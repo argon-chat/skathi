@@ -16,24 +16,24 @@ use std::sync::Mutex;
 use vn_runtime::JsRuntime;
 
 pub mod args;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod badge;
 pub mod capture;
 pub mod dialog;
 pub mod fs;
 pub mod launch;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod media_session;
 pub mod network;
 mod pool;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod power;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod share;
 pub mod shell;
 pub mod tray;
 mod web;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod webauthn;
 
 /// A failure JS turns into a rejection: `name` is a DOMException name or `TypeError`.

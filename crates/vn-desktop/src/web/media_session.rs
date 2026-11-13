@@ -1,5 +1,6 @@
 //! `MediaMetadata` and `navigator.mediaSession` for the system media controls. Changes in one task reach the
-//! system as one update; artwork that is not http(s) is read with the page's `fetch` and sent as bytes.
+//! system as one update; artwork the system does not load itself is read with the page's `fetch` and sent
+//! as bytes.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
@@ -282,12 +283,10 @@ fn area(sizes: &str) -> f64 {
 }
 
 fn send(state: &serde_json::Value, bytes: Option<&[u8]>) {
-    if let Some(owner) = crate::dialog::current_owner() {
-        if let Err(e) = crate::media_session::update(owner.hwnd, state, bytes) {
-            crate::advise(&format!(
-                "navigator.mediaSession: the system media controls refused the update ({e})"
-            ));
-        }
+    if let Err(e) = crate::media_session::update(crate::dialog::current_owner().map(|o| o.hwnd), state, bytes) {
+        crate::advise(&format!(
+            "navigator.mediaSession: the system media controls refused the update ({e})"
+        ));
     }
     #[cfg(test)]
     tests::SENT.with(|s| s.borrow_mut().push((state.clone(), bytes.map(<[u8]>::len))));
@@ -318,7 +317,8 @@ unsafe fn flush(g: *mut c_void) {
             _ => Some(i),
         })
     });
-    let web = art.is_some_and(|a| a.src.starts_with("http://") || a.src.starts_with("https://"));
+    let web = crate::media_session::LOADS_ARTWORK_URLS
+        && art.is_some_and(|a| a.src.starts_with("http://") || a.src.starts_with("https://"));
     let mut state = json!({
         "metadata": meta.as_ref().map(|m| {
             let mut v = json!({ "title": m.title, "artist": m.artist, "album": m.album });
@@ -606,15 +606,16 @@ pub(super) mod tests {
         assert_eq!(out, "true,true,image/png,true,true,true,true");
         let sent = sent();
         assert_eq!(sent.len(), 1, "{sent:?}");
-        assert_eq!(
-            sent[0].0,
-            serde_json::json!({
-                "metadata": { "title": "Song", "artist": "Band", "album": "", "artworkUrl": "https://x.test/l.png" },
-                "playbackState": "playing",
-                "actions": ["seekto"],
-                "position": { "duration": 100.0, "position": 5.0, "playbackRate": 1.0 },
-            })
-        );
+        let mut expected = serde_json::json!({
+            "metadata": { "title": "Song", "artist": "Band", "album": "", "artworkUrl": "https://x.test/l.png" },
+            "playbackState": "playing",
+            "actions": ["seekto"],
+            "position": { "duration": 100.0, "position": 5.0, "playbackRate": 1.0 },
+        });
+        if !crate::media_session::LOADS_ARTWORK_URLS {
+            expected["metadata"].as_object_mut().unwrap().remove("artworkUrl");
+        }
+        assert_eq!(sent[0].0, expected);
         let out = vn_runtime::testing::on_js_thread(|| {
             vn_runtime::JsRuntime::with(|rt| unsafe {
                 super::super::deliver(

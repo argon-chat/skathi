@@ -38,6 +38,8 @@ mod mac;
 use mac as imp;
 #[cfg(target_os = "macos")]
 pub use mac::ns_window_of_view;
+#[cfg(target_os = "macos")]
+pub(crate) use mac::window_of;
 #[cfg(any(target_os = "macos", test))]
 mod mac_plan;
 

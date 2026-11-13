@@ -6,6 +6,7 @@ What a vue-native app can use from the web platform, what is coming, and what is
 | ---- | --------------------------------------------------------------- |
 | ✅   | Supported on Windows, macOS and Linux                           |
 | 🪟   | Supported on Windows; macOS and Linux are planned               |
+| 🍎   | Supported on Windows and macOS; Linux is planned                |
 | 🟡   | Supported with a limitation (see the note)                      |
 | 🗓️   | Planned                                                         |
 | ⏸️   | On hold: waiting on something outside vue-native                |
@@ -83,39 +84,39 @@ What a vue-native app can use from the web platform, what is coming, and what is
 
 ## Graphics and media
 
-| API                                                      | Status | Notes                                                         |
-| -------------------------------------------------------- | ------ | ------------------------------------------------------------- |
-| Canvas 2D, `OffscreenCanvas`, `Path2D`                   | ✅     |                                                               |
-| `ImageData`, `ImageBitmap`, `createImageBitmap`          | ✅     |                                                               |
-| `DOMMatrix`, `DOMPoint`                                  | ✅     |                                                               |
-| WebGPU                                                   | ✅     |                                                               |
-| WebGL, WebGL 2                                           | 🗑️     | `getContext('webgl')` returns `null`; use WebGPU              |
-| Web Audio (`AudioContext` and its nodes, audio worklets) | ✅     |                                                               |
-| `getUserMedia`, `MediaDevices`, `MediaStream`            | 🟡     | Microphone, behind the app's permission prompt; no camera yet |
-| `<video>`                                                | 🟡     | Plays; `drawImage(video)` on a canvas draws nothing yet       |
-| `navigator.mediaSession`, `MediaMetadata`                | 🪟     | System media controls (Windows: the media flyout, media keys) |
-| `MediaRecorder`, WebCodecs, WebRTC                       | ⛔     |                                                               |
+| API                                                      | Status | Notes                                                                                |
+| -------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------ |
+| Canvas 2D, `OffscreenCanvas`, `Path2D`                   | ✅     |                                                                                      |
+| `ImageData`, `ImageBitmap`, `createImageBitmap`          | ✅     |                                                                                      |
+| `DOMMatrix`, `DOMPoint`                                  | ✅     |                                                                                      |
+| WebGPU                                                   | ✅     |                                                                                      |
+| WebGL, WebGL 2                                           | 🗑️     | `getContext('webgl')` returns `null`; use WebGPU                                     |
+| Web Audio (`AudioContext` and its nodes, audio worklets) | ✅     |                                                                                      |
+| `getUserMedia`, `MediaDevices`, `MediaStream`            | 🟡     | Microphone, behind the app's permission prompt; no camera yet                        |
+| `<video>`                                                | 🟡     | Plays; `drawImage(video)` on a canvas draws nothing yet                              |
+| `navigator.mediaSession`, `MediaMetadata`                | 🍎     | System media controls and media keys (Windows: the media flyout; macOS: Now Playing) |
+| `MediaRecorder`, WebCodecs, WebRTC                       | ⛔     |                                                                                      |
 
 ## System integration
 
-| API                                                                | Status | Notes                                                                                              |
-| ------------------------------------------------------------------ | ------ | -------------------------------------------------------------------------------------------------- |
-| `navigator.language`, `navigator.languages`                        | ✅     | The system's language preferences; an app can override them                                        |
-| `navigator.userAgentData`                                          | ✅     | Including `getHighEntropyValues`                                                                   |
-| `navigator.permissions.query`                                      | ✅     |                                                                                                    |
-| Async Clipboard (`navigator.clipboard`, `ClipboardItem`)           | ✅     |                                                                                                    |
-| `navigator.getBattery`                                             | ✅     |                                                                                                    |
-| `navigator.userActivation`                                         | ✅     |                                                                                                    |
-| `navigator.windowControlsOverlay`                                  | ✅     |                                                                                                    |
-| `launchQueue` (`LaunchParams`)                                     | ✅     | Files and URLs the app was opened with                                                             |
-| `navigator.setAppBadge`, `clearAppBadge`                           | 🪟     | Windows: a badge on the taskbar button                                                             |
-| `navigator.wakeLock` (`screen`)                                    | 🪟     | Released when the window is minimized or closed                                                    |
-| `navigator.share`, `navigator.canShare`                            | 🪟     | The system share sheet; text, URLs and files                                                       |
-| Passkeys: `navigator.credentials`, `PublicKeyCredential`           | 🪟     | Windows Hello, security keys, phones. See below. Conditional mediation (autofill) is not supported |
-| `Notification`                                                     | 🗑️     |                                                                                                    |
-| Gamepad (`navigator.getGamepads`)                                  | ⛔     |                                                                                                    |
-| Geolocation                                                        | ⛔     |                                                                                                    |
-| Vibration, Pointer Lock, Web Bluetooth, WebUSB, WebHID, Web Serial | ⛔     |                                                                                                    |
+| API                                                                | Status | Notes                                                                                                 |
+| ------------------------------------------------------------------ | ------ | ----------------------------------------------------------------------------------------------------- |
+| `navigator.language`, `navigator.languages`                        | ✅     | The system's language preferences; an app can override them                                           |
+| `navigator.userAgentData`                                          | ✅     | Including `getHighEntropyValues`                                                                      |
+| `navigator.permissions.query`                                      | ✅     |                                                                                                       |
+| Async Clipboard (`navigator.clipboard`, `ClipboardItem`)           | ✅     |                                                                                                       |
+| `navigator.getBattery`                                             | ✅     |                                                                                                       |
+| `navigator.userActivation`                                         | ✅     |                                                                                                       |
+| `navigator.windowControlsOverlay`                                  | ✅     |                                                                                                       |
+| `launchQueue` (`LaunchParams`)                                     | ✅     | Files and URLs the app was opened with                                                                |
+| `navigator.setAppBadge`, `clearAppBadge`                           | 🍎     | Windows: a badge on the taskbar button; macOS: the Dock icon's badge                                  |
+| `navigator.wakeLock` (`screen`)                                    | 🍎     | Released when the window is minimized or closed                                                       |
+| `navigator.share`, `navigator.canShare`                            | 🍎     | The system share sheet; text, URLs and files                                                          |
+| Passkeys: `navigator.credentials`, `PublicKeyCredential`           | 🍎     | Windows Hello, iCloud Keychain, security keys, phones. See below. No conditional mediation (autofill) |
+| `Notification`                                                     | 🗑️     |                                                                                                       |
+| Gamepad (`navigator.getGamepads`)                                  | ⛔     |                                                                                                       |
+| Geolocation                                                        | ⛔     |                                                                                                       |
+| Vibration, Pointer Lock, Web Bluetooth, WebUSB, WebHID, Web Serial | ⛔     |                                                                                                       |
 
 ### Passkeys in an app
 
@@ -123,3 +124,10 @@ A web page's relying party ID defaults to its own domain. An app has no web orig
 relying party itself: `rp.id` in `create()`, `rpId` in `get()`. The client data's `origin` is then
 `https://<rpId>`, which is what the relying party's server should expect. A page served over https
 from the relying party's domain keeps its own origin and needs neither.
+
+On macOS the system serves a relying party only to an app associated with its domain: the app must be
+signed with a provisioning profile that grants the Associated Domains entitlement
+`webcredentials:<rpId>`, and `https://<rpId>/.well-known/apple-app-site-association` must list the app
+under `webcredentials`. Without that, `create()` and `get()` reject with `NotAllowedError` and
+`isUserVerifyingPlatformAuthenticatorAvailable()` resolves `false`. The client data is the system's
+own, with the origin `https://<rpId>`.

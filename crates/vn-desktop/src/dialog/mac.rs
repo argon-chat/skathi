@@ -169,7 +169,7 @@ pub fn ns_window_of_view(ns_view: *mut c_void) -> Option<isize> {
     view.window().map(|w| Retained::as_ptr(&w) as isize)
 }
 
-fn window_of(mtm: MainThreadMarker, owner: isize) -> Option<Retained<NSWindow>> {
+pub(crate) fn window_of(mtm: MainThreadMarker, owner: isize) -> Option<Retained<NSWindow>> {
     if owner == 0 {
         return None;
     }

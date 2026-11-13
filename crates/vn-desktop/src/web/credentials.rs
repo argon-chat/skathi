@@ -297,12 +297,17 @@ unsafe fn make_credential(
     obj
 }
 
+/// What was signed: the system's own client data when it wrote one, else the one sent with the request.
+fn signed_client_data(v: &Json, sent: Vec<u8>) -> Vec<u8> {
+    v["clientDataJSON"].as_str().and_then(unb64).unwrap_or(sent)
+}
+
 unsafe fn created(g: *mut c_void, token: u32, v: &Json, _made: u64) -> Result<u64, u64> {
     let (client_data, cred_props) = CONTEXT
         .with(|c| c.borrow_mut().remove(&token))
         .unwrap_or_default();
     let resp = Response {
-        client_data,
+        client_data: signed_client_data(v, client_data),
         kind: Kind::Attestation {
             object: field(v, "attestationObject"),
             auth_data: field(v, "authenticatorData"),
@@ -331,7 +336,7 @@ unsafe fn asserted(g: *mut c_void, token: u32, v: &Json, _made: u64) -> Result<u
         .with(|c| c.borrow_mut().remove(&token))
         .unwrap_or_default();
     let resp = Response {
-        client_data,
+        client_data: signed_client_data(v, client_data),
         kind: Kind::Assertion {
             auth_data: field(v, "authenticatorData"),
             signature: field(v, "signature"),
@@ -418,6 +423,7 @@ host_fn!(fn container_create(g, args) {
         let cd = client_data("webauthn.create", &challenge, &origin);
         let req = json!({
             "rpId": rp_id,
+            "challenge": b64(&challenge),
             "rpName": rp_name,
             "userId": b64(&user_id),
             "userName": name,
@@ -460,6 +466,7 @@ host_fn!(fn container_get(g, args) {
         let cd = client_data("webauthn.get", &challenge, &origin);
         let req = json!({
             "rpId": rp_id,
+            "challenge": b64(&challenge),
             "clientDataJSON": cd,
             "timeout": timeout(dec_f64(member(g, pk, "timeout"))),
             "allow": allow,
@@ -850,7 +857,7 @@ mod tests {
         let payload = if create {
             json!({ "id": e("cred"), "attestationObject": e("att"), "authenticatorData": e("auth"), "transports": ["internal", "hybrid"], "attachment": "platform", "publicKey": e("spki"), "publicKeyAlgorithm": -7, "residentKey": true })
         } else {
-            json!({ "id": e("cred"), "authenticatorData": e("auth"), "signature": e("sig"), "userHandle": e("u1"), "attachment": "platform" })
+            json!({ "id": e("cred"), "authenticatorData": e("auth"), "signature": e("sig"), "userHandle": e("u1"), "attachment": "platform", "clientDataJSON": e("sys") })
         };
         crate::settle(token, Ok(payload.to_string()));
         Ok(token)
@@ -894,7 +901,7 @@ mod tests {
                c.response instanceof AuthenticatorAttestationResponse, c.response.getTransports().join('+'), dec(c.response.getPublicKey()), \
                JSON.parse(dec(c.response.clientDataJSON)).origin, JSON.stringify(c.getClientExtensionResults()), c.toJSON().response.publicKeyAlgorithm]; \
              const a = await navigator.credentials.get({ publicKey: { challenge: new Uint8Array([9]), rpId: 'example.com', allowCredentials: [{ type: 'public-key', id: new Uint8Array([5]) }] } }); \
-             r.push(a.response instanceof AuthenticatorAssertionResponse, dec(a.response.signature), dec(a.response.userHandle), a.toJSON().response.userHandle); \
+             r.push(a.response instanceof AuthenticatorAssertionResponse, dec(a.response.signature), dec(a.response.userHandle), a.toJSON().response.userHandle, dec(a.response.clientDataJSON)); \
              for (const bad of [{}, { publicKey: { challenge: new Uint8Array([1]) } }]) { try { await navigator.credentials.get(bad); } catch (e) { r.push(e.name); } } \
              const o = PublicKeyCredential.parseRequestOptionsFromJSON({ challenge: 'AQID', allowCredentials: [{ type: 'public-key', id: 'BQ' }] }); \
              r.push(new Uint8Array(o.challenge).join('.'), new Uint8Array(o.allowCredentials[0].id)[0]); \
@@ -903,11 +910,12 @@ mod tests {
         );
         assert_eq!(
             out,
-            "true|true|public-key|cred|platform|true|hybrid+internal|spki|https://example.com|{\"credProps\":{\"rk\":true}}|-7|true|sig|u1|dTE|NotSupportedError|SecurityError|1.2.3|5|true"
+            "true|true|public-key|cred|platform|true|hybrid+internal|spki|https://example.com|{\"credProps\":{\"rk\":true}}|-7|true|sig|u1|dTE|sys|NotSupportedError|SecurityError|1.2.3|5|true"
         );
         let reqs = REQUESTS.lock().unwrap().drain(..).collect::<Vec<_>>();
         assert_eq!(reqs[0]["rpId"], "example.com");
         assert_eq!(reqs[0]["algs"], json!([-7]));
+        assert_eq!((reqs[0]["challenge"].as_str(), reqs[1]["challenge"].as_str()), (Some("AQID"), Some("CQ")));
         assert_eq!(reqs[1]["allow"], json!([{ "id": "BQ", "transports": [] }]));
 
         *HANG.lock().unwrap() = true;

@@ -1,6 +1,6 @@
 //! The JS surface of vn-desktop as native objects: `appShell`, `appLaunch` with `launchQueue`,
-//! `appCapture`, and on Windows badging, screen wake lock, media session, Web Share and passkeys.
-//! A promise for host work is settled from the desktop queue by [`deliver`].
+//! `appCapture`, and on Windows and macOS badging, screen wake lock, media session, Web Share and
+//! passkeys. A promise for host work is settled from the desktop queue by [`deliver`].
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -16,15 +16,15 @@ mod app_capture;
 mod app_launch;
 mod app_shell;
 mod fsa;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 mod badge;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 mod credentials;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 mod media_session;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 mod share;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 mod wake_lock;
 
 pub(crate) use vn_runtime::host::{error, global, rejected, rejected_with};
@@ -112,7 +112,7 @@ pub(crate) unsafe fn deliver(g: *mut c_void, token: u32, ok: bool, payload: &str
                 app_launch::on_launch(g, &value);
                 true
             }
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             Some("mediasession") => {
                 media_session::on_action(g, &value);
                 true
@@ -160,7 +160,7 @@ pub(crate) unsafe fn handler_set(g: *mut c_void, this: u64, name: &str, v: u64) 
 }
 
 /// `navigator`'s prototype, where the members go as in a browser.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 unsafe fn navigator_proto(g: *mut c_void) -> u64 {
     let ctor = get(g, global(g), "Navigator");
     let proto = if is_cell(ctor) { get(g, ctor, "prototype") } else { UNDEF };
@@ -181,7 +181,7 @@ pub(crate) unsafe fn install(g: *mut c_void) {
     app_launch::install(g, event_target);
     app_capture::install(g);
     fsa::install(g);
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         let nav = navigator_proto(g);
         badge::install(g, nav);

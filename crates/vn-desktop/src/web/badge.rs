@@ -10,9 +10,7 @@ use super::rejected;
 const FLAG: i64 = -1;
 
 fn show(contents: i64) {
-    if let Some(owner) = crate::dialog::current_owner() {
-        crate::badge::set(owner.hwnd, contents);
-    }
+    crate::badge::set(crate::dialog::current_owner().map(|o| o.hwnd), contents);
 }
 
 host_fn!(fn set_app_badge(g, args) {
