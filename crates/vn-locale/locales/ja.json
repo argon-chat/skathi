@@ -1,0 +1,18 @@
+{
+  "vn.app.this_app": "このアプリ",
+  "vn.consent.microphone.title": "{app} がマイクの使用を求めています",
+  "vn.consent.microphone.body": "許可すると、{app} は今回以降もマイクから録音できるようになります。この選択はこのアプリについて記憶されます。",
+  "vn.consent.camera.title": "{app} がカメラの使用を求めています",
+  "vn.consent.camera.body": "許可すると、{app} は今回以降もカメラで動画を録画できるようになります。この選択はこのアプリについて記憶されます。",
+  "vn.consent.allow": "許可(&A)",
+  "vn.consent.block": "ブロック(&B)",
+  "vn.crash.title": "{app} で問題が発生しました",
+  "vn.crash.body": "内部エラーによりアプリが停止しました。続けるには再起動してください。",
+  "vn.crash.body_no_restart": "内部エラーによりアプリが停止しました。続けるには、アプリを閉じてからもう一度開いてください。",
+  "vn.crash.details": "詳細",
+  "vn.crash.restart": "再起動(&R)",
+  "vn.crash.copy": "レポートをコピー(&C)",
+  "vn.crash.copied": "コピーしました",
+  "vn.crash.close": "閉じる(&L)",
+  "vn.crash.version": "バージョン {version}"
+}

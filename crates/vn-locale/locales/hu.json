@@ -1,0 +1,18 @@
+{
+  "vn.app.this_app": "Ez az alkalmazás",
+  "vn.consent.microphone.title": "{app} hozzáférést kér a mikrofonhoz",
+  "vn.consent.microphone.body": "Ha engedélyezi, {app} most és a jövőben is hangot rögzíthet a mikrofonnal. A választását az alkalmazás megjegyzi.",
+  "vn.consent.camera.title": "{app} hozzáférést kér a kamerához",
+  "vn.consent.camera.body": "Ha engedélyezi, {app} most és a jövőben is videót rögzíthet a kamerával. A választását az alkalmazás megjegyzi.",
+  "vn.consent.allow": "&Engedélyezés",
+  "vn.consent.block": "&Letiltás",
+  "vn.crash.title": "{app} nem tud tovább működni",
+  "vn.crash.body": "Egy belső hiba leállította az alkalmazást. A folytatáshoz indítsa újra.",
+  "vn.crash.body_no_restart": "Egy belső hiba leállította az alkalmazást. A folytatáshoz zárja be, majd nyissa meg újra.",
+  "vn.crash.details": "Részletek",
+  "vn.crash.restart": "Új&raindítás",
+  "vn.crash.copy": "Jelentés &másolása",
+  "vn.crash.copied": "Másolva",
+  "vn.crash.close": "&Bezárás",
+  "vn.crash.version": "Verzió: {version}"
+}

@@ -2,7 +2,7 @@
 //! the buttons print what they would do (Copy really copies). Windows only.
 //!
 //! ```text
-//! cargo run -p vn-app --example crash_dialog -- [ru] [light|dark] [owner] [expanded] [embedded] [solid]
+//! cargo run -p vn-app --example crash_dialog -- [--lang de] [light|dark] [owner] [expanded] [embedded] [solid]
 //!     [--app Name] [--version 1.4.2] [--reason "text"] [--accent 005FB8/60CDFF] [--icon C:\Windows\notepad.exe]
 //! ```
 
@@ -27,7 +27,7 @@ fn main() {
         Some(vn_app::consent_window::Accent { light_theme: rgb(l)?, dark_theme: rgb(d)? })
     });
     vn_app::crash_window::preview(vn_app::crash_window::Preview {
-        russian: has("ru"),
+        lang: value("--lang").unwrap_or_default(),
         dark,
         app: value("--app").unwrap_or("Argon".into()),
         version: Some(value("--version").unwrap_or("1.4.2".into())),

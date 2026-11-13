@@ -71,6 +71,7 @@ self_cell = "1"
 vn-desktop = { path = "../vn-desktop" }
 vn-hotkeys = { path = "../vn-hotkeys" }
 vn-permissions = { path = "../vn-permissions" }
+vn-locale = { path = "../vn-locale" }
 vn-storage = { path = "../vn-storage", optional = true }
 vn-clipboard = { path = "../vn-clipboard", optional = true }
 # Fallback client for a request redjs's stack does not carry as is (a body, or a redirect that must
@@ -114,7 +115,6 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
-    "Win32_Globalization",
     "Win32_Storage_Xps",
     "Win32_System_LibraryLoader",
     "Win32_System_Com",

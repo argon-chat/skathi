@@ -79,68 +79,27 @@ pub fn set_app_name(name: &str) {
 }
 
 pub(crate) fn app_name() -> String {
-    APP_NAME.lock().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_else(|| "This app".to_string())
+    vn_locale::app_name(APP_NAME.lock().unwrap_or_else(|p| p.into_inner()).as_deref())
 }
 
-fn russian_ui() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let lang = unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() };
-        lang & 0x3ff == 0x19
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        false
-    }
-}
-
-pub fn question(cap: Capability, app: &str, russian: bool) -> Question {
-    let camera = cap == Capability::Camera;
-    let (instruction, content, allow, block) = if russian && camera {
-        (
-            format!("{app} запрашивает доступ к камере"),
-            format!("Если разрешить, {app} сможет записывать видео с камеры — сейчас и в следующий раз. Выбор запоминается для этого приложения."),
-            "&Разрешить",
-            "&Блокировать",
-        )
-    } else if camera {
-        (
-            format!("{app} wants to use your camera"),
-            format!("If you allow it, {app} can record video from your camera, now and next time. Your choice is remembered for this app."),
-            "&Allow",
-            "&Block",
-        )
-    } else if russian {
-        (
-            format!("{app} запрашивает доступ к микрофону"),
-            format!(
-                "Если разрешить, {app} сможет записывать звук с микрофона — сейчас и в следующий раз. \
-                 Выбор запоминается для этого приложения."
-            ),
-            "&Разрешить",
-            "&Блокировать",
-        )
+pub fn question(cap: Capability, app: &str, lang: &str) -> Question {
+    use vn_locale::keys;
+    let text = |key: &str| vn_locale::text_in(lang, key).unwrap_or_else(|| key.to_string());
+    let (instruction, content) = if cap == Capability::Camera {
+        (keys::CONSENT_CAMERA_TITLE, keys::CONSENT_CAMERA_BODY)
     } else {
-        (
-            format!("{app} wants to use your microphone"),
-            format!(
-                "If you allow it, {app} can record from your microphone, now and next time. \
-                 Your choice is remembered for this app."
-            ),
-            "&Allow",
-            "&Block",
-        )
+        (keys::CONSENT_MICROPHONE_TITLE, keys::CONSENT_MICROPHONE_BODY)
     };
+    let named = [("app", app)];
     Question {
         capability: cap,
         title: app.to_string(),
-        instruction,
-        content,
-        buttons: vec![allow.to_string(), block.to_string()],
+        instruction: vn_locale::format(&text(instruction), &named),
+        content: vn_locale::format(&text(content), &named),
+        buttons: vec![text(keys::CONSENT_ALLOW), text(keys::CONSENT_BLOCK)],
         default: 1,
     }
 }
-
 #[derive(Clone, Copy)]
 pub struct Hooks {
     pub forbidden: fn() -> bool,
@@ -364,7 +323,7 @@ impl AppConsent {
             let shared = Arc::clone(&self.shared);
             match (self.shared.hooks.asker)() {
                 Some(asker) => asker(
-                    question(cap, &app_name(), russian_ui()),
+                    question(cap, &app_name(), &vn_locale::language()),
                     Box::new(move |reply| shared.answered(cap, reply)),
                 ),
                 None => {
@@ -775,22 +734,22 @@ mod tests {
     }
 
     #[test]
-    fn the_question_names_the_app_in_english_or_russian() {
-        let q = question(Capability::Microphone, "Argon", false);
+    fn the_question_names_the_app_in_the_chosen_language() {
+        let q = question(Capability::Microphone, "Argon", "en");
         assert_eq!(q.title, "Argon");
         assert_eq!(q.instruction, "Argon wants to use your microphone");
         assert_eq!(q.buttons, vec!["&Allow".to_string(), "&Block".to_string()]);
         assert_eq!(q.default, 1, "Enter blocks: a stray key press never grants");
-        let q = question(Capability::Microphone, "Argon", true);
+        let q = question(Capability::Microphone, "Argon", "ru");
         assert_eq!(q.instruction, "Argon запрашивает доступ к микрофону");
-        assert_eq!(q.buttons, vec!["&Разрешить".to_string(), "&Блокировать".to_string()]);
-        let q = question(Capability::Camera, "Argon", true);
+        assert_eq!(q.buttons[0], "&Разрешить");
+        let q = question(Capability::Camera, "Argon", "ru");
         assert_eq!(q.instruction, "Argon запрашивает доступ к камере");
         assert!(q.content.contains("записывать видео"));
         assert!(!q.content.contains("микрофон"));
-        assert_eq!(question(Capability::Camera, "Argon", false).instruction, "Argon wants to use your camera");
+        assert_eq!(question(Capability::Camera, "Argon", "ja").buttons[0], "許可(&A)");
+        assert_eq!(question(Capability::Camera, "Argon", "en").instruction, "Argon wants to use your camera");
     }
-
     #[test]
     fn native_camera_consent_is_the_microphones_model() {
         set_camera_capture(true);

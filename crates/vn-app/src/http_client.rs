@@ -120,8 +120,13 @@ impl HttpClient for RedjsHttpClient {
     }
 
     fn send(&self, req: http::Request<AsyncBody>) -> BoxFuture<'static, AnyResult<http::Response<AsyncBody>>> {
-        let (parts, body) = req.into_parts();
+        let (mut parts, body) = req.into_parts();
         if !plain_get(&parts, &body) {
+            if !parts.headers.contains_key(http::header::ACCEPT_LANGUAGE) {
+                if let Ok(v) = http::HeaderValue::from_str(&vn_runtime::redjs::webapi::navigator::accept_language()) {
+                    parts.headers.insert(http::header::ACCEPT_LANGUAGE, v);
+                }
+            }
             return match self.fallback() {
                 Some(client) => client.send(http::Request::from_parts(parts, body)),
                 None => Box::pin(async { Err(anyhow!("no HTTP client for this request")) }),

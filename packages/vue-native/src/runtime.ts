@@ -10678,6 +10678,8 @@ export { appTray } from "./tray";
 export type { AppTray, TrayOptions, TrayPixels, TrayMenuItem, TrayMenuEntry } from "./tray";
 export { appHotkeys } from "./hotkeys";
 export type { AppHotkeys, HotkeyBinding, HotkeyButton, HotkeyChord, HotkeyEvent, HotkeyStatus } from "./hotkeys";
+export { appLocale } from "./locale";
+export type { AppLocale, MessageArgs, Messages } from "./locale";
 export type { AppHost, AppHostError } from "./apphost";
 
 // Compiled SFC code and app code import everything Vue-ish from here

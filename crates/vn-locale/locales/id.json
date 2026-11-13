@@ -1,0 +1,18 @@
+{
+  "vn.app.this_app": "Aplikasi ini",
+  "vn.consent.microphone.title": "{app} ingin menggunakan mikrofon Anda",
+  "vn.consent.microphone.body": "Jika Anda mengizinkan, {app} dapat merekam suara dari mikrofon Anda, sekarang dan selanjutnya. Pilihan Anda akan diingat untuk aplikasi ini.",
+  "vn.consent.camera.title": "{app} ingin menggunakan kamera Anda",
+  "vn.consent.camera.body": "Jika Anda mengizinkan, {app} dapat merekam video dari kamera Anda, sekarang dan selanjutnya. Pilihan Anda akan diingat untuk aplikasi ini.",
+  "vn.consent.allow": "&Izinkan",
+  "vn.consent.block": "&Blokir",
+  "vn.crash.title": "{app} mengalami masalah",
+  "vn.crash.body": "Kesalahan internal menghentikan aplikasi. Mulai ulang untuk melanjutkan.",
+  "vn.crash.body_no_restart": "Kesalahan internal menghentikan aplikasi. Tutup lalu buka kembali untuk melanjutkan.",
+  "vn.crash.details": "Detail",
+  "vn.crash.restart": "&Mulai ulang",
+  "vn.crash.copy": "&Salin laporan",
+  "vn.crash.copied": "Tersalin",
+  "vn.crash.close": "&Tutup",
+  "vn.crash.version": "Versi {version}"
+}

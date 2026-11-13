@@ -1,0 +1,18 @@
+{
+  "vn.app.this_app": "Diese App",
+  "vn.consent.microphone.title": "{app} möchte auf Ihr Mikrofon zugreifen",
+  "vn.consent.microphone.body": "Wenn Sie es erlauben, kann {app} jetzt und künftig Ton über Ihr Mikrofon aufnehmen. Ihre Auswahl wird für diese App gespeichert.",
+  "vn.consent.camera.title": "{app} möchte auf Ihre Kamera zugreifen",
+  "vn.consent.camera.body": "Wenn Sie es erlauben, kann {app} jetzt und künftig Videos mit Ihrer Kamera aufnehmen. Ihre Auswahl wird für diese App gespeichert.",
+  "vn.consent.allow": "&Zulassen",
+  "vn.consent.block": "&Blockieren",
+  "vn.crash.title": "{app} wurde wegen eines Fehlers beendet",
+  "vn.crash.body": "Ein interner Fehler hat die App gestoppt. Starten Sie sie neu, um weiterzumachen.",
+  "vn.crash.body_no_restart": "Ein interner Fehler hat die App gestoppt. Schließen Sie sie und öffnen Sie sie erneut, um weiterzumachen.",
+  "vn.crash.details": "Details",
+  "vn.crash.restart": "&Neu starten",
+  "vn.crash.copy": "Bericht &kopieren",
+  "vn.crash.copied": "Kopiert",
+  "vn.crash.close": "&Schließen",
+  "vn.crash.version": "Version {version}"
+}

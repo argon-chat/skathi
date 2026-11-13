@@ -395,7 +395,7 @@ async fn reveal(handle: WindowHandle<Prompt>, hwnd: isize, owner: isize, height:
 #[derive(Debug, Clone)]
 pub struct Preview {
     pub capability: Capability,
-    pub russian: bool,
+    pub lang: String,
     pub dark: Option<bool>,
     pub app: String,
     pub owner: bool,
@@ -419,7 +419,8 @@ pub fn preview(p: Preview) {
         let _ = card::PREVIEW_ICON.set(exe);
     }
     gpui_platform::application().run(move |cx: &mut App| {
-        let q = vn_permissions::consent::question(p.capability, &p.app, p.russian);
+        let lang = if p.lang.is_empty() { vn_locale::language() } else { p.lang.clone() };
+        let q = vn_permissions::consent::question(p.capability, &p.app, &lang);
         let owner = if p.owner { card::preview_owner(&p.app, cx) } else { 0 };
         if p.through_desktop {
             install(cx);

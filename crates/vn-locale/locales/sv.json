@@ -1,0 +1,18 @@
+{
+  "vn.app.this_app": "Den här appen",
+  "vn.consent.microphone.title": "{app} vill använda din mikrofon",
+  "vn.consent.microphone.body": "Om du tillåter det kan {app} spela in ljud från din mikrofon, nu och framöver. Ditt val sparas för den här appen.",
+  "vn.consent.camera.title": "{app} vill använda din kamera",
+  "vn.consent.camera.body": "Om du tillåter det kan {app} spela in video med din kamera, nu och framöver. Ditt val sparas för den här appen.",
+  "vn.consent.allow": "&Tillåt",
+  "vn.consent.block": "&Blockera",
+  "vn.crash.title": "{app} har stött på ett problem",
+  "vn.crash.body": "Ett internt fel stoppade appen. Starta om den för att fortsätta.",
+  "vn.crash.body_no_restart": "Ett internt fel stoppade appen. Stäng den och öppna den igen för att fortsätta.",
+  "vn.crash.details": "Detaljer",
+  "vn.crash.restart": "&Starta om",
+  "vn.crash.copy": "&Kopiera rapport",
+  "vn.crash.copied": "Kopierad",
+  "vn.crash.close": "Stän&g",
+  "vn.crash.version": "Version {version}"
+}

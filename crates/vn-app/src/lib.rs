@@ -1094,6 +1094,7 @@ fn run_app() {
             #[cfg(feature = "clipboard")]
             vn_clipboard::install();
             vn_permissions::install(rt);
+            vn_locale::install(rt);
             // Without a backend every `<iframe src>` answers `error`.
             if !devtools_mode {
                 install_iframe_backend();

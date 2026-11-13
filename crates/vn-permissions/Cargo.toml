@@ -16,14 +16,13 @@ audio = ["vn-runtime/audio"]
 vn-runtime = { path = "../vn-runtime", default-features = false }
 # `permissions.json`, the app's answers to its own prompt (src/decisions.rs).
 serde_json = "1"
+vn-locale = { path = "../vn-locale" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # 0.62 like `vn-video`: this crate shares no types with gpui. Everything here is a state read or
 # a shell open; `Security_Authorization_AppCapabilityAccess` is absent on purpose (see win.rs).
-# `Globalization` is only `GetUserDefaultUILanguage`, for the prompt's language.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
-    "Win32_Globalization",
     "Win32_Security",
     "Win32_System_Registry",
     "Win32_System_Threading",

@@ -1,0 +1,18 @@
+{
+  "vn.app.this_app": "此應用程式",
+  "vn.consent.microphone.title": "{app} 想要使用你的麥克風",
+  "vn.consent.microphone.body": "如果允許，{app} 現在和之後都能透過你的麥克風錄音。系統會為此應用程式記住你的選擇。",
+  "vn.consent.camera.title": "{app} 想要使用你的相機",
+  "vn.consent.camera.body": "如果允許，{app} 現在和之後都能透過你的相機錄製影片。系統會為此應用程式記住你的選擇。",
+  "vn.consent.allow": "允許(&A)",
+  "vn.consent.block": "封鎖(&B)",
+  "vn.crash.title": "{app} 發生問題",
+  "vn.crash.body": "內部錯誤導致應用程式停止運作。請重新啟動以繼續。",
+  "vn.crash.body_no_restart": "內部錯誤導致應用程式停止運作。請關閉後再重新開啟以繼續。",
+  "vn.crash.details": "詳細資料",
+  "vn.crash.restart": "重新啟動(&R)",
+  "vn.crash.copy": "複製報告(&C)",
+  "vn.crash.copied": "已複製",
+  "vn.crash.close": "關閉(&L)",
+  "vn.crash.version": "版本 {version}"
+}

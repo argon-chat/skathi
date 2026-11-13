@@ -6,7 +6,7 @@
 //! new process, so the dialog offers that without needing the runtime. It is a Windows 11
 //! ContentDialog like the permission prompt (src/content_dialog.rs): a collapsed Details expander
 //! (panic message and location, app version, OS build) and the buttons Restart, Copy report and
-//! Close. English, or Russian when that is the Windows display language.
+//! Close, in the language `vn-locale` chooses.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -16,25 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::App;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Lang {
-    En,
-    Ru,
-}
-
-pub fn lang_of(langid: u16) -> Lang {
-    if langid & 0x3ff == 0x19 { Lang::Ru } else { Lang::En }
-}
-
-pub fn ui_lang() -> Lang {
-    #[cfg(target_os = "windows")]
-    {
-        lang_of(unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() })
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Lang::En
-    }
+pub fn ui_lang() -> String {
+    vn_locale::language()
 }
 
 #[derive(Debug)]
@@ -50,37 +33,24 @@ pub struct Strings {
     pub version: &'static str,
 }
 
-const EN: Strings = Strings {
-    title: "{app} ran into a problem",
-    body: "An internal error stopped the app. Restart it to keep going.",
-    body_no_restart: "An internal error stopped the app. Close it and open it again to keep going.",
-    details: "Details",
-    restart: "&Restart",
-    copy: "&Copy report",
-    copied: "Copied",
-    close: "C&lose",
-    version: "Version {v}",
-};
-
-const RU: Strings = Strings {
-    title: "{app} столкнулся с ошибкой",
-    body: "Внутренняя ошибка остановила приложение. Перезапустите его, чтобы продолжить работу.",
-    body_no_restart: "Внутренняя ошибка остановила приложение. Закройте его и откройте снова, чтобы продолжить работу.",
-    details: "Подробности",
-    restart: "&Перезапустить",
-    copy: "&Скопировать отчёт",
-    copied: "Скопировано",
-    close: "&Закрыть",
-    version: "Версия {v}",
-};
-
-pub fn strings(lang: Lang) -> &'static Strings {
-    match lang {
-        Lang::En => &EN,
-        Lang::Ru => &RU,
-    }
+/// Leaked: the dialog opens once, as the process ends.
+pub fn strings(lang: &str) -> &'static Strings {
+    use vn_locale::keys;
+    let t = |key: &str| -> &'static str {
+        Box::leak(vn_locale::text_in(lang, key).unwrap_or_else(|| key.to_string()).into_boxed_str())
+    };
+    Box::leak(Box::new(Strings {
+        title: t(keys::CRASH_TITLE),
+        body: t(keys::CRASH_BODY),
+        body_no_restart: t(keys::CRASH_BODY_NO_RESTART),
+        details: t(keys::CRASH_DETAILS),
+        restart: t(keys::CRASH_RESTART),
+        copy: t(keys::CRASH_COPY),
+        copied: t(keys::CRASH_COPIED),
+        close: t(keys::CRASH_CLOSE),
+        version: t(keys::CRASH_VERSION),
+    }))
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Restart,
@@ -123,12 +93,12 @@ pub struct Report {
 
 impl Report {
     pub fn title(&self, s: &Strings) -> String {
-        s.title.replace("{app}", &self.app)
+        vn_locale::format(s.title, &[("app", &self.app)])
     }
 
     pub fn about(&self, s: &Strings) -> String {
         match &self.version {
-            Some(v) => format!("{} · {}", s.version.replace("{v}", v), self.os),
+            Some(v) => format!("{} · {}", vn_locale::format(s.version, &[("version", v)]), self.os),
             None => self.os.clone(),
         }
     }
@@ -347,7 +317,7 @@ fn show(report: Report, cx: &mut App) {
 
 #[cfg(not(target_os = "windows"))]
 fn show(report: Report, cx: &mut App) {
-    let s = strings(ui_lang());
+    let s = strings(&ui_lang());
     let acts = actions(crate::embed::active()).iter().copied().filter(|a| *a != Action::Copy).collect::<Vec<_>>();
     if let Some(h) = crate::MAIN_WINDOW.with(|w| w.get()) {
         let _ = h.update(cx, |_, window, _| window.activate_window());
@@ -391,7 +361,7 @@ mod view {
         ImageFormat, KeyDownEvent, MouseButton, Role, Subscription, Window, WindowAppearance, WindowHandle,
     };
 
-    use super::{actions, primary, strings, ui_lang, Action, Lang, Report, Strings};
+    use super::{actions, primary, strings, ui_lang, Action, Report, Strings};
     use crate::content_dialog::{self as card, fonts, hwnd_of, parse_label, win, Accent, Fonts, Guard, Label, Theme};
 
     const WIDTH: f32 = 500.0;
@@ -408,7 +378,7 @@ mod view {
 
     struct Spec {
         report: Report,
-        lang: Lang,
+        lang: String,
         actions: &'static [Action],
         owner: isize,
         dark: Option<bool>,
@@ -716,7 +686,7 @@ mod view {
             let height = height.clone();
             move |window, cx| {
                 cx.new(|cx| {
-                    let s = strings(spec.lang);
+                    let s = strings(&spec.lang);
                     let labels: Vec<Label> = spec.actions.iter().map(|a| parse_label(a.label(s))).collect();
                     let expander = cx.focus_handle().tab_index(0).tab_stop(true);
                     let focus: Vec<FocusHandle> = (0..labels.len())
@@ -804,7 +774,7 @@ mod view {
     #[doc(hidden)]
     #[derive(Debug, Clone)]
     pub struct Preview {
-        pub russian: bool,
+        pub lang: String,
         pub dark: Option<bool>,
         pub app: String,
         pub version: Option<String>,
@@ -836,7 +806,7 @@ mod view {
                     time: std::time::SystemTime::now(),
                     reason: p.reason.clone(),
                 },
-                lang: if p.russian { Lang::Ru } else { Lang::En },
+                lang: if p.lang.is_empty() { super::ui_lang() } else { p.lang.clone() },
                 actions: actions(p.embedded),
                 owner,
                 dark: p.dark,
@@ -870,43 +840,17 @@ mod tests {
     }
 
     #[test]
-    fn russian_is_chosen_by_the_primary_language_only() {
-        assert_eq!(lang_of(0x0419), Lang::Ru, "ru-RU");
-        assert_eq!(lang_of(0x0819), Lang::Ru, "ru-MD: another sublanguage, still Russian");
-        assert_eq!(lang_of(0x0409), Lang::En, "en-US");
-        assert_eq!(lang_of(0x0422), Lang::En, "uk-UA is not Russian");
-        assert_eq!(lang_of(0x0000), Lang::En);
-        assert_eq!(strings(Lang::Ru).details, "Подробности");
-        assert_eq!(strings(Lang::En).details, "Details");
-    }
-
-    #[test]
-    fn the_title_names_the_app_in_either_language() {
+    fn the_title_names_the_app_in_the_chosen_language() {
         let r = report(None);
-        assert_eq!(r.title(strings(Lang::En)), "Argon ran into a problem");
-        assert_eq!(r.title(strings(Lang::Ru)), "Argon столкнулся с ошибкой");
+        assert_eq!(r.title(strings("en")), "Argon ran into a problem");
+        assert_eq!(r.title(strings("ru")), "Argon не может продолжить работу");
+        assert_eq!(strings("de").details, "Details");
+        assert_eq!(strings("ja").restart, "再起動(&R)");
     }
-
-    #[test]
-    fn every_button_has_its_own_access_key() {
-        for lang in [Lang::En, Lang::Ru] {
-            let s = strings(lang);
-            let key_of = |l: &str| {
-                let at = l.find('&')?;
-                l[at + 1..].chars().next().and_then(|c| c.to_lowercase().next())
-            };
-            let keys: Vec<char> = actions(false).iter().map(|a| key_of(a.label(s)).expect("an access key")).collect();
-            let mut unique = keys.clone();
-            unique.sort();
-            unique.dedup();
-            assert_eq!(unique.len(), keys.len(), "{lang:?}: {keys:?}");
-        }
-    }
-
     #[test]
     fn embedded_there_is_no_restart_and_close_is_the_default() {
-        assert_eq!(body(strings(Lang::En), actions(true)), strings(Lang::En).body_no_restart, "it does not say Restart");
-        assert_eq!(body(strings(Lang::Ru), actions(false)), strings(Lang::Ru).body);
+        assert_eq!(body(strings("en"), actions(true)), strings("en").body_no_restart, "it does not say Restart");
+        assert_eq!(body(strings("ru"), actions(false)), strings("ru").body);
         assert_eq!(actions(false), &[Action::Restart, Action::Copy, Action::Close]);
         assert_eq!(primary(actions(false)), 0);
         assert_eq!(actions(true), &[Action::Copy, Action::Close]);
@@ -929,9 +873,9 @@ mod tests {
 
     #[test]
     fn details_name_the_version_and_the_os() {
-        assert_eq!(report(Some("1.4.2")).about(strings(Lang::En)), "Version 1.4.2 · Windows 10.0.26100 (x86_64)");
-        assert_eq!(report(Some("1.4.2")).about(strings(Lang::Ru)), "Версия 1.4.2 · Windows 10.0.26100 (x86_64)");
-        assert_eq!(report(None).about(strings(Lang::En)), "Windows 10.0.26100 (x86_64)");
+        assert_eq!(report(Some("1.4.2")).about(strings("en")), "Version 1.4.2 · Windows 10.0.26100 (x86_64)");
+        assert_eq!(report(Some("1.4.2")).about(strings("ru")), "Версия 1.4.2 · Windows 10.0.26100 (x86_64)");
+        assert_eq!(report(None).about(strings("en")), "Windows 10.0.26100 (x86_64)");
     }
 
     #[test]

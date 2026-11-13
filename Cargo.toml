@@ -10,6 +10,7 @@ members = [
     "crates/vn-sticker",    # <vn-sticker>: Lottie + VP9-alpha stickers, shared decoders, loop cache
     "crates/vn-video",      # <video> playback: portable core + the Media Foundation backend
     "crates/vn-permissions",# platform permission backends behind redjs's navigator.permissions
+    "crates/vn-locale",     # the SDK's own text in the user's language; appLocale for an app's
     "crates/vn-storage",    # localStorage on a disk: folders, atomic writes, DPAPI at rest
     "crates/vn-clipboard",  # navigator.clipboard over the SAME gpui clipboard the <input> uses
     "crates/vn-webview",    # <iframe>: a document in the platform webview (WebView2), under the app surface

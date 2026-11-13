@@ -7347,6 +7347,7 @@ dependencies = [
  "vn-desktop",
  "vn-elements",
  "vn-hotkeys",
+ "vn-locale",
  "vn-payload",
  "vn-permissions",
  "vn-runtime",
@@ -7426,6 +7427,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vn-locale"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "vn-runtime",
+]
+
+[[package]]
 name = "vn-lottie"
 version = "0.1.0"
 dependencies = [
@@ -7450,6 +7459,7 @@ dependencies = [
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
  "serde_json",
+ "vn-locale",
  "vn-runtime",
  "windows 0.62.2",
 ]

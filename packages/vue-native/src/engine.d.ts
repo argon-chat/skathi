@@ -207,6 +207,8 @@ interface VnBatteryManager extends VnEventTarget {
 declare var BatteryManager: (Function & { readonly prototype: VnBatteryManager }) | undefined;
 
 interface VnNavigator {
+  readonly language?: string;
+  readonly languages?: readonly string[];
   getBattery?(): Promise<VnBatteryManager>;
   permissions?: {
     query(descriptor: { name: string }): Promise<VnPermissionStatus>;

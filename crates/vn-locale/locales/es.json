@@ -1,0 +1,18 @@
+{
+  "vn.app.this_app": "Esta aplicación",
+  "vn.consent.microphone.title": "{app} quiere usar tu micrófono",
+  "vn.consent.microphone.body": "Si lo permites, {app} podrá grabar audio con tu micrófono, ahora y en el futuro. Tu elección se recuerda para esta aplicación.",
+  "vn.consent.camera.title": "{app} quiere usar tu cámara",
+  "vn.consent.camera.body": "Si lo permites, {app} podrá grabar vídeo con tu cámara, ahora y en el futuro. Tu elección se recuerda para esta aplicación.",
+  "vn.consent.allow": "&Permitir",
+  "vn.consent.block": "&Bloquear",
+  "vn.crash.title": "{app} ha tenido un problema",
+  "vn.crash.body": "Un error interno ha detenido la aplicación. Reiníciala para continuar.",
+  "vn.crash.body_no_restart": "Un error interno ha detenido la aplicación. Ciérrala y vuelve a abrirla para continuar.",
+  "vn.crash.details": "Detalles",
+  "vn.crash.restart": "&Reiniciar",
+  "vn.crash.copy": "&Copiar informe",
+  "vn.crash.copied": "Copiado",
+  "vn.crash.close": "C&errar",
+  "vn.crash.version": "Versión {version}"
+}

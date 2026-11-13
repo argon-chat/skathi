@@ -2,7 +2,7 @@
 //! (src/consent_window.rs). Windows only.
 //!
 //! ```text
-//! cargo run -p vn-app --example consent_prompt -- [microphone|camera] [ru] [light|dark] [owner]
+//! cargo run -p vn-app --example consent_prompt -- [microphone|camera] [--lang de] [light|dark] [owner]
 //!     [--app Name] [--accent 005FB8/60CDFF] [--icon C:\Windows\notepad.exe]
 //!     [desktop] [--close-owner-after 2000] [solid]
 //! ```
@@ -32,7 +32,7 @@ fn main() {
     });
     vn_app::consent_window::preview(vn_app::consent_window::Preview {
         capability,
-        russian: has("ru"),
+        lang: value("--lang").unwrap_or_default(),
         dark,
         app,
         owner: has("owner"),

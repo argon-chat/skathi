@@ -87,6 +87,27 @@ documented inline in [`apps/hello/tailwind.config.js`](apps/hello/tailwind.confi
 Utilities the engine cannot render never fail silently — vn-css prints a
 one-shot advisory per gap on every stylesheet compile (`[css] …` on stderr).
 
+## Languages
+
+`navigator.language` and `navigator.languages` are the OS's display languages, and every
+`fetch`, `XMLHttpRequest` and WebSocket sends a matching `Accept-Language`, as Chrome does.
+
+The host's own dialogs (the permission prompt, the crash dialog) ship in 29 languages
+([`crates/vn-locale/locales`](crates/vn-locale/locales)). `appLocale` picks the same way for an
+app's strings, and lets an app choose its language or translate the SDK's:
+
+```ts
+import { appLocale } from "vue-native";
+
+appLocale.define({
+  en: { "app.greeting": "Hello, {name}" },
+  de: { "app.greeting": "Hallo, {name}" },
+  hy: { "vn.consent.allow": "&Թույլատրել" },
+});
+appLocale.t("app.greeting", { name: "Ada" }); // the best match for navigator.languages
+appLocale.language = "de"; // the app's choice, for its text and the SDK's dialogs; null follows the OS
+```
+
 ## License
 
 vue-native is licensed under either of [Apache License 2.0](LICENSE-APACHE) or
