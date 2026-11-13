@@ -83,10 +83,5 @@ describe("the other interfaces", () => {
     expect(div.style instanceof g(rt, "CSSStyleDeclaration")).toBe(true);
     const r = div.getBoundingClientRect();
     expect(r instanceof g(rt, "DOMRect")).toBe(true);
-    expect(r instanceof g(rt, "DOMRectReadOnly")).toBe(true);
-    expect({ ...r }.width).toBe(0);
-    const made = new (g(rt, "DOMRect"))(1, 2, 3, 4) as Record<string, number> & { toJSON(): unknown };
-    expect([made.x, made.y, made.right, made.bottom]).toEqual([1, 2, 4, 6]);
-    expect(made.toJSON()).toEqual({ x: 1, y: 2, width: 3, height: 4, top: 2, right: 4, bottom: 6, left: 1 });
   });
 });

@@ -3987,55 +3987,17 @@ function formControls(form: MirrorElement): MirrorElement[] {
   return out;
 }
 
+/** A native event class the engine provides (redjs), or `null` where it has none. */
+function nativeEventClass<I>(name: string): (new (type: string, init?: I) => VnEvent) | null {
+  const C = (globalThis as Record<string, unknown>)[name];
+  return typeof C === "function" ? (C as new (type: string, init?: I) => VnEvent) : null;
+}
+
 type SubmitEventInit = { bubbles?: boolean; cancelable?: boolean; composed?: boolean; submitter?: unknown };
-const SubmitEventClass: (new (type: string, init?: SubmitEventInit) => VnEvent) | null = (() => {
-  const g = globalThis as { SubmitEvent?: unknown };
-  if (typeof g.SubmitEvent === "function" && !vacant(g, "SubmitEvent"))
-    return g.SubmitEvent as new (type: string, init?: SubmitEventInit) => VnEvent;
-  if (typeof Event !== "function") return null;
-  class SubmitEvent extends Event {
-    readonly submitter: unknown;
-    constructor(type: string, init: SubmitEventInit = {}) {
-      super(type, init);
-      this.submitter = init.submitter ?? null;
-    }
-  }
-  try {
-    Object.defineProperty(globalThis, "SubmitEvent", { value: mark(SubmitEvent), configurable: true, writable: true });
-  } catch {
-    /* a frozen global: the class still serves this module */
-  }
-  return SubmitEvent as unknown as new (type: string, init?: SubmitEventInit) => VnEvent;
-})();
+const SubmitEventClass = nativeEventClass<SubmitEventInit>("SubmitEvent");
 
 type ClipboardEventInit = { bubbles?: boolean; cancelable?: boolean; composed?: boolean; clipboardData?: unknown };
-/** The engine's `ClipboardEvent`, or ours, installed on the global when it lacks one; `clipboardData` is a prototype getter, as WebIDL puts a readonly attribute. */
-const ClipboardEventClass: (new (type: string, init?: ClipboardEventInit) => VnEvent) | null = (() => {
-  const g = globalThis as { ClipboardEvent?: unknown };
-  if (typeof g.ClipboardEvent === "function" && !vacant(g, "ClipboardEvent"))
-    return g.ClipboardEvent as new (type: string, init?: ClipboardEventInit) => VnEvent;
-  if (typeof Event !== "function") return null;
-  const data = new WeakMap<object, unknown>();
-  class ClipboardEvent extends Event {
-    constructor(type: string, init: ClipboardEventInit = {}) {
-      super(type, init);
-      data.set(this, init.clipboardData ?? null);
-    }
-    get clipboardData(): unknown {
-      return data.has(this) ? data.get(this) : null;
-    }
-  }
-  try {
-    Object.defineProperty(globalThis, "ClipboardEvent", {
-      value: mark(ClipboardEvent),
-      configurable: true,
-      writable: true,
-    });
-  } catch {
-    /* a frozen global: the class still serves this module */
-  }
-  return ClipboardEvent as unknown as new (type: string, init?: ClipboardEventInit) => VnEvent;
-})();
+const ClipboardEventClass = nativeEventClass<ClipboardEventInit>("ClipboardEvent");
 
 function adviseNoNavigation(via: string): void {
   warnCompat(
@@ -6920,51 +6882,7 @@ type ErrorEventInit = {
   colno?: number;
   error?: unknown;
 };
-const ErrorEventClass: (new (type: string, init?: ErrorEventInit) => VnEvent) | null = (() => {
-  const g = globalThis as { ErrorEvent?: unknown };
-  if (typeof g.ErrorEvent === "function" && !vacant(g, "ErrorEvent"))
-    return g.ErrorEvent as new (type: string, init?: ErrorEventInit) => VnEvent;
-  if (typeof Event !== "function") return null;
-  const fields = new WeakMap<
-    object,
-    Required<Pick<ErrorEventInit, "message" | "filename" | "lineno" | "colno">> & { error: unknown }
-  >();
-  const field = <K extends "message" | "filename" | "lineno" | "colno" | "error">(ev: object, k: K, empty: unknown) =>
-    fields.has(ev) ? fields.get(ev)![k] : empty;
-  class ErrorEvent extends Event {
-    constructor(type: string, init: ErrorEventInit = {}) {
-      super(type, init);
-      fields.set(this, {
-        message: String(init.message ?? ""),
-        filename: String(init.filename ?? ""),
-        lineno: Number(init.lineno ?? 0) >>> 0,
-        colno: Number(init.colno ?? 0) >>> 0,
-        error: init.error === undefined ? null : init.error,
-      });
-    }
-    get message(): string {
-      return field(this, "message", "") as string;
-    }
-    get filename(): string {
-      return field(this, "filename", "") as string;
-    }
-    get lineno(): number {
-      return field(this, "lineno", 0) as number;
-    }
-    get colno(): number {
-      return field(this, "colno", 0) as number;
-    }
-    get error(): unknown {
-      return field(this, "error", null);
-    }
-  }
-  try {
-    Object.defineProperty(globalThis, "ErrorEvent", { value: mark(ErrorEvent), configurable: true, writable: true });
-  } catch {
-    /* a frozen global: the class still serves this module */
-  }
-  return ErrorEvent as unknown as new (type: string, init?: ErrorEventInit) => VnEvent;
-})();
+const ErrorEventClass = nativeEventClass<ErrorEventInit>("ErrorEvent");
 
 const LAYOUT_START = 0;
 const LAYOUT_NEXT = 1;
@@ -7393,17 +7311,6 @@ for (const [name, value] of [
   }
   defineGlobal("DocumentFragment", DocumentFragment);
 }
-
-// -- NodeFilter. reka's FocusScope calls `createTreeWalker(root, NodeFilter.SHOW_ELEMENT, …)`.
-defineGlobal("NodeFilter", {
-  SHOW_ALL: 0xffffffff,
-  SHOW_ELEMENT: 1,
-  SHOW_TEXT: 4,
-  SHOW_COMMENT: 128,
-  FILTER_ACCEPT: 1,
-  FILTER_REJECT: 2,
-  FILTER_SKIP: 3,
-});
 
 // Tag-specific element classes: redjs ships only Element/HTMLElement/SVGElement and reka-ui brands nodes with
 // `instanceof HTMLInputElement`. A missing class is a ReferenceError, worse than a false `instanceof`, so each exists
@@ -8286,67 +8193,6 @@ defineInterface(
 defineInterface("Performance", (x) => x != null && x === theGlobal("performance"), ET);
 defineInterface("Crypto", (x) => x != null && x === theGlobal("crypto"), null);
 
-const EVENT_INTERFACES: readonly (readonly [
-  name: string,
-  parent: "Event" | "UIEvent",
-  members: Readonly<Record<string, unknown>>,
-])[] = [
-  ["TransitionEvent", "Event", { propertyName: "", elapsedTime: 0, pseudoElement: "" }],
-  ["AnimationEvent", "Event", { animationName: "", elapsedTime: 0, pseudoElement: "" }],
-  ["CompositionEvent", "UIEvent", { data: "" }],
-  ["HashChangeEvent", "Event", { oldURL: "", newURL: "" }],
-  ["PopStateEvent", "Event", { state: null }],
-  ["PageTransitionEvent", "Event", { persisted: false }],
-  ["PromiseRejectionEvent", "Event", { promise: undefined, reason: undefined }],
-  ["ToggleEvent", "Event", { oldState: "", newState: "" }],
-  ["MediaQueryListEvent", "Event", { media: "", matches: false }],
-  ["FormDataEvent", "Event", { formData: undefined }],
-];
-{
-  const EventBase = typeof Event === "function" ? Event : null;
-  const ui = theGlobal("UIEvent");
-  const UIEventBase = typeof ui === "function" ? (ui as typeof Event) : EventBase;
-  const inits = new WeakMap<object, Record<string, unknown>>();
-  for (const [name, parent, members] of EVENT_INTERFACES) {
-    const Base = parent === "UIEvent" ? UIEventBase : EventBase;
-    if (!Base || !vacant(globalThis, name)) continue;
-    const klass = class extends Base {
-      constructor(type: string, init: Record<string, unknown> = {}) {
-        super(type, init);
-        const own: Record<string, unknown> = {};
-        for (const k in members) {
-          const d = members[k];
-          const v = init?.[k];
-          own[k] =
-            v === undefined
-              ? d
-              : typeof d === "number"
-                ? Number(v)
-                : typeof d === "string"
-                  ? String(v)
-                  : typeof d === "boolean"
-                    ? !!v
-                    : v;
-        }
-        inits.set(this, own);
-      }
-    };
-    Object.defineProperty(klass, "name", { value: name });
-    for (const k of Object.keys(members)) {
-      Object.defineProperty(klass.prototype, k, {
-        get(this: object) {
-          const own = inits.get(this);
-          if (!own) throw new TypeError("Illegal invocation");
-          return own[k];
-        },
-        enumerable: true,
-        configurable: true,
-      });
-    }
-    defineGlobal(name, klass);
-  }
-}
-
 // InputEvent's `dataTransfer` and `getTargetRanges()`: only for contenteditable; in a text field's `beforeinput` /
 // `input` Chromium has no DataTransfer (the text is `data`) and no target ranges.
 {
@@ -8371,113 +8217,7 @@ const EVENT_INTERFACES: readonly (readonly [
     });
 }
 
-// -- Touch: the interfaces exist and construct, but as on desktop Chrome without a touch screen `'ontouchstart' in window` is false,
-//    `maxTouchPoints` is 0 and no touch event is delivered, so libraries that feature-test touch take their non-touch path.
-const TouchListProto = collectionProto("TouchList");
-adoptInterface("TouchList", TouchListProto, null);
-{
-  const TOUCH_MEMBERS: Readonly<Record<string, number | string>> = {
-    clientX: 0,
-    clientY: 0,
-    screenX: 0,
-    screenY: 0,
-    pageX: 0,
-    pageY: 0,
-    radiusX: 0,
-    radiusY: 0,
-    rotationAngle: 0,
-    force: 0,
-    altitudeAngle: 0,
-    azimuthAngle: 0,
-    touchType: "direct",
-  };
-  const touches = new WeakMap<object, Record<string, unknown>>();
-  const touchSlot = (self: object) => {
-    const own = touches.get(self);
-    if (!own) throw new TypeError("Illegal invocation");
-    return own;
-  };
-  class Touch {
-    constructor(init?: Record<string, unknown>) {
-      if (init == null || typeof init !== "object") {
-        throw new TypeError("Failed to construct 'Touch': 1 argument required, but only 0 present.");
-      }
-      for (const req of ["identifier", "target"]) {
-        if (init[req] === undefined) {
-          throw new TypeError(
-            `Failed to construct 'Touch': Failed to read the '${req}' property from 'TouchInit': Required member is undefined.`,
-          );
-        }
-      }
-      const own: Record<string, unknown> = { identifier: Number(init.identifier) | 0, target: init.target };
-      for (const [k, d] of Object.entries(TOUCH_MEMBERS)) {
-        const v = init[k];
-        own[k] = v === undefined ? d : typeof d === "number" ? Number(v) : String(v);
-      }
-      touches.set(this, own);
-    }
-  }
-  for (const k of ["identifier", "target", ...Object.keys(TOUCH_MEMBERS)]) {
-    Object.defineProperty(Touch.prototype, k, {
-      get(this: object) {
-        return touchSlot(this)[k];
-      },
-      enumerable: true,
-      configurable: true,
-    });
-  }
-  if (vacant(globalThis, "Touch")) defineGlobal("Touch", Touch);
-  const TouchCtor = theGlobal("Touch") as { prototype: object } | undefined;
-
-  const ui = theGlobal("UIEvent");
-  const Base = typeof ui === "function" ? (ui as typeof Event) : typeof Event === "function" ? Event : null;
-  if (Base && vacant(globalThis, "TouchEvent")) {
-    const lists = new WeakMap<object, Record<string, unknown>>();
-    const touchList = (v: unknown, member: string): MirrorCollection<unknown> => {
-      if (v == null) return staticList(TouchListProto, []);
-      if (typeof (v as Iterable<unknown>)[Symbol.iterator] !== "function") {
-        throw new TypeError(
-          `Failed to construct 'TouchEvent': Failed to read the '${member}' property from 'TouchEventInit': The provided value cannot be converted to a sequence.`,
-        );
-      }
-      const items = [...(v as Iterable<unknown>)];
-      for (const t of items) {
-        if (!(TouchCtor && t instanceof (TouchCtor as unknown as new () => object))) {
-          throw new TypeError(
-            `Failed to construct 'TouchEvent': Failed to read the '${member}' property from 'TouchEventInit': Failed to convert value to 'Touch'.`,
-          );
-        }
-      }
-      return staticList(TouchListProto, items);
-    };
-    class TouchEvent extends Base {
-      constructor(type: string, init: Record<string, unknown> = {}) {
-        super(type, init);
-        lists.set(this, {
-          touches: touchList(init?.touches, "touches"),
-          targetTouches: touchList(init?.targetTouches, "targetTouches"),
-          changedTouches: touchList(init?.changedTouches, "changedTouches"),
-          altKey: !!init?.altKey,
-          metaKey: !!init?.metaKey,
-          ctrlKey: !!init?.ctrlKey,
-          shiftKey: !!init?.shiftKey,
-        });
-      }
-    }
-    for (const k of ["touches", "targetTouches", "changedTouches", "altKey", "metaKey", "ctrlKey", "shiftKey"]) {
-      Object.defineProperty(TouchEvent.prototype, k, {
-        get(this: object) {
-          const own = lists.get(this);
-          if (!own) throw new TypeError("Illegal invocation");
-          return own[k];
-        },
-        enumerable: true,
-        configurable: true,
-      });
-    }
-    defineGlobal("TouchEvent", TouchEvent);
-  }
-}
+// No touch screen, as desktop Chrome without one: `maxTouchPoints` is 0 and no touch event is delivered.
 {
   const nav = typeof navigator !== "undefined" && navigator ? (navigator as object) : null;
   if (nav && vacant(nav, "maxTouchPoints")) {
@@ -8489,45 +8229,11 @@ adoptInterface("TouchList", TouchListProto, null);
   }
 }
 
-class DOMRectReadOnlyImpl {
-  declare x: number;
-  declare y: number;
-  declare width: number;
-  declare height: number;
-  declare top: number;
-  declare left: number;
-  declare right: number;
-  declare bottom: number;
-  constructor(x: unknown = 0, y: unknown = 0, width: unknown = 0, height: unknown = 0) {
-    const [nx = NaN, ny = NaN, nw = NaN, nh = NaN] = [x, y, width, height].map(Number);
-    Object.assign(this, {
-      x: nx,
-      y: ny,
-      width: nw,
-      height: nh,
-      top: Math.min(ny, ny + nh),
-      left: Math.min(nx, nx + nw),
-      right: Math.max(nx, nx + nw),
-      bottom: Math.max(ny, ny + nh),
-    });
-  }
-  static fromRect(r: { x?: number; y?: number; width?: number; height?: number } = {}) {
-    return new this(r.x ?? 0, r.y ?? 0, r.width ?? 0, r.height ?? 0);
-  }
-  toJSON() {
-    const { x, y, width, height, top, right, bottom, left } = this;
-    return { x, y, width, height, top, right, bottom, left };
-  }
-}
-Object.defineProperty(DOMRectReadOnlyImpl, "name", { value: "DOMRectReadOnly" });
-class DOMRectImpl extends DOMRectReadOnlyImpl {}
-Object.defineProperty(DOMRectImpl, "name", { value: "DOMRect" });
-defineGlobal("DOMRectReadOnly", DOMRectReadOnlyImpl);
-defineGlobal("DOMRect", DOMRectImpl);
-function asDomRect<T extends object>(r: T): T {
+function asDomRect(r: MirrorRect): MirrorRect {
   const C = theGlobal("DOMRect");
-  if (C === DOMRectImpl) Object.setPrototypeOf(r, DOMRectImpl.prototype);
-  return r;
+  return typeof C === "function"
+    ? new (C as new (x: number, y: number, w: number, h: number) => MirrorRect)(r.x, r.y, r.width, r.height)
+    : r;
 }
 
 // -- getComputedStyle: values come from the real cascade (the properties components read, used width/height, every custom property).
@@ -8963,7 +8669,7 @@ installSelection({
     return el.childNodes[0] ?? null;
   },
   rect: (el) => (el as MirrorElement).getBoundingClientRect(),
-  makeRect: (x, y, w, h) => new DOMRectImpl(x, y, w, h),
+  makeRect: (x, y, w, h) => asDomRect({ x, y, width: w, height: h, top: y, left: x, right: x + w, bottom: y + h }),
   createText: (data) => looseCreated(nodeOps.createText(data)),
   createFragment: () => new (globalThis as unknown as { DocumentFragment: new () => MirrorElement }).DocumentFragment(),
   warn: warnCompat,

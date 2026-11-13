@@ -469,64 +469,12 @@ describe("interfaces over objects that already existed", () => {
     expect(records[0] instanceof g.MutationRecord).toBe(true);
     expect(doc.createTreeWalker(el, 1) instanceof g.TreeWalker).toBe(true);
   });
-
-  test("the event interfaces construct, with their members as read-only getters", () => {
-    const { g } = world();
-    const t = new g.TransitionEvent("transitionend", { propertyName: "opacity", elapsedTime: "0.5", bubbles: true });
-    expect(t instanceof g.TransitionEvent).toBe(true);
-    expect(t instanceof Event).toBe(true);
-    expect([t.type, t.propertyName, t.elapsedTime, t.pseudoElement, t.bubbles]).toEqual([
-      "transitionend",
-      "opacity",
-      0.5,
-      "",
-      true,
-    ]);
-    expect(Object.keys(t)).not.toContain("propertyName");
-    const a = new g.AnimationEvent("animationend", { animationName: "fade" });
-    expect([a.animationName, a.elapsedTime]).toEqual(["fade", 0]);
-    const c = new g.CompositionEvent("compositionend", { data: "日本" });
-    expect(c.data).toBe("日本");
-    const p = new g.PopStateEvent("popstate", { state: { page: 2 } });
-    expect(p.state).toEqual({ page: 2 });
-    expect(new g.ToggleEvent("toggle", { newState: "open" }).newState).toBe("open");
-    expect(() => Object.getOwnPropertyDescriptor(g.TransitionEvent.prototype, "propertyName")!.get!.call({})).toThrow(
-      "Illegal invocation",
-    );
-  });
 });
 
 describe("touch, as desktop Chrome shows it on a machine without a touch screen", () => {
-  test("the interfaces construct; nothing says touch is there", () => {
+  test("nothing says touch is there", () => {
     const { rt, g, vue } = world();
     const el = vue("div");
-    const t = new g.Touch({ identifier: 7, target: el, clientX: 10, clientY: "20" });
-    expect(t instanceof g.Touch).toBe(true);
-    expect([t.identifier, t.target, t.clientX, t.clientY, t.pageX, t.force, t.touchType]).toEqual([
-      7,
-      el,
-      10,
-      20,
-      0,
-      0,
-      "direct",
-    ]);
-    expect(() => new g.Touch({ target: el })).toThrow("identifier");
-    const ev = new g.TouchEvent("touchstart", { touches: [t], changedTouches: [t], ctrlKey: true, bubbles: true });
-    expect(ev instanceof g.TouchEvent).toBe(true);
-    expect(ev instanceof Event).toBe(true);
-    expect(ev.touches instanceof g.TouchList).toBe(true);
-    expect([
-      ev.touches.length,
-      ev.touches.item(0),
-      ev.touches[0],
-      ev.targetTouches.length,
-      ev.ctrlKey,
-      ev.bubbles,
-    ]).toEqual([1, t, t, 0, true, true]);
-    expect([...ev.changedTouches]).toEqual([t]);
-    expect(() => new g.TouchEvent("touchstart", { touches: [{}] })).toThrow("Touch");
-    expect(() => new g.TouchList()).toThrow("Illegal constructor");
     expect("ontouchstart" in g).toBe(false);
     expect("ontouchstart" in el).toBe(false);
     void rt;

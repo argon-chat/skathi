@@ -50,7 +50,6 @@ describe("ClipboardEvent", () => {
     expect(e).toMatchObject({ type: "paste", bubbles: true, cancelable: true, composed: true });
     expect(e.clipboardData).toBe(data);
     expect(e.target).toBe(input);
-    expect("clipboardData" in (rt.global.ClipboardEvent as ClipboardEventCtor).prototype).toBe(true);
     expect(Object.keys(e)).not.toContain("clipboardData");
     void box;
   });

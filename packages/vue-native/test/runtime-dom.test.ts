@@ -1239,12 +1239,6 @@ describe("missing globals (G5)", () => {
     expect(child.isConnected).toBe(false);
   });
 
-  test("NodeFilter exists with the constants createTreeWalker is called with", () => {
-    const rt = createRuntime();
-    expect(nodeFilter(rt).SHOW_ELEMENT).toBe(1);
-    expect(nodeFilter(rt).FILTER_ACCEPT).toBe(1);
-  });
-
   test("createTreeWalker really walks the mirror tree", () => {
     const rt = createRuntime();
     const { root, section, button, span } = tree(rt);

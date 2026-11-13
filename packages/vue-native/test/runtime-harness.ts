@@ -31,6 +31,7 @@ import {
 import type { WaapiHost } from "../src/waapi";
 import { readTsSource } from "./ts-source";
 import { createReferenceWaapiCore, referenceEffect, referenceValues } from "./fixtures/waapi-core-reference";
+import { ENGINE_CLASSES } from "./fixtures/engine-classes";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const RUNTIME_PATH = join(HERE, "../src/runtime.ts");
@@ -645,6 +646,7 @@ export function createRuntime(
     // The windowing host (crates/vn-app/src/window.prelude.js) publishes itself on the real global before the
     // bundle evaluates, and runtime-window's tests fake it the same way; carry it into the private world.
     __VN_WINDOW__: (globalThis as { __VN_WINDOW__?: unknown }).__VN_WINDOW__,
+    ...ENGINE_CLASSES,
     Blob: globalThis.Blob,
     DOMException: globalThis.DOMException,
     // Whatever a test says the prelude put on the global before the bundle ran.
