@@ -1,4 +1,4 @@
-// The code tables that cross the language boundary, checked against Rust (runtime.ts `EV_CODES` and protocol.d.ts
+// The code tables that cross the language boundary, checked against Rust (runtime/event-names.ts `EV_CODES` and protocol.d.ts
 // `VnEventCode` against tree.rs `EVENT_NAMES`). A drift is an event that silently stops being delivered, so this reads
 // the Rust. It is also why the JS tables are plain object literals rather than a `const enum`.
 
@@ -68,7 +68,7 @@ test("EDIT_TYPES is vn-elements' InputType, code for code", () => {
   const fromRust: string[] = [""];
   for (const [, variant, code] of variants) fromRust[Number(code)] = names[variant!]!;
   expect(variants.length).toBeGreaterThan(10);
-  const runtime = readFileSync(join(HERE, "../src/runtime.ts"), "utf8");
+  const runtime = readFileSync(join(HERE, "../src/runtime/event-names.ts"), "utf8");
   const table = runtime.slice(runtime.indexOf("const EDIT_TYPES = ["));
   const fromTs = [...table.slice(0, table.indexOf("] as const")).matchAll(/"(\w*)"/g)].map((m) => m[1]);
   expect(fromTs).toEqual(fromRust);

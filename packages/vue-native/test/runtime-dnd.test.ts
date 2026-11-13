@@ -1,4 +1,4 @@
-// HTML drag and drop within the app (runtime.ts `dndDispatch`): the runtime
+// HTML drag and drop within the app (runtime/dnd.ts `dndDispatch`): the runtime
 // runs the gesture off the host's mouse events, since gpui drags no DOM
 // elements. A press on a `draggable="true"` element, a move past 4 px, and the
 // drag events fire in a browser's order with one DataTransfer.

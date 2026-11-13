@@ -29,12 +29,13 @@ import {
   watch,
 } from "@vue/runtime-core";
 import type { WaapiHost } from "../src/waapi";
-import { readTsSource } from "./ts-source";
+import { bundleRuntime, readTsSource } from "./ts-source";
 import { createReferenceWaapiCore, referenceEffect, referenceValues } from "./fixtures/waapi-core-reference";
 import { ENGINE_CLASSES } from "./fixtures/engine-classes";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const RUNTIME_PATH = join(HERE, "../src/runtime.ts");
+const RUNTIME_JS = await bundleRuntime(RUNTIME_PATH);
 
 export const CANVAS_PATH = join(HERE, "../src/canvas.ts");
 let adoptCanvasFn: unknown = null;
@@ -381,7 +382,7 @@ export function createRuntime(
   } = {},
 ) {
   const withDevtools = options.devtools !== false;
-  const raw = readTsSource(RUNTIME_PATH);
+  const raw = RUNTIME_JS;
   if (!IMPORT_LINE.test(raw)) {
     throw new Error("runtime.ts no longer imports @vue/runtime-core — update this harness");
   }

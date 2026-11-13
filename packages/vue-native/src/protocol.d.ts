@@ -114,7 +114,7 @@ interface VnEventPayload {
   key: string | undefined;
 }
 
-/** Every event code the host can deliver, in lockstep with the host's `EV_*` table (`EV_CODES` in `runtime.ts`; `test/protocol-codes.test.ts` checks it against the Rust). Not a `const enum`: bun downgrades it and `isolatedModules` forbids ambient ones. */
+/** Every event code the host can deliver, in lockstep with the host's `EV_*` table (`EV_CODES` in `runtime/event-names.ts`; `test/protocol-codes.test.ts` checks it against the Rust). Not a `const enum`: bun downgrades it and `isolatedModules` forbids ambient ones. */
 type VnEventCode =
   | 1 // click
   | 2 // mousedown

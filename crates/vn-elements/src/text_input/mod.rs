@@ -76,7 +76,7 @@ const BOTH_KEY_CONTEXTS: &str = "VnTextInput VnTextArea";
 pub const DEFAULT_ROWS: usize = 2;
 
 /// What a user edit does: the DOM's `InputEvent.inputType`. The discriminant is the code carried to
-/// JS, where `EDIT_TYPES` in `packages/vue-native/src/runtime.ts` names it (`test/protocol-codes.test.ts`
+/// JS, where `EDIT_TYPES` in `packages/vue-native/src/runtime/event-names.ts` names it (`test/protocol-codes.test.ts`
 /// parses this enum).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
