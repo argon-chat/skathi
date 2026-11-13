@@ -1,5 +1,5 @@
-//! Regenerates `crates/vn-thorvg-sys/src/bindings.rs` from the vendored `thorvg_capi.h`. Run it
-//! after `tools/vendor-thorvg.sh` bumps the pin. A separate, workspace-excluded crate: `bindgen`
+//! Regenerates `crates/vn-thorvg-sys/src/bindings.rs` from the submodule's `thorvg_capi.h`. Run it
+//! after moving the `thorvg/` submodule. A separate, workspace-excluded crate: `bindgen`
 //! needs `libclang`, which a plain `cargo build` must never need.
 //!
 //! ```text
@@ -58,7 +58,7 @@ fn main() {
         .rustified_enum("Tvg_Filter_Method")
         .use_core()
         .layout_tests(true)
-        // Doxygen comments do not survive translation legibly and would triple the file; the header is vendored next door.
+        // Doxygen comments do not survive translation legibly and would triple the file; the header is in the submodule.
         .generate_comments(false)
         .generate()
         .expect("bindgen failed — is LIBCLANG_PATH set?");

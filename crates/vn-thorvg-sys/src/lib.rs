@@ -1,9 +1,8 @@
-//! Raw FFI declarations for the vendored [ThorVG] 1.1.0 C API, with no safe wrapper: the only
-//! consumer is `vn-lottie`'s ThorVG backend, which owns the lifetimes.
+//! Raw FFI declarations for the [ThorVG] C API, with no safe wrapper: the only consumer is
+//! `vn-lottie`'s ThorVG backend, which owns the lifetimes.
 //!
-//! * `thorvg/` is a pristine subset of the upstream release tarball (`tools/vendor-thorvg.sh`).
-//! * `src/bindings.rs` is checked in and `build.rs` never runs `bindgen`; regenerate it with
-//!   `tools/regen-bindings` after bumping the vendored version (see `VENDOR.md`).
+//! `src/bindings.rs` is checked in and `build.rs` never runs `bindgen`; regenerate it with
+//! `tools/regen-bindings` after moving the `thorvg/` submodule (see `build.rs`).
 //!
 //! [ThorVG]: https://github.com/thorvg/thorvg
 
@@ -11,8 +10,8 @@
 
 include!("bindings.rs");
 
-/// The vendored upstream release as `(major, minor, micro)`, compared against [`tvg_engine_version`] by `vn-lottie`.
-pub const VENDORED_VERSION: (u32, u32, u32) =
+/// The ThorVG release the bindings were generated from, as `(major, minor, micro)`.
+pub const THORVG_VERSION: (u32, u32, u32) =
     (TVG_VERSION_MAJOR, TVG_VERSION_MINOR, TVG_VERSION_MICRO);
 
 impl Tvg_Result {
@@ -32,6 +31,7 @@ impl Tvg_Result {
             Self::TVG_RESULT_FAILED_ALLOCATION => "FAILED_ALLOCATION",
             Self::TVG_RESULT_MEMORY_CORRUPTION => "MEMORY_CORRUPTION",
             Self::TVG_RESULT_NOT_SUPPORTED => "NOT_SUPPORTED",
+            Self::TVG_RESULT_SYSTEM_ERROR => "SYSTEM_ERROR",
             Self::TVG_RESULT_UNKNOWN => "UNKNOWN",
         }
     }
@@ -49,7 +49,7 @@ mod tests {
         unsafe { tvg_engine_version(&mut major, &mut minor, &mut micro, &mut version) }
             .ok()
             .expect("tvg_engine_version");
-        assert_eq!((major, minor, micro), VENDORED_VERSION);
+        assert_eq!((major, minor, micro), THORVG_VERSION);
     }
 
     #[test]

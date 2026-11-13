@@ -1,10 +1,10 @@
-//! The ThorVG backend: the vendored C++ engine behind `vn-thorvg-sys`. Unlike `rasterlottie` it has
+//! The ThorVG backend: the C++ engine behind `vn-thorvg-sys`. Unlike `rasterlottie` it has
 //! no support-profile check: it renders what it understands and skips the rest, so `load` fails
 //! only when the document is not a Lottie at all.
 //!
 //! # Safety
 //!
-//! The engine is process-global and not concurrency-safe: ThorVG 1.1.0's software engine keeps
+//! The engine is process-global and not concurrency-safe: ThorVG's software engine keeps
 //! unsynchronised global state (loader registry, renderer refcount, composition pools), and two
 //! threads driving their own animations corrupt it. So every `tvg_*` call goes through [`ENGINE`],
 //! a plain mutex, uncontended since gpui paints on one thread.

@@ -26,7 +26,7 @@ rasterlottie = { version = "=0.2.2", default-features = false, features = [
     "images",
     "text",
 ] }
-# Vendored ThorVG 1.1.0 (C++) + checked-in FFI; `optional` so `--no-default-features` has no C++.
+# ThorVG (C++ submodule) + checked-in FFI; `optional` so `--no-default-features` has no C++.
 vn-thorvg-sys = { path = "../vn-thorvg-sys", optional = true }
 # `.tgs` is gzipped Lottie JSON; `rust_backend` keeps it pure Rust.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

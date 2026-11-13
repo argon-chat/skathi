@@ -2,7 +2,7 @@
 
 pub const TVG_VERSION_MAJOR: u32 = 1;
 pub const TVG_VERSION_MINOR: u32 = 1;
-pub const TVG_VERSION_MICRO: u32 = 0;
+pub const TVG_VERSION_MICRO: u32 = 2;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _Tvg_Canvas {
@@ -39,6 +39,12 @@ pub struct _Tvg_Accessor {
     _unused: [u8; 0],
 }
 pub type Tvg_Accessor = *mut _Tvg_Accessor;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct _Tvg_Video {
+    _unused: [u8; 0],
+}
+pub type Tvg_Video = *mut _Tvg_Video;
 #[repr(i32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum Tvg_Result {
@@ -48,6 +54,7 @@ pub enum Tvg_Result {
     TVG_RESULT_FAILED_ALLOCATION = 3,
     TVG_RESULT_MEMORY_CORRUPTION = 4,
     TVG_RESULT_NOT_SUPPORTED = 5,
+    TVG_RESULT_SYSTEM_ERROR = 6,
     TVG_RESULT_UNKNOWN = 255,
 }
 #[repr(C)]
@@ -446,6 +453,12 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn tvg_paint_set_id(paint: Tvg_Paint, id: u32) -> Tvg_Result;
+}
+unsafe extern "C" {
+    pub fn tvg_paint_get_data(paint: Tvg_Paint) -> *mut ::core::ffi::c_void;
+}
+unsafe extern "C" {
+    pub fn tvg_paint_set_data(paint: Tvg_Paint, data: *mut ::core::ffi::c_void) -> Tvg_Result;
 }
 unsafe extern "C" {
     pub fn tvg_paint_scale(paint: Tvg_Paint, factor: f32) -> Tvg_Result;
@@ -1100,6 +1113,9 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn tvg_lottie_animation_set_quality(animation: Tvg_Animation, value: u8) -> Tvg_Result;
 }
+unsafe extern "C" {
+    pub fn tvg_lottie_animation_expressions_supported() -> bool;
+}
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Tvg_Audio_Info {
@@ -1138,4 +1154,55 @@ unsafe extern "C" {
         resolver: Tvg_Audio_Resolver,
         data: *mut ::core::ffi::c_void,
     ) -> Tvg_Result;
+}
+unsafe extern "C" {
+    pub fn tvg_lottie_animation_set_volume(animation: Tvg_Animation, volume: f32) -> Tvg_Result;
+}
+unsafe extern "C" {
+    pub fn tvg_lottie_animation_get_volume(animation: Tvg_Animation) -> f32;
+}
+unsafe extern "C" {
+    pub fn tvg_video_new() -> Tvg_Video;
+}
+unsafe extern "C" {
+    pub fn tvg_video_del(video: Tvg_Video) -> Tvg_Result;
+}
+unsafe extern "C" {
+    pub fn tvg_video_get_picture(video: Tvg_Video) -> Tvg_Paint;
+}
+unsafe extern "C" {
+    pub fn tvg_video_play(video: Tvg_Video) -> Tvg_Result;
+}
+unsafe extern "C" {
+    pub fn tvg_video_pause(video: Tvg_Video) -> Tvg_Result;
+}
+unsafe extern "C" {
+    pub fn tvg_video_stop(video: Tvg_Video) -> Tvg_Result;
+}
+unsafe extern "C" {
+    pub fn tvg_video_seek(video: Tvg_Video, seconds: f32) -> Tvg_Result;
+}
+unsafe extern "C" {
+    pub fn tvg_video_set_loop(video: Tvg_Video, on: bool) -> Tvg_Result;
+}
+unsafe extern "C" {
+    pub fn tvg_video_get_loop(video: Tvg_Video) -> bool;
+}
+unsafe extern "C" {
+    pub fn tvg_video_set_volume(video: Tvg_Video, volume: f32) -> Tvg_Result;
+}
+unsafe extern "C" {
+    pub fn tvg_video_get_volume(video: Tvg_Video) -> f32;
+}
+unsafe extern "C" {
+    pub fn tvg_video_set_mute(video: Tvg_Video, on: bool) -> Tvg_Result;
+}
+unsafe extern "C" {
+    pub fn tvg_video_get_muted(video: Tvg_Video) -> bool;
+}
+unsafe extern "C" {
+    pub fn tvg_video_get_time(video: Tvg_Video) -> f32;
+}
+unsafe extern "C" {
+    pub fn tvg_video_get_duration(video: Tvg_Video) -> f32;
 }

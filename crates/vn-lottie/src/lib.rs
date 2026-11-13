@@ -17,7 +17,7 @@
 //! Rasterisation happens behind [`Backend`]; the `.tgs` gunzip, the [`normalize`] pass,
 //! [`LottieMeta`], the transport and the events are shared above it.
 //!
-//! * [`Backend::ThorVg`]: vendored ThorVG 1.1.0 C++ behind the `thorvg` feature, on by default;
+//! * [`Backend::ThorVg`]: ThorVG (C++, built from source) behind the `thorvg` feature, on by default;
 //!   wider format coverage and faster, with no cmake or system libraries.
 //! * [`Backend::Rasterlottie`]: pure Rust on `tiny-skia`, always compiled in; the fallback for
 //!   `bell.json`, whose Fill effect ThorVG drops.
