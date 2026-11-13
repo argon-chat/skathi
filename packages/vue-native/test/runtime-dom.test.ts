@@ -780,6 +780,19 @@ describe("classList and the transition-class merge", () => {
     expect(rt.host.classes.at(-1)?.value).toBe("btn");
   });
 
+  test("a write that leaves the class as it was does not reach the host", () => {
+    const rt = createRuntime();
+    const { button } = tree(rt);
+    rt.patchProp(button, "class", null, "btn primary");
+    const writes = rt.host.classes.length;
+    button.classList.add("btn");
+    button.classList.remove("open");
+    button.className = "btn primary";
+    expect(rt.host.classes.length).toBe(writes);
+    button.className = "btn";
+    expect(rt.host.classes.length).toBe(writes + 1);
+  });
+
   test("a re-render keeps the transition classes a <Transition> layered on", () => {
     const rt = createRuntime();
     const { button } = tree(rt);

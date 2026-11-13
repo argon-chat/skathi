@@ -220,9 +220,9 @@ export function writeClass(el: MirrorElement, remove = false): void {
   const base = el._class || "";
   const extra = el._vtc;
   const value = extra && extra.size ? [base, ...extra].filter(Boolean).join(" ") : base;
-  __vn_set_class(el.__vnId, value);
+  const before = el.attrs?.class;
+  if (before !== value) __vn_set_class(el.__vnId, value);
   if (!el.attrs) return;
-  const before = el.attrs.class;
   if (remove && !value) delete el.attrs.class;
   else el.attrs.class = value;
   if (before !== el.attrs.class) notifyMutation(el, "attributes", { attributeName: "class", oldValue: before ?? null });
