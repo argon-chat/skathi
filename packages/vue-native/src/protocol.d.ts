@@ -406,6 +406,8 @@ declare function __vn_badge_set(contents: number): void;
 declare function __vn_wake_lock_hold(on: boolean): boolean;
 /** `{ metadata: { title, artist, album, artworkUrl? } | null, playbackState, actions, position }`; `artwork` the image bytes when it is not http(s). Button presses come back as token-0 `kind: "mediasession"` events. */
 declare function __vn_media_session_update(stateJson: string, artwork: ArrayBuffer | undefined): void;
+/** `{ title, text?, url?, files: names }` with the files' bytes in order. `{ token }` settles when the share sheet completes, or fails `AbortError` when dismissed. */
+declare function __vn_share(requestJson: string, buffers: ArrayBuffer[]): VnJson;
 
 /** Every SFC's `<style>` block, collected at module-eval time and joined into the first stylesheet by `mount()`. */
 declare var __VN_CSS__: string[] | undefined;

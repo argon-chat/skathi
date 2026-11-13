@@ -29,6 +29,7 @@ import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/
 import { installDesktop } from "./desktop";
 import { installBadge } from "./badge";
 import { installMediaSession } from "./mediasession";
+import { installShare } from "./share";
 import { installWakeLock } from "./wakelock";
 import type { WakeLockDeps } from "./wakelock";
 import "./apphost";
@@ -9942,6 +9943,19 @@ if (typeof navigator !== "undefined" && navigator) {
         ),
       onAction: (fn) => void desktopEvents.set("mediasession", fn),
       reportError: (e) => (globalThis as { reportError?: (e: unknown) => void }).reportError?.(e),
+    });
+  }
+  if (typeof __vn_share === "function" && vacant(navigator, "share")) {
+    const FileCtor = (globalThis as { File?: abstract new (...args: never[]) => object }).File;
+    installShare(navigator, {
+      host: { share: __vn_share },
+      call: desktopCallRaw,
+      resolveUrl: (u) => new URL(u, (globalThis as { location?: { href: string } }).location?.href).href,
+      isFile: (v): v is { name: string; arrayBuffer(): Promise<ArrayBuffer> } =>
+        typeof FileCtor === "function" && v instanceof FileCtor,
+      activation,
+      documentTitle: () => document?.title ?? "",
+      DOMException: (globalThis as unknown as DesktopEngine).DOMException,
     });
   }
   if (typeof __vn_wake_lock_hold === "function" && vacant(navigator, "wakeLock")) {

@@ -30,6 +30,8 @@ pub mod network;
 mod pool;
 #[cfg(target_os = "windows")]
 pub mod power;
+#[cfg(target_os = "windows")]
+pub mod share;
 pub mod shell;
 pub mod tray;
 
@@ -564,6 +566,28 @@ host_fn!(fn vn_media_session_update(g, args) {
     Value::undefined().0
 });
 
+#[cfg(target_os = "windows")]
+host_fn!(fn vn_share(g, args) {
+    use vn_runtime::redjs::webapi::util;
+    let req: serde_json::Value = serde_json::from_str(&read_arg_string(g, args.arg(0).0)).unwrap_or_default();
+    let s = |k: &str| req[k].as_str().map(str::to_string);
+    let names: Vec<String> = req["files"].as_array().map(|a| a.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect()).unwrap_or_default();
+    let buffers = args.arg(1).0;
+    let files = names
+        .into_iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let bytes = unsafe { util::bufferish(g, util::get_i(g, buffers, i as u32)) }.map(|b| b.to_vec()).unwrap_or_default();
+            share::SharedFile { name, bytes }
+        })
+        .collect();
+    let Some(owner) = dialog::current_owner() else {
+        return js_string(&Fail::new("NotAllowedError", "There is no window to share from").to_sync_json());
+    };
+    let request = share::Request { title: s("title").unwrap_or_default(), text: s("text"), url: s("url"), files };
+    js_string(&share::start(owner.hwnd, request))
+});
+
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
         ("__vn_desktop_set_dispatcher", 1, vn_desktop_set_dispatcher as *const _),
@@ -606,6 +630,7 @@ pub fn install(rt: &JsRuntime) {
         rt.register("__vn_badge_set", 1, vn_badge_set as *const _);
         rt.register("__vn_wake_lock_hold", 1, vn_wake_lock_hold as *const _);
         rt.register("__vn_media_session_update", 2, vn_media_session_update as *const _);
+        rt.register("__vn_share", 2, vn_share as *const _);
     }
     let g = rt.raw();
     RT_G.store(g as usize, Ordering::Release);

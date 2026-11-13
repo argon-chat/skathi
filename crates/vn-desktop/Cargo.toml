@@ -16,8 +16,11 @@ vn-permissions = { path = "../vn-permissions" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = [
+    "ApplicationModel_DataTransfer",
     "Foundation",
+    "Foundation_Collections",
     "Media",
+    "Storage",
     "Storage_Streams",
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
@@ -46,6 +49,7 @@ windows = { version = "0.62", features = [
 ] }
 # `#[implement(...)]` expands to `::windows_core::` paths, so the crate must be nameable.
 windows-core = "0.62"
+windows-collections = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # ScreenCaptureKit and CoreGraphics have no binding here: classes are looked up by name.
