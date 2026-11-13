@@ -2,6 +2,7 @@ name: Release
 
 # A `v<version>` tag publishes the prebuilt hosts `vn build` and `vn dev` download (cli/host-fetch.ts):
 # every published variant and the dev host for Windows x64 and macOS arm64, gzipped, plus hosts.json.
+# The Windows hosts with devtools embed the inspector's native AOT image (scripts/aot/prepare-inspector.ts).
 
 on:
   push:
@@ -77,9 +78,21 @@ jobs:
       - name: Fetch and verify native dependencies (macOS)
         if: matrix.platform == 'macos'
         run: bash vendor/redjs/setup.sh
+      - name: Cache the native AOT toolchain
+        if: matrix.platform == 'windows'
+        uses: actions/cache@v4
+        with:
+          path: .aot-cache
+          key: native-aot-${{ hashFiles('scripts/aot/toolchain.lock.json') }}
+      - name: Prepare the native inspector image
+        if: matrix.platform == 'windows'
+        run: bun scripts/aot/prepare-inspector.ts --out release-inspector --cache .aot-cache --target-dir target
       - name: Build and pack the hosts
         working-directory: packages/vue-native
-        run: bun scripts/release-hosts.ts --out ../../release-hosts
+        run: |
+          inspector=()
+          if [ -f ../../release-inspector/build.json ]; then inspector=(--native-inspector ../../release-inspector/build.json); fi
+          bun scripts/release-hosts.ts --out ../../release-hosts "${inspector[@]}"
       - uses: actions/upload-artifact@v4
         with:
           name: hosts-${{ matrix.platform }}

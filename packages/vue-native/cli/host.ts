@@ -319,29 +319,41 @@ function cargo(): string {
   throw new HostError("cargo is not on PATH — building a host needs the Rust toolchain (vn build does not)");
 }
 
-export const hostCargoArgs = (variant: Variant): string[] => [
-  "build",
-  "--release",
-  "-p",
-  "vn-app",
-  ...hostsFor(currentPlatform()).cargoTarget,
-  ...(variant === DEV_HOST ? [] : cargoFeatureArgs(variant)),
-];
+/** The cargo command line for `variant`, plus `extra` features (`native-inspector` for a release host). */
+export function hostCargoArgs(variant: Variant, extra: string[] = []): string[] {
+  const args = variant === DEV_HOST ? [] : cargoFeatureArgs(variant);
+  const at = args.indexOf("--features");
+  if (extra.length) {
+    if (at < 0) args.push("--features", extra.join(","));
+    else args[at + 1] = [args[at + 1], ...extra].join(",");
+  }
+  return ["build", "--release", "-p", "vn-app", ...hostsFor(currentPlatform()).cargoTarget, ...args];
+}
+
+export interface CargoExtras {
+  features?: string[];
+  env?: Record<string, string>;
+}
 
 /** MAINTAINERS ONLY, in a checkout: cargo-builds the bare host for `variant` into the checkout's target/; returns its path. */
 export function cargoBuildHost(
   variant: Variant,
   log: (line: string) => void = console.log,
+  extras: CargoExtras = {},
 ): { exe: string; ms: number } {
   if (!REPO_ROOT || !REPO_RELEASE_EXE) {
     throw new HostError(
       "vn host build runs from a vue-native checkout; elsewhere, use vn host fetch or vn host add <exe>",
     );
   }
-  const args = hostCargoArgs(variant);
+  const args = hostCargoArgs(variant, extras.features);
   log(`[vn] cargo ${args.join(" ")}`);
   const t0 = performance.now();
-  const r = spawnSync(cargo(), args, { cwd: REPO_ROOT, stdio: "inherit" });
+  const r = spawnSync(cargo(), args, {
+    cwd: REPO_ROOT,
+    stdio: "inherit",
+    env: { ...process.env, ...extras.env },
+  });
   if (r.status !== 0) throw new HostError(`cargo ${args.join(" ")} failed (exit ${r.status})`);
   return { exe: REPO_RELEASE_EXE, ms: Math.round(performance.now() - t0) };
 }

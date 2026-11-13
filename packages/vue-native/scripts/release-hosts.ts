@@ -1,8 +1,10 @@
 // The hosts a vue-native release carries (.github/workflows/release.yml; read by cli/host-fetch.ts).
 //
-//   bun scripts/release-hosts.ts --out <dir> [--variant <name>]...
+//   bun scripts/release-hosts.ts --out <dir> [--variant <name>]... [--native-inspector <build.json>]
 //     on each OS: cargo-build each variant (default: every published one and the dev host), gzip it into <dir>
-//     and describe it in <dir>/hosts-<platform>-<arch>.json
+//     and describe it in <dir>/hosts-<platform>-<arch>.json. With --native-inspector (Windows x64: the
+//     build.json of scripts/aot/prepare-inspector.ts), every host with devtools embeds the inspector's
+//     native AOT image.
 //   bun scripts/release-hosts.ts --merge <dir>
 //     once, over every OS's output: <dir>/hosts.json
 //   bun scripts/release-hosts.ts --check-tag <tag>
@@ -11,7 +13,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { VARIANTS } from "../cli/config";
+import { partsLeftOut, VARIANTS } from "../cli/config";
 import { hostAssetName, MANIFEST_NAME, sha256, type HostManifest, type HostManifestEntry } from "../cli/host-fetch";
 import { CLI_VERSION, cargoBuildHost, checkHost, DEV_HOST, hostInfo } from "../cli/host";
 import { currentPlatform } from "../cli/platform";
@@ -21,6 +23,7 @@ const { values } = parseArgs({
     out: { type: "string" },
     merge: { type: "string" },
     variant: { type: "string", multiple: true },
+    "native-inspector": { type: "string" },
     "check-tag": { type: "string" },
   },
 });
@@ -56,9 +59,38 @@ const out = resolve(values.out);
 mkdirSync(out, { recursive: true });
 const platform = currentPlatform();
 const arch = process.arch;
+// The receipt prepare-inspector.ts writes. Its paths go to every build, so redjs and the devtools
+// bundle are not rebuilt between variants; only the hosts with devtools take the feature.
+interface InspectorReceipt {
+  schema: string;
+  stage: string;
+  manifest: string;
+  bundle: string;
+  table: string;
+}
+let inspector: InspectorReceipt | null = null;
+if (values["native-inspector"]) {
+  inspector = JSON.parse(readFileSync(resolve(values["native-inspector"]), "utf8")) as InspectorReceipt;
+  if (inspector.schema !== "vue-native.embedded-native-inspector" || inspector.stage !== "native-image") {
+    throw new Error(`${values["native-inspector"]} is not a native inspector receipt from prepare-inspector.ts`);
+  }
+}
+const inspectorEnv: Record<string, string> = inspector
+  ? {
+      REDJS_AOT_BUILTIN_TABLE_DIR: inspector.table,
+      VN_DEVTOOLS_BUNDLE: inspector.bundle,
+      VN_DEVTOOLS_NATIVE_MANIFEST: inspector.manifest,
+      VN_DEVTOOLS_NATIVE_IMAGE_DLL: "",
+    }
+  : {};
+
 const entries: HostManifestEntry[] = [];
 for (const variant of values.variant ?? [...VARIANTS, DEV_HOST]) {
-  const { exe, ms } = cargoBuildHost(variant);
+  const devtools = variant === DEV_HOST || !partsLeftOut(variant).includes("devtools");
+  const { exe, ms } = cargoBuildHost(variant, console.log, {
+    env: inspectorEnv,
+    features: inspector && devtools ? ["native-inspector"] : [],
+  });
   const info = hostInfo(exe);
   const problem = checkHost(exe, info, variant, false);
   if (problem) throw new Error(problem);
