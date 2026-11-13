@@ -1,13 +1,8 @@
-// `<canvas>`: the element half (width/height reflection, `getContext`, `toDataURL`, `toBlob`) over
-// the native 2D/WebGPU contexts that live in redjs. Setting width or height, even to the same
-// value, clears the bitmap and resets the context.
-//
-// The bitmap is published under the element's host node id (`__vnId`) so the host can paint it.
-// An `<img>` is drawn from host-decoded pixels, cached per element and `src`.
-//
-// runtime.ts calls `adoptCanvas` on every mirror `<canvas>`. test/runtime-harness.ts evaluates
-// this module standalone, so host functions are read through `natives()` at call time, never
-// at module scope.
+// `<canvas>`: the element half (width/height reflection, `getContext`, `toDataURL`, `toBlob`) over the native
+// 2D/WebGPU contexts that live in redjs. Setting width or height, even to the same value, clears the bitmap and
+// resets the context. The bitmap is published under the element's host node id (`__vnId`) so the host can paint it.
+// runtime.ts calls `adoptCanvas` on every mirror `<canvas>`; test/runtime-harness.ts evaluates this module
+// standalone, so host functions are read through `natives()` at call time, never at module scope.
 
 type Context2D = object;
 type ContextGPU = object;
@@ -76,7 +71,6 @@ function advise(key: string, msg: string): void {
   console.warn(`[vue-native compat] ${msg}`);
 }
 
-/** Context mode is fixed after a successful selection. Failed requests leave it unset. */
 const contexts = new WeakMap<object, ContextSelection>();
 
 function dimension(el: CanvasElement, name: "width" | "height"): number {
@@ -136,11 +130,9 @@ function originClean(el: ImageElement, src: string): boolean {
   return el.attrs.crossorigin != null || el.attrs.crossOrigin != null;
 }
 
-/** The pixels of a usable `<img>`: none while loading; a broken one throws InvalidStateError (Chromium's wording). */
 function imageSource(el: ImageElement): unknown {
   const src = el.attrs.src ?? "";
   if (src.trim() === "" || !el.complete) return null;
-  // Complete with a src but no current one: the request answered `error`.
   if (el.currentSrc === "") {
     throw new DOMException("The HTMLImageElement provided is in the 'broken' state.", "InvalidStateError");
   }
@@ -162,9 +154,7 @@ function imageSource(el: ImageElement): unknown {
   return got;
 }
 
-/** Source for `drawImage`/`createImageBitmap`: canvas -> its context, `<img>` -> pixels, `<video>` -> null (no frames yet), else undefined (the engine's TypeError). */
 function resolveSource(v: unknown): unknown {
-  // Reading a blank canvas does not select a rendering mode for it.
   if (isCanvas(v)) return contexts.get(v)?.value ?? null;
   const tag = tagOf(v);
   if (tag === "IMG" && typeof v === "object" && v !== null && "__vnId" in v) return imageSource(v as ImageElement);
@@ -230,7 +220,6 @@ function resized(el: CanvasElement): void {
 export function adoptCanvas(target: object): void {
   const el = target as CanvasElement;
   installHook();
-  // `patchProp` is the only writer of `attrs`; any width/height write resizes, even to the same value.
   el.attrs = new Proxy(el.attrs, {
     set(t, k, v) {
       t[k as string] = v as string;

@@ -1,12 +1,11 @@
-//! The Linux provider's key store: the Secret Service, else a key file; envelope and master key
-//! are `envelope.rs`, as on macOS. One item per app in the default collection: service
-//! `gl.argon.vue-native.storage`, account `exe:<file stem>`, secret = the 32-byte master key.
+//! The Linux provider's key store: the Secret Service, else a key file; envelope and master key are
+//! `envelope.rs`. One item per app in the default collection (service `gl.argon.vue-native.storage`,
+//! account `exe:<file stem>`).
 //!
-//! `CreateItem` with `replace = false` adds a second item instead of failing, so racing
-//! first runs each add one; every read takes the oldest item and the loser deletes its own.
-//! The key file is used only where nothing owns `org.freedesktop.secrets` on the session bus
-//! (or there is no bus); a service that is present but locked or dismissed is an error latched
-//! for the process, since a new key would orphan sealed data. Once a key file exists it stays
+//! `CreateItem` with `replace = false` adds a second item instead of failing, so racing first runs each
+//! add one; every read takes the oldest and the loser deletes its own. The key file is used only where
+//! nothing owns `org.freedesktop.secrets` (or there is no bus); a present but locked service is an error
+//! latched for the process, since a new key would orphan sealed data. Once a key file exists it stays
 //! the key. Loaded once per process, failure included.
 
 use std::fs::{self, OpenOptions};
@@ -21,9 +20,7 @@ use oo7::dbus::{Collection, Error as DbusError, Service};
 use super::envelope::{self, MasterKey, Origin, KEY_LEN};
 use super::SecretProvider;
 
-/// The Secret Service attribute every vue-native app's key is filed under.
 pub const SERVICE: &str = "gl.argon.vue-native.storage";
-/// This provider's byte in the `VNSTOR` file header.
 const PROVIDER_ID: u8 = 3;
 
 pub struct SecretService {
@@ -68,7 +65,6 @@ impl SecretProvider for SecretService {
 const KEYRING: &str = "Linux Secret Service + AES-256-GCM (per-user)";
 const KEY_FILE: &str = "Linux key file + AES-256-GCM (per-user, no Secret Service)";
 
-/// This app's account name: see [`envelope::account_for`].
 fn account() -> String {
     envelope::account_for(None, crate::exe_stem().as_deref())
 }
@@ -113,13 +109,11 @@ fn fresh() -> Result<[u8; KEY_LEN], String> {
     Ok(k)
 }
 
-/// No Secret Service to ask: nothing owns the name or can be activated for it, or no session bus.
 fn absent(e: &DbusError) -> bool {
     let what = format!("{e:?}");
     ["ServiceUnknown", "NameHasNoOwner", "Address(", "InputOutput("].iter().any(|s| what.contains(s))
 }
 
-/// Why `add` failed: our item lost a first-run race, or the service failed.
 enum KeyringError {
     Raced,
     Failed(DbusError),

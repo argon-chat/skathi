@@ -69,9 +69,8 @@ static ACCEPT_GEN: AtomicU64 = AtomicU64::new(0);
 /// `console` and `fetch`.
 static TEES_INSTALLED: AtomicBool = AtomicBool::new(false);
 
-/// Starts the recording an attaching client needs to have been doing already: the log ring and
-/// rule-text capture. Unconditional because a disabled app can `enable()` later and neither can
-/// be recovered after the fact.
+/// Starts the log ring and rule-text capture. Unconditional: a disabled app can `enable()` later
+/// and neither can be recovered after the fact.
 pub fn arm() {
     vn_tree::log::enable();
     vn_css::set_capture_rule_text(true);
@@ -105,9 +104,6 @@ pub fn boot(config_enabled: bool) {
 
 /// `VN_DEVTOOLS=1|on|true|yes` forces the devtools on and locks them against `disable()`;
 /// `0|off|false|no` only sets the initial state. An empty value counts as unset.
-///
-/// Locking is sound because reaching the port already needs local code execution as this user,
-/// and whoever can set the environment can also replace the executable.
 fn resolve_initial(config_enabled: bool) -> (bool, bool) {
     match std::env::var("VN_DEVTOOLS").unwrap_or_default().to_ascii_lowercase().as_str() {
         "" => (config_enabled, false),
@@ -180,9 +176,8 @@ pub fn state_json() -> String {
     .to_json()
 }
 
-/// Binds `127.0.0.1:0`, publishes `<dist>/devtools.json` and starts the listener thread. Failures
-/// are reported and ignored. Port and token are fresh every time so a client dropped at
-/// `disable()` cannot walk back in.
+/// Port and token are fresh every time so a client dropped at `disable()` cannot walk back in.
+/// Failures are reported and ignored.
 fn start_listener() {
     if PORT.load(Ordering::SeqCst) != 0 {
         return;
@@ -232,10 +227,8 @@ fn start_listener() {
         .ok();
 }
 
-/// Closes the listener, drops every push socket, blanks the token and deletes the handshake.
-///
 /// `accept()` cannot be interrupted by a flag, so the generation is bumped and we connect to
-/// ourselves: the loop wakes, sees the new generation and returns, dropping its listener.
+/// ourselves: the loop wakes, sees the new generation and returns.
 fn stop_listener() {
     leases::clear();
     picker::stop();
@@ -262,7 +255,6 @@ fn stop_listener() {
     vn_tree::log::record("dev", msg);
 }
 
-/// Tees `console.*` into the log ring; the original method still runs.
 const CONSOLE_TEE_JS: &str = r#"
 (function () {
   if (!globalThis.console) return;
@@ -378,9 +370,7 @@ vn_runtime::host_fn!(fn vn_devtools_console(g, args) {
     vn_runtime::redjs::api::Value::undefined().0
 });
 
-// `__vn_devtools_targets()`: the attachable dev hosts, found by reading `devtools.json`
-// handshakes and probing each port. Includes each target's token; the calling JS already has
-// eval-level trust over its own process.
+// Includes each target's token; the calling JS already has eval-level trust over its own process.
 vn_runtime::host_fn!(fn vn_devtools_targets(_g, _args) {
     let payload = targets_json();
     JsRuntime::with(|rt| rt.ctx().string(&payload).0)
@@ -450,7 +440,6 @@ fn read_target(dir: &std::path::Path) -> Option<Json> {
     let port = doc.get("port").and_then(Json::as_f64)? as u16;
     let token = doc.get("token").and_then(Json::as_str)?.to_string();
     let pid = doc.get("pid").and_then(Json::as_f64).unwrap_or(0.0);
-    // Alive means the port accepts; a stale handshake's refused connect is instant.
     let alive = TcpStream::connect_timeout(
         &SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
         std::time::Duration::from_millis(150),
@@ -596,9 +585,8 @@ vn_runtime::raw_host_fn! { fn vn_trace_callback_end(_g, cf) {
     Value::undefined().0
 } }
 
-/// Registers the devtools host fns; call before the app bundle boots. Unconditional so
-/// `appDevtools` can answer in a process whose devtools are off; the JS tees are not (see
-/// [`install_tees_once`]).
+/// Call before the app bundle boots. Unconditional so `appDevtools` can answer while devtools are
+/// off; the JS tees are not (see [`install_tees_once`]).
 pub fn install(rt: &JsRuntime) {
     rt.register("__vn_trace_callback_begin", 1, vn_trace_callback_begin as *const _);
     rt.register("__vn_trace_callback_end", 1, vn_trace_callback_end as *const _);
@@ -613,9 +601,8 @@ pub fn install(rt: &JsRuntime) {
     }
 }
 
-/// Wraps `console.*`, `fetch` and `WebSocket` once per process, on the first moment the devtools
-/// are on, so a host that starts disabled keeps the engine's own `console` and `fetch`. Never
-/// unwrapped: code may already have captured the wrappers.
+/// Wraps `console.*`, `fetch` and `WebSocket` once, when the devtools are first on, so a host that
+/// starts disabled keeps the engine's own. Never unwrapped: code may have captured the wrappers.
 fn install_tees_once() {
     if TEES_INSTALLED.swap(true, Ordering::SeqCst) {
         return;
@@ -693,8 +680,6 @@ fn fresh_token() -> String {
     format!("{a:016x}{:016x}", h2.finish())
 }
 
-/// Serves connections until a [`stop_listener`] supersedes `generation`; returning drops
-/// `listener`, which closes the socket.
 fn accept_loop(listener: TcpListener, generation: u64) {
     loop {
         let accepted = listener.accept();
@@ -717,9 +702,8 @@ fn accept_loop(listener: TcpListener, generation: u64) {
     }
 }
 
-/// One connection, either newline-delimited JSON (a client may pipeline commands) or HTTP/1.1
-/// (one `POST /` per connection, `Connection: close`), told apart by the first line: JSON starts
-/// with `{`, an HTTP request line ends with ` HTTP/1.x`.
+/// Newline-delimited JSON (pipelining allowed) or HTTP/1.1 (one `POST /` per connection), told
+/// apart by the first line: JSON starts with `{`, an HTTP request line ends with ` HTTP/1.x`.
 fn serve(stream: TcpStream) {
     let Ok(write_half) = stream.try_clone() else { return };
     let mut out = write_half;
@@ -785,10 +769,8 @@ fn handle_request(line: &str) -> String {
     }
 }
 
-/// Bodies larger than this are refused before anything is read.
 const MAX_HTTP_BODY: usize = 4 << 20;
 
-/// `POST / HTTP/1.1` to `("POST", "/")`; `None` when the line is not HTTP.
 fn http_request_line(line: &str) -> Option<(String, String)> {
     let line = line.trim_end();
     let rest = line.strip_suffix(" HTTP/1.1").or_else(|| line.strip_suffix(" HTTP/1.0"))?;
@@ -823,7 +805,6 @@ fn serve_http(request_line: &str, mut reader: BufReader<TcpStream>, mut out: Tcp
     let length: Option<usize> = head("content-length").parse::<usize>().ok();
     let chunked = head("transfer-encoding").eq_ignore_ascii_case("chunked");
 
-    // An RFC 6455 handshake is an ordinary GET; the push channel is recognised by `Upgrade`.
     if method == "GET"
         && head("upgrade").eq_ignore_ascii_case("websocket")
         && head("connection").to_ascii_lowercase().contains("upgrade")
@@ -834,7 +815,6 @@ fn serve_http(request_line: &str, mut reader: BufReader<TcpStream>, mut out: Tcp
 
     let mut reply = |status: &str, body: String| http_reply(&mut out, status, &body);
     match method.as_str() {
-        // Browser clients send this preflight before every POST.
         "OPTIONS" => reply("204 No Content", String::new()),
         "POST" => {
             if chunked {
@@ -968,7 +948,6 @@ pub fn pump() {
         return;
     }
     let response = run(&req, &reply);
-    // A command's `window` argument is scoped to that command only.
     TARGET_WINDOW.with(|c| c.set(None));
     match response {
         Outcome::Done(text) => {
@@ -1051,7 +1030,6 @@ fn resume_pending(mut p: Pending) -> Option<Pending> {
 
 fn run(req: &Json, reply: &Sender<String>) -> Outcome {
     let cmd = req.get("cmd").and_then(Json::as_str).unwrap_or("");
-    // Absent `window` = the primary window.
     let window_arg = req.get("window").and_then(Json::as_f64).map(|w| w as u64);
     TARGET_WINDOW.with(|c| c.set(window_arg));
     let arg = |name: &str| req.get(name).and_then(Json::as_str).map(str::to_string);
@@ -1072,7 +1050,6 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
         "tree" => cmd_tree(
             arg("selector").as_deref(),
             num("depth"),
-            // A `window` alone roots the tree at what that window paints.
             num("node").or_else(|| {
                 window_arg.map(|id| f64::from(window_root(id))).filter(|r| *r > 0.0)
             }),
@@ -1219,7 +1196,6 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
 }
 
 thread_local! {
-    /// The `window` argument of the executing command; `None` = the primary window.
     static TARGET_WINDOW: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
@@ -1276,15 +1252,12 @@ fn window_root(id: u64) -> u32 {
     crate::popout::list().into_iter().find(|(w, _, _)| *w == id).map_or(0, |(_, node, _)| node)
 }
 
-/// Every window of this process, primary first.
 fn window_ids() -> Vec<u64> {
     let mut ids: Vec<u64> = crate::main_window_id().into_iter().collect();
     ids.extend(crate::popout::list().into_iter().map(|(id, _, _)| id));
     ids
 }
 
-/// Resolves a selector to exactly one node; ambiguity is an error listing the candidates, and
-/// `index` disambiguates.
 fn resolve_one(selector: &str, index: Option<f64>) -> Result<u32, String> {
     let (ids, _warnings) = vn_tree::devtools::query(selector)?;
     match (ids.len(), index) {
@@ -1307,7 +1280,6 @@ fn resolve_one(selector: &str, index: Option<f64>) -> Result<u32, String> {
     }
 }
 
-/// `tag.class (id N)`, enough to tell candidates apart in an error.
 fn short(id: u32) -> String {
     match vn_tree::devtools::node_info(id) {
         None => format!("#{id}"),
@@ -1394,7 +1366,6 @@ fn cmd_text(selector: &str, index: Option<f64>) -> String {
 }
 
 fn cmd_tree(selector: Option<&str>, depth: Option<f64>, node: Option<f64>) -> String {
-    // `node` is accepted alongside a selector: an inspector already has the id it walked to.
     let root = match (selector, node) {
         (None, None) => vn_tree::devtools::root_id(),
         (sel, node) => match resolve_target(sel, None, node) {
@@ -1460,7 +1431,6 @@ fn cmd_styles(selector: Option<&str>, index: Option<f64>, node: Option<f64>) -> 
                 "node {id} has no computed style — it is a text/anchor node, or the cascade has \
                  not run since it was created"
             )),
-            // One JSON string per source line, so a dump is skimmable.
             Some(buckets) => ok(Json::obj(vec![
                 ("id", Json::n(f64::from(id))),
                 ("hovered", Json::Bool(vn_tree::devtools::is_hovered(id))),
@@ -1547,7 +1517,6 @@ fn cmd_rules(selector: Option<&str>, index: Option<f64>, node: Option<f64>) -> S
         ("count", Json::n(items.len() as f64)),
         ("rules", Json::arr(items)),
     ];
-    // All-empty declarations: the sheet was compiled before rule-text capture was on.
     if captured == 0 && !rules.is_empty() {
         out.push((
             "note",
@@ -1578,8 +1547,6 @@ pub fn highlight_overlay() -> Option<gpui::Div> {
     overlay_for(crate::main_window_id(), 0)
 }
 
-/// The same outline for a pop-out, whose bounds map is keyed by `root` (the popped-out node) and
-/// which must draw it in its own root view.
 pub fn popout_highlight_overlay(window: u64, root: u32) -> Option<gpui::Div> {
     overlay_for(Some(window), root)
 }
@@ -1596,7 +1563,6 @@ fn overlay_for(window: Option<u64>, root: u32) -> Option<gpui::Div> {
         *slot = None;
     }
     let h = slot.as_ref()?;
-    // Every window renders this; only the one asked draws it.
     let wanted = h.window.or_else(crate::main_window_id);
     if wanted != window {
         return None;
@@ -1617,7 +1583,6 @@ fn overlay_for(window: Option<u64>, root: u32) -> Option<gpui::Div> {
             .child(
                 div()
                     .absolute()
-                    // Above the box, or inside it at the window's top edge so the chip is not clipped.
                     .top(px(if y >= 20.0 { -19.0 } else { 1.0 }))
                     .left(px(0.))
                     .px(px(5.))
@@ -1635,7 +1600,6 @@ fn overlay_for(window: Option<u64>, root: u32) -> Option<gpui::Div> {
     )
 }
 
-/// `div.card · 320×48` — what the chip over a highlighted node says.
 fn describe(id: u32, w: f32, h: f32) -> String {
     let head = match vn_tree::devtools::node_info(id) {
         None => format!("#{id}"),
@@ -1651,7 +1615,6 @@ fn describe(id: u32, w: f32, h: f32) -> String {
     format!("{head} · {}×{}", w.round(), h.round())
 }
 
-/// A selector, an explicit node id, or (for `highlight`) neither.
 fn resolve_target(selector: Option<&str>, index: Option<f64>, node: Option<f64>) -> Result<u32, String> {
     match (selector, node) {
         (Some(sel), _) => resolve_one(sel, index),
@@ -1666,8 +1629,6 @@ fn resolve_target(selector: Option<&str>, index: Option<f64>, node: Option<f64>)
     }
 }
 
-/// Draws (or clears) the inspector's outline over a node; a node id is accepted because the
-/// inspector already has ids.
 fn cmd_highlight(
     selector: Option<&str>,
     index: Option<f64>,
@@ -1701,12 +1662,8 @@ fn cmd_highlight(
     ]))
 }
 
-/// Where the pointer is over the target and which node is under it. A poll, not a mode: the host
-/// keeps no state. `insideWindow` is gpui's window-level hover flag.
-///
-/// With `window`, that window; without, every window is asked and the one the pointer is over
-/// wins. The hit test is gpui's own (`Hitbox::is_hovered_at`) and must run inside the window
-/// whose rendered frame owns the hitboxes.
+/// A poll, not a mode. Without `window` every window is asked and the one the pointer is over
+/// wins. The hit test is gpui's own and must run inside the window whose frame owns the hitboxes.
 fn cmd_pick(window_arg: Option<u64>) -> String {
     let candidates: Vec<u64> = match window_arg {
         Some(id) => vec![id],
@@ -1715,7 +1672,6 @@ fn cmd_pick(window_arg: Option<u64>) -> String {
     if candidates.is_empty() {
         return err("this process has no window to pick in");
     }
-    // (id, x, y, insideWindow, viewport w, viewport h, path)
     type Facts = (u64, f32, f32, bool, f32, f32, Vec<u32>);
     let mut chosen: Option<Facts> = None;
     for id in candidates {
@@ -1777,9 +1733,7 @@ fn cmd_click(selector: &str, index: Option<f64>, button: Option<f64>) -> String 
              in a <KeepAlive> cache), so there is no point to click"
         ));
     };
-    // `click` dispatches by node id, so this point is informational; it must match what `mouse`
-    // would aim at. The raw centre is the fallback for a node gpui would not hit, which `click`
-    // may still reach.
+    // Must match what `mouse` would aim at; the raw centre is the fallback for a node gpui would not hit.
     let (cx_, cy) = with_node_window(id, |window, _| vn_tree::devtools::aim_point(id, window))
         .flatten()
         .unwrap_or((x + w / 2.0, y + h / 2.0));
@@ -1838,7 +1792,6 @@ fn cmd_ime(selector: &str, index: Option<f64>, text: &str, commit: bool) -> Stri
     };
     let out = with_node_window(id, |window, app| {
         let done = vn_tree::devtools::ime(id, text, commit, window, app);
-        // `input` and `compositionend` go out on a `Window::defer`; flush so the next command sees them.
         if vn_tree::flush_changes() {
             window.refresh();
         }
@@ -1890,9 +1843,8 @@ fn mouse_inputs(
     events
 }
 
-/// A real pointer event through gpui's own hit test (unlike `click`, which synthesizes into JS
-/// from a node id): the hit test, content masks, paint order, `pointer-events` and hover all
-/// apply. No OS cursor moves.
+/// Unlike `click` (synthesized into JS from a node id), content masks, paint order,
+/// `pointer-events` and hover all apply. No OS cursor moves.
 fn cmd_mouse(
     selector: Option<&str>,
     index: Option<f64>,
@@ -1979,7 +1931,6 @@ fn cmd_eval(src: &str) -> String {
     match result {
         Err(e) => err(format!("eval helper failed: {e}")),
         Ok(text) => {
-            // Land Vue's scheduled work in this frame, in every window that paints the tree.
             let _ = with_commit(|_window, cx| {
                 if vn_tree::flush_changes() {
                     // Preserve unaffected cached subtrees, as after_wave does for the same DOM change.
@@ -2034,9 +1985,8 @@ fn cmd_logs(since: Option<f64>) -> String {
     ok(Json::obj(out))
 }
 
-/// Both commands focus first and finish on the NEXT frame (see [`Pending`]).
-/// `key` without a selector goes to whatever already has focus, in which case
-/// there is nothing to wait for.
+/// Both focus first and finish on the NEXT frame (see [`Pending`]); `key` without a selector goes
+/// to the focused element and does not wait.
 fn start_input_command(cmd: &str, req: &Json, reply: &Sender<String>) -> Outcome {
     let keys: Vec<String> = match cmd {
         "key" => match req.get("key").and_then(Json::as_str) {
@@ -2101,9 +2051,8 @@ fn start_input_command(cmd: &str, req: &Json, reply: &Sender<String>) -> Outcome
     })
 }
 
-/// One printable character as a real key press: the keystroke runs the input's
-/// `intercept_keystrokes` hook (firing `keydown`, honoring `preventDefault()`), then the focused
-/// input handler inserts the character and fires `input`.
+/// One printable character as a real key press: `keydown` (honoring `preventDefault()`) via the
+/// input's `intercept_keystrokes` hook, then the input handler inserts it and fires `input`.
 fn type_char(ch: char, window: &mut Window, cx: &mut App) -> bool {
     let key = match ch {
         ' ' => "space".to_string(),
@@ -2173,9 +2122,7 @@ fn parse_keystroke(spec: &str) -> Result<gpui::Keystroke, String> {
     Ok(gpui::Keystroke { modifiers, key: name, key_char })
 }
 
-/// A real wheel event at a window coordinate through gpui's own hit test (`scroll` drives a
-/// `ScrollHandle` directly and never involves the wheel). Deltas are the DOM's: `dy > 0` scrolls
-/// down.
+/// Unlike `scroll` (which drives a `ScrollHandle` directly). Deltas are the DOM's: `dy > 0` scrolls down.
 fn cmd_wheel(
     selector: Option<&str>,
     index: Option<f64>,
@@ -2202,7 +2149,6 @@ fn cmd_wheel(
     }
     let position = gpui::Point::new(gpui::px(point.0), gpui::px(point.1));
     let wheel = |window: &mut Window, app: &mut App| {
-        // A move first, as `mouse` sends one: gpui hit-tests from the window's pointer position.
         window.dispatch_event(
             gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
                 position,
@@ -2228,7 +2174,6 @@ fn cmd_wheel(
         }
         true
     };
-    // A selector names the window that paints the node; bare x/y use the command's window.
     let done = match node {
         Some(id) => with_node_window(id, wheel),
         None => with_target(wheel),
@@ -2244,7 +2189,6 @@ fn cmd_wheel(
     }
 }
 
-/// Every OS window this process paints, and every inspector it has open.
 fn cmd_windows() -> String {
     let main = crate::main_window_id();
     let popouts = crate::popout::list();
@@ -2323,7 +2267,6 @@ fn cmd_raise() -> String {
     }
 }
 
-/// `trace start|stop|peek|mark` — see `trace.rs`.
 fn cmd_trace(op: Option<&str>, frames: bool, label: Option<&str>, cap: Option<f64>) -> String {
     let result = match op.unwrap_or("peek") {
         "start" => trace::start(cap.map(|c| c.max(0.0) as usize)),
@@ -2387,7 +2330,6 @@ fn perf_data() -> Json {
         ("p95Ms", Json::n(round2(p95))),
         ("maxMs", Json::n(round2(max))),
         ("fps", Json::n(f64::from((fps * 10.0).round() / 10.0))),
-        // One frame's budget: the display refresh interval; `null` when the platform does not report it.
         (
             "budgetMs",
             match crate::window::frame_budget_ms() {
@@ -2398,28 +2340,23 @@ fn perf_data() -> Json {
         ("samples", Json::arr(tail)),
         ("idle", crate::idle::status()),
         ("nodes", Json::n(f64::from(vn_tree::devtools::node_count()))),
-        // Since process start: element-tree builds, and frames shown by a present alone.
         ("builds", Json::n(vn_tree::devtools::frame_counts().0 as f64)),
         ("presents", Json::n(vn_tree::devtools::frame_counts().1 as f64)),
         // Scroll containers registered with the wheel router last frame. Filled by the paint walk,
         // so a retained-render replay cannot rebuild it.
         ("scrollChain", Json::n(f64::from(vn_tree::devtools::scroll_chain_count()))),
         ("windows", Json::n(window_ids().len() as f64)),
-        // The phase breakdown belongs to `VN_PERF`, which owns those counters; say whether it is on.
         ("phases", Json::Bool(vn_tree::perf::env_enabled())),
     ])
 }
 
-/// The push channel's framing of the same object.
 pub(crate) fn perf_json() -> String {
     let Json::Obj(mut entries) = perf_data() else { return String::new() };
     entries.insert(0, ("t".to_string(), Json::s("perf")));
     Json::Obj(entries).to_json()
 }
 
-/// `localStorage` / `sessionStorage`, read and written through the app's own JS (`eval`) rather
-/// than `vn-storage`, so a panel shows what `localStorage.getItem` answers, pending writes
-/// included.
+/// Goes through the app's own JS (`eval`), not `vn-storage`, so pending writes are included.
 fn cmd_storage(
     area: Option<&str>,
     op: Option<&str>,
@@ -2468,7 +2405,6 @@ fn cmd_storage(
             ))
         }
     };
-    // Unwrap `cmd_eval`'s envelope; a `null` value means this host has no such area.
     let reply = cmd_eval(&js);
     let Some(parsed) = json::parse(&reply) else { return reply };
     if parsed.get("ok").and_then(Json::as_bool) != Some(true) {
@@ -2482,13 +2418,9 @@ fn cmd_storage(
     }
 }
 
-/// `dialog`: scripted answers for waiting dialogs (`<input type=file>`, File System Access
-/// pickers, `<a download>` Save As, permission prompts). Only under `VN_DIALOGS=scripted`; the
-/// devtools never answer a real dialog.
-///
-/// `list` (default) names each; `answer` finishes a file dialog with `paths` (a JSON array, or
-/// one string split by `|`); `choose` presses a question's `button` (label or index); `cancel`
-/// dismisses either.
+/// Scripted answers for waiting dialogs; only under `VN_DIALOGS=scripted` (the devtools never
+/// answer a real dialog). `list` (default); `answer` with `paths` (a JSON array, or one string
+/// split by `|`); `choose` a question's `button` (label or index); `cancel`.
 fn cmd_dialog(op: Option<&str>, id: Option<f64>, paths: Option<&Json>, button: Option<String>) -> String {
     use vn_desktop::dialog::{scripted, scripted_mode};
     if !scripted_mode() {
@@ -2497,7 +2429,6 @@ fn cmd_dialog(op: Option<&str>, id: Option<f64>, paths: Option<&Json>, button: O
              real one, which is the user's to answer",
         );
     }
-    // vn-desktop answers serde_json values; the wire embeds their text.
     fn embed(v: impl std::fmt::Display) -> Json {
         Json::from(Raw(v.to_string()))
     }
@@ -2535,9 +2466,8 @@ fn cmd_dialog(op: Option<&str>, id: Option<f64>, paths: Option<&Json>, button: O
     }
 }
 
-/// `permissions`: the app's permission states and stored answers. `list` (default) gives each
-/// capability's `state`, the stored `decisions` and their `file`; `reset` forgets the answer for
-/// `name`, or all of them, so the next request asks again. Works on any host, unlike `dialog`.
+/// `list` (default) gives each capability's `state` and the stored `decisions`; `reset` forgets
+/// the answer for `name`, or all, so the next request asks again. Works on any host, unlike `dialog`.
 fn cmd_permissions(op: Option<&str>, name: Option<&str>) -> String {
     match op.unwrap_or("list") {
         "list" => ok(Json::from(Raw(vn_permissions::describe_json()))),
@@ -2723,7 +2653,6 @@ mod tests {
         assert!(parse_keystroke("Shift+F10").unwrap().modifiers.shift);
     }
 
-    /// `VN_DEVTOOLS=1` forces on and locks; `=0` forces off without locking.
     #[test]
     fn the_env_override_forces_on_and_only_forcing_on_locks() {
         let saved = std::env::var("VN_DEVTOOLS").ok();
@@ -2732,7 +2661,6 @@ mod tests {
             resolve_initial(config)
         };
 
-        // Unset or empty: the config decides, nothing is locked.
         assert_eq!(case("", true), (true, false));
         assert_eq!(case("", false), (false, false));
         for on in ["1", "on", "true", "yes", "ON", "True"] {
@@ -2750,7 +2678,6 @@ mod tests {
         }
     }
 
-    /// A JSON request and an HTTP request line cannot be confused, so one port serves both.
     #[test]
     fn http_and_json_framings_are_told_apart_by_the_first_line() {
         assert_eq!(

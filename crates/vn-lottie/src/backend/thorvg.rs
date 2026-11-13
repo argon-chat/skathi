@@ -6,20 +6,18 @@
 //!
 //! The engine is process-global and not concurrency-safe: ThorVG 1.1.0's software engine keeps
 //! unsynchronised global state (loader registry, renderer refcount, composition pools), and two
-//! threads driving their own animations corrupt it (measured: 12/40 `STATUS_ACCESS_VIOLATION` runs
-//! at `--test-threads=8` without the lock, 0/40 with). So every `tvg_*` call goes through
-//! [`ENGINE`], a plain mutex, uncontended since gpui paints on one thread.
+//! threads driving their own animations corrupt it. So every `tvg_*` call goes through [`ENGINE`],
+//! a plain mutex, uncontended since gpui paints on one thread.
 //!
-//! [`ThorVg`] is `Send` (the sticker engine loads on one worker and may draw on another): every
-//! call is made under [`ENGINE`], the object graph is owned by one [`ThorVg`] and never shared, and
-//! the expression engine's JerryScript context is looked up by thread id on every evaluation
-//! (`LottieExpressions::context()`). It is not `Sync`.
+//! [`ThorVg`] is `Send` (the sticker engine loads on one worker and may draw on another) and not
+//! `Sync`: every call is made under [`ENGINE`], the object graph is owned by one [`ThorVg`], and
+//! the expression engine's JerryScript context is looked up by thread id on every evaluation.
 //!
-//! Lifetimes: `animation` owns `picture` and `canvas` takes a second reference in
-//! `tvg_canvas_add`; both are released in [`Drop`]. `self.buffer` is only replaced after
-//! `tvg_swcanvas_set_target` points at the replacement. `tvg_picture_load_data` is called with
-//! `copy = true`, so ThorVG owns its JSON and its content-hash loader cache is disabled (otherwise
-//! two `<lottie>` nodes showing the same file would share a loader and its playhead).
+//! Lifetimes: `animation` owns `picture` and `canvas` takes a second reference in `tvg_canvas_add`;
+//! both are released in [`Drop`]. `self.buffer` is only replaced after `tvg_swcanvas_set_target`
+//! points at the replacement. `tvg_picture_load_data` is called with `copy = true`, so ThorVG owns
+//! its JSON and its content-hash loader cache is disabled (otherwise two `<lottie>` nodes showing
+//! the same file would share a loader and its playhead).
 
 use std::ffi::c_char;
 use std::ptr;
@@ -34,14 +32,12 @@ use crate::state::{LottieError, LottieMeta};
 /// and `"lottie+json"`); an unknown type falls through to trying every loader.
 const MIME_LOTTIE: &[u8] = b"lottie+json\0";
 
-/// The one lock every `tvg_*` call is made under. It guards a `Result` so engine start-up happens
-/// once, inside the same critical section.
+/// The one lock every `tvg_*` call is made under; it guards a `Result` so engine start-up happens once.
 static ENGINE: std::sync::Mutex<Option<Result<(), i32>>> = std::sync::Mutex::new(None);
 
 /// Takes the engine lock, bringing ThorVG up on first use. `threads = 0` keeps ThorVG's
-/// TaskScheduler on the calling thread (frames are rasterised inline from the paint pass). The
-/// engine is never terminated: `tvg_engine_term` is refcounted and nothing proves the last
-/// `LottieState` gone.
+/// TaskScheduler on the calling thread. The engine is never terminated: `tvg_engine_term` is
+/// refcounted and nothing proves the last `LottieState` gone.
 fn engine() -> Result<std::sync::MutexGuard<'static, Option<Result<(), i32>>>, LottieError> {
     // A poisoned lock means a previous caller panicked mid-render; ThorVG's state is still consistent, so recover.
     let mut guard = ENGINE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -64,15 +60,13 @@ pub(crate) struct ThorVg {
     animation: tvg::Tvg_Animation,
     picture: tvg::Tvg_Paint,
     canvas: tvg::Tvg_Canvas,
-    /// ThorVG's render target: `target.0 * target.1` ARGB8888 words, kept across frames so a
-    /// steady-state animation allocates once.
+    /// ThorVG's render target: `target.0 * target.1` ARGB8888 words, kept across frames.
     buffer: Vec<u32>,
     target: (u32, u32),
     straight: bool,
     intrinsic: (u32, u32),
     /// `Picture::size` dirties the scene, so it is only re-applied when the size moves.
     applied_size: (f32, f32),
-    /// Offset between ThorVG's frame domain (`0 ..= op - ip`) and absolute source frames.
     in_point: f32,
 }
 
@@ -81,8 +75,7 @@ impl ThorVg {
         // Held for all of `load`: `tvg_picture_load_data` registers the loader in a process-global registry.
         let _engine = engine()?;
 
-        // ThorVG's loader parses text, so the document goes back to JSON here, carrying
-        // `crate::normalize`'s rewrites (which run for both backends).
+        // ThorVG's loader parses text, so the document goes back to JSON here, carrying `crate::normalize`'s rewrites.
         let json = serde_json::to_string(&document).map_err(LottieError::Json)?;
 
         unsafe {
@@ -142,14 +135,12 @@ impl ThorVg {
         }
     }
 
-    /// `<lottie>`'s raster: uniform `scale` from the authored size into a `width × height` canvas,
-    /// premultiplied BGRA.
+    /// `<lottie>`'s raster: uniform `scale` from the authored size into a `width × height` canvas, premultiplied BGRA.
     pub fn render(&mut self, frame: f32, scale: f32, width: u32, height: u32) -> Option<Raster> {
         // Uniform scale from the authored size, as `rasterlottie` does; the canvas is the ceil, so a
         // fractional scale letterboxes by at most a pixel.
         let size = (self.intrinsic.0 as f32 * scale, self.intrinsic.1 as f32 * scale);
         let words = self.draw(frame, size, (width, height), false)?;
-        // ARGB8888 is `0xAARRGGBB`: the little-endian bytes are already B, G, R, A, so no channel swap.
         let mut bgra = Vec::with_capacity(words.len() * 4);
         for word in words {
             bgra.extend_from_slice(&word.to_le_bytes());
@@ -161,8 +152,7 @@ impl ThorVg {
         })
     }
 
-    /// The sticker engine's raster: the whole animation stretched to `width × height`,
-    /// straight-alpha BGRA (`ARGB8888S`), borrowed until the next call.
+    /// The sticker engine's raster: the whole animation stretched to `width × height`, straight-alpha BGRA, borrowed until the next call.
     pub fn render_straight(&mut self, frame: f32, width: u32, height: u32) -> Option<&[u8]> {
         let words = self.draw(frame, (width as f32, height as f32), (width, height), true)?;
         #[cfg(target_endian = "big")]
@@ -172,17 +162,14 @@ impl ThorVg {
         Some(unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), words.len() * 4) })
     }
 
-    /// Draws `frame` at `size` into a `target` canvas (straight alpha when `straight`) and returns its words.
     fn draw(&mut self, frame: f32, size: (f32, f32), target: (u32, u32), straight: bool) -> Option<&[u32]> {
         let (width, height) = target;
         if width == 0 || height == 0 {
             return None;
         }
-        // Held across the whole update/draw/sync sequence, the unit ThorVG's internals assume.
         let _engine = engine().ok()?;
         unsafe {
             if self.target != target || self.straight != straight {
-                // Allocate, retarget, then drop the old buffer: the canvas must never point at freed memory.
                 let mut buffer = vec![0u32; (width as usize) * (height as usize)];
                 let colorspace = if straight {
                     tvg::Tvg_Colorspace::TVG_COLORSPACE_ARGB8888S
@@ -239,7 +226,6 @@ impl Drop for ThorVg {
         // Teardown unregisters the loader from the global registry `load` touched, so it takes the
         // lock; if the engine never came up there is nothing to destroy.
         let Ok(_engine) = engine() else { return };
-        // Canvas first: it releases its picture reference, then the animation releases the last one.
         unsafe {
             tvg::tvg_canvas_destroy(self.canvas);
             tvg::tvg_animation_del(self.animation);

@@ -2,15 +2,7 @@
 //!
 //! Enabled by `--features prod`. There is no manifest, module registry, watcher or polling:
 //! [`poll_frame`] is an empty inline function. Everything app-specific reads the payload
-//! ([`crate::payload`]):
-//!
-//! | what | from |
-//! |---|---|
-//! | the bundle | `vn/app.js` — exactly `bun prod.ts`'s output |
-//! | the window config | `vn/window.json` — exactly what dev reads from the manifest |
-//! | the app's name | `vn/app.json` `name` — `vn.config.json` `"name"`, else the app directory |
-//! | `fetch()` / `Image` | the content provider below, over the payload's assets |
-//! | `<img>` / `<lottie>` / `<video>` | `vn_tree::set_asset_store` (lib.rs) — the same lookup |
+//! ([`crate::payload`]).
 //!
 //! The inspector bundle and the preludes stay `include_str!`: they belong to the host, not the app.
 
@@ -18,8 +10,6 @@ use vn_runtime::JsRuntime;
 
 use crate::payload;
 
-/// Installs the content provider and evaluates the packaged bundle, which
-/// mounts the app. `main` has already refused to get here without a payload.
 pub fn boot(rt: &JsRuntime) {
     let Some(loaded) = payload::get() else {
         eprintln!("[prod] no app payload — nothing to boot");
@@ -91,9 +81,6 @@ pub fn boot(rt: &JsRuntime) {
     }
 }
 
-/// `location.reload()`'s second half (src/reload.rs): the app is already torn
-/// down; evaluate the payload's script again. The content provider [`boot`]
-/// installed stays (it is set once per process).
 pub fn reboot(rt: &JsRuntime) {
     let Some(script) = payload::get().and_then(|l| l.payload.script()) else {
         eprintln!("[prod] reload: the payload has no vn/app.js — nothing to run");
@@ -104,25 +91,17 @@ pub fn reboot(rt: &JsRuntime) {
     }
 }
 
-/// No dev transport in prod: nothing to poll, nothing to reload.
 #[inline(always)]
 pub fn poll_frame(_frame_no: u32) {}
 
-/// The `window` block of `vn.config.json`, as `bun prod.ts` wrote it into the
-/// payload (`{}` when the app declares none) — the same JSON the dev host reads
-/// out of `dist/manifest.json`.
 pub fn window_config() -> Option<String> {
     payload::get()?.payload.window_json().map(str::to_string)
 }
 
-/// The `launch` block of the payload's META — the same JSON the dev host
-/// reads out of `dist/manifest.json` (see [`crate::dev::launch_config`]).
 pub fn launch_config() -> Option<String> {
     payload::get()?.meta.launch.clone()
 }
 
-/// The app's name; see [`crate::dev::app_name`] for what it is for.
-///
 /// The payload's `name`, resolved by `vn build` with dev's own chain (`vn.config.json` `"name"`, else
 /// the app directory). It beats the exe's file stem, so renaming `Hello.exe` does not lose a user's
 /// data and prod apps do not share one storage folder. `VN_APP_NAME` still wins.
@@ -132,9 +111,6 @@ pub fn app_name() -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 
-/// `<img>`, `<lottie>`, `<video>`, `poster`: resolve relative URLs out of the
-/// payload instead of the disk. Returns whether a store was installed.
-///
 /// `VN_APP_ROOT` is ignored in a packaged exe: the package is the document, and an env var pointing
 /// `<img>` at a directory while `fetch()` read the payload would be a dev/prod split.
 pub fn publish_asset_store() -> bool {
@@ -150,8 +126,6 @@ pub fn publish_asset_store() -> bool {
     true
 }
 
-/// A prod build with no payload is a bare host: say what it is and stop.
-/// `--devtools` (the inspector mode) needs no app and keeps working.
 pub fn require_payload() {
     if payload::get().is_some() {
         return;

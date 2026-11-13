@@ -1,15 +1,12 @@
 #!/usr/bin/env bun
 /**
- * vn-devtools MCP server: the same wire as `ctl.ts`, exposed as MCP tools.
+ * vn-devtools MCP server: the same wire as `ctl.ts`, exposed as MCP tools `vn_<cmd>`.
  *
  *   bun packages/vue-native/devtools/mcp.ts [--dist <slot> | --app <name>]
  *
- * `--app <name>` attaches to a packaged app (`vn build`) by its vn.config name instead: its newest live
- * instance, re-resolved per call (./apps.ts).
- *
- * One server instance per dist slot; every tool re-reads `<dist>/devtools.json` per call, so restarting the
- * host (new port, new token) does not require restarting the server. The tool list is generated from
- * `./commands.ts` (the table `ctl.ts` reads too) and named `vn_<cmd>`, so tools are 1:1 with wire commands.
+ * `--app <name>` attaches to a packaged app by its vn.config name, re-resolved per call (./apps.ts).
+ * Every tool re-reads `<dist>/devtools.json` per call, so restarting the host does not require
+ * restarting the server.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -81,8 +78,6 @@ async function call(request: Record<string, unknown>) {
   return JSON.parse(line) as { ok?: boolean; data?: unknown; error?: string };
 }
 
-// Tool table, generated from the shared command table: one tool `vn_<cmd>` per wire command, with its
-// arguments plus `window`.
 
 const TOOLS = mcpTools();
 
@@ -102,8 +97,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
   const args = (request.params.arguments ?? {}) as Record<string, unknown>;
   try {
-    // `build` already drops the arguments the caller left out, so the host
-    // never sees `"index": null`.
     const reply = await call(tool.build(args));
     if (!reply.ok) {
       return { isError: true, content: [{ type: "text", text: reply.error ?? "unknown error" }] };

@@ -6,25 +6,20 @@
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-/// Entries kept.
 const CAPACITY: usize = 500;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
-/// Monotonic entry sequence — the `since` cursor `logs` pages on.
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// One captured line.
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub seq: u64,
     pub at_ms: u64,
-    /// `log`, `warn`, `error`, `advisory`, `css`, `dev`, `js` — a coarse channel name, not a
-    /// severity ladder.
+    /// `log`, `warn`, `error`, `advisory`, `css`, `dev` or `js`: a coarse channel, not a severity.
     pub kind: &'static str,
     pub text: String,
-    /// `console.log("%cA%cB", cssA, cssB)`'s style runs, kept as TEXT because the inspector re-parses
-    /// it anyway. As the JSON the console tee built:
-    /// `[{"at":0,"css":"…"},{"at":1,"css":"…"}]`, where `at` is an index into [`Entry::text`].
+    /// `console.log("%cA%cB", …)` style runs as the JSON the console tee built
+    /// (`[{"at":0,"css":"…"}]`, `at` an index into [`Entry::text`]), kept as text because the inspector re-parses it.
     pub styles: Option<String>,
 }
 
@@ -37,7 +32,6 @@ thread_local! {
     static STATUS: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-/// Collapses every run of whitespace to one space and trims the ends.
 pub fn one_line(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut space = false;
@@ -66,7 +60,6 @@ pub fn status() -> Option<String> {
     STATUS.with(|s| s.borrow().clone())
 }
 
-/// Turns the ring on.
 pub fn enable() {
     ENABLED.store(true, Ordering::Relaxed);
     START.with(|s| {
@@ -80,7 +73,6 @@ pub fn is_enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
-/// `(entries in the ring, bytes of their text and style runs)` — devtools `mem`.
 pub fn mem_stats() -> (usize, usize) {
     RING.with(|r| {
         let r = r.borrow();
@@ -92,12 +84,10 @@ pub fn mem_stats() -> (usize, usize) {
     })
 }
 
-/// Appends one line.
 pub fn record(kind: &'static str, text: impl Into<String>) {
     record_styled(kind, text, None)
 }
 
-/// [`record`], plus the `%c` style runs a `console.*` call carried.
 pub fn record_styled(kind: &'static str, text: impl Into<String>, styles: Option<String>) {
     if !is_enabled() {
         return;
@@ -115,7 +105,7 @@ pub fn record_styled(kind: &'static str, text: impl Into<String>, styles: Option
 }
 
 /// Every entry with `seq >= since`, oldest first, plus how many were dropped from the front before
-/// `since` could be served, so a client with a stale cursor is told it missed lines.
+/// `since` could be served.
 pub fn since(since: u64) -> (Vec<Entry>, u64) {
     RING.with(|r| {
         let r = r.borrow();

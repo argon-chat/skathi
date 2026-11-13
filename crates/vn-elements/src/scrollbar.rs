@@ -5,7 +5,7 @@
 //!
 //! The wheel is intercepted in the capture phase: gpui's own listener bubbles without stopping
 //! propagation, so every ancestor scroll box would scroll at once. A gesture locks to the axis it
-//! began on, and the root element always scrolls, so no wheel falls through to gpui's listener.
+//! began on.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -56,13 +56,11 @@ pub struct ScrollbarStyle {
     pub thumb_active: Hsla,
     pub track: Hsla,
     pub track_active: Hsla,
-    /// Keep the bar up regardless of the idle timer.
     pub always_visible: bool,
 }
 
 impl ScrollbarStyle {
-    /// The default look: the element's text colour at low alpha, so it contrasts on any
-    /// background. `scrollbar-color` overrides it.
+    /// The default look: the text colour at low alpha, so it contrasts on any background.
     pub fn from_text_color(color: Hsla) -> Self {
         Self {
             track_width: Some(TRACK_AUTO),
@@ -107,7 +105,6 @@ struct State {
     last_scroll: Option<Instant>,
     last_drag_update: Instant,
     idle_timer: bool,
-    /// Axis the current wheel gesture locked to, and when it was last fed.
     lock: Option<(Axis, Instant)>,
     width: [Pixels; 2],
     width_at: Instant,
@@ -156,24 +153,18 @@ struct ChainEntry {
 }
 
 thread_local! {
-    /// Scroll containers painted last frame, in paint order. Deferred children can paint after
-    /// their ancestors, so nesting comes from element-id ancestry, not this order.
-    ///
-    /// gpui's wheel listener does not stop propagation and `should_handle_scroll` is true for every
-    /// hitbox under the pointer, so a wheel over a nested box would scroll it and the page.
+    /// Scroll containers painted last frame, in paint order. Deferred children can paint after their
+    /// ancestors, so nesting comes from element-id ancestry, not this order.
     static CHAIN: std::cell::RefCell<Vec<ChainEntry>> = const { std::cell::RefCell::new(Vec::new()) };
 
-    /// Scroll containers under the pointer with the offsets the capture phase of the current wheel
-    /// event found, before gpui's bubble listener moved anything. See [`undo_wheel_scroll`].
+    /// Scroll containers under the pointer with the offsets the current wheel event found. See [`undo_wheel_scroll`].
     static BEFORE_WHEEL: std::cell::RefCell<Vec<(gpui::HitboxId, ScrollHandle, Point<Pixels>)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Puts every scroll container under the pointer back where the current wheel event found it, and
-/// says whether one had moved.
-///
-/// For a cancelled `wheel`: gpui's listeners have already scrolled, so the embedder calls this and
-/// stops propagation. Only meaningful during that event's dispatch.
+/// says whether one had moved. For a cancelled `wheel`: gpui's listeners have already scrolled, so
+/// the embedder calls this and stops propagation. Only meaningful during that event's dispatch.
 pub fn undo_wheel_scroll() -> bool {
     BEFORE_WHEEL.with(|b| {
         let mut moved = false;
@@ -188,11 +179,9 @@ pub fn undo_wheel_scroll() -> bool {
 }
 
 thread_local! {
-    /// Per-scrollbar state, keyed by the bar's `ElementId` (the container's node id).
-    ///
-    /// Not gpui element state: `Window::use_state` is keyed by the whole element-id path, which
-    /// changes when a retained-render boundary is re-offered with a new entity, and that reset an
-    /// in-progress drag.
+    /// Per-scrollbar state, keyed by the bar's `ElementId`. Not gpui element state: `Window::use_state`
+    /// is keyed by the whole element-id path, which changes when a retained-render boundary is
+    /// re-offered with a new entity, and that reset an in-progress drag.
     static STATES: std::cell::RefCell<HashMap<u64, (u64, Rc<Cell<State>>)>> =
         std::cell::RefCell::new(HashMap::new());
     static FRAME: Cell<u64> = const { Cell::new(0) };
@@ -231,11 +220,9 @@ pub fn reset_frame() {
 }
 
 /// A contiguous run of registry entries a retained-render boundary added while painting for real.
-///
-/// A replayed subtree does not paint, so without re-registering its span the wheel router loses
-/// every scroll container inside it. Replay is safe because `HitboxId`s are never reused within a
-/// window and `ScrollHandle` is a shared `Rc`. Record with [`chain_mark`] + [`chain_since`],
-/// replay with [`chain_replay`].
+/// A replayed subtree does not paint, so without re-registering its span the wheel router loses its
+/// scroll containers. Replay is safe because `HitboxId`s are never reused within a window. Record
+/// with [`chain_mark`] + [`chain_since`], replay with [`chain_replay`].
 #[derive(Clone, Default)]
 pub struct ChainSpan(Vec<ChainEntry>);
 
@@ -254,8 +241,7 @@ impl std::fmt::Debug for ChainSpan {
     }
 }
 
-/// `mark` / `since` over a `Vec`, generic so it can be tested without gpui (a `HitboxId` cannot be
-/// built outside gpui's `test-support`).
+/// `mark` / `since` over a `Vec`, generic so it can be tested without gpui.
 fn span_since<T: Clone>(v: &[T], mark: usize) -> Vec<T> {
     v.get(mark..).map(<[T]>::to_vec).unwrap_or_default()
 }
@@ -279,7 +265,6 @@ pub fn chain_count() -> usize {
     chain_mark()
 }
 
-/// The container's path: the bar is its last child, so its own id is dropped.
 fn container_path(id: &GlobalElementId) -> &[ElementId] {
     match id.split_last() {
         Some((_, ancestors)) => ancestors,
@@ -326,8 +311,8 @@ fn can_move(handle: &ScrollHandle, axis: Axis, delta: Pixels) -> bool {
     (next - current).abs() > px(0.01)
 }
 
-/// An overlay scrollbar for one `overflow: auto | scroll` box, plus its wheel routing. Paint it as
-/// the container's last child; it is absolutely positioned and reads its geometry from the handle.
+/// An overlay scrollbar for one `overflow: auto | scroll` box, plus its wheel routing; paint it as
+/// the container's last child.
 pub struct Scrollbar {
     id: ElementId,
     handle: ScrollHandle,
@@ -353,8 +338,7 @@ impl Scrollbar {
         }
     }
 
-    /// Dispatches the DOM `wheel` event for a gesture this element takes over; `true` is
-    /// `preventDefault()`. Only called on the takeover path.
+    /// Dispatches the DOM `wheel` event for a gesture this element takes over; `true` is `preventDefault()`.
     pub fn on_wheel(
         mut self,
         f: impl Fn(Point<Pixels>, &mut Window, &mut App) -> bool + 'static,
@@ -363,7 +347,6 @@ impl Scrollbar {
         self
     }
 
-    /// Reports a scroll this element performed itself (wheel takeover, thumb drag, track click).
     pub fn on_scrolled(mut self, f: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_scrolled = Some(Rc::new(f));
         self
@@ -448,7 +431,6 @@ impl Element for Scrollbar {
         let state = state_for(&self.id);
         let now = Instant::now();
 
-        // Viewport in window space as the container recorded it; this element's own bounds ride the scroll offset.
         let viewport = self.handle.bounds();
         if viewport.size.width <= px(0.) || viewport.size.height <= px(0.) {
             return Prepaint { viewport: None, axes: Vec::new(), state, opacity: 0.0 };
@@ -530,7 +512,6 @@ impl Element for Scrollbar {
                 if max_offset <= px(0.5) {
                     continue;
                 }
-                // The horizontal track stops short of the vertical one so the thumbs never meet.
                 let margin_end = if both && !vertical { width } else { px(0.) };
                 let track = if vertical {
                     Bounds {
@@ -551,7 +532,6 @@ impl Element for Scrollbar {
                 let scrolled = if vertical { -offset.y } else { -offset.x };
                 let start = (travel * (scrolled / max_offset).clamp(0., 1.)).max(px(0.));
 
-                // The hit target keeps the full track width; only the fill narrows on hover.
                 let hovered = state.get().hovered == Some(axis) || state.get().dragging == Some(axis);
                 let target = if hovered { width - INSET * 2. } else { (width - INSET * 2.) * 0.66 };
                 let mut s = state.get();
@@ -627,9 +607,8 @@ impl Element for Scrollbar {
         let opacity = prepaint.opacity;
         let bounds = viewport.bounds;
 
-        // Scroll chain: gpui's wheel listener moves every ancestor too, so register this container
-        // and take over only when it is the nearest box to use the wheel AND an ancestor could also
-        // move. Otherwise gpui's listener runs untouched.
+        // Scroll chain: gpui's wheel listener moves every ancestor too, so take over only when this is
+        // the nearest box to use the wheel AND an ancestor could also move.
         let ancestry = global_id.cloned().unwrap_or_default();
         CHAIN.with(|c| {
             c.borrow_mut().push(ChainEntry {
@@ -654,7 +633,6 @@ impl Element for Scrollbar {
                 if !phase.capture() || !hitbox_id.should_handle_scroll(window) {
                     return;
                 }
-                // Offset before anything moved it (see `undo_wheel_scroll`).
                 BEFORE_WHEEL.with(|b| {
                     let mut b = b.borrow_mut();
                     if b.is_empty() {
@@ -682,12 +660,9 @@ impl Element for Scrollbar {
                 s.lock = Some((axis, now));
                 state.set(s);
 
-                // A vertical delta drives a horizontal-only box, as in a browser.
                 let gesture_axis = axis;
                 let (axis, delta) = effective_delta(gesture_axis, raw, (wants_x, wants_y));
 
-                // Deferred children invert paint order, so use element ancestry: a child at its edge
-                // yields to the nearest ancestor that can use the wheel.
                 let (can_claim, outer_moves) = CHAIN.with(|c| {
                     let chain = c.borrow();
                     chain_position(
@@ -763,7 +738,6 @@ impl Element for Scrollbar {
                     }
                     cx.notify(view);
                 }
-                // Chaining: an event this box cannot use goes on to ancestors only if the axis chains.
                 if moved || prevented || !overscroll.chains(axis) {
                     cx.stop_propagation();
                 }
@@ -999,7 +973,6 @@ fn sample_opacity(state: &State, now: Instant) -> f32 {
     }
 }
 
-/// Moves a painted thumb width toward `target` and returns where it got to. Pure in `now`.
 fn animate_width(state: &mut State, idx: usize, target: Pixels, now: Instant) -> Pixels {
     let from = state.width[idx];
     if from == Pixels::ZERO {

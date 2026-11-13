@@ -13,7 +13,6 @@ use crate::element::{El, MatchDom};
 enum Anchor {
     Descendant,
     Child,
-    /// `:has(+ .x)` — the sibling right after.
     NextSibling,
     FollowingSibling,
 }
@@ -28,8 +27,6 @@ thread_local! {
     /// leaked stylesheet is `'static`, and an entry from a replaced sheet is simply never named
     /// again.
     static REGISTRY: RefCell<Vec<Entry>> = const { RefCell::new(Vec::new()) };
-    /// Recompiles must map the same argument to the same index, so the rewritten text is identical
-    /// and `reparse_selector` reuses the selector instead of leaking another.
     static BY_ARGUMENT: RefCell<std::collections::HashMap<String, Option<usize>>> =
         RefCell::new(std::collections::HashMap::new());
 }
@@ -38,19 +35,15 @@ thread_local! {
 /// parcel routes to the element.
 const PREFIX: &str = "--vn-has-";
 
-/// Is this custom pseudo-class one the rewrite produced?
 pub(crate) fn is_marker(name: &str) -> bool {
     name.strip_prefix(PREFIX)
         .is_some_and(|index| index.parse::<usize>().is_ok())
 }
 
-/// Does this selector text contain a `:has()` the compiler has to rewrite?
 pub(crate) fn present(selector_text: &str) -> bool {
     selector_text.contains(":has(")
 }
 
-/// The rewritten text, or `None` when the argument cannot be compiled and the rule is dropped as
-/// before.
 pub(crate) fn rewrite(selector_text: &str) -> Option<String> {
     let mut out = String::with_capacity(selector_text.len());
     let mut rest = selector_text;
@@ -74,7 +67,6 @@ pub(crate) fn rewrite(selector_text: &str) -> Option<String> {
     Some(out)
 }
 
-/// The offset of the `)` that closes an argument list opened before `text`.
 fn balanced_end(text: &str) -> Option<usize> {
     let mut depth = 0usize;
     for (i, c) in text.char_indices() {
@@ -147,7 +139,6 @@ pub(crate) fn registry_len() -> usize {
     REGISTRY.with(|r| r.borrow().len())
 }
 
-/// Answers one rewritten `:has()` against an element.
 pub(crate) fn matches<D: MatchDom>(name: &str, node: &D) -> bool {
     let Some(index) = name.strip_prefix(PREFIX).and_then(|n| n.parse::<usize>().ok()) else {
         return false;

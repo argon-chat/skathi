@@ -8,23 +8,10 @@
 //! A browser throttles a hidden page but never stops it. So a gpui timer runs here every [`TICK`],
 //! and whenever no frame has been pumped for [`STALL`] it runs the same JS wave the frame does
 //! ([`crate::js_wave`] with [`crate::Wave::Background`]) and the same flush after it
-//! ([`crate::after_wave`]), minus the animation frames:
-//!
-//! - timers, native tasks (fetch, image decodes), WebSocket events, IndexedDB
-//!   results, Web Audio upkeep, permission changes and microtasks run;
-//! - the host queues drain: voice events, `appPermissions` / `appShell`
-//!   settlements, the localStorage write, a requested `location.reload()`,
-//!   one devtools command per tick (so `eval` answers while minimised);
-//! - `requestAnimationFrame` callbacks (and redjs's idle callbacks, which run
-//!   after them) wait for the next drawn frame, as in a hidden browser page;
-//! - tree changes are restyled and the window is marked dirty; it is drawn
-//!   when it is shown again.
+//! ([`crate::after_wave`]), minus the animation frames.
 //!
 //! The trigger is "no frame for `STALL`", not "minimised": one rule covers every way a window stops
-//! getting frames (minimised, `SW_HIDE`, a stalled swap chain, another virtual desktop), and while
-//! frames arrive the tick costs one `Instant` comparison. `document.hidden` and `visibilitychange`
-//! follow the minimise state through gpui's visibility observer, and the cloak through the funnel
-//! this tick runs (src/window.rs).
+//! getting frames (minimised, `SW_HIDE`, a stalled swap chain, another virtual desktop).
 //!
 //! **Re-entrancy.** The tick is a gpui foreground task, so it runs from the message loop, never
 //! inside the frame pump. It stands down when it finds itself inside a published phase (a nested
@@ -51,16 +38,11 @@ pub const TICK: Duration = Duration::from_millis(100);
 pub const STALL: Duration = Duration::from_millis(250);
 
 thread_local! {
-    /// When the frame pump last ran (its start and its end both stamp it).
     static LAST_FRAME: Cell<Option<Instant>> = const { Cell::new(None) };
-    /// Background waves run so far, for diagnostics and the first-takeover log line.
     static WAVES: Cell<u64> = const { Cell::new(0) };
-    /// Whether the tick is currently standing in for the frame clock, so the
-    /// log says so once per hidden period rather than once per tick.
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Called by the frame pump: frames are flowing, the tick stands down.
 pub fn note_frame() {
     LAST_FRAME.with(|c| c.set(Some(Instant::now())));
     if ACTIVE.with(|a| a.replace(false)) {
@@ -72,14 +54,10 @@ pub fn note_frame() {
     }
 }
 
-/// Has the frame pump run at all? Until it has, nothing may stand in for it:
-/// the first frame owns the boot wave.
 pub fn pumped_once() -> bool {
     LAST_FRAME.with(|c| c.get().is_some())
 }
 
-/// The decision, pure: is the frame clock stalled? `None` (the pump has never
-/// run) is not a stall: the first frame owns the boot wave.
 pub fn due(last_frame: Option<Instant>, now: Instant) -> bool {
     match last_frame {
         Some(t) => now.saturating_duration_since(t) >= STALL,
@@ -87,7 +65,6 @@ pub fn due(last_frame: Option<Instant>, now: Instant) -> bool {
     }
 }
 
-/// Starts the tick. Called once, after the primary window exists.
 pub fn start(cx: &mut App) {
     cx.spawn(async move |cx| loop {
         cx.background_executor().timer(TICK).await;
@@ -95,21 +72,16 @@ pub fn start(cx: &mut App) {
             continue;
         }
         let Some(handle) = crate::MAIN_WINDOW.with(|w| w.get()) else { continue };
-        // Fails while the window is mid-update (a nested message loop) or
-        // closed; either way there is nothing to do on this tick.
         let _ = handle.update(cx, |_, window, cx| wave(window, cx));
     })
     .detach();
 }
 
-/// One background wave: the frame's JS wave without the animation frames,
-/// then the frame's flush.
 fn wave(window: &mut gpui::Window, cx: &mut App) {
-    // Nested inside a published phase: the outer wave owns the JS.
     if vn_runtime::with_app(|_| ()).is_some() {
         return;
     }
-    // No JS after a caught native panic (I9). The frame pump puts up the
+    // No JS after a caught native panic.
     // crash dialog; a minimised, hidden or cloaked window draws no frame, so
     // the tick does it here (src/crash_window.rs, once per process).
     if vn_runtime::bridge::poisoned() {

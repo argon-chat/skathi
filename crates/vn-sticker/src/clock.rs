@@ -1,37 +1,29 @@
-//! Time: the present grid, a source's timeline, a target's pace and the
-//! clocks they run on.
+//! Time: the present grid, a source's timeline, a target's pace and the clocks they run on, in
+//! microseconds on the engine's own clock ([`Us`]).
 //!
-//! Everything is in microseconds on the engine's own clock ([`Us`]).
-//!
-//! * **One clock per source**, shared by every place and size that shows it,
-//!   so all copies of an emoji move together. It starts on a present-grid
-//!   line when the source is first shown playing, stops while nothing shows
-//!   it playing, and resumes where it stopped.
+//! * **One clock per source**, shared by every place and size that shows it, so all copies of an
+//!   emoji move together. It starts on a present-grid line when the source is first shown playing,
+//!   stops while nothing shows it playing, and resumes where it stopped.
 //! * **A target's pace** is its source's frame rate, or a cap below it (30 fps for emoji ≤ 64 px).
 //!   A paced target shows `slots` frames a loop: slot `k` starts `k / fps` into the loop and shows
 //!   the source frame playing then.
-//! * **The present grid.** A frame change is due on a multiple of 1/60 s, so
-//!   however many sources animate, a window presents at most 60 times a
-//!   second (a 165 Hz display would otherwise present every vsync with enough
-//!   sources out of phase).
+//! * **The present grid.** A frame change is due on a multiple of 1/60 s, so however many sources
+//!   animate, a window presents at most 60 times a second.
 
 use std::sync::Arc;
 
-/// Microseconds on the engine's clock.
 pub type Us = u64;
 
 const SECOND: Us = 1_000_000;
 
-/// Present-grid lines a second.
 pub const GRID_HZ: Us = 60;
 
-/// Grid line `k`: `k / 60` s, rounded up to the µs. Slot starts round up the
-/// same way, so a 30 or 60 fps frame change falls exactly on a line.
+/// Grid line `k`: `k / 60` s, rounded up to the µs. Slot starts round up the same way, so a 30 or
+/// 60 fps frame change falls exactly on a line.
 fn line(k: Us) -> Us {
     (k * SECOND).div_ceil(GRID_HZ)
 }
 
-/// `t` moved up to the next present-grid line; a time on a line stays.
 pub fn grid_ceil(t: Us) -> Us {
     let k = t * GRID_HZ / SECOND;
     if line(k) >= t {
@@ -46,17 +38,13 @@ fn ceil_us(n: u64, fps: f64) -> Us {
     ((n as f64 * SECOND as f64 / fps) - 1e-6).ceil().max(0.0) as Us
 }
 
-/// When a source's frames play, within one loop.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Timeline {
-    /// `frames` frames at `fps` (Lottie: whole frames from `ip`).
     Uniform { frames: u32, fps: f32 },
-    /// A frame per presentation time, ms from the first (video).
     Pts { pts_ms: Arc<[u32]>, duration_ms: u32 },
 }
 
 impl Timeline {
-    /// Frames in one loop, at least 1.
     pub fn frames(&self) -> u32 {
         match self {
             Timeline::Uniform { frames, .. } => (*frames).max(1),
@@ -64,7 +52,6 @@ impl Timeline {
         }
     }
 
-    /// The nominal frame rate, above 0.
     pub fn fps(&self) -> f32 {
         let fps = match self {
             Timeline::Uniform { fps, .. } => *fps,
@@ -77,7 +64,6 @@ impl Timeline {
         }
     }
 
-    /// One loop, at least 1 µs.
     pub fn duration(&self) -> Us {
         let us = match self {
             Timeline::Uniform { frames, .. } => (*frames).max(1) as f64 * SECOND as f64 / self.fps() as f64,
@@ -86,7 +72,6 @@ impl Timeline {
         (us.round() as Us).max(1)
     }
 
-    /// The frame playing `t` into a loop (`t` below [`Timeline::duration`]).
     pub fn frame_at(&self, t: Us) -> u32 {
         let frame = match self {
             Timeline::Uniform { .. } => (t as f64 * self.fps() as f64 / SECOND as f64) as u32,
@@ -99,7 +84,6 @@ impl Timeline {
     }
 }
 
-/// A target's frames: `slots` a loop at `fps`, over its source's timeline.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pace {
     fps: f64,
@@ -108,7 +92,6 @@ pub struct Pace {
 }
 
 impl Pace {
-    /// The timeline's own rate, or `cap` when that is lower.
     pub fn new(timeline: &Timeline, cap: Option<f32>) -> Pace {
         let mut fps = timeline.fps() as f64;
         if let Some(cap) = cap.filter(|c| c.is_finite() && *c > 0.0) {
@@ -119,28 +102,22 @@ impl Pace {
         Pace { fps, slots, duration }
     }
 
-    /// Frames this target shows in one loop.
     pub fn slots(&self) -> u32 {
         self.slots
     }
 
-    /// One loop.
     pub fn duration(&self) -> Us {
         self.duration
     }
 
-    /// When slot `k` starts, into the loop: `k / fps`, rounded up to the µs.
     pub fn slot_start(&self, k: u32) -> Us {
         ceil_us(k as u64, self.fps).min(self.duration)
     }
 
-    /// The source frame slot `k` shows.
     pub fn frame(&self, timeline: &Timeline, k: u32) -> u32 {
         timeline.frame_at(self.slot_start(k).min(self.duration - 1))
     }
 
-    /// The slot showing `elapsed` into playback, looping, and when (in elapsed
-    /// time) the next slot starts.
     pub fn at(&self, elapsed: Us) -> (u32, Us) {
         let loops = elapsed / self.duration;
         let t = elapsed % self.duration;
@@ -161,7 +138,6 @@ impl Pace {
     }
 }
 
-/// A playback clock that can stop and resume.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clock {
     origin: Us,
@@ -169,17 +145,14 @@ pub struct Clock {
 }
 
 impl Clock {
-    /// Running from the first grid line at or after `now`.
     pub fn new(now: Us) -> Clock {
         Clock { origin: grid_ceil(now), paused_at: None }
     }
 
-    /// Stopped at its very start: the first frame until it runs.
     pub fn stopped(now: Us) -> Clock {
         Clock { origin: now, paused_at: Some(now) }
     }
 
-    /// Playback time at `now`.
     pub fn elapsed(&self, now: Us) -> Us {
         self.paused_at.unwrap_or(now).saturating_sub(self.origin)
     }
@@ -194,14 +167,12 @@ impl Clock {
         }
     }
 
-    /// Runs again from where it stopped, re-aligned to the present grid.
     pub fn resume(&mut self, now: Us) {
         if let Some(at) = self.paused_at.take() {
             self.origin = grid_ceil(self.origin + now.saturating_sub(at));
         }
     }
 
-    /// The engine time at which playback reaches `elapsed`.
     pub fn when(&self, elapsed: Us) -> Us {
         self.origin + elapsed
     }

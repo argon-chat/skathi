@@ -1,7 +1,5 @@
-// Imperative tree mutation: `appendChild`, `insertBefore`, `removeChild`, `replaceChild`, ChildNode and ParentNode,
-// and `insertAdjacent*`, on mirror nodes, with the DOM's semantics. Every case also checks the host tree
-// (`host.tree`, a model of crates/vn-tree's), since the mirror and the host must never disagree about who is whose
-// child.
+// Imperative tree mutation (`appendChild`, `insertBefore`, `removeChild`, `replaceChild`, ChildNode/ParentNode, `insertAdjacent*`)
+// on mirror nodes with the DOM's semantics; every case also checks `host.tree`, since mirror and host must never disagree.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
@@ -12,14 +10,11 @@ function world() {
   const rt: Any = createRuntime();
   const doc: Any = rt.global.document;
   const tree = rt.host.tree;
-  /** The host's children of a node, as tags. */
   const shape = (n: Any) => tree.shape(n.__vnId);
-  /** The host's parent of a node: 0 none, else the parent's tag. */
   const hostParent = (n: Any) => {
     const p = tree.parent.get(n.__vnId);
     return p ? tree.tag.get(p) : p;
   };
-  /** A renderer-made element, the way a Vue patch makes one. */
   const vue = (tag: string, parent?: Any) => {
     const el = rt.nodeOps.createElement(tag);
     if (parent) rt.nodeOps.insert(el, parent, null);
@@ -28,7 +23,6 @@ function world() {
   return { rt, doc, tree, shape, hostParent, vue };
 }
 
-/** Records MutationObserver childList records as "target:+added/-removed". */
 function watch(rt: Any, target: Any) {
   const seen: string[] = [];
   const tag = (n: Any) => (n.nodeType === 3 ? `#${n.data}` : n.tagName.toLowerCase());
@@ -54,7 +48,6 @@ describe("document.createElement makes tree nodes", () => {
     expect(img.parentNode).toBe(placeholder);
     expect(placeholder.childNodes).toEqual([img]);
     expect(shape(placeholder)).toEqual(["img"]);
-    // Inserted under a node the renderer holds, it is the renderer's kind now.
     expect(rt.nodesById.get(img.__vnId)).toBe(img);
     expect(rt.looseRoots.size).toBe(0);
     expect(rt.host.tree.errors).toEqual([]);
@@ -149,14 +142,12 @@ describe("Node: appendChild, insertBefore, removeChild, replaceChild", () => {
     expect(card.parentNode).toBeNull();
     expect(host.childNodes).toEqual([]);
     expect(shape(host)).toEqual([]);
-    // Parked in a box of its own that is not in the tree; nothing was freed.
     expect(hostParent(card)).toBe("vn-detached");
     expect(rt.host.tree.freed).toEqual([]);
     expect(rt.isLoose ? rt.isLoose(card) : rt.looseRoots.has(card.__vnId)).toBe(true);
     card.click();
     expect(clicks).toBe(1);
     expect(() => host.removeChild(card)).toThrow(expect.objectContaining({ name: "NotFoundError" }));
-    // Back in: the box goes, the subtree is the renderer's kind again.
     host.appendChild(card);
     expect(shape(host)).toEqual(["div"]);
     expect(shape(card)).toEqual(["span"]);
@@ -200,7 +191,6 @@ describe("DocumentFragment", () => {
     expect(list.childNodes).toEqual(items);
     expect(shape(list)).toEqual(["li", "li", "li"]);
     expect(list.textContent).toBe("123");
-    // One record for the whole insertion, as for a fragment in a browser.
     expect(seen).toEqual(["ul:+li+li+li"]);
     expect(rt.host.tree.errors).toEqual([]);
   });
@@ -302,12 +292,9 @@ describe("what the renderer and script share", () => {
     rt.nodeOps.setElementText(box, "empty");
     expect(box.childNodes).toEqual([]);
     expect(rt.host.tree.freed).toEqual([]);
-    // The script's node is still the script's: it can be appended again.
     const other = vue("section");
     other.appendChild(mine);
     expect(rt.host.tree.shape(other.__vnId)).toEqual(["canvas"]);
-    // The leave transition ends: Vue removes the node it had made, once,
-    // with the box it was parked in.
     rt.nodeOps.remove(leaving);
     expect(leaving.__vnId).toBe(0);
     expect(rt.host.tree.live.has(leavingId)).toBe(false);
@@ -383,7 +370,6 @@ describe("loose nodes are freed once the collector has them", () => {
     // A conservative collector may keep a few; most must go.
     expect(freed).toBeGreaterThanOrEqual(32);
     expect(rt.host.tree.errors).toEqual([]);
-    // No box outlives its subtree.
     const boxes = [...rt.host.tree.live].filter((id: number) => rt.host.tree.tag.get(id) === "vn-detached");
     expect(boxes.length).toBeLessThanOrEqual(64 - freed);
   });

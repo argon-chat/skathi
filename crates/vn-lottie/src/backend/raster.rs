@@ -1,6 +1,5 @@
 //! The [`rasterlottie`] backend: pure Rust, `tiny-skia`. It validates: an unsupported feature
-//! surfaces as [`LottieError::Unsupported`] at load, one advisory per feature, rather than a
-//! silently wrong frame. See `crate::normalize`.
+//! surfaces as [`LottieError::Unsupported`] at load rather than a silently wrong frame.
 
 use rasterlottie::{Animation, PreparedAnimation, RenderConfig, Renderer, Rgba8};
 use serde_json::Value;
@@ -45,8 +44,7 @@ impl Rasterlottie {
         })
     }
 
-    /// The sticker engine's raster: straight-alpha BGRA. rasterlottie scales uniformly only, so the
-    /// animation is drawn at the fitting scale, top-left, leaving at most a pixel of transparent edge.
+    /// The sticker engine's raster: straight-alpha BGRA. rasterlottie scales uniformly only, so the animation is drawn top-left, leaving at most a pixel of transparent edge.
     pub fn render_straight(&mut self, frame: f32, intrinsic: (u32, u32), width: u32, height: u32) -> Option<&[u8]> {
         if width == 0 || height == 0 {
             return None;
@@ -78,7 +76,6 @@ impl Rasterlottie {
             .render_frame(frame, RenderConfig::new(Rgba8::TRANSPARENT, scale))
             .ok()?;
 
-        // rasterlottie hands back premultiplied RGBA; gpui's atlas wants BGRA.
         let mut bgra = raster.pixels;
         for pixel in bgra.chunks_exact_mut(4) {
             pixel.swap(0, 2);

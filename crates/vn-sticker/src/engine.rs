@@ -1,18 +1,14 @@
-//! What draws a source's frames: a Lottie [`vn_lottie::Animation`] or a VP9
-//! [`VideoSource`] with its decoders, behind one [`Engine`] trait so the core
-//! schedules both alike (and tests can stand in a fake).
+//! What draws a source's frames: a Lottie [`vn_lottie::Animation`] or a VP9 [`VideoSource`] with its
+//! decoders, behind one [`Engine`] trait so the core schedules both alike.
 
 use std::sync::Arc;
 
 use crate::clock::Timeline;
 use crate::video::{DecodeOptions, Target as VideoTarget, VideoDecoder, VideoSource};
 
-/// What a file is, by its first bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
-    /// Lottie JSON, or a `.tgs` (gzipped Lottie JSON).
     Lottie,
-    /// A WebM (VP9, maybe with alpha).
     Video,
 }
 
@@ -36,25 +32,19 @@ impl Kind {
     }
 }
 
-/// A loaded source. Lives on the worker threads (`Send`), one call at a time.
 pub trait Engine: Send {
     fn kind(&self) -> Kind;
-    /// Intrinsic size in pixels.
     fn size(&self) -> (u32, u32);
     fn timeline(&self) -> Timeline;
-    /// Source frame `frame` filling `width × height`: BGRA, straight alpha,
-    /// rows packed. `alpha_only`: B = G = R = 255 with the frame's alpha
-    /// (a tinted video, whose colour stream is then never decoded).
+    /// Source frame `frame` filling `width × height`: BGRA, straight alpha, rows packed. `alpha_only`:
+    /// B = G = R = 255 with the frame's alpha (a tinted video, whose colour stream is never decoded).
     fn draw(&mut self, frame: u32, alpha_only: bool, width: u32, height: u32) -> Result<Vec<u8>, String>;
-    /// Bytes held, for the stats.
     fn estimated_bytes(&self) -> usize;
 }
 
-/// Makes an engine from a file's bytes. The core's is [`load`]; tests pass
-/// their own.
+/// Makes an engine from a file's bytes. The core's is [`load`]; tests pass their own.
 pub type Loader = fn(&Arc<[u8]>) -> Result<Box<dyn Engine>, String>;
 
-/// The real loader: sniffs the bytes and loads a Lottie or opens a WebM.
 pub fn load(bytes: &Arc<[u8]>) -> Result<Box<dyn Engine>, String> {
     match Kind::sniff(bytes) {
         Some(Kind::Lottie) => vn_lottie::Animation::load(bytes)
@@ -98,7 +88,6 @@ impl Engine for LottieEngine {
     }
 }
 
-/// A decoder and the frame it holds.
 struct Cursor {
     decoder: VideoDecoder,
     current: Option<u32>,

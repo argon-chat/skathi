@@ -1,8 +1,5 @@
-//! Desktop capture sources and bounded PNG previews, off the frame thread.
-//!
-//! IDs are `screen:<handle>` / `window:<handle>` (HMONITOR/HWND on Windows, CGDirectDisplayID/
-//! CGWindowID on macOS), decimal strings in JS. Under `VN_MEDIA_CAPTURE=fake` the list is one
-//! synthetic screen on every platform.
+//! Desktop capture sources and bounded PNG previews, off the frame thread. IDs are `screen:<handle>` /
+//! `window:<handle>`, decimal strings in JS. Under `VN_MEDIA_CAPTURE=fake` the list is one synthetic screen.
 
 use base64::Engine;
 use image::ImageEncoder;
@@ -80,7 +77,6 @@ impl Options {
     }
 }
 
-/// Starts an asynchronous enumeration, answering the desktop token protocol.
 pub fn start_sources(types: &str, options: &str) -> String {
     let options = match Options::parse(types, options) {
         Ok(options) => options,
@@ -93,8 +89,7 @@ pub fn start_sources(types: &str, options: &str) -> String {
             Ok(Done::json(&Value::Array(sources).to_string()))
         });
     };
-    // The Screen Recording prompt can wait on the user, so it gets its own thread: a pool job
-    // would count as in flight for the frame pump.
+    // The Screen Recording prompt can wait on the user: its own thread, since a pool job would count as in flight.
     #[cfg(target_os = "macos")]
     if options.screens || options.windows {
         let asked = std::thread::Builder::new().name("vn-capture-consent".into()).spawn(move || {
@@ -112,20 +107,16 @@ pub fn start_sources(types: &str, options: &str) -> String {
     json!({"token": token}).to_string()
 }
 
-/// Enumeration usable by native callers too. Unsupported hosts reject instead of listing nothing.
 pub fn sources(options: Options) -> Result<Vec<Value>, Fail> {
     if !options.screens && !options.windows {
         return Ok(Vec::new());
     }
-    // A fake capture shows no real desktop, so its picker lists none either.
     if fake_capture() {
         return fake_sources(options);
     }
-    // Names and thumbnails count as screen recording to TCC: ask first, so a denial says where
-    // to enable it. Never on the frame thread; `start_sources` has already waited.
+    // Names and thumbnails count as screen recording to TCC: ask first, never on the frame thread.
     #[cfg(target_os = "macos")]
     vn_permissions::require_display_capture().map_err(|(name, message)| Fail::new(name, message))?;
-    // Windows has no capture prompt, only the consent-store toggle: read it, never ask.
     #[cfg(target_os = "windows")]
     {
         refuse_denied(vn_permissions::status(vn_permissions::Cap::DisplayCapture))?;
@@ -157,7 +148,6 @@ fn fake_capture() -> bool {
     std::env::var("VN_MEDIA_CAPTURE").is_ok_and(|v| v.trim().eq_ignore_ascii_case("fake"))
 }
 
-/// The fake desktop: one 1920×1080 `screen:1` with the fake capture's checkerboard thumbnail.
 fn fake_sources(options: Options) -> Result<Vec<Value>, Fail> {
     if !options.screens {
         return Ok(Vec::new());

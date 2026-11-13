@@ -2,18 +2,16 @@
 //! The headers configure and rtcd.pl would generate are checked in under `config/`
 //! (`tools/vendor-libvpx.ts` regenerates them) and `sources.txt` lists the C files.
 //!
-//! * `x86_64-msvc`: SSE2/SSSE3/AVX2 intrinsics with runtime CPU detection. libvpx's assembly is
-//!   not built: rtcd entries with only an asm version point at C (`config/asm-only.txt`), and the
-//!   asm helpers the intrinsics call are `csrc/vn_vpx_asm_shim.c`.
-//! * `generic`: plain C, every other target. `VN_VPX_CONFIG=generic` forces it on x86_64 too, as
-//!   the reference the intrinsics build must match bit for bit (VENDOR.md).
+//! * `x86_64-msvc`: SSE2/SSSE3/AVX2 intrinsics with runtime CPU detection. libvpx's assembly is not
+//!   built: rtcd entries with only an asm version point at C (`config/asm-only.txt`), and the asm
+//!   helpers the intrinsics call are `csrc/vn_vpx_asm_shim.c`.
+//! * `generic`: plain C, every other target. `VN_VPX_CONFIG=generic` forces it on x86_64 too, as the
+//!   reference the intrinsics build must match bit for bit (VENDOR.md).
 //!
 //! Every C file is compiled with `config/prefix/<configuration>.h` force-included, renaming each
 //! symbol libvpx defines to `vnvpx_*` so this copy links next to libwebrtc's libvpx
 //! (`tools/prefix-symbols.ts` generates it; `VN_VPX_PREFIX=0` omits it, for that tool only).
-//!
-//! libvpx is always compiled optimised, whatever the cargo profile: a debug build of the decoder is
-//! ten times slower.
+//! libvpx is always compiled optimised: a debug build of the decoder is ten times slower.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -66,13 +64,13 @@ fn main() {
             .opt_level(2)
             .debug(false)
             .warnings(false)
-            // A release build of libvpx: its asserts are internal invariants,
-            // and one that a damaged stream trips must not abort the process.
+            // A release build of libvpx: a damaged stream that trips an internal assert must not
+            // abort the process.
             .define("NDEBUG", None);
         if msvc {
             build.define("_CRT_SECURE_NO_WARNINGS", None);
-            // configure's generic vpx_config.h spells INLINE `inline`, which
-            // MSVC's C front end accepts only from C11 on.
+            // configure's generic vpx_config.h spells INLINE `inline`, which MSVC's C front end
+            // accepts only from C11 on.
             if !x86 {
                 build.flag("/std:c11");
             }
@@ -91,10 +89,9 @@ fn main() {
     }
 
     if x86 {
-        // AVX2 files get /arch:AVX2 so the whole function body is VEX-encoded
-        // (no SSE/AVX transition stalls); libvpx calls them only after its
-        // runtime check. The rest compiles at the x86_64 baseline: MSVC takes
-        // SSSE3/SSE4.1 intrinsics without an /arch switch.
+        // AVX2 files get /arch:AVX2 so the whole function body is VEX-encoded (no SSE/AVX transition
+        // stalls); libvpx calls them only after its runtime check. The rest compiles at the x86_64
+        // baseline.
         let mut avx2 = cc::Build::new();
         base(&mut avx2);
         avx2.flag("/arch:AVX2");
@@ -118,7 +115,6 @@ fn main() {
     build.compile("vn_vpx");
 }
 
-/// `sources.txt`: the `[c]` section and the `[x86_64]` section.
 fn sources(path: &Path) -> (Vec<String>, Vec<String>) {
     let text = std::fs::read_to_string(path).expect("sources.txt");
     let (mut common, mut x86) = (Vec::new(), Vec::new());

@@ -1,10 +1,6 @@
-// The code tables that cross the language boundary, checked against Rust.
-//
-//   src/runtime.ts    `EV_CODES`      <->  crates/vn-tree/src/tree.rs `EVENT_NAMES`
-//   src/protocol.d.ts `VnEventCode`   <->  the same `EVENT_NAMES`
-//
-// A drift is an event that silently stops being delivered, which no unit test on either side can see, so this test
-// reads the Rust. It is also why the JS tables are plain object literals rather than a `const enum`.
+// The code tables that cross the language boundary, checked against Rust (runtime.ts `EV_CODES` and protocol.d.ts
+// `VnEventCode` against tree.rs `EVENT_NAMES`). A drift is an event that silently stops being delivered, so this reads
+// the Rust. It is also why the JS tables are plain object literals rather than a `const enum`.
 
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -17,14 +13,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "../../..");
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
 
-/** `pub const NAME: u32 = 12;` -> { NAME: 12 }, over one slice of a Rust file. */
 function rustConsts(source) {
   const out = {};
   for (const m of source.matchAll(/pub const (\w+): u32 = (\d+);/g)) out[m[1]] = Number(m[2]);
   return out;
 }
 
-/** `EVENT_NAMES` as `{ "click": 1, … }` — the JS spelling of every host code. */
 function rustEventNames() {
   const source = read("crates/vn-tree/src/tree.rs");
   const consts = rustConsts(source);

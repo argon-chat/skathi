@@ -1,34 +1,16 @@
-//! The Windows backend.
+//! The Windows backend. vue-native is an unpackaged win32 process (no MSIX identity).
 //!
-//! vue-native is an unpackaged win32 process (no MSIX identity), which decides everything below.
+//! State comes from the registry consent store, not WinRT: `AppCapability::CheckAccess()` reports
+//! `Allowed` for unpackaged callers even with the microphone toggle off. Both
+//! `HKCU\...\CapabilityAccessManager\ConsentStore\<cap>\Value` (master toggle) and `...\NonPackaged\Value`
+//! (desktop apps) must say Allow.
 //!
-//! State is read from the consent store in the registry, not WinRT: `AppCapability::CheckAccess()`
-//! reports `Allowed` even for capabilities that do not exist when the caller is unpackaged, so it
-//! would say `granted` with the microphone toggle off.
+//! There is no `prompt` state: Windows never asks an unpackaged process. `request()` opens the
+//! `ms-settings:` page and settles with whatever the user did.
 //!
-//! ```text
-//! HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager
-//!      \ConsentStore\<capability>\Value              REG_SZ Allow|Deny
-//!      \ConsentStore\<capability>\NonPackaged\Value  REG_SZ Allow|Deny
-//! ```
-//!
-//! The first is the master toggle, the second "Let desktop apps access your microphone"; both
-//! must say Allow. There is no per-executable decision for an unpackaged app (the per-exe subkeys
-//! carry only usage telemetry).
-//!
-//! There is no `prompt` state: Windows never asks an unpackaged process, so this backend returns
-//! only `Granted`, `Denied` and `Unsupported`.
-//!
-//! No unpackaged API raises the consent UI, so `request()` opens the `ms-settings:` privacy page
-//! and waits for the store to change, settling with whatever the user did. Requests for a
-//! capability whose page is already open join it.
-//!
-//! Changes: `RegNotifyChangeKeyValue` with `REG_NOTIFY_THREAD_AGNOSTIC` is a real subscription
-//! (no polling); one watcher thread waits on every consent key. It is armed without
-//! `bWatchSubtree` and with `REG_NOTIFY_CHANGE_LAST_SET` only: the per-exe telemetry keys are
-//! written whenever any other app touches a microphone. The watcher also drops wakeups that did
-//! not change the effective state. Lazily written keys (`webcam\NonPackaged`, the policy keys)
-//! are watched through their nearest existing ancestor, then directly once they exist.
+//! One watcher thread waits (`RegNotifyChangeKeyValue`, thread-agnostic) on every consent key, armed
+//! with `REG_NOTIFY_CHANGE_LAST_SET` and no subtree: the per-exe telemetry keys are written whenever
+//! any app touches a microphone. Lazily written keys are watched via their nearest existing ancestor.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -57,11 +39,10 @@ const PUSH_NOTIFICATIONS: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Pus
 /// `Granted` over a user toggle.
 const APP_PRIVACY_POLICY: &str = r"SOFTWARE\Policies\Microsoft\Windows\AppPrivacy";
 
-/// How long `request()` waits for the user to come back from Settings before settling with the
-/// state by then; a promise that hangs forever leaves the app with no recovery.
+/// How long `request()` waits for the user to come back from Settings; a promise that hangs
+/// forever leaves the app with no recovery.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// The consent-store key name for a capability, if it is gated there at all.
 fn consent_key(cap: Capability) -> Option<&'static str> {
     match cap {
         Capability::Microphone => Some("microphone"),
@@ -75,7 +56,6 @@ fn consent_key(cap: Capability) -> Option<&'static str> {
     }
 }
 
-/// The `LetAppsAccess*` policy value, where one exists.
 fn policy_value(cap: Capability) -> Option<&'static str> {
     match cap {
         Capability::Microphone => Some("LetAppsAccessMicrophone"),
@@ -86,8 +66,7 @@ fn policy_value(cap: Capability) -> Option<&'static str> {
     }
 }
 
-/// The Settings page that owns this capability's toggle. Notifications go to their own page: the
-/// per-app toggle is there, not on the privacy pages.
+/// Notifications have their own Settings page; the per-app toggle is not on the privacy pages.
 fn settings_uri(cap: Capability) -> Option<&'static str> {
     match cap {
         Capability::Microphone => Some("ms-settings:privacy-microphone"),
@@ -104,7 +83,6 @@ fn read_sz(root: HKEY, path: &str, name: &str) -> Option<String> {
     let name = HSTRING::from(name);
     let mut len: u32 = 0;
     unsafe {
-        // Size query first: RegGetValueW reports the byte length including the terminator.
         if RegGetValueW(root, &path, &name, RRF_RT_REG_SZ, None, None, Some(&mut len))
             != ERROR_SUCCESS
         {
@@ -151,8 +129,7 @@ fn read_dword(root: HKEY, path: &str, name: &str) -> Option<u32> {
     Some(out)
 }
 
-/// One consent-store `Value` as a tri-state. `None` (absent) is not a denial: the toggles default
-/// on and the keys are created lazily.
+/// One consent-store `Value` as a tri-state. `None` (absent) is not a denial: keys are created lazily.
 fn consent_value(path: &str) -> Option<bool> {
     match read_sz(HKEY_CURRENT_USER, path, "Value")?.as_str() {
         "Allow" => Some(true),
@@ -161,8 +138,7 @@ fn consent_value(path: &str) -> Option<bool> {
     }
 }
 
-/// The group-policy overlay; `Some(false)` = force-denied. Only the deny direction is honoured:
-/// the policies' documented scope is packaged apps.
+/// The group-policy overlay; only the deny direction is honoured (documented scope: packaged apps).
 fn policy_denies(cap: Capability) -> bool {
     let Some(name) = policy_value(cap) else { return false };
     for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
@@ -173,7 +149,6 @@ fn policy_denies(cap: Capability) -> bool {
     false
 }
 
-/// The effective state for this process.
 pub fn read_state(cap: Capability) -> PermissionState {
     if policy_denies(cap) {
         return PermissionState::Denied;
@@ -198,11 +173,7 @@ pub fn read_state(cap: Capability) -> PermissionState {
     }
 }
 
-/// Toast state for an unpackaged app: the global `ToastEnabled` and the per-AUMID `Enabled`
-/// (both absent = on).
-///
-/// This is the user preference, not whether the process can raise a toast now (that also needs a
-/// Start-menu shortcut carrying the AUMID, an installer concern).
+/// Toast state: the global `ToastEnabled` and per-AUMID `Enabled` (both absent = on). The user
 fn notifications_state() -> PermissionState {
     if read_dword(HKEY_CURRENT_USER, PUSH_NOTIFICATIONS, "ToastEnabled") == Some(0) {
         return PermissionState::Denied;
@@ -223,7 +194,6 @@ fn notifications_state() -> PermissionState {
 
 static AUMID: OnceLock<Option<String>> = OnceLock::new();
 
-/// The AppUserModelID toasts are published under, set by the embedder before `install()`.
 pub fn set_aumid(id: &str) {
     let _ = AUMID.set(Some(id.to_string()));
 }
@@ -239,8 +209,6 @@ struct PendingRequest {
     started: Instant,
 }
 
-/// Joins `token` to a request already waiting on `cap`'s Settings page or, for the first one,
-/// opens the page. `false` when the page could not be opened.
 fn join_or_open(
     pending: &Mutex<Vec<(u32, PendingRequest)>>,
     token: u32,
@@ -340,8 +308,7 @@ impl PermissionHost for WindowsHost {
     }
 }
 
-/// `ShellExecuteW`: no WinRT apartment or async, same packaged or not. Success is the legacy
-/// `> 32` HINSTANCE convention.
+/// `ShellExecuteW`; success is the legacy `> 32` HINSTANCE convention.
 fn open_uri(uri: &str) -> bool {
     let uri = HSTRING::from(uri);
     let verb = HSTRING::from("open");
@@ -356,8 +323,6 @@ fn changes() -> &'static Mutex<Vec<Capability>> {
     C.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// Every registry key participating in an effective state, with its hive and capabilities: both
-/// consent gates, the toast switches and the policy overlay in both hives.
 fn watched_keys() -> Vec<(HKEY, String, Vec<Capability>)> {
     let mut out: Vec<(HKEY, String, Vec<Capability>)> = Vec::new();
     for cap in Capability::ALL.iter().copied() {
@@ -387,15 +352,11 @@ fn open_key(root: HKEY, path: &str) -> Option<HKEY> {
     (unsafe { RegOpenKeyExW(root, &wide, None, KEY_READ | KEY_NOTIFY, &mut key) } == ERROR_SUCCESS).then_some(key)
 }
 
-/// One key a state depends on, and the key actually watched for it. Lazily written keys are
-/// watched through their nearest existing ancestor (`REG_NOTIFY_CHANGE_NAME`, no subtree), then
-/// directly once they exist.
+/// One key a state depends on, and the key actually watched for it (see the module header).
 struct Watch {
     root: HKEY,
     path: String,
     key: Option<HKEY>,
-    /// How much of `path` the open key is (its length in bytes): all of it,
-    /// or an ancestor's.
     open: usize,
     armed: bool,
     event: HANDLE,
@@ -413,7 +374,6 @@ impl Watch {
         self.key.is_some() && self.open == self.path.len()
     }
 
-    /// Opens the key, or its nearest existing ancestor while it is missing.
     fn reopen(&mut self) {
         if self.exact() {
             return;
@@ -438,8 +398,7 @@ impl Watch {
         }
     }
 
-    /// Asks for the next change. A notification is one-shot, so this runs
-    /// again after every wakeup.
+    /// Asks for the next change; notifications are one-shot, so this re-arms after every wakeup.
     fn arm(&mut self) {
         if self.armed {
             return;
@@ -482,7 +441,6 @@ impl Drop for Watch {
     }
 }
 
-/// Every watched key, waited on at once.
 struct Watcher {
     watches: Vec<Watch>,
 }
@@ -492,9 +450,7 @@ impl Watcher {
         Watcher { watches: keys.into_iter().filter_map(|(root, path)| Watch::new(root, path)).collect() }
     }
 
-    /// Blocks until one of the keys changes (`Some(index)`), or `timeout_ms`
-    /// passes or the wait fails (`None`). A key created meanwhile is watched
-    /// directly from then on.
+    /// Blocks until a key changes (`Some(index)`) or the timeout/failure (`None`).
     fn wait(&mut self, timeout_ms: u32) -> Option<usize> {
         for w in &mut self.watches {
             w.arm();
@@ -527,9 +483,7 @@ impl Watcher {
     }
 }
 
-/// Waits on every key at once and reports only effective changes: a wakeup often changes
-/// nothing, and re-reading every capability (a key watched via its ancestor wakes for the
-/// ancestor) filters that.
+/// Reports only effective changes: re-reads every capability, since a wakeup often changes nothing.
 fn watch_loop() {
     let mut watcher = Watcher::new(watched_keys().into_iter().map(|(root, path, _)| (root, path)));
     let mut snapshot: HashMap<Capability, PermissionState> =
@@ -560,8 +514,6 @@ mod tests {
 
     #[test]
     fn every_capability_has_a_deliberate_windows_mapping() {
-        // No capability may fall through: each is consent-store gated or explicitly not, and
-        // says why in the match above.
         for cap in Capability::ALL.iter().copied() {
             let gated = consent_key(cap).is_some();
             match cap {
@@ -596,8 +548,6 @@ mod tests {
 
     #[test]
     fn reading_the_real_consent_store_never_says_prompt_and_never_panics() {
-        // Read-only against the live machine: every capability answers and `Prompt` is never
-        // among them.
         for cap in Capability::ALL.iter().copied() {
             let st = read_state(cap);
             assert_ne!(
@@ -610,8 +560,6 @@ mod tests {
 
     #[test]
     fn a_missing_key_reads_as_granted_rather_than_denied() {
-        // The default direction matters: an absent toggle means Windows has not
-        // been told to deny anything.
         assert_eq!(consent_value(&format!(r"{CONSENT}\vnProbeNoSuchCapability")), None);
     }
 
@@ -630,8 +578,6 @@ mod tests {
 
     #[test]
     fn the_watch_table_covers_both_gates_of_every_gated_capability() {
-        // Watching only the master toggle misses the "Let desktop apps..." switch on the
-        // NonPackaged subkey.
         let keys = watched_keys();
         for cap in Capability::ALL.iter().copied() {
             let Some(k) = consent_key(cap) else { continue };
@@ -643,13 +589,11 @@ mod tests {
                 );
             }
         }
-        // The deny overlay is part of the state too, in both hives.
         for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
             assert!(keys.iter().any(|(r, p, c)| *r == root && p == APP_PRIVACY_POLICY && c.contains(&Capability::Microphone)));
         }
     }
 
-    /// A key under `HKCU\Software` of this test's own, deleted at the end.
     struct ScratchKey(String);
     impl ScratchKey {
         fn new(name: &str) -> ScratchKey {
@@ -689,8 +633,6 @@ mod tests {
 
     #[test]
     fn a_key_created_after_the_watch_began_is_watched_from_then_on() {
-        // `webcam\NonPackaged` is created the first time Settings writes it.
-        // Watching only the keys that existed at start would never see it.
         let base = ScratchKey::new("lazy");
         base.set("present", "Allow");
         let lazy = format!(r"{}\webcam\NonPackaged", base.0);
@@ -702,7 +644,6 @@ mod tests {
         base.set(r"webcam\NonPackaged", "Deny");
         assert_eq!(w.wait(5000), Some(0), "the ancestor saw the key created");
         assert!(w.watches[0].exact(), "and the key itself is watched from now on");
-        // Drain a wakeup the creation's own value write may have left.
         let _ = w.wait(100);
         base.set(r"webcam\NonPackaged", "Allow");
         assert_eq!(w.wait(5000), Some(0), "a toggle of the new key wakes the watcher");

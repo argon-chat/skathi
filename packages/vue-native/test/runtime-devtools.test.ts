@@ -1,8 +1,5 @@
-// The `appDevtools` extension tier.
-//
-// Not tested here: that `disable()` really closes the TCP listener, deletes the handshake and makes the port refuse;
-// that is end-to-end, pinned by `packages/vn-test/specs/devtools-optout.spec.ts`. Here: the JSON round trip, the
-// refusal advisory, the `onChange` fan-out and the inert branch of a `--features no-devtools` host.
+// The `appDevtools` extension tier: the JSON round trip, the refusal advisory, the `onChange` fan-out and the inert branch
+// of a `--features no-devtools` host. That `disable()` really closes the listener is end-to-end (vn-test devtools-optout.spec.ts).
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
@@ -20,8 +17,6 @@ describe("appDevtools", () => {
     expect(rt.appDevtools.disable()).toBe(false);
     expect(rt.host.devtools.setCalls).toEqual([false]);
     expect(rt.appDevtools.isEnabled()).toBe(false);
-    // The port going to null is how an app can tell the LISTENER is gone rather
-    // than just the key being refused — the distinction this API exists for.
     expect(rt.appDevtools.info().port).toBeNull();
     expect(rt.advisories()).toEqual([]);
   });
@@ -31,8 +26,6 @@ describe("appDevtools", () => {
     rt.appDevtools.disable();
     expect(rt.appDevtools.enable()).toBe(true);
     expect(rt.appDevtools.info().port).toBe(49221);
-    // Calling either again is a no-op that still answers truthfully: an app
-    // that calls `enable()` on every route change must not be surprising.
     expect(rt.appDevtools.enable()).toBe(true);
     expect(rt.appDevtools.disable()).toBe(false);
     expect(rt.appDevtools.disable()).toBe(false);
@@ -81,7 +74,6 @@ describe("appDevtools", () => {
     });
     rt.appDevtools.onChange((on: boolean) => seen.push(on));
     expect(rt.appDevtools.disable()).toBe(false);
-    // The second listener still ran, and the throw is reported once.
     expect(seen).toEqual([false]);
     expect(rt.advisories().some((a: string) => /change listener threw/.test(a))).toBe(true);
   });
@@ -100,8 +92,6 @@ describe("appDevtools", () => {
   });
 
   test("info() is the host's own object, field for field", () => {
-    // The shape is a contract with `devtools::state_json`; a field that
-    // disappears there and lingers here is exactly the drift this pins.
     const rt = createRuntime();
     expect(Object.keys(rt.appDevtools.info()).sort()).toEqual([
       "enabled",
@@ -135,7 +125,6 @@ describe("appDevtools", () => {
       inspectors: 0,
       slot: "",
     });
-    // The registry is still real, so no caller special-cases this build.
     const off = rt.appDevtools.onChange(() => {});
     expect(typeof off).toBe("function");
     off();

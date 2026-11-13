@@ -56,8 +56,7 @@ fn threads() -> usize {
     n
 }
 
-/// Mounts a `<video>` on the clip, plays it until it has a frame (or 5 s), and drops it. `false`
-/// when this machine has no media backend.
+/// Mounts a `<video>` on the clip, plays it until it has a frame (or 5 s), and drops it; `false` when there is no media backend.
 fn one_element(clip: &PathBuf) -> bool {
     let Ok(backend) = vn_video::backend_for_this_platform() else { return false };
     let mut state = VideoState::new(backend);
@@ -78,7 +77,6 @@ fn one_element(clip: &PathBuf) -> bool {
     true
 }
 
-/// The thread count once it has stopped falling (pipelines wind down asynchronously), at most `ms` later.
 fn settled_threads(ms: u64) -> usize {
     let until = Instant::now() + Duration::from_millis(ms);
     let mut last = threads();

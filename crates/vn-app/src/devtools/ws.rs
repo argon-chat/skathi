@@ -3,17 +3,16 @@
 //! One port, three framings told apart by the first request line: `{` is NDJSON, `POST /` is HTTP
 //! (a command), `GET /` with `Upgrade: websocket` is this.
 //!
-//! Once per frame, on the main thread, in the publication the command queue drains in, everything
-//! that moved is written to every attached socket: new log lines, a tree revision, a frame-time
-//! sample every quarter second, the status line, network entries.
+//! Once per frame, in the publication the command queue drains in, everything that moved (log
+//! lines, tree revision, frame-time sample, status line, network entries) is written to every
+//! attached socket.
 //!
-//! Hand-rolled on the existing port (already tokened and discoverable): the only WebSocket code in
-//! the process is redjs's client, which cannot answer an upgrade (it validates the accept key
-//! instead of computing it and rejects masked frames). What is reused is [`accept_key`] and the
-//! opcode constants.
+//! Hand-rolled: redjs's WebSocket client cannot answer an upgrade (it validates the accept key
+//! instead of computing it and rejects masked frames); only [`accept_key`] and the opcode
+//! constants are reused.
 //!
 //! Clients send little: `{"since": N}` (log cursor), `{"sub": ["logs","perf","tree"]}` (streams,
-//! default all), plus `ping` and `close`. Commands stay on HTTP.
+//! default all), `ping`, `close`. Commands stay on HTTP.
 
 use std::io::{BufReader, Read, Write};
 use std::net::TcpStream;
@@ -28,8 +27,7 @@ use crate::json::{self, Json, Raw};
 /// How often a frame-time sample is pushed.
 const PERF_EVERY_MS: u64 = 250;
 
-/// A socket that has stopped draining has a wedged peer: past this many queued messages it is
-/// dropped rather than allowed to grow the process.
+/// A socket past this many queued messages has a wedged peer and is dropped.
 const MAX_QUEUED: usize = 512;
 
 const WANT_LOGS: u32 = 1;
@@ -55,10 +53,8 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// Bumped every frame the retained tree changed.
 static TREE_REV: AtomicU64 = AtomicU64::new(0);
 
-/// Answers `GET /` + `Upgrade: websocket` and then serves the connection until it closes. Called
-/// from [`super::serve_http`] after it read the request line and headers.
-///
-/// The token is checked from the query string (`/?token=…`) because a browser `WebSocket` cannot set a header.
+/// Serves the connection until it closes. The token is read from the query string (`/?token=…`):
+/// a browser `WebSocket` cannot set a header.
 pub fn serve(target: &str, headers: &[(String, String)], mut out: TcpStream, reader: BufReader<TcpStream>) {
     let generation = super::ACCEPT_GEN.load(Ordering::SeqCst);
     let header = |name: &str| {
@@ -261,8 +257,8 @@ fn on_text(id: u64, text: &str) {
     }
 }
 
-/// One frame off the front of `buf`, unmasked. `Ok(None)` = need more bytes. A client frame must be
-/// masked (RFC 6455), and reading an unmasked one would take payload bytes as the mask key.
+/// `Ok(None)` = need more bytes. A client frame must be masked (RFC 6455): an unmasked one would
+/// take payload bytes as the mask key.
 fn parse_client_frame(buf: &[u8]) -> Result<Option<(u8, Vec<u8>, usize)>, String> {
     if buf.len() < 2 {
         return Ok(None);
@@ -341,8 +337,7 @@ fn drop_sub(id: u64) {
     }
 }
 
-/// Drops every attached socket (`appDevtools.disable()`), so an attached inspector sees its feed
-/// close rather than go stale.
+/// For `appDevtools.disable()`: an attached inspector sees its feed close rather than go stale.
 pub fn close_all() {
     let subscribers = {
         let mut subs = SUBS.lock().unwrap_or_else(|error| error.into_inner());
@@ -385,9 +380,7 @@ thread_local! {
     static LAST_TREE_REV: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// Everything that moved this frame, to everybody attached. Runs in the command queue's
-/// publication, so a socket is told what a command on the same frame would see. Returns at once
-/// when nobody is attached.
+/// Runs in the command queue's publication, so a socket is told what a command on the same frame would see.
 pub fn broadcast_frame() {
     let Ok(mut subs) = SUBS.lock() else { return };
     if subs.is_empty() {

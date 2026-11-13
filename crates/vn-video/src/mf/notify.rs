@@ -37,12 +37,10 @@ impl IMFMediaEngineNotify_Impl for EngineNotify_Impl {
     }
 }
 
-/// `MF_MEDIA_ENGINE_EVENT` → [`MediaEvent`]. Values below 1000 are the HTML 5 set, so this is a
-/// rename; MF's own events above 1000 have no HTML counterpart and are dropped, with two exceptions below.
+/// `MF_MEDIA_ENGINE_EVENT` → [`MediaEvent`]: values below 1000 are the HTML 5 set; MF's own events above 1000 are dropped, with two exceptions below.
 pub fn translate(code: u32) -> Option<MediaEvent> {
     Some(match code {
         1 => MediaEvent::LoadStart,
-        // 2 progress / 3 suspend / 4 abort: not surfaced.
         5 => MediaEvent::Error,
         6 => MediaEvent::Emptied,
         // 7 stalled: folded into `waiting`, which a buffering UI relies on.

@@ -1,10 +1,5 @@
-// `vn build` for macOS: the `.app` layout, Info.plist, the icns encoder, the `macos` config block and host
-// resolution per platform (cli/macos-bundle.ts, cli/platform.ts).
-//
-//   bun test packages/vue-native/test/macos-bundle.test.ts
-//
-// Everything runs on any OS: the bundle is files, the plist is text, the icns is bytes, and the host is a fake
-// Mach-O header that is never run.
+// `vn build` for macOS: the `.app` layout, Info.plist, the icns encoder, the `macos` config block and host resolution per
+// platform. Everything runs on any OS: the bundle is files, the plist text, the icns bytes, the host a fake Mach-O header.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -43,7 +38,6 @@ const fresh = (name: string) => {
   return d;
 };
 
-/** Just enough of an XML plist reader to read back what plistXml writes. */
 function readPlist(xml: string): PlistValue {
   expect(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist')).toBe(true);
   expect(xml).toContain('<plist version="1.0">');
@@ -99,7 +93,6 @@ function solid(size: number, rgba: [number, number, number, number] = [200, 40, 
   return { width: size, height: size, data };
 }
 
-/** A Mach-O header the sniffer accepts; never executed. */
 function fakeMachO(path: string, cpu = 0x0100000c): string {
   const b = new Uint8Array(4096);
   const dv = new DataView(b.buffer);
@@ -233,7 +226,6 @@ describe("icns", () => {
       expect([...img.data.subarray(0, 4)]).toEqual([200, 40, 90, 255]);
     }
     expect(Buffer.from(entries.find((e) => e.type === "ic10")!.data).equals(Buffer.from(png))).toBe(true);
-    // @2x types reuse the 1x image of the same pixel size.
     const at = (t: string) => entries.find((e) => e.type === t)!.data;
     expect(at("ic11")).toEqual(at("icp5"));
     expect(at("ic13")).toEqual(at("ic08"));
@@ -345,9 +337,7 @@ describe("the .app", () => {
     expect(existsSync(join(c, "MacOS", info.CFBundleExecutable as string))).toBe(true);
     expect(existsSync(join(c, "Resources", `${info.CFBundleIconFile}.icns`))).toBe(true);
     if (process.platform !== "win32") expect(statSync(join(c, "MacOS", "Hello")).mode & 0o777).toBe(0o755);
-    // Where the host will look for its payload is where it was put.
     expect(bundlePayloadPath(r.executable)).toBe(join(c, "Resources", "app.vnpk"));
-    // A packaged executable is not a bare host: asking it for host info would launch the app.
     expect(isStamped(r.executable)).toBe(true);
     expect(isStamped(host)).toBe(false);
   });

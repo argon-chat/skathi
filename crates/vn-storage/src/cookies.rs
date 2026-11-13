@@ -1,20 +1,13 @@
 //! The cookie jar's persistence: redjs's `CookieHost`, backed by `<storage folder>/cookies.sealed`.
-//! redjs owns the jar and its rules.
 //!
-//! Always sealed, whatever `appStorage`'s `encrypted` setting: a session cookie is the login.
-//! Without a provider (not Windows) the jar stays in memory and one advisory says so; it is
-//! never written as plaintext.
+//! Always sealed, whatever `appStorage`'s `encrypted` setting: a session cookie is the login. Without a
+//! provider the jar stays in memory and one advisory says so; it is never written as plaintext.
 //!
-//! The folder is latched at [`install`]: the host can provision cookies before JS runs, and a
-//! later `setStorageFolder` moves `localStorage`, not the jar.
+//! The folder is latched at [`install`]; a later `setStorageFolder` moves `localStorage`, not the jar.
 //!
-//! redjs calls `store` on every change, from any thread, with its jar lock held, so `store`
-//! only stages; [`pump`] seals and writes once per frame and [`flush`] writes now. Lock order:
-//! redjs's jar lock, then this module's.
-//!
-//! Format: the `localStorage` JSON ([`file::encode_as`], `"vue-native/cookies"`). Each entry is
-//! `[name, record]`, the record being the cookie's fields joined by U+0001 (redjs drops cookies
-//! containing control characters), value last.
+//! redjs calls `store` on every change, from any thread, with its jar lock held, so `store` only stages;
+//! [`pump`] seals and writes once per frame and [`flush`] writes now. Lock order: redjs's jar lock, then
+//! this module's.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -32,11 +25,8 @@ pub fn path_in(folder: &Path) -> PathBuf {
 }
 
 struct State {
-    /// Latched at [`install`]. `None` = not installed (nothing persists).
     folder: Option<PathBuf>,
-    /// The encoded entries waiting for [`pump`].
     staged: Option<Vec<(String, String)>>,
-    /// How many cookies were persisted last (loaded, or staged).
     count: usize,
     error: Option<String>,
 }
@@ -53,7 +43,6 @@ impl Host {
         st.error = Some(what);
     }
 
-    /// The file's cookies, or none plus an advisory if it cannot be read (never a hard failure).
     fn read(&self, st: &mut State) -> Vec<Cookie> {
         let Some(folder) = st.folder.clone() else { return Vec::new() };
         let path = path_in(&folder);
@@ -85,7 +74,6 @@ impl Host {
         }
     }
 
-    /// Seals and writes what is staged. `Ok(false)` = nothing was staged.
     fn write_staged(&self) -> Result<bool, String> {
         let (folder, entries) = {
             let mut st = self.state.lock().unwrap();
@@ -196,22 +184,18 @@ fn unpack(name: &str, record: &str) -> Option<Cookie> {
         secure: flag(f[3])?,
         http_only: flag(f[4])?,
         same_site: SameSite::parse(f[5]),
-        // A persisted cookie always has an expiry; one without is not ours.
         expires: Some(f[6].parse().ok()?),
         creation: f[7].parse().ok()?,
         last_access: f[8].parse().ok()?,
     })
 }
 
-/// Latches `folder`, installs the host into redjs and loads the jar.
 pub fn install(folder: PathBuf) {
     HOST.state.lock().unwrap().folder = Some(folder);
     jar::set_host(&HOST);
-    // Load now so what is on disk is in the jar before anything else sets a cookie.
     let _ = jar::get(None);
 }
 
-/// The folder the jar was latched to, once installed.
 pub fn folder() -> Option<PathBuf> {
     HOST.state.lock().unwrap().folder.clone()
 }

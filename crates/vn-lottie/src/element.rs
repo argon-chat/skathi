@@ -5,11 +5,9 @@ use gpui::{div, img, AnyElement, App, IntoElement, ObjectFit, Styled, StyledImag
 
 use crate::LottieState;
 
-/// CSS `object-fit`; mirrors gpui's [`ObjectFit`] one-for-one as a comparable, storable value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LottieFit {
     Fill,
-    /// The default, matching `<lottie-player>`'s `preserveAspectRatio: "xMidYMid meet"`.
     #[default]
     Contain,
     Cover,
@@ -29,12 +27,9 @@ impl From<LottieFit> for ObjectFit {
     }
 }
 
-/// Per-frame view parameters; nothing is remembered between frames.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LottieOptions {
-    /// The content box in logical (CSS) pixels; the host falls back to the animation's intrinsic size.
     pub size: (f32, f32),
-    /// Device pixels per logical pixel (`window.scale_factor()`); drives the raster size.
     pub scale: f32,
     pub object_fit: LottieFit,
     pub grayscale: bool,
@@ -63,8 +58,7 @@ impl LottieOptions {
 }
 
 /// Builds the element for one frame: rasterises the current playhead (cached when nothing moved),
-/// paints it and releases atlas tiles of rasters out of use, so call this rather than
-/// [`LottieState::render_frame`]. An unrasterisable frame paints an empty box of the same size.
+/// paints it and releases atlas tiles of rasters out of use; call this rather than [`LottieState::render_frame`].
 pub fn lottie(
     state: &mut LottieState,
     options: &LottieOptions,

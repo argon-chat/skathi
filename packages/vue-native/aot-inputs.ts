@@ -19,7 +19,6 @@ export interface AotEngineIdentity {
   sha256: string | null;
 }
 
-/** Plain and AOT prebuilts can share a revision while exposing different ABIs. */
 export function aotEngineIdentity(pins: string | null): AotEngineIdentity {
   const values = new Map<string, string>();
   for (const line of (pins ?? "").split(/\r?\n/)) {
@@ -43,7 +42,6 @@ export interface AotInputsOptions {
   typescript: TypeScript;
   aliases: Record<string, string>;
   declarations?: string[];
-  /** Stable anchors for dependencies on another Windows volume, e.g. the SDK. */
   sourceRoots?: Record<string, string>;
 }
 
@@ -143,9 +141,7 @@ export class AotInputs {
         }
       };
       visit(configPath);
-      // Vue/Vite projects commonly have a solution tsconfig with files: [],
-      // referring to separate app and tooling projects. Use the entry's project
-      // so its aliases, ambient types and libraries survive the archive too.
+      // Use the entry's project (a Vue/Vite solution tsconfig has files: []) so its aliases and ambient types survive.
       const selected = projects.find((project) => project.fileNames.some((path) => this.key(path) === this.key(entry))) ?? projects[0]!;
       options = selected.options;
       roots = selected.fileNames.filter((path) => /\.[cm]?[jt]sx?$/i.test(path));
@@ -155,9 +151,8 @@ export class AotInputs {
     host.fileExists = (path) => this.virtual.has(this.key(path)) || typescript.sys.fileExists(path);
     host.resolveModuleNames = (names, importer) => names.map((specifier) => {
       const alias = aliases[specifier];
-      // Bun's resolved runtime modules are already roots. Keep the package's
-      // declaration entry as well; returning the JS alias first drops .d.ts
-      // files and every type-only dependency reachable only through them.
+      // Bun's resolved runtime modules are already roots; keep the package's declaration entry too,
+      // or .d.ts files and every type-only dependency behind them are dropped.
       const resolved = typescript.resolveModuleName(specifier, importer, options, host).resolvedModule
         ?? (specifier.endsWith(".vue") ? typescript.resolveModuleName(`${specifier}.ts`, importer, options, host).resolvedModule : undefined)
         ?? (alias ? typescript.resolveModuleName(specifier, alias, options, host).resolvedModule : undefined)
@@ -168,8 +163,7 @@ export class AotInputs {
       }
       return resolved;
     });
-    // CompilerHost's default getSourceFile closes over its original readFile;
-    // override it so virtual Vue modules and post-plugin TS participate too.
+    // Override CompilerHost's getSourceFile so virtual Vue modules and post-plugin TS participate.
     host.getSourceFile = (path, languageVersion) => {
       const text = read(path);
       return text === undefined ? undefined : typescript.createSourceFile(path, text, languageVersion, true);

@@ -1,10 +1,7 @@
-//! The JS↔gpui call boundary: raw `&mut App` / `&mut Window` pointers are
-//! published for a bounded scope with an RAII guard, tagged with a [`Phase`],
-//! and host functions may only reach them through [`with_commit`] /
-//! [`with_app`]. Outside a published scope those return `None` and the caller
-//! must throw a JS error rather than touch gpui.
-//!
-//! Teardown lives in `Drop` (as gpui's `ElementArenaScope`), so a panic cannot leave a dangling pointer published.
+//! The JS↔gpui call boundary: raw `&mut App` / `&mut Window` pointers are published for a bounded scope
+//! with an RAII guard (so a panic cannot leave a dangling pointer), tagged with a [`Phase`]. Host
+//! functions reach them only through [`with_commit`] / [`with_app`]; outside a published scope those
+//! return `None` and the caller must throw a JS error rather than touch gpui.
 
 use std::any::Any;
 use std::cell::Cell;
@@ -12,17 +9,11 @@ use std::ffi::c_void;
 
 use gpui::{App, Window};
 
-/// Where the current thread stands relative to gpui's frame lifecycle.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Phase {
-    /// Nothing published. Host fns needing gpui must throw.
     None,
-    /// `&mut App` published, no window (app-level tasks, startup eval).
     App,
-    /// `&mut App` + `&mut Window` published, outside any draw. The only phase
-    /// in which the retained tree may be mutated and gpui called freely.
     Commit,
-    /// Inside `Window::draw`: everything is frozen, nothing is published.
     Draw,
 }
 
@@ -32,23 +23,14 @@ thread_local! {
     static PHASE: Cell<Phase> = const { Cell::new(Phase::None) };
     static POISONED: Cell<bool> = const { Cell::new(false) };
     static LAST_PANIC: Cell<Option<(String, String)>> = const { Cell::new(None) };
-    /// Why the runtime was poisoned: the first caught panic's message and
-    /// location, for the host's crash dialog (vn-app src/crash_window.rs).
     static POISON_REASON: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     static DRAIN_OWED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// A dispatch made under a gpui listener leaves its microtask checkpoint owed instead of running
-/// it there; every JS entry settles it first ([`settle_owed_drain`]), so there is still a
-/// checkpoint between any two events. Call it BEFORE the dispatch's call into JS.
-///
-/// It takes the engine's API lock and keeps it until settled: JSC drains microtasks whenever the
-/// outermost API lock is released.
-///
-/// Returns `false`, and owes nothing, when JS is already running below the dispatch (a listener run
-/// by a forced layout's draw from inside a script): that dispatch is nested and the enclosing
-/// script's checkpoint covers it. Owing there would keep a lock past the release of heap access,
-/// and JSC aborts ("Attempting to release access but the mutator does not have access").
+/// A dispatch made under a gpui listener leaves its microtask checkpoint owed; every JS entry settles it
+/// first ([`settle_owed_drain`]). Call BEFORE the dispatch's call into JS. Keeps the engine's API lock until
+/// settled (JSC drains microtasks when the outermost lock is released). Returns `false` and owes nothing when
+/// JS is already running below the dispatch: owing there keeps a lock past the heap-access release and JSC aborts.
 pub fn owe_drain() -> bool {
     if DRAIN_OWED.with(|c| c.get()) {
         return true;
@@ -71,14 +53,11 @@ pub fn owe_drain() -> bool {
     owed
 }
 
-/// Is a checkpoint owed ([`owe_drain`])?
 pub fn drain_owed() -> bool {
     DRAIN_OWED.with(|c| c.get())
 }
 
-/// The owed checkpoint, now, if there is one, and the API lock released.
-/// Every publication runs it first ([`with_published`],
-/// [`with_published_app`]); so must a host that calls into JS outside one.
+/// Runs the owed checkpoint, if any, and releases the API lock. Every publication runs it first.
 pub fn settle_owed_drain() {
     if !DRAIN_OWED.with(|c| c.replace(false)) {
         return;
@@ -92,8 +71,6 @@ pub fn settle_owed_drain() {
     });
 }
 
-/// True once a host-fn panic has been caught. gpui state must be assumed
-/// corrupt (leases dropped, update depth unbalanced): stop scheduling JS.
 pub fn poisoned() -> bool {
     POISONED.with(|c| c.get())
 }
@@ -102,15 +79,11 @@ pub fn poison() {
     POISONED.with(|c| c.set(true));
 }
 
-/// Why the runtime is poisoned: `"<message> at <file:line:col>"` of the first
-/// caught panic, or `None` when it is not poisoned or was poisoned by a bare
-/// [`poison`] call that gave no reason.
 pub fn poison_reason() -> Option<String> {
     POISON_REASON.with(|r| r.borrow().clone())
 }
 
-/// [`poison`], keeping the first reason given: the panic that broke the
-/// runtime, not one that followed from it.
+/// [`poison`], keeping the first reason given: the panic that broke the runtime, not one that followed.
 pub fn poison_with(reason: String) {
     poison();
     POISON_REASON.with(|r| {
@@ -121,7 +94,6 @@ pub fn poison_with(reason: String) {
     });
 }
 
-/// `"<message> at <location>"`, or the message alone without a location.
 pub fn describe_panic(message: &str, location: &str) -> String {
     if location.is_empty() { message.to_string() } else { format!("{message} at {location}") }
 }
@@ -137,8 +109,6 @@ impl Drop for Guard {
 }
 
 /// Publishes `window` + `cx` for the duration of `f`, after settling an owed checkpoint.
-///
-/// Takes `&mut` for the whole call so the caller cannot touch them while the raw pointers are live.
 pub fn with_published<R>(
     window: &mut Window,
     cx: &mut App,
@@ -155,7 +125,6 @@ pub fn with_published<R>(
     f()
 }
 
-/// [`with_published`] without a window — `Phase::App` only.
 pub fn with_published_app<R>(cx: &mut App, f: impl FnOnce() -> R) -> R {
     let _g = Guard(
         APP.with(|c| c.replace(cx as *mut App)),
@@ -166,11 +135,8 @@ pub fn with_published_app<R>(cx: &mut App, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Runs `f`, a `Window::draw` made from inside a publication, as [`Phase::Draw`]: nothing is
-/// reachable through [`with_commit`] or [`with_app`] until it returns.
-///
-/// A forced layout draws from inside a script's `Phase::Commit`, whose pointers are the `Window` and
-/// `App` gpui is already working through; handing them out again would alias the `&mut`s.
+/// Runs `f`, a `Window::draw` made inside a publication, as [`Phase::Draw`]: nothing is reachable until it
+/// returns (a forced layout draws from inside `Phase::Commit`; handing the pointers out again would alias).
 pub fn with_draw<R>(f: impl FnOnce() -> R) -> R {
     let _g = Guard(
         APP.with(|c| c.get()),
@@ -180,8 +146,7 @@ pub fn with_draw<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// The commit-phase accessor: full `&mut Window` + `&mut App`. `None` when the
-/// thread is not inside a `Phase::Commit` publication — throw, don't fall back.
+/// The commit-phase accessor; `None` outside a `Phase::Commit` publication: throw, don't fall back.
 #[inline]
 pub fn with_commit<R>(f: impl FnOnce(&mut Window, &mut App) -> R) -> Option<R> {
     if PHASE.with(|c| c.get()) != Phase::Commit {
@@ -194,7 +159,6 @@ pub fn with_commit<R>(f: impl FnOnce(&mut Window, &mut App) -> R) -> Option<R> {
     Some(f(unsafe { &mut *w }, unsafe { &mut *a }))
 }
 
-/// App-level accessor: works in `Phase::App` and `Phase::Commit`.
 #[inline]
 pub fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
     if !matches!(PHASE.with(|c| c.get()), Phase::App | Phase::Commit) {
@@ -206,8 +170,6 @@ pub fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
     Some(f(unsafe { &mut *a }))
 }
 
-/// Chains onto the default panic hook so a shielded host-fn panic still keeps
-/// its message + location for [`panic_to_js`]. Call once at startup.
 pub fn install_panic_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -223,8 +185,6 @@ pub fn install_panic_hook() {
     }));
 }
 
-/// Throws a JS error (`kind`: 0 Error, 1 TypeError, 2 RangeError) on `g` and
-/// returns the `u64` a host fn should return.
 pub fn throw_error(g: *mut c_void, kind: u32, msg: &str) -> u64 {
     let utf16: Vec<u16> = msg.encode_utf16().collect();
     let mut err = 0u64;
@@ -236,8 +196,6 @@ pub fn throw_error(g: *mut c_void, kind: u32, msg: &str) -> u64 {
     redjs::api::Value::undefined().0
 }
 
-/// The `host_fn!` catch arm: converts a caught panic payload into a thrown JS `Error` and poisons
-/// the runtime.
 pub fn panic_to_js(g: *mut c_void, payload: Box<dyn Any + Send>) -> u64 {
     let (msg, loc) = LAST_PANIC.with(|c| c.take()).unwrap_or_default();
     let text = payload
@@ -255,8 +213,6 @@ mod tests {
     use crate::JsRuntime;
     use redjs::api::Value;
 
-    /// `owe()` owes the checkpoint as vn-tree's `dispatch_event` does under a gpui listener, and
-    /// answers whether it did.
     fn install_owe(rt: &JsRuntime) {
         let f = rt.ctx().function("owe", 0, |_g, _frame| Value::boolean(owe_drain()).0).unwrap();
         rt.ctx().global_set("owe", f).unwrap();
@@ -267,15 +223,12 @@ mod tests {
         rt.ctx().to_rust_string(v).unwrap()
     }
 
-    /// Regression: a microtask run by JSC's own drain in `JSLock::willReleaseLock` reached a
-    /// listener's dispatch through a forced layout's draw; owing there kept a lock past the heap
-    /// access and the next release aborted the process.
+    /// Regression: owing a checkpoint under a forced layout's draw kept a lock past the heap access and aborted.
     #[test]
     fn a_dispatch_inside_running_js_owes_nothing() {
         crate::testing::on_js_thread(|| {
             JsRuntime::with(|rt| {
                 install_owe(rt);
-                // No explicit drain: the reaction runs from the eval's final unlock, the case under test.
                 rt.ctx().eval("globalThis.seen = []; Promise.resolve().then(() => seen.push(owe()))").unwrap();
             });
             assert!(!drain_owed(), "a dispatch nested in running JS owes nothing");
@@ -287,7 +240,6 @@ mod tests {
         });
     }
 
-    /// Outside JS, the dispatch still owes; the settle runs the checkpoint and gives the lock back.
     #[test]
     fn a_dispatch_outside_js_owes_its_checkpoint_until_it_is_settled() {
         crate::testing::on_js_thread(|| {
@@ -306,7 +258,6 @@ mod tests {
         });
     }
 
-    /// A draw made inside a publication hides it, and gives it back.
     #[test]
     fn a_draw_inside_a_publication_freezes_it() {
         std::thread::spawn(|| {
@@ -322,7 +273,6 @@ mod tests {
         .unwrap();
     }
 
-    /// A second boot in one process panics with a message saying what to do.
     #[test]
     fn a_second_init_is_refused_with_a_message() {
         let message = crate::testing::on_js_thread(|| {
@@ -332,7 +282,6 @@ mod tests {
         assert!(message.contains("vn_runtime::testing::on_js_thread"), "{message}");
     }
 
-    /// The crash dialog names the panic that broke the runtime, not one that followed from it.
     /// Runs on a thread of its own: the poison is per thread.
     #[test]
     fn the_first_poison_reason_is_kept() {

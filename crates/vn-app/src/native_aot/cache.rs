@@ -45,7 +45,6 @@ fn verified(path: &Path, expected: &str, size: u64) -> Result<File, String> {
     file.rewind().map_err(|error| error.to_string())?;
     Ok(file)
 }
-/// Only remove a file we successfully created exclusively, including on error.
 struct Temporary {
     path: PathBuf,
     file: Option<File>,

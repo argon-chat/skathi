@@ -144,7 +144,6 @@ describe("import.meta.glob", () => {
     expect(() => expandGlobs(`\nimport.meta.glob("./x/*.ts", { eagr: true })`, ctx)).toThrow(/main\.ts:2: .*unknown option "eagr"/);
     expect(() => expandGlobs(`import.meta.glob("@/kinds/*.ts")`, ctx)).toThrow(/alias/);
     expect(() => expandGlobs(`import.meta.glob(pattern)`, ctx)).toThrow();
-    // A mention is not a call.
     expect(expandGlobs(`type G = typeof import.meta.glob;`, ctx)).toBeNull();
   });
 
@@ -186,7 +185,6 @@ describe("module namespaces", () => {
     expect(ns[Symbol.toStringTag]).toBe("Module");
     expect(Object.getPrototypeOf(ns)).toBe(null);
     expect(ns.default.name).toBe("B");
-    // Unminified, as Bun writes it without `minify`.
     const plain =
       "var __export = (target, all) => {\n  for (var name in all)\n    __defProp(target, name, {\n" +
       "      get: all[name],\n      enumerable: true,\n      configurable: true,\n      set: __exportSetter.bind(all, name)\n    });\n};";
@@ -209,7 +207,6 @@ describe("module namespaces", () => {
     expect(r.code).toContain("x.import('y')");
     expect(r.code).toContain("function __vnImportNs(m)");
     expect(r.unresolved).toBe(1);
-    // A CommonJS module's exports become a namespace with `default`, as Vite gives one.
     const helper = r.code.slice(r.code.indexOf("function __vnImportNs"));
     const ns = new Function(`${helper}\nreturn __vnImportNs;`)()({ a: 1 });
     expect(ns[Symbol.toStringTag]).toBe("Module");
@@ -253,9 +250,7 @@ describe("CSS @import inlining", () => {
     expect(css).toContain(`url("/packages/assets/fonts/AlcarinTengwar/a.woff2?v=2#x")`);
     expect(css).toContain(`url("/packages/assets/img/k.png")`);
     expect(css).toContain(`url(data:image/png;base64,AA==), url(/rooted.png), url(#f), url(var(--u))`);
-    // The imported sheet was inlined, and its url() is relative to it.
     expect(css).toContain(`.m { background: url("/packages/assets/fonts/m.png") }`);
-    // Above the root: a file: URL.
     const out = rebaseCssUrls(`a{b:url(../up.png)}`, join(root, "x.css"), root);
     expect(out).toMatch(/^a\{b:url\("file:\/\/\/.*\/up\.png"\)\}$/);
   });
@@ -414,7 +409,6 @@ describe("prod.ts over test/fixtures/vite-app", () => {
   const proc = Bun.spawnSync(["bun", "prod.ts", join(FIXTURE, "src/main.ts"), join(out, "app.prod.js")], { cwd: PKG_DIR });
   const log = proc.stdout.toString() + proc.stderr.toString();
   const body = proc.exitCode === 0 ? readFileSync(join(out, "app.prod.js"), "utf8") : "";
-  /** Boolean, so a failure prints one line instead of the whole bundle. */
   const has = (s: string) => body.includes(s);
 
   test("builds", () => {
@@ -467,7 +461,6 @@ describe("prod.ts over test/fixtures/vite-app", () => {
     expect(/\.imported-into-scoped\[data-v-[0-9a-f]+\]/.test(body)).toBe(true);
     expect(/\.app-root\[data-v-[0-9a-f]+\] \{ margin-top: 0\.5rem;/.test(body)).toBe(true);
     expect(/\.p-4 \{\\n\s+padding: 1rem/.test(body)).toBe(true);
-    // v-bind(): the style's variable and the script's useCssVars key agree.
     const v = /color: var\(--(v?[0-9a-f]{8})\)/.exec(body)?.[1];
     expect(v).toBeTruthy();
     expect(has(`${v}:`)).toBe(true);
@@ -516,8 +509,6 @@ describe("build.ts (dev) over test/fixtures/vite-dev-app", () => {
   });
 });
 
-// The same fixture prod.ts is tested on above: dev gives each shape the value
-// prod gives it, through the same plugin.
 describe("build.ts (dev) over test/fixtures/vite-app", () => {
   const dist = mkdtempSync(join(tmpdir(), "vn-viteapp-dev-"));
   tmpDirs.push(dist);

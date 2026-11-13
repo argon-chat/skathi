@@ -1,17 +1,11 @@
-//! What a VP9 packet says about itself, read from its first bits without
-//! decoding it: which frames it holds (the superframe index), whether one of
-//! them is shown, the profile, and a keyframe's size and colour.
-//!
-//! The demuxer uses this to build the frame index ([`super::VideoMeta`]'s
-//! `pts_ms` has an entry per packet that shows a frame) and to refuse what
-//! libvpx would refuse later, with a better message. Bit layout: the VP9
-//! bitstream specification, sections 6.2 (`uncompressed_header`) and B.3
-//! (superframes).
+//! What a VP9 packet says about itself, read from its first bits without decoding it: which frames
+//! it holds (the superframe index), whether one is shown, the profile, and a keyframe's size and
+//! colour. The demuxer uses it to build the frame index and to refuse what libvpx would refuse
+//! later, with a better message. Bit layout: the VP9 bitstream specification, sections 6.2
+//! (`uncompressed_header`) and B.3 (superframes).
 
-/// A superframe holds at most 8 frames (3 bits of count).
 const MAX_FRAMES: usize = 8;
 
-/// One packet's frames: byte ranges into the packet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Frames {
     count: usize,
@@ -24,9 +18,8 @@ impl Frames {
     }
 }
 
-/// The frames of `packet`: the ranges its superframe index names, or the
-/// whole packet when it has no index. `None` for an index whose sizes run
-/// past the packet (libvpx: "Invalid frame size in index").
+/// The frames of `packet`: the ranges its superframe index names, or the whole packet when it has
+/// no index. `None` for an index whose sizes run past the packet.
 pub(crate) fn frames(packet: &[u8]) -> Option<Frames> {
     let mut out = Frames { count: 1, ranges: [(0, 0); MAX_FRAMES] };
     out.ranges[0] = (0, packet.len());
@@ -61,24 +54,18 @@ pub(crate) fn frames(packet: &[u8]) -> Option<Frames> {
     Some(out)
 }
 
-/// `color_space` in a VP9 header.
 pub(crate) const CS_RGB: u8 = 7;
 
-/// The start of one frame's uncompressed header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FrameHeader {
     pub profile: u8,
-    /// `show_existing_frame` or `show_frame`.
     pub shows: bool,
     pub keyframe: bool,
-    /// A keyframe's or intra-only frame's size.
     pub size: Option<(u32, u32)>,
-    /// A keyframe's `color_space` and `color_range` (1: full).
     pub color: Option<(u8, bool)>,
 }
 
-/// The header of one frame (not a superframe). `None` when it is not a VP9
-/// frame header (bad frame marker, bad sync code, too short).
+/// The header of one frame (not a superframe); `None` when it is not a VP9 frame header.
 pub(crate) fn frame_header(frame: &[u8]) -> Option<FrameHeader> {
     let mut b = Bits { data: frame, pos: 0 };
     if b.read(2)? != 2 {
@@ -92,7 +79,6 @@ pub(crate) fn frame_header(frame: &[u8]) -> Option<FrameHeader> {
     }
     let mut header = FrameHeader { profile, shows: false, keyframe: false, size: None, color: None };
     if b.read(1)? == 1 {
-        // show_existing_frame: shows a frame already decoded.
         header.shows = true;
         return Some(header);
     }
@@ -152,7 +138,6 @@ fn frame_size(b: &mut Bits) -> Option<(u32, u32)> {
     Some((w, h))
 }
 
-/// MSB-first bits.
 struct Bits<'a> {
     data: &'a [u8],
     pos: usize,
@@ -170,21 +155,15 @@ impl Bits<'_> {
     }
 }
 
-/// What a whole packet (a frame or a superframe) does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PacketInfo {
-    /// The highest profile any of its frames declares.
     pub profile: u8,
-    /// One of its frames is shown.
     pub shows: bool,
-    /// Its first frame is a keyframe.
     pub keyframe: bool,
-    /// The largest frame size a keyframe or intra-only frame in it declares.
     pub size: Option<(u32, u32)>,
 }
 
-/// Reads every frame header in `packet`. `Err` names what is wrong in words
-/// for the advisory.
+/// Reads every frame header in `packet`. `Err` names what is wrong in words for the advisory.
 pub(crate) fn packet_info(packet: &[u8]) -> Result<PacketInfo, &'static str> {
     let frames = frames(packet).ok_or("its superframe index names more bytes than it has")?;
     let mut info = PacketInfo::default();
@@ -212,7 +191,6 @@ pub(crate) fn packet_info(packet: &[u8]) -> Result<PacketInfo, &'static str> {
 pub(crate) mod tests {
     use super::*;
 
-    /// A keyframe header: profile 0, shown, BT.601 studio range, `w` × `h`.
     pub(crate) fn keyframe(w: u32, h: u32) -> Vec<u8> {
         let mut bits = BitWriter::default();
         bits.put(2, 2); // frame_marker
@@ -260,7 +238,6 @@ pub(crate) mod tests {
 
     #[test]
     fn profiles_and_shown_existing_frames_are_read() {
-        // marker 10, profile bits low=1 high=0 → profile 1, then show_existing_frame=1.
         let h = frame_header(&[0b1010_1000]).unwrap();
         assert_eq!((h.profile, h.shows, h.keyframe), (1, true, false));
         // profile 2 (low=0, high=1), inter frame, hidden: show_existing 0, frame_type 1, show_frame 0.
@@ -275,7 +252,6 @@ pub(crate) mod tests {
         let a = keyframe(16, 16);
         let b = [0b1000_0100u8, 0, 0]; // an inter frame, not shown
         let mut packet = [b.as_slice(), a.as_slice()].concat();
-        // marker 0b110_00_001: 2 frames, 1-byte sizes.
         let marker = 0b1100_0001u8;
         packet.extend([marker, b.len() as u8, a.len() as u8, marker]);
         let f = frames(&packet).unwrap();

@@ -4,21 +4,14 @@
 
 use vn_runtime::redjs::webapi::permissions::{Capability, PermissionState};
 
-/// A capability AVFoundation asks for: its media type, the Info.plist key
-/// without which TCC ends the process, and its Privacy & Security pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Media {
     pub cap: Capability,
-    /// `NSMicrophoneUsageDescription` / `NSCameraUsageDescription`.
     pub usage_key: &'static str,
-    /// The pane's name in System Settings › Privacy & Security.
     pub page: &'static str,
-    /// Its `x-apple.systempreferences:com.apple.preference.security?…` anchor.
     pub anchor: &'static str,
 }
 
-/// The microphone (`AVMediaTypeAudio`) and the camera (`AVMediaTypeVideo`),
-/// one model for both; `None` for every other capability.
 pub(crate) fn media(cap: Capability) -> Option<Media> {
     match cap {
         Capability::Microphone => Some(Media {
@@ -37,7 +30,6 @@ pub(crate) fn media(cap: Capability) -> Option<Media> {
     }
 }
 
-/// `x-apple.systempreferences:` for a Privacy & Security pane.
 pub(crate) fn privacy_pane_url(anchor: &str) -> String {
     format!("x-apple.systempreferences:com.apple.preference.security?{anchor}")
 }
@@ -52,9 +44,7 @@ pub(crate) fn authorization_state(value: isize) -> PermissionState {
     }
 }
 
-/// Screen recording's state from the preflight and whether this run's
-/// request was refused. Without a refusal, a missing grant is `prompt`:
-/// TCC cannot tell "never asked" from "said no" before the app asks.
+/// Screen recording's state from the preflight and whether this run's request was refused.
 pub(crate) fn screen_state(granted: bool, refused: bool) -> PermissionState {
     if granted {
         PermissionState::Granted
@@ -68,15 +58,11 @@ pub(crate) fn screen_state(granted: bool, refused: bool) -> PermissionState {
 #[derive(Default)]
 pub(crate) struct Requests {
     next: u32,
-    /// Capabilities whose request is in flight.
     asking: Vec<Capability>,
     pub(crate) waiting: Vec<(u32, Capability)>,
     pub(crate) settled: Vec<(u32, PermissionState)>,
     pub(crate) changes: Vec<Capability>,
-    /// Screen recording was requested in this run and not granted: what
-    /// tells a refusal from a capability nobody has asked about yet.
     screen_refused: bool,
-    /// Each capability's state as last reported, so a read that sees it move queues a `change`.
     seen: Vec<(Capability, PermissionState)>,
 }
 
@@ -121,7 +107,6 @@ impl Requests {
         }
     }
 
-    /// One read of `cap`'s state: a `change` when it moved since the last.
     pub(crate) fn read(&mut self, cap: Capability, state: PermissionState) -> PermissionState {
         let before = self.seen.iter().find(|(c, _)| *c == cap).map(|(_, s)| *s);
         if before.is_some_and(|seen| seen != state) {
@@ -131,7 +116,6 @@ impl Requests {
         state
     }
 
-    /// One screen-recording read, `granted` being the preflight's answer.
     pub(crate) fn screen(&mut self, granted: bool) -> PermissionState {
         let state = screen_state(granted, self.screen_refused);
         self.read(Capability::DisplayCapture, state)
@@ -199,7 +183,6 @@ mod tests {
         assert_eq!(std::mem::take(&mut requests.settled), vec![(camera, PermissionState::Denied)]);
         assert_eq!(requests.waiting, vec![(mic, Capability::Microphone)], "the microphone waiter stays");
         assert_eq!(std::mem::take(&mut requests.changes), vec![Capability::Camera]);
-        // The answer is what the next read sees: no second change.
         assert_eq!(requests.read(Capability::Camera, PermissionState::Denied), PermissionState::Denied);
         assert!(requests.changes.is_empty());
     }
@@ -211,7 +194,6 @@ mod tests {
         assert!(requests.changes.is_empty(), "a first read is not a change");
         requests.read(Capability::Camera, PermissionState::Prompt);
         assert!(requests.changes.is_empty(), "a read that agrees is not a change");
-        // Denied at TCC's prompt in another flow, then turned on in Settings.
         requests.read(Capability::Camera, PermissionState::Denied);
         assert_eq!(std::mem::take(&mut requests.changes), vec![Capability::Camera]);
         requests.read(Capability::Camera, PermissionState::Granted);
@@ -237,7 +219,6 @@ mod tests {
         assert_eq!(std::mem::take(&mut requests.changes), vec![Capability::DisplayCapture]);
         assert_eq!(requests.screen(false), PermissionState::Denied);
         assert!(requests.changes.is_empty(), "a read that agrees is not a change");
-        // Granted in System Settings and visible to the preflight.
         assert_eq!(requests.screen(true), PermissionState::Granted);
         assert_eq!(std::mem::take(&mut requests.changes), vec![Capability::DisplayCapture]);
     }

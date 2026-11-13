@@ -63,7 +63,6 @@ describe("useCssVars", () => {
     let el: any = null;
     const Comp = defineComponent({
       setup() {
-        // What compileScript emits for `color: v-bind(color)` in a <style>.
         rt.useCssVars(() => ({ "abc123-color": color.value, "abc123-size": 4 }));
         return () => h("div", { ref: (e: unknown) => (el = e) }, "x");
       },
@@ -101,8 +100,7 @@ describe("useCssVars", () => {
 });
 
 describe("a <style> injected into document.head", () => {
-  // style-inject's exact sequence (vue3-spinners runs it at module scope):
-  // insert the empty <style>, THEN append the text node.
+  // style-inject's exact sequence (vue3-spinners): insert the empty <style>, THEN append the text node.
   function inject(rt: any, css: string) {
     const d = rt.global.document;
     const s = d.createElement("style");
@@ -157,8 +155,6 @@ describe("a <style> injected into document.head", () => {
   });
 
   test("each injected sheet reaches the host as its own text, not glued onto the bundle's", async () => {
-    // The host parses (and keeps) one parse per distinct text: a concatenation
-    // re-parsed the whole bundle sheet whenever an injected one changed.
     const rt = createRuntime({ globals: { __VN_CSS__: [".bundle{}"] } });
     inject(rt, ".a{}");
     rt.createApp({ render: () => null }).mount();
@@ -184,7 +180,6 @@ describe("a <style> injected into document.head", () => {
 });
 
 describe("IntersectionObserver, updated after layout and delivered from a task", () => {
-  /** An app root painted at 800x600, and one element in it at `bounds`. */
   function world(bounds: string) {
     const rt = createRuntime();
     rt.createApp({ render: () => null }).mount();
@@ -195,7 +190,6 @@ describe("IntersectionObserver, updated after layout and delivered from a task",
     rt.host.boundsById.set(el.__vnId, bounds);
     return { rt, root, el };
   }
-  /** One frame: the host's step after layout, then the task it queued. */
   async function frameStep(rt: ReturnType<typeof createRuntime>) {
     rt.host.layout.step();
     await frame();
@@ -208,7 +202,6 @@ describe("IntersectionObserver, updated after layout and delivered from a task",
     ob.observe(el);
     expect(rt.host.layout.pending).toBe(true);
     rt.host.layout.step();
-    // Queued by the step, delivered from a task: not inside the step.
     expect(seen.length).toBe(0);
     await frame();
     expect(seen.length).toBe(1);
@@ -218,10 +211,8 @@ describe("IntersectionObserver, updated after layout and delivered from a task",
     expect(seen[0].boundingClientRect).toMatchObject({ x: 100, y: 100, width: 200, height: 100 });
     expect(seen[0].rootBounds).toMatchObject({ x: 0, y: 0, width: 800, height: 600 });
     expect(seen[0]).toBeInstanceOf(rt.global.IntersectionObserverEntry);
-    // No change -> no callback.
     await frameStep(rt);
     expect(seen.length).toBe(1);
-    // Scrolled out below the viewport.
     rt.host.boundsById.set(el.__vnId, "100,700,200,100");
     await frameStep(rt);
     expect(seen.length).toBe(2);
@@ -240,11 +231,9 @@ describe("IntersectionObserver, updated after layout and delivered from a task",
     expect(seen.length).toBe(1);
     expect(seen[0].intersectionRatio).toBeCloseTo(0.5);
     expect(seen[0].intersectionRect).toMatchObject({ y: 550, height: 50, width: 100 });
-    // 60% visible: still between 0.5 and 0.75 -> same threshold index, no entry.
     rt.host.boundsById.set(el.__vnId, "0,540,100,100");
     await frameStep(rt);
     expect(seen.length).toBe(1);
-    // 80%: past 0.75 -> one entry.
     rt.host.boundsById.set(el.__vnId, "0,520,100,100");
     await frameStep(rt);
     expect(seen.length).toBe(2);
@@ -258,7 +247,6 @@ describe("IntersectionObserver, updated after layout and delivered from a task",
     expect(ob.rootMargin).toBe("0px 0px 10% 0px");
     ob.observe(el);
     await frameStep(rt);
-    // 10% of 600 = 60 px of margin below: the element at 650..690 is inside 0..660.
     expect(seen[0].isIntersecting).toBe(true);
     expect(seen[0].rootBounds).toMatchObject({ height: 660 });
     expect(() => new rt.global.IntersectionObserver(() => {}, { rootMargin: "10em" })).toThrow(/pixels or percent/);
@@ -297,7 +285,6 @@ describe("IntersectionObserver, updated after layout and delivered from a task",
     ob.observe(late);
     ob.observe(hidden);
     await frameStep(rt);
-    // The step runs after layout, so "no box" is the answer, not "not yet".
     expect(seen.map((e) => [e.target === late, e.isIntersecting])).toEqual([
       [true, false],
       [false, false],

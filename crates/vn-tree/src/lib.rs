@@ -186,8 +186,6 @@ host_fn!(fn vn_set_prop(g, args) {
     if frame_attr {
         iframe::note(id);
     }
-    // An `<img>`'s `src` is answered with `load` / `error` (`img::tick`), whether or not the
-    // element is ever painted.
     if img_src {
         perf::note_img_src();
         img::note_src(id);
@@ -214,8 +212,6 @@ host_fn!(fn vn_set_stylesheet(g, args) {
     } else {
         Vec::new()
     };
-    // Every node needs a fresh cascade under a new sheet — and under the one already installed,
-    // re-sent unchanged, nothing does.
     if tree::set_stylesheet_with_head(css, head) {
         perf::note_full(perf::FullReason::Stylesheet);
         tree::with_tree(|t| t.mark_dirty());
@@ -245,14 +241,11 @@ host_fn!(fn vn_set_dispatcher(g, args) {
 });
 
 
-/// Builds a JS string Value for a host fn to return.
 fn ret_string(s: &str) -> u64 {
     JsRuntime::with(|rt| rt.ctx().string(s).0)
 }
 
-// Returns the matched ids comma-joined, `""` for no match, or `"!<advisory>"` when the selector is
-// one the engine cannot run — the JS side turns that into the same advisory text a rule using it
-// would print.
+// Ids comma-joined, `""` for no match, or `"!<advisory>"` for a selector the engine cannot run.
 host_fn!(fn vn_query(g, args) {
     let selector = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     let root = arg_id(args.arg(1));
@@ -290,10 +283,8 @@ host_fn!(fn vn_computed_style(_g, args) {
     ret_string(&dom::computed_style(id).unwrap_or_default())
 });
 
-// One call for `scrollTop`/`scrollLeft`/`scrollTo`/`scrollBy`/`scrollWidth`/`scrollHeight`, by op: 0
-// read, 1 set absolute (NaN leaves an axis alone), 2 scroll by (NaN is 0). Answers
-// `"left,top,scrollWidth,scrollHeight"` in CSS px, or `""` for a node that is not a scroll container
-// (not an error: a browser reports 0 and ignores the write).
+// op 0 read, 1 set absolute (NaN leaves an axis alone), 2 scroll by (NaN is 0). Answers
+// `"left,top,scrollWidth,scrollHeight"` in CSS px, or `""` for a node that is not a scroll container.
 host_fn!(fn vn_scroll(_g, args) {
     let id = arg_id(args.arg(0));
     let op = arg_id(args.arg(1));
@@ -319,8 +310,7 @@ host_fn!(fn vn_scroll(_g, args) {
     })
 });
 
-// `""` when it scrolled (or had nothing to do), `!<advisory>` when it could not, in the same shape
-// `__vn_query` uses for a selector the engine cannot run.
+// `""` on success, `!<advisory>` when it could not (same shape as `__vn_query`).
 host_fn!(fn vn_scroll_into_view(_g, args) {
     let id = arg_id(args.arg(0));
     let block = scroll::Align::from_code(arg_id(args.arg(1)));
@@ -342,7 +332,6 @@ host_fn!(fn vn_focus(_g, args) {
     if op == 0 && render::style_refuses_focus(id) {
         return ret_string("refused");
     }
-    // Under a gpui listener this draws nothing and the focus is queued (FO-1).
     if op == 0 && layout_owed() && render::focus_wants_build(id) {
         sync_layout_by(perf::SyncCaller::Focus);
     }
@@ -371,9 +360,6 @@ host_fn!(fn vn_input_select(_g, args) {
     Value::boolean(render::select_input_text(arg_id(args.arg(0)))).0
 });
 
-// So the surface is a property read and a method call, the same split `__vn_bounds` /
-// `__vn_computed_style` already established, and the JS runtime's job is only to spell them
-// `el.currentTime` and `el.play()`.
 
 // `name=value` lines, empty for a node that is not a loaded `<video>`.
 host_fn!(fn vn_media_state(_g, args) {
@@ -440,7 +426,6 @@ host_fn!(fn vn_fullscreen_element(_g, args) {
     Value::boolean(fullscreen::set(arg_id(args.arg(0)))).0
 });
 
-/// Registers the whole `__vn_*` protocol surface on the JS global.
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
         ("__vn_intern", 1, vn_intern as *const _),
@@ -487,37 +472,26 @@ pub fn install(rt: &JsRuntime) {
     font_api::install(rt);
 }
 
-// A browser lays out ON READ (`scrollHeight`, `getBoundingClientRect()`, `offset*`/`client*`). Here
-// layout happens during a frame, so JS that runs before the first frame (`mount()`, `onMounted`)
-// would read 0 for a node nothing has laid out, and an app storing that 0 never re-measures. The
-// read therefore forces a layout through a host-installed hook ([`sync_layout`]); see
-// [`dom::bounds`] for when.
+// A browser lays out on read; here layout happens during a frame, so a DOM read before the first
+// frame would see 0. The read forces a layout through the host hook ([`sync_layout`]).
 
 thread_local! {
     static SYNC_LAYOUT: std::cell::Cell<Option<fn()>> = const { std::cell::Cell::new(None) };
     static IN_SYNC_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// How many JS dispatches a gpui listener (or gpui's own draw) has on the stack
-    /// ([`InputDispatch`]).
     static INPUT_DISPATCH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    /// Inside a dispatch no gpui listener is under ([`off_input`]): the frame tick, the pump's
-    /// coalesced `mousemove`, the devtools' synthesized events, a `window.defer` callback.
+    /// Set inside JS dispatches no gpui listener is under ([`off_input`]).
     static OFF_INPUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// [`render::build_count`] when [`flush_changes`] last took changes: while it still equals the
-    /// build count, the restyled tree has not been laid out.
+    /// [`render::build_count`] at the last flush that took changes; while equal, nothing has laid it out.
     static FLUSHED_AT_BUILD: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     static FLUSHED_BY_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Is a gpui listener on the stack that called into JS (a mouse, key, wheel or clipboard handler),
-/// or gpui's own draw (`focus` / `blur`)? A draw there is unsafe: gpui takes the frame's listeners
-/// out for a mouse dispatch (a draw would swap frames under them) and focus listeners run INSIDE
-/// `Window::draw` (it would nest). The forced layout does not draw while this is true.
+/// True while a gpui listener (or gpui's own draw) has called into JS. The forced layout must not
+/// draw then: gpui took the frame's listeners out, and focus listeners run inside `Window::draw`.
 pub fn in_input_dispatch() -> bool {
     INPUT_DISPATCH.with(|c| c.get()) > 0
 }
 
-/// Marks a JS dispatch that a gpui listener started; a no-op under [`off_input`] (see
-/// [`in_input_dispatch`]).
 pub(crate) struct InputDispatch(bool);
 
 impl InputDispatch {
@@ -528,8 +502,7 @@ impl InputDispatch {
         Self::inside_gpui()
     }
 
-    /// The same mark, whatever encloses it: for a listener gpui calls from inside its draw, which
-    /// no enclosing mark can make safe to draw under.
+    /// The same mark whatever encloses it (listeners gpui runs from inside its draw).
     pub(crate) fn inside_gpui() -> Self {
         INPUT_DISPATCH.with(|c| c.set(c.get() + 1));
         Self(true)
@@ -544,11 +517,8 @@ impl Drop for InputDispatch {
     }
 }
 
-/// Runs `f`, whose JS dispatches no gpui listener is under: the frame tick, the pump's coalesced
-/// `mousemove` and the devtools' synthesized events (all in the pump, before gpui's draw), and a
-/// `window.defer` callback (gpui runs it once the dispatch that queued it has returned and put the
-/// frame's listeners back). The mark only keeps a dispatch from COUNTING as input; an enclosing
-/// input dispatch still counts.
+/// Runs `f` as JS no gpui listener is under (frame tick, pump, devtools events, `window.defer`).
+/// It does not hide an enclosing input dispatch.
 pub(crate) fn off_input<R>(f: impl FnOnce() -> R) -> R {
     struct Restore(bool);
     impl Drop for Restore {
@@ -560,20 +530,17 @@ pub(crate) fn off_input<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Does the tree hold changes no frame has laid out yet?
 pub(crate) fn layout_owed() -> bool {
     tree::read_tree(|t| t.is_dirty()) || FLUSHED_AT_BUILD.with(|c| c.get()) == Some(render::build_count())
 }
 
-/// Installs the host's "draw one frame, now" callback (inverted because `vn-tree` cannot depend on
-/// `vn-app`, which knows the window).
+/// Installs the host's "draw one frame now" callback (`vn-tree` cannot depend on `vn-app`).
 pub fn set_sync_layout(f: fn()) {
     SYNC_LAYOUT.with(|c| c.set(Some(f)));
 }
 
-/// Folds the pending changes and draws one frame, so a layout read that follows answers from
-/// rectangles rather than from an empty map. Re-entrant calls are dropped (the draw walks the tree,
-/// and a read inside it would recurse); a no-op with no hook installed.
+/// Folds pending changes and draws one frame so a layout read answers from real rectangles.
+/// Re-entrant calls are dropped; a no-op with no hook installed.
 pub fn sync_layout() {
     if IN_SYNC_LAYOUT.with(|c| c.get()) {
         return;
@@ -581,9 +548,7 @@ pub fn sync_layout() {
     sync_layout_inner();
 }
 
-/// [`sync_layout`], counted for the devtools frame trace by the DOM read that asked: whether it
-/// drew (a build happened) and the wall time of the whole call — the restyle it flushes and gpui's
-/// full window draw.
+/// [`sync_layout`], recorded in the devtools frame trace.
 pub(crate) fn sync_layout_by(caller: perf::SyncCaller) {
     if IN_SYNC_LAYOUT.with(|c| c.get()) {
         return;
@@ -606,8 +571,6 @@ pub(crate) fn sync_layout_by(caller: perf::SyncCaller) {
 fn sync_layout_inner() {
     let Some(f) = SYNC_LAYOUT.with(|c| c.get()) else { return };
     IN_SYNC_LAYOUT.with(|c| c.set(true));
-    // The frame is about to paint from `node.computed`, so the cascade owes it the same pass a JS
-    // wave's end would have run.
     if flush_changes() {
         FLUSHED_BY_SYNC.with(|c| c.set(true));
     }
@@ -615,15 +578,11 @@ fn sync_layout_inner() {
     IN_SYNC_LAYOUT.with(|c| c.set(false));
 }
 
-/// What a JS wave left for the frame ([`flush_changes_kind`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flush {
-    /// The tree did not change.
     Unchanged,
-    /// The tree changed, and no element-tree build has laid it out since.
     Changed,
-    /// A forced layout flushed every change and drew after the last one: the primary window holds a
-    /// drawn frame waiting to be presented.
+    /// A forced layout drew after the last change; a drawn frame waits to be presented.
     DrawnBySync,
 }
 
@@ -631,8 +590,7 @@ pub fn flush_changes() -> bool {
     flush_changes_kind() != Flush::Unchanged
 }
 
-/// [`flush_changes`], telling apart the wave whose changes a forced layout has already drawn
-/// ([`Flush::DrawnBySync`]) from one that still needs a draw.
+/// Like [`flush_changes`], but tells a wave a forced layout already drew from one that needs a draw.
 pub fn flush_changes_kind() -> Flush {
     let dirty = tree::with_tree(|t| t.take_dirty());
     if dirty {
@@ -649,14 +607,12 @@ pub fn flush_changes_kind() -> Flush {
     } else if !forced {
         Flush::Unchanged
     } else if layout_owed() {
-        // Flushed by a forced layout the host could not draw.
         Flush::Changed
     } else {
         Flush::DrawnBySync
     }
 }
 
-/// True while any CSS transition runs — the host keeps repainting.
 pub fn animating() -> bool {
     tree::animating()
 }
@@ -665,13 +621,11 @@ pub fn lotties_animating() -> bool {
     lottie::any_playing()
 }
 
-/// True while any `<video>` still needs frames (playing, seeking, or waiting for its first frame).
 pub fn videos_playing() -> bool {
     video::any_playing()
 }
 
-/// Publishes the renderer's D3D11 device so Media Foundation decodes onto gpui's texture pool
-/// (zero-copy present). Called every frame; see [`video_device_changed`].
+/// Publishes the renderer's D3D11 device so Media Foundation decodes onto gpui's texture pool.
 ///
 /// # Safety
 /// `ptr` must be a live `ID3D11Device` COM pointer owned by the caller.
@@ -680,8 +634,7 @@ pub unsafe fn set_video_device(ptr: *mut c_void, generation: u64) {
     vn_video::mf::set_shared_device(ptr, generation);
 }
 
-/// A lazy renderer device provider, initialized when the first video backend asks for it.
-/// Installing it does not allocate any Direct3D11 resources.
+/// A lazy provider of the renderer's D3D11 device, resolved when the first video backend asks.
 #[cfg(windows)]
 pub use vn_video::mf::{SharedDeviceProvider, SharedVideoDevice};
 
@@ -698,52 +651,36 @@ pub fn video_device_changed() -> usize {
     video::device_changed()
 }
 
-/// The per-frame work that needs a `Window` and cannot be done from a host fn. Call it once per
-/// frame from the pump, BEFORE the draw; returns `true` when something moved and the window must
-/// repaint.
+/// Per-frame work that needs a `Window`; call once per frame from the pump, before the draw.
+/// Returns `true` when the window must repaint.
 pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
-    // The pump's, not an input listener's: a layout read in one of these handlers (an `<img>`
-    // `load` measuring the picture) may force a frame.
+    // The pump's, not an input listener's: a layout read in a handler may force a frame.
     off_input(|| frame_tick_inner(window, cx))
 }
 
 fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
-    // gpui's asset cache lets go of blob: decodes no node shows any more.
     img::evict_pending(window, cx);
     render::apply_pending_blur(window, cx);
     render::apply_pending_focus(window, cx);
     render::ensure_root_focus(window, cx);
     tree::advance_animations();
-    // All of them, unconditionally: `|` rather than `||`, because a `<video>` frame must be pulled
-    // even on a tick where a `<lottie>` also moved, and an animation event must be dispatched even
-    // on a tick where both did.
+    // `|` not `||`: every part must run each tick.
     let anim = render::dispatch_anim_events(window, cx);
-    // A script animation created, moved or dropped since the last tick (`Element.animate()`): a
-    // seek on a paused one is not "animating", and nothing else would draw it.
     let scripted = tree::take_script_dirty();
-    // `<img>` `load` / `error`, for every `src` written since the last tick.
     img::tick(window, cx);
     iframe::tick(window, cx);
     let lottie_moved = lottie::tick(window, cx);
     let video_moved = video::tick(window, cx);
     let stickers_moved = render::sticker::tick(window, cx);
-    // A `<canvas>` that drew since the last frame repaints, as a mutation would; an idle one costs
-    // this one atomic swap (render::canvas).
     let canvas_moved = render::canvas::tick(window);
     let scrolled = scroll::dispatch_pending(window, cx);
     let fonts_moved = fonts::tick(window, cx);
     let resampled = resample::tick(window, cx);
-    // After the resample tick: it takes the copies that tick kept (`img::residency_tick`).
     let restored = img::residency_tick(window, cx);
-    // A selection drag resolves what waited for this frame, scrolls past a container's edge and
-    // owes `selectionchange`.
     let selecting = selection::tick(window, cx);
     let draw =
         anim | scripted | lottie_moved | video_moved | stickers_moved | canvas_moved | scrolled | fonts_moved
             | resampled | restored | selecting;
-    // A frame written into the tile the last drawn scene samples is shown by a present, with no
-    // build (`crate::live`); one that needs a draw is folded into the answer, and a frame that
-    // draws anyway presents what it drew.
     match live::take() {
         live::Shown::Draw => true,
         live::Shown::Present if !draw => {
@@ -754,10 +691,8 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     }
 }
 
-/// The per-frame work a SECONDARY window does for itself, from its own `render()`: resources of its
-/// own atlas (retired tiles, zero-copy `<video>` frames, sticker tiles) and its own focus. The
-/// JS-facing half of [`frame_tick`] is not here: it belongs to the one JS realm and must run once per
-/// frame group, not once per window.
+/// Per-frame work a SECONDARY window does from its own `render()`: its atlas resources and focus.
+/// The JS-facing half stays in [`frame_tick`] (one JS realm, once per frame group).
 pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
     pointer::arm_hover_tick(window);
     img::evict_pending(window, cx);
@@ -785,15 +720,12 @@ pub fn set_page_hidden(hidden: bool) {
     live::set_hidden(hidden);
 }
 
-/// Mirrors the OS reduced-motion preference into the transition animator.
 pub fn set_reduce_motion(on: bool) {
     tree::set_reduce_motion(on);
 }
 
-/// Publishes the window environment `@media` conditions are evaluated against: viewport size in CSS
-/// px, the OS/window colour scheme, the reduced-motion preference, the DPI scale (`resolution`) and
-/// the chrome mode (`display-mode`). Call it every frame: a change marks the whole tree dirty (any
-/// `@media` rule may have flipped) and returns `true`.
+/// Publishes the window environment `@media` is evaluated against (viewport, colour scheme,
+/// reduced motion, DPI, display mode). Call every frame; a change dirties the tree and returns `true`.
 pub fn set_env(env: vn_css::Env) -> bool {
     let changed = tree::set_env(env);
     if changed {
@@ -807,14 +739,12 @@ pub fn set_env_for(key: windows::WinKey, env: vn_css::Env) -> bool {
     tree::set_window_env(key, env)
 }
 
-/// The environment the last [`set_env`] published — the source `matchMedia` evaluates against, so
-/// JS and CSS can never disagree. The primary window's: there is one JS realm.
+/// The last [`set_env`] value, the source `matchMedia` evaluates against (the primary window's).
 pub fn env() -> vn_css::Env {
     tree::env()
 }
 
-/// Evaluates one media-query string against the live [`env`], exactly as the cascade would. `Err`
-/// carries the reason the prelude could not be compiled.
+/// Evaluates one media query against [`env`], as the cascade would. `Err` is the compile failure.
 pub fn match_media(query: &str) -> Result<bool, String> {
     vn_css::match_media(query, &tree::env())
 }
@@ -823,8 +753,6 @@ pub fn match_media(query: &str) -> Result<bool, String> {
 mod tests {
     use super::*;
 
-    /// The four inputs these tests actually vary; the DPI scale and the chrome mode come from the
-    /// default.
     fn env(w: f32, h: f32, dark: bool, reduce_motion: bool) -> vn_css::Env {
         vn_css::Env {
             viewport_width: w,
@@ -835,8 +763,6 @@ mod tests {
         }
     }
 
-    /// Each `#[test]` runs on its own thread, so the tree/engine/env thread-locals start fresh — no
-    /// cross-test bleed.
     fn opacity_of(id: u32) -> Option<f32> {
         tree::read_tree(|t| {
             t.node(id)
@@ -858,8 +784,6 @@ mod tests {
         assert!(tree::with_tree(|t| t.take_dirty()));
     }
 
-    /// End to end through the real tree: an element property drives `:disabled`, and a property
-    /// write alone is enough to re-cascade.
     #[test]
     fn element_properties_drive_the_cascade() {
         let child = tree::with_tree(|t| {
@@ -883,7 +807,6 @@ mod tests {
         assert!(flush_changes(), "a prop write must dirty the tree");
         assert_eq!(opacity_of(child), Some(0.4));
 
-        // …and `:disabled="false"` is not disabled, as in a browser.
         tree::with_tree(|t| {
             let key = t.intern("disabled");
             t.set_prop(child, key, Some("false".into()));
@@ -892,8 +815,7 @@ mod tests {
         assert_eq!(opacity_of(child), Some(1.0));
     }
 
-    /// `[class*="group/msg"]` matched nothing: the class rides `set_class`, and attribute selectors
-    /// read only the property map.
+    /// Attribute selectors read only the property map; `class` rides `set_class`.
     #[test]
     fn attribute_selectors_see_the_class_attribute() {
         let (root, child) = tree::with_tree(|t| {
@@ -924,8 +846,6 @@ mod tests {
         })
     }
 
-    /// A node with no rectangle while the tree owes a layout, and no host that can draw (none here,
-    /// as under a gpui input listener), reads STALE, and the runtime advises.
     #[test]
     fn an_owed_layout_that_cannot_be_forced_reads_stale() {
         let child = mounted_child();
@@ -936,7 +856,6 @@ mod tests {
         assert_eq!(dom::bounds(child), (None, false), "built and still unpainted: not painted");
     }
 
-    /// A hook that draws makes the answer fresh.
     #[test]
     fn a_refused_forced_layout_keeps_the_waves_repaint() {
         fn refuse() {}
@@ -966,9 +885,7 @@ mod tests {
         assert_eq!(flush_changes_kind(), Flush::Changed);
     }
 
-    /// What may draw: a dispatch under `off_input` (the pump, a deferred wave) does not count as
-    /// input, but it never hides an input dispatch around it, and gpui's draw (focus listeners)
-    /// counts whatever encloses it.
+    /// A dispatch under `off_input` does not count as input, but never hides an enclosing one.
     #[test]
     fn off_input_never_masks_an_enclosing_input_dispatch() {
         assert!(!in_input_dispatch());
@@ -993,10 +910,8 @@ mod tests {
         assert!(!in_input_dispatch());
     }
 
-    /// `getComputedStyle` is a FLUSH POINT: a component may change an attribute and read the
-    /// resulting style back on the next line, and CSSOM says it gets the new value. reka-ui's
-    /// `<Presence>` does exactly that to decide whether an element has an exit animation to wait
-    /// for, so a stale read unmounted every dialog, popover and drawer without animating it.
+    /// `getComputedStyle` is a flush point: reka-ui's `<Presence>` reads style right after an
+    /// attribute change, and a stale read unmounted dialogs without animating them.
     #[test]
     fn getcomputedstyle_flushes_the_pending_cascade() {
         let child = tree::with_tree(|t| {
@@ -1025,8 +940,6 @@ mod tests {
         };
         assert_eq!(name_now(), "enter");
 
-        // The flip, WITHOUT a frame in between — this is the `await nextTick()` of the Presence
-        // watcher, not a repaint.
         tree::with_tree(|t| {
             let key = t.intern("data-state");
             t.set_prop(child, key, Some("closed".into()));
@@ -1036,8 +949,6 @@ mod tests {
         assert!(flush_changes(), "a forced flush still owes the frame a repaint");
     }
 
-    /// An infinite animation stops with its node, even when Vue hands the node's id to a new one in
-    /// the same wave.
     #[test]
     fn an_infinite_animation_dies_with_its_node_when_the_wave_reuses_nothing() {
         tree::set_engine(vn_css::Engine::compile(
@@ -1065,9 +976,6 @@ mod tests {
         assert_eq!(reused, spinner, "after the sweep it is");
     }
 
-    /// Hiding cancels its runs (with `animationcancel`) and those of everything under it, even
-    /// nodes whose own style did not move; showing starts them afresh; a node inserted under a
-    /// hidden one never starts.
     #[test]
     fn display_none_stops_the_animations_under_it_and_showing_restarts_them() {
         tree::set_engine(vn_css::Engine::compile(
@@ -1089,7 +997,6 @@ mod tests {
         tree::take_anim_events();
         assert!(animating(), "the spinner runs");
 
-        // The PANEL is hidden; the spinner's own style does not change.
         tree::with_tree(|t| t.set_class(panel, "gone"));
         flush_changes();
         assert!(!animating(), "nothing runs under display: none");
@@ -1099,7 +1006,6 @@ mod tests {
             .collect();
         assert_eq!(cancelled.len(), 1, "one animationcancel for the spinner");
 
-        // Inserted under the hidden panel: never starts.
         let late = tree::with_tree(|t| {
             let div = t.intern("div");
             let late = t.create_element(div);
@@ -1124,8 +1030,6 @@ mod tests {
         assert!(!hot.contains(&spinner) && hot.contains(&late));
     }
 
-    /// The retained-render cache refuses only the boundaries on a moving node's path: the node and
-    /// its ancestors, never a sibling subtree.
     #[test]
     fn only_a_moving_nodes_ancestors_are_hot() {
         tree::set_engine(vn_css::Engine::compile(
@@ -1166,8 +1070,7 @@ mod tests {
         assert!(hot.is_empty(), "nothing moves: {hot:?}");
     }
 
-    /// Custom properties inherit through the REAL tree, which is what obliges the restyle pass to
-    /// walk in document order rather than by node id.
+    /// Custom properties inherit through the real tree, so restyle walks document order, not ids.
     #[test]
     fn custom_properties_inherit_through_the_real_tree() {
         let (mid, leaf) = tree::with_tree(|t| {
@@ -1175,8 +1078,7 @@ mod tests {
             let div = t.intern("div");
             let mid = t.create_element(div);
             let leaf = t.create_element(div);
-            // Deliberately inserted CHILD-FIRST so the id order and the document order disagree —
-            // the pass must follow the tree, not the slab.
+            // Inserted child-first so id order and document order disagree.
             t.insert(leaf, mid, 0);
             t.insert(mid, root, 0);
             t.set_class(mid, "page");
@@ -1194,8 +1096,6 @@ mod tests {
         assert_eq!(opacity_of(leaf), Some(0.2));
     }
 
-    /// `element.style.setProperty("--x", …)` — reka-ui's `--reka-popper-*` channel — reaches the
-    /// map and the subtree that reads it.
     #[test]
     fn an_inline_custom_property_reaches_the_subtree() {
         let leaf = tree::with_tree(|t| {
@@ -1215,10 +1115,7 @@ mod tests {
         assert_eq!(opacity_of(leaf), Some(0.35));
     }
 
-    // A mutation recascades the mutated node's SUBTREE, not the document.
 
-    /// A descendant combinator reads every ancestor, so a class change on a container has to reach
-    /// the leaf under it — the subtree walk is exactly what makes that hold.
     #[test]
     fn a_class_change_restyles_the_whole_subtree_under_it() {
         let (mid, leaf) = tree::with_tree(|t| {
@@ -1237,14 +1134,11 @@ mod tests {
         tree::restyle_all();
         assert_eq!(opacity_of(leaf), Some(0.1));
 
-        // Only `mid` is touched; the leaf two nodes down must still move.
         tree::with_tree(|t| t.set_class(mid, "page"));
         flush_changes();
         assert_eq!(opacity_of(leaf), Some(0.9));
     }
 
-    /// `.stack > *` is offered to an element only when its parent carries the key (vn-css's parent
-    /// buckets), so no child of a plain `div` ever asks the parent about `stack`.
     #[test]
     fn a_parent_gaining_the_key_of_a_parent_keyed_rule_restyles_its_children() {
         let (mid, first, second) = tree::with_tree(|t| {
@@ -1282,8 +1176,7 @@ mod tests {
         assert_eq!((opacity_of(first), opacity_of(second)), (Some(0.3), Some(0.3)));
     }
 
-    /// The class list is a set, as `classList` is: the rule index offers a class's rules once per
-    /// entry, so a repeated class would run them twice.
+    /// The class list is a set, as `classList` is: a repeated class must not run its rules twice.
     #[test]
     fn a_repeated_class_is_one_entry_of_the_class_list() {
         tree::with_tree(|t| {
@@ -1298,8 +1191,6 @@ mod tests {
         });
     }
 
-    /// The same, through the custom-property channel: an inherited `--x` redefined on an ancestor
-    /// has to re-resolve every `var(--x)` beneath it.
     #[test]
     fn an_inherited_var_flip_restyles_the_descendants_that_read_it() {
         let (mid, leaf) = tree::with_tree(|t| {
@@ -1324,8 +1215,6 @@ mod tests {
         assert_eq!(opacity_of(leaf), Some(0.75));
     }
 
-    /// `+` and `~` are the one combinator that reads SIDEWAYS, so a sheet that uses them makes a
-    /// mark reach its following siblings too.
     #[test]
     fn a_sibling_combinator_still_sees_a_class_change_next_door() {
         let (first, second) = tree::with_tree(|t| {
@@ -1344,14 +1233,11 @@ mod tests {
         tree::restyle_all();
         assert_eq!(opacity_of(second), Some(0.2));
 
-        // Nothing about `second` changed — only the element BEFORE it.
         tree::with_tree(|t| t.set_class(first, "marker"));
         flush_changes();
         assert_eq!(opacity_of(second), Some(0.8));
     }
 
-    /// A structural pseudo reads the parent's child list, so an insert has to recascade the
-    /// siblings around it.
     #[test]
     fn inserting_a_child_recascades_the_siblings_a_structural_pseudo_reads() {
         let (parent, only) = tree::with_tree(|t| {
@@ -1380,7 +1266,6 @@ mod tests {
         assert_eq!(opacity_of(only), Some(0.3));
     }
 
-    /// Removing it again moves them back.
     #[test]
     fn a_prepend_moves_the_nth_child_answer_of_every_later_sibling() {
         let (parent, items) = tree::with_tree(|t| {
@@ -1459,8 +1344,6 @@ mod tests {
         assert_eq!(opacity_of(boxed), Some(0.3), "text with data");
     }
 
-    /// `:has()` reads DOWN, so a change anywhere under the anchor has to re-match it: a child
-    /// inserted and removed, and an attribute written two levels below.
     #[test]
     fn has_follows_changes_anywhere_under_the_anchor() {
         let (card, inner) = tree::with_tree(|t| {
@@ -1506,8 +1389,6 @@ mod tests {
         assert_eq!(opacity_of(card), Some(0.9), "an attribute two levels down");
     }
 
-    /// A `:has()` further left in the selector makes a DESCENDANT's match read the anchor's
-    /// subtree, so the change has to reach the descendant, not only the anchor.
     #[test]
     fn has_left_of_a_combinator_reaches_the_descendants_that_read_it() {
         let (panel, title, slot) = tree::with_tree(|t| {
@@ -1568,7 +1449,6 @@ mod tests {
         }
     }
 
-    /// `@media` conditions read the published env, and moving it re-cascades.
     #[test]
     fn media_conditions_follow_the_published_env() {
         let child = tree::with_tree(|t| {
@@ -1587,7 +1467,6 @@ mod tests {
         flush_changes();
         assert_eq!(opacity_of(child), Some(0.1));
 
-        // The resize alone — no tree mutation at all — must re-cascade.
         assert!(set_env(env(700.0, 600.0, false, false)));
         assert!(flush_changes());
         assert_eq!(opacity_of(child), Some(0.9));
@@ -1601,10 +1480,8 @@ mod tests {
         })
     }
 
-    /// `pointer-events` is an INHERITED property, and the whole "invisible panel parked over the
-    /// visible one" idiom depends on it: an `opacity-0 pointer-events-none` tab panel is `absolute
-    /// inset-x-0 top-0`, so its controls sit pixel for pixel on the live ones and — being painted
-    /// later — take every click aimed at them.
+    /// `pointer-events` inherits, and an `opacity-0 pointer-events-none` panel parked over the live
+    /// one would otherwise take every click aimed at it.
     #[test]
     fn pointer_events_none_inherits_and_can_be_opted_out_of() {
         let (panel, child, opted_in, deep) = tree::with_tree(|t| {
@@ -1633,8 +1510,6 @@ mod tests {
         assert_eq!(inert_of(deep), Some(false), "…and that inherits too");
     }
 
-    /// A screen-reader-only box paints nothing but is `visible`, and a `visible` declaration under
-    /// a hidden box wins.
     #[test]
     fn focus_refuses_what_css_hides() {
         let ids = tree::with_tree(|t| {
@@ -1670,11 +1545,10 @@ mod tests {
     }
 }
 
-/// Dispatches an input event into JS (through the registered dispatcher) and runs its microtask
-/// checkpoint, so Vue's reactive flush lands in the same frame. Must be called with `Phase::Commit`
-/// published. Returns `false` when a handler called `preventDefault()`. Under a gpui listener the
-/// checkpoint is owed and run after gpui's dispatch (`render::settle_owed_later`), where an
-/// `onMounted` that measures can lay out; JS that starts first settles it.
+/// Dispatches an input event into JS and runs its microtask checkpoint so Vue's flush lands in the
+/// same frame. Needs `Phase::Commit` published; `false` means a handler called `preventDefault()`.
+/// Under a gpui listener the checkpoint is owed and run after gpui's dispatch
+/// (`render::settle_owed_later`), where an `onMounted` that measures can lay out.
 pub fn dispatch_event(node: u32, event: u32, payload: &EventPayload) -> bool {
     dispatch_event_with(node, event, payload, None)
 }
@@ -1684,9 +1558,8 @@ thread_local! {
     static POINTER_AT: std::cell::Cell<Option<(f64, f64)>> = const { std::cell::Cell::new(None) };
 }
 
-/// The next [`dispatch_event`] carries the pointer at (`x`, `y`) as the dispatcher's ninth and
-/// tenth arguments: a `wheel` is a MouseEvent, and its `clientX` / `clientY` are where it happened,
-/// which its payload has no room for (its `a`/`b` are the deltas).
+/// The next [`dispatch_event`] carries the pointer at (`x`, `y`) as the dispatcher's ninth and tenth
+/// arguments (a `wheel` payload has no room for `clientX` / `clientY`).
 pub(crate) fn pointer_at_next_dispatch(x: f64, y: f64) {
     POINTER_AT.with(|c| c.set(Some((x, y))));
 }
@@ -1708,9 +1581,8 @@ pub fn dispatch_event_with(node: u32, event: u32, payload: &EventPayload, data: 
 
 fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload, data: Option<Value>, at: Option<(f64, f64)>) -> bool {
     vn_runtime::bridge::settle_owed_drain();
-    // Under a gpui listener, owe this dispatch's checkpoint, before the call (owing holds the engine
-    // lock, or JSC drains when the call ends). Nested under a script, nothing is owed or drained: the
-    // script's own checkpoint runs these microtasks.
+    // Under a gpui listener, owe the checkpoint before the call (owing holds the engine lock, or JSC
+    // drains when the call ends). Nested under a script, the script's own checkpoint runs it.
     let owe = in_input_dispatch();
     if owe {
         vn_runtime::bridge::owe_drain();

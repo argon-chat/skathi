@@ -1,7 +1,6 @@
-//! vue-native as a library: another program (a terminal UI, a game launcher, a service with a tray)
-//! runs the whole engine on a thread of its own and talks to the app through async functions and
-//! events. On macOS, AppKit owns the process main thread: use `Builder::run_on_main_thread` with an
-//! application cleanup callback instead.
+//! vue-native as a library: another program runs the whole engine on a thread of its own and talks
+//! to the app through async functions and events. On macOS, AppKit owns the process main thread:
+//! use `Builder::run_on_main_thread` with an application cleanup callback instead.
 //!
 //! **One per process, once.** The JS realm cannot be torn down and gpui is one `Application`, so
 //! [`Builder::spawn`] works once; after the app closes its thread sleeps for the rest of the process.
@@ -43,12 +42,10 @@ impl SetupHook {
     }
 }
 
-/// The vue-native thread's stack: the exe's own (`/STACK` in build.rs), which
-/// is what JSC's recursion limit is sized for.
+/// The exe's own stack size (`/STACK` in build.rs), which JSC's recursion limit is sized for.
 #[cfg(not(target_os = "macos"))]
 const STACK: usize = 8 * 1024 * 1024;
 
-/// How many queued items one drain may deliver, as in vn-desktop.
 const DRAIN_CAP: usize = 16;
 
 /// A host function: called with the [`Call`] on the vue-native thread.
@@ -72,18 +69,16 @@ struct Config {
 static CONFIG: OnceLock<Config> = OnceLock::new();
 static STARTED: AtomicBool = AtomicBool::new(false);
 
-/// Is this vue-native embedded in another program?
 pub(crate) fn active() -> bool {
     CONFIG.get().is_some()
 }
 
-/// This embedding binary already prepared the desktop launch policy in spawn.
+/// `spawn` already prepared the desktop launch policy.
 pub(crate) fn desktop_launch_prepared() -> bool {
     CONFIG.get().is_some_and(|config| config.desktop_launch)
 }
 
-/// Does the app take the foreground at startup? Always, unless embedded with
-/// [`Builder::activate`]`(false)`.
+/// Always, unless embedded with [`Builder::activate`]`(false)`.
 pub(crate) fn activates() -> bool {
     CONFIG.get().is_none_or(|c| requests_activation(c.activate, c.visible))
 }
@@ -92,8 +87,7 @@ pub(crate) fn visible() -> bool {
     CONFIG.get().is_none_or(|c| c.visible)
 }
 
-/// Seals a dormant profile's localStorage before application-owned migration.
-/// It uses the SDK storage format and OS provider, with no plaintext fallback.
+/// Seals a dormant profile's localStorage with the OS provider, no plaintext fallback.
 pub fn encrypt_local_storage_at(directory: &Path) -> Result<bool, String> {
     #[cfg(feature = "storages")]
     { vn_storage::encrypt_local_storage_at(directory) }
@@ -106,7 +100,6 @@ pub(crate) fn storage_encrypted() -> Option<bool> {
     CONFIG.get()?.storage_encrypted
 }
 
-/// The persistent root chosen before storage and cookies are installed.
 pub(crate) fn data_dir() -> Option<&'static Path> {
     CONFIG.get()?.data_dir.as_deref()
 }
@@ -138,13 +131,11 @@ fn requests_activation(activate: bool, visible: bool) -> bool {
     activate && visible
 }
 
-/// The exe F12 starts as the inspector, embedded (src/inspector.rs).
 #[cfg_attr(not(vn_devtools), allow(dead_code))]
 pub(crate) fn inspector_exe() -> Option<PathBuf> {
     CONFIG.get()?.inspector_exe.clone()
 }
 
-/// The desktop entry id the embedder named ([`Builder::desktop_id`]).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn desktop_id() -> Option<String> {
     CONFIG.get()?.desktop_id.clone()
@@ -160,8 +151,7 @@ enum PayloadSource {
 
 #[cfg(any(feature = "prod", test))]
 impl PayloadSource {
-    /// The bytes, a label, and the folder its asset packs are in (`None`: the
-    /// executable's).
+    /// The bytes, a label, and the folder of its asset packs (`None`: the executable's).
     fn load(self) -> Result<(crate::payload::PayloadBytes, String, Option<PathBuf>), Error> {
         use crate::payload::PayloadBytes;
         match self {
@@ -180,26 +170,23 @@ impl PayloadSource {
 /// Why [`Builder::spawn`] did not start vue-native.
 #[derive(Debug)]
 pub enum Error {
-    /// vue-native already ran in this process (it runs once; module docs).
+    /// It runs once per process.
     AlreadyStarted,
-    /// A `--features prod` build with no app: no payload was given, none is
-    /// stamped into this exe, and `VN_PAYLOAD` is unset.
+    /// A `--features prod` build with no payload given, stamped in, or in `VN_PAYLOAD`.
     NoPayload,
-    /// A dev build boots the dev dist (`VN_DIST`, packages/vue-native/dist)
-    /// and has no payload loader; a payload needs `--features prod`.
+    /// A dev build boots the dev dist and has no payload loader.
     PayloadNeedsProd,
     /// The payload could not be read or parsed.
     Payload(String),
     /// Something read this process's arguments before `spawn`.
     ArgsAlreadyRead,
-    /// Desktop launch policy forwarded this invocation, or refused a duplicate.
-    /// The embedding main should return this exit code (0 means forwarded).
+    /// Desktop launch policy forwarded this invocation or refused a duplicate: the embedding main
+    /// should return this exit code (0 means forwarded).
     LaunchExit(i32),
     /// The configured profile directory could not be prepared.
     DataDirectory(String),
-    /// The thread could not be started.
     Spawn(std::io::Error),
-    /// AppKit must run on the process main thread, using `run_on_main_thread`.
+    /// AppKit needs the process main thread: use `run_on_main_thread`.
     MainThreadRequired,
 }
 
@@ -303,27 +290,26 @@ impl Builder {
         self
     }
 
-    /// The app, as the `.vnpk` file `vn build` writes. `--features prod` only. Mapped read-only for
-    /// the app's lifetime: replace it atomically, never modify it in place.
+    /// The `.vnpk` file `vn build` writes (`--features prod` only), mapped read-only for the app's
+    /// lifetime: replace it atomically, never modify it in place.
     pub fn payload_file(mut self, path: impl Into<PathBuf>) -> Self {
         self.payload = Some(PayloadSource::File(path.into()));
         self
     }
 
-    /// The app, as owned bytes of a `.vnpk`. Prefer [`Self::payload_static`] for `include_bytes!`.
+    /// Owned `.vnpk` bytes. Prefer [`Self::payload_static`] for `include_bytes!`.
     pub fn payload_bytes(mut self, bytes: impl Into<Vec<u8>>) -> Self {
         self.payload = Some(PayloadSource::Bytes(bytes.into()));
         self
     }
 
-    /// A static `.vnpk` (such as `include_bytes!`), borrowed without copying.
+    /// A static `.vnpk`, borrowed without copying.
     pub fn payload_static(mut self, bytes: &'static [u8]) -> Self {
         self.payload = Some(PayloadSource::Static(bytes));
         self
     }
 
-    /// `appLaunch.argv` after the exe: what the app is launched with. None of
-    /// it is read as a host flag.
+    /// `appLaunch.argv` after the exe; none of it is read as a host flag.
     pub fn args<I, S>(mut self, args: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -333,8 +319,8 @@ impl Builder {
         self
     }
 
-    /// A function the app calls as `appHost.call(name, ...args)`: the handler
-    /// gets the arguments as a JSON array and answers through the [`Call`].
+    /// A function the app calls as `appHost.call(name, ...args)`; the handler gets the arguments
+    /// as a JSON array and answers through the [`Call`].
     pub fn function<F>(mut self, name: impl Into<String>, handler: F) -> Self
     where
         F: Fn(Call) + Send + Sync + 'static,
@@ -356,9 +342,8 @@ impl Builder {
         self
     }
 
-    /// A vn-app.exe of this vue-native version, started as the inspector on
-    /// F12 and `appDevtools.open()`. Without it they say why nothing opened;
-    /// the devtools protocol itself (ctl.ts, the MCP server) works either way.
+    /// A vn-app.exe of this vue-native version, started as the inspector on F12 and
+    /// `appDevtools.open()`. Without it they say why nothing opened; the devtools protocol works either way.
     pub fn inspector_exe(mut self, path: impl Into<PathBuf>) -> Self {
         self.inspector_exe = Some(path.into());
         self
@@ -371,10 +356,9 @@ impl Builder {
         self
     }
 
-    /// Starts vue-native on a thread of its own and returns at once; the
-    /// window opens a moment later. Events emitted before the app is ready
-    /// wait for it. On macOS this returns `Error::MainThreadRequired`; use
-    /// `Self::run_on_main_thread` from the process main thread instead.
+    /// Starts vue-native on a thread of its own and returns at once; events emitted before the app
+    /// is ready wait for it. On macOS this returns `Error::MainThreadRequired`: use
+    /// `Self::run_on_main_thread` instead.
     pub fn spawn(self) -> Result<Handle, Error> {
         #[cfg(target_os = "macos")]
         {
@@ -469,7 +453,6 @@ impl Builder {
     #[cfg(feature = "prod")]
     fn load_payload(&mut self) -> Result<(), Error> {
         let Some(source) = self.payload.take() else {
-            // The embedder's exe may carry a stamped payload, or `VN_PAYLOAD` may name one.
             return if crate::payload::get().is_some() { Ok(()) } else { Err(Error::NoPayload) };
         };
         let (bytes, label, dir) = source.load()?;
@@ -497,11 +480,9 @@ fn require_main_thread() -> Result<(), Error> {
     }
 }
 
-/// The vue-native thread (the process main thread when hosted by AppKit).
 fn run_thread() {
-    // `run_embedded` ends in `shutdown::finish`, which never returns; only a
-    // panic out of gpui's loop gets past it. The thread must not end even then
-    // (its thread-locals are the JS realm), so it reports and sleeps.
+    // `run_embedded` ends in `shutdown::finish`, which never returns; only a panic out of gpui's
+    // loop gets past it. The thread must not end even then (its thread-locals are the JS realm).
     if let Err(p) = std::panic::catch_unwind(crate::run_embedded) {
         let why = p
             .downcast_ref::<&str>()
@@ -530,7 +511,7 @@ static EXIT_CV: Condvar = Condvar::new();
 static CLOSE: AtomicBool = AtomicBool::new(false);
 static SHOW: AtomicBool = AtomicBool::new(false);
 
-/// The app has closed (src/shutdown.rs). The first report wins.
+/// The first report wins.
 pub(crate) fn finished(clean: bool, summary: String) {
     let Ok(mut exit) = EXIT.lock() else { return };
     if exit.is_none() {
@@ -559,16 +540,14 @@ impl std::fmt::Display for EmitError {
 
 impl std::error::Error for EmitError {}
 
-/// The embedder's side of a running vue-native. Cheap to clone; every method
-/// works from any thread.
+/// The embedder's side of a running vue-native. Cheap to clone; every method works from any thread.
 #[derive(Clone)]
 pub struct Handle {
     _private: (),
 }
 
 impl Handle {
-    /// Delivers `appHost.on(event)`'s handlers `data` (one JSON value) in the
-    /// app's next frame.
+    /// Delivers `data` (one JSON value) to `appHost.on(event)` handlers in the app's next frame.
     pub fn emit(&self, event: &str, data: &str) -> Result<(), EmitError> {
         if self.is_closed() {
             return Err(EmitError::Closed);
@@ -592,19 +571,16 @@ impl Handle {
         true
     }
 
-    /// Closes the app as `appWindow.close()` does: the windows go at once and
-    /// the teardown runs behind them; [`Handle::wait`] returns when it is done.
+    /// Closes the app as `appWindow.close()` does: the windows go at once, the teardown runs behind them.
     pub fn close(&self) {
         CLOSE.store(true, Ordering::Release);
         wake();
     }
 
-    /// Has the app closed?
     pub fn is_closed(&self) -> bool {
         EXIT.lock().is_ok_and(|e| e.is_some())
     }
 
-    /// Blocks until the app has closed.
     pub fn wait(&self) -> Exit {
         let mut exit = EXIT.lock().unwrap_or_else(|p| p.into_inner());
         loop {
@@ -637,7 +613,7 @@ impl Call {
         &self.name
     }
 
-    /// The call's arguments, as one JSON array.
+    /// One JSON array.
     pub fn args(&self) -> &str {
         &self.args
     }
@@ -652,14 +628,12 @@ impl Call {
         self.reply.reject(message)
     }
 
-    /// The answer half, to move to another thread.
     pub fn into_reply(self) -> Reply {
         self.reply
     }
 }
 
-/// Settles one call's promise, from any thread. Dropped unanswered, it
-/// rejects, so a promise never hangs on a host that forgot it.
+/// Settles one call's promise, from any thread. Dropped unanswered, it rejects, so a promise never hangs.
 pub struct Reply {
     token: u32,
     settled: bool,
@@ -704,7 +678,7 @@ enum Item {
 
 static QUEUE: Mutex<VecDeque<Item>> = Mutex::new(VecDeque::new());
 static QUEUED: AtomicUsize = AtomicUsize::new(0);
-/// Calls made and not yet delivered back: the event loop's in-flight work.
+/// Calls made and not yet settled: the event loop's in-flight work.
 static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 static NEXT_TOKEN: AtomicU32 = AtomicU32::new(1);
 static RT_G: AtomicUsize = AtomicUsize::new(0);
@@ -781,21 +755,18 @@ fn deliver(token: u32, ok: bool, text: &str) {
     });
 }
 
-/// After storage installation, before any application JS or window creation.
 pub(crate) fn setup(runtime: &JsRuntime) -> Result<(), String> {
     let Some(config) = CONFIG.get() else { return Ok(()) };
     config.setup.run(&HostContext::installed(Some(runtime)))
 }
 
-/// The Dock icon was clicked while no window is visible (macOS
-/// `applicationShouldHandleReopen:`): the primary window comes back as
-/// [`Handle::show`] brings it, in the next frame. A closing app ignores it.
+/// Dock click with no window visible (`applicationShouldHandleReopen:`): as [`Handle::show`].
 #[cfg(target_os = "macos")]
 pub(crate) fn reopen() {
     let _accepted = Handle { _private: () }.show();
 }
 
-/// In the frame's JS wave (lib.rs `js_wave`): a close the embedder asked for.
+/// Applies a show or close the embedder asked for, from the frame's JS wave.
 pub(crate) fn pump() {
     let show = SHOW.swap(false, Ordering::AcqRel);
     if CLOSE.swap(false, Ordering::AcqRel) {
@@ -817,8 +788,7 @@ host_fn!(fn vn_host_set_dispatcher(g, args) {
     Value::undefined().0
 });
 
-// `__vn_host_call(name, argsJson) -> token`, 0 for a name the embedder did not
-// register (the shim rejects with the list it did).
+// Returns a token, 0 for a name the embedder did not register (the shim rejects with the list it did).
 host_fn!(fn vn_host_call(g, args) {
     let name = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }.unwrap_or_default();
     let call_args = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(1).0) }
@@ -835,8 +805,7 @@ host_fn!(fn vn_host_call(g, args) {
     };
     IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
     let call = Call { name, args: call_args, reply: Reply { token, settled: false } };
-    // The embedder's code: a panic in it rejects this call (via Reply's drop) rather than poisoning
-    // the runtime.
+    // A panic in the embedder's code rejects this call (via Reply's drop) rather than poisoning the runtime.
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler(call))).is_err() {
         eprintln!("[embed] the host function behind appHost.call panicked");
     }
@@ -850,8 +819,7 @@ host_fn!(fn vn_host_functions(_g, _args) {
     JsRuntime::with(|rt| rt.ctx().string(&json)).0
 });
 
-/// Registers `__vn_host_*`, embedded only: in the exe they do not exist and
-/// `appHost.available` is `false`.
+/// Embedded only: in the exe `__vn_host_*` do not exist and `appHost.available` is `false`.
 pub(crate) fn install(rt: &JsRuntime) {
     if !active() {
         return;

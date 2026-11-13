@@ -6,30 +6,17 @@
 //! window, sized to its content, centred, owned, then shown), waits for the reply, and sends
 //! `Msg::Close` when the owner closes.
 //!
-//! A Windows 11 ContentDialog (content_dialog.rs): the app's icon and name, the capability's glyph
-//! in an accent-tinted circle, the question over a sentence of body text, and equal-width buttons.
 //! The first button (Allow) is the accent-filled one; initial focus, and so Enter, is on
 //! [`Ask::default`], which consent.rs makes Block so a stray Enter grants nothing.
 //!
-//! # Input
-//!
-//! - Enter or Space presses the focused button; Esc and Alt+F4 dismiss.
-//! - Tab, Shift+Tab and the arrow keys move between the buttons, with the Windows 11 focus ring once
-//!   the keyboard is in use.
-//! - Alt+letter presses the button whose `&` marks that letter.
-//! - **Input protection**: for [`INPUT_DELAY`] after the prompt becomes the active window, clicks,
+//! **Input protection**: for [`INPUT_DELAY`] after the prompt becomes the active window, clicks,
 //!   Enter, Space and access keys are ignored, so input aimed at the app the moment the prompt
 //!   appears cannot land on Allow. Esc and Tab are never ignored.
-//!
-//! # Lifecycle
 //!
 //! vn-desktop owns the rules (dialog/ask.rs): one question per owner at a time, none for a closing
 //! owner, and the owner is destroyed only once [`present`] has returned. The owner is disabled while
 //! the prompt is up. The reply is sent exactly once: by a button, a dismissal, the owner closing
 //! (`Msg::Close`), or the window going away any other way (the view's `Drop`).
-//!
-//! gpui reports the window to UI Automation through AccessKit: the card is a `Dialog` named by the
-//! question and each button a `Button` with its access key.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -48,17 +35,13 @@ use vn_desktop::Fail;
 use vn_runtime::redjs::webapi::permissions::Capability;
 
 use crate::content_dialog::{self as card, fonts, hwnd_of, win, Fonts, Theme, WIDTH};
-// The ContentDialog's pure parts, re-exported (examples/consent_prompt.rs names `Rgb` and `Accent`).
 pub use crate::content_dialog::{
     access_key_matches, center_in, contrast, glyph_in_accent, parse_label, text_on, Accent, Guard, Label, Rect, Rgb,
     INPUT_DELAY,
 };
 
-/// The button styled as the accent (filled) one: Allow, by `Question`'s
-/// contract (button 0 is Allow, button 1 Block).
 const ACCENT: usize = 0;
 
-/// The capability's Segoe Fluent Icons / Segoe MDL2 Assets glyph.
 pub fn glyph(cap: Capability) -> char {
     match cap {
         Capability::Microphone => '\u{E720}',
@@ -70,20 +53,15 @@ pub fn glyph(cap: Capability) -> char {
     }
 }
 
-/// What the prompt shows.
 #[derive(Debug, Clone)]
 pub struct Spec {
     pub capability: Capability,
-    /// The app's name, in the caption row and the window title.
     pub app: String,
     pub instruction: String,
     pub content: String,
     pub buttons: Vec<String>,
-    /// Focused at first, so the button Enter presses.
     pub default: usize,
-    /// The asking window's HWND, 0 for none.
     pub owner: isize,
-    /// The theme, when it is not the system's (the preview).
     pub dark: Option<bool>,
 }
 
@@ -96,8 +74,6 @@ enum Msg {
 
 static TX: OnceLock<UnboundedSender<Msg>> = OnceLock::new();
 
-/// Starts the main thread's side: a task that opens and closes prompts for
-/// [`present`]. Call once, on the gpui main thread.
 pub fn install(cx: &mut App) {
     let (tx, mut rx) = unbounded::<Msg>();
     if TX.set(tx).is_err() {
@@ -111,9 +87,6 @@ pub fn install(cx: &mut App) {
     .detach();
 }
 
-/// vn-desktop's presenter (`dialog::ask_with`), on the `vn-ask` thread: shows
-/// the prompt on the main thread and waits for its reply. When the owner
-/// starts closing it closes the prompt, and returns once that is done.
 pub fn present(capability: Capability, q: &Ask, owner: isize, cancel: &Cancellation) -> Result<Option<usize>, Fail> {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let fail = |m: &str| Fail::new("NotSupportedError", m.to_string());
@@ -156,7 +129,6 @@ pub fn present(capability: Capability, q: &Ask, owner: isize, cancel: &Cancellat
 }
 
 thread_local! {
-    /// The prompts on screen, by `present`'s id.
     static OPEN: RefCell<Vec<(u64, WindowHandle<Prompt>)>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -196,11 +168,8 @@ struct Prompt {
     icon: Option<Arc<Image>>,
     done: Option<Done>,
     hwnd: isize,
-    /// The owner was disabled by this prompt and must be enabled again.
     owner_disabled: bool,
-    /// The card's laid-out height, DIP, from its last frame.
     height: Rc<Cell<f32>>,
-    /// The button a mouse press began on, once the guard allowed it.
     pressing: Option<usize>,
     _subs: Vec<Subscription>,
 }
@@ -210,7 +179,6 @@ impl Prompt {
         self.spec.dark.unwrap_or(matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark))
     }
 
-    /// The reply, once; then the window goes.
     fn finish(&mut self, answer: Option<usize>, window: &mut Window) {
         let Some(done) = self.done.take() else { return };
         // The owner first: an owned window that is destroyed hands the
@@ -314,7 +282,6 @@ impl Render for Prompt {
             .flex_col()
             .font_family(f.text)
             .text_color(t.text)
-            // The window, while it is taller than the card (the first frame).
             .bg(t.footer)
             .child(card::card(self.height.clone(), self.body(&t, f), card::footer(&t, buttons)))
     }
@@ -331,7 +298,6 @@ impl Drop for Prompt {
     }
 }
 
-/// Opens the prompt, hidden, and reveals it once it has its size and place.
 fn open(id: u64, spec: Spec, done: Done, cx: &mut App) -> anyhow::Result<WindowHandle<Prompt>> {
     let owner = win::usable(spec.owner).then_some(spec.owner).unwrap_or(0);
     let spec = Spec { owner, ..spec };
@@ -367,7 +333,6 @@ fn open(id: u64, spec: Spec, done: Done, cx: &mut App) -> anyhow::Result<WindowH
                     }),
                 ];
                 window.on_window_should_close(cx, |window, cx| {
-                    // Alt+F4, or the system menu's Close: a dismissal.
                     if let Some(view) = window.root::<Prompt>().flatten() {
                         view.update(cx, |p, _| {
                             p.release_owner();
@@ -407,8 +372,6 @@ fn open(id: u64, spec: Spec, done: Done, cx: &mut App) -> anyhow::Result<WindowH
     Ok(handle)
 }
 
-/// Sizes the hidden window to its card, centres it on its owner, draws it
-/// at that size, and shows it (content_dialog.rs `fit`).
 async fn reveal(handle: WindowHandle<Prompt>, hwnd: isize, owner: isize, height: Rc<Cell<f32>>, cx: &mut AsyncApp) {
     card::fit(handle.into(), hwnd, owner, WIDTH, &height, cx).await;
     let Ok(live) = handle.update(cx, |p, _, _| p.done.is_some()) else { return };
@@ -428,7 +391,6 @@ async fn reveal(handle: WindowHandle<Prompt>, hwnd: isize, owner: isize, height:
     });
 }
 
-/// What the preview shows (examples/consent_prompt.rs).
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct Preview {
@@ -436,27 +398,17 @@ pub struct Preview {
     pub russian: bool,
     pub dark: Option<bool>,
     pub app: String,
-    /// Ask over a window of its own, rather than with no owner.
     pub owner: bool,
     pub accent: Option<Accent>,
-    /// An exe whose icon stands in for the app's.
     pub icon_from: Option<String>,
-    /// Ask through vn-desktop's question (`dialog::ask_with`, the vn-ask
-    /// thread, [`present`]) as the app does, and, with a delay, close the
-    /// owner under the prompt after it.
     pub through_desktop: bool,
     pub close_owner_after: Option<Duration>,
-    /// The card without acrylic, as Windows 10 draws it.
     pub solid: bool,
 }
 
-/// The preview's owner, for vn-desktop's owner resolver.
 static PREVIEW_OWNER: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
-/// The preview owner's vn-desktop key.
 const PREVIEW_KEY: u64 = 1;
 
-/// `cargo run -p vn-app --example consent_prompt`: the prompt on its own,
-/// for a look at it. Prints the answer and exits.
 #[doc(hidden)]
 pub fn preview(p: Preview) {
     if let Some(a) = p.accent {
@@ -521,7 +473,6 @@ pub fn preview(p: Preview) {
             dark: p.dark,
         };
         let done: Done = Box::new(|a| println!("answer: {a:?}"));
-        // The prompt's reply ends the preview once its window has gone.
         cx.on_window_closed(|cx, _| cx.quit()).detach();
         if let Err(e) = open(0, spec, done, cx) {
             eprintln!("the prompt could not open: {e:#}");
@@ -585,16 +536,11 @@ mod tests {
 
     #[test]
     fn accent_text_is_whichever_of_black_and_white_reads_better() {
-        // Windows' defaults: white on the light theme's blue, black on the
-        // dark theme's.
         assert_eq!(text_on(Accent::DEFAULT.light_theme), Rgb(255, 255, 255));
         assert_eq!(text_on(Accent::DEFAULT.dark_theme), Rgb(0, 0, 0));
-        // A user's grey accent (AccentLight2 #595959) and a pale yellow one.
         assert_eq!(text_on(Rgb(0x59, 0x59, 0x59)), Rgb(255, 255, 255));
         assert_eq!(text_on(Rgb(0xFF, 0xE0, 0x80)), Rgb(0, 0, 0));
         assert!(contrast(Rgb(0, 0, 0), Rgb(255, 255, 255)) > 20.9);
-        // The glyph is coloured by the default blues, not by a grey accent
-        // on the dark card.
         assert!(glyph_in_accent(Accent::DEFAULT.light_theme, false));
         assert!(glyph_in_accent(Accent::DEFAULT.dark_theme, true));
         assert!(!glyph_in_accent(Rgb(0x59, 0x59, 0x59), true));
@@ -605,11 +551,8 @@ mod tests {
     fn the_prompt_is_centred_on_its_owner_and_kept_on_its_monitor() {
         let work = [0, 0, 1920, 1040];
         assert_eq!(center_in([100, 100, 1100, 700], work, 440, 300), (380, 250));
-        // An owner hanging off the right edge: the prompt stays on screen.
         assert_eq!(center_in([1700, 100, 2700, 700], work, 440, 300), (1480, 250));
-        // A monitor to the left of the primary one.
         assert_eq!(center_in([-1500, 0, -500, 600], [-1920, 0, 0, 1040], 440, 300), (-1220, 150));
-        // Larger than the work area: its top-left corner stays on it.
         assert_eq!(center_in([0, 0, 100, 100], [0, 0, 400, 200], 440, 300), (0, 0));
     }
 

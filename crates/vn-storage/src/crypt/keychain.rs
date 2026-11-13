@@ -1,14 +1,11 @@
-//! The macOS provider's Keychain half: the only code here that needs a Mac; the decisions are
-//! in `envelope.rs`. One generic-password item per app in the default (login) keychain:
-//! service `gl.argon.vue-native.storage`, account = bundle identifier else `exe:<file stem>`,
-//! data = the 32-byte master key.
+//! The macOS provider's Keychain half: the only code here that needs a Mac. One generic-password item
+//! per app in the default (login) keychain (service `gl.argon.vue-native.storage`).
 //!
-//! The file-based login keychain, not the data-protection one: that needs a
-//! keychain-access-groups entitlement and Team ID, which unsigned dev builds lack. The item's
-//! ACL trusts the creating app's signature; another app (or an ad-hoc rebuild) makes macOS
-//! prompt out of process, which blocks this call but cannot deadlock the UI thread. The key is
-//! loaded once per process, failure included, so a refused prompt does not reappear every frame
-//! and a run that could not open old data never writes over it.
+//! The file-based login keychain, not the data-protection one, which needs an entitlement unsigned dev
+//! builds lack. Another app (or an ad-hoc rebuild) makes macOS prompt out of process, which blocks this
+//! call but cannot deadlock the UI thread. The key is loaded once per process, failure included, so a
+//! refused prompt does not reappear every frame and a run that could not open old data never writes
+//! over it.
 
 use std::sync::OnceLock;
 
@@ -21,7 +18,6 @@ use security_framework::passwords::{generic_password, PasswordOptions};
 use super::envelope::{self, MasterKey, Origin, KEY_LEN};
 use super::SecretProvider;
 
-/// The keychain service every vue-native app's key is filed under.
 pub const SERVICE: &str = "gl.argon.vue-native.storage";
 
 pub struct Keychain {
@@ -79,7 +75,6 @@ fn account() -> String {
     envelope::account_for(bundle_id.as_deref(), stem.as_deref())
 }
 
-/// The key filed under `account`, created on first use.
 fn load(account: &str) -> Result<MasterKey, String> {
     let read = || match generic_password(PasswordOptions::new_generic_password(SERVICE, account)) {
         Ok(bytes) => Ok(Some(bytes)),

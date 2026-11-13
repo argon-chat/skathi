@@ -2,7 +2,6 @@
 //! [`WEBKIT_APPLIED`]; every other vendor prefix is dropped before the mapper with no advisory.
 //! Prefixed values belong to the property they are a value of.
 
-/// The `-webkit-` properties that are applied, named without the prefix.
 pub const WEBKIT_APPLIED: &[&str] = &[
     "align-content",
     "align-items",
@@ -87,7 +86,6 @@ pub const WEBKIT_APPLIED: &[&str] = &[
 
 const PREFIXES: [&str; 4] = ["-webkit-", "-moz-", "-ms-", "-o-"];
 
-/// A custom property (`--webkit-x`) is never prefixed.
 pub fn dropped(name: &str) -> bool {
     let Some(prefix) = PREFIXES.iter().find(|p| starts_with_ignore_case(name, p)) else {
         return false;
@@ -122,8 +120,6 @@ pub(crate) fn property_dropped(p: &lightningcss::properties::Property) -> bool {
             } else {
                 return false;
             };
-            // A declaration that is ALSO unprefixed (only a merged one can be) is the standard
-            // property.
             if vp.contains(VendorPrefix::None) {
                 return false;
             }

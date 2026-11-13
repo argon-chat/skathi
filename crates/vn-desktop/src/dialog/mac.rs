@@ -1,25 +1,19 @@
 //! `NSOpenPanel` / `NSSavePanel`, `NSAlert` and `NSColorPanel`, for a `vn-dialog` thread (mod.rs).
 //!
-//! AppKit panels belong to the main thread, which is also the frame thread and JSC's. The dialog
-//! thread hands the panel to the main queue and waits on a channel; nothing modal runs on the main
-//! thread (no `runModal`), so gpui and JS keep running while a panel is open:
+//! AppKit panels belong to the main thread, which is also the frame thread and JSC's. The dialog thread
+//! hands the panel to the main queue and waits on a channel; nothing runs modal (no `runModal`), so gpui
+//! and JS keep running. With an owner window on screen the panel is a sheet on it; without one a file
+//! panel is modeless, and a question (which needs its window) is dismissed.
 //!
-//! - with an owner window on screen, the panel is a sheet on it, modal to that window only;
-//! - without one (no owner, or it is minimised, hidden or already showing a sheet), a file panel
-//!   is modeless. A question needs its window: it is a sheet on the owner even when minimised,
-//!   and with no owner at all it is dismissed (ask.rs logs it).
+//! The owner (`Owner::hwnd`) is the `NSWindow` resolved from gpui's `NSView` ([`ns_window_of_view`]); the
+//! main thread uses that earlier-captured pointer only after finding it in `[NSApp windows]`.
 //!
-//! The owner (`Owner::hwnd`) is the `NSWindow` resolved from gpui's `NSView`
-//! ([`ns_window_of_view`]); being a pointer captured earlier, the main thread uses it only after
-//! finding it in `[NSApp windows]`.
+//! Cancellation: the dialog thread checks its owner every 100 ms; once it is closing, the main thread ends
+//! the panel as its Cancel would. Every completion handler orders its panel out before answering, so when
+//! the thread returns (`is_idle`) no sheet is attached. After [`GIVE_UP`] the thread stops waiting.
 //!
-//! Cancellation: the dialog thread checks its owner every 100 ms; once it is closing, the main
-//! thread ends the panel as its Cancel button would. Every completion handler orders its panel
-//! out before answering, so when the thread returns (`is_idle`) no sheet is attached to the owner.
-//! After [`GIVE_UP`] the thread stops waiting, so a wedged main thread cannot keep a window open.
-//!
-//! The colour picker is the shared `NSColorPanel`: not modal, no OK button. The colour it shows
-//! when it closes is the answer, an unchanged colour is a cancel, and one is open app-wide.
+//! The colour picker is the shared `NSColorPanel`: not modal, no OK button. The colour it shows when it
+//! closes is the answer, an unchanged colour is a cancel, and one is open app-wide.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -51,51 +45,41 @@ use super::mac_plan::{self, Format};
 use super::{Ask, Cancellation, Kind, Known, Native, Start};
 use crate::Fail;
 
-// `UTType` is looked up by name; linking makes sure its framework is loaded
-// (macOS 11+, below the 13.0 deployment target).
+// `UTType` is looked up by name; linking makes sure its framework is loaded (macOS 11+).
 #[link(name = "UniformTypeIdentifiers", kind = "framework")]
 unsafe extern "C" {}
 
 const POLL: Duration = Duration::from_millis(100);
-/// How long a closing owner waits for AppKit to take the panel away.
 const GIVE_UP: Duration = Duration::from_secs(3);
 
 type Answer<T> = Result<Option<T>, Fail>;
 type Reply<T> = mpsc::Sender<Answer<T>>;
 
-/// A dialog on screen, as the main thread knows it.
 struct Live {
-    /// Ends it as its own Cancel would; its completion handler answers.
     close: Rc<dyn Fn()>,
-    /// Takes it off screen and answers `None` without waiting for AppKit.
     force: Box<dyn FnOnce()>,
-    /// `close` has been tried once already.
     asked: bool,
 }
 
 thread_local! {
-    /// Main thread only: the dialogs a closing owner may have to end.
     static LIVE: RefCell<HashMap<u64, Live>> = RefCell::new(HashMap::new());
 }
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
 
-/// Registered before the panel begins, so a completion handler that AppKit
-/// calls at once (`NSModalResponseAbort`) finds it to forget.
+/// Registered before the panel begins, so a completion handler AppKit calls at once finds it to forget.
 fn register(id: u64, close: Rc<dyn Fn()>, force: Box<dyn FnOnce()>) {
     LIVE.with(|l| l.borrow_mut().insert(id, Live { close, force, asked: false }));
 }
 
-/// The dialog has answered: nothing is left to close.
 fn forget(id: u64) {
     // Dropped outside the borrow: the closures release AppKit objects.
     let gone = LIVE.with(|l| l.borrow_mut().remove(&id));
     drop(gone);
 }
 
-/// Main thread: dialog `id`'s owner is closing. The first request ends the
-/// dialog as Cancel would; a later one forces it. AppKit is called outside
-/// the borrow, since ending a panel runs its completion handler (`forget`).
+/// Main thread: dialog `id`'s owner is closing. The first request ends the dialog as Cancel would; a
+/// later one forces it. AppKit is called outside the borrow: ending a panel runs its completion handler.
 fn close(id: u64) {
     enum Step {
         Ask(Rc<dyn Fn()>),
@@ -118,8 +102,6 @@ fn close(id: u64) {
     }
 }
 
-/// Runs `show` on the main queue and waits for the dialog's answer, ending
-/// the dialog if its owner closes meanwhile (module docs).
 fn run<T: Send + 'static>(
     what: &'static str,
     cancel: &Cancellation,
@@ -133,7 +115,6 @@ fn run<T: Send + 'static>(
     let gate = cancel.clone();
     dispatch2::DispatchQueue::main().exec_async(move || {
         let failed = tx.clone();
-        // A panic must not unwind into libdispatch.
         let shown = std::panic::catch_unwind(AssertUnwindSafe(|| {
             if gate.is_requested() {
                 let _ = tx.send(Ok(None));
@@ -158,7 +139,6 @@ fn run<T: Send + 'static>(
     loop {
         match rx.recv_timeout(POLL) {
             Ok(answer) => return answer,
-            // Every holder of the reply went away without one.
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
@@ -174,16 +154,14 @@ fn run<T: Send + 'static>(
     }
 }
 
-/// Runs a completion handler's body; a panic answers with a failure instead
-/// of unwinding into AppKit.
+/// Runs a completion handler's body; a panic answers with a failure instead of unwinding into AppKit.
 fn guarded<T>(reply: &Reply<T>, body: impl FnOnce() -> Answer<T>) {
     let answer = std::panic::catch_unwind(AssertUnwindSafe(body))
         .unwrap_or_else(|_| Err(Fail::new("InvalidStateError", "the dialog's answer could not be read").code("EIO")));
     let _ = reply.send(answer);
 }
 
-/// The `NSWindow` of gpui's `NSView` (its raw window handle): a dialog
-/// owner. Main thread only; `None` off it, or for a view in no window.
+/// The `NSWindow` of gpui's `NSView`: a dialog owner. Main thread only.
 pub fn ns_window_of_view(ns_view: *mut c_void) -> Option<isize> {
     MainThreadMarker::new()?;
     // SAFETY: gpui's raw handle is its live `NSView`, read on the main thread.
@@ -191,7 +169,6 @@ pub fn ns_window_of_view(ns_view: *mut c_void) -> Option<isize> {
     view.window().map(|w| Retained::as_ptr(&w) as isize)
 }
 
-/// The owner's `NSWindow`, if it is still one of this app's windows.
 fn window_of(mtm: MainThreadMarker, owner: isize) -> Option<Retained<NSWindow>> {
     if owner == 0 {
         return None;
@@ -199,13 +176,10 @@ fn window_of(mtm: MainThreadMarker, owner: isize) -> Option<Retained<NSWindow>> 
     NSApplication::sharedApplication(mtm).windows().iter().find(|w| Retained::as_ptr(w) as isize == owner)
 }
 
-/// A window a file panel can be a sheet on: on screen, with no sheet already.
 fn sheet_parent(mtm: MainThreadMarker, owner: isize) -> Option<Retained<NSWindow>> {
     window_of(mtm, owner).filter(|w| w.isVisible() && !w.isMiniaturized() && w.attachedSheet().is_none())
 }
 
-/// A known folder's path, from `NSFileManager` (thread-safe), else under
-/// `$HOME`.
 pub(super) fn known_folder(k: Known) -> Option<PathBuf> {
     let dir = match k {
         Known::Desktop => NSSearchPathDirectory::DesktopDirectory,
@@ -224,14 +198,11 @@ pub(super) fn known_folder(k: Known) -> Option<PathBuf> {
     found.or_else(|| std::env::var_os("HOME").map(|home| mac_plan::home_folder(Path::new(&home), k)))
 }
 
-/// Shows the panel for `n`, a sheet on `owner` when it can be. `Ok(None)` is
-/// a dismissal, including the one the owner's closing forces.
 pub(super) fn pick(n: &Native, owner: isize, cancel: &Cancellation) -> Answer<Vec<PathBuf>> {
     let n = n.clone();
     run("file", cancel, move |mtm, id, reply| show_panel(mtm, id, &n, owner, reply))
 }
 
-/// `UTType`s for `exts`; an empty array (every file) for `None`.
 fn content_types(exts: Option<&[String]>) -> Retained<NSArray<AnyObject>> {
     let (Some(exts), Some(cls)) = (exts, AnyClass::get(c"UTType")) else {
         return NSArray::new();
@@ -239,14 +210,12 @@ fn content_types(exts: Option<&[String]>) -> Retained<NSArray<AnyObject>> {
     let types: Vec<Retained<AnyObject>> = exts
         .iter()
         .filter_map(|e| -> Option<Retained<AnyObject>> {
-            // An unknown extension still gets a (dynamic) type that matches it.
             unsafe { msg_send![cls, typeWithFilenameExtension: &*NSString::from_str(e)] }
         })
         .collect();
     NSArray::from_retained_slice(&types)
 }
 
-/// `allowedContentTypes` (macOS 11+); empty allows every file.
 fn set_allowed(panel: &NSSavePanel, types: &NSArray<AnyObject>) {
     unsafe {
         let _: () = msg_send![panel, setAllowedContentTypes: types];
@@ -255,7 +224,6 @@ fn set_allowed(panel: &NSSavePanel, types: &NSArray<AnyObject>) {
 
 struct FormatIvars {
     panel: Weak<NSSavePanel>,
-    /// One per pop-up entry, in its order.
     types: Vec<Retained<NSArray<AnyObject>>>,
 }
 
@@ -269,7 +237,6 @@ define_class!(
     struct FormatTarget;
 
     impl FormatTarget {
-        /// The "Format:" pop-up's action: the panel takes the entry's types.
         #[unsafe(method(formatChanged:))]
         fn format_changed(&self, sender: &NSPopUpButton) {
             let ivars = self.ivars();
@@ -288,7 +255,6 @@ impl FormatTarget {
     }
 }
 
-/// "Format: [pop-up]", the accessory view Chromium puts on a Mac panel.
 fn format_view(mtm: MainThreadMarker, formats: &[Format], target: &FormatTarget) -> Retained<NSView> {
     let label = NSTextField::labelWithString(&NSString::from_str("Format:"), mtm);
     let popup = NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), NSRect::ZERO, false);
@@ -315,7 +281,6 @@ fn format_view(mtm: MainThreadMarker, formats: &[Format], target: &FormatTarget)
     view
 }
 
-/// The picked paths, from `URLs` (open) or `URL` (save).
 fn picked(panel: &NSSavePanel, open: Option<&NSOpenPanel>) -> Result<Vec<PathBuf>, Fail> {
     let urls: Vec<Retained<NSURL>> = match open {
         Some(open) => open.URLs().to_vec(),
@@ -337,8 +302,6 @@ fn show_panel(mtm: MainThreadMarker, id: u64, n: &Native, owner: isize, reply: R
         open.setCanChooseDirectories(n.kind == Kind::Folder);
         open.setAllowsMultipleSelection(n.multiple);
         open.setResolvesAliases(true);
-        // A bundle is a folder here, as on Windows: never one opaque "file"
-        // that the stat after the pick would refuse.
         panel.setTreatsFilePackagesAsDirectories(true);
     }
     panel.setCanCreateDirectories(n.kind != Kind::Open);
@@ -348,7 +311,6 @@ fn show_panel(mtm: MainThreadMarker, id: u64, n: &Native, owner: isize, reply: R
         }
     }
 
-    // The client GUID's remembered folder, kept in the app's defaults.
     let defaults = NSUserDefaults::standardUserDefaults();
     let key = NSString::from_str(&mac_plan::remembered_key(n.client));
     let remembered = defaults.stringForKey(&key).map(|s| PathBuf::from(s.to_string())).filter(|p| p.is_dir());
@@ -379,10 +341,8 @@ fn show_panel(mtm: MainThreadMarker, id: u64, n: &Native, owner: isize, reply: R
     let done = {
         let (panel, reply) = (panel.clone(), reply.clone());
         RcBlock::new(move |response: NSModalResponse| {
-            // The pop-up's target is weak: the handler keeps it alive.
             let _target = &target;
             guarded(&reply, || {
-                // Off screen before the answer: the owner may go right after.
                 panel.orderOut(None);
                 forget(id);
                 if response != NSModalResponseOK {
@@ -418,9 +378,7 @@ fn show_panel(mtm: MainThreadMarker, id: u64, n: &Native, owner: isize, reply: R
     Ok(())
 }
 
-/// Asks `q` in an `NSAlert` sheet on `owner`: the index of the button
-/// pressed, or `Ok(None)` when the owner's closing ends it. An alert has no
-/// close box; Esc presses a button titled "Cancel", as AppKit assigns it.
+/// Asks `q` in an `NSAlert` sheet on `owner`: the index of the button pressed, or `Ok(None)` when the owner's closing ends it.
 pub(super) fn ask(q: &Ask, owner: isize, cancel: &Cancellation) -> Answer<usize> {
     let q = q.clone();
     run("question", cancel, move |mtm, id, reply| show_alert(mtm, id, &q, owner, reply))
@@ -439,7 +397,6 @@ fn show_alert(mtm: MainThreadMarker, id: u64, q: &Ask, owner: isize, reply: Repl
     let buttons: Vec<Retained<NSButton>> =
         q.buttons.iter().map(|b| alert.addButtonWithTitle(&NSString::from_str(&label_of(b)))).collect();
     let count = buttons.len();
-    // AppKit makes the first button the default.
     let default = q.default.min(count.saturating_sub(1));
     if default != 0 {
         buttons[0].setKeyEquivalent(&NSString::from_str(""));
@@ -475,12 +432,9 @@ fn show_alert(mtm: MainThreadMarker, id: u64, q: &Ask, owner: isize, reply: Repl
     Ok(())
 }
 
-/// The shared panel is the app's, not a window's: one picker at a time.
 static COLOR_OPEN: AtomicBool = AtomicBool::new(false);
 
-/// Shows the shared colour panel at `value` (`#rrggbb`) and answers with
-/// the colour it shows when the user closes it; `Ok(None)` when unchanged,
-/// or when the owner's closing closes it.
+/// Shows the shared colour panel at `value` and answers with the colour it shows when closed; `Ok(None)` when unchanged.
 pub(super) fn color(value: &str, _owner: isize, cancel: &Cancellation) -> Answer<String> {
     if COLOR_OPEN.swap(true, Ordering::AcqRel) {
         return Err(Fail::new("NotAllowedError", "Color picker already active.").code("EBUSY"));
@@ -496,8 +450,6 @@ pub(super) fn color(value: &str, _owner: isize, cancel: &Cancellation) -> Answer
     run("colour", cancel, move |mtm, id, reply| show_color(mtm, id, initial, reply))
 }
 
-/// `#rrggbb` of what the panel shows; `fallback` for a colour with no sRGB
-/// form (a pattern).
 fn hex_of_color(color: &NSColor, fallback: &str) -> String {
     match color.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace()) {
         Some(c) => mac_plan::hex_of(c.redComponent(), c.greenComponent(), c.blueComponent()),
@@ -519,7 +471,6 @@ fn show_color(mtm: MainThreadMarker, id: u64, initial: String, reply: Reply<Stri
     panel.setShowsAlpha(false);
     panel.setColor(&NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, 1.0));
 
-    // The observer's token is dropped (and the block with it) on close.
     let observer: Observer = Rc::default();
     let closed = {
         let (panel, observer, reply) = (panel.clone(), observer.clone(), reply.clone());

@@ -1,19 +1,16 @@
 //! The loop cache: every frame of a small target's loop, LZ4-compressed, so the loop replays
 //! without its engine.
 //!
-//! Measured on 48 px real `.tgs` loops: 2.3–4.2× under LZ4, 2–3.4 µs to decompress a frame against
-//! 0.09–0.32 ms to rasterise it, and a cached loop (~0.57 MB at 60 fps) lighter than its parsed
-//! ThorVG source (~1 MB). So a small target's engine is freed once its loop is cached. The core
-//! keeps all loops under one budget (24 MB), evicting the least recently shown.
+//! On 48 px real `.tgs` loops LZ4 gives 2.3–4.2×, and decompressing a frame is far cheaper than
+//! rasterising it, so a small target's engine is freed once its loop is cached. The core keeps all
+//! loops under one budget (24 MB), evicting the least recently shown.
 
 use crate::clock::Us;
 
-/// One target's loop: a compressed frame per slot, filled as they are drawn.
 pub struct LoopCache {
     slots: Vec<Option<Box<[u8]>>>,
     filled: u32,
     bytes: usize,
-    /// When a frame was last served from or put into it.
     pub last_used: Us,
 }
 
@@ -41,8 +38,7 @@ impl LoopCache {
         Some(frame)
     }
 
-    /// Stores slot `slot`. Returns the bytes added (0 when it was already
-    /// there or out of range).
+    /// Stores slot `slot`. Returns the bytes added (0 when already there or out of range).
     pub fn put(&mut self, slot: u32, compressed: Box<[u8]>, now: Us) -> usize {
         let Some(entry) = self.slots.get_mut(slot as usize) else { return 0 };
         if entry.is_some() {

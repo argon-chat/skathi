@@ -1,32 +1,24 @@
-//! The registry and the scheduler, with no thread and no clock of its own:
-//! every call takes `now`, and [`Core::plan`] / [`run`] / [`Core::deliver`]
-//! are one turn of the worker. [`crate::Stickers`] puts it behind a lock with
-//! a worker thread. Tests drive it by hand.
+//! The registry and the scheduler, with no thread and no clock of its own: every call takes `now`,
+//! and [`Core::plan`] / [`run`] / [`Core::deliver`] are one turn of the worker. [`crate::Stickers`]
+//! puts it behind a lock with a worker thread; tests drive it by hand.
 //!
-//! # Model
-//!
-//! * A **source** is one `src`: its file's bytes, what it is
-//!   ([`SourceInfo`]), its [`Engine`] while loaded, and its [`Clock`].
-//! * A **target** is a source at one size in device pixels ([`TargetKey`]).
-//!   Every place showing that source at that size shares it: one frame, one
-//!   upload a window. The element (vn-tree) owns the `LiveTile`s and writes
-//!   [`Frame`]s into them in its tick.
-//! * Each tick the element says which targets it shows and whether any place
-//!   is visible ([`Core::demand`]), and takes each target's due frame
-//!   ([`Core::frame`]). The worker keeps one frame ahead of each visible
-//!   target: drawn before it is due, promoted by `frame` when it is.
+//! * A **source** is one `src`: its bytes, [`SourceInfo`], its [`Engine`] while loaded, its [`Clock`].
+//! * A **target** is a source at one size in device pixels ([`TargetKey`]), shared by every place
+//!   showing it: one frame, one upload a window. The element (vn-tree) owns the `LiveTile`s and
+//!   writes [`Frame`]s into them in its tick.
+//! * Each tick the element says which targets it shows and whether any place is visible
+//!   ([`Core::demand`]) and takes each target's due frame ([`Core::frame`]). The worker keeps one
+//!   frame ahead of each visible target.
 //!
 //! # Budgets
 //!
-//! * Targets ≤ [`SMALL_PX`] play at most [`SMALL_FPS`], and their loops are
-//!   cached ([`crate::cache`]) under [`CACHE_BUDGET`]; a source whose every
-//!   target replays from cache drops its engine.
-//! * A target no element asked for in [`TARGET_IDLE`] is dropped (its loop
-//!   cache stays, under the budget).
-//! * A source's engine is dropped [`SOURCE_IDLE`] after it last played; its
-//!   bytes, [`SOURCE_IDLE`] after it was last asked for.
-//! * At most [`MAX_LARGE_VIDEO`] video engines over [`LARGE_VIDEO_AREA`] are
-//!   loaded; a fifth waits for one that is not playing.
+//! * Targets ≤ [`SMALL_PX`] play at most [`SMALL_FPS`] and their loops are cached ([`crate::cache`])
+//!   under [`CACHE_BUDGET`]; a source whose every target replays from cache drops its engine.
+//! * A target no element asked for in [`TARGET_IDLE`] is dropped (its loop cache stays).
+//! * A source's engine is dropped [`SOURCE_IDLE`] after it last played; its bytes, [`SOURCE_IDLE`]
+//!   after it was last asked for.
+//! * At most [`MAX_LARGE_VIDEO`] video engines over [`LARGE_VIDEO_AREA`] are loaded; another waits
+//!   for one that is not playing.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -39,7 +31,6 @@ use crate::engine::{Engine, Kind, Loader};
 /// at [`SMALL_FPS`] and loop-cached.
 pub const SMALL_PX: u32 = 64;
 pub const SMALL_FPS: f32 = 30.0;
-/// All loop caches together.
 pub const CACHE_BUDGET: usize = 24 << 20;
 pub const TARGET_IDLE: Us = 3_000_000;
 pub const SOURCE_IDLE: Us = 15_000_000;
@@ -49,19 +40,14 @@ pub const LARGE_VIDEO_AREA: u64 = 256 * 256;
 /// Loops being filled at once; others play uncached until one completes.
 pub const MAX_FILLING: usize = 8;
 
-/// A source drawn at one size, the unit frames are made for.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TargetKey {
     pub src: Arc<str>,
-    /// Device pixels.
     pub width: u32,
     pub height: u32,
-    /// A tinted video: decode the alpha stream only (B = G = R = 255). The
-    /// element sets it for video only; a Lottie is tinted at paint time.
+    /// A tinted video: decode the alpha stream only (B = G = R = 255). Video only; a Lottie is tinted at paint time.
     pub alpha_only: bool,
-    /// The element's `max-fps`, below the source's own rate.
     pub max_fps: Option<u16>,
-    /// The first frame only, never animated (`play="off"`).
     pub still: bool,
     /// Plays one loop on its own clock and holds the last frame; the value
     /// (the element's node id) keeps two such copies apart.
@@ -90,35 +76,28 @@ impl TargetKey {
         self.is_small() && !self.still && self.once.is_none()
     }
 
-    /// Plays on its source's shared clock.
     fn shares_clock(&self) -> bool {
         !self.still && self.once.is_none()
     }
 }
 
-/// What a loaded source is.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceInfo {
     pub kind: Kind,
-    /// Intrinsic size in px.
     pub width: u32,
     pub height: u32,
     pub frames: u32,
     pub fps: f32,
 }
 
-/// Where a source is, for the element.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SourceStatus {
-    /// Fetch `src` and [`Core::provide`] its bytes.
     NeedsBytes,
     Loading,
     Ready(SourceInfo),
-    /// The advisory for devtools and the `error` event.
     Failed(Arc<str>),
 }
 
-/// A drawn frame: `width × height` straight-alpha BGRA.
 #[derive(Clone, Debug)]
 pub struct Frame {
     /// Unique per frame drawn: a tile writes when it changes.
@@ -132,24 +111,19 @@ pub struct Frame {
     due: Us,
 }
 
-/// What the stats (devtools `mem`) report.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Stats {
     pub sources: usize,
-    /// File bytes held.
     pub file_bytes: usize,
     pub engines: usize,
     pub engine_bytes: usize,
     pub targets: usize,
     pub visible_targets: usize,
-    /// Frames held for targets (current and next).
     pub frame_bytes: usize,
     pub loops: usize,
     pub loops_complete: usize,
     pub cache_bytes: usize,
     pub cache_budget: usize,
-    /// Since start: frames drawn by an engine, frames replayed from a loop
-    /// cache, engines loaded, sources failed.
     pub drawn: u64,
     pub from_cache: u64,
     pub loads: u64,
@@ -158,7 +132,6 @@ pub struct Stats {
 
 #[derive(Debug, PartialEq)]
 enum State {
-    /// Waiting for the element to fetch the bytes.
     Pending,
     Loading,
     Ready,
@@ -171,7 +144,6 @@ struct Source {
     info: Option<SourceInfo>,
     timeline: Option<Timeline>,
     engine: Option<Box<dyn Engine>>,
-    /// The engine is with the worker, or a load is.
     busy: bool,
     clock: Option<Clock>,
     last_demand: Us,
@@ -206,7 +178,6 @@ struct Target {
     current: Option<Frame>,
     ready: Option<Frame>,
     drawing: bool,
-    /// A `once` target's own clock, from when it was first visible.
     clock: Option<Clock>,
     /// Its loop did not fit the budget: drawn live.
     no_cache: bool,
@@ -218,7 +189,6 @@ impl Target {
     }
 }
 
-/// A frame to draw.
 pub struct Req {
     key: TargetKey,
     slot: u32,
@@ -228,14 +198,11 @@ pub struct Req {
     cache: bool,
 }
 
-/// Work for the worker, done without the lock ([`run`]).
 pub enum Job {
     Load { src: Arc<str>, bytes: Arc<[u8]>, loader: Loader },
     Draw { src: Arc<str>, engine: Box<dyn Engine>, reqs: Vec<Req> },
 }
 
-/// A drawn request: the pixels (or why not), and their LZ4 for the loop
-/// cache when the request asked for it.
 pub type Drawn = (Req, Result<Vec<u8>, String>, Option<Box<[u8]>>);
 
 pub enum Done {
@@ -243,8 +210,7 @@ pub enum Done {
     Drawn { src: Arc<str>, engine: Box<dyn Engine>, frames: Vec<Drawn> },
 }
 
-/// Does a job: loads, or draws (in frame order, which a video decoder needs)
-/// and compresses what the loop cache keeps.
+/// Does a job: loads, or draws (in frame order, which a video decoder needs) and compresses.
 pub fn run(job: Job) -> Done {
     match job {
         Job::Load { src, bytes, loader } => Done::Loaded { src, result: loader(&bytes) },
@@ -308,7 +274,6 @@ impl Core {
         self.sources.get_mut(src).expect("just inserted")
     }
 
-    /// Where `src` is. Registers it on first sight (then it needs its bytes).
     pub fn status(&mut self, src: &str, now: Us) -> SourceStatus {
         let s = self.source(src, now);
         s.last_demand = now;
@@ -320,7 +285,6 @@ impl Core {
         }
     }
 
-    /// The fetched file for `src`. Returns true when the worker has work.
     pub fn provide(&mut self, src: &str, bytes: Arc<[u8]>, now: Us) -> bool {
         let s = self.source(src, now);
         if s.state != State::Pending {
@@ -331,7 +295,6 @@ impl Core {
         true
     }
 
-    /// The fetch for `src` failed.
     pub fn fail(&mut self, src: &str, why: &str, now: Us) {
         let s = self.source(src, now);
         s.state = State::Failed(Arc::from(why));
@@ -339,8 +302,6 @@ impl Core {
         self.failures += 1;
     }
 
-    /// An element shows `key` this tick; `visible` if any place of it can be
-    /// seen. Returns true when the worker has new work.
     pub fn demand(&mut self, key: &TargetKey, visible: bool, now: Us) -> bool {
         let s = self.source(&key.src, now);
         s.last_demand = now;
@@ -369,15 +330,12 @@ impl Core {
         wake
     }
 
-    /// `key`'s frame at `now`, promoting the next one when it is due. The
-    /// bool says one was promoted: the worker can draw the one after.
+    /// `key`'s frame at `now`, promoting the next one when it is due (the bool says one was).
     pub fn frame(&mut self, key: &TargetKey, now: Us) -> (Option<Frame>, bool) {
         let Some(t) = self.targets.get_mut(key) else { return (None, false) };
         let due = t.ready.as_ref().is_some_and(|r| r.due <= now);
-        // A hidden target keeps the frame it has: the one drawn ahead belongs
-        // to a clock that has stopped (or soon will) and would put the target
-        // ahead of it when it resumes. Its very first frame is kept for when it
-        // shows.
+        // A hidden target keeps the frame it has: the one drawn ahead belongs to a clock that has
+        // stopped and would put the target ahead of it when it resumes.
         let promoted = due && (t.visible || t.current.is_none());
         if promoted {
             t.current = t.ready.take();
@@ -394,15 +352,12 @@ impl Core {
         (frame, promoted)
     }
 
-    /// One worker turn's work: timers, clocks, loads, and the next frame of
-    /// every target that needs one (served straight from a loop cache where it
-    /// can be).
+    /// One worker turn's work: timers, clocks, loads, and the next frame of every target that needs one.
     pub fn plan(&mut self, now: Us) -> Vec<Job> {
         self.maintain(now);
         let active = self.run_clocks(now);
         let mut jobs = Vec::new();
 
-        // Loads.
         let wanted: HashSet<Arc<str>> = self
             .targets
             .iter()
@@ -435,7 +390,6 @@ impl Core {
             jobs.push(Job::Load { src: src.clone(), bytes: s.bytes.clone().expect("checked"), loader: self.loader });
         }
 
-        // Frames.
         let filling = self.caches.values().filter(|c| !c.is_complete()).count();
         let mut new_fills = 0usize;
         let mut draws: HashMap<Arc<str>, Vec<Req>> = HashMap::new();
@@ -494,7 +448,6 @@ impl Core {
         jobs
     }
 
-    /// Takes the worker's results back.
     pub fn deliver(&mut self, done: Vec<Done>, now: Us) {
         for d in done {
             match d {
@@ -518,7 +471,6 @@ impl Core {
                             s.state = State::Ready;
                             s.last_active = now;
                             if s.is_large_video() {
-                                // Its size was unknown until now.
                                 self.trim_large_videos(&src);
                             }
                         }
@@ -569,7 +521,6 @@ impl Core {
         }
     }
 
-    /// When the worker should look again with nothing to do: the next timer.
     pub fn next_wake(&self, now: Us) -> Us {
         let mut wake = now + 1_000_000;
         for t in self.targets.values() {
@@ -605,7 +556,6 @@ impl Core {
         }
     }
 
-    /// Drops idle targets, unloads idle engines, forgets idle sources.
     fn maintain(&mut self, now: Us) {
         self.targets.retain(|_, t| t.drawing || now.saturating_sub(t.last_demand) <= TARGET_IDLE);
         let cached: HashSet<Arc<str>> = self.caches.keys().map(|k| k.src.clone()).collect();
@@ -628,8 +578,6 @@ impl Core {
         });
     }
 
-    /// Runs the clock of every source shown playing and stops the rest.
-    /// Returns the sources playing.
     fn run_clocks(&mut self, now: Us) -> HashSet<Arc<str>> {
         let active = self.playing();
         let mut resumed = HashSet::new();
@@ -653,7 +601,6 @@ impl Core {
         active
     }
 
-    /// A target that cannot replay without its engine.
     fn target_needs_engine(&self, key: &TargetKey, t: &Target) -> bool {
         if key.still {
             return !t.has_frame();
@@ -661,18 +608,15 @@ impl Core {
         !(key.cacheable() && !t.no_cache && self.caches.get(key).is_some_and(LoopCache::is_complete))
     }
 
-    /// ... and needs it now: it is shown, or has nothing to show yet.
     fn wants_engine_now(&self, key: &TargetKey, t: &Target) -> bool {
         self.target_needs_engine(key, t) && (t.visible || !t.has_frame())
     }
 
-    /// Some target of `src` cannot replay without its engine.
     fn needs_engine(&self, src: &Arc<str>) -> bool {
         self.targets.iter().any(|(k, t)| &k.src == src && self.target_needs_engine(k, t))
     }
 
-    /// Below [`MAX_LARGE_VIDEO`] large video engines, unloading one that is
-    /// not playing if need be. False when all of them are playing.
+    /// Below [`MAX_LARGE_VIDEO`] large video engines, unloading one that is not playing if need be.
     fn make_room_for_large_video(&mut self, active: &HashSet<Arc<str>>) -> bool {
         let loaded = self.sources.values().filter(|s| s.is_large_video() && (s.engine.is_some() || s.busy)).count();
         if loaded < MAX_LARGE_VIDEO {
@@ -693,9 +637,8 @@ impl Core {
         }
     }
 
-    /// Back to [`MAX_LARGE_VIDEO`] large video engines after `loaded` came in
-    /// over it: unloads the least recently played that is not playing, which
-    /// may be `loaded` itself. Over the limit only when all of them play.
+    /// Back to [`MAX_LARGE_VIDEO`] large video engines after `loaded` came in over it: unloads the
+    /// least recently played that is not playing (maybe `loaded`). Over only when all play.
     fn trim_large_videos(&mut self, loaded: &Arc<str>) {
         let active = self.playing();
         loop {
@@ -716,15 +659,12 @@ impl Core {
         }
     }
 
-    /// Sources shown playing: some target of theirs is visible on the shared
-    /// clock.
     fn playing(&self) -> HashSet<Arc<str>> {
         self.targets.iter().filter(|(k, t)| t.visible && k.shares_clock()).map(|(k, _)| k.src.clone()).collect()
     }
 
-    /// Keeps a compressed frame of `key`'s loop, evicting the least recently
-    /// used loops of targets not shown to stay in budget. When nothing can go,
-    /// this loop is not cached at all and the target is drawn live.
+    /// Keeps a compressed frame of `key`'s loop, evicting the least recently used loops of targets
+    /// not shown to stay in budget; when nothing can go, the target is drawn live.
     fn cache_put(&mut self, key: &TargetKey, slot: u32, slots: u32, packed: Box<[u8]>, now: Us) {
         let add = packed.len();
         while self.cache_bytes + add > self.cache_budget {
@@ -754,14 +694,10 @@ impl Core {
     }
 }
 
-/// The slot `t` should hold next and when it is due, or `None` when it has it.
-///
-/// * A target with no frame gets the one playing now (the first frame of a
-///   source not yet played: it is drawn before it is shown).
-/// * A hidden target, or one whose clock is stopped, keeps its frame.
-/// * A shown one behind its clock catches up to now; one on time gets the
-///   next slot, due at its start on the present grid.
-/// * A `once` target stops at its last slot.
+/// The slot `t` should hold next and when it is due, or `None` when it has it. A target with no
+/// frame gets the one playing now; a hidden target, or one whose clock is stopped, keeps its frame;
+/// a shown one behind its clock catches up, one on time gets the next slot, due at its start on the
+/// present grid; a `once` target stops at its last slot.
 fn next_slot(key: &TargetKey, t: &Target, shared: Option<&Clock>, timeline: &Timeline, now: Us) -> Option<(u32, Us)> {
     if t.ready.is_some() {
         return None;

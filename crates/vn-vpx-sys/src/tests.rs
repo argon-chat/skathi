@@ -1,12 +1,8 @@
 use super::*;
 
-/// `testdata/compound.ivf`: 48 frames of ffmpeg's `testsrc2` at 72×56,
-/// turning, VP9 two-pass with alt-ref frames, 5 KB. 8 hidden alt-ref frames
-/// ride in superframes, and the turn makes sub-pixel motion and compound
-/// prediction: with `--features shim-stats` the SIMD-level test shows it
-/// reaching the SSE2 8-tap shims (~5400 calls), the SSSE3 8-tap and 8-tap
-/// averaging shims (~2400 and ~480) and, with AVX2, the 4/8-wide averaging
-/// ones (~200). Made with ffmpeg 6.0 (libvpx-vp9):
+/// `testdata/compound.ivf`: 48 frames of ffmpeg's `testsrc2` at 72×56, turning, VP9 two-pass with
+/// alt-ref frames, 5 KB. 8 hidden alt-ref frames ride in superframes, and the turn makes sub-pixel
+/// motion and compound prediction that reach the SIMD shims. Made with ffmpeg 6.0 (libvpx-vp9):
 ///
 /// ```text
 /// ffmpeg -f lavfi -i testsrc2=size=72x56:rate=30:duration=1.6 -vf rotate=0.05*t*30:c=black \
@@ -14,19 +10,16 @@ use super::*;
 /// (the same with -pass 2 compound.ivf)
 /// ```
 ///
-/// An unrotated `testsrc2` moves by whole pixels (no shim is reached), and a
-/// clip much shorter than 1.6 s gets no alt-ref frame from libvpx at all.
+/// An unrotated `testsrc2` moves by whole pixels (no shim is reached), and a clip much shorter than
+/// 1.6 s gets no alt-ref frame.
 const COMPOUND: &[u8] = include_bytes!("../testdata/compound.ivf");
 
-/// FNV-1a 64 of every shown frame's visible Y, U and V rows, in order: the
-/// same bytes `ffmpeg -i compound.ivf -f rawvideo -pix_fmt yuv420p` writes,
-/// hashed. ffmpeg's native VP9 decoder and its libvpx one both give this, and
-/// so does the pure-C build here (`VN_VPX_CONFIG=generic`).
+/// FNV-1a 64 of every shown frame's visible Y, U and V rows, in order: what ffmpeg's native VP9
+/// decoder and its libvpx one give, and the pure-C build here (`VN_VPX_CONFIG=generic`).
 const COMPOUND_HASH: u64 = 0x22e8_10e0_5c5b_9e2b;
 const COMPOUND_FRAMES: usize = 48;
 
-/// The packets of an IVF file: a 32-byte file header, then per frame a
-/// 12-byte header (size, timestamp) and the packet.
+/// The packets of an IVF file: a 32-byte file header, then per frame a 12-byte header and the packet.
 pub(crate) fn ivf(bytes: &[u8]) -> Vec<&[u8]> {
     assert_eq!(&bytes[..4], b"DKIF");
     let mut packets = Vec::new();
@@ -58,7 +51,6 @@ fn hash_frame(mut hash: u64, frame: &Frame<'_>) -> u64 {
     hash
 }
 
-/// Decodes every packet; returns (shown frames, hash of them).
 fn decode_all(packets: &[&[u8]]) -> (usize, u64) {
     let mut decoder = Decoder::new().unwrap();
     let mut hash = FNV_OFFSET;
@@ -122,7 +114,6 @@ fn the_compound_clip_decodes_frame_by_frame() {
         assert_eq!(frame.color_space, ColorSpace::Unknown);
         assert!(!frame.full_range);
     }
-    // Two-pass with alt-ref: some packets carry a hidden frame with the shown one.
     let superframes = packets.iter().filter(|p| is_superframe(p)).count();
     assert!(superframes > 0, "the clip has no alt-ref superframe");
 }
@@ -170,12 +161,10 @@ fn a_memory_cap_fails_the_decode_and_not_the_process() {
     let err = decoder.decode(packets[0]).unwrap_err();
     assert_eq!(err.code, ErrorCode::Mem, "{err}");
     assert!(decoder.memory().live <= held + 4096);
-    // Lifted, the same decoder starts again at the keyframe.
     decoder.set_memory_limit(0);
     assert!(decoder.decode(packets[0]).unwrap());
 }
 
-/// A xorshift generator: deterministic noise without a dependency.
 pub(crate) struct Noise(u64);
 
 impl Noise {
@@ -200,11 +189,9 @@ fn garbage_truncation_and_bit_flips_are_errors_not_crashes() {
     for n in [1, 2, 3, 10, 100, 1000] {
         let _ = decoder.decode(&noise.bytes(n));
     }
-    // Every prefix of the keyframe.
     for cut in 1..packets[0].len() {
         let _ = decoder.decode(&packets[0][..cut]);
     }
-    // Bit flips through the whole stream, in order, many times over.
     for round in 0..40 {
         let mut decoder = Decoder::new().unwrap();
         for packet in &packets {
@@ -219,7 +206,6 @@ fn garbage_truncation_and_bit_flips_are_errors_not_crashes() {
             }
         }
     }
-    // The decoder that saw garbage still decodes the clip from its keyframe.
     for packet in &packets {
         assert!(decoder.decode(packet).unwrap());
     }

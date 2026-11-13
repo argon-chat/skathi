@@ -1,12 +1,10 @@
-//! `trace`: a frame-by-frame record of where the host's time went during an interaction
-//! (`trace start`, interact, `trace stop --frames`).
+//! `trace`: a frame-by-frame record of where the host's time went during an interaction.
 //!
 //! A frame is the span between two `pump_frame` entries. The vn-tree phase counters are drained at
 //! the NEXT frame's start, so a frame's record includes its own draw. Idle frames are not stored:
 //! the next active frame carries their count (`idleBefore`).
 //!
-//! It shares `vn_tree::perf`'s counters with `VN_PERF`, which drains them once a second, so a trace
-//! refuses to start while `VN_PERF` is on.
+//! It shares `vn_tree::perf`'s counters with `VN_PERF`, so a trace refuses to start while `VN_PERF` is on.
 
 use std::cell::{Cell, RefCell};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};

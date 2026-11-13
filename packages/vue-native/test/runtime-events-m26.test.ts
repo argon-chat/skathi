@@ -1,14 +1,9 @@
-// Pointer and image events: `contextmenu`, `auxclick`, `dblclick` (and `detail` on the click family), `pointercancel`,
-// and an `<img>`'s `load` / `error` with `complete`, `naturalWidth` and the `on<event>` handler attributes.
-// (`new Image()` is the engine's own offscreen image, not this.)
-//
-// The host half is crates/vn-tree/src/render.rs and img.rs, exercised by packages/vn-test/specs/events.spec.ts; this
-// file pins what JS makes of the payloads.
+// Pointer and image events: `contextmenu`, `auxclick`, `dblclick` (and `detail`), `pointercancel`, an `<img>`'s
+// `load` / `error` and the `on<event>` attributes. The host half is crates/vn-tree/src/render.rs and img.rs.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
 
-/** A MouseEvent the way an engine's reads: every init member kept. */
 class FakeMouseEvent extends Event {
   clientX: number;
   clientY: number;
@@ -80,7 +75,6 @@ describe("contextmenu", () => {
   test("the reka trigger: preventDefault, open its own menu — and the host hears the cancel", () => {
     const rt = createRuntime({ MouseEvent: FakeMouseEvent });
     const { inner } = tree(rt);
-    // ContextMenuTrigger.vue: `@contextmenu="(e) => { …; e.preventDefault(); open(e.clientX, e.clientY) }"`.
     let open: { x: number; y: number } | null = null;
     rt.patchProp(inner as never, "onContextmenu", null, (e: Ev) => {
       if (e.defaultPrevented) return;
@@ -89,7 +83,6 @@ describe("contextmenu", () => {
     });
     expect(fire(rt, inner, "contextmenu", 12, 34, 2)).toBe(false);
     expect(open).toEqual({ x: 12, y: 34 });
-    // Cancelled: the default is the page's own, so nothing to say.
     expect(rt.advisories()).toEqual([]);
   });
 
@@ -157,7 +150,6 @@ describe("auxclick", () => {
       }
     });
     expect(fire(rt, inner, "auxclick", 0, 0, 1, 1 << 4)).toBe(false);
-    // A right button's auxclick is not the split, and is not cancelled.
     expect(fire(rt, inner, "auxclick", 0, 0, 2, 1 << 4)).toBe(true);
     expect(split).toEqual([1]);
   });
@@ -177,7 +169,6 @@ describe("auxclick", () => {
 
 describe("beforeinput, input and the composition events", () => {
   type Edit = Ev & { inputType: string; data: string | null; isComposing: boolean; composed: boolean };
-  /** The host's edit: `a` the inputType code, `b` 1 while composing, the data string 8th. */
   const send = (rt: Rt, el: El, name: string, type: number, data?: string, composing = 0, value?: string) =>
     rt.host.dispatcher(el.__vnId, (rt.EV_CODES as Record<string, number>)[name], type, composing, 0, 0, value, data);
   const field = (rt: Rt, tag = "textarea") => {
@@ -216,7 +207,6 @@ describe("beforeinput, input and the composition events", () => {
   test("useEmojiSuggest's swallowed space: a cancelled beforeinput answers the host false", () => {
     const rt = createRuntime();
     const { el } = field(rt);
-    // apps/client useEmojiSuggest.ts onBeforeInput, minus the caret check.
     el.addEventListener("beforeinput", (e) => {
       const ie = e as Edit;
       if (ie.inputType === "insertText" && ie.data === " ") ie.preventDefault();
@@ -288,7 +278,6 @@ describe("beforeinput, input and the composition events", () => {
     send(rt, el, "input", 4, "k", 1, "ak");
     send(rt, el, "input", 4, "か", 1, "aか");
     expect(model).toEqual(["a"]);
-    // A re-render in the middle of it does not write the field back.
     const writes = () => rt.host.props.filter((p: { id: number; key: string }) => p.id === el.__vnId && p.key === "value").length;
     const before = writes();
     rt.vModelText.beforeUpdate(el as never, { value: "a" }, { props: { "onUpdate:modelValue": (v: unknown) => model.push(v) } });
@@ -327,7 +316,6 @@ describe("dblclick and detail", () => {
     outer.addEventListener("dblclick", (e) => seen.push(`dblclick:${e.detail}:${e.bubbles}:${e.button}`));
     fire(rt, inner, "click", 5, 5, 0, 1 << 4);
     fire(rt, inner, "click", 5, 5, 0, 2 << 4);
-    // A triple click is a third click, not a second dblclick.
     fire(rt, inner, "click", 5, 5, 0, 3 << 4);
     expect(seen).toEqual(["click:1", "click:2", "dblclick:2:true:0", "click:3"]);
   });
@@ -429,8 +417,6 @@ describe("keyboard clicks", () => {
   const keyClick = (rt: Rt, el: El, key: string) =>
     rt.host.dispatcher(el.__vnId as number, rt.EV_CODES.click, 0, 0, 0, 0, key);
 
-  // Which elements the host clicks from a key is the host's rule
-  // (vn-tree `render::keyboard_activates`, and its Rust test).
   test("a keyboard click is detail 0, and one on a button or a link says nothing", () => {
     const rt = createRuntime({ MouseEvent: FakeMouseEvent });
     const { outer } = tree(rt);
@@ -562,7 +548,6 @@ describe("<img> load and error", () => {
     const rt = createRuntime();
     const img = newImg(rt);
     let aspect = 0;
-    // LinkPreviewCard.vue's onImageLoad.
     rt.patchProp(img as never, "onLoad", null, (e: { target: El }) => {
       aspect = (e.target.naturalWidth as number) / (e.target.naturalHeight as number);
     });
@@ -659,7 +644,6 @@ describe("<img> load and error", () => {
     const img = rt.nodeOps.createElement("img");
     expect(d.get!.call(img)).toBe(0);
     expect(() => d.get!.call(rt.nodeOps.createElement("div"))).toThrow("Illegal invocation");
-    // …and on a <div> the names are what they are in a browser: absent.
     const div = rt.nodeOps.createElement("div") as unknown as El;
     expect([div.naturalWidth, div.complete]).toEqual([undefined, undefined]);
     div.src = "kept";

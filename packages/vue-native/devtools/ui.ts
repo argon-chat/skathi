@@ -4,16 +4,10 @@
  *
  *   bun devtools/ui.ts [--target <slot|app>] [--window WxH] [--wait]
  *
- * Turns a friendly `--target` (slot name, app name, path) into the command the host already understands,
- * `vn-app.exe --devtools --target <absolute slot>`, which is what F12 spawns (`crates/vn-app/src/inspector.rs`
- * `open_for_window`).
- *
- * The inspector's own sources do not hot-reload while you edit them: the bundle in the executable is the
- * inspector. `cargo build -p vn-app` rebuilds it (build.rs re-runs when `apps/devtools` changes), and
- * `VN_DEVTOOLS_BUNDLE=<path to app.prod.js>` skips the bun invocation inside it.
- *
- * The target need not be running at launch (its list refreshes every few seconds); if one is, the handshake
- * is validated here, so a typo in the slot name is a message rather than an empty window.
+ * Turns a friendly `--target` into `vn-app.exe --devtools --target <absolute slot>`, which is what
+ * F12 spawns. The inspector's sources do not hot-reload: the bundle in the executable is the
+ * inspector (`cargo build -p vn-app` rebuilds it; `VN_DEVTOOLS_BUNDLE=<app.prod.js>` skips the bun
+ * invocation). If the target is running, the handshake is validated here, so a typo is a message.
  */
 
 import { spawn } from "node:child_process";
@@ -62,7 +56,6 @@ if (flags.help) {
   process.exit(0);
 }
 
-/** `dist-shadcn` | `shadcn` | `Y:\…\slots\hello-1-1` -> an absolute slot dir. */
 function resolveTargetSlot(spec: string): string {
   if (spec.includes("/") || spec.includes("\\")) return resolve(spec);
   const beside = join(PKG, spec);
@@ -102,9 +95,8 @@ if (!existsSync(exe)) {
 }
 
 const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-// VN_DIST names the slot a host serves; an inspector serves nothing and gets a private slot under %TEMP%,
-// so an inherited VN_DIST would put its handshake on top of some app's: drop it. `--target` sets
-// VN_DEVTOOLS_TARGET in the child instead.
+// VN_DIST names the slot a host serves; an inspector gets a private slot under %TEMP%, so an
+// inherited VN_DIST would put its handshake on top of some app's: drop it.
 delete env.VN_DEVTOOLS_TARGET;
 if (typeof flags.window === "string" && flags.window) env.VN_WINDOW = flags.window;
 

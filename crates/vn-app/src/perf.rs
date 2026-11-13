@@ -4,17 +4,6 @@
 //! summarised to stderr and cleared. With `VN_PERF` unset it is a single relaxed atomic load and an
 //! early return, so it stays wired into the pump.
 //!
-//! ```text
-//! [vn-perf] boot->first-frame 214.7ms
-//! [vn-perf] tag=grid-400-cached  t=+3.0s  frames=180  avg=16.7  p50=16.6  p95=17.9  max=31.2  fps=59.9
-//! [vn-perf]   restyle passes=12  nodes=6.1K  sel=340.2K total=48.3ms  avg=4.02  max=6.10  [inline 0.1 · cascade 44.0 · store 4.2]
-//! [vn-perf]   build   passes=180 nodes=90.0K              total=210.4ms avg=1.17  max=3.90
-//! ```
-//!
-//! The indented lines are the phase breakdown ([`vn_tree::perf`]) for the same second as the frame
-//! line: where the milliseconds went, how many elements were re-cascaded and rebuilt, and how many
-//! selectors the matcher ran.
-//!
 //! `__vn_perf_mark("<label>")` (registered in `lib.rs`) labels the scenario from the Vue app: it
 //! flushes the window in progress, prints a banner and restarts the clock. A no-op when the probe is
 //! off.
@@ -25,7 +14,6 @@ use std::time::{Duration, Instant};
 
 const HOW_OFTEN: Duration = Duration::from_secs(1);
 
-/// 0 = not looked at yet, 1 = off, 2 = on.
 static ENABLED: AtomicU8 = AtomicU8::new(0);
 
 #[inline]
@@ -47,42 +35,30 @@ pub fn enabled() -> bool {
 }
 
 struct State {
-    /// When the process reached `main` — the denominator for "first paint".
     boot: Instant,
     first_frame: Option<Instant>,
     last_frame: Option<Instant>,
     window_start: Instant,
-    /// Frame intervals in ms for the current one-second window.
     samples: Vec<f32>,
     tag: String,
-    /// Frames since the current tag started.
     tagged_frames: u64,
     tag_start: Instant,
 
-    // ---- the four-bucket frame accounting (see `pump_done`/`render_*`).
-    /// The last stamp taken, whichever bucket it closed.
     cursor: Instant,
     pump_ms: f32,
     setup_ms: f32,
     render_ms: f32,
-    /// The tail of a frame that DREW: gpui's layout, paint, present, plus what is left of the vsync
-    /// interval. Kept apart from the idle tail so the cost of one drawn frame stays visible.
     tail_draw_ms: f32,
-    /// The tail of a frame that drew nothing — pure wait for the next vsync.
     tail_idle_ms: f32,
     draws: u32,
-    /// Did the frame currently being measured reach `render()`?
     drew: bool,
 }
 
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
-    /// The probe-off half of "has the first frame happened" (the probe-on half
-    /// is `State::first_frame`).
     static FIRST_FRAME_SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Starts the clock. Called once from `main`, before the window opens.
 pub fn boot() {
     // Seeded first and unconditionally: this `thread_local` would otherwise initialise lazily on the
     // first frame and make `boot -> first frame` read as zero.
@@ -119,13 +95,11 @@ pub fn boot() {
 // unconditional fixed-size ring ([`ROLL`]) costing one `Instant::now()` and one array store per
 // frame. `cfg(vn_devtools)`, since a shipped prod build has nobody to read it.
 
-/// How many frame intervals the panel can look back over: 600 is about 10 s at 60 Hz, in 2.4 KB.
 #[cfg(vn_devtools)]
 pub const ROLL_LEN: usize = 600;
 
 #[cfg(vn_devtools)]
 struct Roll {
-    /// Frame intervals in ms, newest at `head - 1`.
     ms: [f32; ROLL_LEN],
     head: usize,
     filled: usize,
@@ -148,20 +122,16 @@ thread_local! {
     });
 }
 
-/// A window of frame intervals, oldest first, plus what the panel wants to
-/// print beside the sparkline.
 #[cfg(vn_devtools)]
 pub struct Snapshot {
     pub samples: Vec<f32>,
     pub frames: u64,
-    /// Milliseconds from `main` to the first frame.
     pub boot_to_first_frame_ms: Option<f32>,
     pub uptime_ms: f32,
 }
 
 #[cfg(vn_devtools)]
 impl Snapshot {
-    /// `(avg, p50, p95, max, fps)` over the window; an empty window reports zeros, not NaN.
     pub fn stats(&self) -> (f32, f32, f32, f32, f32) {
         if self.samples.is_empty() {
             return (0.0, 0.0, 0.0, 0.0, 0.0);
@@ -175,13 +145,11 @@ impl Snapshot {
     }
 }
 
-/// The rolling window, oldest sample first.
 #[cfg(vn_devtools)]
 pub fn snapshot() -> Snapshot {
     ROLL.with(|r| {
         let r = r.borrow();
         let mut samples = Vec::with_capacity(r.filled);
-        // `filled` entries ending at `head`, wrapped.
         let start = (r.head + ROLL_LEN - r.filled) % ROLL_LEN;
         for i in 0..r.filled {
             samples.push(r.ms[(start + i) % ROLL_LEN]);
@@ -195,8 +163,6 @@ pub fn snapshot() -> Snapshot {
     })
 }
 
-/// The rolling ring's half of [`frame`]. Split out so the always-on cost is one
-/// function with no environment lookup in it.
 #[cfg(vn_devtools)]
 #[inline]
 fn roll_frame(now: Instant) {
@@ -219,10 +185,9 @@ fn roll_frame(now: Instant) {
 // Boot-time JS evaluation: wall time around each `JsRuntime::eval` (parse, bytecode generation and
 // running the top level, which for `boot.js` and `app.prod.js` creates and mounts the app). Always
 // recorded and closed at the first frame, so a dev cold restart or HMR re-eval is never charged to
-// boot. Printed on the VN_PERF first-frame line and served as `bootJs` by the devtools `perf` command.
+// boot.
 
 struct BootJs {
-    /// `(label, scripts, ms)`, in first-evaluated order.
     parts: Vec<(&'static str, u32, f32)>,
     closed: bool,
 }
@@ -231,8 +196,6 @@ thread_local! {
     static BOOT_JS: RefCell<BootJs> = const { RefCell::new(BootJs { parts: Vec::new(), closed: false }) };
 }
 
-/// Runs `f` — one script evaluation — and, until the first frame, charges its
-/// wall time to `label` (several scripts may share a label: `modules`).
 pub fn boot_eval<T>(label: &'static str, f: impl FnOnce() -> T) -> T {
     let start = Instant::now();
     let out = f();
@@ -253,7 +216,6 @@ pub fn boot_eval<T>(label: &'static str, f: impl FnOnce() -> T) -> T {
     out
 }
 
-/// The boot-time evaluation record: `(label, scripts, ms)` per label.
 pub fn boot_js() -> Vec<(&'static str, u32, f32)> {
     BOOT_JS.with(|b| b.borrow().parts.clone())
 }
@@ -262,7 +224,6 @@ fn close_boot_js() {
     BOOT_JS.with(|b| b.borrow_mut().closed = true);
 }
 
-/// `boot js 38.4ms (18%)  vendor.js 21.0 · modules×42 9.1 · boot.js 6.2`.
 fn boot_js_line(boot_ms: f32) -> String {
     let parts = boot_js();
     let total: f32 = parts.iter().map(|p| p.2).sum();
@@ -278,7 +239,6 @@ fn boot_js_line(boot_ms: f32) -> String {
     )
 }
 
-/// One frame happened. Call from the per-frame pump.
 #[inline]
 pub fn frame() {
     #[cfg(vn_devtools)]
@@ -286,7 +246,6 @@ pub fn frame() {
     #[cfg(vn_devtools)]
     roll_frame(Instant::now());
     if !enabled() {
-        // The record closes at the first frame whether or not anybody prints it.
         if !FIRST_FRAME_SEEN.with(|f| f.replace(true)) {
             close_boot_js();
         }
@@ -308,8 +267,6 @@ pub fn frame() {
             st.tagged_frames += 1;
         }
         st.last_frame = Some(now);
-        // Closes the previous frame's tail (everything after the last stamp:
-        // gpui's layout, paint, present, and the vsync wait).
         let tail = ms_since(st.cursor, now);
         if std::mem::take(&mut st.drew) {
             st.tail_draw_ms += tail;
@@ -345,23 +302,18 @@ fn stamp(f: impl FnOnce(&mut State, f32)) {
     });
 }
 
-/// The JS pump (host fns, HMR poll, timers/rAF/microtasks, the tree flush)
-/// finished; gpui is about to decide whether to draw.
 pub fn pump_done() {
     #[cfg(vn_devtools)]
     crate::devtools::trace::pump_done();
     stamp(|st, dt| st.pump_ms += dt);
 }
 
-/// gpui reached the hosting view's `render()` — everything between here and
-/// [`pump_done`] is gpui's own per-frame setup for a draw it decided to do.
 pub fn render_begin() {
     #[cfg(vn_devtools)]
     crate::devtools::trace::render_begin();
     stamp(|st, dt| st.setup_ms += dt);
 }
 
-/// The element tree for this frame is built; layout and paint follow.
 pub fn render_done() {
     #[cfg(vn_devtools)]
     crate::devtools::trace::render_done();
@@ -372,7 +324,6 @@ pub fn render_done() {
     });
 }
 
-/// Labels the scenario the numbers belong to; flushes the window in progress.
 pub fn mark(tag: &str) {
     #[cfg(vn_devtools)]
     crate::devtools::trace::mark(tag);
@@ -400,7 +351,6 @@ pub fn mark(tag: &str) {
     });
 }
 
-/// `12345` -> `12.3K`, `1234567` -> `1.23M`: keeps the counters' columns readable.
 fn compact(n: u64) -> String {
     match n {
         0..=9_999 => n.to_string(),
@@ -409,14 +359,11 @@ fn compact(n: u64) -> String {
     }
 }
 
-/// The wall-clock partition of the window: every millisecond is in exactly one of the four buckets.
 fn report_frame_split(st: &mut State) {
     let total = st.pump_ms + st.setup_ms + st.render_ms + st.tail_draw_ms + st.tail_idle_ms;
     if total <= 0.0 {
         return;
     }
-    // `gpui/frame` is what one drawn frame costs outside our code: pre-render setup, layout,
-    // prepaint, paint, present, and what is left of the vsync interval.
     let per_draw = if st.draws > 0 {
         (st.setup_ms + st.tail_draw_ms) / st.draws as f32
     } else {
@@ -443,7 +390,6 @@ fn report_frame_split(st: &mut State) {
     st.draws = 0;
 }
 
-/// The phase breakdown, printed under the frame line for the same second. Silent when nothing ran.
 fn report_phases() {
     let Some(p) = vn_tree::perf::take() else { return };
     if p.restyle_passes > 0 {
@@ -464,8 +410,6 @@ fn report_phases() {
             p.fold_ms,
             p.store_ms,
         );
-        // Where the selectors run came from (rules no key could file run against every element)
-        // and how few of them matched.
         let [any, tag, class, id, root, parent] = p.rules_split.by_bucket;
         eprintln!(
             "[vn-perf]           sel by bucket: any {} · tag {} · class {} · id {} · root {} · parent {}   matched {}",
@@ -477,8 +421,6 @@ fn report_phases() {
             compact(parent),
             compact(p.rules_split.matched),
         );
-        // The matched-properties cache: elements whose fold an earlier one
-        // with the same rules and inherited inputs already did.
         eprintln!(
             "[vn-perf]           fold shared: {} of {} asked ({} cascaded)",
             compact(p.share_hits),
@@ -492,8 +434,6 @@ fn report_phases() {
              avg={:.2}  max={:.2}",
             p.build_passes,
             compact(p.elements_built),
-            // Retained-render cache boundaries: replayed / re-rendered / stood down. Blank when
-            // nothing is cached.
             if p.cache_offers + p.cache_standdowns > 0 {
                 format!(
                     "cache={}/{}/{}",

@@ -8,10 +8,7 @@
 //! straight-alpha bytes, `Send`. The sticker engine (`crates/vn-sticker`) draws with it on a worker thread.
 //!
 //! ```ignore
-//! // once per <lottie> node, kept in the host's side map
 //! let mut state = LottieState::load(&bytes)?;
-//!
-//! // every frame
 //! let advance = state.advance(dt);
 //! for event in advance.events() { /* dispatch to JS */ }
 //! let element = lottie(&mut state, &options, window, cx);
@@ -26,10 +23,8 @@
 //!   `bell.json`, whose Fill effect ThorVG drops.
 //!
 //! `VN_LOTTIE_BACKEND=thorvg|rasterlottie` overrides the choice at run time. `rasterlottie` rejects
-//! unaltered After Effects exports, so [`normalize`] rewrites two Bodymovin idioms first.
-//!
-//! Prop names, transport semantics and event names mirror lottie-web so a `<lottie>` component
-//! ports from the browser unchanged.
+//! unaltered After Effects exports, so [`normalize`] rewrites two Bodymovin idioms first. Prop
+//! names, transport semantics and event names mirror lottie-web.
 
 pub mod animation;
 pub mod backend;
@@ -47,8 +42,7 @@ pub use state::{
     raster_size_for, Advance, Direction, LoopMode, LottieError, LottieEvent, LottieMeta, LottieState, PlayMode,
 };
 
-/// True if any state in `states` still needs the frame pump running; the host folds it into its
-/// `animating()` OR-chain.
+/// True if any state in `states` still needs the frame pump running.
 pub fn any_playing<'a>(states: impl IntoIterator<Item = &'a LottieState>) -> bool {
     states.into_iter().any(LottieState::needs_frame)
 }

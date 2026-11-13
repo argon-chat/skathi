@@ -1,19 +1,10 @@
-//! The user's answers to this app's own permission prompt, kept in `permissions.json` in the
-//! app's storage folder:
+//! The user's answers to this app's own permission prompt, kept in `permissions.json` in the app's
+//! storage folder (`{"version":1,"permissions":{"microphone":{"decision":"allow","at":<unix ms>}}}`).
+//! A dismissal is never written.
 //!
-//! ```json
-//! { "version": 1,
-//!   "permissions": { "microphone": { "decision": "allow", "at": 1793568000000 } } }
-//! ```
-//!
-//! `at` is Unix ms. A dismissal is not a decision and is never written.
-//!
-//! The file is read once, at the first question, and written through on every change (write to
-//! a temp file, then rename). With no storage folder the answers last for the run only. A file
-//! that is not JSON is left alone until the next answer replaces it; one that could not be
-//! read (held open elsewhere) is read again at the next question and never written over before.
-//!
-//! It is plain text: anyone who can edit it already runs as this user, so it is no escalation.
+//! Read once at the first question, written through on every change (temp file, then rename). A file
+//! that is not JSON is left until the next answer replaces it; one that could not be read (held open
+//! elsewhere) is read again at the next question and never written over.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -22,7 +13,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value as Json};
 use vn_runtime::redjs::webapi::permissions::Capability;
 
-/// The user's answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Decision {
     Allow,
@@ -49,11 +39,9 @@ impl Decision {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub decision: Decision,
-    /// Unix ms.
     pub at: u64,
 }
 
-/// The decisions of one app: in memory, and in a file when there is one.
 #[derive(Default)]
 pub struct Store {
     path: Option<PathBuf>,
@@ -66,7 +54,6 @@ impl Store {
         Store { path: None, loaded: false, map: BTreeMap::new() }
     }
 
-    /// Where the decisions live from now on (`None`: memory only).
     pub fn set_path(&mut self, path: Option<PathBuf>) {
         self.path = path;
         self.loaded = false;
@@ -77,9 +64,8 @@ impl Store {
         self.path.as_deref()
     }
 
-    /// Reads the file once. A failed read (a sharing violation, say) leaves the store unloaded
-    /// and nothing is written meanwhile, so an answer cannot replace a file whose other answers
-    /// were never seen.
+    /// Reads the file once. A failed read leaves the store unloaded and nothing is written meanwhile, so
+    /// an answer cannot replace a file whose other answers were never seen.
     fn load(&mut self) {
         if self.loaded {
             return;
@@ -92,7 +78,6 @@ impl Store {
             Ok(text) => {
                 self.loaded = true;
                 match parse(&text) {
-                    // Answers given while the file could not be read are newer.
                     Ok(map) => {
                         let newer = std::mem::replace(&mut self.map, map);
                         self.map.extend(newer);
@@ -110,8 +95,7 @@ impl Store {
         self.map.get(cap.web_name()).copied()
     }
 
-    /// Stores (`Some`) or forgets (`None`) the answer for `cap`; `true` when that changed
-    /// anything. A failed write is logged and the answer stands for this run.
+    /// Stores (`Some`) or forgets (`None`) the answer for `cap`; `true` when that changed anything.
     pub fn set(&mut self, cap: Capability, decision: Option<Decision>) -> bool {
         self.load();
         let before = self.map.get(cap.web_name()).map(|e| e.decision);
@@ -128,8 +112,7 @@ impl Store {
         }
         if let Some(path) = &self.path {
             if !self.loaded {
-                // The file is there but could not be read: writing now would
-                // drop every answer in it but this one.
+                // Unreadable file: writing now would drop every answer in it but this one.
                 eprintln!("[permissions] {} was not read; the answer holds for this run and is not written", path.display());
             } else if let Err(e) = write(path, &encode(&self.map)) {
                 eprintln!("[permissions] could not write {}: {e} (the answer holds for this run)", path.display());
@@ -138,7 +121,6 @@ impl Store {
         true
     }
 
-    /// Every stored answer, in name order.
     pub fn list(&mut self) -> Vec<(Capability, Entry)> {
         self.load();
         self.map.iter().filter_map(|(name, e)| Capability::from_web_name(name).map(|c| (c, *e))).collect()
@@ -157,8 +139,7 @@ fn encode(map: &BTreeMap<&'static str, Entry>) -> String {
     serde_json::to_string_pretty(&json!({ "version": 1, "permissions": permissions })).unwrap_or_default()
 }
 
-/// The file's text → its answers. Names this build does not know and
-/// entries it cannot read are skipped: a newer build's file still works.
+/// Unknown names and unreadable entries are skipped: a newer build's file still works.
 fn parse(text: &str) -> Result<BTreeMap<&'static str, Entry>, String> {
     let v: Json = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let Some(perms) = v.get("permissions").and_then(Json::as_object) else {
@@ -179,7 +160,6 @@ fn read(path: &Path) -> std::io::Result<String> {
     std::fs::read_to_string(path)
 }
 
-/// The tests' read: the real one, unless a test made it fail.
 #[cfg(test)]
 fn read(path: &Path) -> std::io::Result<String> {
     if tests::FAIL_READS.with(|f| f.get() > 0) {
@@ -189,8 +169,7 @@ fn read(path: &Path) -> std::io::Result<String> {
     std::fs::read_to_string(path)
 }
 
-/// Write-then-rename, so a crash mid-write leaves the old file whole. The temp name is unique
-/// to this process and write, and the data reaches disk before the rename.
+/// Write-then-rename, so a crash mid-write leaves the old file whole.
 fn write(path: &Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -217,7 +196,6 @@ mod tests {
     use super::*;
 
     thread_local! {
-        /// How many of this thread's next reads fail as a sharing violation does.
         pub(super) static FAIL_READS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     }
 
@@ -245,7 +223,6 @@ mod tests {
         assert!(s.set(Capability::Microphone, Some(Decision::Block)));
         assert!(!s.set(Capability::Microphone, Some(Decision::Block)), "the same answer is not a change");
         assert!(file.is_file(), "written through, creating the folder");
-        // Another run of the app.
         let mut again = Store::new();
         again.set_path(Some(file.clone()));
         let e = again.get(Capability::Microphone).unwrap();
@@ -271,18 +248,13 @@ mod tests {
         s.set_path(Some(file.clone()));
         assert!(s.set(Capability::Microphone, Some(Decision::Block)));
         assert!(s.set(Capability::Camera, Some(Decision::Allow)));
-        // Another run, while something else holds the file open: the
-        // question's read and the answer's both fail.
         let mut again = Store::new();
         again.set_path(Some(file.clone()));
         FAIL_READS.with(|f| f.set(2));
         assert_eq!(again.get(Capability::Microphone), None, "unread: nothing known yet");
-        // An answer now holds for the run, and does not replace the file
-        // with a one-entry copy.
         assert!(again.set(Capability::Geolocation, Some(Decision::Allow)));
         let on_disk = parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(on_disk.len(), 2, "the camera's and the microphone's answers survive: {on_disk:?}");
-        // The next question reads again, and the earlier answers are back.
         assert_eq!(again.get(Capability::Microphone).map(|e| e.decision), Some(Decision::Block));
         assert_eq!(again.get(Capability::Camera).map(|e| e.decision), Some(Decision::Allow));
         assert_eq!(again.get(Capability::Geolocation).map(|e| e.decision), Some(Decision::Allow), "and this run's answer stays");

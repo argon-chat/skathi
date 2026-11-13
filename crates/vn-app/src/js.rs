@@ -141,8 +141,6 @@ thread_local! {
 pub(crate) fn on_frame(hook: impl Fn() + 'static) {
     FRAME_HOOKS.with(|hooks| hooks.borrow_mut().push(std::rc::Rc::new(hook)));
 }
-/// Runs the embedder's frame hooks, from the frame pump. Cloned out first, so
-/// a hook may register another without a `RefCell` double borrow.
 pub(crate) fn frame() {
     let hooks = FRAME_HOOKS.with(|hooks| hooks.borrow().clone());
     for hook in hooks {

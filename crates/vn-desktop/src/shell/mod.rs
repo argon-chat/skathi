@@ -1,12 +1,9 @@
 //! The shell: open a URL or file with its handler, reveal a file, move a file to the trash.
 //!
-//! A failure reaches JS (gpui's `open_target` is fire-and-forget). Validation is pure, runs on the
-//! frame thread and refuses synchronously; the OS call runs on one `vn-shell` thread (a COM STA) that
-//! also does the `stat` in front of each call, so the frame thread never touches a user path.
-//!
-//! With `VN_SHELL=record` nothing reaches the OS: each call is validated and stat'ed, then settles
-//! successfully and logs `[shell] <op> <target> (recorded)` (kind `shell`), so automated runs can
-//! drive links and `appShell` without opening anything.
+//! Validation is pure, runs on the frame thread and refuses synchronously; the OS call runs on one `vn-shell`
+//! thread (a COM STA) that also does the `stat` in front of each call, so the frame thread never touches a
+//! user path. With `VN_SHELL=record` nothing reaches the OS: each call is validated and stat'ed, then
+//! settles successfully and logs `[shell] <op> <target> (recorded)`.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Sender};
@@ -54,13 +51,11 @@ impl Op {
     }
 }
 
-/// Schemes CONTENT (`<a href>`, `window.open`) may hand to the OS. Whatever the app renders can
-/// reach these, so `file:`, custom protocols and `ms-settings:` never pass; `appShell.openExternal`
-/// is the escape hatch for a URL the app trusts.
+/// Schemes CONTENT (`<a href>`, `window.open`) may hand to the OS. `file:`, custom protocols and
+/// `ms-settings:` never pass; `appShell.openExternal` is the escape hatch for a URL the app trusts.
 pub const CONTENT_SCHEMES: &[&str] = &["http", "https", "mailto"];
 
-/// `https://x` → `Some("https")`, lowercased. A drive letter (`C:\x`) parses as a one-letter
-/// scheme, which is why `file`-ish inputs are refused by name.
+/// `https://x` → `Some("https")`, lowercased. A drive letter (`C:\x`) parses as a one-letter scheme.
 pub fn scheme_of(url: &str) -> Option<String> {
     let colon = url.find(':')?;
     let s = &url[..colon];
@@ -86,7 +81,6 @@ pub fn validate_external(url: &str, content: bool) -> Result<String, Fail> {
         return Err(Fail::type_error(format!("openExternal: {url:?} is not an absolute URL")));
     };
     if scheme.len() == 1 {
-        // `C:\x`, `D:/y` — a Windows drive path, not a URL.
         return Err(Fail::type_error(format!(
             "openExternal: {url:?} is a file path — use appShell.openPath()"
         )));
@@ -109,8 +103,7 @@ pub fn validate_external(url: &str, content: bool) -> Result<String, Fail> {
     Ok(url.to_string())
 }
 
-/// An absolute path, or why not. `\\?\` and UNC are fine; a relative path is a TypeError rather
-/// than resolved against a cwd the app does not control.
+/// An absolute path, or why not. `\\?\` and UNC are fine; a relative path is a TypeError, not resolved against a cwd.
 pub fn validate_path(path: &str, what: &str) -> Result<PathBuf, Fail> {
     if path.is_empty() {
         return Err(Fail::type_error(format!("{what}: the path is empty")));
@@ -124,7 +117,6 @@ pub fn validate_path(path: &str, what: &str) -> Result<PathBuf, Fail> {
             "{what}: {path:?} is not an absolute path (appStorage.getUserFolder() names the usual places)"
         )));
     }
-    // `C:\x\report.txt:payload.exe` is an NTFS alternate data stream; refuse the shape outright.
     if alternate_stream(&p) {
         return Err(Fail::type_error(format!(
             "{what}: {path:?} names an alternate data stream (a `:` after the drive)"
@@ -148,10 +140,8 @@ fn alternate_stream(p: &Path) -> bool {
     rest.contains(':')
 }
 
-/// Extensions `openPath` refuses without `{ allowExecutable: true }`: everything Windows will run,
-/// install, or hand to a script host when it is "opened" (every `PATHEXT` entry, ClickOnce,
-/// `.settingcontent-ms`, MSIX, `.scr`, PowerShell files). Keeps a save-then-open flow from launching
-/// an attacker-named `report.pdf.exe`.
+/// Extensions `openPath` refuses without `{ allowExecutable: true }`: everything Windows will run, install,
+/// or hand to a script host when "opened". Keeps a save-then-open flow from launching `report.pdf.exe`.
 const EXECUTABLE_EXTS: &[&str] = &[
     "exe", "com", "bat", "cmd", "scr", "pif", "cpl", "msc", "msi", "msp", "mst", "lnk", "url",
     "scf", "hta", "ps1", "psm1", "psd1", "ps1xml", "ps2", "ps2xml", "psc1", "psc2", "vb", "vbs",
@@ -161,9 +151,8 @@ const EXECUTABLE_EXTS: &[&str] = &[
     "xbap", "msh", "msh1", "msh2", "mshxml", "msh1xml", "msh2xml", "sct", "shb", "xll", "website",
 ];
 
-/// Would the shell RUN this rather than open it? The extension is read as Windows reads it:
-/// trailing dots and spaces stripped (`evil.exe.` runs `evil.exe`), case-insensitive. `PATHEXT`
-/// only ever ADDS refusals.
+/// Would the shell RUN this rather than open it? The extension is read as Windows reads it: trailing dots
+/// and spaces stripped, case-insensitive; `PATHEXT` only ever ADDS refusals.
 pub fn is_executable(path: &Path, pathext: Option<&str>) -> bool {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let name = name.trim_end_matches(['.', ' ']);
@@ -251,7 +240,6 @@ struct Job {
     op: Op,
 }
 
-/// `VN_SHELL=record`: validate and stat, never reach the OS.
 pub fn recording() -> bool {
     static R: OnceLock<bool> = OnceLock::new();
     *R.get_or_init(|| std::env::var("VN_SHELL").is_ok_and(|v| v.eq_ignore_ascii_case("record")))

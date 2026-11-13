@@ -1,13 +1,9 @@
 //! The one-instance rule on Linux: `instance_win`'s protocol over a Unix socket.
 //!
-//! ```text
-//!   $XDG_RUNTIME_DIR/vn-instance-<key>.lock   flock'd by the instance for its lifetime
-//!   $XDG_RUNTIME_DIR/vn-instance-<key>.sock   where it listens
-//! ```
-//! The `flock` decides, not the socket: the kernel drops it when the holder ends however it ends, so
-//! a stale socket file from a crash is simply replaced. A launch that cannot take the lock connects
-//! and forwards. Per user: `$XDG_RUNTIME_DIR` (else a 0700 `/tmp/vn-instance-<uid>`), and the server
-//! checks the peer's uid (`SO_PEERCRED`) before reading. The ack is one byte: delivered, or closing.
+//! `$XDG_RUNTIME_DIR/vn-instance-<key>.lock` is flock'd by the instance for its lifetime and `.sock` is
+//! where it listens. The `flock` decides, not the socket: the kernel drops it however the holder ends, so a
+//! stale socket from a crash is replaced. The runtime dir is per user (else a 0700 `/tmp/vn-instance-<uid>`)
+//! and the server checks the peer's uid (`SO_PEERCRED`) before reading.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
@@ -19,7 +15,6 @@ use std::time::{Duration, Instant};
 
 use super::{Forward, CLOSING_PATIENCE_MS, FORWARD_TIMEOUT_MS, MAX_MESSAGE};
 
-/// How `claim` ended; the Windows variants, minus those a socket cannot give.
 #[derive(Debug)]
 pub enum Claim {
     Primary,
@@ -33,7 +28,6 @@ pub enum Claim {
 const ACK_DELIVERED: u8 = 1;
 const ACK_CLOSING: u8 = 2;
 
-/// FNV-1a 128 of the parts, NUL-separated: names a file, protects nothing.
 fn instance_key(id: &str, storage: &str) -> String {
     let mut h: u128 = 0x6c62272e07bb014262b821756295c58d;
     for (i, part) in [id.as_bytes(), storage.as_bytes()].into_iter().enumerate() {
@@ -54,7 +48,6 @@ fn uid() -> u32 {
     unsafe { libc::getuid() }
 }
 
-/// `$XDG_RUNTIME_DIR`, else a 0700 directory of our own under /tmp.
 fn runtime_dir() -> Result<PathBuf, String> {
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|p| p.is_absolute() && p.is_dir()) {
         return Ok(dir);
@@ -92,7 +85,6 @@ fn claim_within(id: &str, storage: &str, fwd: &Forward, patience: Duration) -> C
     loop {
         match take_lock(&lock_path) {
             Lock::Ours(file) => {
-                // Held for the life of the process.
                 std::mem::forget(file);
                 if let Err(why) = serve(&sock_path) {
                     eprintln!("[launch] the single-instance socket could not be created: {why}");
@@ -112,7 +104,6 @@ fn claim_within(id: &str, storage: &str, fwd: &Forward, patience: Duration) -> C
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
-            // The holder is starting (no socket yet) or exiting (lock about to go).
             Sent::Gone if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             Sent::Closing => return Claim::StillClosing,
             Sent::Gone | Sent::NoAnswer if closing => return Claim::StillClosing,
@@ -262,8 +253,6 @@ mod tests {
     fn a_second_claim_forwards_to_the_first() {
         let id = format!("vn-test-{}", std::process::id());
         assert!(matches!(claim_within(&id, "s", &fwd("x://1"), Duration::from_secs(2)), Claim::Primary));
-        // The lock is per open file description, so a second open in this
-        // process is a second claimant, like another process.
         assert!(matches!(claim_within(&id, "s", &fwd("x://2"), Duration::from_secs(2)), Claim::Forwarded));
     }
 }

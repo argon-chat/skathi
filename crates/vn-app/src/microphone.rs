@@ -3,13 +3,9 @@
 //! notifications (`devices`).
 //!
 //! Capture is enabled: `getUserMedia({ audio })` opens the device once the user allowed this app in
-//! its prompt (crates/vn-permissions `consent`). `VN_MEDIA_CAPTURE` changes that for the process:
-//!
-//! - `deny` latches capture shut: every `getUserMedia` is a
-//!   `NotAllowedError`, and no prompt is ever shown. Agent and test launches
-//!   set it, so they can never open the machine's microphone;
-//! - `fake` captures a synthetic 440 Hz tone instead of any device, behind
-//!   the same prompt. It is what an automated run of the whole path uses.
+//! its prompt (crates/vn-permissions `consent`). `VN_MEDIA_CAPTURE=deny` latches capture shut (agent
+//! and test launches, so they never open the machine's microphone); `fake` captures a synthetic
+//! 440 Hz tone instead of any device, behind the same prompt.
 //!
 //! Echo cancellation, noise suppression and gain control are the embedder's
 //! (`mediastream::set_capture_processing`): the engine has none of its own,
@@ -19,8 +15,7 @@ mod devices;
 
 use vn_runtime::redjs::webapi::mediastream;
 
-/// Opens the gate as `VN_MEDIA_CAPTURE` says and starts the device
-/// notifications. Once, at boot, before any app code.
+/// Opens the gate as `VN_MEDIA_CAPTURE` says and starts the device notifications; once, at boot.
 pub fn install() {
     let raw = std::env::var("VN_MEDIA_CAPTURE").ok();
     match capture_mode(raw.as_deref()) {
@@ -48,9 +43,6 @@ pub fn install() {
     }
 }
 
-/// Where this platform's own settings turn the microphone back on, for the
-/// advisory a "Permission denied by system" logs; `None` where there is no
-/// such page.
 fn system_denied_hint() -> Option<&'static str> {
     if cfg!(target_os = "windows") {
         Some(

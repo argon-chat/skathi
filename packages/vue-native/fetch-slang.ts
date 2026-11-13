@@ -1,12 +1,9 @@
-// Fetch-and-pin the Slang compiler.
+// Fetch-and-pin the Slang compiler. Usage: bun fetch-slang.ts [--force]
 //
-// Usage: bun fetch-slang.ts [--force]
-//
-// Downloads the release named in `crates/vn-effects/tools/slang.manifest.json`, verifies its sha256 before
-// extracting anything, and unpacks the three files `shaders.ts` needs into `tools/slang/win-x64/` (gitignored).
-//
-// Only needed to author or edit a `.slang` source; the built-in effects' generated HLSL is checked in, so
-// `cargo build` and CI need no download.
+// Downloads the release named in `crates/vn-effects/tools/slang.manifest.json`, verifies its sha256
+// before extracting anything, and unpacks the files `shaders.ts` needs into `tools/slang/win-x64/`
+// (gitignored). Only needed to author or edit a `.slang` source: the built-in effects' generated
+// HLSL is checked in.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -46,9 +43,7 @@ type Manifest = {
 
 function platformKey(): string {
   if (process.platform !== "win32") {
-    // macos-aarch64 / linux-x86_64 zips exist upstream; pin them here when a
-    // non-Windows renderer needs them. Refusing loudly beats silently
-    // downloading the wrong archive.
+    // Only the Windows zip is pinned; refusing loudly beats downloading the wrong archive.
     throw new Error(
       `no pinned slangc asset for ${process.platform}/${process.arch}. ` +
         `Add one to ${MANIFEST} (upstream publishes macos-aarch64 and linux-x86_64).`,
@@ -102,7 +97,6 @@ async function main() {
 
     const extracted = join(work, "x");
     mkdirSync(extracted, { recursive: true });
-    // `tar` ships with Windows 10+ and reads zip; no extra dependency.
     const untar = spawnSync("tar", ["-xf", archive, "-C", extracted], { encoding: "utf8" });
     if (untar.status !== 0) {
       throw new Error(`extract failed: ${untar.stderr || untar.stdout}`);

@@ -1,9 +1,6 @@
-// The host preludes' checked-in JavaScript, checked against its TypeScript.
-//
-// `crates/vn-app/src/prelude.js` and `window.prelude.js` are generated from the `.ts` beside them and `include_str!`'d;
-// the Rust build does not regenerate them, so this file is what stops a stale artifact shipping. It imports `TARGETS`
-// and `render` from the generator so what is compared is the generator's own output. It also pins the DO-NOT-EDIT
-// header and the `"use strict"` directive that bun drops and the generator puts back.
+// The host preludes' checked-in JavaScript, checked against its TypeScript: the Rust build does not regenerate
+// `prelude.js` / `window.prelude.js`, so this stops a stale artifact shipping. Also pins the DO-NOT-EDIT header and
+// the `"use strict"` directive that bun drops and the generator puts back.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -18,16 +15,11 @@ describe("generated host preludes", () => {
     test(`${name} is byte-identical to what the generator emits`, () => {
       const want = render(target);
       const got = readFileSync(target.out, "utf8");
-      // Compared as text, not as a hash: when this fails the diff IS the
-      // report, and `bun packages/vue-native/scripts/gen-preludes.ts` is the
-      // fix.
       expect(got).toBe(want);
     });
 
     test(`${name} says it is generated, and from where`, () => {
       const got = readFileSync(target.out, "utf8");
-      // The header is the only warning a contributor gets before editing a file
-      // whose edits are erased by the next regeneration.
       expect(got.startsWith("// GENERATED from ")).toBe(true);
       expect(got).toContain(basename(target.source));
       expect(got).toContain("gen-preludes.ts");
@@ -48,9 +40,6 @@ describe("generated host preludes", () => {
   });
 
   test("the source is TypeScript that erases to the artifact, not a copy of it", () => {
-    // The whole point of the exercise: if the `.ts` were the `.js` with a new
-    // extension, every one of the assertions above would still pass and nothing
-    // would have been gained. This pins that the sources actually carry types.
     for (const target of TARGETS) {
       const src = readFileSync(target.source, "utf8");
       expect(src).not.toBe(readFileSync(target.out, "utf8"));

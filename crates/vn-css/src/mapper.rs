@@ -59,12 +59,9 @@ pub enum WindowControl {
     Minimize,
     Maximize,
     Close,
-    /// `--window-control: none` — an explicit "not a caption button", so a rule can cancel one set
-    /// by an earlier rule.
     None,
 }
 
-/// `user-select`, as declared.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UserSelect {
     /// Declared `auto`: kept apart from "not declared" so that it can override an earlier rule's
@@ -75,17 +72,13 @@ pub enum UserSelect {
     All,
 }
 
-/// One `filter: drop-shadow()`, resolved.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DropShadow {
-    /// Horizontal offset, px.
     pub dx: f32,
-    /// Vertical offset, px.
     pub dy: f32,
     /// The Gaussian's **sigma**, px. CSS's third length and gpui's `blur_radius` are both sigmas,
     /// so it transfers 1:1.
     pub blur: f32,
-    /// `None` = `currentColor`, resolved by the renderer.
     pub color: Option<gpui::Hsla>,
 }
 
@@ -93,9 +86,7 @@ pub struct DropShadow {
 /// inherit, so `inherit` asks for the PARENT's computed radius, which the mapper cannot know.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RadiusInherit {
-    /// Corners some declaration wrote, length or `inherit`.
     pub declared: u8,
-    /// Of those, the ones whose last declaration was `inherit`.
     pub inherit: u8,
 }
 
@@ -115,34 +106,25 @@ impl RadiusInherit {
         }
     }
 
-    /// Later-wins per corner.
     pub(crate) fn refine(&mut self, later: &RadiusInherit) {
         self.inherit = (self.inherit & !later.declared) | (later.inherit & later.declared);
         self.declared |= later.declared;
     }
 }
 
-/// Computed values that a `gpui::StyleRefinement` has nowhere to carry.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Extras {
-    /// `object-fit` — only meaningful on a replaced element (`<img>`); parsed and folded for every
-    /// element, exactly as a browser does.
     pub object_fit: Option<ObjectFit>,
     /// `None` means undeclared, which lets the renderer inherit the parent's value; `Some(None)` is
     /// an explicit opt-out.
     pub window_drag: Option<WindowDrag>,
-    /// `--window-control`. Never inherited (D-14).
     pub window_control: Option<WindowControl>,
     pub fixed: Option<bool>,
-    /// `filter: drop-shadow(<dx> <dy> <blur>? <color>?)`, recorded for the one shape gpui can draw
-    /// exactly — see [`DropShadow`] and `vn_tree::render::apply_drop_shadow`.
     pub drop_shadow: Option<DropShadow>,
     /// Whether `sticky` diverges depends on whether an ancestor scrolls, which only the renderer
     /// knows (`advise_out_of_flow`).
     pub sticky: Option<bool>,
-    /// `z-index`: `None` = not declared, `Some(None)` = `auto`, `Some(Some(n))` = an integer.
     pub z_index: Option<Option<i32>>,
-    /// `isolation`: `Some(true)` for `isolate`, `Some(false)` for `auto`.
     pub isolate: Option<bool>,
     /// The element declared a `position` other than `static`. gpui cannot say this: `static` and
     /// `relative` both map onto its default `Relative`.
@@ -159,16 +141,10 @@ pub struct Extras {
     /// The `display` had an inline outer type. taffy lays the box out block-level, which ignores
     /// the parent's `text-align`; the renderer advises (`advise_inline_level`).
     pub inline_level: Option<bool>,
-    /// `appearance: none` (`Some(true)`) or any other value (`Some(false)`).
     pub appearance_none: Option<bool>,
-    /// Native control tint; Some(None) resets an earlier color to auto.
     pub accent_color: Option<Option<Hsla>>,
-    /// SVG `fill` — see [`SvgPaint`].
     pub fill: Option<SvgPaint>,
-    /// SVG `stroke` — see [`SvgPaint`].
     pub stroke: Option<SvgPaint>,
-    /// Other SVG presentation properties (`stroke-width`, `fill-rule`, dash and join, ...) by name,
-    /// as CSS text.
     pub svg_presentation: Option<Rc<Vec<(&'static str, Rc<str>)>>>,
     /// `text-transform`. gpui has no such text-style field: the shaper is handed a string, so the
     /// case change is applied to that string by the renderer.
@@ -176,106 +152,73 @@ pub struct Extras {
     /// The whitespace-processing half of `white-space`; gpui models only whether a line may wrap,
     /// so collapsing is applied to the string by the renderer, like `text_transform`.
     pub white_space: Option<WhiteSpaceMode>,
-    /// Meaningful only on a pseudo-element rule; CSS and the renderer ignore it elsewhere.
     pub content: Option<Rc<str>>,
     /// `content: none` / `normal` was declared: a later rule that says so takes back the string an
     /// earlier one gave, where leaving `content` unset says nothing.
     pub content_none: bool,
-    /// `background-clip: text` (or its `-webkit-` spelling).
     pub background_clip_text: Option<bool>,
     /// `-webkit-text-fill-color` overrides foreground `color`, independently of the background
     /// clipped behind the text.
     pub text_fill_color: Option<TextFill>,
-    /// Representative background metadata retained for style inspection. Text clipping uses the
-    /// complete background stack, not this colour.
     pub background_key_color: Option<gpui::Hsla>,
     /// Kept apart from the refinement: size/position/repeat are separate properties, often from
     /// separate rules, folded onto the layers after the cascade.
     pub background_images: Option<Rc<Vec<BackgroundLayer>>>,
-    /// The `url()` layers of the same `background-image` list, next to their CSS layer indices.
     pub background_urls: Option<Rc<Vec<BackgroundUrl>>>,
-    /// `background-size`, per layer, in CSS order.
     pub background_size: Option<Rc<Vec<BackgroundSize>>>,
-    /// `background-position`, per layer, in CSS order.
     pub background_position: Option<Rc<Vec<(TileLength, TileLength)>>>,
-    /// `background-repeat`, per layer, in CSS order, as `(x, y)`.
     pub background_repeat: Option<Rc<Vec<(bool, bool)>>>,
-    /// `list-style-type` — the marker an `<li>` under this element gets.
     pub list_marker: Option<ListMarker>,
-    /// `list-style-position: inside`.
     pub list_marker_inside: Option<bool>,
     /// The web fonts this element's `font-family` asks for that are not loaded yet: the families of
     /// the list, up to the one used, that [`set_web_font_families`] named, in order.
     pub web_font: Option<Rc<[String]>>,
-    /// `text-underline-offset`, in px.
     pub underline_offset: Option<f32>,
-    /// The `text-decoration-*` longhands this element declares, for the same reason as
-    /// [`Self::underline_offset`]: see [`DecorationPatch`].
     pub decoration: DecorationPatch,
-    /// The `outline` longhands one declaration block declares: see [`OutlinePatch`]. Read off a
-    /// rule's own extras, not off the folded ones.
     pub outline: OutlinePatch,
     /// `currentColor` is the computed `color`, unknown while a declaration is mapped (no inherited
     /// text property is folded), so targets are recorded and substituted after the cascade.
     pub current_color: CurrentColorTargets,
-    /// Border declarations clear an earlier currentColor on the affected side.
     pub current_color_overrides: CurrentColorTargets,
     /// `filter: blur()` radius in px. Exact only for a solid, contentless leaf box (the "glow
     /// blob"), which the renderer repaints as its own shadow.
     pub blur: Option<f32>,
-    /// A same-document SVG filter, resolved against the retained DOM at paint time.
     pub filter_url: Option<Rc<str>>,
-    /// Not inherited here, as in CSS.
     pub scrollbar_width: Option<ScrollbarWidth>,
     pub scrollbar_color: Option<(gpui::Hsla, gpui::Hsla)>,
-    /// `overscroll-behavior-x`, the horizontal half of what a wheel at this box's edge does to its
-    /// ancestors.
     pub overscroll_x: Option<OverscrollBehavior>,
-    /// `overscroll-behavior-y`.
     pub overscroll_y: Option<OverscrollBehavior>,
     /// Only a qualifier of the refinement's axis, which stays the truth (see `compute_overflow`).
     pub overflow_x: Option<OverflowKeyword>,
-    /// The `overflow-y` keyword, as [`Self::overflow_x`].
     pub overflow_y: Option<OverflowKeyword>,
     /// `mask-image` (or the `mask` shorthand's images). The three `mask_*` fields are kept apart
     /// because they cascade apart, and [`Extras::mask_ring`] reads them together.
     pub mask_images: Option<MaskImages>,
-    /// `mask-clip` (or the shorthand's boxes).
     pub mask_clips: Option<MaskClips>,
-    /// `mask-composite` / `-webkit-mask-composite` (or the shorthand's), for the top layer, which
-    /// is the only one composited onto anything.
     pub mask_composite: Option<MaskCompositing>,
-    /// `border-radius: inherit` and its longhands — see [`RadiusInherit`].
     pub radius_inherit: RadiusInherit,
 }
 
-/// `mask-image`, as far as the paint path can tell layers apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaskImages {
     None,
     TwoOpaque,
-    /// Anything else (a `url()`, a fade, one layer, three).
     Other,
 }
 
-/// `mask-clip`, as far as the gradient-border idiom needs it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaskClips {
     ContentThenBorder,
-    /// Anything else.
     Other,
 }
 
-/// The top mask layer's compositing operator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaskCompositing {
     Add,
     Exclude,
-    /// Anything else.
     Other,
 }
 
-/// CSS `scrollbar-width`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScrollbarWidth {
     /// The platform's own width — 14 px here, which is what Windows 11's overlay scrollbar occupies
@@ -286,26 +229,19 @@ pub enum ScrollbarWidth {
     None,
 }
 
-/// CSS `overscroll-behavior`, per axis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverscrollBehavior {
-    /// (The other half of `auto` — the platform's rubber-band bounce — has nothing to do here,
-    /// because there is no bounce to suppress.)
     Auto,
-    /// `none` additionally suppresses the bounce, which is the only way it differs from `contain`
-    /// on a platform that has one; here the two behave identically and honestly so.
     Contain,
     None,
 }
 
 impl OverscrollBehavior {
-    /// Does a wheel that this box cannot use reach its ancestors?
     pub fn chains(self) -> bool {
         matches!(self, Self::Auto)
     }
 }
 
-/// CSS `text-transform`, applied to the string before it reaches the shaper.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextTransform {
     None,
@@ -314,7 +250,6 @@ pub enum TextTransform {
     Capitalize,
 }
 
-/// CSS `white-space`, at the level the renderer needs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WhiteSpaceMode {
     Normal,
@@ -326,19 +261,16 @@ pub enum WhiteSpaceMode {
 }
 
 impl WhiteSpaceMode {
-    /// Is a RUN of white space collapsed to a single space?
     pub fn collapses_spaces(self) -> bool {
         matches!(self, WhiteSpaceMode::Normal | WhiteSpaceMode::Nowrap | WhiteSpaceMode::PreLine)
     }
 
-    /// Is a source newline a line BREAK, or just more white space?
     pub fn preserves_newlines(self) -> bool {
         !matches!(self, WhiteSpaceMode::Normal | WhiteSpaceMode::Nowrap)
     }
 }
 
 impl TextTransform {
-    /// Applies the case change.
     pub fn apply(self, text: &str) -> Option<String> {
         match self {
             TextTransform::None => None,
@@ -366,7 +298,6 @@ impl TextTransform {
     }
 }
 
-/// `-webkit-text-fill-color`'s value (see [`Extras::text_fill_color`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TextFill {
     CurrentColor,
@@ -375,18 +306,13 @@ pub enum TextFill {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SvgPaint {
-    /// `none` — this half of the geometry is not painted.
     None,
     Current,
     Color(Hsla),
-    /// A paint this engine does not carry: a paint server (`url(…)`), `context-fill` /
-    /// `context-stroke`, or a colour the mapper cannot resolve.
     Server,
 }
 
 impl SvgPaint {
-    /// Spelled for the SVG fed to resvg: `none`, `currentColor`, or `rgb(r,g,b)` (`rgba` when
-    /// translucent).
     pub fn as_attr(self) -> std::borrow::Cow<'static, str> {
         match self {
             SvgPaint::None => "none".into(),
@@ -406,8 +332,6 @@ impl SvgPaint {
     }
 }
 
-/// `text-decoration-color`, `-style` and `-thickness` as declared, beside the decoration they also
-/// land on when their own block declares the line.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DecorationPatch {
     /// `Some(None)` is the `text-decoration` shorthand's reset to `currentColor`: it ends an
@@ -458,14 +382,11 @@ impl DecorationPatch {
     }
 }
 
-/// The `outline` longhands one declaration block declares.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct OutlinePatch {
     pub width: Option<f32>,
     pub style: Option<gpui::BorderStyle>,
-    /// `outline-style: none` / `hidden`, which is a zero width.
     pub hidden: Option<bool>,
-    /// `Some(None)` is `currentColor`, resolved after the cascade.
     pub color: Option<Option<Hsla>>,
     pub offset: Option<f32>,
 }
@@ -489,8 +410,6 @@ impl OutlinePatch {
         }
     }
 
-    /// `slot` holds the ring of the block these longhands come from. When the rules before it had
-    /// produced `earlier`, the block's ring becomes that one with the block's longhands over it.
     pub(crate) fn merge_over(&self, earlier: Option<gpui::Outline>, slot: &mut Option<gpui::Outline>) {
         let Some(mut ring) = earlier else { return };
         if *self == Self::default() {
@@ -541,7 +460,6 @@ impl OutlinePatch {
 }
 
 impl Extras {
-    /// Later-wins merge, matching `Refineable::refine` for the refinements.
     pub(crate) fn refine(&mut self, other: &Extras) {
         if other.object_fit.is_some() {
             self.object_fit = other.object_fit;
@@ -690,23 +608,18 @@ impl Extras {
         self.radius_inherit.refine(&other.radius_inherit);
     }
 
-    /// The `mask` this element ends up with is the gradient-border idiom: two opaque layers, the
-    /// top one clipped to the content box, composited with `exclude`.
     pub fn mask_ring(&self) -> bool {
         self.mask_images == Some(MaskImages::TwoOpaque)
             && self.mask_clips == Some(MaskClips::ContentThenBorder)
             && self.mask_composite == Some(MaskCompositing::Exclude)
     }
 
-    /// Folds the `background-image` stack together with the three geometry properties into the
-    /// layer list gpui paints, BOTTOM layer first.
     pub fn resolve_background_layers(&self) -> Vec<gpui::Background> {
         let Some(images) = self.background_images.as_ref() else {
             return Vec::new();
         };
         let mut out: Vec<gpui::Background> =
             images.iter().map(|layer| self.tiled_gradient(layer)).collect();
-        // CSS paints layer 0 on top; gpui paints the list in order.
         out.reverse();
         out
     }
@@ -731,8 +644,6 @@ impl Extras {
                 },
             ));
         }
-        // CSS order (layer 0 on top), stable so a banded gradient keeps its bands in order — then
-        // bottom first, as gpui paints.
         stack.sort_by_key(|(index, _)| *index);
         Some(stack.into_iter().rev().map(|(_, layer)| layer).collect())
     }
@@ -758,8 +669,6 @@ impl Extras {
         background
     }
 
-    /// The declared integer `z-index`; `None` for `auto` and for no declaration, which are the same
-    /// thing.
     pub fn z(&self) -> Option<i32> {
         self.z_index.flatten()
     }
@@ -782,19 +691,14 @@ pub(crate) struct Converted {
     pub important_transition_declarations: Option<Rc<Collector>>,
     pub normal_animations: Option<Rc<Vec<AnimationSpec>>>,
     pub important_animations: Option<Rc<Vec<AnimationSpec>>>,
-    /// Longhand-only `animation-*` declarations — see [`AnimationPatch`].
     pub normal_animation_patch: Option<AnimationPatch>,
     pub important_animation_patch: Option<AnimationPatch>,
     pub normal_extras: Extras,
     pub important_extras: Extras,
-    /// `--x` declarations, in source order (`None` = the half declared none).
     pub normal_custom: Option<Rc<Decls>>,
     pub important_custom: Option<Rc<Decls>>,
-    /// Known properties whose value referenced `var()`.
     pub normal_dynamic: Option<Rc<Decls>>,
     pub important_dynamic: Option<Rc<Decls>>,
-    /// The font-relative declarations, and every static one after the first of them, applied again
-    /// per element ([`FontDecls`]).
     pub normal_font: Option<FontDecls>,
     pub important_font: Option<FontDecls>,
     /// Kept with the rule and logged when it matches: a compile-time advisory describes the
@@ -834,11 +738,8 @@ fn apply_static<'i>(
 }
 
 enum Channel {
-    /// `--x: …` — folds into the element's custom-property map instead of into a refinement.
     Custom(String, String),
-    /// A known property whose value used `var()` or `env()`; substituted and re-parsed per element.
     Dynamic(String, String),
-    /// Everything else — mapped once, here.
     Static,
 }
 
@@ -871,7 +772,6 @@ fn initial_inset_sides(
     }
 }
 
-/// Printed from the parsed form (lightningcss keeps no source spans). Only devtools calls this.
 pub(crate) fn decl_pairs(block: &DeclarationBlock) -> Vec<(String, String, bool)> {
     let mut out = Vec::new();
     for (props, important) in [(&block.declarations, false), (&block.important_declarations, true)] {
@@ -897,9 +797,6 @@ fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
     match p {
         Property::Custom(c) => match &c.name {
             CustomPropertyName::Custom(name) if name.0.as_ref() == effect::SHADING => Channel::Static,
-            // `--window-control` is the same shape of thing: a real interpreted property spelled as
-            // a custom one so a browser degrades it to "does nothing" rather than dropping it (see
-            // [`WindowControl`]).
             CustomPropertyName::Custom(name) if name.0.as_ref() == WINDOW_CONTROL => Channel::Static,
             CustomPropertyName::Custom(name) => match value_text(p) {
                 Some(v) => Channel::Custom(name.0.as_ref().to_string(), v),
@@ -914,8 +811,6 @@ fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
                     Channel::Static
                 }
             },
-            // Tailwind's `content-*` is `content: var(--tw-content)`; `apply` handles it once the
-            // `var()` is resolved, here.
             CustomPropertyName::Unknown(name) if has_substitution(&c.value) => {
                 match value_text(p) {
                     Some(v) => Channel::Dynamic(name.0.as_ref().to_string(), v),
@@ -924,8 +819,6 @@ fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
             }
             CustomPropertyName::Unknown(_) => Channel::Static,
         },
-        // A `clip-path` lightningcss has no typed value for, and no `var()` to resolve first:
-        // `apply` advises it.
         Property::Unparsed(u)
             if matches!(u.property_id, PropertyId::ClipPath(_)) && !has_substitution(&u.value) =>
         {
@@ -942,8 +835,6 @@ fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
     }
 }
 
-/// Converts a declaration block into (normal, important) refinements plus the transitions, custom
-/// properties and `var()`-composed declarations each half declares.
 pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
     let mut diagnostics: Vec<String> = Vec::new();
     let diagnostics = &mut diagnostics;
@@ -975,7 +866,6 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
                     if animations.take(p, diagnostics) {
                         continue;
                     }
-                    // Rare enough to be worth saying rather than modelling.
                     let id = p.property_id();
                     if dynamic.iter().any(|(n, _)| *n == id.name()) {
                         once(
@@ -1092,8 +982,6 @@ pub(crate) fn apply_dynamic(
     apply(&property, r, x, diagnostics);
 }
 
-/// Parses an inline `style` body ("color: red; padding: 4px") into a refinement — the transport for
-/// Vue `:style` objects and `style=""` strings.
 pub fn parse_inline(body: &str, diagnostics: &mut Vec<String>) -> StyleRefinement {
     let (refinement, transitions, _) = parse_inline_full(body, diagnostics);
     if !transitions.is_empty() {
@@ -1106,7 +994,6 @@ pub fn parse_inline(body: &str, diagnostics: &mut Vec<String>) -> StyleRefinemen
     refinement
 }
 
-/// Parses an inline `style` body into a refinement plus the transitions it declares.
 pub fn parse_inline_with_transitions(
     body: &str,
     diagnostics: &mut Vec<String>,
@@ -1127,7 +1014,6 @@ pub fn parse_inline_full(
     )
 }
 
-/// Motion-only priority metadata.
 #[derive(Clone, Debug, Default)]
 pub struct InlineMotion {
     pub(crate) transitions: Option<Rc<Collector>>,
@@ -1137,7 +1023,6 @@ impl InlineMotion {
     fn is_empty(&self) -> bool { self.transitions.is_none() && self.animations.is_none() }
 }
 
-/// Everything an inline `style` body contributes to the cascade.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InlinePriority {
     pub refinement: Option<Rc<StyleRefinement>>,
@@ -1149,8 +1034,6 @@ pub struct InlinePriority {
 
 #[derive(Clone, Debug, Default)]
 pub struct InlineStyle {
-    /// Optional parsed normal/important motion declarations, folded at their own priority without
-    /// changing general refinement handling.
     pub normal_motion: Option<InlineMotion>,
     pub important_motion: Option<InlineMotion>,
     pub refinement: Option<Rc<StyleRefinement>>,
@@ -1164,13 +1047,10 @@ pub struct InlineStyle {
     /// the animation it means to freeze.
     pub animation_patch: Option<AnimationPatch>,
     pub extras: Extras,
-    /// `--x` declarations.
     pub custom: Decls,
-    /// Known properties whose value referenced `var()`.
     pub dynamic: Decls,
     /// An inline `padding: .5em` is the element's own em, which the parse cannot know.
     pub font: Option<FontDecls>,
-    /// Normal and important halves for registered-variable dependency replay.
     #[doc(hidden)]
     pub priority: Option<Rc<[InlinePriority; 2]>>,
 }
@@ -1188,7 +1068,6 @@ impl InlineStyle {
     }
 }
 
-/// Does this engine take `name: value` as one declaration it applies?
 pub fn accepts_declaration(name: &str, value: &str) -> bool {
     let name = name.trim();
     if name.starts_with("--") {
@@ -1217,7 +1096,6 @@ pub fn accepts_declaration(name: &str, value: &str) -> bool {
     diagnostics.is_empty() && !style.is_empty()
 }
 
-/// Parses an inline `style` body into everything it contributes.
 pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineStyle {
     let mut r = StyleRefinement::default();
     let mut extras = Extras::default();
@@ -1319,7 +1197,6 @@ fn color(c: &CssColor) -> Option<Hsla> {
 
 thread_local! {
     static REM_BASIS: std::cell::Cell<f32> = const { std::cell::Cell::new(INITIAL_REM_BASIS) };
-    /// `(width, height)` in CSS px.
     static VIEWPORT_BASIS: std::cell::Cell<(f32, f32)> =
         const { std::cell::Cell::new(INITIAL_VIEWPORT_BASIS) };
     /// Set the first time a sheet resolves a viewport unit. Nothing else has to recompile when the
@@ -1336,8 +1213,6 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashSet::new());
 }
 
-/// The web font families that have a face still waiting to load (the host's `@font-face` rules,
-/// which load lazily).
 pub fn set_web_font_families(families: impl IntoIterator<Item = String>) {
     let set = families.into_iter().map(|f| f.to_lowercase()).collect();
     WEB_FONTS.with(|w| *w.borrow_mut() = set);
@@ -1383,8 +1258,6 @@ fn font_installed(name: &str) -> Option<bool> {
     Some(set.contains(name))
 }
 
-/// `(asked for, used instead)` for every `font-family` whose FIRST entry names a family that is not
-/// installed — drained by the renderer's one-shot advisory.
 pub fn take_font_misses() -> Vec<(String, Option<String>)> {
     FONT_MISSES.with(|m| std::mem::take(&mut *m.borrow_mut()))
 }
@@ -1411,7 +1284,6 @@ fn generic_family(g: &lightningcss::properties::font::GenericFontFamily) -> Opti
         G::Fantasy => &["Impact"],
         _ => return None,
     };
-    // A generic always resolves in a browser, so it does here too.
     Some(
         candidates
             .iter()
@@ -1421,8 +1293,6 @@ fn generic_family(g: &lightningcss::properties::font::GenericFontFamily) -> Opti
     )
 }
 
-/// The first installed family; per-glyph fallback is `composed_font_stack`'s, otherwise the
-/// system's. With none available the first named family stays so gpui's default applies.
 fn first_available_family(families: &[CssFontFamily]) -> Option<String> {
     use lightningcss::traits::ToCss;
     let mut first_named = None;
@@ -1462,21 +1332,15 @@ thread_local! {
     static UNREACHED_FONTS: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// The web font families the host draws character by character, from the faces whose
-/// `unicode-range` covers each (gpui's `FamilyComposer`), with whether each covers Latin text.
 pub fn set_composed_font_families(families: impl IntoIterator<Item = (String, bool)>) {
     let list = families.into_iter().map(|(f, latin)| (f.to_lowercase(), latin)).collect();
     COMPOSED_FONTS.with(|c| *c.borrow_mut() = list);
 }
 
-/// `(web family, family drawn instead)` where a composed web family follows the installed family
-/// the text is drawn with, so its glyphs are never reached.
 pub fn take_unreached_fonts() -> Vec<(String, String)> {
     UNREACHED_FONTS.with(|m| std::mem::take(&mut *m.borrow_mut()))
 }
 
-/// The first is the font's family: a composed family that covers no Latin text when it leads, else
-/// the first available one (as [`first_available_family`]).
 fn composed_font_stack(families: &[CssFontFamily]) -> Option<(String, gpui::FontFallbacks)> {
     use lightningcss::traits::ToCss;
     let composed = COMPOSED_FONTS.with(|c| c.borrow().clone());
@@ -1523,7 +1387,6 @@ fn composed_font_stack(families: &[CssFontFamily]) -> Option<(String, gpui::Font
 
 pub const INITIAL_REM_BASIS: f32 = 16.0;
 
-/// The px value of `1rem`.
 pub fn rem_basis() -> f32 {
     REM_BASIS.with(|c| c.get())
 }
@@ -1547,24 +1410,18 @@ pub fn set_rem_basis(px: f32) -> bool {
 /// Must be non-zero: 0 would collapse every `vh` before the first `set_env`.
 pub const INITIAL_VIEWPORT_BASIS: (f32, f32) = (1280.0, 720.0);
 
-/// The px value of `100vw` / `100vh`.
 pub fn viewport_basis() -> (f32, f32) {
     VIEWPORT_BASIS.with(|c| c.get())
 }
 
-/// Lets a resize skip the stylesheet when no length depends on the viewport.
 pub fn uses_viewport_units() -> bool {
     VIEWPORT_UNITS_SEEN.with(|c| c.get())
 }
 
-/// Forgets that a viewport unit was seen — called when a new sheet is compiled, so the flag
-/// describes the CURRENT sheet rather than every sheet ever loaded.
 pub fn reset_viewport_units_seen() {
     VIEWPORT_UNITS_SEEN.with(|c| c.set(false));
 }
 
-/// Runs `f` and says whether IT resolved a viewport unit, whatever the flag said before; the flag
-/// ends up as before OR that.
 pub(crate) fn noting_viewport_units<R>(f: impl FnOnce() -> R) -> (R, bool) {
     let before = VIEWPORT_UNITS_SEEN.with(|c| c.replace(false));
     let out = f();
@@ -1573,8 +1430,6 @@ pub(crate) fn noting_viewport_units<R>(f: impl FnOnce() -> R) -> (R, bool) {
     (out, seen)
 }
 
-/// Viewport units are flattened at sheet compile time, so `true` means re-resolve them
-/// (`Engine::rebase_viewport`) when `uses_viewport_units` says the sheet cares.
 pub fn set_viewport_basis(width: f32, height: f32) -> bool {
     if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) {
         return false;
@@ -1596,8 +1451,6 @@ pub fn set_viewport_basis(width: f32, height: f32) -> bool {
 fn viewport_value_px(v: &LengthValue) -> Option<f32> {
     let (w, h) = viewport_basis();
     let px = match v {
-        // `vi` / `vb` are the inline / block axis; in `horizontal-tb` — the only writing mode there
-        // is here — those are the horizontal and vertical ones.
         LengthValue::Vw(p)
         | LengthValue::Svw(p)
         | LengthValue::Lvw(p)
@@ -1624,8 +1477,6 @@ fn viewport_value_px(v: &LengthValue) -> Option<f32> {
     Some(px)
 }
 
-/// The same resolution as [`viewport_value_px`], reached from a raw token (`Token::Dimension {
-/// unit, .. }`) rather than a parsed `LengthValue` — the path a `var()`-composed declaration takes.
 fn viewport_unit_px(unit: &str, value: f32) -> Option<f32> {
     let (w, h) = viewport_basis();
     let basis = match unit {
@@ -1654,12 +1505,9 @@ fn length_value_px(v: &LengthValue) -> Option<f32> {
 // CSS Values 4's fallback when the host cannot measure a font.
 const HALF_EM: f32 = 0.5;
 
-/// Font-relative lengths supplied by the same text system that paints glyphs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FontRelativeMetrics {
-    /// The advance of the shaped `0` glyph, in CSS pixels.
     pub zero_advance: f32,
-    /// The face's x-height, in CSS pixels.
     pub x_height: f32,
 }
 
@@ -1700,8 +1548,6 @@ fn character_basis(x_height: bool) -> f32 {
         .unwrap_or(HALF_EM * size)
 }
 
-/// The px value of one `unit` of the font-relative lengths [`length_value_px`] resolves, reached
-/// from a raw token: the path a `var()`-composed declaration takes.
 fn font_unit_px(unit: &str, value: f32) -> Option<f32> {
     match unit {
         "rem" => Some(value * rem_basis()),
@@ -1718,7 +1564,6 @@ thread_local! {
     static FONT_UNITS_SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// The px value of `1em` for the declaration being converted.
 fn em_basis() -> f32 {
     FONT_UNITS_SEEN.with(|c| c.set(true));
     let basis = FONT_BASIS.with(|c| c.get());
@@ -1729,7 +1574,6 @@ fn em_basis() -> f32 {
     }
 }
 
-/// Runs `f` with `1em` = `px`.
 pub(crate) fn with_font_basis<R>(px: f32, f: impl FnOnce() -> R) -> R {
     struct Restore(f32);
     impl Drop for Restore {
@@ -1741,7 +1585,6 @@ pub(crate) fn with_font_basis<R>(px: f32, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Runs `f`, and says whether anything it converted read the font basis.
 pub(crate) fn noting_font_units<R>(f: impl FnOnce() -> R) -> (R, bool) {
     let before = FONT_UNITS_SEEN.with(|c| c.replace(false));
     let out = f();
@@ -1756,7 +1599,6 @@ pub(crate) fn sets_font_size(p: &Property) -> bool {
     matches!(p, Property::FontSize(_))
 }
 
-/// Applies one font-relative declaration with `1em` = `basis`.
 pub(crate) fn apply_at(
     p: &Property,
     basis: f32,
@@ -1767,7 +1609,6 @@ pub(crate) fn apply_at(
     with_font_basis(basis, || apply(p, r, x, diagnostics));
 }
 
-/// A computed `font-size` in px. The mapper writes px; a `Rems` is read against the current basis.
 pub(crate) fn font_size_px(l: AbsoluteLength) -> f32 {
     match l {
         AbsoluteLength::Pixels(p) => f32::from(p),
@@ -1775,7 +1616,6 @@ pub(crate) fn font_size_px(l: AbsoluteLength) -> f32 {
     }
 }
 
-/// The px sizes Chromium gives the absolute `font-size` keywords at a 16px `medium`.
 fn absolute_font_size_px(k: &lightningcss::properties::font::AbsoluteFontSize) -> f32 {
     use lightningcss::properties::font::AbsoluteFontSize as A;
     match k {
@@ -1875,8 +1715,6 @@ fn calc_dropped() {
     CALC_DROPPED.with(|c| c.set(true));
 }
 
-/// A `calc()` over `<length-percentage>`s folded to its LINEAR form, `(fraction, px)` meaning
-/// `fraction × basis + px`, or `None` when it is not linear in the basis.
 fn calc_linear(c: &lightningcss::values::calc::Calc<LengthPercentage>) -> Option<(f32, f32)> {
     use lightningcss::values::calc::{Calc, MathFunction};
     match c {
@@ -1946,7 +1784,6 @@ fn max_size_length(v: &lightningcss::properties::size::MaxSize) -> Option<Length
     }
 }
 
-/// A circle of one length goes in gpui's `corner_radii`.
 fn corner(
     length: &mut Option<AbsoluteLength>,
     relative: &mut Option<Option<gpui::VnCornerRadius>>,
@@ -1984,8 +1821,6 @@ fn gap_definite(v: &lightningcss::properties::align::GapValue) -> Option<Definit
     }
 }
 
-/// The cross-axis alignment keywords, shared by `align-items` / `align-self` (gpui aliases
-/// `AlignSelf = AlignItems`).
 fn self_position(v: &SelfPosition) -> gpui::AlignItems {
     use gpui::AlignItems as G;
     match v {
@@ -2136,8 +1971,6 @@ fn grid_line(l: &lightningcss::properties::grid::GridLine<'_>) -> Option<gpui::G
     }
 }
 
-/// `outline` and its longhands accumulate into one `Outline`, so `outline: 2px solid transparent;
-/// outline-offset: 2px` (Tailwind's `outline-none`) is a single ring.
 fn outline_mut(r: &mut StyleRefinement) -> &mut gpui::Outline {
     r.vn_outline.get_or_insert(gpui::Outline {
         width: px(0.0),
@@ -2147,7 +1980,6 @@ fn outline_mut(r: &mut StyleRefinement) -> &mut gpui::Outline {
     })
 }
 
-/// A list marker, as `list-style-type` names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ListMarker {
     None,
@@ -2163,7 +1995,6 @@ pub enum ListMarker {
 }
 
 impl ListMarker {
-    /// The marker string for the `n`-th item (1-based), or `None` for no marker.
     pub fn render(self, n: usize) -> Option<String> {
         fn alpha(mut n: usize, upper: bool) -> String {
             let base = if upper { b'A' } else { b'a' };
@@ -2238,7 +2069,6 @@ fn list_marker(style: &lightningcss::properties::list::ListStyleType<'_>) -> Opt
     }
 }
 
-/// The properties an element wrote `currentColor` into, as a bitmask.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CurrentColorTargets(pub u16);
 
@@ -2267,12 +2097,10 @@ fn cycled<T: Copy>(list: Option<&Rc<Vec<T>>>, i: usize) -> Option<T> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BackgroundUrl {
-    /// Position in the `background-image` list, layer 0 being the top one.
     pub index: u16,
     pub url: Rc<str>,
 }
 
-/// One layer's `background-size`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BackgroundSize {
     Explicit(Option<TileLength>, Option<TileLength>),
@@ -2280,7 +2108,6 @@ pub enum BackgroundSize {
     Contain,
 }
 
-/// One layer of [`Extras::resolve_background_stack`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum PaintLayer {
     Gradient(gpui::Background),
@@ -2294,7 +2121,6 @@ pub enum PaintLayer {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BackgroundLayer {
-    /// Position in the `background-image` list, layer 0 being the top one.
     pub index: u16,
     pub background: gpui::Background,
 }
@@ -2331,16 +2157,12 @@ struct Stop {
     position: Option<StopPosition>,
 }
 
-/// CSS lets an author write either, and neither can be converted into the other here: the line's
-/// length is a function of the box, which only the shader knows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum StopPosition {
     Fraction(f32),
     Pixels(f32),
 }
 
-/// Missing positions interpolate between anchors; a run whose anchors have different units cannot,
-/// so it spreads evenly by index.
 fn resolve_stop_positions(stops: &mut [Stop]) {
     let n = stops.len();
     if n == 0 {
@@ -2394,8 +2216,6 @@ fn resolve_stop_positions(stops: &mut [Stop]) {
     }
 }
 
-/// The ramp gpui evaluates is piecewise linear, so the hint becomes the extra stop it describes:
-/// the midpoint colour, AT the hint.
 fn hint_stop(before: Hsla, after: Hsla, position: StopPosition) -> Stop {
     Stop {
         color: mix_hsla(before, after),
@@ -2443,8 +2263,6 @@ fn stop_position_angle(
     }
 }
 
-/// `None` means a colour did not resolve to a concrete value, which the caller reports as an
-/// unresolved colour rather than painting a guess.
 fn collect_stops<P: Clone>(
     items: &[lightningcss::values::gradient::GradientItem<P>],
     position_of: &dyn Fn(&P) -> Option<StopPosition>,
@@ -2457,8 +2275,6 @@ fn collect_stops<P: Clone>(
         match item {
             GradientItem::ColorStop(s) => {
                 let color = color(&s.color)?;
-                // A hint only means something between two stops, so it is resolved once the stop
-                // after it arrives.
                 for hint in pending_hints.drain(..) {
                     if let Some(before) = stops.last().map(|s: &Stop| s.color) {
                         stops.push(hint_stop(before, color, hint));
@@ -2642,8 +2458,6 @@ fn webkit_mask_compositing(keyword: &str) -> MaskCompositing {
     }
 }
 
-/// Says once that a mask is not applied, for the declaration just recorded in `x` (one rule's
-/// declarations, not the element's cascade).
 fn advise_mask(x: &Extras, diagnostics: &mut Vec<String>) {
     let unsupported = x.mask_images == Some(MaskImages::Other)
         || x.mask_composite == Some(MaskCompositing::Other)
@@ -2660,8 +2474,6 @@ fn advise_mask(x: &Extras, diagnostics: &mut Vec<String>) {
     }
 }
 
-/// Maps a `background-image` list onto [`Extras::background_images`], keeping each gpui background
-/// next to the CSS layer index that placed it.
 fn collect_background_images<'a>(
     images: impl Iterator<Item = &'a lightningcss::values::image::Image<'a>>,
     x: &mut Extras,
@@ -2733,8 +2545,6 @@ fn background_position(
     )
 }
 
-/// A percentage aligns the tile inside the space it leaves — `50%` centres it — so it stays a
-/// fraction all the way to the shader, which is the only place that knows the box and the tile.
 fn position_component<S: Copy>(
     component: &lightningcss::values::position::PositionComponent<S>,
     horizontal: bool,
@@ -2765,8 +2575,6 @@ where
                 Some(v) if near => absolute(v)
                     .map(TileLength::Pixels)
                     .unwrap_or(TileLength::Fraction(0.0)),
-                // The near-edge spellings and every percentage form are exact; this is the one that
-                // is not.
                 Some(_) => {
                     warn_once(
                         diagnostics,
@@ -2785,8 +2593,6 @@ where
     }
 }
 
-/// Lets [`position_component`] ask a horizontal or vertical side keyword the one question it has:
-/// is this the edge offsets are measured FROM?
 pub(crate) trait PositionSide {
     fn is_near_edge(self) -> bool;
 }
@@ -2803,7 +2609,6 @@ impl PositionSide for lightningcss::values::position::VerticalPositionKeyword {
     }
 }
 
-/// Tiling is applied by the caller, since size/position/repeat can arrive from separate rules.
 fn gradient_layer(
     img: &lightningcss::values::image::Image<'_>,
     diagnostics: &mut Vec<String>,
@@ -2826,8 +2631,6 @@ fn gradient_layer(
         Image::None => return None,
     };
 
-    // A `repeating-*` gradient restarts its ramp every period instead of clamping at the ends;
-    // everything else about it is identical, which is why the two forms share every arm below.
     let (background, stops) = match gradient {
         Gradient::Linear(l) | Gradient::RepeatingLinear(l) => {
             let stops = collect_stops(&l.items, &stop_position_lp)?;
@@ -2932,7 +2735,6 @@ fn gradient_layer(
     Some((layers, key))
 }
 
-/// Records an advisory once; repeats would bury every other message.
 pub(crate) fn once(diagnostics: &mut Vec<String>, msg: String) {
     if !diagnostics.iter().any(|d| *d == msg) {
         diagnostics.push(msg);
@@ -2947,7 +2749,6 @@ fn warn_once(diagnostics: &mut Vec<String>, msg: &str) {
     once(diagnostics, msg.to_string());
 }
 
-/// [`color`] only understands a resolved RGBA.
 pub(crate) fn apply_current_color(
     r: &mut StyleRefinement,
     targets: CurrentColorTargets,
@@ -3022,8 +2823,6 @@ fn unresolved_color(diagnostics: &mut Vec<String>, what: &str) {
 }
 
 
-// Declared here rather than in lib.rs so the whole effect surface — the module, its interception in
-// the `Custom(_)` branch below, and nothing else — lands in one place.
 #[path = "effect.rs"]
 pub(crate) mod effect;
 
@@ -3048,11 +2847,8 @@ fn object_fit(value: &lightningcss::properties::custom::TokenList, diagnostics: 
     }
 }
 
-/// The custom-property name that carries a caption-button role.
 pub(crate) const WINDOW_CONTROL: &str = "--window-control";
 
-/// The single keyword a token list carries, or `None` when it carries zero or more than one (a
-/// browser drops a multi-keyword declaration on any of these properties).
 fn single_ident<'a>(
     value: &'a lightningcss::properties::custom::TokenList<'_>,
     what: &str,
@@ -3074,8 +2870,6 @@ fn single_ident<'a>(
     first
 }
 
-/// `clip-path` as gpui's rounded content mask carries it (`gpui::VnClipPath`), or `None` (advised)
-/// for a shape the mask cannot be.
 fn clip_path(v: &CssClipPath<'_>, diagnostics: &mut Vec<String>) -> Option<gpui::VnClipPath> {
     use gpui::{VnClipBox, VnClipPath, VnShapeRadius};
     use lightningcss::properties::masking::GeometryBox as G;
@@ -3178,7 +2972,6 @@ fn clip_path_polygon(polygon: &lightningcss::values::shape::Polygon) -> Option<V
         .collect()
 }
 
-/// `clip-path: path([<fill-rule>,]? <string>) <geometry-box>?`, which lightningcss leaves unparsed.
 fn clip_path_path(
     tokens: &lightningcss::properties::custom::TokenList<'_>,
 ) -> Option<Result<gpui::VnClipPath, String>> {
@@ -3201,7 +2994,6 @@ fn clip_path_path(
                 });
             }
             TokenOrValue::Token(Token::WhiteSpace(_)) => {}
-            // Another function, or a box before the shape: not ours.
             _ if path.is_none() => return None,
             _ => return Some(Err("unexpected text after `path()`".into())),
         }
@@ -3266,8 +3058,6 @@ fn shape_center(position: &lightningcss::values::position::Position) -> Option<[
     Some([component(&position.x)?, component(&position.y)?])
 }
 
-/// `true` when a `clip: rect(…)` names a zero-area rectangle — the screen-reader-only idiom, which
-/// clips the box away entirely.
 fn clip_rect_is_empty(value: &lightningcss::properties::custom::TokenList<'_>) -> bool {
     use lightningcss::properties::custom::{Token, TokenOrValue};
 
@@ -3306,8 +3096,6 @@ fn clip_rect_is_empty(value: &lightningcss::properties::custom::TokenList<'_>) -
             || (numbers[3] - numbers[1]).abs() < f32::EPSILON)
 }
 
-/// Those are handled by the cascade (or, for `inherit`, by not writing the field at all — see
-/// `channel`), so a property-specific parser should skip rather than reject them.
 fn is_css_wide_keyword(value: &lightningcss::properties::custom::TokenList<'_>) -> bool {
     single_ident_raw(value).is_some_and(|v| {
         matches!(
@@ -3377,7 +3165,6 @@ fn font_features(
         return Some(gpui::FontFeatures(std::sync::Arc::new(pairs)));
     }
 
-    // A tag with nothing after it is `1`.
     let mut pending: Option<String> = None;
     for t in value.0.iter() {
         match t {
@@ -3464,7 +3251,6 @@ enum ContentValue {
     Unsupported(String),
 }
 
-/// `content: "…"` — the only form that generates a box here.
 fn content_string(value: &lightningcss::properties::custom::TokenList<'_>) -> ContentValue {
     use lightningcss::properties::custom::{Token, TokenOrValue};
     let mut out = String::new();
@@ -3533,7 +3319,6 @@ fn single_number(value: &lightningcss::properties::custom::TokenList<'_>) -> Opt
     found
 }
 
-/// All three spellings and both value vocabularies are accepted silently, as Chromium does.
 fn window_drag(
     property: &str,
     value: &lightningcss::properties::custom::TokenList,
@@ -3595,7 +3380,6 @@ fn scrollbar_color(
     if matches!(tokens.as_slice(), [TokenOrValue::Token(Token::Ident(id))] if id.as_ref().eq_ignore_ascii_case("auto")) {
         return None;
     }
-    // Unknown-property tokens can retain hsl()/rgb() functions after var() substitution.
     let property = Property::Custom(CustomProperty {
         name: CustomPropertyName::Unknown(lightningcss::values::ident::Ident("scrollbar-color".into())),
         value: value.clone(),
@@ -3658,8 +3442,6 @@ fn window_control(
     }
 }
 
-/// The sizing properties (width/height and their min/max, inset, margin, padding, gap, flex-basis,
-/// line-height) take any LINEAR calc(), percentage or not (`DefiniteLength::Calc`).
 fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mut Vec<String>) {
     CALC_DROPPED.with(|c| c.set(false));
     apply_property(p, r, x, diagnostics);
@@ -3829,7 +3611,6 @@ fn apply_property(
                 r.gap.width = Some(v);
             }
         }
-        // Tailwind `gap-y-*` / `gap-x-*` emit the longhands, never the shorthand.
         RowGap(v) => r.gap.height = gap_definite(v),
         ColumnGap(v) => r.gap.width = gap_definite(v),
         Width(v) => r.size.width = size_length(v),
@@ -3858,8 +3639,6 @@ fn apply_property(
         MarginRight(v) => r.margin.right = lpa_length(v),
         MarginBottom(v) => r.margin.bottom = lpa_length(v),
         MarginLeft(v) => r.margin.left = lpa_length(v),
-        // The logical spellings resolve against `horizontal-tb` + `ltr`, the only writing mode and
-        // direction we lay out in: inline-start is the left side, block-start the top.
         PaddingInline(v) => {
             r.padding.left = lp_definite_of_lpa(&v.inline_start);
             r.padding.right = lp_definite_of_lpa(&v.inline_end);
@@ -3932,8 +3711,6 @@ fn apply_property(
                         None
                     }
                     P::Side { side, offset: None } => keyword(side).map(TransformLength::Fraction),
-                    // `right 10px` — a keyword plus an offset, which needs the box to resolve into
-                    // one number.
                     P::Side { .. } => None,
                 }
             }
@@ -4054,8 +3831,6 @@ fn apply_property(
                 set_presentation(Rc::make_mut(list), name, value.into());
             }
         }
-        // taffy is border-box and only border-box, so `border-box` is not a divergence — it is the
-        // model.
         BoxSizing(v, _) => {
             use lightningcss::properties::size::BoxSizing as BS;
             if matches!(v, BS::ContentBox) {
@@ -4110,8 +3885,6 @@ fn apply_property(
             r.visibility = Some(match v {
                 V::Visible => gpui::Visibility::Visible,
                 V::Hidden => gpui::Visibility::Hidden,
-                // `collapse` equals `hidden` except for table rows/columns and flex items; there
-                // are no tables here.
                 V::Collapse => gpui::Visibility::Hidden,
             });
         }
@@ -4140,8 +3913,6 @@ fn apply_property(
             None => unresolved_color(diagnostics, "background-color"),
         },
         Background(layers) => {
-            // Per CSS the colour lives on the LAST layer and paints UNDER every image layer, which
-            // is exactly the relationship between gpui's `background` and its `background_layers`.
             if let Some(last) = layers.last() {
                 if let Some(c) = color(&last.color) {
                     r.background = Some(gpui::Fill::Color(c.into()));
@@ -4215,8 +3986,6 @@ fn apply_property(
         BackgroundRepeat(list) => {
             x.background_repeat = Some(Rc::new(list.iter().map(background_repeat).collect()));
         }
-        // No scrolling viewport to pin a `fixed` background to, and the background always fills the
-        // padding box.
         BackgroundAttachment(_) | BackgroundOrigin(_) => {}
         BackgroundClip(v, _) => {
             use lightningcss::properties::background::BackgroundClip as BC;
@@ -4230,7 +3999,6 @@ fn apply_property(
                 );
             }
         }
-        // Each property records its part, because they cascade apart.
         Mask(layers, _) => {
             x.mask_images = Some(mask_images(layers.iter().map(|l| &l.image)));
             x.mask_clips = Some(mask_clips(layers.iter().map(|l| &l.clip)));
@@ -4247,7 +4015,6 @@ fn apply_property(
             x.mask_composite = Some(list.first().map_or(MaskCompositing::Add, |c| mask_compositing(*c)));
             advise_mask(x, diagnostics);
         }
-        // Typed, in case a lightningcss release parses it.
         WebKitMaskComposite(list) => {
             use lightningcss::traits::ToCss;
             let first = list.first().and_then(|c| c.to_css_string(Default::default()).ok());
@@ -4301,7 +4068,6 @@ fn apply_property(
         BorderRightWidth(v) => r.border_widths.right = border_width_px(v).map(|w| px(w).into()),
         BorderBottomWidth(v) => r.border_widths.bottom = border_width_px(v).map(|w| px(w).into()),
         BorderLeftWidth(v) => r.border_widths.left = border_width_px(v).map(|w| px(w).into()),
-        // The top goes last so its dashed or solid is the one kept.
         BorderStyle(v) => {
             set_border_style(r, v.left, SIDE_LEFT, diagnostics);
             set_border_style(r, v.bottom, SIDE_BOTTOM, diagnostics);
@@ -4337,7 +4103,6 @@ fn apply_property(
             }
             x.radius_inherit.write(wrote, false);
         }
-        // `rounded-t` / `rounded-tl-lg` never use the shorthand.
         BorderTopLeftRadius(v, _) => {
             if corner(&mut r.corner_radii.top_left, &mut r.vn_corner_radii.top_left, v) {
                 x.radius_inherit.write(RadiusInherit::TOP_LEFT, false);
@@ -4358,8 +4123,6 @@ fn apply_property(
                 x.radius_inherit.write(RadiusInherit::BOTTOM_LEFT, false);
             }
         }
-        // `grid-cols-N` / `grid-rows-N` -> `repeat(N, minmax(0, 1fr))`, which is exactly (and only)
-        // what gpui's GridTemplate models.
         GridTemplateColumns(v) => match grid_template(v) {
             Some(t) => r.grid_cols = Some(t),
             None => match grid_tracks(v) {
@@ -4394,8 +4157,6 @@ fn apply_property(
                 ),
             },
         },
-        // Placement. gpui carries a `GridLocation` (a start..end pair per axis) and taffy resolves
-        // it; only NAMED lines and areas are out of reach.
         GridColumnStart(l) | GridColumnEnd(l) | GridRowStart(l) | GridRowEnd(l) => {
             let Some(placement) = grid_line(l) else {
                 unsupported(
@@ -4494,8 +4255,6 @@ fn apply_property(
                 ),
             }
         }
-        // taffy honours the inline axis too; gpui had only ever exposed the block one
-        // (`align-items`).
         JustifyItems(v) => {
             use lightningcss::properties::align::JustifyItems as J;
             match v {
@@ -4506,8 +4265,6 @@ fn apply_property(
                     r.vn_justify_items = Some(self_position(value));
                 }
                 J::Legacy(_) => unsupported(diagnostics, "justify-items: legacy"),
-                // `justify-items: left | right` are the physical spellings of start/end in a
-                // left-to-right writing mode, which is the only one taffy lays out.
                 J::Left { .. } => r.vn_justify_items = Some(gpui::AlignItems::FlexStart),
                 J::Right { .. } => r.vn_justify_items = Some(gpui::AlignItems::FlexEnd),
             }
@@ -4570,7 +4327,6 @@ fn apply_property(
                     x.outline.width = Some(w);
                 }
                 match &o.color {
-                    // Resolved after the cascade, like every other `currentColor`.
                     CssColor::CurrentColor => {
                         x.current_color.0 |= CurrentColorTargets::OUTLINE;
                         x.outline.color = Some(None);
@@ -4823,8 +4579,6 @@ fn apply_property(
             r.mouse_cursor = Some(mapped);
         }
         Filter(list, _) => apply_filter(list, x, diagnostics),
-        // `backdrop-filter` — `blur()` is the one filter function the renderer implements (gpui
-        // `BackdropBlurRect`, D3D11 Dual-Kawase pyramid).
         BackdropFilter(list, _) => apply_backdrop_filter(list, r, diagnostics),
         Custom(c) => match &c.name {
             // `--shading` is the ONE custom property vue-native interprets: a GPU effect has no web
@@ -4837,9 +4591,6 @@ fn apply_property(
                     r.vn_effect = Some(spec);
                 }
             }
-            // `--window-control` — the second interpreted custom property; see [`WindowControl`]
-            // for why the caption-button role is spelled as one rather than as a `window-drag`
-            // value.
             lightningcss::properties::custom::CustomPropertyName::Custom(name)
                 if name.0.as_ref() == WINDOW_CONTROL =>
             {
@@ -4847,11 +4598,7 @@ fn apply_property(
                     x.window_control = Some(c);
                 }
             }
-            // Every other `--x` travels the custom-property channel (see `channel`) and never
-            // reaches the mapper.
             lightningcss::properties::custom::CustomPropertyName::Custom(_) => {}
-            // Not a custom property at all — an unknown/vendor-prefixed one (`-webkit-line-clamp`),
-            // which is a real "we do not map this".
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "object-fit" =>
             {
@@ -4859,9 +4606,6 @@ fn apply_property(
                     x.object_fit = Some(fit);
                 }
             }
-            // `window-drag` is a REAL CSS property (CSS Basic User Interface 4, CSSWG 2026-01-21)
-            // that lightningcss has no typed representation for yet, so it lands in the same bucket
-            // `object-fit` does.
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(
                     name.0.as_ref(),
@@ -4872,8 +4616,6 @@ fn apply_property(
                     x.window_drag = Some(d);
                 }
             }
-            // `pointer-events` is a real CSS property that lightningcss has no typed representation
-            // for either.
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "pointer-events" =>
             {
@@ -4928,7 +4670,6 @@ fn apply_property(
             {
                 match single_number(&c.value) {
                     Some(n) if n >= 1.0 => r.text.line_clamp = Some(n as usize),
-                    // `line-clamp: none` — a refinement cannot spell "clear".
                     _ => unsupported(
                         diagnostics,
                         "line-clamp: none — cannot undo an earlier clamp",
@@ -4989,8 +4730,6 @@ fn apply_property(
                     );
                 }
             }
-            // OpenType FEATURES reach the shaper for real: gpui's `Font` carries a `FontFeatures`
-            // tag/value list and DirectWrite applies it as an `IDWriteTypography` over the run.
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(
                     name.0.as_ref(),
@@ -5001,9 +4740,6 @@ fn apply_property(
                 ) =>
             {
                 match font_features(&c.value, name.0.as_ref()) {
-                    // `normal` and the CSS-wide keywords write nothing: the first is the initial
-                    // value (no features) and the rest mean "take what you would have taken
-                    // anyway".
                     Some(features) if features.0.is_empty() => {}
                     Some(features) => {
                         let mut pairs = r
@@ -5060,8 +4796,6 @@ fn apply_property(
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(name.0.as_ref(), "touch-action" | "scroll-behavior") => {}
-            // `scrollbar-width` / `scrollbar-color` are real CSS properties lightningcss has no
-            // typed representation for.
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "scrollbar-width" =>
             {
@@ -5076,7 +4810,6 @@ fn apply_property(
                     x.scrollbar_color = Some(pair);
                 }
             }
-            // `overscroll-behavior` — whether a wheel this box cannot use reaches its ancestors.
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(
                     name.0.as_ref(),
@@ -5089,8 +4822,6 @@ fn apply_property(
             {
                 let property = name.0.as_ref();
                 if let Some(b) = overscroll(property, &c.value, diagnostics) {
-                    // The logical spellings resolve against `horizontal-tb`, the only writing mode
-                    // we lay out in.
                     match property {
                         "overscroll-behavior-x" | "overscroll-behavior-inline" => {
                             x.overscroll_x = Some(b)
@@ -5105,7 +4836,6 @@ fn apply_property(
                     }
                 }
             }
-            // `isolation` — a real property lightningcss has no typed representation for.
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "isolation" =>
             {
@@ -5169,8 +4899,6 @@ fn apply_property(
                 );
             }
         },
-        // The generic "property not mapped (v1)" is true but useless; each of these says WHY and,
-        // where there is one, names the thing to write instead.
         LetterSpacing(v) => {
             if let Some(px) = spacing_px(v) {
                 r.text.letter_spacing = Some(gpui::px(px));
@@ -5280,8 +5008,6 @@ fn apply_property(
                 r.vn_clip_path = Some(clip);
             }
         }
-        // The line breaker's three CSS Text 3 properties, inherited through gpui's text style like
-        // `white-space` (the fork's `TextWrap`).
         WordWrap(v) | OverflowWrap(v) => {
             use lightningcss::properties::text::OverflowWrap as OW;
             r.text.overflow_wrap = Some(match v {
@@ -5299,8 +5025,6 @@ fn apply_property(
                 WB::BreakWord => gpui::WordBreak::BreakWord,
             });
         }
-        // `manual` (the initial value) breaks after a soft hyphen and shows a hyphen there; `none`
-        // does not break there.
         Hyphens(v, _) => {
             use lightningcss::properties::text::Hyphens as H;
             r.text.hyphens = Some(match v {
@@ -5316,8 +5040,6 @@ fn apply_property(
                 }
             });
         }
-        // `scroll-margin` / `scroll-padding` only shift where `scrollIntoView` and scroll snapping
-        // land.
         ScrollMarginTop(_) | ScrollMarginBottom(_) | ScrollMarginLeft(_) | ScrollMarginRight(_)
         | ScrollMargin(_) | ScrollMarginBlock(_) | ScrollMarginInline(_)
         | ScrollMarginBlockStart(_) | ScrollMarginBlockEnd(_) | ScrollMarginInlineStart(_)
@@ -5336,7 +5058,6 @@ fn apply_property(
         // Reaching here means the value stayed unparsed after substitution (unbalanced `var(` or an
         // invalid token stream): a defensive advisory.
         Unparsed(u) => {
-            // It is a valid reset, not an unresolved var().
             let reset = initial_inset_sides(u.property_id.name(), &u.value);
             if reset != 0 {
                 if reset & 0b0001 != 0 {
@@ -5602,7 +5323,6 @@ fn apply_transform(
         once(diagnostics, format!("`transform` supports ordered 2D translate(), rotate(), scale(), skew(), matrix() and `transform-origin` at paint time — dropped {}", dropped.join(", ")));
     }
 }
-/// Serializes the same affine transform for CSSOM and WAAPI commitStyles.
 pub fn transform_css(spec: TransformSpec) -> String {
     if spec.is_identity() { return "none".into(); }
     let mut parts = Vec::new();
@@ -5623,8 +5343,6 @@ pub fn transform_css(spec: TransformSpec) -> String {
     else if spec.scale != (1.0, 1.0) { parts.push(format!("scale({}, {})", spec.scale.0, spec.scale.1)); }
     parts.join(" ")
 }
-/// Only `blur()` is implemented. `none` maps to a 0px radius, not "undeclared", so it cancels an
-/// earlier rule's blur.
 fn apply_backdrop_filter(
     list: &lightningcss::properties::effects::FilterList,
     r: &mut StyleRefinement,
@@ -5676,8 +5394,6 @@ fn apply_backdrop_filter(
     }
 }
 
-/// `filter: none` records `Some(0.0)` for the same reason as `backdrop-filter: none`: "declared as
-/// nothing" must beat an earlier rule.
 fn apply_filter(
     list: &lightningcss::properties::effects::FilterList,
     x: &mut Extras,
@@ -5743,7 +5459,6 @@ fn apply_filter(
     }
 }
 
-/// One `drop-shadow()` argument list, in px.
 fn drop_shadow_of(shadow: &lightningcss::properties::effects::DropShadow) -> Option<DropShadow> {
     Some(DropShadow {
         dx: css_length_px(&shadow.x_offset)?,
@@ -5755,15 +5470,12 @@ fn drop_shadow_of(shadow: &lightningcss::properties::effects::DropShadow) -> Opt
     })
 }
 
-// `none`/`hidden` compute `border-width` to 0 (what makes `border-none` render no border).
 const SIDE_TOP: u8 = 1;
 const SIDE_RIGHT: u8 = 2;
 const SIDE_BOTTOM: u8 = 4;
 const SIDE_LEFT: u8 = 8;
 const SIDES_ALL: u8 = SIDE_TOP | SIDE_RIGHT | SIDE_BOTTOM | SIDE_LEFT;
 
-/// `none` and `hidden` are a zero width on those sides only: `border-bottom: none` over `border:
-/// 1px solid` leaves the other three sides drawn.
 fn set_border_style(r: &mut StyleRefinement, s: LineStyle, sides: u8, diagnostics: &mut Vec<String>) {
     if matches!(s, LineStyle::None | LineStyle::Hidden) {
         let zero: AbsoluteLength = px(0.0).into();
@@ -5809,8 +5521,6 @@ fn overflow(k: OverflowKeyword) -> Overflow {
     }
 }
 
-/// The refinement decides and the keyword only refines, so a `:hover` keyword folded into the one
-/// `Extras` cannot turn the base's `hidden` into `scroll`.
 fn overflow_keyword(axis: Option<Overflow>, declared: Option<OverflowKeyword>) -> OverflowKeyword {
     use OverflowKeyword as K;
     match axis {
@@ -5823,8 +5533,6 @@ fn overflow_keyword(axis: Option<Overflow>, declared: Option<OverflowKeyword>) -
     }
 }
 
-/// As in a browser, one non-visible axis makes the box a scroll container on both. Runs on the
-/// folded base after the cascade, since axes may come from different rules.
 pub(crate) fn compute_overflow(r: &mut StyleRefinement, x: &mut Extras) {
     use OverflowKeyword as K;
     let kx = overflow_keyword(r.overflow.x, x.overflow_x);
@@ -5848,8 +5556,6 @@ pub(crate) fn compute_overflow(r: &mut StyleRefinement, x: &mut Extras) {
 }
 
 impl Extras {
-    /// `getComputedStyle` overflow for a node: `auto` / `clip` where declared, not the `scroll` /
-    /// `hidden` gpui folds them into.
     pub fn overflow_names(&self, base: &StyleRefinement) -> [&'static str; 2] {
         let name = |k: OverflowKeyword| match k {
             OverflowKeyword::Visible => "visible",
@@ -5884,7 +5590,6 @@ fn prop_name(p: &Property) -> String {
 mod tests {
     use super::*;
 
-    /// Parses a declaration list the way a rule body would be parsed.
     fn map(body: &str) -> (StyleRefinement, Vec<String>) {
         let mut diagnostics = Vec::new();
         let r = parse_inline(body, &mut diagnostics);
@@ -5937,7 +5642,6 @@ mod tests {
 
     #[test]
     fn visible_beside_a_scrolling_axis_computes_to_auto() {
-        // Tailwind's `overflow-y-auto` alone is a scroll container on both axes in a browser.
         let (r, names) = computed_overflow("overflow-y: auto");
         assert_eq!(names, ["auto", "auto"]);
         assert_eq!(r.overflow.x, Some(Overflow::Scroll), "x scrolls too, it is not just clipped");
@@ -5973,7 +5677,6 @@ mod tests {
 
     #[test]
     fn gap_longhands_map_to_the_matching_axis() {
-        // CSS row-gap is the VERTICAL gap -> gpui's gap.height.
         let r = clean("row-gap: 4px; column-gap: 8px");
         assert_eq!(r.gap.height, Some(px(4.0).into()));
         assert_eq!(r.gap.width, Some(px(8.0).into()));
@@ -5993,7 +5696,6 @@ mod tests {
 
     #[test]
     fn border_style_none_computes_the_widths_to_zero() {
-        // Exactly what a browser does — and what makes `border-none` work.
         let r = clean("border: 3px solid red; border-style: none");
         let zero: AbsoluteLength = px(0.0).into();
         assert_eq!(r.border_widths.top, Some(zero));
@@ -6002,8 +5704,6 @@ mod tests {
         assert_eq!(r.border_widths.left, Some(zero));
     }
 
-    /// `none` on one side is that side's width only: a card that drops its bottom border keeps the
-    /// other three.
     #[test]
     fn border_style_none_on_one_side_leaves_the_others() {
         let zero: AbsoluteLength = px(0.0).into();
@@ -6071,7 +5771,6 @@ mod tests {
             Some(Some(gpui::VnCornerRadius { x: px(10.).into(), y: px(20.).into() }))
         );
 
-        // A circle of one length stays on gpui's own field.
         let r = clean("border-radius: 6px / 6px");
         assert_eq!(r.corner_radii.top_right, Some(px(6.).into()));
         assert_eq!(r.vn_corner_radii.top_right, Some(None));
@@ -6113,7 +5812,6 @@ mod tests {
             clean("align-content: space-between").align_content,
             Some(gpui::AlignContent::SpaceBetween)
         );
-        // `self-auto` cannot be expressed as a refinement — it must say so.
         let (r, d) = map("align-self: auto");
         assert_eq!(r.align_self, None);
         assert!(d.iter().any(|m| m.contains("align-self")), "{d:?}");
@@ -6133,8 +5831,6 @@ mod tests {
         assert_eq!(r.grid_rows.map(|t| t.repeat), Some(2));
     }
 
-    /// An ARBITRARY track list — the shape `grid-cols-[1fr_auto]` compiles to, and the one gpui's
-    /// `repeat(N, …)` shorthand cannot express.
     #[test]
     fn an_arbitrary_track_list_becomes_an_explicit_track_list() {
         use gpui::{GridTrack, GridTrackSize as G};
@@ -6185,8 +5881,6 @@ mod tests {
         );
         assert_eq!(r.vn_grid_rows_auto, Some(GridAutoRepeat { fit: true, start: 1, len: 2 }));
 
-        // A plain list says "no auto run" out loud, so an earlier rule's run cannot survive it in
-        // the cascade.
         assert_eq!(
             clean("grid-template-columns: 1fr auto").vn_grid_cols_auto,
             Some(GridAutoRepeat { fit: false, start: 0, len: 0 })
@@ -6207,7 +5901,6 @@ mod tests {
         }
     }
 
-    /// Placement: line numbers and `span N` reach taffy; a NAMED line does not.
     #[test]
     fn grid_placement_maps_lines_and_spans() {
         use gpui::GridPlacement as P;
@@ -6301,8 +5994,6 @@ mod tests {
         assert_eq!(inline.extras.visibility_hidden, None);
     }
 
-    /// Custom properties are STORED, not advised about: they leave the mapper on their own channel
-    /// and land in the element's [`Vars`] map.
     #[test]
     fn custom_properties_travel_their_own_channel() {
         let mut d = Vec::new();
@@ -6322,8 +6013,6 @@ mod tests {
         assert!(inline.refinement.is_some_and(|r| r.text.color.is_some()));
     }
 
-    /// A `var()`-composed value is deferred, not dropped: it rides the dynamic channel as text and
-    /// is substituted per element.
     #[test]
     fn a_var_composed_value_is_deferred_to_computed_value_time() {
         let mut d = Vec::new();
@@ -6354,8 +6043,6 @@ mod tests {
         assert_eq!(shadows[0].blur_radius, px(2.0));
     }
 
-    /// An unresolvable reference drops the declaration — the CSS "invalid at computed-value time"
-    /// rule — and does so SILENTLY, because that is exactly what a browser does with it.
     #[test]
     fn an_unresolvable_var_drops_the_declaration_silently() {
         let mut d = Vec::new();
@@ -6366,7 +6053,6 @@ mod tests {
         assert!(d.is_empty(), "{d:?}");
     }
 
-    /// The OTHER three failures are author mistakes rather than a design, so they still speak.
     #[test]
     fn a_var_cycle_is_still_an_advisory() {
         let mut d = Vec::new();
@@ -6393,8 +6079,6 @@ mod tests {
         assert_eq!(d.len(), 1, "{d:?}");
     }
 
-    /// `currentColor` is the element's computed `color`, which is only known after the cascade — so
-    /// the mapper RECORDS the target and `Engine::compute_node` substitutes.
     #[test]
     fn currentcolor_is_recorded_for_substitution_after_the_cascade() {
         let (r, x, d) = map_full("background-color: currentColor");
@@ -6412,8 +6096,6 @@ mod tests {
         assert!(d.is_empty(), "{d:?}");
     }
 
-    /// `clamp()` whose MIN is above its MAX resolves to MIN (`f32::clamp` panics on it), and a
-    /// division by zero is no length at all.
     #[test]
     fn calc_that_is_not_a_finite_length_does_not_reach_the_layout() {
         let (r, _) = map("width: clamp(2rem, 5px, 1rem)");
@@ -6459,14 +6141,12 @@ mod tests {
             clean("padding-top: calc(10% - 1px)").padding.top,
             Some(DefiniteLength::Calc { fraction: 0.1, pixels: px(-1.0) })
         );
-        // The percentages cancel: a plain length, not a calc.
         assert_eq!(
             clean("width: calc(50% - 50% + 3px)").size.width,
             Some(Length::Definite(px(3.0).into()))
         );
     }
 
-    /// What the layout cannot take is dropped — and SAID, which it was not.
     #[test]
     fn a_calc_that_cannot_be_laid_out_is_advised() {
         let advised = |body: &str, property: &str| {
@@ -6478,9 +6158,7 @@ mod tests {
         };
         advised("width: min(100%, 10px)", "width");
         advised("left: clamp(0px, 50%, 100px)", "left");
-        // A property whose percentage is resolved before layout here.
         advised("background-position: calc(100% - 4px) 0", "background-position");
-        // A radius resolves at paint, but only a linear calc().
         advised("border-radius: max(50%, 10px)", "border-radius");
         let (r, _) = map("width: min(100%, 10px)");
         assert_eq!(r.size.width, None);
@@ -6506,7 +6184,6 @@ mod tests {
         ] {
             assert_eq!(clean(&format!("cursor: {value}")).mouse_cursor, Some(shape), "{value}");
         }
-        // Custom brush cursors must at least honour their specified fallback.
         assert_eq!(clean("cursor: url(brush.svg) 8 8, crosshair").mouse_cursor, Some(C::Crosshair));
         let (style, diagnostics) = map("cursor: wait");
         assert_eq!(style.mouse_cursor, Some(C::Arrow));
@@ -6557,7 +6234,6 @@ mod tests {
         for (body, none) in [
             ("appearance: none", Some(true)),
             ("-webkit-appearance: none", Some(true)),
-            // Gecko's prefix, which Chromium does not read either.
             ("-moz-appearance: none", None),
             ("appearance: auto", Some(false)),
             ("appearance: menulist-button", Some(false)),
@@ -6583,8 +6259,6 @@ mod tests {
         assert!(!x.may_defer());
     }
 
-    /// Same for `sticky`: the flag is recorded, the advisory belongs to the renderer, which is the
-    /// only side that can see whether anything above the element scrolls.
     #[test]
     fn sticky_is_relative_and_records_the_flag() {
         let (x, d) = extras("position: sticky");
@@ -6594,8 +6268,6 @@ mod tests {
         assert_eq!(x.sticky, Some(false));
     }
 
-    /// `z-index` applies only to a positioned box or a flex or grid item, so the renderer needs
-    /// exactly this bit.
     #[test]
     fn positioned_records_a_declared_non_static_position() {
         for decl in ["position: relative", "position: absolute", "position: fixed", "position: sticky"] {
@@ -6618,8 +6290,6 @@ mod tests {
         assert_eq!(x.z(), Some(50));
         assert!(x.may_defer());
 
-        // A negative one is a deferred draw too: it paints before its context's in-flow content,
-        // wherever its box is.
         let (x, d) = extras("z-index: -1");
         assert_eq!(x.z(), Some(-1));
         assert!(x.may_defer());
@@ -6628,7 +6298,6 @@ mod tests {
         assert!(!extras("z-index: 0").0.may_defer());
     }
 
-    /// `auto` and `0` are different values: only an integer makes a stacking context.
     #[test]
     fn z_index_auto_is_not_zero() {
         assert_eq!(extras("z-index: auto").0.z_index, Some(None));
@@ -6680,8 +6349,6 @@ mod tests {
         assert!(d.iter().any(|m| m.contains("pointer-events")), "{d:?}");
     }
 
-    /// A percentage translate stays a percentage all the way to paint: it resolves against the
-    /// element's OWN border box, which only the renderer knows.
     #[test]
     fn translate_is_kept_in_its_authored_unit() {
         let (r, d) = transform("transform: translate(-50%, -50%)");
@@ -6700,8 +6367,6 @@ mod tests {
         );
     }
 
-    /// Tailwind's `-translate-x-1/2` emits the whole identity chain, and an identity component is
-    /// genuinely nothing — no advisory, and a computed value that carries only the translate.
     #[test]
     fn tailwinds_identity_transform_chain_is_silent() {
         let (r, d) = transform(
@@ -6723,8 +6388,6 @@ mod tests {
         assert!(d.is_empty(), "{d:?}");
         assert_eq!(r, Some(TransformSpec::IDENTITY));
         assert!(r.unwrap().is_identity());
-        // A declaration that was never written stays absent, which is what lets an earlier rule's
-        // transform survive the cascade.
         assert_eq!(transform("color: red").0, None);
     }
 
@@ -6747,8 +6410,6 @@ mod tests {
             (-1.0, 1.0)
         );
 
-        // A 3D rotation needs a projection nothing here has; still advised, and the parts that DO
-        // work still land.
         let (r, d) = transform("transform: rotateY(30deg) skewX(10deg)");
         assert_eq!(r.expect("declared").rotate, 0.0);
         assert!(d.iter().any(|m| m.contains("rotate3d()")), "{d:?}");
@@ -6767,8 +6428,6 @@ mod tests {
             list[0]
         };
 
-        // CSS and gpui share the angle convention (0deg = to top, clockwise), so the keyword forms
-        // are the only conversion.
         let right = one("background-image: linear-gradient(to right, #ff0000, #0000ff)");
         let ninety = one("background: linear-gradient(90deg, #ff0000 0%, #0000ff 100%)");
         assert_eq!(format!("{right:?}"), format!("{ninety:?}"), "`to right` is 90deg");
@@ -6776,7 +6435,6 @@ mod tests {
         let explicit = one("background-image: linear-gradient(180deg, #fff, #000)");
         assert_eq!(format!("{down:?}"), format!("{explicit:?}"), "the default is `to bottom`");
 
-        // Radial and conic are their own tags rather than a refusal.
         assert!(format!("{:?}", one("background-image: radial-gradient(#fff, #000)"))
             .starts_with("RadialGradient"));
         assert!(format!("{:?}", one("background-image: conic-gradient(#fff, #000)"))
@@ -6790,8 +6448,6 @@ mod tests {
         assert_ne!(format!("{repeating:?}"), format!("{:?}", one(
             "background-image: linear-gradient(#f00 0px, #00f 10px)")));
 
-        // Two layers stay two layers, and CSS's top-first order is reversed into gpui's
-        // bottom-first paint order.
         let stack = layers(
             "background-image: linear-gradient(#f00, #f00), linear-gradient(#00f, #00f)",
         );
@@ -6812,8 +6468,6 @@ mod tests {
         }
         assert!(format!("{:?}", layers[0]).contains("LinearGradient(90"));
 
-        // Without a `background-size` there is no tile: the gradient covers the box, which is what
-        // CSS says an `auto` size does for an image with no intrinsic dimensions.
         let (_, x, _) = map_full("background-image: linear-gradient(#f00, #00f)");
         assert!(!x.resolve_background_layers()[0].is_tiled());
     }
@@ -6865,14 +6519,11 @@ mod tests {
         assert!(matches!(stack[0], PaintLayer::Image { .. }), "{stack:?}");
         assert!(matches!(stack[1], PaintLayer::Gradient(_)), "{stack:?}");
 
-        // Gradients alone stay gpui's to paint.
         let (_, x, _) = map_full("background-image: linear-gradient(#f00, #00f)");
         assert_eq!(x.resolve_background_stack(), None);
         assert_eq!(map_full("background-image: url(\"\")").1.resolve_background_stack(), None);
     }
 
-    /// A later rule's gradient-only `background-image` replaces an earlier rule's `url()`: the two
-    /// halves of one declaration cascade together.
     #[test]
     fn a_later_background_image_replaces_an_earlier_url() {
         let (_, mut x, _) = map_full("background-image: url(a.png)");
@@ -6901,8 +6552,6 @@ mod tests {
         );
     }
 
-    /// `text-decoration-line: none` has to UNDO an earlier `underline`, and a refinement cannot
-    /// spell "clear" — so it declares a decoration that paints nothing instead.
     #[test]
     fn no_underline_cancels_an_earlier_one() {
         let r = clean("text-decoration-line: underline; text-decoration-line: none");
@@ -6920,8 +6569,6 @@ mod tests {
         assert_eq!(r.text.underline.expect("declared").offset, px(4.0));
         assert_eq!(x.underline_offset, Some(4.0));
 
-        // Declared the other way round, only the `Extras` half can carry it — and that is the half
-        // `compute_node` applies.
         let (_, x, d) = map_full("text-underline-offset: 4px");
         assert!(d.is_empty(), "{d:?}");
         assert_eq!(x.underline_offset, Some(4.0));
@@ -6934,8 +6581,6 @@ mod tests {
         assert_eq!(clean("font-weight: 500").text.font_weight, Some(gpui::FontWeight(500.0)));
     }
 
-    /// OpenType FEATURES reach the shaper — gpui's `Font` carries a tag/value list DirectWrite
-    /// installs over the run — while variation AXES do not, and only the second says so.
     #[test]
     fn font_features_reach_the_shaper_and_axes_do_not() {
         let features = clean("font-feature-settings: \"ss01\" 1, \"liga\" 0")
@@ -6963,8 +6608,6 @@ mod tests {
             p.iter().map(|(t, v)| (t.to_string(), *v)).collect()
         };
         assert_eq!(features("font-kerning: none"), pairs(&[("kern", 0)]));
-        // The initial values write nothing — DirectWrite already kerns and ligates by default, as a
-        // browser does.
         assert!(features("font-kerning: auto").is_empty());
         assert!(features("font-kerning: normal").is_empty());
         assert!(features("font-variant-ligatures: normal").is_empty());
@@ -6991,7 +6634,6 @@ mod tests {
     #[test]
     fn font_family_takes_the_first_installed_family() {
         let family = |css: &str| clean(css).text.font_family.map(|f| f.to_string());
-        // No source (tools, tests): the first named family, as before.
         assert_eq!(family("font-family: Inter, sans-serif").as_deref(), Some("Inter"));
 
         set_font_source(|| vec!["Segoe UI".into(), "Consolas".into(), "Arial".into()]);
@@ -7007,8 +6649,6 @@ mod tests {
             .as_deref(),
             Some("Consolas")
         );
-        // Tailwind's `font-sans`: `ui-sans-serif` is Safari-only and `system-ui` is the platform UI
-        // font — NOT the emoji face the old "first named family" rule landed on.
         assert_eq!(
             family(
                 "font-family: ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \
@@ -7019,12 +6659,8 @@ mod tests {
         );
         assert_eq!(family("font-family: monospace").as_deref(), Some("Consolas"));
         assert_eq!(family("font-family: sans-serif").as_deref(), Some("Arial"));
-        // No stand-in for `serif` is installed here: the UI font, not nothing.
         assert_eq!(family("font-family: serif").as_deref(), Some(".SystemUIFont"));
-        // Nothing available: the first named family stays, and gpui's own default applies as
-        // before.
         assert_eq!(family("font-family: Roboto, Helvetica").as_deref(), Some("Roboto"));
-        // Only a missing FIRST entry is reported, once per family.
         let misses = take_font_misses();
         assert_eq!(
             misses,
@@ -7047,7 +6683,6 @@ mod tests {
             )
         };
         set_font_source(|| vec!["Arial".into(), "Mix".into(), "Segoe UI".into()]);
-        // Nothing composed: as before, no fallbacks at all.
         assert_eq!(font("font-family: Mix, Arial"), (Some("Mix".into()), None));
 
         set_composed_font_families([("Mix".to_string(), true), ("VN PUA".to_string(), false)]);
@@ -7055,8 +6690,6 @@ mod tests {
         assert_eq!(font("font-family: Mix, \"Segoe UI\", sans-serif"), some("Mix", "Segoe UI|Arial"));
         assert_eq!(font("font-family: \"VN PUA\", Nowhere, mix, sans-serif"), some("VN PUA", "mix|Arial"));
         assert_eq!(font("font-family: Nowhere, \"VN PUA\", Mix"), some("VN PUA", "Mix"));
-        // An installed family first draws the text; the web families after it are not reached, and
-        // say so.
         assert!(take_unreached_fonts().is_empty());
         assert_eq!(font("font-family: Arial, Mix, \"VN PUA\""), some("Arial", ""));
         assert_eq!(
@@ -7078,10 +6711,7 @@ mod tests {
         set_web_font_families(["VN Web".to_string(), "vn half".to_string(), "VN PUA".to_string()]);
         assert_eq!(web("font-family: \"VN Web\", Arial").as_deref(), Some("VN Web"));
         assert_eq!(clean("font-family: \"VN Web\", Arial").text.font_family.as_deref(), Some("Arial"));
-        // A family not declared anywhere is passed over, as for drawing.
         assert_eq!(web("font-family: Nowhere, vn web, sans-serif").as_deref(), Some("vn web"));
-        // Every waiting family before the one used: a face limited to some characters leaves the
-        // rest of the text to the next one.
         assert_eq!(web("font-family: \"VN PUA\", \"VN Web\", serif").as_deref(), Some("VN PUA|VN Web"));
         assert_eq!(web("font-family: Arial, \"VN Web\"").as_deref(), Some(""));
         assert_eq!(web("font-family: sans-serif, \"VN Web\"").as_deref(), Some(""));
@@ -7090,8 +6720,6 @@ mod tests {
         set_web_font_families(Vec::new());
     }
 
-    /// The screen-reader-only idiom is a box clipped to an EMPTY rectangle, which paints nothing —
-    /// expressible as `visibility: hidden`, which keeps the layout box exactly as `clip` does.
     #[test]
     fn the_visually_hidden_clip_idiom_hides_the_box() {
         assert_eq!(
@@ -7102,7 +6730,6 @@ mod tests {
             clean("clip: rect(0 0 0 0)").visibility,
             Some(gpui::Visibility::Hidden)
         );
-        // A rectangle with area is a real sub-rect clip, which is not.
         let (r, d) = map("clip: rect(0, 20px, 20px, 0)");
         assert_eq!(r.visibility, None);
         assert!(d.iter().any(|m| m.contains("legacy `clip")), "{d:?}");
@@ -7179,8 +6806,6 @@ mod tests {
         assert!(shadows[2].inset, "the third is an inset shadow");
         assert_eq!(shadows[2].blur_radius, px(2.0));
         assert_eq!(shadows[2].offset.y, px(1.0));
-        // `box-shadow: none` — lightningcss parses it to an empty list, which is written through as
-        // an empty `Vec` and therefore genuinely CLEARS a shadow an earlier rule declared.
         let mut d = Vec::new();
         let mut r = StyleRefinement::default();
         r.box_shadow = Some(vec![gpui::BoxShadow {
@@ -7195,8 +6820,6 @@ mod tests {
         assert!(d.is_empty(), "{d:?}");
     }
 
-    /// `content` is the property that decides whether a `::before` box EXISTS, so it is parsed even
-    /// though lightningcss has no typed representation.
     #[test]
     fn content_keeps_literal_strings_and_advises_the_rest() {
         let (x, d) = extras(r#"content: "->""#);
@@ -7241,8 +6864,6 @@ mod tests {
         assert_eq!(x.blur, Some(64.0));
         assert!(d.is_empty(), "a lone blur() is implemented, not advised: {d:?}");
 
-        // `filter: none` is a VALUE, not "undeclared" — it has to beat an earlier rule's blur in
-        // the cascade.
         assert_eq!(extras("filter: none").0.blur, Some(0.0));
 
         assert_eq!(extras("filter: blur(8px)  ").0.blur, Some(8.0));
@@ -7341,8 +6962,6 @@ mod tests {
         }
     }
 
-    /// `border-radius` does not inherit, so its `inherit` is not a no-op: it is recorded per
-    /// corner, in cascade order, for the renderer to fill in.
     #[test]
     fn border_radius_inherit_is_recorded_per_corner() {
         let inherit = |name: &str| {
@@ -7357,7 +6976,6 @@ mod tests {
         let (_, x) = inherit("border-bottom-left-radius");
         let bl = RadiusInherit::BOTTOM_LEFT;
         assert_eq!(x.radius_inherit, RadiusInherit { declared: bl, inherit: bl });
-        // Not a radius: still the silent no-op it always was.
         assert_eq!(inherit("color").1.radius_inherit, RadiusInherit::default());
 
         let (_, x, d) = map_full("border-radius: 4px; border-top-left-radius: 50%");
@@ -7384,8 +7002,6 @@ mod tests {
             ("list-style-image: url(dot.png)", "this list marker is not generated"),
             ("resize: both", "resize"),
             ("user-select: contain", "user-select"),
-            // `blur()` alone is recorded rather than advised (see `apply_filter`), so the advisory
-            // this sweep is about needs a filter that is not it.
             ("filter: grayscale(1)", "supported functions are blur(), drop-shadow()"),
             ("border-collapse: collapse", "table properties"),
             ("clip: rect(0,0,10px,10px)", "legacy `clip"),
@@ -7416,15 +7032,12 @@ mod tests {
             "text-size-adjust: 100%",
             "touch-action: none",
             "-webkit-font-smoothing: antialiased",
-            // `-webkit-line-clamp` is honoured on its own; the legacy flexbox switches around it
-            // are inert in browsers too.
             "-webkit-box-orient: vertical",
             "vertical-align: baseline",
             "text-indent: 0",
             "resize: none",
             "overflow-wrap: normal",
             "word-break: normal",
-            // Applied by the line breaker (gpui fork, `TextWrap`).
             "overflow-wrap: break-word",
             "overflow-wrap: anywhere",
             "word-wrap: break-word",
@@ -7438,8 +7051,6 @@ mod tests {
             "list-style-type: disc",
             "list-style: decimal inside",
             "list-style-position: inside",
-            // Only ever read through a decoration LINE, which this has none of — a browser paints
-            // nothing here either.
             "text-decoration-color: #f00",
             "visibility: collapse",
             "letter-spacing: 0.05em",
@@ -7456,8 +7067,6 @@ mod tests {
             "text-underline-offset: 4px",
             "text-decoration-skip-ink: none",
             "clip: rect(0, 0, 0, 0)",
-            // They only move where `scrollIntoView` and scroll snapping land, and neither is
-            // modelled at all.
             "scroll-margin-top: 4rem",
             "scroll-padding: 1rem",
             "background-size: cover",
@@ -7509,8 +7118,6 @@ mod tests {
         }
     }
 
-    /// `transform-origin` on its own changes nothing (as in CSS) but must not be lost when
-    /// `transform` is declared beside it, in either order.
     #[test]
     fn transform_origin_survives_beside_the_transform() {
         let spec = transform("transform-origin: left top; transform: rotate(45deg)")
@@ -7554,8 +7161,6 @@ mod tests {
         assert!((f32::from(far.y) - 250.0).abs() < 1e-3, "{far:?}");
     }
 
-    /// `matrix(a,b,c,d,e,f)` decomposes into the translate/rotate/scale triple gpui carries — which
-    /// is what an animation library that composes its own transform emits.
     #[test]
     fn a_matrix_decomposes_into_translate_rotate_scale() {
         let spec = transform("transform: matrix(2, 0, 0, 2, 10, 20)").0.expect("declared");
@@ -7569,7 +7174,6 @@ mod tests {
             "{spec:?}"
         );
         assert!((spec.scale.0 - 1.0).abs() < 1e-4 && (spec.scale.1 - 1.0).abs() < 1e-4);
-        // The full shear coefficient survives without an advisory.
         let (_, d) = map("transform: matrix(1, 0, 0.5, 1, 0, 0)");
         assert!(d.is_empty(), "{d:?}");
     }
@@ -7754,8 +7358,6 @@ mod tests {
         assert!(matches!(r.background, Some(gpui::Fill::Color(_))));
     }
 
-    /// The three lengths transfer 1:1 — CSS's third length and gpui's `blur_radius` are both
-    /// sigmas.
     #[test]
     fn drop_shadow_parses_into_extras_and_says_nothing() {
         let (_, x, d) = map_full("filter: drop-shadow(2px 4px 6px rgb(0 0 0 / 0.5))");
@@ -7776,7 +7378,6 @@ mod tests {
         assert!(d.iter().any(|m| m.contains("a second drop-shadow()")), "{d:?}");
     }
 
-    /// Its parts are recorded without a word, and only the whole cascade makes the ring.
     #[test]
     fn the_gradient_border_mask_is_a_ring_and_others_are_advised() {
         let ring = "-webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
@@ -7817,8 +7418,6 @@ mod tests {
         assert!(d.is_empty() && !x.mask_ring(), "{d:?}");
     }
 
-    /// `clip-path` reaches gpui as a rounded content mask (`gpui::VnClipPath`): `inset()`,
-    /// `circle()` and a lone box exactly, `ellipse()` as a capsule with an advisory.
     #[test]
     fn clip_path_is_a_rounded_mask_and_the_other_shapes_advise() {
         use gpui::{VnClipBox as B, VnClipPath as C, VnCornerRadius, VnShapeRadius as R};
@@ -7872,7 +7471,6 @@ mod tests {
         assert_eq!(clean("clip-path: margin-box").vn_clip_path, Some(C::Box(B::Margin)));
         assert_eq!(clean("clip-path: fill-box").vn_clip_path, Some(C::Box(B::Content)));
         assert_eq!(clean("clip-path: stroke-box").vn_clip_path, Some(C::Box(B::Border)));
-        // What is still not applied: a reference and the CSS Shapes 2 functions.
         for other in ["url(#c)", "rect(0 10px 10px 0)", "xywh(0 0 10px 10px)", "shape(from 0 0, line to 10px 10px)"] {
             let (r, d) = map(&format!("clip-path: {other}"));
             assert_eq!(r.vn_clip_path, None, "{other}");
@@ -8011,8 +7609,6 @@ mod scrollbar_tests {
         assert!(!OverscrollBehavior::None.chains());
     }
 
-    /// One malformed declaration in an inline body costs that declaration, as in a browser, not the
-    /// element's whole inline style.
     #[test]
     fn a_malformed_inline_declaration_is_skipped_and_the_rest_applies() {
         let mut d = Vec::new();
@@ -8097,7 +7693,6 @@ mod prefix_tests {
         let c = convert_block(&block("-webkit-transition: opacity 1s; -webkit-transform: scale(2)"));
         assert!(c.normal.is_some() && c.normal_transitions.is_some());
         assert!(c.diagnostics.is_none(), "{:?}", c.diagnostics);
-        // A `-webkit-` property Chromium draws and this engine does not is still heard about.
         let (_, d) = extras("-webkit-text-stroke: 1px red");
         assert!(d.iter().any(|m| m.contains("not mapped")), "{d:?}");
     }
@@ -8125,7 +7720,6 @@ mod prefix_tests {
         assert_eq!(x.background_clip_text, Some(true));
         assert!(x.text_fill_color.is_some());
         assert!(!d.iter().any(|m| m.contains("not mapped")), "{d:?}");
-        // Not a colour: said, not applied.
         let (x, d) = extras("-webkit-text-fill-color: 3px");
         assert_eq!(x.text_fill_color, None);
         assert!(!d.is_empty());

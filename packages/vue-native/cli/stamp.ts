@@ -1,20 +1,10 @@
-// Stamping: a copy of a host exe becomes ONE app's exe.
-//
-//   copy host → <out>.partial
-//     → strip a certificate table (a stamped image invalidates it anyway; the
-//       AUTHOR signs the stamped exe, later)
-//     → pass 1: RT_ICON×n, RT_GROUP_ICON #1, RT_VERSION #1, RCDATA "VNPAYLOAD" (skew 0)
-//     → read the payload's RVA back out of .rsrc, compute the skew that puts the
-//       VNPK data region on a page boundary in the mapped image
-//     → pass 2: VNPAYLOAD again, with that skew (and a third pass if the RVA
-//       somehow moved — it does not, measured)
-//     → Subsystem := GUI (unless asked to keep the console)
-//     → verify: map it as an image resource, FindResourceW the payload, compare
-//     → rename over <out>
-//
-// Everything after the copy is in-place edits of a file nobody else has open
-// yet, which is the window Windows Defender likes to scan in — so the two
-// resource transactions and the final rename retry on a sharing violation.
+// Stamping: a copy of a host exe becomes ONE app's exe. Copy host -> <out>.partial, strip any
+// certificate table (the author signs the stamped exe later), write icons, VERSIONINFO and the
+// VNPAYLOAD resource (pass 1 with skew 0, pass 2 with the skew that page-aligns the VNPK data
+// region in the mapped image), set the subsystem to GUI unless asked to keep the console, verify
+// by mapping it as an image resource, rename over <out>. The file is freshly written, which is
+// when Windows Defender likes to scan it, so the resource transactions and the rename retry on a
+// sharing violation.
 
 import { copyFileSync, existsSync, renameSync, rmSync, statSync, truncateSync } from "node:fs";
 import { groupIcon, type IconImage } from "./icon";
@@ -37,22 +27,15 @@ import {
 import { HEADER_SIZE, PAGE, readHeader, skewFor } from "./vnpk";
 
 export const PAYLOAD_NAME = "VNPAYLOAD";
-/** Icons and VERSIONINFO are conventionally en-US; the payload is language-neutral. */
 export const RES_LANG = 0x0409;
 export const PAYLOAD_LANG = 0;
 
 export interface StampOptions {
-  /** The exe to start from: a bare host, or an already-stamped exe to re-stamp. */
   host: string;
-  /** Where the stamped exe ends up. Written as `<out>.partial`, then renamed. */
   out: string;
-  /** Builds the VNPK blob for a given skew; called once per pass, and the bytes must differ only in the skew. */
   payload: (skew: number) => Uint8Array;
-  /** `undefined` keeps whatever icons `host` has; an array replaces them all. */
   icons?: IconImage[];
-  /** `undefined` keeps `host`'s VERSIONINFO; bytes replace it. */
   versionInfo?: Uint8Array;
-  /** `gui` (default) flips the PE subsystem to 2, so a double-click opens no console. */
   subsystem?: "gui" | "console" | "keep";
   log?: (line: string) => void;
 }
@@ -80,7 +63,6 @@ function isSharing(e: unknown): boolean {
   return code === "EBUSY" || code === "EPERM" || code === "EACCES";
 }
 
-/** Retries `f` while Windows reports someone else holding the file (Defender, Explorer's preview). */
 function retrying<T>(what: string, f: () => T, log: (l: string) => void, attempts = 8): T {
   let delay = 100;
   for (let i = 1; ; i++) {
@@ -99,11 +81,7 @@ function payloadEntry(pe: PeInfo): ResourceEntry | undefined {
   return pe.resources.find((r) => r.type === RT.RCDATA && r.name === PAYLOAD_NAME);
 }
 
-/**
- * Removes an Authenticode certificate table: truncate at its offset when it is
- * the file's tail (where signtool puts it), and zero the SECURITY directory
- * entry either way. Returns whether there was one.
- */
+/** Removes an Authenticode certificate table (truncate when it is the file's tail, zero the SECURITY entry either way). Returns whether there was one. */
 export function stripSignature(path: string): boolean {
   const pe = readPe(path);
   if (!pe.security.size) return false;
@@ -161,8 +139,7 @@ export function stamp(options: StampOptions): StampResult {
       log,
     );
 
-    // Passes 2..3: the skew. The payload's RVA is decided by what sorts ahead of
-    // RT_RCDATA (the RT_ICONs), so re-writing the payload alone never moves it.
+    // Passes 2..3: the skew. The RVA is decided by what sorts ahead of RT_RCDATA (the RT_ICONs).
     let pe = readPe(partial);
     let entry = payloadEntry(pe);
     if (!entry) throw new Error(`${partial}: the payload resource is missing after EndUpdateResourceW`);
@@ -206,8 +183,7 @@ export function stamp(options: StampOptions): StampResult {
     }
     const tRes = performance.now();
 
-    // Verify the way the host reads it: an image map, FindResourceW, LockResource. A file Windows will not map
-    // fails here, not on a user's machine.
+    // Verify the way the host reads it, so a file Windows will not map fails here, not on a user's machine.
     pe = readPe(partial);
     entry = payloadEntry(pe);
     if (!entry || entry.size !== blob.length) {

@@ -15,13 +15,9 @@ pub(crate) trait ExtractImpl {
 impl<'i, I: SelectorImpl<'i>> ExtractImpl for parcel_selectors::parser::Selector<'i, I> {
     type I = I;
 }
-/// `lightningcss::selector::Selectors`, recovered by projection.
 pub(crate) type Impl = <LcssSelector<'static> as ExtractImpl>::I;
 
-/// The minimal element view the matcher needs. `Copy` because matching walks freely.
 pub trait MatchDom: Copy {
-    /// Identity of the node, unique within a document; also names the ancestor a `group-hover:`
-    /// rule points at.
     fn key(&self) -> u64;
     fn parent(&self) -> Option<Self>;
     fn prev_sibling(&self) -> Option<Self>;
@@ -32,27 +28,19 @@ pub trait MatchDom: Copy {
     fn tag_name(&self) -> &str;
     fn each_class(&self, f: &mut dyn FnMut(&str));
     fn has_scope(&self, name: &str) -> bool;
-    /// An attribute's value, or `None` when the node does not carry it.
     fn attr(&self, name: &str) -> Option<&str>;
     fn is_empty(&self) -> bool;
     fn is_root(&self) -> bool;
-    /// Only `:has()` walks downwards. Implementations with no tree yield nothing, making `:has()`
-    /// false.
     fn each_child(&self, _f: &mut dyn FnMut(Self)) {}
     /// The answer moves when a following sibling changes, though the asker is neither its ancestor
     /// nor after it; a dependency-driven restyle must hear of that here.
     fn note_following_sibling_anchor(&self) {}
-    /// Then a script's query (`matches`, `querySelector`, `closest`) is filtered by it, as a
-    /// browser's is ([`crate::query_all_in`]).
     const LIVE_STATE: bool = false;
-    /// `None` (default): the cascade's view, where an interaction pseudo-class matches as "would
-    /// match in that state" because gpui applies the rung live.
     fn interaction(&self, _state: Interaction) -> Option<bool> {
         None
     }
 }
 
-/// The interaction states a selector can name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Interaction {
     Hover,
@@ -121,7 +109,6 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
     fn has_local_name(&self, local_name: &<Self::Impl as SelectorImpl<'i>>::BorrowedLocalName) -> bool {
         let name = local_name.0.as_ref();
         self.0.has_tag(name)
-            // The root answers to both `html` and `body`.
             || (self.0.is_root() && matches!(name, "html" | "body"))
     }
     fn has_namespace(&self, _ns: &<Self::Impl as SelectorImpl<'i>>::BorrowedNamespaceUrl) -> bool {
@@ -143,7 +130,6 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
         if name.starts_with("data-v-") {
             return matches!(operation, AttrSelectorOperation::Exists) && self.0.has_scope(name);
         }
-        // Everything else comes off the property map.
         match self.0.attr(name) {
             Some(value) => operation.eval_str(value),
             None => false,

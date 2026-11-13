@@ -1,6 +1,4 @@
-// The renderer's event-prop plumbing: which `on*` props reach the host, which
-// names they normalise to, and — the compat-first part — that a prop the host
-// cannot deliver says so instead of vanishing.
+// The renderer's event-prop plumbing: which `on*` props reach the host, which names they normalise to, and that a prop the host cannot deliver says so instead of vanishing.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
@@ -18,11 +16,9 @@ describe("patchProp: on* props", () => {
     rt.patchProp(rt.el(), "onMouseover", null, () => {});
     const advisories = rt.advisories();
     expect(advisories.length).toBe(1);
-    // Same shape as the addEventListener advisory next to it.
     expect(advisories[0]).toContain("@mouseover");
     expect(advisories[0]).toContain("not delivered by the native host yet");
     expect(advisories[0]).toContain("will never fire");
-    // …and no listener flag was set, because there is no code to set it under.
     expect(rt.host.listeners).toEqual([]);
   });
 
@@ -31,7 +27,6 @@ describe("patchProp: on* props", () => {
     for (let i = 0; i < 5; i++) rt.patchProp(rt.el(i), "onMouseover", null, () => {});
     rt.patchProp(rt.el(), "onTouchstart", null, () => {});
     expect(rt.advisories().length).toBe(2);
-    // A *different* world starts over — the dedup set is per module instance.
     const other = createRuntime();
     other.patchProp(other.el(), "onMouseover", null, () => {});
     expect(other.advisories().length).toBe(1);
@@ -46,9 +41,7 @@ describe("patchProp: on* props", () => {
   });
 
   test("component-emit props that leak onto an element stay silent", () => {
-    // `<input v-model>` compiles to an `onUpdate:modelValue` prop on the
-    // ELEMENT. A browser binds it to an event that never fires, silently; the
-    // advisory is for real DOM event names, not for this.
+    // `<input v-model>` compiles to an `onUpdate:modelValue` prop on the ELEMENT: not a DOM event, so no advisory.
     const rt = createRuntime();
     rt.patchProp(rt.el(), "onUpdate:modelValue", null, () => {});
     expect(rt.advisories()).toEqual([]);
@@ -61,7 +54,6 @@ describe("patchProp: on* props", () => {
       node.addEventListener(name, () => {});
     }
     expect(rt.advisories()).toEqual([]);
-    // An element event the host really cannot deliver still speaks.
     node.addEventListener("mouseover", () => {});
     expect(rt.advisories().length).toBe(1);
   });
@@ -83,9 +75,6 @@ describe("<lottie> event names", () => {
   });
 
   test("the `on:` form the compiler emits for a custom element keeps its case", () => {
-    // `@loopComplete` on <lottie> compiles to the prop `on:loopComplete` —
-    // compiler-dom's case-preserving spelling for a custom element. That is the
-    // shape this element actually receives, so it is the one that must work.
     const rt = createRuntime();
     rt.patchProp(rt.el(4), "on:loopComplete", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.loopComplete)).toEqual([{ id: 4, code: 12, on: true }]);
@@ -93,8 +82,6 @@ describe("<lottie> event names", () => {
   });
 
   test("`once`, `online` and `only` are attributes, not listeners for ce / line / ly", () => {
-    // runtime-dom's `isOn`: `on` and then anything but a lowercase letter.
-    // `<vn-sticker once>` is the attribute that plays one loop.
     const rt = createRuntime();
     for (const key of ["once", "online", "only"]) rt.patchProp(rt.el(5), key, null, "");
     expect(rt.host.listeners).toEqual([]);
@@ -174,7 +161,6 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     expect(rt.EV_CODES.timeupdate).toBe(27);
     expect(rt.EV_CODES.ended).toBe(32);
     expect(rt.EV_CODES.emptied).toBe(34);
-    // …and the animator's four sit AFTER the media block, not on top of it.
     expect(rt.EV_CODES.transitionend).toBe(35);
     expect(rt.EV_CODES.animationcancel).toBe(38);
   });
@@ -210,14 +196,10 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     expect(node.buffered.length).toBe(1);
     expect(node.buffered.end(0)).toBe(6.25);
     expect(node.error).toBe(null);
-    // Live: the host moved, and so does the property. No cache to invalidate.
     rt.host.mediaById.set(node.__vnId, STATE.replace("currentTime=3.5", "currentTime=9"));
     expect(node.currentTime).toBe(9);
   });
 
-  // The whole state string costs every engine getter at once (~0.2 ms on Media
-  // Foundation); a canvas loop reading `readyState` per target per frame paid it
-  // eight times a frame.
   test("a scalar property is one host call for its own value, not the whole state", () => {
     const rt = createRuntime();
     const node = video(rt);
@@ -230,10 +212,8 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
       [node.__vnId, 10],
       [node.__vnId, 1],
     ]);
-    // The ranges and the error still come off the state string.
     expect(node.buffered.length).toBe(1);
     expect(rt.host.mediaStateReads).toBe(1);
-    // A node the host knows nothing about reads the defaults, as before.
     const bare = rt.nodeOps.createElement("video");
     expect([bare.paused, bare.readyState, bare.duration]).toEqual([true, 0, NaN]);
   });
@@ -270,7 +250,6 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     rt.host.canPlayByType.set('video/mp4; codecs="avc1.640028"', "probably");
     expect(node.canPlayType('video/mp4; codecs="avc1.640028"')).toBe("probably");
     expect(node.canPlayType("application/x-nonsense")).toBe("");
-    // A <div> is not an HTMLMediaElement in a browser either.
     expect(rt.nodeOps.createElement("div").currentTime).toBe(undefined);
   });
 });
@@ -282,8 +261,6 @@ describe("the listener flag is only written when it changes", () => {
     rt.patchProp(el, "onClick", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([{ id: el.__vnId, code: 1, on: true }]);
 
-    // A fresh inline arrow every render is the ordinary case, not a pathology:
-    // it is what `@click="() => pick(i)"` inside a `v-for` compiles to.
     for (let i = 0; i < 10; i++) rt.patchProp(el, "onClick", () => {}, () => {});
     expect(rt.flagsFor(rt.EV_CODES.click).length).toBe(1);
   });
@@ -297,15 +274,11 @@ describe("the listener flag is only written when it changes", () => {
       { id: el.__vnId, code: 1, on: true },
       { id: el.__vnId, code: 1, on: false },
     ]);
-    // Nothing is armed now, so clearing again has nothing to say.
     rt.patchProp(el, "onClick", null, null);
     expect(rt.flagsFor(rt.EV_CODES.click).length).toBe(2);
   });
 
   test("a second listener for the same code rides the first one's bit", () => {
-    // `pointerdown` has no code of its own — it is derived from `mousedown` —
-    // so both names OR into one bit, and the second registration must not
-    // re-announce it.
     const rt = createRuntime();
     const el = rt.nodeOps.createElement("div");
     rt.patchProp(el, "onMousedown", null, () => {});
@@ -319,8 +292,6 @@ describe("the listener flag is only written when it changes", () => {
     const b = rt.nodeOps.createElement("div");
     rt.patchProp(a, "onClick", null, () => {});
     rt.patchProp(b, "onClick", null, () => {});
-    // The record lives on the node object, not in a map keyed by id — which is
-    // what makes it safe against the host recycling an id after `__vn_remove`.
     expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([
       { id: a.__vnId, code: 1, on: true },
       { id: b.__vnId, code: 1, on: true },
@@ -329,7 +300,6 @@ describe("the listener flag is only written when it changes", () => {
 });
 
 describe("v-model", () => {
-  /** What Vue hands `created`: the element, the binding, the vnode. */
   const bind = (rt, el, modifiers, onUpdate) =>
     rt.vModelText.created(el, { modifiers }, { props: { "onUpdate:modelValue": onUpdate } });
 

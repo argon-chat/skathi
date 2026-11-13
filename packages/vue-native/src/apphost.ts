@@ -10,7 +10,6 @@ export interface AppHostError extends Error {
 export interface AppHost {
   readonly available: boolean;
   readonly functions: readonly string[];
-  /** Calls the embedder's function `name`; its answer, parsed from JSON. */
   call<T = unknown>(name: string, ...args: unknown[]): Promise<T>;
   on(event: string, handler: (data: unknown) => void): () => void;
   off(event: string, handler: (data: unknown) => void): void;

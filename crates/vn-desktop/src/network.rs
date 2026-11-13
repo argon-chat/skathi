@@ -1,31 +1,23 @@
-//! `navigator.onLine` and the `online` / `offline` events, from the OS.
-//!
-//! As in Chromium, online means "the OS believes there is a network", not "the internet is
-//! reachable". Windows uses the network connectivity hint (iphlpapi, Windows 10 2004+), resolved at
-//! run time so an older Windows still starts with the state unset (redjs answers `true` and an
-//! advisory says so). Linux uses rtnetlink link and address changes. [`install`] seeds the state
-//! synchronously before any context exists, so no event is queued for the seed.
+//! `navigator.onLine` and the `online` / `offline` events, from the OS. As in Chromium, online means "the OS
+//! believes there is a network". Windows uses the connectivity hint (iphlpapi, 2004+), resolved at run time
+//! so an older Windows still starts with the state unset; Linux uses rtnetlink. [`install`] seeds the state
+//! synchronously before any context exists.
 
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use vn_runtime::redjs::webapi::navigator;
 
-/// Delay before a change towards online is announced (Chromium's calculator).
 pub const ONLINE_DELAY: Duration = Duration::from_millis(500);
-/// Delay towards offline; the longer wait keeps a network switch (which passes through "none")
-/// from firing `offline` + `online`.
+/// Delay towards offline; the longer wait keeps a network switch (which passes through "none") from firing both.
 pub const OFFLINE_DELAY: Duration = Duration::from_millis(1500);
 
-/// Maps `NL_NETWORK_CONNECTIVITY_LEVEL_HINT` to `onLine`: only `None` is offline; `Unknown` and
-/// `Hidden` read as online, as Chromium reads "cannot tell".
 pub fn level_is_online(level: i32) -> bool {
     level != 1
 }
 
-/// Chromium's change calculator with time passed in. Every hint restarts one timer; when it fires
-/// the newest hint is announced if it differs from the last one (Blink fires only when the boolean
-/// flips).
+/// Chromium's change calculator with time passed in: every hint restarts one timer; when it fires the
+/// newest hint is announced if it differs from the last.
 #[derive(Debug, Clone)]
 pub struct Debounce {
     announced: bool,
@@ -61,7 +53,6 @@ impl Debounce {
     }
 }
 
-/// `None` until [`install`] has seeded it, and again if the subscription failed.
 static CALC: Mutex<Option<Debounce>> = Mutex::new(None);
 static WAKE: Condvar = Condvar::new();
 
@@ -94,7 +85,6 @@ fn run() {
     }
 }
 
-/// Starts the provider behind `navigator.onLine`, once per process. Call before `JsRuntime::init`.
 pub fn install() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(imp::install);
@@ -128,7 +118,6 @@ mod imp {
         on_hint(level_is_online(hint.level));
     }
 
-/// `None` before Windows 10 2004. The library is never freed: the subscription outlives everything.
     pub(super) fn resolve() -> Option<(GetHint, NotifyHint)> {
         unsafe {
             let lib = LoadLibraryExW(w!("iphlpapi.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32).ok()?;
@@ -160,7 +149,6 @@ mod imp {
                 return;
             }
         };
-        // Seed first, then subscribe: the initial notification closes the gap.
         let seed = level_is_online(level);
         *calc() = Some(Debounce::new(seed));
         navigator::set_on_line(Some(seed));
@@ -178,8 +166,6 @@ mod imp {
     }
 }
 
-/// Linux, as Chromium's `AddressTrackerLinux`: online while a non-loopback interface is up and
-/// holds an address beyond IPv6 link-local.
 #[cfg(target_os = "linux")]
 mod imp {
     use std::io;
@@ -235,7 +221,6 @@ mod imp {
         Ok(fd)
     }
 
-    /// Any message, or an overrun, is a reason to re-read; what changed does not matter.
     fn watch(fd: OwnedFd) {
         let mut buffer = [0u8; 16 * 1024];
         loop {
@@ -258,7 +243,6 @@ mod imp {
     }
 
     pub(super) fn install() {
-        // Subscribe, then read: a change in between is a message waiting on the socket.
         let fd = match subscribe() {
             Ok(fd) => fd,
             Err(error) => {
@@ -316,7 +300,6 @@ mod tests {
         assert_eq!(d.deadline(), Some(ms(2500)));
         assert_eq!(d.fire(ms(2500)), Some(true));
 
-        // A network switch passes through "none": the second hint restarts the timer.
         d.hint(false, ms(3000));
         d.hint(true, ms(3100));
         assert_eq!(d.deadline(), Some(ms(4600)), "restarted, still the offline delay");

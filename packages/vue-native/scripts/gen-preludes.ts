@@ -4,15 +4,12 @@
 //   bun scripts/gen-preludes.ts           regenerate the checked-in artifacts
 //   bun scripts/gen-preludes.ts --check   CI gate: regenerate in memory and fail if a checked-in file is stale
 //
-// The `.js` is a checked-in artifact so `cargo build` works with no bun or node, an emitter upgrade that
-// changes codegen shows as a diff, and stack traces and `vn://window.js` point at a real file.
-// `Bun.Transpiler` is used because it is the same emitter build.ts feeds `src/*.ts` through.
-// `test/prelude-generated.test.ts` keeps the checked-in bytes honest.
+// The `.js` is checked in so `cargo build` needs no bun or node and stack traces point at a real file.
+// `test/prelude-generated.test.ts` keeps the bytes honest.
 //
-// Bun parses its input as a module and drops the directive prologue, but `rt.eval` evaluates the artifact
-// as a classic script, where dropping "use strict" changes behaviour (assignments to read-only globals
-// stop throwing, and window.prelude.ts guards three redjs globals that way). A target may ask for the
-// directive back; it is re-emitted at file scope. It is per target because prelude.js is not strict.
+// Bun drops the directive prologue, but `rt.eval` evaluates the artifact as a classic script, where
+// dropping "use strict" changes behaviour; a target may ask for the directive back, per target
+// because prelude.js is not strict.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -25,9 +22,7 @@ const COMMAND = "bun packages/vue-native/scripts/gen-preludes.ts";
 export interface Target {
   source: string;
   out: string;
-  /** Re-emit `"use strict";` at file scope: bun drops directive prologues. */
   strict: boolean;
-  /** One line for the artifact's header: what this file is for. */
   what: string;
 }
 
@@ -74,12 +69,10 @@ function header(t: Target): string {
 
 export function render(t: Target): string {
   const js = transpiler.transformSync(readFileSync(t.source, "utf8"));
-  // The directive goes after the header comment and before everything else: a comment does not end the
-  // directive prologue.
+  // The directive goes after the header comment: a comment does not end the directive prologue.
   return header(t) + (t.strict ? `"use strict";\n` : "") + js;
 }
 
-/** `a` vs `b`, as the first line that differs and how many do. */
 function summarize(want: string, got: string): string {
   const w = want.split("\n");
   const g = got.split("\n");
@@ -139,6 +132,5 @@ function main(): void {
   if (check) console.log(`preludes: ${TARGETS.length} artifact(s) up to date`);
 }
 
-// Only when run, never when imported: the prelude test imports `TARGETS` and `render` and must not write
-// to the tree.
+// Only when run, never when imported: the prelude test imports `TARGETS` and `render` and must not write.
 if (import.meta.main) main();

@@ -1,7 +1,4 @@
-// The importer graph: a changed plain .js module must reload the components
-// that import it instead of restarting the app.
-//
-//   bun test           (from packages/vue-native)
+// The importer graph: a changed plain .js module must reload the components that import it instead of restarting the app.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -43,7 +40,6 @@ describe("boot", () => {
     expect(w.runs(APP)).toBe(1);
     expect(w.runs(COUNTER)).toBe(1);
     expect(w.runs(UTIL)).toBe(1);
-    // depth first: Counter's factory finishes inside App's
     expect(w.hmr.createRecord).toEqual([COUNTER, APP]);
     expect(w.hardRestarted()).toBe(false);
   });
@@ -63,16 +59,12 @@ describe("shared plain module changed", () => {
     definePlain(w, UTIL, [], 2); // host re-evals the changed script
     applyChanges(w, changed(UTIL));
 
-    // util re-executed once, no matter that two components reach it
     expect(w.runs(UTIL)).toBe(2);
-    // both importing components re-required...
     expect(w.runs(APP)).toBe(2);
     expect(w.runs(COUNTER)).toBe(2);
-    // ...and handed to Vue exactly once each
     expect(w.hmr.reload.slice().sort()).toEqual([APP, COUNTER].sort());
     expect(w.hmr.reload.length).toBe(2);
     expect(w.hmr.rerender).toEqual([]);
-    // the entry never re-runs -> createApp() is not called again
     expect(w.runs(ENTRY)).toBe(1);
     expect(w.hardRestarted()).toBe(false);
   });
@@ -89,7 +81,6 @@ describe("shared plain module changed", () => {
     expect(newApp.__version).toBe(1); // App's own code did not change...
     expect(newApp.imported["./util.js"].version).toBe(2); // ...but its import did
     expect(w.hmr.records.get(COUNTER).imported["../util.js"].version).toBe(2);
-    // and both components got the SAME exports object, not one copy each
     expect(newApp.imported["./util.js"]).toBe(
       w.hmr.records.get(COUNTER).imported["../util.js"],
     );
@@ -99,8 +90,6 @@ describe("shared plain module changed", () => {
     const w = bootStandardFixture();
     definePlain(w, UTIL, [], 2);
     applyChanges(w, changed(UTIL));
-    // called again by the re-run factories, but Vue's record is not replaced —
-    // that is what reload(id, def) is for.
     expect(w.hmr.createRecord).toEqual([COUNTER, APP, COUNTER, APP]);
   });
 
@@ -129,8 +118,6 @@ describe("shared plain module changed", () => {
 
 describe("walk boundaries", () => {
   test("stops at the nearest component (does not climb past it)", () => {
-    // util -> Counter.vue -> App.vue: App must NOT be re-required, because
-    // Vue's record updates Counter's definition in place.
     const w = createLoader();
     const HELPER = "app/src/helper.js";
     definePlain(w, HELPER, [], 1);
@@ -171,7 +158,6 @@ describe("walk boundaries", () => {
     expect(w.runs(MID)).toBe(2);
     expect(w.runs(APP)).toBe(2);
     expect(w.hmr.reload).toEqual([APP]);
-    // the intermediate handed its own fresh copy down
     expect(w.hmr.records.get(APP).imported["./mid.js"].imported["./base.js"].version).toBe(2);
   });
 

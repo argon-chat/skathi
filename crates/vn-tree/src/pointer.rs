@@ -20,16 +20,13 @@ use vn_runtime::{host_fn, JsRuntime};
 use crate::tree::{self, Kind, Tree};
 use crate::windows;
 
-/// The pointer events a covered listener would have taken: what the dev log line names.
 const PRESS_BITS: u64 = (1 << tree::EV_CLICK)
     | (1 << tree::EV_MOUSEDOWN)
     | (1 << tree::EV_MOUSEUP)
     | (1 << tree::EV_CONTEXTMENU)
     | (1 << tree::EV_AUXCLICK);
 
-/// Turns the targeting on for this window: picks for every element, and the refiner. Called once
-/// per build (`render::arm_pick_hitboxes`); both are window flags and cost one read when already
-/// set.
+/// Turns the targeting on for this window (picks for every element, and the refiner); called once per build.
 pub(crate) fn arm(window: &mut Window) {
     if !window.vn_picks_every_box() {
         window.set_vn_pick_every_box(true);
@@ -39,8 +36,6 @@ pub(crate) fn arm(window: &mut Window) {
     }
 }
 
-/// The node a window paints as its root: the document root in the primary window, the popped-out
-/// node in a pop-out.
 fn window_root(t: &Tree, window: &Window) -> u32 {
     match windows::root_of(windows::key(window)) {
         0 => t.root,
@@ -48,9 +43,9 @@ fn window_root(t: &Tree, window: &Window) -> u32 {
     }
 }
 
-/// `id` and its ancestors up to `root`, target first — `None` when `id` is not an element this
-/// window can target: gone, not an element, outside `root`'s subtree, `pointer-events: none`, or
-/// inside a `visibility: hidden` subtree (gpui paints none of one, so it is not there to be hit).
+/// `id` and its ancestors up to `root`, target first; `None` when `id` cannot be targeted in this
+/// window (gone, outside `root`, `pointer-events: none`, or inside `visibility: hidden`, which gpui
+/// paints none of).
 fn path_if_hittable(t: &Tree, id: u32, root: u32) -> Option<Vec<u32>> {
     let node = t.node(id)?;
     if node.kind != Kind::Element {
@@ -79,13 +74,10 @@ fn path_if_hittable(t: &Tree, id: u32, root: u32) -> Option<Vec<u32>> {
     None
 }
 
-/// What the resolution found: the target, its path (target first, the root last), and the tags
-/// under the pointer it came from, topmost first.
 struct Resolved {
     target: u32,
     path: Vec<u32>,
     tags: Vec<u32>,
-    /// Index in `tags` of the target; `tags.len()` when it is the fallback.
     at: usize,
 }
 
@@ -99,8 +91,6 @@ fn resolve(t: &Tree, tags: Vec<u32>, root: u32) -> Resolved {
     Resolved { target: root, path: vec![root], tags, at }
 }
 
-/// The topmost element at `p` that a pointer event there is for, in this window. `None` when
-/// nothing but the root is there (or the tree has none).
 pub(crate) fn topmost(window: &Window, p: Point<Pixels>) -> Option<u32> {
     let tags = window.vn_tags_at(p);
     tree::read_tree(|t| {
@@ -109,7 +99,6 @@ pub(crate) fn topmost(window: &Window, p: Point<Pixels>) -> Option<u32> {
     })
 }
 
-/// [`topmost`], or the window's root: the target of a pointer event at `p`.
 pub(crate) fn target_at(window: &Window, p: Point<Pixels>) -> u32 {
     let tags = window.vn_tags_at(p);
     tree::read_tree(|t| {
@@ -175,8 +164,6 @@ pub(crate) fn capture_listeners(window: &mut Window) {
     });
 }
 
-/// The fork's hit refiner: run at the start of every press, release and wheel in a window, before
-/// any listener.
 fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) {
     let capture = (kind != VnHitKind::Scroll).then(|| captured_target(window)).flatten();
     if capture.is_none() && crate::select::refine(kind, p, window, cx) {
@@ -214,8 +201,6 @@ fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) 
     window.vn_restrict_mouse_hit(&|tag| path.binary_search(&tag).is_ok(), kind != VnHitKind::Scroll);
 }
 
-/// The element the mouse event being dispatched in this window is for, or `fallback` outside such a
-/// dispatch (a window the refiner is not armed in).
 pub(crate) fn target_or(window: &Window, fallback: u32) -> u32 {
     windows::here(window, |w| w.hit).unwrap_or(fallback)
 }
@@ -243,7 +228,6 @@ fn click_target_in_tree(t: &Tree, down: u32, up: u32, root: u32, capture: Option
     capture.or_else(|| common_ancestor(t, down, up))
 }
 
-/// The nearest common inclusive ancestor of `a` and `b`.
 fn common_ancestor(t: &Tree, a: u32, b: u32) -> Option<u32> {
     let mut seen = Vec::with_capacity(16);
     let mut cur = a;
@@ -270,8 +254,6 @@ fn common_ancestor(t: &Tree, a: u32, b: u32) -> Option<u32> {
 }
 
 
-/// The elements under `p` in `window`, topmost first: every hittable element whose box is there
-/// (`all`), or the target alone.
 fn hit_ids(window: &Window, p: Point<Pixels>, all: bool) -> Vec<u32> {
     let tags = window.vn_tags_at(p);
     tree::read_tree(|t| {
@@ -301,8 +283,6 @@ fn hit_ids(window: &Window, p: Point<Pixels>, all: bool) -> Vec<u32> {
     })
 }
 
-/// `hit_ids` in the primary window — the one `document`'s viewport is — from wherever the script
-/// runs: the window in hand when it is that one, else borrowed through the app.
 fn hit_ids_in_primary(p: Point<Pixels>, all: bool) -> Vec<u32> {
     let primary = windows::primary();
     let in_hand = vn_runtime::with_commit(|window, cx| {
@@ -371,20 +351,16 @@ host_fn!(fn vn_pointer_capture(_g, args) {
     Value::boolean(valid).0
 });
 
-/// Registers hit testing and explicit pointer capture.
 pub(crate) fn install(rt: &JsRuntime) {
     rt.register("__vn_hit_at", 3, vn_hit_at as *const std::ffi::c_void);
     rt.register("__vn_pointer_capture", 3, vn_pointer_capture as *const std::ffi::c_void);
 }
 
 thread_local! {
-    /// `(cover, listener)` pairs the dev log has already named.
     static NAMED: std::cell::RefCell<std::collections::HashSet<(u32, u32)>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
 }
 
-/// A press whose target COVERS an element that listens for presses and is not on its path — a box
-/// painted over it that is not one of its ancestors.
 fn note_covered(t: &Tree, r: &Resolved, p: Point<Pixels>) {
     let mut listener = None;
     for &tag in r.tags.iter().skip(r.at + 1) {
@@ -427,23 +403,15 @@ fn note_covered(t: &Tree, r: &Resolved, p: Point<Pixels>) {
 
 #[derive(Default)]
 pub struct Hover {
-    /// The topmost element under the pointer and its ancestors, target first: the elements `:hover`
-    /// matches.
     path: Vec<u32>,
     from: Option<(Point<Pixels>, bool, u64)>,
-    /// When the last resolution ran.
     when: Option<std::time::Instant>,
-    /// A pop-out's per-frame tick is armed ([`arm_hover_tick`]).
     ticking: bool,
 }
 
-/// How often a page that keeps building frames under a STILL pointer has its hover resolved again:
-/// an animation, a scroll, a list filling in.
+/// How often a page that keeps building frames under a still pointer has its hover resolved again.
 const STILL_POINTER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
-/// Resolves what is hovered in this window, once a frame, the way a press is resolved: the topmost
-/// element under the pointer that `pointer-events` lets be hit (a pick or a hitbox,
-/// [`gpui::Window::vn_tags_at`]), and its ancestors.
 pub(crate) fn resolve_hover(window: &mut Window, cx: &mut App) {
     let pos = window.mouse_position();
     if crate::select::covers(window, pos) {
@@ -488,7 +456,6 @@ fn boundary(old: &[u32], new: &[u32]) -> (Vec<u32>, Vec<u32>) {
     (left, entered)
 }
 
-/// The hover path moved from `old` to `new`: the styles first, then the events.
 fn hover_moved(old: &[u32], new: &[u32], pos: Point<Pixels>, window: &mut Window, cx: &mut App) {
     let (left, entered) = boundary(old, new);
     // Before any handler: a `mouseenter` listener that restyles must find the transition already
@@ -524,8 +491,6 @@ fn hover_moved(old: &[u32], new: &[u32], pos: Point<Pixels>, window: &mut Window
     }
     let payload = crate::render::mouse_payload(pos, -1.0, &window.modifiers());
     let events = leaves.into_iter().map(|id| (id, tree::EV_MOUSELEAVE)).chain(enters.into_iter().map(|id| (id, tree::EV_MOUSEENTER)));
-    // The pump's, before gpui's draw, as the frame's `mousemove` is
-    // (`render::flush_pending_mouse_move`, which runs after this).
     crate::off_input(|| {
         for (id, ev) in events {
             if tree::read_tree(|t| t.node(id).is_some()) {
@@ -535,7 +500,6 @@ fn hover_moved(old: &[u32], new: &[u32], pos: Point<Pixels>, window: &mut Window
     });
 }
 
-/// Does `id` still hang off `root`?
 fn path_to(t: &Tree, id: u32, root: u32) -> bool {
     let mut cur = id;
     for _ in 0..4096 {
@@ -550,9 +514,8 @@ fn path_to(t: &Tree, id: u32, root: u32) -> bool {
     false
 }
 
-/// A pop-out window has no frame pump (vn-app's pump drives the primary window), so its hover — and
-/// its frame's coalesced `mousemove` — are delivered from a per-frame callback of its own, armed
-/// here once, from the pop-out's build.
+/// A pop-out has no frame pump (vn-app's drives the primary window), so its hover and coalesced
+/// `mousemove` are delivered from a per-frame callback armed here once, from its build.
 pub(crate) fn arm_hover_tick(window: &mut Window) {
     let k = windows::key(window);
     if windows::is_primary(k) || windows::here(window, |w| std::mem::replace(&mut w.hover.ticking, true)) {
@@ -566,7 +529,6 @@ fn hover_tick(window: &mut Window, cx: &mut App) {
     window.on_next_frame(hover_tick);
 }
 
-/// `node 42 (<div id="x" class="a b">)`, for the log line and the advisory.
 fn describe(t: &Tree, id: u32) -> String {
     let Some(node) = t.node(id) else { return format!("node {id}") };
     let mut out = format!("node {id} (<{}", t.name(node.tag));
@@ -589,8 +551,6 @@ mod tests {
         tree::with_tree(build)
     }
 
-    /// The cascade's answers, set by hand as the selection tests do: `pointer-events` already
-    /// folded down the tree, `visibility` as declared.
     fn set(t: &mut Tree, id: u32, pointer_none: Option<bool>, hidden: bool) {
         let mut cs = vn_css::ComputedStates::default();
         cs.extras.pointer_events_none = pointer_none;
@@ -682,14 +642,11 @@ mod tests {
         });
     }
 
-    /// `mouseleave` innermost first, then `mouseenter` outermost first; the shared ancestors hear
-    /// neither.
     #[test]
     fn the_boundary_between_two_hover_paths() {
         let (left, entered) = boundary(&[5, 3, 2, 1], &[6, 4, 2, 1]);
         assert_eq!(left, vec![5, 3]);
         assert_eq!(entered, vec![4, 6]);
-        // Into a child: only the child enters.
         assert_eq!(boundary(&[3, 2, 1], &[5, 3, 2, 1]), (vec![], vec![5]));
         assert_eq!(boundary(&[3, 2, 1], &[]), (vec![3, 2, 1], vec![]));
         assert_eq!(boundary(&[], &[3, 2, 1]), (vec![], vec![1, 2, 3]));
@@ -752,7 +709,6 @@ mod tests {
             assert_eq!((r.target, r.at), (plain, 2));
             let r = resolve(t, vec![decor], root);
             assert_eq!(r.target, root, "nothing hittable: the root");
-            // A node outside the window's root is not this window's.
             assert!(path_if_hittable(t, plain, decor).is_none());
         });
     }

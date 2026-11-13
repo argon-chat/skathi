@@ -1,22 +1,17 @@
 //! A frame's RGB in other primaries, or with another transfer curve, moved to sRGB's: what
-//! Chromium's compositor does to a video on an sRGB display (gfx::ColorSpace and its
-//! ColorTransform; checked against Chrome 156 in vn-sticker's video tests).
+//! Chromium's compositor does to a video on an sRGB display (checked against Chrome 156 in
+//! vn-sticker's video tests).
 //!
-//! Per pixel, on straight RGB: decode with the frame's transfer curve, a 3×3
-//! matrix from its primaries to sRGB's (Bradford-adapted from its white
-//! point to D65 when they differ, as skcms adapts through D50), clamp,
-//! encode with the sRGB curve. Chromium draws the SDR video curves (BT.709,
-//! SMPTE 170M, BT.2020) with the sRGB curve itself, so a frame in BT.709
-//! primaries with one of those is untouched: [`Gamut::new`] gives `None`
-//! and nothing runs.
+//! Per pixel, on straight RGB: decode with the frame's transfer curve, a 3×3 matrix from its
+//! primaries to sRGB's (Bradford-adapted from its white point to D65, as skcms adapts through D50),
+//! clamp, encode with the sRGB curve. Chromium draws the SDR video curves (BT.709, SMPTE 170M,
+//! BT.2020) with the sRGB curve itself, so a frame in BT.709 primaries with one of those is
+//! untouched: [`Gamut::new`] gives `None`.
 //!
-//! Tables: the decode is 256 floats, the encode 8193 bytes over linear
-//! light in steps of 1/8192 (at most 0.2 of a level off, near black where
-//! the sRGB curve is steepest).
+//! The decode table is 256 floats, the encode 8193 bytes over linear light in steps of 1/8192.
 
 use crate::{Primaries, Transfer};
 
-/// Linear-light steps of the encode table.
 const STEPS: usize = 8192;
 
 /// Chromaticities `[r, g, b, white]`, `(x, y)`: skia's SkNamedPrimaries.
@@ -78,7 +73,6 @@ fn to_xyz(c: [[f64; 2]; 4]) -> M3 {
     p.map(|row| [row[0] * s[0], row[1] * s[1], row[2] * s[2]])
 }
 
-/// Bradford chromatic adaptation from one white to another (XYZ).
 fn bradford(from: [f64; 3], to: [f64; 3]) -> M3 {
     const B: M3 = [[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]];
     let (f, t) = (apply(&B, from), apply(&B, to));
@@ -86,7 +80,6 @@ fn bradford(from: [f64; 3], to: [f64; 3]) -> M3 {
     mul(&invert(&B), &mul(&scale, &B))
 }
 
-/// Linear RGB in `p` to linear sRGB.
 pub(crate) fn matrix(p: Primaries) -> M3 {
     let (src, srgb) = (chromaticities(p), chromaticities(Primaries::Bt709));
     let adapt = bradford(xyz(src[3]), xyz(srgb[3]));
@@ -115,7 +108,6 @@ fn curve(t: Transfer) -> Curve {
     }
 }
 
-/// The curve, encoded value to linear light.
 pub(crate) fn decode(t: Transfer, x: f64) -> f64 {
     let k = curve(t);
     if x < k.d {
@@ -125,7 +117,6 @@ pub(crate) fn decode(t: Transfer, x: f64) -> f64 {
     }
 }
 
-/// The sRGB curve, linear light to encoded.
 pub(crate) fn encode_srgb(l: f64) -> f64 {
     if l <= 0.003_130_8 {
         12.92 * l
@@ -134,7 +125,6 @@ pub(crate) fn encode_srgb(l: f64) -> f64 {
     }
 }
 
-/// One frame colour space's tables.
 pub(crate) struct Gamut {
     pub(crate) key: (Primaries, Transfer),
     linear: [f32; 256],
@@ -143,8 +133,7 @@ pub(crate) struct Gamut {
 }
 
 impl Gamut {
-    /// `None` when there is nothing to do: BT.709 primaries and a curve
-    /// Chromium draws as sRGB's.
+    /// `None` when there is nothing to do: BT.709 primaries and a curve Chromium draws as sRGB's.
     pub(crate) fn new(primaries: Primaries, transfer: Transfer) -> Option<Gamut> {
         if primaries == Primaries::Bt709 && transfer == Transfer::Srgb {
             return None;
@@ -159,7 +148,6 @@ impl Gamut {
         std::mem::size_of::<Self>() + self.encode.len()
     }
 
-    /// Straight BGRA pixels, in place. A transparent pixel's colour is left.
     pub(crate) fn apply(&self, pixels: &mut [u8]) {
         let (m, lin, enc) = (&self.m, &self.linear, &self.encode[..]);
         let out = |v: f32| enc[(v.clamp(0.0, 1.0) * STEPS as f32 + 0.5) as usize];

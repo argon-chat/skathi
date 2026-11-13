@@ -6,11 +6,9 @@
 //!
 //! ThorVG reads natively the two Bodymovin idioms the pass exists for, so there it must be
 //! harmless. This renders every file in a directory twice through ThorVG, raw and normalised, at
-//! five timeline points and reports the worst mean per-channel difference; anything but
-//! `0.000000` means the pass changes what a capable renderer draws.
-//!
-//! It talks to `vn-thorvg-sys` directly because `LottieState::load` always normalises, which is
-//! what is under test (and an integration test only links the public API).
+//! five timeline points and reports the worst mean per-channel difference; anything but `0.000000`
+//! means the pass changes what a capable renderer draws. It talks to `vn-thorvg-sys` directly
+//! because `LottieState::load` always normalises, which is what is under test.
 
 use std::ffi::c_char;
 use std::path::Path;

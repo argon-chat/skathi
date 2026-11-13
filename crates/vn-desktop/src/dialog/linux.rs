@@ -1,12 +1,8 @@
-//! Linux: what every desktop answers, with no toolkit of our own.
-//!
-//! File pickers use the desktop portal's FileChooser (ashpd). It has no owner here: gpui does not
-//! hand out its windows' Wayland/X11 handles. A question or colour uses `zenity`, or `kdialog` on
-//! KDE or when zenity is missing.
-//!
-//! Each runs on the dialog's own thread and blocks it. A helper process is killed when the owner
-//! closes; a portal request cannot be closed before it answers (ashpd hands out the request only
-//! with its response), so the promise settles as a cancel and the late result is ignored.
+//! Linux: what every desktop answers, with no toolkit of our own. File pickers use the desktop portal's
+//! FileChooser (ashpd), which has no owner here (gpui does not hand out window handles). A question or
+//! colour uses `zenity`, or `kdialog` on KDE. Each runs on the dialog's own thread and blocks it. A helper
+//! process is killed when the owner closes; a portal request cannot be closed before it answers, so the
+//! promise settles as a cancel and the late result is ignored.
 
 use std::future::Future;
 use std::io::Read;
@@ -73,7 +69,6 @@ pub(super) fn pick(n: &Native, _: isize, cancel: &Cancellation) -> Result<Option
     Ok(Some(paths))
 }
 
-/// The type list, as globs that match either case (GTK's are case-sensitive).
 fn portal_filters(n: &Native) -> Vec<FileFilter> {
     let mut out: Vec<FileFilter> = n
         .filters
@@ -86,7 +81,6 @@ fn portal_filters(n: &Native) -> Vec<FileFilter> {
     out
 }
 
-/// `png` → `*.[pP][nN][gG]`.
 fn caseless_glob(ext: &str) -> String {
     let mut glob = String::from("*.");
     for c in ext.chars() {
@@ -114,8 +108,7 @@ fn start_folder(n: &Native) -> Option<PathBuf> {
     }
 }
 
-/// The save picker's `SetDefaultExtension`: a name typed without one gets
-/// the type's, unless that names a file the user was not asked to replace.
+/// The save picker's `SetDefaultExtension`: a name typed without one gets the type's.
 fn with_default_ext(path: &mut PathBuf, ext: &str) {
     if path.extension().is_some() || ext.is_empty() {
         return;
@@ -126,11 +119,9 @@ fn with_default_ext(path: &mut PathBuf, ext: &str) {
     }
 }
 
-/// A `file://` URI's path, percent-decoded. Anything else is not a file.
 fn file_path_of(uri: &str) -> Option<PathBuf> {
     use std::os::unix::ffi::OsStringExt;
     let rest = uri.strip_prefix("file://")?;
-    // `file://host/path`: only the local host.
     let path = match rest.find('/') {
         Some(0) => rest,
         Some(i) if &rest[..i] == "localhost" => &rest[i..],
@@ -154,8 +145,6 @@ fn file_path_of(uri: &str) -> Option<PathBuf> {
     Some(PathBuf::from(std::ffi::OsString::from_vec(out)))
 }
 
-/// Runs `fut` on this thread until it finishes, or until the owner starts to
-/// close (`None`).
 fn until_cancelled<T>(cancel: &Cancellation, fut: impl Future<Output = T>) -> Option<T> {
     async_io::block_on(futures_lite::future::or(async { Some(fut.await) }, async {
         loop {
@@ -167,8 +156,6 @@ fn until_cancelled<T>(cancel: &Cancellation, fut: impl Future<Output = T>) -> Op
     }))
 }
 
-/// The XDG user directory (`~/.config/user-dirs.dirs`, kept by
-/// xdg-user-dirs in the user's language), else its English default.
 pub(super) fn known_folder(k: Known) -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from).filter(|h| h.is_absolute())?;
     let (key, default) = match k {
@@ -187,7 +174,6 @@ pub(super) fn known_folder(k: Known) -> Option<PathBuf> {
     Some(saved.unwrap_or_else(|| home.join(default)))
 }
 
-/// One line of `user-dirs.dirs`: `XDG_DOWNLOAD_DIR="$HOME/Downloads"`.
 fn user_dir(dirs: &str, key: &str, home: &Path) -> Option<PathBuf> {
     let value = dirs.lines().find_map(|l| l.trim().strip_prefix(key)?.strip_prefix('='))?;
     let value = value.trim().strip_prefix('"')?.strip_suffix('"')?;
@@ -196,20 +182,16 @@ fn user_dir(dirs: &str, key: &str, home: &Path) -> Option<PathBuf> {
         None if value.starts_with('/') => PathBuf::from(value),
         None => return None,
     };
-    // A directory set to $HOME itself is "not used" (xdg-user-dirs).
     (path != home).then_some(path)
 }
 
-/// Which helper to try first: KDE's own on KDE.
 fn kde_first() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d.eq_ignore_ascii_case("KDE")))
 }
 
-/// What a helper said: how it exited and what it printed.
 type Said = (ExitStatus, String);
 
-/// Runs a helper to completion, killing it if the owner starts to close
-/// (`Ok(None)`). `Err` with `NotFound` is a helper that is not installed.
+/// Runs a helper to completion, killing it if the owner starts to close (`Ok(None)`).
 fn run_watched(mut cmd: Command, cancel: &Cancellation) -> std::io::Result<Option<Said>> {
     let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
     loop {
@@ -229,7 +211,6 @@ fn run_watched(mut cmd: Command, cancel: &Cancellation) -> std::io::Result<Optio
     }
 }
 
-/// Tries the helpers in order; the first one installed answers.
 fn ask_helpers<T>(
     cancel: &Cancellation,
     what: &str,
@@ -253,8 +234,7 @@ fn ordered<T>(mut helpers: Vec<(&'static str, Command, T)>) -> Vec<(&'static str
     helpers
 }
 
-/// The question. The first button is zenity's OK and the rest its extra buttons, so zenity's own
-/// Cancel, Esc and the close box are a dismissal. kdialog: yes / no / cancel, up to three buttons.
+/// The question: zenity's own Cancel, Esc and close box are a dismissal. kdialog: yes / no / cancel, up to three buttons.
 pub(super) fn ask(q: &Ask, _: isize, cancel: &Cancellation) -> Result<Option<usize>, Fail> {
     if cancel.is_requested() {
         return Ok(None);
@@ -304,7 +284,6 @@ pub(super) fn ask(q: &Ask, _: isize, cancel: &Cancellation) -> Result<Option<usi
     ask_helpers(cancel, "native questions", ordered(helpers)).map(Option::flatten)
 }
 
-/// The colour chooser: `#rrggbb` in and out.
 pub(super) fn color(value: &str, _: isize, cancel: &Cancellation) -> Result<Option<String>, Fail> {
     if cancel.is_requested() {
         return Ok(None);
@@ -319,8 +298,6 @@ pub(super) fn color(value: &str, _: isize, cancel: &Cancellation) -> Result<Opti
     ask_helpers(cancel, "color pickers", ordered(helpers)).map(Option::flatten)
 }
 
-/// `#rrggbb`, from what the helpers print: zenity's `rgb(r,g,b)` /
-/// `rgba(r,g,b,a)` (GTK's `gdk_rgba_to_string`), kdialog's `#rrggbb`.
 fn hex_of(s: &str) -> Option<String> {
     if let Some(hex) = s.strip_prefix('#') {
         return (hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit())).then(|| format!("#{}", hex.to_ascii_lowercase()));

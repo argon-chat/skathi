@@ -8,19 +8,13 @@ use lightningcss::media_query::{
 };
 use lightningcss::traits::ToCss;
 
-/// The runtime inputs `@media` conditions are evaluated against — the native stand-in for a
-/// browser's "environment".
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Env {
     pub viewport_width: f32,
     pub viewport_height: f32,
-    /// `prefers-color-scheme: dark`.
     pub dark: bool,
-    /// `prefers-reduced-motion: reduce`.
     pub reduce_motion: bool,
-    /// `resolution` in `dppx` — the window's DPI scale factor.
     pub scale_factor: f32,
-    /// `display-mode` — which chrome mode the window is in.
     pub display_mode: DisplayMode,
     /// All zero when the overlay is not visible (OS chrome, fullscreen, minimised) — exactly what a
     /// PWA in a tab reports, so a component written for a real PWA takes the right branch.
@@ -33,7 +27,6 @@ pub struct Env {
     pub safe_area_insets: [f32; 4],
 }
 
-/// The `display-mode` media feature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisplayMode {
     Standalone,
@@ -67,8 +60,6 @@ impl Default for Env {
     }
 }
 
-/// The comparison in `feature OP value` (already normalised into that orientation by lightningcss:
-/// `(400px < width)` parses as `width > 400px`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Cmp {
     Lt,
@@ -89,8 +80,6 @@ impl Cmp {
         }
     }
 
-    /// The interval syntax (`(400px < width < 800px)`) states its first comparison value-first, so
-    /// it needs flipping.
     fn flip(self) -> Cmp {
         match self {
             Cmp::Lt => Cmp::Gt,
@@ -114,7 +103,6 @@ impl Cmp {
     }
 }
 
-/// One supported media feature test.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Feature {
     Width(Cmp, f32),
@@ -123,17 +111,12 @@ pub(crate) enum Feature {
     ReducedMotion(bool),
     Resolution(Cmp, f32),
     Display(DisplayMode),
-    /// `any` widens the question from "the primary device" to "any device attached", which is the
-    /// only thing the two features differ in.
     Pointer { any: bool, want: PointerKind },
     Hover { any: bool, want: bool },
 }
 
-/// The `pointer` / `any-pointer` values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PointerKind {
-    /// No pointing device at all — never true for us; a gpui window always has a mouse cursor to be
-    /// pointed at.
     None,
     Coarse,
     Fine,
@@ -157,8 +140,6 @@ impl Feature {
                 PointerKind::Coarse => any && env.coarse_pointer,
             },
             Feature::Hover { any, want } => {
-                // The touch flag only moves the answer for a device set that has no mouse in it,
-                // which a gpui window never has.
                 let _ = any;
                 want
             }
@@ -166,7 +147,6 @@ impl Feature {
     }
 }
 
-/// A whole `@media` prelude as a boolean tree.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Cond {
     Always,
@@ -189,8 +169,6 @@ impl Cond {
         }
     }
 
-    /// `a and b`, flattened and constant-folded so the common `@media screen and (min-width:
-    /// 640px)` ends up as a single feature.
     pub(crate) fn and(self, other: Cond) -> Cond {
         match (self, other) {
             (Cond::Never, _) | (_, Cond::Never) => Cond::Never,
@@ -212,10 +190,8 @@ impl Cond {
     }
 }
 
-/// Why a `@media` prelude could not be compiled.
 pub(crate) type Unsupported = &'static str;
 
-/// The supported surface, quoted verbatim in every advisory so an author never has to guess.
 pub(crate) const SUPPORTED: &str = "supported: `screen`/`all`/`print` media types, \
      `width`/`min-width`/`max-width`, `height`/`min-height`/`max-height` (px lengths, \
      range and interval syntax), `prefers-color-scheme`, `prefers-reduced-motion`, \
@@ -223,7 +199,6 @@ pub(crate) const SUPPORTED: &str = "supported: `screen`/`all`/`print` media type
      `pointer`/`any-pointer`, `hover`/`any-hover`, \
      combined with `and`/`or`/`not`/`,`";
 
-/// Parses a whole media list (the comma-separated prelude) into one condition.
 pub(crate) fn parse_list(list: &MediaList<'_>) -> Result<Cond, Unsupported> {
     let mut queries = Vec::with_capacity(list.media_queries.len());
     for q in &list.media_queries {
@@ -249,7 +224,6 @@ fn parse_query(q: &MediaQuery<'_>) -> Result<Cond, Unsupported> {
         None => type_cond,
     };
     Ok(match q.qualifier {
-        // `only` is the legacy MSIE guard and means nothing to a modern parser.
         Some(Qualifier::Not) => match cond {
             Cond::Always => Cond::Never,
             Cond::Never => Cond::Always,
@@ -277,8 +251,6 @@ fn parse_condition(c: &MediaCondition<'_>) -> Result<Cond, Unsupported> {
     })
 }
 
-/// The feature name, once lightningcss has stripped any `min-`/`max-` prefix (it turns those into a
-/// range comparator, so `min-width: 640px` arrives here as `width >= 640px`).
 fn standard(name: &MediaFeatureName<'_, MediaFeatureId>) -> Result<MediaFeatureId, Unsupported> {
     match name {
         MediaFeatureName::Standard(id) => Ok(*id),
@@ -303,8 +275,6 @@ fn ident<'a>(value: &'a MediaFeatureValue<'_>) -> Result<&'a str, Unsupported> {
     }
 }
 
-/// `resolution` normalised to `dppx` (what `devicePixelRatio` and `scale_factor()` are); 96 dpi = 1
-/// dppx is exact.
 fn dppx(value: &MediaFeatureValue<'_>) -> Result<f32, Unsupported> {
     use lightningcss::values::resolution::Resolution;
     match value {
@@ -387,7 +357,6 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
             },
             _ => return Err("an unsupported media feature"),
         },
-        // Boolean form: "the feature is present and not its zero/none value".
         QueryFeature::Boolean { name } => match standard(name)? {
             Width | Height => Cond::Always,
             PrefersColorScheme => Cond::Always,
@@ -439,7 +408,6 @@ pub fn match_media(query: &str, env: &Env) -> Result<bool, String> {
         .map_err(|why| format!("uses {why} — {SUPPORTED}"))
 }
 
-/// The prelude's source text, for advisories.
 pub(crate) fn list_text(list: &MediaList<'_>) -> String {
     list.to_css_string(lightningcss::printer::PrinterOptions::default())
         .unwrap_or_else(|_| "<media query>".into())
@@ -569,14 +537,11 @@ mod tests {
             assert!(t("(any-hover: hover)", env), "the mouse can always hover");
             assert!(!t("(any-hover: none)", env));
             assert!(t("(any-pointer: fine)", env));
-            // The boolean form is "not `none`", which the mouse satisfies.
             assert!(t("(pointer)", env) && t("(hover)", env));
         }
         assert!(!t("(any-pointer: coarse)", &mouse));
         assert!(t("(any-pointer: coarse)", &touch));
 
-        // Tailwind's own `pointer-coarse:` / `hover:` variants compile to exactly these, and `not`
-        // composes.
         assert!(t("not (pointer: coarse)", &mouse));
         assert!(t("(hover: hover) and (pointer: fine)", &mouse));
     }
@@ -624,8 +589,6 @@ mod tests {
         assert!(cond("(display-mode: standalone)").unwrap().eval(&standalone));
         assert!(cond("(display-mode: fullscreen)").unwrap().eval(&fs));
 
-        // We are permanently an installed app window, so `browser` parses (a ported PWA's fallback
-        // branch stays compilable) and never matches.
         let browser = cond("(display-mode: browser)").unwrap();
         assert_eq!(browser, Cond::Never);
         assert!(!browser.eval(&wco));

@@ -30,22 +30,17 @@ const OVERSCAN_FRACTION: f32 = 0.5;
 /// The least overscan, in CSS pixels.
 const MIN_OVERSCAN: f32 = 256.0;
 
-/// One candidate's pin.
 struct Entry {
     sub_rev: u64,
     ctx: Inherited,
     parent_size: (f32, f32),
     size: (f32, f32),
-    /// The subtree's node ids, valid for `ids_rev`.
     ids: Vec<u32>,
     ids_rev: u64,
 }
 
-/// The clip a node's children are tested against, in this frame's window coordinates, and how far
-/// last frame's rectangles of those children moved.
 #[derive(Clone, Copy)]
 struct View {
-    /// `[left, top, right, bottom]`; `None` when no clip can be predicted.
     clip: Option<[f32; 4]>,
     shift: (f32, f32),
 }
@@ -54,9 +49,7 @@ thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
     static WINDOW: Cell<[f32; 4]> = const { Cell::new([0.0; 4]) };
     static ENTRIES: RefCell<IdMap<Entry>> = RefCell::new(IdMap::default());
-    /// Per parent, for the build in progress.
     static VIEWS: RefCell<IdMap<View>> = RefCell::new(IdMap::default());
-    /// Scroll offsets as of the last build that tested a container's children.
     static OFFSETS: RefCell<IdMap<(f32, f32)>> = RefCell::new(IdMap::default());
     /// Moving nodes and their ancestors: refused as candidates.
     static HOT: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
@@ -64,7 +57,6 @@ thread_local! {
     static MOVING: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
     /// The focused and pointer-capturing nodes and their ancestors.
     static PINNED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
-    /// Whether a subtree holds something that refuses culling, by `sub_rev`.
     static BLOCKED: RefCell<IdMap<(u64, bool)>> = RefCell::new(IdMap::default());
 }
 
@@ -86,7 +78,6 @@ fn enabled() -> bool {
     })
 }
 
-/// Decided once per build, before the tree is read.
 pub(crate) fn begin_frame(window: &Window, now: std::time::Instant) {
     let on = enabled() && !window.is_a11y_active();
     ACTIVE.with(|c| c.set(on));
@@ -133,7 +124,6 @@ fn clips(overflow: Option<gpui::Overflow>) -> bool {
     !matches!(overflow, None | Some(gpui::Overflow::Visible))
 }
 
-/// Does this ONE node refuse culling of any subtree holding it?
 fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     if node.kind != Kind::Element {
         return false;
@@ -177,7 +167,6 @@ fn blocked(t: &Tree, id: u32) -> bool {
     out
 }
 
-/// The clip `parent`'s children are tested against.
 fn view_of(t: &Tree, parent: u32, root: u32, win: WinKey) -> View {
     if let Some(view) = VIEWS.with(|v| v.borrow().get(&parent).copied()) {
         return view;
@@ -228,8 +217,6 @@ fn view_of(t: &Tree, parent: u32, root: u32, win: WinKey) -> View {
     view
 }
 
-/// The culling hook, called by `build_node` before it lowers anything: `Some` is the placeholder
-/// the caller returns in place of the node.
 pub(crate) fn placeholder(
     t: &Tree,
     id: u32,
@@ -312,8 +299,6 @@ pub(crate) fn placeholder(
     Some(Placeholder { id, inner: crate::render::probe(id, boxed.into_any_element()) }.into_any_element())
 }
 
-/// The stand-in: its probe records the box's rectangle, then every node under it is carried forward
-/// by however far the box moved.
 struct Placeholder {
     id: u32,
     inner: AnyElement,

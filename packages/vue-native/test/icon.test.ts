@@ -1,6 +1,4 @@
-// The exe icon pipeline — `.ico` verbatim, a square PNG resized in TS.
-//
-//   bun test packages/vue-native/test/icon.test.ts
+// The exe icon pipeline: `.ico` verbatim, a square PNG resized in TS.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -19,7 +17,6 @@ function solid(size: number, rgba: [number, number, number, number]): Rgba {
   return { width: size, height: size, data };
 }
 
-/** A hand-built PNG with a chosen colour type and per-row filters, to exercise the decoder. */
 function rawPng(width: number, height: number, color: number, rows: Uint8Array[], plte?: Uint8Array): Uint8Array {
   const chunk = (type: string, body: Uint8Array) => {
     const out = new Uint8Array(12 + body.length);
@@ -56,7 +53,6 @@ describe("PNG", () => {
   });
 
   test("every filter type and the RGB / palette colour types decode", () => {
-    // 2×2 RGB, rows filtered with Sub (1) and Paeth (4).
     const rgb = rawPng(2, 2, 2, [
       new Uint8Array([1, 10, 20, 30, 5, 5, 5]), // Sub: pixel 2 = (15,25,35)
       new Uint8Array([4, 1, 1, 1, 0, 0, 0]), // Paeth over row 1
@@ -64,11 +60,8 @@ describe("PNG", () => {
     const a = decodePng(rgb);
     expect([...a.data.subarray(0, 8)]).toEqual([10, 20, 30, 255, 15, 25, 35, 255]);
     expect([...a.data.subarray(8, 12)]).toEqual([11, 21, 31, 255]);
-    // Up (2) and Average (3).
     const up = decodePng(rawPng(1, 2, 0, [new Uint8Array([0, 100]), new Uint8Array([2, 5])]));
     expect(up.data[4]).toBe(105);
-    // Average on the first row: no row above, so pixel 0 adds (0+0)/2 and
-    // pixel 1 adds (100+0)/2.
     const avg = decodePng(rawPng(2, 1, 0, [new Uint8Array([3, 100, 10])]));
     expect([avg.data[0], avg.data[4]]).toEqual([100, 60]);
     const pal = decodePng(rawPng(1, 1, 3, [new Uint8Array([0, 1])], new Uint8Array([0, 0, 0, 9, 8, 7])));
@@ -84,8 +77,6 @@ describe("PNG", () => {
 
 describe("resize", () => {
   test("a box filter averages, in premultiplied alpha", () => {
-    // Left half opaque red, right half fully transparent GREEN. A straight-alpha
-    // average would turn the edge pixel brownish; premultiplied keeps it red.
     const img: Rgba = { width: 2, height: 1, data: new Uint8Array([255, 0, 0, 255, 0, 255, 0, 0]) };
     const one = resizeRgba(img, 1, 1);
     expect([...one.data]).toEqual([255, 0, 0, 128]);
@@ -122,7 +113,6 @@ describe("icon images", () => {
   });
 
   test(".ico in, group icon out", () => {
-    // Build a 2-image .ico by hand, then parse it back.
     const imgs = [encodePng(solid(16, [1, 1, 1, 255])), encodePng(solid(32, [2, 2, 2, 255]))];
     const head = new Uint8Array(6 + imgs.length * 16);
     const dv = new DataView(head.buffer);

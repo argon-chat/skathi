@@ -28,9 +28,7 @@ pub struct HostCookie {
 }
 
 /// Services available after storage is installed and before any application JS runs.
-///
-/// Cookie and secret operations require `vn-app`'s `storages` feature. Secrets use
-/// the existing sealed storage format and OS encryption provider; no plaintext fallback.
+/// Cookie and secret operations need the `storages` feature; secrets are sealed by the OS provider, no plaintext fallback.
 pub struct HostContext<'a> {
     runtime: Option<&'a vn_runtime::JsRuntime>,
     js: Option<&'a crate::js::Context>,
@@ -49,13 +47,12 @@ impl<'a> HostContext<'a> {
         }
     }
 
-    /// The full direct JavaScriptCore API, borrowed on the UI/VM thread only.
+    /// Direct JavaScriptCore API; UI/VM thread only.
     pub fn js(&self) -> &'a crate::js::Context {
         self.js.expect("HostContext::js is only available inside Builder::setup")
     }
 
-    /// Installs an ordinary native namespace before app code. Nested properties
-    /// and methods are built with `js.object`, `js.set` and `vn_app::js::function`.
+    /// Installs a native namespace before app code, built with `js.object`, `js.set` and `vn_app::js::function`.
     pub fn expose(&self, name: &str, value: crate::js::Value) -> crate::js::Result<()> {
         if name.is_empty() || name.to_ascii_lowercase().starts_with("__vn")
             || !self.js().global_get(name)?.is_undefined() {
@@ -69,26 +66,21 @@ impl<'a> HostContext<'a> {
         crate::js::JsDispatcher::install(self.js())
     }
 
-    /// The running app's [`super::Handle`], for UI that outlives setup — a
-    /// tray icon that shows or closes the window. On macOS it is the only way
-    /// to one: `run_on_main_thread` keeps the process and returns no handle.
+    /// The running app's [`super::Handle`], for UI that outlives setup (a tray icon). On macOS it
+    /// is the only way to one: `run_on_main_thread` returns no handle.
     pub fn handle(&self) -> super::Handle {
         super::Handle { _private: () }
     }
 
-    /// The engine's own runtime, for a native extension built against the
-    /// same `vn-runtime`: it registers `__vn_*`-style host fns with
-    /// `vn_runtime::host_fn!` and `JsRuntime::register`, which [`Self::expose`]
-    /// refuses on purpose. Prefer `expose` unless the extension needs that.
+    /// The engine's runtime, for an extension built against the same `vn-runtime` that registers
+    /// `__vn_*` host fns, which [`Self::expose`] refuses on purpose. Prefer `expose`.
     pub fn runtime(&self) -> &'a vn_runtime::JsRuntime {
         self.runtime.expect("HostContext::runtime is only available inside Builder::setup")
     }
 
-    /// Called on the VM thread once per frame, in the frame pump, before the
-    /// frame's wave drains: the place for a native extension to deliver what
-    /// its worker threads queued (events, settled promises), so a JS handler
-    /// never observes a half-applied patch. Keep it bounded; it is on the
-    /// frame's critical path. Runs until shutdown.
+    /// Called on the VM thread once per frame before the frame's wave drains: deliver what worker
+    /// threads queued here, so a JS handler never observes a half-applied patch. Keep it bounded;
+    /// it is on the frame's critical path. Runs until shutdown.
     pub fn on_frame(&self, hook: impl Fn() + 'static) {
         crate::js::on_frame(hook);
     }
@@ -99,13 +91,12 @@ impl<'a> HostContext<'a> {
         crate::js::on_reload(hook);
     }
 
-    /// Called once on the VM thread during orderly shutdown. Release protected
-    /// callback values here; worker shutdown remains the embedding app's responsibility.
+    /// Called once on the VM thread during orderly shutdown. Release protected callbacks here;
+    /// stopping workers is the embedder's job.
     pub fn on_shutdown(&self, hook: impl Fn(&crate::js::Context) + 'static) {
         crate::js::on_shutdown(hook);
     }
 
-    /// The storage directory latched for cookies and host secrets at startup.
     pub fn storage_dir(&self) -> Result<PathBuf, String> {
         self.storage_dir.clone().ok_or_else(storage_unavailable)
     }
@@ -140,7 +131,6 @@ impl<'a> HostContext<'a> {
         }
     }
 
-    /// Fills bytes from the OS CSPRNG or returns an explicit unsupported error.
     pub fn random_bytes(&self, bytes: &mut [u8]) -> Result<(), String> {
         #[cfg(feature = "storages")]
         { vn_storage::crypt::random_bytes(bytes) }
@@ -151,8 +141,7 @@ impl<'a> HostContext<'a> {
         }
     }
 
-    /// Reads one sealed UTF-8 secret. Only an absent file returns `Ok(None)`;
-    /// corrupt, inaccessible or undecryptable secrets return an error.
+    /// Only an absent file returns `Ok(None)`; a corrupt or undecryptable secret is an error.
     pub fn read_secret(&self, name: &str) -> Result<Option<String>, String> {
         validate_secret_name(name)?;
         let folder = self.storage_dir()?;
@@ -176,7 +165,6 @@ impl<'a> HostContext<'a> {
         }
     }
 
-    /// Atomically writes one sealed UTF-8 secret under an application-owned filename.
     pub fn write_secret(&self, name: &str, value: &str) -> Result<(), String> {
         validate_secret_name(name)?;
         let folder = self.storage_dir()?;

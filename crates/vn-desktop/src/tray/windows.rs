@@ -87,7 +87,6 @@ impl Controller {
             return Err(Error::Closed);
         }
         let revision = self.revision.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
-        // Never run a user capture's destructor while holding the queue mutex.
         let discarded = pending.replace((revision, options));
         drop(pending);
         drop(discarded);
@@ -98,7 +97,6 @@ impl Controller {
                     crate::log_later("warn", format!("tray menu cancellation: {error}"));
                 }
                 if let Err(error) = PostMessageW(Some(hwnd), UPDATE, WPARAM(0), LPARAM(0)) {
-                    // The periodic recovery tick also drains pending updates.
                     crate::log_later("warn", format!("tray update wake: {error}"));
                 }
             }
@@ -109,8 +107,7 @@ impl Controller {
         self.revision.load(Ordering::Acquire)
     }
     fn stop_admission(&self) {
-        // Serialize the tombstone with set(): a concurrent admitted update must
-        // never become the current revision after the controller has stopped.
+        // Serialize the tombstone with set(): an admitted update must never become current after the stop.
         let _pending = self.pending.lock().ok();
         if !self.stopping.swap(true, Ordering::AcqRel) {
             self.revision.fetch_add(1, Ordering::AcqRel);
@@ -148,8 +145,7 @@ impl Controller {
                     crate::log_later("error", "native tray thread panicked".into());
                 }
             } else {
-                // Explorer can stall inside a shell call. Its worker retains all
-                // resources; shutdown must not join it without a deadline.
+                // Explorer can stall inside a shell call: shutdown must not join its worker without a deadline.
                 crate::log_later(
                     "warn",
                     "native tray teardown timed out; worker owns cleanup".into(),
@@ -343,7 +339,6 @@ impl State {
             snapshot.options.on_quit.as_ref(),
         )?;
         let point = point.unwrap_or_else(|| menu_position(hwnd));
-        // Windows may deny foreground activation; menu tracking still works.
         let _foreground_allowed = unsafe { SetForegroundWindow(hwnd) }.as_bool();
         let selected = unsafe {
             TrackPopupMenu(
@@ -455,7 +450,6 @@ fn build_menu(
     Ok(menu)
 }
 fn menu_label(label: &str) -> Vec<u16> {
-    // Labels are plain text, not implicit Win32 mnemonic markup.
     label
         .replace('&', "&&")
         .encode_utf16()
@@ -555,9 +549,7 @@ fn make_icon_foreground(source: Option<&Icon>, foreground: u8) -> Result<NativeI
     let mut pixels = canvas.into_raw();
     for pixel in pixels.chunks_exact_mut(4) {
         let alpha = u16::from(pixel[3]);
-        // This BI_RGB-to-HICON boundary takes straight colours (verified by
-        // DrawIconEx readback). Keep interpolation premultiplied, then restore
-        // straight colours only for native icon creation.
+        // This BI_RGB-to-HICON boundary takes straight colours: interpolate premultiplied, restore straight only for icon creation.
         if source.template {
             for channel in &mut pixel[..3] {
                 *channel = foreground;

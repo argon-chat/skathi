@@ -62,7 +62,6 @@ describe("childNodes: a live NodeList, the renderer's own list", () => {
     expect(() => list.item()).toThrow("1 argument required");
     expect(list.item).toBe(g.NodeList.prototype.item);
     expect(p.childNodes).toBe(list);
-    // Live: it IS the list the renderer splices.
     const b = vue("b", p);
     expect(list.length).toBe(2);
     expect([...list]).toEqual([t, b]);
@@ -73,7 +72,6 @@ describe("childNodes: a live NodeList, the renderer's own list", () => {
       [0, t],
       [1, b],
     ]);
-    // A text node has one too, empty.
     expect(t.childNodes instanceof g.NodeList).toBe(true);
     expect(t.childNodes.length).toBe(0);
   });
@@ -94,7 +92,6 @@ describe("childNodes: a live NodeList, the renderer's own list", () => {
     const a = vue("i", root);
     const b = vue("i", root);
     rt.host.queryAnswers.set("i|0", `${a.__vnId},${b.__vnId}`);
-    // framer-motion/dist/es/animation/animate/resolve-subjects.mjs, verbatim.
     const NodeList = g.NodeList;
     function resolveSubjects(subject: Any) {
       if (subject instanceof NodeList) return Array.from(subject);
@@ -123,7 +120,6 @@ describe("querySelectorAll: a static NodeList", () => {
     expect(Object.keys(list)).toEqual(["0"]);
     expect(Object.getOwnPropertyDescriptor(list, 0)).toEqual({ value: a, writable: false, enumerable: true, configurable: true });
     expect(typeof list.map).toBe("undefined");
-    // Static: a later child is not in it.
     vue("i", root);
     expect(list.length).toBe(1);
     expect(g.document.querySelectorAll("i") instanceof g.NodeList).toBe(true);
@@ -173,13 +169,10 @@ describe("children and getElementsBy*: live HTMLCollections", () => {
     expect("p" in kids).toBe(true);
     expect("1" in kids).toBe(true);
     expect("2" in kids).toBe(false);
-    // Indices then names; the names are not enumerable.
     expect(Object.getOwnPropertyNames(kids)).toEqual(["0", "1", "n", "p"]);
     expect(Object.keys(kids)).toEqual(["0", "1"]);
-    // A name the prototype has stays the prototype's.
     vue("i", root, { id: "item" });
     expect(typeof kids.item).toBe("function");
-    // Live.
     expect(kids.length).toBe(3);
     root.removeChild(span);
     expect(kids.length).toBe(2);
@@ -272,7 +265,6 @@ describe("Node", () => {
     expect(doc.createAttribute("x") instanceof g.Node).toBe(true);
     expect(doc instanceof g.Node).toBe(true);
     expect({} instanceof g.Node).toBe(false);
-    // The constants reach every node through its chain (emojix compares with them).
     expect(t.nodeType === g.Node.TEXT_NODE).toBe(true);
     expect(t.TEXT_NODE).toBe(3);
     expect(el.ELEMENT_NODE).toBe(1);
@@ -334,7 +326,6 @@ describe("namespaces: SVG and MathML elements", () => {
     expect(svg instanceof g.HTMLElement).toBe(false);
     const mi = doc.createElementNS("http://www.w3.org/1998/Math/MathML", "mi");
     expect(mi instanceof g.MathMLElement).toBe(true);
-    // A fragment is a Node but not an element of either kind.
     const frag = new g.DocumentFragment();
     expect(frag instanceof g.HTMLElement).toBe(false);
     expect(frag instanceof g.Node).toBe(true);
@@ -391,11 +382,9 @@ describe("touch, as desktop Chrome shows it on a machine without a touch screen"
     expect([...ev.changedTouches]).toEqual([t]);
     expect(() => new g.TouchEvent("touchstart", { touches: [{}] })).toThrow("Touch");
     expect(() => new g.TouchList()).toThrow("Illegal constructor");
-    // What a page tests to decide it is on a touch device: all no.
     expect("ontouchstart" in g).toBe(false);
     expect("ontouchstart" in el).toBe(false);
     void rt;
-    // The engine's navigator (a parameter in the harness) says 0 touch points.
     const navigator: Any = { permissions: { query: () => Promise.resolve(Object.assign(new EventTarget(), { state: "granted" })) } };
     createRuntime({ navigator });
     expect(navigator.maxTouchPoints).toBe(0);

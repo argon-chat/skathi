@@ -1,10 +1,6 @@
-// <Transition> / <TransitionGroup> (compat roadmap G9).
-//
-// These are runtime-dom's components ported onto our host, so what is worth
-// pinning is (a) that they EXIST as exports at all — their absence is a hard
-// prod-build failure for anything importing them from "vue", which @vueuse/core
-// does at module scope — and (b) that the class pipeline runs the same phases in
-// the same order, riding vn-css's real transition engine.
+// <Transition> / <TransitionGroup>: they must EXIST as exports (their absence is a hard prod-build failure for
+// anything importing them from "vue", which @vueuse/core does at module scope), and the class pipeline must run
+// the same phases in the same order, riding vn-css's real transition engine.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
@@ -17,8 +13,6 @@ describe("exports", () => {
     expect(typeof rt.Transition).toBe("object");
     expect(rt.Transition.name).toBe("Transition");
     expect(rt.TransitionGroup.name).toBe("TransitionGroup");
-    // BaseTransition's props (mode, appear, …) are merged in, so `<Transition
-    // mode="out-in">` is validated and handled by runtime-core itself.
     expect("mode" in rt.Transition.props).toBe(true);
     expect("appear" in rt.Transition.props).toBe(true);
     expect("enterActiveClass" in rt.Transition.props).toBe(true);
@@ -45,17 +39,13 @@ describe("the class pipeline", () => {
 
     let done = false;
     hooks.onEnter(node, () => (done = true));
-    // Still in the from-state until two frames have passed.
     expect(lastClass(rt)).toContain("fade-enter-from");
 
     await tick();
     await tick();
     await tick();
-    // The to-phase really happened…
     expect(rt.host.classes.map((c) => c.value)).toContain("card fade-enter-active fade-enter-to");
-    // …with no transition-duration published the phase then resolves at once…
     expect(done).toBe(true);
-    // …and every phase class is cleaned up afterwards.
     expect(lastClass(rt)).toBe("card");
   });
 
@@ -85,7 +75,6 @@ describe("the class pipeline", () => {
     const rt = createRuntime();
     const onEnter = () => {};
     const props = rt.resolveTransitionProps({ name: "fade", css: false, onEnter, mode: "out-in" });
-    // Only the JS hooks survive — no generated onBeforeEnter.
     expect(props.onEnter).toBe(onEnter);
     expect(props.mode).toBe("out-in");
   });
@@ -100,13 +89,10 @@ describe("the class pipeline", () => {
     await tick();
     await tick();
     await tick();
-    // 50ms has NOT elapsed, so the phase is still running…
     expect(done).toBe(false);
     expect(lastClass(rt)).toContain("fade-enter-to");
     await new Promise((r) => setTimeout(r, 80));
     expect(done).toBe(true);
-    // The timer is the SAFETY NET now rather than the mechanism, so there is
-    // no divergence left to state — runtime-dom arms the same fallback.
     expect(rt.advisories()).toEqual([]);
   });
 
@@ -140,7 +126,6 @@ describe("the class pipeline", () => {
     const rt = createRuntime();
     const node = el(rt);
     rt.host.computedById.set(node.__vnId, "transition-duration=0.05s\n");
-    // Two-argument hook = "I will call done myself" (runtime-dom's rule).
     const hooks = rt.resolveTransitionProps({ name: "fade", onEnter: (_el, _done) => {} });
     let done = false;
     hooks.onEnter(node, () => (done = true));

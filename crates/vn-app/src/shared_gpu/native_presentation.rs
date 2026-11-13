@@ -107,7 +107,6 @@ struct CachedConversion {
     pipeline: Conversion,
     fence: ID3D12Fence,
     native_queue: ID3D12CommandQueue,
-    // Orders our readiness values in precisely the same order as submissions.
     submission: Mutex<u64>,
     _lifetime: Lifetime,
 }

@@ -5,14 +5,6 @@
 //! cargo run -p vn-app --example crash_dialog -- [ru] [light|dark] [owner] [expanded] [embedded] [solid]
 //!     [--app Name] [--version 1.4.2] [--reason "text"] [--accent 005FB8/60CDFF] [--icon C:\Windows\notepad.exe]
 //! ```
-//!
-//! `light` / `dark` force the theme (the system's otherwise); `ru` speaks
-//! Russian; `owner` opens a window first and shows the dialog over it, which
-//! it then disables; `expanded` opens Details; `embedded` is an embedded
-//! host's dialog (no Restart); `solid` draws the card without acrylic, as
-//! before Windows 11 22H2. `--accent` replaces the system accent (the light
-//! and dark themes' fills) and `--icon` takes another exe's icon, this one
-//! having none. Prints the answer and exits.
 
 #[cfg(target_os = "windows")]
 fn main() {

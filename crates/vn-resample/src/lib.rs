@@ -1,9 +1,7 @@
 //! The pixel kernel behind `vn-tree`'s downscaled image copies (`vn_tree::resample` decides when a
-//! copy is made).
-//!
-//! It lives in a crate of its own so the workspace's dev profile can give it `opt-level = 3`:
+//! copy is made). It has a crate of its own so the dev profile can give it `opt-level = 3`:
 //! `image::imageops::resize` is generic, so it is compiled in whichever crate calls it, and from
-//! `vn-tree` it ran unoptimised in debug builds (one image took 659 ms on the painting thread).
+//! `vn-tree` it ran unoptimised in debug builds.
 
 /// `w` × `h` pixels of 4 bytes, BGRA or RGBA (the channel order does not
 /// matter here), filtered down to `tw` × `th`. Straight alpha unless
@@ -12,9 +10,8 @@ pub fn downscale(bytes: &[u8], w: u32, h: u32, tw: u32, th: u32, premultiplied: 
     use image::{imageops, ImageBuffer, Rgba};
     let (tw, th) = (tw.clamp(1, w.max(1)), th.clamp(1, h.max(1)));
     // First a k×k box average, k the largest power of two that leaves the image at least twice the
-    // target (a mipmap chain's 2×2 steps in one pass), so Lanczos has a ratio under 4 left. In
-    // integers off the bytes, premultiplied so the filter weighs colour by coverage; this pass
-    // reads every source pixel and is most of the cost.
+    // target, so Lanczos has a ratio under 4 left. In integers off the bytes, premultiplied so the
+    // filter weighs colour by coverage; this pass reads every source pixel and is most of the cost.
     let mut k = 1u32;
     while w / (k * 2) >= tw * 2 && h / (k * 2) >= th * 2 && k < 128 {
         k *= 2;
@@ -62,8 +59,6 @@ pub fn downscale(bytes: &[u8], w: u32, h: u32, tw: u32, th: u32, premultiplied: 
     out
 }
 
-/// One source row into the per-block sums of [`downscale`]'s box pass: `k`
-/// pixels a block, colour weighted by alpha unless `PREMULTIPLIED`.
 #[inline(always)]
 fn box_row<const PREMULTIPLIED: bool>(row: &[u8], k: u32, acc: &mut [[u32; 4]]) {
     for (block, s) in row.chunks_exact((k * 4) as usize).zip(acc.iter_mut()) {
@@ -88,7 +83,6 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    /// A one-pixel black/white checkerboard, opaque.
     fn checker(w: u32, h: u32) -> Vec<u8> {
         let mut v = Vec::with_capacity((w * h * 4) as usize);
         for y in 0..h {
@@ -108,7 +102,6 @@ mod tests {
             assert!((p[0] as i32 - 128).abs() <= 2, "{p:?}");
             assert_eq!(p[3], 255);
         }
-        // An odd ratio, where the box steps stop early and Lanczos does more.
         let out = downscale(&checker(1080, 1080), 1080, 1080, 47, 47, false);
         for p in out.chunks_exact(4) {
             assert!((p[0] as i32 - 128).abs() <= 3, "{p:?}");
@@ -132,7 +125,6 @@ mod tests {
                 assert!(p[1] <= 2 && p[0] >= 250, "edge pixel {p:?}");
             }
         }
-        // Premultiplied in, premultiplied out: colour never above alpha.
         let pre: Vec<u8> = v.iter().enumerate().map(|(i, b)| if i % 4 == 1 { 0 } else { *b }).collect();
         for p in downscale(&pre, w, h, 8, 1, true).chunks_exact(4) {
             assert!(p[0] <= p[3] && p[1] <= p[3] && p[2] <= p[3], "{p:?}");
@@ -149,8 +141,7 @@ mod tests {
         best
     }
 
-    /// The avatar case `vn_tree::resample::SYNC_PIXELS` is sized by, and a banner drawn at half
-    /// size, where Lanczos does all the work. The budget holds in a debug build too.
+    /// The avatar case `vn_tree::resample::SYNC_PIXELS` is sized by, and a banner drawn at half size. The budget holds in debug too.
     #[test]
     fn an_avatar_and_a_banner_downscale_quickly() {
         let avatar = checker(1080, 1080);

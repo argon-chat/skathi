@@ -1,14 +1,10 @@
-//! `<iframe>`'s document, in the platform's webview.
+//! `<iframe>`'s document, in the platform's webview. Implements `vn_tree::iframe::Backend` over WebView2 on
+//! Windows (`win`); elsewhere [`backend`] returns `None` and every `<iframe src>` answers `error`.
 //!
-//! `vn_tree::iframe` knows the element; this crate knows a browser. It implements
-//! `vn_tree::iframe::Backend` over WebView2 on Windows (`win`); elsewhere [`backend`] returns
-//! `None` and every `<iframe src>` answers `error`.
-//!
-//! The webview never loads the app's document directly: its top-level page is the relay page
-//! (`relay.html`, which also documents the message protocol) holding the one real `<iframe>`.
-//! Both are served from the internal origin [`APP_ORIGIN`] by a request handler: the relay page at
-//! [`RELAY_PATH`], the app's files (`Config::assets`) under every other path. The app's
-//! `location.origin` (`app://redjs`) gets no origin from a browser, so [`internal_url`] maps it.
+//! The webview never loads the app's document directly: its top-level page is the relay page (`relay.html`,
+//! which also documents the message protocol) holding the one real `<iframe>`. Both are served from the
+//! internal origin [`APP_ORIGIN`] by a request handler. The app's `location.origin` (`app://redjs`) gets no
+//! origin from a browser, so [`internal_url`] maps it.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -16,25 +12,18 @@ use std::rc::Rc;
 #[cfg(windows)]
 mod win;
 
-/// What the host gives the backend.
 pub struct Config {
-    /// One of the app's own files by its URL path (`/games/pong/index.html`).
     pub assets: Rc<dyn Fn(&str) -> Option<Vec<u8>>>,
-    /// Where the browser keeps its profile: a directory of this app's own.
     pub user_data: PathBuf,
-    /// The app's `location.origin`, which `src` values are written against.
     pub page_origin: String,
-    /// May the page's devtools be opened?
     pub devtools: bool,
 }
 
 /// The origin of the relay page and the app's files inside the webview. `.invalid` never resolves
 /// (RFC 6761), so a request the handler misses fails instead of reaching a network.
 pub const APP_ORIGIN: &str = "https://app.vn.invalid";
-/// The relay page's path under [`APP_ORIGIN`].
 pub const RELAY_PATH: &str = "/__vn_iframe__/relay.html";
 
-/// The platform's backend, or `None` where there is none.
 pub fn backend(config: Config) -> Option<Rc<dyn vn_tree::iframe::Backend>> {
     #[cfg(windows)]
     {
@@ -47,8 +36,6 @@ pub fn backend(config: Config) -> Option<Rc<dyn vn_tree::iframe::Backend>> {
     }
 }
 
-/// The URL the webview loads for an app-side `src`: the app's own origin and
-/// origin-relative paths become [`APP_ORIGIN`]; anything else is itself.
 pub fn internal_url(src: &str, page_origin: &str) -> String {
     let src = src.trim();
     if let Some(rest) = src.strip_prefix(page_origin) {
@@ -69,18 +56,14 @@ pub fn internal_url(src: &str, page_origin: &str) -> String {
     format!("{APP_ORIGIN}/{}", src.trim_start_matches('/'))
 }
 
-/// `targetOrigin` as the relay page should use it: `*` and `/` as they are,
-/// the app's origin as the internal one.
 pub fn internal_origin(target: &str, page_origin: &str) -> String {
     if target == page_origin { APP_ORIGIN.to_string() } else { target.to_string() }
 }
 
-/// An origin the document reported, as the app knows it.
 pub fn external_origin(origin: &str, page_origin: &str) -> String {
     if origin == APP_ORIGIN { page_origin.to_string() } else { origin.to_string() }
 }
 
-/// The `Content-Type` of an app file, by its extension.
 pub fn content_type(path: &str) -> &'static str {
     let path = path.split(['?', '#']).next().unwrap_or(path);
     match path.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {

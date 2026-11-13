@@ -51,7 +51,6 @@ impl MatchDom for El {
     }
 }
 
-/// `.box` (or `class`) under a parent whose computed font size is `parent` px.
 fn at(engine: &Engine, class: &'static str, inline: Option<&InlineStyle>, parent: f32) -> ComputedStates {
     engine.compute_node_at(El(class), inline, &Rc::new(Vars::default()), None, parent, &Env::default(), &mut Vec::new())
 }
@@ -84,7 +83,6 @@ fn font_size_percentages_and_keywords_are_of_the_parent() {
     assert_eq!(boxed(".box { font-size: calc(50% + 2px) }", 20.0).font_size, 12.0);
     assert_eq!(boxed(".box { font-size: larger }", 10.0).font_size, 12.0);
     assert_eq!(boxed(".box { font-size: smaller }", 12.0).font_size, 10.0);
-    // An absolute keyword is not relative to anything.
     assert_eq!(boxed(".box { font-size: small }", 40.0).font_size, 13.0);
 }
 
@@ -106,7 +104,6 @@ fn calc_mixes_em_with_rem_px_and_percent() {
     let rem = crate::rem_basis();
     let s = boxed(".box { font-size: 10px; width: calc(2em + 1rem + 3px) }", 16.0);
     assert_eq!(s.base.size.width, Some(Length::Definite(px(20.0 + rem + 3.0).into())));
-    // A percentage stays for the layout; the em part is px already.
     let s = boxed(".box { font-size: 10px; padding-left: calc(50% + 1em) }", 16.0);
     assert_eq!(
         s.base.padding.left,
@@ -116,9 +113,7 @@ fn calc_mixes_em_with_rem_px_and_percent() {
 
 #[test]
 fn line_height_number_stays_a_number_and_em_or_percent_become_px() {
-    // A number inherits as the number (gpui takes it of each element's size).
     assert_eq!(boxed(".box { font-size: 10px; line-height: 1.5 }", 16.0).base.text.line_height, Some(relative(1.5)));
-    // An em or a percentage computes to px of the element's own size, which the children inherit.
     assert_eq!(boxed(".box { font-size: 10px; line-height: 1.5em }", 16.0).base.text.line_height, d(15.0));
     assert_eq!(boxed(".box { font-size: 10px; line-height: 150% }", 16.0).base.text.line_height, d(15.0));
 }
@@ -193,7 +188,6 @@ fn a_viewport_rebase_keeps_the_em_per_element() {
 
 #[test]
 fn a_sheet_compiled_alone_still_reads_em_as_the_root_and_a_block_without_em_keeps_no_list() {
-    // `compute_node` with no parent size: the rem basis, as before.
     let engine = Engine::compile(".box { padding: 1em }");
     let rem = crate::rem_basis();
     assert_eq!(engine.compute(El("box"), None, &Env::default()).base.padding.top, d(rem));

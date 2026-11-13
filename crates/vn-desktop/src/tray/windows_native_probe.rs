@@ -4,7 +4,6 @@ use crate::tray::Tray;
 use std::sync::mpsc::{Receiver, Sender};
 use windows::core::BOOL;
 
-// The popup's documented native menu query (MN_GETHMENU in winuser.h).
 const MN_GETHMENU: u32 = 0x01e1;
 fn send(hwnd: HWND, message: u32, wparam: usize, lparam: isize) -> usize {
     let mut result = 0usize;
@@ -40,7 +39,6 @@ unsafe extern "system" fn find_popup(hwnd: HWND, data: LPARAM) -> BOOL {
 }
 fn popup(thread: u32) -> Option<HWND> {
     let mut result = HWND::default();
-    // Callback stopping enumeration is normal, independent of GetLastError.
     let _enumerated = unsafe {
         EnumThreadWindows(
             thread,
@@ -163,7 +161,6 @@ fn owned_native_tray_supports_menus_mutation_recovery_and_teardown() {
         ((ICON_ID << 16) | NIN_KEYSELECT) as isize,
     );
     expect_event(&received, "first");
-    // Open a real popup belonging to our native pump. Never send global input.
     unsafe {
         PostMessageW(
             Some(hwnd),
@@ -195,7 +192,6 @@ fn owned_native_tray_supports_menus_mutation_recovery_and_teardown() {
     // input on this desktop. Cancel only our own popup; don't use global input.
     send(hwnd, WM_CANCELMODE, 0, 0);
     assert!(received.try_recv().is_err());
-    // Replacing an open menu retires its selection projection.
     unsafe {
         PostMessageW(
             Some(hwnd),
@@ -207,7 +203,6 @@ fn owned_native_tray_supports_menus_mutation_recovery_and_teardown() {
     .unwrap();
     let stale = wait_popup(thread);
     tray.set(Some(model(&events, "second", true))).unwrap();
-    // It is safe if cancellation has already destroyed the old popup.
     let _posted_to_old_popup =
         unsafe { PostMessageW(Some(stale), WM_KEYDOWN, WPARAM(0x0d), LPARAM(1)) };
     send(hwnd, UPDATE, 0, 0);
@@ -217,7 +212,6 @@ fn owned_native_tray_supports_menus_mutation_recovery_and_teardown() {
     );
     send(hwnd, CALLBACK, 0, ((ICON_ID << 16) | NIN_SELECT) as isize);
     expect_event(&received, "second");
-    // Simulate only this icon losing registration; do not restart Explorer.
     let data = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: hwnd,

@@ -1,34 +1,18 @@
-// VNPK v1: the one blob a packaged exe carries.
+// VNPK v1: the one blob a packaged exe carries. The writer is here; the reader that matters is in
+// Rust (`crates/vn-payload`), and both are held to `test/fixtures/golden.vnpk`.
 //
-// The writer lives here; the reader that matters is in Rust (`crates/vn-payload`), and both are held to one
-// golden fixture, `packages/vue-native/test/fixtures/golden.vnpk`. The reader below is for `vn build`'s
-// verify step and the tests.
+//   header (64 bytes, little-endian, read BYTE-WISE: the blob is only 4-byte aligned in the image)
+//     0 "VNPK" | 4 u16 format = 1 (a host refuses > 1) | 6 u16 flags (bit 0: has BYTECODE)
+//     8 u32 entry_count | 12 u32 toc_off (= 64) | 16 u32 names_off | 20 u32 names_len
+//     24 u32 skew: zero bytes between names and data, chosen so data_off lands on a page boundary
+//        IN THE MAPPED IMAGE | 28 u32 reserved | 32 u64 data_off (= names_off + names_len + skew)
+//     40 u64 blob_len | 48 [16] reserved
+//   toc: entry_count x 32 bytes sorted by (kind, name bytes): u32 name_off (rel. names_off),
+//     u32 name_len, u64 off (rel. data_off), u64 len, u16 kind, u8 align_log2, u8 reserved, u32 crc32
+//   names: UTF-8, no terminators. data: each entry aligned to 2^align_log2 relative to data_off.
 //
-//   header (64 bytes, little-endian, read BYTE-WISE: the blob is only 4-byte
-//   aligned inside the image)
-//     0   [4]  "VNPK"
-//     4   u16  format = 1            (a host refuses > 1: "built by a newer vn")
-//     6   u16  flags                 (bit 0: has BYTECODE)
-//     8   u32  entry_count
-//     12  u32  toc_off               (= 64)
-//     16  u32  names_off
-//     20  u32  names_len
-//     24  u32  skew                  zero bytes between the names and the data,
-//                                    chosen by the stamper so data_off lands on
-//                                    a page boundary IN THE MAPPED IMAGE
-//     28  u32  reserved (0)
-//     32  u64  data_off              = names_off + names_len + skew
-//     40  u64  blob_len
-//     48  [16] reserved (0)
-//   toc: entry_count × 32 bytes, sorted by (kind, name bytes)
-//     u32 name_off (rel. names_off), u32 name_len, u64 off (rel. data_off),
-//     u64 len, u16 kind, u8 align_log2, u8 reserved, u32 crc32
-//   names: UTF-8, no terminators
-//   data: each entry aligned to 2^align_log2 relative to data_off
-//
-// No timestamps anywhere, so two builds of the same inputs are byte-identical.
-// No compression: demand paging matters more than size, and PNG/MP4/TGS are
-// already compressed.
+// No timestamps, so two builds of the same inputs are byte-identical. No compression: demand
+// paging matters more than size.
 
 export const MAGIC = "VNPK";
 export const FORMAT = 1;
@@ -36,17 +20,14 @@ export const HEADER_SIZE = 64;
 export const TOC_ENTRY_SIZE = 32;
 export const PAGE = 4096;
 
-/** Entry kinds. Only `ASSET` is ever reachable from app code. */
 export const KIND = {
   META: 1,
   WINDOW: 2,
   SCRIPT: 3,
-  /** Reserved for a JSC bytecode cache; page-aligned when present. */
   BYTECODE: 4,
   ASSET: 16,
 } as const;
 
-/** The names the host looks the internal entries up by. */
 export const NAMES = {
   META: "vn/app.json",
   WINDOW: "vn/window.json",
@@ -60,14 +41,12 @@ export interface VnpkInput {
   name: string;
   kind: number;
   data: Uint8Array;
-  /** Default: 12 (a page) for BYTECODE, 4 (16 bytes) for everything else. */
   alignLog2?: number;
 }
 
 export interface VnpkEntry {
   name: string;
   kind: number;
-  /** Offset of the bytes from the start of the BLOB (not from data_off). */
   start: number;
   len: number;
   alignLog2: number;
@@ -86,8 +65,7 @@ export interface VnpkHeader {
   blobLen: number;
 }
 
-// crc32 (IEEE), for `vn verify` and the tests; the host never checks it at boot, since hashing the payload
-// would fault in every page.
+// crc32 (IEEE), for `vn verify` and the tests; the host never checks it at boot (it would fault in every page).
 
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -107,7 +85,6 @@ export function crc32(bytes: Uint8Array, seed = 0): number {
 
 const utf8 = new TextEncoder();
 
-/** Lexicographic byte order — what Rust's `str` Ord is, and what the host binary-searches. */
 export function compareBytes(a: Uint8Array, b: Uint8Array): number {
   const n = Math.min(a.length, b.length);
   for (let i = 0; i < n; i++) {
@@ -122,7 +99,7 @@ function defaultAlign(kind: number): number {
   return kind === KIND.BYTECODE ? 12 : 4;
 }
 
-/** Lays the entries out and returns the blob. `skew` is the stamper's business (see `skewFor`); `skew: 0` is a valid payload, just not page-aligned. */
+/** Lays the entries out and returns the blob. `skew: 0` is a valid payload, just not page-aligned. */
 export function writeVnpk(inputs: VnpkInput[], options: { skew?: number } = {}): Uint8Array {
   const skew = options.skew ?? 0;
   if (!Number.isInteger(skew) || skew < 0 || skew >= PAGE) {
@@ -199,7 +176,7 @@ export function writeVnpk(inputs: VnpkInput[], options: { skew?: number } = {}):
   return out;
 }
 
-/** The skew that puts `data_off` on a page boundary once the blob sits at image RVA `rva`. Pure: the RVA does not move between stamping passes, since only the `RT_ICON`s are laid out ahead of the payload. */
+/** The skew that puts `data_off` on a page boundary once the blob sits at image RVA `rva`. */
 export function skewFor(rva: number, header: Pick<VnpkHeader, "namesOff" | "namesLen">): number {
   const namesEnd = header.namesOff + header.namesLen;
   return (PAGE - ((rva + namesEnd) % PAGE)) % PAGE;

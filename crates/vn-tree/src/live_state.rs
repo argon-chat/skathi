@@ -14,20 +14,14 @@ use vn_css::{Interaction, MatchDom};
 use crate::tree::{self, NodeRef, Tree};
 use crate::windows;
 
-/// The live state of every window, taken once per query.
 #[derive(Default)]
 pub(crate) struct LiveStates {
-    /// Each window's focused node, and whether it shows focus (`:focus-visible`).
     focused: Vec<(u32, bool)>,
-    /// The focused nodes and their ancestors, each up to its window's painted root.
     focus_within: HashSet<u32>,
-    /// The targets of the presses in progress and their ancestors.
     active: HashSet<u32>,
 }
 
 impl LiveStates {
-    /// One walk up from each window's focused node and press target: a few dozen ids, whatever the
-    /// size of the tree being queried.
     pub(crate) fn take(t: &Tree) -> Self {
         let mut windows_now: Vec<(u32, u32, bool, Option<u32>)> = Vec::new();
         windows::each(|_, w| {
@@ -57,7 +51,6 @@ impl LiveStates {
     }
 }
 
-/// `id` and its ancestors, up to and including `root` (`0`: the tree's root).
 fn chain(t: &Tree, id: u32, root: u32, out: &mut HashSet<u32>) {
     let mut at = id;
     // A tree is a tree, but a corrupt parent chain must not hang a query.
@@ -90,15 +83,11 @@ pub(crate) fn is_text_field(t: &Tree, id: u32) -> bool {
     }
 }
 
-/// Called wherever the host is about to run script for a window: before each input dispatch, and
-/// once a frame before the JS pump.
 pub(crate) fn note_modality(window: &Window) {
     let keyboard = window.last_input_was_keyboard();
     windows::here(window, |w| w.keyboard_input = keyboard);
 }
 
-/// The matcher's view of a node for a script's query: [`NodeRef`], with the live interaction state
-/// ([`vn_css::MatchDom::LIVE_STATE`]).
 #[derive(Clone, Copy)]
 pub(crate) struct LiveRef<'t> {
     pub(crate) node: NodeRef<'t>,
@@ -171,8 +160,6 @@ mod tests {
     use super::*;
     use crate::dom::{self, QueryMode};
 
-    /// root > nav > (button, input), and root > side > field, `side` painted by a pop-out (window
-    /// 2).
     fn page() -> [u32; 6] {
         let ids = tree::with_tree(|t| {
             let root = t.create_root();

@@ -16,7 +16,6 @@ fn load(name: &str) -> LottieState {
     LottieState::load(&bytes(name)).unwrap_or_else(|error| panic!("load {name}: {error}"))
 }
 
-/// Every fixture, and what each is here to prove is renderable.
 const ALL: &[&str] = &[
     "star.json",
     "rectangle.json",
@@ -31,8 +30,7 @@ const ALL: &[&str] = &[
     "spinning-star.tgs",
 ];
 
-/// The subset that actually moves; the feature fixtures are single-frame by design.
-/// `the_animated_list_matches_what_the_documents_animate` checks this list against the files.
+/// The subset that actually moves; `the_animated_list_matches_what_the_documents_animate` checks it against the files.
 const ANIMATED: &[&str] = &[
     "position-linear.json",
     "position-hold.json",
@@ -40,8 +38,6 @@ const ANIMATED: &[&str] = &[
     "spinning-star.tgs",
 ];
 
-/// One frame of RGBA at 128px as a flat buffer, through the real `render_frame` path (BGRA,
-/// physical pixels, cache).
 fn raster(state: &mut LottieState, frame: f32) -> Vec<u8> {
     state.seek_frame(frame);
     let image = state
@@ -85,7 +81,6 @@ fn every_fixture_loads_and_reports_its_metadata() {
 
 #[test]
 fn metadata_matches_the_source_document() {
-    // star.json: 80x80, 60fps, frames 0..120 — i.e. exactly two seconds.
     let state = load("star.json");
     let meta = state.meta();
     assert_eq!((meta.width, meta.height), (80, 80));
@@ -106,8 +101,6 @@ fn metadata_matches_the_source_document() {
 fn every_fixture_rasterises_something_visible() {
     for name in ALL {
         let mut state = load(name);
-        // Sample across the timeline: a shape can legitimately be empty at the
-        // very first frame, but not across the whole animation.
         let visible = sweep(&mut state, 5)
             .iter()
             .filter(|bytes| opaque_pixels(bytes) > 0)
@@ -128,7 +121,6 @@ fn the_animation_actually_moves() {
             .len();
         assert!(distinct >= 2, "{name}: all 5 sampled frames are identical");
 
-        // Distinct rasters are not enough (a one-pixel flicker would pass): require a real share of the canvas to differ.
         let changed = frames[1..]
             .iter()
             .map(|later| {
@@ -154,7 +146,6 @@ fn the_animation_actually_moves() {
 fn the_animated_list_matches_what_the_documents_animate() {
     fn animated_property_count(value: &serde_json::Value) -> usize {
         match value {
-            // A Lottie property is `{"a": 0 | 1, "k": ...}`; `a: 1` means `k` is a keyframe list.
             serde_json::Value::Object(map) => {
                 let here = usize::from(
                     map.get("a").and_then(serde_json::Value::as_u64) == Some(1)
@@ -169,7 +160,6 @@ fn the_animated_list_matches_what_the_documents_animate() {
 
     for name in ALL {
         let raw = bytes(name);
-        // `.tgs` is gzipped; the crate sniffs the same magic in `load`.
         let text = if raw.starts_with(&[0x1f, 0x8b]) {
             use std::io::Read as _;
             let mut text = String::new();
@@ -192,7 +182,6 @@ fn the_animated_list_matches_what_the_documents_animate() {
     }
 }
 
-/// Mean x of the opaque pixels, in `0.0..1.0` across the raster.
 fn opaque_centroid_x(bytes: &[u8], width: usize) -> f32 {
     let (mut sum, mut count) = (0.0f32, 0usize);
     for (index, pixel) in bytes.chunks_exact(4).enumerate() {
@@ -233,7 +222,6 @@ fn the_terminator_keyframe_animates_to_the_right_place() {
 fn seeking_is_deterministic() {
     let mut state = load("star.json");
     let first = raster(&mut state, 40.0);
-    // Wander off and come back; the raster must be bit-identical.
     let _ = raster(&mut state, 0.0);
     let _ = raster(&mut state, 119.0);
     assert_eq!(first, raster(&mut state, 40.0), "same frame, different raster");
@@ -259,13 +247,10 @@ fn resizing_re_renders_and_paused_playback_does_not() {
 #[test]
 fn dpi_scale_drives_the_physical_raster_size() {
     let mut state = load("star.json");
-    // 96 CSS px at 150% must rasterise at 144 device px, not 96.
     let image = state.render_frame((96.0, 96.0), 1.5).unwrap();
     assert_eq!(image.size(0).width.0, 144);
     assert_eq!(image.size(0).height.0, 144);
 
-    // A non-square box letterboxes: `contain` fits the limiting dimension, so a
-    // square animation in a 200x100 box rasterises 100x100.
     let mut rect = load("star.json");
     let image = rect.render_frame((200.0, 100.0), 1.0).unwrap();
     assert_eq!(image.size(0).height.0, 100);
@@ -284,13 +269,10 @@ fn tgs_stickers_unwrap_and_carry_their_marker() {
     let sticker = load("sticker.tgs");
     let meta = sticker.meta();
     assert!(meta.telegram_sticker, "the \"tgs\": 1 marker was lost");
-    // Telegram's sticker constraints: 512x512, 60fps, at most 3 seconds.
     assert_eq!((meta.width, meta.height), (512, 512));
     assert_eq!(meta.frame_rate, 60.0);
     assert!(meta.duration <= Duration::from_secs(3));
 
-    // And the gzip wrapper is genuinely a wrapper: same animation as the JSON
-    // it was built from, only rescaled.
     assert_eq!(meta.total_frames, load("star.json").meta().total_frames);
 }
 
@@ -305,7 +287,6 @@ fn garbage_is_rejected_with_a_useful_error() {
         LottieState::load(b"not json at all"),
         Err(LottieError::Json(_)),
     ));
-    // Valid JSON, but not an animation: no frame rate, no canvas.
     assert!(matches!(
         LottieState::load(br#"{"hello": "world"}"#),
         Err(LottieError::Parse(_)),
@@ -320,8 +301,6 @@ fn garbage_is_rejected_with_a_useful_error() {
 
 #[test]
 fn solid_layers_are_rewritten_and_advertised() {
-    // solid-layer.json is a bare `ty: 1` layer. The backend has no solid-layer
-    // support, so without `normalize` it would not load at all.
     let mut state = load("solid-layer.json");
     assert!(
         state.advisories().iter().any(|note| note.contains("solid layer")),
@@ -331,7 +310,6 @@ fn solid_layers_are_rewritten_and_advertised() {
     assert!(opaque_pixels(&raster(&mut state, 0.0)) > 0, "the solid drew nothing");
 }
 
-/// 60fps fixtures: one frame of wall clock.
 const TICK: Duration = Duration::from_nanos(16_666_667);
 
 #[test]
@@ -349,7 +327,6 @@ fn advancing_moves_the_playhead_and_emits_enter_frame() {
     let advance = state.advance(TICK);
     assert!(advance.needs_repaint);
     assert_eq!(advance.entered_frame, Some(state.frame()));
-    // 60fps source, 1/60s tick: exactly one frame.
     assert!((state.frame() - 1.0).abs() < 1e-3, "frame = {}", state.frame());
     assert!(matches!(
         advance.events().next(),
@@ -375,7 +352,6 @@ fn speed_scales_wall_clock_time() {
     state.advance(TICK);
     assert!((state.frame() - 2.0).abs() < 1e-3, "frame = {}", state.frame());
 
-    // Zero speed is a pause, not a divide-by-zero.
     let mut stalled = load("star.json");
     stalled.set_speed(0.0);
     assert!(!stalled.needs_frame());
@@ -397,7 +373,6 @@ fn reverse_plays_from_the_end() {
 fn a_non_looping_animation_completes_once_and_stops() {
     let mut state = load("star.json");
     state.set_loop_mode(LoopMode::None);
-    // Two seconds of animation, three seconds of tick.
     let advance = state.advance(Duration::from_secs(3));
     assert!(advance.completed);
     assert_eq!(advance.loops_completed, 1);
@@ -457,7 +432,6 @@ fn a_counted_loop_repeats_n_times_then_completes() {
 fn bounce_mode_reverses_at_the_boundary() {
     let mut state = load("star.json");
     state.set_play_mode(PlayMode::Bounce);
-    // 2.5s into a 2s animation: one boundary crossed, then half a second back.
     state.advance(Duration::from_millis(2500));
     assert_eq!(state.direction(), Direction::Reverse);
     assert!((state.frame() - 90.0).abs() < 1e-2, "frame = {}", state.frame());
@@ -515,7 +489,6 @@ fn segments_confine_playback_and_pull_the_playhead_in() {
     state.advance(Duration::from_secs(3));
     assert_eq!(state.frame(), 40.0, "playback left the segment");
 
-    // A reversed pair is normalised, and out-of-range ends are clamped.
     state.set_segment(Some((90.0, 20.0)));
     assert_eq!(state.active_segment(), (20.0, 90.0));
     state.set_segment(Some((-5.0, 1e6)));
@@ -535,7 +508,6 @@ fn progress_within_a_segment_is_relative_to_it() {
 
 #[test]
 fn a_huge_tick_cannot_spin_forever() {
-    // A pathological dt must terminate, not lap the segment unboundedly.
     let mut state = load("star.json");
     let advance = state.advance(Duration::from_secs(86_400));
     assert!(advance.loops_completed > 0);
@@ -545,7 +517,6 @@ fn a_huge_tick_cannot_spin_forever() {
 #[test]
 fn rendering_retires_superseded_rasters_for_the_atlas() {
     let mut state = load("star.json");
-    // Three distinct frames: by the third the first is two generations back and safe to release.
     let first = state.render_frame((64.0, 64.0), 1.0).unwrap();
     state.seek_frame(30.0);
     state.render_frame((64.0, 64.0), 1.0).unwrap();
@@ -557,7 +528,6 @@ fn rendering_retires_superseded_rasters_for_the_atlas() {
     assert_eq!(retired.len(), 1);
     assert_eq!(retired[0].id, first.id);
 
-    // Teardown hands back everything still held.
     assert_eq!(state.take_all_images().len(), 2);
 }
 
@@ -581,9 +551,7 @@ fn the_backend_under_test_is_the_one_the_environment_asked_for() {
     }
 }
 
-/// The seam's contract: swapping the engine changes the pixels and nothing else. Metadata comes
-/// from the document and the raster geometry is computed once, so these must match exactly for
-/// every fixture.
+/// The seam's contract: swapping the engine changes the pixels and nothing else (metadata and raster geometry match exactly).
 #[cfg(feature = "thorvg")]
 #[test]
 fn both_backends_agree_on_everything_except_the_pixels() {
@@ -627,10 +595,8 @@ fn both_backends_agree_on_everything_except_the_pixels() {
     }
 }
 
-/// Loads and renders from eight threads at once: a regression test for ThorVG 1.1.0's
-/// unsynchronised process-global state (`STATUS_ACCESS_VIOLATION` in 12 of 40 `--test-threads=8`
-/// runs before `backend::thorvg`'s engine lock). Each `LottieState` is built inside its thread
-/// because the ThorVG variant is `!Send` by construction.
+/// Loads and renders from eight threads at once: a regression test for ThorVG 1.1.0's unsynchronised
+/// process-global state. Each `LottieState` is built inside its thread because the ThorVG variant is `!Send`.
 #[test]
 fn concurrent_loads_and_renders_do_not_corrupt_the_engine() {
     let payloads: Vec<Vec<u8>> = ALL.iter().map(|name| bytes(name)).collect();
@@ -655,9 +621,7 @@ fn concurrent_loads_and_renders_do_not_corrupt_the_engine() {
     });
 }
 
-/// A [`vn_lottie::Transport`] on its own is the state's transport: the same
-/// start, the same playhead and the same events, tick for tick, through loops,
-/// a bounce, a segment and a reverse.
+/// A [`vn_lottie::Transport`] on its own is the state's transport: same events, tick for tick.
 #[test]
 fn a_transport_alone_plays_as_the_state_does() {
     let mut state = load("spinning-star.tgs");

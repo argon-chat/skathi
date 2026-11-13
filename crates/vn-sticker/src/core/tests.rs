@@ -60,7 +60,6 @@ fn pump(core: &mut Core, now: Us) {
     panic!("the worker never settled");
 }
 
-/// Registers `name` with fake `spec` bytes and loads it.
 fn ready(core: &mut Core, name: &str, spec: &str, now: Us) -> Arc<str> {
     assert_eq!(core.status(name, now), SourceStatus::NeedsBytes);
     assert!(core.provide(name, Arc::from(spec.as_bytes()), now));
@@ -70,7 +69,6 @@ fn ready(core: &mut Core, name: &str, spec: &str, now: Us) -> Arc<str> {
     Arc::from(name)
 }
 
-/// One element tick: demand `key` visibly, let the worker run, take the frame.
 fn tick(core: &mut Core, key: &TargetKey, visible: bool, now: Us) -> Option<Frame> {
     core.demand(key, visible, now);
     pump(core, now);
@@ -79,8 +77,6 @@ fn tick(core: &mut Core, key: &TargetKey, visible: bool, now: Us) -> Option<Fram
     frame
 }
 
-/// Ticks every 8 ms from `from` to `to` (as a 120 Hz display would), and
-/// returns the last frame.
 fn play(core: &mut Core, key: &TargetKey, visible: bool, from: Us, to: Us) -> Option<Frame> {
     let mut last = None;
     let mut now = from;
@@ -124,7 +120,6 @@ fn a_shown_target_gets_its_first_frame_and_one_frame_ahead() {
     assert_eq!(shown(&tick(&mut core, &key, true, 250 * MS)), 2);
     assert_eq!(shown(&tick(&mut core, &key, true, 399 * MS)), 3);
     assert_eq!(shown(&tick(&mut core, &key, true, 400 * MS)), 0, "looped");
-    // A tick after a long gap shows the frame drawn ahead, then catches up.
     assert_eq!(shown(&tick(&mut core, &key, true, 1_000 * MS)), 1);
     assert_eq!(shown(&tick(&mut core, &key, true, 1_001 * MS)), 2, "caught up with the clock");
 }
@@ -277,7 +272,6 @@ fn a_source_with_cached_loops_outlives_its_bytes() {
 #[test]
 fn the_cache_budget_evicts_loops_not_shown() {
     let frame = 48 * 48 * 4;
-    // The fake's frames are one byte repeated: LZ4 packs one into ~40 bytes.
     let packed = compress(&vec![1u8; frame]).len();
     let mut core = Core::with_budget(fake, packed * 10);
     let a = ready(&mut core, "a", "FAKE lottie 6 30 100 100", 0);
@@ -295,7 +289,6 @@ fn the_cache_budget_evicts_loops_not_shown() {
     let stats = core.stats();
     assert_eq!(stats.loops, 1, "a's hidden loop made room for b's: {stats:?}");
     assert!(stats.cache_bytes <= packed * 10);
-    // Both shown, no room for either to grow: the newcomer is drawn live.
     let c = ready(&mut core, "c", "FAKE lottie 6 30 100 100", S);
     let kc = TargetKey::new(c, 40, 40);
     for i in 0..8 {
@@ -315,8 +308,6 @@ fn at_most_four_large_videos_are_loaded() {
         let src = ready(&mut core, &name, "FAKE video 30 30 512 512", 0);
         keys.push(TargetKey::new(src, 200, 200));
     }
-    // Loading the five above already went through the limit: the first one
-    // not playing made room each time.
     for k in &keys[..4] {
         assert!(tick(&mut core, k, true, S).is_some());
     }

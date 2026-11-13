@@ -1,19 +1,13 @@
-//! `navigator.clipboard` backend: gpui's `App::read_from_clipboard` / `write_to_clipboard`
-//! behind redjs's `ClipboardHost`.
-//!
-//! Text goes through gpui because `OpenClipboard` is exclusive and the native <input> already
-//! copies through gpui. Items (`win.rs`) open the clipboard themselves: gpui's `ClipboardItem`
-//! has no HTML entry and writes images only as PNG. Both paths open and close around one call on
-//! the same thread, so they never overlap.
-//!
-//! gpui's clipboard needs an `&App`, available only inside a published frame scope
-//! (`vn_runtime::bridge`); a call from outside rejects with a message.
+//! `navigator.clipboard` backend: gpui's `App::read_from_clipboard` / `write_to_clipboard` behind redjs's
+//! `ClipboardHost`. Text goes through gpui because `OpenClipboard` is exclusive and the native <input> copies
+//! through gpui. Items (`win.rs`) open the clipboard themselves (gpui's `ClipboardItem` has no HTML entry);
+//! both paths open and close around one call on the same thread, so they never overlap. gpui's clipboard
+//! needs an `&App`, available only inside a published frame scope; a call from outside rejects.
 
 use gpui::ClipboardItem;
 use vn_runtime::redjs::webapi::clipboard::{self as api, ClipboardHost};
 use vn_runtime::with_app;
 
-/// The backend; gpui holds the clipboard.
 pub struct GpuiClipboard;
 
 const NO_FRAME: &str = "the clipboard is only reachable from inside a frame (this call ran \
@@ -32,7 +26,6 @@ impl ClipboardHost for GpuiClipboard {
 
     fn read_text(&self) -> Result<String, String> {
         with_app(|cx| {
-            // An empty clipboard and an image-only one both read as "", as in a browser.
             cx.read_from_clipboard().and_then(|item| item.text()).unwrap_or_default()
         })
         .ok_or_else(|| NO_FRAME.to_string())
@@ -74,8 +67,7 @@ impl ClipboardHost for GpuiClipboard {
 #[cfg(windows)]
 mod win;
 
-/// Installs the backend into redjs. Registers no host functions and needs no pump: the
-/// clipboard is synchronous.
+/// Installs the backend into redjs. Registers no host functions and needs no pump.
 pub fn install() {
     static H: GpuiClipboard = GpuiClipboard;
     api::set_host(&H);

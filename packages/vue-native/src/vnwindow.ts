@@ -8,7 +8,6 @@
 //
 // A component rather than `<Teleport to="vn:window">`: like `window.open()` it supplies the target
 // element, so `<Teleport :to="pal.el">` composes onto a `VnWindow` as onto a popup's body.
-// `window.open` itself stays reserved (it means a second document).
 
 import { defineComponent, h, mergeProps, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from "@vue/runtime-core";
 import type { PropType } from "@vue/runtime-core";
@@ -18,7 +17,6 @@ export interface VnWindowTarget {
   readonly __vnId: number;
 }
 
-/** Every field optional; absent lets the OS pick. */
 export interface VnWindowBounds {
   x?: number;
   y?: number;
@@ -26,19 +24,16 @@ export interface VnWindowBounds {
   height?: number;
 }
 
-/** The `resize` payload, in CSS px of the POP-OUT's own viewport. */
 export interface VnWindowMetrics {
   width: number;
   height: number;
   scale: number;
 }
 
-/** The `show` payload: the viewport, and ms from the `visible` change to the first drawn frame. */
 export interface VnWindowShown extends VnWindowMetrics {
   firstFrameMs: number;
 }
 
-/** A rectangle in the pop-out's CSS px, relative to its root. */
 export interface VnWindowRect {
   x: number;
   y: number;
@@ -58,10 +53,7 @@ const CREATION_TIME_ONLY = [
   "focusable",
 ] as const;
 
-/**
- * Symbol prop marking a window's painted root. Vue's `for…in` skips symbols, so it never reaches
- * the host, yet `createElement` registers the element before its children mount (runtime.ts `windowRootOf`).
- */
+/** Symbol prop marking a window's painted root: Vue's `for…in` skips symbols so it never reaches the host, yet `createElement` registers the element before its children mount. */
 export const WINDOW_ROOT: unique symbol = Symbol("vn-window-root");
 
 /** Painted roots of the mounted `<VnWindow>`s; a node under one belongs to that window's document. Empty without a pop-out. */
@@ -139,21 +131,13 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
   setup(props, { slots, emit, expose, attrs }) {
     const el = ref<VnWindowTarget | null>(null);
     const windowId = ref(0);
-    /**
-     * This pop-out's own viewport in CSS px. There is one JS realm, so `window.innerWidth`,
-     * `matchMedia` and `appWindow.*` keep meaning the primary window; a pop-out's metrics are
-     * pushed to the component instead. CSS (`@media`, `env(titlebar-area-*)`) is evaluated
-     * against the window that paints the element.
-     */
+    /** This pop-out's own viewport in CSS px. There is one JS realm, so `window.innerWidth`, `matchMedia` and `appWindow.*` keep meaning the primary window; CSS (`@media`, `env(titlebar-area-*)`) is evaluated against the window that paints the element. */
     const width = ref(0);
     const height = ref(0);
     const scale = ref(1);
     let closed = false;
 
-    /**
-     * Where an element of the MAIN window is, in this window's CSS px relative to its root, across
-     * monitors and DPIs; null if either is unpainted or before open.
-     */
+    /** Where an element of the MAIN window is, in this window's CSS px relative to its root; null if either is unpainted or before open. */
     const mapFromMain = (target: VnWindowTarget | null | undefined): VnWindowRect | null => {
       if (closed || !el.value || !target || typeof __vn_window_map_rect !== "function") return null;
       const raw = __vn_window_map_rect(el.value.__vnId, target.__vnId);
@@ -187,7 +171,6 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       if (props.cover !== undefined) o.cover = props.cover;
       return JSON.stringify(o);
     };
-    /** Options the host has, so a change before the deferred open lands can be sent afterwards. */
     let sent = "";
     const sync = () => {
       if (closed || !el.value || !windowId.value) return;
@@ -207,7 +190,6 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       switch (kind) {
         case "open":
           windowId.value = detail.windowId ?? 0;
-          // A prop that changed between mount and the deferred open reached no window.
           sync();
           emit("open", windowId.value);
           break;
@@ -267,7 +249,6 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       if (root) windowRoots.delete(root);
     });
 
-    // Live props are pushed to the host; creation-time-only ones are advised (CREATION_TIME_ONLY).
     watch(
       () =>
         [
@@ -291,10 +272,9 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       sync,
     );
 
-    // The pop-out's painted root: the host gives it the main window's root treatment (100%x100%,
-    // scroll, focus handle) so content fills the window and an `<input>` can hold focus. It
-    // renders in this tree between mount and the deferred open; `.vn-window-root` styles those frames.
-    // Attrs are merged here because Vue's fall-through `for…in` would drop the `WINDOW_ROOT` symbol.
+    // The pop-out's painted root: the host gives it the main window's root treatment (100%x100%, scroll, focus handle) so
+    // content fills the window and an `<input>` can hold focus. It renders in this tree between mount and the deferred
+    // open (`.vn-window-root`). Attrs are merged here because Vue's fall-through `for…in` would drop `WINDOW_ROOT`.
     return () => {
       const root: Record<string | symbol, unknown> = mergeProps({ ref: el, class: "vn-window-root" }, attrs);
       root[WINDOW_ROOT] = true;
@@ -303,5 +283,4 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
   },
 });
 
-/** Props that cannot change on a live `<VnWindow>`; changing one advises. */
 export const VN_WINDOW_CREATION_TIME_PROPS: readonly string[] = CREATION_TIME_ONLY;

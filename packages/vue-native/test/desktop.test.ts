@@ -1,8 +1,6 @@
-// File System Access, the pickers, `<input type=file>` and `<a download>`: the JS half.
-//
-// The Rust half is unit-tested in crates/vn-desktop, and packages/vn-test/specs/files.spec.ts drives both through a real
-// host with VN_DIALOGS=scripted. Pinned here is what only the runtime can get wrong: the spec's option checks and
-// exception names, transient activation, that a handle holds no path, and the input element's events.
+// File System Access, the pickers, `<input type=file>` and `<a download>`: the JS half. Pinned here is what only the
+// runtime can get wrong: option checks and exception names, transient activation, that a handle holds no path, and
+// the input element's events.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime, FakeFileList } from "./runtime-harness";
@@ -12,10 +10,8 @@ type Call = { op: string; args: unknown[]; token: number | null };
 
 const calls = (rt: Rt, op: string): Call[] => rt.host.desktop.fs.calls.filter((c: Call) => c.op === op);
 const tick = () => new Promise((r) => setTimeout(r, 0));
-/** A user gesture, as the host delivers one (only these activate). */
 const gesture = (rt: Rt) => rt.noteActivation("mousedown", undefined);
 
-/** A handle the host granted (a launch path, a drop). */
 const handle = (rt: Rt, h: number, name: string, kind: "file" | "directory") =>
   rt.desktopApi.handleFrom({ h, name, kind }) as Record<string, any>;
 
@@ -167,7 +163,6 @@ describe("FileSystemHandle and its two kinds", () => {
     expect(rt.host.desktop.fs.prompt.has(8)).toBe(true);
     gesture(rt);
     expect(await f.requestPermission()).toBe("granted");
-    // Not consumed: a picker may still follow in the same gesture.
     expect(rt.activation.isActive()).toBe(true);
     expect(await f.queryPermission()).toBe("granted");
     rt.host.desktop.fs.prompt.add(9);
@@ -187,7 +182,6 @@ describe("FileSystemHandle and its two kinds", () => {
     const refused = await dir.removeEntry("x").catch((e: Error) => e);
     expect(refused).toBeInstanceOf(DOMException);
     expect(refused.name).toBe("NotAllowedError");
-    // A plain lookup never asks, gesture or not (Chromium checks read access only).
     gesture(rt);
     rt.host.desktop.fs.answers.set("child", () => ({ payload: { h: 10, name: "a", kind: "file" } }));
     await dir.getFileHandle("a");
@@ -264,7 +258,6 @@ describe("FileSystemHandle and its two kinds", () => {
     expect(idOf(Object.create(rt.global.FileSystemFileHandle.prototype))).toBeUndefined();
     const names = rt.host.desktop.fs.refused.map((r: { name: string }) => r.name);
     expect(names).toEqual(["FileSystemWritableFileStream"]);
-    // The clone comes back through the factory, as a drop's handle does.
     const clone = rt.host.desktop.fs.factory(33, "a", "file");
     expect(clone).toBeInstanceOf(rt.global.FileSystemFileHandle);
     expect(rt.advisories()).toEqual([]);
@@ -330,7 +323,6 @@ describe("FileSystemWritableFileStream", () => {
   });
 });
 
-/** `<root><input type=file></root>`, with the events it fires recorded on the root (bubbling). */
 function fileWorld(attrs: Record<string, string> = {}) {
   const rt = createRuntime();
   const root = rt.nodeOps.createElement("root");
@@ -344,7 +336,6 @@ function fileWorld(attrs: Record<string, string> = {}) {
   }
   const host = (node: { id: number }, name: "click" | "keydown" | "keyup" | "mousedown", key?: string) =>
     rt.host.dispatcher(node.__vnId, rt.EV_CODES[name], 5, 6, 0, 0, key);
-  /** A user's click: the mousedown that activates, then the click. */
   const userClick = (node: { id: number }) => {
     host(node, "mousedown");
     host(node, "click");
@@ -373,9 +364,7 @@ describe("<input type=file> (HTML)", () => {
   });
 
   test("a host click is a user's press even when no mousedown came first (nobody listened for one)", () => {
-    // The host forwards only what is listened for; the input arms click, not
-    // mousedown. The e2e spec (vn-test files.spec.ts) found this on a real
-    // click: the press never reached JS, so nothing counted as a gesture.
+    // The host forwards only what is listened for; the input arms click, not mousedown.
     const { rt, input, host } = fileWorld();
     host(input, "click");
     expect(calls(rt, "dialogOpen").length).toBe(1);
@@ -394,7 +383,6 @@ describe("<input type=file> (HTML)", () => {
     expect(input.files).toBe(list);
     expect(input.value).toBe("C:\\fakepath\\data.csv");
     expect(label()).toBe("2 files");
-    // The next pick hands the host the current selection (the same one again is a cancel).
     userClick(input);
     expect(calls(rt, "dialogOpen")[1].args[1]).toBe(list);
   });

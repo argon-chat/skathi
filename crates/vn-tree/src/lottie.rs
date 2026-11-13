@@ -27,23 +27,15 @@ use crate::tree::{self, Tree};
 use crate::windows::{self, WinKey};
 use crate::EventPayload;
 
-/// One `<lottie>` node's persistent state.
 struct Entry {
     src: String,
-    /// `None` until the load lands, and for good when it failed.
     transport: Option<Transport>,
     /// Last `autoplay` value seen, so play/pause is edge-triggered off the *prop* (a `v-bind` that
     /// never changes must not restart a paused animation every frame).
     autoplay: bool,
-    /// Its tile lives in that window's atlas; a node that moves to another window gets a new tile
-    /// there.
     window: WinKey,
-    /// The box the build laid the animation into: logical px, and the window's scale.
     boxed: Option<((f32, f32), f32)>,
-    /// Shared with the worker: the animation, the load's outcome, the frame asked for and the frame
-    /// drawn.
     job: Arc<Job>,
-    /// The last raster asked for: `(frame bits, width, height)`.
     asked: Option<(u32, u32, u32)>,
     tile: Option<Tile>,
 }
@@ -71,13 +63,11 @@ impl Entry {
     }
 }
 
-/// The node's picture: a tile in `live`'s window, holding the frame `shows`.
 struct Tile {
     live: LiveTile,
     shows: (u32, u32, u32),
 }
 
-/// A node's half of the worker's state.
 #[derive(Default)]
 struct Job {
     slot: Mutex<Slot>,
@@ -85,21 +75,12 @@ struct Job {
 
 #[derive(Default)]
 struct Slot {
-    /// While the worker is not drawing with it.
     animation: Option<Animation>,
-    /// What the load came to, until the tick takes it: the metadata, or the compat channel's key
-    /// prefix and the advisory.
     loaded: Option<Result<LottieMeta, (&'static str, String)>>,
-    /// Non-fatal notes from a load that worked, or the unsupported features of one that did not,
-    /// for the compat channel.
     advisories: Vec<String>,
-    /// The newest frame asked for and not started: `(frame, width, height)`.
     ask: Option<(f32, u32, u32)>,
-    /// A draw is queued for this node.
     queued: bool,
-    /// The newest frame drawn and not yet written: `(frame bits, w, h, bytes)`.
     drawn: Option<((u32, u32, u32), Vec<u8>)>,
-    /// The node is gone: whatever is left is dropped.
     gone: bool,
 }
 
@@ -111,11 +92,9 @@ impl Job {
 
 thread_local! {
     static LOTTIE_STATES: RefCell<HashMap<u32, Entry>> = RefCell::new(HashMap::new());
-    /// Wall clock for the tick.
     static LAST_TICK: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
-/// Live `<lottie>` elements (devtools `mem`).
 pub(crate) fn count() -> usize {
     LOTTIE_STATES.with(|m| m.borrow().len())
 }
@@ -125,11 +104,9 @@ pub(crate) fn count() -> usize {
 const MAX_DT: Duration = Duration::from_millis(250);
 
 
-/// Loads, fetches and draws not yet handed back.
 static PENDING: AtomicUsize = AtomicUsize::new(0);
 
 enum Work {
-    /// Bytes in memory, or a file to read.
     Load { job: Arc<Job>, src: String, from: From },
     Draw(Arc<Job>),
 }
@@ -241,7 +218,6 @@ fn draw_on_worker(job: &Job) {
     }
 }
 
-/// Asks the worker for `frame` at `w × h`; a newer ask replaces one not started yet.
 fn ask(job: &Arc<Job>, frame: f32, w: u32, h: u32) {
     let mut slot = job.slot();
     slot.ask = Some((frame, w, h));
@@ -283,7 +259,6 @@ fn start_load(job: &Arc<Job>, src: &str, cx: &mut App) -> Result<(), String> {
     Ok(())
 }
 
-/// `loop` — browser boolean-attribute grammar, plus lottie-web's numeric form.
 fn loop_mode_from(raw: Option<&str>) -> LoopMode {
     match raw.map(str::trim) {
         None | Some("false") => LoopMode::None,
@@ -297,13 +272,11 @@ fn loop_mode_from(raw: Option<&str>) -> LoopMode {
     }
 }
 
-/// The browser's boolean-attribute rule: present is true unless it spells `"false"` (which is what
-/// `:attr="false"` serialises to through `patchProp`).
+/// The browser's boolean-attribute rule: present is true unless it spells `"false"` (`:attr="false"`).
 fn bool_attr(raw: Option<&str>) -> bool {
     raw.is_some_and(|v| v.trim() != "false")
 }
 
-/// `segment="in,out"`.
 fn segment_from(raw: Option<&str>) -> Option<(f32, f32)> {
     let raw = raw?.trim();
     if raw.is_empty() {
@@ -316,7 +289,6 @@ fn segment_from(raw: Option<&str>) -> Option<(f32, f32)> {
     Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
 }
 
-/// Props lottie-web / `<lottie-player>` have and this renderer does not.
 const UNSUPPORTED_PROPS: &[(&str, &str)] = &[
     ("renderer", "rendering is always the software rasteriser; there is no svg/canvas/html renderer to choose"),
     ("background", "use the CSS `background-color` / `background-image` on the element — the raster is transparent, so it shows through"),
@@ -342,8 +314,6 @@ fn warn_unsupported_props(t: &Tree, id: u32) {
 
 
 
-/// Starts the load if `src` changed (or there is no entry yet), then pushes every prop into the
-/// transport.
 pub(crate) fn sync(t: &Tree, id: u32, win: WinKey, cx: &mut App) -> Option<(u32, u32)> {
     warn_unsupported_props(t, id);
     let src = t.prop(id, "src").unwrap_or("").to_string();
@@ -357,8 +327,7 @@ pub(crate) fn sync(t: &Tree, id: u32, win: WinKey, cx: &mut App) -> Option<(u32,
                 forget(old);
             }
             let entry = Entry::new(src.clone(), autoplay, win);
-            // An absent `src` is not an error worth shouting about (a `v-if`'d or not-yet-resolved
-            // binding hits this on its first frame).
+            // An absent `src` is not worth an error (a `v-if`'d binding hits it on its first frame).
             if !src.trim().is_empty() {
                 if let Err(msg) = start_load(&entry.job, &src, cx) {
                     crate::render::warn_compat(&format!("lottie-src:{src}"), &msg);
@@ -377,7 +346,6 @@ pub(crate) fn sync(t: &Tree, id: u32, win: WinKey, cx: &mut App) -> Option<(u32,
     })
 }
 
-/// Pushes the props into a loaded node's transport.
 fn apply_props(t: &Tree, id: u32, entry: &mut Entry, loaded: bool, autoplay: bool) {
     let Some(state) = entry.transport.as_mut() else {
         entry.autoplay = autoplay;
@@ -410,8 +378,6 @@ fn apply_props(t: &Tree, id: u32, entry: &mut Entry, loaded: bool, autoplay: boo
     entry.autoplay = autoplay;
 }
 
-/// What the build paints for a node laid into a box of `size` logical px on a `scale` display: its
-/// tile, once it has a frame in this window.
 pub(crate) fn paint(id: u32, win: WinKey, size: (f32, f32), scale: f32) -> Option<Arc<RenderImage>> {
     LOTTIE_STATES.with(|m| {
         let mut map = m.borrow_mut();
@@ -421,8 +387,6 @@ pub(crate) fn paint(id: u32, win: WinKey, size: (f32, f32), scale: f32) -> Optio
     })
 }
 
-/// Lets go of a node's state: its tile goes back to its atlas, and the worker drops whatever it
-/// still holds for it.
 fn forget(entry: Entry) {
     let mut slot = entry.job.slot();
     slot.gone = true;
@@ -445,7 +409,6 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
     }
 }
 
-/// A window closed: its atlas went with it, so its tiles are simply dropped.
 pub(crate) fn forget_window(key: WinKey) {
     LOTTIE_STATES.with(|m| {
         for entry in m.borrow_mut().values_mut() {
@@ -468,7 +431,6 @@ pub fn any_playing() -> bool {
         })
 }
 
-/// One tick's events for one node, with what their payloads read.
 #[derive(Clone, Copy)]
 struct Ticked {
     id: u32,
@@ -584,7 +546,6 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     draw
 }
 
-/// Writes the frames the worker drew for nodes built in window `here` into their tiles.
 fn write(window: &mut Window, here: WinKey, touch: &mut Vec<u32>, draw: &mut bool) -> Shown {
     let mut shown = Shown::Nowhere;
     LOTTIE_STATES.with(|m| {
@@ -606,8 +567,7 @@ fn write(window: &mut Window, here: WinKey, touch: &mut Vec<u32>, draw: &mut boo
             tile.shows = key;
             let wrote = tile.live.write_bgra(window, bytes, true);
             if !fits || wrote == Shown::Draw {
-                // A cache boundary over the node would replay a sprite that points at the old
-                // place.
+                // A cache boundary over the node would replay a sprite pointing at the old place.
                 touch.push(id);
                 shown = Shown::Draw;
             } else {
@@ -619,8 +579,7 @@ fn write(window: &mut Window, here: WinKey, touch: &mut Vec<u32>, draw: &mut boo
     shown
 }
 
-/// A pop-out's half of [`tick`], from its own draw: its atlas's dropped tiles handed back, and the
-/// frames drawn for the nodes it built written into its tiles.
+/// A pop-out's half of [`tick`], from its own draw.
 pub(crate) fn window_tick(window: &mut Window, cx: &mut App) {
     drain_pending_drops(window, cx);
     let here = windows::key(window);
@@ -643,8 +602,6 @@ fn drain_pending_drops(window: &mut Window, cx: &mut App) {
     }
 }
 
-/// A load's outcome on the compat channel: what the compatibility pass rewrote, or why it failed
-/// and which features it lacks.
 fn report_load(src: &str, loaded: &Result<LottieMeta, (&'static str, String)>, advisories: &[String]) {
     match loaded {
         Ok(_) => {
@@ -667,7 +624,6 @@ fn report_load(src: &str, loaded: &Result<LottieMeta, (&'static str, String)>, a
     }
 }
 
-/// One tick's events, in lottie-web's firing order, gated on the listener bits.
 fn dispatch_events(ticked: &Ticked, window: &mut Window, cx: &mut App) {
     let Ticked { id, advance, total_frames, frame, progress } = *ticked;
     let listeners = tree::read_tree(|t| t.node(id).map(|n| n.listeners)).unwrap_or(0);
@@ -735,8 +691,7 @@ mod tests {
 
     #[test]
     fn loop_follows_the_lottie_player_defaults_and_lottie_webs_counting() {
-        // OWNER DECISION 1: absent means NOT looping (`<lottie-player>`), not lottie-web's
-        // `loadAnimation` default.
+        // Absent means NOT looping (`<lottie-player>`), not lottie-web's `loadAnimation` default.
         assert_eq!(loop_mode_from(None), LoopMode::None);
         assert_eq!(loop_mode_from(Some("false")), LoopMode::None);
         assert_eq!(loop_mode_from(Some("")), LoopMode::Loop);

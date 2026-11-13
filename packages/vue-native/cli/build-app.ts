@@ -1,24 +1,13 @@
-// `vn build`: an app directory in, one exe out — no Rust toolchain.
+// `vn build`: an app directory in, one exe out, no Rust toolchain.
 //
-//   vn.config.json ─┐
-//   bun prod.ts ────┼─► app.prod.js + window.json ─┐
-//   "assets" ───────┘                               ├─► VNPK ─► stamp(copy of the bare host)
-//   vn/app.json (name, version, host) ──────────────┘             │
-//                                                                 ▼
-//                                                  <appRoot>/dist/<exeName>.exe
+//   vn.config.json + prod.ts (app.prod.js, window.json) + "assets" -> VNPK -> stamp(copy of the bare host)
+//   -> <appRoot>/dist/<exeName>.exe
 //
-// Intermediates go to `dist/.vn/` (`app.prod.js`, `window.json`, `assets.json`,
-// `app.vnpk`). `assets.json` is the builder's list of files the bundle's
-// imports refer to (`?url`, image imports); they are packed beside "assets"
-// and "publicDir".
-// The `.vnpk` is the exact blob that was stamped, so a bare host can run it
-// without a re-stamp while iterating: `VN_PAYLOAD=dist/.vn/app.vnpk <host>`.
-//
-// That picture is Windows. For macOS (`process.platform === "darwin"`, or
-// `--platform macos` with `--host <mac vn-app>` anywhere) the last step is
-// macos-bundle.ts instead: the host is copied into `<exeName>.app` untouched,
-// the same VNPK goes beside it in Contents/Resources, and the bundle is signed
-// (ad hoc unless an identity is given). `PACKAGERS` holds the two.
+// Intermediates go to `dist/.vn/` (`app.prod.js`, `window.json`, `assets.json`, `app.vnpk`). The
+// `.vnpk` is the exact blob that was stamped, so `VN_PAYLOAD=dist/.vn/app.vnpk <host>` runs it
+// without a re-stamp. On macOS (or `--platform macos` with `--host <mac vn-app>`) the last step is
+// macos-bundle.ts: the host is copied into `<exeName>.app`, the VNPK goes in Contents/Resources,
+// and the bundle is signed (ad hoc unless an identity is given). `PACKAGERS` holds the two.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -46,37 +35,28 @@ import { FORMAT, KIND, NAMES, readHeader, skewFor, writeVnpk, type VnpkInput } f
 
 export const PROD_TS = join(PKG_DIR, "prod.ts");
 
-/** A PE image is capped at 4 GiB; beyond that a sidecar is the right tool. */
 export const WARN_PAYLOAD_BYTES = 512 * 1024 * 1024;
 export const MAX_PAYLOAD_BYTES = 1536 * 1024 * 1024;
 
 export interface BuildOptions {
-  /** An app directory, its entry module, or its vn.config.json. */
   target: string;
   /** Read this config instead of <appRoot>/vn.config.json; paths still belong to appRoot. */
   configPath?: string;
-  /** Output directory. Default `<appRoot>/dist`. */
   out?: string;
   host?: string;
   /** The host variant; overrides vn.config.json's `windows` selection. */
   variant?: Variant;
-  /** Keep the console subsystem (stderr in a console window). */
   console?: boolean;
-  /** Write `dist/.vn/app.vnpk` and stop — no host needed. */
   payloadOnly?: boolean;
   allowHostMismatch?: boolean;
-  /** `--define K=V`, each passed to prod.ts on top of vn.config.json `define`. */
   defines?: string[];
-  /** Retain typed source/SFC inputs for a future AOT frontend, outside the payload. */
   aotInputs?: boolean;
-  /** What to package for. Default: the OS this runs on. */
   platform?: Platform;
   /** macOS: a codesign identity (`-` = ad hoc), or false for none; over `macos.sign`. */
   sign?: string | false;
   log?: (line: string) => void;
 }
 
-/** One entry of the builder's `assets.json` (prod.ts): a file an import referred to. */
 interface BuilderAsset {
   key: string;
   path: string;
@@ -93,13 +73,9 @@ function readBuilderAssets(path: string): BuilderAsset[] {
 
 export interface MacBundle extends AppBundleResult {
   bundleId: string;
-  /** The icon's pixel sizes, or empty for none. */
   iconSizes: number[];
-  /** The identity it was signed with (`-`: ad hoc), or null when it was not. */
   signed: string | null;
-  /** Why it was not signed, and how to sign it. */
   signNote: string | null;
-  /** The entitlements a real identity signs with (dist/.vn/entitlements.plist). */
   entitlements: string;
 }
 
@@ -141,9 +117,7 @@ export function appMeta(
     host: { version: host?.info.vueNative ?? CLI_VERSION, variant },
     entry,
     assets: assetCount,
-    // Read by the host before anything else exists: the single-instance check and protocol registration.
     launch: config.launch,
-    // The asset packs beside the payload, which the host opens and checks.
     ...(packs.length ? { packs: packs.map((p) => ({ name: p.name, file: p.file, id: p.id })) } : {}),
   });
 }
@@ -151,13 +125,12 @@ export function appMeta(
 export interface BuiltPack {
   name: string;
   file: string;
-  /** Lowercase hex SHA-256 of the pack's index (header, TOC, names) — crates/vn-payload `Payload::index`. */
   id: string;
   blob: Uint8Array;
   assets: AssetFile[];
 }
 
-/** Deals the assets out to the packs in order: a pack with `match` takes what its globs match, one without takes the rest; the remainder stays in the payload. */
+/** Deals the assets out to the packs in order; what no pack takes stays in the payload. */
 export function splitPacks(files: AssetFile[], packs: PackConfig[]): { own: AssetFile[]; packs: { name: string; files: AssetFile[] }[] } {
   let left = files;
   const dealt = packs.map((p) => {
@@ -184,25 +157,21 @@ interface PackageInput {
   config: AppConfig;
   host: ResolvedHost;
   inputs: VnpkInput[];
-  /** The asset packs, which go wherever the host looks for them beside its payload. */
   packs: BuiltPack[];
   outDir: string;
   work: string;
   options: BuildOptions;
-  /** Pushed to; the build prints them. */
   warnings: string[];
   log: (line: string) => void;
 }
 
 interface Packaged {
   exe: string;
-  /** The exact VNPK that shipped, for `dist/.vn/app.vnpk`. */
   payload: Uint8Array;
   stamp: StampResult | null;
   bundle: MacBundle | null;
 }
 
-/** Windows: stamp a copy of the host (stamp.ts); the packs go beside it. */
 function stampExe({ config, host, inputs, packs, outDir, options, log }: PackageInput): Packaged {
   for (const p of packs) writeFileSync(join(outDir, p.file), p.blob);
   const fv = numericVersion(config.version);
@@ -217,8 +186,7 @@ function stampExe({ config, host, inputs, packs, outDir, options, log }: Package
     versionInfo: buildVersionInfo({
       fileVersion: [fv[0], fv[1], fv[2], 0],
       strings: {
-        // Task Manager names a process by its FileDescription, so it is the
-        // product name and not a sentence — what Electron does too.
+        // Task Manager names a process by its FileDescription, so it is the product name.
         FileDescription: config.productName,
         ProductName: config.productName,
         ProductVersion: config.version,
@@ -263,8 +231,7 @@ function macBundle({ config, host, inputs, packs, outDir, work, options, warning
         'to a reverse-DNS id such as "com.example.app"; signing and notarisation expect one',
     );
   }
-  // The host maps app.vnpk from offset 0, so the data region is page-aligned
-  // when the skew puts it on a page boundary of the FILE.
+  // The host maps app.vnpk from offset 0, so the data region must be page-aligned in the FILE.
   const unskewed = writeVnpk(inputs);
   const skew = skewFor(0, readHeader(unskewed));
   const payload = skew ? writeVnpk(inputs, { skew }) : unskewed;
@@ -288,7 +255,6 @@ function macBundle({ config, host, inputs, packs, outDir, work, options, warning
     infoPlist: plistXml(infoPlist(info)),
     log,
   });
-  // Beside app.vnpk in Contents/Resources, before the seal covers it.
   for (const p of packs) writeFileSync(join(written.app, "Contents", "Resources", p.file), p.blob);
 
   const onMac = process.platform === "darwin";
@@ -323,7 +289,6 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   const platform = options.platform ?? currentPlatform();
   const config = loadAppConfig(options.target, { configPath: options.configPath, platform });
   const warnings = [...config.warnings];
-  // `--variant` / `--features` / `--without` (vn.ts) over vn.config.json's.
   const variant: Variant = options.variant ?? config.windows.variant;
   partsLeftOut(variant);
   warnings.push(...variantWarnings(variant));
@@ -331,8 +296,7 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   const work = join(outDir, ".vn");
   mkdirSync(work, { recursive: true });
 
-  // The host first: a missing or mismatched host should fail before a bundle
-  // is spent on it.
+  // The host first: a missing or mismatched host should fail before a bundle is spent on it.
   const host = options.payloadOnly
     ? null
     : resolveHost({ host: options.host, variant, allowMismatch: options.allowHostMismatch, platform, log });
@@ -341,7 +305,6 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     if (host.unverified) warnings.push(host.unverified);
   }
 
-  // The bundle: the same `prod.ts` every prod build uses.
   const jsOut = join(work, "app.prod.js");
   const assetsJson = join(work, "assets.json");
   // A stale list from an older build must not survive a builder that wrote none.
@@ -365,8 +328,7 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   const ta = performance.now();
   const collected = collectAssets(config.appRoot, config.assets, config.assetsDeclared, config.publicDir);
   warnings.push(...collected.warnings);
-  // What the bundle's imports referred to (`?url`, `import logo from "./a.png"`),
-  // keyed the way the bundle spells the URL. They live under src/ or in a
+  // What the bundle's imports referred to (`?url`, image imports): they live under src/ or in a
   // package, which the "assets" walk never packages, so they are added here.
   const known = new Map(collected.files.map((f) => [f.key, f]));
   for (const a of readBuilderAssets(assetsJson)) {
@@ -412,14 +374,12 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     ...split.own.map((f) => ({ name: f.key, kind: KIND.ASSET, data: new Uint8Array(readFileSync(f.path)) })),
   ];
   const vnpk = join(work, "app.vnpk");
-  // Beside app.vnpk in dist/.vn/, where a host run on it finds them.
   for (const p of packs) writeFileSync(join(work, p.file), p.blob);
 
   let packaged: Packaged | null = null;
   const ts = performance.now();
   if (options.payloadOnly || !host) {
-    // An app split into packs ships its app.vnpk as a file, mapped from
-    // offset 0: page-align its data as the packs' is.
+    // An app split into packs ships app.vnpk as a file mapped from offset 0: page-align its data.
     const unskewed = writeVnpk(inputs);
     const skew = packs.length ? skewFor(0, readHeader(unskewed)) : 0;
     writeFileSync(vnpk, skew ? writeVnpk(inputs, { skew }) : unskewed);

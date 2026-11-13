@@ -16,17 +16,14 @@ use crate::render::warn_compat;
 use crate::tree::{Node, Tree};
 
 thread_local! {
-    /// `<label for="x">` → its text, built at most ONCE per frame and only when some control
-    /// actually asks (accname step 2D).
+    /// `<label for="x">` → its text, built at most once per frame and only when a control asks.
     static LABEL_FOR: RefCell<Option<HashMap<String, String>>> = const { RefCell::new(None) };
 }
 
-/// Drops the per-frame `<label for>` index.
 pub(crate) fn reset_frame() {
     LABEL_FOR.with(|m| *m.borrow_mut() = None);
 }
 
-/// The text of the `<label for="…">` that names this element, if one exists.
 fn label_for(t: &Tree, target_id: &str) -> Option<String> {
     LABEL_FOR.with(|cell| {
         let mut cell = cell.borrow_mut();
@@ -54,7 +51,6 @@ fn collect_labels(t: &Tree, id: u32, out: &mut HashMap<String, String>) {
     }
 }
 
-/// The explicit `role` attribute, lowered to an AccessKit role.
 pub(crate) fn role_from_attr(role: &str) -> Result<Option<Role>, ()> {
     let mut saw_token = false;
     for token in role.split_ascii_whitespace() {
@@ -72,7 +68,6 @@ pub(crate) fn role_from_attr(role: &str) -> Result<Option<Role>, ()> {
     if saw_token { Err(()) } else { Ok(None) }
 }
 
-/// The WAI-ARIA role vocabulary this build can express.
 fn known_role(role: &str) -> Option<Role> {
     Some(match role {
         "alert" => Role::Alert,
@@ -157,7 +152,6 @@ fn known_role(role: &str) -> Option<Role> {
     })
 }
 
-/// The role HTML itself gives a tag — the implicit half of HTML-AAM.
 pub(crate) fn implicit_role(
     tag: &str,
     input_type: Option<&str>,
@@ -237,8 +231,8 @@ pub(crate) fn implicit_role(
     })
 }
 
-/// `<input type=…>` → the AccessKit role that drives both a screen reader and, on Windows, a
-/// password manager's field detection.
+/// `<input type=…>` → the role that drives both a screen reader and, on Windows, a password
+/// manager's field detection.
 fn input_role(input_type: Option<&str>) -> Option<Role> {
     Some(match input_type.unwrap_or("text") {
         "checkbox" => Role::CheckBox,
@@ -296,14 +290,12 @@ pub(crate) fn aria_bool(value: &str) -> Option<bool> {
     }
 }
 
-/// An HTML boolean attribute (`disabled`, `readonly`, `required`, `checked`): present means true
-/// whatever the value, and only the literal `"false"` — what Vue writes for `:disabled="false"`
-/// before it removes the attribute — is treated as absent.
+/// An HTML boolean attribute: present means true whatever the value, except the literal `"false"`
+/// (what Vue writes for `:disabled="false"` before removing the attribute).
 pub(crate) fn html_bool(value: &str) -> bool {
     !value.eq_ignore_ascii_case("false")
 }
 
-/// `aria-orientation`.
 pub(crate) fn orientation(value: &str) -> Option<Orientation> {
     match value.trim().to_ascii_lowercase().as_str() {
         "horizontal" => Some(Orientation::Horizontal),
@@ -341,9 +333,6 @@ fn implicit_from(t: &Tree, id: u32, tag: &str) -> Option<Role> {
     implicit_role(tag, input_type.as_deref(), has_href, alt_empty)
 }
 
-/// The accessible NAME: `aria-label`, else `aria-labelledby` resolved against the referenced
-/// elements' text, else — for the controls where HTML says so — nothing (gpui derives a name from
-/// the element's own text runs).
 pub(crate) fn accessible_label(t: &Tree, id: u32) -> Option<String> {
     if let Some(label) = t.prop(id, "aria-label").map(str::trim).filter(|l| !l.is_empty()) {
         return Some(label.to_string());
@@ -361,16 +350,13 @@ pub(crate) fn accessible_label(t: &Tree, id: u32) -> Option<String> {
     t.prop(id, "alt").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string)
 }
 
-/// Is `id` an `<input type=file>`?
 pub(crate) fn is_file_input(t: &Tree, id: u32) -> bool {
     t.node(id).is_some_and(|n| t.name(n.tag) == "input")
         && t.prop(id, "type").is_some_and(|ty| ty.trim().eq_ignore_ascii_case("file"))
 }
 
-/// A file input's two strings, Chromium's English UA text: the button ("Choose File", or "Choose
-/// Files" with `multiple`, which is Chromium's only test; a `webkitdirectory` input without it says
-/// "Choose File") and the status the runtime pushes as the reserved `:file-label` prop ("No file
-/// chosen", the file's name, "3 files").
+/// A file input's two strings, Chromium's English UA text: the button ("Choose File", plural only
+/// with `multiple`) and the status the runtime pushes as the reserved `:file-label` prop.
 pub(crate) fn file_input_labels(t: &Tree, id: u32) -> Option<(&'static str, String)> {
     if !is_file_input(t, id) {
         return None;
@@ -381,8 +367,8 @@ pub(crate) fn file_input_labels(t: &Tree, id: u32) -> Option<(&'static str, Stri
     Some((button, status.to_string()))
 }
 
-/// Roles whose accessible NAME comes from their own contents — step 2F of the accname algorithm,
-/// and the reason `<button>Save</button>` announces "Save" without anybody writing an `aria-label`.
+/// Roles whose accessible name comes from their contents (accname step 2F): why `<button>Save</button>`
+/// announces "Save".
 fn names_from_content(role: Role) -> bool {
     matches!(
         role,
@@ -413,9 +399,9 @@ fn names_from_content(role: Role) -> bool {
     )
 }
 
-/// The static-text family: roles whose UIA `Name` is, by Windows convention, the text they contain.
-/// ARIA says they take no name from content, but gpui exposes no text runs for a `StyledText`, so
-/// following it literally would leave nameless `Text` elements where the prose is.
+/// The static-text family: UIA `Name` is, by Windows convention, their text. ARIA says they take no
+/// name from content, but gpui exposes no text runs for a `StyledText`, so following it would leave
+/// nameless `Text` elements.
 fn names_from_text(role: Role) -> bool {
     matches!(
         role,
@@ -437,8 +423,6 @@ fn names_from_text(role: Role) -> bool {
     )
 }
 
-/// `aria-describedby` gets the same treatment as `aria-labelledby`, but lands on the description
-/// rather than the name.
 pub(crate) fn accessible_description(t: &Tree, id: u32) -> Option<String> {
     if let Some(d) = t.prop(id, "aria-description").map(str::trim).filter(|d| !d.is_empty()) {
         return Some(d.to_string());
@@ -448,8 +432,6 @@ pub(crate) fn accessible_description(t: &Tree, id: u32) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-/// An ID-reference list (`aria-labelledby="a b c"`) → the concatenated text content of the elements
-/// it names, space separated, as the accname algorithm computes it for the simple case.
 fn resolve_id_refs(t: &Tree, refs: &str) -> String {
     let mut out = String::new();
     for target in refs.split_ascii_whitespace() {
@@ -481,7 +463,6 @@ fn find_by_dom_id(t: &Tree, from: u32, wanted: &str) -> Option<u32> {
     None
 }
 
-/// The rendered text of a subtree, the way `textContent` collects it.
 fn text_content(t: &Tree, id: u32) -> String {
     /// A name is spoken, not read; past this the walk is pure cost.
     const MAX: usize = 2048;
@@ -505,10 +486,7 @@ fn text_content(t: &Tree, id: u32) -> String {
     out.trim().to_string()
 }
 
-/// Lower this node's `role` / `aria-*` onto a gpui element.
 pub(crate) fn apply<E: StatefulInteractiveElement>(mut e: E, t: &Tree, id: u32, node: &Node) -> E {
-    // The fast path: a node JS never wrote an attribute to cannot carry a `role` or an `aria-*`,
-    // and its implicit role is the only thing left to decide.
     let tag = t.name(node.tag);
     let Some(role) = resolved_role(t, id, node) else {
         return e;
@@ -679,8 +657,6 @@ mod tests {
     use super::*;
     use crate::tree::with_tree;
 
-    /// A tree fixture: one element of `tag` carrying `attrs`, plus whatever `extra` builds beside
-    /// it.
     fn element(t: &mut Tree, tag: &str, attrs: &[(&str, &str)]) -> u32 {
         let tag = t.intern(tag);
         let id = t.create_element(tag);
@@ -691,8 +667,6 @@ mod tests {
         id
     }
 
-    /// The end-to-end shape of the thing: an attribute Vue writes through `__vn_set_prop` comes
-    /// back out as an AccessKit role.
     #[test]
     fn the_prop_channel_reaches_the_role() {
         with_tree(|t| {
@@ -717,8 +691,6 @@ mod tests {
         });
     }
 
-    /// `<input type=email>` is an email field to a screen reader AND to a password manager, and the
-    /// type attribute is how it says so.
     #[test]
     fn an_inputs_type_reaches_the_role_through_the_tree() {
         with_tree(|t| {
@@ -732,8 +704,6 @@ mod tests {
         });
     }
 
-    /// `<input type=file>` is a button named by its button and its status; `aria-label` still wins,
-    /// and `multiple` pluralises the button.
     #[test]
     fn a_file_input_is_a_button_named_by_its_button_and_status() {
         with_tree(|t| {
@@ -752,8 +722,6 @@ mod tests {
         });
     }
 
-    /// `aria-labelledby` names OTHER elements; the accessible name is their text, concatenated in
-    /// reference order — which needs a real tree walk.
     #[test]
     fn aria_labelledby_resolves_to_the_referenced_text() {
         with_tree(|t| {
@@ -794,8 +762,6 @@ mod tests {
         });
     }
 
-    /// Name from content — the accname step that makes a plain `<button>Save</button>` announce as
-    /// "Save".
     #[test]
     fn a_button_is_named_by_its_own_text() {
         with_tree(|t| {
@@ -819,8 +785,7 @@ mod tests {
         });
     }
 
-    /// `<label for="x">` names the control with that id — the forms idiom, and the only thing that
-    /// names a shadcn checkbox (which has no text of its own and no `aria-label`).
+    /// `<label for="x">` names the control with that id (the only thing naming a shadcn checkbox).
     #[test]
     fn a_label_for_names_the_control_it_points_at() {
         with_tree(|t| {
@@ -836,14 +801,11 @@ mod tests {
 
             assert_eq!(accessible_label(t, box_), None, "no attribute names it");
             assert_eq!(label_for(t, "terms").as_deref(), Some("Accept terms"));
-            // …and a control nothing points at stays unnamed rather than borrowing the nearest
-            // label.
             assert_eq!(label_for(t, "other"), None);
             reset_frame();
         });
     }
 
-    /// `alt` is an accessible name too — the oldest one on the web.
     #[test]
     fn alt_names_an_image() {
         with_tree(|t| {
@@ -854,8 +816,6 @@ mod tests {
         });
     }
 
-    /// The explicit `role` attribute is the whole WAI-ARIA vocabulary, and it is case-insensitive
-    /// the way every HTML attribute keyword is.
     #[test]
     fn the_role_attribute_lowers_to_accesskit() {
         for (attr, want) in [
@@ -881,8 +841,6 @@ mod tests {
         }
     }
 
-    /// `presentation` / `none` mean "strip the semantics", which is an absent role — not an
-    /// unmappable one, and so not an advisory.
     #[test]
     fn presentation_removes_the_node_without_complaining() {
         assert_eq!(role_from_attr("presentation"), Ok(None));
@@ -890,16 +848,13 @@ mod tests {
         assert_eq!(role_from_attr("  "), Ok(None));
     }
 
-    /// A `role` attribute is a fallback LIST, first understood token wins — which is how
-    /// `role="doc-subtitle heading"` keeps working.
+    /// `role` is a fallback list, first understood token wins (`role="doc-subtitle heading"`).
     #[test]
     fn a_role_list_takes_the_first_token_it_knows() {
         assert_eq!(role_from_attr("doc-subtitle heading"), Ok(Some(Role::Heading)));
         assert_eq!(role_from_attr("nonsense also-nonsense"), Err(()));
     }
 
-    /// HTML-AAM: the tag alone is semantics, and an app that writes no ARIA at all still produces a
-    /// readable tree.
     #[test]
     fn a_tag_carries_its_implicit_role() {
         for (tag, want) in [
@@ -923,23 +878,18 @@ mod tests {
         assert_eq!(implicit_role("span", None, false, false), None, "<span> is generic");
     }
 
-    /// An `<a>` is a link only with an `href` — the same rule the HTML accessibility mapping
-    /// states, and the reason a `<a @click>` button announces as nothing rather than as a link.
     #[test]
     fn an_anchor_without_href_is_not_a_link() {
         assert_eq!(implicit_role("a", None, true, false), Some(Role::Link));
         assert_eq!(implicit_role("a", None, false, false), None);
     }
 
-    /// `alt=""` is HTML's "this image is decorative"; it must not reach the tree at all.
     #[test]
     fn an_empty_alt_hides_the_image() {
         assert_eq!(implicit_role("img", None, false, false), Some(Role::Image));
         assert_eq!(implicit_role("img", None, false, true), None);
     }
 
-    /// `<input type=…>` drives both screen readers and password managers, and is the one place the
-    /// type attribute changes the role outright.
     #[test]
     fn input_type_selects_the_field_role() {
         for (ty, want) in [
@@ -973,8 +923,6 @@ mod tests {
         assert_eq!(heading_level("div"), None);
     }
 
-    /// ARIA state values are *values*, not attribute presence — the opposite of the HTML booleans
-    /// beside them.
     #[test]
     fn aria_states_read_their_value_html_booleans_read_their_presence() {
         assert_eq!(tristate("true"), Some(Toggled::True));

@@ -1,4 +1,3 @@
-//! Win32 source metadata and GDI previews. All handles stay on this worker.
 
 use core::ffi::c_void;
 
@@ -32,8 +31,7 @@ fn failure(operation: &str) -> Fail {
 }
 
 pub(super) fn sources(options: Options) -> Result<Vec<Value>, Fail> {
-    // DPI virtualisation would otherwise mix logical window coordinates with
-    // physical desktop pixels on mixed-DPI displays. Restore pool-thread state.
+    // DPI virtualisation would mix logical window coordinates with physical pixels on mixed-DPI displays.
     let _dpi =
         Dpi(unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) });
     let mut result = Vec::new();
@@ -188,8 +186,6 @@ fn window_info(window: HWND) -> Option<(String, RECT, u32)> {
     }
 }
 
-/// One selected top-down BGRA DIB. Selection, bitmap, DC and screen DC all
-/// unwind in the reverse order, including error and early-return paths.
 struct Surface {
     screen: HDC,
     dc: HDC,
@@ -342,10 +338,8 @@ fn window_thumbnail(window: HWND, rect: RECT, options: Options) -> Result<String
     if width == 0 || height == 0 {
         return Ok(String::new());
     }
-    // PrintWindow may synchronously call the target window procedure. A
-    // process that hangs between IsHungAppWindow and PrintWindow must neither
-    // strand this enumeration nor consume all four I/O-pool workers. At most
-    // two isolated print workers can be outstanding, even across refreshes.
+    // PrintWindow may call the target's window procedure: a hung process must neither strand this
+    // enumeration nor consume the I/O pool, so at most two isolated print workers are outstanding.
     use std::sync::atomic::{AtomicUsize, Ordering};
     static PRINT_WORKERS: AtomicUsize = AtomicUsize::new(0);
     if PRINT_WORKERS
@@ -406,8 +400,7 @@ fn print_thumbnail(window: HWND, rect: RECT, width: u32, height: u32) -> Result<
     if unsafe { IsHungAppWindow(window) }.as_bool() {
         return Err(Fail::new("OperationError", "the window is not responding"));
     }
-    // Printing its own surface preserves content when another window covers
-    // it. Copying the desktop rectangle here would show the covering window.
+    // Printing its own surface preserves content when another window covers it.
     let full = Surface::new(
         (rect.right - rect.left) as u32,
         (rect.bottom - rect.top) as u32,
@@ -457,7 +450,6 @@ fn window_icon(window: HWND) -> Result<Option<String>, Fail> {
     if icon == 0 {
         return Ok(None);
     }
-    // Icons returned by WM_GETICON / the class are borrowed, never destroyed.
     let icon = HICON(icon as *mut c_void);
     let black = Surface::new(32, 32)?;
     let white = Surface::new(32, 32)?;

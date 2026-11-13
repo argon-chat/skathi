@@ -23,7 +23,6 @@ impl Vars {
         self.entries.len()
     }
 
-    /// The computed value of `--name` (pass the name WITH its leading `--`).
     pub fn get(&self, name: &str) -> Option<&str> {
         self.entries
             .binary_search_by(|(k, _)| (**k).cmp(name))
@@ -31,13 +30,11 @@ impl Vars {
             .map(|i| &*self.entries[i].1)
     }
 
-    /// Every entry, in name order — the devtools/`getComputedStyle` view.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.entries.iter().map(|(k, v)| (&**k, &**v))
     }
 }
 
-/// Resolve registered defaults and inheritance before ordinary var() substitution.
 pub(crate) fn resolve_registered(parent: &Rc<Vars>, own: &[&(String, String)],
     registrations: &[crate::registered::PercentageRegistration], env: &crate::Env,
     diagnostics: &mut Vec<String>) -> Rc<Vars> {
@@ -67,10 +64,8 @@ pub(crate) fn resolve_registered(parent: &Rc<Vars>, own: &[&(String, String)],
     resolve(&computed, &invalid.iter().collect::<Vec<_>>(), env, diagnostics)
 }
 
-/// The reason a declaration is invalid at computed-value time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum VarError {
-    /// `var(--x)` where `--x` is not set and there is no fallback.
     Unresolved(String),
     /// Its own variant because an author cannot set an environment variable, so "declare it" is not
     /// advice.
@@ -122,8 +117,6 @@ fn skip_string(bytes: &[u8], i: usize) -> usize {
     bytes.len()
 }
 
-/// The ONLY differences are where the name is looked up and whether the page can write it — so they
-/// share one scanner and one substituter rather than growing a second copy of both.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Subst {
     Var,
@@ -144,8 +137,6 @@ fn is_fn_at(bytes: &[u8], i: usize, name: &[u8]) -> bool {
         .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
-/// The first `var(` or `env(` at or after `from` that is a real function token — i.e. not inside a
-/// string and not the tail of a longer identifier.
 fn find_subst(bytes: &[u8], from: usize) -> Option<(usize, Subst)> {
     let mut i = from;
     while i < bytes.len() {
@@ -168,7 +159,6 @@ fn find_subst(bytes: &[u8], from: usize) -> Option<(usize, Subst)> {
 /// name with an index is unknown.
 fn env_value(name: &str, env: &crate::Env) -> Option<String> {
     let px = |v: f32| {
-        // `1` rather than `1.0`, `0.5` kept — the shortest text that round-trips.
         if v == v.trunc() && v.is_finite() {
             format!("{}px", v as i64)
         } else {
@@ -229,7 +219,6 @@ fn split_var_args(inner: &str) -> (&str, Option<&str>) {
             }
             b'(' => depth += 1,
             b')' => depth = depth.saturating_sub(1),
-            // The fallback is every token after the comma.
             b',' if depth == 0 => return (inner[..i].trim(), Some(inner[i + 1..].trim_start())),
             _ => {}
         }
@@ -238,8 +227,6 @@ fn split_var_args(inner: &str) -> (&str, Option<&str>) {
     (inner.trim(), None)
 }
 
-/// `lookup` returns `None` for "not set", which is what makes the fallback apply and a
-/// fallback-less reference invalidate the declaration.
 pub(crate) fn substitute(
     text: &str,
     env: &crate::Env,
@@ -254,8 +241,6 @@ pub(crate) fn substitute(
     while let Some((open, kind)) = find_subst(bytes, cursor) {
         let paren = open + 3;
         let Some(close) = matching_paren(bytes, paren) else {
-            // Unbalanced — copy the rest verbatim and let the re-parse fail with the ordinary "did
-            // not parse" advisory.
             break;
         };
         out.push_str(&text[cursor..open]);
@@ -285,22 +270,17 @@ pub(crate) fn substitute(
     Ok(out)
 }
 
-/// Substitutes against an already-resolved [`Vars`] map — the form every non-custom declaration
-/// uses.
 pub(crate) fn substitute_with(text: &str, vars: &Vars, env: &crate::Env) -> Result<String, VarError> {
     substitute(text, env, &mut |name| Ok(vars.get(name).map(str::to_string)))
 }
 
 enum Slot<'a> {
-    /// Declared on this element, not resolved yet.
     Raw(&'a str),
     Done(String),
     Busy,
     Dropped,
 }
 
-/// Only names this element DECLARES live in `slots`; everything else is read straight off the
-/// parent map, which is already fully resolved.
 fn force<'a>(
     slots: &mut HashMap<&'a str, Slot<'a>>,
     parent: &Vars,
@@ -389,8 +369,6 @@ pub(crate) fn resolve(
         return parent.clone();
     }
 
-    // Fold to one declaration per name (last wins) before dropping inert ones: a name whose last
-    // declaration differs from the parent's is live even if an earlier one matched it.
     let mut folded: Vec<(&str, &str)> = Vec::with_capacity(own.len());
     let mut seen: std::collections::HashSet<&str> =
         std::collections::HashSet::with_capacity(own.len());
@@ -400,8 +378,6 @@ pub(crate) fn resolve(
         }
         match wide_keyword(raw) {
             Some(Wide::Inherited) => continue,
-            // `initial`: guaranteed-invalid, and it must still SHADOW the inherited value — a
-            // folded name with no resolved slot is exactly that (see the merge below).
             Some(Wide::Initial) => folded.push((name.as_str(), raw.as_str())),
             None => {
                 if !inert(raw, name, parent) {
@@ -425,8 +401,6 @@ pub(crate) fn resolve(
         );
     }
     for (name, _) in &folded {
-        // The Err arm cannot escape here: `force` converts every failure of its own value into
-        // "unset" + an advisory.
         if let Err(e) = force(&mut slots, parent, env, name, diagnostics) {
             diagnostics.push(format!(
                 "`{name}` is invalid at computed-value time — {}",
@@ -440,8 +414,6 @@ pub(crate) fn resolve(
         .into_iter()
         .filter_map(|(k, v)| match v {
             Slot::Done(value) => Some((k, value)),
-            // `Busy` is a name left mid-cycle, `Raw` cannot survive the loop above, `Dropped` is
-            // invalid at computed-value time.
             _ => None,
         })
         .collect();
@@ -488,14 +460,10 @@ mod tests {
         resolve(&Rc::new(Vars::default()), &refs(&own), &crate::Env::default(), &mut d)
     }
 
-    /// `resolve` takes borrowed declarations (the cascade never copies them); the tests still want
-    /// to write literals.
     fn refs(own: &[(String, String)]) -> Vec<&(String, String)> {
         own.iter().collect()
     }
 
-    /// `tailwindcss-animate` resets its channels with `initial`, which is the GUARANTEED-INVALID
-    /// value, not the seven-letter string.
     #[test]
     fn the_css_wide_keywords_are_keywords_for_a_custom_property_too() {
         let v = vars(&[("--tw-enter-scale", "initial")]);
@@ -514,7 +482,6 @@ mod tests {
         assert_eq!(child.get("--x"), None, "CSS Variables §3: no inheritance rescue");
         assert!(d.is_empty(), "and it is not an error: {d:?}");
 
-        // `inherit` / `unset` / `revert` keep the parent's value instead.
         for keyword in ["inherit", "unset", "revert", "REVERT-LAYER"] {
             let own = vec![("--x".to_string(), keyword.to_string())];
             let child = resolve(&parent, &refs(&own), &crate::Env::default(), &mut Vec::new());
@@ -549,8 +516,6 @@ mod tests {
         assert_eq!(v.get("--y"), Some("9"));
     }
 
-    /// The custom property is dropped — CSS's "invalid at computed-value time" — and SILENTLY,
-    /// because that is exactly what a browser does with it.
     #[test]
     fn a_fallbackless_missing_reference_invalidates_the_declaration() {
         let own = vec![("--x".to_string(), "var(--nope)".to_string())];
@@ -586,8 +551,6 @@ mod tests {
         assert_eq!(parent.get("--b"), Some("2"));
     }
 
-    /// The fast path: an element that re-declares exactly what it inherited (Tailwind's universal
-    /// `--tw-*` block on every element) must share the parent's `Rc`, not rebuild an identical map.
     #[test]
     fn redeclaring_the_inherited_value_shares_the_parents_map() {
         let parent = vars(&[("--a", "1"), ("--b", "0 0 #0000")]);
@@ -609,8 +572,6 @@ mod tests {
         assert_eq!(child.get("--b"), Some("2"));
     }
 
-    /// Skipping declarations that cannot move anything must not skip the cascade's last-wins rule:
-    /// which of two declarations for one name is inert depends on which one is LAST.
     #[test]
     fn dropping_inert_declarations_respects_last_wins() {
         let parent = vars(&[("--a", "1")]);
@@ -634,8 +595,6 @@ mod tests {
     #[test]
     fn a_var_reference_never_takes_the_identical_fast_path() {
         let parent = vars(&[("--b", "red"), ("--a", "var(--b)")]);
-        // The parent's own `--a` resolved to `red`; a child re-declaring the same TEXT resolves to
-        // `red` too, so the map is equal — but it must be reached by resolving, not by assuming.
         let mut d = Vec::new();
         let own = vec![("--a".to_string(), "var(--b)".to_string())];
         let child = resolve(&parent, &refs(&own), &crate::Env::default(), &mut d);
@@ -697,7 +656,6 @@ mod tests {
         assert_eq!(substitute_with("var(--a, var(--z, red))", &v, &crate::Env::default()).unwrap(), "red");
     }
 
-    /// A comma inside a nested function is not the fallback separator.
     #[test]
     fn the_fallback_split_is_top_level_only() {
         let v = vars(&[]);

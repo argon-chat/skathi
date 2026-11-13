@@ -7,7 +7,6 @@
 // `__vn_window_*` host functions, registered by window.rs with fixed arity. Four return JSON
 // strings (state, match_media, hitboxes, cursor); the rest submit an op and return undefined.
 
-/** The window as of this frame, as JSON. See `window.rs::snapshot_json`. */
 declare function __vn_window_state(): string;
 
 /**
@@ -16,7 +15,6 @@ declare function __vn_window_state(): string;
  */
 declare function __vn_window_observe(fn: (kinds: string, json: string) => boolean): void;
 
-/** `SetWindowTextW`, with the raw string. */
 declare function __vn_window_set_title(title: string): void;
 
 /**
@@ -28,7 +26,6 @@ declare function __vn_window_verb(verb: string): void;
 
 declare function __vn_window_set_fullscreen(on: boolean): void;
 
-/** `true` raises the window; `false` requests attention (flashes the taskbar). */
 declare function __vn_window_activate(raise: boolean): void;
 
 /**
@@ -45,7 +42,6 @@ declare function __vn_window_set_bounds(
 
 declare function __vn_window_set_always_on_top(on: boolean): void;
 declare function __vn_window_set_backdrop(name: string): void;
-/** `"system" | "light" | "dark"`; anything else is advised and ignored. */
 declare function __vn_window_set_theme(name: string): void;
 
 /**
@@ -59,7 +55,6 @@ declare function __vn_window_set_overlay(
   symbolColor: string,
 ): void;
 
-/** `{ matches, error? }` as JSON — the cascade's own evaluator, same env. */
 declare function __vn_window_match_media(query: string): string;
 
 /**
@@ -68,19 +63,14 @@ declare function __vn_window_match_media(query: string): string;
  */
 declare function __vn_window_hitboxes(windowId?: number): string;
 
-/** `{ x, y }` in CSS px, or `null` when the platform has no cursor to report. */
 declare function __vn_window_cursor(): string;
 
-/** Publishes one compat advisory to the host's diagnostic channel. */
 declare function __vn_window_advise(message: string): void;
 
-/** `window.rs::snapshot_json`, field for field. Everything is CSS px. */
 interface VnWindowState {
   innerWidth: number;
   innerHeight: number;
-  /** The whole window, screen-relative. */
   outer: VnWindowRect;
-  /** The content area, screen-relative. */
   content: VnWindowRect;
   devicePixelRatio: number;
   maximized: boolean;
@@ -92,21 +82,17 @@ interface VnWindowState {
   backdrop: string;
   /** What the window draws of `backdrop`: `"none"` while macOS fullscreen has no desktop picture for the glass. */
   effectiveBackdrop: string;
-  /** `appWindow.theme`: `"system"`, `"light"` or `"dark"`. */
   theme: string;
   /** The window's dark mode as DWM has it, read back — `null` when it will not say. */
   systemDarkMode: boolean | null;
-  /** What DWM believes, read back — `null` when it will not say. */
   systemBackdrop: number | null;
   alwaysOnTop: boolean;
-  /** `"browser"` / `"standalone"` / `"fullscreen"` — the `display-mode` MQ. */
   displayMode: string;
   titleBarStyle: "default" | "hidden";
   titleBarOverlayVisible: boolean;
   /** The area left to APP CONTENT, not the titlebar's own box. */
   titleBarArea: VnWindowRect;
   fallbackTitleBar: boolean;
-  /** Whether the HOST draws the min/max/close cluster. */
   hostControls: boolean;
   clientWidth: number;
   clientHeight: number;
@@ -125,19 +111,16 @@ interface VnWindowState {
   };
 }
 
-/** `__vn_window_match_media`. `error` is present only when the query failed. */
 interface VnMatchMediaResult {
   matches: boolean;
   error?: string;
 }
 
-/** One `WindowControlArea` the last painted frame registered. */
 interface VnWindowHitbox {
   node: number;
   area: "drag" | "no-drag" | "minimize" | "maximize" | "close";
 }
 
-/** `__vn_window_cursor` — `null` when the platform has no cursor. */
 type VnWindowCursorPos = { x: number; y: number } | null;
 
 /**
@@ -146,11 +129,8 @@ type VnWindowCursorPos = { x: number; y: number } | null;
  * still fails to type-check.
  */
 interface VnWindowHost {
-  /** Always this window, in v1. The spelling ported Tauri code uses. */
   getCurrentWindow(): VnAppWindow;
-  /** Re-reads the host NOW, bypassing the one-frame snapshot. */
   refresh(): VnWindowState;
-  /** Publishes one advisory, at most once per key. */
   warn(key: string, message: string): void;
   /** The last painted frame's hitboxes; WM_NCHITTEST cannot be synthesised. */
   controlHitboxes(): VnWindowHitbox[];
@@ -164,18 +144,14 @@ interface VnWindowHost {
  * type exactly.
  */
 interface VnDocument {
-  /** CSSOM View: `true` while this window has the OS focus. */
   hasFocus(): boolean;
-  /** Pops the fullscreen stack; leaves fullscreen when it empties. */
   exitFullscreen(): Promise<void>;
-  /** redjs's own. */
   dispatchEvent(ev: VnEvent): boolean;
 }
 
 // Globals the prelude itself creates, so they cannot live in engine.d.ts. `var`, not `function`,
 // because the prelude assigns them.
 
-/** Pushed by redjs on resize; the prelude only seeds them at boot. */
 declare var innerWidth: number;
 declare var innerHeight: number;
 declare var devicePixelRatio: number;
@@ -188,16 +164,13 @@ declare var screenY: number;
 declare var screenLeft: number;
 declare var screenTop: number;
 
-/** Resizes the VIEWPORT; `moveTo` positions the WINDOW. */
 declare var resizeTo: (width: number, height: number) => void;
 declare var resizeBy: (dw: number, dh: number) => void;
 declare var moveTo: (x: number, y: number) => void;
 declare var moveBy: (dx: number, dy: number) => void;
 
 declare var close: () => void;
-/** Requests attention rather than raising, unless `window.focus: "raise"`. */
 declare var focus: () => void;
-/** Does nothing, loudly — as it does in every browser since it was removed. */
 declare var blur: () => void;
 /** Not supported (v1 is single-window); advises and returns `null`. */
 declare var open: () => null;
@@ -215,11 +188,9 @@ interface VnDispatchTarget {
   dispatchEvent(ev: VnEvent): boolean;
 }
 
-/** `screen` and its `ScreenOrientation`. */
 interface VnScreenOrientation extends VnEventTarget {
   readonly type: "landscape-primary" | "portrait-primary";
   readonly angle: number;
-  /** Rejects with `NotSupportedError`, as it does in every desktop browser. */
   lock(): Promise<never>;
   unlock(): void;
 }
@@ -230,7 +201,6 @@ interface VnScreen extends VnEventTarget {
   readonly availHeight: number;
   readonly availLeft: number;
   readonly availTop: number;
-  /** 24, unconditionally — what the spec says to answer when unknown. */
   readonly colorDepth: number;
   readonly pixelDepth: number;
   readonly isExtended: boolean;
@@ -243,7 +213,6 @@ interface VnMediaQueryList extends VnEventTarget {
   readonly media: string;
   readonly matches: boolean;
   onchange: ((this: VnMediaQueryList, ev: VnEvent) => void) | null;
-  /** Deprecated in the spec, not removed — and still what shipped libraries call. */
   addListener(fn: (ev: VnEvent) => void): void;
   removeListener(fn: (ev: VnEvent) => void): void;
   __vnReevaluate(): void;
@@ -278,9 +247,7 @@ interface VnFullscreenTarget {
   dispatchEvent?: (ev: VnEvent) => boolean;
 }
 interface VnFullscreenOptions {
-  /** Ignored — there is no browser UI here to lock. */
   keyboardLock?: unknown;
-  /** Ignored: needs the Window Management API. */
   screen?: unknown;
 }
 /** `| undefined` and probed, like `HTMLElement` in engine.d.ts: a redjs revision may not ship it. */
@@ -293,7 +260,6 @@ declare var __VUE_OPTIONS_API__: boolean;
 declare var __VUE_PROD_DEVTOOLS__: boolean;
 declare var __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: boolean;
 
-/** The inert `history` stub: every method is a no-op, so it is not typed as `History`. */
 interface VnHistoryStub {
   state: null;
   length: number;

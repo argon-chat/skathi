@@ -1,24 +1,16 @@
-//! At-rest encryption for the storage file: a provider trait and one provider per platform.
-//! The key must live somewhere the attacker does not have, so each provider leans on the OS.
+//! At-rest encryption for the storage file: a provider trait and one provider per platform, each leaning
+//! on the OS so the key lives somewhere the attacker does not have.
 //!
-//! - Windows (id 1): DPAPI. The OS derives the key from the user's logon credential; this
-//!   process never sees it. It protects against other users and a copied file or backup, not
-//!   against anything running as the same user. A blob can become unreadable (local account,
-//!   reset password, profile that did not roam), which is why an unreadable blob is an empty
-//!   area plus an advisory, never a fatal error, and why the default folder is `LOCALAPPDATA`.
-//! - macOS (id 2): one random 256-bit master key per app in the login keychain (service
-//!   `gl.argon.vue-native.storage`, account = bundle identifier or `exe:<name>`), sealing
-//!   blobs with AES-256-GCM in `envelope` (versioned, random nonce, the DPAPI entropy string
-//!   as associated data). The key is created add-only so racing processes agree on one
-//!   (`envelope::load_or_create`). Only `keychain` needs a Mac; the rest compiles under
-//!   `cfg(test)` everywhere.
-//! - Linux (id 3): the same envelope and key, held by the Secret Service. With no Secret
-//!   Service on the bus (bare window manager, WSLg) the key goes in a user-only file under
-//!   `$XDG_DATA_HOME/vue-native/keys/`; once made it is used even if a keyring appears later,
-//!   since a second key would orphan the data. See `secret_service`.
+//! - Windows (id 1): DPAPI, keyed to the user's logon credential. A blob can become unreadable (local
+//!   account, reset password, profile that did not roam), so an unreadable blob is an empty area plus an
+//!   advisory, never fatal, and the default folder is `LOCALAPPDATA`.
+//! - macOS (id 2): one random 256-bit master key per app in the login keychain, sealing blobs in
+//!   `envelope` (created add-only so racing processes agree).
+//! - Linux (id 3): the same envelope, key held by the Secret Service, else a user-only key file; see
+//!   `secret_service`.
 //!
-//! A keychain or keyring that cannot be read is an error latched for the process: never
-//! plaintext, and never a new key that would orphan data sealed under the old one.
+//! A keychain or keyring that cannot be read is an error latched for the process: never plaintext, and
+//! never a new key that would orphan data sealed under the old one.
 //! [`CryptProtectData`]: https://learn.microsoft.com/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata
 
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
@@ -28,17 +20,13 @@ mod keychain;
 #[cfg(target_os = "linux")]
 mod secret_service;
 
-/// One way of turning bytes into bytes only this user can read back on disk.
 pub trait SecretProvider: Send + Sync {
-    /// How an advisory names this: `"Windows DPAPI (per-user)"`.
     fn name(&self) -> &'static str;
 
-    /// The byte identifying this provider in a file header, so a file written by one provider is
-    /// refused by another. `1` is DPAPI, `2` the macOS Keychain, `3` the Linux one.
+    /// The byte identifying this provider in a file header, so a file written by another is refused.
     fn id(&self) -> u8;
 
-    /// Whether this provider can seal and open right now. Lets a caller tell an unreadable blob
-    /// from an unavailable provider (locked or refused keychain: refuse, touch nothing).
+    /// Whether this provider can seal and open right now (locked or refused keychain: refuse, touch nothing).
     fn ready(&self) -> Result<(), String> {
         Ok(())
     }
@@ -47,14 +35,11 @@ pub trait SecretProvider: Send + Sync {
     fn unprotect(&self, ciphertext: &[u8]) -> Result<Vec<u8>, String>;
 }
 
-/// Entropy mixed into every blob. Not a secret (it is in the binary); it stops an unrelated
-/// program running as the same user from decrypting our blob by passing it to
-/// `CryptUnprotectData`.
+/// Entropy mixed into every blob; not a secret, it stops an unrelated same-user program from unsealing it.
 #[cfg(target_os = "windows")]
 const ENTROPY: &[u8] = b"vue-native/storage/v1";
 
-/// The provider for this build, or `None` on a platform without one; asking for
-/// `{ encrypted: true }` there is refused rather than written as plaintext.
+/// The provider for this build, or `None`; `{ encrypted: true }` is refused there rather than written plaintext.
 pub fn provider() -> Option<&'static dyn SecretProvider> {
     #[cfg(target_os = "windows")]
     {
@@ -77,7 +62,6 @@ pub fn provider() -> Option<&'static dyn SecretProvider> {
     }
 }
 
-/// Fills `buf` from the OS CSPRNG; an error, never a weaker fallback.
 pub fn random_bytes(buf: &mut [u8]) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -121,7 +105,6 @@ impl SecretProvider for Dpapi {
     }
 }
 
-/// One body for both directions so the `LocalFree` cannot be forgotten in one of them.
 #[cfg(target_os = "windows")]
 unsafe fn dpapi(input: &[u8], protect: bool) -> Result<Vec<u8>, String> {
     use windows::Win32::Foundation::{HLOCAL, LocalFree};

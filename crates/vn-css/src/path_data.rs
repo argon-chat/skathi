@@ -5,14 +5,11 @@
 
 use gpui::VnPathVerb;
 
-/// Parses `d`.
 pub(crate) fn parse(d: &str) -> Result<Vec<VnPathVerb>, String> {
     let mut p = Parser { s: d.as_bytes(), i: 0 };
     let mut out = Vec::new();
     let mut current = [0f32; 2];
     let mut start = [0f32; 2];
-    // The last cubic's second control point, or quadratic's control point, for `S` and `T`; `None`
-    // after anything else.
     let mut last_cubic: Option<[f32; 2]> = None;
     let mut last_quad: Option<[f32; 2]> = None;
     p.skip_separators();
@@ -36,7 +33,6 @@ pub(crate) fn parse(d: &str) -> Result<Vec<VnPathVerb>, String> {
                     out.push(VnPathVerb::MoveTo(pt));
                     start = pt;
                 } else {
-                    // Coordinate pairs after the first are implicit lines.
                     out.push(VnPathVerb::LineTo(pt));
                 }
                 current = pt;
@@ -225,7 +221,6 @@ impl Parser<'_> {
         Ok(value)
     }
 
-    /// An arc flag: `0` or `1`, which needs no separator after it.
     fn flag(&mut self) -> Result<bool, String> {
         self.skip_whitespace();
         let flag = match self.peek() {
@@ -260,8 +255,6 @@ mod tests {
             ok("M10 20 L30 40 H50 V60 Z"),
             vec![MoveTo([10., 20.]), LineTo([30., 40.]), LineTo([50., 40.]), LineTo([50., 60.]), Close]
         );
-        // Relative, and pairs after a moveto are linetos; after `z` the current point is the
-        // subpath's start.
         assert_eq!(
             ok("m10,20 10,0 0,10 z l5 5 h-5 v-5"),
             vec![
@@ -300,7 +293,6 @@ mod tests {
             ok("M10 10 q10 0 10 10 t10 10"),
             vec![MoveTo([10., 10.]), QuadTo([20., 10.], [20., 20.]), QuadTo([20., 30.], [30., 30.])]
         );
-        // `S` after a line takes the current point; `T` after a cubic too.
         assert_eq!(
             ok("M0 0 L10 0 S20 10 20 20 T30 30"),
             vec![

@@ -1,12 +1,9 @@
 //! `mem`: where this process's memory is, computed on request.
 //!
-//! Numbers are either measured by the OS (process counters, address-space walk,
-//! heap summaries, DXGI), counted by an allocator (Rust heap, JSC, mimalloc), or
-//! computed from live structures (lower bounds).
-//!
-//! `breakdown` (bytes) folds them into categories that sum to the committed
-//! address space; the other sections are in MB. `gc` first runs `release_memory`
-//! and reports before/after, which changes state (finalizers run).
+//! Numbers are measured by the OS, counted by an allocator, or computed from live structures
+//! (lower bounds). `breakdown` (bytes) folds them into categories that sum to the committed
+//! address space; the other sections are in MB. `gc` first runs `release_memory` and reports
+//! before/after, which changes state (finalizers run).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -202,8 +199,7 @@ fn process() -> Counters {
     }
 }
 
-/// Who a committed private allocation (one `VirtualAlloc` reservation) belongs
-/// to, as far as this process can tell from the outside.
+/// Who a committed private allocation (one `VirtualAlloc` reservation) belongs to.
 #[derive(Clone, Copy, PartialEq)]
 enum Owner {
     /// The TEB's `StackLimit` is inside it.
@@ -235,8 +231,7 @@ enum Resident {
 /// Resident bytes per [`Resident`] class: `[class][0 = private, 1 = shared]`.
 type ResidentBytes = [[f64; 2]; 6];
 
-/// Every working-set page (`QueryWorkingSet`) counted against its region: the
-/// RAM picture, where the breakdown is the commit picture (a stack's
+/// The RAM picture (`QueryWorkingSet`); the breakdown is the commit picture (a stack's
 /// committed-but-untouched pages are only in the latter).
 fn resident(w: &Walk) -> Option<ResidentBytes> {
     extern "system" {
@@ -304,8 +299,7 @@ fn allocation_base(p: usize) -> Option<usize> {
     (n != 0).then(|| unsafe { info.assume_init() }.allocation_base as usize)
 }
 
-/// A thread's description with every run of digits folded to `#`, so a pool's
-/// workers group into one row.
+/// Digit runs folded to `#`, so a pool's workers group into one row.
 fn thread_group(h: isize) -> String {
     let mut p: *mut u16 = std::ptr::null_mut();
     if unsafe { GetThreadDescription(h, &mut p) } < 0 || p.is_null() {
@@ -330,9 +324,8 @@ fn thread_group(h: isize) -> String {
     if out.is_empty() { "(unnamed)".into() } else { out }
 }
 
-/// The allocation base of every thread's stack (with its group name), and the
-/// thread count. `StackLimit` is the third word of the TEB's `NT_TIB`; it is
-/// read with `ReadProcessMemory` because a thread can exit mid-walk.
+/// `StackLimit` (third word of the TEB's `NT_TIB`) is read with `ReadProcessMemory` because a
+/// thread can exit mid-walk.
 fn stack_bases() -> (HashMap<usize, String>, usize) {
     const THREAD_QUERY_INFORMATION: u32 = 0x40;
     const THREAD_QUERY_LIMITED_INFORMATION: u32 = 0x800;
@@ -394,9 +387,8 @@ fn stack_bases() -> (HashMap<usize, String>, usize) {
     (bases, threads)
 }
 
-/// The allocation bases of the process heap's segments and big blocks, from a
-/// `HeapWalk` under `HeapLock`. Slow, and the heap stays locked, so nothing may
-/// allocate meanwhile: addresses go into a preallocated buffer.
+/// `HeapWalk` under `HeapLock`: slow, and the heap stays locked, so nothing may allocate
+/// meanwhile (addresses go into a preallocated buffer).
 fn heap_bases() -> (HashSet<usize>, usize, f64) {
     const PROCESS_HEAP_REGION: u16 = 0x1;
     const PROCESS_HEAP_ENTRY_BUSY: u16 = 0x4;
@@ -680,8 +672,7 @@ struct Heaps {
     json: Json,
 }
 
-/// `HeapSummary` of the process heap (the Rust heap and the static CRT's
-/// `malloc` share it) and of every other heap.
+/// The Rust heap and the static CRT's `malloc` share the process heap.
 fn heaps() -> Heaps {
     let mut handles = [0isize; 256];
     let n = unsafe { GetProcessHeaps(handles.len() as u32, handles.as_mut_ptr()) } as usize;
@@ -775,8 +766,7 @@ struct Gpu {
     json: Json,
 }
 
-/// Per adapter: this process's usage in the local (VRAM) and non-local
-/// (shared system memory) segments.
+/// Per adapter: usage in the local (VRAM) and non-local (shared) segments.
 fn gpu() -> Gpu {
     use windows::Win32::Graphics::Dxgi::{
         DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO,
@@ -1040,9 +1030,8 @@ fn breakdown(i: &Inputs) -> Json {
     ])
 }
 
-/// `gc`: run `release_memory` first and report before/after; `code`: also drop
-/// compiled code. `regions`: also walk the process heap (locked meanwhile) to
-/// attribute its reservations.
+/// `gc`: `release_memory` first, before/after; `code`: also drop compiled code; `regions`: also
+/// walk the process heap (locked meanwhile).
 pub(crate) fn report(
     gc: bool,
     code: bool,

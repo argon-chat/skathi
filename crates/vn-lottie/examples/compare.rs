@@ -8,15 +8,12 @@
 //! ```
 //!
 //! Walks `tests/fixtures/` and `tests/corpus/` (fetched by `tools/fetch-corpus.sh`), loads every
-//! file on every compiled-in backend (`--no-default-features` gives a `rasterlottie`-only run) and
-//! prints a markdown table of: load (accepted at all), cover (canvas fraction painted over the
-//! timeline; a backend painting 3 % of what the other does is silently dropping layers), Δ (mean
-//! per-pixel difference between backends) and ms (median rasterisation cost at 128 / 256 / 512 px,
-//! cache defeated by seeking before every render).
-//!
-//! `--golden` scores each backend against `LottieFiles/test-files`' frame-0 reference renders.
-//! `--soak` renders one file forever so an outside observer can watch the working set settle.
-//! `--png <dir>` dumps a mid-timeline frame per file per backend.
+//! file on every compiled-in backend and prints a markdown table of: load (accepted at all), cover
+//! (canvas fraction painted over the timeline; a backend painting 3 % of what the other does is
+//! silently dropping layers), Δ (mean per-pixel difference between backends) and ms (median
+//! rasterisation cost at 128 / 256 / 512 px, cache defeated by seeking before every render).
+//! `--golden` scores each backend against `LottieFiles/test-files`' frame-0 reference renders;
+//! `--soak` renders one file forever; `--png <dir>` dumps a mid-timeline frame per file per backend.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -24,7 +21,6 @@ use std::time::{Duration, Instant};
 use vn_lottie::{Backend, LottieState};
 
 const SIZES: [f32; 3] = [128.0, 256.0, 512.0];
-/// Samples per file; enough to average out one slow first frame without a long run.
 const ITERATIONS: usize = 60;
 const SAMPLES: usize = 9;
 
@@ -128,15 +124,11 @@ fn header(backends: &[Backend]) {
 
 struct Measured {
     error: Option<String>,
-    /// Fraction of the 256px canvas with non-zero alpha, averaged over the
-    /// timeline samples.
     coverage: f64,
     millis: [f64; SIZES.len()],
     samples: Vec<Sample>,
 }
 
-/// One rendered frame; dimensions travel with the bytes because `contain` letterboxes (a 443x367
-/// animation in a 256px box is 256x212).
 struct Sample {
     width: u32,
     height: u32,
@@ -192,7 +184,6 @@ fn measure(bytes: &[u8], backend: Backend) -> Measured {
     for (index, size) in SIZES.iter().enumerate() {
         let mut timings = Vec::with_capacity(ITERATIONS);
         for iteration in 0..ITERATIONS {
-            // Seeking every iteration defeats the frame cache, so this times rasterisation.
             let frame = total * (iteration % SAMPLES) as f32 / SAMPLES as f32;
             state.seek_frame(frame);
             let started = Instant::now();
@@ -217,7 +208,6 @@ fn median_ms(timings: &mut [Duration]) -> f64 {
     timings[timings.len() / 2].as_secs_f64() * 1000.0
 }
 
-/// Mean absolute per-channel difference between two backends' samples, as a fraction of full scale.
 fn difference(a: &[Sample], b: &[Sample]) -> Option<f64> {
     if a.is_empty() || a.len() != b.len() {
         return None;
@@ -284,7 +274,6 @@ fn dump(dir: &Path, name: &str, backend: Backend, measured: &Measured) {
     let Some(sample) = measured.samples.get(measured.samples.len() / 2) else {
         return;
     };
-    // The buffers are BGRA (gpui's atlas order); PNG wants RGBA.
     let mut rgba = sample.bgra.clone();
     for pixel in rgba.chunks_exact_mut(4) {
         pixel.swap(0, 2);
@@ -296,9 +285,7 @@ fn dump(dir: &Path, name: &str, backend: Backend, measured: &Measured) {
     let _ = image.save(dir.join(format!("{stem}.{}.png", backend.name())));
 }
 
-/// Renders one file in a tight loop forever so an external observer can watch the working set settle.
 fn soak_forever(_backends: &[Backend], relative: &str) {
-    // `preferred()` selects the backend as elsewhere: `VN_LOTTIE_BACKEND=thorvg ... --soak fixtures/mask.json`.
     let backend = Backend::preferred();
     let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")).join(relative);
     let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("read {path:?}: {error}"));
@@ -314,7 +301,6 @@ fn soak_forever(_backends: &[Backend], relative: &str) {
     loop {
         state.seek_frame(total * (frame % 120) as f32 / 120.0);
         let _ = state.render_frame((256.0, 256.0), 1.0);
-        // What the host does every frame; skipping it leaks.
         let _ = state.take_retired();
         frame += 1;
         if frame.is_multiple_of(600) {
@@ -324,9 +310,8 @@ fn soak_forever(_backends: &[Backend], relative: &str) {
 }
 
 /// Scores both backends against the upstream reference renders: `tests/fixtures/golden/*-00.png`
-/// are `LottieFiles/test-files`' frame-0 PNGs for the six CC0 fixtures at the authored size, the
-/// only external opinion on which backend is right. The metric is the mean per-channel difference
-/// over un-premultiplied RGBA, so a colour error scores far above antialiasing noise.
+/// (frame 0 of the six CC0 fixtures at the authored size). The metric is the mean per-channel
+/// difference over un-premultiplied RGBA.
 fn golden_table(backends: &[Backend]) {
     let fixtures = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
     let mut head = String::from("| fixture |");

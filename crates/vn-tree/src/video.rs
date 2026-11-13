@@ -2,14 +2,11 @@
 //! `src` → path resolve, the prop→transport sync, the once-per-frame tick and the event dispatch. The
 //! gpui element is built in [`crate::render`] (`build_video`).
 //!
-//! - `autoplay` is edge-triggered off the prop (`:autoplay="isPlaying"` is a transport control), as on
-//!   `<lottie>`.
-//! - `currentTime` is written through a WRITE COUNTER, not the value: `el.currentTime = 0` on a video
-//!   already at 0 must re-seek (a replay button), and a prop channel that dedupes on the string cannot
-//!   see it.
-//! - A detached `<video>` is paused and suspended (unlike `<lottie>`): a stream costs tens of MiB of
-//!   RAM/VRAM, and a browser runs the pause steps on removal too. A hidden or off-screen one keeps
-//!   playing, as in a browser.
+//! - `autoplay` is edge-triggered off the prop, as on `<lottie>`.
+//! - `currentTime` is written through a write counter, not the value: `el.currentTime = 0` on a video
+//!   already at 0 must re-seek, and a prop channel that dedupes on the string cannot see it.
+//! - A detached `<video>` is paused and suspended (unlike `<lottie>`): a stream costs tens of MiB, and
+//!   a browser pauses on removal too. A hidden or off-screen one keeps playing.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -24,36 +21,26 @@ use vn_video::{
 use crate::tree::{self, Tree};
 use crate::EventPayload;
 
-/// One `<video>` node's persistent state.
 struct Entry {
     src: String,
     /// `None` when no backend could be built or the `src` could not be resolved.
     state: Option<VideoState>,
-    /// Last `autoplay` value seen, so play/pause is edge-triggered off the *prop*.
     autoplay: bool,
-    /// The last value each transport PROP had.
     props: Props,
-    /// Last `currentTime` write counter seen.
     seek_write: Option<u32>,
-    /// Written by the build, read by the tick.
     frame_box: (u32, u32),
-    /// The events emitted since JS last drained them, newest last.
     recent: Vec<&'static str>,
-    /// Has this element's error already been turned into an advisory?
     warned_error: bool,
-    /// Where to pick up after a forced rebuild: `(src, currentTime, playing)`.
     resume: Option<(String, f64, bool)>,
-    /// Two things ride on it and both are per-window gpui resources: the atlas a retired frame's
-    /// tile goes back to, and the atlas a zero-copy GPU frame has to be blitted INTO.
+    /// Per-window gpui resources ride on it: the atlas a retired frame's tile returns to, and the
+    /// atlas a zero-copy GPU frame is blitted into.
     window: crate::windows::WinKey,
-    /// The scale factor of that window, from its last painted frame.
     scale: f32,
 }
 
 thread_local! {
     static VIDEO_STATES: RefCell<HashMap<u32, Entry>> = RefCell::new(HashMap::new());
-    /// What scripts set through each element's own API, by node — kept apart from [`VIDEO_STATES`]
-    /// because it outlives the decoder (see [`Api`]).
+    /// Script-set state by node, apart from [`VIDEO_STATES`] because it outlives the decoder ([`Api`]).
     static API: RefCell<HashMap<u32, Api>> = RefCell::new(HashMap::new());
 }
 
@@ -65,11 +52,9 @@ struct Api {
     volume: Option<f64>,
     rate: Option<f64>,
     looping: Option<bool>,
-    /// HTML: a `play()` before the source is ready plays once it is.
     playing: Option<bool>,
 }
 
-/// Records one API write ([`media_call`]'s verb) for node `id`.
 fn note_api(id: u32, verb: u32, arg: f64, live: bool) {
     API.with(|m| {
         let mut m = m.borrow_mut();
@@ -85,7 +70,6 @@ fn note_api(id: u32, verb: u32, arg: f64, live: bool) {
     });
 }
 
-/// Node `id`'s API writes; `take_playing` also consumes its pending `play()`.
 fn api_of(id: u32, take_playing: bool) -> Api {
     API.with(|m| {
         let mut m = m.borrow_mut();
@@ -108,7 +92,6 @@ fn attribute_wins(id: u32, f: impl FnOnce(&mut Api)) {
     });
 }
 
-/// Live `<video>` elements (devtools `mem`).
 pub(crate) fn count() -> usize {
     VIDEO_STATES.with(|m| m.borrow().len())
 }
@@ -124,13 +107,11 @@ fn queue_drops(win: crate::windows::WinKey, images: impl IntoIterator<Item = Arc
 const RING: usize = 32;
 
 
-/// The browser's boolean-attribute rule: present is true unless it spells `"false"` (which is what
-/// `:attr="false"` serialises to through `patchProp`).
+/// The browser's boolean-attribute rule: present is true unless it spells `"false"` (`:attr="false"`).
 fn bool_attr(raw: Option<&str>) -> bool {
     raw.is_some_and(|v| v.trim() != "false")
 }
 
-/// The transport props, as last read off the tree.
 #[derive(PartialEq)]
 struct Props {
     looping: bool,
@@ -149,7 +130,6 @@ fn number_attr(raw: Option<&str>) -> Option<f64> {
     raw.and_then(|v| v.trim().parse::<f64>().ok())
 }
 
-/// Props `<video>` has in a browser that this renderer does not implement.
 const UNSUPPORTED_PROPS: &[(&str, &str)] = &[
     (
         "controls",
@@ -197,8 +177,6 @@ fn warn_unsupported_props(t: &Tree, id: u32) {
 }
 
 
-/// Creates the state if `src` changed (or there is none yet), then pushes every prop into the
-/// transport.
 pub(crate) fn sync(t: &Tree, id: u32, win: crate::windows::WinKey, scale: f32) -> Option<(u32, u32)> {
     warn_unsupported_props(t, id);
     let src = t.prop(id, "src").unwrap_or("").trim().to_string();
@@ -237,14 +215,12 @@ pub(crate) fn sync(t: &Tree, id: u32, win: crate::windows::WinKey, scale: f32) -
         }
 
         let entry = map.get_mut(&id)?;
-        // `scale` goes with it because `frame_box` is in PHYSICAL pixels and the two windows can
-        // sit on displays of different DPI.
+        // `scale` goes too: `frame_box` is in physical pixels and the windows can differ in DPI.
         entry.window = win;
         entry.scale = scale;
         let state = entry.state.as_mut()?;
         state.resume();
 
-        // --- transport: pushed only where the PROP CHANGED ---------------
         let props = Props {
             looping: bool_attr(t.prop(id, "loop")),
             muted: bool_attr(t.prop(id, "muted")),
@@ -295,7 +271,6 @@ pub(crate) fn sync(t: &Tree, id: u32, win: crate::windows::WinKey, scale: f32) -
             state.set_rate(rate);
         }
 
-        // `currentTime`: the WRITE COUNTER decides, not the value.
         if let Some((value, write)) = t
             .prop_write(id, "currenttime")
             .or_else(|| t.prop_write(id, "current-time"))
@@ -320,11 +295,9 @@ pub(crate) fn sync(t: &Tree, id: u32, win: crate::windows::WinKey, scale: f32) -
     })
 }
 
-/// Builds one node's state.
 fn load(src: &str) -> Option<VideoState> {
     if src.is_empty() {
-        // An absent `src` is not an error worth shouting about (a `v-if`'d or not-yet-resolved
-        // binding hits this on its first frame).
+        // An absent `src` is not worth an error (a `v-if`'d binding hits it on its first frame).
         return None;
     }
     if src.starts_with(vn_video::stream::PREFIX) {
@@ -376,7 +349,6 @@ fn load(src: &str) -> Option<VideoState> {
     }
 }
 
-/// One media error → one advisory line, in the shape the rest of the renderer uses.
 fn report(src: &str, error: &MediaError) {
     let text = match &error.advisory {
         Some(advisory) => advisory.clone(),
@@ -385,7 +357,6 @@ fn report(src: &str, error: &MediaError) {
     crate::render::warn_compat(&format!("video-error:{src}:{:?}", error.code), &text);
 }
 
-/// Runs `f` with one node's live state, if it has one.
 pub(crate) fn with_state<R>(id: u32, f: impl FnOnce(&mut VideoState) -> R) -> Option<R> {
     VIDEO_STATES.with(|m| m.borrow_mut().get_mut(&id)?.state.as_mut().map(f))
 }
@@ -435,8 +406,6 @@ pub fn device_changed() -> usize {
     })
 }
 
-/// True while any `<video>` still needs frames — folded into the host's `animating()` OR-chain next
-/// to `<lottie>`'s.
 pub fn any_playing() -> bool {
     VIDEO_STATES.with(|m| {
         m.borrow()
@@ -446,14 +415,10 @@ pub fn any_playing() -> bool {
     })
 }
 
-/// Can a pixel of this `<video>` be on screen: inside the viewport and not clipped away by an
-/// ancestor (`crate::live::visible`)?
 fn on_screen(id: u32, win: crate::windows::WinKey) -> bool {
     crate::live::visible(id, win)
 }
 
-/// Pulls a frame for every live `<video>` and dispatches the events that produced. Returns `true`
-/// when something moved and the window must repaint.
 pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     drain_pending_drops(window, cx);
 
@@ -462,10 +427,8 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     // Collect first, dispatch after: a JS handler can mutate the tree (and `flush_changes`
     // re-enters `gc`), so the map must not be borrowed while any of this reaches JavaScript.
     let mut moved = false;
-    // The zero-copy present path leaves the decoded frame in VRAM and hands us a BORROWED texture;
-    // this is where it becomes an atlas tile. Collected inside the map borrow and uploaded outside
-    // it (`upload_image_from_gpu` takes `&mut Window`), and routed to the window that PAINTS the
-    // element: a pop-out's frame in the primary atlas would be found by nothing.
+    // The zero-copy path leaves the frame in VRAM as a BORROWED texture; it becomes an atlas tile
+    // here, uploaded outside the map borrow (`&mut Window`) in the window that PAINTS the element.
     let mut uploads: Vec<(u32, Arc<RenderImage>, vn_video::GpuFrame, bool)> = Vec::new();
     let mut elsewhere: Vec<(crate::windows::WinKey, crate::windows::PendingUpload)> = Vec::new();
     let here = crate::windows::key(window);
@@ -475,8 +438,7 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
         for (&id, entry) in map.iter_mut() {
             let attached = attached(id);
             let Some(state) = entry.state.as_mut() else { continue };
-            // Detached — unmounted, or parked in a `<KeepAlive>` cache container that is never
-            // inserted — means stop decoding.
+            // Detached (unmounted, or parked in a never-inserted `<KeepAlive>` container): stop decoding.
             if !attached {
                 if state.wants_playing() && !state.suspended() {
                     state.pause();
@@ -507,8 +469,6 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
                 continue;
             }
             let advance = state.advance(now, &FrameRequest { max_size });
-            // Decoded and uploaded either way (a canvas may be drawing from it); shown only when a
-            // pixel of it can be on screen.
             let show = advance.new_frame && on_screen(id, entry.window);
             match state.take_gpu_upload() {
                 Some((image, gpu)) if entry.window == here => uploads.push((id, image, gpu, show)),
@@ -521,8 +481,7 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
                 }
                 None => moved |= show,
             }
-            // The seek can only land once the new pipeline knows the duration, so it waits for
-            // `loadedmetadata` — the same moment a browser's own `currentTime` becomes settable.
+            // The seek waits for `loadedmetadata`, when a browser's `currentTime` becomes settable too.
             if entry.resume.is_some()
                 && advance.events.contains(&MediaEvent::LoadedMetadata)
             {
@@ -546,9 +505,8 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     });
 
     for (win, upload) in elsewhere {
-        // At most one frame per element per tick, and a queue that survived a draw is stale by
-        // definition (the texture is reused by the next `present`) — so the newest wins rather than
-        // piling up.
+        // At most one frame per element per tick; a queue that survived a draw is stale (the texture
+        // is reused), so the newest wins.
         crate::windows::of(win, |w| {
             w.pending_uploads.retain(|u| u.node != upload.node);
             w.pending_uploads.push(upload);
@@ -583,7 +541,6 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     moved
 }
 
-/// Is this node still part of the painted document?
 fn attached(id: u32) -> bool {
     tree::read_tree(|t| {
         let root = t.root;
@@ -605,7 +562,6 @@ fn attached(id: u32) -> bool {
     })
 }
 
-/// Blits every zero-copy frame queued for THIS window into its sprite atlas.
 pub(crate) fn drain_pending_uploads(window: &mut Window) {
     let queued = crate::windows::here(window, |w| std::mem::take(&mut w.pending_uploads));
     for u in queued {
@@ -632,8 +588,7 @@ pub(crate) fn drain_pending_uploads(window: &mut Window) {
     }
 }
 
-/// [`drain_pending_drops`] for a window that is not the one the pump runs with — a pop-out draining
-/// its own atlas from its own draw.
+/// [`drain_pending_drops`] for a window other than the pump's (a pop-out draining its own atlas).
 pub(crate) fn drain_pending_drops_for(window: &mut Window, cx: &mut App) {
     drain_pending_drops(window, cx);
 }
@@ -668,7 +623,6 @@ fn event_code(event: MediaEvent) -> u32 {
     }
 }
 
-/// One tick's events, gated on the listener bits.
 fn dispatch_events(id: u32, events: &[MediaEvent], window: &mut Window, cx: &mut App) {
     for &event in events {
         if event == MediaEvent::Error {
@@ -698,8 +652,6 @@ fn dispatch_events(id: u32, events: &[MediaEvent], window: &mut Window, cx: &mut
         if listeners & (1u64 << code) == 0 {
             continue;
         }
-        // `message` has to outlive the payload that borrows it, so it is bound here rather than
-        // inside the branch.
         let error = (event == MediaEvent::Error)
             .then(|| with_state(id, |s| s.error()).flatten())
             .flatten();
@@ -738,9 +690,7 @@ fn dispatch_events(id: u32, events: &[MediaEvent], window: &mut Window, cx: &mut
 }
 
 
-/// `HTMLMediaElement`'s readable properties, as `name=value` lines — the same shape
-/// `dom::computed_style` uses, and for the same reason: the payload is numbers and the caller is
-/// three lines of JS.
+/// `HTMLMediaElement`'s readable properties as `name=value` lines, the shape `dom::computed_style` uses.
 pub(crate) fn media_state(id: u32) -> Option<String> {
     with_state(id, |s| {
         let ranges = |list: Vec<(f64, f64)>| {
@@ -785,8 +735,6 @@ pub(crate) fn media_state(id: u32) -> Option<String> {
     })
 }
 
-/// ONE scalar property of [`media_state`], by code — `None` for a node that is not a live media
-/// element.
 pub(crate) fn media_prop(id: u32, code: u32) -> Option<f64> {
     let flag = |b: bool| if b { 1.0 } else { 0.0 };
     if with_state(id, |_| ()).is_none() {
@@ -820,8 +768,6 @@ pub(crate) fn media_prop(id: u32, code: u32) -> Option<f64> {
     .flatten()
 }
 
-/// The METHOD half: `play()` / `pause()` / `currentTime =` / `volume =` … . Verbs rather than names
-/// because this is a two-argument host call and the JS side is a switch either way.
 pub(crate) fn media_call(id: u32, verb: u32, arg: f64) -> bool {
     let live = with_state(id, |_| ()).is_some();
     // The element's own state whether or not a decoder exists yet (`Api`).
@@ -863,13 +809,11 @@ pub(crate) fn media_call(id: u32, verb: u32, arg: f64) -> bool {
     .unwrap_or(false)
 }
 
-/// `canPlayType(type)` — `""` / `"maybe"` / `"probably"`, from a LIVE probe of this machine (see
-/// the owner constraint in `vn_video`'s crate docs).
+/// `canPlayType(type)`, from a live probe of this machine, never a static table.
 pub(crate) fn can_play_type(id: u32, mime_type: &str) -> String {
     with_state(id, |s| s.can_play_type(mime_type).as_str().to_string()).unwrap_or_default()
 }
 
-/// Drains the per-node event ring, comma-joined.
 pub(crate) fn drain_recent(id: u32) -> String {
     VIDEO_STATES.with(|m| {
         m.borrow_mut()
@@ -891,7 +835,6 @@ mod tests {
         assert!(!bool_attr(Some("false")));
     }
 
-    /// A script's `muted` before the decoder exists is kept for it (`Api`).
     #[test]
     fn element_api_writes_before_the_decoder_are_kept_for_it() {
         let id = 0x7fff_0001;
@@ -933,8 +876,6 @@ mod tests {
             t.insert(node, root, 0);
             node
         });
-        // An empty `src` loads nothing, which is exactly what this wants: the entry and its
-        // bookkeeping exist, the decoder does not.
         let here = |k, scale| tree::read_tree(|t| {
             sync(t, id, k, scale);
         });
@@ -960,8 +901,7 @@ mod tests {
         });
     }
 
-    /// Every `MediaEvent` must have a code, and no two may share one — a duplicate would silently
-    /// deliver one event under another's name.
+    /// Every `MediaEvent` needs a unique code: a duplicate would deliver one event under another's name.
     #[test]
     fn every_media_event_has_its_own_code() {
         let all = [
@@ -992,8 +932,6 @@ mod tests {
             c
         };
         assert_eq!(codes, unique, "two media events share a host code");
-        // …and every one of them is in the table devtools and the JS mirror read, so a listing can
-        // never lag the codes.
         for &e in &all {
             let code = event_code(e);
             let named = tree::EVENT_NAMES.iter().find(|(c, _)| *c == code);

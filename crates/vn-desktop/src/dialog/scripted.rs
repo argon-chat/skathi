@@ -1,9 +1,7 @@
-//! `VN_DIALOGS=scripted`: a dialog that waits for the devtools instead of the user.
-//!
-//! The dialog still runs on its own thread, owned and serialised like a real one: it parks a
-//! [`Pending`] and waits for `dialog answer` / `choose` / `cancel`, polling its owner every 25 ms.
-//! Answers are validated as the OS dialog's flags would (existing files, an existing folder,
-//! one of the question's buttons); a rejected answer leaves the dialog waiting.
+//! `VN_DIALOGS=scripted`: a dialog that waits for the devtools instead of the user. It still runs on its
+//! own thread, owned and serialised like a real one: it parks a [`Pending`] and waits for `dialog answer` /
+//! `choose` / `cancel`, polling its owner every 25 ms. Answers are validated as the OS dialog's flags
+//! would; a rejected answer leaves the dialog waiting.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -48,8 +46,6 @@ fn remove(id: u64) -> Option<Pending> {
     Some(p.remove(i))
 }
 
-/// Parks a dialog and waits for its answer, or for its owner to close
-/// (`None`, logged).
 fn wait(window: u64, what: &'static str, expect: Expect, summary: Json, waiting: String, cancel: &Cancellation) -> Option<Answer> {
     let (tx, rx) = channel();
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -79,8 +75,6 @@ pub(super) fn pick(n: &Native, window: u64, what: &'static str, cancel: &Cancell
     })
 }
 
-/// The dialog thread's side of a question (ask.rs): the button's index, or
-/// `None` for a dismissal.
 pub(super) fn ask(q: &Ask, window: u64, cancel: &Cancellation) -> Option<usize> {
     let labels: Vec<String> = q.buttons.iter().map(|b| label_of(b)).collect();
     let summary = json!({
@@ -105,7 +99,6 @@ pub(super) fn color(value: &str, window: u64, cancel: &Cancellation) -> Result<O
     })
 }
 
-/// `dialog list`: every dialog waiting for an answer, oldest first.
 pub fn list() -> Json {
     let p = PENDING.lock().unwrap_or_else(|p| p.into_inner());
     Json::Array(
@@ -121,7 +114,6 @@ pub fn list() -> Json {
     )
 }
 
-/// Would the OS dialog have let the user finish with these paths?
 pub fn validate(kind: Kind, multiple: bool, paths: &[PathBuf]) -> Result<(), String> {
     if paths.is_empty() {
         return Err("an answer needs at least one path (use `cancel` to dismiss)".into());
@@ -149,7 +141,6 @@ pub fn validate(kind: Kind, multiple: bool, paths: &[PathBuf]) -> Result<(), Str
     Ok(())
 }
 
-/// `dialog answer`: finish file dialog `id` with `paths`.
 pub fn answer(id: u64, paths: Vec<PathBuf>) -> Result<Json, String> {
     let mut pending = PENDING.lock().unwrap_or_else(|p| p.into_inner());
     let i = pending.iter().position(|x| x.id == id).ok_or_else(|| format!("no dialog #{id} is waiting"))?;
@@ -168,7 +159,6 @@ pub fn answer(id: u64, paths: Vec<PathBuf>) -> Result<Json, String> {
     Ok(json!({ "id": id, "answered": n }))
 }
 
-/// Which of `labels` `button` names: an index, or a label (any case, `&` ignored).
 fn button_index(labels: &[String], button: &str) -> Option<usize> {
     let b = button.trim();
     if let Ok(i) = b.parse::<usize>() {
@@ -178,7 +168,6 @@ fn button_index(labels: &[String], button: &str) -> Option<usize> {
     labels.iter().position(|l| l.to_lowercase() == b)
 }
 
-/// `dialog choose`: press `button` (an index or a label) in question `id`.
 pub fn choose(id: u64, button: &str) -> Result<Json, String> {
     let mut pending = PENDING.lock().unwrap_or_else(|p| p.into_inner());
     let i = pending.iter().position(|x| x.id == id).ok_or_else(|| format!("no dialog #{id} is waiting"))?;
@@ -206,7 +195,6 @@ pub fn choose(id: u64, button: &str) -> Result<Json, String> {
     Ok(json!({ "id": id, "chose": label }))
 }
 
-/// `dialog cancel`: dismiss dialog `id`, as Esc would.
 pub fn cancel(id: u64) -> Result<Json, String> {
     let p = remove(id).ok_or_else(|| format!("no dialog #{id} is waiting"))?;
     let _ = p.tx.send(Answer::Cancel);

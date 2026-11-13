@@ -1,12 +1,6 @@
 //! Dev boot and the file-based HMR transport (no HTTP server or WebSocket: the JS engine has
 //! neither, and the host can read files).
 //!
-//!   dist/vendor.js          IIFE: @vue/runtime-core + renderer + __VN__ loader
-//!   dist/modules/<enc>.js   one classic script per app source file, each
-//!                           `__VN__.define("<id>", factory)`; <enc> is the id
-//!                           with "/" replaced by "__", plus ".js"
-//!   dist/manifest.json      { rev, vendorRev, entry, modules: ["<id>", ...] }
-//!   dist/changes.json       { rev, vendorRev, changed: [{ id, kind }] }
 //! changes.json is written last by the watcher and is the only file polled: once its mtime moves,
 //! every module script and the manifest are on disk. Each changed module script is re-evaluated
 //! (redefining its factory and re-registering its CSS), then the raw changes JSON goes to
@@ -26,28 +20,20 @@ mod tests {
         // wrong would let two apps share one localStorage.
         assert_eq!(super::app_dir_of("apps/hello/src/main.js").as_deref(), Some("hello"));
         assert_eq!(super::app_dir_of("apps/shadcn/src/main.ts").as_deref(), Some("shadcn"));
-        // No `src/` layer — the entry sits in the app directory itself.
         assert_eq!(super::app_dir_of("apps/imgperf/main.js").as_deref(), Some("imgperf"));
-        // Windows separators, because a manifest is written by a builder that
-        // ran on Windows.
         assert_eq!(super::app_dir_of("apps\\hello\\src\\main.js").as_deref(), Some("hello"));
-        // Nothing to derive: the caller falls through to the executable name.
         assert_eq!(super::app_dir_of("main.js"), None);
         assert_eq!(super::app_dir_of(""), None);
         assert_eq!(super::app_dir_of("src/main.js"), None);
     }
 }
 
-/// How often the frame pump calls [`poll`] — every 30th frame, ~2×/s at 60 fps.
 const POLL_EVERY_FRAMES: u32 = 30;
 
-/// A file in this host's dist slot. `VN_DIST` points one exe at another app's build output, so
-/// several dev hosts can run side by side; the rule itself lives in [`crate::slot`].
 pub(crate) fn dist(rel: &str) -> std::path::PathBuf {
     crate::slot::path(rel)
 }
 
-/// `apps/hello/src/App.vue` -> `dist/modules/apps__hello__src__App.vue.js`
 fn module_path(id: &str) -> std::path::PathBuf {
     dist("modules").join(format!("{}.js", id.replace('/', "__")))
 }
@@ -93,8 +79,6 @@ thread_local! {
     static VENDOR_REV: std::cell::Cell<f64> = const { std::cell::Cell::new(-1.0) };
 }
 
-/// `label` is what boot-time accounting charges the evaluation to
-/// (`crate::perf::boot_eval`); the file read is not part of it.
 fn eval_path(rt: &JsRuntime, path: &std::path::Path, url: &str, label: &'static str) -> bool {
     let src = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -136,20 +120,14 @@ pub fn window_config() -> Option<String> {
     Some(v.get("window")?.to_json())
 }
 
-/// The `launch` block `build.ts` gathers from `vn.config.json`'s top-level `id` / `singleInstance` /
-/// `raiseOnSecondInstance` / `protocols`. Read by `main()` before anything else exists.
 pub fn launch_config() -> Option<String> {
     let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
     let v = json::parse(&text)?;
     Some(v.get("launch")?.to_json())
 }
 
-/// The app's own name, which names its per-app place on disk (`%LOCALAPPDATA%\<app name>\storage`).
-///
 /// A dev host cannot use its executable's name: one `vn-app.exe` runs every app `VN_DIST` points at,
-/// and they must not share a `localStorage`. So it comes from `vn.config.json`'s optional `"name"`,
-/// else the app directory of the entry module (as [`publish_asset_base`]). `None` only when there
-/// is no manifest, and then vn-storage falls back to the executable name.
+/// and they must not share a `localStorage`.
 pub fn app_name() -> Option<String> {
     let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
     let v = json::parse(&text)?;
@@ -159,8 +137,6 @@ pub fn app_name() -> Option<String> {
     app_dir_of(v.get("entry").and_then(json::Json::as_str)?)
 }
 
-/// `apps/hello/src/main.js` → `hello`. Split out so the derivation is testable
-/// without a manifest on disk.
 fn app_dir_of(entry: &str) -> Option<String> {
     let mut segs: Vec<&str> = entry.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
     segs.pop()?; // the entry file itself
@@ -170,9 +146,6 @@ fn app_dir_of(entry: &str) -> Option<String> {
     segs.pop().filter(|s| !s.is_empty()).map(str::to_string)
 }
 
-/// Serves `fetch("assets/x.wav")` out of the app directory in a dev build, so it resolves against
-/// the same base as `<img src>` (`vn_tree`'s asset base) rather than the process working directory.
-///
 /// Same seam as `prod.rs`, with the same key (`vn_payload::content_key`: percent-decoded, `.`/`..`
 /// folded, never above the root): a URL that resolves here resolves to the same file once packaged,
 /// and one that cannot be packaged cannot be read here either.
@@ -202,7 +175,6 @@ fn install_asset_provider(rt: &JsRuntime) {
     });
 }
 
-/// One line per key, bounded: the miss above was a file relative to the cwd.
 fn cwd_advisory(raw: &str) {
     use std::collections::HashSet;
     use std::sync::Mutex;
@@ -219,14 +191,10 @@ fn cwd_advisory(raw: &str) {
     );
 }
 
-/// Full boot (also used for a cold restart when vendor.js changed): vendor bundle -> every module
-/// script (registration only, nothing executes) -> `__VN__.boot(entry)`, which requires the entry
-/// and mounts the app.
 pub fn boot(rt: &JsRuntime) {
     let Some(manifest) = read_manifest() else { return };
     publish_asset_base(&manifest.entry);
     vn_tree::set_dev_asset_files(manifest.asset_files);
-    // After the base exists, before any app code can `fetch()`.
     install_asset_provider(rt);
     if !eval_path(rt, &dist("vendor.js"), "vn://vendor.js", "vendor.js") {
         return;
@@ -242,8 +210,6 @@ pub fn boot(rt: &JsRuntime) {
     CHANGES_STAMP.with(|s| s.set(mtime(&dist("changes.json"))));
 }
 
-/// `location.reload()`'s second half (src/reload.rs): the app is already torn
-/// down; evaluate `dist/` again, exactly as a cold restart does.
 pub fn reboot(rt: &JsRuntime) {
     boot(rt);
 }
@@ -260,15 +226,11 @@ fn cold_restart(rt: &JsRuntime) {
     // captures and AudioContexts: end them, as a reload does.
     crate::reload::end_media(rt, "cold restart");
     crate::js::reload(rt.ctx());
-    // The Network panel's divider between the two runs (devtools/net.rs).
     #[cfg(vn_devtools)]
     crate::devtools::mark_reload("cold restart: vendor.js changed");
     boot(rt);
 }
 
-/// Called from the frame pump on every frame; cheap no-op except every
-/// [`POLL_EVERY_FRAMES`]th, and even then it returns without touching JS unless
-/// `dist/changes.json` moved since we last looked.
 pub fn poll_frame(frame_no: u32) {
     if frame_no % POLL_EVERY_FRAMES != 0 {
         return;
@@ -293,7 +255,6 @@ pub fn poll_frame(frame_no: u32) {
     };
     let vendor_rev = changes.get("vendorRev").and_then(json::Json::as_f64).unwrap_or(0.0);
 
-    // Publish newly imported files before updated modules can request them.
     if let Some(manifest) = read_manifest() { vn_tree::set_dev_asset_files(manifest.asset_files); }
     JsRuntime::with(|rt| {
         if VENDOR_REV.with(|v| v.get()) != vendor_rev {
@@ -312,8 +273,6 @@ pub fn poll_frame(frame_no: u32) {
         if ids.is_empty() {
             return;
         }
-        // Redefine first (each script re-registers its factory + CSS), then let
-        // the loader decide what to tell __VUE_HMR_RUNTIME__ about each id.
         for id in &ids {
             // After the first frame, so boot accounting has closed and this
             // label is never charged.

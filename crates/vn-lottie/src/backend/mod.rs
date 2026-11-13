@@ -1,11 +1,10 @@
 //! The rasteriser seam: [`LottieState`](crate::LottieState) owns the transport, metadata and atlas
-//! discipline; a backend only turns frame *n* into BGRA pixels. [`LottieMeta`] is read from the
-//! JSON by [`crate::state`], so `meta()` is identical whichever engine draws; the `.tgs` gunzip and
-//! [`crate::normalize`] pass also run before a backend sees the document.
+//! discipline; a backend only turns frame *n* into BGRA pixels. [`LottieMeta`] is read from the JSON
+//! by [`crate::state`], so `meta()` is identical whichever engine draws.
 //!
-//! [`Backend::preferred`] resolves, in order: `VN_LOTTIE_BACKEND=thorvg|rasterlottie` (lets the
-//! comparison harness run one binary on both engines), the `thorvg-default` feature, then
-//! `rasterlottie`. An unavailable or misspelled value falls back rather than panicking.
+//! [`Backend::preferred`] resolves, in order: `VN_LOTTIE_BACKEND=thorvg|rasterlottie`, the
+//! `thorvg-default` feature, then `rasterlottie`. An unavailable or misspelled value falls back
+//! rather than panicking.
 
 use serde_json::Value;
 
@@ -18,13 +17,11 @@ pub(crate) mod thorvg;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Backend {
     Rasterlottie,
-    /// Vendored ThorVG 1.1.0; needs the `thorvg` feature ([`Backend::is_available`]).
     ThorVg,
 }
 
 impl Backend {
     pub fn preferred() -> Self {
-        // Read once: consulted on every load.
         static PREFERRED: std::sync::OnceLock<Backend> = std::sync::OnceLock::new();
         *PREFERRED.get_or_init(|| {
             let requested = std::env::var("VN_LOTTIE_BACKEND").ok();
@@ -37,7 +34,6 @@ impl Backend {
         })
     }
 
-    /// What the build was configured to prefer, ignoring the environment.
     pub const COMPILED_DEFAULT: Self = if cfg!(feature = "thorvg-default") {
         Self::ThorVg
     } else {
@@ -82,12 +78,11 @@ impl std::fmt::Display for Backend {
 pub(crate) struct Raster {
     pub width: u32,
     pub height: u32,
-    /// BGRA8, alpha-premultiplied, `width * height * 4` bytes.
     pub bgra: Vec<u8>,
 }
 
-/// A loaded animation; one variant per [`Backend`]. The `rasterlottie` payload is boxed because it
-/// is five times the ThorVG one and this enum is inline in every `LottieState`.
+/// A loaded animation; one variant per [`Backend`]. The `rasterlottie` payload is boxed: it is five
+/// times the ThorVG one and this enum is inline in every `LottieState`.
 pub(crate) enum Rasteriser {
     Rasterlottie(Box<raster::Rasterlottie>),
     #[cfg(feature = "thorvg")]
@@ -95,7 +90,6 @@ pub(crate) enum Rasteriser {
 }
 
 impl Rasteriser {
-    /// Hands the normalised document to `backend`, consuming it (both backends re-encode it).
     // `meta` is only read by the ThorVG arm; without the feature it is dead.
     #[cfg_attr(not(feature = "thorvg"), allow(unused_variables))]
     pub fn load(
@@ -125,8 +119,7 @@ impl Rasteriser {
         }
     }
 
-    /// Draws absolute source `frame` at `scale` into a `width × height` raster; the dimensions are
-    /// passed (from [`raster_size`]) so the backends cannot disagree by a rounding step.
+    /// Draws absolute source `frame` at `scale` into a `width × height` raster (dimensions from [`raster_size`], so the backends cannot disagree).
     #[cfg_attr(not(feature = "thorvg"), allow(unused_variables))]
     pub fn render(&mut self, frame: f32, scale: f32, width: u32, height: u32) -> Option<Raster> {
         match self {
@@ -136,8 +129,7 @@ impl Rasteriser {
         }
     }
 
-    /// Draws absolute source `frame` filling a `width × height` raster: straight-alpha BGRA, rows
-    /// packed, borrowed until the next call. `intrinsic` is the authored size.
+    /// Draws absolute source `frame` filling a `width × height` raster: straight-alpha BGRA, rows packed, borrowed until the next call.
     #[cfg_attr(not(feature = "thorvg"), allow(unused_variables))]
     pub fn render_straight(&mut self, frame: f32, intrinsic: (u32, u32), width: u32, height: u32) -> Option<&[u8]> {
         match self {
@@ -147,7 +139,6 @@ impl Rasteriser {
         }
     }
 
-    /// Bytes the backend holds in its own raster buffers; neither engine reports its scene.
     pub fn buffer_bytes(&self) -> usize {
         match self {
             Self::Rasterlottie(inner) => inner.buffer_bytes(),
@@ -157,8 +148,7 @@ impl Rasteriser {
     }
 }
 
-/// One premultiplied BGRA pixel as straight alpha. A fully transparent pixel
-/// is all zeros; otherwise each colour channel is `c · 255 / a`, rounded.
+/// One premultiplied BGRA pixel as straight alpha (`c · 255 / a`, rounded; fully transparent is all zeros).
 pub(crate) fn unpremultiply(px: [u8; 4]) -> [u8; 4] {
     let a = px[3] as u32;
     match a {
@@ -172,7 +162,7 @@ pub(crate) fn unpremultiply(px: [u8; 4]) -> [u8; 4] {
 }
 
 /// The raster dimensions of an animation of `(width, height)` at `scale`: `ceil`, as `rasterlottie`
-/// does, so the backends agree on the texture size (100×50 in a 128×128 box gives 128×64).
+/// does, so the backends agree on the texture size.
 pub(crate) fn raster_size(intrinsic: (u32, u32), scale: f32) -> (u32, u32) {
     let width = ((intrinsic.0 as f32) * scale).ceil().max(1.0) as u32;
     let height = ((intrinsic.1 as f32) * scale).ceil().max(1.0) as u32;

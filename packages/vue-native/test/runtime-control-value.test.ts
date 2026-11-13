@@ -32,7 +32,6 @@ describe("the reka bubble-input pattern", () => {
     el.addEventListener("change", (e) => seen.push(`change:${e.target.value}`));
     root.addEventListener("change", () => seen.push("change@form"));
 
-    // VisuallyHiddenInputBubble.js, verbatim but for `window`.
     const cur: unknown = true;
     const prev: unknown = undefined;
     const input = el;
@@ -56,7 +55,6 @@ describe("the reka bubble-input pattern", () => {
   test("BubbleSelect: HTMLSelectElement.prototype's value setter, then change", () => {
     const rt = createRuntime();
     const select = rt.nodeOps.createElement("select") as unknown as El;
-    // reka's BubbleSelect renders an empty option and one per item.
     for (const v of ["", "apple", "pear"]) {
       const o = rt.nodeOps.createElement("option");
       rt.patchProp(o, "value", null, v);
@@ -67,10 +65,8 @@ describe("the reka bubble-input pattern", () => {
     const setValue = Object.getOwnPropertyDescriptor(proto(rt, "HTMLSelectElement"), "value")!.set!;
     setValue.call(select, "apple");
     select.dispatchEvent(new Event("change", { bubbles: true }));
-    // The host draws the option it selected.
     expect(lastValue(rt, select.__vnId, ":selected")).toBe("1");
     expect(seen).toEqual(["change:apple"]);
-    // No option has the value: nothing is selected, and the value reads "".
     setValue.call(select, "plum");
     expect(select.value).toBe("");
     expect(lastValue(rt, select.__vnId, ":selected")).toBe("-1");
@@ -108,12 +104,9 @@ describe("value", () => {
   test("it reads what the user typed, with no @input anywhere", () => {
     const rt = createRuntime();
     const el = rt.nodeOps.createElement("input") as unknown as El;
-    // The host delivers `input` to a text control on its own account…
     expect(rt.flagsFor(rt.EV_CODES.input).at(-1)).toEqual({ id: el.__vnId, code: rt.EV_CODES.input, on: true });
-    // …and the payload is the field's new value.
     rt.host.dispatcher(el.__vnId, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
     expect(el.value).toBe("typed");
-    // The echo is not pushed back to the field it came from.
     expect(lastValue(rt, el.__vnId)).toBeUndefined();
   });
 
@@ -134,7 +127,6 @@ describe("value", () => {
     rt.host.dispatcher(el.__vnId, rt.EV_CODES.input, 0, 0, 0, 0, "abc");
     expect(model).toBe("abc");
     expect(el.value).toBe("abc");
-    // The model is cleared: the field held "abc", so "" is written.
     rt.vModelText.beforeUpdate(el, { value: "" }, { props: { "onUpdate:modelValue": () => {} } });
     expect(lastValue(rt, el.__vnId)).toBe("");
     expect(el.value).toBe("");

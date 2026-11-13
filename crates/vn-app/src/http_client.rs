@@ -5,22 +5,16 @@
 //! every load (`<img>`, CSS `url()`, `@font-face`, `<lottie>`, `<vn-sticker>`, video posters), all
 //! visible to devtools' Network panel.
 //!
-//! # What goes where
-//!
 //! A `GET` or `HEAD` with no body that follows redirects (what every loader sends) goes to
 //! [`redjs::webapi::http::start`]: the pool decides the connection, follows redirects hop by hop and
 //! decodes the body. Anything else (a body, a request that must not follow a redirect) goes to a
-//! `ReqwestClient`, built on first use so a session that never needs it starts no runtime for it. No
-//! caller sends one today.
-//!
-//! # Divergences
+//! `ReqwestClient`, built on first use so a session that never needs it starts no runtime for it.
 //!
 //! - **No cookies on image loads.** A browser's `<img>` without `crossorigin` is a `no-cors` request
 //!   in credentials mode `include`. The loaders here cannot tell which element asked, so these
 //!   requests are made in mode `omit`.
 //! - **`<video>` bytes are not here.** Media Foundation fetches an http(s) `<video src>` through its
 //!   own network source, with range requests; only the poster, an `<img>`, comes through this client.
-//! - The user agent is the one `fetch` sends (`navigator.userAgent`).
 
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -31,14 +25,12 @@ use futures::future::BoxFuture;
 use gpui::http_client::{http, AsyncBody, HttpClient, Inner, RedirectPolicy, RequestTimeout, Url};
 use vn_runtime::redjs::webapi::{cookies::Credentials, http as net};
 
-/// A dead host must fail fast; `fetch` uses the same split (`fetch.rs`).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// A STALL budget (reset by every byte), not a total: a slow but progressing
 /// download is never cut off.
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct RedjsHttpClient {
-    /// Built on first use (see the module header).
     fallback: OnceLock<Option<Arc<dyn HttpClient>>>,
 }
 
@@ -62,8 +54,6 @@ impl RedjsHttpClient {
     }
 }
 
-/// Aborts the request if the loader drops its future before the answer: a
-/// detached `<img>` whose load gpui gave up on does not keep a connection busy.
 struct AbortOnDrop(Option<Arc<net::Cancel>>);
 
 impl AbortOnDrop {
@@ -82,7 +72,6 @@ impl Drop for AbortOnDrop {
 
 /// The HTTP cache's cap in MB: `VN_HTTP_CACHE` (`0` or `off` turns it off, a number is the cap), else
 /// `vn.config.json`'s `"httpCache": { "maxMB": N }` (`0` or `false` turns it off), else 256.
-/// `window_json` is the window block, which the builders fold the top-level `httpCache` into.
 #[cfg_attr(not(feature = "storages"), allow(dead_code))]
 pub fn cache_mb(window_json: Option<&str>) -> u64 {
     if let Ok(v) = std::env::var("VN_HTTP_CACHE") {
@@ -98,8 +87,6 @@ pub fn cache_mb(window_json: Option<&str>) -> u64 {
     config_mb(window_json).unwrap_or(DEFAULT_CACHE_MB)
 }
 
-/// The window block's `httpCache`: `false` is 0, `{ "maxMB": N }` is N, anything
-/// else (absent, a negative or non-numeric `maxMB`) names nothing.
 #[cfg_attr(not(feature = "storages"), allow(dead_code))]
 fn config_mb(window_json: Option<&str>) -> Option<u64> {
     window_json.and_then(crate::json::parse).and_then(|w| match w.get("httpCache")? {
@@ -113,7 +100,6 @@ fn config_mb(window_json: Option<&str>) -> Option<u64> {
 #[cfg_attr(not(feature = "storages"), allow(dead_code))]
 const DEFAULT_CACHE_MB: u64 = 256;
 
-/// Is this a request redjs's transport carries as is: no body, redirects followed?
 fn plain_get(parts: &http::request::Parts, body: &AsyncBody) -> bool {
     let empty = match &body.0 {
         Inner::Empty => true,
@@ -157,7 +143,6 @@ impl HttpClient for RedjsHttpClient {
             connect_timeout: CONNECT_TIMEOUT,
             io_timeout,
             observer: None,
-            // A loader's request goes through the HTTP cache as a browser's does.
             cache: net::cache::CacheMode::Default,
         };
         let cancel = net::Cancel::new();
@@ -168,7 +153,6 @@ impl HttpClient for RedjsHttpClient {
             request,
             (*cancel).clone(),
             Box::new(move |result| {
-                // The Network panel's row for a load no script made (devtools on only).
                 #[cfg(vn_devtools)]
                 row.finish(&result);
                 let _ = tx.send(result);

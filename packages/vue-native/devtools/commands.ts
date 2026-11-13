@@ -1,46 +1,33 @@
 /**
  * The command table: the one place a vn-devtools command is declared, shared by `ctl.ts` (the
- * dependency-free CLI) and `mcp.ts` (the MCP server). It owns:
- *
- *   * the wire `cmd` and its arguments, with types and prose;
- *   * how a CLI invocation reads into a request (`cli`): positionals and `--flags` are the CLI's own,
- *     so they live in a function rather than a schema;
- *   * the usage lines `ctl --help` prints;
- *   * the JSON Schema and argument pass-through `mcp.ts` registers.
- *
- * The MCP tool name is derived (`vn_<cmd>`), so it cannot name a command that does not exist.
- * `--dist`, `--timeout` and `--json` are transport; `window` rides on every request (`mcpTools` injects
- * it into every schema, `ctl.ts` merges it into every request) rather than per command.
+ * dependency-free CLI) and `mcp.ts` (the MCP server). It owns the wire `cmd` and its arguments, how
+ * a CLI invocation reads into a request, the `ctl --help` usage lines, and the MCP JSON Schema.
+ * The MCP tool name is derived (`vn_<cmd>`); `window` rides on every request.
  */
 
 import { resolve } from "node:path";
 
 export type Flags = Record<string, string | boolean>;
 
-/** A CLI invocation this table cannot read. `ctl.ts` prints it and exits 1. */
 export class UsageError extends Error {}
 
-// The explicit annotation is load-bearing: TypeScript only narrows after a
-// `never`-returning call when the callee is a function declaration or a const
-// with a declared type.
+// The explicit annotation is load-bearing: TypeScript narrows after a `never`-returning call only
+// for a function declaration or a const with a declared type.
 const die: (message: string) => never = (message) => {
   throw new UsageError(message);
 };
 
-/** `--index 2` -> 2; `--index` with nothing after it, or junk -> undefined. */
 export const num = (v: unknown): number | undefined => {
   if (v === undefined || v === "") return undefined;
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
 };
 
-/** Drops the `undefined`s, so the host never sees `"index": null`. */
 const compact = (o: Record<string, unknown>): Record<string, unknown> => {
   for (const k of Object.keys(o)) if (o[k] === undefined) delete o[k];
   return o;
 };
 
-/** New paged APIs reject malformed numbers instead of silently dropping a flag. */
 const integerFlag = (value: unknown, name: string, minimum = 0, maximum = Number.MAX_SAFE_INTEGER): number | undefined => {
   if (value === undefined) return undefined;
   if (value === true || value === false || value === "") die(`${name} needs an integer`);
@@ -72,7 +59,6 @@ const INDEX = int("which match to use when the selector matches several (0-based
 const NODE = int("a node id from vn_tree/vn_query, when you already have one");
 const SINCE = int("first sequence number to return (the `next` from the last call)");
 
-/** The argument every command takes, injected into every MCP schema by [`mcpTools`] and merged into every CLI request by `ctl.ts`. */
 export const WINDOW_ARG = int(
   "which of the target's OS windows the command is about (vn_windows lists them; " +
     "default: the primary one). One process can paint several windows off one retained " +
@@ -80,16 +66,12 @@ export const WINDOW_ARG = int(
 );
 
 export interface CommandSpec {
-  /** The wire `cmd`. The MCP tool is `vn_<cmd>` and the CLI verb is this. */
   cmd: string;
-  /** Other CLI spellings of the verb; the request still carries `cmd`, so an alias never reaches the wire or becomes a second MCP tool. */
+  /** Other CLI spellings of the verb; the request still carries `cmd`. */
   aliases?: string[];
-  /** The MCP tool description. */
   description: string;
-  /** `ctl --help` lines for this command, already column-aligned. */
   usage: string[];
   args: Record<string, ArgSpec>;
-  /** Reads a CLI invocation (positionals after the verb, flags) into a request. */
   cli: (rest: string[], flags: Flags) => Record<string, unknown>;
 }
 
@@ -98,7 +80,6 @@ const withIndex = (o: Record<string, unknown>, flags: Flags): Record<string, unk
   return index === undefined ? o : { ...o, index };
 };
 
-/** The `selector | --node ID` pair `styles`, `rules` and `highlight` share. */
 const selectorOrNode = (cmd: string, rest: string[], flags: Flags): Record<string, unknown> => {
   const node = num(flags.node);
   if (!rest[0] && node === undefined) die(`${cmd} needs a selector or --node <id>`);
@@ -295,7 +276,6 @@ export const COMMANDS: CommandSpec[] = [
     args: { key: str("key name, optionally Mod+Key", true), selector: SELECTOR, index: INDEX },
     cli: (rest, flags) => {
       if (!rest[0]) die("key needs a key name: ctl key Enter [selector]");
-      // With no selector the keystroke goes to whatever already has focus.
       return withIndex(compact({ key: rest[0], selector: rest[1] || undefined }), flags);
     },
   },
@@ -326,9 +306,7 @@ export const COMMANDS: CommandSpec[] = [
       shift: bool("Shift is held (Shift+click extends a text selection)"),
     },
     cli: (rest, flags) => {
-      // Unlike `click`, which synthesizes into the app's dispatcher from a node
-      // id, this one is decided by the hit test — so it is what proves an
-      // element is actually reachable, and it is how `:hover` is exercised.
+      // Unlike `click`, this is decided by the hit test, so it proves an element is reachable and exercises `:hover`.
       const base = compact({
         kind: flags.kind ? String(flags.kind) : "move",
         button: num(flags.button),
@@ -439,8 +417,7 @@ export const COMMANDS: CommandSpec[] = [
     },
     cli: (rest, flags) =>
       compact({
-        // A relative path on a CLI means "relative to where I typed it", and
-        // the host's cwd is its own slot.
+        // A relative path on a CLI means relative to where it was typed; the host's cwd is its own.
         path: rest[0] ? resolve(rest[0]) : undefined,
         backend: flags.backend ? String(flags.backend) : undefined,
       }),
@@ -714,7 +691,6 @@ export const COMMANDS: CommandSpec[] = [
     },
     cli: (rest, flags) => {
       const op = rest[0] || "list";
-      // `dialog answer 3 C:\a.txt` or `dialog answer --id 3 C:\a.txt`
       const flagged = num(flags.id);
       const id = flagged ?? num(rest[1]);
       if (op !== "list" && id === undefined) die(`dialog ${op} needs the dialog's id`);
@@ -775,10 +751,8 @@ export interface McpTool {
   build: (args: Record<string, unknown>) => Record<string, unknown>;
 }
 
-/** `vn_query` for `query`. Derived, so a tool can never outlive its command. */
 export const toolName = (cmd: string): string => `vn_${cmd}`;
 
-/** The MCP tool list, generated; every tool takes `window` (see [`WINDOW_ARG`]). */
 export function mcpTools(): McpTool[] {
   return COMMANDS.map((spec) => {
     const names = Object.keys(spec.args);

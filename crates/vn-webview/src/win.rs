@@ -1,18 +1,13 @@
 //! WebView2, composited under the app's surface.
 //!
-//! One browser environment per process, made when the first `<iframe>` needs it; one webview per
-//! `<iframe>`, in visual hosting mode (`ICoreWebView2CompositionController`): it draws into a
-//! DirectComposition visual placed in the container gpui keeps under the app's surface
-//! (`Window::vn_composition_underlay`). The app paints transparent over the iframe's box, so the
-//! document shows only there, clipped as the box is.
+//! One browser environment per process, made when the first `<iframe>` needs it; one webview per `<iframe>`,
+//! in visual hosting mode: it draws into a DirectComposition visual placed in the container gpui keeps
+//! under the app's surface (`Window::vn_composition_underlay`). The app paints transparent over the
+//! iframe's box, so the document shows only there. Visual hosting has no window to take the mouse, so the
+//! element forwards pointer events (`Frame::pointer`); the keyboard is a real focus move (`MoveFocus`).
 //!
-//! Visual hosting has no window to take the mouse, so the element forwards pointer events
-//! (`Frame::pointer`) and the webview gets `SendMouseInput`. The keyboard is a real focus move
-//! (`MoveFocus`).
-//!
-//! Everything runs on the UI thread. WebView2 calls into the browser process are asynchronous, so a
-//! frame from [`WebView2::create`] is usable at once and queues what it is told until its webview
-//! exists.
+//! Everything runs on the UI thread. A frame from [`WebView2::create`] is usable at once and queues what it
+//! is told until its webview exists.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -38,7 +33,6 @@ use crate::{content_type, external_origin, internal_origin, internal_url, Config
 
 const RELAY_HTML: &str = include_str!("relay.html");
 
-/// Takes a string WebView2 allocated for an out parameter.
 unsafe fn take(text: PWSTR) -> String {
     if text.is_null() {
         return String::new();
@@ -54,7 +48,6 @@ fn log(text: impl AsRef<str>) {
 
 enum Env {
     None,
-    /// Being created; these run when it is.
     Creating(Vec<Box<dyn FnOnce(Option<&ICoreWebView2Environment>)>>),
     Ready(ICoreWebView2Environment),
     Failed,
@@ -63,7 +56,6 @@ enum Env {
 pub(crate) struct WebView2 {
     config: Rc<Config>,
     env: Rc<RefCell<Env>>,
-    /// Is the runtime installed? Asked once; an install needs a relaunch anyway.
     installed: Cell<Option<bool>>,
 }
 
@@ -72,8 +64,6 @@ impl WebView2 {
         Rc::new(Self { config: Rc::new(config), env: Rc::new(RefCell::new(Env::None)), installed: Cell::new(None) })
     }
 
-    /// Runs `then` with the environment, creating it first if this is the
-    /// first frame of the process.
     fn with_env(&self, then: Box<dyn FnOnce(Option<&ICoreWebView2Environment>)>) {
         let mut env = self.env.borrow_mut();
         match &mut *env {
@@ -136,7 +126,6 @@ impl WebView2 {
 
 impl Backend for WebView2 {
     fn supported(&self) -> bool {
-        // The switch a test (or a field diagnosis) turns the backend off with.
         if std::env::var("VN_IFRAME").is_ok_and(|v| v.eq_ignore_ascii_case("off")) {
             return false;
         }
@@ -160,7 +149,6 @@ impl Backend for WebView2 {
             log("this window does not present through DirectComposition, so there is nowhere to draw a document");
             return None;
         };
-        // Owned pointers (gpui's `windows` crate may be another version of this one).
         let device = unsafe { IDCompositionDevice::from_raw(device as *mut _) };
         let underlay = unsafe { IDCompositionVisual::from_raw(underlay as *mut _) };
         let inner = Rc::new(RefCell::new(Inner {
@@ -210,22 +198,17 @@ struct Inner {
     sink: Sink,
     device: IDCompositionDevice,
     underlay: IDCompositionVisual,
-    /// The webview's root visual, a child of `underlay`.
     visual: Option<IDCompositionVisual>,
     controller: Option<ICoreWebView2Controller>,
     composition: Option<ICoreWebView2CompositionController>,
     webview: Option<ICoreWebView2>,
-    /// Has the relay page said it is listening?
     relay_ready: bool,
-    /// Messages for the relay page, held until it is.
     queued: Vec<String>,
     placement: Option<Placement>,
-    /// Is the controller currently visible?
     shown: bool,
     want_focus: bool,
 }
 
-/// Asks the environment for a webview; the rest happens in [`attach`].
 fn start(inner: &Rc<RefCell<Inner>>, env: &ICoreWebView2Environment) -> windows::core::Result<()> {
     let env3: ICoreWebView2Environment3 = env.cast()?;
     let weak = Rc::downgrade(inner);
@@ -240,7 +223,6 @@ fn start(inner: &Rc<RefCell<Inner>>, env: &ICoreWebView2Environment) -> windows:
         };
         let controller: ICoreWebView2Controller = composition.cast()?;
         let Some(inner) = weak.upgrade() else {
-            // The element went away while the browser was starting.
             let _ = unsafe { controller.Close() };
             return Ok(());
         };
@@ -268,8 +250,6 @@ fn attach(
         settings.SetIsStatusBarEnabled(false)?;
         settings.SetIsZoomControlEnabled(false)?;
         settings.SetAreDefaultScriptDialogsEnabled(false)?;
-        // A document, not a browser: no reload, find, print or zoom keys, no
-        // autofill, no swipe to navigate.
         if let Ok(settings) = settings.cast::<ICoreWebView2Settings3>() {
             settings.SetAreBrowserAcceleratorKeysEnabled(config.devtools)?;
         }
@@ -284,17 +264,13 @@ fn attach(
             settings.SetIsSwipeNavigationEnabled(false)?;
         }
         if let Ok(controller2) = controller.cast::<ICoreWebView2Controller2>() {
-            // Until the document paints, the box shows the element's own CSS
-            // background: nothing of the webview's.
             controller2.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR { A: 0, R: 0, G: 0, B: 0 })?;
         }
         if let Ok(controller3) = controller.cast::<ICoreWebView2Controller3>() {
-            // The app says where the box is in device pixels and at what scale.
             controller3.SetBoundsMode(COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS)?;
             controller3.SetShouldDetectMonitorScaleChanges(false)?;
         }
         if let Ok(controller4) = controller.cast::<ICoreWebView2Controller4>() {
-            // Nothing is dropped into a document from outside.
             controller4.SetAllowExternalDrop(false)?;
         }
         controller.SetIsVisible(false)?;
@@ -312,10 +288,8 @@ fn attach(
     let mut token = 0i64;
     let relay_url = format!("{APP_ORIGIN}{RELAY_PATH}");
 
-    // While the document has the keyboard, the keys that are the window's stay
-    // the window's: every Alt combination (Alt+F4, the system menu) and
-    // the keys a PlayFrame host reserves. They are handed to the app's window
-    // as the messages they would have been.
+    // While the document has the keyboard, the window's keys stay the window's: every Alt combination
+    // and the keys a PlayFrame host reserves are handed to the app's window as the messages they would have been.
     unsafe {
         let weak = Rc::downgrade(inner);
         controller.add_AcceleratorKeyPressed(
@@ -327,7 +301,6 @@ fn attach(
                 args.VirtualKey(&mut key)?;
                 let mut lparam = 0i32;
                 args.KeyEventLParam(&mut lparam)?;
-                // Escape leaves the app's fullscreen, whoever has the keyboard.
                 let reserved = RESERVED_KEYS.contains(&key) || (key == VK_ESCAPE && vn_tree::iframe::fullscreen_active());
                 let message = match kind {
                     COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN => WM_SYSKEYDOWN,
@@ -359,7 +332,6 @@ fn attach(
         )?;
     }
 
-    // The app's own files and the relay page, from the package.
     unsafe {
         webview.AddWebResourceRequestedFilter(&HSTRING::from(format!("{APP_ORIGIN}/*")), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL)?;
         let env = env.clone();
@@ -402,8 +374,7 @@ fn attach(
         webview.add_WebMessageReceived(
             &WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
                 let (Some(args), Some(inner)) = (args, weak.upgrade()) else { return Ok(()) };
-                // Only the relay page itself: a frame inside it has
-                // `chrome.webview` too, and must not speak as the relay.
+                // Only the relay page itself: a frame inside it has `chrome.webview` too, and must not speak as the relay.
                 let mut source = PWSTR::null();
                 args.Source(&mut source)?;
                 if take(source) != relay {
@@ -418,7 +389,6 @@ fn attach(
         )?;
     }
 
-    // The iframe's navigation is the element's `load` / `error`.
     unsafe {
         let weak = Rc::downgrade(inner);
         webview.add_FrameNavigationCompleted(
@@ -440,7 +410,6 @@ fn attach(
         )?;
     }
 
-    // The top-level document is the relay page and stays the relay page.
     unsafe {
         let relay = relay_url.clone();
         webview.add_NavigationStarting(
@@ -464,7 +433,6 @@ fn attach(
             })),
             &mut token,
         )?;
-        // No prompt and no grant.
         webview.add_PermissionRequested(
             &PermissionRequestedEventHandler::create(Box::new(|_, args| {
                 if let Some(args) = args {
@@ -484,7 +452,6 @@ fn attach(
             })),
             &mut token,
         )?;
-        // The relay page failing to load is the frame failing.
         let weak = Rc::downgrade(inner);
         webview.add_NavigationCompleted(
             &NavigationCompletedEventHandler::create(Box::new(move |_, args| {
@@ -513,12 +480,10 @@ fn attach(
     Ok(())
 }
 
-/// F5, F11, F12: never the document's (a PlayFrame host's `blockedKeys`).
 const RESERVED_KEYS: [u32; 3] = [0x74, 0x7A, 0x7B];
 const VK_ESCAPE: u32 = 0x1B;
 
-/// A Win32 system cursor id (`IDC_*`) as the app's cursor. A cursor that is
-/// not a system one (an image, `none`, `grab`) reports 0 and is the arrow.
+/// A Win32 system cursor id (`IDC_*`) as the app's cursor; a non-system cursor reports 0 and is the arrow.
 fn cursor_style(id: u32) -> gpui::CursorStyle {
     use gpui::CursorStyle as C;
     match id {
@@ -535,7 +500,6 @@ fn cursor_style(id: u32) -> gpui::CursorStyle {
     }
 }
 
-/// One message from the relay page, as JSON text.
 fn received(inner: &Rc<RefCell<Inner>>, json: &str) {
     let Ok(message) = serde_json::from_str::<serde_json::Value>(json) else { return };
     match message.get("t").and_then(|t| t.as_str()) {
@@ -561,7 +525,6 @@ fn received(inner: &Rc<RefCell<Inner>>, json: &str) {
 }
 
 impl Inner {
-    /// Posts to the relay page, or holds the message until it listens.
     fn send(&mut self, json: String) {
         match (&self.webview, self.relay_ready) {
             (Some(webview), true) => {
@@ -597,7 +560,6 @@ impl Inner {
                     })?;
                     visual.SetOffsetX2(x)?;
                     visual.SetOffsetY2(y)?;
-                    // In the visual's own coordinates.
                     let [cx, cy, cw, ch] = p.clip;
                     visual.SetClip2(&windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F {
                         left: cx - x,
@@ -618,13 +580,10 @@ impl Inner {
         }
     }
 
-    /// Moves the document under another window's surface, or under this
-    /// window's new compositor. The webview and its document stay.
     fn rehome(&mut self, window: &gpui::Window) {
         let (Some(hwnd), Some((device, underlay))) = (hwnd_of(window), window.vn_composition_underlay()) else {
             return;
         };
-        // Owned: released here when nothing changed.
         let device = unsafe { IDCompositionDevice::from_raw(device as *mut _) };
         let underlay = unsafe { IDCompositionVisual::from_raw(underlay as *mut _) };
         if hwnd == self.hwnd && underlay.as_raw() == self.underlay.as_raw() {
@@ -640,7 +599,6 @@ impl Inner {
             self.device = device;
             self.underlay = underlay;
             let (Some(controller), Some(composition)) = (&self.controller, &self.composition) else {
-                // Not made yet: `attach` uses what was just stored.
                 return Ok(());
             };
             if moved {
@@ -703,7 +661,6 @@ impl Frame for Handle {
             }
         }
         message.insert("fullscreen".into(), attrs.allow_fullscreen.into());
-        // A navigation replaces whatever was still waiting for the old document.
         me.queued.retain(|m| !m.starts_with("{\"t\":\"post\""));
         me.send(serde_json::Value::Object(message).to_string());
     }
@@ -711,7 +668,6 @@ impl Frame for Handle {
     fn post(&mut self, wire: &str, target_origin: &str) {
         let mut me = self.0.borrow_mut();
         let origin = serde_json::Value::String(internal_origin(target_origin, &me.config.page_origin));
-        // `wire` is JSON text already; it is embedded, not re-encoded.
         me.send(format!("{{\"t\":\"post\",\"o\":{origin},\"w\":{wire}}}"));
     }
 
@@ -740,8 +696,7 @@ impl Frame for Handle {
             PointerKind::Down(2) => (COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_DOWN, 0),
             PointerKind::Up(2) => (COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_UP, 0),
             PointerKind::Down(_) | PointerKind::Up(_) => return,
-            // Win32 wheel units: 120 per notch, positive AWAY from the user, so
-            // a scroll down is negative. One notch is taken as 100 px.
+            // Win32 wheel units: 120 per notch, positive AWAY from the user; one notch is taken as 100 px.
             PointerKind::Wheel(dx, dy) if dy != 0.0 || dx == 0.0 => {
                 (COREWEBVIEW2_MOUSE_EVENT_KIND_WHEEL, ((-dy * 1.2).round() as i32) as u32)
             }
@@ -764,7 +719,6 @@ impl Frame for Handle {
             keys |= COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_CONTROL.0;
         }
         let mut point = POINT { x: input.x.round() as i32, y: input.y.round() as i32 };
-        // A leave has no position and no keys: anything else is refused.
         if input.kind == PointerKind::Leave {
             point = POINT::default();
             keys = COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE.0;
@@ -786,7 +740,6 @@ impl Drop for Handle {
                 let _ = me.underlay.RemoveVisual(visual);
                 let _ = me.device.Commit();
             }
-            // Ends the document and, with the last one, the browser processes.
             if let Some(controller) = &me.controller {
                 let _ = controller.Close();
             }

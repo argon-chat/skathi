@@ -2,7 +2,6 @@
 // overlay) and the `appWindow` extension (`globalThis.__VN_WINDOW__`, re-exported by runtime.ts),
 // over the host's `__vn_window_*` bindings. Generated into window.prelude.js (`bun run preludes`).
 //
-// A classic script with no imports; its ambient types come from the tsconfig.json beside it.
 // `document!` is always defined here, though engine.d.ts types it optional for the unit-test harness.
 //
 // TODO(redjs): move this into native accessors in redjs's webapi/dom.rs.
@@ -26,7 +25,6 @@
   const ro = (obj: object, name: string, get: () => unknown) =>
     Object.defineProperty(obj, name, { get, configurable: true, enumerable: true });
 
-  // The getter applies HTML's title normalisation.
   const normalizeTitle = (v: unknown) => String(v).replace(/[\t\n\f\r ]+/g, " ").replace(/^ | $/g, "");
   let titleSlot = normalizeTitle(S.title);
   Object.defineProperty(document, "title", {
@@ -40,7 +38,6 @@
     enumerable: true,
   });
 
-  // `innerWidth`/`innerHeight`/`devicePixelRatio` are owned by redjs. All values are CSS px.
   // `outerHeight - innerHeight` is not the titlebar height: use `getTitlebarAreaRect().height`.
   ro(globalThis, "outerWidth", () => S.outer.width);
   ro(globalThis, "outerHeight", () => S.outer.height);
@@ -67,7 +64,6 @@
     if (h !== undefined) mask |= BOUNDS_H;
     __vn_window_set_bounds(x ?? 0, y ?? 0, w ?? 0, h ?? 0, mask);
   };
-  // `resizeTo` resizes the viewport; `moveTo` positions the window.
   globalThis.resizeTo = (w, h) => setBounds({ width: w, height: h }, true);
   globalThis.resizeBy = (dw, dh) =>
     setBounds({ width: S.innerWidth + (dw || 0), height: S.innerHeight + (dh || 0) }, true);
@@ -229,7 +225,6 @@
     return true;
   };
   const fireFs = (target: VnFullscreenTarget | undefined) => {
-    // Connected mirrors bubble through the runtime's document registry.
     if (target?.isConnected !== false && typeof target?.dispatchEvent === "function") {
       target.dispatchEvent(new Event("fullscreenchange", { bubbles: true, composed: true }));
     } else {
@@ -353,7 +348,6 @@
   ro(wco, "visible", () => S.titleBarOverlayVisible);
   wco.getTitlebarAreaRect = () => {
     const r = S.titleBarArea;
-    // Plain object: redjs has no DOMRect.
     return {
       x: r.x, y: r.y, width: r.width, height: r.height,
       top: r.y, left: r.x, right: r.x + r.width, bottom: r.y + r.height,
@@ -363,7 +357,6 @@
   wco.ongeometrychange = null;
   Object.defineProperty(nav, "windowControlsOverlay", { value: wco, configurable: true, enumerable: true });
 
-  // `unload` is being removed from the platform; not implemented.
   const addEL = globalThis.addEventListener?.bind(globalThis);
   if (addEL) {
     globalThis.addEventListener = (type, fn, opts) => {
@@ -396,9 +389,6 @@
   }
   globalThis.__vnStickyActivation = markSticky;
 
-  // Methods are synchronous and return undefined (JS and the UI thread are one thread); `await` on
-  // them still works. `VnAppWindow` comes from protocol.d.ts so this and the runtime's `appWindow`
-  // stay one type.
   const appWindow = new EventTarget() as VnAppWindow;
   const verb = (name: string) => () => __vn_window_verb(name);
   appWindow.minimize = verb("minimize");
@@ -422,8 +412,6 @@
   // Electron's shape: `false` retires the host-drawn min/max/close cluster, an object installs it
   // (the OS performs the actions; HTMAXBUTTON arms the Windows 11 snap flyout). Under
   // `titleBarStyle: "default"` the OS already draws real buttons, so that case is refused.
-  // `mode`: -1 = leave the cluster, only the height moved; 0 = off; 1 = on. The other parameters
-  // are `unknown` because apps hand them in.
   const setOverlay = (height: unknown, mode: number, color?: unknown, symbolColor?: unknown) => {
     __vn_window_set_overlay(
       typeof height === "number" ? height : NaN,
@@ -446,7 +434,6 @@
       "`startResizeDragging()` is not implemented — the window already has live resize borders on " +
         "all four edges.",
     );
-  // `as const` makes a typo in these names a build error.
   for (const name of ["setProgressBar", "setOverlayIcon", "setBadgeCount", "setSkipTaskbar", "setIcon"] as const) {
     appWindow[name] = () =>
       warn(
@@ -506,7 +493,6 @@
   // These need a different window style; changing it mid-session desyncs gpui's border_offset and
   // hit-test flags.
   const STYLE_ONLY = ["frame", "titleBarStyle"];
-  // `opts` values are `unknown`; the casts rely on each setter's own coercion.
   const defineWindow = (opts: Record<string, unknown> | null | undefined) => {
     if (!opts || typeof opts !== "object") return;
     for (const key of Object.keys(opts)) {
@@ -576,8 +562,6 @@
       switch (kind) {
         case "boot":
         case "resize":
-          // The trusted `resize` was already dispatched by the host through
-          // redjs; nothing to do but re-evaluate the live media queries.
           break;
         case "focus":
         case "blur":
@@ -598,7 +582,6 @@
         case "mediachange":
           break;
         default:
-          // maximize / unmaximize / minimize / restore / move
           emit(appWindow, kind);
           break;
       }

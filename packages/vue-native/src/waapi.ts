@@ -1,11 +1,7 @@
-// Web Animations: `Element.animate()`, `Animation`, `KeyframeEffect` and `document.timeline`.
-//
-// This module is the object model and lifecycle state machine (play, pause, seek, reverse, finish,
-// playback rate, `ready`/`finished`, events, auto-removal of replaced animations). It tells the
-// native core (crates/vn-tree/src/waapi.rs) only the effect (keyframes, timing) and the clock
-// (start or held time, rate); the host animator (crates/vn-css/src/animator/script.rs) samples
-// every frame from that, so nothing crosses per frame.
-//
+// Web Animations: `Element.animate()`, `Animation`, `KeyframeEffect` and `document.timeline`: the object model and
+// lifecycle state machine. It tells the native core (crates/vn-tree/src/waapi.rs) only the effect (keyframes, timing)
+// and the clock (start or held time, rate); the host animator (crates/vn-css/src/animator/script.rs) samples every
+// frame from that, so nothing crosses per frame.
 // Differences from a browser:
 // * `animate` / `getAnimations` live on HTMLElement.prototype and SVGElement.prototype, not
 //   Element.prototype: motion / framer-motion probe Element.prototype to choose WAAPI, and their JS
@@ -20,7 +16,6 @@
 //   properties the animator cannot interpolate are advised once each; timing, promises and events
 //   still run.
 // * `getAnimations()` lists script animations only; CSS animations and transitions have no objects.
-//
 // Without the host functions nothing is installed and `animate` stays undefined.
 
 export interface WaapiHost {
@@ -41,7 +36,6 @@ export interface WaapiDeps {
   warn(key: string, message: string): void;
   now(): number;
   frame(cb: (timestamp: number) => void): void;
-  /** Calls `stamp` with each animation frame's timestamp, before that frame's rAF callbacks run. */
   onFrame?(stamp: (timestamp: number) => void): void;
   setTimer(cb: () => void, ms: number): unknown;
   clearTimer(handle: unknown): void;
@@ -146,7 +140,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     dispatchEvent?(ev: object): boolean;
   };
 
-  /** Animations that paint or may still, in creation (composite) order. */
   const live = new Set<AnimationImpl>();
   let nextId = 0;
 
@@ -166,10 +159,9 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     }, 0);
   };
 
-  // The timeline's time is constant within a frame (the rAF timestamp, stamped via `d.onFrame`),
-  // so two reads in one frame compare equal (Argon's chat scroller relies on it). Read outside a
-  // frame, it is read once and held, as Chromium holds it for a task, until the host's next wave
-  // starts (a 0 ms timer). It never goes back.
+  // The timeline's time is constant within a frame (the rAF timestamp via `d.onFrame`), so two reads in one frame
+  // compare equal (Argon's chat scroller relies on it). Outside a frame it is read once and held, as Chromium holds it
+  // for a task, until the host's next wave starts (a 0 ms timer). It never goes back.
   let heldTime: number | null = null;
   let lastTime = -Infinity;
   let releaseArmed = false;
@@ -831,7 +823,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       }, Math.max(0, ms));
     }
 
-    /** @internal The effect's keyframes, timing or target changed. */
     _effectChanged(): void {
       if (this.#native) {
         host.drop(this.#nid);

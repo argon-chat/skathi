@@ -1,6 +1,5 @@
 use super::*;
 
-/// xorshift64*, for repeatable noise.
 struct Noise(u64);
 
 impl Noise {
@@ -11,7 +10,6 @@ impl Noise {
         self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
 
-    /// Bytes with runs of the extremes, where clamping and saturation live.
     fn bytes(&mut self, n: usize) -> Vec<u8> {
         (0..n)
             .map(|_| match self.next() % 8 {
@@ -68,7 +66,6 @@ fn every_level_gives_the_scalar_bytes_at_every_width() {
     }
 }
 
-/// The exact conversion of one sample, in f64.
 fn exact(colour: Colorimetry, y: f64, u: f64, v: f64) -> [f64; 3] {
     let (kr, kb) = colour.matrix.kr_kb();
     let kg = 1.0 - kr - kb;
@@ -82,7 +79,6 @@ fn exact(colour: Colorimetry, y: f64, u: f64, v: f64) -> [f64; 3] {
 
 #[test]
 fn the_integer_matrix_is_the_exact_one_rounded() {
-    // Every Y with a spread of U, V: off by at most 1, and rarely.
     for colour in ALL {
         let k = colour.coeffs();
         let (mut total, mut off) = (0, 0);
@@ -122,11 +118,9 @@ fn the_reference_colours_come_out() {
     check(studio601, (16, 128, 128), [0, 0, 0], 0);
     check(studio601, (235, 128, 128), [255, 255, 255], 0);
     check(studio601, (126, 128, 128), [128, 128, 128], 0);
-    // BT.601's primaries in studio range.
     check(studio601, (81, 90, 240), [255, 0, 0], 2);
     check(studio601, (145, 54, 34), [0, 255, 0], 2);
     check(studio601, (41, 240, 110), [0, 0, 255], 2);
-    // BT.709's: the same red read as BT.601 is visibly off.
     let studio709 = Colorimetry::new(Matrix::Bt709, false);
     check(studio709, (63, 102, 240), [255, 0, 0], 2);
     check(studio709, (173, 42, 26), [0, 255, 0], 2);
@@ -146,16 +140,13 @@ fn chroma_is_centre_sited_and_bilinear() {
     let mut out = [0u8; 8];
     chroma_row(Level::Scalar, &near, &near, &mut tmp, &mut out);
     assert_eq!(out, [0, 0, 0, 40, 120, 160, 160, 160]);
-    // Vertically: 3/4 near, 1/4 far.
     chroma_row(Level::Scalar, &[200], &[40], &mut tmp, &mut out[..2]);
     assert_eq!(&out[..2], &[160, 160]);
-    // An odd width ends on an even luma sample.
     let mut odd = [0u8; 3];
     chroma_row(Level::Scalar, &[0, 160], &[0, 160], &mut tmp, &mut odd);
     assert_eq!(odd, [0, 40, 120]);
 }
 
-/// A frame of noise with gradients in it, `w` × `h`, owned.
 struct Frame {
     w: usize,
     h: usize,
@@ -194,7 +185,6 @@ impl Frame {
         I420 { width: self.w as u32, height: self.h as u32, y: p(&self.y), u: p(&self.u), v: p(&self.v), a: alpha.then(|| p(&self.a)) }
     }
 
-    /// The straight BGRA of every pixel at full size, from the scalar rows.
     fn bgra(&self, colour: Colorimetry, alpha: bool) -> Vec<u8> {
         let mut out = vec![0; self.w * self.h * 4];
         Converter::with_level(Level::Scalar).to_bgra(&self.i420(alpha), colour, &mut out, self.w as u32, self.h as u32).unwrap();
@@ -210,8 +200,6 @@ fn a_frame_at_its_own_size_is_its_pixels_at_every_level() {
         let frame = Frame::new(w, h, (w * 1000 + h) as u64);
         for alpha in [true, false] {
             let want = frame.bgra(STUDIO601, alpha);
-            // Pixel by pixel from the definition: chroma bilinear, then the
-            // matrix, then the alpha as is.
             for y in 0..h {
                 for x in 0..w {
                     let px = &want[(y * w + x) * 4..(y * w + x) * 4 + 4];
@@ -227,8 +215,6 @@ fn a_frame_at_its_own_size_is_its_pixels_at_every_level() {
     }
 }
 
-/// The reference resampler, in f64: per axis area (down or 1:1) or
-/// bilinear (up), on premultiplied values.
 fn reference_scale(src: &[u8], (w, h): (usize, usize), (tw, th): (usize, usize)) -> Vec<f64> {
     fn taps(n: usize, t: usize) -> Vec<Vec<(usize, f64)>> {
         let s = n as f64 / t as f64;
@@ -300,7 +286,6 @@ fn scaling_is_the_reference_resampler_within_a_rounding() {
 
 #[test]
 fn a_transparent_pixels_colour_does_not_bleed_into_an_edge() {
-    // Columns 0..3 opaque red, 3..8 transparent green.
     let (w, h) = (8usize, 2usize);
     let y: Vec<u8> = (0..w * h).map(|i| if i % w < 3 { 81 } else { 145 }).collect();
     let u: Vec<u8> = (0..4).map(|i| if i < 2 { 90 } else { 54 }).collect();
@@ -318,9 +303,8 @@ fn a_transparent_pixels_colour_does_not_bleed_into_an_edge() {
     Converter::new().to_bgra(&frame, STUDIO601, &mut out, 3, 1).unwrap();
     let mut full = vec![0; w * h * 4];
     Converter::new().to_bgra(&frame, STUDIO601, &mut full, w as u32, h as u32).unwrap();
-    // The middle output pixel covers columns 2.67..5.33: an eighth of it is
-    // column 2, the last opaque one, and the rest transparent green. Its
-    // alpha is an eighth, and its colour is column 2's alone.
+    // The middle output pixel covers columns 2.67..5.33: an eighth of it is column 2 (the last
+    // opaque one), the rest transparent green, so its alpha is an eighth and its colour column 2's.
     let mid = &out[4..8];
     assert_eq!(mid[3], 32);
     assert_eq!(&mid[..3], &full[8..11]);
@@ -339,7 +323,6 @@ fn alpha_only_writes_white_and_the_alpha() {
             assert_eq!(&same[(y * 41 + x) * 4..(y * 41 + x) * 4 + 4], &[255, 255, 255, frame.a[y * frame.stride + x]]);
         }
     }
-    // Scaled: the alpha of the colour path, exactly (it averages alpha alike).
     for (tw, th) in [(20, 14), (100, 70), (3, 3)] {
         let mut alpha = vec![0; tw * th * 4];
         c.alpha_to_bgra(Some(plane), (41, 29), &mut alpha, tw as u32, th as u32).unwrap();
@@ -388,7 +371,6 @@ fn wrong_sizes_are_errors() {
     small.y.stride = 3;
     assert_eq!(c.to_bgra(&small, STUDIO601, &mut out, 8, 8), Err(Error::Plane("Y")));
     assert_eq!(c.alpha_to_bgra(Some(Plane { data: &[0; 10], stride: 16 }), (16, 16), &mut out, 8, 8), Err(Error::Plane("alpha")));
-    // Empty targets write nothing and fail nothing.
     assert_eq!(c.to_bgra(&frame.i420(true), STUDIO601, &mut [], 0, 5), Ok(()));
 }
 
@@ -420,7 +402,6 @@ const fn with(colour: Colorimetry, primaries: Primaries, transfer: Transfer) -> 
     Colorimetry { primaries, transfer, ..colour }
 }
 
-/// One straight RGB colour moved to sRGB in f64: the definition.
 fn to_srgb(primaries: Primaries, transfer: Transfer, rgb: [u8; 3]) -> [f64; 3] {
     let m = gamut::matrix(primaries);
     let lin = rgb.map(|c| gamut::decode(transfer, c as f64 / 255.0));
@@ -434,7 +415,6 @@ fn srgb_primaries_and_curve_cost_nothing() {
     let mut out = vec![0; 20 * 14 * 4];
     c.to_bgra(&frame.i420(true), STUDIO601, &mut out, 20, 14).unwrap();
     assert!(c.gamut.is_none(), "no tables for sRGB's own pair");
-    // And a frame in other primaries keeps its tables for the next one.
     c.to_bgra(&frame.i420(true), with(STUDIO601, Primaries::Smpte170, Transfer::Srgb), &mut out, 20, 14).unwrap();
     let held = c.memory_bytes();
     c.to_bgra(&frame.i420(true), with(STUDIO601, Primaries::Smpte170, Transfer::Srgb), &mut out, 20, 14).unwrap();
@@ -469,8 +449,6 @@ fn other_primaries_and_curves_are_moved_to_srgb_in_linear_light() {
 
 #[test]
 fn white_and_greys_stay_whatever_the_white_point() {
-    // Bradford adaptation takes every white point to D65, so a neutral
-    // stays neutral (within the tables' rounding).
     for p in PRIMARIES {
         let Some(g) = gamut::Gamut::new(p, Transfer::Srgb) else { continue };
         let mut px: Vec<u8> = [0u8, 1, 17, 64, 128, 200, 254, 255].iter().flat_map(|&v| [v, v, v, 255]).collect();
@@ -480,7 +458,6 @@ fn white_and_greys_stay_whatever_the_white_point() {
             assert!((*a as i32 - *b as i32).abs() <= 1, "{p:?}: {before:?} became {px:?}");
         }
     }
-    // SMPTE 170M's red is inside sRGB's: less saturated there.
     let mut red = [0u8, 0, 255, 255];
     gamut::Gamut::new(Primaries::Smpte170, Transfer::Srgb).unwrap().apply(&mut red);
     assert!(red[2] < 255 && red[1] > 0, "{red:?}");
@@ -493,14 +470,12 @@ fn the_conversion_runs_on_the_fewer_pixels_and_alike_at_every_level() {
     let g = gamut::Gamut::new(colour.primaries, colour.transfer).unwrap();
     let full = frame.bgra(colour, true);
     for level in Level::available() {
-        // Shrinking: scaled first, then converted, byte for byte.
         let mut plain = vec![0; 20 * 14 * 4];
         Converter::with_level(level).to_bgra(&frame.i420(true), STUDIO601, &mut plain, 20, 14).unwrap();
         g.apply(&mut plain);
         let mut got = vec![0; 20 * 14 * 4];
         Converter::with_level(level).to_bgra(&frame.i420(true), colour, &mut got, 20, 14).unwrap();
         assert_eq!(got, plain, "{} shrinking", level.name());
-        // Growing: converted at the frame's size, then scaled.
         let want = reference_scale(&full, (41, 29), (82, 58));
         let mut got = vec![0; 82 * 58 * 4];
         Converter::with_level(level).to_bgra(&frame.i420(true), colour, &mut got, 82, 58).unwrap();
@@ -518,8 +493,6 @@ fn the_conversion_runs_on_the_fewer_pixels_and_alike_at_every_level() {
 #[test]
 #[ignore]
 fn bench() {
-    // The fastest of many runs: the cost with the machine's other load
-    // (other builds, other apps) taken out.
     let time = |f: &mut dyn FnMut()| {
         f();
         let start = std::time::Instant::now();
@@ -544,7 +517,6 @@ fn bench() {
                     c.alpha_to_bgra(Some(Plane { data: &frame.a, stride: frame.stride }), (w as u32, w as u32), &mut out, t as u32, t as u32).unwrap()
                 });
                 line += &format!(" | →{t}: {colour:7.1} µs, alpha {alpha:6.1}");
-                // SMPTE 170M primaries: the sRGB conversion on top.
                 let smpte = with(STUDIO601, Primaries::Smpte170, Transfer::Srgb);
                 let moved = time(&mut || c.to_bgra(&frame.i420(true), smpte, &mut out, t as u32, t as u32).unwrap());
                 converted += &format!(" | →{t}: {moved:7.1} µs (+{:5.1})", moved - colour);

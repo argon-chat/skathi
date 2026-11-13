@@ -1,9 +1,6 @@
-// Runs src/runtime.ts in an isolated fake host so the renderer's prop/event plumbing can be tested without
-// gpui, JavaScriptCore or a window.
-//
-// As in loader-harness.ts: the source is transpiled to plain JS (./ts-source.ts), import/export lines are
-// stripped, and every ambient name (`__vn_*`, `console`) is bound as a parameter, so each createRuntime() gets
-// its own world (intern table, handler registry, `warned` set: what makes "advisory fires exactly once" testable).
+// Runs src/runtime.ts in an isolated fake host, without gpui, JavaScriptCore or a window. As in
+// loader-harness.ts the source is transpiled (./ts-source.ts), import/export lines are stripped and every
+// ambient name (`__vn_*`, `console`) is a parameter, so each createRuntime() gets its own world.
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,7 +35,6 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const RUNTIME_PATH = join(HERE, "../src/runtime.ts");
 export const DESKTOP_PATH = join(HERE, "../src/desktop.ts");
 
-/** src/desktop.ts, evaluated once into its one export. runtime.ts imports it; that line is stripped and the function comes back as a parameter. It reads no ambient `__vn_*` name, so one evaluation serves every world. */
 let installDesktopFn: unknown = null;
 function loadInstallDesktop(): unknown {
   if (installDesktopFn) return installDesktopFn;
@@ -49,7 +45,6 @@ function loadInstallDesktop(): unknown {
 }
 
 export const CANVAS_PATH = join(HERE, "../src/canvas.ts");
-/** src/canvas.ts's `adoptCanvas`, the same way. */
 let adoptCanvasFn: unknown = null;
 function loadAdoptCanvas(): unknown {
   if (adoptCanvasFn) return adoptCanvasFn;
@@ -61,7 +56,6 @@ function loadAdoptCanvas(): unknown {
 }
 
 export const FONTS_PATH = join(HERE, "../src/fonts.ts");
-/** src/fonts.ts's `installFonts`, the same way. Without `__vn_fonts_*` on the world's global it installs nothing (test/runtime-fonts.test.ts drives it against a fake loader). */
 let installFontsFn: unknown = null;
 function loadInstallFonts(): unknown {
   if (installFontsFn) return installFontsFn;
@@ -73,7 +67,6 @@ function loadInstallFonts(): unknown {
 }
 
 export const WAAPI_PATH = join(HERE, "../src/waapi.ts");
-/** src/waapi.ts's `installWaapi`, the same way; its host arrives as an argument. */
 let installWaapiFn: unknown = null;
 function loadInstallWaapi(): unknown {
   if (installWaapiFn) return installWaapiFn;
@@ -85,7 +78,6 @@ function loadInstallWaapi(): unknown {
 }
 
 export const SELECTION_PATH = join(HERE, "../src/selection.ts");
-/** src/selection.ts's `installSelection`, the same way. */
 let installSelectionFn: unknown = null;
 function loadInstallSelection(): unknown {
   if (installSelectionFn) return installSelectionFn;
@@ -96,7 +88,6 @@ function loadInstallSelection(): unknown {
   return installSelectionFn;
 }
 
-/** The W3C names `vn-permissions` knows, in step with `Capability::ALL`. */
 export const PERMISSION_NAMES = [
   "microphone",
   "camera",
@@ -109,19 +100,12 @@ export const PERMISSION_NAMES = [
 
 const IMPORT_LINE = /^\s*import\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 const STAR_REEXPORT = /^\s*export\s+\*\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
-/**
- * `export { A, B } from "./mod";`: a named re-export of another module. The harness evaluates one file with
- * `new Function`, where `export` is a syntax error and the named module is not loaded; dropping the line loses
- * nothing, since every name handed back is a parameter or in the harness's own `return`.
- */
+/** `export { A, B } from "./mod";`: dropped, since every name handed back is a parameter or in the harness's own `return`. */
 const NAMED_REEXPORT = /^\s*export\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
-/** `export { nodeOps, patchProp };`: a local export list; the names are already declarations in the body. */
 const LOCAL_EXPORT = /^\s*export\s+\{[^}]*\};?[^\S\n]*$/gm;
 
-/** What runtime.ts imports from src/vnwindow.ts (`VnWindow`, `WINDOW_ROOT`, `windowRoots`), in parameter order: a component nothing here renders, its root marker, and an empty registry of window roots. */
 const VNWINDOW_STANDINS = (): unknown[] => [{ name: "VnWindow" }, Symbol("vn-window-root"), new Set<object>()];
 
-/** `FileList`, as much as an input's `files` needs (bun has none): indexed, `length`, `item()`, iterable, and a class for `instanceof`. */
 export class FakeFileList {
   [i: number]: unknown;
   length: number;
@@ -137,19 +121,11 @@ export class FakeFileList {
   }
 }
 
-/** `DataTransfer`, for `new DataTransfer().files` (an empty FileList). */
 class FakeDataTransfer {
   files = new FakeFileList();
 }
 
-/**
- * @param {{ storage?: boolean, devtools?: boolean }} [options]
- *   `storage: false` builds a world with no `__vn_storage_*` (a host built `--no-default-features`, or an older
- *   one), the only way to reach `appStorage`'s inert branch. `devtools: false` does the same for
- *   `__vn_devtools_*` (a `no-devtools` host). `desktop: false` blanks `__vn_desktop_*` / `__vn_shell_*`.
- *   `MouseEvent` hands the world an event class (bun has none), making "only a MouseEvent click activates"
- *   observable.
- */
+/** `storage` / `devtools` / `desktop` `false` build a world without those `__vn_*` slots (an older or `--no-default-features` host); `MouseEvent` hands the world an event class (bun has none). */
 export function createRuntime(
   options: {
     storage?: boolean;
@@ -157,19 +133,13 @@ export function createRuntime(
     desktop?: boolean;
     MouseEvent?: unknown;
     globals?: Record<string, unknown>;
-    /** Host bootstrap, before the runtime (including sealing builtin methods). */
     beforeRuntime?: (global: Record<string, unknown>) => void;
     launch?: Record<string, unknown>;
     styleAccepts?: boolean;
-    /** `false`: no `__vn_layout_watch` / `__vn_set_layout_hook` (an older host). */
     layoutWatch?: boolean;
-    /** `false`: no `__vn_selection_*` (an older host): no `getSelection`. */
     selection?: boolean;
-    /** `false`: no `__vn_anim_*` (an older host): no `el.animate`. */
     anim?: boolean;
-    /** Evaluate into an existing world's global (`rt.global`), as `location.reload()` and a cold restart do; `globals` is ignored then. */
     realm?: Record<string, unknown>;
-    /** The `navigator` the runtime sees (bound as a parameter), instead of a fresh fake. */
     navigator?: Record<string, unknown>;
   } = {},
 ) {
@@ -194,17 +164,13 @@ export function createRuntime(
     props: [], // { id, key, value }
     styles: [],
     classes: [],
-    /** Every `__vn_set_stylesheet(css, extra)`, in order, as the cascade it installs (`css`, then each head `<style>`): the last is in force. */
     sheets: [] as string[],
     sheetParts: [] as string[][],
     logs: [],
     dispatcher: null,
-    /** `__vn_query` answers: selector -> ids (or a `!advisory` string). */
     queryAnswers: new Map(),
     queryCalls: [],
-    /** `__vn_bounds` answers: node id -> "x,y,w,h". */
     boundsById: new Map(),
-    /** The post-layout observer step (crates/vn-tree/src/observe.rs), faked. `host.layout.step()` is one frame with layout already done (`boundsById` IS the layout): the rounds, a `relayout` between them when given, then the finish. Answers the rounds, or -1 when the host would not have called the runtime. */
     layout: {
       hook: null as ((op: number) => number) | null,
       observing: false,
@@ -233,75 +199,52 @@ export function createRuntime(
         return rounds;
       },
     },
-    /** `__vn_computed_style` answers: node id -> "k=v\n…". */
     computedById: new Map(),
-    /** The scroll containers this fake host has, by node id: `{ left, top, maxLeft, maxTop, width, height }` (viewport size plus content overflow, as a `ScrollHandle` holds). A node not in here is not a scroll container and `__vn_scroll` answers "" for it. */
     scrollById: new Map(),
-    /** Every `__vn_scroll` call: `{ id, op, x, y }`. */
     scrollCalls: [],
-    /** Every `__vn_scroll_into_view` call: `{ id, block, inline }`. */
     intoViewCalls: [],
-    /** What `__vn_scroll_into_view` answers — `""`, `"stale"`, or `"!advisory"`. */
     intoViewAnswer: "",
-    /** Whether the host reports the content half of a scroll answer as from the last painted frame (`__vn_scroll`'s fifth field; `noteStale` in runtime.ts). */
     scrollStale: false,
-    /** The document selection (`__vn_selection_*`): `sel` as `[anchor, anchorOffset, anchorOwn, focus, focusOffset, focusOwn]`, every set and rebase, and the text `toString()` answers. */
     selection: {
       sel: null as number[] | null,
       sets: [] as number[][],
       rebases: [] as number[][],
       text: "",
     },
-    /** The hit test (`__vn_hit_at`): ids topmost first ("" outside the viewport), and every question as `[x, y, all]`. */
     pointerCaptureCalls: [] as { id: number; pointerId: number; capture: boolean }[],
     hit: {
       answer: (_x: number, _y: number, _all: number) => "",
       calls: [] as number[][],
     },
-    /** Script animations (`__vn_anim_*`): every call as `[op, ...args]`, the notes `set` answers, and what `values` (commitStyles) answers. */
     anim: {
       calls: [] as unknown[][],
       notes: "",
       values: null as string | null,
     },
-    /** `"prop: value"` declarations the fake engine does not apply (`__vn_style_accepts`). */
     styleRejects: new Set<string>(),
-    /** Every `__vn_style_accepts` question, as `"prop: value"`. */
     acceptCalls: [] as string[],
-    /** `__vn_focus(id, op)`: every call and the host's answer (`moved:<old>`, `already`, `pending`, `refused`; `blurred` or "" for op 1). Default refuses every focus and blur. */
     inputSelectCalls: [] as number[],
     inputSelectAnswer: true,
     focus: {
       calls: [] as { id: number; op: number }[],
       answer: ((_id: number, op: number) => (op === 1 ? "" : "refused")) as (id: number, op: number) => string,
     },
-    /** How many times `__vn_reload()` was called. */
     reloads: 0,
-    /** `__vn_media_state` answers: node id -> "name=value\n…". */
     mediaById: new Map(),
-    /** How many times the WHOLE state was asked for (`__vn_media_state`). */
     mediaStateReads: 0,
-    /** `__vn_media_prop` questions, as `[id, prop]`; answered off `mediaById`. */
     mediaPropReads: [] as number[][],
-    /** `__vn_media_call` log: { id, verb, arg }. */
     mediaCalls: [],
-    /** `__vn_media_can_play` answers: mime type -> "" | "maybe" | "probably". */
     canPlayByType: new Map(),
-    /** The permission backend (`vn-permissions`), faked. `states` is what `__vn_permissions_query` answers; set `pendingToken` to make `request()` return a token, then `settle()` delivers it (the vn-app pump). */
     permissions: {
       platform: "TestOS",
       states: new Map(),
       requests: [],
       pendingToken: null,
       dispatcher: null,
-      /** `__vn_permissions_hint` answers, by name ("" when absent). */
       hints: new Map(),
-      /** Names whose `denied` is the platform's settings, not the user's Block. */
       bySystem: new Set(),
-      /** The fake `navigator.permissions` PermissionStatus objects, by name. */
       statuses: new Map(),
     },
-    /** The storage backend (`vn-storage`), faked. `folders` is the known-folder table; `refuse` / `flushError` make the two failing calls fail, which `appStorage` must throw on. */
     storage: {
       folders: new Map([
         ["APPDATA", "C:\\Users\\test\\AppData\\Roaming"],
@@ -322,31 +265,22 @@ export function createRuntime(
       folderCalls: [],
       setCalls: [],
     },
-    /** The devtools switch (`crates/vn-app/src/devtools/mod.rs`), faked: a state machine and a call log; the JS half's job is the JSON round trip, the refusal advisory and the `onChange` fan-out. */
     devtools: {
       enabled: true,
-      /** `VN_DEVTOOLS=1`: `set_enabled(false)` answers `{error}` instead. */
       locked: false,
       key: true,
       port: 49221,
       inspectors: 0,
-      /** Every `__vn_devtools_set_enabled` argument, in order. */
       setCalls: [],
-      /** How many times `__vn_devtools_open` was called. */
       opens: 0,
-      /** When set, `open()` answers `{error}` with this text. */
       openError: null,
     },
-    /** The desktop host (`crates/vn-desktop`), faked at the seam: every `__vn_shell_*` call is recorded and answers `{token}` (or `refuse`, verbatim); `settle(token, ok, payload)` is the frame pump. Scheme allowlist and executable guard are Rust's; the fake applies only the content allowlist. */
     desktop: {
       dispatcher: null,
       calls: [],
       nextToken: 1,
-      /** When set, the next shell call answers this object (a sync refusal). */
       refuse: null,
-      /** The fake registry: scheme -> owner id ("test" is this app). */
       protocols: new Map(),
-      /** What `__vn_launch_info` answers — this world's own launch. */
       launch: {
         argv: ["C:\\apps\\Test.exe"],
         cwd: "C:\\work",
@@ -359,22 +293,17 @@ export function createRuntime(
       },
     },
   };
-  /** Deliver a forwarded second launch, as the pipe thread + pump would. */
   host.desktop.forward = (launch: Record<string, unknown>) =>
     host.desktop.dispatcher?.(0, true, JSON.stringify({ kind: "launch", source: "second-instance", ...launch }));
-  /** Settle a desktop token as `vn_desktop::pump()` would (`value`: what the host made). */
   host.desktop.settle = (token, ok = true, payload = {}, value = undefined) =>
     host.desktop.dispatcher?.(token, ok, JSON.stringify(payload), value);
-  /** The File System Access + dialog host (`vn-desktop` fs/, dialog/), faked at the seam. Every call is recorded in `fs.calls` as `{ op, args, token }` and answers `{token}`. An `fs.answers` entry (op -> fn(...args)) settles that call a microtask later with `{ ok?, payload?, value? }` or `{ sync }` (a synchronous refusal); otherwise a test settles by hand with `host.desktop.settle`. */
   host.desktop.fs = {
     calls: [],
     answers: new Map(),
     released: [],
     refused: [],
     factory: null,
-    /** What `__vn_fs_set_serializer` was handed: `{ proto, idOf }`. */
     serializer: null,
-    /** Handle ids whose permission is "prompt" (restored, not yet granted). */
     prompt: new Set(),
     permissionCalls: [],
   };
@@ -401,9 +330,7 @@ export function createRuntime(
     }
     return JSON.stringify({ token: host.desktop.nextToken++ });
   };
-  /** Deliver a settled request as the host's per-frame pump would. */
   host.permissions.settle = (token, state) => host.permissions.dispatcher?.(token, state);
-  /** Move a capability and fire the standard-tier `change`, as the OS would. */
   host.permissions.move = (name, state) => {
     host.permissions.states.set(name, state);
     host.permissions.statuses.get(name)?.dispatchEvent(new Event("change"));
@@ -570,10 +497,8 @@ export function createRuntime(
     "__vn_dialog_open",
     "__vn_download",
     "installDesktop",
-    // Bound as parameters so `new MouseEvent` / `new URL` on the link path are the world's own (bun has no `MouseEvent`).
     "MouseEvent",
     "URL",
-    // Bound as a parameter so a test can hand `appPermissions` a `navigator.permissions` to re-broadcast `change` from.
     "navigator",
     "__vn_style_accepts",
     "adoptCanvas",
@@ -595,7 +520,6 @@ export function createRuntime(
     "windowRoots",
   ];
   let nextId = 1;
-  /** The retained tree, as `crates/vn-tree/src/tree.rs` keeps it: insert is also move, remove frees the subtree, setElementText frees the children. Ids are not recycled here, so an op on a freed id is recorded in `errors` (tests assert it is empty). */
   const tree = {
     parent: new Map<number, number>(),
     children: new Map<number, number[]>(),
@@ -667,7 +591,6 @@ export function createRuntime(
     },
   };
   (host as Record<string, unknown>).tree = tree;
-  /** Exactly the object `devtools::state_json` writes. */
   const devtoolsState = () => ({
     enabled: host.devtools.enabled,
     locked: host.devtools.locked,
@@ -734,7 +657,6 @@ export function createRuntime(
     },
     (id) => host.boundsById.get(id) ?? "",
     (id) => host.computedById.get(id) ?? "",
-    // `__vn_scroll`: the clamp the host applies (`scroll::apply`).
     (id, op, x, y) => {
       host.scrollCalls.push({ id, op, x, y });
       const s = host.scrollById.get(id);
@@ -771,7 +693,6 @@ export function createRuntime(
     },
     (_id, type) => host.canPlayByType.get(type) ?? "",
     () => "",
-    // `__vn_media_prop`: the one line of the state string the code names.
     (id, prop) => {
       host.mediaPropReads.push([id, prop]);
       const names = ["currentTime", "duration", "paused", "ended", "seeking", "readyState", "networkState",
@@ -807,7 +728,6 @@ export function createRuntime(
     (fn) => {
       host.permissions.dispatcher = fn;
     },
-    // `folders` is what crates/vn-storage/src/folders.rs resolves, `error` what a rejected call answers with.
     (kind, sub) => {
       host.storage.folderCalls.push({ kind, sub });
       const base = host.storage.folders.get(kind);
@@ -819,7 +739,6 @@ export function createRuntime(
       host.storage.setCalls.push({ path, encrypted });
       if (host.storage.refuse) return JSON.stringify({ error: host.storage.refuse });
       host.storage.folder = path;
-      // "keep" — the app did not say — leaves the format alone, as lib.rs does.
       if (encrypted !== "keep") host.storage.encrypted = encrypted === "true";
       return JSON.stringify({ path });
     },
@@ -842,8 +761,6 @@ export function createRuntime(
       host.storage.flushes++;
       return JSON.stringify({ wrote });
     },
-    // `state` is the reader, `set_enabled` returns the settled state (or `{error}` when the environment holds the
-    // switch), `open` is programmatic F12.
     () => JSON.stringify(devtoolsState()),
     (on) => {
       host.devtools.setCalls.push(on);
@@ -876,7 +793,6 @@ export function createRuntime(
     (path) => shellCall("showItem", path),
     (path) => shellCall("trash", path),
     () => JSON.stringify(host.desktop.launch),
-    // The registry, faked as scheme -> owner id (launch/protocol_win.rs is the real one).
     (scheme) => {
       const s = String(scheme).toLowerCase();
       if (!/^[a-z][a-z0-9+.-]{0,62}$/.test(s) || ["http", "https", "file", "mailto"].includes(s) || s.startsWith("ms-")) {
@@ -914,8 +830,6 @@ export function createRuntime(
     (proto, idOf) => {
       host.desktop.fs.serializer = { proto, idOf };
     },
-    // The session's grants, faked per handle id: an id in `prompt` is a
-    // restored handle nobody granted yet; `request` grants it.
     (h, request) => {
       host.desktop.fs.permissionCalls.push({ h, request });
       if (request) host.desktop.fs.prompt.delete(h);
@@ -927,8 +841,6 @@ export function createRuntime(
     options.MouseEvent ?? globalThis.MouseEvent,
     globalThis.URL,
     options.navigator ?? fakeNavigator,
-    // `__vn_style_accepts`: the fake accepts every declaration except the `"prop: value"` strings in
-    // `host.styleRejects`; `styleAccepts: false` makes it absent (an older host).
     options.styleAccepts === false
       ? undefined
       : (key, value) => {
@@ -937,7 +849,6 @@ export function createRuntime(
         },
     loadAdoptCanvas(),
     loadInstallFonts(),
-    // `layoutWatch: false` makes `__vn_set_layout_hook` / `__vn_layout_watch` absent (an older host: the rAF fallback).
     options.layoutWatch === false
       ? undefined
       : (fn: (op: number) => number) => {
@@ -951,8 +862,6 @@ export function createRuntime(
           host.layout.watches++;
         },
     loadInstallSelection(),
-    // The selection, faked at the seam: `host.selection.sel` is `[anchor, offset, own, focus, offset, own]` or null;
-    // a set naming a node the fake tree does not hold empties it, as the host does.
     () => (host.selection.sel ? host.selection.sel.join(",") : ""),
     (a: number, ao: number, f: number, fo: number) => {
       host.selection.sets.push([a, ao, f, fo]);
@@ -991,26 +900,19 @@ export function createRuntime(
     ...VNWINDOW_STANDINS(),
   ];
   if (options.selection === false) {
-    // A host without the selection: `getSelection` stays undefined.
     const first = params.indexOf("__vn_selection_get");
     for (let i = first; i < first + 4; i++) args[i] = undefined;
   }
 
   if (!withStorage) {
-    // Four `undefined`s in the storage slots: `typeof __vn_storage_info` is
-    // then "undefined" and runtime.js takes the inert branch.
     const first = params.indexOf("__vn_storage_user_folder");
     for (let i = first; i < first + 4; i++) args[i] = undefined;
   }
   if (!withDevtools) {
-    // …and the same three slots blank, which is what `--features no-devtools`
-    // looks like from JS: `appDevtools` goes inert and says so.
     const first = params.indexOf("__vn_devtools_state");
     for (let i = first; i < first + 3; i++) args[i] = undefined;
   }
   if (options.desktop === false) {
-    // A host without vn-desktop: `appShell` goes inert, links advise, there
-    // are no pickers. Every `__vn_desktop_*` … `__vn_download` slot blanks.
     const first = params.indexOf("__vn_desktop_set_dispatcher");
     const last = params.indexOf("__vn_download");
     for (let i = first; i <= last; i++) args[i] = undefined;
@@ -1032,13 +934,9 @@ export function createRuntime(
   return {
     ...exports,
     host,
-    /** The private global runtime.js installed its DOM shims on. */
     global: fakeGlobal,
-    /** A stand-in host element: enough surface for patchProp. */
     el: (id = 1) => ({ __vnId: id, value: "", attrs: Object.create(null), className: "" }),
-    /** Advisories only (warnCompat prefixes every one of them). */
     advisories: () => host.logs.filter((l) => l.startsWith("[vue-native compat]")),
-    /** Listener flag writes for one event code. */
     flagsFor: (code) => host.listeners.filter((l) => l.code === code),
   };
 }

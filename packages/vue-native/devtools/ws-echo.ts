@@ -1,9 +1,6 @@
-// A loopback WebSocket echo server for the hello app's Lab tab. Dev-only and dependency-free (Bun's server):
-// it echoes every frame with the same opcode, so text returns a string and binary returns bytes (the Lab
-// panel checks that redjs's `WebSocket` carries both).
-//
+// A loopback WebSocket echo server for the hello app's Lab tab (dev-only, Bun's server): echoes
+// every frame with the same opcode, so text returns a string and binary returns bytes.
 //   bun packages/vue-native/devtools/ws-echo.ts [port]     # default 8787
-//
 // A plain GET gets a one-line status, so `curl` can tell "up" from "nothing listening".
 
 const port = Number(process.argv[2] ?? 8787);

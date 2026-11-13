@@ -7,13 +7,9 @@ publish = false
 build = "build.rs"
 
 [features]
-# Optional Battery Status API.
 battery = ["vn-runtime/battery"]
-# Native image support for diagnostic artifacts.
 native-aot = ["vn-runtime/native-aot"]
-# Shipped inspector policy: the matching embedded bundle and image are mandatory.
 native-inspector = ["native-aot"]
-# Native WebGPU and canvas presentation; included in normal host builds.
 native-dx12 = ["gpui_windows/native-dx12"]
 # macOS: compile the Metal shaders at app start instead of build time, for a machine without
 # Xcode's Metal toolchain. Shipped builds keep the precompiled library.
@@ -27,7 +23,6 @@ prod = []
 # Compiles out the devtools protocol listener, the embedded inspector and the F12 key, which every
 # build includes otherwise (an app can also disable them at runtime). For a build that must prove
 # no `eval` transport was compiled in: `cargo build -p vn-app --features prod,no-devtools`.
-# `build.rs` emits `cfg(vn_devtools)` unless this is set.
 no-devtools = []
 
 # Accepted no-op, so command lines written against `--features prod,devtools` keep working.
@@ -41,15 +36,12 @@ audio = ["vn-runtime/audio", "vn-permissions/audio"]
 
 # `localStorage` / `sessionStorage` and the `appStorage` extension. Off, the whole surface
 # vanishes, so `typeof localStorage === "undefined"` tells the truth. No third-party dependency;
-# `--no-default-features` only drops `windows/…_Cryptography`.
 storages = ["vn-runtime/storages", "dep:vn-storage"]
 # `navigator.clipboard`. Off, it is undefined; the native <input>'s Ctrl+C is unaffected (it
 # shares gpui's clipboard, not this crate).
 clipboard = ["vn-runtime/clipboard", "dep:vn-clipboard"]
 # `indexedDB` + `navigator.storage`, no Rust dependency. With `storages` on the databases are
 # encrypted SQLite files under the app's storage folder; with it off the in-memory backend runs
-# and says once that nothing survives a restart. Results are delivered inside the frame's pump,
-# within `vn_runtime::runtime::delivery_budget_us`.
 indexeddb = ["vn-runtime/indexeddb", "vn-storage?/indexeddb"]
 
 [dependencies]
@@ -59,13 +51,9 @@ indexeddb = ["vn-runtime/indexeddb", "vn-storage?/indexeddb"]
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false, features = [
     "stacker",
 ] }
-# The devtools screenshot path. `image` and `windows` are pinned to the versions gpui already
-# resolves; `raw-window-handle` names the `HasWindowHandle` impl gpui puts on `Window`.
 image = { version = "0.25", default-features = false, features = ["png"] }
-# gpui logs through the `log` facade; `VN_LOG=<level>` turns it on (`logger` in lib.rs).
 log = "0.4"
 raw-window-handle = "0.6"
-# gpui's `HttpClient` returns anyhow results and no longer re-exports the crate.
 anyhow = "1"
 gpui_platform ={ path = "../../vendor/zed/crates/gpui_platform", default-features = false }
 vn-css = { path = "../vn-css" }
@@ -74,51 +62,33 @@ vn-elements = { path = "../vn-elements" }
 # graph, so one plain dependency would turn every vn-runtime default back on.
 vn-runtime = { path = "../vn-runtime", default-features = false, features = ["net-h2"] }
 vn-tree = { path = "../vn-tree", default-features = false }
-# `<iframe>`: the platform webview behind `vn_tree::iframe`.
 vn-webview = { path = "../vn-webview" }
-# `<vn-sticker>`'s engine; devtools `mem` reports its stats.
 vn-sticker = { path = "../vn-sticker" }
-# The VNPK payload format: the zero-copy parser a packaged exe reads its app out of, and the
-# URL-to-key normaliser `fetch` and `<img>` share.
 vn-payload = { path = "../vn-payload" }
-# Demand-paged external payloads, with owner-bound zero-copy parser views.
 memmap2 = "0.9"
 self_cell = "1"
-# The one argv parser for this process's command line, plus the shell, single instance and custom
-# protocols.
 vn-desktop = { path = "../vn-desktop" }
-# Platform backends behind `navigator.permissions` and the `appPermissions` extension.
 vn-permissions = { path = "../vn-permissions" }
-# `localStorage`'s bytes. Optional so the `storages` feature can remove the API entirely.
 vn-storage = { path = "../vn-storage", optional = true }
-# `navigator.clipboard` over gpui's clipboard. Optional for the same reason.
 vn-clipboard = { path = "../vn-clipboard", optional = true }
 # Fallback client for a request redjs's stack does not carry as is (a body, or a redirect that must
 # not be followed), built on first use; `VN_HTTP_CLIENT=reqwest` installs it in place of redjs's.
 reqwest_client = { path = "../../vendor/zed/crates/reqwest_client" }
-# Hands redjs's network-thread answer to the awaiting gpui loader (src/http_client.rs).
 futures = "0.3"
-# Inflates the embedded inspector bundle that `build.rs` deflates.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-# An asset pack's id: the SHA-256 of its index.
 sha2 = "0.10"
 
 [dev-dependencies]
-# examples/embed.rs reads its calls' JSON arguments the way an embedder would.
 serde_json = "1"
 
 [build-dependencies]
 serde_json = "1"
 sha2 = "0.10"
-# Scope the standalone host manifest to its executable, never library consumers.
 embed-resource = "=3.0.11"
-# Deflates the inspector bundle before it is embedded. Host-side only.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# gpui's macOS text system (CoreText through font-kit); without it no text renders.
 gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false, features = ["font-kit"] }
-# The devtools `mem` port (src/devtools/mem_mac.rs).
 libc = "0.2"
 mach2 = "0.6"
 
@@ -126,36 +96,27 @@ mach2 = "0.6"
 # gpui's Linux display backends: Wayland where there is one, X11 elsewhere. Off, gpui_linux is a
 # headless platform.
 gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false, features = ["wayland", "x11"] }
-# `kill(pid, 0)`: is a dev slot's process alive.
 libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# `#[implement]` for the audio device notifier names `windows_core` from the crate root.
 windows-core = "0.62"
-# WebGPU joins the native renderer device on first requestAdapter.
 wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "3b3506ea31154edc04de64debda0e780cba2639c", default-features = false, features = ["std", "wgsl", "dx12"], optional = true }
 pollster = { version = "0.4", optional = true }
-# Connects GPUI's native generation to WebGPU, and lends a D3D11On12 facade to Media Foundation.
 gpui_windows = { path = "../../vendor/zed/crates/gpui_windows", default-features = false }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Direct3D11on12",
     "Win32_Graphics_Direct3D12",
-    # `IDXGIAdapter3::QueryVideoMemoryInfo`: GPU memory for devtools `mem`.
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
-    # `IMMNotificationClient`: audio device changes for getUserMedia and the default sink.
     "Win32_Media_Audio",
-    # `GetUserDefaultUILanguage`: the crash dialog's language.
     "Win32_Globalization",
     "Win32_Storage_Xps",
-    # `FindResourceW` / `LoadResource` / `LockResource`: the stamped payload.
     "Win32_System_LibraryLoader",
     "Win32_System_Com",
     "Win32_System_SystemInformation",
-    # `OpenProcess` + `WaitForSingleObject`: `VN_OWNER_PID`.
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     # `SetWindowSubclass`: a `<VnWindow :focusable="false">` answers `WM_MOUSEACTIVATE` itself.
@@ -163,7 +124,6 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
     # `RtlGetVersion`: the one version query Windows does not lie about for an unmanifested process.
     "Wdk_System_SystemServices",
-    # `UISettings::GetColorValue`: the system accent the permission prompt's Allow button uses.
     "UI",
     "UI_ViewManagement",
 ] }

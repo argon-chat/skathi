@@ -35,9 +35,8 @@ const ALL: &[&str] = &[
     "spinning-star.tgs",
 ];
 
-/// vue-native's `<lottie>` draws on a worker with [`Animation::render_at`] at
-/// [`raster_size_for`]: the same size as `render_frame`'s raster, and the same
-/// picture at a fractional playhead, in any box.
+/// `<lottie>` draws on a worker with [`Animation::render_at`] at [`raster_size_for`]: the same size
+/// and picture as `render_frame`'s raster, at a fractional playhead, in any box.
 #[test]
 fn render_at_draws_render_frames_picture_at_a_fractional_playhead() {
     use vn_lottie::raster_size_for;
@@ -68,9 +67,7 @@ fn render_at_draws_render_frames_picture_at_a_fractional_playhead() {
     assert_eq!(raster_size_for(load(Backend::preferred(), "star.json").meta(), (0.0, 50.0), 1.0), None);
 }
 
-/// The same frame through `<lottie>`'s premultiplied path and `Animation`'s
-/// straight one: premultiplying the straight bytes gives `<lottie>`'s back, so
-/// only the alpha convention differs, never the picture.
+/// The same frame through `<lottie>`'s premultiplied path and `Animation`'s straight one: only the alpha convention differs.
 #[test]
 fn straight_bytes_premultiply_to_the_lottie_elements_frame() {
     for backend in backends() {
@@ -139,7 +136,6 @@ fn a_size_change_and_back_draws_the_same_frame() {
     }
 }
 
-/// The sticker engine loads on one worker and draws on another.
 #[test]
 fn an_animation_is_drawn_the_same_on_another_thread() {
     fn send<T: Send>() {}

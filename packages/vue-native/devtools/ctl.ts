@@ -4,12 +4,9 @@
  *
  *   bun devtools/ctl.ts [--dist <slot> | --app <name>] <cmd> [args...]
  *
- * Reads `<dist>/devtools.json` (written by the host at boot), opens a TCP connection to 127.0.0.1:<port>,
- * sends one newline-delimited JSON request and prints the reply. Exit code 0 on `{ok:true}`, 1 otherwise, so
- * `ctl click ... && ctl query ...` chains.
- *
- * No npm dependencies on purpose: an agent driving the app through Bash should not need `bun install`.
- * `./commands.ts` is the command table shared with `mcp.ts`.
+ * Reads `<dist>/devtools.json`, sends one newline-delimited JSON request over TCP to 127.0.0.1 and
+ * prints the reply. Exit code 0 on `{ok:true}`, 1 otherwise. No npm dependencies on purpose: an
+ * agent driving the app through Bash should not need `bun install`.
  */
 
 import { connect } from "node:net";
@@ -17,7 +14,6 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The command table is shared with mcp.ts (`commands.ts`).
 import { buildRequest, usageBlock, UsageError, splitArgs } from "./commands";
 import { appSlot } from "./apps";
 
@@ -128,8 +124,7 @@ function send(port: number, payload: string, ms: number): Promise<string> {
 
 const handshake = readHandshake(distDir);
 const windowArg = Number(flags.window);
-// `--window` rides on every request rather than per command; a client that never passes it addresses the
-// primary window.
+// `--window` rides on every request; a client that never passes it addresses the primary window.
 let request: Record<string, unknown>;
 try {
   request = {
@@ -138,8 +133,7 @@ try {
     ...buildRequest(positional, flags),
   };
 } catch (e) {
-  // `commands.ts` throws rather than exiting — it is imported by the MCP
-  // server too, and a tool call must not take the process down.
+  // `commands.ts` throws rather than exiting: the MCP server imports it too.
   if (!(e instanceof UsageError)) throw e;
   die(`${e.message}\n\n${USAGE}`);
 }
@@ -158,9 +152,8 @@ try {
   die(`the host sent something that is not JSON: ${line.slice(0, 400)}`);
 }
 
-// A thrown `eval` is a successful ROUND TRIP carrying a failure — the host
-// reports it as `{ok:true, data:{exception}}`, like a devtools console does.
-// The exit code is the shell's error channel though, so surface it there too.
+// A thrown `eval` is a successful ROUND TRIP carrying `{ok:true, data:{exception}}`; the exit
+// code is the shell's error channel, so surface it there too.
 const threw = reply.ok === true && !!(reply.data as { exception?: string } | undefined)?.exception;
 
 if (flags.json) {

@@ -23,7 +23,6 @@ use gpui::{GpuTextureHandle, RenderImage, TileSource, TileWrite, Window};
 
 use crate::windows::{self, WinKey};
 
-/// What a written frame needs before it can be seen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Shown {
     /// No place that paints the picture can be on screen.
@@ -43,36 +42,29 @@ pub(crate) fn shown(write: TileWrite, visible: bool) -> Shown {
 }
 
 thread_local! {
-    /// The most any producer asked for during this tick.
     static PENDING: Cell<Shown> = const { Cell::new(Shown::Nowhere) };
 }
 
-/// Presents asked of a window since the process started (devtools `perf`).
 static PRESENTS: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn note(shown: Shown) {
     PENDING.with(|p| p.set(p.get().max(shown)));
 }
 
-/// What this tick's writes need, reset for the next one.
 pub(crate) fn take() -> Shown {
     PENDING.with(|p| p.replace(Shown::Nowhere))
 }
 
-/// Is the page hidden (minimised, or on another virtual desktop)?
 static HIDDEN: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn set_hidden(hidden: bool) {
     HIDDEN.store(hidden, Ordering::Relaxed);
 }
 
-/// Is the page hidden ([`set_hidden`])? Nothing on it can be seen, so a producer that plays only
-/// while seen (`<vn-sticker>`) stops.
 pub(crate) fn page_hidden() -> bool {
     HIDDEN.load(Ordering::Relaxed)
 }
 
-/// Presents `window`'s last drawn frame again, and counts it.
 pub(crate) fn present(window: &Window) {
     if HIDDEN.load(Ordering::Relaxed) || !window.is_visible() {
         return;
@@ -81,14 +73,11 @@ pub(crate) fn present(window: &Window) {
     window.request_present();
 }
 
-/// Presents asked since the process started.
 pub(crate) fn present_count() -> u64 {
     PRESENTS.load(Ordering::Relaxed)
 }
 
-/// Can a pixel of node `id` be on screen without being clipped by an ancestor? The node's painted
-/// box, cut to the viewport and to every ancestor that clips its overflow on an axis (`hidden`,
-/// `clip`, `scroll`, `auto`), is not empty.
+/// Can a pixel of node `id` be on screen without being clipped by an ancestor?
 pub(crate) fn visible(id: u32, win: WinKey) -> bool {
     let Some(Some((rect, viewport))) = windows::peek(win, |w| {
         let env = w.env.as_ref()?;
@@ -133,7 +122,6 @@ pub(crate) fn visible(id: u32, win: WinKey) -> bool {
     })
 }
 
-/// `r` cut to `by` on the axes asked, or `None` when nothing is left.
 fn clip_rect(r: windows::Rect, by: windows::Rect, x: bool, y: bool) -> Option<windows::Rect> {
     let (mut x0, mut y0, mut x1, mut y1) = (r.0, r.1, r.0 + r.2, r.1 + r.3);
     if x {
@@ -147,19 +135,14 @@ fn clip_rect(r: windows::Rect, by: windows::Rect, x: bool, y: bool) -> Option<wi
     (x1 > x0 && y1 > y0).then_some((x0, y0, x1 - x0, y1 - y0))
 }
 
-/// One picture a native element repaints by itself: one image id, so one tile in one window's
-/// atlas, for the life of the picture, written frame by frame.
 #[allow(dead_code)]
 pub(crate) struct LiveTile {
-    /// The newest frame under the tile's id.
     image: Arc<RenderImage>,
-    /// The window whose atlas holds the tile.
     win: WinKey,
 }
 
 #[allow(dead_code)]
 impl LiveTile {
-    /// A transparent `width` × `height` picture in window `win`'s atlas.
     pub(crate) fn new(win: WinKey, width: u32, height: u32) -> Self {
         let width = width.max(1);
         let height = height.max(1);
@@ -168,26 +151,21 @@ impl LiveTile {
         LiveTile { image: Arc::new(image), win }
     }
 
-    /// What the build paints (`gpui::img(ImageSource::Render(..))`).
     pub(crate) fn image(&self) -> Arc<RenderImage> {
         self.image.clone()
     }
 
-    /// The picture's size in pixels.
     pub(crate) fn size(&self) -> (u32, u32) {
         let s = self.image.size(0);
         (s.width.0 as u32, s.height.0 as u32)
     }
 
-    /// The window whose atlas holds the tile.
     pub(crate) fn window(&self) -> WinKey {
         self.win
     }
 
-    /// Writes a CPU frame: BGRA, the tile's size, rows packed, with STRAIGHT alpha. gpui's own
-    /// decoders un-premultiply (`swap_rgba_pa_to_bgra`) and the polychrome pipeline blends
-    /// `SRC_ALPHA`, so a premultiplied raster (ThorVG's, a canvas's) comes out darker wherever it
-    /// is translucent.
+    /// Writes a CPU frame: BGRA, the tile's size, rows packed, STRAIGHT alpha (gpui's polychrome
+    /// pipeline blends `SRC_ALPHA`, so a premultiplied raster comes out darker where translucent).
     pub(crate) fn write_bgra(&mut self, window: &mut Window, bgra: Vec<u8>, visible: bool) -> Shown {
         debug_assert_eq!(windows::key(window), self.win, "a tile is written with its own window");
         let (w, h) = self.size();
@@ -200,8 +178,7 @@ impl LiveTile {
         shown(write, visible)
     }
 
-    /// `None` when the renderer refused the texture: the caller falls back to
-    /// [`LiveTile::write_bgra`].
+    /// `None` when the renderer refused the texture: fall back to [`LiveTile::write_bgra`].
     pub(crate) fn write_gpu(&mut self, window: &mut Window, texture: GpuTextureHandle, visible: bool) -> Option<Shown> {
         debug_assert_eq!(windows::key(window), self.win, "a tile is written with its own window");
         match window.write_image_tile(&self.image, 0, TileSource::Gpu(texture)).unwrap_or(TileWrite::Refused) {
@@ -211,8 +188,7 @@ impl LiveTile {
     }
 
     /// Hands the tile back to its window's atlas on that window's next frame, when no scene samples
-    /// it any more. The frame that stops painting it must be a draw (the producer's rules, module
-    /// docs).
+    /// it any more. The frame that stops painting it must be a draw (see the module docs).
     pub(crate) fn retire(self) {
         windows::queue_drops(self.win, [self.image]);
     }
@@ -222,7 +198,6 @@ impl LiveTile {
 mod tests {
     use super::*;
 
-    /// Can a pixel of node `id` be on screen in window `win`?
     fn on_screen(id: u32, win: WinKey) -> bool {
         windows::peek(win, |w| {
             let Some(env) = w.env.as_ref() else { return true };

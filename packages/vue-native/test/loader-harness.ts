@@ -1,10 +1,6 @@
-// Runs src/loader.ts in an isolated fake "engine" so the HMR logic can be tested without gpui, JavaScriptCore or a
-// real Vue.
-//
-// The engine evaluates loader.ts as a classic script touching four ambient names (`globalThis`, `console`,
-// `__vn_set_stylesheet`, plus the runtime namespace it imports). It is transpiled (./ts-source.ts), the imports are
-// stripped and the rest evaluated with those names bound as parameters, so each createLoader() gets a private world
-// (own __VN__, registry, __VUE_HMR_RUNTIME__).
+// Runs src/loader.ts in an isolated fake engine so the HMR logic can be tested without gpui, JavaScriptCore or Vue.
+// loader.ts is transpiled (./ts-source.ts), its imports stripped, and the ambient names bound as parameters, so each
+// createLoader() gets a private world (own __VN__, registry, __VUE_HMR_RUNTIME__).
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +12,6 @@ export const LOADER_PATH = join(HERE, "../src/loader.ts");
 const NS_IMPORT = /^\s*import\s+\*\s+as\s+(\w+)\s+from\s+["']([^"']+)["'];?[^\S\n]*$/gm;
 const RUNTIME_SPEC = "./runtime";
 
-/** A fresh loader world. */
 export function createLoader() {
   const raw = readTsSource(LOADER_PATH);
   const namespaces = []; // [localName, specifier]
@@ -58,9 +53,7 @@ export function createLoader() {
     stylesheets,
     exec: new Map(), // module id -> times its factory has run
     hmr: null,
-    /** How many times `id`'s factory has been executed. */
     runs: (id) => world.exec.get(id) || 0,
-    /** Did anything log a hard restart? */
     hardRestarted: () => logs.some((l) => l.indexOf("hard restart") >= 0),
     logsMatching: (needle) => logs.filter((l) => l.indexOf(needle) >= 0),
   };
@@ -68,7 +61,6 @@ export function createLoader() {
   return world;
 }
 
-/** Minimal stand-in for Vue's __VUE_HMR_RUNTIME__, recording every call. */
 function installVueHmr(world) {
   const calls = { createRecord: [], rerender: [], reload: [] };
   const records = new Map();
@@ -102,7 +94,6 @@ function factoryPreamble(world, id, requires) {
   };
 }
 
-/** A plain .js module: `exports.version` is what importers capture by value. */
 export function definePlain(world, id, requires, version) {
   const run = factoryPreamble(world, id, requires);
   world.VN.setDeps(id, requires.map((r) => r.id));
@@ -117,7 +108,6 @@ export function definePlain(world, id, requires, version) {
   );
 }
 
-/** A .vue module: default-exports a component and registers an HMR record. */
 export function defineComponent(world, id, requires, version, css) {
   const run = factoryPreamble(world, id, requires);
   if (css !== undefined) world.VN.setCss(id, css);
@@ -143,7 +133,6 @@ export function defineComponent(world, id, requires, version, css) {
   );
 }
 
-/** Re-eval of a module script with UNCHANGED js (a <style>-only edit). */
 export function redefineCssOnly(world, id, requires, version, css) {
   defineComponent(world, id, requires, version, css); // same version => same bodyHash
 }
@@ -172,7 +161,6 @@ export function bootStandardFixture(v = 1) {
   return world;
 }
 
-/** What the host does on a change: re-eval the changed scripts, then hmrApply. */
 export function applyChanges(world, changed) {
   world.VN.hmrApply({ rev: 2, vendorRev: 1, changed });
 }

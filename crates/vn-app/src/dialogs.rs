@@ -1,12 +1,6 @@
 //! The windows file dialogs belong to (vn-desktop `dialog`).
 //!
-//! Two things live here, both because only vn-app can name a window:
-//!
-//! - **the owner** of a dialog asked for now: the window published for this
-//!   call (the one an event came from, the primary for a timer), as its
-//!   vn-tree key and native window (the HWND; the `NSWindow` on macOS, which
-//!   the dialog's sheet attaches to);
-//! - **closing a window that owns a dialog.** A dialog runs its modal loop on
+//! **Closing a window that owns a dialog.** A dialog runs its modal loop on
 //!   its own thread, with this window as owner. Destroying the owner while
 //!   that loop still uses it hangs or crashes, so every close path goes
 //!   through here: the dialog is told to close (gpui's `DialogOwner`
@@ -17,8 +11,6 @@ use std::time::Duration;
 
 use gpui::{AnyWindowHandle, App};
 
-/// vn-desktop's owner resolver. The native window is the HWND on Windows and
-/// the `NSWindow` on macOS (`window::dialog_parent`).
 pub fn owner() -> Option<vn_desktop::dialog::Owner> {
     if let Some(o) = vn_runtime::with_commit(|window, _| {
         let key = vn_tree::windows::key(window);
@@ -26,17 +18,10 @@ pub fn owner() -> Option<vn_desktop::dialog::Owner> {
     }) {
         return o;
     }
-    // Outside a Commit publication (a host callback with no window): the
-    // primary, the window a timer's work belongs to.
     let key = vn_tree::windows::primary();
     crate::window::dialog_parent_of(key).map(|hwnd| vn_desktop::dialog::Owner { key, hwnd })
 }
 
-/// vn-permissions' prompt, asked as vn-desktop's question dialog, owned by
-/// the window asking: on Windows a window of our own (src/consent_window.rs),
-/// on macOS the platform's alert, and under `VN_DIALOGS=scripted` a question
-/// the devtools answer (`dialog choose`).
-///
 /// On Linux nobody is asked: Allow, as a desktop browser without a portal grants its own capture.
 /// The desktop has no per-app microphone permission to stand in for, and its only question dialogs
 /// (zenity, kdialog) are often not installed. The answer is stored like any other.
@@ -68,7 +53,6 @@ pub fn ask_permission(q: vn_permissions::Question, reply: Box<dyn FnOnce(Option<
     }
 }
 
-/// Removes `handle`'s window, after its file dialog if it has one open.
 pub fn remove_window(handle: AnyWindowHandle, cx: &mut App) {
     if vn_desktop::dialog::owner_closing(handle.window_id().as_u64()) {
         remove_when_idle(handle, cx);
@@ -77,9 +61,6 @@ pub fn remove_window(handle: AnyWindowHandle, cx: &mut App) {
     }
 }
 
-/// A window's own close request (its X, Alt+F4, the taskbar): `true` closes
-/// it now; `false` means it has a dialog open and is removed once that has
-/// closed.
 pub fn may_close_now(handle: AnyWindowHandle, cx: &mut App) -> bool {
     if !vn_desktop::dialog::owner_closing(handle.window_id().as_u64()) {
         return true;

@@ -1,12 +1,8 @@
 //! Native macOS consent through TCC: microphone and camera (AVFoundation, `tcc::media`) and
 //! screen recording (CoreGraphics).
 //!
-//! AVFoundation's completion runs on an arbitrary queue and only writes to a Rust queue; the
-//! permission pump resolves promises on the VM thread.
-//!
-//! Screen recording has no "not determined": the preflight answers granted or not, and the
-//! request prompts only the first time an app ever asks. A grant made in System Settings takes
-//! effect after a relaunch, so a refused screen request reads `denied` for the rest of the run.
+//! Screen recording has no "not determined": a grant made in System Settings takes effect after a
+//! relaunch, so a refused screen request reads `denied` for the rest of the run.
 
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -27,7 +23,6 @@ unsafe extern "C" {
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
-    // macOS 10.15+. Preflight never prompts; request prompts once per app, ever.
     fn CGPreflightScreenCaptureAccess() -> bool;
     fn CGRequestScreenCaptureAccess() -> bool;
 }
@@ -124,8 +119,6 @@ impl MacHost {
         match self.screen_capture_state() {
             PermissionState::Prompt => {}
             PermissionState::Denied => {
-                // Asked already in this run: TCC will not prompt again, and a
-                // grant needs a relaunch, so open the pane and settle now.
                 open_privacy_pane("Privacy_ScreenCapture");
                 return RequestOutcome::Settled(PermissionState::Denied);
             }
@@ -147,8 +140,6 @@ impl MacHost {
                     .unwrap_or_else(|p| p.into_inner())
                     .complete(Capability::DisplayCapture, state);
             };
-            // Off the calling thread, which may be the VM's: the request goes
-            // through tccd and the VM must not wait on it.
             if std::thread::Builder::new()
                 .name("vn-screen-consent".into())
                 .spawn(ask)
@@ -186,7 +177,6 @@ pub fn usage_description_present(cap: Capability) -> bool {
 
 fn media_state(media: Media) -> PermissionState {
     if !usage_description_present(media.cap) {
-        // Also refuses bare cargo-run hosts, which have no application Info.plist.
         return PermissionState::Denied;
     }
     // SAFETY: AVCaptureDevice and the media type are supplied by the linked

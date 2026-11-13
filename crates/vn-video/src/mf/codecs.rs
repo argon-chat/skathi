@@ -1,8 +1,7 @@
-//! What this machine can decode, asked of the decoder registry rather than a table or the media engine.
-//!
-//! `IMFMediaEngine::CanPlayType` is not used: it answers on the MIME string's shape (measured:
-//! "probably" for nearly every `video/*`), so it can never give a reliable negative. `MFTEnumEx`
-//! queries the decoder registry live, including Store codec extensions added later.
+//! What this machine can decode, asked of the decoder registry rather than a table or the media
+//! engine. `IMFMediaEngine::CanPlayType` is not used: it answers "probably" for nearly every
+//! `video/*`, so it can never give a reliable negative; `MFTEnumEx` queries the registry live,
+//! including Store codec extensions added later.
 //!
 //! There is no registry query for "can you demux this container", so the container list is a hint:
 //! an unrecognised `video/*` type answers `"maybe"`, never `""` (a Store package makes `video/ogg`
@@ -34,7 +33,6 @@ pub enum Codec {
 }
 
 impl Codec {
-    /// The name for an advisory, with the Store package that provides it where one does.
     pub fn describe(self) -> &'static str {
         match self {
             Self::H264 => "H.264/AVC (inbox on every Windows install)",
@@ -71,7 +69,6 @@ impl Codec {
     ];
 }
 
-/// The `codecs=` spelling → our enum; prefix matching, since strings carry profile/level suffixes (`avc1.640028`).
 fn codec_from_token(token: &str) -> Option<Codec> {
     let t = token.trim().trim_matches('"').to_ascii_lowercase();
     if t.starts_with("avc1") || t.starts_with("avc3") || t.starts_with("h264") {
@@ -95,7 +92,6 @@ fn codec_from_token(token: &str) -> Option<Codec> {
     None
 }
 
-/// Is a decoder for `codec` installed? Memoised per codec: `MFTEnumEx` walks the registry.
 pub fn have_decoder(codec: Codec) -> bool {
     static CACHE: OnceLock<HashMap<Codec, bool>> = OnceLock::new();
     *CACHE
@@ -139,7 +135,6 @@ fn enumerate(subtype: GUID) -> u32 {
     count
 }
 
-/// Containers known readable here; a hint, not an authority (see the module docs).
 fn container_known(mime: &str) -> bool {
     matches!(
         mime,
@@ -206,7 +201,6 @@ pub fn can_play_type(mime_type: &str) -> CanPlay {
     }
 }
 
-/// The decoders present, for an advisory: `(installed, missing)`.
 pub fn installed_summary() -> (Vec<&'static str>, Vec<&'static str>) {
     let mut installed = Vec::new();
     let mut missing = Vec::new();

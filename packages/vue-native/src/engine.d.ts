@@ -32,13 +32,9 @@ interface VnEvent {
   readonly bubbles: boolean;
   readonly cancelable: boolean;
   readonly defaultPrevented: boolean;
-  /** Written by `propagate()` — the mirror node the host targeted. */
   target: unknown;
-  /** Rewritten at each step of the propagation walk; `null` once it is over. */
   currentTarget: unknown;
-  /** 0 NONE, 1 CAPTURING_PHASE, 2 AT_TARGET, 3 BUBBLING_PHASE — own, per step. */
   readonly eventPhase: number;
-  /** The walk's path (target first) during dispatch, `[]` after. */
   composedPath(): unknown[];
   preventDefault(): void;
   stopPropagation(): void;
@@ -210,14 +206,10 @@ interface VnPermissionStatus extends VnEventTarget {
   /** The three-word WEB projection: `"unsupported"` reads as `"denied"`. */
   readonly state: "granted" | "denied" | "prompt";
 }
-/** Battery Status API; available only when the host enables its `battery` feature. */
 interface VnBatteryManager extends VnEventTarget {
   readonly charging: boolean;
-  /** Seconds until full, or Infinity when unavailable / discharging. */
   readonly chargingTime: number;
-  /** Seconds until empty, or Infinity when unavailable / charging. */
   readonly dischargingTime: number;
-  /** Remaining charge in the range 0..1. */
   readonly level: number;
   onchargingchange: ((this: VnBatteryManager, ev: VnEvent) => unknown) | null;
   onchargingtimechange: ((this: VnBatteryManager, ev: VnEvent) => unknown) | null;
@@ -228,7 +220,6 @@ interface VnBatteryManager extends VnEventTarget {
 declare var BatteryManager: (Function & { readonly prototype: VnBatteryManager }) | undefined;
 
 interface VnNavigator {
-  /** One cached Promise / manager per context; absent when the feature is disabled. */
   getBattery?(): Promise<VnBatteryManager>;
   permissions?: {
     query(descriptor: { name: string }): Promise<VnPermissionStatus>;
@@ -236,7 +227,6 @@ interface VnNavigator {
 }
 declare var navigator: VnNavigator | undefined;
 
-/** The subset of a response callers read. */
 interface VnFetchResponse {
   readonly ok: boolean;
   readonly status: number;
@@ -247,17 +237,14 @@ declare var fetch:
   | ((url: string, init?: Record<string, unknown>) => Promise<VnFetchResponse>)
   | undefined;
 
-/** redjs's WHATWG `URL`; `href` is the serialised (percent-encoded) form. */
 interface VnURL {
   readonly href: string;
   readonly protocol: string;
 }
-/** Named so apps can merge statics (`createObjectURL` / `revokeObjectURL`) onto it. */
 interface VnURLConstructor {
   new (url: string, base?: string): VnURL;
   prototype: VnURL;
 }
-/** Not `| undefined`: redjs installs `URL` unconditionally. */
 declare var URL: VnURLConstructor;
 
 /**
@@ -269,14 +256,12 @@ interface VnAudioNode {
   disconnect(): void;
 }
 
-/** redjs's PUSH source. `streamId` is the handle the native mixer pushes into (`0` unroutes). */
 interface VnRedStreamSourceNode extends VnAudioNode {
   readonly streamId: number;
   /** Makes a late native push report NotReady rather than dangle. Probe before use. */
   close?(): void;
 }
 
-/** 48 kHz mono, 80 ms is the mixer's format; other channel counts are refused. Every field is optional. */
 interface VnRedStreamSourceOptions {
   sampleRate?: number;
   channelCount?: number;
@@ -284,7 +269,6 @@ interface VnRedStreamSourceOptions {
   capacitySeconds?: number;
 }
 
-/** `value` is the immediate write; the scheduling methods are the timeline. */
 interface VnAudioParam {
   value: number;
   setValueAtTime(value: number, startTime: number): VnAudioParam;
@@ -298,7 +282,6 @@ interface VnGainNode extends VnAudioNode {
   readonly gain: VnAudioParam;
 }
 
-/** Rust DSP compiled into an audio-enabled host; no JS VM on the audio thread. */
 type VnNativeAudioProcessorName = "peak-meter-stereo" | "peak-meter-mono" | "stereo-to-mono" | "input-gate";
 interface VnNativeAudioWorkletOptions {
   numberOfInputs?: 1;

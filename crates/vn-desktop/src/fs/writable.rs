@@ -1,15 +1,12 @@
-//! `FileSystemWritableFileStream`, the host side: writes go to a swap file beside the target and
-//! are swapped in atomically on `close()`, as Chromium's `.crswap` does.
+//! `FileSystemWritableFileStream`, the host side: writes go to a swap file beside the target and are
+//! swapped in atomically on `close()`, as Chromium's `.crswap` does.
 //!
-//! `createWritable()` makes `<name>.vnswap` (or `.vnswap-<n>`) in the target's own folder so the
-//! final rename never crosses a volume; `keepExistingData` copies the target in first. The target is
-//! untouched until `close()`, so a crash, `abort()` or failed write leaves it as it was. `close()`
-//! flushes then replaces the target (`ReplaceFileW`, keeping ACL, attributes and creation time, or
-//! `MoveFileExW` when the target is gone), so a reader sees the old file or the new one. A swap file
-//! left by a crash is swept by the next `createWritable()` on the same target.
-//!
-//! The swap file is opened without `FILE_SHARE_DELETE` so another process's sweep cannot delete it
-//! mid-write; this process tracks its own open ones ([`open_swaps`]) and never sweeps those.
+//! `<name>.vnswap` lives in the target's own folder so the final rename never crosses a volume. The target
+//! is untouched until `close()`, so a crash, `abort()` or failed write leaves it as it was; `close()`
+//! replaces it (`ReplaceFileW`, keeping ACL and creation time, or `MoveFileExW` when it is gone). A swap
+//! file left by a crash is swept by the next `createWritable()`. The swap file is opened without
+//! `FILE_SHARE_DELETE` so another process's sweep cannot delete it mid-write; this process's own open
+//! ones ([`open_swaps`]) are never swept.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -23,8 +20,6 @@ use serde_json::json;
 use super::{fail_io, granted, Access, Kind, NOT_FOUND, NOT_READABLE, TYPE_MISMATCH};
 use crate::{pool, Done, Fail};
 
-/// What one write carries: bytes copied out of JS on the frame thread, or a Blob's source copied on
-/// the pool.
 pub enum Data {
     Bytes(Vec<u8>),
     Blob(vn_runtime::redjs::webapi::blob::Range),
@@ -49,8 +44,6 @@ fn is_swap_of(candidate: &str, name: &str) -> bool {
     rest.is_empty() || rest.strip_prefix('-').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// Deletes the swap files of `target` that no writable of this process holds; one another process
-/// still writes cannot be deleted and is left alone.
 pub fn sweep_orphans(target: &Path) {
     let (Some(dir), Some(name)) = (target.parent(), target.file_name()) else { return };
     let name = name.to_string_lossy();
@@ -78,8 +71,7 @@ fn open_swap_file(p: &Path) -> std::io::Result<File> {
 }
 
 impl Writable {
-    /// `must_exist` is the File System Access rule (a handle whose file was deleted is
-    /// `NotFoundError`); a download writes a target the Save dialog only named.
+    /// `must_exist` is the File System Access rule (a deleted file is `NotFoundError`); a download writes a target the dialog only named.
     pub fn open(target: &Path, keep_existing: bool, must_exist: bool) -> Result<Writable, Fail> {
         match std::fs::metadata(target) {
             Ok(m) if m.is_dir() => return Err(Fail::new("TypeMismatchError", TYPE_MISMATCH)),
@@ -123,7 +115,6 @@ impl Writable {
         self.file()?.metadata().map(|m| m.len()).map_err(|e| fail_io(&e, Access::Write))
     }
 
-    /// A position past the end fills the gap with zero bytes; the cursor ends after the write.
     pub fn write(&mut self, position: Option<u64>, data: &Data) -> Result<(), Fail> {
         if let Some(p) = position {
             self.cursor = p;
@@ -147,8 +138,6 @@ impl Writable {
                 match range.copy_into(&mut counted) {
                     Ok(()) => counted.n,
                     Err(CopyError::Write(e)) => return Err(fail_io(&e, Access::Write)),
-                    // The Blob's own read failed (its file changed or is gone): reject with the
-                    // File API's error, as Chromium does.
                     Err(CopyError::Read(r)) => {
                         return Err(Fail::new(r.name(), if r.name() == "NotFoundError" { NOT_FOUND } else { NOT_READABLE }))
                     }
@@ -163,7 +152,6 @@ impl Writable {
         self.cursor = position;
     }
 
-    /// Shorter cuts, longer pads with zeros; a cursor past the new end moves to it.
     pub fn truncate(&mut self, size: u64) -> Result<(), Fail> {
         self.file()?.set_len(size).map_err(|e| fail_io(&e, Access::Write))?;
         if self.cursor > size {
@@ -172,7 +160,6 @@ impl Writable {
         Ok(())
     }
 
-    /// Flush, close, swap in. On failure the swap file is removed and the target is unchanged.
     pub fn close(mut self) -> Result<(), Fail> {
         let flushed = self.file()?.sync_all();
         self.file = None;
@@ -207,7 +194,6 @@ impl Writable {
 }
 
 impl Drop for Writable {
-    /// A writable dropped without `close()` leaves no swap file behind.
     fn drop(&mut self) {
         if !self.finished {
             self.abort();
@@ -244,7 +230,6 @@ fn replace(target: &Path, swap: &Path) -> std::io::Result<()> {
         };
         match r {
             Ok(()) => return Ok(()),
-            // The target vanished between the check and the call: a move does it.
             Err(e) if (e.code().0 as u32 & 0xFFFF) == 2 => {}
             Err(e) => return Err(std::io::Error::from_raw_os_error((e.code().0 as u32 & 0xFFFF) as i32)),
         }
@@ -258,8 +243,7 @@ fn replace(target: &Path, swap: &Path) -> std::io::Result<()> {
     std::fs::rename(swap, target)
 }
 
-/// A path the wide Win32 calls take: `\\?\` in front of a long absolute one (std adds it by itself,
-/// a direct call does not).
+/// A path the wide Win32 calls take: `\\?\` in front of a long absolute one (std adds it itself, a direct call does not).
 #[cfg(windows)]
 fn win_path(p: &Path) -> windows::core::HSTRING {
     let s = p.as_os_str().to_string_lossy();
@@ -340,8 +324,6 @@ fn finish(w: u64, close: bool) -> String {
     };
     let token = crate::next_token();
     pool::submit(token, move || {
-        // The last reference: every write before this one has finished (the
-        // stream does not call close or abort while a write is in flight).
         let mut guard = wr.lock().unwrap_or_else(|p| p.into_inner());
         let taken = std::mem::replace(
             &mut *guard,
@@ -367,8 +349,6 @@ pub fn start_abort(w: u64) -> String {
     finish(w, false)
 }
 
-/// Writes `data` to `target` whole, through a swap file (a download's bytes). Runs on the calling
-/// thread.
 pub fn write_whole(target: &Path, data: &Data) -> Result<(), Fail> {
     let mut w = Writable::open(target, false, false)?;
     w.write(None, data)?;
@@ -394,7 +374,6 @@ mod tests {
         assert_eq!(swap.file_name().unwrap(), "doc.txt.vnswap");
         w.write(None, &bytes(b"hello")).unwrap();
         w.write(None, &bytes(b" world")).unwrap();
-        // The target is untouched until close.
         assert_eq!(std::fs::read(&target).unwrap(), b"original");
         w.close().unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"hello world");
@@ -407,9 +386,7 @@ mod tests {
         let target = s.0.join("p.bin");
         std::fs::write(&target, b"abcdef").unwrap();
         let mut w = Writable::open(&target, true, true).unwrap();
-        // keepExistingData copies the target in; the cursor starts at 0.
         w.write(None, &bytes(b"XY")).unwrap();
-        // A position past the end pads with zeros.
         w.write(Some(8), &bytes(b"Z")).unwrap();
         w.seek(1);
         w.write(None, &bytes(b"q")).unwrap();
@@ -453,7 +430,6 @@ mod tests {
         assert!(!s.0.join("t.txt.vnswap-3").exists());
         assert!(s.0.join("t.txt.vnswap-x").exists(), "only our exact pattern is swept");
         assert!(s.0.join("other.txt.vnswap").exists(), "another target's swap is not ours to sweep");
-        // A second writable on the same target while the first is live.
         let second = Writable::open(&target, false, true).unwrap();
         assert_eq!(second.swap_path().file_name().unwrap(), "t.txt.vnswap-1");
         assert!(live.swap_path().exists(), "a live swap survives the second open's sweep");
@@ -469,7 +445,6 @@ mod tests {
         assert_eq!(Writable::open(&s.0, false, true).err().map(|f| f.name), Some("TypeMismatchError"));
         write_whole(&target, &bytes(b"downloaded")).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"downloaded");
-        // …and over an existing file.
         write_whole(&target, &bytes(b"again")).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"again");
     }

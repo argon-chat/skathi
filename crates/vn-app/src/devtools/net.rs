@@ -1,21 +1,15 @@
 //! The Network panel's feed: `fetch` / `WebSocket` / `XMLHttpRequest` are teed in JS (`TEE_JS`) and
-//! recorded here in a bounded ring, with a detail record per exchange (headers, bodies, cookies,
-//! timing) served on demand by `net_detail`.
+//! recorded in a bounded ring (`*_CAP`, [`BODY_BUDGET`]), with a detail record per exchange served
+//! by `net_detail`. The tee only adds a reader; a host whose app has the devtools off never installs it.
 //!
-//! The tee only adds a reader: the app keeps its own `Response`, promise and socket. A host whose app
-//! has the devtools off never installs it.
-//!
-//! The ring survives `location.reload()` and the dev host's cold restart (same JS realm): seqs keep
-//! counting and [`mark_reload`] puts a marker row between the runs. The `WebSocket` tee also wraps
+//! The ring survives `location.reload()` (same JS realm): seqs keep counting and [`mark_reload`]
+//! puts a marker row between the runs. The `WebSocket` tee also wraps
 //! `__VN_NATIVE_SCHED__.WebSocket`, so each new runtime's proxy sits over it.
 //!
 //! Script cannot see `Cookie` / `Set-Cookie`, so the host reads the jar (`webapi::cookies`): the
 //! `Cookie` header and a before/after diff (a reconstruction; a concurrent request to the same site
-//! lands in the same jar). A fetch that crossed a network also answers the real lines from
-//! `fetch::net_info`. Nothing hands a cookie to JS; values leave only through the token-guarded
-//! `net_detail`.
-//!
-//! Memory is bounded: see the `*_CAP` constants and [`BODY_BUDGET`].
+//! lands in the same jar), plus the real lines from `fetch::net_info`. Values leave only through
+//! the token-guarded `net_detail`; nothing hands a cookie to JS.
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -506,8 +500,7 @@ fn rid_of(raw: &str) -> Option<u64> {
     (n.is_finite() && n >= 1.0).then_some(n as u64)
 }
 
-/// `{"url":…}` → `{"seq":7,"url":…}` by text surgery (the input is `JSON.stringify` output). `extra` is
-/// more leading members, already serialized, or empty.
+/// `{"url":…}` → `{"seq":7,"url":…}` by text surgery on `JSON.stringify` output; `extra` is more leading members, serialized.
 fn splice_seq(raw: &str, seq: u64, extra: &str) -> String {
     let head = if extra.is_empty() { format!("\"seq\":{seq}") } else { format!("\"seq\":{seq},{extra}") };
     let trimmed = raw.trim_start();
@@ -575,8 +568,7 @@ fn binary(mime: &str) -> bool {
         )
 }
 
-/// `("utf8", text)` or `("base64", data)`. A body cut at the cap may end mid-character; that tail is
-/// dropped rather than calling the body binary.
+/// A body cut at the cap may end mid-character; that tail is dropped rather than calling it binary.
 fn encode(bytes: &[u8], mime: &str, from_string: bool) -> (&'static str, String) {
     let text = match std::str::from_utf8(bytes) {
         Ok(s) => Some(s),
@@ -749,8 +741,7 @@ fn rid_arg(v: Value) -> Option<u64> {
     v.as_number().filter(|n| n.is_finite() && *n >= 1.0).map(|n| n as u64)
 }
 
-// `__vn_devtools_net(json)`: one summary row. The host parses only its `rid`, stamps a seq and stores the
-// text. Returns the seq.
+// One summary row: the host parses only its `rid`, stamps a seq and stores the text.
 host_fn!(fn vn_devtools_net(g, args) {
     let raw = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     if raw.is_empty() {
@@ -760,8 +751,7 @@ host_fn!(fn vn_devtools_net(g, args) {
     Value::number(seq as f64).0
 });
 
-// `__vn_devtools_net_begin(json)`: an exchange started. Returns a record id, or 0 when the devtools are
-// off (the tee then skips every detail). `"jar": true` makes the host read the cookie jar for the URL now.
+// Returns a record id, or 0 when the devtools are off (the tee then skips every detail).
 host_fn!(fn vn_devtools_net_begin(g, args) {
     if !super::enabled() {
         return Value::number(0.0).0;
@@ -778,8 +768,7 @@ host_fn!(fn vn_devtools_net_begin(g, args) {
     Value::number(rid as f64).0
 });
 
-// `__vn_devtools_net_meta(rid, json)`: more of the same record, merged two levels deep. `"jarAfter": true`
-// takes the second jar view.
+// Merged two levels deep.
 host_fn!(fn vn_devtools_net_meta(g, args) {
     let Some(rid) = rid_arg(args.arg(0)) else { return Value::undefined().0 };
     let raw = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
@@ -797,8 +786,7 @@ host_fn!(fn vn_devtools_net_meta(g, args) {
     Value::undefined().0
 });
 
-// `__vn_devtools_net_body(rid, "req"|"res", data, json)`: `data` is a buffer, view or string, or null when the
-// tee did not read one (the json's `note` says why). At most BODY_CAP bytes are copied.
+// `data` is a buffer, view or string, or null when the tee read none. At most BODY_CAP bytes are copied.
 host_fn!(fn vn_devtools_net_body(g, args) {
     let Some(rid) = rid_arg(args.arg(0)) else { return Value::undefined().0 };
     let which = match unsafe { read_string(g, args.arg(1).0) }.as_deref() {
@@ -836,10 +824,9 @@ host_fn!(fn vn_devtools_net_ws(g, args) {
     Value::undefined().0
 });
 
-// `__vn_devtools_net_conn(rid, response)`: stores the transport's connection facts and raw `Set-Cookie`
-// lines (`fetch::net_info`). It returns nothing on purpose: it is a global the app could call, and it reads
-// what script must not see (HttpOnly cookies, the remote address). The values leave only through the
-// token-guarded `net_detail` and the summary row, which `Ring::record` splices host-side.
+// Returns nothing on purpose: it is a global the app could call, and it reads what script must not
+// see (HttpOnly cookies, the remote address). Values leave only through the token-guarded
+// `net_detail` and the summary row, which `Ring::record` splices host-side.
 host_fn!(fn vn_devtools_net_conn(g, args) {
     let Some(rid) = rid_arg(args.arg(0)) else { return Value::undefined().0 };
     let response = args.arg(1);
@@ -860,8 +847,7 @@ host_fn!(fn vn_devtools_net_conn(g, args) {
     Value::undefined().0
 });
 
-/// A row for a load the host made (gpui's loaders fetch through redjs): summary only, no script, tee or
-/// record. `kind` is `"img"`, `"font"` or `"other"` from `Content-Type`. Called on the network thread.
+/// A summary-only row for a load the host made. Called on the network thread.
 pub fn record_loader(
     method: &str,
     url: &str,
@@ -930,8 +916,7 @@ pub fn cache_json() -> Json {
     ])
 }
 
-/// The pooled transport's counters for the Network panel's header. `http::pool` needs redjs's `net-h2`,
-/// which vn-runtime enables by default.
+/// `http::pool` needs redjs's `net-h2`, which vn-runtime enables by default.
 pub fn pool_json() -> Json {
     let s = vn_runtime::redjs::webapi::http::pool::stats();
     Json::obj(vec![
@@ -953,17 +938,15 @@ pub fn install(rt: &JsRuntime) {
     rt.register("__vn_devtools_net_conn", 2, vn_devtools_net_conn as *const _);
 }
 
-/// Wraps `fetch`, `WebSocket` and `XMLHttpRequest`. Separate from [`install`]: a host whose app has the
-/// devtools off must leave the engine's own `fetch` alone.
+/// Separate from [`install`]: a host whose app has the devtools off leaves the engine's `fetch` alone.
 pub fn install_tee(rt: &JsRuntime) {
     if let Err(e) = rt.eval(TEE_JS, "vn://devtools-net.js") {
         eprintln!("[devtools] network tee failed: {}\n{}", e.header, e.stack);
     }
 }
 
-/// A `kind: "reload"` marker row: the host is about to rerun the app in the same realm; `cause` says why.
-/// Called after the old app's unload and before the new bundle evaluates, so only what the old run still
-/// had in flight settles below it. `url` is empty because a marker is not an exchange.
+/// A `kind: "reload"` marker row, called after the old app's unload and before the new bundle
+/// evaluates, so only what the old run still had in flight settles below it.
 pub fn mark_reload(cause: &str) {
     let raw = Json::obj(vec![
         ("kind", Json::s("reload")),

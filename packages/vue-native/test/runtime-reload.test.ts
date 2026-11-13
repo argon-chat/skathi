@@ -5,7 +5,6 @@
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
 
-/** Animation frames that run only when the test says so, and can be cancelled. */
 function frameQueue() {
   const frames = new Map<number, () => void>();
   let next = 1;
@@ -35,13 +34,11 @@ describe("a same-realm reload", () => {
     const first = createRuntime();
     const g = first.global as unknown as G;
     const OldRO = g.ResizeObserver;
-    // The old app observes something, so the host runs the old runtime's step...
     const a = first.nodeOps.createElement("div");
     first.host.boundsById.set(a.__vnId, "0,0,50,10");
     const old: number[] = [];
     new OldRO((entries) => old.push(...entries.map((e) => e.contentRect.width))).observe(a);
     expect(first.host.layout.observing).toBe(true);
-    // ...until the unload lets every observation go and says so.
     g.__VN_UNLOAD__!();
     expect(first.host.layout.observing).toBe(false);
     expect(first.host.layout.step()).toBe(-1);
@@ -67,7 +64,6 @@ describe("a same-realm reload", () => {
     const old: number[] = [];
     new g.ResizeObserver((entries) => old.push(...entries.map((e) => e.contentRect.width))).observe(a);
     g.__VN_UNLOAD__!();
-    // A host that has not heard the `false` yet calls the old step anyway.
     first.host.layout.observing = true;
     first.host.layout.step();
     expect(old).toEqual([]);
@@ -120,7 +116,6 @@ describe("a same-realm reload", () => {
     expect(g.MutationObserver).not.toBe(before.MO);
     expect(g.Window).not.toBe(before.Window);
     expect(g.constructor).toBe(g.Window);
-    // `new Text()` builds a node in the NEW mirror tree.
     const t = new (g.Text as new (s: string) => { id: number })("hi");
     expect(second.nodeById(t.__vnId)).toBe(t);
     expect(first.nodeById(t.__vnId)).toBeUndefined();
@@ -136,7 +131,6 @@ describe("a same-realm reload", () => {
     const created = (doc.createTextNode as (s: string) => { id: number })("b");
     expect(doc.createTextNode).not.toBe(create);
     expect(second.nodeById(created.__vnId)).toBe(created);
-    // A <style> the new app puts in <head> is what head.childNodes lists.
     const style = second.nodeOps.createElement("style");
     (doc.head.appendChild as (n: unknown) => unknown)(style);
     expect([...doc.head.childNodes]).toEqual([style]);
@@ -159,7 +153,6 @@ describe("a same-realm reload", () => {
     }
     expect(doc.createElement).not.toBe(wrapper);
     const a = (doc.createElement as (t: string) => Record<string, unknown>)("a");
-    // One engine call per element: no wrapper of a wrapper.
     expect(engineCalls).toBe(1);
     expect(typeof a.setAttribute).toBe("function");
   });
@@ -186,12 +179,10 @@ describe("a same-realm reload", () => {
     (g.__VN_UNLOAD__ as () => void)();
     expect("appState" in g).toBe(false);
     expect(loaded in g).toBe(false);
-    // What the realm had before the first runtime ran, and the host's names.
     expect(g.preludeFlag).toBe(1);
     expect(g.location).toEqual(expect.objectContaining({ href: "app://redjs/" }));
     expect(g.__VN_HOST_STATE__).toBe("host");
     expect(typeof g.__vn_host_fn).toBe("function");
-    // A non-configurable one cannot go, and the advisory counts it.
     expect(g.pinned).toBe(1);
     expect(first.advisories().some((l: string) => l.includes("1 global(s) the old app declared cannot be deleted"))).toBe(true);
   });

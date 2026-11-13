@@ -1,12 +1,9 @@
 //! Raw FFI declarations for the vendored [ThorVG] 1.1.0 C API, with no safe wrapper: the only
 //! consumer is `vn-lottie`'s ThorVG backend, which owns the lifetimes.
 //!
-//! * `thorvg/` is a pristine subset of the upstream release tarball (`tools/vendor-thorvg.sh`,
-//!   sha256-pinned).
+//! * `thorvg/` is a pristine subset of the upstream release tarball (`tools/vendor-thorvg.sh`).
 //! * `src/bindings.rs` is checked in and `build.rs` never runs `bindgen`; regenerate it with
-//!   `tools/regen-bindings` after bumping the vendored version.
-//!
-//! See `VENDOR.md` for the pin, the copied paths and the update procedure.
+//!   `tools/regen-bindings` after bumping the vendored version (see `VENDOR.md`).
 //!
 //! [ThorVG]: https://github.com/thorvg/thorvg
 
@@ -14,13 +11,11 @@
 
 include!("bindings.rs");
 
-/// The vendored upstream release as `(major, minor, micro)`, compared against
-/// [`tvg_engine_version`] by `vn-lottie` to catch drift between the bindings and the archive.
+/// The vendored upstream release as `(major, minor, micro)`, compared against [`tvg_engine_version`] by `vn-lottie`.
 pub const VENDORED_VERSION: (u32, u32, u32) =
     (TVG_VERSION_MAJOR, TVG_VERSION_MINOR, TVG_VERSION_MICRO);
 
 impl Tvg_Result {
-    /// `Ok(())` for [`Tvg_Result::TVG_RESULT_SUCCESS`], otherwise the code.
     pub fn ok(self) -> Result<(), Self> {
         if matches!(self, Self::TVG_RESULT_SUCCESS) {
             Ok(())
@@ -29,7 +24,6 @@ impl Tvg_Result {
         }
     }
 
-    /// The upstream enumerator name, for error messages.
     pub fn name(self) -> &'static str {
         match self {
             Self::TVG_RESULT_SUCCESS => "SUCCESS",
@@ -58,7 +52,6 @@ mod tests {
         assert_eq!((major, minor, micro), VENDORED_VERSION);
     }
 
-    /// The software canvas comes up, renders nothing and tears down: the engine linked.
     #[test]
     fn a_software_canvas_initialises_and_destroys() {
         unsafe {

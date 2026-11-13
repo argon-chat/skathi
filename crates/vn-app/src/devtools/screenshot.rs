@@ -1,20 +1,19 @@
 //! Two screenshot backends.
 //!
 //! `render_to_image` (default): gpui re-renders the last scene into the D3D11 render target and
-//! reads it back. It returns the client area exactly (no frame or resize border, so a `query`
-//! rectangle crops with only the scale factor) and needs no compositor, so occluded, unfocused and
-//! off-screen windows read back what the app last painted. It does not capture the mica/acrylic
-//! backdrop, which DWM composites underneath: those pixels come back with alpha < 255.
+//! reads it back. It returns the client area exactly and needs no compositor, so occluded,
+//! unfocused and off-screen windows read back what the app last painted. It does not capture the
+//! mica/acrylic backdrop (DWM composites it underneath): those pixels come back with alpha < 255.
 //!
-//! `PrintWindow(PW_RENDERFULLCONTENT)`: asks DWM for the composed content, backdrop included. It
-//! captures the whole window rect, including the invisible resize border (hence `client_origin`).
-//! `BitBlt` from the window DC would return the GDI layer, not gpui's swapchain. Kept as the only
-//! backend that shows the backdrop and as the fallback if `render_to_image` breaks upstream.
+//! `PrintWindow(PW_RENDERFULLCONTENT)`: asks DWM for the composed content, backdrop included, but
+//! captures the whole window rect with its invisible resize border (hence `client_origin`).
+//! `BitBlt` would return the GDI layer, not gpui's swapchain. Also the fallback if
+//! `render_to_image` breaks upstream.
 //!
 //! `backend` picks explicitly; `auto` tries the readback and falls back, recording why in the reply.
 //!
 //! A minimized window cannot really be asked: gpui parks `request_frame` on `SIZE_MINIMIZED` and
-//! devtools commands run one per frame, so the transport stops until the window is restored.
+//! commands run one per frame, so the transport stops until the window is restored.
 
 use std::path::{Path, PathBuf};
 
@@ -66,13 +65,10 @@ pub struct Shot {
     pub height: u32,
     pub hwnd: isize,
     pub iconic: bool,
-    /// Where the CLIENT area starts inside the captured bitmap, in bitmap pixels. `PrintWindow`
-    /// captures the whole window rect, including the invisible resize border, while `query`/`tree`
-    /// bounds are CSS px relative to the client area. `render_to_image` reports `(0, 0)`; the field
-    /// stays so one crop formula works for both backends.
+    /// Where the CLIENT area starts inside the bitmap, in bitmap px; `(0, 0)` for
+    /// `render_to_image`, so one crop formula works for both backends.
     pub client_origin: (i32, i32),
-    /// Bitmap pixels per CSS pixel: `bitmap_x = css_x * scale + client_origin.0`. Both backends
-    /// capture in physical pixels.
+    /// `bitmap_x = css_x * scale + client_origin.0`.
     pub scale: f32,
     /// Which path produced the file: `"render_to_image"` or `"print_window"`.
     pub backend: &'static str,
@@ -103,9 +99,7 @@ pub fn next_default_path() -> PathBuf {
     dir.join(format!("{next}.png"))
 }
 
-/// The gpui window's HWND. The inherent `Window::window_handle()` shadows the
-/// `HasWindowHandle` trait method, hence the UFCS call. Falls back to a pid lookup so a screenshot
-/// still works when upstream moved.
+/// UFCS: the inherent `Window::window_handle()` shadows the `HasWindowHandle` method. Falls back to a pid lookup.
 #[cfg(windows)]
 fn hwnd_of_window() -> Option<isize> {
     super::with_target(|window, _| {
@@ -325,8 +319,7 @@ fn capture_print_window(path: &Path) -> Result<Shot, String> {
     })
 }
 
-/// The client area's top-left inside the captured window rect, in bitmap space. Falls back to
-/// `(0, 0)`: a slightly wrong offset beats no screenshot.
+/// Falls back to `(0, 0)`: a slightly wrong offset beats no screenshot.
 #[cfg(windows)]
 fn client_origin(hwnd: HWND, window_rect: &RECT) -> (i32, i32) {
     let mut origin = POINT { x: 0, y: 0 };

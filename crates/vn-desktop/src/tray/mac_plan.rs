@@ -1,20 +1,16 @@
-//! What the macOS status item is told, decided in plain Rust so it is unit-tested on every OS
-//! (macos.rs does only the AppKit calls).
+//! What the macOS status item is told, decided in plain Rust so it is unit-tested on every OS.
 //!
-//! The menu is a tree of plain nodes plus one action table numbered in windows.rs's command-id order
-//! (a disabled item keeps its slot); each item carries its slot and the revision it was built for in
-//! its `tag` ([`tag`] / [`untag`]), so a selection from a replaced menu is fenced as on Windows.
-//! Clicks follow Windows' rule: a primary click is `on_click` when present, otherwise the menu; a
-//! secondary click (right, or Control-primary) is always the menu. The icon is fitted and centred in
-//! the 18-point square at 1x and 2x, drawn as a template (menu-bar text colour) when the model asks
-//! (`Icon::template`, SVG sources) and for a one-tone grey glyph that would otherwise vanish.
+//! The menu is a tree of plain nodes plus one action table in windows.rs's command-id order; each item
+//! carries its slot and revision in its `tag` ([`tag`] / [`untag`]), so a selection from a replaced menu is
+//! fenced as on Windows. A primary click is `on_click` when present, otherwise the menu; a secondary click
+//! is always the menu. The icon is fitted in the 18-point square at 1x and 2x, drawn as a template when the
+//! model asks (`Icon::template`) and for a one-tone grey glyph that would otherwise vanish.
 
 use std::io::Cursor;
 
 use super::{Callback, Icon, MenuItem};
 
-/// The side of the square a status-bar icon is fitted in, in points: the
-/// menu bar is 22 (24 beside a notch), and AppKit leaves room around 18.
+/// The side of the square a status-bar icon is fitted in, in points (the menu bar is 22, 24 beside a notch).
 pub const SIDE_PT: u32 = 18;
 pub const SCALES: [u32; 2] = [1, 2];
 pub const QUIT: &str = "Quit";
@@ -25,8 +21,6 @@ pub enum Node {
     Item {
         label: String,
         enabled: bool,
-        /// A checkmark (`NSControlStateValueOn`). Unchecked and not checkable
-        /// look the same, as on Windows.
         checked: bool,
         action: usize,
     },
@@ -37,7 +31,6 @@ pub enum Node {
     },
 }
 
-/// Slot `i` is what selecting item `i` runs, `None` for a disabled item or one without a callback.
 pub fn menu(items: &[MenuItem], quit: Option<&Callback>) -> (Vec<Node>, Vec<Option<Callback>>) {
     let mut actions = Vec::new();
     let nodes = nodes(items, quit, &mut actions);
@@ -69,7 +62,6 @@ fn nodes(
                 });
                 continue;
             }
-            // `default` is Windows' bold item; a Mac menu has no such item.
             MenuItem::Action {
                 label,
                 disabled,
@@ -95,8 +87,7 @@ fn nodes(
     out
 }
 
-/// A menu item's `tag`: the low 32 bits of the revision its menu was built
-/// for, then its action slot (at most 512 per menu, `validate_menu`).
+/// A menu item's `tag`: the low 32 bits of its menu's revision, then its action slot (at most 512 per menu).
 pub fn tag(revision: u64, action: usize) -> isize {
     (((revision & 0xffff_ffff) << 32) | (action as u64 & 0xffff_ffff)) as i64 as isize
 }
@@ -111,8 +102,6 @@ pub fn action_of(tag: isize, revision: u64) -> Option<usize> {
     (u64::from(built_for) == revision & 0xffff_ffff).then_some(action)
 }
 
-/// What a click does when the application handles it (with no `on_click` AppKit opens the menu:
-/// [`owns_menu`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Press {
     Click,
@@ -134,7 +123,6 @@ pub fn secondary(right_button: bool, control: bool) -> bool {
     right_button || control
 }
 
-/// Whether AppKit keeps the menu itself (`NSStatusItem.menu`): there is a menu and no `on_click`.
 pub fn owns_menu(has_click: bool, has_menu: bool) -> bool {
     !has_click && has_menu
 }
@@ -158,8 +146,6 @@ pub fn template(icon: &Icon) -> bool {
     icon.template || monochrome(icon)
 }
 
-/// Every visible pixel is grey and of nearly the same shade: a black or white glyph with alpha
-/// edges. A coloured logo keeps its colours.
 pub fn monochrome(icon: &Icon) -> bool {
     const VISIBLE: u8 = 16;
     const GREY: u8 = 24;
@@ -181,8 +167,6 @@ pub fn monochrome(icon: &Icon) -> bool {
     seen && lightest - darkest <= SHADES
 }
 
-/// The icon fitted and centred in a `side` square as straight RGBA, resampled premultiplied so
-/// transparent pixels do not darken the edges.
 pub fn raster(icon: &Icon, side: u32) -> Vec<u8> {
     let side = side.max(1);
     let mut pixels = icon.rgba.to_vec();
@@ -225,7 +209,6 @@ pub fn fit(width: u32, height: u32, side: u32) -> (u32, u32) {
     (width, height)
 }
 
-/// The icon at `scale` as a PNG (keeps AppKit's own colour handling).
 pub fn png(icon: &Icon, scale: u32) -> Result<Vec<u8>, String> {
     use image::ImageEncoder;
     let side = SIDE_PT * scale;
@@ -308,7 +291,6 @@ mod tests {
                             checked: true,
                             action: 1
                         },
-                        // Labels are plain text: no mnemonic markup to escape.
                         Node::Item {
                             label: "A & B".into(),
                             enabled: true,
@@ -381,7 +363,6 @@ mod tests {
     fn one_grey_tone_is_a_template_and_a_logo_keeps_its_colours() {
         let mut glyph = icon(4, 4, [0, 0, 0, 255]);
         assert!(template(&glyph));
-        // Antialiased edges are alpha, transparent pixels do not count.
         let mut pixels = glyph.rgba.to_vec();
         pixels[3] = 40;
         pixels[4..8].copy_from_slice(&[200, 30, 30, 0]);
@@ -410,7 +391,6 @@ mod tests {
         let wide = icon(4, 2, [255, 0, 0, 128]);
         let pixels = raster(&wide, 36);
         assert_eq!(pixels.len(), 36 * 36 * 4);
-        // Centred: transparent above and below, the colour straight inside.
         assert_eq!(pixels[3], 0);
         let middle = &pixels[(18 * 36 + 18) * 4..][..4];
         assert_eq!(middle[0], 255);

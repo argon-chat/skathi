@@ -11,8 +11,7 @@ pub(crate) const MAX_SIDE: u64 = 4096;
 /// A frame interval when the file gives none (one frame, no durations).
 const FALLBACK_FRAME_MS: u32 = 33;
 
-/// One block: its colour packet, its alpha packet, and whether it shows a
-/// frame (a lone hidden frame does not).
+/// One block: its colour packet, its alpha packet, and whether it shows a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Packet {
     pub color: Span,
@@ -23,7 +22,6 @@ pub(crate) struct Packet {
 pub(crate) struct Index {
     pub meta: VideoMeta,
     pub packets: Box<[Packet]>,
-    /// The track's `Colour`, for the YUV matrix.
     pub colour: Option<Colour>,
 }
 
@@ -35,7 +33,6 @@ fn unsupported(why: impl Into<String>) -> VideoError {
     VideoError::Unsupported(why.into())
 }
 
-/// Refuses a packet libvpx would refuse, or that a sticker does not play.
 fn check(info: &vp9::PacketInfo, stream: &str) -> Result<(), VideoError> {
     if info.profile != 0 {
         return Err(unsupported(format!(
@@ -80,7 +77,6 @@ pub(crate) fn index(bytes: &[u8]) -> Result<Index, VideoError> {
         return Err(malformed("the video track shows no frame"));
     }
 
-    // Times: ms from the first shown frame, rounded, never going back.
     let scale = webm.timestamp_scale as i128;
     let first = shown[0].time as i128;
     let ms = |t: i64| ((t as i128 - first) * scale + 500_000).div_euclid(1_000_000);
@@ -107,7 +103,6 @@ pub(crate) fn index(bytes: &[u8]) -> Result<Index, VideoError> {
         }
     };
 
-    // Size: the track's, else the first keyframe's.
     let (pw, ph) = webm
         .track
         .pixel
@@ -118,9 +113,7 @@ pub(crate) fn index(bytes: &[u8]) -> Result<Index, VideoError> {
     }
     let (dw, dh) = webm.track.display;
     let (width, height) = match webm.track.display_unit {
-        // Pixels; each side defaults to the pixel size.
         0 => (if dw > 0 { dw } else { pw }, if dh > 0 { dh } else { ph }),
-        // An aspect ratio: the height stays.
         3 if dw > 0 && dh > 0 => ((ph * dw + dh / 2) / dh, ph),
         _ => (pw, ph),
     };
@@ -153,7 +146,6 @@ mod tests {
         el(id, &v.to_be_bytes())
     }
 
-    /// An inter frame, shown or hidden.
     fn inter(shown: bool) -> Vec<u8> {
         // frame_marker 10, profile 00, show_existing 0, frame_type 1, show_frame, error_resilient 0
         vec![0b1000_0100 | (shown as u8) << 1, 0, 0]
@@ -250,9 +242,8 @@ mod tests {
         assert_eq!(has(&alpha_mode, &[simple_block(1, 0, &k)]), (false, 0), "no BlockAdditional");
     }
 
-    /// `VN_STICKER_SAMPLES=<dir> cargo test -p vn-sticker samples -- --ignored --nocapture`:
-    /// indexes every `.webm` in a directory (real stickers, which are not
-    /// checked in) and prints what it found.
+    /// `VN_STICKER_SAMPLES=<dir> cargo test -p vn-sticker samples -- --ignored --nocapture`: indexes
+    /// every `.webm` in a directory (real stickers, not checked in) and prints what it found.
     #[test]
     #[ignore]
     fn samples() {

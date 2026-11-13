@@ -1,16 +1,12 @@
-//! The macOS source list's rules and JSON, free of ScreenCaptureKit so they unit-test everywhere;
-//! the JSON matches `win.rs` key for key.
+//! The macOS source list's rules and JSON, free of ScreenCaptureKit so they unit-test everywhere.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use serde_json::{json, Value};
 
 use crate::Fail;
 
-/// Windows stops at 512 windows too.
 pub(super) const MAX_WINDOWS: usize = 512;
 
-/// A rectangle in the global display space, in points, origin top left
-/// (CoreGraphics' space, which ScreenCaptureKit frames use).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(super) struct Rect {
     pub x: f64,
@@ -40,8 +36,7 @@ impl Rect {
     }
 }
 
-/// AppKit's frames are bottom-left based with the primary screen's bottom
-/// edge at 0; this is the same rectangle in CoreGraphics' top-left space.
+/// AppKit's frames are bottom-left based; this is the same rectangle in CoreGraphics' top-left space.
 pub(super) fn flip(rect: Rect, primary_height: f64) -> Rect {
     Rect { y: primary_height - (rect.y + rect.height), ..rect }
 }
@@ -50,10 +45,8 @@ pub(super) fn flip(rect: Rect, primary_height: f64) -> Rect {
 pub(super) struct DisplayRow {
     pub id: u32,
     pub frame: Rect,
-    /// Backing pixels per point (2 on a Retina panel), from the display mode.
     pub scale: f64,
     pub primary: bool,
-    /// From the main thread's `NSScreen`, when it answered in time.
     pub work_area: Option<Rect>,
     pub name: Option<String>,
 }
@@ -65,15 +58,12 @@ pub(super) struct WindowRow {
     pub frame: Rect,
     pub layer: isize,
     pub on_screen: bool,
-    /// `None` when ScreenCaptureKit names no owning application.
     pub pid: Option<i32>,
     pub bundle_id: String,
     pub app_name: String,
 }
 
-/// System UI that sits at the normal window layer but is not something a
-/// person shares: the menu bar extras, Control Center, Notification Center,
-/// the Dock, Stage Manager, the screenshot UI.
+/// System UI at the normal window layer that is not something a person shares (menu bar extras, Dock, ...).
 const SYSTEM_BUNDLES: &[&str] = &[
     "com.apple.controlcenter",
     "com.apple.dock",
@@ -97,7 +87,6 @@ pub(super) fn keep_window(window: &WindowRow, own_pid: i32) -> bool {
         && !SYSTEM_BUNDLES.contains(&window.bundle_id.as_str())
 }
 
-/// The main display first, then left to right, top to bottom.
 pub(super) fn order_displays(displays: &mut [DisplayRow]) {
     displays.sort_by(|a, b| {
         b.primary
@@ -107,8 +96,6 @@ pub(super) fn order_displays(displays: &mut [DisplayRow]) {
     });
 }
 
-/// The display a window is on: the one it overlaps most, else the nearest,
-/// as `MonitorFromWindow(MONITOR_DEFAULTTONEAREST)` answers on Windows.
 pub(super) fn display_for(frame: &Rect, displays: &[DisplayRow]) -> Option<u32> {
     let best = displays
         .iter()
@@ -122,7 +109,6 @@ pub(super) fn display_for(frame: &Rect, displays: &[DisplayRow]) -> Option<u32> 
         .map(|d| d.id)
 }
 
-/// `(thumbnailDataUrl, thumbnailError)`.
 pub(super) fn preview(value: Result<String, Fail>) -> (String, Option<String>) {
     match value {
         Ok(url) => (url, None),
@@ -173,7 +159,6 @@ pub(super) fn opaque(rgba: &mut [u8]) {
     }
 }
 
-/// CoreGraphics draws into premultiplied RGBA only; PNG stores straight alpha.
 pub(super) fn unpremultiply(rgba: &mut [u8]) {
     for pixel in rgba.chunks_exact_mut(4) {
         let alpha = pixel[3] as u32;
@@ -250,10 +235,8 @@ mod tests {
 
     #[test]
     fn appkit_frames_flip_into_the_top_left_space() {
-        // A 900 pt primary with a 25 pt menu bar and a 70 pt Dock at the bottom.
         let visible = flip(rect(0.0, 70.0, 1440.0, 805.0), 900.0);
         assert_eq!(visible, rect(0.0, 25.0, 1440.0, 805.0));
-        // A display above the primary has negative top-left y.
         assert_eq!(flip(rect(0.0, 900.0, 1920.0, 1080.0), 900.0).y, -1080.0);
     }
 

@@ -16,7 +16,6 @@ use crate::tree::{self, Tree};
 use crate::windows;
 use crate::EventPayload;
 
-/// One of the three clipboard actions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Verb {
     Copy,
@@ -41,10 +40,9 @@ impl Verb {
         }
     }
 
-    /// The keystrokes that ARE a clipboard command, outside a text field (in one, the widget's own
-    /// bindings say the same thing): the platform's primary modifier with C / X / V, and on Windows
-    /// and Linux the CUA keys Ctrl+Insert, Shift+Delete and Shift+Insert. Any other modifier held
-    /// makes it a different shortcut (Ctrl+Shift+V is not a paste here).
+    /// Keystrokes that ARE a clipboard command outside a text field: the primary modifier with C / X / V,
+    /// and on Windows and Linux Ctrl+Insert, Shift+Delete and Shift+Insert. Any other modifier makes it
+    /// a different shortcut.
     pub(crate) fn of_keystroke(k: &Keystroke) -> Option<Verb> {
         let m = &k.modifiers;
         let mac = cfg!(target_os = "macos");
@@ -65,9 +63,6 @@ impl Verb {
     }
 }
 
-/// Does anything on `target`'s path listen for this event: the node, an ancestor, or `document` /
-/// `window`, which ride the root's bit? When nothing does, the event is not built at all (and a
-/// paste does not read the clipboard twice).
 pub(crate) fn listened(t: &Tree, target: u32, verb: Verb) -> bool {
     let bit = 1u64 << verb.code();
     let mut cur = target;
@@ -83,8 +78,6 @@ pub(crate) fn listened(t: &Tree, target: u32, verb: Verb) -> bool {
     false
 }
 
-/// Fires `verb`'s ClipboardEvent at `target` and does the part of the default action the event
-/// decides.
 pub(crate) fn fire(target: u32, verb: Verb, window: &mut Window, cx: &mut App) -> bool {
     if !tree::read_tree(|t| listened(t, target, verb)) {
         return true;
@@ -102,8 +95,6 @@ pub(crate) fn fire(target: u32, verb: Verb, window: &mut Window, cx: &mut App) -
     proceed
 }
 
-/// The JS half of [`fire`], which needs no window: build `clipboardData`, dispatch, read back what
-/// a cancelled copy / cut wants written, disable the DataTransfer.
 pub(crate) fn exchange(target: u32, verb: Verb, clip: Option<&ClipboardItem>) -> (bool, Option<ClipboardItem>) {
     let data = JsRuntime::try_with(|rt| new_data(rt, verb, clip)).flatten();
     if verb == Verb::Paste {
@@ -120,7 +111,6 @@ pub(crate) fn exchange(target: u32, verb: Verb, clip: Option<&ClipboardItem>) ->
     (proceed, write)
 }
 
-/// `clipboardData` for one event.
 fn new_data(rt: &JsRuntime, verb: Verb, clip: Option<&ClipboardItem>) -> Option<Value> {
     let ctx = rt.ctx();
     let ctor = ctx.global_get("DataTransfer").ok().filter(Value::is_cell)?;
@@ -136,15 +126,13 @@ fn new_data(rt: &JsRuntime, verb: Verb, clip: Option<&ClipboardItem>) -> Option<
     Some(dt)
 }
 
-/// Calls `obj[name](...args)`, ignoring a throw (the item is then missing, which is what a browser
-/// shows for a format it could not read).
+/// Calls `obj[name](...args)`, ignoring a throw (the item is then missing, as in a browser).
 fn call(rt: &JsRuntime, obj: Value, name: &str, args: &[Value]) -> Option<Value> {
     let ctx = rt.ctx();
     let f = ctx.get(obj, &ctx.atom(name)).ok()?;
     ctx.call(f, obj, args).ok()
 }
 
-/// The clipboard's contents into a paste's DataTransfer, text first as Chromium lists it.
 fn fill(rt: &JsRuntime, dt: Value, item: &ClipboardItem) {
     let ctx = rt.ctx();
     for entry in item.entries() {
@@ -205,9 +193,8 @@ fn png_file(rt: &JsRuntime, png: &[u8]) -> Option<Value> {
     ctx.construct(ctor, &[parts, ctx.string("image.png"), opts]).ok()
 }
 
-/// A clipboard image as PNG bytes: PNG as it is, any other raster decoded and re-encoded (Windows
-/// hands a screenshot over as a DIB, which gpui makes a BMP). `None` for SVG and for anything that
-/// does not decode.
+/// A clipboard image as PNG bytes: PNG as is, any other raster re-encoded (Windows hands a screenshot
+/// over as a DIB). `None` for SVG or anything undecodable.
 pub(crate) fn as_png(format: &ImageFormat, bytes: &[u8]) -> Option<Vec<u8>> {
     let from = match format {
         ImageFormat::Png => return Some(bytes.to_vec()),
@@ -225,8 +212,6 @@ pub(crate) fn as_png(format: &ImageFormat, bytes: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// After the dispatch: what a cancelled copy / cut wants on the clipboard, then the DataTransfer is
-/// disabled and released.
 fn finish(rt: &JsRuntime, dt: Value, verb: Verb, proceed: bool) -> Option<ClipboardItem> {
     let write = if verb != Verb::Paste && !proceed { written(rt, dt) } else { None };
     // SAFETY: `dt` is a live DataTransfer of this runtime, on its thread.
@@ -235,7 +220,6 @@ fn finish(rt: &JsRuntime, dt: Value, verb: Verb, proceed: bool) -> Option<Clipbo
     write
 }
 
-/// The cancelled copy's data store, as a clipboard item: its `text/plain`.
 fn written(rt: &JsRuntime, dt: Value) -> Option<ClipboardItem> {
     let ctx = rt.ctx();
     let types = ctx.get(dt, &ctx.atom("types")).ok()?;
@@ -265,8 +249,6 @@ fn written(rt: &JsRuntime, dt: Value) -> Option<ClipboardItem> {
     Some(ClipboardItem::new_string(ctx.read_string(text).ok()?))
 }
 
-/// The root's two key listeners: the capture-phase reset of `WindowState::key_prevented`, and the
-/// bubble-phase clipboard dispatch for a keystroke no text field took (see the module header).
 pub(crate) fn bind_root<E: InteractiveElement>(e: E, root: u32) -> E {
     e.capture_key_down(|_, window, _| windows::here(window, |w| w.key_prevented = false))
         .on_key_down(move |ev: &KeyDownEvent, window, cx| {
@@ -338,8 +320,6 @@ mod tests {
         assert!(listened_at(leaf, Verb::Copy));
     }
 
-    /// A screenshot arrives as a BMP (gpui's reading of CF_DIB); a paste offers it as PNG, as
-    /// Chromium does.
     #[test]
     fn a_bitmap_is_offered_as_png() {
         let mut img = image::RgbaImage::new(2, 1);
@@ -359,7 +339,6 @@ mod tests {
         assert_eq!(as_png(&ImageFormat::Bmp, b"not a bmp"), None);
     }
 
-    /// Runs `src` and returns its string value.
     fn eval(src: &str) -> String {
         JsRuntime::with(|rt| {
             let v = rt.ctx().eval(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
@@ -367,9 +346,6 @@ mod tests {
         })
     }
 
-    /// The whole exchange against a stand-in dispatcher: the eighth argument is a DataTransfer in
-    /// the mode the event calls for, a cancelled copy's text comes back for the clipboard, and
-    /// every store is disabled after.
     #[test]
     fn clipboard_data_crosses_in_the_right_mode_and_comes_back() {
         vn_runtime::testing::on_js_thread(move || {
@@ -398,7 +374,6 @@ mod tests {
             tree::set_dispatcher(f);
             let last = || eval("JSON.stringify(seen[seen.length - 1])");
 
-            // paste: read-only, holding the clipboard's text and its image.
             let mut png = Vec::new();
             image::DynamicImage::ImageRgba8(image::RgbaImage::new(1, 1))
                 .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -419,7 +394,6 @@ mod tests {
             );
             assert_eq!(eval("kept.getData('text/plain') + '|' + kept.files.length"), "|0", "disabled after the event");
 
-            // copy, not cancelled: the selection's job; nothing comes back.
             let (proceed, write) = exchange(node, Verb::Copy, None);
             assert!(proceed);
             assert!(write.is_none());

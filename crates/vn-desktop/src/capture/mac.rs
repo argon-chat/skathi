@@ -1,6 +1,6 @@
-//! ScreenCaptureKit sources (macOS 13+) on the pool worker. SCK answers on its own queues into
-//! channels the worker waits on with a deadline; `NSScreen` is read on the main queue.
-//! Thumbnails use `SCScreenshotManager` on macOS 14+, else `CGWindowListCreateImage`.
+//! ScreenCaptureKit sources (macOS 13+) on the pool worker. SCK answers on its own queues into channels the
+//! worker waits on with a deadline; `NSScreen` is read on the main queue. Thumbnails use
+//! `SCScreenshotManager` on macOS 14+, else `CGWindowListCreateImage`.
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr};
@@ -21,8 +21,6 @@ use super::listing::{self, DisplayRow, Rect, WindowRow};
 use super::{fit, png_url, Options};
 use crate::Fail;
 
-/// `CGImageRef`'s pointee, encoded as the SDK declares it (`^{CGImage=}`) so
-/// objc2's debug message verification accepts it.
 #[repr(C)]
 struct CGImage {
     _private: [u8; 0],
@@ -32,7 +30,6 @@ unsafe impl RefEncode for CGImage {
     const ENCODING_REF: Encoding = Encoding::Pointer(&Encoding::Struct("CGImage", &[]));
 }
 
-// SCK classes are looked up by name at run time; linking makes sure the framework is loaded.
 #[link(name = "ScreenCaptureKit", kind = "framework")]
 unsafe extern "C" {}
 #[link(name = "AppKit", kind = "framework")]
@@ -68,21 +65,15 @@ unsafe extern "C" {
 }
 
 const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
-/// `kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big`: RGBA bytes.
 const PREMULTIPLIED_RGBA: u32 = 1 | (4 << 12);
 const INTERPOLATION_HIGH: i32 = 3;
-/// `kCGWindowListOptionOnScreenOnly`, `kCGWindowListOptionIncludingWindow`.
 const LIST_ON_SCREEN_ONLY: u32 = 1 << 0;
 const LIST_INCLUDING_WINDOW: u32 = 1 << 3;
-/// `kCGWindowImageBoundsIgnoreFraming`, `kCGWindowImageNominalResolution`.
 const IMAGE_IGNORE_FRAMING: u32 = 1 << 0;
 const IMAGE_NOMINAL_RESOLUTION: u32 = 1 << 4;
-/// `SCStreamErrorUserDeclined`.
 const USER_DECLINED: isize = -3801;
-/// Every pending preview shares one deadline.
 const PREVIEW_DEADLINE: Duration = Duration::from_secs(2);
 
-/// An owned `CGImageRef`.
 struct CgImage(NonNull<CGImage>);
 // SAFETY: CGImage is immutable and its retain count is thread-safe.
 unsafe impl Send for CgImage {}
@@ -105,7 +96,6 @@ impl Drop for CgImage {
     }
 }
 
-/// An Objective-C object crossing from a completion queue to the worker.
 struct Sent(Retained<AnyObject>);
 // SAFETY: only immutable ScreenCaptureKit results (SCShareableContent) cross.
 unsafe impl Send for Sent {}
@@ -116,7 +106,6 @@ fn class(name: &CStr) -> Result<&'static AnyClass, Fail> {
     })
 }
 
-/// `(code, localizedDescription)` of an `NSError`, which may be nil.
 unsafe fn error_info(error: *mut AnyObject) -> (isize, String) {
     let Some(error) = (unsafe { error.as_ref() }) else {
         return (0, "unknown error".into());
@@ -192,7 +181,6 @@ unsafe fn list(options: Options) -> Result<Vec<Value>, Fail> {
         screen_details(&mut displays);
     }
 
-    // Start every preview first, then collect them against one deadline.
     let modern = AnyClass::get(c"SCScreenshotManager").is_some();
     let size = |frame: &Rect| {
         fit(frame.width.round() as u32, frame.height.round() as u32, options.thumbnail_width, options.thumbnail_height)
@@ -243,7 +231,6 @@ fn shareable_content() -> Result<Retained<AnyObject>, Fail> {
         };
         let _ = send.try_send(result);
     });
-    // Desktop (wallpaper) windows and off-screen windows are not sources.
     unsafe {
         let _: () = msg_send![
             cls,
@@ -259,7 +246,6 @@ fn shareable_content() -> Result<Retained<AnyObject>, Fail> {
     }
 }
 
-/// Backing pixels per point, from the display's current mode.
 unsafe fn pixel_scale(display: u32, width: f64) -> f64 {
     let mode = unsafe { CGDisplayCopyDisplayMode(display) };
     if mode.is_null() || width <= 0.0 {
@@ -291,9 +277,8 @@ unsafe fn window_row(window: &AnyObject) -> WindowRow {
     row
 }
 
-/// Each display's work area and name, from `NSScreen` on the main queue.
-/// AppKit's screen list is the main thread's; a main thread that does not
-/// answer within half a second leaves the whole display as the work area.
+/// Each display's work area and name, from `NSScreen` on the main queue; if it does not answer within
+/// half a second the whole display is the work area.
 fn screen_details(displays: &mut [DisplayRow]) {
     let (send, receive) = mpsc::sync_channel(1);
     dispatch2::DispatchQueue::main().exec_async(move || {
@@ -320,7 +305,6 @@ unsafe fn read_screens() -> Vec<(u32, Rect, Option<String>)> {
         return Vec::new();
     };
     let screens = unsafe { objects(&screens) };
-    // AppKit's origin is the bottom left of the primary (first) screen.
     let Some(primary) = screens.first() else {
         return Vec::new();
     };
@@ -345,7 +329,6 @@ enum Target<'a> {
     Window(&'a Retained<AnyObject>, u32),
 }
 
-/// A screenshot, or its `NSError` code and description.
 type Shot = Result<CgImage, (isize, String)>;
 
 enum Preview {
@@ -395,7 +378,6 @@ unsafe fn content_filter(target: &Target<'_>) -> Result<Retained<AnyObject>, Fai
     filter.ok_or_else(|| Fail::new("OperationError", "ScreenCaptureKit refused the content filter"))
 }
 
-/// macOS 14+: one `SCScreenshotManager` capture at the thumbnail's size.
 unsafe fn screenshot(
     target: &Target<'_>,
     width: u32,
@@ -411,8 +393,6 @@ unsafe fn screenshot(
     }
     let (send, receive) = mpsc::sync_channel(1);
     let handler = RcBlock::new(move |image: *mut CGImage, error: *mut AnyObject| {
-        // The handler's image is borrowed; a receiver that gave up drops (and
-        // releases) the retained one.
         let result = unsafe { CgImage::retain(image) }.ok_or_else(|| unsafe { error_info(error) });
         let _ = send.try_send(result);
     });
@@ -429,8 +409,7 @@ unsafe fn screenshot(
 
 type WindowListCreateImage = unsafe extern "C" fn(CGRect, u32, u32, u32) -> *mut CGImage;
 
-/// macOS 13: `CGWindowListCreateImage`, synchronous, at 1x. Looked up rather
-/// than linked: the macOS 15 SDK marks it obsoleted.
+/// macOS 13: `CGWindowListCreateImage`, looked up rather than linked (the macOS 15 SDK marks it obsoleted).
 unsafe fn window_list_image(target: &Target<'_>) -> Result<CgImage, Fail> {
     let symbol = unsafe { dlsym(RTLD_DEFAULT, c"CGWindowListCreateImage".as_ptr()) };
     if symbol.is_null() {
@@ -444,7 +423,6 @@ unsafe fn window_list_image(target: &Target<'_>) -> Result<CgImage, Fail> {
             create(cg_rect(*frame), LIST_ON_SCREEN_ONLY, 0, IMAGE_NOMINAL_RESOLUTION)
         },
         Target::Window(_, id) => {
-            // CGRectNull: the window's own bounds.
             let null = CGRect::new(CGPoint::new(f64::INFINITY, f64::INFINITY), CGSize::new(0.0, 0.0));
             unsafe { create(null, LIST_INCLUDING_WINDOW, *id, IMAGE_IGNORE_FRAMING | IMAGE_NOMINAL_RESOLUTION) }
         }
@@ -453,7 +431,6 @@ unsafe fn window_list_image(target: &Target<'_>) -> Result<CgImage, Fail> {
         .ok_or_else(|| Fail::new("OperationError", "the window server returned no image"))
 }
 
-/// Draws `image` scaled into premultiplied RGBA, top row first.
 fn render(image: &CgImage, width: u32, height: u32) -> Result<Vec<u8>, Fail> {
     let mut rgba = vec![0u8; width as usize * height as usize * 4];
     unsafe {
@@ -481,7 +458,6 @@ fn render(image: &CgImage, width: u32, height: u32) -> Result<Vec<u8>, Fail> {
     Ok(rgba)
 }
 
-/// The application's icon at 32 × 32, the size Windows draws window icons at.
 unsafe fn app_icon(pid: i32) -> Option<String> {
     let cls = AnyClass::get(c"NSRunningApplication")?;
     let app: Option<Retained<AnyObject>> = unsafe { msg_send![cls, runningApplicationWithProcessIdentifier: pid] };
@@ -495,7 +471,6 @@ unsafe fn app_icon(pid: i32) -> Option<String> {
             hints: None::<&AnyObject>
         ]
     };
-    // The NSImage owns the returned image.
     let image = unsafe { CgImage::retain(image) }?;
     let mut rgba = render(&image, 32, 32).ok()?;
     listing::unpremultiply(&mut rgba);

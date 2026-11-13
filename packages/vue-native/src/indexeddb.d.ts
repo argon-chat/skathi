@@ -11,7 +11,6 @@ declare global {
   type VnIDBCursorDirection = "next" | "nextunique" | "prev" | "prevunique";
   type VnIDBHandler = ((ev: VnEvent) => void) | null;
 
-  /** What every IndexedDB `error` is: `ConstraintError`, `QuotaExceededError`, `VersionError`, `AbortError`, … */
   interface VnDOMException {
     readonly name: string;
     readonly message: string;
@@ -28,7 +27,6 @@ declare global {
   }
 
   interface VnIDBRequest<T = unknown> extends VnEventTarget {
-    /** Throws `InvalidStateError` until the request is done, as in a browser. */
     readonly result: T;
     readonly error: VnDOMException | null;
     readonly readyState: "pending" | "done";
@@ -62,7 +60,6 @@ declare global {
       mode?: "readonly" | "readwrite",
       options?: { durability?: "default" | "strict" | "relaxed" },
     ): VnIDBTransaction;
-    /** Only inside `upgradeneeded`. */
     createObjectStore(name: string, options?: { keyPath?: string | string[] | null; autoIncrement?: boolean }): VnIDBObjectStore;
     deleteObjectStore(name: string): void;
     close(): void;
@@ -86,7 +83,6 @@ declare global {
     onerror: VnIDBHandler;
   }
 
-  /** What an object store and an index both read with. */
   interface VnIDBReadable {
     readonly name: string;
     readonly keyPath: string | string[] | null;
@@ -107,7 +103,6 @@ declare global {
     delete(query: VnIDBValidKey | VnIDBKeyRange): VnIDBRequest<undefined>;
     clear(): VnIDBRequest<undefined>;
     index(name: string): VnIDBIndex;
-    /** Only inside `upgradeneeded`. */
     createIndex(name: string, keyPath: string | string[], options?: { unique?: boolean; multiEntry?: boolean }): VnIDBIndex;
     deleteIndex(name: string): void;
   }

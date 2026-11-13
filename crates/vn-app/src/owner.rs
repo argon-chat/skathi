@@ -11,10 +11,7 @@
 //! disproportionately wedged ones, and a quit that waits for the frame pump never arrives at a stuck
 //! pump. A test host has no state worth flushing, and an inspector it opened with F12 inherits the
 //! variable (`inspector::spawn` passes the environment through) and goes the same way.
-//!
-//! Unset (every shipped app), this is one `env::var` at boot and nothing else.
 
-/// Starts the watch if `VN_OWNER_PID` names a process. Call once, early in `main`.
 pub fn watch() {
     let Ok(raw) = std::env::var("VN_OWNER_PID") else { return };
     let Ok(pid) = raw.trim().parse::<u32>() else {

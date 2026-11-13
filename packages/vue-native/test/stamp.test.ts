@@ -1,14 +1,6 @@
-// The stamper, on a SYSTEM exe — no cargo, no vue-native host, about a second.
-//
-//   bun test packages/vue-native/test/stamp.test.ts
-//
-// `C:\Windows\System32\whoami.exe` is a real, small, console PE with a
-// manifest, a VERSIONINFO and an MUI resource of its own: the shape of the
-// host in every way that matters to `UpdateResourceW`, at 90 KB instead of
-// 100 MB. Each test stamps a fresh copy and then asks WINDOWS about it — the
-// loader (does it still run?), `FindResourceW` (is the payload where the host
-// will look?), the shell (`ExtractIconExW`) and the version API — rather than
-// re-reading our own bytes and agreeing with ourselves.
+// The stamper, on a SYSTEM exe (no cargo, no host, about a second): `C:\Windows\System32\whoami.exe` is a small console
+// PE with a manifest, VERSIONINFO and MUI resource, the shape of the host for `UpdateResourceW`. Each test stamps a
+// fresh copy and asks WINDOWS about it (loader, `FindResourceW`, `ExtractIconExW`, version API), not our own bytes.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -82,7 +74,6 @@ const versionInfo = () =>
     },
   });
 
-/** whoami's own stdout, so a stamped copy can be compared against the real thing. */
 const expectedUser = isWindows ? spawnSync(WHOAMI, { encoding: "utf8" }).stdout.trim() : "";
 
 describe.skipIf(!isWindows)("stamping a real PE", () => {
@@ -103,8 +94,7 @@ describe.skipIf(!isWindows)("stamping a real PE", () => {
     });
     expect(readPe(out).subsystem).toBe(SUBSYSTEM.GUI);
     expect(stamped.subsystem).toBe(SUBSYSTEM.GUI);
-    // Inherited pipes still work for a GUI-subsystem child — the property that
-    // keeps `vn run` and vn-test able to read a packaged app's stderr.
+    // Inherited pipes still work for a GUI-subsystem child: what lets `vn run` read a packaged app's stderr.
     const run = spawnSync(out, { encoding: "utf8" });
     expect(run.status).toBe(0);
     expect(run.stdout.trim().toLowerCase()).toBe(expectedUser.toLowerCase());
@@ -118,7 +108,6 @@ describe.skipIf(!isWindows)("stamping a real PE", () => {
     expect(pk.entries.map((e) => e.name)).toEqual([NAMES.META, NAMES.WINDOW, NAMES.SCRIPT, "assets/big.bin", "assets/hello.txt"]);
     const hello = pk.find(KIND.ASSET, "assets/hello.txt")!;
     expect(new TextDecoder().decode(pk.bytes(hello))).toBe("hello from one\n");
-    // The skew pass did its job: (rva + data_off) is a page boundary.
     expect(stamped.dataAligned).toBe(true);
     expect((stamped.payloadRva + pk.header.dataOff) % PAGE).toBe(0);
     expect(stamped.passes).toBeLessThanOrEqual(2);
@@ -133,7 +122,6 @@ describe.skipIf(!isWindows)("stamping a real PE", () => {
     expect(versionString(out, "CompanyName")).toBe("Example Co");
     expect(versionString(out, "OriginalFilename")).toBe("Stamped.exe");
     expect(fixedFileVersion(out)).toBe("1.2.3.0");
-    // whoami's own VERSIONINFO was replaced, not merged with.
     const pe = readPe(out);
     expect(pe.resources.filter((r) => r.type === RT.VERSION)).toHaveLength(1);
     expect(pe.resources.filter((r) => r.type === RT.GROUP_ICON)).toHaveLength(1);
@@ -155,7 +143,6 @@ describe.skipIf(!isWindows)("stamping a real PE", () => {
     const pk = readVnpk(loadResourceCopy(again, RT.RCDATA, PAYLOAD_NAME)!);
     expect(new TextDecoder().decode(pk.bytes(pk.find(KIND.ASSET, "assets/hello.txt")!))).toBe("hello from two\n");
     expect(r.dataAligned).toBe(true);
-    // Exactly one payload, and the icon + version from the first stamp survive.
     expect(readPe(again).resources.filter((x) => x.name === PAYLOAD_NAME)).toHaveLength(1);
     expect(shellIconCount(again)).toBe(1);
     expect(versionString(again, "ProductName")).toBe("Stamped Test");
@@ -163,8 +150,7 @@ describe.skipIf(!isWindows)("stamping a real PE", () => {
   });
 
   test("an existing certificate table is stripped before the edit", () => {
-    // whoami.exe is catalog-signed (no embedded table), so give a copy a fake
-    // one at its tail — exactly where signtool puts a real one.
+    // whoami.exe is catalog-signed, so give a copy a fake certificate table at its tail, where signtool puts one.
     const signed = join(dir, "signed.exe");
     copyFileSync(WHOAMI, signed);
     const size = statSync(signed).size;

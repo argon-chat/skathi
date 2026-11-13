@@ -51,7 +51,6 @@ impl Json {
         }
     }
 
-    // Constructors short enough to build a response inline.
 
     pub fn s(v: impl Into<String>) -> Json {
         Json::Str(v.into())
@@ -121,8 +120,6 @@ impl Json {
 pub struct Raw(pub String);
 
 impl From<Raw> for Json {
-    /// Parses the pre-stringified text back, falling back to a string when it
-    /// is not valid JSON — never emits a malformed line onto the wire.
     fn from(raw: Raw) -> Json {
         parse(&raw.0).unwrap_or(Json::Str(raw.0))
     }
@@ -135,8 +132,6 @@ pub fn parse(text: &str) -> Option<Json> {
     (p.i == p.b.len()).then_some(v)
 }
 
-/// A JSON string literal — also a valid JS string literal, so this is how we
-/// splice a module id into an `eval`'d call.
 pub fn quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -265,7 +260,6 @@ impl<'a> Parser<'a> {
                         b't' => out.push(b'\t'),
                         b'u' => {
                             let mut cp = self.hex4()? as u32;
-                            // surrogate pair
                             if (0xd800..0xdc00).contains(&cp)
                                 && self.b.get(self.i) == Some(&b'\\')
                                 && self.b.get(self.i + 1) == Some(&b'u')
@@ -336,8 +330,6 @@ mod tests {
         let v = parse(text).unwrap();
         let round = v.to_json();
         assert_eq!(parse(&round).unwrap(), v);
-        // Integers do not grow a `.0`, and control chars stay escaped so the
-        // newline-delimited wire cannot be split by a payload.
         assert!(round.contains(r#""n":[1,2.5,-3]"#), "{round}");
         assert!(!round.contains('\n'), "{round}");
     }
@@ -351,7 +343,6 @@ mod tests {
     #[test]
     fn raw_passes_pre_stringified_json_through_once() {
         assert_eq!(Json::from(Raw("{\"a\":1}".into())).to_json(), "{\"a\":1}");
-        // …and degrades to a plain string rather than corrupting the line.
         assert_eq!(Json::from(Raw("not json".into())).to_json(), "\"not json\"");
     }
 }

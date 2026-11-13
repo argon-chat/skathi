@@ -1,44 +1,30 @@
 //! The JS engine's garbage goes back to the OS while nobody is looking.
 //!
 //! JSC collects when the app allocates, so an app that allocated a lot and then sits behind other
-//! windows keeps its garbage (a backgrounded app held 95 MB of garbage in 185 MB of JS heap).
+//! windows keeps its garbage.
 //!
 //! So while no window of the app is active, this runs redjs's `release_memory` (two full synchronous
-//! collections, then mimalloc's free pages back to the OS), 45–65 ms on the JS thread:
-//!
-//! - after [`AWAY_AFTER`] without an active window, or [`HIDDEN_AFTER`] hidden
-//!   (minimised, in the tray, cloaked, covered);
-//! - after [`CODE_AFTER`] hidden, `release_memory_and_code`: compiled code
-//!   that is not running goes too (17 MB of JIT and the bytecode that is
-//!   regenerated on demand); the first interaction after it recompiles what it
-//!   runs, which a window someone just brought back can afford;
-//! - again every [`REPEAT`] while it stays that way, since sockets and timers
-//!   keep allocating in the background.
+//! collections, then mimalloc's free pages back to the OS), on the JS thread: after [`AWAY_AFTER`]
+//! without an active window or [`HIDDEN_AFTER`] hidden; after [`CODE_AFTER`] hidden also compiled code
+//! that is not running (`release_memory_and_code`); and every [`REPEAT`] while it stays that way.
 //!
 //! An active window starts it over. `VN_RECLAIM=0` turns it off.
 
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
-/// Without an active window this long before the first collection.
 pub const AWAY_AFTER: Duration = Duration::from_secs(60);
-/// Hidden this long before the first collection.
 pub const HIDDEN_AFTER: Duration = Duration::from_secs(10);
-/// Hidden this long before compiled code goes too.
 pub const CODE_AFTER: Duration = Duration::from_secs(5 * 60);
-/// How often it runs again while the app stays unattended.
 pub const REPEAT: Duration = Duration::from_secs(15 * 60);
 
 /// What to give back. Ordered: `Code` is `Data` and more.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Release {
-    /// The garbage.
     Data,
-    /// The garbage and the compiled code that is not running.
     Code,
 }
 
-/// The state between waves.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Reclaim {
     away_since: Option<Instant>,
@@ -47,8 +33,6 @@ pub struct Reclaim {
 }
 
 impl Reclaim {
-    /// The decision, pure: with whether a window of the app is active and
-    /// whether the page is hidden, what to release now, if anything.
     pub fn decide(&mut self, now: Instant, focused: bool, hidden: bool) -> Option<Release> {
         if focused && !hidden {
             *self = Reclaim::default();
@@ -85,8 +69,6 @@ fn enabled() -> bool {
     *ON.get_or_init(|| std::env::var("VN_RECLAIM").map_or(true, |v| v.trim() != "0"))
 }
 
-/// Called after every JS wave, on either clock, with the runtime's context.
-/// One `Instant` read and a comparison unless it is time.
 pub fn after_wave(rt: &vn_runtime::JsRuntime, focused: bool, hidden: bool) {
     if !enabled() {
         return;

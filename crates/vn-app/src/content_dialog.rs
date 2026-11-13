@@ -1,14 +1,7 @@
 //! The Windows 11 ContentDialog the host draws itself with gpui: what the permission prompt
 //! (src/consent_window.rs) and the crash dialog (src/crash_window.rs) are made of.
 //!
-//! A card of [`WIDTH`] DIP (or wider) on DWM's transient acrylic with rounded corners (solid theme
-//! colours before 22H2): a caption row, a glyph in a tinted circle, a title, body text and a footer
-//! of equal-width buttons. It follows the system's light/dark theme live. The window is owned by an
-//! app window and centred on it. It opens hidden, is sized and drawn out of any `App` update
-//! ([`fit`]) and only then shown, so the open transition is DWM's alone.
-//!
-//! Here: colours, fonts, the card's pieces, buttons with Windows 11's focus ring and access keys, the
-//! input protection ([`Guard`]) and the Win32 side. What each dialog says stays in its own module.
+//! It opens hidden, is sized and drawn out of any `App` update ([`fit`]) and only then shown, so the open transition is DWM's alone.
 
 use std::cell::Cell;
 use std::ops::Range;
@@ -27,24 +20,16 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::popout_win;
 
-/// How long input is ignored once a dialog is the active window.
 pub const INPUT_DELAY: Duration = Duration::from_millis(500);
 
-/// The card's width, DIP: the permission prompt's. The height follows the
-/// text.
 pub const WIDTH: f32 = 440.0;
 
-/// A button's label as drawn, and its access key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Label {
     pub text: String,
-    /// The byte range of the access key's character in `text`, and that
-    /// character, lower-cased.
     pub key: Option<(Range<usize>, char)>,
 }
 
-/// `&Allow` is "Allow" with access key `a`; `&&` is a literal ampersand
-/// (the TaskDialog and Win32 menu convention, vn-desktop `label_of`).
 pub fn parse_label(button: &str) -> Label {
     let mut text = String::with_capacity(button.len());
     let mut key = None;
@@ -82,7 +67,6 @@ pub fn access_key_matches(key: char, name: &str, key_char: Option<&str>, vk_char
         || vk_char.is_some_and(|v| name.chars().count() == 1 && name.eq_ignore_ascii_case(v.encode_utf8(&mut [0; 4])))
 }
 
-/// Which of `labels` an Alt+key stroke presses.
 pub(crate) fn access_key_hit(labels: &[Label], k: &gpui::Keystroke) -> Option<usize> {
     labels.iter().position(|l| {
         l.key.as_ref().is_some_and(|(_, c)| access_key_matches(*c, &k.key, k.key_char.as_deref(), win::latin_key_of(*c)))
@@ -106,7 +90,6 @@ impl Guard {
         }
     }
 
-    /// It stopped being the active window.
     pub fn disarm(&mut self) {
         self.open_at = None;
     }
@@ -116,12 +99,10 @@ impl Guard {
     }
 }
 
-/// An sRGB colour, 0–255.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 impl Rgb {
-    /// WCAG relative luminance.
     pub fn luminance(self) -> f32 {
         let lin = |c: u8| {
             let c = c as f32 / 255.0;
@@ -135,20 +116,16 @@ impl Rgb {
     }
 }
 
-/// WCAG contrast ratio of two colours.
 pub fn contrast(a: Rgb, b: Rgb) -> f32 {
     let (la, lb) = (a.luminance(), b.luminance());
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-/// Black or white, whichever reads better on `fill`: the text of an accent button.
 pub fn text_on(fill: Rgb) -> Rgb {
     let (black, white) = (Rgb(0, 0, 0), Rgb(255, 255, 255));
     if contrast(fill, black) > contrast(fill, white) { black } else { white }
 }
 
-/// The accent fills Windows 11 uses: `AccentDark1` on the light theme,
-/// `AccentLight2` on the dark one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Accent {
     pub light_theme: Rgb,
@@ -156,7 +133,6 @@ pub struct Accent {
 }
 
 impl Accent {
-    /// Windows' default blue.
     pub const DEFAULT: Accent = Accent { light_theme: Rgb(0x00, 0x5F, 0xB8), dark_theme: Rgb(0x60, 0xCD, 0xFF) };
 
     pub fn fill(self, dark: bool) -> Rgb {
@@ -172,12 +148,8 @@ pub fn glyph_in_accent(fill: Rgb, dark: bool) -> bool {
     contrast(fill, card) >= 3.0
 }
 
-/// Physical px, `[left, top, right, bottom]`.
 pub type Rect = [i32; 4];
 
-/// Where a `w`×`h` client area goes: centred on `anchor`, then moved into
-/// `work` (a monitor's work area), keeping its top-left corner on it when it
-/// is larger.
 pub fn center_in(anchor: Rect, work: Rect, w: i32, h: i32) -> (i32, i32) {
     let x = anchor[0] + (anchor[2] - anchor[0] - w) / 2;
     let y = anchor[1] + (anchor[3] - anchor[1] - h) / 2;
@@ -194,8 +166,6 @@ pub(crate) struct Fonts {
     pub mono: &'static str,
 }
 
-/// Segoe UI Variable's optical sizes and Segoe Fluent Icons on Windows 11;
-/// Segoe UI and Segoe MDL2 Assets before it.
 pub(crate) fn fonts(cx: &App) -> &'static Fonts {
     static F: OnceLock<Fonts> = OnceLock::new();
     F.get_or_init(|| {
@@ -212,11 +182,9 @@ pub(crate) fn fonts(cx: &App) -> &'static Fonts {
     })
 }
 
-/// The colours of one theme: Windows 11's ContentDialog tokens.
 pub(crate) struct Theme {
     pub text: Hsla,
     pub text2: Hsla,
-    /// The card above the footer, and the footer band.
     pub body: Hsla,
     pub footer: Hsla,
     pub stroke: Hsla,
@@ -227,15 +195,11 @@ pub(crate) struct Theme {
     pub on_accent: Hsla,
     pub on_accent_pressed: Hsla,
     pub accent_border: Hsla,
-    /// The glyph's circle and the glyph, in the accent.
     pub tint: Hsla,
     pub glyph: Hsla,
-    /// The same in `SystemFillColorCritical`: an error, not a question.
     pub critical_tint: Hsla,
     pub critical: Hsla,
-    /// A recessed block of text (the crash's details), over the card.
     pub well: Hsla,
-    /// A text-only control's hover (`SubtleFillColorSecondary`).
     pub subtle: Hsla,
     pub ring: (Hsla, Hsla),
 }
@@ -248,13 +212,10 @@ impl Theme {
         let white = Rgb(255, 255, 255);
         let vivid = glyph_in_accent(fill, dark);
         if dark {
-            // SystemFillColorCritical, dark: #FF99A4.
             let critical = Rgb(0xFF, 0x99, 0xA4);
             Theme {
                 text: white.alpha(1.0),
                 text2: white.alpha(0.786),
-                // ContentDialog's two surfaces, #2B2B2B over #202020, laid
-                // over the acrylic thinly enough that it shows through.
                 body: Rgb(0x2B, 0x2B, 0x2B).alpha(if acrylic { 0.6 } else { 1.0 }),
                 footer: Rgb(0x20, 0x20, 0x20).alpha(if acrylic { 0.75 } else { 1.0 }),
                 stroke: black.alpha(0.32),
@@ -274,7 +235,6 @@ impl Theme {
                 ring: (white.alpha(1.0), black.alpha(0.7)),
             }
         } else {
-            // SystemFillColorCritical, light: #C42B1C.
             let critical = Rgb(0xC4, 0x2B, 0x1C);
             Theme {
                 text: black.alpha(0.896),
@@ -301,20 +261,14 @@ impl Theme {
     }
 }
 
-/// The accent, acrylic and icon a dialog is drawn with: the system's, or the
-/// preview's in their place.
 pub(crate) fn accent() -> Accent {
     PREVIEW_ACCENT.get().copied().or_else(win::accent).unwrap_or(Accent::DEFAULT)
 }
 
-/// DWM's acrylic is there (22H2 and later), and the preview did not ask for
-/// the solid card.
 pub(crate) fn acrylic() -> bool {
     crate::window::has_system_backdrop() && !PREVIEW_SOLID.load(Ordering::Relaxed)
 }
 
-/// Windows 11's focus visual around `d` (whose corners are `radius`): 2 px
-/// outside, 1 px inside it, 3 px out from the control.
 pub(crate) fn with_ring(d: Div, ring: bool, t: &Theme, radius: f32) -> Div {
     d.when(ring, |d| {
         d.child(
@@ -342,9 +296,6 @@ pub(crate) fn with_ring(d: Div, ring: bool, t: &Theme, radius: f32) -> Div {
     })
 }
 
-/// A footer button: `accent` filled with the accent colour, the access key
-/// underlined while Alt is down, the focus ring once the keyboard is in use.
-/// `wire` adds the caller's mouse handlers to the button itself.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn button(
     id: impl Into<ElementId>,
@@ -397,8 +348,6 @@ pub(crate) fn button(
     with_ring(div().flex_1().relative().child(wire(inner)), ring, t, 4.0)
 }
 
-/// The app's icon in the caption row: its own at 16 px, else Segoe Fluent
-/// Icons' AppIconDefault.
 pub(crate) fn app_icon(icon: &Option<Arc<Image>>, t: &Theme, f: &Fonts) -> AnyElement {
     match icon {
         Some(image) => img(image.clone()).size(px(16.0)).into_any_element(),
@@ -412,8 +361,6 @@ pub(crate) fn app_icon(icon: &Option<Arc<Image>>, t: &Theme, f: &Fonts) -> AnyEl
     }
 }
 
-/// The card above the footer: draggable, the caption row with the app's
-/// icon and name at its top. The caller adds what follows the caption.
 pub(crate) fn body(id: &'static str, app: &str, icon: AnyElement, t: &Theme, f: &Fonts) -> Stateful<Div> {
     div()
         .id(id)
@@ -442,7 +389,6 @@ pub(crate) fn body(id: &'static str, app: &str, icon: AnyElement, t: &Theme, f: 
         )
 }
 
-/// A 40 DIP circle of `tint` holding `glyph` (Segoe Fluent Icons) in `color`.
 pub(crate) fn glyph_badge(glyph: char, tint: Hsla, color: Hsla, f: &Fonts) -> Div {
     div()
         .mt(px(20.0))
@@ -459,7 +405,6 @@ pub(crate) fn glyph_badge(glyph: char, tint: Hsla, color: Hsla, f: &Fonts) -> Di
         .child(glyph.to_string())
 }
 
-/// The title, in Subtitle type.
 pub(crate) fn title(text: String, f: &Fonts) -> Div {
     div()
         .mt(px(16.0))
@@ -470,12 +415,10 @@ pub(crate) fn title(text: String, f: &Fonts) -> Div {
         .child(text)
 }
 
-/// A sentence under the title, in Body type.
 pub(crate) fn content(text: String, t: &Theme) -> Div {
     div().mt(px(8.0)).text_size(px(14.0)).line_height(px(20.0)).text_color(t.text2).child(text)
 }
 
-/// The footer band and its buttons.
 pub(crate) fn footer(t: &Theme, buttons: Vec<impl IntoElement>) -> Div {
     div()
         .flex()
@@ -489,8 +432,6 @@ pub(crate) fn footer(t: &Theme, buttons: Vec<impl IntoElement>) -> Div {
         .children(buttons)
 }
 
-/// The card, body over footer, in the window: what the window is sized to.
-/// The root is the caller's (its id, role, keys); this is its one child.
 pub(crate) fn card(height: Rc<Cell<f32>>, body: impl IntoElement, footer: impl IntoElement) -> Div {
     div()
         .relative()
@@ -517,15 +458,11 @@ pub(crate) fn hwnd_of(window: &Window) -> Option<isize> {
     }
 }
 
-/// The display a dialog owned by `owner` opens on: the owner's monitor, the
-/// primary one without an owner.
 pub(crate) fn display_of(owner: isize, cx: &App) -> Option<DisplayId> {
     let monitor = win::monitor_of(owner);
     (monitor != 0).then(|| DisplayId::new(monitor as u64)).filter(|d| cx.find_display(*d).is_some())
 }
 
-/// A dialog's window: hidden until [`fit`] has sized it, not resizable, not
-/// minimisable, on acrylic or opaque.
 pub(crate) fn window_options(title: String, width: f32, display: Option<DisplayId>, acrylic: bool, cx: &App) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(display, size(px(width), px(320.0)), cx))),
@@ -547,8 +484,6 @@ pub(crate) fn window_options(title: String, width: f32, display: Option<DisplayI
     }
 }
 
-/// While the window is still hidden: owned, round corners, and the
-/// preview's theme when it forces one.
 pub(crate) fn prepare(hwnd: isize, owner: isize, dark: Option<bool>) {
     win::style(hwnd, owner);
     if let Some(dark) = dark {
@@ -572,9 +507,6 @@ pub(crate) async fn fit(handle: AnyWindowHandle, hwnd: isize, owner: isize, widt
     }
 }
 
-/// [`fit`] for a dialog already on screen whose card changed height: it
-/// grows or shrinks about its own centre (where the user may have moved it),
-/// kept on its monitor.
 pub(crate) async fn refit(handle: AnyWindowHandle, hwnd: isize, width: f32, height: &Cell<f32>, cx: &mut AsyncApp) {
     // The frame with the new content first: `height` is the last frame's.
     popout_win::paint_now(hwnd);
@@ -590,8 +522,6 @@ pub(crate) async fn refit(handle: AnyWindowHandle, hwnd: isize, width: f32, heig
     }
 }
 
-/// Disables `owner` while the dialog is up, as a TaskDialog does. Returns
-/// whether it did, so the dialog knows to give it back ([`release_owner`]).
 pub(crate) fn disable_owner(owner: isize) -> bool {
     if owner == 0 {
         return false;
@@ -610,14 +540,10 @@ pub(crate) fn release_owner(owner: isize, own: isize) {
     }
 }
 
-/// The preview draws Windows 10's solid card on Windows 11.
 pub(crate) static PREVIEW_SOLID: AtomicBool = AtomicBool::new(false);
-/// The preview's accent, in place of the system's.
 pub(crate) static PREVIEW_ACCENT: OnceLock<Accent> = OnceLock::new();
-/// The preview's icon: an exe's, in place of this one's (which has none).
 pub(crate) static PREVIEW_ICON: OnceLock<String> = OnceLock::new();
 
-/// The preview's stand-in for an app window: an empty one on Mica.
 pub(crate) struct Blank;
 
 impl Render for Blank {
@@ -626,8 +552,6 @@ impl Render for Blank {
     }
 }
 
-/// Opens [`Blank`] as the preview's owner, and returns its HWND (0 if it
-/// could not open).
 pub(crate) fn preview_owner(title: &str, cx: &mut App) -> isize {
     let bounds = Bounds::centered(None, size(px(900.0), px(600.0)), cx);
     cx.open_window(
@@ -673,7 +597,6 @@ pub(crate) mod win {
         [r.left, r.top, r.right, r.bottom]
     }
 
-    /// A window that can own a dialog: one that exists.
     pub fn usable(raw: isize) -> bool {
         raw != 0 && unsafe { IsWindow(Some(h(raw))) }.as_bool()
     }
@@ -705,7 +628,6 @@ pub(crate) mod win {
         }
     }
 
-    /// The owner's monitor, or the primary one.
     pub fn monitor_of(owner: isize) -> isize {
         let m = if owner != 0 {
             unsafe { MonitorFromWindow(h(owner), MONITOR_DEFAULTTONEAREST) }
@@ -748,7 +670,6 @@ pub(crate) mod win {
             .then(|| rect(info.rcWork))
     }
 
-    /// The window rect that puts a `w`×`h` client area centred on `anchor`.
     fn around(raw: isize, anchor: Rect, w: i32, h: i32) -> Option<Rect> {
         let outer = super::popout_win::window_rect(raw)?;
         let inner = super::popout_win::client_rect_on_screen(raw)?;
@@ -758,19 +679,14 @@ pub(crate) mod win {
         Some([x - border[0], y - border[1], x + w + border[2], y + h + border[3]])
     }
 
-    /// The window rect that puts a `w`×`h` client area centred on the owner.
     pub fn placement(raw: isize, owner: isize, w: i32, h: i32) -> Option<Rect> {
         around(raw, anchor(owner)?, w, h)
     }
 
-    /// The window rect that puts a `w`×`h` client area centred where the
-    /// client area is now.
     pub fn regrown(raw: isize, w: i32, h: i32) -> Option<Rect> {
         around(raw, super::popout_win::client_rect_on_screen(raw)?, w, h)
     }
 
-    /// While the window is still hidden: owned (no taskbar button, above
-    /// its owner), round corners.
     pub fn style(raw: isize, owner: isize) {
         if owner != 0 {
             super::popout_win::make_owned(raw, owner);
@@ -786,7 +702,6 @@ pub(crate) mod win {
         }
     }
 
-    /// The preview's theme, in place of the system's: what tints the acrylic.
     pub fn set_dark(raw: isize, dark: bool) {
         let on = windows::core::BOOL::from(dark);
         unsafe {
@@ -799,7 +714,6 @@ pub(crate) mod win {
         }
     }
 
-    /// The system's accent fills (`UISettings`, what WinUI reads).
     pub fn accent() -> Option<Accent> {
         use windows::UI::ViewManagement::{UIColorType, UISettings};
         let s = UISettings::new().ok()?;
@@ -807,7 +721,6 @@ pub(crate) mod win {
         Some(Accent { light_theme: get(UIColorType::AccentDark1)?, dark_theme: get(UIColorType::AccentLight2)? })
     }
 
-    /// The Latin letter of the key that types `c` on the current layout.
     pub fn latin_key_of(c: char) -> Option<char> {
         let mut buf = [0u16; 2];
         let [unit] = c.encode_utf16(&mut buf) else { return None };
@@ -819,8 +732,6 @@ pub(crate) mod win {
         (vk.is_ascii_uppercase() || vk.is_ascii_digit()).then(|| (vk as char).to_ascii_lowercase())
     }
 
-    /// The app's icon at `px`×`px`, as a PNG: the exe's own (resource 1, the
-    /// one gpui gives its windows), else the owner's class icon.
     pub fn icon_png(owner: isize, own: isize, px: i32) -> Option<Vec<u8>> {
         let px = px.clamp(16, 256);
         let module = unsafe { GetModuleHandleW(None) }.ok()?;
@@ -845,7 +756,6 @@ pub(crate) mod win {
         png
     }
 
-    /// The preview's: another exe's first icon.
     fn from_file(exe: &str, px: i32) -> Option<HICON> {
         use windows::Win32::UI::WindowsAndMessaging::PrivateExtractIconsW;
         let mut path = [0u16; 260];

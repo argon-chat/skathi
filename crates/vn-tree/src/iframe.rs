@@ -18,16 +18,12 @@ use gpui::{App, Bounds, Pixels, Window};
 use crate::tree::{self, Tree};
 use crate::EventPayload;
 
-/// What the element's attributes ask the document to be.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrameAttrs {
-    /// The document's URL, resolved against the app's origin by the backend.
     pub src: Option<String>,
     /// An inline document; wins over `src` when present, as in HTML.
     pub srcdoc: Option<String>,
-    /// The `sandbox` attribute, verbatim. `None`: not sandboxed.
     pub sandbox: Option<String>,
-    /// The `allow` attribute (Permissions Policy), verbatim.
     pub allow: Option<String>,
     pub referrer_policy: Option<String>,
     pub name: Option<String>,
@@ -35,43 +31,32 @@ pub struct FrameAttrs {
 }
 
 impl FrameAttrs {
-    /// Is there a document to load at all?
     fn has_document(&self) -> bool {
         self.srcdoc.is_some() || self.src.is_some()
     }
 
-    /// The text `load` / `error` name the navigation by.
     fn key(&self) -> &str {
         self.src.as_deref().unwrap_or("about:srcdoc")
     }
 }
 
-/// Where the document is on screen this frame, in device pixels of its window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placement {
-    /// The element's content box.
     pub bounds: [f32; 4],
-    /// The part of it that is visible: the box cut by every clipping ancestor.
     pub clip: [f32; 4],
     /// Corner radii of the box, top-left clockwise.
     pub radii: [f32; 4],
-    /// The window's scale factor.
     pub scale: f32,
-    /// The element's own `opacity` times its ancestors'.
     pub opacity: f32,
 }
 
-/// What a document tells its element.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FrameEvent {
-    /// The navigation finished and the document's own `load` fired.
     Loaded,
-    /// The navigation failed, or the browser process went away.
     Failed(String),
     /// `window.parent.postMessage(..)` in the document: the sender's serialized origin (`"null"`
     /// for an opaque one) and the payload's wire text.
     Message { origin: String, wire: String },
-    /// The pointer the document wants over its box changed.
     Cursor(gpui::CursorStyle),
 }
 
@@ -90,7 +75,7 @@ impl Sink {
     }
 }
 
-/// A pointer event over the visible part of the document's box (R6.1).
+/// A pointer event over the visible part of the document's box.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PointerInput {
     pub kind: PointerKind,
@@ -111,32 +96,25 @@ pub enum PointerKind {
     Up(u8),
     /// Device pixels to scroll by, x then y, positive down and right.
     Wheel(f32, f32),
-    /// The pointer left the box.
     Leave,
 }
 
-/// One live document.
 pub trait Frame {
-    /// Load what `attrs` describe, replacing the current document.
     fn navigate(&mut self, attrs: &FrameAttrs);
-    /// Deliver a message to the document's `window` (R2.1).
+    /// Deliver a message to the document's `window`.
     fn post(&mut self, wire: &str, target_origin: &str);
-    /// Show the document at `placement`, or hide it (`None`: not painted this frame — `display:
-    /// none`, culled, scrolled out, R5.5).
+    /// Show the document at `placement`, or hide it (`None`: not painted this frame).
     fn place(&mut self, placement: Option<Placement>);
-    /// The document goes with it and is not reloaded (R1.8).
+    /// Re-parent to `window`; the document goes with it and is not reloaded.
     fn rehome(&mut self, window: &mut Window);
-    /// Give the document the keyboard focus, or take it back (R1.6).
+    /// Give the document the keyboard focus, or take it back.
     fn focus(&mut self, on: bool);
-    /// A pointer event the app's own hit test resolved to this box.
     fn pointer(&mut self, input: PointerInput);
 }
 
-/// The platform's webview.
 pub trait Backend {
     /// Cheap: asked by `vnFeatures.iframe` on every read.
     fn supported(&self) -> bool;
-    /// A new, empty frame in `window`.
     fn create(&self, node: u32, sink: Sink, window: &mut Window, cx: &mut App) -> Option<Box<dyn Frame>>;
 }
 
@@ -144,49 +122,39 @@ struct Live {
     frame: Box<dyn Frame>,
     attrs: FrameAttrs,
     win: crate::windows::WinKey,
-    /// Has the current navigation been answered?
     answered: bool,
     placed: Option<Placement>,
-    /// The pointer the document asks for over its box.
     cursor: gpui::CursorStyle,
 }
 
-/// How many documents may be open at once in the process (R7.4).
+/// How many documents may be open at once in the process.
 pub const MAX_FRAMES: usize = 8;
 
 thread_local! {
     static BACKEND: RefCell<Option<Rc<dyn Backend>>> = const { RefCell::new(None) };
-    /// Wakes the UI loop from a backend callback (set with the backend).
     static WAKE: RefCell<Rc<dyn Fn()>> = RefCell::new(Rc::new(|| {}));
-    /// Nodes to reconcile on the next tick.
     static NOTED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
     static WAITING: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
     static FRAMES: RefCell<HashMap<u32, Live>> = RefCell::new(HashMap::new());
     static EVENTS: RefCell<VecDeque<(u32, FrameEvent)>> = const { RefCell::new(VecDeque::new()) };
-    /// The iframes the paint walk reached since the last tick.
     static PAINTED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
-    /// The windows that built an element tree since the last tick.
     static DREW: RefCell<Vec<crate::windows::WinKey>> = const { RefCell::new(Vec::new()) };
     static REFUSED: RefCell<HashMap<u32, FrameAttrs>> = RefCell::new(HashMap::new());
 }
 
-/// Installs the platform's webview.
 pub fn set_backend(backend: Rc<dyn Backend>, wake: Rc<dyn Fn()>) {
     BACKEND.with(|b| *b.borrow_mut() = Some(backend));
     WAKE.with(|w| *w.borrow_mut() = wake);
 }
 
-/// `vnFeatures.iframe`.
 pub fn supported() -> bool {
     BACKEND.with(|b| b.borrow().as_ref().is_some_and(|b| b.supported()))
 }
 
-/// Is `name` an attribute whose change the document has to hear about?
 pub(crate) fn is_frame_attr(name: &str) -> bool {
     matches!(name, "src" | "srcdoc" | "sandbox" | "allow" | "referrerpolicy" | "name" | "allowfullscreen")
 }
 
-/// An `<iframe>` changed in a way [`tick`] has to look at.
 pub(crate) fn note(id: u32) {
     NOTED.with(|n| n.borrow_mut().insert(id));
 }
@@ -213,7 +181,6 @@ fn attrs_of(t: &Tree, id: u32) -> FrameAttrs {
     }
 }
 
-/// Is the node in a document: does its parent chain end at a root?
 fn connected(t: &Tree, id: u32) -> bool {
     let mut at = id;
     for _ in 0..4096 {
@@ -226,14 +193,10 @@ fn connected(t: &Tree, id: u32) -> bool {
     false
 }
 
-/// What [`tick`] should do about one noted node.
 #[derive(Debug, PartialEq)]
 enum Step {
-    /// The node is gone, disconnected, or has nothing to load.
     Drop,
-    /// Not connected yet, but has a document to load once it is.
     Wait,
-    /// Connected, with a document.
     Show(FrameAttrs),
 }
 
@@ -249,7 +212,6 @@ fn step(t: &Tree, id: u32) -> Step {
     if connected(t, id) { Step::Show(attrs) } else { Step::Wait }
 }
 
-/// Called once per frame from [`crate::frame_tick`].
 pub(crate) fn tick(window: &mut Window, cx: &mut App) {
     let noted: Vec<u32> = NOTED.with(|n| n.borrow_mut().drain().collect());
     let win = crate::windows::key(window);
@@ -258,7 +220,6 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) {
             Step::Drop => {
                 WAITING.with(|w| w.borrow_mut().remove(&id));
                 REFUSED.with(|r| r.borrow_mut().remove(&id));
-                // Dropped here, on the UI thread, with the window at hand.
                 drop(FRAMES.with(|f| f.borrow_mut().remove(&id)));
             }
             Step::Wait => {
@@ -299,7 +260,7 @@ fn show(id: u32, attrs: FrameAttrs, win: crate::windows::WinKey, window: &mut Wi
             }
         }),
         None if FRAMES.with(|f| f.borrow().len()) >= MAX_FRAMES => {
-            // One more would cost the ones that are running (R7.4).
+            // One more would cost the ones that are running.
             let again = REFUSED.with(|r| r.borrow().get(&id) == Some(&attrs));
             if !again {
                 EVENTS.with(|q| {
@@ -336,8 +297,7 @@ fn show(id: u32, attrs: FrameAttrs, win: crate::windows::WinKey, window: &mut Wi
     }
 }
 
-/// Hides each frame of this window that the last paint did not reach (`display: none`, culled,
-/// scrolled out — R5.5).
+/// Hides each frame of this window that the last paint did not reach (`display: none`, culled, scrolled out).
 fn place_all(win: crate::windows::WinKey) {
     let drew = DREW.with(|d| {
         let mut d = d.borrow_mut();
@@ -378,7 +338,7 @@ pub(crate) fn drawing(win: crate::windows::WinKey) {
     });
 }
 
-/// Its document follows it there.
+/// The element is painted in `window`: its document follows it there.
 pub(crate) fn painted_in(id: u32, window: &mut Window) {
     let win = crate::windows::key(window);
     FRAMES.with(|f| {
@@ -392,12 +352,11 @@ pub(crate) fn painted_in(id: u32, window: &mut Window) {
     });
 }
 
-/// The pointer the document wants over its box.
 pub(crate) fn cursor(id: u32) -> Option<gpui::CursorStyle> {
     FRAMES.with(|f| f.borrow().get(&id).map(|l| l.cursor))
 }
 
-/// Told to the frame at once, so the document moves in the frame its box does (R5.4).
+/// Told to the frame at once, so the document moves in the frame its box does.
 pub(crate) fn placed(id: u32, placement: Placement) {
     PAINTED.with(|p| p.borrow_mut().insert(id));
     FRAMES.with(|f| {
@@ -410,7 +369,6 @@ pub(crate) fn placed(id: u32, placement: Placement) {
     });
 }
 
-/// Dispatches the queued document events at their nodes.
 fn deliver(window: &mut Window, cx: &mut App) {
     loop {
         let Some((id, event)) = EVENTS.with(|q| q.borrow_mut().pop_front()) else { break };
@@ -469,7 +427,6 @@ fn message_key(origin: &str, wire: &str) -> String {
     out
 }
 
-/// `contentWindow.postMessage`.
 pub(crate) fn post(id: u32, wire: &str, target_origin: &str) {
     FRAMES.with(|f| {
         if let Some(live) = f.borrow_mut().get_mut(&id) {
@@ -478,7 +435,6 @@ pub(crate) fn post(id: u32, wire: &str, target_origin: &str) {
     });
 }
 
-/// The element took or lost the keyboard focus.
 pub(crate) fn focus(id: u32, on: bool) {
     FRAMES.with(|f| {
         if let Some(live) = f.borrow_mut().get_mut(&id) {
@@ -487,7 +443,6 @@ pub(crate) fn focus(id: u32, on: bool) {
     });
 }
 
-/// A pointer event at the element, for its document.
 pub(crate) fn pointer(id: u32, kind: PointerKind, at: (f32, f32), buttons: u8, shift: bool, control: bool) {
     FRAMES.with(|f| {
         if let Some(live) = f.borrow_mut().get_mut(&id) {
@@ -500,13 +455,11 @@ pub(crate) fn pointer(id: u32, kind: PointerKind, at: (f32, f32), buttons: u8, s
 }
 
 thread_local! {
-    /// Per window: the iframe whose document has the keyboard.
     static FOCUSED: RefCell<HashMap<crate::windows::WinKey, u32>> = RefCell::new(HashMap::new());
 }
 
-/// The keyboard follows the app's focus (R6.3): an `<iframe>` is a focusable element, and while it
-/// is the window's focused node — by a press, `Tab` or `el.focus()` — its document has the keys;
-/// when the focus moves on, the window has them back.
+/// The keyboard follows the app's focus: while an `<iframe>` is the window's focused node (press,
+/// `Tab`, `el.focus()`) its document has the keys; when focus moves on, the window has them back.
 fn sync_focus(win: crate::windows::WinKey, window: &Window) {
     let had = FOCUSED.with(|f| f.borrow().get(&win).copied().unwrap_or(0));
     if !window.is_window_active() {
@@ -537,7 +490,6 @@ pub fn fullscreen_active() -> bool {
     tree::read_tree(|t| crate::fullscreen::current(t).is_some())
 }
 
-/// Does this node have a live document?
 pub(crate) fn has_document(id: u32) -> bool {
     FRAMES.with(|f| f.borrow().contains_key(&id))
 }
@@ -553,7 +505,7 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
     PAINTED.with(|p| p.borrow_mut().retain(|&id| live(id)));
 }
 
-/// Their elements, if they are painted again elsewhere, load anew.
+/// A window closed: its documents go, and their elements load anew if painted again elsewhere.
 pub(crate) fn forget_window(win: crate::windows::WinKey) {
     let gone: Vec<Live> = FRAMES.with(|f| {
         let mut f = f.borrow_mut();
@@ -565,13 +517,11 @@ pub(crate) fn forget_window(win: crate::windows::WinKey) {
     DREW.with(|d| d.borrow_mut().retain(|w| *w != win));
 }
 
-/// Every document goes: the app is quitting.
 pub fn shutdown() {
     drop(FRAMES.with(|f| std::mem::take(&mut *f.borrow_mut())));
     EVENTS.with(|q| q.borrow_mut().clear());
 }
 
-/// The placement of a box painted at `bounds` under `mask`, for [`placed`].
 pub(crate) fn placement(
     bounds: Bounds<Pixels>,
     mask: Bounds<Pixels>,

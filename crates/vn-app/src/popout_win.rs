@@ -1,8 +1,5 @@
-//! Win32 helpers for a `<VnWindow>` that is shown and hidden rather than opened and closed,
-//! owned by the main window, or laid over a monitor or another application.
-//!
-//! gpui has no words for any of it, so these act on the HWND the window host cached. Every
-//! function takes the raw HWND and does nothing on a handle that is not one.
+//! Win32 helpers for a `<VnWindow>` that is shown and hidden, owned by the main window, or laid
+//! over a monitor. They act on the raw HWND and do nothing on a handle that is not one.
 
 #[cfg(target_os = "windows")]
 mod imp {
@@ -38,7 +35,7 @@ mod imp {
         [r.left, r.top, r.right, r.bottom]
     }
 
-    /// The whole monitor `of` is on (or nearest to), taskbar included. Physical px.
+    /// Taskbar included. Physical px.
     pub fn monitor_rect(of: isize) -> Option<Rect> {
         let m = unsafe { MonitorFromWindow(h(of), MONITOR_DEFAULTTONEAREST) };
         if m.is_invalid() {
@@ -54,7 +51,6 @@ mod imp {
         Some(rect(r))
     }
 
-    /// The client area in screen coordinates, physical px.
     pub fn client_rect_on_screen(raw: isize) -> Option<Rect> {
         let mut r = RECT::default();
         unsafe { GetClientRect(h(raw), &mut r) }.ok()?;
@@ -63,8 +59,8 @@ mod imp {
         Some([origin.x, origin.y, origin.x + r.right, origin.y + r.bottom])
     }
 
-    /// Owned by `owner`, without the taskbar button `WS_EX_APPWINDOW` forces even on an owned
-    /// window. The taskbar reads the styles when the window is shown, so call this while hidden.
+    /// Owned by `owner`, without the taskbar button `WS_EX_APPWINDOW` forces. The taskbar reads
+    /// styles on show: call while hidden.
     pub fn make_owned(raw: isize, owner: isize) {
         unsafe {
             SetWindowLongPtrW(h(raw), GWLP_HWNDPARENT, owner);
@@ -73,9 +69,8 @@ mod imp {
         }
     }
 
-    /// Frameless popup styles (no frame, caption or system menu), so the client area is the window
-    /// rect, with square DWM corners and no border. Drops `NonRudeHWND`, which gpui sets on frameless
-    /// windows so the taskbar does NOT step back; covering a monitor wants the opposite.
+    /// Frameless popup (client area = window rect, square corners, no border). Drops `NonRudeHWND`,
+    /// which gpui sets on frameless windows so the taskbar does NOT step back; a cover wants it to.
     pub fn make_cover(raw: isize) {
         let hwnd = h(raw);
         unsafe {
@@ -109,9 +104,8 @@ mod imp {
         }
     }
 
-    /// Puts the window at `r` and makes it stay there. A move onto a monitor of another DPI makes
-    /// Windows send `WM_DPICHANGED` with a suggested rect that gpui applies, so the first call can
-    /// end elsewhere; the second, at the new DPI, does not move monitors again.
+    /// A move onto a monitor of another DPI makes Windows send `WM_DPICHANGED` with a suggested rect
+    /// that gpui applies, so the first call can end elsewhere; hence the retry at the new DPI.
     pub fn set_rect(raw: isize, r: Rect) -> Option<Rect> {
         for _ in 0..3 {
             unsafe {
@@ -132,7 +126,7 @@ mod imp {
         window_rect(raw)
     }
 
-    /// Shows the window. `activate` also makes it the foreground window, which Windows allows when this process already owns the foreground.
+    /// `activate` also takes the foreground, which Windows allows when this process owns it already.
     pub fn show(raw: isize, activate: bool) {
         unsafe {
             if activate {
@@ -144,8 +138,8 @@ mod imp {
         }
     }
 
-    /// Hides the window. If it is the foreground window, `return_to` gets the activation first:
-    /// Windows does not always pick the owner next.
+    /// If it is the foreground window, `return_to` gets the activation first: Windows does not
+    /// always pick the owner next.
     pub fn hide(raw: isize, return_to: Option<isize>) {
         unsafe {
             if let Some(to) = return_to.filter(|_| GetForegroundWindow() == h(raw)) {
@@ -164,8 +158,8 @@ mod imp {
         fg == h(raw)
     }
 
-    /// Draws the window now through its own `WM_PAINT`, so a hidden window (which gets none) can be
-    /// drawn before it is shown. Must not run inside an `App` update: the draw takes the app.
+    /// Draws through `WM_PAINT` so a hidden window (which gets none) can be drawn before it is
+    /// shown. Must not run inside an `App` update: the draw takes the app.
     pub fn paint_now(raw: isize) {
         unsafe {
             let _ = SendMessageW(h(raw), WM_PAINT, Some(WPARAM(0)), Some(LPARAM(0)));
@@ -190,7 +184,7 @@ mod imp {
         }
     }
 
-    /// The whole of monitor `index`, in `EnumDisplayMonitors` order. Physical px.
+    /// `EnumDisplayMonitors` order. Physical px.
     pub fn monitor_rect_at(index: usize) -> Option<Rect> {
         unsafe extern "system" fn each(m: HMONITOR, _: HDC, _: *mut RECT, out: LPARAM) -> BOOL {
             let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
@@ -204,12 +198,9 @@ mod imp {
         all.get(index).copied()
     }
 
-    /// `ignoreMouseEvents`: the mouse goes through the window to whatever is under it, in every
-    /// process (`WS_EX_LAYERED | WS_EX_TRANSPARENT`). `HTTRANSPARENT` would only pass clicks to
-    /// windows of the same thread.
-    ///
-    /// DWM keeps composing gpui's DirectComposition content under `WS_EX_LAYERED`. The constant alpha
-    /// is set anyway: a layered window whose attributes were never set may be left undrawn.
+    /// The mouse goes through to every process (`WS_EX_LAYERED | WS_EX_TRANSPARENT`; `HTTRANSPARENT`
+    /// would only pass clicks to windows of the same thread). The constant alpha is set anyway: a
+    /// layered window whose attributes were never set may be left undrawn.
     pub fn set_click_through(raw: isize, on: bool) {
         let hwnd = h(raw);
         let bits = (WS_EX_LAYERED | WS_EX_TRANSPARENT).0 as isize;
@@ -246,8 +237,7 @@ mod imp {
         _data: usize,
     ) -> LRESULT {
         match msg {
-            // gpui answers `MA_ACTIVATE` to every click; that would make the overlay the foreground
-            // window, take the game's focus and raise the taskbar over a borderless game.
+            // gpui answers `MA_ACTIVATE` to every click, which would steal the foreground from a game.
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
             WM_NCDESTROY => {
                 let _ = unsafe { RemoveWindowSubclass(hwnd, Some(no_activate_proc), NO_ACTIVATE) };
@@ -257,18 +247,13 @@ mod imp {
         }
     }
 
-    /// `focusable: false`: a window never activated, by a show or a click, and untracked by the shell.
+    /// Never activated by a show or a click, and untracked by the shell: `WS_EX_NOACTIVATE` plus
+    /// a `MA_NOACTIVATE` subclass (the style alone would not hold against gpui's `MA_ACTIVATE`),
+    /// and `WS_EX_TOOLWINDOW` (no taskbar button, no `HSHELL_WINDOWCREATED`, so the shell does not
+    /// re-check fullscreen state and the taskbar stays down over a borderless game).
     ///
-    /// * `WS_EX_NOACTIVATE` plus a `WM_MOUSEACTIVATE` answering `MA_NOACTIVATE` (gpui answers
-    ///   `MA_ACTIVATE` itself, so the style alone would not hold);
-    /// * `WS_EX_TOOLWINDOW` instead of `WS_EX_APPWINDOW`: no taskbar button, no Alt-Tab entry, no
-    ///   `HSHELL_WINDOWCREATED`, so the shell does not re-check fullscreen state and the taskbar
-    ///   stays down over a borderless game.
-    ///
-    /// gpui's `NonRudeHWND` stays: without it the taskbar steps back behind a click-through window
-    /// covering the monitor. A `cover` wants it gone, and [`make_cover`] removes it.
-    ///
-    /// Call while the window is hidden: the taskbar reads the styles when a window is shown.
+    /// gpui's `NonRudeHWND` stays, or the taskbar steps back behind a click-through window
+    /// covering the monitor; [`make_cover`] removes it. Call while hidden.
     pub fn make_unfocusable(raw: isize) {
         let hwnd = h(raw);
         unsafe {
@@ -288,9 +273,8 @@ mod imp {
         }
     }
 
-    /// `contentProtection`: screen capture leaves the window out (`WDA_EXCLUDEFROMCAPTURE`, Windows
-    /// 10 2004+), falling back to `WDA_MONITOR` (captured as black) on older Windows. Returns the
-    /// affinity the window has now.
+    /// `WDA_EXCLUDEFROMCAPTURE` (Windows 10 2004+), falling back to `WDA_MONITOR` (captured as
+    /// black). Returns the affinity now in effect.
     pub fn set_content_protection(raw: isize, on: bool) -> u32 {
         let hwnd = h(raw);
         unsafe {
@@ -344,8 +328,8 @@ mod imp {
 
 pub use imp::*;
 
-/// Maps a rectangle from one window's client space to another's, both in CSS px, through the
-/// screen. `from_origin` / `to_origin` are the client areas' screen origins, physical px.
+/// Maps a rect between two windows' client spaces (CSS px) through the screen; the origins are
+/// the client areas' screen origins, physical px.
 pub fn map_rect(
     rect: (f32, f32, f32, f32),
     from_origin: (i32, i32),

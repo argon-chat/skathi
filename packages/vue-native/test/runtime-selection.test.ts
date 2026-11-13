@@ -1,15 +1,11 @@
-// The document text selection's JS half (src/selection.ts): `getSelection()`,
-// `Selection`, `Range`, `document.createRange()`, and the `selectstart` /
-// `selectionchange` events. The host's half (hit testing, painting, the text a
-// selection serializes to) is tested in Rust (crates/vn-tree/src/selection.rs);
-// here the host is `host.selection`, a fake with the same protocol.
+// The document text selection's JS half (src/selection.ts): `getSelection()`, `Selection`, `Range`, `createRange()` and
+// the `selectstart` / `selectionchange` events. The host is `host.selection`, a fake with the same protocol.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
 
 type N = { __vnId: number; childNodes: N[]; parentNode: N | null; data?: string; textContent: string };
 
-/** `<div><p>"Hello " <b>big</b> " world"</p><p>own text</p></div>` under the root. */
 function world(options: Parameters<typeof createRuntime>[0] = {}) {
   const rt = createRuntime(options);
   rt.createApp({ render: () => null }).mount();
@@ -67,11 +63,9 @@ describe("getSelection", () => {
     expect(sel.direction).toBe("backward");
     expect(sel.rangeCount).toBe(1);
     expect(String(sel)).toBe("ello b");
-    // The range is in document order whatever the direction.
     const r = sel.getRangeAt(0);
     expect([r.startContainer, r.startOffset, r.endContainer, r.endOffset]).toEqual([hello, 1, big, 2]);
     expect(r.toString()).toBe("ello bi");
-    // The same range while the selection stays put.
     expect(sel.getRangeAt(0)).toBe(r);
   });
 
@@ -123,14 +117,12 @@ describe("getSelection", () => {
     expect(sel.getRangeAt(0)).toBe(r);
     r.setEnd(w, 4);
     expect(rt.host.selection.sets.at(-1)).toEqual([hello.__vnId, 1, w.__vnId, 4]);
-    // A second range is ignored, as in Chromium.
     const other = doc.createRange();
     other.selectNodeContents(w);
     sel.addRange(other);
     expect(rt.host.selection.sets.at(-1)).toEqual([hello.__vnId, 1, w.__vnId, 4]);
     sel.removeRange(r);
     expect(sel.rangeCount).toBe(0);
-    // Once removed, the range is the script's own again.
     const n = rt.host.selection.sets.length;
     r.collapse(true);
     expect(rt.host.selection.sets.length).toBe(n);
@@ -211,8 +203,6 @@ describe("Range", () => {
     r.deleteContents();
     expect(p1.textContent).toBe("Hrld");
     expect(p1.childNodes.length).toBe(2);
-    // DOM: the start is not an ancestor of the end, so the new boundary is
-    // just after the start's ancestor below the common one.
     expect(r.startContainer === p1 && r.startOffset === 1 && r.collapsed).toBe(true);
   });
 

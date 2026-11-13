@@ -1,18 +1,13 @@
 // File System Access (`showOpenFilePicker`, `showSaveFilePicker`, `showDirectoryPicker`, handles,
-// `FileSystemWritableFileStream`) and the request half of `<input type=file>` / `<a download>`.
-// runtime.ts owns the elements; this file asks the host (vn-desktop) for what they need.
-//
-// Handles hold a numeric id into vn-desktop's handle table, never a path, so nothing here can
-// name or leak a file the user did not pick. A FinalizationRegistry releases the id.
-//
-// Handles are structured-cloneable (a clone is a new handle on the same path) and permission
-// follows the path: picked, dropped or launched paths are "granted"; a handle restored in a
-// later session is "prompt" until requestPermission() on a user activation, which this host
-// grants without Chromium's prompt (warned once).
-//
+// `FileSystemWritableFileStream`) and the request half of `<input type=file>` / `<a download>`. runtime.ts owns the
+// elements; this file asks the host (vn-desktop).
+// Handles hold a numeric id into vn-desktop's handle table, never a path, so nothing here can name or leak a file the
+// user did not pick; a FinalizationRegistry releases the id. Handles are structured-cloneable (a clone is a new handle
+// on the same path). Permission follows the path: picked, dropped or launched paths are "granted"; a handle restored
+// in a later session is "prompt" until requestPermission() on a user activation, which this host grants without
+// Chromium's prompt (warned once).
 // Dependencies are injected so the bun harness can run this against a fake host.
 
-/** A rejection as the host serialises it (`Fail::to_json` / `to_sync_json`). */
 export interface DesktopFailure {
   name: string;
   message?: string;
@@ -23,7 +18,6 @@ export interface DesktopFailure {
 
 export interface DesktopSettle {
   payload: Record<string, unknown>;
-  /** A JS value the host made on delivery (a `File`, a `FileList`), or undefined. */
   value: unknown;
 }
 
@@ -85,7 +79,6 @@ interface WritableStreamLike {
 }
 
 export interface DesktopDeps {
-  /** The host fns, or null in a host without vn-desktop. */
   host: DesktopFsHost | null;
   engine: DesktopEngine;
   call(json: Json): Promise<DesktopSettle>;
@@ -99,7 +92,6 @@ export interface InputPickRequest {
   accept: string;
   multiple: boolean;
   directory: boolean;
-  /** The input's current FileList: picking the same files again is a `cancel`. */
   current: unknown;
 }
 
@@ -138,7 +130,6 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     });
 
   if (!host) {
-    // No vn-desktop: no pickers, so feature detection falls to `<input type=file>`.
     return {
       handleFrom: () => {
         throw new TypeError("no desktop host");
@@ -482,7 +473,6 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       req.result = "handles";
       if (kind === "open") req.multiple = !!o?.multiple;
       if (kind === "save" && o?.suggestedName !== undefined) req.suggestedName = String(o.suggestedName);
-      // A picker needs transient activation and consumes it.
       if (!activation.isActive()) {
         throw new DOMException(failed(method, "Window", "Must be handling a user gesture to show a file picker."), "SecurityError");
       }
@@ -555,7 +545,6 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       return deps.call(fs.dialogOpen(json, req.current)).then(
         (s) => (s.payload.cancelled ? null : s.value),
         (f: DesktopFailure) => {
-          // A dialog already open on this window is dropped, as Chromium does.
           if (f.name === "NotAllowedError" && f.code === "EBUSY") return undefined;
           console.error(`[vue-native] <input type=file>: ${f.message ?? f.error ?? f.name}`);
           return undefined;

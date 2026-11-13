@@ -1,13 +1,9 @@
-//! The macOS `mem` fold, free of Mach calls so it compiles and is tested on
-//! every OS: region classification and the `breakdown`. `mem_mac.rs` walks the
-//! regions and fills [`Region`]s.
+//! The macOS `mem` fold, free of Mach calls so it is tested on every OS; `mem_mac.rs` fills [`Region`]s.
 //!
-//! Categories sum to the task's physical footprint (Activity Monitor's
-//! "Memory"): each region contributes the pages the kernel charges for it
-//! ([`Region::charged_pages`]), and what no region holds is its own row. If the
-//! region estimate exceeds the kernel's figure (pages shared with another
-//! process are charged to only one), the total is the estimate and an `info`
-//! row says by how much.
+//! Categories sum to the task's physical footprint (Activity Monitor's "Memory"): each region
+//! contributes the pages the kernel charges for it ([`Region::charged_pages`]), and what no region
+//! holds is its own row. If the estimate exceeds the kernel's figure (shared pages are charged to
+//! one process only), the total is the estimate and an `info` row says by how much.
 
 use std::collections::HashMap;
 
@@ -97,9 +93,8 @@ pub(super) struct Region {
 }
 
 impl Region {
-    /// Pages charged to the footprint: a file's clean pages are the file
-    /// cache's (only dirty or compressed ones count); anonymous memory counts
-    /// while resident or compressed, minus pages marked `MADV_FREE_REUSABLE`.
+    /// A file's clean pages are the file cache's (only dirty or compressed ones count); anonymous
+    /// memory counts while resident or compressed, minus `MADV_FREE_REUSABLE` pages.
     pub fn charged_pages(&self) -> u64 {
         match self.share_mode {
             SM_EMPTY => 0,
@@ -127,8 +122,7 @@ pub(super) enum Cat {
 pub(super) const MIMALLOC: &str = "mimalloc";
 pub(super) const STACKS: &str = "thread stacks";
 
-/// A thread's name with every run of digits folded to `#`, so a pool's workers
-/// group into one row.
+/// Digit runs folded to `#`, so a pool's workers group into one row.
 pub(super) fn thread_group(name: &str) -> String {
     let mut out = String::new();
     for c in name.trim().chars() {
@@ -143,8 +137,7 @@ pub(super) fn thread_group(name: &str) -> String {
     if out.is_empty() { "(unnamed)".into() } else { out }
 }
 
-/// The slice for a stack region: the group of the thread whose `[low, high)`
-/// stack contains it, with the group's thread count.
+/// The group of the thread whose `[low, high)` stack contains the region, with its thread count.
 pub(super) fn stack_slice(start: u64, stacks: &[(u64, u64, String)], counts: &HashMap<String, usize>) -> String {
     match stacks.iter().find(|(low, high, _)| *low <= start && start < *high) {
         Some((_, _, g)) => format!("thread stacks: {g} ×{}", counts.get(g).copied().unwrap_or(1)),
@@ -323,8 +316,7 @@ pub(super) struct Inputs<'a> {
     pub with_resident: bool,
 }
 
-/// Categories that sum to the physical footprint (or to the region estimate
-/// where that is larger), in bytes.
+/// Bytes; sums to the physical footprint, or the region estimate where that is larger.
 pub(super) fn breakdown(i: &Inputs) -> Json {
     let f = i.fold;
     let residual = i.footprint - f.attributed;

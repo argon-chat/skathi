@@ -1,7 +1,5 @@
-// Legacy font object-model oracle (test/fonts-reference.ts): `FontFace`, `document.fonts` and its
-// `ready` / `check` / `load` / set methods / loading events, over a fake of the
-// host's loader (crates/vn-tree/src/fonts.rs, whose parsing, selection and
-// registration are its own Rust tests).
+// Legacy font object-model oracle (test/fonts-reference.ts): `FontFace`, `document.fonts`, its set methods and events,
+// over a fake of the host's loader.
 
 import { describe, expect, test } from "bun:test";
 import { installFonts } from "./fonts-reference";
@@ -20,11 +18,9 @@ interface Rec {
   status: string;
   error: string;
   inSet: boolean;
-  /** The PUA-only range of a face like Alcarin Tengwar. */
   range?: [number, number];
 }
 
-/** A fake host: a face list, the calls made on it, and the listener to drive. */
 function fakeHost(css: Partial<Rec>[] = []) {
   const faces: Rec[] = [];
   const calls: Any[] = [];
@@ -44,7 +40,6 @@ function fakeHost(css: Partial<Rec>[] = []) {
     inSet: false,
     ...r,
   });
-  // A sheet's faces wait, unloaded, until text drawn with them asks.
   for (const c of css) faces.push(rec({ css: true, inSet: true, ...c }));
   const blobs = new Map<string, unknown>();
   const g: Any = {
@@ -96,13 +91,11 @@ function fakeHost(css: Partial<Rec>[] = []) {
   };
   const doc: Any = {};
   const set: Any = installFonts(g, doc);
-  /** What the host's frame tick delivers. */
   const emit = (id: number, status: string, message = "") => {
     const f = faces.find((x) => x.id === id);
     if (f && status !== "list") f.status = status;
     listener!(id, status, message);
   };
-  /** Text drawn with face `id` asked for it: the frame tick's events. */
   const asked = (id: number) => {
     emit(0, "busy");
     emit(id, "loading");
@@ -115,7 +108,6 @@ function fakeHost(css: Partial<Rec>[] = []) {
     calls,
     emit,
     asked,
-    /** A frame laid out with nothing loading and nothing new asked for. */
     quiet: () => emit(0, "quiet"),
     blobs,
     declare: (r: Partial<Rec>) => faces.push(rec({ css: true, inSet: true, ...r })),
@@ -139,12 +131,10 @@ describe("font behavior oracle (test only)", () => {
     expect(h.set.size).toBe(2);
     const [lato, tengwar] = [...h.set];
     expect(lato instanceof h.g.FontFace).toBe(true);
-    // Lazy, as in a browser: nothing has drawn text with them yet.
     expect([lato.family, lato.weight, lato.status]).toEqual(["Lato", "700", "unloaded"]);
     expect(tengwar.unicodeRange).toBe("U+E000-E0FF");
     expect(h.set.status).toBe("loaded");
 
-    // `ready` waits for the first frame's text to ask for its faces.
     let ready = false;
     h.set.ready.then((s: Any) => {
       expect(s).toBe(h.set);
@@ -170,7 +160,6 @@ describe("font behavior oracle (test only)", () => {
       ["loading", ["Lato"]],
       ["loadingdone", ["Lato"]],
     ]);
-    // Latin text never asked for the Private Use Area face.
     expect(tengwar.status).toBe("unloaded");
     expect(await lato.loaded).toBe(lato);
   });
@@ -179,7 +168,6 @@ describe("font behavior oracle (test only)", () => {
     const h = fakeHost([{ family: "Lato" }, { family: "Alcarin Tengwar", range: [0xe000, 0xe0ff] }]);
     expect(h.set.check("16px Lato")).toBe(false);
     expect(h.set.check("16px Inter")).toBe(true);
-    // Latin text does not select the PUA face.
     h.emit(1, "loaded");
     expect(h.set.check("16px 'Alcarin Tengwar', Lato", "abc")).toBe(true);
     expect(h.set.check("16px 'Alcarin Tengwar', Lato", "\u{E010}")).toBe(false);
@@ -201,7 +189,6 @@ describe("font behavior oracle (test only)", () => {
     const loaded = face.load();
     expect(face.status).toBe("loading");
     expect(h.calls[1]).toEqual(["load", 1]);
-    // The textComposition.ts idiom: load, then add.
     const added = loaded.then((f: Any) => h.set.add(f));
     h.emit(1, "loaded");
     expect(await added).toBe(h.set);
@@ -252,11 +239,9 @@ describe("font behavior oracle (test only)", () => {
     h.quiet();
     await tick();
     expect(ready).toBe(true);
-    // The mount installs the sheet; its `list` event comes with the next frame.
     h.declare({ family: "Lato" });
     expect(h.set.size).toBe(1);
     expect(h.set.status).toBe("loaded");
-    // Its text asks for the face: a new `ready`, settled once that frame is quiet.
     h.asked(1);
     let again = false;
     h.set.ready.then(() => (again = true));

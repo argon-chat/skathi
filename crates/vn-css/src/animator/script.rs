@@ -11,13 +11,11 @@ use super::{initial, install, lerp, slot_of, unify, Animatable, Animator, Slot};
 use crate::keyframes::{Direction, FillMode, Keyframe, Keyframes};
 use crate::transition::{Easing, TransitionProperty};
 
-/// An `AnimationEffect`'s timing, resolved (`duration: "auto"` is 0, `fill: "auto"` is `none`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScriptTiming {
     pub delay: f64,
     pub end_delay: f64,
     pub duration: f64,
-    /// `f64::INFINITY` for `Infinity`.
     pub iterations: f64,
     pub iteration_start: f64,
     pub direction: Direction,
@@ -47,7 +45,6 @@ enum Phase {
     After,
 }
 
-/// The script-visible result of the shared timing kernel.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScriptSample {
     pub progress: Option<f64>,
@@ -67,13 +64,10 @@ impl ScriptTiming {
         (self.delay + self.active_duration() + self.end_delay).max(0.0)
     }
 
-    /// The eased iteration progress at `local` ms of the animation's current time, or `None` when
-    /// the effect is not in effect there (outside its active interval and not filling).
     pub fn progress(&self, local: f64, backwards: bool) -> Option<f64> {
         self.sample(Some(local), backwards).progress
     }
 
-    /// Both painter progress and AnimationEffect.getComputedTiming metadata.
     pub fn sample(&self, local: Option<f64>, backwards: bool) -> ScriptSample {
         let Some(local) = local else { return ScriptSample::default(); };
         let active = self.active_duration();
@@ -157,7 +151,6 @@ impl ScriptClock {
     }
 }
 
-/// One script animation's painting half.
 pub(super) struct ScriptAnim {
     pub(super) id: u32,
     pub(super) frames: Rc<Keyframes>,
@@ -166,8 +159,6 @@ pub(super) struct ScriptAnim {
 }
 
 impl ScriptAnim {
-    /// Will its value change on a later frame? Playing, not held, and not yet past the end it is
-    /// heading for.
     pub(super) fn running(&self, timeline: Option<f64>) -> bool {
         if self.clock.hold.is_some() || self.clock.rate == 0.0 {
             return false;
@@ -198,8 +189,6 @@ impl Animator {
             .map(|origin| now.saturating_duration_since(origin).as_secs_f64() * 1000.0)
     }
 
-    /// Creates script animation `id` on `node`, or replaces its effect (new keyframes, new timing,
-    /// or a new target) keeping its clock.
     pub fn script_set(&mut self, id: u32, node: u32, frames: Rc<Keyframes>, timing: ScriptTiming) {
         let mut clock = ScriptClock::default();
         if let Some(old) = self.script_nodes.get(&id).copied() {
@@ -226,13 +215,10 @@ impl Animator {
         list.insert(at, ScriptAnim { id, frames, timing, clock });
     }
 
-    /// The node animation `id` paints, if it has one here.
     pub fn script_node(&self, id: u32) -> Option<u32> {
         self.script_nodes.get(&id).copied()
     }
 
-    /// Moves animation `id`'s clock. Answers the node it paints, so the host can repaint it, or
-    /// `None` for an id it does not know.
     pub fn script_clock(&mut self, id: u32, clock: ScriptClock) -> Option<u32> {
         let node = *self.script_nodes.get(&id)?;
         let a = self.scripts.get_mut(&node)?.iter_mut().find(|a| a.id == id)?;
@@ -240,7 +226,6 @@ impl Animator {
         Some(node)
     }
 
-    /// Forgets animation `id` (cancelled, replaced, or garbage).
     pub fn script_drop(&mut self, id: u32) -> Option<u32> {
         let node = self.script_nodes.remove(&id)?;
         if let Some(list) = self.scripts.get_mut(&node) {
@@ -252,7 +237,6 @@ impl Animator {
         Some(node)
     }
 
-    /// Empty when it is not in effect; `None` for an id it does not know.
     pub fn script_values(&self, id: u32, base: &StyleRefinement, now: Instant) -> Option<Vec<(String, String)>> {
         let node = *self.script_nodes.get(&id)?;
         let a = self.scripts.get(&node)?.iter().find(|a| a.id == id)?;
@@ -272,7 +256,6 @@ impl Animator {
         Some(out)
     }
 
-    /// The script layer of [`Animator::overlay`].
     pub(super) fn script_overlay(
         &self,
         node: u32,
@@ -317,8 +300,6 @@ fn apply_script_keyframes(out: &mut StyleRefinement, base: &StyleRefinement, fra
         let value = |k: Option<&Keyframe>| k.map_or_else(implicit, |k| slot_of(&k.style, &property));
         let zeros = list.iter().filter(|(o, _)| *o == 0.0).count();
         let ones = list.iter().filter(|(o, _)| *o == 1.0).count();
-        // One keyframe stands alone where several share the end the progress has run past;
-        // otherwise the interval holding it, or the first or last one extrapolated.
         let lone = if p < 0.0 && zeros > 1 {
             Some(list[0].1)
         } else if p >= 1.0 && ones > 1 {
@@ -352,7 +333,6 @@ fn apply_script_keyframes(out: &mut StyleRefinement, base: &StyleRefinement, fra
         };
         match unify(a, b) {
             Some((a, b)) => install(out, base, &property, lerp(a, b, eased)),
-            // Discrete: the start value for the first half, the end after.
             None => install(out, base, &property, if eased < 0.5 { a } else { b }),
         }
     }
@@ -381,27 +361,18 @@ fn css_color(c: Hsla) -> String {
     }
 }
 
-/// One keyframe as the script wrote it, after the JS half has computed the offsets and turned the
-/// IDL names into CSS ones.
 pub struct ScriptFrame {
     pub offset: f32,
-    /// The easing of the interval that starts here; `None` is `linear`.
     pub easing: Option<Easing>,
-    /// `(css-name, value)`, in the order the script gave them.
     pub decls: Vec<(String, String)>,
 }
 
-/// What [`script_keyframes`] could not use, for the JS half's advisories.
 #[derive(Default, Debug)]
 pub struct ScriptKeyframeNotes {
-    /// Property names that parse but do not animate here.
     pub ignored: Vec<String>,
-    /// The parser's own diagnostics (an invalid value, an unresolved var()).
     pub diagnostics: Vec<String>,
 }
 
-/// Compiles a script's keyframes against the TARGET's custom properties — a keyframe value may say
-/// `var(--x)`, and the element it animates is the one whose `--x` that is.
 pub fn script_keyframes(
     frames: &[ScriptFrame],
     vars: &crate::Vars,
@@ -437,7 +408,6 @@ pub fn script_keyframes(
             custom: None,
         });
     }
-    // Stable, so equal offsets keep the order given, which decides between them.
     steps.sort_by(|a, b| a.offset.total_cmp(&b.offset));
     (Rc::new(Keyframes { steps, dynamic: false }), notes)
 }
@@ -519,7 +489,6 @@ mod tests {
         assert_eq!(t.progress(-1.0, false), None, "before, no fill");
         assert_eq!(t.progress(0.0, false), Some(0.0));
         assert_eq!(t.progress(250.0, false), Some(0.25));
-        // Exactly at the end, playing forwards: the after phase, no fill.
         assert_eq!(t.progress(1000.0, false), None);
         assert_eq!(t.progress(1000.0, true), Some(1.0));
 
@@ -581,8 +550,6 @@ mod tests {
 
     #[test]
     fn an_overshooting_easing_extrapolates_the_last_interval() {
-        // Digit.vue's roll: translateY from -100px to -120px on a back-out curve, which overshoots
-        // past -120 before settling.
         let (mut a, t0) = animator();
         let back_out = Easing::CubicBezier(0.34, 1.56, 0.64, 1.0);
         a.script_set(

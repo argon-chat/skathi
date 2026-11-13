@@ -72,8 +72,6 @@ const STATE_FOCUS: u8 = 1;
 const STATE_FOCUS_VISIBLE: u8 = 2;
 const STATE_HOVER: u8 = 4;
 const STATE_ACTIVE: u8 = 8;
-/// `:focus-within` — gpui's `.in_focus()` rung, which is focus anywhere in the element's own focus
-/// subtree.
 const STATE_FOCUS_WITHIN: u8 = 16;
 
 const STATE_RUNGS: usize = 5;
@@ -91,8 +89,6 @@ fn rung_of(states: u8) -> Option<usize> {
     }
 }
 
-/// The folded cascade result for one node — exactly the shape gpui's interactivity ladder consumes,
-/// plus the `transition` list the animator diffs against.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ComputedStates {
     pub base: Rc<StyleRefinement>,
@@ -102,54 +98,33 @@ pub struct ComputedStates {
     /// by the renderer, or gpui has nothing to key it on.
     pub focus: Option<Rc<StyleRefinement>>,
     pub focus_visible: Option<Rc<StyleRefinement>>,
-    /// Like `:focus`, the renderer must give the element a tracked focus handle for gpui to key it
-    /// on.
     pub focus_within: Option<Rc<StyleRefinement>>,
-    /// `.group:hover .this` — what this element looks like while an ANCESTOR is hovered, and which
-    /// ancestor that is (its [`MatchDom::key`]).
     pub group_hover: Option<(u64, Rc<StyleRefinement>)>,
     pub group_active: Option<(u64, Rc<StyleRefinement>)>,
-    /// The folded `transition` list.
     pub transitions: Rc<Vec<TransitionSpec>>,
-    /// Only the clock: unlike a transition, an animation reads its values from the engine's
-    /// `@keyframes`.
     pub animations: Rc<Vec<AnimationSpec>>,
-    /// Computed properties a `StyleRefinement` cannot carry (`object-fit`). Folded from the BASE
-    /// state only — see [`Extras`].
     pub extras: Extras,
-    /// `None` when no `::before` rule matched or none declared `content` (CSS generates no box
-    /// then).
     pub before: Option<Rc<PseudoBox>>,
-    /// The `::after` generated box. See [`ComputedStates::before`].
     pub after: Option<Rc<PseudoBox>>,
-    /// Only `color` and font properties reach the widget.
     pub placeholder: Option<Rc<StyleRefinement>>,
     /// Only `background-color` reaches the widget: gpui's selection is a quad behind the glyphs.
     pub selection: Option<Rc<StyleRefinement>>,
-    /// `::file-selector-button` — the "Choose File" button an `<input type=file>` paints (vn-tree
-    /// `build_file_input`).
     pub file_selector_button: Option<Rc<StyleRefinement>>,
-    /// Native control parts, with their originating element's interaction states.
     pub range_track: Option<Rc<ControlPseudo>>,
     pub range_thumb: Option<Rc<ControlPseudo>>,
     pub color_swatch: Option<Rc<ControlPseudo>>,
     pub color_swatch_wrapper: Option<Rc<ControlPseudo>>,
     /// Children read this one, so the restyle pass must walk in document order.
     pub vars: Rc<Vars>,
-    /// Retained dependency recipe only for nodes with registered animations.
     #[doc(hidden)]
     pub custom_animation: Option<Rc<CustomAnimationContext>>,
     /// The effective `color` (own or threaded from the parent), kept only because `currentColor` is
     /// a computed value that needs it; no other inherited text property is folded here.
     pub color: Option<gpui::Hsla>,
-    /// The element's computed `font-size` in px, base state: its own declaration resolved against
-    /// its parent's, or the parent's.
     pub font_size: f32,
-    /// The inherited face resolved before `ch`/`ex`, including features and weight.
     pub computed_font: gpui::Font,
 }
 
-/// Which generated box a rule targets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PseudoElement {
     Before,
@@ -158,7 +133,6 @@ pub enum PseudoElement {
     /// so it folds into its own refinement and the renderer reads `text.color` off it.
     Placeholder,
     Selection,
-    /// Not a generated box either: the renderer builds the button and refines it with this.
     FileSelectorButton,
     RangeTrack,
     RangeThumb,
@@ -176,7 +150,6 @@ impl PseudoElement {
     }
 }
 
-/// A control's internal part shares its element's custom properties and states.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ControlPseudo {
     pub base: Rc<StyleRefinement>,
@@ -219,29 +192,20 @@ impl ControlFold {
     }
 }
 
-/// A `::before` / `::after` generated box, folded out of the cascade.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PseudoBox {
-    /// The `content` string.
     pub content: Rc<str>,
-    /// The folded declarations, base state only.
     pub style: Rc<StyleRefinement>,
-    /// `object-fit` and friends off the same rules — chiefly `position`, `z-index` and
-    /// `pointer-events`, which decorative pseudo boxes use.
     pub extras: Extras,
 }
 
-/// The corner radii an element hands to a child's `border-radius: inherit`: its computed ones,
-/// which are 0 where it declared none.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InheritedRadii {
-    /// top-left, top-right, bottom-right, bottom-left, as gpui orders corners.
     lengths: [Option<gpui::AbsoluteLength>; 4],
     relative: [Option<Option<gpui::VnCornerRadius>>; 4],
 }
 
 impl InheritedRadii {
-    /// What an element whose computed base style is `style` hands down.
     pub fn of(style: &StyleRefinement) -> Self {
         let (c, v) = (&style.corner_radii, &style.vn_corner_radii);
         Self {
@@ -306,8 +270,6 @@ fn keep_base_svg_paint(extras: &mut Extras, before: SvgBase, diagnostics: &mut V
     extras.svg_presentation = presentation;
 }
 
-/// Fills `border-radius: inherit` once the parent's radii are known. The child takes the parent's
-/// cascaded value, not the animated frame.
 pub fn resolve_inherited_radii(states: &mut ComputedStates, parent: InheritedRadii) -> InheritedRadii {
     let corners = states.extras.radius_inherit.inherit;
     if corners != 0 {
@@ -331,7 +293,6 @@ impl ComputedStates {
             || (2..STATE_RUNGS).any(|rung| self.control_state(rung))
     }
 
-    /// Internal control parts repaint from the originating element's states.
     pub fn control_state(&self, rung: usize) -> bool {
         [&self.range_track, &self.range_thumb, &self.color_swatch, &self.color_swatch_wrapper]
             .into_iter().flatten().any(|part| part.states[rung].is_some())
@@ -392,8 +353,6 @@ struct RuleEntry {
     /// matched, so it is folded separately.
     pseudo: Option<PseudoElement>,
     condition: Option<u32>,
-    /// Emitted the first time the rule MATCHES an element, not at sheet compile (see
-    /// `mapper::Converted::diagnostics`).
     diagnostics: Option<Rc<Vec<String>>>,
     /// Author-written declarations; captured only under `set_capture_rule_text` since a Tailwind
     /// sheet is tens of thousands of strings.
@@ -401,8 +360,6 @@ struct RuleEntry {
 }
 
 impl RuleEntry {
-    /// Replaces what the rule's declarations converted to, and nothing else
-    /// ([`Engine::rebase_viewport`]).
     fn set_declarations(&mut self, c: &mapper::Converted) {
         self.normal = c.normal.clone();
         self.important = c.important.clone();
@@ -518,8 +475,6 @@ impl<'a> Half<'a> {
         extras: &mut Extras,
         diagnostics: &mut Vec<String>,
     ) {
-        // A refinement's outline is a whole ring and replaces the bucket's; the half's longhands go
-        // over the ring the rules before it left.
         let outline = bucket.vn_outline;
         if let Some(r) = self.refinement {
             bucket.refine(r);
@@ -564,7 +519,6 @@ impl<'a> Half<'a> {
         into.refine(&scratch.text);
     }
 
-    /// The `font-size` this half leaves, if it sets one, against a parent of `parent` px.
     fn font_size(&self, vars: &Vars, env: &Env, parent: f32) -> Option<f32> {
         let mut size = self.refinement.and_then(|r| r.text.font_size).map(mapper::font_size_px);
         let sets = self.font.is_some_and(|l| l.iter().any(mapper::sets_font_size))
@@ -597,26 +551,16 @@ impl<'a> Half<'a> {
 /// every author rule beats these.
 pub(crate) const UA_SHEET: &str = ":where([hidden]) { display: none }";
 
-/// A compiled stylesheet: rules with matchable selectors, pre-converted declaration blocks,
-/// specificity and state classification.
 pub struct Engine {
     rules: Vec<RuleEntry>,
     index: RuleIndex,
     conditions: Vec<media::Cond>,
-    /// Devtools reports which `@media` block a matched rule came from; the parsed condition cannot
-    /// be printed back and a reader needs the words, not the tree.
     condition_text: Vec<String>,
     sibling_combinators: bool,
     group_states: bool,
-    /// `Engine::keyframes` picks the last entry whose `@media` condition holds, which is CSS's
-    /// "later block wins".
     keyframes: std::collections::HashMap<Box<str>, Vec<KeyframesBlock>>,
     percentage_properties: Vec<(Option<u32>, registered::PercentageRegistration)>,
-    /// The declaration blocks that resolved a viewport unit, kept with the rules they fill, so a
-    /// resize converts just these again ([`Engine::rebase_viewport`]).
     viewport_blocks: Vec<ViewportBlock>,
-    /// A block resolved a viewport unit and was not kept: one inside `@keyframes`, or one that did
-    /// not print.
     viewport_unkept: bool,
     /// Compile and viewport rebase counter: the matched-properties cache keys on it, since rule
     /// indices mean nothing across sheets and a rebase rewrites declarations in place.
@@ -642,16 +586,12 @@ struct KeyframesBlock {
     block: Rc<keyframes::Keyframes>,
 }
 
-/// A compound is a conjunction: `.card .title` can only match an element that carries `title`, and
-/// `button.ghost` only one whose tag is `button`.
 #[derive(Default)]
 struct RuleIndex {
     by_id: std::collections::HashMap<Box<str>, Vec<u32>>,
     by_class: std::collections::HashMap<Box<str>, Vec<u32>>,
     by_tag: std::collections::HashMap<Box<str>, Vec<u32>>,
     root: Vec<u32>,
-    /// Rules whose subject names nothing, filed by what its PARENT must carry: `.space-x-2 >
-    /// :not([hidden]) ~ :not([hidden])`, `.card > *`, `ul > li` is the tag bucket's.
     by_parent_id: std::collections::HashMap<Box<str>, Vec<u32>>,
     by_parent_class: std::collections::HashMap<Box<str>, Vec<u32>>,
     by_parent_tag: std::collections::HashMap<Box<str>, Vec<u32>>,
@@ -672,8 +612,6 @@ enum Key {
     Tag(Box<str>),
 }
 
-/// Where a selector is filed: under a key its subject must carry, under one its parent must carry,
-/// or nowhere.
 enum Bucket {
     Subject(Key),
     Root,
@@ -681,7 +619,6 @@ enum Bucket {
     Any,
 }
 
-// A class inside `:not()` / `:is()` / `:where()` guarantees nothing about the element.
 macro_rules! compound_key {
     ($iter:expr) => {{
         let mut id: Option<Box<str>> = None;
@@ -704,10 +641,6 @@ macro_rules! compound_key {
     }};
 }
 
-/// Files a rule under the strongest key its subject (rightmost compound) guarantees; a
-/// pseudo-element rule uses its originating element, and a subject naming nothing uses its parent.
-/// Anything else goes to `RuleIndex::any`. Only a filter: candidates still go through
-/// `matches_selector`.
 fn bucket_of(sel: &Selector<'_>) -> Bucket {
     use parcel_selectors::parser::Combinator;
     let mut iter = sel.iter();
@@ -877,8 +810,6 @@ fn rule_index_enabled() -> bool {
     }
 }
 
-/// One author sheet as parsed: the sheet itself (or why it failed) and the advisories its error
-/// recovery produced.
 struct ParsedSheet<'i> {
     sheet: Option<StyleSheet<'i>>,
     diagnostics: Vec<String>,
@@ -891,7 +822,6 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Parses one author sheet, for the compile in progress only.
 fn parse_author_sheet(src: &str) -> ParsedSheet<'_> {
     // Without it, ONE stray `}` anywhere — the Argon client ships one after a `@keyframes` — failed
     // the whole sheet, and the app painted unstyled.
@@ -931,8 +861,6 @@ impl Engine {
         Engine::compile_sheets(&[css])
     }
 
-    /// Each sheet parses on its own, like a browser's `<style>`: a stray brace in one cannot
-    /// swallow the next.
     pub fn compile_sheets(sheets: &[&str]) -> Engine {
         let mut engine = Engine {
             rules: Vec::new(),
@@ -973,7 +901,6 @@ impl Engine {
         self.viewport_blocks.shrink_to_fit();
     }
 
-    /// The UA defaults, collected before the author's sheet (see [`UA_SHEET`]).
     fn collect_ua(&mut self, order: &mut u32) {
         let parsed = UA_PARSED.with(|ua| {
             *ua.get_or_init(|| match StyleSheet::parse(UA_SHEET, ParserOptions::default()) {
@@ -987,20 +914,14 @@ impl Engine {
         }
     }
 
-    /// A change reaches descendants always, but following siblings only if the sheet has a sibling
-    /// combinator.
     pub fn uses_sibling_combinators(&self) -> bool {
         self.sibling_combinators
     }
 
-    /// `.stack > *` is offered only to children of a `.stack`, so a host tracking reach from the
-    /// matcher's own questions would miss a plain `div` gaining the class unless told.
     pub fn classes_keyed_on_the_parent(&self) -> impl Iterator<Item = &str> {
         self.index.by_parent_class.keys().map(|k| &**k)
     }
 
-    /// Asked once per sheet: tracking `.group` anchors costs a node pass that a sheet without
-    /// `group-hover:` must not pay.
     pub fn uses_group_states(&self) -> bool {
         self.group_states
     }
@@ -1016,8 +937,6 @@ impl Engine {
         })
     }
 
-    /// Substitutes the block's `var()` declarations against the animating element's variables.
-    /// Called once when a run starts.
     pub fn keyframes_for(
         &self,
         name: &str,
@@ -1034,8 +953,6 @@ impl Engine {
             .iter()
             .map(|step| {
                 let mut style = (*step.style).clone();
-                // Scratch bucket: a keyframe cannot animate an `Extras` value but `apply_dynamic`
-                // needs somewhere to put one.
                 let mut extras = Extras::default();
                 if let Some(list) = &step.dynamic {
                     for (property, raw) in list.iter() {
@@ -1062,13 +979,10 @@ impl Engine {
         Some(Rc::new(keyframes::Keyframes { steps, dynamic: false }))
     }
 
-    /// Does the sheet define any animation at all? The animator can skip its whole pass when not —
-    /// the common case for a hand-written sheet.
     pub fn has_keyframes(&self) -> bool {
         !self.keyframes.is_empty()
     }
 
-    /// With the index off (or on a sheet compiled before it existed) that is simply every rule.
     fn candidates<D: MatchDom>(&self, node: &D, f: &mut dyn FnMut(u32, usize)) {
         if !self.index.enabled {
             for i in 0..self.rules.len() as u32 {
@@ -1100,7 +1014,6 @@ impl Engine {
         }
     }
 
-    /// `order` is shared across the walk so document order (the tiebreak) survives nesting.
     fn collect(&mut self, rules: &[CssRule<'_>], condition: Option<u32>, order: &mut u32) {
         for rule in rules {
             let style = match rule {
@@ -1284,8 +1197,6 @@ impl Engine {
         }
     }
 
-    /// Each part comes with its INLINE bytes: what its values take in the vector they were moved
-    /// into, which is the same as their share of the rule table.
     #[doc(hidden)]
     pub fn into_parts_for_measuring(self) -> Vec<(&'static str, usize, Box<dyn std::any::Any>)> {
         fn part<T: 'static>(name: &'static str, v: Vec<T>) -> (&'static str, usize, Box<dyn std::any::Any>) {
@@ -1335,18 +1246,14 @@ impl Engine {
         ]
     }
 
-    /// Rewrites only the viewport-dependent declarations; the caller restyles the document.
     pub fn rebase_viewport(&mut self) -> bool {
         if self.viewport_unkept {
             return false;
         }
-        // Folded results from before the rebase are not results of this sheet.
         self.generation = next_generation();
         let options = || ParserOptions { error_recovery: true, ..ParserOptions::default() };
         for block in &self.viewport_blocks {
             let Ok(declarations) = DeclarationBlock::parse_string(&block.css, options()) else {
-                // It printed, so it parses; if it ever does not, the recompile replaces every rule
-                // this loop already touched.
                 return false;
             };
             let converted = mapper::convert_block(&declarations);
@@ -1383,8 +1290,6 @@ impl Engine {
         self.compute_with(node, inline, None, env)
     }
 
-    /// [`Self::compute`], additionally folding the transitions an inline `style` declared (parse
-    /// them with [`parse_inline_with_transitions`]).
     pub fn compute_with<D: MatchDom>(
         &self,
         node: D,
@@ -1395,8 +1300,6 @@ impl Engine {
         self.compute_full(node, inline, inline_transitions, Extras::default(), env)
     }
 
-    /// [`Self::compute_with`], additionally folding the [`Extras`] an inline `style` declared
-    /// (parse them with [`parse_inline_full`]).
     pub fn compute_full<D: MatchDom>(
         &self,
         node: D,
@@ -1450,7 +1353,6 @@ impl Engine {
         self.compute_node_with_font(node, inline, parent_vars, parent_color, parent_font_size, &gpui::Font::default(), env, diagnostics)
     }
 
-    /// The full cascade with the inherited face used by font-relative glyph units.
     #[allow(clippy::too_many_arguments)]
     pub fn compute_node_with_font<D: MatchDom>(
         &self, node: D, inline: Option<&InlineStyle>, parent_vars: &Rc<Vars>,
@@ -1465,8 +1367,6 @@ impl Engine {
         let mut by_bucket = [0u32; 6];
         self.candidates(&node, &mut |i, bucket| {
             let rule = &self.rules[i as usize];
-            // Cheaper than matching, and it has to run first anyway: a rule inside a `@media` block
-            // that does not hold is simply not there.
             if let Some(c) = rule.condition {
                 if !self.conditions[c as usize].eval(env) {
                     return;
@@ -1474,8 +1374,6 @@ impl Engine {
             }
             tested += 1;
             by_bucket[bucket] += 1;
-            // A `::before` selector only matches under `ForStatelessPseudoElement`, which runs the
-            // rest of the selector against the originating element.
             let mode = if rule.pseudo.is_some() && rule.control_origin.is_none() {
                 MatchingMode::ForStatelessPseudoElement
             } else {
@@ -1487,8 +1385,6 @@ impl Engine {
                 matched.push(rule);
             }
         });
-        // Tied entries come from one selector list with identical declarations; the table position
-        // only makes equal matches list the same way (`share`).
         let base = self.rules.as_ptr() as usize;
         let index_of =
             |r: &RuleEntry| ((r as *const RuleEntry as usize - base) / std::mem::size_of::<RuleEntry>()) as u32;
@@ -1542,9 +1438,6 @@ impl Engine {
             registrations.push(registration.clone());
         }
         let vars = vars::resolve_registered(parent_vars, &own_custom, &registrations, env, diagnostics);
-        // Lazily, and only for the rungs that actually declare something: the resolve is the
-        // expensive half of the cascade, and the overwhelming majority of elements declare nothing
-        // on any rung.
         let state_vars: [Option<Rc<Vars>>; STATE_RUNGS] = std::array::from_fn(|rung| {
             if state_custom[rung].is_empty() {
                 return None;
@@ -1613,14 +1506,8 @@ impl Engine {
         // `group_active` per element.
         let mut group = GroupFold::default();
         let mut transitions: Option<Rc<Vec<TransitionSpec>>> = None;
-        // Animation component lists cascade independently; zip them only after all matched rules
-        // and the inline style have declared their longhands.
         let mut animations: Option<Rc<Vec<AnimationSpec>>> = None;
-        // Longhand-only `animation-*` declarations, folded in cascade order and applied over
-        // whichever list wins.
         let mut animation_patch = keyframes::AnimationPatch::default();
-        // `object-fit` has no state ladder (advised at compile time), so every matched rule folds
-        // into one value in cascade order.
         let mut extras = Extras::default();
         // Kept out of `base`: a `::after { content: "" }` must not give the originating element an
         // empty content string.
@@ -1634,8 +1521,6 @@ impl Engine {
         let (mut any_selection, mut any_file_button) = (false, false);
         let mut rung_outline = [mapper::OutlinePatch::default(); STATE_RUNGS];
         let mut held_decoration: Option<mapper::DecorationPatch> = None;
-        // Folded in cascade order: a stateless rule after a rung's rule wins there too; one before
-        // it is already under the rung, in the base.
         macro_rules! over_state_buckets {
             ($half:expr) => {{
                 let rungs = [
@@ -1728,8 +1613,6 @@ impl Engine {
                 if half.is_empty() {
                     continue;
                 }
-                // The full match already proved the ancestor prefix has a solution, so `None` here
-                // means the tree moved and the rule does not apply.
                 if let Some(a) = r.ancestor {
                     let Some(key) = nearest_group_ancestor(&node, &r.selector, a.offset) else {
                         continue;
@@ -1737,8 +1620,6 @@ impl Engine {
                     let Some(bucket) = group.bucket(a.states, key) else {
                         continue;
                     };
-                    // Its em is the base state's: the size a hovered ANCESTOR gives this element is
-                    // not modelled (v1).
                     let svg_before = svg_base(&extras);
                     half.apply(&vars, env, font_size, parent_font_size, &computed_font, parent_font, bucket, &mut extras, diagnostics);
                     if half.font_relative() {
@@ -1747,8 +1628,6 @@ impl Engine {
                     keep_base_svg_paint(&mut extras, svg_before, diagnostics);
                     continue;
                 }
-                // A compound naming several ladder states (`:hover:focus`) cannot be a conjunction
-                // in gpui's ladder; it lands on the strongest rung (`classify_states` warned).
                 let rung = rung_of(r.states);
                 let bucket = match rung {
                     None => &mut base,
@@ -1797,8 +1676,6 @@ impl Engine {
             if let Some(decoration) = held_decoration.take() {
                 extras.decoration = decoration;
             }
-            // The inline style at this priority: after the sheet's normal rules and before its
-            // `!important` ones, or last of all (`Half::of_inline_at`).
             if let Some((half, inline_extras)) = inline.and_then(|i| Half::of_inline_at(i, important_pass)) {
                 half.apply(
                     &vars, env, font_size, parent_font_size, &computed_font, parent_font, &mut base, &mut extras, diagnostics,
@@ -1807,8 +1684,6 @@ impl Engine {
                 over_state_buckets!(half);
             }
         }
-        // Fold it in CSS priority order without changing general StyleRefinement handling: normal
-        // sheet -> normal inline -> important sheet -> important inline.
         let mut transition_components = transition::Collector::default();
         for important in [false, true] {
             for rule in &matched {
@@ -1884,8 +1759,6 @@ impl Engine {
             perf::note_node(tested, ms(t0, t1), ms(t1, t2), ms(t2, std::time::Instant::now()));
             perf::note_split(by_bucket, matched.len());
         }
-        // A rung's ring takes from the base ring what its own rules left undeclared, before
-        // `currentColor` is painted into either.
         if let Some(ring) = base.vn_outline {
             let rungs = [&mut active, &mut hover, &mut focus_visible, &mut focus, &mut focus_within];
             for (index, bucket) in rungs.into_iter().enumerate() {
@@ -1929,8 +1802,6 @@ impl Engine {
                 mapper::apply_current_color(refinement, CurrentColorTargets::default(), color);
             }
         }
-        // `text-underline-offset` and `text-decoration-line` are separate properties (Tailwind: two
-        // classes), so the offset applies to the underline the whole cascade produced.
         if let Some(offset) = extras.underline_offset {
             for refinement in [
                 Some(&mut base),
@@ -1948,7 +1819,6 @@ impl Engine {
                 }
             }
         }
-        // The base decoration only: a state rung's is its own rule's (`mapper::DecorationPatch`).
         extras.decoration.apply(&mut base.text);
         for (refinement, own) in [&mut before, &mut after, &mut placeholder, &mut selection, &mut file_button] {
             own.decoration.apply(&mut refinement.text);
@@ -1984,8 +1854,6 @@ impl Engine {
                 }
             },
             extras,
-            // CSS generates NO box when `content` is absent, which is what makes `content` the gate
-            // here rather than a property of a box that would exist anyway.
             before: any_before
                 .then(|| before.1.content.clone())
                 .flatten()
@@ -2037,8 +1905,6 @@ impl Engine {
 }
 
 impl Engine {
-    /// Steps are flattened (`0%, 100% { }` is two steps), sorted by offset, and keep their own
-    /// `animation-timing-function`, which governs the segment starting there.
     fn collect_keyframes(
         &mut self,
         rule: &lightningcss::rules::keyframes::KeyframesRule<'_>,
@@ -2051,15 +1917,9 @@ impl Engine {
         };
         let mut steps: Vec<keyframes::Keyframe> = Vec::new();
         for frame in &rule.keyframes {
-            // Goes through the same mapper as every rule, so the animatable set equals
-            // `transition`'s by construction.
             let (converted, viewport) =
                 mapper::noting_viewport_units(|| mapper::convert_block(&frame.declarations));
-            // Not kept for [`Engine::rebase_viewport`]: rare, and a running animation holds the
-            // block it started with.
             self.viewport_unkept |= viewport;
-            // A keyframe block has no selector to match, so its declarations can only be reported
-            // here.
             if let Some(list) = &converted.diagnostics {
                 for d in list.iter() {
                     mapper::once(&mut self.diagnostics, d.clone());
@@ -2075,8 +1935,6 @@ impl Engine {
                 style.refine(r);
                 any = true;
             }
-            // `animation-timing-function` inside a keyframe arrives as a longhand-only PATCH (no
-            // name), which is exactly what it is.
             let easing = converted
                 .normal_animation_patch
                 .or(converted.important_animation_patch)
@@ -2132,8 +1990,6 @@ impl Engine {
     }
 }
 
-/// One advisory per at-rule kind, not per rule: a generated sheet carries one `@media` per variant
-/// and would bury every other message.
 fn at_rule_ignored(rule: &CssRule<'_>, diagnostics: &mut Vec<String>) {
     let msg = match rule {
         CssRule::FontFace(_) => return,
@@ -2145,8 +2001,6 @@ fn at_rule_ignored(rule: &CssRule<'_>, diagnostics: &mut Vec<String>) {
     mapper::once(diagnostics, msg);
 }
 
-/// That makes a guarded block behave the way it does in a browser missing the same feature —
-/// skipped — rather than being dropped wholesale whether or not the feature is there.
 fn supports_condition(condition: &lightningcss::rules::supports::SupportsCondition<'_>) -> bool {
     use lightningcss::rules::supports::SupportsCondition as C;
     match condition {
@@ -2159,8 +2013,6 @@ fn supports_condition(condition: &lightningcss::rules::supports::SupportsConditi
                 return false;
             };
             let converted = mapper::convert_block(&block);
-            // Anything else — an unknown property, a value shape with no model here — is
-            // unsupported, and saying so is the correct answer rather than a gap.
             converted.diagnostics.is_none()
                 && (converted.normal.is_some()
                     || converted.normal_custom.is_some()
@@ -2213,8 +2065,6 @@ fn ladder_state(pc: &PseudoClass<'_>) -> u8 {
     }
 }
 
-/// An interaction state named on a compound that is NOT the selector's subject — `.group:hover
-/// .child`, Tailwind's `group-hover:` variant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AncestorState {
     offset: usize,
@@ -2244,7 +2094,6 @@ fn nearest_group_ancestor<D: MatchDom>(
     None
 }
 
-/// One slot per state, because gpui carries one `group_hover` and one `group_active` per element.
 #[derive(Default)]
 struct GroupFold {
     hover: Option<(u64, StyleRefinement)>,
@@ -2268,9 +2117,6 @@ impl GroupFold {
     }
 }
 
-/// Classifies a selector's interaction-state bucket from its RIGHTMOST compound, plus the
-/// ancestor-state descriptor when a state pseudo sits on a compound further left (`.group:hover
-/// .child`).
 pub(crate) fn classify_states(
     sel: &Selector<'_>,
     diagnostics: &mut Vec<String>,
@@ -2287,8 +2133,6 @@ pub(crate) fn classify_states(
         }
     }
     if states.count_ones() > 1 {
-        // gpui's ladder has one refinement per rung and no conjunction, so `:hover:focus` becomes
-        // "whichever rung gpui applies last".
         mapper::once(
             diagnostics,
             format!(
@@ -2331,8 +2175,6 @@ pub(crate) fn classify_states(
             states |= here;
             continue;
         }
-        // A SIBLING's state (`.a:hover + .b`) has no group primitive: gpui keys a group off an
-        // ancestor's hitbox, and a sibling is not one.
         if sibling {
             diagnostics.push(format!(
                 "a sibling-state selector (`+` / `~` with `:hover` on the LEFT) has nothing to \
@@ -2342,7 +2184,6 @@ pub(crate) fn classify_states(
             ));
             return None;
         }
-        // Only hover and active have a group primitive.
         if here & !(STATE_HOVER | STATE_ACTIVE) != 0 {
             mapper::once(
                 diagnostics,
@@ -2355,8 +2196,6 @@ pub(crate) fn classify_states(
             );
             return None;
         }
-        // Two ancestor states in one selector would need two groups on one element, and gpui
-        // carries one `group_hover` / one `group_active`.
         if ancestor.is_some() {
             mapper::once(
                 diagnostics,
@@ -2383,12 +2222,8 @@ fn pseudo_box(
     match pe {
         PE::Before => Some(PseudoElement::Before),
         PE::After => Some(PseudoElement::After),
-        // `::-webkit-input-placeholder` and `::-moz-placeholder` are the same thing; lightningcss
-        // folds every spelling into one variant.
         PE::Placeholder(_) => Some(PseudoElement::Placeholder),
         PE::Selection(_) => Some(PseudoElement::Selection),
-        // `::-webkit-file-upload-button` is the same thing; lightningcss folds the spellings into
-        // one variant here too.
         PE::FileSelectorButton(_) => Some(PseudoElement::FileSelectorButton),
         PE::Custom { name } => match name.as_ref() {
             "-webkit-slider-runnable-track" | "-moz-range-track" => Some(PseudoElement::RangeTrack),
@@ -2418,9 +2253,6 @@ fn control_origin_selector(sel: &Selector<'_>) -> Option<Selector<'static>> {
     Some(style.selectors.0.first()?.clone().into_owned())
 }
 
-/// Pseudo-elements with nothing to style here: `::backdrop` (no open `<dialog>`; Tailwind's
-/// preflight writes one into every sheet) and the native form-control parts (no native skin is
-/// painted).
 fn never_matches_anywhere(
     pe: &<element::Impl as parcel_selectors::parser::SelectorImpl<'_>>::PseudoElement,
 ) -> bool {
@@ -2463,7 +2295,6 @@ where
 {
     let mut ok = true;
     for c in components {
-        // `Some(reason)` = this component can never be answered truthfully.
         let reason: Option<String> = match c {
             Component::NonTSPseudoClass(pc) => {
                 if nested && !live && ladder_state(pc) != 0 {
@@ -2472,8 +2303,6 @@ where
                     // which silently inverts `:not(:hover)`.
                     Some(format!("`:{}` inside :not()/:is()/:where()", pseudo_name(pc)))
                 } else if ladder_state(pc) == 0 && !matches_from_props(pc) {
-                    // A `-moz-`/`-webkit-`-prefixed pseudo-class is a browser's own; Tailwind's
-                    // preflight carries `:-moz-focusring` and `:-moz-ui-invalid` in every sheet.
                     let name = pseudo_name(pc);
                     if name.starts_with("-moz-") || name.starts_with("-webkit-") {
                         None
@@ -2484,16 +2313,12 @@ where
                     None
                 }
             }
-            // `::before` / `::after` are REAL here: they generate a box the renderer builds as a
-            // child of the originating element.
             Component::PseudoElement(pe) if !nested && pseudo_box(pe).is_some() => None,
             Component::PseudoElement(pe) if !nested && never_matches_anywhere(pe) => None,
             Component::PseudoElement(pe) if !nested && is_webkit_scrollbar(pe) => Some(
                 "a `::-webkit-scrollbar*` pseudo-element — vue-native draws overlay scrollbars                  but does not expose them as styleable boxes; use the standard                  `scrollbar-width: auto | thin | none` and `scrollbar-color: <thumb> <track>`,                  which both reach the painter"
                     .into(),
             ),
-            // One advisory for the whole family, not one per spelling: a Tailwind preflight sheet
-            // names eight of them and eight lines would bury everything else.
             Component::PseudoElement(_) => Some(
                 "a pseudo-element other than `::before` / `::after` / `::placeholder` (nothing here paints part of a box separately from the box)"
                     .into(),
@@ -2530,8 +2355,6 @@ where
         };
         if let Some(what) = reason {
             ok = false;
-            // Deduped on the FEATURE, not on the whole message: a Tailwind sheet trips over the
-            // same gap in hundreds of rules, and one line per rule buries everything else.
             if !diagnostics.iter().any(|d| d.starts_with(&what)) {
                 diagnostics.push(format!(
                     "{what} — rules using it can never match and were dropped \
@@ -2617,8 +2440,6 @@ fn pseudo_name(pc: &PseudoClass<'_>) -> String {
     name.to_string()
 }
 
-/// Probes once at compile time against a dummy element so a bad selector costs a diagnostic, not
-/// the app (`:has()` and `:nth-child(.. of S)` panic in the matcher).
 pub(crate) fn probe_runnable(sel: &Selector<'_>) -> bool {
     #[derive(Clone, Copy)]
     struct Probe;
@@ -2670,8 +2491,6 @@ pub(crate) fn probe_runnable(sel: &Selector<'_>) -> bool {
     .is_ok()
 }
 
-/// Names the extras a block actually declared, so the state-selector advisory says `window-drag`
-/// when that is what was written and `object-fit` when it is not.
 fn extras_names(e: &Extras) -> String {
     let mut names: Vec<&str> = Vec::new();
     if e.object_fit.is_some() {
@@ -2729,27 +2548,14 @@ fn capture_rule_text() -> bool {
 
 #[derive(Debug, Clone)]
 pub struct MatchedRule {
-    /// The selector, printed back from the parsed form (so `:has()` shows the rewritten spelling
-    /// the matcher actually ran).
     pub selector: String,
     pub specificity: u32,
-    /// Position in the sheet — the cascade's tiebreak within one specificity.
     pub order: u32,
-    /// The `@media` prelude this rule sits under, `and`-ed through nesting.
     pub media: Option<String>,
-    /// `base` | `hover` | `active` | `focus` | `focus-visible` | `focus-within` — the bucket this
-    /// rule folds into, i.e. which of `styles`' buckets its declarations landed in.
     pub state: &'static str,
-    /// `.group:hover .this` — the state named by the selector belongs to an ANCESTOR, so the rule
-    /// folds into the `group-*` bucket instead.
     pub ancestor_state: bool,
-    /// `::before` / `::after` / `::placeholder` / `::selection` — the rule styles a generated box
-    /// or a widget part, not the element itself.
     pub pseudo: Option<&'static str>,
-    /// `(property, value, important)` in source order.
     pub declarations: Vec<(String, String, bool)>,
-    /// What vn-css has to say about THIS rule's declarations — the advisories that normally reach
-    /// the log the first time the rule matches something.
     pub diagnostics: Vec<String>,
 }
 
@@ -2765,8 +2571,6 @@ fn state_name(states: u8) -> &'static str {
 }
 
 impl Engine {
-    /// The matching half of `compute_node` only: same candidates, `@media` gate, matcher and
-    /// `(specificity, order)` sort.
     pub fn matched_rules<D: MatchDom>(&self, node: D, env: &Env) -> Vec<MatchedRule> {
         let el = element::El(node);
         let mut matched: Vec<&RuleEntry> = Vec::new();
@@ -2816,13 +2620,9 @@ impl Engine {
     }
 }
 
-/// What [`query_all`] found.
 #[derive(Debug, Default)]
 pub struct QueryResult {
-    /// Indices into the `candidates` slice, in the order they were given (document order, if the
-    /// caller passed them that way).
     pub matched: Vec<usize>,
-    /// Advisories that did NOT stop the query — the same text the sheet compiler would print.
     pub warnings: Vec<String>,
 }
 
@@ -2864,9 +2664,6 @@ pub fn query_all_in<D: MatchDom>(
                     sel_text(s)
                 ));
             }
-            // A view with live state answers interaction pseudo-classes as a browser does, anywhere
-            // in the selector; `classify_states`' limits belong to gpui's ladder, which a query
-            // bypasses.
             if D::LIVE_STATE {
                 if !audit_live_selector(s, &mut diagnostics) {
                     return Err(join_diagnostics(&diagnostics));
@@ -2882,9 +2679,6 @@ pub fn query_all_in<D: MatchDom>(
                 return Err(join_diagnostics(&diagnostics));
             }
             if states != 0 || ancestor.is_some() {
-                // A view with no live state (a test double, the compile-time probe) can only answer
-                // an interaction pseudo the cascade's way, "would match when in that state", so it
-                // cannot filter.
                 diagnostics.push(format!(
                     "`{}` names an interaction state, and this element view has no live state: \
                      `:hover`/`:active`/`:focus`/`:focus-visible`/`:focus-within` match as \
@@ -2990,7 +2784,6 @@ mod tests {
         }
     }
 
-    /// The parse itself is not kept at all (`parse_author_sheet`).
     #[test]
     fn recompiling_the_same_text_retains_nothing_new() {
         let css = ".box { height: 10vh } .box:has(> .c) { opacity: 0.5 } \
@@ -3001,8 +2794,6 @@ mod tests {
         let first = Engine::compile(css);
         let after_first = counts();
         assert!(after_first.1 >= 1, "the :has() argument was filed");
-        // (The basis itself is process-global and other tests read it, so it is not moved here;
-        // what a basis move triggers is this same call.)
         for _ in 0..5 {
             let again = Engine::compile(css);
             assert_eq!(again.rules.len(), first.rules.len());
@@ -3010,8 +2801,6 @@ mod tests {
         assert_eq!(counts(), after_first);
     }
 
-    /// Several sheets compile as one cascade in order (a later `<style>` wins at equal
-    /// specificity), each parsed on its own: a stray brace in one does not swallow the next.
     #[test]
     fn compile_sheets_is_one_ordered_cascade_of_separate_parses() {
         let engine = Engine::compile_sheets(&[".box { opacity: 0.1 }", ".box { opacity: 0.5 }"]);
@@ -3029,8 +2818,6 @@ mod tests {
         (*engine.compute(box_node(), None, &Env::default()).transitions).clone()
     }
 
-    /// CSS error recovery: a stray `}` (the Argon client ships one after a `@keyframes`) costs what
-    /// it costs in a browser, not the whole sheet.
     #[test]
     fn a_syntax_error_skips_one_rule_not_the_sheet() {
         let css = "@keyframes pulse { 0% { opacity: 0 } 100% { opacity: 1 } }\n\
@@ -3063,7 +2850,6 @@ mod tests {
     #[test]
     fn a_node_with_no_transition_rule_gets_an_empty_list() {
         assert!(transitions(".box { color: red }").is_empty());
-        // A non-matching rule must not leak its transition.
         assert!(transitions(".other { transition: opacity 1s }").is_empty());
     }
 
@@ -3153,8 +2939,6 @@ mod tests {
         assert_eq!(states.transitions[0].delay, Duration::from_millis(20));
     }
 
-    /// A duration-only rule overrides that component while preserving the earlier property list and
-    /// timing curve, as CSS longhands require.
     #[test]
     fn tailwinds_transition_colors_plus_duration_300_preserves_properties_and_easing() {
         let t = transitions(
@@ -3189,8 +2973,6 @@ mod tests {
         assert_eq!(t[1].property, TransitionProperty::BackgroundColor);
         assert_eq!(t[1].duration, Duration::from_millis(150));
         assert_eq!(t[1].easing, Easing::CubicBezier(0.4, 0.0, 0.2, 1.0));
-        // `fill` and `stroke` animate the colour the SVG sprite is tinted with, because that is the
-        // only colour it has here.
         assert_eq!(t[3].property, TransitionProperty::TextDecorationColor);
         assert_eq!(t[4].property, TransitionProperty::Fill);
         assert_eq!(t[5].property, TransitionProperty::Stroke);
@@ -3246,8 +3028,6 @@ mod tests {
 
     #[test]
     fn several_states_in_one_compound_pick_the_strongest_rung_and_warn() {
-        // gpui's ladder has no AND, so the rule rides the rung gpui applies last (active > hover >
-        // focus-visible > focus).
         let engine = Engine::compile(".box:hover:focus { opacity: 0.4 }");
         assert!(
             engine.diagnostics.iter().any(|d| d.contains("several interaction states")),
@@ -3291,8 +3071,6 @@ mod tests {
 
     #[test]
     fn group_hover_picks_the_nearest_matching_ancestor() {
-        // Both cards carry `.group`; each icon must watch its OWN card, which is also what gpui's
-        // `GroupHitboxes` stack resolves a name to.
         let engine = Engine::compile(".group:hover .icon { opacity: 0.5 }");
         let d = group_doc();
         let states = cascade(&engine, &d, &Env::default());
@@ -3319,8 +3097,6 @@ mod tests {
 
     #[test]
     fn an_ancestor_focus_selector_is_dropped_with_a_diagnostic() {
-        // gpui has `group_hover` and `group_active` and no group focus, so `group-focus:` is
-        // refused rather than quietly applied at rest.
         let engine = Engine::compile(".box:focus .child { opacity: 0.4 }");
         assert!(
             engine.diagnostics.iter().any(|d| d.contains("on an ANCESTOR compound")),
@@ -3332,7 +3108,6 @@ mod tests {
 
     #[test]
     fn a_sibling_state_selector_is_dropped_with_a_diagnostic() {
-        // A group is keyed off an ANCESTOR's hitbox; a sibling is not one.
         let engine = Engine::compile(".a:hover + .b { opacity: 0.4 }");
         assert!(
             engine.diagnostics.iter().any(|d| d.contains("sibling-state selector")),
@@ -3341,8 +3116,6 @@ mod tests {
         );
     }
 
-    /// `.nav:hover::after` is NOT an ancestor state — parcel models a pseudo-element as its own
-    /// sequence, so the `:hover` sits one sequence over while still being on the same element.
     #[test]
     fn a_state_before_a_pseudo_element_is_not_an_ancestor_state() {
         let engine = Engine::compile(r#".nav:hover::after { content: "x" }"#);
@@ -3361,7 +3134,6 @@ mod tests {
         assert_eq!(s.base.max_size.height, Some(gpui::px(680.0).into()));
         assert_eq!(s.base.min_size.width, Some(gpui::px(400.0).into()));
         assert_eq!(s.base.padding.top, Some(gpui::px(100.0).into()));
-        // Same basis twice is not a change — the caller must not recompile.
         assert!(!set_viewport_basis(1000.0, 800.0));
         assert!(set_viewport_basis(1280.0, 720.0));
         set_viewport_basis(INITIAL_VIEWPORT_BASIS.0, INITIAL_VIEWPORT_BASIS.1);
@@ -3382,8 +3154,6 @@ mod tests {
         set_viewport_basis(INITIAL_VIEWPORT_BASIS.0, INITIAL_VIEWPORT_BASIS.1);
     }
 
-    /// A resize re-resolves the viewport rules in place, and the engine then cascades exactly as
-    /// one compiled fresh under the new basis would.
     #[test]
     fn a_resize_rebases_the_viewport_rules_in_place() {
         assert!(set_viewport_basis(1000.0, 800.0));
@@ -3410,8 +3180,6 @@ mod tests {
         set_viewport_basis(INITIAL_VIEWPORT_BASIS.0, INITIAL_VIEWPORT_BASIS.1);
     }
 
-    /// A viewport unit inside `@keyframes` is not kept for a rebase: the caller compiles the sheet
-    /// again.
     #[test]
     fn a_viewport_unit_in_keyframes_asks_for_a_recompile() {
         let mut engine = Engine::compile("@keyframes grow { from { height: 50vh } to { height: 10px } }");
@@ -3587,7 +3355,6 @@ mod tests {
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
 
         let off = engine.compute(node_with(&[("disabled", "")]), None, &Env::default());
-        // The property IS the state: it belongs in base, not on a rung.
         assert_eq!(off.base.opacity, Some(0.4));
         assert!(off.focus.is_none() && off.hover.is_none() && off.active.is_none());
 
@@ -3723,12 +3490,8 @@ mod tests {
         assert!(!attr_matches("#main", &[]));
     }
 
-    /// The scoped-CSS hash keeps its own fast path and must not be answered from the property map
-    /// (`data-v-*` lives in `Node::scopes`).
     #[test]
     fn scope_hashes_still_take_the_scope_path() {
-        // The test node reports no scopes, so a scoped rule must not match even though the property
-        // map is empty too.
         assert!(!attr_matches("[data-v-abc123]", &[("data-v-abc123", "")]));
     }
 
@@ -3746,8 +3509,6 @@ mod tests {
         let wide = engine.compute(box_node(), None, &env_at(700.0, false, false));
         assert_eq!(narrow.base.opacity, Some(0.1));
         assert_eq!(wide.base.opacity, Some(0.9));
-        // The change in `Env` alone changes the result — which is exactly why the host has to mark
-        // the whole tree dirty when it moves.
         assert_ne!(narrow, wide);
     }
 
@@ -3929,8 +3690,6 @@ mod tests {
         );
     }
 
-    /// One advisory per unsupported FEATURE, not per rule — a Tailwind sheet repeats the same gap
-    /// hundreds of times.
     #[test]
     fn audit_advisories_are_one_shot() {
         let engine = Engine::compile(
@@ -3958,8 +3717,6 @@ mod tests {
                 "{selector}: {:?}",
                 engine.diagnostics
             );
-            // The real proof: matching a node that DOES carry `.box` must not take the process
-            // down.
             assert_eq!(
                 engine.compute(box_node(), None, &Env::default()).base.opacity,
                 None
@@ -3986,8 +3743,6 @@ mod tests {
         }
     }
 
-    /// Undeclared stays `None` — the renderer is what supplies the browser initial value (`fill`),
-    /// so "nobody said" and "somebody said fill" stay distinguishable through the cascade.
     #[test]
     fn object_fit_is_absent_when_undeclared() {
         let engine = Engine::compile(".box { opacity: 0.5 }");
@@ -4064,8 +3819,6 @@ mod tests {
         assert_eq!(base.vn_outline.expect("an outline").width, gpui::px(0.0));
     }
 
-    /// A state rule that declares one longhand keeps the rest of the base ring: `:focus {
-    /// outline-offset: 4px }` must not make the outline vanish.
     #[test]
     fn a_state_rules_outline_longhand_keeps_the_base_ring() {
         let engine = Engine::compile(
@@ -4079,7 +3832,6 @@ mod tests {
         let hover = states.hover.as_ref().and_then(|r| r.vn_outline).expect("a hover outline");
         assert_eq!((hover.width, hover.style), (gpui::px(2.0), gpui::BorderStyle::Dashed));
         assert_ne!(hover.color, base.color);
-        // A state's own `outline: none` is declared, not inherited over.
         let engine = Engine::compile(".box { outline: 2px solid #ff0000 } .box:focus { outline: none }");
         let states = engine.compute(box_node(), None, &Env::default());
         assert_eq!(states.focus.as_ref().and_then(|r| r.vn_outline).expect("a focus outline").width, gpui::px(0.0));
@@ -4112,8 +3864,6 @@ mod tests {
         assert_eq!(states.base.text.underline.expect("an underline").color, None);
     }
 
-    /// An interaction state inside `:has()` is answered as true by the cascade and has no rung of
-    /// the subject's to land on, so the rule would apply always.
     #[test]
     fn a_has_argument_with_an_interaction_state_is_refused() {
         for sheet in [
@@ -4124,7 +3874,6 @@ mod tests {
             assert!(engine.diagnostics.iter().any(|d| d.contains(":has()")), "{sheet}: {:?}", engine.diagnostics);
             assert_eq!(engine.compute(box_node(), None, &Env::default()).base.opacity, None, "{sheet}");
         }
-        // One without a state still compiles.
         let engine = Engine::compile(".box:has(input[disabled]) { opacity: 0.5 }");
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
     }
@@ -4142,15 +3891,12 @@ mod tests {
         assert_eq!(base.opacity, Some(0.5));
         assert_eq!(base.text.font_size, Some(gpui::px(20.0).into()));
         assert_eq!(base_with_inline(".box { opacity: 0.5 }", "opacity: 0.9").opacity, Some(0.9));
-        // And an inline `!important` is the last word, beside a normal one that is not.
         let base = base_with_inline(sheet, "opacity: 0.9 !important; font-size: 10px");
         assert_eq!(base.opacity, Some(0.9));
         assert_eq!(base.text.font_size, Some(gpui::px(20.0).into()));
     }
 
 
-    /// What `.box` paints with the pointer over it: the base, and the hover rung laid over it as
-    /// gpui lays it.
     fn hovered_opacity(css: &str, style: Option<&str>) -> Option<f32> {
         use gpui::Refineable as _;
         let engine = Engine::compile(css);
@@ -4166,8 +3912,6 @@ mod tests {
         painted.opacity
     }
 
-    /// A state rule is one more rule in the cascade, not a layer over it: a stateless declaration
-    /// that outranks it holds while the state is on.
     #[test]
     fn a_state_rule_loses_to_a_stateless_one_that_outranks_it() {
         assert_eq!(hovered_opacity(".box { opacity: 0.9 } .box:hover { opacity: 0.5 }", None), Some(0.5));
@@ -4182,7 +3926,6 @@ mod tests {
         assert_eq!(hovered_opacity(".box:hover { opacity: 0.5 }", Some("opacity: 0.9")), Some(0.9));
         let over_inline = ".box:hover { opacity: 0.5 !important }";
         assert_eq!(hovered_opacity(over_inline, Some("opacity: 0.9")), Some(0.5));
-        // Only what the stronger rule declares: the rung keeps the rest.
         let engine = Engine::compile(".box:hover { opacity: 0.5; width: 10px } .box.box { opacity: 0.9 }");
         let hover = engine.compute(box_node(), None, &Env::default()).hover.expect("a hover rung");
         assert_eq!(hover.size.width, Some(gpui::px(10.0).into()));
@@ -4202,7 +3945,6 @@ mod tests {
         out
     }
 
-    /// A bad keyword must leave an advisory, never silently do nothing.
     #[test]
     fn bad_object_fit_value_is_advised() {
         let engine = Engine::compile(".box { object-fit: squish }");
@@ -4214,8 +3956,6 @@ mod tests {
         );
     }
 
-    /// gpui's image element has ONE object-fit, not a hover/active ladder — so a state rule that
-    /// declares it is a real divergence and gets said out loud.
     #[test]
     fn object_fit_on_a_state_selector_is_advised() {
         let engine = Engine::compile(".box:hover { object-fit: cover }");
@@ -4230,8 +3970,6 @@ mod tests {
         );
     }
 
-    /// `object-fit` must not be swallowed by the "property not mapped" fold — that advisory is for
-    /// properties we genuinely do not implement.
     #[test]
     fn object_fit_does_not_report_as_unmapped() {
         let engine = Engine::compile(".box { object-fit: cover }");
@@ -4249,9 +3987,6 @@ mod tests {
             .window_drag
     }
 
-    /// All three property spellings, both value vocabularies, no advisory — Chromium keeps
-    /// `app-region`/`-webkit-app-region` permanently, so warning about them would be pure noise
-    /// (D-13).
     #[test]
     fn every_window_drag_spelling_parses_without_an_advisory() {
         for (css, want) in [
@@ -4272,8 +4007,6 @@ mod tests {
         }
     }
 
-    /// Undeclared must stay `None`, distinct from an explicit `none`: the renderer INHERITS the
-    /// parent's effective value through the `None` case and stops at the explicit one.
     #[test]
     fn undeclared_window_drag_is_distinct_from_an_explicit_none() {
         assert_eq!(drag_of(".box { opacity: 0.5 }"), None);
@@ -4368,7 +4101,6 @@ mod tests {
         );
     }
 
-    /// `env()` is `var()` with a scope the page cannot write.
     fn computed_with_env(css: &str, env: &Env) -> (Rc<StyleRefinement>, Vec<String>) {
         let engine = Engine::compile(css);
         let mut diags = engine.diagnostics.clone();
@@ -4438,8 +4170,6 @@ mod tests {
         assert_eq!(base.margin.left, Some(gpui::px(78.0).into()));
     }
 
-    /// The overlay is not visible in OS chrome / fullscreen, and the host publishes the zero rect
-    /// there — exactly what a PWA in a tab reports.
     #[test]
     fn env_titlebar_area_is_zero_when_the_overlay_is_hidden() {
         let (base, diags) = computed_with_env(
@@ -4450,7 +4180,6 @@ mod tests {
         assert_eq!(base.size.height, Some(gpui::px(0.0).into()));
     }
 
-    /// `safe-area-inset-*` resolve to zero on desktop rather than invalidating their declarations.
     #[test]
     fn env_safe_area_insets_resolve_to_zero() {
         let (base, diags) = computed_with_env(
@@ -4463,8 +4192,6 @@ mod tests {
         assert_eq!(base.padding.bottom, Some(gpui::px(0.0).into()));
     }
 
-    /// Vaul moves a scaled background with a safe-area expression, rather than a literal pixel
-    /// translation.
     #[test]
     fn drawer_background_transform_resolves_safe_area_calc() {
         let (style, diagnostics) = computed_with_env(
@@ -4473,8 +4200,6 @@ mod tests {
             &Env::default(),
         );
         let transform = style.vn_transform.expect("the background transform is retained");
-        // CSS lists multiply left-to-right: the authored 14px translation is applied before
-        // scale(.96), so its used displacement is 13.44px.
         assert_eq!(transform.translate.1, gpui::TransformLength::Pixels(13.44));
         assert!((transform.scale.0 - 0.96).abs() < 1e-6);
         assert!((transform.scale.1 - 0.96).abs() < 1e-6);
@@ -4510,9 +4235,6 @@ mod tests {
         );
     }
 
-    /// `env()` and `var()` nest in each other's fallbacks and in custom properties — they are ONE
-    /// substitution pass, so this is a property of the design rather than a case that had to be
-    /// handled.
     #[test]
     fn env_and_var_nest_in_each_others_fallbacks_and_in_custom_properties() {
         let (base, diags) = computed_with_env(
@@ -4527,8 +4249,6 @@ mod tests {
         assert_eq!(base.margin.top, Some(gpui::px(40.0).into()));
     }
 
-    /// The scanner must not fire on the tail of a longer identifier — the same rule `var()` already
-    /// obeyed for `--my-var(`.
     #[test]
     fn the_env_scanner_skips_identifier_tails() {
         let (base, diags) =
@@ -4664,7 +4384,6 @@ mod tests {
             "[data-x] { color: white }\n",
         ));
         let ix = &engine.index;
-        // Selector text, not indices: the UA sheet's rules come first.
         let names = |v: Option<&Vec<u32>>| -> Vec<String> {
             v.map_or(vec![], |v| v.iter().map(|&i| sel_text(&engine.rules[i as usize].selector)).collect())
         };
@@ -4737,8 +4456,6 @@ mod tests {
         assert!(matched_somewhere > 30, "the sheet exercises the tree ({matched_somewhere} matches)");
     }
 
-    /// Cascades `d` top-down as the restyle walk does, each element under its parent's custom
-    /// properties and colour, once with the cache and once without.
     fn cascade_both(css: &str, d: &Doc, env: &Env) -> (Vec<ComputedStates>, Vec<ComputedStates>) {
         let cached = Engine::compile(css);
         let mut plain = Engine::compile(css);
@@ -4791,7 +4508,6 @@ mod tests {
         assert_eq!(s[9].base.margin.left, Some(gpui::px(3.0).into()));
     }
 
-    /// The match gives them different rules, so the cache never hands one the other's fold.
     #[test]
     fn the_cache_keeps_apart_what_a_selector_tells_apart() {
         type Nodes = Vec<(&'static str, &'static str, usize, Vec<(&'static str, &'static str)>)>;
@@ -4860,8 +4576,6 @@ mod tests {
         assert!(shared(&s, 3, 7), "and the same parent inputs again meet");
     }
 
-    /// An element with an inline style, or one styled by a `.group:hover` rule (whose bucket names
-    /// the ancestor it watches), never asks.
     #[test]
     fn the_cache_leaves_out_inline_styles_and_group_rules() {
         let css = ".group:hover .c { opacity: 0.5 } .c { padding: 2px } .d { padding: 3px }";
@@ -4896,8 +4610,6 @@ mod tests {
         assert_eq!(fold(3).base.opacity, Some(0.25));
     }
 
-    /// What a fold reads besides the rules and the parent: the environment (`env()`, here), the
-    /// viewport after a rebase, and the rem basis a `var()`-composed length resolves against.
     #[test]
     fn the_cache_does_not_outlive_what_the_fold_read() {
         let node = |class| Node { tag: "div", class, attrs: &[] };
@@ -4931,8 +4643,6 @@ mod tests {
         set_rem_basis(old);
     }
 
-    /// `content: none` in a later rule takes the box back; it is a declared value, not the absence
-    /// of one.
     #[test]
     fn content_none_takes_back_an_earlier_rules_box() {
         let engine = Engine::compile(
@@ -4945,8 +4655,6 @@ mod tests {
         assert_eq!(&*states[0].after.as_ref().expect("an ::after box").content, "+");
     }
 
-    /// A `::before` rule styles a GENERATED BOX, not the element it matched — so its declarations
-    /// must land on `ComputedStates::before` and nowhere near `base`.
     #[test]
     fn a_pseudo_element_rule_becomes_its_own_box() {
         let engine = Engine::compile(
@@ -4991,8 +4699,6 @@ mod tests {
         assert_eq!(&*second.after.as_ref().unwrap().content, "!");
     }
 
-    /// A generated box is not in gpui's pointer-state ladder, so a `:hover::after` rule cannot be
-    /// honoured.
     #[test]
     fn a_state_qualified_pseudo_element_rule_advises() {
         let engine = Engine::compile(r#".nav:hover::after { content: "x" }"#);
@@ -5055,8 +4761,6 @@ mod tests {
         assert_eq!(thumb.resolve(false, true, false, false, false).0.size.width, thumb.base.size.width);
     }
 
-    /// `::placeholder` is not a box — it styles the string the text-input widget paints — so it
-    /// folds into its own refinement.
     #[test]
     fn placeholder_folds_into_its_own_refinement() {
         let engine = Engine::compile("input::placeholder { color: rgb(1 2 3) }");
@@ -5095,8 +4799,6 @@ mod tests {
         assert_eq!(rules[0].pseudo, Some("::file-selector-button"));
     }
 
-    /// Every OTHER pseudo-element still cannot match, and the whole family shares ONE advisory — a
-    /// preflight sheet names eight of them.
     #[test]
     fn the_non_generating_pseudo_elements_share_one_advisory() {
         let engine = Engine::compile(
@@ -5131,8 +4833,6 @@ mod tests {
         assert!(tab.base.text.color.is_some(), "the palette reached a descendant");
     }
 
-    /// Argon's fullscreen fallback background shipped as `html.backdrop-suspended body` and never
-    /// applied.
     #[test]
     fn a_class_on_the_root_is_matched_by_the_compound_form_not_the_descendant_one() {
         let opacity = |css: &str| {
@@ -5176,7 +4876,6 @@ mod tests {
         assert!(query_all("a::before", &c).is_ok());
         let err = query_all("a:visited", &c).unwrap_err();
         assert!(err.contains("visited"), "{err}");
-        // Injection guard: a selector may not carry a declaration block.
         assert!(query_all(".a { color: red } .b", &c).unwrap_err().contains('{'));
     }
 
@@ -5200,7 +4899,6 @@ mod tests {
         let nav = all[1];
         let under_nav: Vec<DocRef<'_>> = all[2..].to_vec();
 
-        // A CHILD combinator off the scope: only the direct child `.tab`.
         let r = query_all_in(":scope > .tab", &under_nav, Some(nav)).unwrap();
         assert_eq!(r.matched, vec![0], "only the .tab that is a child of .nav");
 
@@ -5215,11 +4913,9 @@ mod tests {
     fn scope_with_no_scoping_root_is_the_document_element() {
         let d = nested_doc();
         let all = refs(&d);
-        // `matches()` hands the matcher a one-element candidate list.
         let nav = all[1];
         assert_eq!(query_all_in(":scope", &[nav], Some(nav)).unwrap().matched, vec![0]);
         assert!(query_all_in(":scope", &[all[2]], Some(nav)).unwrap().matched.is_empty());
-        // No scoping root: only `.page`, the root, answers to `:scope`.
         assert_eq!(query_all(":scope", &all).unwrap().matched, vec![0]);
     }
 
@@ -5274,8 +4970,6 @@ mod tests {
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
         let d = themed_doc();
         let states = cascade(&engine, &d, &Env::default());
-        // (The stored text is lightningcss's own serialization of the token stream — `rgb(10 20
-        // 30)` round-trips as `#0a141e`.
         assert_eq!(states[0].vars.get("--fg"), Some("#0a141e"));
         assert!(Rc::ptr_eq(&states[0].vars, &states[2].vars));
         assert!(states[2].base.text.color.is_some());
@@ -5292,8 +4986,6 @@ mod tests {
         let fill = states[2].extras.fill.expect("fill computed");
         assert_eq!(fill.as_attr(), "rgb(6,8,11)");
         assert_eq!(states[2].extras.stroke.expect("stroke computed").as_attr(), "rgba(219,232,255,0.169)");
-        // The `drop-shadow()` survives the fold of the rules after it (it was dropped by
-        // `Extras::refine`, so no rule's shadow ever reached a node).
         let shadow = states[2].extras.drop_shadow.expect("drop-shadow computed");
         assert_eq!((shadow.dx, shadow.dy, shadow.blur), (0.0, 18.0, 30.0));
         let engine = Engine::compile(".btn { filter: drop-shadow(0 1px 2px #000) } .page .btn { filter: none }");
@@ -5301,8 +4993,6 @@ mod tests {
         assert_eq!(states[2].extras.drop_shadow, None);
     }
 
-    /// `Extras` have no state ladder, so a `:hover` paint would be drawn at rest: it is dropped,
-    /// and said, and the base paint stays.
     #[test]
     fn a_state_rule_does_not_paint_an_svg_at_rest() {
         let engine = Engine::compile(
@@ -5336,8 +5026,6 @@ mod tests {
         assert_eq!(k[0].vars.get("--bg"), Some("#fff"));
     }
 
-    /// `@media (prefers-color-scheme: dark)` redefining tokens is the OTHER half of dark mode, and
-    /// it must reach the same var map.
     #[test]
     fn media_scoped_redefinitions_reach_the_var_map() {
         let engine = Engine::compile(
@@ -5366,7 +5054,6 @@ mod tests {
         assert_eq!(states[1].vars.get("--w"), Some("2"));
     }
 
-    /// An unresolvable reference drops ONLY that declaration, and says so.
     #[test]
     fn an_unresolvable_var_drops_one_declaration_silently() {
         let engine = Engine::compile(".btn { opacity: 0.5; color: var(--nope) }");
@@ -5409,8 +5096,6 @@ mod tests {
         assert_eq!(opacity, Some(1.0));
     }
 
-    /// (`DocRef` reports no scopes, so the scoped rule must NOT match — the negative half of the
-    /// same test.)
     #[test]
     fn scoped_rules_carry_custom_properties_through_the_normal_matcher() {
         let engine = Engine::compile(".page[data-v-abc] { --v: 1 } .page { --v: 2 }");
@@ -5420,8 +5105,6 @@ mod tests {
         assert_eq!(s[1].vars.get("--v"), Some("2"), "the unscoped rule is the only match");
     }
 
-    /// Tailwind's whole `--tw-*` compound stack, end to end: the shadow the `shadow-sm` utility
-    /// composes must actually reach `box_shadow`.
     #[test]
     fn tailwinds_shadow_compound_renders() {
         let engine = Engine::compile(
@@ -5460,8 +5143,6 @@ mod tests {
         assert!(Rc::ptr_eq(&s[1].vars, &s[2].vars));
     }
 
-    /// `:hover` matches in a query the same way it matches in the cascade — "would match" — and the
-    /// divergence rides back as a warning.
     #[test]
     fn query_all_warns_about_interaction_states() {
         let d = doc();
@@ -5613,7 +5294,6 @@ mod tests {
         assert_eq!(opacity(2), None, "the badge itself is not the subject");
     }
 
-    /// `+` is the sibling right after; `~` is any later one.
     #[test]
     fn has_with_plus_only_looks_at_the_next_sibling() {
         let doc = Doc {
@@ -5645,7 +5325,6 @@ mod tests {
         assert_eq!(opacity(&later, 1), Some(0.5));
     }
 
-    /// The child form only looks one level down, which is the whole point of writing it.
     #[test]
     fn has_with_a_child_combinator_does_not_reach_a_grandchild() {
         let doc = Doc {
@@ -5676,8 +5355,6 @@ mod tests {
         assert_eq!(opacity(&nested), Some(0.5), "…but it is a descendant");
     }
 
-    /// `:focus-within` is gpui's `.in_focus()` rung — focus anywhere in the element's focus subtree
-    /// — so it folds into its own bucket rather than being dropped.
     #[test]
     fn focus_within_folds_into_its_own_rung() {
         let engine = Engine::compile(".box:focus-within { opacity: 0.5 }");
@@ -5691,8 +5368,6 @@ mod tests {
         assert!(states.needs_focus_handle(), "gpui needs a handle to key it on");
     }
 
-    /// A guarded block is then skipped or applied the way a browser missing the same feature would
-    /// treat it — which is also why there is nothing to advise.
     #[test]
     fn supports_conditions_are_evaluated_rather_than_dropped() {
         let applies = |css: &str| {
@@ -5852,7 +5527,6 @@ mod tests {
         let hov = at(8);
         assert_eq!(hov.base.corner_radii.top_left, px(16.));
         assert_eq!(hov.hover.as_ref().unwrap().corner_radii.top_left, px(8.));
-        // `::after` inherits from the element it belongs to.
         let ring = at(9).after.as_ref().expect("an ::after box");
         assert_eq!(ring.style.corner_radii.bottom_right, px(10.));
         let mut orphan = engine.compute_node(
@@ -5917,7 +5591,6 @@ mod tests {
         assert!((opacity(&at(999)) - 1.0).abs() < 1e-2);
     }
 
-    /// CSS adds that implicit end only for a property no keyframe declares there.
     #[test]
     fn a_100_percent_keyframe_holds_under_fill_forwards() {
         let engine = Engine::compile(
@@ -6089,8 +5762,6 @@ mod tests {
         assert_eq!(events[0].node, 1);
     }
 
-    /// A `@keyframes` name the sheet does not define animates nothing, which is what a browser does
-    /// too — so it is an author advisory, not a divergence.
     #[test]
     fn an_unknown_animation_name_is_advised_not_faked() {
         let cs = animated(".box { animation: nope 1s linear }");
@@ -6172,7 +5843,6 @@ mod tests {
     #[test]
     fn a_var_composed_keyframe_resolves_against_the_animating_element() {
         let engine = Engine::compile(TW_ANIMATE);
-        // The block survives compilation instead of collapsing to zero steps.
         let raw = engine.keyframes("enter", &Env::default()).expect("@keyframes enter");
         assert_eq!(raw.steps.len(), 1, "the `from` step is kept, unresolved");
         assert!(raw.dynamic, "and it is flagged as needing per-element work");
@@ -6203,9 +5873,6 @@ mod tests {
         assert!((half.scale.0 - 0.975).abs() < 1e-2, "{:?}", half.scale);
     }
 
-    /// The element's own variables decide the endpoints, so two elements sharing one `@keyframes`
-    /// block animate differently — which is the whole reason the resolution cannot happen at
-    /// compile time.
     #[test]
     fn two_elements_resolve_the_same_keyframes_differently() {
         let engine = Engine::compile(
@@ -6224,8 +5891,6 @@ mod tests {
         assert!(d.is_empty(), "{d:?}");
     }
 
-    /// A block with no `var()` in it is SHARED, not rebuilt per element: the resolver must cost
-    /// nothing for the ordinary case.
     #[test]
     fn a_var_free_keyframes_block_takes_the_shared_fast_path() {
         let engine = Engine::compile(SPIN);
@@ -6253,8 +5918,6 @@ mod tests {
         assert!(d.is_empty(), "an unset var() is silent — a browser drops it too");
     }
 
-    /// So the browser slides the box by half its own size while it zooms, and the two units — a
-    /// pixel zero and a percentage — have to interpolate as one track.
     #[test]
     fn the_shadcn_dialog_enter_slides_as_well_as_zooms() {
         let engine = Engine::compile(
@@ -6313,8 +5976,6 @@ mod tests {
         assert_eq!(cs.animations.len(), 1);
         assert_eq!(cs.animations[0].duration, Duration::from_millis(150));
 
-        // The patch is not disabled, only ordered: a MORE specific longhand still overrides the
-        // list it lost to nothing.
         let engine = Engine::compile(
             "@keyframes enter { from { opacity: 0 } } \
              .animate-in { animation-name: enter; animation-duration: 150ms } \
@@ -6407,7 +6068,6 @@ mod tests {
         assert_eq!(computed.transitions[0].duration, Duration::from_millis(80));
     }
 
-    /// A run's clock is anchored to the first FRAME, not to the cascade that created it.
     #[test]
     fn an_animations_clock_starts_at_the_first_frame() {
         let engine = Engine::compile(SPIN);
@@ -6416,7 +6076,6 @@ mod tests {
         let created = Instant::now();
         a.on_computed_animations(1, &cs, created, &|name| engine.keyframes(name, &Env::default()));
 
-        // 300 ms of mount work happen before the first frame renders.
         let first_frame = created + Duration::from_millis(300);
         a.tick(first_frame);
         let base = StyleRefinement::default();
@@ -6430,7 +6089,6 @@ mod tests {
         assert!((opacity(&a.overlay(1, &base, halfway).unwrap()) - 0.5).abs() < 1e-2);
     }
 
-    /// It decomposes to the 2D scale instead of being dropped whole.
     #[test]
     fn scale3d_decomposes_to_the_two_axes_that_exist() {
         let (r, d) = computed_with_env(".box { transform: scale3d(0.95, 0.8, 1) }", &Env::default());
@@ -6438,13 +6096,10 @@ mod tests {
         assert!((t.scale.0 - 0.95).abs() < 1e-6);
         assert!((t.scale.1 - 0.8).abs() < 1e-6);
         assert!(!d.iter().any(|m| m.contains("scale3d")), "{d:?}");
-        // The Z factor is invisible without a perspective projection, which is reported on its own
-        // line, so it is dropped in silence — a `zoom-in-95` must not cost a log line per screen.
         let (_, d) = computed_with_env(".box { transform: scale3d(1, 1, 2) }", &Env::default());
         assert!(!d.iter().any(|m| m.contains("transform")), "{d:?}");
     }
 
-    // Our hover rung rides gpui's paint-time ladder, which has no clock, so the value snapped.
 
     #[test]
     fn a_hover_rung_gives_up_exactly_its_transitioned_properties() {
@@ -6459,12 +6114,9 @@ mod tests {
 
         let split = crate::strip_transitioned(rung, &cs.transitions).expect("something to strip");
         assert!(split.background.is_none());
-        // Not named in `transition`: still gpui's, still instant — CSS agrees.
         assert!(split.padding.left.is_some());
     }
 
-    /// Nothing is stripped when the author declared no transition, so an app that never uses
-    /// `transition` keeps the exact rung it had before.
     #[test]
     fn a_rung_without_a_transition_is_left_alone() {
         let engine = Engine::compile(".box { background: #000 } .box:hover { background: #fff }");
@@ -6473,8 +6125,6 @@ mod tests {
         assert!(crate::strip_transitioned(rung, &cs.transitions).is_none());
     }
 
-    /// The fold the animator aims at has to match what gpui's ladder would produce: base, then
-    /// group-hover, then hover (`compute_style_internal`).
     #[test]
     fn the_hover_fold_follows_gpuis_own_rung_order() {
         let engine = Engine::compile(
@@ -6487,7 +6137,6 @@ mod tests {
         assert!(icon.hovered(false, false).is_none(), "base state is not a fold");
         assert_eq!(icon.hovered(false, true).unwrap().opacity, Some(0.5));
         assert_eq!(icon.hovered(true, false).unwrap().opacity, Some(0.9));
-        // Hover wins over group-hover with both on: gpui refines hover LAST.
         assert_eq!(icon.hovered(true, true).unwrap().opacity, Some(0.9));
     }
 
@@ -6529,7 +6178,6 @@ mod tests {
         assert!(!a.holds_state(1));
     }
 
-    /// `prefers-reduced-motion` still APPLIES the state style — it only refuses to animate it.
     #[test]
     fn reduced_motion_snaps_a_state_flip_rather_than_dropping_it() {
         use crate::animator::Animator;
@@ -6577,11 +6225,7 @@ mod tests {
         sorted.sort();
         assert_eq!(keys, sorted);
 
-        // The `@media` prelude rides along, so a panel can say WHY a rule is (or is not) in the
-        // list.
         let media: Vec<Option<&str>> = rules.iter().map(|r| r.media.as_deref()).collect();
-        // lightningcss prints a prelude back in RANGE syntax, which is the same query — the panel
-        // shows what the engine understood, not the bytes.
         assert_eq!(media[1], Some("(width >= 100px)"));
         assert_eq!(media[2], None);
         assert_eq!(rules[3].pseudo, Some("::after"));
@@ -6596,8 +6240,6 @@ mod tests {
         );
     }
 
-    /// Declaration text is captured only when the host asks for it — a prod build must not pay one
-    /// `String` per declaration in the sheet for a panel it does not have.
     #[test]
     fn rule_text_is_captured_only_when_asked_for() {
         let d = doc();
@@ -6608,8 +6250,6 @@ mod tests {
         let rules = matched(&off);
         assert_eq!(rules.len(), 1);
         assert!(rules[0].declarations.is_empty());
-        // The selector and its place in the cascade are exact either way — the panel degrades to
-        // "which rules matched", not to nothing.
         assert_eq!(rules[0].selector, ".tab");
 
         set_capture_rule_text(true);
@@ -6856,8 +6496,6 @@ mod tests {
             let inline = parse_inline_style(&format!("--offset:{value}"), &mut Vec::new());
             let states = engine.compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &env, &mut Vec::new());
             animator.on_computed_animations(1, &states, now, &|name| engine.keyframes_for(name, &states.vars, &env, &mut Vec::new()));
-            // Both consumers use the same cached sample; a same-frame rebind above must still
-            // observe the new element-scoped implicit value.
             let _ = animator.overlay(1, &states.base, now);
             let extras = animator.animated_extras(1, now).unwrap();
             assert_eq!(extras.background_position.as_ref().unwrap()[0].0,

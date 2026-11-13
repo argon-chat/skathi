@@ -1,20 +1,14 @@
 //! [`Animation`]: a Lottie with no transport and no gpui object, for the sticker engine
-//! (`crates/vn-sticker`).
-//!
-//! "Load once, draw whole frame `n` at any size", unlike [`crate::LottieState`] (one node, a
-//! playhead, atlas images):
+//! (`crates/vn-sticker`): load once, draw whole frame `n` at any size.
 //!
 //! * Whole frames: frame `n` is source frame `in_point + n` for `n` in `0..frame_count()`.
 //! * Straight-alpha BGRA, as gpui's polychrome pipeline blends (`LiveTile::write_bgra`).
-//! * Filled: the whole animation is stretched to a target of its aspect ratio, so at most a pixel
-//!   of rounding.
-//! * `Send`: loaded on one worker, drawn on another; ThorVG's calls are serialised by its engine
-//!   lock (`backend::thorvg`).
+//! * Filled: the whole animation is stretched to a target of its aspect ratio.
+//! * `Send`: loaded on one worker, drawn on another; ThorVG's calls are serialised by its engine lock.
 
 use crate::backend::{Backend, Rasteriser};
 use crate::state::{prepare, LottieError, LottieMeta, Prepared};
 
-/// A loaded Lottie animation, ready to draw any whole frame at any size.
 pub struct Animation {
     renderer: Rasteriser,
     meta: LottieMeta,
@@ -24,8 +18,6 @@ pub struct Animation {
 }
 
 impl Animation {
-    /// Parses `bytes` (Lottie JSON or gzipped `.tgs`) with the preferred backend, as
-    /// [`crate::LottieState::load`] does.
     pub fn load(bytes: &[u8]) -> Result<Self, LottieError> {
         Self::load_with(Backend::preferred(), bytes)
     }
@@ -59,30 +51,26 @@ impl Animation {
         &self.advisories
     }
 
-    /// Whole frames in one loop, at least 1: the source frames from
-    /// `in_point` up to, not including, `out_point`.
+    /// Whole frames in one loop, at least 1: the source frames from `in_point` up to `out_point`.
     pub fn frame_count(&self) -> u32 {
         self.frame_count
     }
 
-    /// Draws whole frame `n` (wrapped by [`Self::frame_count`]) filling `width × height`:
-    /// straight-alpha BGRA, rows packed, borrowed until the next call. `None` for a zero-sized
-    /// target or an engine failure.
+    /// Draws whole frame `n` (wrapped by [`Self::frame_count`]) filling `width × height`: straight-alpha
+    /// BGRA, rows packed, borrowed until the next call. `None` for a zero-sized target or an engine failure.
     pub fn render(&mut self, n: u32, width: u32, height: u32) -> Option<&[u8]> {
         let frame = self.meta.in_point + (n % self.frame_count) as f32;
         let intrinsic = (self.meta.width.max(1), self.meta.height.max(1));
         self.renderer.render_straight(frame, intrinsic, width, height)
     }
 
-    /// Draws absolute, fractional source `frame` ([`crate::Transport::frame`]) filling
-    /// `width × height`, as [`Self::render`]. A `<lottie>` box's size is [`crate::raster_size_for`].
+    /// Draws absolute, fractional source `frame` filling `width × height`, as [`Self::render`].
     pub fn render_at(&mut self, frame: f32, width: u32, height: u32) -> Option<&[u8]> {
         let intrinsic = (self.meta.width.max(1), self.meta.height.max(1));
         self.renderer.render_straight(frame, intrinsic, width, height)
     }
 
-    /// An estimate of the bytes held, for the engine's budget: three times the document's JSON (a
-    /// parsed `.tgs` measured 1.0–1.7x its JSON, 2–5x once drawn) plus the raster buffer.
+    /// An estimate of the bytes held, for the engine's budget: three times the document's JSON plus the raster buffer.
     pub fn estimated_bytes(&self) -> usize {
         self.json_bytes * 3 + self.renderer.buffer_bytes()
     }

@@ -1,8 +1,5 @@
-// Web Animations' object model (src/waapi.ts): `Element.animate()`, the
-// `Animation` state machine, its promises and events, keyframe and timing
-// processing, and what it hands the host. The host's painting half
-// (crates/vn-css/src/animator/script.rs) has its own Rust tests; here it is a
-// fake that records the effect and the clock it is given.
+// Web Animations' object model (src/waapi.ts): `Element.animate()`, the `Animation` state machine, promises, events and
+// keyframe/timing processing. The host's painting half is a fake that records the effect and the clock.
 
 import { describe, expect, test } from "bun:test";
 import { installWaapi } from "../src/waapi";
@@ -10,7 +7,6 @@ import { createReferenceWaapiCore, parseEasing, referenceEffect, referenceValues
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
-/** A world: a controllable clock, frames and timers, a recording host, two prototypes. */
 function world() {
   let now = 1000;
   const frames: ((ts: number) => void)[] = [];
@@ -75,7 +71,6 @@ function world() {
     DOMException: DOMException as Any,
   });
   const el = (id: number): Any => Object.assign(Object.create(HTMLProto), { __vnId: id, parentNode: null });
-  /** One frame `ms` later: due timers, then the animation frame callbacks, then microtasks. */
   const frame = async (ms = 16) => {
     now += ms;
     const due = timers.filter((t) => t.at <= now).sort((a, b) => a.at - b.at);
@@ -101,9 +96,7 @@ function world() {
     el,
     frame,
     flush,
-    /** An app's requestAnimationFrame. */
     raf: (cb: (ts: number) => void) => frames.push(cb),
-    /** The clock moves on inside the same wave (an observer step after the rAF batch). */
     tick: (ms: number) => void (now += ms),
     HTMLProto,
     SVGProto,
@@ -150,18 +143,13 @@ describe("Element.animate()", () => {
     });
     await w.frame(16);
     expect(inFrame).toBe(ts);
-    // Later in the same wave (the observer step after layout): unchanged,
-    // which is what a "same frame" check compares.
     w.tick(7);
     expect(timeline.currentTime).toBe(ts);
-    // The next wave: the new time.
     await w.frame(16);
     expect(timeline.currentTime).toBe(w.now);
     const read = timeline.currentTime;
     w.tick(3);
     expect(timeline.currentTime).toBe(read);
-    // A read outside any frame holds the time it was read at; a frame stamp
-    // older than that does not move it back.
     await w.frame(0);
     w.tick(5);
     const early = timeline.currentTime;
@@ -212,7 +200,6 @@ describe("Element.animate()", () => {
     expect(a.playState).toBe("finished");
     expect(a.currentTime).toBe(100);
     expect(order).toEqual(["promise"]);
-    // The event: at the next frame's update step.
     await w.frame();
     expect(order).toEqual(["promise", "event:100", "onfinish"]);
     expect(w.last("drop")).toMatchObject({ id: w.last("set").id });
@@ -220,8 +207,6 @@ describe("Element.animate()", () => {
   });
 
   test("onfinish runs before a frame's rAF callbacks: an end value written from one lands with the drop", async () => {
-    // motion's NativeAnimation: fill "both"; onfinish sets the motion value
-    // (whose render is a rAF) and cancels.
     const w = world();
     const a = w.el(11).animate({ opacity: [1, 0.5] }, { duration: 100, fill: "both" });
     const log: string[] = [];
@@ -233,7 +218,6 @@ describe("Element.animate()", () => {
     };
     for (; frameNo < 12 && !log.length; frameNo++) await w.frame(16);
     await w.frame();
-    // The same frame: no frame paints between the drop and the inline style.
     expect(log).toHaveLength(2);
     expect(log[0].split("@")[1]).toBe(log[1].split("@")[1]);
     expect(log[0].startsWith("drop")).toBe(true);
@@ -260,7 +244,6 @@ describe("Element.animate()", () => {
     expect(a.currentTime).toBe(null);
     expect(w.last("drop")).toBeTruthy();
     expect(target.getAnimations()).toEqual([]);
-    // A fresh finished promise, as the DOM has it.
     expect(a.finished).toBeInstanceOf(Promise);
   });
 
@@ -331,7 +314,6 @@ describe("Element.animate()", () => {
     await w.frame();
     expect(removed).toBe(true);
     expect(target.getAnimations()).toEqual([b]);
-    // persist() keeps one.
     b.persist();
     const c = target.animate({ opacity: [1, 0.2] }, { duration: 100, fill: "forwards" });
     await w.frame();
@@ -389,7 +371,6 @@ describe("keyframes and timing", () => {
     expect(e.getKeyframes()[2].offset).toBe(0.8);
     expect(() => new E(null, [{ opacity: 0, offset: 0.5 }, { opacity: 1, offset: 0.2 }])).toThrow(TypeError);
     expect(() => new E(null, [{ opacity: 0, offset: 1.5 }])).toThrow(TypeError);
-    // A single keyframe is the end one.
     expect(new E(null, [{ opacity: 1 }]).getKeyframes()[0].computedOffset).toBe(1);
   });
 
@@ -402,7 +383,6 @@ describe("keyframes and timing", () => {
     expect(k[0]).toMatchObject({ opacity: "0", transform: "none", easing: "ease-in" });
     expect(k[1]).toMatchObject({ transform: "scale(2)" });
     expect(k[1].opacity).toBeUndefined();
-    // `{ opacity: [1] }` — motion's partial-keyframes probe — is legal.
     expect(new E(null, { opacity: [1] }).getKeyframes()[0].computedOffset).toBe(1);
   });
 

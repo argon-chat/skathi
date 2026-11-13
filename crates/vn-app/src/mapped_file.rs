@@ -13,9 +13,6 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::Path;
 
-/// Owns both the immutable view and the file it maps. No writable mapping or
-/// mutable byte slice is exposed. Empty files have an empty view, so callers
-/// can report their usual format errors rather than an OS-specific mmap error.
 #[derive(Debug)]
 pub(crate) struct MappedFile {
     // Fields drop in declaration order: unmap before releasing the source.
@@ -28,8 +25,6 @@ impl MappedFile {
         Self::open_bounded(path, isize::MAX as usize)
     }
 
-    /// Bounds the mapped address range before creating the view. Metadata is
-    /// queried on the opened handle, never through a second path lookup.
     pub(crate) fn open_bounded(path: &Path, max_len: usize) -> io::Result<Self> {
         let mut options = OpenOptions::new();
         options.read(true);

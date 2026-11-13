@@ -1,9 +1,6 @@
-//! Regenerates `crates/vn-thorvg-sys/src/bindings.rs` from the vendored
-//! `thorvg_capi.h`. Run it after `tools/vendor-thorvg.sh` bumps the pin.
-//!
-//! Deliberately a separate, workspace-excluded crate: `bindgen` needs
-//! `libclang`, and the whole point of checking the output in is that a plain
-//! `cargo build` never does.
+//! Regenerates `crates/vn-thorvg-sys/src/bindings.rs` from the vendored `thorvg_capi.h`. Run it
+//! after `tools/vendor-thorvg.sh` bumps the pin. A separate, workspace-excluded crate: `bindgen`
+//! needs `libclang`, which a plain `cargo build` must never need.
 //!
 //! ```text
 //! LIBCLANG_PATH="C:\Program Files\LLVM\bin" \
@@ -20,7 +17,6 @@ use std::path::PathBuf;
 const HOST_TARGET: &str = env!("TVG_HOST_TARGET");
 
 fn main() {
-    // …/tools/regen-bindings -> …/crates/vn-thorvg-sys
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|path| path.parent())

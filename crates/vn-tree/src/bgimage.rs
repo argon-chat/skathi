@@ -19,8 +19,6 @@ use vn_css::{BackgroundSize, PaintLayer, TileLength};
 /// skipped with an advisory instead of flooding the scene.
 const MAX_TILES: usize = 4096;
 
-/// The child that paints `stack` over the padding box of node `id`. `radii` are the padding box's
-/// corner radii, resolved against the box it paints (a percentage needs its size).
 pub(crate) fn layer_element(
     id: u32,
     stack: Vec<PaintLayer>,
@@ -127,9 +125,6 @@ enum Load {
     Ready(Arc<RenderImage>),
 }
 
-/// The decoded image, through gpui's asset system exactly as `img()` loads it: an http(s) fetch or
-/// a file read happens off the render thread, and the view is notified (and repainted) when it
-/// lands.
 fn load(source: &ImageSource, window: &mut Window, cx: &mut App) -> Load {
     match source {
         ImageSource::Resource(resource) => match window.use_asset::<gpui::ImgResourceLoader>(resource, cx) {
@@ -157,7 +152,6 @@ fn is_svg(source: &ImageSource, url: &str) -> bool {
     }
 }
 
-/// A data: URL IS its content — never echo the whole thing into the log.
 fn head(url: &str) -> String {
     let mut s: String = url.chars().take(60).collect();
     if s.len() < url.len() {
@@ -184,7 +178,6 @@ fn corners_for(area: Bounds<Pixels>, tile: Bounds<Pixels>, radii: Corners<Pixels
     }
 }
 
-/// `Err(n)` when covering the box takes more than [`MAX_TILES`] tiles.
 pub(crate) fn tiles(
     area: (f32, f32, f32, f32),
     natural: Option<(f32, f32)>,
@@ -228,7 +221,6 @@ pub(crate) fn tiles(
     Ok(out)
 }
 
-/// `background-size` against the box and the image's natural size.
 fn tile_size(area: (f32, f32), natural: Option<(f32, f32)>, bg_size: BackgroundSize) -> (f32, f32) {
     let (aw, ah) = area;
     match bg_size {
@@ -263,8 +255,6 @@ mod tests {
     const NO: (bool, bool) = (false, false);
     const YES: (bool, bool) = (true, true);
 
-    /// emojix's `getRelativeStyle`: the atlas sized in percentages of the box and positioned by
-    /// percentage.
     #[test]
     fn a_percentage_sprite_lands_on_its_cell() {
         let (iw, ih, cell) = (2040.0_f32, 408.0_f32, 68.0_f32);
@@ -279,8 +269,6 @@ mod tests {
         assert!((y + 3.0 * 22.0).abs() < 0.01, "{y}");
     }
 
-    /// emojix's `computeStyle`: pixel size and negative pixel position, with the default `repeat` —
-    /// only the one tile that touches the box is kept.
     #[test]
     fn a_pixel_sprite_keeps_the_one_tile_that_shows() {
         let size = BackgroundSize::Explicit(Some(P(660.0)), Some(P(132.0)));
@@ -307,7 +295,6 @@ mod tests {
         assert_eq!(tiles(area, Some((40.0, 20.0)), half, (F(0.0), F(0.0)), NO).unwrap(), vec![(0.0, 0.0, 50.0, 25.0)]);
     }
 
-    /// A repeat covers the box from the positioned tile outwards, both ways.
     #[test]
     fn a_repeat_covers_the_box_from_the_positioned_tile() {
         let size = BackgroundSize::Explicit(Some(P(40.0)), Some(P(40.0)));

@@ -10,7 +10,6 @@ function setup(options: { styleAccepts?: boolean } = {}) {
   const root = rt.nodeOps.createElement("div");
   const el = rt.nodeOps.createElement("div");
   rt.nodeOps.insert(el, root, null);
-  /** What the host holds for this element, in its order (Tree::set_style's rule). */
   const hostStyle = () => {
     const out: [string, string][] = [];
     for (const { id, key, value } of rt.host.styles) {
@@ -42,9 +41,7 @@ describe("the style attribute is the inline declaration block", () => {
     const { rt, el, hostStyle } = setup();
     rt.patchProp(el, "style", null, { color: "red", height: "4px" });
     el.setAttribute("style", "width:10px;color:blue");
-    // The attribute is the text as written, as in a browser…
     expect(el.getAttribute("style")).toBe("width:10px;color:blue");
-    // …the block is its parse, and the host holds exactly that.
     expect(el.style.cssText).toBe("width: 10px; color: blue;");
     expect(el.style.height).toBe("");
     expect(el.style.color).toBe("blue");
@@ -52,7 +49,6 @@ describe("the style attribute is the inline declaration block", () => {
       ["width", "10px"],
       ["color", "blue"],
     ]);
-    // A CSSOM change re-serializes the attribute.
     el.style.color = "green";
     expect(el.getAttribute("style")).toBe("width: 10px; color: green;");
   });
@@ -85,13 +81,11 @@ describe("the style attribute is the inline declaration block", () => {
 
   test("hasAttribute follows the browser: present once written, even when emptied", () => {
     const { el } = setup();
-    // Removing a property that is not there changes nothing, so no attribute.
     el.style.color = "";
     expect(el.hasAttribute("style")).toBe(false);
     el.style.color = "red";
     expect(el.hasAttribute("style")).toBe(true);
     el.style.removeProperty("color");
-    // The attribute stays, empty.
     expect(el.hasAttribute("style")).toBe(true);
     expect(el.getAttribute("style")).toBe("");
     el.style.cssText = "";
@@ -125,7 +119,6 @@ describe("the style attribute is the inline declaration block", () => {
     expect(el.style.background).toBe('url("data:image/png;base64,AAA=")   no-repeat');
     expect(el.style.getPropertyValue("--x")).toBe("3");
     expect(el.style.length).toBe(3);
-    // The later duplicate wins, at its own position.
     expect([...el.style]).toEqual(["background", "--x", "width"]);
     expect(el.style.width).toBe("2px");
   });
@@ -143,18 +136,15 @@ describe("the style attribute is the inline declaration block", () => {
     expect(el.style.getPropertyPriority("color")).toBe("important");
     expect(el.getAttribute("style")).toBe("color: red !important;");
     expect(hostStyle()).toEqual([["color", "red !important"]]);
-    // An unknown priority, and a priority inside the value, are ignored.
     el.style.setProperty("width", "1px", "bogus");
     el.style.setProperty("height", "1px !important");
     el.style.height = "2px !important";
     expect(el.style.width).toBe("");
     expect(el.style.height).toBe("");
-    // `undefined` is no value; `null` is the empty string, which removes.
     el.style.color = undefined;
     expect(el.style.color).toBe("red");
     el.style.color = null;
     expect(el.style.color).toBe("");
-    // setProperty takes CSS names: a camelCase name is not one.
     el.style.setProperty("backgroundColor", "red");
     expect(el.style.getPropertyValue("background-color")).toBe("");
     el.style.setProperty("Background-Color", "red");
@@ -300,7 +290,6 @@ describe(":style is runtime-dom's patchStyle", () => {
       ["color", "red"],
       ["opacity", "0.5"],
     ]);
-    // The unchanged `color` cost no host call.
     expect(rt.host.styles.slice(before).some((s) => s.key === "color")).toBe(false);
   });
 
@@ -358,7 +347,6 @@ describe(":style is runtime-dom's patchStyle", () => {
       ["color", "red !important"],
       ["width", "1px"],
     ]);
-    // Dropping the priority is a change.
     rt.patchProp(el, "style", { color: "red !important", width: "1px" }, { color: "red", width: "1px" });
     expect(el.style.getPropertyPriority("color")).toBe("");
     expect(hostStyle()[0]).toEqual(["color", "red"]);
@@ -369,7 +357,6 @@ describe(":style is runtime-dom's patchStyle", () => {
     rt.host.styleRejects.add("display: -ms-flexbox");
     rt.patchProp(el, "style", null, { display: ["-webkit-box", "-ms-flexbox", "flex"] });
     expect(hostStyle()).toEqual([["display", "flex"]]);
-    // The last one was accepted, so nothing earlier was even asked about.
     expect(rt.host.acceptCalls).toEqual(["display: flex"]);
     expect(rt.advisories().some((a) => a.includes("style ") || a.includes(":style"))).toBe(false);
   });
@@ -452,7 +439,6 @@ describe("v-show keeps its display handling", () => {
     expect(hostStyle()).toEqual([["display", "none"]]);
     rt.vShow.updated(el, { value: true, oldValue: false });
     expect(hostStyle()).toEqual([]);
-    // An unchanged truthiness is no work at all.
     const n = rt.host.styles.length;
     rt.vShow.updated(el, { value: 1, oldValue: true });
     expect(rt.host.styles.length).toBe(n);
@@ -467,7 +453,6 @@ describe("v-show keeps its display handling", () => {
     expect(el.style.color).toBe("red");
     rt.vShow.updated(el, { value: true, oldValue: false });
     expect(el.style.display).toBe("grid");
-    // A string style while hidden, too.
     rt.vShow.updated(el, { value: false, oldValue: true });
     rt.patchProp(el, "style", { display: "grid", color: "red" }, "display: block; color: blue");
     expect(el.style.display).toBe("none");

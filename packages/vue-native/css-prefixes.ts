@@ -1,12 +1,9 @@
-// Vendor-prefixed declarations, dropped from the CSS the builders ship so they are neither shipped nor compiled.
-// Mirrors crates/vn-css/src/prefix.rs, which applies only the `-webkit-` spellings in its WEBKIT_APPLIED list
-// and silently drops the rest; test/css-prefixes.test.ts reads prefix.rs and fails when the lists differ.
-//
-// Declarations only: prefixed at-rules, selectors and values are left alone.
+// Vendor-prefixed declarations, dropped from the CSS the builders ship. Mirrors
+// crates/vn-css/src/prefix.rs (only the `-webkit-` spellings in `WEBKIT_APPLIED` apply, the rest are
+// dropped); test/css-prefixes.test.ts fails when the lists differ. Declarations only.
 
 import postcss, { type Root } from "postcss";
 
-/** crates/vn-css/src/prefix.rs `WEBKIT_APPLIED`, in the same order. */
 export const WEBKIT_APPLIED: readonly string[] = [
   "align-content",
   "align-items",
@@ -92,7 +89,6 @@ export const WEBKIT_APPLIED: readonly string[] = [
 const APPLIED = new Set(WEBKIT_APPLIED);
 const PREFIX = /^-(webkit|moz|ms|o)-/i;
 
-/** Is `prop` a vendor-prefixed property vue-native drops? (prefix.rs `dropped`) */
 export function isDroppedPrefix(prop: string): boolean {
   const m = PREFIX.exec(prop);
   if (!m) return false;
@@ -100,14 +96,9 @@ export function isDroppedPrefix(prop: string): boolean {
   return !APPLIED.has(prop.slice(m[0].length).toLowerCase());
 }
 
-/** A prefixed declaration anywhere in the text: the cheap test before parsing. */
 const MAYBE = /(^|[;{\s])-(webkit|moz|ms|o)-[a-z-]+\s*:/i;
 
-/**
- * `css` without the vendor-prefixed declarations vue-native drops. The text is
- * returned as it came when there is none, or when postcss cannot parse it
- * (vn-css then drops them itself, at runtime).
- */
+/** `css` without the vendor-prefixed declarations; unchanged when there are none or postcss cannot parse it. */
 export function pruneVendorPrefixes(css: string): string {
   if (!MAYBE.test(css)) return css;
   let root: Root;

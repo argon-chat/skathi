@@ -33,8 +33,6 @@ describe("the table itself", () => {
     for (const spec of COMMANDS) {
       expect(spec.description.length).toBeGreaterThan(20);
       expect(spec.usage.length).toBeGreaterThan(0);
-      // The usage block is printed verbatim under `commands`, so every line
-      // has to be indented into that block.
       for (const line of spec.usage) expect(line.startsWith("  ")).toBe(true);
     }
   });
@@ -63,7 +61,6 @@ describe("MCP parity", () => {
     for (const tool of tools) {
       expect(tool.inputSchema.properties.window).toBeDefined();
       expect(tool.inputSchema.properties.window.type).toBe("number");
-      // …and it is never required — absent means the primary window.
       expect(tool.inputSchema.required ?? []).not.toContain("window");
     }
   });
@@ -85,9 +82,7 @@ describe("MCP parity", () => {
       selector: ".tab",
       index: 2,
     });
-    // No `selector: undefined`, no `"index": null` reaching the host.
     expect(rules.build({ node: 41 })).toEqual({ cmd: "rules", node: 41 });
-    // An argument the tool does not declare is not forwarded.
     expect(rules.build({ selector: ".tab", nonsense: 1 })).toEqual({
       cmd: "rules",
       selector: ".tab",
@@ -142,8 +137,6 @@ describe("CLI parity", () => {
     ];
     for (const [argv, flags, wire] of cases) {
       expect(buildRequest(argv, flags)).toEqual(wire);
-      // …and the MCP tool for the same command reaches the same wire object
-      // from the same arguments.
       const { cmd, ...args } = wire;
       const tool = tools.find((t) => t.name === toolName(cmd as string))!;
       expect(tool.build(args)).toEqual(wire);
@@ -179,9 +172,7 @@ describe("no front-end may grow a command list of its own", () => {
   });
 
   test("neither writes a wire `cmd` down", () => {
-    // The exact shape of the drift this file exists to prevent: a `cmd: "..."`
-    // literal (mcp.ts's old tool table) or a `case "...":` verb (ctl.ts's old
-    // switch) in a front-end rather than in commands.ts.
+    // The drift this file prevents: a `cmd: "..."` literal or a `case "...":` verb in a front-end rather than in commands.ts.
     for (const [name, src] of [
       ["ctl.ts", ctl],
       ["mcp.ts", mcp],

@@ -1,20 +1,9 @@
-// What goes into the package: `vn.config.json` `"assets"`, resolved to files.
-//
-// The KEY of each file is its path relative to the app root, `/`-separated and
-// case-preserved — exactly the string dev already resolves a relative URL to.
-// `<img src="assets/a.png">` in dev reads `apps/<app>/assets/a.png`; in the exe
-// it reads the payload entry `assets/a.png`.
-//
-// The one remapping is Vite's `publicDir`, and only when vn.config.json
-// declares it: `public/favicon.ico` is keyed `favicon.ico`, which is what
-// The dev host does not remap yet (it resolves `/favicon.ico` against the app root), so a declared
-// publicDir is a known dev/exe difference.
-//
-// Never packaged, whatever the patterns say: `src/` (it is in the bundle
-// already), `node_modules/`, `dist/` (the exe would carry itself), dotfiles
-// and dot-directories, and `vn.config.json`. Files an import pulled in
-// (`?url`, an image import) are not collected here at all: the builder lists
-// them in assets.json and build-app.ts packs them.
+// What goes into the package: `vn.config.json` `"assets"`, resolved to files. The KEY of each file
+// is its path relative to the app root, `/`-separated, case-preserved: what dev resolves a
+// relative URL to. Vite's `publicDir` is the one remapping (`public/favicon.ico` -> `favicon.ico`),
+// only when declared; the dev host does not remap it yet, a known dev/exe difference.
+// Never packaged: `src/`, `node_modules/`, `dist/`, dotfiles and dot-directories, `vn.config.json`.
+// Files an import pulled in (`?url`) are listed by the builder in assets.json and packed by build-app.ts.
 
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -34,7 +23,6 @@ export interface Collected {
 const GLOB = /[*?[\]{}]/;
 const EXCLUDED_ROOTS = new Set(["src", "node_modules", "dist"]);
 
-/** Is this app-root-relative key one that is never packaged? */
 export function excluded(key: string): boolean {
   const segs = key.split("/");
   if (EXCLUDED_ROOTS.has(segs[0]!)) return true;
@@ -99,7 +87,6 @@ export function collectAssets(
       if (key.startsWith("..") || excluded(key)) continue;
       kept++;
       if (fromPublic.has(key)) {
-        // Vite serves the public file at that URL; so does the package.
         warnings.push(`${JSON.stringify(key)} is both in "${publicDir}/" and in "assets" — the ${publicDir}/ file is packaged`);
         fromPublic.delete(key);
         continue;
@@ -111,8 +98,7 @@ export function collectAssets(
     }
   }
   const files = [...byKey.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  // Two keys that differ only in case would be one file on NTFS and two
-  // entries here; the host's case-insensitive fallback could then pick either.
+  // Two keys that differ only in case would be one file on NTFS; the host's case-insensitive fallback could pick either.
   const lower = new Map<string, string>();
   for (const f of files) {
     const k = f.key.toLowerCase();

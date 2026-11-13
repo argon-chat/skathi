@@ -24,7 +24,6 @@ use crate::EventPayload;
 /// being asked for (the owner's budget).
 pub(crate) const TILE_IDLE: Duration = Duration::from_secs(3);
 
-/// The longest side a Lottie is drawn at, in device px.
 const MAX_LOTTIE_PX: u32 = 1024;
 
 
@@ -35,7 +34,6 @@ enum Play {
     Off,
 }
 
-/// `object-fit`, as far as a sticker takes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fit {
     Contain,
@@ -53,11 +51,9 @@ impl Fit {
     }
 }
 
-/// What the build read off the node.
 #[derive(Clone, Debug, PartialEq)]
 struct Props {
     src: Arc<str>,
-    /// `kind="image"`: a still picture, painted as `<img>` paints it.
     image: bool,
     tint: bool,
     play: Play,
@@ -66,8 +62,7 @@ struct Props {
     fit: Fit,
 }
 
-/// The browser's boolean-attribute rule: present is true unless it spells `"false"` (what
-/// `:attr="false"` serialises to).
+/// The browser's boolean-attribute rule: present is true unless it spells `"false"` (`:attr="false"`).
 fn bool_attr(raw: Option<&str>) -> bool {
     raw.is_some_and(|v| v.trim() != "false")
 }
@@ -81,7 +76,6 @@ fn play_from(raw: Option<&str>) -> Result<Play, String> {
     }
 }
 
-/// `max-fps`: a positive number of frames a second; anything else is no cap.
 fn max_fps_from(raw: Option<&str>) -> Option<u16> {
     let fps = raw?.trim().parse::<f32>().ok()?;
     (fps >= 1.0).then(|| fps.min(1000.0) as u16)
@@ -89,7 +83,6 @@ fn max_fps_from(raw: Option<&str>) -> Option<u16> {
 
 fn props_of(t: &Tree, id: u32, node: &crate::tree::Node, prev: Option<&Arc<str>>) -> Props {
     let src = t.prop(id, "src").map(str::trim).unwrap_or("");
-    // One allocation per src, not per build.
     let src = match prev {
         Some(p) if &**p == src => p.clone(),
         _ => Arc::from(src),
@@ -143,9 +136,9 @@ fn props_of(t: &Tree, id: u32, node: &crate::tree::Node, prev: Option<&Arc<str>>
 }
 
 
-/// The size a source is drawn at for a box of `boxed` device px: the picture's size under `fit`,
-/// its longest side rounded up to a 4 px step (8 above 128, 16 above 256), never above a video's
-/// own size or [`MAX_LOTTIE_PX`].
+/// The size a source is drawn at for a box of `boxed` device px: the picture's size under `fit`, its
+/// longest side rounded up to a 4 px step (8 above 128, 16 above 256), capped at a video's own size
+/// or [`MAX_LOTTIE_PX`].
 fn target_size(intrinsic: (u32, u32), boxed: (f32, f32), fit: Fit, kind: Kind) -> Option<(u32, u32)> {
     let (iw, ih) = (intrinsic.0 as f32, intrinsic.1 as f32);
     let (bw, bh) = boxed;
@@ -173,7 +166,6 @@ fn target_size(intrinsic: (u32, u32), boxed: (f32, f32), fit: Fit, kind: Kind) -
     Some(if iw >= ih { (long, short) } else { (short, long) })
 }
 
-/// Node `id`'s target: its source drawn for a box of `boxed` device px.
 fn key_for(id: u32, props: &Props, info: &SourceInfo, boxed: (f32, f32), reduce_motion: bool) -> Option<TargetKey> {
     let (width, height) = target_size((info.width, info.height), boxed, props.fit, info.kind)?;
     let mut key = TargetKey::new(props.src.clone(), width, height);
@@ -191,19 +183,14 @@ fn key_for(id: u32, props: &Props, info: &SourceInfo, boxed: (f32, f32), reduce_
 }
 
 
-/// One `<vn-sticker>` node.
 struct Entry {
     props: Props,
-    /// The window that built the node last.
     win: WinKey,
-    /// Both box axes come from CSS.
     sized: bool,
     info: Option<SourceInfo>,
     want: Option<TargetKey>,
-    /// The tile the build paints: `want`'s, once that has a frame.
     shows: Option<(TargetKey, WinKey)>,
     visible: bool,
-    /// The last tick it could be seen.
     seen: Option<Instant>,
     loaded: bool,
     failed: bool,
@@ -227,16 +214,13 @@ impl Entry {
         }
     }
 
-    /// Seen within [`TILE_IDLE`]: its target is asked for, its tiles kept.
     fn recent(&self, now: Instant) -> bool {
         self.seen.is_some_and(|s| now.duration_since(s) < TILE_IDLE)
     }
 }
 
-/// One target's picture in one window's atlas.
 struct Tile {
     live: LiveTile,
-    /// The frame written last; 0 before the first.
     seq: u64,
 }
 
@@ -245,13 +229,11 @@ thread_local! {
     static TILES: RefCell<HashMap<(TargetKey, WinKey), Tile>> = RefCell::new(HashMap::new());
 }
 
-/// Sources being fetched, so a source is asked for once.
 fn fetching() -> &'static Mutex<HashSet<Arc<str>>> {
     static FETCHING: OnceLock<Mutex<HashSet<Arc<str>>>> = OnceLock::new();
     FETCHING.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-/// `(nodes, tiles, tile bytes)` for devtools `mem`.
 pub(crate) fn mem_stats() -> (usize, usize, usize) {
     let nodes = NODES.with(|m| m.borrow().len());
     TILES.with(|m| {
@@ -261,12 +243,10 @@ pub(crate) fn mem_stats() -> (usize, usize, usize) {
     })
 }
 
-/// Their tiles go back on the next tick.
 pub(crate) fn gc(live: impl Fn(u32) -> bool) {
     NODES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
 }
 
-/// A window closed: its atlas went with it, so its tiles are simply dropped.
 pub(crate) fn forget_window(key: WinKey) {
     TILES.with(|m| m.borrow_mut().retain(|(_, w), _| *w != key));
     NODES.with(|m| {
@@ -279,15 +259,12 @@ pub(crate) fn forget_window(key: WinKey) {
 }
 
 
-/// What a node paints.
 enum Picture {
     Nothing,
     Tile(Arc<RenderImage>),
     Image(ImageSource),
 }
 
-/// Records what the build read, and answers what to paint, how (`fit`, `tint`) and, for a source
-/// already known, its intrinsic size.
 fn note_build(
     id: u32,
     win: WinKey,
@@ -374,8 +351,7 @@ impl gpui::Element for Tinted {
     }
 }
 
-/// gpui `Img`'s sizing rule for a box holding a picture of `iw` × `ih`: an `auto` axis takes the
-/// intrinsic size, or follows the other axis's absolute length through the aspect ratio.
+/// gpui `Img`'s sizing rule for a box holding an `iw` × `ih` picture.
 fn size_as_replaced(style: &mut gpui::StyleRefinement, iw: f32, ih: f32, rem: gpui::Pixels) {
     use gpui::{DefiniteLength, Length};
     let auto = |l: Option<Length>| matches!(l, None | Some(Length::Auto));
@@ -399,8 +375,6 @@ fn size_as_replaced(style: &mut gpui::StyleRefinement, iw: f32, ih: f32, rem: gp
     }
 }
 
-/// `<vn-sticker>`: a styled box, as a `<div>` is, with the tile the node shows painted over its
-/// content box. Not focusable without `tabindex`, as `<img>`.
 pub(super) fn build<V: 'static>(
     t: &Tree,
     id: u32,
@@ -461,8 +435,7 @@ enum Event {
     Ended { id: u32 },
 }
 
-/// The fetch of `src`, once: http(s) on gpui's HTTP client on the background executor, anything
-/// else read here (data:, blob:, the package, a file).
+/// The fetch of `src`, once: http(s) on gpui's HTTP client, anything else read here.
 fn fetch(src: &Arc<str>, cx: &mut App) {
     if !fetching().lock().unwrap_or_else(|p| p.into_inner()).insert(src.clone()) {
         return;
@@ -493,8 +466,7 @@ fn fetch(src: &Arc<str>, cx: &mut App) {
     fetching().lock().unwrap_or_else(|p| p.into_inner()).remove(src);
 }
 
-/// Every `<vn-sticker>`, once a frame from the pump, before the draw: sources fetched, targets
-/// asked for, this window's tiles written, idle tiles retired, events dispatched.
+/// Every `<vn-sticker>`, once a frame from the pump before the draw.
 pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     if NODES.with(|m| m.borrow().is_empty()) && TILES.with(|m| m.borrow().is_empty()) {
         return false;
@@ -558,7 +530,6 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
         let event = match crate::img::probe(id, &src, cx) {
             crate::img::Probe::Pending => continue,
             crate::img::Probe::Loaded(w, h) => Event::Load { id, src, size: (w, h) },
-            // The resolver or the loader has said why.
             crate::img::Probe::Failed => Event::Error { id, src, why: None },
         };
         NODES.with(|m| {
@@ -630,8 +601,6 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     draw
 }
 
-/// What the pump's tick decided (visibility, targets) stands; the draw that follows shows the
-/// frames.
 pub(crate) fn window_tick(window: &mut Window) {
     let here = windows::key(window);
     let keys: HashSet<TargetKey> = NODES.with(|m| {
@@ -662,8 +631,6 @@ fn want_of(id: u32, e: &Entry, info: &SourceInfo) -> Option<TargetKey> {
     key_for(id, &e.props, info, (w * scale, h * scale), reduce_motion)
 }
 
-/// Writes the frames due into window `here`'s tiles and moves nodes onto the tile they want once it
-/// has a frame.
 fn write(window: &mut Window, here: WinKey, frames: &HashMap<TargetKey, Frame>, touch: &mut Vec<u32>) -> Shown {
     let needed: HashMap<TargetKey, bool> = NODES.with(|m| {
         let mut needed: HashMap<TargetKey, bool> = HashMap::new();
@@ -705,8 +672,7 @@ fn write(window: &mut Window, here: WinKey, frames: &HashMap<TargetKey, Frame>, 
     });
     NODES.with(|m| {
         for (&id, e) in m.borrow_mut().iter_mut().filter(|(_, e)| e.win == here) {
-            // A tile that moved: a cache boundary over the node would replay a sprite pointing at
-            // the old place.
+            // A tile that moved: a cache boundary over the node would replay a sprite pointing at the old place.
             if e.shows.as_ref().is_some_and(|(k, w)| *w == here && moved.contains(k)) {
                 touch.push(id);
             }
@@ -727,7 +693,6 @@ fn write(window: &mut Window, here: WinKey, frames: &HashMap<TargetKey, Frame>, 
     shown
 }
 
-/// Hands back every tile no copy seen lately paints or wants.
 fn retire(now: Instant, touch: &mut Vec<u32>) {
     let kept: HashSet<(TargetKey, WinKey)> = NODES.with(|m| {
         let mut kept = HashSet::new();
@@ -809,7 +774,6 @@ mod tests {
     fn a_target_is_the_picture_under_object_fit_rounded_up_to_a_step() {
         // A 512 sticker in a 200 × 200 box at 1.5: 300 device px, a 16 step.
         assert_eq!(target_size((512, 512), (300.0, 300.0), Fit::Contain, Kind::Lottie), Some((304, 304)));
-        // Inline emoji: 24 css px at 1.5 = 36, a 4 step.
         assert_eq!(target_size((100, 100), (36.0, 36.0), Fit::Contain, Kind::Video), Some((36, 36)));
         assert_eq!(target_size((100, 100), (35.2, 35.2), Fit::Contain, Kind::Video), Some((36, 36)));
         assert_eq!(target_size((200, 100), (100.0, 100.0), Fit::Contain, Kind::Lottie), Some((100, 50)));
@@ -821,7 +785,6 @@ mod tests {
     #[test]
     fn a_video_is_never_drawn_above_its_size_and_a_lottie_not_above_the_cap() {
         assert_eq!(target_size((100, 100), (540.0, 540.0), Fit::Contain, Kind::Video), Some((100, 100)));
-        // The step does not round past the video's own size either.
         assert_eq!(target_size((98, 98), (97.0, 97.0), Fit::Contain, Kind::Video), Some((98, 98)));
         assert_eq!(target_size((512, 512), (4000.0, 4000.0), Fit::Contain, Kind::Lottie), Some((1024, 1024)));
         assert_eq!(target_size((512, 256), (4000.0, 4000.0), Fit::Contain, Kind::Lottie), Some((1024, 512)));

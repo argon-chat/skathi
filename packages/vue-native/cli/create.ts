@@ -1,12 +1,6 @@
-// `vn create <dir>` — the smallest app `vn build` turns into an exe.
-//
-//   <dir>/vn.config.json   name, productName, version, window, assets, windows
-//   <dir>/src/main.ts      the stock browser-Vue bootstrap
-//   <dir>/src/App.vue      `<script setup lang="ts">`, a counter and a fetch
-//   <dir>/assets/          what gets packaged (`fetch("assets/hello.txt")`)
-//   <dir>/icon.png         a generated 256² icon, so the first exe has one
-//   <dir>/tsconfig.json    type-checking against the runtime, not lib.dom
-//
+// `vn create <dir>` — the smallest app `vn build` turns into an exe: vn.config.json, src/main.ts,
+// src/App.vue (a counter and a fetch), assets/ (what gets packaged), a generated 256² icon.png so
+// the first exe has one, and a tsconfig.json that type-checks against the runtime, not lib.dom.
 // Nothing is overwritten: an existing file is an error, not a merge.
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -21,8 +15,6 @@ function icon(): Uint8Array {
   const r = 56;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      // A rounded square with a diagonal gradient — the shape of an app icon,
-      // so the generated exe does not look like a broken one.
       const dx = Math.max(0, Math.abs(x - 127.5) - (128 - r));
       const dy = Math.max(0, Math.abs(y - 127.5) - (128 - r));
       const inside = dx * dx + dy * dy <= r * r;
@@ -69,8 +61,7 @@ createApp(App).mount();
 import { onMounted, ref } from "vue";
 
 const count = ref(0);
-// A relative URL resolves against the app root — apps/<app>/ in dev, the
-// payload inside the exe once packaged. The same string works in both.
+// A relative URL resolves against the app root (apps/<app>/ in dev, the payload once packaged).
 const greeting = ref("…");
 onMounted(async () => {
   const res = await fetch("assets/hello.txt");

@@ -1,9 +1,5 @@
-// ClipboardEvent: `copy` / `cut` / `paste` from the host
-// (crates/vn-tree/src/clipboard.rs). The host builds `clipboardData` (a redjs
-// DataTransfer) and hands it to the dispatcher as its eighth argument; the
-// runtime wraps it in a ClipboardEvent and walks the path like any other
-// host event. The host side (the DataTransfer's modes, the write-back of a
-// cancelled copy) is tested in Rust; this file is the JS half.
+// ClipboardEvent: `copy` / `cut` / `paste` from the host. The host builds `clipboardData` (a redjs DataTransfer) and hands it
+// to the dispatcher as its eighth argument; this file is the JS half.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
@@ -19,7 +15,6 @@ type Ev = {
   preventDefault(): void;
 };
 
-/** A mounted app with `<div><input></div>` under the root (`document.body`). */
 function world() {
   const rt = createRuntime();
   rt.createApp({ render: () => null }).mount();
@@ -28,13 +23,11 @@ function world() {
   const input = rt.nodeOps.createElement("input");
   rt.nodeOps.insert(box, body, null);
   rt.nodeOps.insert(input, box, null);
-  /** What the host does: one dispatch, `data` riding the eighth argument. */
   const fire = (node: { id: number }, name: "copy" | "cut" | "paste", data: unknown): boolean =>
     rt.host.dispatcher(node.__vnId, rt.EV_CODES[name], 0, 0, 0, 0, undefined, data);
   return { rt, body, box, input, fire };
 }
 
-/** Stands in for the host's DataTransfer; identity is what is under test. */
 const store = () => ({ types: ["text/plain"], getData: () => "hello" });
 
 describe("ClipboardEvent", () => {
@@ -59,7 +52,6 @@ describe("ClipboardEvent", () => {
     expect(e).toMatchObject({ type: "paste", bubbles: true, cancelable: true, composed: true });
     expect(e.clipboardData).toBe(data);
     expect(e.target).toBe(input);
-    // A readonly attribute is a prototype getter, as WebIDL has it.
     expect("clipboardData" in rt.global.ClipboardEvent.prototype).toBe(true);
     expect(Object.keys(e)).not.toContain("clipboardData");
     void box;
@@ -93,9 +85,7 @@ describe("ClipboardEvent", () => {
     expect(got[0].target).toBe(body);
   });
 
-  // Found by packages/vn-test/specs/event-order.spec.ts: module-scope code
-  // registers its document listeners BEFORE `mount()`, when there is no root to
-  // carry the bit, and the host never delivered the event.
+  // Module-scope code registers document listeners BEFORE `mount()`, when there is no root to carry the bit.
   test("a document listener added before mount() still rides the root's bit", () => {
     const rt = createRuntime();
     rt.global.document.addEventListener("copy", () => {});

@@ -1,19 +1,14 @@
 //! File dialogs: `<input type=file>`, the File System Access pickers and `<a download>`'s Save As.
 //!
-//! Each dialog runs on its own short-lived `vn-dialog` thread (an STA on Windows), so a Save As
-//! left open holds up neither the shared shell thread nor the frame thread, which keeps pumping
-//! while the native modal loop may message its owner synchronously.
+//! Each dialog runs on its own short-lived `vn-dialog` thread (an STA on Windows), so an open Save As
+//! holds up neither the shell thread nor the frame thread.
 //!
-//! Owner lifecycle: a dialog belongs to the window it was asked from, one at a time (a second
-//! picker is refused, a download waits its turn). When that window starts to close,
-//! [`owner_closing`] marks it: a dialog not yet in the OS never will be, and the open one is
-//! closed by a 100 ms check on its own thread (win.rs, mac.rs). vn-app destroys the window only
-//! once [`is_idle`] says the native loop has exited, since destroying an owner under another
-//! thread's modal dialog hangs or crashes. The pending promise settles as a cancel.
+//! A dialog belongs to the window it was asked from, one at a time (a second picker is refused, a
+//! download waits). When that window starts to close, [`owner_closing`] marks it: a dialog not yet in the
+//! OS never will be, and the open one is closed by a check on its own thread. vn-app destroys the window
+//! only once [`is_idle`], since destroying an owner under another thread's modal dialog hangs or crashes.
 //!
-//! `VN_DIALOGS=scripted`: nothing reaches the OS. Requests are parsed, owned and serialised as
-//! usual, then wait for the devtools `dialog` command (`list`, `answer`, `cancel`); what follows
-//! the answer is the real code path. Automated runs never open a window on the host.
+//! `VN_DIALOGS=scripted`: nothing reaches the OS; requests wait for the devtools `dialog` command.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,8 +32,6 @@ mod win;
 #[cfg(target_os = "windows")]
 use win as imp;
 
-// macOS: AppKit panels on the main queue, sheets on the owner; what they are told is decided in
-// mac_plan.rs, unit-tested on every OS.
 #[cfg(target_os = "macos")]
 mod mac;
 #[cfg(target_os = "macos")]
@@ -87,7 +80,6 @@ impl Kind {
     }
 }
 
-/// One entry of the dialog's type list: a display name and its extensions (lowercase, no dot).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Filter {
     pub name: String,
@@ -102,7 +94,6 @@ impl Filter {
 
 pub const ALL_FILES: &str = "All Files (*.*)";
 
-/// `WellKnownDirectory` (WICG FSA), mapped to Windows known folders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Known {
     Desktop,
@@ -137,7 +128,6 @@ impl Known {
     }
 }
 
-/// Where the dialog opens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Start {
     Known(Known),
@@ -152,25 +142,20 @@ pub struct Native {
     pub allow_all: bool,
     pub client: u128,
     pub start: Option<Start>,
-    /// `true`: `SetFolder` (startIn is an instruction). `false`: `SetDefaultFolder` (the remembered
-    /// folder overrides it).
+    /// `true`: `SetFolder` (startIn is an instruction). `false`: `SetDefaultFolder` (the remembered folder wins).
     pub force_start: bool,
     pub suggested_name: Option<String>,
     pub default_ext: Option<String>,
 }
 
-/// What happens with the user's choice.
 pub enum Then {
-    /// `<input type=file>`: Files and a FileList. `walk` is `webkitdirectory`; `prev` is the
-    /// input's current selection, so picking the same files again is a `cancel`, not a `change`.
+    /// `<input type=file>`; `walk` is `webkitdirectory`; `prev` is the current selection, so re-picking it is a `cancel`.
     Files { walk: bool, prev: Vec<PathBuf> },
     Handles,
-    /// `showSaveFilePicker`: a handle, after the file is created empty or truncated.
     SaveHandle,
     Download(Data),
 }
 
-/// The extension of an `accept` token or an FSA extension: `.PNG` → `png`.
 fn ext_of(token: &str) -> Option<String> {
     let e = token.strip_prefix('.')?;
     (!e.is_empty() && !e.contains(['*', '?', ';', '/', '\\', '\0'])).then(|| e.to_ascii_lowercase())
@@ -182,10 +167,8 @@ fn push_unique(out: &mut Vec<String>, e: String) {
     }
 }
 
-/// `<input accept>` → the dialog's type list, as Chromium builds it: one combined entry named
-/// "Image Files" / "Audio Files" / "Video Files" when the attribute is that one wildcard,
-/// "Custom Files" otherwise. `tokens` are already validated by the runtime. Empty when nothing
-/// maps to an extension.
+/// `<input accept>` → the dialog's type list, as Chromium builds it: one combined "Image/Audio/Video
+/// Files" entry for that wildcard, "Custom Files" otherwise.
 pub fn filters_for_accept(tokens: &[String]) -> Vec<Filter> {
     let mut exts = Vec::new();
     let mut valid = 0;
@@ -220,8 +203,7 @@ pub struct AcceptType {
     pub accept: Vec<(String, Vec<String>)>,
 }
 
-/// FSA `types` → one dialog entry per type: its listed extensions plus those its MIME types name.
-/// A type with no extension cannot filter and is left out.
+/// FSA `types` → one dialog entry per type; a type with no extension cannot filter and is left out.
 pub fn filters_for_types(types: &[AcceptType]) -> Vec<Filter> {
     let mut out = Vec::new();
     for t in types {
@@ -255,8 +237,7 @@ pub fn fnv128(bytes: &[u8]) -> u128 {
     h
 }
 
-/// `SetClientGuid` for a picker: `fnv128(app id ‖ "\0" ‖ id)`, or `fnv128(app id)` with no `id`.
-/// The app id is included because the dev host is one exe running many apps.
+/// `SetClientGuid` for a picker: `fnv128(app id ‖ "\0" ‖ id)`; the app id is included because the dev host runs many apps.
 pub fn client_guid(app_id: &str, id: Option<&str>) -> u128 {
     match id {
         Some(id) => fnv128(format!("{app_id}\0{id}").as_bytes()),
@@ -271,7 +252,6 @@ fn app_id() -> String {
     crate::launch::identity().map(|i| i.id.clone()).unwrap_or_else(|| "vue-native-app".to_string())
 }
 
-/// FSA's `id`: at most 32 characters of `[A-Za-z0-9_-]`.
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
@@ -284,7 +264,6 @@ fn strings(v: Option<&Json>) -> Vec<String> {
     v.and_then(Json::as_array).map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect()).unwrap_or_default()
 }
 
-/// The runtime's request → what the OS dialog is told and what follows it.
 pub fn parse(req: &str, prev: Vec<PathBuf>) -> Result<(Native, Then), Fail> {
     let v: Json = serde_json::from_str(req).map_err(|e| bad(format!("dialog request is not JSON: {e}")))?;
     let kind = match v.get("kind").and_then(Json::as_str) {
@@ -321,7 +300,6 @@ pub fn parse(req: &str, prev: Vec<PathBuf>) -> Result<(Native, Then), Fail> {
         Some(Json::Object(o)) => {
             let h = o.get("h").and_then(Json::as_u64).unwrap_or(0);
             let (path, k) = fs::path_of(h).ok_or_else(|| Fail::new("InvalidStateError", fs::INVALID_STATE))?;
-            // A file handle starts the dialog in the file's folder (spec).
             let dir = match k {
                 fs::Kind::Directory => path,
                 fs::Kind::File => path.parent().map(Path::to_path_buf).unwrap_or(path),
@@ -359,9 +337,7 @@ const RESERVED_NAMES: &[&str] = &[
     "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
 
-/// A download's file name, as Chromium's `net::GenerateFileName` makes it: the `download`
-/// attribute if anything is left after sanitising, else the URL's own; characters Windows refuses
-/// become `_`, a device name gets a `_` prefix, and a name with no extension gets its MIME type's.
+/// A download's file name, as Chromium's `net::GenerateFileName` makes it.
 pub fn download_name(attr: &str, url: &str, mime: &str) -> String {
     fn clean(s: &str) -> String {
         let s: String = s
@@ -370,7 +346,6 @@ pub fn download_name(attr: &str, url: &str, mime: &str) -> String {
             .collect();
         s.trim_matches(|c: char| c == '.' || c.is_whitespace()).to_string()
     }
-    // A path in the attribute keeps its last component only, as in Chromium.
     let leaf = attr.rsplit(['/', '\\']).next().unwrap_or(attr);
     let mut name = clean(leaf);
     if name.is_empty() {
@@ -395,9 +370,7 @@ pub fn download_name(attr: &str, url: &str, mime: &str) -> String {
     name
 }
 
-/// A resolved `blob:` URL as the bytes a download writes. A memory Blob shares its buffer; a
-/// picked file is copied on the dialog thread, and one changed since the pick fails with
-/// `NotReadableError`.
+/// A resolved `blob:` URL as the bytes a download writes; a picked file changed since the pick fails with `NotReadableError`.
 pub fn data_of_blob_target(t: vn_runtime::redjs::webapi::url::BlobTarget) -> Data {
     use vn_runtime::redjs::webapi::blob::{DiskFile, Range, Source};
     use vn_runtime::redjs::webapi::url::BlobTarget;
@@ -412,7 +385,6 @@ pub fn data_of_blob_target(t: vn_runtime::redjs::webapi::url::BlobTarget) -> Dat
     }
 }
 
-/// The window a dialog belongs to: vn-tree's window key and its native window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Owner {
     pub key: u64,
@@ -421,8 +393,7 @@ pub struct Owner {
 
 static RESOLVER: OnceLock<fn() -> Option<Owner>> = OnceLock::new();
 
-/// vn-app names the published window at the moment of a call. Without a resolver (a unit test, a
-/// headless tool) a dialog has no owner.
+/// vn-app names the published window at the moment of a call; without a resolver a dialog has no owner.
 pub fn set_owner_resolver(f: fn() -> Option<Owner>) {
     let _ = RESOLVER.set(f);
 }
@@ -430,9 +401,7 @@ pub fn set_owner_resolver(f: fn() -> Option<Owner>) {
 #[derive(Default)]
 struct OwnerState {
     closed: AtomicBool,
-    /// A dialog of this owner is in the OS (or waiting for its scripted answer).
     active: AtomicBool,
-    /// Downloads wait in click order: the next ticket to hand out, and the tickets waiting.
     ticket: std::sync::atomic::AtomicU64,
     queue: Mutex<std::collections::VecDeque<u64>>,
 }
@@ -452,8 +421,7 @@ fn owner_state(key: u64) -> Arc<OwnerState> {
     owners().lock().unwrap_or_else(|p| p.into_inner()).entry(key).or_default().clone()
 }
 
-/// Window `key` is about to be destroyed. Its open dialog is told to close. Returns `true` while
-/// a dialog is still running on it; destroy the window only once [`is_idle`].
+/// Window `key` is about to be destroyed: its open dialog is told to close. `true` while one is still running on it.
 pub fn owner_closing(key: u64) -> bool {
     let mut map = owners().lock().unwrap_or_else(|p| p.into_inner());
     let Some(st) = map.get(&key).cloned() else { return false };
@@ -465,7 +433,6 @@ pub fn owner_closing(key: u64) -> bool {
     active
 }
 
-/// Has window `key`'s dialog left the OS? A closed owner's entry is dropped once idle.
 pub fn is_idle(key: u64) -> bool {
     let mut map = owners().lock().unwrap_or_else(|p| p.into_inner());
     let Some(st) = map.get(&key) else { return true };
@@ -491,21 +458,17 @@ pub fn scripted_mode() -> bool {
     cfg!(test) || *S.get_or_init(|| std::env::var("VN_DIALOGS").is_ok_and(|v| v.eq_ignore_ascii_case("scripted")))
 }
 
-/// Chromium's message; the runtime prefixes "Failed to execute …".
 pub const ALREADY_ACTIVE: &str = "File picker already active.";
 
-/// `__vn_dialog_open(json, currentFiles)` and `__vn_download(…)`: one request. A picker is
-/// refused at once if its owner already has a dialog open; a download waits for it, as Chromium
-/// shows successive Save As dialogs.
+/// `__vn_dialog_open(json, currentFiles)` and `__vn_download(…)`: a picker is refused if its owner already
+/// has a dialog open; a download waits for it.
 pub fn start(native: Native, then: Then, label: &'static str) -> String {
     start_owned(RESOLVER.get().and_then(|f| f()), native, then, label)
 }
 
 const QUEUE_POLL: std::time::Duration = std::time::Duration::from_millis(25);
 
-/// On a dialog thread: waits for `ticket`'s turn, once the owner has no dialog open, then claims
-/// the owner. `false` when the owner closed meanwhile: nothing is claimed, so the HWND is never
-/// used.
+/// On a dialog thread: waits for `ticket`'s turn, then claims the owner. `false` when the owner closed meanwhile.
 fn wait_turn(st: &OwnerState, ticket: u64, cancel: &Cancellation) -> bool {
     loop {
         if cancel.is_requested() {
@@ -554,7 +517,6 @@ fn start_owned(owner: Option<Owner>, native: Native, then: Then, label: &'static
         } else {
             imp::pick(&native, hwnd, &cancel)
         };
-        // The native loop has exited: the owner may be destroyed, and a new dialog may start.
         st.active.store(false, Ordering::Release);
         let result = match picked {
             Ok(Some(paths)) if !paths.is_empty() && !cancel.is_requested() => finish(paths, then),
@@ -590,7 +552,6 @@ pub fn start_open(req: &str, prev: Vec<PathBuf>) -> String {
     }
 }
 
-/// `__vn_download`: Save As for bytes the runtime already resolved, starting in Downloads.
 pub fn start_download(data: Data, name: String) -> String {
     let native = Native {
         kind: Kind::Save,
@@ -620,9 +581,7 @@ fn stat_picked(path: PathBuf, rel: String) -> Result<Picked, Fail> {
     Ok(Picked { path, name, size, mtime, rel })
 }
 
-/// `webkitdirectory`: every file under `root`, sorted by relative path. Directory symlinks and
-/// junctions are not followed (a link up the tree would never end). `webkitRelativePath` is
-/// `<picked folder>/<path/inside>` with `/`.
+/// `webkitdirectory`: every file under `root`, sorted by relative path. Directory links are not followed.
 pub fn walk(root: &Path) -> Result<Vec<(PathBuf, String)>, Fail> {
     let base = fs::name_of(root);
     let mut out = Vec::new();
@@ -644,7 +603,6 @@ pub fn walk(root: &Path) -> Result<Vec<(PathBuf, String)>, Fail> {
         }
         stack.extend(subdirs);
     }
-    // Sorted, so what the app lists is stable from run to run.
     out.sort_by(|a, b| a.1.cmp(&b.1));
     Ok(out)
 }
@@ -694,8 +652,7 @@ fn finish(paths: Vec<PathBuf>, then: Then) -> Result<Done, Fail> {
     }
 }
 
-/// The picked Files and their FileList, on the JS thread; each File is protected until the list
-/// holds it (a Rust `Vec` is not a GC root).
+/// The picked Files and their FileList, on the JS thread; each File is protected until the list holds it.
 unsafe fn make_file_list(g: *mut std::ffi::c_void, picked: &[Picked]) -> u64 {
     use vn_runtime::redjs::ffi::{redjs_protect, redjs_unprotect};
     use vn_runtime::redjs::webapi::file;
@@ -712,7 +669,6 @@ unsafe fn make_file_list(g: *mut std::ffi::c_void, picked: &[Picked]) -> u64 {
     list
 }
 
-/// A request, described for the devtools (`dialog list`) and the log.
 pub fn describe(n: &Native) -> Json {
     let start = match &n.start {
         Some(Start::Known(k)) => Json::String(k.as_str().to_string()),
@@ -896,7 +852,6 @@ mod tests {
         let id = pending_of(key);
         let second: Json = serde_json::from_str(&open(o, req, vec![])).unwrap();
         assert_eq!((second["name"].as_str(), second["error"].as_str()), (Some("NotAllowedError"), Some(ALREADY_ACTIVE)));
-        // Answers the OS dialog would not have taken are refused, and the dialog keeps waiting.
         assert!(scripted::answer(id, vec![s.0.join("missing.txt")]).is_err());
         assert!(scripted::answer(id, vec![PathBuf::from("relative.txt")]).is_err());
         scripted::answer(id, vec![a.clone(), b.clone()]).unwrap();
@@ -936,7 +891,6 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         assert!(!owner_closing(KEY.fetch_add(1, Ordering::Relaxed)));
-        // A request from a closed owner (between its close and its destruction) is a cancel.
         let o2 = owner();
         let k2 = o2.unwrap().key;
         owner_state(k2).closed.store(true, Ordering::Release);
@@ -1055,7 +1009,6 @@ mod tests {
         assert_eq!(got[&d1], (true, r#"{"saved":"one.txt"}"#.to_string()));
         assert_eq!(got[&d2], (true, r#"{"saved":"two.txt"}"#.to_string()));
         assert_eq!(std::fs::read(s.0.join("two.txt")).unwrap(), b"2");
-        // A queued download on a window that closes is a cancel, and never shown.
         let o = owner();
         let key = o.unwrap().key;
         let picker = token_of(&open(o, r#"{"kind":"open","result":"handles"}"#, vec![]));

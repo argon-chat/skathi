@@ -41,8 +41,7 @@ export async function prepare(): Promise<void> {
     const source = argument("--bun-source", true) ?? join(cache, `source-${pin.frontend.revision}`);
     if (!existsSync(join(source, ".git"))) {
       if (existsSync(source)) throw Error("AOT source cache exists without Git provenance; choose another --cache or --bun-source");
-      // Fetch only the reviewed commit; a full moving HEAD/history is neither
-      // an input to the table nor needed on a cold Windows runner.
+      // Fetch only the reviewed commit: a full moving HEAD is not an input to the table.
       run(["git", "init", source]);
       run(["git", "-C", source, "config", "core.autocrlf", "false"]);
       run(["git", "-C", source, "config", "core.longpaths", "true"]);

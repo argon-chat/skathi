@@ -1,48 +1,36 @@
-//! A question with buttons, asked as a modal of a window (the permission prompt).
-//!
-//! Threading and owner rules are the file dialogs' (mod.rs): owned by the window published for
-//! the call, queued behind that window's open dialog, run on a `vn-ask` thread, and closed when
-//! the owner starts closing (vn-app destroys the owner only after the loop exits: `owner_closing`
-//! / `is_idle`). Under `VN_DIALOGS=scripted` the devtools answer with `dialog choose` /
-//! `dialog cancel`. On Windows it is a TaskDialog (win.rs). [`ask_with`] lets a caller show the
-//! question itself; a failing presenter falls back to the native dialog.
+//! A question with buttons, asked as a modal of a window (the permission prompt). Threading and owner
+//! rules are the file dialogs' (mod.rs); it runs on a `vn-ask` thread. Under `VN_DIALOGS=scripted` the
+//! devtools answer with `dialog choose` / `dialog cancel`. On Windows it is a TaskDialog (win.rs).
+//! [`ask_with`] lets a caller show the question itself; a failing presenter falls back to the native dialog.
 
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ask {
-    /// What is asking, for the log and `dialog list`: `"permission"`.
     pub what: &'static str,
     pub title: String,
     pub instruction: String,
     pub content: String,
-    /// The buttons, in order. `&` marks the access key.
     pub buttons: Vec<String>,
     pub default: usize,
 }
 
-/// Called exactly once: the index of the button pressed, or `None` for a dismissal (Esc, the
-/// close box, the owner closing, or nobody able to answer).
+/// Called exactly once: the button index, or `None` for a dismissal.
 pub type Reply = Box<dyn FnOnce(Option<usize>) + Send>;
 
-/// Asks `q` as a modal of the window published for this call (the primary one outside a call).
-/// Never blocks: `reply` runs later, on the dialog's thread.
+/// Asks `q` as a modal of the window published for this call. Never blocks: `reply` runs later, on the dialog's thread.
 pub fn ask(q: Ask, reply: Reply) {
     ask_owned(RESOLVER.get().and_then(|f| f()), q, None, reply)
 }
 
-/// Shows a question in place of the platform's dialog, on the `vn-ask` thread, with the owner's
-/// native window (0 for none). Returns when the question is gone. It must watch the
-/// [`Cancellation`]: the owner is destroyed only after it returns. `Err` falls back to the
-/// platform's dialog.
+/// Shows a question in place of the platform's dialog, on the `vn-ask` thread. It must watch the
+/// [`Cancellation`]: the owner is destroyed only after it returns. `Err` falls back to the platform's dialog.
 pub type Present = Box<dyn FnOnce(&Ask, isize, &Cancellation) -> Result<Option<usize>, Fail> + Send>;
 
-/// [`ask`], shown by `present`. Under `VN_DIALOGS=scripted` `present` is never called.
 pub fn ask_with(q: Ask, present: Present, reply: Reply) {
     ask_owned(RESOLVER.get().and_then(|f| f()), q, Some(present), reply)
 }
 
-/// The reply, sent once; `None` if whatever holds it goes away first.
 struct Once(Option<Reply>);
 
 impl Once {
@@ -126,7 +114,6 @@ pub(super) fn ask_owned(owner: Option<Owner>, q: Ask, present: Option<Present>, 
         reply.send(answer);
     });
     if spawned.is_err() {
-        // The closure went down with the failed spawn; only the queue slot is left to give back.
         owner_state(key).leave_queue(ticket);
     }
 }

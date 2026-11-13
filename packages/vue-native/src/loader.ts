@@ -52,14 +52,11 @@ interface HmrChanges {
   changed?: HmrChange[];
 }
 interface HmrBatch {
-  /** ids already re-executed by an earlier change in this batch. */
   fresh: Set<ModuleId>;
-  /** components already handed to Vue in this batch. */
   reloaded: Set<ModuleId>;
 }
 
 declare global {
-  /** The registry the Rust host drives (`boot`, `hmrApply`); the rest is observability for devtools/ctl.ts and tests. */
   var __VN__: VnRegistry;
 }
 
@@ -146,7 +143,6 @@ function define(id: ModuleId, factory: ModuleFactory, hash?: string): void {
   cache.delete(id); // redefinition invalidates exactly one module
 }
 
-/// Replaces `id`'s outgoing edges and keeps the reverse index in sync.
 function setDeps(id: ModuleId, list: ModuleId[] | null | undefined): void {
   const prev = deps.get(id);
   if (prev) {
@@ -202,8 +198,6 @@ function requireId(id: ModuleId, fromId: ModuleId | null): Record<string, unknow
   return mod.exports;
 }
 
-// setCss runs at module-script eval time, outside the factory, so a style-only edit needs no re-execution.
-
 function setCss(id: ModuleId, css: string): void {
   if (!cssText.has(id)) cssOrder.push(id);
   if (cssText.get(id) === css) return;
@@ -238,7 +232,6 @@ vueExports.createApp = function (...args: Parameters<typeof origCreateApp>) {
     const vm = mount(...mountArgs);
     mountCount++;
     try {
-      // `appContext.reload` is Vue's dev-only slot, absent from the published `AppContext` type.
       if (!(app._context as VueDevContext).reload)
         (app._context as VueDevContext).reload = rootReload;
     } catch (e) {
@@ -287,7 +280,6 @@ function teardown() {
   return true;
 }
 
-/// Fallback `appContext.reload` when Vue's dev one is absent: unmount + fresh mount from the invalidated entry.
 function rootReload(): void {
   log("root reload");
   teardown();
@@ -310,9 +302,6 @@ function hardRestart(reason: string): void {
   flushCss(true);
 }
 
-// The host has already re-evaled every changed module script (new factories in place, cache
-// entries gone, setCss run); what remains is deciding what to tell Vue.
-
 function componentOf(exports: Record<string, unknown> | undefined): ComponentLike | null {
   const c = exports && exports.default;
   return c && (typeof c === "object" || typeof c === "function") && (c as ComponentLike).__hmrId
@@ -320,16 +309,13 @@ function componentOf(exports: Record<string, unknown> | undefined): ComponentLik
     : null;
 }
 
-/// Only .vue modules get a `createRecord` epilogue, so only they can be swapped in place.
 function isComponentId(id: ModuleId): boolean {
   return id.length > 4 && id.slice(-4) === ".vue";
 }
 
-/// A changed non-component module: reload the components that transitively import it, the only
-/// way their captured copies of its exports refresh. Walks the reverse graph over live (already
-/// required) modules, stopping at each .vue module and giving up at the entry. Every module on
-/// the walked paths is invalidated before any re-require so each re-executes once.
-/// Returns false when it bailed out to hardRestart.
+/// A changed non-component module: reload the components that transitively import it (the only way their captured
+/// copies of its exports refresh), stopping at each .vue module and giving up at the entry. Every module on the walked
+/// paths is invalidated before any re-require so each re-executes once. Returns false when it bailed out to hardRestart.
 function reloadDependents(id: ModuleId, hmr: VnVueHmrRuntime, batch: HmrBatch): boolean {
   const visited = new Set<ModuleId>([id]);
   const invalidate: ModuleId[] = [id];
@@ -347,7 +333,6 @@ function reloadDependents(id: ModuleId, hmr: VnVueHmrRuntime, batch: HmrBatch): 
         hardRestart("change in " + id + " reached the entry module");
         return false;
       }
-      // Re-executed earlier in this batch, so the components above it were reloaded too.
       if (batch.fresh.has(imp)) continue;
       // Not live: never required (picks up the new factory later), or invalidated by its own define() this batch, whose change entry covers it.
       if (!cache.has(imp)) continue;
@@ -373,7 +358,6 @@ function reloadDependents(id: ModuleId, hmr: VnVueHmrRuntime, batch: HmrBatch): 
   for (let i = 0; i < invalidate.length; i++) cache.delete(invalidate[i]);
   for (let i = 0; i < targets.length; i++) {
     const target = targets[i];
-    // Re-required earlier in this batch, which saw every module's new factory.
     if (batch.reloaded.has(target)) continue;
     const comp = componentOf(requireId(target, null)); // re-runs the factory chain
     if (!comp) {
@@ -399,7 +383,6 @@ function hmrApply(changes: HmrChanges | null | undefined): void {
     return;
   }
   if (degraded) {
-    // Nothing is mounted (a previous boot or restart threw), so there is nothing for Vue to update.
     hardRestart("app is not running; retrying after " + list.length + " change(s)");
     return;
   }
@@ -423,7 +406,6 @@ function hmrApply(changes: HmrChanges | null | undefined): void {
     (isComponentId(id) ? components : plain).push({ id: id, kind: kind });
   }
 
-  // Filled by requireId: exactly the modules that re-executed this batch, including ones pulled in sideways.
   const batch: HmrBatch = { fresh: new Set(), reloaded: new Set() };
   execLog = batch.fresh;
   let at: ModuleId | null = null;

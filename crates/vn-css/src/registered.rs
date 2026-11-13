@@ -31,7 +31,6 @@ impl CascadeHalf {
     }
 }
 
-/// The retained style recipe for a registered-property animation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CustomAnimationContext {
     pub(crate) registrations: Vec<PercentageRegistration>,

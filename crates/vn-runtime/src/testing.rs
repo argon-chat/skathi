@@ -1,16 +1,7 @@
-//! The JS runtime for tests: one per process, on one thread.
-//!
-//! JSC and redjs boot once per process (a second boot fast-fails the test binary), and
-//! `JsRuntime` is thread-affine, so a test that needs JS runs its body on one long-lived thread:
-//!
-//! ```ignore
-//! vn_runtime::testing::on_js_thread(|| {
-//!     JsRuntime::with(|rt| rt.eval("1 + 1", "test").unwrap());
-//! });
-//! ```
-//!
-//! Bodies run one at a time and share that thread's global object and thread-locals, so a test
-//! sets up what it reads. A panic in a body fails only the test that ran it.
+//! The JS runtime for tests: one per process, on one thread. JSC boots once per process, and
+//! `JsRuntime` is thread-affine, so a test that needs JS runs its body on one long-lived thread
+//! ([`on_js_thread`]). Bodies share that thread's global object and thread-locals, so a test sets up
+//! what it reads; a panic in a body fails only that test.
 
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc;
@@ -22,7 +13,6 @@ type Job = Box<dyn FnOnce() + Send>;
 
 static JS_THREAD: OnceLock<Mutex<mpsc::Sender<Job>>> = OnceLock::new();
 
-/// Runs `f` on this process's JS thread, where [`JsRuntime::init`] has run.
 pub fn on_js_thread<R, F>(f: F) -> R
 where
     F: FnOnce() -> R + Send + 'static,

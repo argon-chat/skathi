@@ -2,13 +2,11 @@
 
 use crate::args::quote_always;
 
-/// Schemes an app may never claim: the browser's, the shell's, script hosts, `ms-*`, `search-ms:`.
 const RESERVED: &[&str] = &[
     "http", "https", "file", "ftp", "mailto", "tel", "data", "blob", "javascript", "about", "vbscript", "search-ms",
 ];
 
-/// A scheme as the registry will hold it, or why not: `[a-z][a-z0-9+.-]{0,62}` lowercased, a
-/// trailing `:` or `://` tolerated, none of [`RESERVED`].
+/// A scheme as the registry will hold it, or why not: `[a-z][a-z0-9+.-]{0,62}` lowercased, none of [`RESERVED`].
 pub fn validate_scheme(raw: &str) -> Result<String, String> {
     let s = raw.trim().trim_end_matches('/').trim_end_matches(':').to_ascii_lowercase();
     let mut chars = s.chars();
@@ -26,13 +24,8 @@ pub fn validate_scheme(raw: &str) -> Result<String, String> {
     Ok(s)
 }
 
-/// The `shell\open\command` a registration writes:
-///
-/// ```text
-///   "<exe>" [--vn-dist "<slot>"] --vn-protocol-launch -- "%1"
-/// ```
-/// The shell substitutes `%1` verbatim, so the URL is recovered from the raw command line after the
-/// marker's `--` rather than re-split.
+/// The `shell\open\command` a registration writes. The shell substitutes `%1` verbatim, so the URL is
+/// recovered from the raw command line after the marker's `--` rather than re-split.
 pub fn command_line(exe: &str, dev_slot: Option<&str>) -> String {
     let mut out = quote_always(exe);
     if let Some(slot) = dev_slot {
@@ -86,7 +79,6 @@ mod tests {
             (r"C:\Program Files\Notes\Notes.exe", None),
             (r"C:\vn\vn-app.exe", Some(r"C:\slots\one\")),
         ] {
-            // The shell's substitution of %1: verbatim.
             let raw = command_line(exe, slot).replace("%1", url);
             let argv: Vec<String> = split_command_line(&raw).into_iter().map(|t| t.text).collect();
             let a = parse(&argv, Some(&raw));

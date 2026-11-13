@@ -1,6 +1,5 @@
-//! The macOS and Linux providers' platform-neutral half: the sealed envelope, the AES-256-GCM
-//! cipher it and the HTTP cache use, first-run key creation, and Keychain status codes.
-//! Compiled for macOS, Linux and tests; `keychain.rs` and `secret_service.rs` hold the keys.
+//! The macOS and Linux providers' platform-neutral half: the sealed envelope, the AES-256-GCM cipher it
+//! and the HTTP cache use, first-run key creation, and Keychain status codes.
 //!
 //! Envelope (version 1), what follows the 8-byte `VNSTOR | 1 | 2` header from `file::seal`:
 //!
@@ -15,14 +14,12 @@
 //!   associated data = "vue-native/storage/v1" ‖ version ‖ key id
 //! ```
 //!
-//! The version is authenticated; the key id makes a replaced key its own error rather than a
-//! generic tag failure; the context string plays DPAPI's entropy role. Random 96-bit nonces
-//! are good for 2^32 blobs per key (NIST SP 800-38D).
+//! The version is authenticated; the key id makes a replaced key its own error rather than a generic tag
+//! failure; the context string plays DPAPI's entropy role.
 
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use ring::rand::{SecureRandom, SystemRandom};
 
-/// The `VNSTOR` header byte naming this provider (DPAPI is 1).
 #[cfg(any(target_os = "macos", test))]
 pub const PROVIDER_ID: u8 = 2;
 pub const VERSION: u8 = 1;
@@ -33,22 +30,18 @@ const HEADER_LEN: usize = 1 + KEY_ID_LEN;
 const CONTEXT: &[u8] = b"vue-native/storage/v1";
 const AAD_LEN: usize = CONTEXT.len() + HEADER_LEN;
 
-/// `errSecItemNotFound`: the one "error" that means "make it".
 #[cfg(any(target_os = "macos", test))]
 pub const ERR_ITEM_NOT_FOUND: i32 = -25300;
-/// `errSecDuplicateItem`: someone else made it first; re-read, never replace.
 #[cfg(any(target_os = "macos", test))]
 pub const ERR_DUPLICATE_ITEM: i32 = -25299;
 
-/// Fills `buf` from the system CSPRNG.
 pub fn fill_random(buf: &mut [u8]) -> Result<(), String> {
     SystemRandom::new()
         .fill(buf)
         .map_err(|_| String::from("the system random generator failed"))
 }
 
-/// AES-256-GCM with a fresh random nonce per message: `nonce (12) ‖ ciphertext ‖ tag (16)`,
-/// the layout the Windows HTTP cache gets from CNG.
+/// AES-256-GCM with a fresh random nonce per message: `nonce (12) ‖ ciphertext ‖ tag (16)`.
 pub struct Aes256Gcm(LessSafeKey);
 
 impl Aes256Gcm {
@@ -95,7 +88,6 @@ impl Aes256Gcm {
     }
 }
 
-/// SHA-256("vue-native/storage/v1/key-id" ‖ key), first four bytes.
 fn key_id(key: &[u8]) -> [u8; KEY_ID_LEN] {
     let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
     ctx.update(CONTEXT);
@@ -161,15 +153,13 @@ impl MasterKey {
 pub enum Origin {
     Found,
     Created,
-    /// Another process made it between our read and add.
     Raced,
 }
 
-/// The key, from `read` (`Ok(None)` = no such item), else created with `fresh` and stored with
-/// `add`. `add` must be add-only: on [`ERR_DUPLICATE_ITEM`] the item is re-read so both
-/// processes end with the stored key. Nothing is created after a read that failed (a locked
-/// keychain does not mean the key is gone; a new key would orphan sealed data), nor is an item
-/// that is not a 256-bit key replaced.
+/// The key, from `read` (`Ok(None)` = no such item), else created with `fresh` and stored with `add`.
+/// `add` must be add-only: on [`ERR_DUPLICATE_ITEM`] the item is re-read so both processes end with the
+/// stored key. Nothing is created after a failed read (a locked keychain does not mean the key is gone;
+/// a new key would orphan sealed data), nor is an item that is not a 256-bit key replaced.
 #[cfg(any(target_os = "macos", test))]
 pub fn load_or_create(
     read: impl FnMut() -> Result<Option<Vec<u8>>, i32>,
@@ -186,8 +176,6 @@ pub fn load_or_create(
     )
 }
 
-/// [`load_or_create`] over any key store: `store` names it in errors, `is_duplicate` says an add
-/// lost the race, `describe` turns a store error into the message for `op`.
 pub fn load_or_create_in<E>(
     store: &str,
     mut read: impl FnMut() -> Result<Option<Vec<u8>>, E>,
@@ -228,7 +216,6 @@ fn take_key(store: &str, mut bytes: Vec<u8>) -> Result<[u8; KEY_LEN], String> {
     r
 }
 
-/// A Keychain `OSStatus` as an error message; always carries the code.
 #[cfg(any(target_os = "macos", test))]
 pub fn keychain_error(op: &str, code: i32) -> String {
     let what = match code {
@@ -248,8 +235,6 @@ pub fn keychain_error(op: &str, code: i32) -> String {
     format!("macOS Keychain: could not {op} the storage key: {what} (OSStatus {code})")
 }
 
-/// The keychain account naming an app's key: its bundle identifier (stable across moves and
-/// updates), else `exe:<file stem>`, else a fixed name.
 pub fn account_for(bundle_id: Option<&str>, exe_stem: Option<&str>) -> String {
     if let Some(id) = bundle_id.map(str::trim).filter(|s| !s.is_empty()) {
         return id.to_string();
@@ -260,7 +245,6 @@ pub fn account_for(bundle_id: Option<&str>, exe_stem: Option<&str>) -> String {
     }
 }
 
-/// A provider over a fixed key, for tests that need the envelope without a keychain.
 #[cfg(test)]
 pub(crate) struct FixedKey(pub MasterKey);
 
@@ -357,7 +341,6 @@ mod tests {
 
     #[test]
     fn aes_gcm_matches_a_published_test_vector() {
-        // NIST GCM test case 14 (AES-256, zero key, zero IV, one zero block).
         let g = Aes256Gcm::new(&[0; 32]).unwrap();
         let mut sealed = vec![0u8; 12];
         sealed.extend_from_slice(&hex("cea7403d4d606b6e074ec5d3baf39d18"));

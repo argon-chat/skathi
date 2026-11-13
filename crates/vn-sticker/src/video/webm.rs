@@ -1,12 +1,7 @@
-//! A minimal WebM (Matroska) demuxer: the first VP9 video track of a file, its
-//! blocks in file order, and each block's alpha packet.
-//!
-//! Reads the EBML `DocType`, the first `Segment` (known or unknown size, as a live writer's),
-//! `Info` (`TimestampScale`, `Duration`), the first video `TrackEntry` with `CodecID` `V_VP9`
-//! (`DefaultDuration`, pixel and display sizes, `AlphaMode`, `Colour`), and every `Cluster`'s
-//! `SimpleBlock`s and `BlockGroup`s, including the `BlockAdditional` with `BlockAddID` 1 (the alpha
-//! packet). Everything else is skipped by its size. Laced video blocks are refused: no WebM writer
-//! laces video.
+//! A minimal WebM (Matroska) demuxer: the first VP9 video track of a file, its blocks in file
+//! order, and each block's alpha packet (`BlockAdditional` with `BlockAddID` 1). Everything else is
+//! skipped by its size. Laced video blocks are refused: no WebM writer laces video. The first
+//! `Segment` may be of unknown size, as a live writer's.
 //!
 //! Damaged input: nothing indexes past a slice or allocates by a declared size (the only allocation
 //! is the block list, at most [`MAX_BLOCKS`]), and masters are read at a fixed depth so a file
@@ -51,15 +46,13 @@ const BLOCK_MORE: u32 = 0xA6;
 const BLOCK_ADD_ID: u32 = 0xEE;
 const BLOCK_ADDITIONAL: u32 = 0xA5;
 
-/// What an unknown-size Cluster may hold: Timestamp, SilentTracks, Position,
-/// PrevSize, SimpleBlock, BlockGroup, EncryptedBlock, Void, CRC-32. Any other
-/// ID is the element after the Cluster.
+/// What an unknown-size Cluster may hold: Timestamp, SilentTracks, Position, PrevSize, SimpleBlock,
+/// BlockGroup, EncryptedBlock, Void, CRC-32. Any other ID is the element after the Cluster.
 const CLUSTER_CHILDREN: [u32; 9] = [CLUSTER_TIMESTAMP, 0x5854, 0xA7, 0xAB, SIMPLE_BLOCK, BLOCK_GROUP, 0xAF, 0xEC, 0xBF];
 
 /// Blocks a file may have: 18 minutes at 60 fps, far past a sticker's 3 s.
 pub(crate) const MAX_BLOCKS: usize = 1 << 16;
 
-/// A byte range of the file.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Span {
     pub start: u32,
@@ -67,7 +60,6 @@ pub(crate) struct Span {
 }
 
 impl Span {
-    /// `start..end` of a file under 4 GiB ([`demux`] checks).
     fn new(start: usize, end: usize) -> Span {
         Span { start: start as u32, len: (end - start) as u32 }
     }
@@ -77,50 +69,36 @@ impl Span {
     }
 }
 
-/// The track's `Colour`: H.273 code points, `None` where the file has none.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Colour {
     pub matrix: Option<u64>,
     pub transfer: Option<u64>,
     pub primaries: Option<u64>,
-    /// 0 unspecified, 1 broadcast (studio), 2 full, 3 defined by the others.
     pub range: Option<u64>,
 }
 
-/// The video track.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Track {
     pub number: u64,
-    /// `PixelWidth` × `PixelHeight`, when the file has them.
     pub pixel: Option<(u64, u64)>,
-    /// `DisplayWidth` × `DisplayHeight` (0 where absent) and `DisplayUnit`.
     pub display: (u64, u64),
     pub display_unit: u64,
-    /// `AlphaMode` is 1.
     pub alpha_mode: bool,
     pub colour: Option<Colour>,
-    /// `DefaultDuration`, in ns.
     pub default_duration: Option<u64>,
 }
 
-/// One block of the video track.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Block {
-    /// Cluster timestamp plus the block's, in `TimestampScale` units.
     pub time: i64,
-    /// The VP9 packet.
     pub data: Span,
-    /// The alpha stream's VP9 packet (`BlockAddID` 1), when not empty.
     pub alpha: Option<Span>,
-    /// `BlockDuration`, in `TimestampScale` units.
     pub duration: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Webm {
-    /// ns per timestamp unit.
     pub timestamp_scale: u64,
-    /// `Info/Duration`, in timestamp units.
     pub duration: Option<f64>,
     pub track: Track,
     pub blocks: Vec<Block>,
@@ -134,8 +112,7 @@ fn unsupported(why: impl Into<String>) -> VideoError {
     VideoError::Unsupported(why.into())
 }
 
-/// An element's header: its ID, where its data starts and its data size
-/// (`None`: unknown, all value bits set).
+/// An element's header: its ID, where its data starts and its data size (`None`: unknown).
 #[derive(Clone, Copy, Debug)]
 struct Element {
     id: u32,
@@ -144,15 +121,13 @@ struct Element {
 }
 
 impl Element {
-    /// Where its data ends, when that is at or before `end`.
     fn end_within(&self, end: usize) -> Option<usize> {
         let size = usize::try_from(self.size?).ok()?;
         self.data.checked_add(size).filter(|&e| e <= end)
     }
 }
 
-/// The element header at `pos`, read from `bytes[..end]`. `None` when those
-/// bytes do not hold a whole, valid one.
+/// The element header at `pos`, read from `bytes[..end]`; `None` unless those bytes hold a whole, valid one.
 fn element(bytes: &[u8], pos: usize, end: usize) -> Option<Element> {
     let b = bytes.get(..end)?;
     let first = *b.get(pos)?;
@@ -165,8 +140,8 @@ fn element(bytes: &[u8], pos: usize, end: usize) -> Option<Element> {
     Some(Element { id, data: pos + id_len + size_len, size })
 }
 
-/// The EBML variable-size integer at `pos`: its value (`None` when every value
-/// bit is set, which a size uses for "unknown") and its length in bytes.
+/// The EBML variable-size integer at `pos`: its value (`None` when every value bit is set, which a
+/// size uses for "unknown") and its length in bytes.
 fn vint(b: &[u8], pos: usize) -> Option<(Option<u64>, usize)> {
     let first = *b.get(pos)?;
     let len = first.leading_zeros() as usize + 1;
@@ -198,8 +173,6 @@ fn float(data: &[u8], what: &str) -> Result<f64, VideoError> {
     }
 }
 
-/// Why an element at `pos` does not fit in `parent_end`: the file ends, or
-/// the element overruns its parent.
 fn overrun(bytes: &[u8], parent_end: usize, pos: usize, inside: &str) -> VideoError {
     if parent_end >= bytes.len() {
         malformed(format!("the file is cut short inside {inside} (byte {pos} of {})", bytes.len()))
@@ -208,7 +181,6 @@ fn overrun(bytes: &[u8], parent_end: usize, pos: usize, inside: &str) -> VideoEr
     }
 }
 
-/// The children of a master whose data is `start..end`, in order, each whole.
 fn children(
     bytes: &[u8],
     start: usize,
@@ -229,13 +201,11 @@ fn children(
     Ok(())
 }
 
-/// The bytes of a string element, without the NUL padding EBML allows.
 fn string(data: &[u8]) -> &[u8] {
     let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
     &data[..end]
 }
 
-/// Demuxes a whole file.
 pub(crate) fn demux(bytes: &[u8]) -> Result<Webm, VideoError> {
     if u32::try_from(bytes.len()).is_err() {
         return Err(unsupported("the file is over 4 GiB"));
@@ -256,7 +226,6 @@ pub(crate) fn demux(bytes: &[u8]) -> Result<Webm, VideoError> {
         return Err(malformed(format!("not a WebM file: its DocType is \"{}\"", String::from_utf8_lossy(doc_type))));
     }
 
-    // The first Segment, past anything else at the top level (Void).
     let mut pos = head_end;
     let segment = loop {
         let e = element(bytes, pos, len).ok_or_else(|| malformed("not a WebM file: no Segment after its EBML header"))?;
@@ -265,8 +234,7 @@ pub(crate) fn demux(bytes: &[u8]) -> Result<Webm, VideoError> {
         }
         pos = e.end_within(len).ok_or_else(|| malformed("not a WebM file: no Segment after its EBML header"))?;
     };
-    // A Segment that claims more than the file has was cut short: read what
-    // is there, and judge the cut where it falls.
+    // A Segment that claims more than the file has was cut short: read what is there.
     let segment_end = segment.end_within(len).unwrap_or(len);
     let cut = segment.size.is_some() && segment.end_within(len).is_none();
 
@@ -299,19 +267,16 @@ struct Parser<'a> {
     timestamp_scale: u64,
     duration: Option<f64>,
     track: Option<Track>,
-    /// The CodecID of the first video track that is not VP9, for the advisory.
     other_video: Option<Vec<u8>>,
     tracks_seen: bool,
     blocks: Vec<Block>,
 }
 
 impl Parser<'_> {
-    /// The Segment's children in `start..end`. `cut`: the Segment claims
-    /// more than the file has, which plays only when the cut falls in the
-    /// metadata after the blocks (Cues, Tags), not where a Cluster could be.
+    /// The Segment's children in `start..end`. `cut`: the Segment claims more than the file has,
+    /// which plays only when the cut falls in the metadata after the blocks (Cues, Tags).
     fn segment(&mut self, start: usize, end: usize, cut: bool) -> Result<(), VideoError> {
         let mut pos = start;
-        // The last element read was metadata after the blocks.
         let mut past_blocks = false;
         while pos < end {
             let Some(e) = element(self.bytes, pos, end) else {
@@ -354,9 +319,8 @@ impl Parser<'_> {
         Ok(())
     }
 
-    /// The element at `pos` runs past the end of the file, and it is
-    /// metadata after the blocks: what is left of its ID is not (the start
-    /// of) one a sticker needs (Cluster, Info, Tracks).
+    /// The element at `pos` runs past the end of the file and is metadata after the blocks: what is
+    /// left of its ID is not (the start of) one a sticker needs (Cluster, Info, Tracks).
     fn trailing_metadata(&self, pos: usize, end: usize) -> bool {
         if self.blocks.is_empty() || end < self.bytes.len() || pos >= end {
             return false;
@@ -408,7 +372,6 @@ impl Parser<'_> {
         })
     }
 
-    /// Reads a Cluster's blocks; returns where the element after it starts.
     fn cluster(&mut self, e: Element, segment_end: usize) -> Result<usize, VideoError> {
         let known = e.size.is_some();
         let end = if known { e.end_within(segment_end).ok_or_else(|| overrun(self.bytes, segment_end, e.data, "a Cluster"))? } else { segment_end };
@@ -485,9 +448,6 @@ impl Parser<'_> {
         Ok(())
     }
 
-    /// A Block's or SimpleBlock's header, `start..end` being its data:
-    /// `Some((relative timestamp, where the frame starts))` for the video
-    /// track's blocks, `None` for another track's.
     fn block_header(&self, start: usize, end: usize) -> Result<Option<(i16, usize)>, VideoError> {
         let b = &self.bytes[..end];
         let (track, n) = vint(b, start).ok_or_else(|| malformed(format!("a damaged block (byte {start})")))?;

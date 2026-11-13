@@ -5,27 +5,18 @@
 //! minimised or cloaked one, and so does this ([`crate::window::occluded`]): `document.hidden`, no
 //! `requestAnimationFrame`, and JS on the background tick (src/background.rs).
 //!
-//! What covers a window follows Chromium's rules: a window above it in the z-order that is shown, not
-//! minimised, not cloaked, not click-through (`WS_EX_TRANSPARENT`), without a window region, and,
-//! when layered, fully opaque by its layered attributes (a per-pixel-alpha window covers nothing).
-//! Only the part of the window on a display counts. A window with an acrylic or mica backdrop above
-//! us counts as covering, as in Chromium.
-//!
 //! Chromium recomputes on window events from a thread of its own. Here the frame pump asks, and
 //! [`RECHECK`] bounds how often the walk runs; the foreground window is never covered (it is read on
 //! every ask, so it comes back at once).
 
 use std::time::Duration;
 
-/// How long a computed answer stands. The walk costs a few syscalls per window
-/// above ours; the pump asks every frame.
 pub const RECHECK: Duration = Duration::from_millis(200);
 
 /// Past this many uncovered pieces the answer is "not covered": a pathological
 /// tiling must not make the walk expensive, and drawing is the safe default.
 const MAX_PIECES: usize = 256;
 
-/// `(left, top, right, bottom)`, right and bottom exclusive.
 pub type Rect = (i32, i32, i32, i32);
 
 fn empty(r: Rect) -> bool {
@@ -36,14 +27,12 @@ fn intersect(a: Rect, b: Rect) -> Rect {
     (a.0.max(b.0), a.1.max(b.1), a.2.min(b.2), a.3.min(b.3))
 }
 
-/// `r` minus `cut`, as up to four rectangles that do not overlap.
 fn subtract(r: Rect, cut: Rect, out: &mut Vec<Rect>) {
     let i = intersect(r, cut);
     if empty(i) {
         out.push(r);
         return;
     }
-    // Above and below the cut, full width; then left and right of it, in its band.
     for piece in [
         (r.0, r.1, r.2, i.1),
         (r.0, i.3, r.2, r.3),
@@ -56,13 +45,10 @@ fn subtract(r: Rect, cut: Rect, out: &mut Vec<Rect>) {
     }
 }
 
-/// The decision, pure: does nothing of `target` that is on a display stay
-/// uncovered by `above` (the covering windows' rects, in any order)?
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn covered(target: Rect, displays: &[Rect], above: impl IntoIterator<Item = Rect>) -> bool {
     let mut visible: Vec<Rect> = displays.iter().map(|&d| intersect(target, d)).filter(|&r| !empty(r)).collect();
     if visible.is_empty() {
-        // Entirely off every display: nothing of it can be seen.
         return true;
     }
     let mut next = Vec::new();
@@ -120,13 +106,11 @@ mod win {
         ok.is_ok() && c != 0
     }
 
-    /// Shown at all: visible, not minimised, not cloaked.
     pub fn shown(h: HWND) -> bool {
         let shown = unsafe { IsWindowVisible(h).as_bool() && !IsIconic(h).as_bool() };
         shown && !cloaked(h)
     }
 
-    /// Chromium's test for a window that hides what is under it.
     fn opaque(h: HWND) -> bool {
         if !shown(h) {
             return false;
@@ -146,7 +130,6 @@ mod win {
                 return false;
             }
         }
-        // A window region (a non-rectangular window) leaves its corners open.
         let mut rgn = RECT::default();
         if unsafe { GetWindowRgnBox(h, &mut rgn) }.0 != 0 {
             return false;
@@ -166,7 +149,6 @@ mod win {
         out
     }
 
-    /// Covered by the windows above it. The foreground window never is.
     pub fn covered(raw: isize) -> bool {
         let h = HWND(raw as *mut _);
         if unsafe { GetForegroundWindow() } == h {
@@ -187,7 +169,6 @@ mod win {
         super::covered(target, &displays, above)
     }
 
-    /// Nothing of the window can be seen: hidden, minimised, cloaked or covered.
     pub fn unseen(raw: isize) -> bool {
         !shown(HWND(raw as *mut _)) || covered(raw)
     }
@@ -237,12 +218,9 @@ mod tests {
 
     #[test]
     fn only_the_part_on_a_display_counts() {
-        // Half off the right edge of the only display: covering the on-screen half covers it.
         let target = (1500, 100, 2300, 700);
         assert!(covered(target, &[SCREEN], [(1400, 0, 1920, 1080)]));
-        // A second display to the right shows the other half.
         assert!(!covered(target, &[SCREEN, (1920, 0, 3840, 1080)], [(1400, 0, 1920, 1080)]));
-        // Entirely off every display.
         assert!(covered((-3000, 0, -2000, 500), &[SCREEN], []));
     }
 
@@ -261,7 +239,6 @@ mod tests {
 
     #[test]
     fn a_pathological_tiling_gives_up_and_draws() {
-        // A grid of 1×1 holes punched into a large window: each cut adds pieces.
         let cuts = (0..40).flat_map(|y| (0..40).map(move |x| (x * 20 + 5, y * 20 + 5, x * 20 + 6, y * 20 + 6)));
         assert!(!covered((0, 0, 800, 800), &[SCREEN], cuts));
     }

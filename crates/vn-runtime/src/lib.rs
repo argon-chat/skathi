@@ -1,6 +1,5 @@
-//! vn-runtime — the JS host seam of vue-native: one JSC context (via redjs) on
-//! gpui's main thread, pumped once per frame, with a phase-gated bridge that is
-//! the only way a JS host function may reach `&mut Window` / `&mut App`.
+//! The JS host seam of vue-native: one JSC context (via redjs) on gpui's main thread, pumped once per
+//! frame, with a phase-gated bridge as the only way a JS host function may reach `&mut Window` / `&mut App`.
 //!
 //! Invariants:
 //! - One VM, one thread: VM thread == gpui main thread == Win32 UI thread.
@@ -22,7 +21,6 @@ pub use runtime::{JsError, JsRuntime};
 
 pub use redjs;
 
-/// The optional web APIs this build carries, as Cargo resolved them (features unify across the graph).
 pub mod built {
     pub const WEBGPU: bool = cfg!(feature = "webgpu");
     pub const AUDIO: bool = cfg!(feature = "audio");
@@ -31,11 +29,8 @@ pub mod built {
     pub const INDEXEDDB: bool = cfg!(feature = "indexeddb");
 }
 
-/// Defines a panic-shielded JSC host function, in redjs's host ABI
-/// ([`raw_host_fn!`]).
-///
-/// The body receives `$g: *mut c_void` (the JSGlobalObject) and `$args: redjs::api::HostArgs` and
-/// returns an encoded JSValue `u64`. A panic becomes a thrown JS `Error` and poisons the runtime.
+/// Defines a panic-shielded JSC host function, in redjs's host ABI: a panic becomes a thrown JS `Error`
+/// and poisons the runtime.
 #[macro_export]
 macro_rules! host_fn {
     ($vis:vis fn $name:ident($g:ident, $args:ident) $body:block) => {
@@ -56,8 +51,7 @@ macro_rules! host_fn {
     };
 }
 
-/// A bare host function in redjs's ABI: `extern "sysv64"` on Windows x64, `extern "C"` elsewhere.
-/// `$g` is the JSGlobalObject, `$cf` the call frame. No panic shield (see [`host_fn!`]).
+/// A bare host function in redjs's ABI (`extern "sysv64"` on Windows x64, `extern "C"` elsewhere); no panic shield.
 #[macro_export]
 macro_rules! raw_host_fn {
     ($vis:vis fn $name:ident($g:ident, $cf:ident) $body:block) => {

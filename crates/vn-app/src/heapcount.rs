@@ -8,8 +8,7 @@
 //!
 //! The wrapper is the global allocator of every build that has the devtools (`cfg(vn_devtools)`). It
 //! counts by default in a dev build and not in a `--features prod` one; `VN_MEMSTATS` overrides
-//! either way (`0` off, anything else on). Off, each allocation pays one relaxed load; on, six
-//! relaxed atomic adds and one `fetch_max`.
+//! either way (`0` off, anything else on).
 //!
 //! The switch is read on the very first allocation, before `main`, through `GetEnvironmentVariableW`
 //! into a stack buffer (`std::env` would allocate inside the allocator), so the count starts at the
@@ -20,24 +19,18 @@ use std::sync::atomic::{AtomicI64, AtomicU8, AtomicU64, Ordering::Relaxed};
 
 pub struct Counting;
 
-/// 0 = not looked at yet, 1 = off, 2 = on.
 static STATE: AtomicU8 = AtomicU8::new(0);
 static LIVE_BYTES: AtomicI64 = AtomicI64::new(0);
 static LIVE_BLOCKS: AtomicI64 = AtomicI64::new(0);
 static PEAK_BYTES: AtomicI64 = AtomicI64::new(0);
 static ALLOCS: AtomicU64 = AtomicU64::new(0);
 
-/// Live bytes and blocks per power-of-two size class: class `k` holds blocks
-/// of `2^(k-1)..2^k` bytes, the last class everything from `2^(CLASSES-2)` up.
-/// Which sizes hold the heap is the first thing a heap number raises.
 const CLASSES: usize = 34;
 #[allow(clippy::declare_interior_mutable_const)]
 const ZERO: AtomicI64 = AtomicI64::new(0);
 static CLASS_BYTES: [AtomicI64; CLASSES] = [ZERO; CLASSES];
 static CLASS_BLOCKS: [AtomicI64; CLASSES] = [ZERO; CLASSES];
 
-/// The default when `VN_MEMSTATS` is unset: on in a dev build, off in a
-/// shipped one.
 const DEFAULT_ON: bool = !cfg!(feature = "prod");
 
 #[cfg(windows)]
@@ -46,11 +39,8 @@ extern "system" {
     fn GetEnvironmentVariableW(name: *const u16, buffer: *mut u16, size: u32) -> u32;
 }
 
-/// `VN_MEMSTATS`: `None` unset or empty, `Some(false)` for "0", `Some(true)`
-/// for anything else. No allocation may happen here.
 #[cfg(windows)]
 fn memstats_env() -> Option<bool> {
-    // "VN_MEMSTATS\0", by hand: no allocation may happen here.
     const NAME: [u16; 12] = [
         b'V' as u16,
         b'N' as u16,
@@ -90,7 +80,6 @@ fn memstats_env() -> Option<bool> {
 
 #[cold]
 fn probe() -> bool {
-    // Unset or empty: the build's default. "0": off. Anything else: on.
     let on = memstats_env().unwrap_or(DEFAULT_ON);
     STATE.store(if on { 2 } else { 1 }, Relaxed);
     on
@@ -172,8 +161,6 @@ unsafe impl GlobalAlloc for Counting {
     }
 }
 
-/// `Some((live bytes, live blocks, peak bytes, allocations since start))`
-/// while counting, `None` when it is off.
 pub fn snapshot() -> Option<(i64, i64, i64, u64)> {
     on().then(|| {
         (
@@ -185,8 +172,6 @@ pub fn snapshot() -> Option<(i64, i64, i64, u64)> {
     })
 }
 
-/// `(upper bound in bytes, live bytes, live blocks)` per non-empty size class,
-/// smallest first. The last class has no upper bound (`u64::MAX`).
 pub fn classes() -> Vec<(u64, i64, i64)> {
     (0..CLASSES)
         .filter_map(|k| {
@@ -302,8 +287,6 @@ pub mod recording {
             }
         }
     }
-    /// Explicit allocation attribution. Callers outside these scopes are
-    /// reported as unscoped; these names are not fabricated stack samples.
     #[track_caller]
     pub fn scope(category: &str, name: &str) -> Scope {
         if EPOCH.load(Ordering::Relaxed) == 0 {

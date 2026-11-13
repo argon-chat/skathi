@@ -294,7 +294,6 @@ struct Extension {
 }
 impl IMFMediaEngineExtension_Impl for Extension_Impl {
     fn CanPlayType(&self, _audio_only: BOOL, _mime: &BSTR) -> Result<MF_MEDIA_ENGINE_CANPLAY> {
-        // We supply bytes; the normal MF container/codec handlers decide types.
         Err(E_NOTIMPL.into())
     }
     fn BeginCreateObject(

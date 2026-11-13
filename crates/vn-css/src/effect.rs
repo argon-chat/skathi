@@ -11,7 +11,6 @@ use vn_effects::{EffectSchema, ParamKind, ParamSchema};
 
 use crate::mapper::once;
 
-/// The custom property this module owns.
 pub const SHADING: &str = "--shading";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,7 +40,6 @@ impl Arg {
     }
 }
 
-/// Parses a `--shading` declaration.
 pub fn parse(value: &TokenList, diagnostics: &mut Vec<String>) -> Option<EffectSpec> {
     let significant: Vec<&TokenOrValue> = value
         .0
@@ -128,8 +126,6 @@ pub fn parse(value: &TokenList, diagnostics: &mut Vec<String>) -> Option<EffectS
     }
 }
 
-/// Positional but type-directed: an argument that does not fit the next optional parameter skips
-/// it, so `glow(12px, 0.8)` and `glow(#7fd4ff, 12px, 0.8)` both parse.
 fn build(
     schema: &'static EffectSchema,
     arguments: &TokenList,
@@ -301,8 +297,6 @@ fn argument(group: &[&TokenOrValue]) -> Result<Arg, String> {
     }
 }
 
-/// A concrete straight-alpha RGBA quadruple, or `None` for anything that does not resolve without
-/// inheritance or a colour-space computation.
 fn rgba(color: &CssColor) -> Option<[f32; 4]> {
     match color {
         CssColor::RGBA(c) => Some([
@@ -335,8 +329,6 @@ mod tests {
     use lightningcss::properties::Property;
     use lightningcss::stylesheet::ParserOptions;
 
-    /// Runs a `--shading` declaration through lightningcss and this parser, exactly as the mapper
-    /// does.
     fn shading(body: &str) -> (Option<EffectSpec>, Vec<String>) {
         let mut diagnostics = Vec::new();
         let block = DeclarationBlock::parse_string(body, ParserOptions::default())
@@ -368,7 +360,6 @@ mod tests {
         assert_eq!(s.params[0], 0.6);
         assert_eq!(s.params[1], 14.0);
         assert!((s.params[4] - 127.0 / 255.0).abs() < 1e-4);
-        // lightningcss stores alpha as a u8, so 0.25 round-trips as 64/255.
         assert!((s.params[7] - 0.25).abs() < 2e-3, "{}", s.params[7]);
         assert_eq!(s.backdrop_blur_radius(), 14.0);
         assert_eq!(s.flags, gpui::EFFECT_FLAG_NEEDS_BACKDROP);
@@ -464,8 +455,6 @@ mod tests {
       ]
     }"#;
 
-    /// The registry is process-wide and additive — the built-ins keep their ids — so tests that do
-    /// not care about app effects are unaffected either way.
     fn with_user_effects() {
         static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
         ONCE.get_or_init(|| {
@@ -486,7 +475,6 @@ mod tests {
         assert_eq!(s.params[4], 1.0);
         assert!((s.params[5] - 136.0 / 255.0).abs() < 1e-3);
         assert_eq!(s.params[6], 0.0);
-        // `wavelength` is the only length, so only its bit is set.
         assert_eq!(s.length_mask, 1 << 1);
         assert!(s.animated);
         assert_eq!(s.flags, 0);

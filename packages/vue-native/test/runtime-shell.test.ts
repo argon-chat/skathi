@@ -1,14 +1,10 @@
-// Links, window.open and `appShell`: the JS half.
-//
-// The Rust half (scheme allowlist, executable guard, shell thread) is unit-tested in crates/vn-desktop; e2e/shell.spec
-// drives both through a real host with VN_SHELL=record. Pinned here: which clicks follow a link, that
-// `preventDefault()` anywhere on the path cancels it, that content can only reach http/https/mailto, and that
-// `appShell` turns the settle protocol into promises that reject with the right names.
+// Links, window.open and `appShell`: the JS half. Pinned here: which clicks follow a link, that `preventDefault()`
+// anywhere on the path cancels it, that content reaches only http/https/mailto, and that `appShell` turns the settle
+// protocol into promises that reject with the right names.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
 
-/** A tiny tree under a root: `<root><a href>…</a></root>`. */
 function linkWorld(href: string | null, options: Parameters<typeof createRuntime>[0] = {}) {
   const rt = createRuntime(options);
   const root = rt.nodeOps.createElement("root");
@@ -73,9 +69,7 @@ describe("<a href>: activation", () => {
   });
 
   test("each host click is one navigation (the host delivers one click per press)", () => {
-    // gpui fires on every listening box under the pointer; vn-tree's
-    // `bind_events` lets only the innermost one through (e2e shell.spec pins
-    // that with a real gpui press). So two host clicks ARE two presses.
+    // gpui fires on every listening box under the pointer; vn-tree's `bind_events` lets only the innermost through.
     const { rt, span, opens, click } = linkWorld("https://example.com/");
     rt.patchProp(span, "onClick", null, () => {});
     click(span);
@@ -218,8 +212,6 @@ describe("window.open", () => {
     const { rt, opens } = linkWorld(null);
     expect(rt.global.open("myapp://x")).toBe(null);
     expect(rt.advisories()[0]).toContain("appShell.openExternal");
-    // The harness has no prelude, so this world's `open` had no prelude open to fall
-    // back to; e2e covers the prelude's advisory.
     expect(rt.global.open()).toBe(null);
     expect(rt.global.open("about:blank")).toBe(null);
     expect(rt.global.open("/relative")).toBe(null);
@@ -229,7 +221,6 @@ describe("window.open", () => {
 
   test("the prelude's open is the fallback for everything that is not external", () => {
     const seen: unknown[][] = [];
-    // What window.prelude.ts installs before the bundle evaluates.
     const prelude = (...args: unknown[]) => (seen.push(args), null);
     const rt = createRuntime({ globals: { open: prelude } });
     expect(rt.global.open("/relative", "_self")).toBe(null);

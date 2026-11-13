@@ -1,12 +1,9 @@
-// The exe's icon: `RT_ICON` 1..n plus `RT_GROUP_ICON` 1.
+// The exe's icon: `RT_ICON` 1..n plus `RT_GROUP_ICON` 1. Id 1 is not our choice: gpui's window class
+// loads `MAKEINTRESOURCE(1)`, so a group icon under that id lands on the window, taskbar, Alt-Tab
+// and the file in Explorer.
 //
-// Id 1 is not our choice: gpui's window class loads `MAKEINTRESOURCE(1)` (vendor/zed/crates/gpui_windows/src/
-// platform.rs `load_icon`), so a group icon under that id lands on the window, taskbar, Alt-Tab and the file
-// in Explorer with no host change.
-//
-// Two inputs: an `.ico`, taken verbatim; or a square 8-bit `.png`, which becomes PNG-compressed images at 256
-// (the file itself when already 256²), 48, 32, 24 and 16, the small ones by a box filter in premultiplied
-// alpha so soft edges do not go dark. Anything else is an error asking for an `.ico`.
+// Two inputs: an `.ico`, taken verbatim; or a square 8-bit `.png`, which becomes PNG-compressed
+// images at 256 (the file itself when already 256), 48, 32, 24 and 16. Anything else is an error.
 
 import { readFileSync } from "node:fs";
 import { extname } from "node:path";
@@ -19,11 +16,9 @@ export interface IconImage {
   bitCount: number;
   planes: number;
   colorCount: number;
-  /** The `RT_ICON` payload: a PNG, or a BMP DIB as an `.ico` carries it. */
   data: Uint8Array;
 }
 
-/** Sizes made from a PNG, largest first (the order Explorer reads them in). */
 export const PNG_ICON_SIZES = [256, 48, 32, 24, 16];
 
 const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -31,7 +26,6 @@ const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 export interface Rgba {
   width: number;
   height: number;
-  /** `width * height * 4`, straight (not premultiplied) alpha. */
   data: Uint8Array;
 }
 
@@ -41,7 +35,6 @@ export function isPng(bytes: Uint8Array): boolean {
 
 const be32 = (b: Uint8Array, o: number) => ((b[o]! << 24) | (b[o + 1]! << 16) | (b[o + 2]! << 8) | b[o + 3]!) >>> 0;
 
-/** The 8-bit, non-interlaced PNGs an icon is made from. Everything else throws. */
 export function decodePng(bytes: Uint8Array, label = "png"): Rgba {
   if (!isPng(bytes)) throw new Error(`${label}: not a PNG`);
   let o = 8;
@@ -157,7 +150,6 @@ function chunk(type: string, body: Uint8Array): Uint8Array {
   return out;
 }
 
-/** RGBA → PNG (colour type 6, filter 0, zlib level 9). Deterministic for one input. */
 export function encodePng(img: Rgba): Uint8Array {
   const { width, height, data } = img;
   const stride = width * 4;
@@ -188,7 +180,6 @@ export function encodePng(img: Rgba): Uint8Array {
   return out;
 }
 
-/** Area-averaging downscale in premultiplied alpha, so a transparent neighbour cannot darken an edge pixel; fractional coverage is weighted exactly. */
 export function resizeRgba(src: Rgba, dw: number, dh: number): Rgba {
   const { width: sw, height: sh, data } = src;
   const out = new Uint8Array(dw * dh * 4);
@@ -234,7 +225,6 @@ export function resizeRgba(src: Rgba, dw: number, dh: number): Rgba {
   return { width: dw, height: dh, data: out };
 }
 
-/** Every image in an `.ico` (ICONDIR + ICONDIRENTRYs), bytes verbatim. */
 export function parseIco(bytes: Uint8Array, label = "ico"): IconImage[] {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (bytes.length < 6 || dv.getUint16(0, true) !== 0 || dv.getUint16(2, true) !== 1) {
@@ -281,13 +271,11 @@ export function iconImagesFrom(path: string): IconImage[] {
     bitCount: 32,
     planes: 1,
     colorCount: 0,
-    // The file itself when it is already the right size: re-encoding would
-    // only throw away whatever the author's tool did better than zlib -9.
+    // The file itself when it is already the right size: re-encoding would only lose the author's tool's work.
     data: s === img.width ? bytes : encodePng(resizeRgba(img, s, s)),
   }));
 }
 
-/** `RT_ICON` payloads (ids `firstId..`) and the `RT_GROUP_ICON` naming them (GRPICONDIR + 14-byte entries: an ICONDIRENTRY whose file offset became a resource id). */
 export function groupIcon(images: IconImage[], firstId = 1): { icons: { id: number; data: Uint8Array }[]; group: Uint8Array } {
   const group = new Uint8Array(6 + images.length * 14);
   const dv = new DataView(group.buffer);

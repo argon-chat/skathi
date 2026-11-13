@@ -1,26 +1,13 @@
 // TEST ONLY: the pre-native Font Loading model, retained as a behavioral oracle. Never imported by src or
-// included in production bundles; native behavior is tested against actual JSC in
-// crates/vn-tree/src/font_api.rs.
-//
-// Web fonts: `FontFace`, `FontFaceSet` and `document.fonts`. The host does the work
-// (crates/vn-tree/src/fonts.rs); this module is the object model over it: a `FontFace` per face (the
-// stylesheet's included) and `document.fonts`, the set, with `ready`, `status`, `check()`, `load()`, the
-// set methods and the `loading` / `loadingdone` / `loadingerror` events. Statuses move by the host's events
-// (`__vn_fonts_set_listener`), delivered from the frame tick.
-//
-// `installFonts(globalThis, document)` must stay importable on its own: host functions are read off `g` at
-// install time, and without them nothing is installed and `FontFace` stays undefined.
+// production bundles; native behavior is tested against actual JSC in crates/vn-tree/src/font_api.rs.
+// `installFonts(globalThis, document)` must stay importable on its own: without the host functions on `g` nothing is installed.
 
-/** The host's half (crates/vn-tree/src/lib.rs, "web fonts"). */
 export interface FontNatives {
-  /** Status changes: `(id, "loading" | "loaded" | "error", message)`; id 0 + "list" = the sheet's faces changed. */
   __vn_fonts_set_listener(fn: (id: number, status: string, message: string) => void): void;
   __vn_fonts_list(): string;
-  /** A script face: its id, or why it is a SyntaxError. */
   __vn_font_create(family: string, source: string, packed: string, now: boolean): number | string;
   __vn_font_load(id: number): void;
   __vn_font_set(id: number, inSet: boolean): void;
-  /** The ids `font` + `text` select in the set, comma-joined; null = `font` does not parse. */
   __vn_fonts_match(font: string, text: string): string | null;
 }
 
@@ -67,7 +54,6 @@ const DEFAULTS: Required<Descriptors> = {
   lineGapOverride: "normal",
 };
 
-/** The descriptors the host parses, packed (`fonts::descriptors`): `|` occurs in none of them. */
 const PACKED = ["style", "weight", "stretch", "unicodeRange", "display"] as const;
 
 type Listener = (ev: object) => unknown;
@@ -80,13 +66,10 @@ interface Engine {
   URL?: { createObjectURL?(blob: object): string; revokeObjectURL?(url: string): void };
 }
 
-/** Installs `FontFace`, `FontFaceSet`, `FontFaceSetLoadEvent` and `document.fonts`. Returns the set (or null). */
 export function installFonts(g: Record<string, unknown>, doc: object | null | undefined): object | null {
   const n = g as unknown as Partial<FontNatives> & Partial<Engine>;
   if (typeof n.__vn_fonts_list !== "function" || typeof n.__vn_fonts_set_listener !== "function") return null;
   const host = n as FontNatives;
-  // The world's own (the engine's global, or a test's), so `document.fonts`
-  // is an EventTarget of the page's realm.
   const EventTargetBase = (n.EventTarget ?? class {}) as { new (): VnEventTarget };
   const domError = (message: string, name: string): Error => {
     if (typeof n.DOMException === "function") return new n.DOMException(message, name);
@@ -119,7 +102,6 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     #loaded: Promise<FontFaceImpl>;
     #resolve!: (f: FontFaceImpl) => void;
     #reject!: (e: unknown) => void;
-    /** The `blob:` URL a binary source was handed over as, revoked once it is read. */
     #blobUrl: string | null = null;
 
     constructor(family: unknown, source: unknown, descriptors?: Descriptors) {
@@ -127,7 +109,6 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
         this.#resolve = resolve;
         this.#reject = reject;
       });
-      // A rejection nobody asked about is not an error the page made.
       this.#loaded.catch(() => {});
       const record = adopting;
       if (record) {
@@ -153,8 +134,6 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
       if (typeof source === "string") {
         src = source;
       } else if (source instanceof ArrayBuffer || ArrayBuffer.isView(source)) {
-        // The bytes go over as a `blob:` URL: the host reads in-memory blobs by URL (crates/vn-tree/src/img.rs)
-        // and a constructor with a binary source starts loading at once.
         const url = n.URL;
         if (typeof n.Blob !== "function" || typeof url?.createObjectURL !== "function") {
           this.#fail("SyntaxError", "FontFace: a binary source needs Blob and URL.createObjectURL");
@@ -226,7 +205,6 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
       return this.#css;
     }
   }
-  // The module-internal members stay off the page's view of the prototype.
   for (const k of ["settle", "hostId", "cssConnected"]) {
     const d = Object.getOwnPropertyDescriptor(FontFaceImpl.prototype, k)!;
     Object.defineProperty(FontFaceImpl.prototype, k, { ...d, enumerable: false });
@@ -243,7 +221,6 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     }
   };
 
-  /** A status from the host, applied; a face of the set that finished is noted for the next `loadingdone`/`loadingerror`. */
   const apply = (f: FontFaceImpl, status: string, message: string): void => {
     const before = f.status;
     f.settle(status, message);
@@ -253,7 +230,6 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     }
   };
 
-  /** The sheet's faces, again from the host's list (a recompile can add or drop rules); read on every use as well as on the `list` event, since a `mount()` sheet is the host's at once and its event arrives next frame. */
   let lastList = "";
   const syncCss = (): void => {
     const raw = host.__vn_fonts_list();
@@ -308,7 +284,6 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     }
   };
 
-  /** The host laid out a frame with nothing loading or newly asked for. Faces load lazily when drawn text asks, so `ready` waits for this, as a browser's waits for pending layout. */
   let hostQuiet = false;
 
   const state = (): void => {
@@ -400,7 +375,6 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
       return this.values();
     }
 
-    /** The faces `font` and `text` select; throws SyntaxError for a `font` that does not parse. */
     #matching(method: string, font: unknown, text: unknown): FontFaceImpl[] {
       fresh();
       const ids = host.__vn_fonts_match(String(font), text === undefined ? " " : String(text));
@@ -447,8 +421,6 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     state();
   });
 
-  // Pending until the host's first quiet frame: the first frame's text has
-  // not asked for its faces yet.
   syncCss();
   freshReady();
   state();

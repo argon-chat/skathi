@@ -1,9 +1,6 @@
-// Forms, focus and location.reload(): the JS half.
-//
-// The host half of focus (`__vn_focus`) is crates/vn-tree/src/render.rs; reload's (`__vn_reload`) is
-// crates/vn-app/src/reload.rs. Pinned here is what only the runtime can get wrong: which clicks and Enter submit
-// which form, with which submitter; the order and targets of the four focus events; what `document.activeElement`
-// says; and what a reload undoes in the realm it keeps.
+// Forms, focus and location.reload(): the JS half. Pinned here is what only the runtime can get wrong: which clicks and
+// Enter submit which form, the order and targets of the four focus events, `document.activeElement`, and what a reload
+// undoes in the realm it keeps.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
@@ -11,7 +8,6 @@ import { createRuntime } from "./runtime-harness";
 type Node = { id: number; attrs: Record<string, string> };
 type Rt = ReturnType<typeof createRuntime>;
 
-/** `<root><form><input/><button/></form></root>`, plus a submit log. */
 function formWorld(options: { button?: string | null; fields?: number; novalidate?: boolean } = {}) {
   const rt = createRuntime();
   const root = rt.nodeOps.createElement("div");
@@ -48,7 +44,6 @@ function formWorld(options: { button?: string | null; fields?: number; novalidat
   };
 }
 
-/** A submit log entry's submitter, by node id (mirror nodes are cyclic; never deep-compare them). */
 const who = (s: { submitter: unknown }) => (s.submitter as Node | null)?.__vnId ?? null;
 
 const lastFlag = (rt: Rt, code: number, id: number) =>
@@ -271,7 +266,6 @@ describe("forms: requestSubmit(), submit(), reset()", () => {
 });
 
 describe("focus: el.focus(), el.blur(), document.activeElement", () => {
-  /** Two inputs, every focus event logged as `type@node(related)`. */
   function focusWorld() {
     const rt = createRuntime();
     const root = rt.nodeOps.createElement("div");
@@ -288,7 +282,6 @@ describe("focus: el.focus(), el.blur(), document.activeElement", () => {
         );
       }
     }
-    // focusin/focusout bubble: the root hears them too.
     rt.patchProp(root, "onFocusin", null, (e: { target: unknown }) => log.push(`focusin^root:${name(e.target)}`));
     return { rt, root, a, b, log };
   }
@@ -371,10 +364,8 @@ describe("focus: a handler that moves the focus abandons the move it interrupts"
       rt.nodeOps.insert(nodes[id], root, null);
     }
     const name = (n: unknown) => Object.keys(nodes).find((k) => nodes[k] === n) ?? "null";
-    // With nothing focused, `activeElement` is the root: `body` (this harness has none).
     const active = () => Object.keys(nodes).find((k) => nodes[k] === rt.global.document.activeElement) ?? "body";
     const log: string[] = [];
-    // `rt.patchProp` keeps one handler per event: tests add theirs through `on`.
     const extra: Record<string, ((e: unknown) => void)[]> = {};
     for (const [id, n] of Object.entries(nodes)) {
       for (const type of ["focus", "blur", "focusin", "focusout"]) {
@@ -385,7 +376,6 @@ describe("focus: a handler that moves the focus abandons the move it interrupts"
       }
     }
     const on = (id: string, type: string, f: (e: unknown) => void) => (extra[`${id}:${type}`] ??= []).push(f);
-    // The host's slot, as `js_focus` / `js_blur` keep it.
     let slot = 0;
     rt.host.focus.answer = (id: number, op: number) => {
       if (op === 1) {
@@ -494,7 +484,6 @@ describe("focus: a handler that moves the focus abandons the move it interrupts"
       "focusin@trigger(inside) active=trigger",
     ]);
     expect(active()).toBe("trigger");
-    // …and the host was never asked: its focus stays where JS says it is.
     expect(rt.host.focus.calls.filter((c: { op: number }) => c.op === 1)).toEqual([]);
     expect(slot()).toBe(nodes.trigger.__vnId);
   });

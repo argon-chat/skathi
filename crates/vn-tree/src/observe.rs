@@ -17,16 +17,12 @@ use vn_runtime::{host_fn, JsRuntime};
 use crate::{log, perf, render};
 
 thread_local! {
-    /// The runtime's `layoutStep`, a protected JS function; 0 = none.
     static HOOK: Cell<u64> = const { Cell::new(0) };
-    /// The runtime has observations (`__vn_layout_watch(true)`, and the last step's answer).
     static OBSERVING: Cell<bool> = const { Cell::new(false) };
     static PENDING: Cell<bool> = const { Cell::new(false) };
-    /// `render::layout_count()` when the last step ended.
     static SEEN: Cell<u64> = const { Cell::new(0) };
 }
 
-/// `layoutStep(op)`, the runtime's half (the numbers are the protocol).
 mod op {
     /// Gather at depth 0.
     pub const START: f64 = 0.0;
@@ -37,7 +33,6 @@ mod op {
     pub const FINISH: f64 = 3.0;
 }
 
-/// These only stop a runtime that never says it is done.
 const MAX_ROUNDS: u32 = 4096;
 const MAX_CALLS: u32 = 1 << 16;
 
@@ -58,14 +53,11 @@ host_fn!(fn vn_layout_watch(_g, args) {
     Value::undefined().0
 });
 
-/// Registers the observer step's half of the `__vn_*` surface.
 pub(crate) fn install(rt: &JsRuntime) {
     rt.register("__vn_set_layout_hook", 1, vn_set_layout_hook as *const std::ffi::c_void);
     rt.register("__vn_layout_watch", 1, vn_layout_watch as *const std::ffi::c_void);
 }
 
-/// The frame's ResizeObserver and IntersectionObserver step. `window` is the primary
-/// window, from the frame pump, after the JS wave and before gpui's own draw decision.
 pub fn update_layout_observers(window: &mut Window, cx: &mut App) {
     let f = HOOK.with(Cell::get);
     if f == 0 || !OBSERVING.with(Cell::get) {
@@ -114,8 +106,6 @@ fn step(f: u64, window: &mut Window, cx: &mut App) {
     perf::note_observers(rounds, relayouts, relayout_ms, span.ms() - relayout_ms, state & 1 != 0);
 }
 
-/// One `layoutStep(op)` as its own JS wave: the call, then the microtask checkpoint (Vue's
-/// scheduler flushes the patch a callback asked for), then the tree flush.
 fn call(f: u64, which: f64, window: &mut Window, cx: &mut App) -> u32 {
     let mut out = 0u32;
     render::js_wave_app(window, cx, || {

@@ -8,13 +8,11 @@ use super::*;
 const ALPHA: &[u8] = include_bytes!("testdata/alpha.webm");
 const SUPERFRAME: &[u8] = include_bytes!("testdata/superframe.webm");
 
-/// vn-vpx-sys's `testdata/compound.ivf` decoded (its `COMPOUND_HASH`, which
-/// is also the pure-C build's and ffmpeg's): `superframe.webm` is that clip
-/// remuxed by ffmpeg.
+/// vn-vpx-sys's `testdata/compound.ivf` decoded (its `COMPOUND_HASH`, also the pure-C build's and
+/// ffmpeg's): `superframe.webm` is that clip remuxed by ffmpeg.
 const COMPOUND_HASH: u64 = 0x22e8_10e0_5c5b_9e2b;
-/// ffmpeg 6.0 with libvpx-vp9 on `alpha.webm` (`-c:v libvpx-vp9 -i
-/// alpha.webm -f rawvideo -pix_fmt yuva420p`): FNV-1a over every frame's Y,
-/// U and V rows, and over every frame's A rows.
+/// ffmpeg 6.0 with libvpx-vp9 on `alpha.webm` (`-c:v libvpx-vp9 -i alpha.webm -f rawvideo -pix_fmt
+/// yuva420p`): FNV-1a over every frame's Y, U and V rows, and over every frame's A rows.
 const ALPHA_COLOUR_HASH: u64 = 0x92e8_01d8_e6cf_69ed;
 const ALPHA_ALPHA_HASH: u64 = 0xef48_4eae_1fef_c6d0;
 
@@ -41,8 +39,7 @@ fn open(bytes: &[u8]) -> Arc<VideoSource> {
     VideoSource::open(Arc::from(bytes)).unwrap()
 }
 
-/// Decodes every frame: (frames, hash of the colour planes, hash of the
-/// alpha planes).
+/// Decodes every frame: (frames, hash of the colour planes, hash of the alpha planes).
 fn decode_hashes(source: &Arc<VideoSource>, options: DecodeOptions) -> (u32, u64, u64) {
     let mut d = source.decoder(options).unwrap();
     let (mut colour, mut alpha) = (FNV_OFFSET, FNV_OFFSET);
@@ -104,7 +101,6 @@ fn a_frame_converts_to_straight_bgra_with_its_alpha_as_is() {
     let pixels = convert(&mut d, 41, 29).unwrap();
     let frame = d.color.as_ref().and_then(Decoder::frame).unwrap();
     let alpha = d.alpha.as_ref().and_then(Decoder::frame).unwrap();
-    // The alpha bytes are the alpha stream's Y plane.
     for y in 0..29 {
         for x in 0..41 {
             assert_eq!(pixels[(y * 41 + x) * 4 + 3], alpha.planes[0].row(y)[x]);
@@ -159,8 +155,7 @@ fn a_file_without_alpha_is_opaque_and_tinted_it_is_white() {
     assert!(d.alpha.is_none());
     d.decode_next().unwrap();
     assert!(convert(&mut d, 36, 28).unwrap().chunks_exact(4).all(|p| p[3] == 255));
-    // No colour space and no alpha: BT.709 studio range, as Chrome shows it
-    // with a GPU (colour.rs).
+    // No colour space and no alpha: BT.709 studio range, as Chrome shows it with a GPU (colour.rs).
     let frame = d.color.as_ref().and_then(Decoder::frame).unwrap();
     assert_eq!(frame.color_space, vn_vpx_sys::ColorSpace::Unknown);
     let i420 = vn_yuv::I420 {
@@ -175,7 +170,6 @@ fn a_file_without_alpha_is_opaque_and_tinted_it_is_white() {
     let bt709 = vn_yuv::Colorimetry::new(vn_yuv::Matrix::Bt709, false);
     vn_yuv::Converter::new().to_bgra(&i420, bt709, &mut want, 72, 56).unwrap();
     assert_eq!(convert(&mut d, 72, 56).unwrap(), want);
-    // Tinted and without alpha there is nothing to decode at all.
     let mut tinted = source.decoder(DecodeOptions { alpha_only: true }).unwrap();
     assert!(tinted.color.is_none() && tinted.alpha.is_none());
     assert!(tinted.memory_bytes() < 4096);
@@ -187,8 +181,7 @@ fn a_file_without_alpha_is_opaque_and_tinted_it_is_white() {
     assert!(convert(&mut tinted, 10, 10).unwrap().iter().all(|&b| b == 255));
 }
 
-/// `superframe.webm` rebuilt with every frame in a block of its own, and
-/// `damage` applied to the packets.
+/// `superframe.webm` rebuilt with every frame in a block of its own, and `damage` applied to the packets.
 fn split_frames(damage: impl Fn(usize, &[u8]) -> Vec<u8>) -> Vec<u8> {
     let webm = webm::demux(SUPERFRAME).unwrap();
     let mut blocks = Vec::new();
@@ -213,7 +206,6 @@ fn a_lone_hidden_frame_is_decoded_with_the_next_shown_one() {
 
 #[test]
 fn a_damaged_frame_stops_the_decoder_until_a_rewind() {
-    // Packet 12 cut to half: libvpx refuses it.
     let bytes = split_frames(|i, p| if i == 12 { p[..p.len() / 2].to_vec() } else { p.to_vec() });
     let source = open(&bytes);
     let mut d = source.decoder(DecodeOptions::default()).unwrap();
@@ -252,7 +244,6 @@ fn decoders_on_several_threads_decode_the_same_frames() {
             assert_eq!(got, want);
         }
     }
-    // And one decoder moving between threads, a frame on each.
     let mut d = source.decoder(DecodeOptions::default()).unwrap();
     for i in 0..4 {
         d = std::thread::spawn(move || {
@@ -275,9 +266,8 @@ fn a_decoder_counts_libvpx_and_its_scratch() {
     assert!(d.memory_bytes() > libvpx + d.converter.memory_bytes() - 1);
 }
 
-/// `VN_STICKER_SAMPLES=<dir> cargo test -p vn-sticker samples_decode --
-/// --ignored --nocapture`: decodes every `.webm` in a directory and prints
-/// what each frame is read as.
+/// `VN_STICKER_SAMPLES=<dir> cargo test -p vn-sticker samples_decode -- --ignored --nocapture`:
+/// decodes every `.webm` in a directory and prints what each frame is read as.
 #[test]
 #[ignore]
 fn samples_decode() {
@@ -321,11 +311,9 @@ fn samples_decode() {
 }
 
 /// `VN_STICKER_DUMP="<file.webm>|<out>|<frame>,<frame>,...[|601s|601f|709s|709f]"
-/// cargo test -p vn-sticker dump_frames -- --ignored --nocapture`: writes the
-/// frames, converted at the file's own size (straight BGRA), one after
-/// another into `<out>`, and prints their pts, to compare with what a
-/// browser draws. The last part reads them with that matrix and range (and
-/// sRGB's primaries) instead of the colour rule's.
+/// cargo test -p vn-sticker dump_frames -- --ignored --nocapture`: writes the frames, converted at
+/// the file's own size (straight BGRA), into `<out>` and prints their pts, to compare with a
+/// browser. The last part reads them with that matrix and range instead of the colour rule's.
 #[test]
 #[ignore]
 fn dump_frames() {
@@ -367,11 +355,8 @@ fn dump_frames() {
     std::fs::write(output, out).unwrap();
 }
 
-/// `VN_STICKER_BENCH=<dir> cargo test --release -p vn-sticker bench --
-/// --ignored --nocapture`: for each `.webm` in the directory, one thread,
-/// decode, convert and total per frame (the fastest loop of several, so the
-/// machine's other load drops out), colour and alpha and alpha only, and the
-/// decoder's memory.
+/// `VN_STICKER_BENCH=<dir> cargo test --release -p vn-sticker bench -- --ignored --nocapture`: per
+/// `.webm`, one thread, decode, convert and total per frame, and the decoder's memory.
 #[test]
 #[ignore]
 fn bench() {
@@ -388,7 +373,6 @@ fn bench() {
         println!("{}: {}x{}, {} frames, alpha {}", path.display(), m.width, m.height, m.frame_count(), m.has_alpha);
         for alpha_only in [false, true] {
             let mut d = source.decoder(DecodeOptions { alpha_only }).unwrap();
-            // Decode: the fastest of 5 whole loops, per frame.
             let mut decode = f64::MAX;
             for _ in 0..5 {
                 d.rewind().unwrap();
@@ -397,8 +381,6 @@ fn bench() {
                 decode = decode.min(start.elapsed().as_secs_f64() * 1e3 / m.frame_count() as f64);
             }
             let memory = d.memory_bytes();
-            // Convert: each frame once per target size, the fastest of 5
-            // loops, per frame (decode time excluded).
             let mut line = format!("  {:<12} decode {decode:.3} ms", if alpha_only { "alpha only" } else { "colour+alpha" });
             for &t in &targets {
                 let (tw, th) = ((m.width * t / side).max(1), (m.height * t / side).max(1));

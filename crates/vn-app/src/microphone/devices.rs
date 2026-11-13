@@ -2,27 +2,15 @@
 //! (`IMMNotificationClient`), handed to redjs (webapi/mediadevices.rs,
 //! "Change notifications from the embedder").
 //!
-//! What a page sees, as in Chrome:
-//!
-//! - `navigator.mediaDevices` fires `devicechange` when an endpoint comes,
-//!   goes, or the default moves. redjs reads the devices again only after a
-//!   change, instead of polling them every two seconds;
-//! - an `AudioContext` on the default sink, and a microphone opened on the
-//!   default, follow the default when the user changes it.
-//!
 //! The callbacks run on a thread of the audio service. They only bump
 //! redjs's counters, which are atomics: Windows asks that they never block
 //! and never call back into the enumerator.
 
 use vn_runtime::redjs::webapi::mediadevices::{self, Flow};
 
-/// What one notification means to redjs. `None`: nothing (a property, or a
-/// role other than the one CPAL reports as default).
 #[derive(Debug, PartialEq, Eq)]
 enum Change {
-    /// An endpoint came, went, or changed state.
     Devices,
-    /// The default for this flow moved.
     Default(Flow),
 }
 
@@ -48,7 +36,6 @@ mod win {
     };
     use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
 
-    /// A default-device notification, by flow and role. Windows reports each
     /// role on its own. "Console" is the one CPAL's default is, so it is the
     /// one a page's default follows; the others change nothing it can see.
     pub(super) fn default_change(flow: EDataFlow, role: ERole) -> Option<Change> {
@@ -91,8 +78,6 @@ mod win {
         }
     }
 
-    /// Registers the client on a thread of its own, which keeps the
-    /// enumerator and the client alive for the life of the process.
     pub(super) fn install() {
         let spawned = std::thread::Builder::new().name("vn-devices".into()).spawn(|| {
             // SAFETY: COM on this thread, multithreaded: the callbacks arrive
@@ -128,8 +113,6 @@ mod win {
     }
 }
 
-/// Start listening, once per process. Without it (or off Windows) redjs
-/// polls the devices and nothing follows the default.
 pub fn install() {
     #[cfg(windows)]
     win::install();
@@ -157,7 +140,6 @@ mod tests {
 
     #[test]
     fn the_client_hands_each_notification_to_redjs() {
-        // Through the COM interface, as the audio service calls it.
         use windows::core::PCWSTR;
         use windows::Win32::Media::Audio::{IMMNotificationClient, DEVICE_STATE_ACTIVE};
         let client: IMMNotificationClient = Client.into();
@@ -167,7 +149,6 @@ mod tests {
             client.OnDefaultDeviceChanged(eCapture, eCommunications, PCWSTR::null()).unwrap();
             client.OnDeviceStateChanged(PCWSTR::null(), DEVICE_STATE_ACTIVE).unwrap();
         }
-        // The console move counted once, the communications one not at all.
         assert_eq!(mediadevices::default_generation(Flow::Input), input + 1);
     }
 }

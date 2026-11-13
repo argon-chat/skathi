@@ -61,7 +61,6 @@ build options
 
 type Flags = Record<string, string | boolean>;
 const BOOLEAN = new Set(["console", "payload-only", "allow-host-mismatch", "aot-inputs", "help", "json", "no-sign"]);
-/** Flags that may be given more than once; collected in order into `repeated`. */
 const REPEATABLE = new Set(["define"]);
 
 function parse(argv: string[]): { positional: string[]; flags: Flags; repeated: Record<string, string[]>; rest: string[] } {
@@ -90,7 +89,6 @@ function parse(argv: string[]): { positional: string[]; flags: Flags; repeated: 
   return { positional, flags, repeated, rest };
 }
 
-/** The variant `--variant` / `--features` / `--without` select, or undefined for none. */
 function variantOf(flags: Flags): Variant | undefined {
   const list = (name: string) => {
     const v = flags[name];
@@ -156,7 +154,6 @@ async function main(argv: string[]): Promise<number> {
           assets: result.assets.length,
           bundleBytes: result.bundleBytes,
           payloadBytes: result.payloadBytes,
-          // Only an app with vn.config.json `packs` has them.
           ...(result.packs.length ? { packs: result.packs } : {}),
           stamp: s && {
             bytes: s.bytes,
@@ -167,7 +164,6 @@ async function main(argv: string[]): Promise<number> {
             iconCount: s.iconCount,
             ms: s.ms,
           },
-          // Only a macOS build has these, so a Windows line is what it always was.
           ...(result.bundle && {
             platform: result.platform,
             app: result.bundle.app,
@@ -189,8 +185,7 @@ async function main(argv: string[]): Promise<number> {
       console.log(summary(result));
     }
     if (command === "build" || !result.exe) return 0;
-    // `run`: inherited handles, so a GUI-subsystem exe's stderr still lands in
-    // this terminal — the one place a double-clicked exe cannot show it.
+    // `run`: inherited handles, so a GUI-subsystem exe's stderr still lands in this terminal.
     const child = spawn(result.exe, rest, { stdio: "inherit" });
     return await new Promise<number>((done) => child.on("exit", (c) => done(c ?? 0)));
   }
@@ -203,8 +198,7 @@ async function main(argv: string[]): Promise<number> {
     const [sub, arg] = args;
     if (sub === "info") {
       const exe = arg ?? resolveHost({ variant: variantOf(flags) ?? "standard", allowMismatch: true }).exe;
-      // `hostInfo` refuses a stamped exe itself: asking one for host info
-      // would launch the app inside it.
+      // `hostInfo` refuses a stamped exe itself: asking one for host info would launch the app inside it.
       console.log(JSON.stringify(hostInfo(exe), null, 2));
       return 0;
     }

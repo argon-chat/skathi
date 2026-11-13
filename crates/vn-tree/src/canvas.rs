@@ -28,14 +28,10 @@ use crate::tree::Tree;
 use crate::windows::{self, WinKey};
 
 
-/// What a canvas paints: CPU bitmap, native texture or allocation-free black.
 #[derive(Clone)]
 pub(crate) enum Pixels {
-    /// A bitmap uploaded into the painting window's sprite atlas: BGRA with straight alpha, as
-    /// gpui's atlas takes it (its polychrome pipeline blends `SRC_ALPHA`, and its own decoders
-    /// un-premultiply).
+    /// A bitmap uploaded into the window's atlas: BGRA with straight alpha, as gpui's atlas takes it.
     Atlas(Arc<RenderImage>),
-    /// Keep only its intrinsic size; painting black needs no CPU image/atlas tile.
     #[cfg(feature = "webgpu")]
     SolidBlack { width: u32, height: u32 },
     #[cfg(feature = "webgpu")]
@@ -59,32 +55,25 @@ pub(crate) fn native_stats() -> (u64, u64) {
     (NATIVE_UPLOADS.load(Relaxed), NATIVE_FALLBACKS.load(Relaxed))
 }
 
-/// One answer from a [`PixelSource`].
 pub(crate) enum Fetch {
     Unpublished,
-    /// The bitmap is still the one at generation `since`.
     Unchanged,
-    /// The bitmap moved: its new generation, and what to paint (`None` for a bitmap with nothing to
-    /// show, 0 × 0 or too large for the atlas).
+    /// The bitmap moved: its new generation, and what to paint (`None` for nothing to show, 0 × 0 or
+    /// too large for the atlas).
     Changed(u64, Option<Pixels>),
 }
 
-/// Where a presented canvas's pixels come from: CPU rasterization or a completed WebGPU readback.
-/// The element never waits for GPU completion.
+/// Where a presented canvas's pixels come from: CPU rasterization or a completed WebGPU readback;
+/// never waits for the GPU.
 pub(crate) trait PixelSource {
-    /// The bitmap published under `key`, compared against generation `since` (0: none seen yet).
     fn fetch(key: u64, since: u64) -> Fetch;
 }
 
-/// Step 1: redjs's vello_cpu bitmap, read from its presentation registry, swizzled and uploaded as
-/// a `RenderImage`.
 pub(crate) struct CpuBitmap;
 
-/// gpui's sprite atlas cannot hold a texture past this side (D3D11's limit,
-/// `gpui_windows::directx_atlas`).
+/// gpui's atlas cannot hold a texture past this side (D3D11's limit).
 const ATLAS_MAX_SIDE: u32 = 16384;
 
-/// Wrap a completed premultiplied RGBA frame for the painting window's atlas.
 fn atlas_frame(generation: u64, width: u32, height: u32, rgba: &[u8]) -> Fetch {
     if width == 0 || height == 0 {
         return Fetch::Changed(generation, None);
@@ -176,12 +165,9 @@ const MOVING: Duration = Duration::from_millis(250);
 /// An animating canvas that has not changed for this long is still again.
 const STILL: Duration = Duration::from_millis(300);
 
-/// `pixels` as an animating canvas (`moving`) or a still one paints them: a frame of a moving
-/// picture, which the resampler leaves alone, or a still image it may draw from a smaller copy.
 fn as_painted(pixels: Pixels, moving: bool) -> Pixels {
     match pixels {
         Pixels::Atlas(image) if moving => {
-            // Fresh from `fetch`, so the only reference.
             Pixels::Atlas(Arc::try_unwrap(image).map(|i| Arc::new(i.dynamic())).unwrap_or_else(|a| a))
         }
         Pixels::Atlas(image) => Pixels::Atlas(image),
@@ -192,8 +178,6 @@ fn as_painted(pixels: Pixels, moving: bool) -> Pixels {
     }
 }
 
-/// The still image an animating canvas's last frame becomes: the same bytes under a new id that is
-/// not `dynamic`.
 fn still_copy(image: &RenderImage) -> Option<Arc<RenderImage>> {
     let size = image.size(0);
     let bytes = image.as_bytes(0)?.to_vec();
@@ -201,7 +185,6 @@ fn still_copy(image: &RenderImage) -> Option<Arc<RenderImage>> {
     Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
 }
 
-/// Premultiplied RGBA (redjs's bitmap, as a canvas keeps it) to straight BGRA (gpui's atlas).
 fn to_bgra(rgba: &[u8]) -> Vec<u8> {
     let mut out = rgba.to_vec();
     for px in out.chunks_exact_mut(4) {
@@ -216,7 +199,6 @@ fn to_bgra(rgba: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The source this build paints from.
 type Source = CanvasBitmap;
 
 
@@ -224,14 +206,10 @@ struct Entry {
     generation: u64,
     pixels: Option<Pixels>,
     window: WinKey,
-    /// When the bitmap last changed.
     changed: Instant,
-    /// Its pixels are `dynamic` while so.
     moving: bool,
 }
 
-/// `(canvases with a presented bitmap, its BGRA bytes)` — the host copies (devtools `mem`); redjs's
-/// own bitmap is the other copy.
 pub(crate) fn mem_stats() -> (usize, usize) {
     CANVASES.with(|c| {
         let c = c.borrow();
@@ -250,16 +228,11 @@ pub(crate) fn mem_stats() -> (usize, usize) {
 
 thread_local! {
     static CANVASES: RefCell<HashMap<u32, Entry>> = RefCell::new(HashMap::new());
-    /// Every `<canvas>` built, with the window that built it last: the ones [`tick`] fetches when a
-    /// bitmap moved.
     static BUILT: RefCell<HashMap<u32, WinKey>> = RefCell::new(HashMap::new());
-    /// When the last animating canvas is due to be still ([`STILL`]): the frame that re-wraps its
-    /// last frame has to be asked for.
     static STILL_AT: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
-/// Hands an image back to its window's atlas, on that window's next frame (the scene that painted
-/// it has been presented by then), its resampled copies with it.
+/// Hands an image back to its window's atlas on that window's next frame, with its resampled copies.
 fn retire_pixels(pixels: Option<Pixels>, window: WinKey) {
     let image = match pixels {
         Some(Pixels::Atlas(image)) => image,
@@ -275,7 +248,6 @@ fn retire(entry: Entry) {
     retire_pixels(entry.pixels, entry.window);
 }
 
-/// What node `id` paints this frame: the image it painted last, unless the bitmap moved since.
 fn current(id: u32, win: WinKey) -> Option<Pixels> {
     current_at(id, win, Instant::now())
 }
@@ -333,7 +305,6 @@ fn current_at(id: u32, win: WinKey, now: Instant) -> Option<Pixels> {
     })
 }
 
-/// Drops the state of canvases that left the tree, their images included.
 pub(crate) fn gc(live: impl Fn(u32) -> bool) {
     let mut dead = std::collections::HashSet::new();
     BUILT.with(|b| {
@@ -359,9 +330,8 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
     gone.into_iter().for_each(retire);
 }
 
-/// The pump's per-frame work: did any canvas draw, resize, or get its context since the last frame?
-/// `true` asks for a draw, the same as a tree mutation would; so does an animation that has just
-/// stopped, whose last frame is re-wrapped as a still image.
+/// The pump's per-frame work; `true` asks for a draw, as a tree mutation would (also when an
+/// animation just stopped).
 pub(crate) fn tick(window: &mut Window) -> bool {
     let presented = take_presented_changed();
     let now = Instant::now();
@@ -391,8 +361,6 @@ pub(crate) fn tick(window: &mut Window) -> bool {
     draw
 }
 
-/// [`tick`]'s fetch of one built canvas: the new bitmap written in place when it is the next frame
-/// of a moving one, else stored for the build as [`current_at`] would.
 fn fetch_live(id: u32, win: WinKey, now: Instant, window: &mut Window) -> crate::live::Shown {
     use crate::live::{shown, Shown};
     let visible = crate::live::visible(id, win);
@@ -438,14 +406,12 @@ fn fetch_live(id: u32, win: WinKey, now: Instant, window: &mut Window) -> crate:
                     };
                     if let Some(old_id) = live {
                         let Some(Pixels::Atlas(fresh)) = pixels else { unreachable!() };
-                        // Fresh from `fetch`, so the only reference.
                         if let Ok(mut next) = Arc::try_unwrap(fresh) {
                             next.id = old_id;
                             let next = Arc::new(next.dynamic());
                             let write = window
                                 .write_image_tile(&next, 0, gpui::TileSource::Bytes)
                                 .unwrap_or(gpui::TileWrite::Placed);
-                            // Not retired: the same id, so the same tile.
                             e.pixels = Some(Pixels::Atlas(next));
                             e.generation = generation;
                             e.changed = now;
@@ -542,8 +508,6 @@ fn native_image(
 }
 
 
-/// HTML's "rules for parsing non-negative integers", with the attribute's default: the same reading
-/// canvas.ts gives `width`/`height`.
 fn dimension(raw: Option<&str>, fallback: u32) -> u32 {
     let Some(raw) = raw else { return fallback };
     let s = raw.trim_start_matches([' ', '\t', '\n', '\x0c', '\r']);
@@ -555,14 +519,11 @@ fn dimension(raw: Option<&str>, fallback: u32) -> u32 {
     }
 }
 
-/// The canvas's intrinsic size in CSS px: its bitmap's, which is the attributes'.
 fn intrinsic(t: &Tree, id: u32) -> (u32, u32) {
     (dimension(t.prop(id, "width"), 300), dimension(t.prop(id, "height"), 150))
 }
 
-/// gpui `Img`'s sizing rule, for a box that holds an image of `iw` × `ih`: an `auto` dimension
-/// takes the intrinsic one, or follows the other one's absolute length through the aspect ratio,
-/// which is also set unless CSS set one.
+/// gpui `Img`'s sizing rule for a box holding an `iw` × `ih` image.
 fn size_as_replaced(style: &mut gpui::StyleRefinement, iw: f32, ih: f32, rem: gpui::Pixels) {
     use gpui::{DefiniteLength, Length};
     let auto = |l: Option<Length>| matches!(l, None | Some(Length::Auto));
@@ -638,8 +599,6 @@ fn solid_black(width: u32, height: u32, fit: gpui::ObjectFit) -> AnyElement {
     ).size_full().into_any_element()
 }
 
-/// `<canvas>`: a styled box at the bitmap's intrinsic size, with the bitmap painted over its
-/// content box.
 pub(super) fn build<V: 'static>(
     t: &Tree,
     id: u32,
@@ -750,7 +709,6 @@ mod tests {
 
     #[test]
     fn premultiplied_rgba_becomes_straight_bgra() {
-        // Opaque and fully transparent pixels only swap.
         assert_eq!(to_bgra(&[1, 2, 3, 255, 0, 0, 0, 0]), vec![3, 2, 1, 255, 0, 0, 0, 0]);
         assert_eq!(to_bgra(&[128, 128, 128, 128]), vec![255, 255, 255, 128]);
         assert_eq!(to_bgra(&[64, 0, 0, 64]), vec![0, 0, 255, 64]);
@@ -811,8 +769,6 @@ mod tests {
         assert!(solid_bounds(&ObjectFit::Fill, Bounds::new(bounds.origin, size(px(0.), px(100.))), 100, 100).is_none());
     }
 
-    /// Upload only when the surface moved: the second fetch at the same generation hands back
-    /// nothing new, and a draw does.
     #[test]
     fn the_cpu_source_uploads_only_what_changed() {
         let key = 0xC0FF_EE00;
@@ -844,8 +800,6 @@ mod tests {
         assert!(matches!(CpuBitmap::fetch(key, g2), Fetch::Unpublished));
     }
 
-    /// A canvas that keeps drawing paints frames the resampler leaves alone, and once it stops, its
-    /// last frame becomes a still image that it may draw from a smaller copy (#22).
     #[test]
     fn an_animating_canvas_is_dynamic_until_it_is_still() {
         let id: u32 = 0xC0FF_EE01;

@@ -1,21 +1,13 @@
 // The macOS side of `vn build`: a copy of the host becomes one app's `.app`.
 //
-//   <exeName>.app/
-//     Contents/
-//       Info.plist              identity, version, icon, TCC usage strings, URL schemes
-//       PkgInfo                 "APPL????"
-//       MacOS/<exeName>         the bare host, copied verbatim (0755)
-//       Resources/app.vnpk      the payload — crates/vn-app/src/payload.rs `bundled`
-//       Resources/AppIcon.icns  when the app has an icon
+//   <exeName>.app/Contents/{Info.plist, PkgInfo, MacOS/<exeName> (the bare host, verbatim),
+//                           Resources/app.vnpk, Resources/AppIcon.icns}
 //
 // Nothing is written into the Mach-O (it would break the host's signature); the payload is a file in
-// the bundle, covered by the bundle's signature. The bundle is assembled as `<out>.partial` and renamed
-// over `<out>`, like stamp.ts.
-//
-// `codesign` runs only on macOS: ad hoc without an identity (Apple Silicon needs it), otherwise hardened
-// runtime, a secure timestamp and the entitlements JSC's JIT and the microphone and camera need.
-// Notarisation is the author's step. The rest is platform-free, so layout, plist and icns are tested on
-// Windows.
+// the bundle, covered by its signature. The bundle is assembled as `<out>.partial` and renamed.
+// `codesign` runs only on macOS: ad hoc without an identity (Apple Silicon needs it), otherwise
+// hardened runtime, a secure timestamp and the entitlements JSC's JIT and the microphone and
+// camera need. Notarisation is the author's step. The rest is platform-free, so it is tested on Windows.
 
 import { spawnSync } from "node:child_process";
 import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -24,7 +16,6 @@ import { decodePng, encodePng, isPng, parseIco, resizeRgba } from "./icon";
 
 export type PlistValue = string | number | boolean | PlistValue[] | { [key: string]: PlistValue };
 
-/** Characters XML 1.0 cannot carry at all, escaped or not. */
 const XML_INVALID = /[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 export function xmlText(s: string, where = "plist"): string {
@@ -64,7 +55,6 @@ function plistLines(value: PlistValue, depth: number, where: string, out: string
   }
 }
 
-/** An XML property list, the layout Xcode writes (tabs, keys in the order given). */
 export function plistXml(root: { [key: string]: PlistValue }): string {
   const out = [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -78,26 +68,19 @@ export function plistXml(root: { [key: string]: PlistValue }): string {
 
 export interface MacInfo {
   bundleId: string;
-  /** CFBundleName and CFBundleDisplayName. */
   name: string;
-  /** The file name in Contents/MacOS. */
   executable: string;
-  /** CFBundleShortVersionString, `a.b.c`. */
   version: string;
-  /** CFBundleVersion, the build number. Default `version`. */
   build?: string;
-  /** CFBundleIconFile without its `.icns`, or null for no icon. */
   iconFile: string | null;
   minimumSystemVersion: string;
   category?: string | null;
   copyright?: string | null;
   microphoneUsageDescription?: string | null;
   cameraUsageDescription?: string | null;
-  /** CFBundleURLTypes: the schemes a link opens this app with. */
   urlSchemes?: string[];
 }
 
-/** Info.plist as a dictionary; {@link plistXml} writes it. */
 export function infoPlist(m: MacInfo): { [key: string]: PlistValue } {
   const d: { [key: string]: PlistValue } = {
     CFBundleDevelopmentRegion: "en",
@@ -119,8 +102,7 @@ export function infoPlist(m: MacInfo): { [key: string]: PlistValue } {
   d.LSMinimumSystemVersion = m.minimumSystemVersion;
   if (m.cameraUsageDescription) {
     d.NSCameraUsageDescription = m.cameraUsageDescription;
-    // macOS 14+ lists an iPhone as a camera of its own type only for an app
-    // that opts in; a native camera backend then discovers it.
+    // macOS 14+ lists an iPhone as a camera only for an app that opts in.
     d.NSCameraUseContinuityCameraDeviceType = true;
   }
   d.NSHighResolutionCapable = true;
@@ -129,7 +111,6 @@ export function infoPlist(m: MacInfo): { [key: string]: PlistValue } {
   return d;
 }
 
-/** The hardened runtime's entitlements: JSC's JIT always (MAP_JIT pages), the microphone and camera when the app says why. */
 export function entitlements(m: Pick<MacInfo, "microphoneUsageDescription" | "cameraUsageDescription">): { [key: string]: PlistValue } {
   const d: { [key: string]: PlistValue } = { "com.apple.security.cs.allow-jit": true };
   if (m.microphoneUsageDescription) d["com.apple.security.device.audio-input"] = true;
@@ -137,12 +118,8 @@ export function entitlements(m: Pick<MacInfo, "microphoneUsageDescription" | "ca
   return d;
 }
 
-//
-//   "icns"  u32be total length
-//   then entries: OSType(4)  u32be length (incl. these 8 bytes)  data
-//
-// Since 10.7 every entry below may hold a PNG, so an icns is a list of PNGs
-// labelled by size — no RLE planes, no masks.
+// "icns" u32be total length, then entries: OSType(4) u32be length (incl. these 8 bytes) data.
+// Since 10.7 every entry may hold a PNG, so an icns is a list of PNGs labelled by size.
 
 /** The PNG-bearing types, smallest first: [OSType, pixels]. `@2x` types share a size with a 1x one. */
 export const ICNS_TYPES: readonly (readonly [string, number])[] = [
@@ -203,13 +180,10 @@ export function parseIcns(bytes: Uint8Array, label = "icns"): IcnsEntry[] {
 
 export interface Icns {
   bytes: Uint8Array;
-  /** The pixel sizes it holds, smallest first, each once. */
   sizes: number[];
-  /** True when the file was taken as given (an `.icns`). */
   verbatim: boolean;
 }
 
-/** The PNG an icon is made from: the PNG itself, or an `.ico`'s largest PNG image. */
 function sourcePng(path: string, bytes: Uint8Array): Uint8Array {
   if (extname(path).toLowerCase() === ".ico") {
     const pngs = parseIco(bytes, path).filter((img) => isPng(img.data));
@@ -222,7 +196,6 @@ function sourcePng(path: string, bytes: Uint8Array): Uint8Array {
   return bytes;
 }
 
-/** A square PNG → every {@link ICNS_TYPES} entry not larger than it (no upscaling). */
 export function icnsFromPng(png: Uint8Array, label = "png"): Icns {
   const img = decodePng(png, label);
   if (img.width !== img.height) {
@@ -235,7 +208,6 @@ export function icnsFromPng(png: Uint8Array, label = "png"): Icns {
     if (size > img.width) continue;
     let data = bySize.get(size);
     if (!data) {
-      // The file itself when it is already the size, as icon.ts does.
       data = size === img.width ? png : encodePng(resizeRgba(img, size, size));
       bySize.set(size, data);
     }
@@ -244,7 +216,6 @@ export function icnsFromPng(png: Uint8Array, label = "png"): Icns {
   return { bytes: encodeIcns(entries), sizes: [...bySize.keys()], verbatim: false };
 }
 
-/** The `AppIcon.icns` for a configured icon path: `.icns` verbatim (checked), a PNG or an `.ico`'s PNG converted. */
 export function icnsFrom(path: string): Icns {
   const bytes = new Uint8Array(readFileSync(path));
   if (extname(path).toLowerCase() === ".icns") {
@@ -261,7 +232,6 @@ export function icnsFrom(path: string): Icns {
 
 const CPU: Record<number, string> = { 0x0100000c: "arm64", 0x01000007: "x86_64", 0x0000000c: "arm", 0x00000007: "i386" };
 
-/** The architectures in a Mach-O (thin or universal), or null when `path` is not one. */
 export function machOArchs(path: string): string[] | null {
   let head: Uint8Array;
   try {
@@ -295,7 +265,6 @@ export function machOArchs(path: string): string[] | null {
   return null;
 }
 
-/** Where an executable inside `*.app/Contents/MacOS/` finds its payload: the same rule as crates/vn-app/src/payload.rs `bundle_payload_path`. */
 export function bundlePayloadPath(exe: string): string | null {
   const macos = dirname(exe);
   const contents = dirname(macos);
@@ -310,9 +279,7 @@ export const ICON_NAME = "AppIcon";
 
 export interface AppBundleOptions {
   host: string;
-  /** `<dir>/<Name>.app`. Written as `<out>.partial`, then renamed. */
   out: string;
-  /** The file name in `Contents/MacOS`, which Info.plist's CFBundleExecutable must name. */
   executable: string;
   payload: Uint8Array;
   icns?: Uint8Array | null;
@@ -322,7 +289,6 @@ export interface AppBundleOptions {
 
 export interface AppBundleResult {
   app: string;
-  /** `<app>/Contents/MacOS/<executable>` — what `vn run` starts. */
   executable: string;
   bytes: number;
   payloadBytes: number;
@@ -382,7 +348,6 @@ export function writeAppBundle(options: AppBundleOptions): AppBundleResult {
 /** `-` is ad hoc: no certificate, no hardened runtime, nothing to notarise. */
 export const AD_HOC = "-";
 
-/** The `codesign` arguments for `identity` (entitlements apply to a real identity only). */
 export function codesignArgs(app: string, identity: string, entitlementsPath: string | null): string[] {
   if (identity === AD_HOC) return ["--force", "--sign", AD_HOC, app];
   return [
@@ -398,18 +363,12 @@ export function codesignArgs(app: string, identity: string, entitlementsPath: st
 }
 
 export interface SignPlan {
-  /** The identity to sign with, or null to leave the bundle as it is. */
   identity: string | null;
-  /** Why it is not signed, or how to sign it later. */
   note: string | null;
 }
 
 const shellWord = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 
-/**
- * Whether and how to sign. `want` is `--sign` / `--no-sign` over
- * `macos.sign`; `codesign` is its path on this machine, or null.
- */
 export function signPlan(input: {
   want: string | false | undefined;
   app: string;
@@ -435,7 +394,6 @@ export function signPlan(input: {
   return { identity: want ?? AD_HOC, note: null };
 }
 
-/** Runs `codesign`, then `codesign --verify --strict`. Throws with codesign's own words. */
 export function signBundle(
   codesign: string,
   app: string,

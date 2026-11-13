@@ -1,5 +1,4 @@
-//! A `ClipboardItem`'s representations on the Windows clipboard, in the formats
-//! Chrome uses for them (`navigator.clipboard.write()` / `read()`).
+//! A `ClipboardItem`'s representations on the Windows clipboard, in the formats Chrome uses for them.
 //!
 //! | MIME type    | written as                                         | read from                     |
 //! |--------------|----------------------------------------------------|-------------------------------|
@@ -7,11 +6,9 @@
 //! | `text/html`  | `HTML Format` (CF_HTML: the fragment in a page)    | its fragment                  |
 //! | `image/png`  | `PNG` (the bytes as given) + `CF_DIBV5` + `CF_DIB` | `PNG`, else a bitmap as a PNG |
 //!
-//! Most apps (Paint, Word, ...) paste only the bitmaps; the PNG keeps alpha and the exact bytes.
-//! Both bitmaps are 32-bit BGRA, straight alpha, bottom-up.
-//!
-//! Every representation is prepared before the clipboard opens, so a PNG that does not decode
-//! leaves it untouched. Opened and closed per call, on the JS thread (see the crate docs).
+//! Most apps paste only the bitmaps; the PNG keeps alpha and the exact bytes. Both bitmaps are 32-bit BGRA,
+//! straight alpha, bottom-up. Every representation is prepared before the clipboard opens, so a PNG that
+//! does not decode leaves it untouched.
 
 use windows::core::w;
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
@@ -147,7 +144,6 @@ fn from_utf16z(bytes: &[u8]) -> String {
     String::from_utf16_lossy(&units)
 }
 
-/// CF_HTML: the fragment inside a page, behind a header of byte offsets.
 fn cf_html(fragment: &str) -> Vec<u8> {
     const HEADER: &str = "Version:0.9\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n";
     let before = "<html><body>\r\n<!--StartFragment-->";
@@ -165,7 +161,6 @@ fn cf_html(fragment: &str) -> Vec<u8> {
     out
 }
 
-/// The fragment of a CF_HTML block, by its header's byte offsets.
 fn html_fragment(bytes: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(bytes);
     let offset = |key: &str| -> Option<usize> {
@@ -177,8 +172,6 @@ fn html_fragment(bytes: &[u8]) -> Option<String> {
     Some(String::from_utf8_lossy(slice).into_owned())
 }
 
-/// A 32-bit bottom-up DIB of RGBA pixels: a `BITMAPV5HEADER` with the masks
-/// and sRGB (`v5`), else a plain `BITMAPINFOHEADER`, `BI_RGB`.
 fn dib(w: u32, h: u32, rgba: &[u8], v5: bool) -> Vec<u8> {
     let header = if v5 { 124u32 } else { 40 };
     let size = w as usize * h as usize * 4;
@@ -218,7 +211,6 @@ fn dib(w: u32, h: u32, rgba: &[u8], v5: bool) -> Vec<u8> {
     out
 }
 
-/// A clipboard bitmap (`CF_DIB` / `CF_DIBV5`, 24 or 32 bpp) as a PNG.
 fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
     let u32_at = |at: usize| Some(u32::from_le_bytes(dib.get(at..at + 4)?.try_into().ok()?));
     let header = u32_at(0)? as usize;
@@ -261,7 +253,6 @@ mod tests {
 
     #[test]
     fn a_dib_round_trips_through_the_png_a_read_makes_of_it() {
-        // 2×2: red, green / blue, half-transparent white — rows top first.
         let rgba = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 128];
         for v5 in [true, false] {
             let png = dib_to_png(&dib(2, 2, &rgba, v5)).expect("a 32-bit DIB reads");

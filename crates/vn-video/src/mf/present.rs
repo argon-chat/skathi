@@ -2,14 +2,14 @@
 //!
 //! Default (zero-copy): `TransferVideoFrame` blits into a BGRA, cropped texture we own on the
 //! renderer's device, and [`Presenter::transfer_gpu`] hands it to the host to copy into the atlas
-//! tile, so the frame never touches system memory. The remaining `RenderImage` is one stable,
-//! zero-filled placeholder per size that gives the atlas a key.
+//! tile. The remaining `RenderImage` is one stable, zero-filled placeholder per size that gives the
+//! atlas a key.
 //!
 //! `VN_VIDEO_READBACK=1` ([`Presenter::transfer`]) reads the frame back through two staging
-//! surfaces; it is the fallback when the atlas refuses the copy (e.g. `VN_VIDEO_DEVICE=private`).
+//! surfaces; it is the fallback when the atlas refuses the copy.
 //!
-//! Either way the frame is produced at the size it will be painted, not encoded: MF's video
-//! processor scales anyway, which cuts 8.3 MB/frame to 1.4 MB/frame (1080p into 800x450).
+//! Either way the frame is produced at the size it will be painted: MF's video processor scales
+//! anyway, which cuts 8.3 MB/frame to 1.4 MB/frame (1080p into 800x450).
 
 use std::sync::Arc;
 
@@ -39,16 +39,13 @@ pub struct Presenter {
     context: ID3D11DeviceContext,
     size: (u32, u32),
     /// What `TransferVideoFrame` writes into: BGRA on the renderer's device, a render target (the
-    /// video processor needs that); on the GPU path it is also what the atlas copies from.
+    /// video processor needs that); on the GPU path the atlas copies from it.
     target: Option<ID3D11Texture2D>,
-    /// TWO staging surfaces (see [`Presenter::transfer`]); empty on the GPU path.
     slots: Vec<Slot>,
     write: usize,
-    /// The GPU path's stable, zero-filled `RenderImage`, one per size. gpui keys atlas tiles by
-    /// `RenderImage::id`, so one id means one tile updated in place (a fresh image per frame leaks a
-    /// tile per frame). Its bytes are never read; the buffer only gives the atlas a size.
+    /// The GPU path's stable, zero-filled `RenderImage`, one per size: gpui keys atlas tiles by
+    /// `RenderImage::id`, so one id means one tile updated in place. Its bytes are never read.
     placeholder: Option<Arc<RenderImage>>,
-    /// `false` once the atlas has refused a GPU upload ([`Presenter::demote_to_readback`]).
     gpu: bool,
 }
 
@@ -73,8 +70,7 @@ impl Presenter {
         self.gpu
     }
 
-    /// Called when `Window::upload_image_from_gpu` returned `false` (wrong device or format): falls
-    /// back to readback permanently and forces the next `present` to re-allocate.
+    /// Called when `Window::upload_image_from_gpu` returned `false`: falls back to readback permanently.
     pub fn demote_to_readback(&mut self) {
         if !self.gpu {
             return;
@@ -91,7 +87,6 @@ impl Presenter {
         self.size
     }
 
-    /// Drops the textures (on `src` change and suspend) so a parked video gives its VRAM back.
     pub fn reset(&mut self) {
         self.target = None;
         self.slots.clear();
@@ -115,7 +110,6 @@ impl Presenter {
                     Format: DXGI_FORMAT_B8G8R8A8_UNORM,
                     SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
                     Usage: D3D11_USAGE_DEFAULT,
-                    // RENDER_TARGET because the video processor writes here.
                     BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
                     ..Default::default()
                 },
@@ -124,7 +118,6 @@ impl Presenter {
             )
         }
         .ok()?;
-        // One zeroed buffer per size; `RgbaImage` is a byte container here, not a colour-space claim.
         let pixels = vec![0u8; size.0 as usize * size.1 as usize * 4];
         let buffer = RgbaImage::from_raw(size.0, size.1, pixels)?;
         // `dynamic`: the GPU fills its tile, so its zeroed pixels must never be resampled into a
@@ -139,8 +132,7 @@ impl Presenter {
 
     /// The zero-copy present: transfer into our own texture and hand the host a borrow. A
     /// `CopySubresourceRegion` on the same context is ordered behind the transfer by the driver, so a
-    /// paused element's single seek frame is correct (the readback path needed pipelining and showed
-    /// the previous seek's frame).
+    /// paused element's single seek frame is correct.
     pub fn transfer_gpu(
         &mut self,
         engine: &IMFMediaEngine,
@@ -215,13 +207,11 @@ impl Presenter {
     /// with that frame's PTS.
     ///
     /// Reading the staging texture just written makes `Map` block the immediate context (also gpui's)
-    /// on the GPU (measured 2.57 ms mean, 4.5 ms p99 per 800x450 frame). With two staging surfaces
-    /// the copy queued this frame is read next frame, at the cost of one frame of latency;
-    /// `D3D11_MAP_FLAG_DO_NOT_WAIT` guards a busy GPU by falling back to a blocking map.
+    /// on the GPU. With two staging surfaces the copy queued this frame is read next frame, at the
+    /// cost of one frame of latency; `D3D11_MAP_FLAG_DO_NOT_WAIT` guards a busy GPU.
     ///
     /// `pipeline: false` reads back the frame just written, blocking. A PAUSED element must do this:
-    /// it produces exactly one frame per seek, so with the pipeline on every seek would display the
-    /// previous seek's frame.
+    /// it produces one frame per seek, so with the pipeline on every seek would display the previous one.
     pub fn transfer(
         &mut self,
         engine: &IMFMediaEngine,
@@ -233,7 +223,6 @@ impl Presenter {
         let target = self.target.as_ref()?.clone();
 
         let dst = RECT { left: 0, top: 0, right: size.0 as i32, bottom: size.1 as i32 };
-        // Transparent border: edges are invisible over whatever CSS put behind the element, opaque black ones would not be.
         let border = MFARGB { rgbAlpha: 0, rgbRed: 0, rgbGreen: 0, rgbBlue: 0 };
         unsafe { engine.TransferVideoFrame(&target, None, &dst, Some(&border)) }.ok()?;
 
@@ -246,13 +235,11 @@ impl Presenter {
             self.write = 1 - write;
             1 - write
         } else {
-            // Read what was just written and drop anything queued behind it (it is older).
             self.slots[1 - write].filled = false;
             write
         };
 
         if !self.slots[read].filled {
-            // First frame after a load or resize: nothing to read yet.
             return None;
         }
         self.slots[read].filled = false;
@@ -277,7 +264,6 @@ impl Presenter {
         }
         let row_bytes = size.0 as usize * 4;
         let pitch = mapped.RowPitch as usize;
-        // ONE copy, straight into the buffer the `RenderImage` will own (it needs its own `Vec`).
         let mut pixels: Vec<u8> = Vec::with_capacity(row_bytes * size.1 as usize);
         // SAFETY: `Map` succeeded, so `pData` is `RowPitch * Height` readable
         // bytes of the staging texture we just created at exactly this size,
@@ -292,7 +278,6 @@ impl Presenter {
         }
         unsafe { self.context.Unmap(&staging, 0) };
 
-        // `RgbaImage` is a byte container here; the bytes are BGRA, as gpui's atlas uploads.
         let buffer = RgbaImage::from_raw(size.0, size.1, pixels)?;
         Some((Arc::new(RenderImage::new(vec![Frame::new(buffer)]).dynamic()), frame_pts))
     }

@@ -1,15 +1,12 @@
 //! The application's icon in the menu bar: an `NSStatusItem`.
 //!
-//! AppKit belongs to the main thread (also gpui's and JSC's), so the main queue plays the role of
-//! windows.rs's tray thread. `set` and `stop` may come from any thread: they admit the change as
-//! windows.rs does (same revision, same coalescing slot) and wake the main queue without waiting, so
-//! a main-thread caller cannot deadlock.
+//! AppKit belongs to the main thread, so the main queue plays the role of windows.rs's tray thread. `set`
+//! and `stop` may come from any thread: they admit the change as windows.rs does and wake the main queue
+//! without waiting, so a main-thread caller cannot deadlock.
 //!
-//! Clicks reach one target per controller on mouse up. Without `on_click` AppKit owns the menu;
-//! otherwise a secondary click shows it for the duration of the click (`performClick:` with the menu
-//! attached, then detached). Menu items carry the revision and action slot in their `tag`, fencing a
-//! selection from a replaced menu; a new model cancels an open menu. Callbacks run on the main
-//! thread, so a Rust callback must not block it; JS callbacks are posted to the VM by vn-app.
+//! Without `on_click` AppKit owns the menu; otherwise a secondary click shows it for the duration of the
+//! click. Menu items carry the revision and action slot in their `tag`, fencing a selection from a
+//! replaced menu. Callbacks run on the main thread, so a Rust callback must not block it.
 
 use super::{
     mac_plan::{self, Node, Press},
@@ -46,7 +43,6 @@ pub(super) struct Controller {
     stopping: AtomicBool,
     revision: AtomicU64,
     pending: Mutex<Option<(u64, Option<Options>)>>,
-    /// A drain is queued on the main queue; later updates only replace `pending`.
     scheduled: AtomicBool,
 }
 impl Controller {
@@ -69,7 +65,6 @@ impl Controller {
             return Err(Error::Closed);
         }
         let revision = self.revision.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
-        // Never run a user capture's destructor while holding the queue mutex.
         let discarded = pending.replace((revision, options));
         drop(pending);
         drop(discarded);
@@ -90,7 +85,6 @@ impl Controller {
         !self.stopping.load(Ordering::Acquire) && revision == self.revision()
     }
     pub(super) fn stop(&self) {
-        // Serialize the tombstone with set(), as windows.rs does.
         let discarded = match self.pending.lock() {
             Ok(mut pending) => {
                 if !self.stopping.swap(true, Ordering::AcqRel) {
@@ -105,8 +99,7 @@ impl Controller {
         };
         drop(discarded);
         let id = self.id;
-        // At once on the main thread, unless a click of this item is still on
-        // the stack (its menu may be tracking): AppKit is left to unwind first.
+        // At once on the main thread, unless a click of this item is still on the stack: let AppKit unwind first.
         match MainThreadMarker::new() {
             Some(mtm) if ACTIVE.with(Cell::get) == 0 => remove(mtm, id),
             _ => on_main(move |mtm| remove(mtm, id)),
@@ -114,8 +107,7 @@ impl Controller {
     }
 }
 
-/// Runs `work` on the main queue, inside an autorelease pool; a panic is
-/// logged instead of unwinding into libdispatch.
+/// Runs `work` on the main queue, in an autorelease pool; a panic is logged instead of unwinding into libdispatch.
 fn on_main(work: impl FnOnce(MainThreadMarker) + Send + 'static) {
     dispatch2::DispatchQueue::main().exec_async(move || {
         let ran = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -133,8 +125,7 @@ fn on_main(work: impl FnOnce(MainThreadMarker) + Send + 'static) {
     });
 }
 
-/// An AppKit callback's body; a panic is logged instead of unwinding into
-/// AppKit, and `stop` knows not to remove the item under it.
+/// An AppKit callback's body; a panic is logged instead of unwinding into AppKit.
 fn guarded(body: impl FnOnce()) {
     struct Active;
     impl Drop for Active {
@@ -149,7 +140,6 @@ fn guarded(body: impl FnOnce()) {
     }
 }
 
-/// The model a status item shows and its menu's action table. Immutable: an open menu keeps its own.
 struct Snapshot {
     revision: u64,
     options: Options,
@@ -160,7 +150,6 @@ struct Native {
     mtm: MainThreadMarker,
     shared: Weak<Controller>,
     status: Retained<NSStatusItem>,
-    /// The button's and every menu item's target. Neither retains it.
     target: Retained<Target>,
     snapshot: Rc<Snapshot>,
     menu: Option<Retained<NSMenu>>,
@@ -172,8 +161,7 @@ impl Native {
             NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
         let target = Target::new(mtm, shared.id);
         if let Some(button) = status.button(mtm) {
-            // SAFETY: the target answers `press:` and outlives the button's use
-            // of it (Native clears it before releasing either).
+            // SAFETY: the target answers `press:` and outlives the button's use of it.
             unsafe {
                 button.setTarget(Some(&target));
                 button.setAction(Some(sel!(press:)));
@@ -216,8 +204,7 @@ impl Drop for Native {
 }
 
 thread_local! {
-    /// Every controller's item, by controller id. Main thread only. Taken out
-    /// while AppKit is called, so no borrow is held across a nested run loop.
+    /// Main thread only; taken out while AppKit is called, so no borrow is held across a nested run loop.
     static ITEMS: RefCell<HashMap<u64, Native>> = RefCell::new(HashMap::new());
     static ACTIVE: Cell<usize> = const { Cell::new(0) };
     static REPORTED: RefCell<HashMap<u64, String>> = RefCell::new(HashMap::new());
@@ -275,7 +262,6 @@ fn apply(mtm: MainThreadMarker, shared: &Arc<Controller>) {
     if let Some(button) = native.status.button(mtm) {
         let tooltip = NSString::from_str(&mac_plan::tooltip(&snapshot.options.tooltip, app_name));
         button.setToolTip(Some(&tooltip));
-        // An image alone says nothing to VoiceOver.
         // SAFETY: `setAccessibilityLabel:` takes an optional NSString.
         let _: () = unsafe { msg_send![&*button, setAccessibilityLabel: &*tooltip] };
         let icon = snapshot.options.icon.as_ref();
@@ -287,7 +273,6 @@ fn apply(mtm: MainThreadMarker, shared: &Arc<Controller>) {
                 }
                 Err(error) => {
                     report(shared.id, format!("native tray icon: {error}"));
-                    // An item without an image cannot be seen or clicked.
                     if button.image().is_none() {
                         button.setImage(app_icon(mtm).as_deref());
                     }
@@ -296,7 +281,6 @@ fn apply(mtm: MainThreadMarker, shared: &Arc<Controller>) {
         }
     }
     ITEMS.with(|items| items.borrow_mut().insert(shared.id, native));
-    // The replaced menu goes once the new one is attached.
     drop(old_menu);
 }
 
@@ -341,8 +325,7 @@ fn pressed(mtm: MainThreadMarker, id: u64) {
     }
 }
 
-/// A secondary click with `on_click`: show the menu for the click's tracking, since AppKit only
-/// highlights and places the menu of an item that owns one.
+/// A secondary click with `on_click`: show the menu, since AppKit only places the menu of an item that owns one.
 fn open_menu(mtm: MainThreadMarker, id: u64, status: &NSStatusItem) {
     let Some(menu) = ITEMS.with(|items| {
         items
@@ -354,8 +337,7 @@ fn open_menu(mtm: MainThreadMarker, id: u64, status: &NSStatusItem) {
     };
     status.setMenu(Some(&menu));
     if let Some(button) = status.button(mtm) {
-        // SAFETY: a click without a sender. Returns once the menu has closed;
-        // the registry is not borrowed meanwhile, so a model can arrive.
+        // SAFETY: a click without a sender. Returns once the menu has closed; the registry is not borrowed meanwhile.
         unsafe { button.performClick(None) };
     }
     let owned = ITEMS.with(|items| {
@@ -429,8 +411,6 @@ impl Target {
     }
 }
 
-/// The menu for `nodes`. Items are enabled by the model, not by AppKit's
-/// responder-chain validation.
 fn build(
     mtm: MainThreadMarker,
     title: &str,
@@ -450,8 +430,7 @@ fn build(
                 checked,
                 action,
             } => {
-                // SAFETY: `select:` is the target's action; the target
-                // outlives the menu (Native detaches it first).
+                // SAFETY: `select:` is the target's action; the target outlives the menu.
                 let item = unsafe {
                     let item = NSMenuItem::initWithTitle_action_keyEquivalent(
                         NSMenuItem::alloc(mtm),
@@ -495,8 +474,7 @@ fn build(
     menu
 }
 
-/// Clears every item's target, so a menu AppKit still holds cannot reach a
-/// released target.
+/// Clears every item's target, so a menu AppKit still holds cannot reach a released target.
 fn detach(menu: &NSMenu) {
     for item in menu.itemArray().iter() {
         // SAFETY: clearing the target.
@@ -518,7 +496,6 @@ fn image(mtm: MainThreadMarker, icon: Option<&Icon>) -> Result<Retained<NSImage>
         let data = NSData::with_bytes(&mac_plan::png(icon, scale)?);
         let rep = NSBitmapImageRep::imageRepWithData(&data)
             .ok_or("AppKit could not read the tray icon")?;
-        // Points, not pixels: the 2× representation is the same size.
         rep.setSize(size);
         image.addRepresentation(&rep);
     }
@@ -528,7 +505,6 @@ fn image(mtm: MainThreadMarker, icon: Option<&Icon>) -> Result<Retained<NSImage>
 
 fn app_icon(mtm: MainThreadMarker) -> Option<Retained<NSImage>> {
     let icon = NSApplication::sharedApplication(mtm).applicationIconImage()?;
-    // A copy: the application's image is shared, and its size is the image's.
     let icon = icon.copy();
     let side = f64::from(mac_plan::SIDE_PT);
     icon.setSize(NSSize::new(side, side));

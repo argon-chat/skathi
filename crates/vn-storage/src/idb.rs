@@ -1,23 +1,15 @@
-//! IndexedDB's host: where the databases live and the key protecting them. redjs owns the API
-//! and the SQLite files; this crate supplies the folder and whether it is encrypted, from the
-//! same state `appStorage.setStorageFolder` writes.
+//! IndexedDB's host: where the databases live and the key protecting them. redjs owns the API and the
+//! SQLite files; this crate supplies the folder and whether it is encrypted, from the same state
+//! `appStorage.setStorageFolder` writes.
 //!
-//! ```text
-//!   <storage folder>\localStorage.json | .sealed      (lib.rs)
-//!   <storage folder>\indexeddb\                       (this file)
-//!        lock                    held by the running instance (redjs)
-//!        <h>.sqlite3 (+ -wal)    one database each (redjs, format 1)
-//!        key.sealed              the database key, sealed by DPAPI
-//!        key.retire              "decrypt at the next start" (a late call)
-//! ```
+//! `<storage folder>\indexeddb\` holds `<h>.sqlite3` per database (redjs), `key.sealed` (the database key,
+//! sealed by DPAPI) and `key.retire` ("decrypt at the next start").
 //!
-//! The key: SQLite3 Multiple Ciphers encrypts every page with ChaCha20-Poly1305 under a raw
-//! 256-bit key from the OS RNG, created when a folder is first encrypted and stored only sealed
-//! (`file::seal`, the provider and header of `localStorage.sealed`). The plaintext key lives in
-//! memory, never on disk. A keychain that cannot be read right now refuses the run and leaves
-//! `key.sealed` in place.
+//! The key is a raw 256-bit OS-RNG key (ChaCha20-Poly1305 via SQLite3 Multiple Ciphers), created when a
+//! folder is first encrypted and stored only sealed; the plaintext lives in memory. A keychain that
+//! cannot be read refuses the run and leaves `key.sealed` in place.
 //!
-//! Encryption is sticky, decided once at IndexedDB's first use:
+//! Encryption is sticky, decided once at first use:
 //!
 //! | the app said                    | key.sealed     | → redjs runs           |
 //! |---------------------------------|----------------|------------------------|
@@ -30,19 +22,13 @@
 //! | nothing, `key.retire` exists    | readable       | Decrypting → plaintext |
 //! | nothing                         | absent         | Plaintext              |
 //!
-//! "Nothing" never decrypts, and a sealed `localStorage` next door counts as having asked, so
-//! one `setStorageFolder(…, { encrypted: true })` covers the whole folder. A `key.sealed` that
-//! cannot be unsealed is moved aside as `key.unreadable-<unix time>.sealed` (never deleted), a
-//! new key is made, and redjs moves aside every database that key cannot open, with an advisory.
+//! "Nothing" never decrypts, and a sealed `localStorage` next door counts as having asked. A
+//! `key.sealed` that cannot be unsealed is moved aside as `key.unreadable-<unix time>.sealed` (never
+//! deleted), a new key is made, and redjs moves aside every database that key cannot open.
 //!
-//! A late `setStorageFolder`: redjs reads the folder and key once, so the call applies at the
-//! next start (redjs's `config-changed` advisory). The encryption half is recorded to survive
-//! until then: `{ encrypted: true }` creates `key.sealed` now, `{ encrypted: false }` leaves
-//! `key.retire` beside an existing key. A call that does not mention `encrypted` flips nothing,
-//! and a move carries an encrypted IndexedDB's `key.sealed` into the new folder. The folder
-//! half is not remembered (it would need a pointer file in the folder moved away from).
-//!
-//! Quota: min(60% of the volume, used + free), re-read by redjs at most every two seconds.
+//! A late `setStorageFolder` applies at the next start (advisory), so the encryption half is recorded:
+//! `{ encrypted: true }` creates `key.sealed` now, `{ encrypted: false }` leaves `key.retire`; omitting
+//! `encrypted` flips nothing and a move carries `key.sealed` along. The folder half is not remembered.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -56,20 +42,15 @@ pub const FOLDER_NAME: &str = "indexeddb";
 pub const KEY_NAME: &str = "key.sealed";
 pub const RETIRE_NAME: &str = "key.retire";
 
-/// `<storage folder>\indexeddb`.
 pub fn folder_of(storage: &Path) -> PathBuf {
     storage.join(FOLDER_NAME)
 }
 
-/// The mode redjs was handed at its start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Plaintext,
     Encrypted,
-    /// Encrypted files are being rekeyed to plaintext; becomes `Plaintext`
-    /// once redjs says every file is (`migrated`).
     Decrypting,
-    /// Encryption was asked for and cannot be had: every open fails.
     Refused,
 }
 
@@ -84,7 +65,6 @@ impl Mode {
     }
 }
 
-/// What redjs latched at its start: the folder, then the mode.
 #[derive(Default)]
 struct Latched {
     folder: Option<PathBuf>,
@@ -92,11 +72,9 @@ struct Latched {
     error: Option<String>,
 }
 
-/// Lock order: `LATCHED` is never held while the storage `State` is taken
-/// (lib.rs holds `State` while it asks for [`info_json`]).
+/// Lock order: `LATCHED` is never held while the storage `State` is taken.
 static LATCHED: Mutex<Latched> = Mutex::new(Latched { folder: None, mode: None, error: None });
 
-/// The folder redjs latched, or the one it would latch now.
 fn latched_or_current() -> PathBuf {
     let latched = LATCHED.lock().unwrap().folder.clone();
     latched.unwrap_or_else(|| folder_of(&crate::current_folder()))
@@ -138,8 +116,6 @@ impl IndexedDbHost for Host {
         latched_or_current().display().to_string()
     }
 
-    /// Every file is in the mode redjs was given; after a decryption the key (and any
-    /// `key.retire`) is removed.
     fn migrated(&self) {
         let mut l = LATCHED.lock().unwrap();
         let Some(dir) = l.folder.clone() else { return };
@@ -157,7 +133,6 @@ impl IndexedDbHost for Host {
                 l.mode = Some(Mode::Plaintext);
             }
             Some(Mode::Encrypted) => {
-                // An explicit `{ encrypted: true }` this run outranks an older late request to decrypt.
                 let _ = std::fs::remove_file(dir.join(RETIRE_NAME));
             }
             _ => {}
@@ -165,8 +140,6 @@ impl IndexedDbHost for Host {
     }
 }
 
-/// The table in the module header. `intent` is `Some(encrypted)` when the app
-/// called `setStorageFolder` this run, `None` when it did not.
 fn decide(
     dir: &Path,
     storage: &Path,
@@ -198,8 +171,6 @@ fn decide(
                 eprintln!("[storage] IndexedDB in {} is encrypted at rest (a new key, sealed by {})", dir.display(), p.name());
                 k
             }
-            // Provider unavailable (locked or refused keychain): says nothing about the key
-            // file, so it stays and this run is refused.
             Err(e) if p.ready().is_err() => {
                 return Err(format!("the IndexedDB key {} cannot be unsealed right now ({e})", key_path.display()));
             }
@@ -218,14 +189,12 @@ fn decide(
         };
         return Ok((Mode::Encrypted, IdbEncryption::Encrypted(key)));
     }
-    // Plaintext asked for (or nothing asked and nothing encrypted here).
     match provider.map(|p| read_key(p, &key_path)) {
         Some(Ok(Some(old_key))) => {
             eprintln!("[storage] IndexedDB in {} is being decrypted, as asked", dir.display());
             Ok((Mode::Decrypting, IdbEncryption::Decrypting { old_key }))
         }
         Some(Err(e)) => {
-            // Nothing can decrypt those files now; redjs moves them aside.
             eprintln!("[storage] the IndexedDB key {} cannot be unsealed ({e}); its databases cannot be decrypted", key_path.display());
             Ok((Mode::Plaintext, IdbEncryption::Plaintext))
         }
@@ -241,8 +210,6 @@ fn read_key(p: &dyn SecretProvider, path: &Path) -> Result<Option<[u8; 32]>, Str
     };
     let mut hex = file::unseal(p, &raw)?;
     let key = parse_hex(hex.trim());
-    // The plaintext key lives in this process anyway; do not leave a second
-    // copy of it in a freed String.
     unsafe { hex.as_bytes_mut().fill(0) };
     key.map(Some).ok_or_else(|| String::from("it does not hold a 256-bit key"))
 }
@@ -274,7 +241,6 @@ fn move_aside(path: &Path) -> PathBuf {
     aside
 }
 
-/// 32 bytes from the OS's preferred RNG.
 #[cfg(target_os = "windows")]
 fn new_key() -> Result<[u8; 32], String> {
     use windows::Win32::Security::Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
@@ -310,7 +276,6 @@ fn quota_from(free: u64, total: u64, usage: u64) -> u64 {
     (total / 10 * 6).min(usage.saturating_add(free))
 }
 
-/// (bytes free to this user, volume size).
 #[cfg(target_os = "windows")]
 fn disk(dir: &Path) -> Option<(u64, u64)> {
     use std::os::windows::ffi::OsStrExt;
@@ -322,8 +287,7 @@ fn disk(dir: &Path) -> Option<(u64, u64)> {
     (total > 0).then_some((free, total))
 }
 
-/// `statfs`, not `statvfs`: Darwin's `statvfs` has 32-bit block counts. `f_bavail` excludes
-/// purgeable APFS space, so the quota errs low.
+/// `statfs`, not `statvfs`: Darwin's `statvfs` has 32-bit block counts.
 #[cfg(target_os = "macos")]
 fn disk(dir: &Path) -> Option<(u64, u64)> {
     use std::os::unix::ffi::OsStrExt;
@@ -338,8 +302,7 @@ fn disk(dir: &Path) -> Option<(u64, u64)> {
     (total > 0).then_some((free, total))
 }
 
-/// `statvfs`, 64-bit on Linux. `f_bavail` is what a non-root user may use;
-/// sizes are in fragments (`f_frsize`), not `f_bsize`.
+/// `statvfs`, 64-bit on Linux; sizes are in fragments (`f_frsize`), not `f_bsize`.
 #[cfg(target_os = "linux")]
 fn disk(dir: &Path) -> Option<(u64, u64)> {
     use std::os::unix::ffi::OsStrExt;
@@ -359,21 +322,17 @@ fn disk(_dir: &Path) -> Option<(u64, u64)> {
     None
 }
 
-/// Installs this host into redjs. From `crate::install`, before app code runs.
 pub fn install() {
     api::set_host(&HOST);
 }
 
-/// `setStorageFolder` ran. Before IndexedDB's first use there is nothing to do; after it the
-/// change is for the next start (advisory) and the encryption half is made to stick.
-/// `encrypted: None` keeps the latched format, and a move carries an encrypted IndexedDB's
-/// encryption to the new folder.
+/// `setStorageFolder` ran. After IndexedDB's first use the change is for the next start and the
+/// encryption half is made to stick.
 pub fn storage_changed(storage: &Path, encrypted: Option<bool>) {
     let (latched_dir, latched_mode) = {
         let l = LATCHED.lock().unwrap();
         match (&l.folder, l.mode) {
             (Some(f), Some(m)) => (f.clone(), m),
-            // Not started, or about to read the new state: nothing to defer.
             _ => return,
         }
     };
@@ -399,8 +358,7 @@ pub fn storage_changed(storage: &Path, encrypted: Option<bool>) {
     }
 }
 
-/// A late call, decided: does it change anything for the next start (the
-/// advisory), and which encryption, if any, to record for it.
+/// A late call, decided: does it change anything for the next start, and which encryption to record.
 fn late_change(latched: Mode, moved: bool, encrypted: Option<bool>) -> (bool, Option<bool>) {
     let flipped = match (latched, encrypted) {
         (_, None) => false,
@@ -420,14 +378,12 @@ fn late_change(latched: Mode, moved: bool, encrypted: Option<bool>) -> (bool, Op
     (true, persist)
 }
 
-/// The encryption half of a late call, made to outlive this run.
 fn persist_intent(dir: &Path, encrypted: bool) -> Result<(), String> {
     let key_path = dir.join(KEY_NAME);
     let retire = dir.join(RETIRE_NAME);
     if encrypted {
         let p = crypt::provider().ok_or("this platform has no encryption provider")?;
-        // Not ready (a locked keychain): an existing key must not be moved
-        // aside as "unreadable" below.
+        // Not ready (a locked keychain): an existing key must not be moved aside as "unreadable".
         p.ready()?;
         let _ = std::fs::remove_file(&retire);
         let readable = matches!(read_key(p, &key_path), Ok(Some(_)));
@@ -446,7 +402,6 @@ fn persist_intent(dir: &Path, encrypted: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// `appStorage.info().indexedDB` as JSON; `storage` is used until redjs latches a folder.
 pub fn info_json(storage: &Path) -> String {
     let l = LATCHED.lock().unwrap();
     let folder = l.folder.clone().unwrap_or_else(|| folder_of(storage));

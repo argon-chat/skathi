@@ -1,6 +1,5 @@
 //! The persistent playback state behind one `<lottie>` node: the prepared animation, the transport
-//! and the rendered-frame cache. Free of `Window` so transport and events are testable without one;
-//! the only gpui type that leaks in is [`RenderImage`].
+//! and the rendered-frame cache. Free of `Window` so transport and events are testable without one.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +17,6 @@ pub enum LottieError {
     Decompress(std::io::Error),
     Json(serde_json::Error),
     Parse(String),
-    /// Uses features the renderer cannot draw at all; [`LottieError::advisories`] has the detail.
     Unsupported(Vec<String>),
 }
 
@@ -58,18 +56,15 @@ pub struct LottieMeta {
     pub out_point: f32,
     pub total_frames: f32,
     pub duration: Duration,
-    /// Intrinsic canvas width in px, the `width` a `<lottie>` gets with no CSS.
     pub width: u32,
     pub height: u32,
     pub telegram_sticker: bool,
 }
 
-/// How playback behaves at the end of the active segment; mirrors lottie-web's `loop` (`true`,
-/// `false` or a number).
+/// How playback behaves at the end of the active segment; mirrors lottie-web's `loop`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LoopMode {
     None,
-    /// `loop: true`: wrap forever; never completes.
     #[default]
     Loop,
     /// `loop: <n>`: wrap `n` times then complete, so the animation plays `n + 1` times, as in lottie-web.
@@ -99,42 +94,31 @@ impl Direction {
     }
 }
 
-/// How a loop boundary is crossed, mirroring `<lottie-player mode>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlayMode {
-    /// `mode="normal"` — jump back to the start of the segment.
     #[default]
     Normal,
-    /// `mode="bounce"` — reverse direction instead of jumping (ping-pong).
     Bounce,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LottieEvent {
-    /// `enterFrame` — the playhead moved this tick.
     EnterFrame {
         frame: f32,
         elapsed: f32,
     },
-    /// `loopComplete` — one pass over the active segment finished and playback
-    /// wrapped (or bounced).
     LoopComplete {
         count: u32,
     },
-    /// `complete` — playback finished and will not resume on its own.
     Complete,
 }
 
-/// The outcome of one [`LottieState::advance`] tick. Flat and `Copy`: the frame pump calls it on
-/// every animating node every frame, so it must not allocate.
+/// The outcome of one [`LottieState::advance`] tick. Flat and `Copy`: it runs for every animating node every frame and must not allocate.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Advance {
-    /// The playhead moved, so the cached frame is stale and the host must
-    /// repaint. Also true on the tick a paused animation completes.
+    /// The playhead moved, so the cached frame is stale and the host must repaint.
     pub needs_repaint: bool,
     pub entered_frame: Option<f32>,
-    /// How many segment passes finished this tick (`loopComplete`). Normally 0
-    /// or 1; larger only if the tick was long enough to lap the segment.
     pub loops_completed: u32,
     pub completed: bool,
     pub loop_count: u32,
@@ -142,15 +126,11 @@ pub struct Advance {
 }
 
 impl Advance {
-    /// The events this tick produced, in lottie-web's firing order:
-    /// `enterFrame`, then `loopComplete`, then `complete`.
     pub fn events(&self) -> impl Iterator<Item = LottieEvent> + '_ {
         let enter = self.entered_frame.map(|frame| LottieEvent::EnterFrame {
             frame,
             elapsed: self.elapsed_frames,
         });
-        // `loops_completed` counts boundaries crossed this tick; report the
-        // running total each one landed on.
         let first_loop = self.loop_count - self.loops_completed;
         let loops = (0..self.loops_completed).map(move |index| LottieEvent::LoopComplete {
             count: first_loop + index + 1,
@@ -161,37 +141,32 @@ impl Advance {
 }
 
 struct CachedFrame {
-    /// `f32::to_bits` of the frame the raster was produced at. Bit equality is
-    /// the right test: a paused playhead does not move at all, so this is exact.
+    /// `f32::to_bits` of the frame the raster was produced at (a paused playhead does not move, so bit equality is exact).
     frame_bits: u32,
     width: u32,
     height: u32,
     image: Arc<RenderImage>,
 }
 
-/// Persistent playback state for one `<lottie>` node; the host keeps one per node in a side map.
 pub struct LottieState {
     renderer: Rasteriser,
     advisories: Vec<String>,
     transport: Transport,
 
     cached: Option<CachedFrame>,
-    /// Held one extra frame before `Window::drop_image`: a texture retired the frame it was last
-    /// painted could still be referenced by the scene being presented.
+    /// Held one extra frame before `Window::drop_image`: the scene being presented may still reference it.
     previous: Option<Arc<RenderImage>>,
     retired: Vec<Arc<RenderImage>>,
 }
 
 impl LottieState {
     /// Parses `bytes` (plain Lottie JSON or a gzipped `.tgs`, sniffed by the `1f 8b` magic) and
-    /// prepares it for rendering. The document goes through [`crate::normalize`] first; what is
-    /// still unrenderable comes back as [`LottieError::Unsupported`] with one advisory per feature.
+    /// prepares it for rendering. What [`crate::normalize`] cannot fix comes back as [`LottieError::Unsupported`].
     pub fn load(bytes: &[u8]) -> Result<Self, LottieError> {
         Self::load_with(Backend::preferred(), bytes)
     }
 
-    /// [`Self::load`] with the rasteriser named. Asking for a backend that was not compiled in is
-    /// an error, not a silent downgrade; check [`Backend::is_available`].
+    /// [`Self::load`] with the rasteriser named; a backend that was not compiled in is an error, not a silent downgrade.
     pub fn load_with(backend: Backend, bytes: &[u8]) -> Result<Self, LottieError> {
         let Prepared {
             renderer,
@@ -222,8 +197,6 @@ impl LottieState {
         self.renderer.backend()
     }
 
-    /// Non-fatal notes about what the compatibility pass had to rewrite, for the
-    /// host's `[vue-native compat]` channel. Empty for a clean file.
     pub fn advisories(&self) -> &[String] {
         &self.advisories
     }
@@ -308,11 +281,9 @@ impl LottieState {
         self.transport.advance(dt)
     }
 
-    /// Rasterises the current frame for a CSS box of `size` logical pixels on a display of `scale`
-    /// device pixels per logical pixel, at physical size (`size * scale`, rounded) so it stays
-    /// crisp. Scaled by `min(width_px / w, height_px / h)`: one texel per physical pixel under
-    /// `contain`. Memoised on `(frame, width_px, height_px)`: a paused animation reuses its raster
-    /// and a resize invalidates it. `None` for a degenerate (zero-area) box.
+    /// Rasterises the current frame for a CSS box of `size` logical pixels on a display of `scale`,
+    /// at physical size, scaled by `min(width_px / w, height_px / h)`. Memoised on `(frame, width_px,
+    /// height_px)`. `None` for a zero-area box.
     pub fn render_frame(&mut self, size: (f32, f32), scale: f32) -> Option<Arc<RenderImage>> {
         let width_px = (size.0 * scale).round().max(0.0) as u32;
         let height_px = (size.1 * scale).round().max(0.0) as u32;
@@ -340,11 +311,9 @@ impl LottieState {
             .renderer
             .render(frame, raster_scale, raster_width, raster_height)?;
 
-        // `RgbaImage` is a byte container here; the bytes are already BGRA, as gpui's atlas uploads.
         let buffer = RgbaImage::from_raw(raster.width, raster.height, raster.bgra)?;
         let image = Arc::new(RenderImage::new(vec![Frame::new(buffer)]).dynamic());
 
-        // Retire the frame before last: the scene that painted it has been presented.
         if let Some(previous) = self.previous.take() {
             if !self
                 .cached
@@ -364,15 +333,13 @@ impl LottieState {
         Some(image)
     }
 
-    /// Rasters no longer painted whose atlas tiles the caller must release with
-    /// `Window::drop_image`. The host must drain this every frame it builds a `<lottie>` element,
-    /// or a 60fps animation leaks one texture per frame.
+    /// Rasters no longer painted whose atlas tiles the caller must release with `Window::drop_image`;
+    /// drain every frame, or a 60fps animation leaks one texture per frame.
     #[must_use = "the atlas tiles leak unless these are passed to Window::drop_image"]
     pub fn take_retired(&mut self) -> Vec<Arc<RenderImage>> {
         std::mem::take(&mut self.retired)
     }
 
-    /// Every raster still held, for teardown; the state is unusable afterwards.
     #[must_use = "the atlas tiles leak unless these are passed to Window::drop_image"]
     pub fn take_all_images(&mut self) -> Vec<Arc<RenderImage>> {
         let mut images = std::mem::take(&mut self.retired);
@@ -383,9 +350,7 @@ impl LottieState {
 }
 
 /// The raster [`LottieState::render_frame`] draws for a box of `size` logical px on a `scale`
-/// display: one texel per device px under `contain`, sized as both backends size it. `None` for a
-/// box with no area. A host that draws elsewhere ([`crate::Animation::render_at`]) asks this for
-/// the same pixels.
+/// display, sized as both backends size it; a host that draws elsewhere asks this for the same pixels.
 pub fn raster_size_for(meta: &LottieMeta, size: (f32, f32), scale: f32) -> Option<(u32, u32)> {
     let width_px = (size.0 * scale).round().max(0.0) as u32;
     let height_px = (size.1 * scale).round().max(0.0) as u32;
@@ -397,8 +362,7 @@ pub fn raster_size_for(meta: &LottieMeta, size: (f32, f32), scale: f32) -> Optio
     Some(backend::raster_size(intrinsic, raster_scale))
 }
 
-/// A loaded document, before any transport: what [`LottieState`] and
-/// [`crate::Animation`] are both built from.
+/// A loaded document, before any transport: what [`LottieState`] and [`crate::Animation`] are built from.
 pub(crate) struct Prepared {
     pub renderer: Rasteriser,
     pub meta: LottieMeta,
@@ -436,8 +400,7 @@ pub(crate) fn prepare(backend: Backend, bytes: &[u8]) -> Result<Prepared, Lottie
 
 /// Reads [`LottieMeta`] straight out of the Bodymovin document, not from a backend: the engines
 /// disagree on the timeline (ThorVG's frame count is 0-based and its duration already divided by
-/// the frame rate) and `meta()` must not depend on which is compiled in. Required fields mirror
-/// `rasterlottie::Animation`'s, so a non-Lottie fails with [`LottieError::Parse`].
+/// the frame rate) and `meta()` must not depend on which is compiled in.
 fn read_meta(document: &Value, telegram_sticker: bool) -> Result<LottieMeta, LottieError> {
     fn number(document: &Value, key: &str) -> Result<f32, LottieError> {
         document
@@ -457,7 +420,6 @@ fn read_meta(document: &Value, telegram_sticker: bool) -> Result<LottieMeta, Lot
     let total_frames = out_point - in_point;
 
     Ok(LottieMeta {
-        // `"v"` is optional in the wild, so it defaults rather than failing the load.
         version: document
             .get("v")
             .and_then(Value::as_str)

@@ -1,37 +1,24 @@
-//! What the macOS panels are told, decided in plain Rust so it is unit-tested
-//! on every OS (mac.rs does only the AppKit calls).
+//! What the macOS panels are told, decided in plain Rust so it is unit-tested on every OS.
 //!
-//! - **Formats.** An `NSSavePanel` has no type list. Its `allowedContentTypes`
-//!   is the filter, and a "Format:" pop-up in the accessory view (Chromium's
-//!   choice on macOS) switches it. The entries are the Windows type list in
-//!   the same order, "All Files" last unless `excludeAcceptAllOption`; the
-//!   first is selected, as `SetFileTypeIndex(1)` selects it.
-//! - **The start folder.** `SetFolder` / `SetDefaultFolder` and the client
-//!   GUID's remembered folder, ported: a forced `startIn` wins, else the
-//!   folder this `id` was last left in, else the default `startIn`.
-//! - **Buttons and colours.** `NSAlertFirstButtonReturn + i` back to button
-//!   `i`, and `NSColor` components to color.rs's `#rrggbb`.
+//! An `NSSavePanel` has no type list: `allowedContentTypes` is the filter and a "Format:" pop-up switches
+//! it, with the Windows type list's entries in order and "All Files" last. The start folder ports
+//! `SetFolder` / `SetDefaultFolder` and the client GUID's remembered folder: a forced `startIn` wins, else
+//! the folder this `id` was last left in, else the default `startIn`.
 
 use std::path::{Path, PathBuf};
 
 use super::{Kind, Known, Native};
 
-/// The pop-up's name for the unrestricted entry. Windows says "All Files
-/// (*.*)"; a Mac has no `*.*`.
 pub const ALL_FILES_MAC: &str = "All Files";
 
-/// One entry of the "Format:" pop-up.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Format {
     pub name: String,
-    /// Lowercase extensions without the dot; `None` allows every file.
     pub exts: Option<Vec<String>>,
 }
 
-/// The pop-up's entries, the selected (first) one first. Empty: no pop-up and
-/// no restriction (a folder pick, or a request with no usable type). One
-/// entry: that restriction, with no pop-up to change it. Names are made
-/// unique (`NSPopUpButton` merges equal titles).
+/// The pop-up's entries, the selected one first. Empty: no pop-up and no restriction; one entry: that
+/// restriction with no pop-up. Names are made unique (`NSPopUpButton` merges equal titles).
 pub fn formats(n: &Native) -> Vec<Format> {
     if n.kind == Kind::Folder || n.filters.is_empty() {
         return Vec::new();
@@ -52,10 +39,7 @@ pub fn formats(n: &Native) -> Vec<Format> {
     out
 }
 
-/// Where the panel opens. `force` is `startIn` given (`SetFolder`);
-/// `remembered` is the folder this picker's `id` was left in last time,
-/// already checked to exist. `None` leaves it to AppKit (the app's last
-/// panel folder).
+/// Where the panel opens. `force` is `startIn` given; `remembered` is the folder this picker's `id` was left in.
 pub fn start_folder(start: Option<PathBuf>, force: bool, remembered: Option<PathBuf>) -> Option<PathBuf> {
     if force && start.is_some() {
         return start;
@@ -63,39 +47,31 @@ pub fn start_folder(start: Option<PathBuf>, force: bool, remembered: Option<Path
     remembered.or(start)
 }
 
-/// The `NSUserDefaults` key that remembers a picker's folder: the client
-/// GUID, so it is per app and per `id` exactly as on Windows.
 pub fn remembered_key(client: u128) -> String {
     format!("VueNativeDialogFolder.{client:032x}")
 }
 
-/// `NSAlertFirstButtonReturn`.
 pub const FIRST_BUTTON: isize = 1000;
 
-/// An `NSAlert` response → the index of the button pressed, in the order the
-/// buttons were added (ask.rs's order). Anything else (`NSModalResponseCancel`
-/// / `Abort` from the owner closing) is a dismissal.
+/// An `NSAlert` response → the index of the button pressed; anything else (the owner closing) is a dismissal.
 pub fn button_of(response: isize, count: usize) -> Option<usize> {
     let i = response.checked_sub(FIRST_BUTTON)?;
     (i >= 0 && (i as usize) < count).then_some(i as usize)
 }
 
-/// `#rrggbb` (already normalised by color.rs) → sRGB components in 0..=1.
 pub fn rgb_of(hex: &str) -> (f64, f64, f64) {
     let n = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0);
     let c = |shift: u32| f64::from((n >> shift) & 0xff) / 255.0;
     (c(16), c(8), c(0))
 }
 
-/// sRGB components → color.rs's `#rrggbb`, clamped (an extended-range
-/// colour from the panel's wide-gamut pickers can fall outside 0..=1).
+/// sRGB components → `#rrggbb`, clamped (wide-gamut pickers can fall outside 0..=1).
 pub fn hex_of(r: f64, g: f64, b: f64) -> String {
     let c = |v: f64| if v.is_nan() { 0 } else { (v.clamp(0.0, 1.0) * 255.0).round() as u8 };
     format!("#{:02x}{:02x}{:02x}", c(r), c(g), c(b))
 }
 
-/// A known folder under the home folder, when `NSFileManager` has none: the
-/// names are fixed on disk (Finder only localises how they are shown).
+/// A known folder under the home folder, when `NSFileManager` has none: the names are fixed on disk.
 pub fn home_folder(home: &Path, k: Known) -> PathBuf {
     home.join(match k {
         Known::Desktop => "Desktop",
@@ -136,10 +112,8 @@ mod tests {
         assert_eq!(f.len(), 2);
         assert_eq!(f[0], Format { name: "Image Files".into(), exts: Some(vec!["png".into(), "jpg".into()]) });
         assert_eq!(f[1], Format { name: ALL_FILES_MAC.into(), exts: None });
-        // excludeAcceptAllOption with one type: restricted, nothing to switch to.
         let f = formats(&native(Kind::Save, &[("CSV", &["csv"])], false));
         assert_eq!(f, vec![Format { name: "CSV".into(), exts: Some(vec!["csv".into()]) }]);
-        // No usable type, or a folder pick: no restriction at all.
         assert!(formats(&native(Kind::Open, &[], true)).is_empty());
         assert!(formats(&native(Kind::Folder, &[("Text", &["txt"])], true)).is_empty());
     }
@@ -155,9 +129,7 @@ mod tests {
     fn the_start_folder_is_set_folder_or_set_default_folder() {
         let start = Some(PathBuf::from("/Users/me/Documents"));
         let remembered = Some(PathBuf::from("/Users/me/Projects"));
-        // startIn given: an instruction, the remembered folder does not matter.
         assert_eq!(start_folder(start.clone(), true, remembered.clone()), start);
-        // A default (downloads): the remembered folder overrides it.
         assert_eq!(start_folder(start.clone(), false, remembered.clone()), remembered);
         assert_eq!(start_folder(start.clone(), false, None), start);
         assert_eq!(start_folder(None, false, None), None);
@@ -170,7 +142,6 @@ mod tests {
         assert_eq!(button_of(1000, 2), Some(0));
         assert_eq!(button_of(1001, 2), Some(1));
         assert_eq!(button_of(1002, 2), None);
-        // NSModalResponseCancel (0), Abort (-1001), Stop (-1000).
         for r in [0, -1001, -1000, 999] {
             assert_eq!(button_of(r, 2), None, "{r}");
         }

@@ -9,10 +9,8 @@
 //!     shell\open\command\(Default) = "\"<exe>\" [--vn-dist \"<slot>\"] --vn-protocol-launch -- \"%1\""
 //! ```
 //!
-//! HKCU only. A scheme that already exists without our marker (in HKCU or HKLM) is another app's and
-//! is never overwritten: registering it is a TypeError naming the owner. Writes are idempotent (which
-//! also heals a registration after the exe moved); each change is followed by
-//! `SHChangeNotify(SHCNE_ASSOCCHANGED)`.
+//! HKCU only. A scheme that already exists without our marker (in HKCU or HKLM) is another app's and is
+//! never overwritten: registering it is a TypeError naming the owner. Writes are idempotent.
 
 use windows::core::{HSTRING, PWSTR};
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR};
@@ -27,14 +25,10 @@ use super::protocol::{command_line, command_targets};
 
 pub const OWNER_VALUE: &str = "VnOwner";
 
-/// Where registrations live; tests point a hive at a scratch subtree of HKCU.
 #[derive(Debug, Clone)]
 pub struct Hive {
-    /// Under HKCU: `Software\Classes`.
     pub classes: String,
-    /// Under HKLM, checked read-only for machine-wide owners. `None` in tests.
     pub machine: Option<String>,
-    /// Broadcast `SHCNE_ASSOCCHANGED` after a write (off in tests).
     pub notify: bool,
 }
 
@@ -47,9 +41,7 @@ impl Hive {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
     Absent,
-    /// Ours (our marker), with the command it currently runs.
     Ours { command: String },
-    /// Somebody else's; `owner` describes them for the error message.
     Foreign { owner: String },
 }
 
@@ -96,7 +88,6 @@ fn create(root: HKEY, path: &str) -> Result<Key, WIN32_ERROR> {
     }
 }
 
-/// A `REG_SZ` value (`""` names the default value), or None.
 fn read_sz(key: &Key, name: &str) -> Option<String> {
     let name = HSTRING::from(name);
     let mut ty = REG_VALUE_TYPE::default();
@@ -160,7 +151,6 @@ pub fn status(hive: &Hive, scheme: &str, id: &str) -> Result<Status, String> {
             if let Some(machine) = &hive.machine {
                 let mpath = format!(r"{machine}\{scheme}");
                 if let Ok(Some(_)) = open(HKEY_LOCAL_MACHINE, &mpath, false) {
-                    // A per-user key would shadow a machine-wide one, taking it over all the same.
                     return Ok(Status::Foreign { owner: "a machine-wide registration (HKLM)".into() });
                 }
             }
@@ -169,8 +159,6 @@ pub fn status(hive: &Hive, scheme: &str, id: &str) -> Result<Status, String> {
     }
 }
 
-/// Registers `<scheme>` for app `id` → `exe`. `Ok(true)` when something was written; `Err` names a
-/// foreign owner or a registry failure.
 pub fn register(hive: &Hive, scheme: &str, id: &str, exe: &str, dev_slot: Option<&str>) -> Result<bool, String> {
     if let Status::Foreign { owner } = status(hive, scheme, id)? {
         return Err(format!("the \"{scheme}\" scheme is registered to {owner}; vue-native never takes over another app's scheme"));
@@ -179,7 +167,6 @@ pub fn register(hive: &Hive, scheme: &str, id: &str, exe: &str, dev_slot: Option
     let fail = |what: &str, e: WIN32_ERROR| format!("writing HKCU\\{path}{what}: {e:?}");
     let root = create(HKEY_CURRENT_USER, &path).map_err(|e| fail("", e))?;
     let mut wrote = false;
-    // The marker first: a half-written key is still recognisably ours.
     wrote |= write_sz(&root, OWNER_VALUE, id).map_err(|e| fail("", e))?;
     wrote |= write_sz(&root, "", &format!("URL:{scheme}")).map_err(|e| fail("", e))?;
     wrote |= write_sz(&root, "URL Protocol", "").map_err(|e| fail("", e))?;
@@ -207,14 +194,10 @@ fn delete(hive: &Hive, scheme: &str) -> bool {
     ok
 }
 
-/// Removes `<scheme>` only when it carries our marker AND runs `exe`, so another copy of the app
-/// keeps its registration.
 pub fn unregister(hive: &Hive, scheme: &str, id: &str, exe: &str) -> bool {
     is_registered(hive, scheme, id, exe) && delete(hive, scheme)
 }
 
-/// `--vn-unregister-protocols`: every key carrying our marker, whichever exe it points at (the
-/// uninstaller's hook). Returns the schemes removed.
 pub fn unregister_all(hive: &Hive, id: &str) -> Vec<String> {
     let Ok(Some(classes)) = open(HKEY_CURRENT_USER, &hive.classes, false) else { return Vec::new() };
     let mut ours = Vec::new();
@@ -231,7 +214,6 @@ pub fn unregister_all(hive: &Hive, id: &str) -> Vec<String> {
             continue;
         }
         let sub = String::from_utf16_lossy(&name[..len as usize]);
-        // File extensions and CLSIDs are not schemes.
         if sub.starts_with('.') || sub.starts_with('{') {
             continue;
         }
@@ -245,12 +227,9 @@ pub fn unregister_all(hive: &Hive, id: &str) -> Vec<String> {
     ours.into_iter().filter(|s| delete(hive, s)).collect()
 }
 
-/// Under MSIX package identity HKCU\Classes writes are virtualised and register nothing; protocols
-/// belong in the AppxManifest.
+/// Under MSIX package identity HKCU\Classes writes are virtualised and register nothing.
 pub fn has_package_identity() -> bool {
     let mut len = 0u32;
-    // APPMODEL_ERROR_NO_PACKAGE (15700) = no identity; ERROR_INSUFFICIENT_BUFFER
-    // (122) = there is one and we did not pass a buffer.
     let r = unsafe { GetCurrentPackageFullName(&mut len, None) };
     r.0 == 122
 }
@@ -259,7 +238,6 @@ pub fn has_package_identity() -> bool {
 mod tests {
     use super::*;
 
-    /// A scratch hive under HKCU, deleted on drop.
     struct Scratch(Hive, String);
     impl Scratch {
         fn new(tag: &str) -> Scratch {
@@ -304,7 +282,6 @@ mod tests {
             Ok(Status::Ours { command: command_line(EXE, None) })
         );
         assert!(is_registered(&s.0, "vntest", "gl.argon.notes", EXE));
-        // The exe moved: re-registering heals the command (and only it).
         let moved = r"D:\Notes\Notes.exe";
         assert!(!is_registered(&s.0, "vntest", "gl.argon.notes", moved));
         assert_eq!(register(&s.0, "vntest", "gl.argon.notes", moved, Some(r"C:\slot")), Ok(true));
@@ -314,7 +291,6 @@ mod tests {
     #[test]
     fn a_foreign_scheme_is_never_overwritten() {
         let s = Scratch::new("foreign");
-        // Another app's key: no marker.
         let k = create(HKEY_CURRENT_USER, &format!(r"{}\other", s.0.classes)).unwrap();
         write_sz(&k, "", "URL:Other App Protocol").unwrap();
         drop(k);
@@ -322,7 +298,6 @@ mod tests {
         assert!(e.contains("Other App Protocol"), "{e}");
         assert!(!unregister(&s.0, "other", "gl.argon.notes", EXE), "and never deleted");
         assert!(open(HKEY_CURRENT_USER, &format!(r"{}\other", s.0.classes), false).unwrap().is_some());
-        // Another vue-native app's key: its marker, named.
         register(&s.0, "theirs", "gl.argon.other", EXE, None).unwrap();
         let e = register(&s.0, "theirs", "gl.argon.notes", EXE, None).unwrap_err();
         assert!(e.contains("gl.argon.other"), "{e}");

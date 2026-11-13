@@ -1,31 +1,19 @@
-// Makes a production bundle pure ASCII, so JavaScriptCore holds its source as 8-bit.
+// Makes a production bundle pure ASCII, so JavaScriptCore holds its source as 8-bit: one non-ASCII
+// character makes WTF keep the whole source as UTF-16 for the life of the process, and Bun's bundler
+// has no ASCII-only output. This pass rewrites the finished bundle, turning each non-ASCII character
+// into the escape its context reads as the same thing (`\uXXXX` in strings, templates, regexes,
+// comments; `\u{…}` for astral identifiers; LS / PS outside a literal become line feeds).
 //
-// WTF keeps a string 8-bit only when every character is ASCII; one other character makes the whole source
-// UTF-16, and JSC keeps the source for the life of the process (functions compile lazily from it). Bun's
-// bundler has no ASCII-only output, so this pass rewrites the finished bundle, turning each non-ASCII
-// character into the escape its context reads as the same thing:
-//
-//   string, template     `\uXXXX`, and a surrogate pair for an astral one
-//   regular expression   the same
-//   identifier           `\uXXXX`, or `\u{…}` for an astral one
-//   comment              escaped too
-//   whitespace           LS / PS outside a literal become line feeds; other Unicode spaces become ` `
-//
-// A `\` before the character goes with it; a `\` before LS / PS in a string is a line continuation, so the
-// pair is dropped. In a TAGGED template the tag reads `strings.raw`, so those characters are left as they
-// are (the bundle stays UTF-16) and the result counts them.
-//
-// The pass is a lexer that must guess whether a `/` divides or starts a regex; if it ends in an impossible
-// state (open string, template or bracket) the bundle is returned unchanged. prod.ts also checks the result
-// with Bun's parser (`checkAscii`).
+// A `\` before the character goes with it; a `\` before LS / PS in a string is a line continuation,
+// so the pair is dropped. In a TAGGED template the tag reads `strings.raw`, so those characters are
+// left (the result counts them). The lexer must guess whether a `/` divides or starts a regex; if it
+// ends in an impossible state the bundle is returned unchanged. prod.ts also checks the result with
+// Bun's parser (`checkAscii`).
 
 export interface AsciiResult {
-  /** The bundle, ASCII-only unless `kept` > 0 (or the pass gave up). */
   code: string;
   escaped: number;
-  /** Non-ASCII characters left in place, in tagged templates. */
   kept: number;
-  /** Set when the pass gave up and `code` is the input unchanged. */
   failed?: string;
 }
 
@@ -34,27 +22,22 @@ const PS = 0x2029;
 
 const hex4 = (u: number) => "\\u" + u.toString(16).toUpperCase().padStart(4, "0");
 
-/** `\uXXXX`, or a surrogate pair of them: one escape that a string, a
- * template and a regular expression (with or without `u`) all read as `cp`. */
+/** `\uXXXX`, or a surrogate pair: one escape that a string, template and regular expression all read as `cp`. */
 function escapeUnits(cp: number): string {
   if (cp <= 0xffff) return hex4(cp);
   const v = cp - 0x10000;
   return hex4(0xd800 + (v >> 10)) + hex4(0xdc00 + (v & 0x3ff));
 }
 
-/** An identifier takes `\uXXXX`, and only `\u{…}` for an astral character. */
 function escapeIdent(cp: number): string {
   return cp <= 0xffff ? hex4(cp) : "\\u{" + cp.toString(16).toUpperCase() + "}";
 }
 
-/** Keywords after which a `/` starts a regular expression. Not `of`: it is
- * a keyword only inside `for (… of …)`, and a minifier may name a variable
- * `of`. */
+/** Keywords after which a `/` starts a regular expression. Not `of`: a minifier may name a variable `of`. */
 const BEFORE_EXPRESSION = new Set([
   "return", "typeof", "instanceof", "in", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await",
   "extends",
 ]);
-/** `if (…) /re/.test(x)`: a `/` after these keywords' `)` starts a regex. */
 const PAREN_STATEMENT = new Set(["if", "while", "for", "with"]);
 
 const isIdentPart = (c: number) =>
@@ -79,16 +62,11 @@ export function asciiOnly(src: string): AsciiResult {
     return [cp, cp > 0xffff ? 2 : 1];
   };
 
-  // Whether a `/` here would start a regular expression.
   let regexOk = true;
-  // One entry per open `(`: did a statement keyword (`if`, `for`…) open it?
   const parens: boolean[] = [];
-  // One entry per open `{`: "block", "expr" (object literal and the like),
-  // or "tpl" (a template's `${`), whose `}` resumes the template.
   const braces: ("block" | "expr" | "tpl")[] = [];
   const templates: boolean[] = []; // tagged? per open `${`
   let lastWord = "";
-  // What the last significant token was, for `{` and templates.
   let last: "word" | "value" | "punct" = "punct";
   let lastPunct = "";
 
@@ -168,7 +146,6 @@ export function asciiOnly(src: string): AsciiResult {
         const d = src.charCodeAt(k);
         if (d > 0x7f) {
           const [cp, len] = cpAt(k);
-          // A line terminator inside a block comment still counts for ASI.
           put(k, k + len, cp === LS || cp === PS ? "\n" : escapeUnits(cp));
           k += len;
         } else k++;
@@ -198,7 +175,6 @@ export function asciiOnly(src: string): AsciiResult {
       continue;
     }
 
-    // Templates: tagged when they follow something that can be called.
     if (c === 96) {
       const tagged = last === "word" ? !BEFORE_EXPRESSION.has(lastWord) : last === "value";
       i++;
@@ -259,8 +235,6 @@ export function asciiOnly(src: string): AsciiResult {
       continue;
     }
     if (c === 123) {
-      // A block after `)` / `=>` / `;` / `{` / `}` / `else` / `do` / `try`… and at the
-      // start; an expression (object literal) after an operator or `return`.
       const block =
         last === "word"
           ? !BEFORE_EXPRESSION.has(lastWord) || lastWord === "else" || lastWord === "do"
@@ -333,7 +307,6 @@ export function asciiOnly(src: string): AsciiResult {
         else break;
       }
       const word = src.slice(start, i);
-      // `1.5`, `.5e-3`: a number's `.` and exponent sign are part of it.
       if (c >= 48 && c <= 57) {
         while (i < n) {
           const d = src.charCodeAt(i);
@@ -345,8 +318,7 @@ export function asciiOnly(src: string): AsciiResult {
         regexOk = false;
         continue;
       }
-      // After a `.` it is a property name, never a keyword: `Symbol.for(x)`,
-      // `map.delete(k)`, `it.return()`.
+      // After a `.` it is a property name, never a keyword: `Symbol.for(x)`, `it.return()`.
       const property = last === "punct" && lastPunct === ".";
       lastWord = property ? "" : word;
       last = "word";
@@ -362,8 +334,6 @@ export function asciiOnly(src: string): AsciiResult {
       continue;
     }
 
-    // `++` / `--` keep whatever came before (postfix after a value, prefix
-    // before one).
     if ((c === 43 || c === 45) && src.charCodeAt(i + 1) === c) {
       i += 2;
       continue;
@@ -385,9 +355,9 @@ export function asciiOnly(src: string): AsciiResult {
 }
 
 /**
- * Checks an escaped bundle against the original with Bun's parser: `null` when both are the same program,
- * otherwise why not. Bun prints strings, untagged templates and identifiers from their value; regexes and
- * tagged templates as written, so those are compared after both prints go through [`asciiOnly`].
+ * Checks an escaped bundle against the original with Bun's parser: `null` when both are the same
+ * program, otherwise why not. Regexes and tagged templates print as written, so those are compared
+ * after both prints go through [`asciiOnly`].
  */
 export function checkAscii(before: string, after: string): string | null {
   try {
@@ -408,7 +378,6 @@ export function checkAscii(before: string, after: string): string | null {
   return `the escaped bundle reads differently near ${JSON.stringify(na.code.slice(Math.max(0, at - 40), at + 40))}`;
 }
 
-/** How many characters of `s` are outside ASCII. */
 export function nonAsciiCount(s: string): number {
   let count = 0;
   for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) > 0x7f) count++;

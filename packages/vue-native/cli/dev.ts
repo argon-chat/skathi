@@ -1,13 +1,7 @@
-// `vn dev [appDir]` — the in-repo dev loop for one app, as one command.
-//
-// It is the two things a developer already runs by hand, wired together:
-//
-//   bun build.ts <entry> <appRoot>/dist/.vn-dev --watch      (HMR producer)
-//   VN_DIST=… VN_APP_ROOT=… target/…/debug/vn-app.exe        (the dev host)
-//
-// The dev host's compiled-in `DEV_DIST` path points into this checkout, and `build.ts` names every module
-// by its path relative to the checkout (`toId`), so the app has to live inside it. `vn build` has no such
-// limit: `prod.ts` emits one bundle.
+// `vn dev [appDir]`: the in-repo dev loop for one app, as one command: `bun build.ts <entry>
+// <appRoot>/dist/.vn-dev --watch` (HMR producer) plus the dev host (`VN_DIST=… VN_APP_ROOT=…
+// target/…/debug/vn-app.exe`). The host's compiled-in `DEV_DIST` points into this checkout and
+// `build.ts` names modules relative to it, so the app has to live inside it (`vn build` has no such limit).
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -39,7 +33,6 @@ export async function dev(target: string, options: { exe?: string } = {}): Promi
   const watcher = spawn(process.execPath, [join(PKG_DIR, "build.ts"), config.entry, dist, "--watch"], {
     cwd: PKG_DIR,
     stdio: "inherit",
-    // The watcher, too, dies with this process however it ends (build.ts).
     env: { ...process.env, VN_OWNER_PID: String(process.pid) },
   });
   const deadline = Date.now() + 120_000;

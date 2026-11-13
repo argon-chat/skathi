@@ -1,5 +1,4 @@
-//! The one argv parser: everything that reads this process's command line uses it, never
-//! `std::env::args()`.
+//! The one argv parser: everything that reads this process's command line uses it, never `std::env::args()`.
 //!
 //! ```text
 //!   <exe> [host flags…] [--] [app args…]
@@ -13,19 +12,13 @@
 
 use std::sync::OnceLock;
 
-/// The marker the protocol registration writes in front of the URL.
 pub const PROTOCOL_LAUNCH: &str = "--vn-protocol-launch";
 
-/// The host flags, as this process was given them.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct HostFlags {
-    /// `--devtools`: this process IS the embedded inspector.
     pub devtools: bool,
-    /// `--target <slot>` (inspector): the slot of the app under inspection.
     pub target: Option<String>,
-    /// `--window <id>` (inspector): the gpui window F12 was pressed in.
     pub window: Option<String>,
-    /// `--parent <pid>` (inspector): the pid to die with.
     pub parent: Option<String>,
     /// `--vn-dist <slot>`: the dev dist slot; a browser-started process has no `VN_DIST`.
     pub vn_dist: Option<String>,
@@ -35,26 +28,17 @@ pub struct HostFlags {
     pub host_info: bool,
 }
 
-/// This process's command line, parsed once.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Args {
-    /// argv[0], as given.
     pub exe: String,
     pub host: HostFlags,
-    /// Started by a protocol registration (`--vn-protocol-launch`).
     pub protocol_launch: bool,
-    /// The deep link of a protocol launch, byte-exact. `None` otherwise.
     pub url: Option<String>,
-    /// Everything after the host-flag run (and after an explicit `--`). Empty in protocol mode.
     pub app_args: Vec<String>,
-    /// `appLaunch.argv`: argv as given, exe first, minus the `--vn-*` internals; `[exe, url]` in
-    /// protocol mode.
     pub argv: Vec<String>,
-    /// Host flags present but not honoured because this is a protocol launch.
     pub ignored: Vec<String>,
 }
 
-/// Flags that take a value, unless the next argument starts with `--`.
 const VALUE_FLAGS: &[&str] = &["--target", "--window", "--parent", "--vn-dist"];
 const BARE_FLAGS: &[&str] = &["--devtools", "--vn-unregister-protocols", "--vn-host-info"];
 
@@ -62,8 +46,7 @@ fn is_host_flag(a: &str) -> bool {
     VALUE_FLAGS.contains(&a) || BARE_FLAGS.contains(&a) || a == PROTOCOL_LAUNCH
 }
 
-/// Parses `argv` (argv[0] included). `raw` is the unsplit command line, used only to recover a
-/// protocol URL; without it the URL is the remaining arguments joined by spaces (lossy).
+/// Parses `argv` (argv[0] included). `raw` is the unsplit command line, used only to recover a protocol URL.
 pub fn parse(argv: &[String], raw: Option<&str>) -> Args {
     let mut out = Args { exe: argv.first().cloned().unwrap_or_default(), ..Args::default() };
     let mut seen: Vec<(String, Option<String>)> = Vec::new();
@@ -125,7 +108,6 @@ pub fn parse(argv: &[String], raw: Option<&str>) -> Args {
     }
     out.app_args = argv.get(i..).map(<[String]>::to_vec).unwrap_or_default();
 
-    // A dev slot path is not an argument the app was launched with.
     let mut j = 1;
     out.argv.push(out.exe.clone());
     while j < argv.len() {
@@ -143,7 +125,6 @@ pub fn parse(argv: &[String], raw: Option<&str>) -> Args {
     out
 }
 
-/// Fallback protocol URL: the arguments after the marker, re-joined (lossy).
 fn url_from_argv(argv: &[String], marker: usize) -> Option<String> {
     let mut k = marker + 1;
     if argv.get(k).map(String::as_str) == Some("--") {
@@ -156,8 +137,6 @@ fn url_from_argv(argv: &[String], marker: usize) -> Option<String> {
     Some(rest.join(" "))
 }
 
-/// The protocol URL out of the raw command line, byte-exact. `marker` is the index of
-/// `--vn-protocol-launch` in the C-runtime split; `None` if the two tokenisations disagree.
 fn url_from_raw(raw: &str, marker: usize) -> Option<String> {
     let tokens = split_command_line(raw);
     if tokens.get(marker).map(|t| t.text.as_str()) != Some(PROTOCOL_LAUNCH) {
@@ -172,7 +151,6 @@ fn url_from_raw(raw: &str, marker: usize) -> Option<String> {
     Some(strip_one_quote_pair(rest).to_string())
 }
 
-/// `"x"` → `x`; anything else unchanged. One pair only.
 fn strip_one_quote_pair(s: &str) -> &str {
     if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
         &s[1..s.len() - 1]
@@ -181,15 +159,13 @@ fn strip_one_quote_pair(s: &str) -> &str {
     }
 }
 
-/// One argument of a raw command line, and the byte offset it started at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
     pub text: String,
     pub start: usize,
 }
 
-/// Splits a Windows command line exactly as the C runtime does, keeping each argument's byte
-/// offset. argv[0] is special: a quoted one runs to the next `"` with no escapes.
+/// Splits a Windows command line exactly as the C runtime does, keeping each argument's byte offset.
 pub fn split_command_line(raw: &str) -> Vec<Token> {
     let b = raw.as_bytes();
     let mut out = Vec::new();
@@ -271,7 +247,6 @@ pub fn split_command_line(raw: &str) -> Vec<Token> {
     out
 }
 
-/// Quotes one argument so [`split_command_line`] reads it back unchanged.
 pub fn quote_arg(arg: &str) -> String {
     if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
         return arg.to_string();
@@ -279,7 +254,6 @@ pub fn quote_arg(arg: &str) -> String {
     quote_always(arg)
 }
 
-/// [`quote_arg`], but always wrapped in quotes.
 pub fn quote_always(arg: &str) -> String {
     let mut out = String::with_capacity(arg.len() + 2);
     out.push('"');
@@ -299,7 +273,6 @@ pub fn quote_always(arg: &str) -> String {
             }
         }
     }
-    // A trailing run of backslashes would escape the closing quote.
     out.extend(std::iter::repeat_n('\\', backslashes * 2));
     out.push('"');
     out
@@ -307,15 +280,12 @@ pub fn quote_always(arg: &str) -> String {
 
 static ARGS: OnceLock<Args> = OnceLock::new();
 
-/// Arguments of an embedded vue-native: the command line belongs to the embedder, so none of it
-/// is a host flag. Call before the first [`process`]; `false` if that already ran.
 pub fn set_embedded(exe: String, app_args: Vec<String>) -> bool {
     let mut argv = vec![exe.clone()];
     argv.extend(app_args.iter().cloned());
     ARGS.set(Args { exe, app_args, argv, ..Args::default() }).is_ok()
 }
 
-/// This process's command line, parsed once.
 pub fn process() -> &'static Args {
     ARGS.get_or_init(|| {
         let argv: Vec<String> =
@@ -324,7 +294,6 @@ pub fn process() -> &'static Args {
     })
 }
 
-/// `GetCommandLineW` as UTF-8.
 #[cfg(windows)]
 pub fn raw_command_line() -> Option<String> {
     #[link(name = "kernel32")]
@@ -359,7 +328,6 @@ mod tests {
         args.iter().map(|s| s.to_string()).collect()
     }
 
-    /// The C runtime's split of `raw`, plus `raw` itself: both inputs `parse` sees.
     fn both(raw: &str) -> Args {
         let argv: Vec<String> = split_command_line(raw).into_iter().map(|t| t.text).collect();
         parse(&argv, Some(raw))

@@ -1,12 +1,6 @@
-//! Platform backends for `navigator.permissions` (the `PermissionHost` trait lives in redjs)
-//! and the `__vn_permissions_*` host fns behind vue-native's `appPermissions`.
-//!
-//! `appPermissions.request(name)` is an extension because the web has no standalone request;
-//! it also exposes a fourth state, `unsupported`.
-//!
-//! Windows: an unpackaged win32 process is gated by pre-answered privacy toggles in the consent
-//! store, so [`win`] reads them, never returns `Prompt`, and `request()` opens the `ms-settings:`
-//! page and waits for the store to change.
+//! Platform backends for `navigator.permissions` and the `__vn_permissions_*` host fns behind
+//! vue-native's `appPermissions`. `appPermissions.request(name)` is an extension (the web has no
+//! standalone request) and adds a fourth state, `unsupported`.
 
 use std::ffi::c_void;
 
@@ -33,28 +27,24 @@ mod tcc;
 pub use consent::{set_app_name, set_asker, set_camera_capture, Asker, Question};
 pub use vn_runtime::redjs::webapi::permissions::{Capability as Cap, PermissionState as State};
 
-/// Settled requests delivered per frame; the rest wait for a later one.
 const DRAIN_CAP: usize = 16;
 
 thread_local! {
     static DISPATCHER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// The backend for this build: the platform's, with the app's own microphone prompt on top
-/// ([`consent`]).
+/// The backend for this build: the platform's, with the app's own prompt on top ([`consent`]).
 fn backend() -> &'static consent::AppConsent {
     static C: std::sync::OnceLock<consent::AppConsent> = std::sync::OnceLock::new();
     C.get_or_init(|| consent::AppConsent::new(platform(), consent::Hooks::process()))
 }
 
-/// `permissions.json` in the app's storage folder, where its answers to the prompt are kept.
-/// `None`, or never called: for this run only.
+/// `permissions.json` in the app's storage folder, where its answers are kept; `None`: this run only.
 pub fn set_decisions_file(path: Option<std::path::PathBuf>) {
     backend().set_decisions_file(path);
 }
 
-/// Forgets the stored answer for `name`, or for every capability with a prompt when `None`, so
-/// the next `getUserMedia` asks again. Returns the names forgotten.
+/// Forgets the stored answer for `name` (or every prompting capability when `None`); returns the names forgotten.
 pub fn reset(name: Option<&str>) -> Result<Vec<&'static str>, String> {
     let cap = match name {
         None => None,
@@ -68,7 +58,6 @@ pub fn reset(name: Option<&str>) -> Result<Vec<&'static str>, String> {
     Ok(backend().reset(cap).into_iter().map(Capability::web_name).collect())
 }
 
-/// Every capability's four-state status, the stored answers and their file, as JSON.
 pub fn describe_json() -> String {
     let b = backend();
     let mut s = String::from("{\"states\":[");
@@ -95,8 +84,7 @@ pub fn describe_json() -> String {
     s
 }
 
-/// Where the user re-enables a capability the platform refused, for the refusal message; `None`
-/// where there is no such page. macOS screen recording also needs a relaunch (TCC prompts once).
+/// Where the user re-enables a capability the platform refused; macOS screen recording also needs a relaunch.
 pub fn refusal_hint(cap: Capability) -> Option<String> {
     #[cfg(target_os = "macos")]
     match cap {
@@ -141,14 +129,11 @@ fn windows_hint(page: &str, device: &str, uri: &str) -> String {
     )
 }
 
-/// The DOMException `(name, message)` for a refused `display-capture`.
 pub fn display_capture_refusal() -> (&'static str, String) {
     capture_refusal(Capability::DisplayCapture)
 }
 
-/// The DOMException `(name, message)` for a denied capture of `cap`: Chrome's "Permission denied
-/// by system" plus the [`refusal_hint`] when the platform refused, "Permission denied" when the
-/// user blocked it in this app's prompt.
+/// The DOMException `(name, message)` for a denied capture of `cap`.
 pub fn capture_refusal(cap: Capability) -> (&'static str, String) {
     refusal_by(api::host(), cap)
 }
@@ -173,8 +158,7 @@ pub fn status(cap: Capability) -> PermissionState {
     state_of(cap)
 }
 
-/// Blocks a worker thread (never the VM's) until `display-capture` is decided, asking if nobody
-/// has. Without a host nothing is refused.
+/// Blocks a worker thread (never the VM's) until `display-capture` is decided, asking if nobody has.
 pub fn require_display_capture() -> Result<(), (&'static str, String)> {
     let Some(host) = api::host() else {
         return Ok(());
@@ -186,15 +170,12 @@ pub fn require_display_capture() -> Result<(), (&'static str, String)> {
     }
 }
 
-/// Whether a request about `cap` is still waiting for its answer; a `prompt` with nothing in
-/// flight was dismissed.
+/// Whether a request about `cap` is still waiting; a `prompt` with nothing in flight was dismissed.
 pub fn in_flight(cap: Capability) -> bool {
     backend().in_flight(cap)
 }
 
-/// Blocks a worker thread until a request already made about `cap` is
-/// decided: its state once no longer `prompt`, or `prompt` when it was
-/// dismissed, `timeout` passed or `cancelled` says so.
+/// Blocks a worker thread until a request already made about `cap` is decided.
 pub fn wait_for_decision(
     cap: Capability,
     timeout: std::time::Duration,
@@ -206,8 +187,7 @@ pub fn wait_for_decision(
     wait(host, cap, std::time::Instant::now() + timeout, &in_flight, cancelled)
 }
 
-/// `cap`'s state once it is no longer `prompt`, requesting it first if it is; `prompt` when the
-/// request was dismissed or `timeout` passes.
+/// `cap`'s state once no longer `prompt`, requesting it first; `prompt` if dismissed or `timeout` passes.
 fn await_decision(
     host: &dyn PermissionHost,
     cap: Capability,
@@ -232,8 +212,7 @@ fn wait(
     cancelled: &dyn Fn() -> bool,
 ) -> PermissionState {
     loop {
-        // In flight read first: an answer settles its waiters after it is
-        // stored, so a request seen finished has its state readable.
+        // Read in-flight first: an answer settles its waiters after it is stored.
         let waiting = in_flight(cap);
         match host.status(cap) {
             PermissionState::Prompt if waiting && !cancelled() && std::time::Instant::now() < deadline => {
@@ -282,16 +261,12 @@ host_fn!(fn vn_permissions_platform(_g, _args) {
     JsRuntime::with(|rt| rt.ctx().string(name).0)
 });
 
-// `__vn_permissions_query(name) -> string`: the four-state answer, or `""` for an unknown name
-// (`navigator.permissions.query` already delivers the TypeError).
 host_fn!(fn vn_permissions_query(g, args) {
     let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     let state = Capability::from_web_name(&name).map(state_of).map(PermissionState::as_str).unwrap_or("");
     JsRuntime::with(|rt| rt.ctx().string(state).0)
 });
 
-// `__vn_permissions_list() -> json`: the whole table in one call. `deniedBySystem` tells a
-// platform denial (settings is the way back) from the user's Block in this app's prompt.
 host_fn!(fn vn_permissions_list(_g, _args) {
     let mut s = String::from("[");
     for (i, cap) in Capability::ALL.iter().copied().enumerate() {
@@ -312,15 +287,12 @@ host_fn!(fn vn_permissions_list(_g, _args) {
     JsRuntime::with(|rt| rt.ctx().string(&s).0)
 });
 
-// `__vn_permissions_request(name) -> json`: `{"state":..}` settled now, `{"token":n}` settled
-// later through the dispatcher, `{"error":..}` for an unknown name.
 host_fn!(fn vn_permissions_request(g, args) {
     let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     let json = request_json(&name, api::host());
     JsRuntime::with(|rt| rt.ctx().string(&json).0)
 });
 
-/// The name is the page's own string: escaped into the error, never spliced.
 fn request_json(name: &str, host: Option<&dyn PermissionHost>) -> String {
     match Capability::from_web_name(name) {
         None => format!("{{\"error\":{}}}", json_string(&format!("{name} is not a permission name"))),
@@ -343,14 +315,12 @@ host_fn!(fn vn_permissions_hint(g, args) {
 host_fn!(fn vn_permissions_set_dispatcher(g, args) {
     let f = args.arg(0);
     unsafe { vn_runtime::redjs::ffi::redjs_protect(g, f.0) };
-    // A reload sets its own dispatcher; release the old one.
     if let Some(old) = replace_dispatcher(f.0) {
         unsafe { vn_runtime::redjs::ffi::redjs_unprotect(g, old) };
     }
     Value::undefined().0
 });
 
-/// Installs `new`; returns the previous dispatcher, if another value, for unprotecting.
 fn replace_dispatcher(new: u64) -> Option<u64> {
     let old = DISPATCHER.with(|d| d.replace(new));
     (old != 0 && old != new).then_some(old)
@@ -360,12 +330,10 @@ fn state_of(cap: Capability) -> PermissionState {
     api::host().map(|h| h.status(cap)).unwrap_or(PermissionState::Unsupported)
 }
 
-/// Whether `request()` would do anything: false when granted or unsupported.
 fn can_request_state(state: PermissionState) -> bool {
     !matches!(state, PermissionState::Granted | PermissionState::Unsupported)
 }
 
-/// Installs the platform backend into redjs and registers the extension host fns.
 pub fn install(rt: &JsRuntime) {
     let host: &'static dyn PermissionHost = backend();
     api::set_host(host);
@@ -383,9 +351,6 @@ pub fn install(rt: &JsRuntime) {
 }
 
 /// Settles finished requests into JS, inside the frame's Commit publication.
-///
-/// `PermissionStatus` change events are dispatched by redjs's own pump; this drains a different
-/// queue.
 pub fn pump() {
     let dispatcher = DISPATCHER.with(|d| d.get());
     if dispatcher == 0 {
@@ -394,8 +359,7 @@ pub fn pump() {
     if api::host().is_none() {
         return;
     }
-    // Not the host's `drain_settled`: that queue also carries the requests
-    // `getUserMedia` made, which redjs settles itself.
+    // Not the host's `drain_settled`: that queue also carries requests redjs settles itself.
     let settled = api::take_settled_up_to(DRAIN_CAP);
     if settled.is_empty() {
         return;
@@ -412,7 +376,6 @@ pub fn pump() {
                 eprintln!("[permissions dispatch] {}\n{}", err.header, err.stack);
             }
         }
-        // The awaiting `.then()` lands in this same Commit publication.
         rt.ctx().drain_microtasks();
     });
 }
@@ -428,7 +391,6 @@ mod tests {
         for cap in Capability::ALL.iter().copied() {
             assert_eq!(h.status(cap), PermissionState::Unsupported, "{cap:?}");
         }
-        // It must not claim a change subscription it lacks.
         assert!(h.drain_changes().is_none());
     }
 
@@ -484,8 +446,7 @@ mod tests {
 
     #[test]
     fn a_state_change_queues_exactly_one_change_and_only_when_it_really_changed() {
-        // Re-setting the same state is not an event, or Windows would emit one `change` per
-        // microphone use by any app.
+        // Re-setting the same state is not an event, or Windows would emit one `change` per microphone use.
         let h = StubHost::scripted("test", &[(Capability::Microphone, PermissionState::Granted)]);
         assert_eq!(h.drain_changes(), Some(vec![]));
         h.set(Capability::Microphone, PermissionState::Granted);
@@ -503,7 +464,6 @@ mod tests {
         let h = StubHost::scripted("test", &[(cap, PermissionState::Prompt)]).granting(PermissionState::Denied);
         assert_eq!(await_decision(&h, cap, Duration::from_secs(5), &pending), PermissionState::Denied);
         assert_eq!(h.drain_settled().len(), 1, "asked exactly once");
-        // Already decided: read, not asked again (a refused request would reopen System Settings).
         assert_eq!(await_decision(&h, cap, Duration::from_secs(5), &pending), PermissionState::Denied);
         assert!(h.drain_settled().is_empty());
         let h = StubHost::scripted("test", &[(cap, PermissionState::Granted)]);
@@ -518,7 +478,6 @@ mod tests {
             fn request(&self, _: Capability) -> RequestOutcome { RequestOutcome::Pending(1) }
         }
         assert_eq!(await_decision(&Stuck, cap, Duration::from_millis(60), &pending), PermissionState::Prompt, "bounded");
-        // Dismissed: `prompt` with nothing in flight answers now, not after the timeout.
         let t = std::time::Instant::now();
         assert_eq!(await_decision(&Stuck, cap, Duration::from_secs(60), &|_| false), PermissionState::Prompt);
         assert!(t.elapsed() < Duration::from_secs(5), "a dismissal does not wait out the timeout");
@@ -576,7 +535,6 @@ mod tests {
     fn a_refusal_is_the_systems_with_its_hint_or_the_users_without() {
         assert_eq!(refusal_message(true, Some("Turn it on.".into())), "Permission denied by system. Turn it on.");
         assert_eq!(refusal_message(true, None), "Permission denied by system");
-        // The user's Block: Chrome's words, and no settings page to send them to.
         assert_eq!(refusal_message(false, Some("Turn it on.".into())), "Permission denied");
     }
 
@@ -594,8 +552,7 @@ mod tests {
 
     #[test]
     fn a_new_dispatcher_lets_the_old_one_go() {
-        // A reload sets a second dispatcher: the first must be unprotected,
-        // and setting the same one again must not unprotect it.
+        // A reload sets a second dispatcher: the first must be unprotected, the same one must not be.
         assert_eq!(replace_dispatcher(11), None);
         assert_eq!(replace_dispatcher(11), None, "the same function is kept");
         assert_eq!(replace_dispatcher(12), Some(11));

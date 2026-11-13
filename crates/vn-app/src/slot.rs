@@ -25,9 +25,6 @@ const DEV_DIST: &str = concat!(
 
 /// This process's slot directory. `VN_DIST` wins everywhere: it points one exe at another app's
 /// build output and keeps every parallel host (the e2e slot pool, the inspector itself) addressable.
-///
-/// `prod` + `no-devtools` has no caller; the function stays rather than being `cfg`'d away, as it
-/// is the definition of "this process's slot".
 #[cfg_attr(all(feature = "prod", not(vn_devtools)), allow(dead_code))]
 pub fn dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("VN_DIST").filter(|v| !v.is_empty()) {
@@ -43,20 +40,16 @@ pub fn dir() -> PathBuf {
     }
 }
 
-/// A file inside this process's slot.
 #[cfg_attr(all(feature = "prod", not(vn_devtools)), allow(dead_code))]
 pub fn path(rel: &str) -> PathBuf {
     dir().join(rel)
 }
 
-/// `%TEMP%\vue-native\apps` — every packaged app's slots, one folder per app
-/// name. Devtools discovery (`targets`, `vn-devtools ctl --app`) scans it.
 #[cfg_attr(not(vn_devtools), allow(dead_code))]
 pub fn apps_root() -> PathBuf {
     std::env::temp_dir().join("vue-native").join("apps")
 }
 
-/// Made once, on first ask: created, and its dead siblings pruned.
 #[cfg(feature = "prod")]
 #[cfg_attr(not(vn_devtools), allow(dead_code))]
 fn prod_dir() -> &'static PathBuf {
@@ -73,8 +66,6 @@ fn prod_dir() -> &'static PathBuf {
     })
 }
 
-/// Deletes the sibling slot directories of processes that are no longer running.
-///
 /// A crashed host leaves its slot behind, which is a discovery problem: later scans
 /// (`targets_json`) would list dead instances. Pruning on the way in is the one moment we may touch
 /// that directory. "No longer running":
@@ -84,8 +75,6 @@ fn prod_dir() -> &'static PathBuf {
 /// * a slot with no handshake and a pid for a name (`apps\<name>\<pid>`, or an inspector's
 ///   `devtools\<parent pid>` before its child has published) is answered by the pid, which a live
 ///   process keeps even with devtools turned off.
-///
-/// Anything else is left alone.
 #[cfg_attr(not(vn_devtools), allow(dead_code))]
 pub fn prune_dead_slots(keep: &Path) {
     let Some(root) = keep.parent() else { return };
@@ -182,15 +171,12 @@ mod tests {
             .join(format!("{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let keep = base.join("keep");
-        // A pid that cannot be running: Windows pids are multiples of 4, and
-        // this one is far beyond any live process table.
         let dead = base.join("4294967291");
         let live = base.join(std::process::id().to_string());
         let foreign = base.join("not-a-pid");
         for d in [&keep, &dead, &live, &foreign] {
             std::fs::create_dir_all(d).unwrap();
         }
-        // A handshake whose port refuses: dead regardless of the name.
         let stale = base.join("stale");
         std::fs::create_dir_all(&stale).unwrap();
         let port = {

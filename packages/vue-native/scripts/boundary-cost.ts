@@ -2,9 +2,8 @@
 //
 //   bun scripts/boundary-cost.ts [app]        default: hello
 //
-// `scripts/host-calls.ts` counts crossings; this prices them. It runs inside the real host (`vn-test` launches
-// the app and each loop is evaluated in its JavaScriptCore), so the numbers include the actual FFI, string
-// marshalling and Rust work. Nothing here asserts; it is an instrument.
+// Runs inside the real host (`vn-test`), so the numbers include FFI, string marshalling and Rust
+// work. Nothing here asserts; it is an instrument.
 
 import { launch } from "../../vn-test/src/index";
 
@@ -16,8 +15,6 @@ const bench = (label: string, n: number, body: string, setup = "") => ({
   n,
   js: `(() => {
     ${setup}
-    // Warm: JSC tiers up, and the first call through a host fn is not the
-    // steady-state one. Discarded.
     for (let i = 0; i < Math.min(${n}, 2000); i++) { ${body} }
     const t0 = performance.now();
     for (let i = 0; i < ${n}; i++) { ${body} }
@@ -27,22 +24,19 @@ const bench = (label: string, n: number, body: string, setup = "") => ({
 });
 
 const BENCHES = [
-  // -- the floor: a host fn taking one integer (id 0 is the reserved "none") and returning the empty string;
-  //    anything a real call costs beyond this is marshalling and Rust work.
+  // -- the floor: a host fn taking one integer and returning the empty string.
   bench("__vn_bounds(0) — the crossing floor", 200_000, `__vn_bounds(0);`),
   bench(
     "__vn_intern (hot: name already interned)",
     200_000,
     `__vn_intern("div");`,
   ),
-  // -- a write on the hot path: crossing + a string argument + a tree mutation on a detached node.
   bench(
     "__vn_set_style (detached node)",
     100_000,
     `__vn_set_style(scratch, key, "12px");`,
     `const scratch = __vn_create_element(__vn_intern("div")); const key = __vn_intern("padding-left");`,
   ),
-  // -- a read: crossing + `format!` + a string return + the JS-side split/parse
   bench(
     "__vn_bounds + parse (what getBoundingClientRect costs)",
     50_000,
@@ -50,7 +44,6 @@ const BENCHES = [
     `const el = document.documentElement;`,
   ),
   bench("__vn_bounds (raw, no parse)", 50_000, `__vn_bounds(1);`),
-  // -- the read that flushes pending style first, then hands back ~20 lines
   bench(
     "getComputedStyle(el).display (one property)",
     20_000,
@@ -58,7 +51,6 @@ const BENCHES = [
     `const el = document.documentElement;`,
   ),
   bench("__vn_computed_style (raw, no parse)", 20_000, `__vn_computed_style(1);`),
-  // -- pure JS, no crossing: the propagation walk, split three ways to show which third is slow.
   bench(
     "dispatchEvent: synthesis + walk (what an event really costs)",
     100_000,
@@ -95,7 +87,6 @@ const BENCHES = [
   ),
 ];
 
-/** Walks to the deepest element, so the propagation numbers have a real path. */
 const DEEPEST = `(() => {
   let best = document.documentElement, bestDepth = 0;
   const walk = (n, d) => {
@@ -121,7 +112,6 @@ async function main() {
     console.log(`${"operation".padEnd(width)} ${"n".padStart(9)} ${"ns/op".padStart(10)}`);
     console.log("-".repeat(width + 22));
     for (const b of BENCHES) {
-      // `deepest` is set by DEEPEST above and lives on the app's global.
       const ns = (await app.eval(b.js)) as number;
       console.log(
         `${b.label.padEnd(width)} ${String(b.n).padStart(9)} ${ns.toFixed(1).padStart(10)}`,

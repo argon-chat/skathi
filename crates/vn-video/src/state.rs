@@ -3,13 +3,11 @@
 //! [`VideoState`] is the object the host keeps per node, ticked once per frame; it owns a
 //! [`VideoBackend`] and adds what a backend must not own:
 //!
-//! 1. Idempotent transport: the element pushes every prop every frame, and this layer turns that
-//!    into edges.
-//! 2. The spec's `timeupdate` cadence (no more often than every 250 ms): the platform's own
-//!    `timeupdate` is dropped and replaced by one on a 250 ms clock, plus one at every seek and at
-//!    `ended`.
+//! 1. Idempotent transport: the element pushes every prop every frame; this layer turns that into edges.
+//! 2. The spec's `timeupdate` cadence: the platform's own is dropped and replaced by one every
+//!    250 ms, plus one at every seek and at `ended`.
 //! 3. Atlas hygiene: gpui keys atlas tiles by `RenderImage::id` and every frame mints a new id, so
-//!    retired images must be handed back with `Window::drop_image` (two-generation retire, as in `vn-lottie`).
+//!    retired images must be handed back with `Window::drop_image` (two-generation retire).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,7 +19,6 @@ use crate::backend::{
     VideoBackend, VideoFrame,
 };
 
-/// The spec's floor for `timeupdate`: no more often than every 250 ms.
 const TIMEUPDATE_PERIOD: Duration = Duration::from_millis(250);
 
 #[derive(Default)]
@@ -56,19 +53,15 @@ pub struct VideoState {
     backend: Box<dyn VideoBackend>,
     pushed: Pushed,
     source: Option<MediaSource>,
-    /// A load that failed outright, kept so the failure costs one advisory, not one per frame.
     load_error: Option<MediaError>,
 
     cached: Option<Cached>,
-    /// The frame before the current one, retired a generation late so the scene that painted it has
-    /// been presented. Almost always `None` on the zero-copy path (stable image handle per size).
+    /// The frame before the current one, retired a generation late so the scene that painted it has been presented.
     previous: Option<Arc<RenderImage>>,
     retired: Vec<Arc<RenderImage>>,
-    /// The GPU texture the last [`Self::advance`] produced, awaiting [`Self::take_gpu_upload`].
     pending_gpu: Option<(Arc<RenderImage>, GpuFrame)>,
 
     last_timeupdate: Option<Instant>,
-    /// `currentTime` at the last emitted `timeupdate`, so a paused video does not tick forever.
     last_reported_time: f64,
     metadata: bool,
     suspended: bool,
@@ -93,7 +86,7 @@ impl VideoState {
     }
 
     /// Loads `source` if it is not the one already loaded. `Err` only for a failure the platform
-    /// reported synchronously; an asynchronous one arrives as [`MediaEvent::Error`] plus [`Self::error`].
+    /// reported synchronously; an asynchronous one arrives as [`MediaEvent::Error`].
     pub fn set_source(&mut self, source: MediaSource) -> Result<(), MediaError> {
         if self.source.as_ref() == Some(&source) {
             return self.load_error.clone().map_or(Ok(()), Err);
@@ -131,7 +124,6 @@ impl VideoState {
         }
     }
 
-    /// True when playback is requested, whether or not the platform has started; not `!paused`.
     pub fn wants_playing(&self) -> bool {
         self.pushed.playing
     }
@@ -171,7 +163,6 @@ impl VideoState {
     }
 
     pub fn set_rate(&mut self, rate: f64) {
-        // A zero or negative rate is a pause request in disguise; browsers reject it.
         if !(rate.is_finite() && rate > 0.0) {
             return;
         }
@@ -190,8 +181,7 @@ impl VideoState {
         self.backend.set_looping(looping);
     }
 
-    /// Releases the decode pipeline while keeping the element (a parked `<KeepAlive>` page). Unlike
-    /// `<lottie>`, a video costs ~28 MiB of RAM and ~68 MiB of VRAM while parked.
+    /// Releases the decode pipeline while keeping the element (a parked `<KeepAlive>` page).
     pub fn suspend(&mut self) {
         if self.suspended {
             return;
@@ -200,8 +190,7 @@ impl VideoState {
         self.backend.suspend();
     }
 
-    /// Puts back what [`Self::suspend`] released and restores the transport. Position and source
-    /// survive a suspend (`VideoBackend::suspend`), so this is a resume, not a reload.
+    /// Puts back what [`Self::suspend`] released; position and source survive, so this is not a reload.
     pub fn resume(&mut self) {
         if !self.suspended {
             return;
@@ -217,7 +206,6 @@ impl VideoState {
         self.suspended
     }
 
-    /// Is this element's sound playing out now (`VideoBackend::audible`)? A suspended one has none.
     pub fn audible(&self) -> bool {
         !self.suspended && self.backend.audible()
     }
@@ -270,12 +258,10 @@ impl VideoState {
         self.backend.can_play_type(mime_type)
     }
 
-    /// `videoWidth` / `videoHeight`; the box falls back to this when CSS declares no size.
     pub fn native_size(&self) -> Option<(u32, u32)> {
         self.backend.native_size()
     }
 
-    /// True while this element still needs the frame pump running.
     pub fn needs_frames(&self) -> bool {
         if self.suspended {
             return false;
@@ -289,8 +275,7 @@ impl VideoState {
     }
 
     /// One frame's work: pull a frame at `request`'s size, collect the platform's events, add the
-    /// throttled `timeupdate`. Call from the frame pump on the UI thread BEFORE the draw that builds
-    /// the element.
+    /// throttled `timeupdate`. Call from the frame pump on the UI thread BEFORE the draw.
     pub fn advance(&mut self, now: Instant, request: &FrameRequest) -> Advance {
         let mut out = Advance::default();
         if self.suspended {
@@ -318,7 +303,7 @@ impl VideoState {
         }
 
         // `timeupdate`: on the 250 ms clock while the position moves, and at every boundary (a seek
-        // that landed, the end), so a bound UI is never left showing a stale position.
+        // that landed, the end).
         let time = self.backend.current_time();
         let boundary = out
             .events
@@ -364,15 +349,13 @@ impl VideoState {
         self.cached = Some(Cached { image: frame.image, size: frame.size, pts: frame.pts });
     }
 
-    /// The GPU texture this tick produced and the image whose atlas tile it must be blitted into,
-    /// if the backend took the zero-copy path. The host must drain this every tick and pass it to
-    /// `Window::upload_image_from_gpu` before the draw; the texture is reused by the next `present`.
+    /// The GPU texture this tick produced and the image whose atlas tile it must be blitted into.
+    /// The host must drain this every tick and upload before the draw; the texture is reused by the next `present`.
     #[must_use = "the video paints transparent unless this reaches Window::upload_image_from_gpu"]
     pub fn take_gpu_upload(&mut self) -> Option<(Arc<RenderImage>, GpuFrame)> {
         self.pending_gpu.take()
     }
 
-    /// Tells the backend the host could not upload the texture, so it fills images with real bytes.
     pub fn gpu_upload_failed(&mut self) {
         self.pending_gpu = None;
         self.backend.gpu_upload_failed();
@@ -383,8 +366,8 @@ impl VideoState {
         self.retired.extend(self.cached.take().map(|c| c.image));
     }
 
-    /// Frames no longer painted whose atlas tiles the caller must release with `Window::drop_image`.
-    /// The host must drain this every frame, or a 60 fps video leaks one tile per frame.
+    /// Frames no longer painted whose atlas tiles the caller must release with `Window::drop_image`
+    /// (drain every frame, or a 60 fps video leaks one tile per frame).
     #[must_use = "the atlas tiles leak unless these are passed to Window::drop_image"]
     pub fn take_retired(&mut self) -> Vec<Arc<RenderImage>> {
         std::mem::take(&mut self.retired)
@@ -406,8 +389,6 @@ mod tests {
         VideoState::new(Box::new(StubBackend::new(4.0, (320, 180))))
     }
 
-    /// The element pushes every prop every frame, so a setter that is not idempotent causes an event
-    /// storm; stated as "n pushes cost exactly what 1 push costs".
     #[test]
     fn repeated_prop_pushes_do_not_retrigger_the_backend() {
         fn events_after(rounds: usize) -> Vec<MediaEvent> {
@@ -472,8 +453,6 @@ mod tests {
         assert_eq!(produced, retired, "{produced} frames produced, {retired} released");
     }
 
-    /// A parked `<KeepAlive>` page must stop costing a decoder, and come back at its position and
-    /// transport state when reactivated.
     #[test]
     fn parking_releases_the_decoder_and_unparking_restores_it() {
         let mut s = state();

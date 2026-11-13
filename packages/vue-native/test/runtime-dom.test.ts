@@ -1,13 +1,10 @@
-// The DOM surface on mirror nodes and the globals a reused browser component reaches for before it can render.
-//
-// The rule pinned here: every answer is either truthful (mirror tree, the host's real matcher and layout bounds)
-// or degraded with an advisory, never silently wrong.
+// The DOM surface on mirror nodes and the globals a reused browser component reaches for before it can render:
+// every answer is either truthful (mirror tree, the host's matcher and layout bounds) or degraded with an advisory.
 
 import { describe, expect, test } from "bun:test";
 import { h } from "@vue/runtime-core";
 import { createRuntime } from "./runtime-harness";
 
-/** A small mounted-ish tree: root > section > (button, span). */
 function tree(rt) {
   const root = rt.nodeOps.createElement("root");
   const section = rt.nodeOps.createElement("section");
@@ -153,7 +150,6 @@ describe("selector matching goes to the host's real matcher", () => {
 
     expect(rt.host.queryCalls.map((c) => c.mode)).toEqual([1, 2, 0, 0]);
     expect(rt.host.queryCalls[0].root).toBe(button.__vnId);
-    // No advisory: these are answered for real, not stubbed.
     expect(rt.advisories()).toEqual([]);
   });
 
@@ -181,8 +177,6 @@ describe("selector matching goes to the host's real matcher", () => {
   test("`:scope` is anchored at the element the call was made on", () => {
     const rt = createRuntime();
     const { root, section, button } = tree(rt);
-    // `:scope` is the scoping root, per call: the JS side only passes the right root id, so two calls with
-    // different subjects must reach the host with different roots.
     rt.host.queryAnswers.set(":scope > button|0", String(button.__vnId));
     expect(section.querySelector(":scope > button")).toBe(button);
     expect(rt.host.queryCalls.at(-1)).toMatchObject({
@@ -275,7 +269,6 @@ describe("layout comes from the host's painted bounds", () => {
 });
 
 describe("programmatic scrolling drives the host's ScrollHandle", () => {
-  /** A scroll container: 300×200 viewport with 1 000 px of content below it. */
   function scroller(rt, node, extra = {}) {
     rt.host.scrollById.set(node.__vnId, {
       left: 0,
@@ -335,13 +328,11 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     section.scrollBy({ top: 30 });
     expect([section.scrollLeft, section.scrollTop]).toEqual([10, 50]);
 
-    // An axis the caller did not name stays where it is (`scrollTo({ top })`).
     section.scrollTo({ top: 5 });
     expect([section.scrollLeft, section.scrollTop]).toEqual([10, 5]);
   });
 
   test("scrollWidth/scrollHeight report the CONTENT box, so scroll-to-bottom works", () => {
-    // `el.scrollTop = el.scrollHeight` is the scroll-to-bottom idiom: it needs the content height, not the painted viewport.
     const rt = createRuntime();
     const { section } = tree(rt);
     scroller(rt, section);
@@ -371,7 +362,6 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     const { button } = tree(rt);
 
     button.scrollIntoView();
-    // CSSOM-View's defaults: block "start", inline "nearest".
     expect(rt.host.intoViewCalls.at(-1)).toEqual({ id: button.__vnId, block: 0, inline: 3 });
 
     button.scrollIntoView(false);
@@ -395,7 +385,6 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
   });
 
   test('behavior: "smooth" is performed instantly and says so, once', () => {
-    // The position is exact; the missing interpolation is a divergence, so it is named.
     const rt = createRuntime();
     const { section } = tree(rt);
     scroller(rt, section);
@@ -502,10 +491,7 @@ describe("the attribute channel", () => {
   });
 });
 
-// runtime-dom assigns a DOM property where the element has one (`shouldSetAsProp`), and the attribute reflects it:
-// `:hidden="false"` must not leave `hidden="false"`, which Tailwind's `[hidden]` rule hides.
 describe("props that are DOM properties, as runtime-dom sets them", () => {
-  /** The last value the host was given for `key` on `el` (`undefined`: removed or never set). */
   const hostProp = (rt, el, key: string) => rt.host.props.filter((p) => p.id === el.__vnId && p.key === key).at(-1)?.value;
   const make = (rt, tag: string) => rt.nodeOps.createElement(tag);
 
@@ -577,8 +563,6 @@ describe("props that are DOM properties, as runtime-dom sets them", () => {
     rt.patchProp(box, "true-value", null, "yes");
     expect(box._trueValue).toBe("yes");
 
-    // setAttribute is the attribute, as written: a present `hidden="false"`
-    // hides in a browser too.
     const div = make(rt, "div");
     div.setAttribute("hidden", "false");
     expect(div.getAttribute("hidden")).toBe("false");
@@ -712,7 +696,6 @@ describe("inline style writes through — custom properties included", () => {
     ]);
     expect(button.style.getPropertyValue("--reka-popper-available-width")).toBe("320px");
     expect(button.style.zIndex).toBe("50");
-    // Custom properties are stored by vn-css, so this must not warn.
     expect(rt.advisories()).toEqual([]);
   });
 });
@@ -732,7 +715,6 @@ describe("classList and the transition-class merge", () => {
   });
 
   test("a re-render keeps the transition classes a <Transition> layered on", () => {
-    // runtime-dom keeps the same split: without it a re-render mid-transition drops `v-enter-active`.
     const rt = createRuntime();
     const { button } = tree(rt);
     rt.patchProp(button, "class", null, "card");
@@ -744,7 +726,6 @@ describe("classList and the transition-class merge", () => {
   });
 });
 
-// `className` writes must reach the attribute: `getAttribute("class")` reads it.
 describe("className, classList and the class attribute are one thing", () => {
   test("className and setAttribute write through; getAttribute and className read the attribute", () => {
     const rt = createRuntime();
@@ -839,8 +820,6 @@ describe("custom events and dispatchEvent", () => {
     const rt = createRuntime();
     const { button: inner } = tree(rt);
     inner.addEventListener("focusScope.autoFocusOnMount", () => {});
-    // The one bit set is the <button>'s own click, armed at creation for its activation behaviour (it submits its
-    // form), not the event's.
     expect(rt.host.listeners).toEqual([{ id: inner.__vnId, code: rt.EV_CODES.click, on: true }]);
     expect(rt.advisories()).toEqual([]);
   });
@@ -853,8 +832,6 @@ describe("custom events and dispatchEvent", () => {
     expect(rt.advisories()[0]).toContain("mouseover");
   });
 
-  // The animator in vn-css sources these four: it alone knows when a track finishes, so they register a real host
-  // listener and say nothing.
   test("the CSS animation/transition events are delivered, not advised", () => {
     for (const name of ["transitionend", "animationstart", "animationend", "animationcancel"]) {
       const rt = createRuntime();
@@ -890,7 +867,6 @@ describe("custom events and dispatchEvent", () => {
   });
 
   test("…and a listener that throws is reported, not the end of the dispatch", () => {
-    // "inner invoke": report the exception, go on to the next listener; dispatchEvent never throws a listener's error.
     const reported: (() => void)[] = [];
     const rt = createRuntime({ globals: { queueMicrotask: (f: () => void) => reported.push(f) } });
     const { button: inner } = tree(rt);
@@ -926,7 +902,6 @@ describe("document- and window-level listeners", () => {
     rt.host.listeners.length = 0;
 
     rt.global.document.addEventListener("keydown", () => {});
-    // The root stands in for `document`, so its bit is set.
     expect(rt.host.listeners.at(-1)).toMatchObject({ code: rt.EV_CODES.keydown, on: true });
   });
 
@@ -947,10 +922,7 @@ describe("document- and window-level listeners", () => {
   });
 });
 
-// ResizeObserver runs in the host's step after the frame's layout (`host.layout.step()` here;
-// crates/vn-tree/src/observe.rs), not polled from requestAnimationFrame.
 describe("ResizeObserver, after layout", () => {
-  /** The fake world's tree: `section` at depth 2, `button` and `span` at depth 3. */
   function world(globals: Record<string, unknown> = {}) {
     const rt = createRuntime({ globals });
     const nodes = tree(rt);
@@ -1005,7 +977,6 @@ describe("ResizeObserver, after layout", () => {
     expect(self).toBe(ob);
     expect(got.o).toBe(ob);
     expect(got.entry.target).toBe(button);
-    // The spec's contentRect is at the padding edge; the layout box's position is not in it.
     expect(got.entry.contentRect).toMatchObject({ x: 0, y: 0, top: 0, left: 0, width: 101, height: 40 });
     expect(got.entry.borderBoxSize[0]).toEqual({ inlineSize: 101, blockSize: 40 });
     expect(got.entry.contentBoxSize[0]).toEqual({ inlineSize: 101, blockSize: 40 });
@@ -1031,8 +1002,6 @@ describe("ResizeObserver, after layout", () => {
       if (grow) rt.host.boundsById.set(button.__vnId, "0,0,180,40");
       grow = false;
     });
-    // Round 1: the section (depth 2). The re-layout moved the button (depth 3), so round 2 reports it in the same step:
-    // no frame paints it at its old size.
     expect(rounds).toBe(2);
     expect(order).toEqual(["section", "button 180"]);
     expect(rt.host.layout.loopErrors).toBe(0);
@@ -1056,8 +1025,6 @@ describe("ResizeObserver, after layout", () => {
     expect(sizes).toEqual(["section 300", "button 100"]);
     sizes.length = 0;
 
-    // The button (depth 3) changes; its callback changes the section (depth 2),
-    // which is not deeper than what was just reported: skipped this step.
     rt.host.boundsById.set(button.__vnId, "0,0,120,40");
     rt.host.layout.step(() => {
       if (shrinkSection) rt.host.boundsById.set(section.__vnId, "0,0,280,100");
@@ -1070,9 +1037,7 @@ describe("ResizeObserver, after layout", () => {
     expect(ev.message).toBe("ResizeObserver loop completed with undelivered notifications.");
     expect(ev.cancelable).toBe(true);
     expect(ev.error).toBe(null);
-    // window.onerror the HTML way: (message, source, lineno, colno, error).
     expect(onerror).toEqual([["ResizeObserver loop completed with undelivered notifications.", "", 0, 0, null]]);
-    // The host owes the next frame a step, which delivers the skipped one.
     expect(rt.host.layout.pending).toBe(true);
     rt.host.layout.step();
     expect(sizes).toEqual(["button 120", "section 280"]);
@@ -1104,7 +1069,6 @@ describe("ResizeObserver, after layout", () => {
     new rt.global.ResizeObserver(() => calls.push("next")).observe(button);
     rt.host.layout.step();
     expect(calls).toEqual(["throws", "next"]);
-    // Rethrown from a microtask: the host's uncaught-error sink, as a listener's throw is.
     expect(later.length).toBe(1);
     expect(() => later[0]!()).toThrow("boom");
   });
@@ -1185,8 +1149,6 @@ describe("missing globals (G5)", () => {
     const { section, button } = tree(rt);
     const seen = [];
     const ob = new rt.global.MutationObserver((r) => seen.push(...r));
-    // What reka's focus scope and floating-ui's auto-update both write: a Document is not an element here but its
-    // element subtree is the root's, so the observer lands on the root.
     ob.observe({ documentElement: section }, { childList: true, subtree: true });
     const extra = rt.nodeOps.createElement("i");
     rt.nodeOps.insert(extra, button, null);
@@ -1206,7 +1168,6 @@ describe("missing globals (G5)", () => {
     expect([...frag.childNodes]).toEqual([child]);
     expect(child.parentNode).toBe(frag);
     expect(child.parentElement).toBe(null);
-    // Detached: it hangs off no root, so it is not painted.
     expect(child.isConnected).toBe(false);
   });
 
@@ -1270,7 +1231,6 @@ describe("missing globals (G5)", () => {
   test("document.querySelectorAll goes through the same host matcher", () => {
     const rt = createRuntime();
     const { root, button } = tree(rt);
-    // `appRoot` is only set by mount(); before that the document has no tree.
     expect(rt.global.document.querySelectorAll("[data-x]").length).toBe(0);
     void root;
     void button;

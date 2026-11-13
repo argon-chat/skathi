@@ -4,18 +4,12 @@
 //! one VNPK blob (bundle, window config, identity, assets) into the copy as the `RT_RCDATA` resource
 //! `VNPAYLOAD`, so an app author ships their own exe without a Rust toolchain.
 //!
-//! **Embedded** is the image itself: `LockResource` points into the mapped exe, valid for the
-//! process lifetime, demand-paged, read-only and shared between instances.
-//!
 //! **File** (`VN_PAYLOAD=app.vnpk`) is read through a read-only file mapping whose owner and handle
 //! live with the parsed payload, so nothing is copied or faulted in unused. Windows denies in-place
 //! writes while allowing atomic replacement; POSIX publishers must keep active files immutable and
 //! publish a new inode. It is honoured only when nothing is embedded (the in-repo iteration loop): a
 //! stamped exe ignores it with one line, since one environment variable could otherwise run
 //! unsigned JS under a signed app's identity.
-//!
-//! The module is in every build because `--vn-host-info` is: a dev host answers it too
-//! (`"mode": "dev"`), which is how `vn build` refuses one.
 #![cfg_attr(not(feature = "prod"), allow(dead_code))]
 
 use std::borrow::Cow;
@@ -23,57 +17,37 @@ use std::sync::OnceLock;
 
 use vn_payload::Payload;
 
-/// Where this process's payload came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     Embedded,
-    /// `Contents/Resources/app.vnpk` of the macOS `.app` this executable is in
-    /// ([`bundled`]).
     Bundled(std::path::PathBuf),
     File(std::path::PathBuf),
-    /// Handed over by the process that embeds vue-native (src/embed.rs);
-    /// the label says how (a path, or "bytes").
     Embedder(String),
 }
 
-/// The META entry, read once.
 #[derive(Debug, Clone, Default)]
 pub struct Meta {
-    /// The identity: `%LOCALAPPDATA%\<name>\storage`, the devtools slot.
     pub name: String,
     pub product_name: String,
     pub version: String,
-    /// The vue-native version whose `vn` built this payload.
     pub vue_native: String,
     pub host_variant: String,
-    /// The `launch` object (`id`, `singleInstance`, `raiseOnSecondInstance`, `protocols`) as JSON,
-    /// when `vn build` wrote one.
     pub launch: Option<String>,
-    /// The asset packs this payload's assets continue in ([`Pack`]).
     pub packs: Vec<PackRef>,
 }
 
-/// One asset pack the META names: `<file>` beside the payload, whose index
-/// (header, TOC and names — [`vn_payload::Payload::index`]) hashes to `id`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PackRef {
     pub name: String,
     pub file: String,
-    /// Lowercase hex SHA-256 of the pack's index.
     pub id: String,
 }
 
-/// An asset pack: a VNPK of assets only, written by `vn build` beside the payload (vn.config.json
-/// `packs`) so parts of an app that change at different rates are different files. Looked up after
-/// the payload's own assets. Its id is checked on open (index only): a pack from another build is
-/// refused, as a corrupt payload is.
 pub struct Pack {
     pub name: String,
     pub payload: AppPayload,
 }
 
-/// Owns the bytes for the parser. A mapped file remains alive until after its
-/// borrowed TOC view has been dropped; failed parses release the owner normally.
 pub(crate) enum PayloadBytes {
     Embedded(&'static [u8]),
     File(crate::mapped_file::MappedFile),
@@ -123,31 +97,26 @@ impl AppPayload {
 
 pub struct Loaded {
     pub payload: AppPayload,
-    /// The META's `packs`, opened, in its order.
     pub packs: Vec<Pack>,
     pub meta: Meta,
     pub source: Source,
 }
 
 impl Loaded {
-    /// Every packaged asset: the payload's own, then each pack's.
     pub fn asset_count(&self) -> usize {
         self.payload.asset_count() + self.packs.iter().map(|p| p.payload.asset_count()).sum::<usize>()
     }
 
-    /// Every packaged asset entry, the payload's first.
     pub fn assets(&self) -> impl Iterator<Item = &vn_payload::Entry<'_>> {
         self.payload.assets().iter().chain(self.packs.iter().flat_map(|p| p.payload.assets().iter()))
     }
 }
 
-/// The lowercase hex SHA-256 of a payload's index: a pack's id.
 pub fn pack_id(payload: &AppPayload) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(payload.0.borrow_dependent().index()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Opens the packs `meta` names, from `dir`.
 fn open_packs(meta: &Meta, dir: Option<&std::path::Path>) -> Result<Vec<Pack>, String> {
     if meta.packs.is_empty() {
         return Ok(Vec::new());
@@ -188,17 +157,13 @@ fn open_packs(meta: &Meta, dir: Option<&std::path::Path>) -> Result<Vec<Pack>, S
 
 static LOADED: OnceLock<Option<Loaded>> = OnceLock::new();
 
-/// This process's payload, resolved on first ask. `None` on a bare host with
-/// no `VN_PAYLOAD`. A payload that is present but corrupt is fatal: there is no
-/// app to run, and running none silently would be worse.
+/// Resolved on first ask. `None` on a bare host; a corrupt payload is fatal, since running no app silently would be worse.
 pub fn get() -> Option<&'static Loaded> {
     LOADED.get_or_init(load).as_ref()
 }
 
 /// The embedder's payload (src/embed.rs), parsed now so a bad one is the embedder's `Err` rather
 /// than [`fatal`]. Before the first [`get`]; it then wins over a stamped resource and `VN_PAYLOAD`.
-///
-/// `dir` is where its asset packs are: the payload file's folder, or `None` for the executable's.
 pub(crate) fn set_external(bytes: PayloadBytes, label: String, dir: Option<&std::path::Path>) -> Result<(), String> {
     let payload = AppPayload::parse(bytes)?;
     let meta = payload.meta().map(parse_meta).unwrap_or_default();
@@ -341,7 +306,6 @@ pub fn message_box(text: &str) {
     let _ = text;
 }
 
-/// The stamped `VNPAYLOAD` resource, as the mapped image's own bytes.
 #[cfg(target_os = "windows")]
 fn embedded() -> Option<&'static [u8]> {
     use windows::core::{w, PCWSTR};
@@ -374,8 +338,6 @@ fn embedded() -> Option<&'static [u8]> {
     None
 }
 
-/// A macOS app's payload: `Name.app/Contents/Resources/app.vnpk`, beside the
-/// executable in `Contents/MacOS`. Stamping the Mach-O would break its code
 /// signature; a resource of the bundle is covered by it, so like the stamped
 /// resource on Windows it wins over `VN_PAYLOAD`.
 #[cfg(target_os = "macos")]
@@ -393,7 +355,6 @@ fn bundled() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Where an executable inside `*.app/Contents/MacOS/` finds its payload.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn bundle_payload_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
     let macos = exe.parent()?;
@@ -404,8 +365,6 @@ fn bundle_payload_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
         .then(|| contents.join("Resources").join("app.vnpk"))
 }
 
-/// `key` (already a [`vn_payload::content_key`]) → the asset's bytes.
-///
 /// Exact first (a binary search); on a miss, an ASCII-case-insensitive scan with one advisory naming
 /// both spellings, since dev runs on NTFS and a packaged exe must not be stricter than the dev host.
 /// A plain `fn` for `vn_tree::set_asset_store`, thread-safe because gpui calls [`GpuiAssets`] from
@@ -427,7 +386,6 @@ pub fn lookup(key: &str) -> Option<&'static [u8]> {
     Some(bytes)
 }
 
-/// One advisory per distinct key, bounded so a loop of misses cannot grow it.
 pub fn advise_once(key: &str, msg: &str) {
     use std::collections::HashSet;
     use std::sync::Mutex;
@@ -443,7 +401,6 @@ pub fn advise_once(key: &str, msg: &str) {
     vn_tree::log::record("advisory", msg.to_string());
 }
 
-/// gpui's `AssetSource` over the payload, borrowed and never copied here.
 pub struct GpuiAssets;
 
 impl gpui::AssetSource for GpuiAssets {
@@ -463,8 +420,6 @@ impl gpui::AssetSource for GpuiAssets {
     }
 }
 
-/// The folder-name form of the app's identity: the devtools slot directory
-/// (`%TEMP%\vue-native\apps\<this>\<pid>`), by the rule vn-storage applies to the storage folder.
 pub fn slot_name() -> String {
     let raw = get().map(|l| l.meta.name.clone()).unwrap_or_default();
     let cleaned: String = raw
@@ -486,10 +441,7 @@ pub fn slot_name() -> String {
     }
 }
 
-/// The parts of the engine a host can be built without, in the order
-/// [`host_variant`] names them — the same list, in the same order, as
-/// `OPTIONAL` in packages/vue-native/cli/config.ts. `devtools` is the inverse
-/// of the `no-devtools` feature; the rest are default features of their own.
+/// Must match `OPTIONAL` in packages/vue-native/cli/config.ts, in order.
 pub const OPTIONAL: [(&str, bool); 6] = [
     ("devtools", cfg!(vn_devtools)),
     ("audio", cfg!(feature = "audio")),
@@ -500,8 +452,7 @@ pub const OPTIONAL: [(&str, bool); 6] = [
 ];
 
 /// This host's variant: `standard` when nothing optional was left out, else
-/// what was, as `no-<part>` joined by `+` in [`OPTIONAL`]'s order —
-/// `no-devtools`, `no-audio`, `no-devtools+no-audio`. `vn build` keys its host
+/// what was, as `no-<part>` joined by `+` in [`OPTIONAL`]'s order. `vn build` keys its host
 /// cache by it, and asks for one by it.
 pub fn host_variant() -> String {
     let off: Vec<String> = OPTIONAL.iter().filter(|(_, on)| !on).map(|(name, _)| format!("no-{name}")).collect();
@@ -671,7 +622,6 @@ mod tests {
         }
         let error = super::open_packs(&meta_with("missing.vnpk", &id), Some(dir)).err().unwrap();
         assert!(error.contains("missing.vnpk"), "{error}");
-        // No `packs`: nothing is opened, wherever the payload is.
         assert!(super::open_packs(&super::Meta::default(), None).unwrap().is_empty());
         std::fs::write(&path, b"released").unwrap();
     }
@@ -711,7 +661,6 @@ mod tests {
             .and_then(crate::json::Json::as_str)
             .unwrap();
         assert_eq!(variant, super::host_variant());
-        // Every optional part in: the plain `standard` name.
         assert_eq!(variant == "standard", super::OPTIONAL.iter().all(|(_, on)| *on));
         assert_eq!(variant.contains("no-devtools"), !cfg!(vn_devtools));
         assert_eq!(

@@ -11,8 +11,6 @@ use vn_runtime::redjs::webapi::permissions::{
 pub struct StubHost {
     platform: &'static str,
     states: Mutex<HashMap<Capability, PermissionState>>,
-    /// What a `request()` turns a non-granted capability into. `None` = the
-    /// platform cannot ask, so `request()` reports the current state unchanged.
     grants_on_request: Mutex<Option<PermissionState>>,
     subscribes: bool,
     changes: Mutex<Vec<Capability>>,
@@ -21,8 +19,6 @@ pub struct StubHost {
 }
 
 impl StubHost {
-    /// Everything `Unsupported`, no subscription — the shape of a platform with
-    /// no backend at all.
     pub fn unsupported(platform: &'static str) -> StubHost {
         StubHost {
             platform,
@@ -35,22 +31,17 @@ impl StubHost {
         }
     }
 
-    /// A host that answers from a table and reports a working change
-    /// subscription.
     pub fn scripted(platform: &'static str, states: &[(Capability, PermissionState)]) -> StubHost {
         let h = StubHost::unsupported(platform);
         *h.states.lock().unwrap() = states.iter().copied().collect();
         StubHost { subscribes: true, ..h }
     }
 
-    /// Make `request()` succeed, asynchronously, with this state.
     pub fn granting(self, state: PermissionState) -> StubHost {
         *self.grants_on_request.lock().unwrap() = Some(state);
         self
     }
 
-    /// Move a capability as the OS would, queueing the `change` the surface is
-    /// supposed to deliver.
     pub fn set(&self, cap: Capability, state: PermissionState) {
         let prev = self.states.lock().unwrap().insert(cap, state);
         if prev != Some(state) && self.subscribes {

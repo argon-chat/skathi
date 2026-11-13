@@ -143,7 +143,6 @@ impl VideoBackend for StubBackend {
         None
     }
 
-    /// Answers `Maybe` for anything that looks like a video type and `No` otherwise.
     fn can_play_type(&self, mime_type: &str) -> CanPlay {
         if mime_type.trim().to_ascii_lowercase().starts_with("video/") {
             CanPlay::Maybe
@@ -174,7 +173,6 @@ impl VideoBackend for StubBackend {
         if w == 0 || h == 0 {
             return None;
         }
-        // A sweeping bar: frames at different times are never bit-identical.
         let progress = if self.duration > 0.0 { self.time / self.duration } else { 0.0 };
         let bar = (progress * w as f64) as u32;
         let mut buf = vec![0u8; (w * h * 4) as usize];

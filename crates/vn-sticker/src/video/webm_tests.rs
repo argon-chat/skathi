@@ -1,7 +1,5 @@
 use super::*;
 
-// A small EBML writer, to build the files the cases need.
-
 fn id_bytes(id: u32) -> Vec<u8> {
     let b = id.to_be_bytes();
     let skip = b.iter().position(|&x| x != 0).unwrap_or(3);
@@ -19,7 +17,6 @@ pub(crate) fn el(id: u32, data: &[u8]) -> Vec<u8> {
     [id_bytes(id), size_bytes(data.len() as u64), data.to_vec()].concat()
 }
 
-/// An element of unknown size (8 bytes of all ones).
 fn el_unknown(id: u32, data: &[u8]) -> Vec<u8> {
     [id_bytes(id), vec![0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], data.to_vec()].concat()
 }
@@ -46,7 +43,6 @@ pub(crate) fn info(scale: u64, duration: Option<f64>) -> Vec<u8> {
     master(INFO, &c)
 }
 
-/// A video TrackEntry with `video` inside its Video element.
 pub(crate) fn video_track(number: u64, codec: &str, video: &[Vec<u8>]) -> Vec<u8> {
     master(
         TRACK_ENTRY,
@@ -89,7 +85,6 @@ pub(crate) fn file(segment: &[Vec<u8>]) -> Vec<u8> {
     [header("webm"), master(SEGMENT, segment)].concat()
 }
 
-/// A track 1 VP9 file: two clusters, a simple block, then blocks with alpha.
 fn sample() -> Vec<u8> {
     let video = [size(64, 48), vec![el_uint(ALPHA_MODE, 1)]].concat();
     file(&[
@@ -178,7 +173,6 @@ fn what_is_not_vp9_is_named() {
     assert!(advice(only("V_MPEG4/ISO/AVC")).contains("V_MPEG4/ISO/AVC"));
     let audio_only = file(&[master(TRACKS, &[audio_track(1)]), cluster(0, &[simple_block(1, 0, b"a")])]);
     assert!(advice(audio_only).contains("no video track"));
-    // A VP9 track after a VP8 one is the one that plays.
     let both = file(&[
         master(TRACKS, &[video_track(1, "V_VP8", &size(8, 8)), video_track(2, "V_VP9", &size(8, 8))]),
         cluster(0, &[simple_block(1, 0, b"vp8"), simple_block(2, 0, b"vp9")]),
@@ -236,7 +230,6 @@ fn a_file_cut_inside_what_it_needs_is_malformed_and_one_cut_in_its_trailing_cues
     assert!(cut.to_string().contains("cut short inside a Cluster"), "{cut}");
 }
 
-/// xorshift64*, for repeatable noise.
 struct Noise(u64);
 
 impl Noise {
@@ -248,7 +241,6 @@ impl Noise {
     }
 }
 
-/// Every span a demuxed file hands out is inside it.
 fn check_spans(bytes: &[u8]) {
     if let Ok(webm) = demux(bytes) {
         for b in &webm.blocks {
@@ -287,7 +279,6 @@ fn damaged_files_are_errors_not_panics() {
 
 #[test]
 fn sizes_the_file_claims_allocate_nothing() {
-    // Elements claiming petabytes, at every level: errors, at once.
     let huge = [0x01, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE];
     let claims = |id: u32, inner: &[u8]| [id_bytes(id), huge.to_vec(), inner.to_vec()].concat();
     let tracks = master(TRACKS, &[video_track(1, "V_VP9", &size(8, 8))]);

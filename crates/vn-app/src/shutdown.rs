@@ -5,16 +5,6 @@
 //! follows runs with nothing on screen: gpui's quit, the `on_app_quit` hooks (IndexedDB's
 //! checkpoint, the cookie jar, the voice rooms' leave) and the end of the process.
 //!
-//! ```text
-//!   close accepted ── begin: hide every window, launch::closing(), arm the deadline
-//!        │
-//!   gpui quit ── on_app_quit hooks, each timed by `step`
-//!        │
-//!   end of main ── finish: one `[shutdown]` line, then the process ends
-//!
-//!   DEADLINE after begin, still running ── one `[shutdown]` line, the process ends
-//! ```
-//!
 //! **The deadline.** [`DEADLINE`] after the close the process ends whatever is still running, and
 //! says on stderr what it was doing. Each quit hook has its own shorter budget, so it fires only
 //! when something has none or ignores it. A second launch of a single-instance app meanwhile is told
@@ -37,22 +27,15 @@ use std::time::{Duration, Instant};
 /// patience with a closing instance (vn-desktop's `CLOSING_PATIENCE`).
 pub const DEADLINE: Duration = Duration::from_secs(4);
 
-/// When the close was accepted, and what it was.
 static BEGAN: OnceLock<(Instant, &'static str)> = OnceLock::new();
-/// The timed teardown steps, in order: when each began, and how long it took
-/// (`None` while it runs, which is what the deadline's line names).
 static STEPS: Mutex<Vec<(&'static str, Instant, Option<Duration>)>> = Mutex::new(Vec::new());
-/// How many windows `begin` hid.
 static HIDDEN: Mutex<usize> = Mutex::new(0);
-/// Set by whichever of `finish` and the deadline ends the process first.
 static ENDING: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn is_closing() -> bool {
     BEGAN.get().is_some()
 }
 
-/// A close was accepted (`why` names it): hide every window, tell the
-/// single-instance server, arm the deadline. Idempotent; main thread.
 pub fn begin(why: &'static str) {
     if BEGAN.set((Instant::now(), why)).is_err() {
         return;
@@ -85,8 +68,6 @@ pub fn begin(why: &'static str) {
     });
 }
 
-/// Runs one teardown step and records how long it took, for the line
-/// [`finish`] and the deadline print.
 pub fn step<T>(name: &'static str, f: impl FnOnce() -> T) -> T {
     let t = Instant::now();
     let index = STEPS.lock().map(|mut s| {
@@ -100,13 +81,9 @@ pub fn step<T>(name: &'static str, f: impl FnOnce() -> T) -> T {
     out
 }
 
-/// The end of `main`, after gpui's quit and its hooks: one `[shutdown]` line, then the process ends.
 pub fn finish() -> ! {
-    // A quit that did not come through a close (the session ending, an
-    // inspector whose app is gone) is timed from here.
     begin("quit");
     if ENDING.swap(true, Ordering::SeqCst) {
-        // The deadline is ending the process right now.
         loop {
             std::thread::park();
         }
@@ -136,8 +113,6 @@ pub fn install_test_delay(cx: &mut gpui::App) {
     }));
 }
 
-/// `why: hid N window(s); quit hooks: a 1 ms, b 30 ms, c still running after
-/// 3950 ms; ended at +D ms`.
 fn timeline() -> String {
     let Some((t0, why)) = BEGAN.get() else { return String::new() };
     let hidden = HIDDEN.lock().map(|h| *h).unwrap_or(0);

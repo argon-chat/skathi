@@ -1,15 +1,11 @@
-//! Separable resampling of premultiplied rows: per axis an area average
-//! (down, or 1:1) or a bilinear filter (up), in f32.
+//! Separable resampling of premultiplied rows: per axis an area average (down, or 1:1) or a
+//! bilinear filter (up), in f32.
 //!
-//! Order: when the frame shrinks vertically, source rows are summed into an
-//! output row first and the horizontal filter runs once per output row; when
-//! it grows, each source row is filtered horizontally once and kept in a
-//! small ring that the output rows blend. Either way the horizontal filter
-//! runs on the fewer rows.
-//!
-//! Every output index reads the same number of taps (`n`, the most any
-//! output needs), zero-padded, so the inner loops have no per-output setup.
-//! A zero tap adds an exact 0, so the padding changes no result.
+//! When the frame shrinks vertically, source rows are summed into an output row first and the
+//! horizontal filter runs once per output row; when it grows, each source row is filtered
+//! horizontally once and kept in a small ring that the output rows blend. Either way the horizontal
+//! filter runs on the fewer rows. Every output reads the same number of taps (`n`), zero-padded: a
+//! zero tap adds an exact 0, so the padding changes no result.
 
 use crate::Level;
 
@@ -20,12 +16,10 @@ pub(crate) struct Taps {
     key: (usize, usize),
     first: Vec<u32>,
     weights: Vec<f32>,
-    /// Taps per output.
     pub n: usize,
 }
 
 impl Taps {
-    /// The taps from `n_src` to `n_dst` (both > 0); kept while they stay.
     pub fn build(&mut self, n_src: usize, n_dst: usize) {
         if self.key == (n_src, n_dst) && !self.first.is_empty() {
             return;
@@ -36,7 +30,6 @@ impl Taps {
         for o in 0..n_dst {
             let mut taps = Vec::with_capacity(scale.ceil() as usize + 2);
             if n_dst <= n_src {
-                // Area: output `o` covers [o·s, (o+1)·s) of the source.
                 let lo = o as f64 * scale;
                 let hi = ((o + 1) as f64 * scale).min(n_src as f64);
                 let mut i = lo.floor() as usize;
@@ -48,7 +41,6 @@ impl Taps {
                     i += 1;
                 }
             } else {
-                // Bilinear between the two source centres around the output's.
                 let pos = ((o as f64 + 0.5) * scale - 0.5).clamp(0.0, (n_src - 1) as f64);
                 let i = pos.floor() as usize;
                 let f = pos - i as f64;
@@ -61,7 +53,6 @@ impl Taps {
             }
             all.push(taps);
         }
-        // Taps are consecutive, so `n` of them fit in the source.
         let n = all.iter().map(Vec::len).max().unwrap_or(1);
         self.n = n;
         self.first.clear();
@@ -77,7 +68,6 @@ impl Taps {
         }
     }
 
-    /// Output `o`'s first source index and its `n` weights.
     #[inline]
     pub fn get(&self, o: usize) -> (usize, &[f32]) {
         (self.first[o] as usize, &self.weights[o * self.n..(o + 1) * self.n])
@@ -92,32 +82,27 @@ impl Taps {
     }
 }
 
-/// The scaler's buffers.
 #[derive(Default)]
 pub(crate) struct Scaler {
     xt: Taps,
     yt: Taps,
-    /// One source row as `source` fills it, `w · C` bytes, and (growing)
-    /// as floats, premultiplied when colour.
+    /// One source row as `source` fills it, `w · C` bytes, and (growing) as floats.
     bytes: Vec<u8>,
     src: Vec<f32>,
-    /// Shrinking: the output row being summed, `w · C`, and the same
-    /// filtered horizontally, `tw · C`.
-    /// Growing: the output row being blended, `tw · C`.
+    /// Shrinking: the output row being summed and the same filtered horizontally. Growing: the
+    /// output row being blended.
     acc: Vec<f32>,
     row: Vec<f32>,
-    /// Growing: the horizontally filtered source rows the output rows blend,
-    /// a ring of `yt.n` rows of `tw · C`, and which source row each holds.
+    /// Growing: a ring of `yt.n` horizontally filtered source rows, and which source row each holds.
     ring: Vec<f32>,
     ring_rows: Vec<usize>,
 }
 
 impl Scaler {
-    /// Scales `w` × `h` rows of `C` channels to `tw` × `th`. `source(sy,
-    /// row)` fills `row` (`w · C` bytes) with source row `sy`: straight BGRA
-    /// (`C` 4, which is weighed by its alpha) or alpha (`C` 1); `finish(oy,
-    /// row)` takes output row `oy` (`tw · C` floats, premultiplied). Source
-    /// rows are asked for in ascending order, each once per run.
+    /// Scales `w` × `h` rows of `C` channels to `tw` × `th`. `source(sy, row)` fills `row` with
+    /// source row `sy`: straight BGRA (`C` 4, weighed by its alpha) or alpha (`C` 1); `finish(oy,
+    /// row)` takes output row `oy` (premultiplied floats). Source rows are asked for in ascending
+    /// order, each once per run.
     pub fn run<const C: usize>(
         &mut self,
         level: Level,
@@ -190,7 +175,6 @@ impl Scaler {
     }
 }
 
-/// A source row as floats: premultiplied when `C` is 4 (BGRA).
 fn to_f32<const C: usize>(level: Level, bytes: &[u8], out: &mut [f32]) {
     if C == 4 {
         premultiply(level, bytes, out);
@@ -201,7 +185,6 @@ fn to_f32<const C: usize>(level: Level, bytes: &[u8], out: &mut [f32]) {
     }
 }
 
-/// `acc += weight · to_f32(bytes)`, in one pass.
 fn accumulate<const C: usize>(level: Level, acc: &mut [f32], weight: f32, bytes: &[u8]) {
     #[cfg(target_arch = "x86_64")]
     let done = match (level, C) {
@@ -231,7 +214,6 @@ fn accumulate<const C: usize>(level: Level, acc: &mut [f32], weight: f32, bytes:
     }
 }
 
-/// `acc += weight · src`.
 fn axpy(level: Level, acc: &mut [f32], weight: f32, src: &[f32]) {
     #[cfg(target_arch = "x86_64")]
     if level == Level::Avx2 {
@@ -245,8 +227,7 @@ fn axpy(level: Level, acc: &mut [f32], weight: f32, src: &[f32]) {
     }
 }
 
-/// The same loop, compiled for AVX2 (8 floats a step; no FMA, so the same
-/// results).
+/// The same loop, compiled for AVX2 (8 floats a step; no FMA, so the same results).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn axpy_avx2(acc: &mut [f32], weight: f32, src: &[f32]) {
@@ -255,7 +236,6 @@ unsafe fn axpy_avx2(acc: &mut [f32], weight: f32, src: &[f32]) {
     }
 }
 
-/// Filters one row of `C`-channel pixels from `xt.key.0` to `xt.key.1`.
 pub(crate) fn horizontal<const C: usize>(xt: &Taps, src: &[f32], out: &mut [f32]) {
     if xt.is_identity() {
         out.copy_from_slice(src);
@@ -271,7 +251,6 @@ pub(crate) fn horizontal<const C: usize>(xt: &Taps, src: &[f32], out: &mut [f32]
     }
 }
 
-/// `N` taps an output, unrolled.
 fn taps_n<const C: usize, const N: usize>(xt: &Taps, src: &[f32], out: &mut [f32]) {
     #[cfg(target_arch = "x86_64")]
     if C == 4 {
@@ -305,7 +284,6 @@ fn taps_any<const C: usize>(xt: &Taps, src: &[f32], out: &mut [f32]) {
     }
 }
 
-/// Straight BGRA bytes to premultiplied `[b·a, g·a, r·a, a]` floats.
 pub(crate) fn premultiply(level: Level, bgra: &[u8], out: &mut [f32]) {
     debug_assert_eq!(bgra.len(), out.len());
     #[cfg(target_arch = "x86_64")]
@@ -325,8 +303,6 @@ pub(crate) fn premultiply(level: Level, bgra: &[u8], out: &mut [f32]) {
     }
 }
 
-/// Premultiplied floats (colour × alpha, alpha 0..255) to straight BGRA
-/// bytes, rounded.
 pub(crate) fn unpremultiply(row: &[f32], out: &mut [u8]) {
     debug_assert_eq!(row.len(), out.len());
     #[cfg(target_arch = "x86_64")]
@@ -344,16 +320,13 @@ pub(crate) fn unpremultiply(row: &[f32], out: &mut [u8]) {
     }
 }
 
-/// The 4-channel loops in SSE2 (x86_64's baseline, so no detection), one
-/// pixel to a register: the same operations in the same order as the scalar
-/// loops, so the same results.
+/// The 4-channel loops in SSE2 (x86_64's baseline), one pixel to a register: the same operations in
+/// the same order as the scalar loops, so the same results.
 #[cfg(target_arch = "x86_64")]
 mod sse {
     use super::Taps;
     use std::arch::x86_64::*;
 
-    /// [`super::accumulate`] of BGRA bytes, a pixel to a register. Returns
-    /// the floats done.
     pub fn accumulate_premultiplied(acc: &mut [f32], weight: f32, bytes: &[u8]) -> usize {
         let n = bytes.len().min(acc.len()) / 4;
         // SAFETY: SSE2 is the baseline; 4 pixels at a time while 4 are left
@@ -381,7 +354,6 @@ mod sse {
         }
     }
 
-    /// Returns the pixels done.
     pub fn premultiply(bgra: &[u8], out: &mut [f32]) -> usize {
         let n = bgra.len() / 4;
         // SAFETY: SSE2 is x86_64's baseline; loads and stores stay inside
@@ -398,7 +370,6 @@ mod sse {
                 let px = [_mm_unpacklo_epi16(lo, zero), _mm_unpackhi_epi16(lo, zero), _mm_unpacklo_epi16(hi, zero), _mm_unpackhi_epi16(hi, zero)];
                 for (k, p) in px.into_iter().enumerate() {
                     let f = _mm_cvtepi32_ps(p);
-                    // [a, a, a, 1]
                     let m = _mm_or_ps(_mm_and_ps(_mm_shuffle_ps::<0xFF>(f, f), colour), one_w);
                     _mm_storeu_ps(out.as_mut_ptr().add(4 * (i + k)), _mm_mul_ps(f, m));
                 }
@@ -428,7 +399,6 @@ mod sse {
         }
     }
 
-    /// Returns the pixels done.
     pub fn unpremultiply(row: &[f32], out: &mut [u8]) -> usize {
         let n = row.len() / 4;
         // SAFETY: SSE2 is the baseline; one pixel in, 4 bytes out, inside both.
@@ -442,7 +412,6 @@ mod sse {
                 let a = _mm_shuffle_ps::<0xFF>(p, p);
                 // 1 / a where a > 0, else 0 (the division's inf is masked).
                 let inv = _mm_and_ps(_mm_div_ps(one, a), _mm_cmpgt_ps(a, zero));
-                // [c·inv, c·inv, c·inv, a]
                 let v = _mm_or_ps(_mm_and_ps(_mm_mul_ps(p, inv), colour), _mm_andnot_ps(colour, p));
                 let q = _mm_cvttps_epi32(_mm_add_ps(v, half));
                 let b = _mm_packus_epi16(_mm_packs_epi32(q, q), q);
@@ -458,8 +427,6 @@ mod sse {
 mod avx2 {
     use std::arch::x86_64::*;
 
-    /// [`super::accumulate`] of BGRA bytes, two pixels to a register: the
-    /// scalar loop's operations, so its results. Returns the floats done.
     #[target_feature(enable = "avx2")]
     pub unsafe fn accumulate_premultiplied(acc: &mut [f32], weight: f32, bytes: &[u8]) -> usize {
         let n = bytes.len().min(acc.len()) / 4;
@@ -477,8 +444,6 @@ mod avx2 {
         4 * i
     }
 
-    /// [`super::accumulate`] of single bytes: the scalar loop, compiled for
-    /// AVX2. Returns the floats done.
     #[target_feature(enable = "avx2")]
     pub unsafe fn accumulate_plain(acc: &mut [f32], weight: f32, bytes: &[u8]) -> usize {
         for (a, &s) in acc.iter_mut().zip(bytes) {
@@ -487,8 +452,6 @@ mod avx2 {
         acc.len().min(bytes.len())
     }
 
-    /// [`super::premultiply`], two pixels to a register. Returns the pixels
-    /// done.
     #[target_feature(enable = "avx2")]
     pub unsafe fn premultiply(bgra: &[u8], out: &mut [f32]) -> usize {
         let n = bgra.len() / 4;
@@ -499,7 +462,6 @@ mod avx2 {
             let v = _mm_loadu_si128(bgra.as_ptr().add(4 * i).cast());
             for (k, p) in [_mm256_cvtepu8_epi32(v), _mm256_cvtepu8_epi32(_mm_unpackhi_epi64(v, v))].into_iter().enumerate() {
                 let f = _mm256_cvtepi32_ps(p);
-                // Per 128-bit lane (a pixel): [a, a, a, 1].
                 let m = _mm256_or_ps(_mm256_and_ps(_mm256_shuffle_ps::<0xFF>(f, f), colour), one_w);
                 _mm256_storeu_ps(out.as_mut_ptr().add(4 * (i + 2 * k)), _mm256_mul_ps(f, m));
             }

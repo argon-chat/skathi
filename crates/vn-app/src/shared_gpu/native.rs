@@ -55,7 +55,6 @@ pub(super) fn stats() -> super::Stats {
         contexts: CONTEXTS.load(Ordering::Relaxed),
         converters: CONVERTERS.load(Ordering::Relaxed),
         frames: FRAMES.load(Ordering::Relaxed),
-        // This getter only observes an existing bridge; it never creates one.
         video_bridge_active: !gpui_windows::renderer_d3d11_device().0.is_null(),
     }
 }

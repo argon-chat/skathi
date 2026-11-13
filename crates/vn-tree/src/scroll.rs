@@ -19,7 +19,6 @@ use gpui::{px, Point, ScrollHandle};
 use crate::render;
 use crate::tree;
 
-/// Where `scrollIntoView` puts the box inside its scroll container, on one axis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Align {
     Start,
@@ -29,7 +28,6 @@ pub(crate) enum Align {
 }
 
 impl Align {
-    /// The wire encoding `__vn_scroll_into_view` takes.
     pub(crate) fn from_code(code: u32) -> Self {
         match code {
             0 => Align::Start,
@@ -40,19 +38,14 @@ impl Align {
     }
 }
 
-/// One scroll container's position and content size, in CSS px.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Info {
     pub(crate) left: f32,
     pub(crate) top: f32,
-    /// `scrollWidth` / `scrollHeight`: the CONTENT box, which is the viewport plus everything that
-    /// overflows it.
     pub(crate) scroll_width: f32,
     pub(crate) scroll_height: f32,
-    /// The content size and the clamp behind this answer are from the LAST PAINTED frame, because
-    /// the tree changed in this same JS wave and a layout could not be forced (see
-    /// [`crate::dom::layout_if_stale`]: it can during boot and `onMounted`, and nowhere inside an
-    /// event handler).
+    /// Content size and clamp are from the LAST PAINTED frame: the tree changed in this JS wave and a
+    /// layout could not be forced ([`crate::dom::layout_if_stale`]).
     pub(crate) stale: bool,
 }
 
@@ -61,7 +54,6 @@ thread_local! {
     static AT_BUILD: RefCell<HashMap<u32, (f32, f32)>> = RefCell::new(HashMap::new());
 }
 
-/// Records where a scroll container stood when this frame's build read it.
 pub(crate) fn note_built(id: u32, handle: &ScrollHandle) {
     let o = handle.offset();
     AT_BUILD.with(|m| m.borrow_mut().insert(id, (-f32::from(o.x), -f32::from(o.y))));
@@ -93,10 +85,7 @@ pub(crate) fn gc(live: &dyn Fn(u32) -> bool) {
     AT_BUILD.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
 }
 
-/// The scroll position and content size of a container, or `None` for a node the cascade never gave
-/// `overflow: scroll|auto`.
 pub(crate) fn info(id: u32) -> Option<Info> {
-    // A clean tree costs one flag read here.
     let stale = crate::dom::layout_if_stale(id);
     let handle = render::scroll_handle_of(id)?;
     Some(info_of(&handle, stale))
@@ -116,7 +105,6 @@ fn info_of(handle: &ScrollHandle, stale: bool) -> Info {
     }
 }
 
-/// `el.scrollTop = n` / `el.scrollLeft = n` / `scrollTo({left, top})`.
 pub(crate) fn set(id: u32, left: Option<f32>, top: Option<f32>) -> Option<Info> {
     let (handle, stale) = layout_then_handle(id)?;
     let current = handle.offset();
@@ -127,7 +115,6 @@ pub(crate) fn set(id: u32, left: Option<f32>, top: Option<f32>) -> Option<Info> 
     Some(apply(id, &handle, want, stale))
 }
 
-/// `scrollBy({left, top})`, in CSS px (positive = down/right).
 pub(crate) fn by(id: u32, dx: f32, dy: f32) -> Option<Info> {
     let (handle, stale) = layout_then_handle(id)?;
     let current = handle.offset();
@@ -138,9 +125,8 @@ pub(crate) fn by(id: u32, dx: f32, dy: f32) -> Option<Info> {
 fn apply(id: u32, handle: &ScrollHandle, want: Point<gpui::Pixels>, stale: bool) -> Info {
     let before = handle.offset();
     let max = handle.max_offset();
-    // The same clamp gpui's own wheel handler applies, and the same one the devtools `scroll`
-    // command has always applied: a programmatic scroll cannot leave the box somewhere a real wheel
-    // could not.
+    // The clamp gpui's wheel handler applies: a programmatic scroll cannot leave the box where a
+    // wheel could not.
     let clamped = Point {
         x: want.x.clamp(-max.x, px(0.)),
         y: want.y.clamp(-max.y, px(0.)),
@@ -152,23 +138,19 @@ fn apply(id: u32, handle: &ScrollHandle, want: Point<gpui::Pixels>, stale: bool)
     info_of(handle, stale)
 }
 
-/// The bookkeeping every offset change JS causes owes the rest of the engine.
 fn note_moved(id: u32) {
     PENDING.with(|p| p.borrow_mut().insert(id));
     tree::with_tree(|t| t.touch(id));
 }
 
-/// A browser lays out on write, and the clamp needs the layout.
 fn layout_then_handle(id: u32) -> Option<(ScrollHandle, bool)> {
     let stale = crate::dom::layout_if_stale(id);
     render::scroll_handle_of(id).map(|h| (h, stale))
 }
 
-/// `element.scrollIntoView(...)`.
 pub(crate) fn into_view(id: u32, block: Align, inline: Align) -> Result<bool, String> {
-    // `true` = the rectangles and clamps below are from the last painted frame (see
-    // [`Info::stale`]); the JS side turns it into the same one advisory a stale `scrollHeight`
-    // gets.
+    // `true`: the rectangles and clamps are from the last painted frame ([`Info::stale`]); the JS
+    // side turns it into the one advisory.
     let stale = crate::dom::layout_if_stale(id);
     // The same correction `dom::bounds` applies, for the same reason: two `scrollIntoView()` calls
     // in one JS wave must not both aim at the position the first one moved away from.
@@ -215,9 +197,6 @@ pub(crate) fn into_view(id: u32, block: Align, inline: Align) -> Result<bool, St
     Ok(stale)
 }
 
-/// How far the content must scroll (CSS sign: positive moves the content up/left) to put
-/// `[target_start, target_start + target_len)` where `align` asks inside `[view_start, view_start +
-/// view_len)`.
 fn align_delta(align: Align, target_start: f32, target_len: f32, view_start: f32, view_len: f32) -> f32 {
     let target_end = target_start + target_len;
     let view_end = view_start + view_len;
@@ -242,8 +221,6 @@ fn align_delta(align: Align, target_start: f32, target_len: f32, view_start: f32
     }
 }
 
-/// Fires the DOM `scroll` event for every container JS moved since the last frame, and says whether
-/// anything moved at all.
 pub(crate) fn dispatch_pending(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let pending: Vec<u32> = PENDING.with(|p| p.borrow_mut().drain().collect());
     if pending.is_empty() {
@@ -260,33 +237,24 @@ pub(crate) fn dispatch_pending(window: &mut gpui::Window, cx: &mut gpui::App) ->
 mod tests {
     use super::*;
 
-    /// `start` / `center` / `end` are the three unconditional alignments, and the sign convention
-    /// is CSS's: a positive delta scrolls the content up (the element moves toward the top of the
-    /// viewport).
     #[test]
     fn the_three_fixed_alignments_are_arithmetic() {
-        // A 40 px row at y = 500, in a 200 px viewport that starts at y = 100.
         let (t0, tl, v0, vl) = (500.0, 40.0, 100.0, 200.0);
         assert_eq!(align_delta(Align::Start, t0, tl, v0, vl), 400.0);
         assert_eq!(align_delta(Align::End, t0, tl, v0, vl), 240.0);
         assert_eq!(align_delta(Align::Center, t0, tl, v0, vl), 320.0);
     }
 
-    /// `nearest` is the one with a spec algorithm rather than a formula, and the four outcomes are
-    /// the four this test names.
     #[test]
     fn nearest_moves_only_the_edge_that_is_out() {
         let (v0, vl) = (100.0, 200.0);
         assert_eq!(align_delta(Align::Nearest, 150.0, 40.0, v0, vl), 0.0);
         assert_eq!(align_delta(Align::Nearest, 40.0, 30.0, v0, vl), -60.0);
         assert_eq!(align_delta(Align::Nearest, 400.0, 30.0, v0, vl), 130.0);
-        // Taller than the viewport and covering it on both sides: a browser does nothing, because
-        // every direction takes some of it off screen.
         assert_eq!(align_delta(Align::Nearest, 0.0, 1000.0, v0, vl), 0.0);
     }
 
-    /// An element exactly flush with an edge is inside, not out — otherwise every `scrollIntoView`
-    /// on an already-aligned row would jitter by a pixel of rounding.
+    /// An element exactly flush with an edge is inside: otherwise `scrollIntoView` on an aligned row jitters.
     #[test]
     fn nearest_treats_a_flush_edge_as_visible() {
         assert_eq!(align_delta(Align::Nearest, 100.0, 200.0, 100.0, 200.0), 0.0);
@@ -294,8 +262,6 @@ mod tests {
         assert_eq!(align_delta(Align::Nearest, 250.0, 50.0, 100.0, 200.0), 0.0);
     }
 
-    /// The wire encoding, including the "anything else is `nearest`" fallback the JS side relies on
-    /// for an unknown keyword.
     #[test]
     fn the_alignment_codes_are_what_the_runtime_sends() {
         assert_eq!(Align::from_code(0), Align::Start);

@@ -6,15 +6,6 @@
 //!     [--app Name] [--accent 005FB8/60CDFF] [--icon C:\Windows\notepad.exe]
 //!     [desktop] [--close-owner-after 2000] [solid]
 //! ```
-//!
-//! `light` / `dark` force the theme (the system's otherwise); `ru` asks in
-//! Russian; `owner` opens a window first and asks over it, which the prompt
-//! then disables until it is answered; `--accent` replaces the system accent
-//! (the light and dark themes' fills) and `--icon` takes another exe's icon,
-//! this one having none. `desktop` asks through vn-desktop's question, on
-//! its thread, as the app does; `--close-owner-after` then closes the owner
-//! under the prompt (a dismissal); `solid` draws the card without acrylic, as
-//! before Windows 11 22H2. Prints the answer and exits.
 
 #[cfg(target_os = "windows")]
 fn main() {
@@ -31,7 +22,6 @@ fn main() {
     };
     let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
     let app = value("--app").unwrap_or("Argon".into());
-    // `--accent 005FB8/60CDFF`: the light and dark themes' fills.
     let accent = value("--accent").and_then(|v| {
         let (l, d) = v.split_once('/')?;
         let rgb = |h: &str| {

@@ -5,10 +5,6 @@
 //! in so the embedded bundle can never be older than its sources; without bun the build fails with
 //! the command to run. `VN_DEVTOOLS_BUNDLE=<app.prod.js>` supplies a prebuilt bundle instead, for
 //! packaging jobs that build JS and Rust in separate stages.
-//!
-//! Emits `cfg(vn_devtools)` (protocol listener, embedded inspector, F12 key) for every build except
-//! `--features no-devtools`, which leaves them out of the image. `devtools` is an accepted no-op;
-//! combining it with `no-devtools` fails here.
 
 #[path = "build_native_inspector.rs"]
 mod native_inspector;
@@ -55,7 +51,6 @@ fn main() {
     let bundle = out.join("app.prod.js");
     let window_json = out.join("window.json");
 
-    // Generous on purpose: the inspector's sources and the framework runtime it is compiled against.
     watch_tree(&repo.join("apps/devtools"));
     watch_tree(&repo.join("packages/vue-native/src"));
     println!(
@@ -88,7 +83,6 @@ fn main() {
 
     let pkg = repo.join("packages/vue-native");
     let entry = repo.join("apps/devtools/src/main.ts");
-    // Let the OS resolve `bun` (`bun.exe`, or a shim).
     let status = Command::new("bun")
         .current_dir(&pkg)
         .arg("prod.ts")
@@ -152,7 +146,6 @@ fn deflate_bundle(bundle: &Path) {
 }
 
 /// `/DEBUG:NONE` for the `release` profile, so a shipped build does not write a huge `vn_app.pdb`.
-///
 /// `strip = "symbols"` does not do this on windows-msvc, and RUSTFLAGS would also strip dev builds;
 /// `rustc-link-arg-bins` is scoped to this package's binaries. The profile is read from `OUT_DIR`
 /// because `PROFILE` says "release" for every profile that inherits it, `release-symbols` included.
@@ -172,13 +165,11 @@ fn suppress_release_pdb() {
 /// function pointers (`callHostFunctionAsConstructor`), and identical-COMDAT folding made `BigInt`
 /// and `Symbol` non-constructors in `--release --features prod` builds. Scoped to this package's
 /// binaries; it lands after rustc's `/OPT:REF,ICF` and link.exe takes the last `/OPT`. Costs about
-/// 8 MB of exe size.
 fn no_identical_code_folding() {
     println!("cargo:rustc-link-arg-bins=/OPT:NOICF");
 }
 
 /// `/STACK:8388608,4096`: an 8 MiB reserve (what JSC needs for deep recursion) with one page of commit.
-///
 /// `.cargo/config.toml` sets a 1 MiB commit for every workspace binary, and threads created with
 /// `STACK_SIZE_PARAM_IS_A_RESERVATION` (every Rust thread, the GPU driver's workers) inherit the
 /// header's commit, so each committed 1 MiB up front. Done here rather than in rustflags because
@@ -188,8 +179,6 @@ fn thread_stack_commit() {
     println!("cargo:rustc-link-arg-bins=/STACK:8388608,4096");
 }
 
-/// The macOS counterparts of the link.exe switches above.
-///
 /// - `-ObjC`: keeps Objective-C categories from static libraries; a library's own link args never
 ///   reach the binary's link.
 /// - `-rpath /usr/lib/swift`: where frameworks that load the system Swift runtime (ScreenCaptureKit)
@@ -230,7 +219,6 @@ fn host_identity() {
     let version = std::fs::read_to_string(&pkg)
         .ok()
         .and_then(|text| {
-            // package.json's own `"version"` is the first.
             let at = text.find("\"version\"")?;
             let rest = &text[at + "\"version\"".len()..];
             let open = rest.find('"')?;
@@ -251,9 +239,7 @@ fn host_identity() {
     println!("cargo:rustc-env=VN_JSC_PIN={pin}");
 }
 
-/// The profile directory this build writes into (`release`, `debug`, `release-symbols`).
 fn profile_dir() -> Option<String> {
-    // OUT_DIR = <target>/<triple>/<profile>/build/<pkg>-<hash>/out
     let out = PathBuf::from(std::env::var("OUT_DIR").ok()?);
     let profile = out.ancestors().nth(3)?.file_name()?;
     Some(profile.to_string_lossy().into_owned())

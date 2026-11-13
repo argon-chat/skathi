@@ -1,20 +1,14 @@
 //! File System Access, the host side.
 //!
-//! Handles are ids: a JS `FileSystemHandle` carries a number and the path lives in [`HANDLES`]; no
-//! host function takes a path from script or returns one. A handle exists only for something the
-//! user granted (a picker result, a launch path, a dropped path) or for a child of a directory handle
-//! reached through the name fence ([`check_name`]): one path component, never `..`, a separator, an
-//! NTFS stream (`:`) or a device name.
+//! Handles are ids: a JS `FileSystemHandle` carries a number and the path lives in [`HANDLES`]; no host
+//! function takes a path from script or returns one. A handle exists only for something the user granted
+//! (a picker result, a launch path, a dropped path) or for a child of a directory handle reached through
+//! the name fence ([`check_name`]). Permission belongs to the path: a GRANT ([`grant`]) covers everything
+//! below it for this session; a handle on an uncovered path is `"prompt"` and every operation through it
+//! is `NotAllowedError` until `requestPermission()` grants it ([`permission`]).
 //!
-//! As in Chromium, handles are [Serializable] ([`to_wire`] / [`from_wire`]); the bytes carry the path
-//! and no script reads them. Permission belongs to the path, not the object: a GRANT ([`grant`]) is a
-//! path the user chose and covers everything below it for this session. A handle on an uncovered
-//! path is `"prompt"`: every operation through it is `NotAllowedError` until `requestPermission()`
-//! grants it ([`permission`]).
-//!
-//! Disk work runs on the pool; the `start_*` functions run on the frame thread, apply the name fence
-//! and either refuse synchronously or queue the operation and answer `{token}`. [`fail_io`] maps
-//! `io::Error` to DOMException names with Chromium's messages.
+//! Disk work runs on the pool; the `start_*` functions run on the frame thread, apply the name fence and
+//! either refuse synchronously or queue the operation and answer `{token}`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -55,8 +49,6 @@ fn handles() -> &'static Mutex<HashMap<u64, Entry>> {
 
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
-/// Makes a handle id for `path`. Registering grants nothing: [`granted_handle_json`] is for what
-/// the user chose.
 pub(crate) fn register(path: PathBuf, kind: Kind) -> u64 {
     let id = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
     handles().lock().unwrap_or_else(|p| p.into_inner()).insert(id, Entry { path, kind });
@@ -71,7 +63,6 @@ pub fn release(id: u64) {
     handles().lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
 }
 
-/// The last component, or the whole root for a drive (`C:\`), as Chromium names a picked drive.
 pub fn name_of(path: &Path) -> String {
     match path.file_name() {
         Some(n) => n.to_string_lossy().into_owned(),
@@ -84,7 +75,6 @@ pub(crate) fn handle_json(path: PathBuf, kind: Kind) -> serde_json::Value {
     json!({ "h": register(path, kind), "name": name, "kind": kind.as_str() })
 }
 
-/// [`handle_json`] plus the grant, for a path the user just chose.
 pub(crate) fn granted_handle_json(path: PathBuf, kind: Kind) -> serde_json::Value {
     grant(&path);
     handle_json(path, kind)
@@ -95,14 +85,12 @@ fn grants() -> &'static Mutex<Vec<String>> {
     G.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// The key a grant is compared by: lexical, no I/O, since it is checked on the frame thread before
-/// every operation.
+/// The key a grant is compared by: lexical, no I/O (checked on the frame thread before every operation).
 fn grant_key(p: &Path) -> String {
     let s = p.to_string_lossy();
     let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
     if cfg!(windows) {
         let s = s.replace('/', "\\").to_lowercase();
-        // `c:\` keeps its separator; `c:\x\` does not.
         let t = s.trim_end_matches('\\');
         if t.ends_with(':') || t.is_empty() { s } else { t.to_string() }
     } else {
@@ -127,8 +115,7 @@ pub fn is_granted(path: &Path) -> bool {
     })
 }
 
-/// `"granted"` or `"prompt"`; `request` grants the handle's path (the runtime passes it only on a
-/// user activation). `None` for an unknown id.
+/// `"granted"` or `"prompt"`; `request` grants the handle's path (only on a user activation). `None` for an unknown id.
 pub fn permission(id: u64, request: bool) -> Option<&'static str> {
     let e = lookup(id)?;
     if request {
@@ -149,13 +136,11 @@ fn granted(id: u64) -> Result<Entry, Fail> {
     Ok(e)
 }
 
-/// The bytes a handle is serialized as: `{"v":1,"kind":…,"path":…}`, opaque to script.
 pub(crate) fn to_wire(id: u64) -> Option<Vec<u8>> {
     let e = lookup(id)?;
     Some(json!({ "v": 1, "kind": e.kind.as_str(), "path": e.path.to_string_lossy() }).to_string().into_bytes())
 }
 
-/// The path and kind back from [`to_wire`]'s bytes, or `None` for anything else.
 pub(crate) fn from_wire(bytes: &[u8]) -> Option<(PathBuf, Kind)> {
     let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
     if v["v"].as_u64() != Some(1) {
@@ -192,8 +177,8 @@ pub const NOT_READABLE: &str =
     "The requested file could not be read, typically due to permission problems that have occurred after a reference to a file was acquired.";
 pub const BAD_NAME: &str = "Name is not allowed.";
 
-/// Whether the operation that failed was reading or writing: a refusal is
-/// `NotAllowedError` for one and `NoModificationAllowedError` for the other.
+/// Whether the failed operation was reading or writing: a refusal is `NotAllowedError` for one and
+/// `NoModificationAllowedError` for the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access {
     Read,
@@ -231,21 +216,15 @@ pub fn fail_io(e: &std::io::Error, access: Access) -> Fail {
     }
 }
 
-/// Windows device names, reserved with or without an extension.
 const DEVICE_NAMES: &[&str] = &[
     "con", "prn", "aux", "nul", "conin$", "conout$", "com0", "com1", "com2", "com3", "com4", "com5", "com6", "com7",
     "com8", "com9", "com¹", "com²", "com³", "lpt0", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8",
     "lpt9", "lpt¹", "lpt²", "lpt³",
 ];
 
-/// The traversal fence of `getFileHandle` / `getDirectoryHandle` / `removeEntry`: not empty, not
-/// `.` or `..`, no separator, and on Windows also:
-///
-/// - no `:` (`a.txt:payload` is an alternate data stream, `C:x` is drive-relative);
-/// - no device name;
-/// - no trailing `.` or space (Windows strips them, so two names would reach one file);
-/// - none of `< > " | ? *` or control characters.
-///
+/// The traversal fence of `getFileHandle` / `getDirectoryHandle` / `removeEntry`: not empty, not `.` or
+/// `..`, no separator, and on Windows also no `:` (alternate data stream, drive-relative), no device
+/// name, no trailing `.` or space (two names would reach one file), none of `< > " | ? *` or controls.
 /// Every refusal is Chromium's `TypeError` "Name is not allowed."
 pub fn check_name(name: &str) -> Result<(), Fail> {
     let bad = || Err(Fail::type_error(BAD_NAME));
@@ -265,7 +244,6 @@ pub fn check_name(name: &str) -> Result<(), Fail> {
     Ok(())
 }
 
-/// `getFile()`: the file as it is now; its size and mtime are the snapshot reads are checked against.
 pub fn op_stat_file(path: &Path) -> Result<(u64, Option<std::time::SystemTime>), Fail> {
     let m = std::fs::metadata(path).map_err(|e| fail_io(&e, Access::Read))?;
     if m.is_dir() {
@@ -282,8 +260,7 @@ fn ensure_dir(dir: &Path) -> Result<(), Fail> {
     Ok(())
 }
 
-/// `getFileHandle` / `getDirectoryHandle`; `name` has passed [`check_name`]. An existing entry of the
-/// other kind is `TypeMismatchError` whether or not `create` is set.
+/// `name` has passed [`check_name`]. An existing entry of the other kind is `TypeMismatchError`.
 pub fn op_child(dir: &Path, name: &str, kind: Kind, create: bool) -> Result<PathBuf, Fail> {
     ensure_dir(dir)?;
     let child = dir.join(name);
@@ -298,8 +275,7 @@ pub fn op_child(dir: &Path, name: &str, kind: Kind, create: bool) -> Result<Path
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && create => {
             let made = match kind {
                 Kind::Directory => std::fs::create_dir(&child),
-                // `create_new`: two racing creates must not truncate each
-                // other's file; the loser finds it and returns it below.
+                // `create_new`: two racing creates must not truncate each other's file.
                 Kind::File => std::fs::OpenOptions::new().write(true).create_new(true).open(&child).map(|_| ()),
             };
             match made {
@@ -316,8 +292,7 @@ pub fn op_remove(dir: &Path, name: &str, recursive: bool) -> Result<(), Fail> {
     ensure_dir(dir)?;
     let child = dir.join(name);
     let m = std::fs::symlink_metadata(&child).map_err(|e| fail_io(&e, Access::Write))?;
-    // A link (a symlink or a junction) is removed as the link: never what it
-    // points at. `remove_dir_all` does not follow links either.
+    // A link is removed as the link, never what it points at.
     let r = if m.is_dir() {
         if recursive {
             std::fs::remove_dir_all(&child)
@@ -332,13 +307,10 @@ pub fn op_remove(dir: &Path, name: &str, recursive: bool) -> Result<(), Fail> {
     r.map_err(|e| fail_io(&e, Access::Write))
 }
 
-/// Canonical where it still resolves, else absolute and lexical (a deleted file is still the same
-/// entry as another handle on its path).
 fn identity(p: &Path) -> String {
     let canon = std::fs::canonicalize(p).unwrap_or_else(|_| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()));
     let s = canon.to_string_lossy();
     let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
-    // NTFS compares names case-insensitively, and so does Explorer.
     if cfg!(windows) {
         s.to_lowercase()
     } else {
@@ -350,7 +322,6 @@ pub fn op_same(a: &Path, a_kind: Kind, b: &Path, b_kind: Kind) -> bool {
     a_kind == b_kind && identity(a) == identity(b)
 }
 
-/// `resolve(possibleDescendant)`: components from `root` down to `desc`, or `None` when not inside.
 pub fn op_resolve(root: &Path, desc: &Path) -> Option<Vec<String>> {
     let (r, d) = (identity(root), identity(desc));
     let sep = std::path::MAIN_SEPARATOR;
@@ -361,8 +332,6 @@ pub fn op_resolve(root: &Path, desc: &Path) -> Option<Vec<String>> {
     if !d.starts_with(&prefix) {
         return None;
     }
-    // The descendant's own spelling, not the lowercased key: count the components below the root
-    // and take that many from the end of its path.
     let below = d[prefix.len()..].split(sep).filter(|c| !c.is_empty()).count();
     let comps: Vec<String> = desc.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
     if comps.len() < below {
@@ -371,7 +340,6 @@ pub fn op_resolve(root: &Path, desc: &Path) -> Option<Vec<String>> {
     Some(comps[comps.len() - below..].to_vec())
 }
 
-/// Entries per batch: a 100 000-entry folder is iterated in small JSON strings, never one giant one.
 pub const DIR_BATCH: usize = 256;
 
 pub struct Cursor {
@@ -386,8 +354,6 @@ impl Cursor {
         Ok(Cursor { dir: dir.to_path_buf(), iter: Some(iter) })
     }
 
-    /// Up to `max` entries and whether the folder is exhausted. A link reports its target's kind; a
-    /// dangling link and anything neither file nor folder are skipped.
     pub fn next(&mut self, max: usize) -> Result<(Vec<(PathBuf, Kind)>, bool), Fail> {
         let mut out = Vec::new();
         let Some(iter) = self.iter.as_mut() else { return Ok((out, true)) };
@@ -494,7 +460,6 @@ pub fn start_remove(dir: u64, name: &str, recursive: bool) -> String {
     token_json(token)
 }
 
-/// Async because canonicalising is I/O.
 pub fn start_same(a: u64, b: u64) -> String {
     let (Some(ea), Some(eb)) = (lookup(a), lookup(b)) else { return gone().to_sync_json() };
     let token = crate::next_token();
@@ -530,7 +495,6 @@ pub fn start_dir_open(dir: u64) -> String {
     token_json(token)
 }
 
-/// Each entry is a handle granted here: it is inside the folder the user picked.
 pub fn start_dir_next(cursor: u64) -> String {
     let Some(c) = cursors().lock().unwrap_or_else(|p| p.into_inner()).get(&cursor).cloned() else {
         return gone().to_sync_json();
@@ -547,12 +511,10 @@ pub fn start_dir_next(cursor: u64) -> String {
     token_json(token)
 }
 
-/// An iteration abandoned early; dropping the `ReadDir` closes the OS handle.
 pub fn dir_close(cursor: u64) {
     cursors().lock().unwrap_or_else(|p| p.into_inner()).remove(&cursor);
 }
 
-/// The path behind a handle id, for other host modules (a picker's `startIn`). Never handed to JS.
 pub(crate) fn path_of(id: u64) -> Option<(PathBuf, Kind)> {
     lookup(id).map(|e| (e.path, e.kind))
 }
@@ -623,11 +585,9 @@ pub(crate) mod tests {
         assert_eq!(op_child(&s.0, "missing", Kind::File, false).unwrap_err().name, "NotFoundError");
         let made = op_child(&s.0, "new.txt", Kind::File, true).unwrap();
         assert_eq!(std::fs::read(&made).unwrap(), b"");
-        // `create` on an existing file returns it and leaves its bytes alone.
         assert_eq!(op_child(&s.0, "a.txt", Kind::File, true).unwrap(), s.0.join("a.txt"));
         assert_eq!(std::fs::read(s.0.join("a.txt")).unwrap(), b"x");
         assert!(op_child(&s.0, "newdir", Kind::Directory, true).unwrap().is_dir());
-        // A handle on a file is not a folder to look into.
         assert_eq!(op_child(&s.0.join("a.txt"), "x", Kind::File, false).unwrap_err().name, "TypeMismatchError");
         assert_eq!(op_stat_file(&s.0.join("sub")).unwrap_err().name, "TypeMismatchError");
         assert_eq!(op_stat_file(&s.0.join("a.txt")).unwrap().0, 1);
@@ -664,10 +624,8 @@ pub(crate) mod tests {
         assert_eq!(op_resolve(&s.0, &file), Some(vec!["Sub".into(), "Deep".into(), "File.txt".into()]));
         assert_eq!(op_resolve(&s.0, &s.0), Some(vec![]));
         assert_eq!(op_resolve(&s.0.join("Sub"), &s.0), None);
-        // A sibling whose name merely starts with the root's is not inside it.
         std::fs::create_dir(s.0.join("Sub2")).unwrap();
         assert_eq!(op_resolve(&s.0.join("Sub"), &s.0.join("Sub2")), None);
-        // A deleted file still resolves lexically.
         std::fs::remove_file(&file).unwrap();
         assert_eq!(op_resolve(&s.0, &file).map(|v| v.len()), Some(3));
     }
@@ -694,15 +652,12 @@ pub(crate) mod tests {
         assert_eq!(sizes[..2], [256, 256]);
         assert!(sizes.iter().all(|&n| n <= DIR_BATCH));
         assert_eq!(all.iter().filter(|(_, k)| *k == Kind::Directory).count(), 1);
-        // Exhausted stays exhausted.
         assert_eq!(c.next(DIR_BATCH).unwrap(), (vec![], true));
         assert_eq!(Cursor::open(&s.0.join("f000")).err().map(|f| f.name), Some("TypeMismatchError"));
     }
 
     #[test]
     fn handles_are_granted_and_released_by_id() {
-        // By id, not by counting the table: other tests grant handles in
-        // parallel.
         let report = PathBuf::from(if cfg!(windows) { r"C:\x\report.txt" } else { "/x/report.txt" });
         let v = handle_json(report.clone(), Kind::File);
         assert_eq!((v["name"].as_str(), v["kind"].as_str()), (Some("report.txt"), Some("file")));
@@ -710,7 +665,6 @@ pub(crate) mod tests {
         assert_eq!(lookup(id).map(|e| e.path), Some(report));
         release(id);
         assert!(lookup(id).is_none());
-        // An unknown id answers synchronously, with no token.
         let out: serde_json::Value = serde_json::from_str(&start_get_file(id)).unwrap();
         assert_eq!(out["name"], "InvalidStateError");
         assert!(out.get("token").is_none());
@@ -726,7 +680,6 @@ pub(crate) mod tests {
         std::fs::create_dir_all(root.join("inner")).unwrap();
         std::fs::write(root.join("inner/a.txt"), b"a").unwrap();
         std::fs::write(s.0.join("Picked2.txt"), b"b").unwrap();
-        // A handle made from bytes (a restored one) on a path nobody granted.
         let h = register(root.clone(), Kind::Directory);
         assert_eq!(permission(h, false), Some("prompt"));
         for refused in [start_dir_open(h), start_child(h, "inner", Kind::Directory, false), start_remove(h, "inner", true)] {
@@ -734,14 +687,12 @@ pub(crate) mod tests {
             assert_eq!((v["name"].as_str(), v["error"].as_str()), (Some("NotAllowedError"), Some(NOT_ALLOWED)), "{refused}");
         }
         assert!(root.join("inner/a.txt").exists(), "nothing ran");
-        // requestPermission grants the path, and its subtree with it.
         assert_eq!(permission(h, true), Some("granted"));
         assert!(is_granted(&root.join("inner").join("a.txt")));
         if cfg!(windows) {
             assert!(is_granted(Path::new(&root.to_string_lossy().to_uppercase())), "NTFS names compare without case");
             assert!(is_granted(&PathBuf::from(format!("{}\\", root.display()))));
         }
-        // A sibling whose name merely starts with the grant's is not inside it.
         assert!(!is_granted(&s.0.join("Picked2.txt")));
         assert!(!is_granted(&s.0));
         let f = register(s.0.join("Picked2.txt"), Kind::File);
@@ -749,7 +700,6 @@ pub(crate) mod tests {
         assert_eq!(v["name"], "NotAllowedError");
         assert_eq!(permission(f, false), Some("prompt"));
         assert_eq!(permission(u64::MAX, true), None, "an unknown id grants nothing");
-        // The writable is refused the same way.
         let v: serde_json::Value = serde_json::from_str(&writable::start_open(f, false)).unwrap();
         assert_eq!(v["name"], "NotAllowedError");
         release(h);

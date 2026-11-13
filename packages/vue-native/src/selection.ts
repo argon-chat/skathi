@@ -1,22 +1,14 @@
-// Text selection: `getSelection()`, `Selection`, `Range`, `document.createRange()` (the JS half
-// of crates/vn-tree/src/selection.rs).
-//
-// The selection lives in the host (drags, double click, Shift+click and Ctrl+A change it without
-// a JS round trip); `Selection` reads it on every access through `__vn_selection_get` and writes
-// through `__vn_selection_set`. A boundary in an element's own text (no Text child in the mirror)
-// is handed out as a real Text node by `materialize`.
-//
-// `Range` is a plain JS object over mirror nodes but STATIC (DOM mutations do not move it), and
-// its rects are element boxes, not glyph boxes. The range a Selection hands out is the
-// selection's own while the two agree.
-//
-// `selectstart` and `selectionchange` are host events dispatched by runtime.ts. This module reads
-// no ambient names: everything comes in through `env`, and without `env.host` nothing installs.
+// Text selection: `getSelection()`, `Selection`, `Range`, `document.createRange()` (the JS half of
+// crates/vn-tree/src/selection.rs).
+// The selection lives in the host (drags, double click, Shift+click and Ctrl+A change it without a JS round trip);
+// `Selection` reads it on every access through `__vn_selection_get` and writes through `__vn_selection_set`. A boundary
+// in an element's own text (no Text child in the mirror) is handed out as a real Text node by `materialize`.
+// `Range` is a plain JS object over mirror nodes but STATIC (DOM mutations do not move it), and its rects are element
+// boxes, not glyph boxes. `selectstart` and `selectionchange` are host events dispatched by runtime.ts. This module
+// reads no ambient names: everything comes in through `env`, and without `env.host` nothing installs.
 
 export interface SelectionHost {
-  /** `"anchor,anchorOffset,anchorOwn,focus,focusOffset,focusOwn"`, or `""` for none. */
   get(): string;
-  /** Anchor and focus as DOM points; anchor 0 empties the selection. Answers whether both were live nodes. */
   set(anchor: number, anchorOffset: number, focus: number, focusOffset: number): boolean;
   text(): string;
 }
@@ -90,7 +82,6 @@ export function installSelection(env: SelectionEnv): void {
     for (let n = b; n; n = n.parentNode) if (n === a) return true;
     return false;
   };
-  /** -1, 0 or 1: where (an, ao) lies relative to (bn, bo). */
   const compare = (an: SelNode, ao: number, bn: SelNode, bo: number): number => {
     if (an === bn) return Math.sign(ao - bo);
     if (holds(an, bn)) {
@@ -99,7 +90,6 @@ export function installSelection(env: SelectionEnv): void {
       return ao <= indexOf(c) ? -1 : 1;
     }
     if (holds(bn, an)) return -compare(bn, bo, an, ao);
-    // Neither holds the other: tree order of the two nodes.
     const chain = (n: SelNode) => {
       const out: SelNode[] = [];
       for (let x: SelNode | null = n; x; x = x.parentNode) out.unshift(x);
@@ -289,7 +279,6 @@ export function installSelection(env: SelectionEnv): void {
       if (ec.kind === 2) out += (ec.text ?? "").slice(0, eo);
       return out;
     }
-    /** Element boxes, not glyph boxes: a part of a text gives its element's rect. */
     getClientRects() {
       const out: DOMRectLike[] = [];
       const seen = new Set<SelNode>();
@@ -556,7 +545,6 @@ export function installSelection(env: SelectionEnv): void {
       if (!(range instanceof RangeImpl)) {
         throw new TypeError("Failed to execute 'addRange' on 'Selection': parameter 1 is not of type 'Range'.");
       }
-      // Chromium: a second range is ignored (no multi-range selections).
       if (read() || !inDocument(range._sc)) return;
       this.tie(range);
       this._push(range._sc, range._so, range._ec, range._eo);

@@ -65,7 +65,6 @@ convolves!(
     vpx_convolve8_avx2, vpx_convolve8_avg_avx2,
 );
 
-/// A 1-D pass's direction and whether it averages.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Pass {
     H,
@@ -74,7 +73,6 @@ enum Pass {
     VAvg,
 }
 
-/// Source and destination planes with a margin the filters may read into.
 struct Planes {
     src: Vec<u8>,
     dst: Vec<u8>,
@@ -82,13 +80,11 @@ struct Planes {
 
 const STRIDE: usize = 96;
 const ROWS: usize = 160;
-/// Where a block starts: 8 rows and 8 columns into the planes.
 const ORIGIN: usize = 8 * STRIDE + 8;
 
 impl Planes {
     fn new(noise: &mut Noise) -> Planes {
         let mut src = noise.bytes(STRIDE * ROWS);
-        // Runs of extremes, so clipping happens.
         for (i, b) in src.iter_mut().enumerate() {
             match (i / 7) % 11 {
                 0 => *b = 0,
@@ -104,7 +100,6 @@ fn kernel(table: usize, phase: usize) -> *const i16 {
     unsafe { vp9_filter_kernels[table].add(phase) as *const i16 }
 }
 
-/// libvpx's C for one helper's job: `w` × `h` at ORIGIN.
 fn reference(planes: &Planes, dst: &mut [u8], pass: Pass, table: usize, phase: usize, w: usize, h: usize) {
     let kernels = unsafe { vp9_filter_kernels[table] };
     let (src, d) = (planes.src[ORIGIN..].as_ptr(), dst[ORIGIN..].as_mut_ptr());
@@ -119,8 +114,7 @@ fn reference(planes: &Planes, dst: &mut [u8], pass: Pass, table: usize, phase: u
     }
 }
 
-/// One shim helper against the C for every phase of every kernel table it
-/// can be handed (`tables`), at several heights, on fresh noise each time.
+/// One shim helper against the C for every phase of every kernel table it can be handed.
 fn check_helper(name: &str, helper: Helper, w: usize, taps: usize, pass: Pass, tables: &[usize]) {
     let mut noise = Noise(0x1234_5678 ^ (w as u64) << 8 ^ taps as u64);
     for &table in tables {
@@ -141,8 +135,7 @@ fn check_helper(name: &str, helper: Helper, w: usize, taps: usize, pass: Pass, t
     }
 }
 
-/// Every kernel table with outer taps (regular, smooth, sharp, and the 4-tap
-/// one the averaging 8-tap helpers also take), and the bilinear one.
+/// Every kernel table with outer taps, and the bilinear one.
 const EIGHT_TAP_TABLES: &[usize] = &[0, 1, 2, 4];
 const BILINEAR: &[usize] = &[3];
 
@@ -210,8 +203,7 @@ fn has_avx2() -> bool {
     std::arch::is_x86_feature_detected!("avx2")
 }
 
-/// The convolutions the decoder dispatches to (each a FUN_CONV_1D/2D over the
-/// helpers, shim ones included) against their C, every block size VP9 has.
+/// The convolutions the decoder dispatches to against their C, every block size VP9 has.
 #[test]
 fn every_simd_convolution_matches_libvpx_c() {
     let mut sets: Vec<(&str, [Convolve; 6])> = vec![
@@ -253,11 +245,9 @@ fn every_simd_convolution_matches_libvpx_c() {
     }
 }
 
-/// libvpx's dispatched function pointers (vpx_dsp_rtcd.h's RTCD_EXTERN
-/// globals; vp9_rtcd.h and vpx_scale_rtcd.h dispatch nothing on x86_64), and
-/// what libvpx's set-up would store in each on a CPU with SSE2, SSSE3 or
-/// AVX2. The intra predictors are left out: every SIMD one is asm-only, so
-/// they are C at every level here.
+/// libvpx's dispatched function pointers (vpx_dsp_rtcd.h's RTCD_EXTERN globals), and what libvpx's
+/// set-up would store in each on a CPU with SSE2, SSSE3 or AVX2. The intra predictors are left out:
+/// every SIMD one is asm-only, so they are C at every level here.
 macro_rules! dispatch_table {
     (variants: $($variant:ident),* ; table: $($slot:ident: $c:ident, $sse2:ident, $ssse3:ident, $avx2:ident;)*) => {
         extern "C" {
@@ -275,7 +265,6 @@ macro_rules! dispatch_table {
                 )*
             }
         }
-        /// Points every dispatched function at its `level` variant.
         unsafe fn dispatch(level: &str) {
             $(
                 let f: unsafe extern "C" fn() = match level {
@@ -324,8 +313,7 @@ dispatch_table! {
     vpx_scaled_2d: vpx_scaled_2d_c, vpx_scaled_2d_c, vpx_scaled_2d_ssse3, vpx_scaled_2d_ssse3;
 }
 
-/// The child half of [`every_simd_level_decodes_bit_exact`]: sets libvpx's
-/// dispatch to `VN_VPX_LEVEL`, decodes the clip, prints the hash.
+/// The child half of [`every_simd_level_decodes_bit_exact`]: sets the dispatch, decodes, prints the hash.
 #[test]
 #[ignore = "run by every_simd_level_decodes_bit_exact in a child process"]
 fn simd_level_child() {
@@ -347,12 +335,10 @@ fn simd_level_child() {
     println!("HASH {shown} {hash:#018x}");
 }
 
-/// The clip decoded with libvpx's dispatch set as a CPU with only SSE2, with
-/// SSSE3, and with AVX2 would set it (and with the rtcd C fallbacks), each in
-/// a child process because the dispatch is process-wide. libvpx's own
-/// `VPX_SIMD_CAPS` override cannot do this: on a current Windows SDK its
-/// `getenv` is compiled out (vpx_ports/x86.h tests
-/// `WINAPI_FAMILY_PARTITION(WINAPI_FAMILY_APP)`, which is always true now).
+/// The clip decoded with the dispatch set as a CPU with only SSE2, SSSE3 or AVX2 would set it (and
+/// the rtcd C fallbacks), each in a child process because the dispatch is process-wide. libvpx's
+/// own `VPX_SIMD_CAPS` override cannot do this: on a current Windows SDK its `getenv` is compiled
+/// out (vpx_ports/x86.h tests `WINAPI_FAMILY_PARTITION(WINAPI_FAMILY_APP)`, always true now).
 #[test]
 fn every_simd_level_decodes_bit_exact() {
     let exe = std::env::current_exe().unwrap();

@@ -33,7 +33,6 @@ const MAX_ROWS: usize = 20;
 const TYPEAHEAD_RESET: Duration = Duration::from_millis(1000);
 
 
-/// One line of the popup: an `<optgroup>`'s label, or an option.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Row {
     Group { label: String },
@@ -41,7 +40,6 @@ pub(crate) enum Row {
 }
 
 impl Row {
-    /// An option the user can pick: enabled, and shown.
     fn pickable(&self) -> Option<usize> {
         match self {
             Row::Opt { index, disabled: false, hidden: false, .. } => Some(*index),
@@ -50,7 +48,6 @@ impl Row {
     }
 }
 
-/// A present boolean attribute ("false" is Vue's spelling of absent).
 fn flag(t: &Tree, id: u32, name: &str) -> bool {
     t.prop(id, name).is_some_and(|v| v != "false")
 }
@@ -91,8 +88,6 @@ fn collect_text(t: &Tree, id: u32, out: &mut String, depth: usize) {
     }
 }
 
-/// The select's list of options, in HTML's order (its option children, and the option children of
-/// its optgroup children), with the optgroups' labels between them.
 pub(crate) fn rows(t: &Tree, select: u32) -> Vec<Row> {
     let mut out = Vec::new();
     let Some(n) = t.node(select) else { return out };
@@ -123,25 +118,20 @@ pub(crate) fn rows(t: &Tree, select: u32) -> Vec<Row> {
     out
 }
 
-/// The index the runtime says is selected: `selectedIndex`, `None` for -1.
 pub(crate) fn shown(t: &Tree, select: u32) -> Option<usize> {
     let ix = t.prop(select, ":selected")?.trim().parse::<i64>().ok()?;
     usize::try_from(ix).ok()
 }
 
-/// Can `select` open, or change by the keyboard: a select, in the tree, and not actually disabled.
 fn usable(t: &Tree, select: u32) -> bool {
     is_select(t, select) && !crate::render::actually_disabled(t, select)
 }
 
 
-/// The pickable options, in order.
 fn choices(rows: &[Row]) -> Vec<usize> {
     rows.iter().filter_map(Row::pickable).collect()
 }
 
-/// Where a key moves from `from`: `delta` pickable options on (negative: back), clamped to the
-/// first and the last.
 fn step(rows: &[Row], from: Option<usize>, delta: isize) -> Option<usize> {
     let c = choices(rows);
     let (first, last) = (*c.first()?, *c.last()?);
@@ -160,7 +150,6 @@ fn step(rows: &[Row], from: Option<usize>, delta: isize) -> Option<usize> {
     Some(if at < 0 { first } else { c.get(at as usize).copied().unwrap_or(last) })
 }
 
-/// What one key does to the selection or the highlight, if it moves it.
 fn moved(rows: &[Row], from: Option<usize>, key: &str) -> Option<Option<usize>> {
     let page = MAX_ROWS as isize - 1;
     Some(match key {
@@ -174,7 +163,6 @@ fn moved(rows: &[Row], from: Option<usize>, key: &str) -> Option<Option<usize>> 
     })
 }
 
-/// A type-ahead search in progress (Chromium's `TypeAhead`).
 #[derive(Default)]
 struct Typeahead {
     text: String,
@@ -186,7 +174,6 @@ impl Typeahead {
         !self.text.is_empty() && self.at.is_some_and(|t| now.duration_since(t) < TYPEAHEAD_RESET)
     }
 
-    /// Types `ch` and finds the option it names, from `from`.
     fn find(&mut self, rows: &[Row], from: Option<usize>, ch: char, now: Instant) -> Option<usize> {
         if !self.active(now) {
             self.text.clear();
@@ -214,7 +201,6 @@ impl Typeahead {
     }
 }
 
-/// A printable character a key typed, with no Ctrl, Alt or Windows key held.
 fn typed(ev: &KeyDownEvent) -> Option<char> {
     let m = &ev.keystroke.modifiers;
     if m.control || m.alt || m.platform {
@@ -230,33 +216,26 @@ fn typed(ev: &KeyDownEvent) -> Option<char> {
 struct Open {
     select: u32,
     window: WinKey,
-    /// The option Enter would pick: the selected one at first, then wherever the keyboard or the
-    /// pointer moved it.
     highlight: Option<usize>,
     scroll: ScrollHandle,
-    /// Scroll the highlighted row into view at the next build.
     reveal: bool,
     bounds: Option<Bounds<Pixels>>,
     typeahead: Typeahead,
 }
 
 thread_local! {
-    /// The one open popup; a desktop has one at a time, as it has one pointer.
     static OPEN: RefCell<Option<Open>> = const { RefCell::new(None) };
-    /// The select a press is on, until the press's default action runs ([`press_settled`]).
     static PRESSED: Cell<Option<(WinKey, u32)>> = const { Cell::new(None) };
     /// The window whose next release is swallowed: its press closed a popup.
     static SWALLOW_UP: Cell<Option<WinKey>> = const { Cell::new(None) };
-    /// A closed select's type-ahead.
     static TYPED: RefCell<Typeahead> = RefCell::new(Typeahead::default());
 }
 
-/// The select whose popup is open in this window.
 fn open_in(k: WinKey) -> Option<u32> {
     OPEN.with(|o| o.borrow().as_ref().filter(|o| o.window == k).map(|o| o.select))
 }
 
-/// Not: it closes, without a repaint (the caller is mid-event, or mid-build).
+/// The open select if it still paints; otherwise it closes, without a repaint (the caller is mid-event, or mid-build).
 fn still_open(k: WinKey) -> Option<u32> {
     let select = open_in(k)?;
     let painted = windows::peek(k, |w| w.bounds.contains_key(&select) || w.prev_bounds.contains_key(&select))
@@ -269,7 +248,6 @@ fn still_open(k: WinKey) -> Option<u32> {
     None
 }
 
-/// The select's subtree builds again, and every window paints.
 fn changed(select: u32, window: &mut Window, cx: &mut App) {
     tree::with_tree(|t| t.touch(select));
     crate::render::request_repaint(window, cx);
@@ -305,14 +283,11 @@ fn pick(select: u32, index: usize, window: &mut Window, cx: &mut App) {
     commit(select, index, window, cx);
 }
 
-/// Selects option `index` of `select` the way the user does: the runtime applies it and fires
-/// `input` and `change` (runtime.ts, `pickOption`).
 fn commit(select: u32, index: usize, window: &mut Window, cx: &mut App) {
     let payload = EventPayload { a: index as f64, ..Default::default() };
     crate::render::js_dispatch_app(select, tree::EV_INPUT, &payload, window, cx);
 }
 
-/// The highlight moves to `index`.
 fn highlight(index: Option<usize>, reveal: bool, window: &mut Window, cx: &mut App) {
     let select = OPEN.with(|o| {
         let mut o = o.borrow_mut();
@@ -330,8 +305,6 @@ fn highlight(index: Option<usize>, reveal: bool, window: &mut Window, cx: &mut A
 }
 
 
-/// The select's press listener: the popup opens as the press's default action ([`press_settled`]),
-/// after the `mousedown` and the focus it gives.
 pub(crate) fn bind_press<E: InteractiveElement>(e: E, id: u32) -> E {
     e.on_mouse_down(MouseButton::Left, move |_, window, _| {
         PRESSED.with(|p| p.set(Some((windows::key(window), id))));
@@ -346,7 +319,6 @@ pub(crate) fn press_settled(cancelled: bool, window: &mut Window, cx: &mut App) 
     open(select, window, cx);
 }
 
-/// The hit refiner's first question (`pointer::refine`): is the event the popup's?
 pub(crate) fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) -> bool {
     let k = windows::key(window);
     if kind == VnHitKind::Up && SWALLOW_UP.with(|s| s.get()) == Some(k) {
@@ -377,7 +349,6 @@ pub(crate) fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx:
     }
 }
 
-/// The event reaches no element: only the popup's own boxes, which carry no node tag, keep it.
 fn hit_nothing(kind: VnHitKind, window: &mut Window) {
     windows::here(window, |w| {
         w.hit = None;
@@ -393,16 +364,14 @@ fn hit_nothing(kind: VnHitKind, window: &mut Window) {
     window.vn_restrict_mouse_hit(&|_| false, false);
 }
 
-/// Is the pointer over the popup?
 pub(crate) fn covers(window: &Window, p: Point<Pixels>) -> bool {
     let k = windows::key(window);
     OPEN.with(|o| o.borrow().as_ref().filter(|o| o.window == k).and_then(|o| o.bounds).is_some_and(|b| b.contains(&p)))
 }
 
 
-/// The build root's key listeners: the popup's keys in the capture phase, before anything of the
-/// page; a closed select's in the bubble phase, after every `keydown` handler, so a cancelled one
-/// does nothing.
+/// The build root's key listeners: the popup's keys in the capture phase; a closed select's in the
+/// bubble phase after every `keydown` handler, so a cancelled one does nothing.
 pub(crate) fn bind_root<E: InteractiveElement>(e: E) -> E {
     e.capture_key_down(|ev: &KeyDownEvent, window, cx| {
         if popup_key(ev, window, cx) {
@@ -417,7 +386,6 @@ pub(crate) fn bind_root<E: InteractiveElement>(e: E) -> E {
     .on_key_down(closed_key)
 }
 
-/// A key while the popup is open.
 fn popup_key(ev: &KeyDownEvent, window: &mut Window, cx: &mut App) -> bool {
     let k = windows::key(window);
     let Some(select) = still_open(k) else { return false };
@@ -452,7 +420,6 @@ fn popup_key(ev: &KeyDownEvent, window: &mut Window, cx: &mut App) -> bool {
     true
 }
 
-/// A key on a focused, closed select, once every `keydown` handler has run.
 fn closed_key(ev: &KeyDownEvent, window: &mut Window, cx: &mut App) {
     let k = windows::key(window);
     if open_in(k).is_some() || windows::here(window, |w| w.key_prevented) {
@@ -490,8 +457,6 @@ fn closed_key(ev: &KeyDownEvent, window: &mut Window, cx: &mut App) {
 }
 
 
-/// What a select shows inside its own box: the shown option's label, every other label at no height
-/// (they size the box), and Chromium's arrow and internal padding unless `appearance` is `none`.
 pub(crate) fn closed_children(
     t: &Tree,
     id: u32,
@@ -534,8 +499,6 @@ pub(crate) fn closed_children(
     kids
 }
 
-/// Chromium's menulist arrow: a chevron in the text colour, centred in the arrow box at the end of
-/// the padding box, at the box's middle.
 fn arrow() -> AnyElement {
     let mut c = gpui::canvas(
         |_, _, _| (),
@@ -563,7 +526,6 @@ fn arrow() -> AnyElement {
     c.into_any_element()
 }
 
-/// The popup's colours (approximately Chromium's list picker's).
 struct Palette {
     background: Hsla,
     border: Hsla,
@@ -593,8 +555,6 @@ fn palette(dark: bool) -> Palette {
     }
 }
 
-/// The popup, if `id`'s is open in this window: a deferred child of the select, so it inherits the
-/// select's text style and paints over everything.
 pub(crate) fn popup_child(
     t: &Tree,
     id: u32,
@@ -707,9 +667,8 @@ pub(crate) fn popup_child(
     Some(gpui::deferred(placed).priority(1).with_stack_key(std::rc::Rc::from([u128::MAX])).into_any_element())
 }
 
-/// The popup's placement: under the select's box, or above it when it does not fit there and fits
-/// better above, kept inside the window sideways. gpui's `anchored` flips around ONE point; a popup
-/// flips around a box.
+/// The popup's placement: under the select's box, or above when it does not fit and fits better
+/// there, kept inside the window sideways (gpui's `anchored` flips around one point, a popup around a box).
 struct Placed {
     select: u32,
     child: AnyElement,
@@ -781,7 +740,6 @@ impl gpui::Element for Placed {
     }
 }
 
-/// Where a popup of `size` goes for a select at `rect` (`x, y, w, h`) in a window of `viewport`.
 fn place(rect: windows::Rect, size: gpui::Size<Pixels>, viewport: gpui::Size<Pixels>) -> Point<Pixels> {
     let (x, y, _, h) = rect;
     let (vw, vh) = (f32::from(viewport.width), f32::from(viewport.height));
@@ -896,7 +854,6 @@ mod tests {
         let vp = gpui::size(px(800.), px(600.));
         let sz = |w: f32, h: f32| gpui::size(px(w), px(h));
         assert_eq!(place((10., 100., 200., 30.), sz(200., 300.), vp), gpui::point(px(10.), px(130.)));
-        // Not below, more room above: above.
         assert_eq!(place((10., 500., 200., 30.), sz(200., 300.), vp), gpui::point(px(10.), px(200.)));
         assert_eq!(place((10., 100., 200., 30.), sz(200., 550.), vp), gpui::point(px(10.), px(130.)));
         assert_eq!(place((700., 100., 80., 30.), sz(200., 100.), vp), gpui::point(px(600.), px(130.)));

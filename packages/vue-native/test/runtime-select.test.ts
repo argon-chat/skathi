@@ -1,9 +1,5 @@
-// `<select>` and `<option>`: the selection model, the host's pick, and
-// `v-model` (runtime-dom's vModelSelect, ported over the model).
-//
-// The host draws the select from the reserved `:selected` prop (the selected
-// index) and reports a pick as the select's `input` host event with the
-// option's index in `a` (crates/vn-tree/src/select.rs).
+// `<select>` and `<option>`: the selection model, the host's pick and `v-model`. The host draws the select from
+// the reserved `:selected` prop and reports a pick as the select's `input` host event with the option index in `a`.
 
 import { describe, expect, test } from "bun:test";
 import { h, nextTick, ref, withDirectives } from "@vue/runtime-core";
@@ -16,7 +12,6 @@ type El = any;
 const shown = (rt: Rt, id: number) =>
   rt.host.props.filter((p: { id: number; key: string }) => p.id === id && p.key === ":selected").at(-1)?.value;
 
-/** A select with options `values` (`null`: no value attribute), as a script builds one. */
 function build(rt: Rt, values: (string | null)[], texts?: string[]): { select: El; opts: El[] } {
   const select = rt.nodeOps.createElement("select") as El;
   const opts = values.map((v, i) => {
@@ -29,7 +24,6 @@ function build(rt: Rt, values: (string | null)[], texts?: string[]): { select: E
   return { select, opts };
 }
 
-/** The user picks option `ix` in the host's popup. */
 const pick = (rt: Rt, select: El, ix: number) => rt.host.dispatcher(select.__vnId, rt.EV_CODES.input, ix, 0, 0, 0);
 
 describe("the selection model", () => {
@@ -47,7 +41,6 @@ describe("the selection model", () => {
     expect(select.selectedIndex).toBe(1);
     expect(on.selected).toBe(true);
     expect(shown(rt, select.__vnId)).toBe("1");
-    // No value attribute: the value is the text, stripped and collapsed.
     expect(select.value).toBe("Two words");
     expect([on.text, on.label, on.index, off.index]).toEqual(["Two words", "Two words", 1, 0]);
   });
@@ -63,17 +56,14 @@ describe("the selection model", () => {
     select.value = "c";
     expect(select.selectedIndex).toBe(2);
     expect(shown(rt, select.__vnId)).toBe("2");
-    // No such value: nothing is selected; selectedIndex -1 likewise.
     select.value = "zzz";
     expect([select.selectedIndex, select.value]).toEqual([-1, ""]);
     select.selectedIndex = 0;
     select.selectedIndex = -1;
     expect(select.selectedIndex).toBe(-1);
-    // Deselecting the selected option of a drop-down selects the first again.
     opts[1].selected = true;
     opts[1].selected = false;
     expect(select.selectedIndex).toBe(0);
-    // The collections.
     expect(select.length).toBe(3);
     expect(select.options.length).toBe(3);
     expect(select.options[2]).toBe(opts[2]);
@@ -94,12 +84,9 @@ describe("the selection model", () => {
     expect(Array.from(select.options).map((o: El) => o.value)).toEqual(["g1", "a", "b"]);
     expect(select.selectedIndex).toBe(2);
     expect(shown(rt, select.__vnId)).toBe("2");
-    // Removing the selected option: the drop-down selects its first.
     rt.nodeOps.remove(opts[1]);
     expect(select.value).toBe("g1");
     expect(shown(rt, select.__vnId)).toBe("0");
-    // An option in a disabled group is disabled too: with only that one
-    // left, the list settling again selects nothing.
     rt.patchProp(group, "disabled", null, true);
     rt.nodeOps.remove(opts[0]);
     select.selectedIndex = -1;
@@ -133,7 +120,6 @@ describe("the host's pick", () => {
     pick(rt, select, 2);
     expect(seen).toEqual(["input:c:true:true", "change:c:true", "change@form"]);
     expect(shown(rt, select.__vnId)).toBe("2");
-    // The option already selected: nothing at all.
     pick(rt, select, 2);
     expect(seen.length).toBe(3);
   });
@@ -168,7 +154,6 @@ describe("the host's pick", () => {
 });
 
 describe("v-model", () => {
-  /** Mounts `<select v-model[.number]="model">` over `options` (`[value, text]`). */
   function mount(rt: Rt, model: { value: unknown }, options: [unknown, string][], mods: Record<string, boolean> = {}, multiple = false) {
     let el: El = null;
     rt.createApp({
@@ -211,7 +196,6 @@ describe("v-model", () => {
     expect(model.value).toBe(2);
     await nextTick();
     expect(el.selectedIndex).toBe(2);
-    // The model moves the selection.
     model.value = 0;
     await nextTick();
     expect(el.selectedIndex).toBe(0);
@@ -228,7 +212,6 @@ describe("v-model", () => {
     expect(model.value).toBe(3);
     pick(rt, el, 0);
     expect(model.value).toBe(a);
-    // Text-only options: the value is the text.
     const rt2 = createRuntime();
     const m2 = { value: "Pear" as unknown };
     let el2: El = null;
@@ -261,7 +244,6 @@ describe("v-model", () => {
     expect(Array.from(el.selectedOptions).map((o: El) => o.value)).toEqual(["b", "c"]);
     expect(el.type).toBe("select-multiple");
     expect(rt.advisories().some((a: string) => a.includes("list box"))).toBe(true);
-    // A pick in the drop-down selects that one option.
     pick(rt, el, 0);
     expect(model.value).toEqual(["a"]);
     const rt2 = createRuntime();

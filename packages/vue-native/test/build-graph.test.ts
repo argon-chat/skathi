@@ -1,7 +1,5 @@
-// build.ts: the dependency graph it records, and the transport shape the Rust
-// host reads. Runs the real builder against test/fixtures/* into a temp dist.
-//
-//   bun test           (from packages/vue-native)
+// build.ts: the dependency graph it records and the transport shape the Rust host reads. Runs the real
+// builder against test/fixtures/* into a temp dist.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -16,7 +14,7 @@ const WS_ROOT = resolve(PKG_DIR, "../..");
 const FIXTURES = join(HERE, "fixtures");
 
 const tmpDirs = [];
-/** Every `bun build.ts --watch` this file starts, killed at the end and on runner exit (a test's `finally` does not run on timeout). A killed runner is covered by `VN_OWNER_PID` (build.ts). */
+/** Every `bun build.ts --watch` this file starts, killed at the end and on runner exit (a test's `finally` does not run on timeout). */
 const watchers = [];
 function watchBuild(entry, dist) {
   const proc = Bun.spawn(["bun", "build.ts", entry, dist, "--watch"], {
@@ -47,7 +45,6 @@ afterAll(async () => {
   }
 });
 
-/** Run the real builder once; returns the parsed manifest + a script reader. */
 function build(fixture) {
   const dist = mkdtempSync(join(tmpdir(), "vn-build-"));
   tmpDirs.push(dist);
@@ -134,8 +131,7 @@ describe("app-owned framework versions", () => {
   });
 });
 
-// An app is not bound by the repo's no-`.js` rule: `SOURCE_EXT` and `CANDIDATE_EXTS` still list `.js`, so a ported
-// Vite app may bring a tree of it. Rebuilt here as a temporary tree.
+// An app is not bound by the repo's no-`.js` rule: a ported Vite app may bring a tree of it.
 describe("a JavaScript app still builds", () => {
   const dir = mkdtempSync(join(FIXTURES, "js-app-"));
   tmpDirs.push(dir);
@@ -165,13 +161,10 @@ describe("a JavaScript app still builds", () => {
     const manifest = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8"));
     expect(manifest.entry).toBe(`${rel}/src/main.js`);
     expect(manifest.modules).toContain(`${rel}/src/util.js`);
-    // `./util` -> `util.js`: `.js` is still ahead of `.ts` in `CANDIDATE_EXTS`, and the builder and `loader.ts` must agree.
     expect(manifest.deps[`${rel}/src/main.js`]).toEqual([`${rel}/src/util.js`]);
   });
 });
 
-// `import.meta` in a prod bundle: a classic script (IIFE), where it is a SyntaxError, and Bun leaves it verbatim in
-// iife output; both builders define it.
 describe("import.meta in a prod bundle", () => {
   const dir = mkdtempSync(join(FIXTURES, "meta-app-"));
   tmpDirs.push(dir);
@@ -195,7 +188,6 @@ describe("import.meta in a prod bundle", () => {
   });
 
   test("the dev builder substitutes an OBJECT, not a string, for import.meta.env", () => {
-    // Bun inserts a non-JSON define value as a string literal, so both builders pass JSON.
     const dist = mkdtempSync(join(tmpdir(), "vn-build-meta-"));
     tmpDirs.push(dist);
     const proc = Bun.spawnSync(["bun", "build.ts", join(dir, "src/main.ts"), dist], { cwd: PKG_DIR });
@@ -252,8 +244,6 @@ describe("style-only edits", () => {
     }
     expect(cssOf(after)).not.toBe(cssOf(before));
     expect(cssOf(after)).toContain("rebeccapurple");
-    // Same hash => the loader's define() keeps the live exports and the
-    // component definition Vue's HMR record already owns.
     expect(hashOf(after)).toBe(hashOf(before));
   }, 30_000);
 
@@ -270,8 +260,6 @@ describe("style-only edits", () => {
   }, 30_000);
 });
 
-// CSS entries: `import "./theme.css"` from a JS module is emitted as a css-only module, not verbatim into a JS
-// body (a SyntaxError at eval).
 
 describe("css entry modules", () => {
   const CSS_ID = id("css-app", "theme.css");
@@ -283,8 +271,6 @@ describe("css entry modules", () => {
     const script = b.script(CSS_ID);
     expect(script).toContain("__VN__.setCss");
     expect(script).toContain("--fixture-fg");
-    // …and an EMPTY factory: importing a stylesheet is a side effect, not a
-    // module with exports.
     expect(script).toMatch(/__VN__\.define\([^,]+, function \(require, module, exports\) \{\s*\}/);
   });
 
@@ -296,8 +282,6 @@ describe("css entry modules", () => {
   });
 
   test("prod.ts puts the same CSS in the same place", () => {
-    // Both builders must agree on what an app stylesheet is: prod has no module transport, so a Bun loader empties the
-    // module and routes its content into the same `cssById` map as a component `<style>`.
     const out = join(mkdtempSync(join(tmpdir(), "vn-prod-")), "app.prod.js");
     tmpDirs.push(dirname(out));
     const entry = join(FIXTURES, "css-app/src/main.ts");
@@ -315,18 +299,13 @@ ${proc.stderr.toString()}`);
   test("stylesheets sort ahead of the app's own modules", () => {
     const b = build("css-app");
     const modules = b.manifest.modules;
-    // The loader aggregates CSS in first-setCss order, which is manifest order,
-    // so a global stylesheet has to be registered before any component <style>.
     expect(modules.indexOf(CSS_ID)).toBeLessThan(modules.indexOf(id("css-app", "App.vue")));
   });
 });
 
-// In a "type": "module" package Bun's CJS output uses Node's rule `__toESM(require(x), 1)`, making `default` the
-// whole exports object, and `import()` stays native, which classic scripts cannot run.
 describe('a "type": "module" app, in dev', () => {
   const out = build("esm-app");
   const MAIN = id("esm-app", "main.ts");
-  /** Every module script, evaluated into a fresh loader world, as the host evaluates them. */
   const world = () => {
     const w = createLoader();
     for (const mod of out.manifest.modules) {
@@ -392,9 +371,7 @@ describe('a "type": "module" app, in dev', () => {
   });
 });
 
-// Shared package entries: a package's own npm imports are separate modules, not inlined copies (a duplicated
-// reka-ui or ion.webcore breaks injection and registries). An entry is one module keyed on its resolved directory.
-// Packages are written at test time.
+// Shared package entries: a package's own npm imports are separate modules, not inlined copies (a duplicated reka-ui breaks injection and registries).
 describe("build.ts (dev): npm packages share the packages they import", () => {
   const dir = mkdtempSync(join(FIXTURES, "npm-share-"));
   tmpDirs.push(dir);
@@ -409,7 +386,6 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
     put(`${path}/index.js`, code);
   };
   put("package.json", JSON.stringify({ name: "npm-share-fixture", private: true }));
-  // The shared one: a context key and a registry, as reka-ui and ion.webcore keep.
   const core = (tag) =>
     `export const KEY = Symbol(${JSON.stringify(tag)});\n` +
     "export const formatters = new Map();\n" +
@@ -428,10 +404,8 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
   mkdirSync(join(dir, "node_modules"), { recursive: true });
   symlinkSync(join(dir, "packages/ctx-provider"), join(dir, "node_modules/ctx-provider"), "junction");
   pkg("node_modules/ctx-consumer", "ctx-consumer", "1.0.0", 'import { inject } from "ctx-core";\nexport const injecting = (scope) => inject(scope);\n');
-  // Another version, nested: another directory, so another module.
   pkg("node_modules/old-user", "old-user", "1.0.0", 'import { KEY } from "ctx-core";\nexport const oldKey = KEY;\n');
   pkg("node_modules/old-user/node_modules/ctx-core", "ctx-core", "1.0.0", core("old"));
-  // A package with a Node build and a browser one (consola's shape): the browser one, as a bundler picks.
   put(
     "node_modules/env-pick/package.json",
     JSON.stringify({ name: "env-pick", version: "1.0.0", exports: { ".": { node: "./node.cjs", default: "./browser.cjs" } } }),
@@ -493,7 +467,6 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
       expect(main.env).toBe("browser");
       const core = w.VN.require("ctx-core");
 
-      // An app edit: only the app module changes, the package keeps its instance.
       const coreScript = script("ctx-core");
       await Bun.sleep(300);
       writeFileSync(join(dir, "src/main.ts"), readFileSync(join(dir, "src/main.ts"), "utf8") + "export const edited = 1;\n");

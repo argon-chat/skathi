@@ -5,22 +5,19 @@
 //!
 //! 1. Terminator keyframes: Bodymovin ≥ 5.5 ends every animated property with `{"t": 42}` and no
 //!    `"s"`, whose implicit value is the previous keyframe's `"e"` (or its own `"s"` for a hold).
-//!    rasterlottie reads `"s"` unconditionally, so one terminator makes the whole animation
-//!    unsupported (6 of 8 real-world fixtures failed on this alone).
+//!    rasterlottie reads `"s"` unconditionally, so one terminator makes the animation unsupported.
 //! 2. Solid layers: a `ty: 1` layer is a `sw × sh` rectangle of colour `sc`; rasterlottie has no
 //!    solid renderer, so it is rewritten into the equivalent shape layer.
 //!
 //! Both rewrites are value-preserving and idempotent. Anything else is left alone and surfaces as a
-//! [`SupportReport`](rasterlottie::SupportReport) issue, which
-//! [`LottieState::load`](crate::LottieState::load) turns into a compat advisory.
+//! [`SupportReport`](rasterlottie::SupportReport) issue, which [`LottieState::load`](crate::LottieState::load)
+//! turns into a compat advisory.
 
 use serde_json::{json, Map, Value};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Normalization {
-    /// Terminator keyframes (`{"t": n}` with no `"s"`) given their implicit value.
     pub terminator_keyframes: usize,
-    /// `ty: 1` solid layers rewritten into equivalent shape layers.
     pub solid_layers: usize,
 }
 
@@ -54,9 +51,8 @@ fn walk(value: &mut Value, stats: &mut Normalization) {
     }
 }
 
-/// Gives every keyframe that omits `"s"` the value the previous keyframe ends on (as lottie-web
-/// resolves it). Only touches `"k"` keyframe lists (first entry an object with a `"t"`); static
-/// number arrays and scalars are skipped.
+/// Gives every keyframe that omits `"s"` the value the previous keyframe ends on. Only touches `"k"`
+/// keyframe lists (first entry an object with a `"t"`); static number arrays and scalars are skipped.
 fn fill_terminator_keyframes(map: &mut Map<String, Value>, stats: &mut Normalization) {
     let Some(Value::Array(keyframes)) = map.get_mut("k") else {
         return;
@@ -88,8 +84,7 @@ fn fill_terminator_keyframes(map: &mut Map<String, Value>, stats: &mut Normaliza
 }
 
 /// Rewrites a solid layer into the equivalent shape layer: a `sw × sh` rectangle centred on the
-/// layer origin, filled with `sc`. Only the content changes; transform, timing, parenting and
-/// mattes are untouched.
+/// layer origin, filled with `sc`. Transform, timing, parenting and mattes are untouched.
 fn rewrite_solid_layer(map: &mut Map<String, Value>, stats: &mut Normalization) {
     // Layer `ty` is a number and a shape item's is a string, so they cannot collide.
     if map.get("ty").and_then(Value::as_u64) != Some(1) {
@@ -144,7 +139,6 @@ fn rewrite_solid_layer(map: &mut Map<String, Value>, stats: &mut Normalization) 
     stats.solid_layers += 1;
 }
 
-/// `#rrggbb` (or `#rgb`) → unit floats, the encoding Lottie uses for fill colours.
 fn parse_hex_color(text: &str) -> Option<[f64; 3]> {
     let digits = text.strip_prefix('#').unwrap_or(text);
     let bytes = match digits.len() {

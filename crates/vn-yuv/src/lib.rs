@@ -1,40 +1,23 @@
-//! vn-yuv: an I420 frame, with an optional alpha plane, to STRAIGHT BGRA at
-//! any size. The video stickers' pixel kernel (`vn-sticker`'s `video`).
+//! vn-yuv: an I420 frame, with an optional alpha plane, to STRAIGHT BGRA at any size. The video
+//! stickers' pixel kernel (`vn-sticker`'s `video`).
 //!
-//! # What it computes
-//!
-//! * **Chroma** is upsampled to luma resolution bilinearly, centre-sited (a
-//!   chroma sample sits between its two luma rows and columns: weights 9, 3,
-//!   3, 1 over 16), as a GPU samples the chroma plane of a `<video>` and as
-//!   libyuv's bilinear I420 conversion does.
-//! * **The matrix** is the caller's [`Colorimetry`] (which one a file gets is
-//!   the caller's rule; vn-sticker follows Chromium's). Studio range maps
-//!   Y 16..235 and C 16..240 to 0..255, full range takes them as they are.
-//! * **Primaries and transfer** other than sRGB's (BT.709 primaries, and
-//!   the curves Chromium draws as sRGB's) are converted to sRGB in linear
-//!   light, per pixel, as Chromium's compositor does (`gamut.rs`). It runs
-//!   on whichever is smaller, the frame or the target: on each source row
-//!   before scaling, or on each target row after. sRGB's own pair skips it.
-//! * **Alpha** is the alpha plane as is, or 255. Colour is never
-//!   premultiplied in the output.
-//! * **Scaling** is separable, per axis: an area average when the axis
-//!   shrinks (or stays), bilinear when it grows. Both weigh colour by alpha
-//!   (they work on premultiplied values and divide back), so the colour of a
-//!   transparent pixel never bleeds into an edge. At 1:1 nothing is
-//!   resampled: the conversion writes the target directly.
+//! * **Chroma** is upsampled bilinearly, centre-sited (weights 9, 3, 3, 1 over 16), as a GPU samples
+//!   a `<video>` and as libyuv does.
+//! * **The matrix** is the caller's [`Colorimetry`]. Studio range maps Y 16..235 and C 16..240 to
+//!   0..255, full range takes them as they are.
+//! * **Primaries and transfer** other than sRGB's (the curves Chromium draws as sRGB's included)
+//!   are converted to sRGB in linear light per pixel (`gamut.rs`), on whichever is smaller, the
+//!   frame or the target. sRGB's own pair skips it.
+//! * **Alpha** is the alpha plane as is, or 255. Colour is never premultiplied in the output.
+//! * **Scaling** is separable: an area average when an axis shrinks (or stays), bilinear when it
+//!   grows. Both weigh colour by alpha, so a transparent pixel's colour never bleeds into an edge.
+//!   At 1:1 nothing is resampled.
 //!
 //! # Speed
 //!
-//! The row kernels (chroma upsampling, YUV to BGRA) are SSE2 and AVX2,
-//! picked at run time ([`Level`]), with a scalar version that gives the same
-//! bytes. The resampling is f32, SSE2 one pixel to a register and AVX2 two,
-//! the same operations in the same order as its scalar loops, so every level
-//! gives the same bytes there too. Rows stream: a [`Converter`] holds a few
-//! rows of scratch, never a frame.
-//!
-//! A 512² frame with alpha converts in ~90 µs on one AVX2 thread (`tests::bench`); the scalar rows
-//! take 1.6 ms. Converting other primaries is scalar, about 3 ns a pixel on the smaller of frame
-//! and target; sRGB's own primaries and curve skip it.
+//! The row kernels are SSE2 and AVX2, picked at run time ([`Level`]), with a scalar version that
+//! gives the same bytes; the f32 resampling does the same operations in the same order at every
+//! level. Rows stream: a [`Converter`] holds a few rows of scratch, never a frame.
 
 mod gamut;
 mod rows;
@@ -45,24 +28,18 @@ pub use rows::Level;
 use rows::{chroma_row, yuva_row, Coeffs, SHIFT};
 use scale::Scaler;
 
-/// A YUV to RGB matrix: H.273 `MatrixCoefficients`, the ones a video sticker
-/// can declare.
+/// A YUV to RGB matrix: H.273 `MatrixCoefficients`, the ones a video sticker can declare.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Matrix {
     /// BT.601 (H.273 5 and 6: BT.470BG, SMPTE 170M).
     Bt601,
-    /// BT.709 (1).
     Bt709,
-    /// BT.2020 non-constant luminance (9).
     Bt2020,
-    /// SMPTE 240M (7).
     Smpte240,
-    /// FCC (4).
     Fcc,
 }
 
 impl Matrix {
-    /// `(Kr, Kb)`.
     fn kr_kb(self) -> (f64, f64) {
         match self {
             Matrix::Bt601 => (0.299, 0.114),
@@ -74,32 +51,20 @@ impl Matrix {
     }
 }
 
-/// H.273 `ColourPrimaries`: the gamut a frame's RGB is in. Anything but
-/// [`Primaries::Bt709`] (sRGB's) is converted to sRGB's, as Chromium does on
-/// an sRGB display.
+/// H.273 `ColourPrimaries`: the gamut a frame's RGB is in. Anything but [`Primaries::Bt709`] is
+/// converted to sRGB's, as Chromium does on an sRGB display.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Primaries {
-    /// BT.709 and sRGB (1).
     Bt709,
-    /// BT.470 System M (4), white C.
     Bt470M,
-    /// BT.470 System B, G (5).
     Bt470Bg,
-    /// SMPTE 170M, BT.601 525 lines (6).
     Smpte170,
-    /// SMPTE 240M (7): SMPTE 170M's.
     Smpte240,
-    /// Generic film (8), white C.
     Film,
-    /// BT.2020 (9).
     Bt2020,
-    /// SMPTE ST 428-1, CIE XYZ (10), white E.
     Smpte428,
-    /// SMPTE RP 431-2, DCI-P3 (11), DCI white.
     Smpte431,
-    /// SMPTE EG 432-1, Display P3 (12).
     P3,
-    /// EBU Tech 3213-E (22).
     Ebu3213,
 }
 
@@ -109,23 +74,16 @@ pub enum Transfer {
     /// sRGB (13), and the SDR video curves Chromium draws as sRGB's:
     /// BT.709 (1), SMPTE 170M (6), BT.2020 (14, 15).
     Srgb,
-    /// Gamma 2.2 (4, BT.470 System M).
     Gamma22,
-    /// Gamma 2.8 (5, BT.470 System B, G).
     Gamma28,
-    /// SMPTE 240M (7).
     Smpte240,
-    /// Linear (8).
     Linear,
-    /// SMPTE ST 428-1 (17).
     Smpte428,
 }
 
-/// How to read a frame's samples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Colorimetry {
     pub matrix: Matrix,
-    /// Full range (0..255) rather than studio range (Y 16..235, C 16..240).
     pub full_range: bool,
     /// With [`Transfer::Srgb`], [`Primaries::Bt709`] costs nothing; any
     /// other pair is converted to sRGB per pixel (module `gamut`).
@@ -134,8 +92,6 @@ pub struct Colorimetry {
 }
 
 impl Colorimetry {
-    /// `matrix` and range, in sRGB's primaries and curve: no conversion
-    /// past the matrix.
     pub const fn new(matrix: Matrix, full_range: bool) -> Colorimetry {
         Colorimetry { matrix, full_range, primaries: Primaries::Bt709, transfer: Transfer::Srgb }
     }
@@ -156,7 +112,6 @@ impl Colorimetry {
     }
 }
 
-/// One plane: rows `stride` bytes apart.
 #[derive(Clone, Copy, Debug)]
 pub struct Plane<'a> {
     pub data: &'a [u8],
@@ -164,20 +119,17 @@ pub struct Plane<'a> {
 }
 
 impl<'a> Plane<'a> {
-    /// Row `y`, `width` bytes.
     #[inline]
     fn row(&self, y: usize, width: usize) -> &'a [u8] {
         &self.data[y * self.stride..y * self.stride + width]
     }
 
-    /// Holds `height` rows of `width` bytes.
     fn holds(&self, width: usize, height: usize) -> bool {
         self.stride >= width && height.checked_sub(1).is_some_and(|h| h.checked_mul(self.stride).and_then(|n| n.checked_add(width)).is_some_and(|n| n <= self.data.len()))
     }
 }
 
-/// An I420 frame: Y at `width` × `height`, U and V at half that (rounded up),
-/// and an optional alpha plane at full size.
+/// An I420 frame: Y at `width` × `height`, U and V at half that (rounded up), optional full-size alpha.
 #[derive(Clone, Copy, Debug)]
 pub struct I420<'a> {
     pub width: u32,
@@ -191,9 +143,7 @@ pub struct I420<'a> {
 /// Why a conversion did not run: the caller's sizes do not add up.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
-    /// A plane is smaller than its frame says.
     Plane(&'static str),
-    /// `pixels.len()` is not `width × height × 4`.
     Target,
 }
 
@@ -208,16 +158,12 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Converts frames, keeping a few rows of scratch between calls.
 pub struct Converter {
     level: Level,
-    /// The vertical chroma blend, `cw + 2`.
     tmp: Vec<u16>,
-    /// U and V of one luma row at luma resolution.
     u: Vec<u8>,
     v: Vec<u8>,
     scaler: Scaler,
-    /// The tables of the last frame colour space that needed converting.
     gamut: Option<Gamut>,
 }
 
@@ -228,7 +174,6 @@ impl Default for Converter {
 }
 
 impl Converter {
-    /// At the best [`Level`] this CPU runs.
     pub fn new() -> Converter {
         Converter::with_level(Level::best())
     }
@@ -243,7 +188,6 @@ impl Converter {
         self.level
     }
 
-    /// Scratch bytes held.
     pub fn memory_bytes(&self) -> usize {
         self.tmp.capacity() * 2 + self.u.capacity() + self.v.capacity() + self.scaler.bytes() + self.gamut.as_ref().map_or(0, Gamut::bytes)
     }
@@ -287,7 +231,6 @@ impl Converter {
         let before = gamut.filter(|_| tw * th >= w * h);
         let after = gamut.filter(|_| tw * th < w * h);
         let Converter { tmp, u, v, scaler, .. } = self;
-        // Source row `sy`, straight BGRA, into `out` (`w · 4`).
         let mut convert = |sy: usize, out: &mut [u8]| {
             let j = sy / 2;
             let far = if sy.is_multiple_of(2) { j.saturating_sub(1) } else { (j + 1).min(ch - 1) };

@@ -1,16 +1,10 @@
-// `VS_VERSIONINFO` — what Explorer's Properties → Details, Task Manager's
-// process name and the SmartScreen prompt read out of an exe.
-//
-// The format is a tree of length-prefixed nodes, each
-//   WORD wLength; WORD wValueLength; WORD wType; WCHAR szKey[]; pad to 4;
-//   Value; pad to 4; Children (each padded to 4)
-// where `wValueLength` counts BYTES for a binary value and WORDS (terminator included) for a text one.
+// `VS_VERSIONINFO`: what Explorer's Details tab, Task Manager and SmartScreen read out of an exe.
+// A tree of length-prefixed nodes: WORD wLength; WORD wValueLength; WORD wType; WCHAR szKey[]; pad to 4;
+// Value; pad to 4; Children. `wValueLength` counts BYTES for a binary value, WORDS for a text one.
 
 export interface VersionStrings {
-  /** Task Manager shows THIS as the process name — the product name, not a sentence. */
   FileDescription: string;
   ProductName: string;
-  /** The full semver, e.g. `1.2.3-beta.1`. */
   ProductVersion: string;
   FileVersion: string;
   InternalName: string;
@@ -24,9 +18,7 @@ export interface VersionInfoInput {
   fileVersion: [number, number, number, number];
   productVersion?: [number, number, number, number];
   strings: VersionStrings;
-  /** Default 0x0409 (en-US). */
   lang?: number;
-  /** Default 1200 (UTF-16). */
   codepage?: number;
 }
 
@@ -45,7 +37,6 @@ function concat(parts: Uint8Array[]): Uint8Array {
 
 const pad4 = (b: Uint8Array) => (b.length % 4 ? concat([b, new Uint8Array(4 - (b.length % 4))]) : b);
 
-/** One node. `valueLen` is in the unit the node's type demands (bytes or words). */
 function node(key: string, type: 0 | 1, value: Uint8Array | null, valueLen: number, children: Uint8Array[]): Uint8Array {
   let body = pad4(concat([new Uint8Array(6), utf16(key)]));
   if (value) body = pad4(concat([body, value]));
@@ -58,7 +49,6 @@ function node(key: string, type: 0 | 1, value: Uint8Array | null, valueLen: numb
   return body;
 }
 
-/** `1.2.3-beta+x` → `[1, 2, 3, 0]`; throws on anything that is not a version. */
 export function numericVersion(v: string): [number, number, number, number] {
   const m = /^\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:[-+].*)?\s*$/.exec(v);
   if (!m) throw new Error(`${JSON.stringify(v)} is not a version (expected a.b.c, semver)`);

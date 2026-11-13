@@ -1,6 +1,4 @@
 //! Linux: freedesktop tools run from the `vn-shell` thread and waited on so a failure reaches JS.
-//! `xdg-open` opens (non-zero status means nothing handles it); `org.freedesktop.FileManager1.ShowItems`
-//! reveals, else the folder is opened; `gio trash` trashes.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -68,8 +66,6 @@ pub fn trash(path: &Path) -> Result<(), Fail> {
     run("trashItem", "gio", &["trash".as_ref(), path.as_os_str()])
 }
 
-/// `file://` and the path, percent-encoded outside RFC 3986's unreserved set
-/// and `/`.
 fn file_uri(path: &Path) -> String {
     use std::os::unix::ffi::OsStrExt;
     let mut uri = String::from("file://");

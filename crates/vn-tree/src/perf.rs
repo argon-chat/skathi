@@ -9,15 +9,12 @@ use std::time::Instant;
 /// 0 = not looked at yet, 1 = off, 2 = on.
 static ENABLED: AtomicU8 = AtomicU8::new(0);
 
-/// The devtools frame trace (`trace start`, `vn_app::devtools::trace`) is recording.
 static TRACING: AtomicBool = AtomicBool::new(false);
 
-/// Arms or disarms the counters for the devtools frame trace.
 pub fn set_tracing(on: bool) {
     TRACING.store(on, Ordering::Relaxed);
 }
 
-/// Is `VN_PERF` itself on (as opposed to a devtools trace)?
 pub fn env_enabled() -> bool {
     env_on()
 }
@@ -45,75 +42,48 @@ fn env_on() -> bool {
     }
 }
 
-/// One second's worth of phase work.
 #[derive(Clone, Copy, Debug)]
 pub struct Phases {
-    /// How many times the restyle pass ran (a frame can run several — every event dispatch flushes
-    /// the tree before returning to the pump).
+    /// How many times the restyle pass ran (every event dispatch flushes the tree, so a frame can run several).
     pub restyle_passes: u32,
     pub restyle_ms: f32,
     pub restyle_max_ms: f32,
-    /// Time inside the inline-style re-parse step of the pass.
     pub inline_ms: f32,
-    /// Time inside `Engine::compute_node` — matching + folding + `var()`.
     pub cascade_ms: f32,
-    /// …split three ways by vn-css itself: running selectors, resolving the element's custom
-    /// properties, folding the matched declarations.
     pub match_ms: f32,
     pub vars_ms: f32,
     pub fold_ms: f32,
-    /// Time storing the results and feeding the animator (the change gate).
     pub store_ms: f32,
-    /// Elements handed to `compute_node` across the window.
     pub nodes_cascaded: u64,
-    /// Selectors actually run through the matcher.
     pub rules_tested: u64,
-    /// [`Self::rules_tested`] split by the index bucket that offered each one (no key, the
-    /// subject's tag, class or id, `:root`, the parent's key), and how many of them matched
-    /// (`vn_css::perf::Split`).
+    /// [`Self::rules_tested`] split by the index bucket that offered each one (`vn_css::perf::Split`).
     pub rules_split: vn_css::perf::Split,
     pub share_asked: u64,
     pub share_hits: u64,
 
-    /// How many times `build_root` ran (once per gpui `render()`).
     pub build_passes: u32,
-    /// How many cache boundaries actually re-rendered in the window — the counter that says whether
-    /// the retained-render cache is working.
+    /// Cache boundaries that actually re-rendered; with the offers and stand-downs, whether the retained-render cache earns its keep.
     pub cached_renders: u32,
-    /// The three together are the whole story of whether the retained-render cache is earning its
-    /// keep.
     pub cache_offers: u32,
     pub cache_standdowns: u32,
     pub build_ms: f32,
     pub build_max_ms: f32,
-    /// Tree nodes lowered into gpui elements across the window.
     pub elements_built: u64,
 
-    // ---- gpui's own element work, measured at the ROOT node's `BoundsProbe`.
-    /// Building the layout request tree (recursive `request_layout`).
     pub layout_req_ms: f32,
-    /// taffy's `compute_layout` — the gap between the root's `request_layout` returning and its
-    /// `prepaint` being called.
     pub taffy_ms: f32,
-    /// The prepaint recursion (hitboxes, scroll offsets, our bounds probes).
     pub prepaint_ms: f32,
-    /// The paint recursion (quads, text, shadows into the scene).
     pub paint_ms: f32,
     pub draw_passes: u32,
 
-    /// Time inside `dispatch_event` — the JS half of an input event: the runtime's capture/bubble
-    /// walk over the mirror tree, the app's handlers, and the microtask drain that runs Vue's patch
-    /// queue.
+    /// Time inside `dispatch_event`: the JS half of an input event, including the microtask drain.
     pub js_passes: u32,
     pub js_ms: f32,
     pub js_max_ms: f32,
 
-    /// Restyle passes that walked the WHOLE document (`dirty_all`), and the nodes whose fold
-    /// actually changed across all passes.
     pub restyle_full: u32,
     pub nodes_changed: u64,
     pub full_reasons: [u32; FullReason::COUNT],
-    /// Stylesheet compiles (`recompile_sheet` / `set_stylesheet`) and their time.
     pub recompiles: u32,
     pub recompile_ms: f32,
     pub sync_layouts: u32,
@@ -121,61 +91,42 @@ pub struct Phases {
     pub sync_layout_max_ms: f32,
     pub sync_layout_refused: u32,
     pub sync_by: [u32; SyncCaller::COUNT],
-    /// The host skips that redundant notification; this is not a count of repeated draws.
-    /// Popped-out windows still receive the changed wave.
+    /// JS waves whose changes a forced layout had already drawn (the host skips the redundant notification).
     pub sync_tail: u32,
     pub sync_tail_free: u32,
-    /// The ResizeObserver / IntersectionObserver step after layout (`crate::observe`): steps run,
-    /// ResizeObserver broadcast rounds, the layouts a round's callbacks made the step redo and
-    /// their wall time, the rest of the step's time (the callbacks, the microtasks after them, the
-    /// flushes; the frame's own draw at its start is not in it), and the "loop completed with
-    /// undelivered notifications" errors raised.
+    /// The ResizeObserver / IntersectionObserver step after layout (`crate::observe`): steps, broadcast
+    /// rounds, layouts redone and their time, the rest of the time, and "loop completed with
+    /// undelivered notifications" errors.
     pub observer_steps: u32,
     pub observer_rounds: u32,
     pub observer_relayouts: u32,
     pub observer_relayout_ms: f32,
     pub observer_ms: f32,
     pub observer_loop_errors: u32,
-    /// Host DOM operations (`__vn_*` mutators), by [`DomOp`].
     pub dom_ops: [u32; DomOp::COUNT],
-    /// The first and last DOM mutation in the window: the span Vue spent rendering + patching, as
-    /// seen from the host (a proxy — render work before the first op and after the last is outside
-    /// it).
+    /// First and last DOM mutation in the window: a proxy for the span Vue spent rendering and patching.
     pub dom_first: Option<Instant>,
     pub dom_last: Option<Instant>,
-    /// Layout and style READS from JS: `getBoundingClientRect` & co (`__vn_bounds`), `scroll*`
-    /// reads, `getComputedStyle`, selector queries.
     pub layout_reads: u32,
     pub scroll_reads: u32,
     pub style_reads: u32,
     pub queries: u32,
-    /// Forced STYLE flushes `getComputedStyle` ran (a restyle each).
     pub style_flushes: u32,
-    /// Image copies for downscaled draws (`crate::resample`): made on the painting thread (count,
-    /// time) and handed to the resampling thread.
     pub resample_sync: u32,
     pub resample_sync_ms: f32,
     pub resample_async: u32,
-    /// Web fonts handed to the text system (count, bytes).
     pub fonts_registered: u32,
     pub font_bytes: u64,
-    /// `<img src>` writes.
     pub img_srcs: u32,
 }
 
-/// Why the next restyle walks the whole document.
 #[derive(Clone, Copy, Debug)]
 pub enum FullReason {
-    /// `__vn_set_stylesheet` — the app installed a sheet.
     Stylesheet = 0,
-    /// The `@media` environment changed (viewport, scheme, DPI, …).
     Env = 1,
-    /// A `<style>` element's text changed → the sheet is recompiled.
     StyleElement = 2,
     Fonts = 3,
-    /// The viewport basis moved under a sheet that uses `vw`/`vh`.
     ViewportBasis = 4,
-    /// The root font-size (`rem` basis) changed.
     RemBasis = 5,
 }
 
@@ -185,7 +136,6 @@ impl FullReason {
         ["stylesheet", "env", "style-element", "fonts", "viewport-basis", "rem-basis"];
 }
 
-/// Which DOM read forced a synchronous layout.
 #[derive(Clone, Copy, Debug)]
 pub enum SyncCaller {
     /// `getBoundingClientRect` / `offset*` / `client*` (`dom::bounds`).
@@ -300,7 +250,6 @@ impl Default for Phases {
 
 thread_local! {
     static PHASES: RefCell<Phases> = const { RefCell::new(ZERO) };
-    /// When the root element's `request_layout` returned — taffy runs next.
     static LAYOUT_DONE: RefCell<Option<Instant>> = const { RefCell::new(None) };
 }
 
@@ -308,7 +257,6 @@ fn with(f: impl FnOnce(&mut Phases)) {
     PHASES.with(|p| f(&mut p.borrow_mut()));
 }
 
-/// Drains the window.
 pub fn take() -> Option<Phases> {
     if !enabled() {
         return None;
@@ -317,8 +265,7 @@ pub fn take() -> Option<Phases> {
     (taken.restyle_passes > 0 || taken.build_passes > 0 || taken.js_passes > 0).then_some(taken)
 }
 
-/// Drains the window whatever ran in it — the devtools trace closes one record per frame, and a
-/// frame of nothing but DOM reads is still a record.
+/// Drains the window whatever ran in it: the devtools trace closes one record per frame.
 pub fn take_all() -> Phases {
     PHASES.with(|p| std::mem::take(&mut *p.borrow_mut()))
 }
@@ -333,7 +280,6 @@ impl Span {
         Span(enabled().then(Instant::now))
     }
 
-    /// Elapsed milliseconds, or 0.0 with the probe off.
     #[inline]
     pub fn ms(&self) -> f32 {
         match self.0 {
@@ -343,7 +289,6 @@ impl Span {
     }
 }
 
-/// One completed restyle pass.
 pub fn note_restyle(total_ms: f32, inline_ms: f32, cascade_ms: f32, store_ms: f32, nodes: u64) {
     if !enabled() {
         return;
@@ -374,7 +319,6 @@ pub fn note_restyle(total_ms: f32, inline_ms: f32, cascade_ms: f32, store_ms: f3
     });
 }
 
-/// One completed `build_root`.
 pub fn note_build(total_ms: f32, elements: u64) {
     if !enabled() {
         return;
@@ -388,7 +332,6 @@ pub fn note_build(total_ms: f32, elements: u64) {
     });
 }
 
-/// A cache boundary lowered its subtree — see `vn_tree::render::build_cached`.
 #[inline]
 pub fn note_cache_offer(stood_down: bool) {
     if !enabled() {
@@ -417,7 +360,6 @@ pub fn note_build_extra(total_ms: f32, elements: u64) {
     });
 }
 
-/// The root element finished handing gpui its layout requests; taffy is next.
 pub fn note_layout_req(ms: f32) {
     if !enabled() {
         return;
@@ -454,8 +396,6 @@ pub fn note_paint(ms: f32) {
     with(|p| p.paint_ms += ms);
 }
 
-/// The restyle pass's shape: did it walk the whole document, and how many nodes' folds actually
-/// changed.
 pub fn note_restyle_shape(full: bool, changed: u64) {
     if !enabled() {
         return;
@@ -466,7 +406,6 @@ pub fn note_restyle_shape(full: bool, changed: u64) {
     });
 }
 
-/// Something asked for a whole-document restyle.
 #[inline]
 pub fn note_full(reason: FullReason) {
     if !enabled() {
@@ -478,7 +417,6 @@ pub fn note_full(reason: FullReason) {
 // stylesheet compiles since boot (always on: one compile is ~100 ms, so a few relaxed adds beside
 // it cost nothing)
 
-/// The host's live-heap probe (vn-app's counting allocator), when it has one.
 static LIVE_BYTES_PROBE: std::sync::OnceLock<fn() -> Option<i64>> = std::sync::OnceLock::new();
 static SHEET_COMPILES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static SHEET_COMPILE_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -486,7 +424,6 @@ static SHEET_SOURCE_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 static SHEET_GROWTH: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 static SHEET_GROWTH_SEEN: AtomicBool = AtomicBool::new(false);
 
-/// Without one, compiles are still counted, just not weighed.
 pub fn set_live_bytes_probe(f: fn() -> Option<i64>) {
     let _ = LIVE_BYTES_PROBE.set(f);
 }
@@ -495,9 +432,7 @@ pub fn live_bytes() -> Option<i64> {
     LIVE_BYTES_PROBE.get().and_then(|f| f())
 }
 
-/// One whole stylesheet compile and engine swap: `ms`, the source's length, and the Rust heap's net
-/// growth across it (`before`/`after` from [`live_bytes`]) — what a compile leaves behind once the
-/// engine it replaced is gone.
+/// One whole stylesheet compile and engine swap: `ms`, source length, and the Rust heap's net growth across it.
 pub fn note_sheet_compile(ms: f32, source_len: usize, before: Option<i64>, after: Option<i64>) {
     use std::sync::atomic::Ordering::Relaxed;
     SHEET_COMPILES.fetch_add(1, Relaxed);
@@ -521,7 +456,6 @@ pub fn sheet_compiles() -> (u64, f64, u64, Option<i64>) {
     )
 }
 
-/// One stylesheet compile.
 pub fn note_recompile(ms: f32) {
     if !enabled() {
         return;
@@ -546,8 +480,6 @@ pub fn note_sync_tail(free: bool) {
     });
 }
 
-/// One observer step (`crate::observe`): its broadcast rounds, the layouts they made it redo and
-/// their time, the rest of its time, and whether it raised the loop error.
 pub fn note_observers(rounds: u32, relayouts: u32, relayout_ms: f32, ms: f32, loop_error: bool) {
     if !enabled() {
         return;
@@ -562,8 +494,6 @@ pub fn note_observers(rounds: u32, relayouts: u32, relayout_ms: f32, ms: f32, lo
     });
 }
 
-/// One forced synchronous layout: `drew` = a build happened (the hook drew); `ms` is the whole
-/// call, the restyle it flushes included.
 pub fn note_sync_layout(caller: SyncCaller, drew: bool, ms: f32) {
     if !enabled() {
         return;
@@ -581,7 +511,6 @@ pub fn note_sync_layout(caller: SyncCaller, drew: bool, ms: f32) {
     });
 }
 
-/// One `__vn_*` DOM mutation.
 #[inline]
 pub fn note_dom(op: DomOp) {
     if !enabled() {
@@ -601,7 +530,6 @@ pub fn note_dom(op: DomOp) {
     });
 }
 
-/// A layout read from JS (`__vn_bounds`), a scroll read, a `getComputedStyle`, a selector query.
 #[derive(Clone, Copy)]
 pub enum Read {
     Layout,
@@ -624,7 +552,6 @@ pub fn note_read(kind: Read) {
     });
 }
 
-/// `getComputedStyle` ran the pending restyle.
 pub fn note_style_flush() {
     if !enabled() {
         return;
@@ -645,7 +572,6 @@ pub fn note_resample(sync_ms: Option<f32>) {
     });
 }
 
-/// Web fonts handed to the text system.
 pub fn note_fonts(count: u32, bytes: u64) {
     if !enabled() {
         return;
@@ -656,7 +582,6 @@ pub fn note_fonts(count: u32, bytes: u64) {
     });
 }
 
-/// An `<img src>` write.
 pub fn note_img_src() {
     if !enabled() {
         return;
@@ -664,7 +589,6 @@ pub fn note_img_src() {
     with(|p| p.img_srcs += 1);
 }
 
-/// One completed JS event dispatch.
 pub fn note_js(total_ms: f32) {
     if !enabled() {
         return;

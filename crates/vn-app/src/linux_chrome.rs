@@ -4,17 +4,7 @@
 //! `WM_NCHITTEST` and the OS moves, maximizes and closes the window; on macOS
 //! the hidden titlebar keeps AppKit's. A Wayland window has no such caption
 //! (GNOME never draws one), and gpui's Linux backends do not consult the
-//! areas, so the shell does what the OS would:
-//!
-//! - **On press, in the capture phase**, as the OS caption test precedes
-//!   the page: a `drag` area starts an interactive move (the compositor's),
-//!   twice toggles maximize. `no-drag` areas inside are already excluded by
-//!   [`Window::window_control_area_at`].
-//! - **On release over the same button**: minimize, maximize, close — the
-//!   close goes through `appWindow.close()`, `beforeunload` and the teardown
-//!   included.
-//! - **Resize edges**: invisible strips along the border, with the resize
-//!   cursors, that start an interactive resize. Not while maximized or tiled.
+//! areas, so the shell does what the OS would.
 
 use gpui::{
     div, px, CursorStyle, Decorations, Div, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Point,
@@ -23,10 +13,8 @@ use gpui::{
 
 use crate::window;
 
-/// How far into the window an edge can be grabbed.
 const EDGE: f32 = 6.;
 
-/// Can the window be resized from its edges right now?
 fn resizable(window: &Window) -> bool {
     match window.window_decorations() {
         Decorations::Client { tiling } => !window.is_maximized() && !window.is_fullscreen() && !tiling.is_tiled(),
@@ -34,7 +22,6 @@ fn resizable(window: &Window) -> bool {
     }
 }
 
-/// Within [`EDGE`] of the window's border, where the resize strips are.
 fn on_edge(window: &Window, position: Point<Pixels>) -> bool {
     let size = window.viewport_size();
     let edge = px(EDGE);
@@ -47,7 +34,6 @@ pub(crate) fn wrap(shell: Div, window: &Window) -> Div {
             if event.button != MouseButton::Left {
                 return;
             }
-            // A resize strip under a drag area (the top edge) wins.
             if resizable(window) && on_edge(window, event.position) {
                 return;
             }
@@ -87,8 +73,6 @@ pub(crate) fn wrap(shell: Div, window: &Window) -> Div {
     ])
 }
 
-/// One grab strip, laid over the page's border; corners are squares drawn
-/// after the sides, so they win where they overlap.
 fn edge(edge: ResizeEdge, cursor: CursorStyle) -> impl IntoElement {
     let strip = div().id(("resize-edge", edge as usize)).absolute().cursor(cursor);
     let strip = match edge {

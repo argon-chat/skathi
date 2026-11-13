@@ -1,22 +1,15 @@
-//! `app.getUserFolder(kind, subfolder)`: five portable places an app may keep things
-//! (`APPDATA`, `LOCALAPPDATA`, `TEMP`, `DOCUMENTS`, `HOME`), resolved per platform. A closed set,
-//! so a typo cannot become a folder nobody notices is wrong.
+//! `app.getUserFolder(kind, subfolder)`: five portable places an app may keep things (`APPDATA`,
+//! `LOCALAPPDATA`, `TEMP`, `DOCUMENTS`, `HOME`), a closed set so a typo cannot become a wrong folder.
 //!
-//! Windows uses known folders (`SHGetKnownFolderPath`) rather than environment variables, which
-//! are inherited, forgeable, sometimes absent, and do not exist for Documents. `TEMP` goes
-//! through `GetTempPath2W`. Elsewhere there is no roaming/local split: `APPDATA` and
-//! `LOCALAPPDATA` resolve to the same folder (macOS `~/Library/Application Support`, otherwise
-//! `$XDG_DATA_HOME` or `~/.local/share`), so an app needing "never synced" must say so another way.
+//! Windows uses known folders rather than environment variables (inherited, forgeable, absent for
+//! Documents). Elsewhere `APPDATA` and `LOCALAPPDATA` resolve to the same folder, so an app needing
+//! "never synced" must say so another way.
 
 use std::path::PathBuf;
 
-/// The five folder kinds, in the order a picker should list them.
 pub const KINDS: &[&str] = &["APPDATA", "LOCALAPPDATA", "TEMP", "DOCUMENTS", "HOME"];
 
-/// Resolves `kind` (case-insensitive; `APPDATA` is the canonical spelling) and
-/// joins `subfolder`, which may be empty.
-///
-/// Creates nothing; [`crate::set_storage_folder`] is what creates directories.
+/// Resolves `kind` (case-insensitive) and joins `subfolder`, which may be empty. Creates nothing.
 pub fn user_folder(kind: &str, subfolder: &str) -> Result<PathBuf, String> {
     let base = base_of(&kind.to_ascii_uppercase())?;
     if subfolder.is_empty() {
@@ -25,8 +18,7 @@ pub fn user_folder(kind: &str, subfolder: &str) -> Result<PathBuf, String> {
     Ok(base.join(check_subfolder(subfolder)?))
 }
 
-/// A subfolder must be relative and must not climb: a typo or user-supplied string must not
-/// land outside the known folder.
+/// A subfolder must be relative and must not climb.
 fn check_subfolder(sub: &str) -> Result<PathBuf, String> {
     let mut out = PathBuf::new();
     for seg in sub.split(['/', '\\']) {
@@ -73,7 +65,6 @@ fn base_of(kind: &str) -> Result<PathBuf, String> {
         "DOCUMENTS" => FOLDERID_Documents,
         "HOME" => FOLDERID_Profile,
         "TEMP" => {
-            // GetTempPath2W reports the length it needed; MAX_PATH+1 suffices.
             let mut buf = [0u16; 261];
             let n = unsafe { GetTempPath2W(Some(&mut buf)) } as usize;
             if n == 0 || n > buf.len() {
@@ -96,7 +87,6 @@ fn base_of(kind: &str) -> Result<PathBuf, String> {
         .map_err(|e| format!("SHGetKnownFolderPath returned an unreadable path for {kind}: {e}"))
 }
 
-/// Environment-variable fallback for platforms without a known-folder API.
 #[cfg(not(target_os = "windows"))]
 fn base_of(kind: &str) -> Result<PathBuf, String> {
     let home = || {

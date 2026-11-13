@@ -1,12 +1,7 @@
-//! The on-disk shape of a storage area: one file per area, not per key (whole-file rename is
-//! the crash-safe update, and per-key files would leave key names legible in a directory
-//! listing of an encrypted store). Writes go to a `.tmp` carrying the process id, then rename
-//! over the target: a reader never sees a half-written area; two hosts are last-writer-wins.
-//!
-//! `localStorage.json` is plaintext, indented JSON. `localStorage.sealed` is an 8-byte header
-//! (`VNSTOR`, format version, provider id) plus the ciphertext of the same JSON, whole-file so
-//! key names are hidden too. The provider id makes a file sealed by one provider refuse to open
-//! under another.
+//! The on-disk shape of a storage area: one file per area (whole-file rename is the crash-safe update,
+//! and per-key files would leave key names legible). `localStorage.json` is plaintext JSON;
+//! `localStorage.sealed` is an 8-byte header (`VNSTOR`, format version, provider id) plus the ciphertext
+//! of the same JSON, so a file sealed by one provider refuses to open under another.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -18,7 +13,6 @@ pub const SEALED_NAME: &str = "localStorage.sealed";
 
 const MAGIC: &[u8; 6] = b"VNSTOR";
 const FORMAT_VERSION: u8 = 1;
-/// `MAGIC` + format version + provider id.
 const HEADER_LEN: usize = 8;
 
 pub fn plain_path(folder: &Path) -> PathBuf {
@@ -29,13 +23,10 @@ pub fn sealed_path(folder: &Path) -> PathBuf {
     folder.join(SEALED_NAME)
 }
 
-/// The area as the bytes that go into the file (plaintext, or ciphertext once sealed).
 pub fn encode(entries: &[(String, String)]) -> String {
     encode_as("vue-native/storage", entries)
 }
 
-/// [`encode`] under another `format` name (`cookies.sealed` uses `"vue-native/cookies"`).
-/// [`decode`] reads either.
 pub fn encode_as(format: &str, entries: &[(String, String)]) -> String {
     let mut s = String::from("{\n  \"format\": ");
     write_json_string(&mut s, format);
@@ -71,8 +62,7 @@ fn write_json_string(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// Reads what [`encode`] wrote. A small purpose-built parser; unknown members are skipped so a
-/// future version can add one without orphaning today's files.
+/// Reads what [`encode`] wrote; unknown members are skipped so a future version can add one.
 pub fn decode(text: &str) -> Result<Vec<(String, String)>, String> {
     let b = text.as_bytes();
     let mut p = Parser { b, i: 0 };
@@ -209,7 +199,6 @@ impl<'a> Parser<'a> {
                     }
                 }
                 _ => {
-                    // Multi-byte UTF-8 passes through untouched.
                     let start = self.i - 1;
                     while self.i < self.b.len() && (self.b[self.i] & 0xc0) == 0x80 {
                         self.i += 1;
@@ -311,8 +300,6 @@ pub fn unseal(p: &dyn SecretProvider, bytes: &[u8]) -> Result<String, String> {
     String::from_utf8(plain).map_err(|e| format!("decrypted bytes are not UTF-8: {e}"))
 }
 
-/// Writes then renames over the target; never leaves a partial file or collides with another
-/// process's scratch file.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(dir)?;
@@ -320,8 +307,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     {
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(bytes)?;
-        // Rename is atomic but the content reaching disk is not: power loss between the two
-        // would rename an empty file over a good one.
+        // Rename is atomic but the content reaching disk is not: power loss between would leave an empty file.
         f.sync_all()?;
     }
     match std::fs::rename(&tmp, path) {

@@ -9,34 +9,24 @@ use gpui::{App, Window};
 use crate::tree::{self, Kind, NodeRef, Tree};
 use crate::EventPayload;
 
-/// One node, as the wire sees it.
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
     pub id: u32,
-    /// `element` | `text` | `anchor`.
     pub kind: &'static str,
     pub tag: String,
     pub classes: Vec<String>,
-    /// Vue `<style scoped>` hashes (`data-v-...`).
     pub scopes: Vec<String>,
-    /// The DOM-compat attribute channel (`value`, `placeholder`, `data-*`, …).
     pub props: Vec<(String, String)>,
-    /// This node's OWN text (a text node's content, or the inline text an element carries) — not
-    /// the subtree's.
     pub text: String,
     pub parent: u32,
     pub children: Vec<u32>,
-    /// The `EV_*` bits JS listens for, as event names.
     pub listeners: Vec<&'static str>,
-    /// `None` = not painted (detached, or parked in a `<KeepAlive>` cache container).
     pub bounds: Option<(f32, f32, f32, f32)>,
-    /// Some descendant's `group-hover:` rule watches this element, so the renderer gave it gpui's
-    /// `.group(name)` (and therefore a hitbox).
+    /// A descendant's `group-hover:` rule watches this element, so it got gpui's `.group(name)` (and a hitbox).
     pub group_anchor: bool,
 }
 
-/// The listener bits as names, off [`tree::EVENT_NAMES`] — the single table, so this listing cannot
-/// drift behind the codes the way it did before.
+/// The listener bits as names, off [`tree::EVENT_NAMES`], so this listing cannot drift from the codes.
 fn event_names(mask: u64) -> Vec<&'static str> {
     tree::EVENT_NAMES
         .iter()
@@ -45,13 +35,10 @@ fn event_names(mask: u64) -> Vec<&'static str> {
         .collect()
 }
 
-/// The mounted root's node id (0 = nothing mounted yet).
 pub fn root_id() -> u32 {
     tree::read_tree(|t| t.root)
 }
 
-/// Every ELEMENT node reachable from the root, in document order (pre-order — the order
-/// `querySelectorAll` returns).
 fn elements_in_document_order(t: &Tree) -> Vec<u32> {
     let mut out = Vec::new();
     fn walk(t: &Tree, id: u32, out: &mut Vec<u32>) {
@@ -69,7 +56,6 @@ fn elements_in_document_order(t: &Tree) -> Vec<u32> {
     out
 }
 
-/// `querySelectorAll`, through the cascade's own matcher.
 pub fn query(selector: &str) -> Result<(Vec<u32>, Vec<String>), String> {
     tree::read_tree(|t| {
         let ids = elements_in_document_order(t);
@@ -84,16 +70,12 @@ pub fn query(selector: &str) -> Result<(Vec<u32>, Vec<String>), String> {
     })
 }
 
-/// How many live nodes the retained tree holds — the one number that says whether a slow frame is a
-/// big tree or a slow cascade, and the cheapest thing the Performance panel can put beside its
-/// frame times.
 pub fn node_count() -> u32 {
     tree::read_tree(|t| t.live_count())
 }
 
-/// `(element-tree builds, paint-only presents)` since the process started, in any window. A
-/// `<video>` or moving `<canvas>` frame is a present, not a build (`crate::live`); a test reads
-/// both to tell the two apart.
+/// `(element-tree builds, paint-only presents)` since start, in any window; a `<video>` or moving
+/// `<canvas>` frame is a present (`crate::live`).
 pub fn frame_counts() -> (u64, u64) {
     (crate::render::build_count(), crate::live::present_count())
 }
@@ -101,31 +83,24 @@ pub fn frame_counts() -> (u64, u64) {
 pub use crate::resample::ImageStats;
 pub use crate::tree::TreeMem;
 
-/// The retained tree's memory, estimated from its live structures (`Tree::mem_estimate`) — devtools
-/// `mem`.
 pub fn tree_mem() -> TreeMem {
     tree::read_tree(|t| t.mem_estimate())
 }
 
-/// The painted-image registry and the downscaled-copy cache (`crate::resample`).
 pub fn image_stats() -> ImageStats {
     crate::resample::image_stats()
 }
 
 pub use crate::img::{KeptFull, ResidencyStats};
 
-/// What the image residency sweep did since boot: decodes reduced to the copy they are drawn from,
-/// restored, evicted (`crate::img`, "residency").
 pub fn residency_stats() -> ResidencyStats {
     crate::img::residency_stats()
 }
 
-/// Arms the painted-image registry (`VN_MEMSTATS=1`).
 pub fn set_image_tracking(on: bool) {
     crate::resample::set_tracking(on);
 }
 
-/// Everything else vn-tree holds that is worth a line in `mem`, as named counters: `(name, value)`.
 pub fn side_stats() -> Vec<(&'static str, u64)> {
     let (memos, src_bytes, images, image_bytes, backgrounds) = crate::img::mem_stats();
     let (canvases, canvas_bytes) = crate::render::canvas::mem_stats();
@@ -170,7 +145,6 @@ pub fn side_stats() -> Vec<(&'static str, u64)> {
     ]
 }
 
-/// How many scroll containers registered with the wheel router in the frame just painted.
 pub fn scroll_chain_count() -> u32 {
     vn_elements::scrollbar::chain_count() as u32
 }
@@ -203,7 +177,6 @@ pub fn node_info(id: u32) -> Option<NodeInfo> {
     })
 }
 
-/// `textContent` of the subtree, concatenated in document order.
 pub fn text_content(id: u32) -> Option<String> {
     tree::read_tree(|t| {
         t.node(id)?;
@@ -237,7 +210,6 @@ pub fn is_hovered(id: u32) -> bool {
     tree::is_hovered(id)
 }
 
-/// The node's folded [`vn_css::ComputedStates`], rendered as `(bucket, dump)` pairs.
 pub fn computed_styles(id: u32) -> Option<Vec<(&'static str, String)>> {
     // Hoisted out of the closure below: `live_style` reads the tree itself, and a reader that only
     // works while nothing else is reading is a trap.
@@ -283,8 +255,6 @@ pub fn computed_styles(id: u32) -> Option<Vec<(&'static str, String)>> {
     })
 }
 
-/// Every rule in the installed sheet that matches this node, in cascade order — the provenance
-/// behind [`computed_styles`].
 pub fn matched_rules(id: u32) -> Option<Vec<vn_css::MatchedRule>> {
     let env = crate::env();
     tree::read_tree(|t| {
@@ -293,23 +263,19 @@ pub fn matched_rules(id: u32) -> Option<Vec<vn_css::MatchedRule>> {
     })
 }
 
-/// The node's rectangle as seen from inside a BUILD — what the inspector's outline overlay is
-/// positioned from.
 pub fn overlay_bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
     crate::render::painted_bounds(id)
 }
 
-/// The deepest ELEMENT gpui would hit at `(x, y)`, as the path from the root down to it (empty when
-/// the point is over nothing). This is gpui's own hit test (every element gets a hitbox tagged with
-/// its node id in a dev host), so transforms and paint order (deferred/`z-index` boxes in front) and
-/// content masks are exact. Ties go to the deepest, then the last in document order.
+/// The deepest ELEMENT gpui would hit at `(x, y)`, as the path from the root down (empty over
+/// nothing): gpui's own hit test (every element gets a hitbox tagged with its node id in a dev host),
+/// so transforms, paint order and masks are exact. Ties go to the deepest, then the last in document order.
 pub fn hit_test(x: f32, y: f32, window: &Window) -> Vec<u32> {
     hit_test_in(0, x, y, window)
 }
 
-/// [`hit_test`], restricted to the window that paints `root` (0 = primary): hitboxes live in the
-/// painting window's frame, so without it a pop-out point could pick the primary window's node. The
-/// path is still root-first from the document root.
+/// [`hit_test`] restricted to the window that paints `root` (0 = primary): hitboxes live in the
+/// painting window's frame. The path is still root-first from the document root.
 pub fn hit_test_in(root: u32, x: f32, y: f32, window: &Window) -> Vec<u32> {
     let point = gpui::Point::new(gpui::px(x), gpui::px(y));
     tree::read_tree(|t| {
@@ -378,7 +344,6 @@ pub fn aim_point(id: u32, window: &Window) -> Option<(f32, f32)> {
         .then(|| (f32::from(point.x), f32::from(point.y)))
 }
 
-/// Drops `None` fields (and the blocks that become empty because of it) from a pretty `Debug` dump.
 fn prune(dump: &str) -> String {
     let mut lines: Vec<String> = dump
         .lines()
@@ -406,7 +371,6 @@ fn prune(dump: &str) -> String {
 }
 
 
-/// `el.focus()`.
 pub fn focus(id: u32, window: &mut Window, cx: &mut App) -> Result<(), String> {
     crate::render::focus_node(id, window, cx)
 }
@@ -419,7 +383,6 @@ pub fn focused_node(window: &Window, cx: &App) -> Option<u32> {
     crate::render::focused_node(window, cx)
 }
 
-/// Scrolls a container by `(dx, dy)` CSS px and fires `scroll`.
 pub fn scroll(
     id: u32,
     dx: f32,
@@ -430,8 +393,6 @@ pub fn scroll(
     crate::render::scroll_node(id, dx, dy, window, cx)
 }
 
-/// A synthesized mouse sequence at `(x, y)`: `mousedown` → `mouseup` → `click`, each through the
-/// ordinary dispatch path (capture/bubble over the mirror tree, `preventDefault()` honored).
 pub fn click(
     id: u32,
     x: f32,
@@ -484,6 +445,5 @@ mod tests {
     }
 }
 
-/// Native canvas atlas copies and exceptional CPU fallbacks, for the inspector.
 #[cfg(feature = "webgpu")]
 pub fn gpu_canvas_presentation_stats() -> (u64,u64) { crate::render::canvas::native_stats() }

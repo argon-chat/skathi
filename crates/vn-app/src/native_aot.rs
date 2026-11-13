@@ -207,8 +207,6 @@ pub(crate) fn prepare(devtools: bool) -> Result<(), String> {
     let mut preludes = crate::PRELUDE_JS.as_bytes().to_vec();
     preludes.push(0);
     preludes.extend_from_slice(crate::WINDOW_PRELUDE_JS.as_bytes());
-    // Validate ABI and the actual embedded JS/preludes before cache writes or
-    // native initialization. The image hash is checked against the exact File.
     let expected = field(&manifest, "imageSha256")?;
     let (entry, id) = validate(&manifest, source.as_bytes(), &preludes, expected)?;
     let (mut file, description) = if let Some(path) = external {
@@ -251,8 +249,6 @@ pub(crate) fn prepare(devtools: bool) -> Result<(), String> {
     );
     Ok(())
 }
-/// Returns false for ordinary JIT boots. A selected native image never falls
-/// through to source evaluation if its entry throws or remains pending.
 pub(crate) fn boot(rt: &JsRuntime) -> Result<bool, String> {
     let Some(entry) = PLAN.with(|plan| plan.borrow().as_ref().map(|p| p.entry)) else {
         return Ok(false);

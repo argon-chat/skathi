@@ -10,7 +10,6 @@ mod implementation;
 
 pub use implementation::install;
 
-/// Live guest resources, separate from cumulative presentation counters.
 pub(crate) struct Stats {
     pub generation: u64,
     pub contexts: u64,

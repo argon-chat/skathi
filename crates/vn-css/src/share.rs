@@ -8,11 +8,8 @@ use std::rc::Rc;
 
 use crate::{ComputedStates, Env, Vars};
 
-/// A message row's subtree has a few dozen distinct element kinds, and the next row is folded right
-/// after it.
 const SLOTS: usize = 64;
 
-/// Everything a fold depends on besides the declarations themselves.
 pub(crate) struct Key<'a> {
     generation: u64,
     hash: u64,
@@ -34,7 +31,6 @@ impl<'a> Key<'a> {
         parent_font: &'a gpui::Font,
         env: &'a Env,
     ) -> Self {
-        // FNV-1a: a cheap first filter before the slices are compared.
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
         for &r in rules.iter() {
             for b in r.to_le_bytes() {
@@ -75,7 +71,6 @@ impl Entry {
     }
 }
 
-/// Bitwise, so that a NaN channel still meets itself.
 fn color_bits(c: Option<gpui::Hsla>) -> Option<[u32; 4]> {
     c.map(|c| [c.h.to_bits(), c.s.to_bits(), c.l.to_bits(), c.a.to_bits()])
 }
@@ -90,12 +85,10 @@ thread_local! {
     static RING: RefCell<Ring> = RefCell::new(Ring::default());
 }
 
-/// The folded result of an earlier element with exactly these inputs, if one is kept.
 pub(crate) fn lookup(key: &Key<'_>) -> Option<ComputedStates> {
     RING.with(|ring| ring.borrow().entries.iter().find(|e| e.answers(key)).map(|e| e.states.clone()))
 }
 
-/// Keeps a freshly folded result, in place of the oldest one.
 pub(crate) fn insert(key: Key<'_>, states: &ComputedStates) {
     let entry = Entry {
         generation: key.generation,
@@ -120,7 +113,6 @@ pub(crate) fn insert(key: Key<'_>, states: &ComputedStates) {
     });
 }
 
-/// Is the cache on?
 pub(crate) fn enabled() -> bool {
     static ON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
     match ON.load(std::sync::atomic::Ordering::Relaxed) {

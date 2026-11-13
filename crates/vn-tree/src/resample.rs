@@ -17,9 +17,8 @@ use vn_resample::downscale;
 const RESAMPLE_BELOW: f32 = 0.8;
 /// Size steps per octave.
 const STEPS: f32 = 4.0;
-/// The largest image (in source pixels) whose first copy is made on the painting thread: a 1080 ×
-/// 1080 avatar is 1.17 M, and its copy takes about 1.5 ms (`vn_resample`'s
-/// `an_avatar_and_a_banner_downscale_quickly`; the crate is optimised in debug builds too).
+/// The largest image (source pixels) whose first copy is made on the painting thread (a 1080 × 1080
+/// avatar takes about 1.5 ms).
 const SYNC_PIXELS: u64 = 1_300_000;
 /// What one frame may spend making first copies on the painting thread.
 const SYNC_BUDGET: Duration = Duration::from_millis(4);
@@ -27,12 +26,10 @@ const SYNC_BUDGET: Duration = Duration::from_millis(4);
 const SETTLE: Duration = Duration::from_millis(100);
 /// The bytes of copies kept.
 const BUDGET_BYTES: usize = 64 << 20;
-/// How long an image must have been painted before a copy may stand in for its decode: long enough
-/// for the sizes it is drawn at to settle and their copies to exist.
+/// How long an image must have been painted before a copy may stand in for its decode.
 const REDUCE_AFTER: Duration = Duration::from_secs(2);
-/// The span of each of the two windows the largest drawn size is kept over: a large draw (a profile
-/// card, a lightbox) holds the full decode for 15–30 s after it ends, so opening it again soon does
-/// not load the image again.
+/// The span of each of the two windows the largest drawn size is kept over: a large draw holds the
+/// full decode 15–30 s after it ends.
 const USE_WINDOW: Duration = Duration::from_secs(15);
 /// A copy stands in for a decode only when that frees at least this much and at least three
 /// quarters of the decode.
@@ -56,39 +53,30 @@ struct Copy {
 struct Cache {
     copies: HashMap<Key, Copy>,
     in_flight: HashSet<Key>,
-    /// Other sizes of images that have a copy, and since when they are asked for.
     waiting: HashMap<Key, (Weak<RenderImage>, Instant)>,
     clock: u64,
     bytes: usize,
-    /// Time spent making copies on the painting thread since the last tick.
     sync_spent: Duration,
-    /// Evicted copies, for the frame tick to hand back to gpui's atlases.
     retired: Vec<Arc<RenderImage>>,
 }
 
 thread_local! {
     static CACHE: RefCell<Cache> = RefCell::new(Cache::default());
     static HOLD_REPLAYS: Cell<bool> = const { Cell::new(false) };
-    /// How each painted image has been drawn lately ([`note_use`]).
     static USES: RefCell<HashMap<ImageId, Use>> = RefCell::new(HashMap::new());
-    /// Reduced images drawn larger than their pixels since the last sweep.
     static WANT_FULL: RefCell<HashSet<ImageId>> = RefCell::new(HashSet::new());
 }
 
 struct Use {
     image: Weak<RenderImage>,
     first: Instant,
-    /// The largest size drawn in the current window and in the one before it.
     cur: (i32, i32),
     prev: (i32, i32),
     rotated: Instant,
-    /// The size of the latest draw: what an image stands for once a retained subtree replays it (a
-    /// replay draws without asking this module).
+    /// The size of the latest draw: what an image stands for once a retained subtree replays it.
     last: (i32, i32),
 }
 
-/// Records a draw of `image` at `device` pixels, and a reduced image drawn well above its pixels as
-/// wanting its full decode back.
 fn note_use(image: &Arc<RenderImage>, device: Size<DevicePixels>, now: Instant) {
     let d = (device.width.0, device.height.0);
     if image.is_reduced() {
@@ -123,7 +111,6 @@ fn recent_use(id: ImageId, now: Instant) -> Option<((i32, i32), Duration)> {
     USES.with(|u| {
         let u = u.borrow();
         let e = u.get(&id)?;
-        // Windows that ended with no draw since count as empty.
         let since = now.duration_since(e.rotated);
         let (cur, prev) = if since >= USE_WINDOW * 2 {
             ((0, 0), (0, 0))
@@ -138,7 +125,6 @@ fn recent_use(id: ImageId, now: Instant) -> Option<((i32, i32), Duration)> {
     })
 }
 
-/// Why [`reduced_copy`] left a decode full.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum KeepFull {
     /// Already a copy, or not a still picture (an animation, a moving frame).
@@ -193,28 +179,24 @@ pub(crate) fn reduced_copy(full: &Arc<RenderImage>, now: Instant) -> Result<Arc<
     })
 }
 
-/// The ids of reduced images drawn larger than their pixels since the last call.
 pub(crate) fn take_wanted_full() -> HashSet<ImageId> {
     WANT_FULL.with(|w| std::mem::take(&mut *w.borrow_mut()))
 }
 
-/// Marks a reduced image as wanting its full decode back (an `<img>` whose pixels a canvas reads).
 pub(crate) fn want_full(id: ImageId) {
     WANT_FULL.with(|w| w.borrow_mut().insert(id));
 }
 
-/// Forgets the draws of images that are gone.
 pub(crate) fn prune_uses() {
     USES.with(|u| u.borrow_mut().retain(|_, e| e.image.strong_count() > 0));
 }
 
-/// Something other than this module swapped or freed an atlas tile this frame: no retained-render
-/// boundary may replay (see [`holds_replays`]).
+/// Something other than this module swapped or freed an atlas tile: no retained-render boundary may
+/// replay ([`holds_replays`]).
 pub(crate) fn hold_replays_too() {
     HOLD_REPLAYS.with(|h| h.set(true));
 }
 
-/// One copy to make on the resampling thread.
 struct Job {
     key: Key,
     source: Arc<RenderImage>,
@@ -226,8 +208,7 @@ type Landed = (Key, Weak<RenderImage>, Option<RenderImage>);
 static DONE: Mutex<Vec<Landed>> = Mutex::new(Vec::new());
 static JOBS: OnceLock<Mutex<mpsc::Sender<Job>>> = OnceLock::new();
 
-/// `VN_NO_RESAMPLE=1` leaves every image to the atlas's own sampling: the A/B for
-/// `specs/resample.spec.ts`, and a switch for a field diagnosis.
+/// `VN_NO_RESAMPLE=1` leaves every image to the atlas's own sampling (A/B and field diagnosis).
 fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
@@ -239,7 +220,6 @@ fn enabled() -> bool {
     })
 }
 
-/// An image its owner is done with: its copies go back to gpui at the next tick.
 pub(crate) fn forget(image: &RenderImage) {
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
@@ -251,13 +231,10 @@ pub(crate) fn forget(image: &RenderImage) {
     });
 }
 
-/// Did a copy land or go this frame?
 pub(crate) fn holds_replays() -> bool {
     HOLD_REPLAYS.with(Cell::get)
 }
 
-/// The size step for a scale along one axis: 0 when the axis is drawn at [`RESAMPLE_BELOW`] of its
-/// size or more, else the step whose size is the smallest at or above the drawn one.
 pub(crate) fn step(scale: f32) -> i32 {
     if !(scale > 0.0) || scale >= RESAMPLE_BELOW {
         return 0;
@@ -265,7 +242,6 @@ pub(crate) fn step(scale: f32) -> i32 {
     ((scale.log2() * STEPS).ceil() as i32).min(-1)
 }
 
-/// The pixel size a step gives a natural size.
 pub(crate) fn stepped(natural: u32, step: i32) -> u32 {
     if step == 0 {
         return natural;
@@ -273,8 +249,6 @@ pub(crate) fn stepped(natural: u32, step: i32) -> u32 {
     ((natural as f32 * (step as f32 / STEPS).exp2()).ceil() as u32).clamp(1, natural)
 }
 
-/// `gpui::ImageResampler`: the copy to draw `image`'s `frame` from at `device` pixels, or `None` to
-/// draw it as it is.
 fn resampler(image: &Arc<RenderImage>, frame: usize, device: Size<DevicePixels>) -> Option<Arc<RenderImage>> {
     note_use(image, device, Instant::now());
     let out = choose(image, frame, device);
@@ -290,11 +264,9 @@ static TRACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new
 
 struct Seen {
     image: Weak<RenderImage>,
-    /// Decoded bytes over all frames (BGRA, 4 B/px).
     bytes: usize,
     natural: (i32, i32),
     drawn: (i32, i32),
-    /// Drawn at least once from the full-size image (no copy).
     full_drawn: bool,
 }
 
@@ -302,7 +274,6 @@ thread_local! {
     static SEEN: RefCell<HashMap<ImageId, Seen>> = RefCell::new(HashMap::new());
 }
 
-/// Arms the registry (`VN_MEMSTATS=1`, read by the host at boot).
 pub fn set_tracking(on: bool) {
     TRACK.store(on, std::sync::atomic::Ordering::Relaxed);
 }
@@ -333,31 +304,22 @@ fn note_seen(image: &Arc<RenderImage>, device: Size<DevicePixels>, full: bool) {
 
 #[derive(Default, Debug, Clone)]
 pub struct ImageStats {
-    /// Is the registry armed at all? (Everything below except `copies*` is 0 when not.)
     pub tracking: bool,
-    /// Painted images whose decode is still alive (something — gpui's asset cache, a node's memo —
-    /// still holds the `Arc`).
     pub live: usize,
     pub live_bytes: usize,
     pub live_bytes_at_drawn: usize,
-    /// Live images at least 4× the pixels they are drawn at.
     pub oversized: usize,
     pub oversized_bytes: usize,
-    /// Images drawn at least once from the full-size decode — each of those put the full image into
-    /// the polychrome atlas (estimate: a later `drop_image` is not seen here).
+    /// Images drawn at least once from the full-size decode (estimate: a later `drop_image` is not seen).
     pub full_in_atlas: usize,
     pub full_in_atlas_bytes: usize,
-    /// Painted images whose decode has gone since.
     pub gone: usize,
-    /// The downscaled copies this module keeps, and their bytes (budget [`BUDGET_BYTES`]).
     pub copies: usize,
     pub copies_bytes: usize,
     pub copies_in_flight: usize,
-    /// The five largest live decodes: (natural w, h, drawn w, h, bytes).
     pub largest: Vec<(i32, i32, i32, i32, usize)>,
 }
 
-/// The registry and copy-cache totals (devtools `mem`).
 pub fn image_stats() -> ImageStats {
     let mut out = ImageStats { tracking: TRACK.load(std::sync::atomic::Ordering::Relaxed), ..Default::default() };
     CACHE.with(|c| {
@@ -451,8 +413,6 @@ fn choose(image: &Arc<RenderImage>, frame: usize, device: Size<DevicePixels>) ->
     })
 }
 
-/// The existing copy of `id`'s `frame` whose steps are closest to `steps`, a larger one before a
-/// smaller one.
 fn nearest(c: &Cache, id: ImageId, frame: usize, steps: (i32, i32)) -> Option<Key> {
     c.copies
         .keys()
@@ -482,7 +442,6 @@ fn evict(c: &mut Cache, key: Key) {
     }
 }
 
-/// A copy of `image`'s `frame` at `target`, or `None` if it has no such frame.
 fn make(image: &RenderImage, frame: usize, target: (u32, u32)) -> Option<RenderImage> {
     let size = image.size(frame);
     let bytes = image.as_bytes(frame)?;
@@ -510,10 +469,9 @@ fn submit(job: Job) {
     let _ = jobs.lock().unwrap_or_else(|e| e.into_inner()).send(job);
 }
 
-/// Once per frame group, from `crate::frame_tick`: installs the resampler, renews the frame's
-/// [`SYNC_BUDGET`], takes in the copies that landed, starts the ones whose size has held, evicts
-/// copies whose image is gone and the least recently drawn past the budget, and hands the evicted
-/// ones back to gpui.
+/// Once per frame group, from `crate::frame_tick`: installs the resampler, renews [`SYNC_BUDGET`],
+/// takes in landed copies, starts those whose size has held, evicts gone and least recently drawn
+/// copies, and hands the evicted ones back to gpui.
 pub(crate) fn tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     if enabled() {
         gpui::set_image_resampler(resampler);
@@ -570,7 +528,6 @@ pub(crate) fn tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
 mod tests {
     use super::*;
 
-    /// A one-pixel black/white checkerboard, opaque.
     fn checker(w: u32, h: u32) -> Vec<u8> {
         let mut v = Vec::with_capacity((w * h * 4) as usize);
         for y in 0..h {
@@ -598,7 +555,6 @@ mod tests {
         assert_eq!(step(0.79), -1);
         assert_eq!(step(0.5), -4);
         assert_eq!(step(40.0 / 1080.0), -19);
-        // A step's size is never below the drawn one, nor ~19 % above it.
         for drawn in [40u32, 41, 57, 80, 120, 333] {
             let s = stepped(1080, step(drawn as f32 / 1080.0));
             assert!(s >= drawn && s as f32 <= drawn as f32 * 1.19 + 1.0, "{drawn} -> {s}");
@@ -607,8 +563,6 @@ mod tests {
         assert_eq!(stepped(3, -40), 1);
     }
 
-    /// A new frame's [`SYNC_BUDGET`], as `tick` renews it: a debug build or a busy machine can
-    /// spend the whole of it on one copy.
     fn new_frame() {
         CACHE.with(|c| c.borrow_mut().sync_spent = Duration::ZERO);
     }
@@ -629,13 +583,11 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &other));
         let key = (img.id, 0, step(0.5), step(0.5));
         assert!(CACHE.with(|c| c.borrow().waiting.contains_key(&key)));
-        // Asking for both sizes, frame after frame, does not restart the wait.
         let since = CACHE.with(|c| c.borrow().waiting[&key].1);
         let _ = resampler(&img, 0, device(40, 40));
         let _ = resampler(&img, 0, device(100, 100));
         assert_eq!(CACHE.with(|c| c.borrow().waiting[&key].1), since);
 
-        // Only one axis small: only that axis is resampled.
         new_frame();
         let wide = image(checker(400, 2), 400, 2);
         let copy = resampler(&wide, 0, device(40, 2)).unwrap();
@@ -706,7 +658,6 @@ mod tests {
         let _ = take_wanted_full();
         assert!(resampler(&reduced, 0, device(40, 40)).is_none());
         assert!(take_wanted_full().is_empty());
-        // A reduced decode is never reduced again.
         assert_eq!(reduced_copy(&reduced, settled()).err(), Some(KeepFull::NotStill));
         let _ = resampler(&reduced, 0, device(300, 300));
         assert!(take_wanted_full().contains(&reduced.id));
@@ -719,12 +670,10 @@ mod tests {
         let _ = resampler(&big, 0, device(40, 40));
         let _ = resampler(&big, 0, device(400, 400));
         assert_eq!(reduced_copy(&big, settled()).err(), Some(KeepFull::NoCopy));
-        // A small image: a copy would free less than MIN_SAVING.
         new_frame();
         let small = image(checker(120, 120), 120, 120);
         assert!(resampler(&small, 0, device(20, 20)).is_some());
         assert_eq!(reduced_copy(&small, settled()).err(), Some(KeepFull::SmallSaving));
-        // Never drawn: nothing says what size it is needed at.
         let unseen = image(checker(600, 600), 600, 600);
         assert_eq!(reduced_copy(&unseen, settled()).err(), Some(KeepFull::Undrawn));
     }

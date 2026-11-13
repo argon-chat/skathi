@@ -1,20 +1,16 @@
-//! Application-owned notification icons. OS callbacks never run inside JS: on
-//! Windows they run on the tray's own thread; on macOS on the main thread
-//! (which is also the VM's), from AppKit's event dispatch.
+//! Application-owned notification icons. OS callbacks never run inside JS: on Windows they run on the
+//! tray's own thread, on macOS on the main thread (the VM's), from AppKit's event dispatch.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 pub type Callback = Arc<dyn Fn() + Send + Sync + 'static>;
 
-/// Straight RGBA pixels; the OS owns its own copy after an update.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Icon {
     pub width: u32,
     pub height: u32,
     pub rgba: Arc<[u8]>,
-    /// Render the alpha mask in the taskbar's foreground colour (on macOS, a
-    /// template image in the menu bar's text colour).
     pub template: bool,
 }
 
@@ -96,14 +92,10 @@ impl MenuItem {
 
 #[derive(Clone, Default)]
 pub struct Options {
-    /// None uses the executable's icon, with the system icon as a fallback.
     pub icon: Option<Icon>,
-    /// At most 127 UTF-16 units; empty uses the executable's name.
     pub tooltip: String,
     pub menu: Vec<MenuItem>,
-    /// A primary click opens the menu when this is absent.
     pub on_click: Option<Callback>,
-    /// The application decides how to quit. The backend never exits a process.
     pub on_quit: Option<Callback>,
 }
 impl Options {
@@ -184,7 +176,6 @@ impl std::error::Error for Error {}
 mod windows;
 #[cfg(windows)]
 use windows::Controller;
-// The status item's AppKit half; what it is told is decided in mac_plan.rs.
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -213,13 +204,11 @@ impl Drop for Owner {
     }
 }
 
-/// Cloneable app-owned handle. The final owner removes the icon and stops its pump.
 #[derive(Clone)]
 pub struct Tray {
     owner: Arc<Owner>,
 }
 static APP: OnceLock<Mutex<Weak<Owner>>> = OnceLock::new();
-/// Whether the application's icon was last given a model to show, not a removal.
 static APP_SHOWN: AtomicBool = AtomicBool::new(false);
 impl Tray {
     pub const fn is_available() -> bool {
@@ -246,8 +235,7 @@ impl Tray {
         let owner = APP.get()?.lock().ok()?.upgrade()?;
         Some(Self { owner })
     }
-    /// Queues a complete replacement; None removes the icon. Updates coalesce.
-    /// The returned revision fences events from a dismissed/replaced menu.
+    /// Queues a complete replacement; None removes the icon. The returned revision fences events from a replaced menu.
     pub fn set(&self, options: Option<Options>) -> Result<u64, Error> {
         if let Some(options) = &options {
             options.validate()?;
@@ -264,8 +252,6 @@ impl Tray {
             .and_then(|slot| slot.lock().ok()?.upgrade())
             .is_some_and(|owner| Arc::ptr_eq(&owner, &self.owner))
     }
-    /// Whether the application's icon is up (shown and not dropped); a hidden start asks before
-    /// trusting the user to have a way back in.
     pub fn app_shown() -> bool {
         APP_SHOWN.load(Ordering::Acquire) && Self::existing_app().is_some()
     }

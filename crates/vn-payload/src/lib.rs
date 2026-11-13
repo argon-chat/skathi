@@ -1,44 +1,34 @@
-//! VNPK v1, the app payload a packaged exe carries, and the one function that turns a URL into an
-//! asset key.
+//! VNPK v1, the app payload a packaged exe carries, and the one function that turns a URL into an asset key.
 //!
-//! `vn build` writes one blob, stamps it into the bare host as the `RT_RCDATA` resource `VNPAYLOAD`,
-//! and the host maps it zero-copy at boot. This crate is the reader; a golden fixture
-//! (`packages/vue-native/test/fixtures/golden.vnpk`) ties it to the writer
-//! (`packages/vue-native/cli/vnpk.ts`). Layout:
+//! `vn build` writes one blob, stamps it into the bare host as the `RT_RCDATA` resource `VNPAYLOAD`, and the
+//! host maps it zero-copy at boot. This crate is the reader; a golden fixture
+//! (`packages/vue-native/test/fixtures/golden.vnpk`) ties it to the writer (`packages/vue-native/cli/vnpk.ts`).
 //!
 //! ```text
 //! header 64 B | toc (32 B × n, sorted by (kind, name bytes)) | names | skew | data
 //! ```
 //!
-//! Every field is read byte-wise: the blob is only 4-byte aligned in the image.
-//!
-//! [`Payload::parse`] validates once, in O(entries): magic, format, TOC bounds and order, UTF-8
-//! names and text entries. Asset bytes are never read at boot, since that would fault in every page.
-//!
-//! [`content_key`] is the normaliser both asset paths use (redjs's content provider and
-//! `vn_tree::img`), in dev and packaged, so they agree on what `assets/a.png?v=2` names.
+//! Every field is read byte-wise: the blob is only 4-byte aligned in the image. [`Payload::parse`] validates
+//! once, in O(entries); asset bytes are never read at boot, since that would fault in every page.
+//! [`content_key`] is the normaliser both asset paths use, so they agree on what `assets/a.png?v=2` names.
 
 use std::fmt;
 use std::ops::Range;
 
 pub const MAGIC: &[u8; 4] = b"VNPK";
-/// The newest format this host reads; a higher number was built by a newer `vn`.
 pub const FORMAT: u16 = 1;
 pub const HEADER_SIZE: usize = 64;
 pub const TOC_ENTRY_SIZE: usize = 32;
 
-/// Entry kinds. Only [`kind::ASSET`] is reachable from app code: internal entries are looked up by
-/// kind and name, so `fetch("vn/app.js")` is a miss.
+/// Entry kinds. Only [`kind::ASSET`] is reachable from app code, so `fetch("vn/app.js")` is a miss.
 pub mod kind {
     pub const META: u16 = 1;
     pub const WINDOW: u16 = 2;
     pub const SCRIPT: u16 = 3;
-    /// Reserved (a JSC bytecode cache). Page-aligned when present.
     pub const BYTECODE: u16 = 4;
     pub const ASSET: u16 = 16;
 }
 
-/// The names the internal entries are written under.
 pub mod name {
     pub const META: &str = "vn/app.json";
     pub const WINDOW: &str = "vn/window.json";
@@ -50,7 +40,6 @@ pub mod name {
 pub enum Error {
     TooShort(usize),
     BadMagic,
-    /// Built by a newer `vn` than this host understands.
     NewerFormat(u16),
     OutOfBounds {
         what: String,
@@ -88,7 +77,6 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// One table-of-contents entry, resolved to slices of the blob.
 #[derive(Debug, Clone, Copy)]
 pub struct Entry<'a> {
     pub name: &'a str,
@@ -96,12 +84,10 @@ pub struct Entry<'a> {
     pub data: &'a [u8],
 }
 
-/// A validated payload, borrowing the blob (`'static` in the host: the mapped image).
 #[derive(Debug)]
 pub struct Payload<'a> {
     bytes: &'a [u8],
     entries: Vec<Entry<'a>>,
-    /// The contiguous run of [`kind::ASSET`] entries, sorted by name bytes, for the binary search.
     assets: Range<usize>,
     flags: u16,
     skew: u32,
@@ -121,8 +107,6 @@ fn u64_at(b: &[u8], o: usize) -> u64 {
 }
 
 impl<'a> Payload<'a> {
-    /// Validates `bytes` and builds the entry view. O(entries); asset bytes are
-    /// never touched.
     pub fn parse(bytes: &'a [u8]) -> Result<Self, Error> {
         if bytes.len() < HEADER_SIZE {
             return Err(Error::TooShort(bytes.len()));
@@ -240,21 +224,17 @@ impl<'a> Payload<'a> {
             .entries
             .iter()
             .find(|e| e.kind == kind && e.name == name)?;
-        // Validated in `parse`.
         std::str::from_utf8(e.data).ok()
     }
 
-    /// `vn/app.json`.
     pub fn meta(&self) -> Option<&'a str> {
         self.text(kind::META, name::META)
     }
 
-    /// `vn/window.json`.
     pub fn window_json(&self) -> Option<&'a str> {
         self.text(kind::WINDOW, name::WINDOW)
     }
 
-    /// `vn/app.js`.
     pub fn script(&self) -> Option<&'a str> {
         self.text(kind::SCRIPT, name::SCRIPT)
     }
@@ -267,7 +247,6 @@ impl<'a> Payload<'a> {
         self.assets.len()
     }
 
-    /// The asset stored under exactly `key`; a binary search over the sorted run.
     pub fn asset(&self, key: &str) -> Option<&'a [u8]> {
         let run = self.assets();
         run.binary_search_by(|e| e.name.as_bytes().cmp(key.as_bytes()))
@@ -275,8 +254,7 @@ impl<'a> Payload<'a> {
             .map(|i| run[i].data)
     }
 
-    /// The asset whose name equals `key` ignoring ASCII case, with the stored spelling. A linear
-    /// scan for the miss path: NTFS is case-insensitive in dev, so a packaged exe must not be stricter.
+    /// The asset whose name equals `key` ignoring ASCII case: NTFS is case-insensitive in dev, so a packaged exe must not be stricter.
     pub fn asset_ignoring_case(&self, key: &str) -> Option<(&'a str, &'a [u8])> {
         self.assets()
             .iter()
@@ -304,43 +282,31 @@ impl<'a> Payload<'a> {
         self.skew
     }
 
-    /// Where the data region starts, relative to the blob.
     pub fn data_offset(&self) -> u64 {
         self.data_off
     }
 
-    /// The header, TOC and names: names the content (TOC carries lengths and crc32) without reading
-    /// it; an asset pack's identity is a hash of this.
+    /// The header, TOC and names: an asset pack's identity is a hash of this.
     pub fn index(&self) -> &'a [u8] {
         let end = self.data_off.saturating_sub(u64::from(self.skew)).min(self.bytes.len() as u64);
         &self.bytes[..(end as usize).max(HEADER_SIZE.min(self.bytes.len()))]
     }
 
-    /// The blob's own address — for the alignment report in `--vn-host-info`.
     pub fn as_ptr(&self) -> *const u8 {
         self.bytes.as_ptr()
     }
 }
 
-/// Why a URL has no key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyError {
-    /// Nothing left after cleaning (`""`, `"/"`, `"./"`, `"?x"`).
     Empty,
-    /// More `..` than there are segments: the URL climbs out of the app root.
     EscapesRoot,
-    /// A segment no file under the app root can have: `:`, NUL, or bytes that decode to invalid UTF-8.
     Invalid,
 }
 
-/// The app-root-relative key a relative or root-relative URL names, applied textually:
-///
-/// * `?query` and `#hash` are cut;
-/// * `%XX` escapes are decoded;
-/// * `\` is `/`, empty and `.` segments vanish, a leading `/` is the app root;
-/// * `..` folds lexically; one climbing above the app root is [`KeyError::EscapesRoot`].
-///
-/// The result is `/`-separated and case-preserved, the key `vn build` stores a file under.
+/// The app-root-relative key a relative or root-relative URL names, applied textually: `?query` and
+/// `#hash` are cut, `%XX` decoded, `\` is `/`, empty and `.` segments vanish, `..` folds lexically (one
+/// climbing above the root is [`KeyError::EscapesRoot`]). The result is `/`-separated and case-preserved.
 pub fn content_key_checked(url: &str) -> Result<String, KeyError> {
     let mut s = url.trim();
     if let Some(cut) = s.find(['?', '#']) {
@@ -367,13 +333,11 @@ pub fn content_key_checked(url: &str) -> Result<String, KeyError> {
     Ok(segs.join("/"))
 }
 
-/// [`content_key_checked`] without the reason.
 pub fn content_key(url: &str) -> Option<String> {
     content_key_checked(url).ok()
 }
 
-/// `%XX` → byte; a malformed escape is kept literally (what a browser's URL
-/// parser does with `%zz`). `None` when the decoded bytes are not UTF-8.
+/// `%XX` → byte; a malformed escape is kept literally, as a browser does. `None` when the bytes are not UTF-8.
 fn percent_decode(s: &str) -> Option<String> {
     if !s.contains('%') {
         return Some(s.to_string());
@@ -404,8 +368,7 @@ fn hex(c: u8) -> Option<u8> {
     }
 }
 
-/// The media type a packaged `<video>`/`<audio>` source is handed to the platform with (an entry
-/// has no `Content-Type`); matches vn-video's Media Foundation `extension_for`. `""` = unknown.
+/// The media type a packaged `<video>`/`<audio>` source is handed to the platform with; `""` = unknown.
 pub fn media_type_for(key: &str) -> &'static str {
     let ext = key
         .rsplit_once('.')
@@ -434,7 +397,6 @@ pub fn media_type_for(key: &str) -> &'static str {
 mod tests {
     use super::*;
 
-    /// Written by packages/vue-native/cli/vnpk.ts; the TS writer test pins it byte for byte.
     const GOLDEN: &[u8] = include_bytes!("../../../packages/vue-native/test/fixtures/golden.vnpk");
 
     #[test]
@@ -448,7 +410,6 @@ mod tests {
         let meta = p.meta().unwrap();
         assert!(meta.contains(r#""name":"golden""#), "{meta}");
         assert!(meta.contains(r#""variant":"standard""#), "{meta}");
-        // Sorted by NAME BYTES: "L" (0x4c) < "d" < "h" < "ü" (0xc3 0xbc).
         let names: Vec<&str> = p.assets().iter().map(|e| e.name).collect();
         assert_eq!(
             names,
@@ -467,10 +428,8 @@ mod tests {
         let data = p.asset("assets/dir/data.bin").unwrap();
         assert_eq!(data.len(), 256);
         assert!(data.iter().enumerate().all(|(i, b)| *b as usize == i));
-        // Read from the header, not recomputed.
         let names_end = u32_at(GOLDEN, 16) as u64 + u32_at(GOLDEN, 20) as u64;
         assert_eq!(p.data_offset(), names_end + 100);
-        // The index is everything up to the names' end: no skew, no data.
         assert_eq!(p.index(), &GOLDEN[..names_end as usize]);
     }
 
@@ -514,7 +473,6 @@ mod tests {
         let newer = mutated(|v| v[4] = 2);
         assert_eq!(Payload::parse(&newer).unwrap_err(), Error::NewerFormat(2));
         assert!(Error::NewerFormat(2).to_string().contains("newer vn"));
-        // An entry whose length runs past the end.
         let oob = mutated(|v| {
             v[HEADER_SIZE + 16..HEADER_SIZE + 24].copy_from_slice(&(1u64 << 40).to_le_bytes())
         });
@@ -522,18 +480,15 @@ mod tests {
             Payload::parse(&oob).unwrap_err(),
             Error::OutOfBounds { .. }
         ));
-        // A TOC that claims more entries than fit.
         let many = mutated(|v| v[8..12].copy_from_slice(&1000u32.to_le_bytes()));
         assert!(matches!(
             Payload::parse(&many).unwrap_err(),
             Error::OutOfBounds { .. }
         ));
-        // A truncated blob (blob_len says more than there is).
         assert!(matches!(
             Payload::parse(&GOLDEN[..GOLDEN.len() - 1]).unwrap_err(),
             Error::OutOfBounds { .. }
         ));
-        // Unsorted: make the last entry's kind 1.
         let unsorted = mutated(|v| {
             let t = HEADER_SIZE + 6 * TOC_ENTRY_SIZE + 24;
             v[t..t + 2].copy_from_slice(&1u16.to_le_bytes());
@@ -570,10 +525,8 @@ mod tests {
         assert_eq!(k("/assets/a.png").as_deref(), Some("assets/a.png"));
         assert_eq!(k("assets\\a.png").as_deref(), Some("assets/a.png"));
         assert_eq!(k("assets//a.png").as_deref(), Some("assets/a.png"));
-        // A server never sees the query or the fragment.
         assert_eq!(k("assets/a.png?v=2").as_deref(), Some("assets/a.png"));
         assert_eq!(k("assets/a.png#frag").as_deref(), Some("assets/a.png"));
-        // Escapes decode; a malformed one is literal; `+` is not a space in a path.
         assert_eq!(
             k("assets/my%20pic.png").as_deref(),
             Some("assets/my pic.png")
@@ -584,9 +537,7 @@ mod tests {
         );
         assert_eq!(k("assets/100%.txt").as_deref(), Some("assets/100%.txt"));
         assert_eq!(k("assets/a+b.txt").as_deref(), Some("assets/a+b.txt"));
-        // Case is preserved — the store's fallback, not the key, forgives case.
         assert_eq!(k("Assets/A.PNG").as_deref(), Some("Assets/A.PNG"));
-        // Dot segments fold lexically.
         assert_eq!(k("assets/x/../a.png").as_deref(), Some("assets/a.png"));
         assert_eq!(k("assets/./a.png").as_deref(), Some("assets/a.png"));
     }

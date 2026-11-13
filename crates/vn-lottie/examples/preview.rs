@@ -24,8 +24,6 @@ struct Preview {
     name: String,
     size: f32,
     last_tick: Instant,
-    /// Exponential moving average of the whole build-element cost, which is
-    /// what actually lands in the frame budget.
     frame_ms: f64,
     frames: u64,
     loops: u32,
@@ -56,7 +54,6 @@ impl Render for Preview {
             self.frame_ms * 0.9 + elapsed * 0.1
         };
 
-        // The backend is on screen so a screenshot is self-evidencing.
         let backend = self.state.backend();
         let meta = self.state.meta();
         let readout = format!(
@@ -71,7 +68,6 @@ impl Render for Preview {
             window.scale_factor() * 100.0,
         );
 
-        // Keep the pump running: `on_next_frame` re-arms, `notify` redraws.
         let entity = cx.entity();
         window.on_next_frame(move |_, cx| {
             entity.update(cx, |_, cx| cx.notify());
@@ -92,7 +88,6 @@ impl Render for Preview {
                 div()
                     .w(px(self.size))
                     .h(px(self.size))
-                    // A checker-ish backdrop so a transparent animation is visibly transparent.
                     .bg(gpui::rgb(0x2a2a33))
                     .child(element),
             )
@@ -100,7 +95,6 @@ impl Render for Preview {
     }
 }
 
-/// Steady-state rasterisation cost at sticker sizes, cache defeated by seeking every call.
 fn benchmark(state: &mut LottieState) {
     let total = state.meta().total_frames;
     println!(
@@ -126,7 +120,6 @@ fn benchmark(state: &mut LottieState) {
     state.play();
 }
 
-/// Loads one fixture and reports its metadata and any compat advisories.
 fn open_fixture(name: &str) -> LottieState {
     let path = format!("{FIXTURES}/{name}");
     let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("read {path}: {error}"));
@@ -152,7 +145,6 @@ fn open_fixture(name: &str) -> LottieState {
     state
 }
 
-/// `--bench`: benchmark every fixture and exit, no window.
 fn bench_all() {
     let mut names: Vec<_> = std::fs::read_dir(FIXTURES)
         .expect("fixtures directory")
@@ -206,7 +198,6 @@ fn main() {
             },
         )
         .unwrap();
-        // No `cx.activate(true)`: the preview must never steal focus.
         let _ = Duration::ZERO;
     });
 }

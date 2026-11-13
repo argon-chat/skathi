@@ -26,20 +26,13 @@ enum Animatable {
     /// The whole spec travels together because only the eight `params` interpolate — the id, the
     /// flags and the schema metadata must MATCH for a transition to exist at all (see [`unify`]).
     Effect(EffectSpec),
-    /// The whole spec travels together for the same reason CSS interpolates matched function lists
-    /// componentwise rather than through the matrix: lerping the matrix entries of two rotations
-    /// shears.
     Transform(TransformSpec),
 }
 
-/// Why a slot cannot be interpolated (kept comparable so an *unchanged* non-animatable value never
-/// triggers an advisory).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Opaque {
     Auto,
-    /// A percentage (gpui `DefiniteLength::Fraction`)
     Fraction(f32),
-    /// A `calc(<percentage> + <length>)` (gpui `DefiniteLength::Calc`): `(fraction, px)`.
     Calc(f32, f32),
     NonSolidFill,
     /// CSS does not interpolate `none` with a paint either, so the pair is discrete and snaps.
@@ -51,7 +44,6 @@ enum Opaque {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Slot {
-    /// The refinement does not set the property.
     Missing,
     Value(Animatable),
     Opaque(Opaque),
@@ -156,7 +148,6 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
         BorderTopRightRadius => slot_absolute(r.corner_radii.top_right),
         BorderBottomRightRadius => slot_absolute(r.corner_radii.bottom_right),
         BorderBottomLeftRadius => slot_absolute(r.corner_radii.bottom_left),
-        // gpui's `gap` is a Size: row-gap is the height, column-gap the width.
         RowGap => slot_definite(r.gap.height),
         ColumnGap => slot_definite(r.gap.width),
         FontSize => slot_absolute(r.text.font_size),
@@ -181,8 +172,6 @@ fn slot_inherited(
 ) -> Slot {
     use TransitionProperty::*;
     match p {
-        // The one animatable property that INHERITS: "undeclared" means the parent's colour, not
-        // "unset".
         Color => match slot_of(r, p) {
             Slot::Missing => slot_color(inherited),
             slot => slot,
@@ -202,8 +191,6 @@ fn slot_inherited(
     }
 }
 
-/// `currentColor` or a paint server interpolates as the element's `color`. A concrete colour is
-/// baked into the serialized SVG, out of the overlay's reach, so it snaps; so does `none`.
 fn slot_paint(paint: Option<crate::SvgPaint>, color: Option<Hsla>) -> Slot {
     match paint {
         None => Slot::Missing,
@@ -265,8 +252,6 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
                 }
             }
         }
-        // The sprite's tint IS the element's `color` (see [`slot_paint`]), so that is the slot an
-        // interpolated paint is written into.
         Fill | Stroke => r.text.color = color().or(r.text.color),
         Width => r.size.width = length(),
         Height => r.size.height = length(),
@@ -303,15 +288,11 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
     }
 }
 
-/// What stays in the rung is every property the author did NOT name in `transition` — those keep
-/// snapping, which is also what CSS says.
 fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
     use TransitionProperty::*;
     match p {
         Opacity => r.opacity = None,
         Color => r.text.color = None,
-        // Take the colour out of the decoration, not the decoration out of the rung: `None` means
-        // `currentColor`, which is what an undeclared decoration colour is anyway.
         TextDecorationColor => {
             if let Some(u) = r.text.underline.as_mut() {
                 u.color = None;
@@ -365,8 +346,6 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
             dst.text.underline = src.text.underline.clone();
             dst.text.strikethrough = src.text.strikethrough.clone();
         }
-        // The one non-interpolable SVG paint is `none`, and `none` is not in a refinement at all
-        // (`Extras` carries it); the renderer reads it from there, so there is nothing to copy.
         Fill | Stroke => {}
         BackgroundColor => dst.background = src.background.clone(),
         BorderColor => {
@@ -400,8 +379,6 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
     }
 }
 
-/// Splits the rung using the same list as [`covered`], so a property is never both snapped by gpui
-/// and animated here.
 pub fn strip_transitioned(
     rung: &StyleRefinement,
     transitions: &[TransitionSpec],
@@ -421,7 +398,6 @@ pub fn strip_transitioned(
     touched.then_some(out)
 }
 
-/// The CSS initial value, when it is well defined *without* inheritance or layout.
 fn initial(p: &TransitionProperty) -> Option<Animatable> {
     use TransitionProperty::*;
     match p {
@@ -438,14 +414,10 @@ fn initial(p: &TransitionProperty) -> Option<Animatable> {
             Some(Animatable::Pixels(Pixels::from(0.0)))
         }
         Transform => Some(Animatable::Transform(TransformSpec::IDENTITY)),
-        // `auto` / `none` (sizes) and the inherited or currentColor-derived properties (color,
-        // border-color, font-size) have no resolvable initial here — those endpoints snap instead.
         _ => None,
     }
 }
 
-/// Reconciles px/rem endpoints: `0px` and `0rem` are the same length, so a zero on one side adopts
-/// the other's unit rather than failing the diff.
 fn unify(a: Animatable, b: Animatable) -> Option<(Animatable, Animatable)> {
     use Animatable::*;
     match (a, b) {
@@ -455,12 +427,7 @@ fn unify(a: Animatable, b: Animatable) -> Option<(Animatable, Animatable)> {
         (BorderColors(_), BorderColors(_)) => Some((a, b)),
         (Color(color), BorderColors(colors)) => Some((BorderColors([color; 4]), BorderColors(colors))),
         (BorderColors(colors), Color(color)) => Some((BorderColors(colors), BorderColors([color; 4]))),
-        // Only the same effect interpolates: different effects have different parameter meanings
-        // per slot.
         (Effect(x), Effect(y)) if x.id == y.id => Some((a, b)),
-        // Two transforms always interpolate: the spec is a fixed translate/rotate/scale triple, so
-        // there is no "different function list" case to reject — an absent component is its
-        // identity.
         (Transform(_), Transform(_)) => Some((a, b)),
         (Pixels(p), Rems(r)) if r.0 == 0.0 => Some((Pixels(p), Pixels(gpui::Pixels::from(0.0)))),
         (Pixels(p), Rems(r)) if p.as_f32() == 0.0 => Some((Rems(gpui::Rems(0.0)), Rems(r))),
@@ -480,8 +447,6 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
         (Pixels(a), Pixels(b)) => Pixels(gpui::Pixels::interpolate(a, b, t)),
         (Rems(a), Rems(b)) => Rems(gpui::Rems::interpolate(a, b, t)),
         (Effect(a), Effect(b)) => {
-            // Colour params interpolate in straight sRGB: the params vector is opaque floats to
-            // everything but the shader.
             let mut spec = b;
             for (slot, value) in spec.params.iter_mut().enumerate() {
                 *value = f32::interpolate(a.params[slot], b.params[slot], t);
@@ -492,7 +457,6 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
             Effect(spec)
         }
         (Transform(a), Transform(b)) => Transform(a.interpolate(b, t)),
-        // Unreachable: tracks are only created from unified endpoints.
         _ => to,
     }
 }
@@ -506,8 +470,6 @@ fn lerp_color(from: Hsla, to: Hsla, t: f32) -> Hsla {
     let (a, b) = (gpui::Rgba::from(from), gpui::Rgba::from(to));
     let alpha = f32::interpolate(a.a, b.a, t).clamp(0.0, 1.0);
     if alpha <= 0.0 {
-        // Nothing to un-premultiply; keep the hue of the side it is heading for so a later frame
-        // does not start from black.
         return Hsla { a: 0.0, ..if t < 0.5 { from } else { to } };
     }
     let channel = |x: f32, y: f32| (f32::interpolate(x * a.a, y * b.a, t) / alpha).clamp(0.0, 1.0);
@@ -556,21 +518,15 @@ impl Track {
     }
 }
 
-/// Per-node transition state.
 #[derive(Default)]
 pub struct Animator {
     nodes: HashMap<u32, Vec<Track>>,
-    /// A separate map from the transition tracks because the two have different endpoints,
-    /// different clocks and different lifetimes — see [`AnimRun`].
     anims: HashMap<u32, Vec<AnimRun>>,
     registered_samples: RefCell<HashMap<u32, (Instant, Rc<(StyleRefinement, crate::Extras)>)>>,
-    /// Queued `transitionend` / `animation*` events, drained once per frame by the host (which is
-    /// the only place that has a `Window` to dispatch with).
     events: Vec<AnimEvent>,
     /// The held value of a settled state-driven track: the host strips the transitioned properties
     /// out of the rung it hands gpui, so this is all that keeps the hovered value on screen.
     states: HashMap<u32, StyleRefinement>,
-    /// Script animations per node, in creation order, which is their composite order.
     scripts: HashMap<u32, Vec<script::ScriptAnim>>,
     script_nodes: HashMap<u32, u32>,
     /// A script animation's clock is in timeline milliseconds, so without it nothing a script
@@ -585,7 +541,6 @@ mod script;
 pub use script::{script_keyframes, ScriptClock, ScriptFrame, ScriptKeyframeNotes, ScriptSample, ScriptTiming};
 
 impl Animator {
-    /// A fresh animator with no running transitions.
     pub fn new() -> Animator {
         Animator::default()
     }
@@ -697,8 +652,6 @@ impl Animator {
         }
     }
 
-    /// Separate from `on_computed`: only the properties `transition` covers are touched; the rest
-    /// stay gpui's to snap.
     pub fn on_state(
         &mut self,
         node: u32,
@@ -707,8 +660,6 @@ impl Animator {
         now: Instant,
     ) {
         if computed.transitions.is_empty() {
-            // Nothing was stripped out of the rung, so gpui is still applying the whole thing and
-            // there is nothing for us to hold.
             self.states.remove(&node);
             self.nodes.remove(&node);
             return;
@@ -726,8 +677,6 @@ impl Animator {
                 if matches!(to, Slot::Missing) {
                     continue;
                 }
-                // Then the base already says it and holding a copy would only make the overlay
-                // bigger.
                 if to == slot_inherited(base, p, computed.color, &computed.extras) {
                     continue;
                 }
@@ -825,13 +774,10 @@ impl Animator {
         }
     }
 
-    /// Whether `node` is currently holding an interaction-state value — the host uses it to decide
-    /// whether a restyle has to re-fold the target.
     pub fn holds_state(&self, node: u32) -> bool {
         self.states.contains_key(&node)
     }
 
-    /// The interpolated values for `node` this frame, to be refined ON TOP of its computed base.
     pub fn overlay(&self, node: u32, base: &StyleRefinement, now: Instant) -> Option<StyleRefinement> {
         let mut r = self.animation_overlay(node, base, now);
         if let Some(hold) = self.states.get(&node) {
@@ -850,16 +796,12 @@ impl Animator {
         r
     }
 
-    /// Whether any node still has an unfinished transition — the host keeps requesting animation
-    /// frames while this is true.
     pub fn any_active(&self, now: Instant) -> bool {
         self.nodes
             .values()
             .any(|tracks| tracks.iter().any(|t| !t.finished(now)))
     }
 
-    /// The earliest instant at which every running transition has finished, or `None` when nothing
-    /// is running.
     pub fn settles_at(&self) -> Option<Instant> {
         self.nodes
             .values()
@@ -892,8 +834,6 @@ impl Animator {
 
     pub fn gc(&mut self, alive: &dyn Fn(u32) -> bool) {
         self.nodes.retain(|&id, _| alive(id));
-        // A node that stopped existing cannot receive an `animationcancel` (there is nothing to
-        // dispatch it to), so its runs are simply dropped.
         self.anims.retain(|&id, _| alive(id));
         self.registered_samples.get_mut().retain(|&id, _| alive(id));
         self.states.retain(|&id, _| alive(id));
@@ -910,18 +850,14 @@ impl Animator {
         self.registered_samples.get_mut().clear();
         self.nodes.clear();
         self.states.clear();
-        // Ordinary style/font recompilation must not use it: unchanged motion survives and
-        // same-name keyframes rebind on their existing timeline.
         self.anims.clear();
         self.events.clear();
     }
 
-    /// Whether any node has transition state at all.
     pub fn is_idle(&self) -> bool {
         self.nodes.is_empty() && self.anims.is_empty() && self.scripts.is_empty()
     }
 
-    /// Drains the advisories accumulated since the last call.
     pub fn take_diagnostics(&mut self) -> Vec<String> {
         std::mem::take(&mut self.diagnostics)
     }
@@ -932,8 +868,6 @@ impl Animator {
         }
     }
 
-    /// Resolves the two ends of a would-be transition, substituting CSS initial values for absent
-    /// endpoints and advising once when the pair cannot be interpolated.
     fn endpoints(&mut self, from: Slot, to: Slot, property: &TransitionProperty) -> Endpoints {
         if from == to {
             return Endpoints::Snap;
@@ -981,8 +915,6 @@ impl Animator {
             Some((from, to)) => Endpoints::Pair(from, to),
             None => {
                 self.warn_once(match (from, to) {
-                    // This is a real CSS-visible behaviour, not a gap, so it says what happened
-                    // rather than "not supported yet".
                     (Animatable::Effect(a), Animatable::Effect(b)) => format!(
                         "transition of --shading between different effects (`{}` -> `{}`) \
                          cannot interpolate — snapping",
@@ -1010,13 +942,10 @@ fn effect_name(id: u32) -> &'static str {
 
 enum Endpoints {
     Pair(Animatable, Animatable),
-    /// Not interpolatable (or unchanged): the value jumps.
     Snap,
 }
 
 impl Animator {
-    /// The transition tests all predate `@keyframes`, and none of them needs the element's own
-    /// values — only the implicit 0 % / 100 % of an ANIMATION reads those.
     #[cfg(test)]
     fn overlay_test(&self, node: u32, now: Instant) -> Option<StyleRefinement> {
         self.overlay(node, &StyleRefinement::default(), now)
@@ -1165,7 +1094,6 @@ mod tests {
         let at_interrupt = opacity_of(&a.overlay(1, &StyleRefinement::default(), mid).unwrap());
         assert!((at_interrupt - 0.4).abs() < 1e-3, "{at_interrupt}");
 
-        // Reverse mid-flight: the very next sample must equal what was shown.
         a.on_computed(1, Some(&one), &zero, mid);
         let resumed = opacity_of(&a.overlay(1, &StyleRefinement::default(), mid).unwrap());
         assert!(
@@ -1241,7 +1169,6 @@ mod tests {
         let quarter = Rgba::from(lerp_color(clear, white, 0.25));
         assert!((quarter.a - 0.25).abs() < 1e-3, "{quarter:?}");
         assert!(quarter.r > 0.999 && quarter.g > 0.999 && quarter.b > 0.999, "{quarter:?}");
-        // Gray to blue goes straight there, without the hues from red on.
         let gray: Hsla = Rgba { r: 0.5, g: 0.5, b: 0.5, a: 1.0 }.into();
         let blue: Hsla = Rgba { r: 0.0, g: 0.0, b: 1.0, a: 1.0 }.into();
         let half = Rgba::from(lerp_color(gray, blue, 0.5));
@@ -1290,7 +1217,6 @@ mod tests {
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].contains("width"), "{diags:?}");
 
-        // A second identical failure must stay quiet.
         a.on_computed(2, Some(&old), &new, now);
         assert!(a.take_diagnostics().is_empty());
     }
@@ -1523,8 +1449,6 @@ mod tests {
         }
     }
 
-    /// Builds a refinement carrying one `--shading` declaration, through the real mapper — so these
-    /// tests cover the whole chain, not just the animator's half of it.
     fn with_shading(value: &str) -> StyleRefinement {
         let mut diagnostics = Vec::new();
         let r = crate::parse_inline(&format!("--shading: {value}"), &mut diagnostics);
@@ -1594,8 +1518,6 @@ mod tests {
         assert!(a.take_diagnostics().is_empty());
     }
 
-    /// A custom property is not one of them — a browser would not animate `--shading` under `all`
-    /// either — so it has to be named.
     #[test]
     fn all_does_not_cover_shading_but_naming_it_does() {
         let mut a = Animator::new();
@@ -1614,8 +1536,6 @@ mod tests {
         assert!(a.overlay(2, &StyleRefinement::default(), now).is_some());
     }
 
-    /// `--shading: none` is a VALUE, so a transition into it has two present endpoints with
-    /// different ids and must snap rather than silently do nothing.
     #[test]
     fn transitioning_to_none_snaps() {
         let mut a = Animator::new();
@@ -1646,7 +1566,6 @@ mod tests {
         Rgba { r, g, b, a: 1.0 }.into()
     }
 
-    /// Both `fill` and `stroke` get it, because the two are the same question.
     fn svg_states(c: Hsla, paint: Option<crate::SvgPaint>, css: &str) -> ComputedStates {
         let mut base = StyleRefinement::default();
         base.text.color = Some(c);
@@ -1686,9 +1605,6 @@ mod tests {
         }
     }
 
-    /// `none` ↔ a paint is a DISCRETE pair — SVG paint is not a continuous type across that
-    /// boundary and CSS does not interpolate it either — so the value snaps and no track is
-    /// started.
     #[test]
     fn an_svg_paint_of_none_snaps_instead_of_interpolating() {
         let mut a = Animator::new();
@@ -1727,8 +1643,6 @@ mod tests {
 
         a.on_computed(1, Some(&old), &new, now);
         assert!(a.any_active(now));
-        // The element's own base is what the overlay refines — the decoration it must copy
-        // thickness, waviness and offset out of lives there.
         let base = decorated(red);
         let half = a.overlay(1, &base, now + Duration::from_millis(500)).unwrap();
         let u = half.text.underline.clone().expect("the overlay carries a decoration");
@@ -1763,12 +1677,9 @@ struct AnimRun {
     frames: Rc<Keyframes>,
     custom_context: Option<Rc<crate::CustomAnimationContext>>,
     start: Instant,
-    /// The clock has not been anchored to a FRAME yet.
     pending: bool,
     started: bool,
     ended: bool,
-    /// How long the run has already spent paused, so `animation-play-state` resumes where it
-    /// stopped instead of jumping forward.
     paused_for: Duration,
     paused_at: Option<Instant>,
 }
@@ -1806,7 +1717,6 @@ impl AnimRun {
     }
 }
 
-/// What the animator has to tell JS about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnimEventKind {
     TransitionEnd,
@@ -1815,7 +1725,6 @@ pub enum AnimEventKind {
     AnimationCancel,
 }
 
-/// One event to deliver.
 #[derive(Clone, Debug)]
 pub struct AnimEvent {
     pub node: u32,
@@ -1826,7 +1735,6 @@ pub struct AnimEvent {
 }
 
 impl Animator {
-    /// `resolve` is a callback so the animator has no stylesheet dependency.
     pub fn on_computed_animations(
         &mut self,
         node: u32,
@@ -1835,8 +1743,6 @@ impl Animator {
         resolve: &dyn Fn(&str) -> Option<Rc<Keyframes>>,
     ) {
         self.registered_samples.get_mut().remove(&node);
-        // `prefers-reduced-motion` suppresses animations exactly as it suppresses transitions: they
-        // do not run at all.
         let wanted: Vec<AnimationSpec> = if self.reduce_motion {
             Vec::new()
         } else {
@@ -1860,8 +1766,6 @@ impl Animator {
             // than replaying it.
             let existing = previous.iter().position(|r| r.spec.name == spec.name);
             let Some(frames) = resolve(&spec.name) else {
-                // A removed/conditional keyframes block cannot leave its old run sampling a stale
-                // definition.
                 self.warn_once(format!(
                     "`animation-name: {}` names no @keyframes block in the stylesheet — \
                      nothing animates (a browser behaves the same way)",
@@ -1872,8 +1776,6 @@ impl Animator {
             match existing {
                 Some(i) => {
                     let mut run = previous.remove(i);
-                    // `animation-play-state` is a clock edit, not a restart: the pause debt keeps
-                    // the phase where it was.
                     match (run.paused_at, spec.play_state) {
                         (None, PlayState::Paused) => run.paused_at = Some(now),
                         (Some(at), PlayState::Running) => {
@@ -1883,8 +1785,6 @@ impl Animator {
                         _ => {}
                     }
                     run.spec = spec;
-                    // Only reached on a pass that already found this node's computed style
-                    // different, so a steady frame pays nothing.
                     run.frames = frames;
                     run.custom_context = new.custom_animation.clone();
                     runs.push(run);
@@ -1915,8 +1815,6 @@ impl Animator {
         }
     }
 
-    /// A later [`Animator::on_computed_animations`] for the node starts them afresh, which is the
-    /// other half of that rule.
     pub fn cancel_animations(&mut self, node: u32, now: Instant) {
         self.registered_samples.get_mut().remove(&node);
         if let Some(runs) = self.anims.remove(&node) {
@@ -1926,7 +1824,6 @@ impl Animator {
         }
     }
 
-    /// Does `node` hold any `@keyframes` run, running, delayed or filling?
     pub fn has_animations(&self, node: u32) -> bool {
         self.anims.contains_key(&node)
     }
@@ -1945,8 +1842,6 @@ impl Animator {
         });
     }
 
-    /// Advances the animation clocks and queues `animationstart`/`animationend`. Call once per
-    /// frame, before `overlay`.
     pub fn tick(&mut self, now: Instant) {
         self.registered_samples.get_mut().clear();
         let mut events = Vec::new();
@@ -1987,12 +1882,10 @@ impl Animator {
         self.events.append(&mut events);
     }
 
-    /// Drains the queued transition/animation events.
     pub fn take_events(&mut self) -> Vec<AnimEvent> {
         std::mem::take(&mut self.events)
     }
 
-    /// An unfinished transition, or an unpaused `@keyframes` run that is delayed or running.
     pub fn moving_nodes(&self, now: Instant) -> impl Iterator<Item = u32> + '_ {
         let tracks = self
             .nodes
@@ -2018,12 +1911,9 @@ impl Animator {
         tracks.chain(runs).chain(scripts)
     }
 
-    /// Is any animation still running (or holding a `forwards` fill)?
     pub fn any_animation(&self, now: Instant) -> bool {
         let css = self.anims.values().flatten().any(|run| match run.phase(now) {
             Phase::Finished { .. } => false,
-            // A paused animation is not a reason to keep repainting; its value is frozen and the
-            // frame that froze it already painted.
             Phase::Delayed | Phase::Running { .. } => run.paused_at.is_none(),
         });
         css || {
@@ -2032,8 +1922,6 @@ impl Animator {
         }
     }
 
-    /// Per-frame Extras dependent on a registered percentage custom property. The retained recipe
-    /// avoids selectors, tree mutation or a document restyle.
     pub fn animated_extras(&self, node: u32, now: Instant) -> Option<crate::Extras> {
         self.registered_overlay(node, now).map(|sample| sample.1.clone())
     }
@@ -2067,8 +1955,6 @@ impl Animator {
         })
     }
 
-    /// The endpoints are the KEYFRAMES rather than the element's previous computed value, so this
-    /// is composed with — not merged into — the transition tracks.
     fn animation_overlay(
         &self,
         node: u32,
@@ -2137,8 +2023,6 @@ fn apply_keyframes(
             .map(|k| slot_of(&k.style, &property))
             .unwrap_or_else(implicit);
         let (Slot::Value(a), Slot::Value(b)) = (from, to) else {
-            // CSS cannot interpolate those either; the discrete behaviour is to hold whichever end
-            // does have a value.
             if let Slot::Value(v) = from {
                 install(out, base, &property, v);
             } else if let Slot::Value(v) = to {

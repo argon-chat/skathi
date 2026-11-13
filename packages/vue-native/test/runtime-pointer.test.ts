@@ -1,10 +1,6 @@
-// The pointer family (compat roadmap G4).
-//
-// The host sources three things — a move while hovered and the two edges of
-// "the pointer is over me" — and the whole W3C pointer set is derived from
-// those plus mousedown/mouseup. These tests pin the two halves that are easy to
-// get wrong: which host listener a `@pointerdown` registers, and the ORDER and
-// BUBBLING of what comes back out.
+// The pointer family: the host sources a move while hovered and the two edges of "the pointer is over me"; the W3C
+// set is derived from those plus mousedown/mouseup. Pinned: which host listener a `@pointerdown` registers, and the
+// ORDER and BUBBLING of what comes back out.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
@@ -92,8 +88,6 @@ describe("dispatch", () => {
 
     rt.host.dispatcher(inner.__vnId, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
     rt.host.dispatcher(inner.__vnId, rt.EV_CODES.mouseenter, 0, 0, -1, 0, undefined);
-    // The press bubbles to the ancestor; the enter does NOT — which is what
-    // keeps a menu from closing as the pointer crosses its own items.
     expect(seen).toEqual(["down@outer", "enter@inner"]);
   });
 
@@ -141,7 +135,6 @@ describe("only what someone listens for is built", () => {
     const { outer, inner } = tree(rt);
     const seen = [];
     rt.patchProp(outer, "onPointerdown", null, (e) => seen.push(e.type));
-    // Nothing on `inner` listens for anything; the event is delivered there.
     rt.host.dispatcher(inner.__vnId, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
     expect(seen).toEqual(["pointerdown"]);
   });
@@ -156,8 +149,6 @@ describe("only what someone listens for is built", () => {
   });
 
   test("a document-level listener still receives it", () => {
-    // Every dismissable layer in the ecosystem listens here and nowhere else,
-    // so a check that only walked the mirror tree would close nothing.
     const rt = createRuntime();
     const { root, inner } = tree(rt);
     rt.createApp({ render: () => null }); // no mount: appRoot stays null…

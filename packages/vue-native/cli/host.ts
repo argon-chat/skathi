@@ -1,27 +1,18 @@
-// Where `vn build` gets the prebuilt bare host it stamps.
+// Where `vn build` gets the prebuilt bare host it stamps: `cargo build --release -p vn-app
+// --features prod` (the whole engine, no app), built once per vue-native version and variant. A
+// variant names the engine parts left out (config.ts `OPTIONAL`).
 //
-// A bare host is `cargo build --release -p vn-app --features prod` (or `prod,no-devtools`): the whole engine,
-// no app. It is built once per vue-native version and variant, never per app. A variant names the engine
-// parts left out (config.ts `OPTIONAL`): `no-audio` is `--no-default-features --features
-// prod,clipboard,storages,indexeddb,webgpu`.
+// Resolution, first hit wins: 1. `--host <exe>` or `VN_HOST`; 2. in-repo
+// target/x86_64-pc-windows-msvc/release/vn-app.exe, when that is a prod host of this variant and
+// version; 3. the local cache (`vn host add <exe>` or `vn host build`); 4. an error naming the three.
+// Paths for macOS are in platform.ts.
 //
-// Resolution, first hit wins:
-//   1. `--host <exe>` or `VN_HOST`;
-//   2. in-repo: target/x86_64-pc-windows-msvc/release/vn-app.exe, when this CLI runs from a checkout and
-//      that exe is a prod host of the requested variant and of this version;
-//   3. the local cache, %LOCALAPPDATA%\vue-native\hosts\<version>\<variant>\, filled by `vn host add <exe>`
-//      (or `vn host build`, in a checkout);
-//   4. otherwise an error naming the three.
-// On macOS the paths are target/<arch>-apple-darwin/release/vn-app and ~/Library/Caches/vue-native/hosts/
-// (platform.ts).
+// A host for another OS cannot be run to ask what it is: only `--host` / `VN_HOST` names one, its
+// format is sniffed, and what it is comes from a `host.json` beside it or is taken on trust, with a warning.
 //
-// A host for another OS cannot be run to ask what it is, so only `--host` / `VN_HOST` names one, its format
-// is sniffed, and what it is comes from a `host.json` beside it (the cache writes one) or is taken on
-// trust, with a warning.
-//
-// Nothing here uploads or downloads a host. A host and a bundle must come from the same vue-native version
-// (the bundle carries the JS half of the `__vn_*` protocol): the CLI refuses a host whose `--vn-host-info`
-// disagrees (`--allow-host-mismatch` is for maintainers).
+// A host and a bundle must come from the same vue-native version (the bundle carries the JS half of
+// the `__vn_*` protocol): the CLI refuses a host whose `--vn-host-info` disagrees
+// (`--allow-host-mismatch` is for maintainers).
 
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -41,7 +32,6 @@ export const REPO_ROOT: string | null = (() => {
   return existsSync(join(root, "Cargo.toml")) && existsSync(join(root, "crates", "vn-app")) ? root : null;
 })();
 
-/** This OS's in-repo host: `target/<triple>/release/<vn-app[.exe]>`. */
 export const REPO_RELEASE_EXE = REPO_ROOT ? repoHostExe(REPO_ROOT, hostsFor(currentPlatform()), "release") : null;
 
 export interface HostInfo {
@@ -60,7 +50,6 @@ export interface ResolvedHost {
   exe: string;
   info: HostInfo;
   source: "--host" | "VN_HOST" | "repo" | "cache";
-  /** Why `info` is not the host's own answer to `--vn-host-info`: set only for a host of another OS. */
   unverified?: string;
 }
 
@@ -77,7 +66,6 @@ export function isStamped(exe: string): boolean {
   }
 }
 
-/** The platform's executable format, or why `exe` is not one. */
 function formatProblem(exe: string, platform: Platform): string | null {
   if (platform !== "macos") return null;
   const archs = machOArchs(exe);
@@ -86,7 +74,6 @@ function formatProblem(exe: string, platform: Platform): string | null {
   return null;
 }
 
-/** What a host of another OS is, without running it: the `host.json` the cache keeps beside it, else the request taken on trust. */
 export function crossHostInfo(exe: string, variant: Variant, platform: Platform): { info: HostInfo; unverified: string } {
   const problem = formatProblem(exe, platform);
   if (problem) throw new HostError(problem);
@@ -119,7 +106,6 @@ export function crossHostInfo(exe: string, variant: Variant, platform: Platform)
   };
 }
 
-/** `<exe> --vn-host-info`: the host describes itself and exits before any window exists. */
 export function hostInfo(exe: string): HostInfo {
   if (!existsSync(exe)) throw new HostError(`${exe} does not exist`);
   if (isStamped(exe)) {
@@ -162,7 +148,6 @@ export function checkHost(exe: string, info: HostInfo, variant: Variant | null, 
   return null;
 }
 
-/** Newest source mtime that a host build depends on — for the in-repo staleness warning. */
 function newestHostSource(): number {
   if (!REPO_ROOT) return 0;
   let newest = 0;
@@ -309,7 +294,7 @@ function cargo(): string {
   throw new HostError("cargo is not on PATH — building a host needs the Rust toolchain (vn build does not)");
 }
 
-/** MAINTAINERS ONLY, in a checkout: builds the bare host for `variant` and imports it into the cache. Variants share one output path in `target/`, so each is copied out as soon as it exists. */
+/** MAINTAINERS ONLY, in a checkout: builds the bare host for `variant` and imports it into the cache. */
 export function buildHost(variant: Variant, log: (line: string) => void = console.log): { path: string; info: HostInfo; ms: number } {
   if (!REPO_ROOT || !REPO_RELEASE_EXE) {
     throw new HostError("vn host build runs from a vue-native checkout; elsewhere, use vn host add <exe>");

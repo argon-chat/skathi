@@ -1,9 +1,6 @@
-//! The file I/O pool: four worker threads on one queue. Every File System Access operation that
-//! touches a user path runs here; the frame thread only validates and queues.
-//!
-//! [`in_flight`] counts jobs submitted and not finished. A job settles its token BEFORE the count
-//! drops, so the pump source never sees "nothing queued, nothing in flight" while a result is on its
-//! way. Dialogs and the shell are not counted: a Save As left open must not make every frame wait.
+//! The file I/O pool: four worker threads on one queue. Every File System Access operation that touches a
+//! user path runs here. A job settles its token BEFORE [`in_flight`] drops, so the pump source never sees
+//! "nothing queued, nothing in flight" while a result is on its way. Dialogs and the shell are not counted.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,8 +8,6 @@ use std::sync::{Condvar, Mutex, OnceLock};
 
 use crate::Fail;
 
-/// Enough to overlap a slow network share with local work, few enough that a burst of `getFile()`
-/// is not a thread per file.
 pub const WORKERS: usize = 4;
 
 type Job = Box<dyn FnOnce() + Send>;
@@ -61,16 +56,13 @@ fn worker() {
     }
 }
 
-/// Runs one job, then drops the in-flight count (it has settled) and wakes the pump. [`submit`]
-/// already turned a panic into a rejection.
 fn run(job: Job) {
     job();
     IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
     crate::wake();
 }
 
-/// Runs `op` on the pool and settles `token`; a panic settles `InvalidStateError` rather than
-/// leaving the promise pending.
+/// Runs `op` on the pool and settles `token`; a panic settles `InvalidStateError`.
 pub(crate) fn submit(token: u32, op: impl FnOnce() -> Result<crate::Done, Fail> + Send + 'static) {
     IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
     let job: Job = Box::new(move || {

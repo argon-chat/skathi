@@ -11,27 +11,18 @@ use gpui::StyleRefinement;
 
 use crate::transition::Easing;
 
-/// One resolved `@keyframes` step.
 pub struct Keyframe {
-    /// Position on the timeline, 0..=1 (`from` is 0, `to` is 1).
     pub offset: f32,
-    /// `animation-timing-function` declared INSIDE the block — the easing for the segment starting
-    /// here, overriding the animation's own.
     pub easing: Option<Easing>,
-    /// The declarations, already mapped.
     pub style: Rc<StyleRefinement>,
     /// `var()`-composed declarations: the block is document-scoped but custom properties are per
     /// element, so they are substituted by `Engine::keyframes_for` when a run starts.
-    /// `tailwindcss-animate` is written entirely this way.
     pub dynamic: Option<Rc<crate::mapper::Decls>>,
-    /// Custom declarations retained for registered-property animation.
     pub custom: Option<Rc<crate::mapper::Decls>>,
 }
 
-/// One compiled `@keyframes` rule: its steps, sorted by offset.
 pub struct Keyframes {
     pub steps: Vec<Keyframe>,
-    /// Does any step carry [`Keyframe::dynamic`]?
     pub dynamic: bool,
 }
 
@@ -60,19 +51,14 @@ pub enum PlayState {
     Paused,
 }
 
-/// One entry of the folded `animation` list on an element.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnimationSpec {
-    /// The `@keyframes` name.
     pub name: Rc<str>,
     pub duration: Duration,
     pub delay: Duration,
-    /// `f32::INFINITY` for `infinite`.
     pub iterations: f32,
     pub direction: Direction,
     pub fill: FillMode,
-    /// The animation's own `animation-timing-function` — the default easing for every segment a
-    /// keyframe does not override.
     pub easing: Easing,
     pub play_state: PlayState,
 }
@@ -82,7 +68,6 @@ impl AnimationSpec {
         self.name.is_empty() || (self.duration.is_zero() && self.delay.is_zero())
     }
 
-    /// When this animation's LAST iteration ends, measured from its start.
     pub fn total(&self) -> Option<Duration> {
         if !self.iterations.is_finite() {
             return None;
@@ -94,8 +79,6 @@ impl AnimationSpec {
         self.delay.checked_add(run)
     }
 
-    /// After the last iteration the value sticks at the end of the final iteration, which
-    /// `fill-mode: forwards` paints.
     pub fn phase(&self, elapsed: Duration) -> Phase {
         if elapsed < self.delay {
             return Phase::Delayed;
@@ -151,7 +134,6 @@ impl AnimationSpec {
     }
 }
 
-/// Where an animation is on its own clock.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Phase {
     Delayed,
@@ -159,16 +141,12 @@ pub enum Phase {
         iteration: f32,
         progress: f32,
     },
-    /// Past the last iteration; `progress` is the value it settled on, applied only when
-    /// `fill-mode` includes `forwards`.
     Finished {
         progress: f32,
     },
 }
 
 impl Keyframes {
-    /// Steps that do not declare the property are skipped, not treated as stops (CSS's per-property
-    /// timeline).
     pub fn segment<'a>(
         &'a self,
         declares: &dyn Fn(&StyleRefinement) -> bool,
@@ -251,8 +229,6 @@ impl AnimationPatch {
         *self == AnimationPatch::default()
     }
 
-    /// Merges this patch into `into`, later-wins per field — the same fold the refinements get, so
-    /// two rules each setting one longhand compose.
     pub fn apply_over(&self, into: &mut AnimationPatch) {
         if self.duration.is_some() {
             into.duration = self.duration;
@@ -335,15 +311,10 @@ impl AnimationPatch {
     }
 }
 
-/// One property's position between two keyframes.
 pub struct Segment<'a> {
-    /// `None` means "the element's own computed value" (the implicit 0 %).
     pub from: Option<&'a Keyframe>,
-    /// `None` means "the element's own computed value" (the implicit 100 %).
     pub to: Option<&'a Keyframe>,
-    /// 0..=1 between them, BEFORE easing.
     pub t: f32,
-    /// The easing declared on the segment's starting keyframe, if any.
     pub easing: Option<Easing>,
 }
 
@@ -359,14 +330,12 @@ pub struct AnimationDeclarations {
     fills: Option<Vec<FillMode>>,
     play_states: Option<Vec<PlayState>>,
     seen: bool,
-    /// Without one it has no LIST to contribute, only a patch — see [`AnimationPatch`].
     named: bool,
 }
 
 pub(crate) type AnimationCollector = AnimationDeclarations;
 
 impl AnimationDeclarations {
-    /// Consumes `p` when it is an animation declaration; returns whether it did.
     pub(crate) fn take(
         &mut self,
         p: &lightningcss::properties::Property,
@@ -537,8 +506,6 @@ impl AnimationDeclarations {
         }
     }
 
-    /// Cascade each declared longhand independently. A shorthand populated every list in take(), so
-    /// it resets all eight; a name-only rule replaces names alone.
     pub(crate) fn merge(&mut self, later: &Self) {
         macro_rules! field {
             ($field:ident) => {
@@ -574,8 +541,6 @@ impl AnimationDeclarations {
         }
     }
 
-    /// Per-block list remains available to keyframe compilation and diagnostics; the patch also
-    /// carries declared lists for the per-element cascade.
     pub(crate) fn finish(self) -> (Option<Vec<AnimationSpec>>, Option<AnimationPatch>) {
         if !self.seen {
             return (None, None);
@@ -606,7 +571,6 @@ impl AnimationDeclarations {
         (list, Some(patch))
     }
 
-    /// Zip after the cascade, cycling each shorter component list.
     fn specs(&self) -> Vec<AnimationSpec> {
         let names = self.names.as_deref().unwrap_or_default();
         let mut out = Vec::with_capacity(names.len());
@@ -703,8 +667,6 @@ mod tests {
 
     #[test]
     fn the_end_value_is_the_end_of_the_last_iteration() {
-        // An even count on `alternate` ends where it STARTED, because the last iteration ran
-        // backwards.
         let alt = spec(2.0, Direction::Alternate);
         assert_eq!(
             alt.phase(Duration::from_millis(5000)),
@@ -722,8 +684,6 @@ mod tests {
         );
     }
 
-    /// An instant animation rests where a timed one with the same count does: one `alternate`
-    /// iteration ends at the END, not back at the start.
     #[test]
     fn an_instant_animation_rests_where_a_timed_one_does() {
         let mut one = spec(1.0, Direction::Alternate);
@@ -734,7 +694,6 @@ mod tests {
         assert_eq!(two.phase(Duration::ZERO), Phase::Finished { progress: 0.0 });
     }
 
-    /// `animation-iteration-count: 0` never leaves the first keyframe.
     #[test]
     fn a_count_of_zero_rests_at_the_start() {
         let none = spec(0.0, Direction::Normal);
@@ -749,7 +708,6 @@ mod tests {
         );
     }
 
-    /// A count times a duration that no `Duration` holds is "never ends", not a panic in `mul_f32`.
     #[test]
     fn a_total_past_what_a_duration_holds_is_endless() {
         let mut long = spec(1.0e30, Direction::Normal);
@@ -782,8 +740,6 @@ mod tests {
         assert_eq!(s.total(), Some(Duration::from_millis(1500)));
     }
 
-    /// The per-property timeline: a keyframe that does not declare the property is NOT a stop for
-    /// it.
     #[test]
     fn a_property_only_stops_at_the_keyframes_that_declare_it() {
         let mut mid = StyleRefinement::default();
@@ -827,7 +783,6 @@ mod tests {
 
         let declares_width: &dyn Fn(&StyleRefinement) -> bool = &|r| r.size.width.is_some();
         let seg = frames.segment(declares_width, 0.75).unwrap();
-        // Only one declaring keyframe, at 50%: it holds from there on.
         assert_eq!(seg.from.unwrap().offset, 0.5);
         assert!(seg.to.is_none());
 

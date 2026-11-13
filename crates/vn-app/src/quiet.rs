@@ -1,14 +1,9 @@
 //! `VN_WINDOW_FOCUS=never`: a host that never takes the foreground.
 //!
-//! What vn-test sets for every launch (packages/vn-test/src/app.ts), so a spec run on a machine
-//! somebody is working at does not pop windows over their work or take the caret from what they type:
-//!
-//! - every window opens without activation (`SW_SHOWNOACTIVATE`) and is sent to the bottom of the
-//!   z-order;
-//! - the startup `cx.activate(true)` is skipped;
-//! - `window.focus()` neither raises nor flashes the taskbar button, whatever `window.focus` in
-//!   vn.config.json says;
-//! - the devtools `raise` command answers `raised: false`.
+//! What vn-test sets for every launch, so a spec run on a machine somebody is working at does not
+//! pop windows over their work or take the caret: windows open without activation and go to the
+//! bottom of the z-order, the startup `cx.activate(true)` is skipped, and `window.focus()` and the
+//! devtools `raise` command do nothing.
 //!
 //! The window still draws every frame behind other windows (DirectComposition does not throttle an
 //! occluded window), and the devtools screenshot reads gpui's last scene rather than the screen.
@@ -16,15 +11,12 @@
 //! The window is never active at the OS level, and gpui runs focus only in an active window (an
 //! inactive one's focus events carry empty paths, so `on_focus` never fires). So every quiet window
 //! is also marked assumed-active (`Window::set_assume_active`, a fork item): focus moves, keyboard
-//! events, `document.hasFocus()` and the window's `focused` flag all read as they do in front. Every
-//! window counts as active at once, which no OS allows. A spec about real window activation sets
-//! `VN_WINDOW_FOCUS` itself.
+//! events, `document.hasFocus()` and the window's `focused` flag all read as they do in front.
 
 use std::sync::OnceLock;
 
 use gpui::Window;
 
-/// `VN_WINDOW_FOCUS=never`, read once.
 pub fn never_focus() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var("VN_WINDOW_FOCUS").is_ok_and(|v| v == "never"))

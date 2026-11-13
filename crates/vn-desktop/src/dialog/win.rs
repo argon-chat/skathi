@@ -1,9 +1,8 @@
 //! `IFileOpenDialog` / `IFileSaveDialog` on a `vn-dialog` thread (mod.rs).
 //!
-//! Threading follows gpui's `dialog.rs` (Apache-2.0, zed-industries/zed): a dedicated STA, a
-//! 100 ms thread timer posting `WM_CLOSE` to the thread's `#32770` windows once the owner is
-//! closing, and the owner kept alive until the loop exits. Unlike gpui this sets filters, a client
-//! GUID and `FOS_NOCHANGEDIR`, and answers through a callback.
+//! Threading follows gpui's `dialog.rs` (Apache-2.0, zed-industries/zed): a dedicated STA, a 100 ms thread
+//! timer posting `WM_CLOSE` to the thread's `#32770` windows once the owner is closing, and the owner kept
+//! alive until the loop exits.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -79,7 +78,6 @@ thread_local! {
     static CANCELLATION: RefCell<Option<Cancellation>> = const { RefCell::new(None) };
 }
 
-/// Closes this thread's dialog once its owner is closing; a thread timer, dispatched by the modal loop.
 struct CancellationTimer(usize);
 
 impl CancellationTimer {
@@ -111,8 +109,7 @@ unsafe extern "system" fn cancel_dialog(_: HWND, _: u32, _: usize, _: u32) {
     }
 }
 
-/// Shell dialogs can open further modal dialogs (an overwrite prompt): close only dialog windows
-/// on this thread, never the hidden COM windows beside them.
+/// Shell dialogs can open further modal dialogs: close only dialog windows on this thread, never the hidden COM ones.
 unsafe extern "system" fn close_dialog(hwnd: HWND, _: LPARAM) -> BOOL {
     let mut class_name = [0u16; 32];
     let length = unsafe { GetClassNameW(hwnd, &mut class_name) } as usize;
@@ -124,8 +121,7 @@ unsafe extern "system" fn close_dialog(hwnd: HWND, _: LPARAM) -> BOOL {
     TRUE
 }
 
-/// `TaskDialogIndirect`, resolved at run time: it exists only in comctl32 v6 (via manifest), and
-/// linking it statically would stop manifest-less binaries, unit tests included, from loading.
+/// `TaskDialogIndirect`, resolved at run time: linking it statically would stop manifest-less binaries (unit tests) from loading.
 type TaskDialogIndirectFn = unsafe extern "system" fn(
     *const TASKDIALOGCONFIG,
     *mut i32,
@@ -143,11 +139,9 @@ fn task_dialog_indirect() -> Option<TaskDialogIndirectFn> {
     p.map(|p| unsafe { std::mem::transmute::<usize, TaskDialogIndirectFn>(p) })
 }
 
-/// The first button's id; button `i` is `BUTTON_BASE + i`.
 const BUTTON_BASE: i32 = 100;
 
-/// Asks `q` in a TaskDialog owned by `owner` (0 = none): the button index, or `Ok(None)` for Esc,
-/// the close box, or the owner closing (the same 100 ms timer; a TaskDialog is a `#32770` too).
+/// Asks `q` in a TaskDialog owned by `owner` (0 = none): the button index, or `Ok(None)` for Esc, the close box, or the owner closing.
 pub(super) fn ask(q: &super::Ask, owner: isize, cancel: &Cancellation) -> Result<Option<usize>, Fail> {
     let Some(show) = task_dialog_indirect() else {
         return Err(Fail::new(
@@ -199,7 +193,6 @@ pub(super) fn ask(q: &super::Ask, owner: isize, cancel: &Cancellation) -> Result
     Ok((0..buttons.len() as i32).contains(&i).then_some(i as usize))
 }
 
-/// Shows the dialog for `n`; `Ok(None)` is a dismissal, including the owner closing.
 pub(super) fn pick(n: &Native, owner: isize, cancel: &Cancellation) -> Result<Option<Vec<PathBuf>>, Fail> {
     let _apartment = Apartment::new()?;
     let _timer = CancellationTimer::new(cancel.clone())?;
@@ -214,7 +207,6 @@ pub(super) fn pick(n: &Native, owner: isize, cancel: &Cancellation) -> Result<Op
 }
 
 fn item_at(path: &std::path::Path) -> Option<IShellItem> {
-    // The shell's parser does not take the long-path prefix.
     let s = path.to_string_lossy();
     let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
     unsafe { SHCreateItemFromParsingName(&HSTRING::from(s), None).ok() }
@@ -284,7 +276,6 @@ unsafe fn show(n: &Native, owner: isize) -> Result<Option<Vec<PathBuf>>, Fail> {
         None => None,
     };
     if let Some(item) = start {
-        // A start folder that is gone is not worth failing the dialog over.
         let _ = unsafe { if n.force_start { dialog.SetFolder(&item) } else { dialog.SetDefaultFolder(&item) } };
     }
     if let Some(name) = &n.suggested_name {

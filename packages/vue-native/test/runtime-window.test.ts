@@ -1,11 +1,6 @@
-// The tier-3 windowing namespace: `import { appWindow } from "vue-native"`.
-//
-// The implementation itself lives in the host's JS prelude
-// (crates/vn-app/src/window.prelude.js), because the state snapshot and the
-// tier-1 globals it is built on have to exist before the app bundle evaluates.
-// What runtime.js owns — and what these tests pin — is the NAMESPACE: that
-// apps reach the surface through an import rather than a global, and that a
-// host without the prelude degrades loudly instead of silently.
+// The tier-3 windowing namespace: `import { appWindow } from "vue-native"`. The implementation lives in the host's JS
+// prelude; what these tests pin is the NAMESPACE: apps reach it through an import, and a host without the prelude
+// degrades loudly instead of silently.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
@@ -14,7 +9,6 @@ afterEach(() => {
   delete globalThis.__VN_WINDOW__;
 });
 
-/** The shape the host prelude publishes. */
 function fakeHost() {
   const calls = [];
   const appWindow = {
@@ -47,8 +41,6 @@ describe("appWindow namespace", () => {
     const { host } = fakeHost();
     globalThis.__VN_WINDOW__ = host;
     const rt = createRuntime();
-    // Both spellings must stay valid when multi-window lands: `getCurrentWindow()`
-    // keeps meaning "this window" and `appWindow` keeps being its binding.
     expect(rt.getCurrentWindow()).toBe(rt.appWindow);
   });
 
@@ -64,18 +56,13 @@ describe("appWindow namespace", () => {
 describe("no windowing host", () => {
   test("the advisory is LAZY — importing the module warns about nothing", () => {
     const rt = createRuntime();
-    // An advisory that fires on code nobody wrote is noise: an embedder that
-    // never touches `appWindow` must never hear about it.
     expect(rt.advisories()).toEqual([]);
   });
 
   test("touching the inert window warns once and never throws", () => {
     const rt = createRuntime();
-    // Verbs stay callable…
     expect(() => rt.appWindow.maximize()).not.toThrow();
-    // …predicates still answer a boolean…
     expect(rt.appWindow.isMaximized()).toBe(false);
-    // …and assignment is swallowed rather than raising.
     expect(() => {
       rt.appWindow.backdrop = "mica";
     }).not.toThrow();

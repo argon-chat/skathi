@@ -1,13 +1,10 @@
-// The PE side of `vn build`: a pure-TS reader for the header fields and resource-tree facts the stamper
-// needs, plus bun:ffi bindings to the Win32 resource-update API that does the writing.
+// The PE side of `vn build`: a pure-TS reader for the header fields and resource-tree facts the
+// stamper needs, plus bun:ffi bindings to the Win32 resource-update API that does the writing.
 //
-// Win32 rather than a PE writer of our own: `BeginUpdateResourceW` / `UpdateResourceW` /
-// `EndUpdateResourceW` rebuild `.rsrc`, move `.reloc` behind it and fix every header field that moves
-// (0.3 s on the 104 MB host). Bun's own `--windows-icon` uses it too, which is why that flag cannot run
-// when cross-compiling. A pure-TS writer is the road to stamping on another OS.
-//
-// The reader is file-backed and page-cached rather than reading the whole ~100 MB image: everything asked
-// of it lives in the first few KB or in `.rsrc`'s directory tables.
+// Win32 rather than a PE writer of our own: `UpdateResourceW` rebuilds `.rsrc`, moves `.reloc` behind
+// it and fixes every header field that moves. A pure-TS writer is the road to stamping on another OS.
+// The reader is file-backed and page-cached: everything asked of it is in the first few KB or in
+// `.rsrc`'s directory tables.
 
 import { dlopen, FFIType, ptr, toArrayBuffer } from "bun:ffi";
 import { closeSync, fstatSync, openSync, readSync, writeSync } from "node:fs";
@@ -90,10 +87,8 @@ export interface ResourceEntry {
   type: number | string;
   name: number | string;
   lang: number;
-  /** Image RVA of the resource bytes — what the loader's pointer will be relative to. */
   rva: number;
   size: number;
-  /** Where those bytes sit in the FILE. */
   fileOffset: number;
 }
 
@@ -101,17 +96,14 @@ export interface PeInfo {
   is64: boolean;
   machine: number;
   subsystem: number;
-  /** File offset of the optional header's `Subsystem` field. */
   subsystemOffset: number;
   timeDateStamp: number;
   sizeOfImage: number;
   sections: Section[];
   /** The certificate table. Its "RVA" is a FILE offset: the one data directory the loader never maps, so a signature can sit after the image. */
   security: { offset: number; size: number };
-  /** File offset of the SECURITY data-directory entry itself (8 bytes). */
   securityEntryOffset: number;
   resources: ResourceEntry[];
-  /** Bytes after the last section's raw data. */
   overlay: number;
 }
 
@@ -220,7 +212,6 @@ export function readFileRange(path: string, offset: number, len: number): Uint8A
   }
 }
 
-/** Overwrites bytes in place — the subsystem patch and the signature strip. */
 export function patchFile(path: string, offset: number, bytes: Uint8Array) {
   const fd = openSync(path, "r+");
   try {
@@ -235,8 +226,7 @@ export function setSubsystem(path: string, subsystem: number) {
   patchFile(path, pe.subsystemOffset, new Uint8Array([subsystem & 0xff, subsystem >> 8]));
 }
 
-// Every pointer is a u64, every string a NUL-terminated UTF-16LE buffer, and an integer resource id
-// (MAKEINTRESOURCE) is the id as a pointer.
+// Every pointer is a u64, every string a NUL-terminated UTF-16LE buffer, and an integer resource id is the id as a pointer.
 
 const u64 = FFIType.u64;
 const i32 = FFIType.i32;
@@ -303,7 +293,7 @@ export class Win32Error extends Error {
 
 export type ResId = number | string;
 
-/** One `BeginUpdateResourceW` … `EndUpdateResourceW` transaction. String buffers handed to Win32 stay alive on `this` until `commit`: `UpdateResourceW` copies the data but makes no promise about when it reads the name. */
+/** One `BeginUpdateResourceW` ... `EndUpdateResourceW` transaction. String buffers handed to Win32 stay alive on `this` until `commit`: `UpdateResourceW` makes no promise about when it reads the name. */
 export class ResourceUpdate {
   #h: bigint;
   #keep: Uint8Array[] = [];
@@ -331,7 +321,6 @@ export class ResourceUpdate {
     if (!ok) throw new Win32Error(`UpdateResourceW(${type}/${name}/${lang})`, kernel32().GetLastError());
   }
 
-  /** Deletes one resource (NULL data, size 0 — the documented spelling). */
   remove(type: ResId, name: ResId, lang: number) {
     const ok = kernel32().UpdateResourceW(this.#h, this.#id(type), this.#id(name), lang, 0n, 0);
     if (!ok) throw new Win32Error(`UpdateResourceW(delete ${type}/${name}/${lang})`, kernel32().GetLastError());
@@ -356,7 +345,6 @@ export class ResourceUpdate {
 const LOAD_LIBRARY_AS_DATAFILE = 0x2;
 const LOAD_LIBRARY_AS_IMAGE_RESOURCE = 0x20;
 
-/** Maps `path` as the loader's resource lookup sees it and returns a copy of one resource's bytes, or `null`. The verify step: proves the stamped file still maps and `FindResourceW` finds the payload, as the host does at boot. */
 export function loadResourceCopy(path: string, type: ResId, name: ResId, maxBytes = Infinity): Uint8Array | null {
   requireWindows("reading an exe's resources");
   const k = kernel32();
@@ -385,14 +373,12 @@ export function loadResourceCopy(path: string, type: ResId, name: ResId, maxByte
   }
 }
 
-/** How many icons the shell sees in `path` (`ExtractIconExW(path, -1)`). */
 export function shellIconCount(path: string): number {
   requireWindows("counting icons");
   const p = wide(path);
   return shell32().ExtractIconExW(P(p), -1, 0n, 0n, 0);
 }
 
-/** One string out of `\StringFileInfo\040904b0\<key>`, as Explorer and Task Manager read it; `null` when absent. */
 export function versionString(path: string, key: string, table = "040904b0"): string | null {
   requireWindows("reading VERSIONINFO");
   const v = version();
@@ -412,7 +398,6 @@ export function versionString(path: string, key: string, table = "040904b0"): st
   return new TextDecoder("utf-16le").decode(raw).replace(/\0+$/, "");
 }
 
-/** `VS_FIXEDFILEINFO`'s file version as `a.b.c.d`, or `null`. */
 export function fixedFileVersion(path: string): string | null {
   requireWindows("reading VERSIONINFO");
   const v = version();

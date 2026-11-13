@@ -1,10 +1,8 @@
 // A census of the `__vn_*` host protocol: how many calls, of which kind, does each thing an app does cost?
 //
-//   bun scripts/host-calls.ts            the table
-//   bun scripts/host-calls.ts --json     the same numbers, machine-readable
+//   bun scripts/host-calls.ts [--json]
 //
-// It runs the real renderer (`src/runtime.ts`, transpiled by the emitter that builds dist/vendor.js) against a
-// host that only counts. A measurement instrument, not a test: nothing asserts.
+// Runs the real renderer against a host that only counts. An instrument, not a test.
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -112,9 +110,7 @@ function makeWorld(): World {
     __vn_set_stylesheet: (() => bump("__vn_set_stylesheet")) as never,
     __vn_set_listener: (() => bump("__vn_set_listener")) as never,
     __vn_set_dispatcher: (() => bump("__vn_set_dispatcher")) as never,
-    // The three read-back calls answer plausibly rather than emptily: a `""`
-    // from `__vn_bounds` short-circuits `rectOf`, and the census would then
-    // under-count everything a real layout read costs.
+    // The read-back calls answer plausibly: a `""` from `__vn_bounds` would short-circuit `rectOf` and under-count.
     __vn_query: (() => (bump("__vn_query"), "")) as never,
     __vn_bounds: (() => (bump("__vn_bounds"), "0,0,100,20")) as never,
     __vn_computed_style: (() =>
@@ -193,7 +189,6 @@ const total = (c: Counts) => Object.values(c).reduce((a, b) => a + b, 0);
 
 const ROWS = 100;
 
-/** A list row shaped like real app markup: class, two attrs, style, handler. */
 function row(state: { items: { id: number; label: string }[]; hot: number }, i: number) {
   const item = state.items[i];
   return h(

@@ -7,14 +7,6 @@
 //! ContentDialog like the permission prompt (src/content_dialog.rs): a collapsed Details expander
 //! (panic message and location, app version, OS build) and the buttons Restart, Copy report and
 //! Close. English, or Russian when that is the Windows display language.
-//!
-//! **Restart** begins shutdown ([`crate::shutdown::begin`]), starts this executable again with the
-//! same command line, detached, then closes the primary window as `appWindow.close()` does
-//! ([`crate::window::close_primary`]) so gpui quits through its quit hooks. **Close**, Esc and
-//! Alt+F4 are the same close without the relaunch. Embedded (src/embed.rs) there is no Restart.
-//!
-//! On other platforms the dialog is the platform's alert (vn-desktop's question) with Restart and
-//! Close, and the panic's text in its message.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -24,21 +16,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::App;
 
-/// The dialog's language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
     En,
     Ru,
 }
 
-/// The language for a Windows language id (`GetUserDefaultUILanguage`):
-/// Russian for LANG_RUSSIAN (the primary language, its low 10 bits),
-/// English for everything else.
 pub fn lang_of(langid: u16) -> Lang {
     if langid & 0x3ff == 0x19 { Lang::Ru } else { Lang::En }
 }
 
-/// The user's Windows display language; English elsewhere.
 pub fn ui_lang() -> Lang {
     #[cfg(target_os = "windows")]
     {
@@ -50,13 +37,10 @@ pub fn ui_lang() -> Lang {
     }
 }
 
-/// Everything the dialog says. `{app}` is the app's name, `{v}` its version;
-/// `&` marks a button's access key.
 #[derive(Debug)]
 pub struct Strings {
     pub title: &'static str,
     pub body: &'static str,
-    /// The body where there is no Restart (embedded).
     pub body_no_restart: &'static str,
     pub details: &'static str,
     pub restart: &'static str,
@@ -97,7 +81,6 @@ pub fn strings(lang: Lang) -> &'static Strings {
     }
 }
 
-/// A footer button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Restart,
@@ -111,13 +94,10 @@ pub fn actions(embedded: bool) -> &'static [Action] {
     if embedded { &[Action::Copy, Action::Close] } else { &[Action::Restart, Action::Copy, Action::Close] }
 }
 
-/// The accent-filled button, focused at first (so the one Enter presses):
-/// Restart, or Close where there is none.
 pub fn primary(actions: &[Action]) -> usize {
     actions.iter().position(|a| *a == Action::Restart).or_else(|| actions.iter().position(|a| *a == Action::Close)).unwrap_or(0)
 }
 
-/// The sentence under the title: it names the way out the footer offers.
 pub fn body(s: &Strings, actions: &[Action]) -> &'static str {
     if actions.contains(&Action::Restart) { s.body } else { s.body_no_restart }
 }
@@ -132,15 +112,12 @@ impl Action {
     }
 }
 
-/// What the dialog and the copied report tell.
 #[derive(Debug, Clone)]
 pub struct Report {
     pub app: String,
     pub version: Option<String>,
-    /// `Windows 10.0.26100 (x86_64)`.
     pub os: String,
     pub time: SystemTime,
-    /// The panic: `"<message> at <file:line:col>"`.
     pub reason: String,
 }
 
@@ -149,7 +126,6 @@ impl Report {
         s.title.replace("{app}", &self.app)
     }
 
-    /// The line under the panic in Details: the version, then the OS.
     pub fn about(&self, s: &Strings) -> String {
         match &self.version {
             Some(v) => format!("{} · {}", s.version.replace("{v}", v), self.os),
@@ -180,8 +156,6 @@ impl Report {
     }
 }
 
-/// `2026-11-10 14:03:12 UTC`. UTC, so a report read in another time zone
-/// says the same moment; no time-zone database needed.
 pub fn utc(t: SystemTime) -> String {
     let secs = t.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
@@ -198,7 +172,6 @@ pub fn utc(t: SystemTime) -> String {
     format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
-/// The OS and its build, as the report names it.
 pub fn os_version() -> String {
     #[cfg(target_os = "windows")]
     {
@@ -224,8 +197,6 @@ pub fn os_version() -> String {
     }
 }
 
-/// The app's version: a packaged app's (`version` in the payload `vn build`
-/// stamped); a dev host runs whatever is in `dist/`, which has none.
 pub fn app_version() -> Option<String> {
     #[cfg(feature = "prod")]
     {
@@ -258,20 +229,16 @@ pub fn breakable(text: &str, columns: usize) -> String {
     out
 }
 
-/// The relaunch's arguments: this process's, without the program name.
 pub fn relaunch_args(argv: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
     argv.into_iter().skip(1).collect()
 }
 
-/// What a poisoned runtime gets, decided once per process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
-    /// Already decided: nothing more.
     Nothing,
     /// The `[crash]` line only: a test host (src/quiet.rs) is driven by a runner that reads the log,
     /// and a closing app is already going.
     Log,
-    /// The line and the dialog.
     Dialog,
 }
 
@@ -286,8 +253,6 @@ pub fn decide(first: bool, test_host: bool, closing: bool) -> Decision {
 static APP_NAME: Mutex<Option<String>> = Mutex::new(None);
 static DECIDED: AtomicBool = AtomicBool::new(false);
 
-/// The app's display name, for the title: the window title from its config,
-/// as the permission prompt has it.
 pub(crate) fn set_app_name(name: &str) {
     let name = name.trim();
     *APP_NAME.lock().unwrap_or_else(|p| p.into_inner()) = (!name.is_empty()).then(|| name.to_string());
@@ -297,9 +262,7 @@ fn app_name() -> String {
     APP_NAME.lock().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_else(|| "vue-native".to_string())
 }
 
-/// The runtime is poisoned: called where JS would have run (the frame pump,
-/// the background tick), on every such call. The first logs the reason and
-/// opens the dialog; the rest do nothing.
+/// Called where JS would have run; only the first call logs and opens the dialog.
 pub(crate) fn on_poisoned(cx: &mut App) {
     let first = !DECIDED.swap(true, Ordering::SeqCst);
     let decision = decide(first, crate::quiet::never_focus(), crate::shutdown::is_closing());
@@ -317,8 +280,6 @@ pub(crate) fn on_poisoned(cx: &mut App) {
     eprintln!("{line}");
     vn_tree::log::record("crash", line);
     if decision == Decision::Dialog {
-        // A task, so the window opens outside the pump's update of the
-        // primary window.
         cx.spawn(async move |cx| {
             // Restored out of any `App` update: the restore's `WM_SIZE` is
             // sent, and gpui must be free to take the window for it.
@@ -330,7 +291,6 @@ pub(crate) fn on_poisoned(cx: &mut App) {
     }
 }
 
-/// The dialog's answer: the app closes, and with Restart starts again.
 pub(crate) fn quit(action: Action, cx: &mut App) {
     let relaunch = action == Action::Restart && !crate::embed::active();
     crate::shutdown::begin(if relaunch { "restart after a crash" } else { "close after a crash" });
@@ -355,8 +315,6 @@ pub(crate) fn quit(action: Action, cx: &mut App) {
     }
 }
 
-/// Starts this executable again with this process's arguments, detached:
-/// no console, its own process group, no inherited stdio.
 fn relaunch_now() -> Result<u32, String> {
     let exe: PathBuf = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let mut cmd = std::process::Command::new(&exe);
@@ -387,8 +345,6 @@ fn show(report: Report, cx: &mut App) {
     view::show(report, cx);
 }
 
-/// Elsewhere: the platform's alert, asked through vn-desktop's question
-/// (an `NSAlert` sheet on the primary window on macOS).
 #[cfg(not(target_os = "windows"))]
 fn show(report: Report, cx: &mut App) {
     let s = strings(ui_lang());
@@ -438,32 +394,23 @@ mod view {
     use super::{actions, primary, strings, ui_lang, Action, Lang, Report, Strings};
     use crate::content_dialog::{self as card, fonts, hwnd_of, parse_label, win, Accent, Fonts, Guard, Label, Theme};
 
-    /// The card's width, DIP: wider than the prompt's 440 for three buttons.
     const WIDTH: f32 = 500.0;
 
-    /// How long Copy reads "Copied".
     const COPIED_FOR: Duration = Duration::from_secs(2);
 
-    /// Segoe Fluent Icons' Warning triangle.
     const GLYPH: char = '\u{E7BA}';
 
-    /// The details' well: six lines of 16 DIP, then it scrolls.
     const DETAILS_LINES: f32 = 6.0;
 
-    /// Consolas' 12 px columns that fit the well (426 DIP at 6.6 DIP a
-    /// column is 64), less a margin: a longer unbroken run is broken here.
     const DETAILS_COLUMNS: usize = 60;
 
-    /// What the app does with the answer: [`super::quit`], or the preview's.
     type Outcome = Box<dyn FnOnce(Action, &mut App)>;
 
     struct Spec {
         report: Report,
         lang: Lang,
         actions: &'static [Action],
-        /// The primary window's HWND, 0 for none.
         owner: isize,
-        /// The theme, when it is not the system's (the preview).
         dark: Option<bool>,
         expanded: bool,
     }
@@ -472,11 +419,9 @@ mod view {
         spec: Spec,
         s: &'static Strings,
         labels: Vec<Label>,
-        /// The buttons', then the expander's.
         focus: Vec<FocusHandle>,
         expander: FocusHandle,
         expanded: bool,
-        /// Copy's label reads "Copied" while this is the latest copy.
         copied: Option<u64>,
         copies: u64,
         guard: Guard,
@@ -546,7 +491,6 @@ mod view {
             cx.spawn(async move |_, cx: &mut AsyncApp| card::refit(handle, hwnd, WIDTH, &height, cx).await).detach();
         }
 
-        /// The focusables in Tab order: the expander, then the buttons.
         fn ring_order(&self) -> Vec<FocusHandle> {
             std::iter::once(self.expander.clone()).chain(self.focus.iter().cloned()).collect()
         }
@@ -612,11 +556,8 @@ mod view {
             })
         }
 
-        /// The Details expander: a disclosure row, and under it, open, the
-        /// panic in a monospace well and the version and OS.
         fn details(&self, t: &Theme, f: &Fonts, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
             let ring = window.last_input_was_keyboard() && self.expander.is_focused(window);
-            // ChevronDown / ChevronUp.
             let chevron = if self.expanded { '\u{E70E}' } else { '\u{E70D}' };
             let hover = t.subtle;
             let toggle = div()
@@ -652,7 +593,6 @@ mod view {
                 .mt(px(12.0))
                 .flex()
                 .flex_col()
-                // A row, so the toggle's hover and focus ring are as wide as its words.
                 .child(div().flex().ml(px(-8.0)).child(card::with_ring(div().relative().child(toggle), ring, t, 4.0)))
                 .when(self.expanded, |d| {
                     d.child(
@@ -733,7 +673,6 @@ mod view {
         }
     }
 
-    /// The primary window's HWND, 0 for none.
     pub(super) fn primary_hwnd(cx: &mut App) -> isize {
         crate::MAIN_WINDOW
             .with(|w| w.get())
@@ -748,7 +687,6 @@ mod view {
         win::restore(hwnd);
     }
 
-    /// The dialog over the primary window, which it disables while it is up.
     pub(super) fn show(report: Report, cx: &mut App) {
         let owner = primary_hwnd(cx);
         let spec = Spec {
@@ -766,7 +704,6 @@ mod view {
         }
     }
 
-    /// Opens the dialog, hidden, and reveals it once it has its size and place.
     fn open(spec: Spec, outcome: Outcome, cx: &mut App) -> anyhow::Result<WindowHandle<Crash>> {
         let owner = win::usable(spec.owner).then_some(spec.owner).unwrap_or(0);
         let spec = Spec { owner, ..spec };
@@ -781,7 +718,6 @@ mod view {
                 cx.new(|cx| {
                     let s = strings(spec.lang);
                     let labels: Vec<Label> = spec.actions.iter().map(|a| parse_label(a.label(s))).collect();
-                    // Tab order: the expander, then the buttons (`key_down`).
                     let expander = cx.focus_handle().tab_index(0).tab_stop(true);
                     let focus: Vec<FocusHandle> = (0..labels.len())
                         .map(|i| cx.focus_handle().tab_index(i as isize + 1).tab_stop(true))
@@ -802,7 +738,6 @@ mod view {
                         }),
                     ];
                     window.on_window_should_close(cx, |window, cx| {
-                        // Alt+F4, or the system menu's Close: Close.
                         if let Some(view) = window.root::<Crash>().flatten() {
                             let outcome = view.update(cx, |p, _| {
                                 p.release_owner();
@@ -856,8 +791,6 @@ mod view {
         if card::disable_owner(owner) {
             let _ = handle.update(cx, |p, _, _| p.owner_disabled = true);
         }
-        // A test host never gets here (`decide`); the preview may ask not to
-        // take the foreground the same way.
         let activate = !crate::quiet::never_focus();
         crate::popout_win::show(hwnd, activate);
         let _ = handle.update(cx, |p, window, cx| {
@@ -868,7 +801,6 @@ mod view {
         });
     }
 
-    /// What the preview shows (examples/crash_dialog.rs).
     #[doc(hidden)]
     #[derive(Debug, Clone)]
     pub struct Preview {
@@ -877,21 +809,14 @@ mod view {
         pub app: String,
         pub version: Option<String>,
         pub reason: String,
-        /// Over a window of its own, rather than with no owner.
         pub owner: bool,
-        /// As an embedded vue-native shows it: no Restart.
         pub embedded: bool,
-        /// Details open from the start.
         pub expanded: bool,
         pub accent: Option<Accent>,
-        /// An exe whose icon stands in for the app's.
         pub icon_from: Option<String>,
-        /// The card without acrylic, as Windows 10 draws it.
         pub solid: bool,
     }
 
-    /// `cargo run -p vn-app --example crash_dialog`: the dialog on its own; the buttons print what
-    /// they would do.
     #[doc(hidden)]
     pub fn preview(p: Preview) {
         if let Some(a) = p.accent {
@@ -966,7 +891,6 @@ mod tests {
     fn every_button_has_its_own_access_key() {
         for lang in [Lang::En, Lang::Ru] {
             let s = strings(lang);
-            // The character after the first lone `&`, as `parse_label` reads it.
             let key_of = |l: &str| {
                 let at = l.find('&')?;
                 l[at + 1..].chars().next().and_then(|c| c.to_lowercase().next())

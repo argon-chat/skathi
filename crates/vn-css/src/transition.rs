@@ -9,18 +9,12 @@ use lightningcss::properties::{Property, PropertyId};
 use lightningcss::values::easing::{EasingFunction, StepPosition as CssStepPosition};
 use lightningcss::values::time::Time;
 
-/// A property a `transition` can name. Everything except [`Self::All`] and [`Self::Other`] is a
-/// *concrete* slot in `gpui::StyleRefinement` that the animator knows how to interpolate.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TransitionProperty {
     Opacity,
     Color,
-    /// `background-color` (solid fills only)
     BackgroundColor,
-    /// `border-color` (gpui keeps one color for all four sides)
     BorderColor,
-    /// `text-decoration-color` — the colour of the underline / strikethrough, which gpui carries on
-    /// the decoration itself rather than in a slot of its own.
     TextDecorationColor,
     /// Used value is the element's `color`: gpui tints SVG sprites with one colour; `fill: none` is
     /// a discrete endpoint.
@@ -54,11 +48,9 @@ pub enum TransitionProperty {
     /// registration.
     Shading,
     All,
-    /// A property vn-css parses but cannot animate yet (one-shot advisory).
     Other(Rc<str>),
 }
 
-/// The number of concrete properties `all` expands to.
 pub const ANIMATABLE_COUNT: usize = 29;
 
 impl TransitionProperty {
@@ -98,7 +90,6 @@ impl TransitionProperty {
         ]
     }
 
-    /// The CSS name, for diagnostics.
     pub fn name(&self) -> &str {
         use TransitionProperty::*;
         match self {
@@ -138,7 +129,6 @@ impl TransitionProperty {
     }
 }
 
-/// Where a `steps()` function jumps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StepPosition {
     JumpStart,
@@ -147,7 +137,6 @@ pub enum StepPosition {
     JumpBoth,
 }
 
-/// A CSS easing function, with evaluation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Easing {
     Linear,
@@ -166,7 +155,6 @@ impl Default for Easing {
 }
 
 impl Easing {
-    /// Maps input progress (0..=1) to output progress.
     pub fn eval(self, t: f32) -> f32 {
         self.eval_f64(t as f64) as f32
     }
@@ -185,21 +173,14 @@ impl Easing {
     }
 }
 
-/// One resolved transition: which property, for how long, after what delay, shaped by which easing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransitionSpec {
-    /// The property this entry governs.
     pub property: TransitionProperty,
-    /// `transition-duration`.
     pub duration: Duration,
-    /// `transition-delay` (negative values are clamped to zero in v1).
     pub delay: Duration,
-    /// `transition-timing-function`.
     pub easing: Easing,
 }
 
-/// The spec that governs `property`, or `None` when nothing does. Per CSS the LAST matching entry
-/// in the list wins; `all` matches every property.
 pub fn spec_for<'s>(
     specs: &'s [TransitionSpec],
     property: &TransitionProperty,
@@ -210,7 +191,6 @@ pub fn spec_for<'s>(
         .find(|s| s.property == *property || s.property == TransitionProperty::All)
 }
 
-/// The concrete properties a transition list covers, in first-mention order.
 pub fn covered(specs: &[TransitionSpec]) -> Vec<TransitionProperty> {
     let mut out: Vec<TransitionProperty> = Vec::new();
     for s in specs {
@@ -312,7 +292,6 @@ fn steps(count: u32, position: StepPosition, t: f64) -> f64 {
     current / jumps
 }
 
-/// Accumulates one declaration block's transition longhands/shorthand.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Collector {
     properties: Option<Vec<Vec<TransitionProperty>>>,
@@ -343,7 +322,6 @@ impl Collector {
         self.seen |= later.seen;
     }
 
-    /// Aggregate legacy inline callers declare a complete list, not a patch.
     pub(crate) fn from_specs(specs: &[TransitionSpec]) -> Self {
         Self {
             properties: Some(
@@ -359,7 +337,6 @@ impl Collector {
         }
     }
 
-    /// Consumes `p` when it is a transition declaration; returns whether it did.
     pub(crate) fn take(&mut self, p: &Property, diagnostics: &mut Vec<String>) -> bool {
         match p {
             Property::Transition(list, _) => {
@@ -434,8 +411,6 @@ impl Collector {
         }
     }
 
-    /// Zips the four component lists into specs, cycling the shorter ones — `transition-property`
-    /// decides how many transitions there are, exactly as CSS does.
     pub(crate) fn finish(self) -> Option<Vec<TransitionSpec>> {
         if !self.seen {
             return None;
@@ -505,9 +480,7 @@ fn expand(id: &PropertyId) -> Expansion {
         "all" => one(All),
         "opacity" => one(Opacity),
         "color" => one(Color),
-        // `background` is a shorthand whose only animatable part here is the color.
         "background" | "background-color" => one(BackgroundColor),
-        // gpui keeps a single border color, so `border`/`border-color` collapse.
         "border" | "border-color" => one(BorderColor),
         "text-decoration-color" => one(TextDecorationColor),
         "fill" => one(Fill),
@@ -562,7 +535,6 @@ fn expand(id: &PropertyId) -> Expansion {
     }
 }
 
-/// Does the animator interpolate the property `name` (a CSS name, shorthands included)?
 pub(crate) fn animates(name: &str) -> bool {
     match expand(&PropertyId::from(name)) {
         Expansion::None => false,
@@ -594,7 +566,6 @@ pub fn parse_easing(text: &str) -> Option<Easing> {
     }
 }
 
-/// One `<time>` value.
 pub(crate) fn duration_of(t: &Time, what: &str, diagnostics: &mut Vec<String>) -> Duration {
     let ms = t.to_ms();
     if !ms.is_finite() {
@@ -611,10 +582,8 @@ pub(crate) fn duration_of(t: &Time, what: &str, diagnostics: &mut Vec<String>) -
     Duration::from_secs_f64((ms as f64 / 1000.0).min(MAX_TIME_SECS))
 }
 
-/// The longest `<time>` a transition or animation keeps: about 31 years.
 pub(crate) const MAX_TIME_SECS: f64 = 1.0e9;
 
-/// One `<easing-function>`.
 pub(crate) fn easing_of(e: &EasingFunction, diagnostics: &mut Vec<String>) -> Easing {
     match e {
         EasingFunction::Linear => Easing::Linear,
@@ -653,7 +622,6 @@ mod tests {
     use lightningcss::declaration::DeclarationBlock;
     use lightningcss::stylesheet::ParserOptions;
 
-    /// Parses a declaration body through lightningcss and collects transitions.
     fn parse(body: &str) -> (Option<Vec<TransitionSpec>>, Vec<String>) {
         let mut diagnostics = Vec::new();
         let block = DeclarationBlock::parse_string(body, ParserOptions::default())
@@ -770,7 +738,6 @@ mod tests {
 
     #[test]
     fn shorthand_resets_earlier_longhands() {
-        // The shorthand comes last, so the earlier duration must not survive.
         let s = specs("transition-duration: 5s; transition: opacity 100ms");
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].duration, ms(100));
@@ -940,7 +907,6 @@ mod tests {
         }
     }
 
-    /// The Newton solver must agree with a dense brute-force inversion.
     #[test]
     fn cubic_bezier_solver_agrees_with_brute_force() {
         let (x1, y1, x2, y2) = (0.68, -0.55, 0.265, 1.55);

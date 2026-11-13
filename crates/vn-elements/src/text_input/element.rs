@@ -70,8 +70,7 @@ impl Element for TextElement {
         let mut style = Style::default();
         style.size.width = relative(1.0).into();
         if self.options.multiline {
-            // `rows` is only the intrinsic height (a min-height), so CSS `height`/`min-height` still
-            // win; height stays `auto` for the wrapper's flex stretch.
+            // `rows` is only the intrinsic height, so CSS `height`/`min-height` still win.
             style.min_size.height = (line_height * self.options.rows.max(1) as f32).into();
         } else {
             style.size.height = line_height.into();
@@ -89,7 +88,6 @@ impl Element for TextElement {
         cx: &mut App,
     ) -> TextPrepaint {
         let line_height = line_height_for(window, self.options.font_size);
-        // `color` is inherited in CSS; gpui carries the ambient text style down the paint walk.
         if self.options.inherit_color {
             let inherited = window.text_style().color;
             self.options.text_color = inherited;
@@ -173,7 +171,6 @@ impl Element for TextElement {
             (quads, None)
         };
 
-        // Overflow indicator: only a textarea overflows vertically.
         let scrollbar = (self.options.multiline && content_height > bounds.size.height).then(|| {
             let track = bounds.size.height;
             let thumb = (track * (f32::from(track) / f32::from(content_height)))
@@ -286,7 +283,6 @@ fn selection_quads(
 ) -> Vec<PaintQuad> {
     let mut quads = Vec::new();
     let mut cursor = range.start;
-    // Bounded by the byte count: a selection cannot cover more rows than bytes.
     for _ in 0..(range.end - range.start + 2) {
         if cursor >= range.end {
             break;

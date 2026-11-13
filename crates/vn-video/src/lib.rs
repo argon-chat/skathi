@@ -8,22 +8,15 @@
 //! host keeps one per node), [`VideoOptions`] is recomputed per frame (content box, display scale,
 //! `object-fit`), and [`video`] builds the element.
 //! ```ignore
-//! // once per <video> node, in the host's side map
 //! let mut state = VideoState::new(backend::for_this_platform()?);
 //! state.set_source(MediaSource::Path(path))?;
-//!
-//! // every frame, from the pump
 //! let advance = state.advance(Instant::now(), &FrameRequest { max_size });
 //! for event in advance.events { /* dispatch to JS */ }
-//!
-//! // every frame, from the element build
 //! let element = video(&mut state, &options, window, cx);
 //! ```
-//!
 //! Codec availability is a runtime fact: [`VideoState::can_play_type`] is a live probe and a failed
-//! load produces an advisory naming the missing decoder ([`MediaError::advisory`]). No platform
-//! type appears in `backend.rs`, `state.rs` or `element.rs`; the MF implementation is
-//! `#[cfg(windows)]` and [`StubBackend`] keeps the portable half testable everywhere.
+//! load produces an advisory naming the missing decoder ([`MediaError::advisory`]). The MF
+//! implementation is `#[cfg(windows)]`; [`StubBackend`] keeps the portable half testable everywhere.
 
 pub mod backend;
 pub mod element;
@@ -42,8 +35,7 @@ pub use element::{video, VideoFit, VideoOptions};
 pub use state::{Advance, VideoState};
 pub use stub::StubBackend;
 
-/// Fits `natural` inside `bound` at the natural aspect ratio, never upscaling, so readback cost
-/// follows the painted size (see [`FrameRequest`]).
+/// Fits `natural` inside `bound` at the natural aspect ratio, never upscaling (see [`FrameRequest`]).
 pub fn fit_within(natural: (u32, u32), bound: (u32, u32)) -> (u32, u32) {
     let (nw, nh) = (natural.0.max(1), natural.1.max(1));
     let (bw, bh) = bound;
@@ -60,7 +52,6 @@ pub fn fit_within(natural: (u32, u32), bound: (u32, u32)) -> (u32, u32) {
     )
 }
 
-/// Builds the backend this platform has, or explains what is missing.
 pub fn backend_for_this_platform() -> Result<Box<dyn VideoBackend>, MediaError> {
     #[cfg(windows)]
     {
