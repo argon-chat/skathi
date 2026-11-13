@@ -11,7 +11,6 @@ import {
 import type { VNode } from "@vue/runtime-core";
 import type { MirrorElement, MirrorNode } from "./types";
 import { nodeOps } from "./node-ops";
-import { inlineOf } from "./inline-style";
 import { warnCompat } from "../compat";
 
 /** Writes the `--hash-name` custom properties a `v-bind()` in `<style>` reads onto the component's root element(s); teleported children are found by `data-v-owner`. */
@@ -92,7 +91,7 @@ function setVarsOnNode(el: MirrorElement, vars: Record<string, unknown>): void {
     el.style.setProperty(`--${key}`, value);
     cssText += `--${key}: ${value};`;
   }
-  inlineOf(el).cssVarText = cssText;
+  el._cssVarText = cssText;
 }
 function normalizeCssVarValue(value: unknown): string {
   if (value == null) return "initial";

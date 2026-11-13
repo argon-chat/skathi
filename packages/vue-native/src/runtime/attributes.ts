@@ -1,23 +1,10 @@
-import type { MirrorClassList, MirrorElement, MirrorNode, MirrorStyle } from "./types";
+import type { MirrorClassList, MirrorElement, MirrorNode } from "./types";
 import { defineDom, defineDomGet } from "./dom-members";
 import { NODE_MEMBERS } from "./protos";
-import {
-  IMPORTANT_RE,
-  cssPropName,
-  cssomName,
-  hyphenate,
-  inlineValue,
-  noteInlineSerialization,
-  removeInlineDecl,
-  replaceInline,
-  serializeInline,
-  setInlineDecl,
-} from "./inline-style";
+import { hyphenate } from "./inline-style";
 import { branded } from "./collections";
 import { setClassText } from "./patch-prop";
-import { warnCompat } from "../compat";
 import { canonicalEvent } from "./event-names";
-import { styleDecls } from "./interfaces";
 import { isMirrorEl, ownExpando } from "./controls";
 import { propagate } from "./events";
 import { domError } from "./tree-ops";
@@ -293,100 +280,9 @@ defineDomGet("classList", function (this: MirrorElement) {
   return list;
 });
 
-// `el.style` is a CSSStyleDeclaration over `InlineStyleState`; writes take the same host call as `:style`.
-
-/** `style.backgroundColor = v`: `null` removes; `undefined` and a value carrying `!important` are ignored. `style["--x"] = v` sets the custom property (an expando in a browser). */
-function assignInlineProperty(node: MirrorElement, key: string, v: unknown): void {
-  if (v === undefined) return;
-  const name = cssPropName(key);
-  const custom = name.startsWith("--");
-  if (custom) {
-    warnCompat(
-      "style-custom-assign",
-      `el.style["${name}"] = … sets the custom property here, but in a browser it is only an expando on ` +
-        `the declaration object and changes nothing; use el.style.setProperty("${name}", …), which works in both`,
-    );
-  }
-  const value = v === null ? "" : String(v);
-  if (value === "") {
-    removeInlineDecl(node, name);
-    return;
-  }
-  if (!custom && IMPORTANT_RE.test(value)) return;
-  setInlineDecl(node, name, inlineValue(value, custom), false);
-}
-
 defineDomGet("style", function (this: MirrorElement) {
-  const node = this;
-  const decls = () => node._inline?.decls;
-  // The target carries the real members; the handler routes the rest to the declarations (the `as MirrorStyle` cast joins the halves).
-  const target = {
-    setProperty(k: unknown, v: unknown, priority?: unknown) {
-      const name = cssomName(String(k));
-      const custom = name.startsWith("--");
-      if (v === undefined && !custom) return;
-      const value = v === null ? "" : String(v);
-      if (value === "") {
-        removeInlineDecl(node, name);
-        return;
-      }
-      const p = priority == null ? "" : String(priority);
-      if (p !== "" && p.toLowerCase() !== "important") return;
-      if (!custom && IMPORTANT_RE.test(value)) return;
-      setInlineDecl(node, name, inlineValue(value, custom), p !== "");
-    },
-    removeProperty(k: unknown) {
-      return removeInlineDecl(node, cssomName(String(k))) ?? "";
-    },
-    getPropertyValue(k: unknown) {
-      return decls()?.get(cssomName(String(k)))?.value ?? "";
-    },
-    getPropertyPriority(k: unknown) {
-      return decls()?.get(cssomName(String(k)))?.important ? "important" : "";
-    },
-    item(i: unknown) {
-      return [...(decls()?.keys() ?? [])][Number(i)] ?? "";
-    },
-    get length() {
-      return decls()?.size ?? 0;
-    },
-    get cssText() {
-      const text = serializeInline(node._inline);
-      if (text) noteInlineSerialization();
-      return text;
-    },
-    set cssText(v: unknown) {
-      replaceInline(node, v == null ? "" : String(v), false);
-    },
-    get cssFloat() {
-      return decls()?.get("float")?.value ?? "";
-    },
-    set cssFloat(v: unknown) {
-      assignInlineProperty(node, "float", v);
-    },
-    parentRule: null,
-    [Symbol.iterator]() {
-      return [...(decls()?.keys() ?? [])][Symbol.iterator]();
-    },
-  };
-  const style = new Proxy(target as unknown as MirrorStyle, {
-    get: (t, k) => {
-      if (typeof k === "symbol" || k in t) return Reflect.get(t, k);
-      if (/^\d+$/.test(k)) {
-        const n = Number(k);
-        return n < (decls()?.size ?? 0) ? t.item(n) : undefined;
-      }
-      return decls()?.get(cssPropName(k))?.value ?? "";
-    },
-    set: (t, k, v) => {
-      if (typeof k === "symbol" || k in t) return Reflect.set(t, k, v);
-      if (/^\d+$/.test(k)) return true; // the indices are read-only
-      assignInlineProperty(node, k, v);
-      return true;
-    },
-  });
+  const style = __vn_style_object(this);
   Object.defineProperty(this, "style", { value: style, configurable: true });
-  styleDecls.add(style);
   return style;
 });
 

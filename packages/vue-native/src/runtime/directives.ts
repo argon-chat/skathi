@@ -10,7 +10,7 @@ import {
   setSelectedIndex,
 } from "./select";
 import { nextTick } from "@vue/runtime-core";
-import { hyphenate, removeInlineDecl, setInlineDecl, vShowHidden, vShowOriginalDisplay } from "./inline-style";
+import { hyphenate, inlineDisplay, setInlineDisplay, vShowHidden, vShowOriginalDisplay } from "./inline-style";
 
 const assignKey = Symbol("vnModelAssign");
 
@@ -197,8 +197,7 @@ export const vModelSelect = {
 
 function setVShowDisplay(el: MirrorElement, value: unknown): void {
   const d = value ? String(el[vShowOriginalDisplay] ?? "") : "none";
-  if (d === "") removeInlineDecl(el, "display");
-  else setInlineDecl(el, "display", d, false);
+  setInlineDisplay(el, d);
   el[vShowHidden] = !value;
 }
 export const vShow = {
@@ -210,7 +209,7 @@ export const vShow = {
           "use v-if for an animated show/hide",
       );
     }
-    const d = el._inline?.decls.get("display")?.value ?? "";
+    const d = inlineDisplay(el);
     el[vShowOriginalDisplay] = d === "none" ? "" : d;
     setVShowDisplay(el, value);
   },

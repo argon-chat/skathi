@@ -1,6 +1,5 @@
 import { defineDom, defineDomGet } from "./dom-members";
 import type { MirrorElement } from "./types";
-import { clearInline, replaceInline, styleAttribute } from "./inline-style";
 import { toLong, writeAttribute } from "./patch-prop";
 import { REFLECTED } from "./reflected";
 import type { Reflected } from "./reflected";
@@ -10,12 +9,12 @@ import { isMirrorEl, ownExpando } from "./controls";
 // `:style` and `el.style` wrote. `attrs.style` is only a marker for `hasAttribute` / `getAttributeNames`.
 const isStyleAttr = (name: unknown): boolean => String(name).toLowerCase() === "style";
 defineDom("getAttribute", function (this: MirrorElement, name: unknown) {
-  if (isStyleAttr(name)) return styleAttribute(this);
+  if (isStyleAttr(name)) return __vn_style_attr(this.__vnId);
   const v = this.attrs?.[String(name)];
   return v === undefined ? null : v;
 });
 defineDom("hasAttribute", function (this: MirrorElement, name: unknown) {
-  if (isStyleAttr(name)) return !!this._inline?.present;
+  if (isStyleAttr(name)) return __vn_style_attr(this.__vnId) !== null;
   return this.attrs ? String(name) in this.attrs : false;
 });
 defineDom("getAttributeNames", function (this: MirrorElement) {
@@ -24,14 +23,14 @@ defineDom("getAttributeNames", function (this: MirrorElement) {
 defineDom("setAttribute", function (this: MirrorElement, name: unknown, value: unknown) {
   const key = String(name);
   if (isStyleAttr(key)) {
-    replaceInline(this, String(value), true);
+    __vn_style_replace(this.__vnId, String(value), true);
     return;
   }
   writeAttribute(this, key, value == null ? "" : String(value));
 });
 defineDom("removeAttribute", function (this: MirrorElement, name: unknown) {
   if (isStyleAttr(name)) {
-    clearInline(this);
+    __vn_style_clear(this.__vnId);
     return;
   }
   writeAttribute(this, String(name), null);

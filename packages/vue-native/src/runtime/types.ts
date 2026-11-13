@@ -78,21 +78,6 @@ export interface MirrorStyle {
   [property: string]: unknown;
 }
 
-export interface InlineDecl {
-  value: string;
-  important: boolean;
-}
-
-/** The declaration block behind `el.style` AND the `style` attribute: one object, so every spelling reads and writes the same declarations. */
-export interface InlineStyleState {
-  decls: Map<string, InlineDecl>;
-  present: boolean;
-  /** The text `setAttribute("style", …)` wrote, verbatim, until a CSSOM change re-serializes it. */
-  raw: string | null;
-  /** runtime-dom's `CSS_VAR_TEXT`: what `useCssVars` set, kept across a string `:style`. */
-  cssVarText: string;
-}
-
 interface MirrorNodeBase {
   /**
    * The host node id (`VnNodeId`); `el.id` is the `id` ATTRIBUTE. 0 once the node is freed (`forgetDeep`):
@@ -246,7 +231,8 @@ export interface MirrorElement extends MirrorNodeBase {
   load(): void;
   canPlayType(type: string): string;
 
-  _inline?: InlineStyleState;
+  /** runtime-dom's `CSS_VAR_TEXT`: what `useCssVars` set, kept across a string `:style`. */
+  _cssVarText?: string;
   _vtc?: Set<string> | undefined;
   _isLeaving?: boolean;
   _endId?: number;

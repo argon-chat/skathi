@@ -46,7 +46,12 @@ const BENCHES = [
     `void getComputedStyle(el).display;`,
     `const el = document.documentElement;`,
   ),
-  bench("__vn_computed_style (raw, no parse)", 20_000, `__vn_computed_style(1);`),
+  bench(
+    "el.style.paddingLeft = … (a named property write)",
+    100_000,
+    `el.style.paddingLeft = i % 2 ? "12px" : "13px";`,
+    `const el = document.createElement("div");`,
+  ),
   bench(
     "dispatchEvent: synthesis + walk (what an event really costs)",
     100_000,

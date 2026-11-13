@@ -21,7 +21,7 @@ import { hostScroll } from "./scroll";
 import type { ScrollPos } from "./scroll";
 
 // The DOM surface on mirror nodes: reused browser components call element methods unconditionally, so a missing one
-// is a TypeError. Members answer truthfully (mirror tree, `__vn_query`, `__vn_bounds`, `__vn_computed_style`) or
+// is a TypeError. Members answer truthfully (mirror tree, `__vn_query`, `__vn_bounds`, `getComputedStyle`) or
 // return a degraded constant with one advisory.
 
 /** Any function installed on a mirror prototype; the receiver is annotated per call site so `noImplicitThis` catches a member on the wrong prototype. */

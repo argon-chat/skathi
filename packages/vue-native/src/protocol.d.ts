@@ -40,6 +40,25 @@ declare function __vn_fullscreen_window(ownerRoot: VnNodeId, on?: boolean): bool
 declare function __vn_set_style(id: VnNodeId, key: VnNameId, value: string): void;
 /** Does the engine accept `key: value` as one declaration? Absent on an older host. */
 declare function __vn_style_accepts(key: VnNameId, value: string): boolean;
+
+/** `el.style` for a mirror element: a CSSStyleDeclaration over its inline declarations, reading `__vnId` on every access. */
+declare function __vn_style_object(node: object): import("./runtime/types").MirrorStyle;
+/** `getComputedStyle(node)`: read-only, one property per read; anything that is not a mirror node reads the root's. */
+declare function __vn_computed_object(node: unknown): import("./runtime/types").MirrorStyle;
+/** runtime-dom's `setStyle` for one `:style` entry: the key as written (`backgroundColor`), `""` removes, a trailing `!important` is the priority. */
+declare function __vn_style_assign(id: VnNodeId, key: string, value: string): void;
+/** One inline declaration's value by CSS name, `""` when there is none. */
+declare function __vn_style_get(id: VnNodeId, name: string): string;
+/** `style.cssText = text`, or `setAttribute("style", text)` (`asAttribute`, which keeps `text` verbatim). */
+declare function __vn_style_replace(id: VnNodeId, text: string, asAttribute: boolean): void;
+/** `removeAttribute("style")`. */
+declare function __vn_style_clear(id: VnNodeId): void;
+/** The `style` attribute: `null` when absent. */
+declare function __vn_style_attr(id: VnNodeId): string | null;
+/** Called after an inline change that adds or removes the attribute, or every change while observed (`__vn_style_observe`). */
+declare function __vn_style_hook(hook: (id: VnNodeId, oldValue: string | null, present: boolean) => void): void;
+declare function __vn_style_observe(on: boolean): void;
+
 declare function __vn_set_class(id: VnNodeId, classes: string): void;
 /** One attribute-channel prop. `undefined` (or `null`) REMOVES it; anything else must be a string. */
 declare function __vn_set_prop(id: VnNodeId, key: VnNameId, value: string | undefined): void;
@@ -196,8 +215,6 @@ declare function __vn_query(selector: string, root: VnNodeId, mode: VnQueryMode)
 
 /** The node's rectangle at the LAST PAINTED FRAME, in client-area space. Lays out first if the tree changed, except inside an input listener, where it answers `"stale"`. */
 declare function __vn_bounds(id: VnNodeId): VnRect;
-
-declare function __vn_computed_style(id: VnNodeId): VnKvLines;
 
 type VnScrollOp = 0 | 1 | 2;
 

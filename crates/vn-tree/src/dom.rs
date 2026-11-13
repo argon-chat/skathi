@@ -133,160 +133,198 @@ fn bounds_now(id: u32) -> Option<(f32, f32, f32, f32)> {
     Some((x - ox + sx, y - oy + sy, w, h))
 }
 
-pub fn computed_style(id: u32) -> Option<String> {
+/// The properties `getComputedStyle` answers, besides every custom property. Each ALWAYS has a value: a
+/// browser's computed style has no "absent", and a component that reads `display` expects a keyword, not "".
+pub const COMPUTED_PROPERTIES: &[&str] = &[
+    "display",
+    "position",
+    "visibility",
+    "overflow-x",
+    "overflow-y",
+    "overflow",
+    "scrollbar-gutter",
+    "opacity",
+    "z-index",
+    "pointer-events",
+    "transform",
+    "translate",
+    "rotate",
+    "scale",
+    "perspective",
+    "filter",
+    "will-change",
+    "contain",
+    "container-type",
+    "backdrop-filter",
+    "animation-name",
+    "animation-duration",
+    "animation-delay",
+    "animation-fill-mode",
+    "transition-property",
+    "transition-duration",
+    "transition-delay",
+    "width",
+    "height",
+    "direction",
+    "font-size",
+    "color",
+];
+
+/// One computed property of `id` (a [`COMPUTED_PROPERTIES`] name or a custom property); `None` for a node
+/// not in the tree, or a name outside both.
+pub fn computed_value(id: u32, name: &str) -> Option<String> {
+    tree::flush_pending_style();
+    tree::read_tree(|t| computed_in(t, id, name))
+}
+
+/// `(name, value)` for every [`COMPUTED_PROPERTIES`] entry, then each custom property.
+pub fn computed_entries(id: u32) -> Option<Vec<(String, String)>> {
     tree::flush_pending_style();
     tree::read_tree(|t| {
-        let default = vn_css::ComputedStates::default();
-        let cs = t.node(id)?.computed.as_ref().unwrap_or(&default);
-        let mut out = String::new();
-        let mut put = |k: &str, v: String| {
-            out.push_str(k);
-            out.push('=');
-            out.push_str(&v);
-            out.push('\n');
-        };
-
-        // Every property in the published set ALWAYS has a value: a browser's computed style has no
-        // "absent", and a component that reads `display` expects a keyword, not "".
-        put(
-            "display",
-            match cs.base.display.unwrap_or(gpui::Display::Block) {
-                gpui::Display::Block => "block",
-                gpui::Display::Flex => "flex",
-                gpui::Display::Grid => "grid",
-                gpui::Display::None => "none",
-            }
-            .into(),
-        );
-        // `fixed` is laid out as absolute (see the mapper) but the AUTHORED value is what a
-        // component reads back, and @floating-ui branches on exactly this string.
-        put(
-            "position",
-            match (cs.extras.fixed, cs.base.position) {
-                (Some(true), _) => "fixed",
-                (_, Some(gpui::Position::Absolute)) => "absolute",
-                (_, Some(gpui::Position::Relative)) => "relative",
-                (_, None) => "static",
-            }
-            .into(),
-        );
-        // The CSS value, inherited, not gpui's paint switch: a screen-reader-only box paints nothing
-        // but is `visible` (render::css_visible).
-        put("visibility", if crate::render::css_visible(t, id) { "visible" } else { "hidden" }.into());
-        // `auto` and `clip` as computed (vn_css::Extras::overflow_names), not the `scroll` and
-        // `hidden` gpui folds them into.
-        let [overflow_x, overflow_y] = cs.extras.overflow_names(&cs.base);
-        put("overflow-x", overflow_x.into());
-        put("overflow-y", overflow_y.into());
-        put(
-            "overflow",
-            if overflow_x == overflow_y { overflow_x.to_string() } else { format!("{overflow_x} {overflow_y}") },
-        );
-        // `auto` is the CSS initial value AND an exact description of what we do: gpui's scrollbars
-        // are overlays, so no gutter is ever reserved and none can be. (Reka's scroll lock reads it.)
-        put("scrollbar-gutter", "auto".into());
-        put("opacity", format!("{}", cs.base.opacity.unwrap_or(1.0)));
-        put(
-            "z-index",
-            cs.extras.z().map(|z| z.to_string()).unwrap_or_else(|| "auto".into()),
-        );
-        put(
-            "pointer-events",
-            if cs.extras.pointer_events_none == Some(true) { "none" } else { "auto" }.into(),
-        );
-        // The function list, not the `matrix()` a browser resolves to: it is what the cascade holds,
-        // and floating-ui only tests it against `"none"`.
-        put("transform", transform_text(cs.base.vn_transform));
-        // The individual transform properties are not mapped (`transform` is the only one that
-        // applies), plus three not implemented.
-        for name in ["translate", "rotate", "scale", "perspective", "filter"] {
-            put(name, "none".into());
-        }
-        put("will-change", "auto".into());
-        put("contain", "none".into());
-        put("container-type", "normal".into());
-        put(
-            "backdrop-filter",
-            match cs.base.backdrop_blur {
-                Some(r) => format!("blur({}px)", f32::from(r)),
-                None => "none".into(),
-            },
-        );
-        // reka-ui's `Presence` reads `animationName` to decide whether to wait for `animationend`, so
-        // this must be the truth or an exit animation never plays or never finishes.
-        if cs.animations.is_empty() {
-            put("animation-name", "none".into());
-            put("animation-duration", "0s".into());
-            put("animation-delay", "0s".into());
-            put("animation-fill-mode", "none".into());
-        } else {
-            let join = |f: &dyn Fn(&vn_css::AnimationSpec) -> String| {
-                cs.animations.iter().map(f).collect::<Vec<_>>().join(", ")
-            };
-            put("animation-name", join(&|s| {
-                if s.name.is_empty() { "none".into() } else { s.name.to_string() }
-            }));
-            put("animation-duration", join(&|s| secs(s.duration)));
-            put("animation-delay", join(&|s| secs(s.delay)));
-            put(
-                "animation-fill-mode",
-                join(&|s| {
-                    match s.fill {
-                        vn_css::FillMode::None => "none",
-                        vn_css::FillMode::Forwards => "forwards",
-                        vn_css::FillMode::Backwards => "backwards",
-                        vn_css::FillMode::Both => "both",
-                    }
-                    .to_string()
-                }),
-            );
-        }
-        if cs.transitions.is_empty() {
-            put("transition-property", "all".into());
-            put("transition-duration", "0s".into());
-            put("transition-delay", "0s".into());
-        } else {
-            let join = |f: &dyn Fn(&vn_css::TransitionSpec) -> String| {
-                cs.transitions.iter().map(f).collect::<Vec<_>>().join(", ")
-            };
-            put("transition-property", join(&|s| s.property.name().to_string()));
-            put("transition-duration", join(&|s| secs(s.duration)));
-            put("transition-delay", join(&|s| secs(s.delay)));
-        }
-        let (w, h) = crate::render::bounds_of(id).map(|(_, _, w, h)| (w, h)).unwrap_or((0.0, 0.0));
-        put("width", format!("{w}px"));
-        put("height", format!("{h}px"));
-        put("direction", "ltr".into());
-        let mut color = None;
-        let mut at = id;
-        while let Some(n) = t.node(at) {
-            if let Some(c) = n.computed.as_ref() {
-                color = color.or(c.base.text.color);
-            }
-            if color.is_some() || n.parent == 0 || n.parent == at {
-                break;
-            }
-            at = n.parent;
-        }
-        let mut px = None;
-        let mut at = id;
-        while let Some(n) = t.node(at) {
-            if let Some(c) = n.computed.as_ref() {
-                px = Some(c.font_size);
-                break;
-            }
-            if n.parent == 0 || n.parent == at {
-                break;
-            }
-            at = n.parent;
-        }
-        let px = px.unwrap_or_else(vn_css::rem_basis);
-        put("font-size", format!("{px}px"));
-        put("color", css_rgb(color.unwrap_or_else(gpui::black)));
-        for (name, value) in cs.vars.iter() {
-            put(name, value.to_string());
+        let n = t.node(id)?;
+        let mut out: Vec<(String, String)> = COMPUTED_PROPERTIES
+            .iter()
+            .filter_map(|&k| computed_in(t, id, k).map(|v| (k.to_string(), v)))
+            .collect();
+        if let Some(cs) = n.computed.as_ref() {
+            out.extend(cs.vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
         }
         Some(out)
+    })
+}
+
+#[cfg(test)]
+/// [`computed_entries`] as `name=value` lines.
+pub fn computed_style(id: u32) -> Option<String> {
+    let mut out = String::new();
+    for (k, v) in computed_entries(id)? {
+        out.push_str(&k);
+        out.push('=');
+        out.push_str(&v);
+        out.push('\n');
+    }
+    Some(out)
+}
+
+fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
+    let default = vn_css::ComputedStates::default();
+    let cs = t.node(id)?.computed.as_ref().unwrap_or(&default);
+    if name.starts_with("--") {
+        return cs.vars.get(name).map(str::to_string);
+    }
+    let animations = |f: &dyn Fn(&vn_css::AnimationSpec) -> String| {
+        cs.animations.iter().map(f).collect::<Vec<_>>().join(", ")
+    };
+    let transitions = |f: &dyn Fn(&vn_css::TransitionSpec) -> String| {
+        cs.transitions.iter().map(f).collect::<Vec<_>>().join(", ")
+    };
+    Some(match name {
+        "display" => match cs.base.display.unwrap_or(gpui::Display::Block) {
+            gpui::Display::Block => "block",
+            gpui::Display::Flex => "flex",
+            gpui::Display::Grid => "grid",
+            gpui::Display::None => "none",
+        }
+        .into(),
+        // `fixed` is laid out as absolute (see the mapper) but the AUTHORED value is what a
+        // component reads back, and @floating-ui branches on exactly this string.
+        "position" => match (cs.extras.fixed, cs.base.position) {
+            (Some(true), _) => "fixed",
+            (_, Some(gpui::Position::Absolute)) => "absolute",
+            (_, Some(gpui::Position::Relative)) => "relative",
+            (_, None) => "static",
+        }
+        .into(),
+        // The CSS value, inherited, not gpui's paint switch: a screen-reader-only box paints nothing
+        // but is `visible` (render::css_visible).
+        "visibility" => if crate::render::css_visible(t, id) { "visible" } else { "hidden" }.into(),
+        // `auto` and `clip` as computed (vn_css::Extras::overflow_names), not the `scroll` and
+        // `hidden` gpui folds them into.
+        "overflow-x" | "overflow-y" | "overflow" => {
+            let [x, y] = cs.extras.overflow_names(&cs.base);
+            match name {
+                "overflow-x" => x.to_string(),
+                "overflow-y" => y.to_string(),
+                _ if x == y => x.to_string(),
+                _ => format!("{x} {y}"),
+            }
+        }
+        // `auto` is the CSS initial value AND an exact description of what we do: gpui's scrollbars
+        // are overlays, so no gutter is ever reserved and none can be. (Reka's scroll lock reads it.)
+        "scrollbar-gutter" => "auto".into(),
+        "opacity" => format!("{}", cs.base.opacity.unwrap_or(1.0)),
+        "z-index" => cs.extras.z().map(|z| z.to_string()).unwrap_or_else(|| "auto".into()),
+        "pointer-events" => if cs.extras.pointer_events_none == Some(true) { "none" } else { "auto" }.into(),
+        // The function list, not the `matrix()` a browser resolves to: it is what the cascade holds,
+        // and floating-ui only tests it against `"none"`.
+        "transform" => transform_text(cs.base.vn_transform),
+        // The individual transform properties are not mapped (`transform` is the only one that
+        // applies), plus three not implemented.
+        "translate" | "rotate" | "scale" | "perspective" | "filter" => "none".into(),
+        "will-change" => "auto".into(),
+        "contain" => "none".into(),
+        "container-type" => "normal".into(),
+        "backdrop-filter" => match cs.base.backdrop_blur {
+            Some(r) => format!("blur({}px)", f32::from(r)),
+            None => "none".into(),
+        },
+        // reka-ui's `Presence` reads `animationName` to decide whether to wait for `animationend`, so
+        // this must be the truth or an exit animation never plays or never finishes.
+        "animation-name" if cs.animations.is_empty() => "none".into(),
+        "animation-duration" | "animation-delay" if cs.animations.is_empty() => "0s".into(),
+        "animation-fill-mode" if cs.animations.is_empty() => "none".into(),
+        "animation-name" => animations(&|s| if s.name.is_empty() { "none".into() } else { s.name.to_string() }),
+        "animation-duration" => animations(&|s| secs(s.duration)),
+        "animation-delay" => animations(&|s| secs(s.delay)),
+        "animation-fill-mode" => animations(&|s| {
+            match s.fill {
+                vn_css::FillMode::None => "none",
+                vn_css::FillMode::Forwards => "forwards",
+                vn_css::FillMode::Backwards => "backwards",
+                vn_css::FillMode::Both => "both",
+            }
+            .to_string()
+        }),
+        "transition-property" if cs.transitions.is_empty() => "all".into(),
+        "transition-duration" | "transition-delay" if cs.transitions.is_empty() => "0s".into(),
+        "transition-property" => transitions(&|s| s.property.name().to_string()),
+        "transition-duration" => transitions(&|s| secs(s.duration)),
+        "transition-delay" => transitions(&|s| secs(s.delay)),
+        "width" | "height" => {
+            let (w, h) = crate::render::bounds_of(id).map(|(_, _, w, h)| (w, h)).unwrap_or((0.0, 0.0));
+            format!("{}px", if name == "width" { w } else { h })
+        }
+        "direction" => "ltr".into(),
+        "font-size" => {
+            let mut px = None;
+            let mut at = id;
+            while let Some(n) = t.node(at) {
+                if let Some(c) = n.computed.as_ref() {
+                    px = Some(c.font_size);
+                    break;
+                }
+                if n.parent == 0 || n.parent == at {
+                    break;
+                }
+                at = n.parent;
+            }
+            format!("{}px", px.unwrap_or_else(vn_css::rem_basis))
+        }
+        "color" => {
+            let mut color = None;
+            let mut at = id;
+            while let Some(n) = t.node(at) {
+                if let Some(c) = n.computed.as_ref() {
+                    color = color.or(c.base.text.color);
+                }
+                if color.is_some() || n.parent == 0 || n.parent == at {
+                    break;
+                }
+                at = n.parent;
+            }
+            css_rgb(color.unwrap_or_else(gpui::black))
+        }
+        _ => return None,
     })
 }
 

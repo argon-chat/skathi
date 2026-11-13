@@ -159,11 +159,13 @@ defineGlobal(
         },
       });
       observers.add(this);
+      __vn_style_observe(true);
     }
     disconnect() {
       this._targets.length = 0;
       this._records.length = 0;
       observers.delete(this);
+      if (!observers.size) __vn_style_observe(false);
     }
     takeRecords() {
       return this._records.splice(0, this._records.length);

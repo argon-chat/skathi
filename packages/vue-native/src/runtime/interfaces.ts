@@ -322,8 +322,6 @@ if (NodeIface && Object.getPrototypeOf(AttrImpl.prototype) !== NodeIface.prototy
   Object.setPrototypeOf(AttrImpl.prototype, NodeIface.prototype);
 }
 defineInterface("NamedNodeMap", (x) => x instanceof NamedNodeMapImpl, null);
-export const styleDecls = new WeakSet<object>();
-defineInterface("CSSStyleDeclaration", (x) => !!x && typeof x === "object" && styleDecls.has(x), null);
 
 // -- SVG and MathML elements: `instanceof SVGElement` / `MathMLElement` / the tag's interface, never HTMLElement (Vue's Teleport and motion's scroll offsets test these).
 const SVG_INTERFACES: readonly (readonly [name: string, parent: string, tags: readonly string[]])[] = [

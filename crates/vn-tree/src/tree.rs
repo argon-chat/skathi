@@ -162,6 +162,10 @@ pub struct Node {
     pub scopes: Vec<String>,
     pub listeners: u64,
     pub(crate) inline_dirty: bool,
+    /// Whether the element has a `style` attribute: set by any inline write, cleared only by removing it.
+    pub style_present: bool,
+    /// The attribute text as `setAttribute("style", …)` wrote it, until the next inline write.
+    pub style_raw: Option<String>,
     /// Bumped on the node and every ancestor by [`Tree::touch`]. Upwards only: a mutation cannot
     /// reach outside its subtree except through the cascade, which touches changed nodes itself.
     pub(crate) sub_rev: u64,
@@ -461,6 +465,8 @@ impl Tree {
             scopes: Vec::new(),
             listeners: 0,
             inline_dirty: false,
+            style_present: false,
+            style_raw: None,
             sub_rev: 0,
             mark_gen: 0,
             desc_gen: 0,

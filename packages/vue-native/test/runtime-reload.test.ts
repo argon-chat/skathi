@@ -82,7 +82,6 @@ describe("a same-realm reload", () => {
       "HTMLInputElement",
       "Window",
       "Text",
-      "CSSStyleDeclaration",
     ];
     const before = Object.fromEntries(names.map((n) => [n, g[n]]));
     for (const n of names) expect([n, typeof before[n]]).not.toEqual([n, "undefined"]);

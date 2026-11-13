@@ -20,6 +20,8 @@ mod fullscreen;
 mod idmap;
 pub mod iframe;
 mod img;
+mod inline_style;
+mod style_decl;
 mod live;
 mod live_state;
 pub mod log;
@@ -277,11 +279,6 @@ host_fn!(fn vn_bounds(_g, args) {
     ret_string(&out)
 });
 
-host_fn!(fn vn_computed_style(_g, args) {
-    let id = arg_id(args.arg(0));
-    perf::note_read(perf::Read::Style);
-    ret_string(&dom::computed_style(id).unwrap_or_default())
-});
 
 // op 0 read, 1 set absolute (NaN leaves an axis alone), 2 scroll by (NaN is 0). Answers
 // `"left,top,scrollWidth,scrollHeight"` in CSS px, or `""` for a node that is not a scroll container.
@@ -448,7 +445,6 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_set_dispatcher", 1, vn_set_dispatcher as *const _),
         ("__vn_query", 3, vn_query as *const _),
         ("__vn_bounds", 1, vn_bounds as *const _),
-        ("__vn_computed_style", 1, vn_computed_style as *const _),
         ("__vn_scroll", 4, vn_scroll as *const _),
         ("__vn_scroll_into_view", 3, vn_scroll_into_view as *const _),
         ("__vn_focus", 2, vn_focus as *const _),
@@ -466,6 +462,7 @@ pub fn install(rt: &JsRuntime) {
         rt.register(name, *arity, *f);
     }
     waapi::install(rt);
+    style_decl::install(rt);
     selection::install(rt);
     pointer::install(rt);
     observe::install(rt);

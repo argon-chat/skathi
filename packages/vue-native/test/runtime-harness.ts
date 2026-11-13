@@ -32,6 +32,7 @@ import type { WaapiHost } from "../src/waapi";
 import { bundleRuntime, readTsSource } from "./ts-source";
 import { createReferenceWaapiCore, referenceEffect, referenceValues } from "./fixtures/waapi-core-reference";
 import { ENGINE_CLASSES } from "./fixtures/engine-classes";
+import { styleHost } from "./fixtures/engine-style";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const RUNTIME_PATH = join(HERE, "../src/runtime.ts");
@@ -623,6 +624,13 @@ export function createRuntime(
     return i;
   };
   const nameOf = (id: number): string => host.names[id]!;
+  let rootId = 0;
+  const style = styleHost({
+    op: (id, name, value) => host.styles.push({ id, key: name, value }),
+    computed: (id) => host.computedById.get(id) ?? "",
+    root: () => rootId,
+    warnCompat,
+  });
 
   // A private `globalThis` per world: runtime.js installs missing DOM globals on it, and each test needs its own set.
   // redjs's `document.createElement`: a "dumb" element on HTMLElement.prototype with only a `tagName`, outside the
@@ -648,6 +656,7 @@ export function createRuntime(
     // bundle evaluates, and runtime-window's tests fake it the same way; carry it into the private world.
     __VN_WINDOW__: (globalThis as { __VN_WINDOW__?: unknown }).__VN_WINDOW__,
     ...ENGINE_CLASSES,
+    CSSStyleDeclaration: style.CSSStyleDeclaration,
     Blob: globalThis.Blob,
     DOMException: globalThis.DOMException,
     // Whatever a test says the prelude put on the global before the bundle ran.
@@ -699,7 +708,6 @@ export function createRuntime(
     "__vn_log",
     "__vn_query",
     "__vn_bounds",
-    "__vn_computed_style",
     "__vn_scroll",
     "__vn_scroll_into_view",
     "__vn_focus",
@@ -738,6 +746,7 @@ export function createRuntime(
     "shellHost",
     "hasWarned",
     "warnCompat",
+    ...Object.keys(style.fns),
   ];
   const devtoolsState = () => ({
     enabled: host.devtools.enabled,
@@ -794,7 +803,7 @@ export function createRuntime(
       host.sheets.push(parts.join("\n"));
     },
     (id: number, code: unknown, on: unknown) => host.listeners.push({ id, code, on }),
-    () => tree.create("root"),
+    () => (rootId = tree.create("root")),
     (fn: Dispatcher) => {
       host.dispatcher = fn;
     },
@@ -804,7 +813,6 @@ export function createRuntime(
       return host.queryAnswers.get(`${selector}|${mode}`) ?? host.queryAnswers.get(selector) ?? "";
     },
     (id: number) => host.boundsById.get(id) ?? "",
-    (id: number) => host.computedById.get(id) ?? "",
     (id: number, op: number, x: number, y: number) => {
       host.scrollCalls.push({ id, op, x, y });
       const s = host.scrollById.get(id);
@@ -960,6 +968,7 @@ export function createRuntime(
     shellHost,
     hasWarned,
     warnCompat,
+    ...Object.values(style.fns),
   ];
   if (options.selection === false) {
     const first = params.indexOf("__vn_selection_get");

@@ -79,6 +79,7 @@ function teardownDocumentRoot(root: MirrorElement, unmount?: () => void): void {
   globalThis.__VN_TEARDOWN__ = undefined;
   appRoot = null;
   observers.clear();
+  __vn_style_observe(false);
   for (const map of globalHandlers.values()) {
     for (const buckets of Object.values(map)) {
       if (buckets) for (const entry of [...buckets.extraC, ...buckets.extraB]) disposeGlobalListener(entry);
