@@ -263,21 +263,18 @@ fn writables() -> &'static Mutex<HashMap<u64, Arc<Mutex<Writable>>>> {
 
 static NEXT_WRITABLE: AtomicU64 = AtomicU64::new(1);
 
-fn token_json(token: u32) -> String {
-    format!("{{\"token\":{token}}}")
-}
 
 fn closed() -> Fail {
     Fail::new("InvalidStateError", super::INVALID_STATE)
 }
 
-pub fn start_open(file: u64, keep: bool) -> String {
+pub fn start_open(file: u64, keep: bool) -> Result<u32, Fail> {
     let e = match granted(file) {
         Ok(e) => e,
-        Err(f) => return f.to_sync_json(),
+        Err(f) => return Err(f),
     };
     if e.kind != Kind::File {
-        return Fail::new("TypeMismatchError", TYPE_MISMATCH).to_sync_json();
+        return Err(Fail::new("TypeMismatchError", TYPE_MISMATCH));
     }
     let token = crate::next_token();
     pool::submit(token, move || {
@@ -286,41 +283,41 @@ pub fn start_open(file: u64, keep: bool) -> String {
         writables().lock().unwrap_or_else(|p| p.into_inner()).insert(id, Arc::new(Mutex::new(w)));
         Ok(Done::json(&json!({ "w": id }).to_string()))
     });
-    token_json(token)
+    Ok(token)
 }
 
 fn get(w: u64) -> Option<Arc<Mutex<Writable>>> {
     writables().lock().unwrap_or_else(|p| p.into_inner()).get(&w).cloned()
 }
 
-fn run_on(w: u64, op: impl FnOnce(&mut Writable) -> Result<(), Fail> + Send + 'static) -> String {
-    let Some(wr) = get(w) else { return closed().to_sync_json() };
+fn run_on(w: u64, op: impl FnOnce(&mut Writable) -> Result<(), Fail> + Send + 'static) -> Result<u32, Fail> {
+    let Some(wr) = get(w) else { return Err(closed()) };
     let token = crate::next_token();
     pool::submit(token, move || {
         op(&mut wr.lock().unwrap_or_else(|p| p.into_inner()))?;
         Ok(Done::json("{}"))
     });
-    token_json(token)
+    Ok(token)
 }
 
-pub fn start_write(w: u64, position: Option<u64>, data: Data) -> String {
+pub fn start_write(w: u64, position: Option<u64>, data: Data) -> Result<u32, Fail> {
     run_on(w, move |wr| wr.write(position, &data))
 }
 
-pub fn start_seek(w: u64, position: u64) -> String {
+pub fn start_seek(w: u64, position: u64) -> Result<u32, Fail> {
     run_on(w, move |wr| {
         wr.seek(position);
         Ok(())
     })
 }
 
-pub fn start_truncate(w: u64, size: u64) -> String {
+pub fn start_truncate(w: u64, size: u64) -> Result<u32, Fail> {
     run_on(w, move |wr| wr.truncate(size))
 }
 
-fn finish(w: u64, close: bool) -> String {
+fn finish(w: u64, close: bool) -> Result<u32, Fail> {
     let Some(wr) = writables().lock().unwrap_or_else(|p| p.into_inner()).remove(&w) else {
-        return closed().to_sync_json();
+        return Err(closed());
     };
     let token = crate::next_token();
     pool::submit(token, move || {
@@ -338,14 +335,14 @@ fn finish(w: u64, close: bool) -> String {
         }
         Ok(Done::json("{}"))
     });
-    token_json(token)
+    Ok(token)
 }
 
-pub fn start_close(w: u64) -> String {
+pub fn start_close(w: u64) -> Result<u32, Fail> {
     finish(w, true)
 }
 
-pub fn start_abort(w: u64) -> String {
+pub fn start_abort(w: u64) -> Result<u32, Fail> {
     finish(w, false)
 }
 

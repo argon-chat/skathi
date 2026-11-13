@@ -464,9 +464,8 @@ pub fn scripted_mode() -> bool {
 
 pub const ALREADY_ACTIVE: &str = "File picker already active.";
 
-/// `__vn_dialog_open(json, currentFiles)` and `__vn_download(…)`: a picker is refused if its owner already
-/// has a dialog open; a download waits for it.
-pub fn start(native: Native, then: Then, label: &'static str) -> String {
+/// A picker is refused if its owner already has a dialog open; a download waits for it.
+pub fn start(native: Native, then: Then, label: &'static str) -> Result<u32, Fail> {
     start_owned(RESOLVER.get().and_then(|f| f()), native, then, label)
 }
 
@@ -493,18 +492,18 @@ fn wait_turn(st: &OwnerState, ticket: u64, cancel: &Cancellation) -> bool {
     true
 }
 
-fn start_owned(owner: Option<Owner>, native: Native, then: Then, label: &'static str) -> String {
+fn start_owned(owner: Option<Owner>, native: Native, then: Then, label: &'static str) -> Result<u32, Fail> {
     let key = owner.map(|o| o.key).unwrap_or(0);
     let hwnd = owner.map(|o| o.hwnd).unwrap_or(0);
     let st = owner_state(key);
     let token = crate::next_token();
     if st.closed.load(Ordering::Acquire) {
         crate::settle(token, Ok(cancelled()));
-        return format!("{{\"token\":{token}}}");
+        return Ok(token);
     }
     let queued = matches!(then, Then::Download(_));
     if !queued && st.active.swap(true, Ordering::AcqRel) {
-        return Fail::new("NotAllowedError", ALREADY_ACTIVE).code("EBUSY").to_sync_json();
+        return Err(Fail::new("NotAllowedError", ALREADY_ACTIVE).code("EBUSY"));
     }
     let ticket = st.ticket.fetch_add(1, Ordering::AcqRel);
     if queued {
@@ -537,26 +536,26 @@ fn start_owned(owner: Option<Owner>, native: Native, then: Then, label: &'static
         } else {
             st.active.store(false, Ordering::Release);
         }
-        return Fail::new("InvalidStateError", "could not start the dialog thread").code("EIO").to_sync_json();
+        return Err(Fail::new("InvalidStateError", "could not start the dialog thread").code("EIO"));
     }
-    format!("{{\"token\":{token}}}")
+    Ok(token)
 }
 
 fn cancelled() -> String {
     "{\"cancelled\":true}".to_string()
 }
 
-pub fn start_open(req: &str, prev: Vec<PathBuf>) -> String {
+pub fn start_open(req: &str, prev: Vec<PathBuf>) -> Result<u32, Fail> {
     if let Ok(request) = serde_json::from_str::<Json>(req) {
         if request["kind"] == "color" { return color::start(request["value"].as_str().unwrap_or("#000000")); }
     }
     match parse(req, prev) {
         Ok((native, then)) => start(native, then, "picker"),
-        Err(f) => f.to_sync_json(),
+        Err(f) => Err(f),
     }
 }
 
-pub fn start_download(data: Data, name: String) -> String {
+pub fn start_download(data: Data, name: String) -> Result<u32, Fail> {
     let native = Native {
         kind: Kind::Save,
         multiple: false,
@@ -838,7 +837,7 @@ mod tests {
         }
     }
 
-    fn open(owner: Option<Owner>, req: &str, prev: Vec<PathBuf>) -> String {
+    fn open(owner: Option<Owner>, req: &str, prev: Vec<PathBuf>) -> Result<u32, Fail> {
         let (n, then) = parse(req, prev).unwrap();
         start_owned(owner, n, then, "picker")
     }
@@ -852,23 +851,23 @@ mod tests {
         let o = owner();
         let key = o.unwrap().key;
         let req = r#"{"kind":"open","multiple":true,"result":"files"}"#;
-        let t = token_of(&open(o, req, vec![]));
+        let t = token_of(open(o, req, vec![]));
         let id = pending_of(key);
-        let second: Json = serde_json::from_str(&open(o, req, vec![])).unwrap();
-        assert_eq!((second["name"].as_str(), second["error"].as_str()), (Some("NotAllowedError"), Some(ALREADY_ACTIVE)));
+        let second = open(o, req, vec![]).unwrap_err();
+        assert_eq!((second.name, second.message.as_str()), ("NotAllowedError", ALREADY_ACTIVE));
         assert!(scripted::answer(id, vec![s.0.join("missing.txt")]).is_err());
         assert!(scripted::answer(id, vec![PathBuf::from("relative.txt")]).is_err());
         scripted::answer(id, vec![a.clone(), b.clone()]).unwrap();
         let got = wait_for_settles(&[t]);
         assert_eq!(got[&t], (true, r#"{"files":2}"#.to_string()));
         assert!(is_idle(key));
-        let t = token_of(&open(o, req, vec![a.clone(), b.clone()]));
+        let t = token_of(open(o, req, vec![a.clone(), b.clone()]));
         scripted::answer(pending_of(key), vec![a.clone(), b.clone()]).unwrap();
         assert_eq!(wait_for_settles(&[t])[&t], (true, cancelled()));
-        let t = token_of(&open(o, req, vec![]));
+        let t = token_of(open(o, req, vec![]));
         scripted::cancel(pending_of(key)).unwrap();
         assert_eq!(wait_for_settles(&[t])[&t], (true, cancelled()));
-        let t = token_of(&open(o, r#"{"kind":"open","result":"handles"}"#, vec![]));
+        let t = token_of(open(o, r#"{"kind":"open","result":"handles"}"#, vec![]));
         let id = pending_of(key);
         assert!(scripted::answer(id, vec![a.clone(), b.clone()]).is_err());
         scripted::answer(id, vec![a.clone()]).unwrap();
@@ -884,7 +883,7 @@ mod tests {
     fn a_closing_owner_cancels_its_dialog_and_refuses_new_ones() {
         let o = owner();
         let key = o.unwrap().key;
-        let t = token_of(&open(o, r#"{"kind":"open","result":"handles"}"#, vec![]));
+        let t = token_of(open(o, r#"{"kind":"open","result":"handles"}"#, vec![]));
         let _ = pending_of(key);
         assert!(!is_idle(key));
         assert!(owner_closing(key), "a dialog is still running on it");
@@ -898,7 +897,7 @@ mod tests {
         let o2 = owner();
         let k2 = o2.unwrap().key;
         owner_state(k2).closed.store(true, Ordering::Release);
-        let t = token_of(&open(o2, r#"{"kind":"open","result":"handles"}"#, vec![]));
+        let t = token_of(open(o2, r#"{"kind":"open","result":"handles"}"#, vec![]));
         assert_eq!(wait_for_settles(&[t])[&t], (true, cancelled()));
     }
 
@@ -914,7 +913,7 @@ mod tests {
         let rel: Vec<String> = walk(&root).unwrap().into_iter().map(|(_, r)| r).collect();
         assert_eq!(rel, ["proj/a/x.txt", "proj/a/y/z.txt", "proj/b.txt", "proj/c.txt"]);
         let o = owner();
-        let t = token_of(&open(o, r#"{"kind":"folder","result":"files"}"#, vec![]));
+        let t = token_of(open(o, r#"{"kind":"folder","result":"files"}"#, vec![]));
         let id = pending_of(o.unwrap().key);
         assert!(scripted::answer(id, vec![root.join("b.txt")]).is_err(), "a folder pick takes a folder");
         scripted::answer(id, vec![root.clone()]).unwrap();
@@ -928,7 +927,7 @@ mod tests {
         std::fs::write(&target, b"old contents").unwrap();
         let o = owner();
         let key = o.unwrap().key;
-        let t = token_of(&open(o, r#"{"kind":"save","suggestedName":"out.txt"}"#, vec![]));
+        let t = token_of(open(o, r#"{"kind":"save","suggestedName":"out.txt"}"#, vec![]));
         let id = pending_of(key);
         assert!(scripted::answer(id, vec![s.0.join("no-such-dir").join("x.txt")]).is_err());
         scripted::answer(id, vec![target.clone()]).unwrap();
@@ -950,7 +949,7 @@ mod tests {
             suggested_name: Some("report.csv".into()),
             default_ext: Some("csv".into()),
         };
-        let t = token_of(&start_owned(o, n, Then::Download(Data::Bytes(b"a,b\n1,2\n".to_vec())), "download"));
+        let t = token_of(start_owned(o, n, Then::Download(Data::Bytes(b"a,b\n1,2\n".to_vec())), "download"));
         let id = pending_of(key);
         let listed = scripted::list();
         let v = listed.as_array().unwrap().iter().find(|v| v["id"] == id).unwrap();
@@ -964,7 +963,7 @@ mod tests {
         assert!(!names.iter().any(|n| n.contains(".vnswap")), "no swap left: {names:?}");
     }
 
-    fn download(o: Option<Owner>, name: &str, bytes: &[u8]) -> String {
+    fn download(o: Option<Owner>, name: &str, bytes: &[u8]) -> Result<u32, Fail> {
         let n = Native {
             kind: Kind::Save,
             multiple: false,
@@ -988,10 +987,10 @@ mod tests {
         let s = Scratch::new("dialog-queue");
         let o = owner();
         let key = o.unwrap().key;
-        let picker = token_of(&open(o, r#"{"kind":"open","result":"handles"}"#, vec![]));
+        let picker = token_of(open(o, r#"{"kind":"open","result":"handles"}"#, vec![]));
         let first = pending_of(key);
-        let d1 = token_of(&download(o, "one.txt", b"1"));
-        let d2 = token_of(&download(o, "two.txt", b"2"));
+        let d1 = token_of(download(o, "one.txt", b"1"));
+        let d2 = token_of(download(o, "two.txt", b"2"));
         std::thread::sleep(QUEUE_POLL * 3);
         assert_eq!(pending_count(key), 1, "only the picker is in front of the user");
         scripted::cancel(first).unwrap();
@@ -1015,9 +1014,9 @@ mod tests {
         assert_eq!(std::fs::read(s.0.join("two.txt")).unwrap(), b"2");
         let o = owner();
         let key = o.unwrap().key;
-        let picker = token_of(&open(o, r#"{"kind":"open","result":"handles"}"#, vec![]));
+        let picker = token_of(open(o, r#"{"kind":"open","result":"handles"}"#, vec![]));
         let _ = pending_of(key);
-        let queued = token_of(&download(o, "never.txt", b"x"));
+        let queued = token_of(download(o, "never.txt", b"x"));
         assert!(owner_closing(key));
         let got = wait_for_settles(&[picker, queued]);
         assert_eq!((got[&picker].1.as_str(), got[&queued].1.as_str()), (cancelled().as_str(), cancelled().as_str()));

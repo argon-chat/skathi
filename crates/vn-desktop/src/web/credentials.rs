@@ -297,7 +297,7 @@ unsafe fn make_credential(
     obj
 }
 
-unsafe fn created(g: *mut c_void, token: u32, v: &Json) -> Result<u64, u64> {
+unsafe fn created(g: *mut c_void, token: u32, v: &Json, _made: u64) -> Result<u64, u64> {
     let (client_data, cred_props) = CONTEXT
         .with(|c| c.borrow_mut().remove(&token))
         .unwrap_or_default();
@@ -326,7 +326,7 @@ unsafe fn created(g: *mut c_void, token: u32, v: &Json) -> Result<u64, u64> {
     ))
 }
 
-unsafe fn asserted(g: *mut c_void, token: u32, v: &Json) -> Result<u64, u64> {
+unsafe fn asserted(g: *mut c_void, token: u32, v: &Json, _made: u64) -> Result<u64, u64> {
     let (client_data, _) = CONTEXT
         .with(|c| c.borrow_mut().remove(&token))
         .unwrap_or_default();

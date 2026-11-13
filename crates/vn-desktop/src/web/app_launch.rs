@@ -66,10 +66,8 @@ unsafe fn make_params(g: *mut c_void, url: Option<String>, handles: &Json) -> u6
     let files = new_array(g);
     let mut n = 0;
     for wire in handles.as_array().into_iter().flatten().filter(|w| w["h"].is_u64()) {
-        if let Ok(h) = crate::make_handle(g, wire) {
-            set_i(g, files, n, h);
-            n += 1;
-        }
+        set_i(g, files, n, super::fsa::from_wire(g, wire));
+        n += 1;
     }
     let object = get(g, host::global(g), "Object");
     let files = call(g, get(g, object, "freeze"), object, &[files]).unwrap_or(files);

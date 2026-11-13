@@ -208,7 +208,7 @@ mod tests {
         let o = owner();
         let key = o.unwrap().key;
         let (n, then) = parse(r#"{"kind":"open","result":"handles"}"#, vec![]).unwrap();
-        let picker = crate::tests::token_of(&start_owned(o, n, then, "picker"));
+        let picker = crate::tests::token_of(start_owned(o, n, then, "picker"));
         let first = pending_of(key);
         let rx = asked(o);
         std::thread::sleep(QUEUE_POLL * 3);

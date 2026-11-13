@@ -34,16 +34,6 @@ import { createReferenceWaapiCore, referenceEffect, referenceValues } from "./fi
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const RUNTIME_PATH = join(HERE, "../src/runtime.ts");
-export const DESKTOP_PATH = join(HERE, "../src/desktop.ts");
-
-let installDesktopFn: unknown = null;
-function loadInstallDesktop(): unknown {
-  if (installDesktopFn) return installDesktopFn;
-  const body = readTsSource(DESKTOP_PATH).replace(/^export\s+(function|const|let|class)\s/gm, "$1 ");
-  // eslint-disable-next-line no-new-func
-  installDesktopFn = new Function(`${body}\nreturn installDesktop;`)();
-  return installDesktopFn;
-}
 
 export const CANVAS_PATH = join(HERE, "../src/canvas.ts");
 let adoptCanvasFn: unknown = null;
@@ -255,7 +245,6 @@ interface RuntimeExports extends Pick<
   looseRoots: Map<number, { ref: WeakRef<MirrorNode>; box: number }>;
   sweepLoose(): void;
   writeClass(el: MirrorElement, remove?: boolean): void;
-  desktopApi: import("../src/desktop").DesktopApi;
   activation: { isActive(): boolean; consume(): void };
   noteActivation(name: string, key: string | undefined): void;
 }
@@ -272,16 +261,8 @@ type Dispatcher = (
   x?: number,
   y?: number,
 ) => unknown;
-type DesktopDispatcher = (token: number, ok: boolean, payloadJson: string, value?: unknown) => unknown;
-type Fn = (...args: unknown[]) => unknown;
 type Json = Record<string, unknown>;
 
-interface FsAnswer {
-  sync?: unknown;
-  ok?: boolean;
-  payload?: Json;
-  value?: unknown;
-}
 interface FsCallRecord {
   op: string;
   args: unknown[];
@@ -368,20 +349,15 @@ interface RuntimeHost {
     openError: string | null;
   };
   desktop: {
-    dispatcher: DesktopDispatcher | null;
     calls: { op: string; args: unknown[] }[];
     nextToken: number;
     refuse: Json | null;
-    settle(token: number, ok?: boolean, payload?: unknown, value?: unknown): unknown;
+    /** Answers a `__VN_FS__` picker: `{ cancelled: true }`, `{ color }`, or `{ files }` with the FileList as `value`. */
+    settle(token: number, ok?: boolean, payload?: Json, value?: unknown): void;
     fs: {
       calls: FsCallRecord[];
-      answers: Map<string, (...args: never[]) => FsAnswer | null | undefined>;
-      released: unknown[];
-      refused: { proto: unknown; name: unknown }[];
-      factory: Fn;
-      serializer: { proto: unknown; idOf: Fn };
-      prompt: Set<unknown>;
-      permissionCalls: { h: unknown; request: boolean }[];
+      /** The next picker finds one already open: it resolves `undefined` without asking. */
+      busy: boolean;
     };
   };
   tree: TreeModel;
@@ -583,40 +559,41 @@ export function createRuntime(
       openError: null,
     },
     desktop: {
-      dispatcher: null,
       calls: [],
       nextToken: 1,
       refuse: null,
-      settle: (token, ok = true, payload = {}, value = undefined) =>
-        host.desktop.dispatcher?.(token, ok, JSON.stringify(payload), value),
-      fs: {
-        calls: [],
-        answers: new Map(),
-        released: [],
-        refused: [],
-        factory: () => {
-          throw new Error("the runtime has not installed a handle factory");
-        },
-        serializer: { proto: null, idOf: () => undefined },
-        prompt: new Set(),
-        permissionCalls: [],
+      settle: (token, ok = true, payload = {}, value = undefined) => {
+        const resolve = pickers.get(token);
+        pickers.delete(token);
+        if (!resolve) return;
+        if (!ok) resolve(undefined);
+        else if (payload.cancelled) resolve(null);
+        else resolve(typeof payload.color === "string" ? payload.color : value);
       },
+      fs: { calls: [], busy: false },
     },
   };
-  const fsCall = (op: string, ...args: unknown[]): string => {
-    const answer = host.desktop.fs.answers.get(op) as Fn | undefined;
-    const out = answer ? (answer(...args) as FsAnswer | null | undefined) : null;
-    if (out && out.sync) {
+  // vn-desktop's `__VN_FS__`, as the inputs and links use it.
+  const pickers = new Map<number, (v: unknown) => void>();
+  const pick = (op: string, args: unknown[]): Promise<never> => {
+    if (host.desktop.fs.busy) {
       host.desktop.fs.calls.push({ op, args, token: null });
-      return JSON.stringify(out.sync);
+      return Promise.resolve(undefined as never);
     }
     const token = host.desktop.nextToken++;
     host.desktop.fs.calls.push({ op, args, token });
-    if (out) {
-      queueMicrotask(() => host.desktop.settle(token, out.ok !== false, out.payload ?? {}, out.value));
-    }
-    return JSON.stringify({ token });
+    return new Promise((resolve) => pickers.set(token, resolve as (v: unknown) => void));
   };
+  const fsHost =
+    options.desktop === false
+      ? undefined
+      : {
+          pickForInput: (accept: string, multiple: boolean, directory: boolean, current: unknown) =>
+            pick("pickForInput", [{ accept, multiple, directory }, current]),
+          pickColor: (value: string) => pick("pickColor", [value]),
+          download: (url: string, attr: string) =>
+            void host.desktop.fs.calls.push({ op: "download", args: [url, attr], token: null }),
+        };
   // vn-desktop's `__VN_SHELL__`, as far as links and `window.open` use it.
   const shellHost =
     options.desktop === false
@@ -668,12 +645,8 @@ export function createRuntime(
     // The windowing host (crates/vn-app/src/window.prelude.js) publishes itself on the real global before the
     // bundle evaluates, and runtime-window's tests fake it the same way; carry it into the private world.
     __VN_WINDOW__: (globalThis as { __VN_WINDOW__?: unknown }).__VN_WINDOW__,
-    // The engine classes desktop.ts builds on (`DesktopEngine`), handed over off the runtime's own global.
     Blob: globalThis.Blob,
     DOMException: globalThis.DOMException,
-    TextDecoder: globalThis.TextDecoder,
-    WritableStream: globalThis.WritableStream,
-    btoa: globalThis.btoa,
     // Whatever a test says the prelude put on the global before the bundle ran.
     ...(options.globals ?? {}),
   };
@@ -737,29 +710,7 @@ export function createRuntime(
     "__vn_devtools_state",
     "__vn_devtools_set_enabled",
     "__vn_devtools_open",
-    "__vn_desktop_set_dispatcher",
-    "__vn_fs_set_handle_factory",
-    "__vn_fs_release",
-    "__vn_fs_get_file",
-    "__vn_fs_child",
-    "__vn_fs_remove",
-    "__vn_fs_same",
-    "__vn_fs_resolve",
-    "__vn_fs_dir_open",
-    "__vn_fs_dir_next",
-    "__vn_fs_dir_close",
-    "__vn_fs_writable_open",
-    "__vn_fs_writable_write",
-    "__vn_fs_writable_seek",
-    "__vn_fs_writable_truncate",
-    "__vn_fs_writable_close",
-    "__vn_fs_writable_abort",
-    "__vn_fs_refuse_clone",
-    "__vn_fs_set_serializer",
-    "__vn_fs_permission",
-    "__vn_dialog_open",
-    "__vn_download",
-    "installDesktop",
+    "__VN_FS__",
     "MouseEvent",
     "URL",
     "navigator",
@@ -931,39 +882,7 @@ export function createRuntime(
       host.devtools.inspectors++;
       return JSON.stringify({ opened: true, window: 4294967297 });
     },
-    (fn: DesktopDispatcher) => {
-      host.desktop.dispatcher = fn;
-    },
-    (fn: Fn) => {
-      host.desktop.fs.factory = fn;
-    },
-    (h: unknown) => host.desktop.fs.released.push(h),
-    (h: unknown) => fsCall("getFile", h),
-    (dir: unknown, name: unknown, isDir: unknown, create: unknown) => fsCall("child", dir, name, isDir, create),
-    (dir: unknown, name: unknown, recursive: unknown) => fsCall("remove", dir, name, recursive),
-    (a: unknown, b: unknown) => fsCall("same", a, b),
-    (root: unknown, other: unknown) => fsCall("resolve", root, other),
-    (dir: unknown) => fsCall("dirOpen", dir),
-    (cursor: unknown) => fsCall("dirNext", cursor),
-    (cursor: unknown) => host.desktop.fs.calls.push({ op: "dirClose", args: [cursor], token: null }),
-    (h: unknown, keep: unknown) => fsCall("writableOpen", h, keep),
-    (w: unknown, position: unknown, data: unknown) => fsCall("writableWrite", w, position, data),
-    (w: unknown, position: unknown) => fsCall("writableSeek", w, position),
-    (w: unknown, size: unknown) => fsCall("writableTruncate", w, size),
-    (w: unknown) => fsCall("writableClose", w),
-    (w: unknown) => fsCall("writableAbort", w),
-    (proto: unknown, name: unknown) => host.desktop.fs.refused.push({ proto, name }),
-    (proto: unknown, idOf: Fn) => {
-      host.desktop.fs.serializer = { proto, idOf };
-    },
-    (h: unknown, request: boolean) => {
-      host.desktop.fs.permissionCalls.push({ h, request });
-      if (request) host.desktop.fs.prompt.delete(h);
-      return host.desktop.fs.prompt.has(h) ? "prompt" : "granted";
-    },
-    (json: string, current: unknown) => fsCall("dialogOpen", JSON.parse(json), current),
-    (url: unknown, attr: unknown) => fsCall("download", url, attr),
-    loadInstallDesktop(),
+    fsHost,
     options.MouseEvent ?? globalThis.MouseEvent,
     globalThis.URL,
     options.navigator ?? fakeNavigator,
@@ -1048,11 +967,6 @@ export function createRuntime(
     const first = params.indexOf("__vn_devtools_state");
     for (let i = first; i < first + 3; i++) args[i] = undefined;
   }
-  if (options.desktop === false) {
-    const first = params.indexOf("__vn_desktop_set_dispatcher");
-    const last = params.indexOf("__vn_download");
-    for (let i = first; i <= last; i++) args[i] = undefined;
-  }
 
   options.beforeRuntime?.(fakeGlobal);
   // eslint-disable-next-line no-new-func
@@ -1061,7 +975,7 @@ export function createRuntime(
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, nodeById, looseById, looseRoots, sweepLoose, Transition, TransitionGroup, resolveTransitionProps,
        writeClass, appWindow, defineWindow, getCurrentWindow,
-       appDevtools, vModelText, vModelSelect, vShow, desktopApi, activation, noteActivation,
+       appDevtools, vModelText, vModelSelect, vShow, activation, noteActivation,
        render, useCssVars, useCssModule, VueElement, defineCustomElement, createSSRApp, hydrate,
        useHost, useShadowRoot, initDirectivesForSSR };`,
   )(...args);

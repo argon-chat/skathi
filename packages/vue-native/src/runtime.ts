@@ -26,9 +26,7 @@ import {
   watch,
 } from "@vue/runtime-core";
 import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/runtime-core";
-import { installDesktop } from "./desktop";
 import "./apphost";
-import type { DesktopApi, DesktopEngine, DesktopFsHost, DesktopSettle } from "./desktop";
 import { shellHost } from "./appapi";
 import type { AppDesktopError } from "./appapi";
 import { hasWarned, warnCompat } from "./compat";
@@ -3335,7 +3333,8 @@ function followHref(href: string, download: string | null): void {
   }
   if (download != null && (scheme === "blob" || scheme === "data")) {
     // Resolved now, at the click, so `a.click(); URL.revokeObjectURL(url)` still saves.
-    desktopApi.download(raw, download);
+    if (fsHost) fsHost.download(raw, download);
+    else warnCompat("download:nohost", "<a download>: this host has no vn-desktop; nothing was saved");
     return;
   }
   if (!CONTENT_SCHEMES.has(scheme)) {
@@ -3354,7 +3353,7 @@ function adviseScheme(scheme: string, via: string): void {
   );
 }
 
-// A file input's click opens the picker via desktop.ts; its `files`, `value`, `accept`, `multiple` and `webkitdirectory`
+// A file input's click opens the picker through vn-desktop; its `files`, `value`, `accept`, `multiple` and `webkitdirectory`
 // are own accessors installed when `type` becomes "file". Detached `document.createElement("input")` (VueUse's
 // `useFileDialog`) gets the same.
 
@@ -3414,12 +3413,16 @@ function showColorPicker(el: MirrorElement | Detached, via: "showPicker" | null)
     console.warn("Color chooser dialog can only be shown with a user activation.");
     return;
   }
+  if (!fsHost) {
+    warnCompat("input-color:nohost", "<input type=color>: this host has no vn-desktop, so there is no color picker");
+    return;
+  }
   const before = colorValue(el.value);
   const id = mirror ? (el as MirrorElement).__vnId : 0;
   activation.consume();
   colorPickers.add(el);
-  void desktopApi
-    .pickColorForInput(before)
+  void fsHost
+    .pickColor(before)
     .then((selected) => {
       if (selected == null) return;
       const next = colorValue(selected);
@@ -3623,15 +3626,17 @@ function showFilePicker(ops: FileInputOps, via: "showPicker" | null): void {
     console.warn("File chooser dialog can only be shown with a user activation.");
     return;
   }
-  void desktopApi
-    .pickForInput({ accept: ops.accept, multiple: ops.multiple, directory: ops.directory, current: ops.current })
-    .then((list) => {
-      if (list === undefined) return;
-      if (list === null) return ops.fire("cancel");
-      ops.setFiles(list);
-      ops.fire("input");
-      ops.fire("change");
-    });
+  if (!fsHost) {
+    warnCompat("input-file:nohost", "<input type=file>: this host has no vn-desktop, so there is no file picker");
+    return;
+  }
+  void fsHost.pickForInput(ops.accept, ops.multiple, ops.directory, ops.current).then((list) => {
+    if (list === undefined) return;
+    if (list === null) return ops.fire("cancel");
+    ops.setFiles(list);
+    ops.fire("input");
+    ops.fire("change");
+  });
 }
 
 const LABELABLE = new Set(["button", "meter", "output", "progress", "select", "textarea"]);
@@ -9461,66 +9466,6 @@ export const appWindow: VnAppWindow = windowHost ? windowHost.appWindow : (inert
 export const defineWindow: (options: Record<string, unknown>) => void = windowHost ? windowHost.defineWindow : missing;
 export const getCurrentWindow = (): VnAppWindow => appWindow;
 
-// File System Access calls answer `{token}` and settle through one dispatcher in the frame pump; a
-// settle may carry a host-made value (a `File`, a `FileList`).
-
-const fsHost: DesktopFsHost | null =
-  typeof __vn_dialog_open === "function"
-    ? {
-        setHandleFactory: __vn_fs_set_handle_factory,
-        release: __vn_fs_release,
-        getFile: __vn_fs_get_file,
-        child: __vn_fs_child,
-        remove: __vn_fs_remove,
-        same: __vn_fs_same,
-        resolve: __vn_fs_resolve,
-        dirOpen: __vn_fs_dir_open,
-        dirNext: __vn_fs_dir_next,
-        dirClose: __vn_fs_dir_close,
-        writableOpen: __vn_fs_writable_open,
-        writableWrite: __vn_fs_writable_write,
-        writableSeek: __vn_fs_writable_seek,
-        writableTruncate: __vn_fs_writable_truncate,
-        writableClose: __vn_fs_writable_close,
-        writableAbort: __vn_fs_writable_abort,
-        refuseClone: __vn_fs_refuse_clone,
-        setSerializer: __vn_fs_set_serializer,
-        permission: __vn_fs_permission,
-        dialogOpen: __vn_dialog_open,
-        download: __vn_download,
-      }
-    : null;
-
-const desktopPending = new Map<number, { resolve: (v: DesktopSettle) => void; reject: (e: unknown) => void }>();
-
-if (typeof __vn_desktop_set_dispatcher === "function") {
-  __vn_desktop_set_dispatcher((token, ok, json, value) => {
-    let payload: Record<string, unknown> = {};
-    try {
-      payload = JSON.parse(json) as Record<string, unknown>;
-    } catch {
-      /* a malformed payload settles with {} rather than leaving the promise hanging */
-    }
-    const p = desktopPending.get(token);
-    if (!p) return;
-    desktopPending.delete(token);
-    if (ok) p.resolve({ payload, value } satisfies DesktopSettle);
-    else p.reject(payload);
-  });
-}
-
-function desktopCallRaw(json: VnJson): Promise<DesktopSettle> {
-  let out: { token?: number; name?: string; error?: string };
-  try {
-    out = JSON.parse(json) as typeof out;
-  } catch {
-    return Promise.reject(new Error(`the desktop host answered something that is not JSON: ${json}`));
-  }
-  if (out.error !== undefined || out.token === undefined) return Promise.reject({ name: out.name ?? "Error", ...out });
-  const token = out.token;
-  return new Promise((resolve, reject) => desktopPending.set(token, { resolve, reject }));
-}
-
 // Transient activation: a keydown or mousedown the host delivered in the last five seconds
 // (Chromium's lifespan). `el.click()` and `dispatchEvent` never activate; neither do Escape or a
 // lone modifier.
@@ -9559,14 +9504,9 @@ if (typeof navigator !== "undefined" && navigator && vacant(navigator, "userActi
   }
 }
 
-const desktopApi: DesktopApi = installDesktop(globalThis as unknown as Record<string, unknown>, {
-  host: fsHost,
-  engine: globalThis as unknown as DesktopEngine,
-  call: desktopCallRaw,
-  warnCompat,
-  activation,
-  realm: { vacant, mark },
-});
+Object.defineProperty(globalThis, "__VN_ACTIVATION__", { value: Object.freeze(activation), configurable: true });
+
+const fsHost = typeof __VN_FS__ === "object" ? __VN_FS__ : null;
 
 /**
  * Hands a content URL to the system. The caller's allowlist is applied again by the host, so

@@ -104,7 +104,7 @@ unsafe fn user_active(g: *mut c_void) -> bool {
     is_cell(ua) && get(g, ua, "isActive") == TRUE
 }
 
-unsafe fn shared(_g: *mut c_void, _token: u32, _v: &serde_json::Value) -> Result<u64, u64> {
+unsafe fn shared(_g: *mut c_void, _token: u32, _v: &serde_json::Value, _made: u64) -> Result<u64, u64> {
     Ok(UNDEF)
 }
 

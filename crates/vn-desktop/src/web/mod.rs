@@ -15,6 +15,7 @@ use crate::Fail;
 mod app_capture;
 mod app_launch;
 mod app_shell;
+mod fsa;
 #[cfg(target_os = "windows")]
 mod badge;
 #[cfg(target_os = "windows")]
@@ -28,8 +29,8 @@ mod wake_lock;
 
 pub(crate) use vn_runtime::host::{error, global, rejected, rejected_with};
 
-/// Turns a settled payload into the value the promise resolves with, or the rejection.
-pub(crate) type Convert = unsafe fn(*mut c_void, u32, &serde_json::Value) -> Result<u64, u64>;
+/// Turns a settled payload (and the value the host made with it, or `undefined`) into the value the promise resolves with, or the rejection.
+pub(crate) type Convert = unsafe fn(*mut c_void, u32, &serde_json::Value, u64) -> Result<u64, u64>;
 
 /// How a host failure reaches JS.
 #[derive(Clone, Copy)]
@@ -103,7 +104,7 @@ pub(crate) unsafe fn abandon(g: *mut c_void, token: u32, reason: u64) {
 }
 
 /// Whether the settle or host event was this module's.
-pub(crate) unsafe fn deliver(g: *mut c_void, token: u32, ok: bool, payload: &str) -> bool {
+pub(crate) unsafe fn deliver(g: *mut c_void, token: u32, ok: bool, payload: &str, make: Option<crate::Maker>) -> bool {
     let value: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
     if token == 0 {
         return match value["kind"].as_str() {
@@ -123,7 +124,8 @@ pub(crate) unsafe fn deliver(g: *mut c_void, token: u32, ok: bool, payload: &str
         return false;
     };
     let outcome = if ok {
-        (p.convert)(g, token, &value)
+        let made = make.map_or(UNDEF, |m| m(g));
+        (p.convert)(g, token, &value, made)
     } else {
         let name = value["name"].as_str().unwrap_or("Error");
         let message = value["message"].as_str().or(value["error"].as_str()).unwrap_or(name);
@@ -178,6 +180,7 @@ pub(crate) unsafe fn install(g: *mut c_void) {
     app_shell::install(g);
     app_launch::install(g, event_target);
     app_capture::install(g);
+    fsa::install(g);
     #[cfg(target_os = "windows")]
     {
         let nav = navigator_proto(g);
@@ -206,11 +209,16 @@ pub(crate) mod testing {
 
     /// Runs `src` with the objects installed, settles every queued host answer, and returns `globalThis.out`.
     pub fn run(src: &str) -> String {
+        run_with(src, |_| {})
+    }
+
+    pub fn run_with(src: &str, setup: impl FnOnce(*mut std::ffi::c_void) + Send + 'static) -> String {
         vn_runtime::testing::on_js_thread({
             let src = src.to_string();
             move || {
                 JsRuntime::with(|rt| unsafe {
                     super::install(rt.raw());
+                    setup(rt.raw());
                     rt.ctx().eval(&format!("globalThis.out = undefined; (async () => {{ {src} }})().then(v => {{ out = String(v); }}, e => {{ out = 'threw ' + (e && e.name) + ': ' + (e && e.message); }});")).unwrap();
                     for _ in 0..400 {
                         rt.ctx().drain_microtasks();
@@ -222,7 +230,8 @@ pub(crate) mod testing {
                         }
                         std::thread::sleep(std::time::Duration::from_millis(5));
                     }
-                    "<timed out>".to_string()
+                    let at = rt.ctx().eval("String(globalThis.at)").and_then(|v: Value| rt.ctx().to_rust_string(v)).unwrap_or_default();
+                    format!("<timed out at {at}>")
                 })
             }
         })
@@ -230,8 +239,8 @@ pub(crate) mod testing {
 
     unsafe fn drain(g: *mut std::ffi::c_void) {
         let tokens: Vec<u32> = super::PENDING.with(|m| m.borrow().keys().copied().collect());
-        for (token, (ok, payload)) in crate::take_settled(&tokens) {
-            super::deliver(g, token, ok, &payload);
+        for (token, ok, payload, make) in crate::take_settled_with_makers(&tokens) {
+            super::deliver(g, token, ok, &payload, make);
         }
     }
 }

@@ -622,6 +622,7 @@ pub(super) mod tests {
                     0,
                     true,
                     r#"{"kind":"mediasession","action":"seekto","seekTime":42}"#,
+                    None,
                 );
                 let v = rt.ctx().eval("String(globalThis.seek)").unwrap();
                 rt.ctx().to_rust_string(v).unwrap()

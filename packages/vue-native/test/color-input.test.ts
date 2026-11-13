@@ -17,12 +17,12 @@ function world() {
       (event: { target: { value: string }; bubbles: boolean; composed: boolean }) =>
         seen.push(name + ":" + event.target.value + ":" + event.bubbles + ":" + event.composed),
     );
-  const calls = () => rt.host.desktop.fs.calls.filter((c: { op: string }) => c.op === "dialogOpen");
+  const calls = () => rt.host.desktop.fs.calls.filter((c: { op: string }) => c.op === "pickColor");
   const click = (node: MirrorElement = input) => {
     rt.host.dispatcher(node.__vnId, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
     rt.host.dispatcher(node.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
   };
-  const answer = async (result: object) => {
+  const answer = async (result: Record<string, unknown>) => {
     rt.host.desktop.settle(calls().at(-1)!.token!, true, result);
     await tick();
   };
@@ -51,7 +51,7 @@ describe("native color inputs", () => {
     const { rt, input, seen, calls, click, answer } = world();
     input.value = "#123456";
     click();
-    expect(calls()[0]!.args).toEqual([{ kind: "color", value: "#123456" }, null]);
+    expect(calls()[0]!.args).toEqual(["#123456"]);
     expect(rt.activation.isActive()).toBe(false);
     click();
     expect(calls().length).toBe(1);

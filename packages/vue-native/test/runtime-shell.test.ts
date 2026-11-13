@@ -130,7 +130,6 @@ describe("<a href>: activation", () => {
     expect(opens()).toEqual([]);
     const saves = rt.host.desktop.fs.calls.filter((c: { op: string }) => c.op === "download");
     expect(saves.map((c: { args: unknown[] }) => c.args)).toEqual([["blob:vn/1234", "report.csv"]]);
-    expect(rt.advisories().filter((l: string) => l.includes("Save As dialog")).length).toBe(1);
   });
 
   test("<a download href=https:…> opens the browser — a cross-origin download is ignored there too", () => {

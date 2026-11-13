@@ -8,11 +8,11 @@ pub fn normalize(value: &str) -> Option<String> {
     .then(|| value.to_ascii_lowercase())
 }
 
-pub fn start(value: &str) -> String {
+pub fn start(value: &str) -> Result<u32, Fail> {
     start_owned(RESOLVER.get().and_then(|resolve| resolve()), value)
 }
 
-fn start_owned(owner: Option<Owner>, value: &str) -> String {
+fn start_owned(owner: Option<Owner>, value: &str) -> Result<u32, Fail> {
     let value = normalize(value).unwrap_or_else(|| "#000000".into());
     let key = owner.map_or(0, |owner| owner.key);
     let hwnd = owner.map_or(0, |owner| owner.hwnd);
@@ -20,12 +20,12 @@ fn start_owned(owner: Option<Owner>, value: &str) -> String {
     let token = crate::next_token();
     if state.closed.load(Ordering::Acquire) {
         crate::settle(token, Ok(cancelled()));
-        return format!("{{\"token\":{token}}}");
+        return Ok(token);
     }
     if state.active.swap(true, Ordering::AcqRel) {
-        return Fail::new("NotAllowedError", "Color picker already active.")
+        return Err(Fail::new("NotAllowedError", "Color picker already active.")
             .code("EBUSY")
-            .to_sync_json();
+            );
     }
     let cancel = Cancellation(state.clone());
     let worker = std::thread::Builder::new()
@@ -48,14 +48,14 @@ fn start_owned(owner: Option<Owner>, value: &str) -> String {
         });
     if worker.is_err() {
         owner_state(key).active.store(false, Ordering::Release);
-        return Fail::new(
+        return Err(Fail::new(
             "InvalidStateError",
             "Could not start the color picker thread.",
         )
         .code("EIO")
-        .to_sync_json();
+        );
     }
-    format!("{{\"token\":{token}}}")
+    Ok(token)
 }
 
 #[cfg(test)]
@@ -82,11 +82,7 @@ mod tests {
     fn scripted_picker_uses_owner_lifecycle_and_settles_selection_or_cancel() {
         let key = 0x434f4c4f52;
         let owner = Some(Owner { key, hwnd: 0 });
-        let start_token = |reply: String| {
-            serde_json::from_str::<Json>(&reply).unwrap()["token"]
-                .as_u64()
-                .unwrap() as u32
-        };
+        let start_token = |reply: Result<u32, Fail>| reply.unwrap();
         let pending = || {
             let deadline = Instant::now() + Duration::from_secs(2);
             loop {
@@ -115,7 +111,7 @@ mod tests {
         };
         let token = start_token(start_owned(owner, "#aabbcc"));
         let id = pending();
-        assert!(start_owned(owner, "#ff0000").contains("EBUSY"));
+        assert_eq!(start_owned(owner, "#ff0000").unwrap_err().code, Some("EBUSY"));
         assert!(scripted::choose(id, "red").is_err());
         scripted::choose(id, "#12ABEF").unwrap();
         let (ok, result) = settled(token);

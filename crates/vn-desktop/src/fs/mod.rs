@@ -155,9 +155,6 @@ pub(crate) fn from_wire(bytes: &[u8]) -> Option<(PathBuf, Kind)> {
     path.is_absolute().then_some((path, kind))
 }
 
-fn token_json(token: u32) -> String {
-    format!("{{\"token\":{token}}}")
-}
 
 fn gone() -> Fail {
     // A released or unknown handle id: the nearest honest name is the one for stale cached state.
@@ -399,13 +396,13 @@ fn cursors() -> &'static Mutex<HashMap<u64, Arc<Mutex<Cursor>>>> {
 
 static NEXT_CURSOR: AtomicU64 = AtomicU64::new(1);
 
-pub fn start_get_file(id: u64) -> String {
+pub fn start_get_file(id: u64) -> Result<u32, Fail> {
     let e = match granted(id) {
         Ok(e) => e,
-        Err(f) => return f.to_sync_json(),
+        Err(f) => return Err(f),
     };
     if e.kind != Kind::File {
-        return Fail::new("TypeMismatchError", TYPE_MISMATCH).to_sync_json();
+        return Err(Fail::new("TypeMismatchError", TYPE_MISMATCH));
     }
     let token = crate::next_token();
     pool::submit(token, move || {
@@ -417,19 +414,19 @@ pub fn start_get_file(id: u64) -> String {
             vn_runtime::redjs::webapi::file::create_file(g, &path, &name, None, size, mtime, "")
         }))
     });
-    token_json(token)
+    Ok(token)
 }
 
-pub fn start_child(dir: u64, name: &str, kind: Kind, create: bool) -> String {
+pub fn start_child(dir: u64, name: &str, kind: Kind, create: bool) -> Result<u32, Fail> {
     if let Err(f) = check_name(name) {
-        return f.to_sync_json();
+        return Err(f);
     }
     let e = match granted(dir) {
         Ok(e) => e,
-        Err(f) => return f.to_sync_json(),
+        Err(f) => return Err(f),
     };
     if e.kind != Kind::Directory {
-        return Fail::new("TypeMismatchError", TYPE_MISMATCH).to_sync_json();
+        return Err(Fail::new("TypeMismatchError", TYPE_MISMATCH));
     }
     let token = crate::next_token();
     let name = name.to_string();
@@ -437,19 +434,19 @@ pub fn start_child(dir: u64, name: &str, kind: Kind, create: bool) -> String {
         let child = op_child(&e.path, &name, kind, create)?;
         Ok(Done::json(&handle_json(child, kind).to_string()))
     });
-    token_json(token)
+    Ok(token)
 }
 
-pub fn start_remove(dir: u64, name: &str, recursive: bool) -> String {
+pub fn start_remove(dir: u64, name: &str, recursive: bool) -> Result<u32, Fail> {
     if let Err(f) = check_name(name) {
-        return f.to_sync_json();
+        return Err(f);
     }
     let e = match granted(dir) {
         Ok(e) => e,
-        Err(f) => return f.to_sync_json(),
+        Err(f) => return Err(f),
     };
     if e.kind != Kind::Directory {
-        return Fail::new("TypeMismatchError", TYPE_MISMATCH).to_sync_json();
+        return Err(Fail::new("TypeMismatchError", TYPE_MISMATCH));
     }
     let token = crate::next_token();
     let name = name.to_string();
@@ -457,33 +454,33 @@ pub fn start_remove(dir: u64, name: &str, recursive: bool) -> String {
         op_remove(&e.path, &name, recursive)?;
         Ok(Done::json("{}"))
     });
-    token_json(token)
+    Ok(token)
 }
 
-pub fn start_same(a: u64, b: u64) -> String {
-    let (Some(ea), Some(eb)) = (lookup(a), lookup(b)) else { return gone().to_sync_json() };
+pub fn start_same(a: u64, b: u64) -> Result<u32, Fail> {
+    let (Some(ea), Some(eb)) = (lookup(a), lookup(b)) else { return Err(gone()) };
     let token = crate::next_token();
     pool::submit(token, move || Ok(Done::json(&json!({ "same": op_same(&ea.path, ea.kind, &eb.path, eb.kind) }).to_string())));
-    token_json(token)
+    Ok(token)
 }
 
-pub fn start_resolve(root: u64, other: u64) -> String {
-    let (Some(er), Some(eo)) = (lookup(root), lookup(other)) else { return gone().to_sync_json() };
+pub fn start_resolve(root: u64, other: u64) -> Result<u32, Fail> {
+    let (Some(er), Some(eo)) = (lookup(root), lookup(other)) else { return Err(gone()) };
     let token = crate::next_token();
     pool::submit(token, move || {
         let path = if er.kind == Kind::Directory { op_resolve(&er.path, &eo.path) } else { op_same(&er.path, er.kind, &eo.path, eo.kind).then(Vec::new) };
         Ok(Done::json(&json!({ "path": path }).to_string()))
     });
-    token_json(token)
+    Ok(token)
 }
 
-pub fn start_dir_open(dir: u64) -> String {
+pub fn start_dir_open(dir: u64) -> Result<u32, Fail> {
     let e = match granted(dir) {
         Ok(e) => e,
-        Err(f) => return f.to_sync_json(),
+        Err(f) => return Err(f),
     };
     if e.kind != Kind::Directory {
-        return Fail::new("TypeMismatchError", TYPE_MISMATCH).to_sync_json();
+        return Err(Fail::new("TypeMismatchError", TYPE_MISMATCH));
     }
     let token = crate::next_token();
     pool::submit(token, move || {
@@ -492,12 +489,12 @@ pub fn start_dir_open(dir: u64) -> String {
         cursors().lock().unwrap_or_else(|p| p.into_inner()).insert(id, Arc::new(Mutex::new(c)));
         Ok(Done::json(&json!({ "cursor": id }).to_string()))
     });
-    token_json(token)
+    Ok(token)
 }
 
-pub fn start_dir_next(cursor: u64) -> String {
+pub fn start_dir_next(cursor: u64) -> Result<u32, Fail> {
     let Some(c) = cursors().lock().unwrap_or_else(|p| p.into_inner()).get(&cursor).cloned() else {
-        return gone().to_sync_json();
+        return Err(gone());
     };
     let token = crate::next_token();
     pool::submit(token, move || {
@@ -508,7 +505,7 @@ pub fn start_dir_next(cursor: u64) -> String {
         }
         Ok(Done::json(&json!({ "entries": entries, "done": done }).to_string()))
     });
-    token_json(token)
+    Ok(token)
 }
 
 pub fn dir_close(cursor: u64) {
@@ -665,9 +662,7 @@ pub(crate) mod tests {
         assert_eq!(lookup(id).map(|e| e.path), Some(report));
         release(id);
         assert!(lookup(id).is_none());
-        let out: serde_json::Value = serde_json::from_str(&start_get_file(id)).unwrap();
-        assert_eq!(out["name"], "InvalidStateError");
-        assert!(out.get("token").is_none());
+        assert_eq!(start_get_file(id).unwrap_err().name, "InvalidStateError");
         if cfg!(windows) {
             assert_eq!(name_of(Path::new(r"C:\")), r"C:\");
         }
@@ -683,8 +678,8 @@ pub(crate) mod tests {
         let h = register(root.clone(), Kind::Directory);
         assert_eq!(permission(h, false), Some("prompt"));
         for refused in [start_dir_open(h), start_child(h, "inner", Kind::Directory, false), start_remove(h, "inner", true)] {
-            let v: serde_json::Value = serde_json::from_str(&refused).unwrap();
-            assert_eq!((v["name"].as_str(), v["error"].as_str()), (Some("NotAllowedError"), Some(NOT_ALLOWED)), "{refused}");
+            let f = refused.unwrap_err();
+            assert_eq!((f.name, f.message.as_str()), ("NotAllowedError", NOT_ALLOWED));
         }
         assert!(root.join("inner/a.txt").exists(), "nothing ran");
         assert_eq!(permission(h, true), Some("granted"));
@@ -696,12 +691,10 @@ pub(crate) mod tests {
         assert!(!is_granted(&s.0.join("Picked2.txt")));
         assert!(!is_granted(&s.0));
         let f = register(s.0.join("Picked2.txt"), Kind::File);
-        let v: serde_json::Value = serde_json::from_str(&start_get_file(f)).unwrap();
-        assert_eq!(v["name"], "NotAllowedError");
+        assert_eq!(start_get_file(f).unwrap_err().name, "NotAllowedError");
         assert_eq!(permission(f, false), Some("prompt"));
         assert_eq!(permission(u64::MAX, true), None, "an unknown id grants nothing");
-        let v: serde_json::Value = serde_json::from_str(&writable::start_open(f, false)).unwrap();
-        assert_eq!(v["name"], "NotAllowedError");
+        assert_eq!(writable::start_open(f, false).unwrap_err().name, "NotAllowedError");
         release(h);
         release(f);
     }
@@ -731,10 +724,9 @@ pub(crate) mod tests {
     #[test]
     fn a_refused_name_never_reaches_the_pool() {
         let dir = register(std::env::temp_dir(), Kind::Directory);
-        let out: serde_json::Value = serde_json::from_str(&start_child(dir, "..", Kind::File, true)).unwrap();
-        assert_eq!((out["name"].as_str(), out["error"].as_str()), (Some("TypeError"), Some(BAD_NAME)));
-        let out: serde_json::Value = serde_json::from_str(&start_remove(dir, "a:b", false)).unwrap();
-        assert_eq!(out["name"], "TypeError");
+        let f = start_child(dir, "..", Kind::File, true).unwrap_err();
+        assert_eq!((f.name, f.message.as_str()), ("TypeError", BAD_NAME));
+        assert_eq!(start_remove(dir, "a:b", false).unwrap_err().name, "TypeError");
         release(dir);
     }
 }
