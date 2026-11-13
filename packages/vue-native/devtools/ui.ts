@@ -45,7 +45,7 @@ function die(message: string): never {
 const argv = process.argv.slice(2);
 const flags: Record<string, string | boolean> = {};
 for (let i = 0; i < argv.length; i++) {
-  const a = argv[i];
+  const a = argv[i]!;
   if (!a.startsWith("--")) continue;
   const name = a.slice(2);
   if (name === "wait" || name === "help") flags[name] = true;

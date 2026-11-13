@@ -94,11 +94,11 @@ describe("#15 repeat(auto-fill | auto-fit, …)", () => {
   test("auto-fill makes as many columns as fit, and wraps the rest", async () => {
     const cells = await Promise.all([1, 2, 3, 4, 5].map((i) => app.locator(`#fill-${i}`).boundingBox()));
     for (let i = 0; i < 4; i++) {
-      bunExpect(Math.abs(cells[i].w - 112.5)).toBeLessThanOrEqual(1);
-      bunExpect(cells[i].y).toBe(cells[0].y);
+      bunExpect(Math.abs(cells[i]!.w - 112.5)).toBeLessThanOrEqual(1);
+      bunExpect(cells[i]!.y).toBe(cells[0]!.y);
     }
-    bunExpect(cells[4].y).toBeGreaterThan(cells[0].y);
-    bunExpect(cells[4].x).toBe(cells[0].x);
+    bunExpect(cells[4]!.y).toBeGreaterThan(cells[0]!.y);
+    bunExpect(cells[4]!.x).toBe(cells[0]!.x);
   });
 
   test("auto-fit collapses the empty columns, so two items share the row", async () => {
@@ -114,7 +114,7 @@ describe("#14 background-image: url()", () => {
   const RED: Rgb = [255, 0, 0];
   const BLUE: Rgb = [0, 0, 255];
   const LIME: Rgb = [0, 255, 0];
-  const near = (a: Rgb, b: Rgb) => a.every((v, i) => Math.abs(v - b[i]) <= 24);
+  const near = (a: Rgb, b: Rgb) => a.every((v, i) => Math.abs(v - b[i]!) <= 24);
 
   /**
    * The colours at `points` (offsets inside `selector`'s box), once the images have decoded — a
@@ -126,14 +126,14 @@ describe("#14 background-image: url()", () => {
       const shot = readPng(await app.screenshot());
       return points.map(([dx, dy]) => shot.at(Math.round(b.x + dx), Math.round(b.y + dy)));
     };
-    return until(read, (got) => got.every((c, i) => near(c, want[i])));
+    return until(read, (got) => got.every((c, i) => near(c, want[i]!)));
   }
 
   test(
     "emojix's pixel sprite shows its cell",
     async () => {
       const got = await colours("#bg-px", [[10, 10]], [BLUE]);
-      bunExpect(near(got[0], BLUE)).toBe(true);
+      bunExpect(near(got[0]!, BLUE)).toBe(true);
     },
     T,
   );
@@ -142,7 +142,7 @@ describe("#14 background-image: url()", () => {
     "emojix's percentage sprite shows its cell",
     async () => {
       const got = await colours("#bg-pct", [[10, 10]], [BLUE]);
-      bunExpect(near(got[0], BLUE)).toBe(true);
+      bunExpect(near(got[0]!, BLUE)).toBe(true);
     },
     T,
   );
@@ -158,8 +158,8 @@ describe("#14 background-image: url()", () => {
         ],
         [RED, BLUE],
       );
-      bunExpect(near(got[0], RED)).toBe(true);
-      bunExpect(near(got[1], BLUE)).toBe(true);
+      bunExpect(near(got[0]!, RED)).toBe(true);
+      bunExpect(near(got[1]!, BLUE)).toBe(true);
     },
     T,
   );
@@ -177,7 +177,7 @@ describe("#14 background-image: url()", () => {
       ];
       const want = [RED, BLUE, RED, BLUE, RED, BLUE];
       const got = await colours("#bg-tile", points, want);
-      got.forEach((c, i) => bunExpect(near(c, want[i])).toBe(true));
+      got.forEach((c, i) => bunExpect(near(c, want[i]!)).toBe(true));
     },
     T,
   );
@@ -186,7 +186,7 @@ describe("#14 background-image: url()", () => {
     "a gradient written above an image paints over it",
     async () => {
       const got = await colours("#bg-over", [[10, 10]], [LIME]);
-      bunExpect(near(got[0], LIME)).toBe(true);
+      bunExpect(near(got[0]!, LIME)).toBe(true);
     },
     T,
   );

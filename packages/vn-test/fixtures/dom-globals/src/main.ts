@@ -1,7 +1,46 @@
 import { createApp, h } from "vue-native";
 
-type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
-const g = globalThis as Any;
+const dom = document as unknown as VnDomDocument;
+
+type Class<Args extends unknown[] = never[], T extends object = object> = {
+  new (...args: Args): T;
+  readonly prototype: T;
+  readonly name: string;
+};
+interface Globals {
+  Node: Class & {
+    readonly ELEMENT_NODE: number;
+    readonly TEXT_NODE: number;
+    readonly COMMENT_NODE: number;
+    readonly DOCUMENT_FRAGMENT_NODE: number;
+  };
+  Element: Class;
+  HTMLElement: Class;
+  SVGElement: Class;
+  SVGSVGElement: Class;
+  SVGGeometryElement: Class;
+  SVGGraphicsElement: Class;
+  CharacterData: Class;
+  Text: Class;
+  NodeList: Class;
+  HTMLCollection: Class;
+  HTMLMediaElement: Class;
+  HTMLVideoElement: Class;
+  HTMLAudioElement: Class;
+  DOMTokenList: Class;
+  DOMStringMap: Class;
+  MediaQueryList: Class;
+  MutationRecord: Class;
+  TreeWalker: Class;
+  EventTarget: Class;
+  Event: Class;
+  TransitionEvent: Class<[string, { propertyName: string }], { propertyName: string }>;
+  AnimationEvent: Class<[string], VnEvent>;
+  TouchEvent: Class<[string, { touches: object[] }], { touches: { length: number } }>;
+  Touch: Class<[{ identifier: number; target: unknown }]>;
+  TouchList: Class;
+}
+const g = globalThis as unknown as Globals & { __VN_TEST_DOM__: unknown };
 
 const App = {
   render: () =>
@@ -19,22 +58,26 @@ const proto = Object.getPrototypeOf;
 
 g.__VN_TEST_DOM__ = {
   probe(): string {
-    const list = document.getElementById("list") as Any;
-    const icon = document.getElementById("icon") as Any;
-    const path = icon.firstChild as Any;
-    const text = list.childNodes[1] as Any;
+    const list = dom.getElementById("list")!;
+    const icon = dom.getElementById("icon")!;
+    const path = icon.firstChild as VnElement;
+    const text = list.childNodes[1]!;
     const kids = list.children;
-    const byTag = document.getElementsByTagName("li");
+    const byTag = dom.getElementsByTagName("li");
     const before = { kids: kids.length, byTag: byTag.length };
-    const extra = document.createElement("li");
+    const extra = dom.createElement("li");
     list.appendChild(extra);
     const after = { kids: kids.length, byTag: byTag.length, nodes: list.childNodes.length };
     list.removeChild(extra);
-    const qsa = document.querySelectorAll("li");
-    const resolveSubjects = (subject: Any) =>
-      subject instanceof g.NodeList ? Array.from(subject) : Array.isArray(subject) ? subject : [subject];
-    const video = document.createElement("video");
-    const audio = document.createElement("audio");
+    const qsa = dom.querySelectorAll("li");
+    const resolveSubjects = (subject: unknown): unknown[] =>
+      subject instanceof g.NodeList
+        ? Array.from(subject as Iterable<unknown>)
+        : Array.isArray(subject)
+          ? subject
+          : [subject];
+    const video = dom.createElement("video");
+    const audio = dom.createElement("audio");
     return JSON.stringify({
       nodeIsOwn: g.Node !== g.Element && g.Node.name === "Node",
       constants: [g.Node.ELEMENT_NODE, g.Node.TEXT_NODE, g.Node.COMMENT_NODE, g.Node.DOCUMENT_FRAGMENT_NODE],
@@ -66,7 +109,7 @@ g.__VN_TEST_DOM__ = {
         kids instanceof g.HTMLCollection,
         kids === list.children,
         kids.namedItem("a") === list.firstChild,
-        kids.b === list.lastChild,
+        (kids as VnElementList & Record<string, unknown>).b === list.lastChild,
         Object.keys(kids).join(),
       ],
       live: [before, after],
@@ -77,8 +120,8 @@ g.__VN_TEST_DOM__ = {
         resolveSubjects(qsa).length,
         resolveSubjects(list.childNodes).length,
       ],
-      byClass: [document.getElementsByClassName("x").length, list.getElementsByClassName("x").length],
-      byName: [document.getElementsByName("q") instanceof g.NodeList, document.getElementsByName("q").length],
+      byClass: [dom.getElementsByClassName("x").length, list.getElementsByClassName("x").length],
+      byName: [dom.getElementsByName("q") instanceof g.NodeList, dom.getElementsByName("q").length],
       svg: [
         icon.tagName,
         path.tagName,
@@ -90,7 +133,7 @@ g.__VN_TEST_DOM__ = {
         path instanceof g.SVGGraphicsElement,
       ],
       svgPainted: icon.getBoundingClientRect().width,
-      svgNS: document.createElementNS("http://www.w3.org/2000/svg", "svg").tagName,
+      svgNS: dom.createElementNS("http://www.w3.org/2000/svg", "svg").tagName,
       media: [
         video instanceof g.HTMLVideoElement,
         video instanceof g.HTMLMediaElement,
@@ -111,9 +154,9 @@ g.__VN_TEST_DOM__ = {
       ],
       touch: [
         "ontouchstart" in window,
-        "ontouchstart" in document.documentElement,
+        "ontouchstart" in dom.documentElement,
         "ontouchstart" in list,
-        navigator.maxTouchPoints,
+        navigator!.maxTouchPoints,
         typeof g.TouchEvent,
         typeof g.Touch,
         typeof g.TouchList,

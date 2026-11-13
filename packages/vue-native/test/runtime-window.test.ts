@@ -3,14 +3,16 @@
 // degrades loudly instead of silently.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement } from "./runtime-harness";
+
+const windowSlot = globalThis as { __VN_WINDOW__?: unknown };
 
 afterEach(() => {
-  delete globalThis.__VN_WINDOW__;
+  delete windowSlot.__VN_WINDOW__;
 });
 
 function fakeHost() {
-  const calls = [];
+  const calls: unknown[] = [];
   const appWindow = {
     maximize: () => calls.push("maximize"),
     isMaximized: () => true,
@@ -19,7 +21,7 @@ function fakeHost() {
     calls,
     host: {
       appWindow,
-      defineWindow: (o) => calls.push(["defineWindow", o]),
+      defineWindow: (o: unknown) => calls.push(["defineWindow", o]),
       getCurrentWindow: () => appWindow,
     },
   };
@@ -28,10 +30,10 @@ function fakeHost() {
 describe("appWindow namespace", () => {
   test("re-exports the host's appWindow rather than a copy of it", () => {
     const { calls, host } = fakeHost();
-    globalThis.__VN_WINDOW__ = host;
+    windowSlot.__VN_WINDOW__ = host;
     const rt = createRuntime();
 
-    expect(rt.appWindow).toBe(host.appWindow);
+    expect(rt.appWindow as unknown).toBe(host.appWindow);
     rt.appWindow.maximize();
     expect(calls).toEqual(["maximize"]);
     expect(rt.advisories()).toEqual([]);
@@ -39,14 +41,14 @@ describe("appWindow namespace", () => {
 
   test("getCurrentWindow() is appWindow — the name ported Tauri code uses", () => {
     const { host } = fakeHost();
-    globalThis.__VN_WINDOW__ = host;
+    windowSlot.__VN_WINDOW__ = host;
     const rt = createRuntime();
     expect(rt.getCurrentWindow()).toBe(rt.appWindow);
   });
 
   test("defineWindow forwards to the host", () => {
     const { calls, host } = fakeHost();
-    globalThis.__VN_WINDOW__ = host;
+    windowSlot.__VN_WINDOW__ = host;
     const rt = createRuntime();
     rt.defineWindow({ title: "Notes" });
     expect(calls).toEqual([["defineWindow", { title: "Notes" }]]);
@@ -91,13 +93,13 @@ describe("native fullscreen Escape", () => {
         return true;
       },
     });
-    globalThis.__VN_WINDOW__ = host;
+    windowSlot.__VN_WINDOW__ = host;
     const rt = createRuntime();
     rt.createApp({ render: () => null }).mount();
     const node = rt.nodeOps.createElement("button");
-    rt.nodeOps.insert(node, rt.nodesById.get(1), null);
+    rt.nodeOps.insert(node, rt.nodesById.get(1) as MirrorElement, null);
     const delivered: string[] = [];
-    node.addEventListener("keydown", (event: KeyboardEvent) => delivered.push(event.key));
+    node.addEventListener("keydown", (event) => void delivered.push((event as VnEvent & { key: string }).key));
     expect(rt.host.dispatcher(node.__vnId, rt.EV_CODES.keydown, 0, 0, 0, 0, "Escape")).toBe(false);
     expect(active).toBe(false);
     expect(delivered).toEqual([]);

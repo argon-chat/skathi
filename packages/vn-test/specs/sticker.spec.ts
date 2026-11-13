@@ -41,7 +41,7 @@ async function centres(boxes: Bounds[]): Promise<Rgb[]> {
   return boxes.map((b) => shot.at(Math.round((b.x + b.w / 2) * k), Math.round((b.y + b.h / 2) * k)));
 }
 
-const near = (got: Rgb, want: Rgb, tol = 10) => got.every((v, i) => Math.abs(v - want[i]) <= tol);
+const near = (got: Rgb, want: Rgb, tol = 10) => got.every((v, i) => Math.abs(v - want[i]!) <= tol);
 /** Which second of `steps.json` a pixel shows: "r", "g", "b", or "?" for anything else. */
 const step = ([r, g, b]: Rgb) =>
   r > 200 && g < 60 && b < 60 ? "r" : g > 200 && r < 60 && b < 60 ? "g" : b > 200 && r < 60 && g < 60 ? "b" : "?";
@@ -197,7 +197,7 @@ test(
     expect(s.sources).toBeGreaterThanOrEqual(4);
     expect(s.failures).toBeGreaterThanOrEqual(1);
     expect(s.visibleTargets).toBeGreaterThanOrEqual(5);
-    expect(s.drawn + s.fromCache).toBeGreaterThan(0);
+    expect(s.drawn! + s.fromCache!).toBeGreaterThan(0);
   },
   T,
 );

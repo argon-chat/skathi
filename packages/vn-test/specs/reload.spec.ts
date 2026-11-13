@@ -158,7 +158,7 @@ async function networkAcrossReload(host: Host, mounted: string): Promise<void> {
     expect(opened).toBeGreaterThan(marker);
     expect(closed).toBeGreaterThan(opened);
     expect(got.some((e) => e.kind === "ws" && e.phase === "close" && e.url.includes("?held"))).toBe(true);
-    expect(got.every((e, i) => i === 0 || e.seq > got[i - 1].seq)).toBe(true);
+    expect(got.every((e, i) => i === 0 || e.seq > got[i - 1]!.seq)).toBe(true);
   } finally {
     server.stop(true);
   }

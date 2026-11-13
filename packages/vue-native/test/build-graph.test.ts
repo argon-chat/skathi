@@ -10,13 +10,53 @@ import { createLoader } from "./loader-harness";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG_DIR = resolve(HERE, "..");
-const WS_ROOT = resolve(PKG_DIR, "../..");
 const FIXTURES = join(HERE, "fixtures");
 
-const tmpDirs = [];
+const tmpDirs: string[] = [];
+
+interface Manifest {
+  rev: number;
+  vendorRev: number;
+  entry: string;
+  modules: string[];
+  deps: Record<string, string[]>;
+}
+interface Changes {
+  changed: { id: string; kind: string }[];
+}
+interface LazyNs {
+  __esModule?: boolean;
+  [Symbol.toStringTag]: string;
+  default: { name: string };
+}
+interface EsmMain {
+  app: { name: string; parts: string[] };
+  ns: { default: (x: string) => string; answer: number };
+  eagerNames: Record<string, string>;
+  lazyKinds: Record<string, () => Promise<{ name: string }>>;
+  lazy: () => Promise<LazyNs>;
+  sameInstance: boolean;
+  json: {
+    config: unknown;
+    title: string;
+    meta: unknown;
+    aliasedJson: unknown;
+  };
+  raw: string;
+  texts: Record<string, string>;
+  worker: new () => unknown;
+  lazyWorker: () => Promise<{ [Symbol.toStringTag]: string; default: unknown }>;
+}
+interface NpmMain {
+  injected: string;
+  registered: string;
+  keys: { app: symbol; old: symbol };
+  env: string;
+  edited: number;
+}
 /** Every `bun build.ts --watch` this file starts, killed at the end and on runner exit (a test's `finally` does not run on timeout). */
-const watchers = [];
-function watchBuild(entry, dist) {
+const watchers: Bun.Subprocess[] = [];
+function watchBuild(entry: string, dist: string) {
   const proc = Bun.spawn(["bun", "build.ts", entry, dist, "--watch"], {
     cwd: PKG_DIR,
     // Nothing reads the output; a pipe nobody drains can stall the child.
@@ -45,7 +85,7 @@ afterAll(async () => {
   }
 });
 
-function build(fixture) {
+function build(fixture: string) {
   const dist = mkdtempSync(join(tmpdir(), "vn-build-"));
   tmpDirs.push(dist);
   const entry = join(FIXTURES, fixture, "src/main.ts");
@@ -53,18 +93,19 @@ function build(fixture) {
   if (proc.exitCode !== 0) {
     throw new Error(`build.ts exited ${proc.exitCode}\n${proc.stdout.toString()}\n${proc.stderr.toString()}`);
   }
-  const manifest = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8"));
-  const changes = JSON.parse(readFileSync(join(dist, "changes.json"), "utf8"));
+  const manifest = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8")) as Manifest;
+  const changes = JSON.parse(readFileSync(join(dist, "changes.json"), "utf8")) as Changes;
   return {
     dist,
     manifest,
     changes,
     stderr: proc.stderr.toString(),
-    script: (id) => readFileSync(join(dist, "modules", id.split("/").join("__") + ".js"), "utf8"),
+    script: (id: string) => readFileSync(join(dist, "modules", id.split("/").join("__") + ".js"), "utf8"),
   };
 }
 
-const id = (fixture, rel) => ["packages/vue-native/test/fixtures", fixture, "src", rel].filter(Boolean).join("/");
+const id = (fixture: string, rel: string) =>
+  ["packages/vue-native/test/fixtures", fixture, "src", rel].filter(Boolean).join("/");
 
 describe("manifest", () => {
   const out = build("graph-app");
@@ -86,7 +127,7 @@ describe("manifest", () => {
   test("records one edge list per module", () => {
     expect(Object.keys(out.manifest.deps).sort()).toEqual(out.manifest.modules.slice().sort());
     expect(out.manifest.deps[ENTRY]).toEqual([APP]);
-    expect(out.manifest.deps[APP].slice().sort()).toEqual([COUNTER, UTIL].sort());
+    expect(out.manifest.deps[APP]!.slice().sort()).toEqual([COUNTER, UTIL].sort());
     expect(out.manifest.deps[COUNTER]).toEqual([UTIL]);
     expect(out.manifest.deps[UTIL]).toEqual([LIB]); // "./lib" -> "lib/index.ts"
     expect(out.manifest.deps[LIB]).toEqual([]);
@@ -232,12 +273,12 @@ describe("style-only edits", () => {
   const file = join(FIXTURES, "style-app/src/App.vue");
   const original = readFileSync(file, "utf8");
   const APP = id("style-app", "App.vue");
-  const hashOf = (script) => /\n}, "([0-9a-f]+)"\);/.exec(script)[1];
-  const cssOf = (script) => /__VN__\.setCss\([^,]+, (".*")\);/.exec(script)[1];
+  const hashOf = (script: string) => /\n}, "([0-9a-f]+)"\);/.exec(script)![1];
+  const cssOf = (script: string) => /__VN__\.setCss\([^,]+, (".*")\);/.exec(script)![1];
 
   test("change the css but not the body hash", () => {
     const before = build("style-app").script(APP);
-    let after;
+    let after: string;
     try {
       writeFileSync(file, original.replace("color: red;", "color: rebeccapurple;"));
       after = build("style-app").script(APP);
@@ -251,7 +292,7 @@ describe("style-only edits", () => {
 
   test("a template edit DOES change the body hash", () => {
     const before = build("style-app").script(APP);
-    let after;
+    let after: string;
     try {
       writeFileSync(file, original.replace("{{ label }}", "{{ label }}!"));
       after = build("style-app").script(APP);
@@ -317,17 +358,17 @@ describe('a "type": "module" app, in dev', () => {
 
   test("a default import is the module's default export, as in Vite", () => {
     expect(out.script(MAIN)).not.toMatch(/__toESM\(require\([^)]*\),\s*1\)/);
-    const main = world().VN.require(MAIN);
+    const main = world().VN.require(MAIN) as unknown as EsmMain;
     expect(main.app.name).toBe("EsmApp");
     expect(main.ns.default("x")).toBe("hello x");
     expect(main.ns.answer).toBe(42);
   });
 
   test("import.meta.glob expands as in prod, in a module and in an SFC, and stays in the graph", async () => {
-    const main = world().VN.require(MAIN);
+    const main = world().VN.require(MAIN) as unknown as EsmMain;
     expect(main.eagerNames).toEqual({ "./kinds/a.ts": "a", "./kinds/b.ts": "b" });
     expect(Object.keys(main.lazyKinds)).toEqual(["./kinds/a.ts"]);
-    expect((await main.lazyKinds["./kinds/a.ts"]()).name).toBe("a");
+    expect((await main.lazyKinds["./kinds/a.ts"]!()).name).toBe("a");
     expect(main.app.parts).toEqual(["./kinds/a.ts", "./kinds/b.ts"]);
     expect(out.manifest.deps[MAIN]).toContain(id("esm-app", "kinds/a.ts"));
     expect(out.manifest.deps[id("esm-app", "App.vue")]).toContain(id("esm-app", "kinds/b.ts"));
@@ -336,7 +377,7 @@ describe('a "type": "module" app, in dev', () => {
   test("import() resolves through the registry, and defineAsyncComponent unwraps it", async () => {
     expect(out.script(MAIN)).not.toMatch(/(?<![\w$.])import\(/);
     expect(out.manifest.deps[MAIN]).toContain(id("esm-app", "Lazy.vue"));
-    const ns = await world().VN.require(MAIN).lazy();
+    const ns = await (world().VN.require(MAIN) as unknown as EsmMain).lazy();
     expect(!!(ns && (ns.__esModule || ns[Symbol.toStringTag] === "Module"))).toBe(true);
     expect(ns.default.name).toBe("LazyPane");
   });
@@ -348,12 +389,12 @@ describe('a "type": "module" app, in dev', () => {
     expect(out.script(ALIAS)).toContain('require("./util.ts")');
     expect(out.script(ALIAS)).not.toContain("@/");
     expect(out.manifest.deps[ALIAS]).toEqual([UTIL]);
-    expect(out.manifest.modules.some((m) => m.startsWith("@/"))).toBe(false);
-    expect(world().VN.require(MAIN).sameInstance).toBe(true);
+    expect(out.manifest.modules.some((m: string) => m.startsWith("@/"))).toBe(false);
+    expect(world().VN.require(MAIN)["sameInstance"]).toBe(true);
   });
 
   test("JSON in src/, outside it and through an alias, as Vite gives it", () => {
-    const { json } = world().VN.require(MAIN);
+    const { json } = world().VN.require(MAIN) as unknown as EsmMain;
     expect(json.config).toEqual({ title: "esm", list: [1, 2] });
     expect(json.title).toBe("esm");
     expect(json.meta).toEqual({ outside: "src" });
@@ -362,7 +403,7 @@ describe('a "type": "module" app, in dev', () => {
   });
 
   test("?raw and a query glob give the text; ?worker is the stub prod gives", async () => {
-    const main = world().VN.require(MAIN);
+    const main = world().VN.require(MAIN) as unknown as EsmMain;
     expect(main.raw).toBe("a note, read with ?raw\n");
     expect(main.texts).toEqual({ "./data/note.txt": "a note, read with ?raw\n" });
     expect(() => new main.worker()).toThrow("work.ts?worker): vue-native has no Web Workers");
@@ -378,16 +419,16 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
   tmpDirs.push(dir);
   const rel = "packages/vue-native/test/fixtures/" + dir.split(/[\\/]/).pop();
   const MAIN = `${rel}/src/main.ts`;
-  const put = (path, text) => {
+  const put = (path: string, text: string) => {
     mkdirSync(dirname(join(dir, path)), { recursive: true });
     writeFileSync(join(dir, path), text);
   };
-  const pkg = (path, name, version, code) => {
+  const pkg = (path: string, name: string, version: string, code: string) => {
     put(`${path}/package.json`, JSON.stringify({ name, version, type: "module", exports: "./index.js" }));
     put(`${path}/index.js`, code);
   };
   put("package.json", JSON.stringify({ name: "npm-share-fixture", private: true }));
-  const core = (tag) =>
+  const core = (tag: string) =>
     `export const KEY = Symbol(${JSON.stringify(tag)});\n` +
     "export const formatters = new Map();\n" +
     "export const provide = (scope, value) => ((scope[KEY] = value), scope);\n" +
@@ -437,19 +478,19 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
 
   const dist = mkdtempSync(join(tmpdir(), "vn-build-npm-"));
   tmpDirs.push(dist);
-  const read = (f) => {
+  const read = (f: string) => {
     try {
       return readFileSync(join(dist, f), "utf8");
     } catch {
       return "";
     }
   };
-  const script = (id) => read(join("modules", id.split("/").join("__") + ".js"));
-  const until = async (ok) => {
+  const script = (id: string) => read(join("modules", id.split("/").join("__") + ".js"));
+  const until = async (ok: () => boolean) => {
     for (let i = 0; i < 150 && !ok(); i++) await Bun.sleep(100);
     return ok();
   };
-  const world = (manifest) => {
+  const world = (manifest: Manifest) => {
     const w = createLoader();
     for (const mod of manifest.modules) {
       new Function("__VN__", "__VUE_HMR_RUNTIME__", script(mod))(w.VN, w.sandbox.__VUE_HMR_RUNTIME__);
@@ -461,15 +502,15 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
     const proc = watchBuild(join(dir, "src/main.ts"), dist);
     try {
       expect(await until(() => read("manifest.json").includes(MAIN))).toBe(true);
-      const manifest = JSON.parse(read("manifest.json"));
-      const npm = manifest.modules.filter((m) => !m.startsWith(rel));
-      expect(npm.filter((m) => m === "ctx-core")).toEqual(["ctx-core"]);
-      expect(npm.filter((m) => m.startsWith("ctx-core~"))).toHaveLength(1); // old-user's nested 1.0.0
+      const manifest = JSON.parse(read("manifest.json")) as Manifest;
+      const npm = manifest.modules.filter((m: string) => !m.startsWith(rel));
+      expect(npm.filter((m: string) => m === "ctx-core")).toEqual(["ctx-core"]);
+      expect(npm.filter((m: string) => m.startsWith("ctx-core~"))).toHaveLength(1); // old-user's nested 1.0.0
       expect(script("ctx-provider")).toContain('require("ctx-core")');
       expect(script("ctx-provider")).not.toContain('Symbol("ctx")');
 
       const w = world(manifest);
-      const main = w.VN.require(MAIN);
+      const main = w.VN.require(MAIN) as unknown as NpmMain;
       expect(main.injected).toBe("ctx-value"); // provided in one package, injected in another
       expect(main.registered).toBe("fmt"); // registered by a package, read by the app
       expect(main.keys.old).not.toBe(main.keys.app);
@@ -484,14 +525,14 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
         readFileSync(join(dir, "src/main.ts"), "utf8") + "export const edited = 1;\n",
       );
       expect(await until(() => script(MAIN).includes("edited"))).toBe(true);
-      const changes = JSON.parse(read("changes.json"));
+      const changes = JSON.parse(read("changes.json")) as Changes;
       expect(changes.changed).toContainEqual({ id: MAIN, kind: "reload" });
-      expect(changes.changed.filter((c) => npm.includes(c.id))).toEqual([]);
+      expect(changes.changed.filter((c: { id: string }) => npm.includes(c.id))).toEqual([]);
       expect(script("ctx-core")).toBe(coreScript);
       new Function("__VN__", "__VUE_HMR_RUNTIME__", script("ctx-core"))(w.VN, w.sandbox.__VUE_HMR_RUNTIME__);
       new Function("__VN__", "__VUE_HMR_RUNTIME__", script(MAIN))(w.VN, w.sandbox.__VUE_HMR_RUNTIME__);
       expect(w.VN.require("ctx-core")).toBe(core);
-      const again = w.VN.require(MAIN);
+      const again = w.VN.require(MAIN) as unknown as NpmMain;
       expect(again.edited).toBe(1);
       expect(again.injected).toBe("ctx-value");
     } finally {
@@ -513,14 +554,14 @@ describe("build.ts (dev): an edit to an inlined file rebuilds its importer", () 
     const dist = mkdtempSync(join(tmpdir(), "vn-build-inline-"));
     tmpDirs.push(dist);
     const proc = watchBuild(join(dir, "src/main.ts"), dist);
-    const read = (f) => {
+    const read = (f: string) => {
       try {
         return readFileSync(join(dist, f), "utf8");
       } catch {
         return "";
       }
     };
-    const until = async (ok) => {
+    const until = async (ok: () => boolean) => {
       for (let i = 0; i < 300 && !ok(); i++) await Bun.sleep(100);
       return ok();
     };
@@ -531,7 +572,7 @@ describe("build.ts (dev): an edit to an inlined file rebuilds its importer", () 
       await Bun.sleep(300); // past the watcher's first events
       writeFileSync(join(dir, "src/data.json"), '{ "v": 2 }\n');
       expect(await until(() => /v:\s*2\b/.test(script()))).toBe(true);
-      const changes = JSON.parse(read("changes.json"));
+      const changes = JSON.parse(read("changes.json")) as Changes;
       expect(changes.changed).toContainEqual({ id: rel, kind: "reload" });
     } finally {
       proc.kill();

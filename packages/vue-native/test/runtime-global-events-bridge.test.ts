@@ -1,7 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type RealmGlobal } from "./runtime-harness";
 import { readTsSource } from "./ts-source";
+
+type Listener = (event: Event) => unknown;
+interface Targetish {
+  addEventListener(type: string, listener: Listener, options?: boolean | AddEventListenerOptions): void;
+  removeEventListener(type: string, listener: Listener, options?: boolean | EventListenerOptions): void;
+  dispatchEvent(event: Event): boolean;
+}
+interface WindowLike extends Targetish {
+  __VN_UNLOAD__(): void;
+}
 
 const prelude = readTsSource(resolve(import.meta.dir, "../../../crates/vn-app/src/prelude.ts"));
 function world() {
@@ -9,7 +19,7 @@ function world() {
   const document = Object.assign(new EventTarget(), { head: {} });
   let originalMessages = 0;
   document.addEventListener("message", () => originalMessages++);
-  let identities: Function[] = [];
+  const identities: unknown[] = [];
   const rt = createRuntime({
     globals: {
       document,
@@ -23,7 +33,7 @@ function world() {
       new Function("globalThis", prelude)(global);
       for (const target of [global, document]) {
         for (const name of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
-          const value = (target as any)[name];
+          const value: unknown = Reflect.get(target, name);
           identities.push(value);
           Object.defineProperty(target, name, { value, writable: false, configurable: false });
         }
@@ -35,8 +45,9 @@ function world() {
   rt.nodeOps.insert(target, rt.global.document.body, null);
   return {
     rt,
-    g: rt.global as any,
-    document: rt.global.document as any,
+    realm: rt.global as RealmGlobal,
+    g: rt.global as unknown as WindowLike,
+    document: rt.global.document as unknown as Targetish,
     target,
     identities,
     originalMessages: () => originalMessages,
@@ -54,7 +65,7 @@ describe("bootstrap global event forwarding with sealed builtin methods", () => 
     g.addEventListener("click", () => seen.push("window-b"));
     rt.host.dispatcher(target.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, "");
     expect(seen).toEqual(["window-c", "document-c", "target", "document-b", "window-b"]);
-    expect([
+    expect<unknown[]>([
       g.addEventListener,
       g.removeEventListener,
       g.dispatchEvent,
@@ -92,7 +103,7 @@ describe("bootstrap global event forwarding with sealed builtin methods", () => 
   });
 
   test("reload drops the old delegate and its native page listeners but keeps bootstrap/native listeners", () => {
-    const { rt: first, g, document, originalMessages } = world();
+    const { realm, g, document, originalMessages } = world();
     let oldMessages = 0,
       newMessages = 0,
       newRuntimeEvents = 0;
@@ -101,7 +112,7 @@ describe("bootstrap global event forwarding with sealed builtin methods", () => 
     g.__VN_UNLOAD__();
     document.dispatchEvent(new Event("message"));
     expect([originalMessages(), oldMessages]).toEqual([2, 1]);
-    const second = createRuntime({ realm: g });
+    const second = createRuntime({ realm });
     second.createApp({ render: () => null }).mount();
     document.addEventListener("message", () => newMessages++);
     document.addEventListener("fullscreenchange", () => newRuntimeEvents++);

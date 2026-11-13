@@ -29,7 +29,7 @@ export function totalLabel(b: MemBreakdown): string {
 }
 
 export function memColor(key: string): string {
-  return MEM_COLORS[key] ?? MEM_COLORS.other;
+  return MEM_COLORS[key] ?? MEM_COLORS.other!;
 }
 
 export function formatMem(bytes: number | null | undefined): string {

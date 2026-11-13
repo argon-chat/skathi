@@ -17,7 +17,11 @@ import type {
   TraceSpan,
   TraceStatus,
 } from "../inspector-model";
-const props = defineProps<{ height: number; request?: InspectorRequest; sessionKey?: string | number }>();
+const props = defineProps<{
+  height: number;
+  request?: InspectorRequest | undefined;
+  sessionKey?: string | number | undefined;
+}>();
 const emit = defineEmits<{ (event: "recording-change", active: boolean): void }>();
 const status = ref<TraceStatus | null>(null),
   frames = ref<TraceFrame[]>([]),

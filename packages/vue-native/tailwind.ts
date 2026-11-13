@@ -47,7 +47,7 @@ export function generate(configPath: string, source?: CssSource): Promise<string
     const move = resolvePath(prev).toLowerCase() !== resolvePath(dir).toLowerCase();
     if (move) process.chdir(dir);
     try {
-      const result = await postcss([tailwindcss(configPath) as any]).process(
+      const result = await postcss([tailwindcss(configPath)]).process(
         source?.text ?? "@tailwind base;\n@tailwind utilities;\n",
         { from: source?.from },
       );

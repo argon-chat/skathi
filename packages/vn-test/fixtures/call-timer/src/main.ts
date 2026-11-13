@@ -1,6 +1,8 @@
 import { createApp, h, reactive, ref, watch, type VNode } from "vue-native";
 
-document.documentElement.style.fontSize = "14px";
+const dom = document as unknown as VnDomDocument;
+
+dom.documentElement.style.fontSize = "14px";
 
 const CELLS = Array.from({ length: 30 }, (_, i) => i % 10);
 const REST = 10;
@@ -125,7 +127,7 @@ createApp({
     return total;
   },
   cells() {
-    return Array.from(document.querySelectorAll(".cell")).map((cell) => {
+    return Array.from(dom.querySelectorAll(".cell")).map((cell) => {
       const r = cell.getBoundingClientRect();
       const spans = Array.from(cell.querySelectorAll("span"));
       const inView = spans.find((s) => Math.abs(s.getBoundingClientRect().top - r.top) < 1);

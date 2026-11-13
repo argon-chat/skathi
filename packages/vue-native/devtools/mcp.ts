@@ -23,7 +23,7 @@ import { mcpTools } from "./commands";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
 const distFlag = argv.indexOf("--dist");
-const DIST = distFlag >= 0 && argv[distFlag + 1] ? resolve(argv[distFlag + 1]) : resolve(HERE, "..", "dist");
+const DIST = distFlag >= 0 && argv[distFlag + 1] ? resolve(argv[distFlag + 1]!) : resolve(HERE, "..", "dist");
 // `--app <name>`: a packaged app. Re-resolved on every call: each launch is a new pid and so a new slot.
 const appFlag = argv.indexOf("--app");
 const APP = appFlag >= 0 && argv[appFlag + 1] ? argv[appFlag + 1]! : null;

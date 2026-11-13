@@ -1,43 +1,24 @@
 {
-  // Type-check only (nothing emits):
-  //   bun x vue-tsc --noEmit -p apps/tsconfig.json
-  // Not extending packages/vue-native/tsconfig.json: its `include` is the runtime's own src/**.
+  // `bun run typecheck` in packages/vue-native checks this with vue-tsc.
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-
-    // No "DOM": the apps run on redjs, which ships a small subset of the web platform. env.d.ts
-    // declares that subset; add missing names there, never widen `lib`.
+    // No "DOM": the apps run on redjs. env.d.ts declares the subset it ships; add names there, never widen `lib`.
     "lib": ["ESNext"],
-
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-
-    // Keeps a bare `x: T` field declaration erased; bun reads this key too.
     "useDefineForClassFields": false,
 
-    "isolatedModules": true,
-    "forceConsistentCasingInFileNames": true,
-    "noImplicitOverride": true,
-
-    // The apps have no node_modules of their own: build.ts pre-seeds these bare specifiers into the
-    // loader's registry, and these paths mirror that mapping.
+    // The apps have no node_modules of their own: build.ts pre-seeds these bare specifiers into the loader's
+    // registry, and these paths mirror that mapping.
     "baseUrl": ".",
     "paths": {
-      // Both names are one module: runtime.ts re-exports @vue/runtime-core.
       "vue": ["../packages/vue-native/src/runtime.ts"],
       "vue-native": ["../packages/vue-native/src/runtime.ts"],
       "vue-router": ["../packages/vue-native/node_modules/vue-router"],
       "pinia": ["../packages/vue-native/node_modules/pinia"]
     },
-
-    // No @types package may put a browser or Node global in scope.
     "types": []
   },
   "include": [
-    // Ambient declarations are not pulled in by importing `vue-native`; they must be listed.
+    // Ambient declarations are not pulled in by importing `vue-native`.
     "../packages/vue-native/src/engine.d.ts",
     "../packages/vue-native/src/protocol.d.ts",
     "../packages/vue-native/src/indexeddb.d.ts",
@@ -52,8 +33,11 @@
     "shaderlab/src/**/*.vue",
     "popout/src/**/*.ts",
     "popout/src/**/*.vue",
+    "listperf/src/**/*.ts",
+    "listperf/src/**/*.vue",
     "devtools/src/**/*.ts",
-    "devtools/src/**/*.vue"
+    "devtools/src/**/*.vue",
+    "../packages/vn-test/fixtures/*/src/**/*.ts",
+    "../packages/vn-test/fixtures/*/src/**/*.vue"
   ]
-  // hello/tailwind.config.ts is out of scope: a build-time Node module (needs @types/node).
 }

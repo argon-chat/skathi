@@ -132,7 +132,7 @@ function realWrapper(effect: EffectSchema, fields: Field[]): string {
   const assignments = fields
     .map((field) => {
       const param = effect.params[field.firstParam];
-      return `    vn_material.${field.name} = ${loadExpr(param, field.components)};`;
+      return `    vn_material.${field.name} = ${loadExpr(param!, field.components)};`;
     })
     .join("\n");
   return `${WRAPPER_BANNER}
@@ -182,12 +182,12 @@ function parseDiagnostics(text: string, userLines: number, file: string): Diagno
   let m: RegExpExecArray | null;
   while ((m = codespan.exec(text))) {
     const detail = /\^+[ \t]+(.+)$/m.exec(m[6] ?? "");
-    push(m[1], Number(m[4]), Number(m[5]), (detail ? detail[1] : m[2]).trim());
+    push(m[1]!, Number(m[4]), Number(m[5]), (detail ? detail[1]! : m[2]!).trim());
   }
 
   const flat = /^(.*?)\((\d+)(?:,(\d+))?\):\s*(error|warning|note)\s+\S+:\s*(.*)$/gm;
   while ((m = flat.exec(text))) {
-    push(m[4], Number(m[2]), Number(m[3] ?? 0), m[5]);
+    push(m[4]!, Number(m[2]), Number(m[3] ?? 0), m[5]!);
   }
   return out;
 }
@@ -201,13 +201,34 @@ function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-type RunResult = { hlsl: string | null; reflection: any; stderr: string; ok: boolean };
+interface ReflType {
+  kind?: string;
+  scalarType?: string;
+  elementType?: ReflType;
+  elementCount?: number | string;
+  userAttribs?: Attribute[];
+  fields?: ReflField[];
+}
+interface ReflField {
+  name?: unknown;
+  type?: ReflType;
+  userAttribs?: Attribute[];
+}
+interface ReflParam {
+  name?: string;
+  type?: ReflType;
+  binding?: { kind?: unknown; index?: unknown };
+}
+interface Reflection {
+  parameters?: ReflParam[];
+}
+type RunResult = { hlsl: string | null; reflection: Reflection | null; stderr: string; ok: boolean; input: string };
 
 /// slangc bug (2026.12): `-reflection-json` re-emits a string literal's source spelling instead of
 /// JSON-escaping it, so an apostrophe comes out as `\'` and `JSON.parse` rejects the file. Repair:
 /// turn the C-only escapes into their character, then double any backslash that is not a legal JSON
 /// escape. Fails loudly: null would surface later as "no parameters".
-function readReflection(path: string): any {
+function readReflection(path: string): Reflection | null {
   if (!existsSync(path)) return null;
   const text = readFileSync(path, "utf8");
   try {
@@ -272,17 +293,17 @@ function runSlangc(
     stderr,
     hlsl: ok ? readFileSync(output, "utf8") : null,
     reflection: readReflection(reflectionPath),
-    ...({ input } as any),
+    input,
   };
 }
 
 /// The register each top-level parameter landed on: the contract with the D3D11 renderer
 /// (t0 backdrop, t1 instance buffer, t2 snapshot, b0 globals, s1 clamp).
-function bindings(reflection: any): Array<Record<string, unknown>> {
+function bindings(reflection: Reflection | null): Array<Record<string, unknown>> {
   const params = Array.isArray(reflection?.parameters) ? reflection.parameters : [];
   return params
-    .filter((p: any) => p?.name !== "vn_reflect")
-    .map((p: any) => ({ name: p?.name, kind: p?.binding?.kind, index: p?.binding?.index }));
+    .filter((p) => p?.name !== "vn_reflect")
+    .map((p) => ({ name: p?.name, kind: p?.binding?.kind, index: p?.binding?.index }));
 }
 
 type Attribute = { name: string; arguments: unknown[] };
@@ -331,7 +352,7 @@ function parseDefault(text: string, components: number, where: string): [number,
     });
   if (numbers.length === 0) throw new SchemaError(`${where}: empty [VnDefault]`);
   if (numbers.length === 1) {
-    for (let c = 0; c < components; c += 1) out[c] = numbers[0];
+    for (let c = 0; c < components; c += 1) out[c] = numbers[0]!;
     return out;
   }
   if (numbers.length !== components) {
@@ -339,7 +360,7 @@ function parseDefault(text: string, components: number, where: string): [number,
       `${where}: [VnDefault] has ${numbers.length} values but the field has ${components} component(s)`,
     );
   }
-  for (let c = 0; c < components; c += 1) out[c] = numbers[c];
+  for (let c = 0; c < components; c += 1) out[c] = numbers[c]!;
   return out;
 }
 
@@ -361,7 +382,7 @@ function allocate(used: boolean[], components: number): number {
   return -1;
 }
 
-function fieldComponents(type: any, where: string): number {
+function fieldComponents(type: ReflType | undefined, where: string): number {
   if (type?.kind === "scalar") {
     if (type.scalarType !== "float32") {
       throw new SchemaError(
@@ -389,14 +410,14 @@ function fieldComponents(type: any, where: string): number {
 const COMPONENT_SUFFIX = ["x", "y", "z", "w"];
 
 function buildSchema(
-  reflection: any,
+  reflection: Reflection | null,
   structName: string,
   source: string,
 ): {
   effect: EffectSchema;
   fields: Field[];
 } {
-  const param = (reflection?.parameters ?? []).find((p: any) => p?.name === "vn_reflect");
+  const param = (reflection?.parameters ?? []).find((p) => p?.name === "vn_reflect");
   const element = param?.type?.elementType;
   if (!element || element.kind !== "struct") {
     throw new SchemaError(
@@ -506,7 +527,7 @@ function buildSchema(
           kind: isLength ? "length" : "number",
           slot: slot + c,
           required: !optional,
-          default: [defaults[c], 0, 0, 0],
+          default: [defaults[c]!, 0, 0, 0],
           range,
         });
       }
@@ -536,12 +557,13 @@ function buildSchema(
   // Type-directed matching needs a skippable parameter's kind to differ from the next one's, else
   // `ripple(1)` is ambiguous.
   for (let i = 0; i < params.length; i += 1) {
-    if (params[i].required) continue;
+    const cur = params[i]!;
+    if (cur.required) continue;
     const nextParam = params[i + 1];
-    if (nextParam && nextParam.kind === params[i].kind) {
+    if (nextParam && nextParam.kind === cur.kind) {
       throw new SchemaError(
-        `${source}: \`${name}\` — optional parameter \`${params[i].name}\` has the same CSS ` +
-          `type (${params[i].kind}) as the parameter after it (\`${nextParam.name}\`), so an ` +
+        `${source}: \`${name}\` — optional parameter \`${cur.name}\` has the same CSS ` +
+          `type (${cur.kind}) as the parameter after it (\`${nextParam.name}\`), so an ` +
           "argument in that position would be ambiguous. Make it required, reorder, or change " +
           "its type.",
       );
@@ -586,7 +608,7 @@ function findStruct(file: string, source: string): string {
         `(${matches.map((m) => m[1]).join(", ")}) — one effect per file`,
     );
   }
-  return matches[0][1];
+  return matches[0]![1]!;
 }
 
 function discover(dir: string): EffectSource[] {
@@ -654,7 +676,7 @@ function compile(
     if (d.message) console.warn(`  ${d.file}:${d.line}: ${d.severity} ${d.message}`);
   }
 
-  const staged = (real as any).input as string;
+  const staged = real.input;
   const body = rewriteLineDirectives(real.hlsl!, staged, stablePath);
   const header =
     `// GENERATED by packages/vue-native/shaders.ts — DO NOT EDIT.\n` +
@@ -801,7 +823,7 @@ function builtinNames(): string[] {
   const path = join(GENERATED, "effects.json");
   if (!existsSync(path)) return BUILTIN_ORDER;
   try {
-    return JSON.parse(readFileSync(path, "utf8")).effects.map((e: any) => e.name);
+    return (JSON.parse(readFileSync(path, "utf8")) as { effects: { name: string }[] }).effects.map((e) => e.name);
   } catch {
     return BUILTIN_ORDER;
   }

@@ -30,7 +30,7 @@ export function useVirtual(heights: () => number[], height: () => number): Virtu
     const hs = heights();
     const out = new Array<number>(hs.length + 1);
     out[0] = 0;
-    for (let i = 0; i < hs.length; i++) out[i + 1] = out[i] + hs[i];
+    for (let i = 0; i < hs.length; i++) out[i + 1] = out[i]! + hs[i]!;
     return out;
   });
 
@@ -48,7 +48,7 @@ export function useVirtual(heights: () => number[], height: () => number): Virtu
     let hi = o.length - 1;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
-      if (o[mid] <= y) lo = mid;
+      if (o[mid]! <= y) lo = mid;
       else hi = mid - 1;
     }
     return lo;
@@ -61,7 +61,7 @@ export function useVirtual(heights: () => number[], height: () => number): Virtu
     const n = offsets.value.length - 1;
     return Math.min(n, indexAt(clamp(scroll.value) + height()) + 1 + OVERSCAN);
   });
-  const padTop = computed(() => offsets.value[start.value] - clamp(scroll.value));
+  const padTop = computed(() => offsets.value[start.value]! - clamp(scroll.value));
   const atBottom = computed(() => scroll.value >= maxScroll.value - 1);
   const thumb = computed(() => {
     const view = height();
@@ -91,8 +91,8 @@ export function useVirtual(heights: () => number[], height: () => number): Virtu
     ensureVisible(i: number) {
       const o = offsets.value;
       if (i < 0 || i + 1 >= o.length) return;
-      const top = o[i];
-      const bottom = o[i + 1];
+      const top = o[i]!;
+      const bottom = o[i + 1]!;
       const view = height();
       if (top < scroll.value) scroll.value = clamp(top);
       else if (bottom > scroll.value + view) scroll.value = clamp(bottom - view);

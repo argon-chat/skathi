@@ -147,10 +147,10 @@ function setDeps(id: ModuleId, list: ModuleId[] | null | undefined): void {
   const prev = deps.get(id);
   if (prev) {
     for (let i = 0; i < prev.length; i++) {
-      const set = importers.get(prev[i]);
+      const set = importers.get(prev[i]!);
       if (!set) continue;
       set.delete(id);
-      if (!set.size) importers.delete(prev[i]);
+      if (!set.size) importers.delete(prev[i]!);
     }
   }
   const next: ModuleId[] = [];
@@ -163,8 +163,8 @@ function setDeps(id: ModuleId, list: ModuleId[] | null | undefined): void {
   }
   deps.set(id, next);
   for (let i = 0; i < next.length; i++) {
-    let set = importers.get(next[i]);
-    if (!set) importers.set(next[i], (set = new Set()));
+    let set = importers.get(next[i]!);
+    if (!set) importers.set(next[i]!, (set = new Set()));
     set.add(id);
   }
 }
@@ -352,9 +352,9 @@ function reloadDependents(id: ModuleId, hmr: VnVueHmrRuntime, batch: HmrBatch): 
     return true;
   }
 
-  for (let i = 0; i < invalidate.length; i++) cache.delete(invalidate[i]);
+  for (let i = 0; i < invalidate.length; i++) cache.delete(invalidate[i]!);
   for (let i = 0; i < targets.length; i++) {
-    const target = targets[i];
+    const target = targets[i]!;
     if (batch.reloaded.has(target)) continue;
     const comp = componentOf(requireId(target, null)); // re-runs the factory chain
     if (!comp) {
@@ -408,7 +408,7 @@ function hmrApply(changes: HmrChanges | null | undefined): void {
   let at: ModuleId | null = null;
   try {
     for (let i = 0; i < plain.length; i++) {
-      at = plain[i].id;
+      at = plain[i]!.id;
       if (batch.fresh.has(at)) {
         log("skip " + at + " (already refreshed by another change in this batch)");
         continue;
@@ -416,7 +416,7 @@ function hmrApply(changes: HmrChanges | null | undefined): void {
       if (!reloadDependents(at, hmr, batch)) return;
     }
     for (let i = 0; i < components.length; i++) {
-      const change = components[i];
+      const change = components[i]!;
       at = change.id;
       if (batch.reloaded.has(at)) {
         // A dependency change already re-ran this factory and reloaded it; another pass would re-mount again.

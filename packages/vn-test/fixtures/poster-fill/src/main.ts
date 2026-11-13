@@ -1,6 +1,8 @@
 import { createApp, h, onMounted, ref } from "vue-native";
 import "./poster.css";
 
+const dom = document as unknown as VnDomDocument;
+
 function bands(w: number, h: number): string {
   const wide = w >= h;
   const step = (wide ? w : h) / 3;
@@ -77,7 +79,7 @@ const Attachment = {
 
 const Grid = {
   setup() {
-    onMounted(() => paint(document.getElementById("p-canvas") as HTMLCanvasElement));
+    onMounted(() => paint(dom.getElementById("p-canvas") as HTMLCanvasElement));
     return () =>
       h("div", { class: "image-grid" }, [
         h("div", { class: "grid-row", style: { height: "120px" } }, [

@@ -70,7 +70,10 @@ export function parseParts(list: unknown, where: string): Part[] {
 }
 
 /** The variant a selection asks for (`host` is the legacy whole-variant spelling). */
-export function selectVariant(sel: { features?: Part[]; without?: Part[]; host?: Variant }, where: string): Variant {
+export function selectVariant(
+  sel: { features?: Part[] | undefined; without?: Part[] | undefined; host?: Variant | undefined },
+  where: string,
+): Variant {
   const given = [sel.features && "features", sel.without && "without", sel.host && "host"].filter(Boolean);
   if (given.length > 1) throw new ConfigError(`${where}: give one of ${given.join(" / ")}, not several`);
   if (sel.features) return variantFor(OPTIONAL.filter((p) => !sel.features!.includes(p)));
@@ -97,11 +100,11 @@ export function cargoFeatureArgs(variant: Variant): string[] {
 }
 
 export interface WindowsConfig {
-  exeName?: string;
-  icon?: string;
-  company?: string;
-  copyright?: string;
-  description?: string;
+  exeName?: string | undefined;
+  icon?: string | undefined;
+  company?: string | undefined;
+  copyright?: string | undefined;
+  description?: string | undefined;
   console?: boolean;
   host?: Variant;
   features?: Part[];
@@ -304,7 +307,7 @@ const CATEGORY = /^public\.app-category\.[a-z]+(-[a-z]+)*$/;
 function readMacos(
   raw: unknown,
   appRoot: string,
-  fallback: { id: string; productName: string; name: string; icon: string | null; copyright?: string },
+  fallback: { id: string; productName: string; name: string; icon: string | null; copyright?: string | undefined },
   warnings: string[],
 ): MacConfig {
   if (raw !== undefined && (!raw || typeof raw !== "object" || Array.isArray(raw))) {
@@ -447,7 +450,10 @@ const str = (v: unknown, where: string): string | undefined => {
 };
 
 /** A config override changes configuration only; entry and relative assets keep the target's app root. */
-export function loadAppConfig(target: string, options: { configPath?: string; platform?: Platform } = {}): AppConfig {
+export function loadAppConfig(
+  target: string,
+  options: { configPath?: string | undefined; platform?: Platform | undefined } = {},
+): AppConfig {
   const { appRoot, entry } = resolveApp(target);
   if (options.configPath !== undefined && !options.configPath.trim()) throw new ConfigError("--config needs a path");
   const configPath = options.configPath === undefined ? join(appRoot, "vn.config.json") : resolve(options.configPath);

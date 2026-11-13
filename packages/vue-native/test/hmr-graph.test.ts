@@ -10,11 +10,12 @@ import {
   bootStandardFixture,
   createLoader,
   defineComponent,
+  type HmrChange,
   definePlain,
   redefineCssOnly,
 } from "./loader-harness";
 
-const changed = (id, kind) => [{ id, kind: kind || "reload" }];
+const changed = (id: string, kind?: HmrChange["kind"]): HmrChange[] => [{ id, kind: kind || "reload" }];
 
 describe("external app module ids", () => {
   test("retains parents outside the SDK while resolving sibling modules", () => {
@@ -29,7 +30,7 @@ describe("external app module ids", () => {
       module.exports = { shared: 17 };
     });
     w.VN.define(entry, (require, module) => {
-      module.exports = { value: require("./gpu/draw").draw + require("../shared").shared };
+      module.exports = { value: (require("./gpu/draw").draw as number) + (require("../shared").shared as number) };
     });
     expect(w.VN.resolve("./gpu/draw", entry)).toBe(helper);
     expect(w.VN.resolve("../shared", entry)).toBe(shared);
@@ -75,17 +76,17 @@ describe("shared plain module changed", () => {
 
   test("the reloaded components see the NEW exports", () => {
     const w = bootStandardFixture();
-    const oldApp = w.hmr.records.get(APP);
-    expect(oldApp.imported["./util.js"].version).toBe(1);
+    const oldApp = w.hmr.records.get(APP)!;
+    expect(oldApp.imported["./util.js"]!.version).toBe(1);
     definePlain(w, UTIL, [], 2);
     applyChanges(w, changed(UTIL));
 
-    const newApp = w.hmr.records.get(APP);
+    const newApp = w.hmr.records.get(APP)!;
     expect(newApp).not.toBe(oldApp); // a fresh def object from a fresh factory run
     expect(newApp.__version).toBe(1); // App's own code did not change...
-    expect(newApp.imported["./util.js"].version).toBe(2); // ...but its import did
-    expect(w.hmr.records.get(COUNTER).imported["../util.js"].version).toBe(2);
-    expect(newApp.imported["./util.js"]).toBe(w.hmr.records.get(COUNTER).imported["../util.js"]);
+    expect(newApp.imported["./util.js"]!.version).toBe(2); // ...but its import did
+    expect(w.hmr.records.get(COUNTER)!.imported["../util.js"]!.version).toBe(2);
+    expect(newApp.imported["./util.js"]!).toBe(w.hmr.records.get(COUNTER)!.imported["../util.js"]!);
   });
 
   test("createRecord stays idempotent across the reload", () => {
@@ -160,7 +161,7 @@ describe("walk boundaries", () => {
     expect(w.runs(MID)).toBe(2);
     expect(w.runs(APP)).toBe(2);
     expect(w.hmr.reload).toEqual([APP]);
-    expect(w.hmr.records.get(APP).imported["./mid.js"].imported["./base.js"].version).toBe(2);
+    expect(w.hmr.records.get(APP)!.imported["./mid.js"]!.imported["./base.js"]!.version).toBe(2);
   });
 
   test("a cycle between plain modules terminates", () => {
@@ -239,7 +240,7 @@ describe("fallbacks", () => {
     w.VN.setDeps(APP, [UTIL, COUNTER]);
     w.VN.define(
       APP,
-      function (require, module, exports) {
+      function (require, _module, exports) {
         require("./util.js");
         exports.default = { notAComponent: true };
       },
@@ -330,8 +331,8 @@ describe("batched changes", () => {
     expect(w.runs(COUNTER)).toBe(2);
     expect(w.hmr.reload.slice().sort()).toEqual([APP, COUNTER].sort());
     expect(w.hmr.reload.length).toBe(2);
-    expect(w.hmr.records.get(APP).__version).toBe(2);
-    expect(w.hmr.records.get(APP).imported["./util.js"].version).toBe(2);
+    expect(w.hmr.records.get(APP)!.__version).toBe(2);
+    expect(w.hmr.records.get(APP)!.imported["./util.js"]!.version).toBe(2);
   });
 
   test("a chain changed end to end runs each module once", () => {
@@ -417,7 +418,7 @@ describe("style-only edits", () => {
     const w = bootStandardFixture();
     const before = w.VN.require(APP).default;
     w.VN.setDeps(APP, [UTIL, COUNTER]);
-    w.VN.define(APP, function (require, module, exports) {
+    w.VN.define(APP, function (require, _module, exports) {
       require("./util.js");
       require("./components/Counter.vue");
       exports.default = { __hmrId: APP, render: function () {} };

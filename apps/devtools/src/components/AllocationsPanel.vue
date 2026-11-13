@@ -2,7 +2,11 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { allocationDiff, allocationKey, byteLabel, rowWindow } from "../inspector-model";
 import type { AllocationRow, AllocationSnapshot, InspectorRequest } from "../inspector-model";
-const props = defineProps<{ height: number; request?: InspectorRequest; sessionKey?: string | number }>();
+const props = defineProps<{
+  height: number;
+  request?: InspectorRequest | undefined;
+  sessionKey?: string | number | undefined;
+}>();
 const emit = defineEmits<{ (event: "recording-change", active: boolean): void }>();
 const snapshot = ref<AllocationSnapshot | null>(null),
   baseline = ref<AllocationRow[] | null>(null),

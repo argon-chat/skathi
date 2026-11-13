@@ -1,12 +1,14 @@
 // It paints nothing, but its CSS `visibility` is `visible`, so it takes focus.
 import { createApp, defineComponent, h, nextTick, onMounted, ref, Teleport } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 type Out = { log: string[]; active: string[] };
 const out: Out = { log: [], active: [] };
 (globalThis as unknown as { __VN_TEST_FOCUS_STYLE__: Out }).__VN_TEST_FOCUS_STYLE__ = out;
 
-const idOf = (t: EventTarget | null) => (t as { id?: string } | null)?.id || "-";
-document.addEventListener("focusin", (e) => out.log.push(`focusin t=${idOf(e.target)}`));
+const idOf = (t: unknown) => (t as { id?: string } | null)?.id || "-";
+dom.addEventListener("focusin", (e) => out.log.push(`focusin t=${idOf(e.target)}`));
 
 const tonesOpen = ref(false);
 
@@ -20,7 +22,7 @@ const Tones = defineComponent({
       // the next line.
       position.value = { left: "24px", top: "220px", visibility: "visible" };
       root.value?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus({ preventScroll: true });
-      out.active.push(idOf(document.activeElement));
+      out.active.push(idOf(dom.activeElement));
     });
     return () =>
       h(Teleport, { to: "body" }, [

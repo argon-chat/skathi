@@ -26,7 +26,6 @@ import {
   resubscribe,
   pickStep,
   pollFallback,
-  refreshMem,
   refreshTargets,
   refreshWindows,
   setTab,
@@ -91,7 +90,7 @@ function onKey(event: VnKeyboardEvent): void {
   }
   if (ctrl && "12345".includes(event.key)) {
     event.preventDefault();
-    setTab((["elements", "network", "performance", "storage", "targets"] as const)[Number(event.key) - 1]);
+    setTab((["elements", "network", "performance", "storage", "targets"] as const)[Number(event.key) - 1]!);
     return;
   }
   if (event.key === "Escape") {

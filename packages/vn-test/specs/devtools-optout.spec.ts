@@ -34,7 +34,7 @@ afterAll(() => {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function until<T>(what: string, probe: () => Promise<T>, ms = 20_000): Promise<T> {
+async function until<T>(what: string, probe: () => Promise<T>, ms = 20_000): Promise<NonNullable<T>> {
   const deadline = Date.now() + ms;
   let last: unknown;
   for (;;) {

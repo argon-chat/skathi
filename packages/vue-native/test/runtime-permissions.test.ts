@@ -4,7 +4,9 @@
 import { describe, expect, test } from "bun:test";
 import { createRuntime, PERMISSION_NAMES } from "./runtime-harness";
 
-function withStates(states) {
+type ChangeEvent = VnEvent & { name: string; state: string };
+
+function withStates(states: Record<string, string>) {
   const rt = createRuntime();
   for (const [name, state] of Object.entries(states)) rt.host.permissions.states.set(name, state);
   return rt;
@@ -70,7 +72,7 @@ describe("appPermissions", () => {
       deniedBySystem: false,
     });
     expect(byName.camera).toEqual({ name: "camera", state: "denied", canRequest: true, deniedBySystem: false });
-    expect(byName.geolocation.canRequest).toBe(false);
+    expect(byName.geolocation?.canRequest).toBe(false);
   });
 
   test("request() resolves immediately when the host settled synchronously", async () => {
@@ -124,8 +126,11 @@ describe("appPermissions", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    const seen = [];
-    rt.appPermissions.addEventListener("change", (e) => seen.push([e.name, e.state]));
+    const seen: string[][] = [];
+    rt.appPermissions.addEventListener("change", (e) => {
+      const change = e as ChangeEvent;
+      seen.push([change.name, change.state]);
+    });
 
     rt.host.permissions.move("microphone", "denied");
     expect(seen).toEqual([["microphone", "denied"]]);
@@ -141,8 +146,10 @@ describe("appPermissions", () => {
     const rt = withStates({ notifications: "granted" });
     await Promise.resolve();
     await Promise.resolve();
-    const seen = [];
-    rt.appPermissions.addEventListener("change", (e) => seen.push(e.state));
+    const seen: string[] = [];
+    rt.appPermissions.addEventListener("change", (e) => {
+      seen.push((e as ChangeEvent).state);
+    });
     rt.host.permissions.move("notifications", "unsupported");
     expect(seen).toEqual(["unsupported"]);
   });

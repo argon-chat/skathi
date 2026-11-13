@@ -2,6 +2,8 @@
 // patch among them) run before the next event's handlers.
 import { createApp, h } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 const log: string[] = [];
 (globalThis as { __VN_TEST_ORDER__?: unknown }).__VN_TEST_ORDER__ = {
   log,
@@ -21,7 +23,7 @@ function rec(name: string, cancel = false, stop = false) {
 
 // The pad's copy is cancelled with nothing in its store, so the system clipboard is never written.
 // Added before mount(), as module-scope code does.
-document.addEventListener("copy", rec("copy", true));
+dom.addEventListener("copy", rec("copy", true));
 
 const box = { width: "120px", height: "40px", background: "#2a3440", margin: "4px" };
 const scroller = { height: "60px", width: "140px", overflow: "auto", background: "#202020" };

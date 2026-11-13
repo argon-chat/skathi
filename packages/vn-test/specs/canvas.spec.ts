@@ -212,7 +212,7 @@ test(
   `);
     const data = (got as { ok: number[] }).ok;
     expect(data.slice(0, 4)).toEqual([255, 255, 255, 128]);
-    expect(Math.abs(data[11] - 128)).toBeLessThanOrEqual(2);
+    expect(Math.abs(data[11]! - 128)).toBeLessThanOrEqual(2);
 
     const b = (await app.query("#cv-alpha")).nodes[0]!.bounds!;
     const shot = readPng(await app.screenshot());

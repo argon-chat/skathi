@@ -6,18 +6,16 @@
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
 
-type N = { __vnId: number };
-
 function world() {
   const rt = createRuntime();
   rt.createApp({ render: () => null }).mount();
   const doc = rt.global.document;
-  const body = doc.body as N;
-  const outer = rt.nodeOps.createElement("div") as N;
+  const body = doc.body;
+  const outer = rt.nodeOps.createElement("div");
   rt.nodeOps.insert(outer, body, null);
-  const inner = rt.nodeOps.createElement("span") as N;
+  const inner = rt.nodeOps.createElement("span");
   rt.nodeOps.insert(inner, outer, null);
-  const text = rt.nodeOps.createText("t") as N;
+  const text = rt.nodeOps.createText("t");
   rt.nodeOps.insert(text, inner, null);
   return { rt, doc, body, outer, inner, text };
 }

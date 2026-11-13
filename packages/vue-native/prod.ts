@@ -319,7 +319,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
       source: text,
       filename: absPath,
       id: scopeId,
-      scoped: style.scoped,
+      scoped: style.scoped ?? false,
       trim: true,
       // MUST match compileScript's `isProd`: both hash a v-bind() variable's name from it.
       isProd: true,
@@ -417,10 +417,10 @@ const SHAPES = {
 
 const vuePlugin = {
   name: "vue-sfc-prod",
-  setup(build: any) {
+  setup(build: Bun.PluginBuilder) {
     // `import "./index.css"`: Bun would treat the .css as an asset; it becomes an empty module and
     // its content goes into the stylesheet.
-    build.onLoad({ filter: /\.css$/ }, async (args: any) => {
+    build.onLoad({ filter: /\.css$/ }, async (args: Bun.OnLoadArgs) => {
       const id = toId(args.path);
       if (!cssById.has(id)) {
         const source = await Bun.file(args.path).text();
@@ -433,14 +433,14 @@ const vuePlugin = {
     build.onResolve({ filter: /^(vue|vue-native)$/ }, () => ({ path: RUNTIME_ENTRY }));
     if (APP_ALIASES.size) {
       const names = [...APP_ALIASES.keys()].map((name) => name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
-      build.onResolve({ filter: new RegExp(`^(${names.join("|")})$`) }, (args: any) => ({
+      build.onResolve({ filter: new RegExp(`^(${names.join("|")})$`) }, (args: Bun.OnResolveArgs) => ({
         path: APP_ALIASES.get(args.path)!,
       }));
     }
-    build.onResolve({ filter: /^(vue-router|pinia)$/ }, (args: any) => ({
+    build.onResolve({ filter: /^(vue-router|pinia)$/ }, (args: Bun.OnResolveArgs) => ({
       path: FRAMEWORK.get(args.path)!.path,
     }));
-    build.onLoad({ filter: /\.vue$/ }, async (args: any) => {
+    build.onLoad({ filter: /\.vue$/ }, async (args: Bun.OnLoadArgs) => {
       const source = await Bun.file(args.path).text();
       return compileVue(args.path, source);
     });
@@ -450,9 +450,12 @@ const vuePlugin = {
 const ENTRY_ID = "vn-entry:main";
 const entryPlugin = {
   name: "vn-html-entry",
-  setup(build: any) {
-    build.onResolve({ filter: /^vn-(entry|html):/ }, (args: any) => ({ path: args.path, namespace: "vn-html" }));
-    build.onLoad({ filter: /.*/, namespace: "vn-html" }, (args: any) => {
+  setup(build: Bun.PluginBuilder) {
+    build.onResolve({ filter: /^vn-(entry|html):/ }, (args: Bun.OnResolveArgs) => ({
+      path: args.path,
+      namespace: "vn-html",
+    }));
+    build.onLoad({ filter: /.*/, namespace: "vn-html" }, (args: Bun.OnLoadArgs) => {
       if (args.path === ENTRY_ID) {
         return {
           contents: `import "vn-html:prelude";\nimport ${J(ENTRY_ABS.split(sep).join("/"))};\n`,
@@ -512,7 +515,7 @@ async function build() {
     for (const log of result.logs) console.error(log);
     throw new Error("prod build failed");
   }
-  const body = tagModuleNamespaces(await result.outputs[0].text()).code;
+  const body = tagModuleNamespaces(await result.outputs[0]!.text()).code;
 
   if (/\b__DEV__\b/.test(body)) {
     throw new Error("__DEV__ survived minification — the define block did not apply");

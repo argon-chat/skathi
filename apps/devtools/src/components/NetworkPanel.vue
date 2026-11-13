@@ -61,7 +61,7 @@ function statusTitle(entry: NetEntry): string {
 function shortUrl(url: string): { host: string; rest: string } {
   const m = /^([a-z]+:\/\/[^/]+)(\/.*)?$/i.exec(url);
   if (!m) return { host: "", rest: url };
-  return { host: m[1], rest: m[2] || "/" };
+  return { host: m[1]!, rest: m[2] || "/" };
 }
 
 /** An answer from the HTTP cache had none, and says so the way Chromium's Size column does. */
@@ -142,7 +142,7 @@ function step(delta: number): void {
   if (!all.length) return;
   const at = all.findIndex((e) => e.seq === state.netSelected);
   const next = at < 0 ? (delta > 0 ? 0 : all.length - 1) : Math.max(0, Math.min(all.length - 1, at + delta));
-  void selectNet(all[next].seq);
+  void selectNet(all[next]!.seq);
 }
 
 function withDetail(seq: number, what: string, make: (d: Detail) => string | null): void {

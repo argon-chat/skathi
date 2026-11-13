@@ -17,7 +17,7 @@ import { png } from "../fixtures/http-images/server";
 const T = 120_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const bodies = new Map<string, Uint8Array>();
+const bodies = new Map<string, Uint8Array<ArrayBuffer>>();
 const body = (key: string, seed: number, size: number) => {
   let b = bodies.get(key);
   if (!b) bodies.set(key, (b = png(seed, size)));
@@ -83,7 +83,7 @@ const popouts = (): Promise<Popout[]> => app.eval("JSON.parse(__vn_window_popout
 const viewer = async () => (await popouts()).find((p) => p.title === "Lightbox")!;
 const lb = <T>(expr: string): Promise<T> => app.eval(`JSON.parse(JSON.stringify(__VN_TEST_LB__.${expr}))`);
 
-async function until<V>(what: string, probe: () => Promise<V>, ms = 8000): Promise<V> {
+async function until<V>(what: string, probe: () => Promise<V>, ms = 8000): Promise<NonNullable<V>> {
   const deadline = Date.now() + ms;
   let last: unknown;
   for (;;) {

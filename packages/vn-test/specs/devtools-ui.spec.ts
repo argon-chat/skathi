@@ -102,7 +102,8 @@ describe("the panels", () => {
       // screen.
       const segs = await inspector.query(".line .seg");
       bunExpect(segs.count).toBeGreaterThan(1);
-      const [badge, rest] = segs.nodes;
+      const badge = segs.nodes[0]!;
+      const rest = segs.nodes[1]!;
       bunExpect(badge.text).toBe("BADGE");
       // Stacked, the tops would differ and both x's would be the column's.
       bunExpect(badge.bounds!.y).toBe(rest.bounds!.y);
@@ -180,7 +181,7 @@ describe("the protocol the inspector runs on", () => {
     async () => {
       const tab = await target.query(".tab");
       bunExpect(tab.count).toBeGreaterThan(0);
-      const data = await target.send("rules", { node: tab.nodes[0].id });
+      const data = await target.send("rules", { node: tab.nodes[0]!.id });
       bunExpect(data.count).toBeGreaterThan(0);
 
       const keys = data.rules.map((r: any) => r.specificity * 1e6 + r.order);
@@ -199,8 +200,8 @@ describe("the protocol the inspector runs on", () => {
     "`highlight` outlines a node and clears again",
     async () => {
       const tab = await target.query(".tab");
-      const on = await target.send("highlight", { node: tab.nodes[1].id, ttlMs: 4000 });
-      bunExpect(on.id).toBe(tab.nodes[1].id);
+      const on = await target.send("highlight", { node: tab.nodes[1]!.id, ttlMs: 4000 });
+      bunExpect(on.id).toBe(tab.nodes[1]!.id);
       // It has a rectangle to draw, because the node was painted last frame.
       bunExpect(on.painted).toBe(true);
       bunExpect(on.bounds.w).toBeGreaterThan(0);
@@ -215,7 +216,7 @@ describe("the protocol the inspector runs on", () => {
     "`pick` names the node under the pointer, and the window it is in",
     async () => {
       const tab = await target.query(".tab");
-      const wanted = tab.nodes[2];
+      const wanted = tab.nodes[2]!;
       // A REAL pointer event through gpui, at the node's centre — the same gesture `locator.hover()`
       // makes.
       await target.locator(".tab").nth(2).hover();

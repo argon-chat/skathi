@@ -27,7 +27,7 @@ describe("native font attachment", () => {
         return nativeSet;
       },
     };
-    expect(installFonts(host, document)).toBe(nativeSet);
+    expect<unknown>(installFonts(host, document)).toBe(nativeSet);
   });
   test("a missing document does not allocate a native set", () => {
     let called = false;

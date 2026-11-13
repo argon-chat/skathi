@@ -92,7 +92,7 @@ const PREFIX = /^-(webkit|moz|ms|o)-/i;
 export function isDroppedPrefix(prop: string): boolean {
   const m = PREFIX.exec(prop);
   if (!m) return false;
-  if (m[1].toLowerCase() !== "webkit") return true;
+  if (m[1]!.toLowerCase() !== "webkit") return true;
   return !APPLIED.has(prop.slice(m[0].length).toLowerCase());
 }
 

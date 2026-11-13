@@ -41,9 +41,9 @@ export interface WaapiDeps {
   clearTimer(handle: unknown): void;
   defineGlobal(name: string, value: unknown): void;
   doc: Record<string, unknown> | null;
-  EventTarget?: new () => object;
-  Event?: new (type: string, init?: object) => object;
-  DOMException?: new (message: string, name: string) => Error;
+  EventTarget?: (new () => object) | undefined;
+  Event?: (new (type: string, init?: object) => object) | undefined;
+  DOMException?: (new (message: string, name: string) => Error) | undefined;
 }
 
 type FillMode = "none" | "forwards" | "backwards" | "both" | "auto";
@@ -934,7 +934,7 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     // `latest` counts even when it stopped painting: a finished animation replaces what it covers either way.
     const mine = [...new Set([...live, latest])].filter((a) => a.effect?._target() === target).sort(byComposite);
     for (let i = 0; i < mine.length; i++) {
-      const a = mine[i];
+      const a = mine[i]!;
       if (a.replaceState !== "active" || a.playState !== "finished") continue;
       const later = mine.slice(i + 1).filter((b) => b.playState === "finished" && b.replaceState !== "removed");
       if (!later.length) continue;

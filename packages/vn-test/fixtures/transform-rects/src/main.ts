@@ -3,6 +3,8 @@
 import { createApp, defineComponent, h, onMounted, ref } from "vue-native";
 import "./transform.css";
 
+const dom = document as unknown as VnDomDocument;
+
 type Rect = [number, number, number, number];
 const rect = (el: Element | null): Rect | null => {
   if (!el) return null;
@@ -16,7 +18,7 @@ const state = {
   io: {} as Record<string, { isIntersecting: boolean; rect: Rect }>,
   startZoom: () => {},
   sampleZoom: () => {
-    const el = document.getElementById("zoom") as HTMLElement;
+    const el = dom.getElementById("zoom") as HTMLElement;
     return {
       offsetWidth: el.offsetWidth,
       clientWidth: el.clientWidth,
@@ -32,7 +34,7 @@ const Popper = defineComponent({
   setup(props, { slots }) {
     const at = ref<[number, number] | null>(null);
     onMounted(() => {
-      const anchor = rect(document.getElementById(props.anchor));
+      const anchor = rect(dom.getElementById(props.anchor));
       state.anchors[props.id] = anchor;
       if (anchor) at.value = [anchor[0], anchor[1] + anchor[3] + 4];
     });
@@ -63,7 +65,7 @@ const Root = defineComponent({
       new ResizeObserver(() => {
         if (first) first = false;
         else state.zoomResizes++;
-      }).observe(document.getElementById("zoom")!);
+      }).observe(dom.getElementById("zoom")!);
       const io = new IntersectionObserver((entries) => {
         for (const e of entries) {
           const r = e.boundingClientRect;
@@ -73,8 +75,8 @@ const Root = defineComponent({
           };
         }
       });
-      io.observe(document.getElementById("far")!);
-      io.observe(document.getElementById("near")!);
+      io.observe(dom.getElementById("far")!);
+      io.observe(dom.getElementById("near")!);
     });
     return () =>
       h("div", { id: "root" }, [

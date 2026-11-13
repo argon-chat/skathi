@@ -1,17 +1,30 @@
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement } from "./runtime-harness";
+
+interface RangeProps {
+  min: string;
+  max: string;
+  step: string;
+  defaultValue: string;
+  valueAsNumber: number;
+  stepUp(n?: unknown): void;
+  stepDown(n?: unknown): void;
+}
 
 function world(attrs: Record<string, string> = {}) {
   const rt = createRuntime();
   const root = rt.nodeOps.createElement("root");
-  const input = rt.nodeOps.createElement("input") as Record<string, any>;
+  const input = rt.nodeOps.createElement("input") as MirrorElement & RangeProps;
   rt.nodeOps.insert(input, root, null);
   rt.patchProp(input, "type", null, "range");
   for (const [key, value] of Object.entries(attrs)) rt.patchProp(input, key, null, value);
   const seen: string[] = [];
   for (const name of ["input", "change"])
-    rt.patchProp(root, "on" + name[0].toUpperCase() + name.slice(1), null, (e: any) =>
-      seen.push(name + ":" + e.target.value + ":" + e.bubbles),
+    rt.patchProp(
+      root,
+      "on" + name[0]!.toUpperCase() + name.slice(1),
+      null,
+      (e: { target: { value: string }; bubbles: boolean }) => seen.push(name + ":" + e.target.value + ":" + e.bubbles),
     );
   return {
     rt,
@@ -77,7 +90,7 @@ describe("HTML input range", () => {
     host("300", true);
     expect(seen).toEqual(["input:200:true", "input:300:true", "change:300:true"]);
     expect(input.valueAsNumber).toBe(300);
-    input.value = 500;
+    (input as { value: unknown }).value = 500;
     input.stepUp();
     expect(seen).toHaveLength(3);
   });
@@ -149,7 +162,7 @@ describe("HTML input range", () => {
     expect(input.value).toBe("600");
     const form = rt.nodeOps.createElement("form");
     rt.nodeOps.insert(input, form, null);
-    form.reset();
+    (form as MirrorElement & { reset(): void }).reset();
     expect(input.value).toBe("800");
     input.defaultValue = "200";
     expect(input.value).toBe("200");

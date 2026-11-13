@@ -1,8 +1,10 @@
 import { createApp, h, ref } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 const name = (e: unknown): string => {
   if (!e) return String(e);
-  if (e === document.body) return "BODY";
+  if (e === dom.body) return "BODY";
   const el = e as Element;
   return el.id || el.tagName || String(e);
 };
@@ -21,12 +23,12 @@ const types = [
   "focusout",
 ];
 for (const t of types) {
-  document.addEventListener(
+  dom.addEventListener(
     t,
     (e: Event) => {
       if (t === "contextmenu") e.preventDefault();
       const rel = t.startsWith("focus") || t === "blur" ? ` rel=${name((e as FocusEvent).relatedTarget)}` : "";
-      log.push(`${t}:${name(e.target)}${rel} active=${name(document.activeElement)}`);
+      log.push(`${t}:${name(e.target)}${rel} active=${name(dom.activeElement)}`);
     },
     true,
   );
@@ -34,16 +36,16 @@ for (const t of types) {
 
 const showGone = ref(true);
 const showGone2 = ref(true);
-const byId = (id: string) => document.getElementById(id) as HTMLElement;
+const byId = (id: string) => dom.getElementById(id) as HTMLElement;
 
 (globalThis as Record<string, unknown>).__VN_TEST_PRESS__ = {
   log,
   reset() {
     byId("field").focus();
     log.length = 0;
-    return name(document.activeElement);
+    return name(dom.activeElement);
   },
-  active: () => name(document.activeElement),
+  active: () => name(dom.activeElement),
   restore() {
     showGone.value = true;
     showGone2.value = true;
@@ -53,7 +55,7 @@ const byId = (id: string) => document.getElementById(id) as HTMLElement;
     for (const id of ["tag", "keys", "minus", "plain", "nolink", "link", "ce", "sum", "role-btn", "lbl"]) {
       byId("field").focus();
       byId(id).focus();
-      out[id] = name(document.activeElement);
+      out[id] = name(dom.activeElement);
     }
     return JSON.stringify(out);
   },

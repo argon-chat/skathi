@@ -28,9 +28,9 @@ interface KV {
   name: string;
   value: string;
   sensitive?: boolean;
-  note?: string;
+  note?: string | undefined;
   faint?: boolean;
-  tone?: "ok" | "warn" | "bad";
+  tone?: "ok" | "warn" | "bad" | undefined;
 }
 
 interface Section {

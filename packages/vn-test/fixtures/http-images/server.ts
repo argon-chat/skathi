@@ -33,11 +33,11 @@ const CRC_TABLE = (() => {
 
 function crc32(bytes: Uint8Array): number {
   let c = 0xffffffff;
-  for (const b of bytes) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
+  for (const b of bytes) c = CRC_TABLE[(c ^ b) & 0xff]! ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
 }
 
-function chunk(type: string, data: Uint8Array): Uint8Array {
+function chunk(type: string, data: Uint8Array): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(12 + data.length);
   const view = new DataView(out.buffer);
   view.setUint32(0, data.length);
@@ -51,7 +51,7 @@ function chunk(type: string, data: Uint8Array): Uint8Array {
  * A `size`-px RGB PNG, distinct per `seed`: a gradient with noise, so it compresses about as badly
  * as a photo avatar does (~40–60 KB at 160 px).
  */
-export function png(seed: number, size = 160): Uint8Array {
+export function png(seed: number, size = 160): Uint8Array<ArrayBuffer> {
   const raw = new Uint8Array(size * (1 + size * 3));
   let s = (seed * 2654435761) >>> 0 || 1;
   for (let y = 0; y < size; y++) {
@@ -89,7 +89,7 @@ export function png(seed: number, size = 160): Uint8Array {
 }
 
 export function serveImages(): ImageServer {
-  const cache = new Map<number, Uint8Array>();
+  const cache = new Map<number, Uint8Array<ArrayBuffer>>();
   const body = (i: number) => {
     let b = cache.get(i);
     if (!b) cache.set(i, (b = png(i)));

@@ -23,21 +23,21 @@ export function flattenDump(lines: string[] | undefined): DumpEntry[] {
   const out: DumpEntry[] = [];
   if (!Array.isArray(lines)) return out;
   for (let i = 0; i < lines.length; i++) {
-    const m = KEY_LINE.exec(lines[i]);
+    const m = KEY_LINE.exec(lines[i]!);
     if (!m) continue;
-    const indent = m[1].length;
-    let value = m[3].trim();
+    const indent = m[1]!.length;
+    let value = m[3]!.trim();
     if (/[([{]$/.test(value)) {
       const parts = [value];
       for (let j = i + 1; j < lines.length; j++) {
-        const inner = lines[j];
+        const inner = lines[j]!;
         const innerIndent = inner.length - inner.trimStart().length;
         parts.push(inner.trim());
         if (innerIndent <= indent && /^[)\]}]/.test(inner.trim())) break;
       }
       value = parts.join(" ");
     }
-    out.push({ indent, key: m[2], value: value.replace(/\s+/g, " ").replace(/,$/, "").trim() });
+    out.push({ indent, key: m[2]!, value: value.replace(/\s+/g, " ").replace(/,$/, "").trim() });
   }
   return out;
 }
@@ -54,7 +54,7 @@ export function parseHsla(value: string | undefined): Hsla | null {
     value || "",
   );
   if (!m) return null;
-  return { h: +m[1], s: +m[2], l: +m[3], a: +m[4] };
+  return { h: +m[1]!, s: +m[2]!, l: +m[3]!, a: +m[4]! };
 }
 
 export function hslaCss(hsla: Hsla): string {

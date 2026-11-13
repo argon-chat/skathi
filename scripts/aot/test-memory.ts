@@ -128,13 +128,21 @@ async function until(read: () => Promise<string>, text: string) {
   } while (Date.now() < deadline);
   throw Error(`Did not observe ${text}: ${last.slice(0, 100)}`);
 }
-const summary: any[] = [];
+interface MediaState {
+  ready: number;
+  width: number;
+  height: number;
+  duration: number;
+  time: number;
+  error: unknown;
+}
+const summary: Record<string, unknown>[] = [];
 try {
   const target = await start("target");
   const mediaSelector = values.get("--media-selector");
   if (mediaSelector) {
     const selector = JSON.stringify(mediaSelector);
-    const mediaState = async () =>
+    const mediaState = async (): Promise<MediaState> =>
       JSON.parse(
         String(
           await evaluate(
@@ -146,9 +154,9 @@ try {
           ),
         ),
       );
-    const poll = async (predicate: (state: any) => boolean) => {
+    const poll = async (predicate: (state: MediaState) => boolean) => {
       const end = Date.now() + 20000;
-      let state;
+      let state: MediaState;
       do {
         state = await mediaState();
         if (predicate(state)) return state;
@@ -203,7 +211,7 @@ try {
     const beforePerf = await app.wire.send("perf");
     const baseline = await app.wire.send("mem", { gc: true });
     save(`${profile}-before.json`, baseline);
-    const samples: any[] = [];
+    const samples: { cycle: number; process: unknown; jsc: unknown }[] = [];
     for (let i = 0; i < cycles; i++) {
       await switchPanel(1, "Network");
       if (i % 50 === 0) await until(text, "Nothing yet.");

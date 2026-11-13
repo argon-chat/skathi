@@ -152,12 +152,7 @@ export class Push {
   private socket: VnWebSocket | null = null;
   private closed = false;
 
-  constructor(
-    target: Target,
-    since: number,
-    streams: PushStream[],
-    private handlers: PushHandlers,
-  ) {
+  constructor(target: Target, since: number, streams: PushStream[], handlers: PushHandlers) {
     const url = `ws://127.0.0.1:${target.port}/?token=${encodeURIComponent(target.token)}&since=${since}`;
     if (typeof WebSocket !== "function") {
       handlers.onClose?.("this host has no WebSocket");

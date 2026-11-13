@@ -82,8 +82,8 @@ describe("selection", () => {
 
 describe("cargo", () => {
   test("WebGPU survives other feature opt-outs and has an explicit opt-out", () => {
-    expect(cargoFeatureArgs("no-audio")[2].split(",")).toContain("webgpu");
-    expect(cargoFeatureArgs("no-webgpu")[2].split(",")).not.toContain("webgpu");
+    expect(cargoFeatureArgs("no-audio")[2]!.split(",")).toContain("webgpu");
+    expect(cargoFeatureArgs("no-webgpu")[2]!.split(",")).not.toContain("webgpu");
   });
 
   test("the two pre-features hosts keep the command line they always had", () => {

@@ -51,7 +51,8 @@ const lime = ([r, g, b]: Rgb) => g > 200 && r < 60 && b < 60;
 const blue = ([r, g, b]: Rgb) => b > 200 && r < 60 && g < 60;
 const gray = ([r, g, b]: Rgb) => Math.abs(r - 136) < 20 && Math.abs(g - 136) < 20 && Math.abs(b - 136) < 20;
 
-const corners = (b: Bounds, inset: number): [number, number][] => [
+type Pt = [number, number];
+const corners = (b: Bounds, inset: number): [Pt, Pt, Pt, Pt] => [
   [b.x + inset, b.y + inset],
   [b.x + b.w - 1 - inset, b.y + inset],
   [b.x + inset, b.y + b.h - 1 - inset],
@@ -270,7 +271,7 @@ describe("clip-path (CSS Masking 1 §5)", () => {
         [i.x + 30, i.y + 3],
         [i.x - 3, i.y + 20],
         [i.x + 15, i.y + 8],
-      ])
+      ] satisfies [number, number][])
         bunExpect(white(s.at(x, y))).toBe(true);
 
       bunExpect(s.count(c, red)).toBeGreaterThan(2700);
@@ -351,13 +352,13 @@ describe("clip-path: polygon() and path() (CSS Shapes 1 §3.1)", () => {
         [t.x + 5, t.y + 5],
         [t.x + 75, t.y + 5],
         [t.x + 15, t.y + 15],
-      ])
+      ] satisfies [number, number][])
         bunExpect(white(s.at(x, y))).toBe(true);
       for (const [x, y] of [
         [t.x + 40, t.y + 3],
         [t.x + 40, t.y + 57],
         [t.x + 5, t.y + 57],
-      ])
+      ] satisfies [number, number][])
         bunExpect(red(s.at(x, y))).toBe(true);
 
       for (const [x, y] of [
@@ -365,7 +366,7 @@ describe("clip-path: polygon() and path() (CSS Shapes 1 §3.1)", () => {
         [n.x + 25, n.y + 4],
         [n.x + 95, n.y + 4],
         [n.x + 60, n.y + 58],
-      ]) {
+      ] satisfies [number, number][]) {
         bunExpect(red(s.at(x, y))).toBe(true);
       }
       for (const [x, y] of [
@@ -377,7 +378,7 @@ describe("clip-path: polygon() and path() (CSS Shapes 1 §3.1)", () => {
         [n.x + 60, n.y - 8],
         [n.x - 10, n.y + 30],
         [n.x + 60, n.y + 70],
-      ])
+      ] satisfies [number, number][])
         bunExpect(white(s.at(x, y))).toBe(true);
 
       bunExpect(white(s.at(h.x + 30, h.y + 30))).toBe(true);

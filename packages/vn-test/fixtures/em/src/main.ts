@@ -2,7 +2,9 @@
 import { createApp, h } from "vue-native";
 import "./em.css";
 
-document.documentElement.style.fontSize = "14px";
+const dom = document as unknown as VnDomDocument;
+
+dom.documentElement.style.fontSize = "14px";
 
 createApp({
   render: () =>
@@ -20,7 +22,7 @@ createApp({
 (globalThis as Record<string, unknown>).__VN_TEST_EM__ = {
   boxes() {
     const out: Record<string, { x: number; y: number; w: number; h: number; fontSize: string }> = {};
-    for (const el of Array.from(document.querySelectorAll("[id]"))) {
+    for (const el of Array.from(dom.querySelectorAll("[id]"))) {
       const r = el.getBoundingClientRect();
       out[el.id] = { x: r.x, y: r.y, w: r.width, h: r.height, fontSize: getComputedStyle(el).fontSize };
     }

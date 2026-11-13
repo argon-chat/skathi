@@ -24,7 +24,7 @@ function world(initialFullscreen = false) {
       super();
       this.__vnId = id;
     }
-    dispatchEvent(event: Event) {
+    override dispatchEvent(event: Event) {
       const result = super.dispatchEvent(event);
       if (this.isConnected && event.bubbles) document.dispatchEvent(new Event(event.type));
       return result;

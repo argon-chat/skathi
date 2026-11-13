@@ -556,11 +556,11 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       );
     },
     showSaveFilePicker(options?: PickerOptions): Promise<FileSystemFileHandle> {
-      return picker("showSaveFilePicker", "save", options).then((ws) => makeHandle(ws[0]) as FileSystemFileHandle);
+      return picker("showSaveFilePicker", "save", options).then((ws) => makeHandle(ws[0]!) as FileSystemFileHandle);
     },
     showDirectoryPicker(options?: PickerOptions): Promise<FileSystemDirectoryHandle> {
       return picker("showDirectoryPicker", "folder", options).then(
-        (ws) => makeHandle(ws[0]) as FileSystemDirectoryHandle,
+        (ws) => makeHandle(ws[0]!) as FileSystemDirectoryHandle,
       );
     },
   };

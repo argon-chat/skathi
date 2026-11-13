@@ -18,7 +18,7 @@ describe("css-prefixes.ts", () => {
     const rs = readFileSync(PREFIX_RS, "utf-8");
     const body = /WEBKIT_APPLIED: &\[&str\] = &\[([\s\S]*?)\];/.exec(rs);
     expect(body).not.toBeNull();
-    const names = [...body![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    const names = [...body![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
     expect(names.length).toBeGreaterThan(40);
     expect([...WEBKIT_APPLIED]).toEqual(names);
   });

@@ -116,7 +116,7 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
     /** Excluded from screen capture (`WDA_EXCLUDEFROMCAPTURE`). Live. */
     contentProtection: { type: Boolean, default: false },
     /** With `cover="monitor"`: monitor index in `EnumDisplayMonitors` order; absent means the main window's. Live: a shown window moves. */
-    monitor: { type: Number, default: undefined },
+    monitor: { type: Number as PropType<number | undefined>, default: undefined },
   },
   emits: {
     /** The OS window exists. Carries its gpui window id — what devtools `--window` names. */

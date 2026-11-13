@@ -72,7 +72,7 @@ export class LocatorAssertions {
       const r = await this.locator.peek();
       return "node" in r
         ? { pass: true, actual: `visible at ${JSON.stringify(r.node.bounds)}` }
-        : { pass: false, actual: r.why.split("\n")[0] };
+        : { pass: false, actual: r.why.split("\n")[0]! };
     });
   }
 

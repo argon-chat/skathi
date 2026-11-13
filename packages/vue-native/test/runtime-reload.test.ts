@@ -3,7 +3,7 @@
 // (`__VN_UNLOAD__`, then a second evaluation); the second must not keep the first one's parked `ResizeObserver` poll.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorNode } from "./runtime-harness";
 
 function frameQueue() {
   const frames = new Map<number, () => void>();
@@ -96,7 +96,7 @@ describe("a same-realm reload", () => {
       expect([n, g[n] === before[n]]).toEqual([n, false]);
       expect([n, typeof g[n]]).toEqual([n, typeof before[n]]);
     }
-    expect(g.constructor).toBe(g.Window);
+    expect(g.constructor as unknown).toBe(g.Window);
   });
 
   test("native FileReader keeps its engine identity across reloads", () => {
@@ -115,25 +115,28 @@ describe("a same-realm reload", () => {
     expect(g.ResizeObserver).not.toBe(before.RO);
     expect(g.MutationObserver).not.toBe(before.MO);
     expect(g.Window).not.toBe(before.Window);
-    expect(g.constructor).toBe(g.Window);
-    const t = new (g.Text as new (s: string) => { id: number })("hi");
+    expect(g.constructor as unknown).toBe(g.Window);
+    const t = new (g.Text as new (s: string) => MirrorNode)("hi");
     expect(second.nodeById(t.__vnId)).toBe(t);
     expect(first.nodeById(t.__vnId)).toBeUndefined();
   });
 
   test("document.createTextNode and head.childNodes are the new runtime's", () => {
-    const doc = { head: {} as Record<string, unknown> } as Record<string, unknown>;
+    const doc: {
+      head: { appendChild?: (n: unknown) => unknown; childNodes?: unknown[] };
+      createTextNode?: (s: string) => MirrorNode;
+    } = { head: {} };
     const first = createRuntime({ globals: { document: doc } });
-    const create = doc.createTextNode as (s: string) => { id: number };
+    const create = doc.createTextNode!;
     expect(first.nodeById(create("a").__vnId)).toBeDefined();
     (first.global.__VN_UNLOAD__ as () => void)();
     const second = createRuntime({ realm: first.global });
-    const created = (doc.createTextNode as (s: string) => { id: number })("b");
+    const created = doc.createTextNode!("b");
     expect(doc.createTextNode).not.toBe(create);
     expect(second.nodeById(created.__vnId)).toBe(created);
     const style = second.nodeOps.createElement("style");
-    (doc.head.appendChild as (n: unknown) => unknown)(style);
-    expect([...doc.head.childNodes]).toEqual([style]);
+    doc.head.appendChild!(style);
+    expect([...doc.head.childNodes!]).toEqual([style]);
   });
 
   test("document.createElement wraps the ENGINE's after a reload, not the old wrapper", () => {

@@ -1,5 +1,7 @@
 import { createApp, h, nextTick, onMounted, onUnmounted, ref } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 const EXIT_MS = 250;
 const OPEN_DELAY_MS = 100;
 
@@ -7,7 +9,7 @@ type State = { log: string[]; layers: string[]; active(): string };
 const out: State = {
   log: [],
   layers: [],
-  active: () => (document.activeElement as { id?: string } | null)?.id || "body",
+  active: () => (dom.activeElement as { id?: string } | null)?.id || "body",
 };
 (globalThis as unknown as { __VN_TEST_ESCAPE__: State }).__VN_TEST_ESCAPE__ = out;
 
@@ -53,11 +55,11 @@ function useFocusScope(
     if (!c.contains(e.relatedTarget as HTMLElement)) last?.focus();
   };
   onMounted(() => {
-    previous = document.activeElement as HTMLElement | null;
+    previous = dom.activeElement as HTMLElement | null;
     out.log.push(`scope:${name} remembers ${out.active()}`);
     if (trapped) {
-      document.addEventListener("focusin", onIn);
-      document.addEventListener("focusout", onOut);
+      dom.addEventListener("focusin", onIn);
+      dom.addEventListener("focusout", onOut);
     }
     nextTick(() => {
       last = first();
@@ -66,8 +68,8 @@ function useFocusScope(
   });
   onUnmounted(() => {
     if (trapped) {
-      document.removeEventListener("focusin", onIn);
-      document.removeEventListener("focusout", onOut);
+      dom.removeEventListener("focusin", onIn);
+      dom.removeEventListener("focusout", onOut);
     }
     const back = previous;
     setTimeout(() => {
@@ -98,7 +100,7 @@ const Tag = {
         onPointerdown: () => {
           tipOpen.value = false;
           pressing = true;
-          document.addEventListener("pointerup", () => setTimeout(() => (pressing = false), 1), { once: true });
+          dom.addEventListener("pointerup", () => setTimeout(() => (pressing = false), 1), { once: true });
         },
         style: { padding: "4px 8px", background: "#ccd", borderRadius: "4px" },
       },
@@ -126,8 +128,8 @@ const Menu = {
     const el = ref<HTMLElement | null>(null);
     useLayer("menu", () => closeMenu());
     // floating-ui measures the anchor on mount, before the FocusScope reads
-    // `document.activeElement`.
-    onMounted(() => document.getElementById("row")?.getBoundingClientRect());
+    // `dom.activeElement`.
+    onMounted(() => dom.getElementById("row")?.getBoundingClientRect());
     useFocusScope(
       "menu",
       () => el.value,

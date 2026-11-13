@@ -8,9 +8,9 @@ const COUNT = Number.isFinite(parsed) && parsed > 0 ? parsed : 600;
 const frame = ref(0);
 const loop = () => {
   frame.value++;
-  requestAnimationFrame(loop);
+  requestAnimationFrame!(loop);
 };
-requestAnimationFrame(loop);
+requestAnimationFrame!(loop);
 
 const cards = Array.from({ length: COUNT }, (_, i) => i);
 

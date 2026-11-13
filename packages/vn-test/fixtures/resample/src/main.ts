@@ -2,6 +2,8 @@
 // linearly, so they aliased.
 import { createApp, h } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 const box = (left: number) => ({
   position: "absolute",
   left: `${left}px`,
@@ -11,7 +13,7 @@ const box = (left: number) => ({
 });
 
 function drawCanvas() {
-  const canvas = document.getElementById("cv") as HTMLCanvasElement;
+  const canvas = dom.getElementById("cv") as HTMLCanvasElement;
   const ctx = canvas.getContext("2d")!;
   const n = 1080;
   const data = ctx.createImageData(n, n);

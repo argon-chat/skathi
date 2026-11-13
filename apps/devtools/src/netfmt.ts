@@ -20,7 +20,7 @@ export function fromBase64(text: string): Uint8Array {
   let bits = 0;
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
-    const v = c < 128 ? B64_INDEX[c] : -1;
+    const v = c < 128 ? B64_INDEX[c]! : -1;
     if (v < 0) continue;
     acc = ((acc << 6) | v) & 0xffffff;
     bits += 6;
@@ -45,7 +45,7 @@ export function hexLine(bytes: Uint8Array, row: number): string {
   for (let i = 0; i < HEX_ROW; i++) {
     const p = at + i;
     if (p < bytes.length) {
-      const b = bytes[p];
+      const b = bytes[p]!;
       hex += (b < 16 ? "0" : "") + b.toString(16);
       ascii += b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".";
     } else {
@@ -92,7 +92,7 @@ export function wrapWords(text: string, cols: number, max = 400): string[] {
 }
 
 export function isJsonMime(mime: string | undefined): boolean {
-  const essence = (mime || "").split(";")[0].trim().toLowerCase();
+  const essence = (mime || "").split(";")[0]!.trim().toLowerCase();
   return essence === "application/json" || essence.endsWith("+json") || essence === "application/x-ndjson";
 }
 
@@ -206,10 +206,11 @@ export function requestHeaderRows(d: NetDetail): HeaderRow[] {
   const jar = d.cookies?.sent;
   if (jar) {
     const at = rows.findIndex((r) => r.name.toLowerCase() === "cookie");
-    if (at >= 0 && rows[at].value.trim()) {
-      rows[at] = { ...rows[at], value: `${rows[at].value}; ${jar}`, note: "the app's, then the jar's" };
-    } else if (at >= 0) {
-      rows[at] = { ...rows[at], value: jar, note: "from the cookie jar" };
+    const existing = rows[at];
+    if (existing && existing.value.trim()) {
+      rows[at] = { ...existing, value: `${existing.value}; ${jar}`, note: "the app's, then the jar's" };
+    } else if (existing) {
+      rows[at] = { ...existing, value: jar, note: "from the cookie jar" };
     } else {
       rows.push({ name: "cookie", value: jar, sensitive: true, note: "from the cookie jar" });
     }

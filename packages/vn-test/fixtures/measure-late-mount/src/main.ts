@@ -52,8 +52,8 @@ const List = defineComponent({
 
 (globalThis as { __VN_TEST_LATE__?: unknown }).__VN_TEST_LATE__ = {
   fetchMount(url: string) {
-    void fetch(url)
-      .then((r) => r.text())
+    void fetch!(url)
+      .then((r) => r.text!())
       .then(() => show("fetch"));
   },
 };

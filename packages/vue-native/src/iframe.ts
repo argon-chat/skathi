@@ -47,12 +47,12 @@ export function toBase64(bytes: Uint8Array): string {
   let chunk = "";
   const n = bytes.length;
   for (let i = 0; i < n; i += 3) {
-    const a = bytes[i];
-    const b = i + 1 < n ? bytes[i + 1] : 0;
-    const c = i + 2 < n ? bytes[i + 2] : 0;
+    const a = bytes[i]!;
+    const b = i + 1 < n ? bytes[i + 1]! : 0;
+    const c = i + 2 < n ? bytes[i + 2]! : 0;
     chunk +=
-      B64[a >> 2] +
-      B64[((a & 3) << 4) | (b >> 4)] +
+      B64[a >> 2]! +
+      B64[((a & 3) << 4) | (b >> 4)]! +
       (i + 1 < n ? B64[((b & 15) << 2) | (c >> 6)] : "=") +
       (i + 2 < n ? B64[c & 63] : "=");
     // One string per 48 KB of input: a megabyte must not be a million concatenations deep.
@@ -73,7 +73,7 @@ export function fromBase64(text: string): Uint8Array {
   let acc = 0;
   let bits = 0;
   for (let i = 0; i < len; i++) {
-    const v = B64_INDEX[text.charCodeAt(i) & 127];
+    const v = B64_INDEX[text.charCodeAt(i) & 127]!;
     if (v === 255) throw new TypeError("iframe message: bad base64");
     acc = (acc << 6) | v;
     bits += 6;
@@ -202,7 +202,7 @@ export function decodeMessage(wire: unknown): unknown {
       const bytes = fromBase64(b as string);
       const Ctor = (
         globalThis as unknown as Record<string, new (buf: ArrayBufferLike, off?: number, len?: number) => unknown>
-      )[a as string];
+      )[a as string]!;
       const width = (Ctor as unknown as { BYTES_PER_ELEMENT?: number }).BYTES_PER_ELEMENT ?? 1;
       return new Ctor(bytes.buffer, 0, bytes.byteLength / width);
     }

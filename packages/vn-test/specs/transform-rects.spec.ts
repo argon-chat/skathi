@@ -141,9 +141,9 @@ describe("IntersectionObserver", () => {
         () => state<Record<string, Io>>("io"),
         (io) => !!io && "far" in io && "near" in io,
       );
-      bunExpect(io.far.isIntersecting).toBe(false);
-      bunExpect(io.far.rect).toEqual([840, 330, 40, 40]);
-      bunExpect(io.near.isIntersecting).toBe(true);
+      bunExpect(io.far!.isIntersecting).toBe(false);
+      bunExpect(io.far!.rect).toEqual([840, 330, 40, 40]);
+      bunExpect(io.near!.isIntersecting).toBe(true);
     },
     T,
   );

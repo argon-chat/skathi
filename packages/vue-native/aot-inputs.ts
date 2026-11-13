@@ -1,7 +1,7 @@
 // Build-time input archive for a future typed AOT frontend. This is deliberately
 // separate from VNPK: source inputs are neither executable code nor JSC bytecode.
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type ts from "typescript";
 
@@ -11,7 +11,7 @@ interface Input {
   path: string;
   kind: InputKind;
   text: string;
-  loader?: string;
+  loader?: string | undefined;
 }
 const sha256 = (text: string | Uint8Array) => createHash("sha256").update(text).digest("hex");
 const slash = (path: string) => path.split(sep).join("/");

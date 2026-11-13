@@ -21,7 +21,7 @@ export class Png {
   at(x: number, y: number): [number, number, number] {
     if (x < 0 || y < 0 || x >= this.width || y >= this.height) return [0, 0, 0];
     const i = (y * this.width + x) * 4;
-    return [this.data[i], this.data[i + 1], this.data[i + 2]];
+    return [this.data[i]!, this.data[i + 1]!, this.data[i + 2]!];
   }
 
   /** The mean of the three channels at `(x, y)` — "how light is this pixel". */
@@ -146,12 +146,12 @@ export function readPng(path: string): Png {
   let prior = new Uint8Array(stride);
   let src = 0;
   for (let y = 0; y < height; y++) {
-    const filter = raw[src++];
+    const filter = raw[src++]!;
     for (let i = 0; i < stride; i++) {
-      const x = raw[src + i];
-      const a = i >= channels ? line[i - channels] : 0;
-      const b = prior[i];
-      const c = i >= channels ? prior[i - channels] : 0;
+      const x = raw[src + i]!;
+      const a = i >= channels ? line[i - channels]! : 0;
+      const b = prior[i]!;
+      const c = i >= channels ? prior[i - channels]! : 0;
       switch (filter) {
         case 0:
           line[i] = x;
@@ -182,10 +182,10 @@ export function readPng(path: string): Png {
     for (let x = 0; x < width; x++) {
       const o = (y * width + x) * 4;
       const i = x * channels;
-      out[o] = line[i];
-      out[o + 1] = line[i + 1];
-      out[o + 2] = line[i + 2];
-      out[o + 3] = channels === 4 ? line[i + 3] : 255;
+      out[o] = line[i]!;
+      out[o + 1] = line[i + 1]!;
+      out[o + 2] = line[i + 2]!;
+      out[o + 3] = channels === 4 ? line[i + 3]! : 255;
     }
     prior = Uint8Array.prototype.slice.call(line);
   }

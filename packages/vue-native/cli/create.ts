@@ -29,7 +29,7 @@ function icon(): Uint8Array {
   return encodePng({ width: size, height: size, data });
 }
 
-export function create(target: string, options: { name?: string } = {}): string[] {
+export function create(target: string, options: { name?: string | undefined } = {}): string[] {
   const dir = resolve(target);
   const name = (options.name ?? basename(dir)).trim();
   if (!name) throw new Error("vn create: the app needs a name");

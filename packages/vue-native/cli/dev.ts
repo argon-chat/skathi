@@ -10,7 +10,7 @@ import { ConfigError, loadAppConfig } from "./config";
 import { PKG_DIR, REPO_ROOT } from "./host";
 import { currentPlatform, hostsFor, repoHostExe } from "./platform";
 
-export async function dev(target: string, options: { exe?: string } = {}): Promise<number> {
+export async function dev(target: string, options: { exe?: string | undefined } = {}): Promise<number> {
   const config = loadAppConfig(target);
   const rel = REPO_ROOT ? relative(REPO_ROOT, config.appRoot) : "";
   if (!REPO_ROOT || rel.startsWith("..") || isAbsolute(rel)) {

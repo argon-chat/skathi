@@ -39,8 +39,8 @@ describe("broadcast connector", () => {
       const r = await settled();
       expect(r.settled).toBe(true);
       expect(r.paths.length).toBe(1);
-      const nums = r.paths[0].match(/-?\d+(\.\d+)?/g)!.map(Number);
-      const [x, top, bottom] = [nums[0], nums[1], nums[2]];
+      const nums = r.paths[0]!.match(/-?\d+(\.\d+)?/g)!.map(Number);
+      const [x, top, bottom] = [nums[0]!, nums[1]!, nums[2]!];
       const [sx, sy] = await rect("#scroll");
       const [, svgTop, svgW, svgH] = await rect("#rope");
       expect(Math.round(svgW)).toBe(240);

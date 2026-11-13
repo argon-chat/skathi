@@ -16,7 +16,7 @@
 // and pinia stay external so libraries land on our runtime.
 
 import { parse, compileScript, compileTemplate, compileStyle, registerTS } from "@vue/compiler-sfc";
-import type { SFCDescriptor } from "@vue/compiler-sfc";
+import type { BindingMetadata, SFCBlock, SFCDescriptor } from "@vue/compiler-sfc";
 import { createRequire } from "module";
 import { resolve, dirname, isAbsolute, join, relative, sep } from "path";
 import {
@@ -212,13 +212,13 @@ async function bundlerResolve(spec: string, from: string, kind: "require" | "imp
   await Bun.build({
     entrypoints: [probe],
     target: "browser",
-    format: "cjs" as any,
+    format: "cjs",
     plugins: [
       {
         name: "vn-resolve-probe",
-        setup(b: any) {
+        setup(b: Bun.PluginBuilder) {
           b.onResolve({ filter: /__vn_resolve_probe__\.js$/ }, () => ({ path: probe }));
-          b.onLoad({ filter: /.*/ }, (args: any) => {
+          b.onLoad({ filter: /.*/ }, (args: Bun.OnLoadArgs) => {
             if (args.path === probe) {
               return { contents: kind === "require" ? `require(${J(spec)});` : `import ${J(spec)};`, loader: "js" };
             }
@@ -340,10 +340,10 @@ async function buildVendor() {
         // vue-router and others import from "vue": that must be our runtime. Exact-match filter only:
         // bun 1.4 crashes on catch-all onResolve filters.
         name: "vendor-vue-alias",
-        setup(b: any) {
+        setup(b: Bun.PluginBuilder) {
           b.onResolve({ filter: /^vue$/ }, () => ({ path: join(RUNTIME_SRC_DIR, "runtime.ts") }));
           // The app owns these packages in dev and prod; mixing majors breaks store/router identity.
-          b.onResolve({ filter: /^(vue-router|pinia)$/ }, (args: any) => ({
+          b.onResolve({ filter: /^(vue-router|pinia)$/ }, (args: Bun.OnResolveArgs) => ({
             path: FRAMEWORK.get(args.path)!.path,
           }));
         },
@@ -354,7 +354,7 @@ async function buildVendor() {
     for (const log of result.logs) console.error(log);
     throw new Error("vendor build failed");
   }
-  const text = await result.outputs[0].text();
+  const text = await result.outputs[0]!.text();
   // The pre-seeded "vue" namespace must still carry the compiler helpers; if Bun tree-shakes the
   // `export *` re-export, templates die with "not a function".
   for (const sym of ["openBlock", "createElementBlock", "createElementVNode", "toDisplayString"]) {
@@ -363,7 +363,7 @@ async function buildVendor() {
   writeAtomic(join(DIST, "vendor.js"), text);
   // vendorRev is a CONTENT hash: restarting the watcher must not make a running host believe its
   // already-evaluated vendor.js is stale.
-  vendorRev = Number(BigInt.asUintN(48, BigInt(Bun.hash(text) as any)));
+  vendorRev = Number(BigInt.asUintN(48, BigInt(Bun.hash(text))));
   return text.length;
 }
 
@@ -407,7 +407,7 @@ async function compileVue(
   const isTS = /^tsx?$/.test(descriptor.scriptSetup?.lang ?? descriptor.script?.lang ?? "");
 
   const chunks: string[] = [];
-  let bindings: any;
+  let bindings: BindingMetadata | undefined;
 
   if (descriptor.scriptSetup || descriptor.script) {
     const compiled = compileScript(descriptor, {
@@ -431,7 +431,7 @@ async function compileVue(
       slotted: descriptor.slotted,
       compilerOptions: {
         hoistStatic: false, // compileTemplate force-sets true; our spread wins (F7)
-        bindingMetadata: bindings,
+        ...(bindings && { bindingMetadata: bindings }),
         expressionPlugins: isTS ? ["typescript"] : [],
         // vue-native host elements missing from the HTML tag list: otherwise the SFC compiler warns
         // on every render. Keep in lockstep with prod.ts and crates/vn-tree/src/render.rs.
@@ -471,7 +471,7 @@ async function compileVue(
       source: text,
       filename: absPath,
       id: scopeId,
-      scoped: style.scoped,
+      scoped: style.scoped ?? false,
     });
     if (out.errors.length) throw new Error(`${id} <style>: ${out.errors.join("; ")}`);
     cssChunks.push(out.code);
@@ -483,8 +483,8 @@ async function compileVue(
 
 const vuePlugin = {
   name: "vue-sfc",
-  setup(build: any) {
-    build.onLoad({ filter: /\.vue$/ }, async (args: any) => {
+  setup(build: Bun.PluginBuilder) {
+    build.onLoad({ filter: /\.vue$/ }, async (args: Bun.OnLoadArgs) => {
       const source = await Bun.file(args.path).text();
       return compileVue(args.path, source);
     });
@@ -521,8 +521,8 @@ const devImports = devImportsPlugin({
 
 const appModulePlugin = {
   name: "vn-dev-app-module",
-  setup(build: any) {
-    build.onLoad({ filter: /\.vue$/ }, async (args: any) => {
+  setup(build: Bun.PluginBuilder) {
+    build.onLoad({ filter: /\.vue$/ }, async (args: Bun.OnLoadArgs) => {
       const out = await compileVue(args.path, await Bun.file(args.path).text());
       const code = transformSource(out.contents, args.path, DEV_SHAPES);
       return code === null ? out : { ...out, contents: code };
@@ -568,7 +568,7 @@ function depsOf(id: string, body: string, ids: Set<string>, skip: Set<string>): 
   const found: string[] = [];
   REQUIRE_RE.lastIndex = 0;
   for (let m = REQUIRE_RE.exec(body); m; m = REQUIRE_RE.exec(body)) {
-    const spec = unquote(m[1]);
+    const spec = unquote(m[1]!);
     if (spec === null || spec.charCodeAt(0) !== 46 /* . */) continue; // bare -> vendor
     if (skip.has(spec)) continue; // a stylesheet: its own synthetic module
     const base = normalizeId((dir ? dir + "/" : "") + spec);
@@ -588,7 +588,7 @@ function bareOf(body: string, skip: Set<string>): string[] {
   const found: string[] = [];
   REQUIRE_RE.lastIndex = 0;
   for (let m = REQUIRE_RE.exec(body); m; m = REQUIRE_RE.exec(body)) {
-    const spec = unquote(m[1]);
+    const spec = unquote(m[1]!);
     if (spec === null) continue;
     const c = spec.charCodeAt(0);
     if (c === 46 /* . */ || c === 47 /* / */) continue; // relative/absolute -> graph
@@ -611,7 +611,7 @@ function cssImportsOf(absPath: string, body: string, cssSpecs: Set<string>): str
   const found: string[] = [];
   REQUIRE_RE.lastIndex = 0;
   for (let m = REQUIRE_RE.exec(body); m; m = REQUIRE_RE.exec(body)) {
-    const spec = unquote(m[1]);
+    const spec = unquote(m[1]!);
     if (spec === null) continue;
     const relative_ = spec.charCodeAt(0) === 46; /* . */
     let abs: string;
@@ -717,7 +717,7 @@ async function buildModule(absPath: string, ids: Set<string>) {
   try {
     result = await Bun.build({
       entrypoints: [absPath],
-      format: "cjs" as any,
+      format: "cjs",
       target: "node",
       external: ["*"],
       plugins: [devShapesPlugin, devImports, appModulePlugin],
@@ -732,7 +732,7 @@ async function buildModule(absPath: string, ids: Set<string>) {
   }
   moduleInlined.set(absPath, new Map(Array.from(inlined, (f) => [f, mtimeOf(f)])));
   // Bundler ESM semantics rather than Node's (vitecompat.ts devEsmInterop).
-  const interop = devEsmInterop(tagModuleNamespaces(await result.outputs[0].text()).code);
+  const interop = devEsmInterop(tagModuleNamespaces(await result.outputs[0]!.text()).code);
   const body = interop.code;
   if (interop.unresolved) {
     console.warn(
@@ -827,8 +827,8 @@ function npmIdOf(spec: string, abs: string, from: string): string {
 function npmSharePlugin(selfKey: string, found: Set<string>) {
   return {
     name: "vn-dev-npm-share",
-    setup(build: any) {
-      build.onResolve({ filter: /^(?!node:)[^./\\]/ }, (args: any) => {
+    setup(build: Bun.PluginBuilder) {
+      build.onResolve({ filter: /^(?!node:)[^./\\]/ }, (args: Bun.OnResolveArgs) => {
         if (args.kind === "entry-point-build" || isAbsolute(args.path) || isPreseeded(args.path)) return undefined;
         const from = importerDir(args, APP_ROOT);
         const abs = resolveImport(args.path, from);
@@ -860,16 +860,16 @@ async function buildNpmModule(id: string): Promise<boolean> {
     }
     return false;
   }
-  const selfKey = npmKey(spec, candidates[0]);
+  const selfKey = npmKey(spec, candidates[0]!);
   const requires = new Set<string>();
   let result: Awaited<ReturnType<typeof Bun.build>> | null = null;
-  let entry = candidates[0];
+  let entry = candidates[0]!;
   for (const [i, candidate] of candidates.entries()) {
     entry = candidate;
     requires.clear();
     result = await Bun.build({
       entrypoints: [candidate],
-      format: "cjs" as any,
+      format: "cjs",
       target: "browser", // picks the browser/ESM conditions, not node builtins
       // Pre-seeded ids plus every other package entry stay external. A dependency can ship raw .vue
       // source: without the SFC plugin Bun treats it as an asset and the import silently renders
@@ -880,7 +880,7 @@ async function buildNpmModule(id: string): Promise<boolean> {
     if (result?.success) break;
     if (i + 1 < candidates.length) {
       console.warn(
-        `${stamp()} npm ${id}: ${toId(candidate)} did not build — retrying with ` + `${toId(candidates[i + 1])}`,
+        `${stamp()} npm ${id}: ${toId(candidate)} did not build — retrying with ` + `${toId(candidates[i + 1]!)}`,
       );
     }
   }
@@ -888,7 +888,7 @@ async function buildNpmModule(id: string): Promise<boolean> {
     for (const log of result?.logs ?? []) console.error(log);
     throw new Error(`npm module build failed: ${id}`);
   }
-  const body = tagModuleNamespaces(await result.outputs[0].text()).code;
+  const body = tagModuleNamespaces(await result.outputs[0]!.text()).code;
   moduleDeps.set(id, []);
   npmBare.set(id, Array.from(requires).sort());
   writeAtomic(
@@ -991,7 +991,7 @@ function blocksOf(absPath: string, src: string): Blocks {
   } catch {
     return { src, script: src, template: "", styleShape: "", styleText: "" };
   }
-  const blockKey = (b: any) => (b ? JSON.stringify([b.content, b.lang ?? "", b.attrs ?? {}]) : "");
+  const blockKey = (b: SFCBlock | null) => (b ? JSON.stringify([b.content, b.lang ?? "", b.attrs]) : "");
   return {
     src,
     script: blockKey(d.script) + " " + blockKey(d.scriptSetup),
@@ -1050,7 +1050,7 @@ function writeManifest(files: string[]) {
         assetFiles: Object.fromEntries(
           [...DEV_ASSET_FILES]
             .filter(([key, path]) => key.startsWith("_vn/fs/") && existsSync(path))
-            .map(([key, path]) => [key, realpathSync(path)])
+            .map(([key, path]): [string, string] => [key, realpathSync(path)])
             .sort(([a], [b]) => a.localeCompare(b)),
         ),
         deps,
@@ -1175,9 +1175,9 @@ await fullBuild("startup").catch((e) => {
 
 if (WATCH) {
   const { watch } = await import("fs");
-  let timer: any = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   let vendorTouched = false;
-  const schedule = (isRuntime: boolean) => (_evt: any, file: any) => {
+  const schedule = (isRuntime: boolean) => (_evt: string, file: string | null) => {
     const name = String(file ?? "");
     if (name.endsWith(".tmp")) return;
     if (isRuntime) vendorTouched = true;
@@ -1215,8 +1215,8 @@ if (WATCH) {
     setInterval(() => {
       try {
         process.kill(owner, 0);
-      } catch (e: any) {
-        if (e?.code === "ESRCH") process.exit(0);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "ESRCH") process.exit(0);
       }
     }, 1000);
   }

@@ -63,21 +63,22 @@ function move(delta: number): void {
   if (!rowsNow.length) return;
   const at = selectedIndex.value;
   const next = at < 0 ? 0 : Math.max(0, Math.min(rowsNow.length - 1, at + delta));
-  void select(rowsNow[next].id);
+  void select(rowsNow[next]!.id);
   list.ensureVisible(next);
 }
 
 function collapseOrParent(): void {
   const at = selectedIndex.value;
-  if (at < 0) return;
   const row = rows.value[at];
+  if (!row) return;
   if (row.open && row.children) {
     setExpanded(row.id, false);
     return;
   }
   for (let i = at - 1; i >= 0; i--) {
-    if (rows.value[i].depth < row.depth) {
-      void select(rows.value[i].id);
+    const above = rows.value[i]!;
+    if (above.depth < row.depth) {
+      void select(above.id);
       list.ensureVisible(i);
       return;
     }
@@ -85,9 +86,8 @@ function collapseOrParent(): void {
 }
 
 function expandOrChild(): void {
-  const at = selectedIndex.value;
-  if (at < 0) return;
-  const row = rows.value[at];
+  const row = rows.value[selectedIndex.value];
+  if (!row) return;
   if (row.children && !row.open) {
     setExpanded(row.id, true);
     return;
@@ -119,13 +119,13 @@ function onKey(event: VnKeyboardEvent): void {
       break;
     case "Home":
       if (rows.value.length) {
-        void select(rows.value[0].id);
+        void select(rows.value[0]!.id);
         list.scroll = 0;
       }
       break;
     case "End":
       if (rows.value.length) {
-        void select(rows.value[rows.value.length - 1].id);
+        void select(rows.value[rows.value.length - 1]!.id);
         list.toBottom();
       }
       break;
@@ -183,8 +183,7 @@ function textOf(row: Row): string {
   return t.length > 90 ? `${t.slice(0, 90)}…` : t;
 }
 function scopeOf(row: Row): string {
-  const s = row.node.scopes || [];
-  return s.length ? s[0] : "";
+  return row.node.scopes?.[0] ?? "";
 }
 </script>
 

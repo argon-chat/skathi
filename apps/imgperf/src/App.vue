@@ -51,7 +51,7 @@ const startChurn = () => {
   churnTimer = setInterval(() => {
     churnRounds++;
     const off = churnRounds * 17;
-    churnList.value = Array.from({ length: 60 }, (_, i) => churnPool[(i * 3 + off) % churnPool.length]);
+    churnList.value = Array.from({ length: 60 }, (_, i) => churnPool[(i * 3 + off) % churnPool.length]!);
     if (churnRounds >= 20) stopChurn();
   }, 500);
 };

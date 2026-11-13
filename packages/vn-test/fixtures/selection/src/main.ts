@@ -1,11 +1,13 @@
 import { createApp, h } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 const state = { changes: 0, starts: 0, copies: [] as string[] };
 (globalThis as unknown as { __VN_TEST_SEL__: unknown }).__VN_TEST_SEL__ = state;
 
-document.addEventListener("selectionchange", () => state.changes++);
-document.addEventListener("selectstart", () => state.starts++);
-document.addEventListener("copy", () => state.copies.push(String(getSelection())));
+dom.addEventListener("selectionchange", () => state.changes++);
+dom.addEventListener("selectstart", () => state.starts++);
+dom.addEventListener("copy", () => state.copies.push(String(getSelection())));
 
 const App = {
   render: () =>

@@ -1,5 +1,7 @@
 import { createApp, h, ref, vModelText, withDirectives } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 type Edit = Event & { inputType: string; data: string | null; isComposing: boolean };
 
 const events: string[] = [];
@@ -59,7 +61,7 @@ const all = (where: string) => {
   cancel,
   model,
   assign(sel: string, v: string) {
-    (document.querySelector(sel) as HTMLTextAreaElement).value = v;
+    (dom.querySelector(sel) as HTMLTextAreaElement).value = v;
   },
 };
 

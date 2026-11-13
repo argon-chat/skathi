@@ -1,19 +1,24 @@
 // The renderer's event-prop plumbing: which `on*` props reach the host, which names they normalise to, and that a prop the host cannot deliver says so instead of vanishing.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement } from "./runtime-harness";
+
+type Rt = ReturnType<typeof createRuntime>;
+type MediaEv = VnEvent & { currentTime: number; detail: { duration: number } };
+
+const stub = (rt: Rt, id?: number) => rt.el(id) as unknown as MirrorElement;
 
 describe("patchProp: on* props", () => {
   test("a known event registers its listener flag under the host's code", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(7), "onClick", null, () => {});
+    rt.patchProp(stub(rt, 7), "onClick", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([{ id: 7, code: 1, on: true }]);
     expect(rt.advisories()).toEqual([]);
   });
 
   test("an event the host does not deliver warns instead of vanishing", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(), "onMouseover", null, () => {});
+    rt.patchProp(stub(rt), "onMouseover", null, () => {});
     const advisories = rt.advisories();
     expect(advisories.length).toBe(1);
     expect(advisories[0]).toContain("@mouseover");
@@ -24,17 +29,17 @@ describe("patchProp: on* props", () => {
 
   test("the advisory is one per event name per session, not one per patch", () => {
     const rt = createRuntime();
-    for (let i = 0; i < 5; i++) rt.patchProp(rt.el(i), "onMouseover", null, () => {});
-    rt.patchProp(rt.el(), "onTouchstart", null, () => {});
+    for (let i = 0; i < 5; i++) rt.patchProp(stub(rt, i), "onMouseover", null, () => {});
+    rt.patchProp(stub(rt), "onTouchstart", null, () => {});
     expect(rt.advisories().length).toBe(2);
     const other = createRuntime();
-    other.patchProp(other.el(), "onMouseover", null, () => {});
+    other.patchProp(stub(other), "onMouseover", null, () => {});
     expect(other.advisories().length).toBe(1);
   });
 
   test("addEventListener and the prop path share one dedup key", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(3), "onMouseover", null, () => {});
+    rt.patchProp(stub(rt, 3), "onMouseover", null, () => {});
     const node = rt.nodeOps.createElement("div");
     node.addEventListener("mouseover", () => {});
     expect(rt.advisories().length).toBe(1);
@@ -43,7 +48,7 @@ describe("patchProp: on* props", () => {
   test("component-emit props that leak onto an element stay silent", () => {
     // `<input v-model>` compiles to an `onUpdate:modelValue` prop on the ELEMENT: not a DOM event, so no advisory.
     const rt = createRuntime();
-    rt.patchProp(rt.el(), "onUpdate:modelValue", null, () => {});
+    rt.patchProp(stub(rt), "onUpdate:modelValue", null, () => {});
     expect(rt.advisories()).toEqual([]);
   });
 
@@ -60,7 +65,7 @@ describe("patchProp: on* props", () => {
 
   test("modifiers are stripped before the name is looked up", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(2), "onClickCaptureOnce", null, () => {});
+    rt.patchProp(stub(rt, 2), "onClickCaptureOnce", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([{ id: 2, code: 1, on: true }]);
     expect(rt.advisories()).toEqual([]);
   });
@@ -76,14 +81,14 @@ describe("<lottie> event names", () => {
 
   test("the `on:` form the compiler emits for a custom element keeps its case", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(4), "on:loopComplete", null, () => {});
+    rt.patchProp(stub(rt, 4), "on:loopComplete", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.loopComplete)).toEqual([{ id: 4, code: 12, on: true }]);
     expect(rt.advisories()).toEqual([]);
   });
 
   test("`once`, `online` and `only` are attributes, not listeners for ce / line / ly", () => {
     const rt = createRuntime();
-    for (const key of ["once", "online", "only"]) rt.patchProp(rt.el(5), key, null, "");
+    for (const key of ["once", "online", "only"]) rt.patchProp(stub(rt, 5), key, null, "");
     expect(rt.host.listeners).toEqual([]);
     expect(rt.advisories()).toEqual([]);
     expect(rt.host.props.filter((p: { id: number }) => p.id === 5).map((p: { key: string }) => p.key)).toEqual([
@@ -97,14 +102,14 @@ describe("<lottie> event names", () => {
     const rt = createRuntime();
     expect(rt.hyphenate("LoopComplete")).toBe("loop-complete");
     expect(rt.canonicalEvent("loop-complete")).toBe("loopComplete");
-    rt.patchProp(rt.el(4), "onLoopComplete", null, () => {});
+    rt.patchProp(stub(rt, 4), "onLoopComplete", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.loopComplete)).toEqual([{ id: 4, code: 12, on: true }]);
     expect(rt.advisories()).toEqual([]);
   });
 
   test("an unknown `on:` event still gets its advisory", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(), "on:someCustomThing", null, () => {});
+    rt.patchProp(stub(rt), "on:someCustomThing", null, () => {});
     expect(rt.advisories().length).toBe(1);
     expect(rt.advisories()[0]).toContain("@someCustomThing");
   });
@@ -122,9 +127,9 @@ describe("<lottie> event names", () => {
     const node = rt.nodeOps.createElement("lottie");
     const fn = () => {};
     node.addEventListener("enter-frame", fn);
-    expect(rt.flagsFor(rt.EV_CODES.enterFrame).at(-1).on).toBe(true);
+    expect(rt.flagsFor(rt.EV_CODES.enterFrame).at(-1)?.on).toBe(true);
     node.removeEventListener("enterFrame", fn);
-    expect(rt.flagsFor(rt.EV_CODES.enterFrame).at(-1).on).toBe(false);
+    expect(rt.flagsFor(rt.EV_CODES.enterFrame).at(-1)?.on).toBe(false);
   });
 });
 
@@ -149,7 +154,7 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     "errorMessage=",
   ].join("\n");
 
-  const video = (rt) => {
+  const video = (rt: Rt) => {
     const node = rt.nodeOps.createElement("video");
     rt.host.mediaById.set(node.__vnId, STATE);
     return node;
@@ -167,7 +172,7 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
 
   test("@timeupdate registers a real host listener instead of advising", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(9), "onTimeupdate", null, () => {});
+    rt.patchProp(stub(rt, 9), "onTimeupdate", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.timeupdate)).toEqual([{ id: 9, code: 27, on: true }]);
     expect(rt.advisories()).toEqual([]);
   });
@@ -175,13 +180,13 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
   test("a dispatched timeupdate carries the payload and does not bubble", () => {
     const rt = createRuntime();
     const node = video(rt);
-    const seen = [];
-    node.addEventListener("timeupdate", (e) => seen.push(e));
+    const seen: MediaEv[] = [];
+    node.addEventListener("timeupdate", (e) => seen.push(e as MediaEv));
     rt.host.dispatcher(node.__vnId, rt.EV_CODES.timeupdate, 3.5, 12, 4, 2, "");
     expect(seen.length).toBe(1);
-    expect(seen[0].currentTime).toBe(3.5);
-    expect(seen[0].detail.duration).toBe(12);
-    expect(seen[0].bubbles).toBe(false);
+    expect(seen[0]?.currentTime).toBe(3.5);
+    expect(seen[0]?.detail.duration).toBe(12);
+    expect(seen[0]?.bubbles).toBe(false);
   });
 
   test("the properties read live off the host, per call", () => {
@@ -237,8 +242,8 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     const rt = createRuntime();
     const node = video(rt);
     rt.host.mediaById.set(node.__vnId, "error=4\nerrorMessage=this machine has no HEVC decoder; re-encode to H.264");
-    expect(node.error.code).toBe(4);
-    expect(node.error.message).toContain("H.264");
+    expect(node.error?.code).toBe(4);
+    expect(node.error?.message).toContain("H.264");
   });
 
   test("canPlayType is a live probe, and a non-media element has no surface", () => {
@@ -247,7 +252,7 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     rt.host.canPlayByType.set('video/mp4; codecs="avc1.640028"', "probably");
     expect(node.canPlayType('video/mp4; codecs="avc1.640028"')).toBe("probably");
     expect(node.canPlayType("application/x-nonsense")).toBe("");
-    expect(rt.nodeOps.createElement("div").currentTime).toBe(undefined);
+    expect<unknown>(rt.nodeOps.createElement("div").currentTime).toBe(undefined);
   });
 });
 
@@ -303,14 +308,14 @@ describe("the listener flag is only written when it changes", () => {
 });
 
 describe("v-model", () => {
-  const bind = (rt, el, modifiers, onUpdate) =>
+  const bind = (rt: Rt, el: MirrorElement, modifiers: Record<string, boolean>, onUpdate: (v: unknown) => void) =>
     rt.vModelText.created(el, { modifiers }, { props: { "onUpdate:modelValue": onUpdate } });
 
   test("updates the model on input", () => {
     const rt = createRuntime();
     const el = rt.nodeOps.createElement("input");
-    let model = null;
-    bind(rt, el, {}, (v) => (model = v));
+    let model: unknown = null;
+    bind(rt, el, {}, (v: unknown) => (model = v));
     rt.host.dispatcher(el.__vnId, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
     expect(model).toBe("typed");
     expect(rt.advisories()).toEqual([]);
@@ -319,8 +324,8 @@ describe("v-model", () => {
   test(".lazy still updates the model, and says how it differs", () => {
     const rt = createRuntime();
     const el = rt.nodeOps.createElement("input");
-    let model = null;
-    bind(rt, el, { lazy: true }, (v) => (model = v));
+    let model: unknown = null;
+    bind(rt, el, { lazy: true }, (v: unknown) => (model = v));
     rt.host.dispatcher(el.__vnId, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
     expect(model).toBe("typed");
     const advisories = rt.advisories();
@@ -332,8 +337,8 @@ describe("v-model", () => {
   test(".number and .trim still apply", () => {
     const rt = createRuntime();
     const el = rt.nodeOps.createElement("input");
-    let model = null;
-    bind(rt, el, { number: true, trim: true }, (v) => (model = v));
+    let model: unknown = null;
+    bind(rt, el, { number: true, trim: true }, (v: unknown) => (model = v));
     rt.host.dispatcher(el.__vnId, rt.EV_CODES.input, 0, 0, 0, 0, "  42  ");
     expect(model).toBe(42);
   });

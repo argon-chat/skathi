@@ -188,7 +188,7 @@ const total = (c: Counts) => Object.values(c).reduce((a, b) => a + b, 0);
 const ROWS = 100;
 
 function row(state: { items: { id: number; label: string }[]; hot: number }, i: number) {
-  const item = state.items[i];
+  const item = state.items[i]!;
   return h(
     "div",
     {

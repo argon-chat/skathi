@@ -1,20 +1,13 @@
 {
-  // Type-checking only: nothing emits. Bun transpiles `src/*.ts` directly; this exists so `bun run typecheck` and editors agree with what ships.
+  // The runtime half: src/ runs in JavaScriptCore, whose surface is exactly what src/engine.d.ts declares.
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    // Not "DOM": redjs is not a browser, and `src/engine.d.ts` declares exactly the DOM classes it has; lib.dom would also type `globalThis.document` as a real Document.
+    // Not "DOM": redjs is not a browser; lib.dom would type `globalThis.document` as a real Document.
     "lib": ["ESNext"],
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    // `false` keeps a bare `x: T` declaration erased instead of a constructor-prologue define that runs after `super()` and clobbers a field a base constructor set. Bun reads this key too.
+    // `false` keeps a bare `x: T` declaration erased instead of a define that runs after `super()` and
+    // clobbers a field a base constructor set. Bun reads this key too.
     "useDefineForClassFields": false,
-    "isolatedModules": true,
-    "forceConsistentCasingInFileNames": true,
-    "noImplicitOverride": true,
-    // The ambient .d.ts files are the whole ambient surface: no @types package may add a global that type-checks but does not exist at runtime.
+    // No @types package may add a global that type-checks but does not exist at runtime.
     "types": []
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts"]

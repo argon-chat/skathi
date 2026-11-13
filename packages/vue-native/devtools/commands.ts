@@ -797,10 +797,11 @@ export const toolName = (cmd: string): string => `vn_${cmd}`;
 export function mcpTools(): McpTool[] {
   return COMMANDS.map((spec) => {
     const names = Object.keys(spec.args);
-    const required = names.filter((n) => spec.args[n].required);
+    const required = names.filter((n) => spec.args[n]!.required);
     const properties: Record<string, { type: string; description: string }> = {};
     for (const n of names) {
-      properties[n] = { type: spec.args[n].type, description: spec.args[n].description };
+      const arg = spec.args[n]!;
+      properties[n] = { type: arg.type, description: arg.description };
     }
     properties.window = { type: WINDOW_ARG.type, description: WINDOW_ARG.description };
     return {
@@ -841,7 +842,7 @@ export function splitArgs(argv: string[]): { positional: string[]; flags: Flags 
   const positional: string[] = [];
   const flags: Flags = {};
   for (let i = 0; i < argv.length; i++) {
-    const value = argv[i];
+    const value = argv[i]!;
     if (!value.startsWith("--")) positional.push(value);
     else {
       const name = value.slice(2);
@@ -853,7 +854,7 @@ export function splitArgs(argv: string[]): { positional: string[]; flags: Flags 
 
 export function buildRequest(argv: string[], flags: Flags): Record<string, unknown> {
   const [cmd, ...rest] = argv;
-  const spec = COMMANDS.find((c) => c.cmd === cmd || (c.aliases ?? []).includes(cmd));
+  const spec = COMMANDS.find((c) => c.cmd === cmd || (cmd !== undefined && (c.aliases ?? []).includes(cmd)));
   if (!spec) die(`unknown command \`${cmd}\``);
   return { cmd: spec.cmd, ...spec.cli(rest, flags) };
 }

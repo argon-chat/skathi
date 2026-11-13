@@ -351,7 +351,7 @@ export function asciiOnly(src: string): AsciiResult {
       continue;
     }
 
-    let p = src[i];
+    let p = src[i]!;
     if (c === 61 && src.charCodeAt(i + 1) === 62) p = "=>";
     i += p.length;
     last = "punct";

@@ -41,19 +41,19 @@ export const MAX_PAYLOAD_BYTES = 1536 * 1024 * 1024;
 export interface BuildOptions {
   target: string;
   /** Read this config instead of <appRoot>/vn.config.json; paths still belong to appRoot. */
-  configPath?: string;
-  out?: string;
-  host?: string;
+  configPath?: string | undefined;
+  out?: string | undefined;
+  host?: string | undefined;
   /** The host variant; overrides vn.config.json's `windows` selection. */
-  variant?: Variant;
+  variant?: Variant | undefined;
   console?: boolean;
   payloadOnly?: boolean;
   allowHostMismatch?: boolean;
-  defines?: string[];
+  defines?: string[] | undefined;
   aotInputs?: boolean;
-  platform?: Platform;
+  platform?: Platform | undefined;
   /** macOS: a codesign identity (`-` = ad hoc), or false for none; over `macos.sign`. */
-  sign?: string | false;
+  sign?: string | false | undefined;
   log?: (line: string) => void;
 }
 

@@ -1,5 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type RealmGlobal } from "./runtime-harness";
+
+type Listener = (event: Event) => unknown;
+interface Targetish {
+  addEventListener(type: string, listener: Listener, options?: boolean | AddEventListenerOptions): void;
+  removeEventListener(type: string, listener: Listener, options?: boolean | EventListenerOptions): void;
+  dispatchEvent(event: Event): boolean;
+}
+interface WindowLike extends Targetish {
+  __VN_UNLOAD__(): void;
+}
+interface ElementLike extends Targetish {
+  isConnected: boolean;
+  remove(): void;
+}
+
+const windowOf = (global: RealmGlobal) => global as unknown as WindowLike;
 
 function world() {
   const nativeWindow = new EventTarget();
@@ -24,7 +40,14 @@ function world() {
   const target = rt.nodeOps.createElement("div");
   rt.nodeOps.insert(parent, rt.global.document.body, null);
   rt.nodeOps.insert(target, parent, null);
-  return { rt, g: rt.global as any, document: rt.global.document as any, parent, target, calls };
+  return {
+    rt,
+    g: windowOf(rt.global),
+    document: rt.global.document as unknown as Targetish,
+    parent: parent as unknown as ElementLike,
+    target: target as unknown as ElementLike,
+    calls,
+  };
 }
 
 describe("fullscreen events across the mirror and global targets", () => {
@@ -110,9 +133,9 @@ describe("fullscreen events across the mirror and global targets", () => {
       expect(nativeResize).toBe(generation + 1);
       expect(fullscreen).toBe(generation + 1);
       expect(calls.filter((call) => call === "window:resize")).toHaveLength(generation + 1);
-      (g.__VN_UNLOAD__ as () => void)();
-      rt = createRuntime({ realm: g });
-      g = rt.global;
+      g.__VN_UNLOAD__();
+      rt = createRuntime({ realm: rt.global });
+      g = windowOf(rt.global);
     }
   });
 });
@@ -190,11 +213,19 @@ describe("fullscreen listener AbortSignal lifecycle", () => {
     const add = signal.addEventListener.bind(signal);
     const remove = signal.removeEventListener.bind(signal);
     const active = new Set<unknown>();
-    signal.addEventListener = ((type: string, listener: any, options: any) => {
+    signal.addEventListener = ((
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) => {
       if (type === "abort") active.add(listener);
       add(type, listener, options);
     }) as typeof signal.addEventListener;
-    signal.removeEventListener = ((type: string, listener: any, options: any) => {
+    signal.removeEventListener = ((
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) => {
       if (type === "abort") active.delete(listener);
       remove(type, listener, options);
     }) as typeof signal.removeEventListener;
@@ -212,7 +243,7 @@ describe("fullscreen listener AbortSignal lifecycle", () => {
     document.addEventListener("fullscreenchange", listener, { signal });
     g.addEventListener("fullscreenchange", listener, { signal });
     expect(active.size).toBe(2);
-    (g.__VN_UNLOAD__ as () => void)();
+    g.__VN_UNLOAD__();
     expect(active.size).toBe(0);
     controller.abort();
     expect(seen).toBe(1);

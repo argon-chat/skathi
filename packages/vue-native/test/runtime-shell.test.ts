@@ -3,7 +3,11 @@
 // protocol into promises that reject with the right names.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type RealmGlobal } from "./runtime-harness";
+
+type Failure = Error & { code?: unknown; osError?: unknown };
+const winOpen = (rt: { global: RealmGlobal }) =>
+  rt.global.open as (url?: string, target?: string, features?: string) => unknown;
 
 function linkWorld(href: string | null, options: Parameters<typeof createRuntime>[0] = {}) {
   const rt = createRuntime(options);
@@ -14,7 +18,7 @@ function linkWorld(href: string | null, options: Parameters<typeof createRuntime
   rt.nodeOps.insert(span, a, null);
   if (href !== null) rt.patchProp(a, "href", null, href);
   const opens = () => rt.host.desktop.calls.filter((c: { op: string }) => c.op === "openExternal");
-  const click = (node: { id: number }) => rt.host.dispatcher(node.__vnId, rt.EV_CODES.click, 5, 6, 0, 0, undefined);
+  const click = (node: { __vnId: number }) => rt.host.dispatcher(node.__vnId, rt.EV_CODES.click, 5, 6, 0, 0, undefined);
   return { rt, root, a, span, opens, click };
 }
 
@@ -51,7 +55,7 @@ describe("<a href>: activation", () => {
     const { span, opens, click } = linkWorld("mailto:someone@example.com");
     click(span);
     expect(opens().length).toBe(1);
-    expect(opens()[0].args[0]).toBe("mailto:someone@example.com");
+    expect(opens()[0]?.args[0]).toBe("mailto:someone@example.com");
   });
 
   test("preventDefault anywhere on the path cancels the navigation (RouterLink's shape)", () => {
@@ -208,18 +212,18 @@ describe("el.click() and dispatchEvent", () => {
 describe("window.open", () => {
   test("an external URL opens the system browser and returns null", () => {
     const { rt, opens } = linkWorld(null);
-    expect(rt.global.open("https://example.com/x", "_blank", "noopener")).toBe(null);
+    expect(winOpen(rt)("https://example.com/x", "_blank", "noopener")).toBe(null);
     expect(opens()).toEqual([{ op: "openExternal", args: ["https://example.com/x", true] }]);
   });
 
   test("another scheme is refused; no url / about:blank are ignored", () => {
     const { rt, opens } = linkWorld(null);
-    expect(rt.global.open("myapp://x")).toBe(null);
+    expect(winOpen(rt)("myapp://x")).toBe(null);
     expect(rt.advisories()[0]).toContain("appShell.openExternal");
-    expect(rt.global.open()).toBe(null);
-    expect(rt.global.open("about:blank")).toBe(null);
-    expect(rt.global.open("/relative")).toBe(null);
-    expect(rt.global.open("C:\\x.txt")).toBe(null);
+    expect(winOpen(rt)()).toBe(null);
+    expect(winOpen(rt)("about:blank")).toBe(null);
+    expect(winOpen(rt)("/relative")).toBe(null);
+    expect(winOpen(rt)("C:\\x.txt")).toBe(null);
     expect(opens()).toEqual([]);
   });
 
@@ -227,9 +231,9 @@ describe("window.open", () => {
     const seen: unknown[][] = [];
     const prelude = (...args: unknown[]) => (seen.push(args), null);
     const rt = createRuntime({ globals: { open: prelude } });
-    expect(rt.global.open("/relative", "_self")).toBe(null);
-    expect(rt.global.open()).toBe(null);
-    expect(rt.global.open("https://example.com/")).toBe(null);
+    expect(winOpen(rt)("/relative", "_self")).toBe(null);
+    expect(winOpen(rt)()).toBe(null);
+    expect(winOpen(rt)("https://example.com/")).toBe(null);
     expect(seen).toEqual([
       ["/relative", "_self", undefined],
       [undefined, undefined, undefined],
@@ -262,7 +266,7 @@ describe("appShell", () => {
     const { rt } = linkWorld(null);
     const p = rt.appShell.openPath("C:\\a\\missing.txt");
     rt.host.desktop.settle(1, false, { name: "NotFoundError", message: "gone", code: "ENOENT", osError: 2 });
-    const e = await p.catch((x: unknown) => x);
+    const e = (await p.catch((x: unknown) => x)) as Failure;
     expect(e).toBeInstanceOf(Error);
     expect(e.name).toBe("NotFoundError");
     expect(e.message).toBe("gone");
@@ -273,16 +277,16 @@ describe("appShell", () => {
   test("a synchronous refusal rejects at once; a TypeError stays a TypeError", async () => {
     const { rt } = linkWorld(null);
     rt.host.desktop.refuse = { error: 'openPath: "a.txt" is not an absolute path', name: "TypeError" };
-    const e = await rt.appShell.openPath("a.txt").catch((x: unknown) => x);
+    const e = (await rt.appShell.openPath("a.txt").catch((x: unknown) => x)) as Failure;
     expect(e).toBeInstanceOf(TypeError);
     rt.host.desktop.refuse = { error: "it would run it", name: "NotAllowedError", code: "EEXECUTABLE" };
-    const f = await rt.appShell.openPath("C:\\x\\setup.exe").catch((x: unknown) => x);
+    const f = (await rt.appShell.openPath("C:\\x\\setup.exe").catch((x: unknown) => x)) as Failure;
     expect([f.name, f.code]).toEqual(["NotAllowedError", "EEXECUTABLE"]);
   });
 
   test("with no desktop host it is inert: one advisory, every call rejects, links advise", async () => {
     const { rt, a, click } = linkWorld("https://example.com/", { desktop: false });
-    const e = await rt.appShell.openPath("C:\\a.txt").catch((x: unknown) => x);
+    const e = (await rt.appShell.openPath("C:\\a.txt").catch((x: unknown) => x)) as Failure;
     expect(e.name).toBe("NotSupportedError");
     await rt.appShell.trashItem("C:\\a.txt").catch(() => {});
     click(a);

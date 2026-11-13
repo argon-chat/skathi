@@ -1,12 +1,14 @@
 import { createApp, h, nextTick, onMounted, ref } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 const STAGES = ["mounted", "nextTick", "raf", "timeout", "late"] as const;
 
 const seen = ref<Record<string, number>>({});
 const boxHeight = ref("auto");
 
 function measure(stage: string) {
-  const el = document.querySelector("#probe-content") as HTMLElement | null;
+  const el = dom.querySelector("#probe-content") as HTMLElement | null;
   const px = el ? el.scrollHeight : -1;
   seen.value = { ...seen.value, [stage]: px };
   return px;
@@ -19,7 +21,7 @@ createApp({
       void nextTick(() => {
         boxHeight.value = `${measure("nextTick")}px`;
       });
-      requestAnimationFrame(() => measure("raf"));
+      requestAnimationFrame!(() => measure("raf"));
       setTimeout(() => measure("timeout"), 0);
       setTimeout(() => measure("late"), 400);
     });

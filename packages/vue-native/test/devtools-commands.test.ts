@@ -60,7 +60,7 @@ describe("MCP parity", () => {
   test("every tool takes `window`", () => {
     for (const tool of tools) {
       expect(tool.inputSchema.properties.window).toBeDefined();
-      expect(tool.inputSchema.properties.window.type).toBe("number");
+      expect(tool.inputSchema.properties.window!.type).toBe("number");
       expect(tool.inputSchema.required ?? []).not.toContain("window");
     }
   });
@@ -70,7 +70,7 @@ describe("MCP parity", () => {
       const tool = tools.find((t) => t.name === toolName(spec.cmd))!;
       const declared = Object.keys(spec.args);
       expect(Object.keys(tool.inputSchema.properties)).toEqual([...declared, "window"]);
-      const required = declared.filter((n) => spec.args[n].required);
+      const required = declared.filter((n) => spec.args[n]!.required);
       expect(tool.inputSchema.required ?? []).toEqual(required);
     }
   });

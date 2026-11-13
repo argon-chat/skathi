@@ -130,7 +130,7 @@ interface ExtraListener {
   fn: EventHandler;
   once: boolean;
   passive?: boolean;
-  signalCleanup?: () => void;
+  signalCleanup?: (() => void) | undefined;
   removed?: boolean;
 }
 
@@ -359,7 +359,7 @@ interface MirrorElement extends MirrorNodeBase {
   canPlayType(type: string): string;
 
   _inline?: InlineStyleState;
-  _vtc?: Set<string>;
+  _vtc?: Set<string> | undefined;
   _isLeaving?: boolean;
   _endId?: number;
 }
@@ -1474,7 +1474,7 @@ const REFLECTED: Record<string, Reflected> = Object.create(null);
 function reflect(kind: ReflectKind, names: string, tags: string | null): void {
   const set = tags ? new Set(tags.split(" ")) : null;
   for (const n of names.split(" ")) {
-    const [prop, attr = prop.toLowerCase()] = n.split("=");
+    const [prop = n, attr = prop.toLowerCase()] = n.split("=");
     REFLECTED[prop] = { attr, kind, tags: set };
   }
 }
@@ -1771,9 +1771,9 @@ function syncListenerFlag(self: MirrorNode, name: string): void {
   if (!code) return;
   const id = self.__vnId;
   const m = handlers.get(self);
-  let on = NAMES_BY_CODE[code].some((n) => m?.[n] && bucketsAlive(m[n]!));
+  let on = NAMES_BY_CODE[code]!.some((n) => m?.[n] && bucketsAlive(m[n]!));
   if (!on && appRoot && id === appRoot.__vnId) {
-    on = NAMES_BY_CODE[code].some((n) => [...globalHandlers.values()].some((g) => g[n] && bucketsAlive(g[n]!)));
+    on = NAMES_BY_CODE[code]!.some((n) => [...globalHandlers.values()].some((g) => g[n] && bucketsAlive(g[n]!)));
     if (!on && dndWants(code)) on = true;
   }
   // Activation behaviour: a link, `<label>`, file/color input and submit/reset button listen for their own click;
@@ -1889,7 +1889,7 @@ function removeGlobalListener(target: object, rawName: string, fn: EventHandler,
   const arr = capture ? buckets.extraC : buckets.extraB;
   const i = arr.findIndex((e) => e.fn === fn);
   if (i >= 0) {
-    disposeGlobalListener(arr[i]);
+    disposeGlobalListener(arr[i]!);
     arr.splice(i, 1);
   }
   if (appRoot) syncListenerFlag(appRoot, name);
@@ -2098,7 +2098,7 @@ function defineDomGet(
   set?: ((value: never) => void) | undefined,
   protos: object[] = [ElementProto],
 ): void {
-  for (const proto of protos) Object.defineProperty(proto, name, { get, set, configurable: true });
+  for (const proto of protos) Object.defineProperty(proto, name, { get, ...(set ? { set } : {}), configurable: true });
 }
 type TreeWalkerFilter = ((node: MirrorNode) => number) | { acceptNode?: (node: MirrorNode) => number } | null;
 
@@ -2190,7 +2190,7 @@ function rectFrom(raw: VnRect, at: 0 | 4): MirrorRect {
       },
     };
   const n = raw.split(",").map(Number);
-  const [x, y, w, h] = n.length >= at + 4 ? n.slice(at, at + 4) : n;
+  const [x = NaN, y = NaN, w = NaN, h = NaN] = n.length >= at + 4 ? n.slice(at, at + 4) : n;
   return {
     x,
     y,
@@ -2362,7 +2362,7 @@ function elementSibling(node: MirrorNode, step: number): MirrorElement | null {
   const p = node.parentNode;
   if (!p || !p.childNodes) return null;
   for (let i = Array.prototype.indexOf.call(p.childNodes, node) + step; i >= 0 && i < p.childNodes.length; i += step) {
-    if (p.childNodes[i].kind === 1) return p.childNodes[i] as MirrorElement;
+    if (p.childNodes[i]!.kind === 1) return p.childNodes[i] as MirrorElement;
   }
   return null;
 }
@@ -2538,7 +2538,7 @@ function hostScroll(node: MirrorElement, op: 0 | 1 | 2, x = NaN, y = NaN, sizeMa
   if (!node.__vnId) return null;
   const raw = __vn_scroll(node.__vnId, op, x, y);
   if (!raw) return null;
-  const [left, top, scrollWidth, scrollHeight, stale] = raw.split(",").map(Number);
+  const [left = NaN, top = NaN, scrollWidth = NaN, scrollHeight = NaN, stale] = raw.split(",").map(Number);
   if (stale && sizeMatters) noteStale();
   return { left, top, scrollWidth, scrollHeight, stale: !!stale };
 }
@@ -2736,7 +2736,7 @@ defineDomGet(
   function (this: MirrorElement, v: unknown) {
     if (!isMirrorEl(this)) return ownExpando(this, "hidden", v);
     if (typeof v === "string" && v.toLowerCase() === "until-found") this.setAttribute("hidden", "until-found");
-    else writeReflected(this, "hidden", REFLECTED.hidden, v);
+    else writeReflected(this, "hidden", REFLECTED.hidden!, v);
   } as (value: never) => void,
 );
 const INPUT_TYPES = new Set(
@@ -3324,7 +3324,7 @@ function followHref(href: string, download: string | null): void {
     );
     return;
   }
-  const scheme = m[1].toLowerCase();
+  const scheme = m[1]!.toLowerCase();
   if (scheme === "javascript") {
     // `javascript:void(0)` is the "link with only a click handler" idiom; anything else asked for code to run.
     if (!/^javascript:\s*(void\s*\(?\s*0\s*\)?\s*;?\s*|;?)$/i.test(raw)) {
@@ -4387,9 +4387,9 @@ const realm = (() => {
 })();
 
 {
-  const g = globalThis as {
+  const g = globalThis as unknown as {
     location?: Record<string, unknown>;
-    __VN_UNLOAD__?: () => void;
+    __VN_UNLOAD__?: (() => void) | undefined;
     __VN_TEARDOWN__?: () => void;
   };
   if (g.location && typeof __vn_reload === "function") {
@@ -4424,7 +4424,7 @@ const realm = (() => {
       const ev = typeof Event === "function" ? new Event("pagehide") : null;
       if (ev) {
         Object.defineProperty(ev, "persisted", { value: false });
-        (globalThis as { dispatchEvent?: (e: VnEvent) => boolean }).dispatchEvent?.(ev);
+        (globalThis as unknown as { dispatchEvent?: (e: VnEvent) => boolean }).dispatchEvent?.(ev);
       }
     } catch (e) {
       __vn_log("reload: pagehide: " + e);
@@ -4891,7 +4891,7 @@ function timeRanges(raw: string | undefined): MirrorTimeRanges {
         .split(",")
         .filter(Boolean)
         .map((pair) => {
-          const [start, end] = pair.split(":").map(Number);
+          const [start = NaN, end = NaN] = pair.split(":").map(Number);
           return { start, end };
         })
     : [];
@@ -5383,7 +5383,7 @@ function buttonsFor(name: string, c: number): number {
     case "mouseleave":
     case "pointerenter":
     case "pointerleave":
-      return c >= 0 && c < BUTTON_BITS.length ? BUTTON_BITS[c] : 0;
+      return c >= 0 && c < BUTTON_BITS.length ? BUTTON_BITS[c]! : 0;
     default:
       return 0;
   }
@@ -5719,10 +5719,10 @@ function propagate(target: MirrorNode, name: string, ev: VnEvent): boolean {
   const composed = path.slice();
   Object.defineProperty(ev, "composedPath", { value: () => composed.slice(), configurable: true });
   try {
-    for (let i = path.length - 1; i > 0 && !state.stopped; i--) at(path[i], "capture");
+    for (let i = path.length - 1; i > 0 && !state.stopped; i--) at(path[i]!, "capture");
     if (!state.stopped) at(target, "capture");
     if (!state.stopped) at(target, "bubble");
-    if (ev.bubbles) for (let i = 1; i < path.length && !state.stopped; i++) at(path[i], "bubble");
+    if (ev.bubbles) for (let i = 1; i < path.length && !state.stopped; i++) at(path[i]!, "bubble");
   } finally {
     Object.defineProperty(ev, "currentTarget", { value: null, configurable: true });
     Object.defineProperty(ev, "eventPhase", { value: EVENT_PHASE.none, configurable: true });
@@ -6097,7 +6097,7 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
   const isImg = target.kind === 1 && (target as MirrorElement).tag === "img";
   if (isImg && (name === "load" || name === "error")) {
     const img = target as MirrorElement;
-    if (key !== img.attrs.src) return true;
+    if (key == null || key !== img.attrs.src) return true;
     img._img = { src: key, ok: name === "load", w: name === "load" ? a : 0, h: name === "load" ? b : 0 };
   }
   // `preventDefault()` on a derived pointer event cancels its source.
@@ -6868,7 +6868,7 @@ const RESIZE_LOOP_MESSAGE = "ResizeObserver loop completed with undelivered noti
  * filter), so the attribute is held back from dispatch and called here.
  */
 function deliverResizeLoopError(): void {
-  const g = globalThis as {
+  const g = globalThis as unknown as {
     onerror?: unknown;
     dispatchEvent?: (e: VnEvent) => boolean;
   };
@@ -7842,7 +7842,7 @@ function defineSelectMembers(sel: MirrorElement): void {
   const options = liveCollection<MirrorElement>(HTMLCollectionProto, true, () => selectOptions(sel));
   const acc = (get: () => unknown, set?: (v: unknown) => void): PropertyDescriptor => ({
     get,
-    set,
+    ...(set ? { set } : {}),
     configurable: true,
     enumerable: true,
   });
@@ -7868,7 +7868,7 @@ function defineOptionMembers(o: MirrorElement): void {
   o._dirty = false;
   const acc = (get: () => unknown, set?: (v: unknown) => void): PropertyDescriptor => ({
     get,
-    set,
+    ...(set ? { set } : {}),
     configurable: true,
     enumerable: true,
   });
@@ -7910,7 +7910,8 @@ for (const [name, spec] of Object.entries(TAG_CLASSES)) {
   const ours = vacant(globalThis, name);
   const parentName = TAG_PARENTS[name];
   const parentProto =
-    (parentName && (globalThis as Record<string, { prototype?: object } | undefined>)[parentName]?.prototype) ||
+    (parentName &&
+      (globalThis as unknown as Record<string, { prototype?: object } | undefined>)[parentName]?.prototype) ||
     ElementProto;
   if (typeof existing === "function" && !ours) {
     // The ENGINE's class (redjs's HTMLImageElement, for `new Image()`) knows
@@ -8496,7 +8497,7 @@ class DOMRectReadOnlyImpl {
   declare right: number;
   declare bottom: number;
   constructor(x: unknown = 0, y: unknown = 0, width: unknown = 0, height: unknown = 0) {
-    const [nx, ny, nw, nh] = [x, y, width, height].map(Number);
+    const [nx = NaN, ny = NaN, nw = NaN, nh = NaN] = [x, y, width, height].map(Number);
     Object.assign(this, {
       x: nx,
       y: ny,
@@ -8700,13 +8701,13 @@ if (doc) {
       currentNode: root,
       nextNode() {
         while (++i < flat.length) {
-          if (accepts(flat[i])) return (this.currentNode = flat[i]);
+          if (accepts(flat[i]!)) return (this.currentNode = flat[i]!);
         }
         return null;
       },
       previousNode() {
         while (--i >= 0) {
-          if (accepts(flat[i])) return (this.currentNode = flat[i]);
+          if (accepts(flat[i]!)) return (this.currentNode = flat[i]!);
         }
         return null;
       },
@@ -8882,7 +8883,7 @@ if (doc) {
       }
     }
     // `<head>` is not a box (a `<style>` appended must not become a child of the root): it stays redjs's property bag, common members filled in.
-    const head = doc.head;
+    const head = doc.head as unknown as Record<string, unknown> | null | undefined;
     if (head && typeof head === "object") {
       if (!head.style || typeof head.style !== "object") head.style = {};
       const hs = head.style as Record<string, unknown>;
@@ -9181,7 +9182,7 @@ const assignKey = Symbol("vnModelAssign");
 interface DirectiveBindingLike {
   value?: unknown;
   oldValue?: unknown;
-  modifiers?: Record<string, boolean>;
+  modifiers?: Partial<Record<string, boolean>>;
 }
 interface VNodeLike {
   props?: Record<string, unknown> | null;
@@ -9429,6 +9430,7 @@ export function withKeys(fn: (event: VnEvent) => unknown, keys: string[]) {
     if (!("key" in event)) return;
     const eventKey = hyphenate(String((event as VnKeyboardEvent).key));
     if (keys.some((k) => k === eventKey || keyAliases[k] === eventKey)) return fn(event);
+    return undefined;
   };
 }
 
@@ -9523,7 +9525,7 @@ function createPermissions(host: PermissionsHost): AppPermissions {
   const statuses = new Map<string, VnPermissionStatus>();
   if (typeof navigator === "object" && navigator && navigator.permissions) {
     for (const name of PERMISSION_NAMES) {
-      navigator.permissions.query({ name }).then(
+      navigator.permissions.query({ name } as never).then(
         (status) => {
           statuses.set(name, status);
           status.addEventListener("change", () => {
@@ -9956,8 +9958,8 @@ function openContentUrl(url: string, via: string): void {
     const s = url == null ? "" : String(url).trim();
     const m = SCHEME_RE.exec(s);
     // A one-letter "scheme" is a drive letter (`C:\x`), not a URL.
-    if (m && m[1].length > 1) {
-      const scheme = m[1].toLowerCase();
+    if (m && m[1]!.length > 1) {
+      const scheme = m[1]!.toLowerCase();
       if (scheme !== "about" && scheme !== "javascript") {
         if (CONTENT_SCHEMES.has(scheme)) openContentUrl(s, "window.open()");
         else adviseScheme(scheme, "window.open()");
@@ -10449,7 +10451,7 @@ function nextFrame(cb: () => void): void {
 const toMs = (s: string): number => (s === "auto" || !s ? 0 : Number(String(s).slice(0, -1).replace(",", ".")) * 1000);
 function listTimeout(delays: string[], durations: string[]): number {
   while (delays.length < durations.length) delays = delays.concat(delays);
-  return Math.max(0, ...durations.map((d: string, i: number) => toMs(d) + toMs(delays[i])));
+  return Math.max(0, ...durations.map((d: string, i: number) => toMs(d) + toMs(delays[i]!)));
 }
 
 function transitionTimeout(el: MirrorElement): number {

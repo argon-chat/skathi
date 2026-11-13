@@ -6,7 +6,11 @@ import type { InspectorRequest } from "../inspector-model";
 import { forceGc, measureResident, refreshMem, refreshPerf, state } from "../store";
 import { GPU_COLOR, formatMem, historyColumns, itemsOf, memColor, percent, segments, totalLabel } from "../memfmt";
 
-const props = defineProps<{ height: number; request?: InspectorRequest; sessionKey?: string | number }>();
+const props = defineProps<{
+  height: number;
+  request?: InspectorRequest | undefined;
+  sessionKey?: string | number | undefined;
+}>();
 const emit = defineEmits<{ (event: "recording-change", active: boolean): void }>();
 const mode = ref<"overview" | "frames" | "allocations">("overview");
 const frameRecording = ref(false),

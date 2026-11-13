@@ -3,7 +3,7 @@
  *   --table <generated matching table> --out <artifact directory> [--bundle <production JS>] [--kind inspector|application]
  */
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, copyFileSync, existsSync } from "node:fs";
-import { resolve, join, basename } from "node:path";
+import { resolve, join } from "node:path";
 import { createHash } from "node:crypto";
 import { loadPin, verifyCompilerInfo, verifyEngine, verifyFile, verifyTable } from "./toolchain";
 const PIN = loadPin(resolve(import.meta.dir, "toolchain.lock.json"));
@@ -59,20 +59,26 @@ if (!process.argv.includes("--bundle")) {
   );
 }
 const source = readFileSync(bundle, "utf8");
-const dump = JSON.parse(readFileSync(join(table, "aot_builtin_table.json"), "utf8"));
+interface BuiltinEntry {
+  holder: string;
+  origin: string;
+  isSymbolName: boolean;
+  name: string;
+}
+const dump = JSON.parse(readFileSync(join(table, "aot_builtin_table.json"), "utf8")) as { entries: BuiltinEntry[] };
 // Keep this host's APIs as unknown JS values. Bun must not assume that our
 // URL/fetch/WebSocket/Blob implementations have Bun-native layouts or helpers.
 const names = [
   ...new Set<string>([
     ...dump.entries
       .filter(
-        (entry: any) =>
+        (entry) =>
           entry.holder === "GlobalThis" &&
           entry.origin === "Host" &&
           !entry.isSymbolName &&
           /^[A-Za-z_$][\w$]*$/.test(entry.name),
       )
-      .map((entry: any) => entry.name),
+      .map((entry) => entry.name),
     "Object",
     "console",
     "window",

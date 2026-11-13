@@ -4,7 +4,29 @@
 import { describe, expect, test } from "bun:test";
 import { installFonts } from "./fonts-reference";
 
-type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
+interface Face {
+  family: string;
+  weight: string;
+  status: string;
+  unicodeRange: string;
+  load(): Promise<Face>;
+  loaded: Promise<Face>;
+}
+type FaceCtor = new (...args: unknown[]) => Face;
+interface FontEvent {
+  fontfaces: Face[];
+}
+interface FaceSet extends Iterable<Face>, EventTarget {
+  size: number;
+  status: string;
+  ready: Promise<FaceSet>;
+  has(face: Face): boolean;
+  add(face: Face): FaceSet;
+  delete(face: Face): boolean;
+  check(font: string, text?: string): boolean;
+  load(font: string, text?: string): Promise<Face[]>;
+  onloadingerror: ((event: FontEvent) => unknown) | null;
+}
 
 interface Rec {
   id: number;
@@ -23,7 +45,7 @@ interface Rec {
 
 function fakeHost(css: Partial<Rec>[] = []) {
   const faces: Rec[] = [];
-  const calls: Any[] = [];
+  const calls: unknown[][] = [];
   let listener: ((id: number, status: string, message: string) => void) | null = null;
   let next = 0;
   const rec = (r: Partial<Rec>): Rec => ({
@@ -42,7 +64,7 @@ function fakeHost(css: Partial<Rec>[] = []) {
   });
   for (const c of css) faces.push(rec({ css: true, inSet: true, ...c }));
   const blobs = new Map<string, unknown>();
-  const g: Any = {
+  const g = {
     EventTarget,
     Event,
     DOMException,
@@ -57,7 +79,7 @@ function fakeHost(css: Partial<Rec>[] = []) {
         blobs.delete(u);
       },
     },
-    __vn_fonts_set_listener(f: Any) {
+    __vn_fonts_set_listener(f: (id: number, status: string, message: string) => void) {
       listener = f;
     },
     __vn_fonts_list() {
@@ -97,8 +119,8 @@ function fakeHost(css: Partial<Rec>[] = []) {
         .join(",");
     },
   };
-  const doc: Any = {};
-  const set: Any = installFonts(g, doc);
+  const doc: { fonts?: FaceSet } = {};
+  const set = installFonts(g, doc) as FaceSet;
   const emit = (id: number, status: string, message = "") => {
     const f = faces.find((x) => x.id === id);
     if (f && status !== "list") f.status = status;
@@ -109,7 +131,7 @@ function fakeHost(css: Partial<Rec>[] = []) {
     emit(id, "loading");
   };
   return {
-    g,
+    g: g as typeof g & { FontFace: FaceCtor },
     doc,
     set,
     faces,
@@ -126,7 +148,7 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 
 describe("font behavior oracle (test only)", () => {
   test("nothing is installed without the host's loader", () => {
-    const g: Any = {};
+    const g: Record<string, unknown> = {};
     expect(installFonts(g, {})).toBeNull();
     expect(g.FontFace).toBeUndefined();
   });
@@ -140,20 +162,22 @@ describe("font behavior oracle (test only)", () => {
     expect(String(h.set)).toBe("[object FontFaceSet]");
     expect(h.set instanceof EventTarget).toBe(true);
     expect(h.set.size).toBe(2);
-    const [lato, tengwar] = [...h.set];
+    const [lato, tengwar] = [...h.set] as [Face, Face];
     expect(lato instanceof h.g.FontFace).toBe(true);
     expect([lato.family, lato.weight, lato.status]).toEqual(["Lato", "700", "unloaded"]);
     expect(tengwar.unicodeRange).toBe("U+E000-E0FF");
     expect(h.set.status).toBe("loaded");
 
     let ready = false;
-    h.set.ready.then((s: Any) => {
+    h.set.ready.then((s) => {
       expect(s).toBe(h.set);
       ready = true;
     });
-    const events: Any[] = [];
+    const events: [string, string[]][] = [];
     for (const type of ["loading", "loadingdone"]) {
-      h.set.addEventListener(type, (e: Any) => events.push([type, e.fontfaces.map((f: Any) => f.family)]));
+      h.set.addEventListener(type, (e) =>
+        events.push([type, (e as unknown as FontEvent).fontfaces.map((f) => f.family)]),
+      );
     }
     await tick();
     expect(ready).toBe(false);
@@ -187,7 +211,7 @@ describe("font behavior oracle (test only)", () => {
     const p = h.set.load("16px 'Alcarin Tengwar'", "\u{E010}");
     h.emit(2, "loaded");
     const faces = await p;
-    expect(faces.map((f: Any) => f.family)).toEqual(["Alcarin Tengwar"]);
+    expect(faces.map((f) => f.family)).toEqual(["Alcarin Tengwar"]);
   });
 
   test("a script face loads on load(), joins the set on add(), and reports its failure", async () => {
@@ -206,7 +230,7 @@ describe("font behavior oracle (test only)", () => {
     const loaded = face.load();
     expect(face.status).toBe("loading");
     expect(h.calls[1]).toEqual(["load", 1]);
-    const added = loaded.then((f: Any) => h.set.add(f));
+    const added = loaded.then((f) => h.set.add(f));
     h.emit(1, "loaded");
     expect(await added).toBe(h.set);
     expect(h.set.has(face)).toBe(true);
@@ -218,8 +242,8 @@ describe("font behavior oracle (test only)", () => {
     h.set.add(bad);
     const p = bad.load();
     expect(h.set.status).toBe("loading");
-    const errors: Any[] = [];
-    h.set.onloadingerror = (e: Any) => errors.push(e.fontfaces.length);
+    const errors: number[] = [];
+    h.set.onloadingerror = (e) => errors.push(e.fontfaces.length);
     h.emit(2, "error", "https://cdn.example/404.woff2: HTTP 404 Not Found");
     await expect(p).rejects.toMatchObject({ name: "NetworkError", message: expect.stringContaining("404") });
     expect(bad.status).toBe("error");
@@ -230,7 +254,7 @@ describe("font behavior oracle (test only)", () => {
     const h = fakeHost();
     const face = new h.g.FontFace("Bytes", new Uint8Array([0, 1, 0, 0]));
     expect(face.status).toBe("loading");
-    const [, family, source, , now] = h.calls[0];
+    const [, family, source, , now] = h.calls[0]!;
     expect([family, now]).toEqual(["Bytes", true]);
     expect(source).toMatch(/^url\("blob:fake\/1"\)$/);
     expect(h.blobs.size).toBe(1);
@@ -273,12 +297,12 @@ describe("font behavior oracle (test only)", () => {
 
   test("a sheet's CSS-connected face cannot be added or deleted, and a new sheet's faces appear", () => {
     const h = fakeHost([{ family: "Lato" }]);
-    const [lato] = [...h.set];
+    const [lato] = [...h.set] as [Face];
     expect(() => h.set.add(lato)).toThrow(/CSS-connected/);
     expect(h.set.delete(lato)).toBe(false);
     h.declare({ family: "Roboto" });
     h.emit(0, "list");
-    expect([...h.set].map((f: Any) => f.family)).toEqual(["Lato", "Roboto"]);
+    expect([...h.set].map((f) => f.family)).toEqual(["Lato", "Roboto"]);
     expect([...h.set][0]).toBe(lato);
   });
 });

@@ -4,8 +4,7 @@ const events: string[] = [];
 const menu = ref<{ x: number; y: number } | null>(null);
 (globalThis as unknown as { __VN_TEST_EVENTS__: unknown }).__VN_TEST_EVENTS__ = { events };
 
-const idOf = (t: EventTarget | null) =>
-  (t as { getAttribute?(n: string): string | null } | null)?.getAttribute?.("id") ?? "?";
+const idOf = (t: unknown) => (t as { getAttribute?(n: string): string | null } | null)?.getAttribute?.("id") ?? "?";
 
 const mouse =
   (where: string, cancel = false) =>

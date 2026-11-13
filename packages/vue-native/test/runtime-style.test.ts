@@ -3,7 +3,9 @@
 
 import { describe, expect, test } from "bun:test";
 import { defineComponent, h, nextTick, ref } from "@vue/runtime-core";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement, type RealmObserverEntry } from "./runtime-harness";
+
+const declared = (el: MirrorElement): string[] => [...(el.style as unknown as Iterable<string>)];
 
 function setup(options: { styleAccepts?: boolean } = {}) {
   const rt = createRuntime(options);
@@ -17,8 +19,8 @@ function setup(options: { styleAccepts?: boolean } = {}) {
       const i = out.findIndex(([k]) => k === key);
       if (value === "") {
         if (i >= 0) out.splice(i, 1);
-      } else if (i >= 0) out[i][1] = value;
-      else out.push([key, value]);
+      } else if (i >= 0) out[i]![1] = String(value);
+      else out.push([key, String(value)]);
     }
     return out;
   };
@@ -103,7 +105,7 @@ describe("the style attribute is the inline declaration block", () => {
     expect(el.style.item(0)).toBe("color");
     expect(el.style[1]).toBe("width");
     expect(el.style[2]).toBe(undefined);
-    expect([...el.style]).toEqual(["color", "width"]);
+    expect(declared(el)).toEqual(["color", "width"]);
     expect(hostStyle()).toEqual([
       ["color", "blue"],
       ["width", "1px"],
@@ -119,7 +121,7 @@ describe("the style attribute is the inline declaration block", () => {
     expect(el.style.background).toBe('url("data:image/png;base64,AAA=")   no-repeat');
     expect(el.style.getPropertyValue("--x")).toBe("3");
     expect(el.style.length).toBe(3);
-    expect([...el.style]).toEqual(["background", "--x", "width"]);
+    expect(declared(el)).toEqual(["background", "--x", "width"]);
     expect(el.style.width).toBe("2px");
   });
 
@@ -158,7 +160,7 @@ describe("the style attribute is the inline declaration block", () => {
     el.style.webkitTransform = "none";
     el.style.MozOsxFontSmoothing = "auto";
     el.style.cssFloat = "left";
-    expect([...el.style]).toEqual(["background-color", "-webkit-transform", "-moz-osx-font-smoothing", "float"]);
+    expect(declared(el)).toEqual(["background-color", "-webkit-transform", "-moz-osx-font-smoothing", "float"]);
     expect(el.style.cssFloat).toBe("left");
   });
 
@@ -188,7 +190,7 @@ describe("the style attribute is the inline declaration block", () => {
   test("a MutationObserver sees style changes, with the old value", async () => {
     const { rt, el } = setup();
     el.style.color = "red";
-    const seen = [];
+    const seen: RealmObserverEntry[] = [];
     const ob = new rt.global.MutationObserver((r) => seen.push(...r));
     ob.observe(el, { attributes: true, attributeOldValue: true, attributeFilter: ["style"] });
     el.style.color = "blue";
@@ -264,8 +266,10 @@ describe(":style is runtime-dom's patchStyle", () => {
 
   test("h('div', { style: '…' }) renders the string style", () => {
     const rt = createRuntime();
-    let el: any = null;
-    rt.createApp({ render: () => h("div", { ref: (e: unknown) => (el = e), style: "display:flex;gap:4px" }) }).mount();
+    let el!: MirrorElement;
+    rt.createApp({
+      render: () => h("div", { ref: (e: unknown) => (el = e as MirrorElement), style: "display:flex;gap:4px" }),
+    }).mount();
     expect(el.style.display).toBe("flex");
     expect(el.getAttribute("style")).toBe("display: flex; gap: 4px;");
     expect(rt.host.styles.filter((s) => s.id === el.__vnId).map((s) => `${s.key}=${s.value}`)).toEqual([
@@ -403,11 +407,11 @@ describe(":style is runtime-dom's patchStyle", () => {
   test("a string style keeps the variables useCssVars set", async () => {
     const rt = createRuntime();
     const style = ref<string>("color: red");
-    let el: any = null;
+    let el!: MirrorElement;
     const Comp = defineComponent({
       setup() {
         rt.useCssVars(() => ({ "abc-gap": "4px" }));
-        return () => h("div", { ref: (e: unknown) => (el = e), style: style.value });
+        return () => h("div", { ref: (e: unknown) => (el = e as MirrorElement), style: style.value });
       },
     });
     rt.createApp(Comp).mount();

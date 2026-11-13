@@ -133,7 +133,7 @@ describe("native inspector build provenance", () => {
 describe("exclusive native frontend download staging", () => {
   const data = Buffer.from("official immutable frontend archive");
   const digest = createHash("sha256").update(data).digest("hex");
-  const response = (() => Promise.resolve(new Response(data))) as typeof fetch;
+  const response = (() => Promise.resolve(new Response(data))) as unknown as typeof fetch;
   test("atomically publishes verified bytes and reuses a valid cache without a fetch", () =>
     fixture(async (root) => {
       const path = join(root, "frontend.tgz");
@@ -141,7 +141,7 @@ describe("exclusive native frontend download staging", () => {
       expect(readFileSync(path)).toEqual(data);
       await downloadVerified("https://example.invalid/fixture", path, digest, (() => {
         throw Error("cache should be reused");
-      }) as typeof fetch);
+      }) as unknown as typeof fetch);
       expect(readdirSync(root)).toEqual(["frontend.tgz"]);
     }));
   test("HTTP, stream, oversized and wrong-hash failures clean only their staging files", () =>
@@ -149,9 +149,15 @@ describe("exclusive native frontend download staging", () => {
       const other = join(root, "unrelated");
       writeFileSync(other, "keep");
       const failures = [
-        { fetcher: (() => Promise.resolve(new Response("missing", { status: 404 }))) as typeof fetch, maximum: 256 },
+        {
+          fetcher: (() => Promise.resolve(new Response("missing", { status: 404 }))) as unknown as typeof fetch,
+          maximum: 256,
+        },
         { fetcher: response, maximum: 2 },
-        { fetcher: (() => Promise.resolve(new Response("different archive"))) as typeof fetch, maximum: 256 },
+        {
+          fetcher: (() => Promise.resolve(new Response("different archive"))) as unknown as typeof fetch,
+          maximum: 256,
+        },
         {
           fetcher: (() =>
             Promise.resolve(
@@ -162,7 +168,7 @@ describe("exclusive native frontend download staging", () => {
                   },
                 }),
               ),
-            )) as typeof fetch,
+            )) as unknown as typeof fetch,
           maximum: 256,
         },
       ];

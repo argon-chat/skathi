@@ -32,7 +32,7 @@ const faces = async (): Promise<string[]> =>
 async function settled() {
   await until(faces, (f) => f.filter((x) => x.includes(":loaded:")).length >= 6);
   await until(
-    async () => [await width("lat"), await width("lat-ref"), await width("plain")],
+    async (): Promise<[number, number, number]> => [await width("lat"), await width("lat-ref"), await width("plain")],
     ([a, b, p]) => a > 0 && Math.abs(a - b) < 0.01 && Math.abs(a - p) > 1,
   );
   await sleep(300);

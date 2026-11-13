@@ -51,7 +51,7 @@ describe("appStorage", () => {
     expect(rt.host.storage.setCalls.slice(1).map((c) => c.encrypted)).toEqual(["keep", "keep"]);
     expect(rt.appStorage.encrypted).toBe(true);
     rt.appStorage.setStorageFolder("C:\\moved", { encrypted: false });
-    expect(rt.host.storage.setCalls[3].encrypted).toBe("false");
+    expect(rt.host.storage.setCalls[3]?.encrypted).toBe("false");
     expect(rt.appStorage.encrypted).toBe(false);
   });
 
@@ -92,7 +92,7 @@ describe("appStorage", () => {
 
   test("arguments are coerced the way every other host-fn wrapper coerces them", () => {
     const rt = createRuntime();
-    expect(() => rt.appStorage.getUserFolder(null)).toThrow(TypeError);
+    expect(() => rt.appStorage.getUserFolder(null as unknown as string)).toThrow(TypeError);
     expect(rt.host.storage.folderCalls.at(-1)).toEqual({ kind: "null", sub: "" });
   });
 });

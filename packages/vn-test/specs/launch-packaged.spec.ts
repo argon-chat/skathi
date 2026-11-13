@@ -143,7 +143,7 @@ describe("a second launch of the packaged exe", () => {
       bunExpect(r.status).toBe(0);
       const got = await untilEvents(1);
       bunExpect(got.events.length).toBe(1);
-      const ev = got.events[0];
+      const ev = got.events[0]!;
       bunExpect(ev.source).toBe("second-instance");
       bunExpect(ev.argv.slice(1)).toEqual(["--open", doc]);
       bunExpect(ev.cwd.toLowerCase()).toBe(scratch.toLowerCase());

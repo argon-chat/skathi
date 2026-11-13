@@ -34,7 +34,7 @@ export interface StampOptions {
   host: string;
   out: string;
   payload: (skew: number) => Uint8Array;
-  icons?: IconImage[];
+  icons?: IconImage[] | undefined;
   versionInfo?: Uint8Array;
   subsystem?: "gui" | "console" | "keep";
   log?: (line: string) => void;
@@ -208,7 +208,7 @@ export function stamp(options: StampOptions): StampResult {
             const err = new Error(
               `${options.out} cannot be replaced — is it running? Close it and build again. (${(e as Error).message})`,
             );
-            (err as NodeJS.ErrnoException).code = (e as NodeJS.ErrnoException).code;
+            (err as { code?: string | undefined }).code = (e as NodeJS.ErrnoException).code;
             throw err;
           }
         }

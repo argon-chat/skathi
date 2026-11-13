@@ -1,5 +1,7 @@
 import { createApp, defineComponent, h, onMounted, ref } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 const state = {
   opened: 0,
   measured: [] as { trigger: number[]; content: number[] }[],
@@ -11,7 +13,7 @@ const state = {
 const open = ref(false);
 const trigger = ref<HTMLElement | null>(null);
 
-const rect = (el: Element) => {
+const rect = (el: Element): [number, number, number, number] => {
   const r = el.getBoundingClientRect();
   return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
 };
@@ -27,7 +29,7 @@ const Content = defineComponent({
       if (!content || !anchor) return;
       state.opened++;
       content.focus();
-      state.active.push(document.activeElement?.id ?? "");
+      state.active.push(dom.activeElement?.id ?? "");
       const t = rect(anchor);
       const c = rect(content);
       state.measured.push({ trigger: t, content: c });

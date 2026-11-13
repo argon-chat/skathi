@@ -4,16 +4,32 @@
 // test/waapi.test.ts; the painting half is crates/vn-css/src/animator/script.rs.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement } from "./runtime-harness";
 
-type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
+interface TestAnimation {
+  ready: Promise<unknown>;
+  finished: Promise<unknown>;
+  startTime: unknown;
+  playState: string;
+  commitStyles(): void;
+}
+type AnimatableElement = MirrorElement & {
+  animate(keyframes: unknown, options: unknown): TestAnimation;
+  getAnimations(): TestAnimation[];
+};
+interface AnimationGlobal {
+  [name: string]: unknown;
+  document: { timeline: { currentTime: unknown }; getAnimations(): unknown[] };
+  requestAnimationFrame(cb: (ts: number) => void): void;
+  CSS: { supports(...args: string[]): boolean };
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe("el.animate() in the runtime", () => {
   test("a mirror element animates through the host, with one placement advisory", async () => {
     const rt = createRuntime();
-    const el: Any = rt.nodeOps.createElement("div");
+    const el = rt.nodeOps.createElement("div") as AnimatableElement;
     expect(typeof el.animate).toBe("function");
     expect(typeof el.getAnimations).toBe("function");
     const a = el.animate([{ transform: "translateY(0px)" }, { transform: "translateY(-24px)" }], {
@@ -22,7 +38,7 @@ describe("el.animate() in the runtime", () => {
     });
     const set = rt.host.anim.calls.find((c) => c[0] === "set")!;
     expect(set[2]).toBe(el.__vnId);
-    expect(set[3].map((f: Any) => [f.computed, f.props])).toEqual([
+    expect((set[3] as { computed: number; props: unknown }[]).map((f) => [f.computed, f.props])).toEqual([
       [0, [["transform", "translateY(0px)"]]],
       [1, [["transform", "translateY(-24px)"]]],
     ]);
@@ -49,7 +65,7 @@ describe("el.animate() in the runtime", () => {
 
   test("commitStyles writes the host's values into the inline style", async () => {
     const rt = createRuntime();
-    const el: Any = rt.nodeOps.createElement("div");
+    const el = rt.nodeOps.createElement("div") as AnimatableElement;
     const a = el.animate({ opacity: [0, 0.5] }, { duration: 10, fill: "forwards" });
     await a.finished;
     rt.host.anim.values = "opacity\u001d0.5";
@@ -59,7 +75,7 @@ describe("el.animate() in the runtime", () => {
 
   test("the globals and document.timeline", () => {
     const rt = createRuntime();
-    const g = rt.global as Record<string, Any>;
+    const g = rt.global as unknown as AnimationGlobal;
     for (const name of [
       "Animation",
       "KeyframeEffect",
@@ -78,14 +94,14 @@ describe("el.animate() in the runtime", () => {
     // Argon's Digit.vue asks exactly this, and builds a linear() spring when
     // the answer is yes: el.animate() would then throw on every tick.
     const rt = createRuntime();
-    const CSS = (rt.global as Record<string, Any>).CSS;
+    const CSS = (rt.global as unknown as AnimationGlobal).CSS;
     expect(CSS.supports("animation-timing-function", "linear(0, 1)")).toBe(false);
     expect(CSS.supports("transition-timing-function: LINEAR(0, 0.5 50%, 1)")).toBe(false);
     expect(CSS.supports("transition", "opacity 1s linear(0, 1)")).toBe(false);
     expect(CSS.supports("animation-timing-function", "cubic-bezier(0.34, 1.56, 0.64, 1)")).toBe(true);
     expect(CSS.supports("transition-timing-function", "linear")).toBe(true);
     expect(CSS.supports("background", "linear-gradient(red, blue)")).toBe(true);
-    const el: Any = rt.nodeOps.createElement("div");
+    const el = rt.nodeOps.createElement("div") as AnimatableElement;
     expect(() => el.animate({ opacity: [0, 1] }, { duration: 10, easing: "linear(0, 1)" })).toThrow(TypeError);
   });
 
@@ -94,7 +110,7 @@ describe("el.animate() in the runtime", () => {
     const rt = createRuntime({
       globals: { requestAnimationFrame: (cb: (ts: number) => void) => setTimeout(() => cb(TS), 0) },
     });
-    const g = rt.global as Record<string, Any>;
+    const g = rt.global as unknown as AnimationGlobal;
     const seen = await new Promise((resolve) =>
       g.requestAnimationFrame((ts: number) => resolve([ts, g.document.timeline.currentTime])),
     );
@@ -105,8 +121,8 @@ describe("el.animate() in the runtime", () => {
 
   test("an older host without __vn_anim_* installs nothing", async () => {
     const rt = createRuntime({ anim: false });
-    const el: Any = rt.nodeOps.createElement("div");
-    expect(el.animate).toBeUndefined();
+    const el = rt.nodeOps.createElement("div") as AnimatableElement;
+    expect((el as Partial<AnimatableElement>).animate).toBeUndefined();
     expect((rt.global as Record<string, unknown>).KeyframeEffect).toBeUndefined();
     await sleep(0);
   });

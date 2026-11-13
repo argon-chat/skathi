@@ -90,7 +90,7 @@ function onLineClick(line: ConsoleLine, event: VnMouseEvent): void {
     const to = all.findIndex((l) => uidOf(l) === uid);
     if (from >= 0 && to >= 0) {
       const next: Record<number, boolean> = {};
-      for (let i = Math.min(from, to); i <= Math.max(from, to); i++) next[uidOf(all[i])] = true;
+      for (let i = Math.min(from, to); i <= Math.max(from, to); i++) next[uidOf(all[i]!)] = true;
       selected.value = next;
       return;
     }
@@ -159,7 +159,7 @@ function copyLine(line: ConsoleLine): void {
 
 function copyLines(picked: ConsoleLine[]): void {
   if (!picked.length) return;
-  if (picked.length === 1) return copyLine(picked[0]);
+  if (picked.length === 1) return copyLine(picked[0]!);
   const text = picked.map((l) => `[${l.kind}] ${l.text}`).join("\n");
   void copyText(text, `${picked.length} lines`);
 }
@@ -178,7 +178,7 @@ function history(delta: number): void {
   if (!h.length) return;
   const next = Math.max(0, Math.min(h.length, state.evalIndex + delta));
   state.evalIndex = next;
-  draft.value = next >= h.length ? "" : h[next];
+  draft.value = next >= h.length ? "" : h[next]!;
 }
 
 function onPromptKey(event: VnKeyboardEvent): void {
@@ -198,7 +198,7 @@ function onPromptKey(event: VnKeyboardEvent): void {
   }
   if (event.key === "Tab" && hint.value.length) {
     event.preventDefault();
-    accept(hint.value[0]);
+    accept(hint.value[0]!);
     return;
   }
   if (event.key === "Escape") {
@@ -270,7 +270,10 @@ onUnmounted(() => {
 
 const counts = computed(() => {
   const out: Record<string, number> = { error: 0, warn: 0, info: 0, debug: 0 };
-  for (const line of state.logs) out[levelOf(line.kind)]++;
+  for (const line of state.logs) {
+    const level = levelOf(line.kind);
+    out[level] = (out[level] ?? 0) + 1;
+  }
   return out;
 });
 
@@ -278,10 +281,10 @@ function segments(line: ConsoleLine): { text: string; css: string }[] {
   const runs = line.styles;
   if (!runs || !runs.length) return [{ text: line.text, css: "" }];
   const out: { text: string; css: string }[] = [];
-  const head = line.text.slice(0, runs[0].at);
+  const head = line.text.slice(0, runs[0]!.at);
   if (head) out.push({ text: head, css: "" });
   runs.forEach((run: StyleRun, i: number) => {
-    const end = i + 1 < runs.length ? runs[i + 1].at : line.text.length;
+    const end = i + 1 < runs.length ? runs[i + 1]!.at : line.text.length;
     const text = line.text.slice(run.at, end);
     if (text) out.push({ text, css: run.css });
   });
@@ -293,7 +296,7 @@ function runStyle(css: string): Record<string, string> {
   const style: Record<string, string> = {};
   for (const part of css.split(";")) {
     const [rawName, ...rest] = part.split(":");
-    const name = rawName.trim().toLowerCase();
+    const name = rawName!.trim().toLowerCase();
     const value = rest.join(":").trim();
     if (!value) continue;
     if (name === "color") style.color = value;

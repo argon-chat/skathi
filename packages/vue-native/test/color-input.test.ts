@@ -1,25 +1,29 @@
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement } from "./runtime-harness";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 function world() {
   const rt = createRuntime();
   const root = rt.nodeOps.createElement("div");
-  const input = rt.nodeOps.createElement("input") as Record<string, any>;
+  const input = rt.nodeOps.createElement("input") as MirrorElement & { type: string };
   rt.nodeOps.insert(input, root, null);
   rt.patchProp(input, "type", null, "color");
   const seen: string[] = [];
   for (const name of ["input", "change"])
-    rt.patchProp(root, "on" + name[0].toUpperCase() + name.slice(1), null, (event: any) =>
-      seen.push(name + ":" + event.target.value + ":" + event.bubbles + ":" + event.composed),
+    rt.patchProp(
+      root,
+      "on" + name[0]!.toUpperCase() + name.slice(1),
+      null,
+      (event: { target: { value: string }; bubbles: boolean; composed: boolean }) =>
+        seen.push(name + ":" + event.target.value + ":" + event.bubbles + ":" + event.composed),
     );
-  const calls = () => rt.host.desktop.fs.calls.filter((c: any) => c.op === "dialogOpen");
-  const click = (node = input) => {
+  const calls = () => rt.host.desktop.fs.calls.filter((c: { op: string }) => c.op === "dialogOpen");
+  const click = (node: MirrorElement = input) => {
     rt.host.dispatcher(node.__vnId, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
     rt.host.dispatcher(node.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
   };
   const answer = async (result: object) => {
-    rt.host.desktop.settle(calls().at(-1)!.token, true, result);
+    rt.host.desktop.settle(calls().at(-1)!.token!, true, result);
     await tick();
   };
   return { rt, root, input, seen, calls, click, answer };
@@ -36,7 +40,7 @@ describe("native color inputs", () => {
     expect(input.value).toBe("#ff0000");
     input.value = "invalid";
     expect(input.value).toBe("#000000");
-    input.value = null;
+    (input as { value: unknown }).value = null;
     expect(input.value).toBe("#000000");
     await tick();
     expect(seen).toEqual([]);
@@ -47,7 +51,7 @@ describe("native color inputs", () => {
     const { rt, input, seen, calls, click, answer } = world();
     input.value = "#123456";
     click();
-    expect(calls()[0].args).toEqual([{ kind: "color", value: "#123456" }, null]);
+    expect(calls()[0]!.args).toEqual([{ kind: "color", value: "#123456" }, null]);
     expect(rt.activation.isActive()).toBe(false);
     click();
     expect(calls().length).toBe(1);

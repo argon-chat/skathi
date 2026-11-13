@@ -17,6 +17,6 @@ const transpiler = new Bun.Transpiler({
 });
 
 /** One src/*.ts file, as the JavaScript the bundler would emit for it. */
-export function readTsSource(path) {
+export function readTsSource(path: string): string {
   return transpiler.transformSync(readFileSync(path, "utf8"));
 }

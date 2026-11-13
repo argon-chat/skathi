@@ -1,12 +1,14 @@
 import { createApp, h, ref } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 const state = { log: [] as string[] };
 (globalThis as unknown as { __VN_TEST_HIT__: unknown }).__VN_TEST_HIT__ = state;
 
 const idOf = (e: Event) => (e.target as HTMLElement | null)?.id || (e.target as HTMLElement | null)?.className || "?";
 const note = (what: string) => (e: Event) => state.log.push(`${e.type}:${what} t=${idOf(e)}`);
 
-document.addEventListener("mousedown", (e) => state.log.push(`mousedown:document t=${idOf(e)}`));
+dom.addEventListener("mousedown", (e) => state.log.push(`mousedown:document t=${idOf(e)}`));
 
 const abs = (left: number, top: number, width: number, height: number, extra: Record<string, string> = {}) => ({
   position: "absolute",

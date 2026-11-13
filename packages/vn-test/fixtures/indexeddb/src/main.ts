@@ -214,7 +214,7 @@ createApp({
           "div",
           { id: "notes" },
           notes.value.map((n) =>
-            h("div", { class: "note", key: n.id }, `${n.id}:${n.title}${n.done ? " (done)" : ""}`),
+            h("div", { class: "note", key: n.id! }, `${n.id}:${n.title}${n.done ? " (done)" : ""}`),
           ),
         ),
       ]);

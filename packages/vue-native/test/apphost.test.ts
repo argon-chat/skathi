@@ -43,7 +43,7 @@ test("in the exe appHost is unavailable, and a call rejects and says why once", 
     const { appHost } = await load();
     expect(appHost.available).toBe(false);
     expect(appHost.functions).toEqual([]);
-    const e = await appHost.call("ping").catch((x: unknown) => x as Error & { function: string });
+    const e = (await appHost.call("ping").catch((x: unknown) => x)) as Error & { function: string };
     expect(e.name).toBe("AppHostError");
     expect(e.function).toBe("ping");
     await appHost.call("ping").catch(() => {});
@@ -68,12 +68,12 @@ test("a call sends its arguments as JSON and settles with the host's answer", as
 
   const bad = appHost.call("ping");
   h.dispatch(2, false, "the host function panicked");
-  const e = await bad.catch((x: unknown) => x as Error & { function: string });
+  const e = (await bad.catch((x: unknown) => x)) as Error & { function: string };
   expect(e.name).toBe("AppHostError");
   expect(e.message).toBe("the host function panicked");
   expect(e.function).toBe("ping");
 
-  const unknown = await appHost.call("nope").catch((x: unknown) => x as Error);
+  const unknown = (await appHost.call("nope").catch((x: unknown) => x)) as Error;
   expect(unknown).toBeInstanceOf(TypeError);
   expect(unknown.message).toBe('appHost.call: the embedder has no function "nope" (it has "db.query", "ping")');
 
@@ -109,9 +109,9 @@ test("the public global is the same facade and reload retires old listeners and 
   expect(G.__VN_HOST__).toBe(first.appHost);
   const seen: unknown[] = [];
   first.appHost.on("change", (data) => seen.push(data));
-  const old = first.appHost.call("slow").catch((error: Error) => error);
+  const old = first.appHost.call("slow").catch((error: unknown) => error as Error);
   first.resetAppHost();
-  expect((await old).message).toContain("page unloaded");
+  expect(((await old) as Error).message).toContain("page unloaded");
   h.dispatch(0, true, '{"event":"change","data":"stale"}');
   expect(seen).toEqual([]);
   const second = await load();

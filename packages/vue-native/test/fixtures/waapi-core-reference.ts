@@ -4,7 +4,6 @@ import type { WaapiCore, WaapiHost, WaapiEffectNotes } from "../../src/waapi";
 
 type FillMode = "none" | "forwards" | "backwards" | "both" | "auto";
 type PlaybackDirection = "normal" | "reverse" | "alternate" | "alternate-reverse";
-type PlayState = "idle" | "running" | "paused" | "finished";
 type Composite = "replace" | "add" | "accumulate" | "auto";
 
 const FILLS: readonly FillMode[] = ["none", "forwards", "backwards", "both", "auto"];
@@ -21,17 +20,6 @@ interface Timing {
   direction: PlaybackDirection;
   easing: string;
 }
-
-const DEFAULT_TIMING: Timing = {
-  delay: 0,
-  endDelay: 0,
-  fill: "auto",
-  iterationStart: 0,
-  iterations: 1,
-  duration: "auto",
-  direction: "normal",
-  easing: "linear",
-};
 
 // ---------------------------------------------------------------------------
 // easing (CSS Easing Functions Level 1, minus `linear(…)`)
@@ -108,7 +96,7 @@ export function parseEasing(text: string): EasingFn | null {
   if (s === "step-end") return steps(1, "jump-end");
   let m = CUBIC_RE.exec(s);
   if (m) {
-    const [x1, y1, x2, y2] = m.slice(1).map(Number);
+    const [x1, y1, x2, y2] = m.slice(1).map(Number) as [number, number, number, number];
     if (!(x1 >= 0 && x1 <= 1 && x2 >= 0 && x2 <= 1)) return null;
     return cubicBezier(x1, y1, x2, y2);
   }
@@ -249,15 +237,15 @@ function compositeOf(v: unknown, where: string): Composite {
 function computeMissingOffsets(frames: Frame[]): void {
   if (frames.length === 0) return;
   for (const f of frames) f.computed = f.offset ?? NaN;
-  if (frames.length > 1 && frames[0].offset === null) frames[0].computed = 0;
-  const last = frames[frames.length - 1];
+  if (frames.length > 1 && frames[0]!.offset === null) frames[0]!.computed = 0;
+  const last = frames[frames.length - 1]!;
   if (last.offset === null) last.computed = 1;
   let prev = 0;
   for (let i = 1; i < frames.length; i++) {
-    if (Number.isNaN(frames[i].computed)) continue;
+    if (Number.isNaN(frames[i]!.computed)) continue;
     const gap = i - prev;
     for (let j = prev + 1; j < i; j++) {
-      frames[j].computed = frames[prev].computed + ((frames[i].computed - frames[prev].computed) * (j - prev)) / gap;
+      frames[j]!.computed = frames[prev]!.computed + ((frames[i]!.computed - frames[prev]!.computed) * (j - prev)) / gap;
     }
     prev = i;
   }
@@ -318,12 +306,12 @@ function processKeyframes(input: unknown, where: string): Frame[] {
   const frames = [...merged.values()].sort((a, b) => a.computed - b.computed);
   const list = <T>(v: unknown): T[] => (v === undefined ? [] : Array.isArray(v) ? (v as T[]) : [v as T]);
   list<unknown>(source.offset).forEach((v, i) => {
-    if (i < frames.length) frames[i].offset = offsetOf(v, where);
+    if (i < frames.length) frames[i]!.offset = offsetOf(v, where);
   });
   const easings = list<unknown>(source.easing).map((v) => easingOf(v, where));
-  if (easings.length) frames.forEach((f, i) => (f.easing = easings[i % easings.length]));
+  if (easings.length) frames.forEach((f, i) => (f.easing = easings[i % easings.length]!));
   const composites = list<unknown>(source.composite).map((v) => compositeOf(v, where));
-  if (composites.length) frames.forEach((f, i) => (f.composite = composites[i % composites.length]));
+  if (composites.length) frames.forEach((f, i) => (f.composite = composites[i % composites.length]!));
   checkOffsets(frames, where);
   for (const f of frames) if (f.offset !== null) f.computed = f.offset;
   return frames;

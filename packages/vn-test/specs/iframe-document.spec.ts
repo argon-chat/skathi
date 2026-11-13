@@ -59,7 +59,7 @@ describe("<iframe> with a document", () => {
       const s = await until((s) => s.log.includes("load") && messages(s, "hello").length > 0);
       expect(s.log.filter((l) => l === "load")).toEqual(["load"]);
       expect(s.log).not.toContain("error");
-      const [hello] = messages(s, "hello");
+      const hello = messages(s, "hello")[0]!;
       expect([hello.who, hello.origin]).toEqual(["mine", "null"]);
       expect([hello.data.framed, hello.data.origin]).toEqual([true, "null"]);
       expect(hello.data.size).toEqual([320, 240]);
@@ -81,7 +81,7 @@ describe("<iframe> with a document", () => {
       expect(
         echoes.every((m) => m.who === "mine" && m.origin === "null" && m.data.sourceIsParent && m.data.originIsStable),
       ).toBe(true);
-      expect(echoes[20].data.kinds).toEqual({
+      expect(echoes[20]!.data.kinds).toEqual({
         type: "[object String]",
         when: "[object Date]",
         bytes: "[object Uint8Array]",
@@ -98,7 +98,7 @@ describe("<iframe> with a document", () => {
     async () => {
       await app.eval(`document.querySelector("#slot iframe").contentWindow.postMessage({ type: "escape" }, "*")`);
       const s = await until((s) => messages(s, "escaped").length > 0);
-      const { tried } = messages(s, "escaped")[0].data;
+      const { tried } = messages(s, "escaped")[0]!.data;
       expect(tried.top).toBe("SecurityError");
       expect(tried.parentDoc).toBe("SecurityError");
       await app.eval(`document.querySelector("#slot iframe").contentWindow.postMessage({ type: "ping", n: 99 }, "*")`);
@@ -135,7 +135,7 @@ describe("<iframe> with a document", () => {
     async () => {
       await app.locator("#slot iframe").click({ real: true });
       const s = await until((s) => messages(s, "click").length > 0);
-      const click = messages(s, "click")[0].data;
+      const click = messages(s, "click")[0]!.data;
       expect(Math.abs(click.x - 160)).toBeLessThanOrEqual(1);
       expect(Math.abs(click.y - 120)).toBeLessThanOrEqual(1);
       expect(click.onBox).toBe(false);

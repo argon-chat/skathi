@@ -3,10 +3,10 @@
 // `value` member on the tag classes.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement } from "./runtime-harness";
 
 type El = {
-  id: number;
+  __vnId: number;
   value: unknown;
   checked: unknown;
   defaultValue: unknown;
@@ -19,14 +19,19 @@ type Rt = ReturnType<typeof createRuntime>;
 
 const lastValue = (rt: Rt, id: number, key = "value") =>
   rt.host.props.filter((p: { id: number; key: string }) => p.id === id && p.key === key).at(-1)?.value;
-const proto = (rt: Rt, name: string) => (rt.global as Record<string, { prototype: object }>)[name].prototype;
+const proto = (rt: Rt, name: string): object => {
+  const ctor = (rt.global as Record<string, { prototype: object } | undefined>)[name];
+  if (!ctor) throw new Error(`${name} is not a realm global`);
+  return ctor.prototype;
+};
+const mirror = (el: El) => el as unknown as MirrorElement;
 
 describe("the reka bubble-input pattern", () => {
   test("HTMLInputElement.prototype's value setter reaches the host, and the hand-made events are heard", () => {
     const rt = createRuntime();
     const root = rt.nodeOps.createElement("form") as unknown as El;
     const el = rt.nodeOps.createElement("input") as unknown as El;
-    rt.nodeOps.insert(el as never, root as never, null);
+    rt.nodeOps.insert(mirror(el), mirror(root), null);
     const seen: string[] = [];
     el.addEventListener("input", (e) => seen.push(`input:${e.target.value}:${e.bubbles}`));
     el.addEventListener("change", (e) => seen.push(`change:${e.target.value}`));
@@ -58,7 +63,7 @@ describe("the reka bubble-input pattern", () => {
     for (const v of ["", "apple", "pear"]) {
       const o = rt.nodeOps.createElement("option");
       rt.patchProp(o, "value", null, v);
-      rt.nodeOps.insert(o as never, select as never, null);
+      rt.nodeOps.insert(o, mirror(select), null);
     }
     const seen: string[] = [];
     select.addEventListener("change", (e) => seen.push(`change:${e.target.value}`));
@@ -113,7 +118,7 @@ describe("value", () => {
   test(":value from the template still goes through the host once", () => {
     const rt = createRuntime();
     const el = rt.nodeOps.createElement("input") as unknown as El;
-    rt.patchProp(el, "value", null, "x");
+    rt.patchProp(mirror(el), "value", null, "x");
     expect(el.value).toBe("x");
     expect(
       rt.host.props.filter((p: { id: number; key: string }) => p.id === el.__vnId && p.key === "value").length,
@@ -124,12 +129,16 @@ describe("value", () => {
     const rt = createRuntime();
     const el = rt.nodeOps.createElement("input") as unknown as El;
     let model: unknown = null;
-    rt.vModelText.created(el, { modifiers: {} }, { props: { "onUpdate:modelValue": (v: unknown) => (model = v) } });
-    rt.vModelText.mounted(el, { value: "" });
+    rt.vModelText.created(
+      mirror(el),
+      { modifiers: {} },
+      { props: { "onUpdate:modelValue": (v: unknown) => (model = v) } },
+    );
+    rt.vModelText.mounted(mirror(el), { value: "" });
     rt.host.dispatcher(el.__vnId, rt.EV_CODES.input, 0, 0, 0, 0, "abc");
     expect(model).toBe("abc");
     expect(el.value).toBe("abc");
-    rt.vModelText.beforeUpdate(el, { value: "" }, { props: { "onUpdate:modelValue": () => {} } });
+    rt.vModelText.beforeUpdate(mirror(el), { value: "" }, { props: { "onUpdate:modelValue": () => {} } });
     expect(lastValue(rt, el.__vnId)).toBe("");
     expect(el.value).toBe("");
   });
@@ -145,7 +154,7 @@ describe("value", () => {
     );
 
     const file = rt.nodeOps.createElement("input") as unknown as El;
-    rt.patchProp(file, "type", null, "file");
+    rt.patchProp(mirror(file), "type", null, "file");
     expect(() => {
       file.value = "C:\\x.txt";
     }).toThrow("may only be programmatically set to the empty string");
@@ -159,9 +168,9 @@ describe("checked, defaultValue, defaultChecked", () => {
   test("checked follows the attribute until assigned, and an assignment reaches the host", () => {
     const rt = createRuntime();
     const box = rt.nodeOps.createElement("input") as unknown as El;
-    rt.patchProp(box, "type", null, "checkbox");
+    rt.patchProp(mirror(box), "type", null, "checkbox");
     expect(box.checked).toBe(false);
-    rt.patchProp(box, "checked", null, true);
+    rt.patchProp(mirror(box), "checked", null, true);
     expect(box.checked).toBe(true);
     Object.getOwnPropertyDescriptor(proto(rt, "HTMLInputElement"), "checked")!.set!.call(box, false);
     expect(box.checked).toBe(false);

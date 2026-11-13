@@ -4,23 +4,121 @@
 
 import { describe, expect, test } from "bun:test";
 import { h } from "@vue/runtime-core";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement } from "./runtime-harness";
 
-type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
+type Fn = (this: unknown, ...args: unknown[]) => unknown;
+
+interface Collection extends Iterable<DomNode> {
+  [key: string]: unknown;
+  length: number;
+  item(index?: number): DomNode | null;
+  namedItem(name: string): DomNode | null;
+  forEach(callback: (node: DomNode, index: number) => void): void;
+  entries(): IterableIterator<[number, DomNode]>;
+}
+interface DomNode {
+  [key: string]: unknown;
+  tagName: string;
+  nodeName: string;
+  nodeType: number;
+  localName: string;
+  namespaceURI: string;
+  parentNode: DomNode | null;
+  childNodes: Collection;
+  children: Collection;
+  touches: Collection;
+  targetTouches: Collection;
+  changedTouches: Collection;
+  addedNodes: Collection;
+  removedNodes: Collection;
+  setAttribute(name: string, value: string): void;
+  getAttribute(name: string): string | null;
+  appendChild(node: DomNode): DomNode;
+  removeChild(node: DomNode): DomNode;
+  querySelectorAll(selector: string): Collection;
+  getElementsByTagName(tag: string): Collection;
+  getElementsByClassName(names: string): Collection;
+  getClientRects(): Collection;
+}
+interface DomDocument extends DomNode {
+  head: DomNode;
+  createElement(tag: string): DomNode;
+  createElementNS(namespace: string, tag: string): DomNode;
+  createComment(data: string): DomNode;
+  createAttribute(name: string): DomNode;
+  createTreeWalker(root: DomNode, what: number): unknown;
+  getElementsByName(name: string): Collection;
+}
+interface Ctor {
+  new (...args: unknown[]): DomNode;
+  prototype: { [key: PropertyKey]: unknown; item: Fn };
+  name: string;
+  [key: string]: unknown;
+}
+interface Observer {
+  observe(target: DomNode, options: unknown): void;
+}
+interface Realm {
+  AnimationEvent: Ctor;
+  CharacterData: Ctor;
+  CompositionEvent: Ctor;
+  DOMRectList: Ctor;
+  DOMStringMap: Ctor;
+  DOMTokenList: Ctor;
+  DocumentFragment: Ctor;
+  Element: Ctor;
+  HTMLAudioElement: Ctor;
+  HTMLCollection: Ctor;
+  HTMLElement: Ctor;
+  HTMLMediaElement: Ctor;
+  HTMLParagraphElement: Ctor;
+  HTMLStyleElement: Ctor;
+  HTMLVideoElement: Ctor;
+  MathMLElement: Ctor;
+  MutationRecord: Ctor;
+  Node: Ctor;
+  NodeList: Ctor;
+  PopStateEvent: Ctor;
+  SVGElement: Ctor;
+  SVGGeometryElement: Ctor;
+  SVGGradientElement: Ctor;
+  SVGGraphicsElement: Ctor;
+  SVGLinearGradientElement: Ctor;
+  SVGPathElement: Ctor;
+  SVGSVGElement: Ctor;
+  SVGTextContentElement: Ctor;
+  Text: Ctor;
+  ToggleEvent: Ctor;
+  Touch: Ctor;
+  TouchEvent: Ctor;
+  TouchList: Ctor;
+  TransitionEvent: Ctor;
+  TreeWalker: Ctor;
+  MutationObserver: new (callback: (records: DomNode[]) => unknown) => Observer;
+  document: DomDocument;
+}
+const mirror = (node: DomNode) => node as unknown as MirrorElement;
+const ctorOf = (g: Realm, name: string): Ctor => {
+  const ctor = (g as unknown as Record<string, Ctor | undefined>)[name];
+  if (!ctor) throw new Error(`${name} is not a realm global`);
+  return ctor;
+};
 
 function world() {
-  const rt: Any = createRuntime();
-  const g: Any = rt.global;
-  const doc: Any = g.document;
-  const vue = (tag: string, parent?: Any, attrs: Record<string, string> = {}) => {
-    const el = rt.nodeOps.createElement(tag);
+  const rt = createRuntime();
+  const g = rt.global as unknown as Realm;
+  const doc = g.document;
+  const vue = (tag: string, parent?: DomNode, attrs: Record<string, string> = {}) => {
+    const raw = rt.nodeOps.createElement(tag);
+    const el = raw as unknown as DomNode;
     for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-    if (parent) rt.nodeOps.insert(el, parent, null);
+    if (parent) rt.nodeOps.insert(raw, mirror(parent), null);
     return el;
   };
-  const text = (s: string, parent?: Any) => {
-    const t = rt.nodeOps.createText(s);
-    if (parent) rt.nodeOps.insert(t, parent, null);
+  const text = (s: string, parent?: DomNode) => {
+    const raw = rt.nodeOps.createText(s);
+    const t = raw as unknown as DomNode;
+    if (parent) rt.nodeOps.insert(raw, mirror(parent), null);
     return t;
   };
   return { rt, g, doc, vue, text };
@@ -30,11 +128,12 @@ describe("NodeList and HTMLCollection, the interfaces", () => {
   test("exist, cannot be constructed, and carry WebIDL's members", () => {
     const { g } = world();
     for (const name of ["NodeList", "HTMLCollection", "DOMRectList"]) {
-      expect(typeof g[name]).toBe("function");
-      expect(g[name].name).toBe(name);
-      expect(() => new g[name]()).toThrow("Illegal constructor");
-      expect(g[name].prototype.constructor).toBe(g[name]);
-      expect(Object.getPrototypeOf(g[name].prototype)).toBe(Object.prototype);
+      const ctor = ctorOf(g, name);
+      expect(typeof ctor).toBe("function");
+      expect(ctor.name).toBe(name);
+      expect(() => new ctor()).toThrow("Illegal constructor");
+      expect(ctor.prototype.constructor).toBe(ctor);
+      expect(Object.getPrototypeOf(ctor.prototype)).toBe(Object.prototype);
     }
     const nl = g.NodeList.prototype;
     expect(Object.keys(nl).sort()).toEqual(["entries", "forEach", "item", "keys", "length", "values"]);
@@ -60,7 +159,7 @@ describe("childNodes: a live NodeList, the renderer's own list", () => {
     expect(list.item(99)).toBe(null);
     expect(list[99]).toBe(undefined);
     expect(() => list.item()).toThrow("1 argument required");
-    expect(list.item).toBe(g.NodeList.prototype.item);
+    expect(list.item as unknown).toBe(g.NodeList.prototype.item);
     expect(p.childNodes).toBe(list);
     const b = vue("b", p);
     expect(list.length).toBe(2);
@@ -93,8 +192,8 @@ describe("childNodes: a live NodeList, the renderer's own list", () => {
     const b = vue("i", root);
     rt.host.queryAnswers.set("i|0", `${a.__vnId},${b.__vnId}`);
     const NodeList = g.NodeList;
-    function resolveSubjects(subject: Any) {
-      if (subject instanceof NodeList) return Array.from(subject);
+    function resolveSubjects(subject: unknown) {
+      if (subject instanceof NodeList) return Array.from(subject as unknown as Collection);
       else if (Array.isArray(subject)) return subject;
       return [subject];
     }
@@ -133,13 +232,14 @@ describe("querySelectorAll: a static NodeList", () => {
   test("MutationRecord's addedNodes and removedNodes are NodeLists too", async () => {
     const { g, vue } = world();
     const root = vue("div");
-    const records: Any[] = [];
-    new g.MutationObserver((r: Any[]) => records.push(...r)).observe(root, { childList: true });
+    const records: DomNode[] = [];
+    new g.MutationObserver((r) => records.push(...r)).observe(root, { childList: true });
     const child = vue("span", root);
     await Promise.resolve();
-    expect(records[0].addedNodes instanceof g.NodeList).toBe(true);
-    expect(records[0].addedNodes.item(0)).toBe(child);
-    expect(records[0].removedNodes.length).toBe(0);
+    const record = records[0]!;
+    expect(record.addedNodes instanceof g.NodeList).toBe(true);
+    expect(record.addedNodes.item(0)).toBe(child);
+    expect(record.removedNodes.length).toBe(0);
   });
 
   test("getClientRects() is a DOMRectList", () => {
@@ -182,7 +282,7 @@ describe("children and getElementsBy*: live HTMLCollections", () => {
     root.removeChild(span);
     expect(kids.length).toBe(2);
     expect(kids.n).toBe(undefined);
-    expect([...kids]).toEqual([p, kids[1]]);
+    expect([...kids]).toEqual([p, kids[1] as DomNode]);
   });
 
   test("index properties are read-only; an expando is fine", () => {
@@ -230,13 +330,13 @@ describe("children and getElementsBy*: live HTMLCollections", () => {
     const inputs = doc.getElementsByTagName("input");
     expect(inputs instanceof g.HTMLCollection).toBe(true);
     expect(inputs.length).toBe(2);
-    expect(inputs.namedItem("r").getAttribute("name")).toBe("r");
+    expect(inputs.namedItem("r")?.getAttribute("name")).toBe("r");
     expect(doc.getElementsByTagName("head")[0]).toBe(doc.head);
     expect(doc.getElementsByClassName("f").length).toBe(2);
     const named = doc.getElementsByName("q");
     expect(named instanceof g.NodeList).toBe(true);
     expect(named.length).toBe(1);
-    expect(named[0].tagName).toBe("INPUT");
+    expect(named.item(0)?.tagName).toBe("INPUT");
   });
 });
 
@@ -291,11 +391,11 @@ describe("Node", () => {
 describe("namespaces: SVG and MathML elements", () => {
   test("Vue's <svg> subtree: lowercase tagName, the SVG namespace, the SVG interfaces, not HTMLElement", () => {
     const { rt, g } = world();
-    let svg: Any;
+    const found: { svg?: DomNode } = {};
     rt.createApp({
       render: () =>
         h("div", [
-          h("svg", { ref: (e: unknown) => (svg = e) }, [
+          h("svg", { ref: (e: unknown) => (found.svg = e as DomNode) }, [
             h("path", { d: "M0 0" }),
             h("defs", [h("linearGradient", { id: "g" })]),
             h("text", "t"),
@@ -303,8 +403,9 @@ describe("namespaces: SVG and MathML elements", () => {
           h("math", [h("mi", "x")]),
         ]),
     }).mount();
-    const [path, defs] = svg.children;
-    const grad = defs.children[0];
+    const svg = found.svg!;
+    const [path, defs] = svg.children as unknown as [DomNode, DomNode];
+    const grad = defs.children[0] as DomNode;
     const text = svg.children[2];
     expect([svg.tagName, path.tagName, grad.tagName, svg.nodeName]).toEqual(["svg", "path", "linearGradient", "svg"]);
     expect([svg.namespaceURI, svg.localName, grad.localName]).toEqual([
@@ -326,11 +427,11 @@ describe("namespaces: SVG and MathML elements", () => {
     expect(grad instanceof g.SVGGraphicsElement).toBe(false);
     expect(text instanceof g.SVGTextContentElement).toBe(true);
     expect(Object.getPrototypeOf(g.SVGPathElement.prototype)).toBe(g.SVGGeometryElement.prototype);
-    const math = svg.parentNode.children[1];
+    const div = svg.parentNode!;
+    const math = div.children[1] as DomNode;
     expect(math instanceof g.MathMLElement).toBe(true);
     expect(math instanceof g.HTMLElement).toBe(false);
     expect(math.namespaceURI).toBe("http://www.w3.org/1998/Math/MathML");
-    const div = svg.parentNode;
     expect([div instanceof g.HTMLElement, div instanceof g.SVGElement, div.namespaceURI, div.localName]).toEqual([
       true,
       false,
@@ -361,8 +462,8 @@ describe("interfaces over objects that already existed", () => {
     expect(el.dataset instanceof g.DOMStringMap).toBe(true);
     expect({} instanceof g.DOMTokenList).toBe(false);
     expect(() => new g.DOMTokenList()).toThrow("Illegal constructor");
-    const records: Any[] = [];
-    new g.MutationObserver((r: Any[]) => records.push(...r)).observe(el, { attributes: true });
+    const records: DomNode[] = [];
+    new g.MutationObserver((r) => records.push(...r)).observe(el, { attributes: true });
     el.setAttribute("x", "1");
     await Promise.resolve();
     expect(records[0] instanceof g.MutationRecord).toBe(true);
@@ -389,7 +490,7 @@ describe("interfaces over objects that already existed", () => {
     const p = new g.PopStateEvent("popstate", { state: { page: 2 } });
     expect(p.state).toEqual({ page: 2 });
     expect(new g.ToggleEvent("toggle", { newState: "open" }).newState).toBe("open");
-    expect(() => Object.getOwnPropertyDescriptor(g.TransitionEvent.prototype, "propertyName").get.call({})).toThrow(
+    expect(() => Object.getOwnPropertyDescriptor(g.TransitionEvent.prototype, "propertyName")!.get!.call({})).toThrow(
       "Illegal invocation",
     );
   });
@@ -429,7 +530,7 @@ describe("touch, as desktop Chrome shows it on a machine without a touch screen"
     expect("ontouchstart" in g).toBe(false);
     expect("ontouchstart" in el).toBe(false);
     void rt;
-    const navigator: Any = {
+    const navigator: { permissions: { query: () => Promise<unknown> }; maxTouchPoints?: number } = {
       permissions: { query: () => Promise.resolve(Object.assign(new EventTarget(), { state: "granted" })) },
     };
     createRuntime({ navigator });
@@ -439,16 +540,16 @@ describe("touch, as desktop Chrome shows it on a machine without a touch screen"
 
 describe("a same-realm reload", () => {
   test("Node, NodeList and the element chain are the new runtime's", () => {
-    const first: Any = createRuntime();
-    const realm = first.global;
+    const first = createRuntime();
+    const realm = first.global as unknown as Realm;
     const OldNode = realm.Node;
     const OldNodeList = realm.NodeList;
-    (realm.__VN_UNLOAD__ as () => void)();
-    const second: Any = createRuntime({ realm });
+    (first.global.__VN_UNLOAD__ as () => void)();
+    const second = createRuntime({ realm: first.global });
     expect(realm.Node).not.toBe(OldNode);
     expect(realm.NodeList).not.toBe(OldNodeList);
     const t = second.nodeOps.createText("x");
-    const el = second.nodeOps.createElement("div");
+    const el = second.nodeOps.createElement("div") as unknown as DomNode;
     expect(t instanceof realm.Node).toBe(true);
     expect(el.childNodes instanceof realm.NodeList).toBe(true);
     expect(el.children instanceof realm.HTMLCollection).toBe(true);
@@ -480,7 +581,7 @@ describe("HTML element interfaces, by tag", () => {
     const { g, doc, vue } = world();
     const root = vue("div");
     const found: unknown[] = [];
-    new g.MutationObserver((records: Any[]) => {
+    new g.MutationObserver((records) => {
       for (const r of records) for (const n of r.addedNodes) if (n instanceof g.HTMLAudioElement) found.push(n);
     }).observe(root, { childList: true, subtree: true });
     const audio = doc.createElement("audio");
@@ -506,8 +607,11 @@ describe("HTML element interfaces, by tag", () => {
       ["blockquote", "HTMLQuoteElement"],
     ];
     for (const [tag, name] of cases) {
-      expect([tag, doc.createElement(tag) instanceof g[name]]).toEqual([tag, true]);
-      expect([name, Object.getPrototypeOf(g[name].prototype) === g.HTMLElement.prototype]).toEqual([name, true]);
+      expect([tag, doc.createElement(tag) instanceof ctorOf(g, name)]).toEqual([tag, true]);
+      expect([name, Object.getPrototypeOf(ctorOf(g, name).prototype) === g.HTMLElement.prototype]).toEqual([
+        name,
+        true,
+      ]);
     }
     expect(doc.createElement("div") instanceof g.HTMLParagraphElement).toBe(false);
     expect(typeof g.HTMLStyleElement).toBe("function");

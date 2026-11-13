@@ -318,7 +318,7 @@ describe("index.html", () => {
     });
     const lifted = liftIndexHtml(join(root, "index.html"), root);
     const rt = createRuntime();
-    const document = rt.global.document as Document;
+    const document = rt.global.document as unknown as Document;
     const source = htmlPreludeModule(lifted).replace(/^import "vue-native";\s*/m, "");
     new Function("document", source)(document);
     const all = (node: Node): Element[] =>

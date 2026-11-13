@@ -2,21 +2,91 @@
 // the `selectstart` / `selectionchange` events. The host is `host.selection`, a fake with the same protocol.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import {
+  createRuntime,
+  type MirrorElement,
+  type MirrorNode,
+  type RealmDocument,
+  type RealmGlobal,
+} from "./runtime-harness";
 
-type N = { __vnId: number; childNodes: N[]; parentNode: N | null; data?: string; textContent: string };
+type N = MirrorNode & { data?: string };
+
+interface RangeLike {
+  startContainer: unknown;
+  startOffset: number;
+  endContainer: unknown;
+  endOffset: number;
+  collapsed: boolean;
+  commonAncestorContainer: unknown;
+  setStart(node: unknown, offset: number): void;
+  setEnd(node: unknown, offset: number): void;
+  setStartBefore(node: unknown): void;
+  setEndAfter(node: unknown): void;
+  collapse(toStart?: boolean): void;
+  selectNode(node: unknown): void;
+  selectNodeContents(node: unknown): void;
+  compareBoundaryPoints(how: number, other: RangeLike): number;
+  comparePoint(node: unknown, offset: number): number;
+  isPointInRange(node: unknown, offset: number): boolean;
+  intersectsNode(node: unknown): boolean;
+  cloneRange(): RangeLike;
+  deleteContents(): void;
+  insertNode(node: unknown): void;
+  cloneContents(): N;
+}
+interface RangeCtor {
+  new (): RangeLike;
+  START_TO_START: number;
+  START_TO_END: number;
+  END_TO_END: number;
+  END_TO_START: number;
+}
+interface SelectionLike {
+  rangeCount: number;
+  type: string;
+  isCollapsed: boolean;
+  direction: string;
+  anchorNode: unknown;
+  anchorOffset: number;
+  focusNode: unknown;
+  focusOffset: number;
+  getRangeAt(index: number): RangeLike;
+  collapse(node: unknown, offset: number): void;
+  collapseToStart(): void;
+  collapseToEnd(): void;
+  extend(node: unknown, offset: number): void;
+  setBaseAndExtent(anchor: unknown, anchorOffset: number, focus: unknown, focusOffset: number): void;
+  selectAllChildren(node: unknown): void;
+  removeAllRanges(): void;
+  addRange(range: RangeLike): void;
+  removeRange(range: RangeLike): void;
+  containsNode(node: unknown, partial?: boolean): boolean;
+}
+interface SelectionDocument extends RealmDocument {
+  createRange(): RangeLike;
+  getSelection(): SelectionLike;
+  onselectionchange: (() => unknown) | null;
+}
+type SelectionGlobal = RealmGlobal & {
+  getSelection(): SelectionLike;
+  Selection: new () => SelectionLike;
+  Range: RangeCtor;
+  addEventListener(type: string, listener: () => void, capture?: boolean): void;
+};
 
 function world(options: Parameters<typeof createRuntime>[0] = {}) {
   const rt = createRuntime(options);
   rt.createApp({ render: () => null }).mount();
-  const doc = rt.global.document;
-  const body = doc.body as N;
-  const el = (tag: string, parent: N) => {
+  const global = rt.global as SelectionGlobal;
+  const doc = global.document as SelectionDocument;
+  const body = doc.body;
+  const el = (tag: string, parent: MirrorElement) => {
     const e = rt.nodeOps.createElement(tag);
     rt.nodeOps.insert(e, parent, null);
-    return e as N;
+    return e;
   };
-  const text = (s: string, parent: N) => {
+  const text = (s: string, parent: MirrorElement) => {
     const t = rt.nodeOps.createText(s);
     rt.nodeOps.insert(t, parent, null);
     return t as N;
@@ -29,16 +99,16 @@ function world(options: Parameters<typeof createRuntime>[0] = {}) {
   const world_ = text(" world", p1);
   const p2 = el("p", div);
   rt.nodeOps.setElementText(p2, "own text");
-  const sel = rt.global.getSelection();
-  return { rt, doc, body, div, p1, hello, b, big, world: world_, p2, sel };
+  const sel = global.getSelection();
+  return { rt, global, doc, body, div, p1, hello, b, big, world: world_, p2, sel };
 }
 
 describe("getSelection", () => {
   test("window's and document's are one Selection; an older host has none", () => {
-    const { rt, doc, sel } = world();
+    const { global, doc, sel } = world();
     expect(doc.getSelection()).toBe(sel);
-    expect(sel).toBeInstanceOf(rt.global.Selection);
-    expect(() => new rt.global.Selection()).toThrow(TypeError);
+    expect(sel).toBeInstanceOf(global.Selection);
+    expect(() => new global.Selection()).toThrow(TypeError);
     expect(sel.rangeCount).toBe(0);
     expect(sel.type).toBe("None");
     expect(sel.isCollapsed).toBe(true);
@@ -75,7 +145,7 @@ describe("getSelection", () => {
     rt.host.selection.sel = [p2.__vnId, 1, 1, p2.__vnId, 4, 1];
     const a = sel.anchorNode as N;
     expect(p2.childNodes.length).toBe(1);
-    expect(a).toBe(p2.childNodes[0]);
+    expect<unknown>(a).toBe(p2.childNodes[0]);
     expect(a.data).toBe("own text");
     expect(sel.anchorOffset).toBe(1);
     expect(sel.focusOffset).toBe(4);
@@ -139,10 +209,10 @@ describe("getSelection", () => {
 
 describe("Range", () => {
   test("boundaries: a start after the end collapses it, and the offsets are checked", () => {
-    const { rt, doc, hello, world: w, p1, body } = world();
+    const { global, doc, hello, world: w, p1, body } = world();
     const r = doc.createRange();
-    expect(r).toBeInstanceOf(rt.global.Range);
-    expect(new rt.global.Range().startContainer).toBe(body);
+    expect(r).toBeInstanceOf(global.Range);
+    expect(new global.Range().startContainer).toBe(body);
     r.setStart(w, 2);
     expect([r.endContainer, r.endOffset]).toEqual([w, 2]);
     r.setStart(hello, 1);
@@ -169,13 +239,13 @@ describe("Range", () => {
   });
 
   test("comparisons", () => {
-    const { rt, doc, hello, big, world: w, p1, b } = world();
+    const { global, doc, hello, big, world: w, p1, b } = world();
     const a = doc.createRange();
     a.setStart(hello, 1);
     a.setEnd(big, 2);
     const c = doc.createRange();
     c.selectNode(b);
-    const R = rt.global.Range;
+    const R = global.Range;
     expect(a.compareBoundaryPoints(R.START_TO_START, c)).toBe(-1);
     expect(a.compareBoundaryPoints(R.END_TO_END, c)).toBe(-1);
     expect(a.compareBoundaryPoints(R.START_TO_END, c)).toBe(1);
@@ -238,19 +308,19 @@ describe("selection events", () => {
   });
 
   test("selectionchange arrives at the document: not bubbling, not cancelable", () => {
-    const { rt, doc, body } = world();
+    const { rt, global, doc, body } = world();
     const seen: string[] = [];
-    let ev: { target: unknown; bubbles: boolean; cancelable: boolean; eventPhase: number } | null = null;
-    rt.global.addEventListener("selectionchange", () => seen.push("window:capture"), true);
-    rt.global.addEventListener("selectionchange", () => seen.push("window:bubble"));
-    doc.addEventListener("selectionchange", (e: typeof ev) => {
+    const evs: { target: unknown; bubbles: unknown; cancelable: unknown; eventPhase: unknown }[] = [];
+    global.addEventListener("selectionchange", () => seen.push("window:capture"), true);
+    global.addEventListener("selectionchange", () => seen.push("window:bubble"));
+    doc.addEventListener("selectionchange", (e) => {
       seen.push("document");
-      ev = { target: e!.target, bubbles: e!.bubbles, cancelable: e!.cancelable, eventPhase: e!.eventPhase };
+      evs.push({ target: e.target, bubbles: e.bubbles, cancelable: e.cancelable, eventPhase: e.eventPhase });
     });
     rt.patchProp(body, "onClick", null, () => {});
     expect(rt.host.dispatcher(body.__vnId, 46, 0, 0, 0, 0, undefined)).toBe(true);
     expect(seen).toEqual(["window:capture", "document"]);
-    expect(ev).toEqual({ target: doc, bubbles: false, cancelable: false, eventPhase: 2 });
+    expect(evs).toEqual([{ target: doc, bubbles: false, cancelable: false, eventPhase: 2 }]);
   });
 
   test("document.onselectionchange is the IDL handler", () => {

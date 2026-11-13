@@ -1,6 +1,8 @@
 // A browser runs it at the checkpoint after the keydown event, BEFORE the field inserts the key.
 import { createApp, h, ref } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 const text = ref("");
 const showVictim = ref(true);
 const state = {
@@ -56,7 +58,7 @@ createApp({
                 onFocus: logFocus,
                 onBlur: logFocus,
                 onMousedown: () => {
-                  state.focusLog.push(`mousedown:active-${document.activeElement?.id || "none"}`);
+                  state.focusLog.push(`mousedown:active-${dom.activeElement?.id || "none"}`);
                   queueMicrotask(() => (showVictim.value = false));
                 },
               },

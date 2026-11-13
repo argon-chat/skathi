@@ -130,7 +130,7 @@ function colliding(lib: string, exe: string): Set<string> {
     }
     const m = symbol.exec(line);
     if (!m) continue;
-    const [, value, section, storage, name] = m;
+    const [, value, section, storage, name] = m as string[] as [string, string, string, string, string];
     lastSection = storage === "Static" && section.startsWith("SECT") ? section : null;
     if (storage !== "External") continue;
     if (section.startsWith("SECT")) defined.push([name, section]);

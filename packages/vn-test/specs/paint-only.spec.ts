@@ -40,7 +40,7 @@ async function digest(b: Bounds): Promise<string> {
 }
 
 const near = (got: [number, number, number], want: [number, number, number]) =>
-  got.every((v, i) => Math.abs(v - want[i]) <= 8);
+  got.every((v, i) => Math.abs(v - want[i]!) <= 8);
 
 test(
   "a playing, visible <video> is shown by presents, not builds",

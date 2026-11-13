@@ -1,24 +1,25 @@
 import { createApp, h, nextTick, ref } from "vue-native";
 import "./fonts.css";
 
+const dom = document as unknown as VnDomDocument;
+
 const TEXT = "WWWWiiii";
-type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
-const fonts = (document as Any).fonts;
+const fonts = dom.fonts;
 
 const events: string[] = [];
 const results: Record<string, unknown> = {};
 const showLate = ref(false);
-const face = (family: string) => [...fonts].find((f: Any) => f.family === family);
+const face = (family: string) => [...fonts].find((f) => f.family === family);
 for (const type of ["loading", "loadingdone", "loadingerror"]) {
-  fonts.addEventListener(type, (e: Any) =>
-    events.push(`${type}:${[...e.fontfaces].map((f: Any) => f.family).join(",")}`),
+  fonts.addEventListener(type, (e: VnEvent) =>
+    events.push(`${type}:${[...(e as VnFontFaceSetEvent).fontfaces].map((f) => f.family).join(",")}`),
   );
 }
 
 const scenarios: Record<string, () => Promise<unknown>> = {
   async script() {
-    const buf = await (await fetch("/src/fonts/PressStart2P-Regular.ttf")).arrayBuffer();
-    const face = new (globalThis as Any).FontFace("VN Script", buf);
+    const buf = await (await fetch!("/src/fonts/PressStart2P-Regular.ttf")).arrayBuffer();
+    const face = new FontFace("VN Script", buf);
     const first = face.status;
     await face.loaded;
     fonts.add(face);
@@ -35,7 +36,7 @@ const scenarios: Record<string, () => Promise<unknown>> = {
     return {
       pixel: fonts.check("16px 'VN Pixel'"),
       tengwarPua: fonts.check("16px 'VN Tengwar'", ""),
-      loaded: tengwar.map((f: Any) => `${f.family}:${f.status}:${f.unicodeRange}`),
+      loaded: tengwar.map((f) => `${f.family}:${f.status}:${f.unicodeRange}`),
       system: fonts.check("16px serif"),
       bad: (() => {
         try {
@@ -48,16 +49,16 @@ const scenarios: Record<string, () => Promise<unknown>> = {
     };
   },
   async late() {
-    const late = face("VN Late");
+    const late = face("VN Late")!;
     const before = late.status;
     showLate.value = true;
     await nextTick();
-    const fallback = document.getElementById("late")!.getBoundingClientRect().width;
+    const fallback = dom.getElementById("late")!.getBoundingClientRect().width;
     await late.loaded;
-    return { before, fallback, status: late.status, unused: face("VN Unused").status };
+    return { before, fallback, status: late.status, unused: face("VN Unused")!.status };
   },
   async missing() {
-    const face = new (globalThis as Any).FontFace("VN Missing", "url(/src/fonts/nope.ttf)");
+    const face = new FontFace("VN Missing", "url(/src/fonts/nope.ttf)");
     fonts.add(face);
     try {
       await face.load();
@@ -98,8 +99,8 @@ createApp({
 results.boot = {
   status: fonts.status,
   size: fonts.size,
-  faces: [...fonts].map((f: Any) => `${f.family}:${f.status}`),
+  faces: [...fonts].map((f) => `${f.family}:${f.status}`),
 };
-fonts.ready.then((s: Any) => {
-  results.ready = { same: s === fonts, status: s.status, faces: [...s].map((f: Any) => `${f.family}:${f.status}`) };
+fonts.ready.then((s) => {
+  results.ready = { same: s === fonts, status: s.status, faces: [...s].map((f) => `${f.family}:${f.status}`) };
 });

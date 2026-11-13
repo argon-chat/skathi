@@ -60,7 +60,7 @@ function readPlist(xml: string): PlistValue {
   const text = (tag: string): string => {
     let s = "";
     while (tokens[i]![4] !== undefined) s += tokens[i++]![4];
-    expect(tokens[i]![1] + tokens[i]![2]).toBe(`/${tag}`);
+    expect(tokens[i]![1]! + tokens[i]![2]!).toBe(`/${tag}`);
     i++;
     return unescape(s);
   };

@@ -3,7 +3,7 @@
 // the input element's events.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime, FakeFileList } from "./runtime-harness";
+import { createRuntime, FakeFileList, type MirrorElement } from "./runtime-harness";
 
 type Rt = ReturnType<typeof createRuntime>;
 type Call = { op: string; args: unknown[]; token: number | null };
@@ -12,8 +12,72 @@ const calls = (rt: Rt, op: string): Call[] => rt.host.desktop.fs.calls.filter((c
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const gesture = (rt: Rt) => rt.noteActivation("mousedown", undefined);
 
+interface FsHandle extends Error {
+  kind: string;
+  move?: unknown;
+  createSyncAccessHandle?: unknown;
+  keys(): AsyncIterableIterator<string>;
+  [Symbol.asyncIterator](): AsyncIterableIterator<[string, FsHandle]>;
+  queryPermission(options?: unknown): Promise<unknown>;
+  requestPermission(options?: unknown): Promise<unknown>;
+  getFileHandle(name: string, options?: unknown): Promise<FsHandle>;
+  getDirectoryHandle(name: string, options?: unknown): Promise<FsHandle>;
+  removeEntry(name: string, options?: unknown): Promise<FsHandle>;
+  resolve(other: unknown): Promise<unknown>;
+  isSameEntry(other: unknown): Promise<unknown>;
+  createWritable(options?: unknown): Promise<FsHandle>;
+  write(chunk: unknown): Promise<FsHandle>;
+  seek(position: number): Promise<FsHandle>;
+  truncate(size: number): Promise<FsHandle>;
+  close(): Promise<FsHandle>;
+  abort(): Promise<FsHandle>;
+}
+
+type Picked = FsHandle[] & Error;
+
+interface HandleClass {
+  new (): unknown;
+  prototype: object;
+}
+
+interface DetachedElement {
+  type: string;
+  onchange: ((e: { target: { files: unknown } }) => void) | null;
+  oncancel: (() => void) | null;
+  href: string;
+  download: string;
+  dispatchEvent(e: Event): boolean;
+  setAttribute(name: string, value: string): void;
+}
+
+interface DesktopGlobals {
+  showOpenFilePicker(options?: unknown): Promise<Picked>;
+  showSaveFilePicker(options?: unknown): Promise<Picked>;
+  showDirectoryPicker(options?: unknown): Promise<Picked>;
+  FileSystemHandle: HandleClass;
+  FileSystemFileHandle: HandleClass;
+  FileSystemDirectoryHandle: HandleClass;
+  FileSystemWritableFileStream: HandleClass;
+  document: { createElement(tag: string): FileInput & DetachedElement; activeElement: unknown };
+}
+
+const win = (rt: Rt) => rt.global as unknown as DesktopGlobals;
+
+type FileInput = MirrorElement & FileInputProps;
+
+interface FileInputProps {
+  get files(): FakeFileList;
+  set files(value: unknown);
+  value: string;
+  accept: string;
+  multiple: boolean;
+  webkitdirectory: boolean;
+  click(): void;
+  showPicker(): void;
+}
+
 const handle = (rt: Rt, h: number, name: string, kind: "file" | "directory") =>
-  rt.desktopApi.handleFrom({ h, name, kind }) as Record<string, any>;
+  rt.desktopApi.handleFrom({ h, name, kind }) as FsHandle;
 
 test("desktop adapter preserves the engine's native FileReader and ProgressEvent", () => {
   class NativeReader {}
@@ -21,13 +85,15 @@ test("desktop adapter preserves the engine's native FileReader and ProgressEvent
   const rt = createRuntime({ globals: { FileReader: NativeReader, ProgressEvent: NativeProgress } });
   expect(rt.global.FileReader).toBe(NativeReader);
   expect(rt.global.ProgressEvent).toBe(NativeProgress);
-  expect(rt.host.desktop.fs.refused.some((entry: { name: string }) => entry.name === "FileReader")).toBe(false);
+  expect(rt.host.desktop.fs.refused.some((entry) => entry.name === "FileReader")).toBe(false);
 });
 
 describe("the pickers (WICG File System Access)", () => {
   test("need a user gesture: SecurityError with Chromium's message", async () => {
     const rt = createRuntime();
-    const err = await rt.global.showOpenFilePicker().catch((e: Error) => e);
+    const err = await win(rt)
+      .showOpenFilePicker()
+      .catch((e: Error) => e);
     expect(err).toBeInstanceOf(DOMException);
     expect(err.name).toBe("SecurityError");
     expect(err.message).toBe(
@@ -48,13 +114,13 @@ describe("the pickers (WICG File System Access)", () => {
   test("a gesture sends the request, and is consumed by it", async () => {
     const rt = createRuntime();
     gesture(rt);
-    const p = rt.global.showOpenFilePicker({
+    const p = win(rt).showOpenFilePicker({
       multiple: true,
       id: "imports",
       startIn: "documents",
       types: [{ description: "Images", accept: { "image/*": [".png", ".gif"] } }],
     });
-    const [c] = calls(rt, "dialogOpen");
+    const c = calls(rt, "dialogOpen")[0]!;
     expect(c.args[0]).toEqual({
       id: "imports",
       startIn: "documents",
@@ -65,27 +131,29 @@ describe("the pickers (WICG File System Access)", () => {
       multiple: true,
     });
     expect(rt.activation.isActive()).toBe(false);
-    const again = await rt.global.showSaveFilePicker().catch((e: Error) => e);
+    const again = await win(rt)
+      .showSaveFilePicker()
+      .catch((e: Error) => e);
     expect(again.name).toBe("SecurityError");
-    rt.host.desktop.settle(c.token, true, {
+    rt.host.desktop.settle(c.token!, true, {
       handles: [
         { h: 1, name: "a.png", kind: "file" },
         { h: 2, name: "b.gif", kind: "file" },
       ],
     });
     const hs = await p;
-    expect(hs.map((h: any) => h.name)).toEqual(["a.png", "b.gif"]);
-    expect(hs[0]).toBeInstanceOf(rt.global.FileSystemFileHandle);
+    expect(hs.map((h: { name: string }) => h.name)).toEqual(["a.png", "b.gif"]);
+    expect(hs[0]).toBeInstanceOf(win(rt).FileSystemFileHandle);
     expect(JSON.stringify(hs[0])).toBe("{}");
   });
 
   test("a dismissal is AbortError; a second dialog on the window is NotAllowedError", async () => {
     const rt = createRuntime();
     gesture(rt);
-    const p = rt.global.showDirectoryPicker();
-    const [c] = calls(rt, "dialogOpen");
-    expect((c.args[0] as any).kind).toBe("folder");
-    rt.host.desktop.settle(c.token, true, { cancelled: true });
+    const p = win(rt).showDirectoryPicker();
+    const c = calls(rt, "dialogOpen")[0]!;
+    expect((c.args[0] as { kind: string }).kind).toBe("folder");
+    rt.host.desktop.settle(c.token!, true, { cancelled: true });
     const err = await p.catch((e: Error) => e);
     expect([err.name, err.message]).toEqual(["AbortError", "The user aborted a request."]);
     expect(err).toBeInstanceOf(DOMException);
@@ -94,7 +162,9 @@ describe("the pickers (WICG File System Access)", () => {
     rt.host.desktop.fs.answers.set("dialogOpen", () => ({
       sync: { error: "File picker already active.", name: "NotAllowedError", code: "EBUSY" },
     }));
-    const busy = await rt.global.showSaveFilePicker().catch((e: Error) => e);
+    const busy = await win(rt)
+      .showSaveFilePicker()
+      .catch((e: Error) => e);
     expect([busy.name, busy.message]).toEqual([
       "NotAllowedError",
       "Failed to execute 'showSaveFilePicker' on 'Window': File picker already active.",
@@ -105,7 +175,9 @@ describe("the pickers (WICG File System Access)", () => {
     const rt = createRuntime();
     const bad = async (o: unknown) => {
       gesture(rt);
-      const e = await rt.global.showOpenFilePicker(o).catch((x: Error) => x);
+      const e = await win(rt)
+        .showOpenFilePicker(o)
+        .catch((x: Error) => x);
       return e instanceof TypeError ? e.message : `not a TypeError: ${e}`;
     };
     expect(await bad({ id: "x".repeat(33) })).toContain("ID too long");
@@ -124,8 +196,8 @@ describe("the pickers (WICG File System Access)", () => {
     const rt = createRuntime();
     const dir = handle(rt, 41, "proj", "directory");
     gesture(rt);
-    rt.global.showSaveFilePicker({ startIn: dir, suggestedName: "out.csv" });
-    const [c] = calls(rt, "dialogOpen");
+    win(rt).showSaveFilePicker({ startIn: dir, suggestedName: "out.csv" });
+    const c = calls(rt, "dialogOpen")[0]!;
     expect(c.args[0]).toMatchObject({ kind: "save", startIn: { h: 41 }, suggestedName: "out.csv" });
   });
 });
@@ -133,8 +205,8 @@ describe("the pickers (WICG File System Access)", () => {
 describe("FileSystemHandle and its two kinds", () => {
   test("cannot be constructed by script, and holds no path anywhere", () => {
     const rt = createRuntime();
-    expect(() => new rt.global.FileSystemHandle()).toThrow(TypeError);
-    expect(() => new rt.global.FileSystemFileHandle()).toThrow(TypeError);
+    expect(() => new (win(rt).FileSystemHandle)()).toThrow(TypeError);
+    expect(() => new (win(rt).FileSystemFileHandle)()).toThrow(TypeError);
     const f = handle(rt, 3, "notes.txt", "file");
     expect([f.kind, f.name]).toEqual(["file", "notes.txt"]);
     expect(Object.keys(f)).toEqual([]);
@@ -157,7 +229,7 @@ describe("FileSystemHandle and its two kinds", () => {
     rt.host.desktop.fs.prompt.add(8);
     const f = handle(rt, 8, "restored.txt", "file");
     expect(await f.queryPermission({ mode: "readwrite" })).toBe("prompt");
-    const denied = await f.requestPermission().catch((e: Error) => e);
+    const denied = (await f.requestPermission().catch((e: Error) => e)) as Error;
     expect(denied).toBeInstanceOf(DOMException);
     expect([denied.name, denied.message]).toEqual([
       "SecurityError",
@@ -215,10 +287,10 @@ describe("FileSystemHandle and its two kinds", () => {
           : { payload: { h: 9, name, kind: isDir ? "directory" : "file" } },
     );
     const f = await dir.getFileHandle("a.txt", { create: true });
-    expect(f).toBeInstanceOf(rt.global.FileSystemFileHandle);
-    expect(calls(rt, "child")[0].args).toEqual([5, "a.txt", false, true]);
+    expect(f).toBeInstanceOf(win(rt).FileSystemFileHandle);
+    expect(calls(rt, "child")[0]!.args).toEqual([5, "a.txt", false, true]);
     const d = await dir.getDirectoryHandle("sub");
-    expect(d).toBeInstanceOf(rt.global.FileSystemDirectoryHandle);
+    expect(d).toBeInstanceOf(win(rt).FileSystemDirectoryHandle);
     const nf = await dir.getFileHandle("missing.txt").catch((e: Error) => e);
     expect(nf).toBeInstanceOf(DOMException);
     expect(nf.name).toBe("NotFoundError");
@@ -274,14 +346,14 @@ describe("FileSystemHandle and its two kinds", () => {
   test("handles are [Serializable] through their base, by id; the writable stream is refused by this adapter", () => {
     const rt = createRuntime();
     const { proto, idOf } = rt.host.desktop.fs.serializer;
-    expect(proto).toBe(rt.global.FileSystemHandle.prototype);
+    expect(proto).toBe(win(rt).FileSystemHandle.prototype);
     expect(idOf(handle(rt, 31, "a", "file"))).toBe(31);
     expect(idOf(handle(rt, 32, "d", "directory"))).toBe(32);
-    expect(idOf(Object.create(rt.global.FileSystemFileHandle.prototype))).toBeUndefined();
-    const names = rt.host.desktop.fs.refused.map((r: { name: string }) => r.name);
+    expect(idOf(Object.create(win(rt).FileSystemFileHandle.prototype))).toBeUndefined();
+    const names = rt.host.desktop.fs.refused.map((r) => r.name);
     expect(names).toEqual(["FileSystemWritableFileStream"]);
     const clone = rt.host.desktop.fs.factory(33, "a", "file");
-    expect(clone).toBeInstanceOf(rt.global.FileSystemFileHandle);
+    expect(clone).toBeInstanceOf(win(rt).FileSystemFileHandle);
     expect(rt.advisories()).toEqual([]);
   });
 });
@@ -300,8 +372,8 @@ describe("FileSystemWritableFileStream", () => {
     const rt = createRuntime();
     const w = await stream(rt);
     expect(w).toBeInstanceOf(WritableStream);
-    expect(w).toBeInstanceOf(rt.global.FileSystemWritableFileStream);
-    expect(calls(rt, "writableOpen")[0].args).toEqual([3, true]);
+    expect(w).toBeInstanceOf(win(rt).FileSystemWritableFileStream);
+    expect(calls(rt, "writableOpen")[0]!.args).toEqual([3, true]);
     await w.write("hé");
     await w.write(new Uint8Array([1, 2, 3]).buffer);
     await w.write(new Uint16Array([0x0201]));
@@ -311,12 +383,12 @@ describe("FileSystemWritableFileStream", () => {
     await w.close();
     const writes = calls(rt, "writableWrite").map((c) => [c.args[0], c.args[1], c.args[2]]);
     expect(writes[0]).toEqual([12, -1, "hé"]);
-    expect(writes[1][2]).toEqual(new Uint8Array([1, 2, 3]));
-    expect(writes[2][2]).toEqual(new Uint8Array([1, 2]));
+    expect(writes[1]![2]).toEqual(new Uint8Array([1, 2, 3]));
+    expect(writes[2]![2]).toEqual(new Uint8Array([1, 2]));
     expect(writes[3]).toEqual([12, 5, "x"]);
-    expect(calls(rt, "writableSeek")[0].args).toEqual([12, 2]);
-    expect(calls(rt, "writableTruncate")[0].args).toEqual([12, 4]);
-    expect(calls(rt, "writableClose")[0].args).toEqual([12]);
+    expect(calls(rt, "writableSeek")[0]!.args).toEqual([12, 2]);
+    expect(calls(rt, "writableTruncate")[0]!.args).toEqual([12, 4]);
+    expect(calls(rt, "writableClose")[0]!.args).toEqual([12]);
   });
 
   test("a Blob crosses as the Blob (the host copies it on the pool)", async () => {
@@ -324,7 +396,7 @@ describe("FileSystemWritableFileStream", () => {
     const w = await stream(rt);
     const b = new Blob(["abc"]);
     await w.write(b);
-    expect(calls(rt, "writableWrite")[0].args[2]).toBe(b);
+    expect(calls(rt, "writableWrite")[0]!.args[2]).toBe(b);
   });
 
   test("bad chunks error the stream with the spec's exceptions", async () => {
@@ -341,7 +413,7 @@ describe("FileSystemWritableFileStream", () => {
     const rt = createRuntime();
     const w = await stream(rt);
     await w.abort();
-    expect(calls(rt, "writableAbort")[0].args).toEqual([12]);
+    expect(calls(rt, "writableAbort")[0]!.args).toEqual([12]);
   });
 });
 
@@ -354,20 +426,20 @@ function fileWorld(attrs: Record<string, string> = {}) {
   for (const [k, v] of Object.entries(attrs)) rt.patchProp(input, k, null, v);
   const seen: string[] = [];
   for (const t of ["input", "change", "cancel"]) {
-    rt.patchProp(root, `on${t[0].toUpperCase()}${t.slice(1)}`, null, (e: any) =>
+    rt.patchProp(root, `on${t[0]!.toUpperCase()}${t.slice(1)}`, null, (e: { bubbles: boolean; target: unknown }) =>
       seen.push(`${t}:${e.bubbles}:${e.target === input}`),
     );
   }
-  const host = (node: { id: number }, name: "click" | "keydown" | "keyup" | "mousedown", key?: string) =>
+  const host = (node: { __vnId: number }, name: "click" | "keydown" | "keyup" | "mousedown", key?: string) =>
     rt.host.dispatcher(node.__vnId, rt.EV_CODES[name], 5, 6, 0, 0, key);
-  const userClick = (node: { id: number }) => {
+  const userClick = (node: { __vnId: number }) => {
     host(node, "mousedown");
     host(node, "click");
   };
   const label = () =>
     rt.host.props.filter((p: { id: number; key: string }) => p.id === input.__vnId && p.key === ":file-label").at(-1)
       ?.value;
-  return { rt, root, input: input as Record<string, any>, seen, host, userClick, label };
+  return { rt, root, input: input as unknown as FileInput, seen, host, userClick, label };
 }
 
 describe("<input type=file> (HTML)", () => {
@@ -399,24 +471,24 @@ describe("<input type=file> (HTML)", () => {
   test("a user's click asks for files; the pick sets files, then fires input and change, both bubbling", async () => {
     const { rt, input, seen, userClick, label } = fileWorld({ accept: ".CSV, text/*, nope", multiple: "" });
     userClick(input);
-    const [c] = calls(rt, "dialogOpen");
+    const c = calls(rt, "dialogOpen")[0]!;
     expect(c.args[0]).toEqual({ kind: "open", multiple: true, accept: [".csv", "text/*"], result: "files" });
     expect(rt.advisories().some((l: string) => l.includes('"nope"') && l.includes("ignored"))).toBe(true);
     const list = new FakeFileList([new File(["a,b"], "data.csv"), new File(["x"], "two.csv")]);
-    rt.host.desktop.settle(c.token, true, { files: 2 }, list);
+    rt.host.desktop.settle(c.token!, true, { files: 2 }, list);
     await tick();
     expect(seen).toEqual(["input:true:true", "change:true:true"]);
     expect(input.files).toBe(list);
     expect(input.value).toBe("C:\\fakepath\\data.csv");
     expect(label()).toBe("2 files");
     userClick(input);
-    expect(calls(rt, "dialogOpen")[1].args[1]).toBe(list);
+    expect(calls(rt, "dialogOpen")[1]!.args[1]).toBe(list);
   });
 
   test("a dismissal (or the same selection) fires cancel; a busy window fires nothing", async () => {
     const { rt, input, seen, userClick } = fileWorld();
     userClick(input);
-    rt.host.desktop.settle(calls(rt, "dialogOpen")[0].token, true, { cancelled: true });
+    rt.host.desktop.settle(calls(rt, "dialogOpen")[0]!.token!, true, { cancelled: true });
     await tick();
     expect(seen).toEqual(["cancel:true:true"]);
     rt.host.desktop.fs.answers.set("dialogOpen", () => ({
@@ -435,11 +507,11 @@ describe("<input type=file> (HTML)", () => {
     input.files = null;
     expect(input.files).toBe(list);
     expect(() => (input.files = [new File(["x"], "b.txt")])).toThrow(TypeError);
-    let err: any;
+    let err: Error | undefined;
     try {
       input.value = "C:\\x.txt";
     } catch (e) {
-      err = e;
+      err = e as Error;
     }
     expect([err?.name, err?.message]).toEqual([
       "InvalidStateError",
@@ -454,13 +526,13 @@ describe("<input type=file> (HTML)", () => {
     const { rt, input, userClick } = fileWorld({ webkitdirectory: "" });
     expect([input.webkitdirectory, input.multiple, input.accept]).toEqual([true, false, ""]);
     userClick(input);
-    expect((calls(rt, "dialogOpen")[0].args[0] as any).kind).toBe("folder");
+    expect((calls(rt, "dialogOpen")[0]!.args[0] as { kind: string }).kind).toBe("folder");
     input.multiple = true;
     input.accept = "image/*";
     expect(
       rt.host.props
-        .filter((p: any) => p.id === input.__vnId && ["multiple", "accept"].includes(p.key))
-        .map((p: any) => [p.key, p.value]),
+        .filter((p: { id: number; key: string }) => p.id === input.__vnId && ["multiple", "accept"].includes(p.key))
+        .map((p: { key: string; value: unknown }) => [p.key, p.value]),
     ).toEqual([
       ["multiple", ""],
       ["accept", "image/*"],
@@ -479,19 +551,19 @@ describe("<input type=file> (HTML)", () => {
     expect(calls(rt, "dialogOpen").length).toBe(1);
     host(input, "keyup", " ");
     expect(calls(rt, "dialogOpen").length).toBe(2);
-    rt.patchProp(input, "onKeydown", null, (e: any) => e.preventDefault());
+    rt.patchProp(input, "onKeydown", null, (e: Event) => e.preventDefault());
     host(input, "keydown", "Enter");
     expect(calls(rt, "dialogOpen").length).toBe(2);
   });
 
   test("showPicker(): immutable is InvalidStateError, no gesture is NotAllowedError, a text input advises", () => {
     const { rt, input, host } = fileWorld();
-    const thrown = (el: any) => {
+    const thrown = (el: { showPicker(): void }) => {
       try {
         el.showPicker();
         return "no throw";
-      } catch (e: any) {
-        return `${e.name}: ${e.message}`;
+      } catch (e) {
+        return `${(e as Error).name}: ${(e as Error).message}`;
       }
     };
     expect(thrown(input)).toBe(
@@ -532,7 +604,7 @@ describe("<label> activation (HTML)", () => {
 
   test("is armed for clicks at creation, and clicks the control its `for` names", () => {
     const { rt, label, span, userClick } = labelWorld();
-    expect(rt.flagsFor(rt.EV_CODES.click).some((f: any) => f.id === label.__vnId && f.on)).toBe(true);
+    expect(rt.flagsFor(rt.EV_CODES.click).some((f) => f.id === label.__vnId && f.on)).toBe(true);
     rt.patchProp(label, "for", null, "pick");
     userClick(span);
     expect(calls(rt, "dialogOpen").length).toBe(1);
@@ -548,7 +620,7 @@ describe("<label> activation (HTML)", () => {
     rt.patchProp(input, "type", null, "file");
     let clicks = 0;
     rt.patchProp(input, "onClick", null, () => clicks++);
-    const user = (n: { id: number }) => {
+    const user = (n: { __vnId: number }) => {
       rt.host.dispatcher(n.__vnId, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
       rt.host.dispatcher(n.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
     };
@@ -573,44 +645,44 @@ describe("<label> activation (HTML)", () => {
       { id: input.__vnId, op: 0 },
       { id: input.__vnId, op: 0 },
     ]);
-    expect(rt.global.document.activeElement).toBe(input);
+    expect(win(rt).document.activeElement).toBe(input);
   });
 });
 
 describe("detached elements (redjs's document.createElement)", () => {
   test("VueUse's useFileDialog: an input never in the tree picks, and onchange sees event.target.files", async () => {
     const rt = createRuntime();
-    const input = rt.global.document.createElement("input");
+    const input = win(rt).document.createElement("input");
     input.type = "file";
     input.multiple = true;
     input.accept = "image/*";
     expect(input.files.length).toBe(0);
-    let got: any = null;
+    let got: unknown = null;
     let cancelled = 0;
-    input.onchange = (e: any) => (got = e.target.files);
+    input.onchange = (e: { target: { files: unknown } }) => (got = e.target.files);
     input.oncancel = () => cancelled++;
     rt.noteActivation("mousedown", undefined);
     input.click();
-    const [c] = calls(rt, "dialogOpen");
+    const c = calls(rt, "dialogOpen")[0]!;
     expect(c.args[0]).toEqual({ kind: "open", multiple: true, accept: ["image/*"], result: "files" });
     const list = new FakeFileList([new File(["p"], "p.png")]);
-    rt.host.desktop.settle(c.token, true, { files: 1 }, list);
+    rt.host.desktop.settle(c.token!, true, { files: 1 }, list);
     await tick();
     expect(got).toBe(list);
     expect(input.value).toBe("C:\\fakepath\\p.png");
     input.click();
-    rt.host.desktop.settle(calls(rt, "dialogOpen")[1].token, true, { cancelled: true });
+    rt.host.desktop.settle(calls(rt, "dialogOpen")[1]!.token!, true, { cancelled: true });
     await tick();
     expect(cancelled).toBe(1);
   });
 
   test("FileSaver.js: a detached <a download> clicked or dispatched saves; setAttribute works too", () => {
     const rt = createRuntime();
-    const a = rt.global.document.createElement("a");
+    const a = win(rt).document.createElement("a");
     a.href = "blob:vn/42";
     a.download = "notes.txt";
     a.dispatchEvent(new Event("click"));
-    const b = rt.global.document.createElement("a");
+    const b = win(rt).document.createElement("a");
     b.setAttribute("href", "data:text/plain,hi");
     b.setAttribute("download", "");
     expect(b.getAttribute("download")).toBe("");

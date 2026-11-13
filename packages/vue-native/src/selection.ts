@@ -100,7 +100,7 @@ export function installSelection(env: SelectionEnv): void {
     if (ca[0] !== cb[0]) return -1;
     let i = 0;
     while (ca[i] === cb[i]) i++;
-    return indexOf(ca[i]) < indexOf(cb[i]) ? -1 : 1;
+    return indexOf(ca[i]!) < indexOf(cb[i]!) ? -1 : 1;
   };
   const point = (node: unknown, offset: unknown, method: string, iface: string): Point => {
     if (!env.isNode(node)) {
@@ -485,17 +485,17 @@ export function installSelection(env: SelectionEnv): void {
       // A boundary in an element's own text: give it its Text child (the host
       // moves the boundary with it), then read again.
       for (const at of [0, 3]) {
-        const el = p[at + 2] ? env.nodeById(p[at]) : undefined;
+        const el = p[at + 2] ? env.nodeById(p[at]!) : undefined;
         if (el) env.materialize(el);
       }
       raw = host!.get();
       if (!raw) return null;
       p = raw.split(",").map(Number);
     }
-    const a = env.nodeById(p[0]);
-    const f = env.nodeById(p[3]);
+    const a = env.nodeById(p[0]!);
+    const f = env.nodeById(p[3]!);
     if (!a || !f) return null;
-    return [a, p[1], f, p[4]];
+    return [a, p[1]!, f, p[4]!];
   }
 
   class SelectionImpl {

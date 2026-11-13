@@ -4,9 +4,9 @@
 // drag events fire in a browser's order with one DataTransfer.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement } from "./runtime-harness";
 
-type N = { __vnId: number; attrs: Record<string, string>; parentNode: N | null };
+type N = MirrorElement;
 type DragEv = {
   type: string;
   target: N;
@@ -25,9 +25,9 @@ const DRAG_EVENTS = ["dragstart", "drag", "dragenter", "dragover", "dragleave", 
 function world() {
   const rt = createRuntime();
   rt.createApp({ render: () => null }).mount();
-  const body = rt.global.document.body as N;
+  const body = rt.global.document.body;
   const el = (tag: string, parent: N) => {
-    const e = rt.nodeOps.createElement(tag) as N;
+    const e = rt.nodeOps.createElement(tag);
     rt.nodeOps.insert(e, parent, null);
     return e;
   };
@@ -42,7 +42,7 @@ function world() {
   const name = (n: N) =>
     n === a ? "a" : n === b ? "b" : n === c ? "c" : n === list ? "list" : n === label ? "label" : "?";
   for (const ev of DRAG_EVENTS) {
-    rt.patchProp(list, `on${ev[0].toUpperCase()}${ev.slice(1)}`, null, (e: DragEv) => {
+    rt.patchProp(list, `on${ev.charAt(0).toUpperCase()}${ev.slice(1)}`, null, (e: DragEv) => {
       log.push(`${e.type}@${name(e.target)}`);
       events.push(e);
     });
@@ -127,7 +127,7 @@ describe("the gesture", () => {
       "drop@c",
       "dragend@a",
     ]);
-    const dt = events[0].dataTransfer;
+    const dt = events[0]!.dataTransfer;
     expect(events.every((e) => e.dataTransfer === dt)).toBe(true);
     const enterC = events.find((e) => e.type === "dragenter" && e.target === c)!;
     const leaveB = events.find((e) => e.type === "dragleave")!;
@@ -238,6 +238,6 @@ describe("the gesture", () => {
     press(label);
     move(b, 10, 40);
     expect(seen).toEqual(["copy"]);
-    expect(events[0].dataTransfer.effectAllowed).toBe("copyMove");
+    expect(events[0]!.dataTransfer.effectAllowed).toBe("copyMove");
   });
 });

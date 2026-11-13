@@ -3,6 +3,15 @@
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
+import type { VnLaunchEvent } from "../src/runtime";
+
+type Rt = ReturnType<typeof createRuntime>;
+type Forwarded = Parameters<Rt["host"]["desktop"]["forward"]>[0];
+type RealmClass = abstract new (...args: never[]) => object;
+
+const queue = (rt: Rt) => rt.global.launchQueue as { setConsumer(consumer: unknown): void };
+const realmClass = (rt: Rt, name: string) => rt.global[name] as RealmClass;
+const forward = (rt: Rt, launch: Record<string, unknown>) => rt.host.desktop.forward(launch as Forwarded);
 
 type Params = { targetURL: string | null; files: readonly unknown[] };
 
@@ -10,17 +19,17 @@ describe("launchQueue", () => {
   test("this process's own launch is buffered until setConsumer, then delivered synchronously", () => {
     const rt = createRuntime({ launch: { url: "notes://open?id=7" } });
     const seen: Params[] = [];
-    rt.global.launchQueue.setConsumer((p: Params) => seen.push(p));
+    queue(rt).setConsumer((p: Params) => seen.push(p));
     expect(seen.length).toBe(1);
-    expect(seen[0].targetURL).toBe("notes://open?id=7");
-    expect(seen[0].files).toEqual([]);
-    expect(seen[0]).toBeInstanceOf(rt.global.LaunchParams);
+    expect(seen[0]?.targetURL).toBe("notes://open?id=7");
+    expect(seen[0]?.files).toEqual([]);
+    expect(seen[0]).toBeInstanceOf(realmClass(rt, "LaunchParams"));
   });
 
   test("a plain launch is one LaunchParams with a null targetURL", () => {
     const rt = createRuntime();
     const seen: Params[] = [];
-    rt.global.launchQueue.setConsumer((p: Params) => seen.push(p));
+    queue(rt).setConsumer((p: Params) => seen.push(p));
     expect(seen.map((p) => p.targetURL)).toEqual([null]);
     expect(rt.advisories()).toEqual([]);
   });
@@ -28,23 +37,23 @@ describe("launchQueue", () => {
   test("a forwarded launch goes straight to the consumer; a replaced consumer gets only later ones", () => {
     const rt = createRuntime();
     const first: Params[] = [];
-    rt.global.launchQueue.setConsumer((p: Params) => first.push(p));
-    rt.host.desktop.forward({ argv: ["x.exe", "notes://a"], cwd: "C:\\", url: "notes://a", paths: [] });
+    queue(rt).setConsumer((p: Params) => first.push(p));
+    forward(rt, { argv: ["x.exe", "notes://a"], cwd: "C:\\", url: "notes://a", paths: [] });
     expect(first.map((p) => p.targetURL)).toEqual([null, "notes://a"]);
     const second: Params[] = [];
-    rt.global.launchQueue.setConsumer((p: Params) => second.push(p));
+    queue(rt).setConsumer((p: Params) => second.push(p));
     expect(second).toEqual([]);
-    rt.host.desktop.forward({ argv: [], cwd: "C:\\", url: null, paths: [] });
+    forward(rt, { argv: [], cwd: "C:\\", url: null, paths: [] });
     expect(second.length).toBe(1);
     expect(first.length).toBe(2);
   });
 
   test("launches that arrive before any consumer queue up in order", () => {
     const rt = createRuntime();
-    rt.host.desktop.forward({ argv: [], cwd: "C:\\", url: "notes://1", paths: [] });
-    rt.host.desktop.forward({ argv: [], cwd: "C:\\", url: "notes://2", paths: [] });
+    forward(rt, { argv: [], cwd: "C:\\", url: "notes://1", paths: [] });
+    forward(rt, { argv: [], cwd: "C:\\", url: "notes://2", paths: [] });
     const seen: Params[] = [];
-    rt.global.launchQueue.setConsumer((p: Params) => seen.push(p));
+    queue(rt).setConsumer((p: Params) => seen.push(p));
     expect(seen.map((p) => p.targetURL)).toEqual([null, "notes://1", "notes://2"]);
   });
 
@@ -53,8 +62,8 @@ describe("launchQueue", () => {
       launch: { paths: ["C:\\docs\\a.txt"], handles: [{ h: 7, name: "a.txt", kind: "file" }] },
     });
     const seen: Params[] = [];
-    rt.global.launchQueue.setConsumer((p: Params) => seen.push(p));
-    rt.host.desktop.forward({
+    queue(rt).setConsumer((p: Params) => seen.push(p));
+    forward(rt, {
       argv: [],
       cwd: "C:\\",
       url: null,
@@ -62,11 +71,11 @@ describe("launchQueue", () => {
       handles: [{ h: 8, name: "proj", kind: "directory" }],
     });
     expect(seen.length).toBe(2);
-    const [a] = seen[0].files as { kind: string; name: string }[];
-    const [b] = seen[1].files as { kind: string; name: string }[];
-    expect([a.name, a.kind, b.name, b.kind]).toEqual(["a.txt", "file", "proj", "directory"]);
-    expect(a).toBeInstanceOf(rt.global.FileSystemFileHandle);
-    expect(b).toBeInstanceOf(rt.global.FileSystemDirectoryHandle);
+    const [a] = (seen[0]?.files ?? []) as { kind: string; name: string }[];
+    const [b] = (seen[1]?.files ?? []) as { kind: string; name: string }[];
+    expect([a?.name, a?.kind, b?.name, b?.kind]).toEqual(["a.txt", "file", "proj", "directory"]);
+    expect(a).toBeInstanceOf(realmClass(rt, "FileSystemFileHandle"));
+    expect(b).toBeInstanceOf(realmClass(rt, "FileSystemDirectoryHandle"));
     expect(JSON.stringify(a)).not.toContain("docs");
     // The handle answers through the host by id, not by path.
     rt.host.desktop.fs.answers.set("getFile", (h: number) => ({ payload: { name: "a.txt", size: 1 }, value: { h } }));
@@ -77,18 +86,18 @@ describe("launchQueue", () => {
   test("a consumer that throws does not take the next launch with it", () => {
     const rt = createRuntime();
     let n = 0;
-    rt.global.launchQueue.setConsumer(() => {
+    queue(rt).setConsumer(() => {
       n++;
       throw new Error("boom");
     });
-    rt.host.desktop.forward({ argv: [], cwd: "C:\\", url: "notes://x", paths: [] });
+    forward(rt, { argv: [], cwd: "C:\\", url: "notes://x", paths: [] });
     expect(n).toBe(2);
     expect(rt.host.logs.some((l: string) => l.includes("launchQueue consumer threw"))).toBe(true);
   });
 
   test("setConsumer with a non-function is the browser's TypeError", () => {
     const rt = createRuntime();
-    expect(() => rt.global.launchQueue.setConsumer(42)).toThrow(TypeError);
+    expect(() => queue(rt).setConsumer(42)).toThrow(TypeError);
   });
 });
 
@@ -114,10 +123,18 @@ describe("appLaunch", () => {
   test("a forwarded launch fires `launch` with the second process's argv, cwd, url, paths and source", () => {
     const rt = createRuntime();
     const events: Record<string, unknown>[] = [];
-    rt.appLaunch.addEventListener("launch", (e: Record<string, unknown>) =>
-      events.push({ argv: e.argv, cwd: e.cwd, url: e.url, paths: e.paths, source: e.source, type: e.type }),
-    );
-    rt.host.desktop.forward({
+    rt.appLaunch.addEventListener("launch", (e) => {
+      const launch = e as VnLaunchEvent;
+      events.push({
+        argv: launch.argv,
+        cwd: launch.cwd,
+        url: launch.url,
+        paths: launch.paths,
+        source: launch.source,
+        type: launch.type,
+      });
+    });
+    forward(rt, {
       argv: ["C:\\apps\\Notes.exe", "b.txt"],
       cwd: "D:\\work",
       url: null,
@@ -138,11 +155,11 @@ describe("appLaunch", () => {
   test("the tier-2 event fires before the tier-1 queue delivers", () => {
     const rt = createRuntime();
     const order: string[] = [];
-    rt.global.launchQueue.setConsumer((p: Params) => order.push(`queue ${p.targetURL}`));
+    queue(rt).setConsumer((p: Params) => order.push(`queue ${p.targetURL}`));
     rt.appLaunch.addEventListener("launch", () => {
       order.push("event");
     });
-    rt.host.desktop.forward({ argv: [], cwd: "C:\\", url: "notes://z", paths: [] });
+    forward(rt, { argv: [], cwd: "C:\\", url: "notes://z", paths: [] });
     expect(order).toEqual(["queue null", "event", "queue notes://z"]);
   });
 
@@ -165,7 +182,7 @@ describe("appLaunch", () => {
     expect(rt.appLaunch.argv).toEqual([]);
     expect(rt.appLaunch.singleInstance).toBe(false);
     const seen: Params[] = [];
-    rt.global.launchQueue.setConsumer((p: Params) => seen.push(p));
+    queue(rt).setConsumer((p: Params) => seen.push(p));
     expect(seen).toEqual([]);
     expect(() => rt.appLaunch.registerProtocol("notes")).toThrow(TypeError);
     expect(rt.appLaunch.isProtocolRegistered("notes")).toBe(false);

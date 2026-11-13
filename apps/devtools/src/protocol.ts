@@ -434,7 +434,7 @@ export interface ConsoleLine {
 
 export interface MenuItem {
   label: string;
-  hint?: string;
+  hint?: string | undefined;
   disabled?: boolean;
   divider?: boolean;
   run: () => void;

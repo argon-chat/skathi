@@ -2,7 +2,7 @@
 // `load` / `error` and the `on<event>` attributes. The host half is crates/vn-tree/src/render.rs and img.rs.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement } from "./runtime-harness";
 
 class FakeMouseEvent extends Event {
   clientX: number;
@@ -26,8 +26,9 @@ class FakeMouseEvent extends Event {
 
 type Ev = FakeMouseEvent & { pointerType?: string; pointerId?: number; isPrimary?: boolean; pressure?: number };
 type Rt = ReturnType<typeof createRuntime>;
+const stub = (rt: Rt, id?: number) => rt.el(id) as unknown as MirrorElement;
 type El = {
-  id: number;
+  __vnId: number;
   attrs: Record<string, string>;
   addEventListener(t: string, f: (e: Ev) => void, o?: unknown): void;
   removeEventListener(t: string, f: (e: Ev) => void): void;
@@ -43,13 +44,13 @@ function tree(rt: Rt) {
   rt.nodeOps.insert(inner as never, outer as never, null);
   return { root, outer, inner };
 }
-const fire = (rt: Rt, el: El, name: string, a = 0, b = 0, c = 0, d = 0, key?: string) =>
-  rt.host.dispatcher(el.__vnId, (rt.EV_CODES as Record<string, number>)[name], a, b, c, d, key);
+const fire = (rt: Rt, el: El, name: keyof Rt["EV_CODES"], a = 0, b = 0, c = 0, d = 0, key?: string) =>
+  rt.host.dispatcher(el.__vnId, rt.EV_CODES[name], a, b, c, d, key);
 
 describe("contextmenu", () => {
   test("a listener arms the host's own code", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(4), "onContextmenu", null, () => {});
+    rt.patchProp(stub(rt, 4), "onContextmenu", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.contextmenu)).toEqual([{ id: 4, code: 42, on: true }]);
     expect(rt.advisories()).toEqual([]);
   });
@@ -75,14 +76,14 @@ describe("contextmenu", () => {
   test("the reka trigger: preventDefault, open its own menu — and the host hears the cancel", () => {
     const rt = createRuntime({ MouseEvent: FakeMouseEvent });
     const { inner } = tree(rt);
-    let open: { x: number; y: number } | null = null;
+    const open: { x: number; y: number }[] = [];
     rt.patchProp(inner as never, "onContextmenu", null, (e: Ev) => {
       if (e.defaultPrevented) return;
       e.preventDefault();
-      open = { x: e.clientX, y: e.clientY };
+      open.push({ x: e.clientX, y: e.clientY });
     });
     expect(fire(rt, inner, "contextmenu", 12, 34, 2)).toBe(false);
-    expect(open).toEqual({ x: 12, y: 34 });
+    expect(open).toEqual([{ x: 12, y: 34 }]);
     expect(rt.advisories()).toEqual([]);
   });
 
@@ -116,7 +117,7 @@ describe("contextmenu", () => {
 describe("auxclick", () => {
   test("a listener arms the host's own code, and is not advised as undelivered", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(6), "onAuxclick", null, () => {});
+    rt.patchProp(stub(rt, 6), "onAuxclick", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.auxclick)).toEqual([{ id: 6, code: 47, on: true }]);
     expect(rt.advisories()).toEqual([]);
   });
@@ -169,8 +170,15 @@ describe("auxclick", () => {
 
 describe("beforeinput, input and the composition events", () => {
   type Edit = Ev & { inputType: string; data: string | null; isComposing: boolean; composed: boolean };
-  const send = (rt: Rt, el: El, name: string, type: number, data?: string, composing = 0, value?: string) =>
-    rt.host.dispatcher(el.__vnId, (rt.EV_CODES as Record<string, number>)[name], type, composing, 0, 0, value, data);
+  const send = (
+    rt: Rt,
+    el: El,
+    name: keyof Rt["EV_CODES"],
+    type: number,
+    data?: string,
+    composing = 0,
+    value?: string,
+  ) => rt.host.dispatcher(el.__vnId, rt.EV_CODES[name], type, composing, 0, 0, value, data);
   const field = (rt: Rt, tag = "textarea") => {
     const { outer } = tree(rt);
     const el = rt.nodeOps.createElement(tag) as unknown as El;
@@ -181,9 +189,9 @@ describe("beforeinput, input and the composition events", () => {
 
   test("@beforeinput and the composition events arm their own codes, and are not advised", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(5), "onBeforeinput", null, () => {});
-    rt.patchProp(rt.el(5), "onCompositionstart", null, () => {});
-    rt.patchProp(rt.el(5), "onCompositionend", null, () => {});
+    rt.patchProp(stub(rt, 5), "onBeforeinput", null, () => {});
+    rt.patchProp(stub(rt, 5), "onCompositionstart", null, () => {});
+    rt.patchProp(stub(rt, 5), "onCompositionend", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.beforeinput)).toEqual([{ id: 5, code: 48, on: true }]);
     expect(rt.flagsFor(rt.EV_CODES.compositionstart)).toEqual([{ id: 5, code: 49, on: true }]);
     expect(rt.flagsFor(rt.EV_CODES.compositionend)).toEqual([{ id: 5, code: 51, on: true }]);
@@ -312,7 +320,7 @@ describe("beforeinput, input and the composition events", () => {
 describe("dblclick and detail", () => {
   test("@dblclick arms the click bit — it has no code of its own", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(8), "onDblclick", null, () => {});
+    rt.patchProp(stub(rt, 8), "onDblclick", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([{ id: 8, code: 1, on: true }]);
     expect(rt.advisories()).toEqual([]);
   });
@@ -519,7 +527,7 @@ describe("pointercancel", () => {
     rt.createApp({ render: () => null });
     let seen: Ev | undefined;
     (rt.global as unknown as El).addEventListener("pointercancel", (e) => (seen = e));
-    rt.patchProp(rt.el(3), "onPointercancel", null, () => {});
+    rt.patchProp(stub(rt, 3), "onPointercancel", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.pointercancel)).toEqual([{ id: 3, code: 44, on: true }]);
     fire(rt, inner, "pointercancel", 7, 8, -1);
     expect(seen?.type).toBe("pointercancel");

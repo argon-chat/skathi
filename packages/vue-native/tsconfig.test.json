@@ -1,0 +1,7 @@
+{
+  // Tests import src/, which needs the engine's ambient declarations; skipLibCheck absorbs their overlap with
+  // @types/bun.
+  "extends": "./tsconfig.tools.json",
+  "include": ["test/**/*.ts", "src/engine.d.ts", "src/protocol.d.ts", "src/indexeddb.d.ts"],
+  "exclude": ["test/fixtures/**"]
+}

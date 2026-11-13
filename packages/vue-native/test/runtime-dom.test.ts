@@ -3,9 +3,63 @@
 
 import { describe, expect, test } from "bun:test";
 import { h } from "@vue/runtime-core";
-import { createRuntime } from "./runtime-harness";
+import {
+  createRuntime,
+  type MirrorElement,
+  type MirrorNode,
+  type RealmObserver,
+  type RealmObserverEntry,
+} from "./runtime-harness";
 
-function tree(rt) {
+type Rt = ReturnType<typeof createRuntime>;
+type Constructor = new (...args: never[]) => object;
+
+interface ResizeEntry {
+  target: unknown;
+  contentRect: unknown;
+  borderBoxSize: unknown[];
+  contentBoxSize: unknown[];
+  devicePixelContentBoxSize: unknown[];
+}
+interface ErrorEventLike {
+  type: string;
+  message: string;
+  cancelable: boolean;
+  error: unknown;
+}
+interface ComputedStyleLike {
+  getPropertyValue(name: string): string;
+  [key: string]: unknown;
+}
+
+const sizeOf = (entry: RealmObserverEntry | undefined) => {
+  const rect = entry?.contentRect as { width: number; height: number } | undefined;
+  if (!rect) throw new Error("the observer reported no contentRect");
+  return rect;
+};
+const computedStyleOf = (rt: Rt, el: MirrorElement) =>
+  (rt.global as unknown as { getComputedStyle(el: MirrorElement): ComputedStyleLike }).getComputedStyle(el);
+const nodeFilter = (rt: Rt) => rt.global.NodeFilter as { SHOW_ELEMENT: number; FILTER_ACCEPT: number };
+const skipFlag = (node: MirrorNode) => (node as unknown as { __v_skip?: unknown }).__v_skip;
+
+// The reflected IDL properties the runtime defines on its element mirrors (REFLECTED), beyond MirrorElement's members.
+type ReflectedElement = MirrorElement & {
+  disabled: boolean;
+  readOnly: boolean;
+  checked: boolean;
+  hidden: boolean | string;
+  placeholder: string;
+  type: string;
+  title: string;
+  multiple: boolean;
+  dir: string;
+  tabIndex: number;
+  maxLength: number;
+  required: boolean | number;
+  open: boolean;
+};
+
+function tree(rt: Rt) {
   const root = rt.nodeOps.createElement("root");
   const section = rt.nodeOps.createElement("section");
   const button = rt.nodeOps.createElement("button");
@@ -149,7 +203,7 @@ describe("selector matching goes to the host's real matcher", () => {
     expect([...root.querySelectorAll(".x")]).toEqual([section, button]);
 
     expect(rt.host.queryCalls.map((c) => c.mode)).toEqual([1, 2, 0, 0]);
-    expect(rt.host.queryCalls[0].root).toBe(button.__vnId);
+    expect(rt.host.queryCalls[0]?.root).toBe(button.__vnId);
     expect(rt.advisories()).toEqual([]);
   });
 
@@ -186,7 +240,7 @@ describe("selector matching goes to the host's real matcher", () => {
     });
 
     root.querySelectorAll(":scope > button");
-    expect(rt.host.queryCalls.at(-1).root).toBe(root.__vnId);
+    expect(rt.host.queryCalls.at(-1)?.root).toBe(root.__vnId);
 
     expect(rt.advisories()).toEqual([]);
   });
@@ -248,14 +302,14 @@ describe("layout comes from the host's painted bounds", () => {
     const { button, span } = tree(rt);
     rt.host.boundsById.set(button.__vnId, "stale");
     rt.host.boundsById.set(span.__vnId, "stale");
-    const measure = (el) => el.offsetWidth;
+    const measure = (el: MirrorElement) => el.offsetWidth;
     for (let i = 0; i < 3; i++) expect(measure(button)).toBe(0);
     expect(measure(span)).toBe(0);
     const stale = () => rt.advisories().filter((a) => a.includes("not been laid out"));
     expect(stale().length).toBe(1);
     expect(stale()[0]).toContain("offsetWidth");
     expect(stale()[0]).toContain("requestAnimationFrame");
-    const elsewhere = (el) => el.offsetWidth;
+    const elsewhere = (el: MirrorElement) => el.offsetWidth;
     expect(elsewhere(span)).toBe(0);
     expect(stale().length).toBe(2);
     expect(button.getBoundingClientRect()).toMatchObject({ x: 0, y: 0, width: 0, height: 0 });
@@ -276,7 +330,11 @@ describe("layout comes from the host's painted bounds", () => {
 });
 
 describe("programmatic scrolling drives the host's ScrollHandle", () => {
-  function scroller(rt, node, extra = {}) {
+  function scroller(
+    rt: Rt,
+    node: MirrorElement,
+    extra: Partial<NonNullable<ReturnType<Rt["host"]["scrollById"]["get"]>>> = {},
+  ) {
     rt.host.scrollById.set(node.__vnId, {
       left: 0,
       top: 0,
@@ -317,7 +375,7 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     scroller(rt, section);
     section.scrollTop = 120;
     section.scrollTop = NaN;
-    section.scrollTop = "nope";
+    section.scrollTop = "nope" as unknown as number;
     expect(section.scrollTop).toBe(120);
   });
 
@@ -450,8 +508,8 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     scroller(rt, section);
     section.scrollTop = 120;
 
-    const seen = [];
-    section.addEventListener("scroll", (e) => seen.push(e.target.scrollTop));
+    const seen: number[] = [];
+    section.addEventListener("scroll", (e) => seen.push((e.target as MirrorElement).scrollTop));
     rt.host.dispatcher(section.__vnId, rt.EV_CODES.scroll, 0, 120, 0, 0, null);
 
     expect(seen).toEqual([120]);
@@ -499,9 +557,9 @@ describe("the attribute channel", () => {
 });
 
 describe("props that are DOM properties, as runtime-dom sets them", () => {
-  const hostProp = (rt, el, key: string) =>
+  const hostProp = (rt: Rt, el: MirrorElement, key: string) =>
     rt.host.props.filter((p) => p.id === el.__vnId && p.key === key).at(-1)?.value;
-  const make = (rt, tag: string) => rt.nodeOps.createElement(tag);
+  const make = (rt: Rt, tag: string) => rt.nodeOps.createElement(tag) as ReflectedElement;
 
   test("a boolean property is present as '' or absent, never the string 'false'", () => {
     const rt = createRuntime();
@@ -591,7 +649,7 @@ describe("props that are DOM properties, as runtime-dom sets them", () => {
   test("a component's :hidden=false leaves no attribute (reka TabsContent)", () => {
     const rt = createRuntime();
     rt.createApp({ render: () => h("section", { id: "panel", hidden: false, "data-state": "active" }) }).mount();
-    const panel = [...rt.nodesById.values()].find((n) => n.tag === "section");
+    const panel = [...rt.nodesById.values()].find((n) => n.tag === "section") as MirrorElement;
     expect(panel.hasAttribute("hidden")).toBe(false);
     expect(panel.getAttribute("data-state")).toBe("active");
     expect(hostProp(rt, panel, "hidden")).toBeUndefined();
@@ -599,7 +657,7 @@ describe("props that are DOM properties, as runtime-dom sets them", () => {
 });
 
 describe("reflected IDL attributes", () => {
-  const make = (rt, tag: string) => rt.nodeOps.createElement(tag);
+  const make = (rt: Rt, tag: string) => rt.nodeOps.createElement(tag) as ReflectedElement;
 
   test("input.placeholder, input.type, el.title and el.hidden read and write their attributes", () => {
     const rt = createRuntime();
@@ -714,12 +772,12 @@ describe("classList and the transition-class merge", () => {
     const { button } = tree(rt);
     rt.patchProp(button, "class", null, "btn primary");
     button.classList.add("open");
-    expect(rt.host.classes.at(-1).value).toBe("btn primary open");
+    expect(rt.host.classes.at(-1)?.value).toBe("btn primary open");
     expect(button.classList.contains("primary")).toBe(true);
     button.classList.remove("primary");
-    expect(rt.host.classes.at(-1).value).toBe("btn open");
+    expect(rt.host.classes.at(-1)?.value).toBe("btn open");
     expect(button.classList.toggle("open")).toBe(false);
-    expect(rt.host.classes.at(-1).value).toBe("btn");
+    expect(rt.host.classes.at(-1)?.value).toBe("btn");
   });
 
   test("a re-render keeps the transition classes a <Transition> layered on", () => {
@@ -728,9 +786,9 @@ describe("classList and the transition-class merge", () => {
     rt.patchProp(button, "class", null, "card");
     button._vtc = new Set(["v-enter-active"]);
     rt.writeClass(button);
-    expect(rt.host.classes.at(-1).value).toBe("card v-enter-active");
+    expect(rt.host.classes.at(-1)?.value).toBe("card v-enter-active");
     rt.patchProp(button, "class", "card", "card open");
-    expect(rt.host.classes.at(-1).value).toBe("card open v-enter-active");
+    expect(rt.host.classes.at(-1)?.value).toBe("card open v-enter-active");
   });
 });
 
@@ -747,10 +805,10 @@ describe("className, classList and the class attribute are one thing", () => {
     expect(button.classList.contains("group/msg")).toBe(true);
     button.setAttribute("class", "a b");
     expect(button.className).toBe("a b");
-    expect(rt.host.classes.at(-1).value).toBe("a b");
+    expect(rt.host.classes.at(-1)?.value).toBe("a b");
     button.removeAttribute("class");
     expect(button.getAttribute("class")).toBe(null);
-    expect(rt.host.classes.at(-1).value).toBe("");
+    expect(rt.host.classes.at(-1)?.value).toBe("");
     rt.patchProp(button, "class", null, "");
     expect(button.getAttribute("class")).toBe("");
     rt.patchProp(button, "class", "", null);
@@ -766,7 +824,7 @@ describe("className, classList and the class attribute are one thing", () => {
     expect(button.className).toBe("card v-enter-active");
     expect(button.classList.contains("v-enter-active")).toBe(true);
     button.className += " lit";
-    expect(rt.host.classes.at(-1).value).toBe("card lit v-enter-active");
+    expect(rt.host.classes.at(-1)?.value).toBe("card lit v-enter-active");
     button._vtc = undefined;
     rt.writeClass(button);
     expect(button.className).toBe("card lit");
@@ -779,7 +837,7 @@ describe("className, classList and the class attribute are one thing", () => {
   test("a class change is an attributes mutation", async () => {
     const rt = createRuntime();
     const { section, button } = tree(rt);
-    const seen = [];
+    const seen: RealmObserverEntry[] = [];
     new rt.global.MutationObserver((records) => seen.push(...records)).observe(section, {
       attributes: true,
       attributeFilter: ["class"],
@@ -804,8 +862,8 @@ describe("mirror nodes are not reactive state", () => {
     // reka-ui's layer stack and focus guards rely on.
     const rt = createRuntime();
     const { button, text } = tree(rt);
-    expect(button.__v_skip).toBe(true);
-    expect(text.__v_skip).toBe(true);
+    expect(skipFlag(button)).toBe(true);
+    expect(skipFlag(text)).toBe(true);
   });
 });
 
@@ -813,7 +871,7 @@ describe("custom events and dispatchEvent", () => {
   test("a component's own event round-trips through the normal propagation walk", () => {
     const rt = createRuntime();
     const { section: outer, button: inner } = tree(rt);
-    const seen = [];
+    const seen: string[] = [];
     inner.addEventListener("select.select", (e) => seen.push(`at-target:${e.type}`), { once: true });
     outer.addEventListener("select.select", () => seen.push("bubbled"));
 
@@ -841,7 +899,7 @@ describe("custom events and dispatchEvent", () => {
   });
 
   test("the CSS animation/transition events are delivered, not advised", () => {
-    for (const name of ["transitionend", "animationstart", "animationend", "animationcancel"]) {
+    for (const name of ["transitionend", "animationstart", "animationend", "animationcancel"] as const) {
       const rt = createRuntime();
       const { button: inner } = tree(rt);
       inner.addEventListener(name, () => {});
@@ -853,9 +911,9 @@ describe("custom events and dispatchEvent", () => {
   test("eventPhase, currentTarget and composedPath() read as a browser's, during the walk and after it", () => {
     const rt = createRuntime();
     const { section: outer, button: inner } = tree(rt);
-    const seen = [];
-    const who = (t) => (t === inner ? "inner" : t === outer ? "outer" : String(t));
-    const note = (where) => (e) =>
+    const seen: string[] = [];
+    const who = (t: unknown) => (t === inner ? "inner" : t === outer ? "outer" : String(t));
+    const note = (where: string) => (e: VnEvent) =>
       seen.push(
         `${where}:${e.eventPhase}:${who(e.currentTarget)}:${e.composedPath()[0] === inner}:${e.composedPath()[1] === outer}`,
       );
@@ -885,12 +943,12 @@ describe("custom events and dispatchEvent", () => {
       throw new Error("listener");
     });
     inner.addEventListener("x.boom", () => ran.push("same node"));
-    inner.parentNode.addEventListener("x.boom", () => ran.push("ancestor"));
+    inner.parentNode?.addEventListener("x.boom", () => ran.push("ancestor"));
     const ev = new CustomEvent("x.boom", { bubbles: true });
     expect(inner.dispatchEvent(ev)).toBe(true);
     expect(ran).toEqual(["same node", "ancestor"]);
     expect(reported.length).toBe(1);
-    expect(() => reported[0]()).toThrow("listener");
+    expect(() => reported[0]?.()).toThrow("listener");
     expect(ev.currentTarget).toBe(null);
     expect(ev.eventPhase).toBe(0);
   });
@@ -920,9 +978,9 @@ describe("document- and window-level listeners", () => {
     const app = rt.createApp({ render: () => null });
     app.mount();
     const node = rt.nodeOps.createElement("div");
-    rt.nodeOps.insert(node, rt.nodesById.get(rt.host.listeners[0]?.__vnId ?? 1) ?? node, null);
+    rt.nodeOps.insert(node, (rt.nodesById.get(rt.host.listeners[0]?.id ?? 1) ?? node) as MirrorElement, null);
 
-    const order = [];
+    const order: string[] = [];
     node.addEventListener("keydown", () => order.push("node"));
     rt.global.document.addEventListener("keydown", () => order.push("document"));
     globalThis.addEventListener?.call?.(globalThis, "keydown", () => {});
@@ -945,7 +1003,7 @@ describe("ResizeObserver, after layout", () => {
   test("a target's first size is reported at the next step, and again only when it changes", () => {
     const { rt, button } = world();
     const seen: number[][] = [];
-    const ob = new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => e.contentRect.width)));
+    const ob = new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => sizeOf(e).width)));
     expect(rt.host.layout.step()).toBe(-1); // nothing observed: the host calls nothing
     ob.observe(button);
     expect(rt.host.layout.pending).toBe(true);
@@ -965,7 +1023,7 @@ describe("ResizeObserver, after layout", () => {
     const { rt, span } = world();
     rt.host.boundsById.delete(span.__vnId);
     const seen: number[][] = [];
-    new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => e.contentRect.height))).observe(span);
+    new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => sizeOf(e).height))).observe(span);
     rt.host.layout.step();
     expect(seen).toEqual([[0]]);
     rt.host.boundsById.set(span.__vnId, "0,0,30,10");
@@ -976,21 +1034,21 @@ describe("ResizeObserver, after layout", () => {
   test("the entry: the layout box, contentRect at (0, 0), device pixels, and the observer as `this`", () => {
     const { rt, button } = world({ devicePixelRatio: 1.5 });
     rt.host.boundsById.set(button.__vnId, "40,60,101,40");
-    let got: any = null;
+    let got = null as { entry: ResizeEntry; o: unknown } | null;
     let self: unknown = null;
-    const ob = new rt.global.ResizeObserver(function (this: unknown, entries: any[], o: unknown) {
+    const ob = new rt.global.ResizeObserver(function (this: unknown, entries, o) {
       self = this;
-      got = { entry: entries[0], o };
+      got = { entry: entries[0] as unknown as ResizeEntry, o };
     });
     ob.observe(button);
     rt.host.layout.step();
     expect(self).toBe(ob);
-    expect(got.o).toBe(ob);
-    expect(got.entry.target).toBe(button);
-    expect(got.entry.contentRect).toMatchObject({ x: 0, y: 0, top: 0, left: 0, width: 101, height: 40 });
-    expect(got.entry.borderBoxSize[0]).toEqual({ inlineSize: 101, blockSize: 40 });
-    expect(got.entry.contentBoxSize[0]).toEqual({ inlineSize: 101, blockSize: 40 });
-    expect(got.entry.devicePixelContentBoxSize[0]).toEqual({ inlineSize: 152, blockSize: 60 });
+    expect(got!.o).toBe(ob);
+    expect(got!.entry.target).toBe(button);
+    expect(got!.entry.contentRect).toMatchObject({ x: 0, y: 0, top: 0, left: 0, width: 101, height: 40 });
+    expect(got!.entry.borderBoxSize[0]).toEqual({ inlineSize: 101, blockSize: 40 });
+    expect(got!.entry.contentBoxSize[0]).toEqual({ inlineSize: 101, blockSize: 40 });
+    expect(got!.entry.devicePixelContentBoxSize[0]).toEqual({ inlineSize: 152, blockSize: 60 });
   });
 
   test("what a callback changes is laid out and reported in the same step, deeper targets only", () => {
@@ -1001,7 +1059,7 @@ describe("ResizeObserver, after layout", () => {
       order.push("section");
       grow = true;
     }).observe(section);
-    new rt.global.ResizeObserver((e) => order.push(`button ${e[0].contentRect.width}`)).observe(button);
+    new rt.global.ResizeObserver((e) => order.push(`button ${sizeOf(e[0]).width}`)).observe(button);
     expect(rt.host.layout.step()).toBe(1); // both first sizes, one round
     expect(order).toEqual(["section", "button 100"]);
     order.length = 0;
@@ -1018,17 +1076,17 @@ describe("ResizeObserver, after layout", () => {
   });
 
   test("a change at or above the depth just reported is skipped: the loop error, and the next step reports it", () => {
-    const events: any[] = [];
+    const events: ErrorEventLike[] = [];
     const onerror: unknown[][] = [];
     const { rt, section, button } = world({
-      dispatchEvent: (ev: any) => (events.push(ev), true),
+      dispatchEvent: (ev: ErrorEventLike) => (events.push(ev), true),
     });
-    (rt.global as any).onerror = (...args: unknown[]) => void onerror.push(args);
+    rt.global.onerror = (...args: unknown[]) => void onerror.push(args);
     const sizes: string[] = [];
     let shrinkSection = false;
-    new rt.global.ResizeObserver((e) => sizes.push(`section ${e[0].contentRect.width}`)).observe(section);
+    new rt.global.ResizeObserver((e) => sizes.push(`section ${sizeOf(e[0]).width}`)).observe(section);
     new rt.global.ResizeObserver((e) => {
-      sizes.push(`button ${e[0].contentRect.width}`);
+      sizes.push(`button ${sizeOf(e[0]).width}`);
       shrinkSection = true;
     }).observe(button);
     rt.host.layout.step(() => (shrinkSection = false));
@@ -1042,7 +1100,7 @@ describe("ResizeObserver, after layout", () => {
     });
     expect(sizes).toEqual(["button 120"]);
     expect(rt.host.layout.loopErrors).toBe(1);
-    const ev = events.find((e) => e.type === "error");
+    const ev = events.find((e) => e.type === "error")!;
     expect(ev).toBeInstanceOf(rt.global.ErrorEvent);
     expect(ev.message).toBe("ResizeObserver loop completed with undelivered notifications.");
     expect(ev.cancelable).toBe(true);
@@ -1057,10 +1115,10 @@ describe("ResizeObserver, after layout", () => {
   test("an observer disconnected by an earlier callback in the round is not called", () => {
     const { rt, section, button } = world();
     const calls: string[] = [];
-    let second: any = null;
+    let second: RealmObserver | null = null;
     new rt.global.ResizeObserver(() => {
       calls.push("first");
-      second.disconnect();
+      second?.disconnect();
     }).observe(section);
     second = new rt.global.ResizeObserver(() => calls.push("second"));
     second.observe(button);
@@ -1101,14 +1159,14 @@ describe("ResizeObserver, after layout", () => {
     const { button } = tree(rt);
     rt.host.boundsById.set(button.__vnId, "0,0,100,40");
     const seen: number[][] = [];
-    new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => e.contentRect.width))).observe(button);
+    new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => sizeOf(e).width))).observe(button);
     tick(10);
     expect(seen).toEqual([[100]]);
     expect(queue.length).toBe(0);
     const slow = [...timers].filter(([, t]) => t.ms === 250);
     expect(slow.length).toBe(1);
     rt.host.boundsById.set(button.__vnId, "0,0,250,40");
-    const [id, t] = slow[0];
+    const [id, t] = slow[0]!;
     timers.delete(id);
     t.cb();
     tick();
@@ -1120,7 +1178,7 @@ describe("missing globals (G5)", () => {
   test("MutationObserver sees real childList and attribute mutations, batched on a microtask", async () => {
     const rt = createRuntime();
     const { section, button } = tree(rt);
-    const seen = [];
+    const seen: RealmObserverEntry[] = [];
     const ob = new rt.global.MutationObserver((records) => seen.push(...records));
     ob.observe(section, { childList: true, attributes: true, subtree: true });
 
@@ -1132,9 +1190,9 @@ describe("missing globals (G5)", () => {
     await Promise.resolve();
 
     expect(seen.map((r) => r.type)).toEqual(["childList", "attributes"]);
-    expect([...seen[0].addedNodes]).toEqual([extra]);
-    expect(seen[1].target).toBe(button);
-    expect(seen[1].attributeName).toBe("data-state");
+    expect([...(seen[0]!.addedNodes as Iterable<unknown>)]).toEqual([extra]);
+    expect(seen[1]!.target).toBe(button);
+    expect(seen[1]!.attributeName).toBe("data-state");
 
     ob.disconnect();
     rt.nodeOps.remove(extra);
@@ -1145,7 +1203,7 @@ describe("missing globals (G5)", () => {
   test("an observer without subtree only hears about its own node", async () => {
     const rt = createRuntime();
     const { section, button } = tree(rt);
-    const seen = [];
+    const seen: RealmObserverEntry[] = [];
     const ob = new rt.global.MutationObserver((r) => seen.push(...r));
     ob.observe(section, { childList: true });
     rt.patchProp(button, "data-x", null, "1");
@@ -1157,9 +1215,9 @@ describe("missing globals (G5)", () => {
   test("observe(document) means the root element — 'watch everything' is not a no-op", async () => {
     const rt = createRuntime();
     const { section, button } = tree(rt);
-    const seen = [];
+    const seen: RealmObserverEntry[] = [];
     const ob = new rt.global.MutationObserver((r) => seen.push(...r));
-    ob.observe({ documentElement: section }, { childList: true, subtree: true });
+    ob.observe({ documentElement: section } as unknown as MirrorNode, { childList: true, subtree: true });
     const extra = rt.nodeOps.createElement("i");
     rt.nodeOps.insert(extra, button, null);
     await Promise.resolve();
@@ -1170,7 +1228,7 @@ describe("missing globals (G5)", () => {
 
   test("DocumentFragment is a real (detached) node, so a Teleport into one works", () => {
     const rt = createRuntime();
-    const frag = new rt.global.DocumentFragment();
+    const frag = new (rt.global.DocumentFragment as new () => MirrorElement)();
     expect(frag.nodeType).toBe(11);
     const child = rt.nodeOps.createElement("div");
     rt.nodeOps.insert(child, frag, null);
@@ -1183,15 +1241,18 @@ describe("missing globals (G5)", () => {
 
   test("NodeFilter exists with the constants createTreeWalker is called with", () => {
     const rt = createRuntime();
-    expect(rt.global.NodeFilter.SHOW_ELEMENT).toBe(1);
-    expect(rt.global.NodeFilter.FILTER_ACCEPT).toBe(1);
+    expect(nodeFilter(rt).SHOW_ELEMENT).toBe(1);
+    expect(nodeFilter(rt).FILTER_ACCEPT).toBe(1);
   });
 
   test("createTreeWalker really walks the mirror tree", () => {
     const rt = createRuntime();
     const { root, section, button, span } = tree(rt);
-    const walker = rt.global.document.createTreeWalker(root, rt.global.NodeFilter.SHOW_ELEMENT);
-    const out = [];
+    const doc = rt.global.document as unknown as {
+      createTreeWalker(root: MirrorNode, what: number): { nextNode(): MirrorNode | null };
+    };
+    const walker = doc.createTreeWalker(root, nodeFilter(rt).SHOW_ELEMENT);
+    const out: MirrorNode[] = [];
     for (let n = walker.nextNode(); n; n = walker.nextNode()) out.push(n);
     expect(out).toEqual([section, button, span]);
   });
@@ -1200,9 +1261,9 @@ describe("missing globals (G5)", () => {
     const rt = createRuntime();
     const input = rt.nodeOps.createElement("input");
     const div = rt.nodeOps.createElement("div");
-    expect(input instanceof rt.global.HTMLInputElement).toBe(true);
-    expect(div instanceof rt.global.HTMLInputElement).toBe(false);
-    expect(div instanceof rt.global.HTMLDivElement).toBe(true);
+    expect(input instanceof (rt.global.HTMLInputElement as Constructor)).toBe(true);
+    expect(div instanceof (rt.global.HTMLInputElement as Constructor)).toBe(false);
+    expect(div instanceof (rt.global.HTMLDivElement as Constructor)).toBe(true);
   });
 
   test("getComputedStyle reads the host's computed values, and says so for the rest", () => {
@@ -1212,7 +1273,7 @@ describe("missing globals (G5)", () => {
       button.__vnId,
       "display=flex\nposition=fixed\ntransition-duration=0.15s\n--primary=240 5.9% 10%\n",
     );
-    const cs = rt.global.getComputedStyle(button);
+    const cs = computedStyleOf(rt, button);
     expect(cs.display).toBe("flex");
     expect(cs.position).toBe("fixed");
     expect(cs.transitionDuration).toBe("0.15s");
@@ -1226,7 +1287,7 @@ describe("missing globals (G5)", () => {
   test('getComputedStyle: a node the host has no style for reads "" for everything, without an advisory', () => {
     const rt = createRuntime();
     const { button } = tree(rt);
-    const cs = rt.global.getComputedStyle(button);
+    const cs = computedStyleOf(rt, button);
     for (const k of [
       "width",
       "height",

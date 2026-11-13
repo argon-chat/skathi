@@ -240,7 +240,7 @@ describe("text selection by mouse", () => {
       const scale = shot.width / Number(await app.eval("window.innerWidth"));
       const n = shot.count(
         { x: p1.x * scale, y: p1.y * scale, w: p1.w * scale, h: p1.h * scale },
-        (_l, [r, g, b]) => b > r + 25,
+        (_l, [r, , b]) => b > r + 25,
       );
       bunExpect(n).toBeGreaterThan(50);
       await app.eval("getSelection().removeAllRanges()");

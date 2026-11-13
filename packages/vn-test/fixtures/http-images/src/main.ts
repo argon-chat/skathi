@@ -5,16 +5,24 @@ let started = 0;
 let loads: number[] = [];
 let errors: string[] = [];
 
-(globalThis as any).__imgs = {
+interface Imgs {
+  get(url: string, init?: RequestInit): number;
+  got: string;
+  encrypt(on: boolean): boolean;
+  start(list: string[]): number;
+  clear(): void;
+  stats(): { n: number; loads: number[]; errors: string[] };
+}
+const imgs: Imgs = {
   get(url: string, init?: RequestInit) {
-    (globalThis as any).__imgs.got = "";
-    fetch(url, init)
+    imgs.got = "";
+    fetch!(url, init)
       .then(async (r) => {
         const n = (await r.arrayBuffer()).byteLength;
         return { status: r.status, bytes: n, url: r.url, redirected: r.redirected };
       })
-      .catch((e) => ({ error: String((e && e.message) || e) }))
-      .then((v) => ((globalThis as any).__imgs.got = JSON.stringify(v)));
+      .catch((e: unknown) => ({ error: String((e as { message?: unknown } | null)?.message || e) }))
+      .then((v) => (imgs.got = JSON.stringify(v)));
     return 1;
   },
   got: "",
@@ -36,6 +44,8 @@ let errors: string[] = [];
     return { n: urls.value.length, loads: loads.slice(), errors: errors.slice() };
   },
 };
+
+(globalThis as unknown as { __imgs: Imgs }).__imgs = imgs;
 
 createApp({
   render: () =>

@@ -199,10 +199,10 @@ function newestHostSource(): number {
 }
 
 export interface ResolveOptions {
-  host?: string;
+  host?: string | undefined;
   variant: Variant;
-  allowMismatch?: boolean;
-  platform?: Platform;
+  allowMismatch?: boolean | undefined;
+  platform?: Platform | undefined;
   log?: (line: string) => void;
 }
 

@@ -1,53 +1,27 @@
 {
-  // Type-check only (nothing emits):
-  //   cd packages/vue-native && bun x vue-tsc --noEmit -p ../../apps/shadcn/tsconfig.json
-  // Unlike apps/tsconfig.json this checks ported browser code (shadcn-vue, verbatim) as browser
-  // code; what the host cannot deliver shows up as runtime advisories.
+  // Needs this app's own node_modules: `bun install` here, then `bun x vue-tsc --noEmit -p .`.
+  // Unlike apps/tsconfig.json this checks ported browser code (shadcn-vue, verbatim) as browser code.
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-
-    // DOM: HTMLAttributes['class'] is in every upstream component's props, and reka-ui, vueuse and
-    // lucide are written against HTMLElement and friends.
+    // DOM: reka-ui, vueuse and lucide are written against HTMLElement and friends.
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
-
-    "strict": true,
-    "noEmit": true,
-    // reka-ui alone is ~2.6 MB of .d.ts; its internal type errors are not ours.
-    "skipLibCheck": true,
     // tailwindcss-animate and a few other deps are `export =` CJS.
     "esModuleInterop": true,
-    "isolatedModules": true,
-    "forceConsistentCasingInFileNames": true,
-    "noImplicitOverride": true,
 
     "baseUrl": ".",
     "paths": {
-      // shadcn's own convention, so a component pasted from its docs resolves.
       "@/*": ["./src/*"],
-
-      // "vue" is deliberately not mapped to packages/vue-native/src/runtime.ts: that file
-      // re-exports only @vue/runtime-core (no HTMLAttributes), `paths` would retarget reka-ui's own
-      // .d.ts imports of "vue", and its engine.d.ts globals collide with lib.dom.
-      // "vue-native" binds to the same real package; the one signature that differs is asserted in
-      // src/main.ts.
+      // Not runtime.ts: it re-exports only @vue/runtime-core (no HTMLAttributes), and `paths` would retarget
+      // reka-ui's own .d.ts imports of "vue".
       "vue-native": ["./node_modules/vue"]
     },
-
-    // No @types package may put an ambient global in scope.
     "types": []
   },
-
-  // checkUnknownProps/Events are off: shadcn components forward undeclared attrs through $attrs and
-  // reka-ui's Primitive, which those checks would reject as errors. The rest of strictTemplates
-  // stays on; it type-checks v-model write-back.
+  // checkUnknownProps/Events are off: shadcn forwards undeclared attrs through $attrs and reka-ui's Primitive.
   "vueCompilerOptions": {
     "strictTemplates": true,
     "checkUnknownProps": false,
     "checkUnknownEvents": false
   },
-
   "include": ["src/**/*.ts", "src/**/*.vue"]
-  // tailwind.config.ts and tools/*.ts are out of scope: build-time Node modules (need @types/node).
 }

@@ -9,9 +9,9 @@ export interface VersionStrings {
   FileVersion: string;
   InternalName: string;
   OriginalFilename: string;
-  CompanyName?: string;
-  LegalCopyright?: string;
-  Comments?: string;
+  CompanyName?: string | undefined;
+  LegalCopyright?: string | undefined;
+  Comments?: string | undefined;
 }
 
 export interface VersionInfoInput {

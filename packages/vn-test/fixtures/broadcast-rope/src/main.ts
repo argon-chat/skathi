@@ -10,7 +10,7 @@ const LANE_X = [3.5, 6.5];
 const TICK = 4;
 
 const state = { measured: 0, paths: [] as string[], height: 0, settled: false };
-(globalThis as any).__VN_TEST_ROPE__ = state;
+(globalThis as unknown as { __VN_TEST_ROPE__: unknown }).__VN_TEST_ROPE__ = state;
 
 const Connectors = {
   props: { container: Object },
@@ -54,7 +54,7 @@ const Connectors = {
     const schedule = () => {
       state.settled = false;
       if (!frame) {
-        frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame!(() => {
           frame = 0;
           measure();
         });

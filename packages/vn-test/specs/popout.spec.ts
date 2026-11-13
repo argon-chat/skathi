@@ -22,7 +22,7 @@ type Popout = {
 const popouts = (): Promise<Popout[]> => app.eval("JSON.parse(__vn_window_popouts())");
 const windows = () => app.send("windows");
 
-async function until<T>(what: string, probe: () => Promise<T>, ms = 8000): Promise<T> {
+async function until<T>(what: string, probe: () => Promise<T>, ms = 8000): Promise<NonNullable<T>> {
   const deadline = Date.now() + ms;
   let last: unknown;
   for (;;) {
@@ -106,7 +106,7 @@ describe("pop-out", () => {
   test(
     "popping out opens a SECOND OS window painting that subtree",
     async () => {
-      const panelBefore = (await app.query(".panel")).nodes[0].id;
+      const panelBefore = (await app.query(".panel")).nodes[0]!.id;
 
       await app.locator(".pop").click();
 
@@ -114,10 +114,10 @@ describe("pop-out", () => {
         const l = await popouts();
         return l.length === 1 ? l : null;
       });
-      palette = list[0];
+      palette = list[0]!;
       bunExpect(palette.windowId).toBeGreaterThan(0);
       bunExpect(palette.node).not.toBe(panelBefore);
-      bunExpect((await app.query(".panel")).nodes[0].id).toBe(panelBefore);
+      bunExpect((await app.query(".panel")).nodes[0]!.id).toBe(panelBefore);
       bunExpect(palette.title).toBe("Palette - charcoal");
       bunExpect(palette.chrome).toBe("default");
 
@@ -310,7 +310,7 @@ describe("pop-out", () => {
       bunExpect(box.w).toBe(320);
       bunExpect(box.h).toBe(180);
 
-      const id = (await app.query(".clip")).nodes[0].id;
+      const id = (await app.query(".clip")).nodes[0]!.id;
       const events = await until("the video to report `playing`", async () => {
         const bag = await mediaEvents(id);
         return bag.has("playing") ? bag : null;

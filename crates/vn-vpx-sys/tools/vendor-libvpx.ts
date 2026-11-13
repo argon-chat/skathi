@@ -156,15 +156,15 @@ function patchAsmOnly(headers: Map<string, string>): Map<string, string> {
     let patched = 0;
     for (const line of text.split("\n")) {
       const def = /^#define (\w+) (\w+)$/.exec(line);
-      if (def && hits.has(def[2])) {
-        hits.set(def[2], hits.get(def[2])! + 1);
+      if (def && hits.has(def[2]!)) {
+        hits.set(def[2]!, hits.get(def[2]!)! + 1);
         lines.push(`#define ${def[1]} ${def[1]}_c`);
         patched++;
         continue;
       }
       const dispatch = /^\s*if \(flags & HAS_\w+\) (\w+) = (\w+);$/.exec(line);
-      if (dispatch && hits.has(dispatch[2])) {
-        hits.set(dispatch[2], hits.get(dispatch[2])! + 1);
+      if (dispatch && hits.has(dispatch[2]!)) {
+        hits.set(dispatch[2]!, hits.get(dispatch[2]!)! + 1);
         patched++;
         continue;
       }
@@ -199,7 +199,7 @@ function generate(src: string, cfg: Config, work: string): Map<string, string> {
   const options =
     /^RTCD_OPTIONS = (.*)$/m
       .exec(lf(readFileSync(join(dir, mk), "utf8")))?.[1]
-      .trim()
+      ?.trim()
       .split(/\s+/)
       .filter(Boolean) ?? [];
   const headers = new Map<string, string>();
@@ -244,7 +244,7 @@ function headerClosure(src: string, files: string[], generated: Map<string, stri
   const headers: string[] = [];
   const follow = (from: string, text: string) => {
     for (const m of text.matchAll(/^\s*#\s*include\s+"([^"]+)"/gm)) {
-      const inc = m[1];
+      const inc = m[1]!;
       const base = inc.replace(/^\.\//, "");
       if (generated.has(base)) continue;
       const local = slash(join(dirname(from), inc)).replace(/^\.\//, "");

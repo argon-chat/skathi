@@ -9,7 +9,11 @@ import type {
   InspectorRequest,
   Preview,
 } from "../inspector-model";
-const props = defineProps<{ height: number; request?: InspectorRequest; sessionKey?: string | number }>();
+const props = defineProps<{
+  height: number;
+  request?: InspectorRequest | undefined;
+  sessionKey?: string | number | undefined;
+}>();
 const catalog = ref<DatabaseList | null>(null),
   schema = ref<DatabaseSchema | null>(null),
   page = ref<DatabaseRecords | null>(null);

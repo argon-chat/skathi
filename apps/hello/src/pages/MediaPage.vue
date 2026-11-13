@@ -4,7 +4,6 @@ import { TINY_CLIP_DATA_URI } from "../tinyClip";
 import { computed, onMounted, reactive, ref } from "vue";
 
 const videoEl = ref<VnMediaElement | null>(null);
-const brokenEl = ref<VnMediaElement | null>(null);
 
 const media = reactive({
   currentTime: 0,
@@ -231,7 +230,7 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
       <div class="title">The error path — a source this machine cannot decode</div>
       <div class="stage">
         <div class="frame small">
-          <video ref="brokenEl" class="video" src="assets/unsupported-codec.mkv" @error="onBrokenError" />
+          <video class="video" src="assets/unsupported-codec.mkv" @error="onBrokenError" />
         </div>
         <div class="side">
           <div class="meta bad" v-if="brokenError">MediaError code {{ brokenError.code }}</div>

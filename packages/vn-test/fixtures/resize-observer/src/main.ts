@@ -1,5 +1,7 @@
 import { createApp, defineComponent, h, onMounted, ref } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 const ROW = 20;
 
 const state = {
@@ -15,15 +17,15 @@ const state = {
   run(name: string) {
     if (name === "grow") {
       state.grow = { at: state.frame, seen: [], next: null };
-      const list = document.getElementById("list")!;
+      const list = dom.getElementById("list")!;
       for (let i = 0; i < 3; i++) {
-        const row = document.createElement("div");
+        const row = dom.createElement("div");
         row.style.height = `${ROW}px`;
         list.appendChild(row);
       }
     } else if (name === "loop") {
       state.loop = { at: state.frame };
-      document.getElementById("inner")!.style.width = "150px";
+      dom.getElementById("inner")!.style.width = "150px";
     }
     return state.frame;
   },
@@ -34,12 +36,12 @@ const tick = () => {
   state.frame++;
   const g = state.grow;
   if (g && !g.next && state.frame > g.at) {
-    const height = (id: string) => document.getElementById(id)!.getBoundingClientRect().height;
+    const height = (id: string) => dom.getElementById(id)!.getBoundingClientRect().height;
     g.next = { frame: state.frame, panel: height("panel"), list: height("list") };
   }
-  requestAnimationFrame(tick);
+  requestAnimationFrame!(tick);
 };
-requestAnimationFrame(tick);
+requestAnimationFrame!(tick);
 
 window.addEventListener("error", (e) => {
   state.errors.push({ via: "listener", frame: state.frame, message: (e as ErrorEvent).message });
@@ -56,17 +58,17 @@ const Root = defineComponent({
         const height = entries[0]!.contentRect.height;
         state.grow?.seen.push({ frame: state.frame, height });
         panelHeight.value = height;
-      }).observe(document.getElementById("list")!);
+      }).observe(dom.getElementById("list")!);
 
       let armed = true;
       new ResizeObserver(() => {
         if (!state.loop || !armed) return;
         armed = false;
-        document.getElementById("outer")!.style.width = "260px";
-      }).observe(document.getElementById("inner")!);
+        dom.getElementById("outer")!.style.width = "260px";
+      }).observe(dom.getElementById("inner")!);
       new ResizeObserver((entries) => {
         state.outer.push({ frame: state.frame, width: entries[0]!.contentRect.width });
-      }).observe(document.getElementById("outer")!);
+      }).observe(dom.getElementById("outer")!);
     });
     return () =>
       h("div", { id: "root", style: { padding: "10px", background: "white" } }, [

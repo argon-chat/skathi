@@ -46,6 +46,9 @@ exclusions in `.prettierignore`. Rust is `cargo fmt`'s.
   leave it out.
 - **No documentation files.** `README.md` is the only document in this repo. Do not add `.md`
   files, design notes or reports; explain a change in its commit message.
+- **Strict TypeScript.** Every TS project extends `tsconfig.base.json` (`strict` plus `noUncheckedIndexedAccess`,
+  `exactOptionalPropertyTypes`, `noUnused*` and the rest); `bun run typecheck` checks all of them. No `any`, no
+  `@ts-ignore`/`@ts-expect-error`; `unknown` and narrowing at boundaries.
 - **Generated files are not edited by hand.** `crates/vn-app/src/prelude.js` and
   `window.prelude.js` come from the `.ts` beside them (`bun run preludes`).
 - **This is a public SDK.** No product-specific code or policy: an app's own features live in

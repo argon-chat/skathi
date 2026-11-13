@@ -1,10 +1,10 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_EXE, expect, launch } from "../src/index";
+import { DEFAULT_EXE, launch } from "../src/index";
 
 const T = 40_000;
 
@@ -36,7 +36,7 @@ afterAll(async () => {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function until<T>(what: string, probe: () => Promise<T>, ms = 15_000): Promise<T> {
+async function until<T>(what: string, probe: () => Promise<T>, ms = 15_000): Promise<NonNullable<T>> {
   const deadline = Date.now() + ms;
   let last: unknown;
   for (;;) {
@@ -363,7 +363,7 @@ describe("what the inspector found in the framework", () => {
         await app.eval(`document.querySelector(".mark").textContent = ${JSON.stringify(text)}; 0`);
         await sleep(200);
         const found = await app.query(".mark");
-        return found.nodes[0].bounds!.h;
+        return found.nodes[0]!.bounds!.h;
       };
       const one = await height("alpha beta");
       bunExpect(one).toBeGreaterThan(0);

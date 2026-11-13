@@ -1,21 +1,68 @@
 // `el.attributes` (a live NamedNodeMap), `Attr` nodes and the attribute methods around them.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement } from "./runtime-harness";
 
-// The runtime's DOM objects, loosely typed: the harness hands back mirrors.
-// biome-ignore lint/suspicious/noExplicitAny: test access to the mirror's DOM surface
-type Any = any;
+interface Attr {
+  name: string;
+  value: string;
+  localName: string;
+  prefix: string | null;
+  namespaceURI: string | null;
+  ownerElement: unknown;
+  nodeType: number;
+  nodeName: string;
+  nodeValue: string;
+  specified: boolean;
+}
+
+interface NamedNodeMap extends Iterable<Attr> {
+  length: number;
+  item(index: number): Attr | null;
+  getNamedItem(name: string): Attr | null;
+  getNamedItemNS(ns: string | null, local: string): Attr | null;
+  setNamedItem(attr: Attr): Attr | null;
+  removeNamedItem(name: string): Attr;
+  removeNamedItemNS(ns: string | null, local: string): Attr;
+  [key: number]: Attr | undefined;
+  id: Attr;
+  "data-state": Attr;
+}
+
+// The attribute surface the runtime installs on its element mirrors (defineDomGet), beyond MirrorElement's own members.
+type AttrElement = MirrorElement & {
+  attributes: NamedNodeMap;
+  getAttributeNode(name: string): Attr | null;
+  getAttributeNodeNS(ns: string | null, local: string): Attr | null;
+  setAttributeNode(attr: unknown): Attr | null;
+  removeAttributeNode(attr: Attr): Attr;
+  setAttributeNS(ns: string | null, name: string, value: string): void;
+  getAttributeNS(ns: string | null, local: string): string | null;
+  hasAttributeNS(ns: string | null, local: string): boolean;
+  removeAttributeNS(ns: string | null, local: string): void;
+  hasAttributes(): boolean;
+};
+
+interface AttrGlobal {
+  Attr: new () => Attr;
+  NamedNodeMap: new () => NamedNodeMap;
+}
 
 function world() {
   const rt = createRuntime();
   const root = rt.nodeOps.createElement("div");
-  const el: Any = rt.nodeOps.createElement("button");
+  const el = rt.nodeOps.createElement("button") as AttrElement;
   rt.nodeOps.insert(el, root, null);
   rt.patchProp(el, "id", null, "b1");
   rt.patchProp(el, "data-state", null, "open");
   rt.patchProp(el, "aria-label", null, "Close");
-  return { rt, root, el, document: rt.global.document as Any, g: rt.global as Any };
+  return {
+    rt,
+    root,
+    el,
+    document: rt.global.document as typeof rt.global.document & { createAttribute(name: string): Attr },
+    g: rt.global as typeof rt.global & AttrGlobal,
+  };
 }
 
 describe("el.attributes", () => {
@@ -23,15 +70,15 @@ describe("el.attributes", () => {
     const { el } = world();
     const map = el.attributes;
     expect(map.length).toBe(3);
-    expect(map.item(0).name).toBe("id");
-    expect(map[1].name).toBe("data-state");
-    expect(map[2].value).toBe("Close");
+    expect(map.item(0)!.name).toBe("id");
+    expect(map[1]!.name).toBe("data-state");
+    expect(map[2]!.value).toBe("Close");
     expect(map[3]).toBe(undefined);
     expect(map.item(3)).toBe(null);
     expect(map.id.value).toBe("b1");
     expect(map["data-state"].value).toBe("open");
-    expect([...map].map((a: Any) => `${a.name}=${a.value}`)).toEqual(["id=b1", "data-state=open", "aria-label=Close"]);
-    expect(Array.from(map, (a: Any) => a.name)).toEqual(["id", "data-state", "aria-label"]);
+    expect([...map].map((a: Attr) => `${a.name}=${a.value}`)).toEqual(["id=b1", "data-state=open", "aria-label=Close"]);
+    expect(Array.from(map, (a: Attr) => a.name)).toEqual(["id", "data-state", "aria-label"]);
     expect(Array.prototype.slice.call(map).length).toBe(3);
     expect(Object.keys(map)).toEqual(["0", "1", "2"]);
     expect(0 in map).toBe(true);
@@ -44,15 +91,15 @@ describe("el.attributes", () => {
     expect(el.attributes).toBe(map);
     el.setAttribute("title", "x");
     expect(map.length).toBe(4);
-    expect(map[3].name).toBe("title");
+    expect(map[3]!.name).toBe("title");
     rt.patchProp(el, "data-state", "open", null);
     expect(map.length).toBe(3);
-    expect([...map].map((a: Any) => a.name)).toEqual(["id", "aria-label", "title"]);
+    expect([...map].map((a: Attr) => a.name)).toEqual(["id", "aria-label", "title"]);
   });
 
   test("one Attr per attribute: the map, getNamedItem and getAttributeNode agree", () => {
     const { el } = world();
-    const a = el.attributes[0];
+    const a = el.attributes[0]!;
     expect(el.attributes.getNamedItem("id")).toBe(a);
     expect(el.getAttributeNode("id")).toBe(a);
     expect(el.getAttributeNode("missing")).toBe(null);
@@ -61,7 +108,7 @@ describe("el.attributes", () => {
 
   test("an Attr's fields, and its value reads and writes through the element", () => {
     const { el } = world();
-    const a = el.getAttributeNode("data-state");
+    const a = el.getAttributeNode("data-state")!;
     expect(a.name).toBe("data-state");
     expect(a.localName).toBe("data-state");
     expect(a.prefix).toBe(null);
@@ -82,8 +129,8 @@ describe("el.attributes", () => {
     const { el } = world();
     el.setAttribute("class", "a b");
     el.setAttribute("style", "color: red");
-    const cls = el.getAttributeNode("class");
-    const style = el.getAttributeNode("style");
+    const cls = el.getAttributeNode("class")!;
+    const style = el.getAttributeNode("style")!;
     expect(cls.value).toBe("a b");
     expect(style.value).toBe("color: red");
     cls.value = "c";
@@ -95,7 +142,7 @@ describe("el.attributes", () => {
 
   test("removing the attribute detaches its Attr, which keeps the value it had", () => {
     const { el } = world();
-    const a = el.getAttributeNode("aria-label");
+    const a = el.getAttributeNode("aria-label")!;
     el.removeAttribute("aria-label");
     expect(a.ownerElement).toBe(null);
     expect(a.value).toBe("Close");
@@ -140,7 +187,7 @@ describe("el.attributes", () => {
     expect(fresh.value).toBe("hello");
     expect(el.getAttribute("title")).toBe("bye");
 
-    const other: Any = rt.nodeOps.createElement("span");
+    const other = rt.nodeOps.createElement("span") as AttrElement;
     rt.nodeOps.insert(other, root, null);
     expect(() => other.setAttributeNode(second)).toThrow(/already an attribute of another Element/);
     expect(() => el.setAttributeNode({ name: "x", value: "y" })).toThrow(TypeError);
@@ -150,7 +197,7 @@ describe("el.attributes", () => {
 
   test("removeAttributeNode removes the element's own Attr and refuses another", () => {
     const { el, document } = world();
-    const a = el.getAttributeNode("id");
+    const a = el.getAttributeNode("id")!;
     expect(el.removeAttributeNode(a)).toBe(a);
     expect(el.hasAttribute("id")).toBe(false);
     expect(() => el.removeAttributeNode(a)).toThrow(/owned by another element/);
@@ -165,7 +212,7 @@ describe("el.attributes", () => {
     expect(el.getAttributeNS(XLINK, "href")).toBe("#icon");
     expect(el.hasAttributeNS(XLINK, "href")).toBe(true);
     expect(el.hasAttributeNS(null, "href")).toBe(false);
-    const a = el.attributes.getNamedItemNS(XLINK, "href");
+    const a = el.attributes.getNamedItemNS(XLINK, "href")!;
     expect(a.prefix).toBe("xlink");
     expect(a.localName).toBe("href");
     expect(a.namespaceURI).toBe(XLINK);
@@ -187,7 +234,7 @@ describe("el.attributes", () => {
     const { rt, el } = world();
     expect(el.hasAttributes()).toBe(true);
     expect(el.getAttributeNames()).toEqual(["id", "data-state", "aria-label"]);
-    const bare: Any = rt.nodeOps.createElement("span");
+    const bare = rt.nodeOps.createElement("span") as AttrElement;
     expect(bare.hasAttributes()).toBe(false);
     expect(bare.getAttributeNames()).toEqual([]);
     expect(bare.attributes.length).toBe(0);
@@ -219,7 +266,7 @@ describe("el.attributes", () => {
 
   test("a text node has no attributes", () => {
     const { rt } = world();
-    const t: Any = rt.nodeOps.createText("hi");
+    const t = rt.nodeOps.createText("hi") as unknown as { attributes?: unknown };
     expect(t.attributes).toBe(undefined);
   });
 });

@@ -2,34 +2,68 @@
 // on mirror nodes with the DOM's semantics; every case also checks `host.tree`, since mirror and host must never disagree.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement, type MirrorNode, type RealmEvent } from "./runtime-harness";
 
-type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
+// Tree mutation the runtime installs on its mirrors beyond MirrorElement's own members.
+type Constructor = new (...args: never[]) => object;
+
+interface TreeOps {
+  appendChild<T extends MirrorNode>(node: T): T;
+  insertBefore<T extends MirrorNode>(node: T, reference?: MirrorNode | null): T;
+  removeChild<T extends MirrorNode>(node: T): T;
+  replaceChild<T extends MirrorNode>(node: MirrorNode, old: T): T;
+  prepend(...nodes: unknown[]): void;
+  before(...nodes: unknown[]): void;
+  after(...nodes: unknown[]): void;
+  replaceWith(...nodes: unknown[]): void;
+  replaceChildren(...nodes: unknown[]): void;
+}
+type DomElement = MirrorElement &
+  TreeOps & {
+    id: string;
+    insertAdjacentText(where: string, text: string): void;
+    addEventListener(name: string, fn: (ev: RealmEvent) => void): void;
+  };
+type DomNode = MirrorNode & TreeOps;
+interface DomDocument {
+  body: DomElement;
+  createElement(tag: string): DomElement;
+  createElementNS(ns: string, tag: string): DomElement;
+  createTextNode(data: string): DomNode;
+  createComment(data: string): DomNode & { data: string };
+  createDocumentFragment(): DomNode;
+}
+interface MutationRecordLike {
+  target: DomNode;
+  addedNodes: Iterable<DomNode>;
+  removedNodes: Iterable<DomNode>;
+}
 
 function world() {
-  const rt: Any = createRuntime();
-  const doc: Any = rt.global.document;
+  const rt = createRuntime();
+  const doc = rt.global.document as unknown as DomDocument;
   const tree = rt.host.tree;
-  const shape = (n: Any) => tree.shape(n.__vnId);
-  const hostParent = (n: Any) => {
+  const shape = (n: MirrorNode) => tree.shape(n.__vnId);
+  const hostParent = (n: MirrorNode) => {
     const p = tree.parent.get(n.__vnId);
     return p ? tree.tag.get(p) : p;
   };
-  const vue = (tag: string, parent?: Any) => {
-    const el = rt.nodeOps.createElement(tag);
+  const vue = (tag: string, parent?: DomElement) => {
+    const el = rt.nodeOps.createElement(tag) as DomElement;
     if (parent) rt.nodeOps.insert(el, parent, null);
     return el;
   };
   return { rt, doc, tree, shape, hostParent, vue };
 }
 
-function watch(rt: Any, target: Any) {
+function watch(rt: ReturnType<typeof createRuntime>, target: MirrorNode) {
   const seen: string[] = [];
-  const tag = (n: Any) => (n.nodeType === 3 ? `#${n.data}` : n.tagName.toLowerCase());
-  new rt.global.MutationObserver((records: Any[]) => {
+  const tag = (n: MirrorNode) => (n.kind !== 1 ? `#${n.data}` : n.tagName.toLowerCase());
+  new rt.global.MutationObserver((entries) => {
+    const records = entries as unknown as MutationRecordLike[];
     for (const r of records) {
       seen.push(
-        `${tag(r.target)}:${Array.from(r.addedNodes, (n: Any) => "+" + tag(n)).join("")}${Array.from(r.removedNodes, (n: Any) => "-" + tag(n)).join("")}`,
+        `${tag(r.target)}:${Array.from(r.addedNodes, (n) => "+" + tag(n)).join("")}${Array.from(r.removedNodes, (n) => "-" + tag(n)).join("")}`,
       );
     }
   }).observe(target, { childList: true, subtree: true });
@@ -43,7 +77,7 @@ describe("document.createElement makes tree nodes", () => {
     const img = doc.createElement("img");
     expect(img.tagName).toBe("IMG");
     expect(rt.nodeById(img.__vnId)).toBe(img);
-    expect(img instanceof rt.global.HTMLImageElement).toBe(true);
+    expect(img instanceof (rt.global.HTMLImageElement as Constructor)).toBe(true);
     expect(img.parentNode).toBeNull();
     expect(hostParent(img)).toBe(0);
     expect(placeholder.appendChild(img)).toBe(img);
@@ -63,11 +97,11 @@ describe("document.createElement makes tree nodes", () => {
   });
 
   test("the name is checked, the engine keeps <a>, <input> and the head-only tags, and the SVG namespace keeps case", () => {
-    const { rt, doc } = world();
+    const { doc } = world();
     expect(() => doc.createElement("")).toThrow("is not a valid name");
     expect(() => doc.createElement("a b")).toThrow(expect.objectContaining({ name: "InvalidCharacterError" }));
     for (const t of ["a", "input", "style", "link", "script"]) {
-      expect([t, rt.isMirrorNode?.(doc.createElement(t)) ?? "__vnId" in doc.createElement(t)]).toEqual([t, false]);
+      expect([t, "__vnId" in doc.createElement(t)]).toEqual([t, false]);
     }
     const grad = doc.createElementNS("http://www.w3.org/2000/svg", "linearGradient");
     expect(grad.tag).toBe("linearGradient");
@@ -129,8 +163,8 @@ describe("Node: appendChild, insertBefore, removeChild, replaceChild", () => {
     expect(() => t.appendChild(doc.createElement("b"))).toThrow(
       expect.objectContaining({ name: "HierarchyRequestError" }),
     );
-    expect(() => outer.appendChild({})).toThrow("parameter 1 is not of type 'Node'");
-    expect(() => outer.appendChild("text")).toThrow(TypeError);
+    expect(() => outer.appendChild({} as MirrorNode)).toThrow("parameter 1 is not of type 'Node'");
+    expect(() => outer.appendChild("text" as unknown as MirrorNode)).toThrow(TypeError);
   });
 
   test("removeChild DETACHES: the node keeps its listeners and its subtree, and can go back in", async () => {
@@ -148,7 +182,7 @@ describe("Node: appendChild, insertBefore, removeChild, replaceChild", () => {
     expect(shape(host)).toEqual([]);
     expect(hostParent(card)).toBe("vn-detached");
     expect(rt.host.tree.freed).toEqual([]);
-    expect(rt.isLoose ? rt.isLoose(card) : rt.looseRoots.has(card.__vnId)).toBe(true);
+    expect(rt.looseRoots.has(card.__vnId)).toBe(true);
     card.click();
     expect(clicks).toBe(1);
     expect(() => host.removeChild(card)).toThrow(expect.objectContaining({ name: "NotFoundError" }));
@@ -164,7 +198,9 @@ describe("Node: appendChild, insertBefore, removeChild, replaceChild", () => {
   test("replaceChild answers the old child, which is detached, and keeps the position", () => {
     const { doc, shape, vue } = world();
     const row = vue("div");
-    const [a, b, c] = ["a", "b", "c"].map((t) => doc.createElement(t === "b" ? "em" : "span"));
+    const a = doc.createElement("span");
+    const b = doc.createElement("em");
+    const c = doc.createElement("span");
     row.append(a, b, c);
     const x = doc.createElement("strong");
     expect(row.replaceChild(x, b)).toBe(b);
@@ -182,7 +218,7 @@ describe("DocumentFragment", () => {
     const { rt, doc, shape, vue } = world();
     const list = vue("ul");
     const frag = doc.createDocumentFragment();
-    expect(frag instanceof rt.global.DocumentFragment).toBe(true);
+    expect(frag instanceof (rt.global.DocumentFragment as Constructor)).toBe(true);
     expect([frag.nodeType, frag.nodeName]).toEqual([11, "#document-fragment"]);
     const items = [1, 2, 3].map((n) => {
       const li = doc.createElement("li");
@@ -211,8 +247,7 @@ describe("ChildNode and ParentNode", () => {
       parent.appendChild(el);
       return el;
     });
-    const names = () =>
-      parent.childNodes.map((c: Any) => (c.nodeType === 3 ? `'${c.data}'` : c.getAttribute("data-k")));
+    const names = () => parent.childNodes.map((c) => (c.kind !== 1 ? `'${c.data}'` : c.getAttribute("data-k")));
     return { parent, kids, names };
   }
 
@@ -229,7 +264,7 @@ describe("ChildNode and ParentNode", () => {
   test("before / after skip the nodes being moved when they pick the reference", () => {
     const w = world();
     const { kids, names } = row(w);
-    const [A, B, C] = kids;
+    const [A, B, C] = kids as [DomElement, DomElement, DomElement];
     B.before(A);
     expect(names()).toEqual(["A", "B", "C"]);
     C.before(A);
@@ -243,7 +278,7 @@ describe("ChildNode and ParentNode", () => {
   test("replaceWith, remove, replaceChildren", () => {
     const w = world();
     const { parent, kids, names } = row(w);
-    const [A, B, C] = kids;
+    const [A, B, C] = kids as [DomElement, DomElement, DomElement];
     B.replaceWith("1", "2");
     expect(names()).toEqual(["A", "'1'", "'2'", "C"]);
     expect(B.parentNode).toBeNull();
@@ -286,7 +321,7 @@ describe("insertAdjacentElement / insertAdjacentText", () => {
     expect(() => mid.insertAdjacentElement("inside", mk("y"))).toThrow(
       expect.objectContaining({ name: "SyntaxError" }),
     );
-    expect(() => mid.insertAdjacentElement("beforeend", doc.createTextNode("t"))).toThrow(
+    expect(() => mid.insertAdjacentElement("beforeend", doc.createTextNode("t") as MirrorElement)).toThrow(
       "parameter 2 is not of type 'Element'",
     );
   });
@@ -309,7 +344,7 @@ describe("what the renderer and script share", () => {
     rt.nodeOps.remove(leaving);
     expect(leaving.__vnId).toBe(0);
     expect(rt.host.tree.live.has(leavingId)).toBe(false);
-    expect([...rt.host.tree.live].some((id: number) => rt.host.tree.tag.get(id) === "vn-detached")).toBe(false);
+    expect([...rt.host.tree.live].some((id) => rt.host.tree.tag.get(id) === "vn-detached")).toBe(false);
     expect(rt.host.tree.errors).toEqual([]);
   });
 
@@ -326,9 +361,9 @@ describe("what the renderer and script share", () => {
   });
 
   test("an engine <a> appended to the tree is an advisory, and an engine <style> anywhere joins the stylesheet", async () => {
-    const rt: Any = createRuntime({ globals: { __VN_CSS__: [".bundle{}"] } });
+    const rt = createRuntime({ globals: { __VN_CSS__: [".bundle{}"] } });
     rt.createApp({ render: () => null }).mount();
-    const doc = rt.global.document;
+    const doc = rt.global.document as unknown as DomDocument;
     const a = doc.createElement("a");
     expect(doc.body.appendChild(a)).toBe(a);
     expect(rt.advisories().join("\n")).toContain("engine's detached element");
@@ -381,7 +416,7 @@ describe("loose nodes are freed once the collector has them", () => {
     // A conservative collector may keep a few; most must go.
     expect(freed).toBeGreaterThanOrEqual(32);
     expect(rt.host.tree.errors).toEqual([]);
-    const boxes = [...rt.host.tree.live].filter((id: number) => rt.host.tree.tag.get(id) === "vn-detached");
+    const boxes = [...rt.host.tree.live].filter((id) => rt.host.tree.tag.get(id) === "vn-detached");
     expect(boxes.length).toBeLessThanOrEqual(64 - freed);
   });
 });

@@ -1,20 +1,18 @@
 {
-  // The build-time half: builder scripts and devtools clients, which run under bun with the full Node surface.
-  // Separate from tsconfig.json because `src/` runs in JavaScriptCore with the small surface `src/engine.d.ts`
-  // declares, and `@types/bun` and `engine.d.ts` both declare `console`, `Event` and the timers.
-  //
-  // `test/` is not here: a strict pass needs the harnesses' `new Function` boundary to get a hand-written return type first.
+  // The build-time half: builders, the CLI, devtools clients and repo scripts, which run under bun.
+  // Separate from tsconfig.json because @types/bun and src/engine.d.ts both declare `console`, `Event`
+  // and the timers.
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
     "useDefineForClassFields": false,
-    "isolatedModules": true,
-    "noImplicitOverride": true,
     "types": ["bun"]
   },
-  "include": ["*.ts", "devtools/**/*.ts", "scripts/**/*.ts", "cli/**/*.ts"]
+  "include": [
+    "*.ts",
+    "devtools/**/*.ts",
+    "scripts/**/*.ts",
+    "cli/**/*.ts",
+    "../../scripts/**/*.ts",
+    "../../crates/*/tools/**/*.ts"
+  ]
 }

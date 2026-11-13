@@ -1,5 +1,7 @@
 import { createApp, h, ref } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 type Log = { log: string[] };
 const out: Log = { log: [] };
 (globalThis as unknown as { __VN_TEST_KEYS__: Log }).__VN_TEST_KEYS__ = out;
@@ -7,8 +9,8 @@ const out: Log = { log: [] };
 const idOf = (e: Event) => (e.target as { id?: string } | null)?.id || (e.target === document ? "document" : "?");
 const note = (who: string) => (e: KeyboardEvent) => out.log.push(`${who}:${e.type}:${e.key} t=${idOf(e)}`);
 
-document.addEventListener("keydown", note("document"));
-document.addEventListener("keyup", note("document"));
+dom.addEventListener("keydown", note("document"));
+dom.addEventListener("keyup", note("document"));
 
 const fieldOpen = ref(true);
 
@@ -49,7 +51,7 @@ const App = {
           onKeydown: (e: KeyboardEvent) => {
             if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Enter") return;
             e.preventDefault();
-            const active = (document.activeElement as { id?: string } | null)?.id ?? "none";
+            const active = (dom.activeElement as { id?: string } | null)?.id ?? "none";
             (e.target as HTMLInputElement).focus();
             out.log.push(`suggest:keydown:${e.key} active=${active}`);
           },

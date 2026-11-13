@@ -88,7 +88,7 @@ describe("a second launch", () => {
       bunExpect(ms).toBeLessThan(5_000);
       const got = await untilEvents(1);
       bunExpect(got.events.length).toBe(1);
-      const ev = got.events[0];
+      const ev = got.events[0]!;
       bunExpect(ev.source).toBe("second-instance");
       bunExpect(ev.argv.slice(1)).toEqual(["--foo", doc, "missing.txt"]);
       bunExpect(ev.cwd.toLowerCase()).toBe(scratch.toLowerCase());
@@ -118,7 +118,7 @@ describe("a second launch", () => {
       });
       bunExpect(r.status).toBe(0);
       const got = await untilEvents(2);
-      const ev = got.events[1];
+      const ev = got.events[1]!;
       bunExpect(ev.url).toBe(url);
       bunExpect(got.params.at(-1)).toEqual({ targetURL: url, files: 0 });
       bunExpect(ev.argv.includes("--devtools")).toBe(false);
@@ -132,7 +132,7 @@ describe("a second launch", () => {
       const r = spawnSync(exe, ["report.txt", "--devtools"], { cwd: scratch, env: secondEnv(), timeout: 15_000 });
       bunExpect(r.status).toBe(0);
       const got = await untilEvents(3);
-      bunExpect(got.events[2].argv.slice(1)).toEqual(["report.txt", "--devtools"]);
+      bunExpect(got.events[2]!.argv.slice(1)).toEqual(["report.txt", "--devtools"]);
     },
     T,
   );
@@ -149,7 +149,7 @@ describe("a second launch", () => {
       });
       bunExpect(r.status).toBe(0);
       const got = await untilEvents(4);
-      bunExpect(got.events[3].argv.slice(1)).toEqual(["quiet"]);
+      bunExpect(got.events[3]!.argv.slice(1)).toEqual(["quiet"]);
       const lines = await forwardedLines();
       bunExpect(lines.at(-1)).toContain("the second launch was quiet (VN_WINDOW_FOCUS=never)");
     },

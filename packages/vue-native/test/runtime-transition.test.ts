@@ -3,7 +3,17 @@
 // the same phases in the same order, riding vn-css's real transition engine.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement } from "./runtime-harness";
+
+type Rt = ReturnType<typeof createRuntime>;
+interface PhaseHooks {
+  onBeforeEnter(el: MirrorElement): void;
+  onBeforeAppear(el: MirrorElement): void;
+  onEnter(el: MirrorElement, done: () => void): void;
+  onLeave(el: MirrorElement, done: () => void): void;
+}
+const phaseHooks = (rt: Rt, props: Parameters<Rt["resolveTransitionProps"]>[0]) =>
+  rt.resolveTransitionProps(props) as unknown as PhaseHooks;
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -20,19 +30,19 @@ describe("exports", () => {
 });
 
 describe("the class pipeline", () => {
-  function el(rt) {
+  function el(rt: Rt) {
     const root = rt.nodeOps.createElement("root");
     const node = rt.nodeOps.createElement("div");
     rt.nodeOps.insert(node, root, null);
     rt.patchProp(node, "class", null, "card");
     return node;
   }
-  const lastClass = (rt) => rt.host.classes.at(-1).value;
+  const lastClass = (rt: Rt) => rt.host.classes.at(-1)?.value;
 
   test("enter runs from-classes, then to-classes on the next frame", async () => {
     const rt = createRuntime();
     const node = el(rt);
-    const hooks = rt.resolveTransitionProps({ name: "fade" });
+    const hooks = phaseHooks(rt, { name: "fade" });
 
     hooks.onBeforeEnter(node);
     expect(lastClass(rt)).toBe("card fade-enter-from fade-enter-active");
@@ -52,7 +62,7 @@ describe("the class pipeline", () => {
   test("leave runs the leave phases and clears them when done", async () => {
     const rt = createRuntime();
     const node = el(rt);
-    const hooks = rt.resolveTransitionProps({ name: "fade" });
+    const hooks = phaseHooks(rt, { name: "fade" });
     let done = false;
     hooks.onLeave(node, () => (done = true));
     expect(lastClass(rt)).toBe("card fade-leave-from fade-leave-active");
@@ -66,7 +76,7 @@ describe("the class pipeline", () => {
   test("`appear` uses its own class names when given", () => {
     const rt = createRuntime();
     const node = el(rt);
-    const hooks = rt.resolveTransitionProps({ name: "fade", appearFromClass: "boot" });
+    const hooks = phaseHooks(rt, { name: "fade", appearFromClass: "boot" });
     hooks.onBeforeAppear(node);
     expect(lastClass(rt)).toBe("card boot fade-enter-active");
   });
@@ -83,7 +93,7 @@ describe("the class pipeline", () => {
     const rt = createRuntime();
     const node = el(rt);
     rt.host.computedById.set(node.__vnId, "transition-duration=0.05s\ntransition-delay=0s\n");
-    const hooks = rt.resolveTransitionProps({ name: "fade" });
+    const hooks = phaseHooks(rt, { name: "fade" });
     let done = false;
     hooks.onEnter(node, () => (done = true));
     await tick();
@@ -100,7 +110,7 @@ describe("the class pipeline", () => {
     const rt = createRuntime();
     const node = el(rt);
     rt.host.computedById.set(node.__vnId, "transition-duration=5s\ntransition-delay=0s\n");
-    const hooks = rt.resolveTransitionProps({ name: "fade" });
+    const hooks = phaseHooks(rt, { name: "fade" });
     let done = false;
     hooks.onEnter(node, () => (done = true));
     await tick();
@@ -115,7 +125,7 @@ describe("the class pipeline", () => {
     const rt = createRuntime();
     const node = el(rt);
     rt.host.computedById.set(node.__vnId, "transition-duration=10s\n");
-    const hooks = rt.resolveTransitionProps({ name: "fade", duration: 10 });
+    const hooks = phaseHooks(rt, { name: "fade", duration: 10 });
     let done = false;
     hooks.onEnter(node, () => (done = true));
     await new Promise((r) => setTimeout(r, 60));
@@ -126,7 +136,7 @@ describe("the class pipeline", () => {
     const rt = createRuntime();
     const node = el(rt);
     rt.host.computedById.set(node.__vnId, "transition-duration=0.05s\n");
-    const hooks = rt.resolveTransitionProps({ name: "fade", onEnter: (_el, _done) => {} });
+    const hooks = phaseHooks(rt, { name: "fade", onEnter: (_el: unknown, _done: unknown) => {} });
     let done = false;
     hooks.onEnter(node, () => (done = true));
     await new Promise((r) => setTimeout(r, 90));

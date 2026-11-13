@@ -1,5 +1,7 @@
 import { createApp, h, nextTick, onMounted, ref } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 const STAGES = ["mounted", "nextTick", "raf", "late"] as const;
 
 const REAL = 165;
@@ -7,13 +9,13 @@ const REAL = 165;
 const seen = ref<Record<string, number>>({});
 
 function measure(stage: string) {
-  const el = document.querySelector("#probe-panel") as HTMLElement | null;
+  const el = dom.querySelector("#probe-panel") as HTMLElement | null;
   const px = el ? el.scrollHeight : -1;
   seen.value = { ...seen.value, [stage]: px };
   return px;
 }
 
-document.documentElement.style.fontSize = "14px";
+dom.documentElement.style.fontSize = "14px";
 
 const CSS = `
 #probe-panel {
@@ -39,7 +41,7 @@ createApp({
     onMounted(() => {
       measure("mounted");
       void nextTick(() => measure("nextTick"));
-      requestAnimationFrame(() => measure("raf"));
+      requestAnimationFrame!(() => measure("raf"));
       // Long after any 300 ms transition would have finished, so the spec can assert that the
       // early stages saw the SETTLED number rather than a number that merely happened to be close.
       setTimeout(() => measure("late"), 600);

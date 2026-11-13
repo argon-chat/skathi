@@ -1,14 +1,9 @@
 {
+  "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
     "lib": ["ESNext"],
-    "strict": true,
-    "skipLibCheck": true,
-    "noEmit": true,
     "baseUrl": "../../..",
-    "paths": { "vue": ["packages/vue-native/node_modules/vue"], "vue-native": ["packages/vue-native/src/index.ts"] },
+    "paths": { "vue": ["packages/vue-native/src/runtime.ts"], "vue-native": ["packages/vue-native/src/runtime.ts"] },
     "types": []
   },
   "vueCompilerOptions": { "strictTemplates": true },
@@ -23,6 +18,7 @@
     "../src/inspector-model.ts",
     "../../../packages/vue-native/src/protocol.d.ts",
     "../../../packages/vue-native/src/engine.d.ts",
+    "../../../packages/vue-native/src/indexeddb.d.ts",
     "../../env.d.ts"
   ]
 }

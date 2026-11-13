@@ -3,12 +3,45 @@
 
 import { describe, expect, test } from "bun:test";
 import { defineComponent, h, nextTick, ref } from "@vue/runtime-core";
-import { createRuntime } from "./runtime-harness";
+import {
+  createRuntime,
+  type MirrorElement,
+  type MirrorNode,
+  type RealmDocument,
+  type RealmObserver,
+  type RealmObserverEntry,
+} from "./runtime-harness";
+
+type Rt = ReturnType<typeof createRuntime>;
+type Parent = MirrorElement & {
+  appendChild(child: MirrorNode): MirrorNode;
+  removeChild(child: MirrorNode): MirrorNode;
+  insertAdjacentElement(where: string, element: MirrorNode): unknown;
+};
+interface CompatDocument extends RealmDocument {
+  head: Parent;
+  createElement(tag: string): Parent;
+  getElementsByTagName(tag: string): { [index: number]: Parent | undefined; item(index: number): Parent | null };
+}
+const documentOf = (rt: Rt): CompatDocument => rt.global.document as CompatDocument;
+
+interface IntersectionEntry extends RealmObserverEntry {
+  isIntersecting: boolean;
+  intersectionRatio: number;
+}
+interface IntersectionObserverLike extends RealmObserver {
+  thresholds: number[];
+  rootMargin: string;
+  takeRecords(): IntersectionEntry[];
+}
+type IntersectionObserverCtor = new (
+  callback: (entries: IntersectionEntry[]) => unknown,
+  options?: unknown,
+) => IntersectionObserverLike;
+const intersectionObserver = (rt: Rt): IntersectionObserverCtor =>
+  rt.global.IntersectionObserver as unknown as IntersectionObserverCtor;
 
 const frame = () => new Promise((r) => setTimeout(r, 4));
-const frames = async (n: number) => {
-  for (let i = 0; i < n; i++) await frame();
-};
 
 describe("runtime-dom's exports", () => {
   test("every name runtime-dom adds over runtime-core is exported", () => {
@@ -27,7 +60,7 @@ describe("runtime-dom's exports", () => {
       "nodeOps",
       "patchProp",
     ]) {
-      expect(rt[name]).toBeDefined();
+      expect(rt[name as keyof typeof rt]).toBeDefined();
     }
   });
 
@@ -36,7 +69,7 @@ describe("runtime-dom's exports", () => {
     const container = rt.nodeOps.createElement("div");
     rt.render(h("span", { class: "x" }, "hi"), container);
     expect(container.childNodes.length).toBe(1);
-    expect(container.childNodes[0].tagName).toBe("SPAN");
+    expect((container.childNodes[0] as MirrorElement).tagName).toBe("SPAN");
     rt.render(null, container);
     expect(container.childNodes.length).toBe(0);
   });
@@ -60,11 +93,11 @@ describe("useCssVars", () => {
   test("writes the v-bind() custom properties onto the component's root and follows the state", async () => {
     const rt = createRuntime();
     const color = ref("red");
-    let el: any = null;
+    let el!: MirrorElement;
     const Comp = defineComponent({
       setup() {
         rt.useCssVars(() => ({ "abc123-color": color.value, "abc123-size": 4 }));
-        return () => h("div", { ref: (e: unknown) => (el = e) }, "x");
+        return () => h("div", { ref: (e: unknown) => (el = e as MirrorElement) }, "x");
       },
     });
     rt.createApp(Comp).mount();
@@ -86,8 +119,8 @@ describe("useCssVars", () => {
       setup() {
         rt.useCssVars(() => ({ "f-gap": null }));
         return () => [
-          h("i", { ref: (e: any) => e && ids.push(e.__vnId) }),
-          h("b", { ref: (e: any) => e && ids.push(e.__vnId) }),
+          h("i", { ref: (e: unknown) => void (e && ids.push((e as MirrorElement).__vnId)) }),
+          h("b", { ref: (e: unknown) => void (e && ids.push((e as MirrorElement).__vnId)) }),
         ];
       },
     });
@@ -101,11 +134,11 @@ describe("useCssVars", () => {
 
 describe("a <style> injected into document.head", () => {
   // style-inject's exact sequence (vue3-spinners): insert the empty <style>, THEN append the text node.
-  function inject(rt: any, css: string) {
-    const d = rt.global.document;
+  function inject(rt: Rt, css: string) {
+    const d = documentOf(rt);
     const s = d.createElement("style");
     s.setAttribute?.("type", "text/css");
-    d.getElementsByTagName("head")[0].insertAdjacentElement("beforeend", s);
+    d.getElementsByTagName("head")[0]!.insertAdjacentElement("beforeend", s);
     s.appendChild(d.createTextNode(css));
     return s;
   }
@@ -120,7 +153,7 @@ describe("a <style> injected into document.head", () => {
 
   test("a stylesheet populated before head insertion retains text and keyframes (Vaul order)", async () => {
     const rt = createRuntime({ globals: { __VN_CSS__: [".bundle{}"] } });
-    const doc = rt.global.document;
+    const doc = documentOf(rt);
     const style = doc.createElement("style");
     const css =
       "[data-drawer]{animation:slide .5s}@keyframes slide{from{transform:translateY(100%)}to{transform:translateY(0)}}";
@@ -141,15 +174,15 @@ describe("a <style> injected into document.head", () => {
     const rt = createRuntime({ globals: { __VN_CSS__: [".bundle{}"] } });
     rt.createApp({ render: () => null }).mount();
     const s = inject(rt, ".a{}");
-    s.appendChild(rt.global.document.createTextNode(".b{}"));
+    s.appendChild(documentOf(rt).createTextNode(".b{}"));
     await Promise.resolve();
     expect(rt.host.sheets.at(-1)).toBe(".bundle{}\n.a{}.b{}");
     expect(rt.host.sheets.length).toBe(2); // the mount's, then ONE for both edits
     s.textContent = ".c{}";
     await Promise.resolve();
     expect(rt.host.sheets.at(-1)).toBe(".bundle{}\n.c{}");
-    expect(s.parentNode).toBe(rt.global.document.head);
-    s.parentNode.removeChild(s);
+    expect(s.parentNode).toBe(documentOf(rt).head);
+    (s.parentNode as Parent).removeChild(s);
     await Promise.resolve();
     expect(rt.host.sheets.at(-1)).toBe(".bundle{}");
     expect(s.parentNode).toBeNull();
@@ -169,7 +202,7 @@ describe("a <style> injected into document.head", () => {
 
   test("getElementsByTagName and createTextNode are there, and a <link> stylesheet is an advisory", () => {
     const rt = createRuntime();
-    const d = rt.global.document;
+    const d = documentOf(rt);
     expect(d.getElementsByTagName("head")[0]).toBe(d.head);
     expect(d.getElementsByTagName("head").item(1)).toBeNull();
     const t = d.createTextNode("hi");
@@ -184,54 +217,54 @@ describe("IntersectionObserver, updated after layout and delivered from a task",
   function world(bounds: string) {
     const rt = createRuntime();
     rt.createApp({ render: () => null }).mount();
-    const root = rt.global.document.documentElement;
+    const root = documentOf(rt).documentElement;
     rt.host.boundsById.set(root.__vnId, "0,0,800,600");
     const el = rt.nodeOps.createElement("div");
     rt.nodeOps.insert(el, root, null);
     rt.host.boundsById.set(el.__vnId, bounds);
     return { rt, root, el };
   }
-  async function frameStep(rt: ReturnType<typeof createRuntime>) {
+  async function frameStep(rt: Rt) {
     rt.host.layout.step();
     await frame();
   }
 
   test("replaces redjs's inert observer, and reports once on observe and again only on a change", async () => {
     const { rt, el } = world("100,100,200,100");
-    const seen: any[] = [];
-    const ob = new rt.global.IntersectionObserver((entries: any[]) => seen.push(...entries));
+    const seen: IntersectionEntry[] = [];
+    const ob = new (intersectionObserver(rt))((entries) => seen.push(...entries));
     ob.observe(el);
     expect(rt.host.layout.pending).toBe(true);
     rt.host.layout.step();
     expect(seen.length).toBe(0);
     await frame();
     expect(seen.length).toBe(1);
-    expect(seen[0].isIntersecting).toBe(true);
-    expect(seen[0].intersectionRatio).toBe(1);
-    expect(seen[0].target).toBe(el);
-    expect(seen[0].boundingClientRect).toMatchObject({ x: 100, y: 100, width: 200, height: 100 });
-    expect(seen[0].rootBounds).toMatchObject({ x: 0, y: 0, width: 800, height: 600 });
+    expect(seen[0]!.isIntersecting).toBe(true);
+    expect(seen[0]!.intersectionRatio).toBe(1);
+    expect(seen[0]!.target).toBe(el);
+    expect(seen[0]!.boundingClientRect).toMatchObject({ x: 100, y: 100, width: 200, height: 100 });
+    expect(seen[0]!.rootBounds).toMatchObject({ x: 0, y: 0, width: 800, height: 600 });
     expect(seen[0]).toBeInstanceOf(rt.global.IntersectionObserverEntry);
     await frameStep(rt);
     expect(seen.length).toBe(1);
     rt.host.boundsById.set(el.__vnId, "100,700,200,100");
     await frameStep(rt);
     expect(seen.length).toBe(2);
-    expect(seen[1].isIntersecting).toBe(false);
-    expect(seen[1].intersectionRatio).toBe(0);
+    expect(seen[1]!.isIntersecting).toBe(false);
+    expect(seen[1]!.intersectionRatio).toBe(0);
     ob.disconnect();
   });
 
   test("intersectionRatio and thresholds: half visible crosses 0.5 but not 0.75", async () => {
     const { rt, el } = world("0,550,100,100"); // 50 of 100 px inside a 600-high viewport
-    const seen: any[] = [];
-    const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e), { threshold: [0.75, 0, 0.5] });
+    const seen: IntersectionEntry[] = [];
+    const ob = new (intersectionObserver(rt))((e) => seen.push(...e), { threshold: [0.75, 0, 0.5] });
     expect(ob.thresholds).toEqual([0, 0.5, 0.75]);
     ob.observe(el);
     await frameStep(rt);
     expect(seen.length).toBe(1);
-    expect(seen[0].intersectionRatio).toBeCloseTo(0.5);
-    expect(seen[0].intersectionRect).toMatchObject({ y: 550, height: 50, width: 100 });
+    expect(seen[0]!.intersectionRatio).toBeCloseTo(0.5);
+    expect(seen[0]!.intersectionRect).toMatchObject({ y: 550, height: 50, width: 100 });
     rt.host.boundsById.set(el.__vnId, "0,540,100,100");
     await frameStep(rt);
     expect(seen.length).toBe(1);
@@ -243,15 +276,15 @@ describe("IntersectionObserver, updated after layout and delivered from a task",
 
   test("rootMargin grows the root, in px and %, and is reported normalized", async () => {
     const { rt, el } = world("0,650,100,40"); // 50 px below the viewport
-    const seen: any[] = [];
-    const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e), { rootMargin: "0px 0px 10%" });
+    const seen: IntersectionEntry[] = [];
+    const ob = new (intersectionObserver(rt))((e) => seen.push(...e), { rootMargin: "0px 0px 10%" });
     expect(ob.rootMargin).toBe("0px 0px 10% 0px");
     ob.observe(el);
     await frameStep(rt);
-    expect(seen[0].isIntersecting).toBe(true);
-    expect(seen[0].rootBounds).toMatchObject({ height: 660 });
-    expect(() => new rt.global.IntersectionObserver(() => {}, { rootMargin: "10em" })).toThrow(/pixels or percent/);
-    expect(() => new rt.global.IntersectionObserver(() => {}, { threshold: 2 })).toThrow(RangeError);
+    expect(seen[0]!.isIntersecting).toBe(true);
+    expect(seen[0]!.rootBounds).toMatchObject({ height: 660 });
+    expect(() => new (intersectionObserver(rt))(() => {}, { rootMargin: "10em" })).toThrow(/pixels or percent/);
+    expect(() => new (intersectionObserver(rt))(() => {}, { threshold: 2 })).toThrow(RangeError);
     ob.disconnect();
   });
 
@@ -263,16 +296,16 @@ describe("IntersectionObserver, updated after layout and delivered from a task",
     const inside = rt.nodeOps.createElement("p");
     rt.nodeOps.insert(inside, scroller, null);
     rt.host.boundsById.set(inside.__vnId, "0,400,100,50"); // inside the window, below the scroller's box
-    const seen: any[] = [];
-    const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e), { root: scroller });
+    const seen: IntersectionEntry[] = [];
+    const ob = new (intersectionObserver(rt))((e) => seen.push(...e), { root: scroller });
     ob.observe(inside);
     ob.observe(el); // not a descendant of the root
     await frameStep(rt);
-    expect(seen.find((e) => e.target === inside).isIntersecting).toBe(false);
-    expect(seen.find((e) => e.target === el).isIntersecting).toBe(false);
+    expect(seen.find((e) => e.target === inside)!.isIntersecting).toBe(false);
+    expect(seen.find((e) => e.target === el)!.isIntersecting).toBe(false);
     rt.host.boundsById.set(inside.__vnId, "0,200,100,50");
     await frameStep(rt);
-    expect(seen.filter((e) => e.target === inside).at(-1).isIntersecting).toBe(true);
+    expect(seen.filter((e) => e.target === inside).at(-1)!.isIntersecting).toBe(true);
     ob.disconnect();
   });
 
@@ -281,8 +314,8 @@ describe("IntersectionObserver, updated after layout and delivered from a task",
     const late = rt.nodeOps.createElement("div");
     rt.nodeOps.insert(late, root, null);
     const hidden = rt.nodeOps.createElement("div"); // detached: never painted
-    const seen: any[] = [];
-    const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e));
+    const seen: IntersectionEntry[] = [];
+    const ob = new (intersectionObserver(rt))((e) => seen.push(...e));
     ob.observe(late);
     ob.observe(hidden);
     await frameStep(rt);
@@ -299,8 +332,8 @@ describe("IntersectionObserver, updated after layout and delivered from a task",
 
   test("takeRecords() empties the queue before the task delivers it", async () => {
     const { rt, el } = world("100,100,200,100");
-    const seen: any[] = [];
-    const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e));
+    const seen: IntersectionEntry[] = [];
+    const ob = new (intersectionObserver(rt))((e) => seen.push(...e));
     ob.observe(el);
     rt.host.layout.step();
     const taken = ob.takeRecords();
@@ -312,7 +345,7 @@ describe("IntersectionObserver, updated after layout and delivered from a task",
 
   test("nothing observed: the step says so, and the host stops calling it", async () => {
     const { rt, el } = world("100,100,200,100");
-    const ob = new rt.global.IntersectionObserver(() => {});
+    const ob = new (intersectionObserver(rt))(() => {});
     ob.observe(el);
     await frameStep(rt);
     expect(rt.host.layout.observing).toBe(true);

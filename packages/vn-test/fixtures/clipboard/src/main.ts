@@ -1,5 +1,7 @@
 import { createApp, h } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 type Store = {
   types: readonly string[];
   setData(format: string, data: string): void;
@@ -35,7 +37,7 @@ const record = (where: string, cancel: boolean) => (e: Event) => {
   if (cancel) ev.preventDefault();
 };
 
-document.addEventListener("paste", (e) => {
+dom.addEventListener("paste", (e) => {
   const t = (e.target as { getAttribute?(n: string): string | null } | null)?.getAttribute?.("id") ?? "?";
   events.push(`paste@document|target=${t}`);
 });

@@ -1,5 +1,7 @@
 import { createApp, h } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 const state = {
   color: "#ff0000",
   running: false,
@@ -9,22 +11,22 @@ const state = {
 
 function loop() {
   if (!state.running) return;
-  const canvas = document.getElementById("cv") as HTMLCanvasElement;
+  const canvas = dom.getElementById("cv") as HTMLCanvasElement;
   const ctx = canvas.getContext("2d")!;
   ctx.fillStyle = state.color;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   state.frames++;
-  requestAnimationFrame(loop);
+  requestAnimationFrame!(loop);
 }
 
-(globalThis as any).__VN_TEST_PAINT__ = {
+(globalThis as unknown as { __VN_TEST_PAINT__: unknown }).__VN_TEST_PAINT__ = {
   state,
   start(color: string) {
     state.color = color;
     state.frames = 0;
     if (!state.running) {
       state.running = true;
-      requestAnimationFrame(loop);
+      requestAnimationFrame!(loop);
     }
   },
   stop() {

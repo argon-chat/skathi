@@ -59,7 +59,7 @@ async function shoot(): Promise<Shot> {
   for (let y = 60; y < 144; y += 4) {
     for (let x = 60; x < 224; x += 4) {
       const p = at(x, y);
-      for (let i = 0; i < 3; i++) sum[i] += p[i];
+      for (let i = 0; i < 3; i++) sum[i]! += p[i]!;
       const l = (p[0] + p[1] + p[2]) / 3;
       lo = Math.min(lo, l);
       hi = Math.max(hi, l);
@@ -70,7 +70,7 @@ async function shoot(): Promise<Shot> {
 }
 
 const luma = (c: Rgb) => (c[0] + c[1] + c[2]) / 3;
-const close = (a: Rgb, b: Rgb, tol = 6) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
+const close = (a: Rgb, b: Rgb, tol = 6) => a.every((v, i) => Math.abs(v - b[i]!) <= tol);
 
 describe("backdrop", () => {
   test(
@@ -79,7 +79,7 @@ describe("backdrop", () => {
       await sleep(500);
       const s = await state();
       expect(s.backdrop).toBe("acrylic");
-      expect(s.system).toBe(DWMSBT.acrylic);
+      expect(s.system).toBe(DWMSBT.acrylic!);
       const { entries } = await app.logs(0);
       expect(entries.filter((l) => l.kind === "advisory" && /acrylic/.test(l.text))).toEqual([]);
       const shot = await shoot();

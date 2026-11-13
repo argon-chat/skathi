@@ -13,7 +13,7 @@
     "vue-router": "4"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.tools.json && tsc -p tsconfig.test.json && tsc -p ../../crates/vn-app/src/tsconfig.json && tsc -p ../vn-test/tsconfig.json && vue-tsc -p ../../apps/tsconfig.json && vue-tsc -p ../../apps/devtools/test/tsconfig.inspector-ui.json",
     "build": "bun build.ts",
     "watch": "bun build.ts --watch",
     "devtools:ui": "bun devtools/ui.ts",

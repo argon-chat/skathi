@@ -103,7 +103,7 @@ describe("el.scrollTop / scrollLeft", () => {
       const { entries } = await app.logs();
       const advised = entries.filter((e) => typeof e.text === "string" && e.text.includes("LAST PAINTED frame"));
       expect(advised.length).toBe(1);
-      expect(advised[0].text).toContain("requestAnimationFrame");
+      expect(advised[0]!.text).toContain("requestAnimationFrame");
 
       // …and after the frame the number is exact, which is what the advisory tells the app to wait
       // for.
@@ -258,7 +258,7 @@ describe("what is advisory'd rather than done", () => {
       const { entries } = await app.logs();
       const smooth = entries.filter((e) => typeof e.text === "string" && e.text.includes("scroll behavior"));
       expect(smooth.length).toBe(1);
-      expect(smooth[0].text).toContain("INSTANTLY");
+      expect(smooth[0]!.text).toContain("INSTANTLY");
     },
     T,
   );

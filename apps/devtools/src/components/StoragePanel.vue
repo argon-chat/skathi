@@ -5,7 +5,11 @@ import type { InspectorRequest } from "../inspector-model";
 import { PANE_HEAD_H } from "../layout";
 import { clearStorage, refreshStorage, removeStorage, setStorage, state, ui } from "../store";
 
-const props = defineProps<{ height: number; request?: InspectorRequest; sessionKey?: string | number }>();
+const props = defineProps<{
+  height: number;
+  request?: InspectorRequest | undefined;
+  sessionKey?: string | number | undefined;
+}>();
 const indexed = ref(false);
 
 const editing = ref<string | null>(null);

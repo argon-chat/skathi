@@ -3,11 +3,10 @@
 import { createApp, h } from "vue-native";
 import "./fonts.css";
 
-type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
-const fonts = (document as Any).fonts;
+const fonts = (document as unknown as VnDomDocument).fonts;
 
 (globalThis as unknown as { __VN_TEST_SUBSETS__: unknown }).__VN_TEST_SUBSETS__ = {
-  faces: () => [...fonts].map((f: Any) => `${f.family}:${f.status}:${f.unicodeRange.split(",")[0]}`),
+  faces: () => [...fonts].map((f) => `${f.family}:${f.status}:${f.unicodeRange.split(",")[0]}`),
 };
 
 const PUA = "";

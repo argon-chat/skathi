@@ -75,8 +75,8 @@ declare global {
     clipboard: {
       readText(): Promise<string>;
       writeText(text: string): Promise<void>;
-      read(): Promise<unknown[]>;
-      write(items: unknown[]): Promise<void>;
+      read(): Promise<VnClipboardItem[]>;
+      write(items: VnClipboardItem[]): Promise<void>;
     };
 
     /** `el.click()` and `dispatchEvent` never activate. */
@@ -86,6 +86,8 @@ declare global {
     };
 
     readonly onLine: boolean;
+    readonly platform: string;
+    readonly maxTouchPoints: number;
   }
 
   interface VnWindowControlsOverlay extends VnEventTarget {
@@ -144,7 +146,8 @@ declare global {
   }
 
   interface VnElement extends VnEventTarget {
-    readonly id: VnNodeId;
+    /** The `id` ATTRIBUTE; the host's node id is not reachable from script. */
+    id: string;
     getBoundingClientRect(): VnDomRect;
     /**
      * `0` on an element that does not scroll, and a write to one does nothing, exactly as in a
@@ -218,7 +221,11 @@ declare global {
 
 declare global {
   interface VnFetchResponse {
+    readonly url: string;
+    readonly redirected: boolean;
+    readonly headers: { get(name: string): string | null };
     arrayBuffer(): Promise<ArrayBuffer>;
+    blob(): Promise<VnBlob>;
   }
 
   /**
@@ -614,4 +621,324 @@ declare global {
    * them under a known name.
    */
   var __voice: Record<string, (...args: never[]) => unknown> | undefined;
+}
+
+// The DOM redjs's mirror tree answers to (packages/vue-native/src/runtime.ts). `document` itself stays
+// engine.d.ts's loose `VnDocument | undefined`; a caller that needs the methods narrows it once, to VnDomDocument.
+declare global {
+  var window: typeof globalThis;
+  var onerror: ((...args: unknown[]) => unknown) | null;
+  function atob(data: string): string;
+  function getComputedStyle(el: VnElement): { readonly fontSize: string };
+
+  type RequestInit = Record<string, unknown>;
+
+  type Event = VnEvent;
+  type CustomEvent<T = unknown> = VnCustomEvent<T>;
+  type EventTarget = VnEventTarget;
+  type MouseEvent = VnMouseEvent;
+  type KeyboardEvent = VnKeyboardEvent;
+  type WheelEvent = VnWheelEvent;
+  type FocusEvent = VnFocusEvent;
+  type CompositionEvent = VnCompositionEvent;
+  type ErrorEvent = VnErrorEvent;
+  type Blob = VnBlob;
+  type File = VnFile;
+  type DOMException = VnDOMException;
+  type FileSystemFileHandle = VnFileSystemFileHandle;
+  type DOMRect = VnDomRect;
+  type Node = VnNode;
+  type Element = VnElement;
+  type HTMLElement = VnElement;
+  type Document = VnDomDocument;
+  type HTMLInputElement = VnInputElement;
+  type HTMLTextAreaElement = VnTextAreaElement;
+  type HTMLSelectElement = VnSelectElement;
+  type HTMLImageElement = VnImageElement;
+  type HTMLCanvasElement = VnCanvasElement;
+  type HTMLVideoElement = VnMediaElement;
+  type HTMLIFrameElement = VnIframeElement;
+  type MediaStreamTrack = VnMediaStreamTrack;
+  type MediaStreamConstraints = VnMediaStreamConstraints;
+  type MediaDeviceInfo = VnMediaDeviceInfo;
+
+  interface VnEventTarget {
+    addEventListener(
+      type: "keydown" | "keyup",
+      listener: (ev: VnKeyboardEvent) => unknown,
+      options?: boolean | { capture?: boolean; once?: boolean },
+    ): void;
+    addEventListener(
+      type: "focusin" | "focusout",
+      listener: (ev: VnFocusEvent) => unknown,
+      options?: boolean | { capture?: boolean; once?: boolean },
+    ): void;
+    removeEventListener(
+      type: "keydown" | "keyup",
+      listener: (ev: VnKeyboardEvent) => unknown,
+      options?: boolean | { capture?: boolean },
+    ): void;
+    removeEventListener(
+      type: "focusin" | "focusout",
+      listener: (ev: VnFocusEvent) => unknown,
+      options?: boolean | { capture?: boolean },
+    ): void;
+  }
+  function addEventListener(
+    type: "keydown" | "keyup",
+    listener: (ev: VnKeyboardEvent) => unknown,
+    options?: boolean | { capture?: boolean; once?: boolean },
+  ): void;
+  function removeEventListener(
+    type: "keydown" | "keyup",
+    listener: (ev: VnKeyboardEvent) => unknown,
+    options?: boolean | { capture?: boolean },
+  ): void;
+
+  interface VnFocusEvent extends VnEvent {
+    readonly relatedTarget: unknown;
+  }
+  interface VnCompositionEvent extends VnEvent {
+    readonly data: string;
+  }
+  interface VnErrorEvent extends VnEvent {
+    readonly message: string;
+  }
+
+  interface VnNode extends VnEventTarget {
+    readonly nodeType: number;
+    readonly nodeName: string;
+    readonly isConnected: boolean;
+    readonly parentNode: VnNode | null;
+    readonly firstChild: VnNode | null;
+    readonly lastChild: VnNode | null;
+    readonly childNodes: VnNodeList;
+    readonly ownerDocument: VnDomDocument;
+    textContent: string | null;
+    appendChild<T extends VnNode>(child: T): T;
+    removeChild<T extends VnNode>(child: T): T;
+    contains(other: VnNode | null): boolean;
+  }
+
+  interface VnInlineStyle {
+    fontSize: string;
+    border: string;
+    display: string;
+    position: string;
+    left: string;
+    top: string;
+    width: string;
+    height: string;
+    pointerEvents: string;
+  }
+
+  interface VnDomRectList extends Iterable<VnDomRect> {
+    readonly length: number;
+    readonly [index: number]: VnDomRect;
+  }
+
+  interface VnNodeList extends Iterable<VnNode> {
+    readonly length: number;
+    readonly [index: number]: VnNode;
+    item(index: number): VnNode | null;
+  }
+
+  interface VnElementList<E extends VnElement = VnElement> extends Iterable<E> {
+    readonly length: number;
+    readonly [index: number]: E;
+    item(index: number): E | null;
+    namedItem(name: string): E | null;
+  }
+
+  interface VnAnimationOptions {
+    duration?: number;
+    easing?: string;
+  }
+
+  interface VnElement extends VnNode {
+    readonly tagName: string;
+    readonly namespaceURI: string | null;
+    readonly classList: object;
+    readonly dataset: object;
+    className: string;
+    readonly style: VnInlineStyle;
+    readonly parentElement: VnElement | null;
+    readonly offsetWidth: number;
+    readonly offsetHeight: number;
+    readonly clientWidth: number;
+    readonly clientHeight: number;
+    readonly children: VnElementList;
+    getClientRects(): VnDomRectList;
+    getElementsByClassName(names: string): VnElementList;
+    getAttribute(name: string): string | null;
+    setAttribute(name: string, value: string): void;
+    removeAttribute(name: string): void;
+    closest(selector: string): VnElement | null;
+    querySelector<E extends VnElement = VnElement>(selector: string): E | null;
+    querySelectorAll<E extends VnElement = VnElement>(selector: string): VnElementList<E>;
+    remove(): void;
+    focus(options?: { preventScroll?: boolean }): void;
+    animate(keyframes: Record<string, string>[], options?: VnAnimationOptions): unknown;
+  }
+
+  interface VnInputElement extends VnElement {
+    value: string;
+    readonly files: VnFileList | null;
+  }
+  interface VnTextAreaElement extends VnElement {
+    value: string;
+  }
+  interface VnSelectElement extends VnElement {
+    value: string;
+  }
+  interface VnImageElement extends VnElement {
+    src: string;
+    readonly complete: boolean;
+    readonly naturalWidth: number;
+    readonly naturalHeight: number;
+    onload: ((ev: VnEvent) => unknown) | null;
+  }
+
+  interface VnImageData {
+    readonly data: Uint8ClampedArray;
+  }
+  interface VnCanvas2D {
+    fillStyle: string;
+    fillRect(x: number, y: number, w: number, h: number): void;
+    createImageData(w: number, h: number): VnImageData;
+    putImageData(data: VnImageData, x: number, y: number): void;
+  }
+  interface VnCanvasElement extends VnElement {
+    width: number;
+    height: number;
+    getContext(kind: "2d"): VnCanvas2D | null;
+  }
+
+  interface VnTokenList {
+    value: string;
+    readonly length: number;
+    contains(token: string): boolean;
+    add(...tokens: string[]): void;
+    remove(...tokens: string[]): void;
+    supports(token: string): boolean;
+  }
+  interface VnContentWindow {
+    readonly document: unknown;
+    postMessage(message: unknown, targetOrigin: string | { targetOrigin?: string }, transfer?: unknown[]): void;
+  }
+  interface VnIframeElement extends VnElement {
+    get sandbox(): VnTokenList;
+    set sandbox(value: string);
+    allow: string;
+    referrerPolicy: string;
+    src: string;
+    readonly contentWindow: VnContentWindow | null;
+    readonly contentDocument: unknown;
+    onload: ((ev: VnEvent) => unknown) | null;
+    onerror: ((ev: VnEvent) => unknown) | null;
+  }
+
+  var HTMLIFrameElement: { new (): VnIframeElement; prototype: VnIframeElement };
+
+  interface VnMediaElement {
+    src: string;
+  }
+
+  interface VnFontFace {
+    readonly family: string;
+    readonly status: string;
+    readonly unicodeRange: string;
+    readonly loaded: Promise<VnFontFace>;
+    load(): Promise<VnFontFace>;
+  }
+  interface VnFontFaceSetEvent extends VnEvent {
+    readonly fontfaces: Iterable<VnFontFace>;
+  }
+  interface VnFontFaceSet extends VnEventTarget, Iterable<VnFontFace> {
+    readonly status: string;
+    readonly size: number;
+    readonly ready: Promise<VnFontFaceSet>;
+    add(face: VnFontFace): void;
+    has(face: VnFontFace): boolean;
+    check(font: string, text?: string): boolean;
+    load(font: string, text?: string): Promise<VnFontFace[]>;
+  }
+  var FontFace: { new (family: string, source: string | ArrayBuffer): VnFontFace; prototype: VnFontFace };
+
+  interface VnDomDocument extends VnEventTarget {
+    readonly documentElement: VnElement;
+    readonly body: VnElement;
+    readonly activeElement: VnElement | null;
+    readonly fonts: VnFontFaceSet;
+    getElementById(id: string): VnElement | null;
+    getElementsByTagName(tag: string): VnElementList;
+    getElementsByClassName(names: string): VnElementList;
+    getElementsByName(name: string): VnNodeList;
+    createElement(tag: "iframe"): VnIframeElement;
+    createElement(tag: string): VnElement;
+    createElementNS(ns: string, tag: string): VnElement;
+    querySelector<E extends VnElement = VnElement>(selector: string): E | null;
+    querySelectorAll<E extends VnElement = VnElement>(selector: string): VnElementList<E>;
+  }
+
+  interface VnResizeObserverEntry {
+    readonly target: VnElement;
+    readonly contentRect: VnDomRect;
+  }
+  interface VnResizeObserver {
+    observe(el: VnElement): void;
+    disconnect(): void;
+  }
+  type ResizeObserver = VnResizeObserver;
+  var ResizeObserver: { new (callback: (entries: VnResizeObserverEntry[]) => void): VnResizeObserver };
+  interface VnIntersectionObserverEntry {
+    readonly target: VnElement;
+    readonly isIntersecting: boolean;
+    readonly boundingClientRect: VnDomRect;
+  }
+  var IntersectionObserver: {
+    new (callback: (entries: VnIntersectionObserverEntry[]) => void): {
+      observe(el: VnElement): void;
+      disconnect(): void;
+    };
+  };
+
+  interface VnClipboardItem {
+    readonly types: readonly string[];
+    getType(type: string): Promise<VnBlob>;
+  }
+  var ClipboardItem: { new (items: Record<string, VnBlob>): VnClipboardItem; prototype: VnClipboardItem };
+
+  interface VnMediaStreamConstraints {
+    audio?: boolean;
+    video?: boolean;
+  }
+  interface VnMediaTrackSettings {
+    readonly echoCancellation?: boolean;
+    readonly noiseSuppression?: boolean;
+    readonly autoGainControl?: boolean;
+    readonly channelCount?: number;
+  }
+  interface VnMediaStreamTrack {
+    readonly readyState: string;
+    readonly label: string;
+    getSettings(): VnMediaTrackSettings;
+    stop(): void;
+  }
+  interface VnMediaStream {
+    getAudioTracks(): VnMediaStreamTrack[];
+    getTracks(): VnMediaStreamTrack[];
+  }
+  interface VnMediaDeviceInfo {
+    readonly kind: string;
+    readonly deviceId: string;
+    readonly label: string;
+  }
+
+  interface VnNavigator {
+    readonly mediaDevices: {
+      getUserMedia(constraints?: VnMediaStreamConstraints): Promise<VnMediaStream>;
+      enumerateDevices(): Promise<VnMediaDeviceInfo[]>;
+    };
+  }
 }

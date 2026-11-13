@@ -2,18 +2,16 @@
 // to the dispatcher as its eighth argument; this file is the JS half.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement, type MirrorNode, type RealmEvent } from "./runtime-harness";
 
-type Ev = {
-  type: string;
+interface Ev extends RealmEvent {
   bubbles: boolean;
   cancelable: boolean;
   composed: boolean;
   clipboardData: unknown;
-  target: unknown;
   currentTarget: unknown;
-  preventDefault(): void;
-};
+}
+type ClipboardEventCtor = (new (type: string, init?: Record<string, unknown>) => Ev) & { prototype: object };
 
 function world() {
   const rt = createRuntime();
@@ -23,8 +21,8 @@ function world() {
   const input = rt.nodeOps.createElement("input");
   rt.nodeOps.insert(box, body, null);
   rt.nodeOps.insert(input, box, null);
-  const fire = (node: { id: number }, name: "copy" | "cut" | "paste", data: unknown): boolean =>
-    rt.host.dispatcher(node.__vnId, rt.EV_CODES[name], 0, 0, 0, 0, undefined, data);
+  const fire = (node: MirrorNode, name: "copy" | "cut" | "paste", data: unknown): boolean =>
+    !!rt.host.dispatcher(node.__vnId, rt.EV_CODES[name], 0, 0, 0, 0, undefined, data);
   return { rt, body, box, input, fire };
 }
 
@@ -47,12 +45,12 @@ describe("ClipboardEvent", () => {
     rt.patchProp(input, "onPaste", null, (e: Ev) => seen.push(e));
     expect(fire(input, "paste", data)).toBe(true);
     expect(seen.length).toBe(1);
-    const e = seen[0];
-    expect(e).toBeInstanceOf(rt.global.ClipboardEvent);
+    const e = seen[0]!;
+    expect(e).toBeInstanceOf(rt.global.ClipboardEvent as ClipboardEventCtor);
     expect(e).toMatchObject({ type: "paste", bubbles: true, cancelable: true, composed: true });
     expect(e.clipboardData).toBe(data);
     expect(e.target).toBe(input);
-    expect("clipboardData" in rt.global.ClipboardEvent.prototype).toBe(true);
+    expect("clipboardData" in (rt.global.ClipboardEvent as ClipboardEventCtor).prototype).toBe(true);
     expect(Object.keys(e)).not.toContain("clipboardData");
     void box;
   });
@@ -60,17 +58,15 @@ describe("ClipboardEvent", () => {
   test("it bubbles to an ancestor, then to document and window", () => {
     const { rt, input, box, fire } = world();
     const order: string[] = [];
-    rt.patchProp(box, "onCopy", null, (e: Ev) =>
-      order.push(`box:${(e.target as { __vnId: number }).__vnId === input.__vnId}`),
-    );
-    rt.global.document.addEventListener("copy", (e: Ev) => order.push(`document:${e.clipboardData !== null}`));
+    rt.patchProp(box, "onCopy", null, (e: Ev) => order.push(`box:${e.target?.__vnId === input.__vnId}`));
+    rt.global.document.addEventListener("copy", (e) => order.push(`document:${e.clipboardData !== null}`));
     expect(fire(input, "copy", store())).toBe(true);
     expect(order).toEqual(["box:true", "document:true"]);
   });
 
   test("preventDefault() is reported back, which is what cancels the host's default action", () => {
     const { rt, input, fire } = world();
-    rt.global.document.addEventListener("cut", (e: Ev) => e.preventDefault());
+    rt.global.document.addEventListener("cut", (e) => e.preventDefault());
     expect(fire(input, "cut", store())).toBe(false);
     rt.patchProp(input, "onPaste", null, (e: Ev) => e.preventDefault());
     expect(fire(input, "paste", store())).toBe(false);
@@ -79,12 +75,12 @@ describe("ClipboardEvent", () => {
   test("a document listener rides the root's bit, and the root is the target when nothing is focused", () => {
     const { rt, body, fire } = world();
     rt.host.listeners.length = 0;
-    const got: Ev[] = [];
-    rt.global.document.addEventListener("paste", (e: Ev) => got.push(e));
+    const got: RealmEvent[] = [];
+    rt.global.document.addEventListener("paste", (e) => got.push(e));
     expect(rt.flagsFor(rt.EV_CODES.paste)).toEqual([{ id: body.__vnId, code: 39, on: true }]);
     fire(body, "paste", store());
     expect(got.length).toBe(1);
-    expect(got[0].target).toBe(body);
+    expect(got[0]!.target).toBe(body);
   });
 
   // Module-scope code registers document listeners BEFORE `mount()`, when there is no root to carry the bit.
@@ -102,17 +98,21 @@ describe("ClipboardEvent", () => {
     const seen: Ev[] = [];
     rt.patchProp(input, "onCopy", null, (e: Ev) => seen.push(e));
     fire(input, "copy", undefined);
-    expect(seen[0].clipboardData).toBeNull();
+    expect(seen[0]!.clipboardData).toBeNull();
   });
 
   test("a script can construct one, as in a browser", () => {
     const { rt, input } = world();
     const data = store();
     const seen: Ev[] = [];
-    input.addEventListener("paste", (e: Ev) => seen.push(e));
-    const ev = new rt.global.ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data });
-    input.dispatchEvent(ev);
-    expect(seen[0].clipboardData).toBe(data);
-    expect(new rt.global.ClipboardEvent("copy").clipboardData).toBeNull();
+    input.addEventListener("paste", (e) => seen.push(e as unknown as Ev));
+    const ev = new (rt.global.ClipboardEvent as ClipboardEventCtor)("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: data,
+    });
+    input.dispatchEvent(ev as unknown as Parameters<MirrorElement["dispatchEvent"]>[0]);
+    expect(seen[0]!.clipboardData).toBe(data);
+    expect(new (rt.global.ClipboardEvent as ClipboardEventCtor)("copy").clipboardData).toBeNull();
   });
 });

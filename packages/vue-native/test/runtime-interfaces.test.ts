@@ -6,7 +6,11 @@ import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
 
 type Ctor = { new (...a: unknown[]): unknown; (...a: unknown[]): unknown; prototype: object; name: string };
-const g = (rt: ReturnType<typeof createRuntime>, name: string) => (rt.global as Record<string, Ctor>)[name];
+const g = (rt: ReturnType<typeof createRuntime>, name: string): Ctor => {
+  const ctor = (rt.global as Record<string, Ctor | undefined>)[name];
+  if (!ctor) throw new Error(`the realm has no ${name}`);
+  return ctor;
+};
 
 describe("Window", () => {
   test("exists, cannot be constructed, and the global is one", () => {
@@ -33,7 +37,8 @@ describe("Window", () => {
     }
     meta.set(Pay, [Window]);
     const registry = new Map<unknown, unknown>([[Window, rt.global]]);
-    const pay = new Pay(...(meta.get(Pay) ?? []).map((t) => registry.get(t)));
+    const [dep] = (meta.get(Pay) ?? []).map((t) => registry.get(t));
+    const pay = new Pay(dep);
     expect(pay.w instanceof Window).toBe(true);
   });
 });

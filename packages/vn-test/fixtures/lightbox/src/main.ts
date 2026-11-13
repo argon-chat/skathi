@@ -11,6 +11,8 @@ import {
   VnWindow,
 } from "vue-native";
 
+const dom = document as unknown as VnDomDocument;
+
 interface Item {
   thumb: string;
   full: string;
@@ -216,8 +218,8 @@ async function copyPicture() {
   S.menu = null;
   if (!item) return;
   try {
-    const blob = await (await fetch(item.full)).blob();
-    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    const blob = await (await fetch!(item.full)).blob();
+    await navigator!.clipboard.write([new ClipboardItem({ "image/png": blob })]);
     S.actions.push(`copy:ok:${blob.size}`);
   } catch (e) {
     S.actions.push(`copy:error:${(e as Error).name}:${(e as Error).message}`);
@@ -235,7 +237,7 @@ async function savePicture() {
       suggestedName: `picture-${S.index}.png`,
       types: [{ description: "PNG image", accept: { "image/png": [".png"] } }],
     });
-    const blob = await (await fetch(item.full)).blob();
+    const blob = await (await fetch!(item.full)).blob();
     const out = await handle.createWritable();
     await out.write(blob);
     await out.close();
@@ -519,7 +521,7 @@ createApp({
     return r && v ? { left: r.left, top: r.top, width: r.width, height: r.height, vw: v.width, vh: v.height } : null;
   },
   menuInfo() {
-    const m = document.getElementById("lb-menu");
+    const m = dom.getElementById("lb-menu");
     if (!m) return null;
     const r = m.getBoundingClientRect();
     const doc = m.ownerDocument;
@@ -527,13 +529,13 @@ createApp({
       left: r.left,
       top: r.top,
       inWindow: !!m.closest(".vn-window-root"),
-      sameDocument: doc === document,
+      sameDocument: doc === dom,
       docWidth: doc.documentElement.clientWidth,
       bodyIsRoot: doc.body === doc.documentElement,
-      mainWidth: document.documentElement.clientWidth,
+      mainWidth: dom.documentElement.clientWidth,
       rootClass: doc.body.className,
       bodyPointerEvents: doc.body.style.pointerEvents,
-      hintInWindow: !!document.getElementById("lb-hint")?.closest(".vn-window-root"),
+      hintInWindow: !!dom.getElementById("lb-hint")?.closest(".vn-window-root"),
     };
   },
   detachInline() {
@@ -556,7 +558,7 @@ createApp({
   /** Reads the clipboard back the way a paste would, into `S.readBack`. */
   readBack() {
     S.readBack = "";
-    navigator.clipboard.read().then(
+    navigator!.clipboard.read().then(
       async ([item]) => {
         const png = new Uint8Array(await (await item!.getType("image/png")).arrayBuffer());
         S.readBack = `${item!.types.join(",")}:${png.length}:${png[0]}`;

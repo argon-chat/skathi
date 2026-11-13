@@ -3,9 +3,8 @@
 // undoes in the realm it keeps.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness";
+import { createRuntime, type MirrorElement } from "./runtime-harness";
 
-type Node = { id: number; attrs: Record<string, string> };
 type Rt = ReturnType<typeof createRuntime>;
 
 function formWorld(options: { button?: string | null; fields?: number; novalidate?: boolean } = {}) {
@@ -14,14 +13,14 @@ function formWorld(options: { button?: string | null; fields?: number; novalidat
   const form = rt.nodeOps.createElement("form");
   rt.nodeOps.insert(form, root, null);
   if (options.novalidate !== false) rt.patchProp(form, "novalidate", null, "");
-  const fields: Node[] = [];
+  const fields: MirrorElement[] = [];
   for (let i = 0; i < (options.fields ?? 1); i++) {
     const input = rt.nodeOps.createElement("input");
     rt.patchProp(input, "type", null, "email");
     rt.nodeOps.insert(input, form, null);
     fields.push(input);
   }
-  let button: Node | null = null;
+  let button: MirrorElement | null = null;
   if (options.button !== null) {
     button = rt.nodeOps.createElement("button");
     if (options.button) rt.patchProp(button, "type", null, options.button);
@@ -38,15 +37,15 @@ function formWorld(options: { button?: string | null; fields?: number; novalidat
       if (cancel) e.preventDefault();
     },
   );
-  const click = (n: Node) => rt.host.dispatcher(n.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
-  const enter = (n: Node) => rt.host.dispatcher(n.__vnId, rt.EV_CODES.keydown, 0, 0, 0, 0, "Enter");
+  const click = (n: MirrorElement) => rt.host.dispatcher(n.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
+  const enter = (n: MirrorElement) => rt.host.dispatcher(n.__vnId, rt.EV_CODES.keydown, 0, 0, 0, 0, "Enter");
   const navigations = () => rt.advisories().filter((l: string) => l.includes("no document to navigate")).length;
   return {
     rt,
     root,
     form,
     fields,
-    field: fields[0],
+    field: fields[0]!,
     button,
     submits,
     click,
@@ -58,10 +57,10 @@ function formWorld(options: { button?: string | null; fields?: number; novalidat
   };
 }
 
-const who = (s: { submitter: unknown }) => (s.submitter as Node | null)?.__vnId ?? null;
+const who = (s: { submitter: unknown }) => (s.submitter as MirrorElement | null)?.__vnId ?? null;
 
 const lastFlag = (rt: Rt, code: number, id: number) =>
-  rt.host.listeners.filter((l: { id: number; code: number }) => l.code === code && l.id === id).at(-1)?.on;
+  rt.host.listeners.filter((l) => l.code === code && l.id === id).at(-1)?.on;
 
 describe("forms: what the host is asked to deliver", () => {
   test("@submit is kept, with no 'not delivered' advisory", () => {
@@ -102,7 +101,7 @@ describe("forms: a submit button's activation", () => {
     rt.patchProp(icon, "onClick", null, () => {});
     click(icon);
     expect(submits.length).toBe(1);
-    expect(submits[0].submitter).toBe(button);
+    expect(submits[0]!.submitter).toBe(button);
   });
 
   test("a disabled button, a type=button and a cancelled click do not submit", () => {
@@ -296,7 +295,7 @@ describe("focus: el.focus(), el.blur(), document.activeElement", () => {
       for (const type of ["focus", "blur", "focusin", "focusout"]) {
         rt.patchProp(
           n,
-          `on${type[0].toUpperCase()}${type.slice(1)}`,
+          `on${type[0]!.toUpperCase()}${type.slice(1)}`,
           null,
           (e: { relatedTarget?: unknown; type: string }) =>
             log.push(`${e.type}@${label}(${name(e.relatedTarget ?? null)})`),
@@ -373,20 +372,22 @@ describe("focus: a handler that moves the focus abandons the move it interrupts"
   function nestedWorld() {
     const rt = createRuntime();
     const root = rt.nodeOps.createElement("div");
-    const nodes: Record<string, Node> = {};
-    for (const id of ["inside", "trigger", "other"]) {
-      nodes[id] = rt.nodeOps.createElement("button");
-      rt.nodeOps.insert(nodes[id], root, null);
-    }
-    const name = (n: unknown) => Object.keys(nodes).find((k) => nodes[k] === n) ?? "null";
-    const active = () => Object.keys(nodes).find((k) => nodes[k] === rt.global.document.activeElement) ?? "body";
+    const button = () => {
+      const el = rt.nodeOps.createElement("button");
+      rt.nodeOps.insert(el, root, null);
+      return el;
+    };
+    const nodes = { inside: button(), trigger: button(), other: button() };
+    const nameOf = (n: unknown) => Object.entries(nodes).find(([, el]) => el === n)?.[0];
+    const name = (n: unknown) => nameOf(n) ?? "null";
+    const active = () => nameOf(rt.global.document.activeElement) ?? "body";
     const log: string[] = [];
     const extra: Record<string, ((e: unknown) => void)[]> = {};
     for (const [id, n] of Object.entries(nodes)) {
       for (const type of ["focus", "blur", "focusin", "focusout"]) {
         rt.patchProp(
           n,
-          `on${type[0].toUpperCase()}${type.slice(1)}`,
+          `on${type[0]!.toUpperCase()}${type.slice(1)}`,
           null,
           (e: { relatedTarget?: unknown; type: string }) => {
             log.push(`${e.type}@${id}(${name(e.relatedTarget ?? null)}) active=${active()}`);
@@ -586,7 +587,12 @@ describe("location.reload()", () => {
       WebSocket: FakeSocket,
     };
     const rt = createRuntime({ globals });
-    const g = rt.global as unknown as Record<string, (...a: unknown[]) => unknown> & {
+    const g = rt.global as unknown as {
+      addEventListener(type: string, listener: () => unknown): void;
+      setTimeout(callback: () => void): number;
+      setInterval(callback: () => void): number;
+      requestAnimationFrame(callback: () => void): number;
+      clearTimeout(id: number): void;
       __VN_UNLOAD__?: () => void;
       __VN_TEARDOWN__?: () => void;
       WebSocket: new (url: string) => FakeSocket;
@@ -599,7 +605,7 @@ describe("location.reload()", () => {
     g.setTimeout(() => {});
     g.setInterval(() => {});
     g.requestAnimationFrame(() => {});
-    const kept = g.setTimeout(() => {}) as number;
+    const kept = g.setTimeout(() => {});
     g.clearTimeout(kept);
     const ws = new g.WebSocket("wss://example.invalid/");
     expect(ws).toBeInstanceOf(FakeSocket);
@@ -640,7 +646,7 @@ describe("native text field select()", () => {
       const seen: unknown[][] = [];
       input.addEventListener("input", () => seen.push(["input"]));
       input.addEventListener("change", () => seen.push(["change"]));
-      root.addEventListener("select", (e: any) => {
+      root.addEventListener("select", (e) => {
         seen.push([e.type, e.target === input, e.bubbles, e.cancelable]);
         e.preventDefault();
       });

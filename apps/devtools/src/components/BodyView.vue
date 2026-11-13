@@ -66,7 +66,7 @@ const list = useVirtual(
 const rows = computed(() => {
   const out: { i: number; text: string }[] = [];
   for (let i = list.start; i < list.end; i++) {
-    out.push({ i, text: mode.value === "hex" ? hexLine(bytes.value!, i) : lines.value[i] });
+    out.push({ i, text: mode.value === "hex" ? hexLine(bytes.value!, i) : lines.value[i]! });
   }
   return out;
 });

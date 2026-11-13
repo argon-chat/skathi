@@ -26,7 +26,7 @@ globalThis.history = {
 // public event methods stable and change only their private delegate on reload.
 (() => {
   type Method = (...args: unknown[]) => unknown;
-  type Methods = { add?: Method; remove?: Method; dispatch?: Method };
+  type Methods = { add?: Method | undefined; remove?: Method | undefined; dispatch?: Method | undefined };
   type Slot = { native: Readonly<Methods>; set(delegate: Methods): void; clear(delegate: Methods): void };
   type Bridge = { get(target: object): Slot | undefined };
   const host = globalThis as unknown as { document?: object; __VN_GLOBAL_EVENTS__?: Bridge };

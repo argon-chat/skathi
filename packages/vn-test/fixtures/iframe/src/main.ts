@@ -1,7 +1,13 @@
 import { createApp, h } from "vue-native";
 
-type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
-const g = globalThis as Any;
+const dom = document as unknown as VnDomDocument;
+
+interface WindowMessage extends VnEvent {
+  readonly source: unknown;
+  readonly origin: string;
+  readonly data: unknown;
+}
+const g = globalThis as unknown as { vnFeatures?: { iframe?: unknown }; __VN_TEST_IFRAME__: unknown };
 
 const App = {
   render: () =>
@@ -13,10 +19,11 @@ const App = {
 createApp(App).mount("#app");
 
 const log: string[] = [];
-let frame: Any = null;
-let firstWindow: Any = null;
+let frame: VnIframeElement | null = null;
+let firstWindow: VnContentWindow | null = null;
 
-window.addEventListener("message", (e: Any) => {
+window.addEventListener("message", (ev) => {
+  const e = ev as WindowMessage;
   const mine = frame && e.source === frame.contentWindow;
   const text = JSON.stringify(e.data, (_k, v) => (typeof v === "bigint" ? `${v}n` : v));
   log.push(`message ${mine ? "mine" : "other"} ${e.origin} ${text}`);
@@ -24,8 +31,8 @@ window.addEventListener("message", (e: Any) => {
 
 g.__VN_TEST_IFRAME__ = {
   mount(src: string): void {
-    const slot = document.getElementById("slot") as Any;
-    frame = document.createElement("iframe");
+    const slot = dom.getElementById("slot")!;
+    frame = dom.createElement("iframe");
     log.push(`detached contentWindow ${frame.contentWindow === null ? "null" : "set"}`);
     frame.sandbox.value = "allow-scripts allow-pointer-lock";
     frame.allow = "fullscreen 'none'";
@@ -55,33 +62,33 @@ g.__VN_TEST_IFRAME__ = {
         out.push(`${label} ${(e as Error).name}`);
       }
     };
-    tryPost("star", () => frame.contentWindow.postMessage({ type: "ping", n: 1 }, "*"));
-    tryPost("options", () => frame.contentWindow.postMessage({ type: "ping", n: 2 }, { targetOrigin: "*" }));
-    tryPost("function", () => frame.contentWindow.postMessage({ fn() {} }, "*"));
-    tryPost("node", () => frame.contentWindow.postMessage({ el: frame }, "*"));
-    tryPost("transfer", () => frame.contentWindow.postMessage(1, "*", [new ArrayBuffer(1)]));
+    tryPost("star", () => frame!.contentWindow!.postMessage({ type: "ping", n: 1 }, "*"));
+    tryPost("options", () => frame!.contentWindow!.postMessage({ type: "ping", n: 2 }, { targetOrigin: "*" }));
+    tryPost("function", () => frame!.contentWindow!.postMessage({ fn() {} }, "*"));
+    tryPost("node", () => frame!.contentWindow!.postMessage({ el: frame }, "*"));
+    tryPost("transfer", () => frame!.contentWindow!.postMessage(1, "*", [new ArrayBuffer(1)]));
     return out.join("; ");
   },
 
   move(): void {
-    const page = document.getElementById("page") as Any;
-    const slot = document.getElementById("slot") as Any;
-    page.appendChild(frame);
-    slot.appendChild(frame);
+    const page = dom.getElementById("page")!;
+    const slot = dom.getElementById("slot")!;
+    page.appendChild(frame!);
+    slot.appendChild(frame!);
   },
 
   unmount(): void {
     frame?.remove();
-    log.push(`removed contentWindow ${frame.contentWindow === null ? "null" : "set"}`);
+    log.push(`removed contentWindow ${frame!.contentWindow === null ? "null" : "set"}`);
   },
 
   state(): string {
-    const plain = document.getElementById("plain") as Any;
-    const rect = (el: Any) => {
+    const plain = dom.getElementById("plain") as VnIframeElement;
+    const rect = (el: VnElement): [number, number, number, number] => {
       const r = el.getBoundingClientRect();
       return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
     };
-    const slot = (document.getElementById("slot") as Any).getBoundingClientRect();
+    const slot = dom.getElementById("slot")!.getBoundingClientRect();
     const f = frame;
     return JSON.stringify({
       supported: g.vnFeatures?.iframe,
@@ -103,7 +110,7 @@ g.__VN_TEST_IFRAME__ = {
           f.getAttribute("sandbox"),
         ],
         sandboxAssign: (() => {
-          const probe = document.createElement("iframe") as Any;
+          const probe = dom.createElement("iframe");
           probe.sandbox = "allow-forms";
           probe.sandbox.add("allow-scripts", "allow-forms");
           probe.sandbox.remove("allow-forms");
@@ -127,8 +134,8 @@ g.__VN_TEST_IFRAME__ = {
         sameWindow: f.isConnected ? f.contentWindow === firstWindow && f.contentWindow === f.contentWindow : null,
         windowKeys: f.isConnected
           ? [
-              typeof f.contentWindow.postMessage,
-              String(f.contentWindow.document),
+              typeof f.contentWindow!.postMessage,
+              String(f.contentWindow!.document),
               Object.getPrototypeOf(f.contentWindow),
             ]
           : null,

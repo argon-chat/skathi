@@ -167,10 +167,10 @@ export function frameBuckets(frames: TraceFrame[], maximum = 180) {
   const stride = Math.max(1, Math.ceil(frames.length / Math.max(1, maximum)));
   const buckets: { frame: TraceFrame; count: number }[] = [];
   for (let offset = 0; offset < frames.length; offset += stride) {
-    let frame = frames[offset];
+    let frame = frames[offset]!;
     const end = Math.min(frames.length, offset + stride);
     for (let index = offset + 1; index < end; index++)
-      if (frames[index].durationMs > frame.durationMs) frame = frames[index];
+      if (frames[index]!.durationMs > frame.durationMs) frame = frames[index]!;
     buckets.push({ frame, count: end - offset });
   }
   return buckets;
@@ -201,7 +201,7 @@ export function spanRows(spans: TraceSpan[], collapsed: ReadonlySet<number> = ne
       const nested = children.get(item.span.id) || [];
       if (!item.hidden) rows.push({ span: item.span, depth: item.depth, hasChildren: nested.length > 0 });
       for (let index = nested.length - 1; index >= 0; index--)
-        stack.push({ span: nested[index], depth: item.depth + 1, hidden: item.hidden || collapsed.has(item.span.id) });
+        stack.push({ span: nested[index]!, depth: item.depth + 1, hidden: item.hidden || collapsed.has(item.span.id) });
     }
   }
   for (const root of roots) visit(root);

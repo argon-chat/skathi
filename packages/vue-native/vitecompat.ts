@@ -263,7 +263,7 @@ export interface GlobContext {
   file: string;
   docRoot: string;
   /** Dev form: import each match by importer-relative path (prod imports by absolute path). */
-  relativeSpecs?: boolean;
+  relativeSpecs?: boolean | undefined;
 }
 
 function splitGlob(pattern: string): [string, string] {
@@ -509,7 +509,7 @@ export function svgAsSfc(svg: string): string {
 }
 
 export interface ShapesOptions {
-  sourceLoaded?: (file: string, source: string, transformed: string) => void;
+  sourceLoaded?: ((file: string, source: string, transformed: string) => void) | undefined;
   /** The document root: where `vn.config.json` / `index.html` live. URLs and `/` globs start here. */
   docRoot: string;
   wsRoot: string;
@@ -521,9 +521,9 @@ export interface ShapesOptions {
   assets: Map<string, string>;
   notes: Map<string, number>;
   /** The dev builder: one module per file, imports left to its registry. */
-  dev?: boolean;
+  dev?: boolean | undefined;
   /** Called with each file a `?query` import builds into its importer, so a watcher can rebuild the importer. */
-  inlined?: (absPath: string) => void;
+  inlined?: ((absPath: string) => void) | undefined;
 }
 
 /**
@@ -589,10 +589,10 @@ export function viteShapesPlugin(o: ShapesOptions) {
   };
   return {
     name: "vn-vite-shapes",
-    setup(build: any) {
+    setup(build: Bun.PluginBuilder) {
       // A `?query` specifier: the query stays in the path of our own namespace, since Bun keys modules
       // by path (`a.svg?raw` and `a.svg` would collapse) and pluginData does not reach onLoad in Bun 1.4.
-      build.onResolve({ filter: /\?[\w&=.-]+$/ }, (args: any) => {
+      build.onResolve({ filter: /\?[\w&=.-]+$/ }, (args: Bun.OnResolveArgs) => {
         const q = args.path.lastIndexOf("?");
         const bare = args.path.slice(0, q);
         const params = new Set(
@@ -607,14 +607,14 @@ export function viteShapesPlugin(o: ShapesOptions) {
         o.inlined?.(real);
         return { path: `${real}?${args.path.slice(q + 1)}`, namespace: NS };
       });
-      build.onLoad({ filter: /.*/, namespace: NS }, async (args: any) => {
+      build.onLoad({ filter: /.*/, namespace: NS }, async (args: Bun.OnLoadArgs) => {
         const q = args.path.lastIndexOf("?");
         const file = args.path.slice(0, q);
         const params = new Set<string>(
           args.path
             .slice(q + 1)
             .split("&")
-            .map((p: string) => p.split("=")[0]),
+            .map((p: string) => p.split("=")[0]!),
         );
         const id = idOf(file);
         const isWasm = /\.wasm$/i.test(file);
@@ -648,7 +648,7 @@ export function viteShapesPlugin(o: ShapesOptions) {
         note(o, `?url (packed as an asset)`);
         return { contents: urlModule(file), loader: "js" };
       });
-      build.onLoad({ filter: /\.svg$/i }, async (args: any) => {
+      build.onLoad({ filter: /\.svg$/i }, async (args: Bun.OnLoadArgs) => {
         if (o.svgDefault === "component") {
           note(o, `.svg as a component`);
           return o.compileSfc(args.path + ".vue", svgAsSfc(await Bun.file(args.path).text()));
@@ -657,15 +657,15 @@ export function viteShapesPlugin(o: ShapesOptions) {
         return { contents: urlModule(args.path), loader: "js" };
       });
       // Any other asset: its URL (Bun's file loader would emit a hashed copy nothing packs).
-      build.onLoad({ filter: ASSET_EXT }, (args: any) => {
+      build.onLoad({ filter: ASSET_EXT }, (args: Bun.OnLoadArgs) => {
         note(o, `asset URL (packed as an asset)`);
         return { contents: urlModule(args.path), loader: "js" };
       });
-      build.onLoad({ filter: /\.wasm$/i }, (args: any) => {
+      build.onLoad({ filter: /\.wasm$/i }, (args: Bun.OnLoadArgs) => {
         note(o, `.wasm stubbed (WebAssembly out of scope)`);
         return { contents: wasmStubModule(idOf(args.path), new Set()), loader: "js" };
       });
-      build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async (args: any) => {
+      build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async (args: Bun.OnLoadArgs) => {
         const src = await Bun.file(args.path).text();
         const code =
           src.includes("import.meta.glob") || src.includes("new URL") ? transformSource(src, args.path, o) : null;
@@ -699,8 +699,8 @@ export function devImportsPlugin(o: DevImportsOptions) {
   };
   return {
     name: "vn-dev-imports",
-    setup(build: any) {
-      build.onResolve({ filter: LEAF_IMPORT }, (args: any) => {
+    setup(build: Bun.PluginBuilder) {
+      build.onResolve({ filter: LEAF_IMPORT }, (args: Bun.OnResolveArgs) => {
         if (args.kind === "entry-point-build") return undefined;
         const abs = resolveImport(args.path, importerDir(args, o.srcDir));
         if (abs === null || !isAbsolute(abs)) return undefined; // external: build.ts reports the miss
@@ -709,7 +709,7 @@ export function devImportsPlugin(o: DevImportsOptions) {
       });
       // Bare specifiers only: an absolute path is the entry point (Windows `C:\…` starts with a letter).
       // `node:` stays out of the filter: a plugin that sees Bun's own `node:module` import makes it a real require.
-      build.onResolve({ filter: /^(?!node:)[^./\\]/ }, (args: any) => {
+      build.onResolve({ filter: /^(?!node:)[^./\\]/ }, (args: Bun.OnResolveArgs) => {
         if (args.kind === "entry-point-build" || isAbsolute(args.path) || o.preseeded(args.path)) return undefined;
         const from = importerDir(args, o.srcDir);
         const abs = resolveImport(args.path, from);
@@ -1102,8 +1102,8 @@ function pkgJsonOf(entry: string, name: string): string | undefined {
 export interface FrameworkDep {
   path: string;
   from: "app" | "vue-native";
-  version?: string;
-  warning?: string;
+  version?: string | undefined;
+  warning?: string | undefined;
 }
 
 /** Which copy of `name` (pinia / vue-router) the builders use: the app's own when declared and installed, else vue-native's. */

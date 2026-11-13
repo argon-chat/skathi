@@ -40,7 +40,7 @@ async function until(ok: (s: Shot) => boolean, ms = 5_000): Promise<Shot> {
 const near =
   (want: Rgb, tol = 40) =>
   (got: Rgb) =>
-    got.every((v, i) => Math.abs(v - want[i]) <= tol);
+    got.every((v, i) => Math.abs(v - want[i]!) <= tol);
 const red = near([255, 0, 0]);
 const green = near([0, 160, 0]);
 const magenta = near([255, 0, 255]);

@@ -242,8 +242,8 @@ describe("Element.animate()", () => {
     for (; frameNo < 12 && !log.length; frameNo++) await w.frame(16);
     await w.frame();
     expect(log).toHaveLength(2);
-    expect(log[0].split("@")[1]).toBe(log[1].split("@")[1]);
-    expect(log[0].startsWith("drop")).toBe(true);
+    expect(log[0]!.split("@")[1]).toBe(log[1]!.split("@")[1]);
+    expect(log[0]!.startsWith("drop")).toBe(true);
   });
 
   test("cancel mid-flight rejects `finished` with AbortError, fires cancel, and drops the effect", async () => {

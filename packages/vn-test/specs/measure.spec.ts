@@ -75,7 +75,7 @@ describe("a layout read lays out", () => {
           " document.documentElement.getBoundingClientRect().width," +
           " document.documentElement.getBoundingClientRect().height])",
       );
-      const [iw, ih, rw, rh] = JSON.parse(String(root.value ?? root)) as number[];
+      const [iw, ih, rw, rh] = JSON.parse(String(root.value ?? root)) as [number, number, number, number];
       bunExpect(Math.round(iw)).toBe(Math.round(rw));
       bunExpect(Math.round(ih)).toBe(Math.round(rh));
     },

@@ -37,7 +37,6 @@ import type {
   WindowsReply,
 } from "./protocol";
 
-const PICK_TTL_MS = 1500;
 const SELECT_TTL_MS = 6000;
 const LOG_LIMIT = 1000;
 const NET_LIMIT = 400;
@@ -685,7 +684,7 @@ export function stepMatch(delta: number): void {
   reindex();
   if (!all.length) return;
   state.matchIndex = (state.matchIndex + delta + all.length) % all.length;
-  const id = all[state.matchIndex];
+  const id = all[state.matchIndex]!;
   void select(id);
 }
 
@@ -882,7 +881,7 @@ function applyPerf(data: PerfReply): void {
   const samples = data.samples || [];
   // The reply's `samples` are the target's ring (which overlaps between pushes), so appending all
   // of them would draw the same milliseconds several times.
-  if (samples.length) state.perfHistory.push(samples[samples.length - 1]);
+  if (samples.length) state.perfHistory.push(samples[samples.length - 1]!);
   if (state.perfHistory.length > PERF_HISTORY) {
     state.perfHistory.splice(0, state.perfHistory.length - PERF_HISTORY);
   }

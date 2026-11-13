@@ -3,6 +3,8 @@
 import { createApp, h, type VNode } from "vue-native";
 import "./wrap.css";
 
+const dom = document as unknown as VnDomDocument;
+
 const A = "a".repeat(160);
 const URL = `https://example.com/files/${"b".repeat(40)}/${"c".repeat(60)}?token=${"d".repeat(48)}`;
 const HASH = "3f9a0c4e".repeat(16);
@@ -79,7 +81,7 @@ createApp({
 (globalThis as Record<string, unknown>).__VN_TEST_WRAP__ = {
   boxes() {
     const out: Record<string, { x: number; y: number; w: number; h: number; right: number }> = {};
-    for (const el of Array.from(document.querySelectorAll("[id]"))) {
+    for (const el of Array.from(dom.querySelectorAll("[id]"))) {
       const r = el.getBoundingClientRect();
       out[el.id] = { x: r.x, y: r.y, w: r.width, h: r.height, right: r.right };
     }
