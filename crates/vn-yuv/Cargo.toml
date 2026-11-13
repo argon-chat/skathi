@@ -2,6 +2,7 @@
 name = "vn-yuv"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 publish = false
 description = "I420 + alpha to straight BGRA at any size: the video stickers' pixel kernel, in a crate of its own so the dev profile can optimise it"
 

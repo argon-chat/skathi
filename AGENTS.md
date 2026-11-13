@@ -34,6 +34,8 @@ bun run shaders:check
 
 End-to-end: `bun test specs` in `packages/vn-test`, after `cargo build -p vn-app`.
 
+A new crate dependency must pass `cargo deny check licenses` (`deny.toml`): no GPL family.
+
 Formatting, from the repo root: `bun fmt` (`bun fmt --check` to verify). Settings are in `bunfig.toml`,
 exclusions in `.prettierignore`. Rust is `cargo fmt`'s.
 
@@ -44,8 +46,9 @@ exclusions in `.prettierignore`. Rust is `cargo fmt`'s.
   narrate history ("used to", "until m26", "after the audit"), cite milestones, reports or
   documents, or leave essays. Doc comments on public API are one or two lines. When in doubt,
   leave it out.
-- **No documentation files.** `README.md` is the only document in this repo. Do not add `.md`
-  files, design notes or reports; explain a change in its commit message.
+- **No generated documents.** Do not add design notes, plans, reports, audits or summaries as
+  `.md` files; explain a change in its commit message. README, LICENSE and the usual repo files
+  (CONTRIBUTING, SECURITY, CHANGELOG) are fine when a person asks for them.
 - **Strict TypeScript.** Every TS project extends `tsconfig.base.json` (`strict` plus `noUncheckedIndexedAccess`,
   `exactOptionalPropertyTypes`, `noUnused*` and the rest); `bun run typecheck` checks all of them. No `any`, no
   `@ts-ignore`/`@ts-expect-error`; `unknown` and narrowing at boundaries.

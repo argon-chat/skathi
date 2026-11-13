@@ -70,3 +70,22 @@ documented inline in [`apps/hello/tailwind.config.js`](apps/hello/tailwind.confi
 
 Utilities the engine cannot render never fail silently — vn-css prints a
 one-shot advisory per gap on every stylesheet compile (`[css] …` on stderr).
+
+## License
+
+vue-native is licensed under either of [Apache License 2.0](LICENSE-APACHE) or
+[MIT](LICENSE-MIT), at your option.
+
+The host (`vn-app`) statically links JavaScriptCore, WTF and bmalloc from Bun's WebKit build
+through [redjs](https://github.com/argon-chat/redjs). Parts of JavaScriptCore and WTF are
+licensed under the GNU LGPL 2; the rest of WebKit is BSD. To meet the LGPL, the patched WebKit
+source is public at [oven-sh/WebKit](https://github.com/oven-sh/WebKit), at the commit named by
+`webkit.version` in `vendor/redjs/pins.txt`, and the host is built from this repository: to run
+an app on a modified JavaScriptCore, build that commit, rebuild the host against it
+(`vn host build`) and stamp the app onto it (`vn build --host <exe>`). An app's own code is a
+payload the host reads at startup, not linked into it.
+
+Other native code in the host: ICU (Unicode License V3), mimalloc (MIT), SQLite3MultipleCiphers
+(MIT; SQLite is public domain), libvpx (BSD-3-Clause), ThorVG (MIT), gpui (Apache-2.0) and the
+Rust crates in `Cargo.lock`, which `cargo deny check licenses` keeps to permissive licenses and
+MPL-2.0 (`deny.toml`).

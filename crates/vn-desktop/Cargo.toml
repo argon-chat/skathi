@@ -2,6 +2,7 @@
 name = "vn-desktop"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 publish = false
 
 # `args` is pure and dependency-free on purpose: `main()` reads it before anything else exists.
