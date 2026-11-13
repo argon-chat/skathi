@@ -408,6 +408,12 @@ declare function __vn_wake_lock_hold(on: boolean): boolean;
 declare function __vn_media_session_update(stateJson: string, artwork: ArrayBuffer | undefined): void;
 /** `{ title, text?, url?, files: names }` with the files' bytes in order. `{ token }` settles when the share sheet completes, or fails `AbortError` when dismissed. */
 declare function __vn_share(requestJson: string, buffers: ArrayBuffer[]): VnJson;
+/** Passkeys through the system authenticator. Binary fields are base64url; `{ token }` settles with `{ id, attestationObject, authenticatorData, transports, attachment, publicKey?, publicKeyAlgorithm, residentKey? }`. */
+declare function __vn_webauthn_create(requestJson: string): VnJson;
+/** `{ token }` settling with `{ id, authenticatorData, signature, userHandle?, attachment }`. */
+declare function __vn_webauthn_get(requestJson: string): VnJson;
+declare function __vn_webauthn_cancel(token: number): void;
+declare function __vn_webauthn_available(): boolean;
 
 /** Every SFC's `<style>` block, collected at module-eval time and joined into the first stylesheet by `mount()`. */
 declare var __VN_CSS__: string[] | undefined;

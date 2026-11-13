@@ -28,6 +28,7 @@ import {
 import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/runtime-core";
 import { installDesktop } from "./desktop";
 import { installBadge } from "./badge";
+import { installCredentials } from "./credentials";
 import { installMediaSession } from "./mediasession";
 import { installShare } from "./share";
 import { installWakeLock } from "./wakelock";
@@ -9955,6 +9956,19 @@ if (typeof navigator !== "undefined" && navigator) {
         typeof FileCtor === "function" && v instanceof FileCtor,
       activation,
       documentTitle: () => document?.title ?? "",
+      DOMException: (globalThis as unknown as DesktopEngine).DOMException,
+    });
+  }
+  if (typeof __vn_webauthn_create === "function" && vacant(navigator, "credentials")) {
+    installCredentials(navigator, {
+      host: {
+        create: __vn_webauthn_create,
+        get: __vn_webauthn_get,
+        cancel: __vn_webauthn_cancel,
+        available: __vn_webauthn_available,
+      },
+      call: desktopCall,
+      pageUrl: () => (globalThis as { location?: { href: string } }).location?.href ?? "",
       DOMException: (globalThis as unknown as DesktopEngine).DOMException,
     });
   }

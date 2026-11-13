@@ -34,6 +34,8 @@ pub mod power;
 pub mod share;
 pub mod shell;
 pub mod tray;
+#[cfg(target_os = "windows")]
+pub mod webauthn;
 
 /// A failure JS turns into a rejection: `name` is a DOMException name or `TypeError`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -588,6 +590,36 @@ host_fn!(fn vn_share(g, args) {
     js_string(&share::start(owner.hwnd, request))
 });
 
+#[cfg(target_os = "windows")]
+fn webauthn_start(g: *mut c_void, v: u64, start: fn(isize, serde_json::Value) -> String) -> u64 {
+    let req: serde_json::Value = serde_json::from_str(&read_arg_string(g, v)).unwrap_or_default();
+    match dialog::current_owner() {
+        Some(owner) => js_string(&start(owner.hwnd, req)),
+        None => js_string(&Fail::new("NotAllowedError", "There is no window to ask from").to_sync_json()),
+    }
+}
+
+#[cfg(target_os = "windows")]
+host_fn!(fn vn_webauthn_create(g, args) {
+    webauthn_start(g, args.arg(0).0, webauthn::start_create)
+});
+
+#[cfg(target_os = "windows")]
+host_fn!(fn vn_webauthn_get(g, args) {
+    webauthn_start(g, args.arg(0).0, webauthn::start_get)
+});
+
+#[cfg(target_os = "windows")]
+host_fn!(fn vn_webauthn_cancel(_g, args) {
+    webauthn::cancel(arg_id(&args, 0) as u32);
+    Value::undefined().0
+});
+
+#[cfg(target_os = "windows")]
+host_fn!(fn vn_webauthn_available(_g, _args) {
+    Value::boolean(webauthn::available()).0
+});
+
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
         ("__vn_desktop_set_dispatcher", 1, vn_desktop_set_dispatcher as *const _),
@@ -631,6 +663,10 @@ pub fn install(rt: &JsRuntime) {
         rt.register("__vn_wake_lock_hold", 1, vn_wake_lock_hold as *const _);
         rt.register("__vn_media_session_update", 2, vn_media_session_update as *const _);
         rt.register("__vn_share", 2, vn_share as *const _);
+        rt.register("__vn_webauthn_create", 1, vn_webauthn_create as *const _);
+        rt.register("__vn_webauthn_get", 1, vn_webauthn_get as *const _);
+        rt.register("__vn_webauthn_cancel", 1, vn_webauthn_cancel as *const _);
+        rt.register("__vn_webauthn_available", 0, vn_webauthn_available as *const _);
     }
     let g = rt.raw();
     RT_G.store(g as usize, Ordering::Release);
