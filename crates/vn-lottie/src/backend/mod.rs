@@ -1,33 +1,11 @@
-//! The rasteriser seam.
+//! The rasteriser seam: [`LottieState`](crate::LottieState) owns the transport, metadata and atlas
+//! discipline; a backend only turns frame *n* into BGRA pixels. [`LottieMeta`] is read from the
+//! JSON by [`crate::state`], so `meta()` is identical whichever engine draws; the `.tgs` gunzip and
+//! [`crate::normalize`] pass also run before a backend sees the document.
 //!
-//! [`LottieState`](crate::LottieState) owns the transport, the metadata and
-//! the atlas discipline; everything below this module is "turn frame *n* into
-//! BGRA pixels". Two implementations sit behind it:
-//!
-//! | | crate | build cost |
-//! | --- | --- | --- |
-//! | [`Backend::ThorVg`] (default) | `vn-thorvg-sys` (vendored ThorVG 1.1.0 C++) | feature `thorvg`, ~54 s once |
-//! | [`Backend::Rasterlottie`] | `rasterlottie` (pure Rust, `tiny-skia`) | none |
-//!
-//! The split is deliberately *below* metadata: [`LottieMeta`] is read from the
-//! JSON document by [`crate::state`], not from whatever the backend happens to
-//! expose, so `meta()` is bit-identical whichever engine is drawing. The same
-//! goes for the `.tgs` gunzip and the [`crate::normalize`] pass — both run on
-//! the document before a backend ever sees it.
-//!
-//! # Choosing one
-//!
-//! [`Backend::preferred`] resolves, in order:
-//!
-//! 1. `VN_LOTTIE_BACKEND=thorvg|rasterlottie` in the environment — which is
-//!    how the comparison harness runs the *same* test binary on both engines,
-//!    and how a user works around a file one engine gets wrong without a
-//!    rebuild.
-//! 2. the `thorvg-default` cargo feature (on by default),
-//! 3. `rasterlottie`.
-//!
-//! An unavailable or misspelled value falls back rather than panicking: a
-//! typo in an env var must not take the app down.
+//! [`Backend::preferred`] resolves, in order: `VN_LOTTIE_BACKEND=thorvg|rasterlottie` (lets the
+//! comparison harness run one binary on both engines), the `thorvg-default` feature, then
+//! `rasterlottie`. An unavailable or misspelled value falls back rather than panicking.
 
 use serde_json::Value;
 
@@ -37,22 +15,16 @@ pub(crate) mod raster;
 #[cfg(feature = "thorvg")]
 pub(crate) mod thorvg;
 
-/// Which rasteriser draws the frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Backend {
-    /// [`rasterlottie`] — pure Rust on `tiny-skia`. Always compiled in.
     Rasterlottie,
-    /// Vendored ThorVG 1.1.0, software engine. Needs the `thorvg` feature;
-    /// [`Backend::is_available`] reports whether it was compiled in.
+    /// Vendored ThorVG 1.1.0; needs the `thorvg` feature ([`Backend::is_available`]).
     ThorVg,
 }
 
 impl Backend {
-    /// The backend a plain [`LottieState::load`](crate::LottieState::load)
-    /// uses. See the module docs for the resolution order.
     pub fn preferred() -> Self {
-        // Read once: this is consulted on every load, and an env var cannot
-        // meaningfully change mid-process.
+        // Read once: consulted on every load.
         static PREFERRED: std::sync::OnceLock<Backend> = std::sync::OnceLock::new();
         *PREFERRED.get_or_init(|| {
             let requested = std::env::var("VN_LOTTIE_BACKEND").ok();
@@ -72,7 +44,6 @@ impl Backend {
         Self::Rasterlottie
     };
 
-    /// True when this backend was compiled into the binary.
     pub fn is_available(self) -> bool {
         match self {
             Self::Rasterlottie => true,
@@ -80,7 +51,6 @@ impl Backend {
         }
     }
 
-    /// The name accepted by `VN_LOTTIE_BACKEND`, and used in diagnostics.
     pub fn name(self) -> &'static str {
         match self {
             Self::Rasterlottie => "rasterlottie",
@@ -109,7 +79,6 @@ impl std::fmt::Display for Backend {
     }
 }
 
-/// One rasterised frame, in the byte order gpui's atlas wants.
 pub(crate) struct Raster {
     pub width: u32,
     pub height: u32,
@@ -117,12 +86,8 @@ pub(crate) struct Raster {
     pub bgra: Vec<u8>,
 }
 
-/// A loaded animation, ready to draw. One variant per [`Backend`].
-///
-/// The `rasterlottie` payload is boxed because it is five times the size of
-/// the ThorVG one (which is four pointers and a `Vec`), and this enum lives
-/// inline in every `LottieState` the host keeps per node. One pointer chase
-/// per `render_frame` against a rasterisation measured in microseconds.
+/// A loaded animation; one variant per [`Backend`]. The `rasterlottie` payload is boxed because it
+/// is five times the ThorVG one and this enum is inline in every `LottieState`.
 pub(crate) enum Rasteriser {
     Rasterlottie(Box<raster::Rasterlottie>),
     #[cfg(feature = "thorvg")]
@@ -130,11 +95,7 @@ pub(crate) enum Rasteriser {
 }
 
 impl Rasteriser {
-    /// Hands the normalised document to `backend`.
-    ///
-    /// `document` is consumed because both backends re-encode it: the
-    /// rasterlottie one deserialises it into its own model, the ThorVG one
-    /// serialises it back to text for the C loader.
+    /// Hands the normalised document to `backend`, consuming it (both backends re-encode it).
     // `meta` is only read by the ThorVG arm; without the feature it is dead.
     #[cfg_attr(not(feature = "thorvg"), allow(unused_variables))]
     pub fn load(
@@ -156,7 +117,6 @@ impl Rasteriser {
         }
     }
 
-    /// Which engine this is.
     pub fn backend(&self) -> Backend {
         match self {
             Self::Rasterlottie(_) => Backend::Rasterlottie,
@@ -165,13 +125,8 @@ impl Rasteriser {
         }
     }
 
-    /// Draws absolute source `frame` at `scale` into a `width × height`
-    /// raster.
-    ///
-    /// `width`/`height` are what [`raster_size`] computed from `scale`; they
-    /// are passed rather than recomputed so the two backends cannot disagree
-    /// about the output dimensions by a rounding step.
-    // Ditto for the explicit dimensions: `rasterlottie` derives them itself.
+    /// Draws absolute source `frame` at `scale` into a `width × height` raster; the dimensions are
+    /// passed (from [`raster_size`]) so the backends cannot disagree by a rounding step.
     #[cfg_attr(not(feature = "thorvg"), allow(unused_variables))]
     pub fn render(&mut self, frame: f32, scale: f32, width: u32, height: u32) -> Option<Raster> {
         match self {
@@ -181,9 +136,8 @@ impl Rasteriser {
         }
     }
 
-    /// Draws absolute source `frame` filling a `width × height` raster,
-    /// STRAIGHT-alpha BGRA rows packed, borrowed until the next call
-    /// ([`crate::Animation`]'s raster). `intrinsic` is the authored size.
+    /// Draws absolute source `frame` filling a `width × height` raster: straight-alpha BGRA, rows
+    /// packed, borrowed until the next call. `intrinsic` is the authored size.
     #[cfg_attr(not(feature = "thorvg"), allow(unused_variables))]
     pub fn render_straight(&mut self, frame: f32, intrinsic: (u32, u32), width: u32, height: u32) -> Option<&[u8]> {
         match self {
@@ -193,8 +147,7 @@ impl Rasteriser {
         }
     }
 
-    /// Bytes the backend holds in its own raster buffers. ThorVG's scene and
-    /// rasterlottie's prepared model are not reported by either engine.
+    /// Bytes the backend holds in its own raster buffers; neither engine reports its scene.
     pub fn buffer_bytes(&self) -> usize {
         match self {
             Self::Rasterlottie(inner) => inner.buffer_bytes(),
@@ -218,12 +171,8 @@ pub(crate) fn unpremultiply(px: [u8; 4]) -> [u8; 4] {
     }
 }
 
-/// The raster dimensions an animation of `(width, height)` produces at `scale`.
-///
-/// `ceil` — not `round` — because that is what `rasterlottie`'s
-/// `resolve_output_canvas_size` does, and the two backends must agree on the
-/// size of the texture gpui gets. A 100×50 animation in a 128×128 box scales
-/// by 1.28 and rasterises 128×64.
+/// The raster dimensions of an animation of `(width, height)` at `scale`: `ceil`, as `rasterlottie`
+/// does, so the backends agree on the texture size (100×50 in a 128×128 box gives 128×64).
 pub(crate) fn raster_size(intrinsic: (u32, u32), scale: f32) -> (u32, u32) {
     let width = ((intrinsic.0 as f32) * scale).ceil().max(1.0) as u32;
     let height = ((intrinsic.1 as f32) * scale).ceil().max(1.0) as u32;

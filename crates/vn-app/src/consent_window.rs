@@ -1,59 +1,35 @@
-//! The permission prompt on Windows: a window of the app's own, drawn by gpui,
-//! in place of vn-desktop's TaskDialog (docs/PERMISSIONS.md §5.1).
+//! The permission prompt on Windows: a window of the app's own, drawn by gpui, in place of
+//! vn-desktop's TaskDialog.
 //!
-//! ```text
-//!   consent.rs ── ask_permission (frame thread) ── vn_desktop::dialog::ask_with
-//!                                                    │ owner, queue, close, scripted seam
-//!                                                    ▼
-//!                                  vn-ask thread: present() ── Msg::Open ──▶ gpui main thread
-//!                                    waits for the reply,                    open(): a hidden window,
-//!                                    Msg::Close when the owner closes        sized to its content,
-//!                                                    ◀── reply (once) ───── centred, owned, shown
-//! ```
+//! consent.rs `ask_permission` (frame thread) calls `vn_desktop::dialog::ask_with`, whose presenter
+//! [`present`] runs on the `vn-ask` thread: it sends `Msg::Open` to the gpui main thread (a hidden
+//! window, sized to its content, centred, owned, then shown), waits for the reply, and sends
+//! `Msg::Close` when the owner closes.
 //!
-//! # What it looks like, and why
-//!
-//! A Windows 11 ContentDialog, as the system's own consent prompts are: a
-//! 440 DIP card on DWM's transient acrylic (`DWMSBT_TRANSIENTWINDOW`) with
-//! rounded corners, the app's icon and name in caption type, the capability's
-//! Segoe Fluent Icons glyph in an accent-tinted circle, the question in
-//! Subtitle type over a sentence of body text, and a footer band holding the
-//! buttons, equal width. It follows the system's light or dark app theme (live)
-//! and the system accent colour. Before 22H2 there is no system acrylic, and
-//! the card is drawn in the theme's solid colours instead. It has no entrance
-//! animation of its own: it is shown already drawn at its final size, and the
-//! open transition is DWM's.
-//!
-//! The first button (Allow) is the accent-filled one, whatever the default.
-//! Initial focus, and so Enter, is on [`Ask::default`]: consent.rs makes
-//! that Block, so a stray Enter grants nothing.
+//! A Windows 11 ContentDialog (content_dialog.rs): the app's icon and name, the capability's glyph
+//! in an accent-tinted circle, the question over a sentence of body text, and equal-width buttons.
+//! The first button (Allow) is the accent-filled one; initial focus, and so Enter, is on
+//! [`Ask::default`], which consent.rs makes Block so a stray Enter grants nothing.
 //!
 //! # Input
 //!
 //! - Enter or Space presses the focused button; Esc and Alt+F4 dismiss.
-//! - Tab, Shift+Tab and the arrow keys move between the buttons, with the
-//!   Windows 11 focus ring once the keyboard is in use.
-//! - Alt+letter presses the button whose `&` marks that letter (underlined
-//!   while Alt is down, as Windows shows access keys).
-//! - **Input protection**: for [`INPUT_DELAY`] after the prompt becomes the
-//!   active window (shown, or activated again), clicks, Enter, Space and
-//!   access keys are ignored, so a click or a key aimed at the app the moment
-//!   the prompt appears cannot land on Allow (Chromium's permission bubble
-//!   does the same). Esc and Tab are never ignored.
+//! - Tab, Shift+Tab and the arrow keys move between the buttons, with the Windows 11 focus ring once
+//!   the keyboard is in use.
+//! - Alt+letter presses the button whose `&` marks that letter.
+//! - **Input protection**: for [`INPUT_DELAY`] after the prompt becomes the active window, clicks,
+//!   Enter, Space and access keys are ignored, so input aimed at the app the moment the prompt
+//!   appears cannot land on Allow. Esc and Tab are never ignored.
 //!
 //! # Lifecycle
 //!
-//! vn-desktop owns the rules (dialog/ask.rs): one question per owner at a
-//! time (a second capability waits its turn), none for an owner that is
-//! closing, and the owner is destroyed only once [`present`] has returned.
-//! While the prompt is up its owner is disabled, as a TaskDialog's is. The
-//! reply is sent exactly once: by a button, by a dismissal, by the owner
-//! closing (`Msg::Close`), or by the window going away any other way (the
-//! view's `Drop`).
+//! vn-desktop owns the rules (dialog/ask.rs): one question per owner at a time, none for a closing
+//! owner, and the owner is destroyed only once [`present`] has returned. The owner is disabled while
+//! the prompt is up. The reply is sent exactly once: by a button, a dismissal, the owner closing
+//! (`Msg::Close`), or the window going away any other way (the view's `Drop`).
 //!
-//! Accessibility: gpui reports the window to UI Automation through AccessKit,
-//! so the card is a `Dialog` named by the question and each button a `Button`
-//! with its access key.
+//! gpui reports the window to UI Automation through AccessKit: the card is a `Dialog` named by the
+//! question and each button a `Button` with its access key.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -72,8 +48,7 @@ use vn_desktop::Fail;
 use vn_runtime::redjs::webapi::permissions::Capability;
 
 use crate::content_dialog::{self as card, fonts, hwnd_of, win, Fonts, Theme, WIDTH};
-// The ContentDialog's pure parts, here since the prompt was the first to
-// have them (examples/consent_prompt.rs names `Rgb` and `Accent`).
+// The ContentDialog's pure parts, re-exported (examples/consent_prompt.rs names `Rgb` and `Accent`).
 pub use crate::content_dialog::{
     access_key_matches, center_in, contrast, glyph_in_accent, parse_label, text_on, Accent, Guard, Label, Rect, Rgb,
     INPUT_DELAY,
@@ -94,10 +69,6 @@ pub fn glyph(cap: Capability) -> char {
         Capability::Geolocation => '\u{E81D}',
     }
 }
-
-// ---------------------------------------------------------------------------
-// the vn-ask thread's side
-// ---------------------------------------------------------------------------
 
 /// What the prompt shows.
 #[derive(Debug, Clone)]
@@ -211,10 +182,6 @@ fn receive(msg: Msg, cx: &mut App) {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// the window
-// ---------------------------------------------------------------------------
 
 type Done = Box<dyn FnOnce(Option<usize>)>;
 
@@ -460,10 +427,6 @@ async fn reveal(handle: WindowHandle<Prompt>, hwnd: isize, owner: isize, height:
         cx.notify();
     });
 }
-
-// ---------------------------------------------------------------------------
-// the preview
-// ---------------------------------------------------------------------------
 
 /// What the preview shows (examples/consent_prompt.rs).
 #[doc(hidden)]

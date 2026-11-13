@@ -1,26 +1,11 @@
 <script setup lang="ts">
-// docs/WINDOWING.md §4.2 mode 3 — OS-drawn chrome, `titleBarStyle: "default"`.
-//
-// The window above this content has a real `WS_CAPTION` (fork item F-03), so
-// the titlebar, its three buttons, double-click-to-zoom, the system menu and
-// the snap-layouts flyout are all the OS's. This app draws NO titlebar and
-// declares no drag region — the point of the mode is that it does not have to.
-//
-// The `window-drag: move` rule below is deliberately still in the stylesheet:
-// it is INERT here and says so once (A-25). That is the compat-first shape —
-// the same component in `titleBarStyle: "hidden"` would drag the window, and
-// silently doing nothing is exactly the failure the advisory exists to prevent.
 import { onMounted, onUnmounted, ref } from "vue";
 import { appWindow } from "vue-native";
 
-// engine.d.ts types `navigator` as optional; under vn-app it is installed
-// before this module evaluates. Asserted once, here.
+// engine.d.ts types `navigator` as optional; under vn-app it is installed before this module
+// evaluates.
 const wco = navigator!.windowControlsOverlay;
 
-// The template renders this with `String(v)` and `v-for`-over-the-object, so
-// the row values are deliberately heterogeneous — strings, booleans and the
-// `unknown`s that come off `appWindow.chrome`, which the prelude builds and
-// the runtime types as a bare `Record<string, unknown>`.
 const state = ref<Record<string, unknown>>({});
 const read = () => {
   const r = wco.getTitlebarAreaRect();
@@ -52,7 +37,6 @@ onUnmounted(() => removeEventListener("resize", read));
       change mid-session without desyncing gpui's cached frame metrics (D-25).
     </p>
 
-    <!-- Inert in this mode, and it says so once. See the comment above. -->
     <div class="fakebar">window-drag: move — inert here (advisory A-25)</div>
 
     <div class="grid">
@@ -90,7 +74,7 @@ onUnmounted(() => removeEventListener("resize", read));
   line-height: 20px;
 }
 .fakebar {
-  /* Would drag the window under `titleBarStyle: "hidden"`. Does nothing here. */
+  /* Would drag the window under `titleBarStyle: "hidden"`. */
   window-drag: move;
   padding-top: 8px;
   padding-bottom: 8px;

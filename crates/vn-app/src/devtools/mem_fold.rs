@@ -1,30 +1,20 @@
-//! The macOS `mem` fold, kept free of Mach calls so it is compiled and tested
-//! on every OS: which category a VM region belongs to, how many of its pages
-//! the kernel charges to the physical footprint, and the `breakdown` built
-//! from those sums. `mem_mac.rs` walks the regions and fills [`Region`]s; this
-//! file never touches the process.
+//! The macOS `mem` fold, free of Mach calls so it compiles and is tested on
+//! every OS: region classification and the `breakdown`. `mem_mac.rs` walks the
+//! regions and fills [`Region`]s.
 //!
-//! ## The basis
-//!
-//! Windows' categories sum to the committed address space; macOS has no commit
-//! charge, and the number a person compares against is Activity Monitor's
-//! "Memory" — the task's **physical footprint** (`task_vm_info.phys_footprint`).
-//! So the categories sum to that: every region contributes the pages the
-//! kernel charges for it ([`Region::charged_pages`]), classified by the region's
-//! VM tag (`VM_MEMORY_*`, `mach/vm_statistics.h`) and backing, and what no
-//! region accounts for (GPU memory charged to the task but not mapped into it,
-//! page tables, ledger adjustments) is its own row. When the region estimate
-//! overshoots the kernel's figure (pages shared with another process are
-//! charged to only one of them), the total is the estimate and an `info` row
-//! says by how much.
+//! Categories sum to the task's physical footprint (Activity Monitor's
+//! "Memory"): each region contributes the pages the kernel charges for it
+//! ([`Region::charged_pages`]), and what no region holds is its own row. If the
+//! region estimate exceeds the kernel's figure (pages shared with another
+//! process are charged to only one), the total is the estimate and an `info`
+//! row says by how much.
 
 use std::collections::HashMap;
 
 use super::mem_common::{bytes, category, info, item, with_resident};
 use crate::json::Json;
 
-// `share_mode` (mach/vm_region.h). The fold tells only empty, shared and the
-// rest apart; COW is named for the tests.
+// `share_mode` (mach/vm_region.h).
 #[cfg(test)]
 const SM_COW: u8 = 1;
 #[cfg(test)]
@@ -34,7 +24,7 @@ pub(super) const SM_SHARED: u8 = 4;
 pub(super) const SM_TRUESHARED: u8 = 5;
 pub(super) const SM_SHARED_ALIASED: u8 = 7;
 
-/// The `VM_MEMORY_*` tags the fold names (mach/vm_statistics.h).
+/// The `VM_MEMORY_*` tags the fold names.
 pub(super) mod tag {
     pub const MALLOC: u32 = 1;
     pub const MALLOC_SMALL: u32 = 2;
@@ -69,10 +59,7 @@ pub(super) mod tag {
     pub const IMAGEIO: u32 = 70;
     pub const IOSURFACE: u32 = 88;
     pub const IOACCELERATOR: u32 = 100;
-    /// mimalloc's default (`mi_option_os_tag`, `MIMALLOC_OS_TAG`): 240 is
-    /// `VM_MEMORY_APPLICATION_SPECIFIC_1` — its docs say "100 collided with
-    /// IOAccelerator". A value outside 100..=255 makes it fall back to 254.
-    /// `mem_mac.rs` asks mimalloc rather than assuming it.
+    /// mimalloc's default `mi_option_os_tag`; `mem_mac.rs` asks mimalloc instead.
     #[cfg(test)]
     pub const MIMALLOC_DEFAULT: u32 = 240;
 }
@@ -80,20 +67,18 @@ pub(super) mod tag {
 /// What a region maps.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(super) enum Backing {
-    /// Anonymous memory (no file behind it).
     #[default]
     Anonymous,
     /// A Mach-O image dyld loaded, or the dyld shared cache.
     Image,
-    /// Any other file (fonts, ICU data, caches someone `mmap`ed).
+    /// Any other file.
     File,
 }
 
-/// One leaf region of the walk (submaps recursed into), with the counts of
-/// `vm_region_submap_info_64` the fold reads — in PAGES.
+/// One leaf region of the walk; the counts are in pages.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Region {
-    // Read by `mem_mac.rs` (the largest untagged regions), not by the fold.
+    // Read by `mem_mac.rs`, not by the fold.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub start: u64,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -101,11 +86,9 @@ pub(super) struct Region {
     pub tag: u32,
     pub share_mode: u8,
     pub backing: Backing,
-    /// Inside the dyld shared cache (the shared-region submap).
     pub shared_cache: bool,
     pub exec: bool,
-    /// The file's name (not its path), for a file-backed region outside the
-    /// shared cache.
+    /// File name (not path) of a file-backed region outside the shared cache.
     pub name: Option<String>,
     pub resident: u64,
     pub dirtied: u64,
@@ -114,12 +97,9 @@ pub(super) struct Region {
 }
 
 impl Region {
-    /// The pages the kernel charges to this task's footprint for this region,
-    /// as far as the region's own counts tell: a file's clean pages are the
-    /// file cache's (only the private copies of a written page count, and they
-    /// are dirty or compressed); anonymous memory counts while it is resident
-    /// or compressed, except pages marked reusable (`MADV_FREE_REUSABLE`, which
-    /// both libmalloc and mimalloc use to give pages back without unmapping).
+    /// Pages charged to the footprint: a file's clean pages are the file
+    /// cache's (only dirty or compressed ones count); anonymous memory counts
+    /// while resident or compressed, minus pages marked `MADV_FREE_REUSABLE`.
     pub fn charged_pages(&self) -> u64 {
         match self.share_mode {
             SM_EMPTY => 0,
@@ -128,14 +108,12 @@ impl Region {
         }
     }
 
-    /// Is the region's object shared with another mapping (another process,
-    /// or another range of this one)?
     pub fn shared(&self) -> bool {
         matches!(self.share_mode, SM_SHARED | SM_TRUESHARED | SM_SHARED_ALIASED)
     }
 }
 
-/// The breakdown's categories, in the order the panel draws them.
+/// In the order the panel draws them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub(super) enum Cat {
     Images,
@@ -146,14 +124,11 @@ pub(super) enum Cat {
     Other,
 }
 
-/// The slice label of mimalloc's pages inside `jsc` (split further by
-/// mimalloc's own live count in [`breakdown`]).
 pub(super) const MIMALLOC: &str = "mimalloc";
-/// The slice label of thread stacks no live thread claims.
 pub(super) const STACKS: &str = "thread stacks";
 
 /// A thread's name with every run of digits folded to `#`, so a pool's workers
-/// group into one row (as `mem.rs` does with Windows thread descriptions).
+/// group into one row.
 pub(super) fn thread_group(name: &str) -> String {
     let mut out = String::new();
     for c in name.trim().chars() {
@@ -168,9 +143,8 @@ pub(super) fn thread_group(name: &str) -> String {
     if out.is_empty() { "(unnamed)".into() } else { out }
 }
 
-/// The slice a stack region goes under: the group of the live thread whose
-/// stack `[low, high)` contains it, with the group's thread count.
-/// `stacks` is `(low, high, group)`; `counts` the threads per group.
+/// The slice for a stack region: the group of the thread whose `[low, high)`
+/// stack contains it, with the group's thread count.
 pub(super) fn stack_slice(start: u64, stacks: &[(u64, u64, String)], counts: &HashMap<String, usize>) -> String {
     match stacks.iter().find(|(low, high, _)| *low <= start && start < *high) {
         Some((_, _, g)) => format!("thread stacks: {g} ×{}", counts.get(g).copied().unwrap_or(1)),
@@ -178,8 +152,7 @@ pub(super) fn stack_slice(start: u64, stacks: &[(u64, u64, String)], counts: &Ha
     }
 }
 
-/// What a tag is called in `vmmap`, for the ones that are not a category of
-/// their own.
+/// The `vmmap` name of a tag that is not a category of its own.
 pub(super) fn tag_name(t: u32) -> String {
     let s = match t {
         0 => "untagged anonymous memory (mmap / vm_allocate without a tag)",
@@ -234,8 +207,7 @@ pub(super) fn tag_name(t: u32) -> String {
     s.to_string()
 }
 
-/// Which category a region is in, and the slice of it. `mi_tag` is the tag
-/// mimalloc puts on its OS memory in this process.
+/// The region's category and slice. `mi_tag` is mimalloc's OS-memory tag.
 pub(super) fn classify(r: &Region, mi_tag: u32) -> (Cat, String) {
     match r.backing {
         Backing::Image if r.shared_cache => (Cat::Images, "dyld shared cache (system libraries' written __DATA)".into()),
@@ -281,8 +253,6 @@ pub(super) fn classify(r: &Region, mi_tag: u32) -> (Cat, String) {
     }
 }
 
-/// The walk's sums: footprint bytes per category and per slice, and (with
-/// `regions`) the resident bytes per category.
 #[derive(Default)]
 pub(super) struct Fold {
     pub bytes: HashMap<Cat, f64>,
@@ -293,7 +263,6 @@ pub(super) struct Fold {
 }
 
 impl Fold {
-    /// Counts one region under `(cat, slice)`; `page` is the page size.
     pub fn add(&mut self, r: &Region, cat: Cat, slice: String, page: u64) {
         let charged = (r.charged_pages() * page) as f64;
         self.attributed += charged;
@@ -309,7 +278,7 @@ impl Fold {
         self.bytes.get(&cat).copied().unwrap_or(0.0)
     }
 
-    /// A category's slices, biggest first.
+    /// Biggest first.
     pub fn slices_of(&self, cat: Cat) -> Vec<(String, f64)> {
         let mut v: Vec<(String, f64)> =
             self.slices.iter().filter(|((c, _), _)| *c == cat).map(|((_, s), b)| (s.clone(), *b)).collect();
@@ -329,19 +298,17 @@ impl Fold {
     }
 }
 
-/// Everything [`breakdown`] needs besides the fold. All in bytes.
+/// Everything [`breakdown`] needs besides the fold, in bytes.
 pub(super) struct Inputs<'a> {
     pub fold: &'a Fold,
-    /// `phys_footprint`: Activity Monitor's "Memory".
+    /// `phys_footprint`.
     pub footprint: f64,
     pub resident_size: f64,
-    /// `internal`: anonymous memory in RAM.
+    /// Anonymous memory in RAM.
     pub internal: f64,
-    /// The graphics ledger (`ledger_tag_graphics_footprint` and its
-    /// compressed twin): GPU memory charged to this task. 0 from a kernel that
-    /// does not report it.
+    /// GPU memory charged to this task; 0 from a kernel that does not report it.
     pub graphics_ledger: f64,
-    /// `malloc_zone_statistics(NULL)`: bytes in use in every malloc zone.
+    /// Bytes in use in every malloc zone.
     pub malloc_in_use: f64,
     pub mi_live: f64,
     pub mi_committed: f64,
@@ -350,15 +317,14 @@ pub(super) struct Inputs<'a> {
     pub rust_live: Option<f64>,
     /// `mem_common::rust_items` when the Rust heap is counted.
     pub rust_items: Vec<Json>,
-    /// The atlas and render-target rows (`mem_common::gpu_items`) and their sum.
     pub gpu_items: Vec<Json>,
     pub gpu_named: f64,
-    /// Add `residentBytes` per category (`mem {regions}`).
+    /// Add `residentBytes` per category.
     pub with_resident: bool,
 }
 
 /// Categories that sum to the physical footprint (or to the region estimate
-/// where that is larger), in bytes — the same shape as Windows' `breakdown`.
+/// where that is larger), in bytes.
 pub(super) fn breakdown(i: &Inputs) -> Json {
     let f = i.fold;
     let residual = i.footprint - f.attributed;
@@ -367,8 +333,6 @@ pub(super) fn breakdown(i: &Inputs) -> Json {
     let rest_unmapped = unmapped - gpu_unmapped;
     let total = f.attributed + unmapped;
 
-    // Images: the dirty pages of the loaded Mach-Os (their written __DATA);
-    // the clean ones are the file cache's.
     let mut image_items = f.rows(Cat::Images, 10, "modules", &[]);
     image_items.push(info(
         "resident image pages, clean and dirty (shared: not in the footprint)",
@@ -376,8 +340,6 @@ pub(super) fn breakdown(i: &Inputs) -> Json {
     ));
     let mapped_items = f.rows(Cat::Mapped, 8, "files", &[]);
 
-    // JSC: mimalloc's pages, split by mimalloc's own live count, then the
-    // regions JSC tags itself.
     let mi_pages = f.slices.get(&(Cat::Jsc, MIMALLOC.to_string())).copied().unwrap_or(0.0);
     let mi_live = i.mi_live.min(mi_pages);
     let mut jsc_items = vec![
@@ -396,8 +358,6 @@ pub(super) fn breakdown(i: &Inputs) -> Json {
         i.jsc[2],
     ));
 
-    // The malloc zones: Rust's `System` allocator, C/C++ and Objective-C
-    // `malloc`, and the system frameworks' all share them.
     let heap = f.of(Cat::Rust);
     let mut rust_items = Vec::new();
     match i.rust_live {
@@ -566,8 +526,7 @@ mod tests {
         let cat = |r: Region| classify(&r, mi).0;
         assert_eq!(cat(anon(mi, 1)), Cat::Jsc);
         assert_eq!(classify(&anon(mi, 1), mi).1, MIMALLOC);
-        // A process started with MIMALLOC_OS_TAG=250: 240 is then an ordinary
-        // application-specific tag.
+        // MIMALLOC_OS_TAG=250: 240 is then an ordinary tag.
         assert_eq!(classify(&anon(250, 1), 250).0, Cat::Jsc);
         assert_eq!(classify(&anon(240, 1), 250).0, Cat::Other);
         for t in [tag::JAVASCRIPT_CORE, tag::JAVASCRIPT_JIT_EXECUTABLE_ALLOCATOR, tag::JAVASCRIPT_JIT_REGISTER_FILE] {
@@ -679,8 +638,7 @@ mod tests {
     fn categories_sum_to_the_footprint() {
         let fold = sample();
         let p = PAGE as f64;
-        // 4 + 1 + 2 + 3 + 5 + 1 + 1 anonymous pages, 2 dirty image pages; the
-        // mapped file's clean pages are not charged.
+        // 4+1+2+3+5+1+1 anonymous pages, 2 dirty image pages.
         assert_eq!(fold.attributed, 19.0 * p);
         // The kernel says 25 pages: 6 no region holds, 4 of them GPU memory.
         let b = breakdown(&inputs(&fold, 25.0 * p, 4.0 * p));

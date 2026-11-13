@@ -4,50 +4,16 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# The desktop surface a browser does not have words for, plus the tier-1 pieces
-# that have to reach the OS: the central argv parser, the shell (open a URL or a
-# file, reveal, trash), single instance and the custom-protocol registration
-# (docs/SHELL.md, docs/LAUNCH.md; research/reports/m25/desktop-apis-design.md).
-#
-# `args` is pure and dependency-free on purpose: it is what `main()` reads
-# before anything else exists, and what the inspector mode is decided by.
+# `args` is pure and dependency-free on purpose: `main()` reads it before anything else exists.
 
 [dependencies]
-# The JS host seam (`host_fn!`, `JsRuntime`), exactly as vn-permissions uses it:
-# every async call answers `{token}` synchronously and the per-frame pump settles
-# it through ONE registered dispatcher.
 vn-runtime = { path = "../vn-runtime", default-features = false }
-# Already in the graph (gpui uses it), so this adds no crate to the build. The
-# instance pipe's messages and vn.config's launch block are JSON, and both are
-# parsed STRICTLY — a hand-rolled reader for input that crosses a process
-# boundary is the wrong place to economise.
 serde_json = "1"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
-# Source thumbnails read the desktop, so `capture::sources` reads the
-# `display-capture` state first: on macOS it asks (TCC), on Windows a denied
-# consent-store toggle refuses (vn_permissions::require_display_capture/status).
 vn-permissions = { path = "../vn-permissions" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# 0.62, matching vn-permissions / vn-storage / vn-video (this crate shares no
-# types with gpui, so it does not have to agree with gpui's 0.61).
-#
-#   UI_Shell(+Common)      ShellExecuteExW, SHOpenFolderAndSelectItems,
-#                          IFileOperation (trash), SHChangeNotify
-#   System_Com             the shell thread's STA
-#   System_LibraryLoader   iphlpapi's connectivity hint, resolved at run time
-#                          (navigator.onLine; Windows 10 2004+)
-#   System_Pipes, IO       the single-instance pipe
-#   System_Threading       the instance mutex, peer-process checks
-#   System_RemoteDesktop   ProcessIdToSessionId (the pipe name is per session)
-#   Security(+Authorization) the pipe's DACL and both ends' token-user check
-#   Storage_FileSystem     CreateFileW on the pipe, file identity of the exe
-#   System_Registry        per-user protocol registration (HKCU only)
-#   Storage_Packaging_Appx GetCurrentPackageFullName (MSIX: skip the registry)
-#   UI_WindowsAndMessaging raising the primary; AllowSetForegroundWindow
-#   UI_Controls            TASKDIALOGCONFIG (the question dialog; the function
-#                          itself is resolved at run time, dialog/win.rs)
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
@@ -71,26 +37,15 @@ windows = { version = "0.62", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
 ] }
-# `#[implement(IFileOperationProgressSink)]` expands to `::windows_core::…`
-# paths, so the crate has to be nameable here. Same 0.62 the `windows` crate
-# above already depends on.
+# `#[implement(...)]` expands to `::windows_core::` paths, so the crate must be nameable.
 windows-core = "0.62"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# ScreenCaptureKit sources (src/capture/mac.rs). Versions already pinned by the
-# SDK's AppKit backend and vn-permissions, so no crate is added to the build.
-# ScreenCaptureKit and CoreGraphics have no binding in the graph: their classes
-# are looked up by name and the few C functions declared in place.
+# ScreenCaptureKit and CoreGraphics have no binding here: classes are looked up by name.
 block2 = "0.6.2"
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "objc2"] }
 objc2 = "0.6.4"
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CFCGTypes"] }
-# The file dialogs (src/dialog/mac.rs). The features only switch on more of
-# the same two crates (gpui's AppKit backend already builds objc2-app-kit
-# 0.3.2); none of them pulls in an optional dependency, so the graph is
-# unchanged. UTType has no binding here and is used by name. The tray
-# (src/tray/macos.rs) adds the status item, its menu items, NSImage with its
-# bitmap representations and NSEvent: again only more of the same crates.
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
     "block2",
@@ -142,10 +97,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# flock, getuid and SO_PEERCRED for the single-instance socket (src/launch/instance_unix.rs).
 libc = "0.2"
-# The file pickers: the desktop portal (src/dialog/linux.rs). gpui's Linux
-# backends build the same ashpd 0.13 on async-io, so no crate is added.
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "file_chooser"] }
 async-io = "2"
 futures-lite = "2"

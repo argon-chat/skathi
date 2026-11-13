@@ -1,31 +1,6 @@
 <script setup lang="ts">
-// The console drawer: the target's log ring, live, and a prompt into its JSC.
-//
-// Two things changed from v1, and both were the same complaint.
-//
-//   NEWEST LAST. v1 reversed the list, because nothing could scroll a container
-//   and "keep the newest visible" had no other implementation. It reads wrong —
-//   a stack trace runs upwards, a sequence of events reads backwards — and it
-//   is fixed here by a list that owns its offset (`../virtual.ts`) and follows
-//   the tail until you scroll away from it, exactly like a terminal.
-//
-//   NO 700 ms LAG. Lines arrive on the push channel, in the frame the target
-//   wrote them (`crates/vn-app/src/devtools/ws.rs`). A `console.log` in the app
-//   is on screen before you have finished looking up.
-//
-// Everything else is the usual console furniture that was missing: level
-// filters, a text filter, clear, preserve-on-reattach, an eval history and
-// completion of the target's own globals.
-//
-// ## Copying (m26)
-//
-// A drag over the messages selects their text, as in a browser (the engine's
-// text selection, docs/RUNTIME.md §5.17), and Ctrl+C or the menu's "Copy"
-// copies it. The row shortcuts stay: the ⧉ on a hovered or selected line, the
-// right-click menu ("Copy message", "Copy all visible"), and Ctrl+C over the
-// selected rows when no text is selected. A click selects a row, Ctrl+click
-// adds or removes one, Shift+click selects the range from the last one; the
-// click that ends a text drag leaves the rows alone.
+// NEWEST LAST. v1 reversed the list, because nothing could scroll a container and "keep the newest
+// visible" had no other implementation.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { onKeydown } from "../keys";
 import { LOG_H, PANE_HEAD_H, PROMPT_H } from "../layout";
@@ -50,30 +25,21 @@ const props = defineProps<{ height: number }>();
 
 const listHeight = computed(() => Math.max(30, props.height - PANE_HEAD_H - PROMPT_H));
 const lines = computed(() => visibleLogs());
-/**
- * Keyed by the line's `uid` (store.ts `pushLine`), not its index: an index
- * names a different line every time the filter changes or the 1000-line buffer
- * drops its oldest.
- */
 const expanded = ref<Record<number, boolean>>({});
 const selected = ref<Record<number, boolean>>({});
-/** Where a Shift+click range starts: the last line clicked without Shift. */
 let anchor: number | null = null;
 const promptBox = ref<VnElement | null>(null);
 const draft = ref("");
 const hint = ref<string[]>([]);
 
-/** The text column's width — the pane minus the gutter, the kind chip and the ⧉. */
 const textWidth = computed(() => Math.max(200, viewport.w - 230));
 
 const uidOf = (line: ConsoleLine): number => line.uid ?? -1;
 
 const heights = computed(() =>
   lines.value.map((line) => {
-    // A collapsed line is one row with an ellipsis; an expanded one wraps.
-    // Nothing here can measure text (see `../virtual.ts`), so the wrapped
-    // height is an estimate that is deliberately generous by a fraction of a
-    // line rather than short by one.
+    // Nothing here can measure text (see `../virtual.ts`), so the wrapped height is an estimate
+    // that is deliberately generous by a fraction of a line rather than short by one.
     if (!expanded.value[uidOf(line)]) return LOG_H;
     return LOG_H * wrappedLines(line.text, textWidth.value) + 4;
   }),
@@ -88,8 +54,8 @@ const slice = computed(() =>
   lines.value.slice(list.start, list.end).map((line, i) => ({ line, index: list.start + i })),
 );
 
-// Follow the tail — unless the reader has scrolled away from it, which is the
-// signal that they are reading something older and would rather not be yanked.
+// Follow the tail — unless the reader has scrolled away from it, which is the signal that they are
+// reading something older and would rather not be yanked.
 watch(
   () => lines.value.length,
   () => {
@@ -103,17 +69,12 @@ watch(
   },
 );
 
-// ---- selection --------------------------------------------------------------
-
 function selectedLines(): ConsoleLine[] {
   return lines.value.filter((line) => selected.value[uidOf(line)]);
 }
 
 function onLineClick(line: ConsoleLine, event: VnMouseEvent): void {
   ui.copyTarget = "console";
-  // The release of a drag that selected text: the text is what was wanted,
-  // not the row (a plain click clears the text selection on its press, so
-  // only a drag gets here with one).
   if (selectedText()) return;
   const uid = uidOf(line);
   if (event.ctrlKey || event.metaKey) {
@@ -134,10 +95,8 @@ function onLineClick(line: ConsoleLine, event: VnMouseEvent): void {
       return;
     }
   }
-  // A plain click selects the line alone — and, as before, opens or closes it
-  // when there is more of it than one row shows. (A one-row line is left
-  // alone: "expanding" it only adds the wrap padding, and that nudge is enough
-  // to take the list off the tail it was following.)
+  // A plain click selects the line alone — and, as before, opens or closes it when there is more
+  // of it than one row shows.
   selected.value = { [uid]: true };
   anchor = uid;
   if (expanded.value[uid] || wrappedLines(line.text, textWidth.value) > 1) {
@@ -149,7 +108,6 @@ function onLineDown(line: ConsoleLine, event: VnMouseEvent): void {
   if (event.button !== 2) return;
   ui.copyTarget = "console";
   const uid = uidOf(line);
-  // Right-clicking outside the selection moves it, as every list does.
   if (!selected.value[uid]) {
     selected.value = { [uid]: true };
     anchor = uid;
@@ -158,7 +116,6 @@ function onLineDown(line: ConsoleLine, event: VnMouseEvent): void {
   const visible = lines.value;
   const text = selectedText();
   const items: MenuItem[] = [];
-  // Text selected by a drag comes first, as a browser's "Copy" does.
   if (text) items.push({ label: "Copy", hint: "Ctrl+C", run: () => void copyText(text, "the selection") });
   items.push({ label: "Copy message", hint: !text && picked.length === 1 ? "Ctrl+C" : undefined, run: () => copyLine(line) });
   if (picked.length > 1) {
@@ -177,7 +134,6 @@ function onLineDown(line: ConsoleLine, event: VnMouseEvent): void {
   openMenu(event.clientX, event.clientY, items);
 }
 
-/** The text a drag selected, anywhere in the window ("" for none). */
 function selectedText(): string {
   return globalThis.getSelection?.()?.toString() ?? "";
 }
@@ -189,13 +145,10 @@ function selectAll(): void {
   ui.copyTarget = "console";
 }
 
-// ---- copy -------------------------------------------------------------------
-
 function copyLine(line: ConsoleLine): void {
   void copyText(line.text, "the message");
 }
 
-/** Several lines: one per line, with the channel each came from. */
 function copyLines(picked: ConsoleLine[]): void {
   if (!picked.length) return;
   if (picked.length === 1) return copyLine(picked[0]);
@@ -222,9 +175,8 @@ function history(delta: number): void {
 
 function onPromptKey(event: VnKeyboardEvent): void {
   if (event.key === "Enter") {
-    // Tab-completion's first suggestion is accepted by Enter only when the
-    // hint list is showing and the caret is at a word — otherwise Enter
-    // evaluates, which is what it is for.
+    // Tab-completion's first suggestion is accepted by Enter only when the hint list is showing
+    // and the caret is at a word — otherwise Enter evaluates, which is what it is for.
     submit();
     return;
   }
@@ -262,18 +214,17 @@ function focusPrompt(): void {
 function onKey(event: VnKeyboardEvent): void {
   const ctrl = event.ctrlKey || event.metaKey;
   const key = event.key.toLowerCase();
-  // Ctrl+L is the terminal's clear and nobody has ever had to learn it.
   if (key === "l" && ctrl && state.consoleOpen) {
     event.preventDefault();
     clearConsole();
     return;
   }
-  // Ctrl+C / Ctrl+A belong to a text field while one has focus (the prompt,
-  // the filter), and to this list only when it was the last thing clicked.
+  // Ctrl+C / Ctrl+A belong to a text field while one has focus (the prompt, the filter), and to
+  // this list only when it was the last thing clicked.
   if (!ctrl || event.shiftKey || ui.typing || ui.menu || !state.consoleOpen || ui.copyTarget !== "console") return;
   if (key === "c") {
-    // Selected text is the engine's to copy (the default action of this
-    // keydown); the selected rows only when there is none.
+    // Selected text is the engine's to copy (the default action of this keydown); the selected
+    // rows only when there is none.
     if (selectedText()) return;
     const picked = selectedLines();
     if (!picked.length) return;
@@ -285,9 +236,6 @@ function onKey(event: VnKeyboardEvent): void {
   }
 }
 
-// A cleared console has nothing selected; a line that scrolled out of the
-// 1000-line buffer is simply gone from `lines`, which is what `selectedLines`
-// reads, so only the explicit clear needs handling.
 watch(
   () => state.logs.length === 0,
   (empty) => {
@@ -318,15 +266,6 @@ const counts = computed(() => {
   return out;
 });
 
-/**
- * One console line, split at its `%c` boundaries.
- *
- * The runs come from the target's own log ring (`crates/vn-tree/src/log.rs`),
- * where the console tee put them after applying the Console Standard's
- * formatter — so `%c` never reaches this app as text, and the CSS never reaches
- * it as a message. All that is left is "this stretch of characters was declared
- * with this CSS".
- */
 function segments(line: ConsoleLine): { text: string; css: string }[] {
   const runs = line.styles;
   if (!runs || !runs.length) return [{ text: line.text, css: "" }];
@@ -341,17 +280,6 @@ function segments(line: ConsoleLine): { text: string; css: string }[] {
   return out;
 }
 
-/**
- * The four declarations a console run is ever really using, pulled out of the
- * CSS string the app passed.
- *
- * Deliberately not a CSS parser and not `style="…"` pass-through: the string is
- * ARBITRARY text from the app under inspection, it is written for a browser's
- * console (`padding`, `border-radius`, `text-shadow`), and handing it straight
- * to this app's own stylesheet would let a target's log line lay out the
- * inspector. Four properties, read by name, is the whole of what a coloured
- * badge needs.
- */
 function runStyle(css: string): Record<string, string> {
   if (!css) return {};
   const style: Record<string, string> = {};
@@ -441,10 +369,8 @@ function glyph(kind: string): string {
         >
           <span class="glyph">{{ glyph(row.line.kind) }}</span>
           <span class="kind">{{ row.line.kind }}</span>
-          <!-- A line with no `%c` is ONE text node, not a span wrapping one:
-               the wrapper would defeat the row's own ellipsis, and 99% of
-               lines have no runs. `.seg` therefore means "a styled run",
-               which is also what makes it a usable selector in a spec. -->
+          <!-- A line with no `%c` is ONE text node, not a span wrapping one: the wrapper would
+               defeat the row's own ellipsis, and 99% of lines have no runs. -->
           <span
             v-if="row.line.styles && row.line.styles.length"
             class="text"
@@ -461,7 +387,6 @@ function glyph(kind: string): string {
           <span v-else class="text plain" :class="{ wrap: expanded[uidOf(row.line)] }">{{
             row.line.text
           }}</span>
-          <!-- The whole message in one click, however much of it is shown. -->
           <span class="copy" title="Copy message" @click.stop="copyLine(row.line)">⧉</span>
         </div>
       </div>
@@ -565,8 +490,6 @@ function glyph(kind: string): string {
   flex-direction: row;
   align-items: flex-start;
   gap: 6px;
-  /* A row is exactly as tall as the virtual list budgeted for it. Anything
-     that overflows is clipped rather than drawn over the next line. */
   overflow: hidden;
   padding-left: 8px;
   padding-right: 12px;
@@ -584,10 +507,7 @@ function glyph(kind: string): string {
 .line.sel:hover {
   background: #17405f;
 }
-/* The per-line copy affordance: present on every line, drawn only on the
- * hovered or selected one (an ancestor `:hover` rule — vn-css folds it into
- * the line's hover bucket). Transparent rather than `display: none` so that
- * showing it never re-lays the row out. */
+/* Transparent rather than `display: none` so that showing it never re-lays the row out. */
 .copy {
   width: 14px;
   flex-shrink: 0;
@@ -614,13 +534,8 @@ function glyph(kind: string): string {
   font-size: 10px;
   color: #5c6b80;
 }
-/* A row of `%c` runs, DECLARED as a row rather than left to the engine's
- * inline-formatting fallback. The fallback is right for prose — it wraps —
- * and wrong here: a collapsed console line is exactly one line tall, and a
- * wrapped second line would be drawn into the row underneath it.
- *
- * `.text.plain` (a line with no runs) opts back out: it is a single text
- * node, and a block box is what `text-overflow: ellipsis` needs. */
+/* The fallback is right for prose — it wraps — and wrong here: a collapsed console line is exactly
+   one line tall, and a wrapped second line would be drawn into the row underneath it. */
 .text {
   flex: 1;
   min-width: 0;
@@ -632,9 +547,6 @@ function glyph(kind: string): string {
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 17px;
-  /* The message is selectable; the glyph, the kind and the ⧉ are not (the
-   * app's `none`), so a drag over several rows copies the messages, one per
-   * line. */
   user-select: text;
 }
 .text.plain {
@@ -644,18 +556,12 @@ function glyph(kind: string): string {
   white-space: normal;
   flex-wrap: wrap;
 }
-/* One `%c` run. The padding is what makes a coloured badge look like one;
- * `flex-shrink: 0` keeps a badge its own width while the message beside it
- * takes the squeeze. */
 .seg {
   border-radius: 3px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* A run that carries a background is a BADGE: it keeps its own width, and the
-   message beside it takes the squeeze. Without this the badge is the thing
-   that ellipses, which is the one part of the line you can always read. */
 .seg:first-child {
   flex-shrink: 0;
 }

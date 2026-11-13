@@ -1,20 +1,13 @@
-//! The one-instance rule on Linux: `instance_win`'s protocol over a Unix
-//! socket.
+//! The one-instance rule on Linux: `instance_win`'s protocol over a Unix socket.
 //!
 //! ```text
 //!   $XDG_RUNTIME_DIR/vn-instance-<key>.lock   flock'd by the instance for its lifetime
 //!   $XDG_RUNTIME_DIR/vn-instance-<key>.sock   where it listens
 //! ```
-//!
-//! - **The lock decides, not the socket.** Whoever holds the `flock` is the
-//!   instance; the kernel drops it when that process ends however it ends, so
-//!   a stale socket file left by a crash is simply replaced. A launch that
-//!   cannot take the lock connects and forwards, exactly as on Windows.
-//! - **Per user.** `$XDG_RUNTIME_DIR` is the user's own 0700 directory (a
-//!   0700 `/tmp/vn-instance-<uid>` without one), and the server checks the
-//!   peer's uid (`SO_PEERCRED`) before reading anything.
-//! - **Same answers.** One byte: delivered, or closing (the second launch
-//!   waits for this process to exit and becomes the instance).
+//! The `flock` decides, not the socket: the kernel drops it when the holder ends however it ends, so
+//! a stale socket file from a crash is simply replaced. A launch that cannot take the lock connects
+//! and forwards. Per user: `$XDG_RUNTIME_DIR` (else a 0700 `/tmp/vn-instance-<uid>`), and the server
+//! checks the peer's uid (`SO_PEERCRED`) before reading. The ack is one byte: delivered, or closing.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
@@ -219,7 +212,6 @@ fn serve(sock: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-/// One connected client: verify, read, ack, deliver.
 fn handle(mut stream: UnixStream) {
     if peer_uid(&stream) != Some(uid()) {
         eprintln!("[launch] refused a single-instance message: not this user");

@@ -1,22 +1,9 @@
-// A fixture for packages/vn-test/specs/broadcast-rope.spec.ts: Argon's
-// broadcast connector (apps/client src/components/channels/
-// BroadcastConnectors.vue), the faint line in the channel list's gutter from a
-// broadcast voice channel to the channels that hear it.
-//
-// The component is reproduced as the client writes it: an inline `<svg>` with
-// no viewBox and no width/height attributes, sized by CSS (`position:
-// absolute; top: 0; left: 0; width: 100%` and an inline `height` of the
-// scroller's scrollHeight), whose `<path d>`s come from the rows'
-// getBoundingClientRect(), re-measured on the next animation frame and by
-// ResizeObserver / MutationObserver. A browser draws the paths in CSS pixels
-// of the svg's box. `stroke-opacity: 0.28` is dropped here so the line reads
-// back as the list's `color` at full strength.
-// Render functions rather than an SFC, for the reason fixtures/layout gives.
+// `stroke-opacity: 0.28` is dropped here so the line reads back as the list's `color` at full
+// strength.
 import { createApp, h, onMounted, onUnmounted, ref, watch } from "vue-native";
 import "./rope.css";
 
 const ROWS = ["564gtr", "4536456", "annonces", "rurune-box", "smazka", "br", "rubka", "5345"];
-/** рубка broadcasts to rurune-box and Смазка, as in the owner's space. */
 const LINKS = [{ from: "rubka", to: ["rurune-box", "smazka"] }];
 
 const LANE_X = [3.5, 6.5];
@@ -62,8 +49,6 @@ const Connectors = {
       state.height = height.value;
     }
 
-    // One measure per frame, and one more once the list has settled, as the
-    // client does (its list animates rows in).
     let frame = 0;
     let settle: ReturnType<typeof setTimeout> | null = null;
     const schedule = () => {
@@ -81,8 +66,8 @@ const Connectors = {
         state.settled = true;
       }, 320);
     };
-    // The scroller is the parent's template ref, so it arrives after this
-    // mounts; the client watches the prop for the same reason.
+    // The scroller is the parent's template ref, so it arrives after this mounts; the client
+    // watches the prop for the same reason.
     let ro: ResizeObserver | null = null;
     const observe = (el: HTMLElement | null | undefined) => {
       ro?.disconnect();

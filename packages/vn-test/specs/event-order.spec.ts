@@ -1,16 +1,5 @@
-// One platform event, two JS events, and the microtask checkpoint between them
-// (m26 client sweep #8, docs/RUNTIME.md §5.8).
-//
-//   bun test packages/vn-test/specs/event-order.spec.ts
-//
-// A dispatch made under a gpui listener leaves its checkpoint owed, and the
-// host settles it after gpui's dispatch, where a layout read may lay out. When
-// the same platform event produces a SECOND dispatch first, that dispatch
-// settles the owed checkpoint before it runs. So each event's microtasks still
-// run before the next event's handlers, as in a browser and as before #8.
-// These are the seven pairs where one platform event produces two dispatches.
-// Every handler in `fixtures/event-order` logs its event and then, from a
-// microtask, `<event>:mt`.
+// When the same platform event produces a SECOND dispatch first, that dispatch settles the owed
+// checkpoint before it runs.
 
 import { afterAll, expect, test } from "bun:test";
 import { launch } from "../src/index";
@@ -29,7 +18,6 @@ async function readLog(): Promise<string[]> {
   return JSON.parse(String(r?.value ?? r)) as string[];
 }
 
-/** Clears the log, acts, and returns the log once every `want` event and its microtask are in. */
 async function logOf(action: () => Promise<unknown>, want: string[]): Promise<string[]> {
   await app.eval("__VN_TEST_ORDER__.clear()");
   await action();
@@ -41,7 +29,6 @@ async function logOf(action: () => Promise<unknown>, want: string[]): Promise<st
   }
 }
 
-/** The events in order, each followed at once by its own microtask. */
 function expectCheckpointed(log: string[], events: string[]) {
   expect(log).toEqual(events.flatMap((e) => [e, `${e}:mt`]));
 }
@@ -78,8 +65,8 @@ test("the Menu key: keyup, then contextmenu", async () => {
 }, T);
 
 test("Enter on a button clicks on the press, Space on the release", async () => {
-  // Chromium: Enter's click comes from its keypress, before keyup; Space's is
-  // the keyup's default action, after its handlers.
+  // Chromium: Enter's click comes from its keypress, before keyup; Space's is the keyup's default
+  // action, after its handlers.
   const enter = await logOf(() => app.locator("#btn").press("Enter"), ["keyup-btn", "click-btn"]);
   expectCheckpointed(enter, ["click-btn", "keyup-btn"]);
   const space = await logOf(() => app.locator("#btn").press("Space"), ["keyup-btn", "click-btn"]);
@@ -87,8 +74,8 @@ test("Enter on a button clicks on the press, Space on the release", async () => 
 }, T);
 
 test("a div role=button that handles its own keys acts once, with no click", async () => {
-  // A browser clicks only an element with an activation behaviour; a click
-  // here as well would run a menu item's action twice.
+  // A browser clicks only an element with an activation behaviour; a click here as well would run
+  // a menu item's action twice.
   const enter = await logOf(() => app.locator("#role-btn").press("Enter"), ["act-role"]);
   const space = await logOf(() => app.locator("#role-btn").press("Space"), ["act-role"]);
   await Bun.sleep(150);
@@ -104,8 +91,6 @@ test("a cancelled Enter keydown or Space keyup clicks nothing", async () => {
 }, T);
 
 test("one wheel over a scroll container: wheel, then scroll", async () => {
-  // As in a browser: `wheel` is cancelable and comes first, and `scroll`
-  // follows once the dispatch is over (render::report_scroll_later).
   const log = await logOf(() => app.send("wheel", { selector: "#scroller", dy: 40 }), ["wheel", "scroll"]);
   expectCheckpointed(log, ["wheel", "scroll"]);
 }, T);

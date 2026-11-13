@@ -1,14 +1,3 @@
-// Document text selection by mouse (m26, docs/RUNTIME.md §5.17,
-// crates/vn-tree/src/selection.rs + packages/vue-native/src/selection.ts).
-//
-//   bun test packages/vn-test/specs/selection.spec.ts
-//
-// The gestures are REAL pointer events through gpui's hit test (devtools
-// `mouse`, with `held` for the moves of a drag and `clicks` for double and
-// triple clicks), so the press goes where a hand's would. One test presses
-// Ctrl+C, which writes the system clipboard: it saves what was there first and
-// puts it back afterwards.
-
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { launch, readPng } from "../src/index";
@@ -32,7 +21,6 @@ async function box(sel: string): Promise<Box> {
 async function mouse(x: number, y: number, kind: string, extra: Record<string, unknown> = {}) {
   await app.send("mouse", { x, y, kind, ...extra });
 }
-/** A drag from one window point to another, through a few held moves. */
 async function drag(from: [number, number], to: [number, number]) {
   await mouse(from[0], from[1], "down");
   for (let i = 1; i <= 4; i++) {
@@ -47,7 +35,6 @@ const selected = async () => String(await app.eval("String(getSelection())"));
 const rangeCount = async () => Number(await app.eval("getSelection().rangeCount"));
 const state = async () =>
   JSON.parse(String(await app.eval("JSON.stringify(__VN_TEST_SEL__)"))) as { changes: number; starts: number; copies: string[] };
-/** Somewhere with no text: the bottom-right corner of the page. */
 const nowhere = async () => {
   const d = await box("#doc");
   return [d.x + d.w - 4, d.y + d.h - 4] as [number, number];
@@ -104,7 +91,6 @@ describe("text selection by mouse", () => {
       bunExpect(got).toBe("Hello big world\n\nSecond paragraph here");
       bunExpect((await state()).copies.at(-1)).toBe("Hello big world\n\nSecond paragraph here");
     } finally {
-      // Put the owner's text back (Set-Clipboard with nothing clears it).
       const escaped = saved.replace(/\r?\n$/, "").replace(/'/g, "''");
       powershell(saved ? `Set-Clipboard -Value '${escaped}'` : "Set-Clipboard -Value $null");
     }
@@ -139,7 +125,6 @@ describe("text selection by mouse", () => {
     const text = await selected();
     bunExpect(text.startsWith("Second paragraph here")).toBe(true);
     bunExpect(text.endsWith("Third one")).toBe(true);
-    // `user-select: none` text between is left out.
     bunExpect(text).not.toContain("Not selectable");
   }, T);
 
@@ -185,7 +170,6 @@ describe("text selection by mouse", () => {
       await mouse(sc.x + 20, sc.y + 8 + (sc.h + 22) * (i / 3), "move", { held: true });
       await sleep(30);
     }
-    // Held still past the edge: the frames keep scrolling.
     await sleep(600);
     await mouse(below[0], below[1], "move", { held: true });
     await mouse(below[0], below[1], "up");

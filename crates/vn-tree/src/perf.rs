@@ -1,35 +1,15 @@
-//! Phase counters for the `VN_PERF` probe — "where did the frame go?".
-//!
-//! `vn-app`'s `perf` module owns the frame CLOCK (one `Instant` per frame, a
-//! one-second window, percentiles). This module owns the two phases that clock
-//! cannot see from the host side, because both run deep inside `vn-tree`:
-//!
-//! * **restyle** — [`crate::tree::Tree::restyle`]: re-parsing dirty inline
-//!   styles, then the cascade (`vn_css::Engine::compute_node` per element),
-//!   then storing the result and feeding the transition animator;
-//! * **build** — [`crate::render::build_root`]: lowering the retained tree into
-//!   this frame's gpui element tree.
-//!
-//! Both are accumulated into a one-second window that `vn-app` drains next to
-//! its own frame report, so the two lines always describe the same second.
-//!
-//! Everything here is gated on the same `VN_PERF` env var: with the probe off a
-//! phase costs one relaxed atomic load and an early return, so the hooks stay
-//! wired in permanently rather than living behind a cargo feature nobody
-//! remembers to turn on.
+//! Phase counters for the `VN_PERF` probe: the restyle and build phases that run deep inside `vn-tree`,
+//! accumulated into a one-second window that `vn-app` drains next to its own frame report. With the
+//! probe off a phase costs one relaxed atomic load.
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Instant;
 
-/// 0 = not looked at yet, 1 = off, 2 = on. Mirrors `vn_app::perf::enabled`;
-/// the crates cannot see each other's statics and the check is one load.
+/// 0 = not looked at yet, 1 = off, 2 = on.
 static ENABLED: AtomicU8 = AtomicU8::new(0);
 
-/// The devtools frame trace (`trace start`, `vn_app::devtools::trace`) is
-/// recording. It turns every counter here on without `VN_PERF`, and it drains
-/// them once per frame with [`take`] — so the two never run together (the
-/// devtools refuse a trace while `VN_PERF` owns the counters).
+/// The devtools frame trace (`trace start`, `vn_app::devtools::trace`) is recording.
 static TRACING: AtomicBool = AtomicBool::new(false);
 
 /// Arms or disarms the counters for the devtools frame trace.
@@ -65,12 +45,11 @@ fn env_on() -> bool {
     }
 }
 
-/// One second's worth of phase work. Times are milliseconds, summed over the
-/// window; `*_max` is the single worst occurrence in it.
+/// One second's worth of phase work.
 #[derive(Clone, Copy, Debug)]
 pub struct Phases {
-    /// How many times the restyle pass ran (a frame can run several — every
-    /// event dispatch flushes the tree before returning to the pump).
+    /// How many times the restyle pass ran (a frame can run several — every event dispatch flushes
+    /// the tree before returning to the pump).
     pub restyle_passes: u32,
     pub restyle_ms: f32,
     pub restyle_max_ms: f32,
@@ -78,8 +57,8 @@ pub struct Phases {
     pub inline_ms: f32,
     /// Time inside `Engine::compute_node` — matching + folding + `var()`.
     pub cascade_ms: f32,
-    /// …split three ways by vn-css itself: running selectors, resolving the
-    /// element's custom properties, folding the matched declarations.
+    /// …split three ways by vn-css itself: running selectors, resolving the element's custom
+    /// properties, folding the matched declarations.
     pub match_ms: f32,
     pub vars_ms: f32,
     pub fold_ms: f32,
@@ -87,30 +66,22 @@ pub struct Phases {
     pub store_ms: f32,
     /// Elements handed to `compute_node` across the window.
     pub nodes_cascaded: u64,
-    /// Selectors actually run through the matcher. With the rule index in
-    /// place this is much smaller than `nodes_cascaded * rules_in_sheet`, and
-    /// the ratio between the two is the index's whole reason for existing.
+    /// Selectors actually run through the matcher.
     pub rules_tested: u64,
-    /// [`Self::rules_tested`] split by the index bucket that offered each one
-    /// (no key, the subject's tag, class or id, `:root`, the parent's key), and
-    /// how many of them matched
+    /// [`Self::rules_tested`] split by the index bucket that offered each one (no key, the
+    /// subject's tag, class or id, `:root`, the parent's key), and how many of them matched
     /// (`vn_css::perf::Split`).
     pub rules_split: vn_css::perf::Split,
-    /// Elements that asked the matched-properties cache, and the ones an
-    /// earlier element answered (`vn_css::perf::take_share`).
     pub share_asked: u64,
     pub share_hits: u64,
 
     /// How many times `build_root` ran (once per gpui `render()`).
     pub build_passes: u32,
-    /// How many cache boundaries actually re-rendered in the window — the
-    /// counter that says whether the retained-render cache is working. Zero
-    /// with boundaries live means every one of them replayed.
+    /// How many cache boundaries actually re-rendered in the window — the counter that says whether
+    /// the retained-render cache is working.
     pub cached_renders: u32,
-    /// Boundaries offered to gpui across the window (`replay` = offered minus
-    /// re-rendered), and boundaries that stood down because they were thrashing
-    /// (`vn_tree::cache::THRASH_LIMIT`). The three together are the whole story
-    /// of whether the retained-render cache is earning its keep.
+    /// The three together are the whole story of whether the retained-render cache is earning its
+    /// keep.
     pub cache_offers: u32,
     pub cache_standdowns: u32,
     pub build_ms: f32,
@@ -119,13 +90,10 @@ pub struct Phases {
     pub elements_built: u64,
 
     // ---- gpui's own element work, measured at the ROOT node's `BoundsProbe`.
-    // The root's element methods bracket the whole recursion, so timing three
-    // of them attributes every millisecond gpui spends between "here is your
-    // element tree" and "the scene is ready":
     /// Building the layout request tree (recursive `request_layout`).
     pub layout_req_ms: f32,
-    /// taffy's `compute_layout` — the gap between the root's `request_layout`
-    /// returning and its `prepaint` being called.
+    /// taffy's `compute_layout` — the gap between the root's `request_layout` returning and its
+    /// `prepaint` being called.
     pub taffy_ms: f32,
     /// The prepaint recursion (hitboxes, scroll offsets, our bounds probes).
     pub prepaint_ms: f32,
@@ -133,48 +101,35 @@ pub struct Phases {
     pub paint_ms: f32,
     pub draw_passes: u32,
 
-    /// Time inside `dispatch_event` — the JS half of an input event: the
-    /// runtime's capture/bubble walk over the mirror tree, the app's handlers,
-    /// and the microtask drain that runs Vue's patch queue. It OVERLAPS the
-    /// host's own phases (it is called from the pump and from gpui listeners
-    /// alike), so it is reported on its own line rather than added to them.
+    /// Time inside `dispatch_event` — the JS half of an input event: the runtime's capture/bubble
+    /// walk over the mirror tree, the app's handlers, and the microtask drain that runs Vue's patch
+    /// queue.
     pub js_passes: u32,
     pub js_ms: f32,
     pub js_max_ms: f32,
 
-    // ---- added for the devtools frame trace (m26 perf investigation). Every
-    // one of these is gated like the rest: one atomic load with nothing armed.
-    /// Restyle passes that walked the WHOLE document (`dirty_all`), and the
-    /// nodes whose fold actually changed across all passes.
+    /// Restyle passes that walked the WHOLE document (`dirty_all`), and the nodes whose fold
+    /// actually changed across all passes.
     pub restyle_full: u32,
     pub nodes_changed: u64,
-    /// Why a whole-document restyle was asked for, by [`FullReason`].
     pub full_reasons: [u32; FullReason::COUNT],
     /// Stylesheet compiles (`recompile_sheet` / `set_stylesheet`) and their time.
     pub recompiles: u32,
     pub recompile_ms: f32,
-    /// FORCED synchronous layouts (`crate::sync_layout`): how many drew, the
-    /// wall time of all of them (the whole gpui draw each one does, restyle
-    /// included), how many were owed and could not draw (a gpui listener on
-    /// the stack), and which DOM read asked, by [`SyncCaller`].
     pub sync_layouts: u32,
     pub sync_layout_ms: f32,
     pub sync_layout_max_ms: f32,
     pub sync_layout_refused: u32,
     pub sync_by: [u32; SyncCaller::COUNT],
-    /// JS waves whose changes were all flushed AND drawn by a forced layout
-    /// ([`crate::Flush::DrawnBySync`]), and of those, the ones where nothing
-    /// else (an animation or a media frame) asked the primary window to draw.
-    /// The host skips that redundant notification; this is not a count of
-    /// repeated draws. Popped-out windows still receive the changed wave.
+    /// The host skips that redundant notification; this is not a count of repeated draws.
+    /// Popped-out windows still receive the changed wave.
     pub sync_tail: u32,
     pub sync_tail_free: u32,
-    /// The ResizeObserver / IntersectionObserver step after layout
-    /// (`crate::observe`): steps run, ResizeObserver broadcast rounds, the
-    /// layouts a round's callbacks made the step redo and their wall time, the
-    /// rest of the step's time (the callbacks, the microtasks after them, the
-    /// flushes; the frame's own draw at its start is not in it), and the
-    /// "loop completed with undelivered notifications" errors raised.
+    /// The ResizeObserver / IntersectionObserver step after layout (`crate::observe`): steps run,
+    /// ResizeObserver broadcast rounds, the layouts a round's callbacks made the step redo and
+    /// their wall time, the rest of the step's time (the callbacks, the microtasks after them, the
+    /// flushes; the frame's own draw at its start is not in it), and the "loop completed with
+    /// undelivered notifications" errors raised.
     pub observer_steps: u32,
     pub observer_rounds: u32,
     pub observer_relayouts: u32,
@@ -183,21 +138,21 @@ pub struct Phases {
     pub observer_loop_errors: u32,
     /// Host DOM operations (`__vn_*` mutators), by [`DomOp`].
     pub dom_ops: [u32; DomOp::COUNT],
-    /// The first and last DOM mutation in the window: the span Vue spent
-    /// rendering + patching, as seen from the host (a proxy — render work
-    /// before the first op and after the last is outside it).
+    /// The first and last DOM mutation in the window: the span Vue spent rendering + patching, as
+    /// seen from the host (a proxy — render work before the first op and after the last is outside
+    /// it).
     pub dom_first: Option<Instant>,
     pub dom_last: Option<Instant>,
-    /// Layout and style READS from JS: `getBoundingClientRect` & co
-    /// (`__vn_bounds`), `scroll*` reads, `getComputedStyle`, selector queries.
+    /// Layout and style READS from JS: `getBoundingClientRect` & co (`__vn_bounds`), `scroll*`
+    /// reads, `getComputedStyle`, selector queries.
     pub layout_reads: u32,
     pub scroll_reads: u32,
     pub style_reads: u32,
     pub queries: u32,
     /// Forced STYLE flushes `getComputedStyle` ran (a restyle each).
     pub style_flushes: u32,
-    /// Image copies for downscaled draws (`crate::resample`): made on the
-    /// painting thread (count, time) and handed to the resampling thread.
+    /// Image copies for downscaled draws (`crate::resample`): made on the painting thread (count,
+    /// time) and handed to the resampling thread.
     pub resample_sync: u32,
     pub resample_sync_ms: f32,
     pub resample_async: u32,
@@ -217,7 +172,6 @@ pub enum FullReason {
     Env = 1,
     /// A `<style>` element's text changed → the sheet is recompiled.
     StyleElement = 2,
-    /// Web fonts were registered → the sheet is recompiled.
     Fonts = 3,
     /// The viewport basis moved under a sheet that uses `vw`/`vh`.
     ViewportBasis = 4,
@@ -354,7 +308,7 @@ fn with(f: impl FnOnce(&mut Phases)) {
     PHASES.with(|p| f(&mut p.borrow_mut()));
 }
 
-/// Drains the window. Returns `None` when the probe is off or nothing ran.
+/// Drains the window.
 pub fn take() -> Option<Phases> {
     if !enabled() {
         return None;
@@ -363,14 +317,14 @@ pub fn take() -> Option<Phases> {
     (taken.restyle_passes > 0 || taken.build_passes > 0 || taken.js_passes > 0).then_some(taken)
 }
 
-/// Drains the window whatever ran in it — the devtools trace closes one
-/// record per frame, and a frame of nothing but DOM reads is still a record.
+/// Drains the window whatever ran in it — the devtools trace closes one record per frame, and a
+/// frame of nothing but DOM reads is still a record.
 pub fn take_all() -> Phases {
     PHASES.with(|p| std::mem::take(&mut *p.borrow_mut()))
 }
 
-/// A phase timer. `Span::start()` is a single atomic load when the probe is
-/// off, so callers need no `if` of their own.
+/// A phase timer. `Span::start()` is a single atomic load when the probe is off, so callers need no
+/// `if` of their own.
 pub struct Span(Option<Instant>);
 
 impl Span {
@@ -435,14 +389,6 @@ pub fn note_build(total_ms: f32, elements: u64) {
 }
 
 /// A cache boundary lowered its subtree — see `vn_tree::render::build_cached`.
-///
-/// It is the SAME work `note_build` measures and it is charged to the same
-/// bucket, but it does not open a new pass: a boundary renders inside gpui's
-/// prepaint, so counting it as a pass would make `build avg` the average of a
-/// frame and a fragment. Without this line the work would land in `prepaint`
-/// instead and the partition would still add up — while quietly saying our
-/// lowering had got cheaper because gpui's prepaint had got dearer.
-/// A cache boundary was offered to gpui, or stood down instead.
 #[inline]
 pub fn note_cache_offer(stood_down: bool) {
     if !enabled() {
@@ -465,8 +411,8 @@ pub fn note_build_extra(total_ms: f32, elements: u64) {
         p.build_ms += total_ms;
         p.elements_built += elements;
         p.cached_renders += 1;
-        // The subtree's own prepaint+layout runs inside gpui's prepaint, which
-        // is where it belongs; only the lowering is moved.
+        // The subtree's own prepaint+layout runs inside gpui's prepaint, which is where it belongs;
+        // only the lowering is moved.
         p.prepaint_ms -= total_ms;
     });
 }
@@ -483,8 +429,6 @@ pub fn note_layout_req(ms: f32) {
     });
 }
 
-/// The root element's prepaint is about to start — everything since
-/// [`note_layout_req`] was taffy.
 pub fn note_taffy_gap() {
     if !enabled() {
         return;
@@ -510,8 +454,8 @@ pub fn note_paint(ms: f32) {
     with(|p| p.paint_ms += ms);
 }
 
-/// The restyle pass's shape: did it walk the whole document, and how many
-/// nodes' folds actually changed.
+/// The restyle pass's shape: did it walk the whole document, and how many nodes' folds actually
+/// changed.
 pub fn note_restyle_shape(full: bool, changed: u64) {
     if !enabled() {
         return;
@@ -531,10 +475,8 @@ pub fn note_full(reason: FullReason) {
     with(|p| p.full_reasons[reason as usize] += 1);
 }
 
-// ---------------------------------------------------------------------------
-// stylesheet compiles since boot (always on: one compile is ~100 ms, so a few
-// relaxed adds beside it cost nothing)
-// ---------------------------------------------------------------------------
+// stylesheet compiles since boot (always on: one compile is ~100 ms, so a few relaxed adds beside
+// it cost nothing)
 
 /// The host's live-heap probe (vn-app's counting allocator), when it has one.
 static LIVE_BYTES_PROBE: std::sync::OnceLock<fn() -> Option<i64>> = std::sync::OnceLock::new();
@@ -544,21 +486,18 @@ static SHEET_SOURCE_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 static SHEET_GROWTH: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 static SHEET_GROWTH_SEEN: AtomicBool = AtomicBool::new(false);
 
-/// Installs the live-heap probe (`devtools mem`, m26). Without one, compiles
-/// are still counted, just not weighed.
+/// Without one, compiles are still counted, just not weighed.
 pub fn set_live_bytes_probe(f: fn() -> Option<i64>) {
     let _ = LIVE_BYTES_PROBE.set(f);
 }
 
-/// Live Rust heap bytes right now, if the host counts them.
 pub fn live_bytes() -> Option<i64> {
     LIVE_BYTES_PROBE.get().and_then(|f| f())
 }
 
-/// One whole stylesheet compile and engine swap: `ms`, the source's length,
-/// and the Rust heap's net growth across it (`before`/`after` from
-/// [`live_bytes`]) — what a compile leaves behind once the engine it replaced
-/// is gone.
+/// One whole stylesheet compile and engine swap: `ms`, the source's length, and the Rust heap's net
+/// growth across it (`before`/`after` from [`live_bytes`]) — what a compile leaves behind once the
+/// engine it replaced is gone.
 pub fn note_sheet_compile(ms: f32, source_len: usize, before: Option<i64>, after: Option<i64>) {
     use std::sync::atomic::Ordering::Relaxed;
     SHEET_COMPILES.fetch_add(1, Relaxed);
@@ -570,8 +509,8 @@ pub fn note_sheet_compile(ms: f32, source_len: usize, before: Option<i64>, after
     }
 }
 
-/// `(compiles, total ms, source bytes compiled, net Rust heap growth)` since
-/// boot; the growth is `None` without a live-heap probe.
+/// `(compiles, total ms, source bytes compiled, net Rust heap growth)` since boot; the growth is
+/// `None` without a live-heap probe.
 pub fn sheet_compiles() -> (u64, f64, u64, Option<i64>) {
     use std::sync::atomic::Ordering::Relaxed;
     (
@@ -593,8 +532,8 @@ pub fn note_recompile(ms: f32) {
     });
 }
 
-/// A JS wave whose changes a forced layout had already drawn; `free` = nothing
-/// else needed the frame to draw.
+/// A JS wave whose changes a forced layout had already drawn; `free` = nothing else needed the
+/// frame to draw.
 pub fn note_sync_tail(free: bool) {
     if !enabled() {
         return;
@@ -607,9 +546,8 @@ pub fn note_sync_tail(free: bool) {
     });
 }
 
-/// One observer step (`crate::observe`): its broadcast rounds, the layouts
-/// they made it redo and their time, the rest of its time, and whether it
-/// raised the loop error.
+/// One observer step (`crate::observe`): its broadcast rounds, the layouts they made it redo and
+/// their time, the rest of its time, and whether it raised the loop error.
 pub fn note_observers(rounds: u32, relayouts: u32, relayout_ms: f32, ms: f32, loop_error: bool) {
     if !enabled() {
         return;
@@ -624,8 +562,8 @@ pub fn note_observers(rounds: u32, relayouts: u32, relayout_ms: f32, ms: f32, lo
     });
 }
 
-/// One forced synchronous layout: `drew` = a build happened (the hook drew);
-/// `ms` is the whole call, the restyle it flushes included.
+/// One forced synchronous layout: `drew` = a build happened (the hook drew); `ms` is the whole
+/// call, the restyle it flushes included.
 pub fn note_sync_layout(caller: SyncCaller, drew: bool, ms: f32) {
     if !enabled() {
         return;
@@ -663,8 +601,7 @@ pub fn note_dom(op: DomOp) {
     });
 }
 
-/// A layout read from JS (`__vn_bounds`), a scroll read, a
-/// `getComputedStyle`, a selector query.
+/// A layout read from JS (`__vn_bounds`), a scroll read, a `getComputedStyle`, a selector query.
 #[derive(Clone, Copy)]
 pub enum Read {
     Layout,
@@ -695,7 +632,6 @@ pub fn note_style_flush() {
     with(|p| p.style_flushes += 1);
 }
 
-/// A downscaled copy: made now on the painting thread (`ms`), or queued.
 pub fn note_resample(sync_ms: Option<f32>) {
     if !enabled() {
         return;

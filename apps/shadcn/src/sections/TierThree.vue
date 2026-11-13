@@ -1,14 +1,4 @@
 <script setup lang="ts">
-// TIER 3 — portal + floating components. These are the ones that reach deepest
-// into the DOM: Teleport targets, focus traps, dismissable layers, and
-// @floating-ui positioning driven by getBoundingClientRect.
-//
-// As of compat round 6 this tier needs NO app-level configuration at all. It
-// used to wrap everything in reka-ui's `<ConfigProvider :teleport-to>`, because
-// reka's `<Teleport>` defaults to the STRING "body" and the renderer had no
-// `nodeOps.querySelector` to resolve it with. It has one now, and "body" means
-// the app root — which is also what makes the dialog's `fixed inset-0` cover
-// the window rather than one column of the page.
 import { ref } from "vue";
 import type { AcceptableValue } from "reka-ui";
 import Section from "./Section.vue";
@@ -19,10 +9,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popove
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "../components/ui/select";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 
-// `AcceptableValue`, not `string`: reka's SelectRoot writes `null` back through
-// `v-model` when the selection is cleared, so a `Ref<string>` here was a lie the
-// template type-checker caught the first time it was pointed at this file. See
-// the same note in TierTwo.vue.
 const fruit = ref<AcceptableValue>("apple");
 </script>
 

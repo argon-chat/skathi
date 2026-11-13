@@ -1,14 +1,3 @@
-// A chat composer's key handling against a text field's default action (m26
-// client sweep #8, docs/RUNTIME.md §5.8).
-//
-//   bun test packages/vn-test/specs/composer.spec.ts
-//
-// A listener's microtask checkpoint is settled after gpui's dispatch, so a
-// layout read in it can lay out. A text field is the exception: the keydown's
-// checkpoint is settled before the widget inserts the key, because a browser
-// runs it between the event and the default action, and a handler that
-// rewrites or clears the value must see the key land in what it wrote.
-
 import { afterAll, expect, test } from "bun:test";
 import { launch } from "../src/index";
 
@@ -26,7 +15,6 @@ async function read(js: string): Promise<string> {
   return String(r?.value ?? r);
 }
 
-/** Polls `js` until it reads `want` (or 3 s pass) and returns the last answer. */
 async function until(js: string, want: string): Promise<string> {
   const deadline = Date.now() + 3_000;
   for (;;) {
@@ -68,8 +56,8 @@ test("a press whose handler hides its own target from a microtask: nothing is le
   await app.locator("#victim").click({ real: true });
   expect(await until("String(!!document.querySelector('#victim'))", "false")).toBe("false");
   await Bun.sleep(150);
-  // A browser runs the checkpoint before the press's default focus, finds the
-  // target gone and focuses nothing: #other loses focus either way.
+  // A browser runs the checkpoint before the press's default focus, finds the target gone and
+  // focuses nothing: #other loses focus either way.
   const active = await read("String(document.activeElement && document.activeElement.id)");
   const log = await read("JSON.stringify(__VN_TEST_COMPOSER__.state.focusLog)");
   console.log("victim:", active, log);

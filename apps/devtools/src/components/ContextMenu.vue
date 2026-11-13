@@ -1,24 +1,4 @@
 <script setup lang="ts">
-// The right-click menu — one for the whole inspector, opened by whichever
-// panel was right-clicked (`openMenu` in ../store.ts).
-//
-// There is no `contextmenu` event to open it from: the engine dispatches the
-// right button as `mousedown` with `button === 2` and stops there
-// (crates/vn-tree/src/devtools.rs: "a right press produces `contextmenu`,
-// never `click`" — in a browser; here it produces neither). Panels therefore
-// open this on that `mousedown`, which a browser ALSO fires first, so the same
-// code keeps working the day `contextmenu` is dispatched.
-//
-// Dismissal is a full-window shield under the menu (any press outside closes
-// it, as in every OS menu) and Escape, which the shell owns (App.vue).
-//
-// The menu box swallows its own `mousedown` (`@mousedown.stop`). In a browser
-// that listener changes nothing — the shield is a sibling, not an ancestor, so
-// a press on an item never reaches it — and since m26 the same holds here (a
-// press goes to the topmost element and its ancestors only). It stays for an
-// engine before that: there the shield under an item, which listens only for
-// `click`, took the press, closed the menu, and the item's click never came
-// ("Copy message" copied nothing).
 import { computed } from "vue";
 import { MENU_ITEM_H, viewport } from "../layout";
 import { closeMenu, ui } from "../store";
@@ -26,7 +6,6 @@ import type { MenuItem } from "../protocol";
 
 const WIDTH = 236;
 
-/** Kept on-screen: a menu opened near the right or bottom edge flips inward. */
 const at = computed(() => {
   const m = ui.menu;
   if (!m) return { left: 0, top: 0 };

@@ -1,14 +1,3 @@
-// The Network details pane's pure half (`../src/netfmt.ts`): how a captured
-// body becomes lines and hex, which header values are masked and how, and what
-// "Copy as curl" / "Copy as fetch" put on the clipboard.
-//
-//   bun test apps/devtools/test
-//
-// No host, no Vue: these are the functions that turn `net_detail`'s reply
-// (crates/vn-app/src/devtools/net.rs `Ring::detail`) into what a person reads,
-// and the copies are the part most worth pinning — a curl line that quotes one
-// character wrong is a request that silently differs from the one the app made.
-
 import { describe, expect, test } from "bun:test";
 import {
   asCurl,
@@ -83,7 +72,6 @@ describe("text", () => {
       "cache default",
     ]);
     expect(wrapWords("abcdefghijklmnopqrstuvwxyz", 10)).toEqual(["abcdefghij", "klmnopqrst", "uvwxyz"]);
-    // A space too early in the row is not worth a near-empty line.
     expect(wrapWords("a bcdefghijklmnop", 10)).toEqual(["a bcdefghi", "jklmnop"]);
   });
 

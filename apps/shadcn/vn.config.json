@@ -1,5 +1,5 @@
 {
-  "$comment": "No `window` block on purpose: the dev host's defaults are what every shadcn spec was written against. This file exists for `vn build` (docs/PACKAGING.md) — the identity below; the version comes from package.json; there is no assets/ directory, so the package is the bundle alone.",
+  "$comment": "No `window` block on purpose: the dev host's defaults are what every shadcn spec was written against.",
   "name": "shadcn",
   "productName": "shadcn-vue gallery",
   "windows": {

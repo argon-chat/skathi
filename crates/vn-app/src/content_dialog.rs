@@ -1,22 +1,14 @@
-//! The Windows 11 ContentDialog the host draws itself, with gpui: what the
-//! permission prompt (src/consent_window.rs) and the crash dialog
-//! (src/crash_window.rs) are both made of.
+//! The Windows 11 ContentDialog the host draws itself with gpui: what the permission prompt
+//! (src/consent_window.rs) and the crash dialog (src/crash_window.rs) are made of.
 //!
-//! A card of [`WIDTH`] DIP (or wider) on DWM's transient acrylic
-//! (`DWMSBT_TRANSIENTWINDOW`) with rounded corners, before 22H2 the theme's
-//! solid colours instead; a caption row with the app's icon and name; a
-//! Segoe Fluent Icons glyph in a tinted circle; a title in Subtitle type over
-//! body text; and a footer band holding equal-width buttons, the accent one
-//! filled with the system accent colour. It follows the system's light or dark
-//! app theme live. The window is owned by an app window (no taskbar button,
-//! above its owner), centred on it, and shown already drawn at the card's
-//! height: it opens hidden, is sized and drawn out of any `App` update
-//! ([`fit`]), and only then shown, so the open transition is DWM's alone.
+//! A card of [`WIDTH`] DIP (or wider) on DWM's transient acrylic with rounded corners (solid theme
+//! colours before 22H2): a caption row, a glyph in a tinted circle, a title, body text and a footer
+//! of equal-width buttons. It follows the system's light/dark theme live. The window is owned by an
+//! app window and centred on it. It opens hidden, is sized and drawn out of any `App` update
+//! ([`fit`]) and only then shown, so the open transition is DWM's alone.
 //!
-//! Here: the colours ([`Theme`], [`Accent`]), the fonts, the pieces of the
-//! card, the buttons with Windows 11's focus ring and access keys, the input
-//! protection ([`Guard`]), and the Win32 side (ownership, placement, the app's
-//! icon). What each dialog says and does stays in its own module.
+//! Here: colours, fonts, the card's pieces, buttons with Windows 11's focus ring and access keys, the
+//! input protection ([`Guard`]) and the Win32 side. What each dialog says stays in its own module.
 
 use std::cell::Cell;
 use std::ops::Range;
@@ -41,10 +33,6 @@ pub const INPUT_DELAY: Duration = Duration::from_millis(500);
 /// The card's width, DIP: the permission prompt's. The height follows the
 /// text.
 pub const WIDTH: f32 = 440.0;
-
-// ---------------------------------------------------------------------------
-// the pure parts
-// ---------------------------------------------------------------------------
 
 /// A button's label as drawn, and its access key.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,11 +69,9 @@ pub fn parse_label(button: &str) -> Label {
     Label { text, key }
 }
 
-/// Does a keystroke name access key `key`? `key_char` is the character the
-/// layout types (`р` on a Russian layout), `name` gpui's key name (the
-/// layout's unshifted character, often its Latin letter), and `vk_char` the
-/// Latin letter of the key the layout puts `key` on (`VkKeyScanW`), which is
-/// how a Cyrillic access key matches whichever of the two gpui reports.
+/// Does a keystroke name access key `key`? `key_char` is the character the layout types, `name`
+/// gpui's key name, `vk_char` the Latin letter of the key the layout puts `key` on (`VkKeyScanW`),
+/// so a Cyrillic access key matches whichever of the two gpui reports.
 pub fn access_key_matches(key: char, name: &str, key_char: Option<&str>, vk_char: Option<char>) -> bool {
     let same = |s: &str| {
         let mut it = s.chars().flat_map(char::to_lowercase);
@@ -103,19 +89,17 @@ pub(crate) fn access_key_hit(labels: &[Label], k: &gpui::Keystroke) -> Option<us
     })
 }
 
-/// What the input protection allows. Unarmed until the dialog is active,
-/// then closed for [`INPUT_DELAY`]. A press counts from its start: a key
-/// down, or a mouse button down on the button (a release after the delay
-/// of a press begun before it is still refused).
+/// What the input protection allows. Unarmed until the dialog is active, then closed for
+/// [`INPUT_DELAY`]. A press counts from its start, so a release after the delay of a press begun
+/// before it is still refused.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Guard {
     open_at: Option<Instant>,
 }
 
 impl Guard {
-    /// The dialog became the active window at `now`. Once: gpui hears of
-    /// an activation a little after the show that caused it, and that must
-    /// not restart the delay.
+    /// The dialog became the active window at `now`. Once: gpui reports an activation a little after
+    /// the show, which must not restart the delay.
     pub fn arm(&mut self, now: Instant) {
         if self.open_at.is_none() {
             self.open_at = Some(now + INPUT_DELAY);
@@ -157,10 +141,7 @@ pub fn contrast(a: Rgb, b: Rgb) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-/// Black or white, whichever reads better on `fill`: the text of an accent
-/// button. Windows' own choice for its default blues (white on the light
-/// theme's dark accent, black on the dark theme's light one) falls out of
-/// it, and so does a readable answer for a user's own accent.
+/// Black or white, whichever reads better on `fill`: the text of an accent button.
 pub fn text_on(fill: Rgb) -> Rgb {
     let (black, white) = (Rgb(0, 0, 0), Rgb(255, 255, 255));
     if contrast(fill, black) > contrast(fill, white) { black } else { white }
@@ -203,18 +184,13 @@ pub fn center_in(anchor: Rect, work: Rect, w: i32, h: i32) -> (i32, i32) {
     (x.min(work[2] - w).max(work[0]), y.min(work[3] - h).max(work[1]))
 }
 
-// ---------------------------------------------------------------------------
-// fonts and colours
-// ---------------------------------------------------------------------------
-
 pub(crate) struct Fonts {
     pub display: &'static str,
     pub text: &'static str,
     pub small: &'static str,
     pub icons: &'static str,
-    /// Code: Consolas, in every Windows. Not Windows 11's Cascadia Mono:
-    /// gpui draws its variable font a weight heavier than the body text at
-    /// 12 px, and the crash's details read as shouted.
+    /// Code: Consolas. Not Windows 11's Cascadia Mono: gpui draws that variable font a weight
+    /// heavier than the body text at 12 px.
     pub mono: &'static str,
 }
 
@@ -257,8 +233,7 @@ pub(crate) struct Theme {
     /// The same in `SystemFillColorCritical`: an error, not a question.
     pub critical_tint: Hsla,
     pub critical: Hsla,
-    /// A recessed block of text (the crash's details): `ControlFillColor
-    /// Secondary`-like, over the card.
+    /// A recessed block of text (the crash's details), over the card.
     pub well: Hsla,
     /// A text-only control's hover (`SubtleFillColorSecondary`).
     pub subtle: Hsla,
@@ -337,10 +312,6 @@ pub(crate) fn accent() -> Accent {
 pub(crate) fn acrylic() -> bool {
     crate::window::has_system_backdrop() && !PREVIEW_SOLID.load(Ordering::Relaxed)
 }
-
-// ---------------------------------------------------------------------------
-// the pieces of the card
-// ---------------------------------------------------------------------------
 
 /// Windows 11's focus visual around `d` (whose corners are `radius`): 2 px
 /// outside, 1 px inside it, 3 px out from the control.
@@ -527,7 +498,6 @@ pub(crate) fn card(height: Rc<Cell<f32>>, body: impl IntoElement, footer: impl I
         .w_full()
         .flex()
         .flex_col()
-        // What the window is sized to: the card's own height.
         .child(
             canvas(move |b, _, _| height.set(f32::from(b.size.height)), |_, _, _, _| {})
                 .absolute()
@@ -538,10 +508,6 @@ pub(crate) fn card(height: Rc<Cell<f32>>, body: impl IntoElement, footer: impl I
         .child(body)
         .child(footer)
 }
-
-// ---------------------------------------------------------------------------
-// the window
-// ---------------------------------------------------------------------------
 
 pub(crate) fn hwnd_of(window: &Window) -> Option<isize> {
     let handle = <Window as HasWindowHandle>::window_handle(window).ok()?;
@@ -644,10 +610,6 @@ pub(crate) fn release_owner(owner: isize, own: isize) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// the preview's stand-ins (examples/consent_prompt.rs, examples/crash_dialog.rs)
-// ---------------------------------------------------------------------------
-
 /// The preview draws Windows 10's solid card on Windows 11.
 pub(crate) static PREVIEW_SOLID: AtomicBool = AtomicBool::new(false);
 /// The preview's accent, in place of the system's.
@@ -681,10 +643,6 @@ pub(crate) fn preview_owner(title: &str, cx: &mut App) -> isize {
     .and_then(|h| h.update(cx, |_, window, _| hwnd_of(window)).ok().flatten())
     .unwrap_or(0)
 }
-
-// ---------------------------------------------------------------------------
-// Win32
-// ---------------------------------------------------------------------------
 
 pub(crate) mod win {
     use super::{Accent, Rect, Rgb};

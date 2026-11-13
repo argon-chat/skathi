@@ -1,42 +1,6 @@
-//! `:has()`, the relational selector.
-//!
-//! # Why it is not just another matcher arm
-//!
-//! `parcel_selectors` — the matcher lightningcss parses into and the cascade
-//! runs — does not implement `Component::Has`. Its `matches_complex_selector`
-//! reaches `Component::Nesting | Component::Has(..) => unreachable!()` and takes
-//! the process with it, which is why every `:has()` rule was DROPPED at compile
-//! time with an advisory: not because the question is unanswerable here, but
-//! because asking it panicked.
-//!
-//! The question itself is perfectly answerable — vue-native's tree has children
-//! and the matcher is re-entrant. What was missing was a way to reach the arm.
-//!
-//! # The rewrite
-//!
-//! So the sheet compiler rewrites the selector before it is ever handed to the
-//! matcher. `.card:has([data-selected])` is re-parsed as
-//! `.card:--vn-has-0`, and the relative selector `[data-selected]` is compiled
-//! once and filed under index 0 in [`REGISTRY`]. A custom pseudo-class is a
-//! shape parcel DOES route to the element — `Element::match_non_ts_pseudo_class`
-//! — so the arm in `element.rs` gets called with the element in hand and calls
-//! [`matches`], which walks the subtree.
-//!
-//! The rewrite is textual, but on the selector's OWN round-tripped text rather
-//! than on raw CSS: `Selector::to_css_string` gives a normalised form, and the
-//! result is re-parsed by the same parser, so nothing here has to tokenise CSS.
-//!
-//! # What is supported
-//!
-//! The relative selector may be a plain compound or complex selector, matched
-//! against DESCENDANTS (`:has(.x)`, `:has([data-selected])`,
-//! `:has(select:disabled)`), and the explicit child form `:has(> .x)`. The
-//! sibling combinators are matched against the siblings after the element:
-//! `:has(+ .x)` the next one, `:has(~ .x)` any of them.
-//!
-//! Nested `:has()` inside a `:has()` is refused at rewrite time — the inner one
-//! would need its own registry entry keyed on a different subject, and no sheet
-//! in this tree writes one.
+//! `:has()` support. parcel's matcher panics on `Component::Has`, so the selector's own
+//! round-tripped text is rewritten onto a custom pseudo-class and re-parsed. Supports descendant,
+//! `>`, `+` and `~` relative selectors; a nested `:has()` is refused.
 
 use std::cell::RefCell;
 
@@ -45,46 +9,33 @@ use lightningcss::stylesheet::{ParserOptions, StyleSheet};
 
 use crate::element::{El, MatchDom};
 
-/// How a `:has()`'s argument is anchored to the element that carries it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Anchor {
-    /// `:has(.x)` — any descendant.
     Descendant,
-    /// `:has(> .x)` — a direct child.
     Child,
     /// `:has(+ .x)` — the sibling right after.
     NextSibling,
-    /// `:has(~ .x)` — any following sibling.
     FollowingSibling,
 }
 
 struct Entry {
     anchor: Anchor,
-    /// One per comma-separated alternative in the argument.
     selectors: Vec<&'static Selector<'static>>,
 }
 
 thread_local! {
-    /// Compiled `:has()` arguments, indexed by the number in the custom
-    /// pseudo-class name the rewrite produced.
-    ///
-    /// Thread-local and append-only for the life of the process: a `Selector`
-    /// borrowed out of a leaked stylesheet is `'static`, and an entry from a
-    /// replaced sheet is simply never named again.
+    /// Thread-local and append-only for the life of the process: a `Selector` borrowed out of a
+    /// leaked stylesheet is `'static`, and an entry from a replaced sheet is simply never named
+    /// again.
     static REGISTRY: RefCell<Vec<Entry>> = const { RefCell::new(Vec::new()) };
-    /// Each argument's registry index, by its text. A sheet is compiled again
-    /// whenever a basis it flattens moves (every step of a window resize, for
-    /// a sheet with `vh` in it), and the same argument must come back under the
-    /// same index: then the rewritten selector text is the same too, and
-    /// `reparse_selector` hands back the selector it already has instead of
-    /// leaking a new registry entry and a new one-rule sheet per compile.
+    /// Recompiles must map the same argument to the same index, so the rewritten text is identical
+    /// and `reparse_selector` reuses the selector instead of leaking another.
     static BY_ARGUMENT: RefCell<std::collections::HashMap<String, Option<usize>>> =
         RefCell::new(std::collections::HashMap::new());
 }
 
-/// The prefix the rewrite gives a custom pseudo-class. `--` is what makes it a
-/// CUSTOM pseudo-class in lightningcss's grammar, which is the variant parcel
-/// routes to the element.
+/// `--` is what makes it a CUSTOM pseudo-class in lightningcss's grammar, which is the variant
+/// parcel routes to the element.
 const PREFIX: &str = "--vn-has-";
 
 /// Is this custom pseudo-class one the rewrite produced?
@@ -98,12 +49,8 @@ pub(crate) fn present(selector_text: &str) -> bool {
     selector_text.contains(":has(")
 }
 
-/// Rewrites every `:has(...)` in `selector_text` into a custom pseudo-class,
-/// compiling each argument into [`REGISTRY`].
-///
-/// Returns the rewritten text, or `None` when something in the argument cannot
-/// be compiled — in which case the caller keeps its existing "dropped" path and
-/// the rule behaves exactly as it did before.
+/// The rewritten text, or `None` when the argument cannot be compiled and the rule is dropped as
+/// before.
 pub(crate) fn rewrite(selector_text: &str) -> Option<String> {
     let mut out = String::with_capacity(selector_text.len());
     let mut rest = selector_text;
@@ -116,8 +63,8 @@ pub(crate) fn rewrite(selector_text: &str) -> Option<String> {
             return None;
         }
         let index = compile(argument)?;
-        // `rest[..at]` stops BEFORE the `:` of `:has(`, so the colon that makes
-        // this a pseudo-class has to be put back.
+        // `rest[..at]` stops BEFORE the `:` of `:has(`, so the colon that makes this a pseudo-class
+        // has to be put back.
         out.push(':');
         out.push_str(PREFIX);
         out.push_str(&index.to_string());
@@ -141,8 +88,6 @@ fn balanced_end(text: &str) -> Option<usize> {
     None
 }
 
-/// Compiles one `:has()` argument and files it, returning its registry index —
-/// once per distinct argument text ([`BY_ARGUMENT`]).
 fn compile(argument: &str) -> Option<usize> {
     let argument = argument.trim();
     if let Some(hit) = BY_ARGUMENT.with(|b| b.borrow().get(argument).copied()) {
@@ -167,8 +112,6 @@ fn compile_new(argument: &str) -> Option<usize> {
         return None;
     }
 
-    // Spliced into a one-rule sheet to reach the same parser the cascade uses,
-    // then leaked so the selectors are `'static` like the sheet's own.
     let source: &'static str = Box::leak(format!("{body}{{color:red}}").into_boxed_str());
     let sheet: &'static StyleSheet<'static> =
         Box::leak(Box::new(StyleSheet::parse(source, ParserOptions::default()).ok()?));
@@ -178,14 +121,7 @@ fn compile_new(argument: &str) -> Option<usize> {
             return None;
         };
         for selector in &style.selectors.0 {
-            // The argument runs through the same audit the cascade uses, so an
-            // unimplementable inner selector refuses the whole rewrite instead
-            // of silently matching nothing.
             let mut probe = Vec::new();
-            // An interaction state in the argument (`:has(input:focus-visible)`)
-            // has no rung to land on: the cascade answers `:hover` and
-            // `:focus` as true and leaves the rest to gpui's state ladder,
-            // which is the SUBJECT's. Compiled, such a rule applied always.
             let stateless = matches!(crate::classify_states(selector, &mut probe), Some((0, None)));
             if !stateless
                 || !crate::probe_runnable(selector)
@@ -212,10 +148,6 @@ pub(crate) fn registry_len() -> usize {
 }
 
 /// Answers one rewritten `:has()` against an element.
-///
-/// `name` is the custom pseudo-class's name as the matcher saw it; anything
-/// that is not one of ours is `false`, which is what an unknown custom
-/// pseudo-class means.
 pub(crate) fn matches<D: MatchDom>(name: &str, node: &D) -> bool {
     let Some(index) = name.strip_prefix(PREFIX).and_then(|n| n.parse::<usize>().ok()) else {
         return false;
@@ -256,8 +188,6 @@ pub(crate) fn matches<D: MatchDom>(name: &str, node: &D) -> bool {
     })
 }
 
-/// Depth-first over every descendant. Recursion depth is DOM depth, which is
-/// the same depth the restyle walk and the renderer already recurse to.
 fn any_descendant<D: MatchDom>(node: &D, hit: &dyn Fn(&D) -> bool) -> bool {
     let mut found = false;
     node.each_child(&mut |child| {

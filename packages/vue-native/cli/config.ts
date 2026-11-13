@@ -1,9 +1,7 @@
 // `vn.config.json`, as `vn build` reads it.
 //
-// The file is the one the dev builder already reads (`build.ts` copies its
-// `name`, `window` and `devtools` into the dev manifest); `vn build` adds the
-// keys only a packaged exe needs (research/reports/m25/packaging-design.md
-// §4.8):
+// The file is the one the dev builder already reads (`build.ts` copies its `name`, `window` and
+// `devtools` into the dev manifest); `vn build` adds the keys only a packaged exe needs:
 //
 //   {
 //     "name": "hello",            identity: %LOCALAPPDATA%\<name>\storage, the devtools slot
@@ -11,9 +9,9 @@
 //     "version": "1.2.3",         default: the app's package.json version
 //     "window": { … },            unchanged
 //     "devtools": true,           unchanged (a runtime switch)
-//     "httpCache": { "maxMB": 256 },  the disk HTTP cache's cap; 0 or false = none (docs/STORAGE.md §12)
+//     "httpCache": { "maxMB": 256 },  the disk HTTP cache's cap; 0 or false = none
 //     "id": "gl.argon.hello",     launch identity (instance key, protocol owner) — default name
-//     "singleInstance": true,     one process per user session; a 2nd launch forwards (docs/LAUNCH.md)
+//     "singleInstance": true,     one process per user session; a 2nd launch forwards
 //     "raiseOnSecondInstance": true,  bring the window forward on a forwarded launch (default true)
 //     "protocols": ["hello"],     custom URL schemes, registered per-user at startup (prod)
 //     "assets": ["assets"],       what is packaged: dirs/globs relative to the app root
@@ -51,37 +49,21 @@ import type { Platform } from "./platform";
 import { numericVersion } from "./versioninfo";
 
 /**
- * The parts of the engine a host can be built WITHOUT (docs/PACKAGING.md
- * §7.1) — the same list, in the same order, as `OPTIONAL` in
- * crates/vn-app/src/payload.rs, which is what a host's `variant` is named
- * from. Every one is in a host unless it is left out:
- *
- * - `devtools`  — the devtools listener, the embedded inspector, F12
- *                 (`--features no-devtools`; a runtime switch exists too);
- * - `audio`     — Web Audio and `getUserMedia`;
- * - `clipboard` — `navigator.clipboard`;
- * - `storages`  — `localStorage` / `sessionStorage` / `appStorage`;
- * - `indexeddb` — `indexedDB` and `navigator.storage`;
- * - `webgpu`    — native GPU compute/rendering and canvas presentation.
- *
- * Each but `devtools` is a default cargo feature of vn-app of the same name.
+ * The parts of the engine a host can be built WITHOUT: the same list and order as `OPTIONAL` in
+ * crates/vn-app/src/payload.rs, which a host's `variant` is named from. `devtools` is the listener,
+ * inspector and F12 (`--features no-devtools`); the rest are default cargo features of vn-app of
+ * the same name.
  */
 export const OPTIONAL = ["devtools", "audio", "clipboard", "storages", "indexeddb", "webgpu"] as const;
 export type Part = (typeof OPTIONAL)[number];
 
-/**
- * A host's name for what is in it: `standard` with every part, else the parts
- * left out as `no-<part>` joined by `+`, in {@link OPTIONAL}'s order —
- * `no-devtools`, `no-audio`, `no-devtools+no-audio`. The host cache is keyed
- * by it, and a host is asked for by it.
- */
+/** A host's name for what is in it: `standard`, else the parts left out as `no-<part>` joined by `+` in {@link OPTIONAL}'s order (`no-devtools+no-audio`). The host cache is keyed by it. */
 export type Variant = string;
 /** What `vn host build` builds with no selection: the two pre-features variants. */
 export const VARIANTS: Variant[] = ["standard", "no-devtools"];
 
 const isPart = (p: unknown): p is Part => typeof p === "string" && (OPTIONAL as readonly string[]).includes(p);
 
-/** The variant of a host built without `without`. */
 export function variantFor(without: Iterable<Part>): Variant {
   const off = new Set(without);
   const names = OPTIONAL.filter((p) => off.has(p)).map((p) => `no-${p}`);
@@ -105,11 +87,7 @@ export function partsLeftOut(variant: Variant): Part[] {
   return OPTIONAL.filter((p) => off.has(p));
 }
 
-/**
- * A list of part names, checked: `"audio,clipboard"`, or an array of them.
- * Spaces separate too: PowerShell hands an unquoted `audio,clipboard` over as
- * `"audio clipboard"`.
- */
+/** A list of part names: `"audio,clipboard"` or an array. Spaces separate too: PowerShell passes an unquoted `audio,clipboard` as `"audio clipboard"`. */
 export function parseParts(list: unknown, where: string): Part[] {
   const items = typeof list === "string" ? list.split(/[\s,]+/).filter(Boolean) : list;
   if (!Array.isArray(items)) throw new ConfigError(`${where} must be a list of parts (${OPTIONAL.join(", ")})`);
@@ -121,11 +99,7 @@ export function parseParts(list: unknown, where: string): Part[] {
   return OPTIONAL.filter((p) => out.has(p));
 }
 
-/**
- * The variant a selection asks for. `features` names what to TAKE (everything
- * else is left out); `without` names what to leave out; `host` is the
- * pre-features spelling of a whole variant. One of them, or none (`standard`).
- */
+/** The variant a selection asks for: `features` names what to take, `without` what to leave out, `host` is the legacy whole-variant spelling. */
 export function selectVariant(sel: { features?: Part[]; without?: Part[]; host?: Variant }, where: string): Variant {
   const given = [sel.features && "features", sel.without && "without", sel.host && "host"].filter(Boolean);
   if (given.length > 1) throw new ConfigError(`${where}: give one of ${given.join(" / ")}, not several`);
@@ -145,12 +119,7 @@ export function variantWarnings(variant: Variant): string[] {
   return out;
 }
 
-/**
- * The cargo arguments that build a bare host of `variant` (after `cargo build
- * --release -p vn-app`). A host that leaves out none of the default features
- * keeps `--features prod[,no-devtools]`, the command line both pre-features
- * variants always had.
- */
+/** The cargo arguments for a bare host of `variant` (after `cargo build --release -p vn-app`). */
 export function cargoFeatureArgs(variant: Variant): string[] {
   const off = partsLeftOut(variant);
   const features = ["prod", ...(off.includes("devtools") ? ["no-devtools"] : [])];
@@ -167,35 +136,25 @@ export interface WindowsConfig {
   description?: string;
   console?: boolean;
   host?: Variant;
-  /** The parts to take — every other one is left out of the host. */
   features?: Part[];
-  /** The parts to leave out of the host. */
   without?: Part[];
-  /** The host variant all of the above select. */
   variant: Variant;
 }
 
 /** `"macos"`, defaults applied. Read on every platform, so a typo fails a Windows build too. */
 export interface MacConfig {
-  /** CFBundleIdentifier. */
   bundleId: string;
   bundleIdFrom: "macos.bundleId" | "id";
-  /** The bundle's name (`<exeName>.app`) and its executable's (`Contents/MacOS/<exeName>`). */
   exeName: string;
   /** `macos.icon`, else `windows.icon`: an `.icns`, a square PNG, or an `.ico` holding PNG images. */
   iconPath: string | null;
   /** LSApplicationCategoryType, always `public.app-category.<…>`. */
   category: string | null;
-  /** LSMinimumSystemVersion. */
   minimumSystemVersion: string;
-  /** NSHumanReadableCopyright: `macos.copyright`, else `windows.copyright`. */
   copyright: string | null;
   microphoneUsageDescription: string | null;
   cameraUsageDescription: string | null;
-  /**
-   * A codesign identity; `"-"` signs ad hoc; `false` leaves the bundle as the
-   * copy made it. `undefined`: ad hoc wherever `codesign` exists.
-   */
+  /** A codesign identity; `"-"` signs ad hoc; `false` leaves the bundle unsigned. `undefined`: ad hoc wherever `codesign` exists. */
   sign: string | false | undefined;
 }
 
@@ -207,13 +166,11 @@ export interface AppConfig {
   appRoot: string;
   entry: string;
   configPath: string | null;
-  /** The raw parsed file (`{}` when there is none). */
   raw: Record<string, unknown>;
   name: string;
   productName: string;
   version: string;
   versionFrom: "vn.config.json" | "package.json" | "default";
-  /** `vn.config.json` `assets`, or the default `["assets"]`. */
   assets: string[];
   assetsDeclared: boolean;
   /** `vn.config.json` `publicDir`, app-root-relative and `/`-separated; null when undeclared. */
@@ -224,19 +181,12 @@ export interface AppConfig {
   macos: MacConfig;
   exeName: string;
   iconPath: string | null;
-  /** `"id"`, or the name. */
   id: string;
-  /** The launch keys, defaults applied (docs/LAUNCH.md). */
   launch: LaunchConfig;
   warnings: string[];
 }
 
-/**
- * One asset pack: `<name>.vnpk` beside the payload, holding the assets whose
- * key one of `match` matches, or, with no `match`, every asset no earlier
- * pack took. The host opens the packs the payload's META lists and checks
- * each one's id (crates/vn-app/src/payload.rs `Pack`).
- */
+/** One asset pack: `<name>.vnpk` beside the payload, holding the assets whose key matches `match` (none: every asset no earlier pack took). The host checks each pack's id (crates/vn-app/src/payload.rs `Pack`). */
 export interface PackConfig {
   name: string;
   /** Globs over asset keys (`fonts/**`, `**\/*.woff2`); null takes the rest. */
@@ -268,7 +218,6 @@ function parsePacks(raw: unknown): PackConfig[] {
   });
 }
 
-/** The `launch` object `vn build` writes into the payload's META. */
 export interface LaunchConfig {
   id: string;
   singleInstance: boolean;
@@ -282,8 +231,7 @@ const TOP_LEVEL = new Set([
   "version",
   "window",
   "devtools",
-  // The disk HTTP cache's cap, folded into the window block like `devtools`
-  // (docs/STORAGE.md §12).
+  // The disk HTTP cache's cap, folded into the window block like `devtools`.
   "httpCache",
   "assets",
   "publicDir",
@@ -300,11 +248,7 @@ const TOP_LEVEL = new Set([
 
 /** RFC 3986 scheme, lowercase, as the host registers it. */
 const SCHEME = /^[a-z][a-z0-9+.-]{0,62}$/;
-/**
- * Schemes an app may never claim — the browser's own, the shell's, and
- * Windows' `ms-*` / `search-ms`. The host refuses them too; refusing here is
- * what makes it a build error instead of a startup advisory.
- */
+/** Schemes an app may never claim (the browser's, the shell's, Windows' `ms-*`). The host refuses them too; refusing here makes it a build error instead of a startup advisory. */
 const RESERVED_SCHEMES = new Set([
   "http", "https", "file", "ftp", "mailto", "tel", "data", "blob", "javascript", "about", "vbscript", "search-ms",
 ]);
@@ -360,14 +304,10 @@ const MACOS_KEYS = new Set([
   "cameraUsageDescription",
   "sign",
 ]);
-/** CFBundleIdentifier: a UTI — letters, digits, "-" and ".", reverse-DNS. */
 const BUNDLE_ID = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 const CATEGORY = /^public\.app-category\.[a-z]+(-[a-z]+)*$/;
 
-/**
- * The `"macos"` block. `fallback` is what it inherits when a key is absent:
- * the launch id for the bundle id, the Windows icon and copyright.
- */
+/** The `"macos"` block. `fallback` is what it inherits when a key is absent: the launch id, the Windows icon and copyright. */
 function readMacos(
   raw: unknown,
   appRoot: string,
@@ -470,9 +410,7 @@ export function resolveApp(target: string): { appRoot: string; entry: string } {
     );
   }
   if (basename(abs) === "vn.config.json") return resolveApp(dirname(abs));
-  // An entry file: the app root is its directory with a trailing `src/`
-  // stripped — the SAME rule build.ts/prod.ts use for VN_CONFIG_DIR and the
-  // dev host uses for the asset base, so all three agree on "the document".
+  // An entry file: the app root is its directory with a trailing `src/` stripped (the rule build.ts, prod.ts and the dev host share).
   const srcDir = dirname(abs);
   const appRoot = srcDir.endsWith(`${sep}src`) ? dirname(srcDir) : srcDir;
   return { appRoot, entry: abs };
@@ -529,7 +467,6 @@ export function loadAppConfig(target: string, options: { configPath?: string; pl
   const name = str(raw.name, where('"name"')) ?? basename(appRoot);
   const launch = readLaunch(raw, name);
   if (launch.protocols.length && !launch.singleInstance) {
-    // A-F4, at build time as well as at startup.
     warnings.push(
       'vn.config.json declares "protocols" without "singleInstance": every link to them will start a new instance of the app',
     );
@@ -567,11 +504,7 @@ export function loadAppConfig(target: string, options: { configPath?: string; pl
     assets = (raw.assets as string[]).map((a) => a.trim());
   }
 
-  // Vite's `publicDir`: files served at the root, so `public/favicon.ico` is
-  // `/favicon.ico`. Opt-in here (Vite defaults it to "public"): turning it on
-  // by default would re-key a package that already ships a public/ directory
-  // under "assets". An undeclared public/ next to vn.config.json is a warning
-  // in collectAssets instead.
+  // Vite's `publicDir`, opt-in here (Vite defaults it to "public"): turning it on by default would re-key a package that already ships a public/ directory. An undeclared public/ is a warning in collectAssets.
   let publicDir: string | null = null;
   if (raw.publicDir !== undefined && raw.publicDir !== false) {
     const p = typeof raw.publicDir === "string" ? raw.publicDir.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "") : "";

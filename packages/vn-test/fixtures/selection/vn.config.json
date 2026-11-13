@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/selection.spec.ts: document text selection by mouse, getSelection(), user-select and Ctrl+C (m26 text selection). See ../README.md.",
-
   "name": "vn-test-selection",
 
   "window": {

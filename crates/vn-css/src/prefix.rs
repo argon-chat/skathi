@@ -1,48 +1,9 @@
-//! Vendor-prefixed properties: which `-webkit-` spellings are applied, and the
-//! silent drop of every other prefixed declaration.
-//!
-//! A stylesheet written for browsers carries prefixed declarations for
-//! engines this one is not: `-moz-osx-font-smoothing`, `-ms-overflow-style`,
-//! `-webkit-touch-callout`, Tailwind's preflight `-moz-tab-size`. Chromium,
-//! which vue-native is compared against, ignores `-moz-`, `-ms-` and `-o-`
-//! outright and most of those `-webkit-` ones too. Each used to print
-//! "property not mapped", which told the author nothing they could act on.
-//!
-//! So a prefixed declaration is applied only when its spelling is in
-//! [`WEBKIT_APPLIED`]: a `-webkit-` property Chromium honours that does
-//! something here, or that Chromium visibly honours and this engine advises
-//! about. Everything else with a vendor prefix is dropped before the mapper
-//! sees it, with no advisory. The gate runs for stylesheets, `@keyframes`,
-//! inline styles and CSSOM writes alike (`mapper::convert_block`,
-//! `mapper::parse_inline_style`).
-//!
-//! The production and dev builders drop the same declarations from the CSS
-//! they ship (packages/vue-native/css-prefixes.ts). Its copy of the list is
-//! checked against this one by packages/vue-native/test/css-prefixes.test.ts,
-//! which reads this file: keep the list one name per line, between the two
-//! marker comments.
-//!
-//! Prefixed VALUES (`display: -webkit-box`, `-webkit-linear-gradient()`,
-//! `width: -webkit-fill-available`) are not this module's business: they
-//! belong to the property they are a value of.
+//! Vendor-prefixed properties. A prefixed declaration is applied only when its spelling is in
+//! [`WEBKIT_APPLIED`]; every other vendor prefix is dropped before the mapper with no advisory.
+//! Prefixed values belong to the property they are a value of.
 
 /// The `-webkit-` properties that are applied, named without the prefix.
-///
-/// Three groups, all of them spellings Chromium accepts:
-/// * aliases of a standard property, which lightningcss parses into that
-///   property (`-webkit-transform` is a `transform`). They are handled, inert
-///   by design, or advised exactly as their standard spelling is;
-/// * `-webkit-` properties with no standard spelling that this engine handles
-///   by name: `app-region` (window dragging), `line-clamp` and the legacy box
-///   longhands that travel with it, `text-fill-color`, `mask-composite`;
-/// * `-webkit-` properties Chromium visibly honours and this engine does not
-///   draw (`text-stroke`, `box-reflect`, the legacy box layout's `box-flex`):
-///   kept so the author hears "not mapped" rather than nothing.
-///
-/// `backdrop-filter` is Safari's spelling; Chromium takes only the standard
-/// one. It is applied because apps write the pair with the same value.
 pub const WEBKIT_APPLIED: &[&str] = &[
-    // -- webkit-applied: begin --
     "align-content",
     "align-items",
     "align-self",
@@ -122,15 +83,10 @@ pub const WEBKIT_APPLIED: &[&str] = &[
     "transition-timing-function",
     "user-select",
     "writing-mode",
-    // -- webkit-applied: end --
 ];
 
-/// The vendor prefixes, as they are spelled.
 const PREFIXES: [&str; 4] = ["-webkit-", "-moz-", "-ms-", "-o-"];
 
-/// Is `name` (a property name as written, any case) vendor-prefixed and NOT
-/// applied, so that its declaration is dropped without a word?
-///
 /// A custom property (`--webkit-x`) is never prefixed.
 pub fn dropped(name: &str) -> bool {
     let Some(prefix) = PREFIXES.iter().find(|p| starts_with_ignore_case(name, p)) else {
@@ -143,9 +99,8 @@ pub fn dropped(name: &str) -> bool {
     !WEBKIT_APPLIED.iter().any(|n| n.eq_ignore_ascii_case(base))
 }
 
-/// As [`dropped`], for a parsed property: lightningcss strips the prefix off a
-/// property it knows (`-moz-user-select` is a `user-select` with
-/// `VendorPrefix::Moz`) and keeps the whole name of one it does not.
+/// As `dropped`, for a parsed property: lightningcss strips the prefix from a property it knows and
+/// keeps the whole name of one it does not.
 pub(crate) fn property_dropped(p: &lightningcss::properties::Property) -> bool {
     use lightningcss::properties::custom::CustomPropertyName;
     use lightningcss::properties::PropertyId;
@@ -167,8 +122,8 @@ pub(crate) fn property_dropped(p: &lightningcss::properties::Property) -> bool {
             } else {
                 return false;
             };
-            // A declaration that is ALSO unprefixed (only a merged one can be)
-            // is the standard property.
+            // A declaration that is ALSO unprefixed (only a merged one can be) is the standard
+            // property.
             if vp.contains(VendorPrefix::None) {
                 return false;
             }

@@ -1,37 +1,3 @@
-// Building the host under a NON-DEFAULT feature set, for the specs that are
-// about the BUILD rather than about an app.
-//
-// Two claims need this and cannot be made any other way (docs/DEVTOOLS.md
-// "Shape", research/reports/m22/devtools-release.md):
-//
-//   * `--features prod` — a SHIPPED app — carries the devtools and opens its
-//     inspector on F12. Since m22 that is the default, and the only honest
-//     proof is to run a prod binary and press the key.
-//   * `--features no-devtools` still compiles, and the resulting image
-//     contains none of it — no listener, no bundle, not even the inspector's
-//     window title.
-//
-// ## Why this is allowed to run `cargo`
-//
-// It is the same bargain `ensureBuild` already makes for JS: a spec that
-// asserts something about an artifact has to be able to produce that artifact,
-// or it degrades into a spec that passes because somebody remembered to build
-// by hand. The cost is stated rather than hidden — see `staleness` below.
-//
-// ## What it costs, and why it is not an isolated target dir
-//
-// The build happens in the WORKSPACE's own `target/`, so it recompiles exactly
-// one crate (`vn-app`; no feature here propagates to a dependency) and then
-// relinks — about a minute on the machine this was written on. A private
-// `CARGO_TARGET_DIR` would avoid disturbing the dev tree, at the price of
-// rebuilding every dependency including gpui and JavaScriptCore, which is tens
-// of minutes and gigabytes. So instead the disturbance is UNDONE: the staged
-// exe is copied out and `cargo build -p vn-app` runs again, leaving
-// `target/.../debug/vn-app.exe` the plain dev host it was.
-//
-// `stagedExe()` is called before any of that, so the copy this run's other
-// hosts are using is already pinned and cannot be replaced underneath them.
-
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, linkSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -39,11 +5,7 @@ import { homedir } from "node:os";
 import { DEFAULT_EXE, REPO, WORK_DIR, stagedExe } from "./dist";
 
 export interface FeatureExeOptions {
-  /**
-   * Cargo features, e.g. `["prod"]` or `["prod", "no-devtools"]`. A `prod`
-   * build is a BARE HOST since m25 — no app inside; give it one with
-   * [`packagedExe`].
-   */
+  /** Cargo features, e.g. */
   features: string[];
   log?: (line: string) => void;
 }
@@ -88,15 +50,7 @@ function newest(dir: string, out = 0): number {
   return out;
 }
 
-/**
- * Is `exe` older than the sources it was built from?
- *
- * Deliberately a real staleness check rather than a presence check. A cached
- * binary that silently answers for code that has moved is the same failure
- * `crates/vn-app/build.rs` refuses to ship for the inspector bundle — "a
- * debugger that shows you last week's panels" — and a green spec proving a
- * property of last week's build is worse than a slow one.
- */
+/** Is `exe` older than the sources it was built from? */
 function stale(exe: string): boolean {
   if (!existsSync(exe)) return true;
   const built = statSync(exe).mtimeMs;
@@ -110,15 +64,7 @@ function stale(exe: string): boolean {
   return built < newestSource;
 }
 
-/**
- * `cargo`, wherever rustup put it.
- *
- * A shell spawned by a long-lived process inherits the PATH that process was
- * started with, so a machine where `cargo` was added to the user PATH *after*
- * the terminal (or the editor, or an agent's shell) opened runs these specs
- * with no `cargo` on PATH at all — while the same command works by hand in a
- * fresh window. rustup's location is fixed, so ask it before giving up.
- */
+/** `cargo`, wherever rustup put it. */
 function cargoCommand(): string {
   if (spawnSync("cargo", ["--version"], { shell: true, encoding: "utf8" }).status === 0) {
     return "cargo";
@@ -131,10 +77,8 @@ function cargoCommand(): string {
 function run(cmd: string, args: string[], log: (l: string) => void) {
   if (cmd === "cargo") cmd = cargoCommand();
   log(`[vn-test] ${cmd} ${args.join(" ")}`);
-  // `shell: true` because on Windows neither `bun` nor `cargo` is necessarily
-  // an `.exe` on PATH (bun ships a `.cmd` shim), and `spawnSync` applies
-  // PATHEXT only through a shell. Which means the arguments are re-parsed by
-  // cmd, so anything with a space is quoted here.
+  // `shell: true` because on Windows neither `bun` nor `cargo` is necessarily an `.exe` on PATH
+  // (bun ships a `.cmd` shim), and `spawnSync` applies PATHEXT only through a shell.
   const quoted = args.map((a) => (/[\s&|<>^]/.test(a) ? `"${a}"` : a));
   const out = spawnSync(cmd, quoted, { cwd: REPO, encoding: "utf8", shell: true });
   if (out.error) {
@@ -152,12 +96,7 @@ function run(cmd: string, args: string[], log: (l: string) => void) {
 
 const inFlight = new Map<string, Promise<string>>();
 
-/**
- * A `vn-app.exe` built with `features`, staged where a spec can run it.
- *
- * Cached across runs and de-duplicated within one, so several specs asking for
- * the same feature set pay for one build.
- */
+/** A `vn-app.exe` built with `features`, staged where a spec can run it. */
 export function featureExe(options: FeatureExeOptions): Promise<string> {
   const dir = featureExeDir(options.features);
   const key = dir;
@@ -176,8 +115,8 @@ async function build(options: FeatureExeOptions, dir: string): Promise<string> {
     return exe;
   }
 
-  // Pin the DEV bytes for whatever else this run launches, before the shared
-  // target directory is touched at all.
+  // Pin the DEV bytes for whatever else this run launches, before the shared target directory is
+  // touched at all.
   stagedExe();
 
   console.log(
@@ -185,8 +124,8 @@ async function build(options: FeatureExeOptions, dir: string): Promise<string> {
       `crate and relinks (~1 min), then restores the dev exe. It is cached at ${exe}.`,
   );
 
-  // No JS step: a `prod` build carries no app any more (it is stamped in
-  // afterwards — `packagedExe`), so the host is the same whatever runs on it.
+  // No JS step: a `prod` build carries no app any more (it is stamped in afterwards —
+  // `packagedExe`), so the host is the same whatever runs on it.
   const args = ["build", "-p", "vn-app"];
   if (options.features.length) args.push("--features", options.features.join(","));
   run("cargo", args, log);
@@ -194,23 +133,17 @@ async function build(options: FeatureExeOptions, dir: string): Promise<string> {
   mkdirSync(dirname(exe), { recursive: true });
   cpSync(DEFAULT_EXE, exe);
 
-  // Put the tree back: the next `cargo build` in somebody's editor must not
-  // find a prod host where the dev host belongs.
+  // Put the tree back: the next `cargo build` in somebody's editor must not find a prod host where
+  // the dev host belongs.
   if (options.features.length) run("cargo", ["build", "-p", "vn-app"], log);
   return exe;
 }
 
-// ---------------------------------------------------------------------------
-// packaged apps (`vn build`, docs/PACKAGING.md)
-// ---------------------------------------------------------------------------
-
 export type HostVariant = "standard" | "no-devtools";
 
 /**
- * A BARE prod host of `variant`, the way `vn build` finds one: `VN_HOST`, the
- * in-repo release exe, or the local host cache (`vn host build` fills it).
- * When none exists, a DEBUG feature build stands in — minutes rather than the
- * release build's tens of minutes, and the same host for a spec's purposes.
+ * A BARE prod host of `variant`, the way `vn build` finds one: `VN_HOST`, the in-repo release exe,
+ * or the local host cache (`vn host build` fills it).
  */
 export async function bareHost(variant: HostVariant, log: (l: string) => void = () => {}): Promise<string> {
   const { resolveHost, HostError } = await import("../../vue-native/cli/host");
@@ -228,10 +161,10 @@ export async function bareHost(variant: HostVariant, log: (l: string) => void = 
 export interface PackagedExeOptions {
   /** A name under `apps/`, or a path to an app directory. */
   app: string;
-  /** The bare host to stamp. Default: [`bareHost`] of `variant`. */
+  /** The bare host to stamp. */
   host?: string;
   variant?: HostVariant;
-  /** Names the output directory and the exe. Default: the app. */
+  /** Names the output directory and the exe. */
   label?: string;
   log?: (line: string) => void;
 }
@@ -247,9 +180,8 @@ export interface PackagedExe {
 }
 
 /**
- * `vn build <app> --host <bare host>` into `.vn-test/packaged/<label>/`, then a
- * copy under a reaper-visible name. In-process (the CLI is TypeScript in this
- * repo), so a spec gets the build's own result back rather than parsing text.
+ * `vn build <app> --host <bare host>` into `.vn-test/packaged/<label>/`, then a copy under a
+ * reaper-visible name.
  */
 export async function packagedExe(options: PackagedExeOptions): Promise<PackagedExe> {
   const log = options.log ?? (() => {});
@@ -262,7 +194,6 @@ export async function packagedExe(options: PackagedExeOptions): Promise<Packaged
   const result = await buildApp({ target, out, host, variant, log });
   if (!result.exe) throw new Error(`vn build ${target} produced no exe`);
   const exe = join(out, `vn-app-vntest-${process.pid}-${label}.exe`);
-  // A hard link, not a copy: the same ~100 MB image under a second name.
   rmSync(exe, { force: true });
   try {
     linkSync(result.exe, exe);
@@ -272,14 +203,7 @@ export async function packagedExe(options: PackagedExeOptions): Promise<Packaged
   return { exe, built: result.exe, name: result.config.name, result };
 }
 
-/**
- * Does `path` contain `needle` anywhere in its bytes?
- *
- * Streamed in chunks with an overlap, because these images are ~100 MB and a
- * spec that reads one into a string would be measured in seconds and hundreds
- * of megabytes. ASCII only — every marker this is used for is a literal from
- * the source.
- */
+/** Does `path` contain `needle` anywhere in its bytes? */
 export async function fileContains(path: string, needle: string): Promise<boolean> {
   const bytes = new TextEncoder().encode(needle);
   const overlap = bytes.length - 1;

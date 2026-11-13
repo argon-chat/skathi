@@ -1,28 +1,10 @@
 //! The interaction state a script's selector query reads.
 //!
-//! `el.matches(":hover")`, `querySelectorAll(":focus-visible")` and
-//! `closest(":focus-within")` filter by the state the element is in NOW, as in
-//! a browser. The cascade cannot answer that: it sorts a `:hover` rule into
-//! gpui's state ladder and answers "would match when hovered", and gpui picks
-//! the rung live at paint time. So a query goes through [`LiveRef`], the same
-//! matcher's view of a node with the live state attached, read from what the
-//! painter reads:
-//!
-//! - `:hover` — the hover path ([`crate::pointer::resolve_hover`], resolved
-//!   once a frame), which the `:hover` rungs are folded from;
-//! - `:active` — the target of the mouse press in progress in the node's
-//!   window and its ancestors, from the press to the release (any button, as
-//!   gpui's `:active` rung);
-//! - `:focus` — the node holding focus in its window (`document.activeElement`);
-//! - `:focus-visible` — that node, when its window's last input was the
-//!   keyboard (`Window::last_input_was_keyboard`, gpui's `.focus_visible()`
-//!   rung) or it is a text field, which Chromium always shows focus on
-//!   (`MayTriggerVirtualKeyboard`);
-//! - `:focus-within` — that node and its ancestors, up to the root its window
-//!   paints.
-//!
-//! Every window answers for its own nodes: a press or a focus in a pop-out is
-//! that window's, and a node is painted by exactly one window.
+//! `el.matches(":hover")` filters by the state the element is in NOW, which the cascade cannot answer
+//! (it sorts `:hover` rules into gpui's state ladder; gpui picks the rung at paint time). A query goes
+//! through [`LiveRef`], the matcher's view of a node with live state read from what the painter
+//! reads. Every window answers for its own nodes; a `:focus-visible` text field always shows focus,
+//! as in Chromium.
 
 use std::collections::HashSet;
 
@@ -35,19 +17,17 @@ use crate::windows;
 /// The live state of every window, taken once per query.
 #[derive(Default)]
 pub(crate) struct LiveStates {
-    /// Each window's focused node, and whether it shows focus
-    /// (`:focus-visible`).
+    /// Each window's focused node, and whether it shows focus (`:focus-visible`).
     focused: Vec<(u32, bool)>,
-    /// The focused nodes and their ancestors, each up to its window's painted
-    /// root.
+    /// The focused nodes and their ancestors, each up to its window's painted root.
     focus_within: HashSet<u32>,
     /// The targets of the presses in progress and their ancestors.
     active: HashSet<u32>,
 }
 
 impl LiveStates {
-    /// One walk up from each window's focused node and press target: a few
-    /// dozen ids, whatever the size of the tree being queried.
+    /// One walk up from each window's focused node and press target: a few dozen ids, whatever the
+    /// size of the tree being queried.
     pub(crate) fn take(t: &Tree) -> Self {
         let mut windows_now: Vec<(u32, u32, bool, Option<u32>)> = Vec::new();
         windows::each(|_, w| {
@@ -93,10 +73,8 @@ fn chain(t: &Tree, id: u32, root: u32, out: &mut HashSet<u32>) {
     }
 }
 
-/// A text field: Chromium matches `:focus-visible` on it whatever moved the
-/// focus there, a click included, because typing goes into it
-/// (`HTMLInputElement::MayTriggerVirtualKeyboard`). A `<textarea>`, and an
-/// `<input>` of a type the user types into.
+/// A text field: Chromium matches `:focus-visible` on it whatever moved the focus there, a click
+/// included, because typing goes into it (`HTMLInputElement::MayTriggerVirtualKeyboard`).
 pub(crate) fn is_text_field(t: &Tree, id: u32) -> bool {
     let Some(node) = t.node(id) else { return false };
     match t.name(node.tag) {
@@ -112,16 +90,15 @@ pub(crate) fn is_text_field(t: &Tree, id: u32) -> bool {
     }
 }
 
-/// Records which modality this window's last input was, for `:focus-visible`
-/// in a query. Called wherever the host is about to run script for a window:
-/// before each input dispatch, and once a frame before the JS pump.
+/// Called wherever the host is about to run script for a window: before each input dispatch, and
+/// once a frame before the JS pump.
 pub(crate) fn note_modality(window: &Window) {
     let keyboard = window.last_input_was_keyboard();
     windows::here(window, |w| w.keyboard_input = keyboard);
 }
 
-/// The matcher's view of a node for a script's query: [`NodeRef`], with the
-/// live interaction state ([`vn_css::MatchDom::LIVE_STATE`]).
+/// The matcher's view of a node for a script's query: [`NodeRef`], with the live interaction state
+/// ([`vn_css::MatchDom::LIVE_STATE`]).
 #[derive(Clone, Copy)]
 pub(crate) struct LiveRef<'t> {
     pub(crate) node: NodeRef<'t>,
@@ -194,8 +171,8 @@ mod tests {
     use super::*;
     use crate::dom::{self, QueryMode};
 
-    /// root > nav > (button, input), and root > side > field, `side` painted
-    /// by a pop-out (window 2). Window 1 is the primary.
+    /// root > nav > (button, input), and root > side > field, `side` painted by a pop-out (window
+    /// 2).
     fn page() -> [u32; 6] {
         let ids = tree::with_tree(|t| {
             let root = t.create_root();
@@ -230,23 +207,17 @@ mod tests {
     #[test]
     fn focus_and_focus_visible_follow_the_window_and_its_last_input() {
         let [root, nav, button, input, side, field] = page();
-        // Nothing focused: nothing matches, and the query says nothing about it.
         assert!(q(":focus, :focus-visible, :focus-within", root).is_empty());
-        // A click focused the button.
         windows::of(1, |w| (w.focused_node, w.keyboard_input) = (button, false));
         assert_eq!(q(":focus", root), vec![button]);
         assert!(q(":focus-visible", root).is_empty(), "a click shows no focus on a button");
         assert_eq!(q(":focus-within", root), vec![nav, button]);
         assert!(is(":focus-within", root), "up to the root the primary window paints");
         assert_eq!(q("button:not(:focus-visible)", root), vec![button]);
-        // Tab: the same focus is visible.
         windows::of(1, |w| w.keyboard_input = true);
         assert_eq!(q(":focus-visible", root), vec![button]);
-        // A click into a text field shows focus there, as in Chromium.
         windows::of(1, |w| (w.focused_node, w.keyboard_input) = (input, false));
         assert_eq!(q(":focus-visible", root), vec![input]);
-        // A pop-out's focus is its own: a checkbox clicked there shows none,
-        // and focus within stops at the root the pop-out paints.
         windows::of(1, |w| w.focused_node = 0);
         windows::of(2, |w| (w.focused_node, w.keyboard_input) = (field, false));
         assert_eq!(q(":focus", root), vec![field]);
@@ -266,13 +237,10 @@ mod tests {
         assert_eq!(q("button:hover, :hover > button", root), vec![button]);
         assert_eq!(q(":hover + input", root), vec![input]);
         assert!(q(":active", root).is_empty());
-        // A press on the button, in the primary window: the button and its
-        // ancestors are active until the release.
         windows::of(1, |w| w.active = Some(button));
         assert_eq!(q(":active", root), vec![nav, button]);
         assert!(is(":active", root));
         windows::of(1, |w| w.active = None);
-        // A press in the pop-out: up to its painted root.
         windows::of(2, |w| w.active = Some(field));
         assert_eq!(q(":active", root), vec![side, field]);
         assert!(!is(":active", root));

@@ -7,10 +7,9 @@
 //!   so all copies of an emoji move together. It starts on a present-grid
 //!   line when the source is first shown playing, stops while nothing shows
 //!   it playing, and resumes where it stopped.
-//! * **A target's pace** is its source's frame rate, or a cap below it (the
-//!   owner's 30 fps for emoji ≤ 64 px). A paced target shows `slots` frames a
-//!   loop: slot `k` starts `k / fps` into the loop and shows the source frame
-//!   playing then.
+//! * **A target's pace** is its source's frame rate, or a cap below it (30 fps for emoji ≤ 64 px).
+//!   A paced target shows `slots` frames a loop: slot `k` starts `k / fps` into the loop and shows
+//!   the source frame playing then.
 //! * **The present grid.** A frame change is due on a multiple of 1/60 s, so
 //!   however many sources animate, a window presents at most 60 times a
 //!   second (a 165 Hz display would otherwise present every vsync with enough

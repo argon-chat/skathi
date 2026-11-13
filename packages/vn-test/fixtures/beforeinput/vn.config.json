@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/beforeinput.spec.ts: beforeinput, input and the composition events of a text field, in Chromium's order (m26 fixes). See ../README.md.",
-
   "name": "vn-test-beforeinput",
 
   "window": {

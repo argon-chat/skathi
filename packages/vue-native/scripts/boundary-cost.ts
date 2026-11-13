@@ -1,17 +1,10 @@
-// What does crossing the `__vn_*` boundary actually COST, on this machine?
+// What does crossing the `__vn_*` boundary cost, on this machine?
 //
 //   bun scripts/boundary-cost.ts [app]        default: hello
 //
-// `scripts/host-calls.ts` counts crossings; this one prices them. Together they
-// are the arithmetic behind every "migrate / stay JS" verdict in
-// research/reports/m20/runtime-ts.md — a subsystem is worth moving to Rust only
-// if (calls it makes) x (what a call costs) is a number anyone would notice,
-// and the second factor is the one nobody knows without measuring.
-//
-// It runs inside the REAL host: `vn-test` launches the app, and every loop
-// below is evaluated in its JavaScriptCore, so the numbers include the actual
-// FFI, the actual string marshalling and the actual Rust work — not a model of
-// them. Nothing here asserts; it is an instrument.
+// `scripts/host-calls.ts` counts crossings; this prices them. It runs inside the real host (`vn-test` launches
+// the app and each loop is evaluated in its JavaScriptCore), so the numbers include the actual FFI, string
+// marshalling and Rust work. Nothing here asserts; it is an instrument.
 
 import { launch } from "../../vn-test/src/index";
 
@@ -34,20 +27,15 @@ const bench = (label: string, n: number, body: string, setup = "") => ({
 });
 
 const BENCHES = [
-  // -- the FLOOR: a host fn that takes one integer, looks up nothing (id 0 is
-  //    the reserved "none") and returns the empty string. Everything a real
-  //    call costs beyond this is argument marshalling and Rust work.
-  //    ARCHITECTURE.md's "~2.8 ns host calls" is the bare FFI edge measured in
-  //    research/reports/fill-0.md; this is what one costs from JavaScript.
+  // -- the floor: a host fn taking one integer (id 0 is the reserved "none") and returning the empty string;
+  //    anything a real call costs beyond this is marshalling and Rust work.
   bench("__vn_bounds(0) — the crossing floor", 200_000, `__vn_bounds(0);`),
-  // -- the crossing itself, with as little Rust behind it as possible
   bench(
     "__vn_intern (hot: name already interned)",
     200_000,
     `__vn_intern("div");`,
   ),
-  // -- a write on the renderer's hot path: crossing + a string argument + a
-  //    tree mutation. The node is detached, so nothing it does reaches layout.
+  // -- a write on the hot path: crossing + a string argument + a tree mutation on a detached node.
   bench(
     "__vn_set_style (detached node)",
     100_000,
@@ -70,9 +58,7 @@ const BENCHES = [
     `const el = document.documentElement;`,
   ),
   bench("__vn_computed_style (raw, no parse)", 20_000, `__vn_computed_style(1);`),
-  // -- pure JS, no crossing at all: the propagation walk this file exists for.
-  //    Split three ways, because "event handling is slow" is not an answer —
-  //    which THIRD of it is slow decides whether any of it is worth moving.
+  // -- pure JS, no crossing: the propagation walk, split three ways to show which third is slow.
   bench(
     "dispatchEvent: synthesis + walk (what an event really costs)",
     100_000,
@@ -96,7 +82,6 @@ const BENCHES = [
     `Object.defineProperty(ev, "currentTarget", { value: null, configurable: true });`,
     `const ev = new MouseEvent("click");`,
   ),
-  // -- pure JS, the other half of "why the mirror is in JS at all"
   bench("node.parentNode (mirror read)", 1_000_000, `void el.parentNode;`, `const el = deepest;`),
   bench(
     "node.nextSibling (mirror read, indexOf)",

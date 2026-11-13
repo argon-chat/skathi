@@ -1,28 +1,18 @@
-//! SVG path data (SVG 2 §9.3, the `d` grammar) for CSS `path()` (CSS Shapes 1
-//! §3.1), into gpui's absolute [`gpui::VnPathVerb`]s.
-//!
-//! Every command, absolute and relative: `M L H V C S Q T A Z`. `H`/`V` become
-//! lines, `S`/`T` reflect the previous control point (or take the current
-//! point when the previous command was not a curve of their kind), and an arc
-//! becomes cubics (`gpui::VnPathVerb::push_arc`). Numbers take SVG's compact
-//! forms: `1.5.5` is two numbers, `-1-2` too, and an arc's flags need no
-//! separator (`a1 1 0 1110 10`).
-//!
-//! A string that breaks the grammar is an error, which makes the declaration
-//! invalid: Chromium's CSS parser rejects such a `path()` rather than drawing
-//! the part before the error, as an SVG `d` attribute would.
+//! SVG path data (the `d` grammar) for CSS `path()`, into gpui's absolute `VnPathVerb`s. Numbers
+//! take SVG's compact forms (`1.5.5` is two numbers; an arc's flags need no separator). A string
+//! that breaks the grammar is an error that invalidates the declaration, as in Chromium, rather
+//! than drawing the part before the error as SVG `d` would.
 
 use gpui::VnPathVerb;
 
-/// Parses `d`. An empty (or all-whitespace) string is an empty path, which
-/// a `clip-path` encloses nothing with.
+/// Parses `d`.
 pub(crate) fn parse(d: &str) -> Result<Vec<VnPathVerb>, String> {
     let mut p = Parser { s: d.as_bytes(), i: 0 };
     let mut out = Vec::new();
     let mut current = [0f32; 2];
     let mut start = [0f32; 2];
-    // The last cubic's second control point, or quadratic's control point,
-    // for `S` and `T`; `None` after anything else.
+    // The last cubic's second control point, or quadratic's control point, for `S` and `T`; `None`
+    // after anything else.
     let mut last_cubic: Option<[f32; 2]> = None;
     let mut last_quad: Option<[f32; 2]> = None;
     p.skip_separators();
@@ -146,7 +136,6 @@ pub(crate) fn parse(d: &str) -> Result<Vec<VnPathVerb>, String> {
             _ if command.eq_ignore_ascii_case(&b'Z') => {
                 return Err(format!("a number after `Z` in {d:?}"));
             }
-            // The same command again, with its next arguments.
             _ => first_of_command = false,
         }
     }
@@ -172,7 +161,6 @@ impl Parser<'_> {
         }
     }
 
-    /// Whitespace, and at most one comma in it.
     fn skip_separators(&mut self) {
         self.skip_whitespace();
         if self.peek() == Some(b',') {
@@ -191,7 +179,6 @@ impl Parser<'_> {
         }
     }
 
-    /// One number (SVG's `number`), then its separator.
     fn number(&mut self) -> Result<f32, String> {
         self.skip_whitespace();
         let begin = self.i;
@@ -224,8 +211,8 @@ impl Parser<'_> {
                     self.i += 1;
                 }
             } else {
-                // Not an exponent after all (an `e` cannot start a command,
-                // so this is the error the next read reports).
+                // Not an exponent after all (an `e` cannot start a command, so this is the error
+                // the next read reports).
                 self.i = mark;
             }
         }
@@ -273,8 +260,8 @@ mod tests {
             ok("M10 20 L30 40 H50 V60 Z"),
             vec![MoveTo([10., 20.]), LineTo([30., 40.]), LineTo([50., 40.]), LineTo([50., 60.]), Close]
         );
-        // Relative, and pairs after a moveto are linetos; after `z` the
-        // current point is the subpath's start.
+        // Relative, and pairs after a moveto are linetos; after `z` the current point is the
+        // subpath's start.
         assert_eq!(
             ok("m10,20 10,0 0,10 z l5 5 h-5 v-5"),
             vec![
@@ -287,7 +274,6 @@ mod tests {
                 LineTo([10., 20.]),
             ]
         );
-        // A command repeats with its next arguments.
         assert_eq!(ok("M0 0 L1 1 2 2"), vec![MoveTo([0., 0.]), LineTo([1., 1.]), LineTo([2., 2.])]);
         assert_eq!(ok(""), vec![]);
         assert_eq!(ok("  \n "), vec![]);
@@ -297,7 +283,6 @@ mod tests {
     fn numbers_take_the_compact_forms() {
         assert_eq!(ok("M.5.5-1-2"), vec![MoveTo([0.5, 0.5]), LineTo([-1., -2.])]);
         assert_eq!(ok("M1e1 2E-1L+3 -4.25e+0"), vec![MoveTo([10., 0.2]), LineTo([3., -4.25])]);
-        // The number the overlay's spring writes.
         assert_eq!(ok("M0 0 H12.150600000000001"), vec![MoveTo([0., 0.]), LineTo([12.1506, 0.])]);
     }
 
@@ -308,7 +293,6 @@ mod tests {
             vec![
                 MoveTo([0., 0.]),
                 CubicTo([10., 0.], [20., 10.], [20., 20.]),
-                // The first control point mirrors (20, 10) about (20, 20).
                 CubicTo([20., 30.], [30., 40.], [40., 40.]),
             ]
         );
@@ -331,18 +315,15 @@ mod tests {
     #[test]
     fn arcs_become_cubics_and_flags_need_no_separator() {
         let v = ok("M0 50 a50 50 0 0110 0");
-        // `0110 0`: large-arc 0, sweep 1, then x = 10, y = 0.
         assert!(v.len() >= 2, "{v:?}");
         assert_eq!(v.last().map(|verb| matches!(verb, CubicTo(_, _, [x, y]) if *x == 10. && *y == 50.)), Some(true));
         let half = ok("M0 50 A50 50 0 0 1 100 50");
         assert!(half[1..].iter().all(|verb| matches!(verb, CubicTo(..))));
-        // A zero radius is a line.
         assert_eq!(ok("M0 0 A0 5 0 0 0 10 0"), vec![MoveTo([0., 0.]), LineTo([10., 0.])]);
     }
 
     #[test]
     fn the_overlay_notch_parses() {
-        // FlightIsland.vue's silhouette, as its spring writes it, closed.
         let d = "M0 0 C12.1506 0 22 9.8494 22 22 V42 Q22 64 44 64 H420 Q442 64 442 42 V22 \
                  C442 9.8494 451.8494 0 464 0 Z";
         let v = ok(d);

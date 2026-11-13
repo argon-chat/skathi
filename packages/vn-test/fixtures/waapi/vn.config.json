@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/waapi.spec.ts: el.animate() on Argon's counter-digit strip and three boxes (fill, seek, cancel). See ../README.md.",
+  "$comment": "El.animate() on Argon's counter-digit strip and three boxes (fill, seek, cancel).",
 
   "name": "vn-test-waapi",
 

@@ -1,63 +1,14 @@
-//! Builds the devtools inspector INTO the executable.
+//! Embeds the devtools inspector into the executable.
 //!
-//! ```text
-//!   apps/devtools/**  ──bun prod.ts──▶  $OUT_DIR/devtools/app.prod.js
-//!                                                │ deflate (`deflate_bundle`)
-//!                                       $OUT_DIR/devtools/app.prod.js.deflate
-//!                                       $OUT_DIR/devtools/window.json
-//!                                                │ include_bytes! / include_str!
-//!                                                ▼
-//!                                       crates/vn-app/src/inspector.rs
-//! ```
+//! `apps/devtools` is bundled by `bun prod.ts` into `$OUT_DIR/devtools/app.prod.js` (plus
+//! `window.json`), deflated, and embedded by `src/inspector.rs`. It is generated rather than checked
+//! in so the embedded bundle can never be older than its sources; without bun the build fails with
+//! the command to run. `VN_DEVTOOLS_BUNDLE=<app.prod.js>` supplies a prebuilt bundle instead, for
+//! packaging jobs that build JS and Rust in separate stages.
 //!
-//! ## Why a build script and not a checked-in bundle
-//!
-//! Two generated JS artifacts are already checked in here — `src/prelude.js` and
-//! `src/window.prelude.js` — for a reason stated in `lib.rs`: `cargo build`
-//! must not need a JS toolchain, and an `include_str!` of a missing file is a
-//! terrible place to discover bun is not installed. Both are a few hundred
-//! lines of hand-reviewable code that changes when somebody edits its `.ts`
-//! twin.
-//!
-//! The inspector is a different animal: ~130 KB of minified Vue that changes
-//! whenever any of ~20 components does. Checking it in would put a 130 KB
-//! binary diff in every devtools commit, make every rebase a conflict, and —
-//! the part that actually matters — make "the bundle in git is older than the
-//! sources beside it" an ordinary, invisible state. A debugger that silently
-//! shows you last week's panels is worse than one that does not build.
-//!
-//! So it is generated, and the toolchain objection is answered where it is
-//! raised rather than by shipping a stale artifact: this script fails the build
-//! with the exact command to run, and names the flag that builds a host with no
-//! inspector at all. `bun` is already a hard requirement for a dev host to have
-//! anything to *run* (`dist/` comes from `bun build.ts`), so this constrains no
-//! build that was not already constrained.
-//!
-//! `VN_DEVTOOLS_BUNDLE=<path to app.prod.js>` bypasses the bun invocation with
-//! a prebuilt bundle, for a packaging job that builds JS and Rust in separate
-//! stages. It is explicit, it is not a fallback, and nothing selects it
-//! automatically.
-//!
-//! ## The cfg this emits
-//!
-//! `vn_devtools` — "this build has the devtools protocol, the embedded
-//! inspector and the F12 key". **True for every build**, including
-//! `--features prod`, since m22: a shipped app carries its own devtools the way
-//! a browser does, and the app turns them off at RUNTIME instead
-//! (`appDevtools.disable()`, or `"devtools": false` in `vn.config.json` — see
-//! docs/DEVTOOLS.md "Shape" and docs/ARCHITECTURE.md §11 decision 12).
-//!
-//! The one build without them is `--features no-devtools`, the opt-OUT for an
-//! app that wants zero devtools code in its image: no listener, no host fns, no
-//! bundle, no F12, no `rules` text capture, and `appDevtools` inert. It is the
-//! exception, it is never selected automatically, and nothing in this repo
-//! builds it except the size/marker check in
-//! `research/reports/m22/devtools-release.md`.
-//!
-//! `--features devtools` (the m21 opt-IN spelling) is still accepted and now
-//! means nothing at all — every build has them. It is kept only so command
-//! lines and scripts written before the inversion keep producing a working
-//! binary; combining it with `no-devtools` is a contradiction and fails here.
+//! Emits `cfg(vn_devtools)` (protocol listener, embedded inspector, F12 key) for every build except
+//! `--features no-devtools`, which leaves them out of the image. `devtools` is an accepted no-op;
+//! combining it with `no-devtools` fails here.
 
 #[path = "build_native_inspector.rs"]
 mod native_inspector;
@@ -68,7 +19,6 @@ use std::process::Command;
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(vn_devtools)");
     println!("cargo:rerun-if-env-changed=VN_DEVTOOLS_BUNDLE");
-    // link.exe switches: everything below them is spelled for MSVC.
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         suppress_release_pdb();
         no_identical_code_folding();
@@ -80,15 +30,13 @@ fn main() {
     host_identity();
     standalone_manifest();
 
-    // The opt-OUT. Cargo features are additive across a graph, so this is the
-    // one shape a "remove code" flag can take: the absence of the cfg is the
-    // default, and only this flag can produce it.
+    // Cargo features are additive, so the opt-out is the absence of the cfg.
     let opted_out = std::env::var_os("CARGO_FEATURE_NO_DEVTOOLS").is_some();
     let legacy_opt_in = std::env::var_os("CARGO_FEATURE_DEVTOOLS").is_some();
     if opted_out && legacy_opt_in {
         panic!(
             "\n`--features devtools,no-devtools` asks for both halves of one switch.\n\
-             `devtools` is the pre-m22 opt-IN and is now a no-op (every build has them);\n\
+             `devtools` is a no-op (every build has them);\n\
              `no-devtools` is the opt-OUT. Drop one — almost certainly `devtools`.\n"
         );
     }
@@ -107,9 +55,7 @@ fn main() {
     let bundle = out.join("app.prod.js");
     let window_json = out.join("window.json");
 
-    // Everything the bundle is made of. A miss here is the failure mode this
-    // whole file exists to prevent, so the walk is deliberately generous: the
-    // inspector's own sources AND the framework runtime it is compiled against.
+    // Generous on purpose: the inspector's sources and the framework runtime it is compiled against.
     watch_tree(&repo.join("apps/devtools"));
     watch_tree(&repo.join("packages/vue-native/src"));
     println!(
@@ -142,8 +88,7 @@ fn main() {
 
     let pkg = repo.join("packages/vue-native");
     let entry = repo.join("apps/devtools/src/main.ts");
-    // `bun` on PATH is `bun.exe` on Windows and a shim on some installs; let
-    // the OS resolve it rather than guessing an extension.
+    // Let the OS resolve `bun` (`bun.exe`, or a shim).
     let status = Command::new("bun")
         .current_dir(&pkg)
         .arg("prod.ts")
@@ -183,9 +128,8 @@ fn main() {
             )
         );
     }
-    // prod.ts always writes one beside the bundle; belt and braces, because an
-    // `include_str!` of a missing file is the error message this file exists to
-    // never emit.
+    // prod.ts writes one beside the bundle; this keeps a missing file from surfacing as an
+    // `include_str!` error.
     if !window_json.is_file() {
         std::fs::write(&window_json, "{}\n").expect("cannot write a placeholder window.json");
     }
@@ -193,15 +137,9 @@ fn main() {
     native_inspector::prepare(&repo, &out);
 }
 
-/// `<bundle>.deflate`: the inspector bundle as raw deflate, which is what
-/// `src/inspector.rs` embeds.
-///
-/// Only the inspector process ever evaluates the bundle (F12 re-spawns this
-/// exe with `--devtools`), yet every vue-native binary carried it as ~340 KB
-/// of plain JS. Deflated it is about a quarter of that, and inflating it once
-/// when an inspector boots costs a few milliseconds. `window.json` stays plain:
-/// it is 1 KB, and its window title is the marker
-/// `packages/vn-test/specs/devtools-optout.spec.ts` looks for in the image.
+/// `<bundle>.deflate`, embedded by `src/inspector.rs`: only the inspector process evaluates the
+/// bundle, so every other binary carries it at about a quarter of the size. `window.json` stays
+/// plain: its window title is the marker `devtools-optout.spec.ts` looks for in the image.
 fn deflate_bundle(bundle: &Path) {
     use std::io::Write;
     let js = std::fs::read(bundle).expect("cannot read the inspector bundle back from OUT_DIR");
@@ -213,27 +151,12 @@ fn deflate_bundle(bundle: &Path) {
     std::fs::write(PathBuf::from(out), packed).expect("cannot write the deflated inspector bundle");
 }
 
-/// `/DEBUG:NONE` for the `release` profile, so a shipped build stops writing a
-/// 326 MB `vn_app.pdb` nobody ships.
+/// `/DEBUG:NONE` for the `release` profile, so a shipped build does not write a huge `vn_app.pdb`.
 ///
-/// This lives here because there is nowhere else it CAN live. `[profile.release]
-/// strip = "symbols"` is the setting that looks like it does this and does not:
-/// `-C strip` is a Unix `strip(1)` operation, a windows-msvc image has no symbol
-/// table to remove (symbols live in the PDB), and Cargo does not translate it
-/// into a linker switch — measured, byte-identical exe and a full-size PDB
-/// (research/reports/m22/devtools-release.md §5). `RUSTFLAGS` would work and is
-/// global, which would take the PDB away from dev builds too, and Cargo has no
-/// stable per-profile `rustflags`. `cargo:rustc-link-arg-bins` is scoped to
-/// exactly this package's binaries, which is exactly the scope wanted.
-///
-/// The profile is read out of `OUT_DIR` (`…/<profile-dir>/build/<pkg>/out`)
-/// rather than out of `PROFILE`, because `PROFILE` says "release" for every
-/// profile that inherits it — including `release-symbols`, whose entire purpose
-/// is the opposite of this.
-///
-/// `VN_PDB=1` opts back in for a `release` build, for the case where the binary
-/// already exists and rebuilding it under another profile would change the
-/// addresses in the crash dump you are holding.
+/// `strip = "symbols"` does not do this on windows-msvc, and RUSTFLAGS would also strip dev builds;
+/// `rustc-link-arg-bins` is scoped to this package's binaries. The profile is read from `OUT_DIR`
+/// because `PROFILE` says "release" for every profile that inherits it, `release-symbols` included.
+/// `VN_PDB=1` opts back in.
 fn suppress_release_pdb() {
     println!("cargo:rerun-if-env-changed=VN_PDB");
     let asked_for_pdb =
@@ -241,91 +164,41 @@ fn suppress_release_pdb() {
     if asked_for_pdb || profile_dir().as_deref() != Some("release") {
         return;
     }
-    // Last one wins for `/DEBUG`, and rustc has already put its own on the
-    // command line — so this is an override rather than an omission.
+    // The last `/DEBUG` wins, and rustc already passed one.
     println!("cargo:rustc-link-arg-bins=/DEBUG:NONE");
 }
 
-/// `/OPT:NOICF` on the final link: no identical-COMDAT folding in the image
-/// that carries JavaScriptCore.
-///
-/// rustc passes `/OPT:REF,ICF` to link.exe for every optimized MSVC build
-/// (debug gets `/OPT:REF,NOICF`). JSC tells a constructor from a plain function
-/// by comparing native function POINTERS against `callHostFunctionAsConstructor`
-/// (`JSFunctionInlines.h`), so when the linker folds a real constructor's
-/// `[[Construct]]` stub into that function because their bytes match, the
-/// constructor stops being one. MEASURED on the d6375c72 engine, same source,
-/// only this line differing (research/reports/m24/jsc-bump.md §ICF): a
-/// `--release --features prod` exe reported `BigInt` and `Symbol` as
-/// non-constructors and `class X extends BigInt {}` threw "The superclass is
-/// not a constructor" — a silent divergence from every browser. Bun hit the same
-/// fold; WebKit's own build links `/OPT:NOICF`.
-///
-/// Scope: `-bins`, i.e. only vn-app's executable — nothing else's fingerprint
-/// moves. It lands after rustc's own `/OPT:REF,ICF` and link.exe takes the last
-/// `/OPT` it sees (the probe above is how that was checked, not assumed). redjs
-/// says the same for the images IT links (its build.rs).
-///
-/// The price is real: ICF had been sharing a lot of identical (mostly
-/// monomorphized Rust) code, and the `--release --features prod` exe goes from
-/// 100 529 664 to 108 826 112 bytes (+8.3 MB). lld-link with `/OPT:SAFEICF`
-/// (folds only functions whose address is never taken — Bun's setting) measured
-/// correct and 104 149 504 bytes; switching linkers is an open decision, not
-/// something this line does.
+/// `/OPT:NOICF` on the final link. JSC tells a constructor from a plain function by comparing native
+/// function pointers (`callHostFunctionAsConstructor`), and identical-COMDAT folding made `BigInt`
+/// and `Symbol` non-constructors in `--release --features prod` builds. Scoped to this package's
+/// binaries; it lands after rustc's `/OPT:REF,ICF` and link.exe takes the last `/OPT`. Costs about
+/// 8 MB of exe size.
 fn no_identical_code_folding() {
     println!("cargo:rustc-link-arg-bins=/OPT:NOICF");
 }
 
-/// `/STACK:8388608,4096`: an 8 MiB stack RESERVE, one page of COMMIT, in the
-/// executable's PE header.
+/// `/STACK:8388608,4096`: an 8 MiB reserve (what JSC needs for deep recursion) with one page of commit.
 ///
-/// `.cargo/config.toml` sets `/STACK:8388608,1048576` for every binary of the
-/// workspace, and the reserve half of that is what JSC needs (~45k JS frames
-/// before `RangeError` instead of ~8k). The commit half had a cost nobody had
-/// asked for: the header's `SizeOfStackCommit` is not a main-thread setting. A
-/// thread created with `STACK_SIZE_PARAM_IS_A_RESERVATION` — every Rust
-/// `std::thread`, and the GPU driver's workers — gets the header's commit, so
-/// each one committed 1 MiB up front. Measured on `apps/hello`
-/// (research/reports/m26/binary-size-1.md §5): 122 threads, 103 of them
-/// NVIDIA driver workers, 135 MB of stack commit with ~8 MB of it ever touched.
-/// One page of commit took that to 8 MB, and the process's commit charge from
-/// 374 to 244 MB, with the same private working set. A stack still grows on
-/// demand through its guard page, and the reserve (what JSC and stacker read
-/// as the stack's size) is unchanged — deep recursion, warmed-JIT recursion,
-/// 32 KB JIT frames and a 500k-argument `apply` all hit the same limits.
-///
-/// Why here and not in `.cargo/config.toml`: rustflags are part of every
-/// crate's fingerprint, so editing them rebuilds every crate of every profile;
-/// a build-script link arg relinks this one binary. It also lands AFTER the
-/// rustflags on link.exe's command line, and link.exe takes the last `/STACK`
-/// (both checked, not assumed). The commit must be spelled out: a later
-/// `/STACK:<reserve>` with no commit keeps the earlier commit. Test binaries
-/// keep the config's 1 MiB commit, which costs them nothing that matters.
+/// `.cargo/config.toml` sets a 1 MiB commit for every workspace binary, and threads created with
+/// `STACK_SIZE_PARAM_IS_A_RESERVATION` (every Rust thread, the GPU driver's workers) inherit the
+/// header's commit, so each committed 1 MiB up front. Done here rather than in rustflags because
+/// those rebuild every crate; this lands after them and link.exe takes the last `/STACK`, which
+/// must spell out the commit. Test binaries keep the config's value.
 fn thread_stack_commit() {
     println!("cargo:rustc-link-arg-bins=/STACK:8388608,4096");
 }
 
-/// The macOS counterparts of the link.exe switches above, for vn-app's
-/// executable.
+/// The macOS counterparts of the link.exe switches above.
 ///
-/// - `-ObjC`: Objective-C categories in a static library are only kept when
-///   the final link asks for them; a library's own link args never reach the
-///   binary's link.
-/// - `-rpath /usr/lib/swift`: frameworks that load the system Swift runtime
-///   (ScreenCaptureKit) find it there, as Zed's own build sets it.
-/// - `-no_deduplicate`: ld64's identical-code folding, which would do to JSC's
-///   constructor identity what `/OPT:NOICF` prevents on Windows (see
-///   `no_identical_code_folding`). Not yet measured on a Mac: check that
-///   `class X extends BigInt {}` still throws only where a browser does.
-///
-/// - `-U` for Bun's hooks: weak references in the JSC prebuilt that redjs
-///   leaves undefined, so JSC takes its generic RunLoop and error paths. ld64
-///   wants a definition even for a weak reference unless told it may be
-///   missing; dyld then binds it to null. The list is redjs's `BUN_HOOKS`
-///   (its build.rs passes the same flags for the images it links itself).
-///
-/// The main thread's 8 MiB stack is already macOS's default, so no
-/// `-stack_size` is needed for JSC's headroom.
+/// - `-ObjC`: keeps Objective-C categories from static libraries; a library's own link args never
+///   reach the binary's link.
+/// - `-rpath /usr/lib/swift`: where frameworks that load the system Swift runtime (ScreenCaptureKit)
+///   find it.
+/// - `-no_deduplicate`: ld64's identical-code folding, for the same constructor-identity reason as
+///   `/OPT:NOICF`.
+/// - `-U` for Bun's hooks: weak references in the JSC prebuilt that redjs leaves undefined. ld64
+///   wants a definition unless told it may be missing; dyld then binds them to null. The list is
+///   redjs's `BUN_HOOKS`.
 fn macos_link() {
     println!("cargo:rustc-link-arg-bins=-Wl,-ObjC");
     println!("cargo:rustc-link-arg-bins=-Wl,-rpath,/usr/lib/swift");
@@ -344,16 +217,9 @@ fn macos_link() {
     }
 }
 
-/// What `vn-app --vn-host-info` reports and a payload is checked against
-/// (src/payload.rs, docs/PACKAGING.md §host):
-///
-/// * `VN_PKG_VERSION` — `packages/vue-native/package.json` `"version"`. The
-///   renderer half of the contract: a payload records the version of the
-///   vue-native it was bundled against, and a host built from a different one
-///   says so instead of failing in some unrelated way.
-/// * `VN_JSC_PIN` — `vendor/redjs/pins.txt` `webkit.version`, the engine.
-///
-/// Emitted before the `no-devtools` early return: both variants are hosts.
+/// `VN_PKG_VERSION` (packages/vue-native/package.json `"version"`) and `VN_JSC_PIN`
+/// (`vendor/redjs/pins.txt` `webkit.version`), reported by `--vn-host-info` and checked against a
+/// payload. Emitted before the `no-devtools` early return: both variants are hosts.
 fn host_identity() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let repo = manifest.join("..").join("..");
@@ -364,8 +230,7 @@ fn host_identity() {
     let version = std::fs::read_to_string(&pkg)
         .ok()
         .and_then(|text| {
-            // The first `"version": "…"` — package.json's own, which precedes
-            // every dependency map by convention and in this file.
+            // package.json's own `"version"` is the first.
             let at = text.find("\"version\"")?;
             let rest = &text[at + "\"version\"".len()..];
             let open = rest.find('"')?;
@@ -386,8 +251,7 @@ fn host_identity() {
     println!("cargo:rustc-env=VN_JSC_PIN={pin}");
 }
 
-/// The name of the profile directory this build is writing into, e.g.
-/// `release`, `debug`, `release-symbols`.
+/// The profile directory this build writes into (`release`, `debug`, `release-symbols`).
 fn profile_dir() -> Option<String> {
     // OUT_DIR = <target>/<triple>/<profile>/build/<pkg>-<hash>/out
     let out = PathBuf::from(std::env::var("OUT_DIR").ok()?);
@@ -401,10 +265,9 @@ fn failure(pkg: &Path, entry: &Path, bundle: &Path, why: &str) -> String {
          ────────────────────────────────────────────────────────────────────\n\
          the embedded devtools inspector could not be built: {why}\n\
          \n\
-         This build embeds apps/devtools into the executable (docs/DEVTOOLS-UI.md\n\
-         v2 §2). It is generated rather than checked in so a shipped binary can\n\
-         never carry an inspector older than its sources — which is why this is\n\
-         a hard error and not a warning.\n\
+         This build embeds apps/devtools into the executable. It is generated rather\n\
+         than checked in so a shipped binary can never carry an inspector older than\n\
+         its sources, which is why this is a hard error and not a warning.\n\
          \n\
          Fix it one of three ways:\n\
          \n\
@@ -418,7 +281,7 @@ fn failure(pkg: &Path, entry: &Path, bundle: &Path, why: &str) -> String {
          \n\
            3. build a host with no inspector at all:\n\
                 cargo build -p vn-app --features no-devtools\n\
-              (the opt-OUT — docs/DEVTOOLS.md \"Shape\". Every other build,\n\
+              (the opt-OUT. Every other build,\n\
                `--features prod` included, embeds the inspector.)\n\
          \n\
          expected output: {bundle}\n\
@@ -429,12 +292,8 @@ fn failure(pkg: &Path, entry: &Path, bundle: &Path, why: &str) -> String {
     )
 }
 
-/// Every source file under `dir`, as `rerun-if-changed` lines.
-///
-/// Cargo re-runs a build script when a *directory* mtime moves too, but only
-/// for the directory itself — a change two levels down would not be seen. So
-/// the walk is explicit, and it lists directories as well so that ADDING a file
-/// is also a change.
+/// Every source file under `dir`, as `rerun-if-changed` lines. Directories are listed too, so that
+/// adding a file counts as a change (Cargo only sees a directory's own mtime).
 fn watch_tree(dir: &Path) {
     println!("cargo:rerun-if-changed={}", disp(dir));
     let Ok(entries) = std::fs::read_dir(dir) else {

@@ -1,20 +1,15 @@
 #!/usr/bin/env bun
 /**
- * vn-devtools CLI — the zero-setup way to drive a running dev host.
+ * vn-devtools CLI: the zero-setup way to drive a running dev host.
  *
  *   bun devtools/ctl.ts [--dist <slot> | --app <name>] <cmd> [args...]
  *
- * Reads `<dist>/devtools.json` (written by the host at boot), opens a TCP
- * connection to 127.0.0.1:<port>, sends ONE newline-delimited JSON request and
- * prints the reply. Exit code 0 on `{ok:true}`, 1 on anything else — so
- * `ctl click ... && ctl query ...` chains the way a shell expects.
+ * Reads `<dist>/devtools.json` (written by the host at boot), opens a TCP connection to 127.0.0.1:<port>,
+ * sends one newline-delimited JSON request and prints the reply. Exit code 0 on `{ok:true}`, 1 otherwise, so
+ * `ctl click ... && ctl query ...` chains.
  *
- * Zero NPM dependencies on purpose: an agent driving the app through Bash
- * should not need `bun install` to have run. (`./commands.ts` is a sibling
- * source file — the shared command table, which `mcp.ts` imports too, so a
- * command cannot exist on one front-end and not the other.)
- *
- * See docs/DEVTOOLS.md for the command table.
+ * No npm dependencies on purpose: an agent driving the app through Bash should not need `bun install`.
+ * `./commands.ts` is the command table shared with `mcp.ts`.
  */
 
 import { connect } from "node:net";
@@ -22,9 +17,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The command table is SHARED with mcp.ts (`commands.ts`). Neither front-end
-// has a command list of its own any more — that is what let the MCP server sit
-// on the m10 set for a milestone after the CLI grew six commands.
+// The command table is shared with mcp.ts (`commands.ts`).
 import { buildRequest, usageBlock, UsageError, splitArgs } from "./commands";
 import { appSlot } from "./apps";
 
@@ -44,7 +37,7 @@ options
   --dist <slot>    the dist directory the target host was launched with
                    (default: ${DEFAULT_DIST})
   --app <name>     a PACKAGED app instead (vn build): its newest live instance
-                   under %TEMP%\\vue-native\\apps\\<name> (docs/PACKAGING.md)
+                   under %TEMP%\\vue-native\\apps\\<name>
   --window <id>    which of the target's OS windows the command is about
                    (\`windows\` lists them; default: the primary one)
   --timeout <ms>   client-side reply timeout (default ${DEFAULT_TIMEOUT_MS})
@@ -55,10 +48,6 @@ function die(message: string, code = 1): never {
   console.error(message);
   process.exit(code);
 }
-
-// ---------------------------------------------------------------------------
-// argv
-// ---------------------------------------------------------------------------
 
 const { positional, flags } = splitArgs(process.argv.slice(2));
 if (flags.help || positional.length === 0) {
@@ -75,10 +64,6 @@ const distDir = (() => {
   return typeof flags.dist === "string" && flags.dist ? resolve(flags.dist) : DEFAULT_DIST;
 })();
 const timeoutMs = Number(flags.timeout ?? DEFAULT_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
-
-// ---------------------------------------------------------------------------
-// discovery
-// ---------------------------------------------------------------------------
 
 type Handshake = { port: number; pid: number; token: string };
 
@@ -102,10 +87,6 @@ function readHandshake(dir: string): Handshake {
     die(`${path} is not a valid devtools handshake: ${(e as Error).message}`);
   }
 }
-
-// ---------------------------------------------------------------------------
-// transport
-// ---------------------------------------------------------------------------
 
 function send(port: number, payload: string, ms: number): Promise<string> {
   return new Promise((resolveReply, reject) => {
@@ -145,14 +126,10 @@ function send(port: number, payload: string, ms: number): Promise<string> {
   });
 }
 
-// ---------------------------------------------------------------------------
-
 const handshake = readHandshake(distDir);
 const windowArg = Number(flags.window);
-// `--window` rides on EVERY request rather than being spelled out per
-// command: the host reads it uniformly (docs/DEVTOOLS.md, the `window`
-// argument), and a client that never passes it addresses the primary window
-// exactly as it always did.
+// `--window` rides on every request rather than per command; a client that never passes it addresses the
+// primary window.
 let request: Record<string, unknown>;
 try {
   request = {

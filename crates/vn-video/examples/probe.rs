@@ -1,14 +1,7 @@
 //! `cargo run -p vn-video --example probe -- <file> [seconds]`
 //!
-//! Loads one media file through the real backend, plays it, and prints the
-//! event stream, the state machine's view and the per-frame present cost. No
-//! window, no gpui `App` — just the crate.
-//!
-//! It exists because "the video does not play" has half a dozen possible causes
-//! spread across three layers (the element, the state machine, the OS), and
-//! bisecting them through a running UI is slow. It is also where the codec
-//! probe matrix and the present-cost numbers in `research/reports/m12/video.md`
-//! come from.
+//! Loads one media file through the real backend with no window, plays it, and prints the event
+//! stream, the state machine's view and the per-frame present cost.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -37,7 +30,6 @@ fn main() {
     };
     let mut state = VideoState::new(backend);
 
-    // The codec matrix, probed on THIS machine, before anything is loaded.
     println!("-- canPlayType on this machine --");
     for (label, mime) in [
         ("H.264 + AAC (MP4)", "video/mp4; codecs=\"avc1.42E01E, mp4a.40.2\""),
@@ -71,7 +63,6 @@ fn main() {
     let mut present_ms: Vec<f64> = Vec::new();
     let mut last_report = Instant::now();
 
-    // 60 Hz, the cadence a host pump would tick at.
     while start.elapsed().as_secs_f64() < seconds {
         let tick = Instant::now();
         let advance = state.advance(Instant::now(), &request);
@@ -90,8 +81,6 @@ fn main() {
                 state.ready_state(),
             );
         }
-        // Frames are handed back the way the host does it, so the "no leak"
-        // claim is exercised here too.
         let _ = state.take_retired();
 
         if last_report.elapsed() >= Duration::from_secs(2) {

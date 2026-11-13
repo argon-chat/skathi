@@ -8,20 +8,17 @@ publish = false
 links = "thorvg"
 
 [features]
-# Upstream's own `meson_options.txt` defaults, minus what is not vendored
-# (GPU engines, the SVG and WebP loaders). `expressions` is on because
-# upstream's `extra` default contains `lottie_exp` — and because Lottie
-# expressions are the one format feature no pure-Rust backend implements,
-# which is half the reason this crate exists.
+# Upstream's `meson_options.txt` defaults minus what is not vendored (GPU engines, SVG and WebP
+# loaders). `expressions` is on because Lottie expressions are the one format feature no pure-Rust
+# backend implements.
 default = ["expressions", "png", "jpg", "fonts", "threads"]
 expressions = []  # Lottie expressions via the vendored JerryScript (190 TUs)
 png = []          # embedded PNG assets (lodepng, no system dep)
 jpg = []          # embedded JPEG assets (built-in decoder)
 fonts = []        # TTF/OTF/SFNT, for Lottie text layers with a real font
 threads = []      # ThorVG's TaskScheduler; without it everything is serial
-# Off by default, exactly as upstream's `simd` option is: AVX raises the
-# runtime CPU baseline to Sandy Bridge for a rasteriser that is not the
-# bottleneck at sticker sizes. Flip it to measure.
+# Off by default, as upstream's `simd`: AVX raises the runtime CPU baseline to Sandy Bridge for a
+# rasteriser that is not the bottleneck at sticker sizes.
 avx = []
 
 [build-dependencies]

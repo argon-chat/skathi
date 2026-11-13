@@ -1,11 +1,10 @@
-//! The retained tree: a slab of nodes keyed by dense `u32` ids (0 = none),
-//! mutated only from the VM thread via the `__vn_*` host functions.
+//! The retained tree: a slab of nodes keyed by dense `u32` ids (0 = none), mutated only from the VM
+//! thread via the `__vn_*` host functions.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-// Event codes — the JS side (packages/vue-native/src/runtime.js EV_CODES)
-// must stay in lockstep.
+// Event codes — the JS side (packages/vue-native/src/runtime.js EV_CODES) must stay in lockstep.
 pub const EV_CLICK: u32 = 1;
 pub const EV_MOUSEDOWN: u32 = 2;
 pub const EV_MOUSEUP: u32 = 3;
@@ -16,28 +15,17 @@ pub const EV_FOCUS: u32 = 7;
 pub const EV_BLUR: u32 = 8;
 pub const EV_INPUT: u32 = 9;
 pub const EV_SCROLL: u32 = 10;
-// `<lottie>` playback events, named after lottie-web's so a component ports
-// from the browser unchanged (crates/vn-lottie/CONTRACT.md §2).
+// `<lottie>` playback events, named after lottie-web's so a component ports from the browser
+// unchanged.
 pub const EV_COMPLETE: u32 = 11;
 pub const EV_LOOPCOMPLETE: u32 = 12;
 pub const EV_ENTERFRAME: u32 = 13;
-// The pointer family. Only the three the host can actually SOURCE have codes:
-// gpui gives us a move-while-hovered listener and an enter/leave pair, and
-// everything else in the W3C pointer family is derived from these (and from
-// mousedown/mouseup) inside the JS runtime — `pointerdown` is `mousedown`,
-// `pointerenter` is `mouseenter`, and so on. Adding a code per alias would put
-// the same gpui listener on the element several times over.
+// The pointer family.
 pub const EV_MOUSEMOVE: u32 = 14;
 /// Non-bubbling, per the UI Events spec: fires only on the element entered.
 pub const EV_MOUSEENTER: u32 = 15;
 pub const EV_MOUSELEAVE: u32 = 16;
-// `<video>` — the HTML media event set (crates/vn-video/CONTRACT.md §4). Every
-// one of these is also an `MF_MEDIA_ENGINE_EVENT` below 1000, which Microsoft
-// documents as the HTML 5 media events, so the names are the spec's on both
-// sides of the boundary and a component ports from the browser unchanged.
-//
-// This is the block the `u32 -> u64` widening existed for: it takes the highest
-// used code from 16 to 34.
+// `<video>` — the HTML media event set.
 pub const EV_LOADSTART: u32 = 17;
 pub const EV_LOADEDMETADATA: u32 = 18;
 pub const EV_LOADEDDATA: u32 = 19;
@@ -48,9 +36,7 @@ pub const EV_PLAYING: u32 = 23;
 pub const EV_PAUSE: u32 = 24;
 pub const EV_SEEKING: u32 = 25;
 pub const EV_SEEKED: u32 = 26;
-/// Throttled to the spec's "no more often than every 250 ms" — see
-/// `vn_video::VideoState`. High frequency by media standards, so like
-/// `enterFrame` it is gated on the listener bit before the payload is built.
+/// Throttled to the spec's "no more often than every 250 ms" — see `vn_video::VideoState`.
 pub const EV_TIMEUPDATE: u32 = 27;
 pub const EV_DURATIONCHANGE: u32 = 28;
 pub const EV_RATECHANGE: u32 = 29;
@@ -61,78 +47,50 @@ pub const EV_ENDED: u32 = 32;
 pub const EV_ERROR: u32 = 33;
 pub const EV_EMPTIED: u32 = 34;
 
-// The CSS animation/transition events, sourced by vn-css's animator rather than
-// by gpui. `EventPayload::a` carries `elapsedTime` (seconds) and `key` carries
-// `propertyName` / `animationName`.
-//
-// These four were 17-20 on the compat track and were RENUMBERED to 35-38 at the
-// m12 integration merge, because the `<video>` track had independently taken
-// 17-34 for the media block. `Node::listeners` is a `u64`, so the space is
-// there; bits 52-63 remain free.
+// The CSS animation/transition events, sourced by vn-css's animator rather than by gpui.
 pub const EV_TRANSITIONEND: u32 = 35;
 pub const EV_ANIMATIONSTART: u32 = 36;
 pub const EV_ANIMATIONEND: u32 = 37;
 pub const EV_ANIMATIONCANCEL: u32 = 38;
 
-// The ClipboardEvents (`crate::clipboard`). No numbers in the payload: the
-// event's `clipboardData` (a DataTransfer the host builds) travels as the
-// dispatcher's eighth argument.
+// The ClipboardEvents (`crate::clipboard`).
 pub const EV_PASTE: u32 = 39;
 pub const EV_COPY: u32 = 40;
 pub const EV_CUT: u32 = 41;
 
-// m26 fixes: the events the Argon client binds that the host never delivered.
-// (`dblclick` has no code: it rides `click`'s bit, and the JS runtime fires it
-// after the click whose `detail` is 2 — `render::bind_events`.)
-/// A MouseEvent: after the right button's `mouseup` (Chromium on Windows), or
-/// from the Menu key / Shift+F10 at the focused element. Payload as for a
-/// mouse event (`crate::render`'s up wave and `crate::render::bind_menu_keys`).
+// (`dblclick` has no code: it rides `click`'s bit, and the JS runtime fires it after the click
+// whose `detail` is 2 — `render::bind_events`.)
+/// A MouseEvent: after the right button's `mouseup` (Chromium on Windows), or from the Menu key /
+/// Shift+F10 at the focused element.
 pub const EV_CONTEXTMENU: u32 = 42;
-/// `<img>` decoded its `src` (`crate::img::tick`): `a`/`b` = naturalWidth /
-/// naturalHeight, `key` = the `src` it was for. A failure is [`EV_ERROR`] with
-/// the same `key`.
+/// `<img>` decoded its `src` (`crate::img::tick`): `a`/`b` = naturalWidth / naturalHeight, `key` =
+/// the `src` it was for. A failure is [`EV_ERROR`] with the same `key`.
 pub const EV_LOAD: u32 = 43;
-/// The host gave up on a press (the window lost activation mid-press): the
-/// press's `mousedown` target hears it, and nothing more of that press does.
+/// The host gave up on a press (the window lost activation mid-press): the press's `mousedown`
+/// target hears it, and nothing more of that press does.
 pub const EV_POINTERCANCEL: u32 = 44;
-/// Document text selection (`crate::selection`): a press that starts one
-/// fires `selectstart` at the element under it (cancelable, bubbles), and
-/// every change owes `document` one `selectionchange`, delivered from the
-/// frame tick at the root (the JS side retargets it to `document`).
+/// Document text selection (`crate::selection`): a press that starts one fires `selectstart` at the
+/// element under it (cancelable, bubbles), and every change owes `document` one `selectionchange`,
+/// delivered from the frame tick at the root (the JS side retargets it to `document`).
 pub const EV_SELECTSTART: u32 = 45;
 pub const EV_SELECTIONCHANGE: u32 = 46;
-/// A MouseEvent: the middle or the right button pressed and released over the
-/// same element (UI Events §3.5), at the press and release targets' nearest
-/// common ancestor, as `click` is for the primary button. Delivered in the
-/// release's wave after `mouseup` and, for the right button, before
-/// `contextmenu` (Chromium on Windows; `crate::render`'s up wave).
+/// A MouseEvent: the middle or the right button pressed and released over the same element, at the
+/// press and release targets' nearest common ancestor, as `click` is for the primary button.
 pub const EV_AUXCLICK: u32 = 47;
-// A text field's edits (vn-elements `TextInputState`). `a` is the edit's
-// `InputType` code (`InputEvent.inputType`), `b` 1 while an IME composes
-// (`isComposing`), and the dispatcher's eighth argument the event's `data`
-// string (`null` without one). `input` (code 9) carries the same, with the new
-// value in `key`.
-/// Before each edit, cancelable (except the IME's): a cancelled one makes no
-/// edit and no `input`.
+// A text field's edits (vn-elements `TextInputState`).
+/// Before each edit, cancelable (except the IME's): a cancelled one makes no edit and no `input`.
 pub const EV_BEFOREINPUT: u32 = 48;
-/// The IME composition's stages (CompositionEvents, `data` as above): start,
-/// each pre-edit, and the end, which follows the commit's `input`.
+/// The IME composition's stages (CompositionEvents, `data` as above): start, each pre-edit, and the
+/// end, which follows the commit's `input`.
 pub const EV_COMPOSITIONSTART: u32 = 49;
 pub const EV_COMPOSITIONUPDATE: u32 = 50;
 pub const EV_COMPOSITIONEND: u32 = 51;
-/// An `<iframe>`'s document posted to its parent (`crate::iframe`): at the
-/// iframe's node, `key` = `{"o": origin, "d": wire}`. The runtime fires it at
-/// `window`.
+/// An `<iframe>`'s document posted to its parent (`crate::iframe`): at the iframe's node, `key` =
+/// `{"o": origin, "d": wire}`. The runtime fires it at `window`.
 pub const EV_MESSAGE: u32 = 52;
 
-/// Every host event code with the name JS knows it by — the ONE table, so a
-/// listing (devtools) can never lag the codes again. It did: `event_names` in
-/// `devtools.rs` stopped at code 10 and never learned the three `<lottie>`
-/// events, which made a `@complete` handler invisible to `vn_tree`.
-///
-/// Derived names (`pointerdown` from `mousedown`, `focusin` from `focus`) are
-/// deliberately absent: they have no code of their own — the JS runtime
-/// synthesises them from the source event.
+/// Every host event code with the name JS knows it by — the ONE table, so a listing (devtools) can
+/// never lag the codes again.
 pub const EVENT_NAMES: &[(u32, &str)] = &[
     (EV_CLICK, "click"),
     (EV_MOUSEDOWN, "mousedown"),
@@ -201,95 +159,57 @@ pub struct Node {
     pub tag: u32,
     pub parent: u32,
     pub children: Vec<u32>,
-    /// Text content: node text for `Kind::Text`, inline text (exclusive with
-    /// children) for `Kind::Element` via `setElementText`.
+    /// Text content: node text for `Kind::Text`, inline text (exclusive with children) for
+    /// `Kind::Element` via `setElementText`.
     pub text: String,
-    /// (interned kebab-case property, raw value) pairs, last write wins —
-    /// the inline-style transport; parsed lazily into `inline_cache`.
+    /// (interned kebab-case property, raw value) pairs, last write wins — the inline-style
+    /// transport; parsed lazily into `inline_cache`.
     pub style: Vec<(u32, String)>,
     pub classes: Vec<String>,
-    /// The `class` attribute's text as written, for attribute selectors
-    /// (`[class*="group/msg"]`): `classes` is the token list `.x` matches.
+    /// The `class` attribute's text as written, for attribute selectors (`[class*="group/msg"]`):
+    /// `classes` is the token list `.x` matches.
     pub class_attr: String,
-    /// Generic element properties/attributes (interned name, string value,
-    /// write counter) — the DOM-compat channel (`value`, `placeholder`,
-    /// `disabled`, ...). Native widgets (text input etc.) read what they
-    /// understand.
-    ///
-    /// The counter ticks on *every* assignment, including one that stores the
-    /// same string again. In the DOM `el.value = x` always assigns; a native
-    /// widget that dedupes on the string alone cannot tell a controlled input
-    /// being re-forced to a value the user has since typed over from a prop
-    /// nobody touched. See [`Tree::prop_write`].
+    /// Generic element properties/attributes (interned name, string value, write counter) — the
+    /// DOM-compat channel (`value`, `placeholder`, `disabled`, ...).
+    /// The counter ticks on every assignment, even of the same string: a native widget that dedupes
+    /// on the string alone cannot tell a controlled input being re-forced from a prop nobody
+    /// touched. See [`Tree::prop_write`].
     pub props: Vec<(u32, String, u32)>,
-    /// Vue `<style scoped>` hashes (`data-v-...`); a child component's root
-    /// carries two — its own and its parent's.
+    /// Vue `<style scoped>` hashes (`data-v-...`); a child component's root carries two — its own
+    /// and its parent's.
     pub scopes: Vec<String>,
     /// Bitmask of EV_* the JS side listens for.
-    ///
-    /// **`u64`, not `u32`.** The transport is already per-code
-    /// (`__vn_set_listener(id, code, on)`), so the width is purely an internal
-    /// storage decision — but it is a decision with a ceiling, and the `<video>`
-    /// element alone needs 13 codes for its v1 event set and 22 for the full
-    /// HTML media set. At 16 codes used the old `u32` left no room for that, for
-    /// `<audio>`, or for the `<img>` `@load`/`@error` pair the m10 images report
-    /// flagged. Widened as a standalone change so it is never a merge conflict
-    /// with the element work that needs it (research/reports/m11/video.md §9.4).
     pub listeners: u64,
     pub(crate) inline_dirty: bool,
-    /// "Something in this subtree changed" — bumped on the node itself and on
-    /// every ancestor by [`Tree::touch`], which every mutator calls. It is the
-    /// signal the renderer's retained-render cache compares against: a cache
-    /// boundary is only allowed to replay a recorded frame while the number it
-    /// was rendered at still stands (docs/ARCHITECTURE.md §11, D-P01).
-    ///
-    /// Upwards only, and that is the whole design: a mutation can move any
-    /// ancestor's box, so every ancestor's *recorded* frame is stale; it cannot
-    /// move a node outside its own subtree except through the cascade, and the
-    /// cascade reports those itself — the restyle pass touches every node whose
-    /// `ComputedStates` actually changed, which is precisely the set a
-    /// descendant combinator can reach.
+    /// "Something in this subtree changed" — bumped on the node itself and on every ancestor by
+    /// [`Tree::touch`], which every mutator calls.
+    /// Upwards only: a mutation can move any ancestor's box, so their recorded frames are stale,
+    /// but it reaches nothing outside its subtree except through the cascade, which touches every
+    /// node whose `ComputedStates` changed.
     pub(crate) sub_rev: u64,
-    /// The restyle generation in which this node's own cascade inputs changed:
-    /// the next pass walks its whole subtree. See [`Tree::mark_restyle`].
+    /// The restyle generation in which this node's own cascade inputs changed: the next pass walks
+    /// its whole subtree. See [`Tree::mark_restyle`].
     pub(crate) mark_gen: u32,
     /// The generation in which this node, or something under it, was marked.
-    /// It is the trail the next pass follows down from the root to find the
-    /// subtrees it has to walk ([`Tree::restyle_roots`]).
     pub(crate) desc_gen: u32,
-    /// What the cascade found out, while matching, about which OTHER nodes
-    /// decide how this one and its children match ([`sel`]). Written through
-    /// the matcher's `&Tree` (hence the `Cell`), read by the mutators to know
-    /// what a change to the child list has to restyle besides the subtree
-    /// that moved. Sticky: a flag only ever makes a restyle bigger, so one
-    /// that no longer applies costs time, never correctness.
+    /// What the cascade found out, while matching, about which OTHER nodes decide how this one and
+    /// its children match ([`sel`]).
     pub(crate) sel_flags: Cell<u8>,
-    /// Everything the inline `style` body contributes: the mapped refinement,
-    /// its transitions and `object-fit`, plus the `--x` declarations and
-    /// `var()`-composed values that can only be resolved once the node's place
-    /// in the tree is known.
+    /// Everything the inline `style` body contributes: the mapped refinement, its transitions and
+    /// `object-fit`, plus the `--x` declarations and `var()`-composed values that can only be
+    /// resolved once the node's place in the tree is known.
     pub(crate) inline: Option<std::rc::Rc<vn_css::InlineStyle>>,
     /// The folded cascade result, filled by the restyle pass.
     pub computed: Option<vn_css::ComputedStates>,
 }
 
-/// [`Node::sel_flags`]: the dependencies the cascade records while it matches,
-/// the way browsers' selector flags do (Servo's `ElementSelectorFlags`).
-///
-/// They are learned from the questions the matcher asks the tree
-/// (`vn_css::MatchDom`), not from the sheet, because a sheet-wide answer is
-/// useless on a real one: the Argon client's has `> :nth-child(7)` and
-/// `>*:last-child` rules that every element is tested against, so "the sheet
-/// has structural pseudos" is always true, while the elements whose match
-/// actually got as far as asking are few.
-///
-/// The sibling flags live on the PARENT, for its child list. A question the
-/// matcher asks of the element being cascaded itself is an EDGE dependence:
-/// its answer is decided by the adjacent element (`:first-child`, `+`,
-/// `:last-child`, `:has(+ …)`). One asked of any other node is a WALK: the
-/// matcher is stepping along the siblings (`:nth-child()`, `~`), or asking on
-/// an ancestor's behalf (`li:last-child > a`), and a walk is restyled as if
-/// the whole run depended on it. Conservative, never wrong.
+/// [`Node::sel_flags`]: the dependencies the cascade records while it matches, the way browsers'
+/// selector flags do (Servo's `ElementSelectorFlags`).
+/// Learned from the questions the matcher asks (`vn_css::MatchDom`), not from the sheet: a
+/// sheet-wide answer is always true on a real one. Sibling flags live on the parent. A question
+/// asked of the element being cascaded is an EDGE dependence (`:first-child`, `+`); one asked of
+/// another node is a WALK (`:nth-child()`, `~`) and restyles the whole run. Conservative, never
+/// wrong.
 pub(crate) mod sel {
     /// A child's match reads the element right before it.
     pub const PREV_EDGE: u8 = 1;
@@ -302,67 +222,40 @@ pub(crate) mod sel {
     pub const SIBLINGS: u8 = PREV_EDGE | PREV_WALK | NEXT_EDGE | NEXT_WALK;
     /// This node's match read whether it is empty (`:empty`).
     pub const EMPTY: u8 = 16;
-    /// This node's OWN match read its subtree (`:has()` in the subject:
-    /// `.card:has(> svg)`).
+    /// This node's OWN match read its subtree (`:has()` in the subject: `.card:has(> svg)`).
     pub const HAS_SELF: u8 = 32;
-    /// A descendant's match read this node's subtree (`:has()` further left:
-    /// `.dialog:has(.editor) .title`).
+    /// A descendant's match read this node's subtree (`:has()` further left: `.dialog:has(.editor)
+    /// .title`).
     pub const HAS_DESC: u8 = 64;
     pub const HAS: u8 = HAS_SELF | HAS_DESC;
-    /// A child's `:has(+ …)` / `:has(~ …)` read the children after it. That
-    /// child carries a [`HAS`] flag of its own; this one, on the parent, is
-    /// what tells a change under a later child to look back for it
-    /// ([`super::Tree::touch_mutated`]).
+    /// A child's `:has(+ …)` / `:has(~ …)` read the children after it.
     pub const HAS_NEXT: u8 = 128;
 }
 
 thread_local! {
     /// The element the restyle pass is cascading right now, 0 outside one.
-    /// The [`sel`] flags are only learned from the cascade's own questions; a
-    /// `querySelector` or a devtools query asks the same ones and must not
-    /// leave flags behind.
     static CASCADE_SUBJECT: Cell<u32> = const { Cell::new(0) };
-    /// How deep inside [`NodeRef`]'s `each_child` the matcher is: the
-    /// outermost call is the `:has()` anchor asking about its subtree, the
-    /// nested ones are that same question walking down.
+    /// How deep inside [`NodeRef`]'s `each_child` the matcher is: the outermost call is the
+    /// `:has()` anchor asking about its subtree, the nested ones are that same question walking
+    /// down.
     static HAS_DEPTH: Cell<u32> = const { Cell::new(0) };
     /// See [`ReadOnOthers`].
     static READ_ON_OTHERS: RefCell<ReadOnOthers> = RefCell::new(ReadOnOthers::default());
-    /// The `(name, reader tag)` pairs [`READ_ON_OTHERS`] already holds, by
-    /// the address and length of the selector's own string: the matcher asks
-    /// the same few names (`dark`, `group`, `data-state`) millions of times,
-    /// and a hash per ask would cost more than the restyles this saves.
-    /// Direct-mapped and exact (address, length AND tag, and only for the life
-    /// of one sheet: [`set_engine`] empties it), so a miss costs a map lookup
-    /// and a hit is never a different string.
+    /// The `(name, reader tag)` pairs [`READ_ON_OTHERS`] already holds, by the address and length
+    /// of the selector's own string: the matcher asks the same few names (`dark`, `group`,
+    /// `data-state`) millions of times, and a hash per ask would cost more than the restyles this
+    /// saves.
     static READ_CACHE: [Cell<(usize, usize, u32)>; 128] = [const { Cell::new((0, 0, 0)) }; 128];
 }
 
-/// Every class, attribute and scope name the cascade has ever tested on an
-/// element OTHER than the one it was cascading (an ancestor: `.dark .x`; a
-/// sibling: `.a + .b`; a `:has()` descendant), with the tags of the elements
-/// whose cascade asked; and the same for an ancestor's place among its
-/// siblings ([`NameKind::Position`]).
-///
-/// Only a change to one of these names can move another element's match,
-/// and only the match of an element with one of those tags. So a class,
-/// attribute or scope change on a node, or a move of its place in the child
-/// list, is restyled as narrowly as that allows ([`Tree::mark_own_inputs`],
-/// [`Tree::child_list_changed`]): the node alone when no other element
-/// reads the name; the node plus the elements of the reader tags in its
-/// reach when a few tags read it; its whole subtree only when many do. The
-/// node's subtree follows anyway if what it inherits moved
-/// ([`Tree::settle_self_marks`]).
-///
-/// Learned while matching, like [`sel`], and for the same reason: Vue's
-/// `<Transition>` classes (`argon-route-enter-active`), `is-active`,
-/// `data-state` land on page-sized containers, and in the Argon client most
-/// of them only ever appear in the subject position. The one exception
-/// that matters is `class` itself: `.xsolla-checkout-container
-/// [class*="submit-button"] button` reads the class ATTRIBUTE of every
-/// ancestor of every `<button>`, which without the tags would have made
-/// every class change in the document a subtree walk. Growing only, so a
-/// reader is never forgotten while some selector still reads the name.
+/// Every class, attribute and scope name the cascade has ever tested on an element OTHER than the
+/// one it was cascading (an ancestor: `.dark .x`; a sibling: `.a + .b`; a `:has()` descendant),
+/// with the tags of the elements whose cascade asked; and the same for an ancestor's place among
+/// its siblings ([`NameKind::Position`]).
+/// Only a change to one of these names can move another element's match, and only for elements with
+/// the recorded tags, so a change is restyled as narrowly as that allows: the node alone, plus the
+/// reader tags in its reach, or its whole subtree when many tags read it. Growing only, so a reader
+/// is never forgotten.
 #[derive(Default)]
 struct ReadOnOthers {
     names: [HashMap<Box<str>, Readers>; 4],
@@ -385,12 +278,9 @@ enum NameKind {
     Class = 0,
     Attr = 1,
     Scope = 2,
-    /// An element's place among its siblings (`:first-child`, `:nth-child()`
-    /// and the rest), asked of an element that is neither the one being
-    /// cascaded nor one of its siblings: `.row:first-child .cell`. One name,
-    /// [`POSITION`]. A sibling's question needs no entry, because asking it
-    /// already flagged the parent ([`sel`]), and the insert marks that sibling
-    /// directly.
+    /// An element's place among its siblings (`:first-child`, `:nth-child()` and the rest), asked
+    /// of an element that is neither the one being cascaded nor one of its siblings:
+    /// `.row:first-child .cell`.
     Position = 3,
 }
 
@@ -402,15 +292,15 @@ const POSITION: &str = "position";
 enum Reach {
     /// Nobody: restyle the node alone.
     Own,
-    /// Elements with these tags, in the node's subtree (and, with `+` / `~`
-    /// in the sheet, its later siblings' subtrees).
+    /// Elements with these tags, in the node's subtree (and, with `+` / `~` in the sheet, its later
+    /// siblings' subtrees).
     Tags(Vec<u32>),
     /// Anything under it: walk the subtree.
     Subtree,
 }
 
-/// The matcher asked `name` of the node `asked` while cascading `subject`
-/// (whose tag is `subject_tag`): remember it if those are different nodes.
+/// The matcher asked `name` of the node `asked` while cascading `subject` (whose tag is
+/// `subject_tag`): remember it if those are different nodes.
 fn note_name_read(asked: u32, subject: u32, subject_tag: u32, name: &str, kind: NameKind) {
     if subject == 0 || subject == asked {
         return;
@@ -473,8 +363,8 @@ pub struct TreeMem {
     pub computed: usize,
     /// The slab itself (`Vec<Option<Node>>`, capacity).
     pub slot_bytes: usize,
-    /// Heap a node owns directly: children, text, inline-style text, classes,
-    /// attributes, scope hashes.
+    /// Heap a node owns directly: children, text, inline-style text, classes, attributes, scope
+    /// hashes.
     pub owned_bytes: usize,
     /// `ComputedStates` structs, inline in each node.
     pub computed_bytes: usize,
@@ -497,73 +387,49 @@ pub struct Tree {
     nodes: Vec<Option<Node>>,
     /// Ids [`Tree::alloc`] may hand out again.
     free: Vec<u32>,
-    /// Ids freed this wave, not reusable until the side tables have been swept
-    /// ([`Tree::release_freed`]).
     freed: Vec<u32>,
     pub root: u32,
     dirty: bool,
-    /// The current restyle generation. A node whose [`Node::mark_gen`] equals
-    /// it had its own cascade inputs changed since the last pass, and one whose
-    /// [`Node::desc_gen`] does has such a node at or under it. The pass bumps
-    /// the number, which clears every mark in the tree at once. Starts at 1, so
-    /// a new node's zeros mean "never". See [`Tree::mark_restyle`].
+    /// The current restyle generation.
     restyle_gen: u32,
-    /// Parentless nodes other than the root that got a mark at or under them
-    /// this generation: a node Vue has created and not inserted yet, or a
-    /// `<KeepAlive>` cache container, which is never inserted. The pass looks
-    /// for marks under these as well as under the root.
+    /// Parentless nodes other than the root that got a mark at or under them this generation: a
+    /// node Vue has created and not inserted yet, or a `<KeepAlive>` cache container, which is
+    /// never inserted.
     detached_marks: Vec<u32>,
-    /// Some node has carried [`sel::HAS`] since boot: until one does, a
-    /// mutation skips the look for `:has()` anchors above it.
     has_anchors: Cell<bool>,
-    /// Nodes whose own style, and only that, may have moved since the last
-    /// pass ([`Tree::mark_self`]), and the [`sel::HAS_SELF`] anchors a
-    /// mutation reached; see [`Tree::settle_self_marks`].
+    /// Nodes whose own style, and only that, may have moved since the last pass
+    /// ([`Tree::mark_self`]), and the [`sel::HAS_SELF`] anchors a mutation reached; see
+    /// [`Tree::settle_self_marks`].
     self_marks: Vec<u32>,
-    /// The last pass's sheet has a `+` / `~` combinator, so a node's later
-    /// siblings can read it ([`vn_css::Engine::uses_sibling_combinators`]).
-    /// Taken from the pass because the mutators have no engine; a new sheet
-    /// restyles the whole document anyway, so a stale value never matters.
+    /// The last pass's sheet has a `+` / `~` combinator, so a node's later siblings can read it
+    /// ([`vn_css::Engine::uses_sibling_combinators`]).
     sibling_combinators: bool,
-    /// The last write counter [`Tree::set_prop`] handed out. One for the tree
-    /// and not one per slot: a prop removed and set again starts a new slot,
-    /// and a slot's own count would begin at 0 again — the count the first
-    /// assignment had, so the same string assigned after a removal read as
+    /// The last write counter [`Tree::set_prop`] handed out.
+    /// One for the tree, not per slot: a prop removed and set again starts a new slot, and a
+    /// per-slot count would restart at 0, so the same string assigned after a removal read as
     /// "nobody assigned".
     prop_writes: u32,
-    /// "Everything": a new stylesheet or a changed `@media` environment can
-    /// flip any rule in the sheet, so no subtree is safe.
+    /// "Everything": a new stylesheet or a changed `@media` environment can flip any rule in the
+    /// sheet, so no subtree is safe.
     dirty_all: bool,
-    /// Nodes whose inline `style` text changed and must be re-parsed. Tracked
-    /// rather than rediscovered, so the pass never scans the whole slab.
+    /// Nodes whose inline `style` text changed and must be re-parsed. Tracked rather than
+    /// rediscovered, so the pass never scans the whole slab.
     inline_dirty_nodes: Vec<u32>,
-    /// A FORCED style flush (`getComputedStyle`, see
-    /// [`flush_pending_style`]) already ran this wave's restyle. The wave's
-    /// `flush_changes` must still report a change so the root view repaints,
-    /// but it must not run the cascade a second time — and neither must the
-    /// next `getComputedStyle` in the same wave.
+    /// A FORCED style flush (`getComputedStyle`, see [`flush_pending_style`]) already ran this
+    /// wave's restyle.
     style_flushed: bool,
     /// Every `<style>` element in the tree, by node id.
-    ///
-    /// Kept as a set rather than rediscovered, because [`sync_runtime_sheets`]
-    /// runs on every flush that dirties the tree and a scan of the whole slab
-    /// per flush is exactly the cost m11 spent a milestone removing. Almost
-    /// every app leaves it empty and pays one `is_empty()`.
+    /// A set, because [`sync_runtime_sheets`] runs on every flush that dirties the tree and a slab
+    /// scan per flush is too costly.
     style_nodes: std::collections::BTreeSet<u32>,
-    /// Elements some OTHER element's `group-hover:` rule watches — the ones the
-    /// renderer has to give gpui's `.group(name)` to. Recomputed at the end of
-    /// a restyle pass, and only for a sheet that has such a rule at all: a
-    /// scoped restyle can recompute the DESCENDANT without touching the
-    /// ancestor, so an incremental set would go stale in exactly the case the
-    /// scoped pass exists for.
+    /// Elements some OTHER element's `group-hover:` rule watches — the ones the renderer has to
+    /// give gpui's `.group(name)` to.
+    /// Recomputed at the end of a restyle pass rather than updated incrementally: a scoped restyle
+    /// can recompute the descendant without touching the ancestor.
     group_anchors: std::collections::HashSet<u32>,
-    /// Anchor → the elements whose `group-hover:` rung watches it. A flip on
-    /// the anchor is the only signal such a descendant ever gets: its rung is
-    /// folded at build time from the hovered set, so a cached subtree holding
-    /// it has to render again ([`Tree::touch_hover_styled`]), and one that
-    /// declares a `transition` has its animation aimed ([`note_hover`]). Built
-    /// in the same pass as [`Tree::group_anchors`] and, like it, only for a
-    /// sheet that uses the variant at all — so the m11 invariant holds: a
+    /// Anchor → the elements whose `group-hover:` rung watches it.
+    /// A flip on the anchor is the only signal such an element gets: its rung is folded at build
+    /// time, so a cached subtree holding it must render again ([`Tree::touch_hover_styled`]). A
     /// hover walks this list, never the tree.
     group_hover_deps: HashMap<u32, Vec<u32>>,
     names: Vec<String>,
@@ -575,8 +441,8 @@ thread_local! {
     static DISPATCHER: Cell<u64> = const { Cell::new(0) };
 }
 
-/// Runs `f` with the tree. Panics (→ caught by `host_fn!`, poisons) if the
-/// tree is already borrowed — i.e. if JS mutates during a draw walk (I6/I8).
+/// Runs `f` with the tree. Panics (→ caught by `host_fn!`, poisons) if the tree is already borrowed
+/// — i.e. if JS mutates during a draw walk (I6/I8).
 pub fn with_tree<R>(f: impl FnOnce(&mut Tree) -> R) -> R {
     TREE.with(|t| f(&mut t.borrow_mut()))
 }
@@ -586,12 +452,12 @@ pub fn read_tree<R>(f: impl FnOnce(&Tree) -> R) -> R {
     TREE.with(|t| f(&t.borrow()))
 }
 
-/// One line per distinct CSS advisory, however many elements hit it — and
-/// however many times the sheet is recompiled, since a recompile of the same
-/// source produces the same diagnostics (see [`set_stylesheet`]).
+/// One line per distinct CSS advisory, however many elements hit it — and however many times the
+/// sheet is recompiled, since a recompile of the same source produces the same diagnostics (see
+/// [`set_stylesheet`]).
 fn warn_css(msg: &str) {
-    // Normalised BEFORE the dedupe, so two spellings of the same message are
-    // one line and not two (see [`crate::log::one_line`]).
+    // Normalised BEFORE the dedupe, so two spellings of the same message are one line and not two
+    // (see [`crate::log::one_line`]).
     let msg = crate::log::one_line(msg);
     let fresh = CSS_WARNED.with(|w| w.borrow_mut().insert(msg.clone()));
     if fresh {
@@ -613,14 +479,9 @@ impl Tree {
         Tree {
             // Slot 0 is the reserved "none" id.
             nodes: vec![None],
-            // NAME 0 is reserved the same way, and for a bug that shipped:
-            // `create_text` and `create_anchor` give their nodes `tag: 0`
-            // meaning "no tag", but the interner used to hand id 0 to the
-            // FIRST name anybody interned — which is `create_root`'s "root".
-            // So every text node and every Vue fragment anchor reported
-            // `tag: "root"` to the devtools, and the inspector's Elements tree
-            // drew runs of `<root>` rows between the real elements. Reserving
-            // the empty name makes `name(0)` mean what `tag: 0` says.
+            // Name 0 is reserved: text and anchor nodes use `tag: 0` for "no tag", and the interner
+            // would otherwise give 0 to the first name ("root"), so the devtools showed every text
+            // node and fragment anchor as `<root>`.
             names: vec![String::new()],
             name_ids: HashMap::from([(String::new(), 0)]),
             restyle_gen: 1,
@@ -642,16 +503,13 @@ impl Tree {
         self.names.get(id as usize).map(String::as_str).unwrap_or("")
     }
 
-    /// Does some descendant's `group-hover:` rule watch this element? See
-    /// [`Tree::group_anchors`].
+    /// Does some descendant's `group-hover:` rule watch this element? See [`Tree::group_anchors`].
     pub fn is_group_anchor(&self, id: u32) -> bool {
         self.group_anchors.contains(&id)
     }
 
-    /// `id` joined or left the hover path: touch what that repaints, its own
-    /// `:hover` rung and the `group-hover:` elements watching it, so a cached
-    /// subtree holding one renders again. `false` when nothing hangs off its
-    /// hover (then no frame is owed).
+    /// `id` joined or left the hover path: touch what that repaints, its own `:hover` rung and the
+    /// `group-hover:` elements watching it, so a cached subtree holding one renders again.
     pub(crate) fn touch_hover_styled(&mut self, id: u32) -> bool {
         let own = self.node(id).and_then(|n| n.computed.as_ref()).is_some_and(|cs| cs.hover.is_some() || cs.control_state(1));
         if own {
@@ -734,9 +592,9 @@ impl Tree {
 
     pub fn set_text(&mut self, id: u32, text: String) {
         if let Some(n) = self.node_mut(id) {
-            // `:empty` reads whether a text child has data (`NodeRef::is_empty`),
-            // so a text node gaining its first character, or losing its last,
-            // restyles the element it sits in, looking through anchors.
+            // `:empty` reads whether a text child has data (`NodeRef::is_empty`), so a text node
+            // gaining its first character, or losing its last, restyles the element it sits in,
+            // looking through anchors.
             let flips = n.kind == Kind::Text && n.text.is_empty() != text.is_empty();
             let mut parent = n.parent;
             n.text = text;
@@ -747,14 +605,10 @@ impl Tree {
                     parent = p.parent;
                 }
                 // Only an element whose cascade actually asked (`sel::EMPTY`).
-                // A text node gets its first characters on every mount, and
-                // re-cascading the element around each one is what this used
-                // to cost.
                 if self.node(parent).is_some_and(|p| p.sel_flags.get() & sel::EMPTY != 0) {
                     self.mark_with_followers(parent);
                 }
-                // …and a `:has(.badge:empty)` above reads the same answer
-                // from further away.
+                // …and a `:has(.badge:empty)` above reads the same answer from further away.
                 self.touch_mutated(id, false);
                 return;
             }
@@ -762,8 +616,8 @@ impl Tree {
         }
     }
 
-    /// "This element's entire child content is now exactly this string":
-    /// destroy remaining children, set inline text.
+    /// "This element's entire child content is now exactly this string": destroy remaining
+    /// children, set inline text.
     pub fn set_element_text(&mut self, id: u32, text: String) {
         let children = match self.node_mut(id) {
             Some(n) => std::mem::take(&mut n.children),
@@ -786,15 +640,9 @@ impl Tree {
     }
 
     /// Insert-or-move `child` under `parent`, before `anchor` (0 = append).
-    ///
-    /// The moved subtree is restyled whole: its ancestors changed, and a
-    /// descendant combinator reads every one of them. Nothing else is, unless
-    /// the cascade said it reads the child list ([`Tree::child_list_changed`]):
-    /// a sibling whose `:first-child` / `:nth-child()` / `+` / `~` answer can
-    /// move, a parent matched against `:empty` that stops being empty, a
-    /// `:has()` above that can start or stop matching. That used to be "mark
-    /// the parent", which re-cascaded every existing sibling of every inserted
-    /// node: appending one message to a list re-cascaded the list.
+    /// The moved subtree is restyled whole (its ancestors changed). Siblings are marked only if the
+    /// cascade read the child list ([`Tree::child_list_changed`]); marking the parent re-cascaded
+    /// every sibling of every inserted node.
     pub fn insert(&mut self, child: u32, parent: u32, anchor: u32) {
         if child == 0 || parent == 0 || child == anchor || self.node(parent).is_none() {
             return;
@@ -806,8 +654,8 @@ impl Tree {
             self.child_list_changed(old_parent, at, false, was_bare);
         }
         let was_bare = self.bare_if_asked(parent);
-        // An element with inline text gaining a real child: the inline text
-        // is stale Vue state (setElementText always precedes) — drop it.
+        // An element with inline text gaining a real child: the inline text is stale Vue state
+        // (setElementText always precedes) — drop it.
         let idx = {
             let Some(p) = self.node_mut(parent) else { return };
             p.text.clear();
@@ -823,16 +671,13 @@ impl Tree {
             c.parent = parent;
         }
         self.mark_restyle(child);
-        // A subtree carrying this generation's marks has a trail up to where
-        // it USED to hang (or none above itself, if it hung nowhere); the pass
-        // searches from the root, so the trail has to run from here up too.
         if self.node(child).is_some_and(|c| c.desc_gen == self.restyle_gen) {
             self.flag_path(parent);
         }
         self.child_list_changed(parent, idx, true, was_bare);
         self.dirty = true;
-        // BOTH chains: the subtree left one parent and joined another, and a
-        // cache boundary over either has a stale recording.
+        // BOTH chains: the subtree left one parent and joined another, and a cache boundary over
+        // either has a stale recording.
         if old_parent != 0 {
             self.touch_mutated(old_parent, true);
         }
@@ -857,8 +702,8 @@ impl Tree {
         at
     }
 
-    /// Vue calls remove exactly once per unmounted subtree root: recursively
-    /// destroy native state and recycle every id.
+    /// Vue calls remove exactly once per unmounted subtree root: recursively destroy native state
+    /// and recycle every id.
     pub fn remove(&mut self, id: u32) {
         let parent = self.node(id).map(|n| n.parent).unwrap_or(0);
         let was_bare = self.bare_if_asked(parent);
@@ -873,32 +718,12 @@ impl Tree {
         }
     }
 
-    /// `parent`'s child list just changed at `at`: a child went in there
-    /// (`inserted`), or the one that was there came out. Marks whatever the
-    /// cascade said depends on that ([`Node::sel_flags`], recorded while
-    /// matching):
-    ///
-    /// * `PREV_EDGE`: the first element after `at`, whose previous element
-    ///   sibling is a different one now (`:first-child`, `+`);
-    /// * `PREV_WALK`: every child after `at`, whose count of earlier siblings
-    ///   moved (`:nth-child()`, `~`);
-    /// * `NEXT_EDGE` / `NEXT_WALK`: the same, looking the other way
-    ///   (`:last-child`, `:nth-last-child()`, `:has(+ …)`);
-    /// * `EMPTY`: the parent itself, if it stopped or started being empty
-    ///   (`was_bare` is what it was before).
-    ///
-    /// A sibling's own match is what moved, so it is restyled alone, plus the
-    /// elements under it whose selectors read an ANCESTOR's position
-    /// ([`NameKind::Position`]); its subtree is walked only when too many tags
-    /// do. The client's sheet asks `:last-child` and `:nth-child()` of every
-    /// element (Tailwind's `space-y-*` and friends sit in the universal
-    /// bucket), so every parent carries these flags, and marking the siblings
-    /// whole made a route change re-cascade the page next to the new one.
-    /// No later-sibling walk is needed for `+` / `~` either: a selector that
-    /// steps across siblings flags the parent with a WALK on the way, and the
-    /// WALK marks every sibling it could have stepped from.
-    ///
-    /// A `:has()` above is [`Tree::touch_mutated`]'s business.
+    /// `parent`'s child list just changed at `at`: a child went in there (`inserted`), or the one
+    /// that was there came out.
+    /// Marks only what the cascade recorded as depending on it ([`Node::sel_flags`]): a sibling
+    /// whose match moved is restyled alone, plus elements under it that read an ancestor's
+    /// position. Marking siblings whole made a route change re-cascade the page next to the new
+    /// one.
     fn child_list_changed(&mut self, parent: u32, at: usize, inserted: bool, was_bare: bool) {
         let Some(p) = self.node(parent) else { return };
         let flags = p.sel_flags.get();
@@ -935,15 +760,15 @@ impl Tree {
         }
     }
 
-    /// [`Tree::is_bare`], for a node whose cascade asked `:empty` of it, and
-    /// `false` for every other: what [`Tree::child_list_changed`] compares
-    /// against, without a walk of the child list on every insert.
+    /// [`Tree::is_bare`], for a node whose cascade asked `:empty` of it, and `false` for every
+    /// other: what [`Tree::child_list_changed`] compares against, without a walk of the child list
+    /// on every insert.
     fn bare_if_asked(&self, id: u32) -> bool {
         self.node(id).is_some_and(|n| n.sel_flags.get() & sel::EMPTY != 0) && self.is_bare(id)
     }
 
-    /// `:empty` as [`NodeRef::is_empty`] answers it, for the mutators: is
-    /// there no element child and no text with data, looking through anchors?
+    /// `:empty` as [`NodeRef::is_empty`] answers it, for the mutators: is there no element child
+    /// and no text with data, looking through anchors?
     fn is_bare(&self, id: u32) -> bool {
         let Some(n) = self.node(id) else { return true };
         n.text.is_empty()
@@ -972,8 +797,6 @@ impl Tree {
     }
 
     /// Is an ANCESTOR of `id` `display: none`, by its stored computed style?
-    /// The restyle pass asks it of a node with animations, after storing the
-    /// ancestors' new styles (it walks in preorder).
     pub(crate) fn hidden_above(&self, id: u32) -> bool {
         let mut cur = self.node(id).map_or(0, |n| n.parent);
         while cur != 0 {
@@ -986,20 +809,10 @@ impl Tree {
         false
     }
 
-    /// Hands the ids freed since the last call back to [`Tree::alloc`]. Called
-    /// by the wave's flush after every side table keyed by node id has been
-    /// swept for dead ids (`crate::flush_changes`).
-    ///
-    /// Until then a freed id is not reused. The side tables (the animator's
-    /// runs, hover, rectangles, scroll handles, focus, image and canvas state)
-    /// are swept by asking whether the id is still alive. An id freed and
-    /// reallocated within one wave was alive again by the time they asked, so
-    /// the new node inherited the old one's state. In the Argon client a
-    /// dashboard widget's spinner (`animate-spin`, infinite) was removed when a
-    /// space opened, a Vue anchor got its id in the same wave, and the animator
-    /// kept the window redrawing every frame for good, idle. The
-    /// same reuse handed a node mounted and measured in one wave the old
-    /// node's rectangle instead of a layout.
+    /// Hands the ids freed since the last call back to [`Tree::alloc`].
+    /// A freed id is not reused until the side tables keyed by node id have been swept by liveness:
+    /// an id freed and reallocated within one wave looked alive, and the new node inherited the old
+    /// one's animator, rectangle and focus state.
     pub(crate) fn release_freed(&mut self) {
         self.free.append(&mut self.freed);
     }
@@ -1016,8 +829,8 @@ impl Tree {
             n.inline_dirty = true;
             self.dirty = true;
             self.inline_dirty_nodes.push(id);
-            // An inline style is no selector's business: only this element's
-            // own style, and what its subtree inherits from it, can move.
+            // An inline style is no selector's business: only this element's own style, and what
+            // its subtree inherits from it, can move.
             self.mark_self(id);
             self.touch(id);
         }
@@ -1049,9 +862,9 @@ impl Tree {
         self.prop_write(id, name).map(|(v, _)| v)
     }
 
-    /// The property value together with its write counter — see [`Node::props`].
-    /// Consumers that must react to *assignments* rather than to value changes
-    /// (a controlled `<input>`) key off the counter.
+    /// The property value together with its write counter — see [`Node::props`]. Consumers that
+    /// must react to *assignments* rather than to value changes (a controlled `<input>`) key off
+    /// the counter.
     pub fn prop_write<'a>(&'a self, id: u32, name: &str) -> Option<(&'a str, u32)> {
         let key = *self.name_ids.get(name)?;
         self.node(id)?
@@ -1078,19 +891,17 @@ impl Tree {
             if n.class_attr == classes {
                 return; // `el.className = el.className`: nothing moved.
             }
-            // An ordered set, as `classList` is (DOM §7.1, DOMTokenList); the
-            // raw string stays in `class_attr` for `[class*=…]`. Lucide's icons
-            // arrive as `lucide w-4 h-4 … w-4 h-4`, and the rule index offers a
-            // class's rules once per entry (`MatchDom::each_class`), so a
-            // repeat would match and fold them twice.
+            // An ordered set, as `classList` is; the raw string stays in `class_attr` for
+            // `[class*=…]`.
+            // Repeats are dropped: a class listed twice would match and fold its rules twice.
             let mut next: Vec<String> = Vec::new();
             for c in classes.split_whitespace() {
                 if !next.iter().any(|x| x == c) {
                     next.push(c.to_string());
                 }
             }
-            // Only the names that came or went can move a match, plus the
-            // attribute itself for `[class*=…]`.
+            // Only the names that came or went can move a match, plus the attribute itself for
+            // `[class*=…]`.
             let reach = {
                 let gone = n.classes.iter().filter(|c| !next.contains(c));
                 let came = next.iter().filter(|c| !n.classes.contains(c));
@@ -1105,25 +916,17 @@ impl Tree {
         }
     }
 
-    /// A class, attribute or scope of `id` changed; `reach` says whose match
-    /// can have moved besides its own ([`ReadOnOthers`]). The node itself is
-    /// restyled alone ([`Tree::mark_self`]); the elements of the reader tags
-    /// in its reach are marked for a walk each; and when the readers are too
-    /// many to be worth finding, the node's whole subtree is walked, as every
-    /// such change used to be.
-    ///
-    /// "In its reach" is the node's subtree, and, when the sheet has `+` /
-    /// `~`, its later siblings and their subtrees: everywhere a selector that
-    /// reads this node from another element can be anchored. (A `:has()`
-    /// above it is [`Tree::touch_mutated`]'s business.)
+    /// A class, attribute or scope of `id` changed; `reach` says whose match can have moved besides
+    /// its own ([`ReadOnOthers`]).
+    /// "In its reach" is the node's subtree and, when the sheet has `+` / `~`, its later siblings
+    /// and their subtrees.
     fn mark_own_inputs(&mut self, id: u32, reach: Reach) {
         self.mark_reach(id, &reach, self.sibling_combinators);
     }
 
-    /// [`Tree::mark_own_inputs`] for any change whose readers `reach` names:
-    /// `id` alone, plus the reader elements in its subtree, and in its later
-    /// siblings' subtrees with `later_siblings` (the subtree and the later
-    /// siblings whole, for [`Reach::Subtree`]).
+    /// [`Tree::mark_own_inputs`] for any change whose readers `reach` names: `id` alone, plus the
+    /// reader elements in its subtree, and in its later siblings' subtrees with `later_siblings`
+    /// (the subtree and the later siblings whole, for [`Reach::Subtree`]).
     fn mark_reach(&mut self, id: u32, reach: &Reach, later_siblings: bool) {
         let tags = match reach {
             Reach::Subtree if later_siblings => return self.mark_with_followers(id),
@@ -1155,9 +958,9 @@ impl Tree {
         }
     }
 
-    /// "Only this element's own style can have moved": restyled alone by the
-    /// next pass, and its subtree walked only if what the subtree inherits
-    /// from it moved ([`Tree::settle_self_marks`]).
+    /// "Only this element's own style can have moved": restyled alone by the next pass, and its
+    /// subtree walked only if what the subtree inherits from it moved
+    /// ([`Tree::settle_self_marks`]).
     fn mark_self(&mut self, id: u32) {
         if self.dirty_all || id == 0 || self.node(id).is_none_or(|n| n.mark_gen == self.restyle_gen) {
             return;
@@ -1167,9 +970,9 @@ impl Tree {
 
     pub fn set_listener(&mut self, id: u32, event: u32, on: bool) {
         if let Some(n) = self.node_mut(id) {
-            // `event` is a code, not a bit index the caller can be trusted with:
-            // a JS mirror that has drifted ahead of this build would otherwise
-            // shift past the width and panic in debug / wrap in release.
+            // `event` is a code, not a bit index the caller can be trusted with: a JS mirror that
+            // has drifted ahead of this build would otherwise shift past the width and panic in
+            // debug / wrap in release.
             if event >= u64::BITS {
                 return;
             }
@@ -1184,34 +987,27 @@ impl Tree {
         }
     }
 
-    /// [`take_dirty`](Self::take_dirty) without taking it: is there tree state
-    /// the host has not folded and painted yet? Read by the synchronous-layout
-    /// path, which must not consume the flag the frame is going to act on.
+    /// [`take_dirty`](Self::take_dirty) without taking it: is there tree state the host has not
+    /// folded and painted yet?
     pub fn is_dirty(&self) -> bool {
         self.dirty || self.style_flushed
     }
 
     pub fn take_dirty(&mut self) -> bool {
-        // A forced flush already did the cascade, but the frame still has to be
-        // told something changed, or the wave paints the old pixels.
+        // A forced flush already did the cascade, but the frame still has to be told something
+        // changed, or the wave paints the old pixels.
         let flushed = std::mem::take(&mut self.style_flushed);
         std::mem::take(&mut self.dirty) || flushed
     }
 
-    /// "Something changed that no subtree is safe from": a new stylesheet, or a
-    /// changed `@media` environment. Both can flip any rule in the sheet.
-    /// Live nodes — allocated slots that still hold a node. `nodes.len()`
-    /// counts freed slots too, which would make a tree that churned once
-    /// look permanently large.
+    /// "Something changed that no subtree is safe from": a new stylesheet, or a changed `@media`
+    /// environment. Both can flip any rule in the sheet. Live nodes — allocated slots that still
+    /// hold a node.
     pub fn live_count(&self) -> u32 {
         self.nodes.iter().filter(|n| n.is_some()).count() as u32
     }
 
-    /// What the retained tree holds, estimated from the live structures
-    /// (devtools `mem`). Shallow sizes plus the heap capacity of every
-    /// container a node owns; an `Rc` shared between nodes is counted once (by
-    /// pointer). The estimate leaves out allocator overhead and the inside of
-    /// a `StyleRefinement` (its few boxed fields), so it is a floor.
+    /// What the retained tree holds, estimated from the live structures (devtools `mem`).
     pub(crate) fn mem_estimate(&self) -> TreeMem {
         use std::collections::HashSet;
         use std::mem::size_of;
@@ -1259,8 +1055,8 @@ impl Tree {
         m.refinements = refinements.len();
         m.refinement_bytes = refinements.len() * (size_of::<gpui::StyleRefinement>() + 16);
         m.vars_maps = vars.len();
-        // An entry is two `Rc<str>` fat pointers; the strings themselves are
-        // shared down the tree and not counted.
+        // An entry is two `Rc<str>` fat pointers; the strings themselves are shared down the tree
+        // and not counted.
         m.vars_bytes = vars.len() * (size_of::<vn_css::Vars>() + 16) + m.var_entries * 2 * size_of::<std::rc::Rc<str>>();
         m.inlines = inlines.len();
         m.inline_bytes = inlines.len() * (size_of::<vn_css::InlineStyle>() + 16);
@@ -1269,9 +1065,8 @@ impl Tree {
         m
     }
 
-    /// Marks one subtree for a re-cascade — the scoped half of [`mark_dirty`].
-    /// A pop-out resizing changes the `@media` answers for the subtree IT
-    /// paints and for nothing else (docs/MULTIWINDOW.md §6.3).
+    /// Marks one subtree for a re-cascade — the scoped half of [`mark_dirty`]. A pop-out resizing
+    /// changes the `@media` answers for the subtree IT paints and for nothing else.
     pub fn mark_restyle_subtree(&mut self, id: u32) {
         self.dirty = true;
         self.mark_restyle(id);
@@ -1282,20 +1077,13 @@ impl Tree {
         self.dirty_all = true;
     }
 
-    /// "Something inside this subtree changed": bumps [`Node::sub_rev`] on `id`
-    /// and on every ancestor up to the root.
-    ///
-    /// One `u64` add per level, and the depth of a DOM is a small number — a
-    /// Vue wave of a thousand mutations under one parent costs a thousand times
-    /// the depth, which is nothing beside the cascade it is about to run. It is
-    /// deliberately NOT change-gated: a mutator that stored the same string
-    /// again still moved the DOM as far as `MutationObserver` is concerned, and
-    /// a cache that replayed through it would be betting on a comparison the
-    /// caller already declined to make.
+    /// "Something inside this subtree changed": bumps [`Node::sub_rev`] on `id` and on every
+    /// ancestor up to the root.
+    /// Deliberately not change-gated: a mutator that stored the same string still moved the DOM as
+    /// far as `MutationObserver` is concerned.
     pub(crate) fn touch(&mut self, id: u32) {
         let mut cur = id;
-        // A cycle cannot happen (`insert` detaches first), but a corrupt id
-        // must not hang the pump.
+        // A cycle cannot happen (`insert` detaches first), but a corrupt id must not hang the pump.
         for _ in 0..4096 {
             let Some(n) = self.node_mut(cur) else { return };
             n.sub_rev = n.sub_rev.wrapping_add(1);
@@ -1306,17 +1094,12 @@ impl Tree {
         }
     }
 
-    /// [`Tree::touch`], for a mutation that can change how a selector matches
-    /// (child list, classes, attributes, scopes): on the same walk up, every
-    /// `:has()` anchor above is told, since its answer reads the subtree that
-    /// just changed. One whose answer a DESCENDANT's selector reads
-    /// ([`sel::HAS_DESC`]) is marked, subtree and all; one only its own match
-    /// reads ([`sel::HAS_SELF`]) is rechecked alone first
-    /// ([`Tree::settle_self_marks`]). `id` itself counts when the change is
-    /// to its child list (`include_self`), not when it is to its own
-    /// attributes: `:has()` reads descendants.
-    ///
-    /// Until some node has ever been an anchor this is exactly `touch`.
+    /// [`Tree::touch`], for a mutation that can change how a selector matches (child list, classes,
+    /// attributes, scopes): on the same walk up, every `:has()` anchor above is told, since its
+    /// answer reads the subtree that just changed.
+    /// A `:has()` anchor read by a descendant's selector ([`sel::HAS_DESC`]) is marked whole; one
+    /// only its own match reads ([`sel::HAS_SELF`]) is rechecked alone. `id` counts as an anchor
+    /// only for a child-list change (`include_self`).
     pub(crate) fn touch_mutated(&mut self, id: u32, include_self: bool) {
         if !self.has_anchors.get() {
             self.touch(id);
@@ -1338,10 +1121,8 @@ impl Tree {
                 }
             }
             first = false;
-            // A `:has(+ …)` / `:has(~ …)` anchor among the EARLIER siblings
-            // reads this node and what is under it, and is neither above the
-            // change nor after it. `label:has(+ [data-invalid])` kept its
-            // style when the input beside it changed.
+            // A `:has(+ …)` / `:has(~ …)` anchor among the EARLIER siblings reads this node and
+            // what is under it, and is neither above the change nor after it.
             let earlier: Vec<u32> = match self.node(parent) {
                 Some(p) if p.sel_flags.get() & sel::HAS_NEXT != 0 => {
                     p.children.iter().take_while(|&&c| c != cur).copied().collect()
@@ -1366,36 +1147,20 @@ impl Tree {
         }
     }
 
-    /// The subtree revision — see [`Node::sub_rev`]. `0` for a node that does
-    /// not exist, which is also the revision of a never-touched one: a caller
-    /// comparing it must therefore hold a node it knows is alive.
+    /// The subtree revision — see [`Node::sub_rev`]. `0` for a node that does not exist, which is
+    /// also the revision of a never-touched one: a caller comparing it must therefore hold a node
+    /// it knows is alive.
     pub fn sub_rev(&self, id: u32) -> u64 {
         self.node(id).map(|n| n.sub_rev).unwrap_or(0)
     }
 
-    /// "Walk this element's whole subtree next pass": it was inserted or moved
-    /// (its ancestors changed, and a descendant combinator reads every one of
-    /// them), what it hands down to its children moved
-    /// ([`Tree::settle_self_marks`]), or something about it changed that too
-    /// many elements under it read ([`Tree::mark_own_inputs`]). A change that
-    /// only moves the element's own style is [`Tree::mark_self`]'s.
-    ///
-    /// Ancestors and siblings are marked only where the cascade recorded that
-    /// they read this node ([`sel`]): a change to a child list marks the
-    /// siblings and the `:empty` parent that asked ([`Tree::child_list_changed`]),
-    /// and any mutation marks the `:has()` anchors above it
-    /// ([`Tree::touch_mutated`]). What reaches the following siblings through
-    /// `+` / `~` is marked by whoever knows it can ([`Tree::mark_with_followers`]).
-    ///
-    /// **There is no limit on how many.** A mark is two numbers on the node:
-    /// [`Node::mark_gen`] on the node itself, and [`Node::desc_gen`] on it and
-    /// up its ancestors to the first one that already carries it. A wave of N
-    /// marks therefore costs O(N) plus one path to the root, and the pass finds
-    /// its walk roots by following the trail down instead of comparing marks
-    /// against each other. That bookkeeping used to be a list, which had to
-    /// give up at 64 entries and restyle the whole document instead; opening a
-    /// space in the Argon client crossed it 9–10 times per open
-    /// (research/reports/m26/perf-mem-1.md §4).
+    /// "Walk this element's whole subtree next pass": it was inserted or moved (its ancestors
+    /// changed, and a descendant combinator reads every one of them), what it hands down to its
+    /// children moved ([`Tree::settle_self_marks`]), or something about it changed that too many
+    /// elements under it read ([`Tree::mark_own_inputs`]).
+    /// A mark is two numbers ([`Node::mark_gen`], and [`Node::desc_gen`] up the ancestors to the
+    /// first that has it), so N marks cost O(N) plus one path to the root; there is no cap that
+    /// falls back to a whole-document pass.
     fn mark_restyle(&mut self, id: u32) {
         if self.dirty_all || id == 0 {
             return;
@@ -1409,11 +1174,9 @@ impl Tree {
         self.flag_path(id);
     }
 
-    /// [`Tree::mark_restyle`] for `id` and, when the sheet has `+` / `~`, for
-    /// every sibling after it: for a change to something about `id` that the
-    /// cascade does not say who read (its `:empty` or `:has()` answer, or a
-    /// name every tag reads). That is exactly how far a sibling combinator can
-    /// see, and sheets without one pay nothing.
+    /// [`Tree::mark_restyle`] for `id` and, when the sheet has `+` / `~`, for every sibling after
+    /// it: for a change to something about `id` that the cascade does not say who read (its
+    /// `:empty` or `:has()` answer, or a name every tag reads).
     fn mark_with_followers(&mut self, id: u32) {
         self.mark_restyle(id);
         if !self.sibling_combinators {
@@ -1429,17 +1192,14 @@ impl Tree {
         }
     }
 
-    /// Lays this generation's trail from `id` up to the root, stopping at the
-    /// first node that already carries it: everything above that one does too,
-    /// because every trail is laid all the way up ([`Tree::insert`] lays it again
-    /// when it moves a marked subtree). A parentless top other than the root is
-    /// remembered in [`Tree::detached_marks`], so the pass searches under it.
+    /// Lays this generation's trail from `id` up to the root, stopping at the first node that
+    /// already carries it: everything above that one does too, because every trail is laid all the
+    /// way up ([`Tree::insert`] lays it again when it moves a marked subtree).
     fn flag_path(&mut self, id: u32) {
         let gen = self.restyle_gen;
         let root = self.root;
         let mut cur = id;
-        // A cycle cannot happen (`insert` detaches first), but a corrupt id
-        // must not hang the pump.
+        // A cycle cannot happen (`insert` detaches first), but a corrupt id must not hang the pump.
         for _ in 0..4096 {
             let Some(n) = self.node_mut(cur) else { return };
             if n.desc_gen == gen {
@@ -1458,31 +1218,16 @@ impl Tree {
         }
     }
 
-    /// The viewport basis moved: every inline `style` body that names a
-    /// viewport unit is re-parsed, and its subtree re-cascaded.
-    ///
-    /// vn-css flattens `vw`/`vh`/`svw`/`svh`/… to px when it PARSES, and an
-    /// inline body is parsed only when its text changes (`set_style`). The
-    /// sheet has [`restyle_all`]'s recompile for this. Inline styles had
-    /// nothing, so a Vue-bound `width: 100svw` stayed at the size the window
-    /// had when it was first written: the Argon client's AppShell measured
-    /// 1652x633 in a 1700x800 window (m26).
-    ///
-    /// The subtree is marked as well as the node, which covers the
-    /// `var()`-composed values: a custom property declared inline
-    /// (`--h: 100svh`) is resolved where a descendant's `var(--h)` is
-    /// cascaded, so those descendants are re-cascaded with it.
-    ///
-    /// A scan of the slab, but only on a basis change, which is a resize.
-    /// Returns how many nodes were marked.
+    /// The viewport basis moved: every inline `style` body that names a viewport unit is re-parsed,
+    /// and its subtree re-cascaded.
+    /// vn-css flattens `vw`/`vh` to px when it parses, and an inline body is parsed only when its
+    /// text changes, so a resize would otherwise leave it at the old size. The subtree is marked
+    /// too, for `var()`-composed values.
     pub(crate) fn invalidate_viewport_inline(&mut self) -> usize {
         self.invalidate_inline_where(has_viewport_unit)
     }
 
     /// The rem basis moved: the same for every inline body that names a `rem`.
-    /// A Vue-bound `width: 12rem` parsed at 16px stayed 192px after the root's
-    /// font size went to 14px (a UI-scale setting), where the sheet's `12rem`
-    /// followed it.
     pub(crate) fn invalidate_rem_inline(&mut self) -> usize {
         self.invalidate_inline_where(has_rem_unit)
     }
@@ -1511,11 +1256,9 @@ impl Tree {
         hits.len()
     }
 
-    /// A web font was registered: every inline `style` body that sets
-    /// `font-family` (or the `font` shorthand) is re-parsed, because vn-css
-    /// picks the family it draws with when it PARSES, from the fonts installed
-    /// then — the inline half of [`recompile_for_fonts`]. Returns how many
-    /// nodes were marked.
+    /// A web font was registered: every inline `style` body that sets `font-family` (or the `font`
+    /// shorthand) is re-parsed, because vn-css picks the family it draws with when it PARSES, from
+    /// the fonts installed then — the inline half of [`recompile_for_fonts`].
     pub(crate) fn invalidate_font_inline(&mut self) -> usize {
         let keys: Vec<u32> = ["font", "font-family"].iter().filter_map(|k| self.name_ids.get(*k).copied()).collect();
         if keys.is_empty() {
@@ -1544,50 +1287,26 @@ impl Tree {
         hits.len()
     }
 
-    /// The restyle pass: re-parse dirty inline styles, then run the cascade
-    /// for every element node. Runs once per JS wave that touched the tree —
-    /// never during a draw.
+    /// The restyle pass: re-parse dirty inline styles, then run the cascade for every element node.
+    /// Runs once per JS wave that touched the tree — never during a draw.
     pub fn restyle(&mut self, engine: Option<&vn_css::Engine>, env: &vn_css::Env) {
         match engine {
             Some(e) => self.restyle_with(e, env),
-            // Before the first `__vn_set_stylesheet` there is no sheet, but the
-            // cascade still has work to do (inline styles, and the custom
-            // properties an inline `style` declares), so it runs against an
-            // empty one rather than a second, divergent code path.
+            // Before the first `__vn_set_stylesheet` there is no sheet, but the cascade still has
+            // work to do (inline styles, and the custom properties an inline `style` declares), so
+            // it runs against an empty one rather than a second, divergent code path.
             None => NO_SHEET.with(|e| self.restyle_with(e, env)),
         }
     }
 
-    /// The subtree roots this pass has to walk. No two of them overlap, and no
-    /// root's parent is recomputed by the pass, so each one inherits from a
-    /// parent whose computed map is current, in any order.
-    ///
-    /// `dirty_all` (a new sheet, or a changed `@media` environment) answers
-    /// "the whole document": the mounted root plus every parentless node, since
-    /// a `<KeepAlive>` cache container is never inserted and its contents still
-    /// need styles for the frame they are re-attached in.
-    ///
-    /// Otherwise the search follows this generation's trail ([`Node::desc_gen`])
-    /// down from the root and from every parentless node that got a mark
-    /// ([`Tree::detached_marks`]), and visits nothing else:
-    ///
-    /// * a marked node is a root, and nothing under it is looked at, because
-    ///   its walk covers it;
-    /// * so is an element that has never been cascaded: a freshly mounted
-    ///   subtree is never entered with a parent map that does not exist yet;
-    /// * a text or anchor node has no map to hand down either, so a root found
-    ///   under one is promoted to it.
-    ///
-    /// What `+` / `~` can see is the marking's business, not the search's: the
-    /// siblings a mutation reaches across are marked where it happens
-    /// ([`Tree::child_list_changed`], [`Tree::mark_with_followers`]).
-    ///
-    /// The cost is the trail plus the children of the nodes on it, however
-    /// many marks there are.
+    /// The subtree roots this pass has to walk.
+    /// No two overlap, so each inherits from a parent whose computed map is current. The search
+    /// follows this generation's trail down; a marked node is a root and nothing under it is looked
+    /// at. An element never cascaded, or a text/anchor node (no map to hand down), promotes the
+    /// root to itself.
     fn restyle_roots(&mut self) -> Vec<u32> {
         let gen = self.restyle_gen;
-        // Every mark of this generation is spent the moment the roots are
-        // known. Skipping 0 keeps a new node's zeros meaning "never".
+        // Every mark of this generation is spent the moment the roots are known.
         self.restyle_gen = self.restyle_gen.wrapping_add(1).max(1);
         let detached = std::mem::take(&mut self.detached_marks);
         if std::mem::take(&mut self.dirty_all) {
@@ -1604,10 +1323,8 @@ impl Tree {
         }
 
         let mut roots: Vec<u32> = Vec::new();
-        // Most entries of `detached` are nodes Vue created this wave and has
-        // inserted since; those are found from the root, along the trail
-        // `insert` laid. What is left is the root itself and the subtrees that
-        // still hang nowhere, a handful at most.
+        // Most entries of `detached` are nodes Vue created this wave and has inserted since; those
+        // are found from the root, along the trail `insert` laid.
         let mut tops: Vec<u32> = Vec::new();
         for top in std::iter::once(self.root).chain(detached) {
             let Some(n) = self.node(top) else { continue };
@@ -1624,14 +1341,11 @@ impl Tree {
         roots
     }
 
-    /// One step of [`Tree::restyle_roots`]'s search, at a node on this
-    /// generation's trail. Pushes the walk roots found under `id`, or answers
-    /// `true` when `id` itself has to be walked whole, which its caller then
-    /// records (or passes further up, if the caller is no element).
+    /// One step of [`Tree::restyle_roots`]'s search, at a node on this generation's trail.
     fn collect_roots(&self, id: u32, gen: u32, roots: &mut Vec<u32>, depth: u32) -> bool {
         let Some(n) = self.node(id) else { return false };
-        // The depth bound only matters for a corrupt tree; walking the whole
-        // subtree is always correct, just slower.
+        // The depth bound only matters for a corrupt tree; walking the whole subtree is always
+        // correct, just slower.
         if n.mark_gen == gen || (n.kind == Kind::Element && n.computed.is_none()) || depth > 1024 {
             return true;
         }
@@ -1644,9 +1358,8 @@ impl Tree {
                 continue;
             }
             if !element {
-                // A walk inherits from its root's PARENT, and a text or anchor
-                // node has no computed map to give. The walk starts here, or
-                // higher, and covers everything found under here so far.
+                // A walk inherits from its root's PARENT, and a text or anchor node has no computed
+                // map to give.
                 roots.truncate(start);
                 return true;
             }
@@ -1655,29 +1368,11 @@ impl Tree {
         false
     }
 
-    /// The root element's computed `font-size` in px, resolved **without
-    /// committing a cascade**.
-    ///
-    /// `rem` is flattened to px when the sheet is COMPILED, so the basis has to
-    /// be settled before the sheet the document cascades against is chosen
-    /// ([`crate::restyle_all`]). Learning it used to cost a full document pass
-    /// per attempt, and a full pass commits `node.computed` — which made the
-    /// pass after the recompile look like an author's style change, so every
-    /// element with a `transition` animated across it. Invisible on screen (no
-    /// frame ran in between) and very visible to `onMounted`, which measures
-    /// through `sync_layout`'s forced frame: `apps/meet-probe`'s join card read
-    /// its panel at t≈0 of that transition and pinned 293 px where the settled
-    /// layout says 278 (research/reports/m23/tails.md §3).
-    ///
-    /// The root is the one node whose computed style needs no walk: it has no
-    /// parent, so nothing is inherited into it, and no siblings, so no
-    /// combinator can reach it. One [`vn_css::Engine::compute_node`] is the
-    /// whole answer.
-    ///
-    /// The root's inline style is parsed here when it is dirty — `@argon/theme`
-    /// sets `documentElement.style.fontSize` at boot, so the inline style IS
-    /// the interesting case — but `inline_dirty` is deliberately left standing:
-    /// the pass that commits owns that list, and this is a probe.
+    /// The root element's computed `font-size` in px, resolved **without committing a cascade**.
+    /// `rem` is flattened at sheet-compile time, so the basis must be settled before the sheet is
+    /// chosen. A committed cascade would make the pass after the recompile look like an author's
+    /// style change, and every element with a `transition` would animate from the old geometry;
+    /// `onMounted` measures during that animation.
     pub(crate) fn probe_root_font_size(
         &self,
         engine: Option<&vn_css::Engine>,
@@ -1711,28 +1406,17 @@ impl Tree {
         );
         match states.base.text.font_size? {
             gpui::AbsoluteLength::Pixels(p) => Some(f32::from(p)),
-            // `Rems` cannot reach here (the mapper flattens), but if it ever
-            // does, resolving it against the current basis would be a fixed
-            // point that never moves — take the value at face value instead.
+            // `Rems` cannot reach here (the mapper flattens), but if it ever does, resolving it
+            // against the current basis would be a fixed point that never moves — take the value at
+            // face value instead.
             gpui::AbsoluteLength::Rems(r) => Some(r.0 * vn_css::rem_basis()),
         }
     }
 
-    /// What a walk starting at `r` inherits: the custom properties, the
-    /// `pointer-events: none`, the `color` and the corner radii of the nearest
-    /// ancestor that has a computed map (the parent, for every walk root
-    /// [`Tree::restyle_roots`] hands out; a text or anchor node in between
+    /// What a walk starting at `r` inherits: the custom properties, the `pointer-events: none`, the
+    /// `color` and the corner radii of the nearest ancestor that has a computed map (the parent,
+    /// for every walk root [`Tree::restyle_roots`] hands out; a text or anchor node in between
     /// passes everything through unchanged), and the `@media` environment.
-    ///
-    /// **Which window's environment?** (docs/MULTIWINDOW.md §6.) An element
-    /// knows its window implicitly: it hangs under exactly one painted root,
-    /// and each painted root belongs to exactly one window. So the walk root
-    /// resolves it once for the whole subtree. The conditions (`min-width`,
-    /// `prefers-color-scheme`, `display-mode`, `resolution`,
-    /// `env(titlebar-area-*)`) are already per-`Env` PARAMETERS inside
-    /// `compute_node`, so this costs one map lookup per walk root and nothing
-    /// per node, and it is free with no pop-out open: `window_env`
-    /// short-circuits to the published env.
     #[allow(clippy::type_complexity)]
     fn walk_inputs(
         &self,
@@ -1756,11 +1440,8 @@ impl Tree {
         }
         let inherited = parent_computed.map(|c| c.vars.clone()).unwrap_or_else(|| root_vars.clone());
         let inherited_inert = parent_computed.is_some_and(|c| c.extras.pointer_events_none == Some(true));
-        // `currentColor` resolves against the element's computed `color`,
-        // which is inherited when it declares none — so the effective colour
-        // rides down the walk beside the vars map.
-        // So does the computed font size, which every `em` below resolves
-        // against.
+        // `currentColor` resolves against the element's computed `color`, which is inherited when
+        // it declares none — so the effective colour rides down the walk beside the vars map.
         let inherited_text = Inherited {
             color: parent_computed.and_then(|c| c.color),
             font_size: parent_computed.map_or(ROOT_PARENT_FONT_SIZE, |c| c.font_size),
@@ -1770,9 +1451,8 @@ impl Tree {
         (inherited, inherited_inert, inherited_text, inherited_radii, root_env)
     }
 
-    /// One element's cascade, as the walk runs it: `compute_node` with the
-    /// inherited inputs, then the two inherited properties folded in. Answers
-    /// the states and the radii its children inherit.
+    /// One element's cascade, as the walk runs it: `compute_node` with the inherited inputs, then
+    /// the two inherited properties folded in.
     fn cascade_one(
         &self,
         engine: &vn_css::Engine,
@@ -1787,8 +1467,7 @@ impl Tree {
         diagnostics: &mut Vec<String>,
     ) -> (vn_css::ComputedStates, vn_css::InheritedRadii) {
         let n = self.node(id).expect("cascade_one on a live node");
-        // The matcher's sibling and content questions are recorded against
-        // this element ([`sel`]).
+        // The matcher's sibling and content questions are recorded against this element ([`sel`]).
         CASCADE_SUBJECT.with(|c| c.set(id));
         let mut states = engine.compute_node_with_font(
             NodeRef { tree: self, id },
@@ -1801,34 +1480,21 @@ impl Tree {
             diagnostics,
         );
         CASCADE_SUBJECT.with(|c| c.set(0));
-        // `None` = the element declared nothing, so it takes the parent's
-        // value; an explicit `pointer-events: auto` (`Some(false)`) is how a
-        // descendant opts back IN, which is what reka's
-        // `data-[state=open]:pointer-events-auto` overlay relies on.
+        // `None` = the element declared nothing, so it takes the parent's value; an explicit
+        // `pointer-events: auto` (`Some(false)`) is how a descendant opts back IN, which is what
+        // reka's `data-[state=open]:pointer-events-auto` overlay relies on.
         let inert = states.extras.pointer_events_none.unwrap_or(parent_inert);
         states.extras.pointer_events_none = Some(inert);
         let radii = vn_css::resolve_inherited_radii(&mut states, parent_radii);
         (states, radii)
     }
 
-    /// The nodes whose own style, and nothing else's, may have moved
-    /// ([`Tree::mark_self`]): a class, attribute or scope no selector reads on
-    /// another element, an inline style, and the `:has()` anchors only their
-    /// own match reads the subtree of ([`sel::HAS_SELF`]).
-    ///
-    /// Each is cascaded alone, against what it would inherit. A result equal
-    /// to the one it has is dropped; one that differs only in what the node
-    /// itself paints is returned, to be stored with the pass; and one that
-    /// changes what its children inherit (custom properties, `color`, font
-    /// size, `pointer-events`, corner radii) turns into an ordinary mark, subtree
-    /// and all. Run before [`Tree::restyle_roots`], so a node that also lies
-    /// under a walk root of the same pass is simply walked, and its result
-    /// here thrown away by the caller.
-    ///
-    /// This is what keeps a Vue `<Transition>` on a page-sized container from
-    /// re-cascading the page three times (`*-enter-from`, `*-enter-active`,
-    /// `*-enter-to`), and `body:has([data-vaul-drawer])`, whose anchor is the
-    /// document root, from making every mutation a whole-document walk.
+    /// The nodes whose own style, and nothing else's, may have moved ([`Tree::mark_self`]): a
+    /// class, attribute or scope no selector reads on another element, an inline style, and the
+    /// `:has()` anchors only their own match reads the subtree of ([`sel::HAS_SELF`]).
+    /// A result that changes what children inherit (custom properties, `color`, font size,
+    /// `pointer-events`, radii) becomes an ordinary subtree mark. This keeps a Vue `<Transition>`
+    /// on a page-sized container from re-cascading the page per phase.
     fn settle_self_marks(&mut self, engine: &vn_css::Engine, env: &vn_css::Env) -> Vec<(u32, vn_css::ComputedStates)> {
         let mut marks = std::mem::take(&mut self.self_marks);
         if marks.is_empty() || self.dirty_all {
@@ -1842,8 +1508,7 @@ impl Tree {
         let mut whole = Vec::new();
         for id in marks {
             let Some(n) = self.node(id) else { continue };
-            // Walked whole this pass anyway, or never cascaded (then it is a
-            // walk root of its own).
+            // Walked whole this pass anyway, or never cascaded (then it is a walk root of its own).
             if n.kind != Kind::Element || n.mark_gen == self.restyle_gen || n.computed.is_none() {
                 continue;
             }
@@ -1874,9 +1539,9 @@ impl Tree {
 
     fn restyle_with(&mut self, engine: &vn_css::Engine, env: &vn_css::Env) {
         let _profile = vn_runtime::redjs::profiling::span("style", "Restyle DOM");
-        // [`READ_CACHE`] is keyed by this sheet's string addresses; a pass
-        // against a different engine starts it over ([`set_engine`] covers
-        // the installed one, whose address never changes).
+        // [`READ_CACHE`] is keyed by this sheet's string addresses; a pass against a different
+        // engine starts it over ([`set_engine`] covers the installed one, whose address never
+        // changes).
         thread_local! { static CACHE_ENGINE: Cell<usize> = const { Cell::new(0) }; }
         let addr = engine as *const vn_css::Engine as usize;
         if CACHE_ENGINE.with(|c| c.replace(addr)) != addr {
@@ -1887,9 +1552,9 @@ impl Tree {
         self.sibling_combinators = engine.uses_sibling_combinators();
         let pass = crate::perf::Span::start();
         let phase = crate::perf::Span::start();
-        // 1. Re-parse changed inline styles. The list is kept by `set_style`
-        // rather than rediscovered — a scan of the whole slab per pass is the
-        // one thing a scoped restyle must not do.
+        // The walk is in DOCUMENT order, a requirement: custom properties inherit, so a parent must
+        // be computed before its children.
+        // 1. Re-parse changed inline styles.
         let dirty_inline = std::mem::take(&mut self.inline_dirty_nodes);
         for id in dirty_inline {
             if !self.node(id).is_some_and(|n| n.inline_dirty) {
@@ -1922,14 +1587,6 @@ impl Tree {
         let phase = crate::perf::Span::start();
 
         // 2. Cascade (immutable walk), then store.
-        //
-        // The walk is DOCUMENT ORDER, not id order, and that is a requirement
-        // rather than a nicety: CSS custom properties inherit, so a node's map
-        // is its parent's plus its own declarations, and the parent must
-        // therefore be computed first. Every parentless node is a walk root —
-        // the mounted root plus any detached subtree (a `<KeepAlive>` cache
-        // container is never inserted, and its contents still need styles for
-        // the frame they are re-attached in).
         let mut diagnostics: Vec<String> = Vec::new();
         let full = self.dirty_all;
         let settled = self.settle_self_marks(engine, env);
@@ -1939,26 +1596,10 @@ impl Tree {
             let this: &Tree = self;
             let root_vars = std::rc::Rc::new(vn_css::Vars::default());
             let mut out = Vec::new();
-            // `(node, inherited custom properties, is an ancestor `pointer-events:
-            // none`?)`. `pointer-events` is an INHERITED property in CSS, and it
-            // is the whole mechanism behind the "invisible panel on top" idiom:
-            // a tab panel that is `absolute inset-x-0 top-0 opacity-0
-            // pointer-events-none` sits exactly over the visible one, and if the
-            // inertness stops at the panel itself, every control INSIDE it is
-            // still live and — being painted later — on top. That is what made
-            // the meet app's two `Your name` fields fight over the same click
-            // (research/reports/m18/live-test-round2.md §4).
-            // `(node, inherited custom properties, inherited `pointer-events:
-            // none`?, inherited `color`)`.
-            //
-            // The last element is the `@media` ENVIRONMENT this node answers
-            // against. It rides the walk rather than being resolved per node
-            // because it changes at exactly one kind of node — a painted root —
-            // and `windows::env_at_root` is the O(1) test for that, where
-            // `env_for_node`'s ancestor walk is O(depth).
-            //
-            // And the parent's corner radii, for a `border-radius: inherit`
-            // (`vn_css::resolve_inherited_radii`).
+            // `(node, inherited custom properties, is an ancestor `pointer-events: none`?)`.
+            // `pointer-events: none` inherits so a tab panel that is `absolute opacity-0
+            // pointer-events-none` over the visible one is inert all the way down; otherwise its
+            // controls stay live and, painted later, on top.
             let mut stack: Vec<(
                 u32,
                 std::rc::Rc<vn_css::Vars>,
@@ -1967,22 +1608,11 @@ impl Tree {
                 vn_css::InheritedRadii,
                 vn_css::Env,
             )> = Vec::new();
-            // Free for a single-window app: `ROOTS` is empty until a pop-out
-            // actually paints, so the per-child lookup below is never reached.
             let multiwindow = crate::windows::any_secondary();
             for r in roots {
-                // **Which window's `@media` environment does this subtree
-                // answer against?** (docs/MULTIWINDOW.md §6.) An element knows
-                // its window implicitly: it hangs under exactly one painted
-                // root, and each painted root belongs to exactly one window. So
-                // the walk root resolves it once for the whole subtree — the
-                // conditions (`min-width`, `prefers-color-scheme`,
-                // `display-mode`, `resolution`, `env(titlebar-area-*)`) are
-                // already per-`Env` PARAMETERS inside `compute_node`, so this
-                // costs one map lookup per walk root and nothing per node.
-                //
-                // Free when there is no pop-out: `window_env` short-circuits to
-                // the published env the moment no window has a painted root.
+                // **Which window's `@media` environment does this subtree answer against?** An
+                // element knows its window implicitly: it hangs under exactly one painted root, and
+                // each painted root belongs to exactly one window.
                 let (inherited, inherited_inert, inherited_text, inherited_radii, root_env) =
                     this.walk_inputs(r, env, &root_vars);
                 stack.push((r, inherited, inherited_inert, inherited_text, inherited_radii, root_env));
@@ -1990,8 +1620,8 @@ impl Tree {
                     stack.pop()
                 {
                     let Some(n) = this.node(id) else { continue };
-                    // Text and anchor nodes have no cascade of their own; they
-                    // simply pass the map down to whatever hangs under them.
+                    // Text and anchor nodes have no cascade of their own; they simply pass the map
+                    // down to whatever hangs under them.
                     let (child_vars, child_inert, child_text, child_radii) = if n.kind == Kind::Element {
                         let (states, radii) = this.cascade_one(
                             engine,
@@ -2009,17 +1639,10 @@ impl Tree {
                         (parent_vars, parent_inert, parent_text, parent_radii)
                     };
                     for &c in n.children.iter().rev() {
-                        // **The window boundary.** A popped-out node is painted
-                        // by a different window, so its whole subtree answers
-                        // that window's environment — and it must do so on a
-                        // FULL-DOCUMENT pass too, not only when the subtree
-                        // happens to be its own walk root. Resolving the env
-                        // once per walk root was right for the pass that
-                        // changes hands (`set_painted_root` scopes that one)
-                        // and silently wrong for every pass afterwards: opening
-                        // a THIRD window re-cascades the document from `t.root`
-                        // and used to hand the pop-out the primary's `@media`
-                        // answers back.
+                        // **The window boundary.** A popped-out node is painted by a different
+                        // window, so its whole subtree answers that window's environment — and it
+                        // must do so on a FULL-DOCUMENT pass too, not only when the subtree happens
+                        // to be its own walk root.
                         let child_env = if multiwindow {
                             crate::windows::env_at_root(c, env).unwrap_or(here_env)
                         } else {
@@ -2038,9 +1661,9 @@ impl Tree {
             }
             out
         };
-        // The nodes restyled alone ([`Tree::settle_self_marks`]), unless a walk
-        // of this pass reached them too: its result is the one computed with
-        // what the walk's ancestors hand down NOW.
+        // The nodes restyled alone ([`Tree::settle_self_marks`]), unless a walk of this pass
+        // reached them too: its result is the one computed with what the walk's ancestors hand down
+        // NOW.
         let computed = if settled.is_empty() {
             computed
         } else {
@@ -2055,27 +1678,18 @@ impl Tree {
         for d in diagnostics {
             warn_css(&format!("[css] {d}"));
         }
-        // 3. Store + feed the animator. ONE Instant for the whole pass (tracks
-        // started together must not drift), change-gated via
-        // ComputedStates: PartialEq.
+        // 3. Store + feed the animator.
         let now = std::time::Instant::now();
         let has_keyframes = engine.has_keyframes();
-        // `@keyframes` declarations composed with `var()` resolve against the
-        // ANIMATING element, so the advisories they produce belong to the
-        // element too — collected here and drained with the animator's own.
+        // `@keyframes` declarations composed with `var()` resolve against the ANIMATING element, so
+        // the advisories they produce belong to the element too — collected here and drained with
+        // the animator's own.
         let keyframe_diagnostics = std::cell::RefCell::new(Vec::<String>::new());
-        // Every node whose fold actually MOVED. The cascade is the one way a
-        // change at one node can reach a node that is not its descendant in the
-        // mutation sense (a descendant combinator, an inherited `var()`, a
-        // structural pseudo), so the renderer's cache learns about those from
-        // here rather than from the mutator — see [`Tree::touch`].
+        // Every node whose fold actually MOVED.
         let mut restyled: Vec<u32> = Vec::new();
-        // The cascade switches environments at a painted root and this loop does
-        // not walk the tree, so the window has to be asked for again — but only
-        // for a node that is actually about to start an animation, and only
-        // when a pop-out exists at all. Both gates are free in the single-window
-        // case: `any_secondary` is an `is_empty`, and a sheet with no
-        // `@keyframes` never reaches the second one.
+        // The cascade switches environments at a painted root and this loop does not walk the tree,
+        // so the window has to be asked for again — but only for a node that is actually about to
+        // start an animation, and only when a pop-out exists at all.
         let multiwindow = crate::windows::any_secondary();
         // Nodes whose `display` went to or from `none` in this pass.
         let mut display_flips: Vec<(u32, bool)> = Vec::new();
@@ -2088,23 +1702,11 @@ impl Tree {
                 } else {
                     *env
                 };
-                // A stylesheet replacement can change the referenced block
-                // without changing any computed declaration. A pop-out can
-                // need the same rebinding against its own media environment.
-                // **A node painted by a pop-out can need its animations
-                // re-bound while its own computed style has not moved at all.**
-                // The element's declarations are identical in both windows; it
-                // is the `@keyframes` block its `animation-name` refers to that
-                // is declared per window. The change-gate below therefore never
-                // fires for it — and the run it started with, on the frame
-                // before its window had painted and `ROOTS` was still empty,
-                // was resolved against the PRIMARY's environment.
+                // A stylesheet replacement can change the referenced block without changing any
+                // computed declaration.
                 let rebind = (sheet_changed || node_env != *env) && !states.animations.is_empty();
-                // CSS Animations §3: nothing animates on an element that is
-                // `display: none`, or under one. Its runs are cancelled (with
-                // `animationcancel`) and none start; showing it again starts
-                // them afresh. Before `node_mut`: the walk up reads the tree,
-                // whose ancestors this preorder pass has already stored.
+                // Its runs are cancelled (with `animationcancel`) and none start; showing it again
+                // starts them afresh.
                 let self_none = states.base.display == Some(gpui::Display::None);
                 let animated = !states.animations.is_empty() || animator.has_animations(id);
                 let hidden = animated && (self_none || self.hidden_above(id));
@@ -2121,20 +1723,11 @@ impl Tree {
                     }
                     if n.computed.as_ref() != Some(&states) {
                         animator.on_computed(id, n.computed.as_ref(), &states, now);
-                        // `@keyframes` are document-scoped, so the animation
-                        // half needs the sheet; a sheet without any pays
-                        // nothing for the check.
-                        //
-                        // **Against the PAINTING window's environment**, like
-                        // the rest of the cascade (docs/MULTIWINDOW.md §6). A
-                        // `@keyframes` block inside an `@media` one is declared
-                        // only where that query holds, and `env()` inside a
-                        // keyframe resolves against the window too — so the
-                        // same `animation-name` can be a different animation in
-                        // a 380px pop-out and in the document that opened it.
-                        // This used to take the pass's fallback environment,
-                        // which is the PRIMARY window's
-                        // (m22/integration.md §6 item 4).
+                        // Against the PAINTING window's environment: a `@keyframes` block inside
+                        // `@media` is declared only where the query holds, so one `animation-name`
+                        // can differ between a pop-out and the document.
+                        // `@keyframes` are document-scoped, so the animation half needs the sheet;
+                        // a sheet without any pays nothing for the check.
                         if !hidden && (has_keyframes || !states.animations.is_empty() || animator.has_animations(id)) {
                             animator.on_computed_animations(id, &states, now, &|name| {
                                 engine.keyframes_for(
@@ -2145,12 +1738,8 @@ impl Tree {
                                 )
                             });
                         }
-                        // A restyle under a stationary pointer: the flip already
-                        // happened (or never will), so the animator would keep
-                        // aiming at the OLD fold. Re-aim it — but only for a
-                        // node that is actually in a hovered state, or that is
-                        // still holding one, so an ordinary restyle pays a set
-                        // lookup and nothing else.
+                        // A restyle under a stationary pointer: the flip already happened (or never
+                        // will), so the animator would keep aiming at the OLD fold.
                         if states.hover_transitions() {
                             let target = fold_hover_target(id, &states);
                             if target.is_some() || animator.holds_state(id) {
@@ -2160,11 +1749,7 @@ impl Tree {
                         n.computed = Some(states);
                         restyled.push(id);
                     } else if rebind && !hidden {
-                        // Same style, possibly a different animation. The run
-                        // is kept (the name has not changed) and only the block
-                        // behind it is re-resolved, which is what a browser
-                        // does when a media query flips under a running
-                        // animation.
+                        // Same style, possibly a different animation.
                         animator.on_computed_animations(id, &states, now, &|name| {
                             engine.keyframes_for(
                                 name,
@@ -2176,11 +1761,9 @@ impl Tree {
                     }
                 }
             }
-            // A `display` flip reaches the whole subtree, including the nodes
-            // whose own style did not move and so were not in this pass:
-            // hiding cancels every run under the node, and showing starts the
-            // runs of every descendant that is not itself hidden. (The node
-            // itself was handled above.)
+            // A `display` flip reaches the whole subtree, including the nodes whose own style did
+            // not move and so were not in this pass: hiding cancels every run under the node, and
+            // showing starts the runs of every descendant that is not itself hidden.
             for (id, none) in std::mem::take(&mut display_flips) {
                 if !none && self.hidden_above(id) {
                     continue; // shown, but still under a hidden ancestor
@@ -2224,14 +1807,7 @@ impl Tree {
         for id in restyled {
             self.touch(id);
         }
-        // The set of elements that have to carry gpui's `.group(name)`. Costs
-        // one pass over the slab, and only for a sheet that has a
-        // `group-hover:` rule in it at all — and only for a pass that actually
-        // recomputed something. The second half is what keeps
-        // `flush_pending_style` cheap: `getComputedStyle` is a flush point now,
-        // so a mount that reads it a dozen times runs a dozen passes, and all
-        // but the first find no dirty root. No node's `ComputedStates` changed,
-        // so neither set can have.
+        // The set of elements that have to carry gpui's `.group(name)`.
         if !cascaded_anything {
             crate::perf::note_restyle(pass.ms(), inline_ms, cascade_ms, phase.ms(), cascaded);
             return;
@@ -2244,8 +1820,8 @@ impl Tree {
                 if let Some(cs) = &slot.computed {
                     if let Some((key, _)) = &cs.group_hover {
                         self.group_anchors.insert(*key as u32);
-                        // Every one: the rung is folded at build time, so a
-                        // flip on the anchor has to reach each of them.
+                        // Every one: the rung is folded at build time, so a flip on the anchor has
+                        // to reach each of them.
                         self.group_hover_deps.entry(*key as u32).or_default().push(i as u32);
                     }
                     if let Some((key, _)) = &cs.group_active {
@@ -2258,73 +1834,42 @@ impl Tree {
     }
 }
 
-// ---------------------------------------------------------------------------
-// cascade wiring
-// ---------------------------------------------------------------------------
-
 thread_local! {
-    /// The cascade used before any stylesheet is installed — an empty sheet, so
-    /// inline styles and their custom properties take exactly the same path
-    /// they will once a sheet arrives.
+    /// The cascade used before any stylesheet is installed — an empty sheet, so inline styles and
+    /// their custom properties take exactly the same path they will once a sheet arrives.
     static NO_SHEET: vn_css::Engine = vn_css::Engine::compile("");
-    /// Runtime CSS advisories already printed. The cascade's compile-time
-    /// diagnostics are deduped inside the engine; these come from computed-value
-    /// time (an unresolvable `var()`, a reference cycle) and are therefore
-    /// per-element, so a page with 200 buttons must not print 200 lines.
-    /// The CSS every `<style>` element in the tree is carrying right now,
-    /// one text per element, in document order — see [`sync_runtime_sheets`].
+    /// Runtime CSS advisories already printed.
     static RUNTIME_CSS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static CSS_WARNED: RefCell<std::collections::HashSet<String>> =
         RefCell::new(std::collections::HashSet::new());
     static ENGINE: RefCell<Option<vn_css::Engine>> = const { RefCell::new(None) };
-    /// A root whose own `font-size` is in `rem`, settled: the basis CSS gives
-    /// it and the size the root computes to under that basis, which is not the
-    /// basis and must not be adopted as one ([`restyle_all`]).
+    /// A root whose own `font-size` is in `rem`, settled: the basis CSS gives it and the size the
+    /// root computes to under that basis, which is not the basis and must not be adopted as one
+    /// ([`restyle_all`]).
     static REM_SETTLED: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
-    /// The text the current engine was compiled from, kept so the sheet can be
-    /// compiled AGAIN against a different `rem` basis — see [`restyle_all`].
+    /// The text the current engine was compiled from, kept so the sheet can be compiled AGAIN
+    /// against a different `rem` basis — see [`restyle_all`].
     static SHEET_SOURCE: RefCell<String> = const { RefCell::new(String::new()) };
-    /// The `<style>` texts the runtime keeps for `document.head`, which are not
-    /// nodes of the tree: they come with the sheet ([`set_stylesheet_with_head`])
-    /// and cascade right after it.
+    /// The `<style>` texts the runtime keeps for `document.head`, which are not nodes of the tree:
+    /// they come with the sheet ([`set_stylesheet_with_head`]) and cascade right after it.
     static HEAD_SHEETS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static ANIMATOR: RefCell<vn_css::Animator> = RefCell::new(vn_css::Animator::new());
-    /// A replaced sheet can change a keyframes block without changing the
-    /// element's computed declarations. Re-resolve those blocks next cascade,
-    /// retaining each same-name animation's clock.
+    /// A replaced sheet can change a keyframes block without changing the element's computed
+    /// declarations.
     static REBIND_ANIMATIONS: Cell<bool> = const { Cell::new(false) };
-    /// The `@media` environment the cascade is evaluated against **for
-    /// everything the PRIMARY window paints** — the native stand-in for a
-    /// browser's viewport + OS preferences. The host refreshes it every frame
-    /// from that window (see [`set_env`]).
-    ///
-    /// A pop-out's own environment lives in its `WindowState`
-    /// (`crate::windows::set_env`); `restyle_with` carries the chosen one down
-    /// the cascade walk and switches at a painted root
-    /// (`crate::windows::env_at_root`), which is the only node where the window
-    /// can change. This one stays a single slot because it is also the FALLBACK for
-    /// a pop-out that has been requested but has not painted yet, and because
-    /// `matchMedia` — a JS-realm global, and there is one realm — means it
-    /// (docs/MULTIWINDOW.md §7.7, A-M04).
+    /// The `@media` environment the cascade is evaluated against **for everything the PRIMARY
+    /// window paints** — the native stand-in for a browser's viewport + OS preferences.
+    /// A pop-out's environment lives in its `WindowState`. This stays one slot because it is also
+    /// the fallback for a pop-out that has not painted yet, and `matchMedia` is a global of the one
+    /// JS realm.
     static ENV: Cell<vn_css::Env> = Cell::new(vn_css::Env::default());
 }
 
-/// Publishes the current window environment. Returns `true` when it CHANGED,
-/// which obliges the caller to mark the tree dirty: a resize or a theme flip
-/// can turn any `@media` rule in the sheet on or off, so every node has to be
-/// re-cascaded. Both events are rare enough that a full invalidation is the
-/// right trade against tracking which rules a condition feeds.
+/// Publishes the current window environment.
+/// `true` when it changed, which obliges the caller to mark the tree dirty: a resize or theme flip
+/// can turn any `@media` rule on or off.
 pub fn set_env(env: vn_css::Env) -> bool {
     // `prefers-reduced-motion` is also what suppresses running transitions.
-    // Pushed unconditionally (the animator only reacts to the false→true edge)
-    // so it cannot be missed on the one frame where the rest of the env happens
-    // to equal the default.
-    //
-    // **Deliberately only from the primary window** (docs/MULTIWINDOW.md §5.3):
-    // `set_reduce_motion` is a whole-ANIMATOR flag and the animator is shared,
-    // so a second window pushing its own value would stomp the first's. It is
-    // an OS-wide preference — `App::reduce_motion()` answers the same in every
-    // window — so taking it from one window is not an approximation.
     set_reduce_motion(env.reduce_motion);
     crate::windows::set_env(crate::windows::primary(), env);
     ENV.with(|e| {
@@ -2336,10 +1881,7 @@ pub fn set_env(env: vn_css::Env) -> bool {
     })
 }
 
-/// Publishes ONE non-primary window's `@media` environment (§6). Returns `true`
-/// when it changed, in which case the subtree that window paints is marked for
-/// a scoped restyle — not the whole document, because nothing outside that
-/// window's painted root can have answered against this env.
+/// Publishes ONE non-primary window's `@media` environment.
 pub fn set_window_env(k: crate::windows::WinKey, env: vn_css::Env) -> bool {
     if !crate::windows::set_env(k, env) {
         return false;
@@ -2355,9 +1897,7 @@ pub fn env() -> vn_css::Env {
     ENV.with(|e| e.get())
 }
 
-/// The per-frame interpolated overlay for a node (None = idle). `base` is the
-/// node's computed style — a `@keyframes` animation reads it for the implicit
-/// 0 % / 100 % of any property its keyframes do not declare.
+/// The per-frame interpolated overlay for a node (None = idle).
 pub fn animation_overlay(
     id: u32,
     base: &gpui::StyleRefinement,
@@ -2372,37 +1912,18 @@ pub fn animated_extras(id: u32, now: std::time::Instant) -> Option<vn_css::Extra
 }
 
 thread_local! {
-    /// Which elements the pointer is currently inside, as gpui's own hover
-    /// edges report it. One set, not two: an element is "group-hovered" exactly
-    /// when the anchor its `group-hover:` rung names is in here.
-    ///
-    /// This exists ONLY so that a restyle landing while the pointer is already
-    /// over something can re-fold the target — the flip itself is an edge, and
-    /// an edge alone cannot answer "what state am I in now?".
+    /// Which elements the pointer is currently inside, as gpui's own hover edges report it.
+    /// Exists so a restyle landing while the pointer is already over something can re-fold the
+    /// target: the flip is an edge, which cannot answer "what state am I in now?".
     static HOVERED: RefCell<std::collections::HashSet<u32>> =
         RefCell::new(std::collections::HashSet::new());
 }
 
-/// `id` joined (`true`) or left the hover path: the topmost element under the
-/// pointer and its ancestors, resolved once a frame by
-/// [`crate::pointer::resolve_hover`]. [`HOVERED`] is that path, and
-/// [`crate::render::apply_computed_style`] folds the `:hover` and
-/// `group-hover:` rungs from it.
-///
-/// This is also the whole state-transition story on the input side. In a
-/// browser a `transition` on the BASE rule animates the changes a `:hover`
-/// rule makes; a rung refined over the computed style has no clock at all, so
-/// a hover SNAPPED (m7 recorded this as "state-rule transitions rejected by
-/// design", which was about a `transition` declared ON the state rule; the
-/// base-rule case is the one authors actually write and it was snapping too).
-/// So the renderer strips the transitioned properties out of the rung, and this
-/// routes the flip into the animator instead. What the author did NOT name in
-/// `transition` stays in the rung and still snaps — which is also what CSS
-/// says.
-///
-/// Cost per flip is one map lookup plus one `on_state` per element that
-/// actually declares a transition, so m11's "no full-tree work per hover" holds
-/// (`group_hover_deps` is a precomputed list, not a walk).
+/// `id` joined (`true`) or left the hover path: the topmost element under the pointer and its
+/// ancestors, resolved once a frame by [`crate::pointer::resolve_hover`].
+/// A rung refined over the computed style has no clock, so a hover would snap: the renderer strips
+/// the properties named in `transition` out of the rung and this routes the flip into the animator
+/// instead. Cost is one map lookup per flip (`group_hover_deps` is a list, not a walk).
 pub fn note_hover(id: u32, hovered: bool) {
     let changed = HOVERED.with(|h| {
         let mut h = h.borrow_mut();
@@ -2413,38 +1934,24 @@ pub fn note_hover(id: u32, hovered: bool) {
     }
     let now = std::time::Instant::now();
     retarget_state(id, now);
-    // The other half of `group-hover:`: this element may be the `.group` some
-    // descendants watch, and a flip on it is the only signal they get.
+    // The other half of `group-hover:`: this element may be the `.group` some descendants watch,
+    // and a flip on it is the only signal they get.
     let deps = read_tree(|t| t.group_hover_deps.get(&id).cloned());
     for dep in deps.into_iter().flatten() {
         retarget_state(dep, now);
     }
 }
 
-/// Does `:hover` match `id` right now? True for the topmost element under the
-/// pointer and every ancestor of it, as of the last frame's resolution
-/// ([`note_hover`]).
+/// Does `:hover` match `id` right now? True for the topmost element under the pointer and every
+/// ancestor of it, as of the last frame's resolution ([`note_hover`]).
 pub fn is_hovered(id: u32) -> bool {
     HOVERED.with(|h| h.borrow().contains(&id))
 }
 
-/// The style that is IN EFFECT for `id` on this frame — what a browser would
-/// answer for `getComputedStyle(el)`.
-///
-/// It reassembles, for a reader, exactly the composition
-/// [`crate::render::apply_computed_style`] hands gpui:
-///
-///   base  →  the animator's in-flight overlay  →  the hover rung minus the
-///            properties the animator took over (only while hovered)
-///
-/// …which is why it is the one bucket an assertion can use to prove a `:hover`
-/// actually LANDED. The static `hover` bucket next to it says only "the cascade
-/// produced this rung", which is true whether or not a pointer is anywhere near.
-///
-/// One honest gap, structural: `:active` is refined by gpui at paint time off
-/// a hitbox we cannot read back, so a pressed element reports its unpressed
-/// style here. Introduced for `vn-test` (docs/TESTING.md); nothing on the
-/// paint path calls it.
+/// The style that is IN EFFECT for `id` on this frame — what a browser would answer for
+/// `getComputedStyle(el)`.
+/// A pressed element reports its unpressed style: `:active` is refined by gpui at paint time off a
+/// hitbox that cannot be read back.
 pub fn live_style(id: u32) -> Option<gpui::StyleRefinement> {
     use gpui::Refineable as _;
     let cs = read_tree(|t| t.node(id).and_then(|n| n.computed.clone()))?;
@@ -2452,9 +1959,7 @@ pub fn live_style(id: u32) -> Option<gpui::StyleRefinement> {
     if let Some(overlay) = animation_overlay(id, &cs.base, std::time::Instant::now()) {
         live.refine(&overlay);
     }
-    // Same order as the renderer's fold. `pointer-events: none` does not keep
-    // a rung off: an element that cannot be hit is still hovered while a
-    // descendant that can be is.
+    // Same order as the renderer's fold.
     if let Some(rung) = fold_hover_target(id, &cs) {
         match vn_css::strip_transitioned(&rung, &cs.transitions) {
             Some(stripped) => live.refine(&stripped),
@@ -2464,9 +1969,8 @@ pub fn live_style(id: u32) -> Option<gpui::StyleRefinement> {
     Some(live)
 }
 
-/// The refinement `id`'s ladder produces for the pointer state it is in RIGHT
-/// NOW — `None` when it is in the plain base state. Reads [`HOVERED`] only, so
-/// it is safe to call with the tree already borrowed.
+/// The refinement `id`'s ladder produces for the pointer state it is in RIGHT NOW — `None` when it
+/// is in the plain base state.
 fn fold_hover_target(id: u32, cs: &vn_css::ComputedStates) -> Option<gpui::StyleRefinement> {
     HOVERED.with(|h| {
         let h = h.borrow();
@@ -2491,8 +1995,8 @@ fn retarget_state(id: u32, now: std::time::Instant) {
     ANIMATOR.with(|a| a.borrow_mut().on_state(id, &cs, target.as_ref(), now));
 }
 
-/// True while any transition runs — the host keeps repainting. Also drops
-/// settled tracks (visually a no-op: a finished track equals the base).
+/// True while any transition runs — the host keeps repainting. Also drops settled tracks (visually
+/// a no-op: a finished track equals the base).
 pub fn animating() -> bool {
     let now = std::time::Instant::now();
     ANIMATOR.with(|a| {
@@ -2501,10 +2005,9 @@ pub fn animating() -> bool {
     })
 }
 
-/// Every node whose painted style the animator is moving at `now`, and every
-/// ancestor of each, into `out` — the subtrees the retained-render cache must
-/// not replay this frame (`cache::begin_frame`). One walk up per moving node,
-/// stopping at the first ancestor already collected.
+/// Every node whose painted style the animator is moving at `now`, and every ancestor of each, into
+/// `out` — the subtrees the retained-render cache must not replay this frame
+/// (`cache::begin_frame`).
 pub(crate) fn moving_paths(now: std::time::Instant, out: &mut std::collections::HashSet<u32>) {
     ANIMATOR.with(|a| {
         let a = a.borrow();
@@ -2519,26 +2022,22 @@ pub(crate) fn moving_paths(now: std::time::Instant, out: &mut std::collections::
     });
 }
 
-/// Only the nodes whose painted style the animator is moving at `now`, without
-/// their ancestors — the boxes under which `crate::cull` cannot trust layout
-/// rectangles to say where anything is.
+/// Only the nodes whose painted style the animator is moving at `now`, without their ancestors —
+/// the boxes under which `crate::cull` cannot trust layout rectangles to say where anything is.
 pub(crate) fn moving_nodes(now: std::time::Instant, out: &mut std::collections::HashSet<u32>) {
     ANIMATOR.with(|a| out.extend(a.borrow().moving_nodes(now)));
 }
 
-/// Advances the animator's clock and queues whatever events crossing a boundary
-/// produced. Must run EVERY frame, from [`crate::frame_tick`] — it used to live
-/// inside [`animating`], which the host calls behind a `||` short-circuit, so a
-/// frame that already had a reason to repaint skipped the clock entirely and no
-/// `animationstart` was ever queued.
+/// Advances the animator's clock and queues whatever events crossing a boundary produced.
+/// Must run EVERY frame from [`crate::frame_tick`], not behind [`animating`]'s `||` short-circuit,
+/// or a frame with another reason to repaint skips the clock and no `animationstart` is queued.
 pub fn advance_animations() {
     let now = std::time::Instant::now();
     ANIMATOR.with(|a| {
         let mut a = a.borrow_mut();
         // `tick` turns a run crossing its delay or its last iteration into an
-        // `animationstart`/`animationend`; it runs before `finish_settled`
-        // drops the settled transition tracks (which is where `transitionend`
-        // comes from).
+        // `animationstart`/`animationend`; it runs before `finish_settled` drops the settled
+        // transition tracks (which is where `transitionend` comes from).
         a.tick(now);
         a.finish_settled(now);
     });
@@ -2549,26 +2048,15 @@ pub fn take_anim_events() -> Vec<vn_css::AnimEvent> {
     ANIMATOR.with(|a| a.borrow_mut().take_events())
 }
 
-// ---------------------------------------------------------------------------
-// script animations: `Element.animate()`
-// ---------------------------------------------------------------------------
-//
-// The painting half lives in vn-css (animator/script.rs) and the object model
-// in packages/vue-native/src/waapi.ts; these are the four doors between them,
-// called from the `__vn_anim_*` host functions. Each one moves what a node
-// paints without moving its style, so each touches the node (the render cache
-// must not replay it) and asks for a draw ([`take_script_dirty`]) — a paused
-// animation that is seeked is not "animating", and nothing else would.
-
 thread_local! {
     static SCRIPT_DIRTY: Cell<bool> = const { Cell::new(false) };
     /// The instant `performance.now()` reads 0 at, taken once.
     static TIMELINE_ORIGIN: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
 }
 
-/// Hands the animator the document timeline's zero, the first time a script
-/// animation needs it. redjs keeps ONE clock for `performance.now()`, rAF
-/// timestamps and `redjs_now`, so its origin is a fixed `Instant`.
+/// Hands the animator the document timeline's zero, the first time a script animation needs it.
+/// redjs keeps ONE clock for `performance.now()`, rAF timestamps and `redjs_now`, so its origin is
+/// a fixed `Instant`.
 fn ensure_timeline_origin(animator: &mut vn_css::Animator) {
     if TIMELINE_ORIGIN.with(|o| o.get()).is_some() {
         return;
@@ -2589,8 +2077,8 @@ fn script_touched(node: Option<u32>) {
     SCRIPT_DIRTY.with(|d| d.set(true));
 }
 
-/// Creates or re-targets script animation `id`'s effect. The keyframes are
-/// compiled against `node`'s custom properties (a value may be `var(--x)`).
+/// Creates or re-targets script animation `id`'s effect. The keyframes are compiled against
+/// `node`'s custom properties (a value may be `var(--x)`).
 pub(crate) fn script_anim_set(
     id: u32,
     node: u32,
@@ -2627,8 +2115,7 @@ pub(crate) fn script_anim_drop(id: u32) {
     script_touched(node);
 }
 
-/// Animation `id`'s own values right now, for `commitStyles()`; `None` when
-/// it has no target here.
+/// Animation `id`'s own values right now, for `commitStyles()`; `None` when it has no target here.
 pub(crate) fn script_anim_values(id: u32) -> Option<Vec<(String, String)>> {
     let now = std::time::Instant::now();
     ANIMATOR.with(|a| {
@@ -2640,8 +2127,10 @@ pub(crate) fn script_anim_values(id: u32) -> Option<Vec<(String, String)>> {
     })
 }
 
-/// Did a script animation change what some node paints since the last call?
-/// Read once per frame by [`crate::frame_tick`].
+/// Did a script animation change what some node paints since the last call? Read once per frame by
+/// [`crate::frame_tick`].
+/// Each script-animation door touches the node (the render cache must not replay it) and asks for a
+/// draw: a paused, seeked animation is not "animating", so nothing else would.
 pub(crate) fn take_script_dirty() -> bool {
     SCRIPT_DIRTY.with(|d| d.replace(false))
 }
@@ -2651,10 +2140,9 @@ pub fn animator_gc() {
         a.borrow_mut()
             .gc(&|id| read_tree(|t| t.node(id).is_some()));
     });
-    // A node unmounted while the pointer was over it never gets a leave edge
-    // (gpui drops the element and with it the listener), so the set has to be
-    // swept too — otherwise the id is "hovered" forever and a later node
-    // reusing it would come up pre-hovered.
+    // A node unmounted while the pointer was over it never gets a leave edge (gpui drops the
+    // element and with it the listener), so the set has to be swept too — otherwise the id is
+    // "hovered" forever and a later node reusing it would come up pre-hovered.
     HOVERED.with(|h| {
         let mut h = h.borrow_mut();
         if !h.is_empty() {
@@ -2667,17 +2155,10 @@ pub fn set_reduce_motion(on: bool) {
     ANIMATOR.with(|a| a.borrow_mut().set_reduce_motion(on));
 }
 
-/// Installs a compiled stylesheet, keeping its source for
-/// [`recompile_for_rem_basis`].
-/// Everything the engine compiles: the build's sheet, then whatever the running
-/// app has put in `<style>` elements.
-///
-/// The runtime half comes LAST, so at equal specificity it wins — which is
-/// where a `<style>` appended to the document sits in a browser's cascade too.
-///
-/// One text per sheet, not one concatenation: vn-css parses each on its own and
-/// once per distinct text, so a `<style>` that changes does not make the
-/// build's sheet parse — and leak — again (`vn_css::Engine::compile_sheets`).
+/// Installs a compiled stylesheet, keeping its source for [`recompile_for_rem_basis`].
+/// The runtime `<style>` texts come last, so at equal specificity they win, as in a browser. One
+/// text per sheet, not one concatenation: vn-css parses each once per distinct text, so a changing
+/// `<style>` does not re-parse (and leak) the build's sheet.
 fn sheet_sources() -> Vec<String> {
     let mut out = vec![SHEET_SOURCE.with(|s| s.borrow().clone())];
     HEAD_SHEETS.with(|h| out.extend(h.borrow().iter().cloned()));
@@ -2686,36 +2167,15 @@ fn sheet_sources() -> Vec<String> {
 }
 
 /// Collects every `<style>` element's text and, if it has changed, recompiles.
-///
-/// **A `<style>` element in the tree now works.** It used to render nothing and
-/// install nothing — a real gap, and one every component library walks into:
-/// reka-ui appends one at runtime to hide a scroll area's scrollbars,
-/// `vite-plugin-css-injected-by-js` ships a whole bundle that way, and
-/// `document.createElement("style")` is how half the ecosystem does anything
-/// dynamic with CSS. The element still paints nothing, exactly as in a browser
-/// (it is metadata content, `vn_tree::render::is_metadata`); what changed is
-/// that its CSS reaches the cascade.
-///
-/// Called from [`restyle_all`], i.e. once per flush that dirtied the tree —
-/// which is the only moment a `<style>`'s text can have changed. The comparison
-/// is against the installed string, so a flush that did not touch one costs a
-/// walk of the (usually empty) style-node set and nothing else, and a recompile
-/// cannot re-trigger itself.
 fn sync_runtime_sheets() {
     let next = with_tree(|t| {
         // Document order, since a sheet later in the document has to win.
-        // Creation order used to stand in for it, by node id; but ids are
-        // handed out again, last freed first, so a `<style>` created after
-        // another was removed could sort before one that had been there all
-        // along, and a moved one kept its old place.
-        //
-        // A node's place is the child index at each level from its root down.
-        // The document's root sorts first, then each pop-out's.
         let mut placed: Vec<((bool, u32, Vec<usize>), u32)> = Vec::new();
         for &id in t.style_nodes.iter() {
-            // Reused controls keep unopened content in detached fragments
-            // (Reka SelectViewport includes a <style> there). Such a sheet is
-            // inert until attached to a document or painted VnWindow root.
+            // Reused controls keep unopened content in detached fragments (Reka SelectViewport
+            // includes a <style> there).
+            // Order is document order (child index path from the root), not node id: ids are
+            // reused, last freed first.
             let mut ancestor = id;
             let mut path = Vec::new();
             let mut top = None;
@@ -2753,12 +2213,9 @@ fn sync_runtime_sheets() {
         return;
     }
     RUNTIME_CSS.with(|r| *r.borrow_mut() = next);
-    // The dedupe set is deliberately NOT cleared. A `<style>` arrives in pieces
-    // — created, then filled, then sometimes refilled — and each step is a
-    // recompile; clearing would make every advisory the BUILD's sheet already
-    // gave re-print once per step, which is the exact noise `set_stylesheet`'s
-    // freshness check exists to prevent. Whatever the new text says that has
-    // not been said is a new string and speaks on its own.
+    // The dedupe set is deliberately NOT cleared.
+    // A `<style>` arrives in pieces and each step recompiles; clearing would re-print every
+    // advisory the build's sheet already gave.
     recompile_sheet(
         crate::perf::FullReason::StyleElement,
         "a <style> element in the tree changed — recompiling the stylesheet",
@@ -2771,14 +2228,11 @@ pub(crate) fn set_stylesheet(css: String) {
     set_stylesheet_with_head(css, Vec::new());
 }
 
-/// Installs the app's stylesheet, with the `<style>` texts `document.head`
-/// holds, each its own sheet after `css` (see [`sheet_sources`]).
-///
-/// Returns `false`, and compiles nothing, when the sheet and the head texts are
-/// exactly what is installed already. The runtime re-sends the sheet whenever a
-/// head `<style>` is touched, empty ones included: the Argon client re-sent the
-/// identical text during boot, one of its six boot compiles and a full restyle
-/// that changed nothing (research/reports/m26/perf-mem-2.md §1).
+/// Installs the app's stylesheet, with the `<style>` texts `document.head` holds, each its own
+/// sheet after `css` (see [`sheet_sources`]).
+/// Returns `false` and compiles nothing when the texts are what is installed already: the runtime
+/// re-sends the sheet whenever a head `<style>` is touched, which would otherwise be a full restyle
+/// for nothing.
 pub fn set_stylesheet_with_head(css: String, head: Vec<String>) -> bool {
     let same = ENGINE.with(|e| e.borrow().is_some())
         && SHEET_SOURCE.with(|s| *s.borrow() == css)
@@ -2786,12 +2240,8 @@ pub fn set_stylesheet_with_head(css: String, head: Vec<String>) -> bool {
     if same {
         return false;
     }
-    // A genuinely NEW sheet is a new set of gaps: an advisory suppressed
-    // against the old one must be free to speak again (this is the HMR path).
-    // Recompiling the SAME text under a new rem/viewport basis is not that —
-    // see [`recompile_sheet`], which is why the clear lives here and not in
-    // [`set_engine`]. Nor is a head `<style>` changing: like one in the tree
-    // ([`sync_runtime_sheets`]), what it says new speaks on its own.
+    // A genuinely NEW sheet is a new set of gaps: an advisory suppressed against the old one must
+    // be free to speak again (this is the HMR path).
     let fresh = SHEET_SOURCE.with(|s| *s.borrow() != css);
     if fresh {
         CSS_WARNED.with(|w| w.borrow_mut().clear());
@@ -2811,19 +2261,17 @@ pub fn set_stylesheet_with_head(css: String, head: Vec<String>) -> bool {
     true
 }
 
-/// Compiles the sheets, after handing their `@font-face` rules to
-/// [`crate::fonts`] (which vn-css itself does not keep).
+/// Compiles the sheets, after handing their `@font-face` rules to [`crate::fonts`] (which vn-css
+/// itself does not keep).
 fn compile(sources: &[String]) -> vn_css::Engine {
     crate::fonts::note_sheet(&sources.join("\n"));
     let sheets: Vec<&str> = sources.iter().map(String::as_str).collect();
     vn_css::Engine::compile_sheets(&sheets)
 }
 
-/// Web fonts were registered: vn-css chose every `font-family` when it
-/// compiled the sheet and parsed the inline styles, against the fonts
-/// installed THEN, so both are done again and the document is restyled.
-/// Called from [`crate::fonts`]'s frame tick, after its new installed-font
-/// list is in place.
+/// Web fonts were registered: vn-css chose every `font-family` when it compiled the sheet and
+/// parsed the inline styles, against the fonts installed THEN, so both are done again and the
+/// document is restyled.
 pub(crate) fn recompile_for_fonts() {
     recompile_sheet(crate::perf::FullReason::Fonts, "web fonts were registered — recompiling the stylesheet");
     with_tree(|t| {
@@ -2833,27 +2281,19 @@ pub(crate) fn recompile_for_fonts() {
 }
 
 /// Installs a compiled engine WITHOUT recording a source to recompile from.
-/// [`set_stylesheet`] is the path the host uses; this one is for tests and for
-/// the recompile inside [`restyle_all`], which already has the source.
 pub(crate) fn set_engine(engine: vn_css::Engine) {
-    // A font load, late component style or rem recompile must not erase a
-    // running animation/transition. Its computed declarations can stay equal,
-    // so explicitly rebind keyframes even when the ordinary change gate does
-    // not fire. Same-name runs keep their clocks; missing definitions cancel.
+    // A font load, late component style or rem recompile must not erase a running
+    // animation/transition.
     REBIND_ANIMATIONS.with(|pending| pending.set(true));
-    // Through `warn_css`, so a recompile under a new rem/viewport basis does
-    // not re-print what the same source already said. Compiling the sheet three
-    // times at boot — once cold, once for the rem basis, once for the client
-    // size — is normal and used to TRIPLE the advisory stream the developer
-    // sees. `set_stylesheet` clears the dedupe set when the text itself
-    // changes, which is the case that has to speak again.
+    // Through `warn_css`, so a recompile under a new rem/viewport basis does not re-print what the
+    // same source already said.
     for d in &engine.diagnostics {
         warn_css(&format!("[css] {d}"));
     }
     note_parent_keys(&engine);
     ENGINE.with(|c| *c.borrow_mut() = Some(engine));
-    // The cache is keyed by the old sheet's string addresses, which the new
-    // sheet may reuse for different names.
+    // The cache is keyed by the old sheet's string addresses, which the new sheet may reuse for
+    // different names.
     forget_read_cache();
 }
 
@@ -2861,11 +2301,9 @@ fn forget_read_cache() {
     READ_CACHE.with(|c| c.iter().for_each(|s| s.set((0, 0, 0))));
 }
 
-/// The names [`ReadOnOthers`] cannot learn by listening: vn-css's index offers
-/// `.stack > *` only to the children of a `.stack`, so no other child ever
-/// asks its parent about `stack` (`Engine::classes_keyed_on_the_parent`). Each
-/// is entered as read by every tag, which is what the matcher's questions
-/// recorded when every element was asked them.
+/// The names [`ReadOnOthers`] cannot learn by listening: vn-css's index offers `.stack > *` only to
+/// the children of a `.stack`, so no other child ever asks its parent about `stack`
+/// (`Engine::classes_keyed_on_the_parent`).
 fn note_parent_keys(engine: &vn_css::Engine) {
     READ_ON_OTHERS.with(|r| {
         let mut r = r.borrow_mut();
@@ -2882,65 +2320,30 @@ fn note_parent_keys(engine: &vn_css::Engine) {
 }
 
 /// Reads the installed stylesheet. `None` = no sheet (inline styles only).
-///
-/// The one reader outside the restyle pass is devtools' rule provenance
-/// (`crate::devtools::matched_rules`), which asks the engine which rules match
-/// a node — the same question the cascade asks, without folding the answer.
 pub(crate) fn with_engine<R>(f: impl FnOnce(Option<&vn_css::Engine>) -> R) -> R {
     ENGINE.with(|e| f(e.borrow().as_ref()))
 }
 
-/// Restyles under the current engine (or inline-only when none is set), then
-/// re-runs the whole thing if the ROOT element turned out to define a different
-/// `rem`.
-///
-/// `rem` is the root element's `font-size`, and vn-css flattens it to px at
-/// SHEET COMPILE time (gpui's style fields are `Pixels`; carrying `Rems`
-/// through every one of them is a different project — see
-/// [`vn_css::set_rem_basis`]). So a root font-size the app sets from JS cannot
-/// move the sheet that is already compiled; the sheet has to be compiled again.
-///
-/// Which is what this does, and the loop is the whole subtlety: the root's own
-/// `font-size` may itself be written in `rem` or `em`, so recompiling can
-/// change the very value that triggered the recompile. CSS resolves that by
-/// defining the root's own `rem` against the INITIAL font size. An `em` or a
-/// percentage is reached by iterating to a fixed point; a `rem` has none, and
-/// is worked out from two passes instead (see the loop).
-///
-/// In practice this fires at most once in an app's life — `@argon/theme` sets
-/// `documentElement.style.fontSize` once at boot — and never at all for an app
-/// that leaves the root font-size alone, which is the case the `changed` test
-/// keeps free.
+/// Restyles under the current engine (or inline-only when none is set), then re-runs the whole
+/// thing if the ROOT element turned out to define a different `rem`.
+/// `rem` is flattened to px at sheet-compile time, so a root font-size set from JS cannot move a
+/// compiled sheet; the sheet is compiled again. The root's own `rem` is of the initial 16px.
 pub fn restyle_all() {
     let pending = read_tree(|t| t.dirty);
     sync_runtime_sheets();
     let env = env();
-    // Viewport units are flattened to px at sheet-compile time, exactly like
-    // `rem` — so a resize has to re-resolve them ([`rebase_viewport`]), and
-    // only when the sheet actually contains a `vh`/`vw`. Almost none do; the
-    // ones that do cannot do without it (`max-h-[85vh]` is the only thing
-    // keeping reka's dialog inside the window, and dropping it turned the
-    // dialog into a full-window black slab).
-    // **A-M05, the phase-1 guard (docs/MULTIWINDOW.md §6.2 option C).** `vw` /
-    // `vh` / `rem` are flattened to px at SHEET-COMPILE time, into one
-    // process-wide basis, so two differently-sized windows sharing a
-    // `vh`-using sheet would recompile the single `Engine` on every frame —
-    // and repeatedly compiling it would restyle both windows on every frame.
-    // The basis therefore stays the PRIMARY
-    // window's, and we say so once.
-    //
-    // The gate is free for the apps that use no viewport unit, which is most of
-    // them: `uses_viewport_units()` is false and per-window `@media` is
-    // completely correct today. When it is true and a pop-out is open, the
-    // conditions are still per-window (above); only the LENGTHS come from the
-    // primary window's viewport.
+    // Viewport units are flattened to px at sheet-compile time, exactly like `rem` — so a resize
+    // has to re-resolve them ([`rebase_viewport`]), and only when the sheet actually contains a
+    // `vh`/`vw`.
+    // vw/vh/rem are flattened into one process-wide basis, so two differently sized windows
+    // sharing a `vh` sheet would recompile the single `Engine` every frame. The basis stays the
+    // primary window's and a pop-out's lengths use it; `@media` conditions stay per-window.
     let basis_moved = vn_css::set_viewport_basis(env.viewport_width, env.viewport_height);
     if basis_moved && vn_css::uses_viewport_units() {
         rebase_viewport(env.viewport_width, env.viewport_height);
     }
-    // …and the INLINE styles, which no recompile reaches: each body that names
-    // a viewport unit is re-parsed against the new basis (m26; see
-    // `Tree::invalidate_viewport_inline`).
+    // …and the INLINE styles, which no recompile reaches: each body that names a viewport unit is
+    // re-parsed against the new basis.
     if basis_moved {
         with_tree(|t| t.invalidate_viewport_inline());
     }
@@ -2950,40 +2353,17 @@ pub fn restyle_all() {
             "A-M05: this stylesheet uses `vw`/`vh`/`rem`, which vue-native flattens to px when \
              the sheet is COMPILED — so those lengths resolve against the PRIMARY window's \
              viewport in every window, including pop-outs. `@media` conditions, `env()` and \
-             `prefers-color-scheme` are already per-window. See docs/MULTIWINDOW.md §6.2.",
+             `prefers-color-scheme` are already per-window.",
         );
     }
-    // **The rem basis is settled BEFORE the document is cascaded, not by
-    // cascading it.** `rem` is flattened at sheet-compile time, so the basis
-    // has to be known before the sheet the document cascades against is
-    // chosen. This used to iterate a FULL cascade per pass — and a full
-    // cascade COMMITS `node.computed`, so the pass that followed the recompile
-    // was, to the animator, an author's style change: every element carrying a
-    // `transition` animated from the 16px-basis geometry to the real one.
-    //
-    // Nothing painted in between, so nothing showed it — except a layout read.
-    // `apps/meet-probe`'s join card measures its panel from `onMounted`, which
-    // is `sync_layout`'s forced frame, which is t≈0 of that transition: the
-    // panel answered 293 where the settled layout (and a browser) says 278, and
-    // the app wrote that number back as a height for the life of the process
-    // (research/reports/m23/tails.md §3).
-    //
-    // The root has no parent and no siblings, so its own computed style is one
-    // `compute_node`: the basis can be resolved from it alone, and the document
-    // is cascaded exactly ONCE, under the settled basis. Which is also what a
-    // browser does — `rem` is resolved at computed-value time, so an
-    // intermediate computed style never exists to transition from.
-    //
-    // **The root's own `rem` is of the INITIAL font size** (CSS Values 4
-    // §6.1.1), so `html { font-size: 0.875rem }` is 14px. The sheet is
-    // flattened against the basis, though, so that rule's size follows
-    // whatever basis it was compiled with, and adopting what the root computes
-    // to has no fixed point: 14, 12.25, 10.7… — three recompiles on every
-    // flush until the basis fell out of range. Two samples that disagree say
-    // the root's size follows the basis. It is linear in it, so they give the
-    // size at the initial 16px, which is the basis CSS means. That basis and
-    // what the root computes to under it are remembered, so that the next
-    // flush sees a settled root instead of a moved one.
+    // **The rem basis is settled BEFORE the document is cascaded, not by cascading it.** `rem` is
+    // flattened at sheet-compile time, so the basis has to be known before the sheet the document
+    // cascades against is chosen.
+    // A full cascade commits `node.computed`, so the pass after the recompile would look like an
+    // author's style change to the animator, and `onMounted` would measure the panel mid-transition
+    // (293 vs 278 px). The root has no parent or siblings, so one `compute_node` gives the basis,
+    // and the document is cascaded once. The root's own `rem` has no fixed point under adoption
+    // (14, 12.25, 10.7...): two samples are linear in the basis and give the size at 16px.
     let probe = || {
         ENGINE.with(|eng| {
             let eng = eng.borrow();
@@ -3024,11 +2404,9 @@ pub fn restyle_all() {
             break;
         }
     }
-    // The recompile and the re-resolve above mark the tree for the pass that
-    // follows, and that pass is this one. Left armed, the flag ran every such
-    // flush twice: a second restyle, gc and element build that changed
-    // nothing, on every step of a resize under a sheet with a `vh` in it.
-    // What the caller had pending it took before calling.
+    // The recompile and the re-resolve above mark the tree for the pass that follows, and that pass
+    // is this one.
+    // Left armed, the flag made every such flush restyle twice.
     with_tree(|t| t.dirty = pending);
     ENGINE.with(|eng| {
         let eng = eng.borrow();
@@ -3036,9 +2414,8 @@ pub fn restyle_all() {
     });
 }
 
-/// Does this CSS value text use a viewport-relative unit (`100vw`, `85svh`,
-/// `calc(100vh - 2rem)`, `-.5vmin`)? A dimension token is a number directly
-/// followed by its unit; the unit set is vn-css's (`viewport_unit_px`).
+/// Does this CSS value text use a viewport-relative unit (`100vw`, `85svh`, `calc(100vh - 2rem)`,
+/// `-.5vmin`)?
 fn has_viewport_unit(value: &str) -> bool {
     const UNITS: [&str; 24] = [
         "vw", "vh", "vi", "vb", "vmin", "vmax", "svw", "svh", "svi", "svb", "svmin", "svmax", "lvw", "lvh",
@@ -3047,8 +2424,8 @@ fn has_viewport_unit(value: &str) -> bool {
     has_unit(value, &UNITS)
 }
 
-/// Does this CSS value text use `rem`, which is flattened against the root's
-/// font size the same way a viewport unit is against the window?
+/// Does this CSS value text use `rem`, which is flattened against the root's font size the same way
+/// a viewport unit is against the window?
 fn has_rem_unit(value: &str) -> bool {
     has_unit(value, &["rem"])
 }
@@ -3074,8 +2451,7 @@ fn has_unit(value: &str, units: &[&str]) -> bool {
             || b[i] == b'_'
             || (b[i] == b'-' && b.get(i + 1).is_some_and(|c| c.is_ascii_alphabetic() || *c == b'-' || *c == b'_'))
         {
-            // An identifier (`var(--x9vw)`, `abc12vh`): its digits are not a
-            // number. A `-` before a digit is a sign, not an identifier.
+            // An identifier (`var(--x9vw)`, `abc12vh`): its digits are not a number.
             while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'-' || b[i] == b'_') {
                 i += 1;
             }
@@ -3086,30 +2462,12 @@ fn has_unit(value: &str, units: &[&str]) -> bool {
     false
 }
 
-/// A FORCED STYLE FLUSH: run the pending restyle now, because JS is about to
-/// read a computed value.
-///
-/// In a browser, `getComputedStyle` is a flush point — CSSOM §5 makes it return
-/// the value the DOM currently in memory produces, so a component may mutate an
-/// attribute and read the result back on the very next line. Ours cascaded once
-/// per JS wave instead, so such a read answered with the PREVIOUS style.
-///
-/// That is not an academic difference. reka-ui's `<Presence>` is built on it:
-/// when an element stops being present it does
-///
-/// ```js
-/// await nextTick();                                    // data-state="closed"
-/// const name = getComputedStyle(node).animationName;   // must be "exit"
-/// if (name === "none" || name === prevAnimationName) unmount();
-/// ```
-///
-/// With a stale read the name was still `enter`, so `prevAnimationName ===
-/// currentAnimationName`, so every dialog, popover, drawer and tooltip in the
-/// library unmounted INSTANTLY instead of playing its exit animation.
-///
-/// Only the CASCADE is flushed, not layout: `getBoundingClientRect` still
-/// reports the last painted rectangle (m18), because a box's size is decided by
-/// gpui's layout pass and there is no way to run one outside a frame.
+/// A FORCED STYLE FLUSH: run the pending restyle now, because JS is about to read a computed value.
+/// In a browser `getComputedStyle` is a flush point; here the cascade ran once per wave, so a read
+/// answered with the previous style and reka's `<Presence>` (it reads `animationName` after
+/// `nextTick`) unmounted every dialog and popover instantly instead of playing its exit animation.
+/// Only the cascade is flushed, not layout: `getBoundingClientRect` still reports the last painted
+/// rectangle.
 pub fn flush_pending_style() {
     let pending = with_tree(|t| {
         if !t.dirty {
@@ -3127,19 +2485,11 @@ pub fn flush_pending_style() {
     }
 }
 
-/// Recompiles the retained stylesheet source under whatever basis just changed,
-/// and marks the tree for a full restyle. `false` = there was no source to
-/// recompile (before the first `__vn_set_stylesheet`), so the caller should
-/// stop.
+/// Recompiles the retained stylesheet source under whatever basis just changed, and marks the tree
+/// for a full restyle.
 fn recompile_sheet(reason: crate::perf::FullReason, why: &str) -> bool {
-    // `dev`, not `css`. Nothing here describes a divergence from a browser:
-    // it says the engine flattened `rem`/`vh` at compile time and has just
-    // re-flattened them against a number that moved. A developer counting CSS
-    // warnings in the Console panel was being handed three of these per boot
-    // (cold, the root font-size, the first real client size) as if they were
-    // gaps, which is exactly the noise m19's rule — an advisory has to name a
-    // real divergence — was written to keep out. The line still prints and is
-    // still in the ring; it is on the channel that says "state trace".
+    // `dev`, not `css`.
+    // This is not a divergence from a browser, and a `css` advisory has to name one.
     crate::log::record("dev", format!("[css] {why}"));
     let sources = sheet_sources();
     if sources.iter().all(|s| s.trim().is_empty()) {
@@ -3159,16 +2509,10 @@ fn recompile_sheet(reason: crate::perf::FullReason, why: &str) -> bool {
     true
 }
 
-/// The viewport basis moved under a sheet that uses `vh`/`vw`: re-resolves just
-/// the rules that use one, in the installed engine
-/// ([`vn_css::Engine::rebase_viewport`]), or recompiles the sheet when the
-/// engine cannot. A window drag does this on every step, and a recompile of the
-/// Argon client's sheet is ~60 ms (research/reports/m26/perf-mem-3.md §2).
-///
-/// It keeps the engine and avoids a full sheet compilation; running motion
-/// keeps its clock on either path. The resize already marked the whole
-/// document for a restyle (`crate::set_env`); this marks it again for the
-/// callers that move the basis some other way.
+/// The viewport basis moved under a sheet that uses `vh`/`vw`: re-resolves just the rules that use
+/// one, in the installed engine ([`vn_css::Engine::rebase_viewport`]), or recompiles the sheet when
+/// the engine cannot.
+/// A window drag does this on every step; recompiling a large sheet is tens of milliseconds.
 fn rebase_viewport(width: f32, height: f32) {
     let took = std::time::Instant::now();
     let rebased = ENGINE.with(|e| e.borrow_mut().as_mut().is_some_and(|e| e.rebase_viewport()));
@@ -3186,18 +2530,16 @@ fn rebase_viewport(width: f32, height: f32) {
     with_tree(|t| t.mark_dirty());
 }
 
-/// One recompile to adopt the root's font-size, and one more in case that
-/// font-size was itself relative. A third would be a cycle.
+/// One recompile to adopt the root's font-size, and one more in case that font-size was itself
+/// relative. A third would be a cycle.
 const REM_BASIS_PASSES: usize = 3;
 
-/// The font size the document root inherits: CSS's initial `medium`, which
-/// is 16px in every browser's default settings. The root's own `font-size:
-/// 62.5%` or `1.5em` is of this.
+/// The font size the document root inherits: CSS's initial `medium`, which is 16px in every
+/// browser's default settings.
 const ROOT_PARENT_FONT_SIZE: f32 = 16.0;
 
-/// The inherited text values the restyle walk threads into each element:
-/// what `currentColor` and `em` resolve against when the element declares
-/// no `color` or `font-size` of its own.
+/// The inherited text values the restyle walk threads into each element: what `currentColor` and
+/// `em` resolve against when the element declares no `color` or `font-size` of its own.
 #[derive(Clone, Debug, PartialEq)]
 struct Inherited {
     color: Option<gpui::Hsla>,
@@ -3205,7 +2547,6 @@ struct Inherited {
     font_size: f32,
     font: gpui::Font,
 }
-
 
 /// The matcher's view of one element node.
 #[derive(Clone, Copy)]
@@ -3239,10 +2580,8 @@ impl<'t> NodeRef<'t> {
         None
     }
 
-    /// Records, for the restyle pass's own questions only, that the matcher
-    /// asked this node about a sibling ([`sel`]): EDGE when it is the element
-    /// being cascaded, WALK for any other. On the parent, whose child list it
-    /// is about.
+    /// Records, for the restyle pass's own questions only, that the matcher asked this node about a
+    /// sibling ([`sel`]): EDGE when it is the element being cascaded, WALK for any other.
     fn note_sibling_question(&self, edge: u8, walk: u8) {
         let subject = CASCADE_SUBJECT.with(Cell::get);
         if subject == 0 {
@@ -3262,9 +2601,8 @@ impl<'t> NodeRef<'t> {
         }
     }
 
-    /// Records, for the restyle pass's own questions only, that the matcher
-    /// asked `name` of this node on behalf of another element
-    /// ([`ReadOnOthers`]).
+    /// Records, for the restyle pass's own questions only, that the matcher asked `name` of this
+    /// node on behalf of another element ([`ReadOnOthers`]).
     fn note_read(&self, name: &str, kind: NameKind) {
         let subject = CASCADE_SUBJECT.with(Cell::get);
         if subject == 0 || subject == self.id {
@@ -3274,10 +2612,11 @@ impl<'t> NodeRef<'t> {
         note_name_read(self.id, subject, tag, name, kind);
     }
 
-    /// The same for a question about this node's own content: `:empty`, or
-    /// `:has()`, which is [`sel::HAS_SELF`] when the element being cascaded
-    /// asked it of itself and [`sel::HAS_DESC`] when a descendant's selector
-    /// asked it of an ancestor.
+    /// The same for a question about this node's own content: `:empty`, or `:has()`, which is
+    /// [`sel::HAS_SELF`] when the element being cascaded asked it of itself and [`sel::HAS_DESC`]
+    /// when a descendant's selector asked it of an ancestor.
+    /// Anchor nodes are Vue fragments: not elements, but they carry element children, so the walk
+    /// flattens through them, or a `:has()` would miss everything under a `v-if`.
     fn note_content_question(&self, flag: u8) {
         let subject = CASCADE_SUBJECT.with(Cell::get);
         if subject == 0 {
@@ -3312,9 +2651,9 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
         self.note_sibling_question(sel::NEXT_EDGE, sel::NEXT_WALK);
         self.element_sibling(true)
     }
-    /// The anchor is flagged as one whose match reads other nodes, and its
-    /// parent as having such a child: the nodes it reads are its later
-    /// siblings' subtrees, which no ancestor walk from a change reaches.
+    /// The anchor is flagged as one whose match reads other nodes, and its parent as having such a
+    /// child: the nodes it reads are its later siblings' subtrees, which no ancestor walk from a
+    /// change reaches.
     fn note_following_sibling_anchor(&self) {
         if CASCADE_SUBJECT.with(Cell::get) == 0 {
             return;
@@ -3325,15 +2664,6 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
         }
     }
     /// Every ELEMENT child, for `:has()`.
-    ///
-    /// Anchor nodes are Vue fragments: not elements, but they DO carry element
-    /// children, so the walk flattens through them (and through text nodes,
-    /// which have none) rather than stopping. Without that a `:has()` would
-    /// miss everything under a `v-if` or a `<template>`.
-    ///
-    /// The outermost call is the anchor asking about its own subtree, so that
-    /// node is flagged [`sel::HAS`]; the nested calls are the same question
-    /// walking down, and flag nothing.
     fn each_child(&self, f: &mut dyn FnMut(Self)) {
         fn walk<'t>(tree: &'t Tree, id: u32, f: &mut dyn FnMut(NodeRef<'t>)) {
             let Some(node) = tree.node(id) else { return };
@@ -3359,9 +2689,8 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
         walk(self.tree, self.id, f);
     }
     fn has_tag(&self, name: &str) -> bool {
-        // The `html` / `body` aliasing for the document root lives in vn-css
-        // (`element.rs`), so every `MatchDom` gets it — the query matcher and
-        // the engine's own tests included.
+        // The `html` / `body` aliasing for the document root lives in vn-css (`element.rs`), so
+        // every `MatchDom` gets it — the query matcher and the engine's own tests included.
         self.tree.name(self.node().tag) == name
     }
     fn tag_eq(&self, other: &Self) -> bool {
@@ -3383,15 +2712,11 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
         self.note_read(name, NameKind::Scope);
         self.node().scopes.iter().any(|s| s == name)
     }
-    /// The DOM attribute channel, straight off `Node::props`. Names are
-    /// interned once per sheet compile's worth of lookups; an attribute a
-    /// selector asks for that JS has never written has no id at all, which is
-    /// the cheap "absent" answer.
+    /// The DOM attribute channel, straight off `Node::props`.
+    /// An empty `class` reads as absent: the channel cannot tell `class=""` from none.
     fn attr(&self, name: &str) -> Option<&str> {
         self.note_read(name, NameKind::Attr);
         // `class` rides its own channel (`set_class`), not the property map.
-        // An empty one reads as absent: the channel cannot tell `class=""`
-        // from no attribute (docs/RUNTIME.md §5.13).
         if name == "class" {
             let raw = self.node().class_attr.as_str();
             return (!raw.is_empty()).then_some(raw);
@@ -3403,16 +2728,11 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
             .find(|(k, _, _)| *k == key)
             .map(|(_, v, _)| v.as_str())
     }
-    /// `:empty` as Selectors 3 and the browsers read it: only an element, or a
-    /// text node with data, makes a parent non-empty. A comment does not, and
-    /// neither does a zero-length text node. Those are exactly what Vue leaves
-    /// behind: a comment for a `v-if` that is off, and empty text for a
-    /// fragment's or a Teleport's two ends in a production build. Counting
-    /// them meant `empty:hidden` never matched (m26 client sweep #23).
-    /// Whitespace-only text still counts, as it does in Chrome and Firefox.
-    /// An anchor that carries children is looked through, as `each_child`
-    /// does. The answer is [`Tree::is_bare`]'s, which the mutators also use
-    /// to tell when it flips.
+    /// `:empty` as Selectors 3 and the browsers read it: only an element, or a text node with data,
+    /// makes a parent non-empty.
+    /// A comment or zero-length text node does not (Vue leaves them for a `v-if` that is off and
+    /// for fragment ends), or `empty:hidden` would never match. Whitespace-only text still counts.
+    /// An anchor with children is looked through.
     fn is_empty(&self) -> bool {
         self.note_content_question(sel::EMPTY);
         self.tree.is_bare(self.id)
@@ -3426,11 +2746,9 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
 mod tests {
     use super::*;
 
-    /// The retained-render cache replays a subtree for exactly as long as
-    /// [`Node::sub_rev`] says nothing in it moved, so the number has to move for
-    /// every mutation and for no mutation next door. Upwards, and only upwards:
-    /// a change at a node restyles its own subtree and can move any ancestor's
-    /// box, but it cannot move a cousin's.
+    /// The retained-render cache replays a subtree for exactly as long as [`Node::sub_rev`] says
+    /// nothing in it moved, so the number has to move for every mutation and for no mutation next
+    /// door.
     #[test]
     fn a_mutation_bumps_the_subtree_revision_of_every_ancestor_and_of_nothing_else() {
         let (root, left, leaf, right) = with_tree(|t| {
@@ -3455,9 +2773,9 @@ mod tests {
         assert_eq!(after.3, before.3, "the sibling subtree did not move");
     }
 
-    /// Removing a child is a change to the PARENT's subtree — `:last-child`
-    /// and the parent's own box both depend on the child list — and the node
-    /// that went away cannot report anything itself.
+    /// Removing a child is a change to the PARENT's subtree — `:last-child` and the parent's own
+    /// box both depend on the child list — and the node that went away cannot report anything
+    /// itself.
     #[test]
     fn removing_a_child_bumps_the_parent() {
         let (parent, child) = with_tree(|t| {
@@ -3474,11 +2792,8 @@ mod tests {
         assert!(read_tree(|t| t.sub_rev(parent)) > before);
     }
 
-    /// The one way a change at one node reaches a node that is not its
-    /// descendant is the CASCADE — a descendant combinator, an inherited
-    /// `var()`, a structural pseudo. The mutator cannot see that far, so the
-    /// restyle pass reports it: every node whose fold actually moved is
-    /// touched, and a cache boundary sitting on one of them invalidates.
+    /// The one way a change at one node reaches a node that is not its descendant is the CASCADE —
+    /// a descendant combinator, an inherited `var()`, a structural pseudo.
     #[test]
     fn the_cascade_touches_every_node_whose_fold_moved() {
         set_stylesheet(".on .leaf { opacity: 0.5 }".into());
@@ -3511,19 +2826,11 @@ mod tests {
         assert_eq!(after.1, before.1, "the bystander's fold did not move");
     }
 
-    /// A `<style>` element in the tree used to render nothing AND install
-    /// nothing. Only the first of those is the browser's behaviour: `<style>`
-    /// is metadata content, so it generates no box — but its CSS reaches the
-    /// cascade, and every component library counts on that. reka-ui appends one
-    /// at runtime to hide a scroll area's scrollbars,
+    /// Only the first of those is the browser's behaviour: `<style>` is metadata content, so it
+    /// generates no box — but its CSS reaches the cascade, and every component library counts on
+    /// that. reka-ui appends one at runtime to hide a scroll area's scrollbars,
     /// `vite-plugin-css-injected-by-js` ships a whole bundle that way, and
-    /// `document.createElement("style")` is how half the ecosystem does
-    /// anything dynamic with CSS (engine-round.md §4.7).
-    ///
-    /// The runtime half is concatenated AFTER the build's sheet, so at equal
-    /// specificity it wins — which is where a `<style>` appended to the
-    /// document sits in a browser's cascade — and a change to its TEXT
-    /// recompiles, because that is the only moment the text can have moved.
+    /// `document.createElement("style")` is how half the ecosystem does anything dynamic with CSS.
     #[test]
     fn a_runtime_style_element_reaches_the_cascade_and_recompiles_when_its_text_moves() {
         let opacity = |id: u32| {
@@ -3546,8 +2853,8 @@ mod tests {
         restyle_all();
         assert_eq!(opacity(probe), Some(0.25), "the build's sheet, with an empty <style>");
 
-        // The `<style>` arrives in pieces — created, then filled — which is
-        // exactly how Vue and reka do it.
+        // The `<style>` arrives in pieces — created, then filled — which is exactly how Vue and
+        // reka do it.
         with_tree(|t| t.set_element_text(sheet, ".probe { opacity: 0.5 }".into()));
         restyle_all();
         assert_eq!(opacity(probe), Some(0.5), "a runtime <style> installs its rules");
@@ -3557,8 +2864,8 @@ mod tests {
         restyle_all();
         assert_eq!(opacity(probe), Some(0.75), "changed text re-installs");
 
-        // A restyle that did NOT touch the text must not change the answer (and
-        // costs a walk of the style-node set and nothing else).
+        // A restyle that did NOT touch the text must not change the answer (and costs a walk of the
+        // style-node set and nothing else).
         restyle_all();
         assert_eq!(opacity(probe), Some(0.75), "an unchanged sheet is not recompiled away");
 
@@ -3568,8 +2875,8 @@ mod tests {
         assert_eq!(opacity(probe), Some(0.25), "removing the rules restores the build's sheet");
     }
 
-    /// The sheets are taken in document order, not in the order their nodes
-    /// were created: a `<style>` put in front of an older one comes first.
+    /// The sheets are taken in document order, not in the order their nodes were created: a
+    /// `<style>` put in front of an older one comes first.
     #[test]
     fn runtime_sheets_are_in_document_order() {
         set_stylesheet(String::new());
@@ -3647,11 +2954,8 @@ mod tests {
         crate::windows::forget(9001);
     }
 
-    /// m26 client sweep #23: `fixed inset-0 … empty:hidden` overlays stayed
-    /// laid out and painted, because the anchors Vue leaves in an empty
-    /// container counted as children. A comment and a zero-length text node
-    /// do not make an element non-empty; an element, or text with data, does;
-    /// and a text node gaining or losing its data restyles its parent.
+    /// A comment and a zero-length text node do not make an element non-empty; an element, or text
+    /// with data, does; and a text node gaining or losing its data restyles its parent.
     #[test]
     fn empty_ignores_vue_anchors_and_empty_text() {
         let opacity = |id: u32| {
@@ -3710,12 +3014,9 @@ mod tests {
         }
     }
 
-    /// m26 6c: an INLINE `100svw` is flattened to px when it is parsed, and it
-    /// is parsed only when its text changes, so a resize left it at the old
-    /// window size (the Argon client's AppShell: 1652x633 in a 1700x800
-    /// window). A basis change now re-parses every inline body that names a
-    /// viewport unit and re-cascades its subtree, which also re-resolves a
-    /// custom property declared inline and composed by a descendant's `var()`.
+    /// A basis change now re-parses every inline body that names a viewport unit and re-cascades
+    /// its subtree, which also re-resolves a custom property declared inline and composed by a
+    /// descendant's `var()`.
     #[test]
     fn inline_viewport_units_and_var_composed_ones_follow_the_viewport() {
         fn px(l: Option<gpui::Length>) -> Option<f32> {
@@ -3766,8 +3067,7 @@ mod tests {
         assert_eq!(size(child).and_then(|s| s.0), Some(850.0), "and the var()-composed vw with it");
         assert_eq!(size(plain).and_then(|s| s.0), Some(40.0));
 
-        // Without the host's full invalidation (a scoped pass), the marks
-        // alone still reach both.
+        // Without the host's full invalidation (a scoped pass), the marks alone still reach both.
         assert!(vn_css::set_viewport_basis(1000.0, 500.0));
         let marked = with_tree(|t| t.invalidate_viewport_inline());
         assert_eq!(marked, 2, "the shell and the --w parent; never the px-only node");
@@ -3776,9 +3076,9 @@ mod tests {
         assert_eq!(size(child).and_then(|s| s.0), Some(500.0));
     }
 
-    /// A SHEET's `vw`/`vh` follow a resize: re-resolved in the installed
-    /// engine (`rebase_viewport`), or, with a viewport unit inside
-    /// `@keyframes`, by compiling the sheet again. Same answer either way.
+    /// A SHEET's `vw`/`vh` follow a resize: re-resolved in the installed engine
+    /// (`rebase_viewport`), or, with a viewport unit inside `@keyframes`, by compiling the sheet
+    /// again.
     #[test]
     fn sheet_viewport_units_follow_the_viewport() {
         let width = |id: u32| {
@@ -3825,8 +3125,8 @@ mod tests {
         vn_css::set_viewport_basis(vn_css::INITIAL_VIEWPORT_BASIS.0, vn_css::INITIAL_VIEWPORT_BASIS.1);
     }
 
-    /// The runtime re-sends the sheet whenever a head `<style>` is touched; the
-    /// same sheet and head texts again compile nothing, and any change does.
+    /// The runtime re-sends the sheet whenever a head `<style>` is touched; the same sheet and head
+    /// texts again compile nothing, and any change does.
     #[test]
     fn an_unchanged_sheet_resent_compiles_nothing() {
         assert!(set_stylesheet_with_head(".a { opacity: 0.5 }".into(), vec![".b {}".into()]));
@@ -3876,8 +3176,7 @@ mod tests {
         let at = start + std::time::Duration::from_millis(200);
         assert!((motion_opacity_at(node, at).unwrap() - 0.4).abs() < 1e-5);
 
-        // A synchronously mounted panel can append CSS while its surrounding
-        // Drawer is moving. The Drawer declarations do not change at all.
+        // A synchronously mounted panel can append CSS while its surrounding Drawer is moving.
         assert!(set_stylesheet_with_head(sheet.into(), vec![".late-panel { color: red }".into()]));
         flush_motion_styles();
         assert!((motion_opacity_at(node, at).unwrap() - 0.4).abs() < 1e-5,
@@ -3938,30 +3237,15 @@ mod tests {
             "a late sheet must not snap or restart an unrelated transition");
     }
 
-    /// **A `rem` recompile is the engine correcting its own basis, not the
-    /// author changing a declaration — so it must not start a transition.**
-    ///
-    /// `rem` is flattened to px when the sheet is COMPILED, so an app that sets
-    /// its own root font-size (every Tailwind app with a 14 px base) makes the
-    /// engine compile twice. [`restyle_all`] used to learn the basis by
-    /// CASCADING the document, and a cascade commits `node.computed`: the pass
-    /// after the recompile was, to the animator, a style change, and every
-    /// element carrying a `transition` animated from the 16 px-basis geometry
-    /// to the real one.
-    ///
-    /// No frame ran between the two passes, so nothing on screen showed it —
-    /// but `onMounted` measures through `sync_layout`'s forced frame, which is
-    /// t=0 of that animation. `apps/meet-probe`'s join card measured its panel
-    /// at 293 px where the settled layout says 278 and pinned it as its own
-    /// height (research/reports/m23/tails.md §3).
+    /// **A `rem` recompile is the engine correcting its own basis, not the author changing a
+    /// declaration — so it must not start a transition.**
     #[test]
     fn a_rem_recompile_at_boot_starts_no_transition() {
         set_stylesheet(".card { padding: 1.5rem; transition: all 300ms }".into());
         let card = with_tree(|t| {
             let root = t.create_root();
-            // EXACTLY `@argon/theme`'s line, and the reason the cold compile
-            // cannot have known the basis: an INLINE root font-size, written
-            // before the app mounts.
+            // EXACTLY `@argon/theme`'s line, and the reason the cold compile cannot have known the
+            // basis: an INLINE root font-size, written before the app mounts.
             let font_size = t.intern("font-size");
             t.set_style(root, font_size, "14px".into());
             let div = t.intern("div");
@@ -3971,8 +3255,6 @@ mod tests {
             card
         });
 
-        // The basis is resolved from the ROOT ALONE, and resolving it commits
-        // nothing: no node has a computed style until the one cascade runs.
         let probed = ENGINE.with(|eng| {
             let eng = eng.borrow();
             read_tree(|t| t.probe_root_font_size(eng.as_ref(), &env()))
@@ -3996,9 +3278,7 @@ mod tests {
             "the ONE committed cascade ran under the settled basis"
         );
 
-        // …and the animator has nothing to say about this node. Before the fix
-        // it held a 300 ms `padding` track from 24 px to 21 px, and a layout
-        // read at t=0 answered 24.
+        // …and the animator has nothing to say about this node.
         let base = read_tree(|t| {
             t.node(card).and_then(|n| n.computed.as_ref()).map(|c| c.base.clone())
         })
@@ -4009,8 +3289,8 @@ mod tests {
         );
     }
 
-    /// Two `<style>` elements concatenate in document order: a sheet appended
-    /// later has to win at equal specificity.
+    /// Two `<style>` elements concatenate in document order: a sheet appended later has to win at
+    /// equal specificity.
     #[test]
     fn several_style_elements_concatenate_in_document_order() {
         let opacity = |id: u32| {
@@ -4027,9 +3307,7 @@ mod tests {
             for css in [".probe { opacity: 0.1 }", ".probe { opacity: 0.9 }"] {
                 let sheet = t.create_element(style_tag);
                 t.set_element_text(sheet, css.into());
-                // Appended. This passed `1 + i` as the node to insert before,
-                // which put the second sheet in front of the probe and so of
-                // the first; creation order hid it.
+                // Appended.
                 t.insert(sheet, root, 0);
             }
             probe
@@ -4038,8 +3316,8 @@ mod tests {
         assert_eq!(opacity(probe), Some(0.9), "the later sheet wins at equal specificity");
     }
 
-    /// A root with `n` children, each with one child of its own, all cascaded.
-    /// Returns `(root, children, grandchildren)`.
+    /// A root with `n` children, each with one child of its own, all cascaded. Returns `(root,
+    /// children, grandchildren)`.
     fn cascaded_comb(n: usize) -> (u32, Vec<u32>, Vec<u32>) {
         let ids = with_tree(|t| {
             let root = t.create_root();
@@ -4067,9 +3345,6 @@ mod tests {
         roots
     }
 
-    /// The mass mount that used to fall off the 64-mark cliff into a
-    /// whole-document pass: 300 separate marks are 300 walk roots, and nothing
-    /// else is walked.
     #[test]
     fn hundreds_of_separate_marks_stay_a_scoped_pass() {
         let (_, _, grandkids) = cascaded_comb(300);
@@ -4096,9 +3371,7 @@ mod tests {
         assert_eq!(roots_of(), vec![kids[1]]);
     }
 
-    /// A `<KeepAlive>` cache container is never inserted, and a mark inside it
-    /// is still found. Moving a marked node from there into the document finds
-    /// it under its new parent.
+    /// A `<KeepAlive>` cache container is never inserted, and a mark inside it is still found.
     #[test]
     fn marks_in_a_parentless_container_are_found_and_follow_a_move() {
         let (_, kids, _) = cascaded_comb(2);
@@ -4113,8 +3386,8 @@ mod tests {
         with_tree(|t| t.mark_restyle_subtree(kept));
         assert_eq!(roots_of(), vec![kept]);
 
-        // Marked while detached, then moved: found under its new parent, and
-        // neither parent is walked, since no cascade read either child list.
+        // Marked while detached, then moved: found under its new parent, and neither parent is
+        // walked, since no cascade read either child list.
         with_tree(|t| {
             t.mark_restyle_subtree(kept);
             t.insert(kept, kids[0], 0);
@@ -4123,9 +3396,8 @@ mod tests {
         let _ = cache;
     }
 
-    /// The common case of a mount: appending to a list whose children no rule
-    /// reads the positions of walks the new child and nothing else, however
-    /// long the list is. It used to walk the whole list.
+    /// The common case of a mount: appending to a list whose children no rule reads the positions
+    /// of walks the new child and nothing else, however long the list is.
     #[test]
     fn an_append_walks_the_new_child_and_not_its_siblings() {
         let (root, kids, _) = cascaded_comb(50);
@@ -4139,10 +3411,8 @@ mod tests {
         let _ = kids;
     }
 
-    /// `body:has(…)` makes the document root an anchor whose subtree is every
-    /// node, so marking it on every mutation would make every wave a
-    /// whole-document walk. It is rechecked alone instead, and walked only
-    /// when its own answer moves.
+    /// `body:has(…)` makes the document root an anchor whose subtree is every node, so marking it
+    /// on every mutation would make every wave a whole-document walk.
     #[test]
     fn a_root_has_anchor_is_rechecked_not_walked() {
         let sheet = "body:has([data-x]) { opacity: 0.5 }";
@@ -4159,25 +3429,22 @@ mod tests {
             with_tree(|t| t.settle_self_marks(engine, &env)).into_iter().map(|(id, _)| id).collect::<Vec<_>>()
         };
 
-        // A class nothing reads anywhere: the node and the anchor are asked
-        // again, alone, and neither answer moved.
+        // A class nothing reads anywhere: the node and the anchor are asked again, alone, and
+        // neither answer moved.
         with_tree(|t| t.set_class(grandkids[1], "x"));
         assert!(settled_ids(&engine).is_empty());
         assert!(roots_of().is_empty(), "no walk at all");
 
-        // `data-x` is what the `:has()` walk reads on the root's descendants,
-        // and only the root reads it, so the writer has no reader under it and
-        // is restyled alone. The root's own answer moved, but nothing it hands
-        // down did, so it is restyled alone as well.
+        // `data-x` is what the `:has()` walk reads on the root's descendants, and only the root
+        // reads it, so the writer has no reader under it and is restyled alone.
         let x = with_tree(|t| t.intern("data-x"));
         with_tree(|t| t.set_prop(grandkids[0], x, Some(String::new())));
         assert_eq!(settled_ids(&engine), vec![root]);
         assert!(roots_of().is_empty(), "no walk at all");
     }
 
-    /// A `:has(+ …)` anchor reads the sibling AFTER it, so a change to that
-    /// sibling has to recheck the anchor, which is neither above the change
-    /// nor after it.
+    /// A `:has(+ …)` anchor reads the sibling AFTER it, so a change to that sibling has to recheck
+    /// the anchor, which is neither above the change nor after it.
     #[test]
     fn a_following_sibling_has_anchor_is_rechecked_when_that_sibling_changes() {
         let sheet = "div:has(+ [data-x]) { opacity: 0.5 }";
@@ -4197,8 +3464,8 @@ mod tests {
         assert!(settled.contains(&kids[0]), "the earlier sibling's answer moved: {settled:?}");
     }
 
-    /// A text node's first character changes its element's `:empty` answer,
-    /// which a `:has()` further up reads through the element.
+    /// A text node's first character changes its element's `:empty` answer, which a `:has()`
+    /// further up reads through the element.
     #[test]
     fn a_text_node_filling_up_rechecks_the_has_anchor_that_reads_empty() {
         let sheet = ".card:has(span:empty) { opacity: 0.5 }";
@@ -4224,8 +3491,8 @@ mod tests {
         assert_eq!(card_now, Some(None), "the badge has text now: {:?}", settled.iter().map(|s| s.0).collect::<Vec<_>>());
     }
 
-    /// A prop removed and assigned again is a new assignment, whatever the
-    /// string: the count does not start over with the slot.
+    /// A prop removed and assigned again is a new assignment, whatever the string: the count does
+    /// not start over with the slot.
     #[test]
     fn a_prop_set_again_after_a_removal_has_a_new_write_count() {
         let (id, value) = with_tree(|t| {
@@ -4244,9 +3511,8 @@ mod tests {
         assert_ne!(write(Some("a")).unwrap(), first);
     }
 
-    /// A class no selector reads on another element moves only the element's
-    /// own style: restyled alone, no walk. One that IS read on others (`.on
-    /// .leaf`, read by a `div`) walks the `div`s under it.
+    /// A class no selector reads on another element moves only the element's own style: restyled
+    /// alone, no walk.
     #[test]
     fn a_class_read_only_by_its_own_element_restyles_that_element_alone() {
         let sheet = ".hot { opacity: 0.5 } .on .leaf { opacity: 0.25 }";
@@ -4273,7 +3539,6 @@ mod tests {
         assert!(roots_of().is_empty(), "the subtree is not walked");
 
         // `on` is read on the leaf's ancestors by `.on .leaf`.
-        // (The node is settled again: the test never stored the first answer.)
         with_tree(|t| t.set_class(kids[0], "hot on"));
         let settled = with_tree(|t| t.settle_self_marks(&engine, &env));
         assert_eq!(settled.iter().map(|s| s.0).collect::<Vec<_>>(), vec![kids[0]]);
@@ -4281,10 +3546,8 @@ mod tests {
         let _ = root;
     }
 
-    /// A sibling whose place in the list moved is restyled alone: its own
-    /// `:nth-child()` answer is what changed. Under it, only the elements whose
-    /// selectors read an ANCESTOR's place (`.row:first-child .cell`) are
-    /// walked.
+    /// A sibling whose place in the list moved is restyled alone: its own `:nth-child()` answer is
+    /// what changed.
     #[test]
     fn a_moved_sibling_is_restyled_alone_with_the_elements_that_read_its_place() {
         let sheet = ".row:nth-child(2) { opacity: 0.5 } .row:first-child .cell { opacity: 0.25 }";
@@ -4349,11 +3612,8 @@ mod tests {
         );
     }
 
-    /// A name a few tags read on others walks the elements of those tags in
-    /// the writer's subtree, not the subtree. The case is the Argon client's
-    /// `.xsolla-checkout-container [class*="submit-button"] button`, which
-    /// reads the class ATTRIBUTE of every ancestor of every `<button>`: without
-    /// the tags, any class change anywhere would walk everything under it.
+    /// A name a few tags read on others walks the elements of those tags in the writer's subtree,
+    /// not the subtree.
     #[test]
     fn a_name_read_by_a_few_tags_walks_only_those_elements() {
         let sheet = "[class*=\"submit\"] button { opacity: 0.5 }";
@@ -4399,9 +3659,8 @@ mod tests {
         assert!(buttons.iter().all(|&b| opacity(b).is_none()));
     }
 
-    /// …and when the cascade did read positions, the insert marks exactly the
-    /// siblings it said, to be restyled alone: an edge question marks the
-    /// neighbour, a walk marks the run.
+    /// …and when the cascade did read positions, the insert marks exactly the siblings it said, to
+    /// be restyled alone: an edge question marks the neighbour, a walk marks the run.
     #[test]
     fn an_insert_marks_the_siblings_the_cascade_said_it_read() {
         let (root, kids, _) = cascaded_comb(5);
@@ -4438,8 +3697,8 @@ mod tests {
         assert_eq!(roots_of(), vec![middle]);
     }
 
-    /// A Vue fragment's anchor carries element children but no computed map,
-    /// so a walk cannot start under it: the root is promoted to the anchor.
+    /// A Vue fragment's anchor carries element children but no computed map, so a walk cannot start
+    /// under it: the root is promoted to the anchor.
     #[test]
     fn a_root_under_an_anchor_is_promoted_to_the_anchor() {
         let (anchor, inner) = with_tree(|t| {
@@ -4458,10 +3717,8 @@ mod tests {
         assert_eq!(roots_of(), vec![anchor]);
     }
 
-    /// With `+` / `~` in the sheet, a name that later siblings read reaches
-    /// them: the readers among them are walked. An insert reaches only the
-    /// siblings whose cascade stepped across the spot, which the parent's
-    /// flags name; the rest of the run is not walked any more.
+    /// With `+` / `~` in the sheet, a name that later siblings read reaches them: the readers among
+    /// them are walked.
     #[test]
     fn a_sibling_combinator_reaches_later_siblings_where_they_read() {
         let sheet = ".a + .b { opacity: 0.5 }";
@@ -4506,9 +3763,8 @@ mod tests {
         assert_eq!(opacity(second), None);
     }
 
-    /// A node created this wave and never cascaded is a walk root wherever the
-    /// search meets it, so a subtree is never entered with a parent map that
-    /// does not exist yet.
+    /// A node created this wave and never cascaded is a walk root wherever the search meets it, so
+    /// a subtree is never entered with a parent map that does not exist yet.
     #[test]
     fn an_uncascaded_element_on_the_trail_is_a_walk_root() {
         let (_, kids, _) = cascaded_comb(2);
@@ -4517,9 +3773,9 @@ mod tests {
             let fresh = t.create_element(div);
             let inner = t.create_element(div);
             t.insert(inner, fresh, 0);
-            // Attached by hand, without the parent mark `insert` would add,
-            // and with its own mark taken off: only the trail through it and
-            // its missing computed map say it has to be walked.
+            // Attached by hand, without the parent mark `insert` would add, and with its own mark
+            // taken off: only the trail through it and its missing computed map say it has to be
+            // walked.
             t.node_mut(fresh).unwrap().parent = kids[0];
             t.node_mut(fresh).unwrap().mark_gen = 0;
             t.node_mut(kids[0]).unwrap().children.push(fresh);
@@ -4541,10 +3797,9 @@ mod tests {
         Some(gpui::px(v).into())
     }
 
-    /// The root's own `rem` is of the initial 16px, so `0.875rem` is a 14px
-    /// basis — and stays one: adopting what the root computes to under each
-    /// new basis shrank it on every flush (14, 12.25, 10.7…). An inline `rem`
-    /// follows the basis too, and the pass leaves no restyle pending.
+    /// The root's own `rem` is of the initial 16px, so `0.875rem` is a 14px basis — and stays one:
+    /// adopting what the root computes to under each new basis shrank it on every flush (14, 12.25,
+    /// 10.7…).
     #[test]
     fn a_root_font_size_in_rem_settles_on_the_initial_size() {
         set_stylesheet(":root { font-size: 0.875rem } .w { width: 2rem }".into());
@@ -4571,10 +3826,6 @@ mod tests {
         }
     }
 
-    /// CSS Values 4 §6.1.1 down a real walk: the root's `62.5%` is of the
-    /// initial 16px, each `font-size` em or percentage is of the parent's
-    /// computed size, every other em is of the element's own, an element
-    /// that declares no size inherits the px, and `rem` stays on the root.
     #[test]
     fn em_follows_the_computed_font_size_down_the_walk() {
         set_stylesheet(
@@ -4619,10 +3870,8 @@ mod tests {
         assert!(reported.lines().any(|l| l == "font-size=15px"), "getComputedStyle: {reported}");
     }
 
-    /// Two cousins with the same rules under parents of different font sizes:
-    /// the matched-properties cache must not hand the second the first's px.
-    /// And a class that changes only its own element's font size still walks
-    /// the subtree under it, since every em there moves.
+    /// Two cousins with the same rules under parents of different font sizes: the
+    /// matched-properties cache must not hand the second the first's px.
     #[test]
     fn a_new_parent_font_size_reaches_the_em_below_it() {
         set_stylesheet(".big { font-size: 20px } .leaf { padding: 1em }".into());
@@ -4646,8 +3895,8 @@ mod tests {
         restyle_all();
         assert_eq!(leaves.iter().map(|&l| padding_top_of(l)).collect::<Vec<_>>(), vec![px_len(20.0), px_len(16.0)]);
 
-        // `.big` is read by its own element alone, so this is a self-mark; the
-        // font size it hands down moved, so the leaf under it is walked too.
+        // `.big` is read by its own element alone, so this is a self-mark; the font size it hands
+        // down moved, so the leaf under it is walked too.
         with_tree(|t| {
             t.set_class(plain, "big");
             t.set_class(big, "");

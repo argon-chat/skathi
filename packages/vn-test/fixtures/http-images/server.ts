@@ -1,18 +1,6 @@
-// The loopback server behind fixtures/http-images: N distinct PNGs, served the
-// way the Argon client's files are (measured 2026-11-02, research/reports/m26/
-// fixes-lag-1.md §4.12):
-//
-//   GET /files/<i>        302, `Cache-Control: private, max-age=300`, no validators
-//   GET /cdn/<i>.png      200, `Cache-Control: max-age=2592000`, ETag, Last-Modified
-//                         304 to a matching If-None-Match / If-Modified-Since
-//
-// `policy` overrides the 200's caching headers per test (`no-store`, `max-age=0`,
-// a Vary, …). Every request is counted, so a test can say "the server saw
-// nothing". Runs in the test process (Bun.serve); nothing is written to disk.
 import { deflateSync } from "node:zlib";
 
 export interface Seen {
-  /** Every request, in order: `METHOD path status`. */
   log: string[];
   redirects: number;
   bodies: number;
@@ -22,13 +10,10 @@ export interface Seen {
 export interface ImageServer {
   base: string;
   seen: Seen;
-  /** The 302 URL of image `i` (what an `<img src>` is given). */
   file(i: number, query?: string): string;
-  /** The final URL of image `i`. */
   cdn(i: number, query?: string): string;
-  /** Headers the 200 (and its 304) carry instead of the defaults. */
   policy: Record<string, string> | null;
-  /** Held before every answer, in ms: a round trip to a real server rather than loopback's none. Default 0. */
+  /** Held before every answer, in ms: a round trip to a real server rather than loopback's none. */
   delayMs: number;
   reset(): void;
   stop(): void;
@@ -62,8 +47,10 @@ function chunk(type: string, data: Uint8Array): Uint8Array {
   return out;
 }
 
-/** A `size`-px RGB PNG, distinct per `seed`: a gradient with noise, so it
- *  compresses about as badly as a photo avatar does (~40–60 KB at 160 px). */
+/**
+ * A `size`-px RGB PNG, distinct per `seed`: a gradient with noise, so it compresses about as badly
+ * as a photo avatar does (~40–60 KB at 160 px).
+ */
 export function png(seed: number, size = 160): Uint8Array {
   const raw = new Uint8Array(size * (1 + size * 3));
   let s = (seed * 2654435761) >>> 0 || 1;

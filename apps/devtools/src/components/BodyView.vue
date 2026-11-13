@@ -1,12 +1,4 @@
 <script setup lang="ts">
-// A body, readable: text as lines, JSON pretty-printed, binary as a hex dump.
-//
-// Over a virtual list (`../virtual.ts`), because the cap is 256 KB and a
-// 256 KB binary body is sixteen thousand rows of hex — the engine pays for
-// every node it is asked to lay out, so only the rows in view exist. Long text
-// lines are HARD-wrapped at a column count derived from the pane's width
-// (`textLines`): nothing here can measure text, and a fixed row height is what
-// lets the list skip to any row without measuring the ones before it.
 import { computed, ref, watch } from "vue";
 import { BODY_BAR_H, BODY_LINE_H, MONO_W } from "../layout";
 import { copyText } from "../store";
@@ -28,9 +20,7 @@ const props = defineProps<{
   body: NetBody | null | undefined;
   width: number;
   height: number;
-  /** `limits.budget`, for the "evicted" line. */
   budget: number;
-  /** How the status bar names a copy: "the response body". */
   what: string;
 }>();
 
@@ -97,8 +87,6 @@ const empty = computed(() => {
 function copy(): void {
   const b = props.body;
   if (!b) return;
-  // The text as it came (not the pretty-printed one) — a body pasted into a
-  // bug report should be the bytes the server sent. Binary goes as the dump.
   void copyText(bodyAsText(b), b.truncated ? `${props.what} (truncated)` : props.what);
 }
 </script>
@@ -202,8 +190,6 @@ function copy(): void {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* The body's lines are selectable — the part the virtual list has on screen;
- * "⧉ copy" takes the whole body. */
 .list {
   position: relative;
   overflow: hidden;

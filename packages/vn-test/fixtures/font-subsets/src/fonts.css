@@ -1,12 +1,4 @@
-/* A fixture for packages/vn-test/specs/font-subsets.spec.ts: one family cut
-   into `unicode-range` subsets, as Fontsource and Google Fonts ship it
-   (docs/RUNTIME.md §5.15). The `Mix` faces are @fontsource-variable/manrope's
-   own rules for its latin and cyrillic files, plus a greek subset whose file
-   is not there and that no text asks for. `Ref *` name the same files once
-   each, without a range: what `Mix` must draw per character. `PUA` is Alcarin
-   Tengwar limited to the Private Use Area, leading a stack as the Argon
-   client's `"Alcarin Tengwar", Inter, …` does. Both fonts are OFL (the
-   licences are next to them). */
+/* Fixture for specs/font-subsets.spec.ts: one family cut into `unicode-range` subsets (latin, cyrillic, and a greek one whose file is absent), plus `Ref *` faces per file without a range. */
 
 @font-face {
   font-family: "Mix";
@@ -64,8 +56,6 @@
   padding: 4px 8px;
 }
 
-/* Every probe is one line, shrink-wrapped, at a whole CSS pixel, so two
-   probes with the same text in the same face rasterize the same. */
 .row {
   display: flex;
   align-items: flex-start;
@@ -76,7 +66,6 @@
   flex: none;
   font-size: 20px;
   line-height: 28px;
-  /* The pieces' leading and trailing spaces count. */
   white-space: pre;
 }
 

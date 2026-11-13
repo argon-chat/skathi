@@ -1,9 +1,8 @@
-//! Frame-time profiler — `VN_PERF=1`.
+//! Frame-time profiler, `VN_PERF=1`.
 //!
-//! One `Instant` read per frame and one push into a `Vec<f32>`; every second
-//! the window is summarised to stderr and cleared. With `VN_PERF` unset the
-//! whole thing is a single relaxed atomic load and an early return, so it can
-//! stay wired into the pump permanently.
+//! One `Instant` read per frame and one push into a `Vec<f32>`; every second the window is
+//! summarised to stderr and cleared. With `VN_PERF` unset it is a single relaxed atomic load and an
+//! early return, so it stays wired into the pump.
 //!
 //! ```text
 //! [vn-perf] boot->first-frame 214.7ms
@@ -12,17 +11,13 @@
 //! [vn-perf]   build   passes=180 nodes=90.0K              total=210.4ms avg=1.17  max=3.90
 //! ```
 //!
-//! The two indented lines are the phase breakdown ([`vn_tree::perf`]) for the
-//! SAME second as the frame line above them: where the milliseconds went, how
-//! many elements were re-cascaded and rebuilt, and how many selectors the
-//! matcher actually ran. They are what makes "the mutation frame costs 90 ms"
-//! an actionable statement instead of a complaint.
+//! The indented lines are the phase breakdown ([`vn_tree::perf`]) for the same second as the frame
+//! line: where the milliseconds went, how many elements were re-cascaded and rebuilt, and how many
+//! selectors the matcher ran.
 //!
-//! `__vn_perf_mark("<label>")` (registered in `lib.rs`) labels the scenario
-//! from the Vue app: it flushes the window in progress, prints a banner and
-//! restarts the clock, which is what makes "idle vs scrolling vs churn"
-//! separable in the log. It is a no-op when the probe is off, so an app may
-//! call it unconditionally.
+//! `__vn_perf_mark("<label>")` (registered in `lib.rs`) labels the scenario from the Vue app: it
+//! flushes the window in progress, prints a banner and restarts the clock. A no-op when the probe is
+//! off.
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -70,10 +65,8 @@ struct State {
     pump_ms: f32,
     setup_ms: f32,
     render_ms: f32,
-    /// The tail of a frame that DREW: gpui's layout, paint, present — plus
-    /// whatever is left of the vsync interval, which on a slow frame is
-    /// nothing. Split from the idle tail because mixing them hides the number
-    /// that matters: what one drawn frame actually costs.
+    /// The tail of a frame that DREW: gpui's layout, paint, present, plus what is left of the vsync
+    /// interval. Kept apart from the idle tail so the cost of one drawn frame stays visible.
     tail_draw_ms: f32,
     /// The tail of a frame that drew nothing — pure wait for the next vsync.
     tail_idle_ms: f32,
@@ -91,10 +84,8 @@ thread_local! {
 
 /// Starts the clock. Called once from `main`, before the window opens.
 pub fn boot() {
-    // The rolling ring's `boot` is seeded FIRST and unconditionally: it is a
-    // `thread_local` that would otherwise initialise itself lazily on the
-    // first frame, which would make `boot -> first frame` read as zero — the
-    // one number a startup regression shows up in.
+    // Seeded first and unconditionally: this `thread_local` would otherwise initialise lazily on the
+    // first frame and make `boot -> first frame` read as zero.
     #[cfg(vn_devtools)]
     ROLL.with(|r| r.borrow_mut().boot = Instant::now());
     if !enabled() {
@@ -124,29 +115,11 @@ pub fn boot() {
     eprintln!("[vn-perf] probe on (VN_PERF) — frame stats every {}s", HOW_OFTEN.as_secs());
 }
 
-// ---------------------------------------------------------------------------
-// the rolling window the devtools Performance panel reads
-// ---------------------------------------------------------------------------
-//
-// `VN_PERF` above is a REPORT: it prints a summary to stderr every second and
-// costs a `Vec` push plus four `Instant` reads per frame. The panel needs
-// something different — a window of the last few seconds, readable at any
-// moment, from a build nobody remembered to set an environment variable on —
-// so [`ROLL`] is a separate, unconditional, fixed-size ring.
-//
-// Its cost is one `Instant::now()` (which `frame()` was already going to take
-// when the probe is on, and which is a `QueryPerformanceCounter` read
-// otherwise: ~20 ns) and one store into a fixed array. No allocation, no
-// branch on an environment variable, no growth. That is what makes it honest to
-// leave wired in permanently: the profiler you have to restart the app to turn
-// on is the profiler that never answers the question you actually had.
-//
-// It is `cfg(vn_devtools)` all the same, because a shipped `--features prod`
-// build has nobody to read it.
+// The rolling window the devtools Performance panel reads: unlike `VN_PERF`'s report, an
+// unconditional fixed-size ring ([`ROLL`]) costing one `Instant::now()` and one array store per
+// frame. `cfg(vn_devtools)`, since a shipped prod build has nobody to read it.
 
-/// How many frame intervals the panel can look back over. 600 ≈ 10 s at 60 Hz
-/// and 3.6 s at 165 Hz — long enough to hold a whole interaction, short enough
-/// that the array is 2.4 KB.
+/// How many frame intervals the panel can look back over: 600 is about 10 s at 60 Hz, in 2.4 KB.
 #[cfg(vn_devtools)]
 pub const ROLL_LEN: usize = 600;
 
@@ -181,16 +154,14 @@ thread_local! {
 pub struct Snapshot {
     pub samples: Vec<f32>,
     pub frames: u64,
-    /// Milliseconds from `main` to the first frame — the number a startup
-    /// regression shows up in first.
+    /// Milliseconds from `main` to the first frame.
     pub boot_to_first_frame_ms: Option<f32>,
     pub uptime_ms: f32,
 }
 
 #[cfg(vn_devtools)]
 impl Snapshot {
-    /// `(avg, p50, p95, max, fps)` over the window. Empty windows report zeros
-    /// rather than NaN — a panel should show "no frames yet", not "NaN".
+    /// `(avg, p50, p95, max, fps)` over the window; an empty window reports zeros, not NaN.
     pub fn stats(&self) -> (f32, f32, f32, f32, f32) {
         if self.samples.is_empty() {
             return (0.0, 0.0, 0.0, 0.0, 0.0);
@@ -245,24 +216,10 @@ fn roll_frame(now: Instant) {
     });
 }
 
-// ---------------------------------------------------------------------------
-// boot-time JS evaluation
-// ---------------------------------------------------------------------------
-//
-// How much of boot→first-frame is the engine evaluating scripts: the preludes,
-// then either `vendor.js` + the module scripts + `__VN__.boot` (dev) or the one
-// `app.prod.js` IIFE (prod). It is the number a bytecode cache would act on, so
-// it is measured before anyone builds one (m24, research/reports/m24/jsc-bump.md).
-//
-// Each figure is wall time around `JsRuntime::eval`: parse + bytecode
-// generation + running the top level — for `boot.js` and `app.prod.js` that
-// top level CREATES AND MOUNTS THE APP, host calls included. A cache can only
-// remove the parse/compile part of it.
-//
-// Always recorded — one `Instant` pair per boot script, nothing per frame —
-// and closed at the first frame, so a dev cold restart or an HMR re-eval is
-// never charged to boot. Printed on the VN_PERF first-frame line and served as
-// `bootJs` by the devtools `perf` command.
+// Boot-time JS evaluation: wall time around each `JsRuntime::eval` (parse, bytecode generation and
+// running the top level, which for `boot.js` and `app.prod.js` creates and mounts the app). Always
+// recorded and closed at the first frame, so a dev cold restart or HMR re-eval is never charged to
+// boot. Printed on the VN_PERF first-frame line and served as `bootJs` by the devtools `perf` command.
 
 struct BootJs {
     /// `(label, scripts, ms)`, in first-evaluated order.
@@ -372,9 +329,8 @@ fn ms_since(then: Instant, now: Instant) -> f32 {
     now.saturating_duration_since(then).as_secs_f32() * 1000.0
 }
 
-/// Closes a bucket and opens the next. The four calls below partition the wall
-/// clock exactly — `pump + setup + render + tail` is the frame — which is what
-/// makes "the mutation frame costs 90 ms" answerable rather than arguable.
+/// Closes a bucket and opens the next. The four buckets partition the wall clock exactly:
+/// `pump + setup + render + tail` is the frame.
 fn stamp(f: impl FnOnce(&mut State, f32)) {
     if !enabled() {
         return;
@@ -444,8 +400,7 @@ pub fn mark(tag: &str) {
     });
 }
 
-/// `12345` -> `12.3K`, `1234567` -> `1.23M` — the counters run to millions and
-/// a raw digit string makes the two columns that matter unreadable.
+/// `12345` -> `12.3K`, `1234567` -> `1.23M`: keeps the counters' columns readable.
 fn compact(n: u64) -> String {
     match n {
         0..=9_999 => n.to_string(),
@@ -454,17 +409,14 @@ fn compact(n: u64) -> String {
     }
 }
 
-/// The wall-clock partition of the window: every millisecond of the second is
-/// in exactly one of the four buckets, so a slow second can be attributed
-/// before anything is optimized.
+/// The wall-clock partition of the window: every millisecond is in exactly one of the four buckets.
 fn report_frame_split(st: &mut State) {
     let total = st.pump_ms + st.setup_ms + st.render_ms + st.tail_draw_ms + st.tail_idle_ms;
     if total <= 0.0 {
         return;
     }
-    // `gpui/frame` is what one DRAWN frame costs outside our own code: gpui's
-    // pre-render setup, its layout/prepaint/paint, the present, and whatever is
-    // left of the vsync interval (on a slow frame, nothing).
+    // `gpui/frame` is what one drawn frame costs outside our code: pre-render setup, layout,
+    // prepaint, paint, present, and what is left of the vsync interval.
     let per_draw = if st.draws > 0 {
         (st.setup_ms + st.tail_draw_ms) / st.draws as f32
     } else {
@@ -491,9 +443,7 @@ fn report_frame_split(st: &mut State) {
     st.draws = 0;
 }
 
-/// The phase breakdown, printed right under the frame line so both describe the
-/// same second. Silent when nothing ran (an idle second still draws, so `build`
-/// is always there; `restyle` only appears when something actually mutated).
+/// The phase breakdown, printed under the frame line for the same second. Silent when nothing ran.
 fn report_phases() {
     let Some(p) = vn_tree::perf::take() else { return };
     if p.restyle_passes > 0 {
@@ -514,9 +464,8 @@ fn report_phases() {
             p.fold_ms,
             p.store_ms,
         );
-        // The rule index's report card: where the selectors run came from
-        // (rules no key could file are run against every element), and how
-        // few of them matched.
+        // Where the selectors run came from (rules no key could file run against every element)
+        // and how few of them matched.
         let [any, tag, class, id, root, parent] = p.rules_split.by_bucket;
         eprintln!(
             "[vn-perf]           sel by bucket: any {} · tag {} · class {} · id {} · root {} · parent {}   matched {}",
@@ -543,12 +492,8 @@ fn report_phases() {
              avg={:.2}  max={:.2}",
             p.build_passes,
             compact(p.elements_built),
-            // How many retained-render cache boundaries actually re-rendered.
-            // Blank when nothing is cached, so the line reads exactly as it did
-            // on every app that never crosses the threshold.
-            // replayed / re-rendered / stood down — the whole story of whether
-            // the retained-render cache is earning its keep, and blank on every
-            // app whose subtrees never cross the threshold.
+            // Retained-render cache boundaries: replayed / re-rendered / stood down. Blank when
+            // nothing is cached.
             if p.cache_offers + p.cache_standdowns > 0 {
                 format!(
                     "cache={}/{}/{}",
@@ -596,8 +541,7 @@ fn report(st: &mut State, now: Instant) {
     if st.samples.is_empty() {
         return;
     }
-    // Sorting the window (a few hundred f32s) once a second is free next to a
-    // frame, and gives exact percentiles rather than a running estimate.
+    // Sorting a few hundred f32s once a second is free and gives exact percentiles.
     let mut sorted = st.samples.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = sorted.len();

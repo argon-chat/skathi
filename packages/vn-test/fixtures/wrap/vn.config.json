@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/wrap.spec.ts: long unbroken tokens against overflow-wrap, word-break and white-space. See ../README.md.",
+  "$comment": "Long unbroken tokens against overflow-wrap, word-break and white-space.",
 
   "name": "vn-test-wrap",
 

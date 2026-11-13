@@ -1,13 +1,9 @@
-// The events the Argon client binds that the host never delivered (m26 fixes):
-// `contextmenu`, `auxclick`, `dblclick` (and `detail` on the click family),
-// `pointercancel`, and an `<img>`'s `load` / `error` — with `complete`, `naturalWidth` and the
-// `on<event>` handler attributes they are read through. (`new Image()` is the
-// engine's own offscreen image, redjs webapi/image.rs, and is not this.)
+// Pointer and image events: `contextmenu`, `auxclick`, `dblclick` (and `detail` on the click family), `pointercancel`,
+// and an `<img>`'s `load` / `error` with `complete`, `naturalWidth` and the `on<event>` handler attributes.
+// (`new Image()` is the engine's own offscreen image, not this.)
 //
-// The host half (which box is the target, when each one fires) is
-// crates/vn-tree/src/render.rs and img.rs, exercised by
-// packages/vn-test/specs/events.spec.ts; this file pins what JS makes of the
-// payloads.
+// The host half is crates/vn-tree/src/render.rs and img.rs, exercised by packages/vn-test/specs/events.spec.ts; this
+// file pins what JS makes of the payloads.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
@@ -389,7 +385,7 @@ describe("button and buttons", () => {
   });
 });
 
-describe("a cancelled press (docs/RUNTIME.md §5.8)", () => {
+describe("a cancelled press", () => {
   test("the host is told: a cancelled mousedown or pointerdown returns false", () => {
     const rt = createRuntime({ MouseEvent: FakeMouseEvent });
     const { inner } = tree(rt);
@@ -401,7 +397,7 @@ describe("a cancelled press (docs/RUNTIME.md §5.8)", () => {
     expect(rt.advisories()).toEqual([]);
   });
 
-  test("on a text field it is advised once (L-2): the field has already focused itself", () => {
+  test("on a text field it is advised once: the field has already focused itself", () => {
     const rt = createRuntime({ MouseEvent: FakeMouseEvent });
     const { outer } = tree(rt);
     const field = rt.nodeOps.createElement("textarea") as unknown as El;
@@ -410,7 +406,7 @@ describe("a cancelled press (docs/RUNTIME.md §5.8)", () => {
     expect(fire(rt, field, "mousedown", 0, 0, 0)).toBe(false);
     fire(rt, field, "mousedown", 0, 0, 0);
     expect(rt.advisories().length).toBe(1);
-    expect(rt.advisories()[0]).toContain("L-2");
+    expect(rt.advisories()[0]).toContain("already focused itself");
   });
 
   test("an uncancelled press on a field, or a cancelled one on a file input, is not advised", () => {
@@ -425,12 +421,11 @@ describe("a cancelled press (docs/RUNTIME.md §5.8)", () => {
     rt.nodeOps.insert(file as never, outer as never, null);
     file.addEventListener("mousedown", (e) => e.preventDefault());
     expect(fire(rt, file, "mousedown", 0, 0, 0)).toBe(false);
-    // (A file input has an advisory of its own, D-F12, for its rendering.)
-    expect(rt.advisories().filter((a) => a.includes("L-2"))).toEqual([]);
+    expect(rt.advisories().filter((a) => a.includes("already focused itself"))).toEqual([]);
   });
 });
 
-describe("keyboard clicks (docs/RUNTIME.md §5.11)", () => {
+describe("keyboard clicks", () => {
   const keyClick = (rt: Rt, el: El, key: string) =>
     rt.host.dispatcher(el.__vnId as number, rt.EV_CODES.click, 0, 0, 0, 0, key);
 
@@ -465,7 +460,7 @@ describe("keyboard clicks (docs/RUNTIME.md §5.11)", () => {
   });
 });
 
-describe("passive listeners (a cancelled wheel scrolls nothing: docs/RUNTIME.md §5.8)", () => {
+describe("passive listeners (a cancelled wheel scrolls nothing)", () => {
   test("@wheel.passive is delivered, and its preventDefault() does nothing", () => {
     const rt = createRuntime({ MouseEvent: FakeMouseEvent });
     const { inner } = tree(rt);
@@ -502,7 +497,7 @@ describe("passive listeners (a cancelled wheel scrolls nothing: docs/RUNTIME.md 
     expect(fire(rt, inner, "wheel", 0, 40)).toBe(false);
   });
 
-  test("a cancelled wheel on a <textarea> is advised once (W-1): the widget has already scrolled", () => {
+  test("a cancelled wheel on a <textarea> is advised once: the widget has already scrolled", () => {
     const rt = createRuntime({ MouseEvent: FakeMouseEvent });
     const { outer } = tree(rt);
     const ta = rt.nodeOps.createElement("textarea") as unknown as El;
@@ -510,7 +505,7 @@ describe("passive listeners (a cancelled wheel scrolls nothing: docs/RUNTIME.md 
     ta.addEventListener("wheel", (e) => e.preventDefault());
     expect(fire(rt, ta, "wheel", 0, 40)).toBe(false);
     fire(rt, ta, "wheel", 0, 40);
-    expect(rt.advisories().filter((a) => a.includes("W-1")).length).toBe(1);
+    expect(rt.advisories().filter((a) => a.includes("already scrolled")).length).toBe(1);
   });
 
   test("the default applies to wheel and touch only: a document mousedown listener still cancels", () => {

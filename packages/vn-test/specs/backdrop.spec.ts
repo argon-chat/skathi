@@ -1,23 +1,5 @@
-// The window's backdrop material on the real host (docs/WINDOWING.md §4.4).
-//
-//   bun test packages/vn-test/specs/backdrop.spec.ts
-//
-// DWM composites a backdrop UNDER what the app paints, so `render_to_image`
-// cannot see it: this spec reads the window with `print_window`, which is the
-// composed window as DWM has it. Two answers are checked for every material:
-// what DWM itself reads back (`systemBackdrop`, `DWMWA_SYSTEMBACKDROP_TYPE`)
-// and the pixels of the fixture's transparent area. The fixture opens on
-// `acrylic`, frameless (`titleBarStyle: "hidden"`).
-//
-// DWM draws the system backdrops only for an ACTIVE frame, and vn-test never
-// activates a window (VN_WINDOW_FOCUS=never). Unprompted, the pixels are each
-// material's inactive colour. `WM_NCACTIVATE` tells the frame it is active
-// without making it the foreground window, which is all DWM looks at, so the
-// spec sends that to read the materials themselves — and checks the window
-// did not become the foreground one. PrintWindow does not carry what is behind
-// the window, so an active acrylic reads back as its tint alone.
-//
-// Needs Windows 11 22H2 (build 22621) or later, where `acrylic` is DWM's own.
+// DWM draws the system backdrops only for an ACTIVE frame, and vn-test never activates a window
+// (VN_WINDOW_FOCUS=never).
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { dlopen, FFIType } from "bun:ffi";
@@ -58,17 +40,12 @@ const setTheme = async (t: string) => {
 };
 
 let hwnd = 0n;
-/** Tells the frame it is active, or not, without touching the foreground. */
 const activeFrame = async (on: boolean) => {
   user32.symbols.SendMessageW(hwnd, WM_NCACTIVATE, on ? 1n : 0n, -1n);
   await sleep(500);
 };
 
 type Shot = { mean: Rgb; spread: number; solid: Rgb; top: Rgb };
-/** The window as DWM composed it: the mean colour of the transparent area
- *  (clear of `#solid` and of the edges), the spread across it, `#solid`, and
- *  a pixel on the top edge. Coordinates are CSS px through the reply's own
- *  `scale` and client offset. */
 async function shoot(): Promise<Shot> {
   const r = await app.send("screenshot", { backend: "print_window" });
   hwnd = BigInt(r.hwnd);
@@ -107,17 +84,13 @@ describe("backdrop", () => {
   }, T);
 
   test("every pair of materials, both orders: DWM reads back the one asked for, and its pixels do not depend on the one before", async () => {
-    // The first visit to each material, from `none`, is its reference.
     const ref: Record<string, Rgb> = {};
     for (const m of MATERIALS) {
       await setBackdrop("none");
       await setBackdrop(m);
       ref[m] = (await shoot()).mean;
     }
-    // `none` is opaque, and the window repaints for it: not the last frame's
-    // transparent pixels.
     expect(luma(ref.none!)).toBeGreaterThan(240);
-    // The materials are not each other.
     expect(close(ref.acrylic!, ref.mica!)).toBe(false);
     expect(close(ref.acrylic!, ref.none!)).toBe(false);
 
@@ -137,10 +110,8 @@ describe("backdrop", () => {
     expect(bad).toEqual([]);
   }, 180_000);
 
-  // A real activation change anywhere on the machine makes DWM re-read the
-  // window's real state, so on a machine in use a told-active frame can fall
-  // back to inactive between two shots. Each active read therefore re-tells
-  // the frame right before its shot, and each comparison gets three tries.
+  // Each active read therefore re-tells the frame right before its shot, and each comparison gets
+  // three tries.
   const activeAfter = async (from: string, to: string): Promise<Rgb> => {
     await setBackdrop(from);
     await setBackdrop(to);
@@ -177,8 +148,8 @@ describe("backdrop", () => {
     } finally {
       await activeFrame(false);
     }
-    // The machine may be in use, so the foreground can move for its own
-    // reasons; what must not happen is that it moves to this window.
+    // The machine may be in use, so the foreground can move for its own reasons; what must not
+    // happen is that it moves to this window.
     expect(user32.symbols.GetForegroundWindow()).not.toBe(hwnd);
   }, 120_000);
 

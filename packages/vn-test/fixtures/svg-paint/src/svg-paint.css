@@ -13,8 +13,6 @@
   height: 60px;
 }
 
-/* The EXOBIO overlay's notch: the surface token on a wrapper, the paints on
-   the <svg> (one bare <path> inside), the outline swapped by a class. */
 .dock {
   --surface: rgb(255, 0, 0);
   left: 20px;
@@ -33,14 +31,12 @@
   stroke: rgb(255, 0, 255);
 }
 
-/* A presentation attribute on the <svg> loses to the rule on the <svg>… */
 .attr-loses {
   left: 140px;
   top: 20px;
   fill: rgb(255, 0, 0);
 }
 
-/* …and a rule on a shape inside beats the shape's own attribute. */
 .inner-rule {
   left: 260px;
   top: 20px;
@@ -49,7 +45,6 @@
   fill: rgb(255, 0, 0);
 }
 
-/* The inline style on the shape beats the rule. */
 .inline-wins {
   left: 380px;
   top: 20px;
@@ -58,15 +53,14 @@
   fill: rgb(255, 0, 0);
 }
 
-/* A shape's attribute beats the value it would INHERIT from a rule on the
-   <svg>: inheritance is the weakest of the three. */
+/* A shape's attribute beats the value it would INHERIT from a rule on the <svg>: inheritance is
+   the weakest of the three. */
 .inherit-loses {
   left: 20px;
   top: 120px;
   fill: rgb(255, 0, 0);
 }
 
-/* `drop-shadow()` follows the circle, not the box, and reaches past it. */
 .shadowed {
   left: 140px;
   top: 120px;

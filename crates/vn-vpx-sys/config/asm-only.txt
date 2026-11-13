@@ -7,9 +7,8 @@
 # dispatch keeps the C default). The tool fails if an entry no longer matches
 # exactly one line, so the list cannot drift silently across a bump.
 #
-# Found by linking without the asm objects: each was an unresolved external
-# (W0, research/reports/m26/stickers-1.md). Prediction modes and the
-# full-pixel copy and average; none of them is a hot path at sticker sizes.
+# Found by linking without the asm objects: each was an unresolved external. Prediction modes and
+# the full-pixel copy and average; none is a hot path at sticker sizes.
 
 vpx_convolve_avg_sse2
 vpx_convolve_copy_sse2

@@ -1,20 +1,12 @@
-// Fetch-and-pin the Slang compiler, PEWPEW's `toolkit.manifest.ts` pattern.
+// Fetch-and-pin the Slang compiler.
 //
 // Usage: bun fetch-slang.ts [--force]
 //
-// Downloads the release named in `crates/vn-effects/tools/slang.manifest.json`,
-// verifies its sha256 BEFORE extracting anything, and unpacks the three files
-// `shaders.ts` needs into `tools/slang/win-x64/` (gitignored).
+// Downloads the release named in `crates/vn-effects/tools/slang.manifest.json`, verifies its sha256 before
+// extracting anything, and unpacks the three files `shaders.ts` needs into `tools/slang/win-x64/` (gitignored).
 //
-// You need this ONLY to author or edit a `.slang` source — a BUILT-IN effect
-// under `crates/vn-effects/shaders/`, or your own app's under
-// `apps/<app>/shaders/` (docs/SHADERS-AUTHORING.md). The built-ins' generated
-// HLSL is checked in, so `cargo build`, CI and every contributor who is not
-// writing a shader need neither this download nor a second SDK — see
-// docs/SHADERS.md §2.3 for why that trade was made.
-//
-// Vendoring the 35 MB into git was the alternative (open question 3). Fetching
-// won for exactly the reason above: nothing in the build depends on it.
+// Only needed to author or edit a `.slang` source; the built-in effects' generated HLSL is checked in, so
+// `cargo build` and CI need no download.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";

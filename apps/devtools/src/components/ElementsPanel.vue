@@ -1,20 +1,6 @@
 <script setup lang="ts">
-// The element tree: a windowed list, a search, breadcrumbs, and the keyboard.
-//
-// Three things v1 did not have, in the order they were missed:
-//
-//   1. KEYBOARD. Up/Down walk the visible rows, Left/Right collapse and expand
-//      (Left on a closed row goes to the parent, exactly as every tree in every
-//      IDE does), Enter re-arms the outline in the target. It is the difference
-//      between reading a tree and using one.
-//   2. SEARCH. Ctrl+F, then Enter / Shift+Enter to step. It searches the whole
-//      tree — not the visible rows — and opens whatever is collapsed over a
-//      hit, because a search that only finds what you have already expanded is
-//      a filter, not a search.
-//   3. SCROLLING THAT FOLLOWS. Selecting a node off-screen (a pick, a search
-//      hit, an arrow key) scrolls to it. That needs a list that owns its own
-//      offset — see `../virtual.ts` for why the native scroll container could
-//      not have done it.
+// It searches the whole tree — not the visible rows — and opens whatever is collapsed over a hit,
+// because a search that only finds what you have already expanded is a filter, not a search. 3.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { Row } from "../protocol";
 import { onKeydown } from "../keys";
@@ -51,12 +37,8 @@ const searchBox = ref<VnElement | null>(null);
 const selectedIndex = computed(() => rows.value.findIndex((r) => r.id === state.selected));
 const crumbs = computed(() => ancestors(state.selected));
 
-/** The rendered slice. */
 const slice = computed(() => rows.value.slice(list.start, list.end));
 
-// Selection moves for reasons this component did not cause — a pick in the
-// target, a search step, a click in the breadcrumbs — and every one of them
-// should bring the row into view.
 watch(
   () => state.selected,
   () => {
@@ -93,8 +75,6 @@ function collapseOrParent(): void {
     setExpanded(row.id, false);
     return;
   }
-  // Already closed (or a leaf): step out to the parent, which is the nearest
-  // row above with a smaller depth.
   for (let i = at - 1; i >= 0; i--) {
     if (rows.value[i].depth < row.depth) {
       void select(rows.value[i].id);
@@ -117,12 +97,6 @@ function expandOrChild(): void {
 
 function onKey(event: VnKeyboardEvent): void {
   if (state.tab !== "elements") return;
-  // A search box has the keyboard while it is focused; arrow keys there move a
-  // caret, not a selection. Escape is deliberately NOT handled here at all:
-  // two listeners on one target cannot stop each other's propagation, and the
-  // child's runs FIRST (Vue mounts children before parents), so a panel that
-  // closed its own search would have the shell toggle the drawer on the same
-  // keystroke. The shell owns Escape and calls `ui.closeElementSearch`.
   if (ui.typing && event.key !== "Enter") return;
   switch (event.key) {
     case "ArrowDown":
@@ -160,8 +134,6 @@ function onKey(event: VnKeyboardEvent): void {
         stepMatch(event.shiftKey ? -1 : 1);
         break;
       }
-      // Re-arm the outline in the target and hold it there a little longer —
-      // "show me where this is" without moving the mouse.
       if (state.selected !== null) void highlight(state.selected, 4000);
       break;
     default:
@@ -200,7 +172,6 @@ onUnmounted(() => {
   ui.elementSearchOpen = false;
 });
 
-/** `<div class="a b" id="x">` — one row, coloured by part. */
 function classesOf(row: Row): string[] {
   return row.node.classes || [];
 }
@@ -268,9 +239,6 @@ function scopeOf(row: Row): string {
             @click="twistyClick(row, $event)"
             >{{ row.children ? (row.open ? "▾" : "▸") : "" }}</span
           >
-          <!-- Rows are drawn by KIND, never by tag: a text node and a fragment
-               anchor both carry `tag: ""`, and guessing from the tag is what
-               used to print a run of `<root>` rows. See `rowKind` in dump.ts. -->
           <template v-if="rowKind(row.node) === 'text'">
             <span class="t-faint">"</span><span class="text">{{ textOf(row) }}</span
             ><span class="t-faint">"</span>
@@ -298,8 +266,6 @@ function scopeOf(row: Row): string {
       ></div>
     </div>
 
-    <!-- Breadcrumbs. Chrome puts them under the tree and so do we: they are the
-         answer to "where am I", and the fastest way back up a deep subtree. -->
     <footer class="crumbs mono">
       <template v-if="crumbs.length">
         <template v-for="(node, i) in crumbs" :key="node.id">

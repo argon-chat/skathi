@@ -1,15 +1,8 @@
-// Vendor-prefixed declarations, dropped from the CSS the builders ship.
+// Vendor-prefixed declarations, dropped from the CSS the builders ship so they are neither shipped nor compiled.
+// Mirrors crates/vn-css/src/prefix.rs, which applies only the `-webkit-` spellings in its WEBKIT_APPLIED list
+// and silently drops the rest; test/css-prefixes.test.ts reads prefix.rs and fails when the lists differ.
 //
-// The runtime half is crates/vn-css/src/prefix.rs: vn-css applies a prefixed
-// declaration only when it is a `-webkit-` spelling in its WEBKIT_APPLIED list
-// and drops every other one (`-moz-`, `-ms-`, `-o-`, and the `-webkit-` ones
-// Chromium ignores or that do nothing here) without an advisory. This module
-// drops the same declarations at build time, so they are neither shipped nor
-// compiled. The list below is a copy of the Rust one;
-// test/css-prefixes.test.ts reads prefix.rs and fails when the two differ.
-//
-// Declarations only: prefixed at-rules (`@-webkit-keyframes`), selectors
-// (`::-webkit-scrollbar`) and values (`display: -webkit-box`) are left alone.
+// Declarations only: prefixed at-rules, selectors and values are left alone.
 
 import postcss, { type Root } from "postcss";
 

@@ -1,12 +1,8 @@
-//! `IMFMediaEngineNotify` — the OS's event callback, and the queue it feeds.
+//! `IMFMediaEngineNotify`: the OS's event callback and the queue it feeds.
 //!
-//! **The one non-negotiable rule here: never touch anything but the queue.**
-//! `EventNotify` is called from a Media Foundation worker thread. A JS handler
-//! can mutate the retained tree and gpui's `Window` is not `Send`, so anything
-//! dispatched from here would be a data race at best. Events go into a mutex'd
-//! `Vec` and are drained on the UI thread inside the frame pump — the same
-//! collect-first / dispatch-after discipline `vn_tree::lottie::tick`
-//! documents.
+//! Never touch anything but the queue here: `EventNotify` runs on a Media Foundation worker thread
+//! and a JS handler can mutate the retained tree. Events go into a mutex'd `Vec` drained on the UI
+//! thread in the frame pump.
 
 use std::sync::{Arc, Mutex};
 
@@ -31,9 +27,7 @@ impl EngineNotify {
 impl IMFMediaEngineNotify_Impl for EngineNotify_Impl {
     fn EventNotify(&self, event: u32, _param1: usize, _param2: u32) -> windows::core::Result<()> {
         if let Ok(mut queue) = self.queue.lock() {
-            // A stalled UI thread must not turn into unbounded growth. 4096
-            // events is minutes of the busiest stream; past that the oldest go,
-            // because the newest are the ones that describe the current state.
+            // Bounds a stalled UI thread's backlog; the newest events describe the current state, so the oldest go.
             if queue.len() >= 4096 {
                 queue.remove(0);
             }
@@ -43,22 +37,15 @@ impl IMFMediaEngineNotify_Impl for EngineNotify_Impl {
     }
 }
 
-/// `MF_MEDIA_ENGINE_EVENT` → [`MediaEvent`].
-///
-/// Microsoft documents every value below 1000 as "events defined in HTML 5 for
-/// media elements", which is why this function is a rename rather than a state
-/// machine. The values above 1000 are MF's own (`MF_MEDIA_ENGINE_EVENT_
-/// FORMATCHANGE`, `..._PURGEQUEUEDEVENTS`, the frame-server and audio-endpoint
-/// notifications) and have no HTML counterpart, so they are dropped here — with
-/// the two exceptions noted below.
+/// `MF_MEDIA_ENGINE_EVENT` → [`MediaEvent`]. Values below 1000 are the HTML 5 set, so this is a
+/// rename; MF's own events above 1000 have no HTML counterpart and are dropped, with two exceptions below.
 pub fn translate(code: u32) -> Option<MediaEvent> {
     Some(match code {
         1 => MediaEvent::LoadStart,
-        // 2 progress / 3 suspend / 4 abort — tier 2, see CONTRACT.md §4.
+        // 2 progress / 3 suspend / 4 abort: not surfaced.
         5 => MediaEvent::Error,
         6 => MediaEvent::Emptied,
-        // 7 stalled — folded into `waiting`, which is the one the spec makes
-        // load-bearing for a buffering UI.
+        // 7 stalled: folded into `waiting`, which a buffering UI relies on.
         7 => MediaEvent::Waiting,
         8 => MediaEvent::Play,
         9 => MediaEvent::Pause,
@@ -83,8 +70,6 @@ pub fn translate(code: u32) -> Option<MediaEvent> {
 mod tests {
     use super::*;
 
-    /// The v1 event set, code by code. This is the table that would silently
-    /// rot if MF's enum and ours ever drifted.
     #[test]
     fn the_html5_range_maps_one_for_one() {
         assert_eq!(translate(1), Some(MediaEvent::LoadStart));

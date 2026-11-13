@@ -110,10 +110,6 @@ describe("the class pipeline", () => {
     expect(rt.advisories()).toEqual([]);
   });
 
-  // m12 item 6: the phase ends on the real event when one arrives, well before
-  // the computed timeout would. That is the difference that matters — a
-  // transition the engine cut short used to hold its phase class for the full
-  // declared duration.
   test("a real transitionend ends the phase before the timer would", async () => {
     const rt = createRuntime();
     const node = el(rt);

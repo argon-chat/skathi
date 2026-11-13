@@ -1,19 +1,13 @@
 //! The JS event loop while the window draws no frames.
 //!
-//! The frame pump ([`crate::pump_frame`]) is an `on_next_frame` callback, so it
-//! runs only when gpui draws, and a minimised window draws nothing: gpui on
-//! Windows parks the window's frame callback on `SIZE_MINIMIZED` and gives it
-//! back on restore. Before this module, everything the pump drives stopped
-//! with it: timers, WebSocket and fetch delivery, IndexedDB results, the voice
-//! and permission queues, and the devtools socket. The Argon client's realtime
-//! socket closed with 1006 after 92 s minimised, and on restore its sleep
-//! watcher (a 10 s timer arriving more than 30 s late) reloaded the app
-//! (research/reports/m26/client-sweep-1.md, finding 4).
+//! The frame pump ([`crate::pump_frame`]) is an `on_next_frame` callback, so it runs only when gpui
+//! draws, and a minimised window draws nothing (gpui on Windows parks its frame callback on
+//! `SIZE_MINIMIZED`). Everything the pump drives would stop with it: timers, WebSocket and fetch
+//! delivery, IndexedDB results, the voice and permission queues, the devtools socket.
 //!
-//! A browser throttles a hidden page but never stops it. So a gpui timer runs
-//! here every [`TICK`], and whenever no frame has been pumped for [`STALL`] it
-//! runs the same JS wave the frame does ([`crate::js_wave`] with
-//! [`crate::Wave::Background`]) and the same flush after it
+//! A browser throttles a hidden page but never stops it. So a gpui timer runs here every [`TICK`],
+//! and whenever no frame has been pumped for [`STALL`] it runs the same JS wave the frame does
+//! ([`crate::js_wave`] with [`crate::Wave::Background`]) and the same flush after it
 //! ([`crate::after_wave`]), minus the animation frames:
 //!
 //! - timers, native tasks (fetch, image decodes), WebSocket events, IndexedDB
@@ -26,27 +20,21 @@
 //! - tree changes are restyled and the window is marked dirty; it is drawn
 //!   when it is shown again.
 //!
-//! The trigger is "no frame for `STALL`", not "minimised": it covers every way
-//! a window stops getting frames (minimised, `SW_HIDE`, a stalled swap chain,
-//! and a window on another virtual desktop, whose frames the pump declines)
-//! with one rule, and while frames arrive the tick costs one `Instant`
-//! comparison. `document.hidden` and `visibilitychange` are not this module's:
-//! they follow the minimise state through gpui's visibility observer, and the
-//! cloak through the funnel this tick runs (src/window.rs).
+//! The trigger is "no frame for `STALL`", not "minimised": one rule covers every way a window stops
+//! getting frames (minimised, `SW_HIDE`, a stalled swap chain, another virtual desktop), and while
+//! frames arrive the tick costs one `Instant` comparison. `document.hidden` and `visibilitychange`
+//! follow the minimise state through gpui's visibility observer, and the cloak through the funnel
+//! this tick runs (src/window.rs).
 //!
-//! **Re-entrancy.** The tick is a gpui foreground task, so it runs from the
-//! message loop, never inside the frame pump (one thread). It stands down when
-//! it finds itself inside a published phase (a nested message loop entered
-//! from a host fn), when the window is mid-update (`update` fails), and after
-//! a caught native panic, exactly like `window::visibility_changed`; after the
-//! panic it opens the crash dialog in the frame pump's place
-//! (src/crash_window.rs).
+//! **Re-entrancy.** The tick is a gpui foreground task, so it runs from the message loop, never
+//! inside the frame pump. It stands down when it finds itself inside a published phase (a nested
+//! message loop entered from a host fn), when the window is mid-update, and after a caught native
+//! panic, like `window::visibility_changed`; after the panic it opens the crash dialog in the
+//! pump's place (src/crash_window.rs).
 //!
-//! **Divergence (doc only).** Chrome aligns a hidden page's timers to 1 s
-//! wake-ups (and chained timers to 1 min after five minutes hidden). Here they
-//! keep a [`TICK`] resolution: a timer is never later than a browser's, and a
-//! socket message waits at most one tick. `requestIdleCallback` waits for the
-//! next drawn frame, where a browser still runs it (late) in a hidden page.
+//! **Divergence.** Chrome aligns a hidden page's timers to 1 s wake-ups. Here they keep a [`TICK`]
+//! resolution, so a timer is never later than a browser's and a socket message waits at most one
+//! tick. `requestIdleCallback` waits for the next drawn frame, where a browser still runs it (late).
 
 use std::cell::Cell;
 use std::time::{Duration, Instant};
@@ -65,8 +53,7 @@ pub const STALL: Duration = Duration::from_millis(250);
 thread_local! {
     /// When the frame pump last ran (its start and its end both stamp it).
     static LAST_FRAME: Cell<Option<Instant>> = const { Cell::new(None) };
-    /// Background waves run so far — read by devtools-free diagnostics and the
-    /// first-takeover log line.
+    /// Background waves run so far, for diagnostics and the first-takeover log line.
     static WAVES: Cell<u64> = const { Cell::new(0) };
     /// Whether the tick is currently standing in for the frame clock, so the
     /// log says so once per hidden period rather than once per tick.

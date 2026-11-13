@@ -1,66 +1,43 @@
-// Text selection: `getSelection()`, `Selection`, `Range` and
-// `document.createRange()` — the JS half of crates/vn-tree/src/selection.rs.
+// Text selection: `getSelection()`, `Selection`, `Range`, `document.createRange()` (the JS half
+// of crates/vn-tree/src/selection.rs).
 //
-// The selection itself lives in the HOST: a drag, a double click, Shift+click
-// and Ctrl+A change it there without a JS round trip, and the host paints it.
-// `Selection` is a view over that state, read on every access through
-// `__vn_selection_get` (one short string) and written through
-// `__vn_selection_set`. A boundary inside an element's OWN text (what Vue's
-// `setElementText` makes; the mirror has no Text child for it) is handed out as
-// a real Text node: the first read turns the own text into one
-// (`materialize`), which renders the same.
+// The selection lives in the host (drags, double click, Shift+click and Ctrl+A change it without
+// a JS round trip); `Selection` reads it on every access through `__vn_selection_get` and writes
+// through `__vn_selection_set`. A boundary in an element's own text (no Text child in the mirror)
+// is handed out as a real Text node by `materialize`.
 //
-// `Range` is a plain JS object over mirror nodes, as in a browser, with two
-// documented differences (docs/RUNTIME.md §5.17): it is STATIC — a DOM
-// mutation does not move its boundaries — and its rects are the boxes of the
-// elements it touches, not of the glyphs. The range a Selection hands out
-// (`getRangeAt(0)`, or the one given to `addRange`) is the selection's own as
-// long as the two agree: changing it changes the selection.
+// `Range` is a plain JS object over mirror nodes but STATIC (DOM mutations do not move it), and
+// its rects are element boxes, not glyph boxes. The range a Selection hands out is the
+// selection's own while the two agree.
 //
-// `selectstart` (cancelable, at the press target) and `selectionchange` (at
-// the document) are host events; runtime.ts dispatches them.
-//
-// runtime.ts calls `installSelection(env)` once. This module reads no ambient
-// name: the host's functions and the runtime's helpers come in through `env`,
-// and without the host's half (`env.host === null`) nothing is installed.
+// `selectstart` and `selectionchange` are host events dispatched by runtime.ts. This module reads
+// no ambient names: everything comes in through `env`, and without `env.host` nothing installs.
 
-/** The host's half (crates/vn-tree/src/selection.rs, "the protocol"). */
 export interface SelectionHost {
   /** `"anchor,anchorOffset,anchorOwn,focus,focusOffset,focusOwn"`, or `""` for none. */
   get(): string;
   /** Anchor and focus as DOM points; anchor 0 empties the selection. Answers whether both were live nodes. */
   set(anchor: number, anchorOffset: number, focus: number, focusOffset: number): boolean;
-  /** `Selection.toString()`: the selected text as it is shown, line breaks and all. */
   text(): string;
 }
 
-/** A mirror node, as far as this module needs one. */
 export interface SelNode {
   __vnId: number;
-  /** 1 element, 2 text, 3 comment. */
   kind: number;
   parentNode: SelNode | null;
   childNodes: SelNode[];
-  /** A text or comment node's data. */
   text?: string;
-  /** An element's own text (exclusive with children). */
   ownText?: string;
 }
 
-/** What the runtime lends: lookups, helpers and the install hooks. */
 export interface SelectionEnv {
   host: SelectionHost | null;
   nodeById(id: number): SelNode | undefined;
   isNode(x: unknown): x is SelNode;
-  /** The app root: what `document.body` stands for. */
   root(): SelNode | null;
-  /** Turns `el`'s own text into a Text child (telling the host); answers that child. */
   materialize(el: SelNode): SelNode | null;
-  /** The border box of an element, as a DOMRect. */
   rect(el: SelNode): DOMRectLike;
-  /** A DOMRect from four numbers. */
   makeRect(x: number, y: number, w: number, h: number): DOMRectLike;
-  /** A new loose Text node / DocumentFragment, as `document.createTextNode` makes them. */
   createText(data: string): SelNode;
   createFragment(): SelNode;
   warn(key: string, msg: string): void;
@@ -80,7 +57,6 @@ export interface DOMRectLike {
   bottom: number;
 }
 
-/** DOM node methods the mutating Range methods call, on mirror nodes that have them. */
 type Mutable = SelNode & {
   data: string;
   insertBefore(node: unknown, ref: unknown): unknown;
@@ -96,7 +72,6 @@ export function installSelection(env: SelectionEnv): void {
 
   const isText = (n: SelNode) => n.kind === 2 || n.kind === 3;
   const indexOf = (n: SelNode) => (n.parentNode ? n.parentNode.childNodes.indexOf(n) : 0);
-  /** An element with own text, given a real Text child first (a no-op for anything else). */
   const real = (n: SelNode): SelNode => {
     if (n.kind === 1 && n.ownText && !n.childNodes.length) env.materialize(n);
     return n;
@@ -111,12 +86,11 @@ export function installSelection(env: SelectionEnv): void {
     const root = env.root();
     return !!root && rootOf(n) === root;
   };
-  /** Is `a` an inclusive ancestor of `b`? */
   const holds = (a: SelNode, b: SelNode | null) => {
     for (let n = b; n; n = n.parentNode) if (n === a) return true;
     return false;
   };
-  /** -1, 0 or 1: where (an, ao) is relative to (bn, bo) (DOM §5.2, "position of a boundary point"). */
+  /** -1, 0 or 1: where (an, ao) lies relative to (bn, bo). */
   const compare = (an: SelNode, ao: number, bn: SelNode, bo: number): number => {
     if (an === bn) return Math.sign(ao - bo);
     if (holds(an, bn)) {
@@ -138,7 +112,6 @@ export function installSelection(env: SelectionEnv): void {
     while (ca[i] === cb[i]) i++;
     return indexOf(ca[i]) < indexOf(cb[i]) ? -1 : 1;
   };
-  /** A boundary argument, checked as `setStart` checks it (DOM §5.5). */
   const point = (node: unknown, offset: unknown, method: string, iface: string): Point => {
     if (!env.isNode(node)) {
       throw new TypeError(`Failed to execute '${method}' on '${iface}': parameter 1 is not of type 'Node'.`);
@@ -159,9 +132,6 @@ export function installSelection(env: SelectionEnv): void {
     return [p, indexOf(node) + (after ? 1 : 0)];
   };
 
-  // ---- Range ----------------------------------------------------------------
-
-  /** The selection whose range a Range currently is (see `Selection.getRangeAt`). */
   const owners = new WeakMap<RangeImpl, SelectionImpl>();
 
   class RangeImpl {
@@ -204,7 +174,6 @@ export function installSelection(env: SelectionEnv): void {
       return a ?? this._sc;
     }
 
-    /** DOM "set the start or end", then the selection this range is, if any. */
     private put(start: boolean, [n, o]: Point) {
       if (start) {
         this._sc = n;
@@ -312,7 +281,6 @@ export function installSelection(env: SelectionEnv): void {
       return r;
     }
     detach() {}
-    /** DOM's: the data of the Text nodes in the range, joined — no line breaks, hidden text included. */
     toString() {
       const { _sc: sc, _so: so, _ec: ec, _eo: eo } = this;
       if (sc === ec && isText(sc)) return sc.kind === 2 ? (sc.text ?? "").slice(so, eo) : "";
@@ -321,10 +289,7 @@ export function installSelection(env: SelectionEnv): void {
       if (ec.kind === 2) out += (ec.text ?? "").slice(0, eo);
       return out;
     }
-    /**
-     * The boxes of the elements the range touches: a whole element's is
-     * exact, a part of a text's is its element's (no glyph boxes here).
-     */
+    /** Element boxes, not glyph boxes: a part of a text gives its element's rect. */
     getClientRects() {
       const out: DOMRectLike[] = [];
       const seen = new Set<SelNode>();
@@ -361,7 +326,6 @@ export function installSelection(env: SelectionEnv): void {
       }
       return env.makeRect(l, t, r - l, b - t);
     }
-    /** DOM's deleteContents, for ranges whose partly-contained nodes are texts or the container itself. */
     deleteContents() {
       if (this.collapsed) return;
       const { _sc: sc, _so: so, _ec: ec, _eo: eo } = this;
@@ -385,7 +349,6 @@ export function installSelection(env: SelectionEnv): void {
       this._so = this._eo = next[1];
       this.sync();
     }
-    /** The contained nodes MOVED into a fragment; texts cut at the ends become new Text nodes. */
     extractContents() {
       const frag = env.createFragment() as Mutable;
       if (this.collapsed) return frag;
@@ -404,10 +367,6 @@ export function installSelection(env: SelectionEnv): void {
       if (tail) frag.appendChild(tail);
       return frag;
     }
-    /**
-     * A copy of the range's TEXT, as one Text node: the retained tree has no
-     * copy operation for elements (`cloneNode` is not implemented either).
-     */
     cloneContents() {
       const frag = env.createFragment() as Mutable;
       if (!this.collapsed) {
@@ -435,7 +394,6 @@ export function installSelection(env: SelectionEnv): void {
         if (so === 0) ref = sc;
         else if (so >= (sc.text ?? "").length) ref = parent.childNodes[indexOf(sc) + 1] ?? null;
         else {
-          // DOM splits the text at the boundary.
           const tail = env.createText((sc.text ?? "").slice(so));
           (sc as Mutable).data = (sc.text ?? "").slice(0, so);
           (parent as Mutable).insertBefore(tail, parent.childNodes[indexOf(sc) + 1] ?? null);
@@ -469,7 +427,6 @@ export function installSelection(env: SelectionEnv): void {
   }
   Object.defineProperty(RangeImpl, "name", { value: "Range" });
 
-  /** The nodes wholly inside `r`, in tree order, none whose parent is also wholly inside (DOM "contained"). */
   function contained(r: RangeImpl): SelNode[] {
     const out: SelNode[] = [];
     const common = r.commonAncestorContainer;
@@ -505,9 +462,6 @@ export function installSelection(env: SelectionEnv): void {
     }
   }
 
-  // ---- Selection ------------------------------------------------------------
-
-  /** The host's selection, with own-text boundaries made real. */
   function read(): [SelNode, number, SelNode, number] | null {
     let raw = host!.get();
     if (!raw) return null;
@@ -675,7 +629,6 @@ export function installSelection(env: SelectionEnv): void {
       if (!env.isNode(node) || !this.rangeCount) return false;
       const r = this.getRangeAt(0);
       if (rootOf(node) !== rootOf(r._sc)) return false;
-      // The node's first and last boundary points: (node, 0) and (node, length).
       const len = lengthOf(node);
       if (!allowPartial) return compare(r._sc, r._so, node, 0) <= 0 && compare(r._ec, r._eo, node, len) >= 0;
       return compare(r._sc, r._so, node, len) <= 0 && compare(r._ec, r._eo, node, 0) >= 0;

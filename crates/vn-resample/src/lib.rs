@@ -1,12 +1,9 @@
-//! The pixel kernel behind `vn-tree`'s downscaled image copies
-//! (`vn_tree::resample`, which decides when a copy is made and keeps them).
+//! The pixel kernel behind `vn-tree`'s downscaled image copies (`vn_tree::resample` decides when a
+//! copy is made).
 //!
-//! It lives in a crate of its own so the workspace's dev profile can give it
-//! `opt-level = 3` (the root `Cargo.toml`). The work is per pixel, and
-//! `image::imageops::resize` is generic, so it is compiled in whichever crate
-//! calls it. Called from `vn-tree`, it ran unoptimised in every debug build:
-//! one image took 659 ms on the painting thread
-//! (research/reports/m26/perf-mem-1.md).
+//! It lives in a crate of its own so the workspace's dev profile can give it `opt-level = 3`:
+//! `image::imageops::resize` is generic, so it is compiled in whichever crate calls it, and from
+//! `vn-tree` it ran unoptimised in debug builds (one image took 659 ms on the painting thread).
 
 /// `w` × `h` pixels of 4 bytes, BGRA or RGBA (the channel order does not
 /// matter here), filtered down to `tw` × `th`. Straight alpha unless
@@ -14,12 +11,10 @@
 pub fn downscale(bytes: &[u8], w: u32, h: u32, tw: u32, th: u32, premultiplied: bool) -> Vec<u8> {
     use image::{imageops, ImageBuffer, Rgba};
     let (tw, th) = (tw.clamp(1, w.max(1)), th.clamp(1, h.max(1)));
-    // First a k×k box average, k the largest power of two that leaves the
-    // image at least twice the target (2×2 box steps, as a mipmap chain makes
-    // them, done in one pass), so Lanczos has a ratio under 4 left to cover.
-    // In integers straight off the bytes, premultiplied, so the filter weighs
-    // colour by coverage: this pass reads every source pixel, and it is most of
-    // the cost.
+    // First a k×k box average, k the largest power of two that leaves the image at least twice the
+    // target (a mipmap chain's 2×2 steps in one pass), so Lanczos has a ratio under 4 left. In
+    // integers off the bytes, premultiplied so the filter weighs colour by coverage; this pass
+    // reads every source pixel and is most of the cost.
     let mut k = 1u32;
     while w / (k * 2) >= tw * 2 && h / (k * 2) >= th * 2 && k < 128 {
         k *= 2;
@@ -154,9 +149,8 @@ mod tests {
         best
     }
 
-    /// The avatar case `vn_tree::resample::SYNC_PIXELS` is sized by, and a
-    /// banner drawn at half size, where Lanczos does all the work. The budget
-    /// holds in a debug build too: that is what the dev profile entry is for.
+    /// The avatar case `vn_tree::resample::SYNC_PIXELS` is sized by, and a banner drawn at half
+    /// size, where Lanczos does all the work. The budget holds in a debug build too.
     #[test]
     fn an_avatar_and_a_banner_downscale_quickly() {
         let avatar = checker(1080, 1080);

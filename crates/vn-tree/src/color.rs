@@ -1,6 +1,6 @@
-//! The generated swatch inside a color input. The originating element owns
-//! focus, keyboard activation and its cancellable DOM click; the runtime opens
-//! the picker only after that click's handlers have run.
+//! The generated swatch inside a color input. The originating element owns focus, keyboard
+//! activation and its cancellable DOM click; the runtime opens the picker only after that click's
+//! handlers have run.
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Div, Length, Refineable, StyleRefinement, Window};
 

@@ -1,27 +1,6 @@
-// A fixture for packages/vn-test/specs/blob-url.spec.ts (m25 desktop track B,
-// research/reports/m25/desktop-b-impl.md): `URL.createObjectURL(blob)` into an
-// <img>, the browser's ordinary preview idiom, on the real host.
-//
-// Three images:
-//
-// - `#live`: a red 8×8 PNG built from bytes in memory, behind a blob: URL
-//   that stays alive. vn-tree must resolve it through redjs's store and paint
-//   red.
-// - `#revoked`: the same bytes behind a URL that is revoked BEFORE the <img>
-//   ever sees it. A browser shows a broken image; so must this, with one
-//   advisory that says the URL is not in the store.
-// - `#sliced`: the PNG behind a slice of a larger Blob (junk in front), so
-//   the URL names a window, not the whole of its bytes.
-//
-// `__VN_TEST_BLOB__` publishes what the spec reads back over eval (GLOBAL
-// scope, as in the other fixtures): the URLs, how a fetch() of the live one
-// settled, and what redjs's own image loaders made of the same URLs: an
-// offscreen `new Image()` (`src` = blob:) and `createImageBitmap` of a URL
-// string and of a Blob. Those go through redjs's store, not vn-tree's walk.
 import { createApp, h, onMounted, ref } from "vue-native";
 
-/** The slice of redjs's offscreen image and bitmap API this fixture uses.
- *  The app tier-1 types do not declare it, since no app has needed it yet. */
+/** The app tier-1 types do not declare it, since no app has needed it yet. */
 type OffscreenImage = {
   onload: (() => void) | null;
   onerror: (() => void) | null;
@@ -54,7 +33,6 @@ const sliced = URL.createObjectURL(new Blob([junk, png]).slice(junk.length));
 const results: Record<string, string> = {};
 (globalThis as unknown as { __VN_TEST_BLOB__: unknown }).__VN_TEST_BLOB__ = { live, revoked, sliced, results };
 
-/** `new Image()` with `src` = url: "load|w|h|complete", or "error". */
 function loadImage(url: string): Promise<string> {
   return new Promise((done) => {
     const i = new images.Image();
@@ -64,7 +42,6 @@ function loadImage(url: string): Promise<string> {
   });
 }
 
-/** `createImageBitmap(source)`: "w|h", or the rejection's name. */
 async function bitmap(source: unknown): Promise<string> {
   try {
     const b = await images.createImageBitmap(source);

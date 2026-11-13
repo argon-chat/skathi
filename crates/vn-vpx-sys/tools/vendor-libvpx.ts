@@ -22,8 +22,7 @@
  *     `#include "..."` (other architectures' headers excepted), and the
  *     licence files into a fresh `libvpx/`. Nothing in it is edited.
  *
- * The output is deterministic: re-running it on the same release must leave
- * `git status` clean. That is the audit.
+ * The output is deterministic: re-running it on the same release must leave `git status` clean.
  */
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";

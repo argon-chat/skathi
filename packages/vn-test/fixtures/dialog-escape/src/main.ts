@@ -1,34 +1,3 @@
-// A fixture for packages/vn-test/specs/dialog-escape.spec.ts (docs/RUNTIME.md
-// §5.21): Escape closes a dialog opened from a context menu.
-//
-// Argon's report dialog, in reka-ui's shapes, written out so the spec does not
-// depend on reka:
-//
-// * `#tag` is a tooltip trigger (reka's TooltipTrigger): focusable, its `focus`
-//   opens `#tip` unless a press is under way, its `blur` and `pointerdown`
-//   close it. Inside `#row`, whose cancelled `contextmenu` opens `#menu`.
-// * `#menu` is a menu content (reka's MenuContent): on mount its FocusScope
-//   remembers `document.activeElement` and focuses the menu. `#report` closes
-//   it; it stays mounted for its exit animation (`EXIT_MS`), and when it
-//   unmounts, its FocusScope hands the focus back to what it remembered, from
-//   a `setTimeout(0)`, as reka's does.
-// * `#dialog` opens `OPEN_DELAY_MS` after `#report`, as Argon's member menu
-//   does. Its FocusScope traps the focus: a `focusout` towards outside the
-//   dialog, or a `focusin` outside it, focuses the last node inside again.
-// * Every open `#tip`, `#menu` and `#dialog` is a dismissable layer (reka's
-//   DismissableLayer): a `window` `keydown` listener that closes it on
-//   Escape when it is the highest layer, the last one opened.
-// * `#outside` is a focusable button outside the dialog, for a press that the
-//   trap has to undo.
-//
-// So the focus that the menu hands back to `#tag` arrives while the dialog
-// traps it. In a browser the trap's `focusout` handler takes the focus back
-// before `#tag` hears anything. The tooltip stays closed, and the dialog is
-// the highest layer when Escape comes.
-//
-// `__VN_TEST_ESCAPE__` holds `log` (`<event>:<id>` for the focus events of
-// `#tag` and `#outside`, and `escape:<layer>`), `layers` (the stack, lowest
-// first) and `active` (`document.activeElement`'s id, read on demand).
 import { createApp, h, nextTick, onMounted, onUnmounted, ref } from "vue-native";
 
 const EXIT_MS = 250;
@@ -47,7 +16,6 @@ const menuOpen = ref(false);
 const menuMounted = ref(false);
 const dialogOpen = ref(false);
 
-/** reka's DismissableLayer: the stack, and Escape for the highest layer only. */
 function useLayer(name: string, close: () => void) {
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== "Escape" || out.layers[out.layers.length - 1] !== name) return;
@@ -64,7 +32,6 @@ function useLayer(name: string, close: () => void) {
   });
 }
 
-/** reka's FocusScope: remember, focus, and (trapped) keep the focus inside; hand it back on unmount. */
 function useFocusScope(name: string, container: () => HTMLElement | null, first: () => HTMLElement | null, trapped: boolean) {
   let previous: HTMLElement | null = null;
   let last: HTMLElement | null = null;
@@ -182,7 +149,6 @@ const Menu = {
 function closeMenu() {
   if (!menuOpen.value) return;
   menuOpen.value = false;
-  // Presence: the content stays until its exit animation ends.
   setTimeout(() => (menuMounted.value = false), EXIT_MS);
 }
 

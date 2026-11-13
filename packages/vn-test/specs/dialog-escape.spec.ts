@@ -1,18 +1,5 @@
-// Escape closes a dialog opened from a context menu (docs/RUNTIME.md §5.21,
-// packages/vue-native/src/runtime.ts `focusMoved`, crates/vn-tree/src/render.rs
-// `focus_transition`).
-//
-// Argon's report dialog, opened from a member's context menu, did not close on
-// Escape. Its menu hands the focus back to what it remembered, a tooltip
-// trigger, once its exit animation ends, and by then the dialog is open and
-// traps the focus. In a browser the trap's `focusout` handler takes the focus
-// back before the trigger hears anything. Here the trigger still heard
-// `focus` and `focusin`, so its tooltip opened above the dialog. The tooltip
-// was then the highest dismissable layer, and the first Escape went to it.
-//
-//   bun test packages/vn-test/specs/dialog-escape.spec.ts
-//
-// Real presses and keys through gpui (devtools `mouse` / `key`).
+// In a browser the trap's `focusout` handler takes the focus back before the trigger hears
+// anything.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { expect, launch } from "../src/index";
@@ -37,18 +24,8 @@ const state = async () =>
     ),
   ) as { log: string[]; layers: string[]; active: string };
 
-/** What the log holds from the dialog's mount on. */
 const sinceDialog = (log: string[]) => log.slice(log.findIndex((l) => l.startsWith("scope:dialog remembers")));
 
-/**
- * The context menu from the keyboard on the focused tooltip trigger, then
- * Report: the dialog is open and the menu gone.
- *
- * In Argon a right press opens the menu. The Menu key on a node that already
- * has the focus opens the same menu with the same remembered node, here and
- * in a browser, and does not depend on when a press's focus is reported
- * (that is `specs/focus-press.spec.ts`, docs/RUNTIME.md §5.22).
- */
 async function openDialog(): Promise<void> {
   await app.eval("__VN_TEST_ESCAPE__.log.length = 0");
   await app.locator("#tag").focus();
@@ -58,7 +35,6 @@ async function openDialog(): Promise<void> {
   await expect(app.locator("#menu")).toHaveCount(1);
   await app.locator("#report").click({ real: true });
   await expect(app.locator("#dialog")).toHaveCount(1);
-  // The menu's exit (250 ms), then its FocusScope's `setTimeout(0)`.
   await expect(app.locator("#menu")).toHaveCount(0);
   await sleep(300);
 }
@@ -67,13 +43,9 @@ describe("a dialog opened from a context menu", () => {
   test("the focus handed back to the menu's trigger never reaches it, and Escape closes the dialog", async () => {
     await openDialog();
     const open = await state();
-    // The path under test: the press focused `#tag`, the menu remembered it
-    // and, after the dialog opened, handed the focus back to it.
     bunExpect(open.log).toContain("scope:menu remembers tag");
     const after = sinceDialog(open.log);
     bunExpect(after).toContain("scope:menu returns to tag");
-    // Chromium: the trap's `focusout` handler wins, `#tag` hears nothing,
-    // and the tooltip stays closed.
     bunExpect(after.filter((l) => l.endsWith(":tag"))).toEqual([]);
     bunExpect(open.layers).toEqual(["dialog"]);
     bunExpect(open.active).toBe("dlg-btn");
@@ -90,9 +62,6 @@ describe("a dialog opened from a context menu", () => {
     await app.locator("#outside").click({ real: true });
     await sleep(300);
     const s = await state();
-    // The host's move: `blur` on the dialog's button names `#outside` as its
-    // `relatedTarget`, the trap takes the focus back from `focusout`, and
-    // the move to `#outside` is abandoned, as in Chromium.
     bunExpect(s.log.filter((l) => l.endsWith(":outside"))).toEqual([]);
     bunExpect(s.active).toBe("dlg-btn");
     await app.press("Escape");

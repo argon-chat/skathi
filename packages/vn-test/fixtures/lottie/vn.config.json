@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/lottie.spec.ts: <lottie> loaded and drawn off the UI thread (crates/vn-tree/src/lottie.rs, crates/vn-lottie/CONTRACT.md §8.10). See ../README.md.",
-
   "name": "vn-test-lottie",
 
   "window": {

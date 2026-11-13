@@ -1,11 +1,4 @@
-// A chat composer's key handling against a text field's default action (m26
-// client sweep #8, docs/RUNTIME.md §5.8).
-//
-// A keydown handler's Vue patch is a microtask. A browser runs it at the
-// checkpoint after the keydown event, BEFORE the field inserts the key. The
-// host now leaves a listener's checkpoint for after gpui's dispatch, except
-// in a text field, where it is settled before the widget acts. `mode` picks
-// what the keydown handler does; `__VN_TEST_COMPOSER__.sent` records sends.
+// A browser runs it at the checkpoint after the keydown event, BEFORE the field inserts the key.
 import { createApp, h, ref } from "vue-native";
 
 const text = ref("");
@@ -13,7 +6,6 @@ const showVictim = ref(true);
 const state = {
   mode: "send" as "send" | "clear" | "upper",
   sent: [] as string[],
-  /** focus / blur on #other and #victim, and what `document.activeElement` read in the mousedown. */
   focusLog: [] as string[],
 };
 (globalThis as { __VN_TEST_COMPOSER__?: unknown }).__VN_TEST_COMPOSER__ = {
@@ -31,15 +23,12 @@ const logFocus = (e: FocusEvent) => state.focusLog.push(`${e.type}-${(e.target a
 
 function onKeydown(e: KeyboardEvent) {
   if (state.mode === "send" && e.key === "Enter") {
-    // Enter-to-send: cancel the newline, send, clear.
     e.preventDefault();
     state.sent.push(text.value);
     text.value = "";
   } else if (state.mode === "clear" && e.key === "Enter") {
-    // Clear WITHOUT cancelling: a browser clears, then inserts the newline.
     text.value = "";
   } else if (state.mode === "upper" && e.key === "x") {
-    // Rewrite the value, and let the key through: "ABC" then "x".
     text.value = text.value.toUpperCase();
   }
 }
@@ -56,12 +45,8 @@ createApp({
           onKeydown,
         }),
         h("button", { id: "other", tabindex: 0, onFocus: logFocus, onBlur: logFocus }, "other"),
-        // `@mousedown.prevent`: the press keeps the caret where it is (a mention
-        // list, a toolbar button). One focusable, one not.
         h("button", { id: "keep", tabindex: 0, onMousedown: (e: MouseEvent) => e.preventDefault() }, "keep"),
         h("div", { id: "keep-plain", onMousedown: (e: MouseEvent) => e.preventDefault() }, "keep-plain"),
-        // A press whose own handler hides the target from a microtask (a reka
-        // DismissableLayer closing on pointerdown-outside has this shape).
         showVictim.value
           ? h(
               "button",

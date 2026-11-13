@@ -1,20 +1,12 @@
-// `<iframe>`: the wire form of a `postMessage` payload.
+// Wire form of a `postMessage` payload between the host and the platform webview (another
+// process). Structured-clone subset: JSON types, `undefined`, non-finite numbers, bigint, Date,
+// ArrayBuffer and views, Map, Set, plain objects and arrays; class instances cross as plain
+// objects. Functions, symbols, DOM nodes and cycles throw `DataCloneError` in the sender.
 //
-// An iframe's document lives in a platform webview (crates/vn-webview), in
-// another process, so `contentWindow.postMessage(data)` and the game's
-// `window.parent.postMessage(data)` cross as text. This is the structured
-// clone subset the two sides agree on (research/reports/m26/
-// iframe-webview-requirements-2026-11-12.md, R2.3): JSON's types, `undefined`,
-// non-finite numbers, bigint, Date, ArrayBuffer and its views, Map, Set, plain
-// objects and arrays; a class instance crosses as a plain object. A function, a
-// symbol, a DOM node or a cycle is a `DataCloneError` in the SENDER,
-// synchronously, as in a browser (which does clone cycles: the one difference).
+// crates/vn-webview/src/relay.js carries the same codec by hand; test/iframe-codec.test.ts
+// runs every case through both.
 //
-// The relay page inside the webview carries the same codec, written out by
-// hand in plain JS (crates/vn-webview/src/relay.js). The two are held together
-// by test/iframe-codec.test.ts, which runs every case through both.
-//
-// Encoded form: a JSON value in which every non-primitive is a tagged array.
+// Every non-primitive is a tagged array:
 //
 //   null, boolean, string, finite number      themselves
 //   ["u"]                                     undefined
@@ -93,7 +85,6 @@ export function fromBase64(text: string): Uint8Array {
   return out;
 }
 
-/** What a browser throws from `postMessage` for a value it cannot clone. */
 function cloneError(what: string): Error {
   const message = `Failed to execute 'postMessage': ${what} could not be cloned.`;
   if (typeof DOMException === "function") return new DOMException(message, "DataCloneError");
@@ -111,7 +102,6 @@ function describe(v: unknown): string {
 
 type Wire = null | boolean | number | string | unknown[];
 
-/** The wire form of `value`. Throws `DataCloneError` for what cannot cross. */
 export function encodeMessage(value: unknown, isPlatformObject?: (v: object) => boolean): Wire {
   const open = new Set<object>();
   const enc = (v: unknown): Wire => {
@@ -132,8 +122,7 @@ export function encodeMessage(value: unknown, isPlatformObject?: (v: object) => 
     }
     if (v === null) return null;
     const obj = v as object;
-    // A cycle. A browser clones cycles; a text channel cannot name the shared
-    // node without an id table on both sides, and no caller sends one.
+    // A browser clones cycles; a text channel cannot without an id table on both sides.
     if (open.has(obj)) throw cloneError("An object with a cycle");
     if (obj instanceof Date) {
       const ms = obj.getTime();
@@ -162,9 +151,7 @@ export function encodeMessage(value: unknown, isPlatformObject?: (v: object) => 
         for (const item of obj) items.push(enc(item));
         return ["s", items];
       }
-      // Any other object crosses as its own enumerable properties, its class
-      // left behind, as a browser's clone does. A platform object (a DOM node)
-      // is what a browser refuses.
+      // Class left behind, as in a browser's clone; a platform object (DOM node) is refused.
       if (isPlatformObject?.(obj)) throw cloneError(describe(obj));
       const entries: Wire[] = [];
       for (const k of Object.keys(obj)) entries.push([k, enc((obj as Record<string, unknown>)[k])]);
@@ -176,7 +163,6 @@ export function encodeMessage(value: unknown, isPlatformObject?: (v: object) => 
   return enc(value);
 }
 
-/** The value a wire form stands for. A malformed one is a `TypeError`: it did not come from `encodeMessage`. */
 export function decodeMessage(wire: unknown): unknown {
   if (wire === null || typeof wire !== "object") return wire;
   if (!Array.isArray(wire)) throw new TypeError("iframe message: not a wire value");

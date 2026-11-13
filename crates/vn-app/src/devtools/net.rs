@@ -1,130 +1,21 @@
-//! The Network panel's feed: a `fetch` / `WebSocket` / `XMLHttpRequest` tee,
-//! recorded in JS, plus (m26) the DETAILS behind each row: headers, bodies,
-//! cookies, timing.
+//! The Network panel's feed: `fetch` / `WebSocket` / `XMLHttpRequest` are teed in JS (`TEE_JS`) and
+//! recorded here in a bounded ring, with a detail record per exchange (headers, bodies, cookies,
+//! timing) served on demand by `net_detail`.
 //!
-//! ## Where the hook lives, and why it is in JS
+//! The tee only adds a reader: the app keeps its own `Response`, promise and socket. A host whose app
+//! has the devtools off never installs it.
 //!
-//! redjs' `fetch` runs on a worker thread and settles its promise on the pump;
-//! its `WebSocket` runs a socket thread per connection. Instrumenting either in
-//! Rust means a hook in the vendored engine, a second place for a request to be
-//! described, and a fork patch to carry — for a feature whose whole content is
-//! *"what did the app ask for, and what came back"*, which is information the
-//! JS side already has in full.
+//! The ring survives `location.reload()` and the dev host's cold restart (same JS realm): seqs keep
+//! counting and [`mark_reload`] puts a marker row between the runs. The `WebSocket` tee also wraps
+//! `__VN_NATIVE_SCHED__.WebSocket`, so each new runtime's proxy sits over it.
 //!
-//! So the tee is JS, installed exactly like the `console.*` tee beside it
-//! (`super::CONSOLE_TEE_JS`) and for the same reason: it ADDS a reader and
-//! changes nothing an app can observe. `fetch` keeps its arguments, its
-//! `Response`, its rejection and its `AbortSignal`; the only difference is one
-//! more `.then` link in the chain, which is not observable from the app. The
-//! `WebSocket` wrapper returns the real socket (a constructor that returns an
-//! object returns THAT object) and keeps `WebSocket.prototype`, so `instanceof`
-//! and every property still answer as before.
+//! Script cannot see `Cookie` / `Set-Cookie`, so the host reads the jar (`webapi::cookies`): the
+//! `Cookie` header and a before/after diff (a reconstruction; a concurrent request to the same site
+//! lands in the same jar). A fetch that crossed a network also answers the real lines from
+//! `fetch::net_info`. Nothing hands a cookie to JS; values leave only through the token-guarded
+//! `net_detail`.
 //!
-//! Divergence, stated rather than hidden: `globalThis.fetch !== <the engine's
-//! own fetch>` while the devtools are on, `WebSocket.prototype.send` and (when
-//! the engine has one) `XMLHttpRequest.prototype.{open,send,setRequestHeader}`
-//! are wrappers too, and `WebSocket.name` reads `"WebSocket"` because it is set
-//! explicitly. A host whose app has the devtools OFF never installs any of it
-//! (`super::install_tees_once`).
-//!
-//! ## Where the entries live
-//!
-//! A bounded ring (like the log ring, and for the identical reason: an app that
-//! polls an endpoint must not grow the process), plus a small pending queue the
-//! push channel drains once per frame. The ring is what a client that has just
-//! attached reads with the `net` command; the queue is what a client that is
-//! already attached is told without asking.
-//!
-//! ## Across a reload
-//!
-//! `location.reload()` and the dev host's cold restart run the app again in the
-//! same JS realm (`crate::reload`), and the runtime evaluated next puts its own
-//! classes on the global (1a84b39). The ring is the host's, so it simply goes
-//! on: seqs keep counting, and the host puts a `kind: "reload"` marker row
-//! ([`mark_reload`]) between the old app's unload and the new bundle. The tee
-//! itself is installed once per process and has to stay underneath what each
-//! new runtime installs:
-//!
-//! - `fetch`: the runtime does not wrap it, and the unload keeps globals that
-//!   predate the first runtime, so the teed `fetch` stays.
-//! - `XMLHttpRequest`: the tee is on the engine's prototype, which no runtime
-//!   replaces.
-//! - `WebSocket`: each runtime sets the global to a new realm proxy over the
-//!   class the FIRST runtime found (`__VN_NATIVE_SCHED__.WebSocket` in
-//!   runtime.ts). At boot the tee is installed before any runtime, so that
-//!   class is the tee. A tee installed later (`appDevtools.enable()`) wraps
-//!   that record too, so from the first reload on it is in the same place.
-//!   Its listeners are added through `EventTarget.prototype.addEventListener`,
-//!   not the proxy's own per-socket method, so they still hear the close
-//!   when a reload shuts the old app's sockets.
-//!
-//! ## The details, and what they cost (m26)
-//!
-//! A row is a SUMMARY: URL, method, status, time. Clicking one in the panel asks
-//! for the rest with `net_detail <seq>` — on demand, so a body never rides the
-//! push channel and an inspector that never clicks pays nothing for it.
-//!
-//! The rest is kept HERE, in Rust, not in the app's JS heap: a [`Record`] per
-//! exchange, keyed by a record id (`rid`) the tee gets from
-//! `__vn_devtools_net_begin` when the request starts. A summary row carries its
-//! `rid`, and that is how a seq finds its record. (A seq cannot be the key: seqs
-//! are handed out when a row is RECORDED, which is when the response arrives,
-//! and the request body exists long before that. Reserving a seq at start would
-//! put the ring out of order and break `since` paging.)
-//!
-//! Memory, all of it bounded, in the order it is spent:
-//!
-//! | what | bound |
-//! |---|---|
-//! | summaries | [`CAPACITY`] = 300 rows (~300 B each) |
-//! | records | one per summary still in the ring, plus at most [`OPEN_CAP`] = 128 in flight |
-//! | per-record meta (headers, form fields, timing, cookies) | [`META_CAP`] = 16 KiB, then only small updates land |
-//! | per-record raw `Set-Cookie` lines | [`WIRE_COOKIES_CAP`] = 16 KiB, at most 32 lines |
-//! | one body | [`BODY_CAP`] = 256 KiB — the rest is cut, and the panel says "truncated" |
-//! | ALL bodies | [`BODY_BUDGET`] = 12 MiB. Past it the OLDEST bodies are evicted first; their record keeps its headers and says "body evicted" |
-//!
-//! So the bodies of roughly the most recent 24 (all at the cap) to several
-//! hundred (typical API payloads) exchanges are kept, and the worst case for
-//! the whole module is ~12 MiB of bodies + ~7 MiB of meta (+ ~7 MiB of raw
-//! Set-Cookie lines in the pathological case of every response carrying 16 KiB
-//! of them).
-//!
-//! ## The connection (m26, redjs f1e563c)
-//!
-//! For a response that came off the network, redjs's `fetch::net_info` says
-//! which protocol it used (`h2` / `http/1.1`), which connection (a
-//! process-unique id; equal ids shared one), whether that connection had
-//! carried an earlier request, and the remote address. The tee hands the app's
-//! `Response` to `__vn_devtools_net_conn` just before it records the row; the
-//! host stores the facts on the record, splices `proto` / `conn` / `reused`
-//! into the summary row (the list's Protocol and Connection columns), and
-//! answers `transport` from them in `net_detail`. The pooled transport's
-//! counters (`http::pool::stats`) ride the `net` reply and the push as `pool`.
-//!
-//! What the TEE spends, in the app's heap, is transient: a capped copy of a body
-//! while it is being handed over, never a ring of them. See `TEE_JS` for the
-//! read rules (what is skipped and why).
-//!
-//! ## Cookies
-//!
-//! Neither `Cookie` nor `Set-Cookie` is visible to script — Fetch forbids it,
-//! and redjs strips `Set-Cookie` before a `Response` exists
-//! (`webapi::fetch::settle`). The jar (`webapi::cookies`) is the one place they
-//! are known, so the HOST reads it, never the tee: when a request with
-//! `credentials: "include"` (or a WebSocket handshake) starts, the record takes
-//! the jar's view of that URL — the `Cookie` header it is about to send — and
-//! when the response head is in, a second view, whose difference is what the
-//! response's `Set-Cookie` did. That is a reconstruction and the reply says so:
-//! a concurrent request to the same site lands in the same jar.
-//!
-//! Since redjs f1e563c the transport keeps the final hop's `Set-Cookie` lines
-//! exactly as received, for the embedder (`NetInfo::set_cookies`), so a fetch
-//! that crossed a network answers `cookies.wire` — the real lines, whatever
-//! the credentials mode — and the panel shows those instead. The jar diff stays
-//! for what has no `Response` to ask: a WebSocket handshake, an XHR.
-//!
-//! Nothing here hands a cookie to JS — `HttpOnly` stays HttpOnly; the values
-//! only leave through the token-guarded `net_detail`.
+//! Memory is bounded: see the `*_CAP` constants and [`BODY_BUDGET`].
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -137,27 +28,18 @@ use vn_runtime::{host_fn, JsRuntime};
 
 use crate::json::{self, Json, Raw};
 
-/// How many exchanges are remembered. 300 covers a page's whole boot plus a
-/// long interactive session; a poll-every-second app fills it in five minutes,
-/// which is the point at which the oldest one has stopped being interesting.
 const CAPACITY: usize = 300;
-/// One body, request or response. Keep in step with `CAP` in `TEE_JS`.
+/// One body. Keep in step with `CAP` in `TEE_JS`.
 pub(crate) const BODY_CAP: usize = 256 * 1024;
-/// Every body held, together. Oldest evicted first.
 pub(crate) const BODY_BUDGET: usize = 12 * 1024 * 1024;
-/// One record's headers, form fields, timing and the like, as JSON text.
 const META_CAP: usize = 16 * 1024;
-/// Records that were begun but have no summary row yet: requests in flight, or
-/// a request whose promise never settled.
+/// Records begun with no summary row yet (in flight, or never settled).
 const OPEN_CAP: usize = 128;
-/// Cookies read out of the jar per snapshot.
 const JAR_CAP: usize = 64;
 const COOKIE_HEADER_CAP: usize = 8 * 1024;
 const SET_COOKIE_LINES_CAP: usize = 32;
-/// One raw `Set-Cookie` line as the transport received it (a cookie is at most
-/// 4096 bytes of name + value, RFC 6265bis §5.6; the rest is attributes)…
+/// One raw `Set-Cookie` line: a cookie is at most 4096 bytes of name + value, plus attributes.
 const WIRE_LINE_CAP: usize = 4096 + 512;
-/// …and all of one response's lines together.
 const WIRE_COOKIES_CAP: usize = 16 * 1024;
 
 const COOKIE_NOTE: &str = "reconstructed from the cookie jar: script never sees Set-Cookie (Fetch \
@@ -169,25 +51,17 @@ const WIRE_NOTE: &str = "Set-Cookie exactly as the transport received it on the 
      `fetch::net_info`; the Response script sees has none, as Fetch requires). The Cookie header \
      is the jar's view of the URL when the request started.";
 
-/// What the transport says about the connection a response came over
-/// (`vn_runtime::redjs::webapi::fetch::NetInfo`, minus the cookies, which are
-/// kept in [`Record::wire_cookies`]).
+/// What the transport says about a response's connection (`fetch::NetInfo`, minus the cookies).
 struct Conn {
-    /// `"h2"` or `"http/1.1"` — ALPN spelling, as `nextHopProtocol` has it.
     protocol: &'static str,
     reused: bool,
-    /// Process-unique: equal ids shared one connection.
     id: u64,
     remote: Option<String>,
-    /// What the HTTP cache did (redjs `cache::Outcome`): `"hit"` came from
-    /// disk with no connection at all (`protocol` "", `id` 0), `"revalidated"`
-    /// from disk after a 304 on this connection; `"stored"`, `"miss"`, `"off"`.
+/// HTTP cache outcome; `"hit"` has no connection (`protocol` "", `id` 0).
     cache: &'static str,
 }
 
 impl Conn {
-    /// The summary row's columns: `proto`/`conn`/`reused` when a connection
-    /// carried the answer, `cache` when the cache had a part in it.
     fn columns(&self) -> String {
         let mut out = Vec::new();
         if self.id != 0 {
@@ -213,14 +87,11 @@ enum Which {
 
 struct Body {
     bytes: Vec<u8>,
-    /// Came from a JS string: text by construction, whatever the bytes look like.
+/// Came from a JS string: text whatever the bytes look like.
     text: bool,
-    /// The HOST cut it at [`BODY_CAP`] (the tee caps too; this is the backstop).
+/// Cut by the host at [`BODY_CAP`] (the tee caps too).
     cut: bool,
-    /// What the tee said about it: `total`, `complete`, `seen`, `unit`, `mime`,
-    /// `kind`, `note`.
     meta: Vec<(String, Json)>,
-    /// Dropped to stay inside [`BODY_BUDGET`].
     evicted: bool,
 }
 
@@ -240,21 +111,16 @@ struct WsCount {
 }
 
 struct Cookies {
-    /// The jar's `Cookie` header for the URL when the request started.
     sent: Option<String>,
-    /// Set-Cookie lines reconstructed from the jar's change.
     set: Vec<String>,
 }
 
-/// One cookie, as compared before/after: `(name, domain, path)` identifies it
-/// (RFC 6265bis §5.7), the fingerprint says whether anything else moved.
+/// One cookie before/after: `(name, domain, path)` is its identity, the hash covers the rest.
 type Print = ((String, String, String), u64);
 
 #[derive(Default)]
 struct Record {
     rid: u64,
-    /// Summary rows that belong to this exchange — one for a fetch, one per
-    /// lifecycle phase for a socket.
     seqs: Vec<u64>,
     meta: Vec<(String, Json)>,
     meta_bytes: usize,
@@ -265,10 +131,8 @@ struct Record {
     jar_before: Option<Vec<Print>>,
     cookies: Option<Cookies>,
     ws: Option<WsCount>,
-    /// The connection, when the response came off the network.
     conn: Option<Conn>,
-    /// The final hop's `Set-Cookie` lines as received — present (possibly
-    /// empty) exactly when [`Record::conn`] is.
+/// The final hop's `Set-Cookie` lines as received; present exactly when `conn` is.
     wire_cookies: Option<Vec<String>>,
 }
 
@@ -281,12 +145,10 @@ impl Record {
         self.meta.iter().find(|(k, _)| k == "kind").and_then(|(_, v)| v.as_str()).unwrap_or("")
     }
 
-    /// Two levels deep: `{timing:{bodyMs}}` lands beside an earlier
-    /// `{timing:{headersMs}}` rather than replacing it.
+/// Merges two levels deep: `{timing:{bodyMs}}` lands beside an earlier `headersMs`.
     fn merge(&mut self, meta: Json, size: usize) {
         let Json::Obj(entries) = meta else { return };
-        // A big update past the cap is refused; a small one (a timing, a close
-        // code) always lands, so a record with huge headers still finishes.
+// A big update past the cap is refused; a small one always lands, so a record with huge headers still finishes.
         if self.meta_bytes + size > META_CAP && size > 1024 {
             self.meta_truncated = true;
             return;
@@ -319,7 +181,6 @@ fn set(obj: &mut Vec<(String, Json)>, key: &str, value: Json) {
     }
 }
 
-/// `obj[key]` as an object, created if absent (or replaced if it was not one).
 fn obj_at<'a>(obj: &'a mut Vec<(String, Json)>, key: &str) -> &'a mut Vec<(String, Json)> {
     let i = match obj.iter().position(|(k, _)| k == key) {
         Some(i) => {
@@ -339,7 +200,6 @@ fn obj_at<'a>(obj: &'a mut Vec<(String, Json)>, key: &str) -> &'a mut Vec<(Strin
     }
 }
 
-/// Removes a boolean control flag the tee sends alongside the meta.
 fn take_flag(meta: &mut Json, key: &str) -> bool {
     let Json::Obj(entries) = meta else { return false };
     match entries.iter().position(|(k, _)| k == key) {
@@ -349,28 +209,20 @@ fn take_flag(meta: &mut Json, key: &str) -> bool {
 }
 
 struct Ring {
-    /// `(seq, the JSON the JS side built)`. Kept as text: it is already valid
-    /// JSON, and re-parsing it into `Json` only to print it again would be work
-    /// done twice with a chance of changing it.
+/// `(seq, JSON the JS side built)`, kept as text to skip a parse/print round trip.
     entries: VecDeque<(u64, String)>,
-    /// Recorded since the push channel last looked.
     pending: Vec<String>,
     next_seq: u64,
     dropped: u64,
-    /// Ascending `rid` — records are only ever pushed at the back, so a binary
-    /// search finds one.
+/// Ascending `rid` (pushed at the back), so a binary search finds one.
     records: VecDeque<Record>,
     by_seq: HashMap<u64, u64>,
     next_rid: u64,
-    /// Body bytes held, against [`BODY_BUDGET`].
     held: usize,
-    /// Bodies dropped to stay inside the budget, since boot.
     evicted: u64,
 }
 
-/// What the network tee holds (devtools `mem`): `(summary rows, their JSON
-/// bytes, detail records, body bytes held, metadata bytes, bodies evicted
-/// since boot)`.
+/// `(summary rows, their JSON bytes, records, body bytes held, metadata bytes, bodies evicted)` for devtools `mem`.
 pub(crate) fn mem_stats() -> (usize, usize, usize, usize, usize, u64) {
     let ring = RING.lock().unwrap_or_else(|e| e.into_inner());
     let Some(r) = ring.as_ref() else { return (0, 0, 0, 0, 0, 0) };
@@ -398,22 +250,17 @@ impl Ring {
         self.records.binary_search_by_key(&rid, |r| r.rid).ok()
     }
 
-    /// A summary row (`__vn_devtools_net`). Returns its seq.
     fn record(&mut self, raw: &str) -> u64 {
         let seq = self.next_seq;
         self.next_seq += 1;
         let rid = rid_of(raw).filter(|rid| self.index_of(*rid).is_some());
-        // The connection rides the summary row (`proto`, `conn`, `reused`) so
-        // the list can show Chromium's Protocol / Connection ID columns without
-        // a `net_detail` per row. The tee reports it just before it records the
-        // row, and it is spliced in HERE, host-side: script never sees it.
+// The connection is spliced in host-side (script never sees it) so the list can show Protocol /
+// Connection without a `net_detail` per row.
         let conn = rid
             .and_then(|rid| self.records[self.index_of(rid)?].conn.as_ref())
             .map(Conn::columns)
             .unwrap_or_default();
-        // The seq is spliced in rather than wrapped: the panel wants one flat
-        // object, and a `{"seq":n,"entry":{…}}` envelope would make every field
-        // access in the UI one level deeper for no benefit.
+// Spliced rather than enveloped: the panel wants one flat object.
         let stamped = splice_seq(raw, seq, &conn);
         if self.entries.len() == CAPACITY {
             if let Some((old, _)) = self.entries.pop_front() {
@@ -435,8 +282,6 @@ impl Ring {
         seq
     }
 
-    /// `__vn_devtools_net_conn`: what the transport said about the response's
-    /// connection, and the raw `Set-Cookie` lines it received.
     fn conn(&mut self, rid: u64, conn: Conn, set_cookies: Vec<String>) {
         let Some(i) = self.index_of(rid) else { return };
         let mut lines = Vec::new();
@@ -466,7 +311,6 @@ impl Ring {
         }
     }
 
-    /// `__vn_devtools_net_begin`: a new exchange. Returns its rid.
     fn begin(&mut self, meta: Json, size: usize, jar: Option<(String, Vec<cookies::Cookie>)>) -> u64 {
         if self.records.iter().filter(|r| r.seqs.is_empty()).count() >= OPEN_CAP {
             if let Some(i) = self.records.iter().position(|r| r.seqs.is_empty()) {
@@ -500,8 +344,6 @@ impl Ring {
         r.jar_url.clone()
     }
 
-    /// The second jar view: whatever moved since the first is what the
-    /// response's `Set-Cookie` did (see the module header for the caveat).
     fn jar_after(&mut self, rid: u64, after: Vec<cookies::Cookie>) {
         let Some(i) = self.index_of(rid) else { return };
         let r = &mut self.records[i];
@@ -527,8 +369,6 @@ impl Ring {
         }
     }
 
-    /// Evicts the OLDEST bodies until `need` more bytes fit in the budget. The
-    /// record keeps everything else and its body says `evicted`.
     fn make_room(&mut self, need: usize) {
         if self.held + need <= BODY_BUDGET {
             return;
@@ -550,8 +390,7 @@ impl Ring {
         }
     }
 
-    /// One WebSocket message: counted, never kept (a chatty socket would evict
-    /// every other entry in the ring within seconds if messages were rows).
+/// Counted, never kept: a chatty socket would evict every other row.
     fn ws_count(&mut self, rid: u64, received: bool, bytes: f64, at: f64) {
         let Some(i) = self.index_of(rid) else { return };
         let w = self.records[i].ws.get_or_insert_with(WsCount::default);
@@ -565,7 +404,6 @@ impl Ring {
         w.last_at = at;
     }
 
-    /// `net_detail`'s answer.
     fn detail(&self, seq: u64) -> Result<Json, String> {
         let Some((_, raw)) = self.entries.iter().find(|(s, _)| *s == seq) else {
             return Err(match (self.entries.front(), self.entries.back()) {
@@ -610,8 +448,7 @@ impl Ring {
             set(obj_at(&mut out, "response"), "body", body_json(r.res.as_ref()));
         }
         if let Some(c) = &r.conn {
-            // The transport's own account replaces the tee's
-            // `nextHopProtocol` guess wholesale.
+// The transport's account replaces the tee's `nextHopProtocol` guess.
             set(
                 &mut out,
                 "transport",
@@ -661,8 +498,7 @@ impl Ring {
 }
 
 fn rid_of(raw: &str) -> Option<u64> {
-    // Cheap pre-check: most rows from an old tee (and every malformed one) have
-    // no rid, and a parse is the only other way to find out.
+// Cheap pre-check: rows without a rid are common, and a parse is the only other test.
     if !raw.contains("\"rid\"") {
         return None;
     }
@@ -670,12 +506,8 @@ fn rid_of(raw: &str) -> Option<u64> {
     (n.is_finite() && n >= 1.0).then_some(n as u64)
 }
 
-/// `{"url":…}` → `{"seq":7,"url":…}`. Text surgery rather than a parse/print
-/// round trip, because the input is `JSON.stringify` output and the only things
-/// being added are leading members.
-///
-/// `extra` is more leading members, already serialized (`"a":1,"b":2`) or
-/// empty — the connection facts the host adds to a row.
+/// `{"url":…}` → `{"seq":7,"url":…}` by text surgery (the input is `JSON.stringify` output). `extra` is
+/// more leading members, already serialized, or empty.
 fn splice_seq(raw: &str, seq: u64, extra: &str) -> String {
     let head = if extra.is_empty() { format!("\"seq\":{seq}") } else { format!("\"seq\":{seq},{extra}") };
     let trimmed = raw.trim_start();
@@ -683,12 +515,10 @@ fn splice_seq(raw: &str, seq: u64, extra: &str) -> String {
         let sep = if rest.trim_start().starts_with('}') { "" } else { "," };
         return format!("{{{head}{sep}{rest}");
     }
-    // Not an object: keep it, wrapped, rather than dropping a line the app
-    // meant to record.
+// Not an object: keep it, wrapped, rather than drop the line.
     format!("{{{head},\"raw\":{}}}", crate::json::quote(raw))
 }
 
-/// A string cut to at most `cap` bytes, on a character boundary.
 fn cap_line(mut s: String, cap: usize) -> String {
     if s.len() > cap {
         let mut at = cap;
@@ -700,11 +530,6 @@ fn cap_line(mut s: String, cap: usize) -> String {
     s
 }
 
-// ---------------------------------------------------------------------------
-// bodies on the wire
-// ---------------------------------------------------------------------------
-
-/// Is this a media type whose bytes are text?
 fn textual(mime: &str) -> bool {
     let m = mime.to_ascii_lowercase();
     let essence = m.split(';').next().unwrap_or("").trim();
@@ -723,8 +548,7 @@ fn textual(mime: &str) -> bool {
         )
 }
 
-/// Is this a media type whose bytes are NOT text, even when they happen to
-/// decode as UTF-8? `application/ion` is the Argon client's whole API.
+/// Binary media types, even when the bytes happen to decode as UTF-8.
 fn binary(mime: &str) -> bool {
     let m = mime.to_ascii_lowercase();
     let essence = m.split(';').next().unwrap_or("").trim();
@@ -751,9 +575,8 @@ fn binary(mime: &str) -> bool {
         )
 }
 
-/// `("utf8", text)` or `("base64", data)`. A body cut at the cap may end inside
-/// a multi-byte character; that tail is dropped rather than the whole body
-/// being called binary.
+/// `("utf8", text)` or `("base64", data)`. A body cut at the cap may end mid-character; that tail is
+/// dropped rather than calling the body binary.
 fn encode(bytes: &[u8], mime: &str, from_string: bool) -> (&'static str, String) {
     let text = match std::str::from_utf8(bytes) {
         Ok(s) => Some(s),
@@ -787,7 +610,6 @@ fn body_json(b: Option<&Body>) -> Json {
     Json::Obj(o)
 }
 
-/// Copies at most [`BODY_CAP`] bytes of a string, on a character boundary.
 fn cap_string(mut s: String) -> (Vec<u8>, bool) {
     if s.len() <= BODY_CAP {
         return (s.into_bytes(), false);
@@ -800,20 +622,14 @@ fn cap_string(mut s: String) -> (Vec<u8>, bool) {
     (s.into_bytes(), true)
 }
 
-// ---------------------------------------------------------------------------
-// cookies
-// ---------------------------------------------------------------------------
-
 fn jar_snapshot(url: &str) -> Vec<cookies::Cookie> {
     let mut all = cookies::get(Some(url));
     all.truncate(JAR_CAP);
     all
 }
 
-/// RFC 6265bis §5.8.3's `Cookie` header out of a jar view: longest path first,
-/// then oldest first. `cookies::header_for` would compute the same string, but
-/// it also bumps every cookie's last-access time, which is the jar's LRU — and
-/// a devtools read must not change which cookie the jar evicts next.
+/// The `Cookie` header from a jar view: longest path first, then oldest. Not `cookies::header_for`:
+/// it bumps every cookie's last-access time (the jar's LRU), which a devtools read must not do.
 fn cookie_header(jar: &[cookies::Cookie]) -> Option<String> {
     if jar.is_empty() {
         return None;
@@ -848,7 +664,6 @@ fn print(c: &cookies::Cookie) -> Print {
     ((c.name.clone(), c.domain.clone(), c.path.clone()), h.finish())
 }
 
-/// What moved in the jar, as `Set-Cookie` lines.
 fn set_cookie_diff(before: &[Print], after: &[cookies::Cookie]) -> Vec<String> {
     let mut lines = Vec::new();
     for c in after {
@@ -889,7 +704,7 @@ fn set_cookie_line(c: &cookies::Cookie) -> String {
     s
 }
 
-/// IMF-fixdate (RFC 9110 §5.6.7), the `Expires` attribute's own format.
+/// IMF-fixdate, the `Expires` format.
 fn http_date(secs: i64) -> String {
     const WD: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const MON: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -923,10 +738,6 @@ fn now_ms() -> f64 {
         .map_or(0.0, |d| d.as_secs_f64() * 1000.0)
 }
 
-// ---------------------------------------------------------------------------
-// the host fns the tee calls
-// ---------------------------------------------------------------------------
-
 static RING: Mutex<Option<Ring>> = Mutex::new(None);
 
 fn with_ring<T>(f: impl FnOnce(&mut Ring) -> T) -> T {
@@ -938,11 +749,8 @@ fn rid_arg(v: Value) -> Option<u64> {
     v.as_number().filter(|n| n.is_finite() && *n >= 1.0).map(|n| n as u64)
 }
 
-// `__vn_devtools_net(json)` — one summary row, as the JS tee described it.
-//
-// The host does not parse it beyond its `rid`. It stamps a sequence number on
-// it (so a client can page) and stores the text; the shape is the tee's
-// business, and it is documented in `TEE_JS` where it is built. Returns the seq.
+// `__vn_devtools_net(json)`: one summary row. The host parses only its `rid`, stamps a seq and stores the
+// text. Returns the seq.
 host_fn!(fn vn_devtools_net(g, args) {
     let raw = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     if raw.is_empty() {
@@ -952,13 +760,8 @@ host_fn!(fn vn_devtools_net(g, args) {
     Value::number(seq as f64).0
 });
 
-// `__vn_devtools_net_begin(json)` — an exchange STARTED: its request side
-// (url, method, headers, credentials). Returns a record id, or 0 when the
-// devtools are off — the tee then skips every detail for that request, so
-// `appDevtools.disable()` also stops what this costs.
-//
-// `"jar": true` asks the host to read the cookie jar for the URL now (see the
-// module header): the tee never sees a cookie.
+// `__vn_devtools_net_begin(json)`: an exchange started. Returns a record id, or 0 when the devtools are
+// off (the tee then skips every detail). `"jar": true` makes the host read the cookie jar for the URL now.
 host_fn!(fn vn_devtools_net_begin(g, args) {
     if !super::enabled() {
         return Value::number(0.0).0;
@@ -975,9 +778,8 @@ host_fn!(fn vn_devtools_net_begin(g, args) {
     Value::number(rid as f64).0
 });
 
-// `__vn_devtools_net_meta(rid, json)` — more of the same record: the response
-// head, a timing, a socket's close code. Merged two levels deep. `"jarAfter":
-// true` takes the second jar view.
+// `__vn_devtools_net_meta(rid, json)`: more of the same record, merged two levels deep. `"jarAfter": true`
+// takes the second jar view.
 host_fn!(fn vn_devtools_net_meta(g, args) {
     let Some(rid) = rid_arg(args.arg(0)) else { return Value::undefined().0 };
     let raw = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
@@ -995,9 +797,8 @@ host_fn!(fn vn_devtools_net_meta(g, args) {
     Value::undefined().0
 });
 
-// `__vn_devtools_net_body(rid, "req"|"res", data, json)` — a body. `data` is an
-// ArrayBuffer / typed array / string, or null when the tee did not read one
-// (the json's `note` says why). At most BODY_CAP bytes are copied out of it.
+// `__vn_devtools_net_body(rid, "req"|"res", data, json)`: `data` is a buffer, view or string, or null when the
+// tee did not read one (the json's `note` says why). At most BODY_CAP bytes are copied.
 host_fn!(fn vn_devtools_net_body(g, args) {
     let Some(rid) = rid_arg(args.arg(0)) else { return Value::undefined().0 };
     let which = match unsafe { read_string(g, args.arg(1).0) }.as_deref() {
@@ -1024,8 +825,7 @@ host_fn!(fn vn_devtools_net_body(g, args) {
     Value::undefined().0
 });
 
-// `__vn_devtools_net_ws(rid, direction, size)` — one WebSocket message: 0 sent,
-// 1 received. A count and a byte total, never the message.
+// `__vn_devtools_net_ws(rid, direction, size)`: one message, 0 sent / 1 received. Counted, never kept.
 host_fn!(fn vn_devtools_net_ws(g, args) {
     let _ = g;
     let Some(rid) = rid_arg(args.arg(0)) else { return Value::undefined().0 };
@@ -1036,28 +836,18 @@ host_fn!(fn vn_devtools_net_ws(g, args) {
     Value::undefined().0
 });
 
-// `__vn_devtools_net_conn(rid, response)` — the transport's account of the
-// connection the app's `Response` came over (redjs `fetch::net_info`): the
-// protocol, whether the connection was reused and its id, the remote address,
-// and the final hop's raw `Set-Cookie` lines.
-//
-// It RETURNS NOTHING, on purpose. The function is a global the app could call
-// too, and what it reads is exactly what script must not see — `Set-Cookie`
-// (HttpOnly cookies included) and a remote address no web API exposes. So it
-// only ever writes into the host's record; the values leave through the
-// token-guarded `net_detail`, and the protocol / connection id through the
-// summary row, which is spliced host-side (`Ring::record`). A response that
-// never crossed a network (`new Response`, `data:`, `blob:`, `file:`) has no
-// info, and nothing is stored.
+// `__vn_devtools_net_conn(rid, response)`: stores the transport's connection facts and raw `Set-Cookie`
+// lines (`fetch::net_info`). It returns nothing on purpose: it is a global the app could call, and it reads
+// what script must not see (HttpOnly cookies, the remote address). The values leave only through the
+// token-guarded `net_detail` and the summary row, which `Ring::record` splices host-side.
 host_fn!(fn vn_devtools_net_conn(g, args) {
     let Some(rid) = rid_arg(args.arg(0)) else { return Value::undefined().0 };
     let response = args.arg(1);
     if response.is_null() || response.is_undefined() {
         return Value::undefined().0;
     }
-    // SAFETY: `g` is this context's global and `response` a value of its heap,
-    // read on the JS thread — the contract `net_info` states. A value that is
-    // not a redjs `Response` answers `None`.
+// SAFETY: `g` is this context's global and `response` a value of its heap, read on the JS thread; a value
+// that is not a redjs `Response` answers `None`.
     let Some(info) = (unsafe { fetch::net_info(g, response.0) }) else { return Value::undefined().0 };
     let conn = Conn {
         protocol: info.protocol,
@@ -1070,11 +860,8 @@ host_fn!(fn vn_devtools_net_conn(g, args) {
     Value::undefined().0
 });
 
-/// A row for a load the host made (`super::LoaderRow`): gpui's loaders fetch
-/// through redjs (`crate::http_client`), so there is a `Response` but no
-/// script, no tee and no record behind it, only the summary. `kind` is
-/// `"img"`, `"font"` or `"other"` from the answer's `Content-Type`.
-/// Called on the network thread.
+/// A row for a load the host made (gpui's loaders fetch through redjs): summary only, no script, tee or
+/// record. `kind` is `"img"`, `"font"` or `"other"` from `Content-Type`. Called on the network thread.
 pub fn record_loader(
     method: &str,
     url: &str,
@@ -1123,9 +910,7 @@ pub fn record_loader(
     with_ring(|ring| ring.record(&raw));
 }
 
-/// The HTTP cache for `net_cache` and `mem`: redjs's counters plus the
-/// host's account of the folder (vn-storage). `null` when no cache is
-/// installed.
+/// The HTTP cache's counters plus the host's account of the folder; `null` when none is installed.
 pub fn cache_json() -> Json {
     let Some(s) = vn_runtime::redjs::webapi::http::cache::stats() else { return Json::Null };
     Json::obj(vec![
@@ -1145,15 +930,8 @@ pub fn cache_json() -> Json {
     ])
 }
 
-/// The pooled transport's counters, for the Network panel's header: how many
-/// HTTP/1.1 and HTTP/2 connections were opened, how many requests went out, how
-/// many rode a connection that had carried one before, how many were retried.
-///
-/// `http::pool` exists only under redjs's `net-h2`, which vn-runtime turns on
-/// by default and vn-app takes vn-runtime with its defaults — so it is always in
-/// this link. A build that ever drops it needs a vn-app feature to gate this on
-/// (Cargo cannot `cfg` on a dependency's feature); the compile error will point
-/// here.
+/// The pooled transport's counters for the Network panel's header. `http::pool` needs redjs's `net-h2`,
+/// which vn-runtime enables by default.
 pub fn pool_json() -> Json {
     let s = vn_runtime::redjs::webapi::http::pool::stats();
     Json::obj(vec![
@@ -1165,8 +943,7 @@ pub fn pool_json() -> Json {
     ])
 }
 
-/// Registers the host fns. Always — they are entries in a table and the tee is
-/// the only caller.
+/// Registers the host fns the tee calls.
 pub fn install(rt: &JsRuntime) {
     rt.register("__vn_devtools_net", 1, vn_devtools_net as *const _);
     rt.register("__vn_devtools_net_begin", 1, vn_devtools_net_begin as *const _);
@@ -1176,25 +953,17 @@ pub fn install(rt: &JsRuntime) {
     rt.register("__vn_devtools_net_conn", 2, vn_devtools_net_conn as *const _);
 }
 
-/// Wraps `fetch`, `WebSocket` and `XMLHttpRequest`. Split out of [`install`]
-/// since m22: the devtools are in every build now, and a host whose app has
-/// them DISABLED must leave the engine's own `fetch` alone — the divergence
-/// ("`globalThis.fetch` is not the engine's own function in a build that has
-/// devtools", docs/DEVTOOLS.md) is only owed when somebody is watching.
+/// Wraps `fetch`, `WebSocket` and `XMLHttpRequest`. Separate from [`install`]: a host whose app has the
+/// devtools off must leave the engine's own `fetch` alone.
 pub fn install_tee(rt: &JsRuntime) {
     if let Err(e) = rt.eval(TEE_JS, "vn://devtools-net.js") {
         eprintln!("[devtools] network tee failed: {}\n{}", e.header, e.stack);
     }
 }
 
-/// A `kind: "reload"` marker row: the host is about to run the app again in
-/// the same realm. `cause` says why: `"location.reload()"`, or whatever another
-/// restart path that calls it passes. The caller ([`super::mark_reload`]) puts
-/// it after the old app's unload and before the new bundle evaluates, so the
-/// old run's rows are above it and the new run's below. Only what the old run
-/// still had in flight settles below it: a fetch that was pending, the close
-/// of a socket the unload shut. `url` is empty because a marker is not an
-/// exchange.
+/// A `kind: "reload"` marker row: the host is about to rerun the app in the same realm; `cause` says why.
+/// Called after the old app's unload and before the new bundle evaluates, so only what the old run still
+/// had in flight settles below it. `url` is empty because a marker is not an exchange.
 pub fn mark_reload(cause: &str) {
     let raw = Json::obj(vec![
         ("kind", Json::s("reload")),
@@ -1208,13 +977,12 @@ pub fn mark_reload(cause: &str) {
     });
 }
 
-/// Everything recorded since the last call. Drained by the push channel once
-/// per frame.
+/// Everything recorded since the last call; the push channel drains it once per frame.
 pub fn drain() -> Vec<String> {
     with_ring(|ring| std::mem::take(&mut ring.pending))
 }
 
-/// `(entries, next, dropped)` from `since` — the `net` command's answer.
+/// `(entries, next, dropped)` from `since`: the `net` command's answer.
 pub fn since(since: u64) -> (Vec<String>, u64, u64) {
     with_ring(|ring| {
         let out: Vec<String> =
@@ -1223,43 +991,25 @@ pub fn since(since: u64) -> (Vec<String>, u64, u64) {
     })
 }
 
-/// The `net_detail` command's answer: everything recorded about the exchange
-/// that summary row `seq` belongs to.
+/// The `net_detail` answer: everything recorded about the exchange behind summary row `seq`.
 pub fn detail(seq: u64) -> Result<Json, String> {
     with_ring(|ring| ring.detail(seq))
 }
 
-/// The tee. Installed before the app bundle evaluates (when the devtools are
-/// on at boot), so a request the app makes at boot is in the panel too.
+/// The tee, installed before the app bundle evaluates so boot requests show up. It runs inside someone
+/// else's app, so:
 ///
-/// Rules it keeps, because it runs inside somebody else's app:
-///
-/// * **Nothing it does reaches the app.** Every step is in a `try`; every
-///   promise it makes has a rejection handler; the app's own promise, `Response`
-///   and socket are the ones it gets back.
-/// * **It never consumes the app's body.** A response body is read from
-///   `res.clone()`, taken synchronously in the tee's own `.then` — which runs
-///   before any handler the app attached, so the body is still unused. In
-///   redjs a clone shares the buffered bytes (`webapi::fetch::resp_clone`: an
-///   `Arc`), so it costs nothing until it is read, and reading it leaves the
-///   original untouched. It is read through `body.getReader()` and CANCELLED at
-///   the cap, never with `arrayBuffer()`: if the engine ever streams bodies, a
-///   clone is a tee of the stream, and reading a whole branch of an endless
-///   one would buffer without bound. Cancelling one branch of a tee leaves the
-///   other alone. If `clone()` throws, the body is skipped with that reason.
-/// * **It never touches `res.body` on the APP's response.** In redjs reading
-///   that getter marks the body used (`resp_body`), which the app would see.
-/// * **What it skips, and says so in the panel:** HEAD / 204 / 205 / 304 (no
-///   body), `text/event-stream` (may never end), image/audio/video bodies, and
-///   anything whose `Content-Length` is over 16 MB — in redjs reading a clone
-///   copies the whole body into the JS heap before the cap applies, so the
-///   declared size is the only guard there is. A request `Blob` is read only up
-///   to 64 KB; a `FormData` is shown as its fields (the engine encodes the
-///   multipart bytes itself); the body inside a `Request` object is not read
-///   (its size is unknown until it is copied whole).
-/// * **XMLHttpRequest** is teed only where the engine has one, by wrapping three
-///   prototype methods and listening for `loadend`. It reads `response` /
-///   `responseText` afterwards, which consumes nothing.
+/// * Nothing it does reaches the app: every step is in a `try`, every promise it makes has a rejection
+///   handler.
+/// * It never consumes the app's body. It reads `res.clone()`, taken synchronously in its own `.then`
+///   (before any app handler), through `getReader()`, and cancels at the cap; never `arrayBuffer()`,
+///   which would buffer an endless stream. It never touches `res.body` on the app's response: in redjs
+///   that getter marks the body used.
+/// * Skipped, and the panel says so: HEAD / 204 / 205 / 304, `text/event-stream`, media bodies, and
+///   `Content-Length` over 16 MB (redjs copies a clone's whole body into the JS heap before the cap
+///   applies). Request `Blob`s are read up to 64 KB, a `FormData` is shown as fields, a `Request`
+///   object's body is not read.
+/// * `XMLHttpRequest` is teed only where the engine has one: three prototype methods and `loadend`.
 const TEE_JS: &str = r#"
 (function () {
   var G = globalThis;
@@ -1273,8 +1023,7 @@ const TEE_JS: &str = r#"
   var CAP = 262144, READ_LIMIT = 16777216, SMALL_BLOB = 65536;
   var HEADERS = 100, HVALUE = 4096, FIELDS = 64, FVALUE = 512;
 
-  // Captured once: an app that replaces Date.now or JSON.stringify (fake
-  // timers, a serializer patch) must not change what the panel records.
+  // Captured once: an app that patches Date.now or JSON.stringify must not change what is recorded.
   var dateNow = Date.now, stringify = JSON.stringify, isArray = Array.isArray;
   var now = function () { return dateNow.call(Date); };
   var noop = function () {};
@@ -1295,8 +1044,6 @@ const TEE_JS: &str = r#"
     try { hBody(rid, which, data == null ? null : data, stringify(o || {})); } catch (e) {}
   };
 
-  // Headers in any HeadersInit shape -> [[name, value], ...]. A Headers (or a
-  // Map) is read with forEach, a sequence pair by pair, a record by its keys.
   var pairs = function (h) {
     var out = [];
     if (h === undefined || h === null) return out;
@@ -1319,7 +1066,6 @@ const TEE_JS: &str = r#"
     for (var i = 0; i < list.length; i++) if (str(list[i][0]).toLowerCase() === name) return list[i][1];
     return "";
   };
-  // getAllResponseHeaders() text -> pairs.
   var rawPairs = function (text) {
     var out = [], lines = str(text).split(/\r?\n/);
     for (var i = 0; i < lines.length && out.length < HEADERS; i++) {
@@ -1335,8 +1081,7 @@ const TEE_JS: &str = r#"
     if (typeof v.size === "number") return v.size;
     return 0;
   };
-  // A Uint8Array over the first n bytes of an ArrayBuffer or any view — no copy;
-  // the host copies at most CAP bytes out of it.
+  // A no-copy Uint8Array over the first n bytes; the host copies at most CAP.
   var head = function (b, n) {
     if (b instanceof ArrayBuffer) return new Uint8Array(b, 0, Math.min(b.byteLength, n));
     return new Uint8Array(b.buffer, b.byteOffset, Math.min(b.byteLength, n));
@@ -1345,11 +1090,8 @@ const TEE_JS: &str = r#"
     return typeof ArrayBuffer === "function" && (b instanceof ArrayBuffer || ArrayBuffer.isView(b));
   };
 
-  // The fallback only: a response that came off redjs's network has its
-  // protocol, reuse and remote address reported host-side (hConn above,
-  // `fetch::net_info`), which replaces this. PerformanceResourceTiming's
-  // nextHopProtocol is the web's own place for the protocol, so it is read
-  // from there for an engine that fills it in and has no host hook.
+  // Fallback only: the host reports protocol, reuse and remote address itself (hConn). This reads
+  // PerformanceResourceTiming.nextHopProtocol for an engine that fills it in.
   var transport = function (url) {
     var out = {};
     try {
@@ -1363,10 +1105,8 @@ const TEE_JS: &str = r#"
     return out;
   };
 
-  // ---- request bodies ------------------------------------------------------
   var USP = G.URLSearchParams, FD = G.FormData, BL = G.Blob;
-  // `ct` is the Content-Type the app set, if it set one: that, not the type the
-  // body would imply, is what went out — and what the panel decodes it as.
+  // `ct` is the Content-Type the app set: that, not the type the body implies, is what went out.
   var textBody = function (rid, s, implied, kind, ct) {
     body(rid, "req", s.length > CAP ? s.slice(0, CAP) : s,
          { kind: kind, total: s.length, unit: "chars", complete: s.length <= CAP, mime: ct || implied });
@@ -1412,8 +1152,6 @@ const TEE_JS: &str = r#"
     return textBody(rid, str(b), "text/plain;charset=UTF-8", "text", ct);
   };
 
-  // ---- response bodies -----------------------------------------------------
-  // Reads at most CAP bytes of a Response WE own (a clone), then cancels.
   var readCapped = function (resp) {
     var s = null;
     try { s = resp.body; } catch (e) {}
@@ -1472,7 +1210,6 @@ const TEE_JS: &str = r#"
     });
   };
 
-  // ---- fetch -------------------------------------------------------------
   var Req = G.Request;
   var beginFetch = function (input, init, url, method, t0) {
     var isReq = false;
@@ -1526,23 +1263,18 @@ const TEE_JS: &str = r#"
       try {
         p = origFetch.apply(this, arguments);
       } catch (e) {
-        // A synchronous throw is a real fetch failure mode (a bad URL), and it
-        // must stay synchronous — so record and rethrow rather than wrapping.
+        // A synchronous throw (a bad URL) must stay synchronous: record and rethrow.
         record({ kind: "fetch", url: url, method: M, at: t0, ms: 0, error: message(e) });
         throw e;
       }
-      // AFTER the call: the engine has read `input` and `init` by now (redjs
-      // builds its plan synchronously), so nothing read here can change what was
-      // sent — and a one-shot iterable of headers has already been consumed by
-      // the call that needed it.
+      // AFTER the call: the engine has read `input` and `init`, so nothing read here changes what was sent
+      // (a one-shot headers iterable is already consumed).
       var rid = 0;
       try { rid = beginFetch(input, init, url, M, t0); } catch (e) { rid = 0; }
       if (!p || typeof p.then !== "function") return p;
       return p.then(
         function (res) {
-          // The transport's connection facts, BEFORE the row is recorded so
-          // the host can put the protocol and connection id on it. Handed the
-          // Response itself; nothing comes back to script (see net.rs).
+          // Connection facts first, so the host can put protocol and connection id on the row.
           if (rid && res && typeof hConn === "function") { try { hConn(rid, res); } catch (e) {} }
           record({ kind: "fetch", url: url, method: M, at: t0,
                    ms: now() - t0, status: res && res.status, ok: !!(res && res.ok),
@@ -1563,18 +1295,9 @@ const TEE_JS: &str = r#"
     G.fetch = teed;
   }
 
-  // ---- WebSocket ---------------------------------------------------------
-  //
-  // A same-realm reload (location.reload(), the dev host's cold restart) runs
-  // a new runtime, and it sets `G.WebSocket` to a new realm proxy (runtime.ts
-  // `realm`). The proxy is built over `__VN_NATIVE_SCHED__.WebSocket`, the
-  // global as the FIRST runtime found it, which is kept once per process. When
-  // the devtools are on at boot, this tee runs before any runtime, so that
-  // record already holds the tee and every proxy wraps it. When the app turns
-  // them on later (`appDevtools.enable()`), the record holds the engine's
-  // class and the next proxy would drop the tee. So the record is wrapped too:
-  // after a reload the proxy sits over the tee, as it does at boot, and the
-  // global (the running runtime's proxy) is wrapped for the app running now.
+  // A same-realm reload runs a new runtime whose proxy sits over `__VN_NATIVE_SCHED__.WebSocket`, the
+  // class the first runtime found. If the devtools were enabled late that is the engine's class and the
+  // next proxy would drop the tee, so that record is wrapped too.
   var OrigWS = G.WebSocket;
   if (typeof OrigWS === "function" && !OrigWS.__vnTeed) {
     var socks = typeof WeakMap === "function" ? new WeakMap() : null;
@@ -1582,8 +1305,7 @@ const TEE_JS: &str = r#"
       if (received) st.received++; else st.sent++;
       if (st.rid && typeof hWs === "function") { try { hWs(st.rid, received ? 1 : 0, sizeOf(data)); } catch (e) {} }
     };
-    // Sends are counted on the PROTOTYPE. This used to put an own `send` on
-    // every socket, which `ws.hasOwnProperty("send")` could see.
+    // Sends are counted on the prototype, so no own `send` shows on a socket.
     var WP = OrigWS.prototype, origSend = WP && WP.send, onProto = false;
     if (typeof origSend === "function" && socks) {
       try {
@@ -1597,28 +1319,20 @@ const TEE_JS: &str = r#"
         onProto = WP.send === sendTee;
       } catch (e) {}
     }
-    // The listeners go on through EventTarget's own method, not `ws.addEventListener`.
-    // A runtime proxy over the engine's class (the case above, devtools turned on
-    // late) gives every socket an own `addEventListener` that records the
-    // listener, and at a reload the runtime removes those before it closes the
-    // old app's sockets. The tee's listeners must stay, so the panel records
-    // that close.
+    // Listeners go through EventTarget's own method: a runtime proxy's per-socket `addEventListener` records
+    // listeners that the runtime removes before closing sockets on reload, and the tee must still hear that close.
     var listenOn = WP && typeof WP.addEventListener === "function" ? WP.addEventListener : null;
     var wsListen = function (ws, type, fn) {
       if (listenOn) listenOn.call(ws, type, fn); else ws.addEventListener(type, fn);
     };
-    // One wrapper per class it wraps (the global's, and the runtime's record of
-    // it). They share `socks` and the prototype's `send`, so a socket is counted
-    // once whichever made it.
+    // One wrapper per class wrapped; they share `socks` and the prototype's `send`, so a socket is counted once.
     var wrapWS = function (Orig) {
       var W = function WebSocket(url, protocols) {
         var t0 = now();
-        // `new Orig(...)` with exactly the arguments we were given: passing
-        // `undefined` for an absent `protocols` is NOT the same call.
+        // Exactly the arguments given: an explicit `undefined` for `protocols` is not the same call.
         var ws = arguments.length > 1 ? new Orig(url, protocols) : new Orig(url);
         teeSocket(ws, t0, url, arguments.length > 1, protocols);
-        // Returning an object from a constructor makes `new W()` evaluate
-        // to it, so the caller gets the REAL socket and nothing is proxied.
+        // A constructor that returns an object makes `new W()` yield it: the caller gets the real socket.
         return ws;
       };
       W.prototype = Orig.prototype;
@@ -1647,8 +1361,7 @@ const TEE_JS: &str = r#"
                             binaryType: str(ws.binaryType || ""), openMs: now() - t0 }, jarAfter: true });
         });
         wsListen(ws, "message", function (e) {
-          // Counted, not logged: a chatty socket would evict every other entry
-          // in the ring within seconds. The count rides the close entry.
+          // Counted, not logged: a chatty socket would evict every other row.
           count(st, true, e && e.data);
         });
         wsListen(ws, "error", function () {
@@ -1663,15 +1376,13 @@ const TEE_JS: &str = r#"
                             wasClean: !!(e && e.wasClean), closeMs: now() - t0 } });
         });
         if (!onProto && typeof ws.send === "function") {
-          // The prototype would not take the wrapper; count on the instance,
-          // as the tee always used to.
+          // The prototype would not take the wrapper; count on the instance.
           var own = ws.send;
           ws.send = function send(data) { var r = own.apply(this, arguments); count(st, false, data); return r; };
         }
       } catch (e) {}
     };
-    // The runtime's record first (see the top of this section). It only exists
-    // once a runtime has run, so at boot this is skipped.
+    // The runtime's record first; it exists only once a runtime has run.
     var NS = G.__VN_NATIVE_SCHED__;
     if (NS && typeof NS.WebSocket === "function" && !NS.WebSocket.__vnTeed) {
       try { NS.WebSocket = wrapWS(NS.WebSocket); } catch (e) {}
@@ -1682,9 +1393,7 @@ const TEE_JS: &str = r#"
     G.WebSocket = Wrapped;
   }
 
-  // ---- XMLHttpRequest ------------------------------------------------------
-  // Only where the engine has one, and light: three prototype methods and a
-  // `loadend` listener per request object, never a wrapper class.
+  // Only where the engine has one: three prototype methods and a `loadend` listener per request.
   var XHR = G.XMLHttpRequest;
   var XP = typeof XHR === "function" ? XHR.prototype : null;
   if (deep && XP && typeof XP.open === "function" && typeof XP.send === "function" &&
@@ -1849,9 +1558,7 @@ mod tests {
         let d = ring.detail(marker).unwrap();
         assert!(matches!(d.get("detail"), Some(Json::Null)));
         assert!(d.get("note").and_then(Json::as_str).is_some_and(|n| n.starts_with("a reload marker")));
-        // The previous run's row still answers from its record.
         assert_eq!(ring.detail(before).unwrap().get("rid").and_then(Json::as_f64), Some(rid as f64));
-        // A row without a record that is NOT a marker keeps the old note.
         let plain = summary(&mut ring, None);
         let note = ring.detail(plain).unwrap().get("note").and_then(Json::as_str).map(str::to_string);
         assert!(note.is_some_and(|n| n.starts_with("no details were recorded")));
@@ -1864,7 +1571,6 @@ mod tests {
         let conn = Conn { protocol: "h2", reused: true, id: 7, remote: Some("93.184.215.14:443".into()), cache: "off" };
         ring.conn(rid, conn, vec!["sid=abc; Path=/; HttpOnly".into(), "theme=dark".into()]);
         let seq = summary(&mut ring, Some(rid));
-        // The row carries the columns, spliced host-side.
         let row = json::parse(&ring.entries.back().unwrap().1).unwrap();
         assert_eq!(row.get("proto").and_then(Json::as_str), Some("h2"));
         assert_eq!(row.get("conn").and_then(Json::as_f64), Some(7.0));
@@ -1875,8 +1581,6 @@ mod tests {
         assert_eq!(t.get("protocol").and_then(Json::as_str), Some("h2"));
         assert_eq!(t.get("connectionId").and_then(Json::as_f64), Some(7.0));
         assert_eq!(t.get("remote").and_then(Json::as_str), Some("93.184.215.14:443"));
-        // No jar snapshot (credentials were not "include"), yet the lines the
-        // transport received are there, exactly.
         let c = d.get("cookies").unwrap();
         assert_eq!(c.get("sent"), Some(&Json::Null));
         let wire = match c.get("wire") {
@@ -1898,10 +1602,8 @@ mod tests {
         assert!(row.get("proto").is_none() && row.get("conn").is_none());
         let t = ring.detail(seq).unwrap();
         assert_eq!(t.get("transport").and_then(|t| t.get("cache")).and_then(Json::as_str), Some("hit"));
-        // A revalidation used a connection AND the cache.
         let c = Conn { protocol: "h2", reused: true, id: 3, remote: None, cache: "revalidated" };
         assert_eq!(c.columns(), "\"proto\":\"h2\",\"conn\":3,\"reused\":true,\"cache\":\"revalidated\"");
-        // Nothing about the cache when it had no part in it.
         let off = Conn { protocol: "h2", reused: false, id: 4, remote: None, cache: "off" };
         assert!(!off.columns().contains("cache"));
     }
@@ -1919,7 +1621,6 @@ mod tests {
         assert_eq!(wire[0].len(), WIRE_LINE_CAP);
         assert!(wire.len() <= SET_COOKIE_LINES_CAP);
         assert!(wire.iter().map(String::len).sum::<usize>() <= WIRE_COOKIES_CAP);
-        // A row with no connection (a data: URL, a failure) gets no columns.
         let other = begun(&mut ring, "fetch");
         summary(&mut ring, Some(other));
         assert!(!ring.entries.back().unwrap().1.contains("\"proto\""));

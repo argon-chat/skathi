@@ -1,16 +1,5 @@
-// Where a failure leaves its evidence.
-//
-// `bun test` has no artifacts directory and no reporter hook to attach one to,
-// so the only channel from a failed assertion back to a human is the error
-// MESSAGE. Everything here exists to make that message carry a path worth
-// opening: a screenshot of the window at the moment the assertion gave up, and
-// the tail of the host's own log ring.
-//
-// The directory is wiped ONCE, when this module is first imported — i.e. at
-// the start of every run, not lazily on the first failure. A run that passes
-// therefore leaves an EMPTY directory rather than last week's screenshots,
-// which matters more than it sounds: the failure message hands over an absolute
-// path, and a stale file at that path is evidence for the wrong bug.
+// `bun test` has no artifacts directory and no reporter hook to attach one to, so the only channel
+// from a failed assertion back to a human is the error MESSAGE.
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

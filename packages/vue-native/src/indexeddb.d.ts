@@ -1,25 +1,7 @@
-// IndexedDB — what `indexedDB` and `navigator.storage` are in a vue-native
-// app. vendor/redjs/redjs/src/webapi/indexeddb/ (m25 P1 the API, P2 the disk).
-//
-// SHIPPED with the runtime, like engine.d.ts and protocol.d.ts: an app's
-// tsconfig lists it (`vn create` writes it in; apps/tsconfig.json does). It
-// lived in apps/env.d.ts while IndexedDB was memory-only; it moved here when
-// the databases went on disk, because an app that keeps its data in
-// IndexedDB is the ordinary case, not a demo's.
-//
-// IndexedDB 3.0, the whole API, ON in vn-app by default (`indexeddb` in
-// crates/vn-app/Cargo.toml). Dexie 4, idb 8, idb-keyval 6 and localForage run
-// on it unmodified (redjs tests/idb_libs.rs, on both backends). The databases
-// are SQLite files under the app's storage folder (`<folder>\indexeddb\`),
-// encrypted at rest when the storage is — `appStorage.setStorageFolder(path,
-// { encrypted: true })`, the same sticky rule as `localStorage`
-// (docs/STORAGE.md "IndexedDB"). A host built without storage runs them in
-// memory and says so once (`[redjs] IndexedDB: … IN MEMORY ONLY`).
-//
-// Typed here at the depth an app calls it directly; a wrapper library's own
-// typings are its business. Keys are `IDBValidKey` in the spec: numbers,
-// strings, Dates, ArrayBuffers/views and arrays of those. Merges onto
-// engine.d.ts's `VnEvent` / `VnEventTarget` / `VnNavigator`.
+// IndexedDB 3.0 as `indexedDB` and `navigator.storage` in a vue-native app. Databases are SQLite
+// files under the app's storage folder (`<folder>\indexeddb\`), encrypted at rest when the storage
+// is; a host built without storage keeps them in memory. Typed at the depth an app calls it
+// directly. Merges onto engine.d.ts's `VnEvent` / `VnEventTarget` / `VnNavigator`.
 
 export {};
 
@@ -29,9 +11,7 @@ declare global {
   type VnIDBCursorDirection = "next" | "nextunique" | "prev" | "prevunique";
   type VnIDBHandler = ((ev: VnEvent) => void) | null;
 
-  /** vendor/redjs/redjs/src/webapi/domexception.rs (m25 P0) — what every
-   *  IndexedDB `error` is: `ConstraintError`, `QuotaExceededError`,
-   *  `VersionError`, `AbortError`, … */
+  /** What every IndexedDB `error` is: `ConstraintError`, `QuotaExceededError`, `VersionError`, `AbortError`, … */
   interface VnDOMException {
     readonly name: string;
     readonly message: string;
@@ -170,10 +150,7 @@ declare global {
     prototype: VnIDBKeyRange;
   };
 
-  /** The Storage API's `StorageManager` — the same module. `estimate()`
-   *  reports the IndexedDB bytes against the quota (1 GiB by default);
-   *  `persist()` and `persisted()` answer `true`, because this runtime never
-   *  evicts an app's data (IDB-D7). */
+  /** `estimate()` reports IndexedDB bytes against the quota (1 GiB by default); `persist()` and `persisted()` answer `true` because data is never evicted. */
   interface VnStorageManager {
     estimate(): Promise<{ usage: number; quota: number }>;
     persist(): Promise<boolean>;

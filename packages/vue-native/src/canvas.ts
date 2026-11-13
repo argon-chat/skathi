@@ -1,35 +1,18 @@
-// `<canvas>`: its bitmap and native 2D or WebGPU context.
+// `<canvas>`: the element half (width/height reflection, `getContext`, `toDataURL`, `toBlob`) over
+// the native 2D/WebGPU contexts that live in redjs. Setting width or height, even to the same
+// value, clears the bitmap and resets the context.
 //
-// Both contexts live in redjs (`webapi/canvas2d` and `webapi/webgpu`),
-// alongside the OffscreenCanvas implementation. This module is the element half HTML puts on
-// `HTMLCanvasElement` — `width`/`height` reflected from the attributes (300 ×
-// 150 by default; setting either, even to the same value, clears the bitmap
-// and resets the context), `getContext`, `toDataURL`, `toBlob` — and the map
-// from a mirror `<canvas>` to its context that `drawImage(canvasElement)` and
-// `createImageBitmap(canvasElement)` go through.
+// The bitmap is published under the element's host node id (`__vnId`) so the host can paint it.
+// An `<img>` is drawn from host-decoded pixels, cached per element and `src`.
 //
-// The bitmap is published under the element's host node id (`__vnId`), which
-// is how the host finds it to paint (crates/vn-tree/src/canvas.rs): a draw
-// repaints the element on the next frame.
-//
-// A mirror `<img>` is drawn from the pixels the host decoded for it
-// (`__vn_img_bitmap`, crates/vn-tree/src/img.rs `pixels`), as an ImageBitmap
-// kept per element and `src`: a cropper that redraws on every pointer move
-// decodes once.
-//
-// runtime.ts calls `adoptCanvas` on every mirror `<canvas>`
-// (`nodeOps.createElement`, which the renderer and `document.createElement`
-// share). It must stay importable on its own: test/runtime-harness.ts
-// evaluates it once and binds `adoptCanvas` into runtime.ts as a parameter, so
-// nothing here may touch a host function at module scope — every one is read
-// through `natives()` at call time.
+// runtime.ts calls `adoptCanvas` on every mirror `<canvas>`. test/runtime-harness.ts evaluates
+// this module standalone, so host functions are read through `natives()` at call time, never
+// at module scope.
 
-/** Native contexts are opaque; rendering and capture stay in redjs. */
 type Context2D = object;
 type ContextGPU = object;
 type ContextSelection = { kind: "2d" | "webgpu"; value: object | null };
 
-/** The redjs natives behind the element half (redjs webapi/canvas2d/context.rs). */
 interface CanvasNatives {
   __rjs_canvas_context(canvas: object, width: number, height: number, options: unknown, key: number): Context2D;
   __rjs_canvas_resize(ctx: Context2D, width: number, height: number): void;
@@ -38,7 +21,6 @@ interface CanvasNatives {
   __rjs_canvas_source_hook(resolve: (value: unknown) => unknown): void;
 }
 
-/** The WebGPU element entry points are present only in a WebGPU-enabled engine. */
 interface WebGPUNatives {
   __rjs_webgpu_context(canvas: object, width: number, height: number, key: number): ContextGPU | null;
   __rjs_webgpu_resize(ctx: ContextGPU, width: number, height: number): void;
@@ -46,18 +28,14 @@ interface WebGPUNatives {
   __rjs_webgpu_blob(ctx: ContextGPU, type: string, quality: unknown): unknown;
 }
 
-/** The host's half (crates/vn-tree/src/lib.rs `vn_img_bitmap`). */
 interface HostNatives {
-  /** The `<img>`'s pixels as an ImageBitmap, `null` for nothing yet, or why not. */
   __vn_img_bitmap(id: number, originClean: boolean): ImageBitmapLike | null | string;
 }
 
-/** An ImageBitmap, as far as this module touches one. */
 interface ImageBitmapLike {
   close(): void;
 }
 
-/** The slice of a mirror `<img>` read here: its DOM state, which runtime.ts keeps. */
 interface ImageElement {
   __vnId: number;
   attrs: Record<string, string>;
@@ -67,7 +45,6 @@ interface ImageElement {
   naturalHeight: number;
 }
 
-/** The slice of a mirror element this module reads and extends. */
 interface CanvasElement {
   __vnId: number;
   tagName: string;
@@ -77,19 +54,16 @@ interface CanvasElement {
   height: number;
 }
 
-/** The engine's canvas natives, looked up per call (absent under bun). */
 function natives(): CanvasNatives | null {
   const g = globalThis as unknown as Partial<CanvasNatives>;
   return typeof g.__rjs_canvas_context === "function" ? (g as CanvasNatives) : null;
 }
 
-/** Look up canvas support directly; adapter availability does not imply presentation. */
 function gpuNatives(): WebGPUNatives | null {
   const g = globalThis as unknown as Partial<WebGPUNatives>;
   return typeof g.__rjs_webgpu_context === "function" ? (g as WebGPUNatives) : null;
 }
 
-/** The host's natives, looked up per call (absent under bun). */
 function host(): HostNatives | null {
   const g = globalThis as unknown as Partial<HostNatives>;
   return typeof g.__vn_img_bitmap === "function" ? (g as HostNatives) : null;
@@ -105,7 +79,6 @@ function advise(key: string, msg: string): void {
 /** Context mode is fixed after a successful selection. Failed requests leave it unset. */
 const contexts = new WeakMap<object, ContextSelection>();
 
-/** HTML "rules for parsing non-negative integers", with the attribute's default. */
 function dimension(el: CanvasElement, name: "width" | "height"): number {
   const fallback = name === "width" ? 300 : 150;
   const raw = el.attrs[name];
@@ -126,7 +99,6 @@ function tagOf(v: unknown): string {
     : "";
 }
 
-/** Select one native context without converting a canvas already using another mode. */
 function contextOf(el: CanvasElement, kind: "2d" | "webgpu", options?: unknown): object | null {
   const selected = contexts.get(el);
   if (selected) return selected.kind === kind ? selected.value : null;
@@ -156,26 +128,15 @@ function contextOf(el: CanvasElement, kind: "2d" | "webgpu", options?: unknown):
   return pending.value;
 }
 
-/** An `<img>`'s decoded pixels, for the `src` (and natural size) they were made for. */
 const decoded = new WeakMap<object, { src: string; w: number; h: number; bitmap: ImageBitmapLike }>();
 
-/**
- * HTML's origin-clean flag for an image: false for one fetched over http(s)
- * without a `crossorigin` attribute, which a browser's page origin never
- * shares with this runtime's `app://`. Recorded on the canvas that draws it,
- * not enforced (redjs canvas2d `Surface::readable` advises instead).
- */
+/** HTML origin-clean flag: false for an http(s) image without `crossorigin`. Recorded on the canvas, not enforced. */
 function originClean(el: ImageElement, src: string): boolean {
   if (!/^https?:/i.test(src.trim())) return true;
   return el.attrs.crossorigin != null || el.attrs.crossOrigin != null;
 }
 
-/**
- * HTML "check the usability of the image argument" for an `<img>`, and its
- * pixels: still loading (or no `src`) draws nothing; a broken one throws
- * InvalidStateError, worded as Chromium words it; a loaded one is the bitmap
- * the host decoded for it.
- */
+/** The pixels of a usable `<img>`: none while loading; a broken one throws InvalidStateError (Chromium's wording). */
 function imageSource(el: ImageElement): unknown {
   const src = el.attrs.src ?? "";
   if (src.trim() === "" || !el.complete) return null;
@@ -201,20 +162,13 @@ function imageSource(el: ImageElement): unknown {
   return got;
 }
 
-/**
- * What `drawImage` / `createImageBitmap` make of a mirror element: a canvas is
- * its context; an `<img>` is its decoded pixels (`imageSource`); a `<video>`
- * has no frames on this side yet (`null`: a valid source with nothing to
- * draw); anything else is not an image source (`undefined`: the engine's
- * TypeError).
- */
+/** Source for `drawImage`/`createImageBitmap`: canvas -> its context, `<img>` -> pixels, `<video>` -> null (no frames yet), else undefined (the engine's TypeError). */
 function resolveSource(v: unknown): unknown {
   // Reading a blank canvas does not select a rendering mode for it.
   if (isCanvas(v)) return contexts.get(v)?.value ?? null;
   const tag = tagOf(v);
   if (tag === "IMG" && typeof v === "object" && v !== null && "__vnId" in v) return imageSource(v as ImageElement);
   if (tag === "VIDEO") {
-    // CV-4 (docs/RUNTIME.md §5.10).
     advise(
       "canvas:source-video",
       "drawImage(<video>) draws nothing yet: the host's video frames are not readable from a canvas in this build",
@@ -224,7 +178,6 @@ function resolveSource(v: unknown): unknown {
   return undefined;
 }
 
-/** The engine the hook went to (once per engine, not once per module). */
 let hookedOn: unknown = null;
 function installHook(): void {
   const n = natives();
@@ -233,7 +186,6 @@ function installHook(): void {
   hookedOn = n.__rjs_canvas_source_hook;
 }
 
-/** WebIDL `unsigned long` for the width/height setters. */
 function toUnsignedLong(v: unknown): number {
   const x = Number(v);
   return Number.isFinite(x) ? Math.trunc(x) >>> 0 : 0;
@@ -266,7 +218,6 @@ function toBlob(this: CanvasElement, callback: unknown, type?: unknown, quality?
   setTimeout(() => (callback as (b: unknown) => void)(blob), 0);
 }
 
-/** A width/height attribute changed: a fresh bitmap, the context at its defaults. */
 function resized(el: CanvasElement): void {
   const selected = contexts.get(el);
   if (!selected?.value) return;
@@ -276,13 +227,10 @@ function resized(el: CanvasElement): void {
   else natives()?.__rjs_canvas_resize(selected.value, w, h);
 }
 
-/** Gives a mirror `<canvas>` its canvas members. */
 export function adoptCanvas(target: object): void {
   const el = target as CanvasElement;
   installHook();
-  // `patchProp` (and so `setAttribute`) is the one writer of `attrs`; a write
-  // to width/height is a resize, even to the same value (HTML: "set bitmap
-  // dimensions" runs on every set).
+  // `patchProp` is the only writer of `attrs`; any width/height write resizes, even to the same value.
   el.attrs = new Proxy(el.attrs, {
     set(t, k, v) {
       t[k as string] = v as string;

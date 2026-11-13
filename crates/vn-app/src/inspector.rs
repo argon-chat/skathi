@@ -1,52 +1,14 @@
-//! The EMBEDDED inspector: `F12`, `--devtools` mode, and the child registry.
+//! The embedded inspector: `F12`, `--devtools` mode, and the child registry.
 //!
-//! ```text
-//!   the app                                    the inspector
-//!  ┌──────────────────────────────┐           ┌──────────────────────────────┐
-//!  │ user presses F12             │  spawn    │ vn-app.exe --devtools        │
-//!  │  intercept_keystrokes ───────┼──────────▶│   --target <slot>            │
-//!  │                              │  (no      │   --window <id>              │
-//!  │ devtools listener :49xxx ◀───┼───────────│   --parent <pid>             │
-//!  └──────────────────────────────┘  focus)   │ inflates and runs the bundle │
-//!                                             │ embedded in THIS executable  │
-//!                                             └──────────────────────────────┘
-//! ```
+//! F12 re-spawns this executable as `vn-app.exe --devtools --target <slot> --window <id> --parent
+//! <pid>`, which inflates and runs the inspector bundle embedded in it. A second process rather
+//! than a panel, so a wedged frame pump or poisoned JS bridge in the app cannot take the inspector
+//! down with it; the same binary, so nothing extra ships.
 //!
-//! ## Why a second process and not a panel
-//!
-//! [`docs/DEVTOOLS-UI.md`] §1 argued this once and the argument has not moved:
-//! the failures worth inspecting are the ones that stop the app — a wedged
-//! frame pump, a poisoned JS bridge, a restyle that never terminates — and a
-//! panel drawn by that machinery goes down with it. What is new in v2 is only
-//! *where the inspector comes from*: it used to be a second dist folder that
-//! `bun devtools/ui.ts` built and launched, and it is now a bundle inside this
-//! very executable, so `F12` needs nothing on disk and works in a shipped app
-//! built with `--features prod` — which since m22 is every shipped app, unless
-//! its own JS turned the devtools off (docs/DEVTOOLS.md).
-//!
-//! Re-spawning **ourselves** is what makes that cheap. There is no second
-//! binary to ship, no second build to keep in step, and no multiwindow refactor
-//! (docs/MULTIWINDOW.md §5: ~25 thread-locals would have to grow a window key
-//! before an inspector could live in a second window of this process). The
-//! child is an ordinary vue-native host whose app happens to be the inspector,
-//! which is also why every last thing in DEVTOOLS-UI.md §§2-5 still applies to
-//! it unchanged.
-//!
-//! ## Focus
-//!
-//! The child's window opens with `focus: false` (`SW_SHOWNOACTIVATE` on
-//! Windows) and the child never calls `cx.activate`. Pressing F12 therefore
-//! does not take the caret out of whatever you were typing into — which is the
-//! whole reason a browser's devtools opens docked and a second window is
-//! normally a nuisance.
-//!
-//! Pressing F12 **again** raises the inspector that already exists, and that is
-//! a focus change the user just asked for. It goes through the OS's own
-//! handshake for handing the foreground on: the app is the foreground process,
-//! so it calls `AllowSetForegroundWindow(child pid)` and then asks the child to
-//! activate itself over the devtools wire. Without that call Windows would
-//! refuse the child's `SetForegroundWindow` and flash its taskbar button
-//! instead.
+//! The child's window opens unfocused (`focus: false`) and never activates, so F12 does not take the
+//! caret from whatever you were typing into. Pressing F12 again raises the existing inspector: the
+//! app calls `AllowSetForegroundWindow(child pid)` and asks the child over the devtools wire to
+//! activate itself, since Windows would otherwise refuse the child's `SetForegroundWindow`.
 
 use std::path::{Path, PathBuf};
 use std::ffi::OsStr;
@@ -55,9 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use gpui::App;
 use vn_runtime::JsRuntime;
 
-/// The inspector, prod-bundled by `build.rs` out of `apps/devtools` and
-/// stored as raw deflate (`build.rs` `deflate_bundle`): ~340 KB of JS that
-/// only an inspector process ever runs, in every binary that has devtools.
+/// The inspector, prod-bundled by `build.rs` from `apps/devtools` and stored as raw deflate.
 const INSPECTOR_JS_DEFLATE: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/devtools/app.prod.js.deflate"));
 
@@ -73,12 +33,7 @@ pub(crate) fn inspector_js() -> std::io::Result<String> {
 /// Its `vn.config.json` window block, emitted beside the bundle by `prod.ts`.
 const INSPECTOR_WINDOW_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/devtools/window.json"));
 
-// ---------------------------------------------------------------------------
-// `--devtools` mode
-// ---------------------------------------------------------------------------
-
-/// What this process was asked to inspect, when it was started with
-/// `--devtools`.
+/// What this process was asked to inspect when started with `--devtools`.
 pub struct Mode {
     /// The slot directory of the app under inspection.
     pub target: Option<String>,
@@ -90,15 +45,8 @@ pub struct Mode {
 
 static MODE: std::sync::OnceLock<Option<Mode>> = std::sync::OnceLock::new();
 
-/// `None` in an ordinary host, which is every host that was not started by
-/// [`open_for_window`] or by hand with `--devtools`.
-///
-/// Read off the ONE argv parser (`vn_desktop::args`), never off argv directly.
-/// Until m25 this was `argv.iter().any(|a| a == "--devtools")` — `--devtools`
-/// ANYWHERE flipped the process into the inspector, which a custom-protocol
-/// link (`myapp://x" --devtools "…`) could have reached. The parser honours it
-/// only as a LEADING host flag, and never in a protocol launch
-/// (docs/LAUNCH.md §2, research/reports/m25/desktop-apis-design.md finding 6).
+/// `None` in an ordinary host. Read off the one argv parser (`vn_desktop::args`), which honours
+/// `--devtools` only as a leading host flag and never in a protocol launch.
 pub fn mode() -> Option<&'static Mode> {
     MODE.get_or_init(|| {
         let host = &vn_desktop::args::process().host;
@@ -119,17 +67,13 @@ pub fn is_devtools_host() -> bool {
     mode().is_some()
 }
 
-/// Sets up the environment a `--devtools` process needs, before anything reads
-/// it. Called first thing in `main`.
+/// Sets up the environment a `--devtools` process needs; called first thing in `main`.
 ///
-/// Two variables, both of which would otherwise be inherited from the app that
-/// spawned us and both of which would be actively wrong:
-///
-/// * `VN_DIST` — the slot this process publishes its OWN handshake into. It
-///   must not be the target's, or the inspector would overwrite the very
-///   `devtools.json` it is trying to read. [`open_for_window`] always passes
-///   one; this is the fallback for `vn-app --devtools` typed by hand.
-/// * `VN_DEVTOOLS_TARGET` — what `--target` means to `__vn_devtools_targets()`.
+/// Both variables would otherwise be inherited from the spawning app and be wrong:
+/// * `VN_DIST`: the slot this process publishes its own handshake into. It must not be the target's,
+///   or the inspector would overwrite the `devtools.json` it reads. [`open_for_window`] always
+///   passes one; this is the fallback for `vn-app --devtools` typed by hand.
+/// * `VN_DEVTOOLS_TARGET`: what `--target` means to `__vn_devtools_targets()`.
 pub fn init() {
     let Some(mode) = mode() else { return };
     if std::env::var_os("VN_DIST").is_none_or(|v| v.is_empty()) {
@@ -167,16 +111,12 @@ pub(crate) fn engine_without_native(policy: Option<&std::ffi::OsStr>, external: 
     }
 }
 
-/// Evaluates the embedded inspector. The `--devtools` half of `boot_mode::boot`.
-///
-/// The bundle is `bun prod.ts`'s output, so it carries its own stylesheet
-/// (`__VN_CSS__` pushes ahead of the IIFE) and mounts itself — exactly what
-/// [`crate::prod::boot`] evaluates, from a different `include_str!`.
+/// Evaluates the embedded inspector. The bundle carries its own stylesheet and mounts itself, like
+/// [`crate::prod::boot`].
 pub fn boot(rt: &JsRuntime) -> Result<(), String> {
     let mode = mode();
-    // What the UI needs and cannot derive: which window of the target this
-    // inspector was opened for, and whether it is a child at all (a child adds
-    // a "close with the app" affordance a hand-launched one must not).
+    // What the UI cannot derive: which window of the target it was opened for, and whether it is a
+    // child (which adds a "close with the app" affordance).
     let args = crate::json::Json::obj(vec![
         (
             "target",
@@ -227,15 +167,13 @@ pub fn boot(rt: &JsRuntime) -> Result<(), String> {
     Ok(())
 }
 
-/// The inspector's own window block — the same JSON `apps/devtools/vn.config.json`
-/// declares, baked in beside the bundle.
+/// The inspector's window block, baked in beside the bundle.
 pub fn window_config() -> Option<String> {
     Some(INSPECTOR_WINDOW_JSON.to_string())
 }
 
-/// `%LOCALAPPDATA%\Temp\vue-native\devtools\<key>` — the slot a child publishes
-/// its handshake into. Deterministic, so the parent can read it back to raise
-/// the window instead of opening a second one.
+/// `%LOCALAPPDATA%\Temp\vue-native\devtools\<key>`: where a child publishes its handshake.
+/// Deterministic, so the parent can read it back to raise the window instead of opening a second.
 fn default_child_slot(key: u32) -> PathBuf {
     std::env::temp_dir().join("vue-native").join("devtools").join(key.to_string())
 }
@@ -248,12 +186,7 @@ fn child_slot(parent_pid: u32, window: Option<u64>) -> PathBuf {
     std::env::temp_dir().join("vue-native").join("devtools").join(leaf)
 }
 
-// ---------------------------------------------------------------------------
-// the child registry (the APP side)
-// ---------------------------------------------------------------------------
-
 struct Child {
-    /// Which of OUR windows this inspector was opened for.
     window: Option<u64>,
     slot: PathBuf,
     pid: u32,
@@ -266,25 +199,11 @@ thread_local! {
 
 /// Have we already told the user the devtools are off in this process?
 static OPTOUT_SAID: AtomicBool = AtomicBool::new(false);
-/// …and separately, that the KEY is off. Two flags rather than one, because
-/// they are two different reasons and a process can hit both — a harness that
-/// sets `VN_DEVTOOLS_KEY=off` on an app that later calls `disable()` would
-/// otherwise be told only about whichever it reached first.
+/// Likewise for the key being off: separate reasons, and a process can hit both.
 static KEY_OFF_SAID: AtomicBool = AtomicBool::new(false);
 
-/// How long after an F12 the next one is ignored.
-///
-/// Two reasons, and the first is the ordinary one: HOLDING F12 auto-repeats at
-/// ~30 Hz on Windows, and every repeat is a real `KeyDown` — without this, a
-/// leaned-on key would raise the inspector thirty times a second. A browser
-/// ignores the repeat too.
-///
-/// The second is empirical and worth writing down: one synthesized keystroke
-/// through `Window::dispatch_keystroke` has been observed reaching the
-/// interceptor twice, intermittently, on a host whose app had a focused text
-/// input. It is gpui's key path, not ours — but the CORRECT behaviour under a
-/// duplicate is the same as under a repeat, so one guard covers both instead
-/// of a special case for something that only happens sometimes.
+/// How long after an F12 the next one is ignored: holding F12 auto-repeats at ~30 Hz, and one
+/// synthesized keystroke has been seen reaching the interceptor twice (gpui's key path).
 const F12_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
 
 thread_local! {
@@ -292,19 +211,13 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
-/// Installs the F12 key. Called once, from `main`, before any window exists.
+/// Installs the F12 key; called once from `main`, before any window exists.
 ///
-/// `App::intercept_keystrokes` rather than a key binding or a per-element
-/// listener, because the requirement is that an app *cannot accidentally eat
-/// it*: interceptors run before action resolution and before every element's
-/// own key listener (`Window::dispatch_key_event`), in whichever window has
-/// focus. The app still SEES the `keydown` afterwards — propagation is not
-/// stopped — which is what a browser does too: a page's `keydown` handler fires
-/// for F12 and cannot cancel the devtools.
+/// An interceptor rather than a key binding, so an app cannot accidentally eat it: it runs before
+/// action resolution and every element's key listener, in whichever window has focus. The app still
+/// sees the `keydown`, as in a browser.
 pub fn install_hotkey(cx: &mut App) {
-    // An inspector does not open an inspector on F12. (It can still be
-    // inspected — by attaching to it from another one, which is what the
-    // targets list is for.)
+    // An inspector does not open an inspector on F12.
     if is_devtools_host() {
         return;
     }
@@ -319,8 +232,7 @@ pub fn install_hotkey(cx: &mut App) {
     std::mem::forget(sub);
 }
 
-/// F12 with no modifiers. `Shift+F12` and friends are left alone: they are
-/// ordinary keystrokes an app is entitled to bind.
+/// F12 with no modifiers; `Shift+F12` and friends stay bindable by apps.
 fn is_f12(k: &gpui::Keystroke) -> bool {
     k.key == "f12"
         && !k.modifiers.control
@@ -342,11 +254,8 @@ pub fn open_for_window(window: Option<u64>, cx: &mut App) {
     if repeat {
         return;
     }
-    // Two gates, and they mean different things — see `crate::window::Config`.
-    //
-    // The MASTER switch first: the app turned its devtools off (in JS, in
-    // `vn.config.json`, or through `VN_DEVTOOLS=0`), so there is no listener
-    // for an inspector to attach to and opening one would show an empty window.
+    // Two gates (see `crate::window::Config`): the master switch first (the app turned its devtools
+    // off, so there is no listener to attach to), then the key, which a harness can turn off alone.
     if !crate::devtools::enabled() {
         if !OPTOUT_SAID.swap(true, Ordering::Relaxed) {
             let msg = "F12: this app has its devtools disabled (`appDevtools.disable()`, or \
@@ -358,8 +267,6 @@ pub fn open_for_window(window: Option<u64>, cx: &mut App) {
         }
         return;
     }
-    // …then the KEY, which a harness turns off on its own with the protocol
-    // left alone.
     if !crate::window::devtools_key_enabled() {
         if !KEY_OFF_SAID.swap(true, Ordering::Relaxed) {
             let msg = "F12: VN_DEVTOOLS_KEY=off, so the inspector is not opened. (The devtools \
@@ -394,8 +301,7 @@ pub fn open_for_window(window: Option<u64>, cx: &mut App) {
     let _ = cx;
 }
 
-/// Reaps children that exited on their own, so a closed inspector window means
-/// the next F12 opens a new one instead of trying to raise a corpse.
+/// Reaps children that exited on their own, so the next F12 opens a new one.
 fn reap() {
     CHILDREN.with(|c| {
         c.borrow_mut().retain_mut(|child| match child.proc.try_wait() {
@@ -415,14 +321,10 @@ fn raise_existing(window: Option<u64>) -> Option<u32> {
             .find(|child| child.window == window)
             .map(|child| (child.pid, child.slot.clone()))
     })?;
-    // The OS's own foreground handshake: WE are the foreground process (the
-    // user just pressed a key in our window), so we are allowed to hand the
-    // foreground to a named process. Without this the child's own
-    // `SetForegroundWindow` is refused and Windows flashes its taskbar button.
+    // We are the foreground process, so we may hand the foreground to the child; otherwise its
+    // `SetForegroundWindow` is refused and its taskbar button flashes.
     allow_foreground(pid);
-    // Off-thread: this runs inside a keystroke interceptor, on the frame pump's
-    // own thread, and a TCP round trip there would be a visible hitch in the
-    // app being debugged.
+    // Off-thread: a TCP round trip on the frame pump's thread would hitch the app being debugged.
     std::thread::Builder::new()
         .name("vn-devtools-raise".into())
         .spawn(move || {
@@ -439,9 +341,8 @@ fn raise_existing(window: Option<u64>) -> Option<u32> {
 fn send_raise(slot: &Path) -> Result<(), String> {
     use std::io::{BufRead, BufReader, Write};
 
-    // `VN_DEVTOOLS_RAISE=off` — for an automated run on a machine somebody is
-    // using. Everything else about the second F12 still happens (no duplicate
-    // process, the log line); the window simply does not come forward.
+    // `VN_DEVTOOLS_RAISE=off`, for automated runs on a machine somebody is using: everything but
+    // the window coming forward still happens.
     if std::env::var("VN_DEVTOOLS_RAISE").is_ok_and(|v| v == "off") {
         return Ok(());
     }
@@ -485,9 +386,8 @@ fn allow_foreground(pid: u32) {
 
 /// Starts a new inspector for `window`.
 fn spawn(window: Option<u64>) -> Result<u32, String> {
-    // The inspector is this host exe started again in `--devtools` mode. An
-    // embedded vue-native is not in its own exe — this one is the embedder's —
-    // so it uses the vn-app.exe the embedder named (src/embed.rs).
+    // The inspector is this host exe started again in `--devtools` mode; an embedded vue-native uses
+    // the vn-app.exe the embedder named.
     let exe = if crate::embed::active() {
         crate::embed::inspector_exe().ok_or(
             "vue-native is embedded, so there is no host exe to start as the inspector; \
@@ -499,8 +399,7 @@ fn spawn(window: Option<u64>) -> Result<u32, String> {
     let target = crate::slot::dir();
     let slot = child_slot(std::process::id(), window);
     std::fs::create_dir_all(&slot).map_err(|e| format!("{}: {e}", slot.display()))?;
-    // Children that crashed left their slots behind (crate::slot — shared
-    // with a packaged app's own `%TEMP%\vue-native\apps\<name>\<pid>`).
+    // Prune slots left behind by crashed children.
     crate::slot::prune_dead_slots(&slot);
 
     let mut cmd = std::process::Command::new(&exe);
@@ -512,24 +411,18 @@ fn spawn(window: Option<u64>) -> Result<u32, String> {
     if let Some(w) = window {
         cmd.arg("--window").arg(w.to_string());
     }
-    // The child is a host in its own right, and every one of these would make
-    // it the WRONG host: our dist slot, our window size, our scenario pin, our
-    // voice identity. `VN_DIST` is replaced rather than removed — it is what
-    // keeps the child's handshake out of the target's slot.
+    // Every inherited setting here would make the child the wrong host (our dist slot, window size,
+    // scenario pin). `VN_DIST` is replaced, not removed, to keep its handshake out of the target's slot.
     cmd.env("VN_DIST", &slot);
     cmd.env("VN_DEVTOOLS_TARGET", &target);
-    // An inspector has to have a port OF ITS OWN: it is how the parent raises it
-    // on a second F12, and how another inspector could attach to it. Forced
-    // rather than inherited, because `VN_DEVTOOLS=0` in the developer's shell
-    // (or an `appDevtools.disable()` this app later reversed) would otherwise
-    // produce a child window nothing can reach or close politely.
+    // The inspector needs a port of its own (the parent raises it through it), so this is forced:
+    // `VN_DEVTOOLS=0` in the shell would otherwise leave an unreachable child.
     cmd.env("VN_DEVTOOLS", "1");
     for name in ["VN_WINDOW", "VN_SCENARIO", "VN_APP_ROOT", "VN_PERF"] {
         cmd.env_remove(name);
     }
     cmd.stdin(std::process::Stdio::null());
-    // The child's stderr is its own; inheriting it would interleave two hosts'
-    // logs in one terminal, and the inspector has a console of its own.
+    // Inheriting stderr would interleave two hosts' logs in one terminal.
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());
 
@@ -539,11 +432,7 @@ fn spawn(window: Option<u64>) -> Result<u32, String> {
     Ok(pid)
 }
 
-/// Kills every inspector this process opened. Called from `App::on_app_quit`.
-///
-/// A debugger that outlives its subject is a window nobody can explain — and,
-/// unlike the crash case (which the child's own parent watch covers), a
-/// deliberate quit is a moment where we know exactly what to do.
+/// Kills every inspector this process opened; called from `App::on_app_quit`.
 pub fn close_children() {
     CHILDREN.with(|c| {
         for child in c.borrow_mut().iter_mut() {
@@ -553,27 +442,18 @@ pub fn close_children() {
     });
 }
 
-/// How many inspectors this process has open. For the `windows` command and
-/// the e2e specs, which is the only way to prove "no duplicate" from outside.
+/// How many inspectors this process has open, for the `windows` command and the e2e specs.
 pub fn children() -> Vec<(Option<u64>, u32)> {
     reap();
     CHILDREN.with(|c| c.borrow().iter().map(|child| (child.window, child.pid)).collect())
 }
 
-// ---------------------------------------------------------------------------
-// the parent watch (the INSPECTOR side)
-// ---------------------------------------------------------------------------
-
 static PARENT_GONE: AtomicBool = AtomicBool::new(false);
 
-/// Starts the watch that closes this inspector when the app it is inspecting
-/// exits. Called from `main` in `--devtools` mode.
+/// Starts the watch that closes this inspector when the inspected app exits (`--devtools` mode).
 ///
-/// It probes the TARGET's own devtools port rather than the pid, for the same
-/// reason discovery does (docs/DEVTOOLS-UI.md §3): a pid can be recycled, a
-/// refused connect on loopback cannot lie, and it is instant. Three consecutive
-/// refusals, because a host mid-restart is a thing that happens and a debugger
-/// that vanishes on a hiccup is worse than one that lingers for six seconds.
+/// It probes the target's devtools port rather than the pid, which can be recycled. Three
+/// consecutive refusals are required, so a host mid-restart does not make the inspector vanish.
 pub fn watch_parent() {
     let Some(mode) = mode() else { return };
     let Some(target) = mode.target.clone() else { return };

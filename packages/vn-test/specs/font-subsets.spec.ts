@@ -1,18 +1,3 @@
-// One font family as `unicode-range` subsets, drawn per character by the
-// subset that covers it (CSS Fonts 4 §4.5 and §5.3; crates/vn-tree/src/fonts.rs,
-// gpui's `FamilyComposer`, docs/RUNTIME.md §5.15).
-//
-//   bun test packages/vn-test/specs/font-subsets.spec.ts
-//
-// `fixtures/font-subsets` declares Manrope as @fontsource-variable/manrope
-// does: one family, one file per subset, each with a `unicode-range`. Every
-// subset used to reach the text system under the same family, so DirectWrite
-// shaped a run with one file and the glyphs were drawn with another's
-// outlines: "EXOBIO OVERLAY LAB" came out as letter-shaped garbage of the
-// right width. Each `Mix` probe is compared, pixel for pixel, with the same
-// text in the single-file `Ref *` family of the file that covers it: the same
-// glyphs at the same place rasterize the same.
-
 import { afterAll, describe, expect, test } from "bun:test";
 import { launch, readPng } from "../src/index";
 
@@ -28,7 +13,6 @@ const T = 30_000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Polls `read` until `ok` holds, and returns the last answer either way. */
 async function until<V>(read: () => Promise<V>, ok: (v: V) => boolean, ms = 10_000): Promise<V> {
   const deadline = Date.now() + ms;
   let v = await read();
@@ -44,11 +28,8 @@ const box = async (id: string): Promise<Box> => (await app.query(`#${id}`)).node
 const width = async (id: string) => (await app.query(`#${id}`)).nodes[0]?.bounds?.w ?? -1;
 const faces = async (): Promise<string[]> => JSON.parse(String(await app.eval("JSON.stringify(__VN_TEST_SUBSETS__.faces())")));
 
-/** Every face the probes draw with is in, and the text swapped to them. */
 async function settled() {
   await until(faces, (f) => f.filter((x) => x.includes(":loaded:")).length >= 6);
-  // The sheet recompiles once the faces are registered; a frame later the
-  // text is in them. `#lat` and `#lat-ref` agreeing on their width is that.
   await until(
     async () => [await width("lat"), await width("lat-ref"), await width("plain")],
     ([a, b, p]) => a > 0 && Math.abs(a - b) < 0.01 && Math.abs(a - p) > 1,
@@ -56,10 +37,6 @@ async function settled() {
   await sleep(300);
 }
 
-/**
- * Pixels of probe `a` against probe `b`, over the first `w` CSS px of each
- * (default: all of `a`): how many are ink in `a`, and how many differ.
- */
 async function compare(a: string, b: string, w?: number) {
   const shot = readPng(await app.screenshot());
   const k = shot.width / WIDTH;
@@ -80,7 +57,6 @@ async function compare(a: string, b: string, w?: number) {
   return { ink, diff };
 }
 
-/** `a` draws what `b` draws: real ink, and (antialiasing aside) the same pixels. */
 async function expectSamePixels(a: string, b: string, w?: number) {
   const { ink, diff } = await compare(a, b, w);
   expect(ink).toBeGreaterThan(40);
@@ -93,7 +69,6 @@ describe("a family cut into unicode-range subsets", () => {
     const f = await faces();
     expect(f).toContain("Mix:loaded:U+301");
     expect(f).toContain("Mix:loaded:U+0-FF");
-    // No Greek text: the greek subset (whose file is not even there) waits.
     expect(f).toContain("Mix:unloaded:U+370-377");
   }, T);
 
@@ -118,9 +93,7 @@ describe("a family cut into unicode-range subsets", () => {
   test("one run of Latin, Cyrillic and digits takes each character from its subset", async () => {
     await settled();
     const pieces = (await width("mixed-lat")) + (await width("mixed-cyr")) + (await width("mixed-num"));
-    // Each box is a whole pixel wide, so each piece may round up by one.
     expect(Math.abs((await width("mixed")) - pieces)).toBeLessThanOrEqual(3);
-    // The run starts as its Latin piece does, glyph for glyph ("EXOBIO").
     await expectSamePixels("mixed", "mixed-lat", (await width("mixed-lat")) - 6);
   }, T);
 

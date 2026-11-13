@@ -1,50 +1,10 @@
-//! `<select>`: the closed box Chromium draws on Windows, and the popup list it
-//! opens (docs/RUNTIME.md §5.28).
+//! `<select>`: the closed box Chromium draws on Windows, and the popup list it opens.
 //!
-//! **The box** is the element's own div: the author's border, padding and
-//! background, around what Chromium's menulist puts inside them. That is the
-//! selected option's label on one line, inside Chromium's internal padding
-//! (`LayoutThemeDefault`: 4px at the start, 1px above and below, and at the end
-//! 1px plus a 15px arrow box), and the arrow: an 8×4 chevron in the text
-//! colour, centred in the last 15px of the padding box, where Chromium puts it
-//! whatever the author's padding. The line height is `normal`, whatever the
-//! author's (Chromium locks it on a menulist). The width is the widest
-//! option's: every label is laid out, and all but the shown one take no
-//! height. `appearance: none` takes the arrow and the internal padding away
-//! and gives the line height back, as in Chromium. There is no UA stylesheet
-//! here, so an unstyled select has no border or background of its own.
-//!
-//! **The selection** is the runtime's (runtime.ts, "`<select>` and
-//! `<option>`"). It pushes the selected index as the reserved `:selected`
-//! prop, and a pick made here goes back as the select's `input` host event
-//! with the option's index in `a`; the runtime applies it and fires `input`
-//! and `change`, or nothing for the option already selected.
-//!
-//! **The popup** lists the options under the box, or above it when there is
-//! more room there, at least as wide as the box and at most 20 rows tall,
-//! scrolling past that. It is deferred above everything else in the window,
-//! and its own boxes carry no node tag, so no element of the page is under a
-//! press on it. Its colours are the select's (`color`, and `background-color`
-//! when it has an opaque one), else the colour scheme's, and the highlight is
-//! approximately Chromium's. While it is open:
-//!
-//! - a press inside it reaches no element of the page ([`refine`]), and a
-//!   release on an enabled option picks it; the pointer moves the highlight;
-//! - a press outside closes it and is swallowed with its release, as
-//!   Chromium's popup takes the press that dismisses it; a wheel outside closes
-//!   it and scrolls as usual;
-//! - the keyboard is the popup's, and the page hears no key event: ↑/↓,
-//!   Home/End and PageUp/PageDown move the highlight over the enabled options,
-//!   typing finds an option by its label, Enter, Space, Tab, Alt+↑/↓ and F4
-//!   pick the highlighted one, and Escape closes without picking;
-//! - it closes when the select loses focus, is disabled or removed, or the
-//!   window is deactivated.
-//!
-//! **Closed**, a focused select opens on Alt+↓/↑, F4, Space and Enter, and
-//! ↑/↓, ←/→, Home/End, PageUp/PageDown and typing change the selection at
-//! once, each change with its `input` and `change`, as Chromium on Windows
-//! does. All of it is the default action of the page's own event: a cancelled
-//! `keydown` does nothing, and a cancelled `mousedown` opens nothing.
+//! The box is the element's own div (author border, padding, background) around the selected option's
+//! label and an 8×4 chevron, with Chromium's internal padding and a `normal` line height; the width is
+//! the widest option's. `appearance: none` removes the arrow and padding. The selection itself is the
+//! runtime's: it pushes the selected index as the reserved `:selected` prop, and a pick goes back as
+//! the select's `input` host event with the option's index in `a`.
 
 use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
@@ -60,8 +20,8 @@ use crate::EventPayload;
 /// Chromium's menulist padding (`LayoutThemeDefault::PopupInternalPadding*`).
 const PAD_START: f32 = 4.0;
 const PAD_BLOCK: f32 = 1.0;
-/// The arrow box: the scroll bar button's width (15px under Windows 11's
-/// Fluent scroll bars), at the end of the padding box.
+/// The arrow box: the scroll bar button's width (15px under Windows 11's Fluent scroll bars), at
+/// the end of the padding box.
 const ARROW_BOX: f32 = 15.0;
 /// 1px, then the arrow box.
 const PAD_END: f32 = 1.0 + ARROW_BOX;
@@ -72,9 +32,6 @@ const MAX_ROWS: usize = 20;
 /// A pause this long starts a new type-ahead search.
 const TYPEAHEAD_RESET: Duration = Duration::from_millis(1000);
 
-// ---------------------------------------------------------------------------
-// The options, as the host tree has them
-// ---------------------------------------------------------------------------
 
 /// One line of the popup: an `<optgroup>`'s label, or an option.
 #[derive(Clone, Debug, PartialEq)]
@@ -106,8 +63,8 @@ pub(crate) fn is_select(t: &Tree, id: u32) -> bool {
     element_named(t, id, "select")
 }
 
-/// HTML's option label: a non-empty `label` attribute, else the option's text
-/// with ASCII white space stripped and collapsed.
+/// HTML's option label: a non-empty `label` attribute, else the option's text with ASCII white
+/// space stripped and collapsed.
 pub(crate) fn option_label(t: &Tree, id: u32) -> String {
     if let Some(l) = t.prop(id, "label").filter(|l| !l.is_empty()) {
         return l.to_string();
@@ -134,10 +91,8 @@ fn collect_text(t: &Tree, id: u32, out: &mut String, depth: usize) {
     }
 }
 
-/// The select's list of options, in HTML's order (its option children, and the
-/// option children of its optgroup children), with the optgroups' labels
-/// between them. An option's index is its place in that list, which is what
-/// `selectedIndex` and the `:selected` prop count.
+/// The select's list of options, in HTML's order (its option children, and the option children of
+/// its optgroup children), with the optgroups' labels between them.
 pub(crate) fn rows(t: &Tree, select: u32) -> Vec<Row> {
     let mut out = Vec::new();
     let Some(n) = t.node(select) else { return out };
@@ -174,30 +129,24 @@ pub(crate) fn shown(t: &Tree, select: u32) -> Option<usize> {
     usize::try_from(ix).ok()
 }
 
-/// Can `select` open, or change by the keyboard: a select, in the tree, and
-/// not actually disabled.
+/// Can `select` open, or change by the keyboard: a select, in the tree, and not actually disabled.
 fn usable(t: &Tree, select: u32) -> bool {
     is_select(t, select) && !crate::render::actually_disabled(t, select)
 }
 
-// ---------------------------------------------------------------------------
-// Moving through the options
-// ---------------------------------------------------------------------------
 
 /// The pickable options, in order.
 fn choices(rows: &[Row]) -> Vec<usize> {
     rows.iter().filter_map(Row::pickable).collect()
 }
 
-/// Where a key moves from `from`: `delta` pickable options on (negative:
-/// back), clamped to the first and the last. Nothing selected: the first.
+/// Where a key moves from `from`: `delta` pickable options on (negative: back), clamped to the
+/// first and the last.
 fn step(rows: &[Row], from: Option<usize>, delta: isize) -> Option<usize> {
     let c = choices(rows);
     let (first, last) = (*c.first()?, *c.last()?);
     let Some(from) = from else { return Some(first) };
     let at = if delta > 0 {
-        // The last pickable one at or before `from`: a disabled option can be
-        // selected, and moving on from it is moving past it.
         match c.iter().rposition(|&i| i <= from) {
             Some(p) => p as isize + delta,
             None => delta - 1,
@@ -237,10 +186,7 @@ impl Typeahead {
         !self.text.is_empty() && self.at.is_some_and(|t| now.duration_since(t) < TYPEAHEAD_RESET)
     }
 
-    /// Types `ch` and finds the option it names, from `from`. One character
-    /// repeated cycles through the options starting with it, from the one
-    /// after `from`; anything else is a prefix, matched from `from` on. Labels
-    /// are compared without case and without their leading white space.
+    /// Types `ch` and finds the option it names, from `from`.
     fn find(&mut self, rows: &[Row], from: Option<usize>, ch: char, now: Instant) -> Option<usize> {
         if !self.active(now) {
             self.text.clear();
@@ -280,20 +226,16 @@ fn typed(ev: &KeyDownEvent) -> Option<char> {
     (chars.next().is_none() && !ch.is_control()).then_some(ch)
 }
 
-// ---------------------------------------------------------------------------
-// The popup's state
-// ---------------------------------------------------------------------------
 
 struct Open {
     select: u32,
     window: WinKey,
-    /// The option Enter would pick: the selected one at first, then wherever
-    /// the keyboard or the pointer moved it.
+    /// The option Enter would pick: the selected one at first, then wherever the keyboard or the
+    /// pointer moved it.
     highlight: Option<usize>,
     scroll: ScrollHandle,
     /// Scroll the highlighted row into view at the next build.
     reveal: bool,
-    /// Where the popup was placed, in window space, at its last prepaint.
     bounds: Option<Bounds<Pixels>>,
     typeahead: Typeahead,
 }
@@ -301,8 +243,7 @@ struct Open {
 thread_local! {
     /// The one open popup; a desktop has one at a time, as it has one pointer.
     static OPEN: RefCell<Option<Open>> = const { RefCell::new(None) };
-    /// The select a press is on, until the press's default action runs
-    /// ([`press_settled`]).
+    /// The select a press is on, until the press's default action runs ([`press_settled`]).
     static PRESSED: Cell<Option<(WinKey, u32)>> = const { Cell::new(None) };
     /// The window whose next release is swallowed: its press closed a popup.
     static SWALLOW_UP: Cell<Option<WinKey>> = const { Cell::new(None) };
@@ -315,9 +256,7 @@ fn open_in(k: WinKey) -> Option<u32> {
     OPEN.with(|o| o.borrow().as_ref().filter(|o| o.window == k).map(|o| o.select))
 }
 
-/// Is the popup still where it was: its select usable, focused, and painted by
-/// this window? Not: it closes, without a repaint (the caller is mid-event, or
-/// mid-build).
+/// Not: it closes, without a repaint (the caller is mid-event, or mid-build).
 fn still_open(k: WinKey) -> Option<u32> {
     let select = open_in(k)?;
     let painted = windows::peek(k, |w| w.bounds.contains_key(&select) || w.prev_bounds.contains_key(&select))
@@ -361,14 +300,13 @@ fn close(window: &mut Window, cx: &mut App) {
     }
 }
 
-/// `index` was picked: the popup closes, and the runtime is told.
 fn pick(select: u32, index: usize, window: &mut Window, cx: &mut App) {
     close(window, cx);
     commit(select, index, window, cx);
 }
 
-/// Selects option `index` of `select` the way the user does: the runtime
-/// applies it and fires `input` and `change` (runtime.ts, `pickOption`).
+/// Selects option `index` of `select` the way the user does: the runtime applies it and fires
+/// `input` and `change` (runtime.ts, `pickOption`).
 fn commit(select: u32, index: usize, window: &mut Window, cx: &mut App) {
     let payload = EventPayload { a: index as f64, ..Default::default() };
     crate::render::js_dispatch_app(select, tree::EV_INPUT, &payload, window, cx);
@@ -379,8 +317,6 @@ fn highlight(index: Option<usize>, reveal: bool, window: &mut Window, cx: &mut A
     let select = OPEN.with(|o| {
         let mut o = o.borrow_mut();
         let o = o.as_mut()?;
-        // A key that lands on the option already highlighted still brings it
-        // back into view, if the wheel scrolled it out.
         if o.highlight == index && !reveal {
             return None;
         }
@@ -393,20 +329,15 @@ fn highlight(index: Option<usize>, reveal: bool, window: &mut Window, cx: &mut A
     }
 }
 
-// ---------------------------------------------------------------------------
-// The pointer
-// ---------------------------------------------------------------------------
 
-/// The select's press listener: the popup opens as the press's default action
-/// ([`press_settled`]), after the `mousedown` and the focus it gives.
+/// The select's press listener: the popup opens as the press's default action ([`press_settled`]),
+/// after the `mousedown` and the focus it gives.
 pub(crate) fn bind_press<E: InteractiveElement>(e: E, id: u32) -> E {
     e.on_mouse_down(MouseButton::Left, move |_, window, _| {
         PRESSED.with(|p| p.set(Some((windows::key(window), id))));
     })
 }
 
-/// A press's default action has run (`render::apply_press_focus`): one on a
-/// select opens its popup, unless its `mousedown` was cancelled.
 pub(crate) fn press_settled(cancelled: bool, window: &mut Window, cx: &mut App) {
     let Some((k, select)) = PRESSED.with(|p| p.take()) else { return };
     if cancelled || k != windows::key(window) {
@@ -415,8 +346,7 @@ pub(crate) fn press_settled(cancelled: bool, window: &mut Window, cx: &mut App) 
     open(select, window, cx);
 }
 
-/// The hit refiner's first question (`pointer::refine`): is the event the
-/// popup's? `true`: it is, and no element of the page hears it.
+/// The hit refiner's first question (`pointer::refine`): is the event the popup's?
 pub(crate) fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) -> bool {
     let k = windows::key(window);
     if kind == VnHitKind::Up && SWALLOW_UP.with(|s| s.get()) == Some(k) {
@@ -443,13 +373,11 @@ pub(crate) fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx:
             close(window, cx);
             false
         }
-        // The release of the press that opened it.
         VnHitKind::Up => false,
     }
 }
 
-/// The event reaches no element: only the popup's own boxes, which carry no
-/// node tag, keep it.
+/// The event reaches no element: only the popup's own boxes, which carry no node tag, keep it.
 fn hit_nothing(kind: VnHitKind, window: &mut Window) {
     windows::here(window, |w| {
         w.hit = None;
@@ -465,20 +393,16 @@ fn hit_nothing(kind: VnHitKind, window: &mut Window) {
     window.vn_restrict_mouse_hit(&|_| false, false);
 }
 
-/// Is the pointer over the popup? Then nothing of the page is hovered anew
-/// (`pointer::resolve_hover`).
+/// Is the pointer over the popup?
 pub(crate) fn covers(window: &Window, p: Point<Pixels>) -> bool {
     let k = windows::key(window);
     OPEN.with(|o| o.borrow().as_ref().filter(|o| o.window == k).and_then(|o| o.bounds).is_some_and(|b| b.contains(&p)))
 }
 
-// ---------------------------------------------------------------------------
-// The keyboard
-// ---------------------------------------------------------------------------
 
-/// The build root's key listeners: the popup's keys in the capture phase,
-/// before anything of the page; a closed select's in the bubble phase, after
-/// every `keydown` handler, so a cancelled one does nothing.
+/// The build root's key listeners: the popup's keys in the capture phase, before anything of the
+/// page; a closed select's in the bubble phase, after every `keydown` handler, so a cancelled one
+/// does nothing.
 pub(crate) fn bind_root<E: InteractiveElement>(e: E) -> E {
     e.capture_key_down(|ev: &KeyDownEvent, window, cx| {
         if popup_key(ev, window, cx) {
@@ -493,7 +417,7 @@ pub(crate) fn bind_root<E: InteractiveElement>(e: E) -> E {
     .on_key_down(closed_key)
 }
 
-/// A key while the popup is open. `true`: it was the popup's (they all are).
+/// A key while the popup is open.
 fn popup_key(ev: &KeyDownEvent, window: &mut Window, cx: &mut App) -> bool {
     let k = windows::key(window);
     let Some(select) = still_open(k) else { return false };
@@ -565,13 +489,9 @@ fn closed_key(ev: &KeyDownEvent, window: &mut Window, cx: &mut App) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Building
-// ---------------------------------------------------------------------------
 
-/// What a select shows inside its own box: the shown option's label, every
-/// other label at no height (they size the box), and Chromium's arrow and
-/// internal padding unless `appearance` is `none`.
+/// What a select shows inside its own box: the shown option's label, every other label at no height
+/// (they size the box), and Chromium's arrow and internal padding unless `appearance` is `none`.
 pub(crate) fn closed_children(
     t: &Tree,
     id: u32,
@@ -588,7 +508,6 @@ pub(crate) fn closed_children(
             .py(px(PAD_BLOCK))
             .line_height(relative(1.2));
     }
-    // The shown one first and in flow; an empty label still takes a line.
     let shown_label = rows.iter().find_map(|r| match r {
         Row::Opt { index, label, .. } if Some(*index) == shown_ix => Some(label.as_str()),
         _ => None,
@@ -615,8 +534,8 @@ pub(crate) fn closed_children(
     kids
 }
 
-/// Chromium's menulist arrow: a chevron in the text colour, centred in the
-/// arrow box at the end of the padding box, at the box's middle.
+/// Chromium's menulist arrow: a chevron in the text colour, centred in the arrow box at the end of
+/// the padding box, at the box's middle.
 fn arrow() -> AnyElement {
     let mut c = gpui::canvas(
         |_, _, _| (),
@@ -674,8 +593,8 @@ fn palette(dark: bool) -> Palette {
     }
 }
 
-/// The popup, if `id`'s is open in this window: a deferred child of the
-/// select, so it inherits the select's text style and paints over everything.
+/// The popup, if `id`'s is open in this window: a deferred child of the select, so it inherits the
+/// select's text style and paints over everything.
 pub(crate) fn popup_child(
     t: &Tree,
     id: u32,
@@ -706,8 +625,6 @@ pub(crate) fn popup_child(
         .and_then(gpui::Fill::color)
         .and_then(|b| b.as_solid())
         .filter(|c| c.a > 0.0);
-    // The select's box, last frame: the popup is at least as wide, and fits
-    // the room above or below it.
     let rect = windows::peek(k, |w| w.bounds.get(&id).or_else(|| w.prev_bounds.get(&id)).copied()).flatten();
     let (width, room) = match rect {
         Some((_, y, w, h)) => {
@@ -771,7 +688,6 @@ pub(crate) fn popup_child(
     }
     if reveal {
         if let Some(r) = reveal_row {
-            // The list's children are the rows that are shown, in order.
             let shown_before = rows[..r].iter().filter(|r| !matches!(r, Row::Opt { hidden: true, .. })).count();
             scroll.scroll_to_item(shown_before);
         }
@@ -791,9 +707,9 @@ pub(crate) fn popup_child(
     Some(gpui::deferred(placed).priority(1).with_stack_key(std::rc::Rc::from([u128::MAX])).into_any_element())
 }
 
-/// The popup's placement: under the select's box, or above it when it does
-/// not fit there and fits better above, kept inside the window sideways.
-/// gpui's `anchored` flips around ONE point; a popup flips around a box.
+/// The popup's placement: under the select's box, or above it when it does not fit there and fits
+/// better above, kept inside the window sideways. gpui's `anchored` flips around ONE point; a popup
+/// flips around a box.
 struct Placed {
     select: u32,
     child: AnyElement,
@@ -865,8 +781,7 @@ impl gpui::Element for Placed {
     }
 }
 
-/// Where a popup of `size` goes for a select at `rect` (`x, y, w, h`) in a
-/// window of `viewport`.
+/// Where a popup of `size` goes for a select at `rect` (`x, y, w, h`) in a window of `viewport`.
 fn place(rect: windows::Rect, size: gpui::Size<Pixels>, viewport: gpui::Size<Pixels>) -> Point<Pixels> {
     let (x, y, _, h) = rect;
     let (vw, vh) = (f32::from(viewport.width), f32::from(viewport.height));
@@ -889,7 +804,8 @@ mod tests {
         Row::Opt { index, label: label.into(), disabled: true, hidden: false, grouped: false }
     }
 
-    /// select > (option "  Every\n body ", optgroup[label=G] > (option[label=Lbl] "x", option[disabled]), option)
+    /// select > (option "  Every\n body ", optgroup[label=G] > (option[label=Lbl] "x",
+    /// option[disabled]), option)
     #[test]
     fn rows_are_html_s_list_of_options_with_the_group_labels() {
         let (select, rows) = tree::with_tree(|t| {
@@ -969,7 +885,6 @@ mod tests {
         assert_eq!(ta.find(&rows, Some(0), 'b', t0), Some(1));
         assert_eq!(ta.find(&rows, Some(1), 'l', t0), Some(2), "a prefix, from the current one");
         assert_eq!(ta.find(&rows, Some(2), 'x', t0), None);
-        // A pause starts over.
         let later = t0 + TYPEAHEAD_RESET + Duration::from_millis(1);
         assert_eq!(ta.find(&rows, Some(2), 'c', later), Some(4));
         assert!(ta.active(later));
@@ -980,13 +895,10 @@ mod tests {
     fn the_popup_goes_under_the_box_and_above_it_when_only_that_fits() {
         let vp = gpui::size(px(800.), px(600.));
         let sz = |w: f32, h: f32| gpui::size(px(w), px(h));
-        // Room below.
         assert_eq!(place((10., 100., 200., 30.), sz(200., 300.), vp), gpui::point(px(10.), px(130.)));
         // Not below, more room above: above.
         assert_eq!(place((10., 500., 200., 30.), sz(200., 300.), vp), gpui::point(px(10.), px(200.)));
-        // Fits neither, more room below: below (its list scrolls).
         assert_eq!(place((10., 100., 200., 30.), sz(200., 550.), vp), gpui::point(px(10.), px(130.)));
-        // Kept inside the window sideways.
         assert_eq!(place((700., 100., 80., 30.), sz(200., 100.), vp), gpui::point(px(600.), px(130.)));
     }
 }

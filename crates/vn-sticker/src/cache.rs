@@ -1,12 +1,10 @@
-//! The loop cache: every frame of a small target's loop, LZ4-compressed, so
-//! the loop replays without its engine.
+//! The loop cache: every frame of a small target's loop, LZ4-compressed, so the loop replays
+//! without its engine.
 //!
-//! W0 measured 48 px loops of real `.tgs` at 2.3–4.2× under LZ4 (mean 2.9×),
-//! 2–3.4 µs to decompress a frame against 0.09–0.32 ms to rasterise it, and a
-//! cached 48 px loop (~0.57 MB at 60 fps) lighter than its parsed ThorVG
-//! source (~1 MB). So a small target's engine is freed once its loop is
-//! cached. The core keeps all loops under one budget (24 MB, the owner's),
-//! evicting the least recently shown.
+//! Measured on 48 px real `.tgs` loops: 2.3–4.2× under LZ4, 2–3.4 µs to decompress a frame against
+//! 0.09–0.32 ms to rasterise it, and a cached loop (~0.57 MB at 60 fps) lighter than its parsed
+//! ThorVG source (~1 MB). So a small target's engine is freed once its loop is cached. The core
+//! keeps all loops under one budget (24 MB), evicting the least recently shown.
 
 use crate::clock::Us;
 
@@ -24,7 +22,6 @@ impl LoopCache {
         LoopCache { slots: vec![None; slots as usize], filled: 0, bytes: 0, last_used: now }
     }
 
-    /// Compressed bytes held.
     pub fn bytes(&self) -> usize {
         self.bytes
     }
@@ -37,7 +34,6 @@ impl LoopCache {
         self.slots.get(slot as usize).is_some_and(Option::is_some)
     }
 
-    /// Slot `slot`'s frame, decompressed to `len` bytes.
     pub fn get(&mut self, slot: u32, len: usize, now: Us) -> Option<Vec<u8>> {
         let compressed = self.slots.get(slot as usize)?.as_ref()?;
         let frame = lz4_flex::block::decompress(compressed, len).ok()?;

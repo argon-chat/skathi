@@ -1,39 +1,30 @@
-//! `location.reload()`: re-run the app, the way the dev host's cold restart
-//! does.
+//! `location.reload()`: re-run the app the way the dev host's cold restart does.
 //!
-//! A browser's reload discards the document and its realm, then loads the page
-//! again. vue-native has one JS realm for the life of the process, so a reload
-//! here is the existing restart path, on request:
+//! A browser's reload discards the document and its realm. vue-native has one JS realm for the life
+//! of the process, so a reload here is the existing restart path, on request:
 //!
-//! 1. `__VN_UNLOAD__()` (packages/vue-native/src/runtime.ts, "location.
-//!    reload"): `pagehide` on `window` (`unload` is not implemented, see
-//!    window.prelude.ts), then `__VN_TEARDOWN__()` (the app unmounts and every
-//!    node is freed), then the realm hygiene. That clears the timers,
-//!    animation frames and idle callbacks the outgoing app scheduled, closes
-//!    its WebSockets, and removes its `window`/`document` listeners.
-//! 2. The bundle is evaluated again: dev re-reads `dist/` (the same `boot` a
-//!    cold restart runs), prod re-evaluates the payload's script.
+//! 1. `__VN_UNLOAD__()` (packages/vue-native/src/runtime.ts): `pagehide` on `window`, then
+//!    `__VN_TEARDOWN__()` (the app unmounts and every node is freed), then the realm hygiene, which
+//!    clears the timers, animation frames and idle callbacks the outgoing app scheduled, closes its
+//!    WebSockets, and removes its `window`/`document` listeners.
+//! 2. The bundle is evaluated again: dev re-reads `dist/` (the `boot` a cold restart runs), prod
+//!    re-evaluates the payload's script.
 //!
-//! The host fn only sets a flag. The work runs at the start of the next frame
-//! ([`pump`]), never inside the call stack that asked for it, because tearing
-//! the app down under its own handler would leave that handler running
-//! against freed nodes. A browser also navigates asynchronously.
+//! The host fn only sets a flag. The work runs at the start of the next frame ([`pump`]), never
+//! inside the call stack that asked, because tearing the app down under its own handler would leave
+//! that handler running against freed nodes.
 //!
-//! What a browser does and this does not, also in the runtime's advisory:
+//! Unlike a browser:
 //!
-//! - the realm survives. The runtime's unload deletes every configurable
-//!   global the old app added and replaces the runtime's own classes and
-//!   hooks (1a84b39), so what carries over is only built-ins the old app
-//!   MODIFIED, plus globals it made non-configurable (counted in an
-//!   advisory);
+//! - the realm survives: the runtime's unload deletes every configurable global the old app added
+//!   and replaces the runtime's own classes and hooks, so what carries over is only built-ins the
+//!   old app modified, plus non-configurable globals (counted in an advisory);
 //! - fetches in flight still settle into the old app's promise chains;
-//! - IndexedDB connections stay open until the old code closes them.
-//!   (Captures and `AudioContext`s do NOT: [`end_media`] ends them as a
-//!   browser's navigation does; an embedder's own sessions end in its
+//! - IndexedDB connections stay open until the old code closes them. (Captures and `AudioContext`s
+//!   do not: [`end_media`] ends them; an embedder's own sessions end in its
 //!   `HostContext::on_reload` hook, which runs right after);
 //! - `beforeunload` is not asked (a reload the app requested is not vetoed);
-//! - `DOMContentLoaded` / `load` fired once per process and do not fire again
-//!   (`document.readyState` stays `"complete"`).
+//! - `DOMContentLoaded` / `load` fire once per process (`document.readyState` stays `"complete"`).
 
 use std::cell::Cell;
 
@@ -84,13 +75,10 @@ fn run(rt: &JsRuntime) {
     crate::boot_mode::reboot(rt);
 }
 
-/// What a browser's navigation ends with the old document, after its
-/// `pagehide` and teardown have run: its captures (every `MediaStreamTrack`
-/// stops and an unused microphone is released) and its `AudioContext`s (a
-/// looping ringtone stops with them). An embedder's own sessions (a call, say)
-/// end in its `on_reload` hook, which the caller runs next.
-///
-/// Never blocks the frame. `why` names the caller in the log.
+/// What a browser's navigation ends with the old document, after `pagehide` and teardown: its
+/// captures (every `MediaStreamTrack` stops, an unused microphone is released) and its
+/// `AudioContext`s. An embedder's own sessions end in its `on_reload` hook, which the caller runs
+/// next. Never blocks the frame. `why` names the caller in the log.
 pub fn end_media(rt: &JsRuntime, why: &str) {
     #[cfg(feature = "audio")]
     let (tracks, contexts) = {

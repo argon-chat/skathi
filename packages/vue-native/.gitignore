@@ -1,14 +1,8 @@
-# Build output. The root .gitignore covers `dist/`; parallel app builds use
-# `bun build.ts <entry> <dist-dir>` with a per-app directory (VN_DIST points the
-# host at it), so `dist-hello/`, `dist-shadcn/`, `dist-imgperf/` … all appear
-# here too. One pattern covers every present and future variant.
+# Build output: per-app dist directories (`dist-hello/` ...) from `bun build.ts <entry> <dist-dir>`.
 dist*/
 
-# Single-file production bundle (prod.ts default output lives under dist/, but
-# an explicit out-file next to the builder should not be committed either).
+# Single-file production bundle written next to the builder.
 app.prod.js
 
-# `build-graph.test.ts` writes a throwaway JavaScript app here to prove the
-# builder still accepts one; it is removed in afterAll, but a crashed run must
-# not leave a stray `.js` tree looking like a checked-in one.
+# Throwaway JavaScript app written by build-graph.test.ts; a crashed run must not leave it behind.
 test/fixtures/js-app-*/

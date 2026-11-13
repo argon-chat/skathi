@@ -1,15 +1,3 @@
-// `<iframe>`: the element's DOM surface and its document's lifecycle
-// (research/reports/m26/iframe-webview-requirements-2026-11-12.md; the R
-// numbers cite it).
-//
-// The fixture drives the element the way Argon's PlayFrame host does. This
-// file covers what holds on every platform — the surface (R1) and the path of
-// a host that has no webview (R8): the element exists, lays out and answers a
-// `src` with `error`. The documents themselves are specs/iframe-document
-// .spec.ts, which needs a backend.
-//
-//   bun test packages/vn-test/specs/iframe.spec.ts
-
 import { afterAll, describe, expect, test } from "bun:test";
 import { launch } from "../src/index";
 
@@ -17,7 +5,6 @@ const app = await launch({
   app: "packages/vn-test/fixtures/iframe/src/main.ts",
   window: [640, 480],
   label: "iframe",
-  // No webview, whatever this machine has: the unsupported path is the subject.
   env: { VN_IFRAME: "off" },
 });
 afterAll(async () => {
@@ -57,7 +44,6 @@ describe("<iframe> without a webview", () => {
       expect(s.frame.attrs).toEqual(["fullscreen 'none'", "fullscreen 'none'", "origin", "origin", "eager", "/games/none/index.html"]);
       expect(s.frame.box).toEqual([20, 10, 320, 240]);
       expect(s.frame.sameWindow).toBe(true);
-      // A cross-origin window: postMessage and nothing of this realm.
       expect(s.frame.windowKeys).toEqual(["function", "undefined", null]);
       expect(s.log[0]).toBe("detached contentWindow null");
     },
@@ -70,7 +56,6 @@ describe("<iframe> without a webview", () => {
       const s = await until((s) => s.log.includes("error"));
       expect(s.log.filter((l: string) => l === "error")).toEqual(["error"]);
       expect(s.log).not.toContain("load");
-      // Moving the element is not a new navigation: no second answer (R1.8).
       await app.eval("__VN_TEST_IFRAME__.move()");
       await new Promise((r) => setTimeout(r, 300));
       expect((await state()).log.filter((l: string) => l === "error")).toEqual(["error"]);

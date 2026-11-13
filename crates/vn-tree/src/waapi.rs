@@ -1,9 +1,4 @@
 //! Stateless Web Animations conversion and timing on the VM thread.
-//!
-//! DOM identity, promises and events stay with the JS facade. This module owns
-//! keyframe/EffectTiming conversion and shares the painter's CSS timing model.
-//! Values crossing user getters/coercions are rooted, including JS strings:
-//! converting a CSS value through a Rust String would lose lone UTF-16 surrogates.
 use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
@@ -35,14 +30,12 @@ enum Intrinsic {
     Has,
 }
 thread_local! {
-    // JsRuntime and its VM live for the process lifetime. These three rooted
-    // intrinsic handles stand in for internal JS operations (spread/HasProperty),
-    // not dynamic accesses to user-replaceable Reflect/Object methods.
+    // JsRuntime and its VM live for the process lifetime.
     static INTRINSICS: Cell<Option<Intrinsics>> = const { Cell::new(None) };
 }
 
-/// Each reentrant native call gets its own roots; no mutable registry or Rust
-/// callback is held while JS runs. The call frame roots the incoming arguments.
+/// Each reentrant native call gets its own roots; no mutable registry or Rust callback is held
+/// while JS runs.
 struct Scope<'a> {
     ctx: &'a Context,
     roots: RefCell<Vec<Value>>,
@@ -129,14 +122,12 @@ impl<'a> Scope<'a> {
         self.call(function, Value::undefined(), &[value])
     }
     fn number(&self, value: Value) -> Result<f64> {
-        // Number(BigInt) succeeds; ToNumber(BigInt) does not. The constructor
-        // also propagates a user valueOf/Symbol.toPrimitive exception verbatim.
+        // Number(BigInt) succeeds; ToNumber(BigInt) does not.
         self.convert("Number", value)?
             .as_number()
             .ok_or_else(|| self.error("Number conversion did not return a number"))
     }
     fn string(&self, value: Value) -> Result<Value> {
-        // String(Symbol) is permitted, unlike the abstract ToString operation.
         let value = self.convert("String", value)?;
         if self.ctx.kind(value) != 5 {
             return Err(self.error("String conversion did not return a string"));
@@ -215,8 +206,6 @@ impl<'a> Scope<'a> {
         self.checked(status, out)
     }
     fn close_iterator(&self, iterator: Value) {
-        // IteratorClose with a throw completion preserves the original throw,
-        // including when obtaining/calling return throws another exception.
         if let Ok(method) = self.get(iterator, "return") {
             if !method.is_null() && !method.is_undefined() {
                 let _closed = self.call(method, iterator, &[]);
@@ -273,8 +262,8 @@ impl<'a> Scope<'a> {
         }
         Ok(Some(number))
     }
-    /// Array iteration keeps holes and observes each coercion before reading
-    /// the next element, so getters can change later indexed values.
+    /// Array iteration keeps holes and observes each coercion before reading the next element, so
+    /// getters can change later indexed values.
     fn each_list(
         &self,
         value: Value,
@@ -307,8 +296,7 @@ impl<'a> Scope<'a> {
             return Err(self.keep(self.ctx.error(2, "Invalid array length")));
         }
         for index in 0..length {
-            // Only converted outputs belong to the outer scope. Temporary
-            // index strings/raw values must not accumulate for sparse arrays.
+            // Only converted outputs belong to the outer scope.
             let transient = Scope::new(self.ctx);
             let key = transient.literal(&index.to_string());
             let exists = transient.intrinsic(Intrinsic::Has, &[value, key])?;
@@ -411,7 +399,6 @@ fn list_frame(scope: &Scope<'_>, value: Value, where_: &str) -> Result<Frame> {
             props.push((key, scope.string(scope.get_key(value, key)?)?));
         }
     }
-    // Keep observable read order: property values, then offset, easing, composite.
     let offset = scope.offset(scope.get(value, "offset")?, where_)?;
     let easing = scope.easing(scope.get(value, "easing")?, where_)?;
     let composite = scope.composite(scope.get(value, "composite")?, where_)?;
@@ -433,7 +420,6 @@ fn keyframes(scope: &Scope<'_>, input: Value, where_: &str) -> Result<Value> {
             );
         }
         if scope.ctx.kind(scope.iterator_method(input)?) == 9 {
-            // for..of obtains the iterator method again after the initial probe.
             let iterator = scope.call(scope.iterator_method(input)?, input, &[])?;
             if !scope.object(iterator) {
                 return scope.fail(where_, "Keyframe iterator must return an object.");
@@ -863,8 +849,6 @@ fn set_effect(
                 }
                 continue;
             };
-            // The CSS parser is UTF-8; normalization/getKeyframes retain the
-            // original UTF-16 JS strings, just as before this painting boundary.
             let value = scope.text(scope.string(scope.index(pair, 1)?)?)?;
             decls.push((css, value));
         }

@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/fonts.spec.ts: web fonts, @font-face and FontFace (m26 client sweep #29, docs/RUNTIME.md §5.15). See ../README.md.",
-
   "name": "vn-test-fonts",
 
   "window": {

@@ -1,28 +1,3 @@
-// IndexedDB ON DISK across real restarts of the host (m25 P2 —
-// research/reports/m25/indexeddb-p2-impl.md, docs/STORAGE.md "IndexedDB").
-//
-//   bun test packages/vn-test/specs/indexeddb-disk.spec.ts
-//
-// redjs proves the backend on its own (the WPT subset and the four libraries
-// on SQLite, a kill mid-transaction — vendor/redjs/redjs/tests/). What only
-// the host can prove is the part that crosses a process boundary:
-//
-//   * a record one host wrote is there for the next host — after a KILL (the
-//     WAL is still beside the file) and after a GRACEFUL quit (vn-app's
-//     on_app_quit runs redjs_idb_shutdown, which checkpoints the WAL away);
-//   * `{ encrypted: true }` leaves no plaintext of a known key or value in
-//     any file of the folder, stays encrypted across a restart that says
-//     nothing (sticky), and an explicit `{ encrypted: false }` decrypts — the
-//     positive control that shows the scan WOULD have found the plaintext;
-//   * a second instance on the same folder gets UnknownError and an advisory
-//     while the first holds it, and recovers once the first is gone;
-//   * the same persistence in a PACKAGED exe (`vn build`), whose folder comes
-//     from the app name `vn build` stamped into it.
-//
-// The fixture is `fixtures/idb-persist`. Every dev host here gets its own
-// `VN_APP_NAME`, so no run touches another's (or a real app's) folder; every
-// folder is removed in teardown.
-
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -36,9 +11,6 @@ const folders = new Set<string>();
 
 afterAll(async () => {
   for (const f of folders) {
-    // `<LOCALAPPDATA>\<app name>\storage\indexeddb` — remove the app-name
-    // directory, and only one this file named. A host that was just killed
-    // can hold its files for a moment after `taskkill` returns.
     const appDir = dirname(dirname(f));
     if (!/^vn-(test-idb|app-vntest)-/.test(basename(appDir))) continue;
     for (let i = 0; ; i++) {
@@ -53,8 +25,10 @@ afterAll(async () => {
   }
 });
 
-/** taskkill /F — no quit observer runs — and wait until the process is gone
- *  (its folder lock and file handles with it). */
+/**
+ * taskkill /F — no quit observer runs — and wait until the process is gone (its folder lock and
+ * file handles with it).
+ */
 async function kill(app: VnApp) {
   await app.close();
   const deadline = Date.now() + 10_000;
@@ -63,7 +37,6 @@ async function kill(app: VnApp) {
   }
 }
 
-/** Starts a scenario and polls until it has settled. */
 async function scenario(app: VnApp, name: string, ...args: string[]): Promise<string> {
   await app.eval(`__VN_TEST_IDB__.run(${[name, ...args].map((a) => JSON.stringify(a)).join(",")})`);
   const deadline = Date.now() + 15_000;
@@ -99,8 +72,6 @@ function files(dir: string): string[] {
   return readdirSync(dir).filter((n) => !n.startsWith("key.")).map((n) => join(dir, n));
 }
 
-/** Every spelling a string can take on disk: ASCII / Latin-1 (values), UTF-16LE (values),
- *  and the order-preserving key encoding (each ASCII unit + 1). */
 function spellings(s: string): Buffer[] {
   return [Buffer.from(s, "latin1"), Buffer.from(s, "utf16le"), Buffer.from([...s].map((c) => c.charCodeAt(0) + 1))];
 }
@@ -124,17 +95,16 @@ describe("IndexedDB on disk, dev host", () => {
     const i = await info(a);
     bunExpect(i.mode).toBe("plaintext");
     bunExpect(await scenario(a, "put", "greeting", value)).toBe("ok");
-    // On disk, not in memory: no memory-only advisory, a database file.
     bunExpect(logLines(a, "IN MEMORY ONLY")).toEqual([]);
     bunExpect(readdirSync(i.folder).some((n) => n.endsWith(".sqlite3"))).toBe(true);
-    await kill(a); // taskkill /F: no quit observer runs
+    await kill(a);
     bunExpect(readdirSync(i.folder).some((n) => n.endsWith(".sqlite3-wal")), "the WAL survives a kill").toBe(true);
 
     a = await host("restart");
     await expect(a.locator("#status")).toHaveText("ready");
     bunExpect(await scenario(a, "get", "greeting")).toBe(value);
     bunExpect(await scenario(a, "databases")).toBe("vn-test-persist@1");
-    await quit(a); // graceful: on_app_quit → redjs_idb_shutdown → every handle closed
+    await quit(a);
     bunExpect(readdirSync(i.folder).filter((n) => n.endsWith("-wal")), "a graceful quit checkpoints the WAL away").toEqual([]);
     bunExpect(logLines(a, "did not finish closing")).toEqual([]);
 
@@ -156,7 +126,6 @@ describe("IndexedDB on disk, dev host", () => {
     await kill(a);
     bunExpect(legible(i.folder, key, value), "plaintext in an encrypted folder").toEqual([]);
 
-    // A restart that says NOTHING about encryption: still encrypted.
     a = await host("sealed");
     await expect(a.locator("#status")).toHaveText("ready");
     i = await info(a);
@@ -166,8 +135,6 @@ describe("IndexedDB on disk, dev host", () => {
     await quit(a);
     bunExpect(legible(i.folder, key, value, `${value}-2`)).toEqual([]);
 
-    // `setStorageFolder(path)` with no options — the owner's own sketch — at
-    // boot and again late: neither is a decryption.
     a = await host("sealed", ["keep"]);
     await expect(a.locator("#status")).toHaveText("ready");
     i = await info(a);
@@ -179,8 +146,6 @@ describe("IndexedDB on disk, dev host", () => {
     await quit(a);
     bunExpect(legible(i.folder, key, value, `${value}-2`)).toEqual([]);
 
-    // An explicit `{ encrypted: false }`: decrypted in place, the key retired —
-    // and the same scan now FINDS the plaintext, so it was a real check.
     a = await host("sealed", ["decrypt"]);
     await expect(a.locator("#status")).toHaveText("ready");
     i = await info(a);
@@ -203,7 +168,7 @@ describe("IndexedDB on disk, dev host", () => {
     bunExpect(await scenario(a, "put", "k", "late-value")).toBe("ok");
     await quit(a);
 
-    a = await host("late"); // says nothing: the key decides
+    a = await host("late");
     await expect(a.locator("#status")).toHaveText("ready");
     const i = await info(a);
     bunExpect(i.mode).toBe("encrypted");
@@ -227,7 +192,6 @@ describe("IndexedDB on disk, dev host", () => {
     bunExpect(advisory[0]).toContain(`pid ${first.pid}`);
 
     await kill(first);
-    // The lock is retried at every call: once the first is gone, the second opens.
     let opened = "";
     for (let i = 0; i < 50 && opened !== "ok"; i++) {
       opened = await scenario(second, "open");
@@ -244,10 +208,6 @@ describe("IndexedDB on disk, packaged exe", () => {
     "a packaged app's record survives its restart",
     async () => {
       const p = await packagedExe({ app: join(REPO, "packages", "vn-test", "fixtures", "idb-persist"), label: "idb-persist" });
-      // A packaged exe's folder is named by the app name `vn build` stamped
-      // into it (docs/STORAGE.md §3 row 4) — not by the exe's file name, and
-      // not by VN_APP_NAME (the harness runs it in the user's environment).
-      // Start it empty.
       const appDir = join(process.env.LOCALAPPDATA ?? "", p.name);
       rmSync(appDir, { recursive: true, force: true });
       const value = `packaged-${run}-${Date.now()}`;

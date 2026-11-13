@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/svg-paint.spec.ts: inline <svg> shapes painted with the fill/stroke colours CSS rules compute (var() included), their precedence against presentation attributes and inline style, and a drop-shadow() that follows the shape. See ../README.md.",
+  "$comment": "Inline <svg> shapes painted with the fill/stroke colours CSS rules compute (var() included), their precedence against presentation attributes and inline style, and a drop-shadow() that follows the shape.",
 
   "name": "vn-test-svg-paint",
 

@@ -1,25 +1,16 @@
-// The PE side of `vn build`: a pure-TS reader for the handful of header fields
-// and resource-tree facts the stamper needs, plus the bun:ffi bindings to the
-// Win32 resource-update API that does the writing.
+// The PE side of `vn build`: a pure-TS reader for the header fields and resource-tree facts the stamper
+// needs, plus bun:ffi bindings to the Win32 resource-update API that does the writing.
 //
-// Why Win32 and not a PE writer of our own: `BeginUpdateResourceW` /
-// `UpdateResourceW` / `EndUpdateResourceW` rebuild `.rsrc`, move `.reloc`
-// behind it and fix every header field that moves — measured on the real
-// 104 MB host, 13 sections, in 0.3 s (research/reports/m25/packaging-design.md
-// §2). It is also exactly what Bun's own `--windows-icon` uses, which is why
-// that flag cannot run when cross-compiling either. A pure-TS writer (the npm
-// `resedit` shape) is the road to stamping on another OS, and LATER.
+// Win32 rather than a PE writer of our own: `BeginUpdateResourceW` / `UpdateResourceW` /
+// `EndUpdateResourceW` rebuild `.rsrc`, move `.reloc` behind it and fix every header field that moves
+// (0.3 s on the 104 MB host). Bun's own `--windows-icon` uses it too, which is why that flag cannot run
+// when cross-compiling. A pure-TS writer is the road to stamping on another OS.
 //
-// The reader is file-backed and page-cached rather than `readFileSync` of the
-// whole image: the host is ~100 MB and every question asked of it here lives
-// in the first few KB or in `.rsrc`'s directory tables.
+// The reader is file-backed and page-cached rather than reading the whole ~100 MB image: everything asked
+// of it lives in the first few KB or in `.rsrc`'s directory tables.
 
 import { dlopen, FFIType, ptr, toArrayBuffer } from "bun:ffi";
 import { closeSync, fstatSync, openSync, readSync, writeSync } from "node:fs";
-
-// ---------------------------------------------------------------------------
-// random access over a file
-// ---------------------------------------------------------------------------
 
 const CHUNK = 64 * 1024;
 
@@ -77,10 +68,6 @@ class FileReader {
   }
 }
 
-// ---------------------------------------------------------------------------
-// the reader
-// ---------------------------------------------------------------------------
-
 export const RT = {
   ICON: 3,
   RCDATA: 10,
@@ -119,10 +106,7 @@ export interface PeInfo {
   timeDateStamp: number;
   sizeOfImage: number;
   sections: Section[];
-  /**
-   * The certificate table. Its "RVA" is a FILE offset — the one data directory
-   * the loader never maps, which is why a signature can sit after the image.
-   */
+  /** The certificate table. Its "RVA" is a FILE offset: the one data directory the loader never maps, so a signature can sit after the image. */
   security: { offset: number; size: number };
   /** File offset of the SECURITY data-directory entry itself (8 bytes). */
   securityEntryOffset: number;
@@ -227,7 +211,6 @@ export function readPe(path: string): PeInfo {
   }
 }
 
-/** Reads `len` bytes at `offset` out of `path`. */
 export function readFileRange(path: string, offset: number, len: number): Uint8Array {
   const r = new FileReader(path);
   try {
@@ -252,13 +235,8 @@ export function setSubsystem(path: string, subsystem: number) {
   patchFile(path, pe.subsystemOffset, new Uint8Array([subsystem & 0xff, subsystem >> 8]));
 }
 
-// ---------------------------------------------------------------------------
-// Win32 through bun:ffi
-// ---------------------------------------------------------------------------
-//
-// Every pointer is a u64, every string a NUL-terminated UTF-16LE buffer, and
-// an integer resource id (MAKEINTRESOURCE) is just the id as a pointer — the
-// shape the design experiment ran on.
+// Every pointer is a u64, every string a NUL-terminated UTF-16LE buffer, and an integer resource id
+// (MAKEINTRESOURCE) is the id as a pointer.
 
 const u64 = FFIType.u64;
 const i32 = FFIType.i32;
@@ -301,8 +279,7 @@ const version = () => (verdll ??= loadVersion());
 export function requireWindows(what: string) {
   if (process.platform !== "win32") {
     throw new Error(
-      `${what} uses the Win32 resource API and runs on Windows only (a cross-OS stamper is LATER — ` +
-        "research/reports/m25/packaging-design.md §4.10).",
+      `${what} uses the Win32 resource API and runs on Windows only; stamping on another OS is not supported.`,
     );
   }
 }
@@ -324,15 +301,9 @@ export class Win32Error extends Error {
   }
 }
 
-/** A resource type or name: an integer id, or a string name. */
 export type ResId = number | string;
 
-/**
- * One `BeginUpdateResourceW` … `EndUpdateResourceW` transaction. The string
- * buffers handed to Win32 are kept alive on `this` until `commit`, because
- * `UpdateResourceW` copies the DATA but the API makes no promise about when it
- * reads the name.
- */
+/** One `BeginUpdateResourceW` … `EndUpdateResourceW` transaction. String buffers handed to Win32 stay alive on `this` until `commit`: `UpdateResourceW` copies the data but makes no promise about when it reads the name. */
 export class ResourceUpdate {
   #h: bigint;
   #keep: Uint8Array[] = [];
@@ -354,7 +325,6 @@ export class ResourceUpdate {
     return P(b);
   }
 
-  /** Adds or replaces one resource. */
   set(type: ResId, name: ResId, lang: number, data: Uint8Array) {
     this.#keep.push(data);
     const ok = kernel32().UpdateResourceW(this.#h, this.#id(type), this.#id(name), lang, data.length ? P(data) : 0n, data.length);
@@ -386,13 +356,7 @@ export class ResourceUpdate {
 const LOAD_LIBRARY_AS_DATAFILE = 0x2;
 const LOAD_LIBRARY_AS_IMAGE_RESOURCE = 0x20;
 
-/**
- * Maps `path` the way the loader's resource lookup sees it and returns a COPY
- * of one resource's bytes — `null` when there is none. This is the verify step:
- * it proves the stamped file is still something Windows will map and that
- * `FindResourceW` finds the payload in it, the same call the host makes at
- * boot.
- */
+/** Maps `path` as the loader's resource lookup sees it and returns a copy of one resource's bytes, or `null`. The verify step: proves the stamped file still maps and `FindResourceW` finds the payload, as the host does at boot. */
 export function loadResourceCopy(path: string, type: ResId, name: ResId, maxBytes = Infinity): Uint8Array | null {
   requireWindows("reading an exe's resources");
   const k = kernel32();
@@ -428,10 +392,7 @@ export function shellIconCount(path: string): number {
   return shell32().ExtractIconExW(P(p), -1, 0n, 0n, 0);
 }
 
-/**
- * One string out of `\StringFileInfo\040904b0\<key>`, read the way Explorer's
- * Properties dialog and Task Manager read it. `null` when absent.
- */
+/** One string out of `\StringFileInfo\040904b0\<key>`, as Explorer and Task Manager read it; `null` when absent. */
 export function versionString(path: string, key: string, table = "040904b0"): string | null {
   requireWindows("reading VERSIONINFO");
   const v = version();

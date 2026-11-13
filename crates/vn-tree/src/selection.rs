@@ -1,56 +1,10 @@
-//! Document text selection: the browser's mouse selection over painted text,
-//! the `Selection` a page reads and writes, and what Ctrl+C copies outside a
-//! text field (docs/RUNTIME.md §5.17).
+//! Document text selection: mouse selection over painted text, the `Selection` a page reads and
+//! writes, and what Ctrl+C copies outside a text field.
 //!
-//! # The model
-//!
-//! A selection is two DOM boundary points, anchor and focus ([`Pos`]): a text
-//! node and a UTF-16 offset into it, an element and a child index, or an
-//! element and a UTF-16 offset into the text it carries ITSELF (Vue's
-//! `setElementText`, which most elements with text use; the JS side turns
-//! that into a real Text child the moment a script asks for the node). The
-//! offsets are the DOM's, so `getSelection()` round-trips them unchanged.
-//!
-//! # What it costs when nobody selects
-//!
-//! Nothing per frame. A text node builds exactly what it built before (a
-//! `SharedString` element) unless it is inside the selection or a drag is in
-//! progress; [`PAINTING`] and [`RECORDING`] are the two flags it checks. The
-//! frame tick returns on one flag read. No glyph data is kept for any text.
-//!
-//! # Painting
-//!
-//! A selected text holder is built as a `StyledText` whose selected byte range
-//! carries the highlight (`::selection`'s `background-color` and `color`, the
-//! nearest one up the tree, as Chromium's highlight inheritance does; else the
-//! same translucent blue the text field uses). Colour does not take part in
-//! shaping, so the line layout cache answers the same glyphs. A selection
-//! change TOUCHES the holders whose range moved ([`Tree::touch`]), which is
-//! what takes the cache boundaries above them out of replay; nothing else is
-//! rebuilt.
-//!
-//! # Hit testing, lazily
-//!
-//! Turning a pointer position into a character offset needs the text's line
-//! layout, which gpui drops with the element after every frame. While a drag
-//! (or a double/triple/shift click) is in progress, text that is built is
-//! wrapped in a [`Recorder`] that keeps its `TextLayout` in [`State::layouts`].
-//! A position over text nobody recorded yet touches those text holders and
-//! resolves on the next frame ([`tick`]); the map is dropped when the gesture
-//! ends. The node under the pointer is gpui's own answer
-//! (`Window::vn_tags_at`, the hit test a click resolves with), so an overlay
-//! above the text is respected.
-//!
-//! # Divergences (said in docs/RUNTIME.md §5.17)
-//!
-//! * A click without a drag CLEARS the selection; a browser leaves a
-//!   collapsed one ("Caret") at the click. `rangeCount` is 0 after it.
-//! * A press inside the selection does not start a drag-and-drop of the text;
-//!   it clears the selection and starts a new one.
-//! * A boundary whose node is removed clears the selection (a browser moves it
-//!   to the parent).
-//! * `user-select: contain` selects as `text` (vn-css advises).
-//! * `Range` objects are static snapshots (a browser's are live).
+//! A selection is two DOM boundary points ([`Pos`]: a text node and UTF-16 offset, an element and a
+//! child index, or an element and an offset into the text it carries itself), so `getSelection()`
+//! round-trips them unchanged. It costs nothing per frame while nobody selects: a text node builds
+//! as before unless inside the selection or a drag ([`PAINTING`], [`RECORDING`] are the two flags).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -66,14 +20,9 @@ use crate::tree::{self, Kind, Node, Tree};
 use crate::windows::{self, WinKey};
 
 /// `selectstart` (cancelable, bubbles) and `selectionchange` (at `document`).
-/// The numbers live in `tree::EVENT_NAMES` with every other host event.
 pub(crate) use crate::tree::{EV_SELECTIONCHANGE, EV_SELECTSTART};
 
-// ---------------------------------------------------------------------------
-// the model
-// ---------------------------------------------------------------------------
 
-/// One boundary point (DOM §5.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Pos {
     pub(crate) node: u32,
@@ -92,7 +41,6 @@ impl Pos {
     }
 }
 
-/// The used value of `user-select` (CSS UI 4 §6.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Us {
     None,
@@ -113,8 +61,8 @@ fn used(parent: Us, declared: Option<UserSelect>) -> Us {
     }
 }
 
-/// How far a gesture grows the selection: a character, a word
-/// (double-click) or a block (triple-click).
+/// How far a gesture grows the selection: a character, a word (double-click) or a block
+/// (triple-click).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Grain {
     Char,
@@ -134,8 +82,8 @@ struct Gesture {
     dragging: bool,
     /// The button came up; what is still unresolved resolves on the next frame.
     released: bool,
-    /// Where the selection is anchored, once the press resolved: the unit the
-    /// press landed in (one point for a character, a word, a block).
+    /// Where the selection is anchored, once the press resolved: the unit the press landed in (one
+    /// point for a character, a word, a block).
     anchor: Option<(Pos, Pos)>,
     /// Frames spent waiting for text to be recorded.
     waits: u8,
@@ -144,8 +92,8 @@ struct Gesture {
 /// What a recorded text holder needs to map a pixel back to a DOM offset.
 struct Recorded {
     layout: TextLayout,
-    /// The part of the text's box its clip leaves on screen (a scroll
-    /// container's, an `overflow: hidden` ancestor's). Empty: none of it is.
+    /// The part of the text's box its clip leaves on screen (a scroll container's, an `overflow:
+    /// hidden` ancestor's).
     visible: Bounds<Pixels>,
     win: WinKey,
     ws: Option<WhiteSpaceMode>,
@@ -174,7 +122,6 @@ thread_local! {
     static RECORDING: Cell<bool> = const { Cell::new(false) };
     /// A gesture or an owed `selectionchange`: what [`tick`] checks.
     static WORK: Cell<bool> = const { Cell::new(false) };
-    /// The JS `mousedown` of the press in progress was cancelled.
     static PRESS_PREVENTED: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -182,12 +129,8 @@ fn set_work(s: &State) {
     WORK.with(|c| c.set(s.gesture.is_some() || s.change_owed));
 }
 
-// ---------------------------------------------------------------------------
-// document order
-// ---------------------------------------------------------------------------
 
-/// The node's place in the document: its child index at every level from the
-/// root down. `None` for a node the root does not reach.
+/// The node's place in the document: its child index at every level from the root down.
 fn path(t: &Tree, id: u32) -> Option<Vec<u32>> {
     let mut out = Vec::new();
     let mut cur = id;
@@ -207,9 +150,7 @@ fn path(t: &Tree, id: u32) -> Option<Vec<u32>> {
     None
 }
 
-/// A boundary point as a key that sorts in document order: the node's path,
-/// then the offset. An element's own text sits under a virtual child 0, so
-/// `(el, 0)` sorts before it and `(el, 1)` after it.
+/// A boundary point as a key that sorts in document order: the node's path, then the offset.
 fn key(t: &Tree, p: Pos) -> Option<Vec<u32>> {
     let mut k = path(t, p.node)?;
     if p.own {
@@ -219,8 +160,8 @@ fn key(t: &Tree, p: Pos) -> Option<Vec<u32>> {
     Some(k)
 }
 
-/// The length of a node in boundary-point terms: UTF-16 units for a text (or
-/// an element's own text, with `own`), children for an element.
+/// The length of a node in boundary-point terms: UTF-16 units for a text (or an element's own text,
+/// with `own`), children for an element.
 fn length(t: &Tree, id: u32, own: bool) -> u32 {
     match t.node(id) {
         Some(n) if n.kind == Kind::Text || own => utf16_len(&n.text),
@@ -256,10 +197,7 @@ struct Ctx {
     case: Option<TextTransform>,
 }
 
-/// Does an element's content take part in a selection at all? Not the
-/// metadata elements (which render nothing), not `display: none`, and not a
-/// form control (a text field has a selection of its own, and a browser's
-/// `toString()` leaves its value out).
+/// Does an element's content take part in a selection at all?
 fn skipped(t: &Tree, n: &Node) -> bool {
     let tag = t.name(n.tag);
     crate::render::is_metadata(tag)
@@ -350,13 +288,10 @@ fn walk_node(
     }
 }
 
-// ---------------------------------------------------------------------------
-// what is painted
-// ---------------------------------------------------------------------------
 
-/// The text a holder paints, as the build shapes it: collapsed by
-/// `white-space`, trimmed at the line's ends, transformed by
-/// `text-transform` — with the DOM offset each painted character came from.
+/// The text a holder paints, as the build shapes it: collapsed by `white-space`, trimmed at the
+/// line's ends, transformed by `text-transform` — with the DOM offset each painted character came
+/// from.
 pub(crate) struct TextMap {
     display: String,
     /// The byte where each painted character starts.
@@ -367,9 +302,8 @@ pub(crate) struct TextMap {
     dom_end: u32,
 }
 
-/// `render::processed_text`, with the source offset of every character it
-/// produces: `(byte in the processed text, char, UTF-16 offset in raw)`.
-/// The same rules, character for character; a test holds the two together.
+/// `render::processed_text`, with the source offset of every character it produces: `(byte in the
+/// processed text, char, UTF-16 offset in raw)`.
 fn collapse(raw: &str, mode: WhiteSpaceMode) -> Vec<(usize, char, u32)> {
     const COLLAPSIBLE: [char; 5] = [' ', '\t', '\n', '\r', '\u{c}'];
     let mut out = Vec::with_capacity(raw.len());
@@ -407,8 +341,8 @@ fn collapse(raw: &str, mode: WhiteSpaceMode) -> Vec<(usize, char, u32)> {
 }
 
 impl TextMap {
-    /// `lead` / `len`: the byte range of the processed text the build kept
-    /// after trimming the line's ends.
+    /// `lead` / `len`: the byte range of the processed text the build kept after trimming the
+    /// line's ends.
     pub(crate) fn new(
         raw: &str,
         ws: Option<WhiteSpaceMode>,
@@ -428,8 +362,6 @@ impl TextMap {
         let mut dom = Vec::with_capacity(m);
         for (j, (b, _)) in display.char_indices().enumerate() {
             starts.push(b as u32);
-            // A transform that changed the length (ß -> SS) maps
-            // proportionally; every other one is one to one.
             let i = if m == n { j } else { j * n / m.max(1) };
             dom.push(shown.get(i).map(|x| x.1).unwrap_or(dom_end));
         }
@@ -442,8 +374,7 @@ impl TextMap {
         self.dom.get(i).copied().unwrap_or(self.dom_end)
     }
 
-    /// The painted byte offset of a DOM offset: the first painted character
-    /// at or after it.
+    /// The painted byte offset of a DOM offset: the first painted character at or after it.
     pub(crate) fn to_display(&self, dom: u32) -> usize {
         let i = self.dom.partition_point(|&d| d < dom);
         self.starts.get(i).map_or(self.display.len(), |&s| s as usize)
@@ -455,8 +386,8 @@ impl TextMap {
     }
 }
 
-/// The [`TextMap`] of a holder, asked outside a build: the trim is read off
-/// the tree, as the build reads it.
+/// The [`TextMap`] of a holder, asked outside a build: the trim is read off the tree, as the build
+/// reads it.
 fn map_of(t: &Tree, holder: u32, ws: Option<WhiteSpaceMode>, case: Option<TextTransform>) -> Option<TextMap> {
     let n = t.node(holder)?;
     let collapsed = crate::render::processed_text(&n.text, ws.unwrap_or(WhiteSpaceMode::Normal));
@@ -498,9 +429,7 @@ fn breaks_of(t: &Tree, n: &Node) -> u8 {
     }
 }
 
-/// Does an element start a new line in the text a selection copies? A block
-/// (an undeclared `display` on anything but the inline-level tags), and any
-/// flex or grid item, which CSS blockifies — `innerText`'s rule.
+/// Does an element start a new line in the text a selection copies?
 fn is_block(t: &Tree, n: &Node) -> bool {
     if n.kind != Kind::Element {
         return false;
@@ -519,10 +448,9 @@ fn is_block(t: &Tree, n: &Node) -> bool {
     !(declared.is_none() && crate::render::INLINE_LEVEL_TAGS.contains(&t.name(n.tag)))
 }
 
-/// The selection's text, as `Selection.toString()` and a copy give it: what
-/// is painted, in document order, with a line break between blocks (two
-/// around a paragraph), a tab between table cells, and nothing from
-/// `user-select: none` content.
+/// The selection's text, as `Selection.toString()` and a copy give it: what is painted, in document
+/// order, with a line break between blocks (two around a paragraph), a tab between table cells, and
+/// nothing from `user-select: none` content.
 fn text_between(t: &Tree, start: &[u32], end: &[u32]) -> String {
     let mut out = String::new();
     let mut breaks = 0u8;
@@ -583,8 +511,8 @@ pub(crate) fn selected_text() -> String {
     })
 }
 
-/// What Ctrl+C outside a text field copies, if the selection has any text and
-/// `focused` is not an editable control (which copies its own).
+/// What Ctrl+C outside a text field copies, if the selection has any text and `focused` is not an
+/// editable control (which copies its own).
 pub(crate) fn text_for_copy(focused: u32) -> Option<String> {
     if focused != 0 && tree::read_tree(|t| editable_at(t, focused)) {
         return None;
@@ -592,13 +520,8 @@ pub(crate) fn text_for_copy(focused: u32) -> Option<String> {
     Some(selected_text()).filter(|s| !s.is_empty())
 }
 
-// ---------------------------------------------------------------------------
-// changing it
-// ---------------------------------------------------------------------------
 
-/// Replaces the selection. Touches every holder whose painted part changed,
-/// owes `document` a `selectionchange` when anything did, and answers whether
-/// it did.
+/// Replaces the selection.
 fn replace(t: &mut Tree, sel: Option<(Pos, Pos)>) -> bool {
     let next = painted_of(t, sel);
     let changed = STATE.with(|s| {
@@ -651,9 +574,8 @@ pub(crate) fn current() -> Option<(Pos, Pos)> {
     STATE.with(|s| s.borrow().sel)
 }
 
-/// After a mutation wave (`render::gc_node_state`): a boundary whose node went
-/// away clears the selection, an offset past a shortened text is clamped, and
-/// the painted parts are recomputed. Layouts of dead nodes go.
+/// After a mutation wave (`render::gc_node_state`): a boundary whose node went away clears the
+/// selection, an offset past a shortened text is clamped, and the painted parts are recomputed.
 pub(crate) fn gc(t: &mut Tree) {
     let (sel, idle) = STATE.with(|s| {
         let mut s = s.borrow_mut();
@@ -673,8 +595,8 @@ pub(crate) fn gc(t: &mut Tree) {
     replace(t, fixed);
 }
 
-/// JS `__vn_selection_rebase`: an element's own text became a Text child, and
-/// the boundaries in it move with it.
+/// JS `__vn_selection_rebase`: an element's own text became a Text child, and the boundaries in it
+/// move with it.
 pub(crate) fn rebase(element: u32, text: u32) {
     let sel = STATE.with(|s| s.borrow().sel);
     let Some((a, f)) = sel else { return };
@@ -685,8 +607,8 @@ pub(crate) fn rebase(element: u32, text: u32) {
     }
 }
 
-/// Focus moved to `id`: a text field takes the selection into itself, so the
-/// document's goes (the highlight with it), as in a browser.
+/// Focus moved to `id`: a text field takes the selection into itself, so the document's goes (the
+/// highlight with it), as in a browser.
 pub(crate) fn focus_moved(id: u32) {
     if STATE.with(|s| s.borrow().sel.is_none()) {
         return;
@@ -698,17 +620,13 @@ pub(crate) fn focus_moved(id: u32) {
     });
 }
 
-/// JS `__vn_selection_set`: anchor and focus as DOM points, or `None` to
-/// empty the selection. A point that names no live, attached node empties it
-/// too; offsets are clamped to the node's length.
+/// JS `__vn_selection_set`: anchor and focus as DOM points, or `None` to empty the selection.
 pub(crate) fn set_from_js(points: Option<(Pos, Pos)>) -> bool {
     let checked = points.and_then(|(a, f)| {
         tree::read_tree(|t| {
             let fix = |p: Pos| -> Option<Pos> {
                 path(t, p.node)?;
                 let n = t.node(p.node)?;
-                // An element carrying its own text has no children to index:
-                // 0 is before the text and anything else after it.
                 if n.kind == Kind::Element && !n.text.is_empty() && !p.own {
                     let len = utf16_len(&n.text);
                     return Some(Pos::own(p.node, if p.offset == 0 { 0 } else { len }));
@@ -741,15 +659,8 @@ fn select_all(window: &mut Window, cx: &mut App) {
     replace_live(sel, window, cx);
 }
 
-// ---------------------------------------------------------------------------
-// building text
-// ---------------------------------------------------------------------------
 
 /// The element a text holder builds as — `render`'s two text arms call this.
-///
-/// `shown` is what the build kept of the processed text (`lead` is where it
-/// starts in it); `raw` is the node's own string. With no selection on it and
-/// no gesture in progress this is the `SharedString` element it always was.
 pub(crate) fn text_element(
     t: &Tree,
     holder: u32,
@@ -784,13 +695,12 @@ pub(crate) fn text_element(
     }
 }
 
-/// The default highlight: the same translucent blue the text field paints
-/// its own selection with, so the two read as one thing.
+/// The default highlight: the same translucent blue the text field paints its own selection with,
+/// so the two read as one thing.
 const DEFAULT_HIGHLIGHT: gpui::Hsla = gpui::Hsla { h: 0.6, s: 0.8, l: 0.6, a: 0.35 };
 
-/// `::selection` for a holder: the nearest element up from it whose cascade
-/// gave it one (Chromium's highlight inheritance; Tailwind's `selection:`
-/// variant writes `*::selection` anyway). `background-color` and `color`.
+/// `::selection` for a holder: the nearest element up from it whose cascade gave it one (Chromium's
+/// highlight inheritance; Tailwind's `selection:` variant writes `*::selection` anyway).
 fn highlight(t: &Tree, holder: u32) -> HighlightStyle {
     let mut cur = match t.node(holder) {
         Some(n) if n.kind == Kind::Text => n.parent,
@@ -814,8 +724,8 @@ fn highlight(t: &Tree, holder: u32) -> HighlightStyle {
     HighlightStyle { background_color: Some(DEFAULT_HIGHLIGHT), ..Default::default() }
 }
 
-/// A text holder's element while a gesture records: the text itself, plus
-/// its line layout kept for the hit test once prepaint has placed it.
+/// A text holder's element while a gesture records: the text itself, plus its line layout kept for
+/// the hit test once prepaint has placed it.
 struct Recorder {
     holder: u32,
     ws: Option<WhiteSpaceMode>,
@@ -885,9 +795,6 @@ impl Element for Recorder {
     }
 }
 
-// ---------------------------------------------------------------------------
-// the pointer
-// ---------------------------------------------------------------------------
 
 /// Is `id` in (or is it) a native text control?
 fn editable_at(t: &Tree, id: u32) -> bool {
@@ -910,8 +817,8 @@ fn up(t: &Tree, id: u32, pred: impl Fn(&Tree, &Node) -> bool) -> bool {
     false
 }
 
-/// Does anything on `target`'s path listen for `code` — the node, an
-/// ancestor, or `document` / `window`, which ride the root's bit?
+/// Does anything on `target`'s path listen for `code` — the node, an ancestor, or `document` /
+/// `window`, which ride the root's bit?
 fn listened(t: &Tree, target: u32, code: u32) -> bool {
     let bit = 1u64 << code;
     let mut cur = target;
@@ -943,9 +850,8 @@ fn used_at(t: &Tree, id: u32) -> Us {
     chain.iter().rev().fold(Us::Text, |us, d| used(us, *d))
 }
 
-/// The topmost node under `p` in the frame gpui last painted: the element a
-/// press there is for (`crate::pointer`), so a selection starts where the
-/// press's events go.
+/// The topmost node under `p` in the frame gpui last painted: the element a press there is for
+/// (`crate::pointer`), so a selection starts where the press's events go.
 fn topmost(window: &Window, p: Point<Pixels>) -> Option<u32> {
     crate::pointer::topmost(window, p)
 }
@@ -955,9 +861,8 @@ fn contains(r: crate::windows::Rect, p: Point<Pixels>) -> bool {
     x >= r.0 && x < r.0 + r.2 && y >= r.1 && y < r.1 + r.3
 }
 
-/// From `from`, down through the children painted under `p`, the last such
-/// child at each level (later siblings paint on top): the deepest element
-/// there.
+/// From `from`, down through the children painted under `p`, the last such child at each level
+/// (later siblings paint on top): the deepest element there.
 fn deepest_at(t: &Tree, k: WinKey, from: u32, p: Point<Pixels>) -> u32 {
     let mut cur = from;
     'down: for _ in 0..4096 {
@@ -999,8 +904,8 @@ fn distance(b: Bounds<Pixels>, p: Point<Pixels>) -> (f32, f32) {
     (gap(p.y, b.top(), b.bottom()), gap(p.x, b.left(), b.right()))
 }
 
-/// The DOM offset under `p` in a recorded holder: the nearest caret
-/// position, as a browser rounds a click to the closer side of a glyph.
+/// The DOM offset under `p` in a recorded holder: the nearest caret position, as a browser rounds a
+/// click to the closer side of a glyph.
 fn offset_in(t: &Tree, holder: u32, rec: &Recorded, p: Point<Pixels>) -> u32 {
     let layout = &rec.layout;
     let b = layout.bounds();
@@ -1092,7 +997,6 @@ fn hit(window: &Window, p: Point<Pixels>) -> Hit {
                     let offset = offset_in(t, id, rec, p);
                     return Hit::At(Pos { node: id, offset, own });
                 }
-                // No text in here at all: look one level out.
                 match t.node(scope).map(|n| n.parent) {
                     Some(parent) if parent != 0 && scope != root => scope = parent,
                     _ => break,
@@ -1103,8 +1007,8 @@ fn hit(window: &Window, p: Point<Pixels>) -> Hit {
     })
 }
 
-/// The word around a position, as a double-click takes it: a run of letters
-/// and digits, a run of white space, or one other character.
+/// The word around a position, as a double-click takes it: a run of letters and digits, a run of
+/// white space, or one other character.
 fn word_at(t: &Tree, p: Pos) -> (Pos, Pos) {
     let Some(n) = t.node(p.node) else { return (p, p) };
     if n.kind == Kind::Element && !p.own {
@@ -1131,7 +1035,6 @@ fn word_at(t: &Tree, p: Pos) -> (Pos, Pos) {
             2
         }
     };
-    // The character the offset is in front of; at the end, the last one.
     let mut i = units.partition_point(|&(at, _)| at < p.offset).min(units.len() - 1);
     if units[i].0 > p.offset && i > 0 {
         i -= 1;
@@ -1150,8 +1053,8 @@ fn word_at(t: &Tree, p: Pos) -> (Pos, Pos) {
     (Pos { offset: units[a].0, ..p }, Pos { offset: end, ..p })
 }
 
-/// The block around a position, as a triple-click takes it: the nearest
-/// block-level element's whole content.
+/// The block around a position, as a triple-click takes it: the nearest block-level element's whole
+/// content.
 fn block_at(t: &Tree, p: Pos) -> (Pos, Pos) {
     let mut cur = match t.node(p.node) {
         Some(n) if n.kind == Kind::Text => n.parent,
@@ -1180,13 +1083,11 @@ fn unit(t: &Tree, p: Pos, grain: Grain) -> (Pos, Pos) {
     }
 }
 
-/// `user-select: all`: a boundary inside such an element moves to the
-/// element's edge, away from the other boundary, so the element is taken
-/// whole.
+/// `user-select: all`: a boundary inside such an element moves to the element's edge, away from the
+/// other boundary, so the element is taken whole.
 fn take_all(t: &Tree, a: Pos, f: Pos) -> (Pos, Pos) {
     let forward = matches!((key(t, a), key(t, f)), (Some(ka), Some(kf)) if ka <= kf);
     let outer = |p: Pos, toward_end: bool| -> Pos {
-        // The outermost `all` element around `p`.
         let mut found = None;
         let mut cur = p.node;
         for _ in 0..4096 {
@@ -1224,14 +1125,11 @@ fn shape(t: &Tree, anchor: (Pos, Pos), focus: Pos, grain: Grain) -> (Pos, Pos) {
     take_all(t, a, f)
 }
 
-/// The root's share of every press: decides, after the JS `mousedown`, whether
-/// the press starts a selection (see the module header). The bubble phase, so
-/// a native widget that stops propagation (a scrollbar, a text field) keeps
-/// its press to itself.
+/// The root's share of every press: decides, after the JS `mousedown`, whether the press starts a
+/// selection (see the module header).
 pub(crate) fn bind_root<E: InteractiveElement>(e: E) -> E {
     e.capture_any_mouse_down(|_, _, _| PRESS_PREVENTED.with(|c| c.set(false)))
         .on_any_mouse_down(|ev, window, cx| press(ev, window, cx))
-        // The release, over the root or outside it.
         .capture_any_mouse_up(on_release)
         .on_mouse_up_out(MouseButton::Left, on_release)
         .on_key_down(|ev, window, cx| {
@@ -1252,8 +1150,6 @@ pub(crate) fn bind_root<E: InteractiveElement>(e: E) -> E {
         })
 }
 
-/// Called by the renderer when the press's JS `mousedown` was cancelled: a
-/// browser starts no selection then.
 pub(crate) fn note_press_prevented() {
     PRESS_PREVENTED.with(|c| c.set(true));
 }
@@ -1262,8 +1158,8 @@ fn press(ev: &MouseDownEvent, window: &mut Window, cx: &mut App) {
     if ev.button != MouseButton::Left || PRESS_PREVENTED.with(|c| c.replace(false)) {
         return;
     }
-    // A gesture whose release never reached us (it went to another window)
-    // ends here; what it selected stays.
+    // A gesture whose release never reached us (it went to another window) ends here; what it
+    // selected stays.
     if STATE.with(|s| s.borrow().gesture.is_some()) {
         finish();
     }
@@ -1284,15 +1180,14 @@ fn press(ev: &MouseDownEvent, window: &mut Window, cx: &mut App) {
             target,
         )
     });
-    // Pressing into a text field moves the selection into it.
     if editable {
         if has_sel {
             replace_live(None, window, cx);
         }
         return;
     }
-    // `user-select: none` is where a press does not touch the selection —
-    // which is what keeps it alive across a click on a "Copy" button.
+    // `user-select: none` is where a press does not touch the selection — which is what keeps it
+    // alive across a click on a "Copy" button.
     if us == Us::None {
         return;
     }
@@ -1335,15 +1230,11 @@ fn press(ev: &MouseDownEvent, window: &mut Window, cx: &mut App) {
     if grain != Grain::Char || extend {
         advance(window, cx);
     }
-    // The move listener is painted by the root while a gesture lasts
-    // (`paint_listeners`): the next frame puts it in place. The release is the
-    // root's own listener, which is there already — a quick click's release
-    // can arrive before any frame.
     crate::render::request_repaint(window, cx);
 }
 
-/// The root's paint, while a gesture lasts in this window: every move,
-/// wherever the pointer is (the window has the mouse captured).
+/// The root's paint, while a gesture lasts in this window: every move, wherever the pointer is (the
+/// window has the mouse captured).
 pub(crate) fn paint_listeners(window: &mut Window) {
     let k = windows::key(window);
     if !WORK.with(|c| c.get()) || STATE.with(|s| s.borrow().gesture.as_ref().is_none_or(|g| g.win != k)) {
@@ -1356,8 +1247,7 @@ pub(crate) fn paint_listeners(window: &mut Window) {
     });
 }
 
-/// The left button's release, from the root's listeners (over the root or
-/// outside it). A no-op without a gesture.
+/// The left button's release, from the root's listeners (over the root or outside it).
 fn on_release(ev: &MouseUpEvent, window: &mut Window, cx: &mut App) {
     if ev.button == MouseButton::Left && WORK.with(|c| c.get()) {
         released(ev.position, window, cx);
@@ -1372,8 +1262,6 @@ fn moved(p: Point<Pixels>, pressed: Option<MouseButton>, window: &mut Window, cx
     let go = STATE.with(|s| {
         let mut s = s.borrow_mut();
         let Some(g) = s.gesture.as_mut().filter(|g| g.win == k && !g.released) else { return None };
-        // The button came up where no release reached us: the gesture ended
-        // where the pointer last was, not here.
         if pressed != Some(MouseButton::Left) {
             return Some(None);
         }
@@ -1419,8 +1307,6 @@ fn released(p: Point<Pixels>, window: &mut Window, cx: &mut App) {
     }
 }
 
-/// Resolves what the gesture can resolve now and applies it; touches the
-/// text it still has to see and asks for the frame that records it.
 fn advance(window: &mut Window, cx: &mut App) {
     let k = windows::key(window);
     let Some((press, last, grain, dragging, released, anchor, extend, waits)) = STATE.with(|s| {
@@ -1437,8 +1323,8 @@ fn advance(window: &mut Window, cx: &mut App) {
         }
         return;
     }
-    // Text that never records (a node no frame paints) must not hold the
-    // gesture forever: past a few frames, what is recorded is the answer.
+    // Text that never records (a node no frame paints) must not hold the gesture forever: past a
+    // few frames, what is recorded is the answer.
     let patient = waits < 4;
     let resolve = |window: &Window, p: Point<Pixels>| -> Result<Option<Pos>, Vec<u32>> {
         match hit(window, p) {
@@ -1492,8 +1378,8 @@ fn advance(window: &mut Window, cx: &mut App) {
     }
 }
 
-/// Touches holders the gesture has to see, so the next frame builds (and
-/// records) them, and asks for that frame.
+/// Touches holders the gesture has to see, so the next frame builds (and records) them, and asks
+/// for that frame.
 fn wait(ids: Vec<u32>, window: &mut Window, cx: &mut App) {
     STATE.with(|s| {
         if let Some(g) = s.borrow_mut().gesture.as_mut() {
@@ -1519,9 +1405,8 @@ fn finish() {
     RECORDING.with(|c| c.set(false));
 }
 
-/// The frame tick (`frame_tick`): a gesture waiting on a frame resolves, a
-/// drag past the edge of its scroll container scrolls it, and an owed
-/// `selectionchange` is delivered. One flag read when there is none of that.
+/// The frame tick (`frame_tick`): a gesture waiting on a frame resolves, a drag past the edge of
+/// its scroll container scrolls it, and an owed `selectionchange` is delivered.
 pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     if !WORK.with(|c| c.get()) {
         return false;
@@ -1553,9 +1438,8 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     moved
 }
 
-/// While a drag is held above or below its scroll container, the container
-/// scrolls toward the pointer, faster the further out it is. Answers whether
-/// it moved (and so whether another frame is wanted).
+/// While a drag is held above or below its scroll container, the container scrolls toward the
+/// pointer, faster the further out it is.
 fn autoscroll(k: WinKey, last: Point<Pixels>) -> bool {
     let anchor = STATE.with(|s| s.borrow().gesture.as_ref().and_then(|g| g.anchor).map(|a| a.0.node));
     let Some(node) = anchor else { return false };
@@ -1589,9 +1473,6 @@ fn autoscroll(k: WinKey, last: Point<Pixels>) -> bool {
     before != after
 }
 
-// ---------------------------------------------------------------------------
-// the protocol (runtime.ts `Selection` / `Range`)
-// ---------------------------------------------------------------------------
 
 use vn_runtime::redjs::api::Value;
 use vn_runtime::{host_fn, JsRuntime};
@@ -1610,9 +1491,6 @@ fn pos_args(args: &vn_runtime::redjs::api::HostArgs, at: u32) -> Pos {
     Pos::at(num(args.arg(at)), num(args.arg(at + 1)))
 }
 
-// `"anchor,anchorOffset,anchorOwn,focus,focusOffset,focusOwn"`, or `""` for no
-// selection. `own` (1) is an element's own text, which JS turns into a Text
-// child before it hands the node out (`__vn_selection_rebase`).
 host_fn!(fn vn_selection_get(_g, _args) {
     match current() {
         Some((a, f)) => ret_string(&format!(
@@ -1623,20 +1501,16 @@ host_fn!(fn vn_selection_get(_g, _args) {
     }
 });
 
-// `(anchor, anchorOffset, focus, focusOffset)`, DOM points; anchor 0 empties
-// the selection. Answers whether the points named live nodes.
 host_fn!(fn vn_selection_set(_g, args) {
     let a = pos_args(&args, 0);
     let points = (a.node != 0).then(|| (a, pos_args(&args, 2)));
     Value::boolean(set_from_js(points)).0
 });
 
-// `Selection.toString()`.
 host_fn!(fn vn_selection_text(_g, _args) {
     ret_string(&selected_text())
 });
 
-// `(element, text)`: the element's own text became the Text child `text`.
 host_fn!(fn vn_selection_rebase(_g, args) {
     rebase(num(args.arg(0)), num(args.arg(1)));
     UNDEF
@@ -1663,9 +1537,8 @@ mod tests {
         collapse(raw, ws).into_iter().map(|x| x.1).collect()
     }
 
-    /// `collapse` is `render::processed_text` with offsets: the two must
-    /// produce the same string for every mode, or a highlight lands on the
-    /// wrong glyphs.
+    /// `collapse` is `render::processed_text` with offsets: the two must produce the same string
+    /// for every mode, or a highlight lands on the wrong glyphs.
     #[test]
     fn collapse_matches_the_renderer() {
         let modes = [
@@ -1685,7 +1558,6 @@ mod tests {
 
     #[test]
     fn a_map_walks_both_ways_through_collapsed_space_and_surrogates() {
-        // "  a  😀b " collapses to " a 😀b " and trims to "a 😀b".
         let raw = "  a  😀b ";
         let processed = crate::render::processed_text(raw, WhiteSpaceMode::Normal);
         assert_eq!(processed, " a 😀b ");
@@ -1727,9 +1599,8 @@ mod tests {
         assert_eq!(clip(&p, &[1, 2, 4], &[3], 10), (4, 10));
     }
 
-    /// A small document: `<div><p>Hello <b>big</b> world</p><p>Second</p>
-    /// <span class=no>skip</span></div>` with the cascade's answers set by
-    /// hand on the nodes.
+    /// A small document: `<div><p>Hello <b>big</b> world</p><p>Second</p> <span
+    /// class=no>skip</span></div>` with the cascade's answers set by hand on the nodes.
     fn doc() -> (u32, u32, u32, u32, u32, u32) {
         tree::with_tree(|t| {
 
@@ -1791,7 +1662,6 @@ mod tests {
         assert_eq!(painted.get(&world), Some(&(0, 6)));
         assert_eq!(painted.get(&p2), Some(&(0, 2)));
         assert_eq!(painted.len(), 4, "user-select: none paints nothing");
-        // Backwards is the same range.
         assert_eq!(tree::read_tree(|t| painted_of(t, Some((Pos::own(p2, 2), Pos::at(hello, 3))))), painted);
 
         tree::with_tree(|t| replace(t, sel));

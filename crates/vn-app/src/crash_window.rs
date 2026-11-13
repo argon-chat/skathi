@@ -1,69 +1,20 @@
-//! The crash dialog: what the user sees once a native panic has poisoned the
-//! runtime (invariant I9, docs/ARCHITECTURE.md §1), drawn by the host with no
-//! JavaScript at all.
+//! The crash dialog: what the user sees once a native panic has poisoned the runtime, drawn by the
+//! host with no JavaScript.
 //!
-//! ```text
-//!   host fn panics ── host_fn!'s catch ── bridge::panic_to_js: poison_with("<msg> at <loc>"),
-//!                                          throw `native panic at …` into JS
-//!   next frame (pump_frame) or background tick ── poisoned() ── on_poisoned (once)
-//!        │ log one `[crash]` line; a test host stops here
-//!        ▼
-//!   the main window restored if minimised ── the dialog, owned by it, disables it
-//!        │
-//!   Restart ── shutdown::begin ── the exe again, same argv ── close_primary ── gpui quit
-//!   Close / Esc / Alt+F4 ── shutdown::begin ── close_primary ── gpui quit
-//! ```
+//! A poisoned runtime runs no JS again (the frame pump and background tick return before their
+//! wave), so the buttons of an app's own error screen, being JS, do nothing. The only way out is a
+//! new process, so the dialog offers that without needing the runtime. It is a Windows 11
+//! ContentDialog like the permission prompt (src/content_dialog.rs): a collapsed Details expander
+//! (panic message and location, app version, OS build) and the buttons Restart, Copy report and
+//! Close. English, or Russian when that is the Windows display language.
 //!
-//! # Why the host draws it
+//! **Restart** begins shutdown ([`crate::shutdown::begin`]), starts this executable again with the
+//! same command line, detached, then closes the primary window as `appWindow.close()` does
+//! ([`crate::window::close_primary`]) so gpui quits through its quit hooks. **Close**, Esc and
+//! Alt+F4 are the same close without the relaunch. Embedded (src/embed.rs) there is no Restart.
 //!
-//! A poisoned runtime runs no JS ever again: the frame pump returns before
-//! its wave, the background tick likewise. Whatever error screen the app's
-//! own code put up from the thrown `Error` (the Argon client's Vue
-//! ErrorBoundary: "Something went wrong / Reload app") is painted, but its
-//! buttons are JS, and `location.reload()` runs inside the very wave that no
-//! longer runs (src/reload.rs). The user saw a "Reload app" that did nothing.
-//! The only way out of a poisoned process is a new process, so the dialog
-//! offers exactly that, and it must not need the runtime to do it.
-//!
-//! # What it looks like
-//!
-//! The permission prompt's Windows 11 ContentDialog (src/content_dialog.rs):
-//! transient acrylic, round corners, the system's theme (live) and accent, the
-//! app's icon and name in the caption row. In place of the capability's glyph,
-//! Segoe Fluent Icons' Warning triangle in a circle tinted with Windows'
-//! critical red (`SystemFillColorCritical`, not the accent); the title "*App*
-//! ran into a problem"; a sentence saying what happened and what to do; a
-//! collapsed **Details** expander with the panic's message and location in a
-//! monospace well (Consolas; scrolling past six lines, the window growing
-//! about its centre to fit it) and the app's version and the OS build; and
-//! the buttons **Restart** (accent,
-//! focused, so Enter), **Copy report** (a plain-text report to the
-//! clipboard; the label reads "Copied" for two seconds) and **Close**. English,
-//! or Russian when that is the Windows display language. Wider than the
-//! prompt (three buttons, the longest «Скопировать отчёт»).
-//!
-//! Input is the prompt's: Tab and the arrow keys, Enter and Space, the access
-//! keys (Alt+R / C / L, Alt+П / С / З), the focus ring, and its input
-//! protection, so a key or a click aimed at the app the moment it broke does
-//! not restart it.
-//!
-//! # What the buttons do
-//!
-//! **Restart** relaunches the process: the close a window's X starts
-//! ([`crate::shutdown::begin`]: the windows hidden, a second launch of a
-//! single-instance app told "closing" so it waits for this process to end, a
-//! deadline armed), this executable started again with this command line,
-//! detached, and then the primary window closed as `appWindow.close()` closes
-//! it ([`crate::window::close_primary`]), so gpui quits through its quit hooks
-//! (IndexedDB's checkpoint, the cookie jar, the voice rooms' leave). Embedded
-//! (src/embed.rs) the process is the embedder's: there is no Restart, and
-//! Close closes the app as an embedder sees any close.
-//!
-//! **Close**, Esc and Alt+F4 are that same close without the relaunch.
-//!
-//! On other platforms the dialog is the platform's alert (vn-desktop's
-//! question, an `NSAlert` sheet on macOS) with Restart and Close, and the
-//! panic's text in its message.
+//! On other platforms the dialog is the platform's alert (vn-desktop's question) with Restart and
+//! Close, and the panic's text in its message.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -72,10 +23,6 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::App;
-
-// ---------------------------------------------------------------------------
-// the pure parts
-// ---------------------------------------------------------------------------
 
 /// The dialog's language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -290,10 +237,9 @@ pub fn app_version() -> Option<String> {
     }
 }
 
-/// `text` with a line break in every run of more than `columns` characters
-/// that has no space in it. gpui wraps a line at its spaces and punctuation
-/// but never inside a word, and a panic's text can hold a long identifier
-/// or path that would otherwise run out of the details' well.
+/// `text` with a line break in every run of more than `columns` characters with no space: gpui wraps
+/// at spaces and punctuation but never inside a word, so a long identifier or path would overflow
+/// the details' well.
 pub fn breakable(text: &str, columns: usize) -> String {
     let mut out = String::with_capacity(text.len() + text.len() / columns.max(1));
     let mut run = 0;
@@ -322,9 +268,8 @@ pub fn relaunch_args(argv: impl IntoIterator<Item = OsString>) -> Vec<OsString> 
 pub enum Decision {
     /// Already decided: nothing more.
     Nothing,
-    /// The `[crash]` line only: a test host (src/quiet.rs) is driven by a
-    /// runner that reads the log, and a dialog nobody answers would only
-    /// keep it alive; a closing app is already going.
+    /// The `[crash]` line only: a test host (src/quiet.rs) is driven by a runner that reads the log,
+    /// and a closing app is already going.
     Log,
     /// The line and the dialog.
     Dialog,
@@ -337,10 +282,6 @@ pub fn decide(first: bool, test_host: bool, closing: bool) -> Decision {
         (true, false) => Decision::Dialog,
     }
 }
-
-// ---------------------------------------------------------------------------
-// the host's side
-// ---------------------------------------------------------------------------
 
 static APP_NAME: Mutex<Option<String>> = Mutex::new(None);
 static DECIDED: AtomicBool = AtomicBool::new(false);
@@ -479,10 +420,6 @@ fn show(report: Report, cx: &mut App) {
     .detach();
 }
 
-// ---------------------------------------------------------------------------
-// the window (Windows)
-// ---------------------------------------------------------------------------
-
 #[cfg(target_os = "windows")]
 pub use view::{preview, Preview};
 
@@ -501,15 +438,13 @@ mod view {
     use super::{actions, primary, strings, ui_lang, Action, Lang, Report, Strings};
     use crate::content_dialog::{self as card, fonts, hwnd_of, parse_label, win, Accent, Fonts, Guard, Label, Theme};
 
-    /// The card's width, DIP: wider than the prompt's 440 for three buttons,
-    /// within ContentDialog's 548.
+    /// The card's width, DIP: wider than the prompt's 440 for three buttons.
     const WIDTH: f32 = 500.0;
 
     /// How long Copy reads "Copied".
     const COPIED_FOR: Duration = Duration::from_secs(2);
 
-    /// Segoe Fluent Icons' Warning: a triangle reads as a fault at a glance,
-    /// where ErrorBadge's own circle sat in the tinted circle twice.
+    /// Segoe Fluent Icons' Warning triangle.
     const GLYPH: char = '\u{E7BA}';
 
     /// The details' well: six lines of 16 DIP, then it scrolls.
@@ -717,9 +652,7 @@ mod view {
                 .mt(px(12.0))
                 .flex()
                 .flex_col()
-                // A row, so the toggle (its hover, its focus ring) is as wide
-                // as its words, and they line up with the body's: its hover
-                // runs past them.
+                // A row, so the toggle's hover and focus ring are as wide as its words.
                 .child(div().flex().ml(px(-8.0)).child(card::with_ring(div().relative().child(toggle), ring, t, 4.0)))
                 .when(self.expanded, |d| {
                     d.child(
@@ -935,10 +868,6 @@ mod view {
         });
     }
 
-    // -----------------------------------------------------------------------
-    // the preview
-    // -----------------------------------------------------------------------
-
     /// What the preview shows (examples/crash_dialog.rs).
     #[doc(hidden)]
     #[derive(Debug, Clone)]
@@ -961,9 +890,8 @@ mod view {
         pub solid: bool,
     }
 
-    /// `cargo run -p vn-app --example crash_dialog`: the dialog on its own,
-    /// for a look at it. Nothing has crashed; the buttons print what they
-    /// would do, Copy really copies, and the preview ends with the dialog.
+    /// `cargo run -p vn-app --example crash_dialog`: the dialog on its own; the buttons print what
+    /// they would do.
     #[doc(hidden)]
     pub fn preview(p: Preview) {
         if let Some(a) = p.accent {

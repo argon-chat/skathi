@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/overlay.spec.ts: an overlay laid over another application — a transparent, click-through, never-activated, capture-excluded <VnWindow>, and one that covers a monitor chosen by index (docs/MULTIWINDOW.md §7.11). See ../README.md.",
-
   "name": "vn-test-overlay",
 
   "window": {

@@ -1,23 +1,3 @@
-// IndexedDB in a real Vue app, on the real host, inside the real frame loop
-// (m25 P1/P2 — research/reports/m25/indexeddb-design.md, -p1-impl.md,
-// -p2-impl.md).
-//
-//   bun test packages/vn-test/specs/indexeddb.spec.ts
-//
-// redjs proves the API itself — the WPT subset (vendor/redjs/redjs/tests/
-// wpt_idb.rs) and Dexie / idb / idb-keyval / localForage unmodified
-// (tests/idb_libs.rs), on both backends. What only a host can prove is the
-// integration: that the build ships it, that a Vue app's state can live in
-// it, that a click handler's transaction commits and Vue re-renders what came
-// back, that results land inside vn-app's own frame pump within the budget
-// vn-runtime sets (`delivery_budget_us`), and that the databases are ON DISK
-// under the app's storage folder — no memory-only advisory. Persistence across
-// restarts, encryption and the second instance: indexeddb-disk.spec.ts.
-//
-// `fixtures/indexeddb` is the app; `__VN_TEST_IDB__.run(name)` starts one of its
-// scenarios and records how it settled. The host gets its own `VN_APP_NAME`
-// (a fresh, empty storage folder), removed afterwards.
-
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { readFileSync, rmSync } from "node:fs";
 import { basename, dirname } from "node:path";
@@ -33,8 +13,6 @@ const app = await launch({
 let idbFolder = "";
 afterAll(async () => {
   await app.close();
-  // `<LOCALAPPDATA>\<appName>\storage\indexeddb` — the app-name directory goes,
-  // once the killed host has let go of its files.
   const appDir = dirname(dirname(idbFolder));
   if (!idbFolder || basename(appDir) !== appName) return;
   for (let i = 0; ; i++) {
@@ -50,7 +28,6 @@ afterAll(async () => {
 
 const T = 30_000;
 
-/** Starts a scenario and polls until it has settled. */
 async function scenario(name: string, ms = 15_000): Promise<string> {
   await app.eval(`__VN_TEST_IDB__.run(${JSON.stringify(name)})`);
   const deadline = Date.now() + ms;
@@ -70,8 +47,8 @@ describe("IndexedDB in a Vue app", () => {
   }, T);
 
   test("a click's transaction commits and Vue renders what came back out", async () => {
-    // One REAL click (gpui's hit test, a host-dispatched handler) and two
-    // devtools clicks: the transaction is made inside the handler either way.
+    // One REAL click (gpui's hit test, a host-dispatched handler) and two devtools clicks: the
+    // transaction is made inside the handler either way.
     await app.locator("#add").click({ real: true });
     await expect(app.locator("#count")).toHaveText("count=1");
     await app.locator("#add").click();
@@ -85,7 +62,6 @@ describe("IndexedDB in a Vue app", () => {
     await app.locator("#clear").click();
     await expect(app.locator("#count")).toHaveText("count=0");
     await expect(app.locator(".note")).toHaveCount(0);
-    // The key generator is not reset by clear(), exactly as in a browser.
     await app.locator("#add").click();
     await expect(app.locator(".note").nth(0)).toHaveText("4:note 1");
   }, T);
@@ -93,9 +69,8 @@ describe("IndexedDB in a Vue app", () => {
   test("500 sequential awaited gets finish in a few frames, not 500", async () => {
     const [sum, frames, ms] = (await scenario("chain")).split("|").map(Number);
     bunExpect(sum).toBe(124750);
-    // Delivered once per pump this would be ~500 frames; the pump's budget
-    // delivers a chain of dependent results inside one frame. The guard is
-    // loose on purpose (a debug host, a busy machine); the number is printed.
+    // Delivered once per pump this would be ~500 frames; the pump's budget delivers a chain of
+    // dependent results inside one frame.
     console.log(`[indexeddb] 500 sequential awaited gets: ${frames} frames, ${ms} ms`);
     bunExpect(frames).toBeLessThanOrEqual(40);
   }, T);
@@ -113,8 +88,6 @@ describe("IndexedDB in a Vue app", () => {
   }, T);
 
   test("databases() and navigator.storage see the app's data", async () => {
-    // The quota is the disk's (vn-storage idb.rs: min(60% of the volume,
-    // used + free)), not P1's fixed 1 GiB.
     const [names, used, quota, persisted] = (await scenario("storage")).split("|");
     bunExpect([names, used, persisted]).toEqual(["true", "true", "true"]);
     console.log(`[indexeddb] navigator.storage.estimate().quota = ${quota}`);

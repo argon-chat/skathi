@@ -1,5 +1,5 @@
-//! Single instance on Windows: a session-local mutex says WHETHER an instance
-//! runs, a per-user named pipe carries a second launch TO it (docs/LAUNCH.md §3).
+//! Single instance on Windows: a session-local mutex says whether an instance runs, a per-user named
+//! pipe carries a second launch to it.
 //!
 //! ```text
 //!   key  = fnv128(id ‖ storage folder name ‖ user SID)
@@ -8,13 +8,11 @@
 //!                                           MESSAGE mode, DACL = this user + SYSTEM
 //! ```
 //!
-//! BOTH ends verify the other: the server checks the client's token user, the
-//! client checks the server's token user AND image (path, or the same file
-//! when the exe is a hard link). A process that squatted the pipe name gets
-//! nothing — not the deep link, not the argv. One message per connection,
-//! capped at [`super::MAX_MESSAGE`], strict JSON, acked with one byte: `1`
-//! delivered, `2` this instance is closing (the second launch waits for it to
-//! exit and becomes the instance itself).
+//! Both ends verify the other: the server checks the client's token user, the client the server's
+//! token user AND image (path, or same file for a hard link), so a process squatting the pipe name
+//! gets nothing. One message per connection, capped at [`super::MAX_MESSAGE`], strict JSON, acked
+//! with one byte: `1` delivered, `2` closing (the second launch waits for it to exit and becomes
+//! the instance).
 
 use std::ffi::c_void;
 use std::sync::mpsc;
@@ -53,26 +51,21 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::{Forward, CLOSING_PATIENCE_MS, FORWARD_TIMEOUT_MS, MAX_MESSAGE};
 
-/// How `claim` ended.
 #[derive(Debug)]
 pub enum Claim {
-    /// We are the instance; the pipe server is running.
     Primary,
     /// The rule could not be enforced (no SID, the mutex is not ours to open):
     /// run as a separate instance, said out loud by the caller.
     Unavailable(String),
-    /// Handed to the running instance, which acked.
     Forwarded,
-    /// An instance holds the mutex but did not answer in time.
     NoAnswer,
     /// The instance answered that it is closing, and had not exited by the
     /// deadline.
     StillClosing,
-    /// The pipe's server is not this app (A-F5).
+    /// The pipe's server is not this app.
     Impostor(String),
 }
 
-/// An owned HANDLE, closed on drop.
 struct Owned(HANDLE);
 impl Drop for Owned {
     fn drop(&mut self) {
@@ -87,8 +80,7 @@ impl Drop for Owned {
 // (or moved to exactly one other thread); nothing aliases them.
 unsafe impl Send for Owned {}
 
-/// FNV-1a, 128-bit. Deterministic across processes and builds, which is the
-/// whole requirement — this names a kernel object, it protects nothing.
+/// FNV-1a, 128-bit: names a kernel object, protects nothing.
 pub fn fnv128(parts: &[&[u8]]) -> u128 {
     const OFFSET: u128 = 0x6c62272e07bb014262b821756295c58d;
     const PRIME: u128 = 0x0000000001000000000000000000013B;
@@ -107,15 +99,11 @@ pub fn fnv128(parts: &[&[u8]]) -> u128 {
     h
 }
 
-/// The instance key: the id, the storage folder's name
-/// ([`super::storage_name`]) and the user. Until m26 a dev host keyed on its
-/// dist slot instead of the folder, so two dev hosts of one app on two slots
-/// both ran, and the second could not open the IndexedDB the first held.
+/// The instance key: the id, the storage folder's name ([`super::storage_name`]) and the user.
 pub fn instance_key(id: &str, storage: &str, sid: &str) -> String {
     format!("{:032x}", fnv128(&[id.as_bytes(), storage.as_bytes(), sid.as_bytes()]))
 }
 
-/// The token user of `process`, as an `S-1-5-…` string.
 fn token_user_sid(process: HANDLE) -> Option<String> {
     unsafe {
         let mut token = HANDLE::default();
@@ -141,7 +129,6 @@ fn own_sid() -> Option<String> {
     token_user_sid(unsafe { GetCurrentProcess() })
 }
 
-/// Opens `pid` for the two questions we ask of a peer.
 fn open_peer(pid: u32) -> Option<Owned> {
     unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok().map(Owned) }
 }
@@ -173,7 +160,6 @@ fn file_identity(path: &str) -> Option<(u32, u64)> {
     }
 }
 
-/// Is `pid` this app — same user, same executable?
 fn verify_server(pid: u32, sid: &str) -> Result<(), String> {
     let peer = open_peer(pid).ok_or_else(|| format!("cannot open pid {pid}"))?;
     let peer_sid = token_user_sid(peer.0).ok_or_else(|| format!("cannot read pid {pid}'s user"))?;
@@ -224,7 +210,6 @@ fn last_error() -> u32 {
     unsafe { GetLastError().0 }
 }
 
-/// Takes the instance, or forwards `fwd` to whoever holds it.
 pub fn claim(id: &str, storage: &str, fwd: &Forward) -> Claim {
     claim_within(id, storage, fwd, Duration::from_millis(FORWARD_TIMEOUT_MS))
 }
@@ -262,9 +247,7 @@ fn claim_within(id: &str, storage: &str, fwd: &Forward, patience: Duration) -> C
             Mutex::Failed(why) => return Claim::Unavailable(why),
             Mutex::Taken => {}
         }
-        // Somebody holds it. Reach them, or — if the holder just exited and its
-        // pipe is gone, or it is closing — loop and try to become the
-        // instance ourselves once it has gone.
+        // Somebody holds it. Reach them, or loop and become the instance once the holder has gone.
         match forward(&pipe_name, &sid, fwd, deadline) {
             Sent::Acked => return Claim::Forwarded,
             Sent::Impostor(why) => return Claim::Impostor(why),
@@ -316,24 +299,15 @@ fn take_mutex(name: &HSTRING) -> Mutex {
     }
 }
 
-// ---------------------------------------------------------------------------
-// the client half (a second launch)
-// ---------------------------------------------------------------------------
-
 enum Sent {
     Acked,
-    /// The instance is closing and did not take the launch.
     Closing,
-    /// No such pipe (yet, or any more).
     Gone,
     NoAnswer,
     Impostor(String),
 }
 
-/// The one-byte answer: delivered.
 const ACK_DELIVERED: u8 = 1;
-/// The one-byte answer: this instance is closing; become the instance once
-/// it has exited.
 const ACK_CLOSING: u8 = 2;
 
 fn forward(pipe_name: &str, sid: &str, fwd: &Forward, deadline: Instant) -> Sent {
@@ -424,10 +398,6 @@ fn forward(pipe_name: &str, sid: &str, fwd: &Forward, deadline: Instant) -> Sent
     }
 }
 
-// ---------------------------------------------------------------------------
-// the server half (the instance)
-// ---------------------------------------------------------------------------
-
 const PIPE_BUFFER: u32 = 64 * 1024;
 
 fn create_instance(name: &HSTRING, dacl: &Dacl, first: bool) -> Result<Owned, String> {
@@ -456,12 +426,9 @@ fn create_instance(name: &HSTRING, dacl: &Dacl, first: bool) -> Result<Owned, St
     Ok(Owned(h))
 }
 
-/// Creates the first pipe instance synchronously (so a failure is reported
-/// to the caller), then hands accepting to the `vn-instance` thread.
-///
-/// The mutex can be ours a moment before the previous instance's pipe is
-/// gone (a launch that waited for a closing instance to exit), so a taken
-/// name is retried for up to a second before it is reported.
+/// Creates the first pipe instance synchronously (so a failure is reported), then hands accepting
+/// to the `vn-instance` thread. The mutex can be ours a moment before the previous instance's pipe
+/// is gone, so a taken name is retried for up to a second.
 fn serve(pipe_name: String, sid: String, deadline: Instant) -> Result<(), String> {
     let dacl = Dacl::for_user(&sid).ok_or("the pipe's security descriptor could not be built")?;
     let name = HSTRING::from(pipe_name);
@@ -509,7 +476,6 @@ fn serve(pipe_name: String, sid: String, deadline: Instant) -> Result<(), String
     Ok(())
 }
 
-/// One connected client: verify, read, ack, deliver.
 fn handle(pipe: Owned, sid: &str) {
     let mut client_pid = 0u32;
     let same_user = unsafe { GetNamedPipeClientProcessId(pipe.0, &mut client_pid) }.is_ok()
@@ -557,8 +523,6 @@ fn handle(pipe: Owned, sid: &str) {
     super::deliver(msg);
 }
 
-/// One whole message, or why not. Reads in chunks while the pipe reports
-/// `ERROR_MORE_DATA`, and gives up past the cap.
 fn read_message(pipe: &Owned) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     let mut chunk = vec![0u8; PIPE_BUFFER as usize];
@@ -577,10 +541,8 @@ fn read_message(pipe: &Owned) -> Result<Vec<u8>, String> {
     }
 }
 
-/// Brings the primary window to the front: restore if minimised, show if
-/// hidden, then take the foreground the secondary allowed us
-/// (`AllowSetForegroundWindow`). Electron apps do the same three in their
-/// `second-instance` handler (`restore()`, `show()`, `focus()`).
+/// Brings the primary window to the front: restore, show, then take the foreground the secondary
+/// allowed (`AllowSetForegroundWindow`).
 pub fn raise(hwnd: isize) {
     let hwnd = HWND(hwnd as *mut c_void);
     unsafe {
@@ -646,8 +608,6 @@ mod tests {
         assert!(t0.elapsed() >= Duration::from_millis(350), "it waited for its deadline");
     }
 
-    /// The whole loop in one process: claim A takes the instance, claim B with
-    /// the same key forwards, and A's queue receives B's launch.
     #[test]
     fn a_second_claim_forwards_to_the_first() {
         let id = format!("vn-desktop-test-{}", std::process::id());

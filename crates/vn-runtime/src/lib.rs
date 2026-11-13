@@ -2,7 +2,7 @@
 //! gpui's main thread, pumped once per frame, with a phase-gated bridge that is
 //! the only way a JS host function may reach `&mut Window` / `&mut App`.
 //!
-//! Invariants (see docs/ARCHITECTURE.md §1 and research/reports/fill-1.md §9):
+//! Invariants:
 //! - One VM, one thread: VM thread == gpui main thread == Win32 UI thread.
 //! - The context is created once and never released (teardown fastfails in
 //!   this JSC prebuilt).
@@ -20,12 +20,9 @@ pub mod testing;
 pub use bridge::{Phase, with_app, with_commit, with_published, with_published_app};
 pub use runtime::{JsError, JsRuntime};
 
-// Re-exported so `host_fn!` expansions and downstream crates use the same redjs.
 pub use redjs;
 
-/// The optional web APIs this build of the crate carries, as Cargo resolved
-/// them. Features unify across the graph, so a host can only check that what
-/// it asked for is what it got (vn-app's payload tests do) by asking here.
+/// The optional web APIs this build carries, as Cargo resolved them (features unify across the graph).
 pub mod built {
     pub const WEBGPU: bool = cfg!(feature = "webgpu");
     pub const AUDIO: bool = cfg!(feature = "audio");
@@ -37,11 +34,8 @@ pub mod built {
 /// Defines a panic-shielded JSC host function, in redjs's host ABI
 /// ([`raw_host_fn!`]).
 ///
-/// The body receives `$g: *mut c_void` (the JSGlobalObject) and
-/// `$args: redjs::api::HostArgs`, and must evaluate to a `u64` (an encoded
-/// JSValue — `redjs::api::Value::undefined().0` when there is nothing to
-/// return). A panic inside the body is converted into a thrown JS `Error` and
-/// poisons the runtime (I9): the pump stops scheduling further JS.
+/// The body receives `$g: *mut c_void` (the JSGlobalObject) and `$args: redjs::api::HostArgs` and
+/// returns an encoded JSValue `u64`. A panic becomes a thrown JS `Error` and poisons the runtime.
 #[macro_export]
 macro_rules! host_fn {
     ($vis:vis fn $name:ident($g:ident, $args:ident) $body:block) => {
@@ -62,11 +56,8 @@ macro_rules! host_fn {
     };
 }
 
-/// A bare host function in redjs's host ABI (`redjs::webapi::util::HostFn`):
-/// `extern "sysv64"` on Windows x64, where the engine calls through the System
-/// V convention, and `extern "C"` everywhere else. The body sees `$g` (the
-/// JSGlobalObject) and `$cf` (the call frame) as `*mut c_void` and returns the
-/// encoded result. No panic shield: that is [`host_fn!`]'s.
+/// A bare host function in redjs's ABI: `extern "sysv64"` on Windows x64, `extern "C"` elsewhere.
+/// `$g` is the JSGlobalObject, `$cf` the call frame. No panic shield (see [`host_fn!`]).
 #[macro_export]
 macro_rules! raw_host_fn {
     ($vis:vis fn $name:ident($g:ident, $cf:ident) $body:block) => {

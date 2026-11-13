@@ -1,45 +1,12 @@
-//! The on-disk shape of a storage area, and the discipline that writes it.
+//! The on-disk shape of a storage area: one file per area, not per key (whole-file rename is
+//! the crash-safe update, and per-key files would leave key names legible in a directory
+//! listing of an encrypted store). Writes go to a `.tmp` carrying the process id, then rename
+//! over the target: a reader never sees a half-written area; two hosts are last-writer-wins.
 //!
-//! # One file per area, not one file per key
-//!
-//! A key/value pair is not the unit anything cares about — the *area* is. Web
-//! Storage's own operations (`clear`, enumeration order, the quota) are
-//! area-wide, an area is the thing a `setItem` has to leave consistent, and the
-//! only file update that is crash-safe is one that replaces a whole file by
-//! rename. Per-key files would give up all of that (a `clear` becomes N
-//! unlinks that can be interrupted halfway) and add one that is worse: **a key
-//! name would become a file name**, so `localStorage.setItem("auth-token", …)`
-//! would leave the string `auth-token` legible in a directory listing of an
-//! otherwise encrypted store, and keys containing `/`, `:` or a reserved
-//! Windows device name would need an escaping scheme nobody would ever read.
-//!
-//! So: one file, whole-area writes, `write-to-.tmp` then `rename` over the
-//! real name — the same discipline `packages/vue-native/build.ts` uses for
-//! `manifest.json`, for the same reason. `rename` on Windows is `MoveFileEx`
-//! with `MOVEFILE_REPLACE_EXISTING`, which is atomic against a reader.
-//!
-//! The temporary file carries the **process id**, so two hosts writing the same
-//! folder cannot land on one another's scratch file. They can still overwrite
-//! one another's *area* — last writer wins, documented in
-//! [`crate`]'s header — but neither of them can ever see a half-written one.
-//!
-//! # Two names, one format
-//!
-//! `localStorage.json` is the plaintext file: real JSON, indented one entry per
-//! line, the sort of thing a person can open when they are trying to work out
-//! what an app remembered about them.
-//!
-//! `localStorage.sealed` is the encrypted one: an 8-byte header
-//! (`VNSTOR`, format version, provider id) followed by the ciphertext of
-//! **exactly the same JSON**. Whole-file rather than per-value, for three
-//! reasons: the key names are hidden too (a per-value scheme leaks the shape of
-//! the data), it is one `CryptProtectData` call instead of one per key, and a
-//! file that is either entirely readable or entirely not has no partially
-//! decryptable state to reason about.
-//!
-//! The provider id in the header is what makes a file written by one provider
-//! *refuse* to open under another, instead of failing somewhere deeper with a
-//! worse message.
+//! `localStorage.json` is plaintext, indented JSON. `localStorage.sealed` is an 8-byte header
+//! (`VNSTOR`, format version, provider id) plus the ciphertext of the same JSON, whole-file so
+//! key names are hidden too. The provider id makes a file sealed by one provider refuse to open
+//! under another.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -62,19 +29,13 @@ pub fn sealed_path(folder: &Path) -> PathBuf {
     folder.join(SEALED_NAME)
 }
 
-// ---------------------------------------------------------------------------
-// JSON
-// ---------------------------------------------------------------------------
-
-/// The area, as the bytes that go into the file (plaintext or, once sealed,
-/// ciphertext).
+/// The area as the bytes that go into the file (plaintext, or ciphertext once sealed).
 pub fn encode(entries: &[(String, String)]) -> String {
     encode_as("vue-native/storage", entries)
 }
 
-/// [`encode`] under another `format` name: the same file shape for another
-/// list of pairs (`cookies.sealed` is `"vue-native/cookies"`). [`decode`]
-/// reads either.
+/// [`encode`] under another `format` name (`cookies.sealed` uses `"vue-native/cookies"`).
+/// [`decode`] reads either.
 pub fn encode_as(format: &str, entries: &[(String, String)]) -> String {
     let mut s = String::from("{\n  \"format\": ");
     write_json_string(&mut s, format);
@@ -110,13 +71,8 @@ fn write_json_string(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// Reads what [`encode`] wrote.
-///
-/// A deliberately small parser rather than a general JSON one: this file has
-/// exactly one shape, it is written by this module and nothing else, and the
-/// interesting half — string unescaping — is the same either way. Unknown
-/// members are skipped so a future version can add one without orphaning
-/// today's files.
+/// Reads what [`encode`] wrote. A small purpose-built parser; unknown members are skipped so a
+/// future version can add one without orphaning today's files.
 pub fn decode(text: &str) -> Result<Vec<(String, String)>, String> {
     let b = text.as_bytes();
     let mut p = Parser { b, i: 0 };
@@ -232,10 +188,8 @@ impl<'a> Parser<'a> {
                         b't' => out.push('\t'),
                         b'u' => {
                             let hi = self.hex4()?;
-                            // A surrogate pair is two escapes; anything else
-                            // (including a lone surrogate, which we never
-                            // write) becomes U+FFFD rather than an error —
-                            // one bad character must not cost the whole area.
+                            // A surrogate pair is two escapes; anything else (a lone surrogate
+                            // included) becomes U+FFFD so one bad character cannot cost the area.
                             let ch = if (0xd800..0xdc00).contains(&hi)
                                 && self.b.get(self.i) == Some(&b'\\')
                                 && self.b.get(self.i + 1) == Some(&b'u')
@@ -255,8 +209,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 _ => {
-                    // Multi-byte UTF-8 passes through untouched: find the end
-                    // of this character in the original str.
+                    // Multi-byte UTF-8 passes through untouched.
                     let start = self.i - 1;
                     while self.i < self.b.len() && (self.b[self.i] & 0xc0) == 0x80 {
                         self.i += 1;
@@ -281,7 +234,6 @@ impl<'a> Parser<'a> {
         Ok(v)
     }
 
-    /// Skips one value of any type — how an unknown member is tolerated.
     fn skip_value(&mut self) -> Result<(), String> {
         self.ws();
         match self.b.get(self.i) {
@@ -327,10 +279,6 @@ impl<'a> Parser<'a> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Sealing
-// ---------------------------------------------------------------------------
-
 pub fn seal(p: &dyn SecretProvider, json: &str) -> Result<Vec<u8>, String> {
     let body = p.protect(json.as_bytes())?;
     let mut out = Vec::with_capacity(HEADER_LEN + body.len());
@@ -363,12 +311,8 @@ pub fn unseal(p: &dyn SecretProvider, bytes: &[u8]) -> Result<String, String> {
     String::from_utf8(plain).map_err(|e| format!("decrypted bytes are not UTF-8: {e}"))
 }
 
-// ---------------------------------------------------------------------------
-// Writing
-// ---------------------------------------------------------------------------
-
-/// Write, then rename over the target. Never leaves a partial file where the
-/// real one was, and never collides with another process's scratch file.
+/// Writes then renames over the target; never leaves a partial file or collides with another
+/// process's scratch file.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(dir)?;
@@ -376,9 +320,8 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     {
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(bytes)?;
-        // The rename is atomic; the CONTENT reaching the platter is not, and a
-        // machine that loses power between the two would rename an empty file
-        // over a good one.
+        // Rename is atomic but the content reaching disk is not: power loss between the two
+        // would rename an empty file over a good one.
         f.sync_all()?;
     }
     match std::fs::rename(&tmp, path) {
@@ -418,9 +361,6 @@ mod tests {
 
     #[test]
     fn every_character_a_value_can_contain_survives() {
-        // Web Storage values are arbitrary strings: quotes, backslashes,
-        // newlines and control characters all occur in real data (a serialized
-        // JSON blob stored as a value is the common case).
         round_trip(vec![
             ("quote\"key".into(), "back\\slash".into()),
             ("nl".into(), "line1\nline2\r\n".into()),
@@ -435,16 +375,12 @@ mod tests {
 
     #[test]
     fn a_json_blob_stored_as_a_value_comes_back_byte_identical() {
-        // The single most common real value, and the one an escaping bug
-        // corrupts silently.
         let payload = r#"{"user":{"name":"O'Brien \"Bob\"","roles":["a\\b"]}}"#;
         round_trip(vec![("session".into(), payload.into())]);
     }
 
     #[test]
     fn an_unknown_member_is_skipped_rather_than_fatal() {
-        // Forward compatibility: a file written by a later build that added a
-        // member must still load here, or an upgrade-then-downgrade loses data.
         let text = r#"{"format":"vue-native/storage","version":1,
             "writtenBy":{"app":"hello","pid":123},"tags":[1,2,3],"encrypted":false,
             "entries":[["k","v"]]}"#;
@@ -459,9 +395,6 @@ mod tests {
 
     #[test]
     fn a_truncated_or_foreign_file_is_an_error_not_an_empty_area() {
-        // The difference between "this app has no saved data" and "this app's
-        // saved data could not be read" has to survive to the caller, which is
-        // what makes the advisory in lib.rs possible.
         for bad in [
             "",
             "{",
@@ -477,8 +410,6 @@ mod tests {
 
     #[test]
     fn escapes_this_module_never_writes_are_still_read() {
-        // Someone WILL hand-edit this file. `\/`, `A` and a surrogate
-        // pair are all legal JSON and all mean something.
         let text = r#"{"entries":[["a\/b","Aé😀"]]}"#;
         assert_eq!(
             decode(text).unwrap(),

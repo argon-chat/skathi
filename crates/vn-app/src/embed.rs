@@ -1,35 +1,19 @@
-//! vue-native as a LIBRARY: another program — a terminal UI, a game launcher,
-//! a service with a tray — runs the whole engine on a thread of its own and
-//! talks to the app through async functions and events (docs/EMBEDDING.md).
-//! On macOS, AppKit owns the process main thread: use
-//! `Builder::run_on_main_thread` with an application cleanup callback instead.
+//! vue-native as a library: another program (a terminal UI, a game launcher, a service with a tray)
+//! runs the whole engine on a thread of its own and talks to the app through async functions and
+//! events. On macOS, AppKit owns the process main thread: use `Builder::run_on_main_thread` with an
+//! application cleanup callback instead.
 //!
-//! ```text
-//!   embedder's threads                   the vue-native thread (gpui + JSC)
-//!  ┌──────────────────────────┐        ┌──────────────────────────────────────┐
-//!  │ Builder::spawn ──────────┼──────▶ │ run_embedded: the exe's boot without │
-//!  │                          │        │   the process (argv, single instance,│
-//!  │ Handle::emit ──┐         │        │   protocols, the exit)               │
-//!  │ Handle::close ─┤ QUEUE ──┼─wake──▶│ pump source: events, settles → JS    │
-//!  │ Reply::resolve ┘         │        │ appHost.call("x") → __vn_host_call ──┼─▶ handler(Call)
-//!  │ Handle::wait ◀───────────┼─EXIT───│ shutdown::finish: report, then park  │
-//!  └──────────────────────────┘        └──────────────────────────────────────┘
-//! ```
+//! **One per process, once.** The JS realm cannot be torn down and gpui is one `Application`, so
+//! [`Builder::spawn`] works once; after the app closes its thread sleeps for the rest of the process.
 //!
-//! **One per process, once.** The JS realm cannot be torn down (vn-runtime's
-//! invariants) and gpui is one `Application`, so [`Builder::spawn`] works once;
-//! after the app closes its thread sleeps for the rest of the process.
+//! **Handlers run on the vue-native thread**, inside the JS call, so a handler that blocks freezes
+//! the UI. One with work to do moves its [`Reply`] to another thread and answers from there; a
+//! dropped `Reply` rejects.
 //!
-//! **Handlers run on the vue-native thread**, inside the JS call, so a handler
-//! that blocks freezes the UI. One that has work to do moves its [`Reply`] to a
-//! thread of its own and answers from there; a dropped `Reply` rejects.
+//! The exe keeps the host command-line flags, `singleInstance`, protocol handling and ending the
+//! process. F12 opens the inspector only when [`Builder::inspector_exe`] names a vn-app.exe.
 //!
-//! What stays the exe's: the host flags on the command line (an embedder's argv
-//! is its own), `singleInstance` and the declared protocols (the embedder is
-//! the instance), and ending the process. F12 opens the inspector only when
-//! [`Builder::inspector_exe`] names a vn-app.exe to start it from.
-//!
-//! JS: `appHost` (packages/vue-native/src/apphost.ts).
+//! JS side: `appHost` (packages/vue-native/src/apphost.ts).
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
@@ -166,10 +150,6 @@ pub(crate) fn desktop_id() -> Option<String> {
     CONFIG.get()?.desktop_id.clone()
 }
 
-// ---------------------------------------------------------------------------
-// the builder
-// ---------------------------------------------------------------------------
-
 // A dev build has no payload loader; it only refuses one.
 #[cfg_attr(not(feature = "prod"), allow(dead_code))]
 enum PayloadSource {
@@ -283,27 +263,22 @@ impl Builder {
         Builder { data_dir: None, storage_encrypted: None, prepare_data_dir: None, visible: true, desktop_launch: false, setup: None, payload: None, args: Vec::new(), functions: HashMap::new(), activate: true, inspector_exe: None, desktop_id: None }
     }
 
-    /// Sets the persistent profile root before cookies, localStorage,
-    /// IndexedDB, permission decisions and host secrets are loaded. HTTP and
-    /// bytecode caches live in its `cache/http` and `cache/jsc` subdirectories.
-    /// `VN_DATA_DIR` overrides this path for isolated dev/test processes.
-    /// Paths must be absolute. Without either option, existing defaults apply.
+    /// Sets the persistent profile root, before storage and cookies load. HTTP and bytecode caches
+    /// live in its `cache/http` and `cache/jsc`. `VN_DATA_DIR` overrides it. Must be absolute.
     pub fn data_dir(mut self, directory: impl Into<PathBuf>) -> Self {
         self.data_dir = Some(directory.into());
         self
     }
 
-    /// Sets storage encryption before any cookie, database or app code runs.
-    /// `true` requires an OS encryption provider and seals existing plaintext
-    /// localStorage before boot. Without this option the sticky/default policy applies.
+    /// Sets storage encryption before any cookie, database or app code runs. `true` requires an OS
+    /// provider and seals existing plaintext localStorage before boot.
     pub fn storage_encrypted(mut self, encrypted: bool) -> Self {
         self.storage_encrypted = Some(encrypted);
         self
     }
 
-    /// Prepares/migrates the configured profile after desktop single-instance
-    /// handling, before directory creation or any storage/VM initialization.
-    /// An error or panic stops startup; no default profile is substituted.
+    /// Prepares or migrates the profile after single-instance handling, before any storage or VM
+    /// initialization. An error or panic stops startup.
     pub fn prepare_data_dir<F>(mut self, prepare: F) -> Self
     where F: FnOnce(&Path) -> Result<(), String> + Send + 'static,
     {
@@ -311,19 +286,15 @@ impl Builder {
         self
     }
 
-    /// Lets this embedding binary own the payload's single-instance and custom
-    /// protocol policy. Uses the real process command line, including a deep
-    /// link's verbatim raw URL; `args` applies only to the default embedding mode.
-    /// A forwarded launch returns `Error::LaunchExit(0)` before creating a VM or window.
+    /// Lets this binary own the payload's single-instance and protocol policy, using the real command
+    /// line (a deep link's raw URL included). A forwarded launch returns `Error::LaunchExit(0)`.
     pub fn desktop_launch(mut self, enabled: bool) -> Self {
         self.desktop_launch = enabled;
         self
     }
 
-    /// Runs once on the vue-native thread, after storage installation and before
-    /// any application JavaScript or window. An error or panic prevents startup;
-    /// the returned Handle reports an unclean Exit instead of opening the app.
-    /// Keep this short; prepare expensive plugin work before `spawn`.
+    /// Runs once on the vue-native thread after storage install, before any app JS or window. An
+    /// error or panic prevents startup. Keep it short.
     pub fn setup<F>(mut self, setup: F) -> Self
     where
         F: FnOnce(&HostContext) -> Result<(), String> + Send + 'static,
@@ -332,24 +303,20 @@ impl Builder {
         self
     }
 
-    /// The app, as the `.vnpk` file `vn build` writes (`dist/.vn/app.vnpk`).
-    /// A `--features prod` build only. Read-only mapped for the app lifetime;
-    /// publish updates by atomic replacement, never by modifying it in place.
+    /// The app, as the `.vnpk` file `vn build` writes. `--features prod` only. Mapped read-only for
+    /// the app's lifetime: replace it atomically, never modify it in place.
     pub fn payload_file(mut self, path: impl Into<PathBuf>) -> Self {
         self.payload = Some(PayloadSource::File(path.into()));
         self
     }
 
-    /// The app, as owned bytes of a `.vnpk`.
-    /// For `include_bytes!`, use [`Self::payload_static`] to avoid a heap copy.
-    /// The provided Vec is moved into the payload owner without another clone.
+    /// The app, as owned bytes of a `.vnpk`. Prefer [`Self::payload_static`] for `include_bytes!`.
     pub fn payload_bytes(mut self, bytes: impl Into<Vec<u8>>) -> Self {
         self.payload = Some(PayloadSource::Bytes(bytes.into()));
         self
     }
 
-    /// A static `.vnpk`, such as `include_bytes!`, borrowed without copying.
-    /// The executable's read-only mapping owns these bytes for the process lifetime.
+    /// A static `.vnpk` (such as `include_bytes!`), borrowed without copying.
     pub fn payload_static(mut self, bytes: &'static [u8]) -> Self {
         self.payload = Some(PayloadSource::Static(bytes));
         self
@@ -376,18 +343,14 @@ impl Builder {
         self
     }
 
-    /// Whether the primary window is shown at startup (default true). Hidden
-    /// applications still boot JS and pump background work; the embedding app
-    /// owns the tray or other UI that shows the window later. Hidden starts do
-    /// not activate the application or raise an already running desktop instance.
+    /// Whether the primary window is shown at startup (default true). Hidden apps still boot JS and
+    /// pump background work, and do not activate or raise an already running instance.
     pub fn visible(mut self, visible: bool) -> Self {
         self.visible = visible;
         self
     }
 
-    /// Whether the app's window takes the foreground when it opens (default
-    /// `true`, as the exe does). `false` leaves the embedder's console or
-    /// window where it is.
+    /// Whether the app's window takes the foreground when it opens (default `true`).
     pub fn activate(mut self, on: bool) -> Self {
         self.activate = on;
         self
@@ -401,10 +364,8 @@ impl Builder {
         self
     }
 
-    /// The app's desktop entry id on Linux (`gl.example.App`, the name of its
-    /// `.desktop` file): the Wayland app id and X11 class of its windows, which
-    /// the desktop matches them to that entry by (the icon, the dock). Without
-    /// it the windows carry the app's `id`. Ignored elsewhere.
+    /// The app's desktop entry id on Linux (`gl.example.App`): the Wayland app id and X11 class of
+    /// its windows, which the desktop matches to the entry's icon and dock slot. Ignored elsewhere.
     pub fn desktop_id(mut self, id: impl Into<String>) -> Self {
         self.desktop_id = Some(id.into());
         self
@@ -431,17 +392,11 @@ impl Builder {
         }
     }
 
-    /// Runs AppKit and JSC on the process main thread until the app closes.
-    ///
-    /// On success this owns the remainder of the process lifetime. The cleanup
-    /// callback runs on a separate lifecycle thread after shutdown hooks finish
-    /// (or the shutdown deadline reports an unclean exit). It should stop and
-    /// join application workers and flush logs, then return the process exit
-    /// code. The process exits there, without destroying the UI thread's JSC
-    /// thread-locals. A callback panic exits with code 1.
-    ///
-    /// Startup validation errors return normally, before starting the UI.
-    /// Calls from a background thread fail before consuming the one-run state.
+    /// Runs AppKit and JSC on the process main thread until the app closes, then owns the rest of the
+    /// process: the cleanup callback runs on a separate lifecycle thread after shutdown hooks (or the
+    /// deadline), should stop workers and flush logs, and returns the exit code. A panic in it exits
+    /// with code 1. Startup validation errors return normally; calls from a background thread fail
+    /// before consuming the one-run state.
     #[cfg(target_os = "macos")]
     pub fn run_on_main_thread<F>(self, on_exit: F) -> Result<(), Error>
     where
@@ -514,8 +469,7 @@ impl Builder {
     #[cfg(feature = "prod")]
     fn load_payload(&mut self) -> Result<(), Error> {
         let Some(source) = self.payload.take() else {
-            // The embedder's own exe may carry one (`vn build` stamps any PE),
-            // or `VN_PAYLOAD` may name one: the exe's own rules.
+            // The embedder's exe may carry a stamped payload, or `VN_PAYLOAD` may name one.
             return if crate::payload::get().is_some() { Ok(()) } else { Err(Error::NoPayload) };
         };
         let (bytes, label, dir) = source.load()?;
@@ -562,18 +516,12 @@ fn run_thread() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// the handle
-// ---------------------------------------------------------------------------
-
 /// How the app ended.
 #[derive(Debug, Clone)]
 pub struct Exit {
-    /// `false` when the teardown ran past its deadline (docs/EMBEDDING.md) or
-    /// the vue-native thread panicked.
+    /// `false` when the teardown ran past its deadline or the vue-native thread panicked.
     pub clean: bool,
-    /// What closed it and how long each teardown step took — the exe's
-    /// `[shutdown]` line.
+    /// What closed it and how long each teardown step took (the exe's `[shutdown]` line).
     pub summary: String,
 }
 
@@ -633,9 +581,8 @@ impl Handle {
         Ok(())
     }
 
-    /// Queues a show/activation on the UI thread, including the first show of
-    /// an initially hidden window. Returns whether it was accepted; closed or
-    /// closing applications refuse it. Uses the toolkit's placement/restore path.
+    /// Queues a show/activation on the UI thread, including the first show of an initially hidden
+    /// window. Returns whether it was accepted.
     pub fn show(&self) -> bool {
         if self.is_closed() || crate::shutdown::is_closing() || CLOSE.load(Ordering::Acquire) {
             return false;
@@ -677,10 +624,6 @@ impl Handle {
         exit.clone()
     }
 }
-
-// ---------------------------------------------------------------------------
-// calls
-// ---------------------------------------------------------------------------
 
 /// One `appHost.call(name, ...args)`.
 pub struct Call {
@@ -753,10 +696,6 @@ impl Drop for Reply {
         push(Item::Settle { token: self.token, ok: false, text: why.into() });
     }
 }
-
-// ---------------------------------------------------------------------------
-// the queue into JS — vn-desktop's settle channel, in miniature
-// ---------------------------------------------------------------------------
 
 enum Item {
     Settle { token: u32, ok: bool, text: String },
@@ -867,10 +806,6 @@ pub(crate) fn pump() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// host functions — `appHost` (packages/vue-native/src/apphost.ts)
-// ---------------------------------------------------------------------------
-
 host_fn!(fn vn_host_set_dispatcher(g, args) {
     let f = args.arg(0);
     unsafe { vn_runtime::redjs::ffi::redjs_protect(g, f.0) };
@@ -878,7 +813,6 @@ host_fn!(fn vn_host_set_dispatcher(g, args) {
     if old != 0 {
         unsafe { vn_runtime::redjs::ffi::redjs_unprotect(g, old) };
     }
-    // Whatever was emitted before the app was ready is deliverable now.
     wake();
     Value::undefined().0
 });
@@ -901,9 +835,8 @@ host_fn!(fn vn_host_call(g, args) {
     };
     IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
     let call = Call { name, args: call_args, reply: Reply { token, settled: false } };
-    // The embedder's code, not ours: a panic in it rejects this call (the
-    // Reply's drop says so) instead of poisoning the runtime the way a panic
-    // in a host fn of our own does.
+    // The embedder's code: a panic in it rejects this call (via Reply's drop) rather than poisoning
+    // the runtime.
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler(call))).is_err() {
         eprintln!("[embed] the host function behind appHost.call panicked");
     }

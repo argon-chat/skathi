@@ -1,9 +1,4 @@
 <script setup lang="ts">
-// shadcn-vue compatibility trial — the demo page.
-//
-// Only the harness (this file, Theme.vue, sections/Section.vue, the tier
-// wrappers) is vue-native-specific. Everything it renders is upstream
-// shadcn-vue.
 import { ref } from "vue";
 
 import Theme from "./Theme.vue";
@@ -12,20 +7,8 @@ import TierOne from "./sections/TierOne.vue";
 import TierTwo from "./sections/TierTwo.vue";
 import TierThree from "./sections/TierThree.vue";
 
-// The whole theme is CSS custom properties (Theme.vue). Switching it is ONE
-// class on ONE element: `.dark` / `.light` redefine every token, the tokens
-// inherit down the tree, and every `bg-primary` / `text-muted-foreground` in
-// every shadcn component re-resolves. Nothing below this line knows a theme
-// exists — which is the point of the exercise.
-//
-// "system" declares neither class, so the `@media (prefers-color-scheme: dark)`
-// block in Theme.vue decides — the OS path.
-//
-// `as const` rather than `string[]`: it makes MODES the SOURCE of the mode
-// type, so the ref, the class binding and the `theme: {{ mode }}` label can
-// only ever hold one of these three — and `indexOf` below can only be handed
-// one of them, which is what makes the cycle total. A stray `mode.value = "Dark"`
-// stops compiling instead of quietly rendering an unstyled page.
+// "system" declares neither class, so the `@media (prefers-color-scheme: dark)` block in Theme.vue
+// decides — the OS path.
 const MODES = ["system", "light", "dark"] as const;
 type Mode = (typeof MODES)[number];
 
@@ -37,13 +20,6 @@ const cycle = () => {
 
 <template>
   <Theme>
-    <!--
-      `text-foreground` on the scroll container is the equivalent of shadcn's own
-      `body { @apply bg-background text-foreground }`: several button/badge
-      variants (outline, ghost, link) deliberately set NO colour and inherit it.
-      Without it they render white-on-white, exactly as they would in a browser
-      with no body rule.
-    -->
     <div
       :class="[
         mode === 'system' ? '' : mode,

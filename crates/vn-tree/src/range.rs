@@ -1,5 +1,4 @@
-//! Native HTML range controls. The outer DOM box owns focus and events;
-//! its track/thumb are CSS parts rather than editable text.
+//! Native HTML range controls.
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -261,8 +260,6 @@ pub(crate) fn bind_root<E: InteractiveElement>(e: E) -> E {
         if let Some(next) = next {
             window.prevent_default();
             if update(id, next, false, window, cx) {
-                // A controlled input may normalize the value in its input
-                // handler. Commit what it left behind, as pointer release does.
                 let current =
                     tree::read_tree(|t| usable(t, id).then(|| Spec::read(t, id).value(t, id)));
                 if let Some(value) = current {
@@ -337,8 +334,6 @@ pub(crate) fn children(t: &Tree, id: u32, window: &Window) -> AnyElement {
     }
     let track_height = pixels(track.style().size.height, 4., 14., window);
     track = track.top(relative(0.5)).mt(px(-track_height / 2.));
-    // Native appearance fills the traversed part; author track gradients own
-    // the fill when ::track is styled (including multi-layer --fill gauges).
     let styled_track = t
         .node(id)
         .and_then(|n| n.computed.as_ref())
@@ -372,7 +367,6 @@ pub(crate) fn children(t: &Tree, id: u32, window: &Window) -> AnyElement {
     let listener = canvas(
         |_, _, _| (),
         move |bounds, (), window, _| {
-            // Per-window listeners continue the drag outside the widget's hitbox.
             window.on_mouse_event(move |ev: &MouseMoveEvent, phase, window, cx| {
                 if !phase.bubble() {
                     return;

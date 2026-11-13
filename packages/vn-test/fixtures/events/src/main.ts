@@ -1,30 +1,9 @@
-// A fixture for packages/vn-test/specs/events.spec.ts (m26 fixes,
-// docs/RUNTIME.md §5.6): the events the Argon client binds that the host never
-// delivered.
-//
-// - `#trigger` is a reka-style context-menu trigger: `contextmenu` is cancelled
-//   and opens `#menu` at the pointer. It also listens for `mousedown`,
-//   `mouseup`, `click` and `auxclick`, and so does `#inner` inside it (press
-//   and release only), which is what pins ONE event per press and the DOM
-//   order.
-// - `#plain` leaves its `contextmenu` uncancelled (the E-1 advisory).
-// - `#pad` and `#pad2` are focusable: the Menu key and Shift+F10 fire
-//   `contextmenu` at them. `#pad2` cancels the Menu key's `keyup`, which
-//   cancels the `contextmenu` too (Chromium).
-// - `#key` takes a keyboard click (Enter): `detail` 0.
-// - `#ok` (a data: PNG), `#bad` (a file that is not there) and `#blob` (a
-//   blob: URL over bytes in memory) answer `load` / `error`; `#ok`'s
-//   `onload` handler attribute is set from `onMounted`.
-//
-// `__VN_TEST_EVENTS__.events` is one line per event a handler saw:
-// `<type>@<listener>|<what it read>`.
 import { createApp, h, onMounted, ref } from "vue-native";
 
 const events: string[] = [];
 const menu = ref<{ x: number; y: number } | null>(null);
 (globalThis as unknown as { __VN_TEST_EVENTS__: unknown }).__VN_TEST_EVENTS__ = { events };
 
-/** A mirror node's `id` PROPERTY is its host id; the attribute is the name. */
 const idOf = (t: EventTarget | null) => (t as { getAttribute?(n: string): string | null } | null)?.getAttribute?.("id") ?? "?";
 
 const mouse = (where: string, cancel = false) => (e: MouseEvent) => {
@@ -40,7 +19,6 @@ const image = (where: string) => (e: Event) => {
   events.push(`${e.type}@${where}|bubbles=${e.bubbles} complete=${img.complete} w=${img.naturalWidth} h=${img.naturalHeight}`);
 };
 
-// An 8×6 PNG (one colour), and the same bytes behind a blob: URL.
 const PNG_8x6 = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAAEUlEQVR4nGNQmPAAK2IYSAkA1tFLAUEgC3gAAAAASUVORK5CYII=";
 const bytes = Uint8Array.from(atob(PNG_8x6), (c) => c.charCodeAt(0));
 const blobUrl = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
@@ -51,8 +29,8 @@ createApp({
   setup() {
     const ok = ref<HTMLImageElement | null>(null);
     onMounted(() => {
-      // The handler attribute: the answer comes from the frame tick, after
-      // this wave, so it is set in time.
+      // The handler attribute: the answer comes from the frame tick, after this wave, so it is set
+      // in time.
       ok.value!.onload = () => events.push(`onload@ok|w=${ok.value!.naturalWidth}`);
     });
     return () =>
@@ -101,11 +79,9 @@ createApp({
           },
           "pad2",
         ),
-        // A <button>: only an element with an activation behaviour clicks from
-        // a key (docs/RUNTIME.md §5.11).
         h("button", { id: "key", tabindex: 0, style: box, onClick: mouse("key") }, "key"),
-        // Drawn in a corner rather than at the pointer, so it never covers a
-        // box the spec aims at next; it says where the pointer was.
+        // Drawn in a corner rather than at the pointer, so it never covers a box the spec aims at
+        // next; it says where the pointer was.
         menu.value
           ? h(
               "div",

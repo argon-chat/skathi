@@ -4,185 +4,107 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 # Compiles `apps/devtools` into the executable and emits `cfg(vn_devtools)`.
-# See the file header for why the inspector bundle is generated rather than
-# checked in like `src/prelude.js`.
 build = "build.rs"
 
 [features]
-# Optional Battery Status API; forwarded without changing generic host defaults.
+# Optional Battery Status API.
 battery = ["vn-runtime/battery"]
-# Native image support for explicit diagnostic artifacts.
+# Native image support for diagnostic artifacts.
 native-aot = ["vn-runtime/native-aot"]
-# Shipped inspector policy: matching embedded bundle + image are mandatory.
+# Shipped inspector policy: the matching embedded bundle and image are mandatory.
 native-inspector = ["native-aot"]
 # Native WebGPU and canvas presentation; included in normal host builds.
 native-dx12 = ["gpui_windows/native-dx12"]
-# macOS: compile the Metal shaders when the app starts instead of at build
-# time, for a machine without Xcode's Metal toolchain (`xcrun metal`).
-# Shipped builds keep the precompiled library.
+# macOS: compile the Metal shaders at app start instead of build time, for a machine without
+# Xcode's Metal toolchain. Shipped builds keep the precompiled library.
 runtime-shaders = ["gpui_platform/runtime_shaders"]
 webgpu = ["vn-runtime/webgpu", "vn-tree/webgpu", "dep:wgpu", "dep:pollster"]
-# The BARE HOST (m25, docs/PACKAGING.md): the dev manifest/HMR polling is
-# compiled out, and the app — bundle, window config, name, assets — is the VNPK
-# payload `vn build` stamps into a COPY of this exe (src/payload.rs, src/prod.rs).
-# The host itself carries no app, so one build serves every app, and an app
-# author never needs a Rust toolchain:
-#
-#   bun packages/vue-native/cli/vn.ts host build   # both variants, into the cache
-#   bun packages/vue-native/cli/vn.ts build apps/hello
-#
-# NOT implied by `--release` — a release build of the dev shell is a legitimate
-# thing to want (fast HMR loop, optimized host). `vn host build` is the opt-in;
-# by hand it is `cargo build --release -p vn-app --features prod`.
+# The bare host: the dev manifest/HMR polling is compiled out, and the app (bundle, window config,
+# name, assets) is the VNPK payload `vn build` stamps into a copy of this exe (src/payload.rs,
+# src/prod.rs). Not implied by `--release`; `vn host build` opts in.
 prod = []
 
-# The devtools OPT-OUT (m22 inverted the model — docs/ARCHITECTURE.md §11
-# decision 12). The devtools protocol listener (docs/DEVTOOLS.md), the EMBEDDED
-# inspector (docs/DEVTOOLS-UI.md) and the F12 key are in EVERY build now,
-# `--features prod` included, because that is what a browser and what Electron
-# ship. An app that does not want them turns them off at RUNTIME —
-# `appDevtools.disable()`, or `"devtools": false` in its `vn.config.json` —
-# which tears the listener down and refuses the key.
-#
-# This flag is the rarer, harder ask: not "off", but "not in the image at all".
-# It is for a build that must be able to prove no `eval` transport was ever
-# compiled in. `build.rs` emits `cfg(vn_devtools)` unless this is set, so:
-#
-#   cargo build -p vn-app                       dev host, inspector embedded
-#   cargo build -p vn-app --features prod       shipped app, inspector embedded,
-#                                               F12 works, app may disable it
-#   cargo build -p vn-app --features prod,no-devtools
-#                                               shipped app with no devtools
-#                                               code in the binary at all
-#
-# It carries no dependencies (it only removes code), and what it saves a prod
-# binary is measured in research/reports/m22/devtools-release.md.
+# Compiles out the devtools protocol listener, the embedded inspector and the F12 key, which every
+# build includes otherwise (an app can also disable them at runtime). For a build that must prove
+# no `eval` transport was compiled in: `cargo build -p vn-app --features prod,no-devtools`.
+# `build.rs` emits `cfg(vn_devtools)` unless this is set.
 no-devtools = []
 
-# The pre-m22 opt-IN, kept as an accepted NO-OP so command lines and scripts
-# written against `--features prod,devtools` keep producing a working binary —
-# they now produce exactly what `--features prod` produces, which is what they
-# were asking for. `build.rs` fails the build if it is combined with
-# `no-devtools`, because that is a contradiction rather than a preference.
+# Accepted no-op, so command lines written against `--features prod,devtools` keep working.
+# `build.rs` fails the build if it is combined with `no-devtools`.
 devtools = []
 
-# Web Audio (`AudioContext` & co) via vn-runtime → redjs → Firewheel. ON by
-# default; `cargo build -p vn-app --no-default-features` builds a host with no
-# audio at all, which is ~40 fewer crates to compile. The reasoning for the
-# default living on rather than off is in crates/vn-runtime/Cargo.toml.
+# Web Audio (`AudioContext` & co) via vn-runtime. `--no-default-features` builds a host with no
+# audio, about 40 fewer crates.
 default = ["audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12"]
 audio = ["vn-runtime/audio", "vn-permissions/audio"]
 
-# `localStorage` / `sessionStorage`, plus the `appStorage` folder + encryption
-# extension. ON by default for the same reason `audio` is: an app written
-# against a browser expects to find them, and a renderer that silently lacks
-# them is exactly the "diverge without saying so" failure this project refuses.
-#
-# Off, the whole thing vanishes — the redjs surface, this crate, the pump call —
-# so `typeof localStorage === "undefined"` tells the truth rather than an
-# in-memory area pretending to persist. Neither flag costs a third-party
-# dependency; `--no-default-features` only drops `windows/…_Cryptography`.
+# `localStorage` / `sessionStorage` and the `appStorage` extension. Off, the whole surface
+# vanishes, so `typeof localStorage === "undefined"` tells the truth. No third-party dependency;
+# `--no-default-features` only drops `windows/…_Cryptography`.
 storages = ["vn-runtime/storages", "dep:vn-storage"]
-# `navigator.clipboard`. Off, `navigator.clipboard` is undefined and the native
-# <input>'s own Ctrl+C is unaffected — the two share gpui's clipboard, not this
-# crate.
+# `navigator.clipboard`. Off, it is undefined; the native <input>'s Ctrl+C is unaffected (it
+# shares gpui's clipboard, not this crate).
 clipboard = ["vn-runtime/clipboard", "dep:vn-clipboard"]
-# `indexedDB` + `navigator.storage`. ON by default, no Rust dependency. With
-# `storages` on (the default) the databases are SQLite files under the app's
-# storage folder, encrypted at rest when the storage is (vn-storage is the
-# host; docs/STORAGE.md "IndexedDB"). With `storages` off there is no host, so
-# the in-memory backend runs and says once that nothing survives a restart.
-# Results are delivered inside the frame's pump, within
-# `vn_runtime::runtime::delivery_budget_us` (a quarter of the frame, ≤ 4 ms).
+# `indexedDB` + `navigator.storage`, no Rust dependency. With `storages` on the databases are
+# encrypted SQLite files under the app's storage folder; with it off the in-memory backend runs
+# and says once that nothing survives a restart. Results are delivered inside the frame's pump,
+# within `vn_runtime::runtime::delivery_budget_us`.
 indexeddb = ["vn-runtime/indexeddb", "vn-storage?/indexeddb"]
 
 [dependencies]
-# `stacker` (zed#63187) made `stacksafe` opt-in; before that PR it was an
-# unconditional gpui dependency. We render an arbitrary-depth user DOM, so
-# `Div::{request_layout,prepaint,paint}` recursion depth is whatever the app's
-# template nests to — exactly the case StackSafe exists for. Every other
-# `gpui` dep here is `default-features = false`, and features are additive
-# across the graph, so this one line restores the pre-merge behavior for the
-# whole binary. Zed enables it for the same reason (crates/zed/Cargo.toml).
+# `stacker` makes `stacksafe` opt-in in gpui; an arbitrary-depth user DOM needs it for
+# `Div::{request_layout,prepaint,paint}`. Features are additive, so this one line enables it for
+# the whole binary.
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false, features = [
     "stacker",
 ] }
-# vn-devtools' screenshot path (dev only, but Cargo has no per-feature
-# exclusion for a dependency a `prod` build simply never calls).
-# `image` and `windows` are pinned to the versions gpui already resolves, so
-# neither adds a second copy to the graph; `raw-window-handle` is the only way
-# to name the `HasWindowHandle` impl gpui puts on `Window` (gpui does not
-# re-export the crate).
+# The devtools screenshot path. `image` and `windows` are pinned to the versions gpui already
+# resolves; `raw-window-handle` names the `HasWindowHandle` impl gpui puts on `Window`.
 image = { version = "0.25", default-features = false, features = ["png"] }
-# gpui logs through the `log` facade and nothing in this process ever installed
-# a sink, so every `log::info!` in the renderer — the GPU it picked included —
-# was discarded. `VN_LOG=<level>` turns them on (see `logger` in lib.rs).
+# gpui logs through the `log` facade; `VN_LOG=<level>` turns it on (`logger` in lib.rs).
 log = "0.4"
 raw-window-handle = "0.6"
-# gpui's `HttpClient` returns anyhow results and no longer re-exports the
-# crate (zed#66430); the Windows dialogs and shared GPU code use it too.
+# gpui's `HttpClient` returns anyhow results and no longer re-exports the crate.
 anyhow = "1"
 gpui_platform ={ path = "../../vendor/zed/crates/gpui_platform", default-features = false }
 vn-css = { path = "../vn-css" }
 vn-elements = { path = "../vn-elements" }
-# `default-features = false` here and in every crate that depends on
-# vn-runtime: Cargo unifies features across the graph, so one plain dependency
-# anywhere would turn every vn-runtime default back on and make `audio`,
-# `storages`, `clipboard` and `indexeddb` above impossible to leave out. This
-# crate's features are the only ones that switch them; `net-h2` is not optional.
+# `default-features = false` here and in every dependent of vn-runtime: features unify across the
+# graph, so one plain dependency would turn every vn-runtime default back on.
 vn-runtime = { path = "../vn-runtime", default-features = false, features = ["net-h2"] }
 vn-tree = { path = "../vn-tree", default-features = false }
-# `<iframe>`: the platform webview behind `vn_tree::iframe` (WebView2 on Windows).
+# `<iframe>`: the platform webview behind `vn_tree::iframe`.
 vn-webview = { path = "../vn-webview" }
-# `<vn-sticker>`'s engine: devtools `mem` reports its sources, engines, frames
-# and loop cache (`vn_sticker::stats`).
+# `<vn-sticker>`'s engine; devtools `mem` reports its stats.
 vn-sticker = { path = "../vn-sticker" }
-# The VNPK payload format (docs/PACKAGING.md): the zero-copy parser a packaged
-# exe reads its app out of, and the URL→key normaliser `fetch` and `<img>`
-# share. No dependencies — it is its own crate so the format is testable without
-# linking an engine.
+# The VNPK payload format: the zero-copy parser a packaged exe reads its app out of, and the
+# URL-to-key normaliser `fetch` and `<img>` share.
 vn-payload = { path = "../vn-payload" }
 # Demand-paged external payloads, with owner-bound zero-copy parser views.
-# Both versions are already resolved by this workspace.
 memmap2 = "0.9"
 self_cell = "1"
-# The desktop surface (docs/SHELL.md, docs/LAUNCH.md): the ONE argv parser every
-# consumer of this process's command line reads (the inspector mode,
-# `--vn-host-info`, the protocol handler), plus the shell, single instance and
-# custom protocols.
+# The one argv parser for this process's command line, plus the shell, single instance and custom
+# protocols.
 vn-desktop = { path = "../vn-desktop" }
-# The platform backends behind redjs's `navigator.permissions`, plus the
-# `appPermissions` extension surface. NOT dev-gated, for the same reason
-# an app asking whether it may use the microphone is doing
-# application work, not automation.
+# Platform backends behind `navigator.permissions` and the `appPermissions` extension.
 vn-permissions = { path = "../vn-permissions" }
-# `localStorage`'s bytes: the storage folder, the atomic writes, DPAPI. Optional
-# because the `storages` feature has to be able to remove the API entirely
-# rather than leave one that cannot persist.
+# `localStorage`'s bytes. Optional so the `storages` feature can remove the API entirely.
 vn-storage = { path = "../vn-storage", optional = true }
-# `navigator.clipboard` over gpui's clipboard — the same one vn-elements' text
-# input uses for Ctrl+C. Optional for the same reason.
+# `navigator.clipboard` over gpui's clipboard. Optional for the same reason.
 vn-clipboard = { path = "../vn-clipboard", optional = true }
-# The fork's own client (vendor/zed/crates/reqwest_client). Since m26 gpui's
-# loaders fetch through redjs's stack instead (src/http_client.rs); this one is
-# the fallback for a request that stack does not carry as is (a body, or a
-# redirect that must not be followed), built on first use. No loader sends one
-# today. `VN_HTTP_CLIENT=reqwest` installs it in place of redjs's (lib.rs).
+# Fallback client for a request redjs's stack does not carry as is (a body, or a redirect that must
+# not be followed), built on first use; `VN_HTTP_CLIENT=reqwest` installs it in place of redjs's.
 reqwest_client = { path = "../../vendor/zed/crates/reqwest_client" }
-# The oneshot that hands redjs's answer (on its network thread) to the gpui
-# loader awaiting it (src/http_client.rs). Already in the link through gpui.
+# Hands redjs's network-thread answer to the awaiting gpui loader (src/http_client.rs).
 futures = "0.3"
-# Inflates the embedded inspector bundle, which `build.rs` deflates
-# (src/inspector.rs). Not a new crate in the image: redjs already links flate2
-# with the same miniz_oxide backend.
+# Inflates the embedded inspector bundle that `build.rs` deflates.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-# An asset pack's id: the SHA-256 of its index (src/payload.rs `pack_id`). Not
-# a new crate in the image: redjs already links it.
+# An asset pack's id: the SHA-256 of its index.
 sha2 = "0.10"
 
 [dev-dependencies]
 # examples/embed.rs reads its calls' JSON arguments the way an embedder would.
-# Already in the graph (vn-permissions, gpui).
 serde_json = "1"
 
 [build-dependencies]
@@ -194,73 +116,54 @@ embed-resource = "=3.0.11"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# gpui's macOS text system (CoreText through font-kit). Off, the backend falls
-# back to a text system that renders no text at all.
+# gpui's macOS text system (CoreText through font-kit); without it no text renders.
 gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false, features = ["font-kit"] }
-# The devtools `mem` port (src/devtools/mem_mac.rs): Mach's `task_info`,
-# `mach_vm_region_recurse` and their structs from mach2, libproc / libmalloc /
-# libdyld / pthread from libc. Both are already in the graph (gpui_apple, cpal).
+# The devtools `mem` port (src/devtools/mem_mac.rs).
 libc = "0.2"
 mach2 = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# gpui's Linux display backends, both: a Wayland session where there is one,
-# X11 (XWayland included) elsewhere. Off, gpui_linux is a headless platform
-# that opens no window.
+# gpui's Linux display backends: Wayland where there is one, X11 elsewhere. Off, gpui_linux is a
+# headless platform.
 gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false, features = ["wayland", "x11"] }
-# `kill(pid, 0)`: is a dev slot's process alive (src/slot.rs).
+# `kill(pid, 0)`: is a dev slot's process alive.
 libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# `#[implement]` for the audio device notifier (src/microphone/devices.rs)
-# names `windows_core` from the crate root.
+# `#[implement]` for the audio device notifier names `windows_core` from the crate root.
 windows-core = "0.62"
 # WebGPU joins the native renderer device on first requestAdapter.
-# Compiling the API does not initialize its guest device or shader caches.
 wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "3b3506ea31154edc04de64debda0e780cba2639c", default-features = false, features = ["std", "wgsl", "dx12"], optional = true }
 pollster = { version = "0.4", optional = true }
-# The host connects GPUI's native generation to WebGPU and lazily lends a
-# D3D11On12 facade to Media Foundation when the first video needs a decoder.
+# Connects GPUI's native generation to WebGPU, and lends a D3D11On12 facade to Media Foundation.
 gpui_windows = { path = "../../vendor/zed/crates/gpui_windows", default-features = false }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Direct3D11on12",
     "Win32_Graphics_Direct3D12",
-    # `IDXGIAdapter3::QueryVideoMemoryInfo` — the GPU memory DXGI attributes to
-    # this process, for the devtools `mem` command (src/devtools/mem.rs). Both
-    # are already compiled for the graph (gpui_windows, vn-video).
+    # `IDXGIAdapter3::QueryVideoMemoryInfo`: GPU memory for devtools `mem`.
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
-    # `IMMNotificationClient` — the system's audio device changes, for
-    # getUserMedia and the default sink (src/microphone/devices.rs). Already
-    # compiled for the graph: cpal enables it.
+    # `IMMNotificationClient`: audio device changes for getUserMedia and the default sink.
     "Win32_Media_Audio",
-    # `GetUserDefaultUILanguage` — the crash dialog's language
-    # (src/crash_window.rs). Already compiled for the graph: vn-permissions
-    # picks its prompt's language the same way.
+    # `GetUserDefaultUILanguage`: the crash dialog's language.
     "Win32_Globalization",
     "Win32_Storage_Xps",
-    # `FindResourceW` / `LoadResource` / `LockResource` — the stamped payload,
-    # read in place out of the mapped image (src/payload.rs).
+    # `FindResourceW` / `LoadResource` / `LockResource`: the stamped payload.
     "Win32_System_LibraryLoader",
     "Win32_System_Com",
     "Win32_System_SystemInformation",
-    # `OpenProcess` + `WaitForSingleObject` — `VN_OWNER_PID` (src/owner.rs).
+    # `OpenProcess` + `WaitForSingleObject`: `VN_OWNER_PID`.
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
-    # `SetWindowSubclass` — a `<VnWindow :focusable="false">` answers
-    # `WM_MOUSEACTIVATE` itself (src/popout_win.rs). Already compiled for the
-    # graph: the zed workspace's `windows` enables it.
+    # `SetWindowSubclass`: a `<VnWindow :focusable="false">` answers `WM_MOUSEACTIVATE` itself.
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
-    # `RtlGetVersion` — the only version query Windows does not lie about for an
-    # unmanifested process, and the way `backdrop: "mica"` knows it is on Win11.
+    # `RtlGetVersion`: the one version query Windows does not lie about for an unmanifested process.
     "Wdk_System_SystemServices",
-    # `UISettings::GetColorValue` — the system accent the permission prompt's
-    # Allow button is filled with (src/consent_window.rs). Already compiled for
-    # the graph: gpui_windows reads the system theme through it.
+    # `UISettings::GetColorValue`: the system accent the permission prompt's Allow button uses.
     "UI",
     "UI_ViewManagement",
 ] }

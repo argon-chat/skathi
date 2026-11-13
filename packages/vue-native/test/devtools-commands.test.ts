@@ -1,14 +1,6 @@
-// The vn-devtools command table has THREE consumers — `ctl.ts` (the CLI),
-// `mcp.ts` (the MCP server) and docs/DEVTOOLS.md — and used to have three
-// copies. They drifted: milestone 21 added `windows`, `perf`, `net`, `storage`,
-// `wheel`, `raise` and the optional `window` argument to the CLI and to the
-// docs, and the MCP server went on exposing the milestone-10 set.
-//
-// So the table moved into `devtools/commands.ts` and the two front-ends
-// generate from it. This file is the lock: it asserts the generated surface is
-// complete, that the docs and the code name the same commands, and — the part
-// that actually prevents the regression — that neither front-end has grown a
-// command list of its own again.
+// The vn-devtools command table has two consumers, `ctl.ts` (the CLI) and `mcp.ts` (the MCP server), both generated
+// from `devtools/commands.ts`. This file asserts the generated surface is complete and that neither front-end has
+// grown a command list of its own.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -28,7 +20,6 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEVTOOLS = resolve(HERE, "..", "devtools");
-const REPO = resolve(HERE, "..", "..", "..");
 const read = (path: string): string => readFileSync(path, "utf8");
 
 describe("the table itself", () => {
@@ -61,16 +52,14 @@ describe("MCP parity", () => {
     expect(tools.map((t) => t.name)).toEqual(commandNames().map(toolName));
   });
 
-  test("the m21 commands are all exposed", () => {
-    // Named rather than derived: this is the exact list that was missing, and
-    // a test that recomputed it from COMMANDS would have passed back then too.
+  test("every wire command is exposed as a tool", () => {
+    // Named rather than derived, so a test recomputing the list from COMMANDS cannot pass vacuously.
     for (const cmd of ["windows", "perf", "net", "storage", "wheel", "raise"]) {
       expect(tools.find((t) => t.name === `vn_${cmd}`)).toBeDefined();
     }
   });
 
   test("every tool takes `window`", () => {
-    // docs/DEVTOOLS.md: "Every command also takes an optional `window`".
     for (const tool of tools) {
       expect(tool.inputSchema.properties.window).toBeDefined();
       expect(tool.inputSchema.properties.window.type).toBe("number");
@@ -205,17 +194,6 @@ describe("no front-end may grow a command list of its own", () => {
   test("mcp.ts registers the generated table, not a literal one", () => {
     expect(mcp).toContain("mcpTools()");
     expect(mcp).not.toMatch(/name:\s*"vn_/);
-  });
-});
-
-describe("the docs name the same commands as the code", () => {
-  test("docs/DEVTOOLS.md's command table is exactly COMMANDS", () => {
-    const md = read(join(REPO, "docs", "DEVTOOLS.md"));
-    const section = md.slice(md.indexOf("\n## Commands"));
-    const table = section.slice(0, section.indexOf("\n### "));
-    const documented = [...table.matchAll(/^\| `([a-z_]+)` \|/gm)].map((m) => m[1]);
-    expect(documented.length).toBeGreaterThan(0);
-    expect([...documented].sort()).toEqual([...commandNames()].sort());
   });
 });
 

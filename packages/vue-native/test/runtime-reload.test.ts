@@ -1,12 +1,6 @@
-// A same-realm reload (m26 client sweep #3): `location.reload()` and the dev
-// host's cold restart evaluate the runtime AGAIN in the realm the first one
-// ran in. These tests run two runtimes in one fake global, the way
-// crates/vn-app/src/reload.rs does: `__VN_UNLOAD__`, then a second evaluation.
-//
-// Before the fix the second runtime kept the first one's `ResizeObserver`,
-// whose poll was parked on an animation frame the unload had cancelled, so no
-// observer fired again. The Argon Dashboard's grid collapsed and popovers
-// stayed parked at their anchors.
+// A same-realm reload: `location.reload()` and the dev host's cold restart evaluate the runtime again in the realm
+// the first one ran in. These tests run two runtimes in one fake global, as crates/vn-app/src/reload.rs does
+// (`__VN_UNLOAD__`, then a second evaluation); the second must not keep the first one's parked `ResizeObserver` poll.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";

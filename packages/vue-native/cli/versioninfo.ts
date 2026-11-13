@@ -4,9 +4,7 @@
 // The format is a tree of length-prefixed nodes, each
 //   WORD wLength; WORD wValueLength; WORD wType; WCHAR szKey[]; pad to 4;
 //   Value; pad to 4; Children (each padded to 4)
-// where `wValueLength` counts BYTES for a binary value and WORDS (terminator
-// included) for a text one. The builder below is the one the design experiment
-// proved against `VerQueryValueW` (research/reports/m25/packaging-design.md §2).
+// where `wValueLength` counts BYTES for a binary value and WORDS (terminator included) for a text one.
 
 export interface VersionStrings {
   /** Task Manager shows THIS as the process name — the product name, not a sentence. */
@@ -14,7 +12,6 @@ export interface VersionStrings {
   ProductName: string;
   /** The full semver, e.g. `1.2.3-beta.1`. */
   ProductVersion: string;
-  /** `a.b.c.0`. */
   FileVersion: string;
   InternalName: string;
   OriginalFilename: string;
@@ -24,7 +21,6 @@ export interface VersionStrings {
 }
 
 export interface VersionInfoInput {
-  /** Four 16-bit parts. */
   fileVersion: [number, number, number, number];
   productVersion?: [number, number, number, number];
   strings: VersionStrings;

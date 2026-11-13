@@ -7,19 +7,11 @@
 //! | `text/html`  | `HTML Format` (CF_HTML: the fragment in a page)    | its fragment                  |
 //! | `image/png`  | `PNG` (the bytes as given) + `CF_DIBV5` + `CF_DIB` | `PNG`, else a bitmap as a PNG |
 //!
-//! The bitmaps are what most apps paste — Paint, Word, the Snipping Tool's
-//! editor and older chat clients read nothing else — and the PNG is what keeps
-//! the alpha and the exact bytes for the apps that know it (and for a read
-//! back here). Both bitmaps are 32-bit BGRA with straight alpha, bottom-up;
-//! `CF_DIBV5` says so in its masks and its sRGB colour space.
+//! Most apps (Paint, Word, ...) paste only the bitmaps; the PNG keeps alpha and the exact bytes.
+//! Both bitmaps are 32-bit BGRA, straight alpha, bottom-up.
 //!
-//! Every representation is prepared BEFORE the clipboard is opened, so a PNG
-//! that does not decode leaves the clipboard as it was: an item is written
-//! whole or not at all, as `write()` promises.
-//!
-//! The clipboard is opened and closed around each call, on the thread JS runs
-//! on — the same thread gpui's own text copy runs on, which does the same — so
-//! the two never hold it at once (see the crate docs).
+//! Every representation is prepared before the clipboard opens, so a PNG that does not decode
+//! leaves it untouched. Opened and closed per call, on the JS thread (see the crate docs).
 
 use windows::core::w;
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
@@ -29,7 +21,6 @@ use windows::Win32::System::DataExchange::{
 };
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
 
-/// What `write()` takes here.
 pub(crate) const TYPES: &[&str] = &["text/plain", "text/html", "image/png"];
 
 const CF_DIB: u32 = 8;
@@ -44,13 +35,10 @@ fn html_format() -> u32 {
     unsafe { RegisterClipboardFormatW(w!("HTML Format")) }
 }
 
-/// The open clipboard; closed on drop.
 struct Open;
 
 impl Open {
-    /// Another process may hold the clipboard for a moment (a clipboard
-    /// manager reading what was just copied): a few short retries, then a
-    /// failure that says so.
+    // Another process (a clipboard manager) may hold it briefly: retry.
     fn new() -> Result<Self, String> {
         for _ in 0..10 {
             if unsafe { OpenClipboard(None) }.is_ok() {
@@ -68,7 +56,6 @@ impl Drop for Open {
     }
 }
 
-/// Replaces the clipboard with one item's representations.
 pub(crate) fn write(items: &[(String, Vec<u8>)]) -> Result<(), String> {
     let mut formats: Vec<(u32, Vec<u8>)> = Vec::new();
     for (ty, bytes) in items {
@@ -95,8 +82,6 @@ pub(crate) fn write(items: &[(String, Vec<u8>)]) -> Result<(), String> {
     Ok(())
 }
 
-/// The clipboard's contents as representations: `image/png`, `text/html`,
-/// `text/plain`, whichever are there.
 pub(crate) fn read() -> Result<Vec<(String, Vec<u8>)>, String> {
     let _open = Open::new()?;
     let mut out = Vec::new();
@@ -113,7 +98,6 @@ pub(crate) fn read() -> Result<Vec<(String, Vec<u8>)>, String> {
     Ok(out)
 }
 
-/// One format's bytes into the open clipboard, which owns them from then on.
 fn set(format: u32, data: &[u8]) -> Result<(), String> {
     unsafe {
         let global = GlobalAlloc(GMEM_MOVEABLE, data.len().max(1)).map_err(|e| format!("out of memory for the clipboard: {e}"))?;
@@ -132,7 +116,6 @@ fn set(format: u32, data: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// One format's bytes out of the open clipboard, if it is there.
 fn get(format: u32) -> Option<Vec<u8>> {
     unsafe {
         IsClipboardFormatAvailable(format).ok()?;
@@ -235,8 +218,7 @@ fn dib(w: u32, h: u32, rgba: &[u8], v5: bool) -> Vec<u8> {
     out
 }
 
-/// A clipboard bitmap (`CF_DIB` / `CF_DIBV5`, 24 or 32 bits a pixel) as a PNG,
-/// for an app that pastes a screenshot: Chrome reads one the same way.
+/// A clipboard bitmap (`CF_DIB` / `CF_DIBV5`, 24 or 32 bpp) as a PNG.
 fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
     let u32_at = |at: usize| Some(u32::from_le_bytes(dib.get(at..at + 4)?.try_into().ok()?));
     let header = u32_at(0)? as usize;

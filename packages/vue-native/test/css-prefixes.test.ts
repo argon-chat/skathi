@@ -16,7 +16,7 @@ const PREFIX_RS = join(HERE, "../../../crates/vn-css/src/prefix.rs");
 describe("css-prefixes.ts", () => {
   test("its list is prefix.rs's WEBKIT_APPLIED, name for name and in order", () => {
     const rs = readFileSync(PREFIX_RS, "utf-8");
-    const body = /\/\/ -- webkit-applied: begin --([\s\S]*?)\/\/ -- webkit-applied: end --/.exec(rs);
+    const body = /WEBKIT_APPLIED: &\[&str\] = &\[([\s\S]*?)\];/.exec(rs);
     expect(body).not.toBeNull();
     const names = [...body![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
     expect(names.length).toBeGreaterThan(40);

@@ -1,23 +1,18 @@
 //! WebView2, composited under the app's surface.
 //!
-//! One browser environment per process, made when the first `<iframe>` needs
-//! it (R7.1); one webview per `<iframe>`, in *visual hosting* mode
-//! (`ICoreWebView2CompositionController`): the webview draws into a
-//! DirectComposition visual instead of a child window, and that visual is put
-//! in the container gpui keeps under the app's own surface
-//! (`Window::vn_composition_underlay`). The app paints transparent over the
-//! iframe's box, so the document shows there and nowhere else, clipped as the
-//! box is, under everything the app paints later.
+//! One browser environment per process, made when the first `<iframe>` needs it; one webview per
+//! `<iframe>`, in visual hosting mode (`ICoreWebView2CompositionController`): it draws into a
+//! DirectComposition visual placed in the container gpui keeps under the app's surface
+//! (`Window::vn_composition_underlay`). The app paints transparent over the iframe's box, so the
+//! document shows only there, clipped as the box is.
 //!
-//! Visual hosting has no window to take the mouse, so pointer events are the
-//! app's: the element's own listeners forward them (`Frame::pointer`) and the
-//! webview is told with `SendMouseInput`. The keyboard is a real focus move
-//! (`MoveFocus`), after which keys go to the browser directly.
+//! Visual hosting has no window to take the mouse, so the element forwards pointer events
+//! (`Frame::pointer`) and the webview gets `SendMouseInput`. The keyboard is a real focus move
+//! (`MoveFocus`).
 //!
-//! Everything here runs on the UI thread, and every WebView2 call that crosses
-//! to the browser process is asynchronous: a frame handed out by
-//! [`WebView2::create`] is usable at once and queues what it is told until its
-//! webview exists.
+//! Everything runs on the UI thread. WebView2 calls into the browser process are asynchronous, so a
+//! frame from [`WebView2::create`] is usable at once and queues what it is told until its webview
+//! exists.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -290,7 +285,7 @@ fn attach(
         }
         if let Ok(controller2) = controller.cast::<ICoreWebView2Controller2>() {
             // Until the document paints, the box shows the element's own CSS
-            // background (R5.7): nothing of the webview's.
+            // background: nothing of the webview's.
             controller2.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR { A: 0, R: 0, G: 0, B: 0 })?;
         }
         if let Ok(controller3) = controller.cast::<ICoreWebView2Controller3>() {
@@ -299,13 +294,12 @@ fn attach(
             controller3.SetShouldDetectMonitorScaleChanges(false)?;
         }
         if let Ok(controller4) = controller.cast::<ICoreWebView2Controller4>() {
-            // Nothing is dropped into a document from outside (R6.6).
+            // Nothing is dropped into a document from outside.
             controller4.SetAllowExternalDrop(false)?;
         }
         controller.SetIsVisible(false)?;
     }
 
-    // The visual the document draws into, under the app's surface.
     let visual = unsafe {
         let me = inner.borrow();
         let visual = me.device.CreateVisual()?;
@@ -319,7 +313,7 @@ fn attach(
     let relay_url = format!("{APP_ORIGIN}{RELAY_PATH}");
 
     // While the document has the keyboard, the keys that are the window's stay
-    // the window's (R6.4): every Alt combination (Alt+F4, the system menu) and
+    // the window's: every Alt combination (Alt+F4, the system menu) and
     // the keys a PlayFrame host reserves. They are handed to the app's window
     // as the messages they would have been.
     unsafe {
@@ -351,7 +345,6 @@ fn attach(
         )?;
     }
 
-    // The pointer the document asks for (`cursor:` in its CSS).
     unsafe {
         let sink = inner.borrow().sink.clone();
         composition.add_CursorChanged(
@@ -366,7 +359,7 @@ fn attach(
         )?;
     }
 
-    // The app's own files and the relay page, from the package (R3.1).
+    // The app's own files and the relay page, from the package.
     unsafe {
         webview.AddWebResourceRequestedFilter(&HSTRING::from(format!("{APP_ORIGIN}/*")), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL)?;
         let env = env.clone();
@@ -403,7 +396,6 @@ fn attach(
         )?;
     }
 
-    // The relay page's reports.
     unsafe {
         let weak = Rc::downgrade(inner);
         let relay = relay_url.clone();
@@ -411,7 +403,7 @@ fn attach(
             &WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
                 let (Some(args), Some(inner)) = (args, weak.upgrade()) else { return Ok(()) };
                 // Only the relay page itself: a frame inside it has
-                // `chrome.webview` too, and must not speak as the relay (R4.2).
+                // `chrome.webview` too, and must not speak as the relay.
                 let mut source = PWSTR::null();
                 args.Source(&mut source)?;
                 if take(source) != relay {
@@ -426,7 +418,7 @@ fn attach(
         )?;
     }
 
-    // The iframe's navigation is the element's `load` / `error` (R1.5).
+    // The iframe's navigation is the element's `load` / `error`.
     unsafe {
         let weak = Rc::downgrade(inner);
         webview.add_FrameNavigationCompleted(
@@ -448,7 +440,7 @@ fn attach(
         )?;
     }
 
-    // The top-level document is the relay page and stays the relay page (R4.4).
+    // The top-level document is the relay page and stays the relay page.
     unsafe {
         let relay = relay_url.clone();
         webview.add_NavigationStarting(
@@ -472,7 +464,7 @@ fn attach(
             })),
             &mut token,
         )?;
-        // No prompt and no grant (R4.5).
+        // No prompt and no grant.
         webview.add_PermissionRequested(
             &PermissionRequestedEventHandler::create(Box::new(|_, args| {
                 if let Some(args) = args {
@@ -794,7 +786,7 @@ impl Drop for Handle {
                 let _ = me.underlay.RemoveVisual(visual);
                 let _ = me.device.Commit();
             }
-            // Ends the document and, with the last one, the browser processes (R7.3).
+            // Ends the document and, with the last one, the browser processes.
             if let Some(controller) = &me.controller {
                 let _ = controller.Close();
             }

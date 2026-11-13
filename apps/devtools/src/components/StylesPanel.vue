@@ -1,32 +1,4 @@
 <script setup lang="ts">
-// Styles: which rules matched, which declarations survived, and what the
-// cascade produced.
-//
-// ## Winner first
-//
-// `rules` answers in CASCADE order — ascending `(specificity, order)`, so the
-// LAST declaration of a property is the one in effect (docs/DEVTOOLS.md, "Rule
-// provenance"). That is the right order for a machine and the wrong one for a
-// person: you look at a styles panel to find out what won, and browsers have
-// trained everyone to read the winner at the top. So the list is reversed here
-// and the arithmetic is done once, in `winners()`.
-//
-// ## What is struck through
-//
-// A declaration is overridden when a LATER rule (or an `!important` one)
-// declares the same property. That is the cascade's own rule and it is
-// re-implemented here on the host's own output rather than guessed at: same
-// input, same sort key, same answer — which is why a strike cannot lie about a
-// winner (docs/DEVTOOLS-UI.md §4).
-//
-// ## The badges
-//
-// Every rule carries facts a browser's styles panel has no column for, because
-// no browser has them: which STATE bucket the rule folds into (`hover`,
-// `focus-visible`, `group-hover`), whether that state belongs to an ANCESTOR,
-// and the advisories vn-css produced for that rule's own declarations. The last
-// one is the answer to "why is this property doing nothing", shown next to the
-// property instead of in a log the developer has to go find.
 import { computed, ref } from "vue";
 import type { Declaration, Rule } from "../protocol";
 import { cssColor, cssish, hslaCss, nodeLabel, parseHsla, topLevel } from "../dump";
@@ -38,15 +10,12 @@ const node = computed(() => (state.selected === null ? null : state.byId[state.s
 const rules = computed(() => state.rules?.rules || []);
 const copied = ref("");
 
-/** `property -> the index of the rule+declaration that WON it`. */
 const winners = computed(() => {
   const best: Record<string, { rule: number; decl: number; important: boolean }> = {};
   rules.value.forEach((rule, ri) => {
     rule.declarations.forEach((decl, di) => {
       const held = best[decl.property];
       const important = !!decl.important;
-      // `!important` beats everything that is not; among equals the later one
-      // wins, and the list is ascending, so "later" is simply "seen after".
       if (!held || important || !held.important) {
         best[decl.property] = { rule: ri, decl: di, important };
       }
@@ -60,18 +29,15 @@ function overridden(ruleIndex: number, declIndex: number, decl: Declaration): bo
   return !won || won.rule !== ruleIndex || won.decl !== declIndex;
 }
 
-/** Winner first — the list as a person reads it. */
 const ordered = computed(() =>
   rules.value.map((rule, i) => ({ rule, index: i })).slice().reverse(),
 );
 
-/** The state bucket, as a badge. `base` is the common case and gets none. */
 function stateBadge(rule: Rule): string {
   if (rule.ancestorState) return `group-${rule.state}`;
   return rule.state === "base" ? "" : rule.state;
 }
 
-/** The computed buckets, `live` first — the style in EFFECT this frame. */
 const buckets = computed(() => {
   const all = state.styles?.computed || {};
   const names = Object.keys(all);
@@ -99,9 +65,6 @@ function bucketRows(name: string): { key: string; value: string; swatch: string 
 
 async function copy(text: string, tag: string): Promise<void> {
   try {
-    // `navigator` is declared optional in engine.d.ts (an embedder can
-    // build redjs without it) and `clipboard` needs vn-app's `clipboard`
-    // feature, so both are probed rather than assumed.
     await globalThis.navigator?.clipboard?.writeText(text);
     copied.value = tag;
     setTimeout(() => {
@@ -112,7 +75,6 @@ async function copy(text: string, tag: string): Promise<void> {
   }
 }
 
-/** The whole rule, as CSS, for the clipboard. */
 function ruleText(rule: Rule): string {
   const body = rule.declarations
     .map((d) => `  ${d.property}: ${d.value}${d.important ? " !important" : ""};`)
@@ -158,7 +120,6 @@ function ruleText(rule: Rule): string {
     </div>
 
     <div v-else class="body">
-      <!-- ---- rules ---------------------------------------------------- -->
       <template v-if="state.stylesTab === 'rules'">
         <div v-if="state.rules && state.rules.note" class="note">{{ state.rules.note }}</div>
         <div v-if="!rules.length" class="empty">
@@ -210,7 +171,6 @@ function ruleText(rule: Rule): string {
         </div>
       </template>
 
-      <!-- ---- computed ------------------------------------------------- -->
       <template v-else>
         <div v-if="state.stylesError" class="empty t-red">{{ state.stylesError }}</div>
         <div v-for="name in buckets" :key="name" class="bucket">
@@ -258,9 +218,6 @@ function ruleText(rule: Rule): string {
   font-size: 11px;
   color: #79c0ff;
 }
-/* `.stab`, not `.tab`: the toolbar's panel tabs are `.tab`, and two
- * different meanings behind one class name is how a selector in a spec (or in
- * somebody's head) quietly matches the wrong thing. */
 .stabs {
   display: flex;
   flex-direction: row;

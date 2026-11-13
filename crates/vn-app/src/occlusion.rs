@@ -1,27 +1,19 @@
 //! Is a window covered by the windows above it?
 //!
-//! gpui presents through DirectComposition, which keeps a window that other
-//! windows cover completely drawing at the display rate. An Argon chat behind
-//! a browser redrew its whole tree 156 times a second for a 6 s name-colour
-//! drift nobody could see: ~0.8 of a core, for hours. A browser stops there:
-//! Chromium's `NativeWindowOcclusionTrackerWin` counts a window that other
-//! windows cover as hidden, as it counts a minimised or cloaked one.
+//! gpui presents through DirectComposition, which keeps a fully covered window drawing at the display
+//! rate. Chromium's `NativeWindowOcclusionTrackerWin` counts such a window as hidden, as it does a
+//! minimised or cloaked one, and so does this ([`crate::window::occluded`]): `document.hidden`, no
+//! `requestAnimationFrame`, and JS on the background tick (src/background.rs).
 //!
-//! So a covered window is a hidden page here too ([`crate::window::occluded`]):
-//! `document.hidden`, no `requestAnimationFrame`, and JS on the background tick
-//! (src/background.rs), exactly as on another virtual desktop.
+//! What covers a window follows Chromium's rules: a window above it in the z-order that is shown, not
+//! minimised, not cloaked, not click-through (`WS_EX_TRANSPARENT`), without a window region, and,
+//! when layered, fully opaque by its layered attributes (a per-pixel-alpha window covers nothing).
+//! Only the part of the window on a display counts. A window with an acrylic or mica backdrop above
+//! us counts as covering, as in Chromium.
 //!
-//! What covers a window follows Chromium's rules: a window above it in the
-//! z-order that is shown, not minimised, not cloaked, not click-through
-//! (`WS_EX_TRANSPARENT`), without a window region, and, when layered, fully
-//! opaque by its layered attributes (a per-pixel-alpha window covers nothing).
-//! Only the part of the window that is on a display counts. A window with an
-//! acrylic or mica backdrop above us counts as covering, as in Chromium.
-//!
-//! Chromium recomputes on window events from a thread of its own. Here the
-//! frame pump asks, and [`RECHECK`] bounds how often the walk runs; a window
-//! the user brings to the front is never covered (the foreground window is
-//! read on every ask, so it comes back at once).
+//! Chromium recomputes on window events from a thread of its own. Here the frame pump asks, and
+//! [`RECHECK`] bounds how often the walk runs; the foreground window is never covered (it is read on
+//! every ask, so it comes back at once).
 
 use std::time::Duration;
 

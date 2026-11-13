@@ -1,21 +1,3 @@
-// A fixture for packages/vn-test/specs/call-timer.spec.ts: Argon's call timer
-// in the titlebar (apps/client AppTitlebar.vue's `.voice-timer`), with the
-// same markup and inline styles as its two components. That is
-// motionCounter/Counter.vue (a 9 px flex row, gap 1, a 2 px pad, clipped) and
-// motionCounter/Digit.vue: a cell `width: 1ch` and one font line high that
-// clips a strip of 30 digits, resting on the middle run through an inline
-// translateY, and rolled with `el.animate()`.
-//
-// The cell's `1ch` is what hid the timer: the unit was dropped, so every cell
-// was 0 px wide. It is half an em of the cell's own 9px now. The root font
-// size is 14px, as `@argon/theme` sets it.
-//
-// The time is @argon/core's startTimer: a 1 s setInterval counting seconds,
-// split into minutes and seconds. `__VN_TEST_TIMER__.start()` runs it,
-// `set(s)` jumps to a time, and `cells()` reads back each cell's box and the
-// digit on show in it.
-//
-// Render functions rather than an SFC, for the reason fixtures/layout gives.
 import { createApp, h, reactive, ref, watch, type VNode } from "vue-native";
 
 document.documentElement.style.fontSize = "14px";
@@ -34,7 +16,6 @@ const show = (s: number) => {
   interval.sec = s % 60;
 };
 
-/** Digit.vue: one place, a clipped strip that rolls to the new digit. */
 const Digit = {
   props: { place: Number, value: Number, height: Number },
   setup(props: { place: number; value: number; height: number }) {
@@ -71,7 +52,6 @@ const Digit = {
   },
 };
 
-/** Counter.vue with the titlebar's props: two places, gap 1, 9 px. */
 const Counter = {
   props: { value: Number, id: String },
   setup(props: { value: number; id: string }) {
@@ -123,7 +103,6 @@ createApp({
   get seconds() {
     return total;
   },
-  /** Each cell's box, and the digit whose span sits in it now. */
   cells() {
     return Array.from(document.querySelectorAll(".cell")).map((cell) => {
       const r = cell.getBoundingClientRect();

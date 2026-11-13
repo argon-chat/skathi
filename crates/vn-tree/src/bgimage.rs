@@ -1,34 +1,11 @@
-//! `background-image: url()` — loaded through `<img src>`'s resolver and
-//! painted by vn-tree, under the element's content.
+//! `background-image: url()` — loaded through `<img src>`'s resolver and painted by vn-tree, under
+//! the element's content.
 //!
-//! gpui's `Background` is a colour or a gradient; there is no image fill. So
-//! an element whose background stack holds a `url()` layer gets one extra gpui
-//! child, FIRST, absolutely positioned over its padding box: a `canvas` that
-//! paints the whole stack, bottom layer first — gradients as quads, images as
-//! sprites through `Window::paint_image`. Being the first child it paints
-//! after the element's own background colour and before every real child, and
-//! being absolutely positioned it takes no part in flex, grid, `gap` or the
-//! inline row. It inserts no hitbox, so it is invisible to hit testing.
-//!
-//! What a browser does and this does too: `background-size` (`auto`, lengths,
-//! percentages of the box, one `auto` axis taken from the image's aspect
-//! ratio, `cover`, `contain`), `background-position` (lengths, and
-//! percentages that align that fraction of the image with that fraction of
-//! the box), `background-repeat` per axis, the box's rounded corners, layer
-//! order with gradients interleaved, and every URL form `<img src>` takes
-//! (http(s), data:, blob:, file:, paths, the packaged app's store).
-//!
-//! Where it differs, each said by an advisory or in crates/vn-css/README.md §5
-//! (item 10):
-//! * the painting area is the PADDING box (`background-clip: padding-box`);
-//!   a browser's default also paints under a translucent border;
-//! * a relative URL resolves against the app root, not the stylesheet;
-//! * in a scroll container the image scrolls with the content
-//!   (`background-attachment: local`), not with the box;
-//! * `space` and `round` repeat plainly (vn-css maps them to `repeat`);
-//! * an animated GIF shows its first frame;
-//! * an SVG with no width/height takes its viewBox size, where CSS would treat
-//!   it as having only an aspect ratio.
+//! gpui has no image fill, so an element with a `url()` layer gets one extra absolutely positioned
+//! child, first, that paints the whole stack bottom layer first; it takes no part in layout and no
+//! hitbox. Differences: the painting area is the padding box, a relative URL resolves against the
+//! app root (not the stylesheet), the image scrolls with content in a scroll container, `space` and
+//! `round` repeat plainly, and an animated GIF shows its first frame.
 
 use std::sync::Arc;
 
@@ -38,14 +15,12 @@ use gpui::{
 };
 use vn_css::{BackgroundSize, PaintLayer, TileLength};
 
-/// More tiles than this in one layer (a 2px pattern over a large box) are not
-/// painted; the layer is skipped with an advisory instead of flooding the
-/// scene.
+/// More tiles than this in one layer (a 2px pattern over a large box) are not painted; the layer is
+/// skipped with an advisory instead of flooding the scene.
 const MAX_TILES: usize = 4096;
 
-/// The child that paints `stack` over the padding box of node `id`.
-/// `radii` are the padding box's corner radii, resolved against the box it
-/// paints (a percentage needs its size).
+/// The child that paints `stack` over the padding box of node `id`. `radii` are the padding box's
+/// corner radii, resolved against the box it paints (a percentage needs its size).
 pub(crate) fn layer_element(
     id: u32,
     stack: Vec<PaintLayer>,
@@ -112,8 +87,6 @@ fn paint_stack(
                     }
                     Load::Ready(image) => image,
                 };
-                // The picture's size, also when the cache holds a smaller copy
-                // of it (crate::img "residency").
                 let raw = image.natural_size(0);
                 let scale = if is_svg(&source, url) { gpui::SMOOTH_SVG_SCALE_FACTOR } else { 1.0 };
                 let natural = (raw.width.0 as f32 / scale, raw.height.0 as f32 / scale);
@@ -154,9 +127,9 @@ enum Load {
     Ready(Arc<RenderImage>),
 }
 
-/// The decoded image, through gpui's asset system exactly as `img()` loads it:
-/// an http(s) fetch or a file read happens off the render thread, and the
-/// view is notified (and repainted) when it lands.
+/// The decoded image, through gpui's asset system exactly as `img()` loads it: an http(s) fetch or
+/// a file read happens off the render thread, and the view is notified (and repainted) when it
+/// lands.
 fn load(source: &ImageSource, window: &mut Window, cx: &mut App) -> Load {
     match source {
         ImageSource::Resource(resource) => match window.use_asset::<gpui::ImgResourceLoader>(resource, cx) {
@@ -172,8 +145,8 @@ fn load(source: &ImageSource, window: &mut Window, cx: &mut App) -> Load {
     }
 }
 
-/// gpui rasterises an SVG at twice its size for smoothness, so its natural
-/// size is half the decoded one.
+/// gpui rasterises an SVG at twice its size for smoothness, so its natural size is half the decoded
+/// one.
 fn is_svg(source: &ImageSource, url: &str) -> bool {
     match source {
         ImageSource::Image(image) => image.format == ImageFormat::Svg,
@@ -193,9 +166,9 @@ fn head(url: &str) -> String {
     s
 }
 
-/// The box's corner radii where the visible part of `tile` reaches a corner of
-/// the box, and square corners elsewhere: gpui rounds the corners of each
-/// sprite it paints, and only the ones on the box's own corners are round.
+/// The box's corner radii where the visible part of `tile` reaches a corner of the box, and square
+/// corners elsewhere: gpui rounds the corners of each sprite it paints, and only the ones on the
+/// box's own corners are round.
 fn corners_for(area: Bounds<Pixels>, tile: Bounds<Pixels>, radii: Corners<Pixels>) -> Corners<Pixels> {
     let visible = area.intersect(&tile);
     let near = |a: Pixels, b: Pixels| (f32::from(a) - f32::from(b)).abs() < 0.5;
@@ -211,10 +184,7 @@ fn corners_for(area: Bounds<Pixels>, tile: Bounds<Pixels>, radii: Corners<Pixels
     }
 }
 
-/// Where one image layer's tiles land, as `(x, y, w, h)` in the box's own
-/// coordinate space (`area` is `(x, y, w, h)` of the padding box) —
-/// CSS Backgrounds 3 §3.6–3.9. `Err(n)` when covering the box takes more than
-/// [`MAX_TILES`] tiles.
+/// `Err(n)` when covering the box takes more than [`MAX_TILES`] tiles.
 pub(crate) fn tiles(
     area: (f32, f32, f32, f32),
     natural: Option<(f32, f32)>,
@@ -227,15 +197,12 @@ pub(crate) fn tiles(
     if !(tw > 0.0 && th > 0.0) || !tw.is_finite() || !th.is_finite() {
         return Ok(Vec::new());
     }
-    // A percentage lines up that fraction of the tile with the same fraction
-    // of the box: `0%` is flush left, `100%` flush right, `50%` centred.
     let offset = |p: TileLength, free: f32| match p {
         TileLength::Pixels(v) => v,
         TileLength::Fraction(f) => free * f,
     };
     let x = offset(position.0, aw - tw);
     let y = offset(position.1, ah - th);
-    // One axis' tile origins: every tile that touches [0, extent).
     let run = |origin: f32, tile: f32, extent: f32, repeats: bool| -> Vec<f32> {
         if !repeats {
             return vec![origin];
@@ -252,8 +219,6 @@ pub(crate) fn tiles(
     let mut out = Vec::with_capacity(count);
     for &ty in &ys {
         for &tx in &xs {
-            // A tile entirely outside the box paints nothing; skip it here
-            // rather than in the renderer.
             if tx + tw <= 0.0 || ty + th <= 0.0 || tx >= aw || ty >= ah {
                 continue;
             }
@@ -298,10 +263,8 @@ mod tests {
     const NO: (bool, bool) = (false, false);
     const YES: (bool, bool) = (true, true);
 
-    /// emojix's `getRelativeStyle`: the atlas sized in percentages of the box
-    /// and positioned by percentage. A 22px box, a 2040x408 atlas of 68px
-    /// cells: the sheet is 660x132, and the cell at column 19, row 3 lands in
-    /// the box exactly.
+    /// emojix's `getRelativeStyle`: the atlas sized in percentages of the box and positioned by
+    /// percentage.
     #[test]
     fn a_percentage_sprite_lands_on_its_cell() {
         let (iw, ih, cell) = (2040.0_f32, 408.0_f32, 68.0_f32);
@@ -312,14 +275,12 @@ mod tests {
         assert_eq!(t.len(), 1);
         let (x, y, w, h) = t[0];
         assert!((w - 660.0).abs() < 0.01 && (h - 132.0).abs() < 0.01, "{t:?}");
-        // The cell's top-left is at (19, 3) cells of 22px, so the sheet sits
-        // that far up and to the left of the box.
         assert!((x + 19.0 * 22.0).abs() < 0.01, "{x}");
         assert!((y + 3.0 * 22.0).abs() < 0.01, "{y}");
     }
 
-    /// emojix's `computeStyle`: pixel size and negative pixel position, with
-    /// the default `repeat` — only the one tile that touches the box is kept.
+    /// emojix's `computeStyle`: pixel size and negative pixel position, with the default `repeat` —
+    /// only the one tile that touches the box is kept.
     #[test]
     fn a_pixel_sprite_keeps_the_one_tile_that_shows() {
         let size = BackgroundSize::Explicit(Some(P(660.0)), Some(P(132.0)));

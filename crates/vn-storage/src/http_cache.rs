@@ -1,10 +1,5 @@
-//! The HTTP cache's host: where redjs's disk cache lives, and whether its
-//! entries are sealed (docs/STORAGE.md §12).
-//!
-//! redjs owns everything browser-shaped about the cache: the freshness rules,
-//! the entries, the index and the eviction (`redjs::webapi::http::cache`).
-//! What it cannot know is the same two things `localStorage` and IndexedDB
-//! need from a desktop host, which are the place and the encryption:
+//! The HTTP cache's host: where redjs's disk cache lives and whether its entries are sealed.
+//! redjs owns the cache rules, index and eviction (`redjs::webapi::http::cache`).
 //!
 //! ```text
 //!   %LOCALAPPDATA%\<app name>\
@@ -13,50 +8,20 @@
 //!             key.sealed       the entries' key, sealed by DPAPI (encrypted only)
 //! ```
 //!
-//! # Beside `storage\`, not in it
+//! It sits beside `storage\`, not in it: it can be deleted at any time, does not follow
+//! `setStorageFolder`, and should not bloat backups of the storage folder.
 //!
-//! It is a cache: it can be deleted at any time, it does not follow
-//! `appStorage.setStorageFolder` to another place, and a backup of the
-//! storage folder should not carry 256 MB of images. Chromium keeps its
-//! `Cache\` beside the profile's data for the same reasons.
+//! Encryption follows the storage setting. Each entry is AES-256-GCM-sealed (CNG on Windows,
+//! ring elsewhere, `ring_gcm`) under one random key kept in `key.sealed`, with the provider and
+//! header of `localStorage.sealed`; DPAPI per entry would be an LSA call per blob. An unreadable
+//! keychain means no cache and the key file is left alone. Without encrypted storage, entries
+//! are plaintext.
 //!
-//! # Encryption follows the storage setting
-//!
-//! An app that encrypts its storage has said its data is private, and what it
-//! downloads is its data too: the API answers, the avatars, the attachments.
-//!
-//! - **Sealed entries.** Each entry is AES-256-GCM-sealed through CNG under one
-//!   random 256-bit key with a fresh 96-bit nonce. The key is stored only
-//!   inside `key.sealed`, sealed by DPAPI with the same provider and header as
-//!   `localStorage.sealed`. The same honest statement applies: this protects
-//!   the files from other users and from being copied off the machine, not
-//!   from code that runs as the same user.
-//! - **Why not DPAPI per entry.** DPAPI is a call into the LSA per blob, and a
-//!   page of avatars is hundreds of blobs.
-//! - **macOS.** The same entries and the same `key.sealed`, with ring's
-//!   AES-256-GCM instead of CNG's and the Keychain provider instead of DPAPI
-//!   (`ring_gcm`). A keychain that cannot be read means no cache, and the key
-//!   file is left alone.
-//! - **Plaintext otherwise.** Without encrypted storage, entries are
-//!   plaintext, as every browser's are.
-//!
-//! The decision is made at install and is sticky, by the same rule as
-//! IndexedDB's (`idb.rs`). The cache is encrypted when any of these holds:
-//! - its own `key.sealed` exists;
-//! - `localStorage.sealed` is in the storage folder;
-//! - IndexedDB's `key.sealed` is in the storage folder.
-//!
-//! Then `appStorage.setStorageFolder(…, { encrypted })` switches it at once,
-//! unlike IndexedDB, because a cache has nothing to migrate:
-//! - the folder is purged (redjs purges on a new sealer tag);
-//! - `{ encrypted: false }` also deletes the key, so the sticky rule does not
-//!   bring encryption back at the next start.
-//!
-//! A call that does not mention `encrypted` changes nothing.
-//!
-//! Encryption that was asked for but cannot be had (no DPAPI, a key that cannot
-//! be made) runs the app with NO cache and says so. Writing plaintext after
-//! being asked for encryption is the one failure that is not allowed here.
+//! The decision is made at install and is sticky: encrypted when the cache's own `key.sealed`,
+//! `localStorage.sealed` or IndexedDB's `key.sealed` exists. `setStorageFolder(…, { encrypted })`
+//! switches it at once (nothing to migrate: the folder is purged, and `{ encrypted: false }`
+//! also deletes the key); a call without `encrypted` changes nothing. Encryption that was asked
+//! for but cannot be had runs the app with no cache and says so, never with plaintext.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -77,13 +42,12 @@ struct State {
 
 static STATE: Mutex<State> = Mutex::new(State { dir: None, max_bytes: 0, sealed: false, error: None });
 
-/// `%LOCALAPPDATA%\<app>\cache\http`.
 pub fn folder_for(app_name: &str) -> Result<PathBuf, String> {
     Ok(folders::user_folder("LOCALAPPDATA", app_name)?.join("cache").join("http"))
 }
 
-/// Turns the cache on for this app: `max_mb` is the cap (0 = no cache). Called
-/// by vn-app after [`crate::install`] (which names the app), before any JS.
+/// Turns the cache on for this app; `max_mb` is the cap (0 = no cache). Call after
+/// [`crate::install`] (which names the app), before any JS.
 pub fn install(max_mb: u64) {
     if max_mb == 0 {
         return;
@@ -100,7 +64,6 @@ pub fn install(max_mb: u64) {
 }
 
 /// Installs an explicitly located cache without changing the storage folder.
-/// The embedder chooses this before any requests or application JavaScript.
 pub fn install_at(max_mb: u64, dir: PathBuf) {
     if max_mb == 0 {
         return;
@@ -114,9 +77,8 @@ fn storage_is_encrypted(storage: &Path) -> bool {
     file::sealed_path(storage).exists() || storage.join("indexeddb").join("key.sealed").exists()
 }
 
-/// From [`crate::set_storage_folder`]: `Some(flag)` that differs from the
-/// cache's mode reinstalls it in the new mode (purging it); `None` changes
-/// nothing.
+/// From [`crate::set_storage_folder`]: `Some(flag)` that differs from the cache's mode reinstalls
+/// it in the new mode (purging it); `None` changes nothing.
 pub fn storage_changed(encrypted: Option<bool>) {
     let Some(want) = encrypted else { return };
     let (dir, max_bytes, sealed) = {
@@ -131,8 +93,7 @@ pub fn storage_changed(encrypted: Option<bool>) {
     }
 }
 
-/// `{"dir":…,"sealed":…,"error":…}` for devtools; redjs's `cache::stats` has
-/// the rest.
+/// `{"dir":…,"sealed":…,"error":…}` for devtools.
 pub fn info_json() -> String {
     let st = STATE.lock().unwrap();
     let dir = st.dir.as_deref().map(|d| d.display().to_string());
@@ -158,8 +119,7 @@ fn apply(dir: PathBuf, max_bytes: u64, sealed: bool) {
             }
         }
     } else {
-        // Plaintext from now on: a key left behind would make the next start
-        // encrypted again (the sticky rule).
+        // Plaintext from now on: a leftover key would make the next start encrypted again.
         let _ = std::fs::remove_file(dir.join(KEY_NAME));
         None
     };
@@ -175,8 +135,7 @@ fn apply(dir: PathBuf, max_bytes: u64, sealed: bool) {
 
 #[cfg(target_os = "windows")]
 mod gcm {
-    //! AES-256-GCM through CNG. A sealed entry is `nonce (12) ‖ ciphertext ‖
-    //! tag (16)`.
+    //! AES-256-GCM through CNG: `nonce (12) ‖ ciphertext ‖ tag (16)`.
 
     use std::path::Path;
     use std::sync::{Arc, Mutex};
@@ -202,8 +161,7 @@ mod gcm {
         id: String,
     }
 
-    // The handles are process-wide CNG objects; every use of the key goes
-    // through the mutex.
+    // The handles are process-wide CNG objects; every key use goes through the mutex.
     unsafe impl Send for Gcm {}
     unsafe impl Sync for Gcm {}
 
@@ -345,9 +303,8 @@ mod gcm {
         Some(out)
     }
 
-    /// The folder's key (made on first use), as a [`Sealer`]. `key.sealed` holds
-    /// `<64 hex key> <16 hex id>`; the id names the key in the sealer's tag, so
-    /// a new key purges what the old one sealed.
+    /// The folder's key (made on first use) as a [`Sealer`]. `key.sealed` holds
+    /// `<64 hex key> <16 hex id>`; the id is in the sealer's tag, so a new key purges old entries.
     pub fn sealer(dir: &Path) -> Result<Arc<dyn Sealer>, String> {
         let p = crypt::provider().ok_or("no DPAPI on this platform")?;
         let path = dir.join(KEY_NAME);
@@ -359,8 +316,7 @@ mod gcm {
                     parsed
                 }
                 Err(e) => {
-                    // Another Windows user, a reset password: the entries are
-                    // lost with the key, and a cache can afford that.
+                    // The entries are lost with the key; a cache can afford that.
                     eprintln!("[storage] the HTTP cache key cannot be unsealed ({e}); making a new one");
                     None
                 }
@@ -404,12 +360,10 @@ mod gcm {
             let mut bad = sealed.clone();
             bad[NONCE + 5] ^= 1;
             assert!(a.open(&bad).is_err());
-            // A fresh nonce every time.
             assert_ne!(a.seal(&plain).unwrap(), sealed);
         }
 
-        /// The macOS cipher (ring) is this one: either opens what the other
-        /// sealed under the same key.
+        /// The macOS cipher (ring) and this one open each other's entries.
         #[test]
         fn ring_and_cng_agree() {
             let cng = Gcm::new(&[0x42; 32], "c".into()).unwrap();
@@ -428,16 +382,13 @@ mod gcm {
             let again = sealer(&dir).unwrap();
             assert_eq!(first.tag(), again.tag());
             assert_eq!(again.open(&first.seal(b"x").unwrap()).unwrap(), b"x");
-            // The key is not on disk in the clear.
             assert!(!raw.windows(8).any(|w| w.iter().all(|c| c.is_ascii_hexdigit())));
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
 }
 
-/// AES-256-GCM through ring: the macOS and Linux cipher. Compiled under `test` on every
-/// platform, where it is checked against CNG's (a sealed entry is the same
-/// `nonce (12) ‖ ciphertext ‖ tag (16)`).
+/// AES-256-GCM through ring (macOS, Linux); under `test` everywhere, to check it against CNG's.
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 mod ring_gcm {
     use std::path::Path;
@@ -489,11 +440,11 @@ mod ring_gcm {
         Some(out)
     }
 
-    /// The Windows `gcm::sealer`'s key file, under any provider: `key.sealed`
-    /// holds `<64 hex key> <16 hex id>` sealed by `p`.
+    /// The Windows `gcm::sealer`'s key file under any provider: `key.sealed` holds
+    /// `<64 hex key> <16 hex id>` sealed by `p`.
     pub fn sealer_with(dir: &Path, p: &dyn SecretProvider) -> Result<Arc<dyn Sealer>, String> {
-        // A locked or refused keychain says nothing about the key file: refuse
-        // (no cache this run) rather than replace a key that may be fine.
+        // A locked or refused keychain says nothing about the key file: refuse (no cache this
+        // run) rather than replace a key that may be fine.
         p.ready()?;
         let path = dir.join(KEY_NAME);
         let existing = match std::fs::read(&path) {
@@ -564,8 +515,7 @@ mod ring_gcm {
             let again = sealer_with(&dir, &p).unwrap();
             assert_eq!(first.tag(), again.tag());
             assert_eq!(again.open(&first.seal(b"x").unwrap()).unwrap(), b"x");
-            // Another key (another user, a replaced keychain item): a new
-            // cache key, so a new tag, and redjs purges the folder.
+            // Another key (another user, a replaced keychain item) gives a new tag; redjs purges.
             let other = sealer_with(&dir, &FixedKey::new(4)).unwrap();
             assert_ne!(other.tag(), first.tag());
             let _ = std::fs::remove_dir_all(&dir);
@@ -598,8 +548,7 @@ mod gcm {
     use std::sync::Arc;
     use vn_runtime::redjs::webapi::http::cache::Sealer;
 
-    /// The folder's key, sealed by the platform provider (Keychain, Secret
-    /// Service), as a [`Sealer`].
+    /// The folder's key, sealed by the platform provider, as a [`Sealer`].
     pub fn sealer(dir: &Path) -> Result<Arc<dyn Sealer>, String> {
         let p = crate::crypt::provider().ok_or("no storage key provider on this platform")?;
         super::ring_gcm::sealer_with(dir, p)

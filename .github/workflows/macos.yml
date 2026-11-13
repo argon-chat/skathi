@@ -1,9 +1,6 @@
 name: macOS
 
-# Bring-up of the macOS host (docs/MACOS.md). It checks and builds vn-app for
-# Apple Silicon; nothing runs yet.
-# Expect it to fail until the port compiles end to end: it is not a required
-# check, and it is the only machine in this repo's CI with Apple's SDK.
+# Bring-up of the macOS host: checks and builds vn-app for Apple Silicon. Not a required check.
 
 on:
   push:
@@ -38,15 +35,11 @@ jobs:
         with:
           bun-version: 1.4.4
       - name: Install Xcode's Metal toolchain
-        # A separate download since Xcode 26. The shaders are compiled at build
-        # time rather than with `runtime-shaders`, so a Metal error fails here
-        # instead of at an app's first frame.
+        # Shaders compile at build time, so a Metal error fails here, not at first frame.
         run: xcrun -f metal >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
       - name: Set up Rust
-        # rust-toolchain.toml pins the channel; the target is this runner's own.
         run: rustup target add "$TARGET"
       - name: Install JS dependencies
-        # vn-app's build script bundles the devtools inspector with bun.
         working-directory: packages/vue-native
         run: bun install --frozen-lockfile
       - name: Cache pinned native dependencies

@@ -47,7 +47,6 @@ export interface AotInputsOptions {
   sourceRoots?: Record<string, string>;
 }
 
-/** Retain TS before Bun erases it, including the generated Vue render/setup module. */
 export class AotInputs {
   private readonly inputs = new Map<string, Input>();
   private readonly modules = new Map<string, { path: string; text: string }>();
@@ -111,7 +110,6 @@ export class AotInputs {
     }
   }
 
-  /** Include imports erased by Bun (type-only imports, ambient types and TS libs). */
   private collectTypes(): { version: string; config: string | null; diagnostics: { code: number; message: string }[] } {
     const { typescript, appRoot, entry, aliases, declarations = [] } = this.options;
     const read = (path: string): string | undefined => {

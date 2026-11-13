@@ -1,10 +1,5 @@
-// A fixture for packages/vn-test/specs/shell.spec.ts (docs/SHELL.md).
-//
-// Every link shape the tier-1 path distinguishes, one per row, plus a handle
-// on `appShell` for the spec: the devtools `eval` runs in GLOBAL scope and a
-// module export is not a global in either boot mode (see devtools-on/main.ts).
-// A promise does not survive the eval round trip either, so `run()` records
-// how each call SETTLED into `results`, and the spec polls that.
+// A promise does not survive the eval round trip either, so `run()` records how each call SETTLED
+// into `results`, and the spec polls that.
 import { appShell, createApp, h, ref } from "vue-native";
 
 type Verb = "openExternal" | "openPath" | "showItemInFolder" | "trashItem";
@@ -26,8 +21,8 @@ const spanClicks = ref(0);
 createApp({
   render: () =>
     h("div", { class: "fixture" }, [
-      // An https link whose CHILD also listens: one physical click reaches two
-      // listening boxes, and must still be one navigation.
+      // An https link whose CHILD also listens: one physical click reaches two listening boxes,
+      // and must still be one navigation.
       h("a", { class: "ext", href: "https://example.invalid/vn-test?q=a b" }, [
         h("span", { class: "ext-label", onClick: () => spanClicks.value++ }, "external link"),
       ]),

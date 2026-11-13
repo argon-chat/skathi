@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/min-content.spec.ts: text's min-content width in Argon's dashboard stat row, at five widths, with and without nowrap. See ../README.md.",
+  "$comment": "Text's min-content width in Argon's dashboard stat row, at five widths, with and without nowrap.",
 
   "name": "vn-test-min-content",
 

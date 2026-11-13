@@ -1,19 +1,10 @@
-// A CENSUS of the `__vn_*` host protocol: how many calls, of which kind, does
-// each thing an app actually does cost?
+// A census of the `__vn_*` host protocol: how many calls, of which kind, does each thing an app does cost?
 //
 //   bun scripts/host-calls.ts            the table
 //   bun scripts/host-calls.ts --json     the same numbers, machine-readable
 //
-// The whole "could half of the runtime move to Rust?" question turns on one
-// number per subsystem — how much of the per-frame cost is JS work, and how
-// much is CROSSING. Guessing at that from the source is how you end up
-// migrating the cheap half. So this runs the REAL renderer (`src/runtime.ts`,
-// transpiled by the same emitter that builds dist/vendor.js) against a host
-// that does nothing but count, and reports what each scenario actually spends.
-//
-// It is a measurement instrument, not a test: nothing here asserts. The numbers
-// it produced are quoted in research/reports/m20/runtime-ts.md, and re-running
-// it is how you check whether they still hold.
+// It runs the real renderer (`src/runtime.ts`, transpiled by the emitter that builds dist/vendor.js) against a
+// host that only counts. A measurement instrument, not a test: nothing asserts.
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -44,7 +35,6 @@ const RUNTIME_PATH = join(HERE, "../src/runtime.ts");
 const IMPORT_LINE = /^\s*import\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 const STAR_REEXPORT = /^\s*export\s+\*\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 
-/** Every host fn, in one place, so a new one cannot be forgotten by the census. */
 const HOST_FNS = [
   "__vn_intern",
   "__vn_create_element",
@@ -77,13 +67,11 @@ type Counts = Partial<Record<HostFn, number>>;
 interface World {
   createApp: (component: unknown) => { mount: (container?: unknown) => unknown; unmount(): void };
   counts: Counts;
-  /** Everything counted since the last `reset()`, and then zeroed. */
   take(): Counts;
   reset(): void;
   global: Record<string, unknown>;
 }
 
-/** A runtime instance whose entire host is a set of counters. */
 function makeWorld(): World {
   const transpiler = new Bun.Transpiler({
     loader: "ts",
@@ -202,10 +190,6 @@ function makeWorld(): World {
 }
 
 const total = (c: Counts) => Object.values(c).reduce((a, b) => a + b, 0);
-
-// ---------------------------------------------------------------------------
-// the scenarios
-// ---------------------------------------------------------------------------
 
 const ROWS = 100;
 

@@ -1,7 +1,3 @@
-//! `em` against the element's own font size (CSS Values 4 §6.1.1), through
-//! `Engine::compute_node_at`: the font size folds first and every other em
-//! resolves under it, `font-size`'s own em against the parent's.
-
 use std::rc::Rc;
 
 use gpui::{px, relative, AbsoluteLength, DefiniteLength, Length};
@@ -70,18 +66,14 @@ fn d(v: f32) -> Option<DefiniteLength> {
 
 #[test]
 fn em_is_the_elements_own_font_size_and_font_size_em_is_the_parents() {
-    // No font-size: the inherited one.
     let s = boxed(".box { padding: 1em }", 10.0);
     assert_eq!((s.font_size, s.base.padding.top), (10.0, d(10.0)));
-    // Its own font-size, in em of the parent, and the padding in em of that.
     let s = boxed(".box { font-size: 2em; padding: 1em .5em }", 10.0);
     assert_eq!(s.font_size, 20.0);
     assert_eq!(s.base.text.font_size, Some(AbsoluteLength::Pixels(px(20.0))));
     assert_eq!((s.base.padding.top, s.base.padding.left), (d(20.0), d(10.0)));
-    // The font-size can come from another rule than the em: the whole cascade decides it first.
     let s = boxed(".box { gap: 1em } .box { font-size: 12px }", 30.0);
     assert_eq!(s.base.gap.width, d(12.0));
-    // `rem` stays on the root.
     let s = boxed(".box { font-size: 30px; width: 2rem }", 10.0);
     assert_eq!(s.base.size.width, Some(Length::Definite(px(2.0 * crate::rem_basis()).into())));
 }
@@ -98,8 +90,8 @@ fn font_size_percentages_and_keywords_are_of_the_parent() {
 
 #[test]
 fn the_same_rules_under_two_parent_sizes_do_not_share_a_fold() {
-    // The matched-properties cache keys the parent's font size: a cousin
-    // under a different size must not get the first one's px.
+    // The matched-properties cache keys the parent's font size: a cousin under a different size
+    // must not get the first one's px.
     let engine = Engine::compile(".box { padding: 1em; font-size: 1.5em }");
     let a = at(&engine, "box", None, 10.0);
     let b = at(&engine, "box", None, 20.0);
@@ -141,11 +133,10 @@ fn ch_ex_and_letter_spacing_follow_the_element() {
 
 #[test]
 fn a_later_static_declaration_still_beats_an_earlier_em_one() {
-    // `padding` goes to the per-element pass; the `padding-left` after it
-    // must be applied after it there too.
+    // `padding` goes to the per-element pass; the `padding-left` after it must be applied after it
+    // there too.
     let s = boxed(".box { padding: 1em; padding-left: 4px }", 10.0);
     assert_eq!((s.base.padding.top, s.base.padding.left), (d(10.0), d(4.0)));
-    // And an earlier static one loses to a later em one.
     let s = boxed(".box { padding-left: 4px; padding: 1em }", 10.0);
     assert_eq!(s.base.padding.left, d(10.0));
     // Across !important: the important em wins over a normal px.
@@ -157,7 +148,6 @@ fn a_later_static_declaration_still_beats_an_earlier_em_one() {
 fn var_composed_em_resolves_against_the_element() {
     let s = boxed(".box { --pad: 2em; font-size: 8px; padding-top: var(--pad) }", 16.0);
     assert_eq!(s.base.padding.top, d(16.0));
-    // A var()-composed font-size is still of the parent.
     let s = boxed(".box { --f: 2em; font-size: var(--f); padding-top: 1em }", 9.0);
     assert_eq!((s.font_size, s.base.padding.top), (18.0, d(18.0)));
 }
@@ -169,7 +159,6 @@ fn an_inline_em_is_the_elements_too() {
     let s = at(&engine, "box", Some(&inline), 10.0);
     assert_eq!((s.font_size, s.base.padding.top), (20.0, d(10.0)));
     assert_eq!(s.base.size.width, Some(Length::Definite(px(30.0).into())));
-    // An inline font-size beats the sheet's, and is of the parent.
     let inline = parse_inline_style("font-size: 150%; margin-top: 1em", &mut Vec::new());
     let s = at(&engine, "box", Some(&inline), 10.0);
     assert_eq!(s.font_size, 15.0);
@@ -183,12 +172,10 @@ fn a_hover_rule_that_changes_the_font_size_moves_the_bases_em_under_the_pointer(
     let hover = s.hover.as_ref().expect("a hover rung");
     assert_eq!(hover.text.font_size, Some(AbsoluteLength::Pixels(px(20.0))));
     assert_eq!(hover.padding.top, d(20.0));
-    // The rung's own em is its own size, and its font-size em the parent's.
     let s = boxed(".box:hover { font-size: 2em; margin-top: 1em }", 10.0);
     let hover = s.hover.as_ref().unwrap();
     assert_eq!(hover.text.font_size, Some(AbsoluteLength::Pixels(px(20.0))));
     assert_eq!(hover.margin.top, Some(Length::Definite(px(20.0).into())));
-    // A rung that keeps the size is left as it was declared.
     let s = boxed(".box { padding: 1em } .box:hover { opacity: .5 }", 10.0);
     assert_eq!(s.hover.as_ref().unwrap().padding.top, None);
 }

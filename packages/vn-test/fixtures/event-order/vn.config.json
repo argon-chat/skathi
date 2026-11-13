@@ -1,6 +1,4 @@
 {
-  "$comment": "The microtask checkpoint between two events one platform event produces (m26 client sweep #8) — see ../README.md and packages/vn-test/specs/event-order.spec.ts.",
-
   "name": "event-order",
 
   "window": {

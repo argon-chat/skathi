@@ -1,7 +1,5 @@
-// `launchQueue` (tier 1) and `appLaunch` (tier 2) — the JS half of
-// docs/LAUNCH.md. The Rust half (the argv parser, the instance pipe, the
-// forward codec) is unit-tested in crates/vn-desktop; e2e/launch.spec drives
-// a real second process.
+// `launchQueue` (tier 1) and `appLaunch` (tier 2): the JS half. The Rust half (argv parser, instance pipe, forward
+// codec) is unit-tested in crates/vn-desktop; e2e/launch.spec drives a real second process.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
@@ -50,7 +48,7 @@ describe("launchQueue", () => {
     expect(seen.map((p) => p.targetURL)).toEqual([null, "notes://1", "notes://2"]);
   });
 
-  test("files are handles for the launch's paths, holding no path (D-F8)", async () => {
+  test("files are handles for the launch's paths, holding no path", async () => {
     const rt = createRuntime({
       launch: { paths: ["C:\\docs\\a.txt"], handles: [{ h: 7, name: "a.txt", kind: "file" }] },
     });

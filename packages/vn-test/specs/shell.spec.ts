@@ -1,18 +1,3 @@
-// Links, window.open and `appShell`, through a real host (docs/SHELL.md).
-//
-//   bun test packages/vn-test/specs/shell.spec.ts
-//
-// The host runs with VN_SHELL=record: every shell call is validated and
-// stat'ed exactly as it would be, then RECORDED in the log ring instead of
-// reaching the OS — so this spec opens no browser, no mail client and no
-// Explorer window, and moves nothing to the Recycle Bin, on the machine it runs
-// on. What it pins is everything up to that line: which clicks follow a link,
-// the content allowlist on both sides of the seam, the executable guard, and
-// that each `appShell` promise settles with the right name.
-//
-// The real OS calls are covered by `cargo test -p vn-desktop` (the trash test
-// is `--ignored`: it touches the user's Recycle Bin and purges itself again).
-
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,13 +20,11 @@ afterAll(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-/** The `[shell] … (recorded …)` lines so far. */
 async function recorded(): Promise<string[]> {
   const { entries } = await app.logs(0);
   return entries.filter((e) => e.kind === "shell").map((e) => e.text);
 }
 
-/** Polls until `pred` holds or the deadline passes; returns the last value. */
 async function until<T>(read: () => Promise<T>, pred: (v: T) => boolean, ms = 5_000): Promise<T> {
   const deadline = Date.now() + ms;
   for (;;) {
@@ -57,9 +40,6 @@ const run = (verb: string, ...args: unknown[]) =>
 
 describe("links (tier 1)", () => {
   test("a REAL click on a link's listening child is one navigation, and each handler runs once", async () => {
-    // A listener on the <a> itself: gpui fires `on_click` on every listening
-    // box under the pointer, and before vn-tree claimed the click for the
-    // innermost one this counted 2 (bubbled from the span + its own delivery).
     await app.eval(
       `globalThis.__aClicks = 0; document.querySelector('.ext').addEventListener('click', () => globalThis.__aClicks++); 1`,
     );

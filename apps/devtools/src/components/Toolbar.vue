@@ -1,12 +1,4 @@
 <script setup lang="ts">
-// The tab strip, the picker toggle, and the window switcher.
-//
-// Chrome puts three things in this row and so do we: the inspect toggle on the
-// left (where the shortcut lives in muscle memory), the panels in the middle,
-// and the state that changes what those panels are ABOUT on the right. Here the
-// third one is not a device emulator, it is a WINDOW: one vue-native process
-// can paint several OS windows off one retained tree (docs/MULTIWINDOW.md), so
-// "which window" is a question every panel's answer depends on.
 import { computed } from "vue";
 import type { Tab } from "../protocol";
 import { state, selectWindow, setTab, togglePick, toggleConsole } from "../store";
@@ -19,7 +11,6 @@ const TABS: { id: Tab; label: string; key: string }[] = [
   { id: "targets", label: "Targets", key: "5" },
 ];
 
-/** Only worth showing when there is more than one — most apps have one window. */
 const showWindows = computed(() => state.windows.length > 1);
 
 const activeWindow = computed(() =>
@@ -38,7 +29,6 @@ function pickWindow(id: number): void {
   void selectWindow(w && w.kind === "main" ? null : id);
 }
 
-// Exchanges only: a reload marker is a divider in the list, not a request.
 const netCount = computed(() => state.net.reduce((n, e) => (e.kind === "reload" ? n : n + 1), 0));
 const errorCount = computed(() => state.logs.filter((l) => l.kind === "error").length);
 </script>

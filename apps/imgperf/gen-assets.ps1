@@ -1,16 +1,12 @@
-# Generates the imgperf test corpus into apps/imgperf/assets/.
+# Generates the imgperf test corpus into apps/imgperf/assets/: pwsh -File apps/imgperf/gen-assets.ps1
 #
-# DISTINCT CONTENT MATTERS: gpui's asset cache is keyed by the resource (path),
-# and its GPU atlas by the decoded image's id, so re-using one file N times
-# measures cache HITS. A real gallery is N different files, so every image here
-# gets its own gradient, ring pattern and index label — no two files share bytes.
+# Every image gets distinct bytes: gpui caches by path and its GPU atlas by decoded image id, so
+# reusing one file would measure cache hits.
 #
-#   thumbs/t<NN>.png    50 x   64x64    (grid of 400 nodes -> cache-hit heavy)
-#   photos/p<NN>.png    50 x  512x512   (50 unique decodes)
-#   large/l<N>.png       4 x 2048x2048  (object-fit + decode-stall probe)
+#   thumbs/t<NN>.png    50 x   64x64
+#   photos/p<NN>.png    50 x  512x512
+#   large/l<N>.png       4 x 2048x2048
 #   large/l0.jpg         1 x 2048x2048  (JPEG decode path)
-#
-# Usage:  pwsh -File apps/imgperf/gen-assets.ps1
 param([switch]$Force)
 
 Add-Type -AssemblyName System.Drawing

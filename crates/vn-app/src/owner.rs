@@ -1,30 +1,18 @@
-//! `VN_OWNER_PID` — a host that dies with the process that launched it.
+//! `VN_OWNER_PID`: a host that dies with the process that launched it.
 //!
-//! vn-test starts every host `detached` and kills it from three places in the
-//! runner: `close()`, a `process.exit` hook, and the signal handlers. All three
-//! run INSIDE the runner, so a runner that is itself killed — `TerminateProcess`
-//! from a task manager, an agent stopped mid-run, a crash inside bun — takes
-//! every one of them down with it, and its hosts live on. That is not a
-//! hypothetical: 35 orphaned `vn-app-vntest-*` processes were found on the
-//! owner's machine (2026-09-18), each a full gpui + JSC host holding a window
-//! and GPU memory, and together enough to make the machine sluggish.
+//! vn-test starts every host detached and kills it from the runner, so a runner that is itself killed
+//! (task manager, a crash inside bun) leaves its hosts running, each a full gpui + JSC host holding
+//! a window and GPU memory. The host is the only party that outlives the runner, so it does the
+//! watching: with `VN_OWNER_PID=<pid>` set, a thread opens a SYNCHRONIZE handle on the owner and
+//! blocks on it; when the owner exits, for any reason, the host terminates itself. A handle rather
+//! than a pid poll, since the pid can be recycled the moment the owner exits.
 //!
-//! The only party that outlives the runner is the host, so the host does the
-//! watching. With `VN_OWNER_PID=<pid>` set, a thread opens a SYNCHRONIZE handle
-//! on the owner and blocks on it; when the owner exits, for any reason, the
-//! host terminates itself. A handle rather than a pid poll, because a handle
-//! names one process for as long as it is held — the pid can be recycled the
-//! moment the owner exits, the handle cannot.
+//! The termination is `TerminateProcess` on ourselves, not `cx.quit()`: the hosts that leak are
+//! disproportionately wedged ones, and a quit that waits for the frame pump never arrives at a stuck
+//! pump. A test host has no state worth flushing, and an inspector it opened with F12 inherits the
+//! variable (`inspector::spawn` passes the environment through) and goes the same way.
 //!
-//! The termination is `TerminateProcess` on ourselves, not `cx.quit()`. The
-//! hosts that leak are disproportionately the wedged ones (a test that failed
-//! by timing out), and a quit that waits for the frame pump never arrives at a
-//! pump that is stuck. Nothing is lost by it: a test host has no state worth
-//! flushing, and an inspector it opened with F12 inherits the same variable
-//! (`inspector::spawn` passes the environment through) and goes the same way.
-//!
-//! Unset — every shipped app, every host launched by hand — this is one
-//! `env::var` at boot and nothing else.
+//! Unset (every shipped app), this is one `env::var` at boot and nothing else.
 
 /// Starts the watch if `VN_OWNER_PID` names a process. Call once, early in `main`.
 pub fn watch() {

@@ -1,15 +1,3 @@
-// `copy` / `cut` / `paste` from real keystrokes (m26 fixes, docs/RUNTIME.md
-// §5.4, crates/vn-tree/src/clipboard.rs).
-//
-//   bun test packages/vn-test/specs/clipboard.spec.ts
-//
-// The keys go through devtools `key`, which is gpui's own keystroke dispatch:
-// the field's keydown interceptor, its key bindings (Ctrl+V, Shift+Insert…)
-// and the root's key listener, exactly as a physical key. `fixtures/clipboard`
-// never writes the system clipboard (see its header), so the spec is safe to
-// run while somebody uses the machine; what the clipboard HOLDS is unknown,
-// so the assertions are about the events and their stores, not the text.
-
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { expect, launch } from "../src/index";
 

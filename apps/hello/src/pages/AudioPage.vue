@@ -1,60 +1,21 @@
 <script setup lang="ts">
-// Web Audio — a real Firewheel graph behind the browser's AudioContext.
-//
-// Nothing on this page is host-specific except one clearly-marked node: it is
-// `new AudioContext()`, `createOscillator()`, `createGain()`,
-// `createAnalyser()`, `decodeAudioData()` and `AudioBufferSourceNode`, wired
-// the way the same code would be wired in Chrome. What is host-specific is
-// what is UNDERNEATH: `crates/vn-runtime` turns on redjs's `audio` feature,
-// which maps the node graph onto Firewheel and opens a cpal output stream on
-// the OS default device. There is no shim and no polyfill — with the feature
-// off, `AudioContext` is not defined at all, so feature detection tells the
-// truth either way.
-//
-// THE GRAPH, and why it has two analysers:
-//
-//     oscillator ──▶ pre ──▶ gain ──▶ post ──▶ destination
-//                    │                 │
-//                 the bars          the proof
-//
-// `pre` taps the signal BEFORE the gain, `post` after it. With the gain at 0
-// the bars keep moving (there IS a tone) while the post-gain RMS reads 0.000
-// (nothing leaves the graph). That pairing is the measurement: a stub analyser
-// returning zeros would fail the first half, and a `gain.value` that did
-// nothing would fail the second. It is also why this page opens SILENT — the
-// gain starts at 0 on purpose, and the readouts below tell you the oscillator
-// is running anyway.
-//
-// The bars are plain divs whose heights come off `getByteFrequencyData` inside
-// a `requestAnimationFrame` loop. No canvas: 48 divs restyling every frame is
-// a fine workout for the cascade, and it means the visualization is inspectable
-// with the devtools selector query like any other element.
 
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref } from "vue";
 
-// --- context ----------------------------------------------------------------
-
-// `AudioContext` is ABSENT, not stubbed, when the host was built without the
-// `audio` feature — so this probe is the honest question and env.d.ts declares
-// the global `| undefined` to keep it meaningful.
 const supported = typeof AudioContext !== "undefined";
 const ctx = ref<VnAudioContext | null>(null);
 const state = reactive({
   ctxState: "—",
   sampleRate: 0,
   currentTime: 0,
-  running: false, // the clock advances ⇒ there is a real output device
+  running: false,
 });
 
-// Nodes, kept out of `reactive()` on purpose: they are host objects with live
-// getters, not data, and wrapping them in a Proxy buys nothing but confusion.
+// Nodes, kept out of `reactive()` on purpose: they are host objects with live getters, not data,
+// and wrapping them in a Proxy buys nothing but confusion.
 let osc: VnOscillatorNode | null = null;
 let preAnalyser: VnAnalyserNode | null = null;
 let postAnalyser: VnAnalyserNode | null = null;
-// `VnGainNodeWithParam`, not `VnGainNode`: engine.d.ts types the latter's
-// `gain` as `{ value: number }` — the half a native producer writes — and
-// `rampGain()` below drives the AudioParam TIMELINE, which redjs implements in
-// full. See the note on the type in apps/env.d.ts.
 let gainNode: VnGainNodeWithParam | null = null;
 let streamNode: VnRedStreamSourceNode | null = null;
 
@@ -70,21 +31,17 @@ function note(line: string) {
 
 function ensureContext(): VnAudioContext {
   if (ctx.value) return ctx.value;
-  // Guarded by `supported` at every entry point (`onMounted` returns early,
-  // and the whole control surface is behind `v-else` of `v-if="!supported"`),
-  // so reaching here with no constructor is not a state this page can be in.
   const a = new AudioContext!();
   ctx.value = a;
 
   preAnalyser = a.createAnalyser();
   postAnalyser = a.createAnalyser();
-  // 2048 → 1024 frequency bins; we fold them into 48 bars below.
   preAnalyser.fftSize = 2048;
   postAnalyser.fftSize = 2048;
   preAnalyser.smoothingTimeConstant = 0.7;
 
   gainNode = a.createGain() as VnGainNodeWithParam;
-  gainNode.gain.value = gain.value; // 0 at boot — see the header
+  gainNode.gain.value = gain.value;
 
   preAnalyser.connect(gainNode);
   gainNode.connect(postAnalyser);
@@ -95,8 +52,6 @@ function ensureContext(): VnAudioContext {
   note(`AudioContext @ ${a.sampleRate} Hz, state=${a.state}`);
   return a;
 }
-
-// --- oscillator -------------------------------------------------------------
 
 const WAVES = ["sine", "square", "sawtooth", "triangle"];
 const wave = ref<string>("square");
@@ -112,7 +67,6 @@ function startTone() {
   osc.frequency.value = freq.value;
   osc.detune.value = detune.value;
   osc.onended = () => note("oscillator: onended");
-  // `preAnalyser` is built by `ensureContext()` on the line above.
   osc.connect(preAnalyser!);
   osc.start();
   playing.value = true;
@@ -130,8 +84,6 @@ function stopTone() {
 
 function setWave(w: string) {
   wave.value = w;
-  // A live `type` write reaches the audio thread on the next block — no
-  // rewiring, no click, exactly as in a browser.
   if (osc) osc.type = w;
 }
 
@@ -145,17 +97,9 @@ function setDetune(cents: number) {
   if (osc) osc.detune.value = detune.value;
 }
 
-// --- sliders ----------------------------------------------------------------
-//
-// There is no `<input type="range">` in this renderer, so a track is a div and
-// the value is arithmetic on `getBoundingClientRect()` — which works because
-// the DOM surface answers it off the real painted rectangle. Same shape as the
-// Media page's scrub bar.
-
-/** 0..1 across the clicked track. */
 function fraction(e: VnMouseEvent) {
-  // Rewritten at each step of the propagation walk, so it is the `.track` div
-  // this handler is bound to rather than whatever was clicked inside it.
+  // Rewritten at each step of the propagation walk, so it is the `.track` div this handler is
+  // bound to rather than whatever was clicked inside it.
   const track = e.currentTarget as VnElement | null;
   if (!track) return 0;
   const rect = track.getBoundingClientRect();
@@ -163,10 +107,6 @@ function fraction(e: VnMouseEvent) {
   return Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
 }
 
-// --- gain -------------------------------------------------------------------
-
-// STARTS AT ZERO. The page is a measurement, not a noise; raise it yourself if
-// you actually want to hear the tone.
 const gain = ref(0);
 
 function setGain(v: number) {
@@ -181,15 +121,12 @@ function rampGain(target: number, seconds: number) {
   const t0 = a.currentTime;
   gainNode.gain.cancelScheduledValues(t0);
   gainNode.gain.setValueAtTime(Math.max(gain.value, 0.0001), t0);
-  // Exponential, because that is what a fade that sounds even to the ear is —
-  // and because this runtime implements it as a real geometric ramp now
-  // rather than as a linear stand-in.
+  // Exponential, because that is what a fade that sounds even to the ear is — and because this
+  // runtime implements it as a real geometric ramp now rather than as a linear stand-in.
   gainNode.gain.exponentialRampToValueAtTime(Math.max(target, 0.0001), t0 + seconds);
   gain.value = target;
   note(`gain: exponential ramp to ${target} over ${seconds}s`);
 }
-
-// --- generated AudioBuffer (a chirp made in JS) ------------------------------
 
 const chirp = reactive<{ buffer: VnAudioBuffer | null; playing: boolean; peak: number }>({
   buffer: null,
@@ -202,8 +139,7 @@ function buildChirp() {
   const seconds = 1.2;
   const rate = a.sampleRate || 48000;
   const frames = Math.floor(seconds * rate);
-  // createBuffer + copyToChannel: the browser's way to hand raw PCM to the
-  // graph without a file. Stereo, so the two channels can differ audibly.
+  // Stereo, so the two channels can differ audibly.
   const buf = a.createBuffer(2, frames, rate);
   const left = new Float32Array(frames);
   const right = new Float32Array(frames);
@@ -213,13 +149,12 @@ function buildChirp() {
   let peak = 0;
   for (let i = 0; i < frames; i++) {
     const t = i / rate;
-    // Exponential sweep: phase is the integral of the instantaneous frequency.
     const phase = (2 * Math.PI * f0 * (Math.exp(k * t) - 1)) / k;
     // Hann window so the ends do not click.
     const win = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / frames);
     const s = Math.sin(phase) * win;
     left[i] = s;
-    right[i] = s * 0.4; // an audible L/R difference to prove the channels are separate
+    right[i] = s * 0.4;
     if (Math.abs(s) > peak) peak = Math.abs(s);
   }
   buf.copyToChannel(left, 0);
@@ -244,8 +179,6 @@ function playChirp() {
   note("chirp: start");
 }
 
-// --- decodeAudioData --------------------------------------------------------
-
 const decoded = reactive({ status: "not loaded", channels: 0, frames: 0, rate: 0, seconds: 0, peak: 0 });
 let decodedBuffer: VnAudioBuffer | null = null;
 
@@ -253,11 +186,6 @@ async function loadFixture() {
   const a = ensureContext();
   decoded.status = "fetching…";
   try {
-    // engine.d.ts declares `fetch` optional — a bare engine may not have it.
-    // The app host does.
-    // Ordinary `fetch` of an app asset, ordinary `arrayBuffer()`, ordinary
-    // `decodeAudioData`. The decoder underneath is symphonia; WAV, FLAC, MP3,
-    // OGG/Vorbis, AAC-LC/M4A, ALAC, AIFF, CAF and MKV all land here.
     const res = await fetch!("assets/chirp-mono-22k.wav");
     if (!res.ok) throw new Error(`fetch: HTTP ${res.status}`);
     const bytes = await res.arrayBuffer();
@@ -269,17 +197,16 @@ async function loadFixture() {
     for (let i = 0; i < ch0.length; i++) peak = Math.max(peak, Math.abs(ch0[i]!));
     decoded.channels = buf.numberOfChannels;
     decoded.frames = buf.length;
-    // NOTE the resample: the fixture is 22 050 Hz on disk and comes back at the
-    // OUTPUT stream's rate, because that is what the graph needs. `duration`
-    // is preserved; `length` is not the file's frame count.
+    // NOTE the resample: the fixture is 22 050 Hz on disk and comes back at the OUTPUT stream's
+    // rate, because that is what the graph needs.
     decoded.rate = buf.sampleRate;
     decoded.seconds = Math.round(buf.duration * 1000) / 1000;
     decoded.peak = Math.round(peak * 1000) / 1000;
     decoded.status = "decoded";
     note(`decodeAudioData: ${buf.numberOfChannels}ch, ${buf.length} frames @ ${buf.sampleRate} Hz`);
   } catch (e) {
-    // The advisory is the error message: a rejection here names the formats
-    // that WOULD have worked and the ones that never will.
+    // The advisory is the error message: a rejection here names the formats that WOULD have worked
+    // and the ones that never will.
     decoded.status = "failed";
     note(`decodeAudioData failed: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -295,16 +222,8 @@ function playDecoded() {
   note("decoded fixture: start");
 }
 
-// --- streaming PCM (RedStreamSourceNode) ------------------------------------
-//
-// NOT a browser API, and named so you can tell at a glance. This is the seam a
-// native producer — a LiveKit/WebRTC remote track, a decoder, a capture bridge
-// — pushes interleaved f32 frames into so they play out of the graph. The Rust
-// side is `redjs::webapi::pcm::sink(streamId)` → `PcmSink::push_interleaved`,
-// which is Send + Sync and never touches the JS context.
-//
-// Here we drive it from JS, which is the same pipe with a shorter cable: it is
-// what makes the seam demoable and testable without writing native code.
+// The Rust side is `redjs::webapi::pcm::sink(streamId)` → `PcmSink::push_interleaved`, which is
+// Send + Sync and never touches the JS context.
 
 const stream = reactive({ open: false, id: -1, pushed: 0, queued: 0, ready: false, under: false, over: false });
 let streamPhase = 0;
@@ -324,8 +243,8 @@ function openStream() {
   stream.open = true;
   stream.id = streamNode.streamId;
   stream.pushed = 0;
-  // The glitch flags latch until the stream is reopened, so reopening has to
-  // clear them — otherwise last session's overflow reads as this one's.
+  // The glitch flags latch until the stream is reopened, so reopening has to clear them —
+  // otherwise last session's overflow reads as this one's.
   stream.under = false;
   stream.over = false;
   streamClock = performance.now();
@@ -335,8 +254,6 @@ function openStream() {
 
 function closeStream() {
   if (!streamNode) return;
-  // Probed rather than assumed: making a late native push report NotReady is
-  // the seam's lifetime rule, and not every engine revision has the method.
   streamNode.close?.();
   streamNode.disconnect();
   streamNode = null;
@@ -345,37 +262,12 @@ function closeStream() {
   note("RedStreamSourceNode closed — further pushes are refused, not swallowed");
 }
 
-/** The buffer depth we open the channel with, in seconds. */
 const STREAM_TARGET_SECONDS = 0.08;
-/** Frames per push — 10 ms at 48 kHz, about what a voice codec hands you. */
 const STREAM_BLOCK = 480;
 
-let streamClock = 0; // performance.now() of the last feed
-let streamDebt = 0; // frames owed to the channel
+let streamClock = 0;
+let streamDebt = 0;
 
-/**
- * Called once per rAF while the stream is open: produce as many frames as REAL
- * TIME has passed, and push them.
- *
- * Pacing by the wall clock rather than by the buffer depth is the honest model,
- * and it is the one a LiveKit track actually has: the producer owns a clock
- * (the sender's), the device owns another, and the channel's job is to absorb
- * the difference. Two things you can only see by doing it this way:
- *
- * * `queuedSeconds` reads 80 ms the instant the node is created and nothing has
- *   been pushed — `fixed_resample` PRE-FILLS the channel with `latencySeconds`
- *   of silence so the device has something to read before the first frame
- *   arrives. A producer that waits for the queue to drop below the target
- *   therefore waits forever (the underflow corrector keeps topping it back up),
- *   which is exactly the bug this comment exists to stop someone rediscovering.
- * * rAF runs at the display rate — 165 Hz here — so a fixed block per frame is
- *   1.65× realtime and overflows continuously. The `overflowed` flag below is
- *   what tells you, and it is the reason it is worth surfacing.
- *
- * The catch-up is capped at 4 blocks: after a long stall (a tab switch, a
- * breakpoint) a producer should drop the missed audio, not dump 2 seconds of
- * stale voice into the channel at once.
- */
 function feedStream() {
   if (!streamNode || !streamBlock) return;
   const now = performance.now();
@@ -396,13 +288,9 @@ function feedStream() {
 
   stream.queued = Math.round((streamNode.queuedSeconds ?? 0) * 1000);
   stream.ready = streamNode.ready;
-  // Read-and-clear on the host side, so these latch here until the stream is
-  // reopened — which is what makes a rare glitch visible after the fact.
   if (streamNode.underflowed) stream.under = true;
   if (streamNode.overflowed) stream.over = true;
 }
-
-// --- suspend / resume -------------------------------------------------------
 
 async function toggleSuspend() {
   const a = ensureContext();
@@ -416,12 +304,8 @@ async function toggleSuspend() {
   state.ctxState = a.state;
 }
 
-// --- the rAF loop -----------------------------------------------------------
-
 let raf = 0;
 let alive = false;
-// The byte view the analyser fills. Allocated once — a new Uint8Array per frame
-// at 165 fps is 27 MB/s of garbage.
 let freqBytes: Uint8Array | null = null;
 let preTime: Float32Array | null = null;
 let postTime: Float32Array | null = null;
@@ -444,8 +328,7 @@ function frame() {
     if (stream.open) feedStream();
 
     preAnalyser.getByteFrequencyData(freqBytes!);
-    // Fold ~1024 linear bins into 48 bars. Logarithmic-ish widths, so the bass
-    // does not get one bar and the top octave forty.
+    // Logarithmic-ish widths, so the bass does not get one bar and the top octave forty.
     const out: number[] = new Array(BARS);
     const n = freqBytes!.length;
     for (let b = 0; b < BARS; b++) {
@@ -467,8 +350,6 @@ function frame() {
     state.currentTime = now;
     state.ctxState = a.state;
   }
-  // engine.d.ts declares rAF optional — the unit-test harness has no frame
-  // pump. Under vn-app it is the host's, one callback per PAINTED frame.
   raf = requestAnimationFrame!(frame);
 }
 
@@ -488,11 +369,10 @@ onMounted(() => {
   if (!supported) return;
   ensureContext();
   startLoop();
-  // `VN_SCENARIO=audio` — a soak with no input: tone running, output muted.
   if (globalThis.__VN_SCENARIO__ === "audio") setTimeout(startTone, 400);
 });
-// KeepAlive: the page's subtree is moved out of the tree, not unmounted, so the
-// rAF loop has to stop by hand or it keeps restyling an invisible page.
+// KeepAlive: the page's subtree is moved out of the tree, not unmounted, so the rAF loop has to
+// stop by hand or it keeps restyling an invisible page.
 onActivated(startLoop);
 onDeactivated(stopLoop);
 onUnmounted(() => {
@@ -501,20 +381,16 @@ onUnmounted(() => {
   closeStream();
 });
 
-// --- readouts ---------------------------------------------------------------
-
 const silent = computed(() => meters.post < 0.001);
 const recent = computed(() => log.value.slice(-9).reverse());
 
-// A capability matrix, read live off the objects rather than written down: a
-// row that says "no" because the method really is absent cannot go stale.
+// A capability matrix, read live off the objects rather than written down: a row that says "no"
+// because the method really is absent cannot go stale.
 const surface = computed<[string, string, string][]>(() => {
   if (!supported) return [];
   const a = ctx.value;
-  // The probe deliberately asks for keys the interface does not declare —
-  // several of these are ABSENT and the row saying so is the point. A
-  // `Record<string, unknown>` view is what "ask the object, do not trust the
-  // table" means in the type system.
+  // The probe deliberately asks for keys the interface does not declare — several of these are
+  // ABSENT and the row saying so is the point.
   const bag = a as unknown as Record<string, unknown> | null;
   const has = (k: string) => (bag && typeof bag[k] === "function" ? "yes" : "—");
   return [
@@ -542,7 +418,6 @@ const surface = computed<[string, string, string][]>(() => {
 
 <template>
   <div class="page">
-    <!-- ===== not supported ============================================== -->
     <div v-if="!supported" class="card">
       <div class="title">Web Audio</div>
       <div class="advisory">
@@ -558,7 +433,6 @@ const surface = computed<[string, string, string][]>(() => {
     </div>
 
     <template v-else>
-      <!-- ===== the graph ================================================= -->
       <div class="card">
         <div class="title">
           oscillator → analyser → gain → analyser → destination
@@ -569,7 +443,6 @@ const surface = computed<[string, string, string][]>(() => {
           the graph.
         </div>
 
-        <!-- the spectrum, 48 plain divs -->
         <div class="bars">
           <div
             v-for="(v, i) in bars"
@@ -624,8 +497,6 @@ const surface = computed<[string, string, string][]>(() => {
           <div class="btn small" @click="rampGain(0.0001, 1.5)">ramp ↓</div>
         </div>
 
-        <!-- The measurement. This is the part that makes "it works" checkable
-             without listening to anything. -->
         <div class="meters">
           <div class="meter">
             <span class="mlbl">pre-gain RMS</span>
@@ -641,7 +512,6 @@ const surface = computed<[string, string, string][]>(() => {
         </div>
       </div>
 
-      <!-- ===== context state ============================================= -->
       <div class="card">
         <div class="title">AudioContext — state, clock, device</div>
         <div class="kv">
@@ -678,7 +548,6 @@ const surface = computed<[string, string, string][]>(() => {
         </div>
       </div>
 
-      <!-- ===== AudioBuffer built in JS =================================== -->
       <div class="card">
         <div class="title">AudioBuffer — a chirp synthesized in JS</div>
         <div class="sub">
@@ -702,7 +571,6 @@ const surface = computed<[string, string, string][]>(() => {
         </div>
       </div>
 
-      <!-- ===== decodeAudioData =========================================== -->
       <div class="card">
         <div class="title">decodeAudioData — a WAV off disk</div>
         <div class="sub">
@@ -732,7 +600,6 @@ const surface = computed<[string, string, string][]>(() => {
         </div>
       </div>
 
-      <!-- ===== streaming PCM ============================================= -->
       <div class="card">
         <div class="titlerow">
           <div class="title">RedStreamSourceNode — streaming PCM in</div>
@@ -766,7 +633,6 @@ const surface = computed<[string, string, string][]>(() => {
         </div>
       </div>
 
-      <!-- ===== surface ==================================================== -->
       <div class="card">
         <div class="title">What is really here</div>
         <div class="sub">Read live off the object, not written down — a row cannot go stale.</div>
@@ -797,7 +663,6 @@ const surface = computed<[string, string, string][]>(() => {
         </div>
       </div>
 
-      <!-- ===== log ======================================================== -->
       <div class="card">
         <div class="title">Log</div>
         <div class="log">
@@ -840,7 +705,6 @@ const surface = computed<[string, string, string][]>(() => {
   border: 1px solid #ffd47940;
 }
 
-/* --- the spectrum ------------------------------------------------------- */
 .bars {
   display: flex;
   flex-direction: row;
@@ -862,7 +726,6 @@ const surface = computed<[string, string, string][]>(() => {
   background: #ff9f7fdd;
 }
 
-/* --- controls ----------------------------------------------------------- */
 .row {
   display: flex;
   flex-direction: row;
@@ -949,7 +812,6 @@ const surface = computed<[string, string, string][]>(() => {
   background: #ff9f7fcc;
 }
 
-/* --- meters ------------------------------------------------------------- */
 .meters {
   display: flex;
   flex-direction: row;
@@ -991,7 +853,6 @@ const surface = computed<[string, string, string][]>(() => {
   border-color: #7fffb040;
 }
 
-/* --- key/value + matrix -------------------------------------------------- */
 .kv {
   display: flex;
   flex-direction: row;
@@ -1048,7 +909,6 @@ const surface = computed<[string, string, string][]>(() => {
   color: #ffffff77;
 }
 
-/* --- advisories + log ---------------------------------------------------- */
 .advisory {
   padding: 10px;
   border-radius: 8px;
@@ -1063,9 +923,6 @@ const surface = computed<[string, string, string][]>(() => {
   background: #ffffff0d;
   border-color: #ffffff1a;
 }
-/* Inline elements do not reflow in this renderer — there is no inline layout
-   pass, so a <code> or a <b> inside a sentence becomes its own line. Prose is
-   therefore written as plain text and structure comes from stacked blocks. */
 .advisory .ahead {
   color: #ffffff;
   margin-bottom: 4px;

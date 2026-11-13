@@ -1,59 +1,19 @@
-//! The PUSH channel: a WebSocket server on the devtools port.
+//! The push channel: a WebSocket server on the devtools port.
 //!
-//! ```text
-//!   GET / HTTP/1.1                     one port, three framings, told apart
-//!   Upgrade: websocket        ────▶    by the first request line:
-//!                                        {…            NDJSON  (ctl.ts, vn-test)
-//!   ◀──── {"t":"logs",…}                 POST / HTTP…  HTTP    (a command)
-//!   ◀──── {"t":"perf",…}                 GET  / HTTP…  + Upgrade: websocket
-//!   ◀──── {"t":"tree","rev":…}                         THIS
-//! ```
+//! One port, three framings told apart by the first request line: `{` is NDJSON, `POST /` is HTTP
+//! (a command), `GET /` with `Upgrade: websocket` is this.
 //!
-//! ## Why this exists
+//! Once per frame, on the main thread, in the publication the command queue drains in, everything
+//! that moved is written to every attached socket: new log lines, a tree revision, a frame-time
+//! sample every quarter second, the status line, network entries.
 //!
-//! v1's inspector polled: `logs` every 700 ms, `tree` every 2500 ms, `pick`
-//! every 150 ms while picking. Every one of those costs the app under
-//! inspection a frame, and — the part a developer actually feels — a
-//! `console.log` took up to 700 ms to appear. "неудобное" is the exact word for
-//! a console that lags two thirds of a second behind the app.
+//! Hand-rolled on the existing port (already tokened and discoverable): the only WebSocket code in
+//! the process is redjs's client, which cannot answer an upgrade (it validates the accept key
+//! instead of computing it and rejects masked frames). What is reused is [`accept_key`] and the
+//! opcode constants.
 //!
-//! So the host pushes. Once per frame, on the main thread, inside the same
-//! publication the command queue drains in, everything that MOVED this frame is
-//! written to every attached socket: new log lines, a tree revision when the
-//! tree changed, a frame-time sample every quarter second, the status line when
-//! it changed, network entries when the app made a request. A log line now
-//! appears in the console in the frame after it was written, and the target
-//! pays for exactly what happened rather than for being asked.
-//!
-//! ## Why on the same port, and why hand-rolled
-//!
-//! The port already exists, already has a token, and is already discoverable
-//! (`<slot>/devtools.json`). A second listener would need a second handshake
-//! field, a second firewall answer and a second failure mode, and would buy
-//! nothing: RFC 6455's opening handshake IS an HTTP request, so the framing
-//! sniff in [`super::serve`] already gets the connection to the right place.
-//!
-//! The server half is ~200 lines here because the only WebSocket code in the
-//! process is redjs's **client** (`redjs::webapi::websocket`), and a client
-//! cannot answer an upgrade: it validates `Sec-WebSocket-Accept` instead of
-//! computing it, and it rejects masked frames (a server must never mask, and a
-//! client must always). What IS reused is the part that would have meant a new
-//! dependency — [`accept_key`] (SHA-1 + base64) and the opcode constants. So
-//! there is no `sha1` crate here, no `tungstenite`, and one implementation of
-//! the handshake hash in the process.
-//!
-//! ## What a client may send
-//!
-//! Very little, on purpose — this is a push channel, not a second command
-//! transport. Commands keep going over HTTP, where they are already serialized,
-//! already one-per-frame and already proven. A client may send:
-//!
-//! ```json
-//! {"since": 1234}                 the log cursor to stream from
-//! {"sub": ["logs","perf","tree"]} which streams it wants (default: all)
-//! ```
-//!
-//! …plus `ping` and `close`, which are the protocol's.
+//! Clients send little: `{"since": N}` (log cursor), `{"sub": ["logs","perf","tree"]}` (streams,
+//! default all), plus `ping` and `close`. Commands stay on HTTP.
 
 use std::io::{BufReader, Read, Write};
 use std::net::TcpStream;
@@ -65,18 +25,13 @@ use vn_runtime::redjs::webapi::websocket::{accept_key, OP_CLOSE, OP_PING, OP_PON
 
 use crate::json::{self, Json, Raw};
 
-/// How often a frame-time sample is pushed. Every frame would be 60-165
-/// messages a second to draw one sparkline point nobody can see.
+/// How often a frame-time sample is pushed.
 const PERF_EVERY_MS: u64 = 250;
 
-/// A socket that has stopped draining is a socket whose peer is wedged. Past
-/// this many queued messages it is dropped rather than allowed to grow the
-/// process — the same reasoning as the log ring's own bound.
+/// A socket that has stopped draining has a wedged peer: past this many queued messages it is
+/// dropped rather than allowed to grow the process.
 const MAX_QUEUED: usize = 512;
 
-// Which streams a subscriber asked for. Five constants rather than a
-// `bitflags` dependency, in a crate that has spent this much effort not
-// acquiring any.
 const WANT_LOGS: u32 = 1;
 const WANT_PERF: u32 = 2;
 const WANT_TREE: u32 = 4;
@@ -97,22 +52,13 @@ struct Sub {
 
 static SUBS: Mutex<Vec<Sub>> = Mutex::new(Vec::new());
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-/// Bumped every frame the retained tree changed, so a client refetches the tree
-/// because something moved rather than because 2.5 s went by.
+/// Bumped every frame the retained tree changed.
 static TREE_REV: AtomicU64 = AtomicU64::new(0);
 
-// ---------------------------------------------------------------------------
-// the upgrade
-// ---------------------------------------------------------------------------
-
-/// Answers `GET /` + `Upgrade: websocket` and then serves the connection until
-/// it closes. Called from [`super::serve_http`], which has already read the
-/// request line and the headers.
+/// Answers `GET /` + `Upgrade: websocket` and then serves the connection until it closes. Called
+/// from [`super::serve_http`] after it read the request line and headers.
 ///
-/// The token is checked from the query string (`/?token=…`), because a browser
-/// `WebSocket` constructor cannot set a header — and neither can redjs's, which
-/// is the client this exists for. Same token, same guard, same threat model as
-/// every other framing on this port.
+/// The token is checked from the query string (`/?token=…`) because a browser `WebSocket` cannot set a header.
 pub fn serve(target: &str, headers: &[(String, String)], mut out: TcpStream, reader: BufReader<TcpStream>) {
     let generation = super::ACCEPT_GEN.load(Ordering::SeqCst);
     let header = |name: &str| {
@@ -133,9 +79,7 @@ pub fn serve(target: &str, headers: &[(String, String)], mut out: TcpStream, rea
         return;
     }
     if !session_matches(super::enabled(), generation, super::ACCEPT_GEN.load(Ordering::SeqCst)) || !token_ok(target) {
-        // Not a 401: this is the same "bad or missing token" the other two
-        // framings answer, and a client that gets it should read the handshake
-        // file rather than retry with credentials.
+        // Not a 401: it is the same "bad or missing token" the other framings answer.
         let _ = out.write_all(
             b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
         );
@@ -159,16 +103,13 @@ pub fn serve(target: &str, headers: &[(String, String)], mut out: TcpStream, rea
     let since = query_number(target, "since").unwrap_or(0.0) as u64;
     let socket = match out.try_clone() { Ok(socket) => socket, Err(_) => return };
     {
-        // Linearize admission with close_all. A handshake that was accepted
-        // before disable cannot register after its session was revoked.
+        // Linearize admission with close_all: a handshake accepted before disable cannot register after its session was revoked.
         let mut subs = SUBS.lock().unwrap_or_else(|error| error.into_inner());
         if !session_matches(super::enabled(), generation, super::ACCEPT_GEN.load(Ordering::SeqCst)) || !token_ok(target) { return; }
         subs.push(Sub { id, tx: tx.clone(), queued: queued.clone(), cursor: since, want: WANT_ALL, socket });
     }
 
-    // The writer owns the socket's write half for the rest of its life, so the
-    // main thread never does I/O: `broadcast` puts bytes on a channel and
-    // returns, whatever the peer's network stack is doing.
+    // The writer owns the write half, so the main thread never does I/O: `broadcast` only queues.
     let writer_queued = queued.clone();
     let mut write_half = match out.try_clone() {
         Ok(w) => w,
@@ -187,7 +128,7 @@ pub fn serve(target: &str, headers: &[(String, String)], mut out: TcpStream, rea
                 }
                 let _ = write_half.flush();
             }
-            // Best-effort courtesy close; the peer may already be gone.
+            // Best-effort close; the peer may already be gone.
             let _ = write_half.write_all(&encode(OP_CLOSE, &1000u16.to_be_bytes()));
             let _ = write_half.shutdown(std::net::Shutdown::Both);
         })
@@ -213,7 +154,6 @@ fn token_ok(target: &str) -> bool {
 
 fn token_matches(expected: &str, supplied: &str) -> bool { !expected.is_empty() && expected == supplied }
 fn session_matches(enabled: bool, requested: u64, current: u64) -> bool { enabled && requested == current }
-
 
 /// `/?token=abc&since=12` → the value of one parameter.
 fn query_string(target: &str, name: &str) -> Option<String> {
@@ -264,16 +204,11 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-// ---------------------------------------------------------------------------
-// reading the client
-// ---------------------------------------------------------------------------
-
 fn read_loop(id: u64, mut reader: BufReader<TcpStream>, tx: &Sender<Vec<u8>>, queued: &Arc<AtomicUsize>) {
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
     loop {
-        // Decode everything already buffered before asking for more, so a
-        // client that pipelines two frames into one packet is not stalled.
+        // Decode everything already buffered first, so two pipelined frames in one packet are not stalled.
         loop {
             match parse_client_frame(&buf) {
                 Err(e) => {
@@ -290,8 +225,7 @@ fn read_loop(id: u64, mut reader: BufReader<TcpStream>, tx: &Sender<Vec<u8>>, qu
                         }
                         OP_PONG => {}
                         OP_TEXT => on_text(id, &String::from_utf8_lossy(&payload)),
-                        // A binary frame from a client that has nothing to say
-                        // in binary. Ignored rather than fatal.
+                        // Binary frames are ignored, not fatal.
                         _ => {}
                     }
                 }
@@ -327,11 +261,8 @@ fn on_text(id: u64, text: &str) {
     }
 }
 
-/// One frame off the front of `buf`, unmasked. `Ok(None)` = need more bytes.
-///
-/// This is the mirror image of redjs' `parse_frame`: a CLIENT frame must be
-/// masked (RFC 6455 §5.3), where a server frame must not be, and accepting an
-/// unmasked one would mean reading four bytes of payload as a mask key.
+/// One frame off the front of `buf`, unmasked. `Ok(None)` = need more bytes. A client frame must be
+/// masked (RFC 6455), and reading an unmasked one would take payload bytes as the mask key.
 fn parse_client_frame(buf: &[u8]) -> Result<Option<(u8, Vec<u8>, usize)>, String> {
     if buf.len() < 2 {
         return Ok(None);
@@ -358,8 +289,7 @@ fn parse_client_frame(buf: &[u8]) -> Result<Option<(u8, Vec<u8>, usize)>, String
             let n = u64::from_be_bytes([
                 buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9],
             ]);
-            // The only client is an inspector sending a 40-byte subscription
-            // object; anything at this scale is a bug or an attack.
+            // The only client sends a tiny subscription object; anything this large is a bug or an attack.
             if n > (1 << 20) {
                 return Err(format!("a client frame of {n} bytes exceeds the 1 MiB cap"));
             }
@@ -411,21 +341,14 @@ fn drop_sub(id: u64) {
     }
 }
 
-/// Drops every attached socket. Called by `appDevtools.disable()`
-/// (`super::stop_listener`).
-///
-/// Dropping a `Sub` drops its `Sender`, which ends that socket's writer thread,
-/// which closes the socket — so an inspector attached to an app that turns its
-/// devtools off sees its feed close rather than going quietly stale. A closing
-/// handshake would be politer and is not worth a second code path: the peer is
-/// a client that already treats a closed socket as "reattach or give up".
+/// Drops every attached socket (`appDevtools.disable()`), so an attached inspector sees its feed
+/// close rather than go stale.
 pub fn close_all() {
     let subscribers = {
         let mut subs = SUBS.lock().unwrap_or_else(|error| error.into_inner());
         std::mem::take(&mut *subs)
     };
-    // serve/read_loop also retain senders. Closing only the registry does not
-    // disconnect their writer channel; shutdown wakes both blocked I/O halves.
+    // serve/read_loop also retain senders, so dropping the registry does not disconnect the writer channel; shutdown wakes both blocked I/O halves.
     for subscriber in subscribers {
         let _ = subscriber.socket.shutdown(std::net::Shutdown::Both);
     }
@@ -450,13 +373,7 @@ fn hello() -> String {
     .to_json()
 }
 
-// ---------------------------------------------------------------------------
-// the push, once per frame, on the main thread
-// ---------------------------------------------------------------------------
-
-/// The retained tree changed this frame. Called from the frame pump with the
-/// value `vn_tree::flush_changes()` already computed, so this costs nothing
-/// when nothing moved.
+/// The retained tree changed this frame.
 pub fn note_tree_changed() {
     TREE_REV.fetch_add(1, Ordering::Relaxed);
 }
@@ -468,21 +385,16 @@ thread_local! {
     static LAST_TREE_REV: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// Everything that moved this frame, to everybody attached.
-///
-/// Called from `pump_frame` inside the same publication the command queue
-/// drains in, so what a socket is told about frame N is what a command running
-/// on frame N would have seen. Returns immediately when nobody is attached,
-/// which is the state a host is in for its whole life unless somebody opened an
-/// inspector on it.
+/// Everything that moved this frame, to everybody attached. Runs in the command queue's
+/// publication, so a socket is told what a command on the same frame would see. Returns at once
+/// when nobody is attached.
 pub fn broadcast_frame() {
     let Ok(mut subs) = SUBS.lock() else { return };
     if subs.is_empty() {
         return;
     }
 
-    // -- logs. One `since` over the oldest cursor, sliced per subscriber, so N
-    //    sockets do not walk the ring N times.
+    // logs: one `since` over the oldest cursor, sliced per subscriber, so N sockets do not walk the ring N times.
     let want_logs = subs.iter().any(|s| s.want & WANT_LOGS != 0);
     if want_logs {
         let oldest = subs
@@ -537,9 +449,7 @@ pub fn broadcast_frame() {
         }
     }
 
-    // -- the tree revision. A number, not a tree: the client decides whether it
-    //    is looking at Elements before spending a frame of the target's budget
-    //    on a `tree` command.
+    // The tree revision: a number, not a tree, so the client decides whether to spend the target's frame on a `tree` command.
     let rev = TREE_REV.load(Ordering::Relaxed);
     if LAST_TREE_REV.with(|c| c.replace(rev)) != rev {
         broadcast(&mut subs, WANT_TREE, &Json::obj(vec![
@@ -548,7 +458,6 @@ pub fn broadcast_frame() {
         ]).to_json());
     }
 
-    // -- the status line, when it changed.
     if let Some(status) = vn_tree::log::status() {
         let changed = LAST_STATUS.with(|s| {
             if *s.borrow() == status {
@@ -566,19 +475,16 @@ pub fn broadcast_frame() {
         }
     }
 
-    // -- network entries the JS tee recorded since last time.
     let net = super::net::drain();
     if !net.is_empty() {
         broadcast(&mut subs, WANT_NET, &Json::obj(vec![
             ("t", Json::s("net")),
             ("entries", Json::arr(net.into_iter().map(|raw| Json::from(Raw(raw))).collect())),
-            // The transport's counters as of these entries; they only move
-            // when a request does, so riding the entries keeps them current.
+            // Transport counters only move when a request does, so they ride the entries.
             ("pool", super::net::pool_json()),
         ]).to_json());
     }
 
-    // -- frame stats, four times a second.
     let now = std::time::Instant::now();
     let due = LAST_PERF.with(|c| match c.get() {
         Some(t) if now.duration_since(t).as_millis() < u128::from(PERF_EVERY_MS) => false,

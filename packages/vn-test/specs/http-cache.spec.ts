@@ -1,15 +1,3 @@
-// The disk HTTP cache in a real host (docs/STORAGE.md §12; redjs
-// webapi/http/cache.rs, crates/vn-storage/src/http_cache.rs). The owner's
-// report was "images get downloaded again every time", so the test is a
-// relaunch: the second process shows every picture without one request.
-//
-//   bun test packages/vn-test/specs/http-cache.spec.ts
-//
-// The images come the way Argon's do (fixtures/http-images/server.ts): a 302
-// with `private, max-age=300`, then a 30-day CDN answer with validators. Each
-// hop is cached on its own terms. The app runs under its own VN_APP_NAME, so
-// its storage and cache folders are this run's alone, and removed at the end.
-
 import { afterAll, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -29,8 +17,6 @@ let app: VnApp | null = null;
 afterAll(async () => {
   await app?.close();
   srv.stop();
-  // The host's handles (the cache's lock among them) can outlive its window
-  // by a moment.
   for (let i = 0; ; i++) {
     try {
       rmSync(ROOT, { recursive: true, force: true });
@@ -91,12 +77,10 @@ test(
     expect(c.entries).toBe(2 * N);
     expect(c.stored).toBe(2 * N);
     expect(c.dir.toLowerCase()).toBe(CACHE.toLowerCase());
-    // The loads are Network rows, though no script made them.
     const net = (await app!.send("net", { since: 0 })) as any;
     const rows = net.entries.filter((e: any) => e.kind === "img");
     expect(rows.length).toBe(N);
     expect(rows.every((e: any) => e.cache === "stored" && e.status === 200 && e.proto)).toBe(true);
-    // And `mem` carries the same block.
     expect(((await app!.send("mem")) as any).httpCache.entries).toBe(2 * N);
   },
   T,
@@ -115,7 +99,6 @@ test(
     expect(c.hits).toBe(2 * N);
     const rows = ((await app!.send("net", { since: 0 })) as any).entries.filter((e: any) => e.kind === "img");
     expect(rows.length).toBe(N);
-    // "(disk cache)": no connection at all.
     expect(rows.every((e: any) => e.cache === "hit" && e.conn === undefined)).toBe(true);
   },
   T,
@@ -125,22 +108,17 @@ test(
   "fetch's cache modes, from the page",
   async () => {
     srv.reset();
-    // default: fresh on disk, so no request.
     expect(await get(srv.cdn(0))).toMatchObject({ status: 200, bytes: expect.any(Number) });
     expect(srv.seen.log).toEqual([]);
-    // no-store: to the server, unconditionally.
     await get(srv.cdn(0), { cache: "no-store" });
     expect(srv.seen.log).toEqual(["GET /cdn/0.png 200"]);
-    // no-cache: to the server, conditionally; its 304 serves the stored body.
     const nc = await get(srv.cdn(0), { cache: "no-cache" });
     expect(nc.status).toBe(200);
     expect(srv.seen.notModified).toBe(1);
-    // only-if-cached: a miss is a network error, and nothing is sent.
     const before = srv.seen.log.length;
     const miss = await get(srv.cdn(999), { cache: "only-if-cached", mode: "same-origin" });
     expect(miss.error).toContain("only-if-cached");
     expect(srv.seen.log.length).toBe(before);
-    // force-cache through the redirect: both hops from disk.
     const fc = await get(srv.file(1), { cache: "force-cache" });
     expect(fc).toMatchObject({ status: 200, redirected: true, url: srv.cdn(1) });
     expect(srv.seen.log.length).toBe(before);

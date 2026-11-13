@@ -1,6 +1,4 @@
-//! Native CSS Font Loading objects. The loader and matching authority are in
-//! `fonts`; JSC private slots trace every promise, listener and member. There
-//! is no script state machine, source evaluation, JSON polling or callback IPC.
+//! Native CSS Font Loading objects.
 use crate::fonts::{self, Descriptors, Snapshot, Status};
 use std::{cell::RefCell, collections::HashMap, ffi::c_void};
 use vn_runtime::redjs::{
@@ -31,8 +29,7 @@ unsafe fn api(g: *mut c_void) -> Api {
     let id = context::id_of(g).expect("registered JSC context");
     APIS.with(|s| *s.borrow().get(&id).expect("FontFace API installed"))
 }
-/// A Rust local is not an ownership edge in the JS heap. Root values across
-/// arbitrary descriptor getters, listener calls, allocation and collection.
+/// A Rust local is not an ownership edge in the JS heap.
 struct Root(*mut c_void, u64);
 impl Root {
     unsafe fn new(g: *mut c_void, v: u64) -> Self {
@@ -170,7 +167,6 @@ unsafe fn iterable(g: *mut c_void, value: u64) -> Result<(Vec<u64>, Vec<Root>), 
         if glue::rjs_to_boolean(g, u::try_get(g, step, "done")?) != 0 {
             return Ok((out, roots));
         }
-        // Store each yielded value in a traced array as the iterator may GC.
         let value = u::try_get(g, step, "value")?;
         roots.push(Root::new(g, value));
         if face_bag(g, value).is_none() {
@@ -179,7 +175,6 @@ unsafe fn iterable(g: *mut c_void, value: u64) -> Result<(Vec<u64>, Vec<Root>), 
             return Err(());
         }
         out.push(value);
-        // FontFace values are canonical roots; other callers validate below.
         if out.len() > 1_000_000 {
             u::throw_type_error(g, "FontFace sequence is too large");
             return Err(());
@@ -253,7 +248,6 @@ unsafe fn new_face(g: *mut c_void, new_target: u64, values: &[String], id: u32, 
         put(g, b, name, u::js_string(g, v));
     }
     let p = promise(g, b, "loaded");
-    // A malformed construction can reject before the application reads loaded.
     // Mark that original promise handled without changing its identity/result.
     let catch = u::get(g, p, "catch");
     let _ = u::call(g, catch, p, &[a.noop]);
@@ -270,8 +264,7 @@ unsafe fn canonical(g: *mut c_void, s: &Snapshot) -> u64 {
     }
     new_face(g, u::UNDEF, &snapshot_values(s), s.id, s.css)
 }
-// WeakRef targets are protected across callbacks/checkpoints. No untraced
-// Rust vector is the only owner of a live set while a listener can collect.
+// No untraced Rust vector is the only owner of a live set while a listener can collect.
 unsafe fn for_sets(g: *mut c_void, mut visit: impl FnMut(u64)) {
     let a = api(g);
     let refs = u::get(g, a.root, "sets");
@@ -343,7 +336,6 @@ unsafe fn settle(g: *mut c_void, face: u64, status: &str, message: &str, syntax:
         },
     );
     let _f = Root::new(g, f);
-    // Clear callbacks before resolving: a then getter or reaction can reenter.
     put(g, b, "loadedResolve", u::UNDEF);
     put(g, b, "loadedReject", u::UNDEF);
     let _ = u::call(
@@ -389,8 +381,8 @@ unsafe fn loading(g: *mut c_void, set: u64) -> Vec<u64> {
         .filter(|f| face_bag(g, *f).is_some_and(|b| text(g, b, "status") == "loading"))
         .collect()
 }
-/// A retained pending promise must keep its owner alive even when script
-/// drops the FontFaceSet itself. Settled unused sets remain weakly tracked.
+/// A retained pending promise must keep its owner alive even when script drops the FontFaceSet
+/// itself.
 unsafe fn refresh_active(g: *mut c_void, set: u64) {
     let Some(b) = set_bag(g, set) else {
         return;
@@ -711,13 +703,11 @@ host_fn!(fn set_check(g,args){
     let values=match selected(g,args.this().0,args.arg(0).0,args.arg(1).0){Ok(Some(v))=>v,Ok(None)=>return domexception::throw(g,"SyntaxError","Invalid font shorthand"),Err(())=>return u::UNDEF};
     u::enc_bool(values.iter().all(|v|text(g,face_bag(g,*v).unwrap(),"status")=="loaded"))
 });
-// Set.load's aggregate is held in the set's private pending array. It does
-// not need JS closures, source evaluation or untraced Rust-held JS references.
+// It does not need JS closures, source evaluation or untraced Rust-held JS references.
 unsafe fn finish_loads(g: *mut c_void, set: u64) {
     let b = set_bag(g, set).unwrap();
     let pending = u::get(g, b, "pending");
     let _pending = Root::new(g, pending);
-    // Detach before any resolution; user then getters can start another load.
     put(g, b, "pending", u::new_array(g));
     for job in items(g, pending) {
         let faces = items(g, u::get(g, job, "faces"));
@@ -857,9 +847,8 @@ pub(crate) fn install(rt: &JsRuntime) {
         let global = glue::rjs_global(g);
         let root_atom = u::atom_priv(g, "vn#fontsRoot");
         glue::rjs_define(g, global, root_atom, root, 1 | 2 | 4);
-        let iterator = glue::rjs_atom_wellknown(g, 0); // Symbol.iterator
+        let iterator = glue::rjs_atom_wellknown(g, 0);
         glue::rjs_define(g, set.proto, iterator, u::get(g, set.proto, "values"), 2);
-        // WebIDL setlike aliases share function identity.
         u::define(g, set.proto, "keys", u::get(g, set.proto, "values"), 2);
         let array_proto = u::get(g, u::get(g, global, "Array"), "prototype");
         let weak_ctor = u::get(g, global, "WeakRef");
@@ -895,8 +884,7 @@ pub(crate) fn install(rt: &JsRuntime) {
     }
 }
 
-/// Called only inside the frame's JS wave. Events are typed native data; the
-/// authoritative snapshot also makes stylesheet changes visible synchronously.
+/// Called only inside the frame's JS wave.
 pub(crate) fn deliver(rt: &JsRuntime, changes: &[(u32, &'static str, String)]) {
     unsafe {
         let g = rt.raw();
@@ -923,8 +911,6 @@ pub(crate) fn deliver(rt: &JsRuntime, changes: &[(u32, &'static str, String)]) {
                     }
                 });
             }
-            // A face can begin and finish in the same native tick (e.g. an invalid
-            // local source). Preserve the observable loading/done/error sequence.
             for_sets(g, |set| {
                 state(g, set);
                 finish_loads(g, set);

@@ -1,23 +1,3 @@
-// `<img src="blob:…">` on the real host (m25 desktop track B —
-// research/reports/m25/desktop-b-impl.md, docs/DESKTOP.md "File layer").
-//
-//   bun test packages/vn-test/specs/blob-url.spec.ts
-//
-// redjs proves the store (webapi/url.rs tests) and vn-tree proves what a
-// resolved target becomes (img.rs tests, on targets built by hand). What only
-// the host can prove is the link between them: that vn-tree, on the render
-// walk, finds the URL a script made in the SAME context's store through
-// `JsRuntime::try_with`, and that gpui paints the bytes. A path-backed File
-// cannot be made from script yet (track C adds the picker), so the picture
-// here comes from bytes in memory; the by-path arm is the same lookup.
-//
-// `fixtures/blob-url` is the app. Its three <img>s: a live URL (red), a URL
-// revoked before the <img> saw it (broken, one advisory), and a slice of a
-// larger Blob (red: the URL names a window, not all of its bytes). The same
-// URLs also go through redjs's own loaders on the host's runtime, an
-// offscreen `new Image()` and `createImageBitmap` (the review round's
-// finding 1).
-
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { expect, launch, readPng, type VnApp } from "../src/index";
 
@@ -33,8 +13,6 @@ afterAll(async () => {
 const T = 30_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** The share of `sel`'s box (inset, so borders and anti-aliasing do not
- *  count) that is pure-ish red in a fresh screenshot. */
 async function redShare(a: VnApp, sel: string): Promise<number> {
   const box = (await a.query(sel)).nodes[0]!.bounds!;
   const shot = readPng(await a.screenshot());

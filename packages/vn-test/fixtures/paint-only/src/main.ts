@@ -1,13 +1,3 @@
-// A fixture for packages/vn-test/specs/paint-only.spec.ts: a picture that
-// changes in a box that does not move is shown by a present of the frame
-// already drawn, not by a build (docs/ARCHITECTURE.md decision 28,
-// crates/vn-tree/src/live.rs).
-//
-// `#vid` plays apps/hello's 2 s, 160x90 clip in a loop, muted. `#cv` is a
-// 64x64 canvas that `__VN_TEST_PAINT__.start(color)` fills with `color` on
-// every animation frame until `stop()`. The colour can change while it runs
-// (`state.color`), which is what the spec reads back from the screen.
-// Render functions rather than an SFC, for the reason fixtures/layout gives.
 import { createApp, h } from "vue-native";
 
 const state = {

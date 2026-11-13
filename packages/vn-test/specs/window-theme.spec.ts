@@ -1,15 +1,3 @@
-// `appWindow.theme`, Electron's `nativeTheme.themeSource` (docs/WINDOWING.md
-// §4.5), on the real host.
-//
-//   bun test packages/vn-test/specs/window-theme.spec.ts
-//
-// Argon's host config drives it from `appearance.Theme`, as the Electron shell
-// does at window creation (apps/client src/lib/vn/hostConfig.ts). Two things
-// follow it: the window's dark mode in DWM, which tints Mica, read back as
-// `systemDarkMode`; and `prefers-color-scheme`. Whatever the machine's own
-// theme is, the spec forces the other one first, so a change is always seen.
-// Any window will do, so this borrows the small call-timer fixture.
-
 import { afterAll, describe, expect, test } from "bun:test";
 import { launch } from "../src/index";
 

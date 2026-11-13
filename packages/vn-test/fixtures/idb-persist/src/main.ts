@@ -1,21 +1,3 @@
-// A fixture for packages/vn-test/specs/indexeddb-disk.spec.ts (m25 P2,
-// research/reports/m25/indexeddb-p2-impl.md): IndexedDB ON DISK, across real
-// restarts of the host.
-//
-// Boot, in this order, because IndexedDB latches its folder and key at its
-// first use:
-//   1. the launch's own argv picks the encryption — `encrypt` calls
-//      `appStorage.setStorageFolder(<the current folder>, { encrypted: true })`,
-//      `decrypt` the same with `{ encrypted: false }`, `keep` the same with no
-//      options at all (which must change no format), none of them calls
-//      nothing (the sticky rule decides);
-//   2. the database opens. A failure is RENDERED (`#status` = `failed: <name>`)
-//      rather than thrown: the second-instance test reads it.
-//
-// `__VN_TEST_IDB__.run(name, ...args)` starts a scenario over the devtools
-// `eval` and records how it settled into `results[name]` (a promise does not
-// survive the round trip): `put key value`, `get key`, `open`, `databases`,
-// `info`, `late true|false|keep`.
 import { appLaunch, appStorage, createApp, h, onMounted, ref } from "vue-native";
 
 const req = <T>(q: VnIDBRequest<T>): Promise<T> =>
@@ -56,7 +38,6 @@ const scenarios: Record<string, (...args: string[]) => Promise<string>> = {
     const v = (await req(db!.transaction("kv").objectStore("kv").get(key))) as { value: string } | undefined;
     return v ? v.value : "<missing>";
   },
-  /** Opens the database now (the second instance retries after the first exits). */
   async open() {
     db = await openKv();
     status.value = "ready";
@@ -72,7 +53,6 @@ const scenarios: Record<string, (...args: string[]) => Promise<string>> = {
   async info() {
     return JSON.stringify(appStorage.info().indexedDB);
   },
-  /** A setStorageFolder AFTER IndexedDB started — for the next start. */
   async late(encrypted: string) {
     if (encrypted === "keep") appStorage.setStorageFolder(appStorage.folder);
     else appStorage.setStorageFolder(appStorage.folder, { encrypted: encrypted === "true" });

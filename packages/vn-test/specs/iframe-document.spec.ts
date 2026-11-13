@@ -1,14 +1,3 @@
-// `<iframe>` with a document: the platform's webview behind the element
-// (crates/vn-webview; research/reports/m26/iframe-webview-requirements-
-// 2026-11-12.md, whose R numbers the tests cite).
-//
-// The fixture mounts an iframe the way Argon's PlayFrame host does and loads
-// fixtures/iframe/public/game.html, which speaks the way a PlayFrame game
-// does. Skipped where the host has no webview (`vnFeatures.iframe` false);
-// specs/iframe.spec.ts covers that path.
-//
-//   bun test packages/vn-test/specs/iframe-document.spec.ts
-
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -25,7 +14,6 @@ afterAll(async () => {
   if (!closed) await app.close();
 });
 
-/** The browser processes serving this fixture's documents (its profile is `vn-test-iframe\webview`). */
 const browserProcesses = (): number => {
   const out = spawnSync(
     "powershell.exe",
@@ -50,7 +38,6 @@ const until = async (done: (s: State) => boolean, ms = 20_000) => {
     await new Promise((r) => setTimeout(r, 50));
   }
 };
-/** The payloads of the game's messages of one type, in arrival order. */
 const messages = (s: State, type: string) =>
   s.log
     .filter((l) => l.startsWith("message "))
@@ -73,11 +60,8 @@ describe("<iframe> with a document", () => {
       expect(s.log.filter((l) => l === "load")).toEqual(["load"]);
       expect(s.log).not.toContain("error");
       const [hello] = messages(s, "hello");
-      // The source is THIS iframe's window; a sandboxed frame's origin is "null".
       expect([hello.who, hello.origin]).toEqual(["mine", "null"]);
-      // It is a real iframe: it has a parent, and an opaque origin of its own.
       expect([hello.data.framed, hello.data.origin]).toEqual([true, "null"]);
-      // The document's viewport is the element's box.
       expect(hello.data.size).toEqual([320, 240]);
     },
     T,
@@ -115,7 +99,6 @@ describe("<iframe> with a document", () => {
       const { tried } = messages(s, "escaped")[0].data;
       expect(tried.top).toBe("SecurityError");
       expect(tried.parentDoc).toBe("SecurityError");
-      // Still alive and still the same document: the top-level page did not navigate.
       await app.eval(`document.querySelector("#slot iframe").contentWindow.postMessage({ type: "ping", n: 99 }, "*")`);
       const after = await until((s) => messages(s, "echo").some((m) => m.data.data?.n === 99));
       expect(messages(after, "hello").length).toBe(1);
@@ -126,8 +109,6 @@ describe("<iframe> with a document", () => {
   it(
     "the document shows in the element's box, composed under the page (R5.1, R5.2)",
     async () => {
-      // The webview is composited by the OS under the app's surface, so only
-      // the composed window has it; the app's own scene has a hole there.
       const shot = await app.send("screenshot", {
         path: join(tmpdir(), `vn-iframe-composed-${process.pid}.png`),
         backend: "print_window",
@@ -138,8 +119,6 @@ describe("<iframe> with a document", () => {
         const py = Math.round(y * shot.scale + shot.clientY);
         return Array.from(png.data.slice((py * png.width + px) * 4, (py * png.width + px) * 4 + 3));
       };
-      // The element is at 20,10 and 320 × 240; game.html is green with a red
-      // 60 × 40 box in its corner.
       expect(at(20 + 160, 10 + 200)).toEqual([0, 160, 80]);
       expect(at(20 + 30, 10 + 20)).toEqual([200, 30, 30]);
       expect(at(20 + 2, 10 + 238)).toEqual([0, 160, 80]);
@@ -166,13 +145,11 @@ describe("<iframe> with a document", () => {
     "the element is a focusable area: a press and focus() make it the active element (R6.3)",
     async () => {
       const active = () => app.eval(`document.activeElement === document.querySelector("#slot iframe")`);
-      // The press above focused it, as a press on an iframe does in a browser.
       expect(await active()).toBe(true);
       await app.eval(`document.querySelector("#slot iframe").blur()`);
       expect(await active()).toBe(false);
       await app.eval(`document.querySelector("#slot iframe").focus({ preventScroll: true })`);
       expect(await active()).toBe(true);
-      // The document is still the same one, and still answers.
       await app.eval(`document.querySelector("#slot iframe").contentWindow.postMessage({ type: "ping", n: 7 }, "*")`);
       await until((s) => messages(s, "echo").some((m) => m.data.data?.n === 7));
     },
@@ -220,7 +197,6 @@ describe("<iframe> with a document", () => {
   (process.platform === "win32" ? it : test.skip)(
     "the app closing ends the browser: no process is left behind (R7.3)",
     async () => {
-      // A second document, live at the moment the app goes.
       await app.eval("__VN_TEST_IFRAME__.mount('/game.html')");
       await until((s) => messages(s, "hello").length === 2);
       expect(browserProcesses()).toBeGreaterThan(0);

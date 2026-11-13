@@ -1,21 +1,5 @@
-// <input type=file>, the File System Access pickers, FileReader and
-// <a download>, through a real host (m25 desktop track C,
-// research/reports/m25/desktop-c-impl.md, docs/DESKTOP.md "Pickers and files").
-//
-//   bun test packages/vn-test/specs/files.spec.ts
-//
-// vn-test launches every host with VN_DIALOGS=scripted. Every dialog here runs
-// on its own dialog thread as a real one would, owned and queued the same way,
-// and waits for `app.answerDialog()` instead of a person. So this spec opens no
-// OS dialog on the machine it runs on. What it pins is everything on both sides
-// of that seam:
-// - which gestures open a picker, and that none opens without one;
-// - what the dialog is asked for (kind, multiple, filters, suggested name);
-// - that the answer becomes Files and handles the page can read and write;
-// - that a cancel is a `cancel` event;
-// - that a download writes the blob's bytes where the user "saved" it;
-// - that no path reaches JS.
-// The files are in a temp folder of this run, removed afterwards.
+// Every dialog here runs on its own dialog thread as a real one would, owned and queued the same
+// way, and waits for `app.answerDialog()` instead of a person.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -47,7 +31,6 @@ afterAll(async () => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-/** Polls until `pred` holds or the deadline passes; returns the last value. */
 async function until<V>(read: () => Promise<V>, pred: (v: V) => boolean, ms = 5_000): Promise<V> {
   const deadline = Date.now() + ms;
   for (;;) {
@@ -151,7 +134,6 @@ describe("file dialogs on the host (VN_DIALOGS=scripted)", () => {
     await until(async () => existsSync(saved) && readFileSync(saved, "utf8"), (v) => v === "a,b\n1,2\n");
     bunExpect(readFileSync(saved, "utf8")).toBe("a,b\n1,2\n");
     const { entries } = await app.logs(0);
-    // A compat advisory is a `warn` line with the "[vue-native compat]" prefix.
     bunExpect(entries.filter((e) => e.text.includes("<a download> (D-F6)")).length).toBe(1);
   }, T);
 

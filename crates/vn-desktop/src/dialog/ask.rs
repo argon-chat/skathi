@@ -1,77 +1,48 @@
-//! A question with buttons, asked as a modal of a window: the permission
-//! prompt (crates/vn-permissions `consent`, docs/PERMISSIONS.md §5.1).
+//! A question with buttons, asked as a modal of a window (the permission prompt).
 //!
-//! It follows the file dialogs' threading and owner rules (mod.rs):
-//!
-//! - It is owned by the window published for the call that asks.
-//! - It waits behind a dialog that window already has open, as a download
-//!   does, rather than being refused.
-//! - Its modal loop runs on a `vn-ask` thread of its own, so the frame thread
-//!   keeps pumping.
-//! - It closes when its owner starts to close. vn-app destroys that window
-//!   only once the loop has exited (`owner_closing` / `is_idle`).
-//! - Under `VN_DIALOGS=scripted` it never reaches the OS. It waits for the
-//!   devtools `dialog choose` (a button) or `dialog cancel` (Esc).
-//!
-//! On Windows it is a TaskDialog (win.rs). TaskDialog makes it modal to its
-//! owner only, gives it the keyboard (Tab, the arrow keys, Enter, the `&`
-//! access keys) and makes Esc and the close box a dismissal.
-//!
-//! A caller may show the question itself instead ([`ask_with`]): vn-app's
-//! permission prompt is a window of its own on Windows. Everything above
-//! still holds for it (the owner, the queue, the close, the scripted seam);
-//! only the native dialog is replaced, and a presenter that fails falls back
-//! to it.
+//! Threading and owner rules are the file dialogs' (mod.rs): owned by the window published for
+//! the call, queued behind that window's open dialog, run on a `vn-ask` thread, and closed when
+//! the owner starts closing (vn-app destroys the owner only after the loop exits: `owner_closing`
+//! / `is_idle`). Under `VN_DIALOGS=scripted` the devtools answer with `dialog choose` /
+//! `dialog cancel`. On Windows it is a TaskDialog (win.rs). [`ask_with`] lets a caller show the
+//! question itself; a failing presenter falls back to the native dialog.
 
 use super::*;
 
-/// What to ask.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ask {
     /// What is asking, for the log and `dialog list`: `"permission"`.
     pub what: &'static str,
-    /// The window title: the app's name.
     pub title: String,
-    /// The question, in the dialog's large type.
     pub instruction: String,
-    /// A sentence or two under it.
     pub content: String,
     /// The buttons, in order. `&` marks the access key.
     pub buttons: Vec<String>,
-    /// The button Enter presses.
     pub default: usize,
 }
 
-/// Called exactly once: with the index of the button pressed, or `None` for a
-/// dismissal (Esc, the close box, the owner window closing, or nobody able to
-/// answer).
+/// Called exactly once: the index of the button pressed, or `None` for a dismissal (Esc, the
+/// close box, the owner closing, or nobody able to answer).
 pub type Reply = Box<dyn FnOnce(Option<usize>) + Send>;
 
-/// Asks `q` as a modal of the window published for this call (the primary
-/// one outside a call). Never blocks: `reply` runs later, on the dialog's
-/// thread.
+/// Asks `q` as a modal of the window published for this call (the primary one outside a call).
+/// Never blocks: `reply` runs later, on the dialog's thread.
 pub fn ask(q: Ask, reply: Reply) {
     ask_owned(RESOLVER.get().and_then(|f| f()), q, None, reply)
 }
 
-/// Shows a question in place of the platform's dialog. It runs on the
-/// `vn-ask` thread once the question's turn has come, with the owner's native
-/// window (0 for none), and returns when the question has gone away: with the
-/// button, or `None` for a dismissal. While it runs it watches the
-/// [`Cancellation`]: its owner is closing, and is destroyed only after it has
-/// returned. An `Err` means it could not show the question at all, and the
-/// platform's dialog asks instead.
+/// Shows a question in place of the platform's dialog, on the `vn-ask` thread, with the owner's
+/// native window (0 for none). Returns when the question is gone. It must watch the
+/// [`Cancellation`]: the owner is destroyed only after it returns. `Err` falls back to the
+/// platform's dialog.
 pub type Present = Box<dyn FnOnce(&Ask, isize, &Cancellation) -> Result<Option<usize>, Fail> + Send>;
 
-/// [`ask`], shown by `present` rather than by the platform's dialog. Under
-/// `VN_DIALOGS=scripted` `present` is never called: the devtools answer, as
-/// they do for [`ask`].
+/// [`ask`], shown by `present`. Under `VN_DIALOGS=scripted` `present` is never called.
 pub fn ask_with(q: Ask, present: Present, reply: Reply) {
     ask_owned(RESOLVER.get().and_then(|f| f()), q, Some(present), reply)
 }
 
-/// The reply, sent once: with the answer, or with `None` when whatever holds
-/// it goes away first (a dialog thread that could not start, or panicked).
+/// The reply, sent once; `None` if whatever holds it goes away first.
 struct Once(Option<Reply>);
 
 impl Once {
@@ -90,7 +61,6 @@ impl Drop for Once {
     }
 }
 
-/// A button's label as the user reads it: `&Allow` is "Allow".
 pub fn label_of(button: &str) -> String {
     let mut out = String::with_capacity(button.len());
     let mut chars = button.chars().peekable();
@@ -117,7 +87,6 @@ pub(super) fn ask_owned(owner: Option<Owner>, q: Ask, present: Option<Present>, 
         reply.send(None);
         return;
     }
-    // Queued here, on the frame thread, so the order is the order asked.
     let ticket = st.ticket.fetch_add(1, Ordering::AcqRel);
     st.queue.lock().unwrap_or_else(|p| p.into_inner()).push_back(ticket);
     let cancel = Cancellation(st.clone());
@@ -147,7 +116,6 @@ pub(super) fn ask_owned(owner: Option<Owner>, q: Ask, present: Option<Present>, 
                 }
             }
         };
-        // The native loop has exited: the owner may be destroyed now.
         st.active.store(false, Ordering::Release);
         let answer = answer.filter(|&i| i < q.buttons.len() && !cancel.is_requested());
         let said = match answer {
@@ -158,8 +126,7 @@ pub(super) fn ask_owned(owner: Option<Owner>, q: Ask, present: Option<Present>, 
         reply.send(answer);
     });
     if spawned.is_err() {
-        // The closure went down with the failed spawn, and its reply said
-        // `None`. Only the place in the queue is left to give back.
+        // The closure went down with the failed spawn; only the queue slot is left to give back.
         owner_state(key).leave_queue(ticket);
     }
 }
@@ -235,14 +202,12 @@ mod tests {
         assert_eq!(v["what"], "permission");
         assert_eq!(v["buttons"], serde_json::json!(["Allow", "Block"]));
         assert_eq!(v["instruction"], "Test wants to use your microphone");
-        // A question takes a button, not paths, and only one that exists.
         assert!(scripted::answer(id, vec![std::env::temp_dir()]).is_err());
         assert!(scripted::choose(id, "Maybe").is_err());
         assert!(scripted::choose(id, "2").is_err());
         scripted::choose(id, "block").unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(20)).unwrap(), Some(1));
         assert!(is_idle(key));
-        // By index, and Esc.
         let rx = asked(o);
         scripted::choose(pending_of(key), "0").unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(20)).unwrap(), Some(0));
@@ -269,10 +234,8 @@ mod tests {
         let _ = crate::tests::wait_for_settles(&[picker]);
         let id = pending_of(key);
         assert_ne!(id, first);
-        // The window closes under the question: a dismissal.
         assert!(owner_closing(key));
         assert_eq!(rx.recv_timeout(Duration::from_secs(20)).unwrap(), None);
-        // A window already closing answers at once, without asking.
         let rx = asked(o);
         assert_eq!(rx.recv_timeout(Duration::from_secs(20)).unwrap(), None);
     }

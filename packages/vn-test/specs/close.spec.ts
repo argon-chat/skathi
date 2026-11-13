@@ -1,16 +1,4 @@
-// Closing the app: the window goes at once, the teardown runs behind it under
-// a deadline, and a launch that arrives meanwhile starts the app afresh
-// (docs/WINDOWING.md §1.10, docs/LAUNCH.md §2, crates/vn-app/src/shutdown.rs).
-//
-//   bun test packages/vn-test/specs/close.spec.ts
-//
-// Every test closes its own host, so every test launches one. The window's
-// visibility is read from outside (`IsWindowVisible` on the HWND the
-// screenshot command names), because a closing host no longer answers
-// devtools. `VN_SHUTDOWN_DELAY_MS` adds a quit hook that takes that long: a
-// slow teardown, made on purpose. The fixture is `launch` (a single-instance
-// app), each test under a VN_APP_NAME of its own, so nothing here shares a
-// storage folder or an instance lock with another test or another run.
+// `VN_SHUTDOWN_DELAY_MS` adds a quit hook that takes that long: a slow teardown, made on purpose.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { dlopen, FFIType } from "bun:ffi";
@@ -48,7 +36,6 @@ async function start(env: Record<string, string> = {}) {
     backend: "render_to_image",
   });
   rmSync(shot.path, { force: true });
-  // Somebody listening for `pagehide`, as a call's leave does.
   await app.eval(`addEventListener("pagehide", () => console.log("[close-spec] pagehide")); "ok"`);
   return { app, appName, hwnd: BigInt(shot.hwnd) };
 }
@@ -75,8 +62,7 @@ describe("closing the app", () => {
   test("appWindow.close(): the window is gone at once, pagehide fired once, the process ends with one line", async () => {
     const { app, hwnd } = await start();
     expect(user32.symbols.IsWindowVisible(hwnd)).not.toBe(0);
-    // What a frameless app's titlebar X does. The reply may never come: the
-    // host is gone by then.
+    // The reply may never come: the host is gone by then.
     void app.eval("__VN_WINDOW__.appWindow.close(); 1").catch(() => {});
     const hidden = await until(() => user32.symbols.IsWindowVisible(hwnd) === 0, 5_000);
     const ended = await until(() => !alive(app.pid), 10_000);
@@ -94,18 +80,15 @@ describe("closing the app", () => {
     const t0 = Date.now();
     void app.eval("close(); 1").catch(() => {});
     expect(await until(() => user32.symbols.IsWindowVisible(hwnd) === 0, 5_000)).toBeGreaterThanOrEqual(0);
-    // Hidden, and still tearing down.
     await Bun.sleep(1_000);
     expect(alive(app.pid)).toBe(true);
     expect(await until(() => !alive(app.pid), 15_000)).toBeGreaterThanOrEqual(0);
     const took = Date.now() - t0;
-    // 4 s after the close, give or take a debug host on a busy machine.
     expect(took).toBeGreaterThan(3_500);
     expect(took).toBeLessThan(8_000);
     const line = logLines(app).find((l) => l.includes("passed its 4 s deadline"));
     expect(line).toBeDefined();
     expect(line).toContain("close(): hid 1 window(s)");
-    // It names the hook that was still running.
     expect(line).toMatch(/VN_SHUTDOWN_DELAY_MS still running after \d+ ms/);
     expect(logLines(app).some((l) => l.startsWith("[shutdown] closed."))).toBe(false);
   }, T);
@@ -114,7 +97,6 @@ describe("closing the app", () => {
     const { app, appName, hwnd } = await start({ VN_SINGLE_INSTANCE: "1", VN_SHUTDOWN_DELAY_MS: "1500" });
     void app.eval("close(); 1").catch(() => {});
     expect(await until(() => user32.symbols.IsWindowVisible(hwnd) === 0, 5_000)).toBeGreaterThanOrEqual(0);
-    // The user starts the app again while the old one is still tearing down.
     const second = spawn(stagedExe(), ["again"], {
       cwd: REPO,
       env: {
@@ -135,7 +117,6 @@ describe("closing the app", () => {
     second.on("exit", (code) => (exited = code ?? -1));
     // It was not handed to the closing instance (that would exit 0 at once)…
     expect(await until(() => !alive(app.pid), 10_000)).toBeGreaterThanOrEqual(0);
-    // …and is still there once the old one has gone: it is the app now.
     await Bun.sleep(2_000);
     expect(exited).toBe(null);
     expect(logLines(app).filter((l) => l.includes("arrived while this instance is closing")).length).toBe(1);

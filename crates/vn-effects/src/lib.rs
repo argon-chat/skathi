@@ -5,74 +5,43 @@
 //! .ripple { --shading: ripple(2.0, #ff8800); }   /* an APP's own shader */
 //! ```
 //!
-//! # Why a custom property and not a `-vn-` prefix
+//! A custom property rather than a `-vn-` prefix: a browser parses, stores and ignores `--shading`,
+//! so the same `.vue` file renders sanely in both. Unlike browsers, where custom properties
+//! inherit, it applies to the declaring element only (inheriting a GPU effect into every
+//! descendant would, say, frost each child of a frosted panel again).
 //!
-//! A custom shader has no web equivalent, so the compat requirement inverts:
-//! the syntax has to be one a browser *correctly ignores*, so the same `.vue`
-//! file renders sanely in a browser (minus the effect) and in vue-native (with
-//! it). `--shading` is the strongest available spelling — a custom property is
-//! VALID CSS that a browser parses, stores and ignores. No dropped declaration,
-//! no console warning, no `@supports` dance.
+//! `gpui` owns the primitive (`EffectQuad`) and value (`EffectSpec`), `gpui_windows` the pipelines
+//! (keyed by the same numbering), this crate the names, argument schemas and defaults, and `vn-css`
+//! the token-list grammar (`crates/vn-css/src/effect.rs`).
 //!
-//! # The one deliberate divergence
+//! The schemas are parsed from `effects.json`, which `bun shaders.ts` produces from slangc's
+//! reflection of each effect struct, so an effect is declared once, in its `.slang` file. Built-ins
+//! are in `crates/vn-effects/generated/effects.json` (checked in and `include_str!`d, so
+//! `cargo build` needs no slangc); app effects in `$VN_EFFECTS_DIR/effects.json`, with ids
+//! allocated after the built-ins in manifest order, which is the order `gpui_windows` builds
+//! pipelines in.
 //!
-//! In a browser, custom properties **inherit**. vue-native applies `--shading`
-//! to the **declaring element only**. Inheriting a GPU effect into every
-//! descendant is never what an author means (a frosted panel would frost each
-//! of its children again, one snapshot each), and since browsers do not render
-//! the property at all there is no visual divergence to reconcile — only a
-//! cascade one. It is called out here, in `gpui::Style::vn_effect`, and in the
-//! parser's advisory.
-//!
-//! # Layering
-//!
-//! * `gpui` owns the primitive (`EffectQuad`) and the value (`EffectSpec`), and
-//!   knows nothing about names or argument grammars.
-//! * `gpui_windows` owns the pipelines, keyed by the same numbering.
-//! * **this crate** owns the names, argument schemas and defaults.
-//! * `vn-css` owns the token-list grammar (`crates/vn-css/src/effect.rs`).
-//!
-//! # Nothing here is written by hand
-//!
-//! The schemas below are not a Rust table. They are parsed from `effects.json`,
-//! which `bun shaders.ts` produces from **slangc's reflection** of each effect
-//! struct — its `[VnEffect]`/`[VnDefault]`/`[VnRange]`/… attributes, its field
-//! order and its field types. An effect is therefore declared exactly once, in
-//! its `.slang` file:
-//!
-//! * **built-ins** — `crates/vn-effects/generated/effects.json`, checked in and
-//!   `include_str!`d, so `cargo build` needs no slangc and no app;
-//! * **app effects** — `$VN_EFFECTS_DIR/effects.json`, written by
-//!   `bun shaders.ts --app <app> --out <dir>` and read at startup. Their ids
-//!   are allocated after the built-ins, in manifest order, which is the same
-//!   order `gpui_windows` builds their pipelines in.
-//!
-//! The parameter **slots** are the contract with the shaders: slot *i* is
-//! `params0[i]` for i < 4 and `params1[i - 4]` beyond, and a colour occupies
-//! four consecutive slots. `shaders.ts` assigns them from field order under
-//! HLSL's own no-straddle rule, and generates the unpacking code to match.
+//! Parameter slots are the contract with the shaders: slot *i* is `params0[i]` for i < 4 and
+//! `params1[i - 4]` beyond, a colour takes four consecutive slots, and `shaders.ts` assigns them
+//! from field order under HLSL's no-straddle rule.
 
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use gpui::{effect_id, EffectSpec, EFFECT_FLAG_NEEDS_BACKDROP};
 
-/// The `effects.json` layout this build understands. `shaders.ts` stamps the
-/// same number into every manifest it writes; a mismatch means the artifacts
-/// were produced by a different toolchain generation and must be regenerated
-/// rather than half-understood.
+/// The `effects.json` layout this build understands; a mismatch means the artifacts came from a
+/// different toolchain generation and must be regenerated.
 pub const MANIFEST_SCHEMA: u32 = 5;
 
-/// The environment variable pointing at an app's compiled effects — the
-/// directory `bun shaders.ts --app … --out <dir>` wrote, holding `effects.json`
-/// plus one `.hlsl` per effect. `gpui_windows` reads the same variable to build
-/// the matching pipelines, so the two always see the same list in the same
-/// order.
+/// The environment variable pointing at an app's compiled effects (the `--out` directory of
+/// `bun shaders.ts --app`, holding `effects.json` plus one `.hlsl` per effect); `gpui_windows`
+/// reads it too, so both see the same list in the same order.
 pub const EFFECTS_DIR_ENV: &str = "VN_EFFECTS_DIR";
 
-/// What kind of CSS value a parameter accepts. This drives both validation and
-/// the type-directed argument matching that lets an OPTIONAL leading parameter
-/// be omitted (`glow(12px, 0.8)` and `glow(#7fd4ff, 12px, 0.8)` both parse).
+/// What kind of CSS value a parameter accepts; drives validation and the type-directed matching
+/// that lets an optional leading parameter be omitted (`glow(12px, 0.8)` and
+/// `glow(#7fd4ff, 12px, 0.8)` both parse).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParamKind {
     /// `<number>` or `<percentage>` (a percentage divides by 100).
@@ -84,7 +53,6 @@ pub enum ParamKind {
 }
 
 impl ParamKind {
-    /// How many of the eight parameter slots this kind consumes.
     pub fn slots(self) -> u8 {
         match self {
             ParamKind::Color => 4,
@@ -92,7 +60,6 @@ impl ParamKind {
         }
     }
 
-    /// The CSS type name, for advisories.
     pub fn name(self) -> &'static str {
         match self {
             ParamKind::Number => "<number>",
@@ -111,25 +78,21 @@ impl ParamKind {
     }
 }
 
-/// One positional argument of an effect.
 #[derive(Clone, Copy, Debug)]
 pub struct ParamSchema {
     /// The author-facing name — the effect struct's field name, or
     /// `field.x`/`field.y`/… for one component of a `float2`/`float3`.
     pub name: &'static str,
     pub kind: ParamKind,
-    /// First slot in [`EffectSpec::params`].
     pub slot: u8,
     /// A required argument may not be skipped by type-directed matching.
     pub required: bool,
-    /// Used verbatim for a colour; `[0]` alone otherwise.
     pub default: [f32; 4],
     /// Inclusive clamp applied to a `Number`/`Length` (`None` = unclamped).
     /// Out-of-range values are clamped WITH an advisory, never dropped.
     pub range: Option<(f32, f32)>,
 }
 
-/// Everything the CSS layer and the painter need to know about one effect.
 #[derive(Clone, Copy, Debug)]
 pub struct EffectSchema {
     pub name: &'static str,
@@ -147,7 +110,6 @@ pub struct EffectSchema {
     pub animated_param: Option<u8>,
     /// The signature printed in an arity/type advisory.
     pub signature: &'static str,
-    /// `[VnDoc("…")]` from the shader, if the author wrote one.
     pub doc: Option<&'static str>,
     /// `true` for `frost`/`noise`/`glow`, `false` for an app's own shader.
     /// Only used to phrase advisories.
@@ -167,9 +129,8 @@ impl EffectSchema {
         mask
     }
 
-    /// A spec with every parameter at its declared default. The parser starts
-    /// here and overwrites what the author supplied, which is what makes every
-    /// optional argument omittable without a second code path.
+    /// A spec with every parameter at its declared default; the parser overwrites what the author
+    /// supplied, so every optional argument is omittable without a second code path.
     pub fn defaults(&self) -> EffectSpec {
         let mut params = [0.0f32; 8];
         for schema in self.params {
@@ -191,7 +152,6 @@ impl EffectSchema {
         }
     }
 
-    /// Whether `spec` should keep the window repainting.
     pub fn is_animated(&self, params: &[f32; 8]) -> bool {
         self.animated_param
             .and_then(|slot| params.get(slot as usize))
@@ -199,13 +159,7 @@ impl EffectSchema {
     }
 }
 
-// ---------------------------------------------------------------------------
-// effects.json
-// ---------------------------------------------------------------------------
-
-/// The checked-in reflection of the built-in effects. Compiled in, so the
-/// registry is never empty and an app with no shaders of its own needs no
-/// environment at all.
+/// The checked-in reflection of the built-in effects, compiled in so the registry is never empty.
 const BUILTIN_MANIFEST: &str = include_str!("../generated/effects.json");
 
 #[derive(serde::Deserialize)]
@@ -240,12 +194,9 @@ struct RawParam {
     range: Option<[f32; 2]>,
 }
 
-/// Turns one `effects.json` into schemas, numbering them from `first_id`.
-///
-/// Everything is leaked into `'static`: the registry is built once per process
-/// and read for the life of it, so leaking a few hundred bytes buys every
-/// consumer a plain `&'static EffectSchema` and keeps the CSS parser free of
-/// lifetimes. `origin` is used only in error text.
+/// Turns one `effects.json` into schemas, numbering them from `first_id`. Leaked into `'static`
+/// (the registry is built once per process) so consumers get plain `&'static EffectSchema`;
+/// `origin` is used only in error text.
 pub fn parse_manifest(
     json: &str,
     first_id: u32,
@@ -302,10 +253,8 @@ pub fn parse_manifest(
             });
         }
 
-        // Type-directed matching is only unambiguous when a skippable
-        // parameter's kind differs from the one after it. shaders.ts enforces
-        // this at compile time; re-check here so a hand-edited manifest cannot
-        // produce a parser that quietly reads arguments into the wrong slots.
+        // Type-directed matching is only unambiguous when a skippable parameter's kind differs from
+        // the next one's; shaders.ts enforces it, re-checked so a hand-edited manifest cannot misread arguments.
         for (i, param) in params.iter().enumerate() {
             if param.required {
                 continue;
@@ -336,10 +285,6 @@ pub fn parse_manifest(
     Ok(out)
 }
 
-// ---------------------------------------------------------------------------
-// the registry
-// ---------------------------------------------------------------------------
-
 static REGISTRY: RwLock<Option<&'static [&'static EffectSchema]>> = RwLock::new(None);
 
 /// House policy is compat-first: a degraded effect system announces itself.
@@ -359,7 +304,6 @@ fn advisory(message: String) {
     seen.push(message);
 }
 
-/// `$VN_EFFECTS_DIR`, if it is set to something non-empty.
 pub fn user_effects_dir() -> Option<PathBuf> {
     match std::env::var_os(EFFECTS_DIR_ENV) {
         Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
@@ -437,29 +381,18 @@ pub fn effects() -> &'static [&'static EffectSchema] {
     built
 }
 
-/// Replaces the registry. Two callers: tests, and a host that wants to load an
-/// app's effects from somewhere other than `$VN_EFFECTS_DIR`.
-///
-/// Built-ins are always included and always keep their `gpui::effect_id`
-/// numbering; `user` is numbered after them.
+/// Replaces the registry (tests, or a host loading an app's effects from elsewhere). Built-ins
+/// always stay and keep their `gpui::effect_id` numbering; `user` is numbered after them.
 pub fn install_user_effects(user: Vec<&'static EffectSchema>) {
     let mut effects: Vec<&'static EffectSchema> = builtins().to_vec();
     effects.extend(user);
     *REGISTRY.write().unwrap_or_else(|e| e.into_inner()) = Some(Box::leak(effects.into_boxed_slice()));
 }
 
-/// The registry, spelled as a value so it can be used where a slice was.
-///
-/// Before schema 4 the registry was a `static EFFECTS: [&EffectSchema; 3]`.
-/// It is now built at startup (built-ins plus whatever `$VN_EFFECTS_DIR`
-/// contributed), which no `static` can express — so `EFFECTS` becomes a
-/// zero-sized handle that derefs to the live slice. Every use a real slice
-/// supported (`EFFECTS.get(i)`, `.iter()`, `.len()`, `EFFECTS[i]`) still
-/// compiles and now also sees the app's own effects, which is what lets an
-/// advisory name one instead of printing "none".
+/// The registry as a value usable where a slice was: a zero-sized handle that derefs to the live
+/// slice (built-ins plus `$VN_EFFECTS_DIR`), which a `static` cannot express.
 pub struct EffectRegistry;
 
-/// See [`EffectRegistry`].
 pub static EFFECTS: EffectRegistry = EffectRegistry;
 
 impl std::ops::Deref for EffectRegistry {
@@ -470,7 +403,6 @@ impl std::ops::Deref for EffectRegistry {
     }
 }
 
-/// Just the built-ins, ignoring whatever the app contributed.
 pub fn builtins() -> &'static [&'static EffectSchema] {
     &effects()[..effect_id::COUNT as usize]
 }
@@ -484,7 +416,6 @@ pub fn lookup(name: &str) -> Option<&'static EffectSchema> {
         .find(|effect| effect.name.eq_ignore_ascii_case(name))
 }
 
-/// The effect names, for the "did you mean" half of an advisory.
 pub fn names() -> impl Iterator<Item = &'static str> {
     effects().iter().map(|effect| effect.name)
 }
@@ -495,8 +426,7 @@ mod tests {
 
     const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
-    /// A hand-written manifest standing in for one an app's `bun shaders.ts`
-    /// would emit — the shape the dynamic path has to survive.
+    /// A hand-written manifest standing in for one an app's `bun shaders.ts` would emit.
     const USER_MANIFEST: &str = r#"{
       "schema": 5,
       "slangc": "2026.12",
@@ -524,9 +454,8 @@ mod tests {
       ]
     }"#;
 
-    /// The numbering is a contract between this registry, `gpui::effect_id` and
-    /// the renderer's pipeline table. Two of the three are checked at compile
-    /// time in gpui_windows; this covers the third.
+    /// The numbering is a contract between this registry, `gpui::effect_id` and the renderer's
+    /// pipeline table; gpui_windows checks the other two at compile time.
     #[test]
     fn ids_match_their_index() {
         for (index, effect) in effects().iter().enumerate() {
@@ -564,9 +493,7 @@ mod tests {
 
     #[test]
     fn required_parameters_come_after_optional_ones_are_skippable() {
-        // Type-directed matching only works when a skippable parameter's kind
-        // differs from the kind of whatever follows it — otherwise an argument
-        // is ambiguous.
+        // A skippable parameter's kind must differ from the next one's, or an argument is ambiguous.
         for effect in effects() {
             for (index, param) in effect.params.iter().enumerate() {
                 if param.required {
@@ -583,10 +510,7 @@ mod tests {
         }
     }
 
-    /// The values here were the hand-written Rust table before schema 4. They
-    /// now come from slangc's reflection of `frost.slang`/`glow.slang`, so this
-    /// test is what proves the reflection pipeline reproduces the schema an
-    /// author previously had to write twice.
+    /// Proves slangc's reflection reproduces the frost/glow schemas.
     #[test]
     fn defaults_land_in_their_slots() {
         let frost = lookup("frost").unwrap().defaults();
@@ -596,10 +520,8 @@ mod tests {
         assert_eq!(frost.backdrop_blur_radius(), 12.0);
         assert_eq!(frost.bleed(), 0.0);
 
-        // `glow` declares its colour FIRST (that is the CSS argument order) but
-        // pins it to slot 4 with `[VnSlot(4)]`, so the packing it shipped with
-        // survives the move to reflection-driven schemas — which matters
-        // because `transition: --shading` interpolates slot by slot.
+        // `glow` declares its colour first (the CSS argument order) but pins it to slot 4 with
+        // `[VnSlot(4)]`; `transition: --shading` interpolates slot by slot.
         let glow = lookup("glow").unwrap().defaults();
         assert_eq!(glow.params[0], 16.0);
         assert_eq!(glow.params[1], 0.75);
@@ -637,8 +559,6 @@ mod tests {
             Some("blurred backdrop + crystalline grain + rim highlight")
         );
     }
-
-    // -- the dynamic half --------------------------------------------------
 
     #[test]
     fn a_user_manifest_parses_and_is_numbered_after_the_builtins() {

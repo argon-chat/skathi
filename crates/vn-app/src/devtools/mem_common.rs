@@ -1,19 +1,11 @@
-//! What `mem` reports the same way on every OS with a port (`mem.rs` on
-//! Windows, `mem_mac.rs` on macOS): the units, the breakdown's row shapes, and
-//! everything read from an allocator or a live structure rather than from the
-//! OS — JSC's heap and its mimalloc, gpui's atlas and decoded images, the
-//! retained tree, vn-tree's side tables, the devtools' rings, the Rust heap.
-//!
-//! The OS half (the process counters, the address-space walk, the system
-//! allocator, the GPU) and the fold into categories stay with each port.
+//! The part of `mem` shared by the Windows and macOS ports: units, row shapes,
+//! and everything read from an allocator or a live structure rather than the OS.
 
 use gpui::{App, Window};
 use vn_runtime::JsRuntime;
 
 use crate::json::Json;
 
-// mimalloc is JSC's allocator here (redjs compiles it into its static lib, on
-// every OS).
 extern "C" {
     fn mi_stats_get_json(buf_size: usize, buf: *mut std::ffi::c_char) -> *mut std::ffi::c_char;
 }
@@ -34,16 +26,12 @@ pub(super) fn file_name(path: &str) -> String {
     path.rsplit(['\\', '/']).next().unwrap_or("").to_string()
 }
 
-// ---------------------------------------------------------------------------
-// the breakdown's rows
-// ---------------------------------------------------------------------------
-
 pub(super) fn item(label: impl Into<String>, b: f64) -> Json {
     Json::obj(vec![("label", Json::s(label)), ("bytes", bytes(b))])
 }
 
-/// A row that is NOT a slice of its category — a figure from another
-/// accountant (JSC's own GC heap count) shown beside the slices it overlaps.
+/// A row that is not a slice of its category: another accountant's figure
+/// shown beside the slices it overlaps.
 pub(super) fn info(label: impl Into<String>, b: f64) -> Json {
     Json::obj(vec![
         ("label", Json::s(label)),
@@ -62,7 +50,6 @@ pub(super) fn category(key: &str, label: &str, b: f64, note: &str, items: Vec<Js
     ])
 }
 
-/// Adds a category's resident bytes (all, and private) when they were counted.
 pub(super) fn with_resident(mut c: Json, r: Option<[f64; 2]>) -> Json {
     if let (Json::Obj(fields), Some([private, shared])) = (&mut c, r) {
         fields.push(("residentBytes".into(), bytes(private + shared)));
@@ -71,12 +58,8 @@ pub(super) fn with_resident(mut c: Json, r: Option<[f64; 2]>) -> Json {
     c
 }
 
-// ---------------------------------------------------------------------------
-// JSC and its malloc
-// ---------------------------------------------------------------------------
-
-/// One `"name": { "total": .., "peak": .., "current": N }` out of mimalloc's
-/// JSON, by name.
+/// The `current` of `"name": { "total": .., "peak": .., "current": N }` in
+/// mimalloc's JSON.
 pub(super) fn mi_current(json: &str, name: &str) -> Option<f64> {
     let at = json.find(&format!("\"{name}\":"))?;
     let rest = &json[at..];
@@ -137,9 +120,6 @@ pub(super) struct Jsc {
 pub(super) fn jsc_stats() -> Jsc {
     JsRuntime::with(|rt| {
         let s = rt.ctx().heap_stats();
-        // What the pump's between-wave memory work costs (redjs web.rs): the
-        // RunLoop turns that fire JSC's GC / sweeper timers, and the JS
-        // thread's mimalloc idle sweeps.
         let w = vn_runtime::redjs::web::idle_work_stats();
         let ms = |us: u64| Json::n((us as f64 / 1000.0 * 10.0).round() / 10.0);
         let idle_work = Json::obj(vec![
@@ -166,9 +146,8 @@ pub(super) fn jsc_stats() -> Jsc {
     })
 }
 
-/// `release_memory` (two full synchronous collections, then free pages back
-/// to the OS) — or, with `code`, the same after deleting all compiled code
-/// that is not running. Returns how long it took, in ms.
+/// `release_memory` (full collections, then pages back to the OS); with `code`,
+/// also drops compiled code not running. Returns ms taken.
 pub(super) fn collect(code: bool) -> f64 {
     let t = std::time::Instant::now();
     JsRuntime::with(|rt| unsafe {
@@ -181,10 +160,6 @@ pub(super) fn collect(code: bool) -> f64 {
     ms(t)
 }
 
-// ---------------------------------------------------------------------------
-// the renderer
-// ---------------------------------------------------------------------------
-
 pub(super) struct Renderer {
     pub(super) targets: f64,
     /// Atlas texture bytes per kind: monochrome, polychrome, subpixel.
@@ -192,7 +167,6 @@ pub(super) struct Renderer {
     pub(super) json: Json,
 }
 
-/// The primary window's renderer, from gpui (fork accessors) and its size.
 pub(super) fn renderer(window: &Window) -> Renderer {
     let scale = window.scale_factor();
     let size = window.viewport_size();
@@ -200,10 +174,8 @@ pub(super) fn renderer(window: &Window) -> Renderer {
         (f32::from(size.width) * scale).round() as f64,
         (f32::from(size.height) * scale).round() as f64,
     );
-    // 32 bytes a pixel on both backends: `gpui_windows::directx_renderer` has
-    // a 3-buffer BGRA swap chain, a single-sample and a 4x MSAA BGRA path
-    // target; `gpui_apple::metal_renderer` a CAMetalLayer of 3 BGRA drawables,
-    // a path intermediate texture and its 4x MSAA twin.
+    // 32 bytes a pixel on both backends: 3 BGRA swap-chain buffers plus a
+    // single-sample and a 4x MSAA path target.
     let targets = 32.0 * w * h;
     let mut per_kind = [0.0; 3];
     let atlas_json = match window.sprite_atlas_stats() {
@@ -244,7 +216,6 @@ pub(super) fn renderer(window: &Window) -> Renderer {
     }
 }
 
-/// The GPU block's named rows: the atlas per kind and the render targets.
 pub(super) fn gpu_items(r: &Renderer) -> Vec<Json> {
     let a = r.atlas;
     vec![
@@ -257,10 +228,6 @@ pub(super) fn gpu_items(r: &Renderer) -> Vec<Json> {
         ),
     ]
 }
-
-// ---------------------------------------------------------------------------
-// what the host's own structures hold
-// ---------------------------------------------------------------------------
 
 pub(super) struct Images {
     pub(super) decoded: f64,
@@ -331,7 +298,6 @@ pub(super) fn images(cx: &App) -> Images {
                 ]),
             ),
             (
-                // vn-tree img.rs "residency": since boot.
                 "residency",
                 Json::obj(vec![
                     ("known", Json::n(res.known as f64)),
@@ -341,7 +307,6 @@ pub(super) fn images(cx: &App) -> Images {
                     ("evicted", Json::n(res.evicted as f64)),
                     ("evictedFreedMB", mb(res.evicted_freed as f64)),
                     (
-                        // Shown decodes the latest sweep left full, by reason.
                         "keptFull",
                         Json::obj(vec![
                             ("notStill", Json::n(res.kept_full.not_still as f64)),
@@ -403,8 +368,7 @@ pub(super) fn tree() -> (Json, f64) {
     )
 }
 
-/// vn-tree's side tables and the devtools' own rings: every value is a count
-/// or, for a name ending in `Bytes`, BYTES.
+/// Every value is a count or, for a name ending in `Bytes`, bytes.
 pub(super) fn side() -> Vec<(&'static str, u64)> {
     let mut o = vn_tree::devtools::side_stats();
     let (rows, row_bytes, records, held, meta, evicted) = super::net::mem_stats();
@@ -421,8 +385,7 @@ pub(super) fn side_json(side: &[(&'static str, u64)]) -> Json {
     Json::obj(side.iter().map(|(k, v)| (*k, Json::n(*v as f64))).collect())
 }
 
-/// `<vn-sticker>`'s engine: its sources, loaded engines, frames held and loop
-/// cache. `null` until something has used it.
+/// `null` until `<vn-sticker>` has been used.
 pub(super) fn stickers() -> Json {
     let Some(s) = vn_sticker::stats() else {
         return Json::Null;
@@ -492,10 +455,8 @@ pub(super) fn rust_json(rust: Option<(i64, i64, i64, u64)>) -> Json {
     }
 }
 
-/// The Rust heap's slices, each computed from the live structure, then what
-/// the stylesheet compiles left behind, then the rest of `live` nothing
-/// itemises. The OS's system allocator rows (C/C++ malloc on the same heap,
-/// slack) follow them in each port's `breakdown`.
+/// The Rust heap's slices, then the remainder of `live` nothing itemises. Each
+/// port's `breakdown` appends the system-allocator rows.
 pub(super) fn rust_items(live: f64, tree_bytes: f64, images: &Images, side: &[(&'static str, u64)]) -> Vec<Json> {
     let side = |name: &str| {
         side
@@ -534,10 +495,8 @@ pub(super) fn rust_items(live: f64, tree_bytes: f64, images: &Images, side: &[(&
     for (label, b) in parts {
         rust_items.push(item(label, b));
     }
-    // Every stylesheet compile leaks its source and its lightningcss AST
-    // (vn-css `Engine::compile`: the rules borrow `'static` selectors
-    // out of it), so what compiles leave behind is measured around each
-    // one — net of the engine it replaced.
+    // Each stylesheet compile leaks its source and lightningcss AST (the rules
+    // borrow `'static` selectors from it), so the leftovers are measured per compile.
     let (compiles, _, _, growth) = vn_tree::perf::sheet_compiles();
     if let Some(g) = growth {
         rust_items.push(item(

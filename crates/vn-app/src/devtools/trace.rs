@@ -1,31 +1,12 @@
-//! `trace` — a frame-by-frame record of where the host's time went, for an
-//! interaction somebody is about to perform (m26 perf work: "opening a space
-//! lags").
+//! `trace`: a frame-by-frame record of where the host's time went during an interaction
+//! (`trace start`, interact, `trace stop --frames`).
 //!
-//! `perf` answers "how long are frames" over a rolling window and `VN_PERF`
-//! prints a per-second phase breakdown to stderr. Neither answers "what did the
-//! frame that took 400 ms DO" — whether it was JS, a forced layout, a
-//! whole-document restyle a font registration asked for, or taffy. This does:
+//! A frame is the span between two `pump_frame` entries. The vn-tree phase counters are drained at
+//! the NEXT frame's start, so a frame's record includes its own draw. Idle frames are not stored:
+//! the next active frame carries their count (`idleBefore`).
 //!
-//! ```text
-//!   trace start            arm: every vn_tree::perf counter, one record a frame
-//!   (click a space)
-//!   trace stop --frames    disarm; the summary, plus every non-idle frame
-//! ```
-//!
-//! A frame is the span between two `pump_frame` entries: the JS wave (timers,
-//! rAF, microtasks — fetch completions and Vue's scheduler run there), the
-//! forced layouts JS caused inside it, the restyle at its end, gpui's draw of
-//! the frame, and the wait for the next vsync. The vn-tree phase counters are
-//! drained at the NEXT frame's start, so a frame's record includes its own
-//! draw.
-//!
-//! Idle frames (no JS to speak of, no draw, no tree work) are not stored one by
-//! one: the next active frame carries how many there were (`idleBefore`).
-//!
-//! It shares `vn_tree::perf`'s counters with `VN_PERF`, which drains them once
-//! a second for its stderr report; the two would steal each other's numbers,
-//! so a trace refuses to start while `VN_PERF` is on.
+//! It shares `vn_tree::perf`'s counters with `VN_PERF`, which drains them once a second, so a trace
+//! refuses to start while `VN_PERF` is on.
 
 use std::cell::{Cell, RefCell};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -34,8 +15,7 @@ use vn_tree::perf::{DomOp, FullReason, Phases, SyncCaller};
 
 use crate::json::Json;
 
-/// Active frames kept. ~10 minutes of continuous animation at 60 Hz, or any
-/// number of interactions separated by idle time.
+/// Active frames kept.
 const DEFAULT_CAP: usize = 20_000;
 
 #[derive(Clone)]
@@ -44,8 +24,7 @@ struct Frame {
     at_ms: f64,
     /// To the next frame's start.
     dur_ms: f32,
-    /// `pump_frame` entry → `perf::pump_done`: the whole JS wave, the devtools
-    /// command, the media tick, the restyle at its end.
+    /// `pump_frame` entry to `perf::pump_done`.
     pump_ms: f32,
     /// `rt.pump(...)` alone: timers, rAF, microtasks.
     js_ms: f32,
@@ -92,14 +71,12 @@ fn active() -> bool {
     TRACE.with(|t| t.borrow().is_some())
 }
 
-/// Starts a trace (or restarts one), discarding what was recorded.
 pub(crate) fn start(cap: Option<usize>) -> Result<Json, String> {
     if vn_tree::perf::env_enabled() {
         return Err("VN_PERF is on and owns the phase counters (it drains them every second); \
                     a trace would read zeros. Restart the host without VN_PERF."
             .into());
     }
-    // Whatever the counters gathered before the trace is not the trace's.
     vn_tree::perf::set_tracing(true);
     let _ = vn_tree::perf::take_all();
     let now = Instant::now();
@@ -123,7 +100,6 @@ pub(crate) fn start(cap: Option<usize>) -> Result<Json, String> {
     Ok(Json::obj(vec![("started", Json::Bool(true)), ("startEpochMs", Json::n(at))]))
 }
 
-/// A label on the frame in progress (`trace mark`, `__vn_perf_mark`).
 pub(crate) fn mark(label: &str) {
     vn_runtime::redjs::profiling::mark(label);
     TRACE.with(|t| {
@@ -131,7 +107,6 @@ pub(crate) fn mark(label: &str) {
             let at = tr.start.elapsed().as_secs_f64() * 1000.0;
             match tr.cur.as_mut() {
                 Some((_, f)) => f.marks.push(label.to_string()),
-                // Before the first frame: a frame of its own.
                 None => tr.frames.push(Frame::empty(at, vec![label.to_string()])),
             }
         }
@@ -174,7 +149,6 @@ impl Frame {
     }
 }
 
-/// `pump_frame` entry: closes the previous frame and opens this one.
 pub(crate) fn frame_start() {
     vn_runtime::redjs::profiling::frame_start();
     if !active() {
@@ -212,7 +186,6 @@ pub(crate) fn frame_start() {
     });
 }
 
-/// `perf::pump_done`: the JS wave and everything after it in `pump_frame`.
 pub(crate) fn pump_done() {
     with_cur(|tr, now| {
         if let (Some(open), Some((_, f))) = (tr.pump_open.take(), tr.cur.as_mut()) {
@@ -221,7 +194,6 @@ pub(crate) fn pump_done() {
     });
 }
 
-/// `rt.pump(...)` took `ms`.
 pub(crate) fn note_js(ms: f32) {
     with_cur(|tr, _| {
         if let Some((_, f)) = tr.cur.as_mut() {
@@ -251,8 +223,6 @@ fn with_cur(f: impl FnOnce(&mut Trace, Instant)) {
     });
 }
 
-/// `trace stop` (`stop = true`) or `trace peek`: the summary, and every stored
-/// frame when `frames` is asked for.
 pub(crate) fn report(stop: bool, frames: bool) -> Result<Json, String> {
     let taken = TRACE.with(|t| {
         let mut t = t.borrow_mut();
@@ -316,7 +286,6 @@ fn dom_span_ms(p: &Phases) -> f32 {
     }
 }
 
-/// One frame, with only the groups that saw anything.
 fn frame_json(f: &Frame) -> Json {
     let p = &f.phases;
     let mut o: Vec<(&str, Json)> = vec![
@@ -371,8 +340,7 @@ fn frame_json(f: &Frame) -> Json {
                 ("ms", r2(p.sync_layout_ms)),
                 ("maxMs", r2(p.sync_layout_max_ms)),
                 ("refused", Json::n(f64::from(p.sync_layout_refused))),
-                // The wave ended with its changes already drawn by a forced
-                // layout; `tailFree`: and nothing else asked for a draw.
+                // `tail`: waves that ended with changes already drawn by a forced layout; `tailFree`: and nothing else asked for a draw.
                 ("tail", Json::n(f64::from(p.sync_tail))),
                 ("tailFree", Json::n(f64::from(p.sync_tail_free))),
                 ("by", Json::obj(by)),
@@ -473,8 +441,6 @@ fn frame_json(f: &Frame) -> Json {
     Json::obj(o)
 }
 
-/// The ResizeObserver / IntersectionObserver step after layout, per frame and
-/// in total (`vn_tree::perf::Phases::observer_steps` and the rest).
 fn observers_json(steps: u32, rounds: u32, relayouts: u32, relayout_ms: f32, ms: f32, loop_errors: u32) -> Json {
     Json::obj(vec![
         ("n", Json::n(f64::from(steps))),
@@ -486,7 +452,6 @@ fn observers_json(steps: u32, rounds: u32, relayouts: u32, relayout_ms: f32, ms:
     ])
 }
 
-/// Totals over the stored frames, and the ten longest.
 fn summary(frames: &[Frame]) -> Json {
     let mut s = Totals::default();
     for f in frames {

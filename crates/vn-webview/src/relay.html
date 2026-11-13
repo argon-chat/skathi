@@ -10,22 +10,14 @@
 </head>
 <body>
 <script>
-// The relay page of a vue-native <iframe> (crates/vn-webview).
-//
-// The webview's top-level document is this page; the one real <iframe> it
-// holds is the app's. Everything a browser does for an iframe — the sandbox,
-// the opaque origin, `window.parent`, the permissions policy — is done by the
-// browser, because it IS an iframe. This page only carries messages:
-//
+// Relay page: the webview's top-level document holds the app's one real <iframe>, so the
+// browser does the sandboxing; this page only carries messages.
 //   host -> here   {t:"nav", src|srcdoc, sandbox, allow, referrerpolicy, name, fullscreen}
 //                  {t:"post", w: wire, o: targetOrigin}     contentWindow.postMessage
 //                  {t:"focus"}
 //   here -> host   {t:"ready"}
 //                  {t:"msg", o: origin, w: wire}            window.parent.postMessage
-//
-// `wire` is the structured-clone subset of packages/vue-native/src/iframe.ts,
-// whose codec is repeated below in plain JS (test/iframe-codec.test.ts runs
-// the same cases through both).
+// `wire` is the codec of packages/vue-native/src/iframe.ts, repeated below in plain JS.
 (() => {
   "use strict";
   const bridge = window.chrome && window.chrome.webview;

@@ -1,14 +1,3 @@
-// <vn-sticker>, vue-native's stickers and animated emoji (crates/vn-tree/src/
-// sticker.rs over crates/vn-sticker), in a real host:
-//
-//   bun test packages/vn-test/specs/sticker.spec.ts
-//
-// `fixtures/sticker` lays stickers out on white. Its `steps.json` is red for
-// the first second of its loop, green for the second and blue for the third,
-// so one pixel says which second a copy shows; `half.json` is a still black
-// square at 50%. The screen is read back with `print_window`, what the window
-// last presented.
-
 import { afterAll, expect, test } from "bun:test";
 import { launch, readPng, type Bounds } from "../src/index";
 
@@ -19,7 +8,6 @@ const app = await launch({
   label: "sticker",
 });
 
-// A loopback server for the http(s) path: the host fetches it, once per source.
 let served = 0;
 const steps = await Bun.file(new URL("../fixtures/sticker/src/steps.json", import.meta.url)).text();
 const server = Bun.serve({
@@ -47,7 +35,6 @@ async function box(selector: string): Promise<Bounds> {
   return b;
 }
 
-/** The centre pixel of each box, from ONE screenshot. */
 async function centres(boxes: Bounds[]): Promise<Rgb[]> {
   const shot = readPng(await app.screenshot(undefined, "print_window"));
   const k = shot.width / W;
@@ -88,14 +75,11 @@ test("copies of one source, at any size, show the same frame of one clock", asyn
     await sleep(270);
   }
   console.log(`[sticker] ${agree}/${n} samples agree; seen ${[...seen].join("")}`);
-  // A sample can land on the one frame where a colour turns over.
   expect(agree).toBeGreaterThanOrEqual(n - 1);
-  // ~3.2 s of samples cross every second of the 3 s loop.
   expect([...seen].sort().join("")).toBe("bgr");
 }, T);
 
 test("pixels are straight alpha, and play=off / once hold their frame", async () => {
-  // `#once` played its one loop and stopped on its last frame.
   await until("ended:once", async () => (await events()).includes("ended:once"), 10_000);
   const [half, off, once] = await centres(await Promise.all(["#half", "#off", "#once"].map(box)));
   // 50% black over white: a premultiplied pipeline that skipped the divide would read ~64.
@@ -107,15 +91,11 @@ test("pixels are straight alpha, and play=off / once hold their frame", async ()
 
 test("tint paints the frame in the element's colour, by the frame's alpha", async () => {
   const [tint, tintHalf] = await centres(await Promise.all(["#tint", "#tint-half"].map(box)));
-  // half.json (black at 50%) in red: red at 50% over white.
   expect(near(tint!, [255, 128, 128])).toBe(true);
-  // steps.json's red, opaque, in rgba(0, 0, 255, 0.5): halfway from red to blue.
   expect(near(tintHalf!, [128, 0, 128])).toBe(true);
 }, T);
 
 test("a colour change, as a theme switch makes, re-tints the frame shown", async () => {
-  // The tint is read when painting (render::sticker `Tinted`): the tile keeps
-  // its frame, and the next draw paints it in the new colour.
   await app.eval("document.getElementById('tint').style.color = 'rgb(0, 0, 255)'; 'ok'");
   await sleep(300);
   const [tint] = await centres([await box("#tint")]);
@@ -172,7 +152,6 @@ test("the engine's stats count what is on screen", async () => {
   const mem = (await app.send("mem")) as { stickers: Record<string, number> | null };
   const s = mem.stickers!;
   console.log(`[sticker] mem: ${JSON.stringify(s)}`);
-  // steps.json (path and URL), half.json, star.tgs; missing.json failed.
   expect(s.sources).toBeGreaterThanOrEqual(4);
   expect(s.failures).toBeGreaterThanOrEqual(1);
   expect(s.visibleTargets).toBeGreaterThanOrEqual(5);

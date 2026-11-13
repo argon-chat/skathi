@@ -1,11 +1,9 @@
-//! A small JSON reader/writer for the dev-loop control files
-//! (`dist/manifest.json`, `dist/changes.json`) and the vn-devtools wire.
+//! A small JSON reader/writer for the dev-loop control files (`dist/manifest.json`,
+//! `dist/changes.json`) and the vn-devtools wire.
 //!
-//! Both file formats are written by our own `packages/vue-native/build.ts`, so
-//! the reader only has to be correct, not fast or forgiving. The writer exists
-//! for the same reason: `serde` + `serde_json` + derives is a lot of build for
-//! one newline-delimited protocol that never leaves localhost, and the whole
-//! thing is ~90 lines.
+//! Both file formats are written by our own `packages/vue-native/build.ts`, so the reader only has to
+//! be correct, not fast or forgiving. The writer exists because `serde` + derives is a lot of build
+//! for one newline-delimited protocol that never leaves localhost.
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Json {
@@ -36,11 +34,8 @@ impl Json {
             _ => None,
         }
     }
-    // The two accessors only the devtools wire and the window config happen to
-    // ask for today. A reader for a JSON variant is part of what a JSON reader
-    // IS — removing one because this month's callers do not use it would mean
-    // adding it back the next time a config grows a boolean — so the exotic
-    // `--features no-devtools` build allows them rather than losing them.
+    // Only the devtools wire and the window config use these today; kept as part of a JSON reader,
+    // so the `no-devtools` build allows them.
     #[cfg_attr(not(vn_devtools), allow(dead_code))]
     pub fn as_bool(&self) -> Option<bool> {
         match self {
@@ -56,7 +51,6 @@ impl Json {
         }
     }
 
-    // -- writing ----------------------------------------------------------
     // Constructors short enough to build a response inline.
 
     pub fn s(v: impl Into<String>) -> Json {

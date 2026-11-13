@@ -1,17 +1,3 @@
-// The Windows clipboard, read and written from the test process — so a spec
-// can see what an app put there the way another app sees it, and put back what
-// the person at the machine had on it.
-//
-//   const saved = clipboardSnapshot();
-//   try { …the app copies… ; clipboardFormat("PNG") } finally { clipboardRestore(saved); }
-//
-// Through bun:ffi and user32/kernel32, no dependency (the rule in
-// package.json). The snapshot holds every format whose data is a memory block
-// (text, HTML, DIBs, PNG, a file drop, an app's own registered formats); the
-// formats that are GDI handles (CF_BITMAP, the metafiles, a palette) are left
-// out, and Windows makes CF_BITMAP again from the DIB on its own. Nothing here
-// logs or keeps what it read beyond the snapshot it returns.
-
 import { dlopen, FFIType, ptr, toArrayBuffer } from "bun:ffi";
 
 const user32 = dlopen("user32.dll", {

@@ -83,7 +83,7 @@ describe("no windowing host", () => {
     const advisories = rt.advisories();
     expect(advisories.length).toBe(1);
     expect(advisories[0]).toContain("windowing host is missing");
-    expect(advisories[0]).toContain("docs/WINDOWING.md");
+    expect(advisories[0]).toContain("appWindow` is inert");
   });
 
   test("defineWindow without a host warns instead of throwing", () => {

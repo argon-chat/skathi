@@ -1,14 +1,3 @@
-// A mouse event goes to the TOPMOST element under the pointer and bubbles from
-// there (m26, docs/RUNTIME.md §5.18, crates/vn-tree/src/pointer.rs, fork item
-// 39). Until then the innermost box that LISTENED took it: a press fell
-// through a card that listens for nothing to the backdrop under it, and
-// `e.target` was the listening box, never the element pressed.
-//
-//   bun test packages/vn-test/specs/hit-target.spec.ts
-//
-// Every gesture is a REAL pointer event through gpui's hit test (devtools
-// `mouse` and `wheel`), aimed at a point, so it lands where a hand's would.
-
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { launch } from "../src/index";
 
@@ -35,7 +24,6 @@ async function centre(sel: string): Promise<[number, number]> {
 async function mouse(x: number, y: number, kind: string, extra: Record<string, unknown> = {}) {
   await app.send("mouse", { x, y, kind, ...extra });
 }
-/** A click at a point, and what the listeners logged for it. */
 async function clickAt(x: number, y: number): Promise<string[]> {
   await app.eval("__VN_TEST_HIT__.log.length = 0");
   await mouse(x, y, "click");
@@ -49,7 +37,6 @@ describe("a mouse event is for the topmost element under the pointer", () => {
   test("a card painted over a listening sibling takes the press; the backdrop beside it still does", async () => {
     const [x, y] = await centre("#card-text");
     bunExpect(await clickAt(x, y)).toEqual(["mousedown:document t=card-text"]);
-    // The backdrop where nothing covers it.
     const b = await box("#backdrop");
     bunExpect(await clickAt(b.x + 6, b.y + 6)).toEqual([
       "mousedown:backdrop t=backdrop",
@@ -121,14 +108,10 @@ describe("a mouse event is for the topmost element under the pointer", () => {
   }, T);
 
   test("inside a replayed cache boundary the cover is still on top", async () => {
-    // `#tick` repaints the window ten times a second; the rows do not change,
-    // so their boundaries replay.
     await sleep(600);
     const mem = (await app.send("mem", {})) as { data?: Record<string, unknown> };
     const counters = JSON.stringify(mem.data ?? mem);
     bunExpect(/"cacheBoundaryEntities":\s*[1-9]/.test(counters)).toBe(true);
-    // `.c-cover` overlaps the listening `.c-under` by a negative margin; the
-    // row around both listens too.
     const [x, y] = await centre("#cc1");
     bunExpect(await clickAt(x, y)).toEqual(["mousedown:document t=cc1", "click:crow1 t=cc1"]);
     bunExpect(await app.eval(`document.elementFromPoint(${x}, ${y}).id`)).toBe("cc1");

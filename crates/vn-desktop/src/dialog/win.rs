@@ -1,14 +1,9 @@
-//! `IFileOpenDialog` / `IFileSaveDialog`, on a `vn-dialog` thread (mod.rs).
+//! `IFileOpenDialog` / `IFileSaveDialog` on a `vn-dialog` thread (mod.rs).
 //!
-//! The threading is ported from gpui's `crates/gpui_windows/src/dialog.rs`
-//! (Apache-2.0, zed-industries/zed; vendor/zed @ `a0f8fa7bdbb`): an STA of the
-//! dialog's own, a 100 ms thread timer that posts `WM_CLOSE` to the thread's
-//! `#32770` windows once the owner is closing, and the owner kept alive until
-//! the native loop exits (mod.rs `owner_closing` / `is_idle`, vn-app's close
-//! paths). What it does not take from gpui is the dialog itself: gpui's
-//! `prompt_for_paths` has no filters, no client GUID and no
-//! `FOS_NOCHANGEDIR`, and answers through a future the frame thread would
-//! have to poll.
+//! Threading follows gpui's `dialog.rs` (Apache-2.0, zed-industries/zed): a dedicated STA, a
+//! 100 ms thread timer posting `WM_CLOSE` to the thread's `#32770` windows once the owner is
+//! closing, and the owner kept alive until the loop exits. Unlike gpui this sets filters, a client
+//! GUID and `FOS_NOCHANGEDIR`, and answers through a callback.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -50,7 +45,6 @@ fn known_id(k: Known) -> windows::core::GUID {
     }
 }
 
-/// A known folder's path, wherever the user has moved it.
 pub(super) fn known_folder(k: Known) -> Option<PathBuf> {
     unsafe {
         let p = SHGetKnownFolderPath(&known_id(k), KF_FLAG_DEFAULT, None).ok()?;
@@ -60,7 +54,6 @@ pub(super) fn known_folder(k: Known) -> Option<PathBuf> {
     }
 }
 
-/// A Windows failure inside the dialog → a rejection.
 fn fail(what: &str, e: &windows::core::Error) -> Fail {
     Fail::new("InvalidStateError", format!("the file dialog failed ({what}): {}", e.message())).code("EIO").os(e.code().0)
 }
@@ -86,8 +79,7 @@ thread_local! {
     static CANCELLATION: RefCell<Option<Cancellation>> = const { RefCell::new(None) };
 }
 
-/// The 100 ms check that closes this thread's dialog once its owner is
-/// closing. A thread timer: the dialog's own modal loop dispatches it.
+/// Closes this thread's dialog once its owner is closing; a thread timer, dispatched by the modal loop.
 struct CancellationTimer(usize);
 
 impl CancellationTimer {
@@ -119,9 +111,8 @@ unsafe extern "system" fn cancel_dialog(_: HWND, _: u32, _: usize, _: u32) {
     }
 }
 
-/// Shell dialogs can open further modal dialogs (an overwrite prompt). Only
-/// dialog windows on this dedicated thread are closed, never the hidden COM
-/// windows beside them.
+/// Shell dialogs can open further modal dialogs (an overwrite prompt): close only dialog windows
+/// on this thread, never the hidden COM windows beside them.
 unsafe extern "system" fn close_dialog(hwnd: HWND, _: LPARAM) -> BOOL {
     let mut class_name = [0u16; 32];
     let length = unsafe { GetClassNameW(hwnd, &mut class_name) } as usize;
@@ -133,10 +124,8 @@ unsafe extern "system" fn close_dialog(hwnd: HWND, _: LPARAM) -> BOOL {
     TRUE
 }
 
-/// `TaskDialogIndirect`, resolved at run time. It exists only in comctl32 v6,
-/// which a process gets through its manifest (vn-app's exe carries gpui's).
-/// Linked statically, it would keep every binary of this crate that has no
-/// such manifest, its unit tests among them, from loading at all.
+/// `TaskDialogIndirect`, resolved at run time: it exists only in comctl32 v6 (via manifest), and
+/// linking it statically would stop manifest-less binaries, unit tests included, from loading.
 type TaskDialogIndirectFn = unsafe extern "system" fn(
     *const TASKDIALOGCONFIG,
     *mut i32,
@@ -157,10 +146,8 @@ fn task_dialog_indirect() -> Option<TaskDialogIndirectFn> {
 /// The first button's id; button `i` is `BUTTON_BASE + i`.
 const BUTTON_BASE: i32 = 100;
 
-/// Asks `q` in a TaskDialog owned by `owner` (0 = none): the index of the
-/// button pressed, or `Ok(None)` for Esc, the close box, or the owner's
-/// closing (the same 100 ms timer as a file dialog: a TaskDialog is a
-/// `#32770` too).
+/// Asks `q` in a TaskDialog owned by `owner` (0 = none): the button index, or `Ok(None)` for Esc,
+/// the close box, or the owner closing (the same 100 ms timer; a TaskDialog is a `#32770` too).
 pub(super) fn ask(q: &super::Ask, owner: isize, cancel: &Cancellation) -> Result<Option<usize>, Fail> {
     let Some(show) = task_dialog_indirect() else {
         return Err(Fail::new(
@@ -184,9 +171,7 @@ pub(super) fn ask(q: &super::Ask, owner: isize, cancel: &Cancellation) -> Result
     let mut config = TASKDIALOGCONFIG::default();
     config.cbSize = std::mem::size_of::<TASKDIALOGCONFIG>() as u32;
     config.hwndParent = HWND(owner as *mut core::ffi::c_void);
-    // Esc and the close box are a dismissal; the dialog opens over its owner.
     let mut flags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW;
-    // The owner window's own icon, so the question says whose it is.
     let icon = if owner != 0 { unsafe { GetClassLongPtrW(HWND(owner as *mut core::ffi::c_void), GCLP_HICON) } } else { 0 };
     if icon != 0 {
         flags |= TDF_USE_HICON_MAIN;
@@ -214,8 +199,7 @@ pub(super) fn ask(q: &super::Ask, owner: isize, cancel: &Cancellation) -> Result
     Ok((0..buttons.len() as i32).contains(&i).then_some(i as usize))
 }
 
-/// Shows the dialog for `n`, owned by `owner` (0 = none). `Ok(None)` is a
-/// dismissal, including the one the owner's closing forces.
+/// Shows the dialog for `n`; `Ok(None)` is a dismissal, including the owner closing.
 pub(super) fn pick(n: &Native, owner: isize, cancel: &Cancellation) -> Result<Option<Vec<PathBuf>>, Fail> {
     let _apartment = Apartment::new()?;
     let _timer = CancellationTimer::new(cancel.clone())?;
@@ -255,8 +239,7 @@ unsafe fn show(n: &Native, owner: isize) -> Result<Option<Vec<PathBuf>>, Fail> {
     .map_err(|e| fail("CoCreateInstance", &e))?;
 
     let mut opts = unsafe { dialog.GetOptions() }.map_err(|e| fail("GetOptions", &e))?;
-    // FOS_NOCHANGEDIR is gpui's missing flag: without it the dialog moves
-    // this PROCESS's current directory to wherever the user browsed.
+    // Without FOS_NOCHANGEDIR the dialog moves the process's current directory.
     opts |= FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR;
     match n.kind {
         Kind::Open => {
@@ -270,7 +253,6 @@ unsafe fn show(n: &Native, owner: isize) -> Result<Option<Vec<PathBuf>>, Fail> {
     }
     unsafe { dialog.SetOptions(opts) }.map_err(|e| fail("SetOptions", &e))?;
 
-    // The strings live until Show returns; the specs point into them.
     let mut names: Vec<HSTRING> = Vec::new();
     let mut specs: Vec<HSTRING> = Vec::new();
     if n.kind != Kind::Folder {
@@ -339,7 +321,6 @@ unsafe fn show(n: &Native, owner: isize) -> Result<Option<Vec<PathBuf>>, Fail> {
     Ok(Some(out))
 }
 
-/// The classic system color dialog runs on the same cancellable owner thread.
 pub(super) fn color(value: &str, owner: isize, cancel: &Cancellation) -> Result<Option<String>, Fail> {
     use windows::Win32::Foundation::COLORREF;
     use windows::Win32::UI::Controls::Dialogs::{ChooseColorW, CommDlgExtendedError, CHOOSECOLORW, CC_FULLOPEN, CC_RGBINIT};

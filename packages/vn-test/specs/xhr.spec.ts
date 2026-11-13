@@ -1,14 +1,3 @@
-// XMLHttpRequest on the real host (m26 fixes, docs/DESKTOP.md §4.5): the
-// Argon client's upload PUT, run in the app against a loopback server.
-//
-//   bun test packages/vn-test/specs/xhr.spec.ts
-//
-// redjs's own tests (src/webapi/xhr/jsc_tests.rs) cover the state machine on
-// both transports. This spec only proves the class reaches a page on the
-// shipped host (net-h2, the vue-native runtime installed over the engine), and
-// that the client's `noXhr()` is false there, so its fetch-PUT fallback is not
-// taken. Any fixture will do; this one borrows `events`.
-
 import { afterAll, expect, test } from "bun:test";
 import { launch } from "../src/index";
 
@@ -40,7 +29,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 test("the client's xhrPut: upload progress, a sliding timeout, the ETag at load", async () => {
   expect(await app.eval("typeof XMLHttpRequest + ',' + typeof ProgressEvent")).toBe("function,function");
   const url = `http://127.0.0.1:${server.port}/part/3`;
-  // lib/video/multipartUpload.ts's xhrPut, with a log instead of a promise.
   await app.eval(`(() => {
     const out = (globalThis.__XHR__ = { log: [], done: false });
     const body = new Blob([new Uint8Array(200 * 1024).fill(1)], { type: "video/mp4" });
@@ -67,7 +55,6 @@ test("the client's xhrPut: upload progress, a sliding timeout, the ETag at load"
   }
   expect(got.done).toBe(true);
   const n = 200 * 1024;
-  // At least one upload progress, the last at the full length, then load.
   expect(got.log.length).toBeGreaterThanOrEqual(2);
   expect(got.log.at(-2)).toBe(`up:${n}/${n}`);
   expect(got.log.at(-1)).toBe(`load:200:"part-3":PUT /part/3 ${n} video/mp4`);

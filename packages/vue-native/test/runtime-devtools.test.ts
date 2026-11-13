@@ -1,22 +1,14 @@
-// The `appDevtools` extension tier (docs/DEVTOOLS.md "Turning them off").
+// The `appDevtools` extension tier.
 //
-// What is NOT tested here is the half that matters most and cannot be reached
-// from a fake host: that `disable()` really closes a TCP listener, deletes the
-// handshake and makes the port refuse. That is an END-TO-END claim about a real
-// process and it is pinned by `packages/vn-test/specs/devtools-optout.spec.ts`,
-// which connects to the port before and after. What lives in JS — the JSON
-// round trip, the refusal advisory, the `onChange` fan-out and the inert branch
-// a `--features no-devtools` host produces — is here.
+// Not tested here: that `disable()` really closes the TCP listener, deletes the handshake and makes the port refuse;
+// that is end-to-end, pinned by `packages/vn-test/specs/devtools-optout.spec.ts`. Here: the JSON round trip, the
+// refusal advisory, the `onChange` fan-out and the inert branch of a `--features no-devtools` host.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
 
 describe("appDevtools", () => {
-  test("the default is ON, which is the whole point of the m22 inversion", () => {
-    // Before m22 a shipped binary had no devtools unless it opted in at COMPILE
-    // time. Now every build has them and every build starts with them on; the
-    // app is what turns them off. `available` is the other half of that answer:
-    // "is there anything here to switch".
+  test("the default is ON", () => {
     const rt = createRuntime();
     expect(rt.appDevtools.available).toBe(true);
     expect(rt.appDevtools.isEnabled()).toBe(true);
@@ -47,10 +39,6 @@ describe("appDevtools", () => {
   });
 
   test("VN_DEVTOOLS=1 refuses disable() — with an advisory, not a throw", () => {
-    // The developer-override case: somebody is debugging a build whose app
-    // turns its devtools off. The app's call must not silently appear to work
-    // (that is the "diverge without saying so" failure this project refuses),
-    // and it must not take a shipped app's boot code down either.
     const rt = createRuntime();
     rt.host.devtools.locked = true;
     expect(rt.appDevtools.disable()).toBe(true);
@@ -127,10 +115,6 @@ describe("appDevtools", () => {
   });
 
   test("`--features no-devtools`: inert, honest, and it does not throw", () => {
-    // The build that has no devtools AT ALL. `appDevtools.disable()` in an
-    // entry module is its likeliest caller, and a build that already has none
-    // must not crash on being asked to turn them off — so `disable()` is a
-    // silent success and only the two verbs that ASK FOR SOMETHING advise.
     const rt = createRuntime({ devtools: false });
     expect(rt.appDevtools.available).toBe(false);
     expect(rt.appDevtools.isEnabled()).toBe(false);

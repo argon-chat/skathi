@@ -1,47 +1,22 @@
 {
-  // Type-checking for the two HOST preludes — `prelude.ts` and
-  // `window.prelude.ts` — and nothing else. It lives HERE, next to them, rather
-  // than in packages/vue-native, because an editor resolves the nearest
-  // tsconfig upward from the file it has open, and these files are not in the
-  // runtime package: they are compiled into the Rust binary as strings.
-  //
-  //   bun x tsc --noEmit -p crates/vn-app/src
-  //
-  // Nothing here emits. `packages/vue-native/scripts/gen-preludes.ts` produces
-  // the checked-in `.js` through `Bun.Transpiler`, which is the same emitter
-  // `build.ts` feeds the runtime through — so tsc's job is only to make this
-  // file and what actually ships agree.
+  // Type-checks the two host preludes only (`bun x tsc --noEmit -p crates/vn-app/src`); they are
+  // compiled into the binary as strings, not part of the runtime package. Nothing is emitted.
   "compilerOptions": {
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    // NOT "DOM" — the same reason packages/vue-native/tsconfig.json gives, and
-    // it bites harder here: this prelude is the file that INSTALLS `screen`,
-    // `matchMedia`, `resizeTo` and `navigator.windowControlsOverlay`. With
-    // lib.dom loaded every one of them would already "exist", the absence they
-    // exist to fill would be invisible, and `document.title` would be a real
-    // `Document`'s rather than the accessor defined three lines down.
+    // Not DOM: lib.dom would make `screen`, `matchMedia` etc. already exist and hide what the
+    // prelude installs.
     "lib": ["ESNext"],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    // Load-bearing, not taste — see packages/vue-native/tsconfig.json. There
-    // are no classes in these two files today, and this is what keeps a class
-    // added later from acquiring a constructor prologue that runs before the
-    // host has finished wiring the global it was reading.
+    // A class added later must not get a constructor prologue that runs before the host wires its globals.
     "useDefineForClassFields": false,
     "forceConsistentCasingInFileNames": true,
     "noImplicitOverride": true,
-    // NOT `isolatedModules`, unlike the runtime's tsconfig: both preludes are
-    // classic SCRIPTS with no import and no export — they have to be, because
-    // `rt.eval` evaluates them as scripts — and that flag requires every file
-    // to be a module.
-    //
-    // `types: []` for the reason the runtime states: no @types package may put
-    // a global in scope that type-checks and does not exist at runtime. That is
-    // the entire bug class this conversion exists to catch, and the prelude is
-    // the worst place in the process to hit it — it runs before anything that
-    // could report the error.
+    // Not `isolatedModules`: the preludes are classic scripts (no import/export).
+    // `types: []` so no @types package puts a global in scope that does not exist at runtime.
     "types": []
   },
   "include": [
@@ -49,7 +24,6 @@
     "window.prelude.ts",
     "prelude-host.d.ts",
     // What redjs provides, and the `__VN_*` contract the runtime consumes.
-    // Reused rather than restated — see prelude-host.d.ts's header.
     "../../../packages/vue-native/src/engine.d.ts",
     "../../../packages/vue-native/src/protocol.d.ts"
   ]

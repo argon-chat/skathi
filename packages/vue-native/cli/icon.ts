@@ -1,18 +1,12 @@
-// The exe's icon: `RT_ICON` 1..n plus `RT_GROUP_ICON` **1**.
+// The exe's icon: `RT_ICON` 1..n plus `RT_GROUP_ICON` 1.
 //
-// Id 1 is not a convention we picked — gpui's window class already loads
-// `LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCE(1), IMAGE_ICON, …)`
-// (vendor/zed/crates/gpui_windows/src/platform.rs `load_icon`), so stamping a
-// group icon under that id is what puts it on the window, the taskbar and
-// Alt-Tab, as well as on the file in Explorer, with no host change at all.
+// Id 1 is not our choice: gpui's window class loads `MAKEINTRESOURCE(1)` (vendor/zed/crates/gpui_windows/src/
+// platform.rs `load_icon`), so a group icon under that id lands on the window, taskbar, Alt-Tab and the file
+// in Explorer with no host change.
 //
-// Two inputs:
-//   * an `.ico` — taken verbatim, every image it carries;
-//   * a SQUARE 8-bit `.png` — becomes PNG-compressed icon images at 256 (the
-//     file itself when it is already 256²), 48, 32, 24 and 16. Windows has read
-//     PNG at every size since Vista. The small sizes are made by a box filter in
-//     premultiplied alpha, which is what keeps a soft edge from going dark.
-// Anything else is an error that asks for an `.ico`, rather than a guess.
+// Two inputs: an `.ico`, taken verbatim; or a square 8-bit `.png`, which becomes PNG-compressed images at 256
+// (the file itself when already 256²), 48, 32, 24 and 16, the small ones by a box filter in premultiplied
+// alpha so soft edges do not go dark. Anything else is an error asking for an `.ico`.
 
 import { readFileSync } from "node:fs";
 import { extname } from "node:path";
@@ -31,10 +25,6 @@ export interface IconImage {
 
 /** Sizes made from a PNG, largest first (the order Explorer reads them in). */
 export const PNG_ICON_SIZES = [256, 48, 32, 24, 16];
-
-// ---------------------------------------------------------------------------
-// PNG
-// ---------------------------------------------------------------------------
 
 const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -198,12 +188,7 @@ export function encodePng(img: Rgba): Uint8Array {
   return out;
 }
 
-/**
- * Area-averaging ("box") downscale, in premultiplied alpha so a transparent
- * neighbour cannot drag an edge pixel's colour towards black. Fractional
- * source coverage is weighted exactly, so 256 → 48 is not a nearest-neighbour
- * shimmer.
- */
+/** Area-averaging downscale in premultiplied alpha, so a transparent neighbour cannot darken an edge pixel; fractional coverage is weighted exactly. */
 export function resizeRgba(src: Rgba, dw: number, dh: number): Rgba {
   const { width: sw, height: sh, data } = src;
   const out = new Uint8Array(dw * dh * 4);
@@ -249,10 +234,6 @@ export function resizeRgba(src: Rgba, dw: number, dh: number): Rgba {
   return { width: dw, height: dh, data: out };
 }
 
-// ---------------------------------------------------------------------------
-// ICO
-// ---------------------------------------------------------------------------
-
 /** Every image in an `.ico` (ICONDIR + ICONDIRENTRYs), bytes verbatim. */
 export function parseIco(bytes: Uint8Array, label = "ico"): IconImage[] {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -280,7 +261,6 @@ export function parseIco(bytes: Uint8Array, label = "ico"): IconImage[] {
   return images;
 }
 
-/** The icon images for a configured `windows.icon` path. */
 export function iconImagesFrom(path: string): IconImage[] {
   const bytes = new Uint8Array(readFileSync(path));
   const ext = extname(path).toLowerCase();
@@ -307,11 +287,7 @@ export function iconImagesFrom(path: string): IconImage[] {
   }));
 }
 
-/**
- * `RT_ICON` payloads (ids `firstId..`) and the `RT_GROUP_ICON` that names them
- * (GRPICONDIR + 14-byte GRPICONDIRENTRYs — an ICONDIRENTRY whose file offset
- * became a resource id).
- */
+/** `RT_ICON` payloads (ids `firstId..`) and the `RT_GROUP_ICON` naming them (GRPICONDIR + 14-byte entries: an ICONDIRENTRY whose file offset became a resource id). */
 export function groupIcon(images: IconImage[], firstId = 1): { icons: { id: number; data: Uint8Array }[]; group: Uint8Array } {
   const group = new Uint8Array(6 + images.length * 14);
   const dv = new DataView(group.buffer);

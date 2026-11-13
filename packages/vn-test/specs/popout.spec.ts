@@ -1,30 +1,5 @@
-// MULTI-WINDOW phase 1, driven end to end — docs/MULTIWINDOW.md.
-//
-//   bun test packages/vn-test/specs/popout.spec.ts
-//
-// One Vue app, one retained tree, up to FOUR OS windows. The claims this file
-// holds down, in order of how much they cost to make true:
-//
-//   * a REAL platform click, dispatched into the palette window's own `Window`,
-//     runs the same JS handler on the same `ref`, and text painted in the main
-//     window moves (§0 — the spike proved this);
-//   * `<Teleport :to="win.el">` MOVES the panel between the windows and moves
-//     it back, keeping its node ids and its state (D-M03);
-//   * a `<input>` inside a pop-out takes real keyboard focus IN THAT WINDOW and
-//     the keystrokes reach it (§5.1 — the focus trio had to become per-window);
-//   * `@media` answers against the window that PAINTS the element, so one rule
-//     is on in the 380 px palette and off in the 620 px main window (§6);
-//   * a `<video>` decodes and paints inside a pop-out, which the spike refused
-//     because atlas tiles are per-window (§7.4, A-M06 retired);
-//   * `chrome="hidden"` gives a pop-out its own titlebar, and its drag region
-//     does not disturb the main window's hitbox list (§7.6).
-//
-// Nothing here focuses a window or moves the real cursor. Cross-window clicks
-// go through `__vn_window_click`, which feeds `gpui::PlatformInput` to that
-// window's own `Window::dispatch_event` — the same entry point the Win32
-// message loop uses. Everything else is a devtools command; since phase 1 those
-// resolve the window from the NODE, so `type` into a pop-out's input needs no
-// `--window` (docs/MULTIWINDOW.md §7.5).
+// Cross-window clicks go through `__vn_window_click`, which feeds `gpui::PlatformInput` to that
+// window's own `Window::dispatch_event` — the same entry point the Win32 message loop uses.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { expect, launch } from "../src/index";
@@ -32,7 +7,6 @@ import { expect, launch } from "../src/index";
 const app = await launch({ app: "popout", window: [620, 460], label: "popout" });
 afterAll(() => app.close());
 
-/** Generous: a cold `bun test` pays for the first frame of a real GPU app. */
 const T = 30_000;
 
 type Popout = {
@@ -48,7 +22,6 @@ type Popout = {
 const popouts = (): Promise<Popout[]> => app.eval("JSON.parse(__vn_window_popouts())");
 const windows = () => app.send("windows");
 
-/** Poll until `probe` is truthy — the pop-out open is deferred by design (§3.2). */
 async function until<T>(what: string, probe: () => Promise<T>, ms = 8000): Promise<T> {
   const deadline = Date.now() + ms;
   let last: unknown;
@@ -62,12 +35,8 @@ async function until<T>(what: string, probe: () => Promise<T>, ms = 8000): Promi
 }
 
 /**
- * The hue of a node's computed `background`, 0..1 — how this file tells the two
- * `@media` branches apart. The styles dump is gpui's own `StyleRefinement`
- * debug, so `Hsla { h: 0.616…` is the blue `#7aa2ff1f` and `h: 0.066…` the
- * orange `#ff9d5c26`. Reading the hue rather than the literal keeps the
- * assertion honest about what it is checking — WHICH RULE WON — without
- * pinning gpui's formatting.
+ * The styles dump is gpui's own `StyleRefinement` debug, so `Hsla { h: 0.616…` is the blue
+ * `#7aa2ff1f` and `h: 0.066…` the orange `#ff9d5c26`.
  */
 async function backgroundHue(selector: string): Promise<number> {
   const dump = JSON.stringify(await app.locator(selector).styles());
@@ -77,9 +46,8 @@ async function backgroundHue(selector: string): Promise<number> {
 }
 
 /**
- * `__vn_media_events(id)` DRAINS the element's event ring — it is the JS side's
- * "what happened since you last asked" — so a poller has to accumulate. This
- * keeps one bag per node for the life of the file.
+ * `__vn_media_events(id)` DRAINS the element's event ring — it is the JS side's "what happened
+ * since you last asked" — so a poller has to accumulate.
  */
 const mediaSeen = new Map<number, Set<string>>();
 async function mediaEvents(id: number): Promise<Set<string>> {
@@ -90,7 +58,6 @@ async function mediaEvents(id: number): Promise<Set<string>> {
   return bag;
 }
 
-/** `__vn_media_state` answers `key=value` lines, not JSON. */
 async function mediaState(id: number): Promise<Record<string, string>> {
   const raw: string = await app.eval(`__vn_media_state(${id})`);
   const out: Record<string, string> = {};
@@ -103,9 +70,7 @@ async function mediaState(id: number): Promise<Record<string, string>> {
 
 /** The panel's rectangle in window A, captured before it is popped out. */
 let inWindowA: { x: number; y: number; w: number; h: number };
-/** The palette window's id and painted root, once it exists. */
 let palette: Popout;
-/** `.panel`'s background hue in the 620 px main window — the wide branch. */
 let wideHue: number;
 
 describe("pop-out", () => {
@@ -113,23 +78,18 @@ describe("pop-out", () => {
     await expect(app.locator(".panel")).toHaveCount(1);
     await expect(app.locator(".count")).toHaveText("0");
     await expect(app.locator(".mirror")).toContainText("count = 0");
-    // Nothing is popped out yet.
     bunExpect(await popouts()).toEqual([]);
 
     inWindowA = await app.locator(".panel").boundingBox();
-    // It is laid out in the 620-wide main window, below the header, the lede,
-    // the mirror rows and the buttons.
     bunExpect(inWindowA.y).toBeGreaterThan(100);
     bunExpect(inWindowA.w).toBeGreaterThan(500);
 
-    // The WIDE branch of `@media (max-width: 420px)`: blue. Captured here so
-    // the per-window test below is a comparison rather than a magic number.
+    // Captured here so the per-window test below is a comparison rather than a magic number.
     wideHue = await backgroundHue(".panel");
     bunExpect(wideHue).toBeGreaterThan(0.5);
   }, T);
 
   test("state is shared before the split, so the two readouts agree", async () => {
-    // `.inc-a` is the "+1 (from window A)" button.
     await app.locator(".inc-a").click();
     await expect(app.locator(".count")).toHaveText("1");
     await expect(app.locator(".mirror")).toContainText("count = 1");
@@ -146,37 +106,21 @@ describe("pop-out", () => {
     });
     palette = list[0];
     bunExpect(palette.windowId).toBeGreaterThan(0);
-    // `<VnWindow>`'s own container is what the host paints; the panel is
-    // teleported INTO it and keeps the id it had in window A (D-M03).
     bunExpect(palette.node).not.toBe(panelBefore);
     bunExpect((await app.query(".panel")).nodes[0].id).toBe(panelBefore);
-    // The live `title` prop reached the OS caption.
     bunExpect(palette.title).toBe("Palette - charcoal");
     bunExpect(palette.chrome).toBe("default");
 
-    // The host said so out loud, once.
     const { entries } = await app.logs(0);
     bunExpect(entries.some((e) => e.text.includes("popped out into window"))).toBe(true);
 
-    // The main window stopped painting it: the hint that only shows while the
-    // panel is away is now painted, which it could not be if `palette` were
-    // false.
     await expect(app.locator(".hint")).toBeVisible();
   }, T);
 
   test("the subtree left the main window's layout but stayed in the tree", async () => {
-    // Still queryable, still styled, still one node — a pop-out is a PAINT-level
-    // detachment, not a tree-level one (D-M05).
     await expect(app.locator(".panel")).toHaveCount(1);
     await expect(app.locator(".count")).toHaveText("1");
 
-    // …and its rectangle is now the PALETTE window's, not window A's. That
-    // window's client area is 380 wide and `<VnWindow>`'s container is its
-    // painted root — which since phase 1 gets `build_node`'s root treatment
-    // (100 %x100 %, `overflow: scroll`, a tracked focus handle, §7.1) — so the
-    // panel is laid out against 380 px rather than against the 620-wide main
-    // window's padded content column, and it sits at the very top of its own
-    // window instead of below the header and the buttons.
     const box = await app.locator(".panel").boundingBox();
     bunExpect(box.w).toBe(380);
     bunExpect(box.w).not.toBe(inWindowA.w);
@@ -189,17 +133,12 @@ describe("pop-out", () => {
     const x = box.x + box.w / 2;
     const y = box.y + box.h / 2;
 
-    // Straight into the palette window's own `Window::dispatch_event` — its hit
-    // test, its element tree, its listener. No cursor moves, nothing is focused.
     const hit = await app.eval(`__vn_window_click(${palette.node}, ${x}, ${y})`);
     bunExpect(hit).toBe(true);
 
-    // The counter painted in the palette moved…
     await expect(app.locator(".count")).toHaveText("2");
-    // …and so did the one painted in window A, off the same reactive wave.
     await expect(app.locator(".mirror")).toContainText("count = 2");
 
-    // Once more, to rule out a one-off.
     await app.eval(`__vn_window_click(${palette.node}, ${x}, ${y})`);
     await expect(app.locator(".mirror")).toContainText("count = 3");
   }, T);
@@ -210,10 +149,6 @@ describe("pop-out", () => {
     await expect(app.locator(".count")).toHaveText("4");
   }, T);
 
-  // -------------------------------------------------------------------------
-  // phase 1
-  // -------------------------------------------------------------------------
-
   test("devtools addresses both windows, and the pop-out reports its own metrics", async () => {
     const data = await windows();
     bunExpect(data.windows.length).toBe(2);
@@ -222,69 +157,36 @@ describe("pop-out", () => {
     bunExpect(main.root).toBe(0);
     bunExpect(pop.kind).toBe("popout");
     bunExpect(pop.id).toBe(palette.windowId);
-    // The node THAT window paints — the key every per-window bounds map is
-    // stored under.
     bunExpect(pop.root).toBe(palette.node);
     bunExpect(pop.viewport.w).toBe(380);
     bunExpect(main.viewport.w).toBe(620);
 
-    // …and the app itself learned its pop-out's size, through `@resize` — the
-    // honest answer to "a pop-out's metrics" in a one-realm world, since
-    // `window.innerWidth` still means the MAIN window's viewport (A-M04).
     await expect(app.locator(".pal-size")).toHaveText("380x320");
   }, T);
 
   test("@media answers against the window that PAINTS the element", async () => {
-    // **The headline of §6.** The palette window's viewport is 380 px and the
-    // main window's is 620, and the sheet says
-    // `@media (max-width: 420px) { .panel { background: #ff9d5c26 } }`.
-    //
-    // So the SAME element, at the SAME moment, in ONE stylesheet, takes the
-    // narrow branch — because the cascade is now evaluated against the window
-    // that paints it. The spike could not do this: there was one global `Env`,
-    // so a 380 px pop-out answered against the main window's 620.
+    // So the SAME element, at the SAME moment, in ONE stylesheet, takes the narrow branch —
+    // because the cascade is now evaluated against the window that paints it.
     const narrowHue = await backgroundHue(".panel");
-    bunExpect(narrowHue).toBeLessThan(0.2); // orange
-    bunExpect(wideHue).toBeGreaterThan(0.5); // blue, in the main window
+    bunExpect(narrowHue).toBeLessThan(0.2);
+    bunExpect(wideHue).toBeGreaterThan(0.5);
   }, T);
 
   test("@keyframes resolve against the painting window too, not the primary's", async () => {
-    // The other half of §6, and the one m22/integration.md §6 item 4 left
-    // standing: the CASCADE became per window, but the ANIMATION half still
-    // handed `engine.keyframes_for` the pass's fallback environment — which is
-    // always the primary window's. Worse, the `@media` a `@keyframes` block sat
-    // under was thrown away at COMPILE time, so one by-name slot held whichever
-    // block the file ended with and no environment could have changed it.
-    //
-    // `.pulse` is one `animation-name`, declared twice in one sheet: `to {
-    // opacity: 0.2 }` at the top level and `to { opacity: 0.8 }` inside the
-    // same `@media (max-width: 420px)` block the panel's background uses. It is
-    // `forwards`, so each element parks on its own answer and the `live` bucket
-    // — `base` refined by what the animator holds — is a settled value rather
-    // than a race against a clock.
+    // It is `forwards`, so each element parks on its own answer and the `live` bucket — `base`
+    // refined by what the animator holds — is a settled value rather than a race against a clock.
     await expect(app.locator(".pulse-palette")).toHaveComputedStyle("opacity", "0.8");
-    // …and the SAME name, at the same moment, in the 620px main window.
     await expect(app.locator(".pulse-main")).toHaveComputedStyle("opacity", "0.2");
   }, T);
 
   test("…and a THIRD window opening does not hand the pop-out the primary's answers back", async () => {
-    // The regression this exists for: the cascade resolved one `Env` per WALK
-    // ROOT, which is right for the pass in which a subtree changes hands
-    // (`set_painted_root` scopes that one to the subtree) and silently wrong
-    // for every full-document pass afterwards. Opening another window dirties
-    // the tree, `restyle_roots` collapses to `t.root`, the popped-out subtree
-    // is walked as part of THAT root — and answered against the primary
-    // window's viewport again. The palette went back to the wide branch and
-    // stayed there, with nothing in the tree, the logs or the styles dump
-    // saying so until you looked at the pixels.
-    //
-    // The env now rides the walk and switches at the one node where the window
-    // can change: a painted root (`windows::env_at_root`).
+    // The env now rides the walk and switches at the one node where the window can change: a
+    // painted root (`windows::env_at_root`).
     await app.locator(".pop-notes").click();
     await until("the notes window to exist", async () =>
       (await popouts()).find((p) => p.title === "Notes") ?? null);
-    // The open is DEFERRED, and the pass that was wrong is the one it triggers
-    // a frame later — so read the answer after it, not before.
+    // The open is DEFERRED, and the pass that was wrong is the one it triggers a frame later — so
+    // read the answer after it, not before.
     await new Promise((r) => setTimeout(r, 600));
     bunExpect(await backgroundHue(".panel")).toBeLessThan(0.2);
 
@@ -296,21 +198,16 @@ describe("pop-out", () => {
   }, T);
 
   test("an <input> in the pop-out takes focus IN THAT WINDOW and receives keystrokes", async () => {
-    // No `--window`: since phase 1 a devtools command resolves the window from
-    // the NODE, because a node hangs under exactly one painted root and each
-    // painted root belongs to exactly one window (§7.5).
     await app.send("type", { selector: ".brush-name", text: "!" });
     // The edit reached the shared `ref`, so the MAIN window's readout moved.
     await expect(app.locator(".brush-mirror")).toContainText("charcoal!");
-    // …and the live `title` prop that is derived from it renamed the OS caption.
     await until("the caption to follow the prop", async () => {
       const [p] = await popouts();
       return p?.title === "Palette - charcoal!";
     });
 
-    // Focus is per-window: the pop-out's input has it, and the main window's
-    // own focus was never taken (`activate` defaults to false, so opening a
-    // palette does not steal the caret).
+    // Focus is per-window: the pop-out's input has it, and the main window's own focus was never
+    // taken (`activate` defaults to false, so opening a palette does not steal the caret).
     const focused = await app.send("query", { selector: ".brush-name" });
     bunExpect(focused.count).toBe(1);
   }, T);
@@ -329,16 +226,11 @@ describe("pop-out", () => {
 
     await until("the pop-out to be gone", async () => (await popouts()).length === 0);
 
-    // The `@close` emit ran — `palette` is false again, so the "bring it back"
-    // button is hidden and the hint is gone.
+    // The `@close` emit ran — `palette` is false again, so the "bring it back" button is hidden
+    // and the hint is gone.
     await expect(app.locator(".hint")).toBeHidden();
 
-    // The panel is painted by the main window again: its box is back inside the
-    // 620-wide window, below the header, and it kept its state.
     await expect(app.locator(".count")).toHaveText("4");
-    // …and it went back to answering `@media` against THIS window: the narrow
-    // branch is off again, which is the other half of §6 and the half a stale
-    // per-window `Env` would silently fail.
     await until("the panel to re-cascade against the main window", async () =>
       (await backgroundHue(".panel")) > 0.5);
     await expect(app.locator(".brush-mirror")).toContainText("charcoal!");
@@ -353,10 +245,6 @@ describe("pop-out", () => {
   }, T);
 
   test("a <video> plays inside a pop-out", async () => {
-    // The case the spike REFUSED (A-M06): a decoded frame becomes an atlas tile
-    // and `Window::drop_image` is per-window, so a tile returned to the wrong
-    // window is freed from every atlas except the one holding it. Phase 1
-    // records the creating window on the element.
     await app.locator(".pop-player").click();
     const player = await until("the player window to exist", async () => {
       const l = await popouts();
@@ -364,9 +252,6 @@ describe("pop-out", () => {
     });
     bunExpect(player.title).toBe("Player");
 
-    // It is laid out in the player window, not the main one — waited for
-    // rather than read, because `__vn_window_popouts()` lists a window from the
-    // deferred open, which is BEFORE its first paint fills its bounds map.
     const box = await until("the clip to be laid out in the player window", async () => {
       const b = await app.locator(".clip").boundingBox();
       return b && b.w > 0 ? b : null;
@@ -374,31 +259,13 @@ describe("pop-out", () => {
     bunExpect(box.w).toBe(320);
     bunExpect(box.h).toBe(180);
 
-    // …and the OS media pipeline is actually running in there: a decoded frame
-    // reached THIS window's sprite atlas. Before phase 1 the tile went to the
-    // primary window's atlas — the pop-out had nothing to paint — and the
-    // retired tiles were freed from every atlas except the one holding them.
-    //
-    // **Waited on `playing`, not on `readyState`.** This test used to poll for
-    // `readyState >= 2` and then assert `currentTime > 0`, which are two
-    // different facts: HAVE_CURRENT_DATA means a frame for the CURRENT position
-    // exists, and the current position at that moment is 0. Measured, the gap
-    // is real and wide — `readyState` reaches 4 (with `videoWidth` already 160,
-    // through `loadeddata`/`canplaythrough`) about 60 ms before `playing` fires
-    // and the clock starts moving. Whether the poll landed inside those 60 ms
-    // is the whole of the flake (research/reports/m23/tails.md §4).
-    //
-    // `playing` is the edge HTML defines as "playback has begun", so it is the
-    // signal this assertion is about. No sleep: the loop is polling a real
-    // state change, and the clock check that follows is the same edge from the
-    // other side.
     const id = (await app.query(".clip")).nodes[0].id;
     const events = await until("the video to report `playing`", async () => {
       const bag = await mediaEvents(id);
       return bag.has("playing") ? bag : null;
     });
-    // `loadeddata` is the browser's "the first frame is available" edge, and it
-    // is the one the atlas upload rides on — so it is worth naming.
+    // `loadeddata` is the browser's "the first frame is available" edge, and it is the one the
+    // atlas upload rides on — so it is worth naming.
     bunExpect([...events]).toContain("loadeddata");
 
     const state = await until("the transport clock to advance", async () => {
@@ -415,8 +282,8 @@ describe("pop-out", () => {
   }, T);
 
   test("a pop-out can draw its OWN titlebar without disturbing the main window's", async () => {
-    // The main window is `titleBarStyle: "default"`, so the OS owns its caption
-    // and it declares no hitboxes of its own.
+    // The main window is `titleBarStyle: "default"`, so the OS owns its caption and it declares no
+    // hitboxes of its own.
     const before = JSON.parse(await app.eval("__vn_window_hitboxes()"));
     bunExpect(before).toEqual([]);
 
@@ -427,9 +294,6 @@ describe("pop-out", () => {
     });
     bunExpect(notes.chrome).toBe("hidden");
 
-    // Its `.bar` declares `window-drag: move` and its close button
-    // `--window-control: close`, and BOTH land in that window's own list —
-    // which is the whole point of `control_hitboxes` becoming per-window (§7.6).
     const boxes = await until("the notes window to paint its chrome", async () => {
       const list = JSON.parse(await app.eval(`__vn_window_hitboxes(${notes.windowId})`));
       return list.length ? list : null;
@@ -438,9 +302,8 @@ describe("pop-out", () => {
     bunExpect(areas).toContain("drag");
     bunExpect(areas).toContain("close");
 
-    // …and the MAIN window's list is still empty. Before phase 1 a pop-out's
-    // build cleared it, which is both a wrong answer and a live bug in the
-    // fallback-titlebar retire rule.
+    // Before phase 1 a pop-out's build cleared it, which is both a wrong answer and a live bug in
+    // the fallback-titlebar retire rule.
     bunExpect(JSON.parse(await app.eval("__vn_window_hitboxes()"))).toEqual([]);
 
     await app.locator(".pop-notes").click();
@@ -449,20 +312,8 @@ describe("pop-out", () => {
   }, T);
 
   test("A-M03: a `position: fixed` box sits at the POP-OUT's edge, not the document's", async () => {
-    // The last designed-not-built row of §10. taffy has no viewport-relative
-    // position, so a fixed box resolves against its PARENT — which agrees with
-    // CSS exactly when the parent's box IS the viewport. In a pop-out the
-    // viewport is that WINDOW's painted root, not `t.root`, and the geometric
-    // test used to ask the primary window's rectangle: two coordinate spaces,
-    // so `position-fixed-not-portalled` fired at every `fixed` element in every
-    // pop-out while a genuinely mis-parented one went unmeasured.
-    //
-    // `.wtool` is `right: 8px; bottom: 8px` inside the 320x260 notes window.
     await app.locator(".pop-notes").click();
-    // The size arrives with the pop-out's first frame (`report_metrics`), the
-    // moment its `@resize` fires — a beat after the entry itself, which exists
-    // at 0x0 from the open. Since JS runs without frames (the background tick),
-    // a devtools eval can land in that beat.
+    // Since JS runs without frames (the background tick), a devtools eval can land in that beat.
     const notes = await until("the notes window to be painted", async () => {
       const l = await popouts();
       return l.find((p) => p.title === "Notes" && p.width > 0) ?? null;
@@ -474,16 +325,11 @@ describe("pop-out", () => {
       const b = await app.locator(".wtool").boundingBox();
       return b.w > 0 ? b : null;
     });
-    // Anchored to THIS window's edges: 320 - 8 and 260 - 8. Against the
-    // document's 620x460 viewport those numbers would be 612 and 452, and
-    // against its own parent's content box they would be neither.
+    // Against the document's 620x460 viewport those numbers would be 612 and 452, and against its
+    // own parent's content box they would be neither.
     bunExpect(tool.x + tool.w).toBe(notes.width - 8);
     bunExpect(tool.y + tool.h).toBe(notes.height - 8);
 
-    // …and it was SAID once, which is the advisory half of A-M03: the same
-    // element pinned to the document's viewport a moment ago is now pinned to
-    // this window's, and that is a real behaviour change even though it is
-    // exactly what a second browser window does.
     const { entries } = await app.logs(0);
     const spoken = entries.filter((e) => e.text.includes("A-M03"));
     bunExpect(spoken.length).toBe(1);
@@ -500,7 +346,6 @@ describe("pop-out", () => {
       return l.find((w) => w.title.startsWith("Palette")) ?? null;
     });
     const before = (await popouts()).length;
-    // A-M02: the same node id may be painted by exactly one window (§5).
     await app.eval(`__vn_window_open(${p.node}, "{}")`);
     bunExpect((await popouts()).length).toBe(before);
     await app.locator(".back").click();

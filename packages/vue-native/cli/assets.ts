@@ -7,9 +7,8 @@
 //
 // The one remapping is Vite's `publicDir`, and only when vn.config.json
 // declares it: `public/favicon.ico` is keyed `favicon.ico`, which is what
-// `/favicon.ico` asks for. The dev host does NOT remap yet — it resolves
-// `/favicon.ico` against the app root — so a declared publicDir is a known
-// dev/exe difference (docs/PACKAGING.md §4).
+// The dev host does not remap yet (it resolves `/favicon.ico` against the app root), so a declared
+// publicDir is a known dev/exe difference.
 //
 // Never packaged, whatever the patterns say: `src/` (it is in the bundle
 // already), `node_modules/`, `dist/` (the exe would carry itself), dotfiles

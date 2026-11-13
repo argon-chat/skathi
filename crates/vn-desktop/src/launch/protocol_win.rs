@@ -1,4 +1,4 @@
-//! Per-user protocol registration in the registry (docs/LAUNCH.md §5).
+//! Per-user protocol registration in the registry.
 //!
 //! ```text
 //!   HKCU\Software\Classes\<scheme>
@@ -9,12 +9,9 @@
 //!     shell\open\command\(Default) = "\"<exe>\" [--vn-dist \"<slot>\"] --vn-protocol-launch -- \"%1\""
 //! ```
 //!
-//! HKCU only — never HKLM, never HKCR (which is the merged view). A scheme
-//! that already exists WITHOUT our marker, in HKCU or machine-wide in HKLM, is
-//! another app's and is never overwritten: registering it is a TypeError that
-//! names the owner. Writes are idempotent — only a value that differs is
-//! written, which is also what heals a registration after the exe moved — and
-//! each write that changed something is followed by
+//! HKCU only. A scheme that already exists without our marker (in HKCU or HKLM) is another app's and
+//! is never overwritten: registering it is a TypeError naming the owner. Writes are idempotent (which
+//! also heals a registration after the exe moved); each change is followed by
 //! `SHChangeNotify(SHCNE_ASSOCCHANGED)`.
 
 use windows::core::{HSTRING, PWSTR};
@@ -28,11 +25,9 @@ use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST
 
 use super::protocol::{command_line, command_targets};
 
-/// The value that marks a key as ours.
 pub const OWNER_VALUE: &str = "VnOwner";
 
-/// Where registrations live. [`Hive::user`] is the real one; tests point a
-/// hive at a scratch subtree of HKCU so they never touch `Software\Classes`.
+/// Where registrations live; tests point a hive at a scratch subtree of HKCU.
 #[derive(Debug, Clone)]
 pub struct Hive {
     /// Under HKCU: `Software\Classes`.
@@ -49,7 +44,6 @@ impl Hive {
     }
 }
 
-/// What a scheme's key says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
     Absent,
@@ -123,7 +117,6 @@ fn read_sz(key: &Key, name: &str) -> Option<String> {
     Some(String::from_utf16_lossy(&wide[..end]))
 }
 
-/// Writes a `REG_SZ` value if it differs. Returns whether it wrote.
 fn write_sz(key: &Key, name: &str, value: &str) -> Result<bool, WIN32_ERROR> {
     if read_sz(key, name).as_deref() == Some(value) {
         return Ok(false);
@@ -148,7 +141,6 @@ fn describe_owner(key: &Key, scheme: &str) -> String {
     }
 }
 
-/// What `<scheme>` is right now, for app `id`.
 pub fn status(hive: &Hive, scheme: &str, id: &str) -> Result<Status, String> {
     let path = format!(r"{}\{scheme}", hive.classes);
     match open(HKEY_CURRENT_USER, &path, false).map_err(|e| format!("reading HKCU\\{path}: {e:?}"))? {
@@ -168,8 +160,7 @@ pub fn status(hive: &Hive, scheme: &str, id: &str) -> Result<Status, String> {
             if let Some(machine) = &hive.machine {
                 let mpath = format!(r"{machine}\{scheme}");
                 if let Ok(Some(_)) = open(HKEY_LOCAL_MACHINE, &mpath, false) {
-                    // A per-user key would SHADOW a machine-wide one for this
-                    // user — taking it over all the same.
+                    // A per-user key would shadow a machine-wide one, taking it over all the same.
                     return Ok(Status::Foreign { owner: "a machine-wide registration (HKLM)".into() });
                 }
             }
@@ -178,10 +169,8 @@ pub fn status(hive: &Hive, scheme: &str, id: &str) -> Result<Status, String> {
     }
 }
 
-/// Registers `<scheme>` for app `id` → `exe`. `Ok(true)` when something was
-/// written, `Ok(false)` when it was already exactly so. `Err` names why not
-/// (a foreign owner, a registry failure) — the caller turns it into a
-/// TypeError or an advisory.
+/// Registers `<scheme>` for app `id` → `exe`. `Ok(true)` when something was written; `Err` names a
+/// foreign owner or a registry failure.
 pub fn register(hive: &Hive, scheme: &str, id: &str, exe: &str, dev_slot: Option<&str>) -> Result<bool, String> {
     if let Status::Foreign { owner } = status(hive, scheme, id)? {
         return Err(format!("the \"{scheme}\" scheme is registered to {owner}; vue-native never takes over another app's scheme"));
@@ -205,7 +194,6 @@ pub fn register(hive: &Hive, scheme: &str, id: &str, exe: &str, dev_slot: Option
     Ok(wrote)
 }
 
-/// Is `<scheme>` ours AND does it start `exe`?
 pub fn is_registered(hive: &Hive, scheme: &str, id: &str, exe: &str) -> bool {
     matches!(status(hive, scheme, id), Ok(Status::Ours { command }) if command_targets(&command, exe))
 }
@@ -219,15 +207,14 @@ fn delete(hive: &Hive, scheme: &str) -> bool {
     ok
 }
 
-/// Removes `<scheme>` — only when it carries our marker AND runs `exe`, so a
-/// copy of the app elsewhere keeps its registration. Returns whether it did.
+/// Removes `<scheme>` only when it carries our marker AND runs `exe`, so another copy of the app
+/// keeps its registration.
 pub fn unregister(hive: &Hive, scheme: &str, id: &str, exe: &str) -> bool {
     is_registered(hive, scheme, id, exe) && delete(hive, scheme)
 }
 
-/// `--vn-unregister-protocols`: every key under the hive's classes carrying
-/// our marker, whichever exe it points at (this is the uninstaller's hook;
-/// the exe may be the one being removed). Returns the schemes removed.
+/// `--vn-unregister-protocols`: every key carrying our marker, whichever exe it points at (the
+/// uninstaller's hook). Returns the schemes removed.
 pub fn unregister_all(hive: &Hive, id: &str) -> Vec<String> {
     let Ok(Some(classes)) = open(HKEY_CURRENT_USER, &hive.classes, false) else { return Vec::new() };
     let mut ours = Vec::new();
@@ -244,8 +231,7 @@ pub fn unregister_all(hive: &Hive, id: &str) -> Vec<String> {
             continue;
         }
         let sub = String::from_utf16_lossy(&name[..len as usize]);
-        // File extensions and CLSIDs are not schemes; skip the obvious ones
-        // without opening them.
+        // File extensions and CLSIDs are not schemes.
         if sub.starts_with('.') || sub.starts_with('{') {
             continue;
         }
@@ -259,9 +245,8 @@ pub fn unregister_all(hive: &Hive, id: &str) -> Vec<String> {
     ours.into_iter().filter(|s| delete(hive, s)).collect()
 }
 
-/// Does this process run with MSIX package identity? Then HKCU\Classes writes
-/// are virtualised and register nothing: protocols belong in the
-/// AppxManifest (`uap:Protocol`) instead (A-F9).
+/// Under MSIX package identity HKCU\Classes writes are virtualised and register nothing; protocols
+/// belong in the AppxManifest.
 pub fn has_package_identity() -> bool {
     let mut len = 0u32;
     // APPMODEL_ERROR_NO_PACKAGE (15700) = no identity; ERROR_INSUFFICIENT_BUFFER
@@ -274,8 +259,7 @@ pub fn has_package_identity() -> bool {
 mod tests {
     use super::*;
 
-    /// A scratch hive under `HKCU\Software\vue-native-test-<pid>-<tag>`, deleted
-    /// on drop — the tests never touch `Software\Classes`.
+    /// A scratch hive under HKCU, deleted on drop.
     struct Scratch(Hive, String);
     impl Scratch {
         fn new(tag: &str) -> Scratch {

@@ -1,37 +1,13 @@
 //! `<iframe>`: a document in a platform webview, drawn into the element's box.
 //!
-//! The requirements are research/reports/m26/iframe-webview-requirements-
-//! 2026-11-12.md; the numbers (`R2.4`) below cite it.
+//! This module knows the tree (which `<iframe>` nodes exist, where their boxes are, how document
+//! events become JS events), not the webview: a [`Backend`] does, registered with [`set_backend`].
+//! With none (Linux, no WebView2 runtime, tests) every `src` is answered with `error`.
 //!
-//! This module is the half that knows the tree: which `<iframe>` nodes exist,
-//! which have a document, where each one's box is this frame, and how the
-//! document's events become JS events. It does not know a webview. A
-//! [`Backend`] does (crates/vn-webview); the host registers one with
-//! [`set_backend`], and where none is registered — Linux, a Windows machine
-//! without the WebView2 runtime, a unit test — every `src` is answered with
-//! `error` and nothing native is created (R8.1).
-//!
-//! # Lifecycle
-//!
-//! A document exists while the element is CONNECTED and has a `src` (or a
-//! `srcdoc`), as in a browser (R1.4):
-//!
-//! * a write to `src` / `srcdoc` / `sandbox` / `allow` / `referrerpolicy` /
-//!   `name`, and any insertion or removal, [`note`]s the node;
-//! * [`tick`], once a frame, reconciles each noted node: creates the frame,
-//!   navigates it, or drops it;
-//! * moving the element inside the tree keeps the frame (R1.8): the node id is
-//!   the frame's identity, not its position;
-//! * a node that no longer exists loses its frame in [`gc`].
-//!
-//! # Events
-//!
-//! A backend reports through the [`Sink`] it was given, from the UI thread but
-//! outside any gpui frame. The sink queues; [`tick`] drains the queue and
-//! dispatches `load`, `error` and `message` at the node. A message carries
-//! `{"o": origin, "d": wire}` as the event's `key`, which the runtime turns
-//! into a `MessageEvent` at `window` (packages/vue-native/src/runtime.ts,
-//! `deliverFrameMessage`).
+//! A document exists while the element is CONNECTED and has a `src`/`srcdoc`. Attribute writes and
+//! insertion/removal [`note`] the node; [`tick`] reconciles each (create, navigate, drop). Moving
+//! the element keeps the frame: the node id is its identity. Backend events arrive on the UI thread
+//! outside any gpui frame, so the [`Sink`] queues and [`tick`] dispatches `load`/`error`/`message`.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -92,15 +68,15 @@ pub enum FrameEvent {
     Loaded,
     /// The navigation failed, or the browser process went away.
     Failed(String),
-    /// `window.parent.postMessage(..)` in the document: the sender's serialized
-    /// origin (`"null"` for an opaque one) and the payload's wire text.
+    /// `window.parent.postMessage(..)` in the document: the sender's serialized origin (`"null"`
+    /// for an opaque one) and the payload's wire text.
     Message { origin: String, wire: String },
     /// The pointer the document wants over its box changed.
     Cursor(gpui::CursorStyle),
 }
 
-/// How a backend reports. Callable from the UI thread at any time; never
-/// re-enters JS — the event is queued for the next [`tick`].
+/// Callable from the UI thread at any time; never re-enters JS — the event is queued for the next
+/// [`tick`].
 #[derive(Clone)]
 pub struct Sink {
     node: u32,
@@ -143,16 +119,12 @@ pub enum PointerKind {
 pub trait Frame {
     /// Load what `attrs` describe, replacing the current document.
     fn navigate(&mut self, attrs: &FrameAttrs);
-    /// Deliver a message to the document's `window` (R2.1). `target_origin` is
-    /// `"*"`, `"/"` (the app's origin) or an origin.
+    /// Deliver a message to the document's `window` (R2.1).
     fn post(&mut self, wire: &str, target_origin: &str);
-    /// Show the document at `placement`, or hide it (`None`: not painted this
-    /// frame — `display: none`, culled, scrolled out, R5.5).
+    /// Show the document at `placement`, or hide it (`None`: not painted this frame — `display:
+    /// none`, culled, scrolled out, R5.5).
     fn place(&mut self, placement: Option<Placement>);
-    /// The element is painted by `window` now: the window it was created in,
-    /// a pop-out it was moved to, or the same window after its compositor was
-    /// rebuilt. The document goes with it and is not reloaded (R1.8). Called
-    /// on every paint of the element; cheap when nothing changed.
+    /// The document goes with it and is not reloaded (R1.8).
     fn rehome(&mut self, window: &mut Window);
     /// Give the document the keyboard focus, or take it back (R1.6).
     fn focus(&mut self, on: bool);
@@ -162,31 +134,24 @@ pub trait Frame {
 
 /// The platform's webview.
 pub trait Backend {
-    /// Can a document be created on this machine right now? Cheap: asked by
-    /// `vnFeatures.iframe` on every read.
+    /// Cheap: asked by `vnFeatures.iframe` on every read.
     fn supported(&self) -> bool;
-    /// A new, empty frame in `window`. `None`: it could not be made; the
-    /// element gets `error`.
+    /// A new, empty frame in `window`.
     fn create(&self, node: u32, sink: Sink, window: &mut Window, cx: &mut App) -> Option<Box<dyn Frame>>;
 }
 
 struct Live {
     frame: Box<dyn Frame>,
-    /// What the frame was last navigated to.
     attrs: FrameAttrs,
-    /// The window it was created in.
     win: crate::windows::WinKey,
-    /// Has the current navigation been answered? Messages before the answer
-    /// are still delivered; a second `Loaded` for one navigation is not.
+    /// Has the current navigation been answered?
     answered: bool,
-    /// What the frame was last told about its place.
     placed: Option<Placement>,
     /// The pointer the document asks for over its box.
     cursor: gpui::CursorStyle,
 }
 
-/// How many documents may be open at once in the process (R7.4). Each is a
-/// renderer process of the system browser.
+/// How many documents may be open at once in the process (R7.4).
 pub const MAX_FRAMES: usize = 8;
 
 thread_local! {
@@ -195,22 +160,17 @@ thread_local! {
     static WAKE: RefCell<Rc<dyn Fn()>> = RefCell::new(Rc::new(|| {}));
     /// Nodes to reconcile on the next tick.
     static NOTED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
-    /// Nodes with a `src` that were not connected when last looked at.
     static WAITING: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
     static FRAMES: RefCell<HashMap<u32, Live>> = RefCell::new(HashMap::new());
     static EVENTS: RefCell<VecDeque<(u32, FrameEvent)>> = const { RefCell::new(VecDeque::new()) };
     /// The iframes the paint walk reached since the last tick.
     static PAINTED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
-    /// The windows that built an element tree since the last tick. A tick
-    /// without a draw between says nothing about what is on screen.
+    /// The windows that built an element tree since the last tick.
     static DREW: RefCell<Vec<crate::windows::WinKey>> = const { RefCell::new(Vec::new()) };
-    /// Unsupported: the `src` each node was last refused for, so one `src` is
-    /// one `error`.
     static REFUSED: RefCell<HashMap<u32, FrameAttrs>> = RefCell::new(HashMap::new());
 }
 
-/// Installs the platform's webview. `wake` schedules a frame of the UI loop
-/// and may be called from a backend callback.
+/// Installs the platform's webview.
 pub fn set_backend(backend: Rc<dyn Backend>, wake: Rc<dyn Fn()>) {
     BACKEND.with(|b| *b.borrow_mut() = Some(backend));
     WAKE.with(|w| *w.borrow_mut() = wake);
@@ -231,8 +191,6 @@ pub(crate) fn note(id: u32) {
     NOTED.with(|n| n.borrow_mut().insert(id));
 }
 
-/// Something was inserted or removed: an `<iframe>` waiting to be connected
-/// may be now, and a connected one may not be.
 pub(crate) fn note_structure() {
     let waiting: Vec<u32> = WAITING.with(|w| w.borrow().iter().copied().collect());
     let live: Vec<u32> = FRAMES.with(|f| f.borrow().keys().copied().collect());
@@ -291,7 +249,6 @@ fn step(t: &Tree, id: u32) -> Step {
     if connected(t, id) { Step::Show(attrs) } else { Step::Wait }
 }
 
-/// Reconciles the noted iframes and dispatches what the documents reported.
 /// Called once per frame from [`crate::frame_tick`].
 pub(crate) fn tick(window: &mut Window, cx: &mut App) {
     let noted: Vec<u32> = NOTED.with(|n| n.borrow_mut().drain().collect());
@@ -306,7 +263,6 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) {
             }
             Step::Wait => {
                 WAITING.with(|w| w.borrow_mut().insert(id));
-                // A browser unloads a disconnected iframe's document.
                 drop(FRAMES.with(|f| f.borrow_mut().remove(&id)));
             }
             Step::Show(attrs) => {
@@ -323,7 +279,6 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) {
 fn show(id: u32, attrs: FrameAttrs, win: crate::windows::WinKey, window: &mut Window, cx: &mut App) {
     let backend = BACKEND.with(|b| b.borrow().clone()).filter(|b| b.supported());
     let Some(backend) = backend else {
-        // No webview here: one `error` per distinct navigation (R8.1).
         let again = REFUSED.with(|r| r.borrow().get(&id) == Some(&attrs));
         if !again {
             EVENTS.with(|q| {
@@ -335,7 +290,6 @@ fn show(id: u32, attrs: FrameAttrs, win: crate::windows::WinKey, window: &mut Wi
     };
     let existing = FRAMES.with(|f| f.borrow().get(&id).map(|l| (l.attrs == attrs, l.win == win)));
     match existing {
-        // Nothing the document depends on changed (a move inside the tree).
         Some((true, _)) => {}
         Some((false, _)) => FRAMES.with(|f| {
             if let Some(live) = f.borrow_mut().get_mut(&id) {
@@ -382,9 +336,8 @@ fn show(id: u32, attrs: FrameAttrs, win: crate::windows::WinKey, window: &mut Wi
     }
 }
 
-/// Hides each frame of this window that the last paint did not reach
-/// (`display: none`, culled, scrolled out — R5.5). Showing and moving happen in
-/// [`placed`], during the paint itself.
+/// Hides each frame of this window that the last paint did not reach (`display: none`, culled,
+/// scrolled out — R5.5).
 fn place_all(win: crate::windows::WinKey) {
     let drew = DREW.with(|d| {
         let mut d = d.borrow_mut();
@@ -404,7 +357,6 @@ fn place_all(win: crate::windows::WinKey) {
             }
         }
     });
-    // Another window's frames were reached by ITS paint; keep the marks.
     PAINTED.with(|p| {
         let mut p = p.borrow_mut();
         for id in seen {
@@ -415,8 +367,8 @@ fn place_all(win: crate::windows::WinKey) {
     });
 }
 
-/// `win` is building the element tree of a draw: the paint that follows
-/// reaches every iframe that is on screen in it.
+/// `win` is building the element tree of a draw: the paint that follows reaches every iframe that
+/// is on screen in it.
 pub(crate) fn drawing(win: crate::windows::WinKey) {
     DREW.with(|d| {
         let mut d = d.borrow_mut();
@@ -426,8 +378,7 @@ pub(crate) fn drawing(win: crate::windows::WinKey) {
     });
 }
 
-/// The paint walk's report, before [`placed`]: `window` is the one painting
-/// this iframe. Its document follows it there.
+/// Its document follows it there.
 pub(crate) fn painted_in(id: u32, window: &mut Window) {
     let win = crate::windows::key(window);
     FRAMES.with(|f| {
@@ -435,7 +386,6 @@ pub(crate) fn painted_in(id: u32, window: &mut Window) {
             live.frame.rehome(window);
             if live.win != win {
                 live.win = win;
-                // The old window's box is gone; the new one reports its own.
                 live.placed = None;
             }
         }
@@ -447,8 +397,7 @@ pub(crate) fn cursor(id: u32) -> Option<gpui::CursorStyle> {
     FRAMES.with(|f| f.borrow().get(&id).map(|l| l.cursor))
 }
 
-/// The paint walk's report: this iframe is on screen at `placement`. Told to
-/// the frame at once, so the document moves in the frame its box does (R5.4).
+/// Told to the frame at once, so the document moves in the frame its box does (R5.4).
 pub(crate) fn placed(id: u32, placement: Placement) {
     PAINTED.with(|p| p.borrow_mut().insert(id));
     FRAMES.with(|f| {
@@ -467,7 +416,6 @@ fn deliver(window: &mut Window, cx: &mut App) {
         let Some((id, event)) = EVENTS.with(|q| q.borrow_mut().pop_front()) else { break };
         let key = FRAMES.with(|f| f.borrow().get(&id).map(|l| l.attrs.key().to_string()));
         let key = key.or_else(|| REFUSED.with(|r| r.borrow().get(&id).map(|a| a.key().to_string())));
-        // The node went away, or dropped its document, while this was queued.
         let Some(key) = key else { continue };
         match event {
             FrameEvent::Loaded | FrameEvent::Failed(_) => {
@@ -491,7 +439,6 @@ fn deliver(window: &mut Window, cx: &mut App) {
                     None => false,
                 });
                 if changed {
-                    // The box's cursor is part of its build.
                     window.refresh();
                 }
             }
@@ -522,7 +469,7 @@ fn message_key(origin: &str, wire: &str) -> String {
     out
 }
 
-/// `contentWindow.postMessage`. Dropped when the node has no document.
+/// `contentWindow.postMessage`.
 pub(crate) fn post(id: u32, wire: &str, target_origin: &str) {
     FRAMES.with(|f| {
         if let Some(live) = f.borrow_mut().get_mut(&id) {
@@ -540,8 +487,7 @@ pub(crate) fn focus(id: u32, on: bool) {
     });
 }
 
-/// A pointer event at the element, for its document. `at` is the pointer in
-/// device pixels of the window; the document gets it relative to its box.
+/// A pointer event at the element, for its document.
 pub(crate) fn pointer(id: u32, kind: PointerKind, at: (f32, f32), buttons: u8, shift: bool, control: bool) {
     FRAMES.with(|f| {
         if let Some(live) = f.borrow_mut().get_mut(&id) {
@@ -558,15 +504,11 @@ thread_local! {
     static FOCUSED: RefCell<HashMap<crate::windows::WinKey, u32>> = RefCell::new(HashMap::new());
 }
 
-/// The keyboard follows the app's focus (R6.3): an `<iframe>` is a focusable
-/// element, and while it is the window's focused node — by a press, `Tab` or
-/// `el.focus()` — its document has the keys; when the focus moves on, the
-/// window has them back. Decided here, once a tick, from the focus the frame
-/// ended with, so a blur-then-focus inside one event is one move.
+/// The keyboard follows the app's focus (R6.3): an `<iframe>` is a focusable element, and while it
+/// is the window's focused node — by a press, `Tab` or `el.focus()` — its document has the keys;
+/// when the focus moves on, the window has them back.
 fn sync_focus(win: crate::windows::WinKey, window: &Window) {
     let had = FOCUSED.with(|f| f.borrow().get(&win).copied().unwrap_or(0));
-    // The system took the keyboard with the window; it is given back to the
-    // document when the window is active again.
     if !window.is_window_active() {
         if had != 0 {
             FOCUSED.with(|f| f.borrow_mut().remove(&win));
@@ -589,9 +531,8 @@ fn sync_focus(win: crate::windows::WinKey, window: &Window) {
     });
 }
 
-/// Is an element of the app fullscreen? Then Escape is the app's even while a
-/// document has the keyboard: it leaves fullscreen and the document does not
-/// hear it, as in a browser.
+/// Is an element of the app fullscreen? Then Escape is the app's even while a document has the
+/// keyboard: it leaves fullscreen and the document does not hear it, as in a browser.
 pub fn fullscreen_active() -> bool {
     tree::read_tree(|t| crate::fullscreen::current(t).is_some())
 }
@@ -601,7 +542,6 @@ pub(crate) fn has_document(id: u32) -> bool {
     FRAMES.with(|f| f.borrow().contains_key(&id))
 }
 
-/// Drops the documents of nodes that no longer exist.
 pub(crate) fn gc(live: impl Fn(u32) -> bool) {
     drop(FRAMES.with(|f| {
         let mut f = f.borrow_mut();
@@ -613,8 +553,7 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
     PAINTED.with(|p| p.borrow_mut().retain(|&id| live(id)));
 }
 
-/// A window closed: the documents it was showing go with it (R7.3). Their
-/// elements, if they are painted again elsewhere, load anew.
+/// Their elements, if they are painted again elsewhere, load anew.
 pub(crate) fn forget_window(win: crate::windows::WinKey) {
     let gone: Vec<Live> = FRAMES.with(|f| {
         let mut f = f.borrow_mut();
@@ -626,8 +565,7 @@ pub(crate) fn forget_window(win: crate::windows::WinKey) {
     DREW.with(|d| d.borrow_mut().retain(|w| *w != win));
 }
 
-/// Every document goes: the app is quitting. The browser processes end with
-/// the last one.
+/// Every document goes: the app is quitting.
 pub fn shutdown() {
     drop(FRAMES.with(|f| std::mem::take(&mut *f.borrow_mut())));
     EVENTS.with(|q| q.borrow_mut().clear());
@@ -658,7 +596,6 @@ mod tests {
     use crate::tree::{read_tree, with_tree};
     use std::cell::Cell;
 
-    /// A backend that records what it was asked.
     #[derive(Default)]
     struct Fake {
         on: Cell<bool>,
@@ -781,7 +718,6 @@ mod tests {
         drawing(5);
         placed(id, at);
         place_all(5);
-        // A tick with no draw between: nothing is known, nothing changes.
         place_all(5);
         // A draw that did not reach it hides it.
         drawing(5);

@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/indexeddb-disk.spec.ts: IndexedDB on disk across real restarts (m25 P2). The spec pins VN_APP_NAME per run for the dev host, so this name only names the packaged exe's folder. See ../README.md.",
+  "$comment": "The spec pins VN_APP_NAME per run for the dev host, so this name only names the packaged exe's folder.",
 
   "name": "vn-test-idb-persist",
   "productName": "vn-test IndexedDB persistence",

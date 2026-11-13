@@ -1,12 +1,8 @@
-// The `appStorage` extension tier (docs/STORAGE.md §4).
+// The `appStorage` extension tier.
 //
-// What is NOT tested here is the standard tier: `localStorage` /
-// `sessionStorage` are redjs's, and their shape — string coercion, the quota,
-// `QuotaExceededError`, named properties, the `storage` divergence — is pinned
-// by Rust tests in vendor/redjs/redjs/src/webapi/storage.rs (`jsc_tests`), and
-// the bytes on disk by crates/vn-storage. What this file covers is the half
-// that lives in JS: the JSON unwrapping, what throws instead of returning a
-// path, and the inert fallback.
+// Not tested here: the standard tier (`localStorage` / `sessionStorage` are redjs's, pinned by Rust tests in
+// vendor/redjs/redjs/src/webapi/storage.rs, and the bytes on disk by crates/vn-storage). Here: the JSON unwrapping,
+// what throws instead of returning a path, and the inert fallback.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
@@ -142,7 +138,7 @@ describe("appStorage without a host", () => {
     expect(rt.appStorage.info().error).toBe("no storage host");
   });
 
-  test("it advises exactly once, naming the feature and the doc", () => {
+  test("it advises exactly once, naming the feature", () => {
     // Compat-first: never a silent divergence. And exactly once — one advisory
     // per property read would drown the log it is meant to be findable in.
     const rt = createRuntime({ storage: false });
@@ -151,7 +147,6 @@ describe("appStorage without a host", () => {
     rt.appStorage.flush();
     expect(rt.advisories()).toHaveLength(1);
     expect(rt.advisories()[0]).toMatch(/storages/);
-    expect(rt.advisories()[0]).toMatch(/docs\/STORAGE\.md/);
   });
 
   test("a real host does NOT advise", () => {

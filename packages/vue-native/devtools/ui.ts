@@ -4,36 +4,16 @@
  *
  *   bun devtools/ui.ts [--target <slot|app>] [--window WxH] [--wait]
  *
- * It is a thin wrapper — deliberately. All it does is turn a friendly
- * `--target` (a slot name, an app name, a path) into the one command the host
- * already understands:
+ * Turns a friendly `--target` (slot name, app name, path) into the command the host already understands,
+ * `vn-app.exe --devtools --target <absolute slot>`, which is what F12 spawns (`crates/vn-app/src/inspector.rs`
+ * `open_for_window`).
  *
- *   vn-app.exe --devtools --target <absolute slot>
+ * The inspector's own sources do not hot-reload while you edit them: the bundle in the executable is the
+ * inspector. `cargo build -p vn-app` rebuilds it (build.rs re-runs when `apps/devtools` changes), and
+ * `VN_DEVTOOLS_BUNDLE=<path to app.prod.js>` skips the bun invocation inside it.
  *
- * …which is EXACTLY what F12 spawns (`crates/vn-app/src/inspector.rs`,
- * `open_for_window`). One code path, one inspector.
- *
- * It did not used to be. Until m21 this script built `apps/devtools` into
- * `packages/vue-native/dist-devtools` and started an ordinary dev host on that
- * slot, while F12 evaluated the bundle `build.rs` had baked into the binary. So
- * there were two inspectors — with two build states, two ways to be stale, and
- * two sets of boot arguments (a hand-launched one never got
- * `__VN_DEVTOOLS_ARGS__` at all, which is why every reader of it guards). The
- * dist-devtools half is gone; the bundle in the executable is the inspector.
- *
- * WHAT THAT COSTS, stated rather than discovered: the inspector's own sources
- * no longer hot-reload while you edit them, because they are no longer served
- * from a dist slot. Re-running `cargo build -p vn-app` rebuilds the bundle
- * (build.rs re-runs when anything under `apps/devtools` moves), and
- * `VN_DEVTOOLS_BUNDLE=<path to app.prod.js>` skips the bun invocation inside it
- * when you want to iterate on the bundle alone.
- *
- * The inspector does NOT need the target to be running at launch: its target
- * list refreshes every few seconds and `--target` stays the preference. But if
- * one IS running the handshake is validated here, so a typo in the slot name is
- * a message rather than an empty window.
- *
- * See docs/DEVTOOLS-UI.md.
+ * The target need not be running at launch (its list refreshes every few seconds); if one is, the handshake
+ * is validated here, so a typo in the slot name is a message rather than an empty window.
  */
 
 import { spawn } from "node:child_process";
@@ -68,8 +48,6 @@ function die(message: string): never {
   process.exit(1);
 }
 
-// ---- argv -----------------------------------------------------------------
-
 const argv = process.argv.slice(2);
 const flags: Record<string, string | boolean> = {};
 for (let i = 0; i < argv.length; i++) {
@@ -83,8 +61,6 @@ if (flags.help) {
   console.log(USAGE);
   process.exit(0);
 }
-
-// ---- the target ------------------------------------------------------------
 
 /** `dist-shadcn` | `shadcn` | `Y:\…\slots\hello-1-1` -> an absolute slot dir. */
 function resolveTargetSlot(spec: string): string {
@@ -117,23 +93,18 @@ if (existsSync(handshake)) {
   );
 }
 
-// ---- launch ----------------------------------------------------------------
-
 const exe = typeof flags.exe === "string" && flags.exe ? resolve(flags.exe) : EXE;
 if (!existsSync(exe)) {
   die(
     `${exe} is missing — build the host first:\n  cargo build -p vn-app\n` +
-      `(every build has the inspector since m22; only \`--features no-devtools\` has none)`,
+      `(every build has the inspector; only \`--features no-devtools\` has none)`,
   );
 }
 
 const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-// VN_DIST names the slot a host SERVES. An inspector serves nothing — it
-// evaluates the bundle inside the executable — and `inspector::init` gives it a
-// private slot under %TEMP% to publish its own handshake into. Inheriting the
-// shell's VN_DIST would put that handshake on top of some app's, so drop it.
-delete env.VN_DIST;
-// Likewise `--target` is what sets VN_DEVTOOLS_TARGET in the child.
+// VN_DIST names the slot a host serves; an inspector serves nothing and gets a private slot under %TEMP%,
+// so an inherited VN_DIST would put its handshake on top of some app's: drop it. `--target` sets
+// VN_DEVTOOLS_TARGET in the child instead.
 delete env.VN_DEVTOOLS_TARGET;
 if (typeof flags.window === "string" && flags.window) env.VN_WINDOW = flags.window;
 

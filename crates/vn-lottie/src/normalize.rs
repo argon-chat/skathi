@@ -1,37 +1,21 @@
-//! Bodymovin → rasterlottie compatibility pass, run over the raw JSON before
-//! the backend parses it.
+//! Bodymovin → rasterlottie compatibility pass, run over the raw JSON before the backend parses it.
 //!
-//! # Why this exists
+//! [`rasterlottie`] refuses to `prepare()` anything it cannot draw exactly, and two ordinary
+//! Bodymovin idioms trip it:
 //!
-//! [`rasterlottie`] validates every animation against a *support profile* and
-//! refuses to `prepare()` anything it cannot draw exactly. That strictness is
-//! the right default for a server-side renderer, but two very ordinary
-//! Bodymovin idioms trip it, and between them they reject the large majority of
-//! files exported by After Effects:
+//! 1. Terminator keyframes: Bodymovin ≥ 5.5 ends every animated property with `{"t": 42}` and no
+//!    `"s"`, whose implicit value is the previous keyframe's `"e"` (or its own `"s"` for a hold).
+//!    rasterlottie reads `"s"` unconditionally, so one terminator makes the whole animation
+//!    unsupported (6 of 8 real-world fixtures failed on this alone).
+//! 2. Solid layers: a `ty: 1` layer is a `sw × sh` rectangle of colour `sc`; rasterlottie has no
+//!    solid renderer, so it is rewritten into the equivalent shape layer.
 //!
-//! 1. **Terminator keyframes.** Bodymovin ≥ 5.5 ends every animated property
-//!    with a keyframe that carries only a time — `{"t": 42}` — and no `"s"`.
-//!    Its value is implicit: it is the previous keyframe's `"e"` (or, for a
-//!    hold, that keyframe's own `"s"`). rasterlottie's keyframe parser reads
-//!    `"s"` unconditionally, so a single terminator makes the *whole property*
-//!    unsupported, which makes the whole animation unrenderable. Measured on
-//!    the fixture set: 6 of 8 real-world files failed on this alone, and
-//!    filling the terminators moved all 6 to fully supported.
-//! 2. **Solid layers.** A `ty: 1` layer is a `sw × sh` rectangle of colour
-//!    `sc`. rasterlottie has no solid-layer renderer, but it does have
-//!    rectangles and fills, so the layer can be rewritten into the shape layer
-//!    it is equivalent to.
-//!
-//! Both rewrites are value-preserving: they express what the Lottie spec
-//! already says the file means, they never invent motion, and they are
-//! idempotent. Anything this pass cannot express is left alone and surfaces as
-//! a [`SupportReport`](rasterlottie::SupportReport) issue, which
-//! [`LottieState::load`](crate::LottieState::load) turns into a compat
-//! advisory rather than a hard failure of the element.
+//! Both rewrites are value-preserving and idempotent. Anything else is left alone and surfaces as a
+//! [`SupportReport`](rasterlottie::SupportReport) issue, which
+//! [`LottieState::load`](crate::LottieState::load) turns into a compat advisory.
 
 use serde_json::{json, Map, Value};
 
-/// What the compatibility pass had to rewrite, for advisory reporting.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Normalization {
     /// Terminator keyframes (`{"t": n}` with no `"s"`) given their implicit value.
@@ -41,13 +25,11 @@ pub struct Normalization {
 }
 
 impl Normalization {
-    /// True when the document was already in the shape rasterlottie expects.
     pub fn is_empty(&self) -> bool {
         self.terminator_keyframes == 0 && self.solid_layers == 0
     }
 }
 
-/// Rewrites `root` in place into the dialect rasterlottie parses.
 pub fn normalize(root: &mut Value) -> Normalization {
     let mut stats = Normalization::default();
     walk(root, &mut stats);
@@ -72,12 +54,9 @@ fn walk(value: &mut Value, stats: &mut Normalization) {
     }
 }
 
-/// Gives every keyframe that omits `"s"` the value the previous keyframe ends
-/// on, which is exactly how lottie-web resolves it.
-///
-/// Only touches objects whose `"k"` is a *keyframe list* — an array whose first
-/// entry is an object with a `"t"`. A static `{"a": 0, "k": [0, 0]}` holds an
-/// array of numbers and is skipped, and so is a bare scalar.
+/// Gives every keyframe that omits `"s"` the value the previous keyframe ends on (as lottie-web
+/// resolves it). Only touches `"k"` keyframe lists (first entry an object with a `"t"`); static
+/// number arrays and scalars are skipped.
 fn fill_terminator_keyframes(map: &mut Map<String, Value>, stats: &mut Normalization) {
     let Some(Value::Array(keyframes)) = map.get_mut("k") else {
         return;
@@ -89,8 +68,7 @@ fn fill_terminator_keyframes(map: &mut Map<String, Value>, stats: &mut Normaliza
         return;
     }
 
-    // The value the timeline is *at* when the previous keyframe ends: its `"e"`
-    // if it interpolates to one, otherwise its own `"s"` (a hold).
+    // The value the timeline is at when the previous keyframe ends: its `"e"`, else its own `"s"` (a hold).
     let mut carried: Option<Value> = None;
     for keyframe in keyframes.iter_mut() {
         let Some(keyframe) = keyframe.as_object_mut() else {
@@ -109,15 +87,11 @@ fn fill_terminator_keyframes(map: &mut Map<String, Value>, stats: &mut Normaliza
     }
 }
 
-/// Rewrites a solid layer into the shape layer it is defined to be equivalent
-/// to: a `sw × sh` rectangle centred on the layer origin, filled with `sc`.
-///
-/// The layer transform (`ks`), timing (`ip`/`op`/`st`), parenting and mattes are
-/// untouched — only the *content* changes representation, so the layer keeps
-/// animating exactly as it did.
+/// Rewrites a solid layer into the equivalent shape layer: a `sw × sh` rectangle centred on the
+/// layer origin, filled with `sc`. Only the content changes; transform, timing, parenting and
+/// mattes are untouched.
 fn rewrite_solid_layer(map: &mut Map<String, Value>, stats: &mut Normalization) {
-    // Layer `ty` is a number; a shape *item*'s `ty` is a string, so this cannot
-    // collide. `sw`/`sh` confirm it really is a solid.
+    // Layer `ty` is a number and a shape item's is a string, so they cannot collide.
     if map.get("ty").and_then(Value::as_u64) != Some(1) {
         return;
     }
@@ -133,8 +107,7 @@ fn rewrite_solid_layer(map: &mut Map<String, Value>, stats: &mut Normalization) 
         .and_then(parse_hex_color)
         .unwrap_or([0.0, 0.0, 0.0]);
 
-    // Lottie places solid content with its top-left at the layer origin, so the
-    // equivalent rectangle is centred at (sw/2, sh/2).
+    // Lottie places solid content top-left at the layer origin, so the rectangle is centred at (sw/2, sh/2).
     let group = json!({
         "ty": "gr",
         "nm": "vn-lottie:solid",
@@ -262,7 +235,6 @@ mod tests {
         let items = &layer["shapes"][0]["it"];
         assert_eq!(items[0]["ty"], json!("rc"));
         assert_eq!(items[0]["s"]["k"], json!([100.0, 50.0]));
-        // Centred on the solid's own box, which starts at the layer origin.
         assert_eq!(items[0]["p"]["k"], json!([50.0, 25.0]));
         assert_eq!(items[1]["ty"], json!("fl"));
         assert_eq!(items[1]["c"]["k"], json!([1.0, 0.0, 0.0, 1.0]));
@@ -271,7 +243,6 @@ mod tests {
 
     #[test]
     fn shape_items_are_not_mistaken_for_solid_layers() {
-        // A shape item's `ty` is a string — it must never match the solid rule.
         let mut document = json!({ "it": [{ "ty": "rc", "sw": 1, "sh": 1 }] });
         assert_eq!(normalize(&mut document).solid_layers, 0);
     }

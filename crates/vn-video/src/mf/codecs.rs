@@ -1,33 +1,12 @@
-//! What this machine can actually decode — asked of the decoder registry, not
-//! of a table and not of the media engine.
+//! What this machine can decode, asked of the decoder registry rather than a table or the media engine.
 //!
-//! # Why not `IMFMediaEngine::CanPlayType`
+//! `IMFMediaEngine::CanPlayType` is not used: it answers on the MIME string's shape (measured:
+//! "probably" for nearly every `video/*`), so it can never give a reliable negative. `MFTEnumEx`
+//! queries the decoder registry live, including Store codec extensions added later.
 //!
-//! Because it answers on the shape of the MIME string rather than on the
-//! registry. [measured] it says `"probably"` for essentially every `video/*`
-//! type put to it, so it can never produce the reliable NEGATIVE that is the
-//! whole point: telling a developer that *this* machine cannot play *this*
-//! file.
-//!
-//! So the codec half of the answer comes from `MFTEnumEx`, which asks the
-//! decoder registry for a transform accepting a given subtype and returns a
-//! count. That is a live probe of what is installed here, right now, including
-//! Store codec extensions added long after our build — which is exactly the
-//! owner constraint: **codec availability is a runtime fact, never a build
-//! fact.**
-//!
-//! # The container half, and why it never says "no"
-//!
-//! There is no registry query for "can you demux this container". So the
-//! container list below is what is KNOWN readable, and an unrecognised
-//! `video/*` type answers `"maybe"` rather than `""`.
-//!
-//! That asymmetry is the result of being wrong once. This machine plays
-//! `video/ogg` — Theora video, Vorbis audio — because a Store package adds an
-//! Ogg source, and Ogg is not in Microsoft's documented inbox container list.
-//! A table saying "no Ogg" would have been a confident lie. The codec probe
-//! stays authoritative for negatives because it asks the machine; the container
-//! list is a hint and is treated as one.
+//! There is no registry query for "can you demux this container", so the container list is a hint:
+//! an unrecognised `video/*` type answers `"maybe"`, never `""` (a Store package makes `video/ogg`
+//! play although Ogg is not in Microsoft's inbox list).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -43,7 +22,6 @@ use windows::Win32::System::Com::CoTaskMemFree;
 
 use crate::backend::CanPlay;
 
-/// A codec we can recognise in a `codecs=` parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Codec {
     H264,
@@ -56,8 +34,7 @@ pub enum Codec {
 }
 
 impl Codec {
-    /// The name to put in an advisory, with the Store package that provides it
-    /// where one does.
+    /// The name for an advisory, with the Store package that provides it where one does.
     pub fn describe(self) -> &'static str {
         match self {
             Self::H264 => "H.264/AVC (inbox on every Windows install)",
@@ -70,8 +47,7 @@ impl Codec {
         }
     }
 
-    /// The Media Foundation subtypes that mean this codec. HEVC has two
-    /// registered GUIDs and decoders register under either.
+    /// HEVC has two registered GUIDs and decoders register under either.
     fn subtypes(self) -> &'static [GUID] {
         match self {
             Self::H264 => &[MFVideoFormat_H264],
@@ -95,9 +71,7 @@ impl Codec {
     ];
 }
 
-/// The `codecs=` parameter's spelling → our enum. Prefix matching, because the
-/// spec's strings carry profile/level suffixes (`avc1.640028`,
-/// `hev1.1.6.L93.B0`, `av01.0.05M.08`).
+/// The `codecs=` spelling → our enum; prefix matching, since strings carry profile/level suffixes (`avc1.640028`).
 fn codec_from_token(token: &str) -> Option<Codec> {
     let t = token.trim().trim_matches('"').to_ascii_lowercase();
     if t.starts_with("avc1") || t.starts_with("avc3") || t.starts_with("h264") {
@@ -121,9 +95,7 @@ fn codec_from_token(token: &str) -> Option<Codec> {
     None
 }
 
-/// Is a decoder for `codec` installed on this machine? Asked once per codec,
-/// then memoised — `MFTEnumEx` walks the registry and is not something to do
-/// per frame.
+/// Is a decoder for `codec` installed? Memoised per codec: `MFTEnumEx` walks the registry.
 pub fn have_decoder(codec: Codec) -> bool {
     static CACHE: OnceLock<HashMap<Codec, bool>> = OnceLock::new();
     *CACHE
@@ -137,7 +109,6 @@ pub fn have_decoder(codec: Codec) -> bool {
         .unwrap_or(&false)
 }
 
-/// How many decoder transforms accept `subtype` as input.
 fn enumerate(subtype: GUID) -> u32 {
     let input = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: subtype };
     let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
@@ -156,8 +127,7 @@ fn enumerate(subtype: GUID) -> u32 {
     if !ok {
         return 0;
     }
-    // `MFTEnumEx` hands back a CoTaskMemAlloc'd array of AddRef'd interfaces:
-    // release each, then free the array, or every probe leaks.
+    // `MFTEnumEx` returns a CoTaskMemAlloc'd array of AddRef'd interfaces: release each, then free the array.
     if !activates.is_null() {
         unsafe {
             for i in 0..count as usize {
@@ -169,8 +139,7 @@ fn enumerate(subtype: GUID) -> u32 {
     count
 }
 
-/// Containers this build KNOWS Media Foundation can read here. A hint, not an
-/// authority — see the module docs for the Ogg case that proved the difference.
+/// Containers known readable here; a hint, not an authority (see the module docs).
 fn container_known(mime: &str) -> bool {
     matches!(
         mime,
@@ -191,24 +160,17 @@ fn container_known(mime: &str) -> bool {
             | "audio/x-wav"
             | "audio/aac"
             | "audio/flac"
-            // Not in Microsoft's documented inbox list, but measured working on
-            // this machine (a Store package adds the source).
+            // Not in Microsoft's inbox list, but measured working here (a Store package adds the source).
             | "video/ogg"
             | "audio/ogg"
             | "application/ogg"
     )
 }
 
-/// `canPlayType(type)`, answered from the registry.
-///
-/// * `""` — a named video codec has no decoder on this machine, or the type is
-///   not media at all. **This is the reliable answer**, because it comes from
-///   the decoder registry rather than from a guess.
-/// * `"maybe"` — plausible: a known container with no codecs named, an
-///   unrecognised codec token, or an unrecognised `video/*` container (which
-///   might still be readable — see the module docs).
-/// * `"probably"` — a known container, and every named video codec has a
-///   decoder installed here.
+/// `canPlayType(type)` from the registry: `""` when a named video codec has no decoder or the type
+/// is not media (the reliable answer); `"maybe"` for a known container with no codecs named, an
+/// unrecognised codec token or an unrecognised `video/*` container; `"probably"` for a known
+/// container whose named video codecs all have a decoder.
 pub fn can_play_type(mime_type: &str) -> CanPlay {
     let lower = mime_type.trim().to_ascii_lowercase();
     let mut parts = lower.split(';');
@@ -230,12 +192,9 @@ pub fn can_play_type(mime_type: &str) -> CanPlay {
             }
             named += 1;
             match codec_from_token(token) {
-                // A video codec we know and do not have: definitely no.
                 Some(codec) if !have_decoder(codec) => return CanPlay::No,
                 Some(_) => {}
-                // An audio codec, or something we do not recognise. Not a
-                // reason to say no — the container source will sort it out —
-                // but it does downgrade the confidence.
+                // An audio or unrecognised codec is not a reason to say no, but lowers confidence.
                 None => return CanPlay::Maybe,
             }
         }
@@ -247,8 +206,7 @@ pub fn can_play_type(mime_type: &str) -> CanPlay {
     }
 }
 
-/// The decoders present on this machine, for an advisory. Returns
-/// `(installed, missing)`.
+/// The decoders present, for an advisory: `(installed, missing)`.
 pub fn installed_summary() -> (Vec<&'static str>, Vec<&'static str>) {
     let mut installed = Vec::new();
     let mut missing = Vec::new();
@@ -274,16 +232,10 @@ mod tests {
         assert_eq!(codec_from_token("hvc1.2.4.L120.B0"), Some(Codec::Hevc));
         assert_eq!(codec_from_token("av01.0.05M.08"), Some(Codec::Av1));
         assert_eq!(codec_from_token("vp09.00.10.08"), Some(Codec::Vp9));
-        // Audio codecs are not ours to judge.
         assert_eq!(codec_from_token("mp4a.40.2"), None);
         assert_eq!(codec_from_token("opus"), None);
     }
 
-    /// A negative only ever comes from the registry, never from a guess: a
-    /// type that is not media at all is `""`, but an unrecognised `video/*`
-    /// container is `"maybe"` — because this machine turned out to play Ogg,
-    /// which is not in Microsoft's documented inbox list, and a table saying
-    /// otherwise would have been a confident lie.
     #[test]
     fn only_the_registry_produces_a_no() {
         assert_eq!(can_play_type("application/x-nonsense"), CanPlay::No);
@@ -291,15 +243,12 @@ mod tests {
         assert_eq!(can_play_type("video/x-flv"), CanPlay::Maybe);
     }
 
-    /// H.264 in MP4 is the inbox baseline — if this is not `probably` on a
-    /// Windows machine, the media stack itself is missing.
+    /// H.264 in MP4 is the inbox baseline; if this is not `probably`, the media stack is missing.
     #[test]
     fn the_inbox_baseline_is_playable() {
         assert_eq!(
             can_play_type("video/mp4; codecs=\"avc1.42E01E, mp4a.40.2\""),
-            // "mp4a" is an audio codec we deliberately do not judge, so the
-            // answer is downgraded from probably to maybe — which is exactly
-            // what the tri-state is for.
+            // `mp4a` is an audio codec we do not judge, so the answer drops from probably to maybe.
             CanPlay::Maybe
         );
         assert_eq!(can_play_type("video/mp4; codecs=\"avc1.640028\""), CanPlay::Probably);

@@ -109,7 +109,7 @@
   ro(screenObj, "orientation", () => orientation);
   globalThis.screen = screenObj;
   globalThis.getScreenDetails = () => {
-    warn("getScreenDetails", "`getScreenDetails()` is not implemented (v1 is single-window). `screen.isExtended` reports " + "whether more than one display exists. See docs/WINDOWING.md §8.");
+    warn("getScreenDetails", "`getScreenDetails()` is not implemented (v1 is single-window). `screen.isExtended` reports " + "whether more than one display exists.");
     const e = new Error("getScreenDetails() is not supported.");
     e.name = "NotSupportedError";
     return Promise.reject(e);
@@ -365,7 +365,7 @@
     };
   }
   globalThis.open = () => {
-    warn("window.open", "`window.open()` is not supported: it means a SECOND DOCUMENT, and the reserved design " + "is in docs/WINDOWING.md §8. To paint part of THIS tree in a second OS window — a tool " + 'palette, a detached player — use `<VnWindow>` from "vue-native" ' + "(docs/MULTIWINDOW.md §1).");
+    warn("window.open", "`window.open()` is not supported: it means a SECOND DOCUMENT. To paint part of THIS tree in " + "a second OS window — a tool palette, a detached player — use `<VnWindow>` from " + '"vue-native".');
     return null;
   };
   let sticky = false;
@@ -502,7 +502,7 @@
         continue;
       }
       if (CREATION_ONLY.includes(key)) {
-        warn(`creation-only:${key}`, `\`${key}\` can only be set when the window is created. Declare it in ` + "`apps/<app>/vn.config.json` under `window`. (gpui fixes this at creation; see " + "docs/WINDOWING.md §9.)");
+        warn(`creation-only:${key}`, `\`${key}\` can only be set when the window is created. Declare it in ` + "`apps/<app>/vn.config.json` under `window`.");
         continue;
       }
       warn(`defineWindow:${key}`, `unknown \`defineWindow\` key: ${JSON.stringify(key)}`);

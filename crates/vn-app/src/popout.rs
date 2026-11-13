@@ -1,32 +1,9 @@
-//! **Multi-window, phase 1** — one Vue subtree, painted by a second OS window
-//! (`docs/MULTIWINDOW.md`).
+//! One Vue subtree painted by a second OS window.
 //!
-//! The whole idea in one paragraph: there is exactly ONE `JsRuntime`, ONE Vue
-//! app and ONE retained tree. `__vn_window_open(nodeId, options)` marks a node
-//! *popped out* — it stops generating a box in the primary window's element
-//! tree (`vn_tree::set_popped_out`, the `<KeepAlive>`-cache half of the
-//! detachment rule) — and opens a second gpui window whose root view lowers
-//! **that same node** through `vn_tree::build_subtree`. The node keeps its id,
-//! its listeners, its computed style and its reactive bindings, so a click in
-//! window B runs the same JS handler, mutates the same `ref`, and both windows
-//! repaint from the same wave.
-//!
-//! ## What phase 1 added over the spike
-//!
-//! * the `<VnWindow>` component's whole prop set — `title`, `bounds`,
-//!   `chrome`, `backdrop`, `alwaysOnTop`, `resizable`, `minWidth`/`minHeight` —
-//!   with the creation-time-only ones advising rather than silently doing
-//!   nothing (D-25/D-30's rule, §3.3);
-//! * a push channel back to JS: `open` / `close` / `focus` / `blur` / `resize`,
-//!   which is what makes a pop-out's own metrics knowable in a one-realm world
-//!   (§7.7 — `window.innerWidth` is still the PRIMARY window's, A-M04);
-//! * the per-window state map behind it (`vn_tree::windows`), so this window's
-//!   focus, bounds, drag regions, atlas tiles and `@media` environment are its
-//!   own (§5);
-//! * `<video>` and `<lottie>` in a pop-out, which the spike refused: the tile's
-//!   creating window is now recorded, so the atlas it goes back to is the one
-//!   that holds it (A-M06 retired);
-//! * closing the primary window closes every pop-out first (D-M16, §7.8).
+//! There is one `JsRuntime`, one Vue app and one retained tree. `__vn_window_open` marks a node
+//! popped out (it stops generating a box in the primary window) and opens a gpui window whose
+//! root view lowers the same node via `vn_tree::build_subtree`, so both windows repaint from
+//! the same wave.
 
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
@@ -45,8 +22,7 @@ use crate::window::Backdrop;
 
 const UNDEF: u64 = 0xa;
 
-/// The root view of a popped-out window. It holds nothing but the node id: the
-/// state lives in the one retained tree, exactly as the primary shell's does.
+/// Root view of a popped-out window; holds only the node id.
 pub struct PopoutShell {
     node: u32,
 }
@@ -54,19 +30,9 @@ pub struct PopoutShell {
 impl Render for PopoutShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let id = window.window_handle().window_id().as_u64();
-        // **This window's own per-frame work**, which the pump physically
-        // cannot do for it: the atlas tiles it owes go back to ITS atlas, the
-        // zero-copy `<video>` frames decoded for it are blitted into ITS
-        // atlas, and its focus bookkeeping runs against ITS focus path
-        // (docs/MULTIWINDOW.md §5.1). The JS-realm half of `frame_tick` — the
-        // media clocks, the animation clock, the timers — deliberately stays
-        // once per FRAME GROUP in the pump (D-M06).
+        // Per-window frame work the pump cannot do: its atlas tiles, `<video>` blits and focus bookkeeping.
         vn_tree::window_frame_tick(window, &mut **cx);
-        // BEFORE the env: publishing an environment for a window whose painted
-        // root is not registered yet would mark nothing for a re-cascade, and
-        // the subtree would keep answering `@media` against the main window
-        // until something else happened to dirty it. `build_subtree` declares
-        // the same thing from the other side, idempotently.
+        // Before the env: publishing one for an unregistered painted root would mark nothing for re-cascade.
         vn_tree::windows::set_painted_root(id, self.node);
         publish_env(id, self.node, window, cx);
         report_metrics(id, self.node, window);
@@ -76,19 +42,13 @@ impl Render for PopoutShell {
             .size_full()
             .text_color(gpui::white())
             .font_family(".SystemUIFont")
-            // The SAME node the primary window stopped painting.
             .child(vn_tree::build_subtree(self.node, window, cx))
-            // …and the inspector's outline, when it is THIS window's node
-            // that is selected. Shell furniture here exactly as it is in the
-            // primary window (docs/DEVTOOLS-UI.md §5): an inspector must not
-            // appear in the tree it is inspecting, and a pop-out's tree is
-            // the same tree.
+            // Shell furniture, as in the primary window: the inspector must not appear in the tree it inspects.
             .children(popout_inspector_overlay(id, self.node))
     }
 }
 
-/// The devtools highlight overlay for a pop-out window. Always `None` in a
-/// build with no devtools in it.
+/// The devtools highlight overlay for a pop-out; `None` without devtools.
 fn popout_inspector_overlay(window: u64, root: u32) -> Option<gpui::Div> {
     #[cfg(vn_devtools)]
     {
@@ -101,21 +61,13 @@ fn popout_inspector_overlay(window: u64, root: u32) -> Option<gpui::Div> {
     }
 }
 
-/// Publishes this window's `@media` environment (docs/MULTIWINDOW.md §6).
-///
-/// From the pop-out's own render, because that is where its viewport, its DPI
-/// and its appearance are — the pump runs with the primary window and has none
-/// of them. A change marks only the subtree this window paints for a re-cascade,
-/// so a pop-out resizing costs a scoped restyle rather than a document one.
+/// Publishes this window's `@media` environment, from its own render: that is where its
+/// viewport, DPI and appearance are known.
 fn publish_env(id: u64, node: u32, window: &Window, cx: &App) {
     let Some(p) = POPOUTS.with(|p| p.borrow().iter().find(|w| w.id.as_u64() == id).map(|w| (w.os_chrome, w.title_bar_height))) else {
         return;
     };
-    // The painted root's box, not the client area — the same definition
-    // `inner_width` uses for the primary window, so an app's `@media` and its
-    // `getBoundingClientRect()` cannot disagree about how wide the viewport is.
-    // Before the first painted frame there is no box; the primary window's env
-    // stands in for those frames rather than a cascade against zeros.
+    // Same definition as the primary window's `inner_width`; before the first painted frame the primary env stands in.
     let viewport = match vn_tree::bounds_in(node, node) {
         Some((_, _, w, h)) if w > 0.0 && h > 0.0 => (w, h),
         _ => {
@@ -130,71 +82,43 @@ fn publish_env(id: u64, node: u32, window: &Window, cx: &App) {
 struct Popout {
     node: u32,
     id: WindowId,
-    /// What the window's caption says — the only human-readable name a window
-    /// switcher can show for it. Read back through [`list`], i.e. by the
-    /// devtools' `windows` command and nothing else.
+    /// Caption text; read back by [`list`].
     title: String,
     handle: WindowHandle<PopoutShell>,
-    /// A GC-protected JS function called with `(nodeId)` when the window closes
-    /// — kept as its own slot because `close` is the one event that fires after
-    /// the window is already gone.
+    /// GC-protected JS callback `(nodeId)`; separate because `close` fires after the window is gone.
     on_close: u64,
-    /// A GC-protected JS function called with `(kind, detailJson)` for every
-    /// other window event this pop-out reports: `open`, `focus`, `blur`,
-    /// `resize`. `<VnWindow>` turns them into Vue emits.
+    /// GC-protected JS callback `(kind, detailJson)` for `open`, `focus`, `blur`, `resize`.
     on_event: u64,
-    /// Does the OS draw this window's caption? `chrome: "default"` (the
-    /// spike's only mode) versus `"hidden"`, which hands the whole surface to
-    /// the app and makes its own `window-drag: move` region load-bearing.
+    /// The OS draws the caption (`chrome: "default"`); false hands the surface to the app.
     os_chrome: bool,
-    /// The caption strip height this window reports through
-    /// `env(titlebar-area-height)` in custom-chrome mode.
+    /// Caption strip height for `env(titlebar-area-height)` in custom-chrome mode.
     title_bar_height: f32,
-    /// Last `(width, height)` reported to JS, so `resize` fires on a change
-    /// rather than every frame.
+    /// Last `(width, height)` reported to JS, so `resize` fires on change.
     last_metrics: (f32, f32),
-    /// Last focus state reported to JS, for the `focus` / `blur` edges.
     last_focused: bool,
-    /// The latest native fullscreen state; cover windows remain monitor-sized.
     fullscreen: bool,
-    /// The window's HWND, captured when it opened (0 = none).
+    /// HWND captured at open; 0 = none.
     hwnd: isize,
-    /// Shown, as far as `visible` is concerned (§7.9). A hidden pop-out still
-    /// paints its subtree — nobody sees it — and is shown again rather than
-    /// opened again.
+    /// A hidden pop-out still paints its subtree and is shown again rather than reopened.
     visible: bool,
-    /// `cover: "monitor"`: every show covers the whole monitor the main
-    /// window is on.
     cover: bool,
-    /// `taskbar` as it was created — read back only to advise on a change.
     taskbar: bool,
-    /// `focusable` as it was created — read back only to advise on a change.
     focusable: bool,
-    /// Does a show take the foreground? Never for a window that is not
-    /// `focusable`.
+    /// Never true for a non-`focusable` window.
     activate: bool,
-    /// `alwaysOnTop`, as of the latest options: every show re-asserts it.
     always_on_top: bool,
-    /// `ignoreMouseEvents` and `contentProtection`, as of the latest options.
     ignore_mouse_events: bool,
     content_protection: bool,
-    /// `monitor`: which monitor a cover window covers, in `EnumDisplayMonitors`
-    /// order. `None` = the main window's.
+    /// Monitor index (`EnumDisplayMonitors` order) a cover window covers; `None` = the main window's.
     monitor: Option<usize>,
-    /// The size and place a window created hidden takes on its first show:
-    /// `(x, y, width, height)`, CSS px. `None` once placed, and for a cover
-    /// window, which the monitor places.
+    /// `(x, y, width, height)` in CSS px a window created hidden takes on its first show; `None` once placed and for cover windows.
     first_place: Option<(Option<f32>, Option<f32>, f32, f32)>,
     /// Last declarative geometry; unrelated prop updates preserve user placement.
     requested_bounds: [Option<f32>; 4],
-    /// When the show in progress was asked for, until its first frame.
     show_asked: Option<Instant>,
-    /// The first frame of the show in progress was drawn: when.
     show_drawn: Option<Instant>,
-    /// Milliseconds from the latest show request to its first drawn frame.
     last_show_ms: f64,
-    /// Bumped by every show and hide, so a deferred tidy-up after a hide can
-    /// tell that the window has been shown since.
+    /// Bumped by every show and hide, so a deferred tidy-up can tell the window was shown since.
     epoch: u64,
     /// Device px per CSS px, as of its latest frame.
     scale: f32,
@@ -204,37 +128,21 @@ struct Popout {
 
 thread_local! {
     static POPOUTS: RefCell<Vec<Popout>> = const { RefCell::new(Vec::new()) };
-    /// One `App::on_window_closed` subscription for all of them: the callback
-    /// is handed a `WindowId`, which is all the addressing we need.
+    /// One `App::on_window_closed` subscription for all pop-outs.
     static CLOSED_SUB: RefCell<Option<Subscription>> = const { RefCell::new(None) };
-    /// [`notify_all`]'s paint task is queued and has not run yet.
     static PAINT_ASKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Every popped-out window is marked dirty whenever the tree moves. That is
-/// what makes "click a button living in window B → BOTH windows' dependent text
-/// updates in the same frame group" true: the JS wave already ran
-/// (synchronously, inside the click listener), and this is the repaint request
-/// that shows its result on the other side.
+/// Marks every pop-out dirty after a JS wave and paints the visible ones from a task.
 ///
-/// **`Window::refresh()` through the window handle, deliberately not
-/// `Entity::update` + `cx.notify()`.** This is called from inside an input
-/// listener, and a listener IS an `Entity<RootView>::update` — so notifying the
-/// root view of the window the event landed in would re-enter that borrow and
-/// panic with "cannot update … while it is already being updated". Addressing
-/// the *window* instead of its *view* borrows nothing: `update_window` on a
-/// window that is already being updated simply fails, and that window was going
-/// to be refreshed by the listener anyway.
+/// Uses `Window::refresh()` through the window handle, not `Entity::update` + `cx.notify()`:
+/// this runs inside an input listener, which is itself an `Entity<RootView>::update`, so notifying
+/// would re-enter that borrow and panic. `update_window` on a window already being updated just
+/// fails, and that window is refreshed by the listener anyway.
 ///
-/// **…and painted from a task, not left to `WM_PAINT`.** A refresh only marks
-/// the window dirty; its frame waits for a `WM_PAINT`, which Windows hands out
-/// only once no posted message is queued, and then one window at a time. While
-/// the app is busy (a screen share: the primary repainting its preview, the
-/// voice engine posting events) the primary's paint is the one handed out, and
-/// a pop-out whose only change is a `<canvas>` (the stream-drawing overlay)
-/// went seconds without a frame. A posted task is served first, and its
-/// [`popout_win::paint_now`] draws the pop-out there and then — or nothing,
-/// when it is not dirty. One task at a time, however many waves ask.
+/// The paint task exists because a refresh only waits for `WM_PAINT`, which Windows hands out
+/// one window at a time once the message queue drains; under load a pop-out whose only change was
+/// a `<canvas>` went seconds without a frame. One task at a time.
 pub fn notify_all(cx: &mut App) {
     let ids: Vec<WindowId> = POPOUTS.with(|p| p.borrow().iter().map(|w| w.id).collect());
     if ids.is_empty() {
@@ -259,35 +167,24 @@ pub fn notify_all(cx: &mut App) {
     .detach();
 }
 
-/// Closes every pop-out. **D-M16 / §7.8**: the primary window owns the JS pump,
-/// so closing it while a pop-out is open would leave that pop-out painted and
-/// frozen — a window with no clock, no timers and no event loop. A pop-out is a
-/// *view onto* the app rather than a peer, which is also what a one-main-window
-/// Electron app does.
+/// Closes every pop-out: the primary window owns the JS pump, so a pop-out outliving it would be frozen.
 pub fn close_all(cx: &mut App) {
     let handles: Vec<WindowHandle<PopoutShell>> =
         POPOUTS.with(|p| p.borrow().iter().map(|w| w.handle).collect());
     for handle in handles {
-        // After its file dialog, if it has one open (dialogs.rs).
+        // A file dialog it owns closes first.
         crate::dialogs::remove_window(handle.into(), cx);
     }
 }
 
-/// How many pop-outs are open. The primary window's close path reads it to
-/// decide whether it has any to take down with it.
 pub fn count() -> usize {
     POPOUTS.with(|p| p.borrow().len())
 }
 
-/// The open pop-outs' window keys (`vn_tree::windows::key`), which address
-/// their HWNDs (`window::hwnd_of`).
+/// The open pop-outs' window keys (`vn_tree::windows::key`).
 pub fn ids() -> Vec<vn_tree::WinKey> {
     POPOUTS.with(|p| p.borrow().iter().map(|w| w.id.as_u64()).collect())
 }
-
-// ---------------------------------------------------------------------------
-// options — `<VnWindow>`'s props, as the host sees them
-// ---------------------------------------------------------------------------
 
 struct Options {
     bounds: [Option<f32>; 4],
@@ -296,7 +193,6 @@ struct Options {
     y: Option<f32>,
     width: f32,
     height: f32,
-    /// `chrome: "default"` = a real OS caption; `"hidden"` = the app draws one.
     os_chrome: bool,
     /// `None` = inherit the app's own `vn.config.json` backdrop.
     backdrop: Option<Backdrop>,
@@ -305,18 +201,10 @@ struct Options {
     min_width: Option<f32>,
     min_height: Option<f32>,
     title_bar_height: f32,
-    /// Does the new window take the keyboard when it appears?
-    ///
-    /// **Default `false`, which is a deliberate departure from gpui's
-    /// `WindowOptions::focus: true`.** A tool palette that grabs focus every
-    /// time it opens is a bug in every desktop app: the user was typing in the
-    /// document, asked for a palette, and would lose the caret. `focus: false`
-    /// becomes `SW_SHOWNOACTIVATE`, so the window appears, paints and is
-    /// clickable without an activation. An app that genuinely wants the second
-    /// window in front — a detached editor, say — passes `activate`.
+    /// Whether the window takes the keyboard when it appears. Defaults to false, unlike gpui's
+    /// `focus: true`: a palette that grabs focus costs the user their caret. False maps to `SW_SHOWNOACTIVATE`.
     activate: bool,
-    /// `visible` — LIVE. `false` creates the window hidden (warm: the next
-    /// show is a show, not an open) and hides an open one (§7.9).
+    /// Live. `false` creates the window hidden (warm) and hides an open one.
     visible: bool,
     /// `cover: "monitor"` — the window covers the whole monitor the main
     /// window is on, taskbar included, with no frame. Creation-time.
@@ -328,10 +216,10 @@ struct Options {
     /// shows them (a media viewer zooms to 1:1). Live.
     full_resolution: bool,
     /// `ignoreMouseEvents` — the mouse goes through the window to whatever is
-    /// under it (§7.11). Live.
+    /// under it. Live.
     ignore_mouse_events: bool,
     /// `focusable: false` — never activated, no taskbar button, unknown to
-    /// the shell (§7.11). Creation-time.
+    /// the shell. Creation-time.
     focusable: bool,
     /// `contentProtection` — screen capture leaves the window out. Live.
     content_protection: bool,
@@ -351,7 +239,7 @@ fn parse_options(raw: &str) -> Options {
         None => {
             crate::window::advise(&format!(
                 "<VnWindow backdrop=\"{name}\">: unknown backdrop — the pop-out inherits the \
-                 app's own (docs/WINDOWING.md §4.4 lists the names)"
+                 app's own"
             ));
             None
         }
@@ -367,8 +255,6 @@ fn parse_options(raw: &str) -> Options {
         y: num("y").map(|n| n as f32),
         width: num("width").unwrap_or(420.0) as f32,
         height: num("height").unwrap_or(320.0) as f32,
-        // `chrome` is spelled the way `<VnWindow>` spells it, which is the way
-        // `vn.config.json`'s `titleBarStyle` spells it minus the `Style`.
         os_chrome: !matches!(text("chrome").as_deref(), Some("hidden")),
         backdrop,
         always_on_top: flag("alwaysOnTop").unwrap_or(false),
@@ -384,7 +270,7 @@ fn parse_options(raw: &str) -> Options {
             Some(other) => {
                 crate::window::advise(&format!(
                     "<VnWindow cover=\"{other}\">: unknown cover — expected \"monitor\". The window \
-                     takes its `bounds` instead (docs/MULTIWINDOW.md §7.9)"
+                     takes its `bounds` instead"
                 ));
                 false
             }
@@ -407,26 +293,17 @@ fn cover_rect(main: Option<isize>, monitor: Option<usize>) -> Option<popout_win:
         }
         crate::window::advise(&format!(
             "<VnWindow :monitor=\"{i}\">: there is no monitor {i} — the window covers the main \
-             window's monitor instead (docs/MULTIWINDOW.md §7.11)"
+             window's monitor instead"
         ));
     }
     main.and_then(popout_win::monitor_rect)
 }
 
-// ---------------------------------------------------------------------------
-// the host surface
-// ---------------------------------------------------------------------------
-
 // `__vn_window_open(nodeId, optionsJson, onClose?, onEvent?)`.
 //
-// The open itself is **deferred**. `App::open_window` builds the root view and
-// then draws the window once before returning (`gpui/src/app.rs:1279`), and
-// this host fn is called from inside the primary window's own update, with
-// `Phase::Commit` published against IT. `cx.defer` runs the open at the end of
-// the current effect cycle, i.e. with every entity returned to the app and no
-// window published — which is also why the JS caller learns the window id
-// through the `open` event rather than as a return value. §3.2's contract says
-// so, and `<VnWindow>` is written to it.
+// The open is deferred: `App::open_window` draws the window before returning, and this runs
+// inside the primary window's update. `cx.defer` opens at the end of the effect cycle, which is
+// also why JS learns the window id through the `open` event rather than a return value.
 host_fn!(fn vn_window_open(g, args) {
     let node = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let raw = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
@@ -440,23 +317,18 @@ host_fn!(fn vn_window_open(g, args) {
     }
     if popout_of_node(node).is_some() {
         crate::window::advise(&format!(
-            "A-M02: __vn_window_open: node {node} is already painted by another window — the \
+            "__vn_window_open: node {node} is already painted by another window — the \
              second call was refused. A node id may be painted by exactly one window, because \
-             every node-keyed side map (focus, scroll, input, media) would otherwise alias \
-             (docs/MULTIWINDOW.md §5)"
+             every node-keyed side map (focus, scroll, input, media) would otherwise alias"
         ));
         return UNDEF;
     }
-    // A-M01: a `<VnWindow>` inside a `<VnWindow>`. gpui has no owner/child
-    // window relationship we honour, and a nested pop-out reads as a modality
-    // request — which is a Win32 `EnableWindow` question, not a rendering one
-    // (§7.6). Flattened to a sibling window, out loud.
+    // A `<VnWindow>` inside another is flattened to a sibling: there is no owner/child relationship, and nesting would read as modality.
     if let Some(outer) = enclosing_popout(node) {
         crate::window::advise(&format!(
-            "A-M01: <VnWindow> (node {node}) is nested inside another one (node {outer}) — it \
+            "<VnWindow> (node {node}) is nested inside another one (node {outer}) — it \
              was flattened to a SIBLING window. vue-native has no owner/child window \
-             relationship, and a nested pop-out reads as a modality request. See \
-             docs/MULTIWINDOW.md §7.6"
+             relationship, and a nested pop-out reads as a modality request."
         ));
     }
     let protect = |v: vn_runtime::redjs::api::Value| -> u64 {
@@ -470,10 +342,7 @@ host_fn!(fn vn_window_open(g, args) {
     let on_close = protect(on_close);
     let on_event = protect(on_event);
     let opts = parse_options(&raw);
-    // Stop painting it HERE, not in the deferred open: the primary window's
-    // very next draw must already be without it, or the subtree would exist in
-    // two element trees for one frame (two sets of `ElementId`s over one node —
-    // gpui's scroll/hitbox state is keyed by that).
+    // Stop painting here, not in the deferred open: otherwise the subtree is in two element trees for a frame (gpui scroll/hitbox state is keyed by `ElementId`).
     vn_tree::set_popped_out(node, true);
     with_app(|cx| {
         cx.defer(move |cx| open_now(node, opts, on_close, on_event, cx));
@@ -481,9 +350,7 @@ host_fn!(fn vn_window_open(g, args) {
     UNDEF
 });
 
-// `__vn_window_close(nodeId)` — closes the window painting that node. The
-// subtree returns to the primary window through the close observer, so this
-// and a user clicking the X take exactly the same path.
+// `__vn_window_close(nodeId)` — the subtree returns through the close observer, the same path as the X button.
 host_fn!(fn vn_window_close_popout(_g, args) {
     let node = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let Some(handle) = popout_of_node(node).map(|i| POPOUTS.with(|p| p.borrow()[i].handle)) else {
@@ -491,23 +358,15 @@ host_fn!(fn vn_window_close_popout(_g, args) {
     };
     with_app(|cx| {
         cx.defer(move |cx| {
-            // Untyped, for the reason spelled out in `vn_window_click` below:
-            // never take the root entity's borrow when the body can re-enter it.
-            // A file dialog it owns closes first (dialogs.rs).
+            // Untyped, as in `vn_window_click`. A file dialog it owns closes first.
             crate::dialogs::remove_window(handle.into(), cx);
         });
     });
     UNDEF
 });
 
-// `__vn_window_set_options(nodeId, optionsJson)` — the LIVE half of
-// `<VnWindow>`'s props.
-//
-// Four of them move at runtime (`title`, `alwaysOnTop`, `visible`,
-// `fullResolution`); the rest are creation-time-only in gpui and therefore
-// here too. **A creation-time prop
-// that changed says so and does nothing**, which is D-25/D-30's rule and the
-// opposite of what a silent no-op teaches an author (docs/WINDOWING.md §3.3).
+// `__vn_window_set_options(nodeId, optionsJson)` — the live half of `<VnWindow>`'s props
+// (`title`, `alwaysOnTop`, `visible`, `fullResolution`, ...). A changed creation-time prop advises and does nothing.
 host_fn!(fn vn_window_set_options(g, args) {
     let node = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let raw = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
@@ -522,30 +381,28 @@ host_fn!(fn vn_window_set_options(g, args) {
         crate::window::advise(
             "<VnWindow focusable>: whether a window can be activated is decided when it is created \
              (the taskbar and the shell read its styles when it is first shown), so changing it \
-             does nothing to a window that is already open — close and re-open it \
-             (docs/MULTIWINDOW.md §7.11)",
+             does nothing to a window that is already open — close and re-open it",
         );
     }
     if opts.os_chrome != old_chrome {
         crate::window::advise(
             "<VnWindow chrome>: the caption mode is decided when the window is created (a real \
              `WS_CAPTION` is a window STYLE), so changing it does nothing to a window that is \
-             already open — close and re-open it. Same rule as `titleBarStyle` \
-             (docs/WINDOWING.md D-25)",
+             already open — close and re-open it. Same rule as `titleBarStyle`",
         );
     }
     if opts.cover != old_cover {
         crate::window::advise(
             "<VnWindow cover>: covering the monitor is decided when the window is created (it \
              takes the frame off the window), so changing it does nothing to a window that is \
-             already open — close and re-open it (docs/MULTIWINDOW.md §7.9)",
+             already open — close and re-open it",
         );
     }
     if opts.taskbar != old_taskbar {
         crate::window::advise(
             "<VnWindow taskbar>: the taskbar reads a window's owner and styles when it is shown, \
              so this is decided when the window is created and changing it does nothing to a \
-             window that is already open — close and re-open it (docs/MULTIWINDOW.md §7.9)",
+             window that is already open — close and re-open it",
         );
     }
     // Live, and nothing to schedule: the next residency sweep reads it.
@@ -554,18 +411,14 @@ host_fn!(fn vn_window_set_options(g, args) {
     if title_moved {
         POPOUTS.with(|p| p.borrow_mut()[i].title = opts.title.clone());
     }
-    // `visible` is recorded now, so a second change in the same wave compares
-    // against it; the show or hide itself is deferred with the rest.
+    // Recorded now so a second change in the same wave compares against it.
     let visible = opts.visible;
     let visible_moved = visible != old_visible;
     if visible_moved {
         POPOUTS.with(|p| p.borrow_mut()[i].visible = visible);
     }
     let always_on_top = opts.always_on_top;
-    // §7.11's live three, recorded now (a second change in the same wave
-    // compares against them) and applied with the rest, out of this update:
-    // a style change re-frames the window, and gpui hears of that through its
-    // window proc.
+    // Live options are recorded now and applied deferred: a style change re-frames the window, and gpui hears of it through its window proc.
     let (hwnd, click_through, protection, monitor_moved, bounds_moved) = POPOUTS.with(|p| {
         let mut p = p.borrow_mut();
         let w = &mut p[i];
@@ -588,8 +441,7 @@ host_fn!(fn vn_window_set_options(g, args) {
         }
         (w.hwnd, click_through, protection, monitor_moved, bounds_moved)
     });
-    // A shown cover window that is asked for another monitor moves there now
-    // (a game moved monitors); a hidden one takes it on its next show.
+    // A shown cover window moves to another monitor now; a hidden one on its next show.
     let replace = monitor_moved && old_cover && old_visible && visible && hwnd != 0;
     let monitor = opts.monitor;
     let bounds_request = bounds_moved.then_some(opts.bounds);
@@ -619,8 +471,7 @@ host_fn!(fn vn_window_set_options(g, args) {
                 }
             }
             if let Some(bounds) = bounds_request {
-                // SetWindowPos may synchronously send WM_SIZE/WM_DPICHANGED.
-                // Run outside App/Window borrows, on the existing HWND, without activation.
+                // SetWindowPos may synchronously send WM_SIZE/WM_DPICHANGED; run outside App/Window borrows.
                 cx.spawn(async move |_| {
                     if let (Some(window), Some(client)) =
                         (popout_win::window_rect(hwnd), popout_win::client_rect_on_screen(hwnd))
@@ -642,31 +493,16 @@ host_fn!(fn vn_window_set_options(g, args) {
     UNDEF
 });
 
-/// Win32 `HWND_TOPMOST` for one pop-out. gpui has no per-window API for it, so
-/// this goes through the HWND the window host cached when that window painted —
-/// which is exactly why that cache had to grow a window key (§5.1).
+/// Win32 `HWND_TOPMOST`; gpui has no per-window API, so this goes through the cached HWND.
 fn set_always_on_top(handle: WindowHandle<PopoutShell>, on: bool) {
     let key = handle.window_id().as_u64();
     let Some(hwnd) = crate::window::hwnd_of(key) else { return };
     crate::window::set_always_on_top_hwnd(hwnd, on);
 }
 
-// `__vn_window_click(nodeId, x, y)` — synthesize a REAL platform mouse click
-// into the window painting `nodeId`, at that window's client coordinates.
-//
-// This is the spike's proof surface, and it is deliberately not a shortcut:
-// it feeds `gpui::PlatformInput::{MouseMove, MouseDown, MouseUp}` to the
-// pop-out's own `Window::dispatch_event` — the *same* entry point the Win32
-// message loop uses. So it runs window B's real hit test, finds the real
-// element `build_subtree` lowered there, and fires the real `on_click`
-// listener `cx.listener` registered against `PopoutShell`. Nothing about the
-// dispatch is faked except where the bytes came from.
-//
-// It exists because a spec that runs while somebody is using the machine may
-// not move the real cursor. (Since devtools v2, `ctl.ts --window <id> mouse`
-// reaches the same path through the command queue.)
-//
-// Returns `true` when a window was found and driven.
+// `__vn_window_click(nodeId, x, y)` — synthesizes a real mouse click (move, down, up) through the
+// pop-out's own `Window::dispatch_event`, at client coordinates, for specs that may not move the
+// real cursor. Returns `true` when a window was driven.
 host_fn!(fn vn_window_click(_g, args) {
     let node = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let x = args.arg(1).as_number().unwrap_or(0.0) as f32;
@@ -676,18 +512,10 @@ host_fn!(fn vn_window_click(_g, args) {
     };
     let position = gpui::Point::new(px(x), px(y));
     let done = with_app(|cx| {
-        // `AnyWindowHandle::update`, NOT `WindowHandle::<PopoutShell>::update`.
-        // The typed one wraps the body in `Entity<PopoutShell>::update`, and the
-        // click listener `build_subtree` registered is a `cx.listener`, i.e.
-        // *another* `Entity<PopoutShell>::update` — so the typed form panics
-        // with "cannot update PopoutShell while it is already being updated"
-        // the instant the dispatch actually hits a handler. The untyped one
-        // hands back the root as an `AnyView` and borrows nothing.
+        // `AnyWindowHandle::update`, not the typed handle: that one wraps the body in
+        // `Entity<PopoutShell>::update`, and the click listener is another, so a hit would panic.
         gpui::AnyWindowHandle::from(handle).update(cx, |_, window, cx| {
-            // A move first: gpui recomputes `mouse_hit_test` from the window's
-            // own `mouse_position`, so a press with no preceding move is tested
-            // against wherever that window's pointer was last (which, for a
-            // window that has never seen the mouse, is the origin).
+            // Move first: gpui hit-tests from the window's own `mouse_position`.
             window.dispatch_event(
                 gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
                     position,
@@ -722,16 +550,13 @@ host_fn!(fn vn_window_click(_g, args) {
     Value::boolean(done.unwrap_or(false)).0
 });
 
-// `__vn_window_popouts()` — `[{node, windowId, title, chrome, width, height}]`,
-// for tests and devtools.
+// `__vn_window_popouts()` — per-pop-out state as JSON, for tests and devtools.
 host_fn!(fn vn_window_popouts(_g, _args) {
     let json = POPOUTS.with(|p| {
         Json::arr(
             p.borrow()
                 .iter()
                 .map(|w| {
-                    // The window as Win32 has it, for the specs of §7.9: what
-                    // DWM shows, where, and who owns it.
                     let rect = popout_win::window_rect(w.hwnd).map_or(Json::Null, |r| {
                         Json::arr(r.iter().map(|v| Json::n(*v as f64)).collect())
                     });
@@ -758,7 +583,6 @@ host_fn!(fn vn_window_popouts(_g, _args) {
                         ("popup", Json::Bool(popup)),
                         ("thickFrame", Json::Bool(thickframe)),
                         ("nonRude", Json::Bool(non_rude)),
-                        // §7.11: the overlay's half, as Win32 has it.
                         ("focusable", Json::Bool(w.focusable)),
                         ("ignoreMouseEvents", Json::Bool(w.ignore_mouse_events)),
                         ("layered", Json::Bool(layered)),
@@ -783,17 +607,11 @@ host_fn!(fn vn_window_popouts(_g, _args) {
     JsRuntime::with(|rt| rt.ctx().string(&json)).0
 });
 
-// `__vn_window_map_rect(popoutNode, nodeId)` — where `nodeId`, as the PRIMARY
-// window painted it, falls inside the pop-out painting `popoutNode`: a
-// `[x, y, width, height]` JSON string in that pop-out's CSS px, relative to its
-// painted root (the space an absolutely positioned child of the root lives
-// in), or `undefined` when either was not painted. It goes through the screen,
-// so it holds across monitors and DPIs — what a viewer's zoom out of the
-// thumbnail needs (§7.9).
+// `__vn_window_map_rect(popoutNode, nodeId)` — where `nodeId`, as the primary window painted it,
+// falls inside the pop-out: `[x, y, width, height]` JSON in the pop-out's CSS px relative to its
+// painted root, or `undefined`. Goes through screen coordinates, so it holds across monitors and DPIs.
 //
-// A cover window is measured where its next show puts it, the main window's
-// monitor at the main window's scale, so the answer is already right while it
-// is hidden and still warm-small.
+// A cover window is measured where its next show puts it, so the answer is right while hidden.
 host_fn!(fn vn_window_map_rect(_g, args) {
     let node = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let src = args.arg(1).as_number().unwrap_or(0.0) as u32;
@@ -807,8 +625,7 @@ host_fn!(fn vn_window_map_rect(_g, args) {
     let Some(from) = popout_win::client_rect_on_screen(main) else { return UNDEF };
     let main_scale = crate::window::primary_scale();
     let to = if cover {
-        // On another monitor than the main window's, at the scale of its own
-        // latest frame — the main window's says nothing about that monitor.
+        // Another monitor: use the scale of its own latest frame, not the main window's.
         let at = monitor.and_then(popout_win::monitor_rect_at);
         let s = if at.is_some() { scale } else { main_scale };
         at.or_else(|| popout_win::monitor_rect(main)).map(|r| (r, s))
@@ -849,8 +666,7 @@ fn fullscreen_window(owner: u32, on: Option<bool>) -> bool {
         with_app(|cx| {
             cx.defer(move |cx| {
                 let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, _| {
-                    // A cover window already owns the monitor. Keep its
-                    // placement and ownership unchanged on enter and exit.
+                    // A cover window already owns the monitor; leave its placement alone.
                     if !cover && window.is_fullscreen() != on {
                         window.toggle_fullscreen();
                     }
@@ -880,7 +696,7 @@ fn popout_of_node(node: u32) -> Option<usize> {
     POPOUTS.with(|p| p.borrow().iter().position(|w| w.node == node))
 }
 
-/// The nearest ancestor of `node` that is itself popped out — A-M01's test.
+/// The nearest popped-out ancestor of `node`.
 fn enclosing_popout(node: u32) -> Option<u32> {
     vn_tree::with_tree(|t| {
         let mut cursor = t.node(node)?.parent;
@@ -897,14 +713,8 @@ fn enclosing_popout(node: u32) -> Option<u32> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// the push channel back to JS
-// ---------------------------------------------------------------------------
-
-/// [`emit`] from the top of an effect cycle (a `defer`, a timer), with the app
-/// published to the handler: a handler that answers by changing a prop —
-/// `visible` again, say — reaches `__vn_window_set_options`, which schedules
-/// through the app and would otherwise be dropped.
+/// [`emit`] from the top of an effect cycle with the app published, so a handler that answers by
+/// changing a prop reaches `__vn_window_set_options`, which schedules through the app.
 fn emit_in(cx: &mut App, on_event: u64, kind: &str, detail: Json) {
     if on_event == 0 {
         return;
@@ -912,14 +722,12 @@ fn emit_in(cx: &mut App, on_event: u64, kind: &str, detail: Json) {
     vn_runtime::with_published_app(cx, || emit(on_event, kind, detail));
 }
 
-/// Fires one `<VnWindow>` event. `detail` is a JSON object the component turns
-/// into the emit's payload.
+/// Fires one `<VnWindow>` event; `detail` is a JSON object for the emit's payload.
 fn emit(on_event: u64, kind: &str, detail: Json) {
     if on_event == 0 {
         return;
     }
-    // Outside a publication: settle an input dispatch's owed checkpoint first,
-    // as every publication does (vn_runtime::bridge::owe_drain).
+    // Settle an input dispatch's owed checkpoint first, as every publication does.
     vn_runtime::bridge::settle_owed_drain();
     JsRuntime::with(|rt| {
         let args = [rt.ctx().string(kind), rt.ctx().string(&detail.to_json())];
@@ -929,20 +737,13 @@ fn emit(on_event: u64, kind: &str, detail: Json) {
             let err = rt.describe(e);
             eprintln!("[VnWindow event] {}\n{}", err.header, err.stack);
         }
-        // Vue schedules its patch flush on microtasks; drain now so the
-        // handler's mutations land in this wave, exactly as an input event's do.
+        // Vue flushes patches on microtasks; drain so the handler's mutations land in this wave.
         rt.ctx().drain_microtasks();
     });
 }
 
-/// `resize` / `focus` / `blur`, from the pop-out's own render.
-///
-/// **This is the honest answer to "what are a pop-out's metrics?"** in a
-/// one-realm world (§7.7): `window.innerWidth` is a JS global and there is one
-/// JS realm, so it keeps meaning the PRIMARY window's viewport (A-M04). A
-/// pop-out's own size is pushed to the component that asked for the window,
-/// which is where an app can actually use it — `<VnWindow @resize>` and the
-/// `width`/`height` it exposes.
+/// Pushes `resize` / `focus` / `blur` from the pop-out's render. `window.innerWidth` stays the
+/// primary window's (one JS realm), so a pop-out's own size reaches the app via `<VnWindow @resize>`.
 fn report_metrics(id: u64, node: u32, window: &Window) {
     let viewport = match vn_tree::bounds_in(node, node) {
         Some((_, _, w, h)) if w > 0.0 && h > 0.0 => (w, h),
@@ -980,20 +781,7 @@ fn report_metrics(id: u64, node: u32, window: &Window) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// addressing a pop-out from the devtools (docs/DEVTOOLS.md, the `window` param)
-// ---------------------------------------------------------------------------
-
-/// `(window id, the node this window paints, its title)` for every pop-out.
-///
-/// The devtools' `windows` command puts the primary window at the head of this
-/// list; here there is nothing but the pop-outs, because the primary window's
-/// identity is `lib.rs`'s to report.
-///
-/// That command is also the only caller, so a `--features no-devtools` build
-/// has none. Kept rather than `cfg`'d: the pop-out registry is this module's
-/// own state (docs/MULTIWINDOW.md) and reading it back is part of what the
-/// registry IS, whoever happens to be asking this month.
+/// `(window id, painted node, title)` for every pop-out; the primary window is `lib.rs`'s to report.
 #[cfg_attr(not(vn_devtools), allow(dead_code))]
 pub fn list() -> Vec<(u64, u32, String)> {
     POPOUTS.with(|p| {
@@ -1001,14 +789,8 @@ pub fn list() -> Vec<(u64, u32, String)> {
     })
 }
 
-/// Runs `f` against one pop-out window, addressed by its gpui window id.
-///
-/// `AnyWindowHandle::update`, NOT the typed handle's — for the reason spelled
-/// out at `vn_window_click`: the typed form wraps the body in
-/// `Entity<PopoutShell>::update`, and a devtools command that dispatches an
-/// event would re-enter that borrow the instant it reached a listener.
-///
-/// Devtools-only, like [`list`] above and for the same reason.
+/// Runs `f` against one pop-out window by gpui window id. Uses `AnyWindowHandle::update` for the
+/// reason given at `vn_window_click`.
 #[cfg_attr(not(vn_devtools), allow(dead_code))]
 pub fn with_window<R>(
     id: u64,
@@ -1019,14 +801,8 @@ pub fn with_window<R>(
     gpui::AnyWindowHandle::from(handle).update(cx, |_, window, cx| f(window, cx)).ok()
 }
 
-// ---------------------------------------------------------------------------
-// opening and closing
-// ---------------------------------------------------------------------------
-
 fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App) {
-    // The node could have been unmounted between the call and this defer — Vue
-    // is free to do that, and opening a window onto a dead id would paint an
-    // empty rectangle nobody can explain.
+    // The node may have been unmounted between the call and this defer.
     if !vn_tree::with_tree(|t| t.node(node).is_some()) {
         vn_tree::set_popped_out(node, false);
         return;
@@ -1041,35 +817,23 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
     if opts.activate && !opts.focusable {
         crate::window::advise(
             "<VnWindow activate :focusable=\"false\">: a window that cannot be activated does not \
-             take the foreground when it is shown either — `activate` is ignored \
-             (docs/MULTIWINDOW.md §7.11)",
+             take the foreground when it is shown either — `activate` is ignored",
         );
     }
     let activate = opts.activate && opts.focusable;
-    // Created hidden, as a cover window is, and for the same reason: its
-    // styles change first, and the shell reads them when it is shown. A
-    // window shown as an app window and only then made a tool window has
-    // already told the shell it exists (§7.11).
+    // Created hidden like a cover window: its styles change before the first show, and the shell reads them then.
     let hidden_first = opts.cover || !opts.focusable;
     let opened = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            // `backdrop` defaults to the app's own `vn.config.json` rather than
-            // to a hardcoded value: a pop-out of a Mica app that came up opaque
-            // white would look like a different application, and the app's
-            // stylesheet (written for that backdrop) would be unreadable on it.
+            // Defaults to the app's own backdrop: a hardcoded one would look like a different application.
             window_background: opts
                 .backdrop
                 .unwrap_or_else(|| crate::window::config().backdrop)
                 .to_gpui(),
             titlebar: Some(TitlebarOptions {
                 title: Some(opts.title.clone().into()),
-                // `chrome: "default"` is a REAL OS caption (fork item F-03):
-                // movable, resizable, closable, snap-layouts — for free, with
-                // no drag region. `chrome: "hidden"` hands the whole surface to
-                // the app, which then has to paint its own `window-drag: move`
-                // region or the window is unmovable — exactly the tier-3
-                // contract `titleBarStyle: "hidden"` has in the primary window.
+                // `chrome: "default"` is a real OS caption; `"hidden"` hands the surface to the app, which must paint a `window-drag: move` region.
                 appears_transparent: !opts.os_chrome,
                 traffic_light_position: crate::window::traffic_light_position(
                     !opts.os_chrome,
@@ -1078,29 +842,20 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
                 ..Default::default()
             }),
             is_resizable: opts.resizable,
-            // See `Options::activate`: a pop-out appears without stealing the
-            // keyboard unless the app asks for it.
             focus: activate && !crate::quiet::never_focus(),
             window_min_size: match (opts.min_width, opts.min_height) {
                 (None, None) => None,
                 (w, h) => Some(size(px(w.unwrap_or(0.0)), px(h.unwrap_or(0.0)))),
             },
-            // Same reason the primary window sets it: a window that throttles
-            // to 33 ms when unfocused would make "both windows update in the
-            // same frame group" false the moment one of them loses focus —
-            // which is *always*, since only one can be focused.
+            // Never throttled when unfocused, so both windows stay in the same frame group.
             inactive_frame_interval: None,
-            // A cover window is always created hidden, even a `visible` one:
-            // its styles change and it is placed on the monitor first, so its
-            // first visible frame already covers it (§7.9). So is a window
-            // that is not `focusable` (§7.11).
+            // A cover or non-focusable window is created hidden so its styles and placement are set before its first visible frame.
             show: opts.visible && !hidden_first,
             is_minimizable: !opts.cover,
             ..Default::default()
         },
         |window, cx| {
-            // Keep the generic GPUI default; enable retention only for VN windows.
-            // The override allows equivalent workloads to compare both paths.
+            // Retained layout is enabled only for VN windows; `VN_RETAINED_LAYOUT=0` opts out.
             if std::env::var_os("VN_RETAINED_LAYOUT").as_deref() != Some(std::ffi::OsStr::new("0")) {
                 window.vn_enable_retained_layout();
             }
@@ -1114,25 +869,17 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
         return;
     };
     let key = handle.window_id().as_u64();
-    // This window's chrome mode, before its first build: `with_control_area`
-    // reads it to decide whether a `window-drag` region is live or inert, and
-    // the first frame is already a frame (docs/MULTIWINDOW.md §7.6).
+    // Before its first build: `with_control_area` reads it to decide whether `window-drag` is live.
     vn_tree::set_os_chrome_in(key, opts.os_chrome);
     vn_tree::windows::set_full_res_images(key, opts.full_resolution);
-    // The HWND has to exist before `alwaysOnTop` can be applied to it, and
-    // `open_window` has already drawn the window once by now — so the handle is
-    // live and `capture_hwnd` succeeds.
+    // `open_window` has already drawn once, so the handle is live and `capture_hwnd` works.
     let mut hwnd = 0;
     let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, cx| {
         hwnd = crate::window::capture_hwnd(window).unwrap_or(0);
-        // Its own X while it owns a file dialog: the dialog closes first
-        // (dialogs.rs). The OS keeps an owner disabled under its modal
-        // dialog, so this is the taskbar's "Close window", not a click.
+        // The X closes a file dialog it owns first (the OS keeps an owner disabled under its modal dialog).
         window.on_window_should_close(cx, |window, cx| crate::dialogs::may_close_now(window.window_handle(), cx));
     });
-    // §7.9, while the window is still hidden: the taskbar reads a window's
-    // styles when it is shown, and a cover window's first frame must already
-    // be the monitor's size.
+    // While still hidden: the taskbar reads styles on show, and a cover window's first frame must already be monitor-sized.
     if hwnd != 0 {
         if !opts.taskbar {
             if let Some(main) = crate::window::primary_hwnd() {
@@ -1141,13 +888,9 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
         }
         if opts.cover {
             popout_win::make_cover(hwnd);
-            // WARM SMALL. A hidden window keeps its swapchain, and one the
-            // monitor's size is 30 MB at 1440p and 66 MB at 4K, in shared
-            // memory on an integrated GPU. The first show sizes it. Out of
-            // this update, as every resize here is: see `resize_outside`.
+            // Warm small: a hidden monitor-sized swapchain costs 30 MB at 1440p and 66 MB at 4K of shared memory. The first show sizes it, outside this update (see `warm_small`).
             cx.spawn(async move |_| warm_small(hwnd)).detach();
         }
-        // §7.11, while it is still hidden too.
         if !opts.focusable {
             popout_win::make_unfocusable(hwnd);
         }
@@ -1182,9 +925,7 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             ignore_mouse_events: opts.ignore_mouse_events,
             content_protection: opts.content_protection,
             monitor: opts.monitor,
-            // Every window created hidden takes its `bounds` on its first
-            // show — gpui never applied them — except a cover window, which
-            // the monitor places.
+            // Windows created hidden take `bounds` on their first show (gpui never applied them), except cover windows, which the monitor places.
             requested_bounds: opts.bounds,
             first_place: ((!opts.visible || hidden_first) && !opts.cover)
                 .then_some((opts.x, opts.y, opts.width, opts.height)),
@@ -1201,8 +942,7 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
     }
     ensure_close_observer(cx);
     let msg = format!(
-        "[window] node {node} popped out into window {:?} — the primary window stopped painting \
-         it (docs/MULTIWINDOW.md)",
+        "[window] node {node} popped out into window {:?} — the primary window stopped painting it",
         handle.window_id()
     );
     eprintln!("{msg}");
@@ -1213,11 +953,9 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
         "open",
         Json::obj(vec![("windowId", Json::n(key as f64)), ("node", Json::n(node as f64))]),
     );
-    // The primary window has to redraw WITHOUT the subtree; nothing in the tree
-    // changed, so `flush_changes` would not have asked for it.
+    // The primary window must redraw without the subtree; nothing in the tree changed.
     crate::notify_shell(cx);
-    // A cover window asked for `visible` was created hidden all the same, as
-    // was one that is not `focusable`; this is its first show.
+    // A cover or non-focusable window asked to be `visible` was created hidden; this is its first show.
     if opts.visible && hidden_first {
         show_now(handle.window_id(), cx);
     }
@@ -1228,17 +966,12 @@ const WARM_SIZE: i32 = 64;
 /// How long a hidden cover window keeps the monitor-sized swapchain of its
 /// last show before it goes back to [`WARM_SIZE`].
 const SHRINK_AFTER: Duration = Duration::from_secs(30);
-/// How long after a hide the hidden window draws once, to hand back the atlas
-/// tiles of what it showed (§7.9).
+/// How long after a hide the hidden window draws once, to hand back the atlas tiles of what it showed.
 const TIDY_AFTER: Duration = Duration::from_millis(500);
 
-/// Shows a pop-out (`visible` became `true`), §7.9.
-///
-/// The frame is drawn BEFORE the window is shown: a hidden window gets no
-/// `WM_PAINT`, so whatever it presented last — the previous picture of a
-/// viewer — would otherwise be what DWM shows until the next vsync. A cover
-/// window is placed on the main window's monitor first, so that frame is
-/// already the monitor's size.
+/// Shows a pop-out. The frame is drawn before the show: a hidden window gets no `WM_PAINT`, so DWM
+/// would otherwise show its previous picture until the next vsync. A cover window is placed on its
+/// monitor first so that frame is already monitor-sized.
 fn show_now(id: WindowId, cx: &mut App) {
     let Some((handle, hwnd, cover, activate, first, monitor, on_top)) = POPOUTS.with(|p| {
         let mut p = p.borrow_mut();
@@ -1254,8 +987,7 @@ fn show_now(id: WindowId, cx: &mut App) {
         return;
     }
     let main = crate::window::primary_hwnd();
-    // Where it goes is worked out here and the move is made outside this
-    // update, with the draw (see [`warm_small`]).
+    // Placement is worked out here; the move is made outside this update.
     let target = if cover {
         cover_rect(main, monitor).filter(|r| popout_win::window_rect(hwnd) != Some(*r))
     } else {
@@ -1278,9 +1010,7 @@ fn show_now(id: WindowId, cx: &mut App) {
         }
         popout_win::paint_now(hwnd);
         popout_win::show(hwnd, activate);
-        // Back on top of the topmost band: whatever became topmost while it
-        // was hidden — the taskbar, another overlay — would otherwise stay
-        // above it. Argon's native overlay re-asserts it on every show too.
+        // Re-assert topmost: whatever became topmost while it was hidden would stay above it.
         if on_top {
             crate::window::set_always_on_top_hwnd(hwnd, true);
         }
@@ -1289,13 +1019,9 @@ fn show_now(id: WindowId, cx: &mut App) {
     .detach();
 }
 
-/// Back to [`WARM_SIZE`], where it is.
-///
-/// **Every resize of a pop-out in this module runs outside any `App` update**,
-/// from a spawned task. gpui hears of a window's new size through `WM_SIZE`
-/// and a callback that needs the app; inside an update that callback is lost,
-/// and the swapchain follows the new size while the window goes on laying out
-/// at the old one.
+/// Back to [`WARM_SIZE`]. Every resize of a pop-out runs outside any `App` update: gpui hears of a
+/// new size through `WM_SIZE` and a callback that needs the app; inside an update that callback is
+/// lost and the swapchain follows the new size while layout stays at the old one.
 fn warm_small(hwnd: isize) {
     if let Some(r) = popout_win::window_rect(hwnd) {
         popout_win::set_rect(hwnd, [r[0], r[1], r[0] + WARM_SIZE, r[1] + WARM_SIZE]);
@@ -1356,9 +1082,7 @@ fn frame_drawn(id: u64, window: &Window, cx: &mut App) {
         }
         let now = Instant::now();
         w.show_drawn = Some(now);
-        // Drawn while still hidden (the usual case): `shown` reports once
-        // the window is on screen. Drawn after it (the paint was skipped):
-        // this frame is the first one anybody sees.
+        // Drawn while hidden (usual): `shown` reports. Drawn after the show: this is the first frame anyone sees.
         popout_win::is_visible(w.hwnd).then_some((w.id, w.on_event, now.duration_since(asked)))
     });
     if let Some((wid, on_event, took)) = report {
@@ -1366,15 +1090,10 @@ fn frame_drawn(id: u64, window: &Window, cx: &mut App) {
     }
 }
 
-/// Hides a pop-out (`visible` became `false`), §7.9. The activation goes back
-/// to the main window when this one had it.
-///
-/// What the hidden window still holds is let go of on a timer, unless it is
-/// shown again first: after [`TIDY_AFTER`] it draws once (its subtree is
-/// empty by then), which hands back the atlas tiles of what it showed — a
-/// hidden window gets no frames, and tiles are returned by a frame; after
-/// [`SHRINK_AFTER`] a cover window goes back to [`WARM_SIZE`], and with it
-/// its monitor-sized swapchain.
+/// Hides a pop-out; activation returns to the main window if this one had it. Unless shown again
+/// first, after [`TIDY_AFTER`] it draws once (its subtree is empty) to return its atlas tiles,
+/// since a hidden window gets no frames; after [`SHRINK_AFTER`] a cover window goes back to
+/// [`WARM_SIZE`].
 fn hide_now(id: WindowId, cx: &mut App) {
     let Some((hwnd, epoch, on_event, cover)) = POPOUTS.with(|p| {
         let mut p = p.borrow_mut();
@@ -1429,13 +1148,7 @@ fn still_hidden(id: WindowId, epoch: u64, cx: &mut App) -> bool {
     gpui::AnyWindowHandle::from(handle).update(cx, |_, window, _| window.refresh()).is_ok()
 }
 
-/// The first show of a window created hidden without `cover`: gpui never
-/// applied its placement (it would have, showing it), so the window takes its
-/// `bounds` now — the client size asked for, at `x`/`y` or centred on the main
-/// window's monitor, CSS px at the main window's scale. The window rect that
-/// makes, for the caller to move it to.
-/// Merge partial CSS-pixel bounds into the current client rect while preserving
-/// the native frame. The coordinate space matches initial VnWindow placement.
+/// Merges partial CSS-px bounds into the current client rect, keeping the native frame.
 fn live_client_rect(window: popout_win::Rect, client: popout_win::Rect, scale: f32,
     bounds: [Option<f32>; 4]) -> popout_win::Rect
 {
@@ -1447,6 +1160,9 @@ fn live_client_rect(window: popout_win::Rect, client: popout_win::Rect, scale: f
     [x - border[0], y - border[1], x + width + border[2], y + height + border[3]]
 }
 
+/// The window rect for the first show of a window created hidden without `cover`: gpui never
+/// applied its placement, so it takes its `bounds` now (client size, at `x`/`y` or centred on the
+/// main window's monitor, CSS px at the main window's scale).
 fn first_rect(
     hwnd: isize,
     main: Option<isize>,
@@ -1454,7 +1170,6 @@ fn first_rect(
 ) -> Option<popout_win::Rect> {
     let scale = crate::window::primary_scale();
     let (win, client) = (popout_win::window_rect(hwnd)?, popout_win::client_rect_on_screen(hwnd)?);
-    // The frame around the client area, as this window's styles draw it.
     let border = [client[0] - win[0], client[1] - win[1], win[2] - client[2], win[3] - client[3]];
     let (cw, ch) = ((w * scale).round() as i32, (h * scale).round() as i32);
     let monitor = main.and_then(popout_win::monitor_rect).unwrap_or([0, 0, cw, ch]);
@@ -1471,20 +1186,14 @@ fn ensure_close_observer(cx: &mut App) {
     CLOSED_SUB.with(|s| *s.borrow_mut() = Some(sub));
 }
 
-/// The X button, `window.close()` from the popped-out window, and
-/// `__vn_window_close(node)` all arrive here — one re-attach path, so a subtree
-/// can never be left owned by a window that no longer exists.
+/// The X button, `window.close()` and `__vn_window_close` all arrive here: one re-attach path.
 fn on_window_closed(id: WindowId, cx: &mut App) {
     let Some(i) = POPOUTS.with(|p| p.borrow().iter().position(|w| w.id == id)) else {
         return;
     };
     let popout = POPOUTS.with(|p| p.borrow_mut().remove(i));
     vn_tree::set_popped_out(popout.node, false);
-    // Everything this window held goes with it: its bounds map (in a coordinate
-    // space that no longer exists), its focus subscriptions, its `@media`
-    // environment, and the atlas tiles it still owed — whose atlas has been
-    // destroyed, so handing them to another window's `drop_image` would remove
-    // keys a LIVE window may have re-inserted (docs/MULTIWINDOW.md §5.1).
+    // Everything the window held goes with it; its atlas is destroyed, so owed tiles must not reach another window's `drop_image`, which could remove keys a live window re-inserted.
     vn_tree::forget_window(id.as_u64());
     crate::window::forget_window(id.as_u64());
     let msg = format!(
@@ -1494,9 +1203,7 @@ fn on_window_closed(id: WindowId, cx: &mut App) {
     );
     eprintln!("{msg}");
     vn_tree::log::record("window", msg);
-    // The primary window must repaint WITH the subtree again, and re-cascade it:
-    // it was answering against the pop-out's `@media` environment and is about
-    // to be laid out in this one.
+    // The primary window must repaint with the subtree and re-cascade it: it answered against the pop-out's `@media` env.
     vn_tree::with_tree(|t| t.mark_restyle_subtree(popout.node));
     crate::notify_shell(cx);
     if popout.on_close != 0 {
@@ -1509,14 +1216,9 @@ fn on_window_closed(id: WindowId, cx: &mut App) {
                 let err = rt.describe(e);
                 eprintln!("[window close callback] {}\n{}", err.header, err.stack);
             }
-            // Vue schedules its patch flush on microtasks; drain now so the
-            // handler's DOM mutations land in this wave, exactly as an input
-            // event's do.
+            // Vue flushes patches on microtasks; drain so the handler's mutations land in this wave.
             rt.ctx().drain_microtasks();
-            // The callback was GC-protected when it was registered and is fired
-            // exactly once, so this is where it stops being rooted. Without it
-            // a pop-out that is opened and closed repeatedly leaks one function
-            // per cycle.
+            // Fired exactly once, so it is unrooted here; otherwise each open/close cycle leaks a function.
             // SAFETY: `on_close` is a value this module protected in
             // `__vn_window_open` and has not unprotected before.
             unsafe { vn_runtime::redjs::ffi::redjs_unprotect(rt.raw(), popout.on_close) };
@@ -1531,22 +1233,11 @@ fn on_window_closed(id: WindowId, cx: &mut App) {
     }
 }
 
-/// Repaint every window that paints part of the tree. Registered with vn-tree
-/// so a JS wave that starts inside an INPUT LISTENER — in any window — reaches
-/// all of them, not only the one the event landed in. Without it, a click in
-/// window B leaves window A's pixels one wave behind permanently: the listener
-/// already consumed the dirty flag, so the pump's own notify never fires.
+/// Repaints every window that paints part of the tree. Registered with vn-tree so a JS wave started
+/// inside an input listener in any window reaches all of them (the listener consumed the dirty flag).
 ///
-/// **Deferred, and that is not a detail.** gpui takes a window *out of its
-/// slot* for the duration of its update (`App::update_window_id`,
-/// `gpui/src/app.rs:1874`: `cx.windows.get_mut(id)?.take()?`), so
-/// `update_window` on a window that is already being updated **fails**. And the
-/// window we most want to repaint is frequently exactly that one: a JS wave
-/// dispatched into window B from a host fn called by window A's own pump is
-/// nested inside A's update, so refreshing A immediately returns `Err` and is
-/// swallowed — the tree is right, A's pixels never move, and nothing says so.
-/// `cx.defer` runs the fan-out at the end of the effect cycle, when every
-/// window is back in its slot.
+/// Deferred: gpui takes a window out of its slot during its update, so `update_window` on a window
+/// already being updated fails and the refresh is silently lost. `cx.defer` runs once every window is back.
 pub(crate) fn repaint_all(cx: &mut App) {
     cx.defer(|cx| {
         crate::refresh_main(cx);
@@ -1584,22 +1275,15 @@ mod tests {
         assert_eq!(o.title, "vue-native");
         assert_eq!((o.width, o.height), (420.0, 320.0));
         assert!(o.x.is_none() && o.y.is_none());
-        // A pop-out with no `chrome` prop gets a REAL caption: movable,
-        // resizable and closable with no drag region at all (D-M10).
         assert!(o.os_chrome);
         assert!(o.resizable);
         assert!(!o.always_on_top);
         assert!(o.backdrop.is_none());
-        // The departure from gpui's default, asserted so it cannot drift back.
         assert!(!o.activate);
-        // §7.9's options are all off: an ordinary pop-out is shown, framed,
-        // on the taskbar, and its images follow the residency rules.
         assert!(o.visible);
         assert!(!o.cover);
         assert!(o.taskbar);
         assert!(!o.full_resolution);
-        // §7.11's too: an ordinary pop-out takes the mouse, can be activated,
-        // is captured, and covers nothing.
         assert!(!o.ignore_mouse_events);
         assert!(o.focusable);
         assert!(!o.content_protection);
@@ -1636,7 +1320,6 @@ mod tests {
 
     #[test]
     fn an_unknown_cover_is_no_cover() {
-        // Advised; the window takes its `bounds` instead of covering anything.
         assert!(!parse_options(r#"{"cover":"screen"}"#).cover);
         assert!(!parse_options(r#"{"cover":"none"}"#).cover);
         assert!(!parse_options(r#"{"cover":""}"#).cover);
@@ -1663,9 +1346,7 @@ mod tests {
 
     #[test]
     fn an_unknown_chrome_value_is_the_default_one_rather_than_nothing() {
-        // `chrome` is a two-value enum; anything that is not the string
-        // "hidden" means the OS draws the caption, which is the mode that
-        // cannot leave a window unmovable.
+        // Anything but "hidden" means the OS draws the caption, which cannot leave a window unmovable.
         assert!(parse_options(r#"{"chrome":"wat"}"#).os_chrome);
         assert!(parse_options(r#"{"chrome":"default"}"#).os_chrome);
     }

@@ -5,9 +5,8 @@
   color: rgb(255, 255, 255);
   font-size: 14px;
 }
-/* The Argon client's settings select (`border rounded-md px-3 py-1.5
-   text-sm`), with an opaque background the popup takes, and a line height
-   Chromium ignores on a menulist. */
+/* The Argon client's settings select (`border rounded-md px-3 py-1.5 text-sm`), with an opaque
+   background the popup takes, and a line height Chromium ignores on a menulist. */
 .box {
   position: absolute;
   border: 1px solid rgb(120, 120, 120);
@@ -22,8 +21,6 @@
   left: 20px;
   top: 20px;
 }
-/* The same box with no native skin: no arrow, no internal padding, and the
-   line height is the author's again. */
 #flat {
   left: 240px;
   top: 20px;
@@ -41,12 +38,10 @@
   left: 20px;
   top: 360px;
 }
-/* 40 rows do not fit above it: the popup is as tall as the room. */
 #long {
   left: 240px;
   top: 360px;
 }
-/* Below #model's popup: a press here while it is open only closes it. */
 #behind {
   position: absolute;
   left: 20px;

@@ -1,23 +1,13 @@
-//! What the macOS status item is told, decided in plain Rust so it is
-//! unit-tested on every OS (macos.rs does only the AppKit calls).
+//! What the macOS status item is told, decided in plain Rust so it is unit-tested on every OS
+//! (macos.rs does only the AppKit calls).
 //!
-//! - **The menu.** The item model becomes a tree of plain nodes and one
-//!   action table, numbered in the order windows.rs numbers its command ids,
-//!   so a disabled item still takes its slot. A menu item carries its slot
-//!   and the revision it was built for in its `tag`
-//!   ([`tag`] / [`untag`]): a selection from a menu that a later model
-//!   replaced is fenced exactly as Windows fences one.
-//! - **Clicks.** Windows' activation rule: a primary click is the
-//!   application's `on_click` when it has one, otherwise the menu; a
-//!   secondary click (right, or Control and primary, as everywhere on macOS)
-//!   is always the menu. Without `on_click` AppKit owns the menu and opens it
-//!   at any click, highlighting the item as a menu-bar menu.
-//! - **The icon.** The status bar's 18-point glyph square, drawn at 1× and
-//!   2×, fitted and centred like the Windows icon. A template icon is drawn
-//!   in the menu bar's text colour (`isTemplate`), the macOS counterpart of
-//!   the Windows foreground recolouring: when the model asks (`Icon::template`,
-//!   SVG sources), and for a one-tone grey glyph, which would otherwise vanish
-//!   on a menu bar of its own shade.
+//! The menu is a tree of plain nodes plus one action table numbered in windows.rs's command-id order
+//! (a disabled item keeps its slot); each item carries its slot and the revision it was built for in
+//! its `tag` ([`tag`] / [`untag`]), so a selection from a replaced menu is fenced as on Windows.
+//! Clicks follow Windows' rule: a primary click is `on_click` when present, otherwise the menu; a
+//! secondary click (right, or Control-primary) is always the menu. The icon is fitted and centred in
+//! the 18-point square at 1x and 2x, drawn as a template (menu-bar text colour) when the model asks
+//! (`Icon::template`, SVG sources) and for a one-tone grey glyph that would otherwise vanish.
 
 use std::io::Cursor;
 
@@ -26,12 +16,9 @@ use super::{Callback, Icon, MenuItem};
 /// The side of the square a status-bar icon is fitted in, in points: the
 /// menu bar is 22 (24 beside a notch), and AppKit leaves room around 18.
 pub const SIDE_PT: u32 = 18;
-/// The backing scales an icon is drawn for.
 pub const SCALES: [u32; 2] = [1, 2];
-/// A quit role without a label.
 pub const QUIT: &str = "Quit";
 
-/// One entry of a status-item menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
     Separator,
@@ -41,7 +28,6 @@ pub enum Node {
         /// A checkmark (`NSControlStateValueOn`). Unchecked and not checkable
         /// look the same, as on Windows.
         checked: bool,
-        /// The item's slot in the action table.
         action: usize,
     },
     Submenu {
@@ -51,9 +37,7 @@ pub enum Node {
     },
 }
 
-/// The menu's nodes and its action table: slot `i` is what selecting the
-/// item numbered `i` runs, `None` for a disabled item or one without a
-/// callback.
+/// Slot `i` is what selecting item `i` runs, `None` for a disabled item or one without a callback.
 pub fn menu(items: &[MenuItem], quit: Option<&Callback>) -> (Vec<Node>, Vec<Option<Callback>>) {
     let mut actions = Vec::new();
     let nodes = nodes(items, quit, &mut actions);
@@ -117,20 +101,18 @@ pub fn tag(revision: u64, action: usize) -> isize {
     (((revision & 0xffff_ffff) << 32) | (action as u64 & 0xffff_ffff)) as i64 as isize
 }
 
-/// [`tag`] back to (revision's low 32 bits, action slot).
 pub fn untag(tag: isize) -> (u32, usize) {
     let tag = tag as i64 as u64;
     ((tag >> 32) as u32, (tag & 0xffff_ffff) as usize)
 }
 
-/// Does a selection tagged `tag` belong to the menu of `revision`?
 pub fn action_of(tag: isize, revision: u64) -> Option<usize> {
     let (built_for, action) = untag(tag);
     (u64::from(built_for) == revision & 0xffff_ffff).then_some(action)
 }
 
-/// What a click on the status item does, when the application handles it
-/// (with no `on_click` AppKit opens the item's own menu: [`owns_menu`]).
+/// What a click does when the application handles it (with no `on_click` AppKit opens the menu:
+/// [`owns_menu`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Press {
     Click,
@@ -138,8 +120,6 @@ pub enum Press {
     Nothing,
 }
 
-/// windows.rs's `activate`: a primary click runs `on_click` when there is
-/// one; anything else opens a menu that has items.
 pub fn press(secondary: bool, has_click: bool, has_menu: bool) -> Press {
     if !secondary && has_click {
         Press::Click
@@ -150,18 +130,15 @@ pub fn press(secondary: bool, has_click: bool, has_menu: bool) -> Press {
     }
 }
 
-/// A right button, or Control with the primary one.
 pub fn secondary(right_button: bool, control: bool) -> bool {
     right_button || control
 }
 
-/// Whether the status item keeps the menu itself (`NSStatusItem.menu`), so
-/// that any click opens it: there is a menu and no `on_click` to report.
+/// Whether AppKit keeps the menu itself (`NSStatusItem.menu`): there is a menu and no `on_click`.
 pub fn owns_menu(has_click: bool, has_menu: bool) -> bool {
     !has_click && has_menu
 }
 
-/// The tooltip shown: the model's, else the application's name.
 pub fn tooltip(tooltip: &str, app_name: impl FnOnce() -> Option<String>) -> String {
     if !tooltip.is_empty() {
         return tooltip.to_owned();
@@ -177,14 +154,12 @@ pub fn tooltip(tooltip: &str, app_name: impl FnOnce() -> Option<String>) -> Stri
         .unwrap_or_else(|| "Application".into())
 }
 
-/// Whether the icon is drawn as a template: asked for, or one grey tone.
 pub fn template(icon: &Icon) -> bool {
     icon.template || monochrome(icon)
 }
 
-/// Every visible pixel is grey (its channels within a few levels of each
-/// other) and of nearly the same shade: a black or white glyph whose edges
-/// are only alpha. A coloured or shaded logo keeps its colours.
+/// Every visible pixel is grey and of nearly the same shade: a black or white glyph with alpha
+/// edges. A coloured logo keeps its colours.
 pub fn monochrome(icon: &Icon) -> bool {
     const VISIBLE: u8 = 16;
     const GREY: u8 = 24;
@@ -206,8 +181,7 @@ pub fn monochrome(icon: &Icon) -> bool {
     seen && lightest - darkest <= SHADES
 }
 
-/// The icon fitted and centred in a `side` × `side` square, as straight
-/// RGBA. Resampled premultiplied (windows.rs's `make_icon_foreground`) so
+/// The icon fitted and centred in a `side` square as straight RGBA, resampled premultiplied so
 /// transparent pixels do not darken the edges.
 pub fn raster(icon: &Icon, side: u32) -> Vec<u8> {
     let side = side.max(1);
@@ -243,7 +217,6 @@ pub fn raster(icon: &Icon, side: u32) -> Vec<u8> {
     pixels
 }
 
-/// `width` × `height` scaled to fit a `side` square, at least one pixel.
 pub fn fit(width: u32, height: u32, side: u32) -> (u32, u32) {
     let scale =
         (f64::from(side) / f64::from(width.max(1))).min(f64::from(side) / f64::from(height.max(1)));
@@ -252,8 +225,7 @@ pub fn fit(width: u32, height: u32, side: u32) -> (u32, u32) {
     (width, height)
 }
 
-/// The icon at `scale` as a PNG, for `NSBitmapImageRep imageRepWithData:`
-/// (a PNG keeps AppKit's own colour handling and needs no raw-plane call).
+/// The icon at `scale` as a PNG (keeps AppKit's own colour handling).
 pub fn png(icon: &Icon, scale: u32) -> Result<Vec<u8>, String> {
     use image::ImageEncoder;
     let side = SIDE_PT * scale;

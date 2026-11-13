@@ -15,10 +15,8 @@
 
 use std::path::PathBuf;
 
-/// The host triple, baked in by `build.rs`. bindgen drives libclang directly,
-/// and libclang's *own* default target can disagree with the host — a 32-bit
-/// default trips bindgen's `target_pointer_size == size_of::<*mut ()>()`
-/// assertion — so the triple is always passed explicitly.
+/// The host triple, baked in by `build.rs`: libclang's own default target can disagree with the host
+/// (a 32-bit default trips bindgen's pointer-size assertion), so it is always passed explicitly.
 const HOST_TARGET: &str = env!("TVG_HOST_TARGET");
 
 fn main() {
@@ -43,9 +41,7 @@ fn main() {
 
     let bindings = bindgen::Builder::default()
         .header(header.to_string_lossy())
-        // The vendored engine is a static archive, so the header must not
-        // decorate its declarations with dllimport — the same define
-        // `build.rs` compiles the C++ with.
+        // The engine is a static archive, so the header must not decorate declarations with dllimport (as in `build.rs`).
         .clang_arg("-DTVG_STATIC")
         .clang_arg(format!("--target={target}"))
         .allowlist_function("tvg_.*")
@@ -53,9 +49,7 @@ fn main() {
         .allowlist_var("TVG_.*")
         .rustified_enum("Tvg_Result")
         .rustified_enum("Tvg_Colorspace")
-        // Power-of-two bitflags (NONE = 0, DEFAULT = 1<<0, SMART_RENDER =
-        // 1<<1, ALIASED = 1<<2). `rustified_enum` would make
-        // `DEFAULT | SMART_RENDER` unrepresentable.
+        // Power-of-two bitflags: `rustified_enum` would make `DEFAULT | SMART_RENDER` unrepresentable.
         .bitfield_enum("Tvg_Engine_Option")
         .rustified_enum("Tvg_Mask_Method")
         .rustified_enum("Tvg_Blend_Method")
@@ -68,8 +62,7 @@ fn main() {
         .rustified_enum("Tvg_Filter_Method")
         .use_core()
         .layout_tests(true)
-        // Doxygen comments do not survive the C-to-Rust translation legibly
-        // and would triple the file's size; the header is vendored next door.
+        // Doxygen comments do not survive translation legibly and would triple the file; the header is vendored next door.
         .generate_comments(false)
         .generate()
         .expect("bindgen failed — is LIBCLANG_PATH set?");

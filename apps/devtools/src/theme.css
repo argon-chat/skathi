@@ -1,38 +1,6 @@
-/* The inspector's one shared stylesheet.
- *
- * Everything here is a NAMED thing rather than a utility soup: `.pane`,
- * `.chip`, `.btn`, `.mono`. Component <style scoped> blocks own layout; this
- * file owns the palette and the handful of controls every panel repeats, so a
- * button in the Console and a button in the Network panel cannot drift apart.
- *
- * No `var(--token)` and no `calc()`. The engine's variable support is real but
- * partial (crates/vn-css maps declarations onto gpui, and a `var()` that fails
- * to resolve degrades to a diagnostic, not to a colour), and an inspector whose
- * own stylesheet is a stress test of the engine it is inspecting is an
- * inspector you cannot trust to be telling you about the app. Literal values,
- * everywhere, on purpose.
- *
- * The palette:
- *   ink      #0b0f16  the window under the mica backdrop
- *   panel    #10151d  a pane
- *   raised   #171e29  a header, a chip, an input
- *   line     #232c3a  a border
- *   text     #d7e0ea  body
- *   dim      #8494a8  a label
- *   faint    #5c6b80  a hint
- *   accent   #6cb6ff  selection, links, the picker
- *   green    #56d364  ok
- *   yellow   #e3b341  warn
- *   red      #ff7b72  error
- *   purple   #d2a8ff  a class name
- *   cyan     #76e3ea  a value
- */
-
 .mono {
   font-family: "Cascadia Mono", "Consolas", monospace;
 }
-
-/* ---- controls ---------------------------------------------------------- */
 
 .btn {
   height: 20px;
@@ -80,7 +48,6 @@
   border-color: #2f6ea8;
 }
 
-/* A small, quiet label — a pane title, a column head. */
 .label {
   font-size: 10px;
   color: #7f8ea3;
@@ -89,7 +56,6 @@
   white-space: nowrap;
 }
 
-/* A rounded key/value badge. `.chip.dim` for secondary facts. */
 .chip {
   height: 18px;
   padding-left: 6px;
@@ -120,8 +86,6 @@
   background: #22110f;
 }
 
-/* ---- panes -------------------------------------------------------------- */
-
 .pane {
   display: flex;
   flex-direction: column;
@@ -140,8 +104,6 @@
   border-color: #1e2733;
   background: #131a24cc;
 }
-
-/* ---- text colours a panel reuses ---------------------------------------- */
 
 .t-dim {
   color: #8494a8;
@@ -168,16 +130,14 @@
   color: #76e3ea;
 }
 
-/* An empty pane's one line of explanation. Deliberately generous with words:
- * "select an element" is not an error state, it is an instruction. */
+/* Deliberately generous with words: "select an element" is not an error state, it is an
+   instruction. */
 .empty {
   padding: 14px;
   font-size: 11px;
   color: #6d7c90;
   line-height: 17px;
 }
-
-/* ---- the custom scrollbar every virtual list draws ---------------------- */
 
 .vscroll {
   position: absolute;

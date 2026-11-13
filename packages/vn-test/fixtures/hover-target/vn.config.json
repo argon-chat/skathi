@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/hover-target.spec.ts: :hover, group-hover and mouseenter/mouseleave follow the topmost element under the pointer and its ancestors (m26, docs/RUNTIME.md §5.18). See ../README.md.",
-
   "name": "vn-test-hover-target",
 
   "window": {

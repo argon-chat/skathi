@@ -1,10 +1,8 @@
-// The `appPermissions` extension tier (docs/PERMISSIONS.md §4).
+// The `appPermissions` extension tier.
 //
-// What is NOT tested here is the standard tier: `navigator.permissions` is
-// redjs's, and its shape is pinned by Rust tests in
-// vendor/redjs/redjs/src/webapi/permissions.rs (`jsc_tests`). What this file
-// covers is the half that lives in JS — the four-state read, the promise
-// plumbing behind `request()`, the advisory, and the `change` re-broadcast.
+// Not tested here: the standard tier (`navigator.permissions` is redjs's, pinned by Rust tests in
+// vendor/redjs/redjs/src/webapi/permissions.rs). Here: the four-state read, the promise plumbing behind `request()`,
+// the advisory, and the `change` re-broadcast.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime, PERMISSION_NAMES } from "./runtime-harness";
@@ -61,7 +59,7 @@ describe("appPermissions", () => {
     expect(advisories).toHaveLength(1);
     expect(advisories[0]).toContain("notifications");
     expect(advisories[0]).toContain("TestOS");
-    expect(advisories[0]).toContain("docs/PERMISSIONS.md");
+    expect(advisories[0]).toContain("request() is a no-op");
   });
 
   test("a granted capability never advises", () => {

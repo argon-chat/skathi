@@ -13,6 +13,6 @@
     "test": "bun test specs"
   },
   "comments": {
-    "dependencies": "There are NONE, on purpose — the same rule devtools/ctl.ts follows. `bun test` is the runner, `bun:test` ships with bun, and the wire is node:net + node:child_process. A test harness that needs its own `bun install` to have run is a harness that cannot be the first thing you reach for after a fresh clone."
+    "dependencies": "None on purpose: bun:test ships with bun, and the wire is node:net + node:child_process."
   }
 }

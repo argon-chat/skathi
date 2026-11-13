@@ -1,20 +1,3 @@
-// Inline <svg> shapes take the fill and stroke the CSS cascade computed for
-// them, read from the PIXELS.
-//
-// The EXOBIO overlay (Y:\elite-cacuator\apps\overlay) draws its notch as an
-// inline <svg> whose `fill: var(--notch-surface)` and rgba `stroke` come from
-// a global stylesheet. vn-css carried a rule's concrete paint only as
-// "painted", so the notch was drawn in the inherited `color`, near-white, where
-// a browser draws it near-black. Every element of the document now has its
-// computed presentation properties written on it in place of the markup's
-// attribute (crates/vn-tree/src/svg.rs, `cascaded`), and a `drop-shadow()` on
-// the <svg> is resvg's `feDropShadow` around the shapes.
-//
-//   bun test packages/vn-test/specs/svg-paint.spec.ts
-//
-// `fixtures/svg-paint` lays each case out on white with `color` blue, so a
-// shape that fell back to `currentColor` reads blue.
-
 import { afterAll, describe, expect, test } from "bun:test";
 import { launch, readPng, type Bounds } from "../src/index";
 
@@ -37,7 +20,6 @@ const box = async (selector: string): Promise<Bounds> => {
   return b;
 };
 
-/** A screenshot, read at CSS pixel `(x, y)`'s centre whatever the scale. */
 const shoot = async () => {
   const shot = readPng(await app.screenshot());
   const k = shot.width / W;
@@ -45,7 +27,6 @@ const shoot = async () => {
 };
 type Shot = Awaited<ReturnType<typeof shoot>>;
 
-/** Polls a screenshot until `ok` holds, and returns the last one either way. */
 async function until(ok: (s: Shot) => boolean, ms = 5_000): Promise<Shot> {
   const deadline = Date.now() + ms;
   let s = await shoot();
@@ -63,7 +44,6 @@ const magenta = near([255, 0, 255]);
 const blue = near([0, 0, 255]);
 const white = near([255, 255, 255], 12);
 
-/** "rgb(…) at (x, y)", for a failure message that says what was there. */
 const said = (s: Shot, x: number, y: number) => `rgb(${s.at(x, y).join(", ")}) at (${x}, ${y})`;
 
 describe("an inline <svg> painted from CSS rules", () => {
@@ -71,9 +51,7 @@ describe("an inline <svg> painted from CSS rules", () => {
     const b = await box("#outline");
     expect(b).toMatchObject({ w: 100, h: 60 });
     const s = await until((s) => red(s.at(b.x + 50, b.y + 30)));
-    // The interior is the var()'d red, not the inherited blue `color`.
     expect(red(s.at(b.x + 50, b.y + 30)), said(s, b.x + 50, b.y + 30)).toBe(true);
-    // An 8px stroke centred on x = 10: x 6..14 is green, 3 and 17 are not.
     for (const x of [7, 10, 13]) expect(green(s.at(b.x + x, b.y + 30)), said(s, b.x + x, b.y + 30)).toBe(true);
     expect(white(s.at(b.x + 3, b.y + 30)), said(s, b.x + 3, b.y + 30)).toBe(true);
     expect(red(s.at(b.x + 17, b.y + 30)), said(s, b.x + 17, b.y + 30)).toBe(true);
@@ -92,34 +70,28 @@ describe("an inline <svg> painted from CSS rules", () => {
   }, T);
 
   test("a presentation attribute loses to the rule on its own element", async () => {
-    // `<svg fill="blue" class="attr-loses">` with `.attr-loses { fill: red }`.
     const b = await box("#attr-loses");
     const s = await until((s) => !white(s.at(b.x + 50, b.y + 30)));
     expect(red(s.at(b.x + 50, b.y + 30)), said(s, b.x + 50, b.y + 30)).toBe(true);
-    // Outside the rect is nothing.
     expect(white(s.at(b.x + 4, b.y + 4)), said(s, b.x + 4, b.y + 4)).toBe(true);
   }, T);
 
   test("a rule that matches a shape inside the svg beats the shape's attribute", async () => {
-    // `.inner-rule rect { fill: red }` over `<rect fill="blue">`.
     const b = await box("#inner-rule");
     const s = await until((s) => !white(s.at(b.x + 50, b.y + 30)));
     expect(red(s.at(b.x + 50, b.y + 30)), said(s, b.x + 50, b.y + 30)).toBe(true);
   }, T);
 
   test("the inline style beats the rule", async () => {
-    // `.inline-wins rect { fill: red }` under `<rect style="fill: green">`.
     const b = await box("#inline-wins");
     const s = await until((s) => !white(s.at(b.x + 50, b.y + 30)));
     expect(green(s.at(b.x + 50, b.y + 30)), said(s, b.x + 50, b.y + 30)).toBe(true);
   }, T);
 
   test("a shape's own attribute beats what it would inherit from the svg's rule", async () => {
-    // `.inherit-loses { fill: red }` on the <svg>, `<rect fill="green">`.
     const b = await box("#inherit-loses");
     const s = await until((s) => !white(s.at(b.x + 50, b.y + 30)));
     expect(green(s.at(b.x + 50, b.y + 30)), said(s, b.x + 50, b.y + 30)).toBe(true);
-    // Nothing drew blue: no shape fell back to `currentColor`.
     for (const sel of ["#outline", "#attr-loses", "#inner-rule", "#inline-wins", "#inherit-loses"]) {
       const c = await box(sel);
       expect(blue(s.at(c.x + 50, c.y + 30)), `${sel}: ${said(s, c.x + 50, c.y + 30)}`).toBe(false);
@@ -129,24 +101,19 @@ describe("an inline <svg> painted from CSS rules", () => {
 
 describe("filter: drop-shadow() on an inline <svg>", () => {
   test("the shadow follows the circle, not the box, and reaches past the box", async () => {
-    // A black r=20 circle centred in a 60px box, `drop-shadow(20px 0 0 red)`:
-    // a red circle centred 20px to the right, under the black one.
     const b = await box("#shadowed");
     expect(b).toMatchObject({ w: 60, h: 60 });
     const [cx, cy] = [b.x + 30, b.y + 30];
     const s = await until((s) => red(s.at(cx + 30, cy)));
     const dark = near([0, 0, 0], 30);
     expect(dark(s.at(cx, cy)), said(s, cx, cy)).toBe(true);
-    // In the shadow, outside the shape — and at cx + 35, outside the box too.
     expect(red(s.at(cx + 30, cy)), said(s, cx + 30, cy)).toBe(true);
     expect(red(s.at(cx + 35, cy)), said(s, cx + 35, cy)).toBe(true);
     // The box's own shadow would cover its offset corner; the circle's does not.
     expect(white(s.at(b.x + 22, b.y + 2)), said(s, b.x + 22, b.y + 2)).toBe(true);
     expect(white(s.at(b.x + 78, b.y + 2)), said(s, b.x + 78, b.y + 2)).toBe(true);
-    // Left of the circle there is no shadow (the offset is to the right).
     expect(white(s.at(cx - 25, cy)), said(s, cx - 25, cy)).toBe(true);
     const logs = JSON.stringify((await app.logs()).entries);
-    // Neither drop-shadow advisory, nor the old "drawn in `color`" one.
     expect(logs).not.toContain("drop-shadow()` is honoured only");
     expect(logs).not.toContain("cast no shadow");
     expect(logs).not.toContain("currentColor`)");

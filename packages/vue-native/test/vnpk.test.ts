@@ -1,9 +1,5 @@
-// VNPK v1, the writer half — research/reports/m25/packaging-design.md §4.2.
-//
-//   bun test packages/vue-native/test/vnpk.test.ts
-//
-// The reader that matters is the host's (crates/vn-payload); it parses the
-// same `fixtures/golden.vnpk` this file pins, so the two sides cannot drift.
+// VNPK v1, the writer half. The reader that matters is the host's (crates/vn-payload); it parses the same
+// `fixtures/golden.vnpk` this file pins, so the two sides cannot drift.
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";

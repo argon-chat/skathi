@@ -1,65 +1,25 @@
-//! The matched-properties cache: elements that matched the same rules under the
-//! same inherited inputs get one computed style, folded once.
-//!
-//! Everything [`crate::Engine::compute_node`] does after matching is a function
-//! of the matched rules (in cascade order), the inline style, what the parent
-//! hands down (its custom properties, `color` and font size), the environment the `@media`
-//! conditions and `env()` read, and the rem and viewport bases. Two elements
-//! that agree on all of them get equal `ComputedStates`, so the second is a clone
-//! of the first: custom properties are not resolved again and the declarations
-//! are not folded again. The match still runs for every element, and that is
-//! what makes this safe against every selector without a per-selector argument:
-//! a sibling, positional or attribute selector, or a `:has()`, that tells two
-//! elements apart has already given them different rule lists. This is Blink's
-//! MatchedPropertiesCache, not Servo's style sharing, which skips the match as
-//! well and needs revalidation selectors and parents that shared to stay right.
-//!
-//! What is left out:
-//! - **An inline style**: the cascade borrows it, so the cache could not hold it,
-//!   and its address could be reused by a different one.
-//! - **A `.group:hover .x` rule**: the fold keys its bucket by the ancestor it
-//!   watches (`ComputedStates::group_hover`), which differs between elements
-//!   with the same rules.
-//!
-//! The parent's custom properties are held by `Rc`, so an entry keeps its key
-//! alive: an address in the cache is never a different map. They compare by
-//! address first and by content after, so the children of two rows that
-//! resolved the same custom properties separately still meet. A hit hands the
-//! cached `vars` down, so the next generation finds the same address.
-//!
-//! In Argon's chat view, 40% of the elements have a same-keyed element under a
-//! same-keyed parent and 8% a same-keyed earlier sibling
-//! (research/reports/m26/fixes-lag-1.md §4.10). So the cache is a short ring of
-//! recent results rather than a per-parent list.
+//! Matched-properties cache (Blink's, not Servo's style sharing): elements that match the same
+//! rules under the same inherited inputs share one `ComputedStates`. The match still runs per
+//! element, so every selector kind stays correct. Not cached: elements with an inline style, and
+//! `.group:hover .x` rules whose bucket depends on the ancestor.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::{ComputedStates, Env, Vars};
 
-/// Recent results kept. A message row's subtree has a few dozen distinct
-/// element kinds, and the next row is folded right after it.
+/// A message row's subtree has a few dozen distinct element kinds, and the next row is folded right
+/// after it.
 const SLOTS: usize = 64;
 
 /// Everything a fold depends on besides the declarations themselves.
 pub(crate) struct Key<'a> {
-    /// [`crate::Engine`]'s generation: rule indices mean nothing across sheets,
-    /// and a viewport rebase rewrites declarations in place.
     generation: u64,
     hash: u64,
-    /// The matched rules' indices, in cascade order.
     rules: Box<[u32]>,
     parent_vars: &'a Rc<Vars>,
     parent_color: Option<gpui::Hsla>,
     env: &'a Env,
-    /// The rem basis and the viewport basis, bitwise: a `var()`-composed value
-    /// resolves `rem` and `vw` against them at fold time. A new rem basis or a
-    /// resize also recompiles or rebases the sheet, which moves the generation;
-    /// this keeps the cache right where a resize skips the rebase (a sheet
-    /// whose only viewport units sit inside custom properties). And the
-    /// parent's font size: every `em` the element resolves, and its own font
-    /// size when it inherits one, follow from it, so two cousins under
-    /// different font sizes must not share.
     bases: [u32; 5],
     parent_font: &'a gpui::Font,
 }
@@ -95,6 +55,8 @@ struct Entry {
     parent_vars: Rc<Vars>,
     parent_color: Option<gpui::Hsla>,
     env: Env,
+    /// Rem and viewport bases plus the parent's font size: `em` values and an inherited font size
+    /// follow from it, so cousins under different font sizes must not share.
     bases: [u32; 5],
     parent_font: gpui::Font,
     states: ComputedStates,
@@ -158,8 +120,7 @@ pub(crate) fn insert(key: Key<'_>, states: &ComputedStates) {
     });
 }
 
-/// Is the cache on? `VN_CSS_NO_SHARE=1` turns it off, for an A/B or to rule it
-/// out, the way `VN_CSS_NO_RULE_INDEX` does the index.
+/// Is the cache on?
 pub(crate) fn enabled() -> bool {
     static ON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
     match ON.load(std::sync::atomic::Ordering::Relaxed) {

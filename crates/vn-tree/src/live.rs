@@ -1,50 +1,19 @@
-//! Paint-only invalidation: a native element's picture changes without a build
-//! (docs/ARCHITECTURE.md decision 28, fork item 40).
+//! Paint-only invalidation: a native element's picture (video frame, moving canvas, Lottie or
+//! sticker raster) changes without a build, by rewriting its atlas tile in place.
 //!
-//! A `<video>` frame, a moving `<canvas>`, a Lottie or sticker raster: each is
-//! a new picture in a box that did not move. Before this, every one of them was
-//! a full window draw, so the build, layout, prepaint and paint all ran again
-//! at the display rate. Now:
+//! A producer keeps one `RenderImage` id for the picture's life (the image is `dynamic`, so the
+//! resampler never swaps in a copy). The frame is written into its tile from the pump before the
+//! draw (`Window::write_image_tile`); gpui answers `InPlace` (a present re-encoding the last scene
+//! suffices, [`Shown::Present`]) or `Placed` (a new tile, needs [`Shown::Draw`]); with no place on
+//! screen it is [`Shown::Nowhere`]. `crate::frame_tick` turns the reported result into a draw or a
+//! present. [`LiveTile`] packages this for elements that rasterise their own picture.
 //!
-//! 1. **One atlas tile per picture, for its whole life.** gpui keys a tile by
-//!    `RenderImage::id`. A producer keeps one id: a zero-copy video's
-//!    placeholder, or [`gpui::RenderImage::successor`] for CPU frames. The
-//!    image is `dynamic`, so the resampler never swaps in a copy with a tile of
-//!    its own.
-//! 2. **The frame goes into that tile from the pump, before the draw**
-//!    (`Window::write_image_tile`), by GPU blit or CPU bytes. gpui answers
-//!    `InPlace` when the tile the last drawn scene samples was overwritten
-//!    where it lies, and `Placed` when the frame took a new tile.
-//! 3. **What the frame then needs** ([`shown`]): `InPlace` with a place that
-//!    can be on screen is a [`Shown::Present`], `Window::request_present`
-//!    re-encoding the scene already drawn. `Placed` there is a
-//!    [`Shown::Draw`]. With no place on screen it is [`Shown::Nowhere`]: the
-//!    next draw that paints the image samples the tile, which holds the newest
-//!    frame.
-//! 4. **The tick reports it** with [`note`]. `crate::frame_tick` turns a Draw
-//!    into its `true` (the host notifies) and a Present into
-//!    `request_present`. No build means the layout samplers stay parked too.
-//!
-//! [`LiveTile`] packages 1–3 for an element that owns its picture and rasterises
-//! it itself: the `<lottie>` port and the shared sticker element are its users.
-//! `<video>` (its image belongs to vn-video) and `<canvas>` (its still/moving
-//! split) use the free functions directly.
-//!
-//! Rules for a producer:
-//!
-//! * Write in the tick, never in a build.
-//! * Paint the tile's image and nothing derived from it.
-//! * Never swap a painted image for one with a new id without a
-//!   [`Shown::Draw`] in the same frame. A retired image's tile is freed on the
-//!   next pump, and a present-only frame would still sample it.
-//! * A tile lives in ONE window's atlas, and it is written with that window.
-//!   The pump holds the primary window, so a pop-out's tile is written from its
-//!   own `window_frame_tick` and shown by its own draw.
-//!
-//! A real draw is still needed for the first write, a new size, an
-//! image-identity change (a video's poster to its first frame, a canvas going
-//! still or starting to move), the video CPU-readback fallback (a new image a
-//! frame), a pop-out's tile, and a device-lost.
+//! Rules for a producer: write in the tick, never in a build; paint the tile's image and nothing
+//! derived from it; never swap a painted image for one with a new id without a `Draw` in the same
+//! frame (the retired tile is freed next pump and a present-only frame would still sample it); a tile
+//! lives in ONE window's atlas and is written with that window (a pop-out's from its own
+//! `window_frame_tick`). A real draw is still needed for the first write, a new size, an identity
+//! change, the video CPU-readback fallback, a pop-out's tile and device loss.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -54,8 +23,7 @@ use gpui::{GpuTextureHandle, RenderImage, TileSource, TileWrite, Window};
 
 use crate::windows::{self, WinKey};
 
-/// What a written frame needs before it can be seen. Ordered: the frame takes
-/// the most any producer asked for.
+/// What a written frame needs before it can be seen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Shown {
     /// No place that paints the picture can be on screen.
@@ -66,11 +34,6 @@ pub(crate) enum Shown {
     Draw,
 }
 
-/// The [`Shown`] for a write gpui reported as `write`, when a place that
-/// paints the image can be on screen (`visible`).
-///
-/// A refused GPU write is a Draw: the caller falls back to CPU frames, which
-/// starts with a new image.
 pub(crate) fn shown(write: TileWrite, visible: bool) -> Shown {
     match (write, visible) {
         (_, false) => Shown::Nowhere,
@@ -87,38 +50,29 @@ thread_local! {
 /// Presents asked of a window since the process started (devtools `perf`).
 static PRESENTS: AtomicU64 = AtomicU64::new(0);
 
-/// Reports what a frame written during this tick needs.
 pub(crate) fn note(shown: Shown) {
     PENDING.with(|p| p.set(p.get().max(shown)));
 }
 
-/// What this tick's writes need, reset for the next one. `crate::frame_tick`
-/// asks once at its end: a Draw becomes its `true`, a Present
-/// `window.request_present()` (see [`present`]).
+/// What this tick's writes need, reset for the next one.
 pub(crate) fn take() -> Shown {
     PENDING.with(|p| p.replace(Shown::Nowhere))
 }
 
-/// Is the page hidden (minimised, or on another virtual desktop)? Set by the
-/// host's window funnel next to `document.hidden` ([`crate::set_page_hidden`]).
+/// Is the page hidden (minimised, or on another virtual desktop)?
 static HIDDEN: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn set_hidden(hidden: bool) {
     HIDDEN.store(hidden, Ordering::Relaxed);
 }
 
-/// Is the page hidden ([`set_hidden`])? Nothing on it can be seen, so a
-/// producer that plays only while seen (`<vn-sticker>`) stops.
+/// Is the page hidden ([`set_hidden`])? Nothing on it can be seen, so a producer that plays only
+/// while seen (`<vn-sticker>`) stops.
 pub(crate) fn page_hidden() -> bool {
     HIDDEN.load(Ordering::Relaxed)
 }
 
-/// Presents `window`'s last drawn frame again, and counts it. Nothing while
-/// the page is hidden or gpui says the window's frames are not shown: gpui
-/// keeps asking a window on another virtual desktop to paint every vsync, and
-/// a background tick that wrote a frame would otherwise present it there. The
-/// tile holds the newest frame; the draw that comes with showing the window
-/// paints it.
+/// Presents `window`'s last drawn frame again, and counts it.
 pub(crate) fn present(window: &Window) {
     if HIDDEN.load(Ordering::Relaxed) || !window.is_visible() {
         return;
@@ -132,24 +86,16 @@ pub(crate) fn present_count() -> u64 {
     PRESENTS.load(Ordering::Relaxed)
 }
 
-/// Can a pixel of node `id` be on screen without being clipped by an ancestor?
-/// The node's painted box,
-/// cut to the viewport and to every ancestor that clips its overflow on an
-/// axis (`hidden`, `clip`, `scroll`, `auto`), is not empty. A message scrolled
-/// out of a chat list is inside the window but shows nothing.
-///
-/// On the safe side wherever it cannot be sure: a box as transformed is taken
-/// by its bounding rectangle, a clip is the clipping box's border box (not its
-/// padding box), and the walk stops at an absolutely or fixed positioned box,
-/// whose containing block may sit above an ancestor's clip. A window with no
-/// published viewport yet counts everything as visible.
+/// Can a pixel of node `id` be on screen without being clipped by an ancestor? The node's painted
+/// box, cut to the viewport and to every ancestor that clips its overflow on an axis (`hidden`,
+/// `clip`, `scroll`, `auto`), is not empty.
 pub(crate) fn visible(id: u32, win: WinKey) -> bool {
     let Some(Some((rect, viewport))) = windows::peek(win, |w| {
         let env = w.env.as_ref()?;
         let rect = w.transformed.get(&id).or_else(|| w.bounds.get(&id)).copied();
         Some((rect, (0.0, 0.0, env.viewport_width, env.viewport_height)))
     }) else {
-        return true; // no viewport published yet
+        return true;
     };
     let Some(r) = rect else { return false }; // not painted
     let mut cut = clip_rect(r, viewport, true, true);
@@ -201,26 +147,16 @@ fn clip_rect(r: windows::Rect, by: windows::Rect, x: bool, y: bool) -> Option<wi
     (x1 > x0 && y1 > y0).then_some((x0, y0, x1 - x0, y1 - y0))
 }
 
-/// One picture a native element repaints by itself: one image id, so one tile
-/// in one window's atlas, for the life of the picture, written frame by frame.
-///
-/// The build paints [`LiveTile::image`], at as many places as show the
-/// picture. The tick writes the next frame ([`LiveTile::write_bgra`] or
-/// [`LiveTile::write_gpu`]) and [`note`]s the answer. `visible` is the
-/// caller's: can any place that paints this tile be seen ([`visible`] over
-/// the places).
+/// One picture a native element repaints by itself: one image id, so one tile in one window's
+/// atlas, for the life of the picture, written frame by frame.
 #[allow(dead_code)]
 pub(crate) struct LiveTile {
-    /// The newest frame under the tile's id. Its bytes are the CPU frame last
-    /// written (zeros for a GPU-fed tile), so a re-upload after the atlas lost
-    /// the tile shows the newest picture.
+    /// The newest frame under the tile's id.
     image: Arc<RenderImage>,
     /// The window whose atlas holds the tile.
     win: WinKey,
 }
 
-// The API the `<lottie>` port and the shared sticker element build on
-// (module docs); `<vn-sticker>` writes CPU frames, nothing writes GPU ones yet.
 #[allow(dead_code)]
 impl LiveTile {
     /// A transparent `width` × `height` picture in window `win`'s atlas.
@@ -248,14 +184,10 @@ impl LiveTile {
         self.win
     }
 
-    /// Writes a CPU frame: BGRA, the tile's size, rows packed, with STRAIGHT
-    /// alpha. gpui's own decoders un-premultiply (`swap_rgba_pa_to_bgra`) and
-    /// the polychrome pipeline blends `SRC_ALPHA`, so a premultiplied raster
-    /// (ThorVG's, a canvas's) comes out darker wherever it is translucent.
-    /// A frame of another size is ignored with a Draw: resize with a new
-    /// [`LiveTile`] (retiring this one), which the build then paints.
-    ///
-    /// `window` must be the tile's window.
+    /// Writes a CPU frame: BGRA, the tile's size, rows packed, with STRAIGHT alpha. gpui's own
+    /// decoders un-premultiply (`swap_rgba_pa_to_bgra`) and the polychrome pipeline blends
+    /// `SRC_ALPHA`, so a premultiplied raster (ThorVG's, a canvas's) comes out darker wherever it
+    /// is translucent.
     pub(crate) fn write_bgra(&mut self, window: &mut Window, bgra: Vec<u8>, visible: bool) -> Shown {
         debug_assert_eq!(windows::key(window), self.win, "a tile is written with its own window");
         let (w, h) = self.size();
@@ -268,9 +200,8 @@ impl LiveTile {
         shown(write, visible)
     }
 
-    /// Writes a GPU frame (the contract of `Window::write_image_tile`'s
-    /// `TileSource::Gpu`). `None` when the renderer refused the texture: the
-    /// caller falls back to [`LiveTile::write_bgra`].
+    /// `None` when the renderer refused the texture: the caller falls back to
+    /// [`LiveTile::write_bgra`].
     pub(crate) fn write_gpu(&mut self, window: &mut Window, texture: GpuTextureHandle, visible: bool) -> Option<Shown> {
         debug_assert_eq!(windows::key(window), self.win, "a tile is written with its own window");
         match window.write_image_tile(&self.image, 0, TileSource::Gpu(texture)).unwrap_or(TileWrite::Refused) {
@@ -279,9 +210,9 @@ impl LiveTile {
         }
     }
 
-    /// Hands the tile back to its window's atlas on that window's next frame,
-    /// when no scene samples it any more. The frame that stops painting it
-    /// must be a draw (the producer's rules, module docs).
+    /// Hands the tile back to its window's atlas on that window's next frame, when no scene samples
+    /// it any more. The frame that stops painting it must be a draw (the producer's rules, module
+    /// docs).
     pub(crate) fn retire(self) {
         windows::queue_drops(self.win, [self.image]);
     }
@@ -291,12 +222,7 @@ impl LiveTile {
 mod tests {
     use super::*;
 
-    /// Can a pixel of node `id` be on screen in window `win`? Its painted box (laid
-    /// out, or as transformed) meets that window's viewport, by the last drawn
-    /// frame's bounds. A node that was not painted (inside `display: none`, never
-    /// built) has none. Clipping by an ancestor is not considered: a clipped box
-    /// counts as on screen, the safe side. A window with no published viewport yet
-    /// counts everything as on screen.
+    /// Can a pixel of node `id` be on screen in window `win`?
     fn on_screen(id: u32, win: WinKey) -> bool {
         windows::peek(win, |w| {
             let Some(env) = w.env.as_ref() else { return true };
@@ -331,9 +257,8 @@ mod tests {
         assert_eq!(take(), Shown::Nowhere, "reset for the next tick");
     }
 
-    /// A box scrolled out of its clipping ancestor is inside the window but
-    /// shows nothing; an absolutely positioned one may escape the clip, so it
-    /// counts as visible.
+    /// A box scrolled out of its clipping ancestor is inside the window but shows nothing; an
+    /// absolutely positioned one may escape the clip, so it counts as visible.
     #[test]
     fn a_box_clipped_away_by_an_ancestor_is_not_visible() {
         use crate::tree;
@@ -349,7 +274,7 @@ mod tests {
             let escaped = t.create_element(div);
             t.set_class(escaped, "abs");
             for n in [inside, outside, escaped] {
-                t.insert(n, list, 0); // appended
+                t.insert(n, list, 0);
             }
             (list, inside, outside, escaped)
         });

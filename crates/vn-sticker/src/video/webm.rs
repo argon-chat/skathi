@@ -1,33 +1,17 @@
 //! A minimal WebM (Matroska) demuxer: the first VP9 video track of a file, its
 //! blocks in file order, and each block's alpha packet.
 //!
-//! What it reads, by element:
+//! Reads the EBML `DocType`, the first `Segment` (known or unknown size, as a live writer's),
+//! `Info` (`TimestampScale`, `Duration`), the first video `TrackEntry` with `CodecID` `V_VP9`
+//! (`DefaultDuration`, pixel and display sizes, `AlphaMode`, `Colour`), and every `Cluster`'s
+//! `SimpleBlock`s and `BlockGroup`s, including the `BlockAdditional` with `BlockAddID` 1 (the alpha
+//! packet). Everything else is skipped by its size. Laced video blocks are refused: no WebM writer
+//! laces video.
 //!
-//! * the EBML header's `DocType` (`webm`, or `matroska`);
-//! * the first `Segment`, of known or unknown size (a live writer's, such as
-//!   `MediaRecorder`'s);
-//! * `Info`: `TimestampScale`, `Duration`;
-//! * `Tracks`: the first video `TrackEntry` whose `CodecID` is `V_VP9`, with
-//!   its `DefaultDuration`, and from `Video` the pixel and display sizes,
-//!   `AlphaMode` and the `Colour` coefficients a player chooses its YUV matrix
-//!   from;
-//! * every `Cluster`, of known or unknown size: its `Timestamp`, and that
-//!   track's `SimpleBlock`s and `BlockGroup`s (`Block`, `BlockDuration`, and
-//!   the `BlockAdditional` with `BlockAddID` 1 in `BlockAdditions`: the alpha
-//!   stream's packet, Matroska's "alpha channel" addition).
-//!
-//! Everything else (SeekHead, Cues, Tags, Chapters, Void, other tracks) is
-//! skipped by its size. Laced video blocks are refused: no WebM writer laces
-//! video (libwebm, ffmpeg and Chromium's MediaRecorder all write a frame a
-//! block), so there is nothing to test a lacing reader against.
-//!
-//! Damaged input: nothing here indexes past a slice or allocates by a size
-//! the file declares. The only allocation is the block list, one entry per
-//! block found and at most [`MAX_BLOCKS`]. Masters are read by one function
-//! each, at a fixed depth, so a file cannot nest its way into a deep stack.
-//! A file cut short inside what a sticker needs (the headers, a Cluster) is
-//! [`VideoError::Malformed`]; one cut in trailing metadata after its blocks
-//! (Cues, Tags) plays.
+//! Damaged input: nothing indexes past a slice or allocates by a declared size (the only allocation
+//! is the block list, at most [`MAX_BLOCKS`]), and masters are read at a fixed depth so a file
+//! cannot nest into a deep stack. A file cut short inside what a sticker needs (headers, a Cluster)
+//! is [`VideoError::Malformed`]; one cut in trailing metadata (Cues, Tags) plays.
 
 use super::VideoError;
 

@@ -1,47 +1,20 @@
-//! File System Access, the host side (docs/DESKTOP.md §2; design §4.3, §4.7).
+//! File System Access, the host side.
 //!
-//! # Handles are ids, and JS never holds a path
+//! Handles are ids: a JS `FileSystemHandle` carries a number and the path lives in [`HANDLES`]; no
+//! host function takes a path from script or returns one. A handle exists only for something the
+//! user granted (a picker result, a launch path, a dropped path) or for a child of a directory handle
+//! reached through the name fence ([`check_name`]): one path component, never `..`, a separator, an
+//! NTFS stream (`:`) or a device name.
 //!
-//! A `FileSystemHandle` in JS carries a number. The path lives HERE, in
-//! [`HANDLES`], and a handle exists only for something the user granted:
+//! As in Chromium, handles are [Serializable] ([`to_wire`] / [`from_wire`]); the bytes carry the path
+//! and no script reads them. Permission belongs to the path, not the object: a GRANT ([`grant`]) is a
+//! path the user chose and covers everything below it for this session. A handle on an uncovered
+//! path is `"prompt"`: every operation through it is `NotAllowedError` until `requestPermission()`
+//! grants it ([`permission`]).
 //!
-//! - a picker's result (`dialog`), a forwarded or initial launch's existing
-//!   paths (`launch`), a dropped path (the `getAsFileSystemHandle` hook);
-//! - a child of a directory handle, reached through the NAME FENCE
-//!   ([`check_name`]): one path component, never `..`, a separator, an NTFS
-//!   stream (`:`) or a device name. A directory handle therefore reaches its
-//!   own subtree and nothing else.
-//!
-//! So no host function takes a path from script, and none returns one: the
-//! owner dropped the tier-2 `appFs`, and these `__vn_fs_*` globals must not
-//! be an undocumented one. What a page can learn about where a file is stays
-//! what a browser shows: a `File`'s `name` and its `webkitRelativePath`.
-//!
-//! # Handles are [Serializable], and permission is per path
-//!
-//! As in Chromium, a handle survives `structuredClone`, `postMessage` and
-//! IndexedDB ([`to_wire`] / [`from_wire`], through redjs's tag 0x39). The
-//! bytes carry the path, and no script ever reads them. A handle made from
-//! them is the same path in a new object, maybe in a later session. So
-//! permission belongs to the path, as Chromium's belongs to the origin and
-//! path, and not to the object. A GRANT ([`grant`]) is a path the user chose:
-//! a pick, a drop, a launch. It covers that path and everything below it, for
-//! this session. A handle on a path that no grant covers is `"prompt"`,
-//! Chromium's state for a handle read back after a restart. Every operation
-//! through it is `NotAllowedError` until `requestPermission()` grants the path
-//! again ([`permission`]; docs/DESKTOP.md D-F22).
-//!
-//! # Threads
-//!
-//! Everything below that touches the disk runs on the pool (`pool.rs`). The
-//! `start_*` functions run on the frame thread inside the host fns: they look
-//! the handle up, apply the name fence, and either refuse synchronously
-//! (`{error, name}`) or queue the operation and answer `{token}`.
-//!
-//! # Errors
-//!
-//! [`fail_io`] is design §3.3's table, tier 1 only (DOMException names, with
-//! Chromium's messages, because pasted errors get searched).
+//! Disk work runs on the pool; the `start_*` functions run on the frame thread, apply the name fence
+//! and either refuse synchronously or queue the operation and answer `{token}`. [`fail_io`] maps
+//! `io::Error` to DOMException names with Chromium's messages.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -54,11 +27,6 @@ use crate::{pool, Done, Fail};
 
 pub mod writable;
 
-// ---------------------------------------------------------------------------
-// the handle table
-// ---------------------------------------------------------------------------
-
-/// What a handle names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     File,
@@ -87,11 +55,8 @@ fn handles() -> &'static Mutex<HashMap<u64, Entry>> {
 
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
-/// Makes a handle id for `path`. Called only by the places listed in the
-/// module docs. The kind comes from a stat that already happened (a dialog
-/// thread, a launch, a drop), from the child lookup that made it, or from the
-/// serialized handle. Registering grants nothing: [`granted_handle_json`] is
-/// for what the user chose.
+/// Makes a handle id for `path`. Registering grants nothing: [`granted_handle_json`] is for what
+/// the user chose.
 pub(crate) fn register(path: PathBuf, kind: Kind) -> u64 {
     let id = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
     handles().lock().unwrap_or_else(|p| p.into_inner()).insert(id, Entry { path, kind });
@@ -102,13 +67,11 @@ fn lookup(id: u64) -> Option<Entry> {
     handles().lock().unwrap_or_else(|p| p.into_inner()).get(&id).cloned()
 }
 
-/// Forgets a handle whose JS object was collected (`FinalizationRegistry`).
 pub fn release(id: u64) {
     handles().lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
 }
 
-/// The name a handle reports: the last component, or the whole root for a
-/// drive (`C:\`), which is what Chromium names a picked drive.
+/// The last component, or the whole root for a drive (`C:\`), as Chromium names a picked drive.
 pub fn name_of(path: &Path) -> String {
     match path.file_name() {
         Some(n) => n.to_string_lossy().into_owned(),
@@ -116,32 +79,24 @@ pub fn name_of(path: &Path) -> String {
     }
 }
 
-/// `{h, name, kind}` — how a handle crosses into JS.
 pub(crate) fn handle_json(path: PathBuf, kind: Kind) -> serde_json::Value {
     let name = name_of(&path);
     json!({ "h": register(path, kind), "name": name, "kind": kind.as_str() })
 }
 
-/// [`handle_json`] for a path the user just chose (a pick, a drop, a launch),
-/// with the grant that comes with it.
+/// [`handle_json`] plus the grant, for a path the user just chose.
 pub(crate) fn granted_handle_json(path: PathBuf, kind: Kind) -> serde_json::Value {
     grant(&path);
     handle_json(path, kind)
 }
-
-// ---------------------------------------------------------------------------
-// permission: the session's grants (module docs)
-// ---------------------------------------------------------------------------
 
 fn grants() -> &'static Mutex<Vec<String>> {
     static G: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
     G.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// The key a grant is compared by. It is lexical, with no I/O, because it is
-/// checked on the frame thread before every operation. Every path in the
-/// table is absolute already: it came from a dialog, a launch, a drop, or a
-/// child joined onto one of those.
+/// The key a grant is compared by: lexical, no I/O, since it is checked on the frame thread before
+/// every operation.
 fn grant_key(p: &Path) -> String {
     let s = p.to_string_lossy();
     let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
@@ -156,7 +111,6 @@ fn grant_key(p: &Path) -> String {
     }
 }
 
-/// Grants `path` and everything below it, for the session.
 pub(crate) fn grant(path: &Path) {
     let k = grant_key(path);
     let mut g = grants().lock().unwrap_or_else(|p| p.into_inner());
@@ -165,7 +119,6 @@ pub(crate) fn grant(path: &Path) {
     }
 }
 
-/// Whether a grant covers `path`: it is a granted path or inside one.
 pub fn is_granted(path: &Path) -> bool {
     let k = grant_key(path);
     let sep = if cfg!(windows) { '\\' } else { '/' };
@@ -174,10 +127,8 @@ pub fn is_granted(path: &Path) -> bool {
     })
 }
 
-/// `__vn_fs_permission(h, request)`: `"granted"` or `"prompt"`, both modes
-/// alike (D-F2). `request` grants the handle's path. The runtime calls it with
-/// `request` only on a user activation (D-F22). `None` for an id the table
-/// does not hold.
+/// `"granted"` or `"prompt"`; `request` grants the handle's path (the runtime passes it only on a
+/// user activation). `None` for an unknown id.
 pub fn permission(id: u64, request: bool) -> Option<&'static str> {
     let e = lookup(id)?;
     if request {
@@ -186,12 +137,10 @@ pub fn permission(id: u64, request: bool) -> Option<&'static str> {
     Some(if is_granted(&e.path) { "granted" } else { "prompt" })
 }
 
-/// The refusal for an operation through a `"prompt"` handle, Chromium's.
 fn not_granted() -> Fail {
     Fail::new("NotAllowedError", NOT_ALLOWED)
 }
 
-/// The entry behind `id`, if a grant covers it.
 fn granted(id: u64) -> Result<Entry, Fail> {
     let e = lookup(id).ok_or_else(gone)?;
     if !is_granted(&e.path) {
@@ -200,20 +149,13 @@ fn granted(id: u64) -> Result<Entry, Fail> {
     Ok(e)
 }
 
-// ---------------------------------------------------------------------------
-// the serialized handle (redjs tag 0x39's payload)
-// ---------------------------------------------------------------------------
-
-/// The bytes a handle is serialized as: `{"v":1,"kind":…,"path":…}`. They hold
-/// the path, and they are opaque to script: redjs stores them inside its own
-/// format, and nothing hands the raw bytes back.
+/// The bytes a handle is serialized as: `{"v":1,"kind":…,"path":…}`, opaque to script.
 pub(crate) fn to_wire(id: u64) -> Option<Vec<u8>> {
     let e = lookup(id)?;
     Some(json!({ "v": 1, "kind": e.kind.as_str(), "path": e.path.to_string_lossy() }).to_string().into_bytes())
 }
 
-/// The path and kind back from [`to_wire`]'s bytes, or `None` for anything
-/// else: another version, a relative path, a kind that is not one of the two.
+/// The path and kind back from [`to_wire`]'s bytes, or `None` for anything else.
 pub(crate) fn from_wire(bytes: &[u8]) -> Option<(PathBuf, Kind)> {
     let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
     if v["v"].as_u64() != Some(1) {
@@ -233,15 +175,9 @@ fn token_json(token: u32) -> String {
 }
 
 fn gone() -> Fail {
-    // A handle id the table does not hold: released already, or never ours.
-    // Chromium has no such state (a handle cannot outlive its object), so the
-    // nearest honest name is the one for "the state you cached is stale".
+    // A released or unknown handle id: the nearest honest name is the one for stale cached state.
     Fail::new("InvalidStateError", INVALID_STATE)
 }
-
-// ---------------------------------------------------------------------------
-// the error map (design §3.3, tier 1)
-// ---------------------------------------------------------------------------
 
 pub const NOT_FOUND: &str = "A requested file or directory could not be found at the time an operation was processed.";
 pub const TYPE_MISMATCH: &str = "The path supplied exists, but was not an entry of requested type.";
@@ -254,7 +190,6 @@ pub const INVALID_STATE: &str =
     "An operation that depends on state cached in an interface object was made but the state had changed since it was read from disk.";
 pub const NOT_READABLE: &str =
     "The requested file could not be read, typically due to permission problems that have occurred after a reference to a file was acquired.";
-/// Chromium's TypeError for a name the fence refuses.
 pub const BAD_NAME: &str = "Name is not allowed.";
 
 /// Whether the operation that failed was reading or writing: a refusal is
@@ -265,9 +200,8 @@ pub enum Access {
     Write,
 }
 
-/// An `io::Error` → the DOMException a File System Access promise rejects
-/// with. The Win32 code decides first, because std folds several of them
-/// into `Other` / `Uncategorized`.
+/// An `io::Error` → the DOMException a promise rejects with. The Win32 code decides first, since
+/// std folds several of them into `Other`.
 pub fn fail_io(e: &std::io::Error, access: Access) -> Fail {
     use std::io::ErrorKind as K;
     let os = e.raw_os_error();
@@ -297,31 +231,20 @@ pub fn fail_io(e: &std::io::Error, access: Access) -> Fail {
     }
 }
 
-// ---------------------------------------------------------------------------
-// the name fence
-// ---------------------------------------------------------------------------
-
-/// Windows device names: `CON` opens the console, `NUL` the bit bucket, with
-/// or without an extension (`nul.txt` is still NUL on every Windows before
-/// 11, and still is there for some APIs).
+/// Windows device names, reserved with or without an extension.
 const DEVICE_NAMES: &[&str] = &[
     "con", "prn", "aux", "nul", "conin$", "conout$", "com0", "com1", "com2", "com3", "com4", "com5", "com6", "com7",
     "com8", "com9", "com¹", "com²", "com³", "lpt0", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8",
     "lpt9", "lpt¹", "lpt²", "lpt³",
 ];
 
-/// The traversal fence of `getFileHandle` / `getDirectoryHandle` /
-/// `removeEntry` (design §4.3). Chromium's rule is "not empty, not `.` or
-/// `..`, no separator"; on Windows the same name must also not be able to
-/// leave the folder or open something that is not a file in it:
+/// The traversal fence of `getFileHandle` / `getDirectoryHandle` / `removeEntry`: not empty, not
+/// `.` or `..`, no separator, and on Windows also:
 ///
-/// - any `:` — `a.txt:payload` is an NTFS alternate data stream, `C:x` is
-///   drive-relative;
-/// - a device name, with or without an extension;
-/// - a trailing `.` or space, which Windows strips (`a.txt.` IS `a.txt`, so
-///   two names would reach one file);
-/// - the characters Windows never allows in a name (`< > " | ? *`) and the
-///   control characters.
+/// - no `:` (`a.txt:payload` is an alternate data stream, `C:x` is drive-relative);
+/// - no device name;
+/// - no trailing `.` or space (Windows strips them, so two names would reach one file);
+/// - none of `< > " | ? *` or control characters.
 ///
 /// Every refusal is Chromium's `TypeError` "Name is not allowed."
 pub fn check_name(name: &str) -> Result<(), Fail> {
@@ -342,12 +265,7 @@ pub fn check_name(name: &str) -> Result<(), Fail> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// the operations (pure: run on the pool, unit-tested without JS)
-// ---------------------------------------------------------------------------
-
-/// `getFile()`: the file as it is now — its size and mtime are the snapshot
-/// the `File` checks every read against.
+/// `getFile()`: the file as it is now; its size and mtime are the snapshot reads are checked against.
 pub fn op_stat_file(path: &Path) -> Result<(u64, Option<std::time::SystemTime>), Fail> {
     let m = std::fs::metadata(path).map_err(|e| fail_io(&e, Access::Read))?;
     if m.is_dir() {
@@ -356,7 +274,6 @@ pub fn op_stat_file(path: &Path) -> Result<(u64, Option<std::time::SystemTime>),
     Ok((m.len(), m.modified().ok()))
 }
 
-/// The directory a handle names, still a directory.
 fn ensure_dir(dir: &Path) -> Result<(), Fail> {
     let m = std::fs::metadata(dir).map_err(|e| fail_io(&e, Access::Read))?;
     if !m.is_dir() {
@@ -365,9 +282,8 @@ fn ensure_dir(dir: &Path) -> Result<(), Fail> {
     Ok(())
 }
 
-/// `getFileHandle(name, {create})` / `getDirectoryHandle(name, {create})`.
-/// `name` has passed [`check_name`]. An existing entry of the other kind is
-/// `TypeMismatchError` whether or not `create` is set, as the spec says.
+/// `getFileHandle` / `getDirectoryHandle`; `name` has passed [`check_name`]. An existing entry of the
+/// other kind is `TypeMismatchError` whether or not `create` is set.
 pub fn op_child(dir: &Path, name: &str, kind: Kind, create: bool) -> Result<PathBuf, Fail> {
     ensure_dir(dir)?;
     let child = dir.join(name);
@@ -396,8 +312,6 @@ pub fn op_child(dir: &Path, name: &str, kind: Kind, create: bool) -> Result<Path
     }
 }
 
-/// `removeEntry(name, {recursive})`. A non-empty folder without `recursive`
-/// is `InvalidModificationError`.
 pub fn op_remove(dir: &Path, name: &str, recursive: bool) -> Result<(), Fail> {
     ensure_dir(dir)?;
     let child = dir.join(name);
@@ -418,9 +332,8 @@ pub fn op_remove(dir: &Path, name: &str, recursive: bool) -> Result<(), Fail> {
     r.map_err(|e| fail_io(&e, Access::Write))
 }
 
-/// The path to compare two handles by: canonical where it still resolves,
-/// absolute and lexical where it does not (a deleted file is still the same
-/// entry as another handle on the same path).
+/// Canonical where it still resolves, else absolute and lexical (a deleted file is still the same
+/// entry as another handle on its path).
 fn identity(p: &Path) -> String {
     let canon = std::fs::canonicalize(p).unwrap_or_else(|_| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()));
     let s = canon.to_string_lossy();
@@ -433,13 +346,11 @@ fn identity(p: &Path) -> String {
     }
 }
 
-/// `isSameEntry`: the same kind and the same entry.
 pub fn op_same(a: &Path, a_kind: Kind, b: &Path, b_kind: Kind) -> bool {
     a_kind == b_kind && identity(a) == identity(b)
 }
 
-/// `resolve(possibleDescendant)`: the components from `root` down to `desc`
-/// (`[]` for the same entry), or `None` when it is not inside.
+/// `resolve(possibleDescendant)`: components from `root` down to `desc`, or `None` when not inside.
 pub fn op_resolve(root: &Path, desc: &Path) -> Option<Vec<String>> {
     let (r, d) = (identity(root), identity(desc));
     let sep = std::path::MAIN_SEPARATOR;
@@ -450,9 +361,8 @@ pub fn op_resolve(root: &Path, desc: &Path) -> Option<Vec<String>> {
     if !d.starts_with(&prefix) {
         return None;
     }
-    // The components are the DESCENDANT's own spelling, not the lowercased
-    // comparison key: count how many there are below the root, and take that
-    // many from the end of its path.
+    // The descendant's own spelling, not the lowercased key: count the components below the root
+    // and take that many from the end of its path.
     let below = d[prefix.len()..].split(sep).filter(|c| !c.is_empty()).count();
     let comps: Vec<String> = desc.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
     if comps.len() < below {
@@ -461,12 +371,7 @@ pub fn op_resolve(root: &Path, desc: &Path) -> Option<Vec<String>> {
     Some(comps[comps.len() - below..].to_vec())
 }
 
-// ---------------------------------------------------------------------------
-// the directory cursor
-// ---------------------------------------------------------------------------
-
-/// Entries per `__vn_fs_dir_next` batch: a 100 000-entry folder is iterated
-/// in 391 small JSON strings, never one giant one (design §4.3).
+/// Entries per batch: a 100 000-entry folder is iterated in small JSON strings, never one giant one.
 pub const DIR_BATCH: usize = 256;
 
 pub struct Cursor {
@@ -481,9 +386,8 @@ impl Cursor {
         Ok(Cursor { dir: dir.to_path_buf(), iter: Some(iter) })
     }
 
-    /// Up to `max` entries and whether the folder is exhausted. A link reports
-    /// its target's kind, as Chromium does; a link whose target is gone, and
-    /// anything that is neither a file nor a folder, is skipped.
+    /// Up to `max` entries and whether the folder is exhausted. A link reports its target's kind; a
+    /// dangling link and anything neither file nor folder are skipped.
     pub fn next(&mut self, max: usize) -> Result<(Vec<(PathBuf, Kind)>, bool), Fail> {
         let mut out = Vec::new();
         let Some(iter) = self.iter.as_mut() else { return Ok((out, true)) };
@@ -529,13 +433,6 @@ fn cursors() -> &'static Mutex<HashMap<u64, Arc<Mutex<Cursor>>>> {
 
 static NEXT_CURSOR: AtomicU64 = AtomicU64::new(1);
 
-// ---------------------------------------------------------------------------
-// starting an operation (frame thread, inside the host fns)
-// ---------------------------------------------------------------------------
-
-/// `__vn_fs_get_file(h)`: settles `{name, size, lastModified}` and hands the
-/// dispatcher the path-backed `File` (made on the JS thread at delivery from
-/// the stat that ran here).
 pub fn start_get_file(id: u64) -> String {
     let e = match granted(id) {
         Ok(e) => e,
@@ -557,7 +454,6 @@ pub fn start_get_file(id: u64) -> String {
     token_json(token)
 }
 
-/// `__vn_fs_child(dir, name, isDirectory, create)`: settles `{h, name, kind}`.
 pub fn start_child(dir: u64, name: &str, kind: Kind, create: bool) -> String {
     if let Err(f) = check_name(name) {
         return f.to_sync_json();
@@ -578,7 +474,6 @@ pub fn start_child(dir: u64, name: &str, kind: Kind, create: bool) -> String {
     token_json(token)
 }
 
-/// `__vn_fs_remove(dir, name, recursive)`.
 pub fn start_remove(dir: u64, name: &str, recursive: bool) -> String {
     if let Err(f) = check_name(name) {
         return f.to_sync_json();
@@ -599,8 +494,7 @@ pub fn start_remove(dir: u64, name: &str, recursive: bool) -> String {
     token_json(token)
 }
 
-/// `__vn_fs_same(a, b)`: settles `{same}`. Canonicalising is I/O, so this is
-/// async even though the answer is a boolean.
+/// Async because canonicalising is I/O.
 pub fn start_same(a: u64, b: u64) -> String {
     let (Some(ea), Some(eb)) = (lookup(a), lookup(b)) else { return gone().to_sync_json() };
     let token = crate::next_token();
@@ -608,7 +502,6 @@ pub fn start_same(a: u64, b: u64) -> String {
     token_json(token)
 }
 
-/// `__vn_fs_resolve(root, other)`: settles `{path: string[] | null}`.
 pub fn start_resolve(root: u64, other: u64) -> String {
     let (Some(er), Some(eo)) = (lookup(root), lookup(other)) else { return gone().to_sync_json() };
     let token = crate::next_token();
@@ -619,7 +512,6 @@ pub fn start_resolve(root: u64, other: u64) -> String {
     token_json(token)
 }
 
-/// `__vn_fs_dir_open(dir)`: settles `{cursor}`.
 pub fn start_dir_open(dir: u64) -> String {
     let e = match granted(dir) {
         Ok(e) => e,
@@ -638,9 +530,7 @@ pub fn start_dir_open(dir: u64) -> String {
     token_json(token)
 }
 
-/// `__vn_fs_dir_next(cursor)`: settles `{entries: [{h, name, kind}], done}`.
-/// Each entry is a handle granted here: it is inside the folder the user
-/// picked, which is what a directory handle grants.
+/// Each entry is a handle granted here: it is inside the folder the user picked.
 pub fn start_dir_next(cursor: u64) -> String {
     let Some(c) = cursors().lock().unwrap_or_else(|p| p.into_inner()).get(&cursor).cloned() else {
         return gone().to_sync_json();
@@ -657,14 +547,12 @@ pub fn start_dir_next(cursor: u64) -> String {
     token_json(token)
 }
 
-/// `__vn_fs_dir_close(cursor)`: an iteration abandoned early (`break` out of
-/// `for await`). Dropping the `ReadDir` closes the OS handle.
+/// An iteration abandoned early; dropping the `ReadDir` closes the OS handle.
 pub fn dir_close(cursor: u64) {
     cursors().lock().unwrap_or_else(|p| p.into_inner()).remove(&cursor);
 }
 
-/// The path behind a handle id, for the other host modules (a picker's
-/// `startIn`). Never handed to JS.
+/// The path behind a handle id, for other host modules (a picker's `startIn`). Never handed to JS.
 pub(crate) fn path_of(id: u64) -> Option<(PathBuf, Kind)> {
     lookup(id).map(|e| (e.path, e.kind))
 }
@@ -673,7 +561,6 @@ pub(crate) fn path_of(id: u64) -> Option<(PathBuf, Kind)> {
 pub(crate) mod tests {
     use super::*;
 
-    /// A scratch folder under the OS temp dir, removed on drop.
     pub(crate) struct Scratch(pub PathBuf);
 
     impl Scratch {

@@ -1,15 +1,3 @@
-// MediaStream and the two MediaStream audio nodes, in a real host (m26 fixes,
-// research/reports/m26/client-sweep-1.md finding 11; redjs webapi/mediastream.rs).
-//
-//   bun test packages/vn-test/specs/media.spec.ts
-//
-// The harness launches every host with VN_MEDIA_CAPTURE=deny, so nothing here
-// can open the machine's microphone: getUserMedia must refuse, by name. What
-// IS exercised is the graph: an oscillator into a MediaStreamAudioDestinationNode,
-// whose track feeds a MediaStreamAudioSourceNode in the same context, read
-// back through an analyser, which is how the Argon client builds its
-// microphone path. Any fixture will do; this one borrows `events`.
-
 import { afterAll, expect, test } from "bun:test";
 import { launch } from "../src/index";
 
@@ -46,8 +34,6 @@ test("the classes are there, tagged as a browser tags them", async () => {
   expect(got).toEqual({
     ok: "[object MediaStream],[object MediaStreamTrack],[object MediaStreamAudioSourceNode],[object MediaStreamAudioDestinationNode]",
   });
-  // The nodes themselves too (fixes-host-media-1 §4: every node said
-  // [object AudioNode]).
   const nodes = await inPage(`
     const ctx = new AudioContext();
     const dest = ctx.createMediaStreamDestination();
@@ -68,9 +54,8 @@ test("getUserMedia refuses with NotAllowedError, and no input is named", async (
     "return (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput')" +
       ".map(d => [d.deviceId, d.label, d instanceof InputDeviceInfo, JSON.stringify(d.getCapabilities())].join('|'));",
   );
-  // At most one anonymous entry (a microphone exists, unnamed): never a device
-  // the page could offer and then fail to open. It is an InputDeviceInfo with
-  // nothing to describe.
+  // At most one anonymous entry (a microphone exists, unnamed): never a device the page could
+  // offer and then fail to open.
   const list = (inputs as { ok: string[] }).ok;
   expect(list.length).toBeLessThanOrEqual(1);
   for (const row of list) expect(row).toBe("||true|{}");
@@ -95,18 +80,14 @@ test("a destination node's track plays into a source node in the same graph", as
     const moved = ctx.currentTime > 0;
     return { kind: track.kind, state: track.readyState, ports: [dest.numberOfInputs, dest.numberOfOutputs, src.numberOfInputs, src.numberOfOutputs], moved, heard: !moved || rms > 0.05, id: __rjs_mediaTrackId(track) > 0 };
   `);
-  // Whether a real output device ran the graph (a headless box has none and
-  // the signal check is moot), for whoever reads the log.
   console.log(`[media] ${JSON.stringify(got)}`);
   expect(got).toEqual({
     ok: { kind: "audio", state: "live", ports: [1, 0, 0, 1], moved: expect.any(Boolean), heard: true, id: true },
   });
 }, T);
 
-// The audio-atlas case (Argon's tone store, @argon/soundfx createAudioAtlas):
-// `start(when, offset, duration)` on a buffer holding many sounds must play the
-// one slice. Before redjs 0b15d66 `duration` was ignored and the source ran on
-// to the end of the buffer, so `onended` came ~0.5 s late here. Muted output.
+// The audio-atlas case (Argon's tone store, @argon/soundfx createAudioAtlas): `start(when, offset,
+// duration)` on a buffer holding many sounds must play the one slice.
 test("a sprite plays only its slice of the buffer: onended after its duration", async () => {
   const got = await inPage(`
     const ctx = new AudioContext();
@@ -129,29 +110,11 @@ test("a sprite plays only its slice of the buffer: onended after its duration", 
   `);
   console.log(`[media] sprite ${JSON.stringify(got)}`);
   const r = (got as { ok: { moved: boolean; why: string } }).ok;
-  // With no output device the clock does not run and nothing ends; the slice
-  // itself is pinned by redjs's offline-graph tests.
+  // With no output device the clock does not run and nothing ends; the slice itself is pinned by
+  // redjs's offline-graph tests.
   if (r.moved) expect(got).toEqual({ ok: { moved: true, why: "ended", inTime: true, loop: [0.25, 0.5] } });
 }, T);
 
-// The Argon dialpad (apps/client packages/audio/src/DTMF.ts, verbatim but for
-// the output node): per key, two oscillators through two stereo panners, a
-// gain whose envelope is scheduled in the same task (0 at `now`, up to 0.075
-// in 8 ms, down to 0 at 120 ms) and a low-pass, started at once, and nothing
-// kept but the oscillators. Pressed 20 times a second for 3 s, while the spec
-// forces a garbage collection every ~60 ms, as a busy client page does.
-// Read through an analyser into a muted gain; nothing reaches a speaker.
-//
-// What the owner heard, and what this measures:
-// - a gain still at its default 1 when the oscillators start is a full-scale
-//   dual tone (peaks near 2) at every key. Each tone peaks near 0.1 and a
-//   few overlap, so the mix never comes near 0.6;
-// - a gain applied squared (0.075 as 0.0056) leaves the tones near 0.01, so
-//   the mix must also reach 0.05;
-// - a gain, panner or filter collected while its oscillators still play
-//   leaves the graph, and the tone stops mid-way. The keys overlap, so the
-//   mix is never silent while they are pressed: a 10 ms stretch of silence
-//   inside the burst is a tone cut short.
 test("a fast dialpad: no full-scale burst, and no tone cut short by a collection", async () => {
   await app.eval(`
     globalThis.__dial = undefined;
@@ -233,10 +196,9 @@ test("a fast dialpad: no full-scale burst, and no tone cut short by a collection
   console.log(`[media] dialpad ${JSON.stringify(got)}, ${collections} forced collections`);
   const r = (got as { ok: { moved: boolean; presses: number; peak: number; loud: number; silent: number } }).ok;
   expect(r.presses).toBe(60);
-  // With no output device the clock does not run and nothing plays; the
-  // envelope and the node lifetimes are then pinned by redjs's own tests.
+  // With no output device the clock does not run and nothing plays; the envelope and the node
+  // lifetimes are then pinned by redjs's own tests.
   if (r.moved) {
-    // Heard, at the envelope's level and not its square.
     expect(r.peak).toBeGreaterThan(0.05);
     expect(r.peak).toBeLessThan(0.6);
     expect(r.loud).toBe(0);

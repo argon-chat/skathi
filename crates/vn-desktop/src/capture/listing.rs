@@ -1,13 +1,12 @@
-//! The macOS source list's rules and JSON, kept free of ScreenCaptureKit so
-//! they run as unit tests everywhere. `mac.rs` reads the platform into these
-//! rows; the JSON matches `win.rs` key for key, plus macOS-only extras.
+//! The macOS source list's rules and JSON, free of ScreenCaptureKit so they unit-test everywhere;
+//! the JSON matches `win.rs` key for key.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use serde_json::{json, Value};
 
 use crate::Fail;
 
-/// Windows stops at 512 windows too (`win.rs` `window_cb`).
+/// Windows stops at 512 windows too.
 pub(super) const MAX_WINDOWS: usize = 512;
 
 /// A rectangle in the global display space, in points, origin top left
@@ -47,7 +46,6 @@ pub(super) fn flip(rect: Rect, primary_height: f64) -> Rect {
     Rect { y: primary_height - (rect.y + rect.height), ..rect }
 }
 
-/// One `SCDisplay`.
 #[derive(Debug, Clone)]
 pub(super) struct DisplayRow {
     pub id: u32,
@@ -60,7 +58,6 @@ pub(super) struct DisplayRow {
     pub name: Option<String>,
 }
 
-/// One `SCWindow`, with its owning application.
 #[derive(Debug, Clone, Default)]
 pub(super) struct WindowRow {
     pub id: u32,
@@ -87,11 +84,8 @@ const SYSTEM_BUNDLES: &[&str] = &[
     "com.apple.wallpaper.agent",
 ];
 
-/// The Windows picker's rules (`win.rs` `window_info`) in macOS terms:
-/// visible (on screen), an ordinary window (layer 0, as `WS_EX_TOOLWINDOW`
-/// and owned windows are dropped there), titled, non-empty, and owned by an
-/// application. This app's own windows are left out too: sharing one would
-/// show the call inside itself.
+/// Which windows the picker lists: on screen, layer 0, titled, non-empty, owned by an
+/// application, and not this app's own (sharing it would show the call inside itself).
 pub(super) fn keep_window(window: &WindowRow, own_pid: i32) -> bool {
     let Some(pid) = window.pid else { return false };
     window.on_screen
@@ -103,8 +97,7 @@ pub(super) fn keep_window(window: &WindowRow, own_pid: i32) -> bool {
         && !SYSTEM_BUNDLES.contains(&window.bundle_id.as_str())
 }
 
-/// The main display first, then left to right, top to bottom: the order the
-/// "Screen N" names follow.
+/// The main display first, then left to right, top to bottom.
 pub(super) fn order_displays(displays: &mut [DisplayRow]) {
     displays.sort_by(|a, b| {
         b.primary
@@ -129,7 +122,7 @@ pub(super) fn display_for(frame: &Rect, displays: &[DisplayRow]) -> Option<u32> 
         .map(|d| d.id)
 }
 
-/// `(thumbnailDataUrl, thumbnailError)`, as `win.rs` `preview` shapes it.
+/// `(thumbnailDataUrl, thumbnailError)`.
 pub(super) fn preview(value: Result<String, Fail>) -> (String, Option<String>) {
     match value {
         Ok(url) => (url, None),
@@ -174,7 +167,6 @@ pub(super) fn window_json(
     })
 }
 
-/// Thumbnails are opaque, as on Windows (`Surface::png`).
 pub(super) fn opaque(rgba: &mut [u8]) {
     for pixel in rgba.chunks_exact_mut(4) {
         pixel[3] = 255;

@@ -1,16 +1,6 @@
-//! `@media` conditions, reduced to the handful of features a native window can
-//! actually answer, plus the runtime [`Env`] they are evaluated against.
-//!
-//! A browser re-evaluates media queries whenever the environment changes; we do
-//! the same, only the "environment" is four numbers a gpui window can report
-//! (`viewport_size()`, `appearance()`, `App::reduce_motion()`). The parsed
-//! condition tree is stored ONCE per `@media` block at compile time and
-//! evaluated per cascade — a resize or a theme flip re-runs the cascade for the
-//! whole tree (rare events, so the whole-tree invalidation is free).
-//!
-//! Anything outside the supported feature set (`print`-only blocks aside, which
-//! reduce to "never") is rejected with an advisory and the block is dropped —
-//! never compiled into a rule that silently cannot match.
+//! `@media` conditions reduced to the features a native window can answer, plus the runtime [`Env`]
+//! they are evaluated against. Anything outside that set is rejected with an advisory and the block
+//! dropped, never compiled into a rule that cannot match.
 
 use lightningcss::media_query::{
     MediaCondition, MediaFeature, MediaFeatureComparison, MediaFeatureId, MediaFeatureName,
@@ -18,12 +8,8 @@ use lightningcss::media_query::{
 };
 use lightningcss::traits::ToCss;
 
-/// The runtime inputs `@media` conditions are evaluated against — the native
-/// stand-in for a browser's "environment".
-///
-/// `viewport_width`/`viewport_height` are CSS pixels (gpui `Pixels` are already
-/// logical, so no DPI scaling is involved) and describe the WINDOW, which is
-/// what `@media (min-width: ...)` means in a browser too.
+/// The runtime inputs `@media` conditions are evaluated against — the native stand-in for a
+/// browser's "environment".
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Env {
     pub viewport_width: f32,
@@ -32,60 +18,30 @@ pub struct Env {
     pub dark: bool,
     /// `prefers-reduced-motion: reduce`.
     pub reduce_motion: bool,
-    /// `resolution` in `dppx` — the window's DPI scale factor. This is the only
-    /// observable a DPI change moves: `devicePixelRatio` has no event in any
-    /// spec, so `matchMedia("(resolution: 1.5dppx)")` + a `change` listener is
-    /// the canonical way to notice one (docs/WINDOWING.md §1.6).
+    /// `resolution` in `dppx` — the window's DPI scale factor.
     pub scale_factor: f32,
     /// `display-mode` — which chrome mode the window is in.
     pub display_mode: DisplayMode,
-    /// The Window Controls Overlay titlebar area, `[x, y, width, height]` in
-    /// CSS px — what `env(titlebar-area-x | -y | -width | -height)` resolves
-    /// to, and the SAME numbers
-    /// `navigator.windowControlsOverlay.getTitlebarAreaRect()` reports
-    /// (docs/WINDOWING.md §2.4). All zero when the overlay is not visible
-    /// (OS chrome, fullscreen, minimised) — exactly what a PWA in a tab
-    /// reports, so a component written for a real PWA takes the right branch.
+    /// All zero when the overlay is not visible (OS chrome, fullscreen, minimised) — exactly what a
+    /// PWA in a tab reports, so a component written for a real PWA takes the right branch.
     pub titlebar_area: [f32; 4],
-    /// Is a COARSE pointing device (a touch screen, a pen digitizer) attached?
-    ///
-    /// Decides `any-pointer: coarse` and `any-hover: none`. The PRIMARY pointer
-    /// of a desktop window is always the mouse — `pointer: fine`,
-    /// `hover: hover` — because that is the device gpui delivers
-    /// `PlatformInput` from, which is also what a browser reports in a desktop
-    /// window on a touch laptop.
-    ///
-    /// The host fills this from `GetSystemMetrics(SM_DIGITIZER)`; `false` (no
-    /// touch hardware) is the desktop default and what `Env::default()` gives.
+    /// The primary pointer of a desktop window is always the mouse (`pointer: fine`, `hover:
+    /// hover`); only `any-pointer` can widen to other hardware.
     pub coarse_pointer: bool,
-    /// `env(safe-area-inset-top | -right | -bottom | -left)`, CSS px, in that
-    /// order.
-    ///
-    /// Zero on desktop Windows, and expected to stay zero. The names exist so a
-    /// stylesheet ported from a PWA RESOLVES instead of having every
-    /// `padding-bottom: env(safe-area-inset-bottom)` dropped as invalid at
-    /// computed-value time — a fallback-less `env()` invalidates its
-    /// declaration, so "we do not know that name" is not a neutral answer.
-    /// `PlatformWindow::insets()` is the hook if a platform ever reports one.
+    /// Exists so `env(safe-area-inset-*)` from PWA sheets resolves: a fallback-less unknown `env()`
+    /// invalidates its declaration.
     pub safe_area_insets: [f32; 4],
 }
 
-/// The `display-mode` media feature. Never `browser`: we are permanently an
-/// installed app window (docs/WINDOWING.md §0).
+/// The `display-mode` media feature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisplayMode {
-    /// OS-drawn chrome (`titleBarStyle: "default"`).
     Standalone,
-    /// Custom chrome (`titleBarStyle: "hidden"`) — the titlebar strip belongs
-    /// to content, which is exactly what WCO means (D-11).
     WindowControlsOverlay,
-    /// The window is fullscreen, in either chrome mode.
     Fullscreen,
 }
 
 impl DisplayMode {
-    /// The CSS keyword, which is also what `matchMedia` and the JS-side
-    /// chrome-mode read report.
     pub fn as_str(self) -> &'static str {
         match self {
             DisplayMode::Standalone => "standalone",
@@ -96,8 +52,6 @@ impl DisplayMode {
 }
 
 impl Default for Env {
-    /// A plain light 1024x768 desktop at 1x — the value tests and any caller
-    /// that has no window yet see. The host overwrites it on the first frame.
     fn default() -> Self {
         Env {
             viewport_width: 1024.0,
@@ -106,9 +60,6 @@ impl Default for Env {
             reduce_motion: false,
             scale_factor: 1.0,
             display_mode: DisplayMode::WindowControlsOverlay,
-            // 32 px is the Win11 standard caption height and this crate's
-            // documented default (§2.3); a sheet compiled with no host yet
-            // therefore gets the same number the host will publish.
             titlebar_area: [0.0, 0.0, 1024.0, 32.0],
             coarse_pointer: false,
             safe_area_insets: [0.0; 4],
@@ -116,8 +67,8 @@ impl Default for Env {
     }
 }
 
-/// The comparison in `feature OP value` (already normalised into that
-/// orientation by lightningcss: `(400px < width)` parses as `width > 400px`).
+/// The comparison in `feature OP value` (already normalised into that orientation by lightningcss:
+/// `(400px < width)` parses as `width > 400px`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Cmp {
     Lt,
@@ -138,8 +89,8 @@ impl Cmp {
         }
     }
 
-    /// `a < b` ⇔ `b > a`. The interval syntax (`(400px < width < 800px)`) states
-    /// its first comparison value-first, so it needs flipping.
+    /// The interval syntax (`(400px < width < 800px)`) states its first comparison value-first, so
+    /// it needs flipping.
     fn flip(self) -> Cmp {
         match self {
             Cmp::Lt => Cmp::Gt,
@@ -156,9 +107,8 @@ impl Cmp {
             Cmp::Le => lhs <= rhs,
             Cmp::Gt => lhs > rhs,
             Cmp::Ge => lhs >= rhs,
-            // Exact float equality is what `(width: 800px)` means in CSS; the
-            // viewport is an integral pixel count, so this is not as fragile as
-            // it looks.
+            // Exact float equality is what `(width: 800px)` means in CSS; the viewport is an
+            // integral pixel count, so this is not as fragile as it looks.
             Cmp::Eq => lhs == rhs,
         }
     }
@@ -169,31 +119,23 @@ impl Cmp {
 pub(crate) enum Feature {
     Width(Cmp, f32),
     Height(Cmp, f32),
-    /// `prefers-color-scheme: dark` (`true`) / `light` (`false`).
     ColorScheme(bool),
-    /// `prefers-reduced-motion: reduce` (`true`) / `no-preference` (`false`).
     ReducedMotion(bool),
-    /// `resolution` / `min-resolution` / `max-resolution`, normalised to dppx.
     Resolution(Cmp, f32),
-    /// `display-mode: standalone | window-controls-overlay | fullscreen`.
     Display(DisplayMode),
-    /// `pointer` / `any-pointer`. `any` widens the question from "the primary
-    /// device" to "any device attached", which is the only thing the two
-    /// features differ in.
+    /// `any` widens the question from "the primary device" to "any device attached", which is the
+    /// only thing the two features differ in.
     Pointer { any: bool, want: PointerKind },
-    /// `hover` / `any-hover`, same distinction.
     Hover { any: bool, want: bool },
 }
 
 /// The `pointer` / `any-pointer` values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PointerKind {
-    /// No pointing device at all — never true for us; a gpui window always has
-    /// a mouse cursor to be pointed at.
+    /// No pointing device at all — never true for us; a gpui window always has a mouse cursor to be
+    /// pointed at.
     None,
-    /// A touch screen or a pen: low accuracy.
     Coarse,
-    /// A mouse or a trackpad.
     Fine,
 }
 
@@ -206,20 +148,16 @@ impl Feature {
             Feature::ReducedMotion(reduce) => env.reduce_motion == reduce,
             Feature::Resolution(cmp, dppx) => cmp.eval(env.scale_factor, dppx),
             Feature::Display(mode) => env.display_mode == mode,
-            // The PRIMARY pointer of a desktop window is the mouse gpui
-            // delivers `PlatformInput` from, whatever else is plugged in — the
-            // same answer a browser gives in a desktop window on a touch
-            // laptop. Only the `any-` forms widen to the attached hardware.
+            // The PRIMARY pointer of a desktop window is the mouse gpui delivers `PlatformInput`
+            // from, whatever else is plugged in — the same answer a browser gives in a desktop
+            // window on a touch laptop.
             Feature::Pointer { any, want } => match want {
                 PointerKind::None => false,
                 PointerKind::Fine => true,
                 PointerKind::Coarse => any && env.coarse_pointer,
             },
             Feature::Hover { any, want } => {
-                // `any-hover: none` asks whether NO attached device can hover,
-                // and the mouse always can — so it is false either way, and
-                // `any-hover: hover` is true either way. The touch flag only
-                // moves the answer for a device set that has no mouse in it,
+                // The touch flag only moves the answer for a device set that has no mouse in it,
                 // which a gpui window never has.
                 let _ = any;
                 want
@@ -251,8 +189,8 @@ impl Cond {
         }
     }
 
-    /// `a and b`, flattened and constant-folded so the common
-    /// `@media screen and (min-width: 640px)` ends up as a single feature.
+    /// `a and b`, flattened and constant-folded so the common `@media screen and (min-width:
+    /// 640px)` ends up as a single feature.
     pub(crate) fn and(self, other: Cond) -> Cond {
         match (self, other) {
             (Cond::Never, _) | (_, Cond::Never) => Cond::Never,
@@ -274,12 +212,10 @@ impl Cond {
     }
 }
 
-/// Why a `@media` prelude could not be compiled. The caller pairs it with the
-/// prelude's source text so the advisory names the exact block.
+/// Why a `@media` prelude could not be compiled.
 pub(crate) type Unsupported = &'static str;
 
-/// The supported surface, quoted verbatim in every advisory so an author never
-/// has to guess.
+/// The supported surface, quoted verbatim in every advisory so an author never has to guess.
 pub(crate) const SUPPORTED: &str = "supported: `screen`/`all`/`print` media types, \
      `width`/`min-width`/`max-width`, `height`/`min-height`/`max-height` (px lengths, \
      range and interval syntax), `prefers-color-scheme`, `prefers-reduced-motion`, \
@@ -288,7 +224,6 @@ pub(crate) const SUPPORTED: &str = "supported: `screen`/`all`/`print` media type
      combined with `and`/`or`/`not`/`,`";
 
 /// Parses a whole media list (the comma-separated prelude) into one condition.
-/// Commas are `or`.
 pub(crate) fn parse_list(list: &MediaList<'_>) -> Result<Cond, Unsupported> {
     let mut queries = Vec::with_capacity(list.media_queries.len());
     for q in &list.media_queries {
@@ -302,9 +237,8 @@ pub(crate) fn parse_list(list: &MediaList<'_>) -> Result<Cond, Unsupported> {
 }
 
 fn parse_query(q: &MediaQuery<'_>) -> Result<Cond, Unsupported> {
-    // We are a screen. `print` blocks parse fine and simply never apply — the
-    // browser-honest answer, and it keeps `print:` utilities from becoming an
-    // error every Tailwind app would hit.
+    // `print` blocks parse fine and simply never apply — the browser-honest answer, and it keeps
+    // `print:` utilities from becoming an error every Tailwind app would hit.
     let type_cond = match &q.media_type {
         MediaType::All | MediaType::Screen => Cond::Always,
         MediaType::Print => Cond::Never,
@@ -343,9 +277,8 @@ fn parse_condition(c: &MediaCondition<'_>) -> Result<Cond, Unsupported> {
     })
 }
 
-/// The feature name, once lightningcss has stripped any `min-`/`max-` prefix
-/// (it turns those into a range comparator, so `min-width: 640px` arrives here
-/// as `width >= 640px`).
+/// The feature name, once lightningcss has stripped any `min-`/`max-` prefix (it turns those into a
+/// range comparator, so `min-width: 640px` arrives here as `width >= 640px`).
 fn standard(name: &MediaFeatureName<'_, MediaFeatureId>) -> Result<MediaFeatureId, Unsupported> {
     match name {
         MediaFeatureName::Standard(id) => Ok(*id),
@@ -370,9 +303,8 @@ fn ident<'a>(value: &'a MediaFeatureValue<'_>) -> Result<&'a str, Unsupported> {
     }
 }
 
-/// `resolution` in any of its three units, normalised to `dppx` — which is what
-/// `devicePixelRatio` and gpui's `scale_factor()` both are. 96 dpi = 1 dppx is
-/// the CSS definition of a reference pixel, not an approximation.
+/// `resolution` normalised to `dppx` (what `devicePixelRatio` and `scale_factor()` are); 96 dpi = 1
+/// dppx is exact.
 fn dppx(value: &MediaFeatureValue<'_>) -> Result<f32, Unsupported> {
     use lightningcss::values::resolution::Resolution;
     match value {
@@ -385,9 +317,8 @@ fn dppx(value: &MediaFeatureValue<'_>) -> Result<f32, Unsupported> {
     }
 }
 
-/// `display-mode: <ident>`. `browser` and `minimal-ui` parse but can never
-/// match — we are permanently an installed app window — which is the
-/// browser-honest answer and keeps a ported PWA's `browser` branch compiling.
+/// `browser` and `minimal-ui` parse but can never match — we are permanently an installed app
+/// window — which is the browser-honest answer and keeps a ported PWA's `browser` branch compiling.
 fn display_mode(value: &MediaFeatureValue<'_>) -> Result<Cond, Unsupported> {
     Ok(match ident(value)? {
         "standalone" => Cond::Feature(Feature::Display(DisplayMode::Standalone)),
@@ -407,7 +338,6 @@ fn sized(id: MediaFeatureId, cmp: Cmp, px: f32) -> Feature {
     }
 }
 
-/// `pointer` / `any-pointer: <ident>`.
 fn pointer(value: &MediaFeatureValue<'_>, any: bool) -> Result<Cond, Unsupported> {
     Ok(Cond::Feature(Feature::Pointer {
         any,
@@ -420,7 +350,6 @@ fn pointer(value: &MediaFeatureValue<'_>, any: bool) -> Result<Cond, Unsupported
     }))
 }
 
-/// `hover` / `any-hover: <ident>`.
 fn hover(value: &MediaFeatureValue<'_>, any: bool) -> Result<Cond, Unsupported> {
     Ok(Cond::Feature(Feature::Hover {
         any,
@@ -460,17 +389,10 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
         },
         // Boolean form: "the feature is present and not its zero/none value".
         QueryFeature::Boolean { name } => match standard(name)? {
-            // A window always has a non-zero size.
             Width | Height => Cond::Always,
-            // `(prefers-color-scheme)` is true whenever a preference exists,
-            // which on every platform we run on it does.
             PrefersColorScheme => Cond::Always,
             PrefersReducedMotion => Cond::Feature(Feature::ReducedMotion(true)),
-            // `(pointer)` / `(hover)` in boolean form ask "is it anything other
-            // than `none`", and the mouse answers yes to both.
             PointerId | AnyPointer | HoverId | AnyHover => Cond::Always,
-            // A screen always has a non-zero resolution, and we are always in
-            // SOME display mode.
             Resolution | DisplayModeId => Cond::Always,
             _ => return Err("an unsupported media feature"),
         },
@@ -484,7 +406,6 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
         QueryFeature::Interval { name, start, start_operator, end, end_operator } => {
             match standard(name)? {
                 id @ (Width | Height) => Cond::And(vec![
-                    // `start OP feature` — stated value-first, so flip it.
                     Cond::Feature(sized(id, Cmp::from(*start_operator).flip(), length_px(start)?)),
                     Cond::Feature(sized(id, Cmp::from(*end_operator), length_px(end)?)),
                 ]),
@@ -501,25 +422,12 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
     })
 }
 
-/// `window.matchMedia(query)` — parse one prelude and evaluate it against
-/// `env`, through the SAME compiler and the SAME evaluator the cascade uses.
-///
-/// Sharing the code is the whole point: a `matchMedia` that answered from a
-/// second implementation could drift from `@media`, and one that answered
-/// `false` forever (which is what redjs ships) is the exact failure the
-/// compat-first policy exists to prevent (D-09).
-///
-/// `Err` carries the human reason a prelude was rejected, so the JS side can
-/// turn it into the same advisory the stylesheet compiler would have printed.
-/// A browser treats a syntactically invalid media list as `not all` — always
-/// false — so the caller reports `matches: false` alongside the advisory.
+/// `Err` is the reason a prelude was rejected; a browser treats an invalid media list as `not all`,
+/// so callers report `matches: false` with the advisory.
 pub fn match_media(query: &str, env: &Env) -> Result<bool, String> {
     use lightningcss::rules::CssRule;
     use lightningcss::stylesheet::{ParserOptions, StyleSheet};
 
-    // lightningcss exposes no standalone media-list parser, so the query is
-    // compiled as the prelude of a throwaway `@media` block — the same path a
-    // stylesheet takes, which is what guarantees identical acceptance.
     let css = format!("@media {query} {{ }}");
     let sheet = StyleSheet::parse(&css, ParserOptions::default())
         .map_err(|e| format!("could not be parsed ({e})"))?;
@@ -543,8 +451,6 @@ mod tests {
     use lightningcss::rules::CssRule;
     use lightningcss::stylesheet::{ParserOptions, StyleSheet};
 
-    /// Parses `@media <prelude> { .x { color: red } }` and returns the compiled
-    /// condition (or the rejection reason).
     fn cond(prelude: &str) -> Result<Cond, Unsupported> {
         let css = format!("@media {prelude} {{ .x {{ color: red }} }}");
         let sheet = StyleSheet::parse(&css, ParserOptions::default()).expect("parses");
@@ -592,7 +498,6 @@ mod tests {
         assert!(cond("all").unwrap().eval(&Env::default()));
         assert_eq!(cond("print").unwrap(), Cond::Never);
         assert!(!cond("print").unwrap().eval(&Env::default()));
-        // The type folds away when it is trivially true.
         assert_eq!(
             cond("screen and (min-width: 100px)").unwrap(),
             Cond::Feature(Feature::Width(Cmp::Ge, 100.0))
@@ -621,7 +526,6 @@ mod tests {
         assert!(!c.eval(&env(700.0, false, false)));
         assert!(!c.eval(&env(600.0, true, false)));
 
-        // A comma-separated list is `or`.
         let c = cond("(max-width: 400px), (min-width: 1200px)").unwrap();
         assert!(c.eval(&env(300.0, false, false)));
         assert!(!c.eval(&env(800.0, false, false)));
@@ -650,11 +554,6 @@ mod tests {
         }
     }
 
-    /// The four interaction features. A gpui window is a desktop window driven
-    /// by a mouse, so the PRIMARY pointer is always fine and always hovers —
-    /// what a browser reports in the same window, on the same machine, even
-    /// when the machine has a touch screen. Only the `any-` forms widen to the
-    /// hardware, and only `any-pointer: coarse` can move.
     #[test]
     fn the_pointer_and_hover_features_answer_for_a_desktop_window() {
         let mouse = Env::default();
@@ -673,18 +572,17 @@ mod tests {
             // The boolean form is "not `none`", which the mouse satisfies.
             assert!(t("(pointer)", env) && t("(hover)", env));
         }
-        // The one answer the hardware moves.
         assert!(!t("(any-pointer: coarse)", &mouse));
         assert!(t("(any-pointer: coarse)", &touch));
 
-        // Tailwind's own `pointer-coarse:` / `hover:` variants compile to
-        // exactly these, and `not` composes.
+        // Tailwind's own `pointer-coarse:` / `hover:` variants compile to exactly these, and `not`
+        // composes.
         assert!(t("not (pointer: coarse)", &mouse));
         assert!(t("(hover: hover) and (pointer: fine)", &mouse));
     }
 
-    /// `resolution` is the ONLY way a stylesheet (or `matchMedia`) can observe
-    /// a DPI change — `devicePixelRatio` has no event in any spec.
+    /// `resolution` is the ONLY way a stylesheet (or `matchMedia`) can observe a DPI change —
+    /// `devicePixelRatio` has no event in any spec.
     #[test]
     fn resolution_normalises_every_unit_to_dppx() {
         let hidpi = Env { scale_factor: 2.0, ..Env::default() };
@@ -695,16 +593,13 @@ mod tests {
         assert!(c.eval(&hidpi));
         assert!(!c.eval(&lodpi));
 
-        // 96dpi === 1dppx by the CSS definition of a reference pixel.
         assert_eq!(
             cond("(min-resolution: 192dpi)").unwrap(),
             Cond::Feature(Feature::Resolution(Cmp::Ge, 2.0))
         );
-        // 1dpcm = 2.54/96 dppx.
         let dpcm = cond("(min-resolution: 96dpcm)").unwrap();
         assert!(dpcm.eval(&Env { scale_factor: 3.0, ..Env::default() }));
 
-        // Exact form and the range/interval syntaxes.
         assert!(cond("(resolution: 1.5dppx)")
             .unwrap()
             .eval(&Env { scale_factor: 1.5, ..Env::default() }));
@@ -712,12 +607,9 @@ mod tests {
         let i = cond("(1dppx < resolution < 3dppx)").unwrap();
         assert!(i.eval(&hidpi));
         assert!(!i.eval(&lodpi));
-        // The boolean form: a screen always has SOME resolution.
         assert_eq!(cond("(resolution)").unwrap(), Cond::Always);
     }
 
-    /// `display-mode` is the CSS-side feature detect for custom chrome, and the
-    /// branch a component ported from a real PWA takes (D-11).
     #[test]
     fn display_mode_reports_the_chrome_mode() {
         let wco = Env { display_mode: DisplayMode::WindowControlsOverlay, ..Env::default() };
@@ -732,8 +624,8 @@ mod tests {
         assert!(cond("(display-mode: standalone)").unwrap().eval(&standalone));
         assert!(cond("(display-mode: fullscreen)").unwrap().eval(&fs));
 
-        // We are permanently an installed app window, so `browser` parses (a
-        // ported PWA's fallback branch stays compilable) and never matches.
+        // We are permanently an installed app window, so `browser` parses (a ported PWA's fallback
+        // branch stays compilable) and never matches.
         let browser = cond("(display-mode: browser)").unwrap();
         assert_eq!(browser, Cond::Never);
         assert!(!browser.eval(&wco));

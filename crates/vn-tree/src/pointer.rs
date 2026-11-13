@@ -1,51 +1,17 @@
 //! Which element a mouse event is FOR: the topmost one under the pointer.
 //!
-//! A browser hit-tests once — the topmost element under the pointer that
-//! `pointer-events` lets be hit — and the event goes to it and bubbles through
-//! its ancestors. gpui instead hands a mouse event to EVERY hitbox under the
-//! pointer, and gpui gives a hitbox only to an element that is interactive.
-//! Together that made the rule "the innermost box that LISTENS takes it": a
-//! box that listens for nothing let a press fall through to whatever listening
-//! box lay under it, a sibling or an unrelated overlay included, and
-//! `e.target` was the listening box, never the element pressed (E-2 in
-//! docs/RUNTIME.md, now retired). A context menu over its dismissal shield
-//! closed on its own items' presses (research/reports/m26/text-selection-1.md
-//! step 0); a `@click.self` backdrop closed on a click at the picture in it.
+//! A browser hit-tests once; gpui hands the event to EVERY hitbox under the pointer, and only
+//! interactive elements have one, so a box that listened for nothing let a press fall through to
+//! whatever listened beneath it (a menu over its dismissal shield closed on its own items). Here:
 //!
-//! The browser's rule, in three parts:
+//! - gpui records a pick for every element without a hitbox (`Window::set_vn_pick_every_box`);
+//! - the target is resolved once per press, release and wheel, before any listener runs ([`refine`]):
+//!   the topmost tagged box whose element is not `pointer-events: none` or under `visibility: hidden`;
+//! - only the target's path hears it (the refiner narrows gpui's hovered set), and a `click` goes to
+//!   the nearest common ancestor of press and release targets ([`click_target`]).
 //!
-//! * **Every box can be hit.** gpui records a PICK for each element that gets
-//!   no hitbox (`Window::set_vn_pick_every_box`, fork item 39): its box,
-//!   content mask, transform and node tag, in the tagged list only. A pick is
-//!   one small record per element per painted frame, replayed with a cached
-//!   view's prepaint, and gpui's per-move hit test never looks at it. (A host
-//!   with devtools gives every element a real hitbox anyway, for the
-//!   inspector's `pick`; the picks are what a `no-devtools` build has.)
-//! * **The target is resolved once per press, release and wheel**, before any
-//!   listener runs ([`refine`], the fork's hit refiner): the topmost tagged box
-//!   under the pointer ([`gpui::Window::vn_tags_at`], in paint order) whose
-//!   element is not `pointer-events: none` and not inside a
-//!   `visibility: hidden` subtree. Nothing hittable: the window's root.
-//! * **Only the target's path hears it.** The refiner narrows gpui's hovered
-//!   set for the event to the hitboxes of the target and its ancestors, and
-//!   adds the ancestors' boxes that do not contain the pointer. Everything
-//!   downstream keys off that set, so it all follows at once: the listeners
-//!   [`crate::render`] binds per element, a text field's own caret placement,
-//!   gpui's focus-on-press, the click tracking, the scroll containers a wheel
-//!   moves. The renderer then dispatches the DOM event AT the target
-//!   ([`target_or`]); a `click` goes to the nearest common ancestor of the
-//!   press's target and the release's ([`click_target`]), as in Chromium.
-//!
-//! `document.elementFromPoint` / `elementsFromPoint` ask the same question
-//! from script (`__vn_hit_at`), of the primary window's last painted frame.
-//!
-//! `mousemove` is not refined (moves are frequent, and resolving one is a walk
-//! over every box): its one dispatch per frame resolves its own target
-//! ([`target_at`]). **Hover** is resolved the same way, once a frame
-//! ([`resolve_hover`]): the path of the topmost element under the pointer is
-//! what `:hover` and `group-hover:` match, and the elements joining or leaving
-//! it are what `mouseenter` and `mouseleave` fire at. `:active` is gpui's
-//! ladder on the press's refined set, so it is the press target's path too.
+//! `mousemove` is not refined (too frequent): its one dispatch per frame resolves its own target
+//! ([`target_at`]); hover is resolved the same way once a frame ([`resolve_hover`]).
 
 use gpui::{App, DispatchPhase, MouseMoveEvent, Pixels, Point, VnHitKind, Window};
 use vn_runtime::redjs::api::Value;
@@ -54,17 +20,16 @@ use vn_runtime::{host_fn, JsRuntime};
 use crate::tree::{self, Kind, Tree};
 use crate::windows;
 
-/// The pointer events a covered listener would have taken: what the dev log
-/// line names.
+/// The pointer events a covered listener would have taken: what the dev log line names.
 const PRESS_BITS: u64 = (1 << tree::EV_CLICK)
     | (1 << tree::EV_MOUSEDOWN)
     | (1 << tree::EV_MOUSEUP)
     | (1 << tree::EV_CONTEXTMENU)
     | (1 << tree::EV_AUXCLICK);
 
-/// Turns the targeting on for this window: picks for every element, and the
-/// refiner. Called once per build (`render::arm_pick_hitboxes`); both are
-/// window flags and cost one read when already set.
+/// Turns the targeting on for this window: picks for every element, and the refiner. Called once
+/// per build (`render::arm_pick_hitboxes`); both are window flags and cost one read when already
+/// set.
 pub(crate) fn arm(window: &mut Window) {
     if !window.vn_picks_every_box() {
         window.set_vn_pick_every_box(true);
@@ -74,8 +39,8 @@ pub(crate) fn arm(window: &mut Window) {
     }
 }
 
-/// The node a window paints as its root: the document root in the primary
-/// window, the popped-out node in a pop-out.
+/// The node a window paints as its root: the document root in the primary window, the popped-out
+/// node in a pop-out.
 fn window_root(t: &Tree, window: &Window) -> u32 {
     match windows::root_of(windows::key(window)) {
         0 => t.root,
@@ -83,16 +48,9 @@ fn window_root(t: &Tree, window: &Window) -> u32 {
     }
 }
 
-/// `id` and its ancestors up to `root`, target first — `None` when `id` is not
-/// an element this window can target: gone, not an element, outside `root`'s
-/// subtree, `pointer-events: none`, or inside a `visibility: hidden` subtree
-/// (gpui paints none of one, so it is not there to be hit).
-///
-/// `pointer-events` is inherited and the cascade has already folded it, so the
-/// element's own computed value is the answer; `auto` under a `none` parent
-/// is hittable. The root is the exception `render::pointer_mask` makes too:
-/// `body { pointer-events: none }` is how a modal layer says "nothing else",
-/// and the root then stands in for the document a browser would target.
+/// `id` and its ancestors up to `root`, target first — `None` when `id` is not an element this
+/// window can target: gone, not an element, outside `root`'s subtree, `pointer-events: none`, or
+/// inside a `visibility: hidden` subtree (gpui paints none of one, so it is not there to be hit).
 fn path_if_hittable(t: &Tree, id: u32, root: u32) -> Option<Vec<u32>> {
     let node = t.node(id)?;
     if node.kind != Kind::Element {
@@ -121,8 +79,8 @@ fn path_if_hittable(t: &Tree, id: u32, root: u32) -> Option<Vec<u32>> {
     None
 }
 
-/// What the resolution found: the target, its path (target first, the root
-/// last), and the tags under the pointer it came from, topmost first.
+/// What the resolution found: the target, its path (target first, the root last), and the tags
+/// under the pointer it came from, topmost first.
 struct Resolved {
     target: u32,
     path: Vec<u32>,
@@ -141,8 +99,8 @@ fn resolve(t: &Tree, tags: Vec<u32>, root: u32) -> Resolved {
     Resolved { target: root, path: vec![root], tags, at }
 }
 
-/// The topmost element at `p` that a pointer event there is for, in this
-/// window. `None` when nothing but the root is there (or the tree has none).
+/// The topmost element at `p` that a pointer event there is for, in this window. `None` when
+/// nothing but the root is there (or the tree has none).
 pub(crate) fn topmost(window: &Window, p: Point<Pixels>) -> Option<u32> {
     let tags = window.vn_tags_at(p);
     tree::read_tree(|t| {
@@ -160,8 +118,8 @@ pub(crate) fn target_at(window: &Window, p: Point<Pixels>) -> u32 {
     })
 }
 
-/// The explicit capture target, while it still belongs to this window's tree.
-/// CSS hit-testing does not revoke capture; removal or moving to another window does.
+/// The explicit capture target, while it still belongs to this window's tree. CSS hit-testing does
+/// not revoke capture; removal or moving to another window does.
 pub(crate) fn captured_target(window: &Window) -> Option<u32> {
     let id = windows::here(window, |w| w.pointer_capture)?;
     let valid = tree::read_tree(|t| {
@@ -192,9 +150,8 @@ fn capture_path(t: &Tree, id: u32, root: u32) -> Option<Vec<u32>> {
     None
 }
 
-/// gpui element moves only run while hovered. The OS captures the window,
-/// so a raw window listener must collect moves beyond the captured box and
-/// beyond the client area as well. Keep normal frame coalescing in both cases.
+/// gpui element moves only run while hovered. The OS captures the window, so a raw window listener
+/// must collect moves beyond the captured box and beyond the client area as well.
 pub(crate) fn capture_listeners(window: &mut Window) {
     window.on_mouse_event(|ev: &MouseMoveEvent, phase, window, _cx| {
         if phase != DispatchPhase::Capture {
@@ -218,12 +175,10 @@ pub(crate) fn capture_listeners(window: &mut Window) {
     });
 }
 
-/// The fork's hit refiner: run at the start of every press, release and wheel
-/// in a window, before any listener.
+/// The fork's hit refiner: run at the start of every press, release and wheel in a window, before
+/// any listener.
 fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) {
     let capture = (kind != VnHitKind::Scroll).then(|| captured_target(window)).flatten();
-    // Explicit capture owns pointer input before any physical hit target,
-    // including an open native <select> popup. Wheel input still hit-tests.
     if capture.is_none() && crate::select::refine(kind, p, window, cx) {
         return;
     }
@@ -245,7 +200,6 @@ fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) 
     let target = resolved.target;
     windows::here(window, |w| {
         w.hit = Some(target);
-        // `:active` in a script's query: from the press to the release.
         match kind {
             VnHitKind::Down => {
                 w.down_hit = Some(target);
@@ -257,20 +211,18 @@ fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) 
     });
     let mut path = resolved.path;
     path.sort_unstable();
-    // A wheel scrolls the containers on the path that are UNDER the pointer:
-    // one off to the side has nothing of the target in view to scroll.
     window.vn_restrict_mouse_hit(&|tag| path.binary_search(&tag).is_ok(), kind != VnHitKind::Scroll);
 }
 
-/// The element the mouse event being dispatched in this window is for, or
-/// `fallback` outside such a dispatch (a window the refiner is not armed in).
+/// The element the mouse event being dispatched in this window is for, or `fallback` outside such a
+/// dispatch (a window the refiner is not armed in).
 pub(crate) fn target_or(window: &Window, fallback: u32) -> u32 {
     windows::here(window, |w| w.hit).unwrap_or(fallback)
 }
 
-/// Where a `click` goes: the nearest common inclusive ancestor of the
-/// original DOM press and the current release. A removed/detached press or
-/// an actually-disabled control cannot be activated by the release.
+/// Where a `click` goes: the nearest common inclusive ancestor of the original DOM press and the
+/// current release. A removed/detached press or an actually-disabled control cannot be activated by
+/// the release.
 pub(crate) fn click_target(window: &Window, down: u32, fallback: u32) -> Option<u32> {
     let capture = captured_target(window);
     let up = windows::here(window, |w| w.hit).unwrap_or(fallback);
@@ -278,7 +230,6 @@ pub(crate) fn click_target(window: &Window, down: u32, fallback: u32) -> Option<
 }
 
 fn click_target_in_tree(t: &Tree, down: u32, up: u32, root: u32, capture: Option<u32>) -> Option<u32> {
-    // A span inside a disabled button is disabled for activation as well.
     // A fieldset itself must not suppress the enabled first legend.
     let enabled_path = |id| {
         let path = capture_path(t, id, root)?;
@@ -318,13 +269,9 @@ fn common_ancestor(t: &Tree, a: u32, b: u32) -> Option<u32> {
     None
 }
 
-// ---------------------------------------------------------------------------
-// `document.elementFromPoint` / `elementsFromPoint` (runtime.ts)
-// ---------------------------------------------------------------------------
 
-/// The elements under `p` in `window`, topmost first: every hittable element
-/// whose box is there (`all`), or the target alone. Nothing outside the
-/// window root's box — the viewport.
+/// The elements under `p` in `window`, topmost first: every hittable element whose box is there
+/// (`all`), or the target alone.
 fn hit_ids(window: &Window, p: Point<Pixels>, all: bool) -> Vec<u32> {
     let tags = window.vn_tags_at(p);
     tree::read_tree(|t| {
@@ -354,9 +301,8 @@ fn hit_ids(window: &Window, p: Point<Pixels>, all: bool) -> Vec<u32> {
     })
 }
 
-/// `hit_ids` in the primary window — the one `document`'s viewport is — from
-/// wherever the script runs: the window in hand when it is that one, else
-/// borrowed through the app.
+/// `hit_ids` in the primary window — the one `document`'s viewport is — from wherever the script
+/// runs: the window in hand when it is that one, else borrowed through the app.
 fn hit_ids_in_primary(p: Point<Pixels>, all: bool) -> Vec<u32> {
     let primary = windows::primary();
     let in_hand = vn_runtime::with_commit(|window, cx| {
@@ -378,8 +324,6 @@ fn other_window(cx: &mut App, key: windows::WinKey, p: Point<Pixels>, all: bool)
     handle.update(cx, |_, window, _| hit_ids(window, p, all)).ok()
 }
 
-// `(x, y, all)` → the element ids under the viewport point, topmost first,
-// comma-separated; `""` outside the viewport (`hit_ids`).
 host_fn!(fn vn_hit_at(_g, args) {
     let n = |v: Value| v.as_number().unwrap_or(f64::NAN);
     let (x, y) = (n(args.arg(0)), n(args.arg(1)));
@@ -393,9 +337,9 @@ host_fn!(fn vn_hit_at(_g, args) {
     JsRuntime::with(|rt| rt.ctx().string(&s).0)
 });
 
-// `(node, pointerId, capture)` — the JS mirror validates the active pointer;
-// ownership is per native window and is cleared even outside a commit wave
-// (unmount and app teardown do not necessarily run in an input callback).
+// `(node, pointerId, capture)` — the JS mirror validates the active pointer; ownership is per
+// native window and is cleared even outside a commit wave (unmount and app teardown do not
+// necessarily run in an input callback).
 host_fn!(fn vn_pointer_capture(_g, args) {
     let id = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let pointer = args.arg(1).as_number().unwrap_or(0.0);
@@ -412,8 +356,7 @@ host_fn!(fn vn_pointer_capture(_g, args) {
         return Value::boolean(true).0;
     }
     let k = windows::window_of_node(id);
-    // The OS capture is held by the window where the live press began. A
-    // script cannot transfer client-space input into another native window.
+    // A script cannot transfer client-space input into another native window.
     if !windows::peek(k, |w| w.press.as_ref().is_some_and(crate::render::Press::is_active)).unwrap_or(false) {
         return Value::boolean(false).0;
     }
@@ -440,16 +383,8 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashSet::new());
 }
 
-/// A press whose target COVERS an element that listens for presses and is not
-/// on its path — a box painted over it that is not one of its ancestors. That
-/// is the browser's rule and nothing to correct, but it is new here, and a
-/// layout that differs from Chromium's (a transparent box laid out bigger than
-/// it should be) takes presses the old rule let through. So the covered
-/// listener gets one `dev` log line per (cover, listener) pair: the lead for
-/// "my button stopped working".
-///
-/// Only the elements gpui found under the pointer are looked at, so this is a
-/// few node reads per press.
+/// A press whose target COVERS an element that listens for presses and is not on its path — a box
+/// painted over it that is not one of its ancestors.
 fn note_covered(t: &Tree, r: &Resolved, p: Point<Pixels>) {
     let mut listener = None;
     for &tag in r.tags.iter().skip(r.at + 1) {
@@ -489,20 +424,12 @@ fn note_covered(t: &Tree, r: &Resolved, p: Point<Pixels>) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Hover: `:hover`, `group-hover`, `mouseenter` / `mouseleave`
-// ---------------------------------------------------------------------------
 
-/// What is hovered in one window (`WindowState::hover`), and what the answer
-/// was resolved from.
 #[derive(Default)]
 pub struct Hover {
-    /// The topmost element under the pointer and its ancestors, target first:
-    /// the elements `:hover` matches. Empty while the pointer is outside the
-    /// window.
+    /// The topmost element under the pointer and its ancestors, target first: the elements `:hover`
+    /// matches.
     path: Vec<u32>,
-    /// The pointer's position, whether it was in the window, and
-    /// `render::layout_count()`, at the last resolution.
     from: Option<(Point<Pixels>, bool, u64)>,
     /// When the last resolution ran.
     when: Option<std::time::Instant>,
@@ -510,34 +437,15 @@ pub struct Hover {
     ticking: bool,
 }
 
-/// How often a page that keeps building frames under a STILL pointer has its
-/// hover resolved again: an animation, a scroll, a list filling in. A moving
-/// pointer resolves every frame it moves in. Chromium likewise refreshes hover
-/// under a still pointer on a timer while a page scrolls, not every frame.
+/// How often a page that keeps building frames under a STILL pointer has its hover resolved again:
+/// an animation, a scroll, a list filling in.
 const STILL_POINTER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
-/// Resolves what is hovered in this window, once a frame, the way a press is
-/// resolved: the topmost element under the pointer that `pointer-events` lets
-/// be hit (a pick or a hitbox, [`gpui::Window::vn_tags_at`]), and its
-/// ancestors. That path is what `:hover` matches, and the elements that join
-/// or leave it are what `mouseenter` and `mouseleave` fire at. gpui's own
-/// hover is geometric: every hitbox under the pointer, so an element under a
-/// cover that listens for nothing stayed hovered, and an ancestor whose box
-/// the pointer had left (a dropdown laid out below its trigger) lost its hover
-/// while its child kept it.
-///
-/// Cost: nothing on a frame in which the pointer did not move and nothing was
-/// built; one walk over the frame's tagged boxes on a frame in which it moved;
-/// the same walk at most every [`STILL_POINTER_INTERVAL`] while frames are
-/// built under a still pointer. The pointer's own moves between frames are
-/// never resolved one by one.
-///
-/// Keyboard input does not hide hover: CSS `:hover` is pointer geometry and
-/// nothing else (docs/ARCHITECTURE.md §11 item 12).
+/// Resolves what is hovered in this window, once a frame, the way a press is resolved: the topmost
+/// element under the pointer that `pointer-events` lets be hit (a pick or a hitbox,
+/// [`gpui::Window::vn_tags_at`]), and its ancestors.
 pub(crate) fn resolve_hover(window: &mut Window, cx: &mut App) {
     let pos = window.mouse_position();
-    // Over an open `<select>` popup nothing of the page is under the pointer:
-    // the hover stays as it was, as when the pointer is over another window.
     if crate::select::covers(window, pos) {
         return;
     }
@@ -574,31 +482,23 @@ pub(crate) fn resolve_hover(window: &mut Window, cx: &mut App) {
     }
 }
 
-/// The elements that leave the hover path, innermost first, and the ones that
-/// join it, outermost first: the order `mouseleave` and `mouseenter` fire in
-/// (UI Events §4.3.3, as Chromium dispatches them).
 fn boundary(old: &[u32], new: &[u32]) -> (Vec<u32>, Vec<u32>) {
     let left = old.iter().copied().filter(|id| !new.contains(id)).collect();
     let entered = new.iter().rev().copied().filter(|id| !old.contains(id)).collect();
     (left, entered)
 }
 
-/// The hover path moved from `old` to `new`: the styles first, then the
-/// events.
+/// The hover path moved from `old` to `new`: the styles first, then the events.
 fn hover_moved(old: &[u32], new: &[u32], pos: Point<Pixels>, window: &mut Window, cx: &mut App) {
     let (left, entered) = boundary(old, new);
-    // `tree::note_hover` keeps the hovered set the renderer folds `:hover`
-    // and `group-hover:` rungs from, and aims the transitions. Before any
-    // handler: a `mouseenter` listener that restyles must find the transition
-    // already aimed at its target.
+    // Before any handler: a `mouseenter` listener that restyles must find the transition already
+    // aimed at its target.
     for &id in &left {
         tree::note_hover(id, false);
     }
     for &id in &entered {
         tree::note_hover(id, true);
     }
-    // The rungs are folded at build time, so a cached subtree holding one has
-    // to render again.
     let restyled = tree::with_tree(|t| {
         let mut any = false;
         for &id in left.iter().chain(&entered) {
@@ -609,10 +509,8 @@ fn hover_moved(old: &[u32], new: &[u32], pos: Point<Pixels>, window: &mut Window
     if restyled {
         crate::render::request_repaint(window, cx);
     }
-    // `mouseenter` and `mouseleave` fire at every element that joins or leaves
-    // the path and listens for them, `pointer-events` notwithstanding: it
-    // decides what is hit, not who hears about it. An element no longer in
-    // the document hears nothing.
+    // `mouseenter` and `mouseleave` fire at every element that joins or leaves the path and listens
+    // for them, `pointer-events` notwithstanding: it decides what is hit, not who hears about it.
     let has = |t: &Tree, id: u32, ev: u32| t.node(id).is_some_and(|n| n.listeners & (1u64 << ev) != 0);
     let (leaves, enters): (Vec<u32>, Vec<u32>) = tree::read_tree(|t| {
         let root = window_root(t, window);
@@ -630,7 +528,6 @@ fn hover_moved(old: &[u32], new: &[u32], pos: Point<Pixels>, window: &mut Window
     // (`render::flush_pending_mouse_move`, which runs after this).
     crate::off_input(|| {
         for (id, ev) in events {
-            // A handler before this one may have removed it.
             if tree::read_tree(|t| t.node(id).is_some()) {
                 crate::render::js_dispatch_app(id, ev, &payload, window, cx);
             }
@@ -653,15 +550,9 @@ fn path_to(t: &Tree, id: u32, root: u32) -> bool {
     false
 }
 
-/// A pop-out window has no frame pump (vn-app's pump drives the primary
-/// window), so its hover — and its frame's coalesced `mousemove` — are
-/// delivered from a per-frame callback of its own, armed here once, from the
-/// pop-out's build.
-///
-/// The `mousemove` used to be left out: a pop-out's move was stored for its
-/// window and never delivered, so nothing in a pop-out heard the pointer move
-/// — a drag that pans a zoomed picture, a player's controls that come back on
-/// a move.
+/// A pop-out window has no frame pump (vn-app's pump drives the primary window), so its hover — and
+/// its frame's coalesced `mousemove` — are delivered from a per-frame callback of its own, armed
+/// here once, from the pop-out's build.
 pub(crate) fn arm_hover_tick(window: &mut Window) {
     let k = windows::key(window);
     if windows::is_primary(k) || windows::here(window, |w| std::mem::replace(&mut w.hover.ticking, true)) {
@@ -671,7 +562,6 @@ pub(crate) fn arm_hover_tick(window: &mut Window) {
 }
 
 fn hover_tick(window: &mut Window, cx: &mut App) {
-    // Hover first, then the move, as the pump does for the primary window.
     crate::render::flush_pending_mouse_move(window, cx);
     window.on_next_frame(hover_tick);
 }
@@ -699,8 +589,8 @@ mod tests {
         tree::with_tree(build)
     }
 
-    /// The cascade's answers, set by hand as the selection tests do:
-    /// `pointer-events` already folded down the tree, `visibility` as declared.
+    /// The cascade's answers, set by hand as the selection tests do: `pointer-events` already
+    /// folded down the tree, `visibility` as declared.
     fn set(t: &mut Tree, id: u32, pointer_none: Option<bool>, hidden: bool) {
         let mut cs = vn_css::ComputedStates::default();
         cs.extras.pointer_events_none = pointer_none;
@@ -792,19 +682,16 @@ mod tests {
         });
     }
 
-    /// `mouseleave` innermost first, then `mouseenter` outermost first; the
-    /// shared ancestors hear neither.
+    /// `mouseleave` innermost first, then `mouseenter` outermost first; the shared ancestors hear
+    /// neither.
     #[test]
     fn the_boundary_between_two_hover_paths() {
-        // Paths are target first: a1 → a → list → root, b1 → b → list → root.
         let (left, entered) = boundary(&[5, 3, 2, 1], &[6, 4, 2, 1]);
         assert_eq!(left, vec![5, 3]);
         assert_eq!(entered, vec![4, 6]);
         // Into a child: only the child enters.
         assert_eq!(boundary(&[3, 2, 1], &[5, 3, 2, 1]), (vec![], vec![5]));
-        // Out of the window: everything leaves, innermost first.
         assert_eq!(boundary(&[3, 2, 1], &[]), (vec![3, 2, 1], vec![]));
-        // Into it: everything enters, the root first.
         assert_eq!(boundary(&[], &[3, 2, 1]), (vec![], vec![1, 2, 3]));
     }
 
@@ -861,7 +748,6 @@ mod tests {
             assert!(path_if_hittable(t, hidden, root).is_none(), "visibility: hidden");
             assert!(path_if_hittable(t, under_hidden, root).is_none(), "inside a hidden subtree");
             assert_eq!(path_if_hittable(t, plain, root), Some(vec![plain, root]));
-            // Topmost first: the decoration and the hidden box are passed over.
             let r = resolve(t, vec![decor, under_hidden, plain, root], root);
             assert_eq!((r.target, r.at), (plain, 2));
             let r = resolve(t, vec![decor], root);

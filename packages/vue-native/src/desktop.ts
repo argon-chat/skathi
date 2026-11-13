@@ -1,44 +1,16 @@
-// File System Access and the file pickers — docs/DESKTOP.md
-// ("Pickers and files"); research/reports/m25/desktop-apis-design.md §4.
+// File System Access (`showOpenFilePicker`, `showSaveFilePicker`, `showDirectoryPicker`, handles,
+// `FileSystemWritableFileStream`) and the request half of `<input type=file>` / `<a download>`.
+// runtime.ts owns the elements; this file asks the host (vn-desktop) for what they need.
 //
-// TIER 1 only, and spec-exact where script can tell: the WICG File System
-// Access classes (`showOpenFilePicker`, `showSaveFilePicker`,
-// `showDirectoryPicker`, `FileSystemHandle` and its two kinds,
-// `FileSystemWritableFileStream`), and the request half of `<input type=file>` and
-// `<a download>`. runtime.ts owns the elements; this file owns what they ask
-// the host for.
+// Handles hold a numeric id into vn-desktop's handle table, never a path, so nothing here can
+// name or leak a file the user did not pick. A FinalizationRegistry releases the id.
 //
-// ## Handles hold an id, never a path
+// Handles are structured-cloneable (a clone is a new handle on the same path) and permission
+// follows the path: picked, dropped or launched paths are "granted"; a handle restored in a
+// later session is "prompt" until requestPermission() on a user activation, which this host
+// grants without Chromium's prompt (warned once).
 //
-// A handle is a number into vn-desktop's handle table (crates/vn-desktop/src/
-// fs/mod.rs) plus the two fields a browser shows: `name` and `kind`. The path
-// stays in Rust. A child is reached only through its parent's id and the name
-// fence the host applies, so nothing here can name a file the user did not
-// pick, and nothing here can leak one: `JSON.stringify`, the console and a
-// devtools eval all see `{}`-shaped objects with no path anywhere. A
-// FinalizationRegistry releases the id when the handle is collected.
-//
-// ## Handles are [Serializable]; permission is the path's
-//
-// As in Chromium, `structuredClone`, `postMessage` and IndexedDB keep a
-// handle: redjs writes the bytes the host gives it (tag 0x39), and the clone
-// is a new handle on the same path. Permission follows the path, not the
-// object. A handle on something the user picked, dropped or launched with
-// in this session, or on something inside it, is "granted". A handle read
-// back in a later session is "prompt" until `requestPermission()` runs on a
-// user activation. Chromium shows a prompt there; this host grants with no
-// prompt, and says so once (D-F22).
-//
-// ## Why this is a separate module with injected dependencies
-//
-// It is re-exported by runtime.ts (like vnwindow.ts) and installed by it. It
-// takes the host functions, the settle channel and the transient-activation
-// state as ARGUMENTS rather than reading `__vn_*` globals, which is what lets
-// the bun harness run it against a fake host and bun's own `WritableStream`,
-// `DOMException` and `Blob`.
-//
-// FileReader and ProgressEvent are native redjs interfaces. This adapter only
-// installs File System Access and picker integration.
+// Dependencies are injected so the bun harness can run this against a fake host.
 
 /** A rejection as the host serialises it (`Fail::to_json` / `to_sync_json`). */
 export interface DesktopFailure {
@@ -49,14 +21,12 @@ export interface DesktopFailure {
   osError?: number;
 }
 
-/** What a settled host call hands over: its JSON payload and its value. */
 export interface DesktopSettle {
   payload: Record<string, unknown>;
   /** A JS value the host made on delivery (a `File`, a `FileList`), or undefined. */
   value: unknown;
 }
 
-/** The `{h, name, kind}` a handle crosses the host boundary as. */
 export interface HandleWire {
   h: number;
   name: string;
@@ -65,7 +35,6 @@ export interface HandleWire {
 
 type Json = string;
 
-/** vn-desktop's File System Access and dialog host fns (protocol.d.ts). */
 export interface DesktopFsHost {
   setHandleFactory(fn: (h: number, name: string, kind: string) => unknown): void;
   release(h: number): void;
@@ -90,7 +59,6 @@ export interface DesktopFsHost {
   download(url: string, downloadAttribute: string): Json;
 }
 
-/** The engine classes this file builds on, injected (see the header). */
 export interface DesktopEngine {
   Blob: abstract new (...args: never[]) => BlobLike;
   DOMException: new (message?: string, name?: string) => Error;
@@ -120,21 +88,13 @@ export interface DesktopDeps {
   /** The host fns, or null in a host without vn-desktop. */
   host: DesktopFsHost | null;
   engine: DesktopEngine;
-  /** One host answer → its settle; rejects with the raw failure. */
   call(json: Json): Promise<DesktopSettle>;
   warnCompat(key: string, message: string): void;
-  /** HTML transient activation, as the runtime tracks it. */
   activation: { isActive(): boolean; consume(): void };
-  /**
-   * The runtime's same-realm reload bookkeeping (runtime.ts `REALM`). Is a
-   * global missing or a previous runtime's (`vacant`), and record one as
-   * this runtime's (`mark`). A class kept from before a reload would run
-   * against the old runtime's state.
-   */
+  /** runtime.ts `REALM` bookkeeping: `vacant` finds a missing or stale global, `mark` records this runtime's. */
   realm: { vacant(obj: object, name: PropertyKey): boolean; mark<T>(v: T): T };
 }
 
-/** What `<input type=file>` asks for (runtime.ts). */
 export interface InputPickRequest {
   accept: string;
   multiple: boolean;
@@ -143,39 +103,25 @@ export interface InputPickRequest {
   current: unknown;
 }
 
-/** What `installDesktop` hands back to runtime.ts. */
 export interface DesktopApi {
-  /** A handle for a launch path or a drop the host already granted. */
   handleFrom(wire: HandleWire): FileSystemHandleLike;
-  /**
-   * `<input type=file>`'s picker. Resolves the new FileList, or null for a
-   * dismissal (or the same selection again); `undefined` when no dialog
-   * could be shown (another one is open on this window — the request is
-   * ignored, as HTML allows).
-   */
+  /** `<input type=file>` picker: the new FileList; null on dismissal or the same selection; undefined if no dialog could be shown (one already open). */
   pickForInput(req: InputPickRequest): Promise<unknown | null | undefined>;
-  /** The color picker: a selected #rrggbb, null on dismissal, undefined if busy. */
   pickColorForInput(value: string): Promise<string | null | undefined>;
-  /** `<a download>` for a `blob:` / `data:` URL: Save As, then the bytes. */
   download(url: string, downloadAttribute: string): void;
 }
 
-/** The common surface of the two handle kinds, for runtime.ts's types. */
 export interface FileSystemHandleLike {
   readonly kind: "file" | "directory";
   readonly name: string;
 }
 
-/** Chromium's prefix on every exception a method throws. */
 function failed(method: string, iface: string, message: string): string {
   return `Failed to execute '${method}' on '${iface}': ${message}`;
 }
 
-/** FSA's `id`: at most 32 of `[A-Za-z0-9_-]`. */
 const ID_RE = /^[A-Za-z0-9_-]*$/;
-/** An extension's code points after the dot (spec: "valid suffix code point"). */
 const EXT_RE = /^\.[A-Za-z0-9+.]+$/;
-/** An RFC 9110 token, which is what both halves of a MIME essence are. */
 const TOKEN_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const WELL_KNOWN = ["desktop", "documents", "downloads", "music", "pictures", "videos"] as const;
 
@@ -186,17 +132,13 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
   const domError = (name: string, message: string): Error =>
     name === "TypeError" ? new TypeError(message) : new DOMException(message, name);
   const fromFailure = (f: DesktopFailure): Error => domError(f.name || "InvalidStateError", f.message ?? f.error ?? f.name);
-  /** A host answer → its settle, with the failure as the DOMException the spec names. */
   const settle = (json: Json): Promise<DesktopSettle> =>
     deps.call(json).catch((f: unknown) => {
       throw f instanceof Error ? f : fromFailure(f as DesktopFailure);
     });
 
-  // ---- File System Access --------------------------------------------------
-
   if (!host) {
-    // No vn-desktop: no pickers, so feature detection takes the
-    // `<input type=file>` path, which says why it cannot open either.
+    // No vn-desktop: no pickers, so feature detection falls to `<input type=file>`.
     return {
       handleFrom: () => {
         throw new TypeError("no desktop host");
@@ -214,7 +156,6 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
   }
   const fs = host;
 
-  /** The id behind each live handle, and the registry that releases it. */
   const ids = new WeakMap<object, number>();
   const released = new FinalizationRegistry<number>((h) => fs.release(h));
   const INTERNAL = Symbol("vn.fs.internal");
@@ -256,28 +197,22 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
         return Promise.reject(e);
       }
     }
-    /**
-     * The path's state: "granted" for what the user chose this session (both
-     * modes alike, D-F2), "prompt" for a handle restored from storage.
-     */
     queryPermission(descriptor?: { mode?: string }): Promise<"granted" | "prompt"> {
       return permission(this, "queryPermission", descriptor, false);
     }
-    /** "prompt" becomes "granted" on a user activation, with no prompt (D-F22). */
     requestPermission(descriptor?: { mode?: string }): Promise<"granted" | "prompt"> {
       return permission(this, "requestPermission", descriptor, true);
     }
   }
 
   let advisedGrant = false;
-  /** `requestPermission` on a "prompt" handle: Chromium asks; this host grants on the gesture. */
   const grantOnGesture = (id: number): void => {
     fs.permission(id, true);
     if (advisedGrant) return;
     advisedGrant = true;
     warnCompat(
       "fsa:grant",
-      "FileSystemHandle (D-F22): a handle restored from storage was granted on a user activation with no " +
+      "FileSystemHandle: a handle restored from storage was granted on a user activation with no " +
         "prompt. Chromium asks the user first (\"Allow this site to view/edit …?\"); this host has no such prompt yet.",
     );
   };
@@ -302,12 +237,7 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     }
   };
 
-  /**
-   * What Chromium's `RunWithWritePermission` does in front of createWritable,
-   * a `create` lookup and removeEntry: a "prompt" handle is asked, which needs
-   * a user activation; without one the operation is NotAllowedError (the host
-   * refuses it, so nothing more is needed here).
-   */
+  // As Chromium: a "prompt" handle is granted on a user activation before a write; otherwise the host refuses (NotAllowedError).
   const writeAccess = (id: number): void => {
     if (fs.permission(id, false) === "prompt" && activation.isActive()) grantOnGesture(id);
   };
@@ -375,7 +305,6 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
         return Promise.reject(e);
       }
     }
-    /** `async iterable<USVString, FileSystemHandle>`, over the host's cursor. */
     async *entries(): AsyncGenerator<[string, FileSystemHandle], void, undefined> {
       const id = idOf(this, "entries", "FileSystemDirectoryHandle");
       const cursor = Number((await settle(fs.dirOpen(id))).payload.cursor);
@@ -401,7 +330,6 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     }
   }
 
-  /** WriteParams / a chunk → what `__vn_fs_writable_*` takes. */
   const asData = (data: unknown, method: string): unknown => {
     if (typeof data === "string" || data instanceof engine.Blob) return data;
     if (data instanceof ArrayBuffer) return new Uint8Array(data);
@@ -451,12 +379,10 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
           return settle(fs.writableAbort(id)).then(() => undefined);
         },
       });
-      // A stream collected without close() or abort() deletes its swap file
-      // (design §4.3, "GC-less drop").
+      // A stream collected without close() or abort() deletes its swap file.
       token = {};
       closedStreams.register(this, id, token);
     }
-    /** Spec: get a writer, write, release it. */
     write(data: unknown): Promise<void> {
       try {
         const writer = this.getWriter();
@@ -483,14 +409,11 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
   ] as const) {
     Object.defineProperty(cls.prototype, Symbol.toStringTag, { value: name, configurable: true });
   }
-  // Both kinds are [Serializable] through their base (the clone's kind is in
-  // the host's bytes); a writable stream is not, as in Chromium.
+  // Both kinds clone through their base; a writable stream does not, as in Chromium.
   fs.setSerializer(FileSystemHandle.prototype, (h) => ids.get(h));
   fs.refuseClone(FileSystemWritableFileStream.prototype, "FileSystemWritableFileStream");
 
   fs.setHandleFactory((h, name, kind) => makeHandle({ h, name, kind: kind === "directory" ? "directory" : "file" }));
-
-  // ---- the pickers ----------------------------------------------------------
 
   interface AcceptOption {
     description?: string;
@@ -506,7 +429,6 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     mode?: string;
   }
 
-  /** The spec's option checks, each a TypeError with Chromium's wording. */
   const validate = (method: string, o: PickerOptions): Record<string, unknown> => {
     const fail = (m: string) => new TypeError(failed(method, "Window", m));
     const req: Record<string, unknown> = {};
@@ -553,7 +475,6 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     return req;
   };
 
-  /** One FSA picker: validate, require (and consume) activation, ask. */
   const picker = (method: string, kind: "open" | "save" | "folder", o: PickerOptions = {}): Promise<HandleWire[]> => {
     try {
       const req = validate(method, o ?? {});
@@ -561,8 +482,7 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       req.result = "handles";
       if (kind === "open") req.multiple = !!o?.multiple;
       if (kind === "save" && o?.suggestedName !== undefined) req.suggestedName = String(o.suggestedName);
-      // HTML/FSA: a picker needs transient activation, and showing one
-      // consumes it (Chromium's ConsumeTransientUserActivation).
+      // A picker needs transient activation and consumes it.
       if (!activation.isActive()) {
         throw new DOMException(failed(method, "Window", "Must be handling a user gesture to show a file picker."), "SecurityError");
       }
@@ -607,14 +527,7 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     if (target[k] === undefined) target[k] = v;
   }
 
-  // ---- <input type=file> and <a download> -----------------------------------
-
-  /**
-   * HTML `accept`: trimmed, lowercased tokens; anything else advised (A-F8)
-   * and dropped. A `type/*` other than the three HTML names is kept, as
-   * Chromium keeps it (`*` is a token character) and maps it to every
-   * extension of that type.
-   */
+  // `accept`: trimmed, lowercased tokens; others are advised and dropped. A `type/*` is kept, as Chromium does.
   const acceptTokens = (accept: string): string[] => {
     const out: string[] = [];
     for (const raw of accept.split(",")) {
@@ -625,7 +538,7 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
         (t.startsWith(".") && t.length > 1) ||
         (!rest.length && !!type && !!sub && TOKEN_RE.test(type) && TOKEN_RE.test(sub));
       if (ok) out.push(t);
-      else warnCompat(`accept:${t}`, `<input accept>: the token "${t}" is not an extension or MIME type and was ignored (A-F8)`);
+      else warnCompat(`accept:${t}`, `<input accept>: the token "${t}" is not an extension or MIME type and was ignored`);
     }
     return out;
   };
@@ -642,8 +555,7 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       return deps.call(fs.dialogOpen(json, req.current)).then(
         (s) => (s.payload.cancelled ? null : s.value),
         (f: DesktopFailure) => {
-          // A dialog already open on this window: HTML lets the request wait
-          // or be dropped; Chromium drops it.
+          // A dialog already open on this window is dropped, as Chromium does.
           if (f.name === "NotAllowedError" && f.code === "EBUSY") return undefined;
           console.error(`[vue-native] <input type=file>: ${f.message ?? f.error ?? f.name}`);
           return undefined;
@@ -663,7 +575,7 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     download(url, attr) {
       warnCompat(
         "download:saveas",
-        "<a download> (D-F6): the file is saved through a Save As dialog, starting in Downloads. Chromium " +
+        "<a download>: the file is saved through a Save As dialog, starting in Downloads. Chromium " +
           "saves to Downloads without asking unless \"Ask where to save each file\" is on",
       );
       deps.call(fs.download(url, attr)).then(

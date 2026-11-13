@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/hit-target.spec.ts: a mouse event goes to the topmost element under the pointer and bubbles from there (m26, docs/RUNTIME.md §5.18). See ../README.md.",
-
   "name": "vn-test-hit-target",
 
   "window": {

@@ -1,23 +1,9 @@
 <script setup lang="ts">
-// The windowing surface, end to end — docs/WINDOWING.md.
-//
-// Everything on this page is either a BROWSER-STANDARD API (`document.title`,
-// `innerWidth`, `screen`, `devicePixelRatio`, `matchMedia`, the Fullscreen API)
-// or the namespaced tier-3 extension (`appWindow`), and the page labels which
-// is which — the three-tier split is the whole point of the design.
 import { onMounted, onUnmounted, ref } from "vue";
 import { appWindow } from "vue-native";
 
 defineOptions({ name: "WindowPage" });
 
-// ---- live state -----------------------------------------------------------
-// Every number below is read straight from the window, not from a mirror we
-// keep in sync ourselves: the host publishes one snapshot per frame and every
-// getter reads it.
-
-// Every value here is rendered as text, and several are deliberately
-// pre-formatted strings ("980 x 720") rather than numbers — the table shows
-// what the window says, it does not compute with it.
 interface Geometry {
   inner: string;
   outer: string;
@@ -28,9 +14,8 @@ interface Geometry {
   extended: boolean;
 }
 
-// engine.d.ts types `document` and `navigator` as optional (the bun test
-// harness has neither). Under vn-app both exist before this module evaluates —
-// asserted once, here, rather than at twelve call sites.
+// Under vn-app both exist before this module evaluates — asserted once, here, rather than at
+// twelve call sites.
 const doc = document!;
 const wco = navigator!.windowControlsOverlay;
 
@@ -38,9 +23,6 @@ const geom = ref<Partial<Geometry>>({});
 const maximized = ref(false);
 const focused = ref(false);
 const bar = ref<VnWindowRect>({ x: 0, y: 0, width: 0, height: 0 });
-// `VnAppWindow.chrome` is a bare `Record<string, unknown>`, so `chrome.client
-// .width` in the template below is `unknown`. The prelude's shape is fixed and
-// small — see `VnWindowChrome` in apps/env.d.ts, and the note there.
 const chrome = ref(appWindow.chrome as unknown as VnWindowChrome);
 
 const readAll = () => {
@@ -60,9 +42,8 @@ const readAll = () => {
   readMq();
 };
 
-// `resize` is the STANDARD event on `window` — `appWindow` deliberately does
-// not carry one, because duplicating it would teach a non-portable idiom for a
-// portable problem.
+// `resize` is the STANDARD event on `window` — `appWindow` deliberately does not carry one,
+// because duplicating it would teach a non-portable idiom for a portable problem.
 const onResize = () => readAll();
 const onState = () => readAll();
 const onFocus = () => readAll();
@@ -87,25 +68,17 @@ onUnmounted(() => {
   wco.removeEventListener("geometrychange", onState);
 });
 
-// ---- title ----------------------------------------------------------------
-// `document.title` is the OS window title (taskbar, Alt-Tab, window
-// enumeration). The PAINTED titlebar text comes from the app's own markup —
-// they are independent in a browser too, and Titlebar.vue happens to mirror it.
 const titleDraft = ref(doc.title);
 const applyTitle = () => {
   doc.title = titleDraft.value;
-  // `document.title` has no change event in any spec, so the titlebar is poked
-  // explicitly rather than polled.
+  // `document.title` has no change event in any spec, so the titlebar is poked explicitly rather
+  // than polled.
   dispatchEvent(new Event("vn:title"));
-  // Read back: the getter applies HTML's whitespace normalisation, exactly as
-  // a browser does, so "  a\n b  " comes back as "a b".
   titleDraft.value = doc.title;
 };
 
-// ---- backdrop -------------------------------------------------------------
-// One unified value list (Tauri's approach) with Electron's lowercase
-// spellings. `blur` resolves to `acrylic` here and says so; `mica` on Windows
-// 10 would fall back to `acrylic` and say so.
+// `blur` resolves to `acrylic` here and says so; `mica` on Windows 10 would fall back to `acrylic`
+// and say so.
 const MATERIALS = ["mica", "mica-alt", "acrylic", "transparent", "none"];
 const backdrop = ref(appWindow.backdrop);
 const setBackdrop = (m: string) => {
@@ -113,18 +86,8 @@ const setBackdrop = (m: string) => {
   backdrop.value = appWindow.backdrop;
 };
 
-// ---- titleBarOverlay ------------------------------------------------------
-// The HOST draws the min/max/close cluster instead of the app. Electron's
-// shape, and Electron's honesty about it: a frameless window has no
-// `WS_CAPTION`, so on Windows the only way to have caption buttons is to draw
-// them. What makes these the OS's rather than three hand-rolled buttons is that
-// each carries a `WindowControlArea` — `WM_NCHITTEST` answers HTMINBUTTON /
-// HTMAXBUTTON / HTCLOSE, the OS performs the action, and HTMAXBUTTON is what
-// arms the Windows 11 snap-layouts flyout.
-//
-// Turning it on narrows `getTitlebarAreaRect().width` (and therefore
-// `env(titlebar-area-width)`) by the cluster's width and fires
-// `geometrychange`; Titlebar.vue drops its own buttons because the rect said so.
+// Electron's shape, and Electron's honesty about it: a frameless window has no `WS_CAPTION`, so on
+// Windows the only way to have caption buttons is to draw them.
 const hostControls = ref(Boolean(appWindow.chrome.hostControls));
 const setHostControls = (on: boolean) => {
   appWindow.setTitleBarOverlay(on ? { symbolColor: "#ffffffe0" } : false);
@@ -132,19 +95,12 @@ const setHostControls = (on: boolean) => {
   readAll();
 };
 
-// ---- media queries --------------------------------------------------------
-// `matchMedia` runs the SAME vn-css evaluator the cascade does, against the
-// same env — before this, `@media (max-width: 600px)` worked while
-// `matchMedia("(max-width: 600px)")` answered false forever.
 const MQ = {
   wide: matchMedia("(min-width: 800px)"),
   dpr: matchMedia(`(min-resolution: ${devicePixelRatio}dppx)`),
   wco: matchMedia("(display-mode: window-controls-overlay)"),
   fullscreen: matchMedia("(display-mode: fullscreen)"),
 };
-// `MediaQueryList.matches` is a plain getter, not a Vue ref, so the values are
-// copied into reactive state — both by the standard `change` event and by
-// `readAll`, which every window event already calls.
 const mq = ref<Partial<Record<keyof typeof MQ, boolean>>>({});
 const readMq = () => (mq.value = Object.fromEntries(
   Object.entries(MQ).map(([k, v]) => [k, v.matches]),
@@ -152,20 +108,13 @@ const readMq = () => (mq.value = Object.fromEntries(
 onMounted(() => Object.values(MQ).forEach((m) => m.addEventListener("change", readMq)));
 onUnmounted(() => Object.values(MQ).forEach((m) => m.removeEventListener("change", readMq)));
 
-// ---- verbs ----------------------------------------------------------------
-// All synchronous, all returning undefined: JS, gpui and the Win32 UI thread
-// are the same thread, so a Promise would lie about ordering. `await` still
-// works, so ported Tauri code runs unmodified.
+// verbs All synchronous, all returning undefined: JS, gpui and the Win32 UI thread are the same
+// thread, so a Promise would lie about ordering.
 const nudge = (dx: number, dy: number) =>
   appWindow.setBounds({ x: appWindow.getBounds().x + dx, y: appWindow.getBounds().y + dy });
 const grow = (d: number) => resizeBy(d, d);
-// The STANDARD Fullscreen API, not an `appWindow` verb: fullscreen state is
-// observed through `document.fullscreenchange`, which is why §3.4 deliberately
-// carries no `appWindow` event for it. Esc always exits.
-//
-// `documentElement` is `unknown` on `VnDocument` and cannot be narrowed by a
-// merge (apps/env.d.ts says why), so it is cast at this one use. The prelude
-// patches `requestFullscreen` onto it AND onto `Element.prototype`.
+// `documentElement` is `unknown` on `VnDocument` and cannot be narrowed by a merge (apps/env.d.ts
+// says why), so it is cast at this one use.
 const toggleFullscreen = () =>
   doc.fullscreenElement
     ? doc.exitFullscreen()
@@ -176,10 +125,9 @@ const toggleFullscreen = () =>
   <div class="page">
     <div class="hd">
       <span class="h1">Windowing</span>
-      <span class="sub">docs/WINDOWING.md — three tiers, one window</span>
+      <span class="sub">three tiers, one window</span>
     </div>
 
-    <!-- chrome mode ------------------------------------------------------ -->
     <section class="card">
       <div class="cap">chrome mode</div>
       <div class="grid">
@@ -208,7 +156,6 @@ const toggleFullscreen = () =>
       </div>
     </section>
 
-    <!-- title ------------------------------------------------------------ -->
     <section class="card">
       <div class="cap">document.title <span class="tier t1">tier 1</span></div>
       <div class="row">
@@ -222,7 +169,6 @@ const toggleFullscreen = () =>
       </div>
     </section>
 
-    <!-- backdrop --------------------------------------------------------- -->
     <section class="card">
       <div class="cap">backdrop material <span class="tier t3">tier 3</span></div>
       <div class="row">
@@ -243,7 +189,6 @@ const toggleFullscreen = () =>
       </div>
     </section>
 
-    <!-- state ------------------------------------------------------------ -->
     <section class="card">
       <div class="cap">window state <span class="tier t3">tier 3</span></div>
       <div class="row">
@@ -265,7 +210,6 @@ const toggleFullscreen = () =>
       </div>
     </section>
 
-    <!-- geometry --------------------------------------------------------- -->
     <section class="card">
       <div class="cap">geometry &amp; screen <span class="tier t1">tier 1</span></div>
       <div class="grid">
@@ -283,7 +227,6 @@ const toggleFullscreen = () =>
       </div>
     </section>
 
-    <!-- matchMedia ------------------------------------------------------- -->
     <section class="card">
       <div class="cap">matchMedia <span class="tier t1">tier 1</span></div>
       <div class="grid">

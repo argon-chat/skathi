@@ -1,16 +1,3 @@
-// Paint-only invalidation (docs/ARCHITECTURE.md decision 28, fork item 40,
-// crates/vn-tree/src/live.rs). A new `<video>` frame, or the next frame of a
-// canvas that keeps drawing, goes into the atlas tile the frame already drawn
-// samples, and the window presents that frame again: no build, no layout.
-// Before, each one was a full draw at the display rate.
-//
-//   bun test packages/vn-test/specs/paint-only.spec.ts
-//
-// `fixtures/paint-only` plays a looping 160x90 clip and has a 64x64 canvas a
-// requestAnimationFrame loop fills with one colour. The host's lifetime
-// `builds` and `presents` (devtools `perf`) tell the two paths apart; the
-// screen shows that a present carries the newest frame.
-
 import { afterAll, expect, test } from "bun:test";
 import { launch, readPng, type Bounds } from "../src/index";
 
@@ -37,16 +24,12 @@ async function box(selector: string): Promise<Bounds> {
   return b;
 }
 
-/** The RGB of the device pixel at the centre of `b`, from one screenshot by
- *  `backend`: `print_window` is what the window last presented, as DWM has it;
- *  `render_to_image` re-renders the scene drawn last from today's atlas. */
 async function centre(b: Bounds, backend: "print_window" | "render_to_image"): Promise<[number, number, number]> {
   const shot = readPng(await app.screenshot(undefined, backend));
   const k = shot.width / W;
   return shot.at(Math.round((b.x + b.w / 2) * k), Math.round((b.y + b.h / 2) * k));
 }
 
-/** A digest of the pixels in `b` as the window last presented them. */
 async function digest(b: Bounds): Promise<string> {
   const shot = readPng(await app.screenshot(undefined, "print_window"));
   const k = shot.width / W;
@@ -75,11 +58,10 @@ test("a playing, visible <video> is shown by presents, not builds", async () => 
   const presents = after.presents - before.presents;
   const builds = after.builds - before.builds;
   console.log(`[paint-only] video, 1 s: ${presents} presents, ${builds} builds`);
-  // ~24-30 decoded frames a second; the window is not focused, so gpui may
-  // hold it near 30 fps.
+  // ~24-30 decoded frames a second; the window is not focused, so gpui may hold it near 30 fps.
   expect(presents).toBeGreaterThanOrEqual(10);
   expect(builds).toBeLessThanOrEqual(1);
-  expect(second).not.toBe(first); // the presented picture moved
+  expect(second).not.toBe(first);
 }, T);
 
 test("a canvas that keeps drawing is shown by presents, with its newest frame", async () => {
@@ -87,7 +69,6 @@ test("a canvas that keeps drawing is shown by presents, with its newest frame", 
   await sleep(300);
   const cv = await box("#cv");
   await app.eval("__VN_TEST_PAINT__.start('#ff0000'); 'ok'");
-  // The first frame and the switch to a moving canvas are draws (new images).
   await sleep(500);
   expect(near(await centre(cv, "print_window"), [255, 0, 0])).toBe(true);
 
@@ -101,13 +82,11 @@ test("a canvas that keeps drawing is shown by presents, with its newest frame", 
   expect(Number(await app.eval("__VN_TEST_PAINT__.state.frames"))).toBeGreaterThan(20);
   expect(presents).toBeGreaterThanOrEqual(10);
   expect(builds).toBeLessThanOrEqual(1);
-  // The colour changed with no build: the scene drawn before it samples the
-  // tile the new frames went into, and the window presented it.
+  // The colour changed with no build: the scene drawn before it samples the tile the new frames
+  // went into, and the window presented it.
   expect(near(await centre(cv, "render_to_image"), [0, 255, 0])).toBe(true);
   expect(near(await centre(cv, "print_window"), [0, 255, 0])).toBe(true);
 
-  // Still again: the last frame is re-wrapped as a still image (one draw), and
-  // it is still the newest colour.
   await app.eval("__VN_TEST_PAINT__.stop(); 'ok'");
   await sleep(800);
   expect(near(await centre(cv, "print_window"), [0, 255, 0])).toBe(true);

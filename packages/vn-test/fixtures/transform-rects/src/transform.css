@@ -5,8 +5,6 @@
   background: #fff;
 }
 
-/* A popover trigger, and reka's PopperContent wrapper: laid out at (0, 0) and
-   moved by the `transform: translate()` floating-ui computes. */
 .trigger {
   position: absolute;
   left: 520px;
@@ -27,7 +25,6 @@
   height: 100px;
   background: #eee;
 }
-/* The profile popover's three-dot menu button. */
 .menu-btn {
   margin-left: 110px;
   margin-top: 10px;
@@ -41,8 +38,6 @@
   background: red;
 }
 
-/* shadcn's DialogContent: `fixed left-[50%] top-[50%] translate-x-[-50%]
-   translate-y-[-50%]`, with a SelectTrigger inside. */
 .dialog {
   position: fixed;
   left: 50%;
@@ -65,7 +60,6 @@
   background: lime;
 }
 
-/* tailwindcss-animate's `zoom-in-95`, slowed down so a test can sample it. */
 .zoom {
   position: absolute;
   left: 40px;
@@ -86,8 +80,6 @@
   }
 }
 
-/* An IntersectionObserver target laid out inside the window and translated
-   out of it, and a control that stays. */
 .far,
 .near {
   position: absolute;

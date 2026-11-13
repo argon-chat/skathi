@@ -1,14 +1,9 @@
-// Runs src/runtime.ts in an isolated fake host so the renderer's prop/event
-// plumbing can be tested without gpui, JavaScriptCore or a window.
+// Runs src/runtime.ts in an isolated fake host so the renderer's prop/event plumbing can be tested without
+// gpui, JavaScriptCore or a window.
 //
-// Same trick as loader-harness.ts: runtime.ts is authored as an ES module for
-// the bundler's benefit, but its body only touches ambient names — the `__vn_*`
-// host functions and `console`. The source is transpiled to plain JS (see
-// ./ts-source.ts — bun's own emitter, the one that produces dist/vendor.js),
-// the import/export lines are stripped, and every ambient name is bound as a
-// PARAMETER, so each createRuntime() call gets its own private world (own
-// intern table, own handler registry, own `warned` set, which is what makes
-// "advisory fires exactly once" testable at all).
+// As in loader-harness.ts: the source is transpiled to plain JS (./ts-source.ts), import/export lines are
+// stripped, and every ambient name (`__vn_*`, `console`) is bound as a parameter, so each createRuntime() gets
+// its own world (intern table, handler registry, `warned` set: what makes "advisory fires exactly once" testable).
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,13 +38,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const RUNTIME_PATH = join(HERE, "../src/runtime.ts");
 export const DESKTOP_PATH = join(HERE, "../src/desktop.ts");
 
-/**
- * src/desktop.ts, evaluated once into its one export. runtime.ts IMPORTS it
- * (`import { installDesktop } from "./desktop"`), and that line goes with the
- * other imports below; the function comes back in as a parameter. desktop.ts
- * reads no ambient `__vn_*` name — its host, engine classes and settle
- * channel are arguments — so one evaluation serves every world.
- */
+/** src/desktop.ts, evaluated once into its one export. runtime.ts imports it; that line is stripped and the function comes back as a parameter. It reads no ambient `__vn_*` name, so one evaluation serves every world. */
 let installDesktopFn: unknown = null;
 function loadInstallDesktop(): unknown {
   if (installDesktopFn) return installDesktopFn;
@@ -60,11 +49,7 @@ function loadInstallDesktop(): unknown {
 }
 
 export const CANVAS_PATH = join(HERE, "../src/canvas.ts");
-/**
- * src/canvas.ts's `adoptCanvas`, the same way: runtime.ts imports it, the
- * import line goes, and the function comes back in as a parameter. Its own
- * imports go too (anything it needs from the host is ambient, read lazily).
- */
+/** src/canvas.ts's `adoptCanvas`, the same way. */
 let adoptCanvasFn: unknown = null;
 function loadAdoptCanvas(): unknown {
   if (adoptCanvasFn) return adoptCanvasFn;
@@ -76,12 +61,7 @@ function loadAdoptCanvas(): unknown {
 }
 
 export const FONTS_PATH = join(HERE, "../src/fonts.ts");
-/**
- * src/fonts.ts's `installFonts`, the same way. It reads the host's natives
- * off the global it is handed, which here is the world's fake global: without
- * `__vn_fonts_*` on it, it installs nothing (test/runtime-fonts.test.ts drives
- * it against a fake loader directly).
- */
+/** src/fonts.ts's `installFonts`, the same way. Without `__vn_fonts_*` on the world's global it installs nothing (test/runtime-fonts.test.ts drives it against a fake loader). */
 let installFontsFn: unknown = null;
 function loadInstallFonts(): unknown {
   if (installFontsFn) return installFontsFn;
@@ -93,11 +73,7 @@ function loadInstallFonts(): unknown {
 }
 
 export const WAAPI_PATH = join(HERE, "../src/waapi.ts");
-/**
- * src/waapi.ts's `installWaapi`, the same way. Its host arrives as an
- * argument (the runtime passes the `__vn_anim_*` parameters bound below), so
- * one evaluation serves every world.
- */
+/** src/waapi.ts's `installWaapi`, the same way; its host arrives as an argument. */
 let installWaapiFn: unknown = null;
 function loadInstallWaapi(): unknown {
   if (installWaapiFn) return installWaapiFn;
@@ -109,11 +85,7 @@ function loadInstallWaapi(): unknown {
 }
 
 export const SELECTION_PATH = join(HERE, "../src/selection.ts");
-/**
- * src/selection.ts's `installSelection`, the same way. It reads nothing
- * ambient: the host's `__vn_selection_*` reach it through the runtime, which
- * binds them as parameters like every other host function.
- */
+/** src/selection.ts's `installSelection`, the same way. */
 let installSelectionFn: unknown = null;
 function loadInstallSelection(): unknown {
   if (installSelectionFn) return installSelectionFn;
@@ -124,7 +96,7 @@ function loadInstallSelection(): unknown {
   return installSelectionFn;
 }
 
-/** The W3C names `vn-permissions` knows — kept in step with `Capability::ALL`. */
+/** The W3C names `vn-permissions` knows, in step with `Capability::ALL`. */
 export const PERMISSION_NAMES = [
   "microphone",
   "camera",
@@ -138,40 +110,18 @@ export const PERMISSION_NAMES = [
 const IMPORT_LINE = /^\s*import\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 const STAR_REEXPORT = /^\s*export\s+\*\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 /**
- * `export { A, B } from "./mod";` — a NAMED re-export of another module.
- *
- * `<VnWindow>` gave runtime.ts its first one (the component lives in
- * src/vnwindow.ts and is re-exported so an app imports one module), and this
- * harness evaluates ONE file with `new Function`: the module a re-export names
- * is not being loaded, and `export` is a syntax error inside a function body
- * either way. Dropping the line is right rather than merely expedient — every
- * name the harness hands back is bound as a parameter or listed in its own
- * `return`, so nothing here was ever reached through a re-export, and
- * `<VnWindow>` is a component the runtime's own tests never render
- * (packages/vn-test drives it against a real host instead).
+ * `export { A, B } from "./mod";`: a named re-export of another module. The harness evaluates one file with
+ * `new Function`, where `export` is a syntax error and the named module is not loaded; dropping the line loses
+ * nothing, since every name handed back is a parameter or in the harness's own `return`.
  */
 const NAMED_REEXPORT = /^\s*export\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
-/**
- * `export { nodeOps, patchProp };` — a LOCAL export list (runtime-dom exports
- * its renderer options, so runtime.ts exports its own). The names are already
- * declarations in the body, so dropping the list loses nothing.
- */
+/** `export { nodeOps, patchProp };`: a local export list; the names are already declarations in the body. */
 const LOCAL_EXPORT = /^\s*export\s+\{[^}]*\};?[^\S\n]*$/gm;
 
-/**
- * What runtime.ts imports from src/vnwindow.ts — `VnWindow`, `WINDOW_ROOT`,
- * `windowRoots` — in the order the parameters list them. The import line goes
- * with the others, so they come back as parameters: a component nothing here
- * renders, its root's marker, and an empty registry of window roots, so every
- * node is in the main window, as in a runtime that never opened a pop-out.
- */
+/** What runtime.ts imports from src/vnwindow.ts (`VnWindow`, `WINDOW_ROOT`, `windowRoots`), in parameter order: a component nothing here renders, its root marker, and an empty registry of window roots. */
 const VNWINDOW_STANDINS = (): unknown[] => [{ name: "VnWindow" }, Symbol("vn-window-root"), new Set<object>()];
 
-/**
- * `FileList`, as much of it as an input's `files` needs (redjs has the real
- * class; bun has none): indexed, `length`, `item()`, iterable, and a class for
- * `instanceof`. A test makes one from bun's own `File`s.
- */
+/** `FileList`, as much as an input's `files` needs (bun has none): indexed, `length`, `item()`, iterable, and a class for `instanceof`. */
 export class FakeFileList {
   [i: number]: unknown;
   length: number;
@@ -192,22 +142,13 @@ class FakeDataTransfer {
   files = new FakeFileList();
 }
 
-/** A fresh runtime world with a recording host. */
 /**
- * @param {{ storage?: boolean, devtools?: boolean }} [options] —
- *   `storage: false` builds a world with no `__vn_storage_*` at all, which is
- *   what a host compiled `--no-default-features` (or an older one) looks like
- *   from JS. It is the only way to reach `appStorage`'s inert branch, and that
- *   branch is the one that must not invent a plausible path.
- *
- *   `devtools: false` does the same for `__vn_devtools_*`, i.e. a host built
- *   `--features no-devtools` (docs/DEVTOOLS.md "Shape"). That branch has to
- *   tell an app the devtools are not merely off but ABSENT, without throwing —
- *   `appDevtools.disable()` in an entry module is its likeliest caller.
- *
- *   `desktop: false` blanks `__vn_desktop_*` / `__vn_shell_*` (no vn-desktop).
- *   `MouseEvent` hands the world an event class (bun has none), which is what
- *   makes the "only a MouseEvent click activates" rule observable.
+ * @param {{ storage?: boolean, devtools?: boolean }} [options]
+ *   `storage: false` builds a world with no `__vn_storage_*` (a host built `--no-default-features`, or an older
+ *   one), the only way to reach `appStorage`'s inert branch. `devtools: false` does the same for
+ *   `__vn_devtools_*` (a `no-devtools` host). `desktop: false` blanks `__vn_desktop_*` / `__vn_shell_*`.
+ *   `MouseEvent` hands the world an event class (bun has none), making "only a MouseEvent click activates"
+ *   observable.
  */
 export function createRuntime(
   options: {
@@ -226,11 +167,7 @@ export function createRuntime(
     selection?: boolean;
     /** `false`: no `__vn_anim_*` (an older host): no `el.animate`. */
     anim?: boolean;
-    /**
-     * Evaluate into an EXISTING world's global (`rt.global`) instead of a
-     * fresh one: what `location.reload()` and the dev host's cold restart
-     * do, a second runtime in the same realm. `globals` is ignored then.
-     */
+    /** Evaluate into an existing world's global (`rt.global`), as `location.reload()` and a cold restart do; `globals` is ignored then. */
     realm?: Record<string, unknown>;
     /** The `navigator` the runtime sees (bound as a parameter), instead of a fresh fake. */
     navigator?: Record<string, unknown>;
@@ -249,23 +186,16 @@ export function createRuntime(
     .replace(STAR_REEXPORT, "")
     .replace(NAMED_REEXPORT, "")
     .replace(LOCAL_EXPORT, "")
-    // `export function foo` / `export const foo` become plain declarations, so
-    // the whole module body is valid inside a function.
     .replace(/^export\s+(function|const|let|class)\s/gm, "$1 ");
 
   const host = {
-    /** interned name -> id, and back */
     names: [],
     listeners: [], // { id, code, on }
     props: [], // { id, key, value }
     styles: [],
     classes: [],
-    /**
-     * Every `__vn_set_stylesheet(css, extra)`, in order, as the one cascade it
-     * installs (`css`, then each head `<style>`): the last one is the sheet in force.
-     */
+    /** Every `__vn_set_stylesheet(css, extra)`, in order, as the cascade it installs (`css`, then each head `<style>`): the last is in force. */
     sheets: [] as string[],
-    /** The same calls as the host receives them: `[css, ...extra]`. */
     sheetParts: [] as string[][],
     logs: [],
     dispatcher: null,
@@ -274,16 +204,7 @@ export function createRuntime(
     queryCalls: [],
     /** `__vn_bounds` answers: node id -> "x,y,w,h". */
     boundsById: new Map(),
-    /**
-     * The observer step after layout (crates/vn-tree/src/observe.rs), faked:
-     * the runtime's `layoutStep`, whether it observes anything, whether an
-     * `observe()` is waiting (`pending`), how many `__vn_layout_watch` calls
-     * came, and the loop errors the steps raised. `host.layout.step()` is
-     * one frame's step with the layout already done (`boundsById` IS the
-     * layout): the rounds, a `relayout` between them when given (the host's
-     * draw; a test moves `boundsById` there), then the finish. Answers the
-     * rounds, or -1 when the host would not have called the runtime at all.
-     */
+    /** The post-layout observer step (crates/vn-tree/src/observe.rs), faked. `host.layout.step()` is one frame with layout already done (`boundsById` IS the layout): the rounds, a `relayout` between them when given, then the finish. Answers the rounds, or -1 when the host would not have called the runtime. */
     layout: {
       hook: null as ((op: number) => number) | null,
       observing: false,
@@ -314,13 +235,7 @@ export function createRuntime(
     },
     /** `__vn_computed_style` answers: node id -> "k=v\n…". */
     computedById: new Map(),
-    /**
-     * The scroll containers this fake host has, keyed by node id:
-     * `{ left, top, maxLeft, maxTop, width, height }` — the viewport size plus
-     * how far the content overflows it, which is exactly what a real
-     * `ScrollHandle` holds. A node that is not in here is not a scroll
-     * container, and `__vn_scroll` answers `""` for it, as the host does.
-     */
+    /** The scroll containers this fake host has, by node id: `{ left, top, maxLeft, maxTop, width, height }` (viewport size plus content overflow, as a `ScrollHandle` holds). A node not in here is not a scroll container and `__vn_scroll` answers "" for it. */
     scrollById: new Map(),
     /** Every `__vn_scroll` call: `{ id, op, x, y }`. */
     scrollCalls: [],
@@ -328,37 +243,22 @@ export function createRuntime(
     intoViewCalls: [],
     /** What `__vn_scroll_into_view` answers — `""`, `"stale"`, or `"!advisory"`. */
     intoViewAnswer: "",
-    /**
-     * Is the host reporting that the CONTENT half of a scroll answer is from
-     * the last painted frame? `__vn_scroll`'s fifth field — see
-     * `crates/vn-tree/src/scroll.rs` and `noteStale` in runtime.ts.
-     */
+    /** Whether the host reports the content half of a scroll answer as from the last painted frame (`__vn_scroll`'s fifth field; `noteStale` in runtime.ts). */
     scrollStale: false,
-    /**
-     * The document selection (`__vn_selection_*`): `sel` as the host keeps
-     * it, `[anchor, anchorOffset, anchorOwn, focus, focusOffset, focusOwn]`,
-     * every set and rebase, and the text `toString()` answers.
-     */
+    /** The document selection (`__vn_selection_*`): `sel` as `[anchor, anchorOffset, anchorOwn, focus, focusOffset, focusOwn]`, every set and rebase, and the text `toString()` answers. */
     selection: {
       sel: null as number[] | null,
       sets: [] as number[][],
       rebases: [] as number[][],
       text: "",
     },
-    /**
-     * The hit test (`__vn_hit_at`): what the host answers for a point — ids
-     * topmost first, `""` outside the viewport — and every question asked, as
-     * `[x, y, all]`.
-     */
+    /** The hit test (`__vn_hit_at`): ids topmost first ("" outside the viewport), and every question as `[x, y, all]`. */
     pointerCaptureCalls: [] as { id: number; pointerId: number; capture: boolean }[],
     hit: {
       answer: (_x: number, _y: number, _all: number) => "",
       calls: [] as number[][],
     },
-    /**
-     * Script animations (`__vn_anim_*`): every call as `[op, ...args]`, the
-     * notes `set` answers, and what `values` (commitStyles) answers.
-     */
+    /** Script animations (`__vn_anim_*`): every call as `[op, ...args]`, the notes `set` answers, and what `values` (commitStyles) answers. */
     anim: {
       calls: [] as unknown[][],
       notes: "",
@@ -368,11 +268,7 @@ export function createRuntime(
     styleRejects: new Set<string>(),
     /** Every `__vn_style_accepts` question, as `"prop: value"`. */
     acceptCalls: [] as string[],
-    /**
-     * `__vn_focus(id, op)`, faked: every call, and what the host answers
-     * (`"moved:<old>"`, `"already"`, `"pending"`, `"refused"`; `"blurred"` or
-     * `""` for op 1). The default refuses every focus and every blur.
-     */
+    /** `__vn_focus(id, op)`: every call and the host's answer (`moved:<old>`, `already`, `pending`, `refused`; `blurred` or "" for op 1). Default refuses every focus and blur. */
     inputSelectCalls: [] as number[],
     inputSelectAnswer: true,
     focus: {
@@ -391,12 +287,7 @@ export function createRuntime(
     mediaCalls: [],
     /** `__vn_media_can_play` answers: mime type -> "" | "maybe" | "probably". */
     canPlayByType: new Map(),
-    /**
-     * The permission backend (`vn-permissions`), faked. `states` is what
-     * `__vn_permissions_query` answers; set `pendingToken` to make `request()`
-     * return a token instead of settling, then call `settle()` to deliver it —
-     * that is the vn-app pump, in one line.
-     */
+    /** The permission backend (`vn-permissions`), faked. `states` is what `__vn_permissions_query` answers; set `pendingToken` to make `request()` return a token, then `settle()` delivers it (the vn-app pump). */
     permissions: {
       platform: "TestOS",
       states: new Map(),
@@ -410,12 +301,7 @@ export function createRuntime(
       /** The fake `navigator.permissions` PermissionStatus objects, by name. */
       statuses: new Map(),
     },
-    /**
-     * The storage backend (`vn-storage`), faked. `folders` is the known-folder
-     * table `folders.rs` resolves; `refuse`/`flushError` make the two failing
-     * calls fail, which is the half of `appStorage` that has to throw rather
-     * than return a path nobody checked.
-     */
+    /** The storage backend (`vn-storage`), faked. `folders` is the known-folder table; `refuse` / `flushError` make the two failing calls fail, which `appStorage` must throw on. */
     storage: {
       folders: new Map([
         ["APPDATA", "C:\\Users\\test\\AppData\\Roaming"],
@@ -436,12 +322,7 @@ export function createRuntime(
       folderCalls: [],
       setCalls: [],
     },
-    /**
-     * The devtools switch (`crates/vn-app/src/devtools/mod.rs`), faked. The
-     * Rust half owns a listener and a socket; the JS half's whole job is the
-     * JSON round trip, the refusal advisory and the `onChange` fan-out, so the
-     * fake is the state machine and a call log.
-     */
+    /** The devtools switch (`crates/vn-app/src/devtools/mod.rs`), faked: a state machine and a call log; the JS half's job is the JSON round trip, the refusal advisory and the `onChange` fan-out. */
     devtools: {
       enabled: true,
       /** `VN_DEVTOOLS=1`: `set_enabled(false)` answers `{error}` instead. */
@@ -456,14 +337,7 @@ export function createRuntime(
       /** When set, `open()` answers `{error}` with this text. */
       openError: null,
     },
-    /**
-     * The desktop host (`crates/vn-desktop`), faked at the seam: every
-     * `__vn_shell_*` call is recorded and answers `{token}` (or the refusal
-     * in `refuse`, verbatim); `settle(token, ok, payload)` is the frame pump.
-     * The scheme allowlist and the executable guard are the RUST side's — the
-     * fake applies only the content allowlist, so a test can tell whether the
-     * JS refused before ever reaching the host.
-     */
+    /** The desktop host (`crates/vn-desktop`), faked at the seam: every `__vn_shell_*` call is recorded and answers `{token}` (or `refuse`, verbatim); `settle(token, ok, payload)` is the frame pump. Scheme allowlist and executable guard are Rust's; the fake applies only the content allowlist. */
     desktop: {
       dispatcher: null,
       calls: [],
@@ -491,15 +365,7 @@ export function createRuntime(
   /** Settle a desktop token as `vn_desktop::pump()` would (`value`: what the host made). */
   host.desktop.settle = (token, ok = true, payload = {}, value = undefined) =>
     host.desktop.dispatcher?.(token, ok, JSON.stringify(payload), value);
-  /**
-   * The File System Access + dialog host (`vn-desktop` fs/, dialog/), faked
-   * at the seam. Every call is recorded in `fs.calls` as `{ op, args, token }`
-   * and answers `{token}`. An entry in `fs.answers` (op → fn(...args)) makes
-   * the fake settle that call itself, a microtask later — the pump source,
-   * in one line — with what the fn returns: `{ ok?, payload?, value? }`, or
-   * `{ sync }` for a synchronous refusal. Without one, a test settles the
-   * token by hand with `host.desktop.settle`.
-   */
+  /** The File System Access + dialog host (`vn-desktop` fs/, dialog/), faked at the seam. Every call is recorded in `fs.calls` as `{ op, args, token }` and answers `{token}`. An `fs.answers` entry (op -> fn(...args)) settles that call a microtask later with `{ ok?, payload?, value? }` or `{ sync }` (a synchronous refusal); otherwise a test settles by hand with `host.desktop.settle`. */
   host.desktop.fs = {
     calls: [],
     answers: new Map(),
@@ -549,13 +415,9 @@ export function createRuntime(
   };
   const nameOf = (id) => host.names[id];
 
-  // A private `globalThis` per world: runtime.js installs the missing DOM
-  // globals (MutationObserver, DocumentFragment, getComputedStyle, …) on it,
-  // and each test must get its own set rather than whichever world happened to
-  // run first.
-  // redjs's `document.createElement`: a "dumb" element on HTMLElement.prototype
-  // with only a `tagName`, outside the tree. The prototype is the world's own
-  // element prototype, found off the first mirror the test creates.
+  // A private `globalThis` per world: runtime.js installs missing DOM globals on it, and each test needs its own set.
+  // redjs's `document.createElement`: a "dumb" element on HTMLElement.prototype with only a `tagName`, outside the
+  // tree; the prototype is found off the first mirror the test creates.
   let elementProto: object | null = null;
   let worldExports: { nodeOps: { createElement(tag: string): object } } | null = null;
   const fakeGlobal = options.realm ?? {
@@ -571,29 +433,22 @@ export function createRuntime(
     FileList: FakeFileList,
     DataTransfer: FakeDataTransfer,
     requestAnimationFrame: (cb) => setTimeout(cb, 0),
-    // The windowing host (crates/vn-app/src/window.prelude.js) publishes itself
-    // on the REAL global before the app bundle evaluates, and runtime-window's
-    // tests fake it the same way. Carry it into the private world so the two
-    // stay compatible: the world is private so that each test gets its own DOM
-    // globals, not so that it is sealed off from the host.
+    // The windowing host (crates/vn-app/src/window.prelude.js) publishes itself on the real global before the
+    // bundle evaluates, and runtime-window's tests fake it the same way; carry it into the private world.
     __VN_WINDOW__: globalThis.__VN_WINDOW__,
-    // The engine classes desktop.ts builds on (its `DesktopEngine`), which the
-    // runtime hands it off its own global. bun has all five; redjs has all
-    // five too, which is the point of testing against bun's.
+    // The engine classes desktop.ts builds on (`DesktopEngine`), handed over off the runtime's own global.
     Blob: globalThis.Blob,
     DOMException: globalThis.DOMException,
     TextDecoder: globalThis.TextDecoder,
     WritableStream: globalThis.WritableStream,
     btoa: globalThis.btoa,
-    // Whatever a test says the PRELUDE put on the global before the bundle
-    // ran (window.open's A-22, say).
+    // Whatever a test says the prelude put on the global before the bundle ran.
     ...(options.globals ?? {}),
   };
 
   const permState = (name) => host.permissions.states.get(name) ?? "unsupported";
-  // The STANDARD tier, faked: `PermissionStatus` is an EventTarget whose
-  // `state` is the three-word web projection of the four-state answer, which is
-  // exactly what redjs's `PermissionState::web_state` does.
+  // The standard tier, faked: `PermissionStatus` is an EventTarget whose `state` is the three-word web
+  // projection of the four-state answer (redjs's `PermissionState::web_state`).
   const fakeNavigator = {
     permissions: {
       query({ name }) {
@@ -714,53 +569,33 @@ export function createRuntime(
     "__vn_fs_permission",
     "__vn_dialog_open",
     "__vn_download",
-    // desktop.ts's one export (see `loadInstallDesktop`).
     "installDesktop",
-    // Bound as parameters so the link path's `new MouseEvent` / `new URL` are
-    // the world's own: bun has a `URL` but no `MouseEvent`, and a test that
-    // wants the engine's "is this a MouseEvent?" check can hand one in.
+    // Bound as parameters so `new MouseEvent` / `new URL` on the link path are the world's own (bun has no `MouseEvent`).
     "MouseEvent",
     "URL",
-    // Bound as a parameter rather than left ambient so a test can hand
-    // `appPermissions` a `navigator.permissions` to re-broadcast `change` from
-    // — bun has a `navigator`, but not that.
+    // Bound as a parameter so a test can hand `appPermissions` a `navigator.permissions` to re-broadcast `change` from.
     "navigator",
     "__vn_style_accepts",
-    // canvas.ts's one export (see `loadAdoptCanvas`).
     "adoptCanvas",
-    // fonts.ts's one export (see `loadInstallFonts`).
     "installFonts",
     "__vn_set_layout_hook",
     "__vn_layout_watch",
-    // selection.ts's one export (see `loadInstallSelection`), and the host's
-    // half of the text selection (`host.selection`).
     "installSelection",
     "__vn_selection_get",
     "__vn_selection_set",
     "__vn_selection_text",
     "__vn_selection_rebase",
-    // `document.elementFromPoint` / `elementsFromPoint` (`host.hit`).
     "__vn_hit_at",
     "__vn_pointer_capture",
-    // waapi.ts's one export (see `loadInstallWaapi`), and the host's half of
-    // `el.animate()` (`host.anim`).
     "installWaapi",
     "__vn_waapi_core",
-    // `<Teleport>`, which runtime.ts makes window-aware, and what it imports
-    // from src/vnwindow.ts (see `VNWINDOW_STANDINS`).
     "Teleport",
     "VnWindow",
     "WINDOW_ROOT",
     "windowRoots",
   ];
   let nextId = 1;
-  /**
-   * The retained tree, as `crates/vn-tree/src/tree.rs` keeps it: insert is
-   * also move, remove frees the whole subtree, setElementText frees the
-   * children. Ids are not recycled here (the real host does recycle them), so
-   * an op on a freed id is recorded in `errors` instead of corrupting a
-   * neighbour: a test asserts `host.tree.errors` is empty.
-   */
+  /** The retained tree, as `crates/vn-tree/src/tree.rs` keeps it: insert is also move, remove frees the subtree, setElementText frees the children. Ids are not recycled here, so an op on a freed id is recorded in `errors` (tests assert it is empty). */
   const tree = {
     parent: new Map<number, number>(),
     children: new Map<number, number[]>(),
@@ -825,7 +660,6 @@ export function createRuntime(
       tree.detach(id);
       tree.free(id);
     },
-    /** The host's children of `id`, as tags (or `#text:data`), for assertions. */
     shape(id: number): string[] {
       return (tree.children.get(id) ?? []).map((c) =>
         tree.tag.get(c) === "#text" ? `#text:${tree.text.get(c) ?? ""}` : tree.tag.get(c)!,
@@ -900,9 +734,7 @@ export function createRuntime(
     },
     (id) => host.boundsById.get(id) ?? "",
     (id) => host.computedById.get(id) ?? "",
-    // `__vn_scroll` — the same clamp the host applies (`scroll::apply`), so a
-    // test that asserts "a write past the end lands at the end" is asserting
-    // the contract rather than the fake.
+    // `__vn_scroll`: the clamp the host applies (`scroll::apply`).
     (id, op, x, y) => {
       host.scrollCalls.push({ id, op, x, y });
       const s = host.scrollById.get(id);
@@ -921,7 +753,6 @@ export function createRuntime(
       host.intoViewCalls.push({ id, block, inline });
       return host.intoViewAnswer;
     },
-    // `__vn_focus` — the host's answer comes from `host.focus.answer`.
     (id, op) => {
       host.focus.calls.push({ id, op });
       return host.focus.answer(id, op);
@@ -951,7 +782,6 @@ export function createRuntime(
       const v = line.slice(line.indexOf("=") + 1);
       return v === "true" ? 1 : v === "false" ? 0 : Number(v);
     },
-    // ---- __vn_permissions_* ------------------------------------------------
     () => host.permissions.platform,
     (name) => (PERMISSION_NAMES.includes(name) ? permState(name) : ""),
     () =>
@@ -977,10 +807,7 @@ export function createRuntime(
     (fn) => {
       host.permissions.dispatcher = fn;
     },
-    // ---- __vn_storage_* ----------------------------------------------------
-    // The whole crate in four closures. `folders` is what
-    // `crates/vn-storage/src/folders.rs` resolves, `error` is what a rejected
-    // call answers with — the JS half's only job is to unwrap that and throw.
+    // `folders` is what crates/vn-storage/src/folders.rs resolves, `error` what a rejected call answers with.
     (kind, sub) => {
       host.storage.folderCalls.push({ kind, sub });
       const base = host.storage.folders.get(kind);
@@ -1015,11 +842,8 @@ export function createRuntime(
       host.storage.flushes++;
       return JSON.stringify({ wrote });
     },
-    // ---- __vn_devtools_* ---------------------------------------------------
-    // `state` is the reader, `set_enabled` returns the SETTLED state (or
-    // `{error}` when the environment holds the switch), `open` is programmatic
-    // F12. The Rust side is `devtools::{state_json, set_enabled}` +
-    // `inspector::open_for_window`.
+    // `state` is the reader, `set_enabled` returns the settled state (or `{error}` when the environment holds the
+    // switch), `open` is programmatic F12.
     () => JSON.stringify(devtoolsState()),
     (on) => {
       host.devtools.setCalls.push(on);
@@ -1038,7 +862,6 @@ export function createRuntime(
       host.devtools.inspectors++;
       return JSON.stringify({ opened: true, window: 4294967297 });
     },
-    // ---- __vn_desktop_* / __vn_shell_* --------------------------------------
     (fn) => {
       host.desktop.dispatcher = fn;
     },
@@ -1053,8 +876,7 @@ export function createRuntime(
     (path) => shellCall("showItem", path),
     (path) => shellCall("trash", path),
     () => JSON.stringify(host.desktop.launch),
-    // The registry, faked as scheme -> owner id. `launch/protocol_win.rs` is
-    // the real one (and its unit tests run against a scratch HKCU subtree).
+    // The registry, faked as scheme -> owner id (launch/protocol_win.rs is the real one).
     (scheme) => {
       const s = String(scheme).toLowerCase();
       if (!/^[a-z][a-z0-9+.-]{0,62}$/.test(s) || ["http", "https", "file", "mailto"].includes(s) || s.startsWith("ms-")) {
@@ -1070,7 +892,6 @@ export function createRuntime(
     (scheme) => host.desktop.protocols.get(String(scheme).toLowerCase()) === "test" &&
       host.desktop.protocols.delete(String(scheme).toLowerCase()),
     (scheme) => host.desktop.protocols.get(String(scheme).toLowerCase()) === "test",
-    // ---- __vn_fs_* / __vn_dialog_open / __vn_download (see `fsCall`) ---------
     (fn) => {
       host.desktop.fs.factory = fn;
     },
@@ -1106,9 +927,8 @@ export function createRuntime(
     options.MouseEvent ?? globalThis.MouseEvent,
     globalThis.URL,
     options.navigator ?? fakeNavigator,
-    // `__vn_style_accepts` — the fake engine accepts every declaration except
-    // the `"prop: value"` strings in `host.styleRejects`. `styleAccepts:
-    // false` makes it absent, which is an older host.
+    // `__vn_style_accepts`: the fake accepts every declaration except the `"prop: value"` strings in
+    // `host.styleRejects`; `styleAccepts: false` makes it absent (an older host).
     options.styleAccepts === false
       ? undefined
       : (key, value) => {
@@ -1117,8 +937,7 @@ export function createRuntime(
         },
     loadAdoptCanvas(),
     loadInstallFonts(),
-    // `__vn_set_layout_hook` / `__vn_layout_watch`. `layoutWatch: false` makes
-    // them absent, which is an older host: the runtime's rAF fallback.
+    // `layoutWatch: false` makes `__vn_set_layout_hook` / `__vn_layout_watch` absent (an older host: the rAF fallback).
     options.layoutWatch === false
       ? undefined
       : (fn: (op: number) => number) => {
@@ -1132,10 +951,8 @@ export function createRuntime(
           host.layout.watches++;
         },
     loadInstallSelection(),
-    // The selection, faked at the seam (crates/vn-tree/src/selection.rs owns
-    // the real one): `host.selection.sel` is `[anchor, offset, own, focus,
-    // offset, own]` or null; a set naming a node the fake tree does not hold
-    // empties it, as the host's does. `text` is what `toString()` answers.
+    // The selection, faked at the seam: `host.selection.sel` is `[anchor, offset, own, focus, offset, own]` or null;
+    // a set naming a node the fake tree does not hold empties it, as the host does.
     () => (host.selection.sel ? host.selection.sel.join(",") : ""),
     (a: number, ao: number, f: number, fo: number) => {
       host.selection.sets.push([a, ao, f, fo]);

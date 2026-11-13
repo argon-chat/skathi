@@ -1,14 +1,3 @@
-// `em` against the element's own computed font size, on the real host
-// (crates/vn-css README, divergence 7).
-//
-//   bun test packages/vn-test/specs/em.spec.ts
-//
-// CSS Values 4 §6.1.1: `em` in `font-size` is of the parent's computed size,
-// and everywhere else of the element's own. vn-css used to flatten every em to
-// the root's size when the sheet compiled, so a `padding: .5em` on 9px text
-// padded 7px under Argon's 14px root, where a browser pads 4.5px. Each test
-// reads one block of fixtures/em back as boxes.
-
 import { afterAll, describe, expect, test } from "bun:test";
 import { launch } from "../src/index";
 
@@ -23,8 +12,6 @@ const T = 30_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type Box = { x: number; y: number; w: number; h: number; fontSize: string };
-/** Within the layout's whole-pixel rounding. The root-em values these
- *  replaced are several px away (a 7px pad for 4.5, 220px for 157.5). */
 const near = (got: number, want: number) => expect(Math.abs(got - want)).toBeLessThanOrEqual(1);
 const boxes = async (): Promise<Record<string, Box>> => JSON.parse(await app.eval(`JSON.stringify(__VN_TEST_EM__.boxes())`));
 
@@ -33,7 +20,6 @@ describe("em", () => {
     await sleep(300);
     const b = await boxes();
     expect(b.chip!.fontSize).toBe("9px");
-    // `padding: .5em 1em`, two `2em × 1em` children, `gap: 1em`.
     near(b["chip-a"]!.w, 18);
     near(b["chip-a"]!.h, 9);
     near(b["chip-a"]!.x - b.chip!.x, 9);
@@ -81,7 +67,6 @@ describe("em", () => {
       await sleep(100);
       hovered = (await boxes()).hov!;
     }
-    // `padding: 1em` under the hovered 20px.
     near(hovered.w, 41);
     near(hovered.h, 41);
     await hov.unhover();

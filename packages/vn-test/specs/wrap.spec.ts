@@ -1,22 +1,3 @@
-// Long unbroken tokens (URLs, hashes, "aaaa…") against `overflow-wrap`,
-// `word-break`, `hyphens` and `white-space` (CSS Text 3 §5, §6), on the real
-// host.
-//
-//   bun test packages/vn-test/specs/wrap.spec.ts
-//
-// gpui's wrapper used to break inside any word that did not fit, and vn-css
-// mapped none of these properties. Text that may not break inside a word now
-// overflows its line, as in a browser, and text that may (Argon's bubbles
-// are `break-words`, its links `[overflow-wrap:anywhere]`) breaks there.
-// The narrow column's link also needs the container fix in vendor/taffy: a
-// row in a column that does not stretch it is fit-content, so it shrinks to
-// the column instead of staying as wide as the link's one line.
-//
-// Lines are counted from heights: the 120px boxes have a 20px line height.
-// The expectations follow CSS Text 3; the two places where Chromium's own
-// layout decides (a bubble whose word may not break holds its row open, a
-// break-word item keeps its whole word as min-content) are noted where read.
-
 import { afterAll, describe, expect, test } from "bun:test";
 import { launch } from "../src/index";
 
@@ -45,12 +26,10 @@ describe("long tokens in Argon's message bubble", () => {
   test("a link in a narrow column wraps inside the column", async () => {
     const b = await boxes();
     const column = b.narrow!;
-    // The column is 260px, 216px of it beside the avatar.
     expect(b["body-n-url"]!.w).toBe(216);
     for (const id of ["rb-n-url", "bw-n-url", "b-n-url"]) {
       expect(b[id]!.right).toBeLessThanOrEqual(column.right);
     }
-    // The link is broken over lines of the bubble's content box (12px pads).
     expect(b["u-n-url"]!.w).toBeLessThanOrEqual(216 - 24);
     expect(b["u-n-url"]!.h).toBeGreaterThan(b["u-url"]!.h);
   }, T);
@@ -61,16 +40,11 @@ describe("long tokens in Argon's message bubble", () => {
       expect(b[`b-${id}`]!.w).toBeLessThanOrEqual(520);
       expect(b[`t-${id}`]!.w).toBeLessThanOrEqual(496);
     }
-    // `break-word` broke the 160 letters over several lines rather than
-    // running them out of the bubble.
     expect(b["t-plain"]!.h).toBeGreaterThan(40);
     expect(b["t-hash"]!.h).toBeGreaterThan(20);
   }, T);
 
   test("a word that may not break lower than its bubble's max-width holds the row open", async () => {
-    // `break-word` breaks the word but does not lower min-content (CSS Text 3
-    // §5.5), so the bubble's minimum is its 520px max-width, past the 216px
-    // body. Chromium lays it out the same way.
     const b = await boxes();
     expect(b["body-n-plain"]!.w).toBe(216);
     expect(b["b-n-plain"]!.w).toBe(520);
@@ -84,14 +58,11 @@ describe("one property each, in 120px", () => {
     expect(lines(b["x-normal"]!)).toBe(1);
     expect(lines(b["x-break-word"]!)).toBe(3);
     expect(lines(b["x-anywhere"]!)).toBe(3);
-    // The legacy `word-break: break-word` is `overflow-wrap: anywhere`.
     expect(lines(b["x-legacy"]!)).toBe(3);
   }, T);
 
   test("word-break: break-all fills each line; keep-all keeps CJK together", async () => {
     const b = await boxes();
-    // Two of the three words pass 120px: one a line normally, two lines when
-    // the break can fall between any letters.
     expect(lines(b["x-normal-words"]!)).toBe(3);
     expect(lines(b["x-break-all"]!)).toBe(2);
     expect(lines(b["x-cjk"]!)).toBe(2);
@@ -116,7 +87,6 @@ describe("one property each, in 120px", () => {
     const b = await boxes();
     expect(b["mc-anywhere"]!.w).toBe(120);
     expect(lines(b["mc-anywhere"]!)).toBeGreaterThan(1);
-    // As in Chromium: the item's automatic minimum is its whole word.
     expect(b["mc-break-word"]!.w).toBeGreaterThan(120);
     expect(lines(b["mc-break-word"]!)).toBe(1);
   }, T);
@@ -165,7 +135,6 @@ describe("selection across breaks inside a word", () => {
     await sleep(120);
     const s = await selected();
     expect(s).toMatch(/^a+$/);
-    // The first line holds 16 letters at this font; half of the second, 8.
     expect(s.length).toBeGreaterThan(16);
     expect(s.length).toBeLessThan(32);
   }, T);

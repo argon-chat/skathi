@@ -1,19 +1,3 @@
-// A fixture for packages/vn-test/specs/select.spec.ts (docs/RUNTIME.md §5.28):
-// the native `<select>`.
-//
-// * `#model` is the Argon client's settings select: `v-model.number` over
-//   numeric `:value`s. Its events land in `window.log`, its model in `#out`.
-// * `#flat` is the same box with `appearance: none`.
-// * `#groups` has an optgroup and a disabled option.
-// * `#guarded` cancels its `mousedown` (it must not open) and its ArrowDown
-//   `keydown` (it must not change).
-// * `#far` sits at the bottom of the window: its popup opens above it.
-// * `#long` sits there too, with 40 options: its popup is capped to the
-//   room above it, and scrolls.
-// * `#behind` is a button below `#model`'s popup, counting its clicks: a
-//   press on it while the popup is open only closes the popup.
-//
-// Render functions and a `.css` import, as in `layout` (see ../README.md).
 import { createApp, h, ref, vModelSelect, withDirectives } from "vue-native";
 import "./select.css";
 

@@ -1,17 +1,9 @@
-//! The Windows shell calls, on the `vn-shell` STA thread (mod.rs).
+//! The Windows shell calls, on the `vn-shell` STA thread.
 //!
-//! * open — `ShellExecuteExW("open")` with `SEE_MASK_NOASYNC` (the flag for a
-//!   thread that does not run a message loop between calls) and
-//!   `SEE_MASK_FLAG_NO_UI`, so "nothing is associated with .xyz" comes back as
-//!   `ERROR_NO_ASSOCIATION` instead of a modal "How do you want to open this?"
-//!   the app never asked for (design §5.2);
-//! * reveal — gpui's `open_target_in_explorer`, error-returning, with the pidls
-//!   freed (gpui leaks both);
-//! * trash — `IFileOperation` with `FOFX_RECYCLEONDELETE`, plus a progress sink
-//!   whose `PreDeleteItem` VETOES any delete the engine could not route through
-//!   the Recycle Bin (a drive without one, a file too large for it). That is
-//!   Chromium/Electron's `DeleteFileProgressSink`: "trash" must never quietly
-//!   become a permanent delete.
+//! Open uses `ShellExecuteExW` with `SEE_MASK_FLAG_NO_UI`, so "nothing is associated" returns
+//! `ERROR_NO_ASSOCIATION` instead of a modal dialog. Trash uses `IFileOperation` with a progress sink
+//! whose `PreDeleteItem` vetoes any delete not routed through the Recycle Bin, so "trash" never
+//! quietly becomes a permanent delete.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -34,19 +26,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::Fail;
 
-/// The shell thread is a COM single-threaded apartment — what the shell's own
-/// objects (`IFileOperation`, the folder views `SHOpenFolderAndSelectItems`
-/// talks to) are written for. `DISABLE_OLE1DDE` is what `ShellExecuteEx`'s
-/// documentation asks of a caller.
+/// A COM single-threaded apartment, which `IFileOperation` and the folder views want.
+/// `DISABLE_OLE1DDE` is what `ShellExecuteEx` asks of a caller.
 pub fn thread_init() {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     }
 }
 
-/// An STA owes its message queue a pump. The thread blocks on its job channel
-/// between calls, so it drains whatever the last call posted before it waits
-/// again.
+/// An STA owes its message queue a pump: drain what the last call posted before blocking again.
 fn drain_messages() {
     unsafe {
         let mut msg = MSG::default();
@@ -57,9 +45,8 @@ fn drain_messages() {
     }
 }
 
-/// What the shell's parsers take: `\\?\C:\x` → `C:\x`, `\\?\UNC\s\x` → `\\s\x`.
-/// `IShellItem` parsing and pidl creation do not understand the long-path
-/// prefix, and the shell has its own long-path handling past it.
+/// `\\?\C:\x` → `C:\x`, `\\?\UNC\s\x` → `\\s\x`: `IShellItem` parsing and pidls do not understand
+/// the long-path prefix.
 fn shell_path(p: &Path) -> HSTRING {
     let s = p.as_os_str().to_string_lossy();
     let s = if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
@@ -72,8 +59,7 @@ fn shell_path(p: &Path) -> HSTRING {
     HSTRING::from(s)
 }
 
-/// The Win32 code inside an `HRESULT_FROM_WIN32`, or a bare small code (the
-/// shell is not consistent about which it returns).
+/// The Win32 code inside an `HRESULT_FROM_WIN32`, or a bare small code (the shell is inconsistent).
 fn win32_of(hr: HRESULT) -> Option<u32> {
     let v = hr.0 as u32;
     if v & 0xFFFF_0000 == 0x8007_0000 {
@@ -85,7 +71,6 @@ fn win32_of(hr: HRESULT) -> Option<u32> {
     }
 }
 
-/// A Windows failure → the rejection the app sees (design §3.3).
 fn fail(verb: &str, target: &str, err: &windows::core::Error) -> Fail {
     let hr = err.code();
     let os = win32_of(hr);
@@ -138,14 +123,12 @@ pub fn open_external(url: &str) -> Result<(), Fail> {
 }
 
 pub fn open_path(path: &Path) -> Result<(), Fail> {
-    // The document's own folder as the working directory — what Explorer does
-    // on a double-click, and what an app that resolves relative names expects.
+    // The document's own folder as cwd, as Explorer does.
     let dir = path.parent().map(shell_path);
     shell_execute(&shell_path(path), dir.as_ref())
         .map_err(|e| fail("openPath", &path.display().to_string(), &e))
 }
 
-/// An absolute pidl, freed on drop.
 struct Pidl(*mut windows::Win32::UI::Shell::Common::ITEMIDLIST);
 
 impl Pidl {
@@ -184,9 +167,8 @@ pub fn show_item(path: &Path) -> Result<(), Fail> {
     drain_messages();
     match r {
         Ok(()) => Ok(()),
-        // gpui's (and Chromium's) observation: on some systems this fails with
-        // "file not found" although the file is there; opening the folder still
-        // works, it just cannot select. Both encodings of the code are seen.
+        // On some systems this fails with "file not found" although the file exists; opening the
+        // folder still works, it just cannot select. Both encodings of the code occur.
         Err(e) if win32_of(e.code()) == Some(ERROR_FILE_NOT_FOUND.0) => {
             shell_execute(&shell_path(parent), None).map_err(|e| fail("showItemInFolder", &target, &e))
         }
@@ -194,8 +176,7 @@ pub fn show_item(path: &Path) -> Result<(), Fail> {
     }
 }
 
-/// Vetoes any delete that would not go to the Recycle Bin, and remembers the
-/// first failure the engine reports for an item.
+/// Vetoes any delete that would not go to the Recycle Bin and remembers the first failure.
 #[implement(IFileOperationProgressSink)]
 struct TrashSink {
     vetoed: Arc<AtomicBool>,
@@ -322,11 +303,8 @@ mod tests {
         assert_eq!((f.name, f.code), ("NotFoundError", Some("ENOASSOC")));
     }
 
-    /// Moves a real scratch file to the Recycle Bin and checks it left. Not in
-    /// the default run: it adds an entry to the user's Recycle Bin, which the
-    /// test then has to find and purge (`$I…`/`$R…` under
-    /// `<drive>\$Recycle.Bin\<SID>`). Run with
-    /// `cargo test -p vn-desktop -- --ignored trash_moves`.
+    /// Not in the default run: it leaves an entry in the user's Recycle Bin that the test must
+    /// purge. Run with `cargo test -p vn-desktop -- --ignored trash_moves`.
     #[test]
     #[ignore]
     fn trash_moves_a_file_to_the_recycle_bin() {
@@ -339,8 +317,7 @@ mod tests {
         trash(&file).expect("trash");
         assert!(!file.exists(), "the file is gone from its folder");
         let _ = std::fs::remove_dir(&dir);
-        // Purge it from the bin again: the `$R` file whose bytes are our marker,
-        // and the `$I` record beside it.
+        // Purge the `$R` file holding our marker and the `$I` record beside it.
         let drive = file.to_string_lossy()[..2].to_string();
         let bin = Path::new(&format!(r"{drive}\")).join("$Recycle.Bin");
         let mut purged = false;

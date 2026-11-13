@@ -1,37 +1,27 @@
-// Where `vn build` gets the prebuilt BARE host it stamps.
+// Where `vn build` gets the prebuilt bare host it stamps.
 //
-// A bare host is `cargo build --release -p vn-app --features prod` (or
-// `prod,no-devtools`): the whole engine, no app. It is built once per
-// vue-native version and VARIANT, never per app — the app arrives later as a
-// payload (research/reports/m25/packaging-design.md §4.9). A variant names the
-// engine parts left out (config.ts `OPTIONAL`): `no-audio` is
-// `--no-default-features --features prod,clipboard,storages,indexeddb,webgpu`.
+// A bare host is `cargo build --release -p vn-app --features prod` (or `prod,no-devtools`): the whole engine,
+// no app. It is built once per vue-native version and variant, never per app. A variant names the engine
+// parts left out (config.ts `OPTIONAL`): `no-audio` is `--no-default-features --features
+// prod,clipboard,storages,indexeddb,webgpu`.
 //
 // Resolution, first hit wins:
 //   1. `--host <exe>` or `VN_HOST`;
-//   2. IN-REPO: target/x86_64-pc-windows-msvc/release/vn-app.exe, when this CLI
-//      runs from a vue-native checkout and that exe says it is a prod host of
-//      the requested variant and of THIS version;
-//   3. the local cache, %LOCALAPPDATA%\vue-native\hosts\<version>\<variant>\,
-//      filled by `vn host add <exe>` (or `vn host build`, in a checkout);
+//   2. in-repo: target/x86_64-pc-windows-msvc/release/vn-app.exe, when this CLI runs from a checkout and
+//      that exe is a prod host of the requested variant and of this version;
+//   3. the local cache, %LOCALAPPDATA%\vue-native\hosts\<version>\<variant>\, filled by `vn host add <exe>`
+//      (or `vn host build`, in a checkout);
 //   4. otherwise an error naming the three.
+// On macOS the paths are target/<arch>-apple-darwin/release/vn-app and ~/Library/Caches/vue-native/hosts/
+// (platform.ts).
 //
-// Those are the Windows paths; on macOS they are target/<arch>-apple-darwin/
-// release/vn-app and ~/Library/Caches/vue-native/hosts/ (platform.ts).
+// A host for another OS cannot be run to ask what it is, so only `--host` / `VN_HOST` names one, its format
+// is sniffed, and what it is comes from a `host.json` beside it (the cache writes one) or is taken on
+// trust, with a warning.
 //
-// A host for ANOTHER OS (`vn build --platform macos` on Windows) cannot be run
-// to ask it what it is, so only `--host` / `VN_HOST` names one, its format is
-// sniffed instead, and what it is comes from a `host.json` beside it (the
-// cache writes one) or is taken on trust — with a warning that says so.
-//
-// Fetching a host from a release channel is deliberately not here: where hosts
-// are published is an open owner decision (design Q1, deferred with
-// distribution). Nothing in this file uploads or downloads anything.
-//
-// Version coupling: the bundle carries `src/runtime.ts`, the JS half of the
-// `__vn_*` host protocol, so a host and a bundle must come from the same
-// vue-native version. The CLI refuses a host whose `--vn-host-info` disagrees
-// (`--allow-host-mismatch` exists for maintainers).
+// Nothing here uploads or downloads a host. A host and a bundle must come from the same vue-native version
+// (the bundle carries the JS half of the `__vn_*` protocol): the CLI refuses a host whose `--vn-host-info`
+// disagrees (`--allow-host-mismatch` is for maintainers).
 
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -46,7 +36,6 @@ import { PAYLOAD_NAME } from "./stamp";
 export const PKG_DIR = resolve(import.meta.dir, "..");
 export const CLI_VERSION: string = JSON.parse(readFileSync(join(PKG_DIR, "package.json"), "utf8")).version;
 
-/** The checkout this CLI lives in, or `null` when it runs from somewhere else. */
 export const REPO_ROOT: string | null = (() => {
   const root = resolve(PKG_DIR, "../..");
   return existsSync(join(root, "Cargo.toml")) && existsSync(join(root, "crates", "vn-app")) ? root : null;
@@ -71,20 +60,13 @@ export interface ResolvedHost {
   exe: string;
   info: HostInfo;
   source: "--host" | "VN_HOST" | "repo" | "cache";
-  /**
-   * Why `info` is not the host's own answer to `--vn-host-info` — set only for
-   * a host of another OS, which cannot be run here.
-   */
+  /** Why `info` is not the host's own answer to `--vn-host-info`: set only for a host of another OS. */
   unverified?: string;
 }
 
 export class HostError extends Error {}
 
-/**
- * True when `exe` already carries an app — asking it for host info would
- * launch that app. On Windows the app is a stamped resource; on macOS it is
- * `Contents/Resources/app.vnpk` of the `.app` the executable sits in.
- */
+/** True when `exe` already carries an app (asking it for host info would launch it): a stamped resource on Windows, `Contents/Resources/app.vnpk` on macOS. */
 export function isStamped(exe: string): boolean {
   const bundled = bundlePayloadPath(exe);
   if (bundled && existsSync(bundled)) return true;
@@ -104,10 +86,7 @@ function formatProblem(exe: string, platform: Platform): string | null {
   return null;
 }
 
-/**
- * What a host of another OS is, without running it: the `host.json` the cache
- * keeps beside it, else the request taken on trust.
- */
+/** What a host of another OS is, without running it: the `host.json` the cache keeps beside it, else the request taken on trust. */
 export function crossHostInfo(exe: string, variant: Variant, platform: Platform): { info: HostInfo; unverified: string } {
   const problem = formatProblem(exe, platform);
   if (problem) throw new HostError(problem);
@@ -222,7 +201,6 @@ export interface ResolveOptions {
   host?: string;
   variant: Variant;
   allowMismatch?: boolean;
-  /** The OS the host is for. Default: this one. */
   platform?: Platform;
   log?: (line: string) => void;
 }
@@ -304,7 +282,6 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
   );
 }
 
-/** Imports a verified host into the cache. Returns its cached path. */
 export function addHost(exe: string, log: (line: string) => void = () => {}): { path: string; info: HostInfo } {
   const src = resolve(exe);
   const info = hostInfo(src);
@@ -332,11 +309,7 @@ function cargo(): string {
   throw new HostError("cargo is not on PATH — building a host needs the Rust toolchain (vn build does not)");
 }
 
-/**
- * MAINTAINERS ONLY, and only in a checkout: builds the bare host for `variant`
- * and imports it into the cache. Both variants are the same output path in
- * `target/`, which is why each one is copied out as soon as it exists.
- */
+/** MAINTAINERS ONLY, in a checkout: builds the bare host for `variant` and imports it into the cache. Variants share one output path in `target/`, so each is copied out as soon as it exists. */
 export function buildHost(variant: Variant, log: (line: string) => void = console.log): { path: string; info: HostInfo; ms: number } {
   if (!REPO_ROOT || !REPO_RELEASE_EXE) {
     throw new HostError("vn host build runs from a vue-native checkout; elsewhere, use vn host add <exe>");

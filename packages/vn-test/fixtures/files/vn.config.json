@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/files.spec.ts: <input type=file>, the File System Access pickers, FileReader and <a download> on the real host, under VN_DIALOGS=scripted (m25 desktop track C). See ../README.md.",
-
   "name": "vn-test-files",
 
   "window": {

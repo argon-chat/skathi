@@ -1,4 +1,4 @@
-// The macOS side of `vn build`: a copy of the host becomes ONE app's `.app`.
+// The macOS side of `vn build`: a copy of the host becomes one app's `.app`.
 //
 //   <exeName>.app/
 //     Contents/
@@ -8,29 +8,19 @@
 //       Resources/app.vnpk      the payload — crates/vn-app/src/payload.rs `bundled`
 //       Resources/AppIcon.icns  when the app has an icon
 //
-// Nothing is written INTO the Mach-O: that would break the host's signature,
-// and a file in the bundle is covered by the bundle's signature anyway, so it
-// is as tamper-evident as the stamped resource is on Windows. The bundle is
-// assembled as `<out>.partial` and renamed over `<out>`, like stamp.ts.
+// Nothing is written into the Mach-O (it would break the host's signature); the payload is a file in
+// the bundle, covered by the bundle's signature. The bundle is assembled as `<out>.partial` and renamed
+// over `<out>`, like stamp.ts.
 //
-// Signing (`codesign`) runs only on macOS. Without an identity the bundle is
-// signed ad hoc, which Apple Silicon needs before it runs a binary whose
-// bundle changed around it; with one it is signed for distribution: hardened
-// runtime, a secure timestamp, and the entitlements JSC's JIT and the
-// microphone and camera need (docs/MACOS.md §4). Notarisation is the author's
-// step (docs/PACKAGING.md §10).
-//
-// Pure TS and platform-free apart from `codesign`, so the layout, the plist and
-// the icns are built — and tested — on Windows too.
+// `codesign` runs only on macOS: ad hoc without an identity (Apple Silicon needs it), otherwise hardened
+// runtime, a secure timestamp and the entitlements JSC's JIT and the microphone and camera need.
+// Notarisation is the author's step. The rest is platform-free, so layout, plist and icns are tested on
+// Windows.
 
 import { spawnSync } from "node:child_process";
 import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { decodePng, encodePng, isPng, parseIco, resizeRgba } from "./icon";
-
-// ---------------------------------------------------------------------------
-// property lists
-// ---------------------------------------------------------------------------
 
 export type PlistValue = string | number | boolean | PlistValue[] | { [key: string]: PlistValue };
 
@@ -139,11 +129,7 @@ export function infoPlist(m: MacInfo): { [key: string]: PlistValue } {
   return d;
 }
 
-/**
- * The hardened runtime's entitlements: JSC's JIT always (it maps MAP_JIT
- * pages and flips them with `pthread_jit_write_protect_np`), the microphone
- * and camera when the app says why it wants them.
- */
+/** The hardened runtime's entitlements: JSC's JIT always (MAP_JIT pages), the microphone and camera when the app says why. */
 export function entitlements(m: Pick<MacInfo, "microphoneUsageDescription" | "cameraUsageDescription">): { [key: string]: PlistValue } {
   const d: { [key: string]: PlistValue } = { "com.apple.security.cs.allow-jit": true };
   if (m.microphoneUsageDescription) d["com.apple.security.device.audio-input"] = true;
@@ -151,9 +137,6 @@ export function entitlements(m: Pick<MacInfo, "microphoneUsageDescription" | "ca
   return d;
 }
 
-// ---------------------------------------------------------------------------
-// icns
-// ---------------------------------------------------------------------------
 //
 //   "icns"  u32be total length
 //   then entries: OSType(4)  u32be length (incl. these 8 bytes)  data
@@ -276,10 +259,6 @@ export function icnsFrom(path: string): Icns {
   return icnsFromPng(sourcePng(path, bytes), path);
 }
 
-// ---------------------------------------------------------------------------
-// Mach-O and the bundle's shape
-// ---------------------------------------------------------------------------
-
 const CPU: Record<number, string> = { 0x0100000c: "arm64", 0x01000007: "x86_64", 0x0000000c: "arm", 0x00000007: "i386" };
 
 /** The architectures in a Mach-O (thin or universal), or null when `path` is not one. */
@@ -316,10 +295,7 @@ export function machOArchs(path: string): string[] | null {
   return null;
 }
 
-/**
- * Where an executable inside `*.app/Contents/MacOS/` finds its payload —
- * crates/vn-app/src/payload.rs `bundle_payload_path`, the same rule.
- */
+/** Where an executable inside `*.app/Contents/MacOS/` finds its payload: the same rule as crates/vn-app/src/payload.rs `bundle_payload_path`. */
 export function bundlePayloadPath(exe: string): string | null {
   const macos = dirname(exe);
   const contents = dirname(macos);
@@ -333,16 +309,13 @@ export const PAYLOAD_FILE = "app.vnpk";
 export const ICON_NAME = "AppIcon";
 
 export interface AppBundleOptions {
-  /** The bare macOS host to copy. */
   host: string;
   /** `<dir>/<Name>.app`. Written as `<out>.partial`, then renamed. */
   out: string;
   /** The file name in `Contents/MacOS`, which Info.plist's CFBundleExecutable must name. */
   executable: string;
   payload: Uint8Array;
-  /** `Contents/Resources/AppIcon.icns`; none when null. */
   icns?: Uint8Array | null;
-  /** The Info.plist text ({@link plistXml}). */
   infoPlist: string;
   log?: (line: string) => void;
 }
@@ -351,7 +324,6 @@ export interface AppBundleResult {
   app: string;
   /** `<app>/Contents/MacOS/<executable>` — what `vn run` starts. */
   executable: string;
-  /** Every file in the bundle together. */
   bytes: number;
   payloadBytes: number;
   iconBytes: number;
@@ -406,10 +378,6 @@ export function writeAppBundle(options: AppBundleOptions): AppBundleResult {
     if (!done) rmSync(partial, { recursive: true, force: true });
   }
 }
-
-// ---------------------------------------------------------------------------
-// codesign
-// ---------------------------------------------------------------------------
 
 /** `-` is ad hoc: no certificate, no hardened runtime, nothing to notarise. */
 export const AD_HOC = "-";

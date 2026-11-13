@@ -1,7 +1,4 @@
-// `el.attributes` (a live NamedNodeMap), `Attr` nodes and the attribute
-// methods around them (DOM §4.9; src/runtime.ts "`el.attributes`, `Attr`
-// nodes"). Until this, `el.attributes` was undefined on every element, so
-// `[...el.attributes]` threw in any library that walks attributes.
+// `el.attributes` (a live NamedNodeMap), `Attr` nodes and the attribute methods around them.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";

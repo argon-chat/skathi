@@ -1,14 +1,3 @@
-// `<lottie>` loaded and drawn off the UI thread (crates/vn-tree/src/lottie.rs,
-// crates/vn-lottie/CONTRACT.md §8.10), in a real host:
-//
-//   bun test packages/vn-test/specs/lottie.spec.ts
-//
-// `fixtures/lottie` lays `<lottie>`s out on white. Its `steps.json` is red for
-// the first second of its loop, green for the second and blue for the third,
-// so one pixel says which second is on screen; `half.json` is a still black
-// square at 50%. The screen is read back with `print_window`, what the window
-// last presented.
-
 import { afterAll, expect, test } from "bun:test";
 import { launch, readPng, type Bounds } from "../src/index";
 
@@ -19,7 +8,6 @@ const app = await launch({
   label: "lottie",
 });
 
-// A loopback server: `<lottie>` takes an http(s) src now.
 const steps = await Bun.file(new URL("../fixtures/lottie/src/steps.json", import.meta.url)).text();
 const server = Bun.serve({
   hostname: "127.0.0.1",
@@ -45,7 +33,6 @@ async function box(selector: string): Promise<Bounds> {
   return b;
 }
 
-/** The centre pixel of each box, from ONE screenshot. */
 async function centres(boxes: Bounds[]): Promise<Rgb[]> {
   const shot = readPng(await app.screenshot(undefined, "print_window"));
   const k = shot.width / W;
@@ -86,7 +73,6 @@ test("a playing <lottie> moves through its loop, by presents and not builds", as
   console.log(`[lottie] 1 s: ${z.presents - a.presents} presents, ${z.builds - a.builds} builds, ${f1 - f0} enterFrame`);
   expect(z.presents - a.presents).toBeGreaterThanOrEqual(10);
   expect(z.builds - a.builds).toBeLessThanOrEqual(1);
-  // enterFrame follows the transport, every tick it moves.
   expect(f1 - f0).toBeGreaterThanOrEqual(20);
 }, T);
 
@@ -94,10 +80,7 @@ test("loop=\"1\" plays twice, then completes: one loopComplete, one complete", a
   await until("complete:count", async () => (await events()).some((e) => e.startsWith("complete:count")), 10_000);
   await sleep(300);
   const mine = (await events()).filter((e) => e.includes(":count"));
-  // lottie-web's stream (CONTRACT.md §8.2, §8.3): loopComplete ×n, then
-  // complete, whose `loops` is the playCount.
   expect(mine).toEqual(["loopComplete:count:1", "complete:count:1"]);
-  // It holds its last frame.
   expect(step((await centres([await box("#count")]))[0]!)).toBe("b");
 }, T);
 

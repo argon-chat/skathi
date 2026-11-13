@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/clipboard.spec.ts: copy / cut / paste ClipboardEvents from real keystrokes (m26 fixes). See ../README.md.",
-
   "name": "vn-test-clipboard",
 
   "window": {

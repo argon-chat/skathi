@@ -1,22 +1,7 @@
-//! `mem` on macOS: the reply `mem.rs` gives on Windows (read its doc for the
-//! sections and the three kinds of number), read through Mach instead of
-//! kernel32. The breakdown's basis is the task's **physical footprint** —
-//! Activity Monitor's "Memory" — rather than a commit charge macOS does not
-//! have; `mem_fold.rs` says how regions become categories that sum to it.
-//!
-//! * **measured by the OS**: `task_info(TASK_VM_INFO)` (footprint, resident,
-//!   internal / external, compressed, the graphics ledger), a walk of every VM
-//!   region with `mach_vm_region_recurse` into the shared-region submap (each
-//!   region's tag, share mode and resident / dirty / compressed / reusable
-//!   page counts; `proc_regionfilename` names a file-backed one), the threads
-//!   (`task_threads`; a pthread's name and stack range), and the malloc zones'
-//!   own summary (`malloc_zone_statistics`);
-//! * **counted by an allocator** and **computed from live structures**: the
-//!   same as on Windows (`mem_common.rs`).
-//!
-//! `regions` adds what the walk already has: the resident bytes per category
-//! and the largest untagged regions. It walks nothing extra — every page count
-//! comes with the region — so on macOS it costs no more than the plain reply.
+//! `mem` on macOS: the reply `mem.rs` gives on Windows, read through Mach. The
+//! breakdown sums to the task's physical footprint; `mem_fold.rs` turns regions
+//! into categories. `regions` adds resident bytes per category and the largest
+//! untagged regions at no extra cost (the walk already has them).
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, c_int, c_long, c_void, CStr};
@@ -43,60 +28,34 @@ use super::mem_common::{
 use super::mem_fold::{self, classify, stack_slice, tag, thread_group, Backing, Cat, Fold, Region};
 use crate::json::Json;
 
-// ---------------------------------------------------------------------------
-// the SDK's layouts
-// ---------------------------------------------------------------------------
-//
-// mach2 declares both `#[repr(C, packed(4))]`, as the headers' `#pragma
-// pack(4)` does; the sizes are pinned here so a crate update that drifts from
-// the SDK fails the build instead of reading the wrong field.
-//
-// `vm_region_submap_info_64` (mach/vm_region.h): protection, max_protection,
-// inheritance, offset, user_tag, pages_resident, pages_shared_now_private,
-// pages_swapped_out, pages_dirtied, ref_count, shadow_depth, external_pager,
-// share_mode, is_submap, behavior, object_id, user_wired_count, flags,
-// pages_reusable, object_id_full — 76 bytes, VM_REGION_SUBMAP_INFO_V2_COUNT_64
-// = 19 natural_t.
+// mach2 declares both structs `#[repr(C, packed(4))]` like the headers; the
+// sizes are pinned so a crate update that drifts from the SDK fails the build
+// instead of reading the wrong field.
 const _: () = assert!(size_of::<vm_region_submap_info_64>() == 76);
-// `task_vm_info` (mach/task_info.h, rev 7): virtual_size, region_count,
-// page_size, resident_size(_peak), device(_peak), internal(_peak),
-// external(_peak), reusable(_peak), purgeable_volatile_{pmap,resident,virtual},
-// compressed(_peak, _lifetime), phys_footprint (rev 1), min/max_address
-// (rev 2), 21 ledger_* (rev 3), limit_bytes_remaining (4), decompressions (5),
-// ledger_swapins (6), ledger_tag_neural_nofootprint_{total,peak} (7) — 372
-// bytes, TASK_VM_INFO_COUNT = 93 natural_t.
 const _: () = assert!(size_of::<task_vm_info>() == 372);
 
 extern "C" {
-    /// mimalloc's options (`mi_option_get`); [`MI_OPTION_OS_TAG`] is the VM
-    /// tag it puts on its OS memory.
     fn mi_option_get(option: c_int) -> c_long;
     /// libdyld (macOS 10.15+): where the dyld shared cache is mapped.
     fn _dyld_get_shared_cache_range(length: *mut usize) -> *const c_void;
 }
 
-/// `mi_option_os_tag` in mimalloc.h's `mi_option_e` (the 19th option).
+/// `mi_option_os_tag` in mimalloc.h's `mi_option_e`.
 const MI_OPTION_OS_TAG: c_int = 18;
 
-/// The tag mimalloc tags its OS memory with in this process: its option, with
-/// the same fallback as `unix_mmap_fd` (mimalloc `prim/unix/prim.c`).
+/// mimalloc's OS-memory VM tag, with its own fallback for out-of-range values.
 fn mimalloc_tag() -> u32 {
     let t = unsafe { mi_option_get(MI_OPTION_OS_TAG) };
     if (100..=255).contains(&t) { t as u32 } else { 254 }
 }
 
-// ---------------------------------------------------------------------------
-// the task's counters
-// ---------------------------------------------------------------------------
-
 struct Vm {
     footprint: f64,
     resident: f64,
     internal: f64,
-    /// The task map's page size, which the region counts are in.
+    /// The region counts are in this page size.
     page: u64,
-    /// GPU memory charged to the task (graphics ledger, + its compressed
-    /// part); 0 from a kernel older than rev 3.
+    /// GPU memory charged to the task; 0 from a kernel older than rev 3.
     graphics: f64,
     json: Json,
 }
@@ -116,8 +75,7 @@ fn vm_info() -> Vm {
     if kr != KERN_SUCCESS {
         return Vm { footprint: 0.0, resident: 0.0, internal: 0.0, page, graphics: 0.0, json: Json::Null };
     }
-    // The kernel fills the newest revision `count` has room for and says how
-    // much it filled: a field past that is not there.
+    // A field past what the kernel filled (`count`) is not there.
     let has = |offset: usize| count as usize * size_of::<natural_t>() >= offset + 8;
     // Packed: every field is copied out before use.
     let (virtual_size, resident, resident_peak) = (info.virtual_size, info.resident_size, info.resident_size_peak);
@@ -145,7 +103,6 @@ fn vm_info() -> Vm {
         page: if page_size > 0 { page_size as u64 } else { page },
         graphics,
         json: Json::obj(vec![
-            // Activity Monitor's "Memory".
             ("footprintMB", mb(footprint as f64)),
             ("footprintPeakMB", footprint_peak),
             ("residentMB", mb(resident as f64)),
@@ -163,21 +120,15 @@ fn vm_info() -> Vm {
     }
 }
 
-// ---------------------------------------------------------------------------
-// threads
-// ---------------------------------------------------------------------------
-
-/// Every pthread's stack `(low, high, group)`, the threads per group, and how
-/// many threads the task has.
 struct Threads {
+    /// `(low, high, group)` per pthread.
     stacks: Vec<(u64, u64, String)>,
     groups: HashMap<String, usize>,
     count: usize,
 }
 
-/// The task's threads. A thread that exits meanwhile is skipped: the pthread
-/// calls validate the thread under libpthread's list lock and fail (ESRCH,
-/// returned in place of the pointer / size) rather than read it.
+/// A thread that exits meanwhile is skipped: the pthread calls validate it
+/// under libpthread's list lock and fail (ESRCH) rather than read it.
 fn threads() -> Threads {
     let task = unsafe { mach_task_self() };
     let mut list: thread_act_array_t = std::ptr::null_mut();
@@ -210,13 +161,8 @@ fn threads() -> Threads {
     Threads { stacks, groups: counts, count: ports.len() }
 }
 
-// ---------------------------------------------------------------------------
-// the address space
-// ---------------------------------------------------------------------------
-
-/// The file names of every image dyld has loaded (the exe, its dylibs and
-/// frameworks): a file-backed region of one of them is an image, not a
-/// mapped file.
+/// File names of every image dyld has loaded: a file-backed region of one of
+/// them is an image, not a mapped file.
 fn image_names() -> HashSet<String> {
     let n = unsafe { _dyld_image_count() };
     (0..n)
@@ -233,8 +179,7 @@ fn region_file(address: u64) -> Option<String> {
     (n > 0).then(|| file_name(&String::from_utf8_lossy(&buf[..(n as usize).min(buf.len())])))
 }
 
-/// Every leaf region, in address order, the submaps (the dyld shared region)
-/// recursed into.
+/// Every leaf region in address order, recursing into submaps.
 fn regions() -> Vec<Region> {
     let task = unsafe { mach_task_self() };
     let (cache_lo, cache_hi) = {
@@ -307,19 +252,13 @@ fn regions() -> Vec<Region> {
     out
 }
 
-// ---------------------------------------------------------------------------
-// the malloc zones
-// ---------------------------------------------------------------------------
-
 struct Zones {
     in_use: f64,
     json: Json,
 }
 
-/// Every malloc zone's statistics summed (`malloc_zone_statistics(NULL)`):
-/// the default zone Rust's `System` allocator and C/C++/Objective-C `malloc`
-/// share, and the frameworks' own zones. mimalloc is not a zone here (no
-/// override), so JSC's malloc is not in it.
+/// All malloc zones summed. mimalloc is not a zone (no override), so JSC's
+/// malloc is not in it.
 fn zones() -> Zones {
     let mut s = libc::malloc_statistics_t { blocks_in_use: 0, size_in_use: 0, max_size_in_use: 0, size_allocated: 0 };
     unsafe { libc::malloc_zone_statistics(std::ptr::null_mut(), &mut s) };
@@ -337,11 +276,6 @@ fn zones() -> Zones {
     }
 }
 
-// ---------------------------------------------------------------------------
-// the report
-// ---------------------------------------------------------------------------
-
-/// `addressSpace`: the walk's own view, in MB for `ctl mem`.
 fn address_json(walk: &[Region], fold: &Fold, page: u64, threads: usize, stack_rows: &[(String, f64, f64)], regions: bool) -> Json {
     let page = page as f64;
     let virtual_size: u64 = walk.iter().map(|r| r.size).sum();
@@ -397,7 +331,6 @@ fn address_json(walk: &[Region], fold: &Fold, page: u64, threads: usize, stack_r
             ]),
         ),
         (
-            // Anonymous memory by VM tag, the way `vmmap --summary` lists it.
             "byTag",
             Json::arr(
                 tags.iter()
@@ -440,8 +373,6 @@ fn address_json(walk: &[Region], fold: &Fold, page: u64, threads: usize, stack_r
     Json::obj(o)
 }
 
-/// The whole report; see `mem.rs` for `gc` and `code`. `regions` adds the
-/// resident bytes per category and the largest untagged regions.
 pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, cx: &mut App) -> Json {
     let gc = gc || code;
     let before = if gc { Some((vm_info(), jsc_stats())) } else { None };
@@ -491,7 +422,6 @@ pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, c
         gpu_named,
         with_resident: regions,
     });
-    // What the allocators we can see account for, against the footprint.
     let explained = fold.of(Cat::Rust) + fold.of(Cat::Jsc) + fold.of(Cat::Graphics);
     let mut o = vec![
         ("breakdown", breakdown),
@@ -502,8 +432,7 @@ pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, c
         ("mimalloc", mi.json),
         ("jsc", jsc.json),
         (
-            // One row: Apple GPUs share the system's memory, so there is no
-            // adapter's VRAM to report, only what is charged to this task.
+            // Unified memory: no VRAM to report, only what is charged to this task.
             "gpu",
             Json::arr(vec![Json::obj(vec![
                 ("adapter", Json::s("unified memory")),
@@ -543,8 +472,7 @@ pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, c
                     "before",
                     Json::obj(vec![("process", before_vm.json), ("jsc", before_jsc.json)]),
                 ),
-                // The footprint is what macOS charges; "private" keeps the
-                // field the inspector already reads.
+                // Footprint, under the name the inspector reads.
                 ("freedPrivateBytes", bytes(before_vm.footprint - vm.footprint)),
                 ("freedJscHeapBytes", bytes(before_jsc.size - jsc.size)),
             ]),

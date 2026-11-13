@@ -5,9 +5,6 @@
   background: #fff;
 }
 
-/* The Argon profile popover (UserProfilePopover.vue): reka's PopoverContent
-   wrapper is `position: fixed; z-index: 50`, and inside it the card is built
-   from three layers that each make a stacking context. */
 .popover {
   position: fixed;
   z-index: 50;
@@ -41,8 +38,6 @@
   background: #00c800;
 }
 
-/* The menu the popover's ⋯ button opens: reka's DropdownMenuContent, a LATER
-   portal of the same `fixed z-50`, over the glass zone. */
 .menu {
   position: fixed;
   z-index: 50;
@@ -55,8 +50,6 @@
   background: #ff0000;
 }
 
-/* A negative z-index on an IN-FLOW box: under its context's in-flow content,
-   over the context's own background. */
 .neg {
   position: absolute;
   left: 420px;
@@ -78,8 +71,6 @@
   background: #ff0000;
 }
 
-/* `opacity < 1` at z auto still makes a stacking context: the z-100 box
-   inside it stays inside it, under a later z-10 sibling. */
 .flow {
   position: absolute;
   left: 420px;

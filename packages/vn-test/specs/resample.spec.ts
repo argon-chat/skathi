@@ -1,15 +1,3 @@
-// Images drawn far below their own size (m26 client sweep #22). gpui's sprite
-// atlas keeps one mip level and samples it linearly, so the Argon client's
-// 1080 px avatars at 40 px aliased. The host now draws such an image from a
-// filtered copy at the size it is shown (crates/vn-tree/src/resample.rs,
-// docs/RUNTIME.md §5.16).
-//
-//   bun test packages/vn-test/specs/resample.spec.ts
-//
-// `fixtures/resample` shows one-pixel checkerboards at 40 x 40 on white, and a
-// 50% grey reference. Filtered, a checkerboard is that grey; unfiltered at
-// 27:1 the sampler lands on texel centres and it is black and white noise.
-
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { launch, readPng, type Bounds } from "../src/index";
 
@@ -33,8 +21,6 @@ const box = async (selector: string): Promise<Bounds> => {
   return b;
 };
 
-/** Every device pixel of `b`, inset by `inset` CSS px (the edges blend into
- *  the white page), from one screenshot. */
 async function pixels(b: Bounds, inset = 4): Promise<Rgb[]> {
   const shot = readPng(await app.screenshot());
   const k = shot.width / W;
@@ -49,7 +35,6 @@ interface Stats {
   n: number;
   mean: number;
   sd: number;
-  /** The largest distance of any channel from the reference grey. */
   worst: number;
 }
 
@@ -61,15 +46,12 @@ function stats(px: Rgb[], ref: number): Stats {
   return { n: px.length, mean, sd, worst };
 }
 
-/** The reference grey, as the screenshot has it. */
 async function reference(): Promise<number> {
   const s = stats(await pixels(await box("#ref")), 0);
   bunExpect(s.sd).toBeLessThan(1);
   return s.mean;
 }
 
-/** Polls the probe until it is flat grey (or the time is up) and returns the
- *  last reading: images decode, and `#big`'s copy lands, asynchronously. */
 async function settle(selector: string, ms = 8_000): Promise<Stats> {
   const ref = await reference();
   const b = await box(selector);

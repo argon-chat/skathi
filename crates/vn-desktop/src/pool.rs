@@ -1,22 +1,9 @@
-//! The file I/O pool: four worker threads, one job queue (design §3.2).
+//! The file I/O pool: four worker threads on one queue. Every File System Access operation that
+//! touches a user path runs here; the frame thread only validates and queues.
 //!
-//! Every File System Access operation that touches a user path runs here —
-//! `stat`, a child lookup, a directory batch, a writable's chunks, the atomic
-//! replace on `close()`. The frame thread only validates and queues: it never
-//! opens, reads or stats a path the user picked.
-//!
-//! No tokio, no new dependency: a `Mutex<VecDeque>` and a `Condvar`, which is
-//! all four threads draining one queue needs.
-//!
-//! # In flight, for the pump
-//!
-//! [`in_flight`] counts jobs submitted and not yet finished. A job settles its
-//! token BEFORE the count drops, so the delivery pump source (`lib.rs`) never
-//! sees "nothing queued, nothing in flight" while a result is on its way. That
-//! count is what lets an awaited chain (`for await` over a folder, a loop of
-//! `await writable.write()`) be delivered inside one pump's budget instead of
-//! one frame per step. Dialogs and the shell are NOT counted: a Save As that
-//! stays open for a minute must not make every frame wait for it.
+//! [`in_flight`] counts jobs submitted and not finished. A job settles its token BEFORE the count
+//! drops, so the pump source never sees "nothing queued, nothing in flight" while a result is on its
+//! way. Dialogs and the shell are not counted: a Save As left open must not make every frame wait.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -24,9 +11,8 @@ use std::sync::{Condvar, Mutex, OnceLock};
 
 use crate::Fail;
 
-/// Worker threads. Four, as the design has it: enough to overlap a slow
-/// network share with local work, few enough that a burst of `getFile()` on
-/// a folder does not become a thread per file.
+/// Enough to overlap a slow network share with local work, few enough that a burst of `getFile()`
+/// is not a thread per file.
 pub const WORKERS: usize = 4;
 
 type Job = Box<dyn FnOnce() + Send>;
@@ -38,7 +24,6 @@ struct Queue {
 
 static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
-/// Jobs submitted and not finished yet.
 pub fn in_flight() -> usize {
     IN_FLIGHT.load(Ordering::Acquire)
 }
@@ -76,18 +61,16 @@ fn worker() {
     }
 }
 
-/// One job, with the in-flight count dropped after it (it has settled by
-/// then) and a wake so a pump waiting on the result returns at once. A panic
-/// stays inside the job: [`submit`] already turned it into a rejection.
+/// Runs one job, then drops the in-flight count (it has settled) and wakes the pump. [`submit`]
+/// already turned a panic into a rejection.
 fn run(job: Job) {
     job();
     IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
     crate::wake();
 }
 
-/// Runs `op` on the pool and settles `token` with its result. A panic inside
-/// `op` settles the token as `InvalidStateError` instead of leaving the
-/// promise pending forever.
+/// Runs `op` on the pool and settles `token`; a panic settles `InvalidStateError` rather than
+/// leaving the promise pending.
 pub(crate) fn submit(token: u32, op: impl FnOnce() -> Result<crate::Done, Fail> + Send + 'static) {
     IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
     let job: Job = Box::new(move || {

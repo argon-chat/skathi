@@ -1,29 +1,16 @@
-//! Grapheme-cluster and word boundary scanning, implemented on `std` alone.
+//! Grapheme-cluster and word boundary scanning on `std` alone (vn-elements depends on `gpui` only).
 //!
-//! Adapted from gpui-vue (`crates/gpui-vue-core/src/custom_elements/input.rs`,
-//! Apache-2.0), which is itself derived from the native renderer in
-//! [remorses/gpuix](https://github.com/remorses/gpuix) @
-//! `b8bbff4ef0dc00dc24c3d3f3ca47818e1be15c69` (Apache-2.0) and from
-//! [zeronsh/comet](https://github.com/zeronsh/comet) (MIT).
-//! See gpui-vue's `THIRD_PARTY_NOTICES.md`.
+//! Adapted from gpui-vue (`crates/gpui-vue-core/src/custom_elements/input.rs`, Apache-2.0), itself
+//! derived from [remorses/gpuix](https://github.com/remorses/gpuix) @
+//! `b8bbff4ef0dc00dc24c3d3f3ca47818e1be15c69` (Apache-2.0) and [zeronsh/comet](https://github.com/zeronsh/comet) (MIT).
 //!
-//! gpui-vue used `unicode-segmentation`; vn-elements is allowed to depend on
-//! `gpui` only, so the UAX #29 rules we actually need for caret motion are
-//! re-implemented here:
-//!
-//! * grapheme clusters — CRLF, combining marks, ZWJ sequences, variation
-//!   selectors, emoji modifiers and regional-indicator (flag) pairs are kept
-//!   together. The `Extend` table below is a pragmatic subset: Latin, Greek,
-//!   Cyrillic, Hebrew, Arabic, Devanagari, Thai, Tibetan and every emoji
-//!   sequence are covered; exotic Indic/Brahmic conjuncts degrade to per-`char`
-//!   motion, which is never *wrong*, only finer-grained than the platform.
-//! * words — a simple three-class (word / whitespace / punctuation) scan that
-//!   reproduces the Windows caret behaviour for ctrl-left / ctrl-right.
+//! Graphemes: CRLF, combining marks, ZWJ sequences, variation selectors, emoji modifiers and flag
+//! pairs stay together. The `Extend` table is a pragmatic subset; exotic Indic conjuncts degrade to
+//! per-`char` motion. Words: a three-class (word / whitespace / punctuation) scan matching Windows
+//! ctrl-left / ctrl-right.
 
 use std::ops::Range;
 
-/// Snap a byte offset to the nearest `char` boundary at or below it, clamped to
-/// the length of `text`.
 pub fn snap(text: &str, offset: usize) -> usize {
     let mut offset = offset.min(text.len());
     while !text.is_char_boundary(offset) {
@@ -54,8 +41,6 @@ fn step_backward(text: &str, offset: usize) -> usize {
     }
 }
 
-/// Characters that never start a new grapheme cluster (`Extend`, `SpacingMark`,
-/// `ZWJ` and the emoji modifiers), as far as caret motion cares.
 fn is_extend(character: char) -> bool {
     matches!(character as u32,
         0x0300..=0x036F     // combining diacritical marks
@@ -93,8 +78,7 @@ fn is_regional_indicator(character: char) -> bool {
     matches!(character as u32, 0x1F1E6..=0x1F1FF)
 }
 
-/// Whether a grapheme cluster starts at `offset` (which must be a `char`
-/// boundary strictly inside `text`).
+/// `offset` must be a `char` boundary strictly inside `text`.
 fn is_cluster_boundary(text: &str, offset: usize) -> bool {
     let (Some(previous), Some(next)) = (char_before(text, offset), char_at(text, offset)) else {
         return true;
@@ -106,7 +90,6 @@ fn is_cluster_boundary(text: &str, offset: usize) -> bool {
         return false;
     }
     if previous == '\u{200D}' {
-        // A ZWJ glues whatever follows to the cluster (emoji ZWJ sequences).
         return false;
     }
     if is_regional_indicator(previous) && is_regional_indicator(next) {
@@ -125,7 +108,6 @@ fn is_cluster_boundary(text: &str, offset: usize) -> bool {
     true
 }
 
-/// The start of the grapheme cluster preceding `offset` (or 0).
 pub fn previous_grapheme(text: &str, offset: usize) -> usize {
     let offset = snap(text, offset);
     if offset == 0 {
@@ -138,7 +120,6 @@ pub fn previous_grapheme(text: &str, offset: usize) -> usize {
     index
 }
 
-/// The start of the grapheme cluster following `offset` (or `text.len()`).
 pub fn next_grapheme(text: &str, offset: usize) -> usize {
     let offset = snap(text, offset);
     if offset >= text.len() {
@@ -168,8 +149,7 @@ fn classify(character: char) -> Class {
     }
 }
 
-/// The offset one word to the left, following the Windows convention: skip any
-/// whitespace, then skip the run of same-class characters before it.
+/// Windows convention: skip whitespace, then the run of same-class characters before it.
 pub fn previous_word(text: &str, offset: usize) -> usize {
     let mut index = snap(text, offset);
     while let Some(character) = char_before(text, index) {
@@ -190,9 +170,7 @@ pub fn previous_word(text: &str, offset: usize) -> usize {
     index
 }
 
-/// The offset one word to the right: skip the run of same-class characters at
-/// the caret, then any whitespace that follows it (so the caret lands on the
-/// first character of the next word).
+/// Skip the run of same-class characters at the caret, then the whitespace that follows.
 pub fn next_word(text: &str, offset: usize) -> usize {
     let mut index = snap(text, offset);
     let Some(class) = char_at(text, index).map(classify) else {
@@ -215,13 +193,9 @@ pub fn next_word(text: &str, offset: usize) -> usize {
     index
 }
 
-/// The run of same-class characters containing `offset` — what a double click
-/// selects.
 pub fn word_range_at(text: &str, offset: usize) -> Range<usize> {
     let offset = snap(text, offset);
-    // At the very end of the text there is no character *at* the offset, so
-    // fall back to the one before it (double-clicking past the last word still
-    // selects that word).
+    // At the end of the text, fall back to the character before it.
     let class = match char_at(text, offset).or_else(|| char_before(text, offset)) {
         Some(character) => classify(character),
         None => return 0..0,

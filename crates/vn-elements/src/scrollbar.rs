@@ -1,52 +1,11 @@
-//! Overlay scrollbars, and the wheel routing that makes `overscroll-behavior`
-//! mean something.
+//! Overlay scrollbars, and the wheel routing that makes `overscroll-behavior` work.
 //!
-//! # Provenance
+//! Adapted from longbridge/gpui-kit `crates/base/src/scrollbar.rs` and `scrollable_mask.rs` at
+//! commit `b6f098db81`, Copyright 2024–2026 Longbridge, licensed under the Apache License 2.0.
 //!
-//! Adapted from **longbridge/gpui-kit** `crates/base/src/scrollbar.rs` and
-//! `crates/base/src/scrollable_mask.rs` at commit `b6f098db81` (2026-09-03),
-//! Copyright 2024–2026 Longbridge, licensed under the Apache License 2.0. The
-//! upstream `LICENSE-APACHE` applies to the derived parts of this file, which
-//! is the same licence our own tree already carries.
-//!
-//! What was taken is the *technique*, not the text: the load-bearing details
-//! that a from-scratch scrollbar gets wrong, listed here so a future reader can
-//! tell adaptation from invention.
-//!
-//! * **It is a real `gpui::Element`, not a `div`.** It requests an absolutely
-//!   positioned box and then ignores its own layout bounds: the geometry comes
-//!   from `ScrollHandle::bounds()`, the viewport the container recorded, in
-//!   window space. That is what lets the bar be painted as the scroll box's own
-//!   last child — inside the subtree the scroll offset translates — and still
-//!   land on the viewport's edge rather than sliding away with the content.
-//! * **Two rectangles per thumb.** `thumb_hit` is the full track width and does
-//!   not shrink; `thumb_fill` is what is painted and does. A thumb that widens
-//!   on hover must not move its own hit target out from under the pointer.
-//! * **Auto-hide is not a timer on the render loop.** A stopped scroll produces
-//!   no further frames, so nothing would ever repaint the bar away. Prepaint
-//!   schedules a background timer for the remaining idle time and notifies when
-//!   it fires, guarded by a flag so it schedules once.
-//! * **Drag is throttled by time and distance** — 120 fps and one pixel.
-//! * **The wheel is intercepted in the CAPTURE phase.** This is
-//!   `scrollable_mask.rs`'s job and it is `overscroll-behavior` in disguise:
-//!   gpui's own scroll listener runs on bubble and does NOT stop propagation,
-//!   so every ancestor scroll box scrolls at once. Capture selects the inner
-//!   box by element ancestry, independently of deferred paint order, and
-//!   explicitly decides whether an ancestor gets the rest.
-//!
-//! What was *not* taken: their theme (`ActiveTheme`), their `ScalarTransition`
-//! easing pair, `schemars`/`serde` derives, the `ListState` and
-//! `UniformListScrollHandle` handle impls (we have one kind of scroller), and
-//! the `ScrollbarTrackStyle::border_color` field they left dead.
-//!
-//! # Why the axis lock, and why the chain terminates
-//!
-//! A gesture locks to the axis it began on so a diagonal trackpad swipe cannot
-//! change owners mid-stroke. And the outermost scroll box in a vue-native
-//! window is always the root element — "the window IS the root" gives it
-//! `overflow: scroll` unconditionally — so every wheel event reaches a mask
-//! that will consume it, and no event ever falls through to gpui's own
-//! all-ancestors-at-once listener.
+//! The wheel is intercepted in the capture phase: gpui's own listener bubbles without stopping
+//! propagation, so every ancestor scroll box would scroll at once. A gesture locks to the axis it
+//! began on, and the root element always scrolls, so no wheel falls through to gpui's listener.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -61,27 +20,17 @@ use gpui::{
     Window, WindowControlArea, fill, relative,
 };
 
-/// The track's width at `scrollbar-width: auto`. Windows 11's overlay
-/// scrollbar occupies about this when it is not hovered.
 const TRACK_AUTO: Pixels = px(14.);
-/// …and at `scrollbar-width: thin`. CSS gives no number; every engine picks
-/// something around half.
 const TRACK_THIN: Pixels = px(8.);
-/// The gap between the thumb and the track's edges.
 const INSET: Pixels = px(3.);
-/// A thumb never becomes a dot, however long the content is.
 const MIN_THUMB: Pixels = px(28.);
-/// How long the bar stays up after the last scroll.
 const IDLE: Duration = Duration::from_millis(1200);
-/// How long it takes to fade away once the idle hold expires.
 const FADE: Duration = Duration::from_millis(220);
-/// How long the thumb takes to reach its hovered width.
 const EXPAND: Duration = Duration::from_millis(120);
 /// Drag updates are clamped to this, and to one pixel of movement.
 const DRAG_FPS: u64 = 120;
 
-/// `overscroll-behavior`, as this element needs it: does a wheel this box
-/// cannot use reach the ancestors?
+/// `overscroll-behavior` for one axis: does a wheel this box cannot use reach the ancestors?
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Overscroll {
     pub x_chains: bool,
@@ -89,7 +38,6 @@ pub struct Overscroll {
 }
 
 impl Overscroll {
-    /// CSS's initial value on both axes: the scroll chains.
     pub const CHAINING: Self = Self { x_chains: true, y_chains: true };
 
     fn chains(self, axis: Axis) -> bool {
@@ -100,35 +48,21 @@ impl Overscroll {
     }
 }
 
-/// Everything CSS gets to say about how the bar looks.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollbarStyle {
-    /// `scrollbar-width`. `None` here is `scrollbar-width: none` — the box
-    /// still scrolls and still routes the wheel, it just draws nothing.
+    /// `None` is `scrollbar-width: none`: the box still scrolls and routes the wheel, but draws nothing.
     pub track_width: Option<Pixels>,
-    /// The thumb at rest.
     pub thumb: Hsla,
-    /// The thumb while the pointer is over the track or dragging it.
     pub thumb_active: Hsla,
-    /// The track. Usually fully transparent — an overlay scrollbar reserves no
-    /// space and paints no gutter until you reach for it.
     pub track: Hsla,
-    /// The track while the pointer is over it.
     pub track_active: Hsla,
-    /// Ignore the idle timer and keep the bar up. This is what
-    /// `should_auto_hide_scrollbars() == false` asks for.
+    /// Keep the bar up regardless of the idle timer.
     pub always_visible: bool,
 }
 
 impl ScrollbarStyle {
-    /// The default overlay look, derived from the element's own text colour.
-    ///
-    /// A scrollbar has to read against whatever the app painted behind it, and
-    /// the one value that reliably contrasts with an element's background is
-    /// the colour it draws its text in. So the thumb is that colour at low
-    /// alpha: dark text (light page) gives a dark thumb, light text (dark page)
-    /// a light one, with no theme, no `prefers-color-scheme` plumbing and no
-    /// guess. `scrollbar-color` overrides it outright.
+    /// The default look: the element's text colour at low alpha, so it contrasts on any
+    /// background. `scrollbar-color` overrides it.
     pub fn from_text_color(color: Hsla) -> Self {
         Self {
             track_width: Some(TRACK_AUTO),
@@ -140,11 +74,8 @@ impl ScrollbarStyle {
         }
     }
 
-    /// `scrollbar-color: <thumb> <track>`.
     pub fn with_colors(mut self, thumb: Hsla, track: Hsla) -> Self {
         self.thumb = thumb;
-        // The author asked for one thumb colour, so the hovered state is the
-        // same colour rather than a different one they did not choose.
         self.thumb_active = thumb;
         self.track = track;
         self.track_active = track;
@@ -167,25 +98,19 @@ impl ScrollbarStyle {
     }
 }
 
-/// The bit of state that has to outlive a frame: what the pointer is doing, and
-/// when the content last moved.
 #[derive(Clone, Copy, Debug)]
 struct State {
     hovered: Option<Axis>,
     dragging: Option<Axis>,
-    /// Where inside the thumb the drag started.
     grab: Pixels,
     last_offset: Point<Pixels>,
     last_scroll: Option<Instant>,
     last_drag_update: Instant,
     idle_timer: bool,
-    /// The axis this wheel gesture locked to, and when it was last fed. A
-    /// precise (trackpad) delta keeps its axis for the whole stroke.
+    /// Axis the current wheel gesture locked to, and when it was last fed.
     lock: Option<(Axis, Instant)>,
-    /// Animated track widths, per axis, so a hover widens rather than jumps.
     width: [Pixels; 2],
     width_at: Instant,
-    /// Fade: the opacity the bar was at when the last visibility change began.
     fade_from: f32,
     fade_at: Instant,
     visible: bool,
@@ -217,11 +142,9 @@ fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
-/// A wheel gesture is one stroke while its events keep arriving; this much
-/// silence ends it and frees the axis lock.
+/// Silence of this length ends a wheel gesture and frees the axis lock.
 const GESTURE_GAP: Duration = Duration::from_millis(180);
 
-/// One painted scroll container, as the wheel router needs to see it.
 #[derive(Clone)]
 struct ChainEntry {
     hitbox: gpui::HitboxId,
@@ -233,35 +156,24 @@ struct ChainEntry {
 }
 
 thread_local! {
-    /// Every scroll container painted in the last frame, in paint order.
+    /// Scroll containers painted last frame, in paint order. Deferred children can paint after
+    /// their ancestors, so nesting comes from element-id ancestry, not this order.
     ///
-    /// Deferred positioned children can paint after their ancestors' bars.
-    /// The element-id ancestry, not this order, decides which box is inner.
-    ///
-    /// This exists for one question, which gpui cannot answer on its own:
-    /// `Hitbox::should_handle_scroll` is true for EVERY hitbox under the
-    /// pointer, ancestors included, and gpui's own wheel listener does not stop
-    /// propagation — so a wheel over a nested box scrolls the box AND the page.
-    /// A browser scrolls one of them.
+    /// gpui's wheel listener does not stop propagation and `should_handle_scroll` is true for every
+    /// hitbox under the pointer, so a wheel over a nested box would scroll it and the page.
     static CHAIN: std::cell::RefCell<Vec<ChainEntry>> = const { std::cell::RefCell::new(Vec::new()) };
 
-    /// Every scroll container under the pointer, with its offset as the
-    /// CAPTURE phase of the wheel event being dispatched found it: before gpui's
-    /// own bubble-phase listener moved anything. Cleared by an effect at the
-    /// end of the dispatch. [`undo_wheel_scroll`] puts them back.
+    /// Scroll containers under the pointer with the offsets the capture phase of the current wheel
+    /// event found, before gpui's bubble listener moved anything. See [`undo_wheel_scroll`].
     static BEFORE_WHEEL: std::cell::RefCell<Vec<(gpui::HitboxId, ScrollHandle, Point<Pixels>)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Puts every scroll container under the pointer back where the wheel event
-/// being dispatched found it, and says whether one had moved.
+/// Puts every scroll container under the pointer back where the current wheel event found it, and
+/// says whether one had moved.
 ///
-/// A browser fires the DOM `wheel` event BEFORE it scrolls, and a cancelled one
-/// scrolls nothing. Here gpui's own listener on a scroll container runs in the
-/// bubble phase before the listener on the same box that fires `wheel`, and the
-/// listeners of any container inside it run earlier still. So the embedder
-/// calls this when `wheel` was cancelled, and stops propagation so that no
-/// outer container moves. Only meaningful during that wheel event's dispatch.
+/// For a cancelled `wheel`: gpui's listeners have already scrolled, so the embedder calls this and
+/// stops propagation. Only meaningful during that event's dispatch.
 pub fn undo_wheel_scroll() -> bool {
     BEFORE_WHEEL.with(|b| {
         let mut moved = false;
@@ -276,34 +188,16 @@ pub fn undo_wheel_scroll() -> bool {
 }
 
 thread_local! {
-    /// What the pointer is doing to each scrollbar, and when its content last
-    /// moved — keyed by the bar's own `ElementId`, which is the scroll
-    /// container's node id.
+    /// Per-scrollbar state, keyed by the bar's `ElementId` (the container's node id).
     ///
-    /// **Deliberately not gpui element state.** `Window::use_state` is keyed by
-    /// the `GlobalElementId` — the whole path of element ids down to this one —
-    /// and a retained-render boundary CHANGES that path: the first offer after
-    /// an ordinary build mints a fresh `Entity`, a fresh `EntityId` is a fresh
-    /// `ElementId::View`, and every descendant's global id moves with it. The
-    /// state that comes back is then a default one.
-    ///
-    /// For most elements that is invisible. For this one it ended a drag
-    /// mid-gesture: a boundary re-rendered three frames running stands down
-    /// (`vn_tree::cache`'s thrash backoff) and is re-offered ~24 frames later
-    /// with a new entity, which is well inside the time a hand takes to drag a
-    /// thumb. `scrollbar.spec.ts`'s "dragging the thumb scrolls the box" is the
-    /// pin. The bar's identity is the container it belongs to, not its position
-    /// in an element tree that is rebuilt every frame, so that is what it is
-    /// keyed by.
+    /// Not gpui element state: `Window::use_state` is keyed by the whole element-id path, which
+    /// changes when a retained-render boundary is re-offered with a new entity, and that reset an
+    /// in-progress drag.
     static STATES: std::cell::RefCell<HashMap<u64, (u64, Rc<Cell<State>>)>> =
         std::cell::RefCell::new(HashMap::new());
-    /// Builds since the process started — the clock [`STATES`] is swept against.
     static FRAME: Cell<u64> = const { Cell::new(0) };
 }
 
-/// A stable key for one scrollbar: its `ElementId`, hashed. The renderer builds
-/// that id as `("vn-scrollbar", <node id>)`, so it is the container's identity
-/// and nothing else.
 fn state_key(id: &ElementId) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     id.hash(&mut h);
@@ -321,14 +215,9 @@ fn state_for(id: &ElementId) -> Rc<Cell<State>> {
     })
 }
 
-/// How many builds a scrollbar may go unseen before its state is dropped.
-/// Generous on purpose — a `<KeepAlive>`d page comes back, and the state is
-/// two pointers — and swept in the same batches, so the sweep is amortised to
-/// nothing.
+/// Builds a scrollbar may go unseen before its state is dropped; large so a `<KeepAlive>`d page keeps its.
 const STATE_TTL: u64 = 4096;
 
-/// Drops the last frame's scroll-container registry. Called from the renderer
-/// at the top of each element-tree build.
 pub fn reset_frame() {
     CHAIN.with(|c| c.borrow_mut().clear());
     let frame = FRAME.with(|c| {
@@ -341,32 +230,12 @@ pub fn reset_frame() {
     }
 }
 
-/// A contiguous run of registry entries — what one retained-render boundary
-/// contributed to the chain while it was painted for real.
+/// A contiguous run of registry entries a retained-render boundary added while painting for real.
 ///
-/// The registry is rebuilt from the paint walk, and a replayed subtree does not
-/// walk: gpui copies its recorded hitboxes, mouse listeners and scene forward
-/// and never calls `paint` again. Without this the wheel router simply loses
-/// every scroll container inside a cached subtree — the box keeps its pixels
-/// and stops scrolling (research/reports/m23/perf-retained.md §4.4), which is
-/// why v1 refused to cache a scroll container at all.
-///
-/// A span is safe to replay because **both** of its fields outlive the frame
-/// they were recorded in:
-///
-/// * `HitboxId` is allocated from a counter that is never reset
-///   (`Window::next_hitbox_id`, initialised once per window), so an id is
-///   unique for the life of the window and cannot come to mean a different
-///   hitbox later; and `reuse_prepaint` clones the recorded hitboxes into the
-///   new frame **with their ids**, so the very hitbox this entry names is in
-///   this frame's hit test.
-/// * `ScrollHandle` is an `Rc` the embedder keeps per node, so the offset the
-///   router reads and moves is the live one either way.
-///
-/// The embedder records a span with [`chain_mark`] + [`chain_since`] around the
-/// boundary's paint and re-registers it with [`chain_replay`] on the frames
-/// that replay. Re-pushing at the same point preserves paint order; every
-/// entry retains the ancestry that decides its place in the scroll chain.
+/// A replayed subtree does not paint, so without re-registering its span the wheel router loses
+/// every scroll container inside it. Replay is safe because `HitboxId`s are never reused within a
+/// window and `ScrollHandle` is a shared `Rc`. Record with [`chain_mark`] + [`chain_since`],
+/// replay with [`chain_replay`].
 #[derive(Clone, Default)]
 pub struct ChainSpan(Vec<ChainEntry>);
 
@@ -385,29 +254,20 @@ impl std::fmt::Debug for ChainSpan {
     }
 }
 
-/// `mark` / `since` / `replay` over a `Vec`, with no gpui in it.
-///
-/// Split out from [`CHAIN`] for one reason: a `HitboxId` cannot be fabricated
-/// outside gpui's own `test-support` feature, so the span mechanics would
-/// otherwise be the one part of this file with no unit test. They are the part
-/// a replay depends on being exactly right, so they are generic and tested
-/// below over `u32`.
+/// `mark` / `since` over a `Vec`, generic so it can be tested without gpui (a `HitboxId` cannot be
+/// built outside gpui's `test-support`).
 fn span_since<T: Clone>(v: &[T], mark: usize) -> Vec<T> {
     v.get(mark..).map(<[T]>::to_vec).unwrap_or_default()
 }
 
-/// How many scroll containers have registered in this frame so far — the mark
-/// a boundary takes before it paints.
 pub fn chain_mark() -> usize {
     CHAIN.with(|c| c.borrow().len())
 }
 
-/// The entries registered since `mark`, in registration order.
 pub fn chain_since(mark: usize) -> ChainSpan {
     CHAIN.with(|c| ChainSpan(span_since(&c.borrow(), mark)))
 }
 
-/// Re-registers a recorded span at the current point in the walk.
 pub fn chain_replay(span: &ChainSpan) {
     if span.0.is_empty() {
         return;
@@ -415,14 +275,11 @@ pub fn chain_replay(span: &ChainSpan) {
     CHAIN.with(|c| c.borrow_mut().extend(span.0.iter().cloned()));
 }
 
-/// How many scroll containers are registered in this frame. The embedder's
-/// regression pin for "a replayed subtree still routes the wheel".
 pub fn chain_count() -> usize {
     chain_mark()
 }
 
-/// The bar is its container's last child, so its final id is not part of
-/// the container's ancestry. Deferred painting preserves this original path.
+/// The container's path: the bar is its last child, so its own id is dropped.
 fn container_path(id: &GlobalElementId) -> &[ElementId] {
     match id.split_last() {
         Some((_, ancestors)) => ancestors,
@@ -455,7 +312,6 @@ fn effective_delta(axis: Axis, raw: Point<Pixels>, axes: (bool, bool)) -> (Axis,
     }
 }
 
-/// Can this box still move on `axis` in the direction `delta` points?
 fn can_move(handle: &ScrollHandle, axis: Axis, delta: Pixels) -> bool {
     let max = handle.max_offset();
     let offset = handle.offset();
@@ -470,16 +326,11 @@ fn can_move(handle: &ScrollHandle, axis: Axis, delta: Pixels) -> bool {
     (next - current).abs() > px(0.01)
 }
 
-/// An overlay scrollbar for one `overflow: auto | scroll` box, plus the wheel
-/// routing for it.
-///
-/// Paint it as the scroll container's LAST child. It contributes nothing to
-/// layout (it is absolutely positioned) and reads its geometry from the handle,
-/// so it does not care where in the subtree it ends up.
+/// An overlay scrollbar for one `overflow: auto | scroll` box, plus its wheel routing. Paint it as
+/// the container's last child; it is absolutely positioned and reads its geometry from the handle.
 pub struct Scrollbar {
     id: ElementId,
     handle: ScrollHandle,
-    /// Which axes the container's `overflow` actually scrolls.
     axes: (bool, bool),
     style: ScrollbarStyle,
     overscroll: Overscroll,
@@ -502,12 +353,8 @@ impl Scrollbar {
         }
     }
 
-    /// Dispatch the DOM `wheel` event for a gesture this element takes over.
-    /// Returning `true` is `preventDefault()`: the box does not scroll.
-    ///
-    /// Only called on the takeover path — when the router has decided that
-    /// letting gpui's own listener run would scroll an ancestor as well. Every
-    /// other wheel goes through the renderer's ordinary listener untouched.
+    /// Dispatches the DOM `wheel` event for a gesture this element takes over; `true` is
+    /// `preventDefault()`. Only called on the takeover path.
     pub fn on_wheel(
         mut self,
         f: impl Fn(Point<Pixels>, &mut Window, &mut App) -> bool + 'static,
@@ -516,14 +363,12 @@ impl Scrollbar {
         self
     }
 
-    /// Report a scroll this element performed itself — a taken-over wheel, a
-    /// thumb drag, a click on the track. The DOM `scroll` event.
+    /// Reports a scroll this element performed itself (wheel takeover, thumb drag, track click).
     pub fn on_scrolled(mut self, f: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_scrolled = Some(Rc::new(f));
         self
     }
 
-    /// Which axes this box scrolls — straight off the computed `overflow`.
     pub fn axes(mut self, x: bool, y: bool) -> Self {
         self.axes = (x, y);
         self
@@ -534,7 +379,6 @@ impl Scrollbar {
         self
     }
 
-    /// The line height a non-precise (mouse) wheel notch is measured in.
     pub fn line_height(mut self, line_height: Pixels) -> Self {
         self.line_height = line_height;
         self
@@ -548,20 +392,13 @@ impl Scrollbar {
     }
 }
 
-/// Everything one axis needs at paint time.
 struct AxisPaint {
     axis: Axis,
-    /// The whole track, at the viewport's edge.
     track: Bounds<Pixels>,
-    /// The full-width hit target.
     thumb_hit: Bounds<Pixels>,
-    /// The (possibly narrower) painted thumb.
     thumb_fill: Bounds<Pixels>,
-    /// The track hitbox, for hover and for opting out of a `window-drag` region.
     hitbox: Hitbox,
-    /// Content minus viewport on this axis — the distance the offset can cover.
     max_offset: Pixels,
-    /// The distance the thumb can travel.
     thumb_travel: Pixels,
 }
 
@@ -591,10 +428,7 @@ impl Element for Scrollbar {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        // Absolute, so it is out of flow and cannot become a flex item of the
-        // box it overlays. The size is irrelevant — `prepaint` reads the
-        // viewport off the handle — but a zero-size absolute box is what taffy
-        // spends the least time on.
+        // Absolute so it is not a flex item of the box it overlays; `prepaint` reads the viewport off the handle.
         let mut style = Style::default();
         style.position = Position::Absolute;
         style.size.width = relative(0.).into();
@@ -614,8 +448,7 @@ impl Element for Scrollbar {
         let state = state_for(&self.id);
         let now = Instant::now();
 
-        // The viewport, in window space, as the container recorded it. NOT this
-        // element's own layout bounds: those ride the scroll offset.
+        // Viewport in window space as the container recorded it; this element's own bounds ride the scroll offset.
         let viewport = self.handle.bounds();
         if viewport.size.width <= px(0.) || viewport.size.height <= px(0.) {
             return Prepaint { viewport: None, axes: Vec::new(), state, opacity: 0.0 };
@@ -628,8 +461,7 @@ impl Element for Scrollbar {
             inner.last_scroll = Some(now);
         }
 
-        // Visibility, and the timer that is the only thing able to take it
-        // away: a stopped scroll produces no more frames on its own.
+        // The idle timer is what hides the bar: a stopped scroll produces no more frames.
         let held = inner
             .last_scroll
             .is_some_and(|t| now.saturating_duration_since(t) < IDLE);
@@ -673,11 +505,7 @@ impl Element for Scrollbar {
             && max.y > px(0.5)
             && max.x > px(0.5);
 
-        // The wheel's box: the whole viewport, inserted after the content it
-        // covers. It is the container's (a wheel is judged by the container),
-        // but nothing is pressed ON it, so its tag says passive
-        // (`gpui::VN_TAG_PASSIVE`): an embedder's hit test looks through it to
-        // the content.
+        // Wheel box over the whole viewport; tagged passive (`gpui::VN_TAG_PASSIVE`) so embedder hit tests look through it.
         let hitbox = window
             .with_content_mask(Some(ContentMask::rect(viewport)), |window| {
                 let tag = window.set_hitbox_tag(0);
@@ -699,13 +527,10 @@ impl Element for Scrollbar {
                 } else {
                     (max.x, viewport.size.width)
                 };
-                // Nothing to scroll on this axis: no bar, exactly as in a
-                // browser.
                 if max_offset <= px(0.5) {
                     continue;
                 }
-                // The horizontal track stops short of the vertical one, so the
-                // two thumbs never meet in the corner.
+                // The horizontal track stops short of the vertical one so the thumbs never meet.
                 let margin_end = if both && !vertical { width } else { px(0.) };
                 let track = if vertical {
                     Bounds {
@@ -721,15 +546,12 @@ impl Element for Scrollbar {
 
                 let track_len = if vertical { track.size.height } else { track.size.width } - margin_end;
                 let content = viewport_len + max_offset;
-                // The browser's proportion: thumb is to track as viewport is to
-                // content, floored so it never becomes a dot.
                 let thumb_len = (track_len * (viewport_len / content)).max(MIN_THUMB).min(track_len);
                 let travel = track_len - thumb_len;
                 let scrolled = if vertical { -offset.y } else { -offset.x };
                 let start = (travel * (scrolled / max_offset).clamp(0., 1.)).max(px(0.));
 
-                // Two rectangles: the hit target is the full track width and
-                // never moves; the fill is what the hover animation narrows.
+                // The hit target keeps the full track width; only the fill narrows on hover.
                 let hovered = state.get().hovered == Some(axis) || state.get().dragging == Some(axis);
                 let target = if hovered { width - INSET * 2. } else { (width - INSET * 2.) * 0.66 };
                 let mut s = state.get();
@@ -805,20 +627,9 @@ impl Element for Scrollbar {
         let opacity = prepaint.opacity;
         let bounds = viewport.bounds;
 
-        // ---- the scroll chain -----------------------------------------
-        //
-        // Register this container, then route the wheel. Both halves exist for
-        // one gpui fact: `should_handle_scroll` is true for every hitbox under
-        // the pointer, and gpui's own wheel listener does not stop propagation
-        // - so a wheel over a nested box moves the box AND the page. A browser
-        // moves the innermost one that can move, and consults
-        // `overscroll-behavior` before it moves anything else.
-        //
-        // The router only takes over when it has to: when this box is the
-        // nearest box that consumes or contains the wheel AND some ancestor
-        // could also move. Everything else goes through gpui's listener
-        // untouched, which is what keeps the renderer's own `wheel` / `scroll`
-        // listeners - and `preventDefault` - behaving exactly as they did.
+        // Scroll chain: gpui's wheel listener moves every ancestor too, so register this container
+        // and take over only when it is the nearest box to use the wheel AND an ancestor could also
+        // move. Otherwise gpui's listener runs untouched.
         let ancestry = global_id.cloned().unwrap_or_default();
         CHAIN.with(|c| {
             c.borrow_mut().push(ChainEntry {
@@ -843,8 +654,7 @@ impl Element for Scrollbar {
                 if !phase.capture() || !hitbox_id.should_handle_scroll(window) {
                     return;
                 }
-                // Where this box stood before anything moved it (see
-                // `undo_wheel_scroll`), once per container per event.
+                // Offset before anything moved it (see `undo_wheel_scroll`).
                 BEFORE_WHEEL.with(|b| {
                     let mut b = b.borrow_mut();
                     if b.is_empty() {
@@ -858,8 +668,7 @@ impl Element for Scrollbar {
                 let raw = event.delta.pixel_delta(line_height);
                 let mut s = state.get();
 
-                // Axis lock, per GESTURE rather than per event: a diagonal
-                // trackpad swipe must not change owners halfway through.
+                // Axis lock is per gesture so a diagonal swipe cannot change owners.
                 let axis = match s.lock {
                     Some((axis, at)) if now.saturating_duration_since(at) < GESTURE_GAP => axis,
                     _ => {
@@ -873,15 +682,11 @@ impl Element for Scrollbar {
                 s.lock = Some((axis, now));
                 state.set(s);
 
-                // gpui maps a vertical delta onto the horizontal axis for a box
-                // that only scrolls that way, and so do we - that is what a
-                // browser does with a plain mouse wheel over a carousel.
+                // A vertical delta drives a horizontal-only box, as in a browser.
                 let gesture_axis = axis;
                 let (axis, delta) = effective_delta(gesture_axis, raw, (wants_x, wants_y));
 
-                // Capture listeners and registry entries follow paint order,
-                // which deferred children can invert. Use the original element
-                // ancestry and its chaining decision: a child at its edge
+                // Deferred children invert paint order, so use element ancestry: a child at its edge
                 // yields to the nearest ancestor that can use the wheel.
                 let (can_claim, outer_moves) = CHAIN.with(|c| {
                     let chain = c.borrow();
@@ -913,26 +718,16 @@ impl Element for Scrollbar {
                     Axis::Vertical => wants_y,
                     Axis::Horizontal => wants_x,
                 };
-                // Take over only when taking over CHANGES something — that is,
-                // only when this handler is going to stop propagation. If this
-                // box is already at its edge on the locked axis and the axis
-                // chains, the outcome is the one gpui's own listener produces
-                // anyway (the ancestors move, this box does not), and the DOM
-                // `wheel` belongs to the ordinary bubble path.
-                //
-                // This is not an optimisation. Dispatching `wheel` here and
-                // then letting the event carry on to the bubble phase would
-                // fire the app's `@wheel` handler TWICE for one physical
-                // wheel — once from `on_wheel` below and once from the
-                // renderer's own `on_scroll` listener on this same node.
+                // Take over only when that changes something: if this box is at its edge and the
+                // axis chains, gpui's listener already does the right thing. Dispatching `wheel`
+                // here too would fire `@wheel` twice (once here, once from the renderer's `on_scroll`).
                 let will_stop = (usable && can_move(&handle, axis, delta))
                     || !overscroll.chains(axis);
                 if !will_stop {
                     return;
                 }
 
-                // Taking over. The DOM `wheel` event first, because it is
-                // cancelable and a browser fires it before it scrolls anything.
+                // DOM `wheel` first: it is cancelable and fires before scrolling.
                 let prevented = on_wheel
                     .as_ref()
                     .map(|f| f(dom_delta(raw), window, cx))
@@ -968,21 +763,14 @@ impl Element for Scrollbar {
                     }
                     cx.notify(view);
                 }
-                // The chaining decision, which is the whole of
-                // `overscroll-behavior`: an event this box could not use goes
-                // on to the ancestors only when the axis chains. When it does,
-                // gpui's own listener runs and moves them - and moves this box
-                // by nothing, because it is already at its edge.
+                // Chaining: an event this box cannot use goes on to ancestors only if the axis chains.
                 if moved || prevented || !overscroll.chains(axis) {
                     cx.stop_propagation();
                 }
             });
         }
 
-        // The release listener is the axis's own, below, so a drag whose track
-        // went away under it (the content shrank: a filter applied, the list
-        // emptied) would never hear its mouse-up. It stayed `dragging`, and
-        // once the box overflowed again every plain mouse move scrolled it.
+        // Release is handled per axis, so a drag whose track vanished (content shrank) would stay `dragging`.
         let mut s = state.get();
         if s.dragging.is_some_and(|axis| !prepaint.axes.iter().any(|ax| ax.axis == axis)) {
             s.dragging = None;
@@ -996,13 +784,9 @@ impl Element for Scrollbar {
         window.with_content_mask(Some(ContentMask::rect(bounds)), |window| {
             for ax in prepaint.axes.iter() {
                 let axis = ax.axis;
-                // A titlebar that declared `window-drag: move` and happens to
-                // reach the viewport's edge would otherwise have Win32 start a
-                // window drag when the thumb is grabbed — the press would never
-                // reach us at all, because the answer to `WM_NCHITTEST` is
-                // given before any mouse message is generated. `NoDrag` is the
-                // positive "this is client content" answer that opts back out.
-                // Paint-phase only: gpui asserts on the frame it is writing to.
+                // A `window-drag: move` titlebar reaching the viewport edge would make Win32 start a
+                // window drag before the press reaches us (`WM_NCHITTEST` is answered first); `NoDrag`
+                // opts back out. Paint-phase only.
                 window.insert_window_control_hitbox(
                     WindowControlArea::NoDrag,
                     ax.hitbox.clone(),
@@ -1019,7 +803,6 @@ impl Element for Scrollbar {
                     );
                 });
 
-                // ---- press: grab the thumb, or jump the track --------------
                 {
                     let handle = self.handle.clone();
                     let state = state.clone();
@@ -1044,9 +827,6 @@ impl Element for Scrollbar {
                                 event.position.x - thumb_hit.origin.x
                             };
                         } else {
-                            // A press on the bare track centres the thumb on
-                            // the pointer and starts dragging from there, which
-                            // is what every overlay scrollbar does.
                             let half = if vertical { thumb_hit.size.height } else { thumb_hit.size.width } / 2.;
                             s.grab = half;
                             let along = if vertical {
@@ -1069,8 +849,6 @@ impl Element for Scrollbar {
                         s.dragging = Some(axis);
                         s.last_scroll = Some(Instant::now());
                         state.set(s);
-                        // A click on the bare track moves the content, so it is
-                        // a `scroll` event like any other.
                         if jumped {
                             if let Some(f) = &on_scrolled {
                                 f(window, cx);
@@ -1080,7 +858,6 @@ impl Element for Scrollbar {
                     });
                 }
 
-                // ---- move: hover, and the drag ----------------------------
                 {
                     let handle = self.handle.clone();
                     let state = state.clone();
@@ -1107,11 +884,7 @@ impl Element for Scrollbar {
                             s.hovered = None;
                             notify = true;
                         }
-                        // Our own `dragging`, not gpui's `event.dragging()`:
-                        // the press is what starts a thumb drag, and a
-                        // synthesized move (the devtools' `mouse`, a tablet)
-                        // carries no `pressed_button` even mid-gesture. We
-                        // saw the press; that is the fact that matters.
+                        // Our own `dragging`: synthesized moves (devtools, tablet) carry no `pressed_button`.
                         if s.dragging == Some(axis) {
                             cx.stop_propagation();
                             let vertical = axis == Axis::Vertical;
@@ -1127,8 +900,6 @@ impl Element for Scrollbar {
                             };
                             let next = -max_offset * fraction;
                             let current = if vertical { handle.offset().y } else { handle.offset().x };
-                            // Throttled by time AND by distance, so a drag on a
-                            // long document does not repaint per mickey.
                             if (next - current).abs() > px(1.)
                                 && Instant::now().saturating_duration_since(s.last_drag_update) >= throttle
                             {
@@ -1155,7 +926,6 @@ impl Element for Scrollbar {
                     });
                 }
 
-                // ---- release ----------------------------------------------
                 {
                     let handle = self.handle.clone();
                     let state = state.clone();
@@ -1169,10 +939,7 @@ impl Element for Scrollbar {
                         }
                         let mut s = state.get();
                         if s.dragging == Some(axis) {
-                            // The drag ends where the pointer is. The moves are
-                            // throttled, and the last one before the release
-                            // is usually among those dropped, which left the
-                            // thumb short of where it was let go.
+                            // Throttled moves may have dropped the last one, so apply the release position.
                             let vertical = axis == Axis::Vertical;
                             let along = if vertical {
                                 event.position.y - track.origin.y
@@ -1186,8 +953,6 @@ impl Element for Scrollbar {
                             } else {
                                 current
                             };
-                            // A press and release in place lands within rounding
-                            // of where it is; that is not a scroll.
                             let moved = (next - current).abs() > px(0.5);
                             if moved {
                                 if vertical { o.y = next } else { o.x = next }
@@ -1212,8 +977,7 @@ impl Element for Scrollbar {
     }
 }
 
-/// gpui's wheel delta is the platform's (positive = the wheel turned away from
-/// you = the content moves DOWN); the DOM's is the opposite.
+/// gpui's wheel delta has the opposite sign of the DOM's.
 fn dom_delta(delta: Point<Pixels>) -> Point<Pixels> {
     point(-delta.x, -delta.y)
 }
@@ -1235,12 +999,10 @@ fn sample_opacity(state: &State, now: Instant) -> f32 {
     }
 }
 
-/// Moves one axis's painted thumb width toward `target`, and reports where it
-/// got to. Pure: `now` is injected, which is what makes it testable.
+/// Moves a painted thumb width toward `target` and returns where it got to. Pure in `now`.
 fn animate_width(state: &mut State, idx: usize, target: Pixels, now: Instant) -> Pixels {
     let from = state.width[idx];
     if from == Pixels::ZERO {
-        // First frame: adopt rather than animate in from nothing.
         state.width[idx] = target;
         state.width_at = now;
         return target;
@@ -1323,9 +1085,6 @@ mod tests {
         assert_eq!(effective_delta(Axis::Vertical, raw, (true, true)), (Axis::Vertical, px(-80.)));
     }
 
-    /// The browser's proportion: a viewport that shows a quarter of the content
-    /// gets a thumb a quarter of the track long, and one that shows almost all
-    /// of it gets a nearly full one.
     fn thumb_len(viewport: f32, content: f32, track: f32) -> f32 {
         let t = px(track) * (px(viewport) / px(content));
         f32::from(t.max(MIN_THUMB).min(px(track)))
@@ -1335,31 +1094,19 @@ mod tests {
     fn the_thumb_is_proportional_and_never_a_dot() {
         assert!((thumb_len(100., 400., 200.) - 50.).abs() < 0.01);
         assert!((thumb_len(300., 400., 300.) - 225.).abs() < 0.01);
-        // A quarter of a 100 px track would be 25 px, under the floor.
         assert_eq!(thumb_len(100., 400., 100.), f32::from(MIN_THUMB));
-        // 10 000 px of content in a 100 px box would give a 1 px thumb.
         assert_eq!(thumb_len(100., 10_000., 100.), f32::from(MIN_THUMB));
-        // …and the floor never exceeds the track.
         assert_eq!(thumb_len(10., 10_000., 10.), 10.);
     }
 
-    /// A boundary records the run of registry entries its own paint added, and
-    /// re-adds exactly that run — in order — on the frames it replays.
-    ///
-    /// Replay preserves registration order, while the router uses each
-    /// entry's element ancestry to identify nested boxes independently of it.
     #[test]
     fn a_recorded_span_replays_in_the_order_it_was_recorded() {
-        // The walk so far: one outer container was registered before us.
         let mut chain = vec![10u32];
         let mark = chain.len();
-        // …the subtree paints for real and registers two of its own…
         chain.extend([20, 21]);
         let span = span_since(&chain, mark);
         assert_eq!(span, vec![20, 21]);
 
-        // …and the next frame it replays: nothing pushes, so the span goes
-        // back at the same point, ahead of whatever the parent adds after it.
         let mut next = vec![10u32];
         let mark = next.len();
         assert!(span_since(&next, mark).is_empty(), "a replay contributes nothing itself");
@@ -1368,9 +1115,6 @@ mod tests {
         assert_eq!(next, vec![10, 20, 21, 11]);
     }
 
-    /// A mark past the end is the "the subtree registered nothing" case, and it
-    /// has to answer an empty span rather than panic — a subtree with no scroll
-    /// container in it takes this path on every single frame.
     #[test]
     fn a_span_with_nothing_in_it_is_empty_not_a_panic() {
         let chain: Vec<u32> = vec![1, 2];
@@ -1380,7 +1124,6 @@ mod tests {
         assert_eq!(ChainSpan::default().len(), 0);
     }
 
-    /// `overscroll-behavior` is one question with one answer per axis.
     #[test]
     fn overscroll_chains_only_where_css_says_so() {
         let auto = Overscroll::CHAINING;
@@ -1391,24 +1134,16 @@ mod tests {
         assert!(contained.chains(Axis::Horizontal));
     }
 
-    /// The width animation is pure in `now`, so it can be stepped without a
-    /// window — which is the property that makes the hover widen testable.
     #[test]
     fn the_thumb_widens_over_time_and_settles() {
         let t0 = Instant::now();
         let mut s = State::default();
-        // The first frame adopts rather than animating in from zero.
         assert_eq!(animate_width(&mut s, 0, px(6.), t0), px(6.));
-        // A new target starts a transition…
         let mid = animate_width(&mut s, 0, px(8.), t0 + EXPAND / 4);
         assert!(mid > px(6.) && mid < px(8.), "{mid:?} is between the two widths");
-        // …which settles exactly on the target once the duration is up.
         assert_eq!(animate_width(&mut s, 0, px(8.), t0 + EXPAND * 2), px(8.));
     }
 
-    /// The fade is the other pure transition: a bar that goes invisible does
-    /// not blink out, and one that comes back does not fade in from where it
-    /// was not.
     #[test]
     fn visibility_fades_from_wherever_it_was() {
         let t0 = Instant::now();
@@ -1416,7 +1151,6 @@ mod tests {
         assert_eq!(sample_opacity(&s, t0), 0.0);
         assert!(sample_opacity(&s, t0 + FADE / 2) > 0.3);
         assert_eq!(sample_opacity(&s, t0 + FADE * 2), 1.0);
-        // Interrupted halfway down, it resumes from the opacity it had.
         s.visible = false;
         s.fade_from = 0.5;
         s.fade_at = t0;
@@ -1425,7 +1159,6 @@ mod tests {
         assert_eq!(sample_opacity(&s, t0 + FADE * 2), 0.0);
     }
 
-    /// `scrollbar-width: none` is not "do not scroll" — it is "do not draw".
     #[test]
     fn hiding_the_bar_keeps_the_style_otherwise_intact() {
         let base = ScrollbarStyle::from_text_color(gpui::black());
@@ -1435,8 +1168,6 @@ mod tests {
         assert_eq!(base.hidden().thumb, base.thumb);
     }
 
-    /// The default thumb takes its hue from the text, which is what makes it
-    /// readable on a dark page and on a light one with no theme in between.
     #[test]
     fn the_default_thumb_follows_the_text_colour() {
         let dark_text = gpui::hsla(0., 0., 0.1, 1.0);
@@ -1445,15 +1176,10 @@ mod tests {
         let on_dark = ScrollbarStyle::from_text_color(light_text);
         assert!(on_light.thumb.l < 0.5, "dark text (light page) → dark thumb");
         assert!(on_dark.thumb.l > 0.5, "light text (dark page) → light thumb");
-        // Both are translucent — an overlay scrollbar is never a solid slab.
         assert!(on_light.thumb.a < 0.5 && on_light.thumb_active.a > on_light.thumb.a);
-        // …and the track starts fully transparent, which is what "reserves no
-        // space and paints no gutter" looks like.
         assert_eq!(on_light.track.a, 0.0);
     }
 
-    /// `scrollbar-color` is the author's answer, and it wins outright — the
-    /// hover state does not invent a second colour they did not choose.
     #[test]
     fn scrollbar_color_replaces_both_thumb_states() {
         let thumb = gpui::hsla(0.5, 1., 0.5, 1.);

@@ -1,51 +1,21 @@
-// vue-native PRODUCTION builder: one self-contained IIFE, no loader, no HMR.
-//
+// Production builder: one self-contained IIFE, no loader, no HMR.
 // Usage: bun prod.ts [app-entry.js] [out-file] [--config <path>] [--app-root <path>] [--define=KEY=VALUE ...]
 //
-//   dist/app.prod.js   IIFE — @vue/runtime-core + src/runtime.ts + every app
-//                      module + every SFC <style>, minified, __DEV__ = false.
-//                      `vn build` (cli/build-app.ts) packs it into the app's
-//                      VNPK payload and stamps that into a prebuilt host, so
-//                      the shipped exe needs no dist/ and no Rust toolchain
-//                      (docs/PACKAGING.md). crates/vn-app/build.rs also runs
-//                      this file, for the embedded devtools inspector.
-//   dist/window.json   the `window` block of vn.config.json (see below)
-//   dist/assets.json   [{ key, path }] — every file an import referred to by
-//                      URL (`?url`, `import x from "./a.png"`), which `vn build`
-//                      packs into the payload under that key (vitecompat.ts)
+//   dist/app.prod.js   IIFE: @vue/runtime-core + src/runtime.ts + every app module + every SFC <style>,
+//                      minified, __DEV__ = false. `vn build` (cli/build-app.ts) packs it into the VNPK
+//                      payload; crates/vn-app/build.rs also runs this file for the devtools inspector.
+//   dist/window.json   the `window` block of vn.config.json
+//   dist/assets.json   [{ key, path }]: every file imported by URL, packed into the payload under key
 //
-// Differences vs the dev builder (build.ts), and why:
+// Differences from the dev builder (build.ts):
+// - one IIFE; "vue" and "vue-native" are aliased to src/runtime.ts instead of a __VN__ registry;
+// - inlineTemplate is true (no HMR, so the render fn may live inside setup());
+// - styles are pushed to (globalThis.__VN_CSS__ ??= []) ahead of the bundle instead of setCss;
+// - __DEV__ false, no HMR epilogue.
+// Unchanged: hoistStatic is forced off (the host has no insertStaticContent), and the scope id
+// hashes the module id only, so dev and prod CSS match.
 //
-//   dev (build.ts)                    prod (this file)
-//   ------------------------------    ---------------------------------------
-//   vendor.js + one script per file   ONE iife (nothing to hot-swap)
-//   __VN__ registry / require()       Bun bundles the graph; "vue" and
-//                                     "vue-native" are ALIASED to src/runtime.ts
-//   inlineTemplate: false (rerender   inlineTemplate: true — no HMR means the
-//     needs a separate _sfc_main.     render fn may live inside setup(), which
-//     render to swap)                 is faster and smaller
-//   __VN__.setCss(id, css)            (globalThis.__VN_CSS__ ??= []).push(css)
-//                                     emitted ahead of the bundle; runtime.ts
-//                                     createApp installs the join on mount
-//   __DEV__ true, HMR epilogue        __DEV__ false, no createRecord/__hmrId
-//
-// UNCHANGED and non-negotiable (research report F7 / e.3):
-// - hoistStatic is FORCED OFF in prod too — the host has no
-//   insertStaticContent, so createStaticVNode would render nothing. The
-//   emitted bundle is asserted free of it below.
-// - the scope id hashes the module id only, so it matches the dev builder's
-//   (`Bun.hash(id)`), which keeps dev/prod CSS identical.
-//
-// VITE PARITY (vitecompat.ts): the import shapes a Vite app writes (`?raw`,
-// `?url`, assets, `.svg` components, `import.meta.glob`, `?worker`/`.wasm`
-// stubs), the app's `define`, SFC `<style>` through the app's Tailwind with
-// `@import` inlined, `index.html`'s styles and classic scripts, and the app's
-// own pinia/vue-router. research/reports/m26/client-gap.md §3.1 is the list.
-//
-// DEBT: compileVue()/the style pipeline below is a deliberate ~100-line copy of
-// build.ts. build.ts is owned by the dev-loop track this round, so importing
-// from it (or refactoring a shared module out of it) is off limits; the two
-// must be merged into a shared `sfc.ts` next round.
+// DEBT: compileVue() and the style pipeline are a ~100-line copy of build.ts; merge into a shared sfc.ts.
 
 import { parse, compileScript, compileTemplate, compileStyle, registerTS } from "@vue/compiler-sfc";
 import { createRequire } from "module";
@@ -80,8 +50,6 @@ import {
   type LiftedHtml,
 } from "./vitecompat";
 
-// ---- paths ----------------------------------------------------------------
-
 const { defines: cliDefines, rest: argv } = takeDefineArgs(process.argv.slice(2));
 let configOverride: string | undefined;
 let appRootOverride: string | undefined;
@@ -107,17 +75,10 @@ const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.ts
 const APP_SRC_DIR = dirname(ENTRY_ABS);
 const OUT_FILE = resolve(positional[1] ?? join(PKG_DIR, "dist", "app.prod.js"));
 
-// `apps/<app>/vn.config.json`'s `window` block, emitted next to the bundle as
-// `window.json`: `vn build` packs it as the payload's `vn/window.json`, and
-// the inspector build `include_str!`s its own. The host reads it BEFORE
-// `cx.open_window`, so it cannot ride inside the bundle (which evaluates long
-// after the window exists) - see docs/WINDOWING.md 4.1. Always written, `{}`
-// when the app declares none.
-//
-// It sits next to `src/`, which is NOT the same thing as the app's package
-// root: `APP_ROOT` below walks up to the nearest `package.json`/`node_modules`
-// for module resolution and can land a level higher. Same name, same rule and
-// same reason as `build.ts`'s `VN_CONFIG_DIR`.
+// The `window` block of vn.config.json, emitted as `window.json` (`vn build` packs it as
+// vn/window.json). The host reads it before opening the window, so it cannot ride inside the
+// bundle. Always written, `{}` when absent. Read from next to `src/`, not APP_ROOT (which can land
+// a level higher).
 const VN_CONFIG_DIR = appRootOverride ?? (APP_SRC_DIR.endsWith(`${sep}src`) ? dirname(APP_SRC_DIR) : APP_SRC_DIR);
 const VN_CONFIG_PATH = configOverride ?? join(VN_CONFIG_DIR, "vn.config.json");
 const WINDOW_JSON = join(dirname(OUT_FILE), "window.json");
@@ -145,33 +106,22 @@ const VN_CONFIG = readVnConfig();
 function windowConfig(): string {
   const cfg = VN_CONFIG;
   const win = { ...((cfg.window as Record<string, unknown> | undefined) ?? {}) };
-  // The top-level `"devtools": false` (docs/DEVTOOLS.md) rides along inside
-  // the window block: that blob is the only JSON the host reads before the
-  // window exists, and since m22 the flag decides whether a devtools listener
-  // is bound at all. Same fold, same precedence, as build.ts - a `window`
-  // block that declares its own wins.
+  // Top-level "devtools": false folds into the window block, as in build.ts; a window block that sets it wins.
   if (typeof cfg.devtools === "boolean" && typeof win.devtools !== "boolean") {
     win.devtools = cfg.devtools;
   }
-  // `"httpCache": { "maxMB": N }` (docs/STORAGE.md §12): the host installs the
-  // cache before any JS runs, so it rides here too, with the same precedence.
+  // "httpCache" folds in the same way: the host installs the cache before any JS runs.
   if (cfg.httpCache !== undefined && win.httpCache === undefined) {
     win.httpCache = cfg.httpCache;
   }
   return JSON.stringify(win, null, 2);
 }
 
-/// Same discovery rule as the dev builder — no config, no Tailwind, and the
-/// emitted bundle is byte-identical to a pre-Tailwind one.
+/// Same discovery rule as the dev builder.
 const TW_CONFIG = findConfig(APP_SRC_DIR, WS_ROOT);
 
-// ---- app package root + TypeScript-aware SFC compilation -------------------
-// Mirrors build.ts exactly; see the long comment there for why `fs` and
-// `registerTS` are both required to compile a component that writes
-// `defineProps<SomeImportedType>()`. npm DEPENDENCIES need nothing special
-// here: prod is a single Bun bundle, so a bare specifier resolves and inlines
-// like any other import (only "vue"/"vue-native" and the app's own
-// vn.config.json "aliases" are re-pointed, and pinia/vue-router chosen, below).
+// App package root and TS-aware SFC compilation: as in build.ts. npm dependencies need nothing
+// special: prod is one Bun bundle, so bare specifiers inline like any import.
 function findAppRoot(startDir: string, stopDir: string): string {
   let dir = startDir;
   for (;;) {
@@ -199,11 +149,8 @@ try {
 const toId = (abs: string) => relative(WS_ROOT, abs).split(sep).join("/");
 const J = (v: unknown) => JSON.stringify(v);
 
-/** Build-log lines, said once each, printed after the build. */
 const advisories = new Set<string>();
 const advise = (m: string) => advisories.add(m);
-
-// ---- defines --------------------------------------------------------------
 
 const APP_DEFINES = appDefines(VN_CONFIG.define, cliDefines, VN_CONFIG_PATH);
 if (APP_DEFINES.errors.length) {
@@ -211,10 +158,7 @@ if (APP_DEFINES.errors.length) {
   process.exit(1);
 }
 
-/**
- * What `vite build` inlines for `import.meta.env`, plus `VN: true` (vue-native's own, see build.ts)
- * and the app's own `import.meta.env.*` defines.
- */
+/** What `vite build` inlines for `import.meta.env`, plus `VN: true` and the app's own defines. */
 const VITE_ENV_PROD: Record<string, unknown> = {
   MODE: "production",
   DEV: false,
@@ -232,10 +176,8 @@ for (const [k, v] of Object.entries(APP_DEFINES.defines)) {
   }
 }
 
-// Vue's esm-bundler build reads these as bare identifiers. Same block as
-// build.ts with the two production flips; `__DEV__: false` is what strips
-// hmr.ts, customFormatter.ts and every dev warning through the
-// `/*@__PURE__*/` + `__DEV__` guards.
+// Vue's esm-bundler build reads these as bare identifiers. `__DEV__: false` strips hmr.ts,
+// customFormatter.ts and the dev warnings.
 const DEFINES: Record<string, string> = {
   __DEV__: "false",
   "process.env.NODE_ENV": '"production"',
@@ -249,37 +191,23 @@ const DEFINES: Record<string, string> = {
   __SSR__: "false",
   __TEST__: "false",
   __VERSION__: '"3.5"',
-  // `import.meta` is a SyntaxError in a classic script, and this bundle is one
-  // (an IIFE the host evaluates) — Bun leaves `import.meta` VERBATIM in an
-  // iife output, so a single `import.meta.env.MODE`, which is how every Vite
-  // app asks what build it is, used to work in dev (build.ts defines it) and
-  // kill the whole prod bundle at eval. Same block as build.ts, production
-  // values: this is the substitution Vite itself performs, so it is parity
-  // rather than a shim. Dotted forms first (Bun matches the longest key); the
-  // bare `import.meta` catches destructuring. The tripwire in `build()` fails
-  // the build if anything still survives.
-  //
-  // The object values MUST be JSON: Bun parses a define value as JSON (or an
-  // identifier) and inserts anything else as a STRING — see the same block in
-  // build.ts for how that made `const { MODE } = import.meta.env` undefined.
+  // `import.meta` is a SyntaxError in a classic script and Bun leaves it verbatim in iife output, so
+  // substitute the production values Vite would inline (same block as build.ts; values must be JSON).
+  // The tripwire in `build()` fails the build if anything survives.
   "import.meta.env.MODE": '"production"',
   "import.meta.env.DEV": "false",
   "import.meta.env.PROD": "true",
   "import.meta.env.SSR": "false",
   "import.meta.env.BASE_URL": '"/"',
-  // vue-native's own (build.ts): `if (!import.meta.env.VN) import("…")` keeps
-  // browser-only code, and what it imports, out of the bundle.
+  // vue-native's own: `if (!import.meta.env.VN) import("…")` keeps browser-only code out of the bundle.
   "import.meta.env.VN": "true",
   "import.meta.env": JSON.stringify(VITE_ENV_PROD),
   "import.meta.hot": "undefined",
   "import.meta.url": '"vn://app.prod.js"',
-  // An `import.meta.glob` the load-time expansion did not reach would
-  // otherwise become `{env,url}.glob(...)` — valid syntax, so the classic-script
-  // check below passes, and a TypeError at eval. Defined to a name instead, so
-  // a survivor is FINDABLE in the output and fails the build (vitecompat.ts).
+  // An unexpanded `import.meta.glob` would become `{env,url}.glob(...)`, valid syntax that fails at
+  // eval; defined to a findable name so it fails the build.
   "import.meta.glob": GLOB_TRIPWIRE,
   "import.meta": JSON.stringify({ env: VITE_ENV_PROD, url: "vn://app.prod.js" }),
-  // The app's own (vn.config.json "define", `--define`), Vite's semantics.
   ...APP_DEFINES.defines,
 };
 
@@ -289,12 +217,8 @@ function writeAtomic(path: string, text: string) {
   renameSync(tmp, path);
 }
 
-// ---- index.html -----------------------------------------------------------
-// A Vite app keeps its global CSS and its theme script in `index.html` next to
-// `src/`. Nothing reads that file in a window that has no document, so it is
-// lifted: styles into the stylesheet in document order, classic scripts into a
-// prelude module that runs before the entry, the mount element's attributes
-// onto the root (vitecompat.ts `liftIndexHtml`).
+// index.html: styles go into the stylesheet in document order, classic scripts into a prelude
+// module that runs before the entry, mount attributes onto the root (vitecompat.ts `liftIndexHtml`).
 const INDEX_HTML = join(VN_CONFIG_DIR, "index.html");
 const LIFTED: LiftedHtml | null = existsSync(INDEX_HTML) ? liftIndexHtml(INDEX_HTML, VN_CONFIG_DIR) : null;
 const HTML_PRELUDE =
@@ -312,36 +236,21 @@ if (LIFTED) {
   }
 }
 
-// ---- SFC pipeline (see DEBT note in the header) ----------------------------
-
-/** Stable per-file scope id — identical formula to build.ts, so dev and prod
- *  produce byte-identical `data-v-*` ids for the same file. */
+/** Stable per-file scope id: the same formula as build.ts, so dev and prod emit the same `data-v-*`. */
 const scopeIdOf = (id: string) => Bun.hash(id).toString(16).slice(0, 8);
 
 /**
- * Template comments are DROPPED in a production build, as Vite's are: its
- * build runs with NODE_ENV=production, which loads compiler-core's prod build,
- * whose `comments` default is false. This process loads the dev compiler, so
- * a comment was kept, and a component whose template starts with one
- * (`<!-- why --><keep-alive>…`) compiled to a FRAGMENT root. The dev runtime
- * sees through that (`filterSingleRoot`, `DEV_ROOT_FRAGMENT`); the prod runtime
- * this bundle runs does not, so the component lost its single root: no
- * fallthrough attrs and none of its parent's scope id. Argon's UserBar
- * `.user-avatar[data-v-…] { margin-right: 10px }` never matched the
- * ArgonAvatar it styles.
+ * Template comments are dropped in a production build, as in Vite. This process loads the dev
+ * compiler, which keeps them, so a template starting with a comment compiled to a fragment root; the
+ * prod runtime does not see through that and the component lost fallthrough attrs and its parent's
+ * scope id.
  */
 const PROD_TEMPLATE_COMMENTS = false;
 
 /** id -> compiled css, filled by the .vue onLoad hook below. */
 const cssById = new Map<string, string>();
 
-/**
- * A stylesheet's text through what Vite's CSS pipeline does for every sheet:
- * local `@import`s inlined (postcss-import), then the app's Tailwind when the
- * text uses it (`@apply`, `@layer`, `theme()`, `@tailwind`) — 228 `@apply`s in
- * the Argon client's SFCs reached vn-css verbatim before this and were dropped
- * there without a word.
- */
+/** A stylesheet's text through Vite's CSS pipeline: local @imports inlined, then the app's Tailwind when the text uses it. */
 async function viteCss(text: string, from: string, label: string): Promise<string> {
   let css = inlineCssImports(text, from, VN_CONFIG_DIR, advise, undefined, ASSETS);
   if (TW_CONFIG && needsTailwindPass(css)) {
@@ -356,9 +265,8 @@ async function viteCss(text: string, from: string, label: string): Promise<strin
 
 async function compileVue(absPath: string, source: string): Promise<{ contents: string; loader: "js" | "ts" }> {
   const id = toId(absPath);
-  // The template AST is parsed HERE and reused by compileTemplate, so this is
-  // where comments are dropped; `compilerOptions.comments` below only covers
-  // a template compiled from source.
+  // The template AST is parsed here and reused by compileTemplate, so comments are dropped here;
+  // `compilerOptions.comments` below covers a template compiled from source.
   const { descriptor, errors } = parse(source, {
     filename: absPath,
     templateParseOptions: { comments: PROD_TEMPLATE_COMMENTS },
@@ -369,10 +277,8 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
   const shortId = scopeIdOf(id);
   const scopeId = `data-v-${shortId}`;
   const hasScoped = descriptor.styles.some((s) => s.scoped);
-  // Same rule as build.ts: compileScript leaves TS syntax in its output, so the
-  // chunk must be handed to Bun with the matching loader. RETURNED rather than
-  // stashed in a module variable: the style pass below awaits, so two
-  // components compile interleaved.
+  // As in build.ts: compileScript leaves TS syntax, so hand the chunk to Bun with the matching
+  // loader. RETURNED, not stashed: the style pass awaits and compiles interleave.
   const isTS = /^tsx?$/.test(descriptor.scriptSetup?.lang ?? descriptor.script?.lang ?? "");
 
   const chunks: string[] = [];
@@ -382,18 +288,14 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
       id: shortId,
       isProd: true,
       fs: SFC_FS,
-      // Prod has no HMR, so the render fn may be inlined into setup() —
-      // smaller output and one less property lookup per render.
+      // No HMR in prod, so the render fn may be inlined into setup().
       inlineTemplate: true,
       genDefaultAs: "_sfc_main",
       templateOptions: {
         compilerOptions: {
-          // compileTemplate hard-defaults this to true and then spreads
-          // compilerOptions over it, so ours wins (F7).
+          // compileTemplate defaults this to true then spreads compilerOptions over it, so ours wins.
           hoistStatic: false,
-          // vue-native host elements the HTML tag list does not contain —
-          // without this `<lottie>` compiles to resolveComponent("lottie").
-          // Lockstep with build.ts, where the rationale is written out.
+          // vue-native host elements missing from the HTML tag list (lockstep with build.ts).
           isCustomElement: (tag: string) => tag === "lottie" || tag.startsWith("vn-"),
           comments: PROD_TEMPLATE_COMMENTS,
         },
@@ -432,14 +334,8 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
   if (hasScoped) chunks.push(`_sfc_main.__scopeId = ${J(scopeId)};`);
   chunks.push("export default _sfc_main;");
 
-  // F7 tripwire, applied to the COMPILED SFC rather than to the finished
-  // bundle: `createStaticVNode` needs `insertStaticContent`, which the host
-  // does not implement, so a hoistStatic leak must fail the build. It has to be
-  // checked here — the bundle also *contains* runtime-core's own definition of
-  // the function (any namespace re-export, e.g. through vue-router or pinia,
-  // keeps it from being tree-shaken), so scanning the output is a false
-  // positive waiting to happen. The compiled template is the only place the
-  // leak can originate.
+  // hoistStatic tripwire on the compiled SFC: createStaticVNode needs insertStaticContent, which the
+  // host lacks. Checked here, not on the bundle, which contains runtime-core's own definition of it.
   let code = chunks.join("\n");
   if (/\bcreateStaticVNode\b/.test(code)) {
     throw new Error(`${id}: emitted createStaticVNode — hoistStatic leaked back on (F7)`);
@@ -450,9 +346,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
   const cssChunks: string[] = [];
   for (const style of descriptor.styles) {
     let text = style.content;
-    // Vite's order: the CSS pipeline (postcss-import, Tailwind) first, the
-    // scoped/v-bind transform after — so an `@import`ed sheet is scoped too
-    // and `@apply`'s expansion lands inside the scoped rule.
+    // Vite's order: CSS pipeline first, so an @imported sheet is scoped too.
     if (!style.lang || style.lang === "css" || style.lang === "postcss") {
       text = await viteCss(text, absPath, `${id} <style>`);
     } else {
@@ -467,9 +361,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
       id: scopeId,
       scoped: style.scoped,
       trim: true,
-      // MUST match compileScript's `isProd`: both hash a `v-bind()` variable's
-      // name from it, and a mismatch makes useCssVars write `--x` while the
-      // rule reads `--y`.
+      // MUST match compileScript's `isProd`: both hash a v-bind() variable's name from it.
       isProd: true,
     });
     if (out.errors.length) throw new Error(`${id} <style>: ${out.errors.join("; ")}`);
@@ -481,25 +373,14 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
   return { contents: code, loader: isTS ? "ts" : "js" };
 }
 
-/**
- * Stylesheets the app imported from JS (`import "./index.css"`), in first-seen
- * order — the prod half of build.ts's CSS-entry support.
- *
- * They are keyed by module id into `cssById` like a component's `<style>`, so
- * the one sorted aggregation below orders them, and both builders agree on the
- * cascade. `.vn/` sorts first (utilities), then everything else by id.
- */
+/** Stylesheets imported from JS (`import "./index.css"`), in first-seen order. Keyed by module id into `cssById` so the one sorted aggregation orders them; `.vn/` sorts first. */
 const cssEntryIds: string[] = [];
 /** True when one of them declares `@tailwind utilities` itself. */
 let appOwnsUtilities = false;
 
-// ---- the import shapes, and the framework packages ---------------------------
-
 /** payload key -> absolute path: every asset an import referred to by URL. */
 const ASSETS = new Map<string, string>();
 
-// pinia / vue-router: the app's own copy when it declares one (an app on
-// pinia 3 gets pinia 3, as in its Vite build), vue-native's otherwise.
 const FRAMEWORK = new Map(
   ["vue-router", "pinia"].map((name) => {
     const dep = frameworkDep(
@@ -514,12 +395,9 @@ const FRAMEWORK = new Map(
 );
 
 /**
- * vn.config.json `"aliases"`: a bare module name and the app's own file that
- * stands in for it, relative to the app root —
- * `{ "some-sdk": "native/some-sdk.ts" }`. It is how a native extension's JS
- * half ships: the embedding host provides the native functions, the app
- * provides the module that drives them, and every importer of the npm name
- * (app code or a library) lands on that one file, never on the npm package.
+ * vn.config.json `"aliases"`: a bare module name and the app file standing in for it, relative to
+ * the app root (`{ "some-sdk": "native/some-sdk.ts" }`): the JS half of a native extension. Every
+ * importer lands on that file, never the npm package.
  */
 function appAliases(raw: unknown): Map<string, string> {
   const out = new Map<string, string>();
@@ -569,14 +447,8 @@ const SHAPES = {
 const vuePlugin = {
   name: "vue-sfc-prod",
   setup(build: any) {
-    // `import "./index.css"` — the shape every Vite app's entry has, and the
-    // file a shadcn-shaped app keeps its whole palette in. Bun would treat a
-    // .css file as an asset; it becomes an empty module whose CONTENT went into
-    // the stylesheet instead. Same rule as build.ts: when the app has a
-    // Tailwind config the sheet goes through Tailwind's own PostCSS pass with
-    // ITSELF as the entry, which is what makes its `@tailwind`, `@layer` and
-    // `@apply` mean anything — after its local `@import`s are inlined, as
-    // postcss-import does in Vite.
+    // `import "./index.css"`: Bun would treat the .css as an asset; it becomes an empty module and its
+    // content goes into the stylesheet, through Tailwind when configured (as in build.ts).
     build.onLoad({ filter: /\.css$/ }, async (args: any) => {
       const id = toId(args.path);
       if (!cssById.has(id)) {
@@ -587,23 +459,16 @@ const vuePlugin = {
       }
       return { contents: "", loader: "js" };
     });
-    // Without the dev loader's pre-seeded registry, "vue" (compiled render
-    // helpers) and "vue-native" (app code) have to resolve somewhere: both are
-    // our runtime module, exactly as the loader aliases them at runtime.
+    // Without the dev loader's pre-seeded registry, "vue" and "vue-native" both resolve to our runtime.
     build.onResolve({ filter: /^(vue|vue-native)$/ }, () => ({ path: RUNTIME_ENTRY }));
-    // The app's own "aliases" (appAliases above): an app with the npm package
-    // installed — for its typings, or because it also ships a browser build —
-    // gets its stand-in file, never the npm package, from every importer.
+    // The app's own "aliases" (appAliases): its stand-in file wins over the npm package everywhere.
     if (APP_ALIASES.size) {
       const names = [...APP_ALIASES.keys()].map((name) => name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
       build.onResolve({ filter: new RegExp(`^(${names.join("|")})$`) }, (args: any) => ({
         path: APP_ALIASES.get(args.path)!,
       }));
     }
-    // The other two pre-seeded ids ride vendor.js in dev, which means they are
-    // resolved from THIS package's node_modules there. Prod resolves them once,
-    // up front (FRAMEWORK above), so every importer — app code, a workspace
-    // package, a library — lands on ONE copy.
+    // vue-router and pinia are resolved once up front (FRAMEWORK), so every importer lands on one copy.
     build.onResolve({ filter: /^(vue-router|pinia)$/ }, (args: any) => ({
       path: FRAMEWORK.get(args.path)!.path,
     }));
@@ -632,23 +497,15 @@ const entryPlugin = {
   },
 };
 
-// ---- ASCII ----------------------------------------------------------------
-
 /**
- * The bundle with every non-ASCII character escaped (ascii.ts), so the host's
- * JavaScriptCore keeps its source 8-bit: one character outside ASCII makes the
- * whole source UTF-16, twice the memory for the life of the process. The
- * Argon client's translations made that 21 MB instead of 12
- * (research/reports/m26/perf-mem-3.md §3).
- *
- * The pass never fails the build. When it cannot lex the bundle, or Bun's
- * parser reads the result differently, the bundle is written as it was and an
- * advisory says why. `VN_BUNDLE_UTF8=1` skips the pass.
+ * The bundle with every non-ASCII character escaped (ascii.ts): one non-ASCII character makes
+ * JavaScriptCore keep the whole source as UTF-16, doubling its memory. Never fails the build: if the
+ * bundle cannot be lexed or the result parses differently, it is written as is with an advisory.
+ * `VN_BUNDLE_UTF8=1` skips the pass.
  */
 function asciiBundle(code: string): string {
   const before = nonAsciiCount(code);
   if (!before || process.env.VN_BUNDLE_UTF8 === "1") return code;
-  // UTF-16 takes one byte more per character than 8-bit.
   const extraMB = (chars: number) => (chars / 1048576).toFixed(1);
   const r = asciiOnly(code);
   const problem = r.failed ?? checkAscii(code, r.code);
@@ -667,8 +524,6 @@ function asciiBundle(code: string): string {
   }
   return r.code;
 }
-
-// ---- build ----------------------------------------------------------------
 
 async function build() {
   const t0 = Date.now();
@@ -692,12 +547,8 @@ async function build() {
     for (const log of result.logs) console.error(log);
     throw new Error("prod build failed");
   }
-  // Namespace objects that say they are (`import()` → defineAsyncComponent):
-  // vitecompat.ts `tagModuleNamespaces`.
   const body = tagModuleNamespaces(await result.outputs[0].text()).code;
 
-  // (The F7 createStaticVNode tripwire now runs per-SFC inside compileVue —
-  // see the comment there for why the finished bundle is the wrong place.)
   // The whole point of the prod define block: no dev branches survive.
   if (/\b__DEV__\b/.test(body)) {
     throw new Error("__DEV__ survived minification — the define block did not apply");
@@ -710,13 +561,9 @@ async function build() {
       `an import.meta.glob(...) survived the build and would throw at startup: …${body.slice(Math.max(0, glob.index - 80), glob.index + 80)}…`,
     );
   }
-  // …and the bundle must PARSE as the classic script the host evaluates it as.
-  // A surviving `import.meta` is the case this exists for — a SyntaxError that
-  // takes the WHOLE bundle down at eval — and it has to fail here, at build
-  // time, rather than on a user's machine as a blank window. Parsing (bun's
-  // parser is JavaScriptCore's, the host's own engine) rather than grepping,
-  // because a library's string literal that merely MENTIONS `import.meta`
-  // would be a false positive. `new Function` compiles without running.
+  // The bundle must also PARSE as a classic script: a surviving `import.meta` is a SyntaxError that
+  // takes the whole bundle down at eval, so fail at build time. Parse rather than grep (a string
+  // literal may mention it); `new Function` compiles without running.
   try {
     new Function(body);
   } catch (e) {
@@ -741,23 +588,11 @@ async function build() {
   const headCss = LIFTED ? await htmlCss(LIFTED.headCss) : [];
   const bodyCss = LIFTED ? await htmlCss(LIFTED.bodyCss) : [];
 
-  // Styles run BEFORE the bundle: runtime.js createApp joins __VN_CSS__ into
-  // the stylesheet on mount, so the first paint is already styled. Sorted by
-  // module id so the cascade order matches the dev loader's (which aggregates
-  // in sorted-file-scan order).
-  //
-  // The Tailwind utilities sheet is keyed under the SAME synthetic id the dev
-  // builder uses (".vn/tailwind.css"), whose leading "." sorts it first — so
-  // dev and prod put the utilities layer in exactly the same place: ahead of
-  // every component <style>. See tailwind.ts for why that ordering is right.
-  //
-  // …unless one of the app's OWN stylesheets already declares `@tailwind
-  // utilities`, in which case it carries them and a second copy would be pure
-  // duplication. build.ts makes the same call for the same reason.
-  //
-  // index.html's sheets bracket all of it the way a browser orders them: the
-  // ones in <head> come before the bundle's CSS (which Vite injects as a
-  // <link> at the end of <head>), the ones in <body> after it.
+  // Styles run before the bundle (createApp joins __VN_CSS__ on mount, so first paint is styled),
+  // sorted by module id to match the dev loader's cascade. The Tailwind sheet is keyed
+  // ".vn/tailwind.css", which sorts first, as in dev; it is skipped when an app stylesheet already
+  // declares `@tailwind utilities`. index.html's sheets bracket it: <head> ones before the bundle's
+  // CSS, <body> ones after.
   if (TW_CONFIG && !appOwnsUtilities) {
     const t = Date.now();
     cssById.set(TW_ID, await generateTailwind(TW_CONFIG));

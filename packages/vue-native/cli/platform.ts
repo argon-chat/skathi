@@ -11,10 +11,7 @@
 //   | cargo | `--target` from .cargo/config.toml | `--target <triple>` (the checkout pins Windows) |
 //   | output | a stamped `<exeName>.exe` (stamp.ts) | `<exeName>.app` with the payload in Contents/Resources (macos-bundle.ts) |
 //
-// What a platform PRODUCES is build-app.ts's `PACKAGERS`, one function each.
-// Any OS that is not macOS keeps the Windows row: that is what every OS got
-// before macOS existed, and it is what a Linux CI running `--payload-only`
-// still gets.
+// What a platform produces is build-app.ts's `PACKAGERS`. Any OS that is not macOS keeps the Windows row.
 
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -59,8 +56,7 @@ export function hostsFor(platform: Platform, arch: string = process.arch): Platf
       triple,
       exeFile: "vn-app",
       cachedFile: "vn-host",
-      // .cargo/config.toml pins the Windows target, and a project config wins
-      // over the user's (docs/MACOS.md §1).
+      // .cargo/config.toml pins the Windows target, and a project config wins over the user's.
       cargoTarget: ["--target", triple],
       cacheRoot: () => join(homedir(), "Library", "Caches", "vue-native", "hosts"),
     };

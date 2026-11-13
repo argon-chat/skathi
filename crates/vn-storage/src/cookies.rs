@@ -1,53 +1,20 @@
-//! The cookie jar's persistence: redjs's `CookieHost`, backed by
-//! `<storage folder>/cookies.sealed`.
+//! The cookie jar's persistence: redjs's `CookieHost`, backed by `<storage folder>/cookies.sealed`.
+//! redjs owns the jar and its rules.
 //!
-//! redjs owns the jar and every cookie rule (`redjs::webapi::cookies`). This
-//! module only decides where the persistent cookies live between runs and how
-//! they are protected. The split is the same one `localStorage` has (see
-//! [`crate`]'s header).
+//! Always sealed, whatever `appStorage`'s `encrypted` setting: a session cookie is the login.
+//! Without a provider (not Windows) the jar stays in memory and one advisory says so; it is
+//! never written as plaintext.
 //!
-//! # Always sealed
+//! The folder is latched at [`install`]: the host can provision cookies before JS runs, and a
+//! later `setStorageFolder` moves `localStorage`, not the jar.
 //!
-//! Cookies are credentials: a session cookie IS the login. So the file is
-//! sealed with the same provider as `localStorage.sealed` (DPAPI on Windows)
-//! **whatever `appStorage`'s `encrypted` setting is**, as Chromium encrypts its
-//! cookie store whether or not anything else is. This is the sticky rule at its
-//! strongest: the jar is never written in plaintext, and no call opens it up.
-//! There is no `cookies.json`.
+//! redjs calls `store` on every change, from any thread, with its jar lock held, so `store`
+//! only stages; [`pump`] seals and writes once per frame and [`flush`] writes now. Lock order:
+//! redjs's jar lock, then this module's.
 //!
-//! Without a provider (not Windows), the jar works in memory and nothing
-//! persists. One advisory says so. Refusing beats a silent downgrade to
-//! plaintext (docs/STORAGE.md §5).
-//!
-//! # Which folder
-//!
-//! The storage folder **as of startup**: the default one
-//! (`%LOCALAPPDATA%\<app>\storage`, or `VN_APP_NAME`'s). It is latched at
-//! [`install`], before any JS runs, because the host can provision cookies
-//! before JS (vn-app's ArgonSecure producer does). A later
-//! `appStorage.setStorageFolder` moves `localStorage`, not the jar.
-//!
-//! # Loaded at startup, written coalesced
-//!
-//! [`install`] loads the file into the jar at once, so the first request
-//! carries the cookies. redjs calls `store` on every change, from whichever
-//! thread made it (a `fetch` worker included) and with its jar lock held. So
-//! `store` only encodes and stages. [`pump`] (once per frame, beside
-//! `localStorage`'s) seals and writes at most once. [`flush`] writes now, and
-//! vn-app calls it at quit.
-//!
-//! Lock order: redjs's jar lock, then this module's. Nothing here calls back
-//! into redjs's cookie module while holding this module's lock.
-//!
-//! # The format
-//!
-//! The same JSON as `localStorage` ([`file::encode_as`], format
-//! `"vue-native/cookies"`), sealed with the same header. Each entry is
-//! `[name, record]`, and the record is the cookie's fields joined by U+0001:
-//! domain, path, host-only, secure, http-only, SameSite, expiry, creation,
-//! last access, then the value. U+0001 is safe as the separator because redjs
-//! drops any cookie with a control character in it. The value comes last, so
-//! it never has to be escaped anyway.
+//! Format: the `localStorage` JSON ([`file::encode_as`], `"vue-native/cookies"`). Each entry is
+//! `[name, record]`, the record being the cookie's fields joined by U+0001 (redjs drops cookies
+//! containing control characters), value last.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -86,9 +53,7 @@ impl Host {
         st.error = Some(what);
     }
 
-    /// The file's cookies, or none (plus an advisory) if it cannot be read.
-    /// Losing cookies means signing in again. That is survivable, and
-    /// refusing to start is not.
+    /// The file's cookies, or none plus an advisory if it cannot be read (never a hard failure).
     fn read(&self, st: &mut State) -> Vec<Cookie> {
         let Some(folder) = st.folder.clone() else { return Vec::new() };
         let path = path_in(&folder);
@@ -129,7 +94,6 @@ impl Host {
             (folder, entries)
         };
         let Some(p) = crypt::provider() else {
-            // `store` never stages without a provider; belt and braces.
             return Ok(false);
         };
         let path = path_in(&folder);
@@ -142,8 +106,7 @@ impl Host {
                 Ok(true)
             }
             Err(e) => {
-                // Put it back unless something newer was staged meanwhile, so
-                // the next frame retries.
+                // Put it back unless something newer was staged, so the next frame retries.
                 if st.staged.is_none() {
                     st.staged = Some(entries);
                 }
@@ -196,10 +159,6 @@ fn advise_memory_only() {
     });
 }
 
-// ---------------------------------------------------------------------------
-// The record
-// ---------------------------------------------------------------------------
-
 fn pack(c: &Cookie) -> (String, String) {
     let b = |v: bool| if v { "1" } else { "0" };
     let record = [
@@ -244,37 +203,27 @@ fn unpack(name: &str, record: &str) -> Option<Cookie> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// The surface vn-app calls
-// ---------------------------------------------------------------------------
-
-/// Latches `folder`, installs the host into redjs and loads the jar. Called
-/// from [`crate::install`], before any JS runs.
+/// Latches `folder`, installs the host into redjs and loads the jar.
 pub fn install(folder: PathBuf) {
     HOST.state.lock().unwrap().folder = Some(folder);
     jar::set_host(&HOST);
-    // Load now, not at the first request: what is on disk must be in the jar
-    // before the host or the app sets anything.
+    // Load now so what is on disk is in the jar before anything else sets a cookie.
     let _ = jar::get(None);
 }
 
-/// The folder the jar was latched to, once installed. vn-app's ArgonSecure
-/// producer keeps its own sealed file beside it.
+/// The folder the jar was latched to, once installed.
 pub fn folder() -> Option<PathBuf> {
     HOST.state.lock().unwrap().folder.clone()
 }
 
-/// One coalesced write per frame, beside [`crate::pump`].
 pub fn pump() {
     let _ = HOST.write_staged();
 }
 
-/// Writes what is staged now. vn-app calls it at quit.
 pub fn flush() -> Result<bool, String> {
     HOST.write_staged()
 }
 
-/// For `appStorage.info()`: `{"file":…,"bytes":…,"persisted":…,"pending":…,"error":…}`.
 pub fn info_json() -> String {
     let st = HOST.state.lock().unwrap();
     let file = st.folder.as_deref().map(path_in);
@@ -367,7 +316,6 @@ mod tests {
             assert!(!raw.windows(needle.len()).any(|w| w == needle.as_bytes()), "{needle:?} is legible");
         }
         assert_eq!(host_in(&dir).load(), sample());
-        // The last of several stores is what lands.
         h.store(&sample()[..1]);
         h.store(&sample()[1..]);
         h.write_staged().unwrap();
@@ -384,7 +332,6 @@ mod tests {
         let h = host_in(&dir);
         assert!(h.load().is_empty());
         assert!(h.state.lock().unwrap().error.as_deref().unwrap().contains("could not decrypt"));
-        // …and the next store replaces it with a good one.
         h.store(&sample());
         h.write_staged().unwrap();
         assert_eq!(host_in(&dir).load(), sample());

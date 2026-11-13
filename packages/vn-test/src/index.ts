@@ -1,22 +1,3 @@
-// vn-test — Playwright-style end-to-end testing for vue-native apps.
-//
-//   import { afterAll, test } from "bun:test";
-//   import { launch, expect } from "vn-test";
-//
-//   const app = await launch({ app: "hello" });
-//   afterAll(() => app.close());
-//
-//   test("the Motion tab activates", async () => {
-//     await app.locator(".tab:nth-child(3)").click();
-//     await expect(app.locator(".tab:nth-child(3)")).toHaveClass("router-link-active");
-//   });
-//
-// `bun test` IS the runner — there is no `vn test` binary and there is not
-// going to be one. Everything here is a library that speaks the devtools
-// protocol in docs/DEVTOOLS.md, which was shaped for exactly this from the day
-// it was written. docs/TESTING.md is the guide, including an honest table of
-// what Playwright does that we do not.
-
 export { launch, MIN_BUN, packagedSlot, VnApp, VnCommandError } from "./app";
 export type { LaunchOptions, LogEntry, Bounds, NodeInfo, PendingDialog, PendingQuestion, PermissionsInfo } from "./app";
 export { Locator, LocatorError, POLL_MS } from "./locator";

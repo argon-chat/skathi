@@ -2,9 +2,8 @@
 //! (redjs `webapi/mediastream.rs`, "The capture gate") and the system's device
 //! notifications (`devices`).
 //!
-//! Capture is enabled: `getUserMedia({ audio })` opens the device once the
-//! user allowed this app in its prompt (crates/vn-permissions `consent`,
-//! docs/PERMISSIONS.md §5.1). `VN_MEDIA_CAPTURE` changes that for the process:
+//! Capture is enabled: `getUserMedia({ audio })` opens the device once the user allowed this app in
+//! its prompt (crates/vn-permissions `consent`). `VN_MEDIA_CAPTURE` changes that for the process:
 //!
 //! - `deny` latches capture shut: every `getUserMedia` is a
 //!   `NotAllowedError`, and no prompt is ever shown. Agent and test launches

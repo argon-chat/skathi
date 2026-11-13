@@ -1,35 +1,12 @@
-//! `mem` — where this process's memory is (m26 perf work: "Argon uses a huge
-//! amount of RAM").
+//! `mem`: where this process's memory is, computed on request.
 //!
-//! Every number here is computed when asked, from structures that already
-//! exist — nothing is sampled per frame. Three kinds of number, and the reply
-//! says which is which:
+//! Numbers are either measured by the OS (process counters, address-space walk,
+//! heap summaries, DXGI), counted by an allocator (Rust heap, JSC, mimalloc), or
+//! computed from live structures (lower bounds).
 //!
-//! * **measured by the OS**: the process counters (`K32GetProcessMemoryInfo`),
-//!   a walk of the address space (`VirtualQuery`: committed bytes by mapping
-//!   type, executable private pages — JSC's JIT — and the image pages per
-//!   module, the mapped files by name), the heaps' own summaries
-//!   (`HeapSummary`), and the GPU memory DXGI attributes to this process per
-//!   adapter (`QueryVideoMemoryInfo`, one row per adapter LUID);
-//! * **counted by an allocator**: the Rust heap (`crate::heapcount` — on by
-//!   default in a dev build), JSC's GC heap (`heap_stats`) and JSC's malloc
-//!   (mimalloc's own statistics);
-//! * **computed from live structures**: gpui's sprite atlas pages and its
-//!   decoded-image cache (fork accessors), the retained tree, the image
-//!   registry, the devtools' own rings. These are lower bounds.
-//!
-//! `breakdown` folds all of it into categories that SUM to the committed
-//! address space (private + mapped + image), so nothing hides: whatever no
-//! allocator accounts for is its own category, "other private", labelled as
-//! what it is. It is in BYTES (the inspector's Performance panel formats it);
-//! the sections beside it are in MB for a person reading `ctl mem`, and every
-//! field named `…Bytes` is bytes.
-//!
-//! `--gc` first runs redjs's `release_memory` (two full synchronous
-//! collections, then free pages back to the OS) and reports the JSC heap and
-//! the process counters before and after it. It changes state: finalizers run,
-//! and whatever only the GC was holding (fetch `Response` bodies, Rust-side
-//! image buffers behind collected JS wrappers) is freed.
+//! `breakdown` (bytes) folds them into categories that sum to the committed
+//! address space; the other sections are in MB. `gc` first runs `release_memory`
+//! and reports before/after, which changes state (finalizers run).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -44,10 +21,8 @@ use super::mem_common::{
 };
 use crate::json::Json;
 
-// ---------------------------------------------------------------------------
-// the OS: kernel32, declared here rather than through `windows` features the
-// graph does not otherwise compile
-// ---------------------------------------------------------------------------
+// kernel32 declared by hand rather than through `windows` features the graph
+// does not otherwise compile.
 
 #[repr(C)]
 #[derive(Default)]
@@ -175,9 +150,8 @@ extern "system" {
     fn GetModuleFileNameW(module: *mut c_void, name: *mut u16, size: u32) -> u32;
 }
 
-// mimalloc is JSC's allocator here (redjs compiles it into its static lib).
 extern "C" {
-    /// Is `p` inside a mimalloc page? Safe for any pointer (a page-map lookup).
+    /// Safe for any pointer (a page-map lookup).
     fn mi_is_in_heap_region(p: *const c_void) -> bool;
 }
 
@@ -189,10 +163,6 @@ const MEM_PRIVATE: u32 = 0x2_0000;
 const PAGE_EXECUTE_ANY: u32 = 0x10 | 0x20 | 0x40 | 0x80;
 const PAGE_GUARD: u32 = 0x100;
 
-// ---------------------------------------------------------------------------
-// the OS's view
-// ---------------------------------------------------------------------------
-
 struct Counters {
     working_set: f64,
     private_working_set: f64,
@@ -200,7 +170,6 @@ struct Counters {
     json: Json,
 }
 
-/// The process counters.
 fn process() -> Counters {
     let mut c = ProcessMemoryCountersEx2 { cb: std::mem::size_of::<ProcessMemoryCountersEx2>() as u32, ..Default::default() };
     let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) } != 0;
@@ -233,22 +202,20 @@ fn process() -> Counters {
     }
 }
 
-
 /// Who a committed private allocation (one `VirtualAlloc` reservation) belongs
 /// to, as far as this process can tell from the outside.
 #[derive(Clone, Copy, PartialEq)]
 enum Owner {
-    /// A thread's stack (its TEB's `StackLimit` is inside it).
+    /// The TEB's `StackLimit` is inside it.
     Stack,
-    /// mimalloc's: some committed page in it is in mimalloc's page map.
+    /// Some committed page in it is in mimalloc's page map.
     Mimalloc,
-    /// The process heap's: a segment or a big block `HeapWalk` reported
-    /// (only with `regions`, which walks the heap).
+    /// A segment or big block `HeapWalk` reported (only with `regions`).
     Heap,
     /// Executable and nobody else's: JSC's JIT pool.
     Jit,
-    /// None of the above: driver heaps, other `VirtualAlloc` users — and, when
-    /// the heap was not walked, the process heap's segments.
+    /// Driver heaps, other `VirtualAlloc` users, and the process heap's
+    /// segments when the heap was not walked.
     Unattributed,
 }
 
@@ -259,7 +226,7 @@ enum Resident {
     Mapped,
     /// mimalloc's reservations and the JIT's.
     Jsc,
-    /// The process heap's (known only when `regions` walked it).
+    /// Known only when `regions` walked the heap.
     Heap,
     Stack,
     Unattributed,
@@ -268,11 +235,9 @@ enum Resident {
 /// Resident bytes per [`Resident`] class: `[class][0 = private, 1 = shared]`.
 type ResidentBytes = [[f64; 2]; 6];
 
-/// Every page of the working set (`QueryWorkingSet`), counted against the
-/// region it is in. This is the RAM picture — Task Manager's "Memory" column is
-/// the private half of it — where the breakdown's committed bytes are the
-/// commit-charge picture: a thread stack's committed-but-untouched pages are in
-/// the second and not in the first.
+/// Every working-set page (`QueryWorkingSet`) counted against its region: the
+/// RAM picture, where the breakdown is the commit picture (a stack's
+/// committed-but-untouched pages are only in the latter).
 fn resident(w: &Walk) -> Option<ResidentBytes> {
     extern "system" {
         fn K32QueryWorkingSet(process: isize, buf: *mut c_void, size: u32) -> i32;
@@ -293,13 +258,12 @@ fn resident(w: &Walk) -> Option<ResidentBytes> {
             }
             return Some(out);
         }
-        // Too small: the first word says how many entries there are now.
+        // Too small: the first word is the current entry count.
         buf = vec![0; n.max(buf.len()) * 5 / 4 + 1024];
     }
     None
 }
 
-/// The address-space walk.
 struct Walk {
     private: usize,
     mapped: usize,
@@ -307,19 +271,18 @@ struct Walk {
     exec: usize,
     reserved: usize,
     regions: usize,
-    /// Every image module by committed bytes, biggest first.
+    /// Biggest first.
     modules: Vec<(String, usize)>,
-    /// Every mapped file by committed bytes, biggest first ("" = pagefile-backed).
+    /// Biggest first; "" = pagefile-backed.
     mapped_files: Vec<(String, usize)>,
     /// Committed private bytes per [`Owner`].
     by_owner: [usize; 5],
     threads: usize,
-    /// `(base, committed, reserved, executable)` of the biggest unattributed
-    /// reservations, biggest first.
+    /// `(base, committed, reserved, executable)`, biggest first.
     unattributed: Vec<(usize, usize, usize, bool)>,
-    /// Thread stacks by thread group: `(group, threads, committed, reserved)`, biggest first.
+    /// `(group, threads, committed, reserved)`, biggest first.
     stack_groups: Vec<(String, usize, usize, usize)>,
-    /// Every committed region `(start, end, class)`, in address order.
+    /// Committed regions `(start, end, class)`, in address order.
     ranges: Vec<(usize, usize, Resident)>,
 }
 
@@ -341,8 +304,7 @@ fn allocation_base(p: usize) -> Option<usize> {
     (n != 0).then(|| unsafe { info.assume_init() }.allocation_base as usize)
 }
 
-/// A thread's description (`SetThreadDescription` — Rust's `thread::Builder`
-/// names, JSC's, gpui's), with every run of digits folded to `#` so a pool's
+/// A thread's description with every run of digits folded to `#`, so a pool's
 /// workers group into one row.
 fn thread_group(h: isize) -> String {
     let mut p: *mut u16 = std::ptr::null_mut();
@@ -368,18 +330,16 @@ fn thread_group(h: isize) -> String {
     if out.is_empty() { "(unnamed)".into() } else { out }
 }
 
-/// The allocation base of every thread's stack in this process (with the
-/// thread's group name), and how many threads there are. A thread's TEB starts with its `NT_TIB`, whose third
-/// word is `StackLimit`; the TEB is read with `ReadProcessMemory` on ourselves
-/// because a thread can exit between the snapshot and the read.
+/// The allocation base of every thread's stack (with its group name), and the
+/// thread count. `StackLimit` is the third word of the TEB's `NT_TIB`; it is
+/// read with `ReadProcessMemory` because a thread can exit mid-walk.
 fn stack_bases() -> (HashMap<usize, String>, usize) {
     const THREAD_QUERY_INFORMATION: u32 = 0x40;
     const THREAD_QUERY_LIMITED_INFORMATION: u32 = 0x800;
     let mut bases = HashMap::new();
     let process = unsafe { GetCurrentProcess() };
     let mut threads = 0;
-    // `NtGetNextThread` walks THIS process's threads; a Toolhelp snapshot would
-    // copy every thread on the machine first (hundreds of ms on a busy one).
+    // Not a Toolhelp snapshot: that copies every thread on the machine first.
     let mut h: isize = 0;
     loop {
         let mut next: isize = 0;
@@ -434,12 +394,9 @@ fn stack_bases() -> (HashMap<usize, String>, usize) {
     (bases, threads)
 }
 
-
-/// The allocation bases the process heap's segments and big blocks live in,
-/// from a `HeapWalk` under `HeapLock` — every block is visited, so this is the
-/// expensive part of `regions` (tens of ms on a heap of 300k blocks) and the
-/// heap is locked for that long. Nothing allocates while it is locked: the
-/// addresses go into a buffer sized beforehand.
+/// The allocation bases of the process heap's segments and big blocks, from a
+/// `HeapWalk` under `HeapLock`. Slow, and the heap stays locked, so nothing may
+/// allocate meanwhile: addresses go into a preallocated buffer.
 fn heap_bases() -> (HashSet<usize>, usize, f64) {
     const PROCESS_HEAP_REGION: u16 = 0x1;
     const PROCESS_HEAP_ENTRY_BUSY: u16 = 0x4;
@@ -484,8 +441,7 @@ fn walk(stacks: &HashMap<usize, String>, threads: usize, heap: Option<&HashSet<u
     let mut modules: HashMap<usize, usize> = HashMap::new();
     let mut mapped_bases: HashMap<usize, usize> = HashMap::new();
     let mut private_bases: HashMap<usize, Base> = HashMap::new();
-    // Every committed region `(start, size, allocation base, kind)`, in address
-    // order — what `resident` maps working-set pages onto.
+    // `(start, size, allocation base, kind)`, in address order.
     let mut committed: Vec<(usize, usize, usize, u32)> = Vec::new();
     let mut regions = 0usize;
     let mut at: usize = 0x10000;
@@ -616,8 +572,7 @@ fn walk(stacks: &HashMap<usize, String>, threads: usize, heap: Option<&HashSet<u
                 buf.len() as u32,
             )
         } as usize;
-        // No name: a pagefile-backed section (shared memory — the D3D runtime's,
-        // the compositor's), which has no file behind it.
+        // No name: a pagefile-backed section (shared memory).
         let name = if n == 0 { String::new() } else { file_name(&String::from_utf16_lossy(&buf[..n])) };
         *files.entry(name).or_default() += bytes;
     }
@@ -679,9 +634,7 @@ fn address_json(w: &Walk, heap_walk: Option<(usize, f64)>) -> Json {
             ),
         ),
         (
-            // Committed private bytes by who owns the reservation (see `Owner`).
-            // `heapMB` is 0 unless `regions` walked the heap; the heap's
-            // reservations are then in `unattributedMB`.
+            // `heap` is 0 unless `regions` walked the heap.
             "privateByOwnerMB",
             Json::obj(vec![
                 ("stacks", mb(w.owned(Owner::Stack) as f64)),
@@ -768,10 +721,6 @@ fn heaps() -> Heaps {
     }
 }
 
-// ---------------------------------------------------------------------------
-// the GPU
-// ---------------------------------------------------------------------------
-
 /// `(name, LUID, hardware identity, adapter)`.
 type Adapter = (
     String,
@@ -781,8 +730,7 @@ type Adapter = (
 );
 
 thread_local! {
-    /// The adapters, enumerated once (a DXGI factory per `mem` costs
-    /// milliseconds) and de-duplicated by LUID.
+    /// Enumerated once (a DXGI factory costs milliseconds), de-duplicated by LUID.
     static ADAPTERS: RefCell<Option<Vec<Adapter>>> = const { RefCell::new(None) };
 }
 
@@ -827,18 +775,16 @@ struct Gpu {
     json: Json,
 }
 
-/// Per adapter: what DXGI says this PROCESS has resident in the adapter's
-/// local (dedicated VRAM) and non-local (shared system memory) segments.
+/// Per adapter: this process's usage in the local (VRAM) and non-local
+/// (shared system memory) segments.
 fn gpu() -> Gpu {
     use windows::Win32::Graphics::Dxgi::{
         DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO,
     };
     let mut out = Vec::new();
     let (mut dedicated, mut shared_total) = (0.0, 0.0);
-    // The same physical GPU can sit behind several LUIDs (this machine: one
-    // RTX card, three LUIDs), and asking each for THIS process's usage
-    // returns the same counter three times. So a LUID whose hardware identity
-    // AND usage match one already reported is that one again, not more VRAM.
+    // One physical GPU can sit behind several LUIDs, each returning the same
+    // per-process counter: skip a LUID whose hardware identity and usage match.
     let mut seen: Vec<([u32; 4], u64, u64)> = Vec::new();
     for (name, luid, hw, a3) in adapters() {
         let mut local = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
@@ -873,10 +819,6 @@ fn gpu() -> Gpu {
     }
 }
 
-// ---------------------------------------------------------------------------
-// the breakdown
-// ---------------------------------------------------------------------------
-
 struct Inputs<'a> {
     resident: Option<&'a ResidentBytes>,
     counters: &'a Counters,
@@ -896,7 +838,6 @@ struct Inputs<'a> {
 fn breakdown(i: &Inputs) -> Json {
     let w = i.walk;
 
-    // Images: the exe and every DLL, the biggest named.
     let mut image_items: Vec<Json> = w.modules.iter().take(10).map(|(n, b)| item(n.clone(), *b as f64)).collect();
     if w.modules.len() > 10 {
         let rest: usize = w.modules.iter().skip(10).map(|(_, b)| *b).sum();
@@ -906,7 +847,6 @@ fn breakdown(i: &Inputs) -> Json {
         ));
     }
 
-    // Mapped files.
     let mut mapped_items: Vec<Json> = w
         .mapped_files
         .iter()
@@ -930,8 +870,6 @@ fn breakdown(i: &Inputs) -> Json {
         ));
     }
 
-    // JSC: its malloc (mimalloc, which the GC heap's blocks come out of too)
-    // and its JIT's executable pages.
     let jsc_bytes = i.mi.committed + w.exec as f64;
     let jsc_items = vec![
         item(
@@ -951,7 +889,6 @@ fn breakdown(i: &Inputs) -> Json {
         ),
     ];
 
-    // The process heap: Rust's `System` allocator and the static CRT's malloc.
     let heap = i.heaps.main_committed + i.heaps.other_committed;
     let mut rust_items = Vec::new();
     match i.rust_live {
@@ -977,8 +914,6 @@ fn breakdown(i: &Inputs) -> Json {
         rust_items.push(item("other Win32 heaps", i.heaps.other_committed));
     }
 
-    // Whatever no allocator we can see accounts for — less the thread stacks,
-    // which the walk finds exactly (each thread's TEB names its stack).
     let other = w.private as f64 - jsc_bytes - heap;
     let stacks = w.owned(Owner::Stack) as f64;
     let mut other_items: Vec<Json> = w
@@ -1005,8 +940,6 @@ fn breakdown(i: &Inputs) -> Json {
         other - stacks,
     ));
 
-    // Resident bytes per row (only with `regions`: without the heap walk the
-    // heap's pages and the unattributed ones cannot be told apart).
     let res = |classes: &[Resident]| {
         i.resident.map(|r| {
             classes.iter().fold([0.0, 0.0], |acc, c| {
@@ -1107,12 +1040,9 @@ fn breakdown(i: &Inputs) -> Json {
     ])
 }
 
-/// The whole report. `gc`: run `release_memory` first and report before/after;
-/// `code`: the same, after deleting all compiled code that is not running
-/// (`redjs_release_memory_and_code`), which tells code from data.
-/// `regions`: also walk the process heap (locked meanwhile), so the address
-/// walk can tell its reservations from the unattributed ones, and list the
-/// biggest of those.
+/// `gc`: run `release_memory` first and report before/after; `code`: also drop
+/// compiled code. `regions`: also walk the process heap (locked meanwhile) to
+/// attribute its reservations.
 pub(crate) fn report(
     gc: bool,
     code: bool,
@@ -1153,7 +1083,6 @@ pub(crate) fn report(
         side: &side,
         rust_live,
     });
-    // What the three allocators we can see account for, against private bytes.
     let explained = heaps.main_committed + mi.committed + walk.exec as f64;
     let side_json = side_json(&side);
     let sheets_json = stylesheet_compiles();
@@ -1174,8 +1103,6 @@ pub(crate) fn report(
         ("tree", tree_json),
         ("side", side_json),
         ("stickers", stickers()),
-        // The disk HTTP cache (`net_cache` has the same block): on disk, not
-        // in memory, but it is what makes an evicted image cheap to show again.
         ("httpCache", super::net::cache_json()),
         ("stylesheetCompiles", sheets_json),
         (

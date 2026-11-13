@@ -1,7 +1,6 @@
-//! The vue-native host exe: the whole engine is the `vn_app` library beside
-//! this file (src/lib.rs); this is its process-owning entry point. An
-//! application that embeds vue-native instead runs it through
-//! `vn_app::embed::Builder` (docs/EMBEDDING.md).
+//! The vue-native host exe: the whole engine is the `vn_app` library beside this file (src/lib.rs);
+//! this is its process-owning entry point. An application that embeds vue-native instead runs it
+//! through `vn_app::embed::Builder`.
 
 // The devtools `mem` command's Rust-heap row counts through this allocator
 // (src/heapcount.rs). It belongs to the exe, not the library: a process has

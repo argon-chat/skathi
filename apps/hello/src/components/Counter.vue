@@ -2,17 +2,12 @@
 import { ref, onMounted, onUnmounted } from "vue";
 
 const count = ref(0);
-// HMR observability: this line runs once per component *instance creation*.
-// A template-only edit (rerender) must NOT print it again; a script edit
-// (reload) must.
+// A template-only edit (rerender) must NOT print it again; a script edit (reload) must.
 console.log("[app] Counter setup ran");
 
-// `setInterval` answers a plain number here (engine.d.ts), not a Node Timeout.
 let timer: number | undefined;
 onMounted(() => {
   console.log("[app] Counter mounted");
-  // Self-driving state, so component state can be observed surviving an edit
-  // without anyone having to click.
   timer = setInterval(() => {
     count.value++;
     console.log("[app] tick count=" + count.value);

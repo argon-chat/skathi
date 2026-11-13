@@ -1,28 +1,15 @@
 #!/usr/bin/env bun
 /**
- * vn-devtools MCP server — the same wire as `ctl.ts`, exposed as MCP tools so
- * an agent can drive a running vue-native dev host without shelling out.
+ * vn-devtools MCP server: the same wire as `ctl.ts`, exposed as MCP tools.
  *
  *   bun packages/vue-native/devtools/mcp.ts [--dist <slot> | --app <name>]
  *
- * `--app <name>` attaches to a PACKAGED app (`vn build`) by its vn.config name
- * instead — its newest live instance, re-resolved per call (./apps.ts).
+ * `--app <name>` attaches to a packaged app (`vn build`) by its vn.config name instead: its newest live
+ * instance, re-resolved per call (./apps.ts).
  *
- * Registered per-repo in `.mcp.json`. One server instance per dist slot: the
- * `--dist` argument decides which `<dist>/devtools.json` handshake it reads,
- * and every tool re-reads it per call, so restarting the host (new port, new
- * token) does not require restarting the MCP server.
- *
- * The tools are deliberately 1:1 with the wire commands — no convenience
- * layering, so anything `ctl.ts` can do is reachable here with the same
- * arguments and the same error text.
- *
- * That 1:1-ness is now MECHANICAL rather than aspirational: the tool list is
- * GENERATED from `./commands.ts`, the table `ctl.ts` reads too, and the tool
- * name is derived (`vn_<cmd>`). There is nothing to keep in step by hand, which
- * is the point — this file exposed the milestone-10 command set for a whole
- * milestone after the CLI grew `windows`, `perf`, `net`, `storage`, `wheel`,
- * `raise` and the `window` argument, because the two tables were copies.
+ * One server instance per dist slot; every tool re-reads `<dist>/devtools.json` per call, so restarting the
+ * host (new port, new token) does not require restarting the server. The tool list is generated from
+ * `./commands.ts` (the table `ctl.ts` reads too) and named `vn_<cmd>`, so tools are 1:1 with wire commands.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -40,8 +27,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
 const distFlag = argv.indexOf("--dist");
 const DIST = distFlag >= 0 && argv[distFlag + 1] ? resolve(argv[distFlag + 1]) : resolve(HERE, "..", "dist");
-// `--app <name>`: a PACKAGED app (docs/PACKAGING.md). Re-resolved on every
-// call, because each launch of the exe is a new pid and so a new slot.
+// `--app <name>`: a packaged app. Re-resolved on every call: each launch is a new pid and so a new slot.
 const appFlag = argv.indexOf("--app");
 const APP = appFlag >= 0 && argv[appFlag + 1] ? argv[appFlag + 1]! : null;
 const TIMEOUT_MS = 10_000;
@@ -95,19 +81,10 @@ async function call(request: Record<string, unknown>) {
   return JSON.parse(line) as { ok?: boolean; data?: unknown; error?: string };
 }
 
-// ---------------------------------------------------------------------------
-// tool table — GENERATED from the shared command table (./commands.ts)
-// ---------------------------------------------------------------------------
-//
-// Every wire command becomes one tool named `vn_<cmd>`, with that command's
-// arguments plus `window` (which every command accepts — docs/DEVTOOLS.md,
-// "The `window` argument"). Adding a command to `commands.ts` registers it
-// here; there is no list to forget to edit, and
-// `test/devtools-commands.test.ts` fails if this file grows one.
+// Tool table, generated from the shared command table: one tool `vn_<cmd>` per wire command, with its
+// arguments plus `window`.
 
 const TOOLS = mcpTools();
-
-// ---------------------------------------------------------------------------
 
 const server = new Server(
   { name: "vn-devtools", version: "1.0.0" },

@@ -1,82 +1,14 @@
-//! Retained-render cache boundaries — `Entity::cached()` over stable subtrees.
+//! Retained-render cache boundaries — `Entity::cached()` over stable subtrees, whose recorded prepaint
+//! and paint spans gpui replays without calling `render`.
 //!
-//! gpui rebuilds and re-lays-out its whole element tree on every drawn frame by
-//! design. On a small tree that is free (m11: 218 nodes, 3.9 ms of gpui);
-//! measured at 1 000 `v-for` rows it is **not** — 5 011 nodes cost ~20 µs each,
-//! 96 ms a frame, of which our own lowering is 25 ms and gpui's layout+paint
-//! 67 ms (research/reports/m23/perf-retained.md §2). Nothing in `render.rs` is
-//! doing anything wrong at 5 µs a node; there are simply too many nodes, every
-//! drawn frame, however little of the page changed.
+//! A cached view cannot size to its content, so the boundary pins the box the subtree last laid out
+//! to. A boundary replays only while its freshness key stands: `sub_rev` (nothing inside changed),
+//! the inherited context, and the parent's rectangle. Refused: native widgets and decoders that
+//! repaint on their own clock, out-of-flow boxes, group anchors, subtrees holding a moving
+//! animation, and everything while a screen reader is attached (the AccessKit tree is built during
+//! the frame and is not part of the replayed spans).
 //!
-//! gpui's own answer is `Entity<T>::cached(style)`: a view whose recorded
-//! prepaint and paint spans are **replayed** — hitboxes, dispatch subtree, tab
-//! stops, deferred draws, scene primitives and text layouts all copied forward
-//! — while `render` is never called. It costs one thing: a cached view cannot
-//! size to its content, so the composer has to supply the box.
-//!
-//! ## What decides a boundary
-//!
-//! * **Size.** We have the box: [`crate::render`]'s `BoundsProbe` records every
-//!   painted node's rectangle every frame, so a subtree that did not change is
-//!   pinned at the size it just laid out to. The pin is only sound while
-//!   nothing can have resized it, which is what the rest of the freshness key
-//!   is for — and the pin measures ITSELF once a boundary replays, which is why
-//!   the box has to be confirmed by an ordinary build before it is trusted (see
-//!   [`Entry::size`]).
-//! * **Dirtiness.** [`Tree::touch`] bumps `sub_rev` on a node and every
-//!   ancestor for every mutation, and the restyle pass touches every node whose
-//!   fold actually moved — which is exactly the reach a descendant combinator,
-//!   an inherited `var()` or a structural pseudo has. A boundary replays only
-//!   while the number it rendered at still stands.
-//! * **Reflow from outside.** A clean subtree can still need a different box
-//!   when its *parent's* content box changes (a window resize, a sibling that
-//!   grew). The parent's rectangle is in the same side map, so the boundary
-//!   stores it and compares — one lookup per boundary per frame.
-//! * **Everything gpui already knows.** `:hover`, `group-hover`, `:active`,
-//!   wheel scrolling and focus all end in `cx.notify(current_view)` or
-//!   `window.refresh()` inside gpui, and `Window::mark_view_dirty` walks the
-//!   view path, so a notify on a nested cached view invalidates it and every
-//!   cached ancestor. None of that is our problem, and none of it is bypassed.
-//!
-//! ## What is deliberately NOT cached (v1)
-//!
-//! A boundary is refused when its subtree contains anything whose per-frame
-//! work does not survive a replay:
-//!
-//! * **`<input>`/`<textarea>`, `<img>`, `<video>`** — native widgets
-//!   and decoders that repaint on their own clock. (`<lottie>` and
-//!   `<vn-sticker>` are not: their frames are written into a tile a replayed
-//!   sprite samples, and a tile that moves touches its node — `crate::lottie`,
-//!   `render::sticker`);
-//! * inline **`<svg>`** except the self-contained static monochrome geometry
-//!   accepted by `svg::can_replay`: its alpha-mask atlas entry has no decoder
-//!   clock. Colour rasters, external resources, and timelines stay excluded;
-//! * an **out-of-flow box** (`position: absolute|fixed`) or a **group anchor**
-//!   (`.group(name)` is registered during the paint walk);
-//! * a subtree holding a node whose transition or animation is moving this
-//!   frame — and only that subtree: the moving node and its ancestors are
-//!   refused, every other boundary still replays (see [`begin_frame`]). A
-//!   boundary below a fading or sliding node is gpui's to refuse: its view
-//!   cache key holds the opacity and transform the ancestors composed (fork
-//!   item 44), so it renders while they change;
-//! * anything at all while a screen reader is attached — the AccessKit tree
-//!   is built during the frame and is not part of the replayed spans.
-//!
-//! A **scroll container** used to be on that list and is the one item that came
-//! off it (m23, `research/reports/m23/scroll.md`). It was refused because
-//! `vn_elements::scrollbar`'s wheel-routing registry is rebuilt from the paint
-//! walk and a replay does not walk, so a cached scroll box kept its pixels and
-//! lost its wheel. [`Boundary`] now records the run of registry entries the
-//! subtree's paint contributed and re-registers it, in place, on the frames
-//! that replay. On the 1 000-row scenario the mutation frame goes from 11.5 ms
-//! of work per draw to **3.6 ms** against the rest of the cache, and from
-//! 89.3 ms with no cache at all — the largest single number in the
-//! retained-render work, and the one this exclusion was costing.
-//!
-//! `VN_NO_CACHE=1` turns the whole thing off; `VN_CACHE_MIN=<n>` moves the
-//! smallest subtree worth a boundary (default [`MIN_NODES`]). A boundary costs
-//! about what one node costs — measured at ~18 µs against ~20 µs — so the win
-//! on a subtree is its node count, and below a handful it is not worth having.
+//! `VN_NO_CACHE=1` turns it off; `VN_CACHE_MIN=<n>` moves the smallest subtree worth a boundary.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -91,134 +23,74 @@ use crate::render::{self, Inherited};
 use crate::tree::{Kind, Node, Tree};
 use crate::windows::{self, Rect, WinKey};
 
-/// The smallest subtree that earns a cache boundary, in lowered nodes.
-///
-/// A boundary is one `ViewElement`, one element-state slot, one taffy leaf and
-/// one replay span; measured on the 1 000-row scenario it costs ~18 µs against
-/// the ~20 µs a lowered node costs, so a subtree of `n` nodes buys roughly `n`
-/// back. Four is where that stops being noise.
+/// The smallest subtree that earns a cache boundary, in lowered nodes: a boundary costs about what
+/// one lowered node does, so below this it is noise.
 const MIN_NODES: u32 = 4;
 
-/// One node's cache boundary, and everything needed to decide whether it may
-/// replay this frame.
+/// One node's cache boundary, and everything needed to decide whether it may replay this frame.
 struct Entry {
-    /// Minted on the first offer, not on the first sighting: a subtree that
-    /// never becomes stable enough to cache never costs an entity.
+    /// Minted on the first offer, not on the first sighting: a subtree that never becomes stable
+    /// enough to cache never costs an entity.
     entity: Option<Entity<CachedSubtree>>,
     /// [`Tree::sub_rev`] at the last render — "nothing inside changed".
     sub_rev: u64,
-    /// The inherited context the subtree was lowered with. `text-transform`,
-    /// `white-space`, `text-align`, `window-drag` and the stacking context are
-    /// threaded down the build rather than folded, so a change to any of them
-    /// at an ancestor changes the subtree's pixels without touching a node
-    /// inside it.
+    /// `text-transform`, `white-space`, `text-align`, `window-drag` and the stacking context are
+    /// threaded down the build rather than folded, so a change to any of them at an ancestor
+    /// changes the subtree's pixels without touching a node inside it.
     ctx: Inherited,
     /// The parent's rectangle at the last render — "nothing outside resized me".
     parent_rect: Option<Rect>,
-    /// The box this boundary would be pinned at, as of the last frame, or
-    /// `None` on the frame the node was first seen as a candidate.
-    ///
-    /// It is part of the freshness key, and that is the load-bearing half of the
-    /// design: while a boundary replays, its own probe records the box we PINNED
-    /// rather than the box its content would take, so the pin cannot correct
-    /// itself. A boundary is therefore only offered once a frame that lowered
-    /// the subtree for real has measured the same box twice running.
-    ///
-    /// **`None` is what makes "twice running" true rather than aspirational.**
-    /// Seeding a new entry with the size in hand made the first sighting
-    /// compare equal to itself and offer immediately — on ONE frame's
-    /// measurement, taken *before* the build that is happening now. When the
-    /// two disagree (the first frame a stylesheet lands on: the tree is being
-    /// lowered styled while `prev_size_of` still answers with the unstyled
-    /// box), the wrong box is pinned, the replay's own probe re-records it,
-    /// and nothing ever measures again. `apps/listperf` froze its whole page
-    /// at the unstyled 104 px row height that way — the exact shape
-    /// `research/reports/m23/perf-retained.md` §4.2 describes and the rule it
-    /// names, which until m23 the code did not actually implement.
+    /// The box this boundary would be pinned at, or `None` on the first sighting. Part of the
+    /// freshness key: a replaying boundary's probe records the box it was PINNED to, so the pin cannot
+    /// correct itself. A boundary is offered only once a real build measured the same box twice
+    /// running; seeding it with the size in hand would pin a pre-stylesheet box forever.
     size: Option<(f32, f32)>,
-    /// Last observed raw bounds. A translated row cannot replay GPUI's
-    /// bounds-keyed recording, even when its dimensions are unchanged.
+    /// Last observed raw bounds.
     rect: Option<Rect>,
-    /// Was a boundary actually offered last frame? A subtree that fell back to
-    /// an ordinary build has no recording gpui can trust, so the first offer
-    /// after one must force a render.
+    /// A subtree that fell back to an ordinary build has no recording gpui can trust, so the first
+    /// offer after one must force a render.
     offered: bool,
-    /// Every node id in the boundary's subtree — **not** only the ones this
-    /// boundary lowered itself. Carried into the live bounds map on a replay
-    /// frame, because the probes that would have recorded them do not run (see
-    /// [`carry_bounds`]).
-    ///
-    /// The distinction is the whole of a bug worth remembering: boundaries
-    /// NEST, and when an outer one replays, the inner ones' `boundary()` calls
-    /// never run — they are inside the render that did not happen — so nothing
-    /// else is ever going to carry their rectangles. `apps/hello` reported
-    /// `bounds: null` for every tab in its nav the moment a Shift+Tab made the
-    /// outer boundary replay.
+    /// Every node id in the boundary's subtree — not only the ones this boundary lowered itself.
+    /// Boundaries nest, and when an outer one replays the inner `boundary()` calls never run, so
+    /// nothing else would carry their rectangles into the bounds map (see [`carry_bounds`]).
     ids: Vec<u32>,
-    // The host's chrome registry is reset every build. GPUI carries its own
-    // caption hitboxes on replay, but cannot refill these SDK-side facts.
+    // GPUI carries its own caption hitboxes on replay, but cannot refill these SDK-side facts.
     controls: Vec<(u32, gpui::WindowControlArea)>,
-    /// The run of `vn_elements::scrollbar` registry entries this subtree
-    /// contributed the last time it was painted for real.
-    ///
-    /// The wheel router's registry is rebuilt from the PAINT walk, and a
-    /// replayed subtree does not walk — which is why v1 refused a boundary
-    /// over a scroll container outright (§4.4 of the report). The span is
-    /// recorded by [`Boundary::paint`] around the inner element's paint and
-    /// re-registered, in place, on the frames that replay. Both of an entry's
-    /// halves survive: a `HitboxId` comes from a counter that is never reset,
-    /// and `reuse_prepaint` copies the recorded hitbox into this frame's hit
-    /// test WITH that id, so `should_handle_scroll` still answers for it.
+    /// The run of `vn_elements::scrollbar` wheel-registry entries the last real paint contributed,
+    /// re-registered in place on replay (the registry is rebuilt from the paint walk, which a replay
+    /// skips).
     chain: vn_elements::ChainSpan,
     /// gpui rendered this boundary since the last time it was offered.
     rendered: bool,
-    /// Consecutive frames in which a boundary we believed CLEAN was re-rendered
-    /// anyway — see [`THRASH_LIMIT`].
+    /// Consecutive frames in which a boundary believed clean was re-rendered anyway ([`THRASH_LIMIT`]).
     misses: u8,
     /// Offers to skip before trying again, after a thrash.
     cooldown: u16,
 }
 
-/// Consecutive unasked-for re-renders before a boundary stands down.
-///
-/// A boundary earns its keep by replaying. gpui's cache key is `(bounds,
-/// content mask, text style)`, so a subtree whose rectangle moves every frame —
-/// every row of a list while it is being scrolled — re-renders every frame AND
-/// pays the wrapper, the element state and the extra taffy leaf on top.
-/// Measured on the 1 000-row scroll: 107 ms a frame without boundaries, 140 ms
-/// with them. So a boundary that is asked to replay and does not, three times
-/// running, stops being offered for [`COOLDOWN`] frames and the subtree lowers
-/// the ordinary way.
-///
-/// Three, not one: the frame after a real mutation legitimately re-renders, and
-/// so does the first frame after a scroll settles.
+/// Consecutive unasked-for re-renders before a boundary stands down. A subtree whose rectangle moves
+/// every frame (a scrolling list) re-renders anyway and would pay the wrapper on top. Three, not
+/// one: the frame after a real mutation legitimately re-renders.
 const THRASH_LIMIT: u8 = 3;
 
-/// How many offers a stood-down boundary skips before trying again. At 165 Hz
-/// this is ~0.15 s, so a scroll that has stopped starts replaying again within
-/// a blink, and a scroll that has not pays the boundary overhead on one frame
-/// in nine.
+/// How many offers a stood-down boundary skips before trying again.
 const COOLDOWN: u16 = 24;
 
 thread_local! {
     static ENTRIES: RefCell<IdMap<Entry>> = RefCell::new(IdMap::default());
-    /// Is caching allowed at all in the frame being built? Answered once per
-    /// build by [`begin_frame`].
+    /// Is caching allowed at all in the frame being built?
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
-    /// The boundary currently being rendered — the recursion guard that stops
-    /// `build_node` from wrapping the same node again on the way in.
+    /// The boundary currently being rendered — the recursion guard that stops `build_node` from
+    /// wrapping the same node again on the way in.
     static IN_RENDER: Cell<u32> = const { Cell::new(0) };
-    /// Memoised subtree shape, keyed by node id and validated against
-    /// `sub_rev`: recomputing it is a walk of the subtree, which is the cost
-    /// the boundary exists to avoid.
+    /// Memoised subtree shape, keyed by node id and validated against `sub_rev`: recomputing it is
+    /// a walk of the subtree, which is the cost the boundary exists to avoid.
     static STATS: RefCell<HashMap<u32, (u64, Stats)>> = RefCell::new(HashMap::new());
-    /// The nodes the animator is moving in the frame being built, and every
-    /// ancestor of each — the boundaries [`begin_frame`] refuses.
+    /// The nodes the animator is moving in the frame being built, and every ancestor of each — the
+    /// boundaries [`begin_frame`] refuses.
     static HOT: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
 }
 
-/// `VN_NO_CACHE=1` — the A/B switch every "before" column in the report was
-/// measured with.
 fn enabled() -> bool {
     thread_local! {
         static ON: Cell<i8> = const { Cell::new(-1) };
@@ -238,14 +110,6 @@ fn enabled() -> bool {
 }
 
 /// `VN_CACHE_NO_SCROLL=1` — put the scroll-container exclusion back.
-///
-/// Two jobs, and the second is why it is shipped rather than deleted after the
-/// measurement. It is the A/B switch the "cache on, scroll container refused"
-/// column of `research/reports/m23/scroll.md` §3 was measured with, so the 3×
-/// that removing the exclusion is worth stays reproducible by anyone reading
-/// the report. And it is the one-flag way to answer "is this a cached scroll
-/// box?" about a suspected rendering bug in the field, without giving up the
-/// rest of the cache the way `VN_NO_CACHE=1` does.
 fn refuse_scroll_containers() -> bool {
     thread_local! {
         static ON: Cell<i8> = const { Cell::new(-1) };
@@ -281,33 +145,10 @@ fn min_nodes() -> u32 {
     })
 }
 
-/// Decided once per build: may anything replay in this frame, and which
-/// subtrees are moving?
-///
-/// The two global refusals are the ones no per-node predicate can see. A
-/// screen reader is the important one — the AccessKit tree is assembled during
-/// the frame and is not part of the prepaint/paint spans gpui replays, so a
-/// cached subtree would simply not exist for Narrator. And a frame on which an
-/// image's smaller copy landed or was evicted (`crate::resample`) must repaint
-/// the scenes that name its tile.
-///
-/// **Animation is per subtree, not per frame.** Everything animating is
-/// re-sampled from the build's one `Instant`, so a replayed subtree would
-/// freeze mid-transition — but only the subtree that HOLDS the moving node.
-/// This used to refuse every boundary in the window while anything at all
-/// moved, which in the Argon client meant never: one visible spinner and the
-/// whole 4 000-node chat re-rendered at the display's rate. Now the moving
-/// nodes and their ancestors are collected here ([`HOT`]) at `now`, the same
-/// instant `build_node` samples the overlays at, and only a boundary on that
-/// path is refused. A `<video>` never needed the global refusal: its tag
-/// already blocks every boundary above it ([`node_blocks`]). A `<lottie>`
-/// needs none: its frames are tile writes a replay shows.
-///
-/// The frame a node STOPS moving is the one that must not replay: the last
-/// recording of its subtree, if there is one, predates the animation. A
-/// refusal therefore marks the entry not-offered, and the first offer after
-/// that mints a fresh entity, which renders — at `now`, where the animation
-/// has finished — instead of replaying.
+/// Decided once per build: may anything replay in this frame, and which subtrees are moving? Only
+/// the subtree holding a moving node (and its ancestors) is refused ([`HOT`]), since a replay would
+/// freeze it mid-transition. The frame a node stops moving must not replay either: the first offer
+/// after a refusal mints a fresh entity, which renders at `now`.
 pub(crate) fn begin_frame(window: &Window, now: std::time::Instant) {
     let on = enabled() && !window.is_a11y_active() && !crate::resample::holds_replays();
     ACTIVE.with(|c| c.set(on));
@@ -325,28 +166,20 @@ fn hot(id: u32) -> bool {
     HOT.with(|h| h.borrow().contains(&id))
 }
 
-/// The boundary whose subtree is being lowered right now, or `0`.
-///
-/// `build_node` asks so it can give that ONE node the same treatment it gives a
-/// build root: a cached view is laid out as a root inside the box its wrapper
-/// reserved, and a root with `width: auto` shrinks to fit. Without this a
-/// stretched row came back 323 px wide instead of 1 518 — a visible change, and
-/// a self-feeding one: the next frame pinned the wrong width, every row below
-/// moved, and every boundary re-rendered forever.
+/// The boundary whose subtree is being lowered right now, or `0`. `build_node` gives that node the
+/// treatment of a build root: a cached view is laid out as a root in its wrapper's box, and a
+/// `width: auto` root would shrink to fit and pin the wrong width.
 #[inline]
 pub(crate) fn boundary_root() -> u32 {
     IN_RENDER.with(|c| c.get())
 }
 
-/// May anything replay in the frame being built? One `Cell` read — the per-node
-/// gate `build_node` gets before it assembles anything for [`boundary`].
+/// May anything replay in the frame being built?
 #[inline]
 pub(crate) fn active() -> bool {
     ACTIVE.with(|c| c.get())
 }
 
-/// Drops per-node state for nodes that no longer exist — called from
-/// `render::gc_node_state`, off a JS wave.
 pub(crate) fn gc(live: &dyn Fn(u32) -> bool) {
     ENTRIES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     STATS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
@@ -366,13 +199,12 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     if node.kind != Kind::Element {
         return false;
     }
-    // A pop-out paints this node from another window's build; the two must not
-    // share a recording.
+    // A pop-out paints this node from another window's build; the two must not share a recording.
     if render::popped_out(id) {
         return true;
     }
-    // `.group(name)` is registered on gpui's group stack during the PAINT walk,
-    // and a replayed subtree does not walk.
+    // `.group(name)` is registered on gpui's group stack during the PAINT walk, and a replayed
+    // subtree does not walk.
     if t.is_group_anchor(id) {
         return true;
     }
@@ -386,37 +218,25 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     let Some(cs) = &node.computed else {
         return false;
     };
-    // A referenced definition can change outside this subtree, so its matrix
-    // must be resolved afresh; descendants still reuse the matrix-aware cache.
+    // A referenced definition can change outside this subtree, so its matrix must be resolved
+    // afresh; descendants still reuse the matrix-aware cache.
     if cs.extras.filter_url.is_some() { return true; }
-    // A scroll container is NO LONGER refused by default. The wheel registry
-    // it contributes to is rebuilt from the paint walk and a replay does not
-    // walk, so the span it pushed is recorded and re-registered in place
-    // instead — see [`Boundary`]. That exclusion was the last one with a known
-    // fix and the most expensive one there has been (11.5 ms → 3.6 ms per draw
-    // on the 1 000-row scenario); [`refuse_scroll_containers`] is the switch
-    // that puts it back, for the A/B and for a field diagnosis.
+    // The wheel registry it contributes to is rebuilt from the paint walk and a replay does not
+    // walk, so the span it pushed is recorded and re-registered in place instead — see
+    // [`Boundary`].
     if refuse_scroll_containers()
         && (cs.base.overflow.x == Some(gpui::Overflow::Scroll)
             || cs.base.overflow.y == Some(gpui::Overflow::Scroll))
     {
         return true;
     }
-    // Out of flow, or escaping its siblings' paint order: `render::stack` moves
-    // the paint into gpui's deferred layer and an absolutely positioned box is
-    // placed by its containing block rather than by its parent's flow, so
-    // neither the pinned size nor the parent-rectangle check means what it says.
-    // It also keeps every deferred draw, and so every stacking key, out of a
-    // recording: a key holds tree-order ordinals that move whenever anything
-    // earlier in the document does, and a negative `z-index` has to be SEEN
-    // while its context's children are built (`render::Stacking`).
     if cs.base.position == Some(gpui::Position::Absolute)
         || cs.extras.may_defer()
     {
         return true;
     }
-    // `position: relative` with an inset SHIFTS the box: the wrapper would have
-    // to carry the shift and the inner element would then apply it again.
+    // `position: relative` with an inset SHIFTS the box: the wrapper would have to carry the shift
+    // and the inner element would then apply it again.
     cs.base.position == Some(gpui::Position::Relative) && has_inset(cs)
 }
 
@@ -429,10 +249,7 @@ fn block_flow(cs: &vn_css::ComputedStates) -> bool {
     matches!(cs.base.display, None | Some(gpui::Display::Block))
 }
 
-/// Can a child's vertical margin adjoin this box's `bottom` (or top) edge? The
-/// conditions of CSS 2 §8.3.1 as taffy's block layout applies them: block flow,
-/// no new formatting context, in flow, no padding or border on that side, and
-/// for the bottom edge an `auto` height.
+/// Can a child's vertical margin adjoin this box's `bottom` (or top) edge?
 fn edge_open(cs: &vn_css::ComputedStates, bottom: bool) -> bool {
     use gpui::IsZero;
     let b = &cs.base;
@@ -452,21 +269,13 @@ fn edge_open(cs: &vn_css::ComputedStates, bottom: bool) -> bool {
         && (!bottom || matches!(b.size.height, None | Some(gpui::Length::Auto)))
 }
 
-/// Does a descendant's margin collapse THROUGH one of this node's vertical
-/// edges, so that it spaces the node in its parent's flow?
-///
-/// [`wrapper_style`] reserves the node's box plus the node's OWN margin; a
-/// margin that reached the parent through the node is not in either. A channel
-/// group whose last row had `margin-bottom: 1px` was one pixel shorter in its
-/// parent whenever it replayed and one taller whenever a hover transition inside
-/// made it build, and every row below it stepped up and down with the pointer.
-/// Such a node is not offered; the boxes inside it that close the edge (or carry
-/// the margin themselves) still are. Erring towards `true` only costs a replay.
+/// Does a descendant's margin collapse THROUGH one of this node's vertical edges, so that it spaces
+/// the node in its parent's flow? The wrapper reserves only the node's own margin, so such a node
+/// would be a pixel off whenever it replays; erring towards `true` only costs a replay.
 fn margin_leaks(t: &Tree, node: &Node) -> bool {
     let Some(cs) = &node.computed else {
         return false;
     };
-    // A flex or grid item is its own formatting context: nothing leaves it.
     let parent = t.node(node.parent).and_then(|p| p.computed.as_ref());
     if !block_flow(cs) || parent.is_some_and(|p| !block_flow(p)) {
         return false;
@@ -477,14 +286,12 @@ fn margin_leaks(t: &Tree, node: &Node) -> bool {
 fn edge_leaks(t: &Tree, node: &Node, bottom: bool) -> bool {
     use gpui::IsZero;
     let mut at = node;
-    // Deep enough for any real wrapper chain; a chain that outruns it is
-    // refused rather than guessed at.
     for _ in 0..32 {
         if !at.computed.as_ref().is_some_and(|cs| edge_open(cs, bottom)) {
             return false;
         }
-        // The in-flow child nearest the edge. Anchors and collapsed whitespace
-        // make no box; `display: none` and out-of-flow boxes are not in the flow.
+        // Anchors and collapsed whitespace make no box; `display: none` and out-of-flow boxes are
+        // not in the flow.
         let in_flow = |&&c: &&u32| {
             t.node(c).is_some_and(|n| match n.kind {
                 Kind::Anchor => false,
@@ -511,7 +318,6 @@ fn edge_leaks(t: &Tree, node: &Node, bottom: bool) -> bool {
             return false;
         };
         let margin = if bottom { &cs.base.margin.bottom } else { &cs.base.margin.top };
-        // `auto` is zero on the block axis.
         if matches!(margin, Some(gpui::Length::Definite(m)) if !m.is_zero()) {
             return true;
         }
@@ -532,8 +338,8 @@ fn stats(t: &Tree, id: u32) -> Stats {
         }
     }
     let mut out = Stats { nodes: 1, blocked: node_blocks(t, id, node) };
-    // SVG serializes its children into one leaf; counting shape nodes would
-    // offer a cache wrapper for a single native element with a large XML tree.
+    // SVG serializes its children into one leaf; counting shape nodes would offer a cache wrapper
+    // for a single native element with a large XML tree.
     if node.kind != Kind::Element || t.name(node.tag) != "svg" {
         for &c in &node.children {
             let s = stats(t, c);
@@ -545,35 +351,26 @@ fn stats(t: &Tree, id: u32) -> Stats {
     out
 }
 
-/// The OUTER box a cached subtree presents to its parent.
-///
-/// A cached view is laid out from this style alone — `request_layout` never
-/// sees the children — so everything that decides the node's used size has to
-/// be here, and nothing that decides its INNER layout (padding, border) may be,
-/// or it would be counted twice. The size is the one the node just laid out to,
-/// which is what the two revision checks make safe to reuse.
+/// The OUTER box a cached subtree presents to its parent. A cached view is laid out from this style
+/// alone, so everything deciding the node's used size is here and nothing deciding its inner layout
+/// (padding, border) may be.
 pub(crate) fn wrapper_style(node: &Node, size: (f32, f32)) -> gpui::StyleRefinement {
     let mut st = gpui::StyleRefinement::default();
     st.size.width = Some(gpui::Length::Definite(gpui::px(size.0).into()));
     st.size.height = Some(gpui::Length::Definite(gpui::px(size.1).into()));
-    // Pinned means pinned: the parent's flex must not stretch or shrink the box
-    // away from the size the subtree was recorded at.
     st.flex_grow = Some(0.0);
     st.flex_shrink = Some(0.0);
     if let Some(cs) = &node.computed {
-        // Margin is the node's spacing in its PARENT's layout, so it belongs
-        // only here. normalize_inner_root removes its inner duplicate.
+        // Margin is the node's spacing in its PARENT's layout, so it belongs only here.
+        // normalize_inner_root removes its inner duplicate.
         st.margin = cs.base.margin.clone();
         st.align_self = cs.base.align_self;
     }
     st
 }
 
-/// The cached view already resolved its root's outer geometry. Resolving
-/// percentage widths or max-width against that pinned box a second time makes
-/// an 85%-wide chat column 85% of itself; right-aligned bubbles then jump each
-/// time a hover frame switches between a cached and an ordinary build.
-/// Descendants retain their authored geometry, padding, borders and alignment.
+/// The cached view already resolved its root's outer geometry; resolving percentage widths against
+/// the pinned box a second time would make an 85% column 85% of itself.
 pub(crate) fn normalize_inner_root(id: u32, style: &mut gpui::StyleRefinement) {
     if IN_RENDER.with(Cell::get) != id {
         return;
@@ -601,8 +398,7 @@ fn pin_inner_style(style: &mut gpui::StyleRefinement, size: (f32, f32)) {
     style.margin.left = Some(gpui::px(0.0).into());
 }
 
-/// The view a boundary hands to gpui. It owns nothing but the coordinates of
-/// the subtree it lowers; the tree itself stays where it is.
+/// The view a boundary hands to gpui; it owns only the coordinates of the subtree it lowers.
 pub(crate) struct CachedSubtree {
     id: u32,
     root: u32,
@@ -620,10 +416,6 @@ impl gpui::Render for CachedSubtree {
 }
 
 /// The boundary hook, called by `build_node` before it lowers anything.
-///
-/// `Some` means "this node is a cache boundary and here is its element"; the
-/// caller must return it untouched — no probe, no stacking wrapper, because the
-/// recording already contains both.
 pub(crate) fn boundary<V: 'static>(
     t: &Tree,
     id: u32,
@@ -643,26 +435,20 @@ pub(crate) fn boundary<V: 'static>(
     if shape.blocked || shape.nodes < min_nodes() || margin_leaks(t, node) {
         return None;
     }
-    // Something inside is moving: lower it this frame, and make sure the
-    // frame it stops moving renders rather than replays (see [`begin_frame`]).
     if hot(id) {
+        // The frame it stops moving must render, not replay (see [`begin_frame`]).
         with_entry(id, |e| e.offered = false);
         return None;
     }
-    // The box the subtree laid out to last frame. Nothing to pin on the first
-    // frame a node is painted, so the first frame is always a real build.
     let rect = render::prev_rect_of(id).filter(|(_, _, width, height)| *width > 0.0 && *height > 0.0)?;
     let size = (rect.2, rect.3);
 
     let parent_rect = (node.parent != 0).then(|| render::prev_rect_of(node.parent)).flatten();
 
     let sub_rev = node.sub_rev;
-    // Everything that has to hold for the recording to still describe this node.
-    // `size` is in there for the reason spelled out on [`Entry::size`]; the rest
-    // is "nothing inside changed" (`sub_rev`), "nothing an ancestor threads down
-    // changed" (`ctx`) and "nothing outside resized me" (`parent_rect`).
-    // Refuse moved origins immediately once observed, without paying for three
-    // futile GPUI re-renders before the ordinary thrash cooldown.
+    // `size` is in there for the reason spelled out on [`Entry::size`]; the rest is "nothing inside
+    // changed" (`sub_rev`), "nothing an ancestor threads down changed" (`ctx`) and "nothing outside
+    // resized me" (`parent_rect`).
     let offer = ENTRIES.with(|m| {
         let mut m = m.borrow_mut();
         let e = m.entry(id).or_insert_with(|| Entry {
@@ -670,8 +456,8 @@ pub(crate) fn boundary<V: 'static>(
             sub_rev,
             ctx: ctx.clone(),
             parent_rect,
-            // NOT `Some(size)`: the first sighting must not compare equal to
-            // itself and offer on one frame's measurement — see [`Entry::size`].
+            // NOT `Some(size)`: the first sighting must not compare equal to itself and offer on
+            // one frame's measurement — see [`Entry::size`].
             size: None,
             rect: None,
             ids: Vec::new(),
@@ -682,10 +468,8 @@ pub(crate) fn boundary<V: 'static>(
             cooldown: 0,
             offered: false,
         });
-        // A re-render nobody asked for: the boundary was offered as clean and
-        // gpui went through it anyway, which means its rectangle, its content
-        // mask or the text style around it moved. Three in a row and it is not
-        // a cache — see [`THRASH_LIMIT`].
+        // A re-render nobody asked for: the rectangle, content mask or text style around it moved.
+        // Three in a row and it is not a cache ([`THRASH_LIMIT`]).
         if std::mem::take(&mut e.rendered) {
             e.misses = e.misses.saturating_add(1);
         } else {
@@ -708,10 +492,6 @@ pub(crate) fn boundary<V: 'static>(
                 && e.size == Some(size)
                 && e.rect == Some(rect);
         if !fresh {
-            // Lower it the ordinary way this frame. That is what re-measures it
-            // honestly — a wrapper would pin the very box we have just decided
-            // we no longer believe — and it is cheaper than rendering through
-            // the boundary only to throw the recording away.
             e.sub_rev = sub_rev;
             e.ctx = ctx.clone();
             e.parent_rect = parent_rect;
@@ -723,18 +503,10 @@ pub(crate) fn boundary<V: 'static>(
             e.offered = false;
             return None;
         }
-        // First offer after an ordinary build: gpui may still be holding an
-        // element state describing a subtree we have since rebuilt, and it must
-        // not be replayed.
-        //
-        // A FRESH ENTITY, not a `notify`. `notify` reaches `window.dirty_views`
-        // through the effect queue, and this runs inside the draw it would have
-        // to affect — so the invalidation lands a frame late and gpui replays
-        // the stale recording in between. A new `EntityId` is a different
-        // `ElementId`, so gpui has no state for it and renders, every time,
-        // synchronously. (Observed as `apps/hello` reporting `bounds: null` for
-        // every node under a boundary: a replay carries the rectangles the
-        // recording holds, and that recording had none yet.)
+        // First offer after an ordinary build: gpui may still hold an element state describing a
+        // subtree we have since rebuilt. A FRESH ENTITY, not a `notify`: `notify` lands a frame late
+        // (this runs inside the draw it would affect) and gpui would replay the stale recording; a
+        // new `EntityId` has no state, so gpui renders synchronously.
         if !std::mem::replace(&mut e.offered, true) {
             e.entity = None;
             e.ids.clear();
@@ -749,9 +521,6 @@ pub(crate) fn boundary<V: 'static>(
     });
     let Some(entity) = offer else { return None };
     crate::perf::note_cache_offer(false);
-    // Whether gpui replays or re-renders, the rectangles this subtree recorded
-    // last frame are the rectangles it has now — the replay is only taken when
-    // the bounds are identical, and a re-render overwrites them anyway.
     carry_bounds(id, win);
     Some(
         Boundary { id, inner: entity.cached(wrapper_style(node, size)).into_any_element() }
@@ -759,29 +528,9 @@ pub(crate) fn boundary<V: 'static>(
     )
 }
 
-/// The one thing a replay has to be given back by hand: the scroll chain.
-///
-/// Everything else a boundary needs is either copied forward by gpui
-/// (`reuse_prepaint` / `reuse_paint`) or carried by us before the element is
-/// even built ([`carry_bounds`]). `vn_elements::scrollbar`'s wheel-routing
-/// registry is neither: it is rebuilt from the **paint walk**, so a subtree
-/// that replays contributes nothing to it and every scroll container inside it
-/// falls out of the chain — the box keeps its pixels and stops scrolling. That
-/// is the whole of why v1 refused to cache a scroll container.
-///
-/// This wrapper brackets the cached element's paint and does the bookkeeping
-/// the walk would have done:
-///
-/// * **painted for real** — the subtree pushed its own entries, so record the
-///   run as this boundary's span;
-/// * **replayed** — it pushed nothing, so re-push the recorded run, *here*,
-///   which is exactly the position in the walk the subtree occupied. The
-///   registry is read innermost-first and that order is positional, so
-///   re-registering in place is what keeps a nested box ahead of the box that
-///   contains it.
-///
-/// It contributes no layout of its own: `request_layout` hands back the inner
-/// element's `LayoutId`, so taffy sees the same one leaf it saw before.
+/// The one thing a replay has to be given back by hand: the scroll chain. A real paint records the
+/// run of wheel-registry entries the subtree pushed; a replay re-pushes it in place, since the
+/// registry is read innermost-first and that order is positional.
 struct Boundary {
     id: u32,
     inner: AnyElement,
@@ -836,8 +585,6 @@ impl Element for Boundary {
         let win = windows::key(window);
         with_entry(self.id, |entry| {
             if entry.rendered {
-                // Nested cached entities render after the outer build has
-                // returned. Snapshot after paint so their areas are included.
                 entry.controls = windows::peek(win, |state| {
                     state.control_hitboxes.iter()
                         .filter(|(id, _)| entry.ids.contains(id)).copied().collect()
@@ -846,10 +593,9 @@ impl Element for Boundary {
         });
         let span = vn_elements::scrollbar::chain_since(mark);
         if span.is_empty() {
-            // Nothing registered: either this subtree really has no scroll
-            // container (the span is empty too, and this is a no-op), or gpui
-            // replayed the recording and the walk that would have registered
-            // them never ran.
+            // Nothing registered: either this subtree really has no scroll container (the span is
+            // empty too, and this is a no-op), or gpui replayed the recording and the walk that
+            // would have registered them never ran.
             with_entry(self.id, |e| vn_elements::scrollbar::chain_replay(&e.chain));
         } else {
             with_entry(self.id, |e| e.chain = span);
@@ -866,13 +612,8 @@ fn with_entry(id: u32, f: impl FnOnce(&mut Entry)) {
     });
 }
 
-/// Refills the live bounds map with the subtree's rectangles.
-///
-/// `getBoundingClientRect()`, the devtools highlight and every hit test read
-/// that map, and `build_root` rotates it at the top of each build. A replayed
-/// subtree runs no probes, so without this every node inside a cached boundary
-/// would read back as "not painted" — the one compat invariant `Entity::cached`
-/// breaks on its own, and the one it cannot see.
+/// Refills the live bounds map with the subtree's rectangles. A replayed subtree runs no probes, so
+/// without this its nodes would read as unpainted (`getBoundingClientRect`, hit tests, devtools).
 fn carry_bounds(id: u32, win: WinKey) {
     ENTRIES.with(|m| {
         let m = m.borrow();
@@ -897,8 +638,6 @@ fn carry_bounds(id: u32, win: WinKey) {
 fn restore_controls(state: &mut windows::WindowState, controls: &[(u32, gpui::WindowControlArea)]) {
     for &(id, area) in controls {
         state.any_drag_region |= area == gpui::WindowControlArea::Drag;
-        // Nested boundaries can be rendered while an ancestor's saved span
-        // has already been carried. Each node still contributes just once.
         if !state.control_hitboxes.contains(&(id, area)) {
             state.control_hitboxes.push((id, area));
         }
@@ -906,9 +645,6 @@ fn restore_controls(state: &mut windows::WindowState, controls: &[(u32, gpui::Wi
 }
 
 /// Collects every node id in a subtree, in document order.
-///
-/// Walked once per boundary RENDER (never on a replay frame), which is the same
-/// order as the render itself, and iterated flat on every replay.
 pub(crate) fn subtree_ids(t: &Tree, id: u32, out: &mut Vec<u32>) {
     out.push(id);
     if let Some(node) = t.node(id) {
@@ -918,10 +654,8 @@ pub(crate) fn subtree_ids(t: &Tree, id: u32, out: &mut Vec<u32>) {
     }
 }
 
-/// Records the ids one boundary's render covers — called by `build_cached`
-/// once the subtree is built.
-/// `(cache boundaries tracked, those holding an entity, node ids they carry)`
-/// — devtools `mem`. The recorded scene spans themselves live in gpui.
+/// Records the ids one boundary's render covers — called by `build_cached` once the subtree is
+/// built. The recorded scene spans themselves live in gpui.
 pub(crate) fn mem_stats() -> (usize, usize, usize) {
     ENTRIES.with(|m| {
         let m = m.borrow();
@@ -978,8 +712,8 @@ mod tests {
         STATS.with(|m| m.borrow_mut().clear());
     }
 
-    /// A group of rows as a channel list has them: `group > rows > row`, the
-    /// row carrying the margin. Returns `(group, rows, last row)`.
+    /// A group of rows as a channel list has them: `group > rows > row`, the row carrying the
+    /// margin.
     fn group_of_rows(css: &str) -> (u32, u32, u32) {
         set_stylesheet(css.into());
         let ids = with_tree(|t| {
@@ -1156,7 +890,6 @@ mod tests {
         assert!(!shape(row).1);
         let before = read_tree(|t| (t.sub_rev(row), t.node(svg).unwrap().computed.as_ref().unwrap().base.text.color));
         set_stylesheet(".icon { color: blue }".into());
-        // Match __vn_set_stylesheet: a replacement marks the document dirty.
         with_tree(|t| t.mark_dirty());
         restyle_all();
         let after = read_tree(|t| (t.sub_rev(row), t.node(svg).unwrap().computed.as_ref().unwrap().base.text.color));
@@ -1164,7 +897,6 @@ mod tests {
         assert_ne!(before.1, after.1);
         assert!(!shape(row).1, "currentColor tint changes do not require a colour raster");
         set_stylesheet(".icon { color: blue } .icon path { stroke: red }".into());
-        // Match __vn_set_stylesheet: a replacement marks the document dirty.
         with_tree(|t| t.mark_dirty());
         restyle_all();
         assert!(shape(row).1, "a descendant's computed concrete stroke invalidates cached Stats");
@@ -1241,9 +973,9 @@ mod tests {
         crate::tree::note_hover(svg, false);
     }
 
-    /// The node count is what decides whether a boundary is worth its ~18 µs,
-    /// so it has to be the number of nodes the build would actually lower —
-    /// text and anchors included, because each of those is a gpui element too.
+    /// The node count is what decides whether a boundary is worth its ~18 µs, so it has to be the
+    /// number of nodes the build would actually lower — text and anchors included, because each of
+    /// those is a gpui element too.
     #[test]
     fn a_subtree_counts_every_node_the_build_would_lower() {
         let (row, _leaf) = with_tree(|t| {
@@ -1305,14 +1037,6 @@ mod tests {
         assert_eq!(style, authored, "normalization is only for the current cached root");
     }
 
-    /// A scroll container no longer refuses the boundary — anywhere inside it,
-    /// or as the boundary node itself.
-    ///
-    /// It was the one exclusion with a real price (11.5 ms → 3.6 ms per draw on
-    /// the 1 000-row scenario) and the one with a known fix: the registry entry a
-    /// scroll box contributes to the wheel router is recorded per boundary and
-    /// re-registered on a replay ([`Boundary`]), rather than being rebuilt by a
-    /// paint walk that does not happen.
     #[test]
     fn a_scroll_container_no_longer_refuses_the_boundary() {
         set_stylesheet(".scrolls { overflow: scroll }".into());
@@ -1337,8 +1061,8 @@ mod tests {
         assert!(!shape(box_).1, "nor itself");
     }
 
-    /// The things that DO still refuse one, so removing the scroll-container
-    /// exclusion cannot be read as "the predicate stopped refusing".
+    /// The things that DO still refuse one, so removing the scroll-container exclusion cannot be
+    /// read as "the predicate stopped refusing".
     #[test]
     fn a_replaced_element_still_refuses_the_boundary() {
         let (wrap, plain) = with_tree(|t| {
@@ -1359,10 +1083,8 @@ mod tests {
         assert!(shape(plain).1, "and every ancestor of it");
     }
 
-    /// The shape is memoised against the subtree revision, because deriving it
-    /// is the walk the boundary exists to avoid. A mutation has to be enough to
-    /// re-derive it — otherwise a `<div>` that becomes a replaced element or an
-    /// out-of-flow box would keep a boundary that is no longer sound.
+    /// The shape is memoised against the subtree revision, because deriving it is the walk the
+    /// boundary exists to avoid.
     #[test]
     fn the_shape_memo_follows_the_subtree_revision() {
         set_stylesheet(".floats { position: absolute }".into());

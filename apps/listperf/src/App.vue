@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 
-// `VN_SCENARIO=<n>` picks the row count, so one process measures one size and
-// the number in the report is never "whatever the app happened to default to".
+// `VN_SCENARIO=<n>` picks the row count, so one process measures one size and the number in the
+// report is never "whatever the app happened to default to".
 const scenario = globalThis.__VN_SCENARIO__ ?? "";
 const parsed = Number.parseInt(scenario, 10);
 const COUNT = Number.isFinite(parsed) && parsed > 0 ? parsed : 1000;
@@ -22,9 +22,6 @@ const scrollTop = ref(0);
 const onScroll = (e: VnEvent) => (scrollTop.value = (e.target as VnElement).scrollTop);
 const title = computed(() => `${rows.value.length} rows`);
 
-// The e2e spec's proof that a row inside a retained-render cache boundary is
-// still a live element: a replayed subtree keeps its recorded mouse listeners,
-// so a click on one has to reach Vue exactly as it did before.
 const clicked = ref(-1);
 </script>
 

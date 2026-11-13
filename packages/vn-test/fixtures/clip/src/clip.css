@@ -5,8 +5,6 @@
   background: #fff;
 }
 
-/* reka's AvatarRoot (`relative flex size-16 shrink-0 overflow-hidden
-   rounded-full`) and AvatarImage (`aspect-square size-full`). */
 .avatar {
   position: absolute;
   left: 20px;
@@ -29,9 +27,6 @@
   height: 64px;
   border-radius: 50%;
 }
-/* `50%` on a box that is not square: CSS draws 60x22 elliptical corners;
-   gpui's are circles, so this is a 22px pill (crates/vn-css/README.md §5
-   item 13). */
 .oval {
   position: absolute;
   left: 20px;
@@ -46,7 +41,6 @@
   height: 100%;
   background: red;
 }
-/* `border-radius: inherit`, the way the Argon client spells it. */
 .inh-img {
   position: absolute;
   left: 176px;
@@ -127,7 +121,6 @@
   background: blue;
 }
 
-/* The perf probe's scene. */
 .perf {
   position: absolute;
   left: 250px;

@@ -1,14 +1,4 @@
-// `el.animate()` paints: Web Animations on the host's animator.
-//
-// Argon's counter (apps/client/src/components/motionCounter/Digit.vue) rolls
-// each digit with `el.animate()` on a back-out curve and cancels a roll that is
-// still running when the next tick comes. Before this the call was a
-// TypeError. The object model is src/waapi.ts (test/waapi.test.ts); the
-// painting half is crates/vn-css/src/animator/script.rs. This spec proves the
-// two meet on screen: the style in effect (`styles().computed.live`) and the
-// pixels.
-//
-//   bun test packages/vn-test/specs/waapi.spec.ts
+// Before this the call was a TypeError.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { launch, readPng } from "../src/index";
@@ -23,7 +13,6 @@ afterAll(() => app.close());
 const T = 30_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** The style in effect this frame, as one text. */
 const live = async (selector: string): Promise<string> =>
   ((await app.locator(selector).styles()).computed.live ?? []).join("\n");
 const opacityOf = (text: string): number => {
@@ -31,11 +20,9 @@ const opacityOf = (text: string): number => {
   return m ? Number(m[1]) : 1;
 };
 const translateYOf = (text: string): number => {
-  // The dump is pretty-printed Debug: `Pixels(\n 0.0,\n ),` per axis.
   const m = /vn_transform:[\s\S]*?translate:\s*\(\s*Pixels\(\s*([-\d.eE]+),?\s*\),?\s*Pixels\(\s*([-\d.eE]+)/.exec(text);
   return m ? Number(m[2]) : NaN;
 };
-/** The colour at the digit window's centre: red is an even cell, blue an odd one. */
 const digitColour = async (): Promise<string> => {
   const shot = readPng(await app.screenshot());
   const k = shot.width / 400;
@@ -67,13 +54,9 @@ describe("el.animate()", () => {
         if (!midColour && Date.now() - started > 350) midColour = await digitColour();
         await sleep(25);
       }
-      // It moved, through the middle…
       expect(seen.some((y) => y < -405 && y > -435)).toBe(true);
-      // …overshot the target, as a back-out curve does…
       expect(Math.min(...seen.filter(Number.isFinite))).toBeLessThan(-441);
-      // …and painted the next cell while it was there.
       expect(midColour).toBe("blue");
-      // Finished, without a fill: back on the strip's own transform.
       expect(await app.eval(`window.__rollDone && window.__roll.playState`)).toBe("finished");
       expect(translateYOf(await live("#strip"))).toBe(-400);
       expect(await digitColour()).toBe("red");
@@ -144,8 +127,6 @@ describe("el.animate()", () => {
   test(
     "motion's finish: the end value written from a rAF in onfinish, then cancel; no frame paints the base",
     async () => {
-      // motion-dom's NativeAnimation, minus motion: fill "both", and onfinish
-      // sets the end value through a motion value (a rAF render) and cancels.
       await app.eval(`(() => {
         const box = document.getElementById("settle");
         const a = box.animate({ opacity: [1, 0.2] }, { duration: 300, fill: "both" });
@@ -156,8 +137,6 @@ describe("el.animate()", () => {
           window.__settled = true;
         };
       })()`);
-      // Red at the box's centre: 0 at opacity 1, 204 at 0.2 on white. A
-      // screenshot is a frame that was drawn, and one takes a few ms.
       const reds: number[] = [];
       const started = Date.now();
       while (Date.now() - started < 700) {

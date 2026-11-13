@@ -1,43 +1,11 @@
 <script setup lang="ts">
 import { TINY_CLIP_DATA_URI } from "../tinyClip";
 
-// <video> — the OS media pipeline inside a CSS box.
-//
-// Two elements: a working 1080p H.264 clip with a full transport built out of
-// ordinary divs, and a deliberately broken one that proves the error path says
-// something useful instead of showing a black rectangle.
-//
-// Things to notice while looking at this file:
-//
-// * `<video>` is a NORMAL element. The `border-radius` and `overflow: hidden`
-//   on `.frame` below really do clip it, and the `:hover` transition really
-//   does apply — that is the payoff for decoding into our own scene graph
-//   (Media Foundation frame-server mode) instead of onto a sibling
-//   DirectComposition visual, where none of it would work.
-// * The transport is `videoEl.play()` / `videoEl.currentTime = 8` /
-//   `@timeupdate`, i.e. plain HTMLMediaElement — nothing app-specific and
-//   nothing host-specific. That is new: until m12's integration the JS runtime
-//   did not know the media event codes, so this page carried a
-//   `useMediaElement` composable that talked to `__vn_media_state` /
-//   `__vn_media_call` itself. `crates/vn-video/CONTRACT.md` §6 said that file
-//   dies the day runtime.js learns the codes. It has, and it did.
-// * The properties are LIVE reads off the host (`el.currentTime` is one host
-//   call, like `getBoundingClientRect()`), so nothing about them is reactive.
-//   The events are what drive the UI — exactly as in a browser, where you also
-//   copy `e.target.currentTime` into state on `@timeupdate` rather than
-//   watching the element.
-
 import { computed, onMounted, reactive, ref } from "vue";
 
-// Template refs on native elements. `VnMediaElement` (apps/env.d.ts) is the
-// HTMLMediaElement surface runtime.ts really installs — its own `MirrorElement`
-// interface has all of it and is not exported, so an app has no name for what a
-// `ref="videoEl"` is holding.
 const videoEl = ref<VnMediaElement | null>(null);
 const brokenEl = ref<VnMediaElement | null>(null);
 
-// What the last event left on the element. `timeupdate` arrives on the spec's
-// 4 Hz cadence, so this rerenders four times a second, not 165.
 const media = reactive({
   currentTime: 0,
   duration: NaN,
@@ -63,12 +31,7 @@ function readBack(el: VnMediaElement | null | undefined) {
   media.videoHeight = el.videoHeight;
 }
 
-/** One handler for every media event: log it, then re-read the element.
- *
- *  `VnEvent.target` is `unknown` — the protocol delivers a node id and the
- *  runtime hands back the mirror node it names, which the type system has no
- *  way to connect to `<video>`. This handler is only ever bound to the one
- *  element above, so that is what the cast says. */
+/** This handler is only ever bound to the one element above, so that is what the cast says. */
 function onMedia(e: VnEvent) {
   log.value.push(e.type);
   if (log.value.length > 40) log.value.shift();
@@ -76,8 +39,8 @@ function onMedia(e: VnEvent) {
 }
 
 function onBrokenError(e: VnEvent) {
-  // `e.target.error` is a real MediaError: `{ code, message }`, where the
-  // message is the advisory naming what THIS machine cannot decode.
+  // `e.target.error` is a real MediaError: `{ code, message }`, where the message is the advisory
+  // naming what THIS machine cannot decode.
   brokenError.value = (e.target as VnMediaElement | null)?.error ?? null;
 }
 
@@ -85,9 +48,6 @@ const muted = ref(true); // browsers require it for autoplay; be a good neighbou
 const looping = ref(false);
 const rate = ref(1);
 
-// `paused` and `ended` are separate in HTML: reaching the end sets `ended` and
-// leaves `paused` alone (the spec only changes `paused` in play()/pause()), so
-// a transport button has to read BOTH or it says "pause" over a stopped video.
 const stopped = computed(() => media.paused || media.ended);
 
 function toggle() {
@@ -102,8 +62,8 @@ function seek(seconds: number) {
   const el = videoEl.value;
   if (!el) return;
   el.currentTime = Math.max(0, seconds);
-  // The seek lands on the host immediately; mirror it so a dragged scrub bar
-  // does not snap back for the ~250 ms until `seeked` arrives.
+  // The seek lands on the host immediately; mirror it so a dragged scrub bar does not snap back
+  // for the ~250 ms until `seeked` arrives.
   media.currentTime = Math.max(0, seconds);
 }
 
@@ -122,7 +82,6 @@ function toggleLoop() {
   if (videoEl.value) videoEl.value.loop = looping.value;
 }
 
-/** `mm:ss.d`, the shape a transport readout wants. */
 function formatTime(seconds: number) {
   if (!Number.isFinite(seconds)) return "--:--";
   const m = Math.floor(seconds / 60);
@@ -130,15 +89,11 @@ function formatTime(seconds: number) {
   return `${String(m).padStart(2, "0")}:${s.toFixed(1).padStart(4, "0")}`;
 }
 
-// --- the scrub bar ----------------------------------------------------------
-// No <input type="range"> in this renderer, so the track is a div and the seek
-// is arithmetic on getBoundingClientRect — which works because the DOM surface
-// answers it off the real painted rectangle.
 const scrubbing = ref(false);
 
 function seekFromEvent(e: VnMouseEvent) {
-  // `currentTarget` is rewritten at each step of the propagation walk, so it
-  // is the `.track` div this handler is bound to — not whatever was clicked.
+  // `currentTarget` is rewritten at each step of the propagation walk, so it is the `.track` div
+  // this handler is bound to — not whatever was clicked.
   const track = e.currentTarget as VnElement | null;
   if (!track || !Number.isFinite(media.duration)) return;
   const rect = track.getBoundingClientRect();
@@ -153,11 +108,6 @@ const progress = computed(() => {
   return Math.min(100, Math.max(0, (currentTime / duration) * 100));
 });
 
-// --- the codec probe --------------------------------------------------------
-// A LIVE probe of this machine, not a table: H.264 + AAC in MP4 is the only
-// combination guaranteed on a clean Windows install; HEVC, AV1, VP9 and the
-// WebM family all arrive as separately installable Store packages that an
-// enterprise image may have stripped. macOS will answer differently again.
 const CODECS: [label: string, mime: string][] = [
   ['H.264 + AAC (MP4)', 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'],
   ['HEVC / H.265 (MP4)', 'video/mp4; codecs="hev1.1.6.L93.B0"'],
@@ -167,12 +117,8 @@ const CODECS: [label: string, mime: string][] = [
   ['Ogg Theora', 'video/ogg; codecs="theora"'],
   ['FFV1 in MKV (a codec the probe does not know)', 'video/x-matroska; codecs="ffv1"'],
 ];
-/** `canPlayType` answers `"" | "maybe" | "probably"`; `""` is rendered as
- *  "no", which is also the class name the stylesheet colours it by. */
 const probe = ref<{ label: string; answer: string }[]>([]);
 onMounted(() => {
-  // `VN_SCENARIO=media` — start looping playback with no input at all, so a
-  // soak or a frame-time measurement is one process and one screen.
   if (globalThis.__VN_SCENARIO__ === "media") {
     setTimeout(() => {
       const el = videoEl.value;
@@ -183,30 +129,20 @@ onMounted(() => {
       readBack(el);
     }, 500);
   }
-  // After the element exists — `canPlayType` is asked OF the media engine.
   setTimeout(() => {
     const el = videoEl.value;
     probe.value = CODECS.map(([label, type]) => ({
       label,
-      // `""` (the spec's "no") and a missing element both render as "no".
       answer: (el && el.canPlayType(type)) || "no",
     }));
     readBack(el);
   }, 250);
 });
 
-// The event log, newest last — the proof that `ended` and `error` really fire.
 const recent = computed(() => log.value.slice(-8).join(" · "));
 
-// --- the other two src grammars (m13 item 3) --------------------------------
-// `<video src>` and `<img src>` take the same three shapes a browser does, and
-// each reaches the platform as the thing it actually wants: a PATH (the OS owns
-// the read-ahead), a URL VERBATIM (its network source streams and range-seeks),
-// or BYTES (a data: URI has neither a path nor a server).
-//
-// The origin is overridable so this page can be pointed at a real server; the
-// default is a local one, so the demo has no third-party dependency and no
-// internet requirement.
+// The origin is overridable so this page can be pointed at a real server; the default is a local
+// one, so the demo has no third-party dependency and no internet requirement.
 const httpOrigin = globalThis.__VN_HTTP_ORIGIN__ || "http://127.0.0.1:8731";
 const tinyClip = TINY_CLIP_DATA_URI;
 const httpClip = `${httpOrigin}/clip-1080p.mp4`;
@@ -215,18 +151,11 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
 
 <template>
   <div class="page">
-    <!-- ===== the working clip ============================================ -->
     <div class="card">
       <div class="title">&lt;video&gt; — Media Foundation, decoded on gpui's own device</div>
 
       <div class="stage">
-        <!-- The frame is a plain CSS box. The radius and the clip below are
-             the point: a video that escaped the scene graph could not have
-             either. -->
         <div class="frame">
-          <!-- The event set is HTML's, bound with plain `@` handlers. The
-               listener bit is what makes the host build and send the payload
-               at all, so an unbound `@timeupdate` costs nothing. -->
           <video
             ref="videoEl"
             class="video"
@@ -275,8 +204,6 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
             <div class="btn ghost" @click="seek(8)">seek 8s</div>
           </div>
 
-          <!-- The scrub bar. `currentTime` updates at the spec's 4 Hz, so this
-               moves exactly as often as a browser's does. -->
           <div
             class="track"
             @mousedown="scrubbing = true; seekFromEvent($event)"
@@ -298,12 +225,10 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
       </div>
     </div>
 
-    <!-- ===== the broken clip ============================================= -->
     <div class="card">
       <div class="title">The error path — a source this machine cannot decode</div>
       <div class="stage">
         <div class="frame small">
-          <!-- One `@error` handler, and `e.target.error` is a real MediaError. -->
           <video
             ref="brokenEl"
             class="video"
@@ -328,7 +253,6 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
       </div>
     </div>
 
-    <!-- ===== the other two src grammars (m13 item 3) ===================== -->
     <div class="card">
       <div class="title">src grammars — data:, http(s) and relative</div>
       <div class="src-row">
@@ -337,7 +261,7 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
           <div class="src-label">
             data: URI — 6 KB of MP4 inlined in the bundle. Staged to a content-hashed file in
             the OS temp directory, because SetSourceFromByteStream OPENS the URL it is given
-            rather than reading the stream (m13 report, item 3).
+            rather than reading the stream.
           </div>
         </div>
         <div class="src-cell">
@@ -357,8 +281,7 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
         <div class="src-cell">
           <img class="mini relative-img" src="assets/clip-1080p.poster.png" alt="relative image" />
           <div class="src-label">
-            &lt;img&gt; by relative URL — the app root in dev, the exe's own payload once packaged
-            (docs/PACKAGING.md). The same key either way, so the two cannot disagree.
+            &lt;img&gt; by relative URL — the app root in dev, the exe's own payload once packaged. The same key either way, so the two cannot disagree.
           </div>
         </div>
       </div>
@@ -368,7 +291,6 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
       </div>
     </div>
 
-    <!-- ===== the live codec probe ======================================== -->
     <div class="card">
       <div class="title">canPlayType() — probed on this machine, right now</div>
       <div class="probe">
@@ -435,8 +357,6 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
   gap: 14px;
   align-items: flex-start;
 }
-/* The proof that the video is inside the scene graph: a rounded, clipped,
-   bordered box that a DirectComposition sibling visual could not honour. */
 .frame {
   width: 420px;
   height: 236px;
@@ -462,9 +382,6 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
   flex-direction: column;
   gap: 8px;
   flex: 1;
-  /* A flex item's default `min-width: auto` is its content's intrinsic width,
-     so a long advisory pushes the row wider than the card instead of wrapping.
-     Same fix as in a browser. */
   min-width: 0;
 }
 .meta {

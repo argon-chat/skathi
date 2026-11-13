@@ -113,7 +113,6 @@ describe("the selection model", () => {
     opts[2].setAttribute("selected", "");
     expect(select.selectedIndex).toBe(2);
     expect(opts[2].defaultSelected).toBe(true);
-    // Dirty now: the attribute no longer moves it.
     opts[1].selected = true;
     opts[1].removeAttribute("selected");
     opts[1].setAttribute("selected", "");

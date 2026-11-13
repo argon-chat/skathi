@@ -1,5 +1,5 @@
 {
-  "$comment": "The OS-chrome demo — docs/WINDOWING.md §4.2 mode 3, fork item F-03. `titleBarStyle: \"default\"` gives the window a real WS_CAPTION: the OS draws the titlebar, its min/max/close, its double-click-to-zoom and its system menu. Kept as its own app rather than a flag on `hello` because the mode is creation-time only (D-25) and because the CSS chrome surface is INERT here, which is a thing to be able to see.",
+  "$comment": "`titleBarStyle: \"default\"` gives the window a real WS_CAPTION: the OS draws the titlebar, its min/max/close, its double-click-to-zoom and its system menu.",
   "window": {
     "title": "vue-native — OS chrome",
     "width": 720,

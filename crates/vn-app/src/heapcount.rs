@@ -1,27 +1,19 @@
-//! Live Rust heap bytes — the devtools `mem` command's "Rust heap" row (m26).
+//! Live Rust heap bytes: the devtools `mem` command's "Rust heap" row.
 //!
-//! The process's private bytes are several allocators' worth of memory: the
-//! Rust heap (this process's system heap, which the static CRT's `malloc`
-//! shares), JSC's mimalloc, JSC's executable memory, D3D's driver
-//! allocations, libwebrtc once a call starts. Only the first can be counted
-//! from Rust, and it is the one the retained tree, the cascade, gpui's element
-//! arena and every decoded image live in — so it is counted here, and the
-//! rest is attributed by subtraction in `devtools::mem`.
+//! The process's private bytes span several allocators (the Rust heap, which the static CRT's
+//! `malloc` shares; JSC's mimalloc and executable memory; D3D's driver allocations; libwebrtc). Only
+//! the Rust heap can be counted from Rust, and the retained tree, cascade, gpui's arena and every
+//! decoded image live in it, so it is counted here and the rest is attributed by subtraction in
+//! `devtools::mem`.
 //!
-//! ## When it counts
+//! The wrapper is the global allocator of every build that has the devtools (`cfg(vn_devtools)`). It
+//! counts by default in a dev build and not in a `--features prod` one; `VN_MEMSTATS` overrides
+//! either way (`0` off, anything else on). Off, each allocation pays one relaxed load; on, six
+//! relaxed atomic adds and one `fetch_max`.
 //!
-//! The wrapper is the global allocator of every build that has the devtools
-//! (`cfg(vn_devtools)`). It COUNTS by default in a dev build and does not in a
-//! `--features prod` one; `VN_MEMSTATS` overrides either way (`0` off,
-//! anything else on). Off, each allocation pays one relaxed load more than
-//! `System` alone. On, it pays six relaxed atomic adds and one `fetch_max` —
-//! measured in research/reports/m26/perf-mem-1.md (idle frame and a cold
-//! "open a space" trace, on vs off) before it was made the dev default.
-//!
-//! The switch is read on the very first allocation, before `main`, through
-//! `GetEnvironmentVariableW` into a stack buffer — reading it with `std::env`
-//! would allocate inside the allocator — so the count starts at the first
-//! byte and a free can never be of something that was not counted.
+//! The switch is read on the very first allocation, before `main`, through `GetEnvironmentVariableW`
+//! into a stack buffer (`std::env` would allocate inside the allocator), so the count starts at the
+//! first byte and a free can never be of something that was not counted.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicI64, AtomicU8, AtomicU64, Ordering::Relaxed};
@@ -37,8 +29,7 @@ static ALLOCS: AtomicU64 = AtomicU64::new(0);
 
 /// Live bytes and blocks per power-of-two size class: class `k` holds blocks
 /// of `2^(k-1)..2^k` bytes, the last class everything from `2^(CLASSES-2)` up.
-/// Which sizes hold the heap is the first thing "what are these 200 MB" asks:
-/// a few 10-MB pixel buffers and a million 64-byte nodes are different bugs.
+/// Which sizes hold the heap is the first thing a heap number raises.
 const CLASSES: usize = 34;
 #[allow(clippy::declare_interior_mutable_const)]
 const ZERO: AtomicI64 = AtomicI64::new(0);

@@ -1,36 +1,19 @@
-//! The per-frame gpui element for one `<video>` node.
-//!
-//! Like `vn_lottie::element`, this is a *component*, not a view: the host owns
-//! the [`VideoState`] in a side map and rebuilds the element tree every frame,
-//! so everything here is recomputed from scratch each time and nothing but the
-//! state survives.
+//! The per-frame gpui element for one `<video>` node: a component, not a view, so everything is
+//! recomputed each frame and only the [`VideoState`] survives.
 
 use gpui::{div, img, AnyElement, App, IntoElement, ObjectFit, Styled, StyledImage, Window};
 
 use crate::state::VideoState;
 
-/// CSS `object-fit`, as the cascade produces it.
-///
-/// Mirrors gpui's own [`ObjectFit`] one-for-one; it exists because gpui's enum
-/// derives nothing, and the host needs a plain value it can compare and store.
+/// CSS `object-fit`; mirrors gpui's [`ObjectFit`] one-for-one as a comparable, storable value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VideoFit {
-    /// `object-fit: fill` — stretch to the box, ignoring aspect ratio.
     Fill,
-    /// `object-fit: contain` — letterbox inside the box.
-    ///
-    /// **The default, and it is the spec's.** HTML says the video is "shown
-    /// centred in the playback area at the largest possible size that fits
-    /// completely within it, with the video's aspect ratio being preserved" —
-    /// i.e. `contain`, not the CSS initial value `fill` that a plain `<img>`
-    /// takes.
+    /// The default, as in the HTML spec (not `fill`, as for `<img>`).
     #[default]
     Contain,
-    /// `object-fit: cover` — fill the box, cropping the overflow.
     Cover,
-    /// `object-fit: scale-down` — `none` or `contain`, whichever is smaller.
     ScaleDown,
-    /// `object-fit: none` — paint at intrinsic size.
     None,
 }
 
@@ -46,13 +29,11 @@ impl From<VideoFit> for ObjectFit {
     }
 }
 
-/// Per-frame view parameters. Style comes from the host's CSS engine; nothing
-/// in here is remembered between frames.
+/// Per-frame view parameters; nothing is remembered between frames.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VideoOptions {
-    /// The content box the video paints into, in **logical** (CSS) pixels.
+    /// The content box in logical (CSS) pixels.
     pub size: (f32, f32),
-    /// Device pixels per logical pixel — `window.scale_factor()`.
     pub scale: f32,
     pub object_fit: VideoFit,
 }
@@ -64,20 +45,13 @@ impl Default for VideoOptions {
 }
 
 impl VideoOptions {
-    /// The physical-pixel box a decoded frame should be capped at — what goes
-    /// into [`crate::FrameRequest`].
-    ///
-    /// Under `cover` the box is *filled*, so the frame has to be at least as
-    /// large as the box's longer relative axis or the upscale would be visible;
-    /// `fit_within` clamps to the native size anyway, so asking for the box's
-    /// bounding square is safe and costs nothing on the common `contain` path.
+    /// The physical-pixel box a decoded frame is capped at ([`crate::FrameRequest`]). `cover` needs
+    /// the larger axis, so the bounding square is requested; `fit_within` clamps to native size.
     pub fn max_frame_size(&self) -> (u32, u32) {
         let w = (self.size.0 * self.scale).round().max(0.0) as u32;
         let h = (self.size.1 * self.scale).round().max(0.0) as u32;
         match self.object_fit {
-            // `cover` crops: the visible area is the box, but the frame that
-            // covers it is larger on one axis. Asking for a square of the
-            // larger dimension is the cheap, correct-enough bound.
+            // `cover` crops, so the covering frame is larger on one axis: ask for a square of the larger dimension.
             VideoFit::Cover => {
                 let m = w.max(h);
                 (m, m)
@@ -87,16 +61,9 @@ impl VideoOptions {
     }
 }
 
-/// Builds the element for one frame.
-///
-/// Paints the frame the last [`VideoState::advance`] produced and releases the
-/// atlas tiles of frames that have fallen out of use — which is why this needs
-/// `window`/`cx` and why the host must call *this* rather than reading
-/// [`VideoState::frame`] directly.
-///
-/// A state with no frame yet (loading, a broken `src`, a zero-area box) paints
-/// an empty box of the same size rather than collapsing the layout — the same
-/// thing a browser does before `loadeddata`.
+/// Builds the element for one frame: paints the frame the last [`VideoState::advance`] produced and
+/// releases atlas tiles of frames out of use, so call this rather than reading [`VideoState::frame`].
+/// A state with no frame yet paints an empty box of the same size.
 pub fn video(
     state: &mut VideoState,
     options: &VideoOptions,
@@ -104,8 +71,7 @@ pub fn video(
     cx: &mut App,
 ) -> AnyElement {
     for image in state.take_retired() {
-        // `Some(window)`: we are inside this window's update, so `App.windows`
-        // has its slot taken and `drop_image` would otherwise skip it.
+        // Inside this window's update `App.windows` has its slot taken, so `drop_image` would skip it.
         cx.drop_image(image, Some(window));
     }
 

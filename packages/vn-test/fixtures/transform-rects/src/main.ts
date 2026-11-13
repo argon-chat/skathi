@@ -1,16 +1,5 @@
-// A fixture for packages/vn-test/specs/transform-rects.spec.ts:
-// getBoundingClientRect() under CSS transforms.
-//
-// reka's PopperContent lays its wrapper out at (0, 0), `position: fixed`, and
-// moves it with the `transform: translate(x, y)` floating-ui computes; shadcn's
-// DialogContent is centred with `translate(-50%, -50%)`. Anything anchored to
-// an element inside either reads that element's getBoundingClientRect(), which
-// a browser answers with transforms applied. Ours answered the layout box, so
-// the Argon profile popover's three-dot menu opened in the window's top-left
-// corner. `Popper` below does what PopperContent does for `side: bottom,
-// align: start`: measure the anchor once mounted, write the translate.
-//
-// Render functions and a `.css` import, as in fixtures/layout.
+// Ours answered the layout box, so the Argon profile popover's three-dot menu opened in the
+// window's top-left corner.
 import { createApp, defineComponent, h, onMounted, ref } from "vue-native";
 import "./transform.css";
 
@@ -22,11 +11,8 @@ const rect = (el: Element | null): Rect | null => {
 };
 
 const state = {
-  /** Each popper's anchor, as measured when it was placed. */
   anchors: {} as Record<string, Rect | null>,
-  /** ResizeObserver entries for `#zoom`, after the first. */
   zoomResizes: 0,
-  /** IntersectionObserver: the last entry per target id. */
   io: {} as Record<string, { isIntersecting: boolean; rect: Rect }>,
   startZoom: () => {},
   sampleZoom: () => {
@@ -90,15 +76,11 @@ const Root = defineComponent({
     return () =>
       h("div", { id: "root" }, [
         h("div", { id: "trigger", class: "trigger" }),
-        // The popover, open: a wrapper moved under the trigger, with the menu
-        // button inside.
         h(Popper, { id: "pop", anchor: "trigger" }, () =>
           h("div", { class: "pop-body" }, [
             h("div", { id: "menu-btn", class: "menu-btn", onClick: () => (menuOpen.value = !menuOpen.value) }),
           ]),
         ),
-        // The dropdown the menu button opens: a second popper anchored to an
-        // element inside the first.
         menuOpen.value ? h(Popper, { id: "menu", anchor: "menu-btn" }, () => h("div", { class: "menu-body" })) : null,
         h("div", { id: "dialog", class: "dialog" }, [
           h("div", { id: "select-trigger", class: "select-trigger", onClick: () => (selectOpen.value = !selectOpen.value) }),

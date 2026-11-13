@@ -1,31 +1,19 @@
-//! What the user answered to this app's own permission prompt, per app, on
-//! disk (docs/PERMISSIONS.md §5.1).
-//!
-//! A browser remembers "Allow" and "Block" per site. An app runs as one
-//! "site", so the answers live in the app's storage folder (the one
-//! `localStorage` uses, `%LOCALAPPDATA%\<app>\storage`), in
-//! `permissions.json`:
+//! The user's answers to this app's own permission prompt, kept in `permissions.json` in the
+//! app's storage folder:
 //!
 //! ```json
 //! { "version": 1,
 //!   "permissions": { "microphone": { "decision": "allow", "at": 1793568000000 } } }
 //! ```
 //!
-//! `at` is when it was answered (Unix ms). Nothing else is kept. A dismissal
-//! (Esc) is not a decision and is never written.
+//! `at` is Unix ms. A dismissal is not a decision and is never written.
 //!
-//! The file is read once, at the first question, and written through on
-//! every change: a decision must outlive a crash. It is written to a
-//! temporary file first, then renamed over the old one. A host with no
-//! storage folder (built without `storages`) keeps the answers for the run
-//! only, as a private browser window does. A file that is not JSON is left
-//! alone until the next answer replaces it, and the reason is logged. A file
-//! that could not be *read* (held open elsewhere) is read again at the next
-//! question, and is never written over before it has been read.
+//! The file is read once, at the first question, and written through on every change (write to
+//! a temp file, then rename). With no storage folder the answers last for the run only. A file
+//! that is not JSON is left alone until the next answer replaces it; one that could not be
+//! read (held open elsewhere) is read again at the next question and never written over before.
 //!
-//! The file is plain text, like `localStorage` beside it. It holds no secret,
-//! and anyone who can edit it already runs as this user and can capture
-//! without asking, so writing an Allow into it is not an escalation.
+//! It is plain text: anyone who can edit it already runs as this user, so it is no escalation.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -58,7 +46,6 @@ impl Decision {
     }
 }
 
-/// One stored answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub decision: Decision,
@@ -79,8 +66,7 @@ impl Store {
         Store { path: None, loaded: false, map: BTreeMap::new() }
     }
 
-    /// Where the decisions live from now on (`None`: memory only). Read
-    /// again at the next question.
+    /// Where the decisions live from now on (`None`: memory only).
     pub fn set_path(&mut self, path: Option<PathBuf>) {
         self.path = path;
         self.loaded = false;
@@ -91,11 +77,9 @@ impl Store {
         self.path.as_deref()
     }
 
-    /// Reads the file once. A read that fails for any reason but "not there"
-    /// (a sharing violation while something else holds it, a permissions
-    /// glitch) leaves the store unloaded: the next question reads again, and
-    /// meanwhile nothing is written, so one answer cannot replace a file
-    /// whose other answers were never seen.
+    /// Reads the file once. A failed read (a sharing violation, say) leaves the store unloaded
+    /// and nothing is written meanwhile, so an answer cannot replace a file whose other answers
+    /// were never seen.
     fn load(&mut self) {
         if self.loaded {
             return;
@@ -126,9 +110,8 @@ impl Store {
         self.map.get(cap.web_name()).copied()
     }
 
-    /// Stores (`Some`) or forgets (`None`) the answer for `cap`. `true` when
-    /// that changed anything. A write that fails is logged; the answer
-    /// stands for this run either way.
+    /// Stores (`Some`) or forgets (`None`) the answer for `cap`; `true` when that changed
+    /// anything. A failed write is logged and the answer stands for this run.
     pub fn set(&mut self, cap: Capability, decision: Option<Decision>) -> bool {
         self.load();
         let before = self.map.get(cap.web_name()).map(|e| e.decision);
@@ -206,10 +189,8 @@ fn read(path: &Path) -> std::io::Result<String> {
     std::fs::read_to_string(path)
 }
 
-/// Write-then-rename, so a crash mid-write leaves the old file whole. The
-/// temporary file's name is this process's and this write's own, so two
-/// processes (or two stores) never write through one, and it reaches the
-/// disk before it is renamed over the old file.
+/// Write-then-rename, so a crash mid-write leaves the old file whole. The temp name is unique
+/// to this process and write, and the data reaches disk before the rename.
 fn write(path: &Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};

@@ -616,8 +616,7 @@ mod tests {
             "private allocation must not scale with the mapped video size"
         );
         eprintln!("MAPPED_MEDIA_PROOF {{\"assetBytes\":{length},\"readBytes\":{bytes},\"largestRead\":{largest},\"seeks\":{seeks},\"privateBefore\":{before},\"privateAfter\":{after},\"painted\":{painted},\"seeked\":{sought}}}");
-        // Exercise the old data-URI Bytes path with the extension installed.
-        // Its existing tiny temp-file fallback remains a supported behavior.
+        // Exercise the data-URI Bytes path (temp-file fallback) with the extension installed.
         let tiny = include_bytes!("../../../../apps/hello/assets/clip-tiny.mp4");
         backend
             .load(&MediaSource::Bytes {

@@ -46,11 +46,7 @@ export interface StampOptions {
   host: string;
   /** Where the stamped exe ends up. Written as `<out>.partial`, then renamed. */
   out: string;
-  /**
-   * Builds the VNPK blob for a given skew. Called once per pass; the bytes must
-   * differ ONLY in the skew (the stamper relies on the payload's RVA not
-   * depending on its own size).
-   */
+  /** Builds the VNPK blob for a given skew; called once per pass, and the bytes must differ only in the skew. */
   payload: (skew: number) => Uint8Array;
   /** `undefined` keeps whatever icons `host` has; an array replaces them all. */
   icons?: IconImage[];
@@ -65,10 +61,8 @@ export interface StampResult {
   out: string;
   bytes: number;
   payloadBytes: number;
-  /** Image RVA of the VNPK blob. */
   payloadRva: number;
   skew: number;
-  /** `(rva + data_off) % 4096 === 0` — what phase-3 bytecode needs. */
   dataAligned: boolean;
   passes: number;
   strippedSignature: boolean;
@@ -140,7 +134,6 @@ export function stamp(options: StampOptions): StampResult {
     let blob = options.payload(skew);
     let passes = 1;
 
-    // Pass 1: everything.
     retrying(
       "stamping resources",
       () => {
@@ -213,9 +206,8 @@ export function stamp(options: StampOptions): StampResult {
     }
     const tRes = performance.now();
 
-    // Verify the way the host will read it: an image map, FindResourceW,
-    // LockResource. A file Windows will not map fails HERE, not on a user's
-    // machine.
+    // Verify the way the host reads it: an image map, FindResourceW, LockResource. A file Windows will not map
+    // fails here, not on a user's machine.
     pe = readPe(partial);
     entry = payloadEntry(pe);
     if (!entry || entry.size !== blob.length) {

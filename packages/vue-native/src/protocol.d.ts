@@ -1,49 +1,21 @@
-// The `__vn_*` host protocol, typed once.
+// The `__vn_*` host protocol. Ambient: engine globals, evaluated as classic scripts.
 //
-// Every function below is registered on the JS global by a Rust `install()`
-// (the file is named on each block), and every one of them is the ONLY way the
-// JS runtime can reach the retained tree, the cascade, the media pipeline, the
-// permission backend or the storage area. Until this file
-// existed the whole seam was untyped: a call with the arguments in the wrong
-// order, or a `number` where the host reads a string, produced a silently
-// wrong-but-plausible result rather than a build error.
-//
-// The rules the seam obeys, which the types encode:
-//
-//   * IDS ARE DENSE u32, and `0` is the reserved "none" id (never a real node).
-//     Everything crossing the boundary as an id is a `VnNodeId` / `VnNameId`.
-//   * NAMES CROSS ONCE. Tags, style keys and prop keys are interned through
-//     `__vn_intern` and travel as `VnNameId` afterwards, so the per-op hot path
-//     never carries a string. A host fn that takes a `VnNameId` will silently
-//     read garbage if handed a raw string, which is precisely what the types
-//     now prevent.
-//   * STRUCTURED ANSWERS ARE STRINGS, in one of three shapes: comma-joined
-//     numbers (`__vn_query`, `__vn_bounds`), `name=value` lines
-//     (`__vn_computed_style`, `__vn_media_state`), or JSON
-//     (`__vn_permissions_*`, `__vn_storage_*`). The alias types
-//     below say which, so a caller cannot `JSON.parse` a line-shaped answer.
-//   * A HOST FN MAY BE ABSENT. `vn-storage` and `vn-permissions`
-//     are installed by the app host, not by the engine, and a build without
-//     them (or the unit-test harness) simply has no such global. The runtime
-//     probes with `typeof __vn_storage_info === "function"` and falls back to
-//     an inert surface — so these are declared as ordinary globals and the
-//     probe is what keeps that honest.
-//
-// Ambient by design: these are engine globals, not module exports, and the
-// files that call them are evaluated as CLASSIC SCRIPTS inside the vendor IIFE.
+// - Ids are dense u32; `0` is the reserved "none" id.
+// - Names cross once: tags, style keys and prop keys are interned via `__vn_intern`
+//   and travel as `VnNameId`; a host fn taking a `VnNameId` misreads a raw string.
+// - Structured answers are strings: comma-joined numbers, `name=value` lines, or JSON.
+// - A host fn may be absent (storage, permissions, windowing, devtools are installed
+//   by the app host): probe with `typeof fn === "function"`.
 
-/** A node id in `crates/vn-tree`'s arena. `0` is the reserved "none" id. */
 type VnNodeId = number;
-/** An interned name id (`__vn_intern`). Dense, stable for the process. */
 type VnNameId = number;
-/** `"12,40,3"` — matched node ids, or `""` for none. See `__vn_query`. */
 type VnIdList = string;
 /**
  * `"x,y,w,h"` as f32s, `""` when the node was not painted, or `"stale"` when it
- * has not been laid out YET and the host could not force a layout. See `__vn_bounds`.
- * When a CSS `transform` (the node's or an ancestor's) moved the picture, four
- * more follow, `"x,y,w,h,tx,ty,tw,th"`: the bounding box it was drawn at, which
- * is getBoundingClientRect()'s answer; the first four stay the layout box.
+ * has not been laid out yet and the host could not force a layout.
+ * When a CSS `transform` moved the picture, four more follow,
+ * `"x,y,w,h,tx,ty,tw,th"`: the drawn bounding box (getBoundingClientRect()'s answer);
+ * the first four stay the layout box.
  */
 type VnRect = string;
 /** `name=value` lines, `\n`-separated. `""` when there is nothing to report. */
@@ -51,37 +23,20 @@ type VnKvLines = string;
 /** A JSON document. The host never returns a bare value — always an object. */
 type VnJson = string;
 
-// ---------------------------------------------------------------------------
-// the retained tree — crates/vn-tree/src/lib.rs::install
-// ---------------------------------------------------------------------------
-
-/**
- * Interns `name`, returning its dense id. Idempotent: the same string always
- * answers the same id, which is what lets the JS side memoise it forever.
- */
+/** Interns `name`. Idempotent: the same string always answers the same id. */
 declare function __vn_intern(name: string): VnNameId;
 
-/** Creates an element node with the interned `tag`. Returns its id. */
 declare function __vn_create_element(tag: VnNameId): VnNodeId;
-/** Creates a text node (`kind === 2`). Returns its id. */
 declare function __vn_create_text(): VnNodeId;
-/** Creates a comment/anchor node (`kind === 3`). Returns its id. */
 declare function __vn_create_anchor(): VnNodeId;
-/**
- * Creates THE root node. Called exactly once, by `createApp().mount()`.
- * `vn_css::element` answers `:root`, `html` and `body` off this one node.
- */
+/** Creates THE root node (`:root`, `html`, `body`). Called exactly once, by `createApp().mount()`. */
 declare function __vn_create_root(): VnNodeId;
 
-/** Sets a text node's content. */
 declare function __vn_set_text(id: VnNodeId, text: string): void;
 /** Sets an ELEMENT's own text — exclusive with its children, as in the tree. */
 declare function __vn_set_element_text(id: VnNodeId, text: string): void;
 
-/**
- * Inserts `child` into `parent` before `anchor` (`0` = append). Also MOVE: the
- * host detaches `child` from wherever it was first.
- */
+/** Inserts `child` into `parent` before `anchor` (`0` = append). Also a move: `child` is detached first. */
 declare function __vn_insert(child: VnNodeId, parent: VnNodeId, anchor: VnNodeId): void;
 /** Destroys `id` AND ITS WHOLE SUBTREE. The ids are recycled afterwards. */
 declare function __vn_remove(id: VnNodeId): void;
@@ -92,83 +47,57 @@ declare function __vn_fullscreen_element(id: VnNodeId): boolean;
 declare function __vn_fullscreen_window(ownerRoot: VnNodeId, on?: boolean): boolean;
 
 /**
- * One inline declaration. `""` REMOVES the property (it does not set empty).
- * A value may end in `!important`; the host keeps the list in order, an
- * updated key in place and a new one appended.
+ * One inline declaration. `""` REMOVES the property. A value may end in `!important`;
+ * an updated key keeps its place, a new one is appended.
  */
 declare function __vn_set_style(id: VnNodeId, key: VnNameId, value: string): void;
-/**
- * Does the engine apply `key: value` as one declaration
- * (`vn_css::accepts_declaration`)? For the array form of `:style`, which keeps
- * the last value the engine accepts. Absent on an older host.
- */
+/** Does the engine accept `key: value` as one declaration? Absent on an older host. */
 declare function __vn_style_accepts(key: VnNameId, value: string): boolean;
-/** The element's whole class attribute, space-joined. Not additive. */
 declare function __vn_set_class(id: VnNodeId, classes: string): void;
-/**
- * One attribute-channel prop. `undefined` (or `null`) REMOVES it — every other
- * value must already be a string, because the host reads it as one.
- */
+/** One attribute-channel prop. `undefined` (or `null`) REMOVES it; anything else must be a string. */
 declare function __vn_set_prop(id: VnNodeId, key: VnNameId, value: string | undefined): void;
-/** Adds a `<style scoped>` data-v id to an element. Additive, never replaces. */
 declare function __vn_add_scope(id: VnNodeId, scope: string): void;
 /**
  * Replaces the whole stylesheet and marks every node for a fresh cascade.
- * `extra` are the `<style>` texts injected into `document.head`, in order: they
- * cascade after `css`, and the host parses each on its own, so an injected
- * sheet that changes does not make the bundle's sheet parse again.
+ * `extra` are the `<style>` texts injected into `document.head`, in order; they
+ * cascade after `css` and are parsed separately from it.
  */
 declare function __vn_set_stylesheet(css: string, extra?: string[]): void;
 
 /**
- * Arms or disarms one event bit on one node (`Node::listeners` is a u64, so
- * `code` must stay below 64). The host only delivers an event whose bit is
- * armed, and several JS event NAMES can share one code — see `syncListenerFlag`
- * in `runtime.ts`, which ORs over all of them before calling this.
+ * Arms or disarms one event bit on one node (`code` must stay below 64). Several JS
+ * event names can share a code, so callers OR over all of them first.
  */
 declare function __vn_set_listener(id: VnNodeId, code: VnEventCode, on: boolean): void;
 
 /**
  * Installs the one dispatcher the host calls for EVERY input event. Returning
- * `false` means a JS handler called `preventDefault()`, which the host honours
- * (`vn_tree::dispatch_event`). The host drains microtasks immediately after the
- * call, so Vue's patch flush lands inside the same frame's commit.
+ * `false` means a handler called `preventDefault()`. The host drains microtasks
+ * right after the call, so Vue's patch flush lands in the same frame's commit.
  */
 declare function __vn_set_dispatcher(fn: VnDispatcher): void;
 
 /**
- * Installs the runtime's observer step, `layoutStep(op) -> number`, which the
- * host calls after a frame's layout and before its paint
- * (crates/vn-tree/src/observe.rs): ResizeObserver's gather and broadcast
- * loop, then the IntersectionObserver update. `op` 0 gathers at depth 0 and
- * answers how many observers have entries; 1 calls the next one back and
- * answers how many are left (the host drains microtasks after each call); 2
- * gathers again at the depth the last broadcast reached, after the host has
- * laid out again; 3 raises the loop error if an observation was skipped,
- * updates the intersections, and answers bit 0 = the loop error was raised,
- * bit 1 = something is still observed.
+ * Installs the observer step `layoutStep(op) -> number`, called after a frame's
+ * layout and before its paint. `op` 0 gathers at depth 0 and answers how many
+ * observers have entries; 1 calls the next one back and answers how many are left;
+ * 2 gathers again at the depth the last broadcast reached, after a fresh layout;
+ * 3 raises the loop error if an observation was skipped, updates intersections,
+ * and answers bit 0 = loop error raised, bit 1 = something is still observed.
  */
 declare function __vn_set_layout_hook(fn: (op: number) => number): void;
 
 /**
- * `true`: there are observations, and the next frame runs the step even if it
- * lays nothing out (an `observe()` reports the target's first size). `false`:
- * the runtime let every observation go (its unload).
+ * `true`: the next frame runs the layout step even if it lays nothing out.
+ * `false`: every observation was released.
  */
 declare function __vn_layout_watch(observing: boolean): void;
 
 /**
- * `(nodeId, code, a, b, c, d, key, data, x, y) -> proceed`.
- *
- * The four numbers and the optional string are ONE payload shape reused for
- * every event; `VnEventPayload` below documents what each slot means per
- * event, mirroring `vn_tree::EventPayload`'s own doc comment. `data` is an
- * object the event carries, `undefined` for every event but copy / cut /
- * paste, where it is the `clipboardData` DataTransfer the host built
- * (`vn_tree::dispatch_event_with`). `x`/`y` are where the pointer is, in the
- * window's CSS px, for an event whose own numbers are taken by something else:
- * a `wheel` (its `clientX`/`clientY`; `a`/`b` are its deltas). `undefined`
- * for every other event.
+ * `(nodeId, code, a, b, c, d, key, data, x, y) -> proceed`. `a`-`d` and `key` are
+ * one payload shape reused per event (see `VnEventPayload`). `data` is the
+ * `clipboardData` DataTransfer for copy / cut / paste, else `undefined`. `x`/`y` are
+ * the pointer in window CSS px, only for a `wheel` (whose `a`/`b` are its deltas).
  */
 type VnDispatcher = (
   node: VnNodeId,
@@ -184,8 +113,7 @@ type VnDispatcher = (
 ) => boolean;
 
 /**
- * What `a`/`b`/`c`/`d`/`key` carry, per event family. Documentation with a
- * compiler behind it: `synthesize()` in `runtime.ts` destructures exactly these.
+ * What `a`/`b`/`c`/`d`/`key` carry, per event family.
  *
  * | family                    | a            | b           | c           | d          | key             |
  * |---------------------------|--------------|-------------|-------------|------------|-----------------|
@@ -199,7 +127,7 @@ type VnDispatcher = (
  * | input                     | —            | —           | —           | —          | the new value   |
  * | scroll                    | scrollLeft   | scrollTop   | —           | —          | —               |
  * | focus / blur              | the move's other node id (`relatedTarget`; 0 none) | — | — | — | —   |
- * | media (crates/vn-video)    | currentTime  | duration    | readyState  | playbackRate | —             |
+ * | media                     | currentTime  | duration    | readyState  | playbackRate | —             |
  * | media `error`             | MediaError.code | currentTime | —        | —          | advisory text   |
  * | lottie `enterFrame`       | currentTime  | totalTime   | elapsed     | progress   | —               |
  * | lottie `loopComplete`     | currentTime  | totalTime   | currentLoop | —          | —               |
@@ -208,10 +136,9 @@ type VnDispatcher = (
  * | animation{start,end,cancel} | elapsedTime | —          | —           | —          | @keyframes name |
  * | copy / cut / paste        | —            | —           | —           | —          | —  (`data` is the DataTransfer) |
  *
- * `mods` is a bitfield: 1 ctrl, 2 shift, 4 alt, 8 meta. `mousedown` /
- * `mouseup` / `click` carry the click count (`MouseEvent.detail`) above it.
- * A keyboard `click` (detail 0) carries the key that made it in `key`:
- * `"Enter"` or `" "`. A mouse click leaves `key` empty.
+ * `mods` is a bitfield: 1 ctrl, 2 shift, 4 alt, 8 meta. `mousedown` / `mouseup` /
+ * `click` carry the click count (`MouseEvent.detail`) above it. A keyboard `click`
+ * (detail 0) carries `"Enter"` or `" "` in `key`; a mouse click leaves it empty.
  */
 interface VnEventPayload {
   a: number;
@@ -222,17 +149,10 @@ interface VnEventPayload {
 }
 
 /**
- * Every event code the host can deliver, in lockstep with
- * `crates/vn-tree/src/tree.rs` (`pub const EV_*` / `EVENT_NAMES`).
- *
- * A TypeScript `const enum` was the obvious spelling and is deliberately NOT
- * used: bun does not inline one, it DOWNGRADES it to a runtime enum object, so
- * the codes would stop being free and `vendor.js` would grow a table it does
- * not need — and `isolatedModules` forbids an ambient one outright. The numbers
- * therefore stay the `EV_CODES` object literal in `runtime.ts`, which is
- * `satisfies`-checked against this type, and `test/protocol-codes.test.ts`
- * parses `tree.rs` and asserts the two tables are identical. That test is the
- * lockstep guarantee a `const enum` could never have given: it reads the Rust.
+ * Every event code the host can deliver, in lockstep with the host's `EV_*` table.
+ * Not a `const enum` (bun downgrades it to a runtime object; `isolatedModules`
+ * forbids ambient ones): the numbers live in `EV_CODES` in `runtime.ts`, and
+ * `test/protocol-codes.test.ts` asserts it matches the Rust.
  */
 type VnEventCode =
   | 1 // click
@@ -269,34 +189,29 @@ type VnEventCode =
   | 32 // ended
   | 33 // error
   | 34 // emptied
-  | 35 // transitionend       (vn-css animator)
+  | 35 // transitionend
   | 36 // animationstart
   | 37 // animationend
   | 38 // animationcancel
-  | 39 // paste               (ClipboardEvent, crates/vn-tree/src/clipboard.rs)
+  | 39 // paste
   | 40 // copy
   | 41 // cut
-  | 42 // contextmenu         (the right button's release, or Menu key / Shift+F10)
-  | 43 // load                (<img>, crates/vn-tree/src/img.rs)
+  | 42 // contextmenu         (right-button release, or Menu key / Shift+F10)
+  | 43 // load                (<img>)
   | 44 // pointercancel      (the window lost activation mid-press)
-  | 45 // selectstart        (a press that starts a text selection, cancelable)
-  | 46 // selectionchange   (at the root, for `document`, crates/vn-tree/src/selection.rs)
-  | 47 // auxclick          (the middle or right button's click, after its mouseup)
-  | 48 // beforeinput       (a text field's edit, before it: cancelable but for the IME's)
-  | 49 // compositionstart  (the IME composition, crates/vn-elements TextInputState)
+  | 45 // selectstart        (cancelable)
+  | 46 // selectionchange   (at the root, for `document`)
+  | 47 // auxclick          (middle or right button, after its mouseup)
+  | 48 // beforeinput       (cancelable, but not during IME composition)
+  | 49 // compositionstart
   | 50 // compositionupdate
   | 51 // compositionend
-  | 52; // message            (an <iframe>'s document to its parent; crates/vn-tree/src/iframe.rs)
-
-// ---------------------------------------------------------------------------
-// the text selection — crates/vn-tree/src/selection.rs (src/selection.ts)
-// ---------------------------------------------------------------------------
+  | 52; // message            (an <iframe>'s document to its parent)
 
 /**
  * The document selection: `"anchor,anchorOffset,anchorOwn,focus,focusOffset,focusOwn"`
  * (DOM boundary points, UTF-16 offsets in a text), or `""` for none. `own` 1 is
- * an offset into an element's OWN text, which the runtime turns into a Text
- * child before it hands the node out.
+ * an offset into an element's OWN text, which the runtime turns into a Text child.
  */
 declare function __vn_selection_get(): string;
 /** Sets anchor and focus; anchor 0 empties it. Answers whether both named live, attached nodes. */
@@ -306,106 +221,60 @@ declare function __vn_selection_text(): string;
 /** `element`'s own text became the Text child `text`: a boundary in it moves with it. */
 declare function __vn_selection_rebase(element: VnNodeId, text: VnNodeId): void;
 
-// ---------------------------------------------------------------------------
-// the hit test — crates/vn-tree/src/pointer.rs
-// ---------------------------------------------------------------------------
-
 /**
- * `document.elementFromPoint` (`all` 0) / `elementsFromPoint` (`all` 1): the
- * element ids under the viewport point `(x, y)`, topmost first and
- * comma-separated, as the host targets a press there (`pointer-events: none`
- * and `visibility: hidden` left out). `""` for a point outside the viewport.
+ * `elementFromPoint` (`all` 0) / `elementsFromPoint` (`all` 1): element ids under
+ * the viewport point `(x, y)`, topmost first, comma-separated, skipping
+ * `pointer-events: none` and `visibility: hidden`. `""` outside the viewport.
  */
 declare function __vn_hit_at(x: number, y: number, all: 0 | 1): string;
-/** Retarget the active mouse pointer in the window painting this node. */
 declare function __vn_pointer_capture(nodeId: number, pointerId: number, capture: boolean): boolean;
 
-// ---------------------------------------------------------------------------
-// script animations — crates/vn-tree/src/lib.rs (src/waapi.ts)
-// ---------------------------------------------------------------------------
-
-/** Native WAAPI normalization, shared timing and typed painter methods. */
 declare var __vn_waapi_core: import("./waapi").NativeWaapiCore | undefined;
-
-// ---------------------------------------------------------------------------
-// the DOM surface — crates/vn-tree/src/dom.rs
-// ---------------------------------------------------------------------------
 
 /** `__vn_query`'s mode: 0 descendants, 1 self (`matches`), 2 `closest`, 3 document subtree (root included). */
 type VnQueryMode = 0 | 1 | 2 | 3;
 
 /**
- * Selector matching through the CASCADE'S OWN matcher — never a second JS-side
- * one, which would be a silent divergence from what actually styles the node.
- *
- * Answers the matched ids comma-joined, `""` for no match, or `"!<advisory>"`
- * when the selector is one the engine cannot run (`:has()`, `::before`). The
- * `!` prefix is why the return type is a plain string rather than a list.
+ * Selector matching through the cascade's own matcher.
+ * Answers matched ids comma-joined, `""` for no match, or `"!<advisory>"` when the
+ * engine cannot run the selector (`:has()`, `::before`).
  */
 declare function __vn_query(selector: string, root: VnNodeId, mode: VnQueryMode): VnIdList;
 
 /**
- * The rectangle gpui laid the node out at during the LAST PAINTED FRAME, in the
- * window's client-area space. `""` for a node that was not painted (detached,
- * `display: none`, parked in a `<KeepAlive>` cache) — which is exactly the
- * all-zero rect a browser reports for those, so it needs no advisory.
- *
- * A node with no rectangle while the tree holds changes no frame has laid out
- * (one this wave mounted) makes the host lay out first, as a browser's forced
- * layout does. It cannot inside a gpui input listener: a draw there would swap
- * the frame whose listeners are running. It then answers `"stale"`, and the
- * runtime reads that as an all-zero rect with one advisory per call site.
+ * The node's rectangle at the LAST PAINTED FRAME, in client-area space. `""` for a
+ * node that was not painted (detached, `display: none`, parked in a `<KeepAlive>`).
+ * If the tree changed since the last layout the host lays out first, except inside
+ * an input listener, where it answers `"stale"` (the runtime reads that as all-zero
+ * and advises once per call site).
  */
 declare function __vn_bounds(id: VnNodeId): VnRect;
 
-/** The folded computed values + every custom property, as `name=value` lines. */
 declare function __vn_computed_style(id: VnNodeId): VnKvLines;
 
-/** `__vn_scroll`'s verb: 0 read, 1 set absolute, 2 scroll by. */
 type VnScrollOp = 0 | 1 | 2;
 
 /**
- * `"left,top,scrollWidth,scrollHeight,stale"` in CSS px — the whole of
- * `scrollTop`, `scrollLeft`, `scrollTo`, `scrollBy`, `scrollWidth` and
- * `scrollHeight` in one call, because all six read the same `ScrollHandle`.
- *
- * `stale` is `1` when the CONTENT half of the answer (and the clamp derived
- * from it) is from the last painted frame, because the tree changed in this
- * same JS wave and a layout could not be forced (only under a gpui listener:
- * key, mousedown, wheel, clipboard, focus/blur). The offset half is never
- * stale. The runtime turns it into one advisory.
- *
- * `""` for a node the cascade never gave `overflow: scroll|auto`. That is not
- * an error: a browser reports 0 for `scrollTop` on every non-scrollable
- * element and silently ignores a write to it, which is what the runtime
- * substitutes.
+ * `"left,top,scrollWidth,scrollHeight,stale"` in CSS px. `stale` is `1` when the
+ * content half (and the clamp derived from it) is from the last painted frame
+ * because a layout could not be forced; the offset half is never stale.
+ * `""` for a node without `overflow: scroll|auto`; the runtime substitutes 0.
  */
 type VnScrollPos = string;
 
 /**
- * Reads or moves a scroll container, through the very `ScrollHandle` gpui
- * paints the subtree with — so the answer is the position AFTER the clamp, and
- * a write is readable back on the next line with no frame in between.
- *
- * `x` / `y` are CSS px (positive = right / down). With op 1 a `NaN` axis is
- * left where it is, which is what `scrollTo({ top })` with no `left` means;
- * with op 2 it is 0. The DOM `scroll` event is fired on the next frame, not
- * from inside the call — CSSOM-View fires it from the update-the-rendering
- * loop and so do we (`crates/vn-tree/src/scroll.rs`).
+ * Reads or moves a scroll container; the answer is the position after the clamp.
+ * `x` / `y` are CSS px (positive = right / down). With op 1 a `NaN` axis is left
+ * where it is; with op 2 it is 0. The DOM `scroll` event fires on the next frame.
  */
 declare function __vn_scroll(id: VnNodeId, op: VnScrollOp, x: number, y: number): VnScrollPos;
 
-/** `scrollIntoView`'s alignment: 0 start, 1 center, 2 end, 3 nearest. */
 type VnScrollAlign = 0 | 1 | 2 | 3;
 
 /**
- * `element.scrollIntoView({ block, inline })` — scrolls every scrollable
- * ancestor, innermost first, clamping each and carrying the element's
- * rectangle down the chain by however far each one actually moved.
- *
- * `""` when it ran, `"stale"` when it ran against a layout a frame old (see
- * `__vn_scroll`), and `"!<advisory>"` when it could not run at all (a node
- * with no rectangle), in the same shape `__vn_query` uses.
+ * `element.scrollIntoView({ block, inline })` through every scrollable ancestor.
+ * `""` when it ran, `"stale"` when it ran against a frame-old layout, `"!<advisory>"`
+ * when it could not run (a node with no rectangle).
  */
 declare function __vn_scroll_into_view(
   id: VnNodeId,
@@ -414,32 +283,20 @@ declare function __vn_scroll_into_view(
 ): string;
 
 /**
- * `el.focus()` (op 0) / `el.blur()` (op 1), crates/vn-tree/src/lib.rs.
- *
- * Focus answers `"moved:<old id>"` (focus moved now; the runtime fires blur/
- * focusout on the old node, 0 = none, then focus/focusin), `"already"`,
- * `"pending"` (queued until the node is built; the host fires the events), or
- * `"refused"` (not focusable or not in the document). Blur answers
- * `"blurred"` or `""`.
+ * `el.focus()` (op 0) / `el.blur()` (op 1).
+ * Focus answers `"moved:<old id>"` (the runtime fires blur/focusout on the old node,
+ * 0 = none, then focus/focusin), `"already"`, `"pending"` (queued until the node is
+ * built; the host fires the events), or `"refused"` (not focusable or not in the
+ * document). Blur answers `"blurred"` or `""`.
  */
 declare function __vn_focus(id: VnNodeId, op: 0 | 1): string;
-/** Select the native input/textarea buffer, including when its first build is pending. */
 declare function __vn_input_select(id: VnNodeId): boolean;
 
-/**
- * `location.reload()`: asks the host to unload and re-run the app at the next
- * frame (crates/vn-app/src/reload.rs). Returns at once.
- */
+/** `location.reload()`: unloads and re-runs the app at the next frame. Returns at once. */
 declare function __vn_reload(): void;
 
-// ---------------------------------------------------------------------------
-// `<video>` / `<audio>` — crates/vn-video (CONTRACT.md §6)
-// ---------------------------------------------------------------------------
-
-/** Live media state as `name=value` lines; `""` for a node that is not one. */
 declare function __vn_media_state(id: VnNodeId): VnKvLines;
 
-/** The scalar properties `__vn_media_prop` answers, by code. Mirrors `vn_tree::video::media_prop`. */
 type VnMediaProp =
   | 0 // currentTime
   | 1 // duration
@@ -456,13 +313,11 @@ type VnMediaProp =
   | 12; // videoHeight
 
 /**
- * ONE scalar media property: a number (booleans are 0/1), or `undefined` for a
- * node that is not a live media element. One engine call, where
- * `__vn_media_state` makes all of them (~0.2 ms on Media Foundation).
+ * ONE scalar media property (booleans are 0/1), or `undefined` for a node that is
+ * not a live media element. Cheaper than `__vn_media_state`, which reads them all.
  */
 declare function __vn_media_prop(id: VnNodeId, prop: VnMediaProp): number | undefined;
 
-/** `HTMLMediaElement`'s verbs, by code. Mirrors `vn_tree::video::media_call`. */
 type VnMediaVerb =
   | 0 // play
   | 1 // pause
@@ -475,69 +330,42 @@ type VnMediaVerb =
 /** Runs one verb. Returns whether the node was a live media element at all. */
 declare function __vn_media_call(id: VnNodeId, verb: VnMediaVerb, arg: number): boolean;
 
-/** `canPlayType(type)` — `"" | "maybe" | "probably"`, probed on THIS machine. */
+/** `canPlayType(type)`, probed on THIS machine. */
 declare function __vn_media_can_play(id: VnNodeId, mime: string): "" | "maybe" | "probably";
 
 /**
- * `<iframe>` (crates/vn-tree/src/iframe.rs). `wire` is the JSON text of the
- * payload in `iframe.ts`'s wire form; `targetOrigin` is `"*"`, `"/"` (the
- * app's own origin) or an origin. Dropped when the frame has no document or
- * its origin does not match, as a browser drops it.
+ * `<iframe>` postMessage. `wire` is the JSON payload; `targetOrigin` is `"*"`, `"/"`
+ * (the app's own origin) or an origin. Dropped when the frame has no document or
+ * its origin does not match.
  */
 declare function __vn_iframe_post(id: VnNodeId, wire: string, targetOrigin: string): void;
-/** Whether this host can show a document in an `<iframe>` at all. */
 declare function __vn_iframe_supported(): boolean;
-/** What a page asks before it offers a feature the host may not have. */
 declare var vnFeatures: { readonly iframe: boolean };
 
-/**
- * Drains the node's recent media events, comma-joined. A bridge and a TEST
- * surface — the events themselves ride the ordinary EV_* channel, so nothing
- * in `runtime.ts` calls this; `crates/vn-video`'s own tests do.
- */
+/** Drains the node's recent media events, comma-joined. For tests; events normally ride the EV_* channel. */
 declare function __vn_media_events(id: VnNodeId): string;
 
-// ---------------------------------------------------------------------------
-// multi-window — crates/vn-app/src/popout.rs (docs/MULTIWINDOW.md)
-// ---------------------------------------------------------------------------
-//
-// These move a subtree's PAINT into a second OS window while the node stays in
-// this tree, this component instance and this reactive graph — so `nodeId` is a
-// `VnNodeId`, i.e. `mirrorNode.id` off a template ref (MULTIWINDOW.md §3.2
-// invariant 1). **`<VnWindow>` (src/vnwindow.ts) is the app-facing spelling and
-// the only thing that should call these**; they are written down here because
-// they are the contract between the component and the host.
-//
-// Installed by `vn-app`, not by the engine — same category as `__vn_storage_*`,
-// so a host without them simply has no such global and a caller that cannot
-// assume vn-app must probe with `typeof __vn_window_open === "function"`.
+// Multi-window. These move a subtree's PAINT into a second OS window while the node
+// stays in this tree and reactive graph; `nodeId` is `mirrorNode.id` off a template
+// ref. `<VnWindow>` (src/vnwindow.ts) is the only intended caller. Installed by the
+// app host, so probe with `typeof __vn_window_open === "function"`.
 
 /**
  * Moves the node's PAINT into a new OS window.
  *
- * `options` is JSON — `<VnWindow>`'s props, verbatim:
- * `{ title?, x?, y?, width?, height?, chrome?, backdrop?, alwaysOnTop?,
- *    resizable?, minWidth?, minHeight?, titleBarHeight?, activate?, visible?,
- *    cover?, taskbar?, fullResolution?, ignoreMouseEvents?, focusable?,
- *    contentProtection?, monitor? }` — `visible`…`fullResolution` are §7.9's,
- *    the last four an overlay's (§7.11).
+ * `options` is JSON — `<VnWindow>`'s props, verbatim: `{ title?, x?, y?, width?,
+ * height?, chrome?, backdrop?, alwaysOnTop?, resizable?, minWidth?, minHeight?,
+ * titleBarHeight?, activate?, visible?, cover?, taskbar?, fullResolution?,
+ * ignoreMouseEvents?, focusable?, contentProtection?, monitor? }`.
  *
- * `onClose` fires with the window, however it closed — the X button,
- * `__vn_window_close`, or the primary window going away. `onEvent` is the push
- * channel for everything else the window reports: `("open", '{"windowId":N}')`,
- * `("focus", "{}")`, `("blur", "{}")`,
+ * `onClose` fires however the window closed. `onEvent` receives the window's other
+ * reports: `("open", '{"windowId":N}')`, `("focus", "{}")`, `("blur", "{}")`,
  * `("resize", '{"width":W,"height":H,"scale":S}')`,
- * `("show", '{"firstFrameMs":T,"width":W,"height":H,"scale":S}')` and
- * `("hide", "{}")` (§7.9). It is how a pop-out's OWN
- * metrics reach JS at all: there is one JS realm, so `window.innerWidth` keeps
- * meaning the primary window's viewport (A-M04, §7.7).
+ * `("show", '{"firstFrameMs":T,"width":W,"height":H,"scale":S}')`, `("hide", "{}")`.
+ * There is one JS realm, so `window.innerWidth` stays the primary window's.
  *
- * Returns `undefined`, and the open is DEFERRED by one effect cycle:
- * `App::open_window` draws the new window once before returning and this is
- * called from inside the primary window's update, so it cannot be nested there
- * (MULTIWINDOW.md §3.2 invariant 2). UN-painting, though, is immediate — the
- * primary window's next draw is already without the subtree, because a node in
- * two element trees for one frame aliases scroll state and hitboxes.
+ * Returns `undefined`; the open is DEFERRED by one effect cycle (it cannot nest in
+ * the primary window's update). Un-painting from the primary window is immediate.
  */
 declare function __vn_window_open(
   nodeId: VnNodeId,
@@ -547,150 +375,79 @@ declare function __vn_window_open(
 ): void;
 
 /**
- * The LIVE half of `<VnWindow>`'s props: `title` renames the window,
- * `alwaysOnTop` re-stacks it, `visible` shows or hides it,
- * `fullResolution` pins or releases its images' full decodes, and
- * `ignoreMouseEvents`, `contentProtection` and `monitor` (§7.11) make it
- * click-through, leave it out of capture and move it. Everything else
- * gpui fixes at creation, so a changed value ADVISES and does nothing — never
- * a silent no-op (docs/WINDOWING.md D-25/D-30).
+ * The live half of `<VnWindow>`'s props: `title`, `alwaysOnTop`, `visible`,
+ * `fullResolution`, `ignoreMouseEvents`, `contentProtection`, `monitor`. Any other
+ * changed value is fixed at creation, so it advises and does nothing.
  */
 declare function __vn_window_set_options(nodeId: VnNodeId, options: VnJson): void;
 
 /**
- * Where `nodeId`, as the PRIMARY window painted it, falls in the pop-out
- * painting `popoutNodeId`: `[x, y, width, height]` as JSON, in the pop-out's
- * CSS px relative to its painted root — through the screen, so across monitors
- * and DPIs. A `cover` window is measured where its next show puts it.
- * `undefined` when either node was not painted (MULTIWINDOW.md §7.9).
+ * Where `nodeId`, as the PRIMARY window painted it, falls in the pop-out painting
+ * `popoutNodeId`: `[x, y, width, height]` as JSON, in the pop-out's CSS px relative
+ * to its painted root, across monitors and DPIs. `undefined` when either node was
+ * not painted.
  */
 declare function __vn_window_map_rect(popoutNodeId: VnNodeId, nodeId: VnNodeId): VnJson | undefined;
 
-/** Closes the window painting `nodeId` — the same path as the user clicking X. */
 declare function __vn_window_close(nodeId: VnNodeId): void;
 
-/**
- * `[{ node, windowId, title, chrome, width, height, focused }]` as JSON. For
- * tests and devtools; the devtools `windows` command is the richer surface.
- */
 declare function __vn_window_popouts(): VnJson;
 
-/**
- * TEST SURFACE. Dispatches a real platform click into the window painting
- * `nodeId`, at that window's own client coordinates; `true` if it landed.
- */
+/** TEST SURFACE. Dispatches a real platform click at the window's own client coordinates; `true` if it landed. */
 declare function __vn_window_click(nodeId: VnNodeId, x: number, y: number): boolean;
 
-// ---------------------------------------------------------------------------
-// host logging — crates/vn-app/src/lib.rs
-// ---------------------------------------------------------------------------
-
 /**
- * A line into the host log.
- *
- * `vn-app` registers it UNCONDITIONALLY (`lib.rs`, next to `__vn_set_status`
- * and `__vn_perf_mark`) and `runtime.ts` calls it unguarded, which is why this
- * is a `function` rather than an optional `var` — an app does not have to
- * probe. An embedder that installed `vn-tree` without `vn-app` would have to
- * provide it; the unit-test harness does, by binding it as a parameter.
+ * A line into the host log. Always registered by the app host, so it is a `function`
+ * and callers do not probe; a bare embedder must provide it.
  */
 declare function __vn_log(message: string): void;
 
 /** Optional recording controls; absent in hosts built without devtools.
- * SDK wrappers pass the original callback at invocation, so callbacks registered
- * before recording still retain their own executable source location.
  * A nonzero token must be ended in finally; zero means recording is inactive.
  */
 declare var __vn_trace_callback_begin: ((callback: unknown) => number) | undefined;
 declare var __vn_trace_callback_end: ((token: number) => void) | undefined;
 
-// ---------------------------------------------------------------------------
-// devtools discovery — crates/vn-app/src/devtools/mod.rs (docs/DEVTOOLS-UI.md)
-// ---------------------------------------------------------------------------
-
 /**
- * Polls background discovery: `{ pending: true }` until a scan completes, then
- * returns every attachable vue-native instance, as JSON:
- * `{ preferred, self: { pid, dir }, targets: [{ slot, dir, port, pid, token,
- * alive, self }] }`.
- *
- * The inspector app's ONE host dependency. Everything else it does goes over
- * the ordinary devtools wire, which redjs's `fetch` can speak by itself — but
- * discovery has to read a handshake file off disk, and `fetch` cannot.
- *
- * Registered by `devtools::install`, i.e. in every host EXCEPT one built with
- * `--features no-devtools`, so a caller must probe with
- * `typeof __vn_devtools_targets === "function"` and say what the absence means.
- * `apps/devtools/src/wire.ts` is the one caller.
+ * Polls background discovery: `{ pending: true }` until a scan completes, then every
+ * attachable vue-native instance as JSON:
+ * `{ preferred, self: { pid, dir }, targets: [{ slot, dir, port, pid, token, alive, self }] }`.
+ * Absent in a host built with `--features no-devtools`; probe before calling.
  */
 declare function __vn_devtools_targets(): VnJson;
 
-// ---------------------------------------------------------------------------
-// the devtools switch — crates/vn-app/src/devtools/mod.rs (docs/DEVTOOLS.md)
-// ---------------------------------------------------------------------------
-//
-// The `appDevtools` extension's three host fns (tier 3, docs/RUNTIME.md). Same
-// availability as `__vn_devtools_targets` above and the same probe: present in
-// every build except `--features no-devtools`, where `appDevtools` goes inert
-// and says so.
+// The devtools switch. Same availability and probe as `__vn_devtools_targets`.
 
 /**
  * `{ enabled, locked, port, pid, key, inspectors, slot }`.
- *
- * `enabled` is the master switch — off means there is NO listener, not merely
- * that F12 is refused. `locked` is `VN_DEVTOOLS=1` in the environment, which
- * refuses `disable()`. `key` is the separate `VN_DEVTOOLS_KEY` gate, which
- * declines F12 with the protocol left alone.
+ * `enabled` off means there is NO listener. `locked` is `VN_DEVTOOLS=1`, which
+ * refuses `disable()`. `key` is the `VN_DEVTOOLS_KEY` gate, which declines F12 only.
  */
 declare function __vn_devtools_state(): VnJson;
 
 /**
- * Turns the devtools on or off, and returns the SETTLED state (the same object
- * `__vn_devtools_state` returns) or `{ error }` when the change was refused.
- *
- * On → binds a fresh port with a fresh token and republishes
- * `<dist>/devtools.json`. Off → closes the listener, drops every push socket,
- * blanks the token and deletes the handshake.
+ * Turns the devtools on or off; returns the settled state or `{ error }` when refused.
+ * On binds a fresh port and token and republishes `<dist>/devtools.json`; off closes
+ * the listener, drops push sockets, blanks the token and deletes the handshake.
  */
 declare function __vn_devtools_set_enabled(on: boolean): VnJson;
 
-/** Programmatic F12: `{ opened, window }` or `{ error }`. */
 declare function __vn_devtools_open(): VnJson;
 
 /**
- * How THIS process was started, when it was started as an inspector
- * (`vn-app --devtools`, which is what F12 spawns —
- * `crates/vn-app/src/inspector.rs`).
- *
- * `window` is the one fact no amount of scanning can recover: a target
- * process can paint several OS windows off one retained tree
- * (docs/MULTIWINDOW.md), and the key that opened this inspector was pressed
- * in exactly one of them.
- *
- * Present for every inspector — `bun devtools/ui.ts --target <slot>` execs the
- * same `vn-app --devtools` line F12 spawns. Still declared optional: it is a
- * JSON global published by another process, so every reader guards.
+ * How THIS process was started as an inspector (`vn-app --devtools`, which F12
+ * spawns). Optional: it is published by another process, so readers guard.
  */
 declare var __VN_DEVTOOLS_ARGS__:
   | {
-      /** The target's slot directory. */
       target: string | null;
-      /** The gpui window id F12 was pressed in. */
       window: number | null;
-      /** The pid this inspector dies with. */
       parent: number | null;
-      /** Always `true` — the bundle came out of the executable. */
       embedded: boolean;
     }
   | undefined;
 
-// ---------------------------------------------------------------------------
-// permissions — crates/vn-permissions/src/lib.rs (docs/PERMISSIONS.md tier 2)
-// ---------------------------------------------------------------------------
-
-/** The four states. `"unsupported"` is the one the web has no word for. */
 type VnPermissionState = "granted" | "denied" | "prompt" | "unsupported";
-/** The W3C names `Capability::ALL` knows. */
 type VnPermissionName =
   | "microphone"
   | "camera"
@@ -700,32 +457,20 @@ type VnPermissionName =
   | "clipboard-write"
   | "geolocation";
 
-/** `"Windows"` / `"macOS"` — the name an advisory would use. */
 declare function __vn_permissions_platform(): string;
-/** The four-state read, or `""` for a name that is not a permission. */
 declare function __vn_permissions_query(name: string): VnPermissionState | "";
-/** `[{ name, state, canRequest }]`, as JSON. */
 declare function __vn_permissions_list(): VnJson;
 /**
- * Starts a request. The JSON answer is one of three shapes:
- * `{ "error": … }` (not a permission name), `{ "state": … }` (settled
- * synchronously — nothing to ask), or `{ "token": n }` (the per-frame pump will
- * deliver the result to the dispatcher under that token).
+ * Starts a request. The JSON answer is `{ "error": … }` (not a permission name),
+ * `{ "state": … }` (settled synchronously), or `{ "token": n }` (the per-frame pump
+ * delivers the result to the dispatcher under that token).
  */
 declare function __vn_permissions_request(name: string): VnJson;
-/**
- * Where the user turns a refused permission back on, for the error a refusal
- * carries (macOS screen recording); `""` where the platform adds nothing.
- */
+/** Where the user turns a refused permission back on (macOS screen recording); `""` where the platform adds nothing. */
 declare function __vn_permissions_hint(name: string): string;
-/** Installs the callback the pump settles pending requests through. */
 declare function __vn_permissions_set_dispatcher(
   fn: (token: number, state: VnPermissionState) => void,
 ): void;
-
-// ---------------------------------------------------------------------------
-// storage — crates/vn-storage/src/lib.rs (docs/STORAGE.md tier 2)
-// ---------------------------------------------------------------------------
 
 /** `{ path }` or `{ error }`. Creates nothing — a path is not a directory. */
 declare function __vn_storage_user_folder(kind: string, subfolder: string): VnJson;
@@ -734,34 +479,21 @@ declare function __vn_storage_user_folder(kind: string, subfolder: string): VnJs
  * `"keep"`: the app did not say — the format stays (encryption is sticky).
  */
 declare function __vn_storage_set_folder(path: string, encrypted: "true" | "false" | "keep"): VnJson;
-/** `{ folder, file, encrypted, bytes, loaded, pending, provider, kinds, error }`. */
 declare function __vn_storage_info(): VnJson;
-/** Forces the coalesced write. `{ wrote: boolean }` or `{ error }`. */
 declare function __vn_storage_flush(): VnJson;
 
-// ---------------------------------------------------------------------------
-// appHost — crates/vn-app/src/embed.rs (docs/EMBEDDING.md). Registered ONLY
-// when another program embeds vue-native; in the vue-native exe none of these
-// exist and `appHost.available` is false.
-// ---------------------------------------------------------------------------
+// appHost. Registered ONLY when another program embeds vue-native; otherwise none of
+// these exist and `appHost.available` is false.
 
 /**
- * The one callback calls settle and events arrive through:
- * `(token, ok, text)`. Token `0` is an event, `text` `{"event", "data"}`.
- * Otherwise `ok` true means `text` is the result as JSON, false that it is
- * the host's message.
+ * The one callback calls settle and events arrive through: `(token, ok, text)`.
+ * Token `0` is an event, `text` `{"event", "data"}`. Otherwise `ok` true means
+ * `text` is the JSON result, false the host's message.
  */
 declare function __vn_host_set_dispatcher(fn: (token: number, ok: boolean, text: string) => void): void;
-/** Calls the embedder's function `name`: the call's token, `0` when it has none by that name. */
 declare function __vn_host_call(name: string, argsJson: string): number;
-/** The names of the embedder's functions, as a JSON array of strings. */
 declare function __vn_host_functions(): string;
-/** Public appHost facade, also available to app-owned adapters without a module alias. */
 declare const __VN_HOST__: import("./apphost").AppHost;
-
-// ---------------------------------------------------------------------------
-// desktop — crates/vn-desktop/src/lib.rs (docs/SHELL.md, docs/LAUNCH.md)
-// ---------------------------------------------------------------------------
 
 /**
  * The one callback the per-frame pump settles every desktop call through:
@@ -775,20 +507,18 @@ declare function __vn_desktop_set_dispatcher(
 ): void;
 /**
  * `{ token }`, or a synchronous refusal `{ error, name, code? }`. `content`
- * true is the TIER-1 path (`<a href>`, `window.open`): http, https and mailto
- * only. False (`appShell.openExternal`) takes any scheme but `file:`.
+ * true is the `<a href>` / `window.open` path: http, https and mailto only.
+ * False (`appShell.openExternal`) takes any scheme but `file:`.
  */
 declare function __vn_shell_open_external(url: string, content: boolean): VnJson;
 /** `{ token }` or `{ error, name, code? }`. Executables refused unless `allowExecutable`. */
 declare function __vn_shell_open_path(path: string, allowExecutable: boolean): VnJson;
-/** `{ token }` or `{ error, name }`. A folder is selected in its parent. */
 declare function __vn_shell_show_item(path: string): VnJson;
-/** `{ token }` or `{ error, name }`. Recycle Bin only, never a permanent delete. */
 declare function __vn_shell_trash(path: string): VnJson;
 /**
- * This process's launch, as `vn_desktop::launch::start` resolved it before the
- * window existed: `{ argv, cwd, url, paths, singleInstance, id, name }`.
- * Forwarded launches arrive later, as token-0 `{ kind: "launch", … }` events.
+ * This process's launch, resolved before the window existed:
+ * `{ argv, cwd, url, paths, singleInstance, id, name }`. Forwarded launches arrive
+ * later as token-0 `{ kind: "launch", … }` events.
  */
 declare function __vn_launch_info(): VnJson;
 /**
@@ -796,37 +526,26 @@ declare function __vn_launch_info(): VnJson;
  * refusal `{ error, name: "TypeError" }` (invalid, reserved, foreign-owned).
  */
 declare function __vn_launch_register_protocol(scheme: string): VnJson;
-/** Removes a registration carrying our marker AND our exe. Did it? */
 declare function __vn_launch_unregister_protocol(scheme: string): boolean;
-/** Ours, and pointing at this exe? */
 declare function __vn_launch_is_protocol_registered(scheme: string): boolean;
 
-// ---- File System Access and dialogs (vn-desktop fs/, dialog/) ---------------
-//
-// Every handle argument is a NUMBER into the host's handle table; no host fn
-// takes or returns a path. `{ token }` answers settle through the dispatcher
-// above; `{ error, name, code? }` is a synchronous refusal (the name fence, an
-// unknown handle, a second dialog on one window).
+// File System Access and dialogs. Every handle argument is a NUMBER into the host's
+// handle table; no host fn takes or returns a path. `{ token }` answers settle through
+// the dispatcher above; `{ error, name, code? }` is a synchronous refusal.
 
 /** `(id, name, kind) => handle` — what a dropped path's handle is made with. */
 declare function __vn_fs_set_handle_factory(fn: (h: number, name: string, kind: string) => unknown): void;
-/** The handle's JS object was collected. */
 declare function __vn_fs_release(h: number): void;
 /** Settles `{ name, size }` with the `File` as the value. */
 declare function __vn_fs_get_file(h: number): VnJson;
-/** Settles `{ h, name, kind }`. */
 declare function __vn_fs_child(dir: number, name: string, isDirectory: boolean, create: boolean): VnJson;
 declare function __vn_fs_remove(dir: number, name: string, recursive: boolean): VnJson;
-/** Settles `{ same }`. */
 declare function __vn_fs_same(a: number, b: number): VnJson;
-/** Settles `{ path: string[] | null }`. */
 declare function __vn_fs_resolve(root: number, other: number): VnJson;
-/** Settles `{ cursor }`. */
 declare function __vn_fs_dir_open(dir: number): VnJson;
 /** Settles `{ entries: {h, name, kind}[], done }`, 256 at most. */
 declare function __vn_fs_dir_next(cursor: number): VnJson;
 declare function __vn_fs_dir_close(cursor: number): void;
-/** Settles `{ w }`. */
 declare function __vn_fs_writable_open(h: number, keepExistingData: boolean): VnJson;
 /** `position` -1 = at the cursor. `data`: a string, a Uint8Array or a Blob. */
 declare function __vn_fs_writable_write(w: number, position: number, data: unknown): VnJson;
@@ -834,12 +553,11 @@ declare function __vn_fs_writable_seek(w: number, position: number): VnJson;
 declare function __vn_fs_writable_truncate(w: number, size: number): VnJson;
 declare function __vn_fs_writable_close(w: number): VnJson;
 declare function __vn_fs_writable_abort(w: number): VnJson;
-/** `structuredClone` of an instance is a DataCloneError naming `interfaceName`. */
 declare function __vn_fs_refuse_clone(proto: object, interfaceName: string): void;
 /**
  * Makes instances of `proto` (FileSystemHandle.prototype) [Serializable]:
- * `idOf(handle)` names the id the host writes, as bytes script never sees; a
- * clone comes back through the handle factory. The first call wins.
+ * `idOf(handle)` names the id the host writes; a clone comes back through the
+ * handle factory. The first call wins.
  */
 declare function __vn_fs_set_serializer(proto: object, idOf: (handle: object) => number | undefined): void;
 /** `"granted"` or `"prompt"`; `request` grants the handle's path (on a user activation only). */
@@ -853,41 +571,26 @@ declare function __vn_fs_permission(h: number, request: boolean): "granted" | "p
 declare function __vn_dialog_open(requestJson: VnJson, currentFiles: unknown): VnJson;
 /** Save As for a `blob:`/`data:` URL, resolved at the call. Settles `{ saved }` or `{ cancelled }`. */
 declare function __vn_download(url: string, downloadAttribute: string): VnJson;
-/** `getDisplayMedia`'s picker: the screens and windows a capture may show (vn-desktop capture.rs). */
 declare function __vn_desktop_get_screen_sources(typesJson: string, optionsJson: string): VnJson;
 
-// ---------------------------------------------------------------------------
-// the `__VN_*` globals — not host FUNCTIONS, but part of the same contract
-// ---------------------------------------------------------------------------
-
-/**
- * Every SFC's `<style>` block, collected at module-eval time by the builder and
- * joined into the first stylesheet by `mount()` (build.ts emits the pushes).
- */
+/** Every SFC's `<style>` block, collected at module-eval time and joined into the first stylesheet by `mount()`. */
 declare var __VN_CSS__: string[] | undefined;
 
-/**
- * Installed by `mount()`; called by the host before it re-evals a new bundle.
- * Unmounts the app and frees every node the mirror still holds.
- */
+/** Installed by `mount()`; the host calls it before re-evaluating a bundle. Unmounts the app and frees every node the mirror holds. */
 declare var __VN_TEARDOWN__: (() => void) | undefined;
 
 /**
- * The windowing host (`crates/vn-app/src/window.prelude.js`, docs/WINDOWING.md
- * tier 3). Absent in the unit-test harness and in any embedder that does not
- * install the prelude — `runtime.ts` exports an inert `appWindow` then, and
- * says so once.
+ * The windowing host. Absent in the unit-test harness and in embedders that do not
+ * install the prelude; `runtime.ts` then exports an inert `appWindow`.
  */
 declare var __VN_WINDOW__: VnWindowHost | undefined;
 
 interface VnWindowHost {
   appWindow: VnAppWindow;
-  /** Consumes Escape only while an element is fullscreen. */
   escapeFullscreen?: () => boolean;
   defineWindow: (options: Record<string, unknown>) => void;
 }
 
-/** `{ x, y, width, height }`, in physical window coordinates. */
 interface VnWindowRect {
   x: number;
   y: number;
@@ -896,13 +599,9 @@ interface VnWindowRect {
 }
 
 /**
- * `appWindow.chrome` — the chrome-mode read, so an app can branch without a
- * media query. `vn_app::window` builds it field by field, so the shape is fixed
- * and small; it was a bag of `unknown` until an app tried to use it.
- *
- * `client` is the window's CLIENT AREA, and `contentInset` is how far the app's
- * viewport is inset inside it by host-drawn chrome — `inner* === client* -
- * inset` by construction, and in custom-chrome mode every inset is zero.
+ * `appWindow.chrome` — the chrome-mode read. `client` is the window's client area;
+ * `contentInset` is how far the app's viewport is inset in it by host-drawn chrome
+ * (`inner* === client* - inset`; every inset is zero in custom-chrome mode).
  */
 interface VnWindowChrome {
   titleBarStyle: string;
@@ -910,19 +609,15 @@ interface VnWindowChrome {
   titleBarHeight: number;
   fallbackTitleBar: boolean;
   overlayVisible: boolean;
-  /** Whether the HOST draws the min/max/close cluster (`titleBarOverlay`). */
   hostControls: boolean;
   client: { width: number; height: number };
   contentInset: { left: number; top: number; right: number; bottom: number };
 }
 
 /**
- * The window facade the prelude builds. An `EventTarget` first — apps listen
- * for `resize`/`move`/`focus` on it — with the Tauri/Electron-shaped verbs
- * bolted on. Every verb is SYNCHRONOUS and returns `undefined`: JS and the UI
- * thread are the same thread here, so a promise would lie about ordering
- * (`await undefined` is legal, so ported `await appWindow.maximize()` still
- * runs).
+ * The window facade: an `EventTarget` (`resize`/`move`/`focus`) with Tauri/Electron-
+ * shaped verbs. Every verb is SYNCHRONOUS and returns `undefined`: JS and the UI
+ * thread are the same thread, so a promise would misstate ordering.
  */
 interface VnAppWindow extends VnEventTarget {
   minimize(): void;
@@ -949,17 +644,13 @@ interface VnAppWindow extends VnEventTarget {
   title: string;
   backdrop: string;
   /** What the window draws of `backdrop`: the same value, or `"none"` while a
-   *  macOS native-fullscreen window cannot show the desktop picture under its
-   *  glass and draws a flat background instead. `backdropchange` fires when
-   *  either moves (docs/WINDOWING.md §4.4). */
+   *  macOS native-fullscreen window draws a flat background instead. `backdropchange`
+   *  fires when either moves. */
   readonly effectiveBackdrop: string;
-  /** `"system" | "light" | "dark"`: Electron's `nativeTheme.themeSource`
-   *  (docs/WINDOWING.md §4.5). */
   theme: string;
   alwaysOnTop: boolean;
   readonly scaleFactor: number;
   readonly chrome: VnWindowChrome;
-  /** Windows taskbar integration — present, advisory-only in v1. */
   setProgressBar(...args: unknown[]): void;
   setOverlayIcon(...args: unknown[]): void;
   setBadgeCount(...args: unknown[]): void;
@@ -968,15 +659,12 @@ interface VnAppWindow extends VnEventTarget {
 }
 
 /**
- * Sticky activation (docs/WINDOWING.md §1.9). The prelude arms it from the
- * engine's own EventTarget, which gpui events never reach — so the host's
- * dispatcher calls this instead, on `keydown`/`mousedown`. Without it
- * `beforeunload` could never veto a close, because the window would never count
- * as having been interacted with.
+ * Sticky activation. The host's dispatcher calls this on `keydown`/`mousedown`
+ * because gpui events never reach the prelude's EventTarget; without it
+ * `beforeunload` could never veto a close.
  */
 declare var __vnStickyActivation: (() => void) | undefined;
 
-/** Vue's dev-only HMR runtime, which `loader.ts` drives. */
 declare var __VUE_HMR_RUNTIME__: VnVueHmrRuntime | undefined;
 
 interface VnVueHmrRuntime {

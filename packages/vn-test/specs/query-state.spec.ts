@@ -1,16 +1,3 @@
-// A script's `matches` / `querySelectorAll` / `closest` filter `:hover`,
-// `:active`, `:focus`, `:focus-visible` and `:focus-within` by the state the
-// element is in now, as in a browser (m26, docs/RUNTIME.md §5.27,
-// crates/vn-tree/src/live_state.rs). They used to match as "would match when
-// in that state", the cascade's meaning: every element matched `:focus`, and a
-// reka Select's trigger matched `:focus-visible` after a mouse pick, which
-// opens reka's keyboard-only tooltips on a click.
-//
-//   bun test packages/vn-test/specs/query-state.spec.ts
-//
-// Presses, moves and keys are REAL platform input through gpui (devtools
-// `mouse` and `key`), which is what sets the modality `:focus-visible` reads.
-
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { launch, readPng, type Bounds } from "../src/index";
 
@@ -30,15 +17,12 @@ async function js<V>(source: string): Promise<V> {
   return JSON.parse(String(await app.eval(`JSON.stringify((() => { ${source} })())`))) as V;
 }
 
-/** `el.matches(sel)` for each `[id, selector]`. */
 const matches = (pairs: [string, string][]) =>
   js<boolean[]>(`return ${JSON.stringify(pairs)}.map(([id, s]) => document.getElementById(id).matches(s))`);
 
-/** The ids `document.querySelectorAll(sel)` finds, in document order. */
 const ids = (sel: string) =>
   js<string[]>(`return Array.from(document.querySelectorAll(${JSON.stringify(sel)}), (e) => e.id || e.tagName)`);
 
-/** Polls `read` until `ok` holds, and returns the last answer either way. */
 async function until<V>(read: () => Promise<V>, ok: (v: V) => boolean, ms = 5_000): Promise<V> {
   const deadline = Date.now() + ms;
   let v = await read();
@@ -55,7 +39,6 @@ const box = async (selector: string): Promise<Bounds> => {
   return b;
 };
 
-/** A screenshot, read at CSS pixel `(x, y)`'s centre whatever the scale. */
 const shoot = async () => {
   const shot = readPng(await app.screenshot());
   const k = shot.width / 460;
@@ -100,7 +83,6 @@ describe("focus in a query", () => {
     const f = await box("#field");
     const s = await until(shoot, (s) => red(s.at(f.x - 2, f.y + f.h / 2)));
     bunExpect(red(s.at(f.x - 2, f.y + f.h / 2))).toBe(true);
-    // The blue ring left with the focus.
     const b = await box("#b");
     bunExpect(blue(s.at(b.x - 2, b.y + b.h / 2))).toBe(false);
   }, T);

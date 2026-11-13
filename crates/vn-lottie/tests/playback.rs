@@ -1,9 +1,5 @@
-//! End-to-end tests over the CC0 fixture set: metadata, rasterisation,
-//! determinism, the transport's event semantics, and `.tgs` unwrapping.
-//!
-//! These deliberately avoid gpui's `Window` — everything asserted here is
-//! reachable from [`LottieState`] alone, which is the point of keeping the
-//! transport free of view types. `examples/preview.rs` covers the painting side.
+//! End-to-end tests over the CC0 fixture set: metadata, rasterisation, determinism, the transport's
+//! event semantics and `.tgs` unwrapping, all through [`LottieState`] without gpui's `Window`.
 
 use std::time::Duration;
 
@@ -35,12 +31,8 @@ const ALL: &[&str] = &[
     "spinning-star.tgs",
 ];
 
-/// The subset that actually moves. The `LottieFiles/test-files` feature
-/// fixtures are single-frame by design — they isolate *rendering* of one
-/// feature, not its animation — so motion is asserted against these instead.
-///
-/// `the_animated_list_matches_what_the_documents_animate` keeps this honest:
-/// the list is checked against the files, not against the README.
+/// The subset that actually moves; the feature fixtures are single-frame by design.
+/// `the_animated_list_matches_what_the_documents_animate` checks this list against the files.
 const ANIMATED: &[&str] = &[
     "position-linear.json",
     "position-hold.json",
@@ -48,10 +40,8 @@ const ANIMATED: &[&str] = &[
     "spinning-star.tgs",
 ];
 
-/// One frame of RGBA at 128px, as a flat buffer, for pixel-level assertions.
-///
-/// Goes through the real `render_frame` path (BGRA, physical pixels, cache), so
-/// what these tests compare is exactly what gpui would paint.
+/// One frame of RGBA at 128px as a flat buffer, through the real `render_frame` path (BGRA,
+/// physical pixels, cache).
 fn raster(state: &mut LottieState, frame: f32) -> Vec<u8> {
     state.seek_frame(frame);
     let image = state
@@ -64,10 +54,8 @@ fn opaque_pixels(bytes: &[u8]) -> usize {
     bytes.chunks_exact(4).filter(|pixel| pixel[3] > 0).count()
 }
 
-/// `count` rasters spread over the whole timeline, **inclusive of the last
-/// frame**. Hold keyframes only step at their own time — `position-hold.json`
-/// jumps at frame 60 of 61 — so a half-open sweep would miss the change and
-/// wrongly conclude the animation is static.
+/// `count` rasters spread over the whole timeline, inclusive of the last frame: hold keyframes only
+/// step at their own time (`position-hold.json` jumps at frame 60 of 61).
 fn sweep(state: &mut LottieState, count: usize) -> Vec<Vec<u8>> {
     let total = state.meta().total_frames;
     (0..count)
@@ -108,8 +96,6 @@ fn metadata_matches_the_source_document() {
     assert_eq!(meta.version, "5.11.0");
     assert!(!meta.telegram_sticker);
 
-    // rectangle.json is the non-square one, so intrinsic size is not a square
-    // baked in somewhere.
     assert_eq!(
         (load("rectangle.json").meta().width, load("rectangle.json").meta().height),
         (100, 50),
@@ -142,9 +128,7 @@ fn the_animation_actually_moves() {
             .len();
         assert!(distinct >= 2, "{name}: all 5 sampled frames are identical");
 
-        // Distinct rasters are not enough on their own — a one-pixel flicker
-        // would pass. Require a real share of the canvas to differ between the
-        // first sample and at least one later one.
+        // Distinct rasters are not enough (a one-pixel flicker would pass): require a real share of the canvas to differ.
         let changed = frames[1..]
             .iter()
             .map(|later| {
@@ -164,19 +148,13 @@ fn the_animation_actually_moves() {
     }
 }
 
-/// Every fixture is scanned for animated properties (`"a": 1` on a property
-/// object) and the result is compared with [`ANIMATED`].
-///
-/// This is the test whose absence let the fixtures README describe `star.json`
-/// as having an "animated transform" for a whole milestone: the transport
-/// tests never needed a moving file, so nothing contradicted the prose. A
-/// claim about a fixture belongs in an assertion, not a table.
+/// Every fixture is scanned for animated properties (`"a": 1` on a property object) and compared
+/// with [`ANIMATED`]; a claim about a fixture belongs in an assertion.
 #[test]
 fn the_animated_list_matches_what_the_documents_animate() {
     fn animated_property_count(value: &serde_json::Value) -> usize {
         match value {
-            // A Lottie property is `{"a": 0 | 1, "k": ...}`; `a: 1` means the
-            // `k` is a keyframe list rather than a static value.
+            // A Lottie property is `{"a": 0 | 1, "k": ...}`; `a: 1` means `k` is a keyframe list.
             serde_json::Value::Object(map) => {
                 let here = usize::from(
                     map.get("a").and_then(serde_json::Value::as_u64) == Some(1)
@@ -229,11 +207,9 @@ fn opaque_centroid_x(bytes: &[u8], width: usize) -> f32 {
 
 #[test]
 fn the_terminator_keyframe_animates_to_the_right_place() {
-    // The regression that motivates `normalize`: this fixture is shaped like a
-    // real Bodymovin export, whose last keyframe is a bare `{"t": 30}`. Without
-    // the compat pass the file does not load at all; with a *wrong* compat pass
-    // it loads but sits still. So assert the motion itself: a 16px square slides
-    // from x=16 to x=48 on a 64px canvas, i.e. left of centre to right of it.
+    // The `normalize` regression: this fixture's last keyframe is a bare `{"t": 30}`, as in a real
+    // Bodymovin export. Without the pass it does not load; with a wrong one it sits still. So assert
+    // the motion: a 16px square slides from x=16 to x=48 on a 64px canvas.
     let mut state = load("terminator-keyframe.json");
     assert!(
         state.advisories().iter().any(|note| note.contains("terminator")),
@@ -270,8 +246,7 @@ fn resizing_re_renders_and_paused_playback_does_not() {
     state.seek_frame(30.0);
 
     let small = state.render_frame((64.0, 64.0), 1.0).unwrap();
-    // Same frame, same size: the cache must hand back the very same image, not
-    // a fresh one — a new `RenderImage` id would mean a new atlas tile.
+    // Same frame, same size: the cache must return the very same image (a new `RenderImage` id means a new atlas tile).
     let again = state.render_frame((64.0, 64.0), 1.0).unwrap();
     assert_eq!(small.id, again.id, "paused playback re-rendered");
     assert!(state.take_retired().is_empty(), "cache hit retired an image");
@@ -355,8 +330,6 @@ fn solid_layers_are_rewritten_and_advertised() {
     );
     assert!(opaque_pixels(&raster(&mut state, 0.0)) > 0, "the solid drew nothing");
 }
-
-// ---- transport -----------------------------------------------------------
 
 /// 60fps fixtures: one frame of wall clock.
 const TICK: Duration = Duration::from_nanos(16_666_667);
@@ -572,9 +545,7 @@ fn a_huge_tick_cannot_spin_forever() {
 #[test]
 fn rendering_retires_superseded_rasters_for_the_atlas() {
     let mut state = load("star.json");
-    // Three distinct frames: by the third, the first is two generations back and
-    // safe to release. Anything less would risk dropping a tile the scene being
-    // presented still references.
+    // Three distinct frames: by the third the first is two generations back and safe to release.
     let first = state.render_frame((64.0, 64.0), 1.0).unwrap();
     state.seek_frame(30.0);
     state.render_frame((64.0, 64.0), 1.0).unwrap();
@@ -590,14 +561,9 @@ fn rendering_retires_superseded_rasters_for_the_atlas() {
     assert_eq!(state.take_all_images().len(), 2);
 }
 
-// ---- backends ------------------------------------------------------------
-
-/// Guards the two-backend claim against being vacuous.
-///
-/// The comparison harness runs this exact binary twice, once with
-/// `VN_LOTTIE_BACKEND=thorvg`. If the feature is off, `Backend::preferred`
-/// falls back rather than panicking — correct at run time, useless in a test
-/// run that believes it is exercising ThorVG. So fail here instead.
+/// Guards the two-backend claim against being vacuous: the harness runs this binary with
+/// `VN_LOTTIE_BACKEND=thorvg`, and `Backend::preferred` falls back silently if the feature is off,
+/// so fail here.
 #[test]
 fn the_backend_under_test_is_the_one_the_environment_asked_for() {
     let requested = std::env::var("VN_LOTTIE_BACKEND");
@@ -615,13 +581,9 @@ fn the_backend_under_test_is_the_one_the_environment_asked_for() {
     }
 }
 
-/// The seam's actual contract: swapping the engine changes the pixels, and
-/// nothing else.
-///
-/// Metadata comes from the document rather than from either backend, and the
-/// raster geometry is computed once and handed to both, so these must match
-/// exactly for every fixture — a difference here means the abstraction leaks
-/// and `crates/vn-tree/src/lottie.rs` would have to care which engine is on.
+/// The seam's contract: swapping the engine changes the pixels and nothing else. Metadata comes
+/// from the document and the raster geometry is computed once, so these must match exactly for
+/// every fixture.
 #[cfg(feature = "thorvg")]
 #[test]
 fn both_backends_agree_on_everything_except_the_pixels() {
@@ -665,17 +627,10 @@ fn both_backends_agree_on_everything_except_the_pixels() {
     }
 }
 
-/// Loads and renders from eight threads at once.
-///
-/// This is a regression test for a real crash, not a hypothetical: ThorVG
-/// 1.1.0 keeps unsynchronised process-global state, and before
-/// `backend::thorvg`'s engine lock this suite died with
-/// `STATUS_ACCESS_VIOLATION` in **12 of 40** `--test-threads=8` runs while
-/// every serial run passed. A safe Rust API must not offer memory corruption
-/// as the price of a thread pool.
-///
-/// Each `LottieState` is built *inside* its thread because the ThorVG variant
-/// is `!Send` by construction; what is shared is the engine underneath them.
+/// Loads and renders from eight threads at once: a regression test for ThorVG 1.1.0's
+/// unsynchronised process-global state (`STATUS_ACCESS_VIOLATION` in 12 of 40 `--test-threads=8`
+/// runs before `backend::thorvg`'s engine lock). Each `LottieState` is built inside its thread
+/// because the ThorVG variant is `!Send` by construction.
 #[test]
 fn concurrent_loads_and_renders_do_not_corrupt_the_engine() {
     let payloads: Vec<Vec<u8>> = ALL.iter().map(|name| bytes(name)).collect();

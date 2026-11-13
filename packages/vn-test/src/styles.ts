@@ -1,37 +1,12 @@
-// Reading the engine's computed-style dump.
-//
-// The `styles` command answers with a pretty `Debug` of gpui's
-// `StyleRefinement`, split one JSON string per source line. It is the engine's
-// OWN vocabulary, not CSS's — `background`, not `background-color`; an `Hsla`
-// struct, not `rgb(...)` — and this file does not pretend otherwise. Faking a
-// `getComputedStyle()` string would mean inventing a serializer that agrees
-// with no browser and drifts from the engine on the first field that gains a
-// variant, which is exactly the kind of quiet divergence this project refuses.
-//
-// What it DOES do is make the dump addressable: fold each multi-line block back
-// onto one line, so `background` is a value you can match a string or a regex
-// against instead of a range of array indices.
+// The `styles` command answers with a pretty `Debug` of gpui's `StyleRefinement`, split one JSON
+// string per source line.
 
 /** One `key: value` from the dump, with its nesting depth and its block folded flat. */
 export type StyleEntry = { indent: number; key: string; value: string };
 
 const KEY_LINE = /^(\s*)([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/;
 
-/**
- * Folds a bucket's lines into `key: value` entries.
- *
- * Nested blocks are joined with single spaces, so
- *
- *     background: Some(
- *         Color(
- *             Solid(Hsla { h: 0.6, s: 1.0, l: 0.65, a: 0.8 }),
- *         ),
- *     ),
- *
- * becomes `Some( Color( Solid(Hsla { h: 0.6, s: 1.0, l: 0.65, a: 0.8 }), ), )`.
- * Every entry keeps its indent, so a caller can prefer the SHALLOWEST `color`
- * (the element's own) over a deeper one (a component of some other struct).
- */
+/** Folds a bucket's lines into `key: value` entries. */
 export function flattenStyleDump(lines: string[]): StyleEntry[] {
   const out: StyleEntry[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -55,13 +30,8 @@ export function flattenStyleDump(lines: string[]): StyleEntry[] {
 }
 
 /**
- * A handful of CSS names that map 1:1 onto an engine field, accepted so that a
- * spec written in browser vocabulary does not silently match nothing.
- *
- * Deliberately SHORT. Every entry here is a promise that the two names mean the
- * same thing, and most CSS properties do not have one field to point at
- * (`padding` is four, `font` is six). Anything not listed is passed through
- * verbatim, which is how you reach the rest of the dump.
+ * A handful of CSS names that map 1:1 onto an engine field, accepted so that a spec written in
+ * browser vocabulary does not silently match nothing.
  */
 const ALIASES: Record<string, string> = {
   "background-color": "background",
@@ -75,10 +45,7 @@ const ALIASES: Record<string, string> = {
 
 export const resolveProperty = (prop: string) => ALIASES[prop] ?? prop;
 
-/**
- * The value of `prop` in a bucket, or `undefined`. Shallowest match wins: an
- * element's own `color` sits above the `color` inside its `text` block.
- */
+/** The value of `prop` in a bucket, or `undefined`. */
 export function styleValue(lines: string[], prop: string): string | undefined {
   const key = resolveProperty(prop);
   const hits = flattenStyleDump(lines).filter((e) => e.key === key);

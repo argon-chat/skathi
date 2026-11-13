@@ -1,10 +1,10 @@
 {
-  "$comment": "Window configuration — docs/WINDOWING.md §4.1. build.ts copies the `window` block verbatim into dist/manifest.json; the host reads it BEFORE cx.open_window, which is the only moment creation-time gpui options can be set without a visible flash. VN_WINDOW / VN_WINDOW_FOCUS still win on top.",
+  "$comment": "The `window` block is read before the window opens; VN_WINDOW / VN_WINDOW_FOCUS override it.",
 
-  "$comment-name": "The app's IDENTITY, not its title: it names %LOCALAPPDATA%\\<name>\\storage, where localStorage lives (docs/STORAGE.md §3). Optional — without it the host derives `hello` from the entry module's app directory, which is the same answer. Spelled out here so that renaming the folder does not silently move a user's saved data.",
+  "$comment-name": "Names %LOCALAPPDATA%\\<name>\\storage, where localStorage lives; spelled out so renaming the folder does not move saved data.",
   "name": "hello",
 
-  "$comment-packaging": "Read only by `vn build` (docs/PACKAGING.md). productName is what Explorer and Task Manager show; version is the exe's VERSIONINFO; `assets` defaults to [\"assets\"] and is spelled out so the packaged set is visible; `windows` is the exe's own identity.",
+  "$comment-packaging": "Read only by `vn build`.",
   "productName": "Hello",
   "version": "0.1.0",
   "assets": ["assets"],
@@ -25,7 +25,7 @@
     "titleBarStyle": "hidden",
     "titleBarHeight": 36,
 
-    "$comment-titleBarFallback": "LEFT AT ITS DEFAULT (true) on purpose. The host's fallback titlebar retires the first frame the app paints a `window-drag: move` region, and the one `[window]` log line that produces is part of what this demo demonstrates. The cost is that env(titlebar-area-height) is legitimately 0 for that one frame (m12 windowing-2 §8.11) — an app whose titlebar is sized purely by env() and cares about frame 1 sets this to false, which apps/oschrome now does.",
+    "$comment-titleBarFallback": "Left at its default (true) on purpose: the fallback titlebar retires on the first drag region, and env(titlebar-area-height) is 0 for that one frame.",
 
     "backdrop": "mica",
     "resizable": true,

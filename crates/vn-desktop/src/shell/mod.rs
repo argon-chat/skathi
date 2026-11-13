@@ -1,30 +1,12 @@
-//! The shell: open a URL with its handler, open a file with its default app,
-//! reveal a file in Explorer, move a file to the Recycle Bin (docs/SHELL.md).
+//! The shell: open a URL or file with its handler, reveal a file, move a file to the trash.
 //!
-//! The bodies of gpui's `open_target` / `open_target_in_explorer`, re-hosted so
-//! a failure reaches JS — gpui's versions are fire-and-forget behind `log_err`,
-//! and an app that cannot tell "opened" from "nothing is associated with .xyz"
-//! cannot tell its user either.
+//! A failure reaches JS (gpui's `open_target` is fire-and-forget). Validation is pure, runs on the
+//! frame thread and refuses synchronously; the OS call runs on one `vn-shell` thread (a COM STA) that
+//! also does the `stat` in front of each call, so the frame thread never touches a user path.
 //!
-//! Everything here splits in two, on purpose:
-//!
-//! * **validation** — the scheme allowlist, absolute paths, the executable
-//!   guard — is pure, runs on the frame thread inside the host fn, and refuses
-//!   SYNCHRONOUSLY (`{error, name}`), so a refused call never costs a thread hop
-//!   and the rules are unit-tested without a shell;
-//! * **the OS call** runs on ONE `vn-shell` thread (a COM STA, which is what the
-//!   shell's own objects want) and settles through the results queue. That
-//!   thread also does the `stat` in front of each call: the frame thread never
-//!   touches a user path (design §3.2).
-//!
-//! # `VN_SHELL=record` — the test seam
-//!
-//! With `VN_SHELL=record` in the environment nothing reaches the OS: every call
-//! is validated and stat'ed exactly as it would be, then settles successfully
-//! and writes one `[shell] <op> <target> (recorded)` line into the log ring
-//! (kind `shell`). It exists so an automated run can drive `<a href>`,
-//! `window.open` and `appShell` end to end without opening a browser, an
-//! Explorer window or a document on the machine it runs on.
+//! With `VN_SHELL=record` nothing reaches the OS: each call is validated and stat'ed, then settles
+//! successfully and logs `[shell] <op> <target> (recorded)` (kind `shell`), so automated runs can
+//! drive links and `appShell` without opening anything.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Sender};
@@ -47,7 +29,6 @@ mod stub;
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 use stub as imp;
 
-/// One shell request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
     OpenExternal(String),
@@ -73,22 +54,13 @@ impl Op {
     }
 }
 
-// ---------------------------------------------------------------------------
-// validation (pure)
-// ---------------------------------------------------------------------------
-
-/// The schemes CONTENT may hand to the OS (design §5.1). Tier-1 surfaces are
-/// reachable by whatever the app renders — a chat message's link, a Markdown
-/// file — so `file:`, custom protocols and `ms-settings:` never pass here; that
-/// closes the classic `shell.openExternal(untrusted)` → `file:///…/calc.exe`
-/// vector by default. `appShell.openExternal` is the escape hatch for a URL the
-/// app's own code trusts.
+/// Schemes CONTENT (`<a href>`, `window.open`) may hand to the OS. Whatever the app renders can
+/// reach these, so `file:`, custom protocols and `ms-settings:` never pass; `appShell.openExternal`
+/// is the escape hatch for a URL the app trusts.
 pub const CONTENT_SCHEMES: &[&str] = &["http", "https", "mailto"];
 
-/// `https://x` → `Some("https")`, lowercased. RFC 3986 `ALPHA *( ALPHA /
-/// DIGIT / "+" / "-" / "." ) ":"`. A drive letter (`C:\x`) parses as a
-/// one-letter scheme, which is exactly why `file`-ish inputs are refused by
-/// name and paths have their own call.
+/// `https://x` → `Some("https")`, lowercased. A drive letter (`C:\x`) parses as a one-letter
+/// scheme, which is why `file`-ish inputs are refused by name.
 pub fn scheme_of(url: &str) -> Option<String> {
     let colon = url.find(':')?;
     let s = &url[..colon];
@@ -103,7 +75,6 @@ pub fn scheme_of(url: &str) -> Option<String> {
     Some(s.to_ascii_lowercase())
 }
 
-/// The URL `openExternal` may hand to the shell, or why not.
 pub fn validate_external(url: &str, content: bool) -> Result<String, Fail> {
     if url.is_empty() {
         return Err(Fail::type_error("openExternal: the URL is empty"));
@@ -138,9 +109,8 @@ pub fn validate_external(url: &str, content: bool) -> Result<String, Fail> {
     Ok(url.to_string())
 }
 
-/// An absolute path, or why not. `\\?\` long paths and UNC are fine; a
-/// relative path is a TypeError rather than something resolved against a cwd
-/// the app does not control.
+/// An absolute path, or why not. `\\?\` and UNC are fine; a relative path is a TypeError rather
+/// than resolved against a cwd the app does not control.
 pub fn validate_path(path: &str, what: &str) -> Result<PathBuf, Fail> {
     if path.is_empty() {
         return Err(Fail::type_error(format!("{what}: the path is empty")));
@@ -154,9 +124,7 @@ pub fn validate_path(path: &str, what: &str) -> Result<PathBuf, Fail> {
             "{what}: {path:?} is not an absolute path (appStorage.getUserFolder() names the usual places)"
         )));
     }
-    // `C:\x\report.txt:payload.exe` names an NTFS alternate data stream. There
-    // is no legitimate reason to hand one to the shell, and the executable
-    // guard below reads extensions off the path — refuse the shape outright.
+    // `C:\x\report.txt:payload.exe` is an NTFS alternate data stream; refuse the shape outright.
     if alternate_stream(&p) {
         return Err(Fail::type_error(format!(
             "{what}: {path:?} names an alternate data stream (a `:` after the drive)"
@@ -165,8 +133,6 @@ pub fn validate_path(path: &str, what: &str) -> Result<PathBuf, Fail> {
     Ok(p)
 }
 
-/// Does the path carry a `:` anywhere but a drive designator or the `\\?\`
-/// prefix?
 fn alternate_stream(p: &Path) -> bool {
     let s = p.to_string_lossy();
     let rest = s
@@ -174,7 +140,6 @@ fn alternate_stream(p: &Path) -> bool {
         .or_else(|| s.strip_prefix(r"\\?\"))
         .or_else(|| s.strip_prefix(r"\\.\"))
         .unwrap_or(&s);
-    // Skip a drive designator (`C:`).
     let rest = if rest.len() >= 2 && rest.as_bytes()[1] == b':' && rest.as_bytes()[0].is_ascii_alphabetic() {
         &rest[2..]
     } else {
@@ -183,15 +148,10 @@ fn alternate_stream(p: &Path) -> bool {
     rest.contains(':')
 }
 
-/// Extensions `openPath` refuses without `{ allowExecutable: true }`.
-///
-/// The design's list (every `PATHEXT` entry plus `.lnk .url .scf .pif .msi .msp
-/// .hta .ps1 .vbs .vbe .js .jse .wsf .wsh .reg .cpl`) and then some: everything
-/// Windows will RUN, install, or hand to a script host when it is "opened" —
-/// ClickOnce (`.application`, `.appref-ms`), the `.settingcontent-ms` that was
-/// CVE-2018-8414, MSIX/AppX installers, compiled help, the screensaver `.scr`
-/// (a PE image) and the PowerShell module/format files. A Save-dialog-then-
-/// "open it" flow must not launch an attacker-named `report.pdf.exe`.
+/// Extensions `openPath` refuses without `{ allowExecutable: true }`: everything Windows will run,
+/// install, or hand to a script host when it is "opened" (every `PATHEXT` entry, ClickOnce,
+/// `.settingcontent-ms`, MSIX, `.scr`, PowerShell files). Keeps a save-then-open flow from launching
+/// an attacker-named `report.pdf.exe`.
 const EXECUTABLE_EXTS: &[&str] = &[
     "exe", "com", "bat", "cmd", "scr", "pif", "cpl", "msc", "msi", "msp", "mst", "lnk", "url",
     "scf", "hta", "ps1", "psm1", "psd1", "ps1xml", "ps2", "ps2xml", "psc1", "psc2", "vb", "vbs",
@@ -201,12 +161,9 @@ const EXECUTABLE_EXTS: &[&str] = &[
     "xbap", "msh", "msh1", "msh2", "mshxml", "msh1xml", "msh2xml", "sct", "shb", "xll", "website",
 ];
 
-/// Would the shell RUN this rather than open it?
-///
-/// The extension is read the way Windows reads it: trailing dots and spaces are
-/// stripped first (`evil.exe.` and `evil.exe ` both run `evil.exe`), and the
-/// comparison is case-insensitive. `PATHEXT` from the environment is honoured
-/// on top of the built-in list — it only ever ADDS refusals.
+/// Would the shell RUN this rather than open it? The extension is read as Windows reads it:
+/// trailing dots and spaces stripped (`evil.exe.` runs `evil.exe`), case-insensitive. `PATHEXT`
+/// only ever ADDS refusals.
 pub fn is_executable(path: &Path, pathext: Option<&str>) -> bool {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let name = name.trim_end_matches(['.', ' ']);
@@ -225,8 +182,6 @@ pub fn is_executable(path: &Path, pathext: Option<&str>) -> bool {
     })
 }
 
-/// The io::Error → (name, code) table of design §3.3, as far as the shell
-/// needs it.
 pub fn fail_from_io(e: &std::io::Error, what: &str, target: &str) -> Fail {
     use std::io::ErrorKind as K;
     let os = e.raw_os_error();
@@ -246,10 +201,6 @@ pub fn fail_from_io(e: &std::io::Error, what: &str, target: &str) -> Fail {
         None => f,
     }
 }
-
-// ---------------------------------------------------------------------------
-// starting a call (frame thread)
-// ---------------------------------------------------------------------------
 
 fn token_json(token: u32) -> String {
     format!("{{\"token\":{token}}}")
@@ -295,16 +246,12 @@ pub fn start_trash(path: &str) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// the shell thread
-// ---------------------------------------------------------------------------
-
 struct Job {
     token: u32,
     op: Op,
 }
 
-/// `VN_SHELL=record`: validate and stat, never reach the OS (module docs).
+/// `VN_SHELL=record`: validate and stat, never reach the OS.
 pub fn recording() -> bool {
     static R: OnceLock<bool> = OnceLock::new();
     *R.get_or_init(|| std::env::var("VN_SHELL").is_ok_and(|v| v.eq_ignore_ascii_case("record")))
@@ -334,7 +281,6 @@ fn submit(op: Op) -> u32 {
     token
 }
 
-/// One request, on the shell thread: the stat, then the OS call (or the record).
 fn run(op: &Op) -> Result<(), Fail> {
     match op {
         Op::OpenExternal(_) => {}
@@ -427,7 +373,6 @@ mod tests {
             r"C:\a\x.lnk", r"C:\a\x.url", r"C:\a\x.ps1", r"C:\a\x.vbs", r"C:\a\x.js", r"C:\a\x.hta",
             r"C:\a\x.msi", r"C:\a\x.reg", r"C:\a\x.cpl", r"C:\a\x.scr", r"C:\a\x.settingcontent-ms",
             r"C:\a\x.appref-ms", r"C:\a\x.msix",
-            // Windows strips trailing dots and spaces before it runs anything.
             r"C:\a\evil.exe.", r"C:\a\evil.exe ", r"C:\a\evil.exe. . ",
         ] {
             assert!(exe(yes), "{yes} must be refused");
@@ -435,7 +380,6 @@ mod tests {
         for no in [r"C:\a\report.pdf", r"C:\a\notes.txt", r"C:\a\photo.PNG", r"C:\a\folder", r"C:\a\.gitignore", r"C:\a\archive.tar.gz", r"C:\a\exe"] {
             assert!(!exe(no), "{no} must be allowed");
         }
-        // PATHEXT only ever adds.
         assert!(is_executable(Path::new(r"C:\a\x.foo"), Some(".COM;.EXE;.FOO")));
         assert!(!is_executable(Path::new(r"C:\a\x.txt"), Some(".COM;.EXE;.FOO")));
     }
@@ -445,7 +389,6 @@ mod tests {
         let nf = std::io::Error::from_raw_os_error(2);
         let f = fail_from_io(&nf, "openPath", "C:\\x");
         assert_eq!((f.name, f.code, f.os_error), ("NotFoundError", Some("ENOENT"), Some(2)));
-        // ERROR_ACCESS_DENIED, EACCES.
         let ad = std::io::Error::from_raw_os_error(if cfg!(windows) { 5 } else { 13 });
         assert_eq!(fail_from_io(&ad, "t", "x").name, "NotAllowedError");
     }

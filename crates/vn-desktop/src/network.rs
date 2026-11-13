@@ -1,57 +1,31 @@
-//! `navigator.onLine` and the `online` / `offline` events, from the OS
-//! (docs/DESKTOP.md §3).
+//! `navigator.onLine` and the `online` / `offline` events, from the OS.
 //!
-//! The value means what it means in Chromium: "the OS believes there is a
-//! network", not "the internet is reachable". Chromium on Windows asks NLA
-//! whether any network is connected. This asks the network connectivity hint
-//! (iphlpapi, Windows 10 2004+). Its `None` level is the same "no network at
-//! all", and `LocalAccess`, a LAN with no internet, is online in both.
-//!
-//! ```text
-//!   iphlpapi: NotifyNetworkConnectivityHintChange ── thread-pool callback ──┐
-//!                                                                         ▼
-//!   vn-net thread: Chromium's change calculator (0.5 s to go online, 1.5 s to
-//!                  go offline, restarted by every hint)                   │
-//!                                                                         ▼
-//!   redjs navigator::set_on_line ── a queue per context ── its pump ── Event("online"/"offline")
-//! ```
-//!
-//! [`install`] seeds the state synchronously, before any context exists, so
-//! the bundle's first read of `navigator.onLine` is the OS's answer and no
-//! event is queued for the seed. Both functions are resolved at run time, so
-//! an older Windows still starts. There the state stays unset: redjs answers
-//! `true`, Chromium's answer when it cannot tell, and an advisory says so.
-//!
-//! On Linux the hints are rtnetlink's link and address changes, read the way
-//! Chromium's `AddressTrackerLinux` reads them (see `imp` there).
+//! As in Chromium, online means "the OS believes there is a network", not "the internet is
+//! reachable". Windows uses the network connectivity hint (iphlpapi, Windows 10 2004+), resolved at
+//! run time so an older Windows still starts with the state unset (redjs answers `true` and an
+//! advisory says so). Linux uses rtnetlink link and address changes. [`install`] seeds the state
+//! synchronously before any context exists, so no event is queued for the seed.
 
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use vn_runtime::redjs::webapi::navigator;
 
-/// How long a change towards online waits before it is announced. Chromium's
-/// `NetworkChangeNotifierWin` calculator: `connection_type_online_delay_`.
+/// Delay before a change towards online is announced (Chromium's calculator).
 pub const ONLINE_DELAY: Duration = Duration::from_millis(500);
-/// How long a change towards offline waits: `connection_type_offline_delay_`.
-/// The longer wait is what keeps a switch between two networks, which
-/// passes through "none" for a moment, from firing `offline` + `online`.
+/// Delay towards offline; the longer wait keeps a network switch (which passes through "none")
+/// from firing `offline` + `online`.
 pub const OFFLINE_DELAY: Duration = Duration::from_millis(1500);
 
-/// `NL_NETWORK_CONNECTIVITY_LEVEL_HINT` to `onLine`. Only `None` (1) is
-/// offline. `Unknown` (0) and `Hidden` (5) mean the OS cannot tell this
-/// process, so they read as online, as Chromium reads "cannot tell".
+/// Maps `NL_NETWORK_CONNECTIVITY_LEVEL_HINT` to `onLine`: only `None` is offline; `Unknown` and
+/// `Hidden` read as online, as Chromium reads "cannot tell".
 pub fn level_is_online(level: i32) -> bool {
     level != 1
 }
 
-/// Chromium's `NetworkChangeCalculator` for the connection type, with time
-/// passed in. Every hint restarts one timer. Its length depends on what was
-/// last announced: [`ONLINE_DELAY`] after an offline, [`OFFLINE_DELAY`]
-/// otherwise. When the timer fires, the newest hint is announced if it
-/// differs from the last announcement. Chromium also notifies a change
-/// between two connected types, but Blink fires `online` / `offline` only
-/// when the boolean flips, so a no-op is dropped here.
+/// Chromium's change calculator with time passed in. Every hint restarts one timer; when it fires
+/// the newest hint is announced if it differs from the last one (Blink fires only when the boolean
+/// flips).
 #[derive(Debug, Clone)]
 pub struct Debounce {
     announced: bool,
@@ -60,24 +34,20 @@ pub struct Debounce {
 }
 
 impl Debounce {
-    /// Starts from the state that was announced (seeded) already.
     pub fn new(announced: bool) -> Self {
         Debounce { announced, pending: announced, deadline: None }
     }
 
-    /// A hint arrived at `now`.
     pub fn hint(&mut self, online: bool, now: Instant) {
         self.pending = online;
         let delay = if self.announced { OFFLINE_DELAY } else { ONLINE_DELAY };
         self.deadline = Some(now + delay);
     }
 
-    /// When the timer fires, if one is running.
     pub fn deadline(&self) -> Option<Instant> {
         self.deadline
     }
 
-    /// The timer at `now`: `Some(state)` when a change is to be announced.
     pub fn fire(&mut self, now: Instant) -> Option<bool> {
         match self.deadline {
             Some(d) if now >= d => self.deadline = None,
@@ -91,8 +61,7 @@ impl Debounce {
     }
 }
 
-/// The calculator the callback feeds and the `vn-net` thread drains. `None`
-/// until [`install`] has seeded it, and again if the subscription failed.
+/// `None` until [`install`] has seeded it, and again if the subscription failed.
 static CALC: Mutex<Option<Debounce>> = Mutex::new(None);
 static WAKE: Condvar = Condvar::new();
 
@@ -100,8 +69,7 @@ fn calc() -> MutexGuard<'static, Option<Debounce>> {
     CALC.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// A hint, from the OS's thread pool. Never panics: it is called across the
-/// Win32 ABI.
+/// Never panics: called across the Win32 ABI.
 fn on_hint(online: bool) {
     if let Some(d) = calc().as_mut() {
         d.hint(online, Instant::now());
@@ -109,7 +77,6 @@ fn on_hint(online: bool) {
     }
 }
 
-/// The `vn-net` thread: waits for the calculator's timer and announces.
 fn run() {
     let mut guard = calc();
     loop {
@@ -127,8 +94,7 @@ fn run() {
     }
 }
 
-/// Starts the provider behind `navigator.onLine`. Once per process; a second
-/// call does nothing. vn-app calls it before `JsRuntime::init`.
+/// Starts the provider behind `navigator.onLine`, once per process. Call before `JsRuntime::init`.
 pub fn install() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(imp::install);
@@ -143,8 +109,7 @@ mod imp {
 
     use super::{calc, level_is_online, navigator, on_hint, Debounce};
 
-    /// `NL_NETWORK_CONNECTIVITY_HINT`. The BOOLEANs are `u8`, not `bool`: the
-    /// OS writes them, and a byte other than 0 or 1 must not be UB.
+/// The BOOLEANs are `u8`: the OS writes them, and a byte other than 0 or 1 must not be UB.
     #[repr(C)]
     #[derive(Clone, Copy, Default)]
     pub(super) struct Hint {
@@ -163,8 +128,7 @@ mod imp {
         on_hint(level_is_online(hint.level));
     }
 
-    /// Both functions, or `None` before Windows 10 2004. The library is never
-    /// freed: the subscription lives as long as the process.
+/// `None` before Windows 10 2004. The library is never freed: the subscription outlives everything.
     pub(super) fn resolve() -> Option<(GetHint, NotifyHint)> {
         unsafe {
             let lib = LoadLibraryExW(w!("iphlpapi.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32).ok()?;
@@ -174,7 +138,6 @@ mod imp {
         }
     }
 
-    /// The level now, or the error code.
     pub(super) fn current(get: GetHint) -> Result<i32, u32> {
         let mut hint = Hint::default();
         match unsafe { get(&mut hint) } {
@@ -197,9 +160,7 @@ mod imp {
                 return;
             }
         };
-        // Seed first, then subscribe. A hint that arrives in between already
-        // finds the calculator, and the initial notification closes the gap
-        // between the read and the subscription.
+        // Seed first, then subscribe: the initial notification closes the gap.
         let seed = level_is_online(level);
         *calc() = Some(Debounce::new(seed));
         navigator::set_on_line(Some(seed));
@@ -217,10 +178,8 @@ mod imp {
     }
 }
 
-/// Linux, as Chromium's `AddressTrackerLinux`: a rtnetlink socket subscribed
-/// to link and address changes, each of which re-reads the interfaces. There
-/// is a network while some interface other than loopback is up and running
-/// and holds an address beyond IPv6 link-local.
+/// Linux, as Chromium's `AddressTrackerLinux`: online while a non-loopback interface is up and
+/// holds an address beyond IPv6 link-local.
 #[cfg(target_os = "linux")]
 mod imp {
     use std::io;
@@ -230,7 +189,6 @@ mod imp {
 
     const UNSET: &str = "so it reads true, Chromium's answer when it cannot tell, and online/offline never fire";
 
-    /// Is there a network now, by the interfaces' flags and addresses.
     pub(super) fn online_now() -> io::Result<bool> {
         let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
         if unsafe { libc::getifaddrs(&mut list) } != 0 {
@@ -277,8 +235,7 @@ mod imp {
         Ok(fd)
     }
 
-    /// The `vn-netlink` thread: any message, or an overrun that lost some,
-    /// is a reason to look again. What changed does not matter.
+    /// Any message, or an overrun, is a reason to re-read; what changed does not matter.
     fn watch(fd: OwnedFd) {
         let mut buffer = [0u8; 16 * 1024];
         loop {
@@ -329,7 +286,6 @@ mod imp {
 
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 mod imp {
-    /// No provider: redjs answers `true` and advises on the first read.
     pub(super) fn install() {}
 }
 
@@ -339,7 +295,6 @@ mod tests {
 
     #[test]
     fn only_the_none_level_is_offline() {
-        // Unknown, None, LocalAccess, InternetAccess, ConstrainedInternetAccess, Hidden.
         let levels: Vec<bool> = (0..=5).map(level_is_online).collect();
         assert_eq!(levels, [true, false, true, true, true, true]);
     }
@@ -351,39 +306,32 @@ mod tests {
         let mut d = Debounce::new(true);
         assert_eq!(d.fire(ms(10_000)), None, "no timer, nothing to say");
 
-        // Online → offline waits 1.5 s.
         d.hint(false, t0);
         assert_eq!(d.deadline(), Some(ms(1500)));
         assert_eq!(d.fire(ms(1499)), None);
         assert_eq!(d.fire(ms(1500)), Some(false));
         assert_eq!(d.fire(ms(1501)), None, "fired once");
 
-        // Offline → online waits 0.5 s.
         d.hint(true, ms(2000));
         assert_eq!(d.deadline(), Some(ms(2500)));
         assert_eq!(d.fire(ms(2500)), Some(true));
 
-        // A switch between networks passes through "none": the second hint
-        // restarts the timer, and at the end nothing changed.
+        // A network switch passes through "none": the second hint restarts the timer.
         d.hint(false, ms(3000));
         d.hint(true, ms(3100));
         assert_eq!(d.deadline(), Some(ms(4600)), "restarted, still the offline delay");
         assert_eq!(d.fire(ms(4600)), None);
 
-        // The newest hint wins.
         d.hint(false, ms(5000));
         d.hint(true, ms(5200));
         d.hint(false, ms(5400));
         assert_eq!(d.fire(ms(6899)), None);
         assert_eq!(d.fire(ms(6900)), Some(false));
 
-        // Repeating the announced state is not a change.
         d.hint(false, ms(7000));
         assert_eq!(d.fire(ms(7500)), None);
     }
 
-    /// The real OS: the hint resolves on this Windows, and installing seeds
-    /// redjs with its answer before anything has to ask.
     #[cfg(target_os = "windows")]
     #[test]
     fn install_seeds_navigator_on_line_from_the_os() {
@@ -395,12 +343,10 @@ mod tests {
         assert!((0..=5).contains(&level), "a known level: {level}");
         install();
         assert_eq!(navigator::on_line_state(), Some(level_is_online(level)));
-        install(); // once per process
+        install(); 
         assert!(navigator::on_line_state().is_some());
     }
 
-    /// The real OS: the interfaces are readable, and installing seeds redjs
-    /// with their answer.
     #[cfg(target_os = "linux")]
     #[test]
     fn install_seeds_navigator_on_line_from_the_interfaces() {

@@ -1,27 +1,3 @@
-// All inspector state, and every command that changes it.
-//
-// One plain `reactive` module rather than pinia: there is exactly one inspector
-// per window, nothing to inject, and every panel is a view over one object.
-// (pinia works here — apps/hello proves it — it just buys nothing.)
-//
-// ## The budget rule, restated for v2
-//
-// Every COMMAND costs the target a frame, so commands are rare, serialized
-// (`wire.ts`) and skipped while a previous one is in flight. Everything that
-// used to be a POLL is now a push (`Push`, `crates/vn-app/src/devtools/ws.rs`):
-// logs, the tree revision, frame stats and network entries arrive when they
-// happen. What is left on a timer is only what genuinely cannot be pushed —
-// the picker (it is a question about the pointer, asked while picking) and the
-// target scan (a local directory walk that involves no target at all).
-//
-//   | v1                        | v2                                        |
-//   |---------------------------|-------------------------------------------|
-//   | logs   700 ms poll        | pushed, same frame                        |
-//   | tree  2500 ms poll        | pushed REVISION; refetched only if the    |
-//   |                           | Elements panel is open and it moved       |
-//   | picker 150 ms poll        | unchanged — it is a pointer question       |
-//   | targets 3000 ms           | unchanged — no target is involved          |
-
 import { markRaw, reactive } from "vue";
 import { Push, devtoolsArgs, listTargets, message, send } from "./wire";
 import { nodeLabel, rowVisible } from "./dump";
@@ -61,30 +37,16 @@ import type {
   WindowsReply,
 } from "./protocol";
 
-/** How long the target keeps a picker highlight without being told again. */
 const PICK_TTL_MS = 1500;
-/** …and how long a SELECTION highlight lives; refreshed while it stays selected. */
 const SELECT_TTL_MS = 6000;
 const LOG_LIMIT = 1000;
 const NET_LIMIT = 400;
-/** How many frame samples the Performance panel keeps for its chart. */
 const PERF_HISTORY = 240;
-/** How many explicitly requested memory snapshots the inspector retains. */
 const MEM_HISTORY = 120;
 
-/** The console's severity buckets, in the order the filter bar shows them. */
 export const LEVELS = ["error", "warn", "info", "debug"] as const;
 export type Level = (typeof LEVELS)[number];
 
-/**
- * A ring `kind` -> a console level.
- *
- * The target's ring uses a coarse CHANNEL name rather than a severity ladder
- * (`vn_tree::log::Entry`), which is the right shape for the ring and the wrong
- * one for a filter bar — so the mapping is here, in the UI, where it belongs.
- * `css` and `advisory` are `warn` because that is what they are: the engine
- * telling you a declaration did not do what you wrote.
- */
 export function levelOf(kind: string): Level {
   switch (kind) {
     case "error":
@@ -103,7 +65,6 @@ export function levelOf(kind: string): Level {
 }
 
 interface State {
-  // -- attachment
   session: number;
   captureActive: boolean;
   targets: Target[];
@@ -118,14 +79,12 @@ interface State {
   window: WindowId | null;
   inspectors: { window: WindowId | null; pid: number }[];
 
-  // -- layout
   tab: Tab;
   consoleOpen: boolean;
   treeWidth: number;
   consoleHeight: number;
   dragging: "tree" | "console" | "net" | null;
 
-  // -- elements
   tree: TreeNode | null;
   rows: Row[];
   byId: Record<NodeId, TreeNode>;
@@ -138,18 +97,14 @@ interface State {
   matches: NodeId[];
   matchIndex: number;
   treeScroll: number;
-  /** Draw Vue's fragment anchors as `<!---->` rows. Off: there is one per
-   *  `v-if` and one per `v-for`, and none of them paint anything. */
   showAnchors: boolean;
 
-  // -- styles
   styles: StylesReply | null;
   rules: RulesReply | null;
   stylesTab: string;
   stylesError: string;
   copied: string;
 
-  // -- console
   logs: ConsoleLine[];
   logCursor: number;
   logStatus: string;
@@ -162,53 +117,36 @@ interface State {
   evalHistory: string[];
   evalIndex: number;
 
-  // -- picker
   picking: boolean;
   pickInfo: PickReply | null;
 
-  // -- performance
   perf: PerfReply | null;
   perfHistory: number[];
-  /** The last explicitly requested `mem` breakdown. */
   mem: MemBreakdown | null;
   memHistory: MemSample[];
   memError: string;
-  /**
-   * The target answered `mem` without a breakdown: its OS has no port
-   * (`{supported: false, reason}`). The host's reason; "" otherwise.
-   */
+  /** The host's reason; "" otherwise. */
   memUnsupported: string;
   memCollectMs: number;
-  /** A `Force GC` is running (it is a full synchronous collection in the target). */
   memGcBusy: boolean;
-  /**
-   * The last `mem {regions}` — the RAM (working set) per category, which needs
-   * a walk of the target's heap and so is taken on request, not polled.
-   */
   memResident: { at: number; breakdown: MemBreakdown } | null;
   memResidentBusy: boolean;
 
-  // -- network
   net: NetEntry[];
   netCursor: number;
   netFilter: string;
-  /** The row whose details are open (its `seq`), or `null` — the list alone. */
   netSelected: number | null;
   netDetail: NetDetail | null;
   netDetailError: string;
   netDetailBusy: boolean;
   netTab: NetTab;
-  /** The request list's width while the details pane is open. */
   netListWidth: number;
-  /** The target's pooled-transport counters, as of the newest entries. */
   netPool: PoolStats | null;
 
-  // -- storage
   storageArea: string;
   storage: { key: string; value: string }[];
   storageError: string;
 
-  // -- preview
   shot: Shot | null;
   shotError: string;
   shotBusy: boolean;
@@ -300,53 +238,25 @@ export const state = reactive<State>({
   shotBusy: false,
 });
 
-/** How this inspector was started — F12 names the window it was opened for. */
 export const args = devtoolsArgs();
 
-/**
- * Cross-panel UI facts that are not inspection state.
- *
- * `typing` is the one that earns its keep: this app is keyboard-first, and
- * every panel's key handler has to know whether the keystroke belongs to a
- * text field instead. A browser would ask `document.activeElement`; the host
- * does not expose one (the focused NODE is known host-side — `mouse` reports
- * it — but not to the app's own JS), so the inputs say so themselves on
- * `@focus` / `@blur`. Two lines per input, and no guessing.
- */
 export const ui = reactive({
   typing: false,
-  /** Set by the Elements panel so Ctrl+F can reach it from the shell. */
   openElementSearch: null as null | (() => void),
-  /** Is that search box open? Escape closes it before it reaches the drawer. */
+  /** Escape closes it before it reaches the drawer. */
   elementSearchOpen: false,
   closeElementSearch: null as null | (() => void),
-  /** Set by the Console so Ctrl+F and the prompt focus can reach it. */
   focusPrompt: null as null | (() => void),
   /**
-   * Which panel Ctrl+C copies from: the one whose row was clicked LAST. Two
-   * panels have a selection at once (the console drawer sits under Network),
-   * and "the one you touched" is the only answer a person would expect.
+   * Two panels have a selection at once (the console drawer sits under Network), and "the one you
+   * touched" is the only answer a person would expect.
    */
   copyTarget: "" as "" | "console" | "network",
-  /** The right-click menu, when one is open (`components/ContextMenu.vue`). */
   menu: null as null | { x: number; y: number; items: MenuItem[] },
-  /** A one-line acknowledgement in the status bar: "copied 3 lines". */
   flash: "",
   flashBad: false,
 });
 
-// ---------------------------------------------------------------------------
-// the wire, with the addressed window folded in
-// ---------------------------------------------------------------------------
-
-/**
- * A command against the attached target's CURRENTLY SELECTED window.
- *
- * The `window` argument rides on every command rather than being spelled out at
- * each call site: the host reads it uniformly (docs/DEVTOOLS.md), commands that
- * do not care ignore it, and forgetting it at one call site is exactly how a
- * window switcher ends up half-working.
- */
 function cmd<T>(name: string, cmdArgs: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
   const target = state.target, session = state.session;
   const scoped = state.window === null ? cmdArgs : { window: state.window, ...cmdArgs };
@@ -366,10 +276,6 @@ export function stopCapture(): void {
   void send(target, "allocations", { op: "stop" }).catch(() => {});
 }
 
-// ---------------------------------------------------------------------------
-// attachment
-// ---------------------------------------------------------------------------
-
 export async function refreshTargets(): Promise<TargetList> {
   const found = await listTargets();
   state.targets = found.targets || [];
@@ -377,11 +283,6 @@ export async function refreshTargets(): Promise<TargetList> {
   return found;
 }
 
-/**
- * Picks the target `--target` named, else the first live one that is not this
- * process — the inspector attaching to ITSELF on startup would be a confusing
- * default, even though it is a perfectly legal thing to ask for by hand.
- */
 export function bestTarget(found?: TargetList | null): Target | null {
   const live = state.targets.filter((t) => t.alive);
   const preferred = found?.preferred || args.target;
@@ -412,8 +313,6 @@ export async function attach(target: Target | null): Promise<void> {
     note({ kind: "dev", text: `attached to ${target.slot} · pid ${pong.pid} · port ${target.port}` });
     await refreshWindows();
     if (session !== state.session) return;
-    // F12 opened this inspector for ONE window of the target. Honour that:
-    // everything below is then about the window the key was pressed in.
     if (args.window !== null && state.windows.some((w) => w.id === args.window)) {
       state.window = args.window;
     }
@@ -474,7 +373,6 @@ function resetInspection(): void {
   state.seenRev = -1;
 }
 
-/** Every failure funnels through here, so a dead target is reported once. */
 function fail(e: unknown): string {
   const text = message(e);
   if (text === "attachment changed") return text;
@@ -483,19 +381,11 @@ function fail(e: unknown): string {
   return text;
 }
 
-// ---------------------------------------------------------------------------
-// the push channel
-// ---------------------------------------------------------------------------
-
-/** Which streams the UI wants right now — the ones a visible panel reads. */
 function streams(): PushStream[] {
   const want: PushStream[] = ["status"];
   if (state.consoleOpen) want.push("logs");
   if (state.tab === "elements") want.push("tree");
   if (state.tab === "network") want.push("net");
-  // Frame stats are four messages a second. Asking for them while nobody is
-  // looking at the Performance panel is exactly the kind of idle cost this
-  // rewrite exists to remove.
   if (state.tab === "performance" && !state.captureActive) want.push("perf");
   return want;
 }
@@ -523,7 +413,6 @@ function closePush(): void {
   state.pushNote = "";
 }
 
-/** Called when the visible panel changes what it needs. */
 export function resubscribe(): void {
   channel?.subscribe(streams());
 }
@@ -531,8 +420,6 @@ export function resubscribe(): void {
 function onPush(msg: PushMessage): void {
   switch (msg.t) {
     case "hello":
-      // The cursor the socket will stream from. Anything older than this came
-      // out of the one `logs` command the attach path runs.
       state.pushNote = `live · proto ${msg.proto}`;
       state.treeRev = msg.treeRev;
       break;
@@ -543,8 +430,7 @@ function onPush(msg: PushMessage): void {
       break;
     case "tree":
       state.treeRev = msg.rev;
-      // The tree is REFETCHED only when somebody is looking at it. A revision
-      // number is free; a `tree` command is a frame of the target's budget.
+      // The tree is REFETCHED only when somebody is looking at it.
       if (state.tab === "elements") scheduleTreeRefresh();
       break;
     case "status":
@@ -560,7 +446,6 @@ function onPush(msg: PushMessage): void {
   }
 }
 
-/** The polling fallback, for a host whose push channel could not be opened. */
 export function pollFallback(): void {
   if (state.status !== "attached" || state.pushLive) return;
   void pollLogs();
@@ -569,9 +454,7 @@ export function pollFallback(): void {
   if (state.tab === "network") void refreshNet();
 }
 
-// ---------------------------------------------------------------------------
 // windows
-// ---------------------------------------------------------------------------
 
 export async function refreshWindows(): Promise<void> {
   if (!state.target) return;
@@ -580,8 +463,6 @@ export async function refreshWindows(): Promise<void> {
     state.windows = data.windows || [];
     state.inspectors = data.inspectors || [];
     if (state.window !== null && !state.windows.some((w) => w.id === state.window)) {
-      // The window we were pointed at closed. Fall back to the primary one
-      // rather than silently addressing nothing.
       state.window = null;
       note({ kind: "dev", text: "the window this inspector was opened for closed — back to the main window" });
     }
@@ -600,15 +481,10 @@ export async function selectWindow(id: WindowId | null): Promise<void> {
   await refreshTree();
 }
 
-/** The window commands are addressed to, resolved for display. */
 export function currentWindow(): WindowInfo | null {
   if (state.window === null) return state.windows.find((w) => w.kind === "main") || null;
   return state.windows.find((w) => w.id === state.window) || null;
 }
-
-// ---------------------------------------------------------------------------
-// elements
-// ---------------------------------------------------------------------------
 
 let treeBusy = false;
 let inspectionEpoch = 0;
@@ -621,7 +497,6 @@ function cancelTreeRefresh(): void {
   treeTimer = null;
 }
 
-/** Collapse a frame-rate revision stream into at most five snapshots a second. */
 function scheduleTreeRefresh(): void {
   if (treeBusy || treeTimer !== null || !state.target || state.tab !== "elements") return;
   treeTimer = setTimeout(() => {
@@ -640,12 +515,8 @@ export async function refreshTree(): Promise<void> {
   const target = state.target;
   const window = state.window;
   try {
-    // Depth 14 covers every app in this repo whole; anything deeper comes back
-    // as a `truncated` count and is fetched on demand when the row is opened.
     const tree = await cmd<TreeNode>("tree", { depth: 14 });
     if (epoch !== inspectionEpoch || target !== state.target || window !== state.window) return;
-    // Wire snapshots are replaced as a whole. Proxying every node and row
-    // adds thousands of reactive reads to each refresh without observing edits.
     state.tree = markRaw(tree);
     state.treeError = "";
     state.seenRev = revision;
@@ -662,21 +533,12 @@ export async function refreshTree(): Promise<void> {
   }
 }
 
-/** Open the first few levels so an attach shows structure, not one root row. */
 function expandInitial(node: TreeNode | null, depth: number): void {
   if (!node || depth > 2) return;
   state.expanded[node.id] = true;
   for (const child of node.children || []) expandInitial(child, depth + 1);
 }
 
-/**
- * Re-flattens the tree into the visible row list, and indexes ALL of it.
- *
- * The two are separate walks on purpose: `byId` has to answer for a node whose
- * row is collapsed out of view (the styles panel reads its bounds; the picker
- * selects it before its ancestors are open), while `rows` is only what is on
- * screen.
- */
 export function reindex(): void {
   const byId: Record<NodeId, TreeNode> = {};
   const index = (node: TreeNode | null): void => {
@@ -691,10 +553,8 @@ export function reindex(): void {
   const rows: Row[] = [];
   const walk = (node: TreeNode | null, depth: number): void => {
     if (!node || node.id === undefined) return;
-    // Fragment anchors (hidden unless the panel's toggle is on) and
-    // whitespace-only text nodes get no row — see `rowVisible`. A hidden node's
-    // CHILDREN are hidden with it, which is right: an anchor has none, and a
-    // text node cannot have any.
+    // Fragment anchors (hidden unless the panel's toggle is on) and whitespace-only text nodes get
+    // no row — see `rowVisible`.
     if (!rowVisible(node, state.showAnchors)) return;
     const children = node.children || [];
     const hit = query ? rowText(node).includes(query) : false;
@@ -718,7 +578,6 @@ export function reindex(): void {
   if (state.matchIndex >= matches.length) state.matchIndex = 0;
 }
 
-/** What Ctrl+F searches: the tag, the classes, the id, and any text. */
 function rowText(node: TreeNode): string {
   const classes = (node.classes || []).join(" ");
   const id = node.props?.id || "";
@@ -730,7 +589,6 @@ export function toggle(id: NodeId): void {
   reindex();
 }
 
-/** The Elements panel's `<!---->` toggle: show or hide the fragment anchors. */
 export function toggleAnchors(): void {
   state.showAnchors = !state.showAnchors;
   reindex();
@@ -741,14 +599,12 @@ export function setExpanded(id: NodeId, open: boolean): void {
   reindex();
 }
 
-/** Opens every ancestor of `id` so a picked node is actually on screen. */
 export function revealPath(path: NodeId[] | undefined): void {
   if (!Array.isArray(path)) return;
   for (const id of path.slice(0, -1)) state.expanded[id] = true;
   reindex();
 }
 
-/** The ancestor chain of the selected node, root first — the breadcrumbs. */
 export function ancestors(id: NodeId | null): TreeNode[] {
   if (id === null || !state.tree) return [];
   const path: TreeNode[] = [];
@@ -774,9 +630,8 @@ export async function select(
   state.rules = null;
   state.stylesError = "";
   if (!state.target || id === null || id === undefined) return;
-  // A node the tree has never seen — picked out of the target before the next
-  // refresh, or selected across a rebuild. Fetch the tree so the panels have
-  // something to name it with.
+  // A node the tree has never seen — picked out of the target before the next refresh, or selected
+  // across a rebuild.
   if (!state.byId[id]) await refreshTree();
   if (options.highlight !== false) highlight(id, SELECT_TTL_MS);
   await loadStyles(id);
@@ -791,19 +646,13 @@ async function loadStyles(id: NodeId): Promise<void> {
   try {
     state.styles = await cmd<StylesReply>("styles", { node: id });
   } catch (e) {
-    // A text node has no computed style — that is an answer, not a failure.
     state.stylesError = message(e);
   }
 }
 
-/** Re-reads the selected node's styles — the "did my edit land" button. */
 export async function refreshStyles(): Promise<void> {
   if (state.selected !== null) await loadStyles(state.selected);
 }
-
-// ---------------------------------------------------------------------------
-// search
-// ---------------------------------------------------------------------------
 
 export function searchElements(query: string): void {
   state.elementSearch = query;
@@ -812,12 +661,8 @@ export function searchElements(query: string): void {
 }
 
 /**
- * Step to the next (or previous) match, opening whatever is collapsed over it.
- *
- * The search runs over the FLATTENED rows, which only contain what is expanded
- * — so a match inside a collapsed subtree would be invisible. Rather than
- * search the whole tree and then guess which ancestors to open, this expands
- * everything the query hits on the way: `expandTo` walks the real tree.
+ * The search runs over the FLATTENED rows, which only contain what is expanded — so a match inside
+ * a collapsed subtree would be invisible.
  */
 export function stepMatch(delta: number): void {
   const query = state.elementSearch.trim().toLowerCase();
@@ -837,10 +682,6 @@ export function stepMatch(delta: number): void {
   const id = all[state.matchIndex];
   void select(id);
 }
-
-// ---------------------------------------------------------------------------
-// highlight + picker
-// ---------------------------------------------------------------------------
 
 export function highlight(id: NodeId, ttlMs: number): Promise<void> {
   if (!state.target) return Promise.resolve();
@@ -883,7 +724,6 @@ export async function togglePick(): Promise<void> {
   }
 }
 
-/** Poll only modal state; native input chooses the exact clicked painted box. */
 export async function pickStep(): Promise<void> {
   if (!state.picking || !state.target || pickBusy) return;
   pickBusy = true;
@@ -916,13 +756,8 @@ export async function pickStep(): Promise<void> {
   } finally { pickBusy = false; }
 }
 
-// ---------------------------------------------------------------------------
-// console
-// ---------------------------------------------------------------------------
-
 let logsBusy = false;
 
-/** A line this inspector wrote about itself. */
 function note(entry: { kind: string; text: string; seq?: number; at?: number }): void {
   pushLine({ seq: -1, at: Date.now(), ...entry });
 }
@@ -951,12 +786,11 @@ export async function pollLogs(): Promise<void> {
   }
 }
 
-/** The console rows that pass the level filter and the text filter. */
 export function visibleLogs(): ConsoleLine[] {
   const needle = state.logFilter.trim().toLowerCase();
   return state.logs.filter((line) => {
-    // Lines the inspector wrote about itself are never filtered out by level:
-    // "attached to …" and "picked div.card" are the transcript of what you did.
+    // Lines the inspector wrote about itself are never filtered out by level: "attached to …" and
+    // "picked div.card" are the transcript of what you did.
     const own = line.seq < 0 && (line.kind === "input" || line.kind === "result" || line.kind === "dev");
     if (!own && !state.levels[levelOf(line.kind)]) return false;
     if (needle && !line.text.toLowerCase().includes(needle)) return false;
@@ -964,13 +798,6 @@ export function visibleLogs(): ConsoleLine[] {
   });
 }
 
-/**
- * Evaluates in the TARGET's JSC, in global scope — the console's whole point.
- *
- * A throw inside the app comes back as `{exception, stack}` on a successful
- * round trip (a devtools console reports a failure, it does not fail), so it is
- * pushed as an `error` line rather than raised here.
- */
 export async function runEval(source: string): Promise<void> {
   if (!state.target || !source.trim()) return;
   note({ kind: "input", text: source });
@@ -1003,12 +830,8 @@ export function clearConsole(): void {
 }
 
 /**
- * Completions for the prompt: the target's own top-level globals.
- *
- * One `eval` per prefix change would be one target frame per keystroke, so the
- * name list is fetched ONCE per attach and filtered locally. That makes it a
- * snapshot rather than a live view — which is the honest trade for a
- * convenience, and is why a name that appears later still evaluates fine.
+ * One `eval` per prefix change would be one target frame per keystroke, so the name list is
+ * fetched ONCE per attach and filtered locally.
  */
 let globalNames: string[] = [];
 
@@ -1031,22 +854,17 @@ export function complete(prefix: string): string[] {
   return globalNames.filter((n) => n.toLowerCase().startsWith(lower)).slice(0, 8);
 }
 
-// ---------------------------------------------------------------------------
-// performance
-// ---------------------------------------------------------------------------
-
 function applyPerf(data: PerfReply): void {
   state.perf = data;
   const samples = data.samples || [];
-  // The chart's own history: the newest sample of each push, appended. The
-  // reply's `samples` are the target's ring (which overlaps between pushes), so
-  // appending all of them would draw the same milliseconds several times.
+  // The reply's `samples` are the target's ring (which overlaps between pushes), so appending all
+  // of them would draw the same milliseconds several times.
   if (samples.length) state.perfHistory.push(samples[samples.length - 1]);
   if (state.perfHistory.length > PERF_HISTORY) {
     state.perfHistory.splice(0, state.perfHistory.length - PERF_HISTORY);
   }
-  // A cold chart (the panel was just opened) is seeded from the ring so it has
-  // a shape immediately instead of drawing itself in over a minute.
+  // A cold chart (the panel was just opened) is seeded from the ring so it has a shape immediately
+  // instead of drawing itself in over a minute.
   if (state.perfHistory.length < 8 && samples.length > 8) {
     state.perfHistory = samples.slice(-PERF_HISTORY);
   }
@@ -1061,22 +879,8 @@ export async function refreshPerf(): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// memory
-// ---------------------------------------------------------------------------
-//
-// `mem` is a COMMAND, not a push: it walks the target's address space and asks
-// three allocators. Request it explicitly; do not inject periodic main-thread
-// work into the very interaction the inspector is trying to diagnose.
-// A second snapshot is skipped while the previous one is still in flight.
-
 let memInFlight = false;
 
-/**
- * Takes a `mem` reply into the state. Returns the reason when it carries no
- * breakdown — a host on an OS without a port answers `{supported: false,
- * reason}`, which is an answer to show, not a reply to dereference.
- */
 function applyMem(reply: MemReply | MemUnsupported): string | null {
   const unsupported = memUnsupported(reply);
   if (unsupported !== null || !("breakdown" in reply)) {
@@ -1102,19 +906,12 @@ export async function refreshMem(): Promise<void> {
     const reply = await cmd<MemReply | MemUnsupported>("mem");
     if (epoch === inspectionEpoch) applyMem(reply);
   } catch (e) {
-    // A host older than `mem` answers "unknown command" — said once, in the
-    // panel, rather than as the inspector-wide error banner.
     if (epoch === inspectionEpoch) state.memError = message(e);
   } finally {
     memInFlight = false;
   }
 }
 
-/**
- * Where the RAM is: `mem {regions}` walks the target's process heap (locked
- * meanwhile — tens of ms on a big heap) so every working-set page can be put
- * in its category. On request only.
- */
 export async function measureResident(): Promise<void> {
   if (!state.target || state.memResidentBusy) return;
   state.memResidentBusy = true;
@@ -1130,7 +927,6 @@ export async function measureResident(): Promise<void> {
   }
 }
 
-/** Two full synchronous JSC collections in the target, then the breakdown. */
 export async function forceGc(): Promise<void> {
   if (!state.target || state.memGcBusy) return;
   state.memGcBusy = true;
@@ -1146,10 +942,6 @@ export async function forceGc(): Promise<void> {
     state.memGcBusy = false;
   }
 }
-
-// ---------------------------------------------------------------------------
-// network
-// ---------------------------------------------------------------------------
 
 function pushNet(entry: NetEntry): void {
   state.net.push(entry);
@@ -1174,15 +966,11 @@ export function clearNet(): void {
   closeNetDetail();
 }
 
-/**
- * Opens the details pane on row `seq` and asks the target for what is behind
- * it. On demand, one command per click: a body never rides the push feed.
- */
+/** On demand, one command per click: a body never rides the push feed. */
 export function selectNet(seq: number | null): Promise<void> {
   ui.copyTarget = "network";
   if (seq === state.netSelected && state.netDetail) return Promise.resolve();
   const entry = seq === null ? undefined : state.net.find((e) => e.seq === seq);
-  // A reload marker is a divider with nothing behind it; the selection stays.
   if (entry?.kind === "reload") return Promise.resolve();
   state.netSelected = seq;
   state.netDetail = null;
@@ -1200,12 +988,8 @@ export function closeNetDetail(): void {
 }
 
 /**
- * `net_detail` for `seq`, into the pane if that row is still the one open.
- *
- * The response body is read off a CLONE after the row was recorded
- * (`net.rs` TEE_JS), so a click on a row that has only just appeared can land
- * before the body does. That is retried a few times, a little later each
- * time, rather than shown as "no body".
+ * The response body is read off a CLONE after the row was recorded (`net.rs` TEE_JS), so a click
+ * on a row that has only just appeared can land before the body does.
  */
 export async function loadNetDetail(seq: number, attempt = 0): Promise<void> {
   if (!state.target) return;
@@ -1228,7 +1012,7 @@ export async function loadNetDetail(seq: number, attempt = 0): Promise<void> {
     if (state.netSelected !== seq) return;
     const text = message(e);
     state.netDetailError = /unknown command/.test(text)
-      ? "this target predates net_detail (m26): it records the rows, not what is behind them"
+      ? "this target predates net_detail: it records the rows, not what is behind them"
       : text;
     if (/cannot reach/.test(text)) fail(e);
   } finally {
@@ -1236,23 +1020,13 @@ export async function loadNetDetail(seq: number, attempt = 0): Promise<void> {
   }
 }
 
-/** The details of `seq`, from the pane when it already has them. */
 export function detailFor(seq: number): Promise<NetDetail> {
   if (state.netDetail && state.netDetail.entry.seq === seq) return Promise.resolve(state.netDetail);
   return cmd<NetDetail>("net_detail", { seq });
 }
 
-// ---------------------------------------------------------------------------
-// the clipboard, the right-click menu, the status-bar acknowledgement
-// ---------------------------------------------------------------------------
-//
-// The panes a developer copies from — console messages, the request details,
-// a response body — are drag-selectable (the engine's text selection,
-// docs/RUNTIME.md §5.17; the rest of the chrome is `user-select: none`, App.vue).
-// The explicit copies stay as the shortcuts they are in a browser: a hover
-// icon, the right-click menu, and Ctrl+C on the selected rows when no text is
-// selected. They also reach what a drag cannot: a whole message behind its
-// ellipsis, a body past what the virtual list has on screen.
+// They also reach what a drag cannot: a whole message behind its ellipsis, a body past what the
+// virtual list has on screen.
 
 let flashTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -1267,14 +1041,10 @@ export function flash(text: string, bad = false): void {
 }
 
 /**
- * Puts `text` on the system clipboard through the app's own
- * `navigator.clipboard` — redjs's async Clipboard API over the host clipboard,
- * the same one a native `<input>` uses for Ctrl+C. `what` is how the status
- * bar names it ("the URL", "3 lines").
+ * Puts `text` on the system clipboard through the app's own `navigator.clipboard` — redjs's async
+ * Clipboard API over the host clipboard, the same one a native `<input>` uses for Ctrl+C.
  */
 export async function copyText(text: string, what: string): Promise<boolean> {
-  // Probed, not assumed: `clipboard` needs vn-app's `clipboard` feature, and a
-  // host built without it has no `navigator.clipboard` to call.
   const clipboard = globalThis.navigator?.clipboard;
   if (!clipboard || typeof clipboard.writeText !== "function") {
     flash("no clipboard in this host — vn-app was built without its `clipboard` feature", true);
@@ -1301,13 +1071,8 @@ export function closeMenu(): void {
 export function visibleNet(): NetEntry[] {
   const needle = state.netFilter.trim().toLowerCase();
   if (!needle) return state.net;
-  // Reload markers stay: they say which run a matching row belongs to.
   return state.net.filter((e) => e.kind === "reload" || e.url.toLowerCase().includes(needle));
 }
-
-// ---------------------------------------------------------------------------
-// storage
-// ---------------------------------------------------------------------------
 
 export async function refreshStorage(): Promise<void> {
   if (!state.target) return;
@@ -1351,18 +1116,9 @@ export async function clearStorage(): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// preview
-// ---------------------------------------------------------------------------
-
 /**
- * A screenshot, ON DEMAND only.
- *
- * A live preview would mean a full window readback plus a PNG encode per frame
- * in the target — the most expensive command on the wire by two orders of
- * magnitude. So this is a button, and the pane says when the image was taken.
- * Each capture lands on a new path (the host rotates them), which is also what
- * keeps gpui's image cache from handing back the previous one.
+ * A live preview would mean a full window readback plus a PNG encode per frame in the target — the
+ * most expensive command on the wire by two orders of magnitude.
  */
 export async function capture(): Promise<void> {
   if (!state.target || state.shotBusy) return;
@@ -1382,10 +1138,6 @@ export async function capture(): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// layout
-// ---------------------------------------------------------------------------
-
 export function setTab(tab: Tab): void {
   state.tab = tab;
   resubscribe();
@@ -1404,7 +1156,6 @@ export function toggleConsole(): void {
   resubscribe();
 }
 
-/** Stable, attachment-scoped transport for lazy inspector panels. */
 export function panelRequest(): <T>(payload: Record<string, unknown>) => Promise<T> {
   const target = state.target, window = state.window, session = state.session;
   return async <T>(payload: Record<string, unknown>): Promise<T> => {
@@ -1425,7 +1176,6 @@ export function setCaptureActive(active: boolean): void {
   resubscribe();
 }
 
-/** The target expires leased recordings if this inspector crashes or closes. */
 export function captureHeartbeat(): void {
   if (!state.target || !state.captureActive) return;
   void cmd("capture-heartbeat").catch(() => {});

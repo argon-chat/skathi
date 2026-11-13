@@ -1,9 +1,5 @@
-//! The frame clock's wake seam.
-//!
-//! An idle window paces its frames (vn-app `src/idle.rs`), so a result that a
-//! worker thread queues for JS could wait for the next paced frame. A producer
-//! that already wakes the redjs pump calls [`wake`] beside it, and the host
-//! delivers a frame at the next refresh instead.
+//! The frame clock's wake seam: an idle window paces its frames, so a producer that wakes the
+//! redjs pump also calls [`wake`] to get a frame at the next refresh.
 
 use std::sync::OnceLock;
 

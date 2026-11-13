@@ -1,17 +1,3 @@
-// Argon's call timer, the titlebar's `00:00` (apps/client AppTitlebar.vue,
-// motionCounter/Counter.vue and Digit.vue), on the real host.
-//
-//   bun test packages/vn-test/specs/call-timer.spec.ts
-//
-// The owner's report: in a call the titlebar showed the call's name and no
-// time at all. The time ticks (a 1 s setInterval, @argon/core startTimer).
-// What hid it was each digit's clipping cell, `width: 1ch`. The mapper
-// dropped `ch` as unresolved, the cell was 0 px wide, and its strip of digits
-// was clipped away entirely. `ch` and `ex` are now half an em, css-values-4's
-// value for a glyph that is not measured, and the em is the cell's own font
-// size, the counter's 9px (crates/vn-css README, divergence 7). That is a
-// 4.5px cell.
-
 import { afterAll, describe, expect, test } from "bun:test";
 import { launch, readPng } from "../src/index";
 
@@ -28,7 +14,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 type Cell = { w: number; h: number; digit: string | null };
 const cells = async (): Promise<Cell[]> => JSON.parse(await app.eval(`JSON.stringify(__VN_TEST_TIMER__.cells())`));
 const digits = async (): Promise<string> => (await cells()).map((c) => c.digit ?? "?").join("");
-/** Waits out Digit's 900 ms roll. */
 const settle = () => sleep(1300);
 
 describe("the call timer", () => {
@@ -37,7 +22,6 @@ describe("the call timer", () => {
     const cs = await cells();
     expect(cs.length).toBe(4);
     for (const c of cs) {
-      // 4.5px, within the layout's whole-pixel rounding.
       expect(Math.abs(c.w - 4.5)).toBeLessThanOrEqual(0.5);
       expect(c.h).toBeCloseTo(9, 1);
     }
@@ -73,7 +57,6 @@ describe("the call timer", () => {
     const shot = readPng(await app.screenshot());
     const k = shot.width / 200;
     const rect = { x: Math.floor(box.x * k), y: Math.floor(box.y * k), w: Math.ceil(box.width * k), h: Math.ceil(box.height * k) };
-    // #9aa0a6 on #202225: anything well above the bar's luma is a glyph.
     expect(rect.w).toBeGreaterThan(0);
     expect(shot.count(rect, (luma) => luma > 90)).toBeGreaterThan(10);
   }, T);

@@ -1,42 +1,12 @@
-// The TIER-1 surface the app host installs — what an APP may assume exists.
-//
-// `packages/vue-native/src/engine.d.ts` is deliberately not this file. It is
-// scoped to what `runtime.ts` itself touches, and the runtime package exports no
-// ambient types for its consumers at all. So an app that writes the ordinary
-// browser code the compat policy promises — `localStorage.setItem`,
-// `matchMedia`, `navigator.clipboard`, `new AudioContext()` — had nothing
-// telling the compiler those names exist.
-//
-// This file is that, for the four demo apps in this directory. Two rules kept
-// while writing it:
-//
-//   1. NOTHING IS DECLARED THAT THE HOST DOES NOT PROVIDE. Each block names the
-//      Rust or JS that installs it. A name that type-checks and is absent at
-//      runtime is the exact bug the no-lib.dom decision exists to catch, so
-//      adding to this file means reading the host first — never reaching for
-//      lib.dom because a symbol was missing.
-//   2. WHERE THE RUNTIME PACKAGE ALREADY HAS THE TYPE, THIS FILE MERGES INTO IT
-//      rather than restating it. `VnNavigator`, `VnDocument`, `VnAudioContext`,
-//      `VnFetchResponse` and friends below are interface merges onto
-//      engine.d.ts's own declarations, so there is one definition per concept
-//      and the two files cannot drift into disagreeing.
-//
-// This is a stopgap in the right place, not the final home: most of it belongs
-// in the runtime package, shipped to apps as part of `vue-native`. See the
-// conversion report.
+// `packages/vue-native/src/engine.d.ts` is deliberately not this file. NOTHING IS DECLARED THAT
+// THE HOST DOES NOT PROVIDE.
 
 export {};
 
-// ---------------------------------------------------------------------------
-// the window, as a global EventTarget — crates/vn-app/src/window.prelude.js
-// ---------------------------------------------------------------------------
-//
-// The prelude installs these on `globalThis` before the app bundle evaluates.
-// `resize` / `focus` / `blur` are the STANDARD window events; `appWindow`
-// deliberately carries no `resize` of its own, so this is the only spelling.
+// the window, as a global EventTarget — crates/vn-app/src/window.prelude.js The prelude installs
+// these on `globalThis` before the app bundle evaluates.
 
 declare global {
-  // selection.ts installs the native Selection object on the global and document.
   function getSelection(): { toString(): string } | null;
   function addEventListener(
     type: string,
@@ -50,9 +20,6 @@ declare global {
   ): void;
   function dispatchEvent(ev: VnEvent): boolean;
 
-  // Geometry. `innerWidth`/`innerHeight`/`devicePixelRatio` come from redjs
-  // itself; the prelude defines the `outer*` / `screen*` pair over the host's
-  // per-frame snapshot (window.prelude.js §"ro(globalThis, …)").
   var innerWidth: number;
   var innerHeight: number;
   var outerWidth: number;
@@ -61,28 +28,10 @@ declare global {
   var screenY: number;
   var devicePixelRatio: number;
 
-  /** `resizeBy(dw, dh)` — window.prelude.js. There is no `moveBy`; nudging the
-   *  window is `appWindow.setBounds()`, which is what WindowPage.vue does. */
   function resizeBy(dw: number, dh: number): void;
 
-  /**
-   * `window.open(url)` — runtime.ts over window.prelude.js's A-22. An
-   * absolute http/https/mailto URL opens in the SYSTEM browser / mail client
-   * and the call returns `null` (noopener semantics, D-F7); any other scheme
-   * is refused with an advisory naming `appShell.openExternal`. No url, a
-   * relative one or `about:blank` is A-22: "a second document" is not
-   * supported, and the call returns `null`. docs/SHELL.md §1.
-   */
   function open(url?: string, target?: string, features?: string): null;
 
-  /**
-   * The Launch Handler API (runtime.ts; docs/LAUNCH.md). This process's own
-   * launch is one `LaunchParams`, buffered until `setConsumer`; with
-   * `"singleInstance": true`, every later launch of the app is forwarded here
-   * and is another. `targetURL` is the raw deep link (or null) — UNTRUSTED
-   * input. `files` holds one granted handle per launch path that exists: a
-   * folder is a directory handle. No `file_handlers` list filters it (D-F8).
-   */
   interface VnLaunchParams {
     readonly targetURL: string | null;
     readonly files: readonly (VnFileSystemFileHandle | VnFileSystemDirectoryHandle)[];
@@ -91,8 +40,6 @@ declare global {
     setConsumer(consumer: (params: VnLaunchParams) => unknown): void;
   };
 
-  /** `screen`, single-display in v1 (`getScreenDetails()` is not implemented
-   *  and advises). window.prelude.js §"ro(screenObj, …)". */
   var screen: {
     readonly width: number;
     readonly height: number;
@@ -103,12 +50,7 @@ declare global {
     readonly isExtended: boolean;
   };
 
-  /**
-   * `matchMedia` — window.prelude.js §1.6, bridged to the SAME vn-css
-   * evaluator the cascade runs, so a JS query and an `@media` block cannot
-   * disagree. A query the evaluator cannot run advises rather than answering
-   * false forever.
-   */
+  /** A query the evaluator cannot run advises rather than answering false forever. */
   function matchMedia(query: string): VnMediaQueryList;
 
   interface VnMediaQueryList extends VnEventTarget {
@@ -116,39 +58,19 @@ declare global {
     readonly media: string;
   }
 
-  /** redjs's `performance`. Only `now()` is used here; it is a monotonic
-   *  millisecond clock, as in a browser. */
   var performance: { now(): number };
 
-  /** The `online` / `offline` handler attributes (redjs navigator.rs), next
-   *  to `addEventListener("online", …)`. See `navigator.onLine`. */
   var ononline: ((ev: VnEvent) => unknown) | null;
   var onoffline: ((ev: VnEvent) => unknown) | null;
 }
 
-// ---------------------------------------------------------------------------
-// navigator — merged onto engine.d.ts's `VnNavigator`
-// ---------------------------------------------------------------------------
-
 declare global {
   interface VnNavigator {
-    /**
-     * Window Controls Overlay (docs/WINDOWING.md §2.3, window.prelude.js).
-     * Standards-track, not an extension. The rect NARROWS when the host draws
-     * its own caption cluster (`setTitleBarOverlay`), which is how
-     * Titlebar.vue knows to drop its own buttons — reading the rect rather
-     * than assuming a side is also what keeps it correct on macOS and RTL.
-     */
     windowControlsOverlay: VnWindowControlsOverlay;
 
     /**
-     * The async Clipboard API — vendor/redjs/redjs/src/webapi/clipboard.rs,
-     * over the host's own clipboard (the same one the native `<input>` uses
-     * for Ctrl+C: one owner, not two).
-     *
-     * `read()` / `write()` (the image forms) are NOT implemented in v1 and
-     * REJECT; they are declared because rejecting is their contract and
-     * StoragePage.vue demonstrates exactly that.
+     * The async Clipboard API — vendor/redjs/redjs/src/webapi/clipboard.rs, over the host's own
+     * clipboard (the same one the native `<input>` uses for Ctrl+C: one owner, not two).
      */
     clipboard: {
       readText(): Promise<string>;
@@ -157,25 +79,12 @@ declare global {
       write(items: unknown[]): Promise<void>;
     };
 
-    /**
-     * HTML's user activation (runtime.ts, where the engine has none). A host
-     * press (a keydown that is not Escape or a lone modifier, a mousedown, or
-     * the click a press produced) makes it active for five seconds, which is
-     * Chromium's lifespan. `el.click()` and `dispatchEvent` never activate.
-     * A file picker needs it (docs/DESKTOP.md §2.2).
-     */
+    /** `el.click()` and `dispatchEvent` never activate. */
     readonly userActivation: {
       readonly isActive: boolean;
       readonly hasBeenActive: boolean;
     };
 
-    /**
-     * NavigatorOnLine (vendor/redjs/redjs/src/webapi/navigator.rs, fed by
-     * crates/vn-desktop/src/network.rs; docs/DESKTOP.md §3). Chromium's
-     * meaning: the OS believes there is a network, NOT that a server is
-     * reachable. A change fires a trusted `online` / `offline` Event on the
-     * window, after Chromium's settle delay (0.5 s up, 1.5 s down).
-     */
     readonly onLine: boolean;
   }
 
@@ -184,65 +93,31 @@ declare global {
     getTitlebarAreaRect(): VnWindowRect;
   }
 
-  /**
-   * `appWindow.chrome` — the per-frame chrome snapshot the prelude publishes
-   * (`ro(appWindow, "chrome", …)`, window.prelude.js). `VnAppWindow` types it
-   * as a bare `Record<string, unknown>`, so `chrome.client.width` is `unknown`
-   * and does not compile; the shape is fixed and small, so it is written down
-   * here and the two pages that read it cast once. Reported.
-   */
   interface VnWindowChrome {
     titleBarStyle: string;
     displayMode: string;
     fallbackTitleBar: boolean;
     overlayVisible: boolean;
     hostControls: boolean;
-    /** The client area, in CSS pixels. */
     client: { width: number; height: number };
-    /** Zero on all four sides once the app owns the whole client area. */
     contentInset: { left: number; top: number; right: number; bottom: number };
   }
 }
 
-// ---------------------------------------------------------------------------
-// document — merged onto engine.d.ts's `VnDocument`
-// ---------------------------------------------------------------------------
-//
-// NOTE: `document` itself stays `VnDocument | undefined`, because that is what
-// engine.d.ts declares and a global `var` cannot be narrowed by a merge. Under
-// vn-app it is always present (runtime.ts force-installs the entry points
-// before the app bundle evaluates), so app code asserts it once per file and
-// says so on the spot.
-
 declare global {
   interface VnDocument {
-    /** The Fullscreen API — window.prelude.js §"fsStack". Deliberately the
-     *  STANDARD surface rather than an `appWindow` verb: fullscreen state is
-     *  observed through `fullscreenchange`, which is why docs/WINDOWING.md
-     *  §3.4 carries no `appWindow` event for it. */
     readonly fullscreenElement: VnElement | null;
     exitFullscreen(): Promise<void>;
-    // NOT `documentElement`: engine.d.ts already declares it as
-    // `documentElement?: unknown`, and an interface merge cannot narrow a
-    // property that is already there. WindowPage.vue casts at the one place it
-    // needs `.requestFullscreen()` off it, and says so.
+    // NOT `documentElement`: engine.d.ts already declares it as `documentElement?: unknown`, and
+    // an interface merge cannot narrow a property that is already there.
 
-    /** Inert, and returns `false` — exactly as a browser does when a command
-     *  cannot be executed. clipboard.rs advises once naming
-     *  `navigator.clipboard`. */
+    /**
+     * Inert, and returns `false` — exactly as a browser does when a command cannot be executed.
+     * clipboard.rs advises once naming `navigator.clipboard`.
+     */
     execCommand(command: string): boolean;
   }
 }
-
-// ---------------------------------------------------------------------------
-// elements
-// ---------------------------------------------------------------------------
-//
-// The retained tree's mirror node. `runtime.ts` has the full and accurate
-// interface for this (`MirrorElement`, ~150 lines of it) and does not EXPORT
-// it, so an app holding a template ref to a native element has no name for
-// what it is holding. Declared here as the subset these apps touch; every
-// member is one `runtime.ts` really installs.
 
 declare global {
   interface VnDomRect {
@@ -256,19 +131,12 @@ declare global {
     readonly height: number;
   }
 
-  /**
-   * `scrollTo` / `scrollBy`'s option bag. Spelled here rather than taken from
-   * `lib.dom` for the reason at the top of this file: nothing is declared that
-   * the host does not provide, and `behavior: "smooth"` is honoured as an
-   * instant jump with one advisory (research/reports/m23/scroll.md).
-   */
   interface VnScrollToOptions {
     left?: number;
     top?: number;
     behavior?: "auto" | "instant" | "smooth";
   }
 
-  /** `scrollIntoView`'s option bag; `block` is vertical, `inline` horizontal. */
   interface VnScrollIntoViewOptions {
     block?: "start" | "center" | "end" | "nearest";
     inline?: "start" | "center" | "end" | "nearest";
@@ -276,68 +144,25 @@ declare global {
   }
 
   interface VnElement extends VnEventTarget {
-    /**
-     * The RETAINED-TREE node id — `crates/vn-tree`'s arena index, which
-     * `runtime.ts` puts on every mirror node it makes (`mk()`), NOT the `id`
-     * ATTRIBUTE. That divergence is a known and reported one (m19 §5, m20
-     * polish §7); it is declared here because it is also the addressing seam
-     * the multi-window host fns are specified against — `__vn_window_open`
-     * takes exactly this number (docs/MULTIWINDOW.md §5.2 invariant 1), which
-     * is what lets `apps/popout` pop a subtree out with no runtime change.
-     * When `element.id` is fixed to answer the attribute, the id a host fn
-     * wants will need its own spelling and this line moves with it.
-     */
     readonly id: VnNodeId;
     getBoundingClientRect(): VnDomRect;
     /**
-     * The scroll position, over the host's real `ScrollHandle` — the same one
-     * the wheel and the scrollbar thumb move. WRITABLE since m23: the value is
-     * clamped to what the box can cover and the getter answers the clamped
-     * number on the next line, with no frame in between. `0` on an element
-     * that does not scroll, and a write to one does nothing, exactly as in a
+     * `0` on an element that does not scroll, and a write to one does nothing, exactly as in a
      * browser.
      */
     scrollTop: number;
     scrollLeft: number;
-    /** The CONTENT box of a scroll container (viewport + overflow). */
     readonly scrollWidth: number;
     readonly scrollHeight: number;
-    /**
-     * `scrollTo(x, y)` / `scrollTo({ left, top, behavior })`. `behavior:
-     * "smooth"` is performed INSTANTLY and advises once — see
-     * research/reports/m23/scroll.md for why it is not animated.
-     */
     scrollTo(x?: number | VnScrollToOptions, y?: number): void;
     scrollBy(x?: number | VnScrollToOptions, y?: number): void;
-    /**
-     * Scrolls every scrollable ancestor so this element lands where `block` /
-     * `inline` ask (`start` | `center` | `end` | `nearest`). Off-screen
-     * elements work: the whole document is laid out, so a row far below the
-     * fold has an exact rectangle to aim at.
-     */
     scrollIntoView(arg?: boolean | VnScrollIntoViewOptions): void;
     focus(): void;
     blur(): void;
-    /**
-     * HTML's synthetic click (runtime.ts): a `MouseEvent("click")` through the
-     * same capture/bubble walk a real click takes, then the activation
-     * behaviour if nobody cancelled it — so `a.click()` on an `<a href>`
-     * follows the link (http/https/mailto to the system, docs/SHELL.md §1).
-     * Does nothing on a disabled form control.
-     */
     click(): void;
-    /** Patched onto `Element.prototype` by window.prelude.js; makes the
-     *  WINDOW fullscreen and advises that per-element fullscreen is not a
-     *  thing here. */
     requestFullscreen(): Promise<void>;
   }
 
-  /**
-   * `<video>` / `<audio>`. Every member is read LIVE off the host
-   * (`__vn_media_prop` / `__vn_media_state`, crates/vn-video CONTRACT.md §6)
-   * rather than mirrored, so none of it is
-   * reactive — the EVENTS are what drive a UI, exactly as in a browser.
-   */
   interface VnMediaElement extends VnElement {
     currentTime: number;
     readonly duration: number;
@@ -351,8 +176,7 @@ declare global {
     loop: boolean;
     readonly videoWidth: number;
     readonly videoHeight: number;
-    /** A real `MediaError`: the message is the advisory naming what THIS
-     *  machine cannot decode. `null` when there is none. */
+    /** A real `MediaError`: the message is the advisory naming what THIS machine cannot decode. */
     readonly error: VnMediaError | null;
     play(): Promise<void>;
     pause(): void;
@@ -364,8 +188,6 @@ declare global {
     readonly message: string;
   }
 
-  /** What a media/lottie/transition event carries once `synthesize()` has
-   *  spread the payload onto it (runtime.ts §"mediaDetail"/"lottieDetail"). */
   interface VnMediaEvent extends VnEvent {
     readonly currentTime: number;
     readonly duration: number;
@@ -379,53 +201,29 @@ declare global {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Web Storage — crates/vn-storage/src/lib.rs (docs/STORAGE.md tier 1)
-// ---------------------------------------------------------------------------
-
 declare global {
   interface VnStorage {
     readonly length: number;
     key(index: number): string | null;
     getItem(key: string): string | null;
-    /** `value` is a STRING. A browser coerces whatever it is handed; so does
-     *  this. Typed strictly so the coercion is written down at the call site
-     *  rather than being invisible. */
+    /** Typed strictly so the coercion is written down at the call site rather than being invisible. */
     setItem(key: string, value: string): void;
     removeItem(key: string): void;
     clear(): void;
   }
-  /** Backed by a file under the app's storage folder; survives a restart. */
   var localStorage: VnStorage;
   /** Per-run, never written anywhere. */
   var sessionStorage: VnStorage;
 }
 
-// IndexedDB (`indexedDB`, `IDBKeyRange`, `DOMException`, `navigator.storage`)
-// is typed by the RUNTIME now — packages/vue-native/src/indexeddb.d.ts, listed
-// in apps/tsconfig.json — since its databases went on disk (m25 P2).
-
-// ---------------------------------------------------------------------------
-// fetch — merged onto engine.d.ts's `VnFetchResponse`
-// ---------------------------------------------------------------------------
-
 declare global {
   interface VnFetchResponse {
-    /** vendor/redjs/redjs/src/webapi/fetch.rs. AudioPage.vue feeds it
-     *  straight to `decodeAudioData`, which is the browser's own idiom. */
     arrayBuffer(): Promise<ArrayBuffer>;
   }
 
   /**
-   * `AbortController` / `AbortSignal` — vendor/redjs/redjs/src/webapi/abort.rs,
-   * the real WHATWG pair, and `webapi::install` calls `abort::install`
-   * UNCONDITIONALLY (no cargo feature, no host opt-in). So unlike `fetch` and
-   * `AudioContext` next door this one is not `| undefined`: a redjs that lacks
-   * it does not exist, and apps/devtools' request timeout depends on it.
-   *
-   * `fetch` reads `init.signal` (fetch.rs `signal_is_aborted`) and rejects with
-   * an `AbortError`, which is what makes a wedged target a message rather than
-   * a pane that waits forever.
+   * So unlike `fetch` and `AudioContext` next door this one is not `| undefined`: a redjs that
+   * lacks it does not exist, and apps/devtools' request timeout depends on it.
    */
   interface VnAbortSignal extends VnEventTarget {
     readonly aborted: boolean;
@@ -439,26 +237,12 @@ declare global {
   var AbortController: { new (): VnAbortController; prototype: VnAbortController };
 }
 
-// ---------------------------------------------------------------------------
-// WebSocket / Blob — vendor/redjs/redjs/src/webapi/{websocket,blob}.rs
-// ---------------------------------------------------------------------------
-//
-// redjs's own RFC 6455 client: a real EventTarget with real CloseEvent and
-// real binary frames. Nothing about the Lab page's use of it is native-specific.
-//
-// Blob / File / FileList / blob: URLs / DataTransfer are the File layer
-// (docs/DESKTOP.md "File layer"): webapi/{blob,file,url,uievents}.rs. A File
-// the host made from a picked or dropped path is read lazily, off the UI
-// thread, under Chromium's snapshot rule.
-
 declare global {
   type VnBlobPart = VnBlob | ArrayBuffer | ArrayBufferView | string;
   interface VnBlobPropertyBag {
     type?: string;
     endings?: "transparent" | "native";
   }
-  /** `stream()`'s result: redjs's ReadableStream (webapi/streams.rs +
-   *  streams.js) of `Uint8Array` chunks of at most 64 KiB. */
   interface VnByteStream extends AsyncIterable<Uint8Array> {
     getReader(): {
       read(): Promise<{ done: boolean; value?: Uint8Array }>;
@@ -482,8 +266,6 @@ declare global {
   interface VnFile extends VnBlob {
     readonly name: string;
     readonly lastModified: number;
-    /** @deprecated Not in the File API any more; Chromium and Safari still ship
-     *  it, and so does redjs (file.rs). A new Date each read. Use `lastModified`. */
     readonly lastModifiedDate: Date;
     readonly webkitRelativePath: string;
   }
@@ -492,20 +274,13 @@ declare global {
     prototype: VnFile;
   };
 
-  /** Made by the host only (`new FileList()` throws), like a browser's. */
   interface VnFileList extends Iterable<VnFile> {
     readonly length: number;
     item(index: number): VnFile | null;
     readonly [index: number]: VnFile;
   }
-  /** The construct signature is lib.dom's: calling it throws "Illegal
-   *  constructor", as in a browser, but without one `x instanceof FileList`
-   *  (zod's `z.instanceof(FileList)`) is a TS2359 error. */
   var FileList: { new (): VnFileList; prototype: VnFileList };
 
-  /** Merged onto engine.d.ts's `VnURLConstructor`: the blob URL store
-   *  (webapi/url.rs). `blob:<origin>/<uuid>`; `fetch()`, `<img src>` and
-   *  `<video src>` resolve it. */
   interface VnURLConstructor {
     createObjectURL(blob: VnBlob): string;
     revokeObjectURL(url: string): void;
@@ -516,8 +291,6 @@ declare global {
     readonly type: string;
     getAsString(callback: ((data: string) => void) | null): void;
     getAsFile(): VnFile | null;
-    /** Present only where the host provides it (File System Access) — feature
-     *  detect with `"getAsFileSystemHandle" in item`. */
     getAsFileSystemHandle?(): Promise<unknown | null>;
   }
   interface VnDataTransferItemList extends Iterable<VnDataTransferItem> {
@@ -541,20 +314,13 @@ declare global {
   }
   var DataTransfer: { new (): VnDataTransfer; prototype: VnDataTransfer };
 
-  /**
-   * `<input type=file>` as runtime.ts gives it (docs/DESKTOP.md §2.7): the
-   * members a browser's HTMLInputElement has for the file state. `files` takes
-   * a FileList (`input.files = dt.files`). `value` is `C:\fakepath\<name>`,
-   * and setting it to anything but "" throws InvalidStateError. A template ref
-   * to a file input is a `VnElement`; cast it to this once.
-   */
   interface VnFileInputElement extends VnElement {
     files: VnFileList;
     value: string;
     accept: string;
     multiple: boolean;
     webkitdirectory: boolean;
-    /** Opens the picker. Needs a user activation (NotAllowedError otherwise). */
+    /** Needs a user activation (NotAllowedError otherwise). */
     showPicker(): void;
   }
 
@@ -564,8 +330,6 @@ declare global {
     readonly wasClean: boolean;
   }
   interface VnMessageEvent extends VnEvent {
-    /** `string` for a text frame; a `Blob` or an `ArrayBuffer` for a binary
-     *  one, depending on `binaryType`. */
     readonly data: string | VnBlob | ArrayBuffer;
   }
 
@@ -592,15 +356,7 @@ declare global {
   };
 }
 
-// ---------------------------------------------------------------------------
-// File System Access, FileReader, the pickers — packages/vue-native/src/desktop.ts
-// over crates/vn-desktop (docs/DESKTOP.md §2)
-// ---------------------------------------------------------------------------
-//
-// A handle holds a host id, never a path: `JSON.stringify(handle)` is "{}".
-// Handles are [Serializable] (structuredClone, IndexedDB). A handle restored
-// in a later session is "prompt" until requestPermission() runs on a user
-// activation (D-F22). Every picker needs a user activation, else SecurityError.
+// Every picker needs a user activation, else SecurityError.
 
 declare global {
   type VnPermissionState = "granted" | "prompt";
@@ -616,9 +372,7 @@ declare global {
   }
   interface VnFileSystemFileHandle extends VnFileSystemHandle {
     readonly kind: "file";
-    /** A path-backed File, read lazily under the snapshot rule (§1.2). */
     getFile(): Promise<VnFile>;
-    /** Writes go to a swap file beside the target; close() replaces it atomically. */
     createWritable(options?: { keepExistingData?: boolean }): Promise<VnFileSystemWritableFileStream>;
   }
   interface VnFileSystemDirectoryHandle
@@ -639,7 +393,6 @@ declare global {
     | { type: "write"; position?: number | null; data: VnFileSystemWriteData }
     | { type: "seek"; position: number }
     | { type: "truncate"; size: number };
-  /** A WritableStream (redjs's streams.js) with the three FSA verbs. */
   interface VnFileSystemWritableFileStream {
     readonly locked: boolean;
     write(data: VnFileSystemWriteChunk): Promise<void>;
@@ -648,9 +401,8 @@ declare global {
     close(): Promise<void>;
     abort(reason?: unknown): Promise<void>;
   }
-  // The construct signatures are lib.dom's: calling one throws "Illegal
-  // constructor", but without it `x instanceof FileSystemFileHandle` does not
-  // type-check.
+  // The construct signatures are lib.dom's: calling one throws "Illegal constructor", but without
+  // it `x instanceof FileSystemFileHandle` does not type-check.
   var FileSystemHandle: { new (): VnFileSystemHandle; prototype: VnFileSystemHandle };
   var FileSystemFileHandle: { new (): VnFileSystemFileHandle; prototype: VnFileSystemFileHandle };
   var FileSystemDirectoryHandle: { new (): VnFileSystemDirectoryHandle; prototype: VnFileSystemDirectoryHandle };
@@ -659,11 +411,9 @@ declare global {
   type VnWellKnownDirectory = "desktop" | "documents" | "downloads" | "music" | "pictures" | "videos";
   interface VnFilePickerAcceptType {
     description?: string;
-    /** MIME type → extensions, each starting with ".". */
     accept: Record<string, string | string[]>;
   }
   interface VnFilePickerOptions {
-    /** Up to 32 of [A-Za-z0-9_-]: the dialog remembers its folder per id, per app. */
     id?: string;
     startIn?: VnWellKnownDirectory | VnFileSystemHandle;
     types?: VnFilePickerAcceptType[];
@@ -680,10 +430,7 @@ declare global {
     startIn?: VnWellKnownDirectory | VnFileSystemHandle;
     mode?: "read" | "readwrite";
   }
-  /** AbortError when dismissed; NotAllowedError "File picker already active." while
-   *  the window has a dialog open; SecurityError without a user activation. */
   function showOpenFilePicker(options?: VnOpenFilePickerOptions): Promise<VnFileSystemFileHandle[]>;
-  /** The picked file is created empty, or truncated (FSA step 7.7). */
   function showSaveFilePicker(options?: VnSaveFilePickerOptions): Promise<VnFileSystemFileHandle>;
   function showDirectoryPicker(options?: VnDirectoryPickerOptions): Promise<VnFileSystemDirectoryHandle>;
 
@@ -692,13 +439,11 @@ declare global {
     readonly loaded: number;
     readonly total: number;
   }
-  /** redjs ships none; desktop.ts installs one where the engine has none. */
   var ProgressEvent: {
     new (type: string, init?: VnEventInit & { lengthComputable?: boolean; loaded?: number; total?: number }): VnProgressEvent;
     prototype: VnProgressEvent;
   };
 
-  /** The File API's FileReader (desktop.ts), over Blob.arrayBuffer(). */
   interface VnFileReader extends VnEventTarget {
     readonly readyState: 0 | 1 | 2;
     readonly result: string | ArrayBuffer | null;
@@ -728,21 +473,7 @@ declare global {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Web Audio — vendor/redjs/redjs/src/webapi/audio.rs, behind vn-app's `audio`
-// cargo feature
-// ---------------------------------------------------------------------------
-//
-// `AudioContext` is declared `| undefined` ON PURPOSE, and engine.d.ts's own
-// comment is the reason: `vn-app --no-default-features` is a legitimate host
-// with no Web Audio at all, so the implementation is ABSENT rather than
-// stubbed and `typeof AudioContext !== "undefined"` is the honest question.
-// Declaring it non-optional would make AudioPage.vue's feature probe look
-// redundant when it is the whole story.
-
 declare global {
-  /** Merged onto engine.d.ts's `VnAudioContext`, which types only the two
-   *  members a native stream source uses. */
   interface VnAudioContext {
     readonly state: "suspended" | "running" | "closed";
     readonly sampleRate: number;
@@ -752,53 +483,25 @@ declare global {
     createAnalyser(): VnAnalyserNode;
     createBuffer(channels: number, frames: number, sampleRate: number): VnAudioBuffer;
     createBufferSource(): VnAudioBufferSourceNode;
-    /** 1..32 outputs, default 6; outside that is an `IndexSizeError`. */
     createChannelSplitter(numberOfOutputs?: number): VnChannelSplitterNode;
-    /** 1..32 mono inputs, default 6; outside that is an `IndexSizeError`. */
     createChannelMerger(numberOfInputs?: number): VnChannelMergerNode;
     decodeAudioData(bytes: ArrayBuffer): Promise<VnAudioBuffer>;
     resume(): Promise<void>;
     suspend(): Promise<void>;
-    /**
-     * OVERLOAD, deliberately added here: engine.d.ts's
-     * `VnRedStreamSourceOptions` declares all four fields REQUIRED, but
-     * `webapi/audio.rs` (`ctx_create_red_stream_source`, and its own doc
-     * comment at §"`options`: `{ sampleRate?, channelCount?, latencySeconds?,
-     * capacitySeconds? }`") defaults every one of them — `createRedStreamSource()`
-     * with no argument at all is legal and its Rust test covers it. Reported;
-     * the fix belongs in engine.d.ts.
-     */
     createRedStreamSource(options?: Partial<VnRedStreamSourceOptions>): VnRedStreamSourceNode;
   }
 
-  /** The PUSH seam. engine.d.ts types `streamId` and `close?` — what a native
-   *  stream source needs — and not the producer-side surface a JS feeder uses, which is
-   *  the rest of this. redjs::webapi::pcm. */
   interface VnRedStreamSourceNode {
-    /** Frames actually accepted; less than `block.length` means the channel
-     *  was full and the rest was dropped rather than blocking. */
     push(block: Float32Array): number;
-    /** How deep the channel is right now. Reads `latencySeconds` the instant
-     *  the node exists — `fixed_resample` PRE-FILLS with silence. */
     readonly queuedSeconds?: number;
-    /** Is the device pulling from this stream at all? */
     readonly ready: boolean;
-    /** Read-and-clear on the host side, which is what makes a rare glitch
-     *  visible after the fact. */
     readonly underflowed: boolean;
     readonly overflowed: boolean;
   }
 
   /**
-   * A `GainNode` whose `gain` is the WHOLE AudioParam.
-   *
-   * NOT a merge onto engine.d.ts's `VnGainNode`, which already declares
-   * `readonly gain: { value: number }` — the `.value` half — and a merge cannot narrow a property that is already
-   * there. The timeline half is just as real: `webapi/audio.rs` implements
-   * `setValueAtTime` / `linearRampToValueAtTime` /
-   * `exponentialRampToValueAtTime` / `cancelScheduledValues`, and AudioPage.vue
-   * exercises them on purpose ("so the AudioParam timeline is exercised, not
-   * just `.value`"). Reported; the fix belongs in engine.d.ts.
+   * NOT a merge onto engine.d.ts's `VnGainNode`, which already declares `readonly gain: { value:
+   * number }` — the `.value` half — and a merge cannot narrow a property that is already there.
    */
   interface VnGainNodeWithParam extends VnAudioNode {
     readonly gain: VnAudioParam;
@@ -845,9 +548,6 @@ declare global {
     stop(when?: number): void;
   }
 
-  /** Merged onto engine.d.ts's `VnAudioNode` (connect/disconnect by index,
-   *  webapi/audio.rs `node_connect` / `node_disconnect`). An output or input
-   *  past the node's count is an `IndexSizeError`. */
   interface VnAudioNode {
     readonly numberOfInputs: number;
     readonly numberOfOutputs: number;
@@ -855,27 +555,15 @@ declare global {
     disconnect(outputOrDestination?: number | VnAudioNode, output?: number, input?: number): void;
   }
 
-  /**
-   * The channel attributes exist on these two nodes only, a deviation named
-   * in vendor/redjs/README.md's Web Audio row. The spec pins each of them
-   * here: a change is an `InvalidStateError`, the current value is allowed.
-   */
   interface VnChannelSplitterNode extends VnAudioNode {
-    /** = `numberOfOutputs`, fixed. */
     channelCount: number;
-    /** `"explicit"`, fixed. */
     channelCountMode: string;
-    /** `"discrete"`, fixed. */
     channelInterpretation: string;
   }
 
   interface VnChannelMergerNode extends VnAudioNode {
-    /** 1, fixed. */
     channelCount: number;
-    /** `"explicit"`, fixed. */
     channelCountMode: string;
-    /** `"speakers"` (default) or `"discrete"`: how a stereo connection
-     *  into one mono input is down-mixed. */
     channelInterpretation: string;
   }
 
@@ -895,51 +583,30 @@ declare global {
   };
 
   var AudioContext: { new (): VnAudioContext; prototype: VnAudioContext } | undefined;
-  /** Probed by AudioPage's capability matrix and genuinely absent — there is
-   *  no offline rendering. Declared so the probe compiles; `undefined` is the
-   *  honest type. */
+  /** Declared so the probe compiles; `undefined` is the honest type. */
   var OfflineAudioContext: undefined;
 }
 
-// ---------------------------------------------------------------------------
-// host-published globals
-// ---------------------------------------------------------------------------
-//
-// None of these is a web API and none pretends to be. They are values the HOST
-// writes onto the global before the bundle evaluates, so an app that does not
-// look for one never notices it is missing — which is why every one of them is
-// optional here.
-
 declare global {
   /**
-   * vue-native's identity flag, the one exception to "optional" above: it is
-   * ALWAYS there under vue-native, so its type is `true`. It is for an app's
-   * own adaptations to the host, `if (globalThis.isVn) …`, without importing
+   * It is for an app's own adaptations to the host, `if (globalThis.isVn) …`, without importing
    * "vue-native" (which a browser build of the same app cannot resolve).
-   * Every browser leaves it `undefined`, so code shared with a browser build
-   * declares it `true | undefined` there. Read-only and non-configurable:
-   * crates/vn-app/src/prelude.ts defines it before the bundle evaluates.
-   * Prefer feature detection for a web API; this is for the host itself.
    */
   var isVn: true;
 
-  /**
-   * `VN_SCENARIO=<name>` — pins the app to one screen at boot, so a soak or a
-   * frame-time measurement is ONE process, ONE screen and no input.
-   * `crates/vn-app/src/main.rs` publishes it (`globalThis.__VN_SCENARIO__ = …`).
-   */
   var __VN_SCENARIO__: string | undefined;
 
-  /** `VN_HTTP_ORIGIN` — where MediaPage points its http(s) `src` demos, so the
-   *  page can be aimed at a real server without an internet dependency. */
+  /**
+   * `VN_HTTP_ORIGIN` — where MediaPage points its http(s) `src` demos, so the page can be aimed at
+   * a real server without an internet dependency.
+   */
   var __VN_HTTP_ORIGIN__: string | undefined;
 
-  /** Flushes the host profiler's window and relabels the following seconds, so
-   *  `VN_PERF=1`'s log reads as one block per imgperf scenario. Installed only
-   *  under `VN_PERF`. */
   var __vn_perf_mark: ((name: string) => void) | undefined;
 
-  /** The scenario driver reaches VoicePage's verbs through `ctl.ts eval`, so
-   *  the page publishes them under a known name. */
+  /**
+   * The scenario driver reaches VoicePage's verbs through `ctl.ts eval`, so the page publishes
+   * them under a known name.
+   */
   var __voice: Record<string, (...args: never[]) => unknown> | undefined;
 }

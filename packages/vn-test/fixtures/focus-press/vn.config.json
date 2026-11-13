@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/focus-press.spec.ts: which element a press focuses, and where its focus events fall among the mouse events (docs/RUNTIME.md §5.22). See ../README.md.",
-
   "name": "vn-test-focus-press",
 
   "window": {

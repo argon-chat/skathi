@@ -1,60 +1,3 @@
-// A media viewer as its own window, the way Telegram Desktop's is
-// (docs/MULTIWINDOW.md §7.9).
-//
-//   bun test packages/vn-test/specs/lightbox.spec.ts
-//
-// `fixtures/lightbox` keeps a `<VnWindow visible=false cover="monitor"
-// :taskbar=false fullResolution>` warm from boot, and a thumbnail's click
-// shows it. The claims, in order:
-//
-//   * the warm window exists before anybody asks for it: hidden, owned by the
-//     main window, no taskbar button (`WS_EX_APPWINDOW` off, not a tool
-//     window), no frame (`WS_POPUP`, no `WS_THICKFRAME`), and small;
-//   * a click SHOWS it — the same window every time — covering the whole
-//     monitor the main window is on, its first frame drawn before it appears;
-//   * Esc, a click on the dim and the arrows reach the viewer, and closing
-//     hides it, leaves the main window's focused field where it was, and the
-//     next open is a show again;
-//   * click → first frame, p50 and p95 over 20 opens, for a picture already
-//     decoded and for one that is not (the thumbnail is what the first frame
-//     shows; the full picture's load is reported beside it);
-//   * the private working set and the GPU memory warm-hidden, open, and
-//     hidden 30 s after a close, when the window has gone back to its warm
-//     size;
-//   * a picture in a `fullResolution` window keeps its full decode while the
-//     same kind of picture drawn as small in the main window is reduced, and
-//     the pin goes when the window stops showing it;
-//   * Ctrl+wheel zooms about the pointer — the picture's point under it stays
-//     under it, which needs the wheel's `clientX`/`clientY` — and a plain wheel
-//     does nothing; a drag pans a zoomed picture no further than Telegram's
-//     clamp, a drag that ends on the dim does not close the viewer, and one
-//     that ends on the picture leaves the next click on the dim its own;
-//   * a right click opens a menu teleported to `body` from inside the viewer:
-//     it is painted IN the viewer, where the click was, and its nodes are in
-//     the viewer's document (the viewport floating-ui measures), whose body
-//     is the window's root, attributes and all; a Teleport that mounted with
-//     the content is in the viewer too. A press outside the menu dismisses it
-//     the way reka-ui's layer does, with no click on the dim. "Go to message"
-//     closes the viewer; "Copy" puts the picture on the clipboard as its PNG
-//     and as the bitmaps other apps paste (read back from this process, and
-//     by the app; the clipboard is put back afterwards); "Save As..." asks the
-//     save dialog with a suggested name and writes the picture's own bytes;
-//   * a chat preview muted through its properties before its `src` plays
-//     without sound, the viewer's video with the same `src` plays with it, and
-//     closing the viewer silences it, and the hidden viewer's draw after the
-//     hide survives the video's frame it may still have queued; a video taken
-//     out of the document is paused, hears `pause`, and is still paused when
-//     it comes back.
-//
-// Quiet: vn-test runs `VN_WINDOW_FOCUS=never`, so the viewer is shown without
-// activation and stays in the z-order just above its owner, which vn-test
-// sends to the bottom — the spec logs whether it was behind the foreground
-// window. Each show is closed again within a second or two. What this file
-// CANNOT prove quietly is that a foreground viewer is above the taskbar (the
-// shell drops the taskbar only for an ACTIVE full-screen window) and that a
-// close hands the activation back to the main window: both need the
-// foreground, which a spec on a machine in use must not take.
-
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { dlopen, FFIType } from "bun:ffi";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
@@ -65,10 +8,6 @@ import { png } from "../fixtures/http-images/server";
 
 const T = 120_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-// ---------------------------------------------------------------------------
-// pictures: a thumbnail and a full one per item, served over loopback
-// ---------------------------------------------------------------------------
 
 const bodies = new Map<string, Uint8Array>();
 const body = (key: string, seed: number, size: number) => {
@@ -90,11 +29,9 @@ const server = Bun.serve({
   },
 });
 const base = `http://127.0.0.1:${server.port}`;
-// Made up front, so a load time is the host's and not this process's deflate.
 for (let i = 0; i < 24; i++) body(`full-${i}`, i, 1600);
 for (const i of [1, 2]) body(`big-${i}`, i, 2400);
 const RUN = process.pid;
-/** Distinct per run, so nothing comes out of a previous run's disk cache. */
 const item = (i: number) => ({ thumb: `${base}/thumb/${i}.png?r=${RUN}`, full: `${base}/full/${i}.png?r=${RUN}`, messageId: `m-${i}` });
 
 const exe = process.env.VN_LIGHTBOX_EXE;
@@ -109,9 +46,7 @@ afterAll(() => {
   server.stop(true);
 });
 
-// ---------------------------------------------------------------------------
 // reading the windows back
-// ---------------------------------------------------------------------------
 
 type Popout = {
   node: number;
@@ -153,7 +88,6 @@ const user32 = dlopen("user32.dll", {
   GetWindow: { args: [FFIType.u64, FFIType.u32], returns: FFIType.u64 },
 });
 const GW_HWNDPREV = 3;
-/** Is the foreground window above `hwnd` in the z-order? */
 function behindForeground(hwnd: number): boolean {
   const fg = user32.symbols.GetForegroundWindow();
   if (fg === 0n || fg === BigInt(hwnd)) return false;
@@ -192,8 +126,6 @@ const pct = (xs: number[], p: number) => {
 };
 const round = (n: number) => Math.round(n * 10) / 10;
 
-/** Clicks thumbnail `i` (a real platform click in the main window) and waits
- *  for the show. Returns the show's event. */
 async function openByClick(i: number) {
   const before = (await lb<unknown[]>("S.events")).length;
   await app.locator(`#thumb-${i}`).click({ real: true });
@@ -227,21 +159,15 @@ describe("lightbox", () => {
     expect(v.visible).toBe(false);
     expect(v.shown).toBe(false);
     expect(v.cover).toBe(true);
-    // Owned by the main window and not an app window: no taskbar button, one
-    // Alt-Tab entry for the pair. Not a tool window either (§7.9).
     expect(v.ownedByMain).toBe(true);
     expect(v.appWindow).toBe(false);
     expect(v.toolWindow).toBe(false);
-    // No frame: a popup, no sizing border, and not opted out of the shell's
-    // full-screen detection.
     expect(v.popup).toBe(true);
     expect(v.thickFrame).toBe(false);
     expect(v.nonRude).toBe(false);
-    // Warm SMALL: a hidden window keeps its swapchain.
     const [l, t, r, b] = v.rect!;
     expect(r - l).toBe(64);
     expect(b - t).toBe(64);
-    // The thumbnails are in, and the memory is the warm-hidden one.
     await until("the thumbnails to load", async () => (await app.query(".thumb")).count === 24);
     await sleep(1500);
     report.warmHidden = await mem();
@@ -254,28 +180,26 @@ describe("lightbox", () => {
     const v = await viewer();
     const scale = await scaleOf(v);
     report.quietBehindForeground = behindForeground(v.hwnd);
-    // Closed before anything is asserted: a failure must not leave a
-    // monitor-sized window up for the rest of the file.
+    // Closed before anything is asserted: a failure must not leave a monitor-sized window up for
+    // the rest of the file.
     await closeByEscape();
     report.firstShow = { shown, scale, rect: v.rect, monitor: v.mainMonitor };
     expect(v.windowId).toBe(before.windowId);
     expect(v.shown).toBe(true);
     expect(v.rect).toEqual(v.mainMonitor);
     expect(shown.firstFrameMs).toBeGreaterThan(0);
-    // The viewport the first frame was laid out in is the monitor's.
     const [l, t, r, b] = v.mainMonitor!;
     expect(Math.abs(shown.width * scale - (r - l))).toBeLessThan(2);
     expect(Math.abs(shown.height * scale - (b - t))).toBeLessThan(2);
     expect(await lb<string[]>("S.closes")).toEqual(["escape"]);
-    // Still the one warm window, hidden.
     const after = await popouts();
     expect(after.length).toBe(2);
     expect((await viewer()).windowId).toBe(before.windowId);
   }, T);
 
   test("the viewer's focus is its own: the main window's field keeps the main window's", async () => {
-    // Opened the way a shortcut would open it: a click on a thumbnail is a
-    // press on something unfocusable, which blurs the field in a browser too.
+    // Opened the way a shortcut would open it: a click on a thumbnail is a press on something
+    // unfocusable, which blurs the field in a browser too.
     await app.send("focus", { selector: "#composer" });
     const composer = (await app.query("#composer")).nodes[0]!.id;
     const mainFocus = async () => (await app.send("mouse", { x: 470, y: 310, kind: "move" })).focused;
@@ -283,15 +207,9 @@ describe("lightbox", () => {
     const before = (await lb<unknown[]>("S.events")).length;
     await app.eval(`__VN_TEST_LB__.open(1); "ok"`);
     await until("the show", async () => (await lb<{ kind: string }[]>("S.events")).slice(before).some((e) => e.kind === "show"));
-    // The keys reach the viewer's own focused element…
     await app.send("key", { selector: "#lb", key: "ArrowRight" });
     await until("the step", async () => (await lb<number>("S.index")) === 2);
-    // …and the main window's focus never moved. That is what the keyboard
-    // reaches once the main window is active again. (`document.activeElement`
-    // is the realm's one answer and reads `body` after the close, as it does
-    // after a browser's in-page viewer closes; with real activation gpui
-    // reports the field's focus again when the main window comes back, which
-    // a quiet run never sees.)
+    // …and the main window's focus never moved.
     expect(await mainFocus()).toBe(composer);
     await closeByEscape();
     expect(await mainFocus()).toBe(composer);
@@ -305,7 +223,6 @@ describe("lightbox", () => {
     await app.send("key", { selector: "#lb", key: "ArrowLeft" });
     await until("the step back to 2", async () => (await lb<number>("S.index")) === 1);
     const v = await viewer();
-    // The dim's own corner: not the stage, which starts at 5 %.
     const before = (await lb<unknown[]>("S.events")).length;
     expect(await app.eval(`__vn_window_click(${v.node}, 4, 4)`)).toBe(true);
     await until("the hide", async () => (await lb<{ kind: string }[]>("S.events")).slice(before).some((e) => e.kind === "hide"));
@@ -316,11 +233,8 @@ describe("lightbox", () => {
     const v = await viewer();
     const r = await app.eval(`JSON.stringify(__VN_TEST_LB__.mapThumb(0))`);
     const rect = JSON.parse(r) as { x: number; y: number; width: number; height: number };
-    // 40 CSS px in the main window; the same physical size in the viewer,
-    // which is on the same monitor at the same scale.
     expect(Math.abs(rect.width - 40)).toBeLessThan(0.5);
     expect(Math.abs(rect.height - 40)).toBeLessThan(0.5);
-    // Inside the monitor the viewer covers.
     const [l, t, rr, b] = v.mainMonitor!;
     const s = await scaleOf(v);
     expect(rect.x).toBeGreaterThanOrEqual(-1);
@@ -330,7 +244,6 @@ describe("lightbox", () => {
   }, T);
 
   test("click → first frame over 20 opens: a decoded picture, and one that is not", async () => {
-    // Decoded: item 0's full picture was shown above; open it again and again.
     const cached: { first: number; js: number }[] = [];
     for (let n = 0; n < 20; n++) {
       const s = await openByClick(0);
@@ -338,8 +251,7 @@ describe("lightbox", () => {
       if (n === 0) report.open = await mem();
       await closeByEscape();
     }
-    // Not decoded: a picture never asked for before, every time. The first
-    // frame shows the thumbnail, which the main window already has.
+    // Not decoded: a picture never asked for before, every time.
     const uncached: { first: number; js: number; load: number }[] = [];
     for (let n = 0; n < 20; n++) {
       const i = 4 + n;
@@ -359,7 +271,6 @@ describe("lightbox", () => {
         clickToFullLoadMs: sum(uncached.map((c) => c.load)),
       },
     };
-    // Sanity, not the target: the target is a release build's (the report).
     expect(cached.every((c) => c.first > 0 && c.js > 0)).toBe(true);
   }, 240_000);
 
@@ -392,7 +303,6 @@ describe("lightbox", () => {
       20_000,
     );
     expect(pinned.keptFull.fullResWindow).toBe(1);
-    // Hidden, the window stops showing it, and the pin goes with the next sweep.
     await app.eval(`__VN_TEST_LB__.S.pinOpen = false; "ok"`);
     await until("the pin to go", async () => (await mem()).residency.keptFull.fullResWindow === 0, 10_000);
     report.residency = { before, pinned };
@@ -404,8 +314,6 @@ describe("lightbox", () => {
     try {
       const id = (await viewer()).windowId;
       const r0 = await until("the picture's box", () => lb<PicRect | null>("picRect()"));
-      // A point off the centre, inside the picture: the picture's point under
-      // the pointer, as a fraction of it, has to stay under it.
       const x = r0.left + r0.width * 0.62;
       const y = r0.top + r0.height * 0.57;
       const u = (x - r0.left) / r0.width;
@@ -414,7 +322,6 @@ describe("lightbox", () => {
       const before = (await wheels()).length;
       await app.send("wheel", { x, y, dy: 120, window: id });
       const plain = await until("the plain wheel", async () => (await wheels()).slice(before)[0]);
-      // The wheel is a MouseEvent: it says where it happened.
       expect(plain.ctrl).toBe(false);
       expect(Math.abs(plain.x - x)).toBeLessThan(1.5);
       expect(Math.abs(plain.y - y)).toBeLessThan(1.5);
@@ -428,7 +335,6 @@ describe("lightbox", () => {
           const z = await lb<number>("S.zoom");
           return z > zoomBefore + 0.01 ? z : 0;
         });
-        // The rect once the transform is the new one.
         const r = await until(`notch ${n}'s box`, async () => {
           const rr = await lb<PicRect>("picRect()");
           return Math.abs(rr.width - r0.width * zoom) < 1 ? rr : null;
@@ -466,8 +372,6 @@ describe("lightbox", () => {
         await sleep(150);
         return lb<PicRect>("picRect()");
       };
-      // Twice the size: both axes overflow. A drag far past the edge stops
-      // with the picture's edge on the window's.
       const z2 = await zoomTo(2);
       const centre: [number, number] = [z2.vw / 2, z2.vh / 2];
       const toBottomRight = await dragTo(centre, [z2.vw - 3, z2.vh - 3]);
@@ -478,8 +382,8 @@ describe("lightbox", () => {
       expect(Math.abs(toBottomRight.top)).toBeLessThan(1.5);
       expect(Math.abs(toTopLeft.left + toTopLeft.width - toTopLeft.vw)).toBeLessThan(1.5);
       expect(Math.abs(toTopLeft.top + toTopLeft.height - toTopLeft.vh)).toBeLessThan(1.5);
-      // Barely zoomed: it fits, so it stays centred whatever the drag — and
-      // the drag ends on the dim, which must not close the viewer.
+      // Barely zoomed: it fits, so it stays centred whatever the drag — and the drag ends on the
+      // dim, which must not close the viewer.
       const small = await zoomTo(1.04);
       const clicks = await lb<number>("S.dimClicks");
       const closes = (await lb<string[]>("S.closes")).length;
@@ -490,8 +394,6 @@ describe("lightbox", () => {
       expect(Math.abs(after.top + after.height / 2 - after.vh / 2)).toBeLessThan(1.5);
       expect((await lb<string[]>("S.closes")).length).toBe(closes);
       expect((await viewer()).visible).toBe(true);
-      // A drag that ends on the picture leaves no swallowed click behind: the
-      // next click on the dim closes.
       await dragTo([small.vw / 2, small.vh / 2], [small.vw / 2 + 60, small.vh / 2 + 40]);
       const before = (await lb<unknown[]>("S.events")).length;
       await app.send("mouse", { x: 4, y: 4, kind: "click", window: id });
@@ -508,26 +410,20 @@ describe("lightbox", () => {
     try {
       const m = await openMenu(0.3, 0.4);
       report.menu = m;
-      // Teleported to `body` from inside the viewer: it is the viewer's.
       expect(m.inWindow).toBe(true);
       expect(Math.abs(m.left - m.x)).toBeLessThan(1.5);
       expect(Math.abs(m.top - m.y)).toBeLessThan(1.5);
-      // Its document is the viewer's: the viewport floating-ui keeps a menu in
-      // is the viewer's width, not the 480 px main window's.
       expect(m.sameDocument).toBe(false);
       expect(m.bodyIsRoot).toBe(true);
       expect(Math.abs(m.docWidth - m.vw)).toBeLessThan(1.5);
       expect(m.mainWidth).toBeLessThan(m.docWidth);
-      // The window's root is that `body`, with the attribute `<VnWindow>` was
-      // given; the layer's `pointer-events: none` is on it, not the main one.
       expect(m.rootClass.split(" ").sort()).toEqual(["lb-window", "vn-window-root"]);
       expect(m.bodyPointerEvents).toBe("none");
       expect(await app.eval(`JSON.stringify(document.body.style.pointerEvents)`)).toBe(`""`);
-      // A Teleport that mounted with the content, before that was in the
-      // document, is the viewer's too.
+      // A Teleport that mounted with the content, before that was in the document, is the viewer's
+      // too.
       expect(m.hintInWindow).toBe(true);
       const before = (await lb<unknown[]>("S.events")).length;
-      // A real click in the viewer: the menu is hit there, or not at all.
       await clickInViewer("#lb-menu-goto");
       await until("the hide", async () => (await lb<{ kind: string }[]>("S.events")).slice(before).some((e) => e.kind === "hide"));
       expect((await lb<string[]>("S.actions")).at(-1)).toBe("goto:m-1");
@@ -546,16 +442,15 @@ describe("lightbox", () => {
       const closes = (await lb<string[]>("S.closes")).length;
       const dims = await lb<number>("S.dimClicks");
       const dismissals = (await lb<string[]>("S.dismissals")).length;
-      // The dim's corner, which the layer's `body { pointer-events: none }`
-      // covers: the window's root takes the press, as a browser's document
-      // would, and the layer's `document` listener hears it.
+      // The dim's corner, which the layer's `body { pointer-events: none }` covers: the window's
+      // root takes the press, as a browser's document would, and the layer's `document` listener
+      // hears it.
       await app.send("mouse", { x: 4, y: 4, kind: "click", window: id });
       await until("the dismissal", async () => (await lb<string[]>("S.dismissals")).length > dismissals);
       await until("the menu gone", async () => (await lb<MenuInfo | null>("menuInfo()")) === null);
       expect((await lb<string[]>("S.closes")).length).toBe(closes);
       expect(await lb<number>("S.dimClicks")).toBe(dims);
       expect((await viewer()).visible).toBe(true);
-      // The layer gave the body its pointer events back: a click on the dim closes now.
       const before = (await lb<unknown[]>("S.events")).length;
       await app.send("mouse", { x: 4, y: 4, kind: "click", window: id });
       await until("the hide", async () => (await lb<{ kind: string }[]>("S.events")).slice(before).some((e) => e.kind === "hide"));
@@ -576,17 +471,14 @@ describe("lightbox", () => {
       const done = await until("the copy", async () => (await lb<string[]>("S.actions")).slice(before).find((a) => a.startsWith("copy:")), 15_000);
       const bytes = body("full-2", 2, 1600);
       expect(done).toBe(`copy:ok:${bytes.length}`);
-      // What another app sees: the PNG as it was fetched…
       const asPng = clipboardFormat("PNG");
       expect(asPng?.length).toBe(bytes.length);
       expect(Buffer.from(asPng!).equals(Buffer.from(bytes))).toBe(true);
-      // …and a 32-bit bitmap of it, twice: CF_DIBV5 (with alpha) and CF_DIB.
       const v5 = dibHeader(clipboardFormat(CF_DIBV5)!);
       const dib = dibHeader(clipboardFormat(CF_DIB)!);
       report.copy = { pngBytes: asPng?.length, v5, dib };
       expect(v5).toMatchObject({ headerSize: 124, width: 1600, height: 1600, bits: 32 });
       expect(dib).toMatchObject({ width: 1600, height: 1600, bits: 32 });
-      // And a paste in the app reads it back as the PNG.
       await app.eval(`__VN_TEST_LB__.readBack(); "ok"`);
       const back = await until("the read back", () => lb<string>("S.readBack"));
       expect(back).toBe(`image/png:${bytes.length}:137`);
@@ -614,7 +506,6 @@ describe("lightbox", () => {
       const done = await until("the save", async () => (await lb<string[]>("S.actions")).slice(before).find((a) => a.startsWith("save:")), 15_000);
       const bytes = body("full-3", 3, 1600);
       expect(done).toBe(`save:ok:picture-3.png:${bytes.length}`);
-      // The bytes the server sent, not a re-encode.
       expect(Buffer.from(readFileSync(out)).equals(Buffer.from(bytes))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -624,8 +515,8 @@ describe("lightbox", () => {
 
   test("a muted preview is silent, the viewer's video is heard, and closing the viewer silences it", async () => {
     await ensureItems();
-    // The chat's preview: muted and played through its properties before its
-    // `src`, as Argon's VideoPlayer does in `onMounted`.
+    // The chat's preview: muted and played through its properties before its `src`, as Argon's
+    // VideoPlayer does in `onMounted`.
     await app.eval(`__VN_TEST_LB__.S.inlineSrc = "/src/av-silent.mp4"; __VN_TEST_LB__.S.inlineOn = true; "ok"`);
     try {
       const playing = await until("the preview to play", async () => {
@@ -636,20 +527,17 @@ describe("lightbox", () => {
       await sleep(300);
       const preview = await videos();
       expect(preview).toEqual({ videos: 1, audible: 0 });
-      // The viewer's video, the same `src`, with sound.
       const n = (await lb<unknown[]>("S.items")).length;
       await app.eval(`__VN_TEST_LB__.S.items.push(${JSON.stringify({ ...item(99), video: "/src/av-silent.mp4" })}); "ok"`);
       const before = (await lb<unknown[]>("S.events")).length;
       await app.eval(`__VN_TEST_LB__.open(${n}); "ok"`);
       await until("the show", async () => (await lb<{ kind: string }[]>("S.events")).slice(before).some((e) => e.kind === "show"));
-      // Only the viewer's is heard: nothing is shared between two elements with one `src`.
       const heard = await until("the viewer's video to be heard", async () => {
         const v = await videos();
         return v.audible === 1 ? v : null;
       }, 20_000);
       expect(heard.videos).toBe(2);
       expect((await lb<{ muted: boolean }>("inlineState()")).muted).toBe(true);
-      // Closed while playing: its sound stops.
       const t0 = performance.now();
       await closeByEscape();
       const quiet = await until("silence", async () => {
@@ -658,11 +546,6 @@ describe("lightbox", () => {
       }, 5_000);
       report.audio = { preview, heard, quietAfterCloseMs: round(performance.now() - t0), quiet };
       expect(quiet.videos).toBe(1);
-      // The hidden viewer draws once 500 ms after the hide, and a frame of the
-      // video it showed can still be queued for it then. That frame's texture
-      // went with the video's player: the upload read freed memory and the
-      // host died here, about one run in two, until the queue held its own
-      // reference.
       await sleep(900);
       expect((await videos()).videos).toBe(1);
       await app.eval(`__VN_TEST_LB__.S.items.pop(); "ok"`);
@@ -678,8 +561,6 @@ describe("lightbox", () => {
         const s = await lb<{ paused: boolean } | null>("inlineState()");
         return s && !s.paused;
       }, 20_000);
-      // Counted from here: the last test's preview, removed as it ended, may
-      // still be hearing its own `pause`.
       const before = (await lb<string[]>("S.inlineEvents")).length;
       expect(await app.eval(`__VN_TEST_LB__.detachInline()`)).toBe(true);
       await until("its pause", async () => (await lb<string[]>("S.inlineEvents")).slice(before).includes("pause"), 5_000);
@@ -701,14 +582,12 @@ describe("lightbox", () => {
 
 type PicRect = { left: number; top: number; width: number; height: number; vw: number; vh: number };
 
-/** The items the first test sets, for a test run on its own (`-t`). */
 async function ensureItems() {
   if ((await lb<unknown[]>("S.items")).length >= 24) return;
   await app.eval(`__VN_TEST_LB__.S.items = ${JSON.stringify(Array.from({ length: 24 }, (_, i) => item(i)))}; "ok"`);
   await until("the warm viewer", async () => (await viewer())?.hwnd);
 }
 
-/** The fixture's `menuInfo()`. */
 interface MenuInfo {
   left: number;
   top: number;
@@ -722,7 +601,6 @@ interface MenuInfo {
   hintInWindow: boolean;
 }
 
-/** A right click on the picture at (`fx`, `fy`) of it; the menu, and where the click was. */
 async function openMenu(fx: number, fy: number) {
   const id = (await viewer()).windowId;
   const r = await until("the picture's box", () => lb<PicRect | null>("picRect()"));
@@ -733,7 +611,6 @@ async function openMenu(fx: number, fy: number) {
   return { ...m, x, y, vw: r.vw };
 }
 
-/** A real click at the centre of `selector`, in the viewer's own client space. */
 async function clickInViewer(selector: string) {
   const id = (await viewer()).windowId;
   const r = JSON.parse(
@@ -742,7 +619,6 @@ async function clickInViewer(selector: string) {
   await app.send("mouse", { x: r.left + r.width / 2, y: r.top + r.height / 2, kind: "click", window: id });
 }
 
-/** `<video>` elements alive, and how many the platform is playing the sound of. */
 async function videos(): Promise<{ videos: number; audible: number }> {
   const m = await app.send("mem", {});
   const find = (o: any, key: string): any => {
@@ -757,7 +633,6 @@ async function videos(): Promise<{ videos: number; audible: number }> {
   return { videos: find(m, "videos") ?? -1, audible: find(m, "videosAudible") ?? -1 };
 }
 
-/** The viewer's device px per CSS px — the main window's, on the same monitor. */
 async function scaleOf(_v: Popout): Promise<number> {
   return Number(await app.eval("devicePixelRatio"));
 }

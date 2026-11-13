@@ -1,28 +1,13 @@
-# Both flags are load-bearing — verified by the integration spike (research/reports/fill-0.md):
+# +crt-static: the JSC prebuilt, redjs's C++ glue and yoga are all /MT; mixing libcmt with
+# msvcrt gives two heaps and allocator-crossing crashes.
 #
-# +crt-static: the bun-webkit JSC prebuilt, redjs's C++ glue and vendored yoga are all /MT.
-#   Without this the link mixes libcmt with msvcrt (LNK4098, two heaps, allocator-crossing
-#   crashes the moment a pointer allocated on one side is freed on the other).
+# /STACK 8 MiB reserve, 1 MiB commit: the default 1 MiB gives JSC only ~8k JS frames; Vue's
+# patch/unmount recursion needs more. The commit applies to every thread (~130 MB of commit
+# charge); vn-app.exe lowers it in build.rs, and editing rustflags here would rebuild everything.
 #
-# /STACK 8 MiB reserve, 1 MiB commit: the PE default 1 MiB gives JSC only ~8k JS frames
-#   before RangeError; 8 MiB gives ~45k. Vue's patch/unmount recursion needs the headroom.
-#   The reserve is address space, not RAM. The 1 MiB COMMIT is not main-thread-only: every
-#   thread created with STACK_SIZE_PARAM_IS_A_RESERVATION (all Rust threads, the GPU
-#   driver's workers) takes the header's commit — ~130 MB of commit charge on apps/hello.
-#   vn-app.exe overrides it to one page from crates/vn-app/build.rs (`thread_stack_commit`);
-#   the value here is left alone because editing rustflags rebuilds every crate, and only
-#   test binaries still carry it (research/reports/m26/binary-size-1.md §5).
-#
-# Build scripts and proc macros must be compiled for the host WITHOUT these
-# rustflags — which only happens when the target is EXPLICIT. `build.target`
-# below makes every plain `cargo build` explicit automatically, so artifacts
-# land in target/x86_64-pc-windows-msvc/ (one tree, correct flags isolation)
-# instead of a second, subtly-different tree under target/debug. Before this
-# was set, the repo carried BOTH trees — ~100 GB of duplicated artifacts.
-#
-# A project config wins over the user's, so on macOS this has to be overridden
-# per command: `cargo build --target aarch64-apple-darwin` (or
-# CARGO_BUILD_TARGET), with artifacts in target/aarch64-apple-darwin/.
+# An explicit `build.target` keeps build scripts and proc macros compiled for the host without
+# these rustflags, in a single target/<triple>/ tree. On macOS override it per command
+# (`--target aarch64-apple-darwin`); a project config wins over the user's.
 [build]
 target = "x86_64-pc-windows-msvc"
 
@@ -30,17 +15,10 @@ target = "x86_64-pc-windows-msvc"
 rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608,1048576"]
 
 [env]
-# The bun-webkit prebuilt is vue-native's OWN copy, at the version pinned in
-# vendor/redjs/pins.txt: `vendor/redjs/setup.ps1` (`setup.sh` on macOS) fetches
-# it, and the mimalloc sources redjs compiles, into the git-ignored
-# vendor/redjs/prebuilt/. redjs's build.rs finds it there by itself — under
-# `bun-webkit` on Windows, `bun-webkit-<platform>` elsewhere — so no
-# `BUN_WEBKIT_DIR` is set here (one that is set still wins). It refuses to
-# build against a prebuilt at any other version, so after a submodule bump that
-# moves the pin the build says "run setup" instead of quietly linking the old
-# engine.
+# The bun-webkit prebuilt is fetched by vendor/redjs/setup.ps1 (setup.sh on macOS) into
+# vendor/redjs/prebuilt/; redjs's build.rs finds it there (a set BUN_WEBKIT_DIR still wins) and
+# refuses any version other than the one in vendor/redjs/pins.txt.
 #
-# The oldest macOS the build targets, the one the JSC prebuilt was built for:
-# without it cc and rustc default to 11.0 on arm64 and ld warns about every
-# object of the engine. An environment that sets it keeps its own value.
+# Oldest macOS targeted (what the JSC prebuilt was built for); without it cc and rustc default
+# to 11.0 on arm64 and ld warns about every engine object.
 MACOSX_DEPLOYMENT_TARGET = "13.0"

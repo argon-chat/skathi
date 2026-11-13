@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/query-state.spec.ts: :hover, :active, :focus, :focus-visible and :focus-within in a script's query follow the live state (m26, docs/RUNTIME.md §5.27). See ../README.md.",
-
   "name": "vn-test-query-state",
 
   "window": {

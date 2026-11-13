@@ -1,10 +1,7 @@
-// The DOM surface on mirror nodes (compat roadmap G2) and the globals a reused
-// browser component reaches for before it can render at all (G5).
+// The DOM surface on mirror nodes and the globals a reused browser component reaches for before it can render.
 //
-// The rule these tests pin is the project's compat law: every answer here is
-// either TRUTHFUL (from the mirror tree, from the host's real matcher, from the
-// host's real layout bounds) or degraded WITH an advisory — never a silent
-// wrong answer.
+// The rule pinned here: every answer is either truthful (mirror tree, the host's real matcher and layout bounds)
+// or degraded with an advisory, never silently wrong.
 
 import { describe, expect, test } from "bun:test";
 import { h } from "@vue/runtime-core";
@@ -61,13 +58,11 @@ describe("tree queries answered from the mirror", () => {
     const { root, section, button, span, text } = tree(rt);
     expect(button.parentElement).toBe(section);
     expect(section.parentElement).toBe(root);
-    // A text node's parent is an element too.
     expect(text.parentElement).toBe(button);
     expect(root.parentElement).toBe(null);
     rt.nodeOps.remove(span);
     expect(span.parentElement).toBe(null);
     expect(span.parentNode).toBe(null);
-    // `parentNode` and `parentElement` agree wherever the parent is an element.
     expect(button.parentNode).toBe(button.parentElement);
   });
 
@@ -117,7 +112,6 @@ describe("tree queries answered from the mirror", () => {
     expect(section.children.item(1)).toBe(span);
     expect(section.children.item(5)).toBe(null);
     expect(section.children.length).toBe(2);
-    // Not mounted: the topmost ancestor.
     expect(button.getRootNode()).toBe(root);
     rt.nodeOps.remove(span);
     expect(span.getRootNode()).toBe(span);
@@ -187,11 +181,8 @@ describe("selector matching goes to the host's real matcher", () => {
   test("`:scope` is anchored at the element the call was made on", () => {
     const rt = createRuntime();
     const { root, section, button } = tree(rt);
-    // `:scope` means the SCOPING ROOT — the node the method was invoked on,
-    // which the DOM defines per CALL and not per document. The JS side's whole
-    // share of that is passing the right root id; `vn_css::query_all_in`
-    // answers the rest. Two calls with the same selector and different subjects
-    // must therefore reach the host with different roots.
+    // `:scope` is the scoping root, per call: the JS side only passes the right root id, so two calls with
+    // different subjects must reach the host with different roots.
     rt.host.queryAnswers.set(":scope > button|0", String(button.__vnId));
     expect(section.querySelector(":scope > button")).toBe(button);
     expect(rt.host.queryCalls.at(-1)).toMatchObject({
@@ -203,7 +194,6 @@ describe("selector matching goes to the host's real matcher", () => {
     root.querySelectorAll(":scope > button");
     expect(rt.host.queryCalls.at(-1).root).toBe(root.__vnId);
 
-    // …and it is no longer a compat advisory: the engine runs it now.
     expect(rt.advisories()).toEqual([]);
   });
 
@@ -247,14 +237,11 @@ describe("layout comes from the host's painted bounds", () => {
     const r = span.getBoundingClientRect();
     expect(r).toMatchObject({ x: 0, y: 0, width: 0, height: 0 });
     expect(span.getClientRects().length).toBe(0);
-    // …and that is NOT a compat gap, so it must not produce an advisory.
     expect(rt.advisories()).toEqual([]);
   });
 
-  // m26 #8: the host answers "stale" when the node has no rectangle YET and the
-  // layout it is owed could not be forced (a gpui input listener is on the
-  // stack). A browser would have laid out, so this one IS a gap: zero, plus one
-  // advisory per call site and accessor, never one per read.
+  // The host answers "stale" when a node has no rectangle yet and layout could not be forced (a gpui input
+  // listener is on the stack): zero plus one advisory per call site and accessor.
   test("a read the host could not lay out for reads zero and advises once per site and kind", () => {
     const rt = createRuntime();
     const { button, span } = tree(rt);
@@ -267,15 +254,12 @@ describe("layout comes from the host's painted bounds", () => {
     expect(stale().length).toBe(1);
     expect(stale()[0]).toContain("offsetWidth");
     expect(stale()[0]).toContain("requestAnimationFrame");
-    // Another call site of the same accessor is another advisory…
     const elsewhere = (el) => el.offsetWidth;
     expect(elsewhere(span)).toBe(0);
     expect(stale().length).toBe(2);
-    // …and so is another accessor; the rect is all zeros, not NaN.
     expect(button.getBoundingClientRect()).toMatchObject({ x: 0, y: 0, width: 0, height: 0 });
     expect(button.getClientRects().length).toBe(0);
     expect(stale().length).toBe(4);
-    // Once laid out, the same node answers its real size, silently.
     rt.host.boundsById.set(button.__vnId, "0,0,120,30");
     expect(measure(button)).toBe(120);
     expect(stale().length).toBe(4);
@@ -305,8 +289,6 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
   }
 
   test("a write reaches the host and the getter sees it on the next line", () => {
-    // The whole of the bug this replaced: `scrollTop` was a plain field, so a
-    // write updated a number nobody read and the box never moved.
     const rt = createRuntime();
     const { section } = tree(rt);
     scroller(rt, section);
@@ -353,16 +335,13 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     section.scrollBy({ top: 30 });
     expect([section.scrollLeft, section.scrollTop]).toEqual([10, 50]);
 
-    // An axis the caller did not name is LEFT WHERE IT IS, which is what
-    // `scrollTo({ top })` means — not "scrolled to 0".
+    // An axis the caller did not name stays where it is (`scrollTo({ top })`).
     section.scrollTo({ top: 5 });
     expect([section.scrollLeft, section.scrollTop]).toEqual([10, 5]);
   });
 
   test("scrollWidth/scrollHeight report the CONTENT box, so scroll-to-bottom works", () => {
-    // `el.scrollTop = el.scrollHeight` is THE scroll-to-bottom idiom. Reporting
-    // the painted rectangle here (the viewport) would stop the list one
-    // viewport down and look like a clamp bug in the app.
+    // `el.scrollTop = el.scrollHeight` is the scroll-to-bottom idiom: it needs the content height, not the painted viewport.
     const rt = createRuntime();
     const { section } = tree(rt);
     scroller(rt, section);
@@ -376,14 +355,11 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
   });
 
   test("an element that does not scroll reports zeros and swallows a write", () => {
-    // A browser's behaviour exactly, so no advisory is warranted.
     const rt = createRuntime();
     const { button } = tree(rt);
     rt.host.boundsById.set(button.__vnId, "0,0,100,40");
     expect(button.scrollTop).toBe(0);
     expect(button.scrollLeft).toBe(0);
-    // …and `scrollWidth` falls back to the border box, which is what a browser
-    // reports for a non-scrollable element.
     expect(button.scrollWidth).toBe(100);
     button.scrollTop = 500;
     expect(button.scrollTop).toBe(0);
@@ -404,8 +380,6 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     button.scrollIntoView({ block: "center", inline: "end" });
     expect(rt.host.intoViewCalls.at(-1)).toMatchObject({ block: 1, inline: 2 });
 
-    // An unknown keyword falls back to the spec default for that axis rather
-    // than throwing — a browser ignores it too.
     button.scrollIntoView({ block: "sideways" });
     expect(rt.host.intoViewCalls.at(-1)).toMatchObject({ block: 0, inline: 3 });
     expect(rt.advisories()).toEqual([]);
@@ -421,9 +395,7 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
   });
 
   test('behavior: "smooth" is performed instantly and says so, once', () => {
-    // The position is exact; the interpolation is what is missing, and that is
-    // a divergence, so it is named. See research/reports/m23/scroll.md for why
-    // it is not run through the CSS animator.
+    // The position is exact; the missing interpolation is a divergence, so it is named.
     const rt = createRuntime();
     const { section } = tree(rt);
     scroller(rt, section);
@@ -437,7 +409,6 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     expect(smooth.length).toBe(1);
     expect(smooth[0]).toContain("INSTANTLY");
 
-    // …and the ordinary spellings say nothing at all.
     const quiet = createRuntime();
     const t2 = tree(quiet);
     quiet.host.scrollById.set(t2.section.__vnId, { left: 0, top: 0, maxLeft: 0, maxTop: 800, width: 300, height: 200 });
@@ -447,21 +418,17 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
   });
 
   test("a content-size answer the host calls STALE becomes one advisory", () => {
-    // The honest gap: a browser lays out on read, and here layout is a frame.
-    // The host forces one on read everywhere except under a gpui listener
-    // (keydown/keyup, mousedown, wheel, clipboard, focus/blur), so there
-    // `el.scrollTop = el.scrollHeight` right after adding content stops one
-    // item short — and must say so rather than be quietly wrong.
+    // A browser lays out on read; here layout is a frame. The host forces one except under a gpui listener
+    // (keydown/keyup, mousedown, wheel, clipboard, focus/blur), so `el.scrollTop = el.scrollHeight` right after adding
+    // content stops an item short and must say so.
     const rt = createRuntime();
     const { section } = tree(rt);
     scroller(rt, section);
     rt.host.scrollStale = true;
 
-    // The OFFSET half is never stale, so a plain read stays silent.
     expect(section.scrollTop).toBe(0);
     expect(rt.advisories()).toEqual([]);
 
-    // The content half, and the clamp that uses it, are not.
     expect(section.scrollHeight).toBe(1000);
     section.scrollTop = 500;
     section.scrollTo({ top: 10 });
@@ -481,9 +448,7 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
   });
 
   test("a scroll EVENT no longer writes the position back onto the node", () => {
-    // It used to, because the field was the only place a position could live.
-    // The accessor reads the host now, so a write-back would push the position
-    // the event describes into the box the event came from.
+    // The accessor reads the host, so a write-back would push the event's position into the box the event came from.
     const rt = createRuntime();
     const { section } = tree(rt);
     scroller(rt, section);
@@ -494,7 +459,6 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     rt.host.dispatcher(section.__vnId, rt.EV_CODES.scroll, 0, 120, 0, 0, null);
 
     expect(seen).toEqual([120]);
-    // …and the only `__vn_scroll` writes are the ones the test made.
     expect(rt.host.scrollCalls.filter((c) => c.op !== 0).length).toBe(1);
   });
 });
@@ -538,10 +502,8 @@ describe("the attribute channel", () => {
   });
 });
 
-// m26 client sweep #10 / #32: runtime-dom assigns a DOM PROPERTY where the
-// element has one (`shouldSetAsProp`), and the attribute is what that property
-// reflects. `:hidden="false"` used to leave `hidden="false"`, which Tailwind's
-// `[hidden]` rule hides: every reka TabsContent was invisible.
+// runtime-dom assigns a DOM property where the element has one (`shouldSetAsProp`), and the attribute reflects it:
+// `:hidden="false"` must not leave `hidden="false"`, which Tailwind's `[hidden]` rule hides.
 describe("props that are DOM properties, as runtime-dom sets them", () => {
   /** The last value the host was given for `key` on `el` (`undefined`: removed or never set). */
   const hostProp = (rt, el, key: string) => rt.host.props.filter((p) => p.id === el.__vnId && p.key === key).at(-1)?.value;
@@ -556,7 +518,6 @@ describe("props that are DOM properties, as runtime-dom sets them", () => {
     rt.patchProp(panel, "hidden", false, true);
     expect(panel.getAttribute("hidden")).toBe("");
     expect(hostProp(rt, panel, "hidden")).toBe("");
-    // `hidden` with no value compiles to "", which is true.
     rt.patchProp(panel, "hidden", true, "");
     expect(panel.getAttribute("hidden")).toBe("");
     rt.patchProp(panel, "hidden", "", null);
@@ -573,14 +534,12 @@ describe("props that are DOM properties, as runtime-dom sets them", () => {
   test("where the element has no such property, the value is the attribute, verbatim", () => {
     const rt = createRuntime();
     const div = make(rt, "div");
-    // No `disabled` on a <div>: runtime-dom writes the attribute, "false" and all.
     rt.patchProp(div, "disabled", null, false);
     expect(div.getAttribute("disabled")).toBe("false");
     rt.patchProp(div, "aria-hidden", null, false);
     expect(div.getAttribute("aria-hidden")).toBe("false");
     rt.patchProp(div, "data-open", null, false);
     expect(div.getAttribute("data-open")).toBe("false");
-    // Inside <svg> every key is an attribute.
     const g = make(rt, "g");
     rt.patchProp(g, "hidden", null, false, "svg");
     expect(g.getAttribute("hidden")).toBe("false");
@@ -676,7 +635,6 @@ describe("reflected IDL attributes", () => {
     expect(div.hidden).toBe("until-found");
     div.hidden = "";
     expect(div.hasAttribute("hidden")).toBe(false);
-    // Not a <div> property: undefined, and an assignment is an expando.
     expect(div.placeholder).toBeUndefined();
     div.placeholder = "x";
     expect(div.placeholder).toBe("x");
@@ -752,10 +710,9 @@ describe("inline style writes through — custom properties included", () => {
       { id: button.__vnId, key: "--reka-popper-available-width", value: "320px" },
       { id: button.__vnId, key: "z-index", value: "50" },
     ]);
-    // …and reads back what was written.
     expect(button.style.getPropertyValue("--reka-popper-available-width")).toBe("320px");
     expect(button.style.zIndex).toBe("50");
-    // Custom properties are now STORED by vn-css, so this must NOT warn.
+    // Custom properties are stored by vn-css, so this must not warn.
     expect(rt.advisories()).toEqual([]);
   });
 });
@@ -775,8 +732,7 @@ describe("classList and the transition-class merge", () => {
   });
 
   test("a re-render keeps the transition classes a <Transition> layered on", () => {
-    // runtime-dom keeps the same split for the same reason: without it a
-    // re-render mid-transition drops `v-enter-active` and the animation stops.
+    // runtime-dom keeps the same split: without it a re-render mid-transition drops `v-enter-active`.
     const rt = createRuntime();
     const { button } = tree(rt);
     rt.patchProp(button, "class", null, "card");
@@ -788,8 +744,7 @@ describe("classList and the transition-class merge", () => {
   });
 });
 
-// m26 client sweep #19: `className` was a plain field, so a script's write
-// changed the mirror only, and getAttribute("class") read null.
+// `className` writes must reach the attribute: `getAttribute("class")` reads it.
 describe("className, classList and the class attribute are one thing", () => {
   test("className and setAttribute write through; getAttribute and className read the attribute", () => {
     const rt = createRuntime();
@@ -807,7 +762,6 @@ describe("className, classList and the class attribute are one thing", () => {
     button.removeAttribute("class");
     expect(button.getAttribute("class")).toBe(null);
     expect(rt.host.classes.at(-1).value).toBe("");
-    // Vue's `:class="null"` removes it too; `class=""` keeps it, empty.
     rt.patchProp(button, "class", null, "");
     expect(button.getAttribute("class")).toBe("");
     rt.patchProp(button, "class", "", null);
@@ -824,11 +778,9 @@ describe("className, classList and the class attribute are one thing", () => {
     expect(button.classList.contains("v-enter-active")).toBe(true);
     button.className += " lit";
     expect(rt.host.classes.at(-1).value).toBe("card lit v-enter-active");
-    // The transition ends: the phase class goes, the script's class stays.
     button._vtc = undefined;
     rt.writeClass(button);
     expect(button.className).toBe("card lit");
-    // classList.remove of a transition class drops it, as from a browser's attribute.
     button._vtc = new Set(["v-leave-active"]);
     button.classList.remove("v-leave-active");
     expect(button._vtc).toBeUndefined();
@@ -858,13 +810,9 @@ describe("className, classList and the class attribute are one thing", () => {
 
 describe("mirror nodes are not reactive state", () => {
   test("a node carries Vue's markRaw flag, as a real DOM node effectively does", () => {
-    // In a browser `reactive(divElement)` hands the element straight back —
-    // `Object.prototype.toString.call(div)` is `[object HTMLDivElement]`, which
-    // Vue classifies as an INVALID reactive target. Our mirrors stringify as
-    // `[object Object]`, so without the flag Vue proxies them and every
-    // identity comparison (`set.has(node)`, `array.indexOf(node)`) starts
-    // answering NO for the same node reached two ways — which is exactly what
-    // reka-ui's layer stack, Collection ordering and focus guards are built on.
+    // In a browser `reactive(divElement)` returns the element (an invalid reactive target). Our mirrors stringify as
+    // `[object Object]`, so without the flag Vue proxies them and identity comparisons (`set.has(node)`) fail, which
+    // reka-ui's layer stack and focus guards rely on.
     const rt = createRuntime();
     const { button, text } = tree(rt);
     expect(button.__v_skip).toBe(true);
@@ -874,8 +822,6 @@ describe("mirror nodes are not reactive state", () => {
 
 describe("custom events and dispatchEvent", () => {
   test("a component's own event round-trips through the normal propagation walk", () => {
-    // reka-ui's whole selection protocol is this: add a one-shot listener for a
-    // custom name, then dispatch it on the same node.
     const rt = createRuntime();
     const { section: outer, button: inner } = tree(rt);
     const seen = [];
@@ -885,7 +831,6 @@ describe("custom events and dispatchEvent", () => {
     const ok = inner.dispatchEvent(new CustomEvent("select.select", { bubbles: true, cancelable: true }));
     expect(seen).toEqual(["at-target:select.select", "bubbled"]);
     expect(ok).toBe(true);
-    // `once` really was once.
     inner.dispatchEvent(new CustomEvent("select.select", { bubbles: true }));
     expect(seen.filter((s) => s.startsWith("at-target")).length).toBe(1);
   });
@@ -894,8 +839,8 @@ describe("custom events and dispatchEvent", () => {
     const rt = createRuntime();
     const { button: inner } = tree(rt);
     inner.addEventListener("focusScope.autoFocusOnMount", () => {});
-    // The one bit set is the <button>'s own click, armed at creation for its
-    // activation behaviour (it submits its form; m26 phase 2), not the event's.
+    // The one bit set is the <button>'s own click, armed at creation for its activation behaviour (it submits its
+    // form), not the event's.
     expect(rt.host.listeners).toEqual([{ id: inner.__vnId, code: rt.EV_CODES.click, on: true }]);
     expect(rt.advisories()).toEqual([]);
   });
@@ -908,9 +853,8 @@ describe("custom events and dispatchEvent", () => {
     expect(rt.advisories()[0]).toContain("mouseover");
   });
 
-  // m12 items 3 and 6: these four used to belong in the test above. vn-css's
-  // animator sources them now — it is the only thing that knows when a track
-  // finishes — so they register a real host listener and say nothing.
+  // The animator in vn-css sources these four: it alone knows when a track finishes, so they register a real host
+  // listener and say nothing.
   test("the CSS animation/transition events are delivered, not advised", () => {
     for (const name of ["transitionend", "animationstart", "animationend", "animationcancel"]) {
       const rt = createRuntime();
@@ -939,7 +883,6 @@ describe("custom events and dispatchEvent", () => {
       "target:2:inner:true:true", //  AT_TARGET
       "bubble:3:outer:true:true", //  BUBBLING_PHASE
     ]);
-    // Over: no current target, no phase, no path; the target stays.
     expect(ev.currentTarget).toBe(null);
     expect(ev.eventPhase).toBe(0);
     expect(ev.composedPath()).toEqual([]);
@@ -947,8 +890,7 @@ describe("custom events and dispatchEvent", () => {
   });
 
   test("…and a listener that throws is reported, not the end of the dispatch", () => {
-    // DOM §2.10 "inner invoke": report the exception, go on to the next
-    // listener; dispatchEvent never throws a listener's error.
+    // "inner invoke": report the exception, go on to the next listener; dispatchEvent never throws a listener's error.
     const reported: (() => void)[] = [];
     const rt = createRuntime({ globals: { queueMicrotask: (f: () => void) => reported.push(f) } });
     const { button: inner } = tree(rt);
@@ -961,7 +903,6 @@ describe("custom events and dispatchEvent", () => {
     const ev = new CustomEvent("x.boom", { bubbles: true });
     expect(inner.dispatchEvent(ev)).toBe(true);
     expect(ran).toEqual(["same node", "ancestor"]);
-    // Reported once, as the error the listener threw, after the walk.
     expect(reported.length).toBe(1);
     expect(() => reported[0]()).toThrow("listener");
     expect(ev.currentTarget).toBe(null);
@@ -985,8 +926,7 @@ describe("document- and window-level listeners", () => {
     rt.host.listeners.length = 0;
 
     rt.global.document.addEventListener("keydown", () => {});
-    // The root is the node that stands in for `document`, so its bit is what
-    // gets set — nothing else in the tree listens for keydown.
+    // The root stands in for `document`, so its bit is set.
     expect(rt.host.listeners.at(-1)).toMatchObject({ code: rt.EV_CODES.keydown, on: true });
   });
 
@@ -1007,10 +947,9 @@ describe("document- and window-level listeners", () => {
   });
 });
 
-// m26 fixes-lag-1: ResizeObserver runs where HTML runs it, in the host's step
-// after the frame's layout (`host.layout.step()` here; crates/vn-tree/src/
-// observe.rs), not polled from requestAnimationFrame before it.
-describe("ResizeObserver, after layout (Resize Observer §3.4.4)", () => {
+// ResizeObserver runs in the host's step after the frame's layout (`host.layout.step()` here;
+// crates/vn-tree/src/observe.rs), not polled from requestAnimationFrame.
+describe("ResizeObserver, after layout", () => {
   /** The fake world's tree: `section` at depth 2, `button` and `span` at depth 3. */
   function world(globals: Record<string, unknown> = {}) {
     const rt = createRuntime({ globals });
@@ -1027,17 +966,14 @@ describe("ResizeObserver, after layout (Resize Observer §3.4.4)", () => {
     const ob = new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => e.contentRect.width)));
     expect(rt.host.layout.step()).toBe(-1); // nothing observed: the host calls nothing
     ob.observe(button);
-    // observe() tells the host a step is owed even if the next frame lays nothing out.
     expect(rt.host.layout.pending).toBe(true);
     expect(rt.host.layout.step()).toBe(1);
     expect(seen).toEqual([[100]]);
-    // Same layout: no callback.
     expect(rt.host.layout.step()).toBe(0);
     expect(seen).toEqual([[100]]);
     rt.host.boundsById.set(button.__vnId, "0,0,250,40");
     rt.host.layout.step();
     expect(seen).toEqual([[100], [250]]);
-    // Nothing left to observe: the step says so, and the host stops calling.
     ob.disconnect();
     rt.host.layout.step();
     expect(rt.host.layout.observing).toBe(false);
@@ -1079,7 +1015,6 @@ describe("ResizeObserver, after layout (Resize Observer §3.4.4)", () => {
   test("what a callback changes is laid out and reported in the same step, deeper targets only", () => {
     const { rt, section, button } = world();
     const order: string[] = [];
-    // The section's observer grows the button (in the host's re-layout).
     let grow = false;
     new rt.global.ResizeObserver(() => {
       order.push("section");
@@ -1096,9 +1031,8 @@ describe("ResizeObserver, after layout (Resize Observer §3.4.4)", () => {
       if (grow) rt.host.boundsById.set(button.__vnId, "0,0,180,40");
       grow = false;
     });
-    // Round 1: the section (depth 2). The re-layout moved the button (depth 3),
-    // deeper than the section, so round 2 reports it: in the SAME step, which is
-    // the same frame — no frame paints the button at its old size.
+    // Round 1: the section (depth 2). The re-layout moved the button (depth 3), so round 2 reports it in the same step:
+    // no frame paints it at its old size.
     expect(rounds).toBe(2);
     expect(order).toEqual(["section", "button 180"]);
     expect(rt.host.layout.loopErrors).toBe(0);
@@ -1219,8 +1153,6 @@ describe("missing globals (G5)", () => {
     const extra = rt.nodeOps.createElement("i");
     rt.nodeOps.insert(extra, section, null);
     rt.patchProp(button, "data-state", null, "open");
-    // Nothing is delivered synchronously — a browser batches to the microtask
-    // checkpoint too.
     expect(seen).toEqual([]);
     await Promise.resolve();
     await Promise.resolve();
@@ -1253,9 +1185,8 @@ describe("missing globals (G5)", () => {
     const { section, button } = tree(rt);
     const seen = [];
     const ob = new rt.global.MutationObserver((r) => seen.push(...r));
-    // What reka's focus scope and floating-ui's auto-update both write. A
-    // Document is not an element here, but its element subtree is the root's,
-    // so the observer has to land on the root rather than warn and drop.
+    // What reka's focus scope and floating-ui's auto-update both write: a Document is not an element here but its
+    // element subtree is the root's, so the observer lands on the root.
     ob.observe({ documentElement: section }, { childList: true, subtree: true });
     const extra = rt.nodeOps.createElement("i");
     rt.nodeOps.insert(extra, button, null);
@@ -1273,7 +1204,6 @@ describe("missing globals (G5)", () => {
     rt.nodeOps.insert(child, frag, null);
     expect([...frag.children]).toEqual([child]);
     expect([...frag.childNodes]).toEqual([child]);
-    // A fragment is a parent NODE but not a parent ELEMENT.
     expect(child.parentNode).toBe(frag);
     expect(child.parentElement).toBe(null);
     // Detached: it hangs off no root, so it is not painted.
@@ -1318,19 +1248,13 @@ describe("missing globals (G5)", () => {
     expect(cs.getPropertyValue("--primary")).toBe("240 5.9% 10%");
     expect(rt.advisories()).toEqual([]);
 
-    // A property the host does not publish reads "" — with one advisory.
     expect(cs.letterSpacing).toBe("");
     expect(rt.advisories().some((a) => a.includes("getComputedStyle"))).toBe(true);
   });
 
-  // m26 client sweep #30: width, position, animationName, --chat-width… "read
-  // """ with an advisory each, although the host publishes all of them. The
-  // reads were of nodes the host has no answer for, which a browser answers
-  // with "" as well, and of a custom property nothing declared.
   test("getComputedStyle: a node the host has no style for reads \"\" for everything, without an advisory", () => {
     const rt = createRuntime();
     const { button } = tree(rt);
-    // No `computedById` entry: removed from the tree, or never connected.
     const cs = rt.global.getComputedStyle(button);
     for (const k of ["width", "height", "position", "direction", "animationName", "transitionDelay", "transitionDuration"]) {
       expect(cs[k]).toBe("");
@@ -1338,7 +1262,6 @@ describe("missing globals (G5)", () => {
     expect(cs.getPropertyValue("--chat-width")).toBe("");
     expect(rt.advisories()).toEqual([]);
 
-    // An undeclared custom property on a node that has a style: "" too, silently.
     rt.host.computedById.set(button.__vnId, "display=block\n");
     expect(cs.getPropertyValue("--undeclared")).toBe("");
     expect(rt.advisories()).toEqual([]);

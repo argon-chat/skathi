@@ -1,22 +1,14 @@
 //! `<iframe>`'s document, in the platform's webview.
 //!
-//! `vn_tree::iframe` knows the element; this crate knows a browser. It
-//! implements `vn_tree::iframe::Backend` over WebView2 on Windows (`win`), and
-//! has no backend elsewhere yet: [`backend`] returns `None`, the host installs
-//! nothing, and every `<iframe src>` answers `error` (requirements R8, in
-//! research/reports/m26/iframe-webview-requirements-2026-11-12.md).
+//! `vn_tree::iframe` knows the element; this crate knows a browser. It implements
+//! `vn_tree::iframe::Backend` over WebView2 on Windows (`win`); elsewhere [`backend`] returns
+//! `None` and every `<iframe src>` answers `error`.
 //!
-//! # What the webview loads
-//!
-//! Never the app's document directly. Its top-level page is the relay page
-//! (`relay.html`), which holds the one real `<iframe>` with the attributes the
-//! app wrote; see that file for why and for the message protocol.
-//!
-//! Both are served from one internal origin, [`APP_ORIGIN`], by a request
-//! handler: the relay page at [`RELAY_PATH`], and under every other path the
-//! app's own files (`Config::assets`). The app's `location.origin`
-//! (`app://redjs`) is not a scheme a browser gives an origin to, so the
-//! backend maps it to the internal one on the way in ([`internal_url`]).
+//! The webview never loads the app's document directly: its top-level page is the relay page
+//! (`relay.html`, which also documents the message protocol) holding the one real `<iframe>`.
+//! Both are served from the internal origin [`APP_ORIGIN`] by a request handler: the relay page at
+//! [`RELAY_PATH`], the app's files (`Config::assets`) under every other path. The app's
+//! `location.origin` (`app://redjs`) gets no origin from a browser, so [`internal_url`] maps it.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -36,9 +28,8 @@ pub struct Config {
     pub devtools: bool,
 }
 
-/// The origin the relay page and the app's files have INSIDE the webview.
-/// `.invalid` never resolves (RFC 6761), so a request the handler misses fails
-/// instead of reaching a network.
+/// The origin of the relay page and the app's files inside the webview. `.invalid` never resolves
+/// (RFC 6761), so a request the handler misses fails instead of reaching a network.
 pub const APP_ORIGIN: &str = "https://app.vn.invalid";
 /// The relay page's path under [`APP_ORIGIN`].
 pub const RELAY_PATH: &str = "/__vn_iframe__/relay.html";

@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/resize-observer.spec.ts: ResizeObserver delivered after the frame's layout and before its paint (a panel sized from its list in the same frame), and the loop error for an observation the depth rule skips. See ../README.md.",
+  "$comment": "ResizeObserver delivered after the frame's layout and before its paint (a panel sized from its list in the same frame), and the loop error for an observation the depth rule skips.",
 
   "name": "vn-test-resize-observer",
 

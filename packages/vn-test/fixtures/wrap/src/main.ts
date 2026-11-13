@@ -1,31 +1,15 @@
-// A fixture for packages/vn-test/specs/wrap.spec.ts: long unbroken tokens
-// (URLs, hashes, "aaaa…") against `overflow-wrap`, `word-break` and
-// `white-space` (CSS Text 3 §5).
-//
-// Two message columns have Argon's row and bubble (wrap.css spells the
-// utilities out), one 640px wide and one 260px. Beside them, 120px boxes each
-// set one property, and `.mc-row`s ask whether a flex item's text can shrink
-// below its longest token (`anywhere` lowers min-content, `break-word` does
-// not). The last stack puts a link in 200px columns that do not stretch it,
-// so its width is fit-content. `__VN_TEST_WRAP__.boxes()` reads back every
-// `[id]` element's box.
-//
-// Render functions and a `.css` import rather than an SFC, for the reason
-// fixtures/layout gives.
+// Beside them, 120px boxes each set one property, and `.mc-row`s ask whether a flex item's text
+// can shrink below its longest token (`anywhere` lowers min-content, `break-word` does not).
 import { createApp, h, type VNode } from "vue-native";
 import "./wrap.css";
 
 const A = "a".repeat(160);
 const URL = `https://example.com/files/${"b".repeat(40)}/${"c".repeat(60)}?token=${"d".repeat(48)}`;
 const HASH = "3f9a0c4e".repeat(16);
-// Two of these words pass a 120px line, so they wrap one a line; broken
-// between letters, they fill two lines.
 const WORDS = "abcdefghij abcdefghij abcdefghij";
 const CJK = "日本語の文章です日本語の文章です";
-// Soft hyphens (U+00AD) between the syllables.
 const SHY = "super­cali­fragilistic­expiali­docious";
 
-/** Argon's message row around one bubble whose text is `kids`. */
 const message = (id: string, kids: (string | VNode)[]) =>
   h("div", { class: "row" }, [
     h("div", { class: "av" }),
@@ -85,7 +69,6 @@ createApp({
 }).mount();
 
 (globalThis as Record<string, unknown>).__VN_TEST_WRAP__ = {
-  /** Every `[id]` element's box, by id. */
   boxes() {
     const out: Record<string, { x: number; y: number; w: number; h: number; right: number }> = {};
     for (const el of Array.from(document.querySelectorAll("[id]"))) {

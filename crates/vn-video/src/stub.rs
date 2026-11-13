@@ -1,15 +1,6 @@
-//! A synthetic backend: no OS, no codec, no GPU.
-//!
-//! It exists so the portable half of this crate is testable on a machine that
-//! has neither Media Foundation nor AVFoundation — `cargo test -p vn-video`
-//! runs the cadence, idempotence and atlas-hygiene tests above on any platform,
-//! and CI does not need a GPU. It is also the reference implementation of the
-//! trait: everything [`VideoBackend`] asks of a platform is done here in eighty
-//! lines, which is a useful sanity check that the trait is at the right
-//! altitude.
-//!
-//! The clock is driven by [`present`](StubBackend::present) rather than by the
-//! wall clock, deliberately: a test that has to sleep is a test that is flaky.
+//! A synthetic backend with no OS, codec or GPU, so the portable half of the crate is testable
+//! anywhere. Its clock is driven by [`present`](StubBackend::present), not the wall clock, so tests
+//! never sleep.
 
 use std::sync::Arc;
 
@@ -21,7 +12,6 @@ use crate::backend::{
     VideoBackend, VideoFrame,
 };
 
-/// The nominal frame period the synthetic clock advances by per `present`.
 const FRAME: f64 = 1.0 / 60.0;
 
 pub struct StubBackend {
@@ -57,8 +47,6 @@ impl StubBackend {
         }
     }
 
-    /// How many frames this backend has produced — the handle a test uses to
-    /// assert that motion actually happened.
     pub fn frames_produced(&self) -> u64 {
         self.frames
     }
@@ -155,9 +143,7 @@ impl VideoBackend for StubBackend {
         None
     }
 
-    /// The stub speaks for nothing real, so it answers `Maybe` for anything
-    /// that looks like a video type and `No` otherwise — enough to exercise the
-    /// call site, honest about knowing nothing.
+    /// Answers `Maybe` for anything that looks like a video type and `No` otherwise.
     fn can_play_type(&self, mime_type: &str) -> CanPlay {
         if mime_type.trim().to_ascii_lowercase().starts_with("video/") {
             CanPlay::Maybe
@@ -188,8 +174,7 @@ impl VideoBackend for StubBackend {
         if w == 0 || h == 0 {
             return None;
         }
-        // A vertical bar sweeping left to right: two frames at different times
-        // are never bit-identical, which is what a motion test asserts on.
+        // A sweeping bar: frames at different times are never bit-identical.
         let progress = if self.duration > 0.0 { self.time / self.duration } else { 0.0 };
         let bar = (progress * w as f64) as u32;
         let mut buf = vec![0u8; (w * h * 4) as usize];
@@ -197,7 +182,6 @@ impl VideoBackend for StubBackend {
             for x in 0..w {
                 let i = ((y * w + x) * 4) as usize;
                 let lit = x.abs_diff(bar) < 4;
-                // BGRA, which is what gpui's atlas uploads.
                 buf[i] = if lit { 255 } else { (x * 255 / w.max(1)) as u8 };
                 buf[i + 1] = if lit { 255 } else { (y * 255 / h.max(1)) as u8 };
                 buf[i + 2] = if lit { 255 } else { 64 };
@@ -210,8 +194,6 @@ impl VideoBackend for StubBackend {
             image: Arc::new(RenderImage::new(vec![Frame::new(buffer)]).dynamic()),
             pts: self.time,
             size,
-            // No OS and no GPU: the synthetic backend is the CPU path by
-            // definition, which is also what keeps it testable in CI.
             gpu: None,
         })
     }

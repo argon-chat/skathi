@@ -1,24 +1,5 @@
-// `beforeinput`, `input` and the composition events of a text field, on the
-// real host (m26 fixes, docs/RUNTIME.md §5.25, crates/vn-elements
-// text_input/state.rs).
-//
-//   bun test packages/vn-test/specs/beforeinput.spec.ts
-//
-// Keys go through devtools `type` / `key`, which is gpui's own keystroke
-// dispatch: the field's keydown interceptor, its key bindings and its input
-// handler, as for a physical key. The IME goes through devtools `ime`, which
-// makes the two calls the platform's IME makes on the field's input handler.
-// The JS half (what the payload becomes) is test/runtime-events-m26.test.ts.
-//
-// One character per `type`, and no `keyup` in the log: devtools hands gpui a
-// whole command in one update, and the widget's `input` goes out at the end
-// of the update it edited in. A physical key is separate platform messages
-// (keydown, the character, keyup), each its own update, so there `input` comes
-// before `keyup` and before the next key's `keydown`.
-//
-// One test pastes and cuts, which reads and writes the system clipboard: it
-// saves the text that was there first and puts it back afterwards, as
-// selection.spec.ts does.
+// One character per `type`, and no `keyup` in the log: devtools hands gpui a whole command in one
+// update, and the widget's `input` goes out at the end of the update it edited in.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -52,7 +33,6 @@ const cancel = (type: string | null, data?: string) =>
 const value = async (sel: string) => String(await app.eval(`document.querySelector(${JSON.stringify(sel)}).value`));
 const ime = (sel: string, text: string, commit = false) => app.send("ime", { selector: sel, text, ...(commit ? { commit } : {}) });
 
-/** `beforeinput` / `input` as the fixture logs them. */
 const bi = (type: string, data: string | null, v: string, composing = false) =>
   `beforeinput@ta|${type} data=${JSON.stringify(data)} composing=${composing} cancelable=${!composing} v=${JSON.stringify(v)}`;
 const inp = (type: string, data: string | null, v: string, composing = false, where = "ta") =>
@@ -110,7 +90,6 @@ describe("beforeinput from the keyboard", () => {
       "keydown@ta|Backspace",
       bi("deleteWordBackward", null, "abc"),
       inp("deleteWordBackward", null, ""),
-      // At the end of an empty value: nothing to delete, so no beforeinput.
       "keydown@ta|Delete",
     ]);
   }, T);
@@ -155,7 +134,6 @@ describe("beforeinput from the keyboard", () => {
         bi("insertFromPaste", "pasted", "xy"),
         inp("insertFromPaste", "pasted", "xypasted"),
         "keydown@ta|a",
-        // Cancelled: the text stays (Chromium has already copied it).
         "keydown@ta|x",
         "cut@ta",
         bi("deleteByCut", null, "xypasted"),
@@ -166,7 +144,6 @@ describe("beforeinput from the keyboard", () => {
       ]);
       bunExpect(powershell("Get-Clipboard -Raw").replace(/\r?\n$/, "")).toBe("xypasted");
     } finally {
-      // Put the owner's text back (Set-Clipboard with nothing clears it).
       const escaped = saved.replace(/\r?\n$/, "").replace(/'/g, "''");
       powershell(saved ? `Set-Clipboard -Value '${escaped}'` : "Set-Clipboard -Value $null");
     }
@@ -231,7 +208,7 @@ describe("the IME", () => {
   }, T);
 
   test("v-model leaves the model alone until the composition ends, as runtime-dom does", async () => {
-    await app.locator("#vm").type("a"); // one character: see the header
+    await app.locator("#vm").type("a");
     await expect(app.locator("#model")).toHaveText("model=a");
     await fresh();
     await ime("#vm", "k");
@@ -246,7 +223,6 @@ describe("the IME", () => {
       inp("insertCompositionText", "か", "aか", true, "vm"),
       inp("insertCompositionText", "火", "a火", true, "vm"),
       'compositionend@vm|data="火" v="a火"',
-      // runtime-dom's re-dispatch, which assigns the model.
       'input@vm|undefined data=undefined composing=undefined cancelable=false v="a火"',
     ]);
   }, T);

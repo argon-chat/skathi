@@ -1,21 +1,13 @@
-//! The gpui [`Element`] that shapes, scrolls and paints the text plus its
-//! selection and caret, and that hands the platform its IME handler.
+//! The gpui [`Element`] that shapes, scrolls and paints the text, selection and caret, and hands the
+//! platform its IME handler.
 //!
-//! Adapted from gpui-vue (`crates/gpui-vue-core/src/custom_elements/input.rs`,
-//! Apache-2.0), which is itself derived from the native renderer in
-//! [remorses/gpuix](https://github.com/remorses/gpuix) @
-//! `b8bbff4ef0dc00dc24c3d3f3ca47818e1be15c69` (Apache-2.0) and from
-//! [zeronsh/comet](https://github.com/zeronsh/comet) (MIT).
-//! See gpui-vue's `THIRD_PARTY_NOTICES.md`.
+//! Adapted from gpui-vue (`crates/gpui-vue-core/src/custom_elements/input.rs`, Apache-2.0), itself
+//! derived from [remorses/gpuix](https://github.com/remorses/gpuix) @
+//! `b8bbff4ef0dc00dc24c3d3f3ca47818e1be15c69` (Apache-2.0) and [zeronsh/comet](https://github.com/zeronsh/comet) (MIT).
 //!
-//! # One shaping path for both fields
-//!
-//! `<input>` and `<textarea>` shape through the SAME call — `shape_text`, which
-//! splits on `\n` and soft-wraps each hard line at a wrap width. A single-line
-//! input is simply the case with no `\n` and no wrap width, so it comes back as
-//! one [`gpui::WrappedLine`] with no wrap boundaries and lays out exactly as the
-//! old `shape_line` did. That is what keeps the caret, hit-testing, selection
-//! and IME code paths single rather than forked.
+//! `<input>` and `<textarea>` share one shaping path (`shape_text`: splits on `\n`, soft-wraps); a
+//! single-line input is the case with no `\n` and no wrap width, so caret, hit-testing, selection
+//! and IME code stay unforked.
 
 use std::ops::Range;
 
@@ -29,15 +21,11 @@ use gpui::{
 use super::TextInputOptions;
 use super::state::{CARET_WIDTH, LineBox, TextInputState};
 
-/// Width of the overflow indicator a textarea paints down its right edge.
 const SCROLLBAR_WIDTH: Pixels = px(4.0);
-/// How far in from the right edge it sits.
 const SCROLLBAR_INSET: Pixels = px(2.0);
-/// Shortest the thumb is allowed to get on a very long document.
 const SCROLLBAR_MIN_THUMB: Pixels = px(20.0);
 
-/// The line height a text input of this font size occupies, taken from the
-/// inherited text style so a CSS `line-height` from the framework still wins.
+/// Line height for this font size, from the inherited text style so a CSS `line-height` wins.
 pub(crate) fn line_height_for(window: &Window, font_size: Pixels) -> Pixels {
     window
         .text_style()
@@ -54,7 +42,6 @@ pub(crate) struct TextElement {
 
 pub(crate) struct TextPrepaint {
     origin: Point<Pixels>,
-    /// One per visual row the selection covers.
     selection: Vec<PaintQuad>,
     caret: Option<PaintQuad>,
     scrollbar: Option<PaintQuad>,
@@ -83,11 +70,8 @@ impl Element for TextElement {
         let mut style = Style::default();
         style.size.width = relative(1.0).into();
         if self.options.multiline {
-            // `rows` is HTML's INTRINSIC height and nothing more: it becomes a
-            // min-height, so a CSS `height` or `min-height` on the element still
-            // wins and content past it scrolls rather than growing the box.
-            // The height itself stays `auto` so the wrapper's flex stretch can
-            // hand this element whichever height did win.
+            // `rows` is only the intrinsic height (a min-height), so CSS `height`/`min-height` still
+            // win; height stays `auto` for the wrapper's flex stretch.
             style.min_size.height = (line_height * self.options.rows.max(1) as f32).into();
         } else {
             style.size.height = line_height.into();
@@ -105,9 +89,7 @@ impl Element for TextElement {
         cx: &mut App,
     ) -> TextPrepaint {
         let line_height = line_height_for(window, self.options.font_size);
-        // `color` is inherited in CSS; gpui carries the ambient text style down
-        // the paint walk, so this is the element's real inherited colour rather
-        // than a framework default (see `TextInputOptions::inherit_color`).
+        // `color` is inherited in CSS; gpui carries the ambient text style down the paint walk.
         if self.options.inherit_color {
             let inherited = window.text_style().color;
             self.options.text_color = inherited;
@@ -128,7 +110,6 @@ impl Element for TextElement {
             if self.options.multiline || !placeholder.contains(['\r', '\n']) {
                 placeholder.clone()
             } else {
-                // A single-line field shows its placeholder on one line.
                 placeholder.replace(['\r', '\n'], " ").into()
             }
         } else {
@@ -140,7 +121,6 @@ impl Element for TextElement {
             self.options.text_color
         };
 
-        // A textarea soft-wraps at its own width; an input scrolls instead.
         let wrap_width = self.options.multiline.then_some(bounds.size.width);
         let lines = shape(
             display,
@@ -170,8 +150,7 @@ impl Element for TextElement {
             });
 
         let state = self.state.read(cx);
-        // `text-align` and the horizontal scroll are one offset — see
-        // `TextInputState::content_left`.
+        // `text-align` and the horizontal scroll are one offset (`TextInputState::content_left`).
         let origin = point(state.content_left(bounds.left()), bounds.top() - scroll_top);
         let (selection, caret) = if selection_range.is_empty() || is_placeholder {
             let at = state.position_for_index(cursor);
@@ -194,9 +173,7 @@ impl Element for TextElement {
             (quads, None)
         };
 
-        // The overflow indicator. Only a textarea can overflow vertically — an
-        // input scrolls horizontally and shows nothing, which is what a browser
-        // does too.
+        // Overflow indicator: only a textarea overflows vertically.
         let scrollbar = (self.options.multiline && content_height > bounds.size.height).then(|| {
             let track = bounds.size.height;
             let thumb = (track * (f32::from(track) / f32::from(content_height)))
@@ -260,10 +237,7 @@ impl Element for TextElement {
             for quad in selection {
                 window.paint_quad(quad);
             }
-            // The shaped lines live in the state entity (`WrappedLine` is not
-            // `Clone`, so they were moved there in prepaint rather than copied).
-            // `state` and `cx` are separate parameters of this closure, so
-            // borrowing the lines while painting through `cx` is fine.
+            // The shaped lines live in the state entity (`WrappedLine` is not `Clone`), moved there in prepaint.
             state.update(cx, |state, cx| {
                 let lh = state.line_height();
                 for line_box in state.lines() {
@@ -285,9 +259,7 @@ impl Element for TextElement {
             }
         });
 
-        // Selection drags have to keep working outside the element's own
-        // hitbox, so the drag listeners live on the window rather than on the
-        // wrapper div (which only sees moves while hovered).
+        // Selection drags must work outside the element's hitbox, so the listeners live on the window.
         let state = self.state.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left) {
@@ -303,14 +275,8 @@ impl Element for TextElement {
     }
 }
 
-/// One quad per VISUAL row the selection covers.
-///
-/// A wrapped row's own end is not something `WrappedLineLayout` will name
-/// directly, so the row's last byte is found by bisecting on the y coordinate:
-/// `position_for_index` is monotonic in the index, so the largest index that
-/// still reports this row's y IS the row's end. That keeps the highlight
-/// hugging the text — extending it to the box's right edge instead would be
-/// visibly wrong on a short wrapped line.
+/// One quad per visual row the selection covers. A wrapped row's end is found by bisecting on y
+/// (`position_for_index` is monotonic), so the highlight hugs the text.
 fn selection_quads(
     state: &TextInputState,
     range: Range<usize>,
@@ -320,9 +286,7 @@ fn selection_quads(
 ) -> Vec<PaintQuad> {
     let mut quads = Vec::new();
     let mut cursor = range.start;
-    // One iteration per visual row; the bound is a safety net, not a limit that
-    // is expected to bite (a selection cannot cover more rows than it has
-    // bytes).
+    // Bounded by the byte count: a selection cannot cover more rows than bytes.
     for _ in 0..(range.end - range.start + 2) {
         if cursor >= range.end {
             break;
@@ -349,7 +313,6 @@ fn selection_quads(
     quads
 }
 
-/// The largest index in `(lo, hi]` still on the visual row whose top is `y`.
 fn row_end(state: &TextInputState, lo: usize, hi: usize, y: Pixels) -> usize {
     last_on_row(
         lo,
@@ -360,9 +323,8 @@ fn row_end(state: &TextInputState, lo: usize, hi: usize, y: Pixels) -> usize {
     )
 }
 
-/// The bisection behind [`row_end`]. `snap` rounds down to a boundary, so a
-/// midpoint inside a multi-byte character can fall back to `low`; stepping to
-/// the next boundary instead keeps going rather than ending the row there.
+/// The bisection behind [`row_end`]. `snap` rounds down, so a midpoint inside a multi-byte
+/// character can fall back to `low`; step to the next boundary instead.
 fn last_on_row(
     lo: usize,
     hi: usize,
@@ -391,8 +353,6 @@ fn last_on_row(
     low.max(lo)
 }
 
-/// Shape the content, underlining the IME pre-edit range if there is one, and
-/// index the resulting hard lines by byte offset and visual row.
 #[allow(clippy::too_many_arguments)]
 fn shape(
     display: SharedString,
@@ -404,9 +364,7 @@ fn shape(
 ) -> Vec<LineBox> {
     let text_style = window.text_style();
     let font = text_style.font();
-    // The field shapes its own runs rather than going through `StyledText`, so
-    // CSS `letter-spacing` has to be carried across explicitly — and it is the
-    // meeting-code field, tracked to 6.3px, that made this visible.
+    // Runs are shaped here rather than via `StyledText`, so CSS `letter-spacing` must be carried across.
     let (tracking, word_spacing) = (text_style.letter_spacing, text_style.word_spacing);
     let run = |len: usize, underline: bool| TextRun {
         len,
@@ -442,9 +400,7 @@ fn shape(
         return Vec::new();
     };
 
-    // `shape_text` consumes each `\n`, so the byte offsets have to be walked
-    // back out of the source string: line N starts one byte after line N-1's
-    // last character.
+    // `shape_text` consumes each `\n`, so line N starts one byte after line N-1's last character.
     let mut out = Vec::with_capacity(lines.len());
     let mut start = 0usize;
     let mut row0 = 0usize;
@@ -458,7 +414,6 @@ fn shape(
             line,
         });
         row0 += rows;
-        // +1 for the `\n` that separated this line from the next.
         start = (start + len + 1).min(text.len().max(start + len));
     }
     out
@@ -471,8 +426,7 @@ mod tests {
 
     #[test]
     fn a_row_end_bisection_steps_over_multibyte_characters() {
-        // The midpoint of the first probe lands inside the emoji, and rounding
-        // it down used to end the row there, short of the selection.
+        // The first probe's midpoint lands inside the emoji; rounding down must not end the row there.
         let text = "Пароль ёж 😀!";
         let snap = |index| boundaries::snap(text, index);
         let next = |index| boundaries::next_grapheme(text, index);

@@ -1,75 +1,27 @@
-// vue-native effect shader compiler: `.slang` -> `.hlsl` + a reflected schema.
+// Effect shader compiler: `.slang` -> `.hlsl` + a reflected schema (`effects.json`).
 //
 // Usage
-//   bun shaders.ts                       regenerate the BUILT-IN effects into
-//                                        crates/vn-effects/generated/
-//   bun shaders.ts --check               CI gate: regenerate into a temp dir and
-//                                        fail if the checked-in files differ
+//   bun shaders.ts                       regenerate the built-in effects into crates/vn-effects/generated/
+//   bun shaders.ts --check               CI gate: regenerate into a temp dir, fail if checked-in files differ
 //   bun shaders.ts --app <dir> --out <dir> [--watch]
-//                                        compile an APP's shaders/*.slang into
-//                                        <out>/<name>.hlsl + <out>/effects.json,
-//                                        which the host loads via VN_EFFECTS_DIR
+//                                        compile an app's shaders/*.slang into <out>/<name>.hlsl +
+//                                        <out>/effects.json (loaded by the host via VN_EFFECTS_DIR)
 //
-// This script is invocable standalone and is deliberately NOT wired into
-// build.ts: a `.slang` edit is a different cadence from a `.vue` edit, an app
-// with no shaders/ dir must not pay for slangc, and a contributor without
-// slangc must still be able to build and ship.
+// Not wired into build.ts: a contributor without slangc must still be able to build.
 //
-// ---------------------------------------------------------------------------
-// THE AUTHORING CONTRACT, AND WHY IT IS REFLECTION-DRIVEN
-// ---------------------------------------------------------------------------
+// An effect author writes one struct (`[VnEffect("ripple")] struct Ripple : IEffect { ... }`). slangc's
+// reflection (`-reflection-json`) of its attributes, field order and types is the single source of truth
+// for the CSS function name, argument order and packing slots, argument types, defaults, ranges,
+// optionality and the backdrop/bleed/animation flags, so a new effect needs no registration in Rust or
+// JS. The engine half of the shader lives in the `vn` module (`vn_begin` + `vn_finish<T : IEffect>`); the
+// wrapper appended here only unpacks parameters.
 //
-// An effect author writes ONE thing:
+// The vertex stage is hand-written HLSL in vendor/zed/crates/gpui_windows/src/effects.hlsl: gpui clips with
+// `float4 : SV_ClipDistance` and no spelling of that survives both Slang's front end and fxc.
 //
-//     import vn;
-//
-//     [VnEffect("ripple")]
-//     struct Ripple : IEffect
-//     {
-//         [VnDefault("1.5")] [VnRange(0.0, 8.0)] float speed;
-//         [VnColor] [VnDefault("#7fd4ff")]       float4 tint;
-//         float4 shade(EffectInput input) { ... }
-//     };
-//
-// slangc reflects the struct's user-defined attributes, its field ORDER and its
-// field TYPES (`-reflection-json`). That reflection is the single source of
-// truth for:
-//
-//   * the CSS function name                    <- [VnEffect("ripple")]
-//   * the argument order and the packing slots <- field declaration order
-//   * each argument's CSS type                 <- field type + [VnLength]/[VnColor]
-//   * defaults, ranges, optionality            <- [VnDefault]/[VnRange]/[VnOptional]
-//   * whether the effect needs the backdrop,
-//     dilates its quad, or animates            <- [VnBackdrop]/[VnBleed]/…
-//
-// so `--shading: ripple(2.0 #ff8800)` parses with ZERO manual registration on
-// the Rust or JS side. The schema is emitted as `effects.json` next to the
-// HLSL; `crates/vn-effects` reads it and `crates/vn-css` validates against it.
-//
-// The engine's half of the shader is NOT string-templated. It lives in the
-// `vn` module as `vn_begin()` + `vn_finish<T : IEffect>()`, and Slang
-// specialises the generic on the author's type at compile time. The wrapper
-// this script appends is therefore only the parameter unpacking — the one part
-// that genuinely cannot be written without knowing the field names, which is
-// exactly what reflection supplies.
-//
-// The VERTEX stage is not generated here at all: it is hand-written HLSL in
-// `vendor/zed/crates/gpui_windows/src/effects.hlsl`, because gpui clips every
-// primitive with `float4 : SV_ClipDistance` and no spelling of that survives
-// both Slang's front end and fxc at any profile. See that file for the errors.
-//
-// ---------------------------------------------------------------------------
-// WHY THE BUILT-IN OUTPUT IS CHECKED IN (docs/SHADERS.md §2.3)
-// ---------------------------------------------------------------------------
-//   * debug builds hot-reload HLSL with `D3DCompileFromFile` on a real path in
-//     this repo, so an effect author gets a sub-second edit->see loop and can
-//     drop to raw HLSL to debug what Slang emitted;
-//   * a Slang upgrade that silently changes codegen shows up as a PR diff;
-//   * contributors and CI need no slangc and no second SDK to build or ship.
-//
-// App-supplied effects invert exactly one of those: their HLSL is compiled by
-// D3DCompile at APP STARTUP (both debug and release), because the app is not
-// part of the Rust build. See docs/SHADERS-AUTHORING.md.
+// Built-in output is checked in so debug builds hot-reload HLSL from a real path, a Slang upgrade that
+// changes codegen shows up as a diff, and contributors and CI need no slangc. App effects are compiled
+// by D3DCompile at app startup instead.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -87,44 +39,30 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
-// ---------------------------------------------------------------------------
-// layout
-// ---------------------------------------------------------------------------
-
 const REPO = resolve(import.meta.dir, "../..");
 const BUILTIN_SHADERS = join(REPO, "crates/vn-effects/shaders");
 const MODULES = join(BUILTIN_SHADERS, "modules");
 const GENERATED = join(REPO, "crates/vn-effects/generated");
 
-/// Bumped whenever the prelude or the generated wrapper changes in a way that
-/// alters codegen or the schema shape. Rides in every generated header and in
-/// every effects.json, so a wrapper edit busts every artifact even when the
-/// `.slang` sources are untouched — PEWPEW's `SHADER_COMPILER_SCHEMA` trick.
-/// Rust refuses to load an effects.json whose schema it does not know.
-/// 5: `VnEffectQuad` carries the content mask's corner radii where its padding was.
+/// Bumped when the prelude or generated wrapper changes codegen or schema shape. Rides in every header and
+/// effects.json, so a wrapper edit busts every artifact; Rust refuses an effects.json with an unknown schema.
 const SCHEMA = 5;
 
-/// Pinned by sha256 in `crates/vn-effects/tools/slang.manifest.json`; see
-/// `fetch-slang.ts`. 2026.12 deliberately matches PEWPEW so there is one set of
-/// codegen quirks to know across both projects.
+/// Pinned by sha256 in `crates/vn-effects/tools/slang.manifest.json` (see `fetch-slang.ts`).
 const SLANG_VERSION = "2026.12";
 
-/// The built-in numbering is a FOUR-way contract: this list, `gpui::effect_id`,
-/// the pipeline table in `gpui_windows`, and the ids in
-/// `crates/vn-effects/generated/effects.json`. Alphabetical file order is NOT
-/// that order (frost, glow, noise), so it is written down here.
+/// The built-in numbering is a four-way contract: this list, `gpui::effect_id`, the pipeline table in
+/// `gpui_windows` and the ids in `crates/vn-effects/generated/effects.json`. It is not alphabetical.
 const BUILTIN_ORDER = ["frost", "noise", "glow"];
 
-/// Eight floats per instance — `EffectQuad::params0` + `params1`. Raising this
-/// means widening the primitive, which costs bytes on every effect quad.
+/// Eight floats per instance (`EffectQuad::params0` + `params1`); raising it widens every effect quad.
 const PARAM_SLOTS = 8;
 
 function findSlangc(): string {
   const candidates = [
     process.env.VN_SLANGC_PATH,
     join(REPO, "tools/slang/win-x64/slangc.exe"),
-    // PEWPEW's checkout, which pins the same version. Handy on this machine;
-    // `bun fetch-slang.ts` populates tools/ for everyone else.
+    // A sibling checkout that pins the same version; otherwise `bun fetch-slang.ts` populates tools/.
     "Z:/!argon/PEWPEW/tools/slang/win-x64/slangc.exe",
   ].filter(Boolean) as string[];
   for (const c of candidates) if (existsSync(c)) return c;
@@ -133,10 +71,6 @@ function findSlangc(): string {
       `tried:\n  ${candidates.join("\n  ")}`,
   );
 }
-
-// ---------------------------------------------------------------------------
-// the schema, as it lands in effects.json
-// ---------------------------------------------------------------------------
 
 type ParamKind = "number" | "length" | "color";
 
@@ -164,19 +98,9 @@ type EffectSchema = {
   signature: string;
 };
 
-// ---------------------------------------------------------------------------
-// the engine-owned wrapper
-// ---------------------------------------------------------------------------
-//
-// Two forms. The PROBE wrapper exists only to make the author's struct a
-// reflectable shader parameter; it never reads a field, so Slang strips the
-// `cbuffer` from the emitted HLSL while `-reflection-json` still describes it
-// in full (measured with slangc 2026.12). That is what lets the schema be
-// discovered without the author declaring anything twice.
-//
-// The REAL wrapper unpacks the parameter slots into the author's named fields —
-// the one thing that cannot be written without knowing those names — and hands
-// the struct to the engine's generic composition.
+// Two wrappers. The probe makes the author's struct a reflectable parameter without reading a field, so
+// Slang strips the cbuffer from the HLSL while `-reflection-json` still describes it. The real one
+// unpacks the slots into the named fields and hands the struct to the engine's generic composition.
 
 const WRAPPER_BANNER = `
 // ===========================================================================
@@ -201,7 +125,6 @@ float4 vn_reflect_probe(float4 vn_position : SV_Position) : SV_Target
 `;
 }
 
-/// `params0` is slots 0..3, `params1` slots 4..7.
 function slotExpr(slot: number): string {
   const bank = slot < 4 ? "params0" : "params1";
   return `vn_in.${bank}.${"xyzw"[slot % 4]}`;
@@ -241,15 +164,10 @@ ${assignments || "    // (this effect declares no parameters)"}
 `;
 }
 
-// ---------------------------------------------------------------------------
-// slangc
-// ---------------------------------------------------------------------------
-
 type Diagnostic = { severity: string; file: string; line: number; col: number; message: string };
 
-/// Slang emits codespan-ish text; turn it into structured records and subtract
-/// the wrapper offset so a diagnostic in USER code keeps the author's line
-/// numbers (which is the whole reason the wrapper is appended, not prepended).
+/// Turns slang's codespan-ish text into structured records, subtracting the wrapper offset so user-code
+/// diagnostics keep the author's line numbers (why the wrapper is appended, not prepended).
 function parseDiagnostics(text: string, userLines: number, file: string): Diagnostic[] {
   const out: Diagnostic[] = [];
   const seen = new Set<string>();
@@ -267,15 +185,8 @@ function parseDiagnostics(text: string, userLines: number, file: string): Diagno
     });
   };
 
-  // Slang's codespan form. The headline carries the message, the `-->` line
-  // carries the location, and the caret block below it repeats the message with
-  // more detail — which is the one worth showing, so prefer it when present:
-  //
-  //   error[E30015]: undefined identifier
-  //     --> …/ripple.slang:10:36
-  //      |
-  //   10 |     return float4(input.local, nope, amount);
-  //      |                                ^^^^ undefined identifier 'nope'.
+  // Slang's codespan form: the headline has the message, `-->` the location, and the caret block repeats
+  // the message in more detail, so prefer it when present.
   const codespan =
     /^(error|warning|note)(?:\[[^\]]*\])?:[ \t]*(.*)\r?\n[ \t]*-->[ \t]*(.+?):(\d+):(\d+)([\s\S]*?)(?=^(?:error|warning|note)\b|^-{2,}'|\Z)/gm;
   let m: RegExpExecArray | null;
@@ -284,8 +195,7 @@ function parseDiagnostics(text: string, userLines: number, file: string): Diagno
     push(m[1], Number(m[4]), Number(m[5]), (detail ? detail[1] : m[2]).trim());
   }
 
-  // The `file(line): severity CODE: message` form slangc uses for some
-  // diagnostics (and fxc uses for all of them).
+  // The `file(line): severity CODE: message` form slangc (and fxc) use for some diagnostics.
   const flat = /^(.*?)\((\d+)(?:,(\d+))?\):\s*(error|warning|note)\s+\S+:\s*(.*)$/gm;
   while ((m = flat.exec(text))) {
     push(m[4], Number(m[2]), Number(m[3] ?? 0), m[5]);
@@ -306,20 +216,10 @@ function sha256(text: string): string {
 
 type RunResult = { hlsl: string | null; reflection: any; stderr: string; ok: boolean };
 
-/// slangc CLI bug (2026.12, hit here): `-reflection-json` re-emits the source
-/// spelling of a string literal instead of JSON-escaping its VALUE. An
-/// apostrophe therefore comes out as `\'` —
-///
-///     "arguments": [ "soft halo centred on the element\'s rounded edge" ]
-///
-/// — which is a C escape, not a JSON one, and `JSON.parse` rejects the whole
-/// file. `[VnDoc("… element's …")]` in `glow.slang` reproduces it, and is left
-/// there on purpose so this path stays exercised.
-///
-/// The repair is total for the escapes a Slang string literal can contain: turn
-/// the C-only ones into their character, then double any backslash that is
-/// still not a legal JSON escape. Failing loudly matters — returning `null`
-/// here would surface much later as "your effect has no parameters".
+/// slangc bug (2026.12): `-reflection-json` re-emits a string literal's source spelling instead of
+/// JSON-escaping it, so an apostrophe comes out as `\'` and `JSON.parse` rejects the file (glow.slang's
+/// `[VnDoc]` keeps this path exercised). Repair: turn the C-only escapes into their character, then double
+/// any backslash that is not a legal JSON escape. Fail loudly: null would surface later as "no parameters".
 function readReflection(path: string): any {
   if (!existsSync(path)) return null;
   const text = readFileSync(path, "utf8");
@@ -351,10 +251,8 @@ function runSlangc(
   workdir: string,
   stem: string,
 ): RunResult {
-  // slangc CLI quirk (documented by PEWPEW, hit again here): it reads and
-  // writes REAL FILES only — there is no stdin/stdout mode for HLSL output —
-  // and it mangles non-ASCII paths. Everything therefore runs in an ASCII temp
-  // dir, never in place next to the sources.
+  // slangc reads and writes real files only (no stdin/stdout mode for HLSL output) and mangles non-ASCII
+  // paths, so everything runs in an ASCII temp dir.
   const input = join(workdir, `${stem}.slang`);
   const output = join(workdir, `${stem}.hlsl`);
   const reflectionPath = join(workdir, `${stem}.reflection.json`);
@@ -368,8 +266,7 @@ function runSlangc(
     "-profile", "sm_5_0",
     "-stage", "fragment",
     "-entry", entry,
-    // Pinned even though no effect takes a matrix yet: PEWPEW lost a day to
-    // 2026.14 flipping this default under them.
+    // Pinned even though no effect takes a matrix yet: slangc 2026.14 flipped this default.
     "-matrix-layout-row-major",
     ...includes.flatMap((dir) => ["-I", dir]),
     "-reflection-json", reflectionPath,
@@ -389,21 +286,14 @@ function runSlangc(
   };
 }
 
-/// The one thing worth keeping out of `-reflection-json`: the register each
-/// top-level parameter landed on. That is the contract with the D3D11 renderer
-/// (t0 processed backdrop, t1 instance buffer, t2 snapshot, b0 globals, s1
-/// clamp), and a Slang upgrade that moved any of them shows up here as a
-/// reviewable diff rather than as a black rectangle three weeks later.
+/// The register each top-level parameter landed on: the contract with the D3D11 renderer (t0 backdrop,
+/// t1 instance buffer, t2 snapshot, b0 globals, s1 clamp). A Slang upgrade moving one shows as a diff.
 function bindings(reflection: any): Array<Record<string, unknown>> {
   const params = Array.isArray(reflection?.parameters) ? reflection.parameters : [];
   return params
     .filter((p: any) => p?.name !== "vn_reflect")
     .map((p: any) => ({ name: p?.name, kind: p?.binding?.kind, index: p?.binding?.index }));
 }
-
-// ---------------------------------------------------------------------------
-// reflection -> schema
-// ---------------------------------------------------------------------------
 
 type Attribute = { name: string; arguments: unknown[] };
 type Field = {
@@ -466,13 +356,8 @@ function parseDefault(text: string, components: number, where: string): [number,
   return out;
 }
 
-/// Whether a `components`-wide field may start at `slot`: free, in range, and
-/// not straddling a 16-byte (four-slot) boundary.
-///
-/// The no-straddle rule is HLSL's own. Scalars go anywhere, a `float4` is
-/// therefore always four-aligned, and a `float2`/`float3` is bumped forward
-/// only when it would straddle — which keeps `params0`/`params1` addressable by
-/// swizzle in the generated wrapper.
+/// Whether a `components`-wide field may start at `slot`: free, in range, and not straddling a 16-byte
+/// (four-slot) boundary (HLSL's rule), which keeps params0/params1 swizzle-addressable.
 function fits(used: boolean[], slot: number, components: number): boolean {
   if (slot < 0 || slot + components > PARAM_SLOTS) return false;
   if (components > 1 && Math.floor(slot / 4) !== Math.floor((slot + components - 1) / 4)) {
@@ -553,12 +438,9 @@ function buildSchema(reflection: any, structName: string, source: string): {
   let bleedParam: number | null = null;
   let animatedParam: number | null = null;
   let backdrop = attr(structAttrs, "VnBackdrop") !== undefined;
-  // Which of the 8 float slots are already spoken for. Fields are packed in
-  // declaration order into the first slot that fits, so a `[VnSlot]`-pinned
-  // field simply reserves its run first and the rest flow around it.
+  // Which of the 8 float slots are taken. Fields pack in declaration order into the first slot that fits;
+  // `[VnSlot]` runs are reserved first.
   const used: boolean[] = new Array(PARAM_SLOTS).fill(false);
-  // Reserve every `[VnSlot]`-pinned run up front, so pinning does not depend on
-  // where the field happens to sit in the declaration order.
   const pinned = new Map<string, number>();
   for (const field of element.fields ?? []) {
     const slotAttr = attr(field.userAttribs ?? [], "VnSlot");
@@ -596,10 +478,8 @@ function buildSchema(reflection: any, structName: string, source: string): {
       throw new SchemaError(`${where}: [VnColor] and [VnLength] are mutually exclusive`);
     }
     if (optional && components > 1 && !isColor) {
-      // A bare vector expands to one CSS argument per component, and the
-      // matcher decides whether to skip an optional parameter one argument at a
-      // time — so half a `float2` could be filled in. Refuse rather than invent
-      // an all-or-nothing rule the CSS grammar cannot express.
+      // A bare vector expands to one CSS argument per component and the matcher skips optional parameters one
+      // argument at a time, so half a `float2` could be filled in: refuse.
       throw new SchemaError(
         `${where}: [VnOptional] is not allowed on a float${components} — it expands to ` +
           `${components} CSS arguments and only some of them could be omitted. Split it into ` +
@@ -631,10 +511,8 @@ function buildSchema(reflection: any, structName: string, source: string): {
     if (isColor) {
       params.push({ name: fieldName, kind: "color", slot, required: !optional, default: defaults, range: null });
     } else {
-      // A vector without [VnColor] expands to one CSS argument per component,
-      // named `field.x`, `field.y`, … — the CSS grammar takes one value per
-      // comma-separated argument, and inventing a bracketed sub-syntax for a
-      // float2 would be a divergence with no browser precedent to copy.
+      // A vector without [VnColor] expands to one CSS argument per component (`field.x`, `field.y`, …): the
+      // CSS grammar takes one value per argument.
       for (let c = 0; c < components; c += 1) {
         params.push({
           name: components === 1 ? fieldName : `${fieldName}.${COMPONENT_SUFFIX[c]}`,
@@ -668,9 +546,8 @@ function buildSchema(reflection: any, structName: string, source: string): {
 
   if (backdropRadiusParam !== null) backdrop = true;
 
-  // Type-directed matching only works when a skippable parameter's kind differs
-  // from the kind of whatever follows it — otherwise an argument is ambiguous
-  // and `ripple(1)` could mean two different things.
+  // Type-directed matching needs a skippable parameter's kind to differ from the next one's, else
+  // `ripple(1)` is ambiguous.
   for (let i = 0; i < params.length; i += 1) {
     if (params[i].required) continue;
     const nextParam = params[i + 1];
@@ -684,9 +561,7 @@ function buildSchema(reflection: any, structName: string, source: string): {
     }
   }
 
-  // `<length:radius>`, `<number:strength>`, `<color:tint>` — but just `<color>`
-  // when the parameter is itself called `color`, which reads better in the
-  // advisory an author actually sees.
+  // `<length:radius>`, `<number:strength>`, `<color:tint>`; just `<color>` when the parameter is called `color`.
   const signature = `${name}(${params
     .map((p) => `<${p.name === p.kind ? p.kind : `${p.kind}:${p.name}`}>${p.required ? "" : "?"}`)
     .join(", ")})`;
@@ -707,15 +582,10 @@ function buildSchema(reflection: any, structName: string, source: string): {
   };
 }
 
-// ---------------------------------------------------------------------------
-// source discovery
-// ---------------------------------------------------------------------------
-
 type EffectSource = { file: string; struct: string; source: string };
 
-/// The struct name is the ONE thing reflection cannot tell us before we have
-/// compiled, because the probe wrapper has to name the type. A file therefore
-/// declares exactly one `struct <Name> : IEffect`.
+/// The struct name must be known before compiling (the probe wrapper names the type), so a file declares
+/// exactly one `struct <Name> : IEffect`.
 function findStruct(file: string, source: string): string {
   const stripped = source.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
   const matches = [...stripped.matchAll(/\bstruct\s+([A-Za-z_]\w*)\s*:\s*(?:vn\.)?IEffect\b/g)];
@@ -745,10 +615,6 @@ function discover(dir: string): EffectSource[] {
     });
 }
 
-// ---------------------------------------------------------------------------
-// compile one effect (two slangc passes)
-// ---------------------------------------------------------------------------
-
 type Compiled = {
   file: string;
   effect: EffectSchema;
@@ -757,13 +623,9 @@ type Compiled = {
   sourceSha256: string;
 };
 
-/// `#line` directives carry the ABSOLUTE path of the staged input, so the temp
-/// directory's random name would land in the artifact and churn the diff on
-/// every regeneration. Rewrite it to a stable name. Line numbers are left
-/// alone — up to `userLines` they are the author's, past that the wrapper's.
-///
-/// For an APP effect the stable name is the author's real `.slang` path, which
-/// is what makes a runtime D3DCompile diagnostic point at their source.
+/// `#line` directives carry the absolute path of the staged input; rewrite it to a stable name so the temp
+/// dir's random name does not churn the diff. For an app effect it is the author's real `.slang` path, so a
+/// D3DCompile diagnostic points at their source. Line numbers are kept.
 function rewriteLineDirectives(hlsl: string, staged: string, stable: string): string {
   return hlsl.split(staged.replace(/\\/g, "/")).join(stable).split(staged).join(stable);
 }
@@ -779,9 +641,8 @@ function compile(
   const userLines = userSource.split("\n").length;
   const stem = basename(effectSource.file).replace(/\.slang$/, "");
 
-  // PASS 1 — reflection only. The probe wrapper never touches the struct, so
-  // its `cbuffer` is dead and Slang drops it from the HLSL we throw away; the
-  // reflection JSON still describes the type in full.
+  // PASS 1: reflection only. The probe wrapper never touches the struct, so its cbuffer is dropped from the
+  // HLSL we discard.
   const probe = runSlangc(
     slangc,
     includes,
@@ -798,8 +659,7 @@ function compile(
   }
   const { effect, fields } = buildSchema(probe.reflection, effectSource.struct, basename(effectSource.file));
 
-  // PASS 2 — the real fragment shader, with the parameter unpacking generated
-  // from what pass 1 learned.
+  // PASS 2: the real fragment shader, with the unpacking generated from pass 1.
   const wrapper = realWrapper(effect, fields);
   const real = runSlangc(
     slangc,
@@ -851,8 +711,7 @@ function compileAll(
   includes: string[],
   stableFor: (s: EffectSource) => string,
 ): Compiled[] {
-  // PEWPEW reports output-file races when several slangc processes run
-  // concurrently; compiling serially avoids it and costs nothing at this scale.
+  // slangc races on output files when run concurrently; compile serially.
   const workdir = mkdtempSync(join(tmpdir(), "vn-shaders-"));
   try {
     return sources.map((s) => compile(slangc, s, workdir, includes, stableFor(s)));
@@ -861,18 +720,12 @@ function compileAll(
   }
 }
 
-// ---------------------------------------------------------------------------
-// effects.json
-// ---------------------------------------------------------------------------
-
 function manifestText(
   kind: "builtin" | "user",
   compiled: Compiled[],
   preludeSha: string,
-  // Built-ins record a REPO-RELATIVE source path: the file is checked in, and
-  // an absolute path would churn the diff on every machine. An app's effects
-  // are read at runtime and record the absolute path, which is what a
-  // diagnostic can actually be clicked through to.
+  // Built-ins record a repo-relative source path (an absolute one would churn the diff); app effects record
+  // the absolute path so a diagnostic is clickable.
   sourceOf: (file: string) => string,
 ): string {
   const manifest = {
@@ -881,8 +734,7 @@ function manifestText(
     kind,
     preludeSha256: preludeSha,
     effects: compiled.map((c, index) => ({
-      // For built-ins this index IS `gpui::effect_id`; for app effects the host
-      // allocates ids after the built-ins in exactly this order.
+      // For built-ins this index is `gpui::effect_id`; app effects get ids after them in this order.
       id: index,
       name: c.effect.name,
       struct: c.effect.struct,
@@ -903,10 +755,6 @@ function manifestText(
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
-// ---------------------------------------------------------------------------
-// built-in mode
-// ---------------------------------------------------------------------------
-
 function builtins(slangc: string, check: boolean) {
   const found = discover(BUILTIN_SHADERS);
   const byName = new Map(found.map((s) => [basename(s.file).replace(/\.slang$/, ""), s]));
@@ -921,8 +769,7 @@ function builtins(slangc: string, check: boolean) {
         (extra.length
           ? `  extra:    ${extra.join(", ")}\n` +
             "  (adding a built-in means editing BUILTIN_ORDER here, gpui::effect_id and\n" +
-            "   EffectShader::ALL in gpui_windows — an APP effect needs none of that;\n" +
-            "   see docs/SHADERS-AUTHORING.md)\n"
+            "   EffectShader::ALL in gpui_windows — an APP effect needs none of that)\n"
           : ""),
     );
   }
@@ -971,8 +818,7 @@ function builtins(slangc: string, check: boolean) {
 
   mkdirSync(GENERATED, { recursive: true });
   for (const [path, text] of wanted) writeFileSync(path, text);
-  // manifest.json was schema 3's name for the same artifact; effects.json
-  // supersedes it and carries the parameter schema too.
+  // manifest.json is the legacy name of effects.json.
   const legacy = join(GENERATED, "manifest.json");
   if (existsSync(legacy)) rmSync(legacy, { force: true });
   console.log(
@@ -980,10 +826,6 @@ function builtins(slangc: string, check: boolean) {
       compiled.map((c) => c.effect.signature).join("\n  "),
   );
 }
-
-// ---------------------------------------------------------------------------
-// app mode
-// ---------------------------------------------------------------------------
 
 function builtinNames(): string[] {
   const path = join(GENERATED, "effects.json");
@@ -1051,7 +893,7 @@ function app(slangc: string, appDir: string, out: string, watchMode: boolean) {
   if (!existsSync(shadersDir) || !statSync(shadersDir).isDirectory()) {
     throw new Error(
       `${appDir} has no shaders/ directory. An app's effects live in ` +
-        `${shadersDir}/<name>.slang — see docs/SHADERS-AUTHORING.md`,
+        `${shadersDir}/<name>.slang`,
     );
   }
 
@@ -1090,10 +932,6 @@ function app(slangc: string, appDir: string, out: string, watchMode: boolean) {
     }, 60);
   });
 }
-
-// ---------------------------------------------------------------------------
-// main
-// ---------------------------------------------------------------------------
 
 function flag(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);

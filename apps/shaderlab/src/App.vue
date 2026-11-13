@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref } from "vue";
 
-// One toggle drives the `transition: --shading` demo. Class-driven on purpose:
-// state-rule transitions are rejected by vn-css by design, so a real class flip
-// is the supported way to animate an effect's parameters.
+// Class-driven on purpose: state-rule transitions are rejected by vn-css by design, so a real
+// class flip is the supported way to animate an effect's parameters.
 const hot = ref(false);
 </script>
 
@@ -21,12 +20,7 @@ const hot = ref(false);
       </div>
     </div>
 
-    <!-- ===================================================================
-         APP EFFECT #1 — ripple. Animated: `speed` carries [VnAnimated], so
-         the host keeps repainting while it is above zero. Five arguments,
-         one of them a float2 that expands to `center.x` / `center.y`, plus a
-         colour.
-         =================================================================== -->
+    <!-- Animated: `speed` carries [VnAnimated], so the host keeps repainting while it is above zero. -->
     <div class="row">
       <div class="panel ripple">
         <div class="name">ripple(1.6, 26px, 0.5, 0.42, #7fd4ff)</div>
@@ -38,11 +32,8 @@ const hot = ref(false);
       </div>
     </div>
 
-    <!-- ===================================================================
-         APP EFFECT #2 — aurora, under `transition: --shading 1400ms`. Every
-         parameter is a float, colour channels included, so the whole look
-         interpolates component-wise on the class flip.
-         =================================================================== -->
+    <!-- Every parameter is a float, colour channels included, so the whole look interpolates
+         component-wise on the class flip. -->
     <div class="row">
       <div class="panel aurora" :class="{ hot }" @click="hot = !hot">
         <div class="name">aurora — click to transition</div>
@@ -56,11 +47,8 @@ const hot = ref(false);
       </div>
     </div>
 
-    <!-- ===================================================================
-         The BUILT-INS, in the same app, from the same registry — frost reads
-         the render-target snapshot (so it needs the colour stripes behind it)
-         and glow dilates its own quad.
-         =================================================================== -->
+    <!-- The BUILT-INS, in the same app, from the same registry — frost reads the render-target
+         snapshot (so it needs the colour stripes behind it) and glow dilates its own quad. -->
     <div class="builtins">
       <div class="stripes">
         <div class="s s1"></div>
@@ -139,9 +127,6 @@ const hot = ref(false);
   color: #ffffff8c;
 }
 
-/* --- app effect: ripple ------------------------------------------------ */
-/* Every argument is validated against the schema slangc reflected out of
-   `struct Ripple` — nothing about `ripple` is registered in Rust or JS. */
 .ripple {
   background: #10182b;
   border: 1px solid #ffffff26;
@@ -152,7 +137,6 @@ const hot = ref(false);
   --shading: ripple(0.5, 54px, 0.15, 0.8, #ff8ad4);
 }
 
-/* --- app effect: aurora, transitioned ---------------------------------- */
 .aurora {
   background: #0d1020;
   border: 1px solid #ffffff26;
@@ -172,7 +156,6 @@ const hot = ref(false);
   color: #10142699;
 }
 
-/* --- built-ins --------------------------------------------------------- */
 .builtins {
   position: relative;
   height: 132px;
@@ -216,7 +199,6 @@ const hot = ref(false);
   left: 244px;
 }
 
-/* --- built-in: glow ---------------------------------------------------- */
 .glow {
   background: #141a2c;
   border: 1px solid #ffffff26;

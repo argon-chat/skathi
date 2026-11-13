@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/focus-style.spec.ts: el.focus() refuses an element CSS hides, as a browser's does (m26, docs/RUNTIME.md §5.20). See ../README.md.",
-
   "name": "vn-test-focus-style",
 
   "window": {

@@ -1,32 +1,15 @@
 <script setup lang="ts">
-// The multi-page shell: RouterLink tabs + a KeepAlive'd RouterView.
-//
-// RouterLink renders an <a> (a generic host element here) and stamps
-// `router-link-active` on the active one — styled below through the ordinary
-// class matcher.
-//
-// <KeepAlive> is the unmodified browser pattern: RouterView's scoped slot
-// hands us the resolved component, KeepAlive caches its instance and MOVES the
-// rendered subtree into a detached container instead of unmounting it. Coming
-// back moves it home again, so page-local state (typed text, timers, scroll
-// offsets) survives a tab switch.
-//
-// `:exclude` keeps ONE page out of the cache on purpose: the Lab tab remounts
-// every visit, which is what proves pinia state is independent of KeepAlive.
+// `:exclude` keeps ONE page out of the cache on purpose: the Lab tab remounts every visit, which
+// is what proves pinia state is independent of KeepAlive.
 import Titlebar from "./components/Titlebar.vue";
 import { useSession } from "./stores/session";
 
 const session = useSession();
-// Matched against the component NAME (`defineOptions({ name })`, or the
-// filename the SFC compiler infers into `__name`) — same rule as the browser.
 const excluded = ["LabPage"];
 </script>
 
 <template>
   <div class="frame">
-    <!-- The app's own titlebar. Declaring a `window-drag: move` region is what
-         retires the host's built-in fallback strip (docs/WINDOWING.md §4.2
-         mode 2) and hands the app the whole window. -->
     <Titlebar />
     <div class="shell">
     <div class="bar">
@@ -44,7 +27,6 @@ const excluded = ["LabPage"];
         <!-- After Lab, so the specs' tab indices (hello, hover, engine) still hold. -->
         <RouterLink class="tab" to="/desktop">Files</RouterLink>
       </div>
-      <!-- Live store read, visible on EVERY tab. -->
       <div class="store">pinia · session · {{ session.badge }}</div>
     </div>
 
@@ -69,8 +51,6 @@ const excluded = ["LabPage"];
   flex: 1;
   gap: 10px;
   padding: 14px;
-  /* The app owns the whole window now, so it also owns the scrollport the
-     host's 24px-padded content box used to imply. */
   overflow-y: scroll;
 }
 .bar {

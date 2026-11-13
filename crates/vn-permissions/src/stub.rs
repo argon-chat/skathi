@@ -1,11 +1,5 @@
-//! A scriptable [`PermissionHost`] with no OS underneath it.
-//!
-//! Two jobs. It is the backend on any platform vue-native has not written one
-//! for yet — where the honest answer for every capability is `Unsupported`, and
-//! the vue-native extension surface turns that into an advisory naming the
-//! platform. And it is the host the trait-level tests drive, because every state
-//! and every transition can be scripted from a test without a real OS toggle
-//! being flipped on somebody's machine.
+//! A scriptable [`PermissionHost`] with no OS underneath it: the backend on platforms without
+//! one (every capability `Unsupported`), and the host the trait-level tests drive.
 
 use std::collections::HashMap;
 use std::sync::Mutex;

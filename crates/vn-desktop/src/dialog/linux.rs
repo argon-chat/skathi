@@ -1,20 +1,12 @@
 //! Linux: what every desktop answers, with no toolkit of our own.
 //!
-//! - **File pickers**: the desktop portal's FileChooser
-//!   (`org.freedesktop.portal.FileChooser`, through ashpd). GNOME, KDE and
-//!   wlroots desktops implement it, it is the only picker a sandbox may use,
-//!   and the portal's save dialog asks before overwriting. It has no owner
-//!   here: gpui does not hand out its windows' Wayland/X11 handles, so the
-//!   dialog is a window of its own.
-//! - **A question, a colour**: `zenity` (GNOME and most desktops ship it) or,
-//!   on KDE or when there is no zenity, `kdialog`.
+//! File pickers use the desktop portal's FileChooser (ashpd). It has no owner here: gpui does not
+//! hand out its windows' Wayland/X11 handles. A question or colour uses `zenity`, or `kdialog` on
+//! KDE or when zenity is missing.
 //!
-//! Each runs on the dialog's own thread and blocks it, as the Windows modal
-//! loop does. While it runs the thread watches the [`Cancellation`]: a helper
-//! process is killed when the owner closes. A portal request cannot be closed
-//! before it answers (ashpd hands out the request only with its response), so
-//! the promise settles as a cancel and the picker stays up until the user
-//! closes it; nothing it then returns is used.
+//! Each runs on the dialog's own thread and blocks it. A helper process is killed when the owner
+//! closes; a portal request cannot be closed before it answers (ashpd hands out the request only
+//! with its response), so the promise settles as a cancel and the late result is ignored.
 
 use std::future::Future;
 use std::io::Read;
@@ -25,10 +17,6 @@ use std::time::Duration;
 use ashpd::desktop::file_chooser::{FileFilter, SelectedFiles};
 
 use super::*;
-
-// ---------------------------------------------------------------------------
-// file pickers: the portal
-// ---------------------------------------------------------------------------
 
 pub(super) fn pick(n: &Native, _: isize, cancel: &Cancellation) -> Result<Option<Vec<PathBuf>>, Fail> {
     if cancel.is_requested() {
@@ -85,8 +73,7 @@ pub(super) fn pick(n: &Native, _: isize, cancel: &Cancellation) -> Result<Option
     Ok(Some(paths))
 }
 
-/// The type list, as globs that match either case (GTK's are case-sensitive,
-/// Windows' type lists are not).
+/// The type list, as globs that match either case (GTK's are case-sensitive).
 fn portal_filters(n: &Native) -> Vec<FileFilter> {
     let mut out: Vec<FileFilter> = n
         .filters
@@ -213,10 +200,6 @@ fn user_dir(dirs: &str, key: &str, home: &Path) -> Option<PathBuf> {
     (path != home).then_some(path)
 }
 
-// ---------------------------------------------------------------------------
-// a question, a colour: zenity or kdialog
-// ---------------------------------------------------------------------------
-
 /// Which helper to try first: KDE's own on KDE.
 fn kde_first() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d.eq_ignore_ascii_case("KDE")))
@@ -270,10 +253,8 @@ fn ordered<T>(mut helpers: Vec<(&'static str, Command, T)>) -> Vec<(&'static str
     helpers
 }
 
-/// The question. The first button is zenity's OK and the rest its extra
-/// buttons, so its own (localised) Cancel, like Esc and the close box, is a
-/// dismissal; Enter presses the first button only when it is the default.
-/// kdialog: yes / no / cancel, up to three buttons.
+/// The question. The first button is zenity's OK and the rest its extra buttons, so zenity's own
+/// Cancel, Esc and the close box are a dismissal. kdialog: yes / no / cancel, up to three buttons.
 pub(super) fn ask(q: &Ask, _: isize, cancel: &Cancellation) -> Result<Option<usize>, Fail> {
     if cancel.is_requested() {
         return Ok(None);

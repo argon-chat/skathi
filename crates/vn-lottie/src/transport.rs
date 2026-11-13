@@ -1,9 +1,6 @@
-//! The transport behind a `<lottie>`: the playhead, play / pause / seek,
-//! speed, direction, loop and bounce modes and segments, and the tick that
-//! moves the playhead and reports lottie-web's events. No rasteriser and no
-//! gpui type: [`crate::LottieState`] is this plus the frames it draws, and a
-//! host that draws elsewhere (vue-native's `<lottie>`, which rasterises on a
-//! worker thread into a tile) keeps one of these on the UI thread.
+//! The transport behind a `<lottie>`: playhead, play / pause / seek, speed, direction, loop and
+//! bounce modes, segments, and the tick that moves the playhead and reports lottie-web's events. No
+//! rasteriser and no gpui type, so a host that draws elsewhere keeps one of these on the UI thread.
 
 use std::time::Duration;
 
@@ -18,8 +15,7 @@ pub struct Transport {
     finished: bool,
     speed: f32,
     direction: Direction,
-    /// The direction `play()` resets to; `Bounce` flips `direction` but must not
-    /// lose the authored one.
+    /// The direction `play()` resets to; `Bounce` flips `direction` without losing it.
     base_direction: Direction,
     loop_mode: LoopMode,
     play_mode: PlayMode,
@@ -28,8 +24,7 @@ pub struct Transport {
 }
 
 impl Transport {
-    /// A transport at the animation's in point, playing and looping, as
-    /// lottie-web's `loadAnimation()` starts one.
+    /// A transport at the animation's in point, playing and looping, as lottie-web starts one.
     pub fn new(meta: LottieMeta) -> Self {
         Self {
             frame: meta.in_point,
@@ -46,15 +41,11 @@ impl Transport {
         }
     }
 
-    /// Everything the file said about itself.
     pub fn meta(&self) -> &LottieMeta {
         &self.meta
     }
 
-    // ---- transport, mirroring lottie-web's `AnimationItem` --------------
-
-    /// `play()` — resume from the current playhead. Replaying a completed
-    /// animation rewinds it, as lottie-web does.
+    /// `play()`: resumes; replaying a completed animation rewinds it, as in lottie-web.
     pub fn play(&mut self) {
         if self.finished {
             self.finished = false;
@@ -87,19 +78,16 @@ impl Transport {
         self.finished = false;
     }
 
-    /// Jump to a normalised position in `0.0..=1.0` across the active segment.
     pub fn seek_progress(&mut self, progress: f32) {
         let (start, end) = self.active_segment();
         self.frame = start + (end - start) * progress.clamp(0.0, 1.0);
         self.finished = false;
     }
 
-    /// The playhead, in absolute source frames.
     pub fn frame(&self) -> f32 {
         self.frame
     }
 
-    /// The playhead as `0.0..=1.0` across the active segment.
     pub fn progress(&self) -> f32 {
         let (start, end) = self.active_segment();
         if end <= start {
@@ -114,7 +102,6 @@ impl Transport {
         self.speed = speed.max(0.0);
     }
 
-    /// The current speed multiplier.
     pub fn speed(&self) -> f32 {
         self.speed
     }
@@ -141,7 +128,6 @@ impl Transport {
         }
     }
 
-    /// The current loop mode.
     pub fn loop_mode(&self) -> LoopMode {
         self.loop_mode
     }
@@ -151,11 +137,8 @@ impl Transport {
         self.play_mode = play_mode;
     }
 
-    /// `playSegments([in, out])` — restrict playback to a frame range. `None`
-    /// (`resetSegments()`) restores the full `in_point..out_point`.
-    ///
-    /// The playhead is pulled into the new range, so a segment change never
-    /// leaves it stranded outside the window it is allowed to play.
+    /// `playSegments([in, out])`: restricts playback to a frame range; `None` restores the full
+    /// range. The playhead is pulled into the new range.
     pub fn set_segment(&mut self, segment: Option<(f32, f32)>) {
         self.segment = segment.map(|(start, end)| {
             let (start, end) = if start <= end {
@@ -172,17 +155,12 @@ impl Transport {
         self.frame = self.frame.clamp(start, end);
     }
 
-    /// The frame range playback is currently confined to.
     pub fn active_segment(&self) -> (f32, f32) {
         self.segment
             .unwrap_or((self.meta.in_point, self.meta.out_point))
     }
 
-    /// True while the animation is playing and has not completed — i.e. the
-    /// host must keep pumping frames for this node.
-    ///
-    /// The host's `animating()` OR-chain includes this, the same way it already
-    /// includes the CSS transition animator. See `CONTRACT.md`.
+    /// True while playing and not completed, i.e. the host must keep pumping frames.
     pub fn needs_frame(&self) -> bool {
         self.playing && !self.finished && self.speed > 0.0
     }
@@ -192,18 +170,12 @@ impl Transport {
         self.finished
     }
 
-    /// True while the transport is running (independent of completion).
     pub fn is_playing(&self) -> bool {
         self.playing
     }
 
-    // ---- the tick -------------------------------------------------------
-
-    /// Moves the playhead by `dt` of wall-clock time and reports what happened.
-    ///
-    /// A paused, finished or zero-speed animation returns an all-false
-    /// [`Advance`] without touching anything, so calling this unconditionally on
-    /// every node every frame is free.
+    /// Moves the playhead by `dt` of wall-clock time and reports what happened. A paused, finished
+    /// or zero-speed animation returns an all-false [`Advance`], so calling this every frame is free.
     pub fn advance(&mut self, dt: Duration) -> Advance {
         let mut result = Advance {
             loop_count: self.loops_done,
@@ -217,8 +189,7 @@ impl Transport {
         let span = end - start;
         let before = self.frame;
 
-        // A degenerate segment has nowhere to go: treat reaching it as an
-        // immediate completion rather than spinning on a zero-length loop.
+        // A degenerate segment completes immediately rather than spinning on a zero-length loop.
         if span <= 0.0 {
             self.frame = start;
             self.finish(&mut result);
@@ -226,8 +197,7 @@ impl Transport {
         }
 
         let mut remaining = dt.as_secs_f32() * self.meta.frame_rate * self.speed;
-        // Bounded because each iteration consumes at least the distance to the
-        // near boundary, and a bounce/wrap resets to the far one.
+        // Bounded: each iteration consumes at least the distance to the near boundary.
         let mut guard = 0;
         while remaining > 0.0 && guard < 64 {
             guard += 1;
@@ -241,7 +211,6 @@ impl Transport {
                 break;
             }
 
-            // Landed on (or past) the boundary.
             remaining -= to_boundary;
             self.frame = match self.direction {
                 Direction::Forward => end,
@@ -254,8 +223,7 @@ impl Transport {
             let keep_going = match self.loop_mode {
                 LoopMode::None => false,
                 LoopMode::Loop => true,
-                // lottie-web's numeric `loop` is a count of *repeats*, so the
-                // animation plays n + 1 times before completing.
+                // lottie-web's numeric `loop` counts repeats, so the animation plays n + 1 times.
                 LoopMode::Count(count) => self.loops_done < count,
             };
             if !keep_going {
@@ -290,7 +258,6 @@ impl Transport {
         result.completed = true;
     }
 
-    /// Where a fresh pass over the segment starts, given the direction.
     fn segment_entry(&self) -> f32 {
         let (start, end) = self.active_segment();
         match self.base_direction {

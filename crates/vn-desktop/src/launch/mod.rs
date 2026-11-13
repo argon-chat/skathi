@@ -1,20 +1,9 @@
-//! How this process was launched, and the one-instance rule (docs/LAUNCH.md).
+//! How this process was launched, and the one-instance rule.
 //!
-//! ```text
-//!   main()  ──args::process()──▶ start(cfg) ──┬─ not single-instance ─▶ run as the app
-//!                                             ├─ first instance ──────▶ run, + pipe server
-//!                                             └─ another one runs ────▶ forward argv/url/cwd,
-//!                                                                      exit 0 (2: no answer,
-//!                                                                      3: pipe not ours)
-//!   pipe server (vn-instance) ── verify client ── read ≤ 1 MiB ── ack ── raise ── emit(launch)
-//!                                                                                │
-//!   JS: appLaunch "launch" event + launchQueue LaunchParams ◀── pump(), token 0 ─┘
-//! ```
-//!
-//! `start` is the first thing `main()` does after the argv parse — before the
-//! inspector, the logger, the payload's assets or gpui — so a second launch
-//! never creates a window, never touches `localStorage`, and is gone in
-//! milliseconds.
+//! `start` is the first thing `main()` does after the argv parse, before the inspector, logger or
+//! gpui, so a second launch never creates a window or touches `localStorage`. It either runs as the
+//! app, becomes the instance (pipe server), or forwards argv/url/cwd to the running one and exits
+//! (0 forwarded, 2 no answer, 3 pipe not ours). The pipe server emits an unsolicited `launch` event.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -37,12 +26,7 @@ pub mod protocol;
 #[cfg(target_os = "windows")]
 pub mod protocol_win;
 
-// ---------------------------------------------------------------------------
-// configuration: the `launch` block of the manifest / payload META
-// ---------------------------------------------------------------------------
-
-/// `vn.config.json`'s launch keys, as the builder copied them (`build.ts` into
-/// `dist/manifest.json`, `vn build` into the payload's META).
+/// `vn.config.json`'s launch keys, as the builders copied them into the manifest / payload META.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchConfig {
     /// `"id"` — reverse-DNS, `gl.argon.notes`. `None`: the app name stands in.
@@ -62,9 +46,8 @@ impl Default for LaunchConfig {
 }
 
 impl LaunchConfig {
-    /// Parses the launch block. A key of the wrong type is IGNORED with a line
-    /// on stderr — the builders validate, so reaching this means a hand-edited
-    /// manifest, and the app should still start.
+    /// A key of the wrong type is ignored with a line on stderr: the builders validate, so this is a
+    /// hand-edited manifest and the app should still start.
     pub fn parse(text: Option<&str>) -> LaunchConfig {
         let mut cfg = LaunchConfig::default();
         let Some(text) = text.map(str::trim).filter(|t| !t.is_empty()) else { return cfg };
@@ -107,26 +90,17 @@ impl LaunchConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// identity
-// ---------------------------------------------------------------------------
-
-/// The app's name and id. The NAME chain is vn-storage's (`VN_APP_NAME` → the
-/// build's `name` → the exe stem) so the two can never disagree about which
-/// app this is; the id is `vn.config.json`'s `"id"`, defaulting to the name.
+/// The app's name and id. The name chain is vn-storage's (`VN_APP_NAME`, the build's `name`, the
+/// exe stem) so the two never disagree about which app this is; the id defaults to the name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identity {
     pub name: String,
     pub id: String,
 }
 
-/// The name of the app's storage folder, `%LOCALAPPDATA%\<this>\storage`:
-/// vn-storage's `sanitize` (crates/vn-storage/src/lib.rs, kept identical),
-/// lowercased because the file system does not tell `Argon` from `argon`.
-/// Part of the instance key, so two processes that would share a storage
-/// folder (and fight over its IndexedDB lock) always share the instance
-/// lock as well. Electron keys `requestSingleInstanceLock` on its `userData`
-/// folder for the same reason.
+/// The app's storage folder name, vn-storage's `sanitize` (kept identical), lowercased because the
+/// file system does not tell `Argon` from `argon`. Part of the instance key, so two processes that
+/// would share a storage folder (and fight over its IndexedDB lock) share the instance too.
 pub fn storage_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -153,11 +127,6 @@ pub fn resolve_identity(cfg: &LaunchConfig, build_name: Option<String>) -> Ident
     Identity { name, id }
 }
 
-// ---------------------------------------------------------------------------
-// what this launch was
-// ---------------------------------------------------------------------------
-
-/// The launch, as `appLaunch` and `launchQueue` see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchInfo {
     /// Electron's `process.argv` shape (exe first), minus the `--vn-*` internals.
@@ -185,8 +154,7 @@ pub fn existing_paths(args: &[String], cwd: &Path) -> Vec<String> {
         }
         let p = Path::new(a);
         let joined = if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
-        // Lexically normalised (`.` and `..` folded, no `\\?\` prefix) — what
-        // Explorer would show, and what `canonicalize` would not.
+        // Lexically normalised (`.` and `..` folded, no `\\?\` prefix), as Explorer shows it.
         let abs = std::path::absolute(&joined).unwrap_or(joined);
         if std::fs::symlink_metadata(&abs).is_ok() {
             out.push(abs.to_string_lossy().into_owned());
@@ -195,12 +163,9 @@ pub fn existing_paths(args: &[String], cwd: &Path) -> Vec<String> {
     out
 }
 
-/// `LaunchParams.files`: one File System Access handle per launch path,
-/// `{h, name, kind}`, granted here because the user named these paths on the
-/// command line (or in Explorer's "Open with"), which is the launch-time
-/// equivalent of picking them. A path's kind is its target's: a symlink to a
-/// folder is a directory handle. A path that vanished between the parse and
-/// now (or a dangling link) has no handle; it stays on `paths`.
+/// `LaunchParams.files`: one File System Access handle per launch path, granted here because the
+/// user named these paths on the command line (the launch-time equivalent of picking them). A path
+/// that vanished since the parse has no handle; it stays on `paths`.
 pub(crate) fn handles_for(paths: &[String]) -> Vec<Json> {
     paths
         .iter()
@@ -216,7 +181,6 @@ struct Boot {
     identity: Identity,
     config: LaunchConfig,
     info: LaunchInfo,
-    /// Does THIS process hold the instance lock?
     single_instance: bool,
     /// A dev host's slot — written into a protocol command as `--vn-dist`.
     dev_slot: Option<String>,
@@ -224,19 +188,15 @@ struct Boot {
 
 static BOOT: OnceLock<Boot> = OnceLock::new();
 
-/// The identity `start` resolved (None before it ran).
 pub fn identity() -> Option<&'static Identity> {
     BOOT.get().map(|b| &b.identity)
 }
 
-/// The launch configuration `start` read (None before it ran).
 pub fn config() -> Option<&'static LaunchConfig> {
     BOOT.get().map(|b| &b.config)
 }
 
-/// `__vn_launch_info()`'s answer: the boot launch plus who we are. Each call
-/// grants fresh `handles` (the runtime asks once per realm, and each realm
-/// releases its own through the handles' FinalizationRegistry).
+/// `__vn_launch_info()`'s answer. Each call grants fresh `handles` (each realm releases its own).
 pub fn info_json() -> String {
     match BOOT.get() {
         Some(b) => {
@@ -252,26 +212,17 @@ pub fn info_json() -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// the forwarded-launch message (one pipe message, strict JSON)
-// ---------------------------------------------------------------------------
-
-/// The cap on one forwarded launch. zed's 128 bytes truncate a long path; a
-/// megabyte is a few thousand of them and still bounded.
+/// Cap on one forwarded launch: enough for a few thousand paths, still bounded.
 pub const MAX_MESSAGE: usize = 1 << 20;
 
-/// What a second launch sends the first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Forward {
     pub argv: Vec<String>,
-    /// The app arguments (`Args::app_args`) — what `paths` is computed from.
     pub args: Vec<String>,
     pub cwd: String,
     pub url: Option<String>,
-    /// May the running instance take the foreground for this launch? `false`
-    /// when the second launch is itself quiet (`VN_WINDOW_FOCUS=never`): a
-    /// test's or an agent's launch never raises a window the person at the
-    /// machine is using. Absent from a message means `true`.
+    /// `false` when the second launch is itself quiet (`VN_WINDOW_FOCUS=never`), so a test's launch
+    /// never raises a window the person at the machine is using. Absent means `true`.
     pub raise: bool,
 }
 
@@ -282,9 +233,8 @@ impl Forward {
             .into_bytes()
     }
 
-    /// STRICT: an object with exactly these keys and types, `v == 1`, at most
-    /// [`MAX_MESSAGE`] bytes. Anything else is refused whole — this crosses a
-    /// process boundary.
+    /// Strict: exactly these keys and types, `v == 1`, at most [`MAX_MESSAGE`] bytes; anything else
+    /// is refused whole, as this crosses a process boundary.
     pub fn decode(bytes: &[u8]) -> Result<Forward, String> {
         if bytes.len() > MAX_MESSAGE {
             return Err(format!("message is {} bytes, over the {MAX_MESSAGE}-byte cap", bytes.len()));
@@ -322,17 +272,14 @@ impl Forward {
     }
 }
 
-/// `VN_WINDOW_FOCUS=never`: this process never takes the foreground
-/// (crates/vn-app/src/quiet.rs reads the same variable for its windows).
+/// `VN_WINDOW_FOCUS=never`: this process never takes the foreground.
 pub fn quiet() -> bool {
     std::env::var("VN_WINDOW_FOCUS").is_ok_and(|v| v == "never")
 }
 
-/// Why a forwarded launch leaves the window where it is (every reason that
-/// holds, `; `-joined), or `None` when it raises it: the app said so
-/// (`"raiseOnSecondInstance": false`); this instance is quiet, so nothing may
-/// raise it; the second launch was quiet, so it may not raise anything; the
-/// `VN_LAUNCH_RAISE=off` seam.
+/// Why a forwarded launch leaves the window where it is (all reasons, `; `-joined), or `None` when
+/// it raises it: the app said so, this instance is quiet, the second launch was quiet, or
+/// `VN_LAUNCH_RAISE=off`.
 fn raise_refusal(app_raises: bool, sender_raises: bool, quiet_here: bool, disabled: bool) -> Option<String> {
     let reasons: Vec<&str> = [
         (!app_raises, "\"raiseOnSecondInstance\" is false"),
@@ -346,8 +293,7 @@ fn raise_refusal(app_raises: bool, sender_raises: bool, quiet_here: bool, disabl
     (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
-/// A forwarded launch, delivered: raise the window, then hand it to JS as an
-/// unsolicited `launch` event. Runs on the pipe server's thread.
+/// A forwarded launch, delivered: raise the window, then emit an unsolicited `launch` event.
 pub(crate) fn deliver(msg: Forward) {
     let paths = existing_paths(&msg.args, Path::new(&msg.cwd));
     let refusal = raise_refusal(config().is_none_or(|c| c.raise), msg.raise, quiet(), raise_disabled());
@@ -376,18 +322,10 @@ pub(crate) fn deliver(msg: Forward) {
     );
 }
 
-// ---------------------------------------------------------------------------
-// closing: a second launch does not land in an instance that is going away
-// ---------------------------------------------------------------------------
-
 static CLOSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// The app is shutting down: its window is closed (or hidden while the
-/// teardown runs) and the process is about to exit. From now on a second
-/// launch is answered "closing" instead of being delivered, and it waits for
-/// this process to exit and runs as the new instance — a launch made right
-/// after a close opens the app, rather than being handed to a process that
-/// is going away.
+/// The app is shutting down. From now on a second launch is answered "closing", waits for this
+/// process to exit and becomes the new instance, rather than being handed to a dying process.
 pub fn closing() {
     CLOSING.store(true, Ordering::Relaxed);
 }
@@ -396,26 +334,19 @@ pub(crate) fn is_closing() -> bool {
     CLOSING.load(Ordering::Relaxed)
 }
 
-// ---------------------------------------------------------------------------
-// raising the primary window
-// ---------------------------------------------------------------------------
-
 static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
 
-/// The window a forwarded launch brings to the front. vn-app publishes the
-/// primary window's HWND as soon as it exists; a launch that arrives before
-/// that has nothing to raise and is still delivered.
+/// The window a forwarded launch raises, published by vn-app once it exists; a launch before that
+/// is still delivered.
 pub fn set_window(hwnd: isize) {
     MAIN_HWND.store(hwnd, Ordering::Relaxed);
 }
 
-/// `VN_LAUNCH_RAISE=off`: deliver, never take the foreground — the test seam,
-/// with VN_DEVTOOLS_RAISE=off as its precedent.
+/// `VN_LAUNCH_RAISE=off`: deliver, never take the foreground (test seam).
 fn raise_disabled() -> bool {
     std::env::var("VN_LAUNCH_RAISE").is_ok_and(|v| v.eq_ignore_ascii_case("off") || v == "0")
 }
 
-/// `false` when there is no window yet.
 fn raise() -> bool {
     let hwnd = MAIN_HWND.load(Ordering::Relaxed);
     if hwnd == 0 {
@@ -426,56 +357,43 @@ fn raise() -> bool {
     true
 }
 
-// ---------------------------------------------------------------------------
-// start: the first thing main() does
-// ---------------------------------------------------------------------------
-
 fn sender_requests_raise(activate: bool, quiet_sender: bool) -> bool {
     activate && !quiet_sender
 }
 
-/// What `main()` should do next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
-    /// Run as the app.
     Run,
     /// Exit with this code: 0 = forwarded to the running instance, 2 = the
     /// running instance did not answer in time, 3 = the pipe is not ours.
     Exit(i32),
 }
 
-/// How long a second launch waits for the first to answer.
 pub const FORWARD_TIMEOUT_MS: u64 = 5_000;
 
-/// How long a second launch waits, from the moment the running instance
-/// answers that it is closing, for it to exit: longer than the host's own
-/// teardown deadline (vn-app's `shutdown::DEADLINE`, 4 s), after which that
-/// process ends itself.
+/// How long a second launch waits for a closing instance to exit: longer than the host's own
+/// teardown deadline (vn-app's `shutdown::DEADLINE`, 4 s).
 pub const CLOSING_PATIENCE_MS: u64 = 6_000;
 
-/// Resolves who we are and what this launch is, and — when `singleInstance`
-/// is on — either becomes THE instance or forwards to it.
+/// Resolves who we are and what this launch is, and, when `singleInstance` is on, either becomes
+/// THE instance or forwards to it.
 ///
-/// `build_name` is the build's `name` (`boot_mode::app_name()`); `dev_slot`
-/// is the dist slot in a DEV host (a protocol registration made there names
-/// it), `None` in prod. The instance key is the id, the storage folder's
-/// name and the user — not the slot: two dev hosts of one app share a
-/// storage folder whatever their slots, so they are one instance too.
+/// `build_name` is the build's `name`; `dev_slot` is the dist slot in a dev host (a protocol
+/// registration made there names it). The instance key ignores the slot: two dev hosts of one app
+/// share a storage folder, so they are one instance.
 pub fn start(args: &Args, config_json: Option<&str>, build_name: Option<String>, dev_slot: Option<PathBuf>) -> Outcome {
     start_with_activation(args, config_json, build_name, dev_slot, true)
 }
 
-/// The same launch arbitration with an explicit sender activation policy. A
-/// background embedding start can forward its argv without foregrounding the
-/// existing instance; the primary instance's policy is otherwise unchanged.
+/// [`start`] with an explicit sender activation policy: a background embedding can forward its argv
+/// without foregrounding the existing instance.
 pub fn start_with_activation(args: &Args, config_json: Option<&str>, build_name: Option<String>, dev_slot: Option<PathBuf>, activate: bool) -> Outcome {
     let config = LaunchConfig::parse(config_json);
     let identity = resolve_identity(&config, build_name);
     if !args.ignored.is_empty() {
-        // A protocol launch honours nothing but `--vn-dist`: whatever else sits
-        // in front of the marker came from a registry command someone edited,
-        // or from an attempt to smuggle a mode switch in. Before the logger
-        // exists, so stderr now and the log ring once it does.
+        // A protocol launch honours nothing but `--vn-dist`: anything else before the marker came
+        // from an edited registry command or a smuggled mode switch. Runs before the logger exists,
+        // so stderr now and the log ring once it does.
         let msg = format!(
             "[vue-native compat] a protocol launch ignores host flags in front of --vn-protocol-launch: {}",
             args.ignored.join(" ")
@@ -490,8 +408,8 @@ pub fn start_with_activation(args: &Args, config_json: Option<&str>, build_name:
         url: args.url.clone(),
         paths: existing_paths(&args.app_args, &cwd),
     };
-    // `<exe> --vn-unregister-protocols`: the uninstaller's hook. Removes every
-    // registration carrying this app's marker and exits, with no window.
+    // `<exe> --vn-unregister-protocols`: the uninstaller's hook; removes every registration with
+    // this app's marker and exits.
     if args.host.unregister_protocols {
         #[cfg(target_os = "windows")]
         for scheme in protocol_win::unregister_all(&protocol_win::Hive::user(), &identity.id) {
@@ -542,7 +460,6 @@ pub fn start_with_activation(args: &Args, config_json: Option<&str>, build_name:
                     outcome = Outcome::Exit(2);
                 }
                 instance::Claim::Impostor(why) => {
-                    // A-F5.
                     eprintln!(
                         "[vue-native compat] the single-instance pipe for {} is owned by a process that is not this app ({why}) — forwarding refused",
                         identity.name
@@ -562,26 +479,20 @@ pub fn start_with_activation(args: &Args, config_json: Option<&str>, build_name:
     outcome
 }
 
-// ---------------------------------------------------------------------------
-// protocols (docs/LAUNCH.md §5)
-// ---------------------------------------------------------------------------
-
 fn own_exe() -> String {
     std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-/// The declared `protocols`, at startup: a PACKAGED app (re-)registers each
-/// one per-user, idempotently — which also heals a registration after the exe
-/// moved (owner decision Q1). A dev host never does so on its own, because
-/// that would point the scheme at a dev slot; `appLaunch.registerProtocol()`
-/// is the explicit way there (A-F10). Main thread, before the window.
+/// The declared `protocols`, at startup: a PACKAGED app (re-)registers each per-user and
+/// idempotently, which also heals a registration after the exe moved. A dev host never does, since
+/// that would point the scheme at a dev slot; `appLaunch.registerProtocol()` is the explicit way.
+/// Main thread, before the window.
 pub fn register_declared() {
     let Some(b) = BOOT.get() else { return };
     if b.config.protocols.is_empty() {
         return;
     }
     if !b.config.single_instance {
-        // A-F4.
         crate::advise_later(&format!(
             "\"protocols\" is declared without \"singleInstance\": every {}:// link starts a new instance of the app",
             b.config.protocols[0]
@@ -601,7 +512,6 @@ pub fn register_declared() {
     #[cfg(target_os = "windows")]
     {
         if protocol_win::has_package_identity() {
-            // A-F9.
             crate::advise_later(
                 "this app runs with MSIX package identity: per-user protocol registration is virtualised there and \
                  would register nothing — declare the protocols in AppxManifest (uap:Protocol) instead; skipped",
@@ -622,7 +532,6 @@ pub fn register_declared() {
     }
 }
 
-/// `appLaunch.registerProtocol(scheme)`: `{ok, wrote}` or `{error, name}`.
 pub fn js_register(raw: &str) -> String {
     let fail = |m: String| crate::Fail::type_error(format!("registerProtocol: {m}")).to_sync_json();
     let scheme = match protocol::validate_scheme(raw) {
@@ -636,7 +545,6 @@ pub fn js_register(raw: &str) -> String {
             return fail("this app runs with MSIX package identity; declare the protocol in AppxManifest (uap:Protocol)".into());
         }
         if b.dev_slot.is_some() {
-            // A-F10.
             crate::advise(&format!(
                 "registerProtocol(\"{scheme}\") in a DEV host points {scheme}:// at this dev slot ({}) — a packaged \
                  exe registers its declared protocols itself; unregister this one when done",
@@ -655,8 +563,7 @@ pub fn js_register(raw: &str) -> String {
     }
 }
 
-/// `appLaunch.unregisterProtocol(scheme)`: true when a registration of OURS,
-/// pointing at THIS exe, was removed.
+/// True when a registration of OURS, pointing at THIS exe, was removed.
 pub fn js_unregister(raw: &str) -> bool {
     let (Ok(scheme), Some(b)) = (protocol::validate_scheme(raw), BOOT.get()) else { return false };
     #[cfg(target_os = "windows")]
@@ -670,7 +577,6 @@ pub fn js_unregister(raw: &str) -> bool {
     }
 }
 
-/// `appLaunch.isProtocolRegistered(scheme)`: ours, and pointing at this exe.
 pub fn js_is_registered(raw: &str) -> bool {
     let (Ok(scheme), Some(b)) = (protocol::validate_scheme(raw), BOOT.get()) else { return false };
     #[cfg(target_os = "windows")]
@@ -727,7 +633,6 @@ mod tests {
         assert_eq!(Forward::decode(&f.encode()), Ok(f.clone()));
         let none = Forward { url: None, raise: false, ..f.clone() };
         assert_eq!(Forward::decode(&none.encode()), Ok(none));
-        // A message with no `raise` asks for the default.
         let old = Forward::decode(br#"{"v":1,"argv":[],"args":[],"cwd":"","url":null}"#).unwrap();
         assert!(old.raise);
         for bad in [
@@ -746,10 +651,8 @@ mod tests {
         assert!(Forward::decode(&huge).unwrap_err().contains("cap"));
     }
 
-    /// Any one reason keeps the window where it is, from either end: a quiet
-    /// instance is never raised, and a quiet launch raises nothing. Every
-    /// reason that holds is named, so a test that sets the seam as well still
-    /// reads the quiet rule.
+    /// Any one reason keeps the window where it is, from either end; every reason that holds is
+    /// named.
     #[test]
     fn background_senders_forward_without_raising_the_existing_instance() {
         assert!(sender_requests_raise(true, false));
@@ -769,8 +672,7 @@ mod tests {
         assert!(all.contains("this instance is quiet") && all.contains("the second launch did not request activation") && all.contains("VN_LAUNCH_RAISE"), "{all}");
     }
 
-    /// The key's name half is the storage folder's name, so the names one
-    /// folder answers to are one instance.
+    /// The key's name half is the storage folder's name.
     #[test]
     fn the_storage_name_is_the_folder_name() {
         assert_eq!(storage_name("argon-vue-native"), "argon-vue-native");

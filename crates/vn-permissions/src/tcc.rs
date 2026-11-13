@@ -1,7 +1,5 @@
-//! The macOS backend's bookkeeping, free of the frameworks so it runs as unit
-//! tests everywhere: which TCC service a capability is, how AVFoundation's
-//! statuses read, and the queue of requests in flight that the completion
-//! handlers write to and the VM's pump drains. `mac.rs` makes the calls.
+//! The macOS backend's bookkeeping, free of the frameworks so it runs as unit tests everywhere;
+//! `mac.rs` makes the calls.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use vn_runtime::redjs::webapi::permissions::{Capability, PermissionState};
@@ -78,10 +76,7 @@ pub(crate) struct Requests {
     /// Screen recording was requested in this run and not granted: what
     /// tells a refusal from a capability nobody has asked about yet.
     screen_refused: bool,
-    /// Each capability's state as last reported, so that a read which sees
-    /// it move queues a `change`: a microphone or camera turned on or off in
-    /// System Settings, a screen-recording grant visible before relaunch,
-    /// macOS 15's periodic re-ask.
+    /// Each capability's state as last reported, so a read that sees it move queues a `change`.
     seen: Vec<(Capability, PermissionState)>,
 }
 

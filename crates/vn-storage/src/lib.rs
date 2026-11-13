@@ -1,110 +1,21 @@
-//! vn-storage — the bytes half of vue-native's Web Storage.
+//! The bytes half of Web Storage: the `localStorage` file, its folder, optional encryption at
+//! rest, and the `__vn_storage_*` host fns behind `appStorage`. The browser-facing surface and
+//! the `StorageHost` trait live in redjs; IndexedDB (feature `indexeddb`) shares this folder
+//! and encryption setting.
 //!
-//! # What is where, and why
+//! Default folder: `%LOCALAPPDATA%\<app name>\storage` (local, not roaming: DPAPI sealing does
+//! not survive roaming). App name, first hit wins: `VN_APP_NAME`, the name given to [`install`],
+//! the executable's file stem.
 //!
-//! The browser-shaped surface (`localStorage`, `sessionStorage`, `Storage`,
-//! `StorageEvent`, string coercion, the quota, `QuotaExceededError`) lives in
-//! **redjs** (`redjs::webapi::storage`), because it is browser semantics and
-//! redjs is where browser semantics live. So does the [`StorageHost`] trait it
-//! reads through — a trait redjs consumes has to be declared by redjs.
+//! Encryption is sticky: a folder that already holds a sealed area keeps that format unless
+//! `setStorageFolder(path, { encrypted: false })` says otherwise, so a restart never silently
+//! rewrites the data as plaintext.
 //!
-//! This crate is the other half: the file on the disk, the folder it lives in,
-//! the optional encryption, and the small `__vn_storage_*` host-fn surface
-//! behind vue-native's own `appStorage` extension. The same split
-//! `vn-permissions` has, and for the same reason — it keeps redjs shippable to
-//! a consumer (PEWPEW) that has no `%LOCALAPPDATA%` and no opinion about DPAPI.
-//!
-//! ```text
-//!   apps/hello  ──import { appStorage } from "vue-native"──┐
-//!                                                          │  tier 2: extension
-//!   packages/vue-native/src/runtime.js ──__vn_storage_*────┤  (folders, encryption)
-//!                                                          │
-//!   apps/*      ──localStorage.setItem(…)──────────────────┤  tier 1: Web Storage
-//!                                                          │
-//!   redjs::webapi::storage  ── dyn StorageHost ────────────┘
-//!                                    ▲
-//!                            vn_storage::FileStorage
-//!                                    │
-//!                     <folder>/localStorage.json   (plaintext)
-//!                     <folder>/localStorage.sealed (DPAPI; macOS: a Keychain key)
-//!
-//!   apps/*      ──indexedDB.open(…)── redjs::webapi::indexeddb (SQLite)
-//!                                    ▲  dyn IndexedDbHost
-//!                            vn_storage::idb::Host   (feature `indexeddb`)
-//!                                    │
-//!                     <folder>/indexeddb/<h>.sqlite3   (ChaCha20-Poly1305
-//!                     <folder>/indexeddb/key.sealed     under a DPAPI-sealed key
-//!                                                       when the folder is encrypted)
-//! ```
-//!
-//! IndexedDB follows the SAME folder and the SAME encryption setting, with the
-//! same sticky rule — see [`idb`] (compiled with the `indexeddb` feature).
-//!
-//! # The default folder, and how the app name is found
-//!
-//! An app that never calls `appStorage.setStorageFolder` gets
-//! `%LOCALAPPDATA%\<app name>\storage`.
-//!
-//! **LOCAL**, not roaming: a `localStorage` area is a cache of one machine's
-//! session state — a scroll position, a collapsed sidebar, a JWT that is
-//! probably expired by the time the profile lands on another machine — and
-//! roaming it is the case where DPAPI encryption stops working (see
-//! [`crypt`]'s roaming caveat). An app that genuinely wants its data to follow
-//! the user says so with one call to `getUserFolder("APPDATA", …)`.
-//!
-//! The app name is resolved in this order, first hit wins:
-//!
-//! 1. `VN_APP_NAME` — the override. This is what isolates two dev hosts that
-//!    would otherwise share a folder, and what the storage-persistence test
-//!    pins so it cannot touch a real app's data.
-//! 2. Whatever the embedder passed to [`install`] — in vue-native, the `name`
-//!    field of `apps/<app>/vn.config.json` if it has one, else the app
-//!    directory from the build manifest's entry (`apps/hello/src/main.js` →
-//!    `hello`). Dev builds only: a dev host runs many apps out of one exe, so
-//!    the exe cannot be the name.
-//! 3. The executable's file stem. A shipped build is one exe per app and its
-//!    file name IS the app's name, so a `prod` build needs no new artifact and
-//!    no config to find its folder.
-//!
-//! # Encryption is sticky
-//!
-//! `{ encrypted: true }` is a runtime call, so a restarted host boots with the
-//! flag off. A folder that already holds a sealed area therefore **decides its
-//! own format**: the load keeps it encrypted and says so, and only an explicit
-//! `setStorageFolder(path, { encrypted: false })` opens it back up. Without
-//! that rule, restarting an app that had turned encryption on would silently
-//! write the user's data back out in plaintext, which is the worst thing this
-//! crate could do.
-//!
-//! # Concurrency: last writer wins, and nothing is ever half-written
-//!
-//! Each process loads the area once and holds it; writes replace the whole file
-//! by rename ([`file`]). Two processes on one folder therefore cannot corrupt
-//! the file — a reader sees the old area or the new one, never a torn one — but
-//! the second writer's copy is the one that survives, and neither sees the
-//! other's changes while running.
-//!
-//! That is exactly the situation a browser has with two tabs, and exactly what
-//! the `storage` event exists to solve. We do not fire it (redjs's storage
-//! module documents why), so the honest answer for two concurrent dev instances
-//! is to give them different folders: `VN_APP_NAME=hello-b`, or an explicit
-//! `setStorageFolder`. `VN_DIST` already separates their *builds*; this
-//! separates their *data*.
-//!
-//! # Writes are coalesced to one per frame
-//!
-//! `StorageHost::store` is called by redjs on every mutation. Writing the file
-//! there would turn a loop of a hundred `setItem` calls into a hundred
-//! `fsync`+rename pairs. So `store` stages the snapshot and [`pump`] — one call
-//! per frame, beside `vn_permissions::pump` — writes at most once. A burst
-//! inside one JS wave is one write, and the data is on disk within a frame
-//! (~6 ms at 165 Hz).
-//!
-//! The cost, stated: a hard kill in that window loses the last frame's writes.
-//! `appStorage.flush()` is the synchronous escape hatch for code that wants the
-//! guarantee at a specific moment. Persistent write failures retain the latest
-//! snapshot and retry automatically at most once per second; explicit flush
-//! always retries immediately.
+//! Writes replace the whole file by rename, so a reader never sees a torn file; two processes on
+//! one folder are last-writer-wins, so give concurrent dev instances different folders
+//! (`VN_APP_NAME`). [`pump`] coalesces writes to one per frame: a hard kill loses at most the
+//! last frame, `appStorage.flush()` writes synchronously, and failed writes retry at most once
+//! per second.
 
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
@@ -125,50 +36,31 @@ pub mod idb;
 
 pub use folders::{user_folder, KINDS};
 
-// ---------------------------------------------------------------------------
-// The backend
-// ---------------------------------------------------------------------------
-
 #[derive(Default)]
 struct State {
     folder: PathBuf,
     encrypted: bool,
-    /// Did the app actually *say* which format it wants?
-    ///
-    /// This is what makes encryption STICKY, and it is not a nicety. The
-    /// encryption flag is a runtime call, so a restarted host starts with
-    /// `encrypted: false` — and without this bit, an app that turned
-    /// encryption on and then restarted would find a sealed area, decide it
-    /// was in the wrong format, and helpfully write the user's data back out
-    /// in plaintext. Silently un-encrypting data is the single worst thing
-    /// this crate could do, so it does not: a sealed area stays sealed unless
-    /// something explicitly asks for `{ encrypted: false }`.
+    /// Whether the app said which format it wants. Makes encryption sticky: a restarted host
+    /// starts with `encrypted: false` and must not rewrite a sealed area as plaintext.
     encryption_explicit: bool,
-    /// The area as last loaded or last handed to `store` — what a folder or
-    /// encryption change has to re-write to the new place/format.
+    /// The area as last loaded or stored; re-written on a folder or format change.
     snapshot: Vec<(String, String)>,
-    /// Set once `load` has run: before that, this process has no opinion about
-    /// what the area contains and must not write one.
+    /// Set once `load` has run; before that this process must not write.
     loaded: bool,
-    /// A staged write waiting for [`pump`].
     dirty: bool,
     /// Persistent I/O failures must not re-encrypt and fsync on every frame.
     retry_after: Option<Instant>,
-    /// The last thing that went wrong, for `appStorage.info()`.
     error: Option<String>,
-    /// A plaintext file that was migrated into a sealed one (or the reverse)
-    /// and should be removed once the new one is safely written.
+    /// Old-format file to remove once the new one is written.
     retire: Option<PathBuf>,
 }
 
-/// The file-backed `localStorage` for this process. One per process; there is
-/// one disk and one area.
+/// The file-backed `localStorage` for this process.
 pub struct FileStorage {
     state: Mutex<State>,
 }
 
-/// The one backend. A `OnceLock` rather than a `static` initialiser because a
-/// `PathBuf` cannot be built in a const context.
+/// The one backend (`OnceLock`: a `PathBuf` cannot be built in a const context).
 fn storage() -> &'static FileStorage {
     static S: OnceLock<FileStorage> = OnceLock::new();
     S.get_or_init(|| FileStorage { state: Mutex::new(State::default()) })
@@ -180,17 +72,13 @@ impl FileStorage {
         st.error = Some(what);
     }
 
-    /// Reads the area out of `folder`, in whichever of the two formats is
-    /// there.
-    ///
-    /// Returns `(entries, migrate)` — `migrate` meaning "this came out of the
-    /// OTHER format and has to be re-written in the configured one".
+    /// Reads the area from `folder` in whichever format is there. `migrate` is true when it came
+    /// from the other format and must be re-written.
     fn read_folder(&self, st: &mut State) -> (Vec<(String, String)>, bool) {
         let plain = file::plain_path(&st.folder);
         let sealed = file::sealed_path(&st.folder);
 
-        // Encryption is sticky (see `State::encryption_explicit`): an existing
-        // sealed area decides the format for a host that never said.
+        // Sticky encryption: an existing sealed area decides the format.
         if !st.encryption_explicit && !st.encrypted && sealed.exists() {
             eprintln!(
                 "[storage] {} is encrypted and nothing asked for plaintext — keeping it encrypted",
@@ -205,9 +93,7 @@ impl FileStorage {
         match self.read_one(st, want) {
             Some(entries) => (entries, false),
             None => {
-                // Nothing in the configured format. Something in the other one
-                // is a MIGRATION — the user turned encryption on (or off) on an
-                // area that already existed — not an empty area.
+                // Only the other format is present: a migration, not an empty area.
                 match self.read_one(st, other) {
                     Some(entries) => {
                         eprintln!(
@@ -225,9 +111,7 @@ impl FileStorage {
         }
     }
 
-    /// One file, or `None` if it is not there. A file that IS there but cannot
-    /// be read is an empty area **plus an advisory** — never a hard failure.
-    /// Losing preferences is survivable; refusing to start is not.
+    /// `None` if the file is absent. An unreadable file is an empty area plus an advisory.
     fn read_one(&self, st: &mut State, path: &Path) -> Option<Vec<(String, String)>> {
         let sealed = path.extension().is_some_and(|e| e == "sealed");
         let raw = std::fs::read(path).ok()?;
@@ -285,8 +169,7 @@ impl FileStorage {
         result
     }
 
-    /// Writes the staged snapshot now. Returns `Ok(false)` when there was
-    /// nothing to write.
+    /// Writes the staged snapshot; `Ok(false)` if nothing was staged.
     fn write_now(&self, st: &mut State) -> Result<bool, String> {
         if !st.dirty {
             return Ok(false);
@@ -328,8 +211,7 @@ impl StorageHost for FileStorage {
         let (entries, migrate) = self.read_folder(&mut st);
         st.snapshot = entries.clone();
         st.loaded = true;
-        // A migration is a write this process owes the disk even if the app
-        // never calls `setItem`.
+        // A migration is a write owed to disk even if the app never calls `setItem`.
         st.dirty = migrate;
         entries
     }
@@ -347,19 +229,13 @@ impl StorageHost for FileStorage {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The folder
-// ---------------------------------------------------------------------------
-
-/// `%LOCALAPPDATA%\<app name>\storage` — see the crate header.
+/// `%LOCALAPPDATA%\<app name>\storage`.
 pub fn default_folder(app_name: Option<&str>) -> PathBuf {
     let name = resolve_app_name(app_name);
     match folders::user_folder("LOCALAPPDATA", &name) {
         Ok(p) => p.join("storage"),
         Err(e) => {
-            // The one case with no good answer: no known folder API and no
-            // HOME. A folder beside the executable is at least writable often
-            // enough to be better than giving up on storage entirely.
+            // No known-folder API and no HOME: beside the exe beats no storage.
             eprintln!("[storage] no local app data folder ({e}); falling back beside the exe");
             std::env::current_exe()
                 .ok()
@@ -376,10 +252,8 @@ pub(crate) fn resolve_app_name(from_embedder: Option<&str>) -> String {
     pick_app_name(env.as_deref(), from_embedder, &stem)
 }
 
-/// The running program's file stem, which names its folder and its storage
-/// key. Started through the dynamic loader (`ld-linux-x86-64.so.2 ./Argon`,
-/// how a build is run against another glibc), `current_exe` is the loader;
-/// the loader hands the program its own path as `argv[0]`, so that names it.
+/// The program's file stem. Under the dynamic loader (`ld-linux-x86-64.so.2 ./Argon`)
+/// `current_exe` is the loader, so `argv[0]` names the program.
 pub(crate) fn exe_stem() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let program = if cfg!(target_os = "linux") && is_dynamic_loader(&exe) {
@@ -396,8 +270,7 @@ fn is_dynamic_loader(path: &Path) -> bool {
         .is_some_and(|name| ["ld-linux", "ld64.so", "ld-musl"].iter().any(|p| name.starts_with(p)))
 }
 
-/// The precedence rule on its own, so it is testable without mutating the
-/// process environment out from under a parallel test.
+/// The precedence rule on its own, testable without touching the environment.
 fn pick_app_name(env: Option<&str>, embedder: Option<&str>, exe_stem: &str) -> String {
     for candidate in [env, embedder, Some(exe_stem)] {
         if let Some(n) = candidate.filter(|n| !n.is_empty()) {
@@ -429,15 +302,9 @@ fn sanitize(name: &str) -> String {
     }
 }
 
-/// Points the backend at `folder`, creating it, and turns encryption on or off
-/// — or, with `None`, leaves it as it is (`setStorageFolder(path)` with no
-/// `encrypted`: a folder change must never be a silent decryption).
-///
-/// Idempotent, and safe to call at any time: before the first `localStorage`
-/// touch it simply decides where the lazy load will read from; after it, the
-/// in-memory area is authoritative and gets re-written into the new place and
-/// format (which is what makes turning encryption on a migration rather than a
-/// data loss).
+/// Points the backend at `folder` (created) and sets encryption; `None` leaves the format as
+/// is, so a folder change is never a silent decryption. Safe at any time: once loaded, the
+/// in-memory area is re-written into the new place and format.
 pub fn set_storage_folder(folder: &Path, encrypted: Option<bool>) -> Result<PathBuf, String> {
     if encrypted == Some(true) && crypt::provider().is_none() {
         return Err(format!(
@@ -448,20 +315,16 @@ pub fn set_storage_folder(folder: &Path, encrypted: Option<bool>) -> Result<Path
     }
     std::fs::create_dir_all(folder)
         .map_err(|e| format!("could not create {}: {e}", folder.display()))?;
-    // Canonicalising resolves `..` and gives `info()` a path a human can
-    // compare against Explorer; on Windows it also gives the `\\?\` prefix,
-    // which is stripped because it is noise in an advisory.
+    // Canonicalise to resolve `..`; strip the `\\?\` prefix, which is noise in advisories.
     let folder = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     let folder = strip_verbatim(&folder);
 
     let r = relocate(&folder, encrypted);
-    // IndexedDB latches its folder and key at its first use; a change after
-    // that is for the next start (src/idb.rs, "A late setStorageFolder").
+    // IndexedDB latches its folder and key at first use; later changes apply at next start.
     // Outside the State lock: the IndexedDB host takes it from its own thread.
     #[cfg(feature = "indexeddb")]
     idb::storage_changed(&folder, encrypted);
-    // The HTTP cache follows the encryption at once; it has nothing to
-    // migrate (src/http_cache.rs).
+    // The HTTP cache follows encryption at once; it has nothing to migrate.
     http_cache::storage_changed(encrypted);
     r.map(|()| folder)
 }
@@ -473,10 +336,8 @@ fn relocate(folder: &Path, encrypted: Option<bool>) -> Result<(), String> {
     let mut st = s.state.lock().unwrap();
     let same_folder = st.folder == folder;
     let was_encrypted = st.encrypted;
-    // `None` keeps the format, and keeps the sticky rule in charge of it: a
-    // host that never said takes on a sealed area in the new folder exactly as
-    // its load would have (`read_folder`), rather than writing plaintext next
-    // to it.
+    // `None` keeps the format under the sticky rule: take on a sealed area in the new folder
+    // as `read_folder` would.
     let encrypted = match encrypted {
         Some(e) => {
             st.encryption_explicit = true;
@@ -490,15 +351,8 @@ fn relocate(folder: &Path, encrypted: Option<bool>) -> Result<(), String> {
     st.encrypted = encrypted;
     st.error = None;
     if moved && st.loaded {
-        // The area this process is holding is the truth; put it where it now
-        // belongs.
-        //
-        // Flipping encryption IN PLACE also retires the file in the old format
-        // — otherwise the plaintext copy would sit next to the encrypted one
-        // and the encryption would have bought nothing. Moving to a DIFFERENT
-        // folder does not: the old folder is somebody else's data now, and
-        // deleting a file there because an app changed its mind is not this
-        // function's business.
+        // Flipping encryption in place retires the old-format file. Moving to another folder
+        // leaves the old one: it is not this function's data to delete.
         if same_folder && was_encrypted != encrypted {
             st.retire = Some(if was_encrypted {
                 file::sealed_path(&folder)
@@ -515,9 +369,7 @@ fn relocate(folder: &Path, encrypted: Option<bool>) -> Result<(), String> {
     Ok(())
 }
 
-/// The storage folder as of now: the configured one, else the default
-/// `install` would have set. What IndexedDB's host latches (src/idb.rs), and
-/// what the HTTP cache's sticky rule reads (src/http_cache.rs).
+/// The configured folder, else the default `install` would set.
 pub(crate) fn current_folder() -> PathBuf {
     let folder = storage().state.lock().unwrap().folder.clone();
     if folder.as_os_str().is_empty() {
@@ -527,9 +379,7 @@ pub(crate) fn current_folder() -> PathBuf {
     }
 }
 
-/// What the app SAID about encryption this run: `Some(encrypted)` once it
-/// called `setStorageFolder`, `None` if it never did (the sticky rule then
-/// decides — see `State::encryption_explicit`).
+/// `Some(encrypted)` once the app called `setStorageFolder`; `None` leaves it to the sticky rule.
 #[cfg_attr(not(feature = "indexeddb"), allow(dead_code))]
 fn encryption_intent() -> Option<bool> {
     let st = storage().state.lock().unwrap();
@@ -545,10 +395,8 @@ fn strip_verbatim(p: &Path) -> PathBuf {
     }
 }
 
-/// Converts an existing localStorage file without loading or changing the
-/// process-wide backend. The source is removed only after a verified sealed
-/// file exists; unreadable/corrupt storage is never replaced with empty data.
-/// Call before any process opens this profile for writes.
+/// Converts an existing localStorage file without loading the backend. The source is removed
+/// only after a verified sealed file exists. Call before any process opens the profile.
 pub fn encrypt_local_storage_at(folder: &Path) -> Result<bool, String> {
     let provider = crypt::provider().ok_or("localStorage encryption is unavailable on this platform")?;
     encrypt_local_storage_with(folder, provider)
@@ -596,8 +444,7 @@ fn encrypt_local_storage_with(folder: &Path, provider: &dyn crypt::SecretProvide
     Ok(changed)
 }
 
-/// Writes the staged area now, synchronously. The escape hatch behind
-/// `appStorage.flush()`.
+/// Writes the staged area now (behind `appStorage.flush()`).
 pub fn flush() -> Result<bool, String> {
     let s = storage();
     let mut st = s.state.lock().unwrap();
@@ -608,32 +455,23 @@ pub fn flush() -> Result<bool, String> {
     r
 }
 
-/// One coalesced write per frame. Goes in `vn-app`'s `pump_frame` beside
-/// `vn_permissions::pump`, and is NOT dev-gated: remembering a preference is
-/// application work.
+/// One coalesced write per frame; call beside `vn_permissions::pump`.
 pub fn pump() {
-    // The cookie jar's write, on the same clock (src/cookies.rs).
     cookies::pump();
-    // The common case is "nothing changed", and it must cost one uncontended
-    // lock and a bool read.
+    // Common case is nothing changed: one uncontended lock.
     let s = storage();
     let mut st = s.state.lock().unwrap();
     if !st.dirty {
         return;
     }
     if let Err(e) = s.write_due(&mut st, Instant::now()) {
-        // Once per distinct message, with at most one automatic retry per second.
-        // Keep the latest snapshot pending through disk/retirement failures.
+        // Log once per distinct message.
         if st.error.as_deref() != Some(e.as_str()) {
             eprintln!("[storage] {e}");
         }
         st.error = Some(e);
     }
 }
-
-// ---------------------------------------------------------------------------
-// host functions
-// ---------------------------------------------------------------------------
 
 pub(crate) fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
@@ -655,8 +493,7 @@ fn err_json(msg: &str) -> String {
     format!("{{\"error\":\"{}\"}}", json_escape(msg))
 }
 
-// `__vn_storage_user_folder(kind, subfolder) -> json` — `{"path":"…"}` or
-// `{"error":"…"}`. Creates nothing.
+// `__vn_storage_user_folder(kind, subfolder) -> json`: `{"path"}` or `{"error"}`. Creates nothing.
 host_fn!(fn vn_storage_user_folder(g, args) {
     let kind = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     let sub = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
@@ -667,9 +504,8 @@ host_fn!(fn vn_storage_user_folder(g, args) {
     JsRuntime::with(|rt| rt.ctx().string(&json).0)
 });
 
-// `__vn_storage_set_folder(path, encrypted) -> json` — `{"path":"…"}` (the
-// canonical path it settled on) or `{"error":"…"}`. `encrypted` is `"true"`,
-// `"false"`, or `"keep"` (the app did not say: the format stays).
+// `__vn_storage_set_folder(path, encrypted) -> json`; `encrypted` is "true", "false" or "keep"
+// (the app did not say).
 host_fn!(fn vn_storage_set_folder(g, args) {
     let path = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     let encrypted = match unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default().as_str() {
@@ -688,9 +524,7 @@ host_fn!(fn vn_storage_set_folder(g, args) {
     JsRuntime::with(|rt| rt.ctx().string(&json).0)
 });
 
-// `__vn_storage_info() -> json` — everything a settings screen or a test wants
-// in one call: where the area is, whether it is encrypted, which file it is in,
-// how big that file is, and the last thing that went wrong.
+// `__vn_storage_info() -> json`: folder, format, file size, pending write, last error.
 host_fn!(fn vn_storage_info(_g, _args) {
     let st = storage().state.lock().unwrap();
     let folder = if st.folder.as_os_str().is_empty() {
@@ -736,26 +570,15 @@ host_fn!(fn vn_storage_flush(_g, _args) {
     JsRuntime::with(|rt| rt.ctx().string(&json).0)
 });
 
-// ---------------------------------------------------------------------------
-// install
-// ---------------------------------------------------------------------------
-
 static APP_NAME: Mutex<Option<String>> = Mutex::new(None);
 
 pub(crate) fn embedder_app_name() -> Option<String> {
     APP_NAME.lock().unwrap().clone()
 }
 
-/// Installs the backend into redjs and registers the extension surface.
-///
-/// `app_name` is what the embedder knows and this crate cannot: in vue-native,
-/// the dev build's `vn.config.json` name or manifest-derived app directory. A
-/// `prod` build passes `None` and the executable's own name is used.
-///
-/// Called from `vn-app`'s boot beside `vn_permissions::install`, and BEFORE any
-/// app code runs — the area is loaded lazily on first touch, so a host that
-/// installs late would hand the app an empty `localStorage` and then quietly
-/// start honouring the disk.
+/// Installs the backend into redjs and registers the extension surface. `app_name` is the
+/// embedder's name for the app (`None` in prod: the exe name). Call before any app code: the
+/// area loads lazily, and a late install would hand the app an empty `localStorage`.
 pub fn install(rt: &JsRuntime, app_name: Option<String>) {
     *APP_NAME.lock().unwrap() = app_name.clone();
     {
@@ -765,12 +588,9 @@ pub fn install(rt: &JsRuntime, app_name: Option<String>) {
         }
     }
     api::set_host(storage());
-    // The cookie jar's file, in the folder as of NOW (src/cookies.rs, "Which
-    // folder"), loaded into redjs's jar before anything can set a cookie.
+    // Load the cookie jar from the current folder before anything can set a cookie.
     cookies::install(current_folder());
-    // …and the same folder (its `indexeddb\` subfolder) for IndexedDB, BEFORE
-    // app code: redjs reads its host once, at the first `indexedDB` use, and a
-    // host installed after that would leave the run in memory.
+    // The IndexedDB host before app code: redjs reads its host once, at first use.
     #[cfg(feature = "indexeddb")]
     idb::install();
     let fns: &[(&str, u32, *const c_void)] = &[
@@ -806,8 +626,6 @@ mod tests {
         assert!(backend.write_due(&mut state, now).is_err());
         assert!(state.dirty && plain.exists());
         std::fs::remove_dir(&sealed).unwrap();
-        // Even after the destination becomes writable, automatic pump calls
-        // during the delay do no disk work and retain the complete snapshot.
         assert!(!backend.write_due(&mut state, now + Duration::from_millis(500)).unwrap());
         assert!(!sealed.exists());
         let locked = std::fs::OpenOptions::new().read(true).share_mode(1).open(&plain).unwrap();
@@ -816,7 +634,6 @@ mod tests {
         drop(locked);
         assert!(!backend.write_due(&mut state, now + Duration::from_millis(1500)).unwrap());
         assert!(plain.exists());
-        // A manual flush bypasses the automatic delay and recovers immediately.
         assert!(backend.write_now(&mut state).unwrap());
         assert!(!state.dirty && state.retry_after.is_none() && state.retire.is_none() && !plain.exists());
         let bytes = std::fs::read(&sealed).unwrap();
@@ -844,18 +661,15 @@ mod tests {
         assert_eq!(file::decode(&file::unseal(&Protector, &sealed).unwrap()).unwrap(), entries);
         assert!(!sealed.windows(b"private value".len()).any(|bytes| bytes == b"private value"));
         assert!(!encrypt_local_storage_with(&base, &Protector).unwrap());
-        // An older duplicate must not resurrect data over the active sealed area.
         std::fs::write(file::plain_path(&base), file::encode(&[("stale".into(), "old".into())])).unwrap();
         assert!(encrypt_local_storage_with(&base, &Protector).unwrap());
         assert_eq!(std::fs::read(file::sealed_path(&base)).unwrap(), sealed);
-        // A corrupt sealed file cannot retire the recovery plaintext.
         std::fs::write(file::plain_path(&base), file::encode(&entries)).unwrap();
         std::fs::write(file::sealed_path(&base), b"broken ciphertext").unwrap();
         assert!(encrypt_local_storage_with(&base, &Protector).is_err());
         assert!(file::plain_path(&base).is_file());
         std::fs::remove_file(file::plain_path(&base)).unwrap();
         std::fs::remove_file(file::sealed_path(&base)).unwrap();
-        // A malformed source stays intact without publishing an empty encrypted area.
         std::fs::write(file::plain_path(&base), b"broken json").unwrap();
         assert!(encrypt_local_storage_with(&base, &Protector).is_err());
         assert_eq!(std::fs::read(file::plain_path(&base)).unwrap(), b"broken json");
@@ -866,14 +680,11 @@ mod tests {
 
     #[test]
     fn an_app_name_becomes_a_folder_name_that_windows_will_accept() {
-        // A display name is not a folder name. `vue-native — hello` is a real
-        // window title in this repo and contains an em dash and spaces.
         assert_eq!(sanitize("hello"), "hello");
         assert_eq!(sanitize("vue-native — hello"), "vue-native---hello");
         assert_eq!(sanitize("a/b\\c:d"), "a-b-c-d");
         assert_eq!(sanitize("My App 1.0"), "My-App-1.0");
-        // Never empty, never a leading dot (a hidden folder), never a trailing
-        // one (Windows silently drops trailing dots).
+        // No leading dot (hidden folder) or trailing dot (Windows drops it).
         assert_eq!(sanitize(""), "vue-native-app");
         assert_eq!(sanitize("///"), "vue-native-app");
         assert_eq!(sanitize(".hidden."), "hidden");
@@ -882,16 +693,11 @@ mod tests {
 
     #[test]
     fn the_env_override_wins_over_the_embedder_and_the_exe() {
-        // The precedence two concurrent dev instances rely on, and the one the
-        // persistence test pins so it cannot touch a real app's folder.
         assert_eq!(pick_app_name(Some("pinned"), Some("config"), "vn-app"), "pinned");
         assert_eq!(pick_app_name(None, Some("config"), "vn-app"), "config");
         assert_eq!(pick_app_name(Some(""), Some("config"), "vn-app"), "config");
-        // Prod: no manifest, so the exe's own name IS the app's name.
         assert_eq!(pick_app_name(None, None, "my-shipped-app"), "my-shipped-app");
-        // And never nothing.
         assert_eq!(pick_app_name(None, None, ""), "vue-native-app");
-        // The live resolver agrees with the rule it delegates to.
         assert!(!resolve_app_name(None).is_empty());
     }
 
@@ -912,8 +718,6 @@ mod tests {
 
     #[test]
     fn json_escaping_survives_a_windows_path_and_a_quote() {
-        // Every host fn here hand-rolls its JSON, and a backslash is the one
-        // character a Windows path is full of.
         assert_eq!(json_escape(r"C:\Users\x"), r"C:\\Users\\x");
         assert_eq!(json_escape("say \"hi\""), "say \\\"hi\\\"");
         assert_eq!(json_escape("a\nb"), "a\\nb");
@@ -921,7 +725,6 @@ mod tests {
         assert!(err_json(r"C:\a").starts_with("{\"error\":\"C:\\\\a\""));
     }
 
-    /// A scratch folder that cleans itself up.
     struct Temp(PathBuf);
     impl Temp {
         fn new(tag: &str) -> Temp {
@@ -936,21 +739,17 @@ mod tests {
         }
     }
 
-    /// There is exactly ONE backend per process — which is the design — so the
-    /// tests that drive it have to run one at a time. Poison-tolerant, so one
-    /// failing test does not turn the rest into confusing lock panics.
+    /// One backend per process, so tests that drive it run one at a time; poison-tolerant.
     fn serial() -> std::sync::MutexGuard<'static, ()> {
         static L: Mutex<()> = Mutex::new(());
         L.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// The state a process has at boot: nothing loaded, nothing staged.
     fn cold() {
         let mut st = storage().state.lock().unwrap();
         *st = State::default();
     }
 
-    /// Drives the backend exactly as redjs does: load, store, flush.
     fn cycle(folder: &Path, encrypted: bool, entries: &[(String, String)]) {
         set_storage_folder(folder, Some(encrypted)).expect("set folder");
         let _ = storage().load();
@@ -958,17 +757,12 @@ mod tests {
         flush().expect("flush");
     }
 
-    /// A cold start against `folder` with the format spelled out: what a
-    /// restarted host does when the app calls `setStorageFolder` at boot.
     fn read_back(folder: &Path, encrypted: bool) -> Vec<(String, String)> {
         cold();
         set_storage_folder(folder, Some(encrypted)).expect("set folder");
         storage().load()
     }
 
-    /// A cold start with NOTHING configured — the app never called
-    /// `setStorageFolder`, so only `install`'s default folder is set and the
-    /// format is whatever the folder already holds.
     fn read_back_unconfigured(folder: &Path) -> Vec<(String, String)> {
         cold();
         storage().state.lock().unwrap().folder = folder.to_path_buf();
@@ -977,8 +771,6 @@ mod tests {
 
     #[test]
     fn an_area_survives_a_restart_of_the_backend() {
-        // The whole point of the crate, at the trait level: what `store` was
-        // given is what the next process's `load` returns.
         let _g = serial();
         let t = Temp::new("persist");
         let entries = vec![("theme".to_string(), "dark".to_string())];
@@ -1009,8 +801,6 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn turning_encryption_on_migrates_the_existing_plaintext_area() {
-        // The honest note from the crate header, executed: an app that flips
-        // `{ encrypted: true }` keeps its data and loses the plaintext copy.
         let _g = serial();
         let t = Temp::new("migrate");
         let entries = vec![("keep".to_string(), "me".to_string())];
@@ -1018,8 +808,6 @@ mod tests {
         cycle(&t.0, false, &entries);
         assert!(file::plain_path(&t.0).exists());
 
-        // A restarted host, now asking for encryption: the load finds only the
-        // plaintext file and adopts it.
         assert_eq!(read_back(&t.0, true), entries, "the data came across");
         assert!(flush().expect("the migration write"), "the migration owes a write");
         assert!(file::sealed_path(&t.0).exists(), "sealed file written");
@@ -1033,8 +821,6 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn flipping_encryption_while_the_area_is_live_also_retires_the_old_file() {
-        // The other half of the migration: the app calls setStorageFolder with
-        // `{ encrypted: true }` at runtime rather than at boot.
         let _g = serial();
         let t = Temp::new("flip");
         let entries = vec![("k".to_string(), "v".to_string())];
@@ -1049,12 +835,6 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn a_restart_that_says_nothing_keeps_an_encrypted_area_encrypted() {
-        // THE failure this design refuses: the encryption flag is a runtime
-        // call, so a restarted host boots with `encrypted: false`. Without the
-        // sticky rule it would find a sealed area, decide it was in the wrong
-        // format, and write the user's data back out in plaintext — silently
-        // un-encrypting it. Once sealed, only an explicit `{ encrypted: false }`
-        // opens it back up.
         let _g = serial();
         let t = Temp::new("sticky");
         let entries = vec![("secret".to_string(), "value".to_string())];
@@ -1068,7 +848,6 @@ mod tests {
         assert!(!file::plain_path(&t.0).exists(), "nothing was written in plaintext");
         assert!(file::sealed_path(&t.0).exists());
 
-        // …and an app that genuinely wants plaintext still gets it.
         assert_eq!(read_back(&t.0, false), entries);
         assert!(flush().expect("the decryption write"));
         assert!(file::plain_path(&t.0).exists());
@@ -1078,8 +857,6 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn a_folder_change_that_says_nothing_about_encryption_keeps_the_format() {
-        // `setStorageFolder(path)` with no `encrypted` is "put it there", not
-        // "and decrypt it": the same sticky rule, applied to the call itself.
         let _g = serial();
         let a = Temp::new("keep-a");
         let b = Temp::new("keep-b");
@@ -1087,19 +864,15 @@ mod tests {
         cold();
         cycle(&a.0, true, &entries);
 
-        // Same folder, live area: nothing to flip.
         set_storage_folder(&a.0, None).expect("same folder");
         assert!(storage().state.lock().unwrap().encrypted);
         assert!(file::sealed_path(&a.0).exists());
         assert!(!file::plain_path(&a.0).exists(), "nothing was decrypted");
 
-        // A new folder: the data goes there, still sealed.
         set_storage_folder(&b.0, None).expect("move");
         assert!(file::sealed_path(&b.0).exists());
         assert!(!file::plain_path(&b.0).exists(), "the move did not decrypt");
 
-        // A cold start that says nothing before its load: the folder decides,
-        // and the app has still not said anything.
         cold();
         set_storage_folder(&b.0, None).expect("cold, unsaid");
         assert_eq!(storage().load(), entries);
@@ -1143,7 +916,6 @@ mod tests {
         let entries = vec![("k".to_string(), "v".to_string())];
         cold();
         cycle(&a.0, false, &entries);
-        // …and now the app calls setStorageFolder for the first time.
         set_storage_folder(&b.0, Some(false)).expect("move");
         assert_eq!(read_back(&b.0, false), entries);
         assert!(file::plain_path(&a.0).exists(), "the old folder is left alone");
@@ -1151,8 +923,6 @@ mod tests {
 
     #[test]
     fn a_folder_that_cannot_be_written_reports_rather_than_pretending() {
-        // A file where a directory should be: `create_dir_all` fails, and the
-        // caller has to hear about it instead of silently keeping the old one.
         let _g = serial();
         let t = Temp::new("blocked");
         std::fs::create_dir_all(&t.0).unwrap();
@@ -1162,8 +932,6 @@ mod tests {
         assert!(e.contains("could not create"), "{e}");
     }
 
-    /// What Argon calls at boot on every platform, under the macOS envelope (a
-    /// fixed key stands in for the keychain).
     #[test]
     fn startup_encryption_under_the_keychain_envelope_round_trips() {
         let p = crypt::envelope::FixedKey::new(8);
@@ -1178,7 +946,6 @@ mod tests {
         assert_eq!(&sealed[..8], b"VNSTOR\x01\x02");
         assert!(!sealed.windows(13).any(|w| w == b"private-token"));
         assert_eq!(file::decode(&file::unseal(&p, &sealed).unwrap()).unwrap(), entries);
-        // Another key cannot open it, and the sealed file is not replaced.
         let other = crypt::envelope::FixedKey::new(9);
         assert!(encrypt_local_storage_with(&base, &other).unwrap_err().contains("different storage key"));
         assert_eq!(std::fs::read(file::sealed_path(&base)).unwrap(), sealed);

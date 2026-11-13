@@ -1,13 +1,8 @@
-// File System Access, the pickers, `<input type=file>` and
-// `<a download>` — the JS half of docs/DESKTOP.md "Pickers and files".
+// File System Access, the pickers, `<input type=file>` and `<a download>`: the JS half.
 //
-// The Rust half (the name fence, the swap and atomic replace, the cursor, the
-// dialogs, the scripted backend) is unit-tested in crates/vn-desktop, and
-// packages/vn-test/specs/files.spec.ts drives both through a real host with
-// VN_DIALOGS=scripted. What is pinned here is what only the runtime can get
-// wrong: the spec's option checks and exception names, transient activation,
-// that a handle holds no path,
-// and the input element's events.
+// The Rust half is unit-tested in crates/vn-desktop, and packages/vn-test/specs/files.spec.ts drives both through a real
+// host with VN_DIALOGS=scripted. Pinned here is what only the runtime can get wrong: the spec's option checks and
+// exception names, transient activation, that a handle holds no path, and the input element's events.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime, FakeFileList } from "./runtime-harness";
@@ -152,7 +147,7 @@ describe("FileSystemHandle and its two kinds", () => {
     expect(typeof f.move).toBe("undefined");
   });
 
-  test("what the user chose is granted in both modes (D-F2); an invalid mode is a TypeError", async () => {
+  test("what the user chose is granted in both modes; an invalid mode is a TypeError", async () => {
     const rt = createRuntime();
     const f = handle(rt, 3, "notes.txt", "file");
     expect(await f.queryPermission()).toBe("granted");
@@ -161,7 +156,7 @@ describe("FileSystemHandle and its two kinds", () => {
     expect(rt.host.desktop.fs.permissionCalls.every((c: { request: boolean }) => !c.request)).toBe(true);
   });
 
-  test("a restored handle is 'prompt'; requestPermission needs a gesture, then grants once-advised (D-F22)", async () => {
+  test("a restored handle is 'prompt'; requestPermission needs a gesture, then grants once-advised", async () => {
     const rt = createRuntime();
     rt.host.desktop.fs.prompt.add(8);
     const f = handle(rt, 8, "restored.txt", "file");
@@ -177,7 +172,7 @@ describe("FileSystemHandle and its two kinds", () => {
     expect(await f.queryPermission()).toBe("granted");
     rt.host.desktop.fs.prompt.add(9);
     await handle(rt, 9, "other.txt", "file").requestPermission();
-    expect(rt.advisories().filter((l: string) => l.includes("D-F22")).length).toBe(1);
+    expect(rt.advisories().filter((l: string) => l.includes("restored from storage")).length).toBe(1);
   });
 
   test("a write through a 'prompt' handle asks on a gesture, and is the host's NotAllowedError without one", async () => {
@@ -367,7 +362,7 @@ describe("<input type=file> (HTML)", () => {
     expect(label()).toBe("No file chosen");
     expect(input.files).toBeInstanceOf(FakeFileList);
     expect([input.files.length, input.value]).toEqual([0, ""]);
-    expect(rt.advisories().filter((l: string) => l.includes("D-F12")).length).toBe(1);
+    expect(rt.advisories().filter((l: string) => l.includes("approximation of Chromium")).length).toBe(1);
   });
 
   test("a click without a user activation opens nothing, and says so in Chromium's words", () => {
@@ -391,7 +386,7 @@ describe("<input type=file> (HTML)", () => {
     userClick(input);
     const [c] = calls(rt, "dialogOpen");
     expect(c.args[0]).toEqual({ kind: "open", multiple: true, accept: [".csv", "text/*"], result: "files" });
-    expect(rt.advisories().some((l: string) => l.includes('"nope"') && l.includes("A-F8"))).toBe(true);
+    expect(rt.advisories().some((l: string) => l.includes('"nope"') && l.includes("ignored"))).toBe(true);
     const list = new FakeFileList([new File(["a,b"], "data.csv"), new File(["x"], "two.csv")]);
     rt.host.desktop.settle(c.token, true, { files: 2 }, list);
     await tick();
@@ -469,7 +464,7 @@ describe("<input type=file> (HTML)", () => {
     expect(calls(rt, "dialogOpen").length).toBe(2);
   });
 
-  test("showPicker(): immutable is InvalidStateError, no gesture is NotAllowedError, a text input advises A-F6", () => {
+  test("showPicker(): immutable is InvalidStateError, no gesture is NotAllowedError, a text input advises", () => {
     const { rt, input, host } = fileWorld();
     const thrown = (el: any) => {
       try {
@@ -489,7 +484,7 @@ describe("<input type=file> (HTML)", () => {
     expect(thrown(input)).toContain("InvalidStateError: Failed to execute 'showPicker' on 'HTMLInputElement': HTMLInputElement::showPicker() cannot be used on immutable controls.");
     const text = rt.nodeOps.createElement("input");
     expect(thrown(text)).toBe("no throw");
-    expect(rt.advisories().some((l: string) => l.includes("A-F6"))).toBe(true);
+    expect(rt.advisories().some((l: string) => l.includes("no-op"))).toBe(true);
   });
 
   test("@change on an element that neither is nor wraps a file input still advises; on a wrapper it does not", async () => {
@@ -541,7 +536,7 @@ describe("<label> activation (HTML)", () => {
     expect([clicks, calls(rt, "dialogOpen").length]).toEqual([2, 2]);
   });
 
-  test("a label for a text field focuses it and clicks it (D-F23 closed in m26 phase 2)", () => {
+  test("a label for a text field focuses it and clicks it", () => {
     const rt = createRuntime();
     rt.host.focus.answer = (_id: number, op: number) => (op === 0 ? "moved:0" : "");
     const label = rt.nodeOps.createElement("label");
@@ -554,7 +549,6 @@ describe("<label> activation (HTML)", () => {
     expect(clicked).toBe(2);
     expect(rt.host.focus.calls).toEqual([{ id: input.__vnId, op: 0 }, { id: input.__vnId, op: 0 }]);
     expect(rt.global.document.activeElement).toBe(input);
-    expect(rt.advisories().filter((l: string) => l.includes("D-F23"))).toEqual([]);
   });
 });
 

@@ -1,9 +1,6 @@
-//! ScreenCaptureKit sources (macOS 13+). Displays and windows come from
-//! `SCShareableContent`; thumbnails from `SCScreenshotManager` on macOS 14+,
-//! else `CGWindowListCreateImage`, resolved at run time because macOS 15
-//! obsoletes it; app icons from `NSRunningApplication`. Everything runs on the
-//! pool worker. ScreenCaptureKit answers on its own queues, into channels the
-//! worker waits on with a deadline; `NSScreen` is read on the main queue.
+//! ScreenCaptureKit sources (macOS 13+) on the pool worker. SCK answers on its own queues into
+//! channels the worker waits on with a deadline; `NSScreen` is read on the main queue.
+//! Thumbnails use `SCScreenshotManager` on macOS 14+, else `CGWindowListCreateImage`.
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr};
@@ -35,9 +32,7 @@ unsafe impl RefEncode for CGImage {
     const ENCODING_REF: Encoding = Encoding::Pointer(&Encoding::Struct("CGImage", &[]));
 }
 
-// SCShareableContent, SCContentFilter, SCStreamConfiguration and
-// SCScreenshotManager are looked up by name at run time; linking makes sure
-// the framework is loaded. AppKit is for NSRunningApplication and NSScreen.
+// SCK classes are looked up by name at run time; linking makes sure the framework is loaded.
 #[link(name = "ScreenCaptureKit", kind = "framework")]
 unsafe extern "C" {}
 #[link(name = "AppKit", kind = "framework")]
@@ -72,7 +67,6 @@ unsafe extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
 
-/// `RTLD_DEFAULT` in <dlfcn.h> on Apple platforms.
 const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
 /// `kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big`: RGBA bytes.
 const PREMULTIPLIED_RGBA: u32 = 1 | (4 << 12);
@@ -85,8 +79,7 @@ const IMAGE_IGNORE_FRAMING: u32 = 1 << 0;
 const IMAGE_NOMINAL_RESOLUTION: u32 = 1 << 4;
 /// `SCStreamErrorUserDeclined`.
 const USER_DECLINED: isize = -3801;
-/// Every pending preview shares one deadline, so a list of 100 windows waits
-/// no longer than a list of one.
+/// Every pending preview shares one deadline.
 const PREVIEW_DEADLINE: Duration = Duration::from_secs(2);
 
 /// An owned `CGImageRef`.
@@ -95,14 +88,12 @@ struct CgImage(NonNull<CGImage>);
 unsafe impl Send for CgImage {}
 
 impl CgImage {
-    /// Takes a reference of its own on a borrowed image.
     unsafe fn retain(image: *mut CGImage) -> Option<Self> {
         NonNull::new(image).map(|image| {
             unsafe { CGImageRetain(image.as_ptr()) };
             CgImage(image)
         })
     }
-    /// Adopts an image returned at +1 (a `Create` function).
     unsafe fn adopt(image: *mut CGImage) -> Option<Self> {
         NonNull::new(image).map(CgImage)
     }
@@ -252,8 +243,7 @@ fn shareable_content() -> Result<Retained<AnyObject>, Fail> {
         };
         let _ = send.try_send(result);
     });
-    // Desktop (wallpaper) windows are not sources; off-screen windows cannot
-    // be previewed and Windows lists only visible ones too.
+    // Desktop (wallpaper) windows and off-screen windows are not sources.
     unsafe {
         let _: () = msg_send![
             cls,
@@ -417,7 +407,6 @@ unsafe fn screenshot(
     unsafe {
         let _: () = msg_send![&*config, setWidth: width as usize];
         let _: () = msg_send![&*config, setHeight: height as usize];
-        // GDI's StretchBlt leaves the cursor out of Windows previews too.
         let _: () = msg_send![&*config, setShowsCursor: Bool::NO];
     }
     let (send, receive) = mpsc::sync_channel(1);

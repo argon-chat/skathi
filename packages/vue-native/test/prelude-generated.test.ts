@@ -1,23 +1,9 @@
 // The host preludes' checked-in JavaScript, checked against its TypeScript.
 //
-// `crates/vn-app/src/prelude.js` and `window.prelude.js` are GENERATED from the
-// `.ts` beside them and `include_str!`'d into the binary. Nothing in the Rust
-// build regenerates them — it must not, because `cargo build` may not require
-// bun — so the only thing standing between "the `.ts` is the source" and "the
-// `.ts` is decoration" is this file. Without it, an edit to `window.prelude.ts`
-// that was never regenerated would type-check, pass every other test, and ship
-// the OLD windowing surface, silently.
-//
-// It imports `TARGETS` and `render` from the generator rather than restating
-// either, so what is compared is the generator's own output — a second copy of
-// the transpiler options here would be a second thing to keep in step, and the
-// options (`useDefineForClassFields: false` in particular) are exactly where a
-// divergence would be invisible.
-//
-// It also pins the two properties of the artifact that are NOT the transpiler's
-// doing, because both are load-bearing and neither is obvious from reading the
-// `.ts`: the DO-NOT-EDIT header, and the `"use strict"` directive that bun
-// drops and the generator puts back.
+// `crates/vn-app/src/prelude.js` and `window.prelude.js` are generated from the `.ts` beside them and `include_str!`'d;
+// the Rust build does not regenerate them, so this file is what stops a stale artifact shipping. It imports `TARGETS`
+// and `render` from the generator so what is compared is the generator's own output. It also pins the DO-NOT-EDIT
+// header and the `"use strict"` directive that bun drops and the generator puts back.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -49,13 +35,6 @@ describe("generated host preludes", () => {
   }
 
   test("the window prelude is strict, and the boot prelude is not", () => {
-    // Not a style rule — a behaviour one, and the single thing the transpiler
-    // silently changes. `window.prelude.ts` opens with `"use strict"`; bun
-    // parses its input as a module and drops the directive prologue; `rt.eval`
-    // then evaluates the artifact as a classic SCRIPT, where the difference is
-    // real (an assignment to a read-only global throws instead of doing
-    // nothing). `prelude.js` has never been strict and is not made strict here,
-    // because that would be a behaviour change riding along inside a move.
     const strict = TARGETS.filter((t) => t.strict).map((t) => basename(t.out));
     expect(strict).toEqual(["window.prelude.js"]);
 
@@ -79,10 +58,6 @@ describe("generated host preludes", () => {
     const win = TARGETS.find((t) => basename(t.out) === "window.prelude.js");
     expect(win).toBeDefined();
     const src = readFileSync(win!.source, "utf8");
-    // `VnAppWindow` is the load-bearing one: it comes from
-    // `src/protocol.d.ts`, so the object the prelude BUILDS and the
-    // `import { appWindow } from "vue-native"` the runtime EXPORTS are now one
-    // declaration. Losing it would be losing the reason to have done this.
     expect(src).toContain("as VnAppWindow");
     expect(src).toContain("VnWindowState");
   });

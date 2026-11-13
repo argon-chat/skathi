@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/iframe.spec.ts: the <iframe> element's DOM surface and its document's lifecycle (docs/IFRAME.md). See ../README.md.",
-
   "name": "vn-test-iframe",
 
   "window": {

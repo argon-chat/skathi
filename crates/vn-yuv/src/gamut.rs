@@ -1,7 +1,6 @@
-//! A frame's RGB in other primaries, or with another transfer curve, moved
-//! to sRGB's: what Chromium's compositor does to a video on an sRGB display
-//! (gfx::ColorSpace and its ColorTransform, read 2026-11, checked against
-//! Chrome 156's screen in vn-sticker's video tests).
+//! A frame's RGB in other primaries, or with another transfer curve, moved to sRGB's: what
+//! Chromium's compositor does to a video on an sRGB display (gfx::ColorSpace and its
+//! ColorTransform; checked against Chrome 156 in vn-sticker's video tests).
 //!
 //! Per pixel, on straight RGB: decode with the frame's transfer curve, a 3×3
 //! matrix from its primaries to sRGB's (Bradford-adapted from its white

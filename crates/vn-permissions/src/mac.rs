@@ -1,19 +1,12 @@
-//! Native macOS consent through TCC: the microphone and the camera
-//! (AVFoundation) and screen recording (CoreGraphics).
+//! Native macOS consent through TCC: microphone and camera (AVFoundation, `tcc::media`) and
+//! screen recording (CoreGraphics).
 //!
-//! AVFoundation owns this app's microphone and camera prompts, one model for
-//! both (`tcc::media`): `authorizationStatusForMediaType:` with
-//! `AVMediaTypeAudio` or `AVMediaTypeVideo`. Its completion runs on an
-//! arbitrary queue and only writes to a Rust queue; the normal permission pump
-//! resolves JS promises and emits change events on the VM thread.
+//! AVFoundation's completion runs on an arbitrary queue and only writes to a Rust queue; the
+//! permission pump resolves promises on the VM thread.
 //!
-//! Screen recording has no "not determined": `CGPreflightScreenCaptureAccess`
-//! answers granted or not, and `CGRequestScreenCaptureAccess` shows the system
-//! prompt only the first time an app ever asks. A grant made in System Settings
-//! takes effect after the app is relaunched. So a screen request that ends
-//! without access reads `denied` for the rest of the run, and recovery is
-//! System Settings plus a relaunch (docs/PERMISSIONS.md §6.1). Other macOS
-//! capabilities remain unsupported until their own platform backends exist.
+//! Screen recording has no "not determined": the preflight answers granted or not, and the
+//! request prompts only the first time an app ever asks. A grant made in System Settings takes
+//! effect after a relaunch, so a refused screen request reads `denied` for the rest of the run.
 
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -28,21 +21,17 @@ use crate::tcc::{self, Media, Requests};
 
 #[link(name = "AVFoundation", kind = "framework")]
 unsafe extern "C" {
-    // An AVMediaType is an NSString constant owned by AVFoundation.
     static AVMediaTypeAudio: *const NSString;
     static AVMediaTypeVideo: *const NSString;
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
-    // macOS 10.15+, C `bool`. Preflight never prompts. Request prompts at most
-    // once per app (TCC remembers a refusal) and reports whether access is
-    // granted.
+    // macOS 10.15+. Preflight never prompts; request prompts once per app, ever.
     fn CGPreflightScreenCaptureAccess() -> bool;
     fn CGRequestScreenCaptureAccess() -> bool;
 }
 
-/// The AVMediaType of an AVFoundation capability.
 fn media_type(media: Media) -> &'static NSString {
     // SAFETY: both constants are AVFoundation's, valid for the process.
     unsafe {
@@ -99,8 +88,7 @@ impl MacHost {
         let state = self.media_state(media);
         if state != PermissionState::Prompt {
             if state == PermissionState::Denied {
-                // TCC cannot re-prompt after a denial. A user's explicit
-                // request opens its recovery page without blocking the VM.
+                // TCC cannot re-prompt after a denial: open the recovery page.
                 open_privacy_pane(media.anchor);
             }
             return RequestOutcome::Settled(state);
@@ -120,11 +108,8 @@ impl MacHost {
                     .unwrap_or_else(|p| p.into_inner())
                     .complete(cap, state);
             });
-            // SAFETY: the framework copies the escaping completion block.
-            // It captures only an Arc/Mutex queue, never a JS value or UI
-            // object. The method is asynchronous (it returns at once, and
-            // TCC's prompt is the system's, not drawn on this thread) and
-            // may call back on any queue.
+            // SAFETY: the framework copies the escaping block, which captures only an Arc/Mutex
+            // queue and may be called back on any queue.
             unsafe {
                 let _: () = msg_send![class!(AVCaptureDevice),
                     requestAccessForMediaType: media_type(media),
@@ -150,9 +135,7 @@ impl MacHost {
         if show {
             let requests = Arc::clone(self.requests());
             let ask = move || {
-                // SAFETY: no arguments. Shows the system prompt the first
-                // time this app asks. It can return before the user answers;
-                // a grant made there only takes effect after a relaunch.
+                // SAFETY: no arguments. Shows the system prompt the first time only.
                 let granted = unsafe { CGRequestScreenCaptureAccess() };
                 let state = if granted {
                     PermissionState::Granted
@@ -179,7 +162,6 @@ impl MacHost {
     }
 }
 
-/// Opens a Privacy & Security pane of System Settings without blocking.
 fn open_privacy_pane(anchor: &str) {
     let _ = std::process::Command::new("/usr/bin/open")
         .arg(tcc::privacy_pane_url(anchor))
@@ -189,10 +171,8 @@ fn open_privacy_pane(anchor: &str) {
         .spawn();
 }
 
-/// Whether the app's Info.plist says why it wants `cap` (the microphone or
-/// the camera). TCC terminates an app that requests or captures without it,
-/// so nothing may touch the device unless this is true; a camera backend
-/// checks it too before it opens one.
+/// Whether Info.plist says why the app wants `cap`: TCC terminates an app that requests or
+/// captures without it, so nothing may touch the device unless this is true.
 pub fn usage_description_present(cap: Capability) -> bool {
     let Some(media) = tcc::media(cap) else {
         return false;
@@ -206,9 +186,7 @@ pub fn usage_description_present(cap: Capability) -> bool {
 
 fn media_state(media: Media) -> PermissionState {
     if !usage_description_present(media.cap) {
-        // TCC terminates an app that requests or captures without this key.
-        // Refuse the capture gate before either API can be called, including
-        // bare cargo-run hosts which do not have an application Info.plist.
+        // Also refuses bare cargo-run hosts, which have no application Info.plist.
         return PermissionState::Denied;
     }
     // SAFETY: AVCaptureDevice and the media type are supplied by the linked

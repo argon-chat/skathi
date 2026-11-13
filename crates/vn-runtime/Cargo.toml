@@ -10,67 +10,23 @@ battery = ["redjs/battery"]
 native-aot = ["redjs/native-aot"]
 # Native WebGPU; normal runtimes include it and the host supplies canvas presentation.
 webgpu = ["redjs/webgpu"]
-# Web Audio is ON by default: `AudioContext` is part of the web platform an app
-# written against a browser expects to find, and a renderer that silently lacks
-# it is exactly the "diverge without saying so" failure this project refuses.
-#
-# It is a feature rather than a hard dependency because it is the single most
-# expensive thing in our build graph after gpui — firewheel + cpal + symphonia
-# (~40 crates) — and a host that will never make a sound (a test harness, a
-# headless screenshot runner) should be able to opt out:
-#
-#   cargo build -p vn-app --no-default-features
-#
-# Opting out does not stub `AudioContext`; it removes it, so feature detection
-# (`typeof AudioContext !== 'undefined'`) tells the truth either way.
-#
-# `storages` and `clipboard` are on for the same reason and cost even less:
-# neither pulls a dependency, both are APIs a browser build takes for granted,
-# and a renderer that silently lacks `localStorage` would break the first Vue
-# app that remembers a preference. They are still features because redjs also
-# ships to a game player that has its own answers for both, and because a host
-# with no `StorageHost`/`ClipboardHost` installed should be able to compile the
-# surface out rather than ship one that only ever fails.
-#
-# `indexeddb` likewise: no dependency, and an app written for a browser expects
-# `indexedDB` (Dexie, idb, localForage and every offline queue assume it).
-#
-# `net-h2` is how a browser talks to a server, so it is on as well: HTTP/2 via
-# ALPN, keep-alive, and one pooled connection per origin. Its crates (tokio,
-# hyper, h2) are already in this link, at the same versions, through gpui's
-# http client. Off, `fetch` falls back to redjs's blocking transport: one
-# thread and one fresh HTTP/1.1 connection per request. It is still correct,
-# just slower. See the module header of redjs/src/webapi/http.rs and
-# research/reports/m26/net-h2-pool.md.
+# On by default: browser APIs an app expects (typeof checks stay truthful either way).
+# Audio is the costliest feature after gpui (firewheel, cpal, symphonia); opt out with
+# `--no-default-features` for headless hosts. Opting out removes the API, it does not stub it.
+# `net-h2` pools HTTP/2 per origin; off, fetch uses redjs's blocking HTTP/1.1 transport.
 default = ["audio", "storages", "clipboard", "indexeddb", "net-h2", "webgpu"]
-# `audio-codecs-extra` rides along: an app runtime's `decodeAudioData` input is
-# "whatever file the user has", not a curated asset pipeline, so AAC-LC/M4A,
-# ALAC, AIFF, CAF and MKV belong in the box. A game shipping its own .ogg does
-# not pay for them (redjs keeps that flag off by default).
+# AAC/M4A, ALAC, AIFF, CAF and MKV for `decodeAudioData` input of arbitrary user files.
 audio = ["redjs/audio", "redjs/audio-codecs-extra"]
-# `localStorage` / `sessionStorage` (crates/vn-storage is the backend).
 storages = ["redjs/storages"]
-# `navigator.clipboard` (crates/vn-clipboard is the backend, over gpui's).
 clipboard = ["redjs/clipboard"]
-# `indexedDB` + `navigator.storage` (research/reports/m25/indexeddb-design.md).
-# On its own: redjs's in-memory backend — the whole API, nothing survives a
-# restart, and redjs advises once that it is so. Off, `typeof indexedDB` is
-# "undefined" — the truth, rather than a database that pretends.
+# On its own: redjs's in-memory backend (nothing survives a restart).
 indexeddb = ["redjs/indexeddb"]
-# IndexedDB ON DISK (m25 P2): redjs's SQLite3 Multiple Ciphers backend — a C
-# compile and ~0.9 MB of the release exe. Not turned on here but by crates/vn-storage's
-# `indexeddb` feature, because the backend only runs when an `IndexedDbHost`
-# is installed and vn-storage is that host: a build without vn-storage would
-# carry the code for nothing.
+# SQLite3 Multiple Ciphers backend (~0.9 MB of the release exe); enabled by vn-storage's
+# `indexeddb` feature, since it only runs once an `IndexedDbHost` is installed.
 indexeddb-disk = ["indexeddb", "redjs/indexeddb-sqlite"]
-# `fetch`'s pooled HTTP/2 + HTTP/1.1 keep-alive transport (see `default`).
 net-h2 = ["redjs/net-h2"]
 
 [dependencies]
-# Lean redjs: JSC, the web platform layer, timers/rAF/microtask pump, and (with
-# the `audio` feature above) Web Audio over Firewheel. `svg-images` always: an
-# SVG `Image` (a data: URL, a Blob) decodes with the resvg gpui already builds.
-# `canvas` always: CanvasRenderingContext2D and a real OffscreenCanvas
-# (src/canvas.ts gives `<canvas>` its element half), rasterized by vello_cpu.
+# `svg-images` and `canvas` are always on.
 redjs = { path = "../../vendor/redjs/redjs", default-features = false, features = ["svg-images", "canvas"] }
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }

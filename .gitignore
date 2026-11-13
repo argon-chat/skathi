@@ -28,7 +28,7 @@ dist/
 /apps/meet-probe/
 /packages/vue-native/dist-meet/
 
-# vn-test scratch (docs/TESTING.md §5). Both are derived and both are large:
+# vn-test scratch, derived and large:
 #   .vn-test/            per-instance dist slots, host logs, the staged ~120 MB exe
 #   .vn-test-artifacts/  the screenshots a failed assertion points at
 /packages/vn-test/.vn-test/

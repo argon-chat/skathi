@@ -5,9 +5,6 @@
   background: #fff;
 }
 
-/* Tailwind's preflight, which every Argon <img> also matches. Its
-   `max-width: 100%` is what took the poster's height: transferred through the
-   picture's aspect ratio, it became a max-height although `height` is given. */
 img,
 video,
 canvas {
@@ -16,7 +13,6 @@ canvas {
   height: auto;
 }
 
-/* AttachmentImageGrid.vue */
 .image-grid {
   position: absolute;
   left: 20px;
@@ -35,7 +31,6 @@ canvas {
   flex-shrink: 0;
 }
 
-/* VideoAttachment.vue, with a grey that reads back exactly. */
 .video-attachment {
   position: relative;
   overflow: hidden;
@@ -69,7 +64,6 @@ canvas {
 .va-contain .va-poster {
   object-fit: contain;
 }
-/* In flow: `w-full h-full object-cover` in a fixed box, block and flex. */
 .inflow {
   position: relative;
   width: 100px;

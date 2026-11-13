@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/em.spec.ts: `em` against the element's own computed font size, down a real tree. See ../README.md.",
+  "$comment": "`em` against the element's own computed font size, down a real tree.",
 
   "name": "vn-test-em",
 

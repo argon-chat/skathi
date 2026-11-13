@@ -1,25 +1,3 @@
-// A fixture for packages/vn-test/specs/resize-observer.spec.ts: ResizeObserver
-// delivered where HTML delivers it, after the frame's layout and before its
-// paint (crates/vn-tree/src/observe.rs, docs/RUNTIME.md §5.1).
-//
-// A perpetual requestAnimationFrame loop numbers the frames (`state.frame`).
-// rAF runs before the frame's layout, and the devtools `eval` that starts a
-// scenario runs after the frame's rAF, in the same wave, so a scenario
-// started in frame N has `at = N`.
-//
-// - `grow`: `#list` gets three more 20 px rows (plain DOM writes, so they are
-//   in the tree before the frame lays out). `#panel` takes its height from a
-//   ResizeObserver on `#list`, through a Vue ref, so the patch is a microtask
-//   of the callback. The callback records the frame it ran in and the height
-//   it saw; the first rAF after records the panel's and the list's painted
-//   heights: the frame that was presented.
-// - `loop`: a ResizeObserver on `#inner` widens `#outer`, its parent, from
-//   its callback. `#outer` is shallower than what was just reported, so it is
-//   skipped: the loop error, as an `error` event at `window` and through
-//   `window.onerror`; another observer on `#outer` hears the new width at the
-//   next frame.
-//
-// Render functions, as in fixtures/layout.
 import { createApp, defineComponent, h, onMounted, ref } from "vue-native";
 
 const ROW = 20;
@@ -28,15 +6,11 @@ const state = {
   frame: 0,
   grow: null as null | {
     at: number;
-    /** The callback: the frame it ran in and the list height it saw. */
     seen: { frame: number; height: number }[];
-    /** The first rAF after: the painted heights of the panel and the list. */
     next: { frame: number; panel: number; list: number } | null;
   },
   loop: null as null | { at: number },
-  /** `#outer`'s observer: every width it heard, and when. */
   outer: [] as { frame: number; width: number }[],
-  /** The loop error, as each route delivered it. */
   errors: [] as { via: string; frame: number; message: string; args?: unknown[] }[],
   run(name: string) {
     if (name === "grow") {

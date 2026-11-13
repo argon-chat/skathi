@@ -1,15 +1,10 @@
-// Runs src/loader.ts in an isolated fake "engine" so the HMR logic can be
-// tested without gpui, JavaScriptCore or a real Vue.
+// Runs src/loader.ts in an isolated fake "engine" so the HMR logic can be tested without gpui, JavaScriptCore or a
+// real Vue.
 //
-// loader.ts is authored as an ES module purely so the bundler can inline
-// runtime.ts into vendor.js; what the engine actually evaluates is a CLASSIC
-// SCRIPT that touches four ambient names: `globalThis`, `console`,
-// `__vn_set_stylesheet`, plus the runtime namespace it imports. We transpile it
-// to plain JS (see ./ts-source.ts), strip the imports, and evaluate the rest
-// with those names bound as PARAMETERS — inside a function body a parameter
-// shadows the real global, so every createLoader() call gets its own private
-// world (own __VN__, own registry, own __VUE_HMR_RUNTIME__) and tests cannot
-// leak into one another.
+// The engine evaluates loader.ts as a classic script touching four ambient names (`globalThis`, `console`,
+// `__vn_set_stylesheet`, plus the runtime namespace it imports). It is transpiled (./ts-source.ts), the imports are
+// stripped and the rest evaluated with those names bound as parameters, so each createLoader() gets a private world
+// (own __VN__, registry, __VUE_HMR_RUNTIME__).
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,11 +13,6 @@ import { readTsSource } from "./ts-source";
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const LOADER_PATH = join(HERE, "../src/loader.ts");
 
-// Every `import * as NS from "..."` at the top of loader.js: the runtime one
-// plus one per VENDORED LIBRARY (vue-router, pinia, …). All of them are
-// stripped and re-bound as parameters — the runtime gets the stub below, the
-// vendored ones get an empty namespace, which is all the registry seeding
-// needs (the tests never call into those libraries).
 const NS_IMPORT = /^\s*import\s+\*\s+as\s+(\w+)\s+from\s+["']([^"']+)["'];?[^\S\n]*$/gm;
 const RUNTIME_SPEC = "./runtime";
 
@@ -103,12 +93,6 @@ function installVueHmr(world) {
   return calls;
 }
 
-// ---- fake module scripts ---------------------------------------------------
-// Shaped exactly like what build.ts emits: setCss? -> setDeps -> define(id,
-// factory, bodyHash). `requires` is [{ spec, id }] — spec is what the factory
-// passes to require() (so id resolution is exercised for real), id is the
-// resolved id the builder would have written into setDeps.
-
 function factoryPreamble(world, id, requires) {
   return (require) => {
     world.exec.set(id, (world.exec.get(id) || 0) + 1);
@@ -163,14 +147,6 @@ export function defineComponent(world, id, requires, version, css) {
 export function redefineCssOnly(world, id, requires, version, css) {
   defineComponent(world, id, requires, version, css); // same version => same bodyHash
 }
-
-// ---- the standard fixture --------------------------------------------------
-//
-//   app/src/main.js (entry)
-//     └── app/src/App.vue
-//           ├── app/src/util.js
-//           └── app/src/components/Counter.vue
-//                 └── app/src/util.js
 
 export const ENTRY = "app/src/main.js";
 export const APP = "app/src/App.vue";

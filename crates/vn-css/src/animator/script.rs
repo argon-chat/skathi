@@ -1,35 +1,6 @@
-//! Script animations: what `Element.animate()` runs (Web Animations 1).
-//!
-//! # The split
-//!
-//! The JS half (packages/vue-native/src/waapi.ts) owns the `Animation` object
-//! and its whole state machine: play, pause, seek, reverse, finish, the
-//! playback rate, the `ready` / `finished` promises and the events. What it
-//! tells this side is only what PAINTING a frame needs:
-//!
-//! * the effect — the keyframes and the timing (delay, duration, iterations,
-//!   direction, fill, easing), via [`Animator::script_set`];
-//! * the clock, exactly as Web Animations defines it — a start time on the
-//!   document timeline, or a held current time, and a playback rate — via
-//!   [`Animator::script_clock`], every time the state machine moves it.
-//!
-//! Each frame the animator turns that clock into the animation's current time
-//! and samples the effect at it, the way it samples a `@keyframes` run. A
-//! running script animation costs JS nothing per frame. The native JS API
-//! also calls this timing model for getComputedTiming(), so script inspection
-//! and painting use one implementation and the same clock.
-//!
-//! # Where this differs from a `@keyframes` run
-//!
-//! * The effect's `easing` applies to the whole iteration and a keyframe's own
-//!   easing (default `linear`) to its interval — the reverse of CSS, where
-//!   `animation-timing-function` is the per-keyframe default.
-//! * An eased progress outside 0..1 (a back-out curve's overshoot)
-//!   EXTRAPOLATES the first or last interval, as the spec says; the CSS path
-//!   clamps. `Element.animate()` users rely on that overshoot.
-//! * Nothing here cancels on `display: none` or on `prefers-reduced-motion`,
-//!   and a stylesheet swap keeps it: none of those touch a script animation in
-//!   a browser either.
+//! Script animations (`Element.animate()`, Web Animations 1). The JS side owns the `Animation`
+//! object and its state machine; this side is told only what painting a frame needs: the effect
+//! (keyframes and timing) and the clock (start or held time, playback rate).
 
 use std::rc::Rc;
 use std::time::Instant;
@@ -40,8 +11,7 @@ use super::{initial, install, lerp, slot_of, unify, Animatable, Animator, Slot};
 use crate::keyframes::{Direction, FillMode, Keyframe, Keyframes};
 use crate::transition::{Easing, TransitionProperty};
 
-/// An `AnimationEffect`'s timing, resolved (`duration: "auto"` is 0, `fill:
-/// "auto"` is `none`). Times in milliseconds, as the DOM has them.
+/// An `AnimationEffect`'s timing, resolved (`duration: "auto"` is 0, `fill: "auto"` is `none`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScriptTiming {
     pub delay: f64,
@@ -85,7 +55,6 @@ pub struct ScriptSample {
 }
 
 impl ScriptTiming {
-    /// Web Animations 1 §4.6.3, "the active duration".
     pub fn active_duration(&self) -> f64 {
         if self.duration == 0.0 || self.iterations == 0.0 {
             0.0
@@ -94,22 +63,17 @@ impl ScriptTiming {
         }
     }
 
-    /// §4.6.4, "the end time".
     pub fn end_time(&self) -> f64 {
         (self.delay + self.active_duration() + self.end_delay).max(0.0)
     }
 
-    /// The eased iteration progress at `local` ms of the animation's current
-    /// time, or `None` when the effect is not in effect there (outside its
-    /// active interval and not filling). `backwards` is the animation
-    /// direction (a negative playback rate), which decides which phase owns a
-    /// local time sitting exactly on a boundary. §4.8–§4.10.
+    /// The eased iteration progress at `local` ms of the animation's current time, or `None` when
+    /// the effect is not in effect there (outside its active interval and not filling).
     pub fn progress(&self, local: f64, backwards: bool) -> Option<f64> {
         self.sample(Some(local), backwards).progress
     }
 
     /// Both painter progress and AnimationEffect.getComputedTiming metadata.
-    /// An unresolved local time or a non-filling phase has no current iteration.
     pub fn sample(&self, local: Option<f64>, backwards: bool) -> ScriptSample {
         let Some(local) = local else { return ScriptSample::default(); };
         let active = self.active_duration();
@@ -145,8 +109,8 @@ impl ScriptTiming {
         } else {
             self.iteration_start % 1.0
         };
-        // The end of an iteration is 1, not the 0 of the next one — but only
-        // where the active interval actually ends.
+        // The end of an iteration is 1, not the 0 of the next one — but only where the active
+        // interval actually ends.
         if simple == 0.0 && phase != Phase::Before && active_time == active && self.iterations != 0.0 {
             simple = 1.0;
         }
@@ -173,9 +137,6 @@ impl ScriptTiming {
     }
 }
 
-/// An `Animation`'s clock, in document-timeline milliseconds: its current
-/// time is `hold` when there is one, else `(timeline − start) × rate`, else
-/// unresolved (an idle animation, which paints nothing).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScriptClock {
     pub start: Option<f64>,
@@ -205,9 +166,8 @@ pub(super) struct ScriptAnim {
 }
 
 impl ScriptAnim {
-    /// Will its value change on a later frame? Playing, not held, and not yet
-    /// past the end it is heading for. The delay counts: the value is about
-    /// to move.
+    /// Will its value change on a later frame? Playing, not held, and not yet past the end it is
+    /// heading for.
     pub(super) fn running(&self, timeline: Option<f64>) -> bool {
         if self.clock.hold.is_some() || self.clock.rate == 0.0 {
             return false;
@@ -229,9 +189,6 @@ impl ScriptAnim {
 }
 
 impl Animator {
-    /// Where the document timeline's zero is: the instant `performance.now()`
-    /// reads 0 at. The host sets it once; until then no script animation is
-    /// sampled.
     pub fn set_timeline_origin(&mut self, origin: Instant) {
         self.timeline_origin = Some(origin);
     }
@@ -241,9 +198,8 @@ impl Animator {
             .map(|origin| now.saturating_duration_since(origin).as_secs_f64() * 1000.0)
     }
 
-    /// Creates script animation `id` on `node`, or replaces its effect (new
-    /// keyframes, new timing, or a new target) keeping its clock. A new one
-    /// starts idle until [`Animator::script_clock`] gives it a time.
+    /// Creates script animation `id` on `node`, or replaces its effect (new keyframes, new timing,
+    /// or a new target) keeping its clock.
     pub fn script_set(&mut self, id: u32, node: u32, frames: Rc<Keyframes>, timing: ScriptTiming) {
         let mut clock = ScriptClock::default();
         if let Some(old) = self.script_nodes.get(&id).copied() {
@@ -264,8 +220,8 @@ impl Animator {
         }
         self.script_nodes.insert(id, node);
         let list = self.scripts.entry(node).or_default();
-        // Composite order is creation order; ids grow with it, so a target
-        // change keeps the animation where it belongs in the new stack.
+        // Ids grow with creation order, so a target change keeps the animation at its composite
+        // position.
         let at = list.iter().position(|a| a.id > id).unwrap_or(list.len());
         list.insert(at, ScriptAnim { id, frames, timing, clock });
     }
@@ -275,8 +231,8 @@ impl Animator {
         self.script_nodes.get(&id).copied()
     }
 
-    /// Moves animation `id`'s clock. Answers the node it paints, so the host
-    /// can repaint it, or `None` for an id it does not know.
+    /// Moves animation `id`'s clock. Answers the node it paints, so the host can repaint it, or
+    /// `None` for an id it does not know.
     pub fn script_clock(&mut self, id: u32, clock: ScriptClock) -> Option<u32> {
         let node = *self.script_nodes.get(&id)?;
         let a = self.scripts.get_mut(&node)?.iter_mut().find(|a| a.id == id)?;
@@ -284,8 +240,7 @@ impl Animator {
         Some(node)
     }
 
-    /// Forgets animation `id` (cancelled, replaced, or garbage). Answers the
-    /// node it painted.
+    /// Forgets animation `id` (cancelled, replaced, or garbage).
     pub fn script_drop(&mut self, id: u32) -> Option<u32> {
         let node = self.script_nodes.remove(&id)?;
         if let Some(list) = self.scripts.get_mut(&node) {
@@ -297,9 +252,7 @@ impl Animator {
         Some(node)
     }
 
-    /// Animation `id`'s own values right now, as CSS `name: value` pairs —
-    /// `commitStyles()`. Empty when it is not in effect; `None` for an id it
-    /// does not know.
+    /// Empty when it is not in effect; `None` for an id it does not know.
     pub fn script_values(&self, id: u32, base: &StyleRefinement, now: Instant) -> Option<Vec<(String, String)>> {
         let node = *self.script_nodes.get(&id)?;
         let a = self.scripts.get(&node)?.iter().find(|a| a.id == id)?;
@@ -341,9 +294,6 @@ impl Animator {
     }
 }
 
-/// Samples a script animation's keyframes at an (eased) iteration progress —
-/// Web Animations 1 §5.3.4, "the effect value of a keyframe effect", per
-/// animatable property.
 fn apply_script_keyframes(out: &mut StyleRefinement, base: &StyleRefinement, frames: &Keyframes, progress: f64) {
     let p = progress as f32;
     for property in TransitionProperty::animatable() {
@@ -354,8 +304,6 @@ fn apply_script_keyframes(out: &mut StyleRefinement, base: &StyleRefinement, fra
         let (Some(&(first, _)), Some(&(last, _))) = (list.first(), list.last()) else {
             continue;
         };
-        // The neutral keyframes: a property no keyframe sets at 0 or at 1
-        // takes its underlying value there.
         if first != 0.0 {
             list.insert(0, (0.0, None));
         }
@@ -369,9 +317,8 @@ fn apply_script_keyframes(out: &mut StyleRefinement, base: &StyleRefinement, fra
         let value = |k: Option<&Keyframe>| k.map_or_else(implicit, |k| slot_of(&k.style, &property));
         let zeros = list.iter().filter(|(o, _)| *o == 0.0).count();
         let ones = list.iter().filter(|(o, _)| *o == 1.0).count();
-        // One keyframe stands alone where several share the end the progress
-        // has run past; otherwise the interval holding it, or the first or
-        // last one extrapolated.
+        // One keyframe stands alone where several share the end the progress has run past;
+        // otherwise the interval holding it, or the first or last one extrapolated.
         let lone = if p < 0.0 && zeros > 1 {
             Some(list[0].1)
         } else if p >= 1.0 && ones > 1 {
@@ -396,8 +343,6 @@ fn apply_script_keyframes(out: &mut StyleRefinement, base: &StyleRefinement, fra
         let distance = if o1 > o0 { (p - o0) / (o1 - o0) } else { 0.0 };
         let eased = k0.and_then(|k| k.easing).unwrap_or(Easing::Linear).eval(distance);
         let (Slot::Value(a), Slot::Value(b)) = (value(k0), value(k1)) else {
-            // One end is `auto`, a percentage or unset: hold whichever end
-            // does have a value, as the `@keyframes` path does.
             if let Slot::Value(v) = value(k0) {
                 install(out, base, &property, v);
             } else if let Slot::Value(v) = value(k1) {
@@ -413,7 +358,6 @@ fn apply_script_keyframes(out: &mut StyleRefinement, base: &StyleRefinement, fra
     }
 }
 
-/// One animated value as CSS text, for `commitStyles()`.
 fn css_value(v: Animatable) -> Option<String> {
     Some(match v {
         Animatable::Number(n) => format!("{n}"),
@@ -437,12 +381,8 @@ fn css_color(c: Hsla) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// the keyframes
-// ---------------------------------------------------------------------------
-
-/// One keyframe as the script wrote it, after the JS half has computed the
-/// offsets and turned the IDL names into CSS ones.
+/// One keyframe as the script wrote it, after the JS half has computed the offsets and turned the
+/// IDL names into CSS ones.
 pub struct ScriptFrame {
     pub offset: f32,
     /// The easing of the interval that starts here; `None` is `linear`.
@@ -460,9 +400,8 @@ pub struct ScriptKeyframeNotes {
     pub diagnostics: Vec<String>,
 }
 
-/// Compiles a script's keyframes against the TARGET's custom properties — a
-/// keyframe value may say `var(--x)`, and the element it animates is the one
-/// whose `--x` that is.
+/// Compiles a script's keyframes against the TARGET's custom properties — a keyframe value may say
+/// `var(--x)`, and the element it animates is the one whose `--x` that is.
 pub fn script_keyframes(
     frames: &[ScriptFrame],
     vars: &crate::Vars,
@@ -498,9 +437,7 @@ pub fn script_keyframes(
             custom: None,
         });
     }
-    // The JS half hands them over in order already (it refuses offsets that
-    // go backwards, as the DOM does); a stable sort keeps equal offsets in
-    // the order given, which is what decides between them.
+    // Stable, so equal offsets keep the order given, which decides between them.
     steps.sort_by(|a, b| a.offset.total_cmp(&b.offset));
     (Rc::new(Keyframes { steps, dynamic: false }), notes)
 }
@@ -531,7 +468,6 @@ mod tests {
         script_keyframes(&frames, &crate::Vars::default(), &crate::Env::default()).0
     }
 
-    /// An animator whose timeline zero is `t0`, so `at(ms)` is that timeline time.
     fn animator() -> (Animator, Instant) {
         let mut a = Animator::new();
         let t0 = Instant::now();
@@ -585,33 +521,26 @@ mod tests {
         assert_eq!(t.progress(250.0, false), Some(0.25));
         // Exactly at the end, playing forwards: the after phase, no fill.
         assert_eq!(t.progress(1000.0, false), None);
-        // …but playing backwards the end belongs to the active phase.
         assert_eq!(t.progress(1000.0, true), Some(1.0));
 
         let filled = ScriptTiming { fill: FillMode::Both, delay: 100.0, ..t };
         assert_eq!(filled.progress(0.0, false), Some(0.0), "backwards fill holds the start");
         assert_eq!(filled.progress(5000.0, false), Some(1.0), "forwards fill holds the end");
 
-        // Three iterations, alternating: 0 → 1, 1 → 0, 0 → 1, and the end
-        // value is the end of the last (forwards) one.
         let alt = ScriptTiming { iterations: 3.0, direction: Direction::Alternate, fill: FillMode::Forwards, ..t };
         assert_eq!(alt.progress(250.0, false), Some(0.25));
         assert_eq!(alt.progress(1250.0, false), Some(0.75));
         assert_eq!(alt.progress(2250.0, false), Some(0.25));
         assert_eq!(alt.progress(9000.0, false), Some(1.0));
-        // Two: the last one ran backwards, so it ends where it began.
         let two = ScriptTiming { iterations: 2.0, ..alt };
         assert_eq!(two.progress(9000.0, false), Some(0.0));
 
-        // A fractional iteration start shifts the whole thing.
         let shifted = ScriptTiming { iteration_start: 0.5, ..t };
         assert_eq!(shifted.progress(250.0, false), Some(0.75));
 
-        // A zero duration jumps straight to the end once the delay is over.
         let instant = ScriptTiming { duration: 0.0, fill: FillMode::Forwards, ..t };
         assert_eq!(instant.progress(10.0, false), Some(1.0));
 
-        // The effect's own easing shapes the whole iteration.
         let stepped = ScriptTiming { easing: Easing::Steps(4, StepPosition::JumpEnd), ..t };
         assert_eq!(stepped.progress(600.0, false), Some(0.5));
         assert_eq!(t.end_time(), 1000.0);
@@ -631,7 +560,6 @@ mod tests {
         assert!((v - 0.5).abs() < 1e-3, "{v}");
         assert!(a.any_animation(at(t0, 600)));
         assert_eq!(a.moving_nodes(at(t0, 600)).collect::<Vec<_>>(), vec![7]);
-        // Finished with no fill: nothing painted, nothing moving.
         assert_eq!(opacity(&a, 7, at(t0, 1200)), None);
         assert!(!a.any_animation(at(t0, 1200)));
         assert_eq!(a.moving_nodes(at(t0, 1200)).count(), 0);
@@ -645,7 +573,6 @@ mod tests {
         let v = opacity(&a, 7, at(t0, 5000)).unwrap();
         assert!((v - 0.25).abs() < 1e-3, "{v}");
         assert!(!a.any_animation(at(t0, 5000)), "paused: no reason to repaint");
-        // Played backwards from the end.
         a.script_clock(1, ScriptClock { start: Some(2000.0), hold: None, rate: -1.0 });
         let v = opacity(&a, 7, at(t0, 1250)).unwrap();
         assert!((v - 0.75).abs() < 1e-3, "{v}");
@@ -654,8 +581,8 @@ mod tests {
 
     #[test]
     fn an_overshooting_easing_extrapolates_the_last_interval() {
-        // Digit.vue's roll: translateY from -100px to -120px on a back-out
-        // curve, which overshoots past -120 before settling.
+        // Digit.vue's roll: translateY from -100px to -120px on a back-out curve, which overshoots
+        // past -120 before settling.
         let (mut a, t0) = animator();
         let back_out = Easing::CubicBezier(0.34, 1.56, 0.64, 1.0);
         a.script_set(
@@ -674,17 +601,13 @@ mod tests {
         let (mut a, t0) = animator();
         let mut base = StyleRefinement::default();
         base.opacity = Some(0.2);
-        // `{ opacity: [1] }` — a single value is the 100 % keyframe; 0 % is
-        // the element's own opacity.
         a.script_set(1, 9, frames(&[(1.0, "opacity: 1")]), timing(1000.0));
         a.script_clock(1, playing(0.0));
         let v = a.overlay(9, &base, at(t0, 500)).unwrap().opacity.unwrap();
         assert!((v - 0.6).abs() < 1e-3, "{v}");
-        // A later animation on the same property replaces it.
         a.script_set(2, 9, frames(&[(0.0, "opacity: 0"), (1.0, "opacity: 0")]), timing(1000.0));
         a.script_clock(2, playing(0.0));
         assert_eq!(a.overlay(9, &base, at(t0, 500)).unwrap().opacity, Some(0.0));
-        // Dropping it shows the first again.
         assert_eq!(a.script_drop(2), Some(9));
         let v = a.overlay(9, &base, at(t0, 500)).unwrap().opacity.unwrap();
         assert!((v - 0.6).abs() < 1e-3, "{v}");
@@ -725,10 +648,8 @@ mod tests {
         let (k, _) = script_keyframes(&f, &crate::Vars::default(), &crate::Env::default());
         a.script_set(1, 2, k, timing(1000.0));
         a.script_clock(1, playing(0.0));
-        // 0..0.5 stepped in two: 0 until a quarter, 0.5 after.
         assert_eq!(opacity(&a, 2, at(t0, 100)), Some(0.0));
         assert_eq!(opacity(&a, 2, at(t0, 300)), Some(0.5));
-        // 0.5..1 is linear back down.
         let v = opacity(&a, 2, at(t0, 750)).unwrap();
         assert!((v - 0.5).abs() < 1e-2, "{v}");
     }

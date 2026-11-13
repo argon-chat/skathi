@@ -1,41 +1,4 @@
 <script setup lang="ts">
-// Performance: the target's frame clock and its memory, live.
-//
-// ## Where the frame numbers come from
-//
-// `crates/vn-app/src/perf.rs` has had a frame profiler since milestone 11, but
-// it is a REPORT: `VN_PERF=1` prints a summary to stderr every second, and you
-// have to have decided to turn it on before the run you now wish you had
-// measured. v2 adds a second, unconditional, fixed-size ring beside it — one
-// `Instant` and one array store per frame — so the question "why is this
-// janky" can be asked of a host that is already running and already janky.
-//
-// The push channel sends a sample four times a second while this panel is
-// open, and stops when it is not (`store.streams()`): a sparkline nobody is
-// looking at is not worth 4 messages a second.
-//
-// ## What it deliberately does not show
-//
-// The per-phase breakdown — restyle / build / layout / paint — belongs to
-// `VN_PERF`, which OWNS those counters and clears them when it reports
-// (`vn_tree::perf::take`). Reading them here would silently break the stderr
-// report of a host somebody is profiling. So the panel says whether the probe
-// is on and points at the environment variable instead of showing zeros that
-// read as "nothing costs anything". (the Frames view records ordered CPU spans independently).
-//
-// ## Memory (m26)
-//
-// `mem`'s `breakdown`, requested explicitly while this panel is open
-// (`store.refreshMem`): categories that SUM to the committed address space —
-// loaded images, mapped files, JSC, the Rust heap, and "other private", which is
-// whatever no allocator we can see accounts for, said as such. The bar is that
-// sum; the table opens each category into its slices; the history is the same
-// stack over the bounded history of requested samples. GPU memory is not in the bar: it is not in
-// the address space, and adding it would double-count nothing and explain
-// nothing — it gets its own block. A macOS host sums to the physical footprint
-// instead (`totalLabel: "footprint"`), and its GPU memory IS in the bar, as the
-// `graphics` category: Apple GPUs share the system's memory. A host on an OS
-// with no port answers `{supported: false, reason}`, and the panel says that.
 import { computed, reactive, ref } from "vue";
 import FrameTimeline from "./FrameTimeline.vue";
 import AllocationsPanel from "./AllocationsPanel.vue";
@@ -63,7 +26,6 @@ function allocationRecordingChanged(active: boolean) { allocationRecording.value
 const perf = computed(() => state.perf);
 const samples = computed(() => state.perfHistory);
 
-/** The chart's ceiling: a frame budget, or the worst sample if it is worse. */
 const ceiling = computed(() => {
   const worst = samples.value.length ? Math.max(...samples.value) : 0;
   return Math.max(20, Math.ceil(worst / 10) * 10);
@@ -74,13 +36,9 @@ function barHeight(ms: number): number {
 }
 
 /**
- * A bar's colour is about the DISPLAY, not a fixed 16.7 ms budget: a 165 Hz
- * monitor has a 6 ms frame and a 60 Hz one has 16.7, and painting the first
- * red for missing the second would be a lie. So the reference is the display's
- * own refresh interval (`budgetMs`, gpui's `Window::refresh_interval`) — a bar
- * 1.6× past it missed a vsync — and, from a target that does not report one,
- * the window's own median: "slow" is well past what this machine has been
- * managing, which is what a hitch actually is.
+ * A bar's colour is about the DISPLAY, not a fixed 16.7 ms budget: a 165 Hz monitor has a 6 ms
+ * frame and a 60 Hz one has 16.7, and painting the first red for missing the second would be a
+ * lie.
  */
 const reference = computed(() => perf.value?.budgetMs || perf.value?.p50Ms || 0);
 
@@ -99,23 +57,18 @@ function seconds(ms: number | null | undefined): string {
   return `${Math.floor(ms / 60_000)} m ${Math.round((ms % 60_000) / 1000)} s`;
 }
 
-// ---- memory ---------------------------------------------------------------
-
 const mem = computed(() => state.mem);
-/** Only a host that does not know the command is "older than m26". */
 const memTooOld = computed(() => /unknown command/i.test(state.memError));
 const bar = computed(() => (mem.value ? segments(mem.value) : []));
 const keys = computed(() => (mem.value ? mem.value.categories.map((c) => c.key) : []));
 const history = computed(() => historyColumns(state.memHistory, keys.value));
 const gpuTotal = computed(() => (mem.value ? mem.value.gpu.dedicatedBytes + mem.value.gpu.sharedBytes : 0));
-/** Which categories (and the GPU block) are opened into their slices. */
 const open = reactive<Record<string, boolean>>({});
 
 function toggle(key: string): void {
   open[key] = !open[key];
 }
 
-/** The category's RAM from the last `Measure RAM`, or nothing. */
 function residentCat(key: string) {
   return state.memResident?.breakdown.categories.find((c) => c.key === key);
 }
@@ -229,7 +182,6 @@ function residentTitle(key: string): string {
         </div>
       </template>
 
-      <!-- memory -->
       <div class="mem-head">
         <span class="label">Memory</span>
         <template v-if="mem">
@@ -280,7 +232,7 @@ function residentTitle(key: string): string {
       </div>
       <div v-else-if="state.memError && !mem" class="empty">
         The target did not answer <b>mem</b>: {{ state.memError }}.<template v-if="memTooOld">
-          A host older than m26 has no memory breakdown.</template
+          An older host has no memory breakdown.</template
         >
       </div>
       <div v-else-if="!mem" class="empty">Asking the target where its memory is…</div>
@@ -521,8 +473,6 @@ function residentTitle(key: string): string {
   color: #5c6b80;
   line-height: 15px;
 }
-
-/* ---- memory ------------------------------------------------------------- */
 
 .mem-head {
   display: flex;

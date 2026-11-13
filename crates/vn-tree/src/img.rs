@@ -1,73 +1,9 @@
 //! `<img src>` — the browser's URL grammar, resolved against a native base.
 //!
-//! # What a `src` may be, in the order this module tries
-//!
-//! | form | example | becomes |
-//! |---|---|---|
-//! | data URL | `data:image/png;base64,iVBOR…` | `ImageSource::Image` (bytes decoded once, cached per node) |
-//! | http(s) URL | `https://host/a.png` | `Resource::Uri` — fetched by gpui's asset loader through the `ReqwestClient` `vn-app` installs |
-//! | blob URL | `blob:app://redjs/<uuid>` | a picked file: `Resource::Path` (no copy); a slice or bytes in memory: `ImageSource::Image` (see "blob: URLs" below) |
-//! | `file://` URL | `file:///C:/x/a.png` | `Resource::Path` |
-//! | absolute path | `C:\x\a.png`, `C:/x/a.png` | `Resource::Path` |
-//! | root-relative | `/assets/a.png` | `Resource::Path` under the **app root** |
-//! | relative | `assets/a.png`, `./a.png`, `../a.png` | `Resource::Path` joined onto the **app root** |
-//!
-//! # The base — what "the document" is here
-//!
-//! A browser resolves a relative `src` against the **document's** URL. Our
-//! document is the app: the dev host knows the entry module from
-//! `dist/manifest.json` (`apps/imgperf/src/main.js`), and the base is that
-//! app's ROOT directory — `apps/imgperf/` — i.e. the entry's directory with a
-//! trailing `src/` stripped. That is deliberately the same place a Vite app
-//! puts `index.html`, so `src="assets/x.png"` means `apps/<app>/assets/x.png`
-//! in both worlds, and a leading `/` behaves like a web server root (the app
-//! root), not like the filesystem root.
-//!
-//! The host publishes it with [`set_asset_base`]; `VN_APP_ROOT` overrides.
-//! With no base set at all, relative paths resolve against the process working
-//! directory (and say so once).
-//!
-//! # The key — one normaliser, every mode
-//!
-//! A relative or root-relative `src` is first turned into an app-root-relative
-//! KEY by [`content_key`] (crates/vn-payload): `?query`/`#hash` cut,
-//! `%XX` decoded, `\` → `/`, `.`/`..` folded. That is what a browser's server
-//! sees, so `a.png?v=2` is the file `a.png` and `my%20pic.png` is `my pic.png`
-//! — here and in `fetch()`, whose content provider uses the same function.
-//!
-//! # The store — a packaged app
-//!
-//! A packaged exe (`vn build`, docs/PACKAGING.md) has no app directory: its
-//! files are entries in the payload stamped into the exe. vn-app hands this
-//! module the payload's lookup with [`set_asset_store`], and from then on a
-//! relative `src` is looked up THERE, under exactly the key dev would have
-//! joined onto the app root — so app code cannot tell which of the two it runs
-//! in:
-//!
-//! * `<img>` / `poster` → `Resource::Embedded(key)`, which gpui reads back
-//!   through the `AssetSource` vn-app installs (and caches by key);
-//! * `<lottie>` → the entry's bytes;
-//! * `<video>` → `MediaSource::Bytes` with the media type from the extension.
-//!
-//! A key that is not in the store is a broken element plus one advisory — what
-//! a 404 is in a browser. There is NO fallback to the disk: in a packaged app
-//! the package is the document. Absolute paths and `file://` still reach the
-//! disk in both modes, because they say so.
-//!
-//! **Invariant:** every URL-taking feature resolves through this module, so
-//! CSS `url()` and `@font-face` inherit the store without a second resolver. They
-//! also share the explicit dev manifest map for imported files outside the app root.
-//!
-//! # Caching
-//!
-//! Resolution runs on the render walk, i.e. per node per frame. Everything
-//! expensive — path normalisation, base64 decoding — is therefore memoised per
-//! node and only redone when the node's `src` string actually changes. gpui's
-//! own asset cache (keyed by the `Resource` / `Image` id) is what dedupes the
-//! *decode* across nodes that share a source. It never evicts on its own, so a
-//! `blob:` source is handed back to it when no node shows it any more, and a
-//! path whose file was picked again after it changed loses its stale decode
-//! (see [`release`]).
+//! Relative `src`s resolve against the app root (set with [`set_asset_base`]) after [`content_key`]
+//! normalisation, the same as `fetch()`. A packaged app looks them up in the payload store instead,
+//! never the disk. Every URL-taking feature resolves through here so CSS `url()` and `@font-face`
+//! inherit the store without a second resolver.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -81,20 +17,18 @@ use vn_runtime::redjs;
 use vn_runtime::redjs::webapi::url::BlobTarget;
 use vn_runtime::JsRuntime;
 
-/// A packaged app's asset store: an app-root-relative key → the bytes, which
-/// live in the mapped exe for the life of the process.
+/// A packaged app's asset store: an app-root-relative key → the bytes, which live in the mapped exe
+/// for the life of the process.
 pub type AssetLookup = fn(&str) -> Option<&'static [u8]>;
 
-/// Explicit imported files outside a dev app's root. The builder publishes
-/// generated URL keys; the host never derives a filesystem path from a hash.
+/// Explicit imported files outside a dev app's root.
 fn dev_asset_files() -> &'static RwLock<HashMap<String, PathBuf>> {
     static FILES: OnceLock<RwLock<HashMap<String, PathBuf>>> = OnceLock::new();
     FILES.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-/// Replaces the dev manifest's imported-file map, also visible to fetch's
-/// background threads. Only canonical generated keys and absolute paths pass.
-/// Packaged apps install an asset store instead and never publish this map.
+/// Replaces the dev manifest's imported-file map, also visible to fetch's background threads. Only
+/// canonical generated keys and absolute paths pass.
 pub fn set_dev_asset_files(files: HashMap<String, PathBuf>) {
     let files = files.into_iter().filter(|(key, path)| {
         key.starts_with("_vn/fs/") && path.is_absolute()
@@ -104,34 +38,31 @@ pub fn set_dev_asset_files(files: HashMap<String, PathBuf>) {
     *dev_asset_files().write().unwrap() = files;
 }
 
-/// Resolves one explicitly mapped dev URL with the same normalization as
-/// image/font/video URLs and fetch. Unknown keys never escape the app root.
+/// Resolves one explicitly mapped dev URL with the same normalization as image/font/video URLs and
+/// fetch. Unknown keys never escape the app root.
 pub fn dev_asset_file(src: &str) -> Option<PathBuf> {
     let key = content_key(src)?;
     dev_asset_files().read().unwrap().get(&key).cloned()
 }
 
 thread_local! {
-    /// The app root relative `src`s resolve against (see module docs).
+    /// The app root relative `src`s resolve against.
     static BASE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
-    /// The packaged app's store, when there is one (see module docs).
+    /// The packaged app's store, when there is one.
     static STORE: Cell<Option<AssetLookup>> = const { Cell::new(None) };
-    /// Per-node memo: the `src` string it was built from → the resolved source.
     /// Keyed by node id and GC'd with the rest of the per-node side state.
     static RESOLVED: RefCell<HashMap<u32, Memo>> = RefCell::new(HashMap::new());
-    /// For each path a `blob:` URL handed to gpui BY PATH: the (size, mtime)
-    /// of the file whose decode gpui's asset cache may now hold for it.
     static BLOB_PATHS: RefCell<HashMap<PathBuf, Snapshot>> = RefCell::new(HashMap::new());
-    /// Sources gpui's asset cache must let go of, at the next point that has
-    /// a `Window` ([`evict_pending`]).
+    /// Sources gpui's asset cache must let go of, at the next point that has a `Window`
+    /// ([`evict_pending`]).
     static EVICT: RefCell<Vec<ImageSource>> = const { RefCell::new(Vec::new()) };
 }
 
 type Snapshot = (u64, Option<std::time::SystemTime>);
 
-/// What this module holds (devtools `mem`): `(per-node memos, bytes of their
-/// src strings, distinct in-memory encoded images (data:/blob: bytes),
-/// their encoded bytes, CSS background entries)`. The DECODES are gpui's.
+/// What this module holds (devtools `mem`): `(per-node memos, bytes of their src strings, distinct
+/// in-memory encoded images (data:/blob: bytes), their encoded bytes, CSS background entries)`. The
+/// DECODES are gpui's.
 pub(crate) fn mem_stats() -> (usize, usize, usize, usize, usize) {
     let mut seen = std::collections::HashSet::new();
     let (mut memos, mut src_bytes, mut images, mut image_bytes) = (0, 0, 0, 0);
@@ -170,31 +101,16 @@ pub(crate) fn mem_stats() -> (usize, usize, usize, usize, usize) {
 struct Memo {
     src: String,
     source: Option<ImageSource>,
-    /// Resolved from a `blob:` URL. gpui's asset cache keeps every decode it
-    /// was given until told otherwise, so a blob: source is handed back to it
-    /// when the last node showing it goes ([`release`]).
     blob: bool,
 }
 
-/// gpui caches a `Resource::Path` decode under the path and an `Image` under
-/// its id, and drops neither. Two cases need it to:
-///
-/// - **A file picked again after it changed.** The new File passes the
-///   snapshot check, but the path's cached decode is the OLD file's, so the
-///   new blob: URL would show the old pixels. When a path arrives with a
-///   snapshot other than the one recorded for it, its cached decode goes.
-///   (An element still showing an older URL of the same file then reloads,
-///   and shows the new pixels where a browser would keep the old ones.)
-/// - **Residency.** A picked photo's decode would otherwise stay for the life
-///   of the app. When no node shows a blob: source any more, it goes.
-///
-/// For an `Image` (bytes in memory) only the decode goes: its atlas tiles are
-/// reachable only through gpui's private `ImageDecoder` asset, so they stay
-/// until the window closes. A `Resource::Path`'s tiles go with it.
+/// gpui caches a `Resource::Path` decode under the path and an `Image` under its id, and drops
+/// neither: a blob source is handed back when no node shows it any more, and a picked file whose
+/// snapshot changed loses its stale decode (else the new blob URL would show the old pixels).
 fn release(map: &HashMap<u32, Memo>, gone: Memo) {
     let Memo { source: Some(source), blob: true, .. } = gone else { return };
     if map.values().any(|m| m.source.as_ref().is_some_and(|s| same_source(s, &source))) {
-        return; // another node still shows it
+        return;
     }
     if let ImageSource::Resource(Resource::Path(p)) = &source {
         BLOB_PATHS.with(|b| b.borrow_mut().remove(p.as_ref()));
@@ -211,8 +127,8 @@ fn same_source(a: &ImageSource, b: &ImageSource) -> bool {
     }
 }
 
-/// Records that `path` goes to gpui as the file with `snap`; queues its old
-/// decode for eviction when gpui may hold one of a different file.
+/// Records that `path` goes to gpui as the file with `snap`; queues its old decode for eviction
+/// when gpui may hold one of a different file.
 fn note_blob_path(path: &Path, snap: Snapshot) {
     let stale = BLOB_PATHS.with(|b| b.borrow_mut().insert(path.to_path_buf(), snap)).is_some_and(|old| old != snap);
     if stale {
@@ -220,10 +136,9 @@ fn note_blob_path(path: &Path, snap: Snapshot) {
     }
 }
 
-/// Hands queued sources back to gpui: the cached decode, and for a path its
-/// atlas tiles (in every window). Called where a `Window` is at hand: right
-/// after `<img>` resolves its `src` (so a stale decode is gone before gpui
-/// is asked for the new one) and once per frame ([`crate::frame_tick`]).
+/// Hands queued sources back to gpui: the cached decode, and for a path its atlas tiles (in every
+/// window). Called where a `Window` is at hand: right after `<img>` resolves its `src` (so a stale
+/// decode is gone before gpui is asked for the new one) and once per frame ([`crate::frame_tick`]).
 pub(crate) fn evict_pending(window: &mut gpui::Window, cx: &mut gpui::App) {
     let queued = EVICT.with(|e| std::mem::take(&mut *e.borrow_mut()));
     for source in queued {
@@ -236,30 +151,8 @@ pub(crate) fn evict_pending(window: &mut gpui::Window, cx: &mut gpui::App) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// residency — what gpui's asset cache keeps of the images this tree showed
-// ---------------------------------------------------------------------------
-//
-// gpui keeps every decode until told otherwise. Left alone, an Argon session
-// keeps every avatar it ever showed, each at the full size it was uploaded
-// at (research/reports/m26/perf-mem-2.md §3: 33 decodes, 57.6 MB,
-// drawn at sizes worth 4.2 MB).
-// Once a second, from the frame tick, [`residency_tick`]:
-//
-// * **evicts** a source no node has shown for [`EVICT_AFTER`]: its decode and
-//   its atlas tiles go. A node showing it again loads it again (an http(s)
-//   image is fetched again: there is no HTTP cache under gpui's loader). The
-//   grace keeps a channel switched away from and back to warm;
-// * **reduces** a decode drawn only well below its size: the copy it is drawn
-//   from takes its place in the cache (`crate::resample::reduced_copy`);
-// * **restores** a reduced decode drawn larger again, or whose pixels a
-//   canvas reads: the full decode is loaded afresh off the render thread and
-//   swapped back in, the element drawing the copy meanwhile.
-//
-// A browser does the same with its decoded-image cache, which it drops and
-// re-decodes at will; what this adds over it is the re-fetch of an evicted
-// http(s) image, which a browser serves from its disk cache.
-
+// gpui keeps every decode until told otherwise; the sweep evicts unshown sources, reduces decodes
+// drawn well below their size, and restores a reduced one that is drawn larger again.
 /// How long a source nobody shows keeps its decode.
 const EVICT_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 /// How often the sweep runs.
@@ -304,9 +197,7 @@ pub struct ResidencyStats {
     pub reduced_freed: usize,
     pub restored: usize,
     pub evicted: usize,
-    /// Pixel bytes the evictions freed (decodes that were loaded).
     pub evicted_freed: usize,
-    /// Sources known now (shown by a node, or within [`EVICT_AFTER`] of it).
     pub known: usize,
     /// Shown sources whose decode the latest sweep left full, by reason.
     pub kept_full: KeptFull,
@@ -323,8 +214,8 @@ pub struct KeptFull {
     pub small_saving: usize,
     /// A canvas read its pixels.
     pub canvas_read: usize,
-    /// Shown in a window that keeps full decodes: a media viewer, which zooms
-    /// to 1:1 (`windows::WindowState::full_res_images`).
+    /// Shown in a window that keeps full decodes: a media viewer, which zooms to 1:1
+    /// (`windows::WindowState::full_res_images`).
     pub full_res_window: usize,
 }
 
@@ -346,10 +237,6 @@ thread_local! {
     static RESIDENCY: RefCell<Residency> = RefCell::new(Residency::default());
 }
 
-/// A node was handed `source`: the sweep knows it from now on, so its decode
-/// goes [`EVICT_AFTER`] after the last node showing it does — also when that
-/// node was gone before the next sweep (a channel switched away from while
-/// its avatars were still loading).
 fn note_known(source: Option<&ImageSource>) {
     let Some(source) = source else { return };
     let Some(key) = source_key(source) else { return };
@@ -374,8 +261,6 @@ fn pixel_bytes(image: &gpui::RenderImage) -> usize {
         .sum()
 }
 
-/// The sources nodes show right now: `<img>` (and `poster`) memos, CSS
-/// background layers.
 fn shown_sources() -> Vec<ImageSource> {
     let mut out: Vec<ImageSource> = RESOLVED.with(|m| m.borrow().values().filter_map(|memo| memo.source.clone()).collect());
     BACKGROUNDS.with(|b| {
@@ -386,8 +271,7 @@ fn shown_sources() -> Vec<ImageSource> {
     out
 }
 
-/// The residency sweep (see the section comment). `true` when the window
-/// should repaint: a full decode came back.
+/// The residency sweep (see the section comment).
 pub(crate) fn residency_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let now = std::time::Instant::now();
     let wanted = crate::resample::take_wanted_full();
@@ -415,8 +299,7 @@ pub(crate) fn residency_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> b
     restored
 }
 
-/// Starts loading the full decode of every shown source whose reduced decode
-/// is one of `wanted`.
+/// Starts loading the full decode of every shown source whose reduced decode is one of `wanted`.
 fn restore(wanted: &std::collections::HashSet<gpui::ImageId>, cx: &mut gpui::App) {
     let shown = shown_sources();
     for source in shown {
@@ -426,7 +309,7 @@ fn restore(wanted: &std::collections::HashSet<gpui::ImageId>, cx: &mut gpui::App
             continue;
         }
         if !RESIDENCY.with(|r| r.borrow_mut().restoring.insert(key.clone())) {
-            continue; // already on its way
+            continue;
         }
         let Some(task) = source.load_detached(cx) else {
             RESIDENCY.with(|r| r.borrow_mut().restoring.remove(&key));
@@ -437,8 +320,6 @@ fn restore(wanted: &std::collections::HashSet<gpui::ImageId>, cx: &mut gpui::App
             cx.update(|cx| {
                 RESIDENCY.with(|r| r.borrow_mut().restoring.remove(&key));
                 let Ok(full) = loaded else { return };
-                // Still the reduced decode? (It may have been evicted, or its
-                // node may show another source by now.)
                 let Some(reduced) = source.cached(cx).filter(|c| c.is_reduced()) else { return };
                 if source.replace_cached(full, cx) {
                     RESIDENCY.with(|r| {
@@ -454,13 +335,11 @@ fn restore(wanted: &std::collections::HashSet<gpui::ImageId>, cx: &mut gpui::App
     }
 }
 
-/// The once-a-second half: evictions and reductions. `true` when an atlas
-/// tile went.
+/// The once-a-second half: evictions and reductions.
 fn sweep(now: std::time::Instant, window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let shown = shown_sources();
     crate::resample::prune_uses();
     let mut moved = false;
-    // Who shows what, now.
     RESIDENCY.with(|r| {
         let mut r = r.borrow_mut();
         for source in &shown {
@@ -469,7 +348,6 @@ fn sweep(now: std::time::Instant, window: &mut gpui::Window, cx: &mut gpui::App)
             }
         }
     });
-    // Evict what nobody has shown for EVICT_AFTER.
     let stale: Vec<(SourceKey, ImageSource)> = RESIDENCY.with(|r| {
         let mut r = r.borrow_mut();
         let keys: Vec<SourceKey> = r
@@ -501,7 +379,7 @@ fn sweep(now: std::time::Instant, window: &mut gpui::Window, cx: &mut gpui::App)
     for source in &shown {
         let Some(key) = source_key(source) else { continue };
         if !seen.insert(key.clone()) {
-            continue; // several nodes show it
+            continue;
         }
         let Some(full) = source.cached(cx) else { continue };
         if full.is_reduced() {
@@ -533,7 +411,6 @@ fn sweep(now: std::time::Instant, window: &mut gpui::Window, cx: &mut gpui::App)
                 r.stats.reduced += 1;
                 r.stats.reduced_freed += freed;
             });
-            // The full decode's own tile, if it was ever drawn as it is.
             cx.drop_image(full, Some(window));
             moved = true;
         }
@@ -542,11 +419,9 @@ fn sweep(now: std::time::Instant, window: &mut gpui::Window, cx: &mut gpui::App)
     moved
 }
 
-/// The sources an `<img>` shows in a window that keeps full decodes — a media
-/// viewer, which zooms to 1:1 at any moment, so a smaller copy standing in
-/// for what it shows would be a blurred picture until the restore landed. Only
-/// while shown: once the viewer stops showing it, the source reduces and
-/// evicts like any other.
+/// The sources an `<img>` shows in a window that keeps full decodes — a media viewer, which zooms
+/// to 1:1 at any moment, so a smaller copy standing in for what it shows would be a blurred picture
+/// until the restore landed.
 fn full_res_sources() -> std::collections::HashSet<SourceKey> {
     if !crate::windows::any_full_res() {
         return std::collections::HashSet::new();
@@ -568,8 +443,6 @@ fn full_res_sources() -> std::collections::HashSet<SourceKey> {
 }
 
 /// A canvas is about to read `source`'s pixels: they must be the full decode.
-/// `true` when they are; otherwise the full decode is on its way back and the
-/// source stays full from now on.
 fn keep_full(source: &ImageSource, image: &gpui::RenderImage) -> bool {
     let Some(key) = source_key(source) else { return true };
     RESIDENCY.with(|r| r.borrow_mut().keep_full.insert(key));
@@ -585,8 +458,7 @@ fn take_evictions() -> Vec<ImageSource> {
     EVICT.with(|e| std::mem::take(&mut *e.borrow_mut()))
 }
 
-/// Publishes the directory relative `src`s resolve against. The host calls this
-/// once at boot (dev: derived from the manifest entry; `VN_APP_ROOT` wins).
+/// Publishes the directory relative `src`s resolve against.
 pub fn set_asset_base(dir: PathBuf) {
     BASE.with(|b| *b.borrow_mut() = Some(dir));
 }
@@ -596,16 +468,15 @@ pub fn asset_base() -> Option<PathBuf> {
     BASE.with(|b| b.borrow().clone())
 }
 
-/// Makes relative `src`s resolve out of `lookup` instead of the disk. Set once,
-/// at boot, by a packaged exe (vn-app's `payload`), on the thread that renders.
+/// Makes relative `src`s resolve out of `lookup` instead of the disk. Set once, at boot, by a
+/// packaged exe (vn-app's `payload`), on the thread that renders.
 pub fn set_asset_store(lookup: AssetLookup) {
     STORE.with(|s| s.set(Some(lookup)));
 }
 
-/// The bytes of one of the app's own files, by the URL path a page names it
-/// with (`/games/pong/index.html`): out of the package in a packaged exe, off
-/// the disk under the app root (or its `public/`) in a dev host. What an
-/// `<iframe>`'s webview is served (`crate::iframe`).
+/// The bytes of one of the app's own files, by the URL path a page names it with
+/// (`/games/pong/index.html`): out of the package in a packaged exe, off the disk under the app
+/// root (or its `public/`) in a dev host.
 pub fn read_app_asset(src: &str) -> Option<Vec<u8>> {
     let key = vn_payload::content_key(src)?;
     if let Some(store) = asset_store() {
@@ -624,9 +495,7 @@ pub fn asset_store() -> Option<AssetLookup> {
     STORE.with(Cell::get)
 }
 
-/// A relative `src` looked up in the store. `None` when there is no store (a
-/// dev host), so the caller takes the path route; otherwise the key and its
-/// bytes, or the advisory a miss deserves.
+/// A relative `src` looked up in the store.
 fn stored(tag: &str, src: &str) -> Option<Result<(String, &'static [u8]), String>> {
     let store = asset_store()?;
     Some(match vn_payload::content_key_checked(src) {
@@ -646,7 +515,6 @@ fn stored(tag: &str, src: &str) -> Option<Result<(String, &'static [u8]), String
     })
 }
 
-/// Drops memoised sources for nodes that no longer exist.
 pub(crate) fn gc(live: impl Fn(u32) -> bool) {
     RESOLVED.with(|m| {
         let mut map = m.borrow_mut();
@@ -660,23 +528,14 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
 }
 
 thread_local! {
-    /// `background-image: url()` sources, per node, as `(url, source)`: an
-    /// element can carry several image layers, and a node can be an `<img>`
-    /// with a background too, so this is a memo of its own beside `RESOLVED`.
+    /// `background-image: url()` sources, per node, as `(url, source)`: an element can carry
+    /// several image layers, and a node can be an `<img>` with a background too, so this is a memo
+    /// of its own beside `RESOLVED`.
     static BACKGROUNDS: RefCell<HashMap<u32, Vec<(std::rc::Rc<str>, Option<ImageSource>)>>> =
         RefCell::new(HashMap::new());
 }
 
-/// The resolved source of one `background-image: url()` on `id`, memoised like
-/// [`source_for`]. CSS `url()` takes the URL grammar `<img src>` does, through
-/// the same resolver — so a relative URL is relative to the APP ROOT, as an
-/// imported asset's URL (`/node_modules/…/atlas.webp`) is, and not to the
-/// stylesheet that wrote it (see `crate::bgimage`).
-///
-/// A `blob:` source here is not handed back to gpui's cache when the node
-/// goes, as an `<img>`'s is ([`release`]): CSS backgrounds name blob: URLs
-/// rarely enough that the decode staying until the window closes is the
-/// simpler trade.
+/// The resolved source of one `background-image: url()` on `id`, memoised like [`source_for`].
 pub(crate) fn background_source(id: u32, url: &str) -> Option<ImageSource> {
     BACKGROUNDS.with(|m| {
         let mut m = m.borrow_mut();
@@ -686,8 +545,8 @@ pub(crate) fn background_source(id: u32, url: &str) -> Option<ImageSource> {
         }
         let source = resolve(url);
         note_known(source.as_ref());
-        // A node whose background URL keeps changing (an animated sprite
-        // sheet swapping sheets) must not grow this without bound.
+        // A node whose background URL keeps changing (an animated sprite sheet swapping sheets)
+        // must not grow this without bound.
         if list.len() >= 8 {
             list.clear();
         }
@@ -697,10 +556,6 @@ pub(crate) fn background_source(id: u32, url: &str) -> Option<ImageSource> {
 }
 
 /// The resolved `ImageSource` for `id`'s current `src`, memoised.
-///
-/// `None` means the `src` could not be turned into anything loadable at all
-/// (empty, or a URL scheme we do not speak) — the caller renders `alt` instead,
-/// exactly as a browser does for a broken image.
 pub(crate) fn source_for(id: u32, src: &str) -> Option<ImageSource> {
     RESOLVED.with(|m| {
         let mut map = m.borrow_mut();
@@ -720,31 +575,14 @@ pub(crate) fn source_for(id: u32, src: &str) -> Option<ImageSource> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// `load` / `error` — the image's half of the HTML "update the image data" steps
-// ---------------------------------------------------------------------------
-//
-// Every `<img>` whose `src` was written is probed once per `src`, attached or
-// not: `new Image()` and a detached `document.createElement("img")` are how
-// code measures a picked file (`naturalWidth` in `onload`), and they are never
-// painted. The answer reaches JS as `load` (a/b = the natural size, `key` = the
-// src) or `error` (`key` = the src) from the frame tick — after the script that
-// set the src, as in a browser, where both are queued as tasks.
-//
-// What "loaded" means is what a browser's `load` means: the bytes are there
-// and the format's header says how big the picture is ("completely
-// available"). That is a header read, not a decode — gpui decodes for the
-// paint, and the probe does not hold a second full-size copy of a photo a
-// script only wanted to measure. An http(s) image is the exception: its bytes
-// arrive through gpui's own loader, the one the element paints from, so the
-// probe waits on that decode and shares it.
+// `load` is a header read, not a decode: the probe must not hold a second full-size copy of a photo
+// a script only wanted to measure. An http(s) image waits on gpui's own decode and shares it.
 
 thread_local! {
     /// `<img>` nodes whose current `src` has not been answered yet.
     static LOADS: RefCell<std::collections::HashSet<u32>> = RefCell::new(std::collections::HashSet::new());
 }
 
-/// `src` was written (or removed) on an `<img>`: answer it on the next tick.
 pub(crate) fn note_src(id: u32) {
     LOADS.with(|l| l.borrow_mut().insert(id));
 }
@@ -761,16 +599,13 @@ pub(crate) enum Probe {
 }
 
 /// Answers every `<img>` whose `src` changed: `load` or `error`, at the node.
-/// Called once per frame from [`crate::frame_tick`].
 pub(crate) fn tick(window: &mut gpui::Window, cx: &mut gpui::App) {
     let pending: Vec<u32> = LOADS.with(|l| l.borrow().iter().copied().collect());
     for id in pending {
-        // The node's current `src`, if the node still exists.
         let Some(src) = crate::tree::read_tree(|t| t.node(id).map(|_| t.prop(id, "src").map(str::to_string))) else {
             LOADS.with(|l| l.borrow_mut().remove(&id));
             continue;
         };
-        // No `src` attribute at all: no request, no event (`complete` is true).
         let Some(src) = src else {
             LOADS.with(|l| l.borrow_mut().remove(&id));
             continue;
@@ -787,7 +622,6 @@ pub(crate) fn tick(window: &mut gpui::Window, cx: &mut gpui::App) {
     }
 }
 
-/// One `src`, answered as far as it can be right now.
 pub(crate) fn probe(id: u32, src: &str, cx: &mut gpui::App) -> Probe {
     // HTML: an empty `src` fires `error` (it is not "no src").
     if src.trim().is_empty() {
@@ -795,16 +629,12 @@ pub(crate) fn probe(id: u32, src: &str, cx: &mut gpui::App) -> Probe {
     }
     let svg_named = names_svg(src);
     match source_for(id, src) {
-        // Unresolvable (bad scheme, missing file in a package, …): already
-        // advised by the resolver.
         None => Probe::Failed,
         Some(ImageSource::Resource(Resource::Uri(uri))) => {
             match cx.fetch_asset::<gpui::ImgResourceLoader>(&Resource::Uri(uri)) {
                 None => Probe::Pending,
                 Some(Err(_)) => Probe::Failed,
                 Some(Ok(image)) => {
-                    // The picture's size, also when the cache holds a smaller
-                    // copy of it (see "residency").
                     let size = image.natural_size(0);
                     // gpui rasterises an SVG at twice its size for smoothness.
                     let scale = if svg_named { gpui::SMOOTH_SVG_SCALE_FACTOR as f64 } else { 1.0 };
@@ -824,15 +654,14 @@ pub(crate) fn probe(id: u32, src: &str, cx: &mut gpui::App) -> Probe {
     }
 }
 
-/// Does the URL's path end in `.svg` (the query and fragment cut)? The one
-/// thing that says a decoded http(s) image was an SVG.
+/// Does the URL's path end in `.svg` (the query and fragment cut)?
 pub(crate) fn names_svg(src: &str) -> bool {
     let path = src.split(['?', '#']).next().unwrap_or(src).trim();
     path.len() > 4 && path.is_char_boundary(path.len() - 4) && path[path.len() - 4..].eq_ignore_ascii_case(".svg")
 }
 
-/// A file's natural size: only the header is read for a raster image (a
-/// picked photo is measured, not loaded); an SVG is read whole.
+/// A file's natural size: only the header is read for a raster image (a picked photo is measured,
+/// not loaded); an SVG is read whole.
 fn file_natural_size(path: &Path) -> Probe {
     let Ok(reader) = image::ImageReader::open(path).and_then(|r| r.with_guessed_format()) else {
         return Probe::Failed;
@@ -846,9 +675,9 @@ fn file_natural_size(path: &Path) -> Probe {
     }
 }
 
-/// The natural size a format's header declares: the raster formats gpui
-/// decodes (through the same `image` crate, so the set cannot drift — the
-/// format is sniffed from the bytes, as gpui does), or an SVG's own size.
+/// The natural size a format's header declares: the raster formats gpui decodes (through the same
+/// `image` crate, so the set cannot drift — the format is sniffed from the bytes, as gpui does), or
+/// an SVG's own size.
 pub(crate) fn natural_size(bytes: &[u8]) -> Probe {
     if let Ok(reader) = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format() {
         if reader.format().is_some() {
@@ -859,10 +688,9 @@ pub(crate) fn natural_size(bytes: &[u8]) -> Probe {
     svg_size(bytes)
 }
 
-/// A raster's natural size as it is painted and drawn: upright, its EXIF
-/// orientation applied (CSS `image-orientation: from-image`, which gpui's
-/// decoder and the `drawImage` pixels below both follow), so a phone photo
-/// taken sideways measures as it shows. A header read; no pixels are decoded.
+/// A raster's natural size as it is painted and drawn: upright, its EXIF orientation applied (CSS
+/// `image-orientation: from-image`, which gpui's decoder and the `drawImage` pixels below both
+/// follow), so a phone photo taken sideways measures as it shows.
 fn upright_size<R: std::io::BufRead + std::io::Seek>(reader: image::ImageReader<R>) -> Probe {
     use image::metadata::Orientation;
     use image::ImageDecoder;
@@ -891,33 +719,13 @@ fn svg_size(bytes: &[u8]) -> Probe {
     }
 }
 
-// ---------------------------------------------------------------------------
-// `drawImage(img)` — an `<img>`'s pixels, for a canvas
-// ---------------------------------------------------------------------------
-//
-// HTML draws an image element at its natural size, upright (EXIF orientation
-// applied, as `image-orientation: from-image` paints it), first frame of an
-// animation. Where the pixels come from:
-//
-// * http(s): gpui's decode, the one the element paints from and the load probe
-//   waited on (so after `load` it is there). It is BGRA, straight alpha; an
-//   SVG is rasterised at twice its size and is halved back here.
-// * everything else (data:, blob:, a file, the packaged store): the bytes,
-//   read and decoded now by redjs's decoder, which uses the same `image` crate
-//   and applies the orientation the same way. That is the synchronous decode a
-//   browser does for a `drawImage` of an image it has not decoded yet. It is
-//   not taken from gpui's cache: gpui gives no way to look without starting a
-//   load, and an image a script only draws is never painted.
-//
-// The caller (packages/vue-native/src/canvas.ts) keeps the result per element
-// and `src`, so a cropper redrawing on every pointer move decodes once.
+// `drawImage` pixels: http(s) uses gpui's decode (BGRA, SVG at twice size, halved back); everything
+// else is read and decoded here, synchronously, since gpui cannot be asked without starting a load.
 
 /// What [`pixels`] found for an `<img>`.
 pub(crate) enum Pixels {
     /// Straight RGBA at the natural size.
     Ready { width: u32, height: u32, rgba: Vec<u8> },
-    /// Nothing to draw now: no `src`, an http(s) decode still on its way, or
-    /// no gpui `App` to ask (`cx` was `None`).
     NotYet,
     /// The bytes are not an image this build decodes, or cannot be read.
     Broken(String),
@@ -934,8 +742,6 @@ pub(crate) fn pixels(id: u32, cx: Option<&mut gpui::App>) -> Pixels {
     }
     if matches!(scheme_of(src).as_str(), "http" | "https") {
         let Some(cx) = cx else { return Pixels::NotYet };
-        // The memo is keyed by the attribute's own text, as the paint and
-        // the probe ask for it.
         let source = source_for(id, &raw);
         let Some(Ok(image)) = (match &source {
             Some(ImageSource::Resource(r @ Resource::Uri(_))) => cx.fetch_asset::<gpui::ImgResourceLoader>(r),
@@ -943,9 +749,9 @@ pub(crate) fn pixels(id: u32, cx: Option<&mut gpui::App>) -> Pixels {
         }) else {
             return Pixels::NotYet;
         };
-        // A canvas reads every pixel: the residency sweep must not have the
-        // smaller copy stand in for this decode, and one that already does
-        // brings the full decode back (a frame or two; NotYet meanwhile).
+        // A canvas reads every pixel: the residency sweep must not have the smaller copy stand in
+        // for this decode, and one that already does brings the full decode back (a frame or two;
+        // NotYet meanwhile).
         if let Some(source) = &source {
             if !keep_full(source, &image) {
                 return Pixels::NotYet;
@@ -976,9 +782,9 @@ pub(crate) fn pixels(id: u32, cx: Option<&mut gpui::App>) -> Pixels {
     }
 }
 
-/// Straight-alpha RGBA scaled to half size by 2×2 averaging (weighted by
-/// alpha, so a transparent pixel adds no colour): gpui's SVG raster, which is
-/// drawn at twice the natural size, back at the natural size.
+/// Straight-alpha RGBA scaled to half size by 2×2 averaging (weighted by alpha, so a transparent
+/// pixel adds no colour): gpui's SVG raster, which is drawn at twice the natural size, back at the
+/// natural size.
 fn halve(rgba: &[u8], w: u32, h: u32) -> (Vec<u8>, u32, u32) {
     let (ow, oh) = ((w / 2).max(1), (h / 2).max(1));
     let mut out = vec![0u8; (ow * oh * 4) as usize];
@@ -1006,17 +812,9 @@ fn halve(rgba: &[u8], w: u32, h: u32) -> (Vec<u8>, u32, u32) {
     (out, ow, oh)
 }
 
-/// The raw FILE bytes behind a `src`, for elements that need the document
-/// rather than a decoded image — `<lottie>` parses Bodymovin JSON (or a gzipped
-/// `.tgs`) itself, so `ImageSource` is no use to it.
-///
-/// The URL grammar is [`resolve`]'s, verbatim: `data:` URIs, `file://` URLs,
-/// absolute Windows paths and relative/root-relative paths against the app root
-/// all mean here exactly what they mean for `<img src>`. Only the *result* type
-/// differs, so `<lottie src>` and `<img src>` can never drift apart.
-///
-/// `Err` carries the advisory text the caller should route through its compat
-/// channel — nothing is printed here, because the caller knows the element name.
+/// The raw FILE bytes behind a `src`, for elements that need the document rather than a decoded
+/// image — `<lottie>` parses Bodymovin JSON (or a gzipped `.tgs`) itself, so `ImageSource` is no
+/// use to it.
 pub(crate) fn read_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
     let src = src.trim();
     if src.is_empty() {
@@ -1028,7 +826,7 @@ pub(crate) fn read_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
     if scheme_of(src) == "blob" {
         return blob_bytes(tag, src, blob_target(src));
     }
-    // A packaged app: the payload, never the disk (module docs).
+    // A packaged app: the payload, never the disk.
     if scheme_of(src).is_empty() {
         if let Some(hit) = stored(tag, src) {
             return hit.map(|(_, bytes)| bytes.to_vec());
@@ -1038,10 +836,9 @@ pub(crate) fn read_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
     read_file(tag, src, &path)
 }
 
-/// What [`read_bytes`] reads, without reading a file yet: the bytes of a
-/// `data:` or `blob:` URL or a packaged asset, which are in memory, or the
-/// path of a file, for a caller that reads it on another thread with
-/// [`read_file`] (`<lottie>`, `crate::lottie`). Same grammar, same errors.
+/// What [`read_bytes`] reads, without reading a file yet: the bytes of a `data:` or `blob:` URL or
+/// a packaged asset, which are in memory, or the path of a file, for a caller that reads it on
+/// another thread with [`read_file`] (`<lottie>`, `crate::lottie`).
 pub(crate) enum Readable {
     Bytes(Vec<u8>),
     File(PathBuf),
@@ -1066,18 +863,8 @@ pub(crate) fn read_file(tag: &str, src: &str, path: &std::path::Path) -> Result<
     std::fs::read(path).map_err(|e| format!("<{tag} src=\"{src}\">: could not read {} — {e}", path.display()))
 }
 
-/// The FILE PATH behind a `src`, for elements that hand the *file* to something
-/// else rather than reading it — `<video>` gives Media Foundation a URL and lets
-/// the OS own the read-ahead buffer, which is the whole point (a 30-minute clip
-/// must not become a 2 GB `Vec<u8>`).
-///
-/// The grammar is [`resolve`]'s minus `data:`, verbatim: `file://` URLs,
-/// absolute Windows paths and relative/root-relative paths against the app root
-/// all mean here exactly what they mean for `<img src>`, so the three elements
-/// can never drift apart.
-///
-/// `Err` carries the advisory text the caller should route through its compat
-/// channel — nothing is printed here, because the caller knows the element name.
+/// The FILE PATH behind a `src`, for `<video>`: the OS owns the read-ahead buffer, so a long clip
+/// never becomes a `Vec<u8>`.
 pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
     let src = src.trim();
     if src.is_empty() {
@@ -1095,8 +882,7 @@ pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
         "file" => {
             file_url(src).ok_or_else(|| format!("<{tag} src=\"{src}\">: malformed file: URL"))
         }
-        // A blob: URL of a whole picked file IS a path; a slice or an
-        // in-memory Blob is not one.
+        // A blob: URL of a whole picked file IS a path; a slice or an in-memory Blob is not one.
         "blob" => match blob_target(src) {
             Some(t @ BlobTarget::Path { range: None, .. }) => {
                 check_snapshot(tag, src, &t)?;
@@ -1119,21 +905,8 @@ pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// The [`vn_video::MediaSource`] behind a `<video src>` — the same grammar as
-/// `<img>`, resolved to what a media pipeline can take rather than to an image.
-///
-/// Three shapes, because the platform genuinely wants three different things
-/// and flattening them would cost something real each time:
-///
-/// * **a path**, so the OS owns the read-ahead buffer and a 30-minute clip
-///   never becomes a `Vec<u8>`;
-/// * **an http(s) URL verbatim**, so the platform's own network source streams
-///   it. Downloading first would turn "starts in 200 ms" into "starts when the
-///   whole file has arrived", which is not what a browser does either;
-/// * **bytes**, for `data:`, which has neither a path nor a server.
-///
-/// `Err` carries the advisory text the caller routes through its compat
-/// channel — nothing is printed here, because the caller knows the element name.
+/// The [`vn_video::MediaSource`] behind a `<video src>`: a path (the OS buffers), an http(s) URL
+/// verbatim (the platform streams it, rather than waiting for a full download), or bytes for `data:`.
 pub(crate) fn resolve_media(tag: &str, src: &str) -> Result<vn_video::MediaSource, String> {
     let src = src.trim();
     if src.is_empty() {
@@ -1141,8 +914,8 @@ pub(crate) fn resolve_media(tag: &str, src: &str) -> Result<vn_video::MediaSourc
     }
     match scheme_of(src).as_str() {
         "data" => {
-            // The media type is the only hint the platform gets about what the
-            // bytes are: a `data:` URI has no filename and no `Content-Type`.
+            // The media type is the only hint the platform gets about what the bytes are: a `data:`
+            // URI has no filename and no `Content-Type`.
             let mime = src
                 .get(5..)
                 .unwrap_or_default()
@@ -1165,8 +938,7 @@ pub(crate) fn resolve_media(tag: &str, src: &str) -> Result<vn_video::MediaSourc
         }
         "http" | "https" => Ok(vn_video::MediaSource::Uri(src.to_string())),
         "blob" => blob_media(tag, src, blob_target(src)),
-        // The payload is already mapped read-only. Preserve its process-life
-        // slice so Media Foundation reads/seek ranges through the native source.
+        // The payload is already mapped read-only.
         "" if asset_store().is_some() => {
             let (key, bytes) = stored(tag, src).expect("asset_store() is set")?;
             Ok(vn_video::MediaSource::StaticBytes {
@@ -1183,11 +955,9 @@ fn scheme_of(src: &str) -> String {
         .unwrap_or_default()
 }
 
-/// `data:` URI → payload bytes. The media type is *not* checked: unlike `<img>`,
-/// which needs it to pick a decoder, a `<lottie>` payload is sniffed by the
-/// crate itself (gzip magic → `.tgs`, otherwise JSON).
+/// `data:` URI → payload bytes.
 fn data_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
-    let body = src.get(5..).unwrap_or_default(); // after "data:"
+    let body = src.get(5..).unwrap_or_default();
     let Some((meta, payload)) = body.split_once(',') else {
         return Err(format!(
             "<{tag} src=\"{}…\">: malformed data: URL (no comma)",
@@ -1232,27 +1002,19 @@ fn resolve(src: &str) -> Option<ImageSource> {
 
     match lower_scheme.as_str() {
         "data" => data_url(src),
-        // gpui's asset loader fetches a `Resource::Uri` through
-        // `cx.http_client()`, which `vn-app` now installs as a real
-        // `ReqwestClient`. The fetch is ASYNCHRONOUS: the first build gets
-        // `None` back from `use_asset`, gpui spawns the request and notifies
-        // the view when the bytes land, so the element shows its `alt` for a
-        // frame or two and then the picture — which is what a browser does.
-        //
-        // NOT `ImageSource::from(&str)`: gpui's `is_uri` classifies a bare
-        // relative path as `Embedded`, so the scheme is decided here.
+        // Fetched asynchronously by gpui, so the element shows `alt` for a frame or two. NOT
+        // `ImageSource::from(&str)`: gpui's `is_uri` classifies a bare relative path as `Embedded`.
         "http" | "https" => Some(ImageSource::Resource(Resource::Uri(src.to_string().into()))),
         "blob" => blob_image(src, blob_target(src)),
         "file" => file_url(src).map(path_source),
-        // A single-letter "scheme" is a Windows drive (`C:\x\a.png`), never a
-        // URL scheme — no registered scheme is one character long.
+        // A single-letter "scheme" is a Windows drive (`C:\x\a.png`), never a URL scheme.
         s if s.len() == 1 && s.chars().all(|c| c.is_ascii_alphabetic()) => {
             Some(path_source(PathBuf::from(src)))
         }
         "" => match stored("img", src) {
-            // gpui reads `Embedded` back through the app's `AssetSource` (the
-            // payload), off the render thread, and caches the decode by key —
-            // the same lifecycle a `Resource::Path` gets, minus the disk.
+            // gpui reads `Embedded` back through the app's `AssetSource` (the payload), off the
+            // render thread, and caches the decode by key — the same lifecycle a `Resource::Path`
+            // gets, minus the disk.
             Some(Ok((key, _))) => Some(ImageSource::Resource(Resource::Embedded(key.into()))),
             Some(Err(msg)) => {
                 warn(msg);
@@ -1271,15 +1033,15 @@ fn resolve(src: &str) -> Option<ImageSource> {
 }
 
 fn path_source(p: PathBuf) -> ImageSource {
-    // Explicitly `Resource::Path`: `impl From<&str> for ImageSource` would
-    // route a Windows path through `url::Url::parse`, where `C:` parses as a
-    // scheme and the file becomes an unfetchable URI.
+    // Explicitly `Resource::Path`: `impl From<&str> for ImageSource` would route a Windows path
+    // through `url::Url::parse`, where `C:` parses as a scheme and the file becomes an unfetchable
+    // URI.
     ImageSource::Resource(Resource::Path(p.into()))
 }
 
-/// Joins a relative or root-relative `src` onto the app root — through
-/// [`content_key`], so the query is cut, escapes are decoded and `.`/`..` fold
-/// exactly as they do for `fetch()` and for a packaged exe's store.
+/// Joins a relative or root-relative `src` onto the app root — through [`content_key`], so the
+/// query is cut, escapes are decoded and `.`/`..` fold exactly as they do for `fetch()` and for a
+/// packaged exe's store.
 fn relative_to_base(tag: &str, src: &str) -> PathBuf {
     if let Some(path) = dev_asset_file(src) { return path; }
     let base = match asset_base() {
@@ -1298,10 +1060,6 @@ fn relative_to_base(tag: &str, src: &str) -> PathBuf {
     match vn_payload::content_key_checked(src) {
         Ok(key) => base.join(key.replace('/', sep)),
         Err(why) => {
-            // The legacy lexical join, kept so nothing that resolved before
-            // stops resolving in dev — but a path that climbs OUT of the app
-            // root is one a packaged exe cannot serve, and the author should
-            // hear that here rather than from a user.
             if why == KeyError::EscapesRoot {
                 warn(format!(
                     "<{tag} src=\"{src}\"> climbs out of the app root ({}) — it resolves in a dev host, \
@@ -1310,7 +1068,6 @@ fn relative_to_base(tag: &str, src: &str) -> PathBuf {
                 ));
             }
             let rel = src.split(['?', '#']).next().unwrap_or_default();
-            // A leading `/` is a *server* root in a browser; ours is the app.
             let rel = rel.trim_start_matches(['/', '\\']);
             normalize(&base.join(rel.replace('/', sep)))
         }
@@ -1333,17 +1090,13 @@ fn normalize(p: &Path) -> PathBuf {
     out
 }
 
-/// `file:///C:/x/a.png` → `C:\x\a.png`. Percent escapes are decoded; a host
-/// component (`file://server/share`) becomes a UNC path.
-///
-/// Off Windows `file:///home/u/a.png` is `/home/u/a.png`: the path is the
-/// URL's own, and a host (`file://localhost/x`) names this machine.
+/// `file:///C:/x/a.png` → `C:\x\a.png`.
 fn file_url(src: &str) -> Option<PathBuf> {
     file_url_for(src, cfg!(windows))
 }
 
 fn file_url_for(src: &str, windows: bool) -> Option<PathBuf> {
-    let rest = src.get(5..)?; // after "file:"
+    let rest = src.get(5..)?;
     let rest = rest.strip_prefix("//").unwrap_or(rest);
     let decoded = percent_decode(rest);
     if !windows {
@@ -1366,9 +1119,9 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&percent_decode_bytes(s)).into_owned()
 }
 
-/// The bytes a percent-encoded string stands for. A `data:` payload is bytes,
-/// not text: `%89PNG` through a `String` came out as U+FFFD and the image
-/// with it.
+/// The bytes a percent-encoded string stands for (a `data:` payload is bytes, not text: `%89PNG`
+/// through a `String` came out as U+FFFD).
+/// The bytes a percent-encoded string stands for.
 fn percent_decode_bytes(s: &str) -> Vec<u8> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -1396,25 +1149,11 @@ fn hex_val(b: u8) -> Option<u8> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// blob: URLs
-// ---------------------------------------------------------------------------
-//
-// `URL.createObjectURL(blob)` puts the Blob's SOURCE in redjs's per-context
-// store — the `Arc` of its bytes, or the path of the file it was picked from
-// — and these arms read it back with no JS involved. A whole picked file is
-// handed on as its PATH, exactly like `src="C:\x\a.png"`: gpui (or Media
-// Foundation) reads it, and the bytes are never copied into the tree. A slice
-// of a file is read here, once per `src` (the per-node memo); bytes in memory
-// are used where they are.
-//
-// The file behind a path-backed URL must still be the one that was picked:
-// if its size or mtime changed, the load fails as a browser's does (the File
-// API's snapshot rule, the same one `file.text()` applies).
+// blob: URLs. A whole picked file is handed on as its PATH, like an absolute `src`, so the bytes are
+// never copied into the tree. A path-backed URL fails when the file's size or mtime changed since
+// it was picked (the File API's snapshot rule).
 
-/// What the JS context's blob URL store holds for `src`. `None` with no
-/// runtime on this thread (unit tests, a headless tool), or for a URL that was
-/// never created, was revoked, or names a Blob that cannot be read.
+/// What the JS context's blob URL store holds for `src`.
 fn blob_target(src: &str) -> Option<BlobTarget> {
     JsRuntime::try_with(|rt| redjs::webapi::url::resolve_blob_url(rt.raw(), src)).flatten()
 }
@@ -1441,9 +1180,8 @@ fn check_snapshot(tag: &str, src: &str, t: &BlobTarget) -> Result<(), String> {
     ))
 }
 
-/// The bytes a blob: URL names: a copy of the store's window when they are in
-/// memory (gpui's `Image` and `<lottie>` own theirs), read from the file for a
-/// path-backed one.
+/// The bytes a blob: URL names: a copy of the store's window when they are in memory (gpui's
+/// `Image` and `<lottie>` own theirs), read from the file for a path-backed one.
 fn blob_bytes(tag: &str, src: &str, target: Option<BlobTarget>) -> Result<Vec<u8>, String> {
     match target {
         None => Err(unknown_blob(tag, src)),
@@ -1461,10 +1199,8 @@ fn blob_bytes(tag: &str, src: &str, target: Option<BlobTarget>) -> Result<Vec<u8
     }
 }
 
-/// `len` bytes of `path` from `offset`: all of them, or an error. A buffer
-/// that cannot be had is an error (the element is broken), never an
-/// out-of-memory abort; so is a file that ends early (shorter than the File
-/// that was picked says), where a truncated image used to be decoded.
+/// `len` bytes of `path` from `offset`: all of them, or an error: a file that ends early or a window
+/// too large to allocate is an error, never a truncated decode or an out-of-memory abort.
 fn read_window(path: &Path, offset: u64, len: u64) -> std::io::Result<Vec<u8>> {
     use std::io::{Error, ErrorKind, Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path)?;
@@ -1483,11 +1219,9 @@ fn read_window(path: &Path, offset: u64, len: u64) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// `<img src="blob:…">`. A browser sniffs an image's format from its bytes
-/// and ignores the Blob's type; so does this, with the type as the fallback.
+/// `<img src="blob:…">`.
 fn blob_image(src: &str, target: Option<BlobTarget>) -> Option<ImageSource> {
     if let Some(t @ BlobTarget::Path { range: None, .. }) = &target {
-        // The whole file: by path, no copy — exactly an absolute-path src.
         if let Err(msg) = check_snapshot("img", src, t) {
             warn(msg);
             return None;
@@ -1514,8 +1248,8 @@ fn blob_image(src: &str, target: Option<BlobTarget>) -> Option<ImageSource> {
     Some(ImageSource::Image(std::sync::Arc::new(Image::from_bytes(format, bytes))))
 }
 
-/// `<video src="blob:…">`: a whole picked file is a PATH (the OS streams it);
-/// a Blob in memory is its own `Arc`, shared when the URL names all of it.
+/// `<video src="blob:…">`: a whole picked file is a PATH (the OS streams it); a Blob in memory is
+/// its own `Arc`, shared when the URL names all of it.
 fn blob_media(tag: &str, src: &str, target: Option<BlobTarget>) -> Result<vn_video::MediaSource, String> {
     match target {
         None => Err(unknown_blob(tag, src)),
@@ -1541,15 +1275,10 @@ fn blob_media(tag: &str, src: &str, target: Option<BlobTarget>) -> Result<vn_vid
     }
 }
 
-// ---------------------------------------------------------------------------
-// data: URLs
-// ---------------------------------------------------------------------------
 
-/// `data:[<mediatype>][;base64],<data>` (RFC 2397). The media type decides the
-/// decoder, defaulting — as the RFC does — to nothing useful for images, so an
-/// absent one is sniffed from the payload instead of guessed.
+/// `data:[<mediatype>][;base64],<data>` (RFC 2397).
 fn data_url(src: &str) -> Option<ImageSource> {
-    let body = src.get(5..)?; // after "data:"
+    let body = src.get(5..)?;
     let (meta, payload) = match body.split_once(',') {
         Some(pair) => pair,
         None => {
@@ -1629,8 +1358,8 @@ fn sniff(bytes: &[u8]) -> Option<ImageFormat> {
     }
 }
 
-/// Standard base64 with optional padding; whitespace (data URLs get wrapped by
-/// every editor on earth) is skipped. URL-safe `-_` is accepted too.
+/// Standard base64 with optional padding; whitespace (data URLs get wrapped by every editor on
+/// earth) is skipped.
 fn base64_decode(s: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(s.len() / 4 * 3);
     let mut acc: u32 = 0;
@@ -1673,9 +1402,6 @@ mod tests {
         out.into_inner()
     }
 
-    /// `drawImage(img)`: a file `<img>` decodes now, at its natural size; an
-    /// http(s) one waits for gpui's decode (there is no `App` here); bytes that
-    /// are no image and a missing `src` are told apart.
     #[test]
     fn an_img_hands_a_canvas_its_pixels() {
         let dir = std::env::temp_dir().join(format!("vn-img-pixels-{}", std::process::id()));
@@ -1704,7 +1430,6 @@ mod tests {
             }
             _ => panic!("a PNG file did not decode"),
         }
-        // A photo taken sideways (EXIF orientation 6) measures and draws upright.
         let turned = dir.join("c.jpg");
         std::fs::write(&turned, sideways_jpeg()).unwrap();
         assert_eq!(file_natural_size(&turned), Probe::Loaded(16.0, 32.0));
@@ -1720,15 +1445,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A 32×16 JPEG whose APP1 Exif segment says orientation 6 (turn 90°
-    /// clockwise to show it): upright it is 16×32.
+    /// A 32×16 JPEG whose APP1 Exif segment says orientation 6 (turn 90° clockwise to show it):
+    /// upright it is 16×32.
     fn sideways_jpeg() -> Vec<u8> {
         let mut out = std::io::Cursor::new(Vec::new());
         image::RgbImage::from_pixel(32, 16, image::Rgb([200, 0, 0]))
             .write_to(&mut out, image::ImageFormat::Jpeg)
             .unwrap();
         let jpeg = out.into_inner();
-        // TIFF, big-endian: one IFD entry, Orientation (0x0112), SHORT, 1, = 6.
         let tiff = [0x4D, 0x4D, 0, 0x2A, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0];
         let len = (2 + 6 + tiff.len()) as u16;
         let mut with = jpeg[..2].to_vec();
@@ -1739,8 +1463,8 @@ mod tests {
         with
     }
 
-    /// gpui's SVG raster (twice the size) back at the natural size: a 2×2
-    /// block averages by alpha, so a transparent pixel adds no colour.
+    /// gpui's SVG raster (twice the size) back at the natural size: a 2×2 block averages by alpha,
+    /// so a transparent pixel adds no colour.
     #[test]
     fn halving_weighs_colour_by_alpha() {
         let px = [
@@ -1751,20 +1475,18 @@ mod tests {
         let (out, w, h) = halve(&px, 2, 2);
         assert_eq!((w, h), (1, 1));
         assert_eq!(out, vec![255, 0, 0, 128]);
-        // An odd edge reuses the last row/column rather than reading past it.
         let (out, w, h) = halve(&[9, 9, 9, 255].repeat(3), 3, 1);
         assert_eq!((w, h, out), (1, 1, vec![9, 9, 9, 255]));
     }
 
-    /// `load`'s natural size is the header's, for a raster and an SVG alike;
-    /// anything else is `error`.
+    /// `load`'s natural size is the header's, for a raster and an SVG alike; anything else is
+    /// `error`.
     #[test]
     fn the_probe_reads_the_natural_size_off_the_header() {
         assert_eq!(natural_size(&png(7, 3)), Probe::Loaded(7.0, 3.0));
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="24"></svg>"#;
         assert_eq!(natural_size(svg), Probe::Loaded(40.0, 24.0));
         assert_eq!(natural_size(b"not an image"), Probe::Failed);
-        // A PNG cut off inside its header is broken.
         assert_eq!(natural_size(&png(4, 4)[..12]), Probe::Failed);
     }
 
@@ -1800,7 +1522,6 @@ mod tests {
                 "{src}"
             );
         }
-        // `..` folds lexically, like a URL.
         assert_eq!(
             as_path(resolve("../hello/assets/a.png")),
             Some(PathBuf::from("Y:\\vue-native\\apps\\hello\\assets\\a.png"))
@@ -1829,8 +1550,7 @@ mod tests {
         );
     }
 
-    /// A `file:` URL is a Windows path only on Windows. Elsewhere the slashes
-    /// stay, or `file:///home/u/a.png` named a file `\home\u\a.png`.
+    /// A `file:` URL is a Windows path only on Windows.
     #[test]
     fn file_urls_keep_their_path_off_windows() {
         let unix = |src| file_url_for(src, false).map(|p| p.to_string_lossy().into_owned());
@@ -1843,8 +1563,7 @@ mod tests {
 
     #[test]
     fn http_becomes_a_uri_resource_for_gpuis_asset_loader() {
-        // Was `is_none()` + an advisory until m13 wired a real HTTP client into
-        // gpui. `Resource::Uri` is what makes gpui fetch it.
+        // `Resource::Uri` is what makes gpui fetch it.
         assert!(matches!(
             resolve("https://example.com/a.png"),
             Some(ImageSource::Resource(Resource::Uri(_)))
@@ -1853,19 +1572,13 @@ mod tests {
             resolve("http://example.com/a.png"),
             Some(ImageSource::Resource(Resource::Uri(_)))
         ));
-        // …and a bare relative path still resolves against the app root rather
-        // than being mistaken for a URL, which is the trap `ImageSource::from`
-        // walks into.
         assert!(matches!(
             resolve("assets/a.png"),
             Some(ImageSource::Resource(Resource::Path(_)))
         ));
     }
 
-    /// `<video>`'s grammar is `<img>`'s, resolved to a media source. The three
-    /// shapes are not interchangeable: a path lets the OS own the read-ahead,
-    /// a URL lets its network source stream, and bytes are for `data:`, which
-    /// has neither.
+    /// `<video>`'s grammar is `<img>`'s, resolved to a media source.
     #[test]
     fn video_sources_resolve_to_the_shape_the_platform_wants() {
         use vn_video::MediaSource;
@@ -1873,8 +1586,8 @@ mod tests {
             resolve_media("video", "https://example.com/a.mp4"),
             Ok(MediaSource::Uri(u)) if u == "https://example.com/a.mp4"
         ));
-        // base64, with the media type carried through — it is the only hint
-        // the platform gets about what the bytes are.
+        // base64, with the media type carried through — it is the only hint the platform gets about
+        // what the bytes are.
         match resolve_media("video", "data:video/mp4;base64,AAAA") {
             Ok(MediaSource::Bytes { mime, data }) => {
                 assert_eq!(mime, "video/mp4");
@@ -1882,11 +1595,10 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        // A URI that decodes to nothing is an error, not a zero-byte load that
-        // fails four layers down inside Media Foundation.
+        // A URI that decodes to nothing is an error, not a zero-byte load that fails four layers
+        // down inside Media Foundation.
         assert!(resolve_media("video", "data:video/mp4;base64,").is_err());
         assert!(resolve_media("video", "").is_err());
-        // Everything else is still a path.
         assert!(matches!(
             resolve_media("video", "assets/clip.mp4"),
             Ok(MediaSource::Path(_))
@@ -1895,7 +1607,6 @@ mod tests {
 
     #[test]
     fn data_urls_decode_and_sniff() {
-        // 1x1 transparent PNG.
         const PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
         let Some(ImageSource::Image(img)) = resolve(PNG) else {
             panic!("data: URL did not resolve to an image");
@@ -1903,11 +1614,9 @@ mod tests {
         assert_eq!(img.format, ImageFormat::Png);
         assert!(img.bytes.starts_with(&[0x89, b'P', b'N', b'G']));
 
-        // No media type at all: sniffed from the bytes.
         let sniffed = resolve("data:;base64,iVBORw0KGgoAAAANSUhEUg==");
         assert!(matches!(sniffed, Some(ImageSource::Image(_))));
 
-        // Percent-encoded (non-base64) SVG, the other common spelling.
         let svg = resolve("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22/%3E");
         let Some(ImageSource::Image(img)) = svg else {
             panic!("percent-encoded data: URL did not resolve");
@@ -1937,7 +1646,6 @@ mod tests {
         assert!(base64_decode("**").is_none());
     }
 
-    // -- a packaged app's store ----------------------------------------------
 
     const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
     static FAKE: &[(&str, &[u8])] = &[
@@ -1949,8 +1657,8 @@ mod tests {
     fn fake_store(key: &str) -> Option<&'static [u8]> {
         FAKE.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
     }
-    /// The store is thread-local; a test that sets one takes it away again, so
-    /// no other test on a reused thread inherits it.
+    /// The store is thread-local; a test that sets one takes it away again, so no other test on a
+    /// reused thread inherits it.
     struct StoreGuard;
     impl Drop for StoreGuard {
         fn drop(&mut self) {
@@ -1981,7 +1689,6 @@ mod tests {
         set_asset_base(PathBuf::from("Y:\\vue-native\\apps\\hello"));
         assert!(resolve("assets/nope.png").is_none());
         assert!(resolve("../hello/assets/a.png").is_none());
-        // What names the disk or the network explicitly still does.
         assert!(matches!(resolve("C:/pics/a.png"), Some(ImageSource::Resource(Resource::Path(_)))));
         assert!(matches!(resolve("https://example.com/a.png"), Some(ImageSource::Resource(Resource::Uri(_)))));
         assert!(matches!(resolve("data:;base64,iVBORw0KGgo="), Some(ImageSource::Image(_))));
@@ -2034,10 +1741,9 @@ mod tests {
         );
     }
 
-    // -- blob: URLs ---------------------------------------------------------
 
-    /// A file under the OS temp dir with the target a picked File over it
-    /// would resolve to, removed on drop.
+    /// A file under the OS temp dir with the target a picked File over it would resolve to, removed
+    /// on drop.
     struct Picked(PathBuf);
 
     impl Picked {
@@ -2084,10 +1790,8 @@ mod tests {
         body.extend_from_slice(PNG_1PX);
         let f = Picked::new("two.bin", &body);
         let src = "blob:app://redjs/00000000-0000-4000-8000-000000000002";
-        // A slice of a file: read here, sniffed (the type says nothing).
         let t = f.target(Some((2, PNG_1PX.len() as u64)), "");
         assert!(matches!(blob_image(src, Some(t)), Some(ImageSource::Image(_))));
-        // Bytes in memory: a whole Arc is shared with the media pipeline.
         let arc = std::sync::Arc::new(PNG_1PX.to_vec());
         let whole = BlobTarget::Bytes { bytes: arc.clone(), offset: 0, len: arc.len(), mime: "video/mp4".into() };
         match blob_media("video", src, Some(whole)) {
@@ -2118,9 +1822,6 @@ mod tests {
         assert!(resolve_media("video", src).unwrap_err().contains("revoked"));
     }
 
-    /// A slice is read whole or not at all: a file that ends early is an
-    /// error (it decoded a truncated image), and so is a window too large to
-    /// hold (it was an out-of-memory abort). m25 review, findings 6 and 13.
     #[test]
     fn a_window_is_read_whole_or_refused() {
         let f = Picked::new("window.bin", b"0123456789");
@@ -2131,10 +1832,9 @@ mod tests {
         assert_eq!(huge.kind(), std::io::ErrorKind::OutOfMemory, "{huge}");
     }
 
-    /// The link the hand-built targets above cannot prove: a URL a SCRIPT
-    /// made, in this thread's runtime, found by the render walk's lookup —
-    /// for bytes in memory and for a path-backed File, which is handed on by
-    /// path.
+    /// The link the hand-built targets above cannot prove: a URL a SCRIPT made, in this thread's
+    /// runtime, found by the render walk's lookup — for bytes in memory and for a path-backed File,
+    /// which is handed on by path.
     #[test]
     fn a_url_made_by_script_resolves_through_the_runtimes_store() {
         let f = Picked::new("picked.png", PNG_1PX);
@@ -2156,8 +1856,6 @@ mod tests {
             let by_path = eval("URL.createObjectURL(picked)");
             assert_eq!(as_path(resolve(&by_path)), Some(f.0.clone()), "a picked file is handed on by path");
             assert!(matches!(resolve_media("video", &by_path), Ok(vn_video::MediaSource::Path(p)) if p == f.0));
-            // gpui's cache lets go of a blob: decode when the last node showing it
-            // goes, and not before (m25 review, finding 4).
             let again = eval("URL.createObjectURL(picked)");
             let _ = take_evictions();
             assert!(source_for(901, &mem).is_some());
@@ -2175,10 +1873,6 @@ mod tests {
         });
     }
 
-    /// gpui keys a path's cached decode by the path alone: a file picked
-    /// again after it changed must not show the old pixels, so the old decode
-    /// is queued for eviction before the new one is asked for (m25 review,
-    /// finding 4).
     #[test]
     fn a_file_picked_again_after_it_changed_evicts_the_old_decode() {
         let f = Picked::new("again.png", PNG_1PX);

@@ -16,7 +16,7 @@
 //!   ([`Core::frame`]). The worker keeps one frame ahead of each visible
 //!   target: drawn before it is due, promoted by `frame` when it is.
 //!
-//! # Budgets (the owner's)
+//! # Budgets
 //!
 //! * Targets ≤ [`SMALL_PX`] play at most [`SMALL_FPS`], and their loops are
 //!   cached ([`crate::cache`]) under [`CACHE_BUDGET`]; a source whose every
@@ -44,8 +44,7 @@ pub const CACHE_BUDGET: usize = 24 << 20;
 pub const TARGET_IDLE: Us = 3_000_000;
 pub const SOURCE_IDLE: Us = 15_000_000;
 pub const MAX_LARGE_VIDEO: usize = 4;
-/// A video larger than this (w × h) is a "512 px" decoder: ~5 MB with alpha
-/// (W0).
+/// A video larger than this (w × h) is a "512 px" decoder: ~5 MB with alpha.
 pub const LARGE_VIDEO_AREA: u64 = 256 * 256;
 /// Loops being filled at once; others play uncached until one completes.
 pub const MAX_FILLING: usize = 8;

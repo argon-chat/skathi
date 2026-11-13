@@ -1,71 +1,6 @@
-//! `<vn-sticker>`: Argon's stickers and animated emoji, Lottie (`.tgs`) and
-//! VP9-alpha WebM, many on screen at once. The `vn-sticker` crate draws the
-//! frames off the UI thread; this module is the element: the box, the fetch,
-//! visibility, the [`LiveTile`]s and the events.
-//!
-//! vue-native only. The browser never sees the tag: the client renders it
-//! under `if (isVn)` and keeps its own players for the browser.
-//!
-//! ```html
-//! <vn-sticker src="https://…/files/{id}" kind="auto|lottie|video|image"
-//!             tint play="auto|on|off" once max-fps="30" />
-//! ```
-//!
-//! * `src`: the file. http(s) is fetched on gpui's HTTP client off the UI
-//!   thread; `data:`, `blob:`, packaged and file paths read as `<lottie src>`
-//!   does.
-//! * `kind`: `image` paints a still picture the way `<img>` does (a tinted
-//!   static emoji). Anything else is sniffed from the bytes: Lottie JSON, a
-//!   gzipped `.tgs`, or a WebM.
-//! * `tint`: paints the frame's alpha in the element's `color`, as the
-//!   browser's `source-atop` fill does.
-//! * `play`: `on` plays while a copy can be seen, `off` shows the first frame,
-//!   and `auto` (the default) is `on` unless the OS asks for reduced motion.
-//!   The client applies its own policy (groups, power saving) through `on` and
-//!   `off`.
-//! * `once`: one loop from when the copy is first seen, then the last frame
-//!   holds and `ended` fires. Without it a sticker loops on its source's clock,
-//!   which every copy of that source shares.
-//! * `max-fps`: a cap below the file's own rate. Copies at 64 device px or
-//!   less play at 30 fps at most anyway (the owner's budget).
-//! * The box: CSS sizes it; an axis CSS leaves `auto` takes the file's
-//!   intrinsic size, through its aspect ratio when the other axis is set.
-//!   `object-fit` places the picture: `contain` (the default), `cover` or
-//!   `fill`. `none` and `scale-down` draw as `contain`, with an advisory.
-//! * Events: `load` when this copy first shows a frame (`a`/`b` = the file's
-//!   intrinsic size, `key` = the src), `error` when the file cannot be fetched
-//!   or played (`key` = the src, the reason goes to the compat log), and
-//!   `ended` after a `once` loop. No per-frame events.
-//!
-//! # From a file to the screen
-//!
-//! 1. The build ([`build`]) records the node's attributes and paints the tile
-//!    the node shows, or nothing yet. It never writes a frame.
-//! 2. The tick ([`tick`], from the pump, before the draw) asks the engine where
-//!    each source is, fetches the ones that need bytes, and works out each
-//!    node's target: its source at its box's size in device px, rounded up to
-//!    a 4, 8 or 16 px step so a box that moves by a pixel keeps its target.
-//!    Every copy at one size shares a target, and every target in one window
-//!    shares a tile.
-//! 3. A node is visible when [`live::visible`] says so: painted in the last
-//!    drawn frame, inside the viewport and not clipped away by an ancestor.
-//!    Targets with a visible copy play; the others hold their frame. A target
-//!    nothing has shown for [`TILE_IDLE`] is no longer asked for, and its
-//!    tiles go back to their atlases.
-//! 4. A frame with a new sequence number is written into its tile. Written
-//!    where the last drawn scene samples it, it costs a present and no build
-//!    (`crate::live`). A tile's first frame, a frame that had to move in the
-//!    atlas, and a node switching tiles need a draw, and touch the node, so a
-//!    cache boundary over it renders again instead of replaying a sprite that
-//!    points at the old place. That is why `<vn-sticker>` is not one of
-//!    `crate::cache`'s exclusions: a message with animated emoji stays
-//!    cacheable.
-//! 5. A node keeps painting the tile it shows until the tile of the target it
-//!    wants has a frame, so a resize never flashes empty.
-//!
-//! A pop-out's tiles live in its own atlas and are written by its own draw
-//! ([`window_tick`], from `crate::window_frame_tick`); the pump's tick only
-//! asks for that draw.
+//! `<vn-sticker>`: Argon's stickers and animated emoji, Lottie (`.tgs`) and VP9-alpha WebM, many on
+//! screen at once. The `vn-sticker` crate draws the frames off the UI thread; this module is the
+//! element: the box, the fetch, visibility, the [`LiveTile`]s and the events.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -85,17 +20,13 @@ use crate::tree::{self, Tree};
 use crate::windows::{self, WinKey};
 use crate::EventPayload;
 
-/// A tile no visible copy has painted for this long goes back to its atlas,
-/// and its target stops being asked for (the owner's budget).
+/// A tile no visible copy has painted for this long goes back to its atlas, and its target stops
+/// being asked for (the owner's budget).
 pub(crate) const TILE_IDLE: Duration = Duration::from_secs(3);
 
-/// The longest side a Lottie is drawn at, in device px. A video is never
-/// decoded above its own size; the GPU scales both.
+/// The longest side a Lottie is drawn at, in device px.
 const MAX_LOTTIE_PX: u32 = 1024;
 
-// ---------------------------------------------------------------------------
-// attributes
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Play {
@@ -135,8 +66,8 @@ struct Props {
     fit: Fit,
 }
 
-/// The browser's boolean-attribute rule: present is true unless it spells
-/// `"false"` (what `:attr="false"` serialises to).
+/// The browser's boolean-attribute rule: present is true unless it spells `"false"` (what
+/// `:attr="false"` serialises to).
 fn bool_attr(raw: Option<&str>) -> bool {
     raw.is_some_and(|v| v.trim() != "false")
 }
@@ -211,14 +142,10 @@ fn props_of(t: &Tree, id: u32, node: &crate::tree::Node, prev: Option<&Arc<str>>
     }
 }
 
-// ---------------------------------------------------------------------------
-// targets
-// ---------------------------------------------------------------------------
 
-/// The size a source is drawn at for a box of `boxed` device px: the picture's
-/// size under `fit`, its longest side rounded up to a 4 px step (8 above 128,
-/// 16 above 256), never above a video's own size or [`MAX_LOTTIE_PX`]. `None`
-/// for an empty box or source.
+/// The size a source is drawn at for a box of `boxed` device px: the picture's size under `fit`,
+/// its longest side rounded up to a 4 px step (8 above 128, 16 above 256), never above a video's
+/// own size or [`MAX_LOTTIE_PX`].
 fn target_size(intrinsic: (u32, u32), boxed: (f32, f32), fit: Fit, kind: Kind) -> Option<(u32, u32)> {
     let (iw, ih) = (intrinsic.0 as f32, intrinsic.1 as f32);
     let (bw, bh) = boxed;
@@ -226,8 +153,6 @@ fn target_size(intrinsic: (u32, u32), boxed: (f32, f32), fit: Fit, kind: Kind) -
         return None;
     }
     let (sx, sy) = (bw / iw, bh / ih);
-    // `fill` stretches the picture; drawn at the larger of the two scales,
-    // neither axis is magnified.
     let scale = match fit {
         Fit::Contain => sx.min(sy),
         Fit::Cover | Fit::Fill => sx.max(sy),
@@ -265,24 +190,18 @@ fn key_for(id: u32, props: &Props, info: &SourceInfo, boxed: (f32, f32), reduce_
     Some(key)
 }
 
-// ---------------------------------------------------------------------------
-// state
-// ---------------------------------------------------------------------------
 
 /// One `<vn-sticker>` node.
 struct Entry {
     props: Props,
     /// The window that built the node last.
     win: WinKey,
-    /// Both box axes come from CSS. When one does not, the box takes the
-    /// source's size, and the build runs again once that is known.
+    /// Both box axes come from CSS.
     sized: bool,
     info: Option<SourceInfo>,
-    /// What the node asks for now.
     want: Option<TargetKey>,
     /// The tile the build paints: `want`'s, once that has a frame.
     shows: Option<(TargetKey, WinKey)>,
-    /// A place of it can be seen now.
     visible: bool,
     /// The last tick it could be seen.
     seen: Option<Instant>,
@@ -326,16 +245,13 @@ thread_local! {
     static TILES: RefCell<HashMap<(TargetKey, WinKey), Tile>> = RefCell::new(HashMap::new());
 }
 
-/// Sources being fetched, so a source is asked for once. Shared with the
-/// fetch tasks, which take theirs out when they are done.
+/// Sources being fetched, so a source is asked for once.
 fn fetching() -> &'static Mutex<HashSet<Arc<str>>> {
     static FETCHING: OnceLock<Mutex<HashSet<Arc<str>>>> = OnceLock::new();
     FETCHING.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-/// `(nodes, tiles, tile bytes)` for devtools `mem`. A tile's bytes count
-/// twice: the atlas copy and the CPU copy of the last frame `LiveTile`
-/// keeps.
+/// `(nodes, tiles, tile bytes)` for devtools `mem`.
 pub(crate) fn mem_stats() -> (usize, usize, usize) {
     let nodes = NODES.with(|m| m.borrow().len());
     TILES.with(|m| {
@@ -345,7 +261,7 @@ pub(crate) fn mem_stats() -> (usize, usize, usize) {
     })
 }
 
-/// Forgets nodes that no longer exist. Their tiles go back on the next tick.
+/// Their tiles go back on the next tick.
 pub(crate) fn gc(live: impl Fn(u32) -> bool) {
     NODES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
 }
@@ -362,9 +278,6 @@ pub(crate) fn forget_window(key: WinKey) {
     });
 }
 
-// ---------------------------------------------------------------------------
-// the build
-// ---------------------------------------------------------------------------
 
 /// What a node paints.
 enum Picture {
@@ -373,8 +286,8 @@ enum Picture {
     Image(ImageSource),
 }
 
-/// Records what the build read, and answers what to paint, how (`fit`,
-/// `tint`) and, for a source already known, its intrinsic size.
+/// Records what the build read, and answers what to paint, how (`fit`, `tint`) and, for a source
+/// already known, its intrinsic size.
 fn note_build(
     id: u32,
     win: WinKey,
@@ -388,8 +301,6 @@ fn note_build(
         let props = props_of(t, id, node, prev.as_ref());
         let e = m.entry(id).or_insert_with(|| Entry::new(props.clone(), win));
         if e.props.src != props.src || e.props.image != props.image {
-            // Another picture: nothing shown until it has a frame, and its own
-            // `load` / `error`.
             *e = Entry::new(props.clone(), win);
         }
         e.props = props;
@@ -410,12 +321,8 @@ fn note_build(
     })
 }
 
-/// A picture painted in the element's `color`: its pixels take the colour by
-/// the colour's alpha and keep their own (`Window::with_image_tint`), the
-/// browser client's `source-atop` fill. The colour is read when painting, as
-/// `currentColor` is for an inline `<svg>` (`render::SvgTint`): a theme or a
-/// `:hover` colour re-tints it with no new frame. A tinted video draws its
-/// alpha only, white, so the colour comes out exact.
+/// A picture painted in the element's `color`: its pixels take the colour by the colour's alpha and
+/// keep their own (`Window::with_image_tint`), the browser client's `source-atop` fill.
 struct Tinted(AnyElement);
 
 impl gpui::Element for Tinted {
@@ -467,9 +374,8 @@ impl gpui::Element for Tinted {
     }
 }
 
-/// gpui `Img`'s sizing rule for a box holding a picture of `iw` × `ih`: an
-/// `auto` axis takes the intrinsic size, or follows the other axis's absolute
-/// length through the aspect ratio.
+/// gpui `Img`'s sizing rule for a box holding a picture of `iw` × `ih`: an `auto` axis takes the
+/// intrinsic size, or follows the other axis's absolute length through the aspect ratio.
 fn size_as_replaced(style: &mut gpui::StyleRefinement, iw: f32, ih: f32, rem: gpui::Pixels) {
     use gpui::{DefiniteLength, Length};
     let auto = |l: Option<Length>| matches!(l, None | Some(Length::Auto));
@@ -493,8 +399,8 @@ fn size_as_replaced(style: &mut gpui::StyleRefinement, iw: f32, ih: f32, rem: gp
     }
 }
 
-/// `<vn-sticker>`: a styled box, as a `<div>` is, with the tile the node shows
-/// painted over its content box. Not focusable without `tabindex`, as `<img>`.
+/// `<vn-sticker>`: a styled box, as a `<div>` is, with the tile the node shows painted over its
+/// content box. Not focusable without `tabindex`, as `<img>`.
 pub(super) fn build<V: 'static>(
     t: &Tree,
     id: u32,
@@ -535,7 +441,6 @@ pub(super) fn build<V: 'static>(
 
     let mask = pointer_mask(node);
     let tab_index = tab_index_of(t, id);
-    // A key or focus listener makes nothing focusable (FO-3).
     let focusable = tab_index.is_some();
     let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
     let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
@@ -549,9 +454,6 @@ pub(super) fn build<V: 'static>(
     bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
 }
 
-// ---------------------------------------------------------------------------
-// the tick
-// ---------------------------------------------------------------------------
 
 enum Event {
     Load { id: u32, src: Arc<str>, size: (f64, f64) },
@@ -559,8 +461,8 @@ enum Event {
     Ended { id: u32 },
 }
 
-/// The fetch of `src`, once: http(s) on gpui's HTTP client on the background
-/// executor, anything else read here (data:, blob:, the package, a file).
+/// The fetch of `src`, once: http(s) on gpui's HTTP client on the background executor, anything
+/// else read here (data:, blob:, the package, a file).
 fn fetch(src: &Arc<str>, cx: &mut App) {
     if !fetching().lock().unwrap_or_else(|p| p.into_inner()).insert(src.clone()) {
         return;
@@ -583,7 +485,6 @@ fn fetch(src: &Arc<str>, cx: &mut App) {
     }
     match crate::img::read_bytes("vn-sticker", src) {
         Ok(bytes) => stickers.provide(src, bytes.into()),
-        // The element and src are put in front when it is reported.
         Err(why) => {
             let prefix = format!("<vn-sticker src=\"{src}\">: ");
             stickers.fail(src, why.strip_prefix(&prefix).unwrap_or(&why));
@@ -592,10 +493,8 @@ fn fetch(src: &Arc<str>, cx: &mut App) {
     fetching().lock().unwrap_or_else(|p| p.into_inner()).remove(src);
 }
 
-/// Every `<vn-sticker>`, once a frame from the pump, before the draw: sources
-/// fetched, targets asked for, this window's tiles written, idle tiles
-/// retired, events dispatched. `true` when a pop-out has to draw (its tiles
-/// are written by its own draw) or a box waits for its source's size.
+/// Every `<vn-sticker>`, once a frame from the pump, before the draw: sources fetched, targets
+/// asked for, this window's tiles written, idle tiles retired, events dispatched.
 pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     if NODES.with(|m| m.borrow().is_empty()) && TILES.with(|m| m.borrow().is_empty()) {
         return false;
@@ -611,7 +510,6 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     let mut fetches: Vec<Arc<str>> = Vec::new();
     let mut images: Vec<(u32, Arc<str>)> = Vec::new();
 
-    // Each node: where its source is, whether it can be seen, what it wants.
     let mut statuses: HashMap<Arc<str>, SourceStatus> = HashMap::new();
     NODES.with(|m| {
         for (&id, e) in m.borrow_mut().iter_mut() {
@@ -640,7 +538,6 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
                 }
                 SourceStatus::Ready(info) => {
                     if e.info.is_none() && !e.sized {
-                        // The box takes the source's size: build it again.
                         touch.push(id);
                         draw = true;
                     }
@@ -673,8 +570,6 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
         events.push(event);
     }
 
-    // The targets: asked for while a copy was seen lately, played while one
-    // can be seen now.
     let demand: HashMap<TargetKey, bool> = NODES.with(|m| {
         let mut demand: HashMap<TargetKey, bool> = HashMap::new();
         for e in m.borrow().values().filter(|e| e.recent(now)) {
@@ -690,12 +585,9 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     let frames: HashMap<TargetKey, Frame> =
         demand.keys().filter_map(|k| stickers.frame(k).map(|f| (k.clone(), f))).collect();
 
-    // This window's tiles.
     let shown = write(window, here, &frames, &mut touch);
     live::note(shown);
 
-    // Another window's tiles are written by its own draw: ask for one when a
-    // copy there can be seen and has a newer frame.
     draw |= NODES.with(|m| {
         m.borrow().values().any(|e| {
             e.win != here
@@ -709,7 +601,6 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
 
     retire(now, &mut touch);
 
-    // `load` once a copy shows a frame, `ended` once a `once` loop is done.
     NODES.with(|m| {
         for (&id, e) in m.borrow_mut().iter_mut() {
             if e.props.image {
@@ -739,9 +630,8 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     draw
 }
 
-/// A pop-out's half of [`tick`], from its own draw: its tiles written with
-/// the frames due now. What the pump's tick decided (visibility, targets)
-/// stands; the draw that follows shows the frames.
+/// What the pump's tick decided (visibility, targets) stands; the draw that follows shows the
+/// frames.
 pub(crate) fn window_tick(window: &mut Window) {
     let here = windows::key(window);
     let keys: HashSet<TargetKey> = NODES.with(|m| {
@@ -764,7 +654,6 @@ pub(crate) fn window_tick(window: &mut Window) {
     }
 }
 
-/// Node `id`'s target now, from the box it was painted at last.
 fn want_of(id: u32, e: &Entry, info: &SourceInfo) -> Option<TargetKey> {
     let (_, _, w, h) = windows::peek(e.win, |w| w.bounds.get(&id).copied()).flatten()?;
     let env = windows::env_of(e.win);
@@ -773,10 +662,9 @@ fn want_of(id: u32, e: &Entry, info: &SourceInfo) -> Option<TargetKey> {
     key_for(id, &e.props, info, (w * scale, h * scale), reduce_motion)
 }
 
-/// Writes the frames due into window `here`'s tiles and moves nodes onto the
-/// tile they want once it has a frame. The answer is what the writes need.
+/// Writes the frames due into window `here`'s tiles and moves nodes onto the tile they want once it
+/// has a frame.
 fn write(window: &mut Window, here: WinKey, frames: &HashMap<TargetKey, Frame>, touch: &mut Vec<u32>) -> Shown {
-    // The targets this window paints, and whether a copy of each can be seen.
     let needed: HashMap<TargetKey, bool> = NODES.with(|m| {
         let mut needed: HashMap<TargetKey, bool> = HashMap::new();
         for e in m.borrow().values().filter(|e| e.win == here) {
@@ -807,8 +695,6 @@ fn write(window: &mut Window, here: WinKey, frames: &HashMap<TargetKey, Frame>, 
             if tile.seq == frame.seq {
                 continue;
             }
-            // Asked as if visible, to tell a write in place from one that
-            // moved the tile.
             let wrote = tile.live.write_bgra(window, frame.bytes.to_vec(), true);
             tile.seq = frame.seq;
             if wrote == Shown::Draw {
@@ -819,8 +705,8 @@ fn write(window: &mut Window, here: WinKey, frames: &HashMap<TargetKey, Frame>, 
     });
     NODES.with(|m| {
         for (&id, e) in m.borrow_mut().iter_mut().filter(|(_, e)| e.win == here) {
-            // A tile that moved: a cache boundary over the node would replay
-            // a sprite pointing at the old place.
+            // A tile that moved: a cache boundary over the node would replay a sprite pointing at
+            // the old place.
             if e.shows.as_ref().is_some_and(|(k, w)| *w == here && moved.contains(k)) {
                 touch.push(id);
             }
@@ -841,9 +727,7 @@ fn write(window: &mut Window, here: WinKey, frames: &HashMap<TargetKey, Frame>, 
     shown
 }
 
-/// Hands back every tile no copy seen lately paints or wants. A node whose
-/// tile goes stops painting it (and is touched, so a cache boundary renders
-/// it again); it gets a tile back when it is seen again.
+/// Hands back every tile no copy seen lately paints or wants.
 fn retire(now: Instant, touch: &mut Vec<u32>) {
     let kept: HashSet<(TargetKey, WinKey)> = NODES.with(|m| {
         let mut kept = HashSet::new();
@@ -928,12 +812,9 @@ mod tests {
         // Inline emoji: 24 css px at 1.5 = 36, a 4 step.
         assert_eq!(target_size((100, 100), (36.0, 36.0), Fit::Contain, Kind::Video), Some((36, 36)));
         assert_eq!(target_size((100, 100), (35.2, 35.2), Fit::Contain, Kind::Video), Some((36, 36)));
-        // Contain fits the long side, cover the short one.
         assert_eq!(target_size((200, 100), (100.0, 100.0), Fit::Contain, Kind::Lottie), Some((100, 50)));
         assert_eq!(target_size((200, 100), (100.0, 100.0), Fit::Cover, Kind::Lottie), Some((200, 100)));
-        // Fill stretches: drawn at the larger scale, so no axis is magnified.
         assert_eq!(target_size((200, 100), (100.0, 100.0), Fit::Fill, Kind::Lottie), Some((200, 100)));
-        // A step between 128 and 256 is 8.
         assert_eq!(target_size((512, 512), (130.0, 130.0), Fit::Contain, Kind::Lottie), Some((136, 136)));
     }
 
@@ -966,7 +847,6 @@ mod tests {
         let key = key_for(7, &props("s"), &lottie, (300.0, 300.0), false).unwrap();
         assert!(!key.still && key.once.is_none() && !key.alpha_only);
 
-        // auto follows reduced motion; on beats it; off is the first frame.
         assert!(key_for(7, &props("s"), &lottie, (300.0, 300.0), true).unwrap().still);
         let on = Props { play: Play::On, ..props("s") };
         assert!(!key_for(7, &on, &lottie, (300.0, 300.0), true).unwrap().still);
@@ -978,7 +858,6 @@ mod tests {
         let once_off = Props { once: true, play: Play::Off, ..props("s") };
         assert_eq!(key_for(7, &once_off, &lottie, (300.0, 300.0), false).unwrap().once, None, "a still never ends");
 
-        // One frame is a still whatever play says.
         let single = info(Kind::Lottie, 512, 512, 1);
         assert!(key_for(7, &on, &single, (300.0, 300.0), false).unwrap().still);
     }

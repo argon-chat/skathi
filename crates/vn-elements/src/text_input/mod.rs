@@ -1,32 +1,16 @@
-//! A reusable single-line text input for gpui.
+//! A reusable text input for gpui (`<input>` and `<textarea>`).
 //!
-//! Adapted from gpui-vue (`crates/gpui-vue-core/src/custom_elements/input.rs`,
-//! Apache-2.0), which is itself derived from the native renderer in
-//! [remorses/gpuix](https://github.com/remorses/gpuix) @
-//! `b8bbff4ef0dc00dc24c3d3f3ca47818e1be15c69` (Apache-2.0) and from
-//! [zeronsh/comet](https://github.com/zeronsh/comet) (MIT) — the caret blink is
-//! ported from Comet's `crates/ui/src/composer.rs`.
-//! See gpui-vue's `THIRD_PARTY_NOTICES.md`.
+//! Adapted from gpui-vue (`crates/gpui-vue-core/src/custom_elements/input.rs`, Apache-2.0), itself
+//! derived from [remorses/gpuix](https://github.com/remorses/gpuix) @
+//! `b8bbff4ef0dc00dc24c3d3f3ca47818e1be15c69` (Apache-2.0) and [zeronsh/comet](https://github.com/zeronsh/comet)
+//! (MIT); the caret blink is ported from Comet's `crates/ui/src/composer.rs`. API usage follows
+//! gpui's own `crates/gpui/examples/input.rs` (Apache-2.0, zed-industries/zed).
 //!
-//! Where gpui-vue's (older) gpui API disagrees with the rev this workspace
-//! builds against, the API usage follows gpui's own
-//! `crates/gpui/examples/input.rs` (Apache-2.0, zed-industries/zed).
-//!
-//! # Shape of the API
-//!
-//! The framework keeps one [`Entity<TextInputState>`] per `<input>` node in a
-//! side map and rebuilds the element tree every frame, so the split is:
-//!
-//! * [`TextInputState`] — everything that must survive a frame (content,
-//!   selection, IME pre-edit, undo history, focus handle, caret blink, the echo
-//!   ring).
-//! * [`TextInputOptions`] — everything the CSS engine recomputes per frame
-//!   (placeholder, colours, font size, disabled, tab index).
-//! * [`TextInputHandlers`] — the per-frame event sinks (`input`,
-//!   `beforeinput`, the composition events, `keydown`, `keyup`,
-//!   `copy`/`cut`/`paste`); `keydown`, the clipboard hook and `beforeinput`
-//!   run *before* the widget acts and can cancel it.
-//! * [`text_input`] — builds the element for one frame out of the three.
+//! The framework keeps one [`Entity<TextInputState>`] per node and rebuilds the element tree every
+//! frame, so [`TextInputState`] holds what survives a frame, [`TextInputOptions`] what CSS
+//! recomputes per frame, and [`TextInputHandlers`] the per-frame event sinks (`keydown`, the
+//! clipboard hook and `beforeinput` run before the widget acts and can cancel it).
+//! [`text_input`] builds the element.
 
 mod boundaries;
 pub mod config;
@@ -75,9 +59,8 @@ actions!(
         Undo,
         WordLeft,
         WordRight,
-        // Multi-line only (`<textarea>`). `Newline` is bound to `enter` in the
-        // TEXTAREA key context alone, so a single-line `<input>` still leaves
-        // Return to the surrounding app (form submit, reka's typeahead).
+        // Multi-line only: `Newline` is bound to `enter` in the TEXTAREA context alone, so a
+        // single-line `<input>` leaves Return to the app.
         Down,
         Newline,
         SelectDown,
@@ -86,39 +69,25 @@ actions!(
     ]
 );
 
-/// The `key_context` the input's key bindings are scoped to. Exposed so an
-/// embedder can write its own bindings against the same context.
+/// The `key_context` the key bindings are scoped to.
 pub const KEY_CONTEXT: &str = "VnTextInput";
 
-/// The extra `key_context` a MULTI-LINE field carries. gpui parses a context
-/// string as a SET of identifiers, so a textarea sets both and thereby
-/// inherits every editing binding while adding the ones that only mean
-/// something with more than one line: `enter`, `up`, `down`.
+/// Extra `key_context` of a multi-line field. gpui parses a context as a set, so a textarea
+/// inherits every editing binding and adds `enter`, `up`, `down`.
 pub const TEXTAREA_KEY_CONTEXT: &str = "VnTextArea";
 const BOTH_KEY_CONTEXTS: &str = "VnTextInput VnTextArea";
 
-/// HTML's default `<textarea rows>`.
 pub const DEFAULT_ROWS: usize = 2;
 
-/// What a user edit does, in the Input Events vocabulary: the DOM's
-/// `InputEvent.inputType`. The discriminant is the code the framework carries
-/// across to JS, where `EDIT_TYPES` in `packages/vue-native/src/runtime.ts`
-/// names it (in lockstep: `test/protocol-codes.test.ts` parses this enum).
-///
-/// Only what this widget can do is here. It has no drag-and-drop of text
-/// (`insertFromDrop`), no spelling replacement (`insertReplacementText`) and no
-/// formatting.
+/// What a user edit does: the DOM's `InputEvent.inputType`. The discriminant is the code carried
+/// to JS, where `EDIT_TYPES` in `packages/vue-native/src/runtime.ts` names it
+/// (`test/protocol-codes.test.ts` parses this enum).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum InputType {
-    /// Typed text. Its data is the text.
     InsertText = 1,
-    /// Return in a `<textarea>`.
     InsertLineBreak = 2,
-    /// A paste. Its data is the clipboard's text, as a browser's plain-text
-    /// field has it.
     InsertFromPaste = 3,
-    /// The IME's pre-edit, and its commit. Its data is the composition's text.
     InsertCompositionText = 4,
     DeleteContentBackward = 5,
     DeleteContentForward = 6,
@@ -132,7 +101,6 @@ pub enum InputType {
 }
 
 impl InputType {
-    /// The DOM's name for it.
     pub const fn name(self) -> &'static str {
         match self {
             InputType::InsertText => "insertText",
@@ -151,21 +119,17 @@ impl InputType {
         }
     }
 
-    /// The code the framework carries across to JS.
     pub const fn code(self) -> u8 {
         self as u8
     }
 
-    /// The IME's text: its `beforeinput` cannot be cancelled, and its events
-    /// say `isComposing` (Input Events Level 1, which Chromium implements).
+    /// The IME's text: its `beforeinput` cannot be cancelled.
     pub const fn composing(self) -> bool {
         matches!(self, InputType::InsertCompositionText)
     }
 }
 
-/// One user edit, as `beforeinput` announces it and `input` reports it: its
-/// type, and its `data` (the inserted text for the types that insert some,
-/// `None` for the others).
+/// One user edit: its type, and its `data` (the inserted text, `None` otherwise).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InputIntent {
     pub input_type: InputType,
@@ -173,7 +137,6 @@ pub struct InputIntent {
 }
 
 impl InputIntent {
-    /// An edit with no data: a deletion, a line break, undo or redo.
     pub fn bare(input_type: InputType) -> Self {
         Self { input_type, data: None }
     }
@@ -183,28 +146,16 @@ impl InputIntent {
     }
 }
 
-/// Called by [`TextInputState`] whenever the user's editing changed the
-/// content; the framework forwards it to JS as an `input` event. The
-/// [`InputIntent`] is the edit that did it.
-///
-/// Invoked deferred (via [`Window::defer`]), i.e. after the edit that caused it
-/// has finished, so it is safe to call back into the same entity — including
-/// [`TextInputState::sync_value`] — from inside it.
+/// Called when user editing changed the content. Deferred (via [`Window::defer`]), so it may call
+/// back into the entity, including [`TextInputState::sync_value`].
 pub type OnChange = Rc<dyn Fn(&str, &InputIntent, &mut Window, &mut App)>;
 
-/// Fired before every user edit, the native side of the DOM's `beforeinput`:
-/// after the keystroke's `keydown` (and a paste's or cut's ClipboardEvent),
-/// before the content changes. Returning `false` means the event was
-/// cancelled: the widget makes no edit and reports no change. Not called when
-/// the edit would do nothing (Backspace at the start of the value).
-///
-/// The IME's events ([`InputType::composing`]) cannot be cancelled; their
-/// answer is ignored. The hook runs inside the widget's update, as
-/// [`OnKeyDown`] does; what its handlers assign to the field is read back
-/// ([`ControlledValue`]) before the edit, which then applies to it.
+/// Fired before every user edit (DOM `beforeinput`), after `keydown`; `false` cancels it. Not
+/// called when the edit would do nothing. The IME's events ([`InputType::composing`]) cannot be
+/// cancelled. Runs inside the widget's update; field assignments made by its handlers are read
+/// back ([`ControlledValue`]) before the edit.
 pub type OnBeforeInput = Rc<dyn Fn(&InputIntent, &mut Window, &mut App) -> bool>;
 
-/// The three stages of an IME composition (UI Events §5.7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompositionPhase {
     Start,
@@ -212,35 +163,22 @@ pub enum CompositionPhase {
     End,
 }
 
-/// The DOM's `compositionstart` / `compositionupdate` / `compositionend`,
-/// with their `data`: what the composition replaces at the start (usually
-/// nothing), the pre-edit text at each update, the committed text at the end.
+/// The DOM's `compositionstart` / `compositionupdate` / `compositionend` with their `data`.
 ///
-/// The order is Chromium's for one pre-edit: `compositionstart`, then
-/// `beforeinput`, `compositionupdate`, the edit, `input`; the commit's
-/// `compositionend` comes after its `input`. `Start` and `Update` run inside
-/// the widget's update, as [`OnBeforeInput`] does; `End` is deferred, after the
-/// `input` it follows. Every `Start` gets its `End`: a commit, a cancelled
-/// pre-edit, the field losing focus, or a value assigned from outside in the
-/// middle of a composition each end it.
+/// Order is Chromium's: `compositionstart`, `beforeinput`, `compositionupdate`, the edit, `input`;
+/// `compositionend` follows the commit's `input`. `Start`/`Update` run inside the widget's update,
+/// `End` is deferred. Every `Start` gets its `End`, including on cancel, focus loss or an outside
+/// value assignment.
 pub type OnComposition = Rc<dyn Fn(CompositionPhase, &str, &mut Window, &mut App)>;
 
-/// Fired for every keystroke that reaches this input *before* the widget acts
-/// on it — the native equivalent of a DOM `keydown` listener.
-///
-/// Returning `false` means the JS side called `preventDefault()`: the widget
-/// must not apply its default editing for that keystroke (no key binding
-/// action, no character insertion). Returning `true` lets the widget's own
-/// bindings (`ctrl-c`, `backspace`, …) and text input run as usual.
+/// Fired for every keystroke before the widget acts on it (DOM `keydown`). `false` means
+/// `preventDefault()`: no binding action or insertion.
 pub type OnKeyDown = Rc<dyn Fn(&KeyDownEvent, &mut Window, &mut App) -> bool>;
 
-/// Fired after a key is released. Fire-and-forget: a `keyup` has no default
-/// action to cancel, so there is nothing to report back.
+/// Fired after a key is released; there is nothing to cancel.
 pub type OnKeyUp = Rc<dyn Fn(&KeyUpEvent, &mut Window, &mut App)>;
 
-/// The three clipboard commands, whichever key gave them: `ctrl-c` /
-/// `ctrl-insert`, `ctrl-x` / `shift-delete`, `ctrl-v` / `shift-insert`
-/// (`cmd-…` on macOS).
+/// The three clipboard commands, whichever key gave them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClipboardCommand {
     Copy,
@@ -248,45 +186,26 @@ pub enum ClipboardCommand {
     Paste,
 }
 
-/// Fired when the user copies, cuts or pastes in this field, BEFORE the widget
-/// touches the clipboard or the content: the native side of the DOM's `copy` /
-/// `cut` / `paste` ClipboardEvents.
-///
-/// Returning `false` means the event was cancelled: the widget does nothing
-/// at all (no copy, no deletion, no insertion). Writing a cancelled copy's
-/// own data (`clipboardData.setData` + `preventDefault()`) to the system
-/// clipboard is the hook's job, not the widget's. It is called outside any
-/// update of the widget's state, so it may call back into it.
+/// Fired on copy, cut or paste before the widget touches the clipboard or content (DOM
+/// ClipboardEvents). `false` cancels; writing a cancelled copy's own data to the clipboard is the
+/// hook's job. Called outside any update of the widget's state, so it may call back into it.
 pub type OnClipboard = Rc<dyn Fn(ClipboardCommand, &mut Window, &mut App) -> bool>;
 
-/// The framework's controlled value as it stands NOW: the string and its write
-/// counter (see [`TextInputState::sync_value`]), or `None` when nothing
-/// assigned one.
-///
-/// The widget reads it again after an [`OnKeyDown`] or [`OnClipboard`] hook
-/// lets the key or command through, right before it acts. The hook's handlers
-/// may have assigned the field (a chat composer clearing itself on Enter, a
-/// handler rewriting the text), and a browser's default action edits what they
-/// wrote, not what the field showed before the event. Without it the
-/// assignment would only land at the next frame's sync, after the edit.
+/// The framework's controlled value as it stands now: the string and its write counter (see
+/// [`TextInputState::sync_value`]), or `None`. Re-read after an [`OnKeyDown`] or [`OnClipboard`]
+/// hook lets the event through, since its handlers may have assigned the field and the default
+/// action must edit what they wrote.
 pub type ControlledValue = Rc<dyn Fn(&App) -> Option<(String, u32)>>;
 
-/// The per-frame callback set the framework hands the widget. All optional:
-/// the framework only fills in what the JS side actually listens for.
+/// The per-frame callback set; all optional.
 #[derive(Clone, Default)]
 pub struct TextInputHandlers {
-    /// User editing changed the content (`input`/`change`).
     pub on_change: Option<OnChange>,
-    /// Before each user edit, and able to cancel it; see [`OnBeforeInput`].
     pub on_before_input: Option<OnBeforeInput>,
-    /// The IME composition's three stages; see [`OnComposition`].
     pub on_composition: Option<OnComposition>,
-    /// Pre-processing hook for keystrokes; see [`OnKeyDown`].
     pub on_key_down: Option<OnKeyDown>,
     pub on_key_up: Option<OnKeyUp>,
-    /// Copy / cut / paste, before the widget acts; see [`OnClipboard`].
     pub on_clipboard: Option<OnClipboard>,
-    /// Re-read after a hook, before the default action; see [`ControlledValue`].
     pub controlled_value: Option<ControlledValue>,
 }
 
@@ -305,76 +224,42 @@ impl std::fmt::Debug for TextInputHandlers {
 }
 
 impl TextInputHandlers {
-    /// The common case: only content changes are observed.
     pub fn with_change(on_change: OnChange) -> Self {
         Self { on_change: Some(on_change), ..Default::default() }
     }
 }
 
-/// Per-frame view parameters. Style comes from the framework's CSS engine;
-/// nothing in here is remembered between frames.
+/// Per-frame view parameters from the CSS engine; nothing is remembered between frames.
 #[derive(Clone, Debug)]
 pub struct TextInputOptions {
-    /// Shown, in `placeholder_color`, while the content is empty.
     pub placeholder: SharedString,
     pub text_color: Hsla,
     pub placeholder_color: Hsla,
     pub selection_color: Hsla,
     pub caret_color: Hsla,
     pub font_size: Pixels,
-    /// Read-only: no typing, paste, cut, undo/redo or IME, and no caret.
-    /// Focus, selection and copy still work.
+    /// Read-only: no typing, paste, cut, undo/redo, IME or caret; focus, selection and copy work.
     pub disabled: bool,
-    /// DOM `tabindex`: `Some(n)` makes the input a tab stop at index `n`,
-    /// `None` takes it out of the tab order.
+    /// DOM `tabindex`: `Some(n)` makes a tab stop at `n`, `None` removes it.
     pub tab_index: Option<isize>,
-    /// `<textarea>`: the content soft-wraps, Return inserts a newline instead
-    /// of being dropped, `up`/`down` move by visual line, and the box scrolls
-    /// vertically rather than horizontally.
+    /// `<textarea>`: soft-wrap, Return inserts a newline, `up`/`down` move by visual line.
     pub multiline: bool,
-    /// The cascade gave this element no `color` of its own, so the editor
-    /// should paint in the INHERITED one.
-    ///
-    /// `color` is an inherited property in CSS and vn-css folds no inherited
-    /// properties, but gpui carries a text style down the PAINT walk — so the
-    /// widget reads `window.text_style()` at prepaint instead of being handed a
-    /// guess. Without it an `<input>` that styles only its border paints its
-    /// text in the framework's fallback colour, which is white-on-white in a
-    /// light theme.
+    /// The cascade gave no `color`, so paint in the inherited one. gpui carries the text style down
+    /// the paint walk, and vn-css folds no inherited properties.
     pub inherit_color: bool,
-    /// CSS `text-align`. Applied as a content offset inside the box rather than
-    /// at paint time, so the caret, the selection, click-to-position and the
-    /// IME candidate window all move with the glyphs — see
-    /// `TextInputState::align_offset`.
+    /// CSS `text-align`, applied as a content offset so caret, selection, click-to-position and the
+    /// IME window move with the glyphs (`TextInputState::align_offset`).
     pub text_align: gpui::TextAlign,
-    /// `<textarea rows>` — the INTRINSIC height, in lines. As in HTML it is
-    /// only a minimum: a CSS `height`/`min-height` still wins and content past
-    /// it scrolls. Ignored unless `multiline`.
+    /// `<textarea rows>`: intrinsic height in lines, only a minimum. Ignored unless `multiline`.
     pub rows: usize,
-    /// What the platform should be told about this field's text assistance —
-    /// the `autocorrect` / `autocapitalize` / `spellcheck` / `enterkeyhint`
-    /// attributes, mapped by [`config::configuration`].
-    ///
-    /// gpui re-queries this every frame off the FOCUSED field's input handler
-    /// and forwards it only on change, so it belongs with the per-frame options
-    /// rather than with the persistent state: the attributes are reactive props
-    /// and a `:spellcheck="…"` that flips has to take effect on the next frame.
+    /// Text-assistance attributes mapped by [`config::configuration`]. Per frame because gpui
+    /// re-queries it off the focused field and the attributes are reactive.
     pub input_config: TextInputConfiguration,
-    /// CSS `pointer-events: none` is in force here (the element's own, or an
-    /// ancestor's — the property inherits).
-    ///
-    /// The field takes no press: neither its own mouse handler nor the
-    /// automatic focus transfer gpui gives every element with a tracked focus
-    /// handle. Dropping the tracked handle is what removes the second one, and
-    /// it costs the field its TAB STOP — a divergence from a browser, where
-    /// `pointer-events` is about the pointer only. It buys the idiom this
-    /// exists for: a tab panel parked over the visible one as `absolute
-    /// inset-x-0 top-0 opacity-0 pointer-events-none`, whose fields sit pixel
-    /// for pixel on top of the live ones and would otherwise swallow every
-    /// click and every keystroke aimed at them.
+    /// CSS `pointer-events: none` is in force (own or inherited): the field takes no press and no
+    /// automatic focus transfer. Dropping the tracked focus handle costs it its tab stop, unlike a
+    /// browser, but keeps pixel-overlaid hidden tab panels from swallowing clicks and keystrokes.
     pub inert: bool,
-    /// `<input type="password">`: every character paints as a bullet, and the
-    /// value cannot be copied or cut out of the field, as in a browser.
+    /// `<input type="password">`: bullets, and no copy or cut.
     pub masked: bool,
 }
 
@@ -400,15 +285,11 @@ impl Default for TextInputOptions {
     }
 }
 
-/// One-time app setup: the text input's key bindings. Call once at startup.
+/// One-time setup: the text input's key bindings.
 pub fn init(cx: &mut App) {
     cx.bind_keys(bindings());
 }
 
-/// Build the element for one frame.
-///
-/// `state` is the entity the framework keeps for this node, `options` the
-/// styling for this frame, `handlers` the per-frame event sinks.
 pub fn text_input(
     state: &Entity<TextInputState>,
     options: TextInputOptions,
@@ -420,9 +301,7 @@ pub fn text_input(
     let input_config = options.input_config.clone();
     let on_key_up = handlers.on_key_up.clone();
     let on_clipboard = handlers.on_clipboard.clone();
-    // The focus handle carries the tab order (gpui reads `tab_index`/`tab_stop`
-    // straight off the handle when the element is painted), so it has to be
-    // updated before `track_focus` clones it below.
+    // The focus handle carries the tab order, so update it before `track_focus` clones it.
     let focus_handle = state.update(cx, |this, _| {
         this.set_tab_index(options.tab_index);
         this.set_frame_params(handlers, disabled, multiline, input_config);
@@ -444,16 +323,11 @@ pub fn text_input(
         .min_w_0()
         .overflow_hidden();
     if multiline {
-        // A textarea's box height comes from CSS (`min-h-20`) or, failing that,
-        // from `rows` via the editor's own min-height. Leaving the wrapper's
-        // height AUTO is what lets flexbox stretch it to whichever of those
-        // won, and `min-h-full` covers the non-flex parent with a definite
-        // height. Text starts at the TOP, as in HTML.
+        // Height comes from CSS (`min-h-20`) or `rows`; leaving the wrapper height AUTO lets flexbox
+        // stretch it to the winner, `min-h-full` covers a non-flex parent. Text starts at the top.
         element = element.min_h_full();
     } else {
-        // Fill whatever content box the framework's CSS gave us and centre the
-        // line in it, so the whole box is clickable and a tall input does not
-        // pin its text to the top.
+        // Fill the content box and centre the line so the whole box is clickable.
         element = element.items_center().h_full();
     }
 
@@ -476,8 +350,7 @@ pub fn text_input(
     element = on_state_action(element, state, TextInputState::delete_word_right);
     element = on_state_action(element, state, TextInputState::delete_to_start);
     element = on_state_action(element, state, TextInputState::delete_to_end);
-    // The clipboard commands ask `on_clipboard` first: the DOM fires `copy` /
-    // `cut` / `paste` before the default action, and a cancelled one has none.
+    // The DOM fires `copy`/`cut`/`paste` before the default action, so ask `on_clipboard` first.
     let clip = &on_clipboard;
     element = on_clipboard_action(element, state, clip, ClipboardCommand::Copy, TextInputState::copy);
     element = on_clipboard_action(element, state, clip, ClipboardCommand::Cut, TextInputState::cut);
@@ -492,11 +365,8 @@ pub fn text_input(
     element = on_state_action(element, state, TextInputState::select_down);
     element = on_state_action(element, state, TextInputState::newline);
 
-    // A textarea scrolls its own overflow. The wheel listener has to sit on the
-    // wrapper (gpui delivers wheel events to a hitbox, and the wrapper is the
-    // one with the box); the caret-following clamp in `set_layout` then keeps
-    // whatever the wheel set, because it only moves the offset when the caret
-    // leaves the viewport.
+    // The wheel listener sits on the wrapper (gpui delivers wheel events to a hitbox); the
+    // caret-following clamp in `set_layout` keeps what the wheel set.
     if multiline {
         let scroll_state = state.clone();
         element = element.on_scroll(move |event, window, cx| {
@@ -505,9 +375,8 @@ pub fn text_input(
         });
     }
 
-    // `keyup` has no default to cancel, so the plain (post-binding) element
-    // listener is enough — unlike `keydown`, which the state entity intercepts
-    // *before* gpui resolves key bindings (see `TextInputState::new`).
+    // `keyup` has no default to cancel, unlike `keydown`, which the state entity intercepts before
+    // key bindings resolve (see `TextInputState::new`).
     if let Some(on_key_up) = on_key_up {
         element = element.on_key_up(move |event, window, cx| on_key_up(event, window, cx));
     }
@@ -517,9 +386,8 @@ pub fn text_input(
         element = element.on_mouse_down(MouseButton::Left, move |event, window, cx| {
             mouse_state.update(cx, |this, cx| this.on_mouse_down(event, window, cx));
         });
-        // The secondary button's own rule (Chromium on Windows): it never
-        // starts a drag-selection, and it keeps a selection it lands inside —
-        // the context menu is about that selection.
+        // Secondary button (Chromium on Windows): never starts a drag-selection, and keeps a
+        // selection it lands inside.
         let menu_state = state.clone();
         element = element.on_mouse_down(MouseButton::Right, move |event, window, cx| {
             menu_state.update(cx, |this, cx| this.on_secondary_mouse_down(event, window, cx));
@@ -533,9 +401,8 @@ pub fn text_input(
         .into_any_element()
 }
 
-/// Route a gpui action to a method on the state entity. The framework rebuilds
-/// the tree every frame from outside any view, so these listeners capture the
-/// entity instead of going through `cx.listener`.
+/// Routes a gpui action to a state-entity method; listeners capture the entity because the tree is
+/// rebuilt outside any view.
 fn on_state_action<E, A>(
     element: E,
     state: &Entity<TextInputState>,
@@ -551,9 +418,8 @@ where
     })
 }
 
-/// [`on_state_action`] for copy / cut / paste: the hook runs first, outside
-/// the state update (it dispatches into JS, which may write the field back),
-/// and a `false` from it skips the widget's own handling.
+/// [`on_state_action`] for copy / cut / paste: the hook runs first, outside the state update (it
+/// dispatches into JS), and `false` skips the widget's handling.
 fn on_clipboard_action<E, A>(
     element: E,
     state: &Entity<TextInputState>,
@@ -574,7 +440,6 @@ where
             }
         }
         state.update(cx, |this, cx| {
-            // The hook's handlers may have assigned the field ([`ControlledValue`]).
             this.resync_controlled(cx);
             handler(this, action, window, cx)
         });
@@ -583,8 +448,7 @@ where
 
 fn bindings() -> Vec<KeyBinding> {
     let context = Some(KEY_CONTEXT);
-    // The platform's "do the thing" modifier, and the one that means "by word",
-    // spliced in at compile time: `KeyBinding::new` takes `&'static str`.
+    // The platform's modifier for "by word", spliced in at compile time: `KeyBinding::new` takes `&'static str`.
     macro_rules! primary {
         ($pre:literal, $key:literal) => {
             if cfg!(target_os = "macos") { concat!($pre, "cmd-", $key) } else { concat!($pre, "ctrl-", $key) }
@@ -630,8 +494,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new(primary!("shift-", "z"), Redo, context),
     ]);
 
-    // The IBM CUA clipboard keys every Windows and Linux edit control still
-    // honours, and so does a browser's text field there.
+    // IBM CUA clipboard keys, honoured by Windows and Linux edit controls.
     if !cfg!(target_os = "macos") {
         bindings.extend([
             KeyBinding::new("ctrl-insert", Copy, context),
@@ -652,9 +515,7 @@ fn bindings() -> Vec<KeyBinding> {
         ]);
     }
 
-    // `up`/`down` are shared: in a single-line input a browser moves the caret
-    // to the start / end of the value, which is what `TextInputState::up`/
-    // `down` do when `multiline` is off.
+    // `up`/`down` are shared: single-line, they move the caret to the start/end, as in a browser.
     bindings.extend([
         KeyBinding::new("up", Up, context),
         KeyBinding::new("down", Down, context),
@@ -662,10 +523,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("shift-down", SelectDown, context),
     ]);
 
-    // `enter` is bound in the TEXTAREA context only. A single-line input
-    // deliberately leaves Return unbound so the surrounding app can use it
-    // (form submit, reka-ui's typeahead), which is also the browser's split:
-    // Return in a `<textarea>` inserts a newline and never submits.
+    // `enter` is bound in the TEXTAREA context only, so a single-line input leaves Return to the app.
     bindings.push(KeyBinding::new(
         "enter",
         Newline,
@@ -680,7 +538,6 @@ mod tests {
     use super::*;
     use gpui::Action;
 
-    /// What one keystroke is bound to in the input's context, by action name.
     fn bound(keys: &'static str) -> Option<&'static str> {
         let want = gpui::Keystroke::parse(keys).unwrap();
         bindings()
@@ -689,8 +546,6 @@ mod tests {
             .map(|b| b.action().name())
     }
 
-    /// The codes are what JS indexes `EDIT_TYPES` with: dense from 1, and only
-    /// the IME's type composes (its `beforeinput` cannot be cancelled).
     #[test]
     fn input_types_are_dense_and_only_the_ime_composes() {
         let all = [
@@ -717,8 +572,6 @@ mod tests {
         assert_eq!(InputIntent::bare(InputType::InsertLineBreak).data, None);
     }
 
-    /// Shift+Insert, Ctrl+Insert and Shift+Delete are the same three commands
-    /// as Ctrl+V/C/X, so they raise the same ClipboardEvents.
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn the_cua_clipboard_keys_are_the_same_commands() {
@@ -728,7 +581,6 @@ mod tests {
         assert_eq!(bound("ctrl-insert"), Some(Copy.name()));
         assert_eq!(bound("shift-delete"), Some(Cut.name()));
         assert_eq!(bound("shift-insert"), Some(Paste.name()));
-        // A plain Delete still deletes.
         assert_eq!(bound("delete"), Some(Delete.name()));
     }
 }

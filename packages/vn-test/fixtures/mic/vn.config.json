@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/mic-consent.spec.ts: getUserMedia behind the app's own permission prompt, over VN_MEDIA_CAPTURE=fake (m26 voice-fixes-1 item 1). See ../README.md.",
-
   "name": "vn-test-mic",
 
   "window": {

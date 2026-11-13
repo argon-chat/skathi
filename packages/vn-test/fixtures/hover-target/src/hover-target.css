@@ -9,7 +9,6 @@
   position: absolute;
 }
 
-/* A hover-styled box, its top half under a cover that listens for nothing. */
 #under {
   left: 20px;
   top: 20px;
@@ -28,7 +27,6 @@
   background: rgba(0, 0, 255, 0.2);
 }
 
-/* Two nested pairs side by side, for the enter/leave order. */
 .wrap {
   width: 200px;
   height: 60px;
@@ -49,7 +47,6 @@
   background: #ddd;
 }
 
-/* A dropdown: the panel is laid out below its trigger, outside its box. */
 #menu {
   left: 20px;
   top: 220px;
@@ -69,7 +66,6 @@
   background: #bbb;
 }
 
-/* `group-hover`, with the right half of the group under a cover. */
 #grp {
   left: 260px;
   top: 220px;
@@ -94,7 +90,6 @@
   background: rgba(0, 0, 0, 0.1);
 }
 
-/* `pointer-events: none` around a child that can be hit. */
 #inert {
   left: 20px;
   top: 340px;

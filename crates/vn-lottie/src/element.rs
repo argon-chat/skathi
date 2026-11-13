@@ -1,31 +1,19 @@
-//! The per-frame gpui element for one `<lottie>` node.
-//!
-//! Like `vn_elements::text_input`, this is a *component*, not a view: the host
-//! owns the [`LottieState`] in a side map and rebuilds the element tree every
-//! frame, so everything here is recomputed from scratch each time and nothing
-//! but the state survives.
+//! The per-frame gpui element for one `<lottie>` node: a component, not a view, so everything is
+//! recomputed each frame and only the [`LottieState`] survives.
 
 use gpui::{div, img, AnyElement, App, IntoElement, ObjectFit, Styled, StyledImage, Window};
 
 use crate::LottieState;
 
-/// CSS `object-fit`, as the cascade produces it.
-///
-/// Mirrors gpui's own [`ObjectFit`] one-for-one; it exists because gpui's enum
-/// derives nothing, and the host needs a plain value it can compare and store.
+/// CSS `object-fit`; mirrors gpui's [`ObjectFit`] one-for-one as a comparable, storable value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LottieFit {
-    /// `object-fit: fill` — stretch to the box, ignoring aspect ratio.
     Fill,
-    /// `object-fit: contain` — letterbox inside the box. The default, matching
-    /// `<lottie-player>`'s `preserveAspectRatio: "xMidYMid meet"`.
+    /// The default, matching `<lottie-player>`'s `preserveAspectRatio: "xMidYMid meet"`.
     #[default]
     Contain,
-    /// `object-fit: cover` — fill the box, cropping the overflow.
     Cover,
-    /// `object-fit: scale-down` — `none` or `contain`, whichever is smaller.
     ScaleDown,
-    /// `object-fit: none` — paint at intrinsic size.
     None,
 }
 
@@ -41,22 +29,14 @@ impl From<LottieFit> for ObjectFit {
     }
 }
 
-/// Per-frame view parameters. Style comes from the host's CSS engine; nothing
-/// in here is remembered between frames.
+/// Per-frame view parameters; nothing is remembered between frames.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LottieOptions {
-    /// The content box the animation paints into, in **logical** (CSS) pixels.
-    /// The host takes this from the cascade, falling back to the animation's
-    /// intrinsic [`LottieMeta::width`](crate::LottieMeta::width)/`height`.
+    /// The content box in logical (CSS) pixels; the host falls back to the animation's intrinsic size.
     pub size: (f32, f32),
-    /// Device pixels per logical pixel — `window.scale_factor()`. Drives the
-    /// physical raster size; see [`LottieState::render_frame`].
+    /// Device pixels per logical pixel (`window.scale_factor()`); drives the raster size.
     pub scale: f32,
-    /// CSS `object-fit`. `Contain` matches `<lottie-player>`'s default
-    /// `preserveAspectRatio: "xMidYMid meet"`.
     pub object_fit: LottieFit,
-    /// CSS `filter: grayscale(1)`, which gpui's image element implements
-    /// natively.
     pub grayscale: bool,
 }
 
@@ -72,7 +52,6 @@ impl Default for LottieOptions {
 }
 
 impl LottieOptions {
-    /// Options that paint `state` at its intrinsic size on a `scale` display.
     pub fn intrinsic(state: &LottieState, scale: f32) -> Self {
         let meta = state.meta();
         Self {
@@ -83,15 +62,9 @@ impl LottieOptions {
     }
 }
 
-/// Builds the element for one frame.
-///
-/// Rasterises the current playhead (from cache when nothing moved), paints it,
-/// and releases the atlas tiles of rasters that have fallen out of use — which
-/// is why this needs `window`/`cx` and why the host must call *this* rather
-/// than [`LottieState::render_frame`] directly.
-///
-/// A frame that cannot be rasterised (degenerate box, backend error) paints an
-/// empty box of the same size rather than collapsing the layout.
+/// Builds the element for one frame: rasterises the current playhead (cached when nothing moved),
+/// paints it and releases atlas tiles of rasters out of use, so call this rather than
+/// [`LottieState::render_frame`]. An unrasterisable frame paints an empty box of the same size.
 pub fn lottie(
     state: &mut LottieState,
     options: &LottieOptions,
@@ -101,8 +74,7 @@ pub fn lottie(
     let rendered = state.render_frame(options.size, options.scale);
 
     for image in state.take_retired() {
-        // `Some(window)`: we are inside this window's update, so `App.windows`
-        // has its slot taken and `drop_image` would otherwise skip it.
+        // Inside this window's update `App.windows` has its slot taken, so `drop_image` would skip it.
         cx.drop_image(image, Some(window));
     }
 

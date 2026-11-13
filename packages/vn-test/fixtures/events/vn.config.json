@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/events.spec.ts: contextmenu (mouse and keys), one event per press, the click family's detail, and <img> load/error (m26 fixes). See ../README.md.",
-
   "name": "vn-test-events",
 
   "window": {

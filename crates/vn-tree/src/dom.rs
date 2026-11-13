@@ -1,24 +1,4 @@
 //! The DOM surface the JS mirror nodes answer from (compat roadmap G2).
-//!
-//! `packages/vue-native/src/runtime.js` puts `closest` / `matches` / `contains`
-//! / `querySelector(All)` / `getBoundingClientRect` / `getComputedStyle` on the
-//! mirror node prototype. Two of those three questions can only be answered
-//! here:
-//!
-//! * **selector matching** lives in the Rust cascade (`vn_css::query_all`), and
-//!   answering it in JS would mean a second, divergent matcher — the exact
-//!   silent-divergence this project exists to avoid. So the mirror asks the real
-//!   one, synchronously, through [`query`].
-//! * **layout** exists only as the rectangle gpui hands each element during
-//!   prepaint; `render::BOUNDS` captures it per painted node, and [`bounds`]
-//!   reads it back. A node that was not painted reports nothing, which the JS
-//!   side turns into an all-zero rect — what a browser reports for a detached
-//!   or `display: none` element.
-//!
-//! Everything is serialized as a small line/comma string rather than JSON: the
-//! payloads are ids and numbers, the callers are three lines of JS each, and a
-//! JSON round trip per `getBoundingClientRect()` would be the wrong tax on a
-//! call floating-ui makes dozens of times per open.
 
 use crate::live_state::{LiveRef, LiveStates};
 use crate::tree::{self, Kind, Tree};
@@ -26,29 +6,21 @@ use crate::tree::{self, Kind, Tree};
 /// What a [`query`] call is asking for.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum QueryMode {
-    /// `root.querySelectorAll(sel)` — every DESCENDANT of `root` that matches,
-    /// in document order. `root` itself is never a candidate, as in the DOM.
+    /// `root.querySelectorAll(sel)` — every DESCENDANT of `root` that matches, in document order.
     Descendants,
-    /// `document.querySelectorAll(sel)` — the document element followed by
-    /// every descendant, in document order.
+    /// `document.querySelectorAll(sel)` — the document element followed by every descendant, in
+    /// document order.
     Document,
     /// `el.matches(sel)` — the node itself, nothing else.
     SelfOnly,
-    /// `el.closest(sel)` — the node, then its ancestors, nearest first; the
-    /// first match wins.
+    /// `el.closest(sel)` — the node, then its ancestors, nearest first; the first match wins.
     Closest,
 }
 
 /// Runs `selector` against the retained tree through the cascade's own matcher.
-///
-/// `Err` carries the same advisory the sheet compiler prints for a selector the
-/// engine cannot run (`:has()`, `::before`, `:visited`), so a `querySelector`
-/// that cannot be answered explains itself instead of reporting "no match".
 pub fn query(selector: &str, root: u32, mode: QueryMode) -> Result<Vec<u32>, String> {
     tree::read_tree(|t| {
         if t.node(root).is_none() {
-            // A detached node still exists in the mirror; in the DOM its
-            // queries simply find nothing.
             return Ok(Vec::new());
         }
         let ids: Vec<u32> = match mode {
@@ -57,17 +29,11 @@ pub fn query(selector: &str, root: u32, mode: QueryMode) -> Result<Vec<u32>, Str
             QueryMode::SelfOnly => vec![root],
             QueryMode::Closest => ancestors_from(t, root),
         };
-        // A script's query filters `:hover` / `:active` / `:focus` /
-        // `:focus-visible` / `:focus-within` by the live state, as a browser's
-        // does; the cascade's matcher answers them "would match"
-        // (`crate::live_state`).
+        // A script's query filters `:hover` / `:active` / `:focus` / `:focus-visible` /
+        // `:focus-within` by the live state, as a browser's does; the cascade's matcher answers
+        // them "would match" (`crate::live_state`).
         let live = LiveStates::take(t);
         let candidates: Vec<LiveRef<'_>> = ids.iter().map(|&id| LiveRef::new(t, id, &live)).collect();
-        // `root` is the node the method was called on, which is exactly the
-        // DOM's *scoping root*: `el.querySelector(":scope > .x")` asks for a
-        // child of `el`, not of the document element. Passing it here is the
-        // whole of `:scope` support — parcel answers `Component::Scope` from
-        // this field.
         let result = vn_css::query_all_in(selector, &candidates, Some(LiveRef::new(t, root, &live)))?;
         for w in &result.warnings {
             crate::log::record("css", format!("[query] {w}"));
@@ -118,30 +84,10 @@ fn ancestors_from(t: &Tree, id: u32) -> Vec<u32> {
     out
 }
 
-/// A browser lays out on read; so does this.
-///
-/// The narrow case, and the only one that is a *wrong answer* rather than a
-/// one-frame-old one: the node has no rectangle **anywhere**, and the tree
-/// still holds changes no frame has taken. That is a node Vue built during this
-/// same JS wave — the whole app during boot, a `v-if` branch that just opened,
-/// a dialog's contents — and it is what `onMounted` + `nextTick` measures.
-/// Reporting `0` there is not "an unpainted element reports zeros"; it is a
-/// browser's answer thrown away because a frame had not come round yet.
-///
-/// A node that HAS a rectangle keeps the one the last frame gave it, which is
-/// the same thing `requestAnimationFrame` reads and the same thing every
-/// devtools query answers. And a node that has no rectangle while the tree is
-/// clean is genuinely not painted — detached, `display: none`, in a
-/// `<KeepAlive>` cache — for which an all-zero rect is exactly right, and no
-/// layout is forced.
-///
-/// **Returns `true` when the answer stays STALE**: the node has no rectangle,
-/// the tree holds changes no frame has laid out, and no layout happened. The
-/// host cannot draw inside a gpui input listener (`crate::in_input_dispatch`),
-/// so a node a click handler mounted and measured in the same wave is the case;
-/// the runtime turns it into an advisory. "Owed" rather than "dirty": the
-/// first forced layout flushes the changes even when its draw is refused, and a
-/// second read in the same wave must still be told.
+/// A browser lays out on read; so does this. Only for a node with no rectangle anywhere while the
+/// tree holds changes no frame has taken (built this same JS wave: boot, a `v-if` that just opened),
+/// which `onMounted` + `nextTick` measures. Returns `true` when the answer stays STALE: the host
+/// cannot draw inside a gpui input listener, so the layout could not be forced.
 fn force_layout_if_unpainted(id: u32) -> bool {
     if id == 0 {
         return false;
@@ -157,30 +103,11 @@ fn force_layout_if_unpainted(id: u32) -> bool {
     crate::render::build_count() == before && crate::render::bounds_of(id).is_none()
 }
 
-/// The same forced layout, for a read whose answer depends on the node's
-/// CONTENT rather than only on its own box: `scrollWidth` / `scrollHeight`, and
-/// every write that has to be clamped against them.
-///
-/// Wider than [`force_layout_if_unpainted`] by exactly one case, and that case
-/// is the whole reason it exists: a node that HAS a rectangle while the tree
-/// still holds changes no frame has taken. `list.append(row);
-/// list.scrollTop = list.scrollHeight` is the canonical scroll-to-bottom
-/// idiom, and the list has been painted many times — it is the row that is
-/// newer than the last frame. Clamping against `max_offset` from before the
-/// append stops the list a row short, forever, because nothing ever
-/// re-measures.
-///
-/// It is still narrow: `sync_layout` flushes the pending changes itself, so a
-/// JS wave that writes twice forces one layout and the second write finds the
-/// tree clean. A clean tree costs nothing here at all.
-///
-/// **Returns `true` when the answer that follows is STALE** — the tree had
-/// changes and the layout could not be forced. `sync_layout` draws through
-/// `Window::draw`, and a second draw is refused anywhere inside the window's
-/// own update, which is every event handler and every timer callback; it works
-/// during boot, module evaluation and `onMounted`, which is the case m22 built
-/// it for. So the caller has to be able to say so, and the build counter is
-/// how it finds out: if no build happened, no layout happened.
+/// The same forced layout, for a read whose answer depends on the node's CONTENT rather than only
+/// on its own box: `scrollWidth` / `scrollHeight`, and every write that has to be clamped against
+/// them. Also for a node that HAS a rectangle: `list.append(row); list.scrollTop = list.scrollHeight`
+/// would otherwise clamp against the height from before the append. Returns `true` when stale
+/// (`sync_layout` cannot draw inside the window's own update; the build counter says whether it did).
 #[must_use]
 pub(crate) fn layout_if_stale(id: u32) -> bool {
     if id == 0 || !tree::read_tree(|t| t.node(id).is_some()) || !crate::layout_owed() {
@@ -191,38 +118,17 @@ pub(crate) fn layout_if_stale(id: u32) -> bool {
     crate::render::build_count() == before
 }
 
-/// `getBoundingClientRect()` — `(x, y, width, height)` in CSS px, from the last
-/// frame the node was painted in, relative to **the app root**.
-///
-/// The app root is JS's viewport: it is the box `position: fixed` resolves
-/// against (see the mapper), it is what `document.documentElement` reports, and
-/// it is where a `<Teleport to="body">` lands. Reporting window-client
-/// coordinates instead would leave @floating-ui measuring elements in one space
-/// and clipping them against another, offset by whatever chrome the host draws
-/// around the root — and every popover pinned to the left edge by the `shift`
-/// middleware, which is exactly how that failure looks.
-///
-/// (Devtools keeps the WINDOW-relative numbers — see [`crate::render::bounds_of`]
-/// — because a screenshot is a window, not a root. The two differ by the root's
-/// origin and nothing else.)
-///
-/// `None` = never painted this frame: detached, `display: none`, or parked in a
-/// `<KeepAlive>` cache container. A browser answers an all-zero rect for all
-/// three, which is what the JS side substitutes.
-///
-/// The `bool` says a missing answer is STALE rather than "not painted": a
-/// layout was owed and could not be forced (see [`force_layout_if_unpainted`]).
+/// `getBoundingClientRect()` in CSS px relative to the APP ROOT (JS's viewport, what `position: fixed`
+/// resolves against); window-client coordinates would make floating-ui measure and clip in different
+/// spaces. `None` = not painted (detached, `display: none`, `<KeepAlive>`). The `bool` says a missing
+/// answer is STALE, not "not painted".
 pub fn bounds(id: u32) -> (Option<(f32, f32, f32, f32)>, bool) {
     let stale = force_layout_if_unpainted(id);
     (bounds_now(id), stale)
 }
 
-/// Where CSS `transform` drew the node, in the same space as [`bounds`]: the
-/// bounding box of its border box under its own transform and its ancestors'.
-/// `getBoundingClientRect()` reports this in a browser, while `offsetWidth`,
-/// `clientWidth` and ResizeObserver keep the layout box. `None` when no
-/// transform moved it (the layout box is the answer) or it was not painted.
-/// Call it after [`bounds`], which forces the layout this reads.
+/// Where CSS `transform` drew the node, in the same space as [`bounds`]: the bounding box of its
+/// border box under its own transform and its ancestors'.
 pub fn transformed(id: u32) -> Option<(f32, f32, f32, f32)> {
     let (x, y, w, h) = crate::render::transformed_of(id)?;
     let (ox, oy) = root_origin();
@@ -239,44 +145,14 @@ fn root_origin() -> (f32, f32) {
 fn bounds_now(id: u32) -> Option<(f32, f32, f32, f32)> {
     let (x, y, w, h) = crate::render::bounds_of(id)?;
     let (ox, oy) = root_origin();
-    // A scroll that no frame has painted yet moved this rectangle and nothing
-    // told the map. `row.scrollIntoView(); row.getBoundingClientRect()` answers
-    // the NEW position in a browser, on the same line, and a forced layout
-    // cannot produce it here — a scroll from a click handler is already inside
-    // the window's update. The shift is exact arithmetic instead; see
-    // [`crate::scroll::unpainted_shift`].
     let (sx, sy) = crate::scroll::unpainted_shift(id);
     Some((x - ox + sx, y - oy + sy, w, h))
 }
 
 /// `getComputedStyle(el)` — the useful subset, as `name=value` lines.
-///
-/// A browser's `CSSStyleDeclaration` has ~340 longhands, every one of them
-/// resolved. We have a `StyleRefinement`, which is the folded set of
-/// declarations that actually applied, plus the element's custom properties.
-/// So this reports:
-///
-/// * the properties reused browser components actually read at runtime —
-///   `transition-*` (Vue's own `<Transition>` measures its timeout with them),
-///   `transform`, `display`, `position`, `overflow-*`, `direction`;
-/// * the USED width/height, off the painted rectangle, because that is the one
-///   place a real number exists;
-/// * every custom property, so `getPropertyValue("--x")` works.
-///
-/// Properties nothing declared are simply absent — the JS side answers `""`
-/// for them and warns once, rather than inventing an initial value it would
-/// have to keep in sync with a browser's.
 pub fn computed_style(id: u32) -> Option<String> {
-    // A browser flushes pending style before answering; so do we, or a
-    // component that mutates an attribute and reads the result back on the next
-    // line gets the value from BEFORE its own mutation. See
-    // [`tree::flush_pending_style`] for the reka `<Presence>` case that makes
-    // this load-bearing rather than pedantic.
     tree::flush_pending_style();
     tree::read_tree(|t| {
-        // A node that exists but has not been cascaded yet (created earlier in
-        // this same JS wave) computes to the initial values, not to nothing —
-        // a browser has no "not styled yet" state to report.
         let default = vn_css::ComputedStates::default();
         let cs = t.node(id)?.computed.as_ref().unwrap_or(&default);
         let mut out = String::new();
@@ -287,11 +163,8 @@ pub fn computed_style(id: u32) -> Option<String> {
             out.push('\n');
         };
 
-        // Every property in the published set ALWAYS has a value: a browser's
-        // computed style has no "absent", and a component that reads `display`
-        // expects a keyword, not "". So an undeclared property reports its CSS
-        // initial value and only a property OUTSIDE the set reads "" (with the
-        // advisory the JS side prints).
+        // Every property in the published set ALWAYS has a value: a browser's computed style has no
+        // "absent", and a component that reads `display` expects a keyword, not "".
         put(
             "display",
             match cs.base.display.unwrap_or(gpui::Display::Block) {
@@ -302,9 +175,8 @@ pub fn computed_style(id: u32) -> Option<String> {
             }
             .into(),
         );
-        // `fixed` is laid out as absolute (see the mapper) but the AUTHORED
-        // value is what a component reads back, and @floating-ui branches on
-        // exactly this string.
+        // `fixed` is laid out as absolute (see the mapper) but the AUTHORED value is what a
+        // component reads back, and @floating-ui branches on exactly this string.
         put(
             "position",
             match (cs.extras.fixed, cs.base.position) {
@@ -315,26 +187,21 @@ pub fn computed_style(id: u32) -> Option<String> {
             }
             .into(),
         );
-        // The CSS value, inherited, not gpui's paint switch: a
-        // screen-reader-only box paints nothing but is `visible`, and a child
-        // of a `hidden` box is `hidden` (render::css_visible).
+        // The CSS value, inherited, not gpui's paint switch: a screen-reader-only box paints
+        // nothing but is `visible`, and a child of a `hidden` box is `hidden`
+        // (render::css_visible).
         put("visibility", if crate::render::css_visible(t, id) { "visible" } else { "hidden" }.into());
-        // `auto` and `clip` as computed (vn_css::Extras::overflow_names), not
-        // the `scroll` and `hidden` gpui folds them into.
+        // `auto` and `clip` as computed (vn_css::Extras::overflow_names), not the `scroll` and
+        // `hidden` gpui folds them into.
         let [overflow_x, overflow_y] = cs.extras.overflow_names(&cs.base);
         put("overflow-x", overflow_x.into());
         put("overflow-y", overflow_y.into());
-        // The shorthand, which is what `isOverflowElement` in @floating-ui
-        // reads: one keyword when the axes agree, as CSSOM serializes it.
         put(
             "overflow",
             if overflow_x == overflow_y { overflow_x.to_string() } else { format!("{overflow_x} {overflow_y}") },
         );
-        // `auto` is the CSS initial value AND an exact description of what we
-        // do: gpui's scrollbars are overlays, so no gutter is ever reserved and
-        // none can be. Reka's scroll lock reads this to decide whether it has
-        // to compensate for a disappearing scrollbar; `""` sent it down the
-        // "unknown" branch, `auto` sends it down the right one.
+        // `auto` is the CSS initial value AND an exact description of what we do: gpui's scrollbars
+        // are overlays, so no gutter is ever reserved and none can be. (Reka's scroll lock reads it.)
         put("scrollbar-gutter", "auto".into());
         put("opacity", format!("{}", cs.base.opacity.unwrap_or(1.0)));
         put(
@@ -345,17 +212,13 @@ pub fn computed_style(id: u32) -> Option<String> {
             "pointer-events",
             if cs.extras.pointer_events_none == Some(true) { "none" } else { "auto" }.into(),
         );
-        // The FULL transform now — translate, rotate and scale all reach the
-        // paint (m13 item 2), so all three are reported. The serialisation is
-        // the function list rather than the `matrix()` a browser resolves to,
-        // because that is what the cascade actually holds; floating-ui's
-        // `isContainingBlock` only tests it against `"none"`.
+        // The serialisation is the function list rather than the `matrix()` a browser resolves to,
+        // because that is what the cascade actually holds; floating-ui's `isContainingBlock` only
+        // tests it against `"none"`.
         put("transform", transform_text(cs.base.vn_transform));
-        // The containing-block probe every floating-ui build runs. These are
-        // the INDIVIDUAL transform properties, which vue-native does not map —
-        // `transform` above is the shorthand and the only one that applies —
-        // plus three that are genuinely not implemented. Reporting the initial
-        // value is honest: it IS what happens.
+        // These are the INDIVIDUAL transform properties, which vue-native does not map —
+        // `transform` above is the shorthand and the only one that applies — plus three that are
+        // genuinely not implemented.
         for name in ["translate", "rotate", "scale", "perspective", "filter"] {
             put(name, "none".into());
         }
@@ -369,11 +232,8 @@ pub fn computed_style(id: u32) -> Option<String> {
                 None => "none".into(),
             },
         );
-        // The animation list. reka-ui's `Presence` reads `animationName` to
-        // decide whether to wait for an `animationend` at all — `none` means
-        // "unmount now", anything else means "wait for the event" — so this has
-        // to be the truth, or an exit animation either never plays or never
-        // finishes.
+        // reka-ui's `Presence` reads `animationName` to decide whether to wait for `animationend`, so
+        // this must be the truth or an exit animation never plays or never finishes.
         if cs.animations.is_empty() {
             put("animation-name", "none".into());
             put("animation-duration", "0s".into());
@@ -401,8 +261,6 @@ pub fn computed_style(id: u32) -> Option<String> {
                 }),
             );
         }
-        // The transition list, in the shape runtime-dom's `<Transition>` reads
-        // it: a comma-joined value per longhand, one entry per list item.
         if cs.transitions.is_empty() {
             put("transition-property", "all".into());
             put("transition-duration", "0s".into());
@@ -415,21 +273,12 @@ pub fn computed_style(id: u32) -> Option<String> {
             put("transition-duration", join(&|s| secs(s.duration)));
             put("transition-delay", join(&|s| secs(s.delay)));
         }
-        // The USED size, i.e. the painted rectangle — the only place a real
-        // number exists. A node that has not been painted reports `0px`, which
-        // is what a browser reports for a `display: none` one.
+        // The USED size, i.e. the painted rectangle — the only place a real number exists.
         let (w, h) = crate::render::bounds_of(id).map(|(_, _, w, h)| (w, h)).unwrap_or((0.0, 0.0));
         put("width", format!("{w}px"));
         put("height", format!("{h}px"));
         // gpui lays out left-to-right unconditionally; floating-ui asks.
         put("direction", "ltr".into());
-        // The two INHERITED text properties a component reads to match its
-        // surroundings: an inline custom emoji sizes itself off its parent's
-        // `fontSize`, an overlay tints itself with `color`. The font size is
-        // the cascade's own computed value, inherited and em-resolved down the
-        // walk (`ComputedStates::font_size`). The colour is the nearest
-        // declaration up the parent chain — what the painter inherits too —
-        // and, with none, the window's default text colour.
         let mut color = None;
         let mut at = id;
         while let Some(n) = t.node(at) {
@@ -441,8 +290,8 @@ pub fn computed_style(id: u32) -> Option<String> {
             }
             at = n.parent;
         }
-        // A node not cascaded yet inherits: the nearest cascaded ancestor's,
-        // and with none the root's, the rem basis.
+        // A node not cascaded yet inherits: the nearest cascaded ancestor's, and with none the
+        // root's, the rem basis.
         let mut px = None;
         let mut at = id;
         while let Some(n) = t.node(at) {
@@ -469,8 +318,8 @@ fn secs(d: std::time::Duration) -> String {
     format!("{}s", d.as_secs_f32())
 }
 
-/// A colour as a browser serialises a computed one: `rgb(r, g, b)`, or
-/// `rgba(r, g, b, a)` when it is not opaque.
+/// A colour as a browser serialises a computed one: `rgb(r, g, b)`, or `rgba(r, g, b, a)` when it
+/// is not opaque.
 fn css_rgb(c: gpui::Hsla) -> String {
     let c = gpui::Rgba::from(c);
     let ch = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -519,9 +368,6 @@ mod tests {
         assert!(query(":root", root, QueryMode::Descendants).unwrap().is_empty());
     }
 
-    /// m26 client sweep #30. `font-size` and `color` inherit, so a child that
-    /// declares neither reports its ancestor's, as a browser computes them; a
-    /// CustomEmojiSegment sized itself off `parentElement.fontSize` and got "".
     #[test]
     fn computed_style_reports_the_inherited_font_size_and_color() {
         let (outer, inner, bare) = tree::with_tree(|t| {
@@ -541,10 +387,8 @@ mod tests {
         assert_eq!(prop(outer, "font-size"), "20px");
         assert_eq!(prop(inner, "font-size"), "20px", "inherited from .outer");
         assert_eq!(prop(inner, "color"), "rgba(255, 0, 0, 0.5)");
-        // Nothing declared up the chain: the root's, i.e. the initial values.
         assert_eq!(prop(bare, "font-size"), format!("{}px", vn_css::rem_basis()));
         assert_eq!(prop(bare, "color"), "rgb(0, 0, 0)");
-        // The ones the sweep saw read "" are in the published set.
         for name in ["width", "height", "position", "direction", "animation-name", "transition-delay", "transition-duration"] {
             assert!(!prop(inner, name).is_empty(), "{name}");
         }
@@ -575,8 +419,7 @@ mod tests {
         assert_eq!(prop(mixed, "animation-duration"), "0.1s, 0.3s, 0.1s, 0.3s");
         assert_eq!(prop(mixed, "animation-delay"), "0.02s, 0.02s, 0.02s, 0.02s");
 
-        // Presence cancels via a single inline longhand. The none slot keeps
-        // the other components, but must serialize the literal keyword so it
+        // The none slot keeps the other components, but must serialize the literal keyword so it
         // does not wait for animationend from an inert animation.
         tree::with_tree(|t| {
             let name = t.intern("animation-name");
@@ -588,10 +431,7 @@ mod tests {
         assert_eq!(prop(single, "animation-fill-mode"), "forwards");
     }
 
-    /// css-overflow-3 §3.1, across rules: `.list` declares only `overflow-y:
-    /// auto`, and `.wide` only `overflow-x: hidden`, so each one's other axis
-    /// computes from `visible` to `auto`. `.cut` is `clip` beside `visible`,
-    /// which pairs with nothing.
+    /// `.cut` is `clip` beside `visible`, which pairs with nothing.
     #[test]
     fn computed_overflow_pairs_the_axes_and_reports_auto_and_clip() {
         let (list, wide, cut, plain) = tree::with_tree(|t| {
@@ -616,7 +456,6 @@ mod tests {
         assert_eq!(axes(wide), ["hidden", "auto", "hidden auto"]);
         assert_eq!(axes(cut), ["clip", "visible", "clip visible"]);
         assert_eq!(axes(plain), ["visible", "visible", "visible"]);
-        // And the layout side: `.list` is a scroll container on x as well.
         let x = tree::with_tree(|t| t.node(list).and_then(|n| n.computed.as_ref()).map(|cs| cs.base.overflow.x));
         assert_eq!(x, Some(Some(gpui::Overflow::Scroll)));
     }

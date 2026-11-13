@@ -1,15 +1,3 @@
-// `el.focus()` refuses an element CSS hides, as a browser's does (m26,
-// docs/RUNTIME.md §5.20, crates/vn-tree/src/render.rs `style_refuses_focus`).
-// Chromium flushes style first and then asks whether the element is rendered
-// and its computed `visibility` is `visible`. Ours asked only whether it could
-// ever take focus, and queued it when it had not been built yet. So a popover
-// that mounts hidden and focuses its item on mount (Argon's emoji tone
-// popover) took the focus a frame later, once it was visible, out of the
-// picker's dismissable layer. In Chromium the item stays unfocused and the
-// picker stays open.
-//
-//   bun test packages/vn-test/specs/focus-style.spec.ts
-
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { launch } from "../src/index";
 
@@ -40,16 +28,13 @@ describe("focus() and the element's style", () => {
     await app.locator("#opener").click({ real: true });
     const deadline = Date.now() + 5_000;
     while ((await out()).active.length === 0 && Date.now() < deadline) await sleep(50);
-    // Frames for a queued focus to have landed, if one had been queued.
     await sleep(400);
     const o = await out();
     bunExpect(o.active.length).toBe(1);
     bunExpect(o.active[0]).not.toBe("tone-1");
     bunExpect(o.log).not.toContain("focusin t=tone-1");
     bunExpect(await active()).toBe("opener");
-    // The popover did open, and is visible now.
     bunExpect(await js<string>('return getComputedStyle(document.getElementById("tone-1")).visibility')).toBe("visible");
-    // Once visible, the item takes focus.
     await app.eval('document.getElementById("tone-1").focus()');
     bunExpect(await active()).toBe("tone-1");
     await app.locator("#opener").click({ real: true });
@@ -66,7 +51,6 @@ describe("focus() and the element's style", () => {
     bunExpect(await active()).toBe("other");
     await sleep(300);
     bunExpect(await active()).toBe("other");
-    // `visibility` inherits: the child computes `hidden` from its box.
     bunExpect(await js<string>('return getComputedStyle(document.getElementById("hchild")).visibility')).toBe("hidden");
   }, T);
 

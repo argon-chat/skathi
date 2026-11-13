@@ -1,17 +1,4 @@
 <script setup lang="ts">
-// Storage: `localStorage` and `sessionStorage`, read AND written.
-//
-// The values come from the app's own JS rather than from vn-storage's disk
-// (see `cmd_storage` in `crates/vn-app/src/devtools/mod.rs` for why): the area
-// an app sees is the spec'd object, and a panel that read the sealed file on
-// disk would show something subtly different — a pending write, or a session
-// area that has no file at all.
-//
-// Editing is real and it is the first WRITE surface this inspector has. That is
-// a deliberate line: the Styles panel still reads only (editing the cascade
-// needs an authoring channel back into it, docs/DEVTOOLS-UI.md §7), but a
-// storage area is a key/value store with a specified setter, and "change this
-// flag and reload" is most of what a storage panel is for.
 import { ref } from "vue";
 import IndexedDbPanel from "./IndexedDbPanel.vue";
 import type { InspectorRequest } from "../inspector-model";
@@ -49,7 +36,6 @@ function switchArea(area: string): void {
   void refreshStorage();
 }
 
-/** How much a value takes, for the size column. */
 function size(value: string): string {
   const n = value.length;
   return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`;

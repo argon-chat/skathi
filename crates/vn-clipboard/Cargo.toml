@@ -5,23 +5,13 @@ edition = "2021"
 publish = false
 
 [dependencies]
-# The JS host seam AND the trait this crate implements — declared in redjs
-# (`redjs::webapi::clipboard`), implemented here. Same layering as
-# `vn-permissions`.
+# The `ClipboardHost` trait is declared in redjs and implemented here.
 vn-runtime = { path = "../vn-runtime", default-features = false, features = ["clipboard"] }
-# NOT a second clipboard implementation: gpui already owns the OS clipboard for
-# the native <input> widget's Ctrl+C/Ctrl+V (crates/vn-elements/src/text_input/
-# state.rs), and two owners of one `OpenClipboard` is a race with no upside.
-# This crate is `App::read_from_clipboard` / `write_to_clipboard` behind a
-# browser-shaped promise, and nothing else.
-#
-# `default-features = false` like every other gpui dependency in this
-# workspace except vn-app's (which enables `stacker` for the whole binary).
+# Not a second clipboard: gpui already owns the OS clipboard for the native <input>, and two
+# owners of one `OpenClipboard` race.
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 
-# The item clipboard (src/win.rs): `write()` / `read()` of a ClipboardItem.
-# Both are already in the graph with these features (gpui_windows' clipboard
-# uses the same Win32 calls and `image`'s PNG codec), so nothing new compiles.
+# Item clipboard (src/win.rs); both crates are already in the graph with these features.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",

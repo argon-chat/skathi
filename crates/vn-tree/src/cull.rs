@@ -1,50 +1,15 @@
 //! Off-screen culling — `content-visibility: auto` for clipped flows.
 //!
-//! A scroll container keeps every row in the DOM, and gpui rebuilds, lays out,
-//! prepaints and paints every one of them on every drawn frame. The retained
-//! cache ([`crate::cache`]) answers that for frames where nothing moves, but a
-//! scroll moves every row: each one re-renders, and a 300-row list pays for all
-//! 300 to show the twenty in its viewport.
+//! gpui rebuilds and lays out every row of a scroll container each drawn frame, and a scroll moves
+//! every row so the retained cache cannot help. A subtree wholly outside every clip around it is
+//! lowered as an empty box of its last laid-out size (with the margin and alignment its parent
+//! reads), and its descendants' rectangles are carried forward so measurement still works.
 //!
-//! A subtree whose box lies wholly outside every clip around it — the window,
-//! and each ancestor whose `overflow` is not `visible` — paints nothing. Here it
-//! is lowered as an empty box of the size it last laid out to, carrying the
-//! margin and alignment its parent's layout reads, exactly like a cache
-//! boundary's wrapper. Its descendants' rectangles are carried forward,
-//! translated with it, so `getBoundingClientRect()`, observers and devtools
-//! still see where every node is.
-//!
-//! ## When the box may stand in for the subtree
-//!
-//! The pin is the cache's: the box is only trusted while nothing can have
-//! resized it — the subtree's `sub_rev`, the inherited context threaded down
-//! the build, and the parent's size are unchanged, and the box measured the
-//! same size on the two frames before it was first pinned.
-//!
-//! The parent's layout must not see through the box: a flex or grid parent
-//! (no margin collapsing), or a node that is itself a flex/grid container or
-//! clips its overflow (its children's margins cannot collapse through it).
-//! A block box in block flow is lowered normally.
-//!
-//! A subtree is refused when its content can be seen or heard outside the box:
-//! out-of-flow and deferred boxes, relative insets, a focused or captured node,
-//! a moving animation, live widgets (`<input>`, `<textarea>`, `<video>`,
-//! `<canvas>`, `<iframe>`), group anchors and pop-outs — and everything while a
-//! screen reader is attached, which reads off-screen content too.
-//!
-//! ## Where the clip is
-//!
-//! Rectangles are last frame's, and the build runs before this frame's layout,
-//! so each clip is predicted: a scroll container's children move by the offset
-//! its `ScrollHandle` moved since the build that last visited it, and that
-//! shift accumulates down nested containers. A box under a `transform` or a
-//! moving animation cannot be placed by layout rectangles alone, so no clip is
-//! known below one until the next clipping ancestor. A margin of overscan keeps
-//! the rows just outside the viewport real, so ordinary scrolling never shows
-//! a placeholder; a wrong guess costs one frame, after which the placeholder's
-//! own measured rectangle lowers the subtree again.
-//!
-//! `VN_NO_CULL=1` turns it off.
+//! The box stands in only while nothing can have resized it (the cache's pin rules), and is refused
+//! for content visible or audible outside it: out-of-flow boxes, focus, animation, live widgets,
+//! group anchors, pop-outs, or a screen reader. Rectangles are last frame's, so each clip is
+//! predicted from scroll offsets and a margin of overscan keeps rows just outside real; a wrong
+//! guess costs one frame. `VN_NO_CULL=1` turns it off.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -59,8 +24,8 @@ use crate::render::Inherited;
 use crate::tree::{Kind, Node, Tree};
 use crate::windows::{self, Rect, WinKey};
 
-/// Extra space around a clip, as a fraction of its larger side, inside which
-/// boxes are still lowered for real.
+/// Extra space around a clip, as a fraction of its larger side, inside which boxes are still
+/// lowered for real.
 const OVERSCAN_FRACTION: f32 = 0.5;
 /// The least overscan, in CSS pixels.
 const MIN_OVERSCAN: f32 = 256.0;
@@ -76,8 +41,8 @@ struct Entry {
     ids_rev: u64,
 }
 
-/// The clip a node's children are tested against, in this frame's window
-/// coordinates, and how far last frame's rectangles of those children moved.
+/// The clip a node's children are tested against, in this frame's window coordinates, and how far
+/// last frame's rectangles of those children moved.
 #[derive(Clone, Copy)]
 struct View {
     /// `[left, top, right, bottom]`; `None` when no clip can be predicted.
@@ -158,7 +123,6 @@ pub(crate) fn begin_frame(window: &Window, now: std::time::Instant) {
 }
 
 
-/// Drops state for nodes that no longer exist — `render::gc_node_state`.
 pub(crate) fn gc(live: &dyn Fn(u32) -> bool) {
     ENTRIES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     OFFSETS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
@@ -213,8 +177,7 @@ fn blocked(t: &Tree, id: u32) -> bool {
     out
 }
 
-/// The clip `parent`'s children are tested against. The walk stops at the
-/// build's root: a pop-out's DOM ancestors belong to another window.
+/// The clip `parent`'s children are tested against.
 fn view_of(t: &Tree, parent: u32, root: u32, win: WinKey) -> View {
     if let Some(view) = VIEWS.with(|v| v.borrow().get(&parent).copied()) {
         return view;
@@ -235,7 +198,6 @@ fn view_of(t: &Tree, parent: u32, root: u32, win: WinKey) -> View {
                 (clips(cs.base.overflow.x), clips(cs.base.overflow.y))
             });
             if clip_x || clip_y {
-                // Its own box, where its ancestors' scrolling moved it.
                 let own = windows::peek(win, |w| w.prev_bounds.get(&parent).copied()).flatten();
                 if let Some((x, y, w, h)) = own {
                     let (x, y) = (x + outer.shift.0, y + outer.shift.1);
@@ -266,8 +228,8 @@ fn view_of(t: &Tree, parent: u32, root: u32, win: WinKey) -> View {
     view
 }
 
-/// The culling hook, called by `build_node` before it lowers anything: `Some`
-/// is the placeholder the caller returns in place of the node.
+/// The culling hook, called by `build_node` before it lowers anything: `Some` is the placeholder
+/// the caller returns in place of the node.
 pub(crate) fn placeholder(
     t: &Tree,
     id: u32,
@@ -301,7 +263,6 @@ pub(crate) fn placeholder(
     if !outside {
         return None;
     }
-    // Off screen: is the box a faithful stand-in?
     let independent = matches!(cs.base.display, Some(gpui::Display::Flex | gpui::Display::Grid))
         || clips(cs.base.overflow.x)
         || clips(cs.base.overflow.y)
@@ -351,8 +312,8 @@ pub(crate) fn placeholder(
     Some(Placeholder { id, inner: crate::render::probe(id, boxed.into_any_element()) }.into_any_element())
 }
 
-/// The stand-in: its probe records the box's rectangle, then every node under
-/// it is carried forward by however far the box moved.
+/// The stand-in: its probe records the box's rectangle, then every node under it is carried forward
+/// by however far the box moved.
 struct Placeholder {
     id: u32,
     inner: AnyElement,

@@ -1,12 +1,3 @@
-// A fixture for packages/vn-test/specs/selection.spec.ts (m26 text selection,
-// docs/RUNTIME.md §5.17): text a mouse drag selects, across inline runs and
-// paragraphs; a paragraph that is `user-select: none`; a button and a field,
-// which start no selection of their own; a short scroll box a drag scrolls.
-//
-// `__VN_TEST_SEL__` holds what the spec reads back: the `selectionchange` /
-// `selectstart` counts, and the text each `copy` saw selected. The copy is
-// NOT cancelled, so Ctrl+C writes the system clipboard: the spec saves and
-// restores what was there.
 import { createApp, h } from "vue-native";
 
 const state = { changes: 0, starts: 0, copies: [] as string[] };

@@ -6,9 +6,8 @@
 #
 #     bash crates/vn-thorvg-sys/tools/vendor-thorvg.sh
 #
-# The tree it produces is PRISTINE upstream — no patches. That is a deliberate
-# property: `git diff` against a fresh run of this script is the audit, and a
-# version bump is "edit VERSION/SHA256, re-run, commit". See VENDOR.md.
+# The tree is pristine upstream, no patches: a version bump is "edit VERSION/SHA256, re-run,
+# commit". See VENDOR.md.
 set -euo pipefail
 
 VERSION="1.1.0"
@@ -59,17 +58,15 @@ copy_dir() {
 cp "${src}/LICENSE" "${dest}/LICENSE"
 mkdir -p "${dest}/inc" && cp "${src}/inc/thorvg.h" "${dest}/inc/thorvg.h"
 
-# Engine. `gpu_engine/` is deliberately absent: we only build the software
-# rasteriser, so the GL/WebGPU backends are dead weight and would drag in
-# system GL headers, breaking the no-system-deps guarantee.
+# Engine. `gpu_engine/` is absent: only the software rasteriser is built, and the GL/WebGPU
+# backends would need system GL headers.
 copy_dir src/common
 copy_dir src/renderer
 copy_dir src/renderer/cpu_engine
 copy_dir src/bindings/capi
 
-# Loaders. `raw` is what Picture::load(uint32_t*) uses and the C API always
-# references it; the rest match `rasterlottie`'s feature set so the two
-# backends are compared at equal capability.
+# Loaders. `raw` is what Picture::load(uint32_t*) uses and the C API always references; the rest
+# match `rasterlottie`'s feature set.
 copy_dir src/loaders/raw
 copy_dir src/loaders/lottie
 copy_dir -r src/loaders/lottie/rapidjson

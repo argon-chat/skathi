@@ -1,20 +1,9 @@
-// A fixture for packages/vn-test/specs/stacking.spec.ts: CSS stacking contexts
-// painted atomically.
-//
-// The Argon profile popover and the menu its ⋯ button opens are two portalled
-// `fixed z-50` overlays, the popover first. Inside the popover, `.card-bg`
-// (`z-index: 0`), `.hero-spacer` (1) and `.glass-zone` (2) each make a stacking
-// context. CSS paints the popover whole, layers included, before the menu; ours
-// painted the layers over the menu's items, and the glass zone took their
-// clicks. Beside it: a negative z-index on an in-flow box, and an `opacity`
-// context at z auto with a z-100 box inside it.
-//
-// Render functions and a `.css` import, as in fixtures/layout.
+// CSS paints the popover whole, layers included, before the menu; ours painted the layers over the
+// menu's items, and the glass zone took their clicks.
 import { createApp, defineComponent, h } from "vue-native";
 import "./stacking.css";
 
 const state = {
-  /** Every click, by the id of the box whose listener took it. */
   clicks: [] as string[],
 };
 (globalThis as { __VN_TEST_STACKING__?: unknown }).__VN_TEST_STACKING__ = state;

@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/broadcast-rope.spec.ts: Argon's broadcast connector, an inline <svg> with no viewBox laid over a channel list and drawn from measured row positions. See ../README.md.",
+  "$comment": "Argon's broadcast connector, an inline <svg> with no viewBox laid over a channel list and drawn from measured row positions.",
 
   "name": "vn-test-broadcast-rope",
 

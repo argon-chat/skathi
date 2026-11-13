@@ -2,14 +2,10 @@
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } from "vue";
 import { useSession } from "../stores/session";
 
-// --- pinia -----------------------------------------------------------------
-// The store is created on first use and lives in the app's effect scope, so
-// every page (and the shell header) reads the very same instance.
 const session = useSession();
 
 const name = ref("");
 const notes = ref("");
-// The two fields that carry text-assistance attributes (see the template).
 const term = ref("");
 const prose = ref("");
 const noteLines = computed(() => notes.value.split("\n").length);
@@ -20,13 +16,12 @@ const submit = () => {
   const v = name.value.trim();
   if (!v) return;
   submitted.value = [...submitted.value.slice(-2), v];
-  session.addNote(v); // …and into the SHARED store, read by every other tab
+  session.addNote(v);
   name.value = "";
 };
 const ellipsis = (s: string) => (s.length > 14 ? s.slice(0, 14) + "…" : s);
 const submittedText = computed(() => submitted.value.map(ellipsis).join(" · ") || "—");
 
-// preventDefault() on keydown cancels the widget's editing, as in a browser.
 const blocked = ref(0);
 const lastKey = ref("—");
 const guardDigits = (e: VnKeyboardEvent) => {
@@ -37,10 +32,6 @@ const guardDigits = (e: VnKeyboardEvent) => {
   }
 };
 
-// --- KeepAlive lifecycle ---------------------------------------------------
-// setup / mounted run ONCE; activated / deactivated run on every tab switch.
-// `visits` counts how often this page came back — proof the instance is the
-// same one, not a fresh mount.
 const activations = ref(0);
 console.log("[app] FormsPage setup ran");
 onMounted(() => console.log("[app] FormsPage mounted"));
@@ -66,9 +57,6 @@ onDeactivated(() => console.log("[app] FormsPage DEACTIVATED"));
       @blur="focused = 'nothing'"
     />
     <div class="hint">v-model echo: "{{ name }}" ({{ name.length }} chars)</div>
-    <!-- The SAME native editor with `multiline` on: Return inserts a newline
-         instead of submitting, the text soft-wraps, and `rows` is the
-         intrinsic height a CSS `height` can still override. -->
     <textarea
       class="field notes"
       v-model="notes"
@@ -82,15 +70,6 @@ onDeactivated(() => console.log("[app] FormsPage DEACTIVATED"));
       textarea v-model: {{ noteLines }} line(s), {{ notes.length }} chars — survives a tab switch
     </div>
 
-    <!-- ===== text-assistance attributes ================================== -->
-    <!-- `autocorrect` / `autocapitalize` / `spellcheck` / `enterkeyhint` are
-         plain attributes: they flow through Vue's patchProp to the host like
-         any other prop, and vn-elements maps them onto gpui's
-         TextInputConfiguration, which gpui re-queries every frame off the
-         FOCUSED field and pushes to the platform on change (zed#63264).
-         `type`/`inputmode` have no field of their own but contribute the hints
-         they carry — here `type="search"` is what makes the confirm key a
-         Search key without an `enterkeyhint` being written. -->
     <input
       class="field search"
       v-model="term"
@@ -127,7 +106,6 @@ onDeactivated(() => console.log("[app] FormsPage DEACTIVATED"));
       survives a tab switch
     </div>
 
-    <!-- ===== pinia: shared state edited here, read everywhere ============ -->
     <div class="store">
       <div class="store-title">pinia store "session" — shared across every tab</div>
       <div class="store-row">
@@ -189,7 +167,6 @@ onDeactivated(() => console.log("[app] FormsPage DEACTIVATED"));
   color: #a5f3a5;
 }
 
-/* ===== pinia block ===================================================== */
 .store {
   display: flex;
   flex-direction: column;

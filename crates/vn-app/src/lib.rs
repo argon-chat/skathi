@@ -1,33 +1,12 @@
-//! vue-native host shell, milestone 1: JavaScript (JSC via redjs) alive inside
-//! a Mica gpui window. The JS below drives the UI through two `host_fn!`s;
-//! the pump runs as a self-rescheduling `on_next_frame` callback — before the
-//! frame's draw, so a JS mutation lands in the same frame.
+//! vue-native host shell: JavaScript (JSC via redjs) inside a gpui window.
 //!
-//! ## Two boot modes, one shell
+//! Two boot modes share everything below the [`boot_mode`] alias, and each owns one file that
+//! supplies the JS: [`dev`] reads `packages/vue-native/dist` and polls `changes.json` for HMR;
+//! [`prod`] (`--features prod`) runs the VNPK payload stamped into the exe ([`payload`]).
+//! Both expose `boot(&JsRuntime)` and `poll_frame(frame_no: u32)`.
 //!
-//! Everything below the [`boot_mode`] alias is identical in both builds; only
-//! *where the JS comes from* differs, and each mode owns one file:
-//!
-//! - **dev** (default) — [`dev`]: reads `packages/vue-native/dist` off disk and
-//!   polls `changes.json` for HMR. Needs the `bun build.ts --watch` loop.
-//! - **prod** (`--features prod`) — [`prod`]: a BARE HOST. The app — the single
-//!   IIFE from `bun prod.ts`, its window config, its identity and its assets —
-//!   is the VNPK payload `vn build` stamps into a copy of this exe
-//!   ([`payload`], docs/PACKAGING.md), so the exe runs standalone with no dist/
-//!   folder, no watcher, and no Rust toolchain on the app author's side.
-//!
-//! Both expose exactly `boot(&JsRuntime)` and `poll_frame(frame_no: u32)`.
-//!
-//! ## Two ways to run, one engine
-//!
-//! This crate is a library with a two-line exe beside it (src/main.rs):
-//!
-//! - [`run_exe`] — the vue-native host exe. The process is the app: its
-//!   command line, its single instance, its end.
-//! - [`embed`] — another program runs the engine on a thread of its own and
-//!   talks to the app through `appHost` (docs/EMBEDDING.md).
-//!
-//! Both run [`run_app`]; only what surrounds it differs.
+//! Two ways to run, both through [`run_app`]: [`run_exe`] (the process is the app) and
+//! [`embed`] (another program runs the engine on a thread of its own).
 
 use std::cell::RefCell;
 
@@ -39,24 +18,16 @@ use gpui_platform::application;
 use vn_runtime::{JsRuntime, Phase, host_fn, with_app, with_published, with_published_app};
 use vn_runtime::runtime::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
 
-// The JS event loop while the window draws no frames (minimised, hidden).
 mod background;
-// The frame clock slows down while nothing happens (src/idle.rs).
 mod idle;
 #[cfg(feature = "prod")]
 mod bytecode;
 #[cfg(not(feature = "prod"))]
 mod dev;
-// The automation surface (docs/DEVTOOLS.md) and the inspector it feeds
-// (docs/DEVTOOLS-UI.md). `vn_devtools` is emitted by build.rs for
-// `not(prod) || feature devtools` — i.e. every dev build, plus a release that
-// asked for its own inspector by name.
+// `vn_devtools` is emitted by build.rs: every dev build, plus a release that asked for devtools.
 #[cfg(vn_devtools)]
 mod devtools;
-// Live Rust heap bytes for the devtools `mem` command; counts by default in a
-// dev build, not in a `prod` one, `VN_MEMSTATS=0/1` either way (src/heapcount.rs).
-// `pub` for the exe's `#[global_allocator]` (src/main.rs), and for an embedder
-// that wants the same row: it declares the allocator itself.
+// `pub` for the exe's `#[global_allocator]` and for embedders, which declare the allocator themselves.
 #[cfg(vn_devtools)]
 pub mod heapcount;
 /// Allocator an embedding executable can install to enable native allocation
@@ -65,98 +36,73 @@ pub mod heapcount;
 pub use heapcount::Counting as HostAllocator;
 #[cfg(not(vn_devtools))]
 pub use std::alloc::System as HostAllocator;
-// The HTTP client gpui loaders use: redjs's network stack, the one `fetch` uses.
 mod http_client;
 // The unit tests are the library's own binary, and some read the counts.
 #[cfg(all(vn_devtools, test))]
 #[global_allocator]
 static GLOBAL: heapcount::Counting = heapcount::Counting;
-mod dialogs; // the window a file dialog belongs to, and closing it safely
+mod dialogs;
 #[cfg(target_os = "windows")]
 #[doc(hidden)] // `preview` is examples/consent_prompt.rs's
-pub mod consent_window; // the permission prompt, a gpui window of its own (docs/PERMISSIONS.md §5.1)
+pub mod consent_window;
 #[cfg(target_os = "windows")]
-mod content_dialog; // the Windows 11 ContentDialog both of those host windows are drawn as
+mod content_dialog;
 #[doc(hidden)] // `preview` is examples/crash_dialog.rs's
-pub mod crash_window; // the fatal surface: a poisoned runtime's dialog, Restart / Close (I9)
+pub mod crash_window;
 pub mod js; // direct JavaScriptCore values and VM-thread dispatch for embedders
-pub mod embed; // vue-native as a library: another program runs it on a thread (docs/EMBEDDING.md)
+pub mod embed; // vue-native as a library: another program runs it on a thread
 pub mod tray; // native application tray for Rust embedders and direct JavaScript callbacks
 #[cfg(vn_devtools)]
-mod inspector; // the EMBEDDED inspector: F12, `--devtools` mode, the child registry
+mod inspector;
 #[cfg(all(vn_devtools, feature = "native-aot"))]
-mod native_aot; // explicitly selected, ABI-checked native inspector images
-mod json; // the dev transport, the devtools wire and vn.config.json share one codec
+mod native_aot;
+mod json;
 #[cfg(feature = "audio")]
-mod microphone; // getUserMedia's capture gate (VN_MEDIA_CAPTURE) and device notifications
-mod mapped_file; // read-only disk payloads, borrowed without a full heap copy
-mod owner; // VN_OWNER_PID: a test host dies with the runner that launched it
-mod payload; // the app stamped into a packaged exe (VNPK), and `--vn-host-info`
-mod occlusion; // a window other windows cover is a hidden page, as in Chromium
+mod microphone;
+mod mapped_file;
+mod owner;
+mod payload;
+mod occlusion;
 mod perf;
-mod reclaim; // the JS engine's garbage goes back to the OS while nobody looks
-mod popout; // SPIKE: a Vue subtree painted by a second OS window (docs/MULTIWINDOW.md)
-mod popout_win; // a pop-out shown and hidden, owned, covering a monitor (MULTIWINDOW.md §7.9)
+mod reclaim;
+mod popout;
+mod popout_win;
 #[cfg(feature = "prod")]
 mod prod;
 #[cfg(all(feature = "webgpu", target_os = "windows"))]
-mod shared_gpu; // renderer/WebGPU generation interoperability
-mod quiet; // VN_WINDOW_FOCUS=never: test hosts open behind and never take the foreground
-mod reload; // `location.reload()`: the restart path, on request
-mod shutdown; // a close hides the windows at once; the teardown runs under a deadline
-mod slot; // which dist slot this process is — the one thing dev, prod and devtools all ask
-mod window; // windowing & chrome (docs/WINDOWING.md)
+mod shared_gpu;
+mod quiet;
+mod reload;
+mod shutdown;
+mod slot;
+mod window;
 #[cfg(target_os = "linux")]
-mod linux_chrome; // the caption and resize edges a Linux window draws itself
+mod linux_chrome;
 
 #[cfg(not(feature = "prod"))]
 use dev as boot_mode;
 #[cfg(feature = "prod")]
 use prod as boot_mode;
 
-/// Vue's esm-bundler build reads these three flags off globalThis (bun refuses
-/// to inline them — must run BEFORE the app bundle, since ESM import hoisting
-/// would put the bundle's Vue code first otherwise). Identical in both modes:
-/// the dev/prod split is in the *bundle's* `define` block (build.ts vs
-/// prod.ts), not here.
+/// Vue's esm-bundler build reads these three flags off globalThis (bun refuses to inline them).
+/// Must run BEFORE the app bundle, since ESM import hoisting would put the bundle's Vue code first.
 ///
-/// Both preludes are AUTHORED IN TYPESCRIPT — `prelude.ts` and
-/// `window.prelude.ts` beside this file — and the `.js` these two consts read
-/// is a checked-in artifact of the generator named in its header. Checked in
-/// because `cargo build` must not need a JS toolchain: an `include_str!` of a
-/// missing file is a compile error in a Rust crate, which is the worst possible
-/// place to discover bun is not installed. `packages/vue-native/test
-/// /prelude-generated.test.ts` is what keeps the two halves in step.
+/// Generated from `prelude.ts` and `window.prelude.ts` beside this file (`bun run preludes`) and
+/// checked in so `cargo build` needs no JS toolchain.
 const PRELUDE_JS: &str = include_str!("prelude.js");
 
-/// The windowing surface's JS half (docs/WINDOWING.md tiers 1 & 2) — the big
-/// one, ~560 lines of real API surface rather than a handful of flags.
-/// Evaluated right after [`PRELUDE_JS`] and before the app bundle, so
-/// `document.title`, `screen`, `matchMedia` and
-/// `navigator.windowControlsOverlay` are already their real selves when the
-/// first component's `<script setup>` runs.
+/// The windowing surface's JS half, evaluated right after [`PRELUDE_JS`] and before the app bundle,
+/// so `document.title`, `screen`, `matchMedia` and `navigator.windowControlsOverlay` are real by
+/// the first component's `<script setup>`.
 const WINDOW_PRELUDE_JS: &str = include_str!("window.prelude.js");
 
 thread_local! {
     static FRAME_NO: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    /// Has the first JS wave already been let through? See [`first_wave_waits`].
     static FIRST_WAVE_RELEASED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// **The first JS wave waits for the first draw.**
-///
-/// `pump_frame` runs before the draw of the frame it belongs to, which is the
-/// browser's own order: a `requestAnimationFrame` callback at frame N reads the
-/// geometry frame N-1 laid out. The exception is the FIRST one. At that point
-/// the app has mounted (boot ran the bundle, Vue built the whole tree) and
-/// nothing has been laid out at all — so every `rAF`, every `setTimeout(0)` and
-/// every timer scheduled from `onMounted` measured a tree with no rectangles in
-/// it and got `0` where a browser, which lays out before it fires the first
-/// animation frame, gets the real number.
-///
-/// So the first wave — and only the first — is deferred by exactly one frame.
-/// `window.refresh()` guarantees that frame happens; from the next one on the
-/// gate is open forever, so no later wave can ever be delayed by this.
+/// The first JS wave waits one frame for the first draw, so rAF and `onMounted` timers measure a
+/// laid-out tree instead of reading 0. Later waves are never delayed by this.
 fn first_wave_waits(window: &mut Window) -> bool {
     if FIRST_WAVE_RELEASED.with(|c| c.get()) {
         return false;
@@ -166,43 +112,18 @@ fn first_wave_waits(window: &mut Window) -> bool {
     true
 }
 
-// ---------------------------------------------------------------------------
-// `VN_LOG` — gpui's own log records, on demand
-// ---------------------------------------------------------------------------
-//
-// gpui reports things only it knows through the `log` facade: which DXGI
-// adapter the renderer chose, the Direct3D feature level, device-lost
-// recovery, DirectWrite fallbacks. Nothing in this process had ever installed a
-// sink, so all of it was dropped on the floor — which is how "gpui might be
-// rendering on a virtual display adapter" stayed a suspicion instead of a fact
-// (research/reports/m11/video.md §5, R1).
-//
-// Off unless `VN_LOG` is set, because these are not app-developer messages: the
-// app-facing channels are the compat advisories and the devtools log ring.
-// `VN_LOG=info` (or `error`/`warn`/`debug`/`trace`) writes them to stderr.
-//
-// `VN_LOG` takes either a bare level (`VN_LOG=debug`) or `RUST_LOG`-shaped
-// per-target directives (`VN_LOG=off,gpui=debug,vn_tree=trace`). The second
-// form is not a convenience: at a bare `debug` this process emits thousands of
-// `parcel_selectors::matching` lines per restyle, so the one setting that makes
-// a chatty subsystem readable also makes the host slow enough to move the
-// timing of whatever is being debugged. A directive list keeps the cost where
-// the interest is.
-//
-// The logger is installed even when `VN_LOG` is unset (it then passes nothing),
-// so the process never has two candidate sinks depending on the environment.
-// The message is teed into `vn_tree::log`'s ring as well as stderr, so
-// `ctl.ts logs` sees it too. That ring is thread-local and a worker thread can
-// log too, hence [`OFF_THREAD`] and [`drain_log_tee`].
+// `VN_LOG` turns on gpui's own log records (adapter choice, device loss, font fallback). It takes a
+// bare level or `RUST_LOG`-style per-target directives (`VN_LOG=off,gpui=debug,vn_tree=trace`): a
+// bare `debug` is chatty enough to disturb the timing being debugged.
+// Records are teed into `vn_tree::log`'s ring, which is thread-local: hence [`OFF_THREAD`] and
+// [`drain_log_tee`].
 struct StderrLogger {
-    /// `(target prefix, level)`, longest prefix first, so `gpui::window` beats
-    /// `gpui`.
+    /// Longest prefix first, so `gpui::window` beats `gpui`.
     directives: Vec<(String, log::LevelFilter)>,
     default: log::LevelFilter,
 }
 
-/// `::`-boundary-aware prefix match: `gpui_windows` must not match a `gpui`
-/// directive, but `gpui::window` must.
+/// `::`-boundary-aware prefix match: `gpui_windows` must not match a `gpui` directive.
 fn target_matches(target: &str, prefix: &str) -> bool {
     target.len() >= prefix.len()
         && target.starts_with(prefix)
@@ -213,7 +134,7 @@ impl StderrLogger {
     fn level_for(&self, target: &str) -> log::LevelFilter {
         for (prefix, l) in &self.directives {
             if target_matches(target, prefix) {
-                return *l; // longest prefix first, so the first hit is the best one
+                return *l;
             }
         }
         self.default
@@ -229,26 +150,19 @@ impl log::Log for StderrLogger {
             return;
         }
         let line = format!("[{} {}] {}", record.level(), record.target(), record.args());
-        // stderr first: it is unbuffered, so a message logged on the way to
-        // `abort()` is already out of the process before the ring is touched.
+        // stderr first: unbuffered, so a message logged on the way to `abort()` still gets out.
         eprintln!("{line}");
         tee(record.level(), line);
     }
     fn flush(&self) {}
 }
 
-// ---------------------------------------------------------------------------
-// teeing into the devtools log ring, from any thread
-// ---------------------------------------------------------------------------
-
-/// The thread `install_logger` ran on — the only one whose `vn_tree::log` ring
-/// `ctl.ts logs` reads.
+/// The thread whose `vn_tree::log` ring `ctl.ts logs` reads.
 static MAIN_THREAD: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
 /// Records made on a worker thread, waiting for a frame.
 static OFF_THREAD: std::sync::Mutex<Vec<(&'static str, String)>> =
     std::sync::Mutex::new(Vec::new());
-/// A wedged subsystem logging in a loop must not grow the process; the drain
-/// runs every frame, so this is never reached in practice.
+/// Bounds a wedged subsystem logging in a loop.
 const OFF_THREAD_CAP: usize = 512;
 
 fn kind_of(level: log::Level) -> &'static str {
@@ -276,9 +190,8 @@ fn tee(level: log::Level, line: String) {
     }
 }
 
-/// Moves whatever the worker threads logged into the main thread's ring.
-/// Called once per frame; `try_lock` because a frame must never block on a
-/// logging thread.
+/// Moves worker-thread records into the main thread's ring, once per frame; `try_lock` so a frame
+/// never blocks on a logging thread.
 fn drain_log_tee() {
     if !vn_tree::log::is_enabled() {
         return;
@@ -303,8 +216,7 @@ fn parse_level(word: &str) -> Option<log::LevelFilter> {
 
 fn install_logger() {
     let _ = MAIN_THREAD.set(std::thread::current().id());
-    // NOT `else { return }`: an unset `VN_LOG` still installs the logger, it
-    // just passes nothing.
+    // An unset `VN_LOG` still installs the logger; it passes nothing.
     let spec = std::env::var("VN_LOG").unwrap_or_default();
     let mut default = log::LevelFilter::Off;
     let mut directives: Vec<(String, log::LevelFilter)> = Vec::new();
@@ -328,15 +240,10 @@ fn install_logger() {
             },
         }
     }
-    // `VN_LOG=gpui=debug` alone means "that target, nothing else" rather than
-    // "that target plus everything at info". An UNSET `VN_LOG` is a third case
-    // and must stay `Off`, so this only fires when the variable was actually
-    // present.
+    // `VN_LOG=gpui=debug` alone means that target only; an unset `VN_LOG` must stay Off.
     if !saw_bare && directives.is_empty() && !spec.is_empty() {
         default = log::LevelFilter::Info;
     }
-    // Longest prefix wins, so a specific directive is never shadowed by a
-    // shorter one that happens to be listed first.
     directives.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
     let max = directives
         .iter()
@@ -347,33 +254,17 @@ fn install_logger() {
     let logger: &'static StderrLogger =
         Box::leak(Box::new(StderrLogger { directives, default }));
     if log::set_logger(logger).is_ok() {
-        // The facade's global gate must be the *loosest* of the directives, or
-        // records are dropped before `enabled` ever sees their target.
+        // Must be the loosest directive, or records are dropped before `enabled` sees their target.
         log::set_max_level(max);
     }
 }
 
-/// The build model, pinned from inside whatever build is running.
-///
-/// `build.rs` emits `cfg(vn_devtools)` for every build except one that asked
-/// for `no-devtools`, and this holds for EVERY feature combination — which is
-/// what makes it the cheap proof that `--features prod` now carries the
-/// devtools. Run it under the combination you care about:
-///
-/// ```sh
-/// cargo test -p vn-app                                   # dev host: has them
-/// cargo test -p vn-app --features prod                   # shipped app: has them
-/// cargo test -p vn-app --features prod,no-devtools       # the opt-out: none
-/// ```
-///
-/// The inversion itself is docs/ARCHITECTURE.md §11 decision 12; the measured
-/// binaries are research/reports/m22/devtools-release.md.
+/// Pins the build model: `build.rs` emits `cfg(vn_devtools)` unless `no-devtools` was asked, for
+/// every feature combination.
 #[cfg(test)]
 #[test]
 fn devtools_are_in_every_build_that_did_not_opt_out() {
     assert_eq!(cfg!(vn_devtools), !cfg!(feature = "no-devtools"));
-    // …and `prod` no longer has anything to do with it. This line is the one
-    // that would have failed before m22.
     if cfg!(feature = "prod") && !cfg!(feature = "no-devtools") {
         assert!(cfg!(vn_devtools), "a shipped build must carry its own devtools");
     }
@@ -417,53 +308,29 @@ mod logger_tests {
 struct Shell {
     status: String,
     log: Vec<String>,
-    /// The fallback titlebar's text: the window's own title (`vn.config.json`
-    /// `window.title`), so a packaged app that never paints its own chrome
-    /// does not show the engine's name in its titlebar.
+    /// The fallback titlebar's text (`window.title`).
     title: String,
 }
 
 thread_local! {
     static SHELL: RefCell<Option<WeakEntity<Shell>>> = const { RefCell::new(None) };
-    /// The primary window itself, as opposed to its root view. Needed because
-    /// the multi-window repaint fan-out runs from inside an input listener,
-    /// where the root view's entity may already be borrowed — see
-    /// [`refresh_main`].
+    /// The primary window itself, not its root view: the multi-window repaint fan-out runs inside
+    /// input listeners, where the root view may already be borrowed.
     static MAIN_WINDOW: std::cell::Cell<Option<gpui::AnyWindowHandle>> =
         const { std::cell::Cell::new(None) };
 }
 
-/// **The forced synchronous layout** a DOM measurement asks for.
+/// The forced synchronous layout a DOM measurement asks for (`vn_tree::set_sync_layout`).
 ///
-/// Installed into `vn_tree` at startup (`set_sync_layout`), and called from
-/// `dom::bounds` when JS measures a node that the host has never painted while
-/// the tree still holds changes — the `onMounted` / `nextTick` case, where a
-/// browser lays out on read and this engine used to answer `0`. See
-/// `vn_tree::sync_layout` for the whole argument.
+/// Draws the primary window once. `with_app` is `None` outside a published phase, including inside
+/// a real frame, so this never runs inside a draw.
 ///
-/// One draw of the primary window, which is what gpui's own effect flush does
-/// for a dirty window (`App::flush_effects` → `window.draw(cx).clear(cx)`).
-/// `with_app` is `None` outside a published phase — including inside a real
-/// frame, where nothing is published — so this can never run inside a draw;
-/// `vn_tree` guards the re-entrant case on its side as well.
+/// When the window is not leased (boot, first mount) it goes through its handle. Every later JS
+/// wave runs leased by its own update (frame pump, media tick), where `handle.update` fails, so
+/// the draw goes through the window that wave published.
 ///
-/// Two ways to reach the window (m26 client sweep #8):
-///
-/// * **Not leased** (boot, module evaluation, the first mount): through its
-///   handle, as before.
-/// * **Leased by its own update**, which is every later JS wave: the frame
-///   pump (`pump_frame`, an `on_next_frame` callback: timers, fetch and
-///   WebSocket completions, rAF, devtools) and the media tick. `handle.update`
-///   fails there, and the read used to answer 0 — the Argon chat list measured
-///   its width in an `onMounted` after a fetch, stored `0px`, and every bubble
-///   collapsed. The window that wave publishes IS the leased one, so the draw
-///   goes through it. In the pump this is a draw before gpui's own draw of the
-///   frame, which is what `flush_effects` would do for a dirty window anyway;
-///   the second draw that frame finds the tree it just laid out.
-/// * **Never inside a gpui input listener** (`vn_tree::in_input_dispatch`):
-///   gpui has the rendered frame's mouse listeners taken out for the dispatch
-///   and walks its dispatch tree for keys, and a draw would swap the frame
-///   under both. The read stays stale there, and `__vn_bounds` says so.
+/// Never inside a gpui input listener (`vn_tree::in_input_dispatch`): gpui has the frame's
+/// listeners taken out, and a draw would swap the frame under them. The read stays stale there.
 fn sync_layout() {
     let Some(handle) = MAIN_WINDOW.with(|w| w.get()) else { return };
     // Drawn as a frame draws: with nothing published (`bridge::with_draw`).
@@ -480,8 +347,7 @@ fn sync_layout() {
 }
 
 fn commit_boot_tree(runtime: &JsRuntime) {
-    // Vue's mount/load handlers may queue their final DOM writes in a
-    // microtask. This checkpoint waits for no network, font, timer or rAF.
+    // Vue's mount/load handlers may queue their last DOM writes in a microtask.
     runtime.ctx().drain_microtasks();
     vn_tree::flush_changes();
 }
@@ -502,8 +368,7 @@ mod startup_tests {
             ).expect("queue the mount/load microtask through the native DOM bridge");
             super::commit_boot_tree(runtime);
             let node = runtime.ctx().global_get("__startupNode").unwrap().as_number().unwrap() as u32;
-            // The inspector API reads existing computed state without forcing
-            // the cascade we are checking. DOM getComputedStyle would flush it.
+            // Reads existing computed state without forcing the cascade (getComputedStyle would flush it).
             let styles = vn_tree::devtools::computed_styles(node).expect("boot writes must already be cascaded");
             let base = &styles.iter().find(|(name, _)| *name == "base").unwrap().1;
             assert!(base.contains("0.75"), "the first draw must not await pump_frame to cascade boot opacity: {base}");
@@ -511,16 +376,11 @@ mod startup_tests {
     }
 }
 
-/// How long a hidden start may go without a tray icon before the window is
-/// shown anyway. Generous: the app's own boot (bundle, first request) puts
-/// the icon up, and a slow disk must not flash the window.
+/// How long a hidden start may go without a tray icon before the window is shown anyway.
 const HIDDEN_START_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// The safety net under a hidden start (`Builder::visible(false)`, an
-/// autostart): the only ways back to such a window are a tray icon and a
-/// second launch. If the app has put up no tray icon (Rust or `appTray`) and
-/// nothing has shown the window by [`HIDDEN_START_GRACE`], it is shown, so a
-/// tray that failed or was never written cannot strand a running app.
+/// Safety net for a hidden start: if no tray icon is up and nothing has shown the window by
+/// [`HIDDEN_START_GRACE`], show it so a failed tray cannot strand the app.
 fn reveal_if_unreachable(cx: &mut App) {
     cx.spawn(async move |cx| {
         cx.background_executor().timer(HIDDEN_START_GRACE).await;
@@ -557,7 +417,6 @@ fn reveal_startup_window(cx: &mut App, activate: bool) {
             return;
         };
         // WM_PAINT takes the App itself, so it must run outside any update.
-        // This presents the styled frame while the native window is hidden.
         popout_win::paint_now(hwnd);
         if shutdown::is_closing() || vn_runtime::bridge::poisoned() {
             window::cancel_startup_reveal();
@@ -585,13 +444,6 @@ fn reveal_startup_window(cx: &mut App, activate: bool) {
     }).detach();
 }
 
-/// Marks the primary window dirty *without* borrowing its root view.
-///
-/// `notify_shell` goes through `Entity<Shell>::update`, which is correct from
-/// the pump but re-enters and panics when called from inside a `cx.listener`
-/// on that same view. Addressing the window borrows nothing, and
-/// `update_window` on a window that is mid-update simply fails — which is the
-/// right answer, since that window is being refreshed by the listener anyway.
 /// The primary window's gpui id — what the devtools `windows` command calls
 /// `main`, and what `--window` names when F12 was pressed there.
 #[cfg(vn_devtools)]
@@ -599,22 +451,14 @@ pub(crate) fn main_window_id() -> Option<u64> {
     MAIN_WINDOW.with(|w| w.get()).map(|h| h.window_id().as_u64())
 }
 
-/// Repaint the primary window.
-///
-/// `notify_shell`, not `Window::refresh` — the two schedule the same redraw,
-/// but `refresh` also raises gpui's `refreshing` flag, and a frame drawn with
-/// that flag up ignores every `Entity::cached` recording in the window. Marking
-/// the hosting view dirty is what the pump does for a JS wave, and it is what
-/// leaves the retained-render cache (`vn_tree::cache`) able to replay the
-/// subtrees the wave did not touch.
+/// Repaint the primary window via `notify_shell`, not `Window::refresh`: `refresh` raises gpui's
+/// `refreshing` flag, which makes the frame ignore every `Entity::cached` recording and defeats the
+/// retained-render cache.
 pub(crate) fn refresh_main(cx: &mut App) {
     notify_shell(cx);
 }
 
-/// Repaint the primary window. The popped-out windows are notified next to it
-/// wherever the tree moved (`popout::notify_all`), but a pop-out OPENING or
-/// CLOSING moves no tree state at all — it only changes which window owns a
-/// subtree — so those two call this directly.
+/// Repaint the primary window. A pop-out opening or closing moves no tree state, so those call this directly.
 pub(crate) fn notify_shell(cx: &mut App) {
     SHELL.with(|s| {
         if let Some(shell) = s.borrow().as_ref().and_then(|w| w.upgrade()) {
@@ -636,7 +480,6 @@ fn update_shell(g: *mut core::ffi::c_void, f: impl FnOnce(&mut Shell)) -> u64 {
     });
     match ran {
         Some(()) => vn_runtime::redjs::api::Value::undefined().0,
-        // Wrong phase: this host fn is only legal while gpui is published.
         None => vn_runtime::bridge::throw_error(g, 1, "__vn_*: called outside a published phase"),
     }
 }
@@ -644,15 +487,12 @@ fn update_shell(g: *mut core::ffi::c_void, f: impl FnOnce(&mut Shell)) -> u64 {
 host_fn!(fn vn_set_status(g, args) {
     let text = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }
         .unwrap_or_default();
-    // A status line is the CURRENT value, not a stream — devtools keeps it in
-    // its own slot so a 2 Hz status ticker cannot evict the log ring.
+    // The CURRENT value, not a stream: a 2 Hz status ticker must not evict the log ring.
     vn_tree::log::set_status(text.clone());
     update_shell(g, move |shell| shell.status = text)
 });
 
-// `__vn_perf_mark("<label>")` — labels the frame-time window the profiler is
-// accumulating (see `perf`). A no-op unless `VN_PERF` is set, so a perf harness
-// app can call it unconditionally.
+// `__vn_perf_mark(label)` labels the profiler's frame-time window; a no-op unless `VN_PERF` is set.
 host_fn!(fn vn_perf_mark(g, args) {
     let text = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }
         .unwrap_or_default();
@@ -672,113 +512,71 @@ host_fn!(fn vn_log(g, args) {
     })
 });
 
-/// The per-frame JS pump: runs before this frame's draw (`on_next_frame`
-/// callbacks drain first), so `cx.notify()` from a host fn is picked up by the
-/// very same frame.
+/// The per-frame JS pump: runs before the frame's draw, so `cx.notify()` from a host fn lands in the same frame.
 fn pump_frame(window: &mut Window, cx: &mut App) {
     #[cfg(vn_devtools)]
     let _allocation_scope = crate::heapcount::recording::scope("runtime", "frame/pump");
-    // On another virtual desktop: a hidden page, as when minimised. gpui keeps
-    // asking a cloaked window to paint every vsync, so the pump declines — no
-    // JS wave, no requestAnimationFrame — and, by not stamping the frame clock,
-    // hands the window to the background tick (timers, sockets, devtools every
-    // 100 ms; src/background.rs), whose funnel reports `document.hidden`. Not
-    // before the first frame: that one owns the boot wave. Nor does it need
-    // every refresh to notice it is back (src/idle.rs). A window other windows
-    // cover is the same hidden page (src/occlusion.rs).
+    // A cloaked or occluded window is a hidden page: decline the pump (no JS wave, no rAF) and, by
+    // not stamping the frame clock, hand the window to the background tick. Not before the first
+    // frame, which owns the boot wave.
     if background::pumped_once() && (window::cloaked() || window::occluded()) {
         idle::rearm_paced(window, pump_frame, idle::CLOAKED_INTERVAL);
         return;
     }
-    // One `Instant` read per frame when VN_PERF is on, an atomic load when it
-    // is off. `on_next_frame` re-arms every frame, so this IS the frame clock.
+    // `on_next_frame` re-arms every frame, so this is the frame clock.
     perf::frame();
-    // The background tick stands down while frames arrive (src/background.rs).
     background::note_frame();
-    // Before the poison gate: what a worker thread logged is exactly
-    // what an agent wants to read when the JS side has already given up.
+    // Before the poison gate: a worker's log is what an agent wants once JS has given up.
     drain_log_tee();
     if vn_runtime::bridge::poisoned() {
-        // I9: no JS after a caught native panic. The pump is not re-armed;
-        // this one call, the first frame after the panic, puts up the fatal
-        // surface the app's own (JS) error screen cannot be: a dialog that
-        // restarts or closes the app (src/crash_window.rs).
+        // No JS after a caught native panic: put up the fatal dialog once and do not re-arm.
         crash_window::on_poisoned(cx);
         return;
     }
-    // One frame, once, so the first wave measures a tree that has been laid out.
     if first_wave_waits(window) {
         idle::rearm_unpaced(window, pump_frame);
         return;
     }
-    // The frame's ONE coalesced mousemove (browsers align move events to the
-    // frame clock; see PendingMouseMove in vn-tree). Dispatched before the
-    // pump block so whatever the handler schedules drains this same frame.
+    // The frame's one coalesced mousemove, before the pump so what its handler schedules drains this frame.
     vn_tree::flush_pending_mouse_move(window, cx);
-    // An inspector whose app has gone closes itself. OUTSIDE the publication
-    // below: `cx` is borrowed by it, and a quit has nothing to do with JS.
+    // An inspector whose app has gone closes itself; outside the publication below, which borrows `cx`.
     #[cfg(vn_devtools)]
     inspector::poll_frame(cx);
     js_wave(window, cx, Wave::Frame);
-    // The `@media` environment (viewport, colour scheme, reduced motion, DPI
-    // scale, chrome mode) is published inside `window::pump` above, next to the
-    // snapshot the same numbers come from — one source, so JS and CSS can never
-    // disagree about the viewport.
-    //
-    // The fallback titlebar retires here rather than in `render`: this runs
-    // after the frame that painted, so "did the app declare a drag region" has
-    // an answer (docs/WINDOWING.md §4.2 mode 2).
+    // After the painted frame, so "did the app declare a drag region" has an answer.
     window::note_painted_frame();
     after_wave(window, cx);
-    // A devtools command is waiting or parked: answer it at the display rate.
     #[cfg(vn_devtools)]
     if devtools::busy() {
         idle::note_moved();
     }
-    // A test host's windows are never active and count as focused (src/quiet.rs).
     idle::rearm(window, pump_frame, window::app_focused(cx) || quiet::never_focus());
-    // Closes the `pump` bucket: everything after this is gpui's — its decision
-    // to draw, the draw itself, the present, and the wait for the next vsync.
+    // Closes the `pump` bucket; what follows is gpui's.
     perf::pump_done();
-    // ResizeObserver and IntersectionObserver, where a browser runs them:
-    // after this frame's layout and before its paint. When the frame is going
-    // to draw, this draws it (the frame's own draw, moved ahead of gpui's,
-    // which then only presents it), delivers, and lays out again if the
-    // callbacks changed anything (crates/vn-tree/src/observe.rs). After
-    // `pump_done`, so that draw stays in gpui's bucket of the frame trace.
+    // ResizeObserver/IntersectionObserver run after layout and before paint: when the frame will
+    // draw, this draws it ahead of gpui's (which then only presents). After `pump_done` so that
+    // draw stays in gpui's bucket of the frame trace.
     vn_tree::update_layout_observers(window, cx);
-    // The wave and the step may have been long; the background tick measures
-    // the stall from its end, so a slow frame is not mistaken for a parked one.
+    // The background tick measures the stall from here, so a slow frame is not mistaken for a parked one.
     background::note_frame();
 }
 
 /// Which clock drives a JS wave.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Wave {
-    /// The window's own frame ([`pump_frame`]): everything, the animation
-    /// frames included.
+    /// The window's own frame; includes animation frames.
     Frame,
-    /// The background tick, while the window draws no frames (minimised,
-    /// hidden): timers, I/O, the host queues and microtasks, but no
-    /// `requestAnimationFrame`, as in a browser's hidden page
-    /// (src/background.rs).
+    /// The background tick while the window draws no frames: no `requestAnimationFrame`, as in a
+    /// hidden page.
     Background,
 }
 
-/// One JS wave inside ONE `Phase::Commit` publication: the reload, the window
-/// funnel, the redjs scheduler, then every host queue that settles promises.
-/// Shared by the frame and the background tick, so the two can never drift
-/// apart in what they deliver.
+/// One JS wave inside one `Phase::Commit` publication, shared by the frame and the background tick.
 pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
-    // For the collection while nobody looks (src/reclaim.rs). A test host's
-    // windows are never active and count as focused (src/quiet.rs).
     let focused = window::app_focused(cx) || quiet::never_focus();
     with_published(window, cx, Phase::Commit, || {
-        // Dev loop: poll dist/changes.json and apply HMR BEFORE the pump, so
-        // everything Vue schedules while patching (its post-flush queue, the
-        // reload path's queueJob) drains in this frame. In prod this is an
-        // empty inline fn. Frames only: it counts frames, and a hot reload of
-        // a minimised window can wait for it to be shown.
+        // Poll dist/changes.json and apply HMR BEFORE the pump, so what Vue schedules while patching
+        // drains this frame. Frames only: it counts frames.
         if wave == Wave::Frame {
             let n = FRAME_NO.with(|f| {
                 let n = f.get().wrapping_add(1);
@@ -787,24 +585,14 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
             });
             boot_mode::poll_frame(n);
         }
-        // `location.reload()` asked during the last frame: unload, tear down
-        // and re-run the app now, before the pump, so the new app's first
-        // wave drains in this frame (src/reload.rs).
+        // `location.reload()` asked last frame: tear down and re-run now so the new app's first wave drains this frame.
         reload::pump();
-        // The window-state funnel (docs/WINDOWING.md §5.3): ONE snapshot, then
-        // resize → visibility → the JS observer, in that order, all inside the
-        // same JS wave the pump below runs in. Before `rt.pump` so a `resize`
-        // handler's DOM mutations drain in this frame, and so
-        // `fullscreenchange` fires after the viewport has finished resizing —
-        // which the Fullscreen spec requires.
+        // One window-state snapshot, then resize, visibility, the JS observer, before `rt.pump` so
+        // `resize` handlers' DOM mutations drain this frame and `fullscreenchange` follows the resize.
         vn_runtime::with_commit(|window, cx| window::pump(window, cx));
-        // The pump's delivery budget (IndexedDB results landing mid-pump) is a
-        // quarter of THIS display's frame, from the snapshot just taken — so a
-        // 144 Hz window does not give away 58% of every frame for the latency
-        // a 60 Hz one gets at 25% (vn_runtime::runtime::delivery_budget_us).
+        // IndexedDB results landing mid-pump get a quarter of THIS display's frame.
         vn_runtime::runtime::set_frame_budget_ms(window::frame_budget_ms());
-        // No animation frames (nor the idle callbacks redjs runs after them)
-        // on the background tick: a hidden page's rAF does not run.
+        // No rAF on the background tick: a hidden page's does not run.
         let flags = match wave {
             Wave::Frame => PUMP_TIMERS | PUMP_RAF | PUMP_MICROTASKS,
             Wave::Background => PUMP_TIMERS | PUMP_MICROTASKS,
@@ -834,80 +622,45 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
             // After the wave, so what it just dropped is garbage by now.
             reclaim::after_wave(rt, focused, wave == Wave::Background || window::page_hidden());
         });
-        // One queued devtools command per frame, in the SAME publication the
-        // pump just used: a command can therefore never observe a half-applied
-        // patch, and anything it schedules drains with the next frame's wave.
+        // One queued devtools command per frame, in the same publication, so it never sees a half-applied patch.
         #[cfg(vn_devtools)]
         {
             devtools::pump();
         }
-        // The embedder's frame hooks (`HostContext::on_frame`), in this SAME
-        // publication: what a native extension delivers to JS can never
-        // observe a half-applied patch, and whatever its JS handler schedules
-        // drains in this frame's wave. `on_next_frame` re-arms
-        // unconditionally, so a queued event is at most ONE frame late.
+        // The embedder's frame hooks (`HostContext::on_frame`), same publication.
         js::frame();
-        // Settled `appPermissions.request()` promises, same publication, same
-        // reasoning. The `change` half is not here: `PermissionStatus` events
-        // are dispatched from inside `rt.pump()` above, by redjs, because that
-        // is where the status objects live.
+        // Settled `appPermissions.request()` promises; `change` events are dispatched by redjs inside `rt.pump()`.
         vn_permissions::pump();
-        // Settled `appShell.*` promises and unsolicited desktop events (a
-        // second instance's `launch`), same publication, same reasoning: the
-        // `.then()` and the Vue patch it triggers land in this frame.
+        // Settled `appShell.*` promises and unsolicited desktop events.
         vn_desktop::pump();
-        // A close the embedder asked for (src/embed.rs). Its calls and events
-        // are delivered inside `rt.pump` above, as a redjs pump source.
+        // A close the embedder asked for.
         embed::pump();
-        // At most ONE localStorage file write per frame, whatever the app did
-        // to the area during this wave. Inside the publication like everything
-        // else here, though nothing in it touches gpui — it is here because the
-        // frame clock is the coalescing clock (docs/STORAGE.md §6).
+        // At most one localStorage file write per frame: the frame clock is the coalescing clock.
         #[cfg(feature = "storages")]
         vn_storage::pump();
     });
 }
 
-/// What follows a JS wave, on both clocks: the media tick, the tree flush and
-/// the repaint request, and the devtools push. On the background tick the
-/// repaint request only marks the window dirty; it is drawn once it is shown.
+/// What follows a JS wave on both clocks: media tick, tree flush, repaint request, devtools push.
+/// On the background tick the repaint request only marks the window dirty.
 pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
-    // Everything that needs a `Window` and could not run from a host fn: the
-    // `<lottie>` transport is advanced by this frame's wall-clock delta (and its
-    // `complete`/`loopComplete`/`enterFrame` events dispatched), every `<video>`
-    // pulls the frame the OS media pipeline has ready (and its HTML media events
-    // are dispatched), and a node that was focused when it got detached loses
-    // gpui focus. Before the draw, so the picture a media element paints is the
-    // one this tick produced.
-    // Two atomic loads: has the renderer recreated its D3D11 device since the
-    // last frame? If so, every `<video>` is decoding onto a dead one and has to
-    // be rebuilt before it is ticked.
+    // Media ticks (`<lottie>`, `<video>`) and detached-focus cleanup need a `Window` and run before
+    // the draw, so a media element paints this tick's picture. The device check comes first: after a
+    // renderer device loss every `<video>` must rebuild before it ticks.
     publish_video_device();
     let media_moved = vn_tree::frame_tick(window, cx);
-    // One notify per JS wave that touched the tree — the draw right after
-    // this callback picks it up (same frame). While CSS transitions run or a
-    // Lottie plays, keep repainting: `on_next_frame` alone re-arms but does not
-    // redraw.
+    // One notify per JS wave that touched the tree. While transitions or a Lottie run keep
+    // repainting: `on_next_frame` re-arms but does not redraw.
     let flush = vn_tree::flush_changes_kind();
     let tree_moved = flush != vn_tree::Flush::Unchanged;
-    // The push channel's tree revision. A number on a socket, not a tree: it
-    // lets an attached inspector refetch because something MOVED rather than
-    // because 2.5 s went by (docs/DEVTOOLS.md, the push channel).
+    // The push channel's tree revision: lets an inspector refetch because something moved.
     #[cfg(vn_devtools)]
     if tree_moved {
         devtools::ws::note_tree_changed();
     }
-    // A playing `<video>` is not on this list: the pump ticks it every frame
-    // regardless, and its tick reports a decoded frame as `media_moved` when
-    // the video can be on screen. A video that only feeds a canvas, or sits
-    // outside the viewport, no longer redraws the window at the display rate.
-    // Nor is a playing `<lottie>` any more: its frames are written into its
-    // tile by the same tick, which asks for a draw only when a present cannot
-    // show them (crates/vn-lottie/CONTRACT.md §8.10).
-    //
-    // A hidden page (minimised, cloaked, covered by other windows) paints no
-    // animation: nobody sees it, and a cloaked or covered window would draw
-    // every one of them. The first frame after it is shown again resumes them.
+    // A playing `<video>` or `<lottie>` is not listed: their ticks ask for a draw only when a present
+    // cannot show the frame (`media_moved`).
+    // A hidden page paints no animation; the first frame after it is shown resumes them.
     let animating = vn_tree::animating() && !window::page_hidden();
     let moving = animating || media_moved;
     if flush == vn_tree::Flush::DrawnBySync {
@@ -916,26 +669,20 @@ pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
         vn_tree::perf::note_sync_tail(!moving);
     }
     if flush == vn_tree::Flush::Changed || moving {
-        // A synchronous DOM measurement already built the primary window.
-        // Preserve that frame unless the wave left newer work to paint.
+        // A synchronous measurement already built the primary window; keep that frame unless newer work remains.
         notify_shell(cx);
     }
     if tree_moved || moving {
-        // Only CSS animations and transitions moving is not work: an
-        // unfocused window paces them (src/idle.rs).
+        // CSS animations alone are not work: an unfocused window paces them.
         if tree_moved || media_moved {
             idle::note_moved();
         } else {
             idle::note_animating();
         }
-        // The synchronous layout only draws the primary window. Popped-out
-        // subtrees still need this wave (docs/MULTIWINDOW.md §6).
+        // The synchronous layout draws only the primary window; pop-outs still need this wave.
         popout::notify_all(cx);
     }
-    // Push, not poll: whatever moved this frame — log lines, the tree
-    // revision just computed above, a frame-time sample — goes out to every
-    // attached inspector here, AFTER the flush, so a socket is never told
-    // about a revision the tree has not reached.
+    // Push, not poll, after the flush, so a socket is never told about a revision the tree has not reached.
     #[cfg(vn_devtools)]
     devtools::ws::broadcast_frame();
 }
@@ -953,11 +700,7 @@ impl Render for Shell {
 
 impl Shell {
     fn render_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
-        // The built-in titlebar is a FALLBACK, not furniture (D-23): an app
-        // that declares no drag region would otherwise be unmovable, so it
-        // stays until the app paints a `window-drag: move` region of its own —
-        // and then retires, with one `[window]` log line. Never silently
-        // removing a behaviour an app relied on.
+        // The built-in titlebar is a fallback: it stays until the app paints a `window-drag: move` region, then retires.
         let shell = div()
             .relative()
             .flex()
@@ -968,9 +711,7 @@ impl Shell {
         #[cfg(target_os = "linux")]
         let shell = linux_chrome::wrap(shell, window);
         if !window::fallback_titlebar() {
-            // Custom chrome, mode 1: the app owns the WHOLE window — its own
-            // titlebar included. No host padding, no host status panel; the
-            // shell is a bare mount point.
+            // Custom chrome: the app owns the whole window; the shell is a bare mount point.
             return shell
                 .child(vn_tree::build_root(window, cx))
                 .children(window_controls_overlay())
@@ -995,16 +736,8 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .gap(px(16.))
-                    // The Vue-driven subtree, straight from the retained tree.
-                    //
-                    // `flex_1().min_h(0)` is what gives the app root a DEFINITE
-                    // box: vue-native's model is "the window is the root", so
-                    // the root element sizes itself to 100% of whatever it is
-                    // handed (see `vn_tree`'s `build_node`). An auto-height slot
-                    // would make `h-full` and `overflow: auto` in the app
-                    // resolve against an indefinite parent — i.e. never scroll —
-                    // and would put a `position: fixed` overlay wherever the
-                    // content happens to end rather than over the viewport.
+                    // `flex_1().min_h(0)` gives the app root a definite box; an auto-height slot would
+                    // break `h-full`, `overflow: auto` and `position: fixed` inside the app.
                     .child(
                         div()
                             .flex_1()
@@ -1038,14 +771,8 @@ impl Shell {
     }
 }
 
-/// The devtools inspector's element outline, drawn over everything the app
-/// painted (docs/DEVTOOLS-UI.md §5). Always `None` in a prod build — and in a
-/// dev build until something sends a `highlight` command.
-///
-/// It sits in the SHELL rather than in the app's own tree on purpose: the
-/// rectangle is in window coordinates (which is what `bounds` reports), the
-/// shell is the element at the window origin, and an overlay inside the app's
-/// tree would be a node the app can see — an inspector must not appear in the
+/// The devtools element outline, in window coordinates. It sits in the shell rather than the app's
+/// tree so the inspector never appears in the tree it inspects.
 /// tree it is inspecting.
 fn inspector_overlay() -> Option<gpui::Div> {
     #[cfg(vn_devtools)]
@@ -1058,41 +785,23 @@ fn inspector_overlay() -> Option<gpui::Div> {
     }
 }
 
-/// The host-drawn caption-button cluster — `titleBarOverlay` (docs/WINDOWING.md
-/// §2.3, §4.3).
+/// The host-drawn caption-button cluster (`titleBarOverlay`), top-right; the rect apps read back
+/// (`getTitlebarAreaRect()`) loses exactly this width.
 ///
-/// A custom-chrome window has no `WS_CAPTION`, so there is no OS cluster to
-/// host: on Windows the only way to get caption buttons in a frameless window
-/// is to draw them, which is exactly what Electron and Chromium do for their
-/// own overlay. What makes these OS-*behaved* rather than three hand-rolled
-/// buttons is `window_control_area`: `WM_NCHITTEST` answers `HTMINBUTTON` /
-/// `HTMAXBUTTON` / `HTCLOSE`, so the OS performs the action, and `HTMAXBUTTON`
-/// is what arms the **Windows 11 snap-layouts flyout** — which no click handler
-/// can produce.
-///
-/// Positioned absolutely at the top-RIGHT because that is where Windows puts
-/// them; the rect an app reads back (`getTitlebarAreaRect()`,
-/// `env(titlebar-area-width)`) loses exactly this width, so app content is
-/// never underneath it.
+/// `window_control_area` makes `WM_NCHITTEST` answer HTMINBUTTON/HTMAXBUTTON/HTCLOSE, so the OS
+/// performs the action and HTMAXBUTTON arms the Windows 11 snap-layouts flyout.
 fn window_controls_overlay() -> Option<gpui::Div> {
     let (height, overlay) = window::overlay()?;
-    // Segoe Fluent Icons is the Win11 caption glyph font and these three are the
-    // OS's own glyphs — chevron-free, hairline, correctly optically centred.
-    //
-    // It is NOT present on Windows 10, where the same private-use code points
-    // live in Segoe MDL2 Assets, so naming only the Win11 font would have shown
-    // three tofu boxes there. `Font::fallbacks` is DirectWrite's own fallback
-    // chain (`IDWriteTextFormat::SetFontFallback`), so the lookup is per
-    // code point and per machine rather than a compile-time guess: Win11 finds
-    // the glyph in the first family, Win10 in the second, and Segoe UI Symbol
-    // is the last stop before DirectWrite's system fallback.
+    // Segoe Fluent Icons is the Win11 caption glyph font; Win10 has the same code points in Segoe
+    // MDL2 Assets. `Font::fallbacks` is DirectWrite's per-code-point chain, so each OS finds the
+    // glyph in its own family.
     const MIN: &str = "\u{e921}";
     const MAX: &str = "\u{e922}";
     const CLOSE: &str = "\u{e8bb}";
     let glyph_font = gpui::Font {
         family: "Segoe Fluent Icons".into(),
         fallbacks: Some(gpui::FontFallbacks::from_fonts(vec![
-            "Segoe MDL2 Assets".to_string(), // Windows 10 — the same code points
+            "Segoe MDL2 Assets".to_string(),
             "Segoe UI Symbol".to_string(),
         ])),
         features: Default::default(),
@@ -1132,23 +841,16 @@ fn window_controls_overlay() -> Option<gpui::Div> {
         strip
             .child(button("wco-min", MIN, WindowControlArea::Min, 0xffffff1a))
             .child(button("wco-max", MAX, WindowControlArea::Max, 0xffffff1a))
-            // Win11's close button turns #C42B1C on hover; every other one gets
-            // a neutral wash. Matching the OS matters more here than matching
-            // the app's palette — this IS the window's chrome.
+            // Win11's close button turns #C42B1C on hover; matching the OS matters more than the app palette.
             .child(button("wco-close", CLOSE, WindowControlArea::Close, 0xc42b1cff)),
     )
 }
 
-/// The directory a relative `<img src>` resolves against — vue-native's
-/// stand-in for the document URL a browser resolves against.
-///
-/// `VN_APP_ROOT` wins when set; otherwise the dev transport derives it from the
-/// manifest entry (`apps/<app>/src/main.js` → `apps/<app>/`) in [`dev::boot`],
-/// and the prod build — which reads no files at all — leaves it unset, so
-/// relative paths fall back to the working directory with an advisory.
+/// The directory a relative `<img src>` resolves against. `VN_APP_ROOT` wins; otherwise [`dev::boot`]
+/// derives it from the manifest entry. Prod leaves it unset, and relative paths fall back to the
+/// working directory with an advisory.
 fn publish_app_root() {
-    // A packaged exe: relative URLs resolve out of the payload, the same store
-    // `fetch()` reads — the package is the document (docs/PACKAGING.md).
+    // A packaged exe: relative URLs resolve out of the payload, like `fetch()`.
     #[cfg(feature = "prod")]
     if prod::publish_asset_store() {
         return;
@@ -1162,7 +864,6 @@ fn publish_app_root() {
 
 /// Installs the webview behind `<iframe>`, if this platform has one.
 fn install_iframe_backend() {
-    // The browser's profile: beside the app's own storage, never inside it.
     #[cfg(feature = "storages")]
     let data = embed::data_dir()
         .map(std::path::Path::to_path_buf)
@@ -1173,7 +874,7 @@ fn install_iframe_backend() {
     let config = vn_webview::Config {
         assets: std::rc::Rc::new(|path| vn_tree::read_app_asset(path)),
         user_data,
-        // redjs's `location.origin` (vendor/redjs, `cookies::PAGE_ORIGIN`).
+        // Matches redjs's `location.origin`.
         page_origin: "app://redjs".into(),
         devtools: !cfg!(feature = "prod"),
     };
@@ -1191,22 +892,11 @@ fn close_iframes_on_quit(cx: &mut App) {
     }));
 }
 
-/// Hands `<video>` the renderer's D3D11 device — and re-hands it every time
-/// the renderer recreates one.
+/// Hands `<video>` the renderer's D3D11 device, and re-hands it whenever the renderer recreates one
+/// (device loss after a TDR or driver update): each `<video>` is rebuilt on the new device, keeping
+/// its position and transport state. Runs every frame; two atomic loads when nothing changed.
 ///
-/// The pointer is BORROWED from `DirectXDevices`, which lives as long as the
-/// renderer does; `vn_video` clones the COM interface if it keeps it.
-///
-/// **This runs once per frame, and the generation is the whole point.** A
-/// device-lost recovery (`DirectXDevices::new` after a TDR, a driver update or
-/// a GPU reset) builds a *new* `ID3D11Device` and bumps the generation. Every
-/// Media Foundation engine we created is still decoding onto the dead one, and
-/// every texture it hands us belongs to a device the atlas now refuses to copy
-/// from — which is exactly what the atlas's device-identity check catches. So a
-/// generation change republishes the device and forces each `<video>` to
-/// rebuild on it, keeping its position and transport state.
-///
-/// Two atomic loads and a compare on the frames where nothing happened.
+/// The pointer is BORROWED from `DirectXDevices`; `vn_video` clones the COM interface if it keeps it.
 #[cfg(target_os = "windows")]
 fn publish_video_device() {
     use std::cell::Cell;
@@ -1238,9 +928,8 @@ fn publish_video_device() {
     if generation == 0 || previous == generation || (ptr.is_null() && previous == 0) {
         return;
     }
-    // A new native12 generation intentionally has no D3D11 bridge yet. Rebuild
-    // old decoders even when the new pointer is null; their next load asks the
-    // lazy provider for the new device, without allocating video state at boot.
+    // A new native12 generation has no D3D11 bridge yet: still rebuild old decoders even with a null
+    // pointer; their next load asks the lazy provider.
     let first = previous == 0;
     PUBLISHED.with(|p| p.set(generation));
     // SAFETY: the pointer comes straight from the live `DirectXDevices`.
@@ -1260,24 +949,11 @@ fn publish_video_device() {
 #[cfg(not(target_os = "windows"))]
 fn publish_video_device() {}
 
-/// The HTTP client gpui fetches `Resource::Uri` assets through: redjs's
-/// network stack, the one `fetch` uses ([`http_client`]).
+/// The HTTP client gpui fetches `Resource::Uri` assets through: redjs's network stack, as `fetch`
+/// uses ([`http_client`]). Without one, gpui's `NullHttpClient` fails every request.
 ///
-/// Without one, `App::http_client()` is gpui's `NullHttpClient`, which fails
-/// every request with "No HttpClient available" a frame after the element asked
-/// — the silent failure the m10 images report chose an advisory over rather
-/// than shipping.
-///
-/// The user agent is the one `fetch` sends (`vn_runtime::runtime::VN_USER_AGENT`),
-/// which names the runtime and no browser: a server that serves us different
-/// bytes because of the UA string is a server whose answer we would rather see
-/// honestly.
-///
-/// `VN_HTTP_CLIENT=reqwest` installs the client every build had before m26 (the
-/// fork's `ReqwestClient`, its own runtime and connection pool, UA
-/// `vue-native/<version>`): the A/B in research/reports/m26/fixes-lag-1.md §4.12
-/// runs one binary both ways, and "this image stopped loading" can be bisected
-/// without a rebuild.
+/// `VN_HTTP_CLIENT=reqwest` installs the fork's `ReqwestClient` instead, to bisect image-loading
+/// problems without a rebuild.
 fn install_http_client(app: gpui::Application) -> gpui::Application {
     if std::env::var("VN_HTTP_CLIENT").is_ok_and(|v| v.eq_ignore_ascii_case("reqwest")) {
         return match reqwest_client::ReqwestClient::user_agent(concat!("vue-native/", env!("CARGO_PKG_VERSION"))) {
@@ -1295,38 +971,26 @@ fn install_http_client(app: gpui::Application) -> gpui::Application {
 pub fn run_exe() {
     // First, so a host whose runner is already gone never opens a window.
     owner::watch();
-    // The ONE parse of this process's command line (docs/LAUNCH.md §2). Every
-    // consumer below — the host check, the inspector mode, the protocol
-    // handler, `appLaunch.argv` — reads this, never `std::env::args()`.
+    // The one parse of the command line; every consumer below reads this, never `std::env::args()`.
     let args = vn_desktop::args::process();
-    // `vn build`'s host check: a BARE host (nothing stamped into it) prints
-    // what it is — mode, vue-native version, variant — as one JSON line and
-    // exits before any window, logger or JS exists. A packaged exe never takes
-    // this branch; its argv belongs to its app.
+    // `vn build`'s host check: a bare host prints one JSON line and exits before any window or JS
+    // exists. A packaged exe's argv belongs to its app.
     if args.host.host_info && !payload::embedded_present() {
         println!("{}", payload::host_info_json());
         return;
     }
-    // `--vn-dist <slot>` is `VN_DIST` spelled on the command line — what a
-    // protocol registration made by a DEV host writes, because a process the
-    // shell starts for a `myapp://` link inherits no environment of ours.
-    // Before anything reads the slot (the logger and the profiler do, through
-    // `slot::dir`).
+    // `--vn-dist <slot>` is `VN_DIST` on the command line (a process the shell starts for a protocol
+    // link inherits no environment). Before anything reads the slot.
     if let Some(dist) = args.host.vn_dist.as_deref().filter(|d| !d.is_empty()) {
         std::env::set_var("VN_DIST", dist);
     }
-    // Single instance (docs/LAUNCH.md §3), BEFORE the inspector, the logger and
-    // gpui: a second launch of a `singleInstance` app forwards its argv / url /
-    // cwd to the running one and exits here, having created no window and
-    // touched no `localStorage`. Every other process records its launch for
-    // `appLaunch` and carries on. The inspector (`--devtools`) is never an
-    // instance of anything and reads no app config.
+    // Single instance, before the inspector, logger and gpui: a second launch of a `singleInstance`
+    // app forwards its argv/url/cwd and exits without creating a window or touching `localStorage`.
+    // The inspector (`--devtools`) is never an instance.
     {
         let launch_cfg = if args.host.devtools { None } else { boot_mode::launch_config() };
-        // A DEV host's slot, for the protocol registrations it makes. The
-        // instance key is the app's id and storage folder, not the slot: two
-        // dev hosts of one app share that folder whatever their slots
-        // (vn-test and agents' copies opt out with VN_SINGLE_INSTANCE=0).
+        // A dev host's slot, for its protocol registrations. The instance key is the app's id and
+        // storage folder, not the slot (vn-test and agents' copies opt out with VN_SINGLE_INSTANCE=0).
         #[cfg(not(feature = "prod"))]
         let dev_slot = Some(slot::dir());
         #[cfg(feature = "prod")]
@@ -1337,21 +1001,15 @@ pub fn run_exe() {
         {
             std::process::exit(code);
         }
-        // The declared `protocols`: a packaged exe (re-)registers them per
-        // user, idempotently; a dev host only says it did not (docs/LAUNCH.md
-        // §5). Only the process that is going to RUN gets here.
+        // A packaged exe re-registers its declared `protocols` per user, idempotently; a dev host only says it did not.
         if !args.host.devtools {
             vn_desktop::launch::register_declared();
         }
     }
-    // `--devtools` rewrites two environment variables (the dist slot this
-    // process publishes into, and which instance it prefers), so it has to run
-    // before anything reads either — which the logger and the profiler both
-    // do indirectly through `slot::dir`.
+    // `--devtools` rewrites the dist slot and preferred-instance env vars, so it runs before anything reads them (via `slot::dir`).
     #[cfg(vn_devtools)]
     inspector::init();
-    // A prod build with no app is a bare host: it says so and stops, rather
-    // than opening an empty window. The inspector mode needs no app.
+    // A prod build with no app is a bare host: say so and stop.
     #[cfg(feature = "prod")]
     {
         #[cfg(vn_devtools)]
@@ -1363,19 +1021,15 @@ pub fn run_exe() {
         }
     }
     run_app();
-    // gpui has quit and its hooks have run: say how the close went, and end
-    // the process without the C runtime's exit path (src/shutdown.rs).
+    // gpui has quit: say how the close went and end the process without the C runtime's exit path.
     shutdown::finish();
 }
 
-/// An embedded vue-native's thread (src/embed.rs): the exe's boot without the
-/// parts that are the process's. The command line is the embedder's (embed
-/// set the app's argv), the embedder is the instance (no `singleInstance`, no
-/// protocol registration), and the end is reported rather than taken.
+/// An embedded vue-native's thread: the exe's boot without the process-owned parts. The embedder
+/// owns the command line and is the instance; the end is reported rather than taken.
 pub(crate) fn run_embedded() {
     let args = vn_desktop::args::process();
-    // Records the launch `appLaunch` reports. With no launch config there is
-    // no single-instance check, so this always runs on.
+    // Records the launch `appLaunch` reports.
     if !embed::desktop_launch_prepared() {
         let _ = vn_desktop::launch::start(args, None, boot_mode::app_name(), None);
     }
@@ -1383,51 +1037,38 @@ pub(crate) fn run_embedded() {
     shutdown::finish();
 }
 
-/// Everything from the logger to gpui's quit, the same for the exe and an
-/// embedder.
+/// Everything from the logger to gpui's quit, shared by the exe and embedders.
 fn run_app() {
     // Before anything gpui does, so the renderer's boot messages are visible.
     install_logger();
     #[cfg(all(feature = "webgpu", target_os = "windows"))]
     shared_gpu::install().expect("installing shared graphics device provider");
     perf::boot();
-    // The Rust heap is being counted (src/heapcount.rs: a dev build, or `VN_MEMSTATS=1`), and
-    // the painted-image registry the `mem` command reports is armed with it.
+    // With the Rust heap counted, arm the painted-image registry the `mem` command reports.
     #[cfg(vn_devtools)]
     if heapcount::on() {
         vn_tree::perf::set_live_bytes_probe(|| heapcount::snapshot().map(|s| s.0));
         vn_tree::devtools::set_image_tracking(true);
     }
-    // The primary window owns the JS pump; accepting its close ends this
-    // host on every OS. AppKit otherwise keeps a windowless app running and
-    // never reaches the SDK shutdown hooks or the embedding lifecycle callback.
+    // The primary window owns the JS pump; closing it ends the host on every OS (AppKit otherwise keeps a windowless app running).
     let app = install_http_client(application())
         .with_quit_mode(gpui::QuitMode::LastWindowClosed);
-    // A primary window that is not on screen (a hidden start, `visible(false)`)
-    // comes back on a Dock click as on a tray click. AppKit asks only when no
-    // window is visible; the show is queued, never applied inside its callback.
+    // A hidden primary window comes back on a Dock click as on a tray click; the show is queued, never applied inside AppKit's callback.
     #[cfg(target_os = "macos")]
     app.on_reopen(|_| embed::reopen());
-    // gpui reads `Resource::Embedded(key)` — what an `<img>` resolves to in a
-    // packaged exe — through this, straight out of the mapped payload.
+    // `Resource::Embedded(key)` (an `<img>` in a packaged exe) reads from the mapped payload.
     #[cfg(feature = "prod")]
     let app = if payload::get().is_some() { app.with_assets(payload::GpuiAssets) } else { app };
     app.run(|cx: &mut App| {
-        // `--devtools` is a THIRD boot mode over this same shell: the app is
-        // the inspector, and it comes out of this executable rather than off
-        // disk. Everything below — the window, the pump, the preludes — is
-        // identical, which is the point of keeping it a mode rather than a
-        // second binary.
+        // `--devtools` is a third boot mode over this same shell: the app is the inspector, from this executable.
         #[cfg(vn_devtools)]
         let devtools_mode = inspector::is_devtools_host();
         #[cfg(not(vn_devtools))]
         let devtools_mode = false;
         vn_elements::init(cx); // key bindings for the native <input> widget
         publish_app_root();
-        // The FIRST quit hook (they run in the order they were added): a quit
-        // that no accepted close announced — the session ending, say — hides
-        // the windows and arms the deadline here (src/shutdown.rs). A no-op
-        // after a close, which already did.
+        // The first quit hook (they run in order of addition): a quit that no accepted close
+        // announced, such as the session ending, hides the windows and arms the deadline here.
         std::mem::forget(cx.on_app_quit(|_| {
             window::cancel_startup_reveal();
             shutdown::begin("quit");
@@ -1440,36 +1081,19 @@ fn run_app() {
         close_iframes_on_quit(cx);
         #[cfg(vn_devtools)]
         {
-            // F12, in EVERY window of this process, ahead of every element's
-            // own key listener. See `inspector::install_hotkey`.
+            // F12 in every window of this process (see `inspector::install_hotkey`).
             inspector::install_hotkey(cx);
-            // A debugger that outlives its subject is a window nobody can
-            // explain. (The child watches us too, for the case where this
-            // never runs — a crash.)
+            // A debugger must not outlive its subject (the child also watches us, for a crash).
             std::mem::forget(cx.on_app_quit(|_| {
                 shutdown::step("inspector", inspector::close_children);
                 std::future::ready(())
             }));
         }
-        // IndexedDB ends before the process does, in EVERY build: transactions
-        // that never committed are dropped (as a browser's are) and every
-        // database is closed on the server thread — for the SQLite backend
-        // that checkpoints the WAL into the file and removes it. Synchronous,
-        // inside the observer, so gpui's 200 ms SHUTDOWN_TIMEOUT for quit
-        // FUTURES does not cut it short; bounded by its own timeout instead.
-        // A kill skips this, and loses nothing committed either (the WAL is
-        // replayed at the next open — redjs tests/idb_crash.rs). A no-op when
-        // the app never touched IndexedDB.
-        // The cookie jar's last staged change (a `Set-Cookie` in the final
-        // frame — a sign-out's, say) is on disk before the process ends. Its
-        // writes are otherwise one per frame, like `localStorage`'s.
-        // So is `localStorage`'s: a `setItem` in a `pagehide` handler is in
-        // the final wave, after the last frame's write.
+        // Flush the cookie jar and `localStorage` so a final-frame `Set-Cookie` or `pagehide` `setItem` reaches disk.
         #[cfg(feature = "storages")]
         std::mem::forget(cx.on_app_quit(|_| {
             shutdown::step("storage", || {
-                // The last attempt must bypass the automatic retry delay: a
-                // file may have become writable just before the app closes.
+                // The last attempt bypasses the automatic retry delay.
                 if let Err(e) = vn_storage::flush() {
                     eprintln!("[storage] localStorage: the last change was not written: {e}");
                 }
@@ -1477,12 +1101,12 @@ fn run_app() {
                     eprintln!("[storage] cookies: the last change was not written: {e}");
                 }
             });
-            // The HTTP cache's queued entries and its LRU index. A kill skips
-            // this and loses only recency: the next start rebuilds the entry
-            // list from the folder (redjs `http::cache`).
+            // A kill loses only HTTP cache recency; the entry list is rebuilt from the folder at next start.
             shutdown::step("http-cache", vn_runtime::redjs::webapi::http::cache::uninstall);
             std::future::ready(())
         }));
+        // Drop uncommitted IndexedDB transactions and close every database on the server thread
+        // (checkpoints the WAL for SQLite). Synchronous, since gpui gives quit futures only 200 ms.
         #[cfg(feature = "indexeddb")]
         std::mem::forget(cx.on_app_quit(|_| {
             let t = std::time::Instant::now();
@@ -1496,46 +1120,29 @@ fn run_app() {
             std::future::ready(())
         }));
         shutdown::install_test_delay(cx);
-        // Before the runtime exists, so the log ring is already recording when
-        // the first advisory fires — and before the window config is read, for
-        // the same reason. This is only the RECORDING half; whether a listener
-        // is started at all is `devtools::boot` below, which needs the config.
+        // Before the runtime exists so the log ring records the first advisory. Only the recording half; `devtools::boot` decides whether to listen.
         #[cfg(vn_devtools)]
         devtools::arm();
 
-        // The window block of `apps/<app>/vn.config.json`, read BEFORE
-        // `open_window` because that is the only tier that can set the
-        // creation-time-only gpui options (`window_min_size`, `is_resizable`,
-        // `is_minimizable`, `titlebar`, `window_background`) with no visible
-        // flash. Environment still wins on top (`VN_WINDOW`, `VN_WINDOW_FOCUS`)
-        // — the perf and screenshot harnesses depend on it (D-21).
-        //
-        // It is read here, ahead of the JS runtime, because it also carries
-        // `"devtools": false` — and that has to be answered before a port is
-        // bound rather than by closing one a moment after opening it.
+        // The window block of vn.config.json is read before `open_window` (only that tier can set the
+        // creation-time-only options without a flash) and before the JS runtime (it carries
+        // `"devtools": false`, which must be answered before a port is bound). `VN_WINDOW` and
+        // `VN_WINDOW_FOCUS` win over it.
         #[cfg(vn_devtools)]
         let window_json =
             if devtools_mode { inspector::window_config() } else { boot_mode::window_config() };
         #[cfg(not(vn_devtools))]
         let window_json = boot_mode::window_config();
-        // The HTTP cache's cap rides in the same block (`httpCache`, folded in
-        // by the builders like `devtools`); read before the block is consumed.
+        // The HTTP cache cap rides in the same block; read before it is consumed.
         #[cfg(feature = "storages")]
         let http_cache_mb = http_client::cache_mb(window_json.as_deref());
         let cfg = window::load_config(window_json);
 
-        // The runtime switch (docs/DEVTOOLS.md "Turning them off"): the config's
-        // answer, the `VN_DEVTOOLS` override on top of it, and the listener if
-        // the result is on. Before `JsRuntime::init`, so the app bundle's very
-        // first line already sees the settled state.
+        // The runtime devtools switch (config, then `VN_DEVTOOLS`), before `JsRuntime::init` so the bundle's first line sees the settled state.
         #[cfg(vn_devtools)]
         devtools::boot(window::devtools_config_enabled());
 
-        // `navigator.onLine` from the OS connectivity hint (docs/DESKTOP.md
-        // §3). Before `JsRuntime::init`: the value is seeded while no context
-        // exists, so the bundle's first read is already the OS's answer and
-        // the seed queues no `online`/`offline` event. A missing API is an
-        // advisory, delivered to the log ring by `vn_desktop::pump()`.
+        // `navigator.onLine` from the OS connectivity hint, seeded before `JsRuntime::init` so the first read is the OS's answer and queues no event.
         vn_desktop::network::install();
 
         #[cfg(all(vn_devtools, not(feature = "native-aot")))]
@@ -1557,8 +1164,7 @@ fn run_app() {
             return;
         }
         JsRuntime::init();
-        // The task that opens the permission prompt's window, before any JS
-        // can ask for one (src/consent_window.rs).
+        // The permission prompt's window task, before any JS can ask for one.
         #[cfg(target_os = "windows")]
         consent_window::install(cx);
         let setup_result = JsRuntime::with(|rt| -> Result<(), String> {
@@ -1568,58 +1174,31 @@ fn run_app() {
             reload::install(rt);
             vn_tree::install(rt);
             window::install(rt);
-            // SPIKE: `__vn_window_open` / `_close` / `_popouts` / `_click` —
-            // one Vue subtree painted by a second OS window (docs/MULTIWINDOW.md).
             popout::install(rt);
-            // `getUserMedia({ audio })`: the capture gate and the system's
-            // device notifications (src/microphone.rs).
             #[cfg(feature = "audio")]
             microphone::install();
-            // `navigator.clipboard` over gpui's clipboard — the same one the
-            // native <input> uses for Ctrl+C, so there is never a second owner
-            // of `OpenClipboard`. No host fns and no pump: the clipboard is
-            // synchronous, so the promise is settled before `readText()`
-            // returns.
+            // `navigator.clipboard` over gpui's clipboard, the one native <input> uses, so there is one owner of `OpenClipboard`.
             #[cfg(feature = "clipboard")]
             vn_clipboard::install();
-            // Installs the platform backend behind redjs's
-            // `navigator.permissions` AND registers `__vn_permissions_*` for
-            // the `appPermissions` extension. Must happen before any app code
-            // runs; the hook is read per call, so nothing else depends on the
-            // order within this block. See docs/PERMISSIONS.md.
+            // The backend behind `navigator.permissions` and `__vn_permissions_*`; before any app code.
             vn_permissions::install(rt);
-            // `<iframe>`: the platform's webview behind `vn_tree::iframe`
-            // (crates/vn-webview). Nothing starts here — the browser is
-            // launched by the first iframe that has a document — and where
-            // there is no backend the element answers every `src` with
-            // `error` and `vnFeatures.iframe` is false.
+            // `<iframe>`: nothing starts until the first iframe with a document; without a backend every `src` answers `error`.
             if !devtools_mode {
                 install_iframe_backend();
             }
-            // `__vn_desktop_*` / `__vn_shell_*`: the settle dispatcher and the
-            // shell behind `<a href>`, `window.open(url)` and `appShell`
-            // (docs/SHELL.md). The shell thread's log lines ("recorded" under
-            // VN_SHELL=record) reach the ring through `pump()`, on this thread.
+            // `__vn_desktop_*` / `__vn_shell_*`: the settle dispatcher and shell behind `<a href>`, `window.open(url)` and `appShell`.
             vn_desktop::set_log_sink(|kind, text| vn_tree::log::record(kind, text));
             vn_desktop::install(rt);
-            // A file dialog is owned by the window published for the call
-            // that asked for it (docs/DESKTOP.md, pickers).
+            // A file dialog is owned by the window published for the call that asked.
             vn_desktop::dialog::set_owner_resolver(dialogs::owner);
-            // The microphone prompt is vn-desktop's question dialog, owned
-            // the same way, and named after the app's window title
-            // (docs/PERMISSIONS.md §5.1). On Windows it is a window of our
-            // own, opened by a task on this thread (src/consent_window.rs).
+            // The microphone prompt is vn-desktop's question dialog, owned the same way and named after the window title; on Windows a window of our own.
             vn_permissions::set_asker(dialogs::ask_permission);
             vn_permissions::set_app_name(&cfg.title);
             // The crash dialog's title names the app the same way.
             crash_window::set_app_name(&cfg.title);
-            // The backend behind redjs's `localStorage`, plus
-            // `__vn_storage_*` for the `appStorage` extension. Must happen
-            // before any app code runs: the area is loaded lazily on first
-            // touch, so a host that installed late would hand the app an empty
-            // `localStorage` and only then start honouring the disk.
-            // `boot_mode::app_name` is what names the default folder in a dev
-            // host, where one exe runs many apps. See docs/STORAGE.md.
+            // The backend behind `localStorage` and `__vn_storage_*`. Before any app code: the area loads
+            // lazily on first touch, so a late install would hand the app an empty `localStorage`.
+            // `boot_mode::app_name` names the default folder in a dev host.
             #[cfg(feature = "storages")]
             if !devtools_mode {
                 let encrypted = embed::storage_encrypted();
@@ -1637,11 +1216,8 @@ fn run_app() {
                 rt,
                 if devtools_mode { Some("vn-devtools".to_string()) } else { boot_mode::app_name() },
             );
-            // The disk HTTP cache under `fetch`, XHR and every `<img>`
-            // (docs/STORAGE.md §12): `%LOCALAPPDATA%\<app>\cache\http`,
-            // sealed when the storage is. After `install` above, which names
-            // the app; before any JS and any loader. Not for the inspector,
-            // which loads nothing worth keeping.
+            // The disk HTTP cache under `fetch`, XHR and `<img>`, sealed when storage is. After `install`
+            // (which names the app), before any JS; not for the inspector.
             #[cfg(feature = "storages")]
             if !devtools_mode {
                 if let Some(directory) = embed::data_dir() {
@@ -1650,22 +1226,17 @@ fn run_app() {
                     vn_storage::http_cache::install(http_cache_mb);
                 }
             }
-            // The answers to the app's own permission prompt live beside its
-            // localStorage, in the storage folder as of now
-            // (crates/vn-permissions/src/decisions.rs). Without storage they
-            // last for the run.
+            // The answers to the app's permission prompt live in the storage folder; without storage they last for the run.
             #[cfg(feature = "storages")]
             vn_permissions::set_decisions_file(vn_storage::cookies::folder().map(|f| f.join("permissions.json")));
-            // Embedding plugins initialize against the installed storage and cookie
-            // jar, before any application JS or window can make its first request.
+            // Embedding plugins initialize against the installed storage and cookie jar, before any app JS.
             if !devtools_mode {
                 tray::install(rt)?;
                 embed::setup(rt)?;
             }
             #[cfg(vn_devtools)]
             devtools::install(rt);
-            // `__vn_host_*` for `appHost`, when another program embeds us
-            // (src/embed.rs). In the exe they do not exist.
+            // `__vn_host_*` for `appHost`; absent in the exe.
             embed::install(rt);
             Ok(())
         });
@@ -1690,12 +1261,8 @@ fn run_app() {
                 window_background: cfg.backdrop.to_gpui(),
                 titlebar: Some(TitlebarOptions {
                     title: Some(cfg.title.clone().into()),
-                    // `appears_transparent` IS the chrome-mode switch: gpui maps
-                    // it to `hide_title_bar`, and fork item F-03 makes
-                    // `!hide_title_bar` add `WS_CAPTION` — a real OS caption,
-                    // not the captionless thick frame it used to give.
-                    // `titleBarStyle` is creation-time only for exactly this
-                    // reason (D-25).
+                    // `appears_transparent` is the chrome-mode switch (`!hide_title_bar` adds `WS_CAPTION`),
+                    // hence `titleBarStyle` is creation-time only.
                     appears_transparent: cfg.title_bar_style == window::TitleBarStyle::Hidden,
                     traffic_light_position: window::traffic_light_position(
                         cfg.title_bar_style == window::TitleBarStyle::Hidden,
@@ -1712,16 +1279,10 @@ fn run_app() {
                 // A permanently armed pump must not opt the window into the
                 // 33 ms unfocused throttle (JS timers would coarsen with it).
                 inactive_frame_interval: None,
-                // THE line that makes F12 not interrupt you: gpui maps this to
-                // `SW_SHOWNOACTIVATE`, so the inspector appears beside the app
-                // without taking the caret out of whatever you were typing.
-                // An ordinary app is unaffected (`focus: true` is gpui's own
-                // default and what every other host here has always used).
+                // gpui maps this to `SW_SHOWNOACTIVATE`: F12 shows the inspector without taking the caret from the app.
                 show: startup_visible && !defer_reveal,
                 focus: startup_focus,
-                // The app draws its caption and edges (src/linux_chrome.rs);
-                // the app id is what the compositor and the .desktop file
-                // match the window by (its icon, its dock entry).
+                // The app draws its caption and edges; the app id is what the compositor and .desktop file match.
                 #[cfg(target_os = "linux")]
                 window_decorations: Some(gpui::WindowDecorations::Client),
                 #[cfg(target_os = "linux")]
@@ -1729,19 +1290,12 @@ fn run_app() {
                 ..Default::default()
             },
             |window, cx| {
-                // Before the first frame is presented, so a test host is never
-                // seen in front of the person's windows (src/quiet.rs).
-                // Keep the generic GPUI default; enable retention only for VN windows.
-                // The override allows equivalent workloads to compare both paths.
                 if std::env::var_os("VN_RETAINED_LAYOUT").as_deref() != Some(std::ffi::OsStr::new("0")) {
                     window.vn_enable_retained_layout();
                 }
+                // Before the first frame is presented, so a test host is never seen in front of the person's windows.
                 quiet::send_to_back(window);
-                // The renderer's device now exists (the window created it), so
-                // this is the first moment `<video>` can be told to decode onto
-                // it rather than onto a second, private one. Before it, and on
-                // a platform with no such accessor, the Media Foundation
-                // backend falls back — it never fails for want of this.
+                // The renderer's device exists now: the first moment `<video>` can decode onto it instead of a private one.
                 publish_video_device();
                 let shell = cx.new(|_| Shell {
                     status: "booting JS…".into(),
@@ -1750,45 +1304,32 @@ fn run_app() {
                 });
                 SHELL.with(|s| *s.borrow_mut() = Some(shell.downgrade()));
                 window::init(&cfg, window, cx);
-                // The window a forwarded second launch brings to the front
-                // (`raiseOnSecondInstance`, docs/LAUNCH.md §3). The pipe thread
-                // raises it directly: the foreground grant the second process
-                // passed on is short-lived, and a JS-initiated focus could not
-                // use it.
+                // The window a forwarded second launch raises; the pipe thread raises it directly since the foreground grant is short-lived.
                 if let Some(hwnd) = window::capture_hwnd(window) {
                     vn_desktop::launch::set_window(hwnd);
                 }
-                // `beforeunload`: `on_window_should_close` is a SYNCHRONOUS
-                // boolean, which is precisely the web event's shape.
+                // `beforeunload`: a synchronous boolean, like the web event.
                 window.on_window_should_close(cx, |window, cx| {
                     let closing = window::should_close();
-                    // Accepted: the windows go NOW, and the teardown runs
-                    // behind them under a deadline (src/shutdown.rs).
+                    // Accepted: the windows go now; teardown runs behind them under a deadline.
                     if closing {
                         window::cancel_startup_reveal();
                         shutdown::begin("a close request (WM_CLOSE)");
                     }
-                    // **D-M16 / docs/MULTIWINDOW.md §7.8.** The primary window
-                    // owns the JS pump (D-M07 option 1), so closing it while a
-                    // pop-out is open would leave that pop-out painted and
-                    // frozen — a live window with no clock, no timers and no
-                    // event loop. A pop-out is a VIEW ONTO the app rather than
-                    // a peer, so it goes with it, which is also what a
-                    // one-main-window Electron app does.
+                    // The primary window owns the JS pump, so a pop-out left open would be a live window
+                    // with no clock. Pop-outs are views onto the app, so they close with it.
                     if closing && popout::count() > 0 {
                         vn_tree::log::record(
                             "window",
                             format!(
                                 "[window] the primary window is closing — taking {} pop-out(s) \
-                                 with it (docs/MULTIWINDOW.md §7.8)",
+                                 with it",
                                 popout::count()
                             ),
                         );
                         popout::close_all(cx);
                     }
-                    // A file dialog owned by this window outlives a close
-                    // request by the dialog's own 100 ms timer; the window is
-                    // destroyed after it (dialogs.rs).
+                    // A file dialog owned by this window outlives a close request by its own 100 ms timer.
                     closing && dialogs::may_close_now(window.window_handle(), cx)
                 });
                 window.on_next_frame(pump_frame);
@@ -1797,21 +1338,15 @@ fn run_app() {
         )
         .map(|handle| MAIN_WINDOW.with(|w| w.set(Some(handle.into()))))
         .unwrap();
-        // Timers, sockets and devtools keep running while the window is
-        // minimised: a gpui timer pumps the JS event loop whenever frames stop.
+        // Timers, sockets and devtools keep running while the window is minimised.
         background::start(cx);
-        // Results queued for JS on other threads ask the paced clock for a
-        // frame (src/idle.rs).
+        // Results queued for JS on other threads ask the paced clock for a frame.
         #[cfg(target_os = "windows")]
         vn_runtime::frames::set_waker(gpui_windows::wake_frames);
 
-        // A DOM layout read lays out, the way a browser's does. Installed
-        // before any JS runs, because the very first thing that needs it is the
-        // app bundle's own `onMounted`.
+        // A DOM layout read lays out, as in a browser; before any JS, since the bundle's `onMounted` needs it.
         vn_tree::set_sync_layout(sync_layout);
-        // `font-family` resolves to the first INSTALLED family in its list, so
-        // the mapper needs the host's family names — read lazily, the first
-        // time a sheet maps a `font-family`, and before any JS has run.
+        // `font-family` resolves to the first installed family, so the mapper needs the host's names (read lazily).
         let text_system = cx.text_system().clone();
         vn_css::set_font_source(move || text_system.all_font_names());
         let metric_system = cx.text_system().clone();
@@ -1819,8 +1354,7 @@ fn run_app() {
         vn_css::set_font_metric_source(move |font, size| {
             let mut cache = metric_text.borrow_mut();
             let (queries, text) = &mut *cache;
-            // This metric-only window is not frame-pumped. Bound its line cache
-            // when animated font sizes or many families produce new cache keys.
+            // This metric-only window is not frame-pumped: bound its line cache.
             if *queries >= 128 {
                 *text = gpui::WindowTextSystem::new(metric_system.clone());
                 *queries = 0;
@@ -1857,11 +1391,7 @@ fn run_app() {
                         return;
                     }
                 }
-                // `VN_SCENARIO=<name>` — a harness app can pin itself to one
-                // screen at boot so a measurement is one process, one scenario,
-                // no input. Published as a plain global; an app that does not
-                // look for it never notices. (JSON-quoted: the value is
-                // whatever the shell handed us.)
+                // `VN_SCENARIO=<name>` pins a harness app to one screen at boot; published as a global (sanitised).
                 let scenario = std::env::var("VN_SCENARIO").unwrap_or_default();
                 if !scenario.is_empty() {
                     let safe: String = scenario
@@ -1884,10 +1414,7 @@ fn run_app() {
                 }
                 #[cfg(not(vn_devtools))]
                 boot_mode::boot(rt);
-                // `DOMContentLoaded` + `load`, once, after the app bundle has
-                // evaluated — several reused browser components wait on these,
-                // and redjs has exported the hook since day one with nothing
-                // ever calling it.
+                // `DOMContentLoaded` + `load`, once, after the app bundle has evaluated.
                 window::content_loaded();
                 commit_boot_tree(rt);
             });
@@ -1901,23 +1428,18 @@ fn run_app() {
             cx.quit();
             return;
         }
-        // The first frame callback deliberately waits for layout before running
-        // JS. It must not also postpone the initial cascade: both bundle and
-        // DOMContentLoaded writes must already be styled when that frame draws.
+        // The first frame callback waits for layout before running JS; the initial cascade must not wait too.
         refresh_main(cx);
         #[cfg(target_os = "windows")]
         if defer_reveal {
             reveal_startup_window(cx, startup_focus);
         }
-        // An initially hidden window has no platform frame callback to own
-        // the boot wave. Start its background clock only AFTER bundle evaluation,
-        // so timers, native completions and reload work without showing a window.
+        // A hidden window has no frame callback to own the boot wave: start its background clock after bundle evaluation.
         if !embed::visible() {
             background::note_frame();
             reveal_if_unreachable(cx);
         }
-        // An inspector never comes to the front on its own — see
-        // `inspector::install_hotkey`. Everything else does, exactly as before.
+        // An inspector never comes to the front on its own.
         if !devtools_mode && !quiet::never_focus() && embed::activates() {
             cx.activate(true);
         }

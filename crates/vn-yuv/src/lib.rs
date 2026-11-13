@@ -32,14 +32,9 @@
 //! gives the same bytes there too. Rows stream: a [`Converter`] holds a few
 //! rows of scratch, never a frame.
 //!
-//! One thread, AVX2, a 512² frame with alpha (`tests::bench`, the fastest of
-//! many runs): 90 µs at 512², 280 µs to 256², 240 µs to 160²; its alpha
-//! alone, 60 and 40 µs. A 100² frame: 5 µs at 100², 14 µs to 48². The
-//! scalar rows take 1.6 ms at 512².
-//!
-//! Converting other primaries is scalar, about 3 ns a pixel on the smaller
-//! of frame and target: +0.8 ms at 512², +0.2 ms to 256², +9 µs to 48² from
-//! 100². sRGB's own primaries and curve skip it at no cost.
+//! A 512² frame with alpha converts in ~90 µs on one AVX2 thread (`tests::bench`); the scalar rows
+//! take 1.6 ms. Converting other primaries is scalar, about 3 ns a pixel on the smaller of frame
+//! and target; sRGB's own primaries and curve skip it.
 
 mod gamut;
 mod rows;

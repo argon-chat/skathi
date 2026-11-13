@@ -1,6 +1,5 @@
-// The inline style as ONE CSSOM declaration block: `:style`, `el.style`,
-// `style.cssText` and the `style` attribute are four views of it, and every
-// change reaches the host through `__vn_set_style` (docs/RUNTIME.md §5.3).
+// The inline style as one CSSOM declaration block: `:style`, `el.style`, `style.cssText` and the `style` attribute
+// are four views of it, and every change reaches the host through `__vn_set_style`.
 
 import { describe, expect, test } from "bun:test";
 import { defineComponent, h, nextTick, ref } from "@vue/runtime-core";

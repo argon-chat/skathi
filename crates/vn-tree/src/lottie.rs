@@ -1,66 +1,16 @@
-//! `<lottie>` — the element layer over the `vn-lottie` crate.
+//! `<lottie>` — the element layer over the `vn-lottie` crate: the per-node side map, the `src` → bytes
+//! load, prop→transport sync, the once-per-frame tick, rasters and event dispatch. The gpui element is
+//! built in [`crate::render`] (`build_lottie`).
 //!
-//! This module owns everything that outlives a frame: the per-node side map,
-//! the `src` → bytes load, the prop→transport sync, the once-per-frame tick,
-//! the rasters and the event dispatch. The gpui element itself is built in
-//! [`crate::render`] (`build_lottie`), which is where the cascade, the focus
-//! handles and the listener wiring already live.
+//! - `autoplay` and `loop` default to `false` (markup, like `<lottie-player>`), overriding the crate's
+//!   lottie-web defaults so a Rust embedder driving `LottieState` still gets those.
+//! - `loopComplete` never fires on the boundary that completes playback (lottie-web fires `complete`
+//!   alone); the last one of a completing tick is filtered in [`dispatch_events`].
+//! - `:loop="n"` maps to `LoopMode::Count(n + 1)`: lottie-web's numeric loop counts repeats.
 //!
-//! `crates/vn-lottie/CONTRACT.md` is the spec this implements; §"Element-layer
-//! decisions" there records where the element layer deliberately overrides the
-//! crate.
-//!
-//! # The three owner-level decisions, in one place
-//!
-//! 1. **`autoplay` and `loop` default to `false`.** The crate defaults both to
-//!    lottie-web's `loadAnimation()` values (`true`/`true`); `<lottie>` is
-//!    markup, and the markup-facing precedent is the `<lottie-player>` web
-//!    component, which defaults both to `false`. Overridden here rather than in
-//!    the crate so a Rust embedder driving `LottieState` directly still gets
-//!    lottie-web's semantics.
-//! 2. **`loopComplete` never fires on the boundary that completes playback.**
-//!    lottie-web fires `complete` alone there. The crate's `Advance` reports
-//!    both, so the last `LoopComplete` of a completing tick is filtered out at
-//!    the dispatch site (see [`dispatch_events`]).
-//! 3. **`:loop="n"` maps to `LoopMode::Count(n + 1)`.** lottie-web's numeric
-//!    `loop` counts *repeats* — `loop: 2` plays three times — while the crate's
-//!    `Count(n)` plays exactly `n` times. The `+ 1` is what makes `:loop="2"`
-//!    behave like the browser; combined with (2) the event stream is then
-//!    lottie-web's exactly: `loopComplete` ×n, then `complete`.
-//!
-//! # Off the UI thread (CONTRACT.md §8.10)
-//!
-//! The UI thread keeps only the transport ([`vn_lottie::Transport`]: the
-//! playhead, the props, the events), which is arithmetic. Everything that
-//! costs is on the `vn-lottie` worker thread:
-//!
-//! * **The load.** A file is read there, an http(s) `src` is fetched on gpui's
-//!   HTTP client, and the parse and the engine's load run there. The node is an
-//!   empty box until the load lands, as an `<img>` is until it decodes; the
-//!   transport starts then, with the props it has at that moment.
-//! * **The raster.** Each tick asks the worker for the frame at the playhead,
-//!   at the box's size in device pixels, if the node can be seen. The next
-//!   tick writes the drawn frame into the node's [`LiveTile`]: in place, a
-//!   frame costs a present and no build. So the picture trails the transport
-//!   by at most one vsync while the worker keeps up, and skips to the newest
-//!   frame when it does not. Events follow the transport, as before.
-//! * The pixels are straight alpha ([`vn_lottie::Animation::render_at`]), which
-//!   is what gpui blends.
-//!
-//! A tile's first frame, a new size and a tile that moved in the atlas need a
-//! draw, and touch the node, so a cache boundary over it renders again instead
-//! of replaying a sprite that points at the old place. That is why `<lottie>`
-//! is not one of `crate::cache`'s exclusions.
-//!
-//! # Detached nodes keep their clock running
-//!
-//! A `<KeepAlive>`-cached page is moved into a detached container, not
-//! unmounted, so its nodes stay allocated and their entries stay in this map.
-//! They keep advancing while off-screen — which is what a browser does with a
-//! `<lottie-player>` in a detached subtree (its rAF loop is never cancelled) —
-//! so coming back shows the animation where it *would* be, not where it was
-//! left. Nothing is drawn meanwhile (a node no one can see asks for no raster),
-//! so the cost is the transport arithmetic.
+//! Only the transport (arithmetic) runs on the UI thread; load, parse and raster run on the
+//! `vn-lottie` worker, and each tick writes the drawn frame into the node's [`LiveTile`]. Detached
+//! nodes (a `<KeepAlive>` page) keep their clock running but draw nothing.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
@@ -79,24 +29,19 @@ use crate::EventPayload;
 
 /// One `<lottie>` node's persistent state.
 struct Entry {
-    /// The raw `src` string the entry was built from — the (re)load key.
     src: String,
-    /// `None` until the load lands, and for good when it failed. A broken `src`
-    /// costs one advisory, not one per frame.
+    /// `None` until the load lands, and for good when it failed.
     transport: Option<Transport>,
-    /// Last `autoplay` value seen, so play/pause is edge-triggered off the
-    /// *prop* (a `v-bind` that never changes must not restart a paused
-    /// animation every frame).
+    /// Last `autoplay` value seen, so play/pause is edge-triggered off the *prop* (a `v-bind` that
+    /// never changes must not restart a paused animation every frame).
     autoplay: bool,
-    /// **The window that built this node last** (docs/MULTIWINDOW.md §5.1).
-    /// Its tile lives in that window's atlas; a node that moves to another
-    /// window gets a new tile there.
+    /// Its tile lives in that window's atlas; a node that moves to another window gets a new tile
+    /// there.
     window: WinKey,
-    /// The box the build laid the animation into: logical px, and the
-    /// window's scale. What the raster is drawn for.
+    /// The box the build laid the animation into: logical px, and the window's scale.
     boxed: Option<((f32, f32), f32)>,
-    /// Shared with the worker: the animation, the load's outcome, the frame
-    /// asked for and the frame drawn.
+    /// Shared with the worker: the animation, the load's outcome, the frame asked for and the frame
+    /// drawn.
     job: Arc<Job>,
     /// The last raster asked for: `(frame bits, width, height)`.
     asked: Option<(u32, u32, u32)>,
@@ -117,7 +62,6 @@ impl Entry {
         }
     }
 
-    /// The raster the box wants now: `(frame bits, width, height)`, and the frame.
     fn want(&self) -> Option<((u32, u32, u32), f32)> {
         let transport = self.transport.as_ref()?;
         let (size, scale) = self.boxed?;
@@ -133,8 +77,7 @@ struct Tile {
     shows: (u32, u32, u32),
 }
 
-/// A node's half of the worker's state. Locked only to hand things over: the
-/// worker takes the animation out to draw.
+/// A node's half of the worker's state.
 #[derive(Default)]
 struct Job {
     slot: Mutex<Slot>,
@@ -144,11 +87,11 @@ struct Job {
 struct Slot {
     /// While the worker is not drawing with it.
     animation: Option<Animation>,
-    /// What the load came to, until the tick takes it: the metadata, or the
-    /// compat channel's key prefix and the advisory.
+    /// What the load came to, until the tick takes it: the metadata, or the compat channel's key
+    /// prefix and the advisory.
     loaded: Option<Result<LottieMeta, (&'static str, String)>>,
-    /// Non-fatal notes from a load that worked, or the unsupported features of
-    /// one that did not, for the compat channel.
+    /// Non-fatal notes from a load that worked, or the unsupported features of one that did not,
+    /// for the compat channel.
     advisories: Vec<String>,
     /// The newest frame asked for and not started: `(frame, width, height)`.
     ask: Option<(f32, u32, u32)>,
@@ -168,8 +111,7 @@ impl Job {
 
 thread_local! {
     static LOTTIE_STATES: RefCell<HashMap<u32, Entry>> = RefCell::new(HashMap::new());
-    /// Wall clock for the tick. `None` until the first frame — the pump's own
-    /// cadence is what defines `dt`, exactly as it does for CSS transitions.
+    /// Wall clock for the tick.
     static LAST_TICK: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
@@ -178,17 +120,12 @@ pub(crate) fn count() -> usize {
     LOTTIE_STATES.with(|m| m.borrow().len())
 }
 
-/// A tick longer than this is treated as a stall (debugger, minimised window,
-/// a long HMR patch) and clamped, so an animation does not teleport. Browsers
-/// do the same by simply not running rAF while hidden.
+/// A tick longer than this is treated as a stall (debugger, minimised window, a long HMR patch) and
+/// clamped, so an animation does not teleport.
 const MAX_DT: Duration = Duration::from_millis(250);
 
-// ---------------------------------------------------------------------------
-// the worker
-// ---------------------------------------------------------------------------
 
-/// Loads, fetches and draws not yet handed back. While any is out the pump
-/// keeps ticking ([`any_playing`]), so the tick that takes the result comes.
+/// Loads, fetches and draws not yet handed back.
 static PENDING: AtomicUsize = AtomicUsize::new(0);
 
 enum Work {
@@ -304,8 +241,7 @@ fn draw_on_worker(job: &Job) {
     }
 }
 
-/// Asks the worker for `frame` at `w × h`; a newer ask replaces one not
-/// started yet.
+/// Asks the worker for `frame` at `w × h`; a newer ask replaces one not started yet.
 fn ask(job: &Arc<Job>, frame: f32, w: u32, h: u32) {
     let mut slot = job.slot();
     slot.ask = Some((frame, w, h));
@@ -316,10 +252,8 @@ fn ask(job: &Arc<Job>, frame: f32, w: u32, h: u32) {
     }
 }
 
-/// Starts loading `src` for `job`: a file is read on the worker, an http(s)
-/// URL fetched on gpui's HTTP client, anything else (`data:`, `blob:`, the
-/// package) is in memory already. `Err` is a `src` that cannot be resolved,
-/// with what `<img>` would have said, for the caller to report now.
+/// Starts loading `src` for `job`: a file is read on the worker, an http(s) URL fetched on gpui's
+/// HTTP client, anything else (`data:`, `blob:`, the package) is in memory already.
 fn start_load(job: &Arc<Job>, src: &str, cx: &mut App) -> Result<(), String> {
     let trimmed = src.trim();
     let scheme = trimmed.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
@@ -348,42 +282,28 @@ fn start_load(job: &Arc<Job>, src: &str, cx: &mut App) -> Result<(), String> {
     submit(Work::Load { job: job.clone(), src: src.to_string(), from });
     Ok(())
 }
-// ---------------------------------------------------------------------------
-// props
-// ---------------------------------------------------------------------------
 
 /// `loop` — browser boolean-attribute grammar, plus lottie-web's numeric form.
-///
-/// Absent is **`LoopMode::None`**: the `<lottie-player>` default, not
-/// lottie-web's (decision 1 in the module docs). `:loop="n"` gets the `+ 1`
-/// that turns the crate's "play n times" into lottie-web's "repeat n times"
-/// (decision 3).
 fn loop_mode_from(raw: Option<&str>) -> LoopMode {
     match raw.map(str::trim) {
         None | Some("false") => LoopMode::None,
         Some("") | Some("true") => LoopMode::Loop,
         Some(v) => match v.parse::<f64>() {
-            // `loop="Infinity"` parses, and so does a count past `u32`: both
-            // loop forever, where `as u32 + 1` overflowed to a count of 0.
             Ok(n) if n >= u32::MAX as f64 => LoopMode::Loop,
             Ok(n) if n >= 1.0 => LoopMode::Count(n as u32 + 1),
-            // `loop="0"` is falsy in lottie-web, like `loop: 0`.
             Ok(_) => LoopMode::None,
-            // Any other non-empty attribute value is truthy in HTML.
             Err(_) => LoopMode::Loop,
         },
     }
 }
 
-/// The browser's boolean-attribute rule: present is true unless it spells
-/// `"false"` (which is what `:attr="false"` serialises to through `patchProp`).
+/// The browser's boolean-attribute rule: present is true unless it spells `"false"` (which is what
+/// `:attr="false"` serialises to through `patchProp`).
 fn bool_attr(raw: Option<&str>) -> bool {
     raw.is_some_and(|v| v.trim() != "false")
 }
 
-/// `segment="in,out"`. An array binding (`:segment="[10, 40]"`) cannot reach
-/// here — `patchProp` drops non-primitive props with its own advisory — so the
-/// string spelling is the supported one, and it is what gets documented.
+/// `segment="in,out"`.
 fn segment_from(raw: Option<&str>) -> Option<(f32, f32)> {
     let raw = raw?.trim();
     if raw.is_empty() {
@@ -421,17 +341,9 @@ fn warn_unsupported_props(t: &Tree, id: u32) {
 }
 
 
-// ---------------------------------------------------------------------------
-// lifecycle
-// ---------------------------------------------------------------------------
 
-/// Starts the load if `src` changed (or there is no entry yet), then pushes
-/// every prop into the transport. Returns the animation's intrinsic size,
-/// which is what the box falls back to when CSS declares none — `None` while
-/// nothing is loaded, i.e. the element paints nothing at all.
-///
-/// Called from the render walk, once per node per frame. The load itself is
-/// off the UI thread; the rest is a handful of setters the transport dedupes.
+/// Starts the load if `src` changed (or there is no entry yet), then pushes every prop into the
+/// transport.
 pub(crate) fn sync(t: &Tree, id: u32, win: WinKey, cx: &mut App) -> Option<(u32, u32)> {
     warn_unsupported_props(t, id);
     let src = t.prop(id, "src").unwrap_or("").to_string();
@@ -441,14 +353,12 @@ pub(crate) fn sync(t: &Tree, id: u32, win: WinKey, cx: &mut App) -> Option<(u32,
         let mut map = m.borrow_mut();
         let fresh = map.get(&id).is_none_or(|entry| entry.src != src);
         if fresh {
-            // The old picture goes back to its atlas; the old load is dropped
-            // wherever it is.
             if let Some(old) = map.remove(&id) {
                 forget(old);
             }
             let entry = Entry::new(src.clone(), autoplay, win);
-            // An absent `src` is not an error worth shouting about (a `v-if`'d
-            // or not-yet-resolved binding hits this on its first frame).
+            // An absent `src` is not an error worth shouting about (a `v-if`'d or not-yet-resolved
+            // binding hits this on its first frame).
             if !src.trim().is_empty() {
                 if let Err(msg) = start_load(&entry.job, &src, cx) {
                     crate::render::warn_compat(&format!("lottie-src:{src}"), &msg);
@@ -458,8 +368,8 @@ pub(crate) fn sync(t: &Tree, id: u32, win: WinKey, cx: &mut App) -> Option<(u32,
         }
 
         let entry = map.get_mut(&id)?;
-        // Re-stamped every frame: a node can move between windows over its life
-        // (pop out, come back), and its tile belongs to the window that built it.
+        // Re-stamped every frame: a node can move between windows over its life (pop out, come
+        // back), and its tile belongs to the window that built it.
         entry.window = win;
         apply_props(t, id, entry, false, autoplay);
         let meta = entry.transport.as_ref()?.meta();
@@ -467,17 +377,9 @@ pub(crate) fn sync(t: &Tree, id: u32, win: WinKey, cx: &mut App) -> Option<(u32,
     })
 }
 
-/// Pushes the props into a loaded node's transport. `loaded` is the frame its
-/// load landed on: then `autoplay` decides whether it starts at all (the
-/// transport starts playing); afterwards a change is a play/pause command,
-/// which is what makes `:autoplay="isPlaying"` work as the transport control
-/// markup needs it to be. `<lottie-player>` only reads `autoplay` at load and
-/// exposes `.play()` / `.pause()` instead — we have no element methods, so
-/// this is a deliberate, documented superset.
+/// Pushes the props into a loaded node's transport.
 fn apply_props(t: &Tree, id: u32, entry: &mut Entry, loaded: bool, autoplay: bool) {
     let Some(state) = entry.transport.as_mut() else {
-        // Still loading: the value seen on the frame it lands is the one that
-        // decides.
         entry.autoplay = autoplay;
         return;
     };
@@ -496,9 +398,6 @@ fn apply_props(t: &Tree, id: u32, entry: &mut Entry, loaded: bool, autoplay: boo
     });
     state.set_segment(segment_from(t.prop(id, "segment")));
 
-    // `set_loop_mode` clears `finished` for any looping mode, so flipping
-    // `:loop` on a completed animation makes it run again — lottie-web's
-    // `setLoop` does the same.
     state.set_loop_mode(loop_mode_from(t.prop(id, "loop")));
 
     if loaded || autoplay != entry.autoplay {
@@ -511,9 +410,8 @@ fn apply_props(t: &Tree, id: u32, entry: &mut Entry, loaded: bool, autoplay: boo
     entry.autoplay = autoplay;
 }
 
-/// What the build paints for a node laid into a box of `size` logical px on
-/// a `scale` display: its tile, once it has a frame in this window. Records
-/// the box, which is what the next raster is drawn for.
+/// What the build paints for a node laid into a box of `size` logical px on a `scale` display: its
+/// tile, once it has a frame in this window.
 pub(crate) fn paint(id: u32, win: WinKey, size: (f32, f32), scale: f32) -> Option<Arc<RenderImage>> {
     LOTTIE_STATES.with(|m| {
         let mut map = m.borrow_mut();
@@ -523,8 +421,8 @@ pub(crate) fn paint(id: u32, win: WinKey, size: (f32, f32), scale: f32) -> Optio
     })
 }
 
-/// Lets go of a node's state: its tile goes back to its atlas, and the worker
-/// drops whatever it still holds for it.
+/// Lets go of a node's state: its tile goes back to its atlas, and the worker drops whatever it
+/// still holds for it.
 fn forget(entry: Entry) {
     let mut slot = entry.job.slot();
     slot.gone = true;
@@ -536,8 +434,6 @@ fn forget(entry: Entry) {
     }
 }
 
-/// Drops the entries of nodes that no longer exist. Their tiles go back to
-/// their windows' atlases on those windows' next frames (CONTRACT.md §8.9).
 pub(crate) fn gc(live: impl Fn(u32) -> bool) {
     let gone: Vec<Entry> = LOTTIE_STATES.with(|m| {
         let mut map = m.borrow_mut();
@@ -561,13 +457,7 @@ pub(crate) fn forget_window(key: WinKey) {
     });
 }
 
-// ---------------------------------------------------------------------------
-// the frame pump
-// ---------------------------------------------------------------------------
 
-/// True while any `<lottie>` still needs frames — folded into the host's
-/// `animating()` OR-chain (CONTRACT.md §4) — or a load or a raster is out on
-/// the worker, whose result the next tick takes.
 pub fn any_playing() -> bool {
     PENDING.load(Ordering::SeqCst) > 0
         || LOTTIE_STATES.with(|m| {
@@ -588,14 +478,8 @@ struct Ticked {
     progress: f32,
 }
 
-/// Takes the loads that landed, advances every `<lottie>` by the wall-clock
-/// delta since the previous frame, asks the worker for the frames the nodes
-/// that can be seen now show, writes the frames it drew into this window's
-/// tiles, and dispatches the events. Returns `true` when the window must draw:
-/// a box that takes its animation's size, a tile's first frame, a new tile.
-/// A frame written in place asks only for a present (`crate::live`).
-///
-/// Runs from the host's frame pump, **before** the draw.
+/// Returns `true` when the window must draw: a box that takes its animation's size, a tile's first
+/// frame, a new tile. A frame written in place asks only for a present (`crate::live`).
 pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     drain_pending_drops(window, cx);
 
@@ -610,8 +494,6 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     let mut draw = false;
     let mut touch: Vec<u32> = Vec::new();
 
-    // Loads that landed. Their transports start now, with the props the node
-    // has now, and move from the next tick on.
     let mut landed: Vec<(u32, String, Result<LottieMeta, (&'static str, String)>, Vec<String>)> = Vec::new();
     LOTTIE_STATES.with(|m| {
         for (&id, entry) in m.borrow_mut().iter_mut() {
@@ -621,7 +503,6 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
                 drop(slot);
                 if let Ok(meta) = &loaded {
                     entry.transport = Some(Transport::new(meta.clone()));
-                    // The box takes the animation's size: build it again.
                     touch.push(id);
                     draw = true;
                 }
@@ -647,9 +528,8 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     }
     let fresh: Vec<u32> = landed.iter().map(|(id, ..)| *id).collect();
 
-    // The clocks. Collect first, dispatch after: a JS handler can mutate the
-    // tree (and `flush_changes` re-enters `gc`), so the map must not be
-    // borrowed while any of this reaches JavaScript.
+    // Collect first, dispatch after: a JS handler can mutate the tree (and `flush_changes`
+    // re-enters `gc`), so the map must not be borrowed while any of this reaches JavaScript.
     let ticks: Vec<Ticked> = if dt.is_zero() {
         Vec::new()
     } else {
@@ -676,8 +556,6 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
         })
     };
 
-    // The rasters: written when drawn, asked for when a node that can be seen
-    // shows another frame or size than its tile holds.
     let shown = write(window, here, &mut touch, &mut draw);
     live::note(shown);
     LOTTIE_STATES.with(|m| {
@@ -706,9 +584,7 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     draw
 }
 
-/// Writes the frames the worker drew for nodes built in window `here` into
-/// their tiles. Another window's frames wait for its own draw
-/// ([`window_tick`]), which `draw` asks for.
+/// Writes the frames the worker drew for nodes built in window `here` into their tiles.
 fn write(window: &mut Window, here: WinKey, touch: &mut Vec<u32>, draw: &mut bool) -> Shown {
     let mut shown = Shown::Nowhere;
     LOTTIE_STATES.with(|m| {
@@ -721,8 +597,6 @@ fn write(window: &mut Window, here: WinKey, touch: &mut Vec<u32>, draw: &mut boo
             let (_, w, h) = key;
             let fits = entry.tile.as_ref().is_some_and(|tile| tile.live.window() == here && tile.live.size() == (w, h));
             if !fits {
-                // Another size or window: a new tile, which the node paints
-                // from its next build on; the old one goes back then.
                 if let Some(old) = entry.tile.take() {
                     old.live.retire();
                 }
@@ -730,12 +604,10 @@ fn write(window: &mut Window, here: WinKey, touch: &mut Vec<u32>, draw: &mut boo
             }
             let tile = entry.tile.as_mut().expect("just made");
             tile.shows = key;
-            // Asked as if visible, to tell a write in place from one that
-            // moved the tile.
             let wrote = tile.live.write_bgra(window, bytes, true);
             if !fits || wrote == Shown::Draw {
-                // A cache boundary over the node would replay a sprite that
-                // points at the old place.
+                // A cache boundary over the node would replay a sprite that points at the old
+                // place.
                 touch.push(id);
                 shown = Shown::Draw;
             } else {
@@ -747,10 +619,8 @@ fn write(window: &mut Window, here: WinKey, touch: &mut Vec<u32>, draw: &mut boo
     shown
 }
 
-/// A pop-out's half of [`tick`], from its own draw: its atlas's dropped
-/// tiles handed back, and the frames drawn for the nodes it built written
-/// into its tiles. The clocks and the events are the pump's, once per frame
-/// group (lib.rs `window_frame_tick`).
+/// A pop-out's half of [`tick`], from its own draw: its atlas's dropped tiles handed back, and the
+/// frames drawn for the nodes it built written into its tiles.
 pub(crate) fn window_tick(window: &mut Window, cx: &mut App) {
     drain_pending_drops(window, cx);
     let here = windows::key(window);
@@ -773,12 +643,11 @@ fn drain_pending_drops(window: &mut Window, cx: &mut App) {
     }
 }
 
-/// A load's outcome on the compat channel: what the compatibility pass
-/// rewrote, or why it failed and which features it lacks.
+/// A load's outcome on the compat channel: what the compatibility pass rewrote, or why it failed
+/// and which features it lacks.
 fn report_load(src: &str, loaded: &Result<LottieMeta, (&'static str, String)>, advisories: &[String]) {
     match loaded {
         Ok(_) => {
-            // A *successful* load can still have had to rewrite the document.
             for advisory in advisories {
                 crate::render::warn_compat(
                     &format!("lottie-load:{src}:{advisory}"),
@@ -799,12 +668,6 @@ fn report_load(src: &str, loaded: &Result<LottieMeta, (&'static str, String)>, a
 }
 
 /// One tick's events, in lottie-web's firing order, gated on the listener bits.
-///
-/// **The `loopComplete` that coincides with `complete` is dropped** — decision 2
-/// in the module docs. `Advance::events()` reports the boundary that ended
-/// playback as both, because at the crate's level it *is* both; lottie-web
-/// fires only `complete` there, for `loop: false` and for a numeric `loop`
-/// alike.
 fn dispatch_events(ticked: &Ticked, window: &mut Window, cx: &mut App) {
     let Ticked { id, advance, total_frames, frame, progress } = *ticked;
     let listeners = tree::read_tree(|t| t.node(id).map(|n| n.listeners)).unwrap_or(0);
@@ -813,11 +676,9 @@ fn dispatch_events(ticked: &Ticked, window: &mut Window, cx: &mut App) {
         return;
     }
 
-    // `loops_completed` counts boundaries crossed this tick; the last of them
-    // is the completing one when `completed` is set.
     let suppressed_loop = advance.completed.then_some(advance.loop_count);
-    // lottie-web's `playCount` at `complete` does not count the completing
-    // pass, so neither does the payload.
+    // lottie-web's `playCount` at `complete` does not count the completing pass, so neither does
+    // the payload.
     let loops_done = if advance.completed {
         advance.loop_count.saturating_sub(1)
     } else {
@@ -828,8 +689,6 @@ fn dispatch_events(ticked: &Ticked, window: &mut Window, cx: &mut App) {
     for event in advance.events() {
         match event {
             LottieEvent::EnterFrame { frame, elapsed } => {
-                // High frequency: do not even build the payload unless someone
-                // is listening (CONTRACT.md §2).
                 if !listens(tree::EV_ENTERFRAME) {
                     continue;
                 }
@@ -876,15 +735,12 @@ mod tests {
 
     #[test]
     fn loop_follows_the_lottie_player_defaults_and_lottie_webs_counting() {
-        // OWNER DECISION 1: absent means NOT looping (`<lottie-player>`), not
-        // lottie-web's `loadAnimation` default.
+        // OWNER DECISION 1: absent means NOT looping (`<lottie-player>`), not lottie-web's
+        // `loadAnimation` default.
         assert_eq!(loop_mode_from(None), LoopMode::None);
         assert_eq!(loop_mode_from(Some("false")), LoopMode::None);
-        // Browser boolean-attribute spellings.
         assert_eq!(loop_mode_from(Some("")), LoopMode::Loop);
         assert_eq!(loop_mode_from(Some("true")), LoopMode::Loop);
-        // OWNER DECISION 3: lottie-web's numeric `loop` counts repeats, so
-        // `loop="2"` plays three times — Count(3) in the crate's counting.
         assert_eq!(loop_mode_from(Some("2")), LoopMode::Count(3));
         assert_eq!(loop_mode_from(Some("0")), LoopMode::None);
         assert_eq!(loop_mode_from(Some("Infinity")), LoopMode::Loop);

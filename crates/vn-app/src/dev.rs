@@ -1,5 +1,5 @@
-//! Dev boot + the file-based HMR transport (no HTTP server, no WebSocket — the
-//! JS engine has neither, and the host can read files anyway).
+//! Dev boot and the file-based HMR transport (no HTTP server or WebSocket: the JS engine has
+//! neither, and the host can read files).
 //!
 //!   dist/vendor.js          IIFE: @vue/runtime-core + renderer + __VN__ loader
 //!   dist/modules/<enc>.js   one classic script per app source file, each
@@ -7,15 +7,12 @@
 //!                           with "/" replaced by "__", plus ".js"
 //!   dist/manifest.json      { rev, vendorRev, entry, modules: ["<id>", ...] }
 //!   dist/changes.json       { rev, vendorRev, changed: [{ id, kind }] }
-//!
-//! changes.json is written LAST by the watcher and is the only file we poll:
-//! once its mtime moves, every module script and the manifest are already on
-//! disk. We re-eval each changed module script (which redefines its factory and
-//! re-registers its CSS) and then hand the raw changes JSON to
+//! changes.json is written last by the watcher and is the only file polled: once its mtime moves,
+//! every module script and the manifest are on disk. Each changed module script is re-evaluated
+//! (redefining its factory and re-registering its CSS), then the raw changes JSON goes to
 //! `__VN__.hmrApply`, which decides rerender / reload / css-only per entry.
 //!
-//! Every path here is compiled out under `--features prod`, where the bundle
-//! is embedded in the exe and nothing polls the filesystem (see `prod.rs`).
+//! Compiled out under `--features prod`, where the bundle is embedded (see `prod.rs`).
 
 use vn_runtime::JsRuntime;
 
@@ -44,13 +41,8 @@ mod tests {
 /// How often the frame pump calls [`poll`] — every 30th frame, ~2×/s at 60 fps.
 const POLL_EVERY_FRAMES: u32 = 30;
 
-/// A file in this host's dist slot.
-///
-/// `VN_DIST` points one exe at another app's build output (build.ts already
-/// takes [entry] [dist-dir] positionals), which is what lets several dev hosts
-/// run side by side without sharing packages/vue-native/dist. The rule moved to
-/// [`crate::slot`] when a prod build gained a slot of its own with no dist in
-/// it; this is the dev half's spelling of the same question.
+/// A file in this host's dist slot. `VN_DIST` points one exe at another app's build output, so
+/// several dev hosts can run side by side; the rule itself lives in [`crate::slot`].
 pub(crate) fn dist(rel: &str) -> std::path::PathBuf {
     crate::slot::path(rel)
 }
@@ -118,17 +110,9 @@ fn eval_path(rt: &JsRuntime, path: &std::path::Path, url: &str, label: &'static 
     true
 }
 
-/// Full boot (also used for a cold restart when vendor.js changed): vendor
-/// bundle -> every module script (registration only, nothing executes) ->
-/// `__VN__.boot(entry)`, which requires the entry and mounts the app.
-/// The base a relative `<img src>` resolves against, derived the only way the
-/// dev host can know it: from the manifest's entry module.
-///
-/// `apps/imgperf/src/main.js` → `apps/imgperf/` — the entry's directory with a
-/// trailing `src/` stripped, i.e. where a Vite app would keep `index.html`. A
-/// browser resolves a relative URL against the document; this is our document's
-/// directory. `VN_APP_ROOT` (read in `lib.rs`) overrides and wins, so this
-/// never clobbers an explicit choice.
+/// The base a relative `<img src>` resolves against, which the dev host can only derive from the
+/// manifest's entry module: `apps/imgperf/src/main.js` → `apps/imgperf/` (a trailing `src/` is
+/// stripped, where a Vite app would keep `index.html`). `VN_APP_ROOT` (read in `lib.rs`) wins.
 fn publish_asset_base(entry: &str) {
     if std::env::var_os("VN_APP_ROOT").is_some_and(|v| !v.is_empty()) {
         return;
@@ -143,43 +127,29 @@ fn publish_asset_base(entry: &str) {
     vn_tree::set_asset_base(base.to_path_buf());
 }
 
-/// The `window` block of `apps/<app>/vn.config.json`, which `build.ts` copies
-/// verbatim into `dist/manifest.json` (docs/WINDOWING.md §4.1).
-///
-/// Read BEFORE `cx.open_window`, which is why it is a third function next to
-/// [`boot`] and [`poll_frame`] rather than something the boot path hands over:
-/// creation-time-only gpui options cannot be applied afterwards without a
-/// visible flash.
+/// The `window` block of `apps/<app>/vn.config.json`, which `build.ts` copies verbatim into
+/// `dist/manifest.json`. Read before `cx.open_window`, since creation-time gpui options cannot be
+/// applied afterwards without a visible flash.
 pub fn window_config() -> Option<String> {
     let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
     let v = json::parse(&text)?;
     Some(v.get("window")?.to_json())
 }
 
-/// The `launch` block `build.ts` gathers from `vn.config.json`'s top-level
-/// `id` / `singleInstance` / `raiseOnSecondInstance` / `protocols`
-/// (docs/LAUNCH.md). Read by `main()` before anything else exists — the
-/// single-instance check is the first thing a process does — which is why it
-/// is a function here beside [`window_config`] rather than part of [`boot`].
+/// The `launch` block `build.ts` gathers from `vn.config.json`'s top-level `id` / `singleInstance` /
+/// `raiseOnSecondInstance` / `protocols`. Read by `main()` before anything else exists.
 pub fn launch_config() -> Option<String> {
     let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
     let v = json::parse(&text)?;
     Some(v.get("launch")?.to_json())
 }
 
-/// The app's own name — what a per-app place on disk is named after
-/// (`%LOCALAPPDATA%\<app name>\storage`, see crates/vn-storage).
+/// The app's own name, which names its per-app place on disk (`%LOCALAPPDATA%\<app name>\storage`).
 ///
-/// A DEV host cannot use its executable's name for this: one `vn-app.exe` runs
-/// `apps/hello`, `apps/shadcn` and whatever else `VN_DIST` points at, and they
-/// must not share a `localStorage`. So it comes from the build:
-/// `apps/<app>/vn.config.json`'s optional `"name"`, and failing that the app
-/// directory the entry module sits in — `apps/hello/src/main.js` → `hello`,
-/// the same derivation [`publish_asset_base`] uses for the asset base, for the
-/// same reason (it is the directory a Vite app would keep `index.html` in).
-///
-/// `None` only when there is no manifest at all, and then vn-storage falls
-/// through to the executable name.
+/// A dev host cannot use its executable's name: one `vn-app.exe` runs every app `VN_DIST` points at,
+/// and they must not share a `localStorage`. So it comes from `vn.config.json`'s optional `"name"`,
+/// else the app directory of the entry module (as [`publish_asset_base`]). `None` only when there
+/// is no manifest, and then vn-storage falls back to the executable name.
 pub fn app_name() -> Option<String> {
     let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
     let v = json::parse(&text)?;
@@ -200,26 +170,15 @@ fn app_dir_of(entry: &str) -> Option<String> {
     segs.pop().filter(|s| !s.is_empty()).map(str::to_string)
 }
 
-/// Serves `fetch("assets/x.wav")` out of the app directory in a dev build.
+/// Serves `fetch("assets/x.wav")` out of the app directory in a dev build, so it resolves against
+/// the same base as `<img src>` (`vn_tree`'s asset base) rather than the process working directory.
 ///
-/// A browser resolves `fetch()` and `<img src>` against the SAME document URL.
-/// Here they were resolved against two different things: `<img>`/`<video>` go
-/// through `vn_tree`'s asset base (the app directory), while `fetch()` fell
-/// through redjs to the process working directory, because the dev host never
-/// installed a content provider and passed empty roots to `redjs_webshim_install`.
-/// So `<img src="assets/a.png">` worked and `fetch("assets/a.png")` 404'd from
-/// the same component — a divergence with no upside.
+/// Same seam as `prod.rs`, with the same key (`vn_payload::content_key`: percent-decoded, `.`/`..`
+/// folded, never above the root): a URL that resolves here resolves to the same file once packaged,
+/// and one that cannot be packaged cannot be read here either.
 ///
-/// This is the same seam `prod.rs` uses to serve a packaged exe's payload, and
-/// since m25 it uses the same KEY: `vn_payload::content_key` (percent-decoded,
-/// `.`/`..` folded, never above the root) — the normaliser `<img>` uses too —
-/// so a URL that resolves here resolves to the same file once packaged, and
-/// one that cannot be packaged cannot be read here either.
-///
-/// A miss is a 404. It used to fall through to redjs's on-disk resolution,
-/// which read it relative to the PROCESS CWD; that is gone in every mode
-/// (vn-runtime `NO_DISK_ROOT`), because a packaged exe has no meaningful cwd.
-/// A miss that the old fallthrough WOULD have served says so, once.
+/// A miss is a 404, with one advisory when a file of that name exists relative to the cwd (a
+/// packaged exe has no meaningful cwd; vn-runtime `NO_DISK_ROOT`).
 fn install_asset_provider(rt: &JsRuntime) {
     // `boot` runs again on a cold restart, and the provider is process-wide and
     // set-once; re-registering would only print an advisory.
@@ -255,12 +214,14 @@ fn cwd_advisory(raw: &str) {
     }
     eprintln!(
         "[vue-native compat] fetch({raw:?}) is a 404: it is not under the app root. A file of that name \
-         exists relative to the working directory, which hosts before m25 read as a fallback — a packaged \
-         exe has no such fallback, so neither does dev. Move it under the app (and into vn.config.json \
-         \"assets\") to have it served."
+         exists relative to the working directory, which is not a fallback: a packaged exe has none, so \
+         neither does dev. Move it under the app (and into vn.config.json \"assets\") to have it served."
     );
 }
 
+/// Full boot (also used for a cold restart when vendor.js changed): vendor bundle -> every module
+/// script (registration only, nothing executes) -> `__VN__.boot(entry)`, which requires the entry
+/// and mounts the app.
 pub fn boot(rt: &JsRuntime) {
     let Some(manifest) = read_manifest() else { return };
     publish_asset_base(&manifest.entry);

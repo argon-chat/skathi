@@ -1,16 +1,6 @@
-// `appHost` — the app's side of an EMBEDDED vue-native (docs/EMBEDDING.md).
-//
-// Another program — a terminal UI, a launcher, a service — runs vue-native as
-// a library (crates/vn-app/src/embed.rs) and gives the app functions to call
-// and events to listen to:
-//
-//   import { appHost } from "vue-native";
-//   const rows = await appHost.call<Row[]>("db.query", "select 1");
-//   const off = appHost.on("status", (s) => (online.value = s.online));
-//
-// Arguments and results cross as JSON. In the vue-native exe nobody embeds the
-// app: `available` is false, `call` rejects and says once why, and `on` never
-// fires — so an app that runs both ways checks `available`.
+// `appHost`: the app's side of an embedded vue-native (see crates/vn-app/src/embed.rs).
+// Arguments and results cross as JSON. Outside an embedder `available` is false, `call` rejects
+// (and says why once) and `on` never fires.
 
 /** A rejection from the embedder: its message, and which function it was. */
 export interface AppHostError extends Error {
@@ -18,13 +8,10 @@ export interface AppHostError extends Error {
 }
 
 export interface AppHost {
-  /** True when another program embeds this app. */
   readonly available: boolean;
-  /** The embedder's functions, sorted. Empty when not embedded. */
   readonly functions: readonly string[];
   /** Calls the embedder's function `name`; its answer, parsed from JSON. */
   call<T = unknown>(name: string, ...args: unknown[]): Promise<T>;
-  /** Listens to the embedder's event `event`. Returns the unsubscribe. */
   on(event: string, handler: (data: unknown) => void): () => void;
   off(event: string, handler: (data: unknown) => void): void;
 }
@@ -40,8 +27,7 @@ const host: HostFns | null =
     ? { setDispatcher: __vn_host_set_dispatcher, call: __vn_host_call, functions: __vn_host_functions }
     : null;
 
-// A reload keeps the JS realm. Retire the previous facade before replacing
-// its native dispatcher, so old subscriptions and promises cannot enter the next app.
+// A reload keeps the JS realm: retire the old facade so stale subscriptions and promises cannot reach the next app.
 const lifecycle = globalThis as { __VN_HOST__?: AppHost; __VN_HOST_LIFECYCLE__?: { reset: () => void } };
 lifecycle.__VN_HOST_LIFECYCLE__?.reset();
 
@@ -78,7 +64,7 @@ function adviseNotEmbedded(name: string): void {
   console.warn(
     `[vue-native compat] appHost.call(${JSON.stringify(name)}): this app is not embedded in another program, ` +
       `so there is no host to call and the promise rejects. appHost exists when an application runs vue-native ` +
-      `as a library (docs/EMBEDDING.md); check appHost.available to run both ways.`,
+      `as a library; check appHost.available to run both ways.`,
   );
 }
 
@@ -164,14 +150,12 @@ export const appHost: AppHost = {
   },
 };
 
-/** Runtime lifecycle hook; this is not part of the application's AppHost API. */
 export function resetAppHost(): void {
   listeners.clear();
   for (const p of pending.values()) p.reject(hostError(p.name, "the page unloaded before the host answered"));
   pending.clear();
 }
 
-// Public lightweight access for app-owned adapters that also build without the
-// vue-native module alias. Replaced on reload together with its dispatcher.
+// Reachable by app adapters that build without the vue-native module alias.
 lifecycle.__VN_HOST__ = appHost;
 lifecycle.__VN_HOST_LIFECYCLE__ = { reset: resetAppHost };

@@ -1,84 +1,45 @@
 {
-  // Type-checking for the demo apps — `hello`, `oschrome`, `imgperf`,
-  // `shaderlab`, `popout`, `devtools`. Nothing here emits: bun/`build.ts` transpiles the `.ts` and
-  // `@vue/compiler-sfc` the `.vue`, so this file exists so that
-  // `bun x vue-tsc --noEmit -p apps/tsconfig.json` and an editor agree with
-  // what actually ships.
-  //
-  // Modelled on packages/vue-native/tsconfig.json, and deliberately NOT
-  // extending it: that file's `include` is the runtime's own `src/**`, and an
-  // app tsconfig that inherited it would silently re-check the runtime.
+  // Type-check only (nothing emits):
+  //   bun x vue-tsc --noEmit -p apps/tsconfig.json
+  // Not extending packages/vue-native/tsconfig.json: its `include` is the runtime's own src/**.
   "compilerOptions": {
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
 
-    // NOT "DOM", for the same reason packages/vue-native/tsconfig.json omits
-    // it: THESE APPS DO NOT RUN IN A BROWSER. They run on redjs under vn-app,
-    // which ships a small, enumerable subset of the web platform — the tier-1
-    // surface docs/WINDOWING.md, docs/STORAGE.md and docs/PERMISSIONS.md
-    // enumerate, and nothing else. `lib.dom` would assert several thousand
-    // APIs the host does not have, and every one of them would type-check here
-    // and then throw at runtime. `env.d.ts` beside this file is the real
-    // surface, written down; if a name is missing from it the honest fix is to
-    // add it there (or in packages/vue-native/src/engine.d.ts) after checking
-    // that the host really provides it — never to widen `lib`.
-    //
-    // ESNext alone still gives Promise, Map/Set, the typed arrays, Intl and
-    // JSON, which are engine features rather than browser ones.
+    // No "DOM": the apps run on redjs, which ships a small subset of the web platform. env.d.ts
+    // declares that subset; add missing names there, never widen `lib`.
     "lib": ["ESNext"],
 
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
 
-    // Same lock as the runtime's: `false` keeps a bare `x: T` field
-    // declaration ERASED rather than emitting a defineProperty in the
-    // constructor prologue. Bun reads this key, so the bundler and tsc agree.
+    // Keeps a bare `x: T` field declaration erased; bun reads this key too.
     "useDefineForClassFields": false,
 
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "noImplicitOverride": true,
 
-    // The apps have no `node_modules` of their own: `build.ts` PRE-SEEDS their
-    // bare specifiers into the loader's registry (`PRESEEDED` in build.ts,
-    // `registry` in src/loader.ts). These paths are that same mapping, so the
-    // checker sees the module the app will actually import at runtime — which
-    // is what puts `appWindow`, `appStorage` and `appPermissions` under the
-    // compiler for the first time. Diverging from build.ts here
-    // would mean checking against a package that never ships.
+    // The apps have no node_modules of their own: build.ts pre-seeds these bare specifiers into the
+    // loader's registry, and these paths mirror that mapping.
     "baseUrl": ".",
     "paths": {
-      // Both names resolve to ONE module. `runtime.ts` re-exports
-      // `@vue/runtime-core`, so `import { ref } from "vue"` and
-      // `import { appWindow } from "vue-native"` are the same namespace —
-      // exactly as the loader seeds them.
+      // Both names are one module: runtime.ts re-exports @vue/runtime-core.
       "vue": ["../packages/vue-native/src/runtime.ts"],
       "vue-native": ["../packages/vue-native/src/runtime.ts"],
-      // These two ARE the real published packages, vendored once under the
-      // runtime and pre-seeded from there.
       "vue-router": ["../packages/vue-native/node_modules/vue-router"],
       "pinia": ["../packages/vue-native/node_modules/pinia"]
     },
 
-    // No @types package may put a browser or a Node global in scope. A global
-    // that type-checks and does not exist at runtime is precisely the bug this
-    // conversion exists to find, so the whole ambient surface is `env.d.ts`
-    // plus what the runtime's own .d.ts files declare (pulled in through the
-    // `vue-native` import above).
+    // No @types package may put a browser or Node global in scope.
     "types": []
   },
   "include": [
-    // The runtime's ambient declarations. They are NOT pulled in by importing
-    // `vue-native`: a `.d.ts` that declares only globals is reached through
-    // `include`/`files`/`types` or not at all, and without them every
-    // `__vn_*` host call inside `runtime.ts` is an unresolved
-    // name. Listing them here is also what puts the host protocol in scope for
-    // the apps themselves (imgperf calls `__vn_log`).
+    // Ambient declarations are not pulled in by importing `vue-native`; they must be listed.
     "../packages/vue-native/src/engine.d.ts",
     "../packages/vue-native/src/protocol.d.ts",
-    // IndexedDB + `navigator.storage`, shipped by the runtime (m25 P2).
     "../packages/vue-native/src/indexeddb.d.ts",
     "env.d.ts",
     "hello/src/**/*.ts",
@@ -89,23 +50,10 @@
     "imgperf/src/**/*.vue",
     "shaderlab/src/**/*.ts",
     "shaderlab/src/**/*.vue",
-    // The multi-window spike (docs/MULTIWINDOW.md). It calls the raw
-    // `__vn_window_*` host fns, which is exactly the code a checker should be
-    // looking at until `<VnWindow>` exists to wrap them.
     "popout/src/**/*.ts",
     "popout/src/**/*.vue",
-    // The inspector (docs/DEVTOOLS-UI.md). A vue-native app like any other, and
-    // the one whose data is entirely OTHER PEOPLE'S JSON: `src/protocol.ts`
-    // writes the wire's reply shapes down from the Rust that builds them, which
-    // is the only thing standing between a renamed field and a blank pane.
     "devtools/src/**/*.ts",
     "devtools/src/**/*.vue"
   ]
-  // `hello/tailwind.config.ts` is deliberately OUT of scope. It is a
-  // BUILD-TIME Node module (jiti loads it inside the Tailwind JIT, it reads
-  // `__dirname`, it imports `node:path`) rather than app code, so checking it
-  // here would mean adding `@types/node` to `types` above and putting Node's
-  // globals in every component's scope. packages/vue-native/tsconfig.json
-  // scopes itself the same way — `src/**` only, with build.ts, prod.ts and
-  // tailwind.ts left out for exactly this reason.
+  // hello/tailwind.config.ts is out of scope: a build-time Node module (needs @types/node).
 }

@@ -1,41 +1,26 @@
-//! The HTTP client gpui's loaders fetch through: redjs's network stack, the one
-//! `fetch` and `XMLHttpRequest` already use.
+//! The HTTP client gpui's loaders fetch through: redjs's network stack, the one `fetch` and
+//! `XMLHttpRequest` use.
 //!
-//! # Why not reqwest
-//!
-//! Until m26 the host installed the fork's `ReqwestClient`, so a page had two
-//! network stacks. `fetch` and XHR went through redjs (`webapi/http.rs`: the
-//! pooled HTTP/2 + HTTP/1.1 keep-alive transport, the cookie jar, devtools'
-//! Network panel). Everything that loads by URL outside JS went through reqwest:
-//! `<img>` and CSS `url()` (gpui's `ImageAssetLoader`), video posters (an
-//! `<img>`), `@font-face` (`vn_tree::fonts`), `<lottie>` and `<vn-sticker>`. That
-//! is a second connection pool to the same CDN, a second TLS stack (rustls
-//! beside schannel), a runtime of its own, and loads devtools never saw.
-//! A browser has one stack and one HTTP cache under all of them, and the cache
-//! is what this unification is for (research/reports/m26/fixes-lag-1.md §4.12).
+//! One stack rather than reqwest beside it: a single connection pool, TLS stack and HTTP cache under
+//! every load (`<img>`, CSS `url()`, `@font-face`, `<lottie>`, `<vn-sticker>`, video posters), all
+//! visible to devtools' Network panel.
 //!
 //! # What goes where
 //!
-//! A `GET` or `HEAD` with no body that follows redirects is what every loader
-//! sends, and it goes to [`redjs::webapi::http::start`]: the pool decides the
-//! connection, follows the redirects hop by hop and decodes the body. Anything
-//! else (a body, a request that must not follow a redirect) goes to the
-//! `ReqwestClient` this module used to be, built on first use so a session that
-//! never needs it starts no runtime for it. No caller sends one today.
+//! A `GET` or `HEAD` with no body that follows redirects (what every loader sends) goes to
+//! [`redjs::webapi::http::start`]: the pool decides the connection, follows redirects hop by hop and
+//! decodes the body. Anything else (a body, a request that must not follow a redirect) goes to a
+//! `ReqwestClient`, built on first use so a session that never needs it starts no runtime for it. No
+//! caller sends one today.
 //!
-//! # Divergences, named
+//! # Divergences
 //!
-//! - **No cookies on image loads.** A browser's `<img>` without `crossorigin` is
-//!   a `no-cors` request in credentials mode `include`: the jar's cookies go
-//!   with it, subject to `SameSite`. The loaders here cannot tell which element
-//!   asked, or what its `crossorigin` says, and reqwest sent no cookies, so
-//!   these requests are made in mode `omit`, as before (docs/RUNTIME.md §5.26,
-//!   IC-1).
-//! - **`<video>` bytes are not here.** Media Foundation fetches an http(s)
-//!   `<video src>` through its own network source, with range requests; only the
-//!   poster, an `<img>`, comes through this client.
-//! - The user agent is the one `fetch` sends (`navigator.userAgent`), no longer
-//!   `vue-native/<version>`: the same server sees one client.
+//! - **No cookies on image loads.** A browser's `<img>` without `crossorigin` is a `no-cors` request
+//!   in credentials mode `include`. The loaders here cannot tell which element asked, so these
+//!   requests are made in mode `omit`.
+//! - **`<video>` bytes are not here.** Media Foundation fetches an http(s) `<video src>` through its
+//!   own network source, with range requests; only the poster, an `<img>`, comes through this client.
+//! - The user agent is the one `fetch` sends (`navigator.userAgent`).
 
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -95,11 +80,9 @@ impl Drop for AbortOnDrop {
     }
 }
 
-/// The HTTP cache's cap in MB (docs/STORAGE.md §12): `VN_HTTP_CACHE` (`0` or
-/// `off` turns it off, a number is the cap), else `vn.config.json`'s
-/// `"httpCache": { "maxMB": N }` (`0` or `"httpCache": false` turns it off),
-/// else 256. `window_json` is the window block, which the builders fold the
-/// top-level `httpCache` into, as they do `devtools`.
+/// The HTTP cache's cap in MB: `VN_HTTP_CACHE` (`0` or `off` turns it off, a number is the cap), else
+/// `vn.config.json`'s `"httpCache": { "maxMB": N }` (`0` or `false` turns it off), else 256.
+/// `window_json` is the window block, which the builders fold the top-level `httpCache` into.
 #[cfg_attr(not(feature = "storages"), allow(dead_code))]
 pub fn cache_mb(window_json: Option<&str>) -> u64 {
     if let Ok(v) = std::env::var("VN_HTTP_CACHE") {
@@ -125,9 +108,8 @@ fn config_mb(window_json: Option<&str>) -> Option<u64> {
     })
 }
 
-/// The HTTP cache's cap when neither the environment nor the config names one.
-/// Chromium sizes its cache from the free disk space; a fixed cap is easier to
-/// reason about for an app, and holds a few thousand avatars.
+/// The HTTP cache's cap when neither the environment nor the config names one. A fixed cap is easier
+/// for an app to reason about than Chromium's free-disk sizing.
 #[cfg_attr(not(feature = "storages"), allow(dead_code))]
 const DEFAULT_CACHE_MB: u64 = 256;
 
@@ -175,8 +157,7 @@ impl HttpClient for RedjsHttpClient {
             connect_timeout: CONNECT_TIMEOUT,
             io_timeout,
             observer: None,
-            // A loader's request goes through the HTTP cache as a browser's
-            // does (docs/STORAGE.md §12).
+            // A loader's request goes through the HTTP cache as a browser's does.
             cache: net::cache::CacheMode::Default,
         };
         let cancel = net::Cancel::new();

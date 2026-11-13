@@ -1,10 +1,6 @@
-//! VP9 WebM stickers, with alpha: the contract between the sticker core and the
-//! video track.
-//!
-//! The core (the rest of this crate) calls only what is declared here. The
-//! video track owns everything under `src/video/` and `crates/vn-vpx-sys`, and
-//! replaces the bodies marked `W3` without changing a signature. A signature
-//! change is agreed with the core first.
+//! VP9 WebM stickers, with alpha: the contract between the sticker core and the video track. The
+//! core calls only what is declared here; everything under `src/video/` and `crates/vn-vpx-sys` is
+//! the video track's.
 //!
 //! # Pipeline
 //!
@@ -21,9 +17,8 @@
 //!                             to the caller's size
 //! ```
 //!
-//! Media Foundation is not an option: its only VP9 decoder is the removable
-//! "VP9 Video Extensions" Store package, and it drops the alpha stream (W0,
-//! `research/reports/m26/stickers-1.md`).
+//! Media Foundation is not an option: its only VP9 decoder is the removable "VP9 Video Extensions"
+//! Store package, and it drops the alpha stream.
 //!
 //! # How the core drives it
 //!
@@ -39,8 +34,8 @@
 //!   [`VideoDecoder::rewind`] and starts again, at most once per loop.
 //! * A small loop (≤ 64 px) is decoded once into the core's compressed loop
 //!   cache, and its decoder is dropped.
-//! * At most 4 decoders of a 512 px source are alive at once (owner's budget).
-//!   Dropping a decoder frees everything it holds.
+//! * At most 4 decoders of a 512 px source are alive at once. Dropping a decoder frees everything
+//!   it holds.
 //!
 //! # Threading
 //!
@@ -50,8 +45,8 @@
 //! calls. Nothing here runs on the UI or JS thread, touches gpui, spawns a
 //! thread or blocks on a lock another decoder holds. libvpx runs with
 //! `threads = 1`: the worker pool is the parallelism. Every call is CPU work
-//! that returns. W0 measured, single-threaded, libvpx with intrinsics and no
-//! nasm: 0.445 ms a 512² frame with alpha, 0.078 ms a 100² frame.
+//! that returns. Measured (single-threaded, intrinsics, no nasm): 0.445 ms a 512² frame with
+//! alpha, 0.078 ms a 100² frame.
 //!
 //! # Pixels
 //!
@@ -157,7 +152,7 @@ pub enum VideoError {
     Unsupported(String),
     /// Not a WebM file, a truncated one, or a VP9 bitstream libvpx rejects.
     Malformed(String),
-    /// The decoder is not in this build (the stub, until W3 lands).
+    /// The decoder is not in this build.
     NotBuilt,
 }
 
@@ -396,10 +391,9 @@ impl VideoDecoder {
         Ok(())
     }
 
-    /// Bytes this decoder holds: libvpx's frame buffers for each stream and
-    /// any conversion scratch. What the budget charges a live decoder; cheap
-    /// to call. W0 measured 5.3 MB for a 512² stream with alpha, 0.63 MB at
-    /// 100².
+    /// Bytes this decoder holds: libvpx's frame buffers for each stream and any conversion scratch.
+    /// What the budget charges a live decoder; cheap to call. Measured 5.3 MB for a 512² stream
+    /// with alpha, 0.63 MB at 100².
     pub fn memory_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + [&self.color, &self.alpha].iter().filter_map(|d| d.as_ref()).map(|d| d.memory().live).sum::<usize>()

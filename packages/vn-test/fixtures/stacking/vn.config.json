@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/stacking.spec.ts: CSS stacking contexts painted atomically (two portalled `fixed z-50` overlays, the earlier with z 0/1/2 layers inside it; a negative z-index in flow; an opacity context at z auto). See ../README.md.",
+  "$comment": "CSS stacking contexts painted atomically (two portalled `fixed z-50` overlays, the earlier with z 0/1/2 layers inside it; a negative z-index in flow; an opacity context at z auto).",
 
   "name": "vn-test-stacking",
 

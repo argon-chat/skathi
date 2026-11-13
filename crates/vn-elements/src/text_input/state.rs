@@ -1,16 +1,10 @@
-//! The persistent editor state behind a single-line text input: content,
-//! selection, IME composition, undo/redo, caret blink and the controlled-value
-//! echo ring.
+//! The persistent editor state behind a text input: content, selection, IME composition,
+//! undo/redo, caret blink and the controlled-value echo ring.
 //!
-//! Adapted from gpui-vue (`crates/gpui-vue-core/src/custom_elements/input.rs`,
-//! Apache-2.0), which is itself derived from the native renderer in
-//! [remorses/gpuix](https://github.com/remorses/gpuix) @
-//! `b8bbff4ef0dc00dc24c3d3f3ca47818e1be15c69` (Apache-2.0) and from
-//! [zeronsh/comet](https://github.com/zeronsh/comet) (MIT) — the caret blink is
-//! ported from Comet's `crates/ui/src/composer.rs`.
-//! See gpui-vue's `THIRD_PARTY_NOTICES.md`.
-//!
-//! Where gpui-vue was written against an older gpui, the API usage follows
+//! Adapted from gpui-vue (`crates/gpui-vue-core/src/custom_elements/input.rs`, Apache-2.0), itself
+//! derived from [remorses/gpuix](https://github.com/remorses/gpuix) @
+//! `b8bbff4ef0dc00dc24c3d3f3ca47818e1be15c69` (Apache-2.0) and [zeronsh/comet](https://github.com/zeronsh/comet)
+//! (MIT); the caret blink is ported from Comet's `crates/ui/src/composer.rs`. API usage follows
 //! gpui's own `crates/gpui/examples/input.rs` (Apache-2.0, zed-industries/zed).
 
 use std::collections::VecDeque;
@@ -23,9 +17,8 @@ use gpui::{
     TextInputConfiguration, TransformationMatrix, UTF16Selection, Window, WrappedLine, px,
 };
 
-/// GPUI paints affine matrices in device pixels, while pointer events and
-/// platform IME queries use logical window pixels. The untransformed layout
-/// bounds alone are therefore insufficient for either direction of mapping.
+/// GPUI paints affine matrices in device pixels while pointer events and IME queries use logical
+/// window pixels, so the untransformed layout bounds alone cannot map either way.
 #[derive(Clone, Copy)]
 struct InputTransform {
     matrix: TransformationMatrix,
@@ -50,9 +43,7 @@ impl InputTransform {
         (f32::from(local.x).is_finite() && f32::from(local.y).is_finite()).then_some(local)
     }
 
-    /// IME candidate windows need an axis-aligned rectangle in WINDOW space.
-    /// Transform every corner: rotating only the origin leaves the wrong
-    /// height and a shear can move the opposite corner beyond both diagonals.
+    /// IME candidate windows need an axis-aligned rectangle in window space: transform every corner.
     fn window_bounds(&self, local: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
         self.matrix.inverse()?; // A collapsed input has no visible caret.
         let corners = [local.origin, Point::new(local.right(), local.top()),
@@ -78,18 +69,13 @@ use super::{
     SelectWordRight, ShowCharacterPalette, TextInputHandlers, Undo, Up, WordLeft, WordRight,
 };
 
-/// How many self-reported values are remembered so the framework echoing them
-/// back as a prop can be recognised and swallowed. Ported verbatim from
-/// gpui-vue, where the ring is what keeps a `v-model`ed input from fighting the
-/// user for the caret.
+/// How many self-reported values are remembered so the framework echoing them back as a prop can be
+/// recognised and swallowed (keeps a `v-model`ed input from fighting the user for the caret).
 const ECHO_RING_CAPACITY: usize = 32;
-/// Upper bound on the undo history (gpui-vue's is unbounded).
 const UNDO_LIMIT: usize = 256;
 const CARET_BLINK_MS: u64 = 500;
-/// Caret width, also the slack kept visible to the right of the caret when
-/// scrolling to follow it.
+/// Caret width, also the slack kept visible right of the caret when scrolling to follow it.
 pub(crate) const CARET_WIDTH: Pixels = px(2.0);
-/// What a password field paints for each character: Chromium's bullet.
 pub(crate) const MASK: char = '\u{2022}';
 
 fn caret_visible(ms_since_activity: u64) -> bool {
@@ -109,16 +95,9 @@ fn utf16_offset_to_utf8(text: &str, offset: usize) -> usize {
     utf8_offset
 }
 
-/// Fold text into something a single-line input can hold.
-///
-/// A lone control character is dropped entirely — that is the `\r`/`\n` a
-/// Return keypress turns into on platforms that route it through the text input
-/// handler, and a single-line input must ignore it. Longer runs of text (a
-/// paste) keep their words separated by turning each line break into one space,
-/// and other control characters are stripped.
-///
-/// gpui-vue turned *every* newline into a space, including a lone one; that
-/// made Return insert a space here.
+/// Fold text into something a single-line input can hold. A lone control character is dropped (the
+/// `\r`/`\n` a Return keypress becomes on platforms that route it through the text input handler);
+/// longer runs turn each line break into one space and lose other control characters.
 fn single_line_text(text: &str) -> String {
     let mut characters = text.chars();
     if let (Some(only), None) = (characters.next(), characters.next()) {
@@ -145,19 +124,10 @@ fn single_line_text(text: &str) -> String {
     out
 }
 
-/// Fold text into something a `<textarea>` can hold.
-///
-/// Line breaks SURVIVE — that is the whole difference from
-/// [`single_line_text`] — normalised to `\n` the way a browser normalises a
-/// textarea's value (the HTML "API value" uses LF, never CRLF, whatever the
-/// platform sent). Tabs survive too. Every other control character is stripped,
-/// because none of them can be shaped and one stray `\0` in a run of text makes
-/// the whole line unshapeable.
-///
-/// A LONE `\r`/`\n` maps to `\n` rather than being dropped: on a platform that
-/// routes Return through the IME text-input path instead of through the key
-/// binding, that lone control character is the Return, and a textarea must
-/// insert a newline for it.
+/// Fold text into something a `<textarea>` can hold. Line breaks survive, normalised to `\n` (the
+/// HTML "API value" is LF whatever the platform sent), as do tabs; other control characters are
+/// stripped since one stray `\0` makes the whole line unshapeable. A lone `\r`/`\n` becomes `\n`:
+/// on a platform that routes Return through the IME text path, that is the Return.
 fn multi_line_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut characters = text.chars().peekable();
@@ -177,8 +147,6 @@ fn multi_line_text(text: &str) -> String {
     out
 }
 
-/// Remember a value we just reported, evicting the oldest once the ring is
-/// full.
 fn remember_reported(pending: &mut VecDeque<String>, value: String) {
     pending.push_back(value);
     while pending.len() > ECHO_RING_CAPACITY {
@@ -186,13 +154,8 @@ fn remember_reported(pending: &mut VecDeque<String>, value: String) {
     }
 }
 
-/// Decide whether an incoming controlled value is an echo of something this
-/// input reported.
-///
-/// On a match every value up to and including it is retired — the framework
-/// processed them, so anything older can never come back — and the caller
-/// leaves the content alone. On a miss the ring is cleared and the value is
-/// external.
+/// Whether an incoming controlled value is an echo of something this input reported. On a match
+/// everything up to and including it is retired; on a miss the ring is cleared and the value is external.
 fn take_echo(pending: &mut VecDeque<String>, value: &str) -> bool {
     match pending.iter().rposition(|reported| reported == value) {
         Some(index) => {
@@ -206,9 +169,8 @@ fn take_echo(pending: &mut VecDeque<String>, value: &str) -> bool {
     }
 }
 
-/// The keystroke gpui synthesizes when one modifier is pressed and released
-/// with nothing in between (zed#64537 hands it to interceptors): one of five
-/// fixed names, no character, no modifiers held.
+/// The keystroke gpui synthesizes when one modifier is pressed and released with nothing in
+/// between (zed#64537): one of five fixed names, no character, no modifiers held.
 fn is_standalone_modifier(keystroke: &gpui::Keystroke) -> bool {
     keystroke.key_char.is_none()
         && keystroke.modifiers == gpui::Modifiers::default()
@@ -225,8 +187,7 @@ struct EditSnapshot {
     selection_reversed: bool,
 }
 
-/// Persistent editor state — one [`gpui::Entity<TextInputState>`] per `<input>`
-/// node, created lazily by the framework and kept across frames.
+/// Persistent editor state: one [`gpui::Entity<TextInputState>`] per input node, kept across frames.
 pub struct TextInputState {
     focus_handle: FocusHandle,
     content: String,
@@ -238,41 +199,25 @@ pub struct TextInputState {
     on_before_input: Option<OnBeforeInput>,
     on_composition: Option<OnComposition>,
     on_key_down: Option<OnKeyDown>,
-    /// A `compositionstart` went out and its `compositionend` is still owed.
     composition_open: bool,
-    /// The text of a composition that a value assigned from outside cut short,
-    /// whose `compositionend` the framework delivers
-    /// ([`Self::flush_abandoned_composition`]): the assignment comes with no
-    /// window to dispatch from.
+    /// The text of a composition cut short by an outside value assignment, whose `compositionend`
+    /// the framework delivers ([`Self::flush_abandoned_composition`]); the assignment has no window.
     abandoned_composition: Option<String>,
-    /// Ends a composition when the field loses focus ([`Self::finish_composition`]).
     _blur: Subscription,
 
-    /// Set when `on_key_down` cancelled a keystroke that would have produced a
-    /// character.
-    ///
-    /// Consuming the key event is usually enough — a platform that asks the app
-    /// first (Windows re-sends `WM_KEYDOWN` as `WM_GPUI_KEYDOWN` and skips
-    /// `TranslateMessage` when it is handled) then never produces the
-    /// character. But not every path is gated on that: gpui's own
-    /// `replay_pending_input` feeds `dispatch_input` straight to the input
-    /// handler after a multi-stroke binding fails to complete. So the widget
-    /// also refuses the text itself. Cleared by the next keystroke.
+    /// Set when `on_key_down` cancelled a keystroke that would have produced a character. Consuming
+    /// the key event is usually enough, but gpui's `replay_pending_input` feeds the input handler
+    /// directly after a multi-stroke binding fails, so the widget also refuses the text. Cleared by
+    /// the next keystroke.
     suppress_text_input: bool,
-    /// Keeps the app-wide keystroke interceptor alive for this input's
-    /// lifetime; see [`Self::on_intercept_keystroke`].
+    /// Keeps the app-wide keystroke interceptor alive; see [`Self::on_intercept_keystroke`].
     _key_interceptor: Option<Subscription>,
 
-    /// Values we reported through `on_change`, newest last.
     pending_values: VecDeque<String>,
-    /// The framework's write counter for the last value assignment we applied,
-    /// so re-reading an untouched prop every frame is free. Keyed on the
-    /// counter rather than the string: two assignments of the same value are
-    /// two assignments, and the second one still has to land if the user typed
-    /// in between (`v-model` clearing a field the user refilled).
+    /// The framework's write counter for the last assignment applied, so re-reading an untouched
+    /// prop is free. Keyed on the counter, not the string: a second assignment of the same value
+    /// must still land if the user typed in between.
     last_synced_write: Option<u32>,
-    /// Where the controlled value is read again before a default action; see
-    /// [`ControlledValue`].
     controlled_value: Option<ControlledValue>,
 
     undo_stack: Vec<EditSnapshot>,
@@ -280,71 +225,45 @@ pub struct TextInputState {
 
     is_selecting: bool,
 
-    /// `<textarea>` rather than `<input>` — see [`super::TextInputOptions`].
     multiline: bool,
 
-    /// What `text_input_configuration` hands gpui — see
-    /// [`super::TextInputOptions::input_config`].
     input_config: TextInputConfiguration,
-    /// The configuration gpui last actually TOOK, and how many times it has
-    /// asked. gpui's own `Window::apply_text_input_configuration` is the only
-    /// caller of the trait method, so this is evidence the configuration left
-    /// this crate and reached the platform layer — not merely that it was
-    /// computed. Recording the queried value (rather than reading
-    /// `input_config` back later) keeps the two independent of where in the
-    /// frame the reader sits.
+    /// The configuration gpui last took, and how many times it has asked: evidence it reached the
+    /// platform layer, not merely that it was computed.
     queried_config: Option<TextInputConfiguration>,
     config_queries: u64,
-    /// The last configuration [`Self::newly_forwarded_configuration`] reported,
-    /// so a focused field logs once per distinct value instead of once per
-    /// frame.
+    /// The last configuration [`Self::newly_forwarded_configuration`] reported, so a focused field
+    /// logs once per distinct value.
     reported_config: Option<TextInputConfiguration>,
 
-    // Written by the element during prepaint, read by hit testing, the caret
-    // and the IME. One entry per HARD line (`shape_text` splits on `\n`); a
-    // single-line input always has exactly one. The shaped lines LIVE here —
-    // `WrappedLine` is not `Clone`, so the element hands them over and borrows
-    // them back to paint.
+    // Written by the element during prepaint; read by hit testing, the caret and the IME. One entry
+    // per hard line (`shape_text` splits on `\n`). The shaped lines live here since `WrappedLine`
+    // is not `Clone`.
     lines: Vec<LineBox>,
     last_bounds: Option<Bounds<Pixels>>,
     input_transform: InputTransform,
     line_height: Pixels,
     content_width: Pixels,
-    /// `line_height * total visual rows` — what the vertical scroll clamps to.
     content_height: Pixels,
     display_is_placeholder: bool,
-    /// `type="password"`: the shaped lines hold one [`MASK`] per character of
-    /// the content, so offsets cross between the two through
-    /// [`Self::display_index`] and [`Self::content_index`].
+    /// `type="password"`: the shaped lines hold one [`MASK`] per character, so offsets cross
+    /// through [`Self::display_index`] and [`Self::content_index`].
     masked: bool,
     scroll_left: Pixels,
-    /// Vertical scroll offset, always zero for a single-line input.
     scroll_top: Pixels,
-    /// How far right the content sits inside the box because of `text-align`.
-    ///
-    /// Alignment is deliberately NOT applied where the text is painted, but
-    /// here, in the one number that maps content space to window space
-    /// ([`Self::content_left`]). Painting the glyphs somewhere the caret, the
-    /// selection quads, the IME candidate window and click-to-position do not
-    /// know about is how a centred field ends up with a caret that lands two
-    /// characters away from where the user clicked.
-    ///
-    /// Zero unless the content is narrower than the box: once it overflows, the
-    /// box scrolls and alignment has nothing left to distribute — which is also
-    /// what a browser does.
+    /// How far right the content sits inside the box because of `text-align`. Applied here, in the
+    /// one number mapping content space to window space ([`Self::content_left`]), not at paint, so
+    /// the caret, selection, IME window and click-to-position agree. Zero once the content
+    /// overflows the box.
     align_offset: Pixels,
 
     blink_anchor: Instant,
     blink_task: Option<Task<()>>,
 }
 
-/// One HARD line (a `\n`-delimited run) and where it sits.
-///
-/// Soft wrapping happens INSIDE a `WrappedLine`: one hard line can occupy
-/// several visual rows, and `rows` is how many. `row0` is the visual row this
-/// hard line starts on, counting from the top of the content.
+/// One hard (`\n`-delimited) line. Soft wrapping happens inside a `WrappedLine`, so it can occupy
+/// `rows` visual rows, the first being `row0` from the top of the content.
 pub(crate) struct LineBox {
-    /// Byte offset of this line's first character in `content`.
     pub(crate) start: usize,
     pub(crate) row0: usize,
     pub(crate) rows: usize,
@@ -352,22 +271,17 @@ pub(crate) struct LineBox {
 }
 
 impl LineBox {
-    /// Byte offset one past this line's last character (excluding the `\n`).
     fn end(&self) -> usize {
         self.start + self.line.len()
     }
 }
 
 impl TextInputState {
-    /// Create the state for one input node, in the window that shows it (its
-    /// blur is that window's focus change).
+    /// Creates the state for one input node, in the window that shows it (its blur is that window's focus change).
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        // A DOM `keydown` listener runs before the browser's default action for
-        // the key. gpui resolves key *bindings* (our editing actions) before it
-        // ever reaches element key listeners, so a plain `on_key_down` would
-        // arrive after `backspace` had already deleted. The keystroke
-        // interceptor is the one hook that runs first — `cx.stop_propagation()`
-        // in it suppresses binding dispatch for the keystroke.
+        // gpui resolves key bindings before element key listeners, so a plain `on_key_down` would
+        // run after `backspace` had already deleted. The keystroke interceptor runs first, and
+        // `cx.stop_propagation()` in it suppresses binding dispatch.
         let weak = cx.weak_entity();
         let interceptor = cx.intercept_keystrokes(move |event, window, cx| {
             weak.update(cx, |this, cx| this.on_intercept_keystroke(event, window, cx))
@@ -418,22 +332,14 @@ impl TextInputState {
         }
     }
 
-    /// The current value, always free of line breaks.
     pub fn text(&self) -> &str {
         &self.content
     }
 
-    /// Controlled-value sync from the framework (Vue `v-model`).
-    ///
-    /// `write` identifies the *assignment*: the framework bumps it every time
-    /// something writes the `value` prop, even when the string is unchanged.
-    /// Idempotent in that re-passing the same `write` is a no-op, so this can
-    /// be called unconditionally every frame; a fresh `write` always lands,
-    /// which is what makes `v-model` able to clear a field twice in a row.
-    ///
-    /// A value that matches one this input itself reported is swallowed (echo
-    /// ring); any other change is treated as external and hard-resets content,
-    /// caret and undo history.
+    /// Controlled-value sync from the framework (Vue `v-model`). `write` identifies the assignment
+    /// (bumped on every write of the `value` prop, even an unchanged string): the same `write` is a
+    /// no-op, so this can be called every frame. A value matching one this input reported is
+    /// swallowed (echo ring); any other change is external and hard-resets content, caret and undo.
     pub fn sync_value(&mut self, value: &str, write: u32, cx: &mut Context<Self>) {
         if self.last_synced_write == Some(write) {
             return;
@@ -446,10 +352,8 @@ impl TextInputState {
         self.set_external_text(value, cx);
     }
 
-    /// [`Self::sync_value`] from the framework's [`ControlledValue`], now
-    /// rather than at the next frame: a hook that let a key or clipboard
-    /// command through may have assigned the field, and the default action
-    /// edits what it wrote.
+    /// [`Self::sync_value`] from the framework's [`ControlledValue`], now rather than at the next
+    /// frame: a hook may have assigned the field and the default action edits what it wrote.
     pub(crate) fn resync_controlled(&mut self, cx: &mut Context<Self>) {
         let Some(source) = self.controlled_value.clone() else {
             return;
@@ -459,46 +363,36 @@ impl TextInputState {
         }
     }
 
-    /// The focus handle owned by this input. The framework needs it to focus
-    /// the input programmatically (autofocus, tab order) and to observe
-    /// focus/blur.
     pub fn focus_handle(&self) -> FocusHandle {
         self.focus_handle.clone()
     }
 
-    /// Whether this input currently holds keyboard focus.
     pub fn is_focused(&self, window: &Window) -> bool {
         self.focus_handle.is_focused(window)
     }
 
-    /// Move keyboard focus to this input.
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         window.focus(&self.focus_handle, cx);
     }
 
-    /// Set the field mode before its initial controlled value is sanitized.
-    /// Frameworks must do this before sync_value, not only when painting.
+    /// Sets the field mode before the initial controlled value is sanitized, so call it before `sync_value`.
     pub fn set_multiline(&mut self, multiline: bool) {
         self.multiline = multiline;
     }
 
-    /// Programmatic HTMLInputElement/HTMLTextAreaElement.select(). Selects the
-    /// native buffer, including Unicode and line breaks, without editing it.
+    /// `select()` of the DOM element: selects the whole buffer without editing it.
     pub fn select_all_text(&mut self, cx: &mut Context<Self>) {
         self.set_selection(0..self.content.len(), cx);
     }
 
-    /// The selection, as byte offsets into [`Self::text`].
     pub fn selected_range(&self) -> Range<usize> {
         self.selected_range.clone()
     }
 
-    /// The IME pre-edit range, if a composition is in progress.
     pub fn marked_range(&self) -> Option<Range<usize>> {
         self.marked_range.clone()
     }
 
-    /// Per-frame parameters pushed in by [`super::text_input`].
     pub(crate) fn set_frame_params(
         &mut self,
         handlers: TextInputHandlers,
@@ -516,16 +410,9 @@ impl TextInputState {
         self.input_config = input_config;
     }
 
-    /// `Some((configuration, queries))` the first time gpui has queried a
-    /// configuration this field has not reported yet — i.e. edge-triggered on
-    /// the VALUE, and only ever after gpui actually asked.
-    ///
-    /// The framework calls this once a frame and logs what it gets, which is
-    /// the observable end of the chain `attributes → TextInputOptions →
-    /// InputHandler → Window::apply_text_input_configuration → PlatformWindow`.
-    /// Nothing else can distinguish "we built a configuration" from "gpui took
-    /// it": on Windows the platform window's `set_text_input_configuration` is
-    /// the default no-op, so the forwarding leaves no other trace.
+    /// `Some((configuration, queries))` the first time gpui has queried a configuration this field
+    /// has not reported yet. Nothing else shows that gpui took it: the Windows platform window's
+    /// `set_text_input_configuration` is a no-op.
     pub fn newly_forwarded_configuration(&mut self) -> Option<(TextInputConfiguration, u64)> {
         let queried = self.queried_config.as_ref()?;
         if self.reported_config.as_ref() == Some(queried) {
@@ -535,8 +422,6 @@ impl TextInputState {
         Some((queried.clone(), self.config_queries))
     }
 
-    /// Fold incoming text into something this field can hold: `single_line_text`
-    /// for an `<input>`, newline normalisation for a `<textarea>`.
     fn sanitize(&self, text: &str) -> String {
         if self.multiline {
             multi_line_text(text)
@@ -545,11 +430,8 @@ impl TextInputState {
         }
     }
 
-    /// DOM `tabindex`: `Some(n >= 0)` puts this input in the tab order at index
-    /// `n`, `Some(n < 0)` keeps it focusable but skipped by `Tab`, `None` takes
-    /// it out. gpui reads both values off the focus handle when the element is
-    /// painted, so this rewrites the handle in place (same `FocusId` — focus is
-    /// not disturbed).
+    /// DOM `tabindex`: `Some(n >= 0)` is a tab stop at `n`, `Some(n < 0)` focusable but skipped by
+    /// `Tab`, `None` removed. Rewrites the focus handle in place (same `FocusId`, focus undisturbed).
     pub fn set_tab_index(&mut self, index: Option<isize>) {
         let tab_index = index.unwrap_or(0);
         let tab_stop = index.is_some_and(|n| n >= 0);
@@ -559,8 +441,7 @@ impl TextInputState {
         self.focus_handle = self.focus_handle.clone().tab_index(tab_index).tab_stop(tab_stop);
     }
 
-    /// The `keydown` hook, run for every keystroke the window sees, before gpui
-    /// resolves key bindings. Only the focused input reacts.
+    /// The `keydown` hook, run before gpui resolves key bindings; only the focused input reacts.
     fn on_intercept_keystroke(
         &mut self,
         event: &KeystrokeEvent,
@@ -571,12 +452,8 @@ impl TextInputState {
         if !self.focus_handle.is_focused(window) {
             return;
         }
-        // Since zed#64537 interceptors also receive the keystroke gpui
-        // synthesizes for a modifier pressed and released ALONE — on the
-        // RELEASE, as `key: "shift"` with no modifiers. A browser fires that
-        // key's `keydown` on the press, so turning this into one would be a
-        // keydown at keyup time; it was never delivered before the merge, and
-        // it is not now.
+        // The interceptor also receives the keystroke gpui synthesizes for a modifier pressed and
+        // released alone, on the release. A browser fires that `keydown` on the press, so ignore it.
         if is_standalone_modifier(&event.keystroke) {
             return;
         }
@@ -589,19 +466,15 @@ impl TextInputState {
             prefer_character_input: false,
         };
         if on_key_down(&key_down, window, cx) {
-            // The keydown's handlers may have assigned the field; the binding
-            // or the character that follows edits what they wrote.
+            // The handlers may have assigned the field; what follows edits what they wrote.
             self.resync_controlled(cx);
             self.flush_abandoned_composition(window, cx);
             return;
         }
-        // preventDefault(): no binding action for this keystroke, and no
-        // character insertion if it was going to produce one.
+        // preventDefault(): no binding action and no character insertion.
         self.suppress_text_input = event.keystroke.key_char.is_some();
         cx.stop_propagation();
     }
-
-    // ---------------------------------------------------------------- editing
 
     fn snapshot(&self) -> EditSnapshot {
         EditSnapshot {
@@ -624,8 +497,7 @@ impl TextInputState {
         if self.content == value {
             return;
         }
-        // The pre-edit's range means nothing in the new value: the composition
-        // ends here, and its `compositionend` is owed.
+        // The pre-edit means nothing in the new value: the composition ends, its `compositionend` owed.
         self.abandon_composition();
         self.content = value;
         let end = self.content.len();
@@ -640,10 +512,8 @@ impl TextInputState {
         cx.notify();
     }
 
-    /// Report the current value to the framework, with the edit that made it,
-    /// and remember it in the echo ring. The callback runs deferred — after
-    /// the current update completes — so it is safe for it to call back into
-    /// this entity (`sync_value`).
+    /// Reports the current value and the edit that made it to the framework, and remembers it in the
+    /// echo ring. Deferred, so the callback may call back into this entity.
     fn emit_change(&mut self, intent: InputIntent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(on_change) = self.on_change.clone() else {
             return;
@@ -653,12 +523,9 @@ impl TextInputState {
         window.defer(cx, move |window, cx| on_change(&value, &intent, window, cx));
     }
 
-    /// `beforeinput` for an edit about to be made: `false` when a handler
-    /// cancelled it. Its handlers may have assigned the field, and the edit
-    /// applies to what they wrote, so the value is read back first; the caller
-    /// works out its range after this. The IME's edits cannot be cancelled,
-    /// and the text in the middle of a composition is the IME's: nothing is
-    /// read back then.
+    /// `beforeinput` for an edit about to be made: `false` when a handler cancelled it. The value is
+    /// read back first (handlers may have assigned the field); the IME's edits cannot be cancelled
+    /// and nothing is read back mid-composition.
     fn before_input(&mut self, intent: &InputIntent, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(hook) = self.on_before_input.clone() else {
             return true;
@@ -674,10 +541,8 @@ impl TextInputState {
         proceed
     }
 
-    /// One stage of the IME composition for the framework: `Start` and
-    /// `Update` now, `End` deferred, so that it follows the `input` the
-    /// commit's edit queued. An `End` with no open composition is dropped, so
-    /// each `Start` gets exactly one.
+    /// One IME composition stage: `Start`/`Update` now, `End` deferred so it follows the commit's
+    /// `input`. An `End` with no open composition is dropped.
     fn composition(&mut self, phase: CompositionPhase, data: &str, window: &mut Window, cx: &mut Context<Self>) {
         match phase {
             CompositionPhase::Start => self.composition_open = true,
@@ -699,9 +564,7 @@ impl TextInputState {
         }
     }
 
-    /// Ends the composition in progress, keeping the text it has: the field
-    /// lost focus (Chromium commits the composition then) or the platform
-    /// unmarked it.
+    /// Ends the composition in progress, keeping its text (focus lost, or the platform unmarked it).
     pub(crate) fn finish_composition(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(range) = self.marked_range.take() else {
             return;
@@ -711,8 +574,7 @@ impl TextInputState {
         self.composition(CompositionPhase::End, &text, window, cx);
     }
 
-    /// The pre-edit is about to lose its meaning (a value assigned from
-    /// outside): its `compositionend` is owed, with the text it had.
+    /// The pre-edit is about to lose its meaning (outside value assignment); its `compositionend` is owed.
     fn abandon_composition(&mut self) {
         let Some(range) = self.marked_range.take() else {
             return;
@@ -722,9 +584,8 @@ impl TextInputState {
         }
     }
 
-    /// Delivers the `compositionend` an assigned value owes
-    /// ([`Self::abandon_composition`]), deferred like every `End`. The
-    /// framework calls it after [`Self::sync_value`], where it has a window.
+    /// Delivers the `compositionend` an assigned value owes ([`Self::abandon_composition`]); called
+    /// after [`Self::sync_value`], where there is a window.
     pub fn flush_abandoned_composition(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(text) = self.abandoned_composition.take() else {
             return;
@@ -745,10 +606,8 @@ impl TextInputState {
         cx.notify();
     }
 
-    /// The one place content is mutated by the user. `range` is a byte range
-    /// into the current content; the returned range covers the inserted text,
-    /// or `None` if the edit was a no-op. `intent` is the edit as the `input`
-    /// event reports it.
+    /// The one place content is mutated by the user. `range` is a byte range into the content; the
+    /// result covers the inserted text, or `None` for a no-op.
     fn edit(
         &mut self,
         range: Range<usize>,
@@ -757,19 +616,16 @@ impl TextInputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
-        // Never trust a range straight from the platform's IME.
         let start = boundaries::snap(&self.content, range.start);
         let end = boundaries::snap(&self.content, range.end).max(start);
         let range = start..end;
 
         let replacement = self.sanitize(new_text);
         if replacement.is_empty() && range.is_empty() {
-            // Nothing to do — e.g. Return, which reaches a single-line input
-            // as a control character and is dropped. Leave the selection alone.
+            // Nothing to do (e.g. Return in a single-line input): leave the selection alone.
             return None;
         }
-        // An IME composition is one undo step: only its first edit (the one
-        // that has no pre-edit range yet) pushes a snapshot.
+        // An IME composition is one undo step: only its first edit pushes a snapshot.
         if self.marked_range.is_none() {
             self.push_undo();
         }
@@ -782,7 +638,6 @@ impl TextInputState {
         Some(inserted)
     }
 
-    /// Replace the current selection (or the IME pre-edit) with `text`.
     fn replace_selection(&mut self, text: &str, intent: InputIntent, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only {
             return;
@@ -796,15 +651,13 @@ impl TextInputState {
         };
         self.selected_range = inserted.end..inserted.end;
         self.selection_reversed = false;
-        // A paste in the middle of a composition replaced the pre-edit.
         if self.marked_range.take().is_some() {
             self.composition(CompositionPhase::End, text, window, cx);
         }
     }
 
-    /// A deletion: the selection, or from the caret to `to(self)`. Nothing to
-    /// delete (Backspace at the start of the value) is no edit and no
-    /// `beforeinput`, as in Chromium.
+    /// A deletion: the selection, or from the caret to `to(self)`. Nothing to delete is no edit and
+    /// no `beforeinput`, as in Chromium.
     fn delete_toward(
         &mut self,
         input_type: InputType,
@@ -829,9 +682,6 @@ impl TextInputState {
         self.replace_selection("", intent, window, cx);
     }
 
-    // -------------------------------------------------------------- selection
-
-    /// The moving end of the selection — where the caret is drawn.
     pub(crate) fn cursor_offset(&self) -> usize {
         if self.selection_reversed {
             self.selected_range.start
@@ -876,8 +726,6 @@ impl TextInputState {
         &self.content[self.selected_range.clone()]
     }
 
-    // ------------------------------------------------------------- key actions
-
     pub(crate) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
         let to = |s: &Self| boundaries::previous_grapheme(&s.content, s.cursor_offset());
         self.delete_toward(InputType::DeleteContentBackward, to, window, cx);
@@ -920,9 +768,7 @@ impl TextInputState {
         self.select_all_text(cx);
     }
 
-    /// `Home` — the start of the VISUAL row in a textarea (what a browser
-    /// does), the start of the value in a single-line input (where the two
-    /// coincide anyway, since it has exactly one row).
+    /// `Home`: the start of the visual row (the value, in a single-line input).
     pub(crate) fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
         let offset = self.row_bound(self.cursor_offset(), false);
         self.move_to(offset, cx);
@@ -943,9 +789,8 @@ impl TextInputState {
         self.select_to(offset, cx);
     }
 
-    /// `ArrowUp`. In a textarea this moves one visual row up, keeping the
-    /// caret's x; in a single-line input a browser jumps to the start of the
-    /// value, which is what falling through to row -1 does here.
+    /// `ArrowUp`: one visual row up keeping the caret's x; in a single-line input, falling through
+    /// to row -1 jumps to the start, as a browser does.
     pub(crate) fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
         let offset = self.offset_one_row(self.cursor_offset(), -1);
         self.move_to(offset, cx);
@@ -966,15 +811,12 @@ impl TextInputState {
         self.select_to(offset, cx);
     }
 
-    /// Return in a `<textarea>`: insert a line break, never submit. Bound only
-    /// in the textarea key context, so this is unreachable for an `<input>`;
-    /// the guard is belt and braces.
+    /// Return in a `<textarea>`: insert a line break, never submit. Bound only in the textarea context.
     pub(crate) fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only || !self.multiline {
             return;
         }
-        // Chromium's `insertLineBreak` for a textarea (a contenteditable's
-        // Return is `insertParagraph`), with no data.
+        // Chromium's `insertLineBreak` for a textarea, with no data.
         let intent = InputIntent::bare(InputType::InsertLineBreak);
         if !self.before_input(&intent, window, cx) {
             return;
@@ -1051,7 +893,6 @@ impl TextInputState {
     }
 
     pub(crate) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        // A browser never lets a password out of its field.
         if self.masked || self.selected_range.is_empty() {
             return;
         }
@@ -1062,9 +903,8 @@ impl TextInputState {
         if self.masked || self.read_only || self.selected_range.is_empty() {
             return;
         }
-        // Chromium writes the clipboard BEFORE it asks `beforeinput`
-        // (`ClipboardCommands::ExecuteCut`): a cancelled `deleteByCut` leaves
-        // the text both on the clipboard and in the field.
+        // Chromium writes the clipboard before asking `beforeinput`: a cancelled `deleteByCut`
+        // leaves the text both on the clipboard and in the field.
         cx.write_to_clipboard(ClipboardItem::new_string(self.selected_text().to_owned()));
         let intent = InputIntent::bare(InputType::DeleteByCut);
         if !self.before_input(&intent, window, cx) || self.selected_range.is_empty() {
@@ -1080,8 +920,7 @@ impl TextInputState {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        // A plain-text field's `insertFromPaste` carries the clipboard's text
-        // as `data` (and no DataTransfer), as Chromium's does.
+        // A plain-text field's `insertFromPaste` carries the text as `data` (no DataTransfer).
         let intent = InputIntent::with(InputType::InsertFromPaste, &text);
         if !self.before_input(&intent, window, cx) {
             return;
@@ -1115,8 +954,7 @@ impl TextInputState {
         }
     }
 
-    /// Escape collapses the selection; with nothing selected the key is left to
-    /// the rest of the app (closing a dialog, clearing a filter, ...).
+    /// Escape collapses the selection; with none, the key is left to the app (closing a dialog, ...).
     pub(crate) fn clear_selection(
         &mut self,
         _: &ClearSelection,
@@ -1139,8 +977,6 @@ impl TextInputState {
     ) {
         window.show_character_palette();
     }
-
-    // ------------------------------------------------------------------ mouse
 
     pub(crate) fn on_mouse_down(
         &mut self,
@@ -1170,10 +1006,8 @@ impl TextInputState {
         }
     }
 
-    /// A right-button press: focus, and the caret moves to the press unless
-    /// the press is inside the selection, which then stays for the context
-    /// menu to act on (Chromium on Windows, in an editable field). No drag
-    /// selection starts, and neither double- nor triple-click selects.
+    /// A right-button press: focus, and the caret moves unless the press is inside the selection,
+    /// which stays for the context menu (Chromium on Windows). No drag or multi-click selection.
     pub(crate) fn on_secondary_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -1190,8 +1024,7 @@ impl TextInputState {
         }
     }
 
-    /// Registered window-wide during paint, so a drag that leaves the input
-    /// keeps extending the selection.
+    /// Registered window-wide during paint so a drag that leaves the input keeps extending the selection.
     pub(crate) fn on_mouse_drag(
         &mut self,
         event: &MouseMoveEvent,
@@ -1212,19 +1045,14 @@ impl TextInputState {
         self.is_selecting = false;
     }
 
-    // ----------------------------------------------------------- layout hooks
-
-    /// The actual composed matrix in force while this field is drawn. Capture
-    /// it during prepaint and paint, because cached layout can be reused under
-    /// a wrapper whose affine transform changed in the meantime.
+    /// The composed matrix in force while this field is drawn. Capture it during prepaint and paint,
+    /// since cached layout can be reused under a wrapper whose transform changed.
     pub(crate) fn set_input_transform(&mut self, matrix: TransformationMatrix, scale_factor: f32) {
         self.input_transform = InputTransform { matrix, scale_factor };
     }
 
-    /// Called by the element every frame once the text has been shaped. The
-    /// lines are MOVED in: `WrappedLine` is not `Clone`, so this is where they
-    /// live for the rest of the frame and the element borrows them back to
-    /// paint.
+    /// Called by the element every frame once the text is shaped. The lines are moved in
+    /// (`WrappedLine` is not `Clone`) and the element borrows them back to paint.
     pub(crate) fn set_layout(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -1243,10 +1071,8 @@ impl TextInputState {
         self.last_bounds = Some(bounds);
         self.line_height = line_height;
         self.display_is_placeholder = display_is_placeholder;
-        // Room to distribute, measured on the WIDEST line so a multi-line
-        // textarea's block stays coherent. `CARET_WIDTH` is reserved for the
-        // same reason `clamp_scroll` reserves it: a caret at the end of a
-        // right-aligned field must still have somewhere to sit.
+        // Room to distribute, measured on the widest line; `CARET_WIDTH` is reserved as in
+        // `clamp_scroll` so a caret at the end of a right-aligned field has somewhere to sit.
         let slack = (bounds.size.width - self.content_width - CARET_WIDTH).max(px(0.0));
         self.align_offset = match text_align {
             gpui::TextAlign::Left => px(0.0),
@@ -1256,17 +1082,14 @@ impl TextInputState {
         self.clamp_scroll(bounds.size);
     }
 
-    /// Window-space x of content-space x = 0 — the single place `text-align`
-    /// and the horizontal scroll are turned into a position. Everything that
-    /// crosses between the two spaces goes through it.
+    /// Window-space x of content-space x = 0: the single place `text-align` and horizontal scroll
+    /// become a position.
     pub(crate) fn content_left(&self, bounds_left: Pixels) -> Pixels {
         bounds_left - self.scroll_left + self.align_offset
     }
 
-    /// Keep the caret inside the viewport, and the viewport inside the content.
-    ///
-    /// A textarea soft-wraps, so its content is never wider than the box and
-    /// only the vertical axis moves; a single-line input is the mirror image.
+    /// Keeps the caret inside the viewport, and the viewport inside the content. A textarea
+    /// soft-wraps so only the vertical axis moves; a single-line input is the mirror image.
     fn clamp_scroll(&mut self, viewport: gpui::Size<Pixels>) {
         let caret = self.position_for_index(self.cursor_offset());
         if self.multiline {
@@ -1290,7 +1113,6 @@ impl TextInputState {
         self.scroll_left = self.scroll_left.clamp(px(0.0), max_scroll);
     }
 
-    /// Wheel scrolling for a textarea, in CSS pixels (positive = down).
     pub fn scroll_by(&mut self, dy: Pixels, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.multiline {
             return;
@@ -1320,8 +1142,6 @@ impl TextInputState {
         self.masked = masked;
     }
 
-    /// The text the field paints: the content, or one [`MASK`] per character
-    /// of it.
     pub(crate) fn display_text(&self) -> String {
         if self.masked {
             std::iter::repeat_n(MASK, self.content.chars().count()).collect()
@@ -1330,7 +1150,6 @@ impl TextInputState {
         }
     }
 
-    /// The painted text's byte offset for a content byte offset.
     pub(crate) fn display_index(&self, index: usize) -> usize {
         if self.masked {
             masked_offset(&self.content, index)
@@ -1339,7 +1158,6 @@ impl TextInputState {
         }
     }
 
-    /// The content byte offset for a painted text's byte offset.
     fn content_index(&self, display: usize) -> usize {
         if self.masked {
             unmasked_offset(&self.content, display)
@@ -1348,13 +1166,11 @@ impl TextInputState {
         }
     }
 
-    /// Round a byte offset to the nearest grapheme boundary in the content, so
-    /// a bisection over indices can never land inside a character.
+    /// Rounds a byte offset to the nearest grapheme boundary so a bisection never lands inside a character.
     pub(crate) fn snap_index(&self, index: usize) -> usize {
         boundaries::snap(&self.content, index.min(self.content.len()))
     }
 
-    /// The grapheme boundary after `index` (or the end of the content).
     pub(crate) fn next_index(&self, index: usize) -> usize {
         boundaries::next_grapheme(&self.content, index)
     }
@@ -1363,12 +1179,10 @@ impl TextInputState {
         self.line_height
     }
 
-    /// The hard line containing `index`, and the index within it.
     fn line_at(&self, index: usize) -> Option<(&LineBox, usize)> {
         let boxes = &self.lines;
-        // A `\n` sits BETWEEN two lines and belongs to neither, so an offset
-        // pointing at one reports the end of the line before it — which is
-        // where a browser draws the caret after pressing End.
+        // A `\n` belongs to neither line; an offset at one reports the end of the line before it
+        // (where a browser draws the caret after End).
         let found = boxes
             .iter()
             .rev()
@@ -1377,8 +1191,7 @@ impl TextInputState {
         Some((found, (index - found.start.min(index)).min(found.line.len())))
     }
 
-    /// Where the caret goes for a byte offset, relative to the top-left of the
-    /// CONTENT (before scrolling). `(0, 0)` when nothing has been shaped yet.
+    /// Caret position for a byte offset, relative to the top-left of the content (before scrolling).
     pub(crate) fn position_for_index(&self, index: usize) -> Point<Pixels> {
         if self.display_is_placeholder {
             return Point::default();
@@ -1390,8 +1203,7 @@ impl TextInputState {
         let within = line_box
             .line
             .position_for_index(local, self.line_height)
-            // `position_for_index` answers `None` past the last glyph; the end
-            // of the last row is the right answer there.
+            // `position_for_index` is `None` past the last glyph; the end of the last row is right.
             .unwrap_or_else(|| {
                 Point::new(
                     line_box.line.width(),
@@ -1404,13 +1216,11 @@ impl TextInputState {
         )
     }
 
-    /// Map external pointer/IME coordinates into the field's layout frame.
     fn index_for_window_position(&self, position: Point<Pixels>) -> Option<usize> {
         Some(self.index_for_position(self.input_transform.layout_point(position)?))
     }
 
-    /// Map an untransformed layout-space position to a byte offset. Keyboard
-    /// navigation already uses this frame and must not apply the inverse twice.
+    /// Maps an untransformed layout-space position to a byte offset; keyboard navigation already uses this frame.
     pub(crate) fn index_for_position(&self, position: Point<Pixels>) -> usize {
         if self.display_is_placeholder || self.content.is_empty() {
             return 0;
@@ -1427,8 +1237,7 @@ impl TextInputState {
         } else {
             0.0
         };
-        // Clicking above the first row or below the last one selects the near
-        // end of the content, exactly as a browser does.
+        // Above the first row or below the last selects the near end of the content, as a browser does.
         if row < 0.0 {
             return 0;
         }
@@ -1461,7 +1270,6 @@ impl TextInputState {
         boundaries::snap(&self.content, index)
     }
 
-    /// The start (`forward = false`) or end of the VISUAL row `index` is on.
     fn row_bound(&self, index: usize, forward: bool) -> usize {
         if self.lines.is_empty() {
             return if forward { self.content.len() } else { 0 };
@@ -1471,10 +1279,8 @@ impl TextInputState {
         self.index_for_content_point(Point::new(x, y))
     }
 
-    /// One visual row up (`delta = -1`) or down, keeping the caret's x. Off
-    /// either end this saturates to the start / end of the content, which is
-    /// both what a browser does in a textarea and what it does in a
-    /// single-line input (where there is only ever one row).
+    /// One visual row up (`delta = -1`) or down, keeping the caret's x; saturates to the start / end
+    /// of the content off either end, as a browser does.
     fn offset_one_row(&self, index: usize, delta: i32) -> usize {
         let caret = self.position_for_index(index);
         let y = caret.y + self.line_height * delta as f32;
@@ -1487,7 +1293,6 @@ impl TextInputState {
         self.index_for_content_point(Point::new(caret.x, y))
     }
 
-    /// [`Self::index_for_position`] in CONTENT space (no bounds, no scroll).
     fn index_for_content_point(&self, point: Point<Pixels>) -> usize {
         let Some(bounds) = self.last_bounds else {
             return 0;
@@ -1498,14 +1303,11 @@ impl TextInputState {
         ))
     }
 
-    // ------------------------------------------------------------------ blink
-
     fn reset_blink(&mut self, cx: &Context<Self>) {
         self.blink_anchor = cx.background_executor().now();
     }
 
-    /// Whether the caret is in its "on" phase, starting/stopping the blink
-    /// timer as focus comes and goes. Ported from Comet via gpui-vue.
+    /// Whether the caret is in its "on" phase, starting/stopping the blink timer as focus comes and goes.
     pub(crate) fn caret_shown(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         if self.read_only || !self.focus_handle.is_focused(window) || !window.is_window_active() {
             self.blink_task = None;
@@ -1526,8 +1328,6 @@ impl TextInputState {
         }
         caret_visible(self.blink_anchor.elapsed().as_millis() as u64)
     }
-
-    // ------------------------------------------------------------------ utf16
 
     fn offset_from_utf16(&self, offset: usize) -> usize {
         utf16_offset_to_utf8(&self.content, offset)
@@ -1606,8 +1406,7 @@ impl EntityInputHandler for TextInputState {
         if self.read_only {
             return;
         }
-        // The keystroke that would have produced this text was cancelled by a
-        // `keydown` handler; the platform still delivered the character.
+        // A `keydown` handler cancelled the keystroke that would have produced this text.
         if std::mem::take(&mut self.suppress_text_input) && range_utf16.is_none() {
             return;
         }
@@ -1619,11 +1418,8 @@ impl EntityInputHandler for TextInputState {
                 .unwrap_or_else(|| this.selected_range.clone())
         };
         if self.marked_range.is_some() {
-            // The IME commits (or, with "", cancels) its composition. The
-            // last `beforeinput` and `compositionupdate` carry the committed
-            // text, then the edit and its `input`, then `compositionend`
-            // (Chromium's `InsertTextDuringCompositionWithEvents`, then
-            // `DispatchCompositionEndEvent`).
+            // The IME commits (or, with "", cancels): the last `beforeinput` and `compositionupdate`
+            // carry the committed text, then the edit and its `input`, then `compositionend`.
             let intent = InputIntent::with(InputType::InsertCompositionText, new_text);
             self.before_input(&intent, window, cx);
             self.composition(CompositionPhase::Update, new_text, window, cx);
@@ -1637,8 +1433,7 @@ impl EntityInputHandler for TextInputState {
             self.composition(CompositionPhase::End, new_text, window, cx);
             return;
         }
-        // Typed text. What the field cannot hold (Return in an `<input>`) is
-        // no edit and no event, whatever is selected.
+        // What the field cannot hold (Return in an `<input>`) is no edit and no event.
         let replacement = self.sanitize(new_text);
         if replacement.is_empty() && (!new_text.is_empty() || range_of(self).is_empty()) {
             return;
@@ -1651,7 +1446,6 @@ impl EntityInputHandler for TextInputState {
         if !self.before_input(&intent, window, cx) {
             return;
         }
-        // After the handlers: a value they assigned put the caret at its end.
         let Some(inserted) = self.edit(range_of(self), new_text, intent, window, cx) else {
             return;
         };
@@ -1679,8 +1473,7 @@ impl EntityInputHandler for TextInputState {
 
         if self.marked_range.is_none() {
             if new_text.is_empty() {
-                // An empty pre-edit outside a composition (some IMEs send
-                // one): Chromium deletes the selection and starts nothing.
+                // An empty pre-edit outside a composition (some IMEs send one): delete the selection, start nothing.
                 if range.is_empty() {
                     return;
                 }
@@ -1695,19 +1488,16 @@ impl EntityInputHandler for TextInputState {
                 }
                 return;
             }
-            // The first pre-edit: `compositionstart`, whose data is what the
-            // composition replaces (the selection, usually nothing).
+            // The first pre-edit: `compositionstart`, whose data is what the composition replaces.
             let replaced = self.content.get(range.clone()).unwrap_or_default().to_owned();
             self.composition(CompositionPhase::Start, &replaced, window, cx);
         }
-        // Chromium's order for every pre-edit: `beforeinput` (not
-        // cancelable), `compositionupdate`, the edit, `input`.
+        // Chromium's order for every pre-edit: `beforeinput` (not cancelable), `compositionupdate`, the edit, `input`.
         let intent = InputIntent::with(InputType::InsertCompositionText, new_text);
         self.before_input(&intent, window, cx);
         self.composition(CompositionPhase::Update, new_text, window, cx);
 
         let Some(inserted) = self.edit(range, new_text, intent, window, cx) else {
-            // The composition was cancelled with nothing to replace.
             if self.marked_range.take().is_some() {
                 cx.notify();
             }
@@ -1716,12 +1506,10 @@ impl EntityInputHandler for TextInputState {
         };
         self.marked_range = (!inserted.is_empty()).then_some(inserted.clone());
         if self.marked_range.is_none() {
-            // An empty pre-edit (the user deleted all of it, or Escape) ends
-            // the composition.
+            // An empty pre-edit (the user deleted all of it, or Escape) ends the composition.
             self.composition(CompositionPhase::End, "", window, cx);
         }
 
-        // `new_selected_range_utf16` is relative to the inserted text.
         let selected_range = match new_selected_range_utf16.as_ref() {
             Some(selected) => {
                 let replacement = &self.content[inserted.clone()];
@@ -1745,9 +1533,7 @@ impl EntityInputHandler for TextInputState {
         let range = self.range_from_utf16(&range_utf16);
         let start = self.position_for_index(range.start);
         let end = self.position_for_index(range.end);
-        // The candidate window hangs off the row the pre-edit ENDS on. When a
-        // composition wraps or spans lines the two rows differ, and reporting
-        // the start's row would put the IME popup a line too high.
+        // The candidate window hangs off the row the pre-edit ENDS on; the start's row would put it a line too high.
         let top = element_bounds.top() + end.y - self.scroll_top;
         let left = self.content_left(element_bounds.left());
         let (x0, x1) = if start.y == end.y {
@@ -1788,11 +1574,8 @@ impl EntityInputHandler for TextInputState {
         !self.read_only
     }
 
-    /// gpui asks the FOCUSED field for this once a frame and forwards it to the
-    /// platform window only when it changed (zed#63264). The value is whatever
-    /// the last frame's `<input>` attributes mapped to, so a reactive
-    /// `:spellcheck` takes effect on the frame after it changes — which is what
-    /// a browser does with the attribute too.
+    /// gpui asks the focused field for this once a frame and forwards it only on change (zed#63264),
+    /// so a reactive `:spellcheck` takes effect on the next frame.
     fn text_input_configuration(
         &mut self,
         _: &mut Window,
@@ -1804,21 +1587,15 @@ impl EntityInputHandler for TextInputState {
     }
 }
 
-/// Does a right-button press at `index` keep `selection`? Only a press inside
-/// a non-empty selection does (its edges included: a press there is on the
-/// selected text's own glyph half).
+/// Does a right-button press at `index` keep `selection`? Only a press inside a non-empty selection does.
 fn secondary_press_keeps(selection: &Range<usize>, index: usize) -> bool {
     !selection.is_empty() && selection.start <= index && index <= selection.end
 }
 
-/// The masked text's byte offset for `index` in `content`: one [`MASK`] per
-/// character before it.
 fn masked_offset(content: &str, index: usize) -> usize {
     content.char_indices().take_while(|(at, _)| *at < index).count() * MASK.len_utf8()
 }
 
-/// The `content` byte offset of the character a masked offset points at, or
-/// the end.
 fn unmasked_offset(content: &str, masked: usize) -> usize {
     content
         .char_indices()
@@ -1832,8 +1609,7 @@ mod tests {
 
     #[test]
     fn masked_offsets_round_trip_across_multibyte_characters() {
-        // ASCII, two-byte Cyrillic, a four-byte emoji: every character is one
-        // three-byte bullet.
+        // ASCII, two-byte Cyrillic, a four-byte emoji: each is one three-byte bullet.
         let content = "aж😀b";
         let boundaries: Vec<usize> = content
             .char_indices()
@@ -1844,7 +1620,6 @@ mod tests {
             assert_eq!(masked_offset(content, at), n * MASK.len_utf8());
             assert_eq!(unmasked_offset(content, n * MASK.len_utf8()), at);
         }
-        // A hit inside a bullet's bytes still names that character.
         assert_eq!(unmasked_offset(content, 4), 1);
         assert_eq!(unmasked_offset(content, 99), content.len());
         assert_eq!(masked_offset("", 0), 0);
@@ -1910,7 +1685,6 @@ mod tests {
         assert!(secondary_press_keeps(&(2..6), 6));
         assert!(!secondary_press_keeps(&(2..6), 7));
         assert!(!secondary_press_keeps(&(2..6), 0));
-        // A caret is no selection: the press moves it.
         assert!(!secondary_press_keeps(&(3..3), 3));
     }
 
@@ -1921,8 +1695,8 @@ mod tests {
         assert_eq!(utf16_offset_to_utf8("é🙂", 3), "é🙂".len());
     }
 
-    /// Only gpui's synthesized lone-modifier stroke is filtered; a real key
-    /// with a modifier held, or a modifier-named key carrying text, is not.
+    /// Only gpui's synthesized lone-modifier stroke is filtered; a real key with a modifier held, or
+    /// a modifier-named key carrying text, is not.
     #[test]
     fn a_released_lone_modifier_is_not_a_keydown() {
         let stroke = |key: &str, modifiers: gpui::Modifiers, key_char: Option<&str>| gpui::Keystroke {
@@ -1945,30 +1719,24 @@ mod tests {
         assert_eq!(single_line_text("plain"), "plain");
     }
 
-    /// The whole difference between `<input>` and `<textarea>`, in one place.
     #[test]
     fn a_textarea_keeps_its_line_breaks() {
-        // Every spelling normalises to LF — the HTML "API value" a browser
-        // reports from `textarea.value`, whatever the platform sent.
+        // Every spelling normalises to LF, as `textarea.value` reports.
         assert_eq!(multi_line_text("a\r\nb\nc\rd"), "a\nb\nc\nd");
-        // …where the same paste into a single-line input folds into spaces.
         assert_eq!(single_line_text("a\r\nb\nc\rd"), "a b c d");
 
-        // A LONE Return is a newline here and nothing at all there. That case
-        // is the Return keypress on a platform that routes it through the text
-        // input handler instead of through the key binding.
+        // A lone Return is a newline here and nothing there (the Return keypress on a platform that
+        // routes it through the text input handler).
         assert_eq!(multi_line_text("\r"), "\n");
         assert_eq!(multi_line_text("\n"), "\n");
         assert_eq!(single_line_text("\r"), "");
 
-        // Tabs survive; nothing else unshapeable does.
         assert_eq!(multi_line_text("a\tb\u{0}c\u{7}"), "a\tbc");
         assert_eq!(multi_line_text("plain"), "plain");
     }
 
     #[test]
     fn a_lone_control_character_is_dropped() {
-        // Return / Tab reaching the input handler must not insert anything.
         assert_eq!(single_line_text("\r"), "");
         assert_eq!(single_line_text("\n"), "");
         assert_eq!(single_line_text("\t"), "");
@@ -1988,8 +1756,6 @@ mod tests {
 
     #[test]
     fn an_echo_retires_everything_older_than_it() {
-        // The framework is a frame behind: it acknowledges "a" while we have
-        // already reported "ab" and "abc".
         let mut pending = ring(&["a", "ab", "abc"]);
         assert!(take_echo(&mut pending, "a"));
         assert_eq!(pending, ring(&["ab", "abc"]));
@@ -2012,7 +1778,6 @@ mod tests {
         }
         assert_eq!(pending.len(), ECHO_RING_CAPACITY);
         assert_eq!(pending.front().map(String::as_str), Some("32"));
-        // The oldest values are gone, so a very stale echo reads as external.
         assert!(!take_echo(&mut pending, "0"));
     }
 

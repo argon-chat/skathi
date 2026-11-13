@@ -1,18 +1,6 @@
 <script setup lang="ts">
-// Targets: every attachable instance on this machine, and every window in the
-// one we are attached to.
-//
-// v1 kept the instance list as a row of pills in the titlebar. It stopped
-// fitting the moment a target could have several WINDOWS: "which of these five
-// processes, and which of its three windows" is a table, not a pill row. It is
-// also the panel that answers "what is this inspector even attached to" — which
-// is why the titlebar's own chip clicks through to here.
-//
-// The preview lives here too. It is a screenshot on demand, never a live feed:
-// a capture re-renders the target's scene into its render target and encodes a
-// PNG (docs/DEVTOOLS.md, "Two screenshot backends"), which at any frame rate
-// would cost the app under inspection more than everything else this inspector
-// does put together. A button and a timestamp are the honest version.
+// It stopped fitting the moment a target could have several WINDOWS: "which of these five
+// processes, and which of its three windows" is a table, not a pill row.
 import { computed } from "vue";
 import type { Target } from "../protocol";
 import {

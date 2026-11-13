@@ -1,17 +1,6 @@
-//! What the cascade knows and nobody outside it can measure: how many
-//! selectors the matcher actually ran, and how `compute_node`'s milliseconds
-//! divide between matching, custom properties, and folding.
-//!
-//! Before the rule index (`Engine::index`) the selector count was `elements ×
-//! rules in the sheet` — a 25 KB Tailwind sheet against a 500-node tree is
-//! ~51 K `matches_selector` calls per restyle. The counter is what turned
-//! "bucketing should help" into a number, and it is what a regression in the
-//! index would show up as first. The three timers are what proved the matcher
-//! was NOT where the cascade's time went (research/reports/m11/
-//! perf-restyle-rebuild.md §3).
-//!
-//! Everything accumulates per `compute_node` call — three `Cell` adds, not one
-//! per selector — and is drained by `vn-tree`'s phase reporter.
+//! Counters for what the cascade does: selectors the matcher ran, and how `compute_node`'s time
+//! divides between matching, custom properties and folding. Accumulated per `compute_node` call and
+//! drained by the host's phase reporter.
 
 use std::cell::Cell;
 
@@ -24,8 +13,8 @@ thread_local! {
     static SHARE: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
 }
 
-/// One element asked the matched-properties cache (`share`), and whether an
-/// earlier element's result answered it.
+/// One element asked the matched-properties cache (`share`), and whether an earlier element's
+/// result answered it.
 pub(crate) fn note_share(hit: bool) {
     SHARE.with(|c| {
         let (asked, hits) = c.get();
@@ -33,16 +22,14 @@ pub(crate) fn note_share(hit: bool) {
     });
 }
 
-/// Drains the cache counters: `(elements that asked, elements answered)`.
-/// An element with an inline style or a `.group:hover` rule does not ask.
+/// Drains the cache counters: `(elements that asked, elements answered)`. An element with an inline
+/// style or a `.group:hover` rule does not ask.
 pub fn take_share() -> (u64, u64) {
     SHARE.with(|c| c.replace((0, 0)))
 }
 
-/// Where the selectors run came from, and how many of them matched: the rule
-/// index's own report card. `by_bucket` is: rules no key could file (`any`,
-/// run against every element), then the subject's tag, class and id buckets,
-/// `:root`, and the parent-keyed buckets (crate `RuleIndex`).
+/// `by_bucket` is: rules no key could file (`any`, run against every element), then the subject's
+/// tag, class and id buckets, `:root`, and the parent-keyed buckets (crate `RuleIndex`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Split {
     pub by_bucket: [u64; 6],

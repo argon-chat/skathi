@@ -1,14 +1,3 @@
-// A fixture for packages/vn-test/specs/iframe.spec.ts: the `<iframe>` element
-// as a page that embeds a sandboxed game uses it (research/reports/m26/
-// iframe-webview-requirements-2026-11-12.md §2).
-//
-// The page: `#slot`, an empty 400 × 300 box, and `#plain`, an `<iframe>` in the
-// template with no attributes. `__VN_TEST_IFRAME__.mount(src)` does what
-// Argon's PlayFrame host does, in its order: create the element, set
-// `sandbox.value`, `allow`, `referrerPolicy` and the style, append it, attach
-// `onload` / `onerror` and a `message` listener on `window`, and only then set
-// `src`. Everything that happens is appended to `log`, which `state()` returns
-// as JSON with what the spec reads off the element.
 import { createApp, h } from "vue-native";
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -29,7 +18,6 @@ let firstWindow: Any = null;
 
 window.addEventListener("message", (e: Any) => {
   const mine = frame && e.source === frame.contentWindow;
-  // A bigint has no JSON form; the log is text.
   const text = JSON.stringify(e.data, (_k, v) => (typeof v === "bigint" ? `${v}n` : v));
   log.push(`message ${mine ? "mine" : "other"} ${e.origin} ${text}`);
 });
@@ -57,7 +45,6 @@ g.__VN_TEST_IFRAME__ = {
     frame.src = src;
   },
 
-  /** Posts as the host does; returns what the call threw, if anything. */
   post(): string {
     const out: string[] = [];
     const tryPost = (label: string, fn: () => void) => {
@@ -76,7 +63,6 @@ g.__VN_TEST_IFRAME__ = {
     return out.join("; ");
   },
 
-  /** Moves the element to the end of `#page` and back, as a `<Teleport>` toggle does. */
   move(): void {
     const page = document.getElementById("page") as Any;
     const slot = document.getElementById("slot") as Any;
@@ -118,7 +104,6 @@ g.__VN_TEST_IFRAME__ = {
           return [probe.getAttribute("sandbox"), probe.sandbox.supports("allow-scripts"), probe.sandbox.supports("nope")];
         })(),
         attrs: [f.allow, f.getAttribute("allow"), f.referrerPolicy, f.getAttribute("referrerpolicy"), f.getAttribute("loading"), f.src],
-        // Relative to the slot: the host positions the frame inside its container.
         box: f.isConnected ? [Math.round(rect(f)[0] - slot.left), Math.round(rect(f)[1] - slot.top), rect(f)[2], rect(f)[3]] : null,
         sameWindow: f.isConnected ? f.contentWindow === firstWindow && f.contentWindow === f.contentWindow : null,
         windowKeys: f.isConnected ? [typeof f.contentWindow.postMessage, String(f.contentWindow.document), Object.getPrototypeOf(f.contentWindow)] : null,

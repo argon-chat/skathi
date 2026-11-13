@@ -1,15 +1,8 @@
-//! The read/drive surface `vn-devtools` sits on: selector queries against the
-//! REAL cascade matcher, node dumps off the retained tree, and synthesized
-//! input through the ordinary dispatch path.
+//! The read/drive surface `vn-devtools` sits on: selector queries against the REAL cascade matcher,
+//! node dumps off the retained tree, and synthesized input through the ordinary dispatch path.
 //!
-//! It lives in vn-tree rather than in vn-app because everything it needs —
-//! the node slab, the computed styles, the focus/scroll/input side maps — is
-//! private to this crate. vn-app owns the transport; this owns the semantics.
-//!
-//! Nothing here is dev-gated: it is ~300 lines of plain reads, and vn-tree has
-//! no `prod` feature to gate on. What IS gated is the only thing that matters —
-//! vn-app compiles its listener, its command dispatch and this module's callers
-//! out entirely under `--features prod`, so a prod build has no way to reach it.
+//! It lives here because the node slab and side maps are private to this crate; vn-app owns the
+//! transport. Nothing is dev-gated here: vn-app compiles its callers out under `--features prod`.
 
 use gpui::{App, Window};
 
@@ -28,26 +21,22 @@ pub struct NodeInfo {
     pub scopes: Vec<String>,
     /// The DOM-compat attribute channel (`value`, `placeholder`, `data-*`, …).
     pub props: Vec<(String, String)>,
-    /// This node's OWN text (a text node's content, or the inline text an
-    /// element carries) — not the subtree's. Use [`text_content`] for that.
+    /// This node's OWN text (a text node's content, or the inline text an element carries) — not
+    /// the subtree's.
     pub text: String,
     pub parent: u32,
     pub children: Vec<u32>,
     /// The `EV_*` bits JS listens for, as event names.
     pub listeners: Vec<&'static str>,
-    /// `(x, y, width, height)` in CSS px, window-relative, from the last frame
-    /// the node was painted in. `None` = not painted (detached, or parked in a
-    /// `<KeepAlive>` cache container).
+    /// `None` = not painted (detached, or parked in a `<KeepAlive>` cache container).
     pub bounds: Option<(f32, f32, f32, f32)>,
-    /// Some descendant's `group-hover:` rule watches this element, so the
-    /// renderer gave it gpui's `.group(name)` (and therefore a hitbox).
+    /// Some descendant's `group-hover:` rule watches this element, so the renderer gave it gpui's
+    /// `.group(name)` (and therefore a hitbox).
     pub group_anchor: bool,
 }
 
-/// The listener bits as names, off [`tree::EVENT_NAMES`] — the single table, so
-/// this listing cannot drift behind the codes the way it did before. (It did:
-/// a hand-kept copy here is how the missing `@animationstart` registration was
-/// found on the compat track.)
+/// The listener bits as names, off [`tree::EVENT_NAMES`] — the single table, so this listing cannot
+/// drift behind the codes the way it did before.
 fn event_names(mask: u64) -> Vec<&'static str> {
     tree::EVENT_NAMES
         .iter()
@@ -61,8 +50,8 @@ pub fn root_id() -> u32 {
     tree::read_tree(|t| t.root)
 }
 
-/// Every ELEMENT node reachable from the root, in document order (pre-order —
-/// the order `querySelectorAll` returns).
+/// Every ELEMENT node reachable from the root, in document order (pre-order — the order
+/// `querySelectorAll` returns).
 fn elements_in_document_order(t: &Tree) -> Vec<u32> {
     let mut out = Vec::new();
     fn walk(t: &Tree, id: u32, out: &mut Vec<u32>) {
@@ -81,15 +70,9 @@ fn elements_in_document_order(t: &Tree) -> Vec<u32> {
 }
 
 /// `querySelectorAll`, through the cascade's own matcher.
-///
-/// Returns `(matched node ids in document order, advisories)`. `Err` carries
-/// the SAME text the sheet compiler prints for an unsupported selector — the
-/// selector audit applies here exactly as it applies to a rule, so
-/// `query(":has(.x)")` explains itself instead of reporting zero matches.
 pub fn query(selector: &str) -> Result<(Vec<u32>, Vec<String>), String> {
     tree::read_tree(|t| {
         let ids = elements_in_document_order(t);
-        // Filtered by the live interaction state, as `document.querySelectorAll`.
         let live = crate::live_state::LiveStates::take(t);
         let candidates: Vec<crate::live_state::LiveRef<'_>> =
             ids.iter().map(|&id| crate::live_state::LiveRef::new(t, id, &live)).collect();
@@ -101,16 +84,16 @@ pub fn query(selector: &str) -> Result<(Vec<u32>, Vec<String>), String> {
     })
 }
 
-/// How many live nodes the retained tree holds — the one number that says
-/// whether a slow frame is a big tree or a slow cascade, and the cheapest
-/// thing the Performance panel can put beside its frame times.
+/// How many live nodes the retained tree holds — the one number that says whether a slow frame is a
+/// big tree or a slow cascade, and the cheapest thing the Performance panel can put beside its
+/// frame times.
 pub fn node_count() -> u32 {
     tree::read_tree(|t| t.live_count())
 }
 
-/// `(element-tree builds, paint-only presents)` since the process started, in
-/// any window. A `<video>` or moving `<canvas>` frame is a present, not a
-/// build (`crate::live`); a test reads both to tell the two apart.
+/// `(element-tree builds, paint-only presents)` since the process started, in any window. A
+/// `<video>` or moving `<canvas>` frame is a present, not a build (`crate::live`); a test reads
+/// both to tell the two apart.
 pub fn frame_counts() -> (u64, u64) {
     (crate::render::build_count(), crate::live::present_count())
 }
@@ -118,8 +101,8 @@ pub fn frame_counts() -> (u64, u64) {
 pub use crate::resample::ImageStats;
 pub use crate::tree::TreeMem;
 
-/// The retained tree's memory, estimated from its live structures
-/// (`Tree::mem_estimate`) — devtools `mem`.
+/// The retained tree's memory, estimated from its live structures (`Tree::mem_estimate`) — devtools
+/// `mem`.
 pub fn tree_mem() -> TreeMem {
     tree::read_tree(|t| t.mem_estimate())
 }
@@ -131,8 +114,8 @@ pub fn image_stats() -> ImageStats {
 
 pub use crate::img::{KeptFull, ResidencyStats};
 
-/// What the image residency sweep did since boot: decodes reduced to the copy
-/// they are drawn from, restored, evicted (`crate::img`, "residency").
+/// What the image residency sweep did since boot: decodes reduced to the copy they are drawn from,
+/// restored, evicted (`crate::img`, "residency").
 pub fn residency_stats() -> ResidencyStats {
     crate::img::residency_stats()
 }
@@ -142,8 +125,7 @@ pub fn set_image_tracking(on: bool) {
     crate::resample::set_tracking(on);
 }
 
-/// Everything else vn-tree holds that is worth a line in `mem`, as named
-/// counters: `(name, value)`. Byte counts end in `Bytes`.
+/// Everything else vn-tree holds that is worth a line in `mem`, as named counters: `(name, value)`.
 pub fn side_stats() -> Vec<(&'static str, u64)> {
     let (memos, src_bytes, images, image_bytes, backgrounds) = crate::img::mem_stats();
     let (canvases, canvas_bytes) = crate::render::canvas::mem_stats();
@@ -188,16 +170,7 @@ pub fn side_stats() -> Vec<(&'static str, u64)> {
     ]
 }
 
-/// How many scroll containers registered with the wheel router in the frame
-/// just painted.
-///
-/// A one-number window onto the one thing a retained-render replay cannot
-/// rebuild for itself. `vn_elements::scrollbar`'s registry is filled by the
-/// PAINT walk, and a replayed subtree does not walk — so before m23 this
-/// number silently dropped every container inside a cache boundary, which is
-/// why a boundary refused to cover one at all. `crate::cache::Boundary` now
-/// re-registers the span it recorded, and this is how a spec asserts that from
-/// outside the process: cache on or off, the count is the same.
+/// How many scroll containers registered with the wheel router in the frame just painted.
 pub fn scroll_chain_count() -> u32 {
     vn_elements::scrollbar::chain_count() as u32
 }
@@ -237,8 +210,8 @@ pub fn text_content(id: u32) -> Option<String> {
         let mut out = String::new();
         fn walk(t: &Tree, id: u32, out: &mut String) {
             let Some(n) = t.node(id) else { return };
-            // An element's own `text` is set by `setElementText`, which is
-            // exclusive with children — so this never double-counts.
+            // An element's own `text` is set by `setElementText`, which is exclusive with children
+            // — so this never double-counts.
             out.push_str(&n.text);
             for &c in &n.children {
                 walk(t, c, out);
@@ -249,38 +222,25 @@ pub fn text_content(id: u32) -> Option<String> {
     })
 }
 
-/// The live buffer of a native `<input>` (what the widget shows right now),
-/// which can be ahead of the `value` prop between an edit and Vue's echo.
 pub fn input_value(id: u32, cx: &App) -> Option<String> {
     crate::render::input_value(id, cx)
 }
 
-/// A text field's IME, as the platform drives the field's input handler:
-/// `text` becomes the composition's pre-edit (`""` cancels it), or with
-/// `commit` its committed text. The devtools `ime` command; a test composes
-/// with it where no IME is installed.
+/// A text field's IME, as the platform drives the field's input handler: `text` becomes the
+/// composition's pre-edit (`""` cancels it), or with `commit` its committed text.
 pub fn ime(id: u32, text: &str, commit: bool, window: &mut Window, cx: &mut App) -> Result<(), String> {
     crate::render::ime(id, text, commit, window, cx)
 }
 
-/// Is the pointer inside this node's hitbox right now? See [`tree::is_hovered`]
-/// for the one case that answers `false` while a browser would say `true`.
+/// See [`tree::is_hovered`] for the one case that answers `false` while a browser would say `true`.
 pub fn is_hovered(id: u32) -> bool {
     tree::is_hovered(id)
 }
 
-/// The node's folded [`vn_css::ComputedStates`], rendered as `(bucket, dump)`
-/// pairs. The dump is `StyleRefinement`'s own `Debug`, minus every field that
-/// is `None` — a refinement has ~90 optional fields and the two or three a rule
-/// actually set are the entire answer.
-///
-/// The `live` bucket is the odd one out and the important one: every other
-/// bucket is a rung the CASCADE produced ("this is what a hover would look
-/// like"), while `live` is the style in effect on this frame ("this is what a
-/// hover IS doing"). See [`tree::live_style`].
+/// The node's folded [`vn_css::ComputedStates`], rendered as `(bucket, dump)` pairs.
 pub fn computed_styles(id: u32) -> Option<Vec<(&'static str, String)>> {
-    // Hoisted out of the closure below: `live_style` reads the tree itself, and
-    // a reader that only works while nothing else is reading is a trap.
+    // Hoisted out of the closure below: `live_style` reads the tree itself, and a reader that only
+    // works while nothing else is reading is a trap.
     let live = tree::live_style(id);
     tree::read_tree(|t| {
         let cs = t.node(id)?.computed.as_ref()?;
@@ -298,8 +258,8 @@ pub fn computed_styles(id: u32) -> Option<Vec<(&'static str, String)>> {
                 out.push((name, prune(&format!("{r:#?}"))));
             }
         }
-        // `.group:hover .this` — the ancestor is named, because "which element
-        // am I watching" is the half of a group rule that can be wrong.
+        // `.group:hover .this` — the ancestor is named, because "which element am I watching" is
+        // the half of a group rule that can be wrong.
         for (name, slot) in
             [("group-hover", &cs.group_hover), ("group-active", &cs.group_active)]
         {
@@ -323,15 +283,8 @@ pub fn computed_styles(id: u32) -> Option<Vec<(&'static str, String)>> {
     })
 }
 
-/// Every rule in the installed sheet that matches this node, in cascade order —
-/// the provenance behind [`computed_styles`].
-///
-/// `None` when the node is gone or no stylesheet is installed. An empty vec is
-/// a real answer ("the sheet has nothing to say about this element").
-///
-/// The `declarations` on each rule are only populated when the host turned
-/// `vn_css::set_capture_rule_text` on BEFORE the sheet was compiled — see
-/// docs/DEVTOOLS-UI.md §"Rule provenance".
+/// Every rule in the installed sheet that matches this node, in cascade order — the provenance
+/// behind [`computed_styles`].
 pub fn matched_rules(id: u32) -> Option<Vec<vn_css::MatchedRule>> {
     let env = crate::env();
     tree::read_tree(|t| {
@@ -340,62 +293,23 @@ pub fn matched_rules(id: u32) -> Option<Vec<vn_css::MatchedRule>> {
     })
 }
 
-/// The node's rectangle as seen from inside a BUILD — what the inspector's
-/// outline overlay is positioned from. See [`crate::render::painted_bounds`]:
-/// during a build the live map is empty, so this falls back to the frame that
-/// was actually painted.
+/// The node's rectangle as seen from inside a BUILD — what the inspector's outline overlay is
+/// positioned from.
 pub fn overlay_bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
     crate::render::painted_bounds(id)
 }
 
-/// The deepest ELEMENT gpui would hit at `(x, y)`, as the path from the root
-/// down to it (empty when the point is over nothing).
-///
-/// **This IS gpui's hit test.** It used to be ours: a walk over the prepaint
-/// bounds map taking the deepest containing rectangle, because gpui decides
-/// hits from hitboxes, only interactive elements have one, and there was no way
-/// to ask what the frame would hit at an arbitrary point without moving the
-/// cursor. Both halves of that are gone. gpui now gives every element a hitbox
-/// tagged with its node id while a dev host is running (`render::pick_hitbox`),
-/// and upstream's `Hitbox::is_hovered_at` answers the question against the
-/// RENDERED frame — so the two divergences the hand-rolled version documented are closed
-/// by construction:
-///
-/// * **transforms.** A rotated or scaled element keeps its untransformed
-///   `bounds`; gpui hit-tests by mapping the pointer BACKWARDS through the
-///   hitbox's matrix, which is exact for rotation and scale alike and correctly
-///   answers "not hittable" for `scale(0)`. Comparing rectangles could only
-///   ever be right for a translation.
-/// * **paint order.** An element lifted out of document order by a deferred
-///   paint (`position: fixed`, a `z-index`) is hit-tested in the order it
-///   paints (fork item 37), so it is in FRONT — which is what the picker has
-///   to say, and what "deeper or later in document order" only sometimes
-///   agreed with.
-///
-/// Content masks come along too: a node scrolled out of its clipping container
-/// is no longer hit, exactly as in a browser.
-///
-/// What is left is the tie-break between the several hitboxes a point is inside
-/// (a node and all of its ancestors): the DEEPEST wins, and among equals the
-/// last in document order, which is paint order. Across two overlays over one
-/// point that is not paint order: a node nested deeper in the one painted
-/// under can win the pick (docs/DEVTOOLS.md).
+/// The deepest ELEMENT gpui would hit at `(x, y)`, as the path from the root down to it (empty when
+/// the point is over nothing). This is gpui's own hit test (every element gets a hitbox tagged with
+/// its node id in a dev host), so transforms and paint order (deferred/`z-index` boxes in front) and
+/// content masks are exact. Ties go to the deepest, then the last in document order.
 pub fn hit_test(x: f32, y: f32, window: &Window) -> Vec<u32> {
     hit_test_in(0, x, y, window)
 }
 
-/// [`hit_test`], restricted to the window that paints `root`.
-///
-/// `root` is the popped-out node a second window paints (`0` = the primary
-/// window). Hitboxes live in the frame of the window that painted them, so a
-/// point is only answerable once a window is named: without this, hovering a
-/// pop-out at (40, 40) could pick the primary window's node at (40, 40), and
-/// the picker would confidently outline the wrong thing in the wrong window
-/// (docs/MULTIWINDOW.md §5.6).
-///
-/// The PATH is still root-first from the document root, not from `root` — the
-/// tree panel expands ancestors, and a node's ancestry does not stop at the
-/// window boundary. Only the search does.
+/// [`hit_test`], restricted to the window that paints `root` (0 = primary): hitboxes live in the
+/// painting window's frame, so without it a pop-out point could pick the primary window's node. The
+/// path is still root-first from the document root.
 pub fn hit_test_in(root: u32, x: f32, y: f32, window: &Window) -> Vec<u32> {
     let point = gpui::Point::new(gpui::px(x), gpui::px(y));
     tree::read_tree(|t| {
@@ -412,16 +326,13 @@ pub fn hit_test_in(root: u32, x: f32, y: f32, window: &Window) -> Vec<u32> {
             if node.kind == Kind::Element
                 && crate::render::pick_hitbox(window, id)
                     .is_some_and(|h| h.is_hovered_at(point, window))
-                // `>=` on the depth: the LAST node found at the deepest
-                // level wins, and document order is paint order.
                 && best.is_none_or(|(d, _)| depth >= d)
             {
                 *best = Some((depth, id));
             }
             for &c in &node.children {
-                // A popped-out subtree is painted by a DIFFERENT window; its
-                // hitboxes are not in this window's frame, so descending into
-                // it can only waste time.
+                // A popped-out subtree is painted by a DIFFERENT window; its hitboxes are not in
+                // this window's frame, so descending into it can only waste time.
                 if window_root == 0 && crate::render::popped_out(c) {
                     continue;
                 }
@@ -448,27 +359,6 @@ pub fn hit_test_in(root: u32, x: f32, y: f32, window: &Window) -> Vec<u32> {
     })
 }
 
-/// The window point to aim a real pointer gesture at, for a node addressed by
-/// SELECTOR rather than by coordinate — the centre of the box as it was
-/// actually painted.
-///
-/// A node's recorded `bounds` are the UNTRANSFORMED rectangle (that is the
-/// frame layout, `getBoundingClientRect` and the outline overlay all think in),
-/// so on a `rotate()`d or `translate()`d element its centre is not where the
-/// element is on screen. Mapping that centre FORWARD through the same matrix
-/// gpui hit-tests backwards through puts the point back on the element — and
-/// the result is then confirmed against gpui's own hit test, so a caller is
-/// told when the box is unreachable (covered by an overlay, clipped out of its
-/// scroll container, `scale(0)`) instead of clicking a point that belongs to
-/// something else.
-///
-/// `None` = the node was not painted in the last frame BY THIS WINDOW, or the
-/// point that would be aimed at is not the node's. Both halves are asked of
-/// `window` and only of `window`: the rectangle comes out of that window's own
-/// bounds map (`render::bounds_here`) and the hitbox out of that window's own
-/// frame, so a node painted by a pop-out answers `None` to the primary window
-/// rather than handing back a coordinate from the other window's client space
-/// (docs/MULTIWINDOW.md §5.6).
 pub fn aim_point(id: u32, window: &Window) -> Option<(f32, f32)> {
     let (x, y, w, h) = crate::render::bounds_here(window, id)?;
     let centre = gpui::Point::new(gpui::px(x + w / 2.0), gpui::px(y + h / 2.0));
@@ -488,16 +378,13 @@ pub fn aim_point(id: u32, window: &Window) -> Option<(f32, f32)> {
         .then(|| (f32::from(point.x), f32::from(point.y)))
 }
 
-/// Drops `None` fields (and the blocks that become empty because of it) from a
-/// pretty `Debug` dump. Purely cosmetic; every value that survives is verbatim.
+/// Drops `None` fields (and the blocks that become empty because of it) from a pretty `Debug` dump.
 fn prune(dump: &str) -> String {
     let mut lines: Vec<String> = dump
         .lines()
         .filter(|l| !l.trim_end().ends_with(": None,") && l.trim() != "None,")
         .map(str::to_string)
         .collect();
-    // Collapse `Foo {` immediately followed by its own `}` — repeatedly, so a
-    // nest of now-empty refinements folds all the way up.
     loop {
         let mut removed = false;
         let mut i = 0;
@@ -518,12 +405,8 @@ fn prune(dump: &str) -> String {
     lines.join("\n")
 }
 
-// ---------------------------------------------------------------------------
-// driving
-// ---------------------------------------------------------------------------
 
-/// `el.focus()`. See [`crate::render::focus_node`] — the `focus`/`blur` events
-/// come from the gpui focus observers, so this reports exactly like a click.
+/// `el.focus()`.
 pub fn focus(id: u32, window: &mut Window, cx: &mut App) -> Result<(), String> {
     crate::render::focus_node(id, window, cx)
 }
@@ -532,20 +415,11 @@ pub fn is_focused(id: u32, window: &Window, cx: &App) -> bool {
     crate::render::is_node_focused(id, window, cx)
 }
 
-/// The node that owns keyboard focus right now, asked of GPUI rather than of
-/// our own bookkeeping.
-///
-/// The distinction matters: `focus`/`blur` events (and therefore
-/// `FOCUSED_NODE`) come from gpui's focus observers, and those report EMPTY
-/// focus paths while the window is not the active one — so an inactive window
-/// can be perfectly focused internally and say nothing about it. Every
-/// keystroke still routes by `window.focus`, which is what this reads.
 pub fn focused_node(window: &Window, cx: &App) -> Option<u32> {
     crate::render::focused_node(window, cx)
 }
 
-/// Scrolls a container by `(dx, dy)` CSS px and fires `scroll`. Returns the new
-/// `(scrollLeft, scrollTop)`.
+/// Scrolls a container by `(dx, dy)` CSS px and fires `scroll`.
 pub fn scroll(
     id: u32,
     dx: f32,
@@ -556,14 +430,8 @@ pub fn scroll(
     crate::render::scroll_node(id, dx, dy, window, cx)
 }
 
-/// A synthesized mouse sequence at `(x, y)`: `mousedown` → `mouseup` →
-/// `click`, each through the ordinary dispatch path (capture/bubble over the
-/// mirror tree, `preventDefault()` honored). Returns whether `click` survived
-/// `preventDefault()`.
-///
-/// HONEST LIMITATION: this is OUR dispatch, not gpui's mouse. `:hover` and
-/// `:active` ride gpui's real hitboxes and are therefore NOT exercised — a
-/// state-styling test still needs a real pointer.
+/// A synthesized mouse sequence at `(x, y)`: `mousedown` → `mouseup` → `click`, each through the
+/// ordinary dispatch path (capture/bubble over the mirror tree, `preventDefault()` honored).
 pub fn click(
     id: u32,
     x: f32,
@@ -575,8 +443,8 @@ pub fn click(
     let payload = |b: f64| EventPayload { a: x as f64, b: y as f64, c: b, ..Default::default() };
     crate::render::synth_event(id, tree::EV_MOUSEDOWN, &payload(button), window, cx);
     crate::render::synth_event(id, tree::EV_MOUSEUP, &payload(button), window, cx);
-    // A browser's `click` carries button 0 whatever `MouseEvent.button` the
-    // press had (a right press produces `contextmenu`, never `click`).
+    // A browser's `click` carries button 0 whatever `MouseEvent.button` the press had (a right
+    // press produces `contextmenu`, never `click`).
     let proceed = crate::render::synth_event(id, tree::EV_CLICK, &payload(0.0), window, cx);
     window.refresh();
     proceed
@@ -586,14 +454,7 @@ pub fn click(
 mod tests {
     use super::*;
 
-    /// `tag: 0` means "this node has no tag" — `create_text` and
-    /// `create_anchor` both set it. It must NOT resolve to whatever name the
-    /// interner happened to hand out first.
-    ///
-    /// It did: the interner started empty, `create_root` interned `"root"`
-    /// into slot 0, and from then on every text node and every Vue fragment
-    /// anchor reported `tag: "root"` on the wire — which the inspector's
-    /// Elements tree drew as runs of `<root>` rows between the real elements.
+    /// `tag: 0` means "this node has no tag" — `create_text` and `create_anchor` both set it.
     #[test]
     fn text_and_anchor_nodes_have_no_tag_name() {
         let (root, div, text, anchor) = tree::with_tree(|t| {
@@ -609,7 +470,6 @@ mod tests {
         });
 
         let info = |id: u32| node_info(id).expect("node exists");
-        // The name table's slot 0 is reserved, so no real name can land there.
         assert_eq!(tree::read_tree(|t| t.name(0).to_string()), "");
 
         assert_eq!(info(root).kind, "element");

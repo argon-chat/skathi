@@ -1,12 +1,10 @@
-// `vn build` for macOS: the `.app` layout, Info.plist, the icns encoder, the
-// `macos` config block and host resolution per platform (cli/macos-bundle.ts,
-// cli/platform.ts, docs/PACKAGING.md §10).
+// `vn build` for macOS: the `.app` layout, Info.plist, the icns encoder, the `macos` config block and host
+// resolution per platform (cli/macos-bundle.ts, cli/platform.ts).
 //
 //   bun test packages/vue-native/test/macos-bundle.test.ts
 //
-// Everything here runs on any OS: the bundle is files, the plist is text, the
-// icns is bytes, and the host is a fake Mach-O header that is never run.
-// Whether a real Mac launches the result is docs/MACOS.md §5's question.
+// Everything runs on any OS: the bundle is files, the plist is text, the icns is bytes, and the host is a fake
+// Mach-O header that is never run.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -44,10 +42,6 @@ const fresh = (name: string) => {
   mkdirSync(d, { recursive: true });
   return d;
 };
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
 
 /** Just enough of an XML plist reader to read back what plistXml writes. */
 function readPlist(xml: string): PlistValue {
@@ -124,10 +118,6 @@ const BASE_INFO = {
   minimumSystemVersion: "13.0",
 };
 
-// ---------------------------------------------------------------------------
-// plist
-// ---------------------------------------------------------------------------
-
 describe("Info.plist", () => {
   test("the required keys, and nothing optional when nothing optional is configured", () => {
     const d = readPlist(plistXml(infoPlist(BASE_INFO))) as Record<string, PlistValue>;
@@ -198,10 +188,6 @@ describe("Info.plist", () => {
     });
   });
 });
-
-// ---------------------------------------------------------------------------
-// icns
-// ---------------------------------------------------------------------------
 
 describe("icns", () => {
   test("container: magic, big-endian total length, entries with OSType + length", () => {
@@ -300,10 +286,6 @@ describe("icns", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Mach-O and the bundle
-// ---------------------------------------------------------------------------
-
 describe("Mach-O sniffing", () => {
   test("thin arm64 and x86_64, universal, and things that are not Mach-O", () => {
     const d = fresh("macho");
@@ -386,10 +368,6 @@ describe("the .app", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// signing
-// ---------------------------------------------------------------------------
-
 describe("codesign", () => {
   test("ad hoc is just --sign -; an identity adds the hardened runtime, a timestamp and the entitlements", () => {
     expect(codesignArgs("A.app", AD_HOC, "e.plist")).toEqual(["--force", "--sign", "-", "A.app"]);
@@ -422,10 +400,6 @@ describe("codesign", () => {
     expect(signPlan({ ...base, want: "X", codesign: "/usr/bin/codesign", onMac: true })).toEqual({ identity: "X", note: null });
   });
 });
-
-// ---------------------------------------------------------------------------
-// vn.config.json "macos"
-// ---------------------------------------------------------------------------
 
 describe('vn.config.json "macos"', () => {
   function app(config: Record<string, unknown>, files: Record<string, Uint8Array | string> = {}): string {
@@ -510,10 +484,6 @@ describe('vn.config.json "macos"', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// hosts per platform
-// ---------------------------------------------------------------------------
-
 describe("hosts per platform", () => {
   test("the Windows row is the paths vn build always used", () => {
     const w = hostsFor("windows", "x64");
@@ -532,7 +502,7 @@ describe("hosts per platform", () => {
     const m = hostsFor("macos", "arm64");
     expect(repoHostExe("R", m, "debug")).toBe(join("R", "target", "aarch64-apple-darwin", "debug", "vn-app"));
     expect(m.cargoTarget).toEqual(["--target", "aarch64-apple-darwin"]);
-    expect(cachedHost("1.2.3", "no-voice", "macos")).toMatch(/Library[\\/]Caches[\\/]vue-native[\\/]hosts[\\/]1\.2\.3[\\/]no-voice[\\/]vn-host$/);
+    expect(cachedHost("1.2.3", "no-audio", "macos")).toMatch(/Library[\\/]Caches[\\/]vue-native[\\/]hosts[\\/]1\.2\.3[\\/]no-audio[\\/]vn-host$/);
   });
 
   test("--platform spellings", () => {
@@ -551,8 +521,8 @@ describe("hosts per platform", () => {
       expect(() => resolveHost({ variant: "standard", platform: "macos", host: join(d, "vn-app.exe") })).toThrow(/not a Mach-O/);
 
       const host = fakeMachO(join(d, "vn-app"));
-      const trusted = resolveHost({ variant: "no-voice", platform: "macos", host });
-      expect(trusted.info.variant).toBe("no-voice");
+      const trusted = resolveHost({ variant: "no-audio", platform: "macos", host });
+      expect(trusted.info.variant).toBe("no-audio");
       expect(trusted.info.features).not.toContain("voice");
       expect(trusted.info.features).toContain("webgpu");
       expect(trusted.unverified).toMatch(/cannot be run/);
@@ -563,7 +533,7 @@ describe("hosts per platform", () => {
       const mismatchAllowed = resolveHost({ variant: "standard", platform: "macos", host, allowMismatch: true });
       expect(mismatchAllowed.info.profile).toBe("release");
       expect(mismatchAllowed.unverified).toMatch(/described by/);
-      expect(() => resolveHost({ variant: "no-voice", platform: "macos", host, allowMismatch: true })).toThrow(HostError);
+      expect(() => resolveHost({ variant: "no-audio", platform: "macos", host, allowMismatch: true })).toThrow(HostError);
     });
 
     test("vn build --platform macos --host <fake>: a bundle whose app.vnpk is the build's payload", async () => {

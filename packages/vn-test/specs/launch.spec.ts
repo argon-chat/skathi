@@ -1,23 +1,5 @@
-// Single instance, forwarded launches and protocol-mode argv, through real
-// processes (docs/LAUNCH.md).
-//
-//   bun test packages/vn-test/specs/launch.spec.ts
-//
-// The primary is the `launch` fixture (`"singleInstance": true`) on its own
-// slot, with VN_SINGLE_INSTANCE=1 overriding the harness default. Each
-// "second launch" below is the SAME staged exe started by hand on the SAME
-// slot, exactly as a user's second double-click (or the shell, for a
-// `myapp://` link) would start it. The lock keys on the app and its storage
-// folder, not the slot (docs/LAUNCH.md §2), so this run gives the app a
-// VN_APP_NAME of its own: two runs of this file never forward into each
-// other. The primary is quiet (the harness's VN_WINDOW_FOCUS=never), so a
-// second launch never raises it, and VN_LAUNCH_RAISE=off (the harness
-// default) says the same again: the run never steals focus from whoever is
-// at the machine.
-//
-// The protocol tests use the REAL HKCU\Software\Classes with a test-only
-// scheme (`vntest-<runner pid>`), delete it in teardown whatever happened,
-// and assert the hive is clean before the file ends.
+// Each "second launch" below is the SAME staged exe started by hand on the SAME slot, exactly as a
+// user's second double-click (or the shell, for a `myapp://` link) would start it.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
@@ -28,7 +10,6 @@ import { stagedExe } from "../src/dist";
 import { expect, launch, REPO } from "../src/index";
 
 const T = 30_000;
-/** This run's storage folder, and with it this run's instance lock. */
 const appName = `vn-test-launch-${process.pid}`;
 const app = await launch({
   app: "packages/vn-test/fixtures/launch/src/main.ts",
@@ -49,7 +30,6 @@ afterAll(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-/** The env a second launch of this slot runs with. */
 const secondEnv = (more: Record<string, string> = {}) => ({
   ...(process.env as Record<string, string>),
   VN_DIST: app.slotDir,
@@ -60,7 +40,6 @@ const secondEnv = (more: Record<string, string> = {}) => ({
   ...more,
 });
 
-/** The primary's `[launch]` log lines about forwarded launches, oldest first. */
 const forwardedLines = async () =>
   (await app.logs(0)).entries.map((e) => e.text).filter((t) => t.includes("a second launch was forwarded here"));
 
@@ -86,7 +65,6 @@ describe("the first instance", () => {
     bunExpect(r.own.singleInstance).toBe(true);
     bunExpect(r.own.argv.slice(1)).toEqual(["--first", "run"]);
     bunExpect(r.own.url).toBe(null);
-    // Its own launch is one LaunchParams, delivered once a consumer was set.
     bunExpect(r.params).toEqual([{ targetURL: null, files: 0 }]);
   }, T);
 });
@@ -94,7 +72,6 @@ describe("the first instance", () => {
 describe("a second launch", () => {
   test("forwards argv, cwd and existing paths to the first, exits 0 fast, and opens no window", async () => {
     const t0 = Date.now();
-    // Not quiet itself (an empty VN_WINDOW_FOCUS), as a user's double-click.
     const r = spawnSync(exe, ["--foo", doc, "missing.txt"], {
       cwd: scratch,
       env: secondEnv({ VN_WINDOW_FOCUS: "" }),
@@ -102,7 +79,6 @@ describe("a second launch", () => {
     });
     const ms = Date.now() - t0;
     bunExpect(r.status).toBe(0);
-    // A debug host on a busy machine: generous, but far below a window's boot.
     bunExpect(ms).toBeLessThan(5_000);
     const got = await untilEvents(1);
     bunExpect(got.events.length).toBe(1);
@@ -112,12 +88,10 @@ describe("a second launch", () => {
     bunExpect(ev.cwd.toLowerCase()).toBe(scratch.toLowerCase());
     bunExpect(ev.paths).toEqual([doc]);
     bunExpect(ev.url).toBe(null);
-    // …and one more LaunchParams, after the event, with a handle for the one
-    // path that exists (docs/LAUNCH.md §1).
     bunExpect(got.params.at(-1)).toEqual({ targetURL: null, files: 1 });
     await expect(app.locator(".fixture")).toHaveText("forwarded launches: 1");
-    // The primary is quiet, so it stayed where it was, and its log says why
-    // (the harness's VN_LAUNCH_RAISE=off is named as well).
+    // The primary is quiet, so it stayed where it was, and its log says why (the harness's
+    // VN_LAUNCH_RAISE=off is named as well).
     const lines = await forwardedLines();
     bunExpect(lines.length).toBe(1);
     bunExpect(lines[0]).toContain("not raised: this instance is quiet (VN_WINDOW_FOCUS=never)");
@@ -125,8 +99,6 @@ describe("a second launch", () => {
   }, T);
 
   test("a protocol launch carries its URL byte-exact, quotes and spaces included", async () => {
-    // What the shell builds from `"<exe>" --vn-protocol-launch -- "%1"` for
-    // the URL  vntest-launch://open?b="c d"&e=%22  — %1 substituted verbatim.
     const url = 'vntest-launch://open?b="c d"&e=%22';
     const r = spawnSync(exe, ["--devtools", "--vn-protocol-launch", "--", `"${url}"`], {
       cwd: REPO,
@@ -139,8 +111,6 @@ describe("a second launch", () => {
     const ev = got.events[1];
     bunExpect(ev.url).toBe(url);
     bunExpect(got.params.at(-1)).toEqual({ targetURL: url, files: 0 });
-    // `--devtools` in front of the protocol marker is NOT a mode switch: the
-    // process forwarded instead of becoming an inspector.
     bunExpect(ev.argv.includes("--devtools")).toBe(false);
   }, T);
 
@@ -152,9 +122,8 @@ describe("a second launch", () => {
   }, T);
 
   test("a quiet second launch is still delivered, and asks for no raise", async () => {
-    // An agent's or a test's launch (VN_WINDOW_FOCUS=never) hands on no
-    // foreground right and says so in its message: it never pulls the
-    // running window to the front, whoever is using it.
+    // An agent's or a test's launch (VN_WINDOW_FOCUS=never) hands on no foreground right and says
+    // so in its message: it never pulls the running window to the front, whoever is using it.
     const r = spawnSync(exe, ["quiet"], { cwd: scratch, env: secondEnv({ VN_WINDOW_FOCUS: "never" }), timeout: 15_000 });
     bunExpect(r.status).toBe(0);
     const got = await untilEvents(4);
@@ -165,16 +134,10 @@ describe("a second launch", () => {
 
 });
 
-// ---------------------------------------------------------------------------
-// protocols — the REAL per-user registry, with a test-only scheme that is
-// removed in teardown and checked gone (docs/LAUNCH.md §5)
-// ---------------------------------------------------------------------------
-
 const scheme = `vntest-${process.pid}`;
 const foreign = `vntest-foreign-${process.pid}`;
 const keyOf = (s: string) => `HKCU\\Software\\Classes\\${s}`;
 const regExists = (key: string) => spawnSync("reg", ["query", key], { stdio: "ignore" }).status === 0;
-/** A key's value (`/ve` = the default one), or null. */
 function regValue(key: string, name: string | null): string | null {
   const r = spawnSync("reg", ["query", key, ...(name === null ? ["/ve"] : ["/v", name])], { encoding: "utf8" });
   if (r.status !== 0) return null;
@@ -199,15 +162,11 @@ describe("protocols", () => {
     bunExpect(command.toLowerCase()).toContain(app.slotDir.toLowerCase());
     bunExpect(command.endsWith(` --vn-protocol-launch -- "%1"`)).toBe(true);
     bunExpect(await api(`isRegistered(${JSON.stringify(scheme)})`)).toBe(true);
-    // A-F10: a dev host says what it just did.
     const { entries } = await app.logs(0);
     bunExpect(entries.some((e) => e.text.includes(`points ${scheme}:// at this dev slot`))).toBe(true);
   }, T);
 
   test("a link to it, opened through the SHELL, reaches the running instance", async () => {
-    // ShellExecuteExW → the registry command → a second process of this exe
-    // → the instance pipe → the `launch` event. No browser is involved: the
-    // scheme is ours.
     const before = (await rec()).events.length;
     const url = `${scheme}://open/item?id=42`;
     await api(`open(${JSON.stringify(url)})`);
@@ -236,7 +195,6 @@ describe("protocols", () => {
     bunExpect(await api(`unregister(${JSON.stringify(scheme)})`)).toBe(true);
     bunExpect(regExists(keyOf(scheme))).toBe(false);
     bunExpect(await api(`isRegistered(${JSON.stringify(scheme)})`)).toBe(false);
-    // Again, then the uninstaller's hook from outside, with no window.
     bunExpect(await api(`register(${JSON.stringify(scheme)})`)).toBe("ok");
     const r = spawnSync(exe, ["--vn-unregister-protocols"], { cwd: REPO, env: secondEnv(), encoding: "utf8", timeout: 15_000 });
     bunExpect(r.status).toBe(0);
@@ -263,8 +221,6 @@ describe("opting out", () => {
     if (child.pid) extra.push(child.pid);
     let exited: number | null = null;
     child.on("exit", (code) => (exited = code ?? -1));
-    // A forwarding process is gone in well under a second; a real second copy
-    // is still booting its window.
     await new Promise((res) => setTimeout(res, 2_500));
     bunExpect(exited).toBe(null);
     const r = await rec();

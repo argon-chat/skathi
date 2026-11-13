@@ -1,20 +1,9 @@
-// A fixture for packages/vn-test/specs/layout.spec.ts — the m26 client sweep's
-// layout and paint findings in the Argon client, each reduced to its shape
-// (research/reports/m26/client-sweep-1.md, fixes in fixes-layout-1.md).
-//
-// One section per finding, each laid out where the spec can hit it. The class
-// names spell out the Tailwind utilities the client wrote, so a rule maps back
-// to `apps/client` (MessageItem.vue, MentionSegment.vue, reka's Slider,
-// InventoryView.vue). Render functions rather than an SFC: this package is
-// `"type": "module"`, and the dev builder's CommonJS interop hands such an
-// importer a `.vue` module's NAMESPACE as its default export.
 import { createApp, h } from "vue-native";
 import "./layout.css";
 
 const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
 const two = (i: number) => (i < 10 ? `0${i}` : `${i}`);
 
-/** #1: a chat row's timestamp, `hidden group-hover/msg:flex`, in a scroller. */
 const messages = () =>
   h(
     "div",
@@ -29,7 +18,6 @@ const messages = () =>
     ),
   );
 
-/** #9: MessageItem's bubble around a mention, nested as the client nests it. */
 const bubble = () =>
   h("div", { class: "chat" }, [
     h("div", { class: "m-row" }, [
@@ -63,14 +51,12 @@ const bubble = () =>
     ]),
   ]);
 
-/** #12: reka Slider's thumb, and a Tailwind `w-[calc(100%-40px)]`. */
 const track = () =>
   h("div", { id: "track", class: "track" }, [
     h("div", { id: "thumb", class: "thumb", style: "left: calc(38.89% + 13.33px)" }),
     h("div", { id: "calc-w", class: "calc-w" }),
   ]);
 
-/** #15: `repeat(auto-fill, …)` and `repeat(auto-fit, …)` grids. */
 const grids = () => [
   h(
     "div",
@@ -83,9 +69,7 @@ const grids = () => [
   ]),
 ];
 
-/** #14: `background-image: url()` — emojix's two sprite forms, a cover banner,
- *  a repeat, and a gradient written above an image. The images are SVG data
- *  URLs (layout.css), so the fixture carries no binary. */
+/** The images are SVG data URLs (layout.css), so the fixture carries no binary. */
 const backgrounds = () =>
   h("div", { id: "bgs", class: "bgs" }, [
     h("div", { id: "bg-px", class: "bg bg-sheet bg-px" }),
@@ -95,18 +79,11 @@ const backgrounds = () =>
     h("div", { id: "bg-over", class: "bg bg-over" }),
   ]);
 
-/** #18: a `backdrop-filter` panel inside a box moved by `transform`, the way
- *  a popper is positioned (UserProfilePopover's `.glass-body`), over stripes
- *  a blur turns grey. */
 const backdrop = () =>
   h("div", { id: "bd-stage", class: "bd-stage" }, [
     h("div", { class: "bd-move" }, [h("div", { id: "bd-glass", class: "bd-glass" })]),
   ]);
 
-/** #36: @argon/ui's RadioGroupItem, checked. A 16px round `<button>` holds
- *  reka's indicator `<span>` (`relative flex items-center justify-center`),
- *  which holds lucide's CircleIcon at `absolute top-1/2 left-1/2 size-2
- *  -translate-x-1/2 -translate-y-1/2`. */
 const radio = () =>
   h("div", { class: "radio-at" }, [
     h("button", { id: "radio", class: "radio", role: "radio", "aria-checked": "true" }, [
@@ -130,8 +107,6 @@ const radio = () =>
     ]),
   ]);
 
-/** #10 (b): the `hidden` attribute, under the UA rule `[hidden] { display:
- *  none }`, which an author `display` beats. */
 const hiddens = () =>
   h("div", { class: "hid-at" }, [
     h("div", { id: "hid", class: "hid-box", hidden: true }),
@@ -139,10 +114,7 @@ const hiddens = () =>
     h("div", { id: "hid-flex", class: "hid-box hid-flex", hidden: true }),
   ]);
 
-/** The Ultima price card's border: an absolutely positioned box over the
- *  card, painted lime and masked down to its padding ring with the
- *  gradient-border idiom. Before the fix the mask was dropped and the lime
- *  covered the card's text. */
+/** Before the fix the mask was dropped and the lime covered the card's text. */
 const maskRing = () =>
   h("div", { id: "ring-card", class: "ring-card" }, [
     h("div", { class: "ring-border" }),

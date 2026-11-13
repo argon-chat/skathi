@@ -1,30 +1,9 @@
-// A real click that opens a reka-style popover, which focuses itself and
-// measures on mount: the shape of the Argon member click (Mom → #564gtr →
-// a member → the profile popover) that aborted the host with "FATAL:
-// Attempting to release access but the mutator does not have access".
-//
-//   bun test packages/vn-test/specs/popover-click.spec.ts
-//
-// The trigger is a <button>, as reka's PopoverTrigger renders, so the press
-// focuses it. That focus is applied after the mousedown and reported by gpui
-// from the next draw. The click opens the popover from the mouse-up wave, and
-// Vue's patch runs in JSC's own microtask drain at the end of that call. The
-// content's onMounted does what reka's FocusScope and floating-ui do: focus
-// the content, then measure the trigger and the content and place one under
-// the other. Each read forces a layout, whose draw reports the trigger's
-// pending focus. That `focus` dispatch therefore ran inside the running
-// script, and it used to keep the engine lock past the drain's release of the
-// heap access (crates/vn-runtime/src/bridge.rs `owe_drain`).
 import { createApp, defineComponent, h, onMounted, ref } from "vue-native";
 
 const state = {
-  /** How many times the content mounted. */
   opened: 0,
-  /** What each mount measured: the trigger's and the content's rects. */
   measured: [] as { trigger: number[]; content: number[] }[],
-  /** focus / blur on the trigger and the content, in order. */
   focusLog: [] as string[],
-  /** `document.activeElement`'s id after each mount. */
   active: [] as string[],
 };
 (globalThis as { __VN_TEST_POPOVER__?: unknown }).__VN_TEST_POPOVER__ = state;
@@ -47,10 +26,8 @@ const Content = defineComponent({
       const anchor = trigger.value;
       if (!content || !anchor) return;
       state.opened++;
-      // FocusScope: the content takes focus as it mounts.
       content.focus();
       state.active.push(document.activeElement?.id ?? "");
-      // floating-ui: measure both, then place the content under the trigger.
       const t = rect(anchor);
       const c = rect(content);
       state.measured.push({ trigger: t, content: c });

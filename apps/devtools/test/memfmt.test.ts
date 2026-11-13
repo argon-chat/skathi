@@ -1,12 +1,3 @@
-// The Performance panel's memory layout (`../src/memfmt.ts`): `mem`'s
-// breakdown -> bar segments, table rows, history columns.
-//
-//   bun test apps/devtools/test
-//
-// The host does the accounting; what is pinned here is that the layout never
-// drops or double-counts a category — the bar must add up to what the host
-// said, or the panel is lying about where the memory is.
-
 import { describe, expect, test } from "bun:test";
 import {
   GPU_COLOR,
@@ -110,8 +101,6 @@ describe("history", () => {
 
 describe("memUnsupported", () => {
   test("a host without a port says why, and that is what the panel shows", () => {
-    // `crates/vn-app/src/devtools/mem_stub.rs`. This reply used to reach
-    // `sampleOf` and throw "undefined is not an object (evaluating 'e.categories')".
     const stub: MemUnsupported = { supported: false, reason: "it has no port to this OS yet" };
     expect(memUnsupported(stub)).toBe("it has no port to this OS yet");
     expect(memUnsupported({ supported: false, reason: "" })).toContain("no memory breakdown");

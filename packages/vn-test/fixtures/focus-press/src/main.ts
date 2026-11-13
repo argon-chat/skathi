@@ -1,28 +1,3 @@
-// A fixture for packages/vn-test/specs/focus-press.spec.ts (docs/RUNTIME.md
-// §5.22): which element a press focuses, and where the focus events fall
-// among the mouse events of the same press.
-//
-// The same page as the headless-Chrome probe the spec's expectations come
-// from (research/reports/m26/hit-target-2.md §10), written with render
-// functions:
-//
-// * `#field`, the text field every case starts focused in;
-// * what cannot take focus: `#tag` (a `<span>` with a `focus` listener),
-//   `#keys` (a `<div>` with key listeners), `#plain`, `#menu-row` (a row with
-//   a `contextmenu` listener), `#nolink` (an `<a>` without `href`),
-//   `#role-btn` (`role="button"` without `tabindex`), `#lbl` (a `<label>`);
-// * what can: `#minus` (`tabindex="-1"`), `#outer` (`tabindex="0"`, pressed on
-//   its inner `<span>` `#inner`), `#btn`, `#link`, `#ce` (contenteditable),
-//   `#sum` (a `<details>`'s `<summary>`);
-// * buttons whose `mousedown` does something: `#prevent` cancels it, `#steal`
-//   focuses `#field`, `#steal2` focuses `#btn`, `#gone` is removed by a
-//   microtask, and so is `#gone2`, inside the focusable `#wrapper`.
-//
-// `document` capture listeners log `<event>:<target>`, with `rel=` for the
-// focus events and `active=` for `document.activeElement` (`BODY` when nothing
-// is focused). `__VN_TEST_PRESS__` holds `log`, `reset()` (focuses `#field`
-// and empties the log), `active()`, `restore()` (mounts `#gone` and `#gone2`
-// again) and `programmatic()` (`focus()` on each case from `#field`).
 import { createApp, h, ref } from "vue-native";
 
 const name = (e: unknown): string => {

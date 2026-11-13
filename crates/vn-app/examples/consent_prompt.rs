@@ -1,5 +1,5 @@
 //! The permission prompt's window on its own, for a look at it
-//! (src/consent_window.rs, docs/PERMISSIONS.md §5.1). Windows only.
+//! (src/consent_window.rs). Windows only.
 //!
 //! ```text
 //! cargo run -p vn-app --example consent_prompt -- [microphone|camera] [ru] [light|dark] [owner]

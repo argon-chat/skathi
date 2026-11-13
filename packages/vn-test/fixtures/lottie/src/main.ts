@@ -1,21 +1,3 @@
-// A fixture for packages/vn-test/specs/lottie.spec.ts: `<lottie>`, whose
-// load and raster run off the UI thread (crates/vn-tree/src/lottie.rs,
-// crates/vn-lottie/CONTRACT.md §8.10), laid out on white.
-//
-// - `steps.json` is a 100x100 Lottie at 30 fps whose square is red for frames
-//   0-29, green for 30-59 and blue for 60-89 (hold keyframes), so a pixel tells
-//   which second of the loop is on screen.
-// - `half.json` is a still 100x100 black square at 50% opacity: on white a
-//   straight-alpha pipeline shows mid grey, a premultiplied one darker.
-//
-// `#play` autoplays and loops; `#count` plays `loop="1"` (twice) at speed 3,
-// then completes; `#still` has no autoplay (stays red); `#seg` loops the
-// green second (`segment="30,59"`); `#half`; `#toggle` plays while
-// `state.toggle` is true. `__VN_TEST_LOTTIE__.events` records
-// `<type>:<id>[:detail]` for every complete and loopComplete, `frames` counts
-// `#play`'s enterFrame, and `add(id, src, left)` puts one more looping 60 px
-// `<lottie>` on the bottom row (a spec's loopback URL).
-// Render functions, as in `layout`.
 import { createApp, h, reactive } from "vue-native";
 
 const events: string[] = [];

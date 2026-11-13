@@ -5,39 +5,17 @@ edition = "2021"
 publish = false
 
 [dependencies]
-# The JS host seam AND the trait this crate implements. `StorageHost` is
-# declared in redjs (`redjs::webapi::storage`) rather than here, for the same
-# reason `PermissionHost` is: `localStorage` has to behave like `localStorage`
-# without knowing which OS is underneath, so the browser-shaped half belongs on
-# the redjs side of the seam and only the BYTES live here. Same layering as
-# `vn-permissions`.
+# `StorageHost` lives in redjs (`redjs::webapi::storage`); this crate supplies only the bytes.
 vn-runtime = { path = "../vn-runtime", default-features = false, features = ["storages"] }
 
 [features]
-# IndexedDB on disk: this crate becomes redjs's `IndexedDbHost` (src/idb.rs)
-# — the databases live in `<storage folder>\indexeddb\`, encrypted at rest
-# under a DPAPI-sealed key whenever the storage is. vn-app turns it on with
-# its own `indexeddb` feature.
+# IndexedDB on disk (src/idb.rs), encrypted at rest whenever the storage is.
 indexeddb = ["vn-runtime/indexeddb-disk"]
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# 0.62, matching `vn-permissions` (this crate shares no types with gpui, so it
-# does not have to agree with gpui's 0.61).
-#
-# Four families, and nothing else:
-#   UI_Shell             SHGetKnownFolderPath + the FOLDERID_* GUIDs. The known
-#                        folder API rather than %APPDATA%: the environment
-#                        variables are inherited and therefore forgeable, they
-#                        are absent in some service contexts, and they do not
-#                        exist at all for Documents or the profile root.
-#   Storage_FileSystem   GetTempPath2W — TEMP genuinely IS an environment
-#                        lookup on Windows, and this is the API that does it
-#                        (and the one that is correct for a SYSTEM process).
-#   System_Com           CoTaskMemFree, which is how SHGetKnownFolderPath's
-#                        result is released.
-#   Security_Cryptography  CryptProtectData / CryptUnprotectData — DPAPI, the
-#                        at-rest encryption provider. No key management, no key
-#                        file, no place for us to leak one.
+# Known-folder API rather than %APPDATA%: environment variables are forgeable and absent in
+# some service contexts. GetTempPath2W for TEMP; CoTaskMemFree releases SHGetKnownFolderPath's
+# result; DPAPI (CryptProtectData) is the at-rest provider.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -48,34 +26,21 @@ windows = { version = "0.62", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# The macOS provider (src/crypt/keychain.rs, docs/STORAGE.md §8). Every one of
-# these is already in the lockfile through rustls / native-tls, so this adds
-# edges, not packages:
-#   ring                AES-256-GCM (the envelope, the HTTP cache's entries) and
-#                       SystemRandom (`crypt::random_bytes`, IndexedDB's key).
-#   security-framework  the login keychain: one generic-password item holding
-#                       the 256-bit master key (SecItemCopyMatching/SecItemAdd).
-#   core-foundation     CFData for that item, and the main bundle's identifier
-#                       that names it.
-#   libc                statfs, for IndexedDB's quota.
+# ring: AES-256-GCM and SystemRandom. security-framework/core-foundation: the login-keychain
+# item holding the master key, named by the bundle identifier. libc: statfs for IndexedDB's quota.
 ring = "0.17.14"
 security-framework = { version = "3.7", default-features = false }
 core-foundation = "0.10.1"
 libc = "0.2.189"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# The Linux provider (src/crypt/secret_service.rs): the macOS envelope over
-# ring, its master key in the Secret Service through oo7 — the client gpui's
-# Linux platform already links, at its revision and on its async-io runtime,
-# so this adds no packages — driven synchronously with futures-lite.
-# libc: statvfs, for IndexedDB's quota.
+# Secret Service via oo7 (the client gpui's Linux platform already links), driven synchronously
+# with futures-lite. libc: statvfs for IndexedDB's quota.
 ring = "0.17.14"
 oo7 = { git = "https://github.com/zed-industries/oo7", rev = "731c1215edb6905876c6137ab300428c7b8d7c13", default-features = false, features = ["async-std", "native_crypto"] }
 futures-lite = "2"
 libc = "0.2.189"
 
 [dev-dependencies]
-# The envelope and the ring cipher are platform-neutral code compiled for
-# `cfg(any(target_os = "macos", test))`, so the Windows test run checks them
-# (and checks the ring cipher against CNG's, src/http_cache.rs).
+# The envelope and ring cipher are compiled under `cfg(any(macos, test))` so Windows tests cover them.
 ring = "0.17.14"

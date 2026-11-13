@@ -1,15 +1,3 @@
-// `:hover`, `group-hover` and `mouseenter` / `mouseleave` follow the topmost
-// element under the pointer and its ancestors, resolved once a frame, as in a
-// browser (m26, docs/RUNTIME.md §5.18, crates/vn-tree/src/pointer.rs
-// `resolve_hover`). gpui's own hover followed every hitbox under the pointer:
-// a box under a cover that listens for nothing stayed hovered (H-1), and a
-// dropdown's trigger lost its hover over its own panel, laid out below it.
-//
-//   bun test packages/vn-test/specs/hover-target.spec.ts
-//
-// Every move is a REAL pointer event through gpui (devtools `mouse`), aimed at
-// a point. The style read back is the one in effect (`styles().computed.live`).
-
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { launch, parseHsla, styleValue } from "../src/index";
 
@@ -40,7 +28,6 @@ async function moveTo(x: number, y: number): Promise<string[]> {
 async function hovered(sel: string): Promise<boolean> {
   return !!(await app.locator(sel).styles()).hovered;
 }
-/** Every box here is grey until its hover rule paints it a colour. */
 async function tinted(sel: string): Promise<boolean> {
   const { computed } = await app.locator(sel).styles();
   const bg = parseHsla(styleValue(computed.live ?? [], "background") ?? "");
@@ -52,11 +39,9 @@ describe("hover follows the topmost element under the pointer", () => {
   test("a cover that listens for nothing takes the hover from the box under it", async () => {
     await away();
     const u = await box("#under");
-    // The bottom half, which nothing covers.
     bunExpect(await moveTo(u.x + u.w / 2, u.y + u.h * 0.75)).toEqual(["mouseenter:under"]);
     bunExpect(await hovered("#under")).toBe(true);
     bunExpect(await tinted("#under")).toBe(true);
-    // The top half, under the cover.
     bunExpect(await moveTo(u.x + u.w / 2, u.y + u.h * 0.25)).toEqual(["mouseleave:under"]);
     bunExpect(await hovered("#under")).toBe(false);
     bunExpect(await tinted("#under")).toBe(false);
@@ -93,7 +78,6 @@ describe("hover follows the topmost element under the pointer", () => {
     const g = await box("#grp");
     await moveTo(g.x + 30, g.y + g.h / 2);
     bunExpect(await tinted("#dot")).toBe(true);
-    // The right half lies under `#grp-cover`.
     await moveTo(g.x + g.w - 30, g.y + g.h / 2);
     bunExpect(await tinted("#dot")).toBe(false);
     bunExpect(await hovered("#grp")).toBe(false);
@@ -105,7 +89,6 @@ describe("hover follows the topmost element under the pointer", () => {
     bunExpect(await moveTo(l.x + l.w / 2, l.y + l.h / 2)).toEqual(["mouseenter:inert"]);
     bunExpect(await hovered("#inert")).toBe(true);
     bunExpect(await tinted("#inert")).toBe(true);
-    // Its own area outside `#live` is the page's.
     const i = await box("#inert");
     bunExpect(await moveTo(i.x + i.w - 20, i.y + i.h / 2)).toEqual(["mouseleave:inert"]);
     bunExpect(await tinted("#inert")).toBe(false);

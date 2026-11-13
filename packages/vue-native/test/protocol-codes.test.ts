@@ -1,21 +1,10 @@
 // The code tables that cross the language boundary, checked against Rust.
 //
-// Two tables in this repo are declared to be "in lockstep" with a Rust one,
-// and until now nothing enforced it:
+//   src/runtime.ts    `EV_CODES`      <->  crates/vn-tree/src/tree.rs `EVENT_NAMES`
+//   src/protocol.d.ts `VnEventCode`   <->  the same `EVENT_NAMES`
 //
-//   src/runtime.ts   `EV_CODES`  <->  crates/vn-tree/src/tree.rs `EVENT_NAMES`
-//   src/protocol.d.ts `VnEventCode` <-> the same `EVENT_NAMES`
-//
-// A drift is an event that silently stops being delivered: the kind of bug
-// that no unit test on either side can see, because each side is
-// self-consistent.
-//
-// So this file reads the RUST. It is the one test here that does, and that is
-// the point: a comment saying "keep these in step" is a request, and a test
-// that parses the other language is an answer. It is also why the JS tables
-// are plain object literals rather than a TypeScript `const enum` — a
-// `const enum` would give the compiler a private opinion about the numbers and
-// still tell it nothing about `tree.rs`.
+// A drift is an event that silently stops being delivered, which no unit test on either side can see, so this test
+// reads the Rust. It is also why the JS tables are plain object literals rather than a `const enum`.
 
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -35,10 +24,6 @@ function rustConsts(source) {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// the input event codes — src/runtime.ts vs crates/vn-tree/src/tree.rs
-// ---------------------------------------------------------------------------
-
 /** `EVENT_NAMES` as `{ "click": 1, … }` — the JS spelling of every host code. */
 function rustEventNames() {
   const source = read("crates/vn-tree/src/tree.rs");
@@ -55,10 +40,6 @@ function rustEventNames() {
 test("EV_CODES is exactly tree.rs's EVENT_NAMES", () => {
   const { EV_CODES } = createRuntime();
   const rust = rustEventNames();
-  // Both directions, and by NAME rather than by count: a code added on one side
-  // only is the failure this exists for, and it can go either way — a new host
-  // event JS never learns to listen for, or a JS name pointing at a code the
-  // host does not source.
   expect(Object.keys(EV_CODES).sort()).toEqual(Object.keys(rust).sort());
   for (const name of Object.keys(rust)) {
     expect(EV_CODES[name], `EV_CODES.${name}`).toBe(rust[name]);

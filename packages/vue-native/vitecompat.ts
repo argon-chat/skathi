@@ -1,38 +1,13 @@
-// Vite parity for vue-native's builders — the parts of a Vite app's build that
-// live in Vite's own plugins rather than in the app, shared by prod.ts and
-// build.ts so the two cannot drift on what an import means.
+// Vite parity for the builders (prod.ts and build.ts), so an import means the same in both.
 //
-// A Vite app does not only import `.ts` and `.vue`. It writes
+//   ?raw             the file's text
+//   ?url / assets    the file's URL; `vn build` packs the file into the payload under that key
+//   .svg             a component with vite-svg-loader, else a URL
+//   import.meta.glob expanded at load time: eager / lazy / `import` / `query`
+//   ?worker, new Worker(new URL(...))  a constructor throwing a named NotSupportedError
+//   .wasm            a stub with an advisory (WebAssembly is out of scope)
 //
-//   import svg from "./x.svg?raw"            the file's TEXT
-//   import url from "./a.png"                the file's URL (any asset)
-//   import url from "./w.js?url"             ditto, for a file that is not one
-//   import Icon from "./icon.svg"            a COMPONENT (vite-svg-loader)
-//   import W from "./w.ts?worker"            a Worker constructor
-//   new Worker(new URL("./w.ts", import.meta.url))
-//   import.meta.glob("./kinds/*.ts", { eager: true, import: "default" })
-//
-// and keeps global CSS and a theme script in `index.html`, static files in
-// `public/`, and build constants in `define`. Every one of those is either a
-// build error or — worse — a SILENT wrong answer under a bundler that does not
-// know them (a `.svg` import became a path string; `import.meta.glob` built
-// and then threw at eval). This module is what each of them means here:
-//
-//   ?raw            the text, exactly as Vite
-//   ?url / assets   the URL of the file, which `vn build` packs into the
-//                   payload under that key (`assets.json`, docs/PACKAGING.md)
-//   .svg            a component when the app uses vite-svg-loader (as Vite
-//                   with that plugin), a URL otherwise (as plain Vite)
-//   import.meta.glob  expanded at load time: eager / lazy / `import` / `query`
-//   ?worker, new Worker(new URL(...))
-//                   a constructor that throws a named NotSupportedError, with
-//                   an advisory — vue-native has no Workers yet
-//                   (research/reports/m25/workers-design.md)
-//   .wasm           a stub with an advisory: WebAssembly is out of scope by
-//                   owner decision (research/reports/m26/client-gap.md)
-//
-// Nothing here is a vue-native invention: each shape answers what Vite answers,
-// or fails with a name instead of silently.
+// Each shape answers what Vite answers, or fails with a name instead of silently.
 
 import { existsSync, readFileSync, realpathSync, statSync } from "fs";
 import { parse as parseSfc, type SFCTemplateBlock } from "@vue/compiler-sfc";
@@ -41,20 +16,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 const J = (v: unknown) => JSON.stringify(v);
 const posix = (p: string) => p.split(sep).join("/");
 
-// ---------------------------------------------------------------------------
-// SFC type resolution
-// ---------------------------------------------------------------------------
-
-/**
- * The `fs` compileScript resolves imported types through.
- *
- * `fileExists` is FILES ONLY. `existsSync` is also true for a directory, so
- * `import type { ToastProps } from "."` (a directory import that should land on
- * `./index.ts`) resolved to the directory itself and `defineProps<ToastProps>()`
- * failed with "Unresolvable type reference" (B-build-ui §1.1 #1a). TypeScript's
- * own `ts.sys.fileExists` — what plugin-vue ends up using — answers false for a
- * directory.
- */
+/** The `fs` compileScript resolves imported types through. `fileExists` is files only: `from "."` must land on ./index.ts, as with ts.sys.fileExists. */
 export const SFC_FS = {
   fileExists: (file: string) => {
     try {
@@ -79,10 +41,6 @@ export const SFC_FS = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// app defines: vn.config.json "define" + `--define K=V`
-// ---------------------------------------------------------------------------
-
 /** Keys the builders own; an app may not redefine them. */
 const RESERVED_DEFINES = new Set([
   "__DEV__",
@@ -96,12 +54,7 @@ const RESERVED_DEFINES = new Set([
 const DEFINE_KEY = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
 const IDENT_PATH = DEFINE_KEY;
 
-/**
- * Is `code` a value Bun's `define` inserts as CODE? Bun parses a define value
- * as JSON or as an identifier path and inserts anything else as a STRING
- * literal (see build.ts's DEFINES comment) — so `1 + 1` would silently become
- * `"1 + 1"`. Refusing it is the compat-honest answer.
- */
+/** Is `code` a value Bun's `define` inserts as code? Anything but JSON or an identifier path becomes a string literal, so it is refused. */
 function isDefineCode(code: string): boolean {
   if (IDENT_PATH.test(code)) return true;
   try {
@@ -118,14 +71,8 @@ export interface AppDefines {
 }
 
 /**
- * Vite's `define`, from `vn.config.json` and the command line.
- *
- * Semantics are Vite's: a STRING value is an expression (`"\"v1\""` is the
- * string `v1`, `"true"` is the boolean), so a `vite.config.ts` block carries
- * over unchanged once its `JSON.stringify(...)` calls are evaluated. A JSON
- * file can also give a non-string value directly (`{ "version": "1" }`), which
- * is serialized — the same thing `JSON.stringify` in a vite config produces.
- * `--define K=V` (repeatable) wins over the file; V is an expression.
+ * Vite's `define`, from `vn.config.json` and the command line. A string value is an expression, a
+ * non-string JSON value is serialized; `--define K=V` (repeatable) wins over the file.
  */
 export function appDefines(configDefine: unknown, cli: string[], where = "vn.config.json"): AppDefines {
   const defines: Record<string, string> = {};
@@ -183,27 +130,14 @@ export function takeDefineArgs(argv: string[]): { defines: string[]; rest: strin
   return { defines, rest };
 }
 
-// ---------------------------------------------------------------------------
-// asset URLs
-// ---------------------------------------------------------------------------
-
-/**
- * The asset types Vite answers a default import of with a URL (its
- * KNOWN_ASSET_TYPES, minus `svg`, which is decided per app, and `wasm`, which
- * is out of scope here).
- */
+/** The asset types a default import resolves to a URL (Vite's KNOWN_ASSET_TYPES minus `svg`, decided per app, and `wasm`). */
 export const ASSET_EXT =
   /\.(apng|bmp|png|jpe?g|jfif|pjpeg|pjp|gif|ico|webp|avif|cur|jxl|mp4|webm|ogg|mp3|wav|flac|aac|opus|mov|m4a|vtt|woff2?|eot|ttf|otf|webmanifest|pdf|txt)$/i;
 
 /**
- * The payload key and URL of a file an import refers to.
- *
- * Inside the document root (where `vn.config.json` / `index.html` live) the key
- * is the root-relative path — what Vite's dev server serves the file under, and
- * what vue-native's dev host already resolves a URL to on disk, so the same URL
- * works in a dev host and in the packaged exe. A file outside it (a hoisted
- * `node_modules`, another drive) gets a content-addressed key under `_vn/fs/`,
- * which a dev manifest explicitly maps to the original file and a production payload carries.
+ * The payload key and URL of an imported file. Inside the document root the key is the
+ * root-relative path (what the dev host resolves, so one URL works dev and packaged); outside it a
+ * content-addressed `_vn/fs/` key, mapped by a dev manifest and carried by a production payload.
  */
 export function assetKey(absPath: string, docRoot: string): { key: string; url: string } {
   const rel = relative(docRoot, absPath);
@@ -217,10 +151,6 @@ export function assetKey(absPath: string, docRoot: string): { key: string; url: 
   const url = "/" + key.split("/").map(encodeURIComponent).join("/");
   return { key, url };
 }
-
-// ---------------------------------------------------------------------------
-// import.meta.glob
-// ---------------------------------------------------------------------------
 
 /** A literal, parsed from source: what `import.meta.glob`'s arguments may be. */
 type Lit = string | number | boolean | null | Lit[] | { [k: string]: Lit };
@@ -342,15 +272,10 @@ const GLOB_OPTIONS = new Set(["eager", "import", "query", "as", "exhaustive", "b
 const GLOB_CHAR = /[*?[\]{}!]/;
 
 export interface GlobContext {
-  /** The importing file. */
   file: string;
   /** Where a `/`-rooted pattern starts: the app's document root. */
   docRoot: string;
-  /**
-   * The dev builder's form: each matched file is imported by a path relative
-   * to the importer (`./kinds/a.ts`), the shape its module registry resolves.
-   * Prod bundles, and imports by absolute path.
-   */
+  /** Dev builder form: import each match by importer-relative path, as its module registry resolves. Prod imports by absolute path. */
   relativeSpecs?: boolean;
 }
 
@@ -397,14 +322,10 @@ function queryString(q: Lit | undefined): string {
 }
 
 /**
- * Expands every `import.meta.glob(...)` in `src` into what Vite generates: an
- * object literal keyed by path, eager entries as hoisted static imports, lazy
- * ones as `() => import(...)`. Returns `null` when there is nothing to expand.
- *
- * Keys follow Vite: a relative pattern keeps the importer-relative spelling
- * (`./kinds/a.ts`, `../effects/b.ts`), a root pattern the root-relative one
- * (`/src/x.vue`); `base` rebases them. The importer never matches itself, and
- * `node_modules` is skipped unless the pattern names it or `exhaustive` is set.
+ * Expands every `import.meta.glob(...)` in `src` as Vite does: an object keyed by path, eager
+ * entries as hoisted static imports, lazy ones as `() => import(...)`. Returns `null` when there is
+ * nothing to expand. Keys keep the pattern's spelling (importer- or root-relative); `base` rebases
+ * them; `node_modules` is skipped unless named or `exhaustive`.
  */
 export function expandGlobs(src: string, ctx: GlobContext): { code: string; count: number; files: number } | null {
   if (!src.includes("import.meta.glob")) return null;
@@ -504,8 +425,6 @@ export function expandGlobs(src: string, ctx: GlobContext): { code: string; coun
       const rel = posix(relative(keyBase, f));
       const key = rooted && opts.base === undefined ? `/${rel}` : rel.startsWith("../") ? rel : `./${rel}`;
       if (!ctx.relativeSpecs) return { key, spec: posix(f) + qs };
-      // A `query` entry is a `?raw` / `?url` import, which the dev builder's
-      // plugins build into the importer as prod's do (viteShapesPlugin).
       const near = posix(relative(dirname(ctx.file), f));
       return { key, spec: (near.startsWith("../") ? near : `./${near}`) + qs };
     });
@@ -538,18 +457,10 @@ export function expandGlobs(src: string, ctx: GlobContext): { code: string; coun
   return { code, count: call, files };
 }
 
-// ---------------------------------------------------------------------------
-// Workers and WebAssembly: named failures, not silent ones
-// ---------------------------------------------------------------------------
-
 /** The advisory prefix runtime.ts's `warnCompat` uses — one grep finds both. */
 const ADVISE = "[vue-native compat]";
 
-/**
- * A JS EXPRESSION that logs one advisory and evaluates to a `NotSupportedError`
- * naming `what` — a DOMException where the engine has one (redjs does), an
- * Error with that name otherwise.
- */
+/** A JS expression that logs one advisory and evaluates to a `NotSupportedError` naming `what`. */
 function notSupportedError(what: string, why: string): string {
   const msg = `${what}: ${why}`;
   return (
@@ -560,9 +471,8 @@ function notSupportedError(what: string, why: string): string {
 }
 
 const WORKERS_WHY =
-  "vue-native has no Web Workers yet (research/reports/m25/workers-design.md) — run the work on the main thread for now";
+  "vue-native has no Web Workers yet — run the work on the main thread for now";
 
-/** The module a `?worker` / `?sharedworker` import becomes. */
 export function workerStubModule(id: string, url = false): string {
   if (url) {
     return `console.warn(${J(`${ADVISE} ${id}?worker&url: ${WORKERS_WHY}`)});\nexport default ${J(`vn-unsupported:worker/${id}`)};\n`;
@@ -574,12 +484,7 @@ export function workerStubModule(id: string, url = false): string {
   );
 }
 
-/**
- * `new Worker(new URL("./w.ts", import.meta.url), …)` — Vite's other worker
- * idiom, which it bundles as a worker entry. Rewritten to construct a class
- * that throws the same named error as `?worker`, so the failure names the
- * file instead of being `Worker is not defined` from deep in a call stack.
- */
+/** `new Worker(new URL("./w.ts", import.meta.url))` becomes the same named-error class as `?worker`, so the failure names the file. */
 export function stubWorkerUrls(src: string, file: string): { code: string; count: number } | null {
   if (!/\bnew\s+(?:Shared)?Worker\s*\(\s*new\s+URL\s*\(/.test(src)) return null;
   let count = 0;
@@ -595,7 +500,7 @@ export function stubWorkerUrls(src: string, file: string): { code: string; count
 }
 
 const WASM_WHY =
-  "WebAssembly is out of scope for vue-native (owner decision, research/reports/m26/client-gap.md); " +
+  "WebAssembly is out of scope for vue-native; " +
   "the native replacement is a host binding";
 
 /** The module a `.wasm` import becomes: a URL that no fetch can satisfy, or an `init` that rejects. */
@@ -604,10 +509,6 @@ export function wasmStubModule(id: string, query: Set<string>): string {
   if (query.has("url")) return advise + `export default ${J(`vn-unsupported:wasm/${id}`)};\n`;
   return advise + `export default function init() { return Promise.reject(${notSupportedError(id, WASM_WHY)}); }\n`;
 }
-
-// ---------------------------------------------------------------------------
-// SVG as a component (vite-svg-loader)
-// ---------------------------------------------------------------------------
 
 /** Does the app use vite-svg-loader, i.e. is a bare `.svg` import a component? */
 export function svgDefaultOf(appPkg: Record<string, unknown> | null): "component" | "url" {
@@ -633,10 +534,6 @@ export function svgAsSfc(svg: string): string {
   return `<template>${body}</template>`;
 }
 
-// ---------------------------------------------------------------------------
-// the Bun plugin
-// ---------------------------------------------------------------------------
-
 export interface ShapesOptions {
   /** Observe typed source before Bun erases types; production AOT input archiving only. */
   sourceLoaded?: (file: string, source: string, transformed: string) => void;
@@ -644,9 +541,7 @@ export interface ShapesOptions {
   docRoot: string;
   /** Workspace root — module ids in messages are relative to it. */
   wsRoot: string;
-  /** What a bare `.svg` import is (see `svgDefaultOf`). */
   svgDefault: "component" | "url";
-  /** Compiles an SFC source to a module (the builder's own `compileVue`). */
   compileSfc: (
     absPath: string,
     source: string,
@@ -655,27 +550,16 @@ export interface ShapesOptions {
   assets: Map<string, string>;
   /** Filled: one line per thing this plugin did that a build log should say. */
   notes: Map<string, number>;
-  /**
-   * The dev builder (build.ts), which builds one module per file and leaves the
-   * imports to its module registry: `import.meta.glob` imports by
-   * importer-relative path, and an asset URL the dev host cannot serve is
-   * named in the notes.
-   */
+  /** The dev builder: one module per file, imports left to its registry. `import.meta.glob` imports by importer-relative path; an asset URL the dev host cannot serve is noted. */
   dev?: boolean;
   /** Called with each file a `?query` import builds into its importer, so a watcher can rebuild the importer when it changes. */
   inlined?: (absPath: string) => void;
 }
 
 /**
- * Resolves an import specifier as the bundler does. This is Bun's resolver,
- * which reads the `compilerOptions.paths` of the importer's nearest
- * tsconfig.json (`"@/*": ["./src/*"]`), plus package `exports` and the browser
- * field. prod.ts's bundle resolves every import this way inside Bun.build.
- * build.ts calls it directly (`devImportsPlugin`), because an import its
- * per-module builds leave external is never resolved by the bundler.
- *
- * A vite.config `resolve.alias` is not read by either builder (docs/PACKAGING.md
- * §3.1).
+ * Resolves an import specifier as the bundler does: Bun's resolver (tsconfig `paths`, package
+ * `exports`, browser field). prod.ts's bundle does this inside Bun.build; build.ts calls it directly
+ * because its per-module builds leave imports external. vite.config `resolve.alias` is not read.
  */
 export function resolveImport(spec: string, fromDir: string): string | null {
   try {
@@ -685,7 +569,6 @@ export function resolveImport(spec: string, fromDir: string): string | null {
   }
 }
 
-/** The directory an `onResolve` call resolves from. */
 export const importerDir = (args: { resolveDir?: string; importer?: string }, fallback: string) =>
   args.resolveDir || (args.importer ? dirname(args.importer) : fallback);
 
@@ -696,7 +579,6 @@ function note(o: ShapesOptions, what: string) {
   o.notes.set(what, (o.notes.get(what) ?? 0) + 1);
 }
 
-/** Loader for a source file by extension. */
 export function loaderOf(path: string): "ts" | "tsx" | "js" | "jsx" {
   const ext = extname(path).toLowerCase();
   if (ext === ".tsx") return "tsx";
@@ -705,10 +587,7 @@ export function loaderOf(path: string): "ts" | "tsx" | "js" | "jsx" {
   return "js";
 }
 
-/**
- * The source-level rewrites: `import.meta.glob` and `new Worker(new URL(...))`.
- * Exported so the SFC path can run it over a component's compiled script.
- */
+/** The source-level rewrites (`import.meta.glob`, `new Worker(new URL(...))`); also run over a component's compiled script. */
 export function transformSource(
   code: string,
   file: string,
@@ -732,7 +611,7 @@ export function transformSource(
   return changed ? code : null;
 }
 
-/** Bun plugin: the import shapes listed in this file's header. Register it BEFORE the SFC plugin. */
+/** Bun plugin for the import shapes above. Register it BEFORE the SFC plugin. */
 export function viteShapesPlugin(o: ShapesOptions) {
   const idOf = (abs: string) => posix(relative(o.wsRoot, abs));
   const urlModule = (abs: string) => {
@@ -743,10 +622,8 @@ export function viteShapesPlugin(o: ShapesOptions) {
   return {
     name: "vn-vite-shapes",
     setup(build: any) {
-      // `x?raw`, `x?url`, `x?worker`, … — any specifier with a query naming a
-      // kind. The query stays IN the path of a namespace of our own: Bun keys
-      // modules by path, so `a.svg?raw` and `a.svg` would otherwise collapse
-      // into one module, and `pluginData` does not reach onLoad in Bun 1.4.
+      // A `?query` specifier: the query stays in the path of our own namespace, since Bun keys modules
+      // by path (`a.svg?raw` and `a.svg` would collapse) and pluginData does not reach onLoad in Bun 1.4.
       build.onResolve({ filter: /\?[\w&=.-]+$/ }, (args: any) => {
         const q = args.path.lastIndexOf("?");
         const bare = args.path.slice(0, q);
@@ -789,7 +666,6 @@ export function viteShapesPlugin(o: ShapesOptions) {
         note(o, `?url (packed as an asset)`);
         return { contents: urlModule(file), loader: "js" };
       });
-      // A bare `.svg`: a component under vite-svg-loader, a URL otherwise.
       build.onLoad({ filter: /\.svg$/i }, async (args: any) => {
         if (o.svgDefault === "component") {
           note(o, `.svg as a component`);
@@ -798,9 +674,7 @@ export function viteShapesPlugin(o: ShapesOptions) {
         note(o, `asset URL (packed as an asset)`);
         return { contents: urlModule(args.path), loader: "js" };
       });
-      // Any other asset: its URL, as Vite answers. Bun's own `file` loader
-      // would emit a hashed copy NEXT TO the bundle and return its relative
-      // path, which nothing packs and nothing resolves.
+      // Any other asset: its URL. Bun's file loader would emit a hashed copy next to the bundle that nothing packs.
       build.onLoad({ filter: ASSET_EXT }, (args: any) => {
         note(o, `asset URL (packed as an asset)`);
         return { contents: urlModule(args.path), loader: "js" };
@@ -809,8 +683,6 @@ export function viteShapesPlugin(o: ShapesOptions) {
         note(o, `.wasm stubbed (WebAssembly out of scope)`);
         return { contents: wasmStubModule(idOf(args.path), new Set()), loader: "js" };
       });
-      // `import.meta.glob` and worker URLs in plain sources. Returning nothing
-      // hands the file back to Bun's own loader untouched.
       build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async (args: any) => {
         const src = await Bun.file(args.path).text();
         const code = src.includes("import.meta.glob") || src.includes("new URL") ? transformSource(src, args.path, o) : null;
@@ -821,43 +693,24 @@ export function viteShapesPlugin(o: ShapesOptions) {
   };
 }
 
-/** A specifier naming a file an import builds INTO its importer: data, `.svg`, `.wasm` and Vite's asset types. */
 export const LEAF_IMPORT = new RegExp(`\\.(?:json|svg|wasm)$|${ASSET_EXT.source}`, "i");
 
 export interface DevImportsOptions {
-  /** The directory whose files the dev builder emits as modules (the app's source root). */
   srcDir: string;
-  /** Bare specifiers vendor.js provides (build.ts PRESEEDED): left as written. */
   preseeded: (spec: string) => boolean;
-  /** Called with each data or asset file an import builds into its importer. */
   inlined?: (absPath: string) => void;
-  /**
-   * The registry id of the npm module a bare import outside the source root
-   * loads (build.ts `npmIdOf`): one per package entry, keyed on where it
-   * resolves. Undefined leaves the specifier as written.
-   */
+  /** Registry id of the npm module a bare import outside the source root loads (build.ts `npmIdOf`). Undefined leaves the specifier as written. */
   npmId?: (spec: string, absPath: string, fromDir: string) => string | undefined;
 }
 
 /**
- * The dev builder's resolution (build.ts `buildModule`). Each app file is built
- * on its own with every import external, so the bundler never resolves an
- * import, and the module registry is keyed by relative path. Two things need
- * the resolver prod's bundle uses (`resolveImport`):
- *
- * - An import that resolves into the app's source root under another name, a
- *   tsconfig `paths` alias (`@/store/x`), becomes the importer-relative path of
- *   that file. It is then a graph edge and loads the one module instance, as in
- *   prod and Vite. Left bare, it was built as an npm package: a second copy of
- *   the module, or a failed build.
- * - Data and asset files (`.json`, `.svg`, Vite's asset types, `.wasm`) are
- *   built into the importer, as prod's bundle builds them, through Bun's JSON
- *   loader and `viteShapesPlugin`'s loaders. Register that plugin first: its
- *   `?query` resolution must see a query import before this one does.
- * - An npm import gets the id `npmId` gives it, so every importer of one
- *   package entry loads one module.
- *
- * Anything else is left to the build's `external`.
+ * The dev builder's resolution (build.ts `buildModule`). Each file is built with every import
+ * external, so the bundler never resolves one; this does what prod's bundle does:
+ * - an import into the source root under another name (tsconfig `paths` alias) becomes the
+ *   importer-relative path, so it is one graph edge and one module instance;
+ * - data and asset files are built into the importer (register `viteShapesPlugin` first: its
+ *   `?query` resolution must see a query import first);
+ * - an npm import gets the id `npmId` gives it, so all importers share one module.
  */
 export function devImportsPlugin(o: DevImportsOptions) {
   const inSrc = (abs: string) => {
@@ -874,10 +727,8 @@ export function devImportsPlugin(o: DevImportsOptions) {
         o.inlined?.(abs);
         return { path: abs };
       });
-      // Bare specifiers only. An absolute path is the entry point (Windows'
-      // `C:\…` starts with a letter too) and must never be marked external.
-      // `node:` stays out of the FILTER: a plugin that so much as sees Bun's
-      // own `node:module` import makes it a real `require("node:module")`.
+      // Bare specifiers only: an absolute path is the entry point (Windows `C:\…` starts with a letter).
+      // `node:` stays out of the filter: a plugin that sees Bun's own `node:module` import makes it a real require.
       build.onResolve({ filter: /^(?!node:)[^./\\]/ }, (args: any) => {
         if (args.kind === "entry-point-build" || isAbsolute(args.path) || o.preseeded(args.path)) return undefined;
         const from = importerDir(args, o.srcDir);
@@ -899,21 +750,9 @@ export function devImportsPlugin(o: DevImportsOptions) {
 /** Identifier an unexpanded `import.meta.glob` is defined to, so a survivor is findable in the output. */
 export const GLOB_TRIPWIRE = "__vn_import_meta_glob_unexpanded";
 
-// ---------------------------------------------------------------------------
-// Module namespace objects (m26 client sweep #2)
-// ---------------------------------------------------------------------------
-//
-// A browser's (and Vite's) `import * as ns` and `await import("./X.vue")`
-// give a MODULE NAMESPACE OBJECT: null prototype, `Symbol.toStringTag` =
-// "Module", one getter per export. Vue's `defineAsyncComponent` unwraps
-// `.default` only from something that says it is one:
-//
-//   if (comp && (comp.__esModule || comp[Symbol.toStringTag] === "Module")) comp = comp.default
-//
-// Bun's bundle builds each namespace as a plain `{}` that its `__export`
-// helper fills with getters, with neither mark. So every
-// `defineAsyncComponent(() => import(…))` mounted the namespace object itself,
-// which renders nothing: each pane of the Argon client's Settings was blank.
+// Bun builds each `import * as ns` / `import()` namespace as a plain `{}` without
+// `Symbol.toStringTag` "Module" or `__esModule`, so Vue's defineAsyncComponent mounts the namespace
+// itself and renders nothing. Mark namespaces as modules.
 
 /** Bun's `__export(target, all)`, minified or not: `(o,t)=>{for(var e in t)p(o,e,{get:t[e],enumerable:!0,configurable:!0,…`. */
 const BUN_EXPORT_HELPER =
@@ -922,13 +761,7 @@ const BUN_EXPORT_HELPER =
 const BUN_EXPORT_SIGNATURE =
   /get\s*:\s*([\w$]+)\[([\w$]+)\]\s*,\s*enumerable\s*:\s*(?:!0|true)\s*,\s*configurable\s*:\s*(?:!0|true)\s*,\s*set\s*:\s*[\w$]+\.bind\(\s*\1\s*,\s*\2\s*\)/;
 
-/**
- * Makes every namespace object a bundle builds look like a module namespace:
- * Bun's `__export` helper now starts by giving its target a null prototype and
- * `Symbol.toStringTag` "Module". Throws when the bundle has the helper in a
- * shape this does not recognise, so a Bun upgrade fails the build instead of
- * blanking every lazy component again.
- */
+/** Makes every namespace object a bundle builds look like a module namespace (null prototype, toStringTag "Module"). Throws on an unrecognised `__export` helper shape, so a Bun upgrade fails the build. */
 export function tagModuleNamespaces(bundle: string): { code: string; count: number } {
   let count = 0;
   const code = bundle.replace(BUN_EXPORT_HELPER, (_m, head: string, target: string, _all: string, loop: string) => {
@@ -950,29 +783,18 @@ export function tagModuleNamespaces(bundle: string): { code: string; count: numb
 
 /** `import("<literal>")` in a module body, but not `x.import(…)`. */
 const DYNAMIC_IMPORT = /(?<![\w$.])import\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\)/g;
-/** An `import(` whose argument is not a string literal. */
 const DYNAMIC_IMPORT_ANY = /(?<![\w$.])import\(\s*(?!["'])/g;
 /** `__toESM(require("…"), 1)`: Bun's Node-mode interop. */
 const NODE_MODE_TO_ESM = /\b__toESM\((require\(\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\))\s*,\s*1\s*\)/g;
 
 /**
- * The dev builder's per-module CJS (build.ts `buildModule`), corrected to a
- * bundler's ESM semantics, which are what a Vite app is written against:
- *
- * - In a `"type": "module"` package Bun emits `__toESM(require(x), 1)`. The `1`
- *   is Node's rule for importing CommonJS: `default` is the whole
- *   `module.exports`, even when that object says `__esModule`. Every module
- *   here is ESM compiled to CJS, so `import App from "./App.vue"` got
- *   `{ __esModule, default }` instead of the component, and the app failed to
- *   mount. Without the `1`, `default` is the module's own default export, as in
- *   Vite.
- * - `import("./X.vue")` is left as a native dynamic import, which the host's
- *   classic scripts cannot run. It becomes a promise of the module's exports,
- *   loaded through the same registry `require` uses. A CJS module's exports are
- *   wrapped as Vite wraps them, with `default` = `module.exports`.
- *
- * Returns the rewritten body and the specifier-less `import(…)` count, which
- * the caller reports (those still reject at runtime).
+ * The dev builder's per-module CJS, corrected to bundler ESM semantics:
+ * - `__toESM(require(x), 1)` (Bun in a "type": "module" package) makes `default` the whole
+ *   `module.exports`, so `import App from "./App.vue"` got `{ __esModule, default }`; dropping the
+ *   `1` gives the module's own default export.
+ * - `import("./X.vue")` is native and the host's classic scripts cannot run it: it becomes a promise
+ *   of the exports through the registry `require`, CJS exports wrapped with `default` = module.exports.
+ * Returns the rewritten body and the count of `import(...)` with a non-literal specifier (these still reject at runtime).
  */
 export function devEsmInterop(body: string): { code: string; unresolved: number } {
   let code = body.replace(NODE_MODE_TO_ESM, "__toESM($1)");
@@ -993,10 +815,6 @@ export function devEsmInterop(body: string): { code: string; unresolved: number 
   return { code, unresolved };
 }
 
-// ---------------------------------------------------------------------------
-// CSS: `@import` inlining (postcss-import, the part Vite always applies)
-// ---------------------------------------------------------------------------
-
 /** `@import "x";`, `@import 'x' screen;`, `@import url(x);`, `@import url("x") print;` */
 const IMPORT_RULE = /@import\s+(?:url\(\s*(['"]?)([^'")]+)\1\s*\)|(['"])([^'"]+)\3)\s*([^;]*);/g;
 
@@ -1004,19 +822,10 @@ const IMPORT_RULE = /@import\s+(?:url\(\s*(['"]?)([^'")]+)\1\s*\)|(['"])([^'"]+)
 const CSS_URL = /\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\burl\(\s*(['"]?)([^'")]*)\1\s*\)/gi;
 
 /**
- * A sheet's relative `url()`s, rewritten to say what they mean once the sheet
- * is one piece of the app's stylesheet, as Vite rewrites them: resolved
- * against the sheet's own file and made root-relative (`/packages/assets/fonts/
- * Lato/Lato-Bold.ttf`), which the host resolves against the app root as it
- * does an `<img src>`. Outside the root, a `file:` URL. Absolute, rooted,
- * `data:`, `#fragment` and aliased (`~`, `@`) URLs are left alone, and so are
- * `@import url(…)`s, which inlining resolves. When a production asset map is
- * supplied, local files also enter the payload and outside-root files use
- * the same portable keys as imported assets; URL query/fragment suffixes
- * stay in CSS rather than becoming part of a filesystem name.
- *
- * Without this, `@font-face { src: url('./Lato/Lato-Bold.ttf') }` in
- * `packages/assets/fonts/fonts.css` named a file next to `index.html`.
+ * Rewrites a sheet's relative `url()`s as Vite does once it is part of the app stylesheet: resolved
+ * against the sheet's file and made root-relative (a `file:` URL outside the root). Absolute, rooted,
+ * `data:`, `#fragment`, aliased (`~`, `@`) URLs and `@import url(...)` are left alone. With a
+ * production asset map, files also enter the payload; query/fragment suffixes stay in the CSS.
  */
 export function rebaseCssUrls(css: string, from: string, docRoot: string, assets?: Map<string, string>): string {
   if (!/url\(/i.test(css)) return css;
@@ -1051,15 +860,9 @@ export function rebaseCssUrls(css: string, from: string, docRoot: string, assets
 }
 
 /**
- * Inlines every LOCAL `@import` in `css` (relative, root-relative or a package
- * path), recursively, the way postcss-import does inside Vite's CSS pipeline —
- * so an `@import "@vue-flow/core/dist/style.css"` in a component's `<style>`
- * reaches the stylesheet instead of being dropped by vn-css as an at-rule it
- * does not know. A media list wraps the imported rules in `@media`. Remote
- * imports are left in place (vn-css drops them with its own advisory).
- *
- * Every sheet's relative `url()`s are rebased on the way ([`rebaseCssUrls`]),
- * each against its own file.
+ * Inlines every local `@import` in `css` recursively, as postcss-import does in Vite (otherwise
+ * vn-css drops it as an unknown at-rule). A media list wraps the rules in `@media`; remote imports
+ * stay. Relative `url()`s are rebased per file ([`rebaseCssUrls`]).
  */
 export function inlineCssImports(
   css: string,
@@ -1096,10 +899,6 @@ export function inlineCssImports(
   });
 }
 
-// ---------------------------------------------------------------------------
-// index.html
-// ---------------------------------------------------------------------------
-
 export interface CssPiece {
   text: string;
   from: string;
@@ -1111,7 +910,6 @@ export interface LiftedHtml {
   bodyCss: CssPiece[];
   /** Inline classic `<script>`s, document order: they run before the entry module, as in a browser. */
   scripts: { text: string; label: string }[];
-  /** Attributes for the document root (`<html class>` and `<body class>`). */
   rootClasses: string[];
   rootAttrs: Record<string, string>;
   /** The app container stays a child of body, outside body-level portals. */
@@ -1129,12 +927,7 @@ function attrsOf(tag: string): Record<string, string> {
   return out;
 }
 
-/**
- * What a Vite app's `index.html` contributes, lifted out of a document the
- * window does not have: inline `<style>`, local `<link rel=stylesheet>`, inline
- * classic `<script>` (the theme script every app has), the root's classes and
- * the mount element's attributes. Everything else is named in `advisories`.
- */
+/** What a Vite app's `index.html` contributes: inline `<style>`, local stylesheets, inline classic scripts, root classes and mount attributes. The rest is named in `advisories`. */
 export function liftIndexHtml(htmlPath: string, docRoot: string): LiftedHtml {
   const raw = readFileSync(htmlPath, "utf8");
   const html = raw.replace(/<!--[\s\S]*?-->/g, (c) => " ".repeat(c.length));
@@ -1231,9 +1024,7 @@ export function liftIndexHtml(htmlPath: string, docRoot: string): LiftedHtml {
 
 type StaticSvgNode = NonNullable<SFCTemplateBlock["ast"]>["children"][number];
 
-/** Static SVG definitions become real, queryable DOM nodes. The runtime has
- * no innerHTML parser, so parse once in the builder and emit its existing DOM
- * operations instead. v-pre makes Vue syntax literal; it is not a template. */
+/** Static SVG definitions become real DOM nodes: the runtime has no innerHTML parser, so parse once in the builder. v-pre makes Vue syntax literal. */
 function staticSvgDom(svg: string): string {
   const { descriptor, errors } = parseSfc(`<template><div v-pre>${svg}</div></template>`, {
     templateParseOptions: { whitespace: "preserve", comments: true },
@@ -1300,10 +1091,6 @@ export function htmlPreludeModule(lifted: LiftedHtml): string {
   return lines.join("\n") + "\n";
 }
 
-// ---------------------------------------------------------------------------
-// the app's own framework packages (pinia, vue-router)
-// ---------------------------------------------------------------------------
-
 const major = (v: string | undefined) => {
   const m = /(\d+)/.exec(v ?? "");
   return m ? Number(m[1]) : NaN;
@@ -1340,15 +1127,7 @@ export interface FrameworkDep {
   warning?: string;
 }
 
-/**
- * Which copy of `name` (pinia / vue-router) either builder uses.
- *
- * The app's OWN when it declares the package and it is installed — an app that
- * asks for pinia 3 gets pinia 3, exactly as its Vite build does. Otherwise
- * vue-native's. Both builders use this choice, so an installed app dependency
- * has the same major in dev and prod. An unavailable declared dependency that
- * falls back to a different runtime major remains an actionable warning.
- */
+/** Which copy of `name` (pinia / vue-router) the builders use: the app's own when declared and installed, else vue-native's. A declared dependency that falls back to another major warns. */
 export function frameworkDep(
   name: string,
   appPkg: Record<string, unknown> | null,
@@ -1383,7 +1162,6 @@ export function frameworkDep(
   return { path: appPath, from: "app", version: appVersion };
 }
 
-/** The app's package.json, or null. */
 export function readPackageJson(dir: string): Record<string, unknown> | null {
   try {
     const v = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));

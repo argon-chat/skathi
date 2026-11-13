@@ -1,12 +1,9 @@
-// Links, window.open and `appShell` — the JS half of docs/SHELL.md.
+// Links, window.open and `appShell`: the JS half.
 //
-// The Rust half (the scheme allowlist again, the executable guard, the shell
-// thread) is unit-tested in crates/vn-desktop; e2e/shell.spec drives both
-// through a real host with VN_SHELL=record. What is pinned here is the part
-// only the runtime can get wrong: WHICH clicks follow a link, that a
-// `preventDefault()` anywhere on the path cancels it, that content can only
-// reach http/https/mailto, and that `appShell` turns the settle protocol into
-// promises that reject with the right names.
+// The Rust half (scheme allowlist, executable guard, shell thread) is unit-tested in crates/vn-desktop; e2e/shell.spec
+// drives both through a real host with VN_SHELL=record. Pinned here: which clicks follow a link, that
+// `preventDefault()` anywhere on the path cancels it, that content can only reach http/https/mailto, and that
+// `appShell` turns the settle protocol into promises that reject with the right names.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
@@ -110,7 +107,7 @@ describe("<a href>: activation", () => {
     expect(rt.advisories()[0]).toContain("RouterLink");
   });
 
-  test("file:, custom protocols and ms-settings: are refused with A-F1, before the host", () => {
+  test("file:, custom protocols and ms-settings: are refused before the host", () => {
     for (const href of ["file:///C:/Windows/System32/calc.exe", "myapp://open", "ms-settings:privacy"]) {
       const { rt, a, opens, click } = linkWorld(href);
       click(a);
@@ -130,14 +127,14 @@ describe("<a href>: activation", () => {
     expect(loud.rt.advisories()[0]).toContain("not executed");
   });
 
-  test("<a download href=blob:…> asks the host to save it (Save As, D-F6), with no gesture needed", () => {
+  test("<a download href=blob:…> asks the host to save it (Save As), with no gesture needed", () => {
     const { rt, a, opens, click } = linkWorld("blob:vn/1234");
     rt.patchProp(a, "download", null, "report.csv");
     click(a);
     expect(opens()).toEqual([]);
     const saves = rt.host.desktop.fs.calls.filter((c: { op: string }) => c.op === "download");
     expect(saves.map((c: { args: unknown[] }) => c.args)).toEqual([["blob:vn/1234", "report.csv"]]);
-    expect(rt.advisories().filter((l: string) => l.includes("D-F6")).length).toBe(1);
+    expect(rt.advisories().filter((l: string) => l.includes("Save As dialog")).length).toBe(1);
   });
 
   test("<a download href=https:…> opens the browser — a cross-origin download is ignored there too", () => {
@@ -217,11 +214,11 @@ describe("window.open", () => {
     expect(opens()).toEqual([{ op: "openExternal", args: ["https://example.com/x", true] }]);
   });
 
-  test("another scheme is refused with A-F1; no url / about:blank stay A-22", () => {
+  test("another scheme is refused; no url / about:blank are ignored", () => {
     const { rt, opens } = linkWorld(null);
     expect(rt.global.open("myapp://x")).toBe(null);
     expect(rt.advisories()[0]).toContain("appShell.openExternal");
-    // The harness has no prelude, so this world's `open` had no A-22 to fall
+    // The harness has no prelude, so this world's `open` had no prelude open to fall
     // back to; e2e covers the prelude's advisory.
     expect(rt.global.open()).toBe(null);
     expect(rt.global.open("about:blank")).toBe(null);
@@ -230,7 +227,7 @@ describe("window.open", () => {
     expect(opens()).toEqual([]);
   });
 
-  test("the prelude's open (A-22) is the fallback for everything that is not external", () => {
+  test("the prelude's open is the fallback for everything that is not external", () => {
     const seen: unknown[][] = [];
     // What window.prelude.ts installs before the bundle evaluates.
     const prelude = (...args: unknown[]) => (seen.push(args), null);

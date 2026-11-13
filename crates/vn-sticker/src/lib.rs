@@ -23,10 +23,8 @@
 //!
 //! # Ownership
 //!
-//! * [`video`] — the VP9 track (WebM demux, libvpx, I420+A to BGRA). Its
-//!   contract is that module's docs; the video track fills the bodies in.
-//! * Everything else (registry, clock, worker, loop cache, budgets, the Lottie
-//!   side) is the core's.
+//! * [`video`]: the VP9 track (WebM demux, libvpx, I420+A to BGRA); its contract is that module's docs.
+//! * Everything else (registry, clock, worker, loop cache, budgets, the Lottie side) is the core's.
 
 pub mod cache;
 pub mod clock;

@@ -1,59 +1,30 @@
-// Web Animations: `Element.animate()`, `Animation`, `KeyframeEffect` and
-// `document.timeline` (Web Animations Level 1) — the layout/CSS stream's module.
+// Web Animations: `Element.animate()`, `Animation`, `KeyframeEffect` and `document.timeline`.
 //
-// # The split
+// This module is the object model and lifecycle state machine (play, pause, seek, reverse, finish,
+// playback rate, `ready`/`finished`, events, auto-removal of replaced animations). It tells the
+// native core (crates/vn-tree/src/waapi.rs) only the effect (keyframes, timing) and the clock
+// (start or held time, rate); the host animator (crates/vn-css/src/animator/script.rs) samples
+// every frame from that, so nothing crosses per frame.
 //
-// This module is the object model and lifecycle state machine: play, pause,
-// seek, reverse, finish, the playback rate, the pending tasks that resolve at
-// the next frame, the `ready` / `finished` promises, the `finish` / `cancel` /
-// `remove` events and the automatic removal of replaced animations. What it
-// tells the native core (crates/vn-tree/src/waapi.rs) is what painting needs:
+// Differences from a browser:
+// * `animate` / `getAnimations` live on HTMLElement.prototype and SVGElement.prototype, not
+//   Element.prototype: motion / framer-motion probe Element.prototype to choose WAAPI, and their JS
+//   path is better here (a spring would fall back to a 300 ms ease-out, a `filter` would jump at
+//   its end). One advisory, on the first call.
+// * `document.timeline.currentTime` is held for the frame (the rAF timestamp once a rAF has run,
+//   else the first read, held from then on). It never goes back.
+// * A finish is dispatched one frame after the frame that reached it: its promise settles in
+//   microtasks that run after the rAF batch (`queueEvent`). A filling animation paints its end
+//   value meanwhile.
+// * Composite `add`/`accumulate`, pseudo-element targets, other timelines, `linear(…)` easing and
+//   properties the animator cannot interpolate are advised once each; timing, promises and events
+//   still run.
+// * `getAnimations()` lists script animations only; CSS animations and transitions have no objects.
 //
-// * the effect — keyframes and timing — when it is created or changed;
-// * the clock — start time on the document timeline, or a held current time,
-//   and the playback rate — whenever the state machine moves it.
-//
-// The host's animator (crates/vn-css/src/animator/script.rs) samples the
-// effect every frame from that clock. The native API shares that Rust timing
-// model for `getComputedTiming()`. Nothing crosses per frame, so a roll
-// that runs for a second costs JS two calls and a timer.
-//
-// # Where it differs from a browser (docs/RUNTIME.md §5.23)
-//
-// * `animate` and `getAnimations` are installed on HTMLElement.prototype and
-//   SVGElement.prototype, NOT Element.prototype. motion / framer-motion decide
-//   between their own JS animations and WAAPI with
-//   `Object.hasOwnProperty.call(Element.prototype, "animate")`, and their JS
-//   path is the better one here: on this one a spring would fall back to a
-//   300 ms ease-out (no `linear()`) and a `filter` would jump at its end.
-//   App code calling `el.animate()` on an element works either way. One
-//   advisory, on the first call.
-// * `document.timeline.currentTime` is held for the frame and is the rAF
-//   timestamp, as in a browser, but only once a rAF callback has run in that
-//   frame. Read before that (from a timer in the same wave), it is the time of
-//   that first read, held from then on; it never goes back.
-// * The animation events go out before a frame's rAF callbacks, as in a
-//   browser, but a finish is dispatched one frame after the frame that
-//   reached it: the promise settles in that frame's microtasks, which here
-//   run after its rAF batch (`queueEvent`). A filling animation paints its
-//   end value meanwhile.
-// * Composite `add` / `accumulate`, pseudo-element targets, other timelines,
-//   `linear(…)` easing (refused, as by a browser without it; `CSS.supports`
-//   answers no to it too, runtime.ts) and properties the animator cannot interpolate
-//   (crates/vn-css `TransitionProperty::animatable`) are advised once each;
-//   the timing, the promises and the events still run.
-// * `getAnimations()` lists script animations only: CSS animations and
-//   transitions run natively and have no `CSSAnimation` objects.
-//
-// runtime.ts calls `installWaapi(…)` once; without the host functions (an
-// older host) nothing is installed and `animate` stays
-// undefined, as it was.
+// Without the host functions nothing is installed and `animate` stays undefined.
 
-/** Direct native methods from crates/vn-tree/src/waapi.rs. */
 export interface WaapiHost {
-  /** Direct typed values; the native painter converts them without a string protocol. */
   setEffect(id: number, node: number, frames: Frame[], timing: Timing): WaapiEffectNotes;
-  /** NaN marks an unresolved clock. */
   clock(id: number, start: number, hold: number, rate: number): void;
   drop(id: number): void;
   values(id: number): [string, string][] | null;
@@ -62,18 +33,13 @@ export interface WaapiHost {
 export interface WaapiDeps {
   host: WaapiHost;
   core: WaapiCore;
-  /** Where `animate` / `getAnimations` go: HTMLElement.prototype, SVGElement.prototype. */
   protos: object[];
   /** The host node a target paints as, or 0 for anything the host does not render. */
   nodeOf(target: object): number;
-  /** `target.style.setProperty(name, value)`, for `commitStyles()`. */
   setStyle(target: object, name: string, value: string): void;
-  /** Is `node` inside `root` (for `getAnimations({ subtree: true })`)? */
   contains(root: object, node: object): boolean;
   warn(key: string, message: string): void;
-  /** `performance.now()`. */
   now(): number;
-  /** `requestAnimationFrame`: a pending play or pause resolves at the next frame. */
   frame(cb: (timestamp: number) => void): void;
   /** Calls `stamp` with each animation frame's timestamp, before that frame's rAF callbacks run. */
   onFrame?(stamp: (timestamp: number) => void): void;
@@ -100,7 +66,6 @@ const DEFAULT_TIMING: Timing = { delay: 0, endDelay: 0, fill: "auto", iterationS
   iterations: 1, duration: "auto", direction: "normal", easing: "linear" };
 interface Frame {
   offset: number | null; computed: number; easing: string; composite: Composite;
-  /** Native normalized key/value pairs, preserving JS strings and property order. */
   props: [string, string][];
 }
 interface ComputedTiming {
@@ -110,7 +75,6 @@ interface ComputedTiming {
 export interface WaapiEffectNotes {
   accepted: boolean; error: string | null; ignored: string[]; diagnostics: string[]; hyphenated: string[];
 }
-/** Native JSC methods; normalization and the shared CSS timing kernel live in Rust. */
 export interface WaapiCore {
   keyframes(input: unknown, where: string): Frame[];
   timing(base: Timing, input: unknown, where: string): Timing;
@@ -149,8 +113,6 @@ function deferred<T>(): Deferred<T> {
     reject(e) {
       if (d.settled) return;
       d.settled = true;
-      // A rejected `ready` / `finished` nobody awaits is not an unhandled
-      // rejection: the DOM marks them handled.
       promise.catch(() => {});
       reject(e);
     },
@@ -184,18 +146,14 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     dispatchEvent?(ev: object): boolean;
   };
 
-  /** Animations that paint or may still: what `getAnimations()` lists. Creation order is composite order. */
+  /** Animations that paint or may still, in creation (composite) order. */
   const live = new Set<AnimationImpl>();
   let nextId = 0;
 
-  // The animation events (finish, cancel, remove) wait for the next frame's
-  // "update animations and send events" step, as in a browser, which runs it
-  // before that frame's animation frame callbacks. Here that step is a timer:
-  // the host's frame runs due timers first, then the rAF batch. So a handler
-  // that writes the end value from a rAF (motion's onfinish does, through a
-  // motion value) paints it in the frame its `cancel()` drops the effect,
-  // with no frame of the base value in between. The promises still settle
-  // first, in the microtasks before.
+  // Events wait for the next frame's update step, as in a browser. Here that is a timer: the host
+  // runs due timers before the rAF batch, so a handler that writes the end value from a rAF
+  // (motion's onfinish) paints it in the frame `cancel()` drops the effect, with no base-value
+  // frame between. Promises settle first, in the microtasks before.
   const events: (() => void)[] = [];
   let eventsArmed = false;
   const queueEvent = (send: () => void): void => {
@@ -208,17 +166,10 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     }, 0);
   };
 
-  // -- the timeline --------------------------------------------------------
-
-  // The document timeline's time does not move within a frame: Web Animations
-  // updates it once per frame, to the timestamp the frame's
-  // requestAnimationFrame callbacks get, and a script comparing two reads from
-  // one frame sees them equal (Argon's chat scroller does, between its rAF
-  // pass and the ResizeObserver report that follows). A rAF callback stamps it
-  // here (`d.onFrame`). Read outside a frame, it is read once and then held,
-  // as Chromium holds it for a task. Either way it is held until the host's
-  // next wave starts: a 0 ms timer, which runs in that wave's timers phase.
-  // It never goes back.
+  // The timeline's time is constant within a frame (the rAF timestamp, stamped via `d.onFrame`),
+  // so two reads in one frame compare equal (Argon's chat scroller relies on it). Read outside a
+  // frame, it is read once and held, as Chromium holds it for a task, until the host's next wave
+  // starts (a 0 ms timer). It never goes back.
   let heldTime: number | null = null;
   let lastTime = -Infinity;
   let releaseArmed = false;
@@ -257,8 +208,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     }
   }
   const timeline = new DocumentTimelineImpl();
-
-  // -- the effect ----------------------------------------------------------
 
   class AnimationEffectImpl {
     /** @internal */ _timing: Timing = { ...DEFAULT_TIMING };
@@ -310,7 +259,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     constructor(target: unknown, keyframes?: unknown, options?: unknown) {
       super();
       if (target instanceof KeyframeEffectImpl) {
-        // `new KeyframeEffect(source)`: a copy.
         this.#target = target.#target;
         this.#frames = target.#frames.map((f) => ({ ...f, props: f.props.map(([key, value]) => [key, value] as [string, string]) }));
         this._timing = { ...target._timing };
@@ -393,7 +341,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       return out;
     }
 
-    /** Hands the effect to the host as animation `id`. False when there is nothing it can paint. */
     override _push(id: number): boolean {
       const target = this.#target;
       if (!target || this.#pseudo !== null) return false;
@@ -422,8 +369,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       return ok;
     }
   }
-
-  // -- the animation -------------------------------------------------------
 
   class AnimationPlaybackEventImpl extends EventBase {
     declare readonly currentTime: number | null;
@@ -470,8 +415,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       if (effect !== undefined && effect !== null) this.effect = effect as AnimationEffectImpl;
     }
 
-    // -- the model's quantities --------------------------------------------
-
     #timelineTime(): number | null {
       return this.#timeline ? this.#timeline.currentTime : null;
     }
@@ -496,8 +439,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       this.#pending = null;
       this.#token++;
     }
-
-    // -- the IDL -------------------------------------------------------------
 
     get effect(): AnimationEffectImpl | null {
       return this.#effect;
@@ -712,8 +653,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       for (const [name, value] of raw) d.setStyle(target, name, value);
     }
 
-    // -- the procedures ------------------------------------------------------
-
     #silentSeek(seek: number | null): void {
       if (seek === null) {
         if (this.#current() !== null) throw new TypeError("Failed to set the 'currentTime' property on 'Animation': currentTime may not be changed from resolved to unresolved.");
@@ -755,7 +694,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       this.#sync();
     }
 
-    /** A pending play or pause completes at the next frame, with that frame's time as the ready time. */
     #schedulePending(): void {
       const token = ++this.#token;
       d.frame((timestamp) => {
@@ -785,7 +723,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       });
     }
 
-    /** §4.4.17, "updating the finished state". */
     #updateFinished(didSeek: boolean, synchronously: boolean): void {
       const tl = this.#timelineTime();
       const unconstrained = didSeek
@@ -826,8 +763,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       const tl = this.#timelineTime();
       this.#sync();
       removeReplaced(this);
-      // After the promise's reactions, at the next frame's update step
-      // (`queueEvent`).
       queueEvent(() => this.#fire("finish", cur, tl));
     }
 
@@ -848,7 +783,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       }
     }
 
-    /** Does it paint, or might it without a state change? What `getAnimations()` calls relevant. */
     #relevant(): boolean {
       if (!this.#effect || this.#replace === "removed") return false;
       const state = this.playState;
@@ -857,7 +791,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       return this.#effect._inEffect(this.#current(), this.#rate < 0);
     }
 
-    /** Brings the host in line with the state machine, and arms the finish timer. */
     #sync(): void {
       const want = this.#relevant();
       if (want) live.add(this);
@@ -879,7 +812,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       this.#arm();
     }
 
-    /** One timer to the moment the current time crosses the end it is heading for. */
     #arm(): void {
       if (this.#timer !== null) {
         d.clearTimer(this.#timer);
@@ -912,7 +844,7 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     /** @internal */ _id(): number {
       return this.#nid;
     }
-    /** @internal Auto-removal (§4.5): replaced by later finished animations. */ _remove(): void {
+    /** @internal */ _remove(): void {
       this.#replace = "removed";
       const cur = this.#current();
       const tl = this.#timelineTime();
@@ -921,17 +853,12 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     }
   }
 
-  /**
-   * §4.5, "removing replaced animations": once `latest` has finished, an
-   * earlier finished, filling animation on the same target whose every
-   * property a later finished one covers is removed — what keeps `fill:
-   * "forwards"` animations from piling up.
-   */
+  /** Once `latest` finished, removes earlier finished, filling animations on the same target whose
+   *  every property a later finished one covers (keeps `fill: "forwards"` from piling up). */
   const removeReplaced = (latest: AnimationImpl): void => {
     const target = latest.effect?._target();
     if (!target) return;
-    // `latest` counts even when it stopped painting (finished, not filling):
-    // a finished animation replaces whatever it covers either way.
+    // `latest` counts even when it stopped painting: a finished animation replaces what it covers either way.
     const mine = [...new Set([...live, latest])].filter((a) => a.effect?._target() === target).sort(byComposite);
     for (let i = 0; i < mine.length; i++) {
       const a = mine[i];
@@ -945,8 +872,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     }
   };
 
-  // -- the surface ---------------------------------------------------------
-
   const byComposite = (a: AnimationImpl, b: AnimationImpl): number => a._id() - b._id();
 
   function animate(this: object, keyframes: unknown, options?: unknown): AnimationImpl {
@@ -954,7 +879,7 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       advisedPlacement = true;
       d.warn(
         "waapi:placement",
-        "Element.animate() runs natively here, on HTMLElement.prototype and SVGElement.prototype only — Element.prototype has no 'animate', so motion / framer-motion keep their own JS animations (docs/RUNTIME.md §5.23)",
+        "Element.animate() runs natively here, on HTMLElement.prototype and SVGElement.prototype only — Element.prototype has no 'animate', so motion / framer-motion keep their own JS animations",
       );
     }
     const effect = new KeyframeEffectImpl(this, keyframes, options);

@@ -1,31 +1,6 @@
-//! Windowing & chrome — the host half of `docs/WINDOWING.md`.
+//! Window state and chrome: browser-standard getters (`innerWidth`, `matchMedia`, the Fullscreen API, ...) wired to real window state, `window-drag` and `navigator.windowControlsOverlay`, and the `appWindow` extension.
 //!
-//! Three tiers of surface land here, and which tier a capability belongs to is
-//! not a matter of taste (the compat-first law, §0 of that document):
-//!
-//! 1. **browser-standard** — `document.title`, `innerWidth`/`outerWidth`,
-//!    `screen`, `resizeTo`/`moveTo`, `matchMedia`, the Fullscreen API,
-//!    `visibilitychange`. These are wired to real window state so JS can never
-//!    disagree with what `@media` already sees;
-//! 2. **standards-track custom chrome** — CSS `window-drag` (handled in
-//!    `vn-css`/`vn-tree`) and `navigator.windowControlsOverlay`;
-//! 3. **namespaced extension** — `appWindow`, for the things the web has no
-//!    words for (minimize, maximize, backdrop material).
-//!
-//! ## Everything funnels through one per-frame snapshot
-//!
-//! [`snapshot`] reads the window ONCE per frame, [`pump`] diffs it against the
-//! previous frame and produces every derived event in a fixed order — resize
-//! first, then visibility, then the JS observer. That ordering is not
-//! cosmetic: the Fullscreen spec requires `fullscreenchange` to fire *after*
-//! the viewport has finished resizing, and doing it in one place is what makes
-//! that true by construction rather than by luck.
-//!
-//! Getters never touch a phase at all — they read the published snapshot — and
-//! mutators QUEUE instead of throwing when no `Phase::Commit` is live, which is
-//! what makes module-scope `document.title = "…"` and `defineWindow({…})` work
-//! (D-29). Nothing in this surface can throw "called outside a published
-//! phase".
+//! [`snapshot`] reads the window once per frame and [`pump`] diffs it into events in a fixed order (resize, visibility, JS observer); `fullscreenchange` must fire after the viewport has resized. Getters read the published snapshot, and mutators queue when no `Phase::Commit` is live, so nothing throws outside a phase.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -40,41 +15,23 @@ use crate::json::{self, Json};
 
 const UNDEF: u64 = 0xa;
 
-// ---------------------------------------------------------------------------
-// configuration (docs/WINDOWING.md §4.1)
-// ---------------------------------------------------------------------------
-
-/// `titleBarStyle`. An ENUM, never a boolean `frameless`: macOS needs `hidden`
-/// vs `hiddenInset`, so the axis has to exist from day one (D-22).
+/// `titleBarStyle`. An enum, not a boolean: macOS needs `hidden` vs `hiddenInset`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TitleBarStyle {
-    /// OS-drawn chrome: a real `WS_CAPTION`, the OS's own min/max/close, the
-    /// OS's double-click-to-zoom and system menu. Needs fork item F-03
-    /// (`dwstyle |= WS_CAPTION` when `!hide_title_bar`), which landed — so this
-    /// variant is now reachable and `titleBarStyle: "default"` no longer falls
-    /// back.
-    ///
-    /// In this mode `window-drag` / `--window-control` are INERT (A-25): the OS
-    /// owns the caption, `windowControlsOverlay.visible` is `false` and
-    /// `display-mode` is `standalone`, which is exactly what a PWA in a
-    /// standalone window reports.
+    /// OS-drawn chrome (`WS_CAPTION`). `window-drag` / `--window-control` are inert; `windowControlsOverlay.visible` is false and `display-mode` is `standalone`.
     Default,
-    /// Custom chrome: the app draws the titlebar, marks it `window-drag: move`
-    /// and marks its buttons `--window-control: …`. The v1 default.
+    /// Custom chrome: the app draws the titlebar (`window-drag: move`, `--window-control`). The default.
     Hidden,
 }
 
-/// Native AppKit controls remain visible in transparent custom titlebars.
-/// Center their 14px button row in the app's declared strip; AppKit restores
-/// the system position during fullscreen transitions.
+/// Native AppKit controls stay visible in transparent custom titlebars; their 14px button row is centred in the app's strip (AppKit resets it on fullscreen transitions).
 pub(crate) fn traffic_light_position(custom_titlebar: bool, height: f32) -> Option<gpui::Point<gpui::Pixels>> {
     (cfg!(target_os = "macos") && custom_titlebar).then(|| {
         gpui::point(gpui::px(12.0), gpui::px(((height - 14.0) / 2.0).max(0.0)))
     })
 }
 
-/// The unified backdrop value space: Tauri's single list with Electron's
-/// lowercase spellings (D-26).
+/// The unified backdrop value space: Tauri's list with Electron's spellings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backdrop {
     None,
@@ -91,9 +48,7 @@ impl Backdrop {
             "mica" => (Backdrop::Mica, None),
             "mica-alt" | "tabbed" => (Backdrop::MicaAlt, None),
             "acrylic" => (Backdrop::Acrylic, None),
-            // Windows has ONE blurred material, so `blur` and `acrylic` are the
-            // same pixels. Say so rather than let an author believe they picked
-            // something different (A-20).
+            // Windows has one blurred material: `blur` and `acrylic` are the same pixels.
             "blur" => (Backdrop::Acrylic, Some(A20)),
             "transparent" => (Backdrop::Transparent, None),
             _ => return None,
@@ -113,39 +68,24 @@ impl Backdrop {
     pub fn to_gpui(self) -> WindowBackgroundAppearance {
         match self {
             Backdrop::None => WindowBackgroundAppearance::Opaque,
-            // macOS has one system material, the behind-window blur of an
-            // `NSVisualEffectView`, which is gpui's `Blurred` there. Mica and
-            // acrylic would otherwise reach gpui's macOS backend as plain
-            // transparency.
+            // macOS has one system material (behind-window blur); Mica and acrylic would otherwise reach gpui as plain transparency.
             #[cfg(target_os = "macos")]
             Backdrop::Mica | Backdrop::MicaAlt | Backdrop::Acrylic => WindowBackgroundAppearance::Blurred,
-            // No material a Linux compositor is sure to draw: gpui's `Blurred`
-            // is a KDE protocol, and anything else non-opaque is plain
-            // see-through. The window is opaque and reads as `none`
-            // ([`effective_backdrop`]), so the app paints its own background.
+            // No material a Linux compositor is sure to draw (gpui's `Blurred` is KDE-only): the window is opaque and reads as `none` ([`effective_backdrop`]).
             #[cfg(target_os = "linux")]
             Backdrop::Mica | Backdrop::MicaAlt | Backdrop::Acrylic => WindowBackgroundAppearance::Opaque,
             #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             Backdrop::Mica => WindowBackgroundAppearance::MicaBackdrop,
             #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             Backdrop::MicaAlt => WindowBackgroundAppearance::MicaAltBackdrop,
-            // DWM's own acrylic, `DWMSBT_TRANSIENTWINDOW` — Electron's
-            // `backgroundMaterial: 'acrylic'`. The fork draws the accent
-            // policy's blur instead before 22621 ([`Backdrop::resolve_for_os`]
-            // says so).
+            // DWM's acrylic (`DWMSBT_TRANSIENTWINDOW`); before 22621 the fork draws the accent-policy blur.
             #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             Backdrop::Acrylic => WindowBackgroundAppearance::AcrylicBackdrop,
             Backdrop::Transparent => WindowBackgroundAppearance::Transparent,
         }
     }
 
-    /// One backdrop name from a `<VnWindow backdrop>` prop, resolved for this
-    /// OS and with every advisory the config path would have printed.
-    ///
-    /// The config path ([`load_config`]) collects its advisories into the
-    /// config's own list; a `<VnWindow>` has no config to collect into, so it
-    /// prints them through [`advise`] — the same text, the same
-    /// print-once ledger.
+    /// One backdrop name from a `<VnWindow backdrop>` prop, resolved for this OS; advisories print through [`advise`].
     pub fn parse(name: &str) -> Option<Backdrop> {
         let (want, note) = Backdrop::from_str(name)?;
         if let Some(n) = note {
@@ -158,10 +98,7 @@ impl Backdrop {
         Some(resolved)
     }
 
-    /// DWM draws the system backdrops — Mica, Mica Alt and acrylic — from
-    /// Windows 11 22H2 (build 22621). Before that, Mica must advise and fall
-    /// back to acrylic, never silently no-op (Tauri's precedent), and acrylic
-    /// is the older accent-policy blur, which says what it costs.
+    /// DWM draws system backdrops from build 22621; before that Mica advises and falls back to acrylic.
     fn resolve_for_os(self) -> (Backdrop, Option<&'static str>) {
         let (backdrop, note) = resolve_backdrop(self, has_system_backdrop());
         // The notes name Windows builds; on Linux the backdrop is whatever the compositor makes of it.
@@ -169,8 +106,7 @@ impl Backdrop {
     }
 }
 
-/// [`Backdrop::resolve_for_os`] with the OS's answer passed in, so both
-/// answers are testable on one machine.
+/// [`Backdrop::resolve_for_os`] with the OS answer passed in, for tests.
 fn resolve_backdrop(b: Backdrop, system_backdrop: bool) -> (Backdrop, Option<&'static str>) {
     match b {
         Backdrop::Mica | Backdrop::MicaAlt if !system_backdrop => (Backdrop::Acrylic, Some(A20B)),
@@ -179,20 +115,7 @@ fn resolve_backdrop(b: Backdrop, system_backdrop: bool) -> (Backdrop, Option<&'s
     }
 }
 
-/// The backdrop the primary window draws right now: `appWindow.backdrop`,
-/// unless gpui says it is standing in for the material
-/// (`Window::is_background_appearance_drawn`).
-///
-/// A fullscreen macOS window lives in a Space of its own, with nothing behind
-/// it for the `NSVisualEffectView` every system backdrop becomes there to
-/// blend. gpui's macOS backend draws the screen's desktop picture inside the
-/// window under the blur instead, so the glass stays glass and this answers
-/// `backdrop`. Only when that picture cannot be shown (none, one in a
-/// privacy-protected folder, a format ImageIO cannot read) does the window
-/// fall back to the flat system background: `appWindow.effectiveBackdrop`
-/// then reads `none`, and `backdropchange` tells the app to paint its own
-/// background. `backdrop` keeps the app's choice. DWM draws Mica and acrylic
-/// behind a fullscreen window, and Windows always answers `drawn`.
+/// The backdrop the primary window draws now: `appWindow.backdrop`, unless gpui stands in for the material (`Window::is_background_appearance_drawn`), e.g. a macOS fullscreen window with no desktop picture to put under the blur.
 pub(crate) fn effective_backdrop(b: Backdrop, drawn: bool) -> Backdrop {
     match b {
         Backdrop::Mica | Backdrop::MicaAlt | Backdrop::Acrylic if !drawn => Backdrop::None,
@@ -200,15 +123,7 @@ pub(crate) fn effective_backdrop(b: Backdrop, drawn: bool) -> Backdrop {
     }
 }
 
-/// `appWindow.theme`: which colour scheme the app's windows take, in place of
-/// the OS's. Electron's `nativeTheme.themeSource`, with its spellings.
-///
-/// Two things follow it, as they follow `themeSource` in Electron:
-/// - the window's own dark mode (`DWMWA_USE_IMMERSIVE_DARK_MODE`), which is
-///   what tints Mica, acrylic and the OS caption;
-/// - `prefers-color-scheme`, i.e. every `@media` and `matchMedia` here.
-///
-/// `System` is the initial value, and it returns both to the OS's setting.
+/// `appWindow.theme`: the colour scheme the app's windows take instead of the OS's (Electron's `themeSource`). Drives the window's DWM dark mode and `prefers-color-scheme`; `System` follows the OS.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
     System,
@@ -234,7 +149,6 @@ impl Theme {
         }
     }
 
-    /// The dark-or-light answer for a window whose OS appearance is `os_dark`.
     fn is_dark(self, os_dark: bool) -> bool {
         match self {
             Theme::System => os_dark,
@@ -252,29 +166,16 @@ const A20C: &str = "`acrylic` before Windows 11 22H2 (build 22621) is the older 
                     blur: it has no light or dark tint of its own, and it has known compositor \
                     cost while resizing and dragging. 22H2 and later draw DWM's own acrylic.";
 
-/// `titleBarOverlay` — the HOST-drawn caption-button cluster for custom-chrome
-/// apps (§2.3, §4.3, D-decisions on the overlay).
-///
-/// Electron's shape, and Electron's honesty about what it is: the buttons are
-/// drawn by the app framework, not by the OS. On Windows a real OS caption
-/// cluster requires a real `WS_CAPTION`, which is `titleBarStyle: "default"` —
-/// a different mode entirely. What makes these buttons OS-*behaved* rather than
-/// hand-rolled is that each carries a `WindowControlArea`, so `WM_NCHITTEST`
-/// answers `HTMINBUTTON`/`HTMAXBUTTON`/`HTCLOSE`: the OS performs the action,
-/// paints its own hover highlight where it wants to, and — the part no app can
-/// fake — `HTMAXBUTTON` is what arms the **Windows 11 snap-layouts flyout**.
+/// `titleBarOverlay`: host-drawn caption buttons for custom chrome. Each carries a `WindowControlArea` so `WM_NCHITTEST` answers `HTMINBUTTON`/`HTMAXBUTTON`/`HTCLOSE`; `HTMAXBUTTON` arms the Windows 11 snap-layouts flyout.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Overlay {
-    /// Background of the cluster strip. `None` = transparent, i.e. whatever the
-    /// app painted underneath shows through.
+    /// Strip background; `None` = transparent.
     pub color: Option<u32>,
-    /// Glyph colour. `None` = follow the window appearance.
+    /// Glyph colour; `None` follows the window appearance.
     pub symbol_color: Option<u32>,
 }
 
-/// The Win11 caption-button metrics: 46 × 32 epx each, three of them.
-/// Hardcoded because they ARE the OS's numbers — an app that wants a different
-/// cluster width wants its own buttons, which is mode 1 with no overlay.
+/// Win11 caption-button metrics: 46 x 32 epx, three buttons. The OS's numbers, hardcoded.
 pub const OVERLAY_BUTTON_WIDTH: f32 = 46.0;
 pub const OVERLAY_BUTTONS: f32 = 3.0;
 
@@ -285,17 +186,13 @@ impl Default for Overlay {
 }
 
 impl Overlay {
-    /// Total width of the cluster, in CSS px — the amount
-    /// `getTitlebarAreaRect()` and `env(titlebar-area-width)` must subtract.
+    /// Total cluster width in CSS px, which `getTitlebarAreaRect()` and `env(titlebar-area-width)` subtract.
     pub fn width() -> f32 {
         OVERLAY_BUTTON_WIDTH * OVERLAY_BUTTONS
     }
 }
 
-/// `#rgb` / `#rrggbb` / `#rrggbbaa` → `0xAARRGGBB`, the shape `gpui::rgba`
-/// wants. Electron accepts CSS colour strings here; hex is the only form worth
-/// carrying without a colour parser, so anything else says so rather than
-/// silently painting black.
+/// `#rgb` / `#rrggbb` / `#rrggbbaa` to `0xAARRGGBB` (`gpui::rgba`'s shape). Other forms are refused rather than painted black.
 fn parse_color(s: &str) -> Option<u32> {
     let h = s.trim().strip_prefix('#')?;
     let n = |i: usize, len: usize| u32::from_str_radix(&h[i..i + len], 16).ok();
@@ -322,7 +219,7 @@ fn color_of(v: &Json, key: &str, advisories: &mut Vec<String>) -> Option<u32> {
     }
 }
 
-/// Everything `apps/<app>/vn.config.json`'s `window` block can say.
+/// The `window` block of `vn.config.json`.
 #[derive(Clone, Debug)]
 pub struct Config {
     pub title: String,
@@ -333,43 +230,20 @@ pub struct Config {
     pub frame: bool,
     pub title_bar_style: TitleBarStyle,
     pub title_bar_height: f32,
-    /// The built-in Shell titlebar (§4.2 mode 2). `true` = keep it until the
-    /// app paints a drag region of its own.
+    /// The built-in Shell titlebar: `true` keeps it until the app paints a drag region.
     pub title_bar_fallback: bool,
-    /// The host-drawn caption-button cluster. `None` = the app draws its own
-    /// (`--window-control`), which is the v1 default.
+    /// Host-drawn caption-button cluster; `None` = the app draws its own.
     pub title_bar_overlay: Option<Overlay>,
     pub backdrop: Backdrop,
     pub resizable: bool,
     pub minimizable: bool,
     pub maximizable: bool,
     pub always_on_top: bool,
-    /// `window.focus()` policy: `false` = `request_attention` (the default —
-    /// this host does not steal focus), `true` = `activate_window` (D-07).
+    /// `window.focus()`: `false` = `request_attention` (default, never steals focus), `true` = `activate_window`.
     pub focus_raise: bool,
-    /// Do this app's devtools start ON? `vn.config.json`'s TOP-LEVEL
-    /// `"devtools": false` turns them off; the builders copy that flag into the
-    /// window block, which is the JSON blob the host already reads before the
-    /// window exists.
-    ///
-    /// Since m22 this is the STATIC SPELLING OF `appDevtools.disable()`, not a
-    /// key gate: `false` means the process starts with no listener, no
-    /// handshake file and no F12 — because the port carries `eval`, and an app
-    /// whose author turned the devtools off must not still be holding a
-    /// localhost socket that runs arbitrary JS in it. `VN_DEVTOOLS=1` in the
-    /// environment overrides it (`devtools::resolve_initial`), which is what
-    /// keeps an app from being able to make itself undebuggable.
-    ///
-    /// Before m22 it gated only the key and the port stayed open. The inversion
-    /// and its reasoning are docs/ARCHITECTURE.md §11 decision 12.
+    /// Whether devtools start on; `"devtools": false` in `vn.config.json` is copied here. `false` means no listener, handshake file or F12, since the port carries `eval`. `VN_DEVTOOLS=1` overrides it (`devtools::resolve_initial`).
     pub devtools: bool,
-    /// May F12 open the inspector, given that the devtools are on at all?
-    ///
-    /// `VN_DEVTOOLS_KEY=off` and nothing else — there is no `vn.config.json`
-    /// spelling, because an app that wants the key gone wants
-    /// `"devtools": false`. It exists for a harness driving an app over the
-    /// wire on a machine somebody is using, where a stray F12 opening a window
-    /// is noise; the protocol is deliberately untouched.
+    /// Whether F12 opens the inspector when devtools are on. Only `VN_DEVTOOLS_KEY=off` sets it, for harnesses driving an app over the wire.
     pub devtools_key: bool,
 }
 
@@ -383,9 +257,7 @@ impl Default for Config {
             min_height: None,
             frame: true,
             title_bar_style: TitleBarStyle::Hidden,
-            // The Win11 standard caption height. macOS would default to 28pt,
-            // which is why this is one configurable number and not a constant
-            // sprinkled through the layout (§7.2).
+            // Win11 standard caption height; configurable because macOS defaults to 28pt.
             title_bar_height: 32.0,
             title_bar_fallback: true,
             title_bar_overlay: None,
@@ -409,16 +281,13 @@ pub fn config() -> Config {
     CONFIG.with(|c| c.borrow().clone())
 }
 
-/// Does `vn.config.json` want the devtools on? Read once by
-/// `devtools::boot`, which owns the runtime switch from then on.
+/// Whether `vn.config.json` wants the devtools on; read once by `devtools::boot`.
 #[cfg(vn_devtools)]
 pub fn devtools_config_enabled() -> bool {
     CONFIG.with(|c| c.borrow().devtools)
 }
 
-/// May F12 open the inspector, `VN_DEVTOOLS_KEY` having had its say? Read from
-/// the loaded config, so it answers from the keystroke interceptor without
-/// re-parsing anything.
+/// Whether F12 may open the inspector, after `VN_DEVTOOLS_KEY`.
 #[cfg(vn_devtools)]
 pub fn devtools_key_enabled() -> bool {
     CONFIG.with(|c| c.borrow().devtools_key)
@@ -435,12 +304,9 @@ fn bool_of(v: &Json, key: &str) -> Option<bool> {
     }
 }
 
-/// Reads the `window` block, applies the environment overrides on top
-/// (`VN_WINDOW`, `VN_WINDOW_FOCUS` — the perf and screenshot harnesses depend
-/// on winning, D-21), and stashes the result for the rest of the process.
+/// Reads the `window` block, applies the environment overrides (`VN_WINDOW`, `VN_WINDOW_FOCUS`) and stashes the result.
 ///
-/// Called BEFORE `cx.open_window`: this is the only tier that can set
-/// creation-time-only gpui options without a visible flash (D-20).
+/// Called before `cx.open_window`: only this tier can set creation-time gpui options without a visible flash.
 pub fn load_config(raw: Option<String>) -> Config {
     let mut cfg = Config::default();
     let mut advisories: Vec<String> = Vec::new();
@@ -465,10 +331,6 @@ pub fn load_config(raw: Option<String>) -> Config {
             }
         }
         match v.get("titleBarStyle").and_then(Json::as_str) {
-            // Fork item F-03 landed (`dwstyle |= WS_CAPTION` when
-            // `!hide_title_bar`), so this is a real mode now: the window is
-            // NOT frameless, the OS draws the caption and its buttons, and the
-            // host's own fallback strip must never appear underneath it.
             Some("default") => cfg.title_bar_style = TitleBarStyle::Default,
             Some("hidden") | None => cfg.title_bar_style = TitleBarStyle::Hidden,
             Some("hiddenInset") => {
@@ -504,8 +366,7 @@ pub fn load_config(raw: Option<String>) -> Config {
                 });
             }
             Some(_) => advisories.push(
-                "`titleBarOverlay` expects `false` or an object `{ height?, color?, symbolColor? }` \
-                 — see docs/WINDOWING.md §4.1."
+                "`titleBarOverlay` expects `false` or an object `{ height?, color?, symbolColor? }`."
                     .into(),
             ),
         }
@@ -539,8 +400,7 @@ pub fn load_config(raw: Option<String>) -> Config {
         }
     }
 
-    // Environment wins: a perf or screenshot harness has to be able to choose
-    // a viewport without editing the app (D-21).
+    // Environment wins, so a perf or screenshot harness can pick a viewport.
     if let Some((w, h)) = std::env::var("VN_WINDOW").ok().and_then(|v| {
         let (w, h) = v.split_once(['x', 'X'])?;
         Some((w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?))
@@ -551,23 +411,14 @@ pub fn load_config(raw: Option<String>) -> Config {
     if std::env::var("VN_WINDOW_FOCUS").is_ok_and(|v| v == "raise") {
         cfg.focus_raise = true;
     }
-    // Same precedence as every other override here: the environment wins, so a
-    // harness can turn F12 off (or back on) without editing the app under test.
-    //
-    // The KEY only, and that is the whole point of it having its own field
-    // since m22: `VN_DEVTOOLS_KEY=off` keeps the protocol, so a spec can drive
-    // an app over the wire on a machine somebody is using without a stray F12
-    // opening a window. Turning the devtools THEMSELVES off is `VN_DEVTOOLS=0`
-    // or `"devtools": false`, and both take the port with them.
+    // Environment wins. `VN_DEVTOOLS_KEY=off` drops only F12 and keeps the protocol; `VN_DEVTOOLS=0` / `"devtools": false` also drop the port.
     match std::env::var("VN_DEVTOOLS_KEY").as_deref() {
         Ok("off" | "none" | "0") => cfg.devtools_key = false,
         Ok("f12" | "on" | "1") => cfg.devtools_key = true,
         _ => {}
     }
 
-    // OS-drawn chrome owns the top strip, so the host's fallback titlebar must
-    // never be stacked underneath it — not even when the config asks for it.
-    // Said out loud rather than silently ignored (A-26).
+    // OS-drawn chrome owns the top strip, so the fallback titlebar is forced off.
     if cfg.title_bar_style == TitleBarStyle::Default {
         if asked_for_fallback {
             advisories.push(A26.to_string());
@@ -579,9 +430,7 @@ pub fn load_config(raw: Option<String>) -> Config {
     cfg.backdrop = backdrop;
     advisories.extend(note.map(str::to_string));
 
-    // Windows 11 snap layouts reject zones above 500 epx even though the
-    // flyout still appears — an invisible failure, so it is worth a line
-    // (A-21). Our default is no minimum at all, so this only bites opt-ins.
+    // Snap layouts reject zones above 500 epx even though the flyout still appears.
     if cfg!(target_os = "windows") && cfg.min_width.is_some_and(|w| w > 500.0) {
         advisories.push(format!(
             "`minWidth: {}` exceeds the 500 epx ceiling Windows 11 snap layouts require: the \
@@ -604,17 +453,12 @@ const A26: &str = "`titleBarFallback: true` is ignored under `titleBarStyle: \"d
                    draws the caption, so a second host-drawn strip underneath it would just eat \
                    32 px of the app. Remove one of the two.";
 
-// ---------------------------------------------------------------------------
-// advisories
-// ---------------------------------------------------------------------------
-
 thread_local! {
     static ADVISED: RefCell<std::collections::HashSet<String>> =
         RefCell::new(std::collections::HashSet::new());
 }
 
-/// One per message, ever — the house style shared with `vn-css`'s `once` and
-/// `vn-tree`'s `warn_compat`.
+/// One per message, ever.
 pub fn advise(msg: &str) {
     ADVISED.with(|s| {
         if s.borrow_mut().insert(msg.to_string()) {
@@ -630,16 +474,7 @@ host_fn!(fn vn_window_advise(g, args) {
     UNDEF
 });
 
-// ---------------------------------------------------------------------------
-// Win32 escape hatches
-// ---------------------------------------------------------------------------
-//
-// gpui has no `PlatformWindow::set_position`, no runtime min/max size and no
-// non-toggling restore, so four of the verbs below reach the HWND directly.
-// That is safe here precisely because gpui's bounds cache is refreshed from the
-// `WM_MOVE`/`WM_SIZE` those calls generate — nothing desyncs, reads simply lag
-// by one frame (which is also what the CSSOM View spec tells authors to expect
-// from `moveTo`). Fork items F-04..F-06 replace them upstream later.
+// gpui has no `PlatformWindow::set_position`, no runtime min/max size and no non-toggling restore, so these verbs reach the HWND directly. gpui's bounds cache refreshes from the resulting `WM_MOVE`/`WM_SIZE`, so reads lag by one frame.
 
 #[cfg(target_os = "windows")]
 mod win {
@@ -651,11 +486,7 @@ mod win {
         super::hwnd_raw().map(|h| HWND(h as *mut _))
     }
 
-    /// `GetWindowRect` — the WINDOW rect, frame included.
-    ///
-    /// NOT `Window::bounds()`, which is produced by `calculate_client_rect` and
-    /// is therefore the CLIENT rect: it is `getContentBounds()`, not
-    /// `getBounds()` (D-06, correcting the research report).
+    /// `GetWindowRect`: the window rect, frame included. `Window::bounds()` is the client rect.
     pub fn window_rect() -> Option<(f32, f32, f32, f32)> {
         let h = hwnd()?;
         let mut r = RECT::default();
@@ -676,8 +507,7 @@ mod win {
         hwnd().is_some_and(|h| unsafe { IsIconic(h) }.as_bool())
     }
 
-    /// The HWND's shown/hidden state, independently of minimization or focus.
-    /// A not-yet-captured HWND keeps the ordinary visible-start default.
+    /// The HWND's shown/hidden state, independent of minimization or focus; visible before capture.
     pub fn is_visible() -> bool {
         hwnd().is_none_or(|h| unsafe { IsWindowVisible(h) }.as_bool())
     }
@@ -726,15 +556,12 @@ mod win {
         }
     }
 
-    /// [`set_always_on_top`] against a named window rather than the primary
-    /// one — a `<VnWindow alwaysOnTop>` pop-out.
+    /// [`set_always_on_top`] for a named window (a `<VnWindow alwaysOnTop>` pop-out).
     pub fn set_always_on_top_for(raw: isize, on: bool) {
         set_always_on_top_hwnd(HWND(raw as *mut _), on);
     }
 
-    /// `DWMWA_USE_IMMERSIVE_DARK_MODE` on one window: the dark or light Mica
-    /// tint, and the OS caption's colours. What gpui itself writes when the OS
-    /// theme changes (`configure_dwm_dark_mode`), here for `appWindow.theme`.
+    /// `DWMWA_USE_IMMERSIVE_DARK_MODE` on one window (Mica tint and OS caption colours), as gpui writes on OS theme change.
     pub fn set_dark_mode_for(raw: isize, dark: bool) {
         use windows::core::BOOL;
         use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
@@ -751,16 +578,13 @@ mod win {
 
     fn set_always_on_top_hwnd(h: HWND, on: bool) {
         let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
-        // `SWP_NOACTIVATE`: a palette that jumps in front must not also steal
-        // the caret from whatever the user is typing into.
+        // `SWP_NOACTIVATE`: a palette that jumps in front must not steal the caret.
         let _ = unsafe {
             SetWindowPos(h, Some(after), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
         };
     }
 
-    /// `appWindow.startDragging()` — the manual equivalent of a
-    /// `window-drag: move` region, for a titlebar that wants to start the drag
-    /// from its own `mousedown` handler.
+    /// `appWindow.startDragging()`: starts a window drag from the app's own `mousedown` handler.
     pub fn start_dragging() {
         if let Some(h) = hwnd() {
             unsafe {
@@ -770,9 +594,7 @@ mod win {
         }
     }
 
-    /// Whether the window is CLOAKED — hidden because its virtual desktop is
-    /// not the current one. Treated as minimised: `document.hidden`, and no
-    /// frames ([`super::cloaked`]).
+    /// Whether the window is cloaked (its virtual desktop is not current); treated as minimised ([`super::cloaked`]).
     pub fn is_cloaked() -> bool {
         use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
         let Some(h) = hwnd() else { return false };
@@ -788,18 +610,9 @@ mod win {
         ok.is_ok() && cloaked != 0
     }
 
-    /// Reads `DWMWA_SYSTEMBACKDROP_TYPE` back out of DWM — what the compositor
-    /// currently believes, not what we last asked for.
+    /// Reads `DWMWA_SYSTEMBACKDROP_TYPE` back from DWM: what the compositor believes, not what was last asked. `set_background_appearance` drives two mechanisms (system backdrop and accent policy) that can disagree.
     ///
-    /// Worth having as a first-class read: `set_background_appearance` drives
-    /// TWO independent mechanisms (the DWM system backdrop and the older accent
-    /// policy), and the `acrylic → mica` bug was exactly one of them being left
-    /// armed. It is also the only machine-checkable answer to "does Mica
-    /// survive a real `WS_CAPTION`" — `DWMSBT_MAINWINDOW` reading back on a
-    /// captioned window means DWM accepted it.
-    ///
-    /// `0 = DWMSBT_AUTO`, `1 = NONE`, `2 = MAINWINDOW` (mica),
-    /// `3 = TRANSIENTWINDOW` (acrylic), `4 = TABBEDWINDOW` (mica-alt).
+    /// `0 = AUTO`, `1 = NONE`, `2 = MAINWINDOW` (mica), `3 = TRANSIENTWINDOW` (acrylic), `4 = TABBEDWINDOW` (mica-alt).
     pub fn system_backdrop() -> Option<u32> {
         use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE};
         let h = hwnd()?;
@@ -816,8 +629,7 @@ mod win {
         Some(v)
     }
 
-    /// Reads `DWMWA_USE_IMMERSIVE_DARK_MODE` back out of DWM, for
-    /// `appWindow.theme`'s state: what the compositor tints Mica with.
+    /// Reads `DWMWA_USE_IMMERSIVE_DARK_MODE` back from DWM.
     pub fn dark_mode() -> Option<bool> {
         use windows::core::BOOL;
         use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
@@ -841,9 +653,7 @@ mod win {
         Some((p.x as f32, p.y as f32))
     }
 
-    /// The window's monitor and that monitor's rect + work area, PHYSICAL px:
-    /// `MonitorFromWindow` + `GetMonitorInfoW`, no enumeration. The display
-    /// cache's key (`display_part`).
+    /// The window's monitor plus its rect and work area, in physical px (`MonitorFromWindow` + `GetMonitorInfoW`); the display cache key.
     pub fn monitor_key() -> Option<(isize, [i32; 8])> {
         use windows::Win32::Graphics::Gdi::{
             GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
@@ -889,21 +699,10 @@ mod win {
 }
 
 thread_local! {
-    /// Each window's HWND, captured once. It never changes for the lifetime of
-    /// a window, and caching it is what lets the Win32 helpers work from
-    /// `open_window`'s builder closure (where nothing is published yet) as well
-    /// as from a host fn.
-    ///
-    /// **Keyed by window** (docs/MULTIWINDOW.md §5.1): one slot held whichever
-    /// HWND won the race, and every Win32 helper — `set_always_on_top`,
-    /// `start_dragging`, `is_iconic`, the backdrop calls — would then drive the
-    /// wrong OS window. `appWindow.*` still means the PRIMARY one (A-M04);
-    /// what the map buys is that a pop-out can be driven deliberately
-    /// ([`hwnd_of`]) instead of by accident.
+    /// Each window's HWND, captured once. Keyed by window so Win32 helpers address the right OS window; `appWindow.*` means the primary one, and a pop-out is driven via [`hwnd_of`].
     static HWND_CACHE: RefCell<std::collections::HashMap<vn_tree::WinKey, isize>> =
         RefCell::new(std::collections::HashMap::new());
-    /// The window `appWindow.*` and every Win32 helper below address. Set by
-    /// [`init`] from inside the primary window's own builder closure.
+    /// The window `appWindow.*` and the Win32 helpers address; set by [`init`] from the primary window's builder closure.
     static PRIMARY_WINDOW: Cell<vn_tree::WinKey> = const { Cell::new(0) };
 }
 
@@ -915,21 +714,17 @@ fn hwnd_raw() -> Option<isize> {
     with_commit(|window, _| capture_hwnd(window)).flatten()
 }
 
-/// `HWND_TOPMOST` for ONE window, addressed by the HWND rather than by "the
-/// window" — which is what `<VnWindow alwaysOnTop>` needs and what the single
-/// `HWND_CACHE` slot could not express (docs/MULTIWINDOW.md §5.1).
+/// `HWND_TOPMOST` for one window by HWND (`<VnWindow alwaysOnTop>`).
 pub fn set_always_on_top_hwnd(hwnd: isize, on: bool) {
     win::set_always_on_top_for(hwnd, on);
 }
 
-/// One window's HWND, if it has already been captured.
 pub fn hwnd_of(key: vn_tree::WinKey) -> Option<isize> {
     HWND_CACHE.with(|m| m.borrow().get(&key).copied()).filter(|&h| h != 0)
 }
 
 pub fn capture_hwnd(window: &Window) -> Option<isize> {
-    // gpui implements `raw_window_handle::HasWindowHandle` on `Window`, but the
-    // inherent `Window::window_handle()` shadows the trait method — hence UFCS.
+    // gpui's inherent `Window::window_handle()` shadows the trait method, hence UFCS.
     let handle = <Window as HasWindowHandle>::window_handle(window).ok()?;
     let raw = match handle.as_raw() {
         RawWindowHandle::Win32(w) => Some(w.hwnd.get()),
@@ -940,20 +735,17 @@ pub fn capture_hwnd(window: &Window) -> Option<isize> {
     Some(raw)
 }
 
-/// The primary window's HWND, once captured.
 pub fn primary_hwnd() -> Option<isize> {
     hwnd_of(PRIMARY_WINDOW.with(|c| c.get()))
 }
 
-/// The primary window's device pixels per CSS px, from the latest snapshot
-/// (1 before the first one).
+/// The primary window's device pixels per CSS px (1 before the first snapshot).
 pub fn primary_scale() -> f32 {
     let s = SNAPSHOT.with(|s| s.borrow().scale);
     if s > 0.0 { s } else { 1.0 }
 }
 
-/// Forgets a window that has closed, so its HWND cannot be handed to a Win32
-/// call against a window that no longer exists.
+/// Forgets a closed window's HWND so it cannot reach a Win32 call.
 pub fn forget_window(key: vn_tree::WinKey) {
     HWND_CACHE.with(|m| m.borrow_mut().remove(&key));
     #[cfg(target_os = "macos")]
@@ -962,17 +754,12 @@ pub fn forget_window(key: vn_tree::WinKey) {
 
 #[cfg(target_os = "macos")]
 thread_local! {
-    /// Each window's `NSWindow`, captured as a dialog owner. Kept apart from
-    /// `HWND_CACHE`: every Win32 helper reads that one, and none of them may
-    /// be handed an `NSWindow`. vn-desktop only uses a pointer from here after
-    /// finding it in `[NSApp windows]`, so a stale one is harmless.
+    /// Each window's `NSWindow`, captured as a dialog owner. Separate from `HWND_CACHE`, which Win32 helpers read. A stale pointer is harmless: vn-desktop only uses one found in `[NSApp windows]`.
     static NS_WINDOW_CACHE: RefCell<std::collections::HashMap<vn_tree::WinKey, isize>> =
         RefCell::new(std::collections::HashMap::new());
 }
 
-/// The native window a file dialog is owned by (vn-desktop `dialog::Owner`):
-/// the HWND on Windows; on macOS the `NSWindow` of gpui's `NSView` (its raw
-/// handle), which the dialog's sheet attaches to.
+/// The native window a file dialog is owned by (vn-desktop `dialog::Owner`): the HWND, or on macOS the `NSWindow` of gpui's `NSView`.
 pub fn dialog_parent(window: &Window) -> Option<isize> {
     #[cfg(target_os = "macos")]
     return capture_ns_window(window);
@@ -990,7 +777,6 @@ fn capture_ns_window(window: &Window) -> Option<isize> {
     Some(ns_window)
 }
 
-/// [`dialog_parent`] of a window by key, once captured.
 pub fn dialog_parent_of(key: vn_tree::WinKey) -> Option<isize> {
     #[cfg(target_os = "macos")]
     return NS_WINDOW_CACHE.with(|m| m.borrow().get(&key).copied()).filter(|&w| w != 0);
@@ -998,11 +784,7 @@ pub fn dialog_parent_of(key: vn_tree::WinKey) -> Option<isize> {
     return hwnd_of(key);
 }
 
-/// Windows 11 22H2 = build 22621 or later: where `DWMWA_SYSTEMBACKDROP_TYPE`
-/// exists, so where DWM draws Mica, Mica Alt and acrylic. The fork's own
-/// check (`gpui_windows`' `has_system_backdrop`) is the same number. 21H2
-/// (22000) had Mica only through an undocumented attribute the fork never set,
-/// so it counts as before.
+/// Windows 11 22H2 (build 22621)+, where `DWMWA_SYSTEMBACKDROP_TYPE` exists. 21H2 had Mica only via an undocumented attribute the fork never set.
 #[cfg(target_os = "windows")]
 pub(crate) fn has_system_backdrop() -> bool {
     use std::sync::OnceLock;
@@ -1014,22 +796,16 @@ pub(crate) fn has_system_backdrop() -> bool {
             dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
             ..Default::default()
         };
-        // `RtlGetVersion` is the only version query Windows does not lie about
-        // for an unmanifested process (`GetVersionEx` reports 6.2 forever).
+        // `RtlGetVersion` is the only version query that does not lie for an unmanifested process.
         unsafe { RtlGetVersion(&mut vi) }.is_ok() && vi.dwBuildNumber >= 22621
     })
 }
 
-/// macOS always has its system material (`NSVisualEffectView`), which every
-/// system backdrop maps to ([`Backdrop::to_gpui`]).
+/// macOS always has its system material, which every system backdrop maps to.
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn has_system_backdrop() -> bool {
     cfg!(target_os = "macos")
 }
-
-// ---------------------------------------------------------------------------
-// the per-frame state snapshot (docs/WINDOWING.md §5.3)
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
@@ -1051,20 +827,16 @@ pub struct Snapshot {
     pub displays: usize,
     pub title: String,
     pub backdrop: Backdrop,
-    /// What the window draws: `backdrop`, or `None` while a macOS fullscreen
-    /// window cannot show the desktop picture under its glass
-    /// ([`effective_backdrop`]).
+    /// What the window draws: `backdrop`, or `None` while macOS fullscreen cannot show the desktop picture ([`effective_backdrop`]).
     pub effective_backdrop: Backdrop,
     pub theme: Theme,
     pub always_on_top: bool,
     pub title_bar_height: f32,
     pub fallback_titlebar: bool,
     pub overlay: Option<Overlay>,
-    /// The window CLIENT area, CSS px. `inner_width`/`inner_height` are the app
-    /// ROOT's box inside it, which is what a browser calls the viewport.
+    /// The window client area in CSS px; `inner_*` is the app root's box inside it (the viewport).
     pub client: (f32, f32),
-    /// `(left, top, right, bottom)` — how far the app root is inset inside the
-    /// client area by host-drawn chrome. All zero in custom-chrome mode.
+    /// `(left, top, right, bottom)` inset of the app root in the client area from host chrome; zero in custom-chrome mode.
     pub content_inset: (f32, f32, f32, f32),
 }
 
@@ -1100,27 +872,19 @@ impl Default for Snapshot {
 }
 
 thread_local! {
-    /// The snapshot every getter reads. Published once per frame, so a getter
-    /// never needs a phase and never lies about which frame it is describing.
+    /// The snapshot every getter reads, published once per frame.
     static SNAPSHOT: RefCell<Snapshot> = RefCell::new(Snapshot::default());
-    /// DOM visibility is published at window initialization, before any app JS.
-    /// Keep its edge separate from PREV, whose first funnel still emits boot.
+    /// DOM visibility, published at window init before app JS. Kept separate from PREV, whose first funnel still emits boot.
     static PAGE_HIDDEN: Cell<Option<bool>> = const { Cell::new(None) };
-    // The HWND stays hidden while its first styled frame is prepared. This is
-    // internal presentation state, not a page becoming document.hidden.
+    // The HWND stays hidden while its first styled frame is prepared; not a page becoming document.hidden.
     static STARTUP_REVEAL_PENDING: Cell<bool> = const { Cell::new(false) };
     /// The registered JS observer (`__vn_window_observe`), protected against GC.
     static OBSERVER: Cell<u64> = const { Cell::new(0) };
-    /// Mutators that arrived outside `Phase::Commit` (module scope, or from
-    /// inside the dispatch below). Drained at the top of the next frame.
+    /// Mutators that arrived outside `Phase::Commit`; drained at the top of the next frame.
     static PENDING: RefCell<VecDeque<Op>> = const { RefCell::new(VecDeque::new()) };
-    /// Set across the whole dispatch step. `resizeTo` from a `resize` handler
-    /// is a classic infinite loop; browsers do not guard it and neither do we,
-    /// but our frame-driven funnel could RE-ENTER within one frame, which is a
-    /// different bug. While this is set, mutators queue instead of applying.
+    /// Set across the dispatch step: mutators queue instead of applying, since the frame funnel could re-enter within a frame.
     static IN_DISPATCH: Cell<bool> = const { Cell::new(false) };
-    /// The mutable half of the chrome state: `backdrop`, `alwaysOnTop`,
-    /// `titleBarHeight` and the fallback titlebar all change at runtime.
+    /// Runtime-mutable chrome state (backdrop, alwaysOnTop, titleBarHeight, fallback titlebar).
     static LIVE: RefCell<Live> = RefCell::new(Live::default());
     /// The backdrop gpui was last given for the primary window, so the frame
     /// funnel re-applies one only when `appWindow.backdrop` moves.
@@ -1131,14 +895,12 @@ thread_local! {
 struct Live {
     title: String,
     backdrop: Backdrop,
-    /// `appWindow.theme`. App-wide, as Electron's `nativeTheme` is: pop-outs
-    /// follow it too.
+    /// `appWindow.theme`, app-wide as Electron's `nativeTheme` is (pop-outs follow).
     theme: Theme,
     always_on_top: bool,
     title_bar_height: f32,
     overlay: Option<Overlay>,
-    /// `false` once the app has painted a `window-drag: move` region of its own
-    /// (§4.2 mode 2) — or from the start if the config said so.
+    /// `false` once the app paints its own `window-drag: move` region, or from the start per config.
     fallback_titlebar: bool,
 }
 
@@ -1156,13 +918,9 @@ impl Default for Live {
     }
 }
 
-/// Seeds the mutable half from the config and publishes the first snapshot,
-/// from inside `open_window`'s builder closure.
+/// Seeds the mutable half from the config and publishes the first snapshot, from `open_window`'s builder closure.
 ///
-/// The first snapshot has to exist BEFORE the JS prelude evaluates: the prelude
-/// seeds `screen`, `outerWidth`, the WCO rect and `appWindow`'s getters from
-/// `__vn_window_state()`, and a window full of zeros at boot would be a lie
-/// that survives until the first frame.
+/// The snapshot must exist before the JS prelude evaluates: it seeds `screen`, `outerWidth` and `appWindow`'s getters.
 pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
     LIVE.with(|l| {
         *l.borrow_mut() = Live {
@@ -1171,8 +929,7 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
             theme: Theme::System,
             always_on_top: cfg.always_on_top,
             title_bar_height: cfg.title_bar_height,
-            // OS chrome draws the real thing; a host cluster on top of it would
-            // be a second set of buttons.
+            // OS chrome draws the real buttons.
             overlay: (cfg.title_bar_style == TitleBarStyle::Hidden)
                 .then_some(cfg.title_bar_overlay)
                 .flatten(),
@@ -1181,10 +938,7 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
     });
     // `open_window` created the window with this one (`window_background`).
     APPLIED_BACKDROP.with(|a| a.set(Some(cfg.backdrop)));
-    // Declared BEFORE anything per-window is published: `set_os_chrome` and
-    // `set_env` below both address "the primary window", and until this runs
-    // there is no such key (docs/MULTIWINDOW.md §5.6). `build_root` asserts the
-    // same thing every frame, from the other side.
+    // Declared before anything per-window is published: `set_os_chrome` and `set_env` address "the primary window".
     let key = vn_tree::windows::key(window);
     PRIMARY_WINDOW.with(|c| c.set(key));
     vn_tree::windows::set_primary(key);
@@ -1192,11 +946,7 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
     // The primary's NSWindow, for a dialog asked outside any window's frame.
     #[cfg(target_os = "macos")]
     dialog_parent(window);
-    // In OS-chrome mode the caption belongs to the OS, so `window-drag` and
-    // `--window-control` must stop emitting hitboxes entirely — otherwise a
-    // stray `move` region in the content would hand the OS `HTCAPTION` for a
-    // piece of the client area and swallow its clicks. Inert, and said out loud
-    // the first time one is painted (A-25).
+    // In OS-chrome mode `window-drag` and `--window-control` emit no hitboxes: a stray `move` region would hand the OS `HTCAPTION` over client area and swallow clicks.
     vn_tree::set_os_chrome(cfg.title_bar_style == TitleBarStyle::Default);
     if cfg.always_on_top {
         win::set_always_on_top(true);
@@ -1206,47 +956,28 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
     cx.observe_displays(|_, _| invalidate_display()).detach();
     let s = snapshot(window, cx);
     SNAPSHOT.with(|c| *c.borrow_mut() = s);
-    // Seed the cascade env too, so the very first restyle already knows the
-    // real viewport, DPI and chrome mode.
+    // Seed the cascade env so the first restyle knows the real viewport, DPI and chrome mode.
     let dark = effective_dark(window);
     let s = SNAPSHOT.with(|c| c.borrow().clone());
     vn_tree::set_env(css_env(&s, dark, cx.reduce_motion()));
-    // A hidden initial window may never receive a platform frame. Publish now
-    // so module-scope document.hidden already describes the real HWND.
+    // A hidden initial window may never get a platform frame; publish now so module-scope document.hidden is right.
     publish_visibility(&s);
-    // `visibilitychange` on the platform's edge rather than the frame's: a
-    // minimised window paints no frames, so the per-frame diff below only ever
-    // saw `minimized` flip at the moment it was restored — and then compared
-    // two visible snapshots. `hidden` was never reported (measured before this
-    // landed: minimise → restore delivered zero `visibilitychange` events).
+    // `visibilitychange` on the platform edge: a minimised window paints no frames, so the per-frame diff would miss `hidden`.
     window
         .observe_window_visibility(|_, window, cx| platform_changed(window, cx))
         .detach();
-    // `focus` / `blur` on the same edge, for the same reason: a window covered
-    // by another one draws no frames, so focus that left and came back while
-    // it was covered compared equal in the per-frame diff. Neither event fired,
-    // and `document.hasFocus()` answered from the stale snapshot — a page that
-    // paused its motion on `blur` stayed paused with the window in front.
+    // `focus`/`blur` on the same edge: a covered window draws no frames, so focus lost and regained while covered would not diff.
     window
         .observe_window_activation(|window, cx| platform_changed(window, cx))
         .detach();
 }
 
-/// gpui's visibility and activation observers. Visibility is, on Windows,
-/// `IsWindowVisible && !IsIconic`, reported from a foreground task after
-/// `WM_SIZE` / `WM_SHOWWINDOW`, so never from inside the update that minimised
-/// the window; activation follows `WM_ACTIVATE` and its X11/Wayland/AppKit
-/// counterparts.
+/// gpui's visibility and activation observers (Windows: `IsWindowVisible && !IsIconic`, reported from a foreground task after `WM_SIZE`/`WM_SHOWWINDOW`).
 ///
-/// Runs the same funnel the frame does, out of band: the snapshot reads
-/// shown/hidden, minimized and focused state from the OS, then publishes DOM
-/// visibility independently of the `minimize` / `restore` events and fires
-/// `focus` / `blur`. The next frame's diff then sees nothing new, so nothing
-/// fires twice.
+/// Runs the frame funnel out of band; the next frame's diff then sees nothing new, so nothing fires twice.
 fn platform_changed(window: &mut Window, cx: &mut gpui::App) {
     if vn_runtime::bridge::poisoned()
-        // Nested inside a published phase (a modal loop entered from a host
-        // fn): the frame's own diff picks the change up afterwards.
+        // Nested inside a published phase: the frame's own diff picks the change up.
         || vn_runtime::with_app(|_| ()).is_some()
         // Before the first frame: that frame's funnel owns `boot`.
         || PREV.with(|p| p.borrow().is_none())
@@ -1259,30 +990,16 @@ fn platform_changed(window: &mut Window, cx: &mut gpui::App) {
     });
 }
 
-/// Is the window on another virtual desktop right now? Asked by the frame pump
-/// every frame, of DWM directly rather than of the snapshot: while cloaked the
-/// snapshot is only refreshed by the background tick.
+/// Whether the window is on another virtual desktop, asked of DWM every frame (while cloaked the snapshot is only refreshed by the background tick).
 ///
-/// A cloaked window is a hidden page, as a minimised one is: `document.hidden`,
-/// no `requestAnimationFrame`, timers and sockets on the background tick. A
-/// browser does the same (Chromium's Windows occlusion tracker counts a cloaked
-/// window as hidden). The difference from minimised is only in how the frames
-/// stop: gpui parks a minimised window's frame callback, and a cloaked one keeps
-/// being asked to paint every vsync, so the pump declines instead
-/// (`crate::pump_frame`).
+/// A cloaked window is a hidden page, like a minimised one; but gpui keeps asking it to paint every vsync, so the pump declines (`crate::pump_frame`).
 pub fn cloaked() -> bool {
     win::is_cloaked()
 }
 
-/// Is every window of the app out of sight behind other windows
-/// (src/occlusion.rs)? The primary one covered, and each pop-out covered or
-/// not shown, since a popped-out call or stream someone is watching still
-/// needs the frame clock. A hidden page then, as a cloaked one is, with the
-/// same consequence in the pump (`crate::pump_frame`).
+/// Whether every window of the app is out of sight behind other windows (src/occlusion.rs): the primary covered, each pop-out covered or not shown. A hidden page, as when cloaked (`crate::pump_frame`).
 ///
-/// The answer stands for [`crate::occlusion::RECHECK`]; the pump asks every
-/// frame. Never in a test host that opens behind everything on purpose
-/// (src/quiet.rs), nor with `VN_OCCLUSION=0`.
+/// Cached for [`crate::occlusion::RECHECK`]. Never in a test host (src/quiet.rs) or with `VN_OCCLUSION=0`.
 pub fn occluded() -> bool {
     thread_local! {
         static LAST: Cell<Option<(std::time::Instant, bool)>> = const { Cell::new(None) };
@@ -1305,11 +1022,7 @@ pub fn occluded() -> bool {
     answer
 }
 
-/// Is the user in this app: a window of this process (the primary one, a
-/// pop-out, a dialog) is the foreground window. Not gpui's
-/// `App::active_window`, which asks Win32's `GetActiveWindow`: that is the
-/// thread's own notion and keeps naming our window after another app took the
-/// foreground, so an unfocused window read as focused.
+/// Whether the user is in this app: a window of this process is the foreground window. Not gpui's `App::active_window` (`GetActiveWindow`), which keeps naming our window after another app took the foreground.
 #[cfg(target_os = "windows")]
 pub fn app_focused(_cx: &gpui::App) -> bool {
     use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
@@ -1366,13 +1079,7 @@ fn publish_visibility(snapshot: &Snapshot) {
     vn_tree::set_page_hidden(hidden);
 }
 
-/// Whether the host still draws its own titlebar strip.
-///
-/// The hardcoded strip in `Shell::render` must not simply be deleted: an app
-/// that declares no drag region would become unmovable. So it retires on the
-/// first painted frame in which any node's effective `window-drag` is `move`,
-/// with one `[window]` log line — never silently removing a behaviour an app
-/// was relying on (D-23).
+/// Whether the host still draws its own titlebar strip. It retires on the first painted frame where any node's effective `window-drag` is `move`, with one `[window]` log line, so an app with no drag region stays movable.
 pub fn fallback_titlebar() -> bool {
     LIVE.with(|l| l.borrow().fallback_titlebar)
 }
@@ -1383,10 +1090,7 @@ fn display_mode(fullscreen: bool) -> vn_css::DisplayMode {
     }
     match config().title_bar_style {
         TitleBarStyle::Default => vn_css::DisplayMode::Standalone,
-        // WCO means "the titlebar strip belongs to content", which is precisely
-        // true in custom-chrome mode whether or not a host cluster is drawn. It
-        // is the branch a reused PWA component must take, so reporting anything
-        // else would make correct components lay out wrongly (D-11).
+        // WCO means "the titlebar strip belongs to content": true in custom-chrome mode with or without a host cluster; reused PWA components rely on it.
         TitleBarStyle::Hidden => vn_css::DisplayMode::WindowControlsOverlay,
     }
 }
@@ -1414,15 +1118,7 @@ fn invalidate_display() {
     DISPLAY.with(|d| *d.borrow_mut() = None);
 }
 
-/// The display half, cached.
-///
-/// `Window::display(cx)` is `cx.platform.displays()` plus a find —
-/// `EnumDisplayMonitors`, then `GetMonitorInfoW` + `GetDpiForMonitor` per
-/// monitor — and `cx.displays().len()` was a second enumeration: both on every
-/// snapshot, i.e. every frame. Now they run when gpui's observers say a display
-/// changed, or when the cheap per-frame key moves: `MonitorFromWindow` +
-/// `GetMonitorInfoW`, two calls. The key is what keeps `screen.avail*` honest —
-/// a taskbar resize moves the work area without any display event.
+/// The display half, cached: re-read when gpui's display observers fire or the cheap per-frame key (monitor, rect, work area via `MonitorFromWindow` + `GetMonitorInfoW`) moves. The key keeps `screen.avail*` honest, as a taskbar resize moves the work area without a display event.
 fn display_part(window: &Window, cx: &gpui::App) -> DisplayPart {
     let primary = vn_tree::windows::key(window) == PRIMARY_WINDOW.with(|c| c.get());
     let key = if primary {
@@ -1496,8 +1192,7 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
     let DisplayPart { screen, displays, .. } = display_part(window, cx);
     let scale = window.scale_factor();
     let fullscreen = window.is_fullscreen();
-    // `GetWindowRect` is in PHYSICAL pixels; everything else on this surface is
-    // CSS px, which is what gpui's `Pixels` already are.
+    // `GetWindowRect` is in physical pixels; everything else here is CSS px (gpui `Pixels`).
     let outer = win::window_rect()
         .map(|(x, y, w, h)| (x / scale, y / scale, w / scale, h / scale))
         .unwrap_or((
@@ -1506,23 +1201,7 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
             f32::from(bounds.size.width),
             f32::from(bounds.size.height),
         ));
-    // `innerWidth`/`innerHeight` are the APP's viewport, which is the app root's
-    // painted box — not the window's client area.
-    //
-    // In custom-chrome mode the two are the same rectangle and nothing changes.
-    // In mode 2 the host draws a titlebar, 24 px of padding and a status panel
-    // around the root, and all of that is UA CHROME: a browser's `innerHeight`
-    // excludes the browser's own toolbars by definition, so reporting the client
-    // area here made `window.innerHeight` disagree with
-    // `document.documentElement.clientHeight` and with every
-    // `getBoundingClientRect()` (which are root-relative) by the height of the
-    // chrome — 167 px on `apps/shadcn`. Anything that sizes itself against the
-    // viewport (reka's `Select` computes `window.innerHeight - 2*margin`) was
-    // that much too optimistic.
-    //
-    // Before the first painted frame the root has no box yet, so the client area
-    // is the honest answer — and it is also the right one, since no chrome has
-    // been drawn either.
+    // `innerWidth`/`innerHeight` are the app root's painted box, not the client area: host chrome (titlebar, padding, status panel in mode 2) is UA chrome, and sizing against the client area would disagree with `clientHeight` and `getBoundingClientRect()`. Before the first painted frame the root has no box, so the client area is used.
     let client = (f32::from(viewport.width), f32::from(viewport.height));
     let (inner, inset) = match vn_tree::root_bounds() {
         Some((x, y, w, h)) if w > 0.0 && h > 0.0 => {
@@ -1567,14 +1246,7 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
     }
 }
 
-/// The Window Controls Overlay rect (§2.3) — the area of the titlebar strip
-/// available to APP CONTENT, and the same numbers `env(titlebar-area-*)`
-/// resolves to.
-///
-/// Zero, with `visible: false`, whenever the strip does not belong to content:
-/// OS chrome, fullscreen, minimised — and while the host's own fallback
-/// titlebar is still up, which is the honest answer the merge report's known
-/// issue was about. A host-drawn button cluster takes its width off the right.
+/// The Window Controls Overlay rect: the titlebar area available to app content, matching `env(titlebar-area-*)`. Zero with `visible: false` when the strip is not content's: OS chrome, fullscreen, minimised, or the fallback titlebar still up. A host cluster takes its width off the right.
 fn titlebar_area(s: &Snapshot) -> (bool, (f32, f32, f32, f32)) {
     let visible = display_mode(s.fullscreen) == vn_css::DisplayMode::WindowControlsOverlay
         && !s.fullscreen
@@ -1584,9 +1256,7 @@ fn titlebar_area(s: &Snapshot) -> (bool, (f32, f32, f32, f32)) {
         return (false, (0.0, 0.0, 0.0, 0.0));
     }
     let cluster = if s.overlay.is_some() { Overlay::width() } else { 0.0 };
-    // Windows puts the caption buttons on the RIGHT, so the content area keeps
-    // `x = 0` and loses width. macOS would keep the width and move `x`, which
-    // is why the app-facing rule is "read the rect, never assume a side".
+    // Windows puts caption buttons on the right, so the area keeps `x = 0` and loses width; apps must read the rect, never assume a side.
     (true, (0.0, 0.0, (s.inner_width - cluster).max(0.0), s.title_bar_height))
 }
 
@@ -1602,8 +1272,7 @@ fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> vn_css::Env {
         display_mode: display_mode(s.fullscreen),
         titlebar_area: [t.0, t.1, t.2, t.3],
         coarse_pointer: coarse_pointer(),
-        // Desktop Windows reports none. `PlatformWindow::insets()` is the hook
-        // if a platform ever does.
+        // Desktop Windows reports none; `PlatformWindow::insets()` is the hook if a platform does.
         safe_area_insets: [0.0; 4],
     }
 }
@@ -1627,15 +1296,9 @@ thread_local! {
         RefCell::new(std::collections::HashMap::new());
 }
 
-/// Keeps a window's DWM dark mode on `appWindow.theme`. Called every frame, for
-/// the primary window and for each pop-out.
+/// Keeps a window's DWM dark mode on `appWindow.theme`, every frame, for the primary and each pop-out.
 ///
-/// gpui writes the OS's appearance into the window whenever the OS theme
-/// changes (`configure_dwm_dark_mode`, after its appearance callback has run),
-/// which would quietly undo a forced theme. So the first frame a window shows
-/// after an OS change writes the forced one back. A window's first frame counts
-/// as a change, which is how a pop-out opened under a forced theme takes it.
-/// Nothing is written while the theme is `system`: there gpui's value is right.
+/// gpui rewrites the OS appearance on an OS theme change, which would undo a forced theme, so the first frame after a change writes the forced one back. A window's first frame counts as a change (pop-outs take a forced theme). Nothing is written under `system`.
 fn keep_theme(window: &Window) {
     let key = vn_tree::windows::key(window);
     let Some(hwnd) = hwnd_of(key) else { return };
@@ -1660,19 +1323,9 @@ fn apply_theme(theme: Theme, window: &Window) {
     }
 }
 
-/// The `@media` + `env()` environment of a SECONDARY window — a `<VnWindow>`
-/// pop-out (docs/MULTIWINDOW.md §6).
+/// The `@media` + `env()` environment of a secondary (`<VnWindow>`) window, built from the window directly since a pop-out has none of `Snapshot`'s `appWindow` state.
 ///
-/// Built from that window directly rather than from a `Snapshot`, because a
-/// `Snapshot` is 20 fields of `appWindow` state and a pop-out has none of it:
-/// it has no observer, no `beforeunload`, no `document.title`. What it has is a
-/// viewport, a DPI and a chrome mode, which is exactly what the cascade asks
-/// for.
-///
-/// `viewport` is the box that window's PAINTED ROOT was laid out at — the same
-/// definition the primary window uses (`inner_width` is the app root's box, not
-/// the client area), so `@media (max-width: 400px)` inside a 380 px pop-out
-/// answers against 380 rather than against the main window's 620.
+/// `viewport` is the box that window's painted root was laid out at, as for the primary window.
 pub fn popout_env(
     window: &Window,
     cx: &gpui::App,
@@ -1685,9 +1338,7 @@ pub fn popout_env(
     let display_mode = if os_chrome {
         vn_css::DisplayMode::Standalone
     } else {
-        // Same rule as the primary window's (D-11): custom chrome means the
-        // titlebar strip belongs to content, which is what a reused PWA
-        // component branches on.
+        // As the primary window: custom chrome means the titlebar strip belongs to content.
         vn_css::DisplayMode::WindowControlsOverlay
     };
     let titlebar_area = if os_chrome {
@@ -1699,8 +1350,7 @@ pub fn popout_env(
         viewport_width: viewport.0,
         viewport_height: viewport.1,
         dark,
-        // Shared by construction: it is an OS preference, and pushing a second
-        // value would stomp the one animator (docs/MULTIWINDOW.md §5.3).
+        // Shared: it is an OS preference, and a second pushed value would stomp the one animator.
         reduce_motion: cx.reduce_motion(),
         scale_factor: window.scale_factor(),
         display_mode,
@@ -1710,20 +1360,14 @@ pub fn popout_env(
     }
 }
 
-/// Is a touch screen or a pen digitizer attached? — `any-pointer: coarse`.
-///
-/// `SM_DIGITIZER` is Windows' own answer and the one Chromium reads for the
-/// same media feature. It cannot change without a device being plugged in, and
-/// it is asked once per frame otherwise, so the answer is cached.
+/// Whether a touch screen or pen digitizer is attached (`any-pointer: coarse`), via `SM_DIGITIZER` as Chromium does. Cached: it only changes when a device is plugged in.
 fn coarse_pointer() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
         #[cfg(target_os = "windows")]
         {
-            // NID_INTEGRATED_TOUCH | NID_EXTERNAL_TOUCH | NID_INTEGRATED_PEN |
-            // NID_EXTERNAL_PEN — "some digitizer is present", which is exactly
-            // what `any-pointer: coarse` asks.
+            // NID_INTEGRATED_TOUCH | NID_EXTERNAL_TOUCH | NID_INTEGRATED_PEN | NID_EXTERNAL_PEN.
             const SM_DIGITIZER: i32 = 94;
             const ANY_DIGITIZER: i32 = 0x01 | 0x02 | 0x04 | 0x08;
             // SAFETY: a pure read of a system metric; no pointers involved.
@@ -1748,8 +1392,7 @@ fn rect(t: (f32, f32, f32, f32)) -> Json {
     ])
 }
 
-/// The snapshot as the JSON the JS side mirrors into `screen`, `outerWidth`,
-/// `navigator.windowControlsOverlay`, `appWindow.*` and friends.
+/// The snapshot as JSON for the JS side to mirror (`screen`, `outerWidth`, WCO, `appWindow.*`).
 fn snapshot_json(s: &Snapshot) -> String {
     let mode = display_mode(s.fullscreen);
     let (wco_visible, titlebar) = titlebar_area(s);
@@ -1771,7 +1414,6 @@ fn snapshot_json(s: &Snapshot) -> String {
         ("backdrop", Json::s(s.backdrop.as_str())),
         ("effectiveBackdrop", Json::s(s.effective_backdrop.as_str())),
         ("theme", Json::s(s.theme.as_str())),
-        // The window's dark mode as DWM has it, read back like `systemBackdrop`.
         (
             "systemDarkMode",
             match win::dark_mode() {
@@ -1779,8 +1421,7 @@ fn snapshot_json(s: &Snapshot) -> String {
                 None => Json::Null,
             },
         ),
-        // What DWM believes, read back rather than remembered — the two
-        // mechanisms `set_background_appearance` drives can disagree.
+        // What DWM believes, read back rather than remembered.
         (
             "systemBackdrop",
             match win::system_backdrop() {
@@ -1801,10 +1442,7 @@ fn snapshot_json(s: &Snapshot) -> String {
         ("titleBarArea", rect(titlebar)),
         ("fallbackTitleBar", Json::Bool(s.fallback_titlebar)),
         ("hostControls", Json::Bool(s.overlay.is_some())),
-        // The window CLIENT area, and how far the app root sits inside it.
-        // `innerWidth`/`innerHeight` are the ROOT's box (see `snapshot`), so
-        // these two are what an app needs to reason about the host's own chrome
-        // — and `client - inset` is `inner` by construction.
+        // The client area and the app root's inset in it; `client - inset` is `inner`.
         ("clientWidth", Json::n(s.client.0)),
         ("clientHeight", Json::n(s.client.1)),
         (
@@ -1842,33 +1480,22 @@ fn snapshot_json(s: &Snapshot) -> String {
     .to_json()
 }
 
-// ---------------------------------------------------------------------------
-// the frame funnel
-// ---------------------------------------------------------------------------
-
 thread_local! {
     static PREV: RefCell<Option<Snapshot>> = const { RefCell::new(None) };
     static BOOTED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Runs inside `pump_frame`'s `Phase::Commit`, BEFORE `rt.pump` — and from
-/// `visibility_changed`, since a minimised window has no frames.
-///
-/// Order is the contract:
-/// 1. drain anything a module-scope mutator queued;
+/// Runs inside `pump_frame`'s `Phase::Commit` before `rt.pump`, and from `visibility_changed`. Order is the contract:
+/// 1. drain queued mutators;
 /// 2. snapshot;
-/// 3. `redjs_dom_resize` when the viewport or the DPI moved — this is what
-///    updates `innerWidth`/`innerHeight`/`devicePixelRatio` and fires the
-///    trusted `resize`;
-/// 4. `redjs_dom_set_visibility` when shown/minimised/cloaked hidden-ness moved;
+/// 3. `redjs_dom_resize` on a viewport or DPI change (updates `innerWidth` etc., fires `resize`);
+/// 4. `redjs_dom_set_visibility` on a hidden-ness change;
 /// 5. the JS observer, with the state delta.
 ///
-/// Step 3 before step 5 is what makes `fullscreenchange` fire AFTER the
-/// viewport has finished resizing, which the Fullscreen spec requires.
+/// Resize before the observer makes `fullscreenchange` fire after the viewport has resized, as the Fullscreen spec requires.
 pub fn pump(window: &mut Window, cx: &mut gpui::App) {
     drain_pending(window, cx);
-    // Before the snapshot, so a backdrop queued since the last frame is
-    // applied and the snapshot's `effectiveBackdrop` describes it.
+    // Before the snapshot so `effectiveBackdrop` describes a queued backdrop.
     sync_backdrop(window, false);
 
     let s = snapshot(window, cx);
@@ -1878,31 +1505,13 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
     let json = snapshot_json(&s);
     let ctx = JsRuntime::with(|rt| rt.raw());
 
-    // Publish the snapshot to JS BEFORE anything fires. `redjs_dom_resize`
-    // dispatches the trusted `resize` SYNCHRONOUSLY, so a handler that reads
-    // `outerWidth` or `screenX` from it would otherwise see LAST frame's
-    // numbers while `innerWidth` already held this frame's — the kind of
-    // half-updated view a browser never shows.
+    // Publish the snapshot to JS before anything fires: `redjs_dom_resize` dispatches `resize` synchronously, and handlers reading `outerWidth` or `screenX` must not see last frame's numbers.
     let dirty = prev.as_ref().is_none_or(|p| *p != s);
     if dirty {
         notify("sync", &json);
     }
 
-    // The viewport is a PUSHED value: `innerWidth` / `innerHeight` /
-    // `devicePixelRatio` are whatever `redjs_dom_resize` last wrote, and JS has
-    // no way to pull them. So every snapshot that moves them pushes — the FIRST
-    // one included, which it was not before.
-    //
-    // Nothing noticed, because the first two snapshots always disagreed: frame
-    // 1's had no painted app root, so `snapshot` fell back to the window's
-    // client area, and frame 2's had the root's real box. The second frame's
-    // "resize" therefore corrected a value the boot frame had never published.
-    // The moment a layout could run BEFORE the first frame
-    // (`vn_tree::sync_layout`), the two agreed — and JS kept redjs's built-in
-    // default viewport for the life of the process.
-    //
-    // The push is not the `resize` EVENT, which still fires only on a change: a
-    // browser does not fire `resize` at load either.
+    // The viewport is pushed, not pulled: `innerWidth`/`innerHeight`/`devicePixelRatio` are whatever `redjs_dom_resize` last wrote, so every viewport change pushes, the first included (else JS keeps redjs's default viewport). The `resize` event itself still fires only on change.
     let viewport_moved = prev.as_ref().is_none_or(|p| {
         p.inner_width != s.inner_width || p.inner_height != s.inner_height || p.scale != s.scale
     });
@@ -1917,8 +1526,7 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
         };
     }
 
-    // This also seeds visibility if no window-init publication was made.
-    // The separate cache prevents an extra visibilitychange on the first pump.
+    // Also seeds visibility if window init made no publication; the separate cache avoids an extra visibilitychange on the first pump.
     publish_visibility(&s);
 
     let mut kinds: Vec<&str> = Vec::new();
@@ -1946,19 +1554,15 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
             if p.outer.0 != s.outer.0 || p.outer.1 != s.outer.1 {
                 kinds.push("move");
             }
-            // WICG's own note is that `geometrychange` fires "as frequently as
-            // a scroll listener"; the official advice is to debounce, and our
-            // docs repeat it.
+            // `geometrychange` can fire as often as a scroll listener (WICG advises debouncing).
             if p.inner_width != s.inner_width
                 || p.scale != s.scale
                 || p.maximized != s.maximized
                 || p.fullscreen != s.fullscreen
                 || p.title_bar_height != s.title_bar_height
-                // Retiring the fallback titlebar hands the app the top strip:
-                // the titlebar area is genuinely new geometry.
+                // Retiring the fallback titlebar hands the app the top strip.
                 || p.fallback_titlebar != s.fallback_titlebar
-                // Showing/hiding the host cluster changes the rect's WIDTH,
-                // which is the whole reason `geometrychange` exists.
+                // The host cluster changes the rect's width.
                 || p.overlay.is_some() != s.overlay.is_some()
             {
                 kinds.push("geometrychange");
@@ -1974,10 +1578,7 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
         IN_DISPATCH.with(|f| f.set(false));
     }
 
-    // The env every `@media` condition and every live `MediaQueryList` is
-    // evaluated against. Published here rather than after the pump so a
-    // `matchMedia(...).matches` read from a `resize` handler already sees the
-    // new viewport.
+    // The env for every `@media` and live `MediaQueryList`, published before the pump so `matchMedia` in a `resize` handler sees the new viewport.
     keep_theme(window);
     let dark = effective_dark(window);
     let env_changed = vn_tree::set_env(css_env(&s, dark, cx.reduce_motion()));
@@ -1988,21 +1589,14 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
     }
 }
 
-/// `backdropchange`: the app's backdrop, or what the window can draw of it,
-/// moved since the last frame.
+/// `backdropchange`: the app's backdrop, or what the window can draw of it, moved.
 fn backdrop_moved(p: &Snapshot, s: &Snapshot) -> bool {
     p.backdrop != s.backdrop || p.effective_backdrop != s.effective_backdrop
 }
 
-/// Hands gpui `appWindow.backdrop` when it is not the one gpui last got.
-/// `force` re-applies it regardless, as an explicit `appWindow.backdrop = …`
-/// always did.
+/// Hands gpui `appWindow.backdrop` if it differs from the last one given; `force` re-applies regardless.
 ///
-/// Fullscreen does not change what gpui is given: its macOS backend keeps the
-/// blur in native fullscreen by drawing the desktop picture under it, and says
-/// when it cannot ([`effective_backdrop`]). Swapping the material out for
-/// `none` there, as this once did, left the window opaque black under a page
-/// that stays transparent.
+/// Fullscreen does not change what gpui is given: its macOS backend keeps the blur by drawing the desktop picture under it ([`effective_backdrop`]).
 fn sync_backdrop(window: &mut Window, force: bool) {
     let want = LIVE.with(|l| l.borrow().backdrop);
     if !force && APPLIED_BACKDROP.with(|a| a.get()) == Some(want) {
@@ -2010,15 +1604,11 @@ fn sync_backdrop(window: &mut Window, force: bool) {
     }
     APPLIED_BACKDROP.with(|a| a.set(Some(want)));
     window.set_background_appearance(want.to_gpui());
-    // The renderer reads the appearance when it draws: `none` clears to
-    // opaque and every material to transparent, and text drops subpixel AA
-    // over a material. Until a frame is drawn, the window keeps the last one,
-    // so `material → none` left it see-through.
+    // The renderer reads the appearance when it draws; until a frame is drawn the window keeps the last one, so `material -> none` would stay see-through.
     window.refresh();
 }
 
-/// Retires the fallback titlebar the first frame the app paints a drag region
-/// of its own. Called after `build_root` has run, i.e. from the frame pump.
+/// Retires the fallback titlebar the first frame the app paints its own drag region; called from the frame pump.
 pub fn note_painted_frame() {
     if !vn_tree::painted_drag_region() {
         return;
@@ -2033,15 +1623,13 @@ pub fn note_painted_frame() {
     });
     if retired {
         let msg = "[window] the app painted a `window-drag: move` region — retiring the built-in \
-                   fallback titlebar (docs/WINDOWING.md §4.2 mode 2)";
+                   fallback titlebar";
         eprintln!("{msg}");
         vn_tree::log::record("window", msg);
     }
 }
 
-/// Fires `DOMContentLoaded` + `load` once, after the app bundle has evaluated.
-/// Several reused browser components wait on these; redjs has exported the hook
-/// since day one and nothing ever called it.
+/// Fires `DOMContentLoaded` + `load` once the app bundle has evaluated; reused browser components wait on them.
 pub fn content_loaded() {
     if BOOTED.with(|b| b.replace(true)) {
         return;
@@ -2053,13 +1641,11 @@ pub fn content_loaded() {
 /// `beforeunload` veto when `kind` is `close-requested`.
 fn notify(kind: &str, state_json: &str) -> bool {
     let f = OBSERVER.with(|o| o.get());
-    // No JS after a caught native panic (I9): nothing can veto a close, so
-    // the window's own X still closes an app whose crash dialog is gone.
+    // No JS after a caught native panic: nothing can veto a close, so the window's own X still works.
     if f == 0 || vn_runtime::bridge::poisoned() {
         return true;
     }
-    // `close-requested` comes from gpui's should-close callback, outside any
-    // publication: an owed checkpoint runs first (vn_runtime::bridge::owe_drain).
+    // `close-requested` comes from gpui's should-close callback, outside any publication: run an owed checkpoint first (vn_runtime::bridge::owe_drain).
     vn_runtime::bridge::settle_owed_drain();
     JsRuntime::with(|rt| {
         let args = [rt.ctx().string(kind), rt.ctx().string(state_json)];
@@ -2073,30 +1659,17 @@ fn notify(kind: &str, state_json: &str) -> bool {
             }
             Err(_) => true,
         };
-        // Vue schedules its patch flush on microtasks; drain now so a handler's
-        // DOM mutations land inside this frame's wave, exactly as an input
-        // event's do.
+        // Drain Vue's microtask flush so DOM mutations land in this frame's wave.
         rt.ctx().drain_microtasks();
         out
     })
 }
 
-/// `beforeunload` — registered on the `open_window` builder.
-///
-/// `Window::on_window_should_close` is a SYNCHRONOUS boolean, which is
-/// precisely `beforeunload`'s shape (the web event is synchronous too). v1
-/// shows no UA confirmation dialog: `Window::prompt` returns a
-/// `oneshot::Receiver`, so bridging it into a sync bool means either a visible
-/// "refused to close, then closed" flicker or a modal Win32 `MessageBox` off
-/// the gpui path (D-27). We veto and hand the app `close-requested` instead.
+/// `beforeunload`, registered on the `open_window` builder. `Window::on_window_should_close` is a synchronous bool, matching the web event. No UA confirmation is shown (`Window::prompt` is async); the close is vetoed and the app gets `close-requested`.
 pub fn should_close() -> bool {
     let json = SNAPSHOT.with(|s| snapshot_json(&s.borrow()));
     notify("close-requested", &json)
 }
-
-// ---------------------------------------------------------------------------
-// mutators — queued rather than thrown when no Commit phase is live
-// ---------------------------------------------------------------------------
 
 enum Op {
     Title(String),
@@ -2115,37 +1688,14 @@ enum Op {
     StartDragging,
 }
 
-/// Re-reads the window into gpui's own caches after a SYNCHRONOUS `SetWindowPos`.
+/// Re-reads the window into gpui's caches after a synchronous `SetWindowPos`.
 ///
-/// This is the fix for the "`setBounds({width, height})` resizes without a
-/// relayout" bug. `SetWindowPos` **sends** `WM_SIZE`/`WM_MOVE` rather than
-/// posting them, so the fork's `handle_size_msg` runs re-entrantly, inside this
-/// frame's `Phase::Commit` — i.e. while `App` is already mutably borrowed.
-/// gpui's `on_resize` callback is
-/// `handle.update(&mut cx, |_, window, cx| window.bounds_changed(cx)).log_err()`:
-/// that `update` cannot take the borrow, fails, and **`log_err` swallows it**.
-/// The platform layer's `logical_size` is updated (so `Window::bounds()` and
-/// `GetWindowRect` both look right), but `Window::viewport_size` — what
-/// `innerWidth`, the cascade env and taffy's root box all read — keeps last
-/// frame's number forever.
-///
-/// `maximize()` is unaffected because `Window::zoom_window` goes through
-/// `ShowWindowAsync`, and `setContentBounds` because `PlatformWindow::resize`
-/// spawns its `SetWindowPos` on the executor: in both cases `WM_SIZE` arrives
-/// later, on the message loop, with nothing borrowed.
-///
-/// So we do by hand exactly what the swallowed callback would have done. The
-/// platform state is already correct by the time `SetWindowPos` returns, which
-/// is what makes this a re-read rather than a guess.
+/// `SetWindowPos` sends `WM_SIZE`/`WM_MOVE` re-entrantly inside `Phase::Commit`, where `App` is already borrowed, so gpui's `on_resize` `update` fails and `log_err` swallows it; `Window::viewport_size` (read by `innerWidth`, the cascade env and taffy) would then stay stale. This does what the swallowed callback would have done. `maximize()` and `setContentBounds` are unaffected: their `WM_SIZE` arrives later on the message loop.
 fn resync_bounds(window: &mut Window, cx: &mut gpui::App) {
     window.bounds_changed(cx);
 }
 
-/// Closes the app as `appWindow.close()` does (`why` names it in the
-/// `[shutdown]` line): the windows go now, the pop-outs with the primary
-/// (docs/MULTIWINDOW.md §7.8), and the primary is removed (after a file
-/// dialog it owns has closed, dialogs.rs), so gpui quits through its quit
-/// hooks. Also the crash dialog's Restart and Close (src/crash_window.rs).
+/// Closes the app as `appWindow.close()` does (`why` names it in the `[shutdown]` line): windows close now, pop-outs with the primary, and the primary is removed after any file dialog it owns closes (dialogs.rs). Also used by the crash dialog (src/crash_window.rs).
 pub(crate) fn close_primary(why: &'static str, window: &mut Window, cx: &mut gpui::App) {
     crate::shutdown::begin(why);
     if crate::popout::count() > 0 {
@@ -2167,9 +1717,7 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
             LIVE.with(|l| l.borrow_mut().title = t);
         }
         Op::Minimize => window.minimize_window(),
-        // `Window::zoom_window` maps to `ShowWindowAsync(SW_MAXIMIZE)` and does
-        // NOT toggle, so the two verbs stay distinct here (fork item F-07 makes
-        // it a toggle upstream, matching macOS).
+        // `Window::zoom_window` is `ShowWindowAsync(SW_MAXIMIZE)` and does not toggle, so the verbs stay distinct.
         Op::Maximize => window.zoom_window(),
         Op::Unmaximize => win::restore(),
         Op::ToggleMaximize => {
@@ -2179,22 +1727,15 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
                 window.zoom_window();
             }
         }
-        // `appWindow` is the primary window, so this closes the app: the
-        // windows go now and the teardown runs behind them (src/shutdown.rs).
-        // Its pop-outs go with it, as on a WM_CLOSE (docs/MULTIWINDOW.md
-        // §7.8): left open, they would keep the app running with no window
-        // on screen. Removed after a file dialog this window owns has closed
-        // (dialogs.rs).
+        // `appWindow` is the primary window, so this closes the app (src/shutdown.rs); pop-outs go with it, else they would keep the app running windowless. Removed after a file dialog it owns has closed (dialogs.rs).
         Op::Close => close_primary("close()", window, cx),
-        // `toggle_fullscreen` is a TOGGLE, so guard every call with the live
-        // state or a double `setFullscreen(true)` leaves fullscreen.
+        // `toggle_fullscreen` toggles, so guard with the live state.
         Op::Fullscreen(on) => {
             if window.is_fullscreen() != on {
                 window.toggle_fullscreen();
             }
         }
-        // A test host neither raises nor flashes its taskbar button
-        // (src/quiet.rs).
+        // A test host neither raises nor flashes the taskbar (src/quiet.rs).
         Op::Activate(_) if crate::quiet::never_focus() => {}
         Op::Activate(raise) => {
             if raise {
@@ -2216,8 +1757,7 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
             win::set_always_on_top(on);
             LIVE.with(|l| l.borrow_mut().always_on_top = on);
         }
-        // Kept even while fullscreen suspends it: leaving fullscreen draws the
-        // backdrop the app asked for last.
+        // Kept while fullscreen suspends it: leaving draws the last backdrop asked for.
         Op::SetBackdrop(b) => {
             LIVE.with(|l| l.borrow_mut().backdrop = b);
             sync_backdrop(window, true);
@@ -2232,12 +1772,7 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
     }
 }
 
-/// `resizeTo`/`moveTo`/`setBounds` — best-effort, non-throwing, clamped to the
-/// display's `visible_bounds()`.
-///
-/// The clamp is the spec's own "optionally, restrain" latitude, and it stops an
-/// app parking itself behind the taskbar (D-05). A refused call is a silent
-/// no-op, as in every UA.
+/// `resizeTo`/`moveTo`/`setBounds`: best-effort, non-throwing, clamped to the display's `visible_bounds()` so an app cannot park behind the taskbar.
 fn apply_bounds(
     window: &mut Window,
     cx: &mut gpui::App,
@@ -2260,9 +1795,7 @@ fn apply_bounds(
             nh = nh.min(ah);
         }
         if content {
-            // `Window::resize` takes a CONTENT size and expands it through
-            // `calculate_window_rect` before `SetWindowPos` — which is exactly
-            // `resizeTo`'s "resize the viewport" wording, so no divergence.
+            // `Window::resize` takes a content size, as `resizeTo` means.
             window.resize(gpui::size(gpui::px(nw), gpui::px(nh)));
         } else {
             win::set_outer_size(nw * s.scale, nh * s.scale);
@@ -2271,9 +1804,7 @@ fn apply_bounds(
     }
     if x.is_some() || y.is_some() {
         let (ox, oy, ow, oh) = s.outer;
-        // A partial `setBounds({x})` moves the OUTER origin either way: the
-        // asymmetry (`resizeTo` sizes the viewport, `moveTo` places the window)
-        // is the CSSOM View spec's, not ours.
+        // A partial `setBounds({x})` moves the outer origin; `resizeTo` sizes the viewport, `moveTo` places the window (CSSOM View).
         let mut nx = x.unwrap_or(ox);
         let mut ny = y.unwrap_or(oy);
         if content {
@@ -2287,17 +1818,13 @@ fn apply_bounds(
         win::set_position(nx * s.scale, ny * s.scale);
         moved_synchronously = true;
     }
-    // `Window::resize` (the `content` branch above) spawns its `SetWindowPos`
-    // on the executor, so its `WM_SIZE` lands outside this borrow and gpui
-    // refreshes itself; the two Win32 escape hatches send theirs re-entrantly
-    // and need the re-read done by hand. See [`resync_bounds`].
+    // The `content` branch's `Window::resize` spawns its `SetWindowPos`; the Win32 hatches send `WM_SIZE` re-entrantly and need [`resync_bounds`].
     if moved_synchronously {
         resync_bounds(window, cx);
     }
 }
 
-/// Applies now if a `Phase::Commit` is live and we are not inside the dispatch
-/// step; otherwise queues. Never throws (D-29).
+/// Applies now if a `Phase::Commit` is live and not inside dispatch; otherwise queues. Never throws.
 fn submit(op: Op) {
     if IN_DISPATCH.with(|f| f.get()) {
         PENDING.with(|p| p.borrow_mut().push_back(op));
@@ -2309,9 +1836,7 @@ fn submit(op: Op) {
     }
 }
 
-/// Element fullscreen explicitly addresses the primary window, even when
-/// JavaScript was entered from a pop-out's input listener. Its operation is
-/// consumed by the primary pump rather than applied to the published window.
+/// Element fullscreen addresses the primary window even when JS was entered from a pop-out; the primary pump consumes the op.
 pub(crate) fn element_fullscreen(on: Option<bool>) -> bool {
     let current = SNAPSHOT.with(|snapshot| snapshot.borrow().fullscreen);
     if let Some(on) = on {
@@ -2344,9 +1869,7 @@ pub(crate) fn request_activate() {
     submit(Op::Activate(true));
 }
 
-/// Set the first time the primary window is raised (`appWindow.show()`, a
-/// tray click through `Handle::show`, a second launch): after it, an initially
-/// hidden window is no longer hidden for want of a way to show it.
+/// Set once the primary window is first raised (`appWindow.show()`, tray click, second launch); after that a hidden start is no longer unreachable.
 static REVEALED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Has anything shown the primary window since a hidden start?
@@ -2354,9 +1877,7 @@ pub(crate) fn revealed() -> bool {
     REVEALED.load(std::sync::atomic::Ordering::Acquire)
 }
 
-/// `submit` needs the op twice (apply it, or queue it) and `Op` is not `Clone`
-/// because `Op::Title` owns a `String`. Rather than clone every op on the hot
-/// path, take it by reference and rebuild — the enum is tiny.
+/// `Op` is not `Clone` (`Op::Title` owns a `String`); take by reference and rebuild.
 fn op_take(op: &Op) -> Op {
     match op {
         Op::Title(t) => Op::Title(t.clone()),
@@ -2391,10 +1912,6 @@ fn drain_pending(window: &mut Window, cx: &mut gpui::App) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// host functions (docs/WINDOWING.md §5.4)
-// ---------------------------------------------------------------------------
-
 fn arg_f32(v: Value) -> Option<f32> {
     let n = v.as_number()?;
     n.is_finite().then_some(n as f32)
@@ -2405,19 +1922,7 @@ fn arg_bool(v: Value) -> bool {
 }
 
 host_fn!(fn vn_window_state(_g, _args) {
-    // The exact-read escape hatch AND the boot seed.
-    //
-    // Re-reads the window when a Commit phase is live, which is what makes
-    // `appWindow.isMaximized()` exact IMMEDIATELY after `maximize()` — the
-    // state verbs go through live Win32 queries (`IsZoomed`/`IsIconic`), so
-    // there is no reason to make a caller wait a frame for them. Geometry
-    // still lags by one frame, because gpui's bounds cache is refreshed from
-    // `WM_MOVE`/`WM_SIZE` (docs/WINDOWING.md §3.1) — and the CSSOM View spec
-    // tells authors to expect exactly that from `moveTo`.
-    //
-    // Outside a Commit phase (module scope, a timer that outran the pump) it
-    // falls back to the published snapshot rather than throwing: nothing on
-    // this surface may throw the phase error.
+    // The exact-read escape hatch and boot seed: re-reads the window under a live Commit so state verbs (`IsZoomed`/`IsIconic`) are exact right after `maximize()`; geometry still lags a frame. Outside a Commit it falls back to the published snapshot rather than throwing.
     if let Some(s) = with_commit(|window, cx| snapshot(window, cx)) {
         SNAPSHOT.with(|c| *c.borrow_mut() = s);
     }
@@ -2439,8 +1944,7 @@ host_fn!(fn vn_window_set_title(g, args) {
 });
 
 host_fn!(fn vn_window_verb(g, args) {
-    // One host fn for the arity-0 verbs: crossing the boundary costs ~3 ns, but
-    // a global per verb costs a name in every app's scope forever.
+    // One host fn for the arity-0 verbs: a global per verb costs a name in every app's scope.
     let verb = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     match verb.as_str() {
         "minimize" => submit(Op::Minimize),
@@ -2450,8 +1954,7 @@ host_fn!(fn vn_window_verb(g, args) {
         "close" => submit(Op::Close),
         "center" => submit(Op::Center),
         "startDragging" => submit(Op::StartDragging),
-        // Shows and raises the window, including the first show of one that
-        // started hidden: what a tray icon's click does.
+        // Shows and raises, including the first show of a hidden start (a tray click).
         "show" => request_activate(),
         other => advise(&format!("unknown appWindow verb {other:?} (host protocol mismatch)")),
     }
@@ -2519,13 +2022,7 @@ host_fn!(fn vn_window_set_theme(g, args) {
 });
 
 host_fn!(fn vn_window_set_overlay(g, args) {
-    // The host half of `setTitleBarOverlay({ height, color, symbolColor })`.
-    //
-    // `height` alone (arg 1 absent) keeps whatever cluster state is live, which
-    // is what `defineWindow({ titleBarHeight })` means. Passing an explicit
-    // `false` retires the cluster; passing an object installs or updates it.
-    // Colours arrive as `#rrggbb` strings, so the parser is shared with the
-    // config path rather than duplicated in JS.
+    // Host half of `setTitleBarOverlay({ height, color, symbolColor })`: `height` alone (arg 1 absent) keeps the live cluster, `false` retires it, an object installs or updates it. Colours arrive as `#rrggbb` strings, parsed by the config path's parser.
     if let Some(h) = arg_f32(args.arg(0)) {
         LIVE.with(|l| l.borrow_mut().title_bar_height = h.max(0.0));
     }
@@ -2568,11 +2065,9 @@ host_fn!(fn vn_window_set_overlay(g, args) {
 
 const A27: &str = "`setTitleBarOverlay()` does nothing under `titleBarStyle: \"default\"` — the OS \
                    draws the caption buttons and owns their colours. The overlay is for \
-                   custom-chrome windows (docs/WINDOWING.md §4.2 mode 1).";
+                   custom-chrome windows.";
 
-/// The host-drawn cluster the Shell paints, or `None`. Read once per frame by
-/// `Shell::render_body` — never drawn in fullscreen (drag regions and caption
-/// buttons are both inert there) or while the window is minimised.
+/// The host-drawn cluster the Shell paints, or `None`; never in fullscreen or while minimised (both inert).
 pub fn overlay() -> Option<(f32, Overlay)> {
     let s = SNAPSHOT.with(|s| s.borrow().clone());
     if s.fullscreen || s.minimized {
@@ -2582,9 +2077,7 @@ pub fn overlay() -> Option<(f32, Overlay)> {
 }
 
 host_fn!(fn vn_window_match_media(g, args) {
-    // The SAME evaluator the cascade runs, against the SAME env — which is the
-    // whole point: before this, `@media (max-width: 600px)` worked while
-    // `matchMedia("(max-width: 600px)")` answered false forever (D-09).
+    // The same evaluator and env as the cascade, so `matchMedia` agrees with `@media`.
     let query = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     let json = match vn_tree::match_media(&query) {
         Ok(m) => Json::obj(vec![("matches", Json::Bool(m))]),
@@ -2597,19 +2090,9 @@ host_fn!(fn vn_window_match_media(g, args) {
     JsRuntime::with(|rt| rt.ctx().string(&json)).0
 });
 
-// `__vn_window_hitboxes(windowId?)` — what the last frame of ONE window handed
-// gpui. Absent = the primary window, which is what it always meant.
-//
-// The window argument is phase 1's (docs/MULTIWINDOW.md §7.6): the hitbox list
-// describes the chrome of the window that emitted it, and a `<VnWindow
-// chrome="hidden">` draws its own caption. With one global list a pop-out's
-// build CLEARED the primary window's, which is both a wrong answer here and a
-// live bug in the fallback-titlebar retire rule.
+// `__vn_window_hitboxes(windowId?)`: what the last frame of one window handed gpui; absent = the primary. Per window so a pop-out's build does not clear the primary's list.
 host_fn!(fn vn_window_hitboxes(_g, args) {
-    // The eval-reachable debug hook the acceptance transcript needs: a
-    // synthesised `ctl.ts click` cannot exercise `WM_NCHITTEST`, so the only
-    // way to prove a drag region was emitted is to read back what the last
-    // painted frame handed gpui (docs/WINDOWING.md §13).
+    // Debug hook: a synthesised click cannot exercise `WM_NCHITTEST`, so read back the hitboxes the last painted frame emitted.
     let key = match args.arg(0).as_number() {
         Some(n) if n > 0.0 => n as u64,
         _ => vn_tree::windows::primary(),
@@ -2637,9 +2120,7 @@ host_fn!(fn vn_window_hitboxes(_g, args) {
 });
 
 host_fn!(fn vn_window_cursor(_g, _args) {
-    // `screenX`/`screenY` on a synthesised mouse event have no source in the
-    // content dispatch path; this is the one place the real cursor position is
-    // readable, and it is what `appWindow.startDragging()` docs point at.
+    // Synthesised mouse events carry no `screenX`/`screenY`; this reads the real cursor position (for `appWindow.startDragging()`).
     let json = match win::cursor_pos() {
         Some((x, y)) => {
             let scale = SNAPSHOT.with(|s| s.borrow().scale).max(0.01);
@@ -2679,8 +2160,7 @@ pub fn install(rt: &JsRuntime) {
 mod tests {
     use super::*;
 
-    /// `appWindow.theme` takes `nativeTheme.themeSource`'s three spellings and
-    /// nothing else; `system` is the OS's answer, the other two override it.
+    /// Takes `nativeTheme.themeSource`'s three spellings only.
     #[test]
     fn the_theme_takes_electrons_spellings_and_forces_only_when_asked() {
         for t in [Theme::System, Theme::Light, Theme::Dark] {
@@ -2692,11 +2172,7 @@ mod tests {
         assert!(!Theme::Light.is_dark(true) && Theme::Dark.is_dark(false));
     }
 
-    /// `acrylic` is DWM's own acrylic wherever DWM draws system backdrops, as
-    /// Electron's `backgroundMaterial: 'acrylic'` is, and says nothing there.
-    /// Before 22621 it is the accent-policy blur, and that is advised; Mica
-    /// falls back to it, advised too. `blur` is the same material, advised
-    /// wherever it is asked for.
+    /// `acrylic` is silent where DWM draws it; before 22621 it is the accent-policy blur and advised, as are Mica (falling back to it) and `blur`.
     #[test]
     fn acrylic_is_the_system_material_and_only_its_fallback_is_advised() {
         assert_eq!(Backdrop::from_str("acrylic"), Some((Backdrop::Acrylic, None)));
@@ -2718,32 +2194,27 @@ mod tests {
         assert_eq!(resolve_backdrop(Backdrop::MicaAlt, false), (Backdrop::Acrylic, Some(A20B)));
         assert_eq!(resolve_backdrop(Backdrop::None, false), (Backdrop::None, None));
 
-        // The config path says nothing about `acrylic` on this machine's
-        // Windows when DWM draws it, and the value survives the load.
+        // Silent about `acrylic` where DWM draws it.
         let cfg = load_config(Some(r#"{"backdrop":"acrylic"}"#.to_string()));
         assert_eq!(cfg.backdrop, Backdrop::Acrylic);
         let advised = ADVISED.with(|s| s.borrow().contains(A20C));
         assert_eq!(advised, cfg!(target_os = "windows") && !has_system_backdrop());
     }
 
-    /// `titleBarOverlay.color` takes CSS hex, which is what Electron's option
-    /// takes. `0xAARRGGBB` is what `gpui::rgba` reads.
+    /// `titleBarOverlay.color` takes CSS hex; `0xAARRGGBB` is what `gpui::rgba` reads.
     #[test]
     fn hex_colours_parse_in_all_three_lengths() {
         assert_eq!(parse_color("#fff"), Some(0xffff_ffff));
         assert_eq!(parse_color("#202020"), Some(0xff20_2020));
         assert_eq!(parse_color("#20202080"), Some(0x8020_2020));
         assert_eq!(parse_color("  #c42b1c  "), Some(0xffc4_2b1c));
-        // Not hex, not a colour: refused rather than silently painted black.
+        // Not hex: refused rather than painted black.
         assert_eq!(parse_color("rgb(1,2,3)"), None);
         assert_eq!(parse_color("#12345"), None);
         assert_eq!(parse_color("#zzz"), None);
     }
 
-    /// The WCO rect is zero — and `visible` false — in every mode where the
-    /// titlebar strip does NOT belong to app content. The last of those cases
-    /// is the one the merge report filed: while the host's own fallback
-    /// titlebar is still up, the strip is the host's.
+    /// The WCO rect is zero and `visible` false whenever the strip is not app content's, including while the host's fallback titlebar is up.
     #[test]
     fn the_titlebar_rect_is_only_non_zero_when_the_strip_belongs_to_content() {
         let base = Snapshot {
@@ -2770,15 +2241,12 @@ mod tests {
         let covered = Snapshot { occluded: true, ..base.clone() };
         assert!(hidden(&covered), "a window other windows cover is a hidden page");
 
-        // A host-drawn cluster takes its width off the RIGHT on Windows, so the
-        // content area keeps x = 0 and loses width (3 x 46 px).
+        // A host cluster takes its width off the right (3 x 46 px).
         let overlaid = Snapshot { overlay: Some(Overlay::default()), ..base.clone() };
         assert_eq!(titlebar_area(&overlaid), (true, (0.0, 0.0, 862.0, 32.0)));
     }
 
-    /// A system material reads as drawn unless gpui stands in for it (a macOS
-    /// fullscreen window without a desktop picture to put under the glass);
-    /// fullscreen alone no longer suspends it, on either OS.
+    /// A system material reads as drawn unless gpui stands in for it (macOS fullscreen without a desktop picture).
     #[test]
     fn a_system_backdrop_is_suspended_only_while_gpui_stands_in_for_it() {
         for b in [Backdrop::Mica, Backdrop::MicaAlt, Backdrop::Acrylic] {
@@ -2792,9 +2260,7 @@ mod tests {
         }
     }
 
-    /// Losing and regaining the desktop picture, and an explicit backdrop
-    /// change, each fire `backdropchange` once; a frame with neither fires
-    /// nothing — entering fullscreen with the picture shown included.
+    /// Losing and regaining the desktop picture, and an explicit backdrop change, each fire `backdropchange` once; entering fullscreen with the picture shown fires nothing.
     #[test]
     fn backdropchange_follows_the_backdrop_and_what_the_window_draws() {
         let windowed = Snapshot { backdrop: Backdrop::Acrylic, effective_backdrop: Backdrop::Acrylic, ..Snapshot::default() };
@@ -2846,9 +2312,7 @@ mod tests {
         assert_eq!(visibility_delta(Some(false), &unfocused), None, "focus is independent of visibility");
     }
 
-    /// The rect the CSS side resolves `env(titlebar-area-*)` from is the SAME
-    /// one the JS getter reports — one function, two consumers, so they cannot
-    /// drift apart.
+    /// The rect behind `env(titlebar-area-*)` is the same one the JS getter reports.
     #[test]
     fn the_css_env_carries_the_same_titlebar_rect() {
         let s = Snapshot {
@@ -2865,9 +2329,7 @@ mod tests {
         assert_eq!(env.safe_area_insets, [0.0; 4]);
     }
 
-    /// `titleBarStyle: "default"` no longer advises and falls back (fork item
-    /// F-03 landed), and it forces the host's own fallback strip off — two
-    /// titlebars stacked is not a mode.
+    /// `titleBarStyle: "default"` applies, and forces the host's fallback strip off.
     #[test]
     fn os_chrome_is_a_real_mode_and_refuses_a_second_titlebar() {
         let cfg = load_config(Some(
@@ -2877,16 +2339,7 @@ mod tests {
         assert!(!cfg.title_bar_fallback);
     }
 
-    /// `"titleBarFallback": false` is the one-line answer to windowing-2 §8.11:
-    /// an app that declares its own titlebar and sizes it purely from
-    /// `env(titlebar-area-height)` sees 0 for the ONE frame before the host's
-    /// fallback strip retires, because the strip legitimately belongs to the
-    /// host until then. Turning the fallback off means it never belongs to the
-    /// host, so the rect is real from the first frame.
-    ///
-    /// This walks the whole chain — JSON → `Config` → the boot `Snapshot` →
-    /// `env(titlebar-area-*)` — because every link in it already existed and
-    /// what was never checked is that they agree.
+    /// `"titleBarFallback": false` makes the titlebar rect real from the first frame, instead of 0 until the fallback strip retires. Walks JSON, `Config`, the boot `Snapshot`, then `env(titlebar-area-*)`.
     #[test]
     fn title_bar_fallback_false_gives_a_real_env_rect_on_the_first_frame() {
         let cfg = load_config(Some(
@@ -2895,8 +2348,7 @@ mod tests {
         ));
         assert!(!cfg.title_bar_fallback);
 
-        // The boot snapshot, as `init` builds it: `fallback_titlebar` is the
-        // config value verbatim, and nothing has painted yet.
+        // The boot snapshot as `init` builds it, before anything paints.
         let boot = Snapshot {
             inner_width: 980.0,
             inner_height: 720.0,
@@ -2907,9 +2359,7 @@ mod tests {
         assert_eq!(titlebar_area(&boot), (true, (0.0, 0.0, 980.0, 36.0)));
         assert_eq!(css_env(&boot, false, false).titlebar_area, [0.0, 0.0, 980.0, 36.0]);
 
-        // …and the default (fallback ON) is the zero rect until it retires,
-        // which is the behaviour the report described and is still correct:
-        // the strip is the host's, and saying otherwise would be the lie.
+        // ...and the default (fallback ON) is the zero rect until it retires.
         let default_cfg = load_config(Some(
             r#"{"titleBarStyle":"hidden","titleBarHeight":36}"#.to_string(),
         ));

@@ -16,12 +16,7 @@ const WS_ROOT = resolve(PKG_DIR, "../..");
 const FIXTURES = join(HERE, "fixtures");
 
 const tmpDirs = [];
-/**
- * Every `bun build.ts --watch` this file starts. A test's own `finally` does not
- * run when it times out or the run ends first, so the kill is also made here,
- * at the end of the file and on the runner's exit. A runner killed outright runs
- * neither: `VN_OWNER_PID` makes the watcher exit by itself then (build.ts).
- */
+/** Every `bun build.ts --watch` this file starts, killed at the end and on runner exit (a test's `finally` does not run on timeout). A killed runner is covered by `VN_OWNER_PID` (build.ts). */
 const watchers = [];
 function watchBuild(entry, dist) {
   const proc = Bun.spawn(["bun", "build.ts", entry, dist, "--watch"], {
@@ -86,12 +81,10 @@ describe("manifest", () => {
   const LIB = id("graph-app", "lib/index.ts");
 
   test("keeps the fields the Rust host reads", () => {
-    // crates/vn-app/src/dev.rs read_manifest(): vendorRev, entry, modules
     expect(typeof out.manifest.rev).toBe("number");
     expect(typeof out.manifest.vendorRev).toBe("number");
     expect(out.manifest.entry).toBe(ENTRY);
     expect(out.manifest.modules.slice().sort()).toEqual([APP, COUNTER, LIB, ENTRY, UTIL].sort());
-    // poll_dev_changes(): rev, vendorRev, changed[].id — unchanged shape
     expect(Object.keys(out.changes).sort()).toEqual(["changed", "rev", "vendorRev"]);
     expect(out.changes.changed).toEqual([]);
   });
@@ -110,7 +103,6 @@ describe("manifest", () => {
       expect(list).not.toContain("vue");
       expect(list).not.toContain("vue-native");
     }
-    // ...even though the modules really do require them
     expect(out.script(ENTRY)).toContain('require("vue-native")');
     expect(out.script(COUNTER)).toContain('require("vue")');
   });
@@ -142,13 +134,8 @@ describe("app-owned framework versions", () => {
   });
 });
 
-// This repo writes no JavaScript any more — the fixtures above are `.ts`, like
-// everything else. An APP is not bound by that rule: `SOURCE_EXT` and
-// `CANDIDATE_EXTS` both still list `.js`, `vn-test` resolves `apps/<x>/src/
-// main.js` by default, and someone porting a Vite app will hand us a tree full
-// of it. Converting the fixtures therefore took the only coverage that path
-// had, so it is rebuilt here — as a temporary tree rather than a checked-in
-// one, which is what keeps "no `.js` in this repository" literally true.
+// An app is not bound by the repo's no-`.js` rule: `SOURCE_EXT` and `CANDIDATE_EXTS` still list `.js`, so a ported
+// Vite app may bring a tree of it. Rebuilt here as a temporary tree.
 describe("a JavaScript app still builds", () => {
   const dir = mkdtempSync(join(FIXTURES, "js-app-"));
   tmpDirs.push(dir);
@@ -156,8 +143,6 @@ describe("a JavaScript app still builds", () => {
 
   test("resolves an extensionless import to a .js file and graphs it", () => {
     mkdirSync(join(dir, "src"), { recursive: true });
-    // No `.vue` and no type annotations: plain ES2015, exactly what a ported
-    // Vite entry looks like before anyone touches it.
     writeFileSync(
       join(dir, "src/util.js"),
       'export const greet = (who) => "hello " + who;\n',
@@ -180,18 +165,13 @@ describe("a JavaScript app still builds", () => {
     const manifest = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8"));
     expect(manifest.entry).toBe(`${rel}/src/main.js`);
     expect(manifest.modules).toContain(`${rel}/src/util.js`);
-    // `./util` -> `util.js`: the `.js` candidate is still ahead of `.ts` in
-    // `CANDIDATE_EXTS`, and both the builder and `loader.ts` must agree on it.
+    // `./util` -> `util.js`: `.js` is still ahead of `.ts` in `CANDIDATE_EXTS`, and the builder and `loader.ts` must agree.
     expect(manifest.deps[`${rel}/src/main.js`]).toEqual([`${rel}/src/util.js`]);
   });
 });
 
-// `import.meta` in a PROD bundle. The bundle is a classic script (an IIFE the
-// host evaluates), where `import.meta` is a SyntaxError — and Bun leaves it
-// verbatim in iife output. build.ts has defined it since m20; prod.ts did not,
-// so the most common line in a Vite app (`import.meta.env.MODE`) worked in dev
-// and killed the whole shipped bundle (research/reports/m25/packaging-design.md
-// §1). Fixed by the same define block with production values.
+// `import.meta` in a prod bundle: a classic script (IIFE), where it is a SyntaxError, and Bun leaves it verbatim in
+// iife output; both builders define it.
 describe("import.meta in a prod bundle", () => {
   const dir = mkdtempSync(join(FIXTURES, "meta-app-"));
   tmpDirs.push(dir);
@@ -202,7 +182,6 @@ describe("import.meta in a prod bundle", () => {
       join(dir, "src/main.ts"),
       "const { MODE } = import.meta.env;\n" +
         "const parts = [import.meta.env.MODE, import.meta.env.PROD, import.meta.env.DEV, MODE, import.meta.url, typeof import.meta.hot];\n" +
-        // A library error message that merely MENTIONS it must not trip the check.
         'const note = "import.meta is only valid inside modules";\n' +
         "(globalThis as any).__metaProbe = parts.join('|') + '|' + note.length;\n",
     );
@@ -211,15 +190,12 @@ describe("import.meta in a prod bundle", () => {
     const proc = Bun.spawnSync(["bun", "prod.ts", join(dir, "src/main.ts"), out], { cwd: PKG_DIR });
     if (proc.exitCode !== 0) throw new Error(`prod.ts exited ${proc.exitCode}\n${proc.stderr.toString()}`);
     const bundle = readFileSync(out, "utf8");
-    // A classic script, run the way the host runs one.
     new Function(bundle)();
     expect((globalThis as any).__metaProbe).toBe("production|true|false|production|vn://app.prod.js|undefined|40");
   });
 
   test("the dev builder substitutes an OBJECT, not a string, for import.meta.env", () => {
-    // Bun inserts a define value that is not JSON as a string literal, which is
-    // what `({MODE:"development",…})` was: `const { MODE } = import.meta.env`
-    // destructured a string. Both builders now pass JSON.
+    // Bun inserts a non-JSON define value as a string literal, so both builders pass JSON.
     const dist = mkdtempSync(join(tmpdir(), "vn-build-meta-"));
     tmpDirs.push(dist);
     const proc = Bun.spawnSync(["bun", "build.ts", join(dir, "src/main.ts"), dist], { cwd: PKG_DIR });
@@ -294,13 +270,8 @@ describe("style-only edits", () => {
   }, 30_000);
 });
 
-// ---------------------------------------------------------------------------
-// CSS entries: `import "./theme.css"` from a JS module
-// ---------------------------------------------------------------------------
-// A Vite app's global stylesheet is imported from its entry module. Before this
-// the .css file was emitted verbatim into a JS module body and died at eval
-// with `SyntaxError: Invalid character: '@'` — and for a shadcn-shaped app that
-// stylesheet is where the whole palette lives.
+// CSS entries: `import "./theme.css"` from a JS module is emitted as a css-only module, not verbatim into a JS
+// body (a SyntaxError at eval).
 
 describe("css entry modules", () => {
   const CSS_ID = id("css-app", "theme.css");
@@ -310,7 +281,6 @@ describe("css entry modules", () => {
     const b = build("css-app");
     expect(b.manifest.modules).toContain(CSS_ID);
     const script = b.script(CSS_ID);
-    // Real CSS on the setCss transport…
     expect(script).toContain("__VN__.setCss");
     expect(script).toContain("--fixture-fg");
     // …and an EMPTY factory: importing a stylesheet is a side effect, not a
@@ -321,16 +291,13 @@ describe("css entry modules", () => {
   test("it is a graph edge of the module that imported it, not an npm package", () => {
     const b = build("css-app");
     expect(b.manifest.deps[MAIN]).toContain(CSS_ID);
-    // It must NOT have been mistaken for a bare specifier and bundled.
     expect(b.stderr).not.toContain("cannot resolve");
     expect(b.stderr).not.toContain("resolves to no built module");
   });
 
   test("prod.ts puts the same CSS in the same place", () => {
-    // The two builders must never disagree about what an app's stylesheet is:
-    // prod has no module transport, so the .css file goes through a Bun loader
-    // that empties the module and routes its CONTENT into the same `cssById`
-    // map a component `<style>` uses.
+    // Both builders must agree on what an app stylesheet is: prod has no module transport, so a Bun loader empties the
+    // module and routes its content into the same `cssById` map as a component `<style>`.
     const out = join(mkdtempSync(join(tmpdir(), "vn-prod-")), "app.prod.js");
     tmpDirs.push(dirname(out));
     const entry = join(FIXTURES, "css-app/src/main.ts");
@@ -341,8 +308,6 @@ ${proc.stderr.toString()}`);
     }
     const bundle = readFileSync(out, "utf8");
     expect(bundle).toContain("--fixture-fg");
-    // …and the stylesheet is a SIDE EFFECT: its module body is empty, so the
-    // `@` at the top of the file never reaches the JS parser.
     expect(bundle).not.toContain('.fixture-card { color');
     expect(proc.stdout.toString()).toContain("css entry");
   });
@@ -356,11 +321,8 @@ ${proc.stderr.toString()}`);
   });
 });
 
-// m26 client sweep #2. In a "type": "module" package (the Argon client is
-// one) Bun's CJS output imports with Node's rule, `__toESM(require(x), 1)`:
-// `default` became the whole exports object, so `createApp(App)` got
-// `{ __esModule, default }`. And `import()` was left as a native dynamic
-// import, which the host's classic scripts cannot run.
+// In a "type": "module" package Bun's CJS output uses Node's rule `__toESM(require(x), 1)`, making `default` the
+// whole exports object, and `import()` stays native, which classic scripts cannot run.
 describe('a "type": "module" app, in dev', () => {
   const out = build("esm-app");
   const MAIN = id("esm-app", "main.ts");
@@ -395,12 +357,10 @@ describe('a "type": "module" app, in dev', () => {
     expect(out.script(MAIN)).not.toMatch(/(?<![\w$.])import\(/);
     expect(out.manifest.deps[MAIN]).toContain(id("esm-app", "Lazy.vue"));
     const ns = await world().VN.require(MAIN).lazy();
-    // runtime-core's own test, verbatim.
     expect(!!(ns && (ns.__esModule || ns[Symbol.toStringTag] === "Module"))).toBe(true);
     expect(ns.default.name).toBe("LazyPane");
   });
 
-  // The blockers that kept apps/client from dev-building.
   const ALIAS = id("esm-app", "alias.ts");
   const UTIL = id("esm-app", "util.ts");
 
@@ -408,7 +368,6 @@ describe('a "type": "module" app, in dev', () => {
     expect(out.script(ALIAS)).toContain('require("./util.ts")');
     expect(out.script(ALIAS)).not.toContain("@/");
     expect(out.manifest.deps[ALIAS]).toEqual([UTIL]);
-    // Not built as an npm package (a second copy, or a failed build).
     expect(out.manifest.modules.some((m) => m.startsWith("@/"))).toBe(false);
     expect(world().VN.require(MAIN).sameInstance).toBe(true);
   });
@@ -433,11 +392,9 @@ describe('a "type": "module" app, in dev', () => {
   });
 });
 
-// The Argon client in dev: `@argon/glue` registered its formatters in a copy of
-// `@argon-chat/ion.webcore` inlined into its own bundle, and the app read the
-// standalone one ("Formatter not found"); each `@argon/ui/*` provided a context
-// from its own reka-ui. A package entry is one module, keyed on the directory
-// it resolves to. The packages are written at test time (no .js is checked in).
+// Shared package entries: a package's own npm imports are separate modules, not inlined copies (a duplicated
+// reka-ui or ion.webcore breaks injection and registries). An entry is one module keyed on its resolved directory.
+// Packages are written at test time.
 describe("build.ts (dev): npm packages share the packages they import", () => {
   const dir = mkdtempSync(join(FIXTURES, "npm-share-"));
   tmpDirs.push(dir);

@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/font-subsets.spec.ts: one family as unicode-range subsets, drawn per character (docs/RUNTIME.md §5.15). See ../README.md.",
-
   "name": "vn-test-font-subsets",
 
   "window": {

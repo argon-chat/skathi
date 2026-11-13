@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/launch.spec.ts: a single-instance app that records every launch it is told about — its own, and each one a second process forwards. See docs/LAUNCH.md.",
+  "$comment": "A single-instance app that records every launch it is told about — its own, and each one a second process forwards.",
 
   "name": "vn-test-launch",
   "id": "gl.argon.vn-test.launch",

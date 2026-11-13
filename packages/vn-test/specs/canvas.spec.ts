@@ -1,22 +1,6 @@
-// `<canvas>` and the 2D context in a real host (m26 client sweep, Canvas2D
-// step 1: redjs webapi/canvas2d + packages/vue-native/src/canvas.ts).
-//
-//   bun test packages/vn-test/specs/canvas.spec.ts
-//
-// What the Argon client does with a canvas: an SVG data URL drawn into a
-// mirror <canvas> and read back with toDataURL (the taskbar icons,
-// desktopTaskbar.ts), a tint by source-atop (custom emoji), a thumbhash-style
-// getImageData over an OffscreenCanvas, and toBlob. Then the screen
-// (crates/vn-tree/src/canvas.rs, CV-1): the box takes the bitmap's size, CSS
-// scales the bitmap, and a draw with no DOM change repaints it. And a mirror
-// <img> drawn into a canvas (CV-4's img half): the pixels the host decoded,
-// from a data: URL, a blob: URL (a picked file) and a loopback http server.
-// Any fixture will do; this one borrows `events`.
-
 import { afterAll, expect, test } from "bun:test";
 import { launch, readPng } from "../src/index";
 
-/** A 2x1 PNG, red | blue. */
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8AAQv8BD/kD/YURmXYAAAAASUVORK5CYII=", "base64");
 /** A 4x2 SVG, red | blue: gpui rasterises it at twice that. */
 const SVG =
@@ -179,10 +163,8 @@ test("a draw with no DOM change repaints the canvas on the next frame", async ()
   expect(g > 200 && r < 60 && bl < 60).toBe(true);
 }, T);
 
-// A canvas keeps its bitmap premultiplied; gpui's atlas takes straight alpha
-// and blends with SRC_ALPHA. The bitmap used to go in premultiplied, so every
-// translucent pixel was multiplied by its alpha twice: half-transparent white
-// over black came out at 64, where a browser shows 128.
+// A canvas keeps its bitmap premultiplied; gpui's atlas takes straight alpha and blends with
+// SRC_ALPHA.
 test("translucent canvas pixels composite as in a browser: an alpha fill and an antialiased edge", async () => {
   const got = await inPage(`
     const wrap = document.createElement('div');
@@ -203,7 +185,6 @@ test("translucent canvas pixels composite as in a browser: an alpha fill and an 
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     return [...ctx.getImageData(0, 0, 4, 1).data];
   `);
-  // What the page reads back is the browser's unpremultiplied value.
   const data = (got as { ok: number[] }).ok;
   expect(data.slice(0, 4)).toEqual([255, 255, 255, 128]);
   expect(Math.abs(data[11] - 128)).toBeLessThanOrEqual(2);
@@ -211,10 +192,8 @@ test("translucent canvas pixels composite as in a browser: an alpha fill and an 
   const b = (await app.query("#cv-alpha")).nodes[0]!.bounds!;
   const shot = readPng(await app.screenshot());
   const scale = shot.width / Number(await app.eval("window.innerWidth"));
-  // The centre of bitmap column `i`: each column is 30 CSS px wide.
   const grey = (i: number) => shot.at(Math.round((b.x + 30 * i + 15) * scale), Math.round((b.y + 30) * scale))[1];
   const seen = { fill: grey(0), empty: grey(1), edgeA: grey(2), edgeB: grey(3) };
-  // Over black, a browser shows 255 x alpha: 128. Premultiplied twice it was 64.
   const near = (v: number, want: number) => Math.abs(v - want) <= 12;
   expect({
     fill: near(seen.fill, 128),
@@ -288,6 +267,5 @@ test("a mirror <img> draws its decoded pixels: data:, blob: and http(s), origin 
 }, T);
 
 test("the app logged nothing broken", async () => {
-  // The 404 is the broken-image case above, which a browser logs too.
   await app.expectNoErrors({ ignore: [/missing\.png/] });
 }, T);

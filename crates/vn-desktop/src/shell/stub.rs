@@ -1,5 +1,4 @@
-//! Non-Windows: the shell calls exist and refuse, so the crate builds and the
-//! validation tests run everywhere. vue-native is Windows-first (ARCHITECTURE).
+//! Non-Windows: the calls exist and refuse, so the crate builds and validation tests run everywhere.
 
 use std::path::Path;
 

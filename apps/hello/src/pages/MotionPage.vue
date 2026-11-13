@@ -4,11 +4,6 @@ import Counter from "../components/Counter.vue";
 
 const wide = ref(false);
 
-// --- CSS animations + the events they fire ----------------------------------
-// `transitionend` and `animationstart`/`end`/`cancel` come from vn-css's own
-// animator (m12 items 3 and 6): the host drains its event queue once a frame
-// and dispatches through the ordinary capture/bubble walk, so these are real
-// DOM events with `propertyName` / `animationName` / `elapsedTime`.
 const ends = ref(0);
 const lastEnd = ref("—");
 const onTransitionEnd = (e: VnTransitionEvent) => {
@@ -16,45 +11,23 @@ const onTransitionEnd = (e: VnTransitionEvent) => {
   lastEnd.value = `${e.propertyName} after ${e.elapsedTime}s`;
 };
 const spinning = ref(true);
-// m13 item 2: a transform on a laid out box. `tilted` drives a transitioned
-// `transform` through an ordinary class toggle, which is the case that proves
-// `transition: transform` interpolates rather than snapping.
 const tilted = ref(false);
 const animStarts = ref(0);
 const animEnds = ref(0);
 const animCancels = ref(0);
 
-// --- <lottie> ---------------------------------------------------------------
-// A REAL Telegram sticker (.tgs = gzipped Bodymovin JSON), resolved through the
-// same asset base as <img src>: "assets/…" means apps/hello/assets/… .
-//
-// `autoplay` and `loop` default to FALSE here, mirroring the <lottie-player>
-// web component rather than lottie-web's loadAnimation() — see
-// crates/vn-lottie/CONTRACT.md. So `loop` is written out, and `:autoplay` is
-// bound to a ref, which is what makes it a play/pause switch.
 const playing = ref(true);
 const speed = ref(1);
 const loops = ref(0);
 const lastLoopFrame = ref(0);
 
-// @loopComplete is lottie-web's event name, and it carries lottie-web's
-// payload: currentLoop (1-based), currentTime (the frame at the boundary) and
-// totalTime (frames in the animation).
 const onLoop = (e: VnLottieLoopEvent) => {
   loops.value = e.currentLoop;
   lastLoopFrame.value = Math.round(e.totalTime);
 };
 
-// Counter's setInterval is started in onMounted and cleared in onUnmounted —
-// and <KeepAlive> runs NEITHER on a tab switch. So the counter keeps ticking
-// while this page sits in the detached cache, exactly like in a browser. If
-// you wanted it frozen you would clear the timer in onDeactivated yourself:
-// that is app policy, not renderer policy.
-//
-// The <lottie> above behaves the same way and for the same reason: a detached
-// <lottie-player> keeps its rAF loop running in a browser, so ours keeps its
-// clock advancing while the page is cached — come back and it is where it
-// would have been, and the loop counter has moved on.
+// So the counter keeps ticking while this page sits in the detached cache, exactly like in a
+// browser.
 onActivated(() => console.log("[app] MotionPage ACTIVATED"));
 onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps ticking)"));
 </script>
@@ -74,10 +47,6 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
       transitionend fired {{ ends }}× — last: {{ lastEnd }} (a real event, not a timer)
     </div>
 
-    <!-- ===== @keyframes ================================================== -->
-    <!-- Three CSS animations on one row: an opacity pulse, a colour cycle with
-         a mid keyframe, and `spin` on an inline <svg> — the only element a real
-         rotation matrix can reach here (m12 items 1 / 3 / 4). -->
     <div class="kf-row">
       <div class="pulse">pulse</div>
       <div class="cycle">cycle</div>
@@ -109,13 +78,6 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
       click the spinner to toggle animation-play-state ({{ spinning ? "running" : "paused" }})
     </div>
 
-    <!-- ===== transform on a LAID OUT BOX (m13 item 2) ==================== -->
-    <!-- Everything below is a plain <div>. Before m13 a rotate/scale on one of
-         these was advised and dropped: gpui carried a transformation matrix on
-         a sprite and none at all on a quad. Now `Style::vn_transform` pushes a
-         matrix around the element's whole painted output — background, border,
-         shadow, text and subtree — and changes no layout, which is the browser's
-         rule. -->
     <div class="tx-row">
       <div class="tx-card">
         rotate(15deg)
@@ -134,19 +96,14 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
       the row keeps its four upright slots, which is the browser's rule.
     </div>
 
-    <!-- ===== negative z-index (m13 item 4) =============================== -->
-    <!-- The green panel is `position: absolute; inset: 0; z-index: -1` INSIDE
-         the blue card, and it is painted first — behind the card's text and its
-         sibling badge, in front of the card's own background. That is CSS 2.1
-         Appendix E's rule, and it costs no layout because an absolutely
-         positioned box does not care where it sits among its siblings. -->
+    <!-- That is CSS 2.1 Appendix E's rule, and it costs no layout because an absolutely positioned
+         box does not care where it sits among its siblings. -->
     <div class="z-card">
       <div class="z-under">z-index: -1 — behind the text, in front of the card's background</div>
       <div class="z-text">in-flow content</div>
       <div class="z-badge">sibling</div>
     </div>
 
-    <!-- ===== <lottie> ==================================================== -->
     <div class="lottie-row">
       <lottie
         class="sticker"
@@ -174,8 +131,6 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
     </div>
 
     <Counter />
-    <!-- Scoped-CSS isolation: this `.label` and Counter's `.label` are two
-         different rules under two different data-v hashes. -->
     <div class="label">MotionPage-scoped .label — must be BLUE</div>
     <div class="hint keep">
       &lt;KeepAlive&gt;: the counter's setInterval is never cleared on a tab switch — and neither is
@@ -197,14 +152,6 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
   font-size: 14px;
   color: #ffffff;
 }
-/* ===== @keyframes ======================================================= */
-/* Three shapes of animation, all through the same engine:
-   - `pulse` interpolates one property back and forth, forever;
-   - `cycle` has a MID keyframe with its own timing function, which is what
-     makes the per-segment easing observable;
-   - `spin` rotates; since m13 it reaches ANY element, not only an inline <svg>,
-     because gpui's Quad/Shadow/PolychromeSprite carry a transformation matrix
-     and `Style::vn_transform` pushes one around the whole painted subtree. */
 @keyframes pulse {
   50% {
     opacity: 0.25;
@@ -263,7 +210,6 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
   height: 20px;
   animation: spin 1s linear infinite;
 }
-/* ===== transform on a laid out box ===================================== */
 .tx-row {
   display: flex;
   flex-direction: row;
@@ -312,7 +258,6 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
 .tx-hover.tilted {
   transform: rotate(-12deg) scale(1.1) translate(10px, 0);
 }
-/* ===== negative z-index ================================================ */
 .z-card {
   position: relative;
   display: flex;
@@ -365,7 +310,6 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
   border-radius: 16px;
 }
 
-/* ===== <lottie> block ==================================================== */
 .lottie-row {
   display: flex;
   flex-direction: row;
@@ -376,8 +320,8 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
   background: #7fd4ff0f;
   border: 1px solid #7fd4ff33;
 }
-/* CSS width/height win over the animation's intrinsic 512×512 canvas — the
-   <img> rule, and the reason a sticker does not blow the layout apart. */
+/* CSS width/height win over the animation's intrinsic 512×512 canvas — the <img> rule, and the
+   reason a sticker does not blow the layout apart. */
 .sticker {
   width: 88px;
   height: 88px;

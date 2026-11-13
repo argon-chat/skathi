@@ -1,10 +1,8 @@
-//! Which YUV matrix, range, primaries and transfer a frame is read with:
-//! what Chromium shows on screen for a `<video src>` of the same file, which
-//! is how Argon's client shows its video stickers (`StickerView.vue`).
+//! Which YUV matrix, range, primaries and transfer a frame is read with: what Chromium shows for a
+//! `<video src>` of the same file, which is how Argon's client shows its video stickers.
 //!
-//! Chromium (media/ffmpeg/ffmpeg_common.cc, AVStreamToVideoDecoderConfig,
-//! then media/filters/vpx_video_decoder.cc and ui/gfx/color_space.cc, read
-//! 2026-11):
+//! Chromium's rules (media/ffmpeg/ffmpeg_common.cc, media/filters/vpx_video_decoder.cc,
+//! ui/gfx/color_space.cc):
 //!
 //! 1. The container's `Colour`, when its MatrixCoefficients,
 //!    TransferCharacteristics and Primaries are all present and all known
@@ -23,24 +21,16 @@
 //!    Without GPU compositing (and in a canvas `drawImage`) both are BT.601.
 //!    Argon's desktop client runs with a GPU, so this follows that.
 //!
-//! Most stickers land in 2 or 3: ffmpeg writes a `Colour` with a `Range`
-//! only, and libvpx-vp9's default `color_space` is unknown. Of the nine emoji
-//! in Argon's emojix playground, five are BT.601 studio range and two (no
-//! alpha) BT.709 by rule 3, one BT.601 and one BT.709 by rule 1.
+//! Most stickers land in 2 or 3: ffmpeg writes a `Colour` with a `Range` only, and libvpx-vp9's
+//! default `color_space` is unknown.
 //!
-//! Primaries and transfer: Chromium's compositor moves a frame to the
-//! display's colour space, sRGB here. It draws the SDR video curves (BT.709,
-//! SMPTE 170M, BT.2020) with the sRGB curve, so a frame in BT.709 primaries
-//! with one of those is untouched; other primaries (SMPTE 170M, BT.470,
-//! BT.2020...) or curves (gamma 2.2, SMPTE 240M...) are converted in linear
-//! light (vn-yuv's `gamut`). A frame with no colour space is not converted.
-//! Emoji 1 of the playground is SMPTE 170M: not converting cost it up to 10
-//! levels against Chrome (mean 2.7).
+//! Primaries and transfer: Chromium's compositor moves a frame to the display's colour space (sRGB
+//! here), drawing the SDR video curves (BT.709, SMPTE 170M, BT.2020) with the sRGB curve, so a
+//! frame in BT.709 primaries with one of those is untouched; other primaries or curves are
+//! converted in linear light (vn-yuv's `gamut`). A frame with no colour space is not converted.
 //!
-//! Checked against Chrome 156 (headless, GPU on, screenshots of the playing
-//! `<video>` over black; research/reports/m26/stickers-video-1.md): the nine
-//! emoji and `testdata/alpha.webm`, every channel within 2 levels and 99.6
-//! to 99.96 % within 1, translucent pixels included.
+//! Checked against Chrome 156 (GPU on, screenshots of the playing `<video>` over black): every
+//! channel within 2 levels and 99.6 to 99.96 % within 1, translucent pixels included.
 //!
 //! Not followed:
 //! - A container matrix of 0 (GBR), 8 (YCoCg) or 11 (YDzDx), which Chromium

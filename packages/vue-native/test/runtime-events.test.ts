@@ -55,12 +55,6 @@ describe("patchProp: on* props", () => {
   });
 
   test("a window-only event on an ELEMENT is silent — a browser never fires it there either", () => {
-    // `el.addEventListener("resize", …)` is dead code in Chrome too: `resize`
-    // is a `window` event. Warning here would report a divergence that does not
-    // exist, and a component that hedges by attaching to both targets would
-    // cost a log line on every app. On `window` the listener is real — it falls
-    // through to redjs's own EventTarget, where the host's trusted `resize` is
-    // dispatched.
     const rt = createRuntime();
     const node = rt.nodeOps.createElement("div");
     for (const name of ["resize", "load", "beforeunload", "hashchange", "storage"]) {
@@ -113,10 +107,6 @@ describe("<lottie> event names", () => {
   });
 
   test("the hyphenated spelling folds onto the same name", () => {
-    // If the tag is ever classified as a plain element, `@loopComplete` becomes
-    // `onLoopComplete` and runtime-dom hyphenates it to "loop-complete" — the
-    // well-known reason a camelCase custom-element event is missed in the
-    // browser. We fold it back rather than dropping the listener.
     const rt = createRuntime();
     expect(rt.hyphenate("LoopComplete")).toBe("loop-complete");
     expect(rt.canonicalEvent("loop-complete")).toBe("loopComplete");
@@ -151,9 +141,6 @@ describe("<lottie> event names", () => {
   });
 });
 
-// crates/vn-video/CONTRACT.md §4 and §6. The Rust side has dispatched these
-// eighteen since <video> landed; until this file knew their names they arrived
-// nowhere and `@timeupdate` warned.
 describe("<video> media events and the HTMLMediaElement surface", () => {
   const STATE = [
     "currentTime=3.5",
@@ -288,12 +275,6 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
   });
 });
 
-// `__vn_set_listener` sets or clears ONE BIT of the node's `listeners` u64, so
-// writing the value that is already there is a boundary crossing that buys
-// nothing — and it used to be the most repeated call in the whole protocol,
-// once per listening element per re-render that re-patched an `on*` prop.
-// `scripts/host-calls.ts` is where that showed up; these are the cases that
-// keep it fixed.
 describe("the listener flag is only written when it changes", () => {
   test("re-patching a handler does not re-announce the bit", () => {
     const rt = createRuntime();
@@ -347,11 +328,6 @@ describe("the listener flag is only written when it changes", () => {
   });
 });
 
-// `v-model` on a text input. The `.lazy` case is the interesting one: it asks
-// to update on `change`, and `tree.rs` has no `EV_CHANGE` — the host sources no
-// such event — so binding one used to register a listener that could never
-// fire. The model never updated, and the only sign was an advisory about an
-// unknown event NAME, which reads like a typo rather than a broken directive.
 describe("v-model", () => {
   /** What Vue hands `created`: the element, the binding, the vnode. */
   const bind = (rt, el, modifiers, onUpdate) =>
@@ -373,8 +349,6 @@ describe("v-model", () => {
     let model = null;
     bind(rt, el, { lazy: true }, (v) => (model = v));
     rt.host.dispatcher(el.__vnId, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
-    // Before m20 this was `null`: the listener was bound to `change`, which the
-    // host never delivers, so the model stayed untouched forever.
     expect(model).toBe("typed");
     const advisories = rt.advisories();
     expect(advisories.length).toBe(1);

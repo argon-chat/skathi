@@ -1,22 +1,4 @@
-// A fixture for packages/vn-test/specs/files.spec.ts (m25 desktop track C,
-// research/reports/m25/desktop-c-impl.md, docs/DESKTOP.md "Pickers and
-// files"): the file APIs a web app uses, on the real host, with every
-// dialog scripted (vn-test launches with VN_DIALOGS=scripted).
-//
-// - `#pick`: <input type=file multiple accept=".txt,text/plain">. Its
-//   `input`/`change`/`cancel` events go into `events`. A `change` reads each
-//   File twice, through FileReader.readAsText and through file.text().
-// - `#label`: a <label for="pick">. Its click opens the same picker.
-// - `#open`: showOpenFilePicker. It reads the handle, writes "changed" through
-//   createWritable, then clones the handle with structuredClone (tag 0x39 on
-//   the real host) and asks the clone the same questions.
-// - `#dir`: showDirectoryPicker, then the entries' names and kinds.
-// - `#dl`: <a download="report.csv"> on a blob: URL. That is Save As here
-//   (D-F6). The page learns nothing back, as in a browser.
-//
-// `__VN_TEST_FILES__` publishes `events`, `results` and `run(name)`. `run`
-// starts a scenario that needs no gesture (`nogesture`: every picker must
-// reject). The spec reads it all back over eval, which runs in GLOBAL scope.
+// `run` starts a scenario that needs no gesture (`nogesture`: every picker must reject).
 import { createApp, h, onMounted, ref } from "vue-native";
 
 type Handle = {
@@ -108,7 +90,6 @@ async function openDir() {
   }
 }
 
-/** Without a gesture every picker rejects, and no dialog is ever made. */
 async function noGesture() {
   const out: string[] = [];
   for (const call of [

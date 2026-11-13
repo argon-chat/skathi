@@ -29,8 +29,7 @@ fn find_filter(tree: &Tree, name: &str) -> Option<u32> {
             return Some(id);
         }
     }
-    // Definitions are usually shallow siblings of the app container. Breadth
-    // first avoids walking a large chat history before reaching them.
+    // Breadth first avoids walking a large chat history before reaching them.
     let mut pending = VecDeque::from([tree.root]);
     while let Some(id) = pending.pop_front() {
         let Some(node) = tree.node(id) else { continue };

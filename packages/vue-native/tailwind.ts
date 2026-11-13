@@ -1,73 +1,15 @@
-// Tailwind CSS integration for vue-native — shared by build.ts (dev) and
-// prod.ts (single-IIFE), so the two builders can never drift on what utilities
-// the app gets.
+// Tailwind CSS integration, shared by build.ts (dev) and prod.ts so both builders give an app the same utilities.
 //
-// ---------------------------------------------------------------------------
-// WHY TAILWIND v3.4 (pinned in package.json as `tailwindcss@3.4`)
-// ---------------------------------------------------------------------------
-// vn-css maps `lightningcss::Property` values onto `gpui::StyleRefinement`.
-// It resolves LITERAL declarations; it does not (yet) have a custom-property
-// store, so `var()` never resolves and `calc()` is dropped.
+// Pinned to v3.4 (package.json): v4 emits `calc(var(--spacing) * 4)`, `color-mix(in oklab, ...)`,
+// `@property`, `@layer` and `@theme`, which vn-css cannot resolve completely yet, while v3.4 emits
+// literal declarations that render. Moving to v4 is a vn-css work item (custom-property inheritance,
+// var() substitution, calc(), @property initial values, color-mix/oklab, @layer in Engine::compile).
 //
-//   v3.4 `p-4`      -> `padding: 1rem`                        rendered
-//   v3.4 `bg-white/10` -> `background-color: rgb(255 255 255 / 0.1)`  rendered
-//   v3.4 `rounded-xl`  -> `border-radius: 0.75rem`            rendered
-//
-//   v4   `p-4`      -> `padding: calc(var(--spacing) * 4)`    NOTHING renders
-//   v4   `bg-white/10` -> `background-color: color-mix(in oklab, ...)`   ditto
-//   v4   also emits `@property --tw-*`, `@layer`, `@theme` at-rules that our
-//        compiler skips wholesale, and leans on `:where()` for its reset.
-//
-// So v4 would degrade essentially EVERY utility to a diagnostic. Moving to v4
-// is a vn-css work item, not a version bump. Until then the pin is the
-// compat-honest choice: standard Tailwind classes in templates, standard
-// Tailwind semantics on screen.
-//
-// WHAT v4 WOULD NEED FROM vn-css (scoped, in dependency order):
-//   1. A custom-property store on the cascade. `--*` declarations currently hit
-//      one advisory and vanish; they need to fold per element like any other
-//      declaration, INHERITING down the tree (that is the part that makes it a
-//      cascade change rather than a mapper change — `element.rs` would have to
-//      expose the parent's resolved map).
-//   2. `var()` substitution before mapping. lightningcss hands us these as
-//      `Property::Unparsed(UnparsedProperty { property_id, value: TokenList })`;
-//      substitute from (1), then re-parse the token list with `property_id` to
-//      get back a typed `Property` the existing mapper arms already handle.
-//   3. `calc()` evaluation for the numeric cases — `Length::Calc` /
-//      `DimensionPercentage::Calc` are dropped by the length converters today.
-//      v4's spacing scale is `calc(var(--spacing) * 4)`, so (1)+(2)+(3) together
-//      are the price of admission for `p-4`.
-//   4. `@property` initial values, so an unset `--tw-*` falls back correctly
-//      instead of resolving to nothing.
-//   5. `color-mix(in oklab, …)` — v4's opacity modifiers — plus the oklab/oklch
-//      color spaces in the `color()` converter.
-//   6. `@layer` handling in `Engine::compile` (currently every at-rule is
-//      dropped, so a v4 sheet would compile to zero rules).
-// (1)-(3) are the load-bearing majority; (4)-(6) are what makes it correct
-// rather than approximate.
-//
-// ---------------------------------------------------------------------------
-// WHAT WE ASK TAILWIND FOR
-// ---------------------------------------------------------------------------
-// `@tailwind base; @tailwind utilities;` — deliberately NOT `components`
-// (which is just the `container` plugin, media-query-only).
-//
-// `base` was excluded until compat round 6, on the grounds that it is preflight
-// (disabled in every vue-native config anyway) plus the
-// `*, ::before, ::after { --tw-*: … }` universal-defaults block, and "the
-// `--tw-*` seeds go nowhere". They go somewhere NOW: vn-css stores custom
-// properties and substitutes `var()`, and those seeds are what makes
-// `--tw-ring-inset`, `--tw-shadow`, `--tw-translate-x` &c resolve at all.
-// Without them every compound utility — shadows, rings, transforms, `space-*`,
-// `divide-*` — is invalid at computed-value time and drops, exactly as it would
-// in a browser served the same sheet.
-//
-// The `::before` / `::after` halves of that selector list are dropped by the
-// selector audit with one advisory (no pseudo-element support); the `*` half
-// compiles and is what carries the seeds.
-//
-// JIT means the sheet contains ONLY the utilities the app's templates actually
-// use, so the diagnostics an app sees are about ITS OWN classes.
+// We ask for `@tailwind base; @tailwind utilities`, not `components` (only the media-query-only
+// `container` plugin). `base` carries the `*, ::before, ::after { --tw-*: … }` seeds that make compound
+// utilities (shadows, rings, transforms, `space-*`, `divide-*`) resolve; its ::before/::after halves are
+// dropped with one advisory and the `*` half compiles. JIT means the sheet holds only the utilities the
+// app's templates use.
 
 import { existsSync } from "fs";
 import { dirname, join, resolve as resolvePath } from "path";
@@ -75,30 +17,15 @@ import { dirname, join, resolve as resolvePath } from "path";
 import postcss from "postcss";
 import tailwindcss from "tailwindcss";
 
-/// The synthetic module id the utilities sheet rides on.
-///
-/// Module ids are workspace-relative POSIX paths, and BOTH aggregators order
-/// CSS by id: the dev loader appends in first-`setCss` order (= the manifest's
-/// module order, which build.ts emits sorted) and prod.ts sorts `cssById`.
-/// A leading "." (0x2E) sorts below every letter and digit, so this id lands
-/// FIRST in both — which is exactly where utilities belong:
-///
-///   utilities first, component <style> last
-///
-/// Tailwind is a flat single-class layer (specificity 0-1-0) while component
-/// styles are almost always `<style scoped>` (`.foo[data-v-x]`, 0-2-0), so the
-/// cascade already prefers the component. Source order only decides ties
-/// between two equally-specific rules — and there the author's own <style>
-/// should win over a framework utility, same as a browser project that imports
-/// tailwind at the top of its entry stylesheet.
+/// The synthetic module id the utilities sheet rides on. Both aggregators order CSS by id and a leading
+/// "." sorts first, so utilities land before component <style>, which wins ties on specificity as in a
+/// browser project that imports tailwind at the top of its entry stylesheet.
 export const TW_ID = ".vn/tailwind.css";
 
 const CONFIG_NAMES = ["tailwind.config.js", "tailwind.config.cjs", "tailwind.config.mjs", "tailwind.config.ts"];
 
-/// Nearest `tailwind.config.*` at or above `startDir`, stopping after
-/// `stopDir` (the workspace root). `null` = this app opts out of Tailwind, and
-/// the builders then emit no synthetic module at all — which is what keeps the
-/// build fixtures (and any non-Tailwind app) byte-identical to before.
+/// Nearest `tailwind.config.*` at or above `startDir`, stopping after `stopDir` (the workspace root).
+/// `null`: the app opts out and no synthetic module is emitted.
 export function findConfig(startDir: string, stopDir: string): string | null {
   let dir = startDir;
   for (;;) {
@@ -113,25 +40,12 @@ export function findConfig(startDir: string, stopDir: string): string | null {
   }
 }
 
-/// Runs Tailwind's JIT over the config's `content` globs and returns the
-/// utilities sheet. Re-reads the content files on every call (Tailwind's own
-/// mtime tracking decides whether to rebuild its context), so watch mode can
-/// simply call this again after any template edit.
+/// Runs Tailwind's JIT over the config's `content` globs and returns the utilities sheet; call it again
+/// after any template edit.
 ///
-/// With the CONFIG'S DIRECTORY as the working directory. Tailwind v3 resolves a
-/// relative `content` glob (`"./src/**/*.vue"`, what every Vite app writes)
-/// against `process.cwd()` unless the config opts into `content.relative`, and
-/// under Vite cwd is the project root, i.e. the config's directory. Both
-/// builders run from `packages/vue-native`, so such a config used to scan the
-/// RUNTIME's sources instead of the app's — measured on the Argon client: 475 KB
-/// of the wrong utilities against 611 KB of the right ones
-/// (research/reports/m26/client-gap/B-build-ui.md §1.1 #2a). In-repo apps that
-/// anchor their globs with `join(__dirname, …)` are unaffected.
-///
-/// The directory change is held across the whole PostCSS run (Tailwind reads
-/// cwd when it sets up its context, which is inside the async plugin), so calls
-/// are SERIALIZED: two overlapping runs must never see each other's cwd. They
-/// are CPU-bound on one JS thread anyway, so nothing is lost.
+/// Runs with the config's directory as cwd: Tailwind v3 resolves a relative `content` glob against
+/// `process.cwd()`, which under Vite is the project root but here would be packages/vue-native. Calls are
+/// serialized because cwd is process-global and Tailwind reads it inside the async plugin.
 export function generate(configPath: string, source?: CssSource): Promise<string> {
   const run = async () => {
     const dir = dirname(configPath);
@@ -154,27 +68,18 @@ export function generate(configPath: string, source?: CssSource): Promise<string
 }
 let queue: Promise<unknown> = Promise.resolve();
 
-/// A stylesheet the APP owns, handed to Tailwind as its own entry.
-///
-/// This is what makes `import "./index.css"` behave the way it does in a Vite
-/// project: the app's stylesheet IS the Tailwind entry, so its `@tailwind`
-/// directives expand in place, its `@layer base { :root { --…: … } }` block
-/// lands in the base layer (which is where the whole shadcn palette lives), and
-/// its `@apply` rules resolve against the app's own config.
+/// A stylesheet the app owns, handed to Tailwind as its own entry so its `@tailwind`, `@layer base` and
+/// `@apply` expand in place, as in a Vite project.
 export type CssSource = { text: string; from: string };
 
-/// Does this stylesheet contain `@tailwind` / `@layer` / `@apply` / `theme()` —
-/// i.e. does it have to go through Tailwind's PostCSS pass to mean anything?
-///
-/// A plain stylesheet does not, and is emitted verbatim, so an app with no
-/// Tailwind config still gets its CSS.
+/// Does this stylesheet contain `@tailwind` / `@layer` / `@apply` / `theme()`, i.e. need Tailwind's PostCSS
+/// pass? A plain sheet is emitted verbatim.
 export function needsTailwindPass(css: string): boolean {
   return /@tailwind\b|@layer\b|@apply\b|@screen\b|(?<![\w-])theme\(/.test(css);
 }
 
-/// Does this stylesheet declare the utilities layer itself? When it does, the
-/// synthetic `.vn/tailwind.css` module is redundant and is not emitted — the
-/// app's own sheet carries the utilities, exactly as in its browser build.
+/// Does this stylesheet declare the utilities layer itself? Then the synthetic `.vn/tailwind.css` module is
+/// redundant.
 export function declaresUtilities(css: string): boolean {
   return /@tailwind\s+utilities\s*;/.test(css);
 }

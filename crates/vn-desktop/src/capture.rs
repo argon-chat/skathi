@@ -1,12 +1,8 @@
 //! Desktop capture sources and bounded PNG previews, off the frame thread.
 //!
-//! IDs use `screen:<HMONITOR>` / `window:<HWND>` on Windows and
-//! `screen:<CGDirectDisplayID>` / `window:<CGWindowID>` on macOS. The decimal
-//! handle is a string throughout JS and is the same handle capture consumes;
-//! display enumeration order and display names are not source identities.
-//! On macOS, enumeration first requires Screen Recording access (TCC); on
-//! Windows, a denied `display-capture` toggle refuses it. Under
-//! `VN_MEDIA_CAPTURE=fake` the list is one synthetic screen on every platform.
+//! IDs are `screen:<handle>` / `window:<handle>` (HMONITOR/HWND on Windows, CGDirectDisplayID/
+//! CGWindowID on macOS), decimal strings in JS. Under `VN_MEDIA_CAPTURE=fake` the list is one
+//! synthetic screen on every platform.
 
 use base64::Engine;
 use image::ImageEncoder;
@@ -97,9 +93,8 @@ pub fn start_sources(types: &str, options: &str) -> String {
             Ok(Done::json(&Value::Array(sources).to_string()))
         });
     };
-    // The Screen Recording question can wait on the user. Like a dialog, it
-    // waits on its own thread rather than as a pool job, which the frame
-    // pump counts as in flight.
+    // The Screen Recording prompt can wait on the user, so it gets its own thread: a pool job
+    // would count as in flight for the frame pump.
     #[cfg(target_os = "macos")]
     if options.screens || options.windows {
         let asked = std::thread::Builder::new().name("vn-capture-consent".into()).spawn(move || {
@@ -117,27 +112,20 @@ pub fn start_sources(types: &str, options: &str) -> String {
     json!({"token": token}).to_string()
 }
 
-/// Enumeration usable by native callers too. Unsupported hosts reject rather
-/// than pretending that desktop capture is supported with an empty list.
+/// Enumeration usable by native callers too. Unsupported hosts reject instead of listing nothing.
 pub fn sources(options: Options) -> Result<Vec<Value>, Fail> {
     if !options.screens && !options.windows {
         return Ok(Vec::new());
     }
-    // A fake capture shows no desktop of the machine's, so its picker lists
-    // none either: one synthetic screen,
-    // on every platform, whatever the platform's state.
+    // A fake capture shows no real desktop, so its picker lists none either.
     if fake_capture() {
         return fake_sources(options);
     }
-    // Names and thumbnails are screen recording to TCC. Ask before reading
-    // any: the first time shows the system prompt, and without access the
-    // listing fails with where to turn it on rather than coming back blank.
-    // Never on the frame thread; `start_sources` has already waited.
+    // Names and thumbnails count as screen recording to TCC: ask first, so a denial says where
+    // to enable it. Never on the frame thread; `start_sources` has already waited.
     #[cfg(target_os = "macos")]
     vn_permissions::require_display_capture().map_err(|(name, message)| Fail::new(name, message))?;
-    // Windows has no prompt for programmatic capture, only its consent-store
-    // toggle: read it, never ask, and refuse when it is off rather than hand
-    // out the thumbnails capture itself would be refused.
+    // Windows has no capture prompt, only the consent-store toggle: read it, never ask.
     #[cfg(target_os = "windows")]
     {
         refuse_denied(vn_permissions::status(vn_permissions::Cap::DisplayCapture))?;
@@ -156,7 +144,6 @@ pub fn sources(options: Options) -> Result<Vec<Value>, Fail> {
     }
 }
 
-/// `display-capture`'s refusal when its state is `denied`.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn refuse_denied(state: vn_permissions::State) -> Result<(), Fail> {
     if state != vn_permissions::State::Denied {
@@ -166,14 +153,11 @@ fn refuse_denied(state: vn_permissions::State) -> Result<(), Fail> {
     Err(Fail::new(name, message))
 }
 
-/// `VN_MEDIA_CAPTURE=fake` (any case), as a capture backend reads it.
 fn fake_capture() -> bool {
     std::env::var("VN_MEDIA_CAPTURE").is_ok_and(|v| v.trim().eq_ignore_ascii_case("fake"))
 }
 
-/// The fake desktop: one 1920×1080 screen, `screen:1` (an id capture binds
-/// as a whole screen), its thumbnail the checkerboard the fake capture
-/// streams; no windows.
+/// The fake desktop: one 1920×1080 `screen:1` with the fake capture's checkerboard thumbnail.
 fn fake_sources(options: Options) -> Result<Vec<Value>, Fail> {
     if !options.screens {
         return Ok(Vec::new());
@@ -186,7 +170,6 @@ fn fake_sources(options: Options) -> Result<Vec<Value>, Fail> {
         let mut rgba = vec![0u8; w as usize * h as usize * 4];
         for y in 0..h {
             for x in 0..w {
-                // The fake frame's 40-pixel squares, at thumbnail scale.
                 let (fx, fy) = (x * sw / w, y * sh / h);
                 let v = if (fx / 40 + fy / 40) % 2 == 0 { 220 } else { 40 };
                 let o = ((y * w + x) * 4) as usize;
@@ -273,7 +256,6 @@ mod tests {
 
     #[test]
     fn a_denied_display_capture_refuses_the_listing() {
-        // Windows: the consent store's "Let desktop apps capture…" is off.
         let refused = refuse_denied(vn_permissions::State::Denied).unwrap_err();
         assert_eq!(refused.name, "NotAllowedError");
         assert!(refused.message.starts_with("Permission denied"), "{}", refused.message);

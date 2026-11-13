@@ -2,13 +2,10 @@
 import { onActivated, onMounted, onUnmounted, ref, shallowRef } from "vue";
 import { useSession } from "./stores/session";
 
-// `name` is what <KeepAlive>'s include/exclude matches on — the shell excludes
-// exactly this page, so it is the one tab that really unmounts and remounts on
-// every visit. Without it the compiler would infer "App" from the filename.
+// `name` is what <KeepAlive>'s include/exclude matches on — the shell excludes exactly this page,
+// so it is the one tab that really unmounts and remounts on every visit.
 defineOptions({ name: "LabPage" });
 
-// --- KeepAlive is OFF here --------------------------------------------------
-// Local state therefore resets on every visit…
 const localVisits = ref(0);
 const scratch = ref("");
 console.log("[app] LabPage setup ran (NOT kept alive — this prints every visit)");
@@ -20,37 +17,21 @@ onUnmounted(() => console.log("[app] LabPage unmounted (left the tab)"));
 // …and onActivated never fires for a page outside the cache.
 onActivated(() => console.log("[app] LabPage ACTIVATED — should NEVER appear"));
 
-// …while the pinia store is untouched by any of that: it lives in the app's
-// effect scope, not in this component's.
 const session = useSession();
 const mountId = Math.random().toString(36).slice(2, 7);
 
-// --- round 5 ----------------------------------------------------------------
-// These drive ELEMENT PROPERTIES, not classes: `:disabled`, `:checked` and
-// `[data-state="…"]` are answered by the cascade straight off the property
-// map, so flipping a ref restyles without a single state class.
 const locked = ref(false);
 const checked = ref(false);
 const open = ref(false);
 
-// --- WebSocket ---------------------------------------------------------------
-// `WebSocket` here is redjs's own RFC 6455 client (vendor/redjs, webapi/websocket.rs):
-// a real EventTarget, real MessageEvent/CloseEvent, real binary frames. The peer
-// is the dev echo server:
-//
-//     bun packages/vue-native/devtools/ws-echo.ts
-//
-// Nothing about this page is native-specific — it is the same code a browser
-// would run, which is the whole claim being demonstrated.
 const WS_URL = "ws://127.0.0.1:8787/";
-// Indexed by `readyState`, which is 0..3 — so the lookup can miss as far as the
-// compiler is concerned, and every use below falls back rather than rendering
-// "undefined".
+// Indexed by `readyState`, which is 0..3 — so the lookup can miss as far as the compiler is
+// concerned, and every use below falls back rather than rendering "undefined".
 const STATES = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
 const stateName = (s: VnWebSocket) => STATES[s.readyState] ?? "UNKNOWN";
 
-// shallowRef, not ref: a WebSocket is a host object and wrapping it in Vue's
-// deep reactive proxy would put a Proxy between us and its native getters.
+// shallowRef, not ref: a WebSocket is a host object and wrapping it in Vue's deep reactive proxy
+// would put a Proxy between us and its native getters.
 const sock = shallowRef<VnWebSocket | null>(null);
 const wsState = ref("CLOSED");
 const wsProtocol = ref("");
@@ -93,8 +74,6 @@ function wsConnect() {
     if (typeof data === "string") {
       rxText.value = data;
     } else {
-      // binaryType "blob" (the browser default) gives a Blob; "arraybuffer"
-      // gives an ArrayBuffer. Both are shown as the same byte list.
       const isBlob = data instanceof Blob;
       const kind = isBlob ? "Blob" : "ArrayBuffer";
       const buf = isBlob ? await data.arrayBuffer() : data;
@@ -124,7 +103,6 @@ function wsSendBinary() {
   }
   txBin.value += 1;
   const n = txBin.value;
-  // A recognisable pattern: 0xA5, the counter little-endian, 0x5A.
   s.send(new Uint8Array([0xa5, n & 255, (n >> 8) & 255, 0x5a]).buffer);
   syncWs();
 }
@@ -142,8 +120,8 @@ function wsClose() {
   syncWs();
 }
 
-// The Lab tab really unmounts on every visit, so a socket left open here would
-// keep receiving into a dead component.
+// The Lab tab really unmounts on every visit, so a socket left open here would keep receiving into
+// a dead component.
 onUnmounted(wsClose);
 </script>
 
@@ -154,11 +132,7 @@ onUnmounted(wsClose);
       <span class="label">·scoped·</span>
     </div>
 
-    <!-- ===================================================================
-         KeepAlive vs pinia: the shell passes :exclude="['LabPage']", so this
-         component is torn down and rebuilt on every visit. Local refs reset;
-         the store does not.
-         =================================================================== -->
+    <!-- Local refs reset; the store does not. -->
     <div class="ka">
       <div class="ka-title">local component state vs pinia store state</div>
       <div class="hint">
@@ -175,10 +149,6 @@ onUnmounted(wsClose);
       </div>
     </div>
 
-    <!-- ===================================================================
-         WebSocket — redjs's native RFC 6455 client. Peer:
-           bun packages/vue-native/devtools/ws-echo.ts
-         =================================================================== -->
     <div class="ws">
       <div class="ws-title">WebSocket — text and binary against a local echo</div>
       <div class="ka-row">
@@ -197,28 +167,17 @@ onUnmounted(wsClose);
       <div class="hint ws-log">{{ wsLog }}</div>
     </div>
 
-    <!-- ===================================================================
-         ROUND 5 — everything below is answered by the CSS cascade alone.
-         No JS reads a focus state, no handler adds a state class:
-         `:focus` / `:focus-visible` ride gpui's focus rungs, `:disabled` /
-         `:checked` / `[data-state]` read the element's own properties, and the
-         `@media` blocks are evaluated against the live window (size, OS theme,
-         reduced-motion).
-         =================================================================== -->
     <div class="r5">
-      <div class="r5-title">round 5 — :focus · props · [attr] · @media</div>
+      <div class="r5-title">:focus · props · [attr] · @media</div>
 
-      <!-- :focus on the native <input>. -->
       <input class="field r5-focus" tabindex="3" placeholder="Tab or click me — :focus ring" />
 
-      <!-- :focus on a plain tabbable div rides gpui's .focus() rung;
-           :focus-visible only lights up when focus arrived from the KEYBOARD,
-           exactly as in a browser. -->
+      <!-- :focus on a plain tabbable div rides gpui's .focus() rung; :focus-visible only lights up
+           when focus arrived from the KEYBOARD, exactly as in a browser. -->
       <div class="r5-box" tabindex="4">
         plain div, tabindex=4 — blue on :focus, amber on :focus-visible (Tab)
       </div>
 
-      <!-- :disabled reads the property, so v-bind alone restyles. -->
       <div class="r5-row">
         <input class="field r5-input" :disabled="locked" :value="locked ? 'locked' : 'editable'" />
         <div class="r5-toggle" @click="locked = !locked">{{ locked ? "unlock" : "lock" }} — :disabled</div>
@@ -226,17 +185,14 @@ onUnmounted(wsClose);
 
       <div class="r5-check" :checked="checked" @click="checked = !checked">:checked = {{ checked }} — click me</div>
 
-      <!-- [attr="…"] — the exact shape Tailwind's `data-[state=open]:` emits. -->
       <div class="r5-state" :data-state="open ? 'open' : 'closed'" @click="open = !open">
         [data-state="{{ open ? "open" : "closed" }}"] — click me
       </div>
 
-      <!-- @media, hand written: resize the window across 640px and 900px. -->
       <div class="r5-media">@media width: GREY &lt; 640px · BLUE ≥ 640px · GREEN ≥ 900px</div>
       <div class="r5-dark">@media (prefers-color-scheme: dark) — AMBER while the OS theme is dark</div>
       <div class="r5-motion">@media (prefers-reduced-motion: reduce) — RED when the OS asks for less motion</div>
 
-      <!-- …and the same four capabilities through Tailwind's own variants. -->
       <div class="flex flex-col gap-2 p-3 rounded-lg bg-white/5 border border-white/20 text-xs text-white/60 sm:text-sky-300 lg:text-emerald-300 dark:bg-amber-400/10">
         <div class="font-mono">tailwind: sm:text-sky-300 · lg:text-emerald-300 · dark:bg-amber-400/10</div>
         <input class="field focus:border-sky-400 disabled:opacity-40" tabindex="5" :disabled="locked" placeholder="tailwind focus: + disabled:" />
@@ -283,7 +239,6 @@ onUnmounted(wsClose);
   color: #ff9aa2;
 }
 
-/* ===== KeepAlive-vs-pinia block ======================================== */
 .ka {
   display: flex;
   flex-direction: column;
@@ -316,7 +271,6 @@ onUnmounted(wsClose);
   background: #4f8cffcc;
 }
 
-/* ===== WebSocket panel ================================================== */
 .ws {
   display: flex;
   flex-direction: column;
@@ -332,10 +286,6 @@ onUnmounted(wsClose);
 }
 </style>
 
-<!-- ===================================================================
-     ROUND 5 — a second <style scoped> block; the SFC pipeline concatenates
-     every style block under the same `data-v-` hash.
-     =================================================================== -->
 <style scoped>
 .r5 {
   display: flex;
@@ -351,8 +301,8 @@ onUnmounted(wsClose);
   color: #ffffffcc;
 }
 
-/* :focus — on an <input> the rung is folded from the editor's own focus
-   handle (tracking it on the wrapper too would double the tab stop). */
+/* :focus — on an <input> the rung is folded from the editor's own focus handle (tracking it on the
+   wrapper too would double the tab stop). */
 .r5-focus {
   width: 300px;
 }
@@ -361,14 +311,11 @@ onUnmounted(wsClose);
   background: #7fd4ff26;
 }
 
-/* The other fields get a ring from the same one-line rule. */
 .field:focus {
   border-color: #7fd4ff;
 }
 
-/* :focus / :focus-visible on a plain tabbable div — gpui's .focus() and
-   .focus_visible() rungs. The latter needs the focus to have come from the
-   keyboard, which is exactly what the browser means by :focus-visible. */
+/* :focus / :focus-visible on a plain tabbable div — gpui's .focus() and .focus_visible() rungs. */
 .r5-box {
   width: 300px;
   padding: 6px;
@@ -386,8 +333,8 @@ onUnmounted(wsClose);
   color: #ffcc00;
 }
 
-/* :disabled / :checked are ELEMENT PROPERTIES, so they fold into the base
-   bucket — there is no gpui rung for them and none is needed. */
+/* :disabled / :checked are ELEMENT PROPERTIES, so they fold into the base bucket — there is no
+   gpui rung for them and none is needed. */
 .r5-row {
   display: flex;
   flex-direction: row;
@@ -422,7 +369,6 @@ onUnmounted(wsClose);
   background: #34c75926;
 }
 
-/* [attr="value"] straight off the property map. */
 .r5-state {
   padding: 6px;
   font-size: 11px;
@@ -436,7 +382,6 @@ onUnmounted(wsClose);
   border-color: #ff2d95;
 }
 
-/* @media against the live window environment. */
 .r5-media,
 .r5-dark,
 .r5-motion {

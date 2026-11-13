@@ -1,13 +1,9 @@
-// Forms, focus and location.reload() (m26 phase 2): the JS half.
+// Forms, focus and location.reload(): the JS half.
 //
-// The host half of focus (`__vn_focus`: gpui's focus, the window's
-// focused-node slot, the queue for a node not built yet) is
-// crates/vn-tree/src/render.rs; reload's (`__vn_reload`, the next-frame
-// teardown and re-evaluation) is crates/vn-app/src/reload.rs. What is pinned
-// here is the part only the runtime can get wrong: which clicks and which
-// Enter submit which form, with which submitter; the order and targets of the
-// four focus events; what `document.activeElement` says; and what a reload
-// undoes in the realm it keeps.
+// The host half of focus (`__vn_focus`) is crates/vn-tree/src/render.rs; reload's (`__vn_reload`) is
+// crates/vn-app/src/reload.rs. Pinned here is what only the runtime can get wrong: which clicks and Enter submit
+// which form, with which submitter; the order and targets of the four focus events; what `document.activeElement`
+// says; and what a reload undoes in the realm it keeps.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";
@@ -363,10 +359,6 @@ describe("focus: el.focus(), el.blur(), document.activeElement", () => {
   });
 });
 
-// A handler that moves the focus while another move's events run. Every
-// expectation below is what Chrome 156 logs for the same page
-// (research/reports/m26/hit-target-2.md §7 has the probe): `type@node(related)
-// active=<document.activeElement>`.
 describe("focus: a handler that moves the focus abandons the move it interrupts", () => {
   const focus = (n: unknown) => (n as { focus(): void }).focus();
   const blur = (n: unknown) => (n as { blur(): void }).blur();

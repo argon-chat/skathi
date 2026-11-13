@@ -1,10 +1,4 @@
-// A fixture for packages/vn-test/specs/min-content.spec.ts: text's min-content
-// width in a flex row. The row is Argon's dashboard stat row
-// (apps/client/src/components/home/widgets/DailyStatsWidget.vue): an icon and
-// a label on the left, the value on the right, `justify-content:
-// space-between`, at five widths. Each row also has a `nowrap` twin, whose
-// label must not shrink below its one line. Render functions rather than an
-// SFC, for the reason fixtures/layout gives.
+// Each row also has a `nowrap` twin, whose label must not shrink below its one line.
 import { createApp, h } from "vue-native";
 
 const WIDTHS = [100, 120, 140, 180, 240];

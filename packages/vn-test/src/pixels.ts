@@ -1,18 +1,9 @@
-// Reading the PIXELS of a screenshot.
-//
-// Some defects are only visible in a frame. A glyph run that is painted
-// underneath its own element's background is at the right place, in the right
-// colour, at the right size and reports the right `getBoundingClientRect` — the
-// only thing wrong with it is the order it was drawn in, and nothing in the DOM
-// can see that. m19 learned the same lesson about animations ("an animation is
-// only proved by frames"); this is that lesson with a decoder attached.
-//
-// Deliberately tiny: `vn_screenshot` writes 8-bit non-interlaced RGBA, which is
-// the one shape below. Anything else throws rather than guessing.
+// Deliberately tiny: `vn_screenshot` writes 8-bit non-interlaced RGBA, which is the one shape
+// below. Anything else throws rather than guessing.
 
 import { readFileSync } from "node:fs";
-// PNG's IDAT is zlib-wrapped, not raw deflate — `node:zlib` reads the wrapper,
-// `Bun.inflateSync` does not.
+// PNG's IDAT is zlib-wrapped, not raw deflate — `node:zlib` reads the wrapper, `Bun.inflateSync`
+// does not.
 import { inflateSync } from "node:zlib";
 
 const SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -128,7 +119,7 @@ export function readPng(path: string): Png {
     const length = file.readUInt32BE(at);
     const type = file.toString("ascii", at + 4, at + 8);
     const body = file.subarray(at + 8, at + 8 + length);
-    at += 12 + length; // length + type + data + crc
+    at += 12 + length;
     if (type === "IHDR") {
       width = body.readUInt32BE(0);
       height = body.readUInt32BE(4);
@@ -151,8 +142,6 @@ export function readPng(path: string): Png {
   const raw = inflateSync(Buffer.concat(idat));
   const stride = width * channels;
   const out = new Uint8Array(width * height * 4);
-  // Un-filter in place, one scanline at a time (PNG §9). `prior` is the
-  // reconstructed line above; the first line's is all zero.
   const line = new Uint8Array(stride);
   let prior = new Uint8Array(stride);
   let src = 0;

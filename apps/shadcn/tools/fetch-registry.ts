@@ -1,26 +1,3 @@
-// Pulls shadcn-vue component sources straight out of the upstream repo.
-//
-//   bun tools/fetch-registry.ts [--force]
-//
-// WHY NOT `npx shadcn-vue add`: the CLI assumes a vite/nuxt project (it reads
-// components.json, patches tailwind.config, rewrites tsconfig paths and runs a
-// package-manager install). Copying the registry files verbatim is the same
-// bytes with none of the assumptions — and it is what makes the compat claim
-// checkable: `git diff` against this script's output shows EXACTLY what we
-// changed, which for the trial must be import-path rewrites and nothing else.
-//
-// PIN: v2.2.0 is the LAST shadcn-vue release on Tailwind v3 (apps/www pins
-// tailwindcss ^3.4.17; from v2.3 the docs app moved to the Tailwind v4 tree in
-// apps/v4). vue-native pins Tailwind 3.4 for cascade reasons — see
-// packages/vue-native/tailwind.ts — so v2.2.0 is the honest pairing. The
-// components themselves are the reka-ui generation, i.e. current shadcn-vue.
-//
-// THE ONLY EDITS (both mechanical, both logged to tools/registry-edits.json):
-//   1. `@/lib/utils`  -> a relative path to src/lib/utils.js
-//   2. `@/registry/...` (blocks/examples only) -> relative
-// Everything else — templates, class strings, reka-ui usage — is byte-identical
-// to upstream. Any further change would invalidate the compat measurement.
-
 import { mkdirSync, writeFileSync, existsSync } from "fs";
 import { dirname, join, relative } from "path";
 
@@ -32,9 +9,7 @@ const UI = `${RAW}/registry/${STYLE}/ui`;
 const APP = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
 const OUT = join(APP, "src", "components", "ui");
 
-/** component dir -> files, as listed by the upstream git tree at REF. */
 const COMPONENTS: Record<string, string[]> = {
-  // tier 1 — static / low-DOM
   button: ["Button.vue", "index.ts"],
   badge: ["Badge.vue", "index.ts"],
   card: [
@@ -47,7 +22,6 @@ const COMPONENTS: Record<string, string[]> = {
   label: ["Label.vue", "index.ts"],
   progress: ["Progress.vue", "index.ts"],
 
-  // tier 2 — form + state
   input: ["Input.vue", "index.ts"],
   textarea: ["Textarea.vue", "index.ts"],
   checkbox: ["Checkbox.vue", "index.ts"],
@@ -60,7 +34,6 @@ const COMPONENTS: Record<string, string[]> = {
     "AccordionTrigger.vue", "index.ts",
   ],
 
-  // tier 3 — portal / floating
   dialog: [
     "Dialog.vue", "DialogClose.vue", "DialogContent.vue", "DialogDescription.vue",
     "DialogFooter.vue", "DialogHeader.vue", "DialogScrollContent.vue",
@@ -84,17 +57,13 @@ const COMPONENTS: Record<string, string[]> = {
   ],
 };
 
-/** Non-`ui/` files the components import, fetched verbatim too. */
 const EXTRAS: Record<string, string> = {
-  // `cn()` — clsx + tailwind-merge. Kept byte-identical (its `@tanstack/vue-table`
-  // and `vue` imports are `import type`, which the bundler erases).
   "src/lib/utils.ts": `${RAW}/lib/utils.ts`,
 };
 
 const force = process.argv.includes("--force");
 const edits: { file: string; from: string; to: string }[] = [];
 
-/** `@/lib/utils` -> relative path from the file to src/lib/utils. */
 function rewrite(fileAbs: string, text: string): string {
   const fromDir = dirname(fileAbs);
   return text.replace(/(['"])@\/([^'"]+)\1/g, (_m, q, spec: string) => {

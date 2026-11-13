@@ -1,26 +1,5 @@
 <script setup lang="ts">
-// Network: what the app asked for, and what came back.
-//
-// The feed is a JS-side tee over `fetch`, `WebSocket` and (where the engine
-// has one) `XMLHttpRequest` (`crates/vn-app/src/devtools/net.rs`) rather than a
-// hook inside redjs. That is the whole reason this panel exists at all in one
-// milestone: the engine's `fetch` runs on a worker thread and its sockets on
-// their own threads, so a Rust-side hook would have been a fork patch and a
-// second description of every request. The JS side already knows the URL, the
-// method, the status and the timing.
-//
-// It records from BOOT, not from when you opened this panel, because the
-// request you want to see is usually the one the app made while starting up.
-// The ring is 300 entries (`net.rs` CAPACITY) for the same reason the log ring
-// is bounded: an app that polls must not grow the process.
-//
-// m26: a row OPENS — click it and the details pane (`NetDetail.vue`) splits
-// the panel, Chromium-style: headers, payload, response body, timing. The
-// details are fetched on demand (`net_detail`), one command per click.
-//
-// The table copies explicitly (the right-click menu, Ctrl+C for the selected
-// row's URL); the details pane's text is drag-selectable — see the note in
-// ../store.ts.
+// The JS side already knows the URL, the method, the status and the timing.
 import { computed, onMounted, onUnmounted, watch } from "vue";
 import { onKeydown } from "../keys";
 import { NET_COLS_H, NET_H, PANE_HEAD_H, SPLIT, viewport } from "../layout";
@@ -47,7 +26,6 @@ const emit = defineEmits<{ (e: "drag", event: VnMouseEvent): void }>();
 const open = computed(() => state.netSelected !== null);
 const bodyH = computed(() => Math.max(60, props.height - PANE_HEAD_H));
 const listHeight = computed(() => Math.max(40, bodyH.value - NET_COLS_H));
-/** The list's width while the details are open; the details take the rest. */
 const listW = computed(() => Math.max(220, Math.min(viewport.w - 320, state.netListWidth)));
 const detailW = computed(() => Math.max(300, viewport.w - listW.value - SPLIT));
 
@@ -80,8 +58,6 @@ function statusText(entry: {
     if (entry.phase === "close") return `closed ${entry.status ?? ""}`.trim();
     return entry.phase;
   }
-  // Chromium's Status column says what the NETWORK answered: a revalidation is
-  // a 304, whatever status the stored answer gave the app.
   if (entry.cache === "revalidated") return "304";
   return entry.status === undefined ? "—" : String(entry.status);
 }
@@ -93,30 +69,23 @@ function statusTitle(entry: NetEntry): string {
   return "";
 }
 
-/** The last path segment, with the origin kept as a dim prefix. */
 function shortUrl(url: string): { host: string; rest: string } {
   const m = /^([a-z]+:\/\/[^/]+)(\/.*)?$/i.exec(url);
   if (!m) return { host: "", rest: url };
   return { host: m[1], rest: m[2] || "/" };
 }
 
-/**
- * `h2`, `http/1.1` — Chromium's Protocol column; empty when there was no
- * connection. An answer from the HTTP cache had none, and says so the way
- * Chromium's Size column does.
- */
+/** An answer from the HTTP cache had none, and says so the way Chromium's Size column does. */
 function protoText(entry: NetEntry): string {
   if (entry.cache === "hit") return "(disk cache)";
   return entry.proto || "";
 }
 
-/** Chromium's Connection ID column: the id, with the first request on a connection marked. */
 function connTitle(entry: NetEntry): string {
   if (entry.conn === undefined) return "no connection: not a network response, or it failed first";
   return `connection #${entry.conn} — ${entry.reused ? "reused: it had carried an earlier request" : "new: opened for this request"}`;
 }
 
-/** The pooled transport's counters, one chip. */
 const pool = computed(() => {
   const p = state.netPool;
   if (!p || !p.requests) return null;
@@ -131,13 +100,8 @@ const pool = computed(() => {
   };
 });
 
-// ---- reload markers -------------------------------------------------------------
-//
-// A `kind: "reload"` row is not an exchange. The target's host puts it where it
-// ran the app again in the same realm, and `cause` says why: `location.reload()`,
-// or a dev host's cold restart.
-// The ring outlives that, so the rows above the marker are the previous run's.
-// It is a divider, so it cannot be selected or opened.
+// The target's host puts it where it ran the app again in the same realm, and `cause` says why:
+// `location.reload()`, or a dev host's cold restart.
 
 function isMarker(entry: NetEntry): boolean {
   return entry.kind === "reload";
@@ -170,14 +134,11 @@ const totals = computed(() => {
   return { fetches: fetches.length, failed, avg: fetches.length ? ms / fetches.length : 0 };
 });
 
-// ---- selection ----------------------------------------------------------------
-
 function onRowClick(entry: NetEntry): void {
   if (isMarker(entry)) return;
   void selectNet(entry.seq);
 }
 
-/** Keeps the open row on screen when the selection moves by keyboard. */
 watch(
   () => state.netSelected,
   (seq) => {
@@ -188,7 +149,6 @@ watch(
 );
 
 function step(delta: number): void {
-  // Markers are dividers; the keyboard steps over them.
   const all = rows.value.filter((e) => !isMarker(e));
   if (!all.length) return;
   const at = all.findIndex((e) => e.seq === state.netSelected);
@@ -196,9 +156,6 @@ function step(delta: number): void {
   void selectNet(all[next].seq);
 }
 
-// ---- copy -------------------------------------------------------------------
-
-/** Runs `make` over the row's details — fetched for this, if they are not the open ones. */
 function withDetail(seq: number, what: string, make: (d: Detail) => string | null): void {
   detailFor(seq).then(
     (d) => {
@@ -253,20 +210,15 @@ function menuFor(entry: NetEntry): MenuItem[] {
 }
 
 function onRowDown(entry: NetEntry, event: VnMouseEvent): void {
-  // The right button. There is no `contextmenu` event in this engine; see
-  // ContextMenu.vue.
   if (event.button !== 2) return;
   ui.copyTarget = "network";
   openMenu(event.clientX, event.clientY, menuFor(entry));
 }
 
-// ---- the keyboard -----------------------------------------------------------
-
 function onKey(event: VnKeyboardEvent): void {
   if (state.tab !== "network" || ui.typing || ui.menu) return;
   const ctrl = event.ctrlKey || event.metaKey;
   if (ctrl && event.key.toLowerCase() === "c" && !event.shiftKey) {
-    // Text selected in the details pane is the engine's to copy.
     if (globalThis.getSelection?.()?.toString()) return;
     if (ui.copyTarget !== "network" || state.netSelected === null) return;
     const entry = state.net.find((e) => e.seq === state.netSelected);
@@ -486,8 +438,6 @@ onUnmounted(() => {
 .c-kind.xhr {
   color: #e3b341;
 }
-/* A reload marker: a divider in the list, not an exchange. Same 20 px height
- * as a row (the virtual list's rows are fixed-height). */
 .row.marker {
   background: #1c1730;
   border-color: #3b2f63;
@@ -507,11 +457,6 @@ onUnmounted(() => {
   flex-shrink: 0;
   color: #8494a8;
 }
-/* `white-space` is set HERE rather than inherited from `.row`: the engine
- * maps text properties onto gpui per element, and a flex item's inline
- * children do not pick the parent's `nowrap` up — a long URL wrapped to two
- * lines and overflowed a 20 px row. Stated because it is a real divergence
- * from a browser, not a style preference. */
 .c-url {
   flex: 1;
   min-width: 0;
@@ -519,11 +464,6 @@ onUnmounted(() => {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-/* …and the two runs are a flex ROW, not inline text: two inline spans that do
- * not fit break between them whatever `nowrap` says (the engine's inline
- * fallback wraps at span boundaries), which put the path of a long URL on a
- * second line once the details pane narrowed the list. In a row the origin
- * gives way first and the path keeps its ellipsis. */
 .c-url.split-url {
   display: flex;
   flex-direction: row;
@@ -547,10 +487,6 @@ onUnmounted(() => {
 .rest-only {
   color: #d7e0ea;
 }
-/* Chromium's Protocol and Connection ID columns, from the transport's own
- * account of the connection (redjs `fetch::net_info`, spliced onto the row by
- * the host). A new connection's id is drawn brighter than a reused one's, so
- * a burst of fresh dials — the thing worth seeing — stands out. */
 .c-proto {
   width: 84px;
   flex-shrink: 0;
@@ -559,7 +495,6 @@ onUnmounted(() => {
 .c-proto.h2 {
   color: #a5d6ff;
 }
-/* An answer from the HTTP cache: no connection, Chromium's "(disk cache)". */
 .c-proto.disk {
   color: #8494a8;
   font-style: italic;

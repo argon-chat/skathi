@@ -1,17 +1,9 @@
 {
-  // The BUILD-TIME half of this package: the builder scripts at the root
-  // (build.ts, prod.ts, tailwind.ts, shaders.ts, fetch-slang.ts) and the
-  // devtools clients. A separate program from tsconfig.json's, because it is a
-  // separate WORLD: these run under bun with the full Node surface, while
-  // `src/` runs inside JavaScriptCore with the deliberately small surface
-  // `src/engine.d.ts` declares. The two cannot share one program — `@types/bun`
-  // and `engine.d.ts` both declare `console`, `Event` and the timers, and one
-  // `declare var` per name is the limit.
+  // The build-time half: builder scripts and devtools clients, which run under bun with the full Node surface.
+  // Separate from tsconfig.json because `src/` runs in JavaScriptCore with the small surface `src/engine.d.ts`
+  // declares, and `@types/bun` and `engine.d.ts` both declare `console`, `Event` and the timers.
   //
-  // `test/` is NOT here. Those files are TypeScript and `bun test` runs them,
-  // but a strict pass over them needs the three harnesses' `new Function`
-  // boundary to be given a hand-written return type first — see
-  // research/reports/m20/runtime-ts.md, "what is not type-checked yet".
+  // `test/` is not here: a strict pass needs the harnesses' `new Function` boundary to get a hand-written return type first.
   "compilerOptions": {
     "target": "ESNext",
     "module": "ESNext",

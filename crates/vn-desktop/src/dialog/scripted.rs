@@ -1,19 +1,9 @@
-//! `VN_DIALOGS=scripted`: a dialog that waits for the devtools instead of the
-//! user (mod.rs, "the test seam").
+//! `VN_DIALOGS=scripted`: a dialog that waits for the devtools instead of the user.
 //!
-//! A scripted dialog runs on its own `vn-dialog` (or `vn-ask`) thread exactly
-//! like a real one, owned and serialised the same way; only the middle step
-//! differs. The thread parks a [`Pending`] entry and waits for `dialog
-//! answer` (a file dialog's paths), `dialog choose` (a question's button) or
-//! `dialog cancel`, checking its owner every 25 ms so a closing window
-//! cancels it the way the `WM_CLOSE` timer cancels a real one.
-//!
-//! The answer is validated the way the OS dialog's flags would constrain the
-//! user: an Open names existing files (`FOS_FILEMUSTEXIST`), at most one
-//! without `multiple`; a folder pick names a folder; a Save names a path in
-//! an existing folder (`FOS_PATHMUSTEXIST`); a question takes one of its own
-//! buttons. A rejected answer leaves the dialog waiting, as a real dialog
-//! stays open on a bad entry.
+//! The dialog still runs on its own thread, owned and serialised like a real one: it parks a
+//! [`Pending`] and waits for `dialog answer` / `choose` / `cancel`, polling its owner every 25 ms.
+//! Answers are validated as the OS dialog's flags would (existing files, an existing folder,
+//! one of the question's buttons); a rejected answer leaves the dialog waiting.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,7 +17,6 @@ use super::ask::{label_of, Ask};
 use super::{describe, Cancellation, Kind, Native};
 use crate::Fail;
 
-/// The answer a scripted dialog waits for.
 pub enum Answer {
     Paths(Vec<PathBuf>),
     Button(usize),
@@ -35,12 +24,9 @@ pub enum Answer {
     Cancel,
 }
 
-/// What a waiting dialog takes as an answer.
 enum Expect {
     Color,
-    /// A file dialog: paths, checked against its kind.
     Paths { kind: Kind, multiple: bool },
-    /// A question: one of its buttons, by label (without `&`).
     Button { labels: Vec<String> },
 }
 
@@ -84,7 +70,6 @@ fn wait(window: u64, what: &'static str, expect: Expect, summary: Json, waiting:
     }
 }
 
-/// The dialog thread's side of a file dialog.
 pub(super) fn pick(n: &Native, window: u64, what: &'static str, cancel: &Cancellation) -> Result<Option<Vec<PathBuf>>, Fail> {
     let expect = Expect::Paths { kind: n.kind, multiple: n.multiple };
     let waiting = format!("{what} ({})", n.kind.as_str());
@@ -183,8 +168,7 @@ pub fn answer(id: u64, paths: Vec<PathBuf>) -> Result<Json, String> {
     Ok(json!({ "id": id, "answered": n }))
 }
 
-/// Which of `labels` `button` names: an index, or a label (any case, `&`
-/// ignored).
+/// Which of `labels` `button` names: an index, or a label (any case, `&` ignored).
 fn button_index(labels: &[String], button: &str) -> Option<usize> {
     let b = button.trim();
     if let Ok(i) = b.parse::<usize>() {

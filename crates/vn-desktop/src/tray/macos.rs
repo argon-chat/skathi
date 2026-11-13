@@ -1,28 +1,15 @@
 //! The application's icon in the menu bar: an `NSStatusItem`.
 //!
-//! AppKit belongs to the main thread, which on macOS is also gpui's and JSC's.
-//! Windows gives the tray a thread and a message window of its own; here the
-//! main queue is that thread. `set` and `stop` may come from any thread: they
-//! admit the change exactly as windows.rs does (the same revision and the same
-//! coalescing slot) and wake the main queue, never waiting for it, so a caller
-//! on the main thread cannot deadlock and nothing appears before AppKit runs.
+//! AppKit belongs to the main thread (also gpui's and JSC's), so the main queue plays the role of
+//! windows.rs's tray thread. `set` and `stop` may come from any thread: they admit the change as
+//! windows.rs does (same revision, same coalescing slot) and wake the main queue without waiting, so
+//! a main-thread caller cannot deadlock.
 //!
-//! - **The item** is created by the first model and removed by `set(None)` or
-//!   `stop` (`removeStatusItem:`). Its button shows the icon (mac_plan.rs: an
-//!   18-point square at 1× and 2×, a template when asked or one grey tone;
-//!   without an icon, the application's), the tooltip, and the same text as
-//!   its VoiceOver label.
-//! - **Clicks** reach one target object per controller, on mouse up of either
-//!   button. Without `on_click` the item owns its menu and AppKit opens it at
-//!   any click. With one, a primary click is reported, and a secondary click
-//!   (or Control-click) opens the menu for the duration of that click
-//!   (`performClick:` with the menu attached, then detached again).
-//! - **Menu items** are built from the model when it is admitted, with the
-//!   revision and their action slot in the `tag`, so the current snapshot
-//!   fences a selection from a replaced menu as windows.rs does. A new model
-//!   cancels an open menu (windows.rs posts `WM_CANCELMODE`).
-//! - **Callbacks** run on the main thread. A Rust callback must not block it;
-//!   JS callbacks are posted to the VM by vn-app as on Windows.
+//! Clicks reach one target per controller on mouse up. Without `on_click` AppKit owns the menu;
+//! otherwise a secondary click shows it for the duration of the click (`performClick:` with the menu
+//! attached, then detached). Menu items carry the revision and action slot in their `tag`, fencing a
+//! selection from a replaced menu; a new model cancels an open menu. Callbacks run on the main
+//! thread, so a Rust callback must not block it; JS callbacks are posted to the VM by vn-app.
 
 use super::{
     mac_plan::{self, Node, Press},
@@ -54,14 +41,12 @@ use std::{
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(super) struct Controller {
-    /// This controller's item in [`ITEMS`].
     id: u64,
     me: Weak<Controller>,
     stopping: AtomicBool,
     revision: AtomicU64,
     pending: Mutex<Option<(u64, Option<Options>)>>,
-    /// A drain is queued on the main queue; later updates only replace
-    /// `pending` (they coalesce, as windows.rs's do).
+    /// A drain is queued on the main queue; later updates only replace `pending`.
     scheduled: AtomicBool,
 }
 impl Controller {
@@ -164,15 +149,13 @@ fn guarded(body: impl FnOnce()) {
     }
 }
 
-/// The model a status item shows, and the action table its menu was built
-/// with (mac_plan.rs). Immutable: a menu that is open keeps its own.
+/// The model a status item shows and its menu's action table. Immutable: an open menu keeps its own.
 struct Snapshot {
     revision: u64,
     options: Options,
     actions: Vec<Option<Callback>>,
 }
 
-/// A controller's status item. Main thread only.
 struct Native {
     mtm: MainThreadMarker,
     shared: Weak<Controller>,
@@ -181,7 +164,6 @@ struct Native {
     target: Retained<Target>,
     snapshot: Rc<Snapshot>,
     menu: Option<Retained<NSMenu>>,
-    /// The icon model the button's image was made from.
     icon: Option<Option<Icon>>,
 }
 impl Native {
@@ -237,9 +219,7 @@ thread_local! {
     /// Every controller's item, by controller id. Main thread only. Taken out
     /// while AppKit is called, so no borrow is held across a nested run loop.
     static ITEMS: RefCell<HashMap<u64, Native>> = RefCell::new(HashMap::new());
-    /// Status-item callbacks on the stack.
     static ACTIVE: Cell<usize> = const { Cell::new(0) };
-    /// The last failure reported per controller, so a repeated one logs once.
     static REPORTED: RefCell<HashMap<u64, String>> = RefCell::new(HashMap::new());
 }
 
@@ -251,7 +231,6 @@ fn report(id: u64, message: String) {
     }
 }
 
-/// Main thread: shows the controller's pending model, or removes its item.
 fn apply(mtm: MainThreadMarker, shared: &Arc<Controller>) {
     if shared.stopping.load(Ordering::Acquire) {
         return;
@@ -282,7 +261,6 @@ fn apply(mtm: MainThreadMarker, shared: &Arc<Controller>) {
         }
         None => Native::new(mtm, shared, snapshot.clone()),
     };
-    // Old model's menu first: an open one is closed, as on Windows.
     let old_menu = native.menu.take();
     if let Some(menu) = &old_menu {
         menu.cancelTracking();
@@ -322,14 +300,12 @@ fn apply(mtm: MainThreadMarker, shared: &Arc<Controller>) {
     drop(old_menu);
 }
 
-/// Main thread: removes the controller's item, if it has one.
 fn remove(_: MainThreadMarker, id: u64) {
     let native = ITEMS.with(|items| items.borrow_mut().remove(&id));
     REPORTED.with(|reported| reported.borrow_mut().remove(&id));
     drop(native);
 }
 
-/// The item's button was clicked (on mouse up).
 fn pressed(mtm: MainThreadMarker, id: u64) {
     let Some((shared, status, snapshot, has_menu)) = ITEMS.with(|items| {
         let items = items.borrow();
@@ -365,9 +341,8 @@ fn pressed(mtm: MainThreadMarker, id: u64) {
     }
 }
 
-/// A secondary click with `on_click`: the item shows its menu for as long as
-/// the click's tracking lasts, since AppKit highlights the item and places
-/// the menu only for a menu of its own.
+/// A secondary click with `on_click`: show the menu for the click's tracking, since AppKit only
+/// highlights and places the menu of an item that owns one.
 fn open_menu(mtm: MainThreadMarker, id: u64, status: &NSStatusItem) {
     let Some(menu) = ITEMS.with(|items| {
         items
@@ -383,7 +358,6 @@ fn open_menu(mtm: MainThreadMarker, id: u64, status: &NSStatusItem) {
         // the registry is not borrowed meanwhile, so a model can arrive.
         unsafe { button.performClick(None) };
     }
-    // The item as its model is now (removed, replaced, or the same).
     let owned = ITEMS.with(|items| {
         let items = items.borrow();
         let native = items.get(&id)?;
@@ -392,7 +366,6 @@ fn open_menu(mtm: MainThreadMarker, id: u64, status: &NSStatusItem) {
     status.setMenu(owned.as_deref());
 }
 
-/// A menu item was chosen.
 fn selected(id: u64, tag: isize) {
     let Some((shared, snapshot)) = ITEMS.with(|items| {
         let items = items.borrow();
@@ -409,7 +382,6 @@ fn selected(id: u64, tag: isize) {
     }
 }
 
-/// Runs a callback of the current model only (windows.rs's `selected`).
 fn fire(shared: &Weak<Controller>, snapshot: &Snapshot, callback: &Callback) {
     if shared
         .upgrade()
@@ -433,14 +405,12 @@ define_class!(
     struct Target;
 
     impl Target {
-        /// The status item's button, on mouse up of either button.
         #[unsafe(method(press:))]
         fn press(&self, _sender: Option<&AnyObject>) {
             let (mtm, id) = (self.mtm(), self.ivars().id);
             guarded(|| pressed(mtm, id));
         }
 
-        /// A menu item; its tag is mac_plan.rs's.
         #[unsafe(method(select:))]
         fn select(&self, sender: Option<&NSMenuItem>) {
             let id = self.ivars().id;
@@ -537,7 +507,6 @@ fn detach(menu: &NSMenu) {
     }
 }
 
-/// The button's image: the model's icon at 1× and 2×, or the application's.
 fn image(mtm: MainThreadMarker, icon: Option<&Icon>) -> Result<Retained<NSImage>, String> {
     let Some(icon) = icon else {
         return app_icon(mtm).ok_or_else(|| "the application has no icon".into());
@@ -557,7 +526,6 @@ fn image(mtm: MainThreadMarker, icon: Option<&Icon>) -> Result<Retained<NSImage>
     Ok(image)
 }
 
-/// The application's icon, at the size the item shows it.
 fn app_icon(mtm: MainThreadMarker) -> Option<Retained<NSImage>> {
     let icon = NSApplication::sharedApplication(mtm).applicationIconImage()?;
     // A copy: the application's image is shared, and its size is the image's.
@@ -567,7 +535,6 @@ fn app_icon(mtm: MainThreadMarker) -> Option<Retained<NSImage>> {
     Some(icon)
 }
 
-/// The bundle's display name (or the process name), for an empty tooltip.
 fn app_name() -> Option<String> {
     NSRunningApplication::currentApplication()
         .localizedName()

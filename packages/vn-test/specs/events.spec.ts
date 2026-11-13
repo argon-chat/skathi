@@ -1,19 +1,3 @@
-// contextmenu, auxclick, one event per press, `detail`, and `<img>` load /
-// error on the real host (m26 fixes, docs/RUNTIME.md §5.6).
-//
-//   bun test packages/vn-test/specs/events.spec.ts
-//
-// The gestures are real gpui input: `mouse` dispatches a MouseDown and a
-// MouseUp through gpui's own hit test, and `key` a KeyDown and a KeyUp. The
-// JS half (what the payload becomes) is test/runtime-events-m26.test.ts;
-// this is the host half — which box is the target, how many times, in what
-// order, and whether an `<img>` is answered at all.
-//
-// Not here: `dblclick` (the devtools `mouse` gesture is a single click, and the
-// click count is the platform's) and `pointercancel` (it needs the window to
-// lose activation mid-press, which a spec must not do to the desktop); both are
-// unit-tested on the payload.
-
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { expect, launch } from "../src/index";
 
@@ -39,7 +23,6 @@ async function fresh(): Promise<string[]> {
   return out;
 }
 
-/** `#sel`'s centre, as the gesture and a keyboard menu aim at it. */
 async function centre(sel: string): Promise<string> {
   const b = await app.locator(sel).boundingBox();
   return `x=${Math.round(b.x + b.w / 2)} y=${Math.round(b.y + b.h / 2)}`;
@@ -72,11 +55,9 @@ describe("contextmenu from the mouse", () => {
       `mousedown@trigger|t=inner b=2 bs=2 d=1 ${at} c=true`,
       `mouseup@inner|t=inner b=2 bs=0 d=1 ${at} c=true`,
       `mouseup@trigger|t=inner b=2 bs=0 d=1 ${at} c=true`,
-      // The right button's click, before the menu: Chromium on Windows
-      // finishes the release before it shows one.
+      // The right button's click, before the menu: Chromium on Windows finishes the release before
+      // it shows one.
       `auxclick@trigger|t=inner b=2 bs=0 d=1 ${at} c=true`,
-      // The element under the pointer is the target, whether it listens for
-      // contextmenu or not (E-2 retired, crates/vn-tree/src/pointer.rs).
       `contextmenu@trigger|t=inner b=2 bs=0 d=0 ${at} c=true`,
     ]);
     await expect(app.locator("#menu")).toHaveCount(1);

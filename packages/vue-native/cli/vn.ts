@@ -2,9 +2,6 @@
 // vn — turn a vue-native app into a Windows exe or a macOS .app, without a Rust toolchain.
 //
 //   bun packages/vue-native/cli/vn.ts build apps/hello
-//
-// See docs/PACKAGING.md for the author-facing guide, and
-// research/reports/m25/packaging-design.md for why it is shaped this way.
 
 import { spawn } from "node:child_process";
 import { buildApp, summary } from "./build-app";
@@ -145,7 +142,6 @@ async function main(argv: string[]): Promise<number> {
       sign: flags["no-sign"] ? false : typeof flags.sign === "string" ? flags.sign.trim() : undefined,
     });
     if (flags.json) {
-      // One line, for scripts and specs — the summary minus the prose.
       const s = result.stamp;
       console.log(
         JSON.stringify({

@@ -184,8 +184,7 @@ impl std::error::Error for Error {}
 mod windows;
 #[cfg(windows)]
 use windows::Controller;
-// The status item's AppKit half; what it is told is decided in mac_plan.rs,
-// unit-tested on every OS.
+// The status item's AppKit half; what it is told is decided in mac_plan.rs.
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -220,8 +219,7 @@ pub struct Tray {
     owner: Arc<Owner>,
 }
 static APP: OnceLock<Mutex<Weak<Owner>>> = OnceLock::new();
-/// Whether the last model given to the application's icon ([`Tray::app`]) was
-/// one to show, rather than a removal.
+/// Whether the application's icon was last given a model to show, not a removal.
 static APP_SHOWN: AtomicBool = AtomicBool::new(false);
 impl Tray {
     pub const fn is_available() -> bool {
@@ -232,7 +230,6 @@ impl Tray {
             owner: Arc::new(Owner(Controller::start()?)),
         })
     }
-    /// The same icon for the application's Rust and JavaScript configuration.
     pub fn app() -> Result<Self, Error> {
         let mut slot = APP
             .get_or_init(|| Mutex::new(Weak::new()))
@@ -267,9 +264,8 @@ impl Tray {
             .and_then(|slot| slot.lock().ok()?.upgrade())
             .is_some_and(|owner| Arc::ptr_eq(&owner, &self.owner))
     }
-    /// Whether the application's icon is up: its last model was one to show
-    /// (from Rust or JavaScript) and it has not been dropped since. What a
-    /// hidden start asks before it trusts the user to have a way back in.
+    /// Whether the application's icon is up (shown and not dropped); a hidden start asks before
+    /// trusting the user to have a way back in.
     pub fn app_shown() -> bool {
         APP_SHOWN.load(Ordering::Acquire) && Self::existing_app().is_some()
     }

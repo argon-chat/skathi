@@ -1,12 +1,6 @@
-// DOM collections and the interface objects code tests nodes against
-// (research/reports/m26/dom-globals-1.md).
-//
-// motion's `animate()` resolves its subject with `subject instanceof NodeList`,
-// a ReferenceError while the global was missing; the client's AudioManager
-// tests `instanceof HTMLAudioElement` inside a MutationObserver callback; emojix
-// compares `nodeType` with `Node.TEXT_NODE`, which was undefined because redjs
-// aliases `Node` to `Element`. Each expectation below is what Chrome answers
-// (Chrome 156, probed for this report), except where a test says otherwise.
+// DOM collections and the interface objects code tests nodes against (`instanceof NodeList`,
+// `instanceof HTMLAudioElement`, `Node.TEXT_NODE`). Each expectation is what Chrome answers, except where a test
+// says otherwise.
 
 import { describe, expect, test } from "bun:test";
 import { h } from "@vue/runtime-core";
@@ -84,7 +78,7 @@ describe("childNodes: a live NodeList, the renderer's own list", () => {
     expect(t.childNodes.length).toBe(0);
   });
 
-  test("divergence (docs/RUNTIME.md §5.24): it is an Array underneath", () => {
+  test("divergence: it is an Array underneath", () => {
     const { g, vue } = world();
     const list = vue("div").childNodes;
     expect(Array.isArray(list)).toBe(true);

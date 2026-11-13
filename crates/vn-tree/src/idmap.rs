@@ -1,9 +1,4 @@
 //! Maps keyed by node id, hashed with one multiply.
-//!
-//! The per-frame side maps (bounds, the retained cache, culling) are probed
-//! several times for every built node, every frame. Their keys are small
-//! integers the tree hands out, never attacker-chosen, so SipHash's DoS
-//! resistance buys nothing and costs most of each lookup.
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};

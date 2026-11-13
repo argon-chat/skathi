@@ -1,32 +1,17 @@
-// What the Network details pane and its copy actions are made of — pure
-// functions, no Vue and no engine globals, so `bun test apps/devtools/test`
-// can hold them down without a host.
-//
-// The wire (`net_detail`, crates/vn-app/src/devtools/net.rs) carries a body as
-// `utf8` text or `base64` bytes. Everything a person reads — the hex dump, the
-// pretty JSON, the form fields, "Copy as curl" — is derived here, in the
-// inspector, from those two shapes.
-
 import type { FormField, HeaderPair, NetBody, NetDetail } from "./protocol";
-
-// ---------------------------------------------------------------------------
-// bytes
-// ---------------------------------------------------------------------------
 
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const B64_INDEX: Int16Array = (() => {
   const t = new Int16Array(128).fill(-1);
   for (let i = 0; i < 64; i++) t[B64.charCodeAt(i)] = i;
-  // base64url as well — it costs two table entries.
   t["-".charCodeAt(0)] = 62;
   t["_".charCodeAt(0)] = 63;
   return t;
 })();
 
 /**
- * RFC 4648 base64 -> bytes. Not `atob`: the inspector's declared surface
- * (apps/env.d.ts) has no `atob`, and a binary string would then need a second
- * pass to become bytes anyway.
+ * Not `atob`: the inspector's declared surface (apps/env.d.ts) has no `atob`, and a binary string
+ * would then need a second pass to become bytes anyway.
  */
 export function fromBase64(text: string): Uint8Array {
   const out = new Uint8Array(Math.floor((text.length * 3) / 4) + 3);
@@ -36,7 +21,7 @@ export function fromBase64(text: string): Uint8Array {
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
     const v = c < 128 ? B64_INDEX[c] : -1;
-    if (v < 0) continue; // padding, whitespace
+    if (v < 0) continue;
     acc = ((acc << 6) | v) & 0xffffff;
     bits += 6;
     if (bits >= 8) {
@@ -47,14 +32,12 @@ export function fromBase64(text: string): Uint8Array {
   return out.subarray(0, o);
 }
 
-/** Bytes per hex-dump row. */
 export const HEX_ROW = 16;
 
 export function hexRows(length: number): number {
   return Math.ceil(length / HEX_ROW);
 }
 
-/** `00000010  de ad be ef 00 01 02 03  04 05 06 07 08 09 0a 0b  ....…` */
 export function hexLine(bytes: Uint8Array, row: number): string {
   const at = row * HEX_ROW;
   let hex = "";
@@ -73,25 +56,12 @@ export function hexLine(bytes: Uint8Array, row: number): string {
   return `${at.toString(16).padStart(8, "0")}  ${hex} ${ascii}`;
 }
 
-/** The whole dump, for the clipboard. */
 export function hexDump(bytes: Uint8Array): string {
   const rows: string[] = [];
   for (let r = 0; r < hexRows(bytes.length); r++) rows.push(hexLine(bytes, r));
   return rows.join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// text
-// ---------------------------------------------------------------------------
-
-/**
- * A text cut into rows of at most `cols` characters.
- *
- * The body view is a virtual list of fixed-height rows (`../virtual.ts`), and
- * nothing in this runtime can measure text, so a long line is HARD-wrapped
- * here at a column count the pane computes from its width. Tabs become two
- * spaces for the same reason: a fixed advance width is the only one we know.
- */
 export function textLines(text: string, cols: number, max = 250_000): string[] {
   const width = Math.max(8, Math.floor(cols));
   const out: string[] = [];
@@ -104,13 +74,6 @@ export function textLines(text: string, cols: number, max = 250_000): string[] {
   return out;
 }
 
-/**
- * Like `textLines`, but a line is broken at its last space when there is one
- * in the second half of the row — for a header VALUE, which is often prose
- * ("credentials include · mode cors · …") and reads badly cut mid-word. A
- * token longer than the row (a URL, a cookie) is still cut hard: the engine
- * will not break it either.
- */
 export function wrapWords(text: string, cols: number, max = 400): string[] {
   const width = Math.max(8, Math.floor(cols));
   const out: string[] = [];
@@ -133,7 +96,6 @@ export function isJsonMime(mime: string | undefined): boolean {
   return essence === "application/json" || essence.endsWith("+json") || essence === "application/x-ndjson";
 }
 
-/** Two-space JSON, or `null` when the text is not a JSON object or array. */
 export function prettyJson(text: string): string | null {
   const t = text.trim();
   if (!t || (t[0] !== "{" && t[0] !== "[")) return null;
@@ -152,7 +114,6 @@ function decodeComponent(s: string): string {
   }
 }
 
-/** `a=1&b=two+words` -> `[["a","1"],["b","two words"]]`. */
 export function parseForm(text: string): HeaderPair[] {
   const out: HeaderPair[] = [];
   for (const part of text.replace(/^\?/, "").split("&")) {
@@ -165,7 +126,6 @@ export function parseForm(text: string): HeaderPair[] {
   return out;
 }
 
-/** The URL's query string as pairs — the Payload tab's first section. */
 export function queryOf(url: string): HeaderPair[] {
   const q = url.indexOf("?");
   if (q < 0) return [];
@@ -185,23 +145,12 @@ export function formatMs(ms: number | null | undefined): string {
   return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
 }
 
-/** `12:03:04.123`, local time. */
 export function clock(at: number): string {
   const d = new Date(at);
   const p = (n: number, w = 2) => String(n).padStart(w, "0");
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
 
-// ---------------------------------------------------------------------------
-// headers, and the ones that are secrets
-// ---------------------------------------------------------------------------
-
-/**
- * Headers whose VALUE is a credential. Shown — this is the developer's own
- * app — but masked until clicked: a screenshot of a Network panel is the most
- * common way a session cookie leaves a machine, and the Argon client's
- * `ArgonSecure` cookie is exactly that.
- */
 export function isSensitive(name: string): boolean {
   const n = name.toLowerCase();
   return n === "cookie" || n === "set-cookie" || n === "authorization" || n === "proxy-authorization";
@@ -211,12 +160,6 @@ function maskValue(v: string): string {
   return v ? `•••••• (${v.length})` : "";
 }
 
-/**
- * A masked header value that still says WHICH cookies there are: the names
- * stay, the values go. `a=1; b=22` -> `a=•••••• (1); b=•••••• (2)`. A
- * `Set-Cookie` line keeps its attributes (`Path`, `Expires`, …), which are not
- * secret and are usually the question.
- */
 export function maskHeader(name: string, value: string): string {
   const n = name.toLowerCase();
   if (n === "cookie") {
@@ -235,7 +178,6 @@ export function maskHeader(name: string, value: string): string {
     const eq = first.indexOf("=");
     return (eq < 0 ? maskValue(first) : `${first.slice(0, eq)}=${maskValue(first.slice(eq + 1))}`) + rest;
   }
-  // Authorization: the scheme is not the secret.
   const sp = value.indexOf(" ");
   return sp > 0 && sp < 16 ? `${value.slice(0, sp)} ${maskValue(value.slice(sp + 1))}` : maskValue(value);
 }
@@ -244,16 +186,12 @@ export interface HeaderRow {
   name: string;
   value: string;
   sensitive: boolean;
-  /** Where a row came from when it is not simply "the app passed it". */
   note?: string;
 }
 
 /**
- * The request headers as they went out, as far as anything can know: the
- * app's own, the Content-Type its body implied, and the jar's Cookie (redjs
- * appends it AFTER a script-set one, `webapi::cookies` C-5). The transport's
- * own (Host, Content-Length, …) are never visible to script and are not
- * invented here.
+ * The transport's own (Host, Content-Length, …) are never visible to script and are not invented
+ * here.
  */
 export function requestHeaderRows(d: NetDetail): HeaderRow[] {
   const rows: HeaderRow[] = (d.request?.headers || []).map(([name, value]) => ({
@@ -279,11 +217,6 @@ export function requestHeaderRows(d: NetDetail): HeaderRow[] {
   return rows;
 }
 
-/**
- * The response headers, plus its Set-Cookie lines: the RAW ones the transport
- * received when the host has them (`cookies.wire`, redjs `net_info`), else the
- * ones reconstructed from what the jar changed.
- */
 export function responseHeaderRows(d: NetDetail): HeaderRow[] {
   const rows: HeaderRow[] = (d.response?.headers || []).map(([name, value]) => ({
     name,
@@ -292,9 +225,6 @@ export function responseHeaderRows(d: NetDetail): HeaderRow[] {
   }));
   const wire = d.cookies?.wire;
   if (wire) {
-    // The jar stores a response's cookies only under credentials "include"
-    // (redjs `Credentials::applies`: the app's origin is opaque, so
-    // "same-origin" matches nothing). Received is not the same as kept.
     const cred = d.request?.credentials;
     const note = cred && cred !== "include" ? `as received · not stored (credentials "${cred}")` : "as received";
     for (const line of wire) rows.push({ name: "set-cookie", value: line, sensitive: true, note });
@@ -310,17 +240,11 @@ export function headersText(rows: readonly { name: string; value: string }[]): s
   return rows.map((r) => `${r.name}: ${r.value}`).join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// bodies
-// ---------------------------------------------------------------------------
-
-/** The kept bytes of a base64 body, or `null` for a text one. */
 export function bodyBytes(body: NetBody | null | undefined): Uint8Array | null {
   if (!body || body.encoding !== "base64" || body.data === undefined) return null;
   return fromBase64(body.data);
 }
 
-/** One line on what is (not) in a body — the bar above every body view. */
 export function bodySummary(body: NetBody | null | undefined, budget: number): string {
   if (body === undefined) return "not read yet";
   if (body === null) return "no body";
@@ -347,18 +271,12 @@ export function bodySummary(body: NetBody | null | undefined, budget: number): s
   return parts.join(" · ");
 }
 
-/** What "Copy response body" puts on the clipboard: the text, or the hex dump. */
 export function bodyAsText(body: NetBody | null | undefined): string {
   if (!body || body.data === undefined) return "";
   if (body.encoding === "base64") return hexDump(fromBase64(body.data));
   return body.data;
 }
 
-// ---------------------------------------------------------------------------
-// copy as curl / fetch
-// ---------------------------------------------------------------------------
-
-/** A POSIX-shell single-quoted word. */
 export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
@@ -393,8 +311,8 @@ function caveats(d: NetDetail): string[] {
 
 function appHeaders(d: NetDetail): HeaderPair[] {
   const rows = requestHeaderRows(d).filter((r) => r.name.toLowerCase() !== "cookie");
-  // A multipart Content-Type names a boundary the engine generated and the
-  // tool will generate again; copying it would point at the wrong one.
+  // A multipart Content-Type names a boundary the engine generated and the tool will generate
+  // again; copying it would point at the wrong one.
   const multipart = d.request?.bodyInfo?.kind === "formdata";
   return rows
     .filter((r) => !(multipart && r.name.toLowerCase() === "content-type"))
@@ -405,11 +323,6 @@ function cookieOf(d: NetDetail): string {
   return requestHeaderRows(d).find((r) => r.name.toLowerCase() === "cookie")?.value || "";
 }
 
-/**
- * Chromium's "Copy as cURL (bash)": the method, the headers the app passed,
- * the cookies that went with it (`-b`, real values — copying is the explicit
- * act masking defers to), and the body.
- */
 export function asCurl(d: NetDetail): string {
   const method = methodOf(d);
   const parts = [`curl ${shellQuote(d.entry.url)}`];
@@ -453,9 +366,8 @@ function formDataBuilder(fields: FormField[]): string {
 }
 
 /**
- * Chromium's "Copy as fetch": the same request as a `fetch()` call. No Cookie
- * header — a script cannot set one in a browser; `credentials` is what carries
- * the cookies, and it is copied as the app gave it.
+ * No Cookie header — a script cannot set one in a browser; `credentials` is what carries the
+ * cookies, and it is copied as the app gave it.
  */
 export function asFetch(d: NetDetail): string {
   const method = methodOf(d);

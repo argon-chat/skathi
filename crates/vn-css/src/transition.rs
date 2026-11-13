@@ -1,19 +1,6 @@
-//! CSS `transition` — parsing and the timing model.
-//!
-//! lightningcss hands us either the `transition` shorthand or the four
-//! longhands (`transition-property/-duration/-delay/-timing-function`). This
-//! module folds a declaration block's worth of those into the per-rule
-//! `Vec<TransitionSpec>` that the cascade carries on `ComputedStates`, and
-//! implements the easing evaluation the animator samples every frame.
-//!
-//! Browser-compat notes (owner policy: never diverge silently):
-//! - `transition-property` names vn-css cannot interpolate become
-//!   [`TransitionProperty::Other`]; the animator emits a one-shot advisory.
-//! - Shorthand names in `transition-property` (`padding`, `margin`,
-//!   `border-radius`, `gap`, `background`, `border`) expand to their longhands,
-//!   each inheriting that list entry's duration/delay/easing — as in CSS.
-//! - Negative `transition-delay` is clamped to zero with an advisory (v1);
-//!   CSS starts such a transition already partway through.
+//! `transition-*` parsing and the timing model. Names that cannot be interpolated become
+//! `TransitionProperty::Other` (the animator advises once); shorthands expand to their longhands; a
+//! negative `transition-delay` is clamped to zero with an advisory.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -22,108 +9,60 @@ use lightningcss::properties::{Property, PropertyId};
 use lightningcss::values::easing::{EasingFunction, StepPosition as CssStepPosition};
 use lightningcss::values::time::Time;
 
-// ---------------------------------------------------------------------------
-// the spec
-// ---------------------------------------------------------------------------
-
-/// A property a `transition` can name. Everything except [`Self::All`] and
-/// [`Self::Other`] is a *concrete* slot in `gpui::StyleRefinement` that the
-/// animator knows how to interpolate.
+/// A property a `transition` can name. Everything except [`Self::All`] and [`Self::Other`] is a
+/// *concrete* slot in `gpui::StyleRefinement` that the animator knows how to interpolate.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TransitionProperty {
-    /// `opacity`
     Opacity,
-    /// `color` (text color)
     Color,
     /// `background-color` (solid fills only)
     BackgroundColor,
     /// `border-color` (gpui keeps one color for all four sides)
     BorderColor,
-    /// `text-decoration-color` — the colour of the underline / strikethrough,
-    /// which gpui carries on the decoration itself rather than in a slot of
-    /// its own.
+    /// `text-decoration-color` — the colour of the underline / strikethrough, which gpui carries on
+    /// the decoration itself rather than in a slot of its own.
     TextDecorationColor,
-    /// SVG `fill`. Its USED value here is the element's `color`: gpui
-    /// rasterises an SVG into a single-colour alpha mask and tints the sprite
-    /// (`vn_tree::svg`), so a painted fill is that colour and an unpainted one
-    /// (`fill: none`) is a discrete endpoint CSS does not interpolate either.
+    /// Used value is the element's `color`: gpui tints SVG sprites with one colour; `fill: none` is
+    /// a discrete endpoint.
     Fill,
-    /// SVG `stroke` — the same, for the other half of the geometry.
     Stroke,
-    /// `width`
     Width,
-    /// `height`
     Height,
-    /// `min-width`
     MinWidth,
-    /// `min-height`
     MinHeight,
-    /// `max-width`
     MaxWidth,
-    /// `max-height`
     MaxHeight,
-    /// `padding-top`
     PaddingTop,
-    /// `padding-right`
     PaddingRight,
-    /// `padding-bottom`
     PaddingBottom,
-    /// `padding-left`
     PaddingLeft,
-    /// `margin-top`
     MarginTop,
-    /// `margin-right`
     MarginRight,
-    /// `margin-bottom`
     MarginBottom,
-    /// `margin-left`
     MarginLeft,
-    /// `border-top-left-radius`
     BorderTopLeftRadius,
-    /// `border-top-right-radius`
     BorderTopRightRadius,
-    /// `border-bottom-right-radius`
     BorderBottomRightRadius,
-    /// `border-bottom-left-radius`
     BorderBottomLeftRadius,
-    /// `row-gap`
     RowGap,
-    /// `column-gap`
     ColumnGap,
-    /// `font-size`
     FontSize,
-    /// `transform` — the whole function list travels as one value, because
-    /// that is how CSS interpolates it: matched lists interpolate
-    /// componentwise (`rotate(0deg)` → `rotate(90deg)` sweeps through 45°),
-    /// never entry-by-entry through the matrix, which would shear.
+    /// The whole function list travels as one value: matched lists interpolate componentwise, never
+    /// through the matrix, which would shear.
     Transform,
-    /// `--shading` — the effect parameter vector.
-    ///
-    /// Deliberately NOT part of [`Self::animatable`], so `transition: all` does
-    /// not cover it and it has to be named explicitly
-    /// (`transition: --shading 300ms`). Two reasons: `all` in CSS means "every
-    /// animatable *property*", and a custom property is not one — a browser
-    /// would not animate `--shading` under `all` either, since animating a
-    /// custom property needs an `@property` registration it does not have. And
-    /// an effect quad is the one style here that can cost a render-target
-    /// snapshot per frame, so opting into animating it should be explicit.
+    /// Excluded from `all`: a custom property is not an animatable property without an `@property`
+    /// registration.
     Shading,
-    /// `all` — expands to every animatable property at diff time.
     All,
     /// A property vn-css parses but cannot animate yet (one-shot advisory).
     Other(Rc<str>),
 }
 
-/// The number of concrete properties `all` expands to. `--shading`
-/// ([`TransitionProperty::Shading`]) is transitionable but deliberately outside
-/// this set — see that variant.
+/// The number of concrete properties `all` expands to.
 pub const ANIMATABLE_COUNT: usize = 29;
 
 impl TransitionProperty {
-    /// Every property vn-css can actually interpolate — the expansion of `all`.
-    ///
-    /// Returned by value (not as a `static`) because the enum carries an `Rc`
-    /// in one variant and so is neither `Sync` nor const-promotable.
+    /// By value: the enum carries an `Rc`, so it is neither `Sync` nor const-promotable.
     pub fn animatable() -> [TransitionProperty; ANIMATABLE_COUNT] {
         use TransitionProperty::*;
         [
@@ -202,32 +141,21 @@ impl TransitionProperty {
 /// Where a `steps()` function jumps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StepPosition {
-    /// `jump-start` / `start`
     JumpStart,
-    /// `jump-end` / `end` (the default)
     JumpEnd,
-    /// `jump-none`
     JumpNone,
-    /// `jump-both`
     JumpBoth,
 }
 
 /// A CSS easing function, with evaluation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Easing {
-    /// `linear`
     Linear,
-    /// `ease` — `cubic-bezier(0.25, 0.1, 0.25, 1)`
     Ease,
-    /// `ease-in` — `cubic-bezier(0.42, 0, 1, 1)`
     EaseIn,
-    /// `ease-out` — `cubic-bezier(0, 0, 0.58, 1)`
     EaseOut,
-    /// `ease-in-out` — `cubic-bezier(0.42, 0, 0.58, 1)`
     EaseInOut,
-    /// `cubic-bezier(x1, y1, x2, y2)`
     CubicBezier(f32, f32, f32, f32),
-    /// `steps(count, position)`
     Steps(u32, StepPosition),
 }
 
@@ -238,15 +166,12 @@ impl Default for Easing {
 }
 
 impl Easing {
-    /// Maps input progress (0..=1) to output progress. Cubic-bézier output may
-    /// leave 0..=1 (overshoot) — that is correct CSS.
+    /// Maps input progress (0..=1) to output progress.
     pub fn eval(self, t: f32) -> f32 {
         self.eval_f64(t as f64) as f32
     }
 
     /// The same curve for script timing, without rounding progress to GPU precision.
-    /// CSS control points retain their parsed precision; time and iteration
-    /// arithmetic stay doubles as required by the Web Animations object model.
     pub fn eval_f64(self, t: f64) -> f64 {
         match self {
             Easing::Linear => t,
@@ -260,8 +185,7 @@ impl Easing {
     }
 }
 
-/// One resolved transition: which property, for how long, after what delay,
-/// shaped by which easing.
+/// One resolved transition: which property, for how long, after what delay, shaped by which easing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransitionSpec {
     /// The property this entry governs.
@@ -274,8 +198,8 @@ pub struct TransitionSpec {
     pub easing: Easing,
 }
 
-/// The spec that governs `property`, or `None` when nothing does. Per CSS the
-/// LAST matching entry in the list wins; `all` matches every property.
+/// The spec that governs `property`, or `None` when nothing does. Per CSS the LAST matching entry
+/// in the list wins; `all` matches every property.
 pub fn spec_for<'s>(
     specs: &'s [TransitionSpec],
     property: &TransitionProperty,
@@ -287,8 +211,6 @@ pub fn spec_for<'s>(
 }
 
 /// The concrete properties a transition list covers, in first-mention order.
-/// `all` expands to [`TransitionProperty::animatable`]; `Other` is skipped
-/// (the animator reports it separately).
 pub fn covered(specs: &[TransitionSpec]) -> Vec<TransitionProperty> {
     let mut out: Vec<TransitionProperty> = Vec::new();
     for s in specs {
@@ -311,11 +233,6 @@ pub fn covered(specs: &[TransitionSpec]) -> Vec<TransitionProperty> {
     out
 }
 
-// ---------------------------------------------------------------------------
-// easing evaluation
-// ---------------------------------------------------------------------------
-
-/// The cubic-bézier basis with P0 = 0 and P3 = 1.
 fn bezier(a: f64, b: f64, t: f64) -> f64 {
     let mt = 1.0 - t;
     3.0 * mt * mt * t * a + 3.0 * mt * t * t * b + t * t * t
@@ -326,8 +243,6 @@ fn bezier_slope(a: f64, b: f64, t: f64) -> f64 {
     3.0 * mt * mt * a + 6.0 * mt * t * (b - a) + 3.0 * t * t * (1.0 - b)
 }
 
-/// Inverts x(t) with Newton-Raphson, falling back to bisection when the
-/// derivative vanishes (flat control polygons) or Newton leaves 0..=1.
 fn solve_t_for_x(x1: f64, x2: f64, x: f64) -> f64 {
     let mut t = x;
     for _ in 0..8 {
@@ -370,13 +285,10 @@ fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64, t: f64) -> f64 {
     if t >= 1.0 {
         return 1.0;
     }
-    // CSS restricts the control points' x to 0..=1; a clamp keeps x(t)
-    // monotonic so the inversion always converges.
     let (x1, x2) = (x1.clamp(0.0, 1.0), x2.clamp(0.0, 1.0));
     bezier(y1, y2, solve_t_for_x(x1, x2, t))
 }
 
-/// The CSS Easing Level 1 step-easing algorithm.
 fn steps(count: u32, position: StepPosition, t: f64) -> f64 {
     let n = count.max(1) as f64;
     let mut current = (t * n).floor();
@@ -392,7 +304,6 @@ fn steps(count: u32, position: StepPosition, t: f64) -> f64 {
         StepPosition::JumpBoth => n + 1.0,
     };
     if jumps <= 0.0 {
-        // `steps(1, jump-none)` is invalid CSS; degrade to a constant.
         return 0.0;
     }
     if t <= 1.0 && current > jumps {
@@ -401,14 +312,9 @@ fn steps(count: u32, position: StepPosition, t: f64) -> f64 {
     current / jumps
 }
 
-// ---------------------------------------------------------------------------
-// parsing
-// ---------------------------------------------------------------------------
-
 /// Accumulates one declaration block's transition longhands/shorthand.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Collector {
-    /// One inner `Vec` per list entry (a shorthand name expands in place).
     properties: Option<Vec<Vec<TransitionProperty>>>,
     durations: Option<Vec<Duration>>,
     delays: Option<Vec<Duration>>,
@@ -475,7 +381,6 @@ impl Collector {
                     delays.push(duration_of(&entry.delay, "transition-delay", diagnostics));
                     easings.push(easing_of(&entry.timing_function, diagnostics));
                 }
-                // The shorthand resets all four longhands.
                 self.properties = Some(properties);
                 self.durations = Some(durations);
                 self.delays = Some(delays);
@@ -529,20 +434,16 @@ impl Collector {
         }
     }
 
-    /// Zips the four component lists into specs, cycling the shorter ones —
-    /// `transition-property` decides how many transitions there are, exactly as
-    /// CSS does. `None` means the block declared no transition at all.
+    /// Zips the four component lists into specs, cycling the shorter ones — `transition-property`
+    /// decides how many transitions there are, exactly as CSS does.
     pub(crate) fn finish(self) -> Option<Vec<TransitionSpec>> {
         if !self.seen {
             return None;
         }
-        // The initial value of `transition-property` is `all`, so a lone
-        // `transition-duration: 200ms` means "all 200ms".
         let entries = self
             .properties
             .unwrap_or_else(|| vec![vec![TransitionProperty::All]]);
         if entries.is_empty() {
-            // `transition: none` / `transition-property: none` — clears.
             return Some(Vec::new());
         }
         let durations = self.durations.unwrap_or_default();
@@ -591,13 +492,10 @@ fn is_transition_id(id: &PropertyId) -> bool {
 }
 
 enum Expansion {
-    /// The `none` keyword — contributes no entry.
     None,
     Props(Vec<TransitionProperty>),
 }
 
-/// Maps a `transition-property` name onto the concrete slots it covers.
-/// Shorthand names expand; unknown/unsupported ones become `Other`.
 fn expand(id: &PropertyId) -> Expansion {
     use TransitionProperty::*;
     let name = id.name();
@@ -611,7 +509,6 @@ fn expand(id: &PropertyId) -> Expansion {
         "background" | "background-color" => one(BackgroundColor),
         // gpui keeps a single border color, so `border`/`border-color` collapse.
         "border" | "border-color" => one(BorderColor),
-        // The other three names in Tailwind's `transition-colors`.
         "text-decoration-color" => one(TextDecorationColor),
         "fill" => one(Fill),
         "stroke" => one(Stroke),
@@ -631,8 +528,6 @@ fn expand(id: &PropertyId) -> Expansion {
         "margin-right" => one(MarginRight),
         "margin-bottom" => one(MarginBottom),
         "margin-left" => one(MarginLeft),
-        // The logical names, resolved like the mapper resolves them
-        // (`horizontal-tb` + `ltr`).
         "padding-inline" => Expansion::Props(vec![PaddingLeft, PaddingRight]),
         "padding-block" => Expansion::Props(vec![PaddingTop, PaddingBottom]),
         "padding-inline-start" => one(PaddingLeft),
@@ -659,27 +554,20 @@ fn expand(id: &PropertyId) -> Expansion {
         "row-gap" => one(RowGap),
         "column-gap" => one(ColumnGap),
         "font-size" => one(FontSize),
-        // Tailwind's `transition-transform`, and shadcn's accordion chevron.
         "transform" => one(Transform),
-        // lightningcss parses an unknown property id — including a custom
-        // property — into `PropertyId::Custom`, whose `name()` keeps the
-        // leading dashes. `--shading` is the one custom property vue-native
-        // maps, so it is the one that animates.
+        // lightningcss parses an unknown property id — including a custom property — into
+        // `PropertyId::Custom`, whose `name()` keeps the leading dashes.
         "--shading" => one(Shading),
         other => one(Other(Rc::from(other))),
     }
 }
 
-/// Does the animator interpolate the property `name` (a CSS name, shorthands
-/// included)? The same expansion `transition-property` uses, so a script
-/// animation and a transition agree on what moves.
+/// Does the animator interpolate the property `name` (a CSS name, shorthands included)?
 pub(crate) fn animates(name: &str) -> bool {
     match expand(&PropertyId::from(name)) {
         Expansion::None => false,
         Expansion::Props(list) => list
             .iter()
-            // `--shading` is transitionable but outside `animatable()`, which
-            // is the list a script animation samples.
             .any(|p| {
                 !matches!(
                     p,
@@ -691,12 +579,8 @@ pub(crate) fn animates(name: &str) -> bool {
     }
 }
 
-/// One `<easing-function>` from text, as `Element.animate()` hands it over
-/// (`"ease-out"`, `"cubic-bezier(0.34, 1.56, 0.64, 1)"`, `"steps(4, end)"`).
-/// `None` for anything the cascade would not take as an
-/// `animation-timing-function` either — `linear(…)` among them, which the
-/// lightningcss in use does not parse, so `CSS.supports` answers no for it and
-/// `animate()` refuses it the way a browser without it does.
+/// `None` for anything `animation-timing-function` would not take either, including `linear(...)`,
+/// which the lightningcss in use does not parse.
 pub fn parse_easing(text: &str) -> Option<Easing> {
     use lightningcss::stylesheet::ParserOptions;
     let id = PropertyId::from("animation-timing-function");
@@ -710,8 +594,7 @@ pub fn parse_easing(text: &str) -> Option<Easing> {
     }
 }
 
-/// One `<time>` value. Shared with `keyframes.rs` — `animation-duration` and
-/// `transition-duration` parse identically.
+/// One `<time>` value.
 pub(crate) fn duration_of(t: &Time, what: &str, diagnostics: &mut Vec<String>) -> Duration {
     let ms = t.to_ms();
     if !ms.is_finite() {
@@ -719,23 +602,19 @@ pub(crate) fn duration_of(t: &Time, what: &str, diagnostics: &mut Vec<String>) -
         return Duration::ZERO;
     }
     if ms < 0.0 {
-        // CSS starts such a transition already partway through; v1 clamps.
         diagnostics.push(format!(
             "negative {what} ({ms}ms) is not supported yet (v1) — clamped to 0s"
         ));
         return Duration::ZERO;
     }
-    // `Duration::from_secs_f64` panics past `u64` seconds, and a track adds
-    // its delay and duration to an `Instant`, which panics on overflow too.
-    // `transition-delay: 9999999s` is a real idiom for "never"; three decades
-    // says the same and stays addable.
+    // `transition-delay: 9999999s` is an idiom for "never"; the cap says the same.
     Duration::from_secs_f64((ms as f64 / 1000.0).min(MAX_TIME_SECS))
 }
 
 /// The longest `<time>` a transition or animation keeps: about 31 years.
 pub(crate) const MAX_TIME_SECS: f64 = 1.0e9;
 
-/// One `<easing-function>`. Shared with `keyframes.rs`.
+/// One `<easing-function>`.
 pub(crate) fn easing_of(e: &EasingFunction, diagnostics: &mut Vec<String>) -> Easing {
     match e {
         EasingFunction::Linear => Easing::Linear,
@@ -870,9 +749,9 @@ mod tests {
         assert_eq!(s.len(), 3);
         assert_eq!(s[0].duration, ms(100));
         assert_eq!(s[1].duration, ms(200));
-        assert_eq!(s[2].duration, ms(100)); // cycled
+        assert_eq!(s[2].duration, ms(100));
         assert!(s.iter().all(|x| x.delay == ms(10)));
-        assert_eq!(s[2].easing, Easing::Linear); // cycled
+        assert_eq!(s[2].easing, Easing::Linear);
     }
 
     #[test]
@@ -937,10 +816,6 @@ mod tests {
         assert_eq!(s[0].property.name(), "filter");
     }
 
-    /// `transform` was the canonical *unsupported* property here until m13
-    /// gave a laid out box a transformation matrix. It is a first-class
-    /// animatable now — which is what makes shadcn's accordion chevron and
-    /// `transition-transform` on a hover work.
     #[test]
     fn transform_is_a_first_class_animatable() {
         let s = specs("transition: transform 200ms");
@@ -950,8 +825,6 @@ mod tests {
         assert!(TransitionProperty::animatable().contains(&TransitionProperty::Transform));
     }
 
-    /// `1e20s` is past what `Duration::from_secs_f64` takes, and a track adds
-    /// its times to an `Instant`.
     #[test]
     fn a_huge_time_is_capped_and_stays_addable() {
         let s = specs("transition: opacity 1e20s 1e20s");
@@ -989,8 +862,6 @@ mod tests {
         assert!(collector.finish().is_none());
     }
 
-    // -- spec_for / covered ------------------------------------------------
-
     #[test]
     fn spec_for_prefers_the_last_matching_entry() {
         let s = specs("transition: all 1s, opacity 2s");
@@ -998,7 +869,6 @@ mod tests {
         assert_eq!(opacity.duration, Duration::from_secs(2));
         let color = spec_for(&s, &TransitionProperty::Color).unwrap();
         assert_eq!(color.duration, Duration::from_secs(1));
-        // `all` came first, so it still governs width.
         assert!(spec_for(&s, &TransitionProperty::Width).is_some());
     }
 
@@ -1013,8 +883,6 @@ mod tests {
         let s = specs("transition: opacity 1s, opacity 2s");
         assert_eq!(covered(&s), vec![TransitionProperty::Opacity]);
     }
-
-    // -- easing ------------------------------------------------------------
 
     const EPS: f32 = 1e-3;
 
@@ -1045,12 +913,10 @@ mod tests {
 
     #[test]
     fn cubic_bezier_matches_known_values() {
-        // Reference values for the CSS keyword curves at t = 0.5.
         assert!((Easing::Ease.eval(0.5) - 0.802_4).abs() < EPS);
         assert!((Easing::EaseIn.eval(0.5) - 0.315_4).abs() < EPS);
         assert!((Easing::EaseOut.eval(0.5) - 0.684_6).abs() < EPS);
         assert!((Easing::EaseInOut.eval(0.5) - 0.5).abs() < EPS);
-        // The keywords are exactly their cubic-bezier() equivalents.
         for t in [0.1, 0.25, 0.5, 0.75, 0.9] {
             assert!(
                 (Easing::Ease.eval(t) - Easing::CubicBezier(0.25, 0.1, 0.25, 1.0).eval(t)).abs()
@@ -1077,11 +943,10 @@ mod tests {
     /// The Newton solver must agree with a dense brute-force inversion.
     #[test]
     fn cubic_bezier_solver_agrees_with_brute_force() {
-        let (x1, y1, x2, y2) = (0.68, -0.55, 0.265, 1.55); // "ease-in-out-back"
+        let (x1, y1, x2, y2) = (0.68, -0.55, 0.265, 1.55);
         let curve = Easing::CubicBezier(x1, y1, x2, y2);
         for i in 1..100 {
             let x = i as f64 / 100.0;
-            // Brute force: scan s densely for the closest x(s).
             let mut best = (f64::MAX, 0.0f64);
             for j in 0..=200_000 {
                 let s = j as f64 / 200_000.0;

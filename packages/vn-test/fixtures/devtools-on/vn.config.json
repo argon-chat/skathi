@@ -1,5 +1,5 @@
 {
-  "$comment": "The control. No `devtools` key at all, so the m22 default applies: the devtools are on, the listener is bound and F12 opens the inspector. Its twin `devtools-off` is the same app with the flag set — see ../README.md.",
+  "$comment": "The control.",
 
   "name": "devtools-on",
 

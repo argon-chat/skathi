@@ -1,38 +1,19 @@
 /**
- * THE command table — the one place a vn-devtools command is declared.
- *
- * There are two front-ends onto the same wire (docs/DEVTOOLS.md): `ctl.ts`, the
- * dependency-free CLI, and `mcp.ts`, the MCP server. They used to carry a copy
- * of the table each, and the copies drifted exactly as copies do: milestone 21
- * added six commands (`windows`, `perf`, `net`, `storage`, `wheel`, `raise`)
- * and the optional `window` argument to the CLI, and the MCP server still
- * exposed the milestone-10 set.
- *
- * So neither file has a command list any more. This one owns:
+ * The command table: the one place a vn-devtools command is declared, shared by `ctl.ts` (the
+ * dependency-free CLI) and `mcp.ts` (the MCP server). It owns:
  *
  *   * the wire `cmd` and its arguments, with types and prose;
- *   * how a CLI invocation reads into a request (`cli`) — those shapes are the
- *     CLI's own (positionals, `--flags`, `ctl type <sel> <words...>`), which is
- *     why they live in a function rather than in a schema;
+ *   * how a CLI invocation reads into a request (`cli`): positionals and `--flags` are the CLI's own,
+ *     so they live in a function rather than a schema;
  *   * the usage lines `ctl --help` prints;
- *   * the JSON Schema and the argument pass-through `mcp.ts` registers.
+ *   * the JSON Schema and argument pass-through `mcp.ts` registers.
  *
- * The MCP tool name is DERIVED (`vn_<cmd>`), never written down, so it cannot
- * name a command that does not exist. `test/devtools-commands.test.ts` asserts
- * the set here equals the set docs/DEVTOOLS.md documents, and that neither
- * front-end declares a `cmd` of its own.
- *
- * NOT here: `--dist`, `--timeout`, `--json`, `--window`. The first three are
- * transport, and `window` rides on EVERY request (`mcpTools` injects it into
- * every schema; `ctl.ts` merges it into every request) rather than being
- * repeated per command.
+ * The MCP tool name is derived (`vn_<cmd>`), so it cannot name a command that does not exist.
+ * `--dist`, `--timeout` and `--json` are transport; `window` rides on every request (`mcpTools` injects
+ * it into every schema, `ctl.ts` merges it into every request) rather than per command.
  */
 
 import { resolve } from "node:path";
-
-// ---------------------------------------------------------------------------
-// argv shapes
-// ---------------------------------------------------------------------------
 
 export type Flags = Record<string, string | boolean>;
 
@@ -69,10 +50,6 @@ const integerFlag = (value: unknown, name: string, minimum = 0, maximum = Number
 };
 const stringFlag = (value: unknown): string | undefined => typeof value === "string" ? value : undefined;
 
-// ---------------------------------------------------------------------------
-// the schema vocabulary
-// ---------------------------------------------------------------------------
-
 export interface ArgSpec {
   type: "string" | "number" | "boolean";
   description: string;
@@ -95,11 +72,7 @@ const INDEX = int("which match to use when the selector matches several (0-based
 const NODE = int("a node id from vn_tree/vn_query, when you already have one");
 const SINCE = int("first sequence number to return (the `next` from the last call)");
 
-/**
- * The one argument every command takes, injected into every MCP schema by
- * [`mcpTools`] and merged into every CLI request by `ctl.ts`. See
- * docs/DEVTOOLS.md, "The `window` argument".
- */
+/** The argument every command takes, injected into every MCP schema by [`mcpTools`] and merged into every CLI request by `ctl.ts`. */
 export const WINDOW_ARG = int(
   "which of the target's OS windows the command is about (vn_windows lists them; " +
     "default: the primary one). One process can paint several windows off one retained " +
@@ -109,22 +82,17 @@ export const WINDOW_ARG = int(
 export interface CommandSpec {
   /** The wire `cmd`. The MCP tool is `vn_<cmd>` and the CLI verb is this. */
   cmd: string;
-  /**
-   * Other CLI spellings of the same verb. The request still carries `cmd`, so
-   * an alias never reaches the wire and never becomes a second MCP tool.
-   */
+  /** Other CLI spellings of the verb; the request still carries `cmd`, so an alias never reaches the wire or becomes a second MCP tool. */
   aliases?: string[];
   /** The MCP tool description. */
   description: string;
   /** `ctl --help` lines for this command, already column-aligned. */
   usage: string[];
-  /** The wire arguments, in the order the MCP schema lists them. */
   args: Record<string, ArgSpec>;
   /** Reads a CLI invocation (positionals after the verb, flags) into a request. */
   cli: (rest: string[], flags: Flags) => Record<string, unknown>;
 }
 
-/** `--index N` folded onto a request, when it was given. */
 const withIndex = (o: Record<string, unknown>, flags: Flags): Record<string, unknown> => {
   const index = num(flags.index);
   return index === undefined ? o : { ...o, index };
@@ -136,10 +104,6 @@ const selectorOrNode = (cmd: string, rest: string[], flags: Flags): Record<strin
   if (!rest[0] && node === undefined) die(`${cmd} needs a selector or --node <id>`);
   return compact({ selector: rest[0] || undefined, node });
 };
-
-// ---------------------------------------------------------------------------
-// the table
-// ---------------------------------------------------------------------------
 
 export const COMMANDS: CommandSpec[] = [
   {
@@ -635,7 +599,7 @@ export const COMMANDS: CommandSpec[] = [
     cmd: "net_cache",
     aliases: ["net-cache"],
     description:
-      "The disk HTTP cache under fetch, XHR and every <img>/font load (docs/STORAGE.md §12): its " +
+      "The disk HTTP cache under fetch, XHR and every <img>/font load: its " +
       "folder, cap, entries and size, whether this instance owns the folder (`writable`) and seals " +
       "entries (`sealed`), and the counters since start (hits, revalidated, stored, misses, " +
       "bypassed, evicted, errors). `op: \"clear\"` deletes every entry and answers `freed` (bytes). " +
@@ -800,10 +764,6 @@ export const COMMANDS: CommandSpec[] = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// front-end 1: MCP
-// ---------------------------------------------------------------------------
-
 export interface McpTool {
   name: string;
   description: string;
@@ -812,17 +772,13 @@ export interface McpTool {
     properties: Record<string, { type: string; description: string }>;
     required?: string[];
   };
-  /** Tool arguments -> the wire request, `cmd` included. */
   build: (args: Record<string, unknown>) => Record<string, unknown>;
 }
 
 /** `vn_query` for `query`. Derived, so a tool can never outlive its command. */
 export const toolName = (cmd: string): string => `vn_${cmd}`;
 
-/**
- * The MCP tool list, generated. Every tool takes `window`, exactly as every
- * wire command does — see [`WINDOW_ARG`].
- */
+/** The MCP tool list, generated; every tool takes `window` (see [`WINDOW_ARG`]). */
 export function mcpTools(): McpTool[] {
   return COMMANDS.map((spec) => {
     const names = Object.keys(spec.args);
@@ -849,22 +805,13 @@ export function mcpTools(): McpTool[] {
   });
 }
 
-// ---------------------------------------------------------------------------
-// front-end 2: the CLI
-// ---------------------------------------------------------------------------
-
-/** Every verb `ctl.ts` accepts, in usage order. */
 export const commandNames = (): string[] => COMMANDS.map((c) => c.cmd);
 
-/** The `commands` block of `ctl --help`. */
 export function usageBlock(): string {
   return COMMANDS.flatMap((c) => c.usage).join("\n");
 }
 
-/**
- * `["query", ".tab"]` + flags -> `{cmd: "query", selector: ".tab"}`.
- * Throws [`UsageError`] for an unknown verb or a malformed invocation.
- */
+/** `["query", ".tab"]` + flags -> `{cmd: "query", selector: ".tab"}`. Throws [`UsageError`] for an unknown verb or malformed invocation. */
 /** Split actual CLI argv using the same boolean arguments the MCP schema exposes. */
 export function splitArgs(argv: string[]): { positional: string[]; flags: Flags } {
   const switches = new Set([

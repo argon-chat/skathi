@@ -1,11 +1,9 @@
 //! Idle frame pacing: the frame clock slows down while nothing happens.
 //!
-//! The pump ([`crate::pump_frame`]) re-arms every frame, so an idle window
-//! still woke the UI thread on every refresh to run a JS wave that found
-//! nothing to do: 165 wakeups a second at 165 Hz. After [`QUIET_FRAMES`]
-//! quiet frames in a row the pump rides along with frames other things ask for
-//! (`Window::on_next_frame_passive`) and tells the platform's frame source the
-//! latest it needs the next one ([`gpui_windows::pace_frames`]):
+//! The pump ([`crate::pump_frame`]) re-arms every frame, so an idle window would wake the UI thread
+//! on every refresh for a JS wave with nothing to do. After [`QUIET_FRAMES`] quiet frames in a row
+//! the pump rides along with frames other things ask for (`Window::on_next_frame_passive`) and tells
+//! the platform's frame source the latest it needs the next one ([`gpui_windows::pace_frames`]):
 //!
 //! - the next JS timer's deadline, or [`IDLE_INTERVAL`] from now, whichever is
 //!   first: a timer fires when it is due, and a socket message, an image
@@ -16,23 +14,16 @@
 //!   [`vn_runtime::frames::wake`] (host dispatcher posts, desktop and embed
 //!   results, voice events, devtools commands).
 //!
-//! A frame is quiet when the wave ran no animation frames and has none
-//! pending, no timer is already due, JS ran briefly, Web Audio has nothing
-//! scheduled or playing (its starts, stops and automation land on pump
-//! ticks), the tree did not change, nothing animates, and no devtools command
-//! is in flight. Anything else
-//! returns the clock to every refresh at once. `VN_IDLE_PACING=0` turns this
-//! off.
+//! A frame is quiet when the wave ran no animation frames and has none pending, no timer is already
+//! due, JS ran briefly, Web Audio has nothing scheduled or playing, the tree did not change, nothing
+//! animates, and no devtools command is in flight. Anything else returns the clock to every refresh
+//! at once. `VN_IDLE_PACING=0` turns pacing off.
 //!
-//! **An unfocused window paces its CSS animations too.** While no window of
-//! the app is active, a frame whose only motion is a CSS animation or
-//! transition counts as quiet, so after [`QUIET_FRAMES`] of them the clock
-//! runs every [`IDLE_INTERVAL`]: an infinite animation in a window behind the
-//! one being used draws at ~30 fps rather than at the display rate (an Argon
-//! chat spent ~0.8 of a core drawing a username's colour drift at 156 fps).
-//! Everything that is work keeps the display rate: a tree change, a video
-//! frame, `requestAnimationFrame`, input (which wakes the clock anyway). A
-//! window nobody can see at all draws no animation (`crate::after_wave`).
+//! **An unfocused window paces its CSS animations too.** While no window of the app is active, a
+//! frame whose only motion is a CSS animation or transition counts as quiet, so an infinite
+//! animation in a window behind the one in use draws at ~30 fps rather than at the display rate.
+//! Everything that is work keeps the display rate: a tree change, a video frame,
+//! `requestAnimationFrame`, input. A window nobody can see draws no animation (`crate::after_wave`).
 
 use std::cell::Cell;
 use std::time::Duration;

@@ -1,18 +1,14 @@
-//! Custom URL protocols: the rules, independent of where they are stored
-//! (docs/LAUNCH.md §5). `protocol_win.rs` is the per-user registry behind them.
+//! Custom URL protocols: the rules, independent of storage (`protocol_win.rs` is the registry).
 
 use crate::args::quote_always;
 
-/// Schemes an app may never claim: the browser's own, the shell's, script
-/// hosts, and Windows' `ms-*` family (`ms-settings:`, `ms-msdt:` …) and
-/// `search-ms:`.
+/// Schemes an app may never claim: the browser's, the shell's, script hosts, `ms-*`, `search-ms:`.
 const RESERVED: &[&str] = &[
     "http", "https", "file", "ftp", "mailto", "tel", "data", "blob", "javascript", "about", "vbscript", "search-ms",
 ];
 
-/// A scheme as the registry will hold it, or why not: RFC 3986
-/// `[a-z][a-z0-9+.-]{0,62}` after lowercasing, a trailing `:` or `://`
-/// tolerated, and none of [`RESERVED`].
+/// A scheme as the registry will hold it, or why not: `[a-z][a-z0-9+.-]{0,62}` lowercased, a
+/// trailing `:` or `://` tolerated, none of [`RESERVED`].
 pub fn validate_scheme(raw: &str) -> Result<String, String> {
     let s = raw.trim().trim_end_matches('/').trim_end_matches(':').to_ascii_lowercase();
     let mut chars = s.chars();
@@ -35,10 +31,8 @@ pub fn validate_scheme(raw: &str) -> Result<String, String> {
 /// ```text
 ///   "<exe>" [--vn-dist "<slot>"] --vn-protocol-launch -- "%1"
 /// ```
-///
-/// The shell substitutes `%1` VERBATIM, quotes and all, which is why the URL
-/// is recovered from the raw command line after the marker's `--` rather than
-/// re-split (args.rs). Nothing after the marker is ever a flag.
+/// The shell substitutes `%1` verbatim, so the URL is recovered from the raw command line after the
+/// marker's `--` rather than re-split.
 pub fn command_line(exe: &str, dev_slot: Option<&str>) -> String {
     let mut out = quote_always(exe);
     if let Some(slot) = dev_slot {
@@ -49,8 +43,6 @@ pub fn command_line(exe: &str, dev_slot: Option<&str>) -> String {
     out
 }
 
-/// Does a registered command start this exe? Case-insensitive on the path,
-/// as the file system is.
 pub fn command_targets(command: &str, exe: &str) -> bool {
     let want = quote_always(exe);
     command.len() >= want.len() && command[..want.len()].eq_ignore_ascii_case(&want)

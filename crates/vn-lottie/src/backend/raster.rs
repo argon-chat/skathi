@@ -1,11 +1,6 @@
-//! The [`rasterlottie`] backend — pure Rust, `tiny-skia`, no build step.
-//!
-//! Its distinguishing behaviour is that it *validates*:
-//! `analyze_animation` walks the model and refuses anything it cannot draw
-//! exactly, so an unsupported feature surfaces as
-//! [`LottieError::Unsupported`] at load with one advisory line per feature,
-//! rather than as a silently wrong frame. See `crate::normalize` for the two
-//! Bodymovin idioms that have to be rewritten before that check passes.
+//! The [`rasterlottie`] backend: pure Rust, `tiny-skia`. It validates: an unsupported feature
+//! surfaces as [`LottieError::Unsupported`] at load, one advisory per feature, rather than a
+//! silently wrong frame. See `crate::normalize`.
 
 use rasterlottie::{Animation, PreparedAnimation, RenderConfig, Renderer, Rgba8};
 use serde_json::Value;
@@ -15,19 +10,14 @@ use crate::state::LottieError;
 
 pub(crate) struct Rasterlottie {
     prepared: PreparedAnimation,
-    /// [`Rasterlottie::render_straight`]'s output, kept across frames.
     straight: Vec<u8>,
 }
 
-// SAFETY: `PreparedAnimation` is `!Send` only because its static path cache
-// holds `Rc<tiny_skia::Path>`s (rasterlottie 0.2.2,
-// `render/renderer_types.rs` `StaticPathCache`). Every clone of those `Rc`s
-// lives inside this one graph: `render_frame` hands clones to the drawing code
-// and they are dropped before it returns, and rasterlottie keeps no
-// thread-local or global state that could hold one (no `thread_local!`,
-// `static` or `OnceLock` in its source). A graph no other thread can reach
-// moves between threads intact; it is never shared (`!Sync`). Re-check this
-// on any rasterlottie upgrade (the pin in Cargo.toml says so).
+// SAFETY: `PreparedAnimation` is `!Send` only because its static path cache holds
+// `Rc<tiny_skia::Path>`s (rasterlottie 0.2.2). Every clone lives inside this one graph
+// (`render_frame`'s clones drop before it returns) and rasterlottie keeps no thread-local or global
+// state that could hold one, so the graph moves between threads intact and is never shared
+// (`!Sync`). Re-check on any rasterlottie upgrade.
 unsafe impl Send for Rasterlottie {}
 
 impl Rasterlottie {
@@ -55,11 +45,8 @@ impl Rasterlottie {
         })
     }
 
-    /// The sticker engine's raster: STRAIGHT-alpha BGRA, `width × height`.
-    /// rasterlottie scales uniformly only, so the animation (authored at
-    /// `intrinsic`) is drawn at the scale that fits and placed top-left; for a
-    /// target with the animation's aspect ratio that leaves at most a pixel
-    /// of transparent edge.
+    /// The sticker engine's raster: straight-alpha BGRA. rasterlottie scales uniformly only, so the
+    /// animation is drawn at the fitting scale, top-left, leaving at most a pixel of transparent edge.
     pub fn render_straight(&mut self, frame: f32, intrinsic: (u32, u32), width: u32, height: u32) -> Option<&[u8]> {
         if width == 0 || height == 0 {
             return None;

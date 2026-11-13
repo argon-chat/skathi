@@ -1,11 +1,6 @@
-// WebIDL interface objects the realm lacked (m26 fixes, URGENT 2).
-//
-// The Argon home screen died on "ReferenceError: Window is not defined": the
-// Xsolla pay SDK's DI (tsyringe) records `design:paramtypes` = `[Window]` at
-// CLASS DEFINITION and resolves `Window` as a token. Each interface here is a
-// browser's: an object whose constructor throws "Illegal constructor" (unless a
-// browser lets you construct it), with `instanceof` true for the objects this
-// realm already has.
+// WebIDL interface objects the realm lacks. Each is a browser's: a constructor that throws "Illegal constructor"
+// (unless a browser lets you construct it), with `instanceof` true for the objects this realm already has. Libraries
+// record them at class definition (tsyringe's `design:paramtypes` = `[Window]`).
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";

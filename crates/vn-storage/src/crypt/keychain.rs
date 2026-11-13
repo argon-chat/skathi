@@ -1,28 +1,14 @@
-//! The macOS provider's Keychain half: the only code in this crate that needs
-//! a Mac. Everything it decides is in `envelope.rs`, which is tested anywhere.
+//! The macOS provider's Keychain half: the only code here that needs a Mac; the decisions are
+//! in `envelope.rs`. One generic-password item per app in the default (login) keychain:
+//! service `gl.argon.vue-native.storage`, account = bundle identifier else `exe:<file stem>`,
+//! data = the 32-byte master key.
 //!
-//! One generic-password item per app in the user's default (login) keychain:
-//!
-//! ```text
-//!   service  gl.argon.vue-native.storage
-//!   account  the main bundle's identifier, else exe:<file stem>
-//!   data     32 random bytes — the master key
-//! ```
-//!
-//! - **The file-based login keychain, not the data-protection one.** The
-//!   data-protection keychain needs a keychain-access-groups entitlement and a
-//!   Team ID; an unsigned or ad-hoc-signed dev build would get
-//!   `errSecMissingEntitlement`. The login keychain works for every build, is
-//!   per user, encrypted under the login password, and never syncs to iCloud.
-//! - **Its ACL** trusts the app that created the item (by its code signature's
-//!   designated requirement). The same app reads it silently; another app, or
-//!   the same app after its signature changed (every rebuild of an ad-hoc
-//!   signed dev binary), makes macOS ask the user. That prompt is drawn by
-//!   SecurityAgent, out of process, so it blocks this call but cannot deadlock
-//!   the UI thread the way an in-process DPAPI prompt would.
-//! - **Loaded once per process**, success or failure. A failure latched for the
-//!   run is what keeps a refused prompt from reappearing every frame, and keeps
-//!   a run that could not open the old data from ever writing over it.
+//! The file-based login keychain, not the data-protection one: that needs a
+//! keychain-access-groups entitlement and Team ID, which unsigned dev builds lack. The item's
+//! ACL trusts the creating app's signature; another app (or an ad-hoc rebuild) makes macOS
+//! prompt out of process, which blocks this call but cannot deadlock the UI thread. The key is
+//! loaded once per process, failure included, so a refused prompt does not reappear every frame
+//! and a run that could not open old data never writes over it.
 
 use std::sync::OnceLock;
 
@@ -74,7 +60,6 @@ impl SecretProvider for Keychain {
     }
 }
 
-/// This app's account name: see [`envelope::account_for`].
 fn account() -> String {
     // SAFETY: CFBundleGetMainBundle and CFBundleGetIdentifier follow the Get
     // rule (nothing to release); both may be null and are checked.
@@ -101,9 +86,8 @@ fn load(account: &str) -> Result<MasterKey, String> {
         Err(e) if e.code() == envelope::ERR_ITEM_NOT_FOUND => Ok(None),
         Err(e) => Err(e.code()),
     };
-    // SecItemAdd and nothing else: `passwords::set_generic_password` would
-    // update an existing item, which is exactly the race `load_or_create`
-    // exists to prevent.
+    // SecItemAdd only: `set_generic_password` would update an existing item, the very race
+    // `load_or_create` prevents.
     let add = |key: &[u8; KEY_LEN]| {
         let mut item = ItemAddOptions::new(ItemAddValue::Data {
             class: ItemClass::generic_password(),
@@ -141,8 +125,6 @@ mod tests {
     use super::*;
     use security_framework::passwords::delete_generic_password;
 
-    /// Real keychain, so opt-in: `cargo test -p vn-storage -- --ignored keychain`
-    /// on a Mac, in a logged-in GUI session. Cleans up its own items.
     #[test]
     #[ignore = "touches the login keychain; run on a Mac with --ignored"]
     fn keychain_a_key_is_created_once_and_read_back() {

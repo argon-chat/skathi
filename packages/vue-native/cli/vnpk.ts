@@ -1,9 +1,8 @@
-// VNPK v1 — the one blob a packaged exe carries (research/reports/m25/packaging-design.md §4.2).
+// VNPK v1: the one blob a packaged exe carries.
 //
-// The WRITER lives here; the READER that matters lives in Rust
-// (`crates/vn-payload`), and the two are held to one golden fixture,
-// `packages/vue-native/test/fixtures/golden.vnpk`, from both sides. The reader
-// below exists for `vn build`'s own verify step and for the tests.
+// The writer lives here; the reader that matters is in Rust (`crates/vn-payload`), and both are held to one
+// golden fixture, `packages/vue-native/test/fixtures/golden.vnpk`. The reader below is for `vn build`'s
+// verify step and the tests.
 //
 //   header (64 bytes, little-endian, read BYTE-WISE: the blob is only 4-byte
 //   aligned inside the image)
@@ -42,7 +41,7 @@ export const KIND = {
   META: 1,
   WINDOW: 2,
   SCRIPT: 3,
-  /** Reserved for phase 3 (a JSC bytecode cache); page-aligned when present. */
+  /** Reserved for a JSC bytecode cache; page-aligned when present. */
   BYTECODE: 4,
   ASSET: 16,
 } as const;
@@ -87,10 +86,8 @@ export interface VnpkHeader {
   blobLen: number;
 }
 
-// ---------------------------------------------------------------------------
-// crc32 (IEEE) — for `vn verify` and the tests; the host never checks it at
-// boot, because hashing the payload would fault in every page (design V7).
-// ---------------------------------------------------------------------------
+// crc32 (IEEE), for `vn verify` and the tests; the host never checks it at boot, since hashing the payload
+// would fault in every page.
 
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -107,10 +104,6 @@ export function crc32(bytes: Uint8Array, seed = 0): number {
   for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]!) & 0xff]! ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
 }
-
-// ---------------------------------------------------------------------------
-// writer
-// ---------------------------------------------------------------------------
 
 const utf8 = new TextEncoder();
 
@@ -129,11 +122,7 @@ function defaultAlign(kind: number): number {
   return kind === KIND.BYTECODE ? 12 : 4;
 }
 
-/**
- * Lays the entries out and returns the blob. `skew` is the stamper's business
- * (see `skewFor`); a blob written with `skew: 0` is a valid payload on its own,
- * just not a page-aligned one.
- */
+/** Lays the entries out and returns the blob. `skew` is the stamper's business (see `skewFor`); `skew: 0` is a valid payload, just not page-aligned. */
 export function writeVnpk(inputs: VnpkInput[], options: { skew?: number } = {}): Uint8Array {
   const skew = options.skew ?? 0;
   if (!Number.isInteger(skew) || skew < 0 || skew >= PAGE) {
@@ -165,7 +154,6 @@ export function writeVnpk(inputs: VnpkInput[], options: { skew?: number } = {}):
   const namesLen = items.reduce((n, e) => n + e.nameBytes.length, 0);
   const dataOff = namesOff + namesLen + skew;
 
-  // Data layout, relative to data_off.
   let cursor = 0;
   const placed = items.map((e) => {
     const off = alignUp(cursor, 1 << e.alignLog2);
@@ -211,20 +199,11 @@ export function writeVnpk(inputs: VnpkInput[], options: { skew?: number } = {}):
   return out;
 }
 
-/**
- * The skew that puts `data_off` on a page boundary once the blob sits at image
- * RVA `rva`. Pure: the RVA does not move between stamping passes, because the
- * only resources laid out ahead of the payload are the `RT_ICON`s (measured,
- * design §2), and changing the skew changes nothing in front of the data.
- */
+/** The skew that puts `data_off` on a page boundary once the blob sits at image RVA `rva`. Pure: the RVA does not move between stamping passes, since only the `RT_ICON`s are laid out ahead of the payload. */
 export function skewFor(rva: number, header: Pick<VnpkHeader, "namesOff" | "namesLen">): number {
   const namesEnd = header.namesOff + header.namesLen;
   return (PAGE - ((rva + namesEnd) % PAGE)) % PAGE;
 }
-
-// ---------------------------------------------------------------------------
-// reader (verify + tests; the host's reader is crates/vn-payload)
-// ---------------------------------------------------------------------------
 
 export class VnpkError extends Error {}
 

@@ -1,18 +1,3 @@
-// `location.reload()` on the real host and engine (m26 client sweep #3,
-// docs/RUNTIME.md §5.2): the app runs again in the SAME JavaScript realm, and
-// the runtime that comes up must not run on its predecessor's classes.
-//
-//   bun test packages/vn-test/specs/reload.spec.ts
-//
-// test/runtime-reload.test.ts pins the bookkeeping in a fake global. This spec
-// checks the same things against JavaScriptCore's real global object, where
-// key enumeration and `delete` are the engine's: after a reload,
-// ResizeObserver is a new class and fires, and a global the old app added is
-// gone. Any fixture will do; this one borrows `events`. The last two tests
-// reload again and check that the devtools Network panel still records fetch
-// and WebSocket: on `events`, whose devtools are on from boot, and on
-// `devtools-late`, which turns them on itself after the runtime has run.
-
 import { readFileSync } from "node:fs";
 import { afterAll, expect, test } from "bun:test";
 import { launch } from "../src/index";
@@ -30,7 +15,6 @@ const T = 30_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const js = async (src: string) => app.eval(src);
 
-/** Polls `cond` (a JS expression) until it is true. */
 async function until(cond: string): Promise<boolean> {
   for (let i = 0; i < 100; i++) {
     if ((await js(`String(!!(${cond}))`)) === "true") return true;
@@ -41,8 +25,6 @@ async function until(cond: string): Promise<boolean> {
 
 test("after location.reload() the runtime's classes are new, ResizeObserver fires, and the old app's globals are gone", async () => {
   await until("document.querySelector('#trigger')");
-  // The old app: a global, a symbol-keyed flag (Mediabunny's shape), and a
-  // note of the classes it ran on. `__VN_*` names survive a reload by design.
   await js(`(() => {
     globalThis.oldAppGlobal = 1;
     globalThis[Symbol.for("vn-test loaded")] = true;
@@ -66,9 +48,6 @@ test("after location.reload() the runtime's classes are new, ResizeObserver fire
   expect(entries.some((e) => e.text.includes("re-runs the app in the SAME JavaScript realm"))).toBe(true);
 }, T);
 
-// A browser's navigation ends the old document's captures and audio
-// (crates/vn-app/src/reload.rs `end_media`). Before m26 voice-fixes-1 an
-// AudioContext kept playing across a reload (a looping ringtone rang on).
 test("location.reload() ends the old page's AudioContexts", async () => {
   expect(await until("document.querySelector('#trigger')")).toBe(true);
   await js(`(() => {
@@ -89,19 +68,13 @@ test("location.reload() ends the old page's AudioContexts", async () => {
     .find((t) => t.includes("the old page's media ended"));
   expect(ended).toBeDefined();
   expect(ended).toContain("1 AudioContext(s) closed");
-  // The advisory (said once, at the first reload) names what a reload closes.
   const { entries } = await app.logs(0);
   expect(entries.some((e) => e.text.includes("window/document listeners, media tracks"))).toBe(true);
 }, T);
 
 
-// The devtools Network tee (crates/vn-app/src/devtools/net.rs) is installed
-// once per process and has to stay underneath what each new runtime puts on the
-// global: a reload's runtime replaces `WebSocket` with a new realm proxy. The
-// ring is the host's, so it goes on across the reload, and the host puts a
-// marker row between the runs. Checked in both install orders: at boot (`events`, the
-// devtools on from the start) and late (`devtools-late`, turned on by the app
-// after the runtime ran), which is the order that used to lose WebSocket.
+// The ring is the host's, so it goes on across the reload, and the host puts a marker row between
+// the runs.
 type Host = Awaited<ReturnType<typeof launch>>;
 type Row = { seq: number; kind: string; url: string; phase?: string; status?: number; cause?: string };
 
@@ -113,7 +86,6 @@ async function untilOn(host: Host, cond: string): Promise<boolean> {
   return false;
 }
 
-/** fetch + WebSocket, a reload, the same again; `mounted` says the new app is up. */
 async function networkAcrossReload(host: Host, mounted: string): Promise<void> {
   const server = Bun.serve({
     port: 0,
@@ -137,7 +109,6 @@ async function networkAcrossReload(host: Host, mounted: string): Promise<void> {
     const rows = async (since: number): Promise<{ entries: Row[]; next: number }> => host.send("net", { since });
     const since = (await rows(0)).next;
 
-    // The old app: a fetch, and a socket it leaves open for the reload to close.
     await host.eval(`(() => {
       const st = globalThis.__VN_TEST_NET__ = { fetch: 0, ws: 0 };
       fetch(${JSON.stringify(http + "/before")}).then((r) => r.text()).then(() => { st.fetch = 1; });
@@ -149,7 +120,6 @@ async function networkAcrossReload(host: Host, mounted: string): Promise<void> {
     await host.eval(`(() => { globalThis.netOldApp = 1; location.reload(); return "asked"; })()`);
     expect(await untilOn(host, `typeof netOldApp === 'undefined' && ${mounted}`)).toBe(true);
 
-    // The new app: the same two, on the new runtime's globals.
     await host.eval(`(() => {
       const st = globalThis.__VN_TEST_NET__ = { fetch: 0, ws: 0 };
       fetch(${JSON.stringify(http + "/after")}).then((r) => r.text()).then(() => { st.fetch = 1; });
@@ -178,9 +148,7 @@ async function networkAcrossReload(host: Host, mounted: string): Promise<void> {
     expect(after).toBeGreaterThan(marker);
     expect(opened).toBeGreaterThan(marker);
     expect(closed).toBeGreaterThan(opened);
-    // The old app's socket, closed by the reload: the tee heard it.
     expect(got.some((e) => e.kind === "ws" && e.phase === "close" && e.url.includes("?held"))).toBe(true);
-    // One ring: the seqs run on through the reload.
     expect(got.every((e, i) => i === 0 || e.seq > got[i - 1].seq)).toBe(true);
   } finally {
     server.stop(true);
@@ -198,8 +166,8 @@ test("…and does when the app turned the devtools on itself, after the runtime 
     label: "reload-late",
   });
   try {
-    // The order this test is for: off at boot, so the tee went in after the
-    // runtime (the host logs the boot state).
+    // The order this test is for: off at boot, so the tee went in after the runtime (the host logs
+    // the boot state).
     const { entries } = await late.logs(0);
     expect(entries.some((e) => e.text.includes("[devtools] disabled at boot"))).toBe(true);
     expect(await untilOn(late, "document.querySelector('#late')")).toBe(true);

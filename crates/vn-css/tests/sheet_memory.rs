@@ -1,15 +1,3 @@
-//! What a compiled stylesheet keeps in memory: the engine, and whatever
-//! outlives it (the parse cache did, until the rules owned their selectors).
-//! A measuring tool, not a check (research/reports/m26 perf-mem-2.md §1,
-//! perf-mem-3.md §2):
-//!
-//! ```text
-//! VN_SHEET=path/to/app.css cargo test -p vn-css --test sheet_memory -- --ignored --nocapture
-//! ```
-//!
-//! Its own test binary, because it counts every allocation through a global
-//! allocator.
-
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -77,12 +65,6 @@ fn what_a_compiled_sheet_keeps() {
     println!("after both engines are dropped: {}", mb(after));
 }
 
-/// Where the engine's bytes are: it is taken apart
-/// (`Engine::into_parts_for_measuring`) and each part is dropped on its own.
-///
-/// ```text
-/// VN_SHEET=path/to/app.css cargo test -p vn-css --release --test sheet_memory -- --ignored --nocapture where_the_engine
-/// ```
 #[test]
 #[ignore = "a measuring tool: VN_SHEET=<css file>"]
 fn where_the_engine_goes() {
@@ -91,8 +73,8 @@ fn where_the_engine_goes() {
         return;
     };
     let css = std::fs::read_to_string(&path).expect("VN_SHEET is readable");
-    // Warm the per-thread memos (UA sheet, reparsed selectors) so they are not
-    // counted as the engine's.
+    // Warm the per-thread memos (UA sheet, reparsed selectors) so they are not counted as the
+    // engine's.
     drop(vn_css::Engine::compile_sheets(&[css.as_str()]));
     let base = LIVE.load(Ordering::Relaxed);
     let engine = vn_css::Engine::compile_sheets(&[css.as_str()]);
@@ -102,8 +84,7 @@ fn where_the_engine_goes() {
     println!("{:<70} {:>9} {:>9}", "part", "inline", "heap");
     let mut accounted = 0;
     for (name, inline, value) in parts {
-        // How many of the refinements are the same value: what interning
-        // them would leave.
+        // How many of the refinements are the same value: what interning them would leave.
         type Pair = (Option<Rc<gpui::StyleRefinement>>, Option<Rc<gpui::StyleRefinement>>);
         if let Some(pairs) = value.downcast_ref::<Vec<Pair>>() {
             let all: Vec<&Rc<gpui::StyleRefinement>> =
@@ -124,7 +105,6 @@ fn where_the_engine_goes() {
         let freed = before - LIVE.load(Ordering::Relaxed);
         let inline = inline as i64;
         if unit {
-            // The rule table itself: freed while it was taken apart.
             println!("{name:<70} {:>9} {:>9}", mb(inline), "");
             accounted += inline;
         } else {

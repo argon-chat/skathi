@@ -1,8 +1,5 @@
-// runtime-dom's names that are not in runtime-core (render, useCssVars, the
-// custom-element and SSR entry points) and the IntersectionObserver updated
-// from painted bounds after layout — research/reports/m26/client-gap.md §3.2.
-//
-//   bun test test/runtime-domcompat.test.ts      (from packages/vue-native)
+// runtime-dom's names that are not in runtime-core (render, useCssVars, the custom-element and SSR entry points)
+// and the IntersectionObserver updated from painted bounds after layout.
 
 import { describe, expect, test } from "bun:test";
 import { defineComponent, h, nextTick, ref } from "@vue/runtime-core";

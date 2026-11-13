@@ -1,3 +1,2 @@
-# Pinned to the toolchain zed's gpui is developed against (edition 2024).
 [toolchain]
 channel = "1.97.1"

@@ -1,43 +1,25 @@
-//! `NSOpenPanel` / `NSSavePanel`, `NSAlert` and `NSColorPanel`, for a
-//! `vn-dialog` thread (mod.rs).
+//! `NSOpenPanel` / `NSSavePanel`, `NSAlert` and `NSColorPanel`, for a `vn-dialog` thread (mod.rs).
 //!
-//! AppKit panels belong to the main thread, which on macOS is also the frame
-//! thread and JSC's. So the dialog thread shows nothing itself: it hands the
-//! panel to the main queue and waits on a channel for the answer. Nothing
-//! modal runs on the main thread (no `runModal`), so gpui keeps drawing and
-//! JS keeps running while a panel is open:
+//! AppKit panels belong to the main thread, which is also the frame thread and JSC's. The dialog
+//! thread hands the panel to the main queue and waits on a channel; nothing modal runs on the main
+//! thread (no `runModal`), so gpui and JS keep running while a panel is open:
 //!
-//! - with an owner window on screen, the panel is a **sheet** on it
-//!   (`beginSheetModalForWindow:completionHandler:`), modal to that window
-//!   only, as the Windows dialog is modal to its HWND;
-//! - without one (no owner, or the owner minimised, hidden or already showing
-//!   a sheet), a file panel is a modeless window (`beginWithCompletionHandler:`).
-//!   A question needs its window: it is a sheet on the owner even when that
-//!   is minimised (it shows when the window comes back, and the Dock icon
-//!   bounces), and with no owner at all it is dismissed (ask.rs logs it).
+//! - with an owner window on screen, the panel is a sheet on it, modal to that window only;
+//! - without one (no owner, or it is minimised, hidden or already showing a sheet), a file panel
+//!   is modeless. A question needs its window: it is a sheet on the owner even when minimised,
+//!   and with no owner at all it is dismissed (ask.rs logs it).
 //!
-//! The owner (`Owner::hwnd`) is the `NSWindow` vn-app resolved from gpui's
-//! `NSView` ([`ns_window_of_view`]). It is a pointer captured earlier, so the
-//! main thread uses it only after finding it in `[NSApp windows]`.
+//! The owner (`Owner::hwnd`) is the `NSWindow` resolved from gpui's `NSView`
+//! ([`ns_window_of_view`]); being a pointer captured earlier, the main thread uses it only after
+//! finding it in `[NSApp windows]`.
 //!
-//! **Cancellation** ports the `WM_CLOSE` timer. The dialog thread checks its
-//! owner every 100 ms; once it is closing, the main thread ends the panel as
-//! its Cancel button would (`cancel:`, `endSheet:returnCode:`, `close`). Every
-//! completion handler orders its panel out BEFORE it answers, so when the
-//! dialog thread returns (and `is_idle` turns true) no sheet is attached to
-//! the owner any more. A panel still there at the next check is ordered out
-//! and answered for; after [`GIVE_UP`] the thread stops waiting (logged), so
-//! a wedged main thread cannot keep a window from closing forever.
+//! Cancellation: the dialog thread checks its owner every 100 ms; once it is closing, the main
+//! thread ends the panel as its Cancel button would. Every completion handler orders its panel
+//! out before answering, so when the thread returns (`is_idle`) no sheet is attached to the owner.
+//! After [`GIVE_UP`] the thread stops waiting, so a wedged main thread cannot keep a window open.
 //!
-//! **Formats** (mac_plan.rs): `allowedContentTypes` from `UTType
-//! typeWithFilenameExtension:` (no binding in the graph, so by name), and a
-//! "Format:" pop-up in the accessory view when there is a choice.
-//!
-//! **The colour picker** is the shared `NSColorPanel`. It is neither modal
-//! nor has an OK button: the colour it shows when it closes is the answer,
-//! and an unchanged colour is a cancel. It floats over every window of the
-//! app, so one is open at a time app-wide, and it stays pending (its owner's
-//! one dialog) until it is closed.
+//! The colour picker is the shared `NSColorPanel`: not modal, no OK button. The colour it shows
+//! when it closes is the answer, an unchanged colour is a cancel, and one is open app-wide.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -74,18 +56,12 @@ use crate::Fail;
 #[link(name = "UniformTypeIdentifiers", kind = "framework")]
 unsafe extern "C" {}
 
-/// How often the dialog thread checks its owner (win.rs's timer).
 const POLL: Duration = Duration::from_millis(100);
 /// How long a closing owner waits for AppKit to take the panel away.
 const GIVE_UP: Duration = Duration::from_secs(3);
 
-/// A dialog's answer: `Ok(None)` is a dismissal.
 type Answer<T> = Result<Option<T>, Fail>;
 type Reply<T> = mpsc::Sender<Answer<T>>;
-
-// ---------------------------------------------------------------------------
-// the main thread's half of every dialog
-// ---------------------------------------------------------------------------
 
 /// A dialog on screen, as the main thread knows it.
 struct Live {
@@ -206,10 +182,6 @@ fn guarded<T>(reply: &Reply<T>, body: impl FnOnce() -> Answer<T>) {
     let _ = reply.send(answer);
 }
 
-// ---------------------------------------------------------------------------
-// owners
-// ---------------------------------------------------------------------------
-
 /// The `NSWindow` of gpui's `NSView` (its raw window handle): a dialog
 /// owner. Main thread only; `None` off it, or for a view in no window.
 pub fn ns_window_of_view(ns_view: *mut c_void) -> Option<isize> {
@@ -232,10 +204,6 @@ fn sheet_parent(mtm: MainThreadMarker, owner: isize) -> Option<Retained<NSWindow
     window_of(mtm, owner).filter(|w| w.isVisible() && !w.isMiniaturized() && w.attachedSheet().is_none())
 }
 
-// ---------------------------------------------------------------------------
-// known folders
-// ---------------------------------------------------------------------------
-
 /// A known folder's path, from `NSFileManager` (thread-safe), else under
 /// `$HOME`.
 pub(super) fn known_folder(k: Known) -> Option<PathBuf> {
@@ -255,10 +223,6 @@ pub(super) fn known_folder(k: Known) -> Option<PathBuf> {
     });
     found.or_else(|| std::env::var_os("HOME").map(|home| mac_plan::home_folder(Path::new(&home), k)))
 }
-
-// ---------------------------------------------------------------------------
-// file panels
-// ---------------------------------------------------------------------------
 
 /// Shows the panel for `n`, a sheet on `owner` when it can be. `Ok(None)` is
 /// a dismissal, including the one the owner's closing forces.
@@ -454,10 +418,6 @@ fn show_panel(mtm: MainThreadMarker, id: u64, n: &Native, owner: isize, reply: R
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// questions
-// ---------------------------------------------------------------------------
-
 /// Asks `q` in an `NSAlert` sheet on `owner`: the index of the button
 /// pressed, or `Ok(None)` when the owner's closing ends it. An alert has no
 /// close box; Esc presses a button titled "Cancel", as AppKit assigns it.
@@ -479,8 +439,7 @@ fn show_alert(mtm: MainThreadMarker, id: u64, q: &Ask, owner: isize, reply: Repl
     let buttons: Vec<Retained<NSButton>> =
         q.buttons.iter().map(|b| alert.addButtonWithTitle(&NSString::from_str(&label_of(b)))).collect();
     let count = buttons.len();
-    // AppKit makes the first button the default; TaskDialog's
-    // nDefaultButton is honoured the same way.
+    // AppKit makes the first button the default.
     let default = q.default.min(count.saturating_sub(1));
     if default != 0 {
         buttons[0].setKeyEquivalent(&NSString::from_str(""));
@@ -515,10 +474,6 @@ fn show_alert(mtm: MainThreadMarker, id: u64, q: &Ask, owner: isize, reply: Repl
     alert.beginSheetModalForWindow_completionHandler(&parent, Some(&done));
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// the colour picker
-// ---------------------------------------------------------------------------
 
 /// The shared panel is the app's, not a window's: one picker at a time.
 static COLOR_OPEN: AtomicBool = AtomicBool::new(false);

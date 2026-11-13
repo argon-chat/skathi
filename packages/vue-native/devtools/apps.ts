@@ -6,7 +6,7 @@
  *
  *   %TEMP%\vue-native\apps\<vn.config name>\<pid>\devtools.json
  *
- * (crates/vn-app/src/slot.rs, docs/PACKAGING.md), one directory per running
+ * (crates/vn-app/src/slot.rs), one directory per running
  * instance. `--app hello` picks the newest one whose process is still alive.
  * Zero dependencies, like `ctl.ts`.
  */
@@ -42,7 +42,6 @@ export interface AppSlot {
   dir: string;
   pid: number;
   port: number;
-  /** Handshake mtime — newest wins. */
   at: number;
 }
 

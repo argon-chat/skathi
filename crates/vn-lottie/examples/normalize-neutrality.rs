@@ -1,23 +1,16 @@
 //! Proves `crates/vn-lottie/src/normalize.rs` is a no-op for ThorVG.
 //!
 //! ```text
-//! cargo run --release -p vn-lottie --example normalize-neutrality -- //!     crates/vn-lottie/tests/corpus/real-world
+//! cargo run --release -p vn-lottie --example normalize-neutrality -- crates/vn-lottie/tests/corpus/real-world
 //! ```
 //!
-//! The compatibility pass exists because `rasterlottie` rejects two ordinary
-//! Bodymovin idioms outright. ThorVG reads both natively, so on that backend
-//! the pass is either harmless or a liability — and "value-preserving" is a
-//! claim, not a fact, until something checks it.
+//! ThorVG reads natively the two Bodymovin idioms the pass exists for, so there it must be
+//! harmless. This renders every file in a directory twice through ThorVG, raw and normalised, at
+//! five timeline points and reports the worst mean per-channel difference; anything but
+//! `0.000000` means the pass changes what a capable renderer draws.
 //!
-//! This renders every file in a directory twice through ThorVG, once raw and
-//! once normalised, at five points on the timeline, and reports the worst mean
-//! per-channel difference. Anything but `0.000000` means the pass is changing
-//! what a capable renderer draws, i.e. it is no longer a compatibility shim.
-//!
-//! It talks to `vn-thorvg-sys` directly rather than through
-//! [`vn_lottie::LottieState`], because `LottieState::load` always normalises —
-//! which is exactly the thing under test. That is also why this is an example
-//! and not a test: an integration test only links the crate's public API.
+//! It talks to `vn-thorvg-sys` directly because `LottieState::load` always normalises, which is
+//! what is under test (and an integration test only links the public API).
 
 use std::ffi::c_char;
 use std::path::Path;

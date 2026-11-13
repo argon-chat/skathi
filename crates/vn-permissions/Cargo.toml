@@ -5,36 +5,21 @@ edition = "2021"
 publish = false
 
 [features]
-# The capture latches (`VN_MEDIA_CAPTURE=deny|fake`) live in redjs's
-# `mediastream`, which exists only with Web Audio. vn-app's `audio` turns this
-# on; without it nothing can capture, so the latches read as never set.
+# The capture latches (`VN_MEDIA_CAPTURE=deny|fake`) live in redjs's `mediastream`, which exists
+# only with Web Audio; without it the latches read as never set.
 audio = ["vn-runtime/audio"]
 
 [dependencies]
-# The JS host seam AND the trait this crate implements. `PermissionHost`,
-# `Capability` and `PermissionState` are defined in redjs
-# (`redjs::webapi::permissions`) rather than here, for the same reason
-# `RedStreamSourceNode` is: the browser-shaped surface has to be able to answer
-# a `navigator.permissions.query()` without knowing which OS is underneath, so
-# the abstraction belongs on the redjs side of the seam and only the *backends*
+# `PermissionHost`, `Capability` and `PermissionState` are defined in redjs; only the backends
 # live here.
 vn-runtime = { path = "../vn-runtime", default-features = false }
 # `permissions.json`, the app's answers to its own prompt (src/decisions.rs).
-# Already in the graph (gpui, vn-desktop), so it adds no crate to the build.
 serde_json = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# 0.62 rather than gpui's 0.61, matching `vn-video`: this crate shares no types
-# with gpui, so the two versions never have to agree.
-#
-# The feature list is small on purpose. Everything here is a STATE READ or a
-# shell open; nothing in it can raise a consent dialog. In particular
-# `Security_Authorization_AppCapabilityAccess` is deliberately absent — see
-# `win.rs` for the probe that showed `AppCapability::CheckAccess` returns
-# `Allowed` for capabilities that do not exist when the caller is unpackaged.
-# The prompt the app shows itself is not here either: it is vn-desktop's
-# TaskDialog, reached through `consent::set_asker`. `Globalization` is only
-# `GetUserDefaultUILanguage`, which picks the prompt's language.
+# 0.62 like `vn-video`: this crate shares no types with gpui. Everything here is a state read or
+# a shell open; `Security_Authorization_AppCapabilityAccess` is absent on purpose (see win.rs).
+# `Globalization` is only `GetUserDefaultUILanguage`, for the prompt's language.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Globalization",
@@ -46,8 +31,7 @@ windows = { version = "0.62", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Versions already pinned by the SDK's AppKit backend. AVFoundation itself is
-# linked directly for its two microphone authorization class methods.
+# Versions already pinned by the SDK's AppKit backend; AVFoundation is linked directly.
 block2 = "0.6.2"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString"] }

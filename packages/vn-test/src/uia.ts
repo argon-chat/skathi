@@ -1,25 +1,5 @@
-// The accessibility tree, read from OUTSIDE the process.
-//
-// Every other assertion in vn-test goes through the devtools wire, which is our
-// own view of our own tree. This one does not: it asks Windows UI Automation
-// what a screen reader would be told, through the same client API Narrator uses.
-// If `crates/vn-tree/src/aria.rs` stopped lowering `role` and `aria-*`, every
-// devtools assertion in the suite would still pass and this one would not.
-//
-// It is a PowerShell shell-out, and that is deliberate. UIA's client API is COM
-// with a large surface; `System.Windows.Automation` is the managed binding
-// Windows ships in the box, so the alternative is an FFI layer of our own for a
-// helper that runs a handful of times per suite. The script is
-// `src/uia.ps1` beside this file.
-//
-// Two properties of the walk matter:
-//
-// * **it never touches the window** — no activation, no focus, no synthetic
-//   input. The user keeps their cursor.
-// * **attaching a client is what turns accessibility ON.** gpui builds no
-//   AccessKit tree until something asks for one (`A11y::is_active`), so the
-//   first walk after launch can come back with only the window in it. That is
-//   why {@link uiaTree} retries until the tree has content.
+// This one does not: it asks Windows UI Automation what a screen reader would be told, through the
+// same client API Narrator uses.
 
 import { spawn } from "node:child_process";
 import { join } from "node:path";
@@ -40,7 +20,7 @@ export interface UiaNode {
   y: number;
   w: number;
   h: number;
-  /** `TogglePattern`: `"On" | "Off" | "Indeterminate"`. Absent when the node has no toggle state. */
+  /** `TogglePattern`: `"On" | "Off" | "Indeterminate"`. */
   toggle?: "On" | "Off" | "Indeterminate";
   /** `SelectionItemPattern`. */
   selected?: boolean;
@@ -57,13 +37,9 @@ export interface UiaNode {
 }
 
 export interface UiaOptions {
-  /** Give up after this many ms. Default 20 000. */
+  /** Give up after this many ms. */
   timeout?: number;
-  /**
-   * Keep re-walking until the tree has at least this many nodes. Accessibility
-   * is activated BY the first walk, so the tree is usually empty on it.
-   * Default 2 (the window plus something in it).
-   */
+  /** Keep re-walking until the tree has at least this many nodes. */
   minNodes?: number;
 }
 
@@ -95,8 +71,6 @@ function runOnce(pid: number, timeout: number): Promise<UiaNode[]> {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      // The script writes JSON on stdout; a per-node error (an element that
-      // vanished between the walk and the read) goes to stderr and is not fatal.
       const start = out.indexOf("[");
       if (code !== 0 && start < 0) {
         reject(new Error(`uiaTree(${pid}): powershell exited ${code}\n${err}`));
@@ -115,12 +89,7 @@ function runOnce(pid: number, timeout: number): Promise<UiaNode[]> {
   });
 }
 
-/**
- * Walks the UI Automation tree of every top-level window `pid` owns.
- *
- * Retries until the tree has `minNodes` nodes, because the first walk is what
- * activates accessibility inside the target process — see the module comment.
- */
+/** Walks the UI Automation tree of every top-level window `pid` owns. */
 export async function uiaTree(pid: number, opts: UiaOptions = {}): Promise<UiaNode[]> {
   if (!uiaSupported()) throw new Error("uiaTree is Windows-only");
   const timeout = opts.timeout ?? 20_000;

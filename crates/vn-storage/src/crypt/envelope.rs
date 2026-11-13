@@ -1,16 +1,8 @@
-//! The macOS and Linux providers' platform-neutral half: the sealed envelope,
-//! the AES-256-GCM cipher it (and the HTTP cache) uses, the first-run key
-//! creation protocol, and what a Keychain status code means.
+//! The macOS and Linux providers' platform-neutral half: the sealed envelope, the AES-256-GCM
+//! cipher it and the HTTP cache use, first-run key creation, and Keychain status codes.
+//! Compiled for macOS, Linux and tests; `keychain.rs` and `secret_service.rs` hold the keys.
 //!
-//! Compiled for `cfg(any(target_os = "macos", target_os = "linux", test))`:
-//! on a Mac and on Linux it is the provider (the key in the Keychain, or in the
-//! Secret Service), elsewhere it exists only so `cargo test` can check it. None
-//! of it touches a key store; `keychain.rs` and `secret_service.rs` do.
-//!
-//! # The envelope (version 1)
-//!
-//! What `SecretProvider::protect` returns, i.e. what follows the 8-byte
-//! `VNSTOR | 1 | 2` file header that `file::seal` writes:
+//! Envelope (version 1), what follows the 8-byte `VNSTOR | 1 | 2` header from `file::seal`:
 //!
 //! ```text
 //!   offset  size  field
@@ -23,38 +15,28 @@
 //!   associated data = "vue-native/storage/v1" ‖ version ‖ key id
 //! ```
 //!
-//! - **The version** is authenticated (it is in the associated data), so a
-//!   future layout cannot be confused with this one by editing one byte.
-//! - **The key id** turns "the keychain item was replaced" (or "this file is
-//!   another user's") into its own error rather than a generic tag failure. It
-//!   is 32 bits of a hash of a random 256-bit key and says nothing about it.
-//! - **The context string** is DPAPI's entropy on Windows, used for the same
-//!   purpose: a blob of ours opens only for code that knows it is ours.
-//! - **Random 96-bit nonces** under one key are good for 2^32 blobs (NIST SP
-//!   800-38D §8.3). The busiest writer is one `localStorage` write per frame:
-//!   decades of continuous writing.
+//! The version is authenticated; the key id makes a replaced key its own error rather than a
+//! generic tag failure; the context string plays DPAPI's entropy role. Random 96-bit nonces
+//! are good for 2^32 blobs per key (NIST SP 800-38D).
 
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use ring::rand::{SecureRandom, SystemRandom};
 
-/// The byte in the `VNSTOR` file header that names this provider (DPAPI is 1).
+/// The `VNSTOR` header byte naming this provider (DPAPI is 1).
 #[cfg(any(target_os = "macos", test))]
 pub const PROVIDER_ID: u8 = 2;
-/// The envelope layout above.
 pub const VERSION: u8 = 1;
 pub const KEY_LEN: usize = 32;
 const KEY_ID_LEN: usize = 4;
 const TAG_LEN: usize = 16;
-/// Version + key id.
 const HEADER_LEN: usize = 1 + KEY_ID_LEN;
-/// The same string DPAPI mixes in as entropy on Windows.
 const CONTEXT: &[u8] = b"vue-native/storage/v1";
 const AAD_LEN: usize = CONTEXT.len() + HEADER_LEN;
 
-/// `errSecItemNotFound`: no such item. The one "error" that means "make it".
+/// `errSecItemNotFound`: the one "error" that means "make it".
 #[cfg(any(target_os = "macos", test))]
 pub const ERR_ITEM_NOT_FOUND: i32 = -25300;
-/// `errSecDuplicateItem`: someone else made it first. Re-read, never replace.
+/// `errSecDuplicateItem`: someone else made it first; re-read, never replace.
 #[cfg(any(target_os = "macos", test))]
 pub const ERR_DUPLICATE_ITEM: i32 = -25299;
 
@@ -65,13 +47,8 @@ pub fn fill_random(buf: &mut [u8]) -> Result<(), String> {
         .map_err(|_| String::from("the system random generator failed"))
 }
 
-// ---------------------------------------------------------------------------
-// The cipher
-// ---------------------------------------------------------------------------
-
-/// AES-256-GCM with a fresh random nonce per message, laid out as
-/// `nonce (12) ‖ ciphertext ‖ tag (16)` — the same layout the Windows HTTP
-/// cache gets from CNG, so one shape describes both.
+/// AES-256-GCM with a fresh random nonce per message: `nonce (12) ‖ ciphertext ‖ tag (16)`,
+/// the layout the Windows HTTP cache gets from CNG.
 pub struct Aes256Gcm(LessSafeKey);
 
 impl Aes256Gcm {
@@ -118,10 +95,6 @@ impl Aes256Gcm {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The envelope
-// ---------------------------------------------------------------------------
-
 /// SHA-256("vue-native/storage/v1/key-id" ‖ key), first four bytes.
 fn key_id(key: &[u8]) -> [u8; KEY_ID_LEN] {
     let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
@@ -142,7 +115,6 @@ fn aad(version: u8, id: &[u8]) -> [u8; AAD_LEN] {
     a
 }
 
-/// The provider's master key, ready to seal and open envelopes.
 pub struct MasterKey {
     aead: Aes256Gcm,
     id: [u8; KEY_ID_LEN],
@@ -185,33 +157,18 @@ impl MasterKey {
     }
 }
 
-// ---------------------------------------------------------------------------
-// First run: find the key, or make it exactly once
-// ---------------------------------------------------------------------------
-
-/// How [`load_or_create`] came by the key — for the log line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
-    /// It was already there.
     Found,
-    /// This process made it.
     Created,
-    /// Another process made it between our read and our add; this is theirs.
+    /// Another process made it between our read and add.
     Raced,
 }
 
-/// The key, from `read` (`Ok(None)` = no such item; `Err` = a Keychain
-/// status), or created with `fresh` and stored with `add`.
-///
-/// `add` must be add-ONLY (`SecItemAdd`, never an update): if another process
-/// created the item first it fails with [`ERR_DUPLICATE_ITEM`] and the item
-/// is re-read, so both processes end up with the one key that is stored. An
-/// upsert there would let the second process overwrite the first's key after
-/// the first had already sealed data with it.
-///
-/// Nothing is created after a read that FAILED (as opposed to found nothing):
-/// a locked keychain or a refused prompt does not mean the key is gone, and a
-/// new key would orphan everything sealed under the old one. Nor is an item
+/// The key, from `read` (`Ok(None)` = no such item), else created with `fresh` and stored with
+/// `add`. `add` must be add-only: on [`ERR_DUPLICATE_ITEM`] the item is re-read so both
+/// processes end with the stored key. Nothing is created after a read that failed (a locked
+/// keychain does not mean the key is gone; a new key would orphan sealed data), nor is an item
 /// that is not a 256-bit key replaced.
 #[cfg(any(target_os = "macos", test))]
 pub fn load_or_create(
@@ -229,9 +186,8 @@ pub fn load_or_create(
     )
 }
 
-/// [`load_or_create`] over any key store: `store` names it in errors,
-/// `is_duplicate` says an add lost the race, `describe` turns a store error
-/// into the message for `op` (`read`, `re-read`, `store`).
+/// [`load_or_create`] over any key store: `store` names it in errors, `is_duplicate` says an add
+/// lost the race, `describe` turns a store error into the message for `op`.
 pub fn load_or_create_in<E>(
     store: &str,
     mut read: impl FnMut() -> Result<Option<Vec<u8>>, E>,
@@ -272,8 +228,7 @@ fn take_key(store: &str, mut bytes: Vec<u8>) -> Result<[u8; KEY_LEN], String> {
     r
 }
 
-/// What a Keychain `OSStatus` means for this crate's purposes, as an error
-/// for `appStorage.info()` and the boot error. Always carries the code.
+/// A Keychain `OSStatus` as an error message; always carries the code.
 #[cfg(any(target_os = "macos", test))]
 pub fn keychain_error(op: &str, code: i32) -> String {
     let what = match code {
@@ -293,9 +248,8 @@ pub fn keychain_error(op: &str, code: i32) -> String {
     format!("macOS Keychain: could not {op} the storage key: {what} (OSStatus {code})")
 }
 
-/// The keychain account that names an app's key: its bundle identifier (what
-/// macOS itself names an app by, and stable across moves and updates), else
-/// `exe:<file stem>` for a bare binary, else a fixed name.
+/// The keychain account naming an app's key: its bundle identifier (stable across moves and
+/// updates), else `exe:<file stem>`, else a fixed name.
 pub fn account_for(bundle_id: Option<&str>, exe_stem: Option<&str>) -> String {
     if let Some(id) = bundle_id.map(str::trim).filter(|s| !s.is_empty()) {
         return id.to_string();
@@ -306,8 +260,7 @@ pub fn account_for(bundle_id: Option<&str>, exe_stem: Option<&str>) -> String {
     }
 }
 
-/// A provider over a fixed key, for tests that need the real envelope without
-/// a keychain.
+/// A provider over a fixed key, for tests that need the envelope without a keychain.
 #[cfg(test)]
 pub(crate) struct FixedKey(pub MasterKey);
 
@@ -388,9 +341,6 @@ mod tests {
 
     #[test]
     fn the_header_is_authenticated_not_just_checked() {
-        // A key whose id matches but whose header was forged is impossible to
-        // build by hand; what can be checked is that the associated data the
-        // tag covers is the header: the raw cipher refuses another one.
         let raw = Aes256Gcm::new(&[5; KEY_LEN]).unwrap();
         let sealed = raw.seal(&aad(VERSION, &key_id(&[5; KEY_LEN])), b"x").unwrap();
         assert_eq!(raw.open(&aad(VERSION, &key_id(&[5; KEY_LEN])), &sealed).unwrap(), b"x");
@@ -407,9 +357,7 @@ mod tests {
 
     #[test]
     fn aes_gcm_matches_a_published_test_vector() {
-        // NIST GCM test case 14 (AES-256, zero key, zero IV, one zero block):
-        // the layout is nonce ‖ ciphertext ‖ tag, and the cipher is the
-        // standard one, not merely self-consistent.
+        // NIST GCM test case 14 (AES-256, zero key, zero IV, one zero block).
         let g = Aes256Gcm::new(&[0; 32]).unwrap();
         let mut sealed = vec![0u8; 12];
         sealed.extend_from_slice(&hex("cea7403d4d606b6e074ec5d3baf39d18"));
@@ -455,8 +403,6 @@ mod tests {
 
     #[test]
     fn losing_the_creation_race_adopts_the_winners_key() {
-        // Two processes read "missing"; the other one's add lands first, ours
-        // fails as a duplicate, and we must use THEIR key, never ours.
         let reads = Cell::new(0);
         let (k, origin) = load_or_create(
             || {
@@ -473,8 +419,6 @@ mod tests {
 
     #[test]
     fn a_failed_read_never_creates_a_key() {
-        // A locked keychain, a refused prompt: the key may well exist. A new
-        // one would orphan everything sealed under it.
         for code in [-25308, -128, -25293] {
             let e = load_or_create(|| Err(code), |_| panic!("no add after a failed read"), || panic!("no new key")).unwrap_err();
             assert!(e.contains(&format!("OSStatus {code}")), "{e}");
@@ -515,8 +459,6 @@ mod tests {
 
     #[test]
     fn the_file_header_names_this_provider_and_another_provider_is_refused() {
-        // Through `file::seal`, exactly as localStorage, cookies, host secrets
-        // and the key files use it.
         let p = FixedKey::new(1);
         let sealed = crate::file::seal(&p, "{\"secret\":1}").unwrap();
         assert_eq!(&sealed[..8], b"VNSTOR\x01\x02");

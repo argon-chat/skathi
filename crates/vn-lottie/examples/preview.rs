@@ -1,16 +1,12 @@
-//! A bare gpui window that loops a fixture, so the painting path can be seen
-//! rather than just asserted.
+//! A bare gpui window that loops a fixture, so the painting path can be seen.
 //!
 //! ```text
 //! cargo run -p vn-lottie --example preview -- [fixture] [size_px]
 //! ```
 //!
-//! Before opening the window it benchmarks the rasteriser at 128/256/512 px and
-//! prints the numbers; the window then reports a live frame counter, loop count
-//! and rolling per-frame cost.
-//!
-//! It deliberately never calls `cx.activate` — it must not steal focus from
-//! whoever is at the keyboard, and it can be screenshotted unfocused.
+//! Before opening the window it benchmarks the rasteriser at 128/256/512 px; the window then
+//! reports a live frame counter, loop count and rolling per-frame cost. It never calls
+//! `cx.activate`, so it does not steal focus.
 
 use std::time::{Duration, Instant};
 
@@ -60,8 +56,7 @@ impl Render for Preview {
             self.frame_ms * 0.9 + elapsed * 0.1
         };
 
-        // The backend is on screen so a screenshot is self-evidencing: a
-        // capture that says `thorvg` cannot be mistaken for the default one.
+        // The backend is on screen so a screenshot is self-evidencing.
         let backend = self.state.backend();
         let meta = self.state.meta();
         let readout = format!(
@@ -97,8 +92,7 @@ impl Render for Preview {
                 div()
                     .w(px(self.size))
                     .h(px(self.size))
-                    // A checker-ish backdrop so a transparent animation is
-                    // visibly transparent rather than invisibly black.
+                    // A checker-ish backdrop so a transparent animation is visibly transparent.
                     .bg(gpui::rgb(0x2a2a33))
                     .child(element),
             )
@@ -106,8 +100,7 @@ impl Render for Preview {
     }
 }
 
-/// Measures steady-state rasterisation cost, cache defeated by seeking every
-/// call, at the sizes stickers actually run at.
+/// Steady-state rasterisation cost at sticker sizes, cache defeated by seeking every call.
 fn benchmark(state: &mut LottieState) {
     let total = state.meta().total_frames;
     println!(

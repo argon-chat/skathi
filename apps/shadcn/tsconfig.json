@@ -1,55 +1,22 @@
 {
-  // Type-checking for the shadcn-vue compatibility trial.
-  //
+  // Type-check only (nothing emits):
   //   cd packages/vue-native && bun x vue-tsc --noEmit -p ../../apps/shadcn/tsconfig.json
-  //
-  // Nothing here emits: `build.ts` transpiles the `.ts` with bun and the `.vue`
-  // with @vue/compiler-sfc, so this file exists so that vue-tsc and an editor
-  // agree with what actually ships.
-  //
-  // ---------------------------------------------------------------------------
-  // WHY THIS IS NOT apps/tsconfig.json
-  // ---------------------------------------------------------------------------
-  // The other four demo apps share one program next door (apps/tsconfig.json),
-  // and that program is deliberately NOT a browser: `lib` is ESNext alone and
-  // "vue" is redirected to packages/vue-native/src/runtime.ts, so a name the
-  // host does not ship fails to compile. That is the right contract for code
-  // WRITTEN for vue-native.
-  //
-  // This app is the opposite experiment. Everything under src/components/ui is
-  // shadcn-vue v2.2.0 fetched verbatim from upstream (tools/fetch-registry.ts),
-  // it is PORTED BROWSER CODE, and the question it exists to answer is whether
-  // browser code runs here unmodified. So it is type-checked as the browser code
-  // it is, and the places where the host cannot deliver are runtime advisories —
-  // which is what the compat-first policy asks for. Checking it against the
-  // runtime's smaller surface instead would report a "failure" on every line
-  // upstream wrote, and there would be nothing left to measure.
+  // Unlike apps/tsconfig.json this checks ported browser code (shadcn-vue, verbatim) as browser
+  // code; what the host cannot deliver shows up as runtime advisories.
   "compilerOptions": {
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
 
-    // DOM, unlike every other tsconfig in this repo. Not an oversight and not a
-    // convenience: `HTMLAttributes['class']` from "vue" is in the props of all
-    // 73 upstream components, and reka-ui's, @vueuse/core's and
-    // lucide-vue-next's own .d.ts files are written against `HTMLElement`,
-    // `Element`, `PointerEvent` and `MouseEvent` throughout. Without lib.dom
-    // this app does not have a type error, it has several thousand.
-    //
-    // What lib.dom asserts here is what the SOURCE believes, not what the host
-    // provides. The runtime installs the subset reka-ui actually reaches for
-    // (closest/matches/querySelector, getBoundingClientRect, getComputedStyle,
-    // MutationObserver, DocumentFragment, the pointer events) and warns at
-    // runtime for the rest — see packages/vue-native/src/runtime.ts.
+    // DOM: HTMLAttributes['class'] is in every upstream component's props, and reka-ui, vueuse and
+    // lucide are written against HTMLElement and friends.
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
 
     "strict": true,
     "noEmit": true,
-    // On for the usual reason and one extra: this app's node_modules is a
-    // published-package graph (reka-ui alone is ~2.6 MB of .d.ts), and its
-    // internal type errors are not ours to fix or to read.
+    // reka-ui alone is ~2.6 MB of .d.ts; its internal type errors are not ours.
     "skipLibCheck": true,
-    // tailwindcss-animate and a few of the smaller deps are `export =` CJS.
+    // tailwindcss-animate and a few other deps are `export =` CJS.
     "esModuleInterop": true,
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
@@ -57,69 +24,24 @@
 
     "baseUrl": ".",
     "paths": {
-      // shadcn's own convention. tools/fetch-registry.ts rewrites `@/lib/utils`
-      // to a relative path on the way in, so nothing under src/ uses this
-      // today; it is here so that a component pasted straight from the shadcn
-      // docs resolves the way its author meant it to.
+      // shadcn's own convention, so a component pasted from its docs resolves.
       "@/*": ["./src/*"],
 
-      // ---- the "vue" decision ---------------------------------------------
-      // "vue" is DELIBERATELY NOT MAPPED. It resolves the ordinary way, to this
-      // app's own node_modules/vue (3.5.41) — the real published package —
-      // rather than to packages/vue-native/src/runtime.ts, for three reasons:
-      //
-      //   1. `HTMLAttributes`, `ButtonHTMLAttributes` and the rest of the
-      //      element-attribute types live in @vue/runtime-dom. runtime.ts
-      //      re-exports @vue/runtime-core and NOTHING else, so a mapping would
-      //      break `class?: HTMLAttributes['class']` in all 73 components at
-      //      once — in code we are committed to keeping byte-identical.
-      //   2. `paths` rewrites bare specifiers EVERYWHERE, node_modules
-      //      included, and reka-ui's own .d.ts files import from "vue" too. The
-      //      mapping would silently retarget a dependency's declarations at a
-      //      module that does not have what they ask for.
-      //   3. runtime.ts is written against lib=ESNext plus its own
-      //      engine.d.ts, which declares `console`, `Event`, `document` and the
-      //      timers as globals. Those collide head-on with lib.dom above, so
-      //      the two cannot share a program even if 1 and 2 were solved. The
-      //      runtime is type-checked by its OWN tsconfig, under the platform it
-      //      really runs on; checking it a second time under a browser lib
-      //      would be checking a lie.
-      //
-      // At RUNTIME "vue" is of course the runtime — build.ts aliases it and
-      // src/loader.ts seeds it. The gap between that and what is typed here is
-      // the compatibility surface this whole app exists to measure.
-      //
-      // "vue-native" is bound to the same real package for the same reasons: it
-      // is the same module as "vue" at runtime (loader.ts seeds both names to
-      // one module), and app code imports exactly one symbol from it. The one
-      // signature where the two genuinely differ is asserted at its call site
-      // in src/main.ts, where it is visible, rather than hidden in a mapping.
+      // "vue" is deliberately not mapped to packages/vue-native/src/runtime.ts: that file
+      // re-exports only @vue/runtime-core (no HTMLAttributes), `paths` would retarget reka-ui's own
+      // .d.ts imports of "vue", and its engine.d.ts globals collide with lib.dom.
+      // "vue-native" binds to the same real package; the one signature that differs is asserted in
+      // src/main.ts.
       "vue-native": ["./node_modules/vue"]
     },
 
-    // No @types package may put an ambient global in scope. The only one
-    // installed is @types/web-bluetooth, a @vueuse/core dependency that its own
-    // .d.ts references directly, so nothing here needs auto-inclusion — and a
-    // global that type-checks and does not exist at runtime is precisely the
-    // bug class this conversion is meant to find.
+    // No @types package may put an ambient global in scope.
     "types": []
   },
 
-  // Template checking, minus the two checks this app cannot honestly pass.
-  //
-  // `checkUnknownProps` / `checkUnknownEvents` reject any attribute or listener
-  // a component does not declare. shadcn components declare only their own
-  // props and forward the rest through `$attrs` and reka-ui's `Primitive`, so
-  // `<Button disabled>`, `<Button @click="…">`, `<Input placeholder="…">` and
-  // every `id` in this app are legal, documented, upstream usage that those two
-  // checks call errors. Turning them on would mean editing the trial's own
-  // usage to satisfy the checker — the one thing it must not do.
-  //
-  // Everything else strictTemplates turns on is KEPT, and it earns its place:
-  // it is what type-checks the `v-model` write-back direction, i.e. the values
-  // a reka-ui primitive can put BACK into a ref. That is where the real
-  // mismatches in this app were (a Select that can emit `null` into a `string`,
-  // a Checkbox that can emit `"indeterminate"` into a `boolean`).
+  // checkUnknownProps/Events are off: shadcn components forward undeclared attrs through $attrs and
+  // reka-ui's Primitive, which those checks would reject as errors. The rest of strictTemplates
+  // stays on; it type-checks v-model write-back.
   "vueCompilerOptions": {
     "strictTemplates": true,
     "checkUnknownProps": false,
@@ -127,16 +49,5 @@
   },
 
   "include": ["src/**/*.ts", "src/**/*.vue"]
-
-  // OUT OF SCOPE, both deliberately:
-  //
-  //   tailwind.config.ts — a BUILD-TIME node module. jiti/bun loads it inside
-  //     the Tailwind JIT, it reads `__dirname` and imports `node:path`, so
-  //     checking it here would mean adding `@types/node` to `types` above and
-  //     putting Node's globals in every component's scope. apps/tsconfig.json
-  //     and packages/vue-native/tsconfig.json scope themselves the same way.
-  //
-  //   tools/*.ts — the same, more so: fetch-registry.ts and gen-theme.ts are
-  //     bun scripts over `fs`, `path` and `fetch`. They run by hand, they emit
-  //     nothing that ships, and this app installs no @types/node for them.
+  // tailwind.config.ts and tools/*.ts are out of scope: build-time Node modules (need @types/node).
 }

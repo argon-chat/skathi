@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/keys.spec.ts: one keydown and one keyup per key, at the focused element (m26, docs/RUNTIME.md §5.19). See ../README.md.",
-
   "name": "vn-test-keys",
 
   "window": {

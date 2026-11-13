@@ -1,17 +1,9 @@
-// How the inspector's Elements tree NAMES a row.
+// How the inspector's Elements tree names a row.
 //
-// The bug this pins: the retained tree gives text nodes and Vue's fragment
-// anchors `tag: 0` ("no tag"), and the host's name table used to hand id 0 to
-// the first name anybody interned — `create_root`'s `"root"`. So every anchor
-// came back as `tag: "root"` and the panel, which decided a row's shape from
-// its tag, drew runs of `<root>` rows between the real elements.
-//
-// Two halves, and this file covers the second:
-//   * the host reserves name 0 (crates/vn-tree/src/tree.rs; the Rust test is
-//     `text_and_anchor_nodes_have_no_tag_name` in vn-tree's devtools.rs);
-//   * the panel decides by KIND and never by tag — which is what keeps it
-//     honest against a host that predates the fix, and is what is asserted
-//     here.
+// Text nodes and Vue's fragment anchors have `tag: 0` ("no tag"), and a host that hands name id 0 to the first
+// interned name makes every anchor come back as `tag: "root"`. The host reserves name 0 (crates/vn-tree/src/tree.rs;
+// Rust test `text_and_anchor_nodes_have_no_tag_name`); this file asserts the panel decides by kind and never by tag,
+// so it stays honest against an older host.
 
 import { describe, expect, test } from "bun:test";
 import { nodeLabel, rowKind, rowVisible } from "../../../apps/devtools/src/dump";

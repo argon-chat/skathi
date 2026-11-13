@@ -1,13 +1,9 @@
-//! Closing the app: the windows go at once, the teardown runs behind them,
-//! under a deadline (m26).
+//! Closing the app: the windows go at once, the teardown runs behind them, under a deadline.
 //!
-//! A close the app accepts hides every window of the process before anything
-//! else, as a browser and Electron do. That is `appWindow.close()` /
-//! `window.close()` (the titlebar X a frameless app draws), or a WM_CLOSE
-//! (the system menu, the taskbar, Alt+F4) that `beforeunload` did not veto.
-//! What follows runs with nothing on screen: gpui's quit, the `on_app_quit`
-//! hooks (IndexedDB's checkpoint, the cookie jar, the voice rooms' leave) and
-//! the end of the process.
+//! A close the app accepts (`appWindow.close()` / `window.close()`, or a WM_CLOSE that
+//! `beforeunload` did not veto) hides every window of the process first, as a browser does. What
+//! follows runs with nothing on screen: gpui's quit, the `on_app_quit` hooks (IndexedDB's
+//! checkpoint, the cookie jar, the voice rooms' leave) and the end of the process.
 //!
 //! ```text
 //!   close accepted ── begin: hide every window, launch::closing(), arm the deadline
@@ -19,35 +15,26 @@
 //!   DEADLINE after begin, still running ── one `[shutdown]` line, the process ends
 //! ```
 //!
-//! **The deadline.** [`DEADLINE`] after the close, the process ends whatever
-//! is still running, and says what it was doing on stderr. Each quit hook has
-//! its own, shorter budget, so the deadline only fires when something has no
-//! budget or ignores it. A second launch of a single-instance app that comes
-//! in meanwhile is told the instance is closing, waits for this process to
-//! end, and starts afresh (crates/vn-desktop/src/launch).
+//! **The deadline.** [`DEADLINE`] after the close the process ends whatever is still running, and
+//! says on stderr what it was doing. Each quit hook has its own shorter budget, so it fires only
+//! when something has none or ignores it. A second launch of a single-instance app meanwhile is told
+//! the instance is closing, waits for this process to end, and starts afresh.
 //!
-//! **Embedded** (src/embed.rs, docs/EMBEDDING.md) the process is not ours:
-//! [`finish`] and the deadline tell the embedder the app has closed, and the
-//! vue-native thread sleeps instead of ending anything.
+//! **Embedded** (src/embed.rs) the process is not ours: [`finish`] and the deadline tell the
+//! embedder the app has closed, and the vue-native thread sleeps instead of ending anything.
 //!
-//! **The end.** Once the quit hooks have run, [`finish`] ends the process with
-//! `TerminateProcess` instead of returning from `main`. Returning runs every
-//! thread-local destructor (the JS realm's, the voice engines') and every
-//! DLL's detach, and `ExitProcess` kills the deadline's thread before those
-//! begin, so nothing would bound them. None of them writes anything a user
-//! would miss: everything that persists is flushed by a quit hook. On an idle
-//! Argon host returning cost ~12 ms (m26); the point is the bound, not the
-//! time. Browsers end a renderer the same way.
+//! **The end.** After the quit hooks, [`finish`] ends the process with `TerminateProcess` instead of
+//! returning from `main`: returning runs every thread-local destructor and DLL detach, and
+//! `ExitProcess` kills the deadline's thread before those begin, so nothing would bound them. None
+//! writes anything a user would miss, since quit hooks flush everything that persists.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// How long the teardown may take after a close before the process is ended
-/// anyway. Above the quit hooks' own budgets run back to back on an app that
-/// has both (IndexedDB 2 s, the voice rooms 2 s, when both are at their
-/// worst), and below a second launch's patience with a closing instance
-/// (vn-desktop's `CLOSING_PATIENCE`).
+/// How long the teardown may take after a close before the process is ended anyway: above the quit
+/// hooks' budgets run back to back (IndexedDB 2 s, voice rooms 2 s), below a second launch's
+/// patience with a closing instance (vn-desktop's `CLOSING_PATIENCE`).
 pub const DEADLINE: Duration = Duration::from_secs(4);
 
 /// When the close was accepted, and what it was.
@@ -113,8 +100,7 @@ pub fn step<T>(name: &'static str, f: impl FnOnce() -> T) -> T {
     out
 }
 
-/// The end of `main`, after gpui's quit and its hooks: one `[shutdown]` line,
-/// then the process ends (module doc, "The end").
+/// The end of `main`, after gpui's quit and its hooks: one `[shutdown]` line, then the process ends.
 pub fn finish() -> ! {
     // A quit that did not come through a close (the session ending, an
     // inspector whose app is gone) is timed from here.
@@ -138,9 +124,7 @@ pub fn finish() -> ! {
     terminate()
 }
 
-/// `VN_SHUTDOWN_DELAY_MS=<n>`: a quit hook that takes `n` ms — the test seam
-/// for what a slow teardown looks like from outside: the window gone at
-/// once, the deadline, a second launch that arrives while the app is closing
+/// `VN_SHUTDOWN_DELAY_MS=<n>`: a quit hook that takes `n` ms, the test seam for a slow teardown
 /// (packages/vn-test/specs/close.spec.ts).
 pub fn install_test_delay(cx: &mut gpui::App) {
     let Some(ms) = std::env::var("VN_SHUTDOWN_DELAY_MS").ok().and_then(|v| v.trim().parse::<u64>().ok()) else {
@@ -183,11 +167,9 @@ fn hide_windows() -> usize {
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{EnumThreadWindows, IsWindowVisible, ShowWindow, SW_HIDE};
 
-    // Every top-level window of the UI thread, which is every gpui window of
-    // the process: the primary and each pop-out. Synchronous, so the windows
-    // are gone from the screen before this returns. gpui hears the change
-    // (`WM_SHOWWINDOW`) and reports it later, from its executor, so this is
-    // safe inside a window update.
+    // Every top-level window of the UI thread, which is every gpui window (primary and pop-outs).
+    // Synchronous; gpui hears `WM_SHOWWINDOW` later from its executor, so this is safe inside a
+    // window update.
     unsafe extern "system" fn hide(hwnd: HWND, count: LPARAM) -> BOOL {
         unsafe {
             if IsWindowVisible(hwnd).as_bool() {

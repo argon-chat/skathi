@@ -1,42 +1,21 @@
 //! The app inside a packaged exe.
 //!
-//! A `--features prod` build is a BARE HOST: the whole engine and no app. `vn
-//! build` (packages/vue-native/cli) copies it and stamps one VNPK blob into the
-//! copy as the `RT_RCDATA` resource `VNPAYLOAD` — the bundle, the window
-//! config, the app's identity and every asset — so an app author ships their
-//! own exe without a Rust toolchain (docs/PACKAGING.md).
+//! A `--features prod` build is a bare host: the engine and no app. `vn build` copies it and stamps
+//! one VNPK blob (bundle, window config, identity, assets) into the copy as the `RT_RCDATA` resource
+//! `VNPAYLOAD`, so an app author ships their own exe without a Rust toolchain.
 //!
-//! ```text
-//!   payload source            parser (crates/vn-payload)      consumers
-//!  ┌───────────────────┐     ┌─────────────────────────┐     ┌──────────────────────────────┐
-//!  │ Embedded          │     │ Payload::parse — O(n),  │     │ prod.rs: script, window.json,│
-//!  │  FindResourceW →  ├────▶│ header + TOC only, never├────▶│   app name, content provider │
-//!  │  LockResource     │     │ the asset bytes         │     │ lib.rs: GpuiAssets, the      │
-//!  │ File (bare host)  │     └─────────────────────────┘     │   vn_tree asset store, slot  │
-//!  │  VN_PAYLOAD=…vnpk │                                     └──────────────────────────────┘
-//!  └───────────────────┘
-//! ```
+//! **Embedded** is the image itself: `LockResource` points into the mapped exe, valid for the
+//! process lifetime, demand-paged, read-only and shared between instances.
 //!
-//! **Embedded** is the image itself: `LockResource` hands back a pointer into
-//! the mapped exe, valid for the life of the process, demand-paged, read-only
-//! and SHARED between instances of the same exe — the same memory story as the
-//! `include_str!` it replaces (design V7). The lookup costs 12–36 µs.
+//! **File** (`VN_PAYLOAD=app.vnpk`) is read through a read-only file mapping whose owner and handle
+//! live with the parsed payload, so nothing is copied or faulted in unused. Windows denies in-place
+//! writes while allowing atomic replacement; POSIX publishers must keep active files immutable and
+//! publish a new inode. It is honoured only when nothing is embedded (the in-repo iteration loop): a
+//! stamped exe ignores it with one line, since one environment variable could otherwise run
+//! unsigned JS under a signed app's identity.
 //!
-//! **File** is read through a read-only file mapping. Its owner and source
-//! handle live with the parsed payload, without copying the whole file into a
-//! heap buffer or faulting in unused assets. Windows denies in-place writes
-//! while allowing atomic rename/replacement; POSIX publishers must likewise
-//! keep active files immutable and publish a new inode.
-//!
-//! **File** is honoured ONLY when nothing is embedded, i.e. on a bare host: it
-//! is the in-repo iteration loop (`VN_PAYLOAD=apps/hello/dist/.vn/app.vnpk
-//! vn-app.exe`) and nothing else. A stamped exe ignores it, with one line —
-//! otherwise one environment variable could run unsigned JS under a signed
-//! app's identity (design §4.12).
-//!
-//! The module is in every build because `--vn-host-info` is: a dev host answers
-//! it too (`"mode": "dev"`), which is how `vn build` refuses one. Everything
-//! else here has only `prod` callers.
+//! The module is in every build because `--vn-host-info` is: a dev host answers it too
+//! (`"mode": "dev"`), which is how `vn build` refuses one.
 #![cfg_attr(not(feature = "prod"), allow(dead_code))]
 
 use std::borrow::Cow;
@@ -67,8 +46,8 @@ pub struct Meta {
     /// The vue-native version whose `vn` built this payload.
     pub vue_native: String,
     pub host_variant: String,
-    /// The `launch` object (`id`, `singleInstance`, `raiseOnSecondInstance`,
-    /// `protocols`) as JSON, when `vn build` wrote one (docs/LAUNCH.md).
+    /// The `launch` object (`id`, `singleInstance`, `raiseOnSecondInstance`, `protocols`) as JSON,
+    /// when `vn build` wrote one.
     pub launch: Option<String>,
     /// The asset packs this payload's assets continue in ([`Pack`]).
     pub packs: Vec<PackRef>,
@@ -84,12 +63,10 @@ pub struct PackRef {
     pub id: String,
 }
 
-/// An asset pack: a VNPK of assets only, written by `vn build` beside the
-/// app's payload (vn.config.json `packs`) so the parts of an app that change
-/// at different rates are different files — fonts, media, the script. Its
-/// assets are looked up after the payload's own. Its id is checked when it is
-/// opened: a pack from another build is refused, as a corrupt payload is.
-/// The check reads the index only; the assets stay unread until asked for.
+/// An asset pack: a VNPK of assets only, written by `vn build` beside the payload (vn.config.json
+/// `packs`) so parts of an app that change at different rates are different files. Looked up after
+/// the payload's own assets. Its id is checked on open (index only): a pack from another build is
+/// refused, as a corrupt payload is.
 pub struct Pack {
     pub name: String,
     pub payload: AppPayload,
@@ -218,13 +195,10 @@ pub fn get() -> Option<&'static Loaded> {
     LOADED.get_or_init(load).as_ref()
 }
 
-/// The embedder's payload (src/embed.rs), parsed now so a bad one is the
-/// embedder's `Err` rather than this module's [`fatal`]. Before the first
-/// [`get`]; it then wins over a stamped resource and `VN_PAYLOAD` alike, since
-/// the process that embeds vue-native is the one that says what it runs.
+/// The embedder's payload (src/embed.rs), parsed now so a bad one is the embedder's `Err` rather
+/// than [`fatal`]. Before the first [`get`]; it then wins over a stamped resource and `VN_PAYLOAD`.
 ///
-/// `dir` is where its asset packs are: the payload file's folder, or `None`
-/// for the executable's.
+/// `dir` is where its asset packs are: the payload file's folder, or `None` for the executable's.
 pub(crate) fn set_external(bytes: PayloadBytes, label: String, dir: Option<&std::path::Path>) -> Result<(), String> {
     let payload = AppPayload::parse(bytes)?;
     let meta = payload.meta().map(parse_meta).unwrap_or_default();
@@ -430,19 +404,12 @@ fn bundle_payload_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
         .then(|| contents.join("Resources").join("app.vnpk"))
 }
 
-// ---------------------------------------------------------------------------
-// the asset lookup — one function behind fetch(), <img>, <lottie>, <video>
-// ---------------------------------------------------------------------------
-
 /// `key` (already a [`vn_payload::content_key`]) → the asset's bytes.
 ///
-/// Exact first (a binary search); on a miss, an ASCII-case-insensitive scan
-/// with ONE advisory naming both spellings — dev runs on NTFS, where
-/// `assets/Logo.PNG` opens `assets/logo.png`, and a packaged exe must not be
-/// stricter than the dev host the author tested on.
-///
-/// A plain `fn` so it can be handed to `vn_tree::set_asset_store`, and
-/// thread-safe because gpui calls [`GpuiAssets`] from its loader threads.
+/// Exact first (a binary search); on a miss, an ASCII-case-insensitive scan with one advisory naming
+/// both spellings, since dev runs on NTFS and a packaged exe must not be stricter than the dev host.
+/// A plain `fn` for `vn_tree::set_asset_store`, thread-safe because gpui calls [`GpuiAssets`] from
+/// its loader threads.
 pub fn lookup(key: &str) -> Option<&'static [u8]> {
     let loaded = get()?;
     let all = || std::iter::once(&loaded.payload).chain(loaded.packs.iter().map(|p| &p.payload));
@@ -476,10 +443,7 @@ pub fn advise_once(key: &str, msg: &str) {
     vn_tree::log::record("advisory", msg.to_string());
 }
 
-/// gpui's `AssetSource` over the payload: what `Resource::Embedded(key)`
-/// (`vn_tree::img`'s store hit) is read back through. Borrowed, never copied
-/// here — gpui decodes from a transient `to_vec` exactly as it does for
-/// `Resource::Path`.
+/// gpui's `AssetSource` over the payload, borrowed and never copied here.
 pub struct GpuiAssets;
 
 impl gpui::AssetSource for GpuiAssets {
@@ -499,9 +463,8 @@ impl gpui::AssetSource for GpuiAssets {
     }
 }
 
-/// The folder-name form of the app's identity — the devtools slot directory
-/// (`%TEMP%\vue-native\apps\<this>\<pid>`). Same rule vn-storage applies to
-/// the storage folder, so the two never disagree about a name.
+/// The folder-name form of the app's identity: the devtools slot directory
+/// (`%TEMP%\vue-native\apps\<this>\<pid>`), by the rule vn-storage applies to the storage folder.
 pub fn slot_name() -> String {
     let raw = get().map(|l| l.meta.name.clone()).unwrap_or_default();
     let cleaned: String = raw
@@ -748,8 +711,7 @@ mod tests {
             .and_then(crate::json::Json::as_str)
             .unwrap();
         assert_eq!(variant, super::host_variant());
-        // Every optional part in: the name every host built before features
-        // could be left out already carried.
+        // Every optional part in: the plain `standard` name.
         assert_eq!(variant == "standard", super::OPTIONAL.iter().all(|(_, on)| *on));
         assert_eq!(variant.contains("no-devtools"), !cfg!(vn_devtools));
         assert_eq!(

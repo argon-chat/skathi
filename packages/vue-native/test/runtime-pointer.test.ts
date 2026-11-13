@@ -135,12 +135,6 @@ describe("dispatch", () => {
   });
 });
 
-// Since m20 the dispatcher only SYNTHESIZES an event somebody is listening for:
-// the host arms one bit per code and several names share a code, so a delivery
-// says nothing about which name has a handler, and building a W3C event costs
-// more than everything else in a dispatch put together (scripts/boundary-cost
-// .ts). These are the cases a careless version of that check would break — each
-// one is a listener that is NOT on the target, which is the whole difficulty.
 describe("only what someone listens for is built", () => {
   test("a listener on an ANCESTOR still receives the derived event", () => {
     const rt = createRuntime();

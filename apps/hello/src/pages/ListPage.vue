@@ -6,15 +6,9 @@ const session = useSession();
 
 const rows = Array.from({ length: 25 }, (_, i) => `row ${i + 1}`);
 const scrollTop = ref(0);
-// `VnEvent.target` is `unknown` — the host names the mirror node it dispatched
-// to, and the protocol has no way to say which element type that is. The cast
-// is to the surface being read, one property of it.
 const onScroll = (e: VnEvent) => (scrollTop.value = (e.target as VnElement).scrollTop);
 const wheelY = ref(0);
 
-// The scroll OFFSET is host state (a gpui ScrollHandle keyed by node id), not
-// component state: KeepAlive moves the node rather than destroying it, so the
-// handle — and the position — survive the tab switch on their own.
 onActivated(() => console.log("[app] ListPage ACTIVATED (scrollTop=" + scrollTop.value + ")"));
 onDeactivated(() => console.log("[app] ListPage DEACTIVATED (scrollTop=" + scrollTop.value + ")"));
 </script>

@@ -1,91 +1,24 @@
-//! At-rest encryption for the storage file: a provider trait, and the one
-//! provider Windows makes it possible to write honestly.
+//! At-rest encryption for the storage file: a provider trait and one provider per platform.
+//! The key must live somewhere the attacker does not have, so each provider leans on the OS.
 //!
-//! # Why a trait, and why DPAPI is the Windows implementation
+//! - Windows (id 1): DPAPI. The OS derives the key from the user's logon credential; this
+//!   process never sees it. It protects against other users and a copied file or backup, not
+//!   against anything running as the same user. A blob can become unreadable (local account,
+//!   reset password, profile that did not roam), which is why an unreadable blob is an empty
+//!   area plus an advisory, never a fatal error, and why the default folder is `LOCALAPPDATA`.
+//! - macOS (id 2): one random 256-bit master key per app in the login keychain (service
+//!   `gl.argon.vue-native.storage`, account = bundle identifier or `exe:<name>`), sealing
+//!   blobs with AES-256-GCM in `envelope` (versioned, random nonce, the DPAPI entropy string
+//!   as associated data). The key is created add-only so racing processes agree on one
+//!   (`envelope::load_or_create`). Only `keychain` needs a Mac; the rest compiles under
+//!   `cfg(test)` everywhere.
+//! - Linux (id 3): the same envelope and key, held by the Secret Service. With no Secret
+//!   Service on the bus (bare window manager, WSLg) the key goes in a user-only file under
+//!   `$XDG_DATA_HOME/vue-native/keys/`; once made it is used even if a keyring appears later,
+//!   since a second key would orphan the data. See `secret_service`.
 //!
-//! Encrypting a file is easy. *Keeping the key* is the entire problem, and it
-//! is the part every "we encrypt your local data" feature gets wrong: a key
-//! stored next to the ciphertext protects against nothing, and a key derived
-//! from something the app knows is a key the attacker also knows, because the
-//! attacker has the app.
-//!
-//! DPAPI ([`CryptProtectData`]) is the answer Windows already has. The key is
-//! derived by the OS from the user's logon credential and lives in LSA; our
-//! process never sees it, never stores it, and cannot leak it. There is no key
-//! file to manage, no first-run key generation, no key rotation, and no
-//! "where do we put the master key" conversation. That is the whole reason it
-//! is the default and the only Windows provider.
-//!
-//! # What DPAPI does and does not protect against — stated plainly
-//!
-//! It protects the file **from other Windows users on this machine, and from
-//! the file being copied off it**. Someone who steals the disk, or the folder,
-//! or the backup, gets bytes they cannot decrypt.
-//!
-//! It does **not** protect against anything running as the same user. A process
-//! running as you can call `CryptUnprotectData` on our file exactly as we do.
-//! That is not a flaw in the design, it is what per-user encryption *means*, and
-//! an application that needs more than that needs a passphrase the user types —
-//! which is a product decision, not a storage backend.
-//!
-//! # The roaming caveat
-//!
-//! DPAPI blobs are tied to the Windows **user**, and by default to the machine's
-//! copy of that user's master key. A roaming profile carries the master key with
-//! it, so `APPDATA` (roaming) plus DPAPI usually survives a move to another
-//! domain-joined machine — but "usually" is doing real work in that sentence: a
-//! local account, a reset password without the old one, or a profile that did
-//! not roam all leave a blob nobody can open again.
-//!
-//! The consequence is designed for, not hoped away: an unreadable blob is
-//! treated as **an empty area plus a loud advisory**, never as a fatal error.
-//! Losing preferences is survivable; refusing to start is not. This is why the
-//! default storage folder is `LOCALAPPDATA` — encrypted data that is explicitly
-//! machine-local cannot be surprised by roaming.
-//!
-//! # macOS: a Keychain-held key and AES-256-GCM (provider id 2)
-//!
-//! macOS has no system-encrypt call, so the provider holds a key, and the
-//! keychain is where a key belongs: one random 256-bit master key per app, a
-//! generic-password item in the user's login keychain (service
-//! `gl.argon.vue-native.storage`, account = the main bundle's identifier, or
-//! `exe:<name>` for an unbundled binary). The login keychain is encrypted
-//! under the user's login password and unlocked by logging in, so this gives
-//! what DPAPI gives: bound to this user, unreadable by other users and off
-//! this machine, no prompt in the ordinary case. The item's ACL names the app
-//! that created it; another app asking makes macOS ask the user.
-//!
-//! Every blob is sealed by `envelope` (versioned, AES-256-GCM, random nonce,
-//! and DPAPI's entropy string `vue-native/storage/v1` as associated data, for
-//! the same "it has to know it was ours" reason), and the key
-//! is created on first use with add-only semantics so two processes racing to
-//! create it agree on one (`envelope::load_or_create`). The Keychain calls
-//! themselves are `keychain`; they are the only part that needs a Mac. The
-//! rest is compiled under `cfg(test)` everywhere and tested on Windows.
-//!
-//! A keychain that cannot be read (locked with no way to ask, the access prompt
-//! refused) is an error from `protect`/`unprotect`, latched for the process:
-//! never plaintext, and never a *new* key that would orphan the data sealed
-//! under the old one.
-//!
-//! # Linux: a Secret Service key, else a key file (provider id 3)
-//!
-//! The macOS design with the keyring the desktop has: the same envelope and
-//! master key, held by the Secret Service (`org.freedesktop.secrets`:
-//! gnome-keyring, KWallet, KeePassXC), which is per user, encrypted under the
-//! login password and unlocked by logging in. A locked or refused keyring is
-//! an error latched for the process, as on macOS.
-//!
-//! Many Linux sessions run no Secret Service at all (a bare window manager,
-//! WSLg). Refusing to start there is not an option for an app, so where the
-//! service does not exist on the session bus the key goes in a file readable
-//! by this user only, `$XDG_DATA_HOME/vue-native/keys/<account>.key` (what
-//! Chromium's "basic" store amounts to). That protects against other users
-//! and against the data folder alone being copied, not against the whole
-//! home directory. A key file, once made, is used from then on even if a
-//! keyring appears later: a second key would orphan the data. See
-//! `secret_service`.
-//!
+//! A keychain or keyring that cannot be read is an error latched for the process: never
+//! plaintext, and never a new key that would orphan data sealed under the old one.
 //! [`CryptProtectData`]: https://learn.microsoft.com/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata
 
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
@@ -95,25 +28,17 @@ mod keychain;
 #[cfg(target_os = "linux")]
 mod secret_service;
 
-/// One way of turning bytes nobody else can read into bytes on a disk.
-///
-/// Whole-blob, not per-value: see [`crate::file`] for why the file is
-/// encrypted as one unit.
+/// One way of turning bytes into bytes only this user can read back on disk.
 pub trait SecretProvider: Send + Sync {
     /// How an advisory names this: `"Windows DPAPI (per-user)"`.
     fn name(&self) -> &'static str;
 
-    /// The byte that identifies this provider in a file header, so a file
-    /// written by one provider is refused by another instead of decrypting to
-    /// garbage. `1` is DPAPI, `2` the macOS Keychain provider, `3` the Linux one.
+    /// The byte identifying this provider in a file header, so a file written by one provider is
+    /// refused by another. `1` is DPAPI, `2` the macOS Keychain, `3` the Linux one.
     fn id(&self) -> u8;
 
-    /// Can this provider seal and open at all right now?
-    ///
-    /// What lets a caller tell "this blob is unreadable" (move it aside, make
-    /// a new key) from "the provider is unavailable" (a locked or refused
-    /// keychain: refuse, and touch nothing). DPAPI is always ready, which is
-    /// the default.
+    /// Whether this provider can seal and open right now. Lets a caller tell an unreadable blob
+    /// from an unavailable provider (locked or refused keychain: refuse, touch nothing).
     fn ready(&self) -> Result<(), String> {
         Ok(())
     }
@@ -122,22 +47,14 @@ pub trait SecretProvider: Send + Sync {
     fn unprotect(&self, ciphertext: &[u8]) -> Result<Vec<u8>, String>;
 }
 
-/// Additional entropy mixed into every blob.
-///
-/// NOT a secret and not pretending to be one — it is compiled into the binary
-/// and anyone can read it. What it buys is that a blob of ours cannot be
-/// decrypted by simply passing it to `CryptUnprotectData` from an unrelated
-/// program that happens to run as the same user: that program has to know it
-/// was ours. A speed bump with a real name, not a security boundary.
+/// Entropy mixed into every blob. Not a secret (it is in the binary); it stops an unrelated
+/// program running as the same user from decrypting our blob by passing it to
+/// `CryptUnprotectData`.
 #[cfg(target_os = "windows")]
 const ENTROPY: &[u8] = b"vue-native/storage/v1";
 
-/// The provider for this build, or `None` on a platform with no honest answer.
-///
-/// `None` is not a stub that stores plaintext under an encrypted name — a
-/// storage folder asked for `{ encrypted: true }` on such a platform is
-/// **refused**, loudly. Silently writing plaintext when an app asked for
-/// encryption is the worst failure available here.
+/// The provider for this build, or `None` on a platform without one; asking for
+/// `{ encrypted: true }` there is refused rather than written as plaintext.
 pub fn provider() -> Option<&'static dyn SecretProvider> {
     #[cfg(target_os = "windows")]
     {
@@ -160,9 +77,7 @@ pub fn provider() -> Option<&'static dyn SecretProvider> {
     }
 }
 
-/// Fills `buf` from the OS's preferred CSPRNG (`BCryptGenRandom` on Windows;
-/// on macOS and Linux ring's `SystemRandom`, `getentropy`/`getrandom`). An error, never a
-/// weaker fallback, on a platform without one here.
+/// Fills `buf` from the OS CSPRNG; an error, never a weaker fallback.
 pub fn random_bytes(buf: &mut [u8]) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -206,9 +121,7 @@ impl SecretProvider for Dpapi {
     }
 }
 
-/// One body for both directions: the two APIs are the same call with the same
-/// blob shapes and the same cleanup, and writing it twice is how the `LocalFree`
-/// gets forgotten in one of them.
+/// One body for both directions so the `LocalFree` cannot be forgotten in one of them.
 #[cfg(target_os = "windows")]
 unsafe fn dpapi(input: &[u8], protect: bool) -> Result<Vec<u8>, String> {
     use windows::Win32::Foundation::{HLOCAL, LocalFree};
@@ -216,8 +129,6 @@ unsafe fn dpapi(input: &[u8], protect: bool) -> Result<Vec<u8>, String> {
         CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
     };
 
-    // `cbData: 0` with a dangling pointer is legal for DPAPI, but an empty
-    // input is never something we ask it to do — the caller has real bytes.
     let mut inb = CRYPT_INTEGER_BLOB {
         cbData: input.len() as u32,
         pbData: input.as_ptr() as *mut u8,
@@ -228,9 +139,7 @@ unsafe fn dpapi(input: &[u8], protect: bool) -> Result<Vec<u8>, String> {
     };
     let mut out = CRYPT_INTEGER_BLOB::default();
 
-    // CRYPTPROTECT_UI_FORBIDDEN: this runs on the JS/render thread inside a
-    // frame. A DPAPI call that decided to raise a UI prompt would deadlock the
-    // very thread that would have to pump it.
+    // CRYPTPROTECT_UI_FORBIDDEN: this runs on the JS/render thread, which a UI prompt would deadlock.
     let r = if protect {
         CryptProtectData(
             &mut inb,
@@ -261,7 +170,6 @@ unsafe fn dpapi(input: &[u8], protect: bool) -> Result<Vec<u8>, String> {
     } else {
         core::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec()
     };
-    // DPAPI allocates the output with LocalAlloc; freeing it is the caller's.
     if !out.pbData.is_null() {
         let _ = LocalFree(Some(HLOCAL(out.pbData as *mut core::ffi::c_void)));
     }
@@ -291,8 +199,6 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn the_ciphertext_does_not_contain_the_plaintext() {
-        // The property the whole feature exists for, checked the way the demo
-        // checks it: the secret must not be findable in the bytes on disk.
         let p = provider().unwrap();
         let secret = b"correct-horse-battery-staple";
         let blob = p.protect(secret).unwrap();
@@ -306,8 +212,6 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn a_tampered_or_foreign_blob_is_an_error_not_garbage() {
-        // What makes "treat an unreadable blob as an empty area" safe: an
-        // unreadable blob is DETECTED, never silently decoded to nonsense.
         let p = provider().unwrap();
         let mut blob = p.protect(b"payload").unwrap();
         let last = blob.len() - 1;

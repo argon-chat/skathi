@@ -1,23 +1,12 @@
 <script setup lang="ts">
-// Pickers and files, tier 1 only — docs/DESKTOP.md §2.
-//
-//   <input type=file>            a FileList, `change` / `cancel`, read with FileReader
-//   showOpenFilePicker()         a handle: read it, edit it, write it back in place
-//   showSaveFilePicker()         a new file, created empty, then written
-//   showDirectoryPicker()        a folder's entries, over the host's cursor
-//   <a download>                 a blob: URL, saved through a Save As (D-F6)
-//
-// Nothing on this page imports from "vue-native": it is the code a browser
-// build would run. Every picker needs a click (a user activation), as in
-// Chromium; a handle never shows its path, only its `name`.
+// Every picker needs a click (a user activation), as in Chromium; a handle never shows its path,
+// only its `name`.
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 
 defineOptions({ name: "FilesPage" });
 
 const describe = (e: unknown) => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 const size = (n: number) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / 1048576).toFixed(1)} MiB`);
-
-// --- <input type=file> ------------------------------------------------------
 
 type Picked = { name: string; size: number; type: string; rel: string };
 const picked = ref<Picked[]>([]);
@@ -48,8 +37,6 @@ async function onPick(e: VnEvent) {
   }
 }
 const onCancel = () => (inputLog.value = [...inputLog.value, "cancel"].slice(-4));
-
-// --- File System Access ------------------------------------------------------
 
 const handle = ref<VnFileSystemFileHandle | null>(null);
 const text = ref("");
@@ -112,9 +99,6 @@ async function openFolder() {
   }
 }
 
-// --- <a download> ------------------------------------------------------------
-
-// The link's href is a blob: URL over the editor's text, remade when it changes.
 const notes = computed(() => text.value || "Saved from the vue-native hello app.\n");
 const blobUrl = ref("");
 const refreshUrl = () => {
@@ -130,10 +114,9 @@ onBeforeUnmount(() => URL.revokeObjectURL(blobUrl.value));
   <div class="page">
     <div class="hd">
       <span class="h1">Files</span>
-      <span class="sub">docs/DESKTOP.md §2 — pickers, File System Access, FileReader, downloads</span>
+      <span class="sub">pickers, File System Access, FileReader, downloads</span>
     </div>
 
-    <!-- <input type=file> ---------------------------------------------------- -->
     <section class="card">
       <div class="cap">
         <span>&lt;input type=file&gt;</span>
@@ -154,7 +137,6 @@ onBeforeUnmount(() => URL.revokeObjectURL(blobUrl.value));
       <div class="note">events: {{ inputLog.join(" · ") || "none yet" }}</div>
     </section>
 
-    <!-- File System Access ---------------------------------------------------- -->
     <section class="card">
       <div class="cap">
         <span>a file, edited in place</span>
@@ -181,7 +163,6 @@ onBeforeUnmount(() => URL.revokeObjectURL(blobUrl.value));
       <div class="note" v-if="entries.length">{{ entries.join("  ") }}</div>
     </section>
 
-    <!-- <a download> ---------------------------------------------------------- -->
     <section class="card">
       <div class="cap">
         <span>a download</span>
@@ -279,7 +260,6 @@ onBeforeUnmount(() => URL.revokeObjectURL(blobUrl.value));
   font-size: 12px;
   color: #ffffffcc;
 }
-/* The button half of <input type=file> — Tailwind's `file:` variants target this too. */
 .file-in::file-selector-button {
   padding: 6px 10px;
   margin-right: 8px;

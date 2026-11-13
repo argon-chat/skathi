@@ -1,5 +1,6 @@
-//! Registered percentage custom properties and their animation-dependent styles.
-//! Only animated nodes retain a cascade recipe; steady frames do not restyle.
+//! Registered percentage custom properties and their animation-dependent styles. Only animated
+//! nodes retain a cascade recipe; steady frames do not restyle.
+
 use std::rc::Rc;
 use gpui::{Refineable, StyleRefinement};
 use crate::{Decls, Env, Extras, Half, Vars, mapper, vars};
@@ -30,8 +31,7 @@ impl CascadeHalf {
     }
 }
 
-/// The retained style recipe for a registered-property animation. Ordinary
-/// properties and Extras are remapped together, preserving their cascade order.
+/// The retained style recipe for a registered-property animation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CustomAnimationContext {
     pub(crate) registrations: Vec<PercentageRegistration>,

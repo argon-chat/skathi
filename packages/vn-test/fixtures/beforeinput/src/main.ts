@@ -1,18 +1,3 @@
-// A fixture for packages/vn-test/specs/beforeinput.spec.ts (m26 fixes,
-// docs/RUNTIME.md §5.25): `beforeinput`, `input` and the composition events of
-// a text field.
-//
-// - `#ta`, a `<textarea>`, logs `keydown`, `beforeinput`, `input`, the three
-//   composition events and `paste` / `cut`. Its `beforeinput`
-//   handler cancels the edit `__VN_TEST_BI__.cancel` names (an inputType, and
-//   optionally the data).
-// - `#vm`, an `<input v-model>`, logs `input` and the composition events;
-//   `#model` shows the model, which runtime-dom leaves alone while an IME
-//   composes.
-//
-// `__VN_TEST_BI__.events` is one line per event a handler saw:
-// `<type>@<where>|<what it read>`. `assign(sel, value)` sets a field's value
-// from script.
 import { createApp, h, ref, vModelText, withDirectives } from "vue-native";
 
 type Edit = Event & { inputType: string; data: string | null; isComposing: boolean };
@@ -49,9 +34,8 @@ const log = (where: string) => (e: Event) => {
   }
 };
 
-// No `keyup`: devtools delivers a key's keyup in the same gpui update as its
-// keydown, so it lands before the `input` the widget defers to the end of that
-// update. A physical key's keyup is a later platform message, after `input`.
+// No `keyup`: devtools delivers a key's keyup in the same gpui update as its keydown, so it lands
+// before the `input` the widget defers to the end of that update.
 const all = (where: string) => {
   const on = log(where);
   return {

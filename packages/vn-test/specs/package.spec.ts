@@ -1,31 +1,3 @@
-// Packaging, held down from outside the process (docs/PACKAGING.md).
-//
-//   bun test packages/vn-test/specs/package.spec.ts
-//
-// `vn build` turns an app directory into ONE exe by stamping a payload into a
-// prebuilt bare host — no Rust toolchain. Every claim below is about the
-// shipped artifact, run the way a user runs it:
-//
-// 1. THE BUILD NEEDS NO TOOLCHAIN. `vn build` runs with every cargo/rustc
-//    directory taken off PATH and CARGO_HOME/RUSTUP_HOME pointed at nothing,
-//    and the exe it writes carries the app's name, icon and version info and
-//    the GUI subsystem (no console window).
-// 2. THE PACKAGE IS THE DOCUMENT. `fetch`, `<img>`, `<video>` and `<lottie>`
-//    resolve the same relative URLs out of the payload that dev resolves
-//    against the app root, and a miss says so instead of reading the cwd.
-// 3. IDENTITY IS THE vn.config NAME. The handshake lives in
-//    %TEMP%\vue-native\apps\<name>\<pid> (never beside the exe), storage in
-//    %LOCALAPPDATA%\<name>\storage — even though the exe launched here is a
-//    hard link named `vn-app-vntest-…` (the reaper's pattern), not `Hello.exe`.
-// 4. TWO APPS, TWO STORES, side by side.
-// 5. A STAMPED EXE CAN BE RE-STAMPED, and keeps its icon and version info.
-// 6. THE no-devtools HOST HAS NO LISTENER: no handshake, no listening port,
-//    and not even the inspector's window title in the image.
-//
-// Hosts: whatever `vn build` itself would find (VN_HOST, the in-repo release
-// exe, the local cache from `vn host build`); a debug feature build stands in
-// when there is none (src/features.ts `bareHost`).
-
 import { afterAll, beforeAll, describe, expect as bunExpect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, linkSync, mkdirSync, readFileSync, rmSync, cpSync } from "node:fs";
@@ -38,11 +10,9 @@ import { readVnpk, writeVnpk, type VnpkInput } from "../../vue-native/cli/vnpk";
 import { buildApp } from "../../vue-native/cli/build-app";
 
 const T = 60_000;
-/** A missing host is built (debug) once — see `bareHost`. */
 const HOST_T = 20 * 60_000;
 const CLI = join(REPO, "packages", "vue-native", "cli", "vn.ts");
 const OUT = join(WORK_DIR, "packaged", `spec-${process.pid}`);
-/** The inspector's window title — present only in an image with the devtools. */
 const MARKER = "vue-native devtools";
 const PROBE_KEY = `vn-package-spec-${process.pid}`;
 
@@ -63,7 +33,6 @@ afterAll(async () => {
   rmSync(OUT, { recursive: true, force: true });
 });
 
-/** The environment of a machine with NO Rust toolchain at all. */
 function noRustEnv(): Record<string, string> {
   const env = { ...(process.env as Record<string, string>) };
   const pathKey = Object.keys(env).find((k) => k.toLowerCase() === "path") ?? "PATH";
@@ -79,7 +48,6 @@ function noRustEnv(): Record<string, string> {
   return env;
 }
 
-/** `vn build <app> --host <host> --out <dir> --json`, as a subprocess with no toolchain. */
 function cliBuild(app: string, host: string, variant: string, label: string) {
   const out = join(OUT, label);
   const t0 = performance.now();
@@ -94,7 +62,6 @@ function cliBuild(app: string, host: string, variant: string, label: string) {
   return { exe: json.exe as string, json, ms };
 }
 
-/** A hard link under the reaper's name — the same image, a name `reap.ts` owns. */
 function runnable(exe: string, label: string): string {
   const link = join(dirname(exe), `vn-app-vntest-${process.pid}-${label}.exe`);
   rmSync(link, { force: true });
@@ -148,7 +115,6 @@ describe("vn build", () => {
       const exe = built[c.key]!.exe;
       bunExpect(exe.endsWith(c.file)).toBe(true);
       const pe = readPe(exe);
-      // GUI: Explorer opens no console window for it.
       bunExpect(pe.subsystem).toBe(SUBSYSTEM.GUI);
       const has = (type: number, name: number | string) => pe.resources.some((r) => r.type === type && r.name === name);
       bunExpect(has(RT.RCDATA, PAYLOAD_NAME)).toBe(true);
@@ -176,7 +142,6 @@ describe("a packaged hello", () => {
     bunExpect(app.slotDir).toBe(packagedSlot("hello", app.pid));
     bunExpect(app.slotDir.startsWith(join(tmpdir(), "vue-native", "apps", "hello"))).toBe(true);
     bunExpect(existsSync(join(dirname(exe), "devtools.json"))).toBe(false);
-    // A prod bundle, not a dev host that happened to be staged.
     bunExpect(await app.eval("typeof globalThis.__VN__")).toBe("undefined");
   }, T);
 
@@ -187,8 +152,8 @@ describe("a packaged hello", () => {
     bunExpect(dotted).toBe(200);
     const miss = await evalAsync(app, "fetch('assets/not-packaged.txt').then(r => r.status).then(s => globalThis.__pkgMiss = s)", "__pkgMiss");
     bunExpect(miss).toBe(404);
-    // `launch()` starts the exe with the REPO as its cwd, where Cargo.toml
-    // exists: a miss must not fall through to the working directory.
+    // `launch()` starts the exe with the REPO as its cwd, where Cargo.toml exists: a miss must not
+    // fall through to the working directory.
     bunExpect(existsSync(join(REPO, "Cargo.toml"))).toBe(true);
     const cwd = await evalAsync(app, "fetch('Cargo.toml').then(r => r.status).then(s => globalThis.__pkgCwd = s)", "__pkgCwd");
     bunExpect(cwd).toBe(404);
@@ -197,7 +162,7 @@ describe("a packaged hello", () => {
   }, T);
 
   test("<img> and <video> resolve relative srcs out of the payload", async () => {
-    await app.locator(".tab").nth(3).click(); // Media
+    await app.locator(".tab").nth(3).click();
     await until("the 1080p clip's metadata", async () => /1920×1080/.test(await app.locator(".meta").first().textContent()));
     await app.eval("document.querySelector('.relative-img').scrollIntoView(); 'ok'");
     await sleep(600);
@@ -205,8 +170,6 @@ describe("a packaged hello", () => {
     const shot = readPng(await app.screenshot());
     const scale = shot.width / Number(await app.eval("window.innerWidth"));
     const rect = { x: (box.x + 6) * scale, y: (box.y + 6) * scale, w: (box.w - 12) * scale, h: (box.h - 12) * scale };
-    // The poster is SMPTE colour bars: an alt-text box is grey, the picture is
-    // mostly saturated colour.
     const saturated = shot.count(rect, (_l, [r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b) > 80);
     bunExpect(saturated / (rect.w * rect.h)).toBeGreaterThan(0.25);
     const { entries } = await app.logs(0);
@@ -214,7 +177,7 @@ describe("a packaged hello", () => {
   }, T);
 
   test("<lottie> plays a .tgs out of the payload", async () => {
-    await app.locator(".tab").nth(2).click(); // Motion
+    await app.locator(".tab").nth(2).click();
     await until("a completed lottie loop", async () => /fired [1-9]\d*×/.test(await app.locator(".loops").textContent()), 20_000);
   }, T);
 
@@ -252,7 +215,6 @@ describe("two packaged apps side by side", () => {
         bunExpect(existsSync(shFile) ? readFileSync(shFile, "utf8") : "").not.toContain(PROBE_KEY);
       }
     } finally {
-      // Leave the user's real hello store as it was.
       await hello.eval(`localStorage.removeItem(${JSON.stringify(PROBE_KEY)}); __vn_storage_flush()`).catch(() => {});
       await hello.close();
       await shadcn.close();
@@ -297,7 +259,6 @@ describe("the no-devtools host", () => {
     for (const k of ["VN_DIST", "VN_APP_ROOT", "VN_PAYLOAD"]) delete env[k];
     const child = spawn(exe, [], { env, stdio: "ignore" });
     strays.push(child);
-    // Long enough that a host which was going to publish a handshake has.
     await sleep(8000);
     bunExpect(child.exitCode).toBeNull();
     const slot = packagedSlot("hello", child.pid!);

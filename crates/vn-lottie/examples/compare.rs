@@ -7,33 +7,16 @@
 //! cargo run --release -p vn-lottie --example compare -- --soak probes/worm.json
 //! ```
 //!
-//! It measures whichever backends are compiled in, so `--no-default-features`
-//! turns it into a `rasterlottie`-only run rather than an error.
+//! Walks `tests/fixtures/` and `tests/corpus/` (fetched by `tools/fetch-corpus.sh`), loads every
+//! file on every compiled-in backend (`--no-default-features` gives a `rasterlottie`-only run) and
+//! prints a markdown table of: load (accepted at all), cover (canvas fraction painted over the
+//! timeline; a backend painting 3 % of what the other does is silently dropping layers), Δ (mean
+//! per-pixel difference between backends) and ms (median rasterisation cost at 128 / 256 / 512 px,
+//! cache defeated by seeking before every render).
 //!
-//! `--golden` scores each backend against `LottieFiles/test-files`' own frame-0
-//! reference renders — the only external opinion on which one is *right* when
-//! the two disagree. `--soak` renders one file forever so an outside observer
-//! can watch the working set settle.
-//!
-//! It walks `tests/fixtures/` and `tests/corpus/` (the latter fetched by
-//! `tools/fetch-corpus.sh`), loads every file on every compiled-in backend,
-//! and prints a markdown table of:
-//!
-//! * **load** — did the backend accept the file at all,
-//! * **cover** — how much of the canvas it actually painted, sampled over the
-//!   timeline. A backend that loads a file and then paints 3 % of what the
-//!   other one paints is *silently* dropping layers, which is the failure mode
-//!   that matters and the one a load/no-load column cannot see,
-//! * **Δ** — mean per-pixel difference between the two backends, so a file
-//!   where they disagree can be pulled out and looked at,
-//! * **ms** — median rasterisation cost at 128 / 256 / 512 px.
-//!
-//! `--png <dir>` dumps a mid-timeline frame per file per backend, which is how
-//! the "who is right" question is actually settled; the table only says where
-//! to look.
-//!
-//! The cache is defeated by seeking before every render, so these are true
-//! rasterisation costs, not cache hits.
+//! `--golden` scores each backend against `LottieFiles/test-files`' frame-0 reference renders.
+//! `--soak` renders one file forever so an outside observer can watch the working set settle.
+//! `--png <dir>` dumps a mid-timeline frame per file per backend.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -41,10 +24,8 @@ use std::time::{Duration, Instant};
 use vn_lottie::{Backend, LottieState};
 
 const SIZES: [f32; 3] = [128.0, 256.0, 512.0];
-/// Samples per file. Enough to average out one slow first frame (both engines
-/// build caches lazily) without making a 50-file run take minutes.
+/// Samples per file; enough to average out one slow first frame without a long run.
 const ITERATIONS: usize = 60;
-/// Timeline samples for the coverage and difference statistics.
 const SAMPLES: usize = 9;
 
 fn main() {
@@ -146,20 +127,16 @@ fn header(backends: &[Backend]) {
 }
 
 struct Measured {
-    /// `None` when the backend refused the file; carries the reason.
     error: Option<String>,
     /// Fraction of the 256px canvas with non-zero alpha, averaged over the
     /// timeline samples.
     coverage: f64,
-    /// Median milliseconds per rasterisation, per entry in [`SIZES`].
     millis: [f64; SIZES.len()],
-    /// The 256px timeline samples, for the cross-backend difference.
     samples: Vec<Sample>,
 }
 
-/// One rendered frame. The dimensions travel with the bytes because
-/// `object-fit: contain` letterboxes: a 443x367 animation in a 256px box
-/// rasterises 256x212, and a PNG writer that assumed square would shear it.
+/// One rendered frame; dimensions travel with the bytes because `contain` letterboxes (a 443x367
+/// animation in a 256px box is 256x212).
 struct Sample {
     width: u32,
     height: u32,
@@ -215,8 +192,7 @@ fn measure(bytes: &[u8], backend: Backend) -> Measured {
     for (index, size) in SIZES.iter().enumerate() {
         let mut timings = Vec::with_capacity(ITERATIONS);
         for iteration in 0..ITERATIONS {
-            // Seeking every iteration defeats the frame cache, so what is timed
-            // is rasterisation and not a `Arc::clone`.
+            // Seeking every iteration defeats the frame cache, so this times rasterisation.
             let frame = total * (iteration % SAMPLES) as f32 / SAMPLES as f32;
             state.seek_frame(frame);
             let started = Instant::now();
@@ -241,8 +217,7 @@ fn median_ms(timings: &mut [Duration]) -> f64 {
     timings[timings.len() / 2].as_secs_f64() * 1000.0
 }
 
-/// Mean absolute per-channel difference between two backends' samples, as a
-/// fraction of full scale. Zero means pixel-identical output.
+/// Mean absolute per-channel difference between two backends' samples, as a fraction of full scale.
 fn difference(a: &[Sample], b: &[Sample]) -> Option<f64> {
     if a.is_empty() || a.len() != b.len() {
         return None;
@@ -277,9 +252,7 @@ fn row(path: &Path, backends: &[Backend], png_dir: Option<&Path>) {
     for (backend, m) in backends.iter().zip(&measured) {
         match &m.error {
             Some(error) => {
-                // Table cells cannot hold a 36-line advisory list, and the
-                // count plus the first offending path is what identifies the
-                // reason anyway.
+                // Table cells cannot hold a 36-line advisory list; the count plus the first path identifies the reason.
                 let short = error.replace('|', "\\|");
                 line.push_str(&format!(" **fail** ({short}) | — |"));
                 for _ in SIZES {
@@ -307,8 +280,6 @@ fn row(path: &Path, backends: &[Backend], png_dir: Option<&Path>) {
     println!("{line}");
 }
 
-/// Writes the middle timeline sample as a PNG so the table's numbers can be
-/// checked against what the frame actually looks like.
 fn dump(dir: &Path, name: &str, backend: Backend, measured: &Measured) {
     let Some(sample) = measured.samples.get(measured.samples.len() / 2) else {
         return;
@@ -325,12 +296,9 @@ fn dump(dir: &Path, name: &str, backend: Backend, measured: &Measured) {
     let _ = image.save(dir.join(format!("{stem}.{}.png", backend.name())));
 }
 
-/// Renders one file in a tight loop forever, so an external observer can watch
-/// the process's working set settle (or not). This is the memory measurement;
-/// it deliberately does nothing else.
+/// Renders one file in a tight loop forever so an external observer can watch the working set settle.
 fn soak_forever(_backends: &[Backend], relative: &str) {
-    // `preferred()` so the soak is selected the same way everything else is:
-    // `VN_LOTTIE_BACKEND=thorvg ... --soak fixtures/mask.json`.
+    // `preferred()` selects the backend as elsewhere: `VN_LOTTIE_BACKEND=thorvg ... --soak fixtures/mask.json`.
     let backend = Backend::preferred();
     let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")).join(relative);
     let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("read {path:?}: {error}"));
@@ -346,8 +314,7 @@ fn soak_forever(_backends: &[Backend], relative: &str) {
     loop {
         state.seek_frame(total * (frame % 120) as f32 / 120.0);
         let _ = state.render_frame((256.0, 256.0), 1.0);
-        // Exactly what the host does every frame; skipping it is the leak the
-        // m10 report describes.
+        // What the host does every frame; skipping it leaks.
         let _ = state.take_retired();
         frame += 1;
         if frame.is_multiple_of(600) {
@@ -356,19 +323,10 @@ fn soak_forever(_backends: &[Backend], relative: &str) {
     }
 }
 
-// ---- goldens -------------------------------------------------------------
-
-/// Scores both backends against the upstream reference renders.
-///
-/// `tests/fixtures/golden/*-00.png` are `LottieFiles/test-files`' own frame-0
-/// PNGs for the six CC0 fixtures, at the authored canvas size. They are the
-/// only *external* opinion available on which backend is drawing the file
-/// correctly — everything else in this harness can say the two engines
-/// disagree, but not which one is wrong.
-///
-/// The metric is the mean per-channel difference over the un-premultiplied
-/// RGBA, so a whole-shape colour error scores an order of magnitude above the
-/// antialiasing noise that any two rasterisers differ by.
+/// Scores both backends against the upstream reference renders: `tests/fixtures/golden/*-00.png`
+/// are `LottieFiles/test-files`' frame-0 PNGs for the six CC0 fixtures at the authored size, the
+/// only external opinion on which backend is right. The metric is the mean per-channel difference
+/// over un-premultiplied RGBA, so a colour error scores far above antialiasing noise.
 fn golden_table(backends: &[Backend]) {
     let fixtures = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
     let mut head = String::from("| fixture |");
@@ -413,8 +371,7 @@ fn golden_table(backends: &[Backend]) {
 fn score_against(bytes: &[u8], backend: Backend, reference: &image::RgbaImage) -> Option<f64> {
     let mut state = LottieState::load_with(backend, bytes).ok()?;
     state.seek_frame(state.meta().in_point);
-    // The goldens are at the authored canvas size, so scale 1 and a box the
-    // shape of the animation land exactly on it.
+    // Goldens are at the authored size, so scale 1 and a box shaped like the animation land exactly on it.
     let image = state.render_frame(
         (
             state.meta().width as f32,
@@ -431,8 +388,7 @@ fn score_against(bytes: &[u8], backend: Backend, reference: &image::RgbaImage) -
     let rendered = image.as_bytes(0)?;
     let mut sum = 0u64;
     for (pixel, expected) in rendered.chunks_exact(4).zip(reference.pixels()) {
-        // Ours is premultiplied BGRA, the golden is straight RGBA. Un-premultiply
-        // before comparing, or every semi-transparent edge reads as an error.
+        // Ours is premultiplied BGRA, the golden straight RGBA: un-premultiply or semi-transparent edges read as errors.
         let alpha = pixel[3];
         let unpremultiply = |channel: u8| -> u8 {
             if alpha == 0 {
@@ -448,7 +404,6 @@ fn score_against(bytes: &[u8], backend: Backend, reference: &image::RgbaImage) -
             alpha,
         ];
         for (a, b) in ours.iter().zip(expected.0.iter()) {
-            // Fully transparent pixels carry undefined colour on both sides.
             if alpha == 0 && expected.0[3] == 0 {
                 continue;
             }

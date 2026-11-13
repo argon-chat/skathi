@@ -1,56 +1,24 @@
-// `<VnWindow>` — a second OS window that paints part of THIS component tree.
+// `<VnWindow>`: a second OS window that paints part of THIS component tree. The subtree stays in
+// this tree, component instance and reactive graph; only its paint moves, so nothing is
+// remounted or serialized and a click in the pop-out runs the same handler.
 //
-// docs/MULTIWINDOW.md §1 (why this spelling), §3.3 (the contract), §5 (what the
-// host had to make per-window for it to be true).
-//
-// The one-sentence model: the subtree inside `<VnWindow>` stays in this tree,
-// this component instance and this reactive graph — only its PAINT moves to
-// another window. Nothing is remounted, nothing is serialized, no store bridge
-// is needed, and a click in the pop-out runs the same handler on the same
-// `ref`:
-//
-//     <VnWindow v-if="open" title="Palette" :bounds="{ width: 320 }"
-//               @close="open = false">
+//     <VnWindow v-if="open" title="Palette" :bounds="{ width: 320 }" @close="open = false">
 //       <Palette v-model="brush" />
 //     </VnWindow>
 //
-// ## Why a component and not `<Teleport to="vn:window">`  (D-M02)
-//
-// In a browser, "teleport into another window" is not a special Teleport
-// target: `window.open()` supplies an element and an ORDINARY
-// `<Teleport :to="w.document.body">` moves DOM into it. Teleport does the
-// moving; something else supplies the target. So vue-native supplies the
-// target, and exposes it — `<Teleport :to="pal.el">` composes onto a `VnWindow`
-// exactly the way it composes onto a popup's `document.body`:
-//
-//     <VnWindow ref="pal" title="Palette" />
-//     <Teleport :to="pal.el"> <Palette /> </Teleport>
-//
-// A magic string in `to` would fail in a browser as Vue's "Failed to locate
-// Teleport target" and render NOTHING — silence in exactly the direction the
-// compat-first policy exists to prevent — and could not carry `title`,
-// `bounds`, `chrome` or `backdrop` either.
-//
-// `window.open` is untouched and still reserved (A-22, docs/WINDOWING.md §8):
-// it means "a second DOCUMENT", which is a different feature from "one tree,
-// two windows".
+// A component rather than `<Teleport to="vn:window">`: like `window.open()` it supplies the target
+// element, so `<Teleport :to="pal.el">` composes onto a `VnWindow` as onto a popup's body.
+// `window.open` itself stays reserved (it means a second document).
 
 import { defineComponent, h, mergeProps, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from "@vue/runtime-core";
 import type { PropType } from "@vue/runtime-core";
 
-/**
- * The container node `<VnWindow>` renders and the pop-out paints as its root.
- *
- * Structurally typed rather than imported: `runtime.ts`'s `MirrorElement` is
- * internal, and importing it here would make the module graph circular
- * (`runtime.ts` re-exports this file). `__vnId` is the retained-tree node id, which
- * is the whole address the host needs (MULTIWINDOW.md §3.2 invariant 1).
- */
+/** The container node `<VnWindow>` renders as the pop-out's root. Structural: importing runtime.ts's `MirrorElement` would be circular. */
 export interface VnWindowTarget {
   readonly __vnId: number;
 }
 
-/** `<VnWindow :bounds>` — every field optional; absent means "let the OS pick". */
+/** Every field optional; absent lets the OS pick. */
 export interface VnWindowBounds {
   x?: number;
   y?: number;
@@ -65,10 +33,7 @@ export interface VnWindowMetrics {
   scale: number;
 }
 
-/**
- * The `show` payload: the viewport it showed at, and how long the show took
- * from the `visible` change to its first drawn frame (MULTIWINDOW.md §7.9).
- */
+/** The `show` payload: the viewport, and ms from the `visible` change to the first drawn frame. */
 export interface VnWindowShown extends VnWindowMetrics {
   firstFrameMs: number;
 }
@@ -81,14 +46,7 @@ export interface VnWindowRect {
   height: number;
 }
 
-/**
- * Props whose value gpui fixes when the window is created.
- *
- * Changing one of these on a live window **advises and does nothing** rather
- * than silently doing nothing — the same rule, for the same reason, as
- * `vn.config.json`'s `titleBarStyle` and `resizable` (docs/WINDOWING.md
- * D-25/D-30). Close and re-open the window (`v-if`) to change them.
- */
+/** Props gpui fixes at window creation; changing one on a live window advises and does nothing (close and re-open via `v-if`). */
 const CREATION_TIME_ONLY = [
   "chrome",
   "backdrop",
@@ -101,23 +59,12 @@ const CREATION_TIME_ONLY = [
 ] as const;
 
 /**
- * The prop that marks the element `<VnWindow>` renders as a window's painted
- * root. A symbol: Vue's prop loop (`for…in`) never sees one, so it never
- * reaches `patchProp` or the host, but the renderer's `createElement` is
- * handed the props and registers the element there — BEFORE its children
- * mount, which is when a `<Teleport>` in the window's content first asks where
- * `body` is (runtime.ts, `windowRootOf`; content that is not inserted yet is
- * placed by its components, `mountingWindowRoot`). Vue's attribute
- * fall-through would drop it, which is why the root merges its own.
+ * Symbol prop marking a window's painted root. Vue's `for…in` skips symbols, so it never reaches
+ * the host, yet `createElement` registers the element before its children mount (runtime.ts `windowRootOf`).
  */
 export const WINDOW_ROOT: unique symbol = Symbol("vn-window-root");
 
-/**
- * The painted roots of the mounted `<VnWindow>`s. A node under one paints in
- * that window, so it is that window's document a `<Teleport to="body">` or an
- * `el.ownerDocument` means (runtime.ts, `windowRootOf` / `windowDocument`).
- * Empty without a pop-out, which is what keeps both free in the main window.
- */
+/** Painted roots of the mounted `<VnWindow>`s; a node under one belongs to that window's document. Empty without a pop-out. */
 export const windowRoots = new Set<object>();
 
 interface OpenOptions extends VnWindowBounds {
@@ -142,20 +89,13 @@ interface OpenOptions extends VnWindowBounds {
 
 export const VnWindow = /*@__PURE__*/ defineComponent({
   name: "VnWindow",
-  // The render function puts the attributes on the root itself (see there).
   inheritAttrs: false,
   props: {
     /** The OS caption text. Live: changing it renames the window. */
     title: { type: String, default: "vue-native" },
     /** Where the window opens, CSS px. Creation-time only. */
     bounds: { type: Object as PropType<VnWindowBounds>, default: undefined },
-    /**
-     * `"default"` — the OS draws a real caption: movable, resizable, closable,
-     * Windows 11 snap layouts, no drag region needed.
-     * `"hidden"` — the app owns the whole surface and must paint its own
-     * `window-drag: move` region, or the window cannot be moved. Exactly the
-     * contract `titleBarStyle: "hidden"` has for the main window.
-     */
+    /** `"default"`: OS caption. `"hidden"`: the app paints its own `window-drag: move` region. */
     chrome: { type: String as PropType<"default" | "hidden">, default: "default" },
     /** `mica` | `mica-alt` | `acrylic` | `transparent` | `none`. Default: the app's own. */
     backdrop: { type: String, default: undefined },
@@ -167,117 +107,52 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
     minHeight: { type: Number, default: undefined },
     /** `env(titlebar-area-height)` inside this window, for `chrome: "hidden"`. */
     titleBarHeight: { type: Number, default: 32 },
-    /**
-     * Does the window take the keyboard when it appears?
-     *
-     * **Default `false`**, and deliberately so: a tool palette that grabs focus
-     * every time it opens is a bug in every desktop app — the user was typing
-     * in the document and would lose the caret. Pass `activate` for a window
-     * that is the user's new centre of attention (a detached editor, a
-     * player).
-     */
+    /** Take the keyboard on show? Default false: a palette that grabs focus steals the caret from the document. */
     activate: { type: Boolean, default: false },
-    /**
-     * Live. `false` keeps the window but hides it: created `false`, it is
-     * made and painted while nobody sees it, so the first `true` is a SHOW —
-     * a frame, not a window creation. What a viewer that has to appear at
-     * once is built on (MULTIWINDOW.md §7.9). A hide hands the activation back
-     * to the main window when this one had it.
-     */
+    /** Live. `false` keeps the window created and painted but hidden, so the first `true` is a frame, not a creation. A hide returns activation to the main window. */
     visible: { type: Boolean, default: true },
-    /**
-     * `"monitor"`: the window has no frame and every show covers the whole
-     * monitor the main window is on, taskbar included — a media viewer's
-     * window. `bounds` is ignored. Creation-time only.
-     */
+    /** `"monitor"`: frameless, covers the whole monitor the main window is on (taskbar included); `bounds` ignored. Creation-time only. */
     cover: { type: String as PropType<"monitor">, default: undefined },
-    /**
-     * `false`: the main window owns this one — no taskbar button, no second
-     * Alt-Tab entry, it stays above the main window and minimises with it.
-     * Creation-time only.
-     */
+    /** `false`: owned by the main window: no taskbar button or Alt-Tab entry, stays above it, minimises with it. Creation-time only. */
     taskbar: { type: Boolean, default: true },
-    /**
-     * The images this window shows keep their full decode while they show
-     * there, instead of the smaller copy an image drawn small is reduced to
-     * after a while (a viewer zooms to 1:1). Live.
-     */
+    /** Keep the full image decode while shown here (no reduced copy for small draws). Live. */
     fullResolution: { type: Boolean, default: false },
-    /**
-     * The mouse goes THROUGH the window to whatever is under it, in any
-     * application — Electron's `setIgnoreMouseEvents(true)`. What an overlay
-     * laid over a game is (MULTIWINDOW.md §7.11). Live. The whole window,
-     * always: there is no `forward` mode that lets clicks land on its painted
-     * parts.
-     */
+    /** The mouse passes THROUGH the whole window to whatever is under it (Electron `setIgnoreMouseEvents(true)`). Live. */
     ignoreMouseEvents: { type: Boolean, default: false },
-    /**
-     * `false`: the window is never activated — not when it is shown, not when
-     * it is clicked — has no taskbar button and no Alt-Tab entry, and the
-     * shell never hears of it, so it does not bring the taskbar up over a
-     * borderless game. Electron's `focusable: false`, which on Windows also
-     * means `skipTaskbar`. It takes no keyboard. Creation-time only.
-     */
+    /** `false`: never activated, no taskbar or Alt-Tab entry, no keyboard (Electron `focusable: false`). Creation-time only. */
     focusable: { type: Boolean, default: true },
-    /**
-     * Screen capture leaves the window out (`WDA_EXCLUDEFROMCAPTURE`) —
-     * Electron's `setContentProtection(true)`. For an overlay drawn over a
-     * screen that is being shared, so it does not echo back into the stream.
-     * Live.
-     */
+    /** Excluded from screen capture (`WDA_EXCLUDEFROMCAPTURE`). Live. */
     contentProtection: { type: Boolean, default: false },
-    /**
-     * With `cover="monitor"`: WHICH monitor, by index, in the order Windows
-     * enumerates them (`EnumDisplayMonitors` — the order a game-activity
-     * plugin reports a game's monitor in). Absent: the main window's. Live: a
-     * shown window moves to the new monitor.
-     */
+    /** With `cover="monitor"`: monitor index in `EnumDisplayMonitors` order; absent means the main window's. Live: a shown window moves. */
     monitor: { type: Number, default: undefined },
   },
   emits: {
     /** The OS window exists. Carries its gpui window id — what devtools `--window` names. */
     open: (_windowId: number) => true,
-    /** It closed, however it closed: the X button, `close()`, or the app quitting. */
     close: () => true,
     focus: () => true,
     blur: () => true,
-    /** This window's own viewport moved. See the note on `width`/`height` below. */
     resize: (_metrics: VnWindowMetrics) => true,
-    /** `visible` became `true` and the window is on screen with its first frame. */
     show: (_shown: VnWindowShown) => true,
-    /** `visible` became `false` and the window is off screen. */
     hide: () => true,
   },
   setup(props, { slots, emit, expose, attrs }) {
     const el = ref<VnWindowTarget | null>(null);
     const windowId = ref(0);
     /**
-     * **This pop-out's own viewport, in CSS px.**
-     *
-     * There is ONE JS realm for the whole process (D-M01), so there is one
-     * `window` object: `window.innerWidth`, `matchMedia`, `document.title` and
-     * every `appWindow.*` verb keep meaning the PRIMARY window and say so once
-     * (A-M04, MULTIWINDOW.md §7.7). Inventing a second `window` that shadowed
-     * the real one inside a subtree would be a divergence no browser has.
-     *
-     * So a pop-out's metrics are pushed to the component that asked for the
-     * window instead — which is where an app can actually use them. CSS is the
-     * other half and needs nothing: `@media (max-width: …)`,
-     * `prefers-color-scheme`, `resolution` and `env(titlebar-area-*)` are
-     * evaluated against the window that PAINTS the element (§6).
+     * This pop-out's own viewport in CSS px. There is one JS realm, so `window.innerWidth`,
+     * `matchMedia` and `appWindow.*` keep meaning the primary window; a pop-out's metrics are
+     * pushed to the component instead. CSS (`@media`, `env(titlebar-area-*)`) is evaluated
+     * against the window that paints the element.
      */
     const width = ref(0);
     const height = ref(0);
     const scale = ref(1);
-    /** `true` once the OS window is gone, so nothing tries to drive a dead id. */
     let closed = false;
 
     /**
-     * Where an element of the MAIN window is, in this window's CSS px relative
-     * to its root (`el`) — through the screen, so across monitors and DPIs.
-     * What a viewer's zoom out of the thumbnail starts from. `null` when either
-     * is not painted, or before the window opened. A `cover` window answers for
-     * where its next show puts it, so this is right while it is still hidden.
+     * Where an element of the MAIN window is, in this window's CSS px relative to its root, across
+     * monitors and DPIs; null if either is unpainted or before open.
      */
     const mapFromMain = (target: VnWindowTarget | null | undefined): VnWindowRect | null => {
       if (closed || !el.value || !target || typeof __vn_window_map_rect !== "function") return null;
@@ -312,8 +187,7 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       if (props.cover !== undefined) o.cover = props.cover;
       return JSON.stringify(o);
     };
-    /** The options the host has, so a change made before the deferred open
-     *  lands can be sent once the window exists. */
+    /** Options the host has, so a change before the deferred open lands can be sent afterwards. */
     let sent = "";
     const sync = () => {
       if (closed || !el.value || !windowId.value) return;
@@ -333,8 +207,7 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       switch (kind) {
         case "open":
           windowId.value = detail.windowId ?? 0;
-          // A prop that moved between the mount and the deferred open (a
-          // `visible` flipped at once, say) reached no window; it does now.
+          // A prop that changed between mount and the deferred open reached no window.
           sync();
           emit("open", windowId.value);
           break;
@@ -370,13 +243,9 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
     onMounted(() => {
       const node = el.value;
       if (!node) return;
-      // The host DEFERS the open by one effect cycle: `App::open_window` draws
-      // the new window once before returning, and this call is nested inside
-      // the primary window's own update. So there is no handle to return here
-      // and none is promised — `@open` is the honest shape (§3.2 invariant 2).
-      // Un-painting, though, is immediate: the main window's very next draw is
-      // already without this subtree, because a node in two element trees for
-      // one frame aliases gpui's scroll state and hitboxes (§3.2 invariant 3).
+      // The host defers the open by one effect cycle (it nests in the primary window's update), so
+      // no handle is returned; use `@open`. Un-painting is immediate: a node in two element trees
+      // for one frame aliases gpui's scroll state and hitboxes.
       sent = options();
       __vn_window_open(node.__vnId, sent, () => {
         closed = true;
@@ -385,26 +254,20 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       }, onEvent);
     });
 
-    // `onBeforeUnmount`, NOT `onUnmounted`: the node must still exist when the
-    // close is requested. After `onUnmounted` Vue has already called
-    // `__vn_remove` and the host would refuse an id that is gone (§3.3).
+    // `onBeforeUnmount`, not `onUnmounted`: the node must exist when the close is requested; after
+    // `onUnmounted` Vue has called `__vn_remove`.
     onBeforeUnmount(() => {
       if (closed || !el.value) return;
       __vn_window_close(el.value.__vnId);
     });
-    // The root leaves the registry once its content has unmounted, so a
-    // child's own unmount hooks still see the window it was in.
+    // Leaves the registry after the content unmounts, so children's unmount hooks still see their window.
     let root: object | null = null;
     onMounted(() => (root = el.value));
     onUnmounted(() => {
       if (root) windowRoots.delete(root);
     });
 
-    // The LIVE props. `bounds` moves/resizes the same window; `title` renames it; `alwaysOnTop` re-stacks it;
-    // `visible` shows or hides it; `fullResolution` pins its images' decodes;
-    // `ignoreMouseEvents`, `contentProtection` and `monitor` are an overlay's
-    // (§7.11). Everything else is creation-time-only in gpui and the host
-    // advises rather than pretending — see CREATION_TIME_ONLY.
+    // Live props are pushed to the host; creation-time-only ones are advised (CREATION_TIME_ONLY).
     watch(
       () =>
         [
@@ -428,20 +291,10 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       sync,
     );
 
-    // The container is an ordinary element node and is the pop-out's PAINTED
-    // ROOT, so the host gives it the root treatment `Tree::root` gets in the
-    // main window — 100 %×100 %, `overflow: scroll`, a tracked focus handle
-    // (MULTIWINDOW.md §7.1). That is what makes the content fill the window and
-    // what lets an `<input>` inside it hold keyboard focus.
-    //
-    // It renders in THIS window's tree for exactly the frames between mount and
-    // the deferred open; `class="vn-window-root"` is the handle an app has if
-    // it wants to style those frames. `WINDOW_ROOT` is the renderer's.
-    //
-    // The attributes an app puts on `<VnWindow>` (`class`, `data-*`, a listener)
-    // land on the root as they would fall through, but merged here: Vue's own
-    // fall-through clones the root's props with a `for…in`, which would drop
-    // the `WINDOW_ROOT` symbol and leave the window's portals in the main one.
+    // The pop-out's painted root: the host gives it the main window's root treatment (100%x100%,
+    // scroll, focus handle) so content fills the window and an `<input>` can hold focus. It
+    // renders in this tree between mount and the deferred open; `.vn-window-root` styles those frames.
+    // Attrs are merged here because Vue's fall-through `for…in` would drop the `WINDOW_ROOT` symbol.
     return () => {
       const root: Record<string | symbol, unknown> = mergeProps({ ref: el, class: "vn-window-root" }, attrs);
       root[WINDOW_ROOT] = true;
@@ -450,5 +303,5 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
   },
 });
 
-/** The names an app can change on a live `<VnWindow>` — the rest re-open it. */
+/** Props that cannot change on a live `<VnWindow>`; changing one advises. */
 export const VN_WINDOW_CREATION_TIME_PROPS: readonly string[] = CREATION_TIME_ONLY;

@@ -1,51 +1,16 @@
-//! HTML text-assistance attributes → gpui's [`TextInputConfiguration`].
+//! HTML text-assistance attributes → gpui's [`TextInputConfiguration`]. A pure parser: attribute
+//! strings in, one configuration out, plus values HTML does not define so the caller can advise.
 //!
-//! zed#63264 gave `InputHandler` a per-frame `text_input_configuration()` whose
-//! four fields are, by construction, the HTML attribute set: `autocorrect`,
-//! `autocapitalize`, `spellcheck` (gpui calls it `suggestions`) and
-//! `enterkeyhint` (gpui calls it `input_action`, and documents its variants as
-//! "the HTML `enterkeyhint` attribute's value set"). gpui re-queries it every
-//! frame and pushes it to the platform only when it changes.
+//! An absent attribute keeps gpui's default (the platform's), not the browser's (spellcheck,
+//! sentence autocapitalize); an app that wants those writes them. The Windows platform window
+//! ignores the configuration anyway.
 //!
-//! So this module is a pure parser: attribute strings in, one
-//! [`TextInputConfiguration`] out, plus a list of values HTML does not define
-//! so the caller can advise instead of guessing.
-//!
-//! # Which defaults
-//!
-//! An **absent** attribute leaves the corresponding field at
-//! [`TextInputConfiguration::default()`] — which is exactly what gpui forwards
-//! for an unconfigured field, i.e. the platform default. It is *not* the
-//! browser's default: a browser enables spellcheck and sentence
-//! autocapitalization on a plain `<input>`, and this does not.
-//!
-//! That difference is deliberate and worth naming rather than hiding. Turning
-//! assistance on for every field in the tree would be a framework-wide
-//! behaviour change justified by nothing an app asked for, and today it would
-//! be unobservable anyway — the Windows platform window ignores the
-//! configuration entirely (`PlatformWindow::set_text_input_configuration` has
-//! no `gpui_windows` override), so only macOS/web would silently start
-//! autocorrecting. An app that wants the browser's defaults writes them:
-//! `<input spellcheck="true" autocapitalize="sentences">`.
-//!
-//! # `type` and `inputmode`
-//!
-//! Neither has a field of its own — `TextInputConfiguration` carries no
-//! keyboard-layout hint — but both carry information the four fields *can*
-//! express, and a browser uses them the same way:
-//!
-//! * `type="search"` / `inputmode="search"` make the confirm key a Search key,
-//!   unless `enterkeyhint` said otherwise.
-//! * `type="password"` forces all assistance off. Browsers never autocorrect,
-//!   capitalize or spellcheck a password field, and it overrides the explicit
-//!   attributes rather than deferring to them: a password reaching a
-//!   suggestion engine is a defect, not a preference.
+//! `type="search"` / `inputmode="search"` make the confirm key a Search key unless `enterkeyhint`
+//! says otherwise. `type="password"` forces all assistance off, overriding explicit attributes.
 
 use gpui::{Autocapitalize, TextInputAction, TextInputConfiguration};
 
-/// The text-assistance attributes of one `<input>`/`<textarea>`, exactly as
-/// they arrived on the node — `None` for absent, `Some("")` for a bare
-/// attribute (which HTML treats as its own keyword for some of these).
+/// The text-assistance attributes of one field as they arrived: `None` absent, `Some("")` bare.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InputAttributes<'a> {
     pub autocorrect: Option<&'a str>,
@@ -53,30 +18,23 @@ pub struct InputAttributes<'a> {
     pub spellcheck: Option<&'a str>,
     pub enterkeyhint: Option<&'a str>,
     pub inputmode: Option<&'a str>,
-    /// The `type` attribute. `<textarea>` has none; pass `None`.
     pub input_type: Option<&'a str>,
 }
 
-/// What [`configuration`] worked out.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MappedConfiguration {
     pub config: TextInputConfiguration,
-    /// One entry per attribute whose value is outside HTML's value set, as
-    /// `(attribute, value)`. The attribute keeps its default; the caller is
-    /// expected to advise once, the way a browser's devtools console would.
+    /// `(attribute, value)` for each value outside HTML's set; the attribute keeps its default.
     pub unsupported: Vec<(&'static str, String)>,
 }
 
-/// Map one field's attributes onto the configuration gpui will forward.
 pub fn configuration(attributes: InputAttributes<'_>) -> MappedConfiguration {
     let mut config = TextInputConfiguration::default();
     let mut unsupported = Vec::new();
-    // Enumerated attribute values are ASCII case-insensitive in HTML.
     let fold = |value: &str| value.trim().to_ascii_lowercase();
 
     if let Some(raw) = attributes.autocorrect {
         match fold(raw).as_str() {
-            // `<input autocorrect>` — the empty string is the "on" keyword.
             "on" | "" => config.autocorrect = true,
             "off" => config.autocorrect = false,
             _ => unsupported.push(("autocorrect", raw.to_string())),
@@ -85,8 +43,7 @@ pub fn configuration(attributes: InputAttributes<'_>) -> MappedConfiguration {
 
     if let Some(raw) = attributes.autocapitalize {
         match fold(raw).as_str() {
-            // Unlike the others, the empty string here is the *default* state,
-            // which inherits — i.e. it means "say nothing", not "say on".
+            // Unlike the others, the empty string is the default (inherit), not "on".
             "" => {}
             "off" | "none" => config.autocapitalize = Autocapitalize::None,
             "on" | "sentences" => config.autocapitalize = Autocapitalize::Sentences,
@@ -178,8 +135,6 @@ mod tests {
         assert!(mapped.unsupported.is_empty());
     }
 
-    /// `<input autocorrect spellcheck>` — a bare attribute is the "on"/"true"
-    /// keyword for these two, and Vue's `patchProp` delivers it as `""`.
     #[test]
     fn bare_attribute_is_the_on_keyword() {
         let mapped = configuration(InputAttributes {
@@ -192,8 +147,6 @@ mod tests {
         assert!(mapped.unsupported.is_empty());
     }
 
-    /// …but a bare `autocapitalize` is HTML's *default* state, which inherits
-    /// rather than turning anything on.
     #[test]
     fn bare_autocapitalize_stays_at_the_default() {
         let mapped = configuration(InputAttributes {
@@ -281,7 +234,6 @@ mod tests {
         }
     }
 
-    /// An explicit `enterkeyhint` beats the hint derived from `type`.
     #[test]
     fn enterkeyhint_wins_over_the_type_derived_action() {
         let mapped = configuration(InputAttributes {
@@ -292,7 +244,6 @@ mod tests {
         assert_eq!(mapped.config.input_action, TextInputAction::Go);
     }
 
-    /// …but nothing beats `type="password"` turning assistance off.
     #[test]
     fn a_password_field_refuses_assistance_it_was_told_to_use() {
         let mapped = configuration(InputAttributes {
@@ -309,15 +260,12 @@ mod tests {
                 autocorrect: false,
                 autocapitalize: Autocapitalize::None,
                 suggestions: false,
-                // The confirm key is presentation, not assistance — it stays.
                 input_action: TextInputAction::Done,
             }
         );
         assert!(mapped.unsupported.is_empty());
     }
 
-    /// An unrelated `type`/`inputmode` changes nothing: they only ever *add* a
-    /// confirm-key hint, they never disable what an attribute asked for.
     #[test]
     fn an_ordinary_type_leaves_the_mapping_alone() {
         let mapped = configuration(InputAttributes {

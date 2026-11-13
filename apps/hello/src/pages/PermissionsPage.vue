@@ -1,16 +1,4 @@
 <script setup lang="ts">
-// The permissions surface, both tiers — docs/PERMISSIONS.md.
-//
-// Every row below is read TWICE on purpose, and the page shows both answers
-// side by side, because the whole design is that they are different surfaces:
-//
-//   tier 1  navigator.permissions.query({ name })  -> "granted"|"denied"|"prompt"
-//           The W3C API, byte-identical to a browser build. Three states.
-//   tier 2  appPermissions.query(name)             -> + "unsupported"
-//           The vue-native extension, which also carries request(). Four states.
-//
-// A capability the platform has no notion of reads `unsupported` on the right
-// and `denied` on the left — that column pair IS the divergence, made visible.
 import { onMounted, onUnmounted, ref } from "vue";
 import { appPermissions } from "vue-native";
 
@@ -18,19 +6,11 @@ defineOptions({ name: "PermissionsPage" });
 
 const platform = ref(appPermissions.platform);
 
-/**
- * One table row. `appPermissions.list()` supplies `name` / `state` /
- * `canRequest`; the other two are this page's own — `webState` is the tier-1
- * answer shown beside the tier-2 one, and that PAIR is the whole point of the
- * screen.
- */
 interface PermissionRow {
   name: string;
-  /** The four-state read. `"unsupported"` is the word the web does not have. */
+  /** `"unsupported"` is the word the web does not have. */
   state: VnPermissionState;
   canRequest: boolean;
-  /** The three-state web projection, or `"!<reason>"` if tier 1 refused the
-   *  name — a mismatch between the two tables, made visible rather than blank. */
   webState: string;
   requesting: boolean;
 }
@@ -39,20 +19,10 @@ const rows = ref<PermissionRow[]>([]);
 const changes = ref<string[]>([]);
 const lastRequest = ref("");
 
-// The standard-tier `PermissionStatus` objects, kept so the page can show the
-// web-facing `state` next to the extension's. They are also the change source:
-// `appPermissions` re-broadcasts from these very objects rather than opening a
-// second native subscription.
-//
-// The value is only ever read for its `state`, and the catch below stores a
-// stand-in that has one and is not a `PermissionStatus` — so that, not the
-// class, is what the map holds.
+// The standard-tier `PermissionStatus` objects, kept so the page can show the web-facing `state`
+// next to the extension's.
 const statuses = new Map<string, { readonly state: string }>();
 
-// Tier 1 is installed by redjs when the host registered a permissions backend;
-// `navigator` and `navigator.permissions` are both optional for that reason.
-// This page is the permissions page — if the surface is missing there is
-// nothing to show, and saying so beats rendering an empty table.
 const webPermissions = navigator?.permissions;
 
 async function readAll() {
@@ -60,8 +30,8 @@ async function readAll() {
   const out: PermissionRow[] = [];
   for (const r of list) {
     if (!statuses.has(r.name)) {
-      // A name the standard tier rejects would be a bug in one of the two
-      // tables; catch it rather than leaving the row blank with no reason.
+      // A name the standard tier rejects would be a bug in one of the two tables; catch it rather
+      // than leaving the row blank with no reason.
       try {
         if (!webPermissions) throw new Error("navigator.permissions is not installed");
         statuses.set(r.name, await webPermissions.query({ name: r.name }));
@@ -81,11 +51,7 @@ async function readAll() {
 }
 
 const onChange = (e: VnEvent) => {
-  // `runtime.ts`'s `createPermissions` re-broadcasts the standard `change` as
-  // `Object.assign(new Event("change"), { name, state })` — the two fields are
-  // on the EVENT ITSELF, not on `e.target` (which is the plain `EventTarget`
-  // the surface is built on). `VnEvent` has no way to say that, so the shape
-  // is named here and asserted once.
+  // `VnEvent` has no way to say that, so the shape is named here and asserted once.
   const { name, state } = e as VnEvent & { name: string; state: VnPermissionState };
   changes.value = [`${name} -> ${state}`, ...changes.value].slice(0, 6);
   readAll();
@@ -97,12 +63,8 @@ onMounted(() => {
 });
 onUnmounted(() => appPermissions.removeEventListener("change", onChange));
 
-// THE EXTENSION. There is no browser call this maps to: a browser asks for the
-// microphone as a side effect of getUserMedia() and never on its own.
-//
-// On Windows this opens the matching ms-settings: page and the promise settles
-// when the consent store actually moves — or after the backend's timeout, with
-// the unchanged state, so the `await` below can never hang forever.
+// There is no browser call this maps to: a browser asks for the microphone as a side effect of
+// getUserMedia() and never on its own.
 async function request(row: PermissionRow) {
   row.requesting = true;
   lastRequest.value = `${row.name}: asking…`;
@@ -110,7 +72,6 @@ async function request(row: PermissionRow) {
     const state = await appPermissions.request(row.name);
     lastRequest.value = `${row.name}: ${state}`;
   } catch (e) {
-    // `request()` rejects with a TypeError naming the bad permission name.
     lastRequest.value = `${row.name}: ${e instanceof Error ? e.message : String(e)}`;
   } finally {
     row.requesting = false;
@@ -126,11 +87,10 @@ const cls = (state: string) =>
   <div class="page">
     <div class="hd">
       <span class="h1">Permissions</span>
-      <span class="sub">docs/PERMISSIONS.md — two tiers, one platform trait</span>
+      <span class="sub">two tiers, one platform trait</span>
       <span class="pill live" id="perm-platform">{{ platform }}</span>
     </div>
 
-    <!-- the table ---------------------------------------------------------- -->
     <section class="card">
       <div class="cap">
         <span>capabilities</span>
@@ -162,7 +122,6 @@ const cls = (state: string) =>
       <div class="note" id="perm-last">{{ lastRequest || "no request made yet" }}</div>
     </section>
 
-    <!-- change log --------------------------------------------------------- -->
     <section class="card">
       <div class="cap">change events</div>
       <div class="grid" id="perm-changes">

@@ -1,13 +1,6 @@
-//! Linux: the freedesktop tools every desktop ships, run from the `vn-shell`
-//! thread and waited on so a failure reaches JS.
-//!
-//! - `openExternal`, `openPath`: `xdg-open`, which defers to the desktop's own
-//!   opener (`gio open`, `kde-open`, …). It exits once the handler is started;
-//!   a non-zero status is "nothing handles this".
-//! - `showItemInFolder`: `org.freedesktop.FileManager1.ShowItems` on the
-//!   session bus (Nautilus, Dolphin, Nemo, Thunar answer it), else the folder
-//!   opened with `xdg-open`.
-//! - `trashItem`: `gio trash` (the freedesktop trash spec, done by GLib).
+//! Linux: freedesktop tools run from the `vn-shell` thread and waited on so a failure reaches JS.
+//! `xdg-open` opens (non-zero status means nothing handles it); `org.freedesktop.FileManager1.ShowItems`
+//! reveals, else the folder is opened; `gio trash` trashes.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -20,7 +13,6 @@ fn failed(verb: &str, why: String) -> Fail {
     Fail::new("OperationError", format!("{verb} failed: {why}"))
 }
 
-/// Runs `program args…` to completion, quietly; its status is the answer.
 fn run(verb: &str, program: &str, args: &[&std::ffi::OsStr]) -> Result<(), Fail> {
     let status = Command::new(program)
         .args(args)

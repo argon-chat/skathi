@@ -1,5 +1,5 @@
 {
-  "$comment": "`\"devtools\": false` at the TOP LEVEL — the place docs/DEVTOOLS.md has always documented, and which the builders only started copying into the manifest's window block in m22. Since m22 it is the static spelling of `appDevtools.disable()`: this host binds no devtools port at all. `VN_DEVTOOLS=1` in the environment overrides it, which is what keeps an app from being able to make itself undebuggable.",
+  "$comment": "`VN_DEVTOOLS=1` in the environment overrides it, which is what keeps an app from being able to make itself undebuggable.",
 
   "name": "devtools-off",
   "devtools": false,

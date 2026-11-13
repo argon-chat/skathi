@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/poster-fill.spec.ts: an absolutely positioned replaced element (<img>, <canvas>, <video>) at `inset: 0; width: 100%; height: 100%; object-fit: cover` fills its box whatever its own aspect ratio (Argon's VideoAttachment poster in a media grid cell). See ../README.md.",
+  "$comment": "An absolutely positioned replaced element (<img>, <canvas>, <video>) at `inset: 0; width: 100%; height: 100%; object-fit: cover` fills its box whatever its own aspect ratio (Argon's VideoAttachment poster in a media grid cell).",
 
   "name": "vn-test-poster-fill",
 

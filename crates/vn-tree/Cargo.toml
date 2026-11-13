@@ -5,7 +5,6 @@ edition = "2021"
 publish = false
 
 [features]
-# Native WebGPU canvas presentation. Hosts can opt out explicitly.
 default = ["webgpu"]
 webgpu = ["vn-runtime/webgpu"]
 
@@ -13,44 +12,24 @@ webgpu = ["vn-runtime/webgpu"]
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 vn-css = { path = "../vn-css" }
 vn-elements = { path = "../vn-elements" }
-# The `<lottie>` element's playback engine — see crates/vn-lottie/CONTRACT.md.
 vn-lottie = { path = "../vn-lottie" }
-# The `<video>` element playback engine - see crates/vn-video/CONTRACT.md.
 vn-video = { path = "../vn-video" }
-# `<vn-sticker>`'s engine: stickers and animated emoji drawn off the UI thread
-# (crate::render::sticker).
 vn-sticker = { path = "../vn-sticker" }
 vn-runtime = { path = "../vn-runtime", default-features = false }
-# The ONE URL → asset-key normaliser (`content_key`), shared with vn-app's
-# content provider so `<img>` and `fetch()` can never disagree about what a
-# relative URL names — and, in a packaged exe, the key the payload store is
-# searched with. No dependencies of its own.
 vn-payload = { path = "../vn-payload" }
-# The pixel kernel of the downscaled image copies (crate::resample), optimised
-# in dev builds too (the root Cargo.toml's [profile.dev.package.vn-resample]).
 vn-resample = { path = "../vn-resample" }
-# A pasted bitmap is offered as image.png, as Chromium offers it (Windows
-# hands a screenshot over as a DIB). The version and the decoders are the ones
-# gpui already builds (vendor/zed/Cargo.toml), so nothing new is compiled.
+# Same version and decoders gpui already builds.
 image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif", "webp", "tiff", "ico"] }
-# The parser gpui feeds SVGs to — `<img src="x.svg">`'s natural size for its
-# `load` event (crate::img::natural_size), and the parser the `<svg>` tests
-# assert against. Pinned to the version gpui resolves (vendor/zed/Cargo.toml),
-# so nothing new is compiled.
+# Pinned to the version gpui resolves.
 usvg = { version = "0.46.0", default-features = false }
-# `@font-face` blocks are parsed by the parser vn-css compiles the sheet with
-# (crate::fonts), at the version vn-css pins, so nothing new is compiled.
+# Pinned to the version vn-css uses.
 lightningcss = { version = "1.0.0-alpha.72", default-features = false }
-# Reading an https font's body off gpui's HTTP client (crate::fonts). The
-# version gpui builds.
 futures = "0.3"
 
 [target.'cfg(windows)'.dependencies]
-# WOFF and WOFF2 fonts are unpacked by DirectWrite (`UnpackFontFile`), the text
-# stack that then shapes them. The version and feature gpui_windows builds.
+# WOFF/WOFF2 are unpacked by DirectWrite (`UnpackFontFile`).
 windows = { version = "0.62", features = ["Win32_Graphics_DirectWrite"] }
 
 [target.'cfg(not(windows))'.dependencies]
-# WOFF and WOFF2 fonts are unpacked in Rust where there is no DirectWrite
-# (src/fonts.rs `unpack`): Core Text and cosmic-text take only sfnt.
+# No DirectWrite here; Core Text and cosmic-text take only sfnt.
 wuff = "0.2.10"

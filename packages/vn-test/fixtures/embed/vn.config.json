@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/embed.spec.ts: an app run by another program, crates/vn-app/examples/embed.rs, which embeds vue-native as a library and talks to it through appHost (docs/EMBEDDING.md). See ../README.md.",
-
   "name": "vn-test-embed",
 
   "window": {

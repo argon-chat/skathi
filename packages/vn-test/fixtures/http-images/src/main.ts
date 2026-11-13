@@ -1,13 +1,3 @@
-// A fixture for packages/vn-test/specs/http-cache.spec.ts: a grid of http(s)
-// <img>, every one of them on screen, loaded from a server the spec runs.
-//
-// Nothing loads until the spec calls `__imgs.start(urls)`; each image's `load`
-// (or `error`) is timed from that call, so a round is "how long until the
-// N-th picture was there". `__imgs.clear()` unmounts the grid, and
-// `__imgs.stats()` reads the round back. `__imgs.get(url, init)` is a `fetch`
-// whose outcome lands in `__imgs.got`, and `__imgs.encrypt(flag)` flips the
-// storage's encryption, which the HTTP cache follows. Render functions rather
-// than an SFC, for the reason fixtures/layout gives.
 import { appStorage, createApp, h, ref } from "vue-native";
 
 const urls = ref<string[]>([]);
@@ -16,7 +6,6 @@ let loads: number[] = [];
 let errors: string[] = [];
 
 (globalThis as any).__imgs = {
-  /** `fetch` from the page; the outcome lands in `__imgs.got` (JSON). */
   get(url: string, init?: RequestInit) {
     (globalThis as any).__imgs.got = "";
     fetch(url, init)
@@ -29,7 +18,6 @@ let errors: string[] = [];
     return 1;
   },
   got: "",
-  /** The storage's encryption, which the HTTP cache follows (docs/STORAGE.md §12). */
   encrypt(on: boolean) {
     appStorage.setStorageFolder(appStorage.folder, { encrypted: on });
     return appStorage.encrypted;

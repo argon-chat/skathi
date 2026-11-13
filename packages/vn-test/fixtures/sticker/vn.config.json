@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/sticker.spec.ts: <vn-sticker>, vue-native's stickers and animated emoji (crates/vn-tree/src/sticker.rs). See ../README.md.",
+  "$comment": "<vn-sticker>, vue-native's stickers and animated emoji (crates/vn-tree/src/sticker.rs).",
 
   "name": "vn-test-sticker",
 

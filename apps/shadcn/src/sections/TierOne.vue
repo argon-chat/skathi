@@ -1,6 +1,4 @@
 <script setup lang="ts">
-// TIER 1 — static / low-DOM shadcn-vue components.
-// Every import below is upstream shadcn-vue v2.2.0, unmodified.
 import Section from "./Section.vue";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";

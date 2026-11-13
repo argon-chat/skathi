@@ -1,17 +1,5 @@
-// A fixture for packages/vn-test/specs/indexeddb.spec.ts (m25 P1,
-// research/reports/m25/indexeddb-design.md): IndexedDB in a real Vue app on
-// the real host, inside the real frame loop.
-//
-// The app half is what an app does: a notes list whose state LIVES in
-// IndexedDB. It opens the database at boot, renders what is stored, and a
-// click writes a record in a transaction made from the click handler and
-// re-reads the store — Vue's reactivity only ever sees what came back out.
-//
-// The spec half is `__VN_TEST_IDB__.run(name)`: scenarios the spec starts over
-// the devtools `eval` (GLOBAL scope — a module export is not a global in
-// either boot mode, see devtools-on/main.ts). A promise does not survive the
-// eval round trip, so each run records how it SETTLED into `results`, and the
-// spec polls that.
+// A promise does not survive the eval round trip, so each run records how it SETTLED into
+// `results`, and the spec polls that.
 import { createApp, h, onMounted, ref } from "vue-native";
 
 type Note = { id?: number; title: string; done: boolean };
@@ -26,11 +14,8 @@ const done = (tx: VnIDBTransaction): Promise<void> =>
     tx.oncomplete = () => resolve();
     tx.onabort = () => reject(tx.error);
   });
-/** One animation frame — the host's frame clock, so a count of these is a count of
- *  pumps. (`!`: engine.d.ts types rAF as optional; under vn-app it never is.) */
+/** (`!`: engine.d.ts types rAF as optional; under vn-app it never is.) */
 const frame = () => new Promise<void>((r) => requestAnimationFrame!(() => r()));
-
-// ---- the app ----------------------------------------------------------------
 
 const status = ref("opening");
 const notes = ref<Note[]>([]);
@@ -66,8 +51,6 @@ async function clearNotes() {
   await reload();
 }
 
-// ---- the scenarios ----------------------------------------------------------
-
 const results: Record<string, string> = {};
 
 const scenarios: Record<string, () => Promise<string>> = {
@@ -82,9 +65,8 @@ const scenarios: Record<string, () => Promise<string>> = {
   },
 
   /**
-   * 500 sequential awaited gets, each in its own transaction — the shape of a
-   * migration or a `for … await` loop. Frames are counted on the host's own
-   * clock; picked up once per pump, this would be ~500 frames.
+   * Frames are counted on the host's own clock; picked up once per pump, this would be ~500
+   * frames.
    */
   async chain() {
     const open = indexedDB.open("vn-test-chain", 1);
@@ -110,10 +92,6 @@ const scenarios: Record<string, () => Promise<string>> = {
     return `${sum}|${frames}|${Math.round(ms)}`;
   },
 
-  /**
-   * A second connection upgrading while the first is open: the first gets
-   * `versionchange`, closes, and the upgrade runs — no `blocked`.
-   */
   async versionchange() {
     const first = await req(indexedDB.open("vn-test-vc", 1));
     const seen: string[] = [];
@@ -135,7 +113,6 @@ const scenarios: Record<string, () => Promise<string>> = {
     return `${seen.join(",")}|v${second.version}|${stores}`;
   },
 
-  /** A uniqueness violation fails its request, and uncaught it aborts the transaction. */
   async constraint() {
     const open = indexedDB.open("vn-test-unique", 1);
     open.onupgradeneeded = () => open.result.createObjectStore("u", { keyPath: "k" }).createIndex("byMail", "mail", { unique: true });
@@ -158,7 +135,6 @@ const scenarios: Record<string, () => Promise<string>> = {
     return `${out}|${left}`;
   },
 
-  /** The structured clone, through storage and back. */
   async structured() {
     const open = indexedDB.open("vn-test-clone", 1);
     open.onupgradeneeded = () => open.result.createObjectStore("v");
@@ -187,7 +163,6 @@ const scenarios: Record<string, () => Promise<string>> = {
     ].join("|");
   },
 
-  /** `databases()` sees what is open, and `estimate()` counts it. */
   async storage() {
     const names = (await indexedDB.databases()).map((d) => d.name).sort();
     const est = await navigator!.storage.estimate();
@@ -205,7 +180,6 @@ g.__VN_TEST_IDB__ = {
       results[name] = `ERR no scenario ${name}`;
       return;
     }
-    // Two frames first: a run starts from an eval, which lands between pumps.
     void frame()
       .then(frame)
       .then(f)

@@ -19,146 +19,47 @@ members = [
     "crates/vn-payload",    # VNPK v1 (a packaged exe's app payload) + the one URL→asset-key normaliser
     "crates/vn-desktop",    # argv parser, shell (open/reveal/trash), single instance, custom protocols
     "crates/vn-resample",   # the downscaled image copies' pixel kernel (optimised in dev, below)
-    # "crates/vn-window",   # window chrome: backdrops, dark mode, titlebar
     "crates/vn-app",        # host binary shell
 ]
-# Path deps inside the workspace directory auto-join the workspace unless
-# excluded; vendor crates must resolve against their OWN workspace roots
-# (zed's / redjs's) for `.workspace = true` field inheritance.
-#
-# regen-bindings is a CONTRIBUTOR tool that depends on `bindgen` (and so on
-# libclang). Excluding it keeps that dependency out of the workspace lockfile
-# entirely — `cargo build` here never resolves it. Same split as
-# crates/vn-effects' slangc.
+# Vendor crates must resolve against their own workspace roots (zed's, redjs's).
+# regen-bindings needs bindgen/libclang; excluded to keep that out of the lockfile.
 exclude = ["vendor", "crates/vn-thorvg-sys/tools/regen-bindings"]
 
-# Replicated from vendor/zed's workspace root: gpui depends on async-task
-# APIs that only exist on this fork rev, and [patch] sections apply only from
-# THIS workspace root, never from a path dependency's own workspace.
-#
-# m24: moved with zed#65274 from smol-rs rev b4486cd7 to zed-industries' pin of
-# the waker-identity fix under review as smol-rs/async-task#108 (a clone of a
-# task waker got a different vtable than the original, so `will_wake` lied and
-# futures were woken over and over).
+# Replicated from vendor/zed: gpui needs async-task APIs that exist only on this fork rev,
+# and [patch] applies only from the workspace root. Carries the waker-identity fix
+# (smol-rs/async-task#108).
 [patch.crates-io]
 async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
-# m26: taffy 0.15.0 (gpui pins `=0.15.0`, vendor/zed/Cargo.toml) from
-# vendor/taffy, the argon-chat/taffy fork: branch `vue-native` is upstream's
-# v0.15.0 tag plus one commit per vue-native patch, each marked "vue-native
-# patch" in the source:
-# - `TaffyTree::resolve_calc_value` decodes the calc() handle gpui packs for
-#   `DefiniteLength::Calc` (vendor/taffy/src/tree/taffy_tree.rs; upstream
-#   resolves every calc to 0).
-# - A min/max size transfers through `aspect-ratio` only into an axis whose
-#   size is auto (`Size::maybe_transfer_aspect_ratio`,
-#   vendor/taffy/src/geometry.rs; css-sizing-4 §5.2). Upstream caps a definite
-#   `height: 100%` at `max-width / ratio`, so a picture under Tailwind's
-#   `img { max-width: 100% }` kept its own shape in a box it should fill.
-# - A row's auto width in a definite space is fit-content, clamped to the
-#   space but not below the items' min-content (CSS Sizing 3 §5.1;
-#   `determine_container_main_size`). Upstream kept the max-content width, so
-#   a long link in a chat bubble held the bubble wider than its column.
-# Two patches carried on 0.13.0 are upstream now and were dropped: the
-# auto-margin `justify-content` fix (taffy 0.14) and a percentage `flex-basis`
-# the container cannot resolve being `content` (0.15; its tests stay, in
-# vendor/taffy/src/compute/mod.rs). A taffy update is a rebase of that branch
-# onto the new tag; the aspect-ratio and fit-content fixes are spec fixes
-# worth offering upstream, the calc one is gpui's encoding.
+# gpui pins taffy =0.15.0; vendor/taffy is the argon-chat/taffy fork (branch `vue-native`:
+# upstream v0.15.0 plus patches, each marked "vue-native patch" in the source).
 taffy = { path = "vendor/taffy" }
-
-# vendor/redjs is a git submodule (https://github.com/argon-chat/redjs) consumed as a
-# path dep (vendor/redjs/redjs).
 
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-# Until m22 the two lines below were absent, so Cargo's defaults applied
-# (`debug = false`, `strip = "none"`) — and on MSVC that pair is not "no debug
-# info": rustc passes `/DEBUG` to link.exe anyway, the linker aggregates
-# whatever the vendored static libraries carry (the bun-webkit JSC prebuilt,
-# redjs's C++ glue, yoga), and a **326 MB `vn_app.pdb`** landed beside the exe.
-# "Release" meant optimized and LTO'd; nobody had checked what it weighed
-# (research/reports/m21/devtools-v2.md §11.2).
-#
-# `debug = false` is Cargo's default and is written down anyway: it is the line
-# somebody reads before asking why there is a PDB.
+# MSVC passes /DEBUG to link.exe regardless, so debug info of the vendored static libs
+# (JSC, redjs glue, yoga) landed in a 326 MB PDB; vn-app/build.rs passes /DEBUG:NONE for release.
 debug = false
-# MEASURED TO DO NOTHING ON THIS TARGET, and kept anyway. `-C strip` is a Unix
-# `strip(1)` operation: a windows-msvc image has no symbol table to remove (they
-# live in the PDB), and Cargo does not translate this into the `/DEBUG:NONE`
-# that would suppress one. The A/B, same tree, same features, only this line
-# differing: `"none"` and `"symbols"` both produced a **97 002 496-byte exe and
-# a 325 939 200-byte PDB** — identical in both files (m22 report §5).
-#
-# It stays because it is correct and free on every other target we might build
-# for, and because deleting a setting that measures as a no-op invites somebody
-# to add it back without measuring. The MSVC half of the job is done where it
-# works: `crates/vn-app/build.rs` passes `/DEBUG:NONE` to the linker for release
-# builds, and the `release-symbols` profile below opts back in.
+# No-op on windows-msvc (symbols live in the PDB); kept for other targets.
 strip = "symbols"
-# NOT set, deliberately, and both are load-bearing omissions:
-#
-# * `panic = "abort"` would break safety invariant I9 (docs/ARCHITECTURE.md §1):
-#   the JS bridge CATCHES native panics (`vn_runtime::bridge::poisoned()`) so a
-#   panic inside a host fn poisons the runtime instead of taking the process
-#   down mid-frame. `abort` deletes that seam and turns every recoverable bug
-#   into a crash dump.
-# * `opt-level = "s"`/`"z"` would trade frame time for bytes on an image whose
-#   size is dominated by a statically linked JavaScriptCore rather than by our
-#   own codegen — `vn-*` is a few MB of a ~50 MB exe. Unmeasured either way, so
-#   it stays at 3: the cascade and the renderer are what this project profiles,
-#   and a size win big enough to justify it would have to be measured first.
+# Not set on purpose: `panic = "abort"` (the JS bridge catches native panics, see
+# vn_runtime::bridge::poisoned) and a size opt-level (the image is dominated by static JSC).
 
-# Release, plus the symbols a crash dump needs.
-#
-# `cargo build --profile release-symbols -p vn-app --features prod` — the same
-# code as `release` (same opt-level, same LTO, same codegen-units), emitting the
-# PDB that `release` now suppresses. It exists because the m13 voice flake was
-# diagnosed out of a libwebrtc `RTC_CHECK` abort with no Rust panic message
-# (research/reports/m13/voice-flake.md §5), and that hunt is impossible without
-# symbols for the vendored static libraries. Artifacts land in
-# `target/<triple>/release-symbols/`, so a symbol build never overwrites the
-# shippable one.
-#
-# `crates/vn-app/build.rs` reads the profile DIRECTORY out of `OUT_DIR` and only
-# suppresses the PDB for the one called `release`, so this profile needs nothing
-# but its name. `VN_PDB=1` in the environment does the same for a `release`
-# build, for the case where the binary already exists and rebuilding under
-# another profile would change the addresses in the dump you are holding.
+# Release plus symbols for crash dumps. `VN_PDB=1` does the same for a plain `release` build.
 [profile.release-symbols]
 inherits = "release"
 strip = "none"
 debug = true
 
-# Dependencies are optimized even in a debug build; our own crates are not.
-#
-# This is a PERFORMANCE-OF-THE-DEV-LOOP setting, and it was measured rather than
-# assumed (research/reports/m11/perf-restyle-rebuild.md §5). With the cascade
-# fixed, what was left of a mutation frame on `apps/shadcn` was gpui's own
-# element work — and three quarters of THAT was taffy's `compute_layout` running
-# unoptimized: 31 ms to lay out 548 nodes. The same is true of parcel_selectors
-# inside the cascade and of gpui's scene building. None of it is code we debug;
-# all of it runs on every frame.
-#
-# `"*"` covers dependencies only, so `vn-*` keep full debug info and cheap
-# incremental rebuilds — the edit-compile-run loop is unchanged. The cost is one
-# slower build the first time after this line changes (and after a `cargo
-# clean`), because every dependency, gpui included, is rebuilt.
+# Dependencies are optimised in dev: unoptimised taffy layout and cascade dominated frame time.
 [profile.dev.package."*"]
 opt-level = 2
 
-# The one workspace crate that is optimised in dev: the downscaled image copies'
-# pixel kernel. It reads every source pixel, and `image::imageops::resize` is
-# generic, so it compiles at the calling crate's level. Inside vn-tree that was
-# opt-level 0: one image took 659 ms on the painting thread in a debug build
-# (research/reports/m26/perf-mem-1.md). Nobody steps through it, and it is
-# small, so the rebuild cost is nothing.
+# Pixel kernel: generic `image::imageops::resize` compiles at the calling crate's opt-level.
 [profile.dev.package.vn-resample]
 opt-level = 3
 
-# The video stickers' pixel kernel, for the same reason: it touches every
-# decoded pixel of every frame on the sticker worker, and at opt-level 0 its
-# SIMD intrinsics are function calls.
+# Same reason: SIMD intrinsics are function calls at opt-level 0.
 [profile.dev.package.vn-yuv]
 opt-level = 3

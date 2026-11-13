@@ -1,68 +1,21 @@
 <script setup lang="ts">
-// MULTI-WINDOW, phase 1 — docs/MULTIWINDOW.md.
-//
-// There is ONE Vue app on this page. Every `<VnWindow>` below paints part of
-// THIS component's template in a second OS window: same node ids, same
-// component instances, same reactive graph, same `count` ref. Nothing is
-// remounted when a window opens, nothing is serialized across it, and there is
-// no store bridge — a click in a pop-out runs the same handler on the same
-// `ref`, and both windows repaint from that one wave.
-//
-// The three pop-outs are the three cases phase 1 exists to make real:
-//
-//   1. a TOOL PALETTE — always on top, editing this document's state. Its
-//      `+1` moves the counter painted in the main window; its `<input>` holds
-//      real keyboard focus in its own window (which needed the focus trio to
-//      become per-window, §5.1). It is built with `<Teleport :to="win.el">`,
-//      so the panel MOVES between the windows and comes back when the palette
-//      closes — the same nodes, the same state, the same instance.
-//   2. a VIDEO PLAYER — the `<video>` / `<lottie>` case the spike REFUSED,
-//      because a decoded frame's atlas tile has to be returned to the window
-//      that created it and `Window::drop_image` is per-window (§7.4, A-M06).
-//   3. a NOTES window with its OWN TITLEBAR — `chrome="hidden"`, so the app
-//      paints the caption and a `window-drag: move` region moves the window.
-//      That needed `control_hitboxes` / `any_drag_region` / `os_chrome` to
-//      become per-window too (§7.6).
-//
-// `<VnWindow>` is tier 3 and namespaced: an app opts in by importing it.
-// `window.open` is untouched, still reserved and still advises (A-22) — it
-// means "a second document", which is a different feature (D-M04).
 import { computed, ref } from "vue";
 import { VnWindow, type VnWindowMetrics, type VnWindowTarget } from "vue-native";
 
 const count = ref(0);
 
-// Which pop-outs are open. `v-if` IS the lifecycle: mounting `<VnWindow>` opens
-// the window, unmounting closes it, and the window's own X button fires
-// `@close` so the flag goes back to false. One direction, one source of truth.
+// `v-if` IS the lifecycle: mounting `<VnWindow>` opens the window, unmounting closes it, and the
+// window's own X button fires `@close` so the flag goes back to false.
 const palette = ref(false);
 const player = ref(false);
 const notes = ref(false);
 
-// State the palette EDITS and the main window READS. This is the whole reason a
-// tool palette wants to be one app rather than two: `brush` is an ordinary
-// `ref` here, not a message on a channel.
 const brush = ref("charcoal");
 const swatches = ["charcoal", "rust", "moss", "slate"];
 
-// D-M03: `<VnWindow>` exposes its container node, so an ordinary `<Teleport>`
-// composes onto it. **That is the browser spelling** — in a browser,
-// `window.open()` supplies an element and `<Teleport :to="w.document.body">`
-// does the moving; nothing about the Teleport is special. Here the target is a
-// mirror node instead of a DOM node, and the Teleport is untouched.
-//
-// It also buys the semantics a slot cannot: the panel is not created when the
-// window opens and destroyed when it closes — it MOVES, keeping its node ids,
-// its component instance and its state, and comes back to window A when the
-// palette goes away.
 const paletteWin = ref<{ el: VnWindowTarget | null } | null>(null);
 const paletteRoot = computed(() => paletteWin.value?.el ?? null);
 
-// What the palette window reports about ITSELF. There is one JS realm, so
-// `window.innerWidth` keeps meaning the MAIN window's viewport (A-M04); a
-// pop-out's own metrics arrive through `@resize` instead, which is also what
-// `<VnWindow>` exposes as `width`/`height`. CSS needs none of this: `@media`
-// inside a pop-out already answers against that window (§6).
 const paletteSize = ref<VnWindowMetrics>({ width: 0, height: 0, scale: 1 });
 const paletteFocused = ref(false);
 const paletteMetrics = computed(() =>
@@ -71,10 +24,8 @@ const paletteMetrics = computed(() =>
     : "none",
 );
 
-// The notes window's own caption text is CSS, not an OS caption.
 const note = ref("");
 
-/** A live prop: renaming the window renames the OS caption. */
 const paletteTitle = computed(() => `Palette - ${brush.value}`);
 </script>
 
@@ -87,7 +38,6 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
       PAINT into a second OS window and leaves it in this tree.
     </p>
 
-    <!-- Stays in window A. Its whole job is to disagree with nothing. -->
     <div class="card mirror">
       window A sees count = <span class="num">{{ count }}</span>
     </div>
@@ -97,9 +47,8 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
       · focused = <span class="num pal-focus">{{ paletteFocused }}</span>
     </div>
 
-    <!-- Distinct classes rather than positions: `v-show` keeps a hidden button
-         in the tree (`display: none`, as in a browser), so nth-of-type would
-         count the invisible ones too. -->
+    <!-- Distinct classes rather than positions: `v-show` keeps a hidden button in the tree
+         (`display: none`, as in a browser), so nth-of-type would count the invisible ones too. -->
     <div class="row">
       <button class="btn pop" @click="palette = true" v-show="!palette">pop the panel out</button>
       <button class="btn back" @click="palette = false" v-show="palette">bring it back</button>
@@ -115,11 +64,6 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
       </button>
     </div>
 
-    <!-- **The per-window `@keyframes` proof** (§6). One `animation-name`,
-         declared twice in one sheet — once at the top level and once inside the
-         same `@media` block the panel's background uses. This one is painted by
-         the 620px main window, the one below by the 380px palette, and they
-         settle on different opacities. -->
     <div class="pulse pulse-main" />
 
     <p class="hint" v-show="palette">
@@ -130,16 +74,9 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
       note = <span class="num note-text">{{ note || "(empty)" }}</span>
     </div>
 
-    <!-- `disabled` while there is no window: the panel renders HERE, in window
-         A, exactly where it is written. The moment the target exists Vue moves
-         the same nodes into it, and moves them back when it goes away.
-         ORDER MATTERS, and it is the one subtlety of the whole idiom: this
-         Teleport is written BEFORE the `<VnWindow>` it targets, and `disabled`
-         is driven by `palette` as well as by the target. Vue patches a
-         component's children in order, so on close the Teleport moves the panel
-         home FIRST and the container is unmounted empty. The other order
-         removes the container while the panel is still inside it — and in
-         vue-native, as in the DOM, removing a node destroys its subtree. -->
+    <!-- ORDER MATTERS, and it is the one subtlety of the whole idiom: this Teleport is written
+         BEFORE the `<VnWindow>` it targets, and `disabled` is driven by `palette` as well as by the
+         target. -->
     <Teleport :to="paletteRoot" :disabled="!palette || !paletteRoot">
       <section class="panel">
         <div class="ptitle">the panel</div>
@@ -158,21 +95,13 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
           </button>
         </div>
 
-        <!-- A real `<input>` in a second window: it takes keyboard focus in
-             THAT window and the keystrokes reach it, which is what the
-             per-window focus trio bought (§7.3). -->
         <input class="brush-name" v-model="brush" />
 
         <div class="foot">clicks and keystrokes here update window A too</div>
       </section>
     </Teleport>
 
-    <!-- ================================================================== -->
-    <!-- 1. the tool palette                                                -->
-    <!-- ================================================================== -->
-    <!-- `alwaysOnTop` because that is what a palette is. It does NOT take the
-         keyboard when it opens (`activate` defaults to false) — the user was
-         typing in the document and must not lose the caret. -->
+    <!-- `alwaysOnTop` because that is what a palette is. -->
     <VnWindow
       v-if="palette"
       ref="paletteWin"
@@ -186,24 +115,12 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
       @focus="paletteFocused = true"
       @blur="paletteFocused = false"
     >
-      <!-- A slot child rather than the Teleport'd panel: this node is CREATED
-           with the window, so the run starts in the window that paints it. A
-           run that is later teleported into another window re-resolves its
-           block in place, which is what a browser does when a media query
-           flips under a running animation. -->
+      <!-- A slot child rather than the Teleport'd panel: this node is CREATED with the window, so
+           the run starts in the window that paints it. -->
       <div class="pulse pulse-palette" />
     </VnWindow>
 
 
-    <!-- ================================================================== -->
-    <!-- 2. the video pop-out                                               -->
-    <!-- ================================================================== -->
-    <!-- The case the spike refused. A decoded frame becomes an atlas TILE, and
-         `Window::drop_image` is per-window: the tile has to go back to the
-         window that created it, or it is freed from every atlas except the one
-         holding it. Phase 1 records the creating window on the element, so this
-         plays here. Slot children rather than a Teleport, which is the other
-         legitimate shape: this subtree is CREATED with the window. -->
     <VnWindow
       v-if="player"
       title="Player"
@@ -216,15 +133,6 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
       </section>
     </VnWindow>
 
-    <!-- ================================================================== -->
-    <!-- 3. the notes window, with a titlebar the app draws                 -->
-    <!-- ================================================================== -->
-    <!-- `chrome="hidden"` means the OS draws no caption, so `.bar` below IS the
-         titlebar: `window-drag: move` moves the window and `--window-control`
-         gives the close button the OS's own behaviour, including the Windows 11
-         snap-layouts flyout on maximise. Exactly the contract
-         `titleBarStyle: "hidden"` has for the main window — and it needed the
-         hitbox list to stop being the primary window's (§7.6). -->
     <VnWindow
       v-if="notes"
       title="Notes"
@@ -241,11 +149,6 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
         <textarea class="note-input" v-model="note" />
         <div class="foot">this window's caption is CSS</div>
 
-        <!-- **A-M03** (§10). `position: fixed` anchors to the viewport of the
-             window that PAINTS it, so this toolbar sits on THIS window's
-             bottom edge — not on the document's, which is 320x260 away and a
-             different size. Exactly where a browser puts a `fixed` element in
-             a second window. -->
         <div class="wtool">fixed</div>
       </section>
     </VnWindow>
@@ -316,7 +219,6 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
   font-size: 12px;
 }
 
-/* ---- the palette ------------------------------------------------------- */
 .panel {
   display: flex;
   flex-direction: column;
@@ -371,11 +273,6 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
   font-size: 12px;
 }
 
-/* **The per-window `@media` proof** (docs/MULTIWINDOW.md §6). The palette
-   window is 380 px wide and the main window is 620, so this rule is ON in the
-   palette and OFF in the main window — for the same element, at the same
-   moment, in one stylesheet. The spike could not do that: the cascade read one
-   global `Env`, so a 380 px pop-out answered against the main window's 620. */
 @media (max-width: 420px) {
   .panel {
     background: #ff9d5c26;
@@ -385,14 +282,8 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
   }
 }
 
-/* **The per-window `@keyframes` proof** (§6). ONE `animation-name`, declared
-   twice: the default below, then an override inside the same
-   `@media (max-width: 420px)` the panel's background uses. Document order is
-   what CSS decides duplicate names by, so the override has to come LAST — and
-   which of the two is declared at all is a question about the WINDOW.
-
-   `forwards` and one iteration, so each element parks on its own answer and the
-   assertion is a settled computed style rather than a race against a clock. */
+/* Document order is what CSS decides duplicate names by, so the override has to come LAST — and
+   which of the two is declared at all is a question about the WINDOW. */
 .pulse {
   width: 40px;
   height: 6px;
@@ -413,7 +304,6 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
   }
 }
 
-/* ---- the player -------------------------------------------------------- */
 .player {
   display: flex;
   flex-direction: column;
@@ -429,7 +319,6 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
   background: #00000060;
 }
 
-/* ---- the notes window's own chrome ------------------------------------- */
 .notes {
   display: flex;
   flex-direction: column;
@@ -445,8 +334,6 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
   padding-left: 12px;
   padding-right: 4px;
   background: #ffffff14;
-  /* This is what makes the window movable: the OS answers `HTCAPTION` for the
-     strip, so a drag on it moves the window and a double-click maximises it. */
   window-drag: move;
 }
 .bar-title {
@@ -461,7 +348,6 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
   border-radius: 4px;
   color: #ffffffc0;
   font-size: 11px;
-  /* `HTCLOSE`: the OS paints its own hover highlight and performs the close. */
   --window-control: close;
 }
 .note-input {
@@ -476,9 +362,6 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
   color: #ffffffc0;
 }
 
-/* **A-M03** (§10): the viewport this resolves against is the pop-out's, so the
-   box is pinned 8px from the bottom-right of the NOTES window — 304x244 inside
-   a 320x260 client area — rather than to the 620x460 document. */
 .wtool {
   position: fixed;
   right: 8px;

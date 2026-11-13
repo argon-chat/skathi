@@ -1,15 +1,5 @@
-// Building the app under test, and handing each instance its own slot.
-//
-// Two separate jobs, deliberately not one:
-//
-//   1. BUILD, once per app per `bun test` process, into a CACHE dist. Rebuilt
-//      only when a source file is newer than the manifest it produced.
-//   2. SLOT, once per launch: a copy of the cache dist that this host owns.
-//      A dist is not shareable — the host writes `devtools.json` into it at
-//      boot, so two hosts on one dist would each claim to be the other.
-//
-// Splitting them is what makes N spec files cost one build and N copies
-// (~5 MB, ~100 ms) instead of N builds.
+// Two separate jobs, deliberately not one: 1. Rebuilt only when a source file is newer than the
+// manifest it produced. 2.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -34,14 +24,7 @@ export const WORK_DIR = join(REPO, "packages/vn-test/.vn-test");
 
 const SOURCE_EXT = /\.(vue|js|ts|mjs|css|json)$/;
 
-/**
- * `hello` -> `apps/hello/src/main.ts`; an explicit path is taken verbatim.
- *
- * `.ts` by NAME LOOKUP only. The builder still resolves and bundles `.js`
- * quite deliberately — `SOURCE_EXT` above lists it, and anyone porting a Vite
- * app arrives with a tree full of it — so an explicit path in either spelling
- * is still handed straight through. It is only `apps/` that has none left.
- */
+/** `hello` -> `apps/hello/src/main.ts`; an explicit path is taken verbatim. */
 export function resolveEntry(app: string): string {
   const explicit = app.includes("/") || app.includes("\\") || app.endsWith(".ts") || app.endsWith(".js");
   if (explicit) return resolve(REPO, app);
@@ -79,11 +62,6 @@ function newestMtime(dir: string, newest = 0): number {
   return out;
 }
 
-/**
- * The inputs a rebuild has to react to: the app's own sources, the runtime that
- * becomes vendor.js, and the config files that sit BESIDE `src/` (tailwind's
- * theme, vn.config.json, the app's package.json) and would otherwise be invisible.
- */
 function newestInput(entry: string): number {
   const srcDir = dirname(entry);
   const appDir = srcDir.endsWith("src") ? dirname(srcDir) : srcDir;
@@ -113,14 +91,8 @@ const builds = new Map<string, Promise<string>>();
 export type BuildLog = (line: string) => void;
 
 /**
- * Builds `entry` into the shared cache dist if anything it is made of moved,
- * and returns that directory.
- *
- * The builder is `packages/vue-native/build.ts`, SHELLED TO rather than
- * imported: it is a script, not a module — it reads `process.argv` and runs a
- * full build at import time — so importing it twice in one process would build
- * twice into whatever the first call's globals said. Shelling out is also what
- * keeps the two honest, because it is the exact command a developer runs.
+ * Builds `entry` into the shared cache dist if anything it is made of moved, and returns that
+ * directory.
  */
 export function ensureBuild(entry: string, log: BuildLog = () => {}): Promise<string> {
   const key = entry.toLowerCase();
@@ -139,10 +111,6 @@ export function ensureBuild(entry: string, log: BuildLog = () => {}): Promise<st
     }
     log(`[vn-test] ${name}: building ${stamp ? "(sources moved)" : "(no dist yet)"} …`);
     const t0 = Date.now();
-    // `--no-install`: a fixture under packages/vn-test has no node_modules above
-    // it, and there Bun AUTO-INSTALLS a bare specifier it cannot resolve —
-    // build.ts's `appRequire("typescript")` included — from the network. With
-    // the registry unreachable that is a hang with no timeout, not an error.
     const r = spawnSync("bun", ["--no-install", "build.ts", entry, cache], {
       cwd: VUE_NATIVE_PKG,
       encoding: "utf8",
@@ -164,16 +132,7 @@ export function ensureBuild(entry: string, log: BuildLog = () => {}): Promise<st
 
 let slotSeq = 0;
 
-/**
- * A private dist for one host: a copy of the cache, minus the handshake.
- *
- * `devtools.json` is deleted rather than left behind because the host NEVER
- * removes it (crates/vn-app/src/devtools/mod.rs: "the file is a 'who is live on
- * this dist slot right now' record, not history"). A copied-in stale one would
- * let the launcher connect to a port that belonged to a previous run — the
- * single most confusing failure this harness could have — so the slot starts
- * with no handshake at all and "the file exists" becomes a real readiness edge.
- */
+/** A private dist for one host: a copy of the cache, minus the handshake. */
 export function allocateSlot(cacheDist: string, label: string): string {
   const slug = label.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 40) || "app";
   const dir = join(WORK_DIR, "slots", `${slug}-${process.pid}-${++slotSeq}`);
@@ -184,15 +143,7 @@ export function allocateSlot(cacheDist: string, label: string): string {
   return dir;
 }
 
-/**
- * The executable this run drives, copied aside under its own name.
- *
- * The habit is older than this package (`vn-app-shadcn.exe` in m10,
- * `vn-app-m14.exe` in m14) and buys two things: `cargo build` can relink
- * `vn-app.exe` while a test run is in flight, and a `taskkill /IM` sweep aimed
- * at one of them cannot take down the other. One copy per PROCESS, not per
- * instance — the file is ~120 MB and every instance runs the same bytes.
- */
+/** The executable this run drives, copied aside under its own name. */
 let exeCopy: string | null = null;
 export function stagedExe(source = DEFAULT_EXE): string {
   if (exeCopy) return exeCopy;
@@ -203,11 +154,11 @@ export function stagedExe(source = DEFAULT_EXE): string {
   }
   const dir = join(WORK_DIR, "bin");
   mkdirSync(dir, { recursive: true });
-  // A host still running from a dead run is what keeps its copy locked, so the
-  // reap goes first and the sweep below can then delete what it freed.
+  // A host still running from a dead run is what keeps its copy locked, so the reap goes first and
+  // the sweep below can then delete what it freed.
   reapOrphans();
-  // Leftovers from runs that died before their exit hook: anything still locked
-  // belongs to a live process and simply refuses to delete, which is the test.
+  // Leftovers from runs that died before their exit hook: anything still locked belongs to a live
+  // process and simply refuses to delete, which is the test.
   for (const name of readdirSync(dir)) {
     if (!/^vn-app-vntest-\d+\.exe$/.test(name)) continue;
     try {
@@ -225,7 +176,6 @@ export function releaseStagedExe() {
   try {
     rmSync(exeCopy);
   } catch {
-    // Still locked: a host outlived its kill. The next run's sweep gets it.
   }
   exeCopy = null;
 }

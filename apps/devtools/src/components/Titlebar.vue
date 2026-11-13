@@ -1,16 +1,4 @@
 <script setup lang="ts">
-// The inspector's own titlebar: what it is attached to, and the OS buttons.
-//
-// Same two CSS facts as apps/hello's titlebar (docs/WINDOWING.md §12):
-// `window-drag: move` makes the strip an HTCAPTION region, `--window-control`
-// makes the three buttons OS-behaved. The carve-out matters more here than
-// there — every control lives INSIDE the drag strip, so each has to opt out
-// with `window-drag: none` or clicking it would drag the window.
-//
-// v2 moved the TARGET LIST out of here and into the Targets panel: with
-// several instances and several windows per instance it is a table, not a row
-// of pills, and the titlebar is where you look for "what am I attached to",
-// not "what could I attach to".
 import { computed, ref, onMounted, onBeforeUnmount } from "vue";
 import { appWindow } from "vue-native";
 import { state, currentWindow, setTab } from "../store";
@@ -42,7 +30,6 @@ const statusText = computed(() => {
 
 <template>
   <header class="titlebar">
-    <!-- AppKit paints the native traffic lights above this client area. -->
     <div v-if="isMac && !isFullscreen" class="native-controls" aria-hidden="true"></div>
     <span class="mark">◈</span>
     <span class="brand">devtools</span>
@@ -61,10 +48,6 @@ const statusText = computed(() => {
 
     <div class="spacer"></div>
 
-    <!-- The push channel is the difference between v1 and v2, so it is a
-         first-class readout rather than a hidden detail: `live` means log lines
-         and tree revisions arrive in the frame they happen in; `polling` means
-         the socket could not be opened and the UI fell back. -->
     <div class="feed" :class="{ live: state.pushLive }" :title="state.pushNote">
       <span class="pulse"></span>
       <span>{{ state.pushLive ? "live" : "polling" }}</span>
@@ -147,9 +130,6 @@ const statusText = computed(() => {
   font-size: 11px;
   color: #d7e0ea;
 }
-/* `.where`, not `.win`: the Toolbar's window PILLS are `.win`, and one class
-   name meaning two things is how a selector quietly matches the wrong element
-   — which it did, in this file's own screenshot run. */
 .pid,
 .where {
   font-size: 11px;

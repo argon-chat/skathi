@@ -1,55 +1,39 @@
-//! VNPK v1 — the app payload a packaged exe carries — and the ONE function that
-//! turns a URL into an asset key.
+//! VNPK v1, the app payload a packaged exe carries, and the one function that turns a URL into an
+//! asset key.
 //!
-//! # The payload
-//!
-//! `vn build` (packages/vue-native/cli) writes one blob, stamps it into a copy
-//! of the prebuilt bare host as the `RT_RCDATA` resource `VNPAYLOAD`, and the
-//! host maps it zero-copy at boot (`FindResourceW` → `LockResource`; see
-//! `crates/vn-app/src/payload.rs`). This crate is the READER, and it is held to
-//! the writer by one golden fixture both sides test against
-//! (`packages/vue-native/test/fixtures/golden.vnpk`). The layout is in
-//! `packages/vue-native/cli/vnpk.ts` and research/reports/m25/packaging-design.md
-//! §4.2; in short:
+//! `vn build` writes one blob, stamps it into the bare host as the `RT_RCDATA` resource `VNPAYLOAD`,
+//! and the host maps it zero-copy at boot. This crate is the reader; a golden fixture
+//! (`packages/vue-native/test/fixtures/golden.vnpk`) ties it to the writer
+//! (`packages/vue-native/cli/vnpk.ts`). Layout:
 //!
 //! ```text
 //! header 64 B | toc (32 B × n, sorted by (kind, name bytes)) | names | skew | data
 //! ```
 //!
-//! Every field is read BYTE-WISE: inside the image the blob is only 4-byte
-//! aligned, so nothing here may cast a pointer to a wider integer.
+//! Every field is read byte-wise: the blob is only 4-byte aligned in the image.
 //!
-//! Validation happens once, in [`Payload::parse`], and is O(entries): magic,
-//! format, every TOC entry in bounds, names valid UTF-8, the text entries valid
-//! UTF-8, the TOC sorted. Only the header, the TOC and the names are touched —
-//! asset bytes are never read at boot, because reading them would fault in
-//! every page of the image (design V7).
+//! [`Payload::parse`] validates once, in O(entries): magic, format, TOC bounds and order, UTF-8
+//! names and text entries. Asset bytes are never read at boot, since that would fault in every page.
 //!
-//! # The key
-//!
-//! [`content_key`] is the normaliser BOTH asset paths use — redjs's content
-//! provider (`fetch`, `new Image`) and `vn_tree::img` (`<img>`, `poster`,
-//! `<lottie>`, `<video>`) — in dev as well as packaged. One function, so the
-//! two can never disagree about what `assets/a.png?v=2` names.
+//! [`content_key`] is the normaliser both asset paths use (redjs's content provider and
+//! `vn_tree::img`), in dev and packaged, so they agree on what `assets/a.png?v=2` names.
 
 use std::fmt;
 use std::ops::Range;
 
 pub const MAGIC: &[u8; 4] = b"VNPK";
-/// The newest format this host reads. A payload with a higher number was built
-/// by a newer `vn`, and the host says so instead of guessing.
+/// The newest format this host reads; a higher number was built by a newer `vn`.
 pub const FORMAT: u16 = 1;
 pub const HEADER_SIZE: usize = 64;
 pub const TOC_ENTRY_SIZE: usize = 32;
 
-/// Entry kinds. Only [`kind::ASSET`] is reachable from app code: the internal
-/// entries are looked up by kind AND name, so `fetch("vn/app.js")` is a miss,
-/// not the bundle's source.
+/// Entry kinds. Only [`kind::ASSET`] is reachable from app code: internal entries are looked up by
+/// kind and name, so `fetch("vn/app.js")` is a miss.
 pub mod kind {
     pub const META: u16 = 1;
     pub const WINDOW: u16 = 2;
     pub const SCRIPT: u16 = 3;
-    /// Reserved for phase 3 (a JSC bytecode cache). Page-aligned when present.
+    /// Reserved (a JSC bytecode cache). Page-aligned when present.
     pub const BYTECODE: u16 = 4;
     pub const ASSET: u16 = 16;
 }
@@ -112,14 +96,12 @@ pub struct Entry<'a> {
     pub data: &'a [u8],
 }
 
-/// A validated payload. Borrowing, never copying: in the host `'a` is
-/// `'static`, because the bytes are the mapped image.
+/// A validated payload, borrowing the blob (`'static` in the host: the mapped image).
 #[derive(Debug)]
 pub struct Payload<'a> {
     bytes: &'a [u8],
     entries: Vec<Entry<'a>>,
-    /// The contiguous run of [`kind::ASSET`] entries inside `entries`, sorted
-    /// by name bytes — what the binary search runs over.
+    /// The contiguous run of [`kind::ASSET`] entries, sorted by name bytes, for the binary search.
     assets: Range<usize>,
     flags: u16,
     skew: u32,
@@ -161,8 +143,7 @@ impl<'a> Payload<'a> {
         let data_off = u64_at(bytes, 32);
         let blob_len = u64_at(bytes, 40);
 
-        // A resource can be a little longer than what was written into it
-        // (nothing guarantees otherwise), never shorter.
+        // A resource can be longer than what was written into it, never shorter.
         let len = bytes.len() as u64;
         let within = |what: &str, start: u64, n: u64| -> Result<(), Error> {
             match start.checked_add(n) {
@@ -263,17 +244,17 @@ impl<'a> Payload<'a> {
         std::str::from_utf8(e.data).ok()
     }
 
-    /// `vn/app.json`: name, productName, version, vueNative, host, entry, assets.
+    /// `vn/app.json`.
     pub fn meta(&self) -> Option<&'a str> {
         self.text(kind::META, name::META)
     }
 
-    /// `vn/window.json` — exactly what the dev host reads out of the manifest.
+    /// `vn/window.json`.
     pub fn window_json(&self) -> Option<&'a str> {
         self.text(kind::WINDOW, name::WINDOW)
     }
 
-    /// `vn/app.js` — exactly `bun prod.ts`'s output.
+    /// `vn/app.js`.
     pub fn script(&self) -> Option<&'a str> {
         self.text(kind::SCRIPT, name::SCRIPT)
     }
@@ -286,8 +267,7 @@ impl<'a> Payload<'a> {
         self.assets.len()
     }
 
-    /// The asset stored under exactly `key`. A binary search over the sorted
-    /// run — no allocation, no map built at boot.
+    /// The asset stored under exactly `key`; a binary search over the sorted run.
     pub fn asset(&self, key: &str) -> Option<&'a [u8]> {
         let run = self.assets();
         run.binary_search_by(|e| e.name.as_bytes().cmp(key.as_bytes()))
@@ -295,10 +275,8 @@ impl<'a> Payload<'a> {
             .map(|i| run[i].data)
     }
 
-    /// The asset whose name equals `key` ignoring ASCII case, with the stored
-    /// spelling. A linear scan, for the miss path only: dev runs on NTFS, where
-    /// `assets/Logo.PNG` opens `assets/logo.png`, and a packaged exe must not
-    /// be stricter than the dev host the author tested on. The caller advises.
+    /// The asset whose name equals `key` ignoring ASCII case, with the stored spelling. A linear
+    /// scan for the miss path: NTFS is case-insensitive in dev, so a packaged exe must not be stricter.
     pub fn asset_ignoring_case(&self, key: &str) -> Option<(&'a str, &'a [u8])> {
         self.assets()
             .iter()
@@ -331,10 +309,8 @@ impl<'a> Payload<'a> {
         self.data_off
     }
 
-    /// The header, the table of contents and the names: everything before the
-    /// skew and the data. The TOC carries every entry's length and crc32, so
-    /// this names the content without reading it — what an asset pack's
-    /// identity is a hash of (`vn build`'s `packs`).
+    /// The header, TOC and names: names the content (TOC carries lengths and crc32) without reading
+    /// it; an asset pack's identity is a hash of this.
     pub fn index(&self) -> &'a [u8] {
         let end = self.data_off.saturating_sub(u64::from(self.skew)).min(self.bytes.len() as u64);
         &self.bytes[..(end as usize).max(HEADER_SIZE.min(self.bytes.len()))]
@@ -346,10 +322,6 @@ impl<'a> Payload<'a> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// URL → key
-// ---------------------------------------------------------------------------
-
 /// Why a URL has no key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyError {
@@ -357,26 +329,18 @@ pub enum KeyError {
     Empty,
     /// More `..` than there are segments: the URL climbs out of the app root.
     EscapesRoot,
-    /// A segment no file under the app root can have — a `:` (a drive letter
-    /// or an NTFS stream once decoded), a NUL, or bytes that decode to
-    /// invalid UTF-8.
+    /// A segment no file under the app root can have: `:`, NUL, or bytes that decode to invalid UTF-8.
     Invalid,
 }
 
-/// The app-root-relative key a relative (or root-relative) URL names.
+/// The app-root-relative key a relative or root-relative URL names, applied textually:
 ///
-/// Browser semantics, applied textually — a URL is not a filesystem walk:
+/// * `?query` and `#hash` are cut;
+/// * `%XX` escapes are decoded;
+/// * `\` is `/`, empty and `.` segments vanish, a leading `/` is the app root;
+/// * `..` folds lexically; one climbing above the app root is [`KeyError::EscapesRoot`].
 ///
-/// * `?query` and `#hash` are cut (`a.png?v=2` is `a.png`, as a server sees it);
-/// * `%XX` escapes are decoded (`my%20pic.png` is the file `my pic.png`);
-/// * `\` is `/`, empty and `.` segments vanish, and a leading `/` is the app
-///   root, the way a server root is;
-/// * `..` folds lexically; one that would climb ABOVE the app root is
-///   [`KeyError::EscapesRoot`] (a browser clamps it at the origin, and the
-///   origin here is the app).
-///
-/// The result is `/`-separated and case-preserved — exactly the key `vn build`
-/// stores a file under.
+/// The result is `/`-separated and case-preserved, the key `vn build` stores a file under.
 pub fn content_key_checked(url: &str) -> Result<String, KeyError> {
     let mut s = url.trim();
     if let Some(cut) = s.find(['?', '#']) {
@@ -440,11 +404,8 @@ fn hex(c: u8) -> Option<u8> {
     }
 }
 
-/// The media type a packaged `<video>`/`<audio>` source is handed to the
-/// platform with — a payload entry has a name, not a `Content-Type`. Matches
-/// the extension table the Media Foundation backend stages `data:` bytes with
-/// (crates/vn-video/src/mf `extension_for`), so the two agree. `""` = unknown,
-/// and the platform sniffs.
+/// The media type a packaged `<video>`/`<audio>` source is handed to the platform with (an entry
+/// has no `Content-Type`); matches vn-video's Media Foundation `extension_for`. `""` = unknown.
 pub fn media_type_for(key: &str) -> &'static str {
     let ext = key
         .rsplit_once('.')
@@ -473,9 +434,7 @@ pub fn media_type_for(key: &str) -> &'static str {
 mod tests {
     use super::*;
 
-    /// Written by packages/vue-native/cli/vnpk.ts from
-    /// packages/vue-native/test/fixtures/golden-vnpk.ts — the SAME file the TS
-    /// writer test pins byte for byte.
+    /// Written by packages/vue-native/cli/vnpk.ts; the TS writer test pins it byte for byte.
     const GOLDEN: &[u8] = include_bytes!("../../../packages/vue-native/test/fixtures/golden.vnpk");
 
     #[test]
@@ -508,8 +467,7 @@ mod tests {
         let data = p.asset("assets/dir/data.bin").unwrap();
         assert_eq!(data.len(), 256);
         assert!(data.iter().enumerate().all(|(i, b)| *b as usize == i));
-        // The data region starts after the names PLUS the skew, read from the
-        // header rather than recomputed.
+        // Read from the header, not recomputed.
         let names_end = u32_at(GOLDEN, 16) as u64 + u32_at(GOLDEN, 20) as u64;
         assert_eq!(p.data_offset(), names_end + 100);
         // The index is everything up to the names' end: no skew, no data.
@@ -648,8 +606,8 @@ mod tests {
             content_key_checked("%2e%2e/a.png"),
             Err(KeyError::EscapesRoot)
         );
-        // A decoded drive letter or stream name must never become a key: in dev
-        // the key is JOINED onto the app root, and `C:/…` would replace it.
+        // A decoded drive letter or stream name must never become a key: in dev the key is joined
+        // onto the app root, and `C:/…` would replace it.
         assert_eq!(
             content_key_checked("C%3A/Windows/win.ini"),
             Err(KeyError::Invalid)

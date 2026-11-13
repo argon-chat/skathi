@@ -1,7 +1,6 @@
-// vue-native JS runtime: @vue/runtime-core custom renderer over the __vn_*
-// host protocol (crates/vn-tree). Apps import `createApp` from "vue-native";
-// compiled SFC render functions import their helpers from "vue" — both are
-// aliased to this module by the bundler (packages/vue-native/build.ts).
+// vue-native JS runtime: a @vue/runtime-core custom renderer over the __vn_* host protocol.
+// Apps import `createApp` from "vue-native"; compiled SFCs import their helpers from "vue".
+// The bundler aliases both to this module.
 
 import {
   BaseTransition,
@@ -27,38 +26,18 @@ import {
   version,
   watch,
 } from "@vue/runtime-core";
-// Type-only, so it is erased before the bundler ever sees it. `RendererOptions`
-// is what makes `nodeOps` below self-typing: every hook's parameters come from
-// Vue's own declaration, so a signature that drifts from what the renderer
-// actually calls is a build error rather than an `undefined` at runtime.
 import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/runtime-core";
-// File System Access, FileReader and the file pickers (docs/DESKTOP.md). A
-// module of its own with its dependencies injected (see its header); it has no
-// tier-2 surface to re-export, so it is installed here rather than re-exported.
 import { installDesktop } from "./desktop";
 import "./apphost";
 import type { DesktopApi, DesktopEngine, DesktopFsHost, DesktopSettle, HandleWire } from "./desktop";
-// `<canvas>`'s bitmap and its 2D context, keyed by the host node id (the
-// host+media stream's module). `nodeOps.createElement` adopts every canvas,
-// the renderer's and `document.createElement`'s alike.
 import { adoptCanvas } from "./canvas";
-// The wire form of an `<iframe>`'s `postMessage` payloads (crates/vn-webview).
 import { decodeMessage, encodeMessage } from "./iframe";
-// `FontFace` and `document.fonts` over the host's `@font-face` loader (the
-// host+media stream's module; crates/vn-tree/src/fonts.rs).
 import { installFonts } from "./fonts";
-// `getSelection()`, `Selection` and `Range` over the host's document text
-// selection (crates/vn-tree/src/selection.rs).
 import { installSelection } from "./selection";
-// `Element.animate()`, `Animation`, `KeyframeEffect` and `document.timeline`
-// over the host's script-animation layer (crates/vn-css/src/animator/script.rs).
 import { installWaapi } from "./waapi";
-// The painted roots of the `<VnWindow>`s: a node under one is in that window's
-// document (`windowRootOf`).
 import { VnWindow, WINDOW_ROOT, windowRoots } from "./vnwindow";
 
-// Cache optional devtools controls before user code can replace globals.
-// A zero token is the inactive path; it adds no exception region around user JS.
+// Cached before user code can replace the globals. A zero token is the inactive path.
 const traceCallbackGlobals = globalThis as unknown as {
   __vn_trace_callback_begin?: (callback: unknown) => number;
   __vn_trace_callback_end?: (token: number) => void;
@@ -68,31 +47,14 @@ const traceCallbackBegin = typeof traceCallbackGlobals.__vn_trace_callback_begin
   ? traceCallbackGlobals.__vn_trace_callback_begin : undefined;
 const traceCallbackEnd = traceCallbackBegin ? traceCallbackGlobals.__vn_trace_callback_end : undefined;
 
-// ---- the realm a reload keeps (m26 client sweep #3) ------------------------
-//
-// `location.reload()` evaluates this module again in the SAME JavaScript realm
-// (crates/vn-app/src/reload.rs), and so does the dev host's cold restart. A
-// browser would start over in a fresh realm. Here the outgoing runtime and app
-// leave their globals behind, and two records keep that from leaking into the
-// next run:
-//
-// - `REALM.installed` holds every function and object a runtime installed on
-//   an engine-owned object: the global, `document`, `document.head`. Where this
-//   file fills a hole ("only when the engine has none"), `vacant()` counts a
-//   predecessor's install as a hole, so the runtime evaluated next installs its
-//   OWN class over it. A kept class runs against the old runtime's state. The
-//   old `ResizeObserver` waited forever on an animation frame the unload had
-//   cancelled, and every observer after a reload stayed silent.
-// - `REALM.base` is the global's own keys when the FIRST runtime started,
-//   before the app. `__VN_UNLOAD__` deletes every configurable global added
-//   since (`resetGlobals`), so the next app sees what a fresh realm would; for
-//   example, Mediabunny's "loaded twice" flag is gone. `__vn*` and `__VN*`
-//   names stay. They are the host's and this runtime's process-wide state, this
-//   record among them.
+// `location.reload()` and the dev host's cold restart re-evaluate this module in the SAME realm.
+// REALM.installed: what a runtime installed on engine-owned objects. `vacant()` counts it as a hole, so the
+//   next runtime installs its OWN class over it (a kept class runs against the old runtime's state).
+// REALM.base: the global's keys at first start. `__VN_UNLOAD__` deletes later additions (`resetGlobals`),
+//   except `__vn*`/`__VN*`, the host's and this runtime's process-wide state.
 interface RealmRecord {
   base: Set<PropertyKey>;
   installed: WeakSet<object>;
-  /** How many runtimes this realm has evaluated, this one included. */
   runs: number;
   /** What `original()` recorded: engine and host functions before any runtime replaced them. */
   originals?: WeakMap<object, Map<PropertyKey, unknown>>;
@@ -104,19 +66,12 @@ const REALM: RealmRecord = ((globalThis as { __VN_REALM__?: RealmRecord }).__VN_
 });
 REALM.runs++;
 
-/** Records `v` as a vue-native runtime's install, and hands it back. */
 function mark<T>(v: T): T {
   if ((typeof v === "object" && v !== null) || typeof v === "function") REALM.installed.add(v as object);
   return v;
 }
 
-/**
- * `obj[name]` as the FIRST runtime in this realm found it, given what it is
- * now. For an engine or host function a runtime wraps or replaces
- * (`document.createElement`, `__vn_set_stylesheet`): the runtime evaluated
- * after a reload must wrap the original, not its predecessor's wrapper, whose
- * state belongs to the old app.
- */
+/** `obj[name]` as the FIRST runtime in this realm found it: after a reload, wrap the original, not the old wrapper. */
 function original<T>(obj: object, name: PropertyKey, now: T): T {
   const table = (REALM.originals ??= new WeakMap());
   let byName = table.get(obj);
@@ -125,11 +80,7 @@ function original<T>(obj: object, name: PropertyKey, now: T): T {
   return byName.get(name) as T;
 }
 
-/**
- * Is `obj[name]` missing, or a previous runtime's install? Either way, the
- * runtime evaluated now installs its own. The lookup walks the prototype
- * chain by descriptor, so no getter runs.
- */
+/** Is `obj[name]` missing or a previous runtime's install? Walks the prototype chain by descriptor, so no getter runs. */
 function vacant(obj: object, name: PropertyKey): boolean {
   for (let o: object | null = obj; o; o = Object.getPrototypeOf(o)) {
     const d = Object.getOwnPropertyDescriptor(o, name);
@@ -141,12 +92,7 @@ function vacant(obj: object, name: PropertyKey): boolean {
   return true;
 }
 
-/**
- * Deletes the configurable globals added since the first runtime started,
- * except `__vn*` / `__VN*`. Called by `__VN_UNLOAD__`, after the teardown, so
- * the runtime and app evaluated next start from the realm the first one
- * found. Returns how many could not be deleted (non-configurable ones).
- */
+/** Deletes configurable globals added since the first runtime, except `__vn*`. Returns how many could not be deleted. */
 function resetGlobals(): number {
   let kept = 0;
   for (const k of Reflect.ownKeys(globalThis)) {
@@ -166,22 +112,14 @@ function resetGlobals(): number {
   return kept;
 }
 
-// ---- the shapes this file is built out of ---------------------------------
-// The host protocol itself is typed in ./protocol.d.ts; what follows is the JS
-// side — the mirror tree, the listener registry, and the DOM surface installed
-// on the two prototypes below. These interfaces are written as an INVENTORY of
-// what answers truthfully: a member that is not here does not exist on a mirror
-// node, and a reused browser component reaching for it gets the same TypeError
-// it would get in an engine that never had one.
+// Members not listed here do not exist on a mirror node: reused browser code gets the TypeError an engine without them would give.
 
 /** 1 element, 2 text, 3 comment. The mirror's own tag — not `nodeType`. */
 type MirrorKind = 1 | 2 | 3;
 
-/** What a listener registered through the renderer or `addEventListener` is. */
 type EventHandler = (ev: VnEvent) => void;
 /** …and what Vue passes for `@click="[a, b]"` — several, in order. */
 type EventHandlerOrList = EventHandler | EventHandler[];
-/** The third argument to add/removeEventListener, in both spellings. */
 type ListenerSignal = {
   readonly aborted: boolean;
   addEventListener(type: string, listener: () => void, options?: { once?: boolean }): void;
@@ -189,38 +127,31 @@ type ListenerSignal = {
 };
 type ListenerOptions = boolean | { capture?: boolean; once?: boolean; passive?: boolean; signal?: ListenerSignal } | undefined;
 
-/** One `addEventListener` registration; `once` is consumed on dispatch. */
 interface ExtraListener {
   fn: EventHandler;
   once: boolean;
-  /** `{ passive: true }`, or the passive default (`passiveOf`). */
   passive?: boolean;
   signalCleanup?: () => void;
   removed?: boolean;
 }
 
 /**
- * Every listener for ONE event name on ONE target, split the way the DOM splits
- * them. `bubble`/`capture` are the RENDERER's slots — one each, because Vue
- * re-patches a prop rather than accumulating; `extraB`/`extraC` are the
- * `addEventListener` ones, which do accumulate.
+ * Listeners for one event name on one target. `bubble`/`capture` are the RENDERER's single slots (Vue
+ * re-patches a prop); `extraB`/`extraC` are `addEventListener`'s and accumulate.
  */
 interface Buckets {
   bubble: EventHandlerOrList | null;
   capture: EventHandlerOrList | null;
   onceB: boolean;
   onceC: boolean;
-  /** `@wheel.passive`: Vue's `onWheelPassive` prop (`passiveOf`). */
   passiveB?: boolean;
   passiveC?: boolean;
   extraB: ExtraListener[];
   extraC: ExtraListener[];
 }
 
-/** event name -> its buckets, for one node id (or one global target). */
 type HandlerMap = Record<string, Buckets | undefined>;
 
-/** `getBoundingClientRect()`'s answer. `toJSON` because the DOM's has one. */
 interface MirrorRect {
   x: number;
   y: number;
@@ -233,15 +164,10 @@ interface MirrorRect {
   toJSON?(): MirrorRect;
 }
 
-/**
- * A NodeList, HTMLCollection or DOMRectList as script sees one: indexed, with
- * `length`, `item()` and iteration (the collection kit, after `TextProto`).
- */
 interface MirrorCollection<T> extends ArrayLike<T>, Iterable<T> {
   item(index: number): T | null;
 }
 
-/** `el.classList`, over the class Vue assigned (transition classes ride `_vtc`). */
 interface MirrorClassList {
   add(...names: string[]): void;
   remove(...names: string[]): void;
@@ -253,12 +179,7 @@ interface MirrorClassList {
   [Symbol.iterator](): IterableIterator<string>;
 }
 
-/**
- * `el.style`. A Proxy: the named members are real methods, anything else is a
- * property write that goes straight through `__vn_set_style` — CUSTOM
- * PROPERTIES INCLUDED, which is how reka-ui's `--reka-popper-*` sizing
- * variables reach the cascade.
- */
+/** `el.style`: a Proxy. Unnamed property writes go straight to `__vn_set_style`, custom properties included (reka-ui's `--reka-popper-*`). */
 interface MirrorStyle {
   setProperty(key: string, value: string | number | null | undefined, priority?: string): void;
   removeProperty(key: string): string;
@@ -270,21 +191,14 @@ interface MirrorStyle {
   [property: string]: unknown;
 }
 
-/** One declaration of an element's inline style, as CSSOM keeps it. */
 interface InlineDecl {
   value: string;
   important: boolean;
 }
 
-/**
- * The CSS declaration block behind `el.style` AND the `style` attribute. It is
- * one object, so `:style`, `el.style.x = …`, `style.cssText`,
- * `setAttribute("style", …)` and `getAttribute("style")` all read and write
- * the same declarations, and every change reaches the host through
- * `__vn_set_style`, the call `:style` has always made.
- */
+/** The declaration block behind `el.style` AND the `style` attribute: one object, so every spelling reads and writes the same declarations. */
 interface InlineStyleState {
-  /** CSS-spelled name → declaration, in declaration order. A Map keeps an updated key in place, as CSSOM does. */
+  /** In declaration order; a Map keeps an updated key in place, as CSSOM does. */
   decls: Map<string, InlineDecl>;
   /** The `style` attribute exists. It can exist and be empty, as in a browser. */
   present: boolean;
@@ -294,55 +208,39 @@ interface InlineStyleState {
   cssVarText: string;
 }
 
-/** The members every mirror node has — elements and text/comment alike. */
 interface MirrorNodeBase {
   /**
-   * The host node id (`VnNodeId`), under a name of its own: `el.id` is the
-   * `id` ATTRIBUTE, as in a browser. Fixed for the life of the host node, and
-   * 0 once the node is freed (`forgetDeep`): host ids are recycled, so a
-   * reference that outlives its node must not name the next one.
+   * The host node id (`VnNodeId`); `el.id` is the `id` ATTRIBUTE. 0 once the node is freed (`forgetDeep`):
+   * host ids are recycled, so a stale reference must not name the next node.
    */
   __vnId: VnNodeId;
   kind: MirrorKind;
   tag: string;
-  /** A parent is always an element; the root's is null. */
   parentNode: MirrorElement | null;
   childNodes: MirrorNode[];
   /** A text/comment node's content. Elements carry theirs in `ownText`. */
   text?: string;
-  // -- installed on BOTH prototypes (`NODE_MEMBERS`)
   contains(other: MirrorNode | null | undefined): boolean;
   readonly ownerDocument: VnDocument | undefined;
   readonly nodeType: 1 | 3 | 8 | 11;
   readonly nodeName: string;
   readonly isConnected: boolean;
-  /** The parent when it is an Element, else null (DOM §4.4). */
   readonly parentElement: MirrorElement | null;
   readonly firstChild: MirrorNode | null;
   readonly lastChild: MirrorNode | null;
   readonly nextSibling: MirrorNode | null;
   readonly previousSibling: MirrorNode | null;
-  /** NonDocumentTypeChildNode: Element and CharacterData both have these. */
   readonly nextElementSibling: MirrorElement | null;
   readonly previousElementSibling: MirrorElement | null;
   hasChildNodes(): boolean;
   getRootNode(): unknown;
   dispatchEvent(ev: VnEvent): boolean;
   /**
-   * The event codes whose `__vn_set_listener` bit is currently ON in the host,
-   * as far as this side knows. Absent = none. See `syncListenerFlag`.
-   *
-   * It lives on the NODE rather than in a side map keyed by id, and that is
-   * load-bearing: `__vn_remove` recycles ids, so a map would answer for the
-   * previous occupant of a slot. A fresh node is a fresh object with no set.
+   * Event codes whose `__vn_set_listener` bit is ON in the host (see `syncListenerFlag`). Kept on the node,
+   * not in a map by id: `__vn_remove` recycles ids, so a map would answer for a slot's previous occupant.
    */
   _listenerOn?: Set<VnEventCode>;
-  /**
-   * Vue writes symbol-keyed bookkeeping straight onto host nodes (the vModel
-   * assign fn, the transition hooks). In a browser those land on a real
-   * element; here they land here — and `__v_skip` on the prototype is what
-   * stops `reactive()` wrapping the node in a Proxy before they do.
-   */
+  /** Vue's symbol-keyed bookkeeping lands here; `__v_skip` on the prototype stops `reactive()` proxying the node. */
   [key: symbol]: unknown;
 }
 
@@ -354,23 +252,11 @@ interface MirrorText extends MirrorNodeBase {
   textContent: string;
 }
 
-/**
- * An element mirror, and with it the whole DOM surface `defineDom` installs.
- *
- * Everything below either answers TRUTHFULLY (from the mirror tree, or from the
- * host's real matcher / real layout bounds / real cascade), or answers a
- * degraded constant AND leaves exactly one advisory. Nothing here is a stub
- * that silently lies.
- */
+/** An element mirror, with the DOM surface `defineDom` installs. Members answer truthfully or return a degraded constant plus one advisory. */
 interface MirrorElement extends MirrorNodeBase {
   kind: 1;
   tagName: string;
-  /**
-   * `<input>`'s value, mirrored so `e.target.value` reads like the browser. An
-   * accessor on the prototype (see `writeControlValue`): assigning it on an
-   * `<input>` / `<textarea>` / `<select>` reaches the host, as `el.value = x`
-   * reaches the widget in a browser.
-   */
+  /** `<input>`'s value; an accessor on the prototype (`writeControlValue`) whose assignment reaches the host. */
   value: string;
   /** The `value` accessor's storage. Internal writers (patchProp, the `input` dispatch) use it directly. */
   _value: string;
@@ -383,7 +269,7 @@ interface MirrorElement extends MirrorNodeBase {
   _falseValue?: unknown;
   /** v-model's expando while an IME composes, as runtime-dom sets it (`vModelText`). */
   composing?: boolean;
-  /** `<option>`: its selectedness and dirtiness (HTML §4.10.10). */
+  /** `<option>`: its selectedness and dirtiness. */
   _selected?: boolean;
   _dirty?: boolean;
   /** `<option>`: the `value` prop as Vue bound it, which `v-model` assigns (runtime-dom's `_value`). Own only once bound. */
@@ -408,13 +294,9 @@ interface MirrorElement extends MirrorNodeBase {
   addEventListener(name: string, fn: EventHandler, opts?: ListenerOptions): void;
   removeEventListener(name: string, fn: EventHandler, opts?: ListenerOptions): void;
 
-  /**
-   * The element's namespace when it is not HTML: `<svg>` and everything Vue
-   * renders inside one, `createElementNS(svgNS, …)`, `<math>`. Absent = HTML.
-   */
+  /** The element's namespace when not HTML (`<svg>` and what Vue renders in it, `<math>`). Absent = HTML. */
   _ns?: "svg" | "mathml";
 
-  // -- the tree, truthfully (the mirror IS the tree)
   /** A live HTMLCollection (`liveCollection`). */
   readonly children: MirrorCollection<MirrorElement>;
   readonly firstElementChild: MirrorElement | null;
@@ -422,16 +304,13 @@ interface MirrorElement extends MirrorNodeBase {
   readonly childElementCount: number;
   textContent: string;
 
-  // -- selector matching, through the real cascade matcher
   matches(selector: string): boolean;
   closest(selector: string): MirrorElement | null;
   querySelector(selector: string): MirrorElement | null;
-  /** A static NodeList. */
   querySelectorAll(selector: string): MirrorCollection<MirrorElement>;
 
-  // -- layout, off the bounds gpui recorded for the last painted frame
+  /** Read from the bounds recorded for the last painted frame. */
   getBoundingClientRect(): MirrorRect;
-  /** A DOMRectList. */
   getClientRects(): MirrorCollection<MirrorRect>;
   readonly offsetWidth: number;
   readonly offsetHeight: number;
@@ -443,7 +322,6 @@ interface MirrorElement extends MirrorNodeBase {
   readonly clientTop: number;
   readonly clientLeft: number;
 
-  // -- scrolling, over the host's real `ScrollHandle` (see `hostScroll`)
   /** The CONTENT box of a scroll container; the border box of anything else. */
   readonly scrollWidth: number;
   readonly scrollHeight: number;
@@ -455,7 +333,6 @@ interface MirrorElement extends MirrorNodeBase {
   scrollBy(x?: unknown, y?: unknown): void;
   scrollIntoView(arg?: unknown): void;
 
-  // -- the attribute channel
   getAttribute(name: string): string | null;
   hasAttribute(name: string): boolean;
   getAttributeNames(): string[];
@@ -466,11 +343,9 @@ interface MirrorElement extends MirrorNodeBase {
   readonly classList: MirrorClassList;
   readonly style: MirrorStyle;
 
-  // -- activation (a click, and a file input's picker without one)
   click(): void;
   showPicker(): void;
 
-  // -- focus and pointer capture
   focus(): void;
   blur(): void;
   select(): void;
@@ -478,13 +353,13 @@ interface MirrorElement extends MirrorNodeBase {
   hasPointerCapture(pointerId: number): boolean;
   releasePointerCapture(pointerId: number): void;
 
-  // -- the retained tree has no copy, and no insert from outside the renderer
+  // The retained tree has no copy and no insert from outside the renderer.
   insertAdjacentElement(where: string, el: MirrorElement): MirrorElement;
   append(...nodes: unknown[]): void;
   remove(): void;
   cloneNode(): null;
 
-  // -- HTMLMediaElement, read live off `__vn_media_state` (vn-video CONTRACT §6)
+  // HTMLMediaElement, read live off `__vn_media_state`.
   currentTime: number;
   readonly duration: number;
   readonly paused: boolean;
@@ -507,7 +382,6 @@ interface MirrorElement extends MirrorNodeBase {
   load(): void;
   canPlayType(type: string): string;
 
-  // -- private bookkeeping, every field of it also present in runtime-dom
   /** The inline style's declarations (runtime-dom keeps them in the real `el.style`). */
   _inline?: InlineStyleState;
   /** The transition classes layered on top of `className`. */
@@ -533,7 +407,7 @@ interface MirrorTimeRanges {
 /** Anything the propagation walk visits: a mirror node, `document`, `window`. */
 type PropagationTarget = MirrorNode | object;
 
-// ---- interning: names cross the boundary once, ids ever after -------------
+// Names cross the host boundary once; ids after.
 const interned = new Map<string, VnNameId>();
 const I = (s: string): VnNameId => {
   let v = interned.get(s);
@@ -544,7 +418,7 @@ const I = (s: string): VnNameId => {
   return v;
 };
 
-// Lockstep with crates/vn-tree (tree.rs EV_*).
+// Keep in lockstep with EV_* in vn-tree's tree.rs.
 const EV_CODES = {
   click: 1,
   mousedown: 2,
@@ -556,24 +430,16 @@ const EV_CODES = {
   blur: 8,
   input: 9,
   scroll: 10,
-  // <lottie> playback (crates/vn-lottie/CONTRACT.md §2). The names are
-  // lottie-web's, camelCase and all, so `e.type` reads the same as it does on a
-  // browser <lottie-player>.
+  // <lottie>: lottie-web's camelCase names, so `e.type` matches a browser <lottie-player>.
   complete: 11,
   loopComplete: 12,
   enterFrame: 13,
-  // The pointer family. gpui sources exactly three things — "the mouse moved
-  // while over me" and the two edges of "the mouse is over me" — so only those
-  // three have host codes; everything else in the W3C pointer set is DERIVED
-  // from them (and from mousedown/mouseup) below.
+  // Pointer family: the host sources only mousemove/mouseenter/mouseleave; the rest of the W3C set is
+  // DERIVED from them and mousedown/mouseup (`DERIVED`).
   mousemove: 14,
   mouseenter: 15,
   mouseleave: 16,
-  // <video> — the HTML media event set (crates/vn-video/CONTRACT.md §4). Every
-  // one of these is also an MF_MEDIA_ENGINE_EVENT below 1000, the range
-  // Microsoft documents as "the events defined in HTML 5 for media elements",
-  // so the names are the spec's on both sides of the boundary and a component
-  // ports from a browser unchanged.
+  // <video>: the HTML media events, under the spec's names.
   loadstart: 17,
   loadedmetadata: 18,
   loadeddata: 19,
@@ -584,8 +450,7 @@ const EV_CODES = {
   pause: 24,
   seeking: 25,
   seeked: 26,
-  // Re-cadenced by the host to the spec's "no more often than every 250 ms" —
-  // MF raises it at the decoder's rate, which is the display's.
+  // The host throttles it to the spec's 250 ms (MF raises it at the display's rate).
   timeupdate: 27,
   durationchange: 28,
   ratechange: 29,
@@ -595,65 +460,43 @@ const EV_CODES = {
   // `a` is MediaError.code (1-4), `key` the advisory naming the missing codec.
   error: 33,
   emptied: 34,
-  // CSS animation/transition events. Unlike everything above, the SOURCE is
-  // vn-css's own animator rather than gpui: it queues one per finished
-  // transition track and per animation start/end/cancel, and the host drains
-  // the queue once a frame (crates/vn-tree/src/render.rs::dispatch_anim_events).
-  // The payload carries `elapsedTime` in `a` and the property / @keyframes
-  // name in `key`.
-  //
-  // 35-38, not 17-20: the `<video>` track took 17-34 for the media block below
-  // and the two landed in the same milestone. `Node::listeners` is a u64.
+  // CSS animation/transition events, queued by vn-css's animator and drained once a frame.
+  // `a` = elapsedTime, `key` = the property / @keyframes name.
   transitionend: 35,
   animationstart: 36,
   animationend: 37,
   animationcancel: 38,
-  // The ClipboardEvents (crates/vn-tree/src/clipboard.rs): copy/cut/paste in a
-  // text field, or the same keys anywhere else, at the focused node or the
-  // root. No numbers: `clipboardData` is the dispatcher's eighth argument.
+  // Clipboard events, at the focused node or the root; `clipboardData` is the dispatcher's eighth argument.
   paste: 39,
   copy: 40,
   cut: 41,
-  // m26 fixes. `contextmenu`: the right button's release (after `mouseup`,
-  // Chromium on Windows), or the Menu key / Shift+F10 at the focused element.
-  // `load`: an `<img>` has its picture (a/b = natural size, `key` = the src;
-  // a failure is `error` with the same `key`). `pointercancel`: the host gave
-  // up on a press — the window lost activation in the middle of it.
+  // `contextmenu`: right-button release, or Menu key / Shift+F10. `load`: an `<img>` has its picture (a/b = natural
+  // size, `key` = src; a failure is `error` with the same `key`). `pointercancel`: the host gave up on a press.
   contextmenu: 42,
   load: 43,
   pointercancel: 44,
-  // The document text selection (crates/vn-tree/src/selection.rs, and
-  // src/selection.ts for `getSelection()`). `selectstart`: a press that is
-  // about to start one, at the press target, cancelable. `selectionchange`:
-  // the selection moved; the host delivers it at the ROOT and the dispatcher
-  // retargets it to `document`, where a browser fires it.
+  // Document text selection. `selectstart` is cancelable, at the press target. `selectionchange` arrives at the
+  // ROOT and is retargeted to `document`, where a browser fires it.
   selectstart: 45,
   selectionchange: 46,
-  // The middle or right button's click (UI Events §3.5): after the release's
-  // `mouseup` and, for the right button, before its `contextmenu` (Chromium
-  // on Windows). `button` 1 or 2, `detail` the click count.
+  // Middle/right button click: after `mouseup` and, for the right button, before `contextmenu`. `button` 1 or 2,
+  // `detail` the click count.
   auxclick: 47,
-  // A text field's edits (crates/vn-elements TextInputState). `beforeinput`
-  // comes before each edit and cancels it (the IME's excepted); `a` is the
-  // edit's `EDIT_TYPES` code, `b` 1 while an IME composes, the eighth
-  // argument the `data` string. `input` (9) carries the same, with the new
-  // value in `key`. The composition events carry their `data` the same way.
+  // Text-field edits. `beforeinput` precedes an edit and cancels it (an IME's excepted); `a` is the `EDIT_TYPES`
+  // code, `b` 1 while an IME composes, the eighth argument the `data` string. `input` (9) carries the same, plus the
+  // new value in `key`. The composition events carry `data` the same way.
   beforeinput: 48,
   compositionstart: 49,
   compositionupdate: 50,
   compositionend: 51,
-  // An `<iframe>`'s document posted to its parent (crates/vn-tree/src/
-  // iframe.rs). Delivered at the iframe's node and retargeted to `window`,
-  // where a browser fires it; `key` is `{"o": origin, "d": wire}` with the
-  // payload in `iframe.ts`'s wire form.
+  // An `<iframe>` document's postMessage, delivered at the iframe node and retargeted to `window`. `key` is
+  // `{"o": origin, "d": wire}`, the payload in `iframe.ts`'s wire form.
   message: 52,
 } as const;
 
 /**
- * `InputEvent.inputType` by the host's code: crates/vn-elements
- * `text_input::InputType`, whose discriminants index this table (in lockstep:
- * test/protocol-codes.test.ts reads the Rust enum). 0 is no edit the host
- * named.
+ * `InputEvent.inputType` by host code: indexes vn-elements' `text_input::InputType` (lockstep, checked by
+ * test/protocol-codes.test.ts). 0 is no edit the host named.
  */
 const EDIT_TYPES = [
   "",
@@ -674,16 +517,9 @@ const EDIT_TYPES = [
 
 /** Every event name the HOST delivers under a code of its own. */
 type HostEventName = keyof typeof EV_CODES;
-// Events the host does not deliver under their own code, synthesized in JS from
-// one that it does. `pre: true` means the derived event fires BEFORE its source,
-// which is the W3C order for the pointer family (`pointerdown` precedes
-// `mousedown`); `focusin`/`focusout` are the bubbling siblings of `focus`/`blur`
-// and fire after them.
-//
-// This is a real implementation, not a stub: a `pointerdown` listener registers
-// the host's `mousedown` bit, and the payload it receives is the same one the
-// mouse event carries — which is what makes reka-ui's Select (`onPointerDown`)
-// and Tooltip (`onPointerEnter`) work rather than merely not throw.
+// Events synthesized in JS from one the host delivers. `pre: true` fires BEFORE its source (W3C pointer order:
+// `pointerdown` precedes `mousedown`); `focusin`/`focusout` bubble and fire after `focus`/`blur`.
+// A `pointerdown` listener registers the host's `mousedown` bit and receives the mouse event's payload.
 const DERIVED = {
   pointerdown: { from: "mousedown", pre: true },
   pointerup: { from: "mouseup", pre: true },
@@ -692,10 +528,7 @@ const DERIVED = {
   pointerleave: { from: "mouseleave", pre: true },
   focusin: { from: "focus", pre: false },
   focusout: { from: "blur", pre: false },
-  // After the click whose `detail` is 2, with the primary button (UI Events
-  // §3.5; Chromium fires it from the click's own dispatch). A `@dblclick`
-  // therefore arms the click bit, and only the second click of a pair makes
-  // one — a triple click does not make a second.
+  // After the click with `detail` 2 and the primary button: only the second click of a pair makes one.
   dblclick: { from: "click", pre: false },
 } as const satisfies Record<string, { from: HostEventName; pre: boolean }>;
 
@@ -734,11 +567,8 @@ const POINTER_EVENTS = new Set<string>([
 ]);
 /** Events that bubble but cannot be cancelled. */
 const NOT_CANCELABLE = new Set<string>(["pointercancel", "gotpointercapture", "lostpointercapture", "select"]);
-// Vue hyphenates an `@camelCase` listener prop (`onLoopComplete` becomes
-// "loop-complete"), which is the well-known reason `@loopComplete` silently
-// misses a web component's camelCase event in a browser. We accept BOTH
-// spellings and fold them onto the canonical camelCase name, so `@loopComplete`
-// works from a template and `addEventListener("loopComplete")` works from JS.
+// Vue hyphenates an `@camelCase` listener prop (`onLoopComplete` -> "loop-complete"); accept both spellings and
+// fold them onto the camelCase name.
 const EVENT_ALIASES: Record<string, string | undefined> = {
   "loop-complete": "loopComplete",
   loopcomplete: "loopComplete",
@@ -746,28 +576,22 @@ const EVENT_ALIASES: Record<string, string | undefined> = {
   enterframe: "enterFrame",
 };
 const canonicalEvent = (name: string): string => EVENT_ALIASES[name] ?? name;
-// Per the UI Events spec these fire at the target only. (`scroll` bubbles from
-// the *document*, never from an element.) The Lottie events are CustomEvents
-// dispatched on the element by <lottie-player>, i.e. `bubbles: false`.
+// These fire at the target only (`scroll` bubbles from the document, never from an element).
 const NO_BUBBLE = new Set<string>([
   "focus",
   "blur",
   "scroll",
-  // Fired at `document`, neither bubbling nor cancelable (Selection API §6).
+  // Fired at `document`; neither bubbles nor cancels.
   "selectionchange",
   "complete",
   "loopComplete",
   "enterFrame",
-  // The enter/leave pair is the one part of the pointer family that does NOT
-  // bubble — getting that wrong is what makes a menu close as soon as the
-  // pointer crosses one of its own items.
+  // enter/leave do not bubble; getting that wrong closes a menu as soon as the pointer crosses one of its items.
   "mouseenter",
   "mouseleave",
   "pointerenter",
   "pointerleave",
-  // Every media event fires AT THE TARGET only — HTML says so for all of them,
-  // and it matters: a `@error` on a page wrapper would otherwise catch a
-  // `<video>`'s failed load as if the wrapper had failed.
+  // Media events fire at the target only; else a wrapper's `@error` would catch a `<video>`'s failed load.
   "loadstart",
   "loadedmetadata",
   "loadeddata",
@@ -786,7 +610,7 @@ const NO_BUBBLE = new Set<string>([
   "ended",
   "error",
   "emptied",
-  // …and an image's `load` (its `error` is the one above).
+  // `<img>`'s `load`.
   "load",
 ]);
 /** The EV_CODES names that come off a media element, in code order. */
@@ -812,28 +636,12 @@ const MEDIA_EVENTS = new Set<string>([
 ]);
 const nodesById = new Map<VnNodeId, MirrorNode>();
 
-// ---- loose nodes: the ones only script holds (m26 client sweep #5a) --------
-//
-// A node the renderer made is held by the renderer (`vnode.el`) or by the tree
-// it is in, and `nodesById` holds it strongly until Vue's `remove` frees it.
-// A node SCRIPT made (`document.createElement`, `createTextNode`, `new
-// DocumentFragment()`) or took out of the tree (`removeChild`, `remove()`,
-// `textContent =`) is a different thing: in a browser it lives exactly as long
-// as script can reach it, and a strong map would keep it, and its host node,
-// forever. So a LOOSE subtree is held weakly here, and once the collector has
-// taken its root (a loose subtree dies whole: `parentNode` and `childNodes`
-// tie it together) `sweepLoose` frees its host nodes with the renderer's own
-// `__vn_remove`.
-//
-// The host has no "detach" op, and none is needed: a removed subtree is
-// `__vn_insert`ed into a container of its own that is never attached (its
-// "box"), the way <KeepAlive> parks a deactivated subtree in its storage
-// container. It is not painted, and the box goes when the subtree is inserted
-// again or freed.
-//
-// Invariant: a node is loose exactly when its topmost ancestor is in
-// `looseRoots`; `nodeOps.insert` moves a subtree between the two registries
-// when it changes sides.
+// Loose nodes are held only by script: made by `document.createElement`, `createTextNode`, `new DocumentFragment()`,
+// or taken out of the tree. They are held weakly, so a script-dropped subtree is collected and `sweepLoose` then
+// frees its host nodes with `__vn_remove`. The host has no "detach" op: a removed subtree is parked under an
+// unattached "box" node, as <KeepAlive> parks a deactivated one.
+// Invariant: a node is loose exactly when its topmost ancestor is in `looseRoots`; `nodeOps.insert` moves a
+// subtree between the registries when it changes sides.
 const looseById = new Map<VnNodeId, WeakRef<MirrorNode>>();
 /** The root of each loose subtree, and the box a removed one is parked in (0: none, it never had a parent). */
 const looseRoots = new Map<VnNodeId, { ref: WeakRef<MirrorNode>; box: VnNodeId }>();
@@ -901,10 +709,7 @@ function looseCreated<T extends MirrorNode>(n: T): T {
   addLooseRoot(n, 0);
   return n;
 }
-/**
- * Takes `child` out of its parent WITHOUT freeing it, as a browser's removal
- * does: a script may insert it again. Its subtree becomes loose, parked in a box.
- */
+/** Takes `child` out of its parent WITHOUT freeing it (a script may re-insert it); its subtree becomes loose, parked in a box. */
 function detachNode(child: MirrorNode, notify = true): void {
   const p = child.parentNode;
   if (!p) return;
@@ -920,11 +725,7 @@ function detachNode(child: MirrorNode, notify = true): void {
   addLooseRoot(child, box);
   if (notify) notifyMutation(p, "childList", { addedNodes: [], removedNodes: [child] });
 }
-/**
- * Forgets a subtree whose host nodes are being freed: every registry, every
- * handler, and its ids, which become 0. Host ids are recycled, so a reference
- * that outlives its node must not go on naming whatever gets the id next.
- */
+/** Forgets a subtree whose host nodes are freed: registries, handlers, and its ids (set to 0, since host ids are recycled). */
 function forgetDeep(n: MirrorNode): void {
   releaseCapturesIn(n);
   forEachDeep(n, (d) => {
@@ -935,11 +736,7 @@ function forgetDeep(n: MirrorNode): void {
   });
 }
 
-// ---- JS mirror nodes ------------------------------------------------------
-// Vue writes symbol props onto host nodes and needs parentNode/nextSibling
-// synchronously — both served from this mirror, zero host calls.
-// One-shot compat advisories: never silently drop behavior a browser has —
-// tell the developer what happened and what to use instead.
+// One-shot compat advisories: never silently drop behavior a browser has; say what to use instead.
 const warned = new Set<string>();
 function warnCompat(key: string, msg: string) {
   if (warned.has(key)) return;
@@ -947,60 +744,28 @@ function warnCompat(key: string, msg: string) {
   console.warn(`[vue-native compat] ${msg}`);
 }
 
-// Host nodes sit on HTMLElement.prototype (redjs provides the real class) so
-// `el instanceof HTMLElement` / `Node` checks in reused browser components
-// pass, and carry the DOM-ish surface cheap to keep (tagName, value,
-// add/removeEventListener).
-// (…and when the engine has no HTMLElement at all — the bun test harness — a
-// private prototype stands in, so the DOM surface below never lands on
-// Object.prototype.)
+// Mirrors sit on HTMLElement.prototype so `instanceof HTMLElement`/`Node` checks in reused browser components pass.
+// The bun test harness has no HTMLElement; a private prototype stands in so the DOM surface never lands on Object.prototype.
 const ElementProto: object =
   typeof HTMLElement === "function" ? HTMLElement.prototype : Object.create(Object.prototype);
-// Text and comment mirrors are NOT elements — no selector matching, no layout,
-// no attributes — but they are Nodes, and reused components branch on
-// `nodeType === 3` all the time. They get their own prototype carrying only the
-// node-level surface (see `NODE_MEMBERS` below).
+// Text and comment mirrors are Nodes (components branch on `nodeType === 3`) but not elements: their prototype
+// carries only the node-level surface (`NODE_MEMBERS`).
 const TextProto: object = Object.create(Object.prototype);
 
-// ---- NodeList, HTMLCollection, DOMRectList ----------------------------------
-//
-// In a browser `childNodes` and `querySelectorAll()` are NodeLists, `children`
-// and `getElementsBy*()` are HTMLCollections, and code tests for them by name:
-// motion's `animate()` resolves its subject with `subject instanceof NodeList`
-// (framer-motion `resolveSubjects`), a ReferenceError while the global did not
-// exist. The prototypes are made here, before the first mirror (`mk` gives
-// every node its `childNodes`). The interface objects that own them are made
-// with the other interfaces, below (`adoptInterface`).
-//
-// There are three kinds of list, by what backs them:
-// - `childNodes` IS the renderer's own child array (every insert and removal
-//   splices it), so it is live by construction. It stays a plain Array on
-//   Array.prototype, because JavaScriptCore's fast `indexOf` and element
-//   access need the original array prototype chain: on an Array re-parented
-//   onto NodeList.prototype, `indexOf` measured 30 times slower, and the
-//   renderer calls it for every insert, move and `nextSibling`. Each list
-//   carries NodeList's `item` and toString tag as own properties
-//   (`childList`), and `instanceof NodeList` accepts it. `forEach`,
-//   `entries`, `keys`, `values` and iteration are Array's, which are
-//   NodeList's own functions in a browser too. Divergence, said in
-//   docs/RUNTIME.md §5.24: `Array.isArray(el.childNodes)` is true, its
-//   prototype is Array.prototype, and the other array methods (`map`,
-//   `filter`, …) are there too.
-// - A STATIC list (`querySelectorAll()`, a MutationRecord's `addedNodes` and
-//   `removedNodes`, `getClientRects()`) is a snapshot. It is a plain object on
-//   the interface's prototype, with read-only index properties, as a browser's is.
-// - A LIVE collection (`children`, `getElementsByTagName()`, …) is a Proxy. It
-//   recomputes its members when the tree has changed since it last looked
-//   (`domEpoch`), and it has index properties and, for an HTMLCollection,
-//   named ones (`form.elements.email`), as WebIDL's legacy platform objects do.
+// NodeList, HTMLCollection and DOMRectList: code tests for them by name (motion's `subject instanceof NodeList`).
+// Three kinds of list:
+// - `childNodes` IS the renderer's child array, so it is live by construction. It stays a plain Array on
+//   Array.prototype: JavaScriptCore's fast `indexOf`/element access need the original chain (re-parenting it onto
+//   NodeList.prototype made `indexOf` 30 times slower). `childList` gives it NodeList's `item` and toString tag,
+//   and `instanceof NodeList` accepts it. Divergence: `Array.isArray(el.childNodes)` is true.
+// - A STATIC list (`querySelectorAll()`, MutationRecord node lists, `getClientRects()`) is a snapshot with
+//   read-only index properties.
+// - A LIVE collection (`children`, `getElementsByTagName()`, ...) is a Proxy that recomputes when the tree changed
+//   (`domEpoch`), with index properties and, for an HTMLCollection, named ones (`form.elements.email`).
 
-/**
- * Bumped by every change a live collection could see: an insert, a removal,
- * an attribute (`id`, `name` and `class` select members).
- */
+/** Bumped by every change a live collection could see: an insert, a removal, an `id`/`name`/`class` change. */
 let domEpoch = 0;
 
-/** A static list's members. */
 const staticItems = new WeakMap<object, readonly unknown[]>();
 
 /** A live collection's state, under both its Proxy and its target. */
@@ -1066,10 +831,8 @@ function indexOfKey(k: string): number {
 }
 
 /**
- * WebIDL's legacy platform object, over a live member list: index properties
- * are read-only and enumerable, named ones (an HTMLCollection's) read-only
- * and not enumerable, and a name the prototype chain already has (`item`,
- * `length`) is the prototype's.
+ * WebIDL's legacy platform object over a live list: index properties are read-only and enumerable, named ones
+ * (an HTMLCollection's) read-only and not enumerable; a name the prototype chain has (`item`, `length`) wins.
  */
 const LIVE_HANDLER: ProxyHandler<object> = {
   get(t, k, recv) {
@@ -1158,11 +921,7 @@ function staticList<T>(proto: object, items: readonly T[]): MirrorCollection<T> 
   return list as unknown as MirrorCollection<T>;
 }
 
-/**
- * A collection interface's prototype, with WebIDL's members on it (enumerable,
- * as WebIDL's are). The iteration methods are the Array ones themselves, as
- * in a browser (`NodeList.prototype.forEach === Array.prototype.forEach`).
- */
+/** A collection interface's prototype: enumerable WebIDL members, and the Array iteration methods themselves, as in a browser. */
 function collectionProto(name: string, opts: { named?: boolean; iterable?: boolean } = {}): object {
   const proto: object = Object.create(Object.prototype);
   const required = (member: string, n: number) => {
@@ -1205,24 +964,20 @@ const NodeListProto = collectionProto("NodeList", { iterable: true });
 const HTMLCollectionProto = collectionProto("HTMLCollection", { named: true });
 const DOMRectListProto = collectionProto("DOMRectList");
 
-// What each `childNodes` array carries of NodeList's own (see above): its
-// `item`, the very function on NodeList.prototype, and its toString tag, so
-// `Object.prototype.toString` says "[object NodeList]" (and Vue's `reactive()`
-// leaves the list alone, as it does a browser's).
+// NodeList's own `item` and toString tag for each `childNodes` array, so `Object.prototype.toString` says
+// "[object NodeList]" and `reactive()` leaves the list alone.
 const CHILD_ITEM: PropertyDescriptor = {
   value: (NodeListProto as { item: unknown }).item,
   writable: true,
   configurable: true,
 };
 const CHILD_TAG: PropertyDescriptor = { value: "NodeList", configurable: true };
-/** A new, empty `childNodes`. */
 function childList(): MirrorNode[] {
   const list: MirrorNode[] = [];
   Object.defineProperty(list, "item", CHILD_ITEM);
   Object.defineProperty(list, Symbol.toStringTag, CHILD_TAG);
   return list;
 }
-/** Is `x` a node's `childNodes` (`childList`)? */
 function isChildList(x: object): x is MirrorNode[] {
   return Array.isArray(x) && (x as { item?: unknown }).item === CHILD_ITEM.value;
 }
@@ -1230,12 +985,7 @@ function isChildList(x: object): x is MirrorNode[] {
 /** The empty answer, shared: a static list can never change. */
 const NO_NODES: readonly MirrorNode[] = Object.freeze([]);
 
-/**
- * Objects made here for interfaces this runtime has no class for (a
- * `classList`, a MutationRecord, …), by interface. Each interface's
- * `instanceof` answers from its set (the interface objects are made below,
- * with the others).
- */
+/** Objects made here for interfaces with no class (`classList`, MutationRecord, ...); each interface's `instanceof` answers from its set. */
 const BRANDS = {
   DOMTokenList: new WeakSet<object>(),
   DOMStringMap: new WeakSet<object>(),
@@ -1249,25 +999,15 @@ function branded<T extends object>(kind: keyof typeof BRANDS, obj: T): T {
   return obj;
 }
 
-/** The element namespaces (`namespaceURI`). */
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MATHML_NS = "http://www.w3.org/1998/Math/MathML";
 
-// A mirror node must never become reactive state.
-//
-// In a browser this is automatic: `Object.prototype.toString.call(divElement)`
-// is `[object HTMLDivElement]`, which Vue's `getTargetType` classifies as
-// INVALID, so `reactive(node)` hands the node straight back. Our mirrors are
-// `Object.create(HTMLElement.prototype)` and stringify as `[object Object]`, so
-// Vue would wrap each one in a Proxy — and then `set.has(node)`,
-// `array.indexOf(node)` and `a === b` all start answering NO for the same node
-// reached two different ways. reka-ui's DismissableLayer stack, its Collection
-// ordering and its focus guards are ALL identity comparisons; every one of them
-// silently breaks.
-//
-// `__v_skip` (Vue's `markRaw` flag) on the prototypes restores the browser's
-// behaviour for every node at once, at zero per-node cost.
+// A mirror node must never become reactive state. A browser element stringifies as `[object HTMLDivElement]`, which
+// Vue's `getTargetType` treats as INVALID, so `reactive(node)` returns it unchanged. Ours stringify as `[object Object]`
+// and would be Proxy-wrapped, so `set.has`, `indexOf` and `===` would disagree about the same node (reka-ui's layer
+// stack, Collection ordering and focus guards are identity comparisons). `__v_skip` (markRaw) on the prototypes
+// restores the browser's behaviour at no per-node cost.
 for (const proto of [ElementProto, TextProto]) {
   Object.defineProperty(proto, "__v_skip", { value: true, configurable: true });
 }
@@ -1276,37 +1016,24 @@ function mk(id: VnNodeId, kind: 1, tag: string): MirrorElement;
 function mk(id: VnNodeId, kind: 2 | 3, tag: string): MirrorText;
 function mk(id: VnNodeId, kind: MirrorKind, tag: string): MirrorNode;
 function mk(id: VnNodeId, kind: MirrorKind, tag: string): MirrorNode {
-  // `MirrorNodeInit` is the one place the two shapes are held open at once: the
-  // node is neither an element nor a text node until `kind` is written.
+  // `MirrorNodeInit` holds both shapes open until `kind` is written.
   const n = Object.create(kind === 1 ? ElementProto : TextProto) as MirrorNodeInit;
   n.__vnId = id;
   n.kind = kind;
   n.tag = tag;
   n.parentNode = null;
-  // A live NodeList, because it is the list the renderer splices (`childList`).
   n.childNodes = childList();
   if (kind === 1) {
     n.tagName = String(tag).toUpperCase();
-    // The storage under the prototype's `value` accessor; its being OWN is
-    // also what tells a mirror element from a detached engine one.
+    // Storage under the prototype's `value` accessor; being OWN also tells a mirror element from a detached engine one.
     n._value = "";
-    // Browser-visible attribute state. `patchProp` is the only writer that Vue
-    // drives; reka-ui's roving focus and its Collection read `data-*`/`aria-*`
-    // back off candidate nodes, so the mirror has to remember what was written
-    // rather than answering "absent" for everything.
+    // Written only by `patchProp`. reka-ui reads `data-*`/`aria-*` back off nodes, so the mirror must remember them.
     n.attrs = Object.create(null);
-    // The `class` Vue (or a script) assigned, kept separately from the
-    // transition classes `<Transition>` layers on top (runtime-dom keeps the
-    // same split, for the same reason: a re-render must not wipe an in-flight
-    // `v-enter-active`). `className` is the prototype's accessor over both.
+    // Kept apart from `<Transition>`'s classes so a re-render does not wipe an in-flight `v-enter-active`, as in
+    // runtime-dom. `className` is the prototype's accessor over both.
     n._class = "";
-    // `scrollTop` / `scrollLeft` are NOT initialised here any more: they are
-    // accessors on the prototype now, reading and writing the host's real
-    // `ScrollHandle` (see `defineDomGet("scrollTop", …)`). An own data property
-    // would shadow them, which is exactly what used to make a write a no-op.
-    //
-    // Own-property methods shadow any prototype ones: these route into the
-    // same registry the renderer's props use, so propagation sees both.
+    // `scrollTop`/`scrollLeft` are prototype accessors over the host's `ScrollHandle`; an own data property would shadow them.
+    // Own methods shadow the prototype's: they route into the registry the renderer's props use, so propagation sees both.
     n.addEventListener = (name, fn, opts) => addExtraListener(n as MirrorElement, name, fn, opts);
     n.removeEventListener = (name, fn, opts) =>
       removeExtraListener(n as MirrorElement, name, fn, opts);
@@ -1320,48 +1047,34 @@ function forEachDeep(n: MirrorNode, f: (n: MirrorNode) => void) {
   for (const c of n.childNodes) forEachDeep(c, f);
 }
 
-// node -> { click: fn }. Keyed by the NODE, weakly: a loose node script dropped
-// must not be kept alive by its own listeners (`addEventListener("load", () =>
-// use(img))` closes over the node it is registered on).
+// node -> { click: fn }. Weak, so a loose node is not kept alive by its own listeners.
 const handlers = new WeakMap<MirrorNode, HandlerMap>();
 
-// Typed by Vue's own `RendererOptions`, minus the `patchProp` that is defined
-// separately below: every hook's parameter types come from the renderer that
-// calls them, so nothing here can drift out of step with what Vue passes.
+// Typed by Vue's `RendererOptions` so hooks cannot drift from what the renderer passes; `patchProp` is defined separately.
 const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
   createElement: (type, namespace, _is, props) => {
     const el = mk(__vn_create_element(I(type)), 1, type);
     // `<VnWindow>`'s root: registered before its content mounts (vnwindow.ts).
     if (props && (props as Record<symbol, unknown>)[WINDOW_ROOT]) windowRoots.add(el);
-    // `<svg>` and what Vue renders inside it, and `<math>`: not HTML elements.
-    // Their `tagName` keeps the name's case (`svg`, `linearGradient`), as a
-    // browser's does, and `instanceof SVGElement` / `MathMLElement` hold
-    // (`namespaceURI`, `wrapElementHasInstance`).
+    // `<svg>`/`<math>` and their content keep their tag's case (`linearGradient`), and `instanceof SVGElement`/`MathMLElement` hold.
     if (namespace === "svg" || namespace === "mathml") {
       el._ns = namespace;
       el.tagName = type;
     }
-    // A `<label>` clicks its control whether or not anything listens, so the
-    // host must deliver its clicks (desktop-apis-design §4.2). So does a
-    // `<button>` (submit is its default type: it submits its form), and an
-    // `<input>` hears Enter for implicit submission (text is its default).
+    // The host must deliver `click` for `<label>` (it activates its control) and `<button>` (it submits), and `keydown`
+    // for `<input>` (implicit submission), whether or not anything listens.
     if (type === "label" || type === "button") syncListenerFlag(el, "click");
     if (type === "input") syncListenerFlag(el, "keydown");
-    // A text control hears its own `input`: that event is what carries the
-    // typed text into the mirror's `value`, so `el.value` reads what the user
-    // typed with no `@input` anywhere.
+    // A text control hears its own `input`: that is what carries typed text into the mirror's `value`.
     if (type === "input" || type === "textarea") syncListenerFlag(el, "input");
     if (type === "canvas") adoptCanvas(el);
-    // `<select>` / `<option>`: the selection model's members (`selectedIndex`,
-    // `options`, `option.selected`…).
     if (!namespace && type === "select") defineSelectMembers(el);
     else if (!namespace && type === "option") defineOptionMembers(el);
     return el;
   },
   createText: (text) => {
     const n = mk(__vn_create_text(), 2, "#text");
-    // The mirror keeps the string too — `textContent` and `Node.data` read it
-    // back, and a host round trip for that would be absurd.
+    // The mirror keeps the string: `textContent` and `Node.data` read it back.
     n.text = String(text);
     __vn_set_text(n.__vnId, n.text);
     return n;
@@ -1372,15 +1085,11 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
     __vn_set_text(node.__vnId, node.text);
   },
   setElementText: (node, text) => {
-    // The children are DETACHED, not freed, as `el.textContent = text` does in
-    // a browser. Normally there are none (Vue unmounts them first), but a
-    // leaving <Transition> child is still here until its leave ends, and Vue
-    // removes it then; one a script appended is still the script's. Freeing
-    // either here left a mirror over a host id that was recycled under it.
+    // DETACH the children, do not free them, as `el.textContent = text` does: a leaving <Transition> child stays until
+    // its leave ends, and a script-appended one is still the script's. Freeing either leaves a mirror over a recycled id.
     const kids = node.childNodes.length ? node.childNodes.slice() : null;
     if (kids) for (const c of kids) detachNode(c, false);
-    // The element's OWN text (exclusive with children, exactly as in the host
-    // tree) — `textContent` reads it back.
+    // The element's OWN text, exclusive with children as in the host tree.
     node.ownText = String(text);
     __vn_set_element_text(node.__vnId, String(text));
     if (kids) optionsChangedIn(node);
@@ -1411,17 +1120,10 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
     const i = p.childNodes.indexOf(node);
     return i >= 0 ? (p.childNodes[i + 1] ?? null) : null;
   },
-  // <style scoped>: Vue stamps every element a scoped component renders (and
-  // child component roots) with its data-v id — the Rust matcher buckets on it.
+  // <style scoped>: the Rust matcher buckets on the data-v id Vue stamps on scoped elements.
   setScopeId: (el, id) => __vn_add_scope(el.__vnId, id),
-  // Vue's `<Teleport>` resolves a STRING `to` through this hook. Without it
-  // `<Teleport to="body">` — reka-ui's default for EVERY portal — warns
-  // "Current renderer does not support string target" and renders nothing.
-  //
-  // The document roots a browser component reaches for all mean "the app root"
-  // here; anything else goes through the real matcher. A Teleport inside a
-  // `<VnWindow>` asks through `windowTeleport` instead, where they mean that
-  // window's root.
+  // Resolves a STRING Teleport `to` (reka-ui portals use "body"). Document roots mean the app root here; anything else
+  // goes through the real matcher. A Teleport inside a `<VnWindow>` asks `windowTeleport` instead.
   querySelector: (sel) => {
     if (DOCUMENT_ROOTS.has(sel) && sel !== "#app") return appRoot;
     // Prefer a real #app container; root-only native entries retain their legacy Teleport alias.
@@ -1433,11 +1135,8 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
 const DOCUMENT_ROOTS = new Set(["body", "html", ":root", "#app"]);
 
 /**
- * The `<VnWindow>` root `node` paints under, or `null` for the main window.
- *
- * A pop-out's content stays in this ONE tree (MULTIWINDOW.md §1), so nothing
- * in the tree's shape says which window a node is in: its nearest registered
- * window root does (vnwindow.ts `windowRoots`). Free without a pop-out.
+ * The `<VnWindow>` root `node` paints under, or `null` for the main window. A pop-out's content stays in the ONE
+ * tree, so only the nearest registered window root (`windowRoots`) says which window a node is in.
  */
 function windowRootOf(node: MirrorNode | null | undefined): MirrorElement | null {
   if (windowRoots.size === 0) return null;
@@ -1453,16 +1152,10 @@ interface MountingInstance {
 }
 
 /**
- * The `<VnWindow>` root that `container`, NOT in the document yet, will paint
- * under — or `null`.
- *
- * Vue mounts an element's children before it inserts the element, so content
- * that mounts with its window (or with any new element in it) hands a
- * `<Teleport>` a container whose parents stop short of the window root, and
- * `windowRootOf` cannot see the window. The components can: the nearest
- * `<VnWindow>` above the Teleport's, whose root element exists before its
- * content mounts. A container that IS in the document and under no window root
- * is in the main window, whatever its components are.
+ * The `<VnWindow>` root that `container`, NOT in the document yet, will paint under, or `null`.
+ * Vue mounts an element's children before inserting the element, so content mounting with its window hands a
+ * `<Teleport>` a container whose parents stop short of the window root. The components can see it: the nearest
+ * `<VnWindow>` above the Teleport's. A container in the document under no window root is in the main window.
  */
 function mountingWindowRoot(container: MirrorNode | null | undefined, parent: MountingInstance | null | undefined): MirrorElement | null {
   if (windowRoots.size === 0 || !container) return null;
@@ -1476,19 +1169,11 @@ function mountingWindowRoot(container: MirrorNode | null | undefined, parent: Mo
 }
 
 /**
- * `<Teleport to="body">` inside a `<VnWindow>` lands in THAT window.
- *
- * In a browser, content in a popup is in the popup's document, and a portal
- * that teleports to "body" from there (`document.body` of the component's own
- * document) stays in the popup. Here a pop-out's subtree is part of the main
- * tree, so the renderer's `querySelector("body")` alone would carry every
- * reka-ui menu, tooltip and dialog opened in a pop-out back to the MAIN
- * window. Teleport resolves a string `to` through the renderer options it is
- * handed (`internals.o.querySelector`), at mount, on a `to` change and in a
- * deferred mount; this hands it options whose document roots are the window
- * root its own placeholder sits under (or will, once the content it mounts
- * with is inserted: `mountingWindowRoot`). A `to` that is a selector for
- * anything else, or an element, is untouched.
+ * `<Teleport to="body">` inside a `<VnWindow>` lands in THAT window, as in a popup's own document. A pop-out's
+ * subtree is part of the main tree, so the plain `querySelector("body")` would carry its menus, tooltips and dialogs
+ * back to the main window. Teleport resolves a string `to` through the renderer options it is handed
+ * (`internals.o.querySelector`), so this hands it options whose document roots are the window root its
+ * placeholder sits under (`mountingWindowRoot`). Other selectors and elements are untouched.
  */
 const TELEPORT_ORIGINAL = Symbol.for("vn.teleport.original");
 type TeleportProcess = ((this: unknown, ...args: unknown[]) => unknown) & { [TELEPORT_ORIGINAL]?: TeleportProcess };
@@ -1497,10 +1182,8 @@ interface TeleportInternals {
 }
 {
   const impl = Teleport as unknown as { process: TeleportProcess };
-  // `location.reload()` evaluates this module again (see the top of this
-  // file), maybe over the same Teleport: the wrapper installed now wraps Vue's
-  // own `process`, never a predecessor's wrapper, whose window registry is the
-  // old app's.
+  // A reload may re-evaluate this module over the same Teleport: wrap Vue's own `process`, never a predecessor's
+  // wrapper, whose window registry is the old app's.
   let process = impl.process;
   while (process[TELEPORT_ORIGINAL]) process = process[TELEPORT_ORIGINAL];
   const wrapped: TeleportProcess = function (this: unknown, ...args: unknown[]) {
@@ -1526,18 +1209,10 @@ interface TeleportInternals {
 }
 
 /**
- * The document a node in a `<VnWindow>` belongs to: its `ownerDocument`.
- *
- * A browser popup's nodes are in the POPUP's document, whose root element is
- * the popup's viewport — so `el.ownerDocument.documentElement.clientWidth` is
- * the popup's width, which is how floating-ui (and with it every reka-ui
- * popper: a context menu, a tooltip) measures the viewport it keeps a menu
- * inside. One realm and one `window` stay one (D-M01): this document is the
- * real one with its root elements (`documentElement`, `body`,
- * `scrollingElement`) answered by the window's root, and everything else —
- * listeners, `activeElement`, `createElement`, queries — the real document's,
- * so a listener added through it hears the same events. Like a popup's
- * document, it is not `=== document`.
+ * The document a node in a `<VnWindow>` belongs to (`ownerDocument`). floating-ui measures the
+ * viewport as `el.ownerDocument.documentElement.clientWidth`, so the root elements answer with the
+ * window's root; everything else (listeners, `activeElement`, queries) is the real document's.
+ * Not `=== document`, like a browser popup's.
  */
 const WINDOW_DOCUMENTS = new WeakMap<object, object>();
 function windowDocument(root: MirrorElement): object {
@@ -1561,12 +1236,7 @@ function windowDocument(root: MirrorElement): object {
   return doc;
 }
 
-/**
- * The renderer's insert, which is also a move, and the DOM methods' too.
- * `notifyAdd: false` leaves the addition record to the caller (one record for
- * a whole fragment); the old parent always hears the removal, as DOM "insert"
- * removes the node from its parent first.
- */
+/** Insert or move. `notifyAdd: false` leaves the addition record to the caller (one per fragment); the old parent always hears the removal. */
 function insertNode(child: MirrorNode, parent: MirrorElement, anchor: MirrorNode | null, notifyAdd: boolean): void {
   const old = child.parentNode;
   if (old && (isLoose(parent) || windowRootOf(child) !== windowRootOf(parent))) releaseCapturesIn(child);
@@ -1593,33 +1263,24 @@ function insertNode(child: MirrorNode, parent: MirrorElement, anchor: MirrorNode
     const now = isLoose(parent);
     if (now !== isLoose(child)) (now ? loosen : tighten)(child);
   }
-  // A select's list of options changed: its selection is settled again.
   if (old && old !== parent) optionsChangedIn(old);
   optionsChangedIn(parent);
   if (old) notifyMutation(old, "childList", { addedNodes: [], removedNodes: [child] });
   if (notifyAdd) notifyMutation(parent, "childList", { addedNodes: [child], removedNodes: [] });
 }
 
-// @vue/shared's hyphenate, verbatim: `\B` so a leading capital is only
-// lowercased, never prefixed. Style keys are camelCase either way, but
-// `withKeys` runs it over `KeyboardEvent.key` — "Enter" must become "enter",
-// not "-enter", or every `@keydown.enter` silently stops matching.
+// `\B` so a leading capital is only lowercased, never prefixed: `withKeys` runs this over
+// `KeyboardEvent.key`, and "Enter" must become "enter", not "-enter".
 const hyphenate = (s: string): string => s.replace(/\B([A-Z])/g, "-$1").toLowerCase();
 
-// ---- the inline style: one CSSOM declaration block per element -------------
-//
-// `el.style`, `:style`, `style.cssText` and the `style` attribute are four views
-// of ONE thing in a browser, and here they are too (`InlineStyleState`). The
-// host keeps the same list (`Tree::set_style`: an updated key stays in place, a
-// new one is appended), so the mirror's declaration order is the order the
-// engine cascades them in.
+// Inline style: one CSSOM declaration block per element, behind `el.style`, `:style`, `cssText`
+// and the `style` attribute. The host keeps the same ordered list, so the mirror's order is the
+// cascade order.
 
 /**
- * A `:style` key or a `CSSStyleDeclaration` attribute name, as CSS spells the
- * property: `backgroundColor` and `background-color` are `background-color`,
- * `webkitTransform` / `WebkitTransform` are `-webkit-transform`, `cssFloat` is
- * `float`. Custom properties are CASE-SENSITIVE and stay as written, so
- * `--rekaPopperWidth` is not renamed.
+ * A `:style` key or `CSSStyleDeclaration` name as CSS spells it (`backgroundColor` ->
+ * `background-color`, `WebkitTransform` -> `-webkit-transform`, `cssFloat` -> `float`). Custom
+ * properties are case-sensitive and stay as written.
  */
 function cssPropName(k: string): string {
   if (k.startsWith("--")) return k;
@@ -1634,12 +1295,7 @@ const IMPORTANT_RE = /\s*!\s*important\s*$/i;
 /** A CSS property name, or a custom property (`--*`). "0" is not one. */
 const PROP_NAME_RE = /^(?:--[^\s:;]+|-?[A-Za-z_\u0080-￿][\w\u0080-￿-]*)$/;
 
-/**
- * A declaration's value as stored: trimmed, as CSS Syntax trims it. An EMPTY
- * custom property is valid CSS (`--x: ;`, and `normalizeCssVarValue` turns ""
- * into " " to keep one), but "" is "remove" on the host channel, so an empty
- * custom property is kept as one space.
- */
+/** A declaration's value as stored, trimmed. An empty custom property is valid CSS but "" means remove on the host channel, so it is kept as one space. */
 const inlineValue = (v: string, custom: boolean): string => {
   const t = v.trim();
   return t === "" && custom ? " " : t;
@@ -1660,12 +1316,7 @@ function serializeInline(st: InlineStyleState | undefined): string {
   }
   return out;
 }
-/**
- * The serialization is from the declarations as written. A browser re-spells
- * each value (`#f00` → `rgb(255, 0, 0)`, `0` → `0px`), folds longhands into
- * shorthands and drops a value it rejects; this has no parser of its own on
- * the JS side, so it does none of that. Said once, at the first read.
- */
+/** Said once, at the first read: unlike a browser, serialization keeps values as written (no re-spelling, no shorthand folding, rejected values kept). */
 function noteInlineSerialization(): void {
   warnCompat(
     "inline-style-serialize",
@@ -1693,11 +1344,7 @@ function styleTouched(el: MirrorElement, st: InlineStyleState, before: string | 
   notifyMutation(el, "attributes", { attributeName: "style", oldValue: before });
 }
 
-/**
- * CSSOM "set a CSS declaration", then "update style attribute" when it changed.
- * An empty value removes the declaration (`setProperty`'s own rule). Answers
- * whether anything changed.
- */
+/** CSSOM "set a CSS declaration". An empty value removes it. Answers whether anything changed. */
 function setInlineDecl(el: MirrorElement, name: string, value: string, important: boolean): boolean {
   if (value === "") return removeInlineDecl(el, name) !== null;
   const st = inlineOf(el);
@@ -1723,13 +1370,9 @@ function removeInlineDecl(el: MirrorElement, name: string): string | null {
 }
 
 /**
- * CSS's "parse a list of declarations" for an inline body. A `;` ends a
- * declaration only outside a string, a comment and `()`/`[]`/`{}`, so
- * `background: url("data:image/png;base64,…")` is one declaration. A
- * declaration without a property name (`0: d`) or without a value is dropped,
- * as a browser drops it. A repeated property keeps its LAST occurrence, at that
- * position, except that a normal one does not override an earlier
- * `!important` one.
+ * CSS "parse a list of declarations": `;` ends a declaration only outside strings, comments and
+ * brackets. A repeated property keeps its last occurrence, except a normal one never overrides an
+ * earlier `!important`. Nameless or valueless declarations are dropped.
  */
 function parseInlineDecls(text: string): Map<string, InlineDecl> {
   const out = new Map<string, InlineDecl>();
@@ -1792,13 +1435,9 @@ function parseInlineDecls(text: string): Map<string, InlineDecl> {
 }
 
 /**
- * `style.cssText = text` (`asAttribute` false) or `setAttribute("style", text)`
- * (true, which also keeps `text` verbatim as the attribute's value): the block
- * is emptied and refilled from `text`. A declaration that stays with the same
- * value costs no host call, as long as the host's order (the surviving keys in
- * their old order, then the new ones) is the new block's order; otherwise the
- * block is re-sent from scratch, because the order decides a shorthand against
- * its longhand.
+ * `style.cssText = text`, or `setAttribute("style", text)` (`asAttribute`, which keeps `text`
+ * verbatim). Unchanged declarations cost no host call while the host's order stays the new order;
+ * otherwise the block is re-sent, because order decides a shorthand against its longhand.
  */
 function replaceInline(el: MirrorElement, text: string, asAttribute: boolean): void {
   const st = inlineOf(el);
@@ -1826,8 +1465,6 @@ function replaceInline(el: MirrorElement, text: string, asAttribute: boolean): v
   if (asAttribute) st.raw = String(text);
 }
 
-// ---- `:style`: runtime-dom's `patchStyle`, over the declaration block -------
-
 /** runtime-dom's `vShowOriginalDisplay` / `vShowHidden`: what `v-show` restores, and whether it is hiding. */
 const vShowOriginalDisplay = Symbol("_vod");
 const vShowHidden = Symbol("_vsh");
@@ -1836,17 +1473,9 @@ const DISPLAY_RE = /(^|;)\s*display\s*:/;
 const RD_IMPORTANT_RE = /\s*!important$/;
 
 /**
- * `:style`, as runtime-dom's `patchStyle` does it, line for line:
- *
- * - a STRING is the whole block (`style.cssText = next`), with the variables
- *   `useCssVars` set appended so a string style does not wipe them;
- * - a RECORD is diffed per property. A key the new record lacks (or holds
- *   `null`/`undefined` in) is removed, and that includes a key a previous
- *   STRING declared, which is how a record replacing a string clears it;
- * - `null`/`undefined` after a style removes the attribute and every
- *   declaration with it;
- * - under `v-show`, a `display` the style controls becomes the one it shows,
- *   and a hidden element stays `display: none`.
+ * runtime-dom's `patchStyle`: a string is the whole block (with `useCssVars` variables appended so
+ * they survive), a record is diffed per property (including keys a previous string declared), null
+ * clears, and under `v-show` a controlled `display` becomes the shown one.
  */
 function patchStyle(el: MirrorElement, prev: unknown, next: unknown): void {
   const isCssString = typeof next === "string";
@@ -1882,12 +1511,7 @@ function patchStyle(el: MirrorElement, prev: unknown, next: unknown): void {
   }
 }
 
-/**
- * runtime-dom's `setStyle`: one `:style` entry. A custom property goes
- * through `setProperty`; a value ending in `!important` is set with that
- * priority; anything else is the attribute setter. `null`/`undefined` (and
- * `""`) remove the property. An ARRAY is the vendor-fallback form.
- */
+/** runtime-dom's `setStyle`: one `:style` entry. A trailing `!important` sets that priority; null and "" remove; an array is the vendor-fallback form. */
 function setStyleValue(el: MirrorElement, name: string, val: unknown): void {
   if (Array.isArray(val)) {
     setStyleFallbacks(el, name, val);
@@ -1909,12 +1533,8 @@ function setStyleValue(el: MirrorElement, name: string, val: unknown): void {
 }
 
 /**
- * `{ display: ["-webkit-box", "-ms-flexbox", "flex"] }`. runtime-dom sets each
- * entry in turn: the browser keeps a value it accepts, ignores one it does
- * not, and an empty entry removes the property. So the outcome is the LAST
- * entry that is empty or accepted, and with none of those the declaration is
- * left as it was. "Accepted" is the engine's answer (`__vn_style_accepts`),
- * because only the engine knows what it applies.
+ * `{ display: ["-webkit-box", "flex"] }`: the outcome is the last entry that is empty or accepted
+ * by the engine (`__vn_style_accepts`); with none, the declaration is left as it was.
  */
 function setStyleFallbacks(el: MirrorElement, name: string, list: unknown[]): void {
   const flat: unknown[] = list.flat(Infinity);
@@ -1964,17 +1584,9 @@ function clearInline(el: MirrorElement): void {
   notifyMutation(el, "attributes", { attributeName: "style", oldValue: before });
 }
 
-// -- Reflected IDL attributes (m26 client sweep #10, #32)
-//
-// A browser element carries most of its content attributes twice: as
-// attributes, and as typed DOM properties that reflect them (`el.hidden`,
-// `input.placeholder`, `el.tabIndex`). This table is the subset vue-native
-// reflects: which property, on which tags (`null`: every HTML element), as
-// which attribute, and of which IDL type. It drives two things:
-// `attributeOf` (what runtime-dom's `patchProp` leaves in the attribute when it
-// assigns the property) and the accessors on the element prototype
-// (`defineReflected`), which used to be missing: `input.placeholder` read
-// `undefined` while `getAttribute("placeholder")` worked.
+// Reflected IDL attributes: the typed DOM properties (`el.hidden`, `input.placeholder`,
+// `el.tabIndex`) vue-native reflects, with their tags (`null`: every HTML element), attribute and
+// IDL type. Drives `attributeOf` and the element-prototype accessors (`defineReflected`).
 type ReflectKind = "bool" | "string" | "long";
 interface Reflected {
   attr: string;
@@ -2028,48 +1640,31 @@ function toLong(v: unknown): number {
   return Number.isFinite(n) ? Math.trunc(n) | 0 : 0;
 }
 
-/**
- * A listener key, by `@vue/shared`'s `isOn`: `on` and then anything but a
- * lowercase letter (`onClick`, `on:loopComplete`). `once`, `online` and
- * `only` are attributes, as in runtime-dom.
- */
+/** `@vue/shared`'s `isOn`: `on` then anything but a lowercase letter. `once`, `online` are attributes. */
 function isOn(key: string): boolean {
   const c = key.charCodeAt(2);
   return key.charCodeAt(0) === 111 && key.charCodeAt(1) === 110 && (c > 122 || c < 97);
 }
 
-/**
- * The renderer's single prop hook — so `prev`/`next` really are `unknown`: a
- * template can bind any value at all. `namespace` is what Vue passes for an
- * element inside `<svg>` / `<math>`, where every key is an attribute.
- * (`setAttribute` / `removeAttribute` write the attribute itself: see
- * `writeAttribute`.)
- */
+/** The renderer's prop hook; `prev`/`next` are `unknown` since a template can bind anything. `namespace` is set inside `<svg>`/`<math>`, where every key is an attribute. */
 function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown, namespace?: unknown): void {
   if (key === "srcObject" && el.tag === "video") {
     el.srcObject = next;
     return;
   }
   if (key === "style") {
-    // A string is `cssText`, a record is diffed, `null` clears: runtime-dom's
-    // `patchStyle`. A null/undefined VALUE in a record clears its property
-    // (`:style="{ transform: maybeUndefined }"` is what @floating-ui/vue's
-    // `floatingStyles` produces before its first measurement).
+    // A null/undefined value in a record clears its property (@floating-ui/vue's
+    // `floatingStyles` is undefined before its first measurement).
     patchStyle(el, prev, next);
   } else if (key === "class") {
-    // runtime-dom's `patchClass`: Vue's class, with the transition classes
-    // merged on top; `null` removes the attribute.
+    // Vue's class with the transition classes merged on top; `null` removes the attribute.
     if (prev !== next) {
       el._class = next == null ? "" : String(next);
       writeClass(el, next == null);
     }
   } else if (isOn(key)) {
-    // runtime-dom's `parseName`, same order: strip the option suffixes, then
-    // read the name.
-    //   onClick / onClickCapture / onClickOnce / onClickCaptureOnce
-    //   on:loopComplete — the case-PRESERVING spelling compiler-dom emits for
-    //                     a custom element's camelCase event (`@loopComplete`
-    //                     on <lottie>). Everything else is hyphenated.
+    // runtime-dom's `parseName`: strip the option suffixes, then read the name. `on:loopComplete`
+    // is the case-preserving spelling compiler-dom emits for a custom element's camelCase event.
     let rest = key.slice(2);
     let capture = false;
     let once = false;
@@ -2082,31 +1677,23 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown,
         capture = true;
         rest = rest.slice(0, -7);
       } else if (rest.endsWith("Passive")) {
-        // `@wheel.passive`: before this, "wheel-passive", an event nothing
-        // fires, so the handler never ran.
         passive = true;
         rest = rest.slice(0, -7);
       } else break;
     }
     const namespaced = rest.startsWith(":");
-    // Hyphenate, don't lowercase — `\B` keeps a leading capital bare, so
-    // "Click" -> "click" and "LoopComplete" -> "loop-complete", exactly as in a
-    // browser. `canonicalEvent` folds that back onto the camelCase name the
-    // host actually emits.
+    // `\B` keeps a leading capital bare ("Click" -> "click", "LoopComplete" -> "loop-complete");
+    // `canonicalEvent` folds that back onto the host's camelCase name.
     const name = namespaced ? rest.slice(1) : canonicalEvent(hyphenate(rest));
     const code = hostCode(name);
     if (!code && RUNTIME_FIRED_EVENTS.has(name)) {
       // `submit` / `reset`: fired by the runtime's form submission.
     } else if (!code && JS_SOURCED_EVENTS.has(name)) {
-      // `change` / `cancel`: the runtime fires them itself on a file input
-      // (and they bubble to whatever wraps one), so the handler is kept.
+      // `change` / `cancel`: the runtime fires them on a file input (they bubble), so the handler is kept.
       if (next) adviseJsSourced(el, name, `@${name}`);
     } else if (!code) {
-      // Compat-first: a listener the host will never deliver must not vanish in
-      // silence. `onUpdate:modelValue` & friends are excluded — a `:` inside
-      // (rather than in front of) the name marks a component-emit prop that
-      // leaked onto an element, which a browser also binds to an event that
-      // never fires, also silently.
+      // A listener the host will never deliver must not vanish silently. A `:` inside the name
+      // marks a component-emit prop that leaked onto an element; that stays silent.
       if (namespaced || !rest.includes(":")) {
         warnCompat(
           `event:${name}`,
@@ -2122,8 +1709,7 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown,
       handlers.set(el, m);
     }
     let buckets = ensureBuckets(m, name);
-    // runtime-dom hands `{ passive: true }` to `addEventListener`, so a prop
-    // with no `.passive` gets the browser's passive default as well.
+    // A prop without `.passive` still gets the browser's passive default.
     const pass = passiveOf(passive ? { passive } : undefined, el, name);
     if (capture) {
       buckets.capture = (next as EventHandlerOrList) || null;
@@ -2138,23 +1724,21 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown,
   } else if (key === "key" || key === "ref") {
     // stripped by the vnode layer; never reaches here — but be safe
   } else if (key === "textContent" && !foreignNamespace(namespace)) {
-    // `v-text` compiles to this DOM property; runtime-dom assigns it, and
-    // ignores a null.
+    // `v-text` compiles to this property; a null is ignored.
     if (next != null) (el as { textContent: unknown }).textContent = next;
   } else if (key === "value" && isRangeInput(el) && !foreignNamespace(namespace)) {
     writeControlValue(el, next);
   } else if (key === "value" && (isSelectEl(el) || isOptionEl(el)) && !foreignNamespace(namespace)) {
     patchSelectValue(el, next);
   } else if (key === "selected" && isOptionEl(el) && !foreignNamespace(namespace)) {
-    // runtime-dom assigns the PROPERTY: the option's selectedness, and its
-    // dirtiness (the attribute is written as well, as it always was here).
+    // runtime-dom assigns the property: the option's selectedness and dirtiness.
     patchAttribute(el, ...attributeOf(el, key, next, namespace));
     setOptionSelected(el, next === "" || !!next);
   } else {
     // runtime-dom keeps these two as properties for v-model's checkbox.
     if (key === "true-value") el._trueValue = next;
     else if (key === "false-value") el._falseValue = next;
-    // `:checked` assigns the PROPERTY (and, below, the boolean attribute).
+    // `:checked` assigns the property (and, below, the boolean attribute).
     else if (key === "checked" && el.tag === "input" && !foreignNamespace(namespace)) el._checked = next === "" || !!next;
     patchAttribute(el, ...attributeOf(el, key, next, namespace));
   }
@@ -2164,24 +1748,12 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown,
 const foreignNamespace = (ns: unknown): boolean => ns === "svg" || ns === "mathml";
 
 /**
- * runtime-dom's `patchProp` for a key that is not style, class or a listener,
- * reduced to the one thing that reaches this host: the attribute it leaves.
- * Where the element has a DOM property of that name (`shouldSetAsProp`), a
- * browser assigns the PROPERTY, and the attribute is what the property
- * reflects, which is not always the value written:
- *
- * - a boolean property (`hidden`, `disabled`, `open`…) is present as `""` or
- *   absent, so `:hidden="false"` REMOVES the attribute. Writing the string
- *   "false" made it present: Tailwind's `[hidden]` rule then hid every reka
- *   `TabsContent`, and `[disabled]` matched enabled controls (m26 #10);
- * - so is `checked` / `selected`, which runtime-dom also writes as a boolean
- *   attribute, and the attribute-only booleans of `isSpecialBooleanAttr`
- *   (`readonly`, `novalidate`…), on any element;
- * - a camelCase property names a different attribute (`tabIndex` → tabindex,
- *   `htmlFor` → for), and a `long` one is written as an integer.
- *
- * Everything else is the attribute verbatim, which is also what a string
- * property reflects. Returns `[attribute, value]`; `null` removes.
+ * runtime-dom's `patchProp` for a non-style/class/listener key, reduced to the attribute it leaves.
+ * Boolean properties (`hidden`, `disabled`, `open`, `checked`, `selected`, `readonly`...) are
+ * present as `""` or absent, so `:hidden="false"` removes the attribute (writing "false" would make
+ * `[hidden]` match). A camelCase property names a different attribute (`tabIndex` -> tabindex) and
+ * a `long` is written as an integer. Everything else is verbatim. Returns `[attribute, value]`;
+ * `null` removes.
  */
 function attributeOf(el: MirrorElement, key: string, next: unknown, namespace: unknown): [string, unknown] {
   const on = (): string | null => (next === "" || !!next ? "" : null); // runtime-dom's includeBooleanAttr
@@ -2198,16 +1770,9 @@ function attributeOf(el: MirrorElement, key: string, next: unknown, namespace: u
 /** runtime-dom's `isSpecialBooleanAttr`: boolean attributes no DOM property of the same name reflects. */
 const SPECIAL_BOOLEAN_ATTRS = new Set(["itemscope", "allowfullscreen", "formnovalidate", "ismap", "nomodule", "novalidate", "readonly"]);
 
-/**
- * Writes one attribute, verbatim: the host's string channel (its native
- * widgets read what they understand; `null` clears), the mirror's `attrs`,
- * and the bookkeeping some attributes carry. `setAttribute` lands here, so
- * `setAttribute("hidden", "false")` keeps the attribute, as it does in a
- * browser.
- */
+/** Writes one attribute verbatim: the host's string channel, the mirror's `attrs`, and the bookkeeping some attributes carry. `setAttribute` lands here. */
 function patchAttribute(el: MirrorElement, key: string, next: unknown): void {
-  // DOM-compat attribute channel: standard-ish props flow to the host as
-  // strings (native widgets read what they understand); null clears.
+  // Props reach the host as strings; null clears.
   if (next == null) __vn_set_prop(el.__vnId, I(key), undefined);
   else if (typeof next === "string" || typeof next === "number" || typeof next === "boolean")
     __vn_set_prop(el.__vnId, I(key), String(next));
@@ -2217,8 +1782,7 @@ function patchAttribute(el: MirrorElement, key: string, next: unknown): void {
       `prop "${key}" with a non-primitive value is not supported by the native host yet; ` +
         `it was dropped — pass a string/number/boolean or handle it in the component`,
     );
-  // …and stays readable from JS, which is what `getAttribute`/`dataset`/the
-  // Collection ordering in reka-ui need.
+  // Stays readable from JS for `getAttribute`/`dataset`/reka-ui's Collection ordering.
   if (el.attrs) {
     const before = el.attrs[key];
     if (next == null) delete el.attrs[key];
@@ -2231,14 +1795,12 @@ function patchAttribute(el: MirrorElement, key: string, next: unknown): void {
     dndSeen = true;
     dndRearm();
   }
-  // The host has the value already (the generic channel, above); only the
-  // mirror's storage follows, so the accessor does not push it twice.
+  // The host has the value already; only the mirror's storage follows.
   if (key === "value" && !(isRangeInput(el) && el._rangeDirty)) el._value = next == null ? "" : String(next);
   if (isRangeInput(el) && ["value", "type", "min", "max", "step"].includes(key)) syncRangeValue(el);
   if (isColorInput(el) && (key === "value" || key === "type")) writeControlValue(el, el._value);
-  // An option's `selected` attribute is its default selectedness: it selects
-  // (or deselects) an option nothing has selected by hand yet (HTML §4.10.10).
-  // A select's `multiple` and `size` change what its selection may be.
+  // An option's `selected` attribute is its default selectedness; a select's `multiple`/`size`
+  // change what its selection may be.
   if (key === "selected" && isOptionEl(el) && !el._dirty) {
     el._selected = next != null;
     selectednessChanged(el);
@@ -2247,23 +1809,17 @@ function patchAttribute(el: MirrorElement, key: string, next: unknown): void {
     resetSelect(el);
     adviseListBox(el);
   }
-  // (`checked` is the other way round: the attribute is `defaultChecked`, and
-  // the `checked` getter follows it until something assigns the property.)
-  // An `<a href>` has an ACTIVATION BEHAVIOUR whether or not anything
-  // listens: following the link is what a click on it means. The host only
-  // delivers a click to a node whose click bit is on, so the bit follows the
-  // href (`syncListenerFlag` ORs it in). docs/SHELL.md §1.
+  // An `<a href>` is activatable whether or not anything listens, and the host only delivers a
+  // click to a node whose click bit is on, so the bit follows the href.
   if (key === "href" && el.tag === "a") syncListenerFlag(el, "click");
-  // …and so does `<input type=file>`'s, which also takes Enter and Space.
+  // Likewise `<input type=file>`, which also takes Enter and Space.
   if (key === "type" && el.tag === "input") syncFileInput(el);
-  // …and a submit button's and a text field's (forms, below): the type
-  // decides whether a click submits and whether Enter does.
+  // Likewise a submit button and a text field: the type decides whether click or Enter submits.
   if (key === "type" && (el.tag === "input" || el.tag === "button")) {
     syncListenerFlag(el, "click");
     if (el.tag === "input") syncListenerFlag(el, "keydown");
   }
-  // F-4 (docs/RUNTIME.md §5.2): the runtime honours a disabled fieldset;
-  // the host's native widgets read only their own `disabled`.
+  // The runtime honours a disabled fieldset; the host's native widgets read only their own `disabled`.
   if (key === "disabled" && el.tag === "fieldset" && next != null && next !== false && next !== "false") {
     warnCompat(
       "fieldset:disabled",
@@ -2284,16 +1840,10 @@ function writeAttribute(el: MirrorElement, key: string, value: string | null): v
   else patchAttribute(el, key, value);
 }
 
-/// The element's class attribute = what Vue assigned + whatever `<Transition>`
-/// has layered on top. runtime-dom does exactly this (its `patchClass` merges
-/// `el._vtc`); without it a re-render during a transition drops the phase class
-/// and the animation stops halfway.
-///
-/// The merged value is also the ATTRIBUTE (m26 client sweep #19): it is what
-/// `getAttribute("class")`, `className` and `classList` read, and the host
-/// keeps it for `[class*=…]` selectors. A change is an `attributes` mutation.
-/// `remove`: the attribute goes away when nothing is left (`:class="null"`,
-/// `removeAttribute("class")`); otherwise an empty class stays present.
+/// The class attribute is what Vue assigned plus whatever `<Transition>` layered on top (`el._vtc`,
+/// merged as runtime-dom does), so a re-render mid-transition keeps the phase class. The merged
+/// value is also what `getAttribute`, `className` and `classList` read. `remove`: the attribute
+/// goes away when nothing is left; otherwise an empty class stays present.
 function writeClass(el: MirrorElement, remove = false): void {
   const base = el._class || "";
   const extra = el._vtc;
@@ -2307,11 +1857,8 @@ function writeClass(el: MirrorElement, remove = false): void {
 }
 
 /**
- * The class attribute becomes `text`, as `el.className = text`,
- * `setAttribute("class", text)` and `classList` make it in a browser. A
- * transition class `text` still names stays a transition class (so a
- * read-modify-write does not bake `v-enter-active` in for good); one it drops
- * is dropped, as removing it from a browser's attribute drops it.
+ * The class attribute becomes `text`, as `className = text` does. A transition class `text` still
+ * names stays one (a read-modify-write must not bake `v-enter-active` in); one it drops is dropped.
  */
 function setClassText(el: MirrorElement, text: string): void {
   const vtc = el._vtc;
@@ -2344,10 +1891,9 @@ function bucketsAlive(b: Buckets): boolean {
   return !!(b.bubble || b.capture || b.extraB.length || b.extraC.length);
 }
 
-// ---- HTML drag and drop, within the app: state (the gesture is below, by the
-// dispatcher). It rides the APP ROOT's bits: a press once anything is
-// `draggable="true"`, then the moves, the release and Escape while a press on
-// one is pending or a drag is under way.
+// HTML drag and drop within the app: state here, the gesture by the dispatcher. Rides the app
+// root's listener bits: a press once anything is `draggable="true"`, then moves/release/Escape
+// while a press is pending or a drag is under way.
 /** Has anything been made `draggable="true"`? */
 let dndSeen = false;
 /** The press on a draggable element, then the drag it became (`dndDispatch`). */
@@ -2367,32 +1913,24 @@ function dndRearm(): void {
   for (const name of ["mousedown", "selectstart", "mousemove", "mouseup", "keydown"]) syncListenerFlag(appRoot, name);
 }
 
-/// Several event NAMES can share one host code (`pointerdown` rides
-/// `mousedown`), so the flag is the OR over every name that maps to it —
-/// switching a `pointerdown` listener off must not silence a `mousedown` one.
-/// A custom event name has no host code at all and needs no flag: it is
-/// dispatched from JS.
+/// Several event names can share one host code (`pointerdown` rides `mousedown`), so the flag is
+/// the OR over every name that maps to it. A custom event name has no host code and needs no flag.
 function syncListenerFlag(self: MirrorNode, name: string): void {
   const code = hostCode(name);
   if (!code) return;
   const id = self.__vnId;
   const m = handlers.get(self);
   let on = NAMES_BY_CODE[code].some((n) => m?.[n] && bucketsAlive(m[n]!));
-  // Document- and window-level listeners ride the APP ROOT's bit: the host
-  // delivers events to nodes, and the root is the node that stands in for the
-  // document. See `globalHandlers` below.
+  // Document- and window-level listeners ride the app root's bit (see `globalHandlers`).
   if (!on && appRoot && id === appRoot.__vnId) {
     on = NAMES_BY_CODE[code].some((n) =>
       [...globalHandlers.values()].some((g) => g[n] && bucketsAlive(g[n]!)),
     );
     if (!on && dndWants(code)) on = true;
   }
-  // …and a link listens for its own click (its activation behaviour), so
-  // removing the last `@click` from an `<a href>` must not switch it off. So
-  // do a `<label>` and file/color inputs, which also hear Enter (keydown)
-  // and Space (keyup) — the keys that click it.
-  // A submit or reset button submits or resets its form, and a text-like
-  // `<input>` submits its form on Enter (implicit submission).
+  // A link, `<label>`, file/color input and submit/reset button listen for their own click
+  // (activation behaviour); file/color inputs also hear Enter/Space, and a text-like `<input>`
+  // submits on Enter (implicit submission).
   if (!on && code === EV_CODES.click) {
     const n = self;
     if (n && (isLabel(n) || isFileInput(n) || isColorInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n))) on = true;
@@ -2401,23 +1939,14 @@ function syncListenerFlag(self: MirrorNode, name: string): void {
     const n = self;
     if (isFileInput(n) || isColorInput(n) || (code === EV_CODES.keydown && blocksImplicitSubmission(n))) on = true;
   }
-  // …and a text control hears its own `input`, which is how its `value` keeps
-  // up with what the user types (the dispatcher writes it before propagating).
+  // A text control hears its own `input`: the dispatcher writes `value` before propagating.
   if (!on && code === EV_CODES.input) {
     const n = self;
     if (n && n.kind === 1 && (n.tag === "input" || n.tag === "textarea")) on = true;
   }
-  // …and only tell the host when the ANSWER CHANGED.
-  //
-  // `set_listener` is idempotent — it sets or clears one bit of a u64 — so a
-  // write of the value already there is a boundary crossing that buys nothing.
-  // It was the single most repeated call in the whole protocol: every re-render
-  // that re-patches an `on*` prop (a fresh inline arrow, or any full-props
-  // diff) called it once per listening element, so a frame that changed ONE
-  // TEXT NODE in a hundred-row list crossed the boundary a hundred times to
-  // re-announce a `click` bit that was already set. See
-  // `scripts/host-calls.ts`, which is how that was found.
-  // (Only a live mirror carries the cache; a stand-in the tests pass does not.)
+  // Only tell the host when the answer changed: `set_listener` is idempotent, and every re-patch of
+  // an `on*` prop would otherwise cross the boundary once per listening element.
+  // (Only a live mirror carries the cache; test stand-ins do not.)
   const node = isMirrorNode(self) ? self : null;
   if (node) {
     const known = node._listenerOn;
@@ -2425,8 +1954,7 @@ function syncListenerFlag(self: MirrorNode, name: string): void {
       if (known?.has(code)) return;
       (node._listenerOn ??= new Set()).add(code);
     } else {
-      // Nothing recorded means the bit was never set, and the host starts every
-      // node at zero — so there is nothing to clear.
+      // Nothing recorded means never set (the host starts every node at zero).
       if (!known?.has(code)) return;
       known.delete(code);
     }
@@ -2434,21 +1962,11 @@ function syncListenerFlag(self: MirrorNode, name: string): void {
   __vn_set_listener(id, code, on);
 }
 
-// ---- document / window level listeners ------------------------------------
-// reka-ui's DismissableLayer (outside click, Escape), its focus guards and
-// every "click outside to close" implementation in the ecosystem bind on
-// `document` or `window`, neither of which is a node in the mirror tree. They
-// get their own registry, joined onto the SAME propagation walk one level above
-// the app root — which is exactly where a browser's event path puts them.
-//
-// Without this, a Dialog opens and never closes, and a menu stays open forever.
+// Document / window level listeners. `document` and `window` are not mirror nodes, so they get
+// their own registry, joined onto the same propagation walk one level above the app root (where a
+// browser's event path puts them). Without it, outside-click and Escape dismissal never fire.
 const globalHandlers = new Map<object, HandlerMap>(); // target object -> { [event name]: buckets }
-/**
- * Is this one of OUR nodes? The propagation walk carries mirror nodes,
- * `document` and `window` in the same array, and this is what tells them apart
- * — so it is a type guard rather than a boolean, and the two registries that
- * follow it are looked up without a cast.
- */
+/** Is this one of OUR nodes? A type guard: the propagation walk mixes mirror nodes, `document` and `window`. */
 const isMirrorNode = (n: unknown): n is MirrorNode =>
   !!n &&
   typeof (n as MirrorNode).__vnId === "number" &&
@@ -2461,13 +1979,9 @@ type ListenerOptionsObject = { capture?: boolean; once?: boolean; passive?: bool
 const PASSIVE_BY_DEFAULT = new Set(["wheel", "mousewheel", "touchstart", "touchmove"]);
 
 /**
- * Is this listener passive? A passive listener's `preventDefault()` does
- * nothing (DOM §2.10). An explicit `passive` decides. Without one, a `wheel`,
- * `mousewheel`, `touchstart` or `touchmove` listener on `window`, `document`
- * or `<body>` (the root here) is passive. That is the DOM's "default passive
- * value", which every engine applies, so that a page-level listener cannot
- * hold up scrolling. Before the host honoured a cancelled `wheel`
- * (docs/RUNTIME.md §5.8), nothing could tell the difference.
+ * Is this listener passive? An explicit `passive` decides. Otherwise `wheel`, `mousewheel`,
+ * `touchstart` and `touchmove` listeners on `window`, `document` or `<body>` (the root here) are
+ * passive, as the DOM's "default passive value" says.
  */
 function passiveOf(opts: ListenerOptions | undefined, target: object, name: string): boolean {
   if (opts && typeof opts === "object" && typeof (opts as ListenerOptionsObject).passive === "boolean")
@@ -2477,18 +1991,13 @@ function passiveOf(opts: ListenerOptions | undefined, target: object, name: stri
 }
 
 /** Host event names a window/document listener must hear from the engine too. */
-// `message`: the host delivers an `<iframe>` document's, the engine fires its
-// own (`window.postMessage`, and whatever dispatches one at the target).
+// `message`: the host delivers an `<iframe>` document's; the engine fires its own (`postMessage`).
 const ALSO_NATIVE = new Set<string>(["load", "error", "message"]);
 
 /**
- * Does a `window` / `document` listener for this name live only in the
- * runtime's registry (`addGlobalListener`), with no copy on the engine's own
- * EventTarget? Then a `dispatchEvent` at that target has to walk the registry
- * too, or the listener never hears it. The windowing prelude's `focus` and
- * `blur` are dispatched exactly so, at `window`: they used to go to the
- * engine's EventTarget, where no `addEventListener("focus")` had ever landed,
- * and a page that paused on `blur` never heard either.
+ * Does a `window` / `document` listener for this name live only in the runtime's registry, with
+ * no copy on the engine's EventTarget? Then `dispatchEvent` at that target must walk the registry
+ * too (the windowing prelude's `focus`/`blur` are dispatched so).
  */
 function keptByRuntime(name: string): boolean {
   if (ALSO_NATIVE.has(name)) return false;
@@ -2503,8 +2012,7 @@ function addGlobalListener(
 ): boolean {
   if (!fn) return false;
   const name = canonicalEvent(rawName);
-  // A file input's `change`/`cancel` bubble to the document like the host's
-  // events do, so a delegated listener takes the same walk.
+  // A file input's `change`/`cancel` bubble to the document, so a delegated listener takes the same walk.
   if (!hostCode(name) && !JS_SOURCED_EVENTS.has(name) && !RUNTIME_FIRED_EVENTS.has(name)) return false;
   const signal = !ALSO_NATIVE.has(name) && opts && typeof opts === "object" ? opts.signal : undefined;
   if (signal?.aborted) return true;
@@ -2530,10 +2038,8 @@ function addGlobalListener(
     signal.addEventListener("abort", abort, { once: true });
   }
   if (appRoot) syncListenerFlag(appRoot, name);
-  // `load` and `error` are ALSO the window's own events (the page's load, an
-  // uncaught error), which the engine would fire at its EventTarget: the
-  // listener goes to both, and hears an element's (capture phase) and the
-  // window's.
+  // `load` and `error` are also the window's own events, so the listener goes to both the registry
+  // and the engine's EventTarget.
   return !ALSO_NATIVE.has(name);
 }
 
@@ -2564,9 +2070,6 @@ function removeGlobalListener(
   return !ALSO_NATIVE.has(name);
 }
 
-/// Installs the interception on one EventTarget-ish global. Events the host CAN
-/// deliver are taken over; everything else still reaches the engine's own
-/// EventTarget, so redjs' web APIs keep working.
 /** What the interception needs off `document` / `globalThis`: two methods, maybe. */
 type GlobalTargetLike = {
   addEventListener?: (name: string, fn: EventHandler, opts?: ListenerOptions) => void;
@@ -2589,11 +2092,9 @@ function globalEventBridge(): { get(target: object): GlobalEventSlot | undefined
 }
 
 /**
- * What a `window` / `document` listener the HOST does not source was handed
- * to: the target's own listener and dispatch methods as the FIRST runtime
- * found them. Kept on the global so that a runtime evaluated again by
- * `location.reload()` wraps the same function, not the previous runtime's
- * wrapper (see `realm` below).
+ * The target's own listener and dispatch methods as the FIRST runtime found them, kept on the
+ * global so a runtime re-evaluated by `location.reload()` wraps the same function, not the
+ * previous wrapper.
  */
 function nativeListenFns(target: object): {
   add: GlobalTargetLike["addEventListener"];
@@ -2656,8 +2157,7 @@ function interceptGlobalTarget(target: object | undefined): void {
     interceptedGlobals.push({ slot, delegate });
     return;
   }
-  // Older/JIT-only hosts have no bootstrap bridge. Keep their existing path;
-  // native AOT never redefines or weakens its sealed public methods.
+  // Older hosts have no bootstrap bridge; native AOT never redefines its sealed public methods.
   try {
     for (const [name, value] of [["dispatchEvent", delegate.dispatch], ["addEventListener", delegate.add], ["removeEventListener", delegate.remove]] as const) {
       Object.defineProperty(target, name, { value, configurable: true, writable: true });
@@ -2671,31 +2171,20 @@ function interceptGlobalTarget(target: object | undefined): void {
   }
 }
 
-// EventTarget-shaped registration for reused browser components/directives
-// (vModelText uses this path). Merged into the same propagation walk.
-/// Does this name look like an event the PLATFORM sources? Those are the ones
-/// worth an advisory when the host cannot deliver them — a listener for one will
-/// simply never fire. A name with a dot or a capital in it is a component's own
-/// custom event (`"select.select"`, `"focusScope.autoFocusOnMount"` — reka-ui
-/// dispatches a dozen of them), and those work fine: they are dispatched from JS
-/// through [`dispatchEvent`] and never touch the host at all.
+/// Does this name look like an event the platform sources? Only those get an advisory when the host
+/// cannot deliver them. A name with a dot or a capital (`"select.select"`) is a component's own
+/// custom event, dispatched from JS and never touching the host.
 const looksNative = (name: string): boolean => /^[a-z]+$/.test(name);
 
 /**
- * Platform events the RUNTIME fires, which no host code exists for: a file
- * input's `change` and `cancel` (desktop-apis-design §4.1). Their listeners
- * are kept; the "never fires" advisory is left for elements that neither are
- * nor wrap a file input (`adviseJsSourced`).
+ * Platform events the runtime fires itself, with no host code: a file input's `change`/`cancel`,
+ * pointer capture. Their listeners are kept; the "never fires" advisory is `adviseJsSourced`'s.
  */
 const JS_SOURCED_EVENTS = new Set<string>(["change", "cancel", "gotpointercapture", "lostpointercapture"]);
 
-/// Events a BROWSER only ever fires on `window` (or `document`), never on an
-/// element. `el.addEventListener("resize", …)` is dead code in Chrome too, so
-/// warning about it here would report a divergence that does not exist — and a
-/// component that hedges by attaching to both targets would cost a log line on
-/// every app. On `window` these do work: `interceptGlobalTarget` hands anything
-/// the host does not source to redjs's own EventTarget, which is where the
-/// trusted `resize` from `redjs_dom_resize` is delivered.
+/// Events a browser fires only on `window`/`document`, never on an element: no advisory for an
+/// element listener, since it is dead code in Chrome too. On `window` they reach the engine's own
+/// EventTarget (see `interceptGlobalTarget`).
 const WINDOW_ONLY_EVENTS = new Set<string>([
   "resize", "load", "unload", "beforeunload", "pageshow", "pagehide",
   "hashchange", "popstate", "online", "offline", "storage", "message",
@@ -2763,30 +2252,18 @@ function removeExtraListener(
   syncListenerFlag(node, name);
 }
 
-// ---- the DOM surface on mirror nodes (compat roadmap G2) ------------------
-// Reused browser components call element methods unconditionally, and redjs'
-// HTMLElement.prototype carries none — so the absence is a TypeError rather
-// than a wrong answer. Everything below either answers TRUTHFULLY (from the
-// mirror tree, or from the host's real matcher / real layout bounds), or
-// answers a degraded constant AND leaves exactly one advisory.
-//
-// The two questions that cannot be answered in JS go to the host:
-//   __vn_query          selector matching, through the CASCADE'S OWN matcher —
-//                       a second JS-side matcher would be a silent divergence
-//   __vn_bounds         the rectangle gpui laid the node out at last frame
+// The DOM surface on mirror nodes. Reused browser components call element methods unconditionally,
+// so a missing one is a TypeError. Members answer truthfully (mirror tree, host matcher, host
+// layout bounds) or answer a degraded constant with one advisory. Host questions:
+//   __vn_query          selector matching, through the cascade's own matcher
+//   __vn_bounds         the rectangle laid out last frame
 //   __vn_computed_style the folded computed values + custom properties
 
 let appRoot: MirrorElement | null = null; // created on mount or a pre-mount body insertion
-// Replays the pre-mount `documentElement` writes onto the real root. Installed by
-// the document surface below; called when the native root is first needed.
+// Replays pre-mount `documentElement` writes onto the real root; installed by the document surface below.
 let flushDocumentElement: ((root: MirrorElement) => void) | null = null;
 
-/**
- * Any function installed on a mirror prototype. The receiver is annotated at
- * each call site (`function (this: MirrorElement) …`), which is what makes
- * `noImplicitThis` catch a member installed on the wrong prototype — the whole
- * reason `NODE_MEMBERS` and the element-only default are separate lists.
- */
+/** Any function installed on a mirror prototype; the receiver is annotated per call site so `noImplicitThis` catches a member on the wrong prototype. */
 type DomMember = (...args: never[]) => unknown;
 
 function defineDom(name: string, value: DomMember, protos: object[] = [ElementProto]): void {
@@ -2811,10 +2288,8 @@ type TreeWalkerFilter =
 /// The members every Node has, elements and text/comment mirrors alike.
 const NODE_MEMBERS: object[] = [ElementProto, TextProto];
 
-/// `__vn_query`, decoded. The host answers `"!<advisory>"` for a selector the
-/// engine cannot run (`:has()`, `::before`, `:visited`) — the same text a rule
-/// using it would print — so an unanswerable query explains itself instead of
-/// quietly reporting "no match".
+/// `__vn_query`, decoded. The host answers `"!<advisory>"` for a selector the engine cannot run
+/// (`:has()`, `::before`), so an unanswerable query explains itself instead of reporting "no match".
 function hostQuery(selector: string, rootId: VnNodeId, mode: VnQueryMode): MirrorElement[] {
   if (rootId === 0) return [];
   const raw = __vn_query(String(selector), rootId, mode);
@@ -2829,9 +2304,7 @@ function hostQuery(selector: string, rootId: VnNodeId, mode: VnQueryMode): Mirro
   const out: MirrorElement[] = [];
   for (const part of raw.split(",")) {
     const node = nodeById(Number(part));
-    // The cascade's matcher only ever answers with ELEMENTS — text and comment
-    // nodes are not selectable — so the narrowing is the host's guarantee, not
-    // an assumption of ours.
+    // The matcher only answers with elements (text and comment nodes are not selectable).
     if (node) out.push(node as MirrorElement);
   }
   return out;
@@ -2846,16 +2319,9 @@ const ZERO_RECT = {
   x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0,
 };
 
-/// The viewport, as `document.documentElement` reports it.
-///
-/// The coordinate space every rect here lives in is the WINDOW'S CLIENT AREA
-/// (that is what gpui hands each element during prepaint), and the app root is
-/// inset within it by whatever chrome the host draws. So the viewport is the
-/// rectangle from the client-area origin to the far corner of the app root —
-/// NOT the root's own box. Reporting the root's size instead would leave
-/// @floating-ui clipping against `(0,0,rootW,rootH)` while measuring elements in
-/// a space offset by the chrome, and every popover would be pushed against the
-/// left edge by the `shift` middleware.
+/// The viewport as `document.documentElement` reports it: from the client-area origin (the space
+/// all rects live in) to the far corner of the app root, which is inset by host chrome. The root's
+/// own size would make @floating-ui clip against an offset space and shift every popover left.
 function viewportRect(): MirrorRect {
   if (!appRoot) return { ...ZERO_RECT };
   const r = rectOf(appRoot);
@@ -2864,13 +2330,9 @@ function viewportRect(): MirrorRect {
   return { x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height };
 }
 /**
- * `__vn_bounds`, with `"stale"` folded into `""` (not painted). The host says
- * `"stale"` when the node has no rectangle yet and the layout it is owed could
- * not be forced: a gpui input listener is on the stack, and a draw there would
- * swap the frame whose listeners are running (crates/vn-tree/src/dom.rs). A
- * browser would lay out and answer the real size, so a script-facing read
- * (`kind`) leaves an advisory, once per call site and kind: a component that
- * measures in a click handler would otherwise print one per row.
+ * `__vn_bounds`, with `"stale"` folded into `""` (not painted). The host says `"stale"` when it
+ * cannot force layout (an input listener is on the stack, and a draw there would swap the running
+ * frame). A script-facing read (`kind`) leaves one advisory per call site and kind.
  */
 function boundsOf(node: MirrorNode, kind?: string): VnRect {
   if (!node.__vnId) return "";
@@ -2892,31 +2354,21 @@ function boundsOf(node: MirrorNode, kind?: string): VnRect {
   }
   return "";
 }
-/**
- * The node's LAYOUT box: where it was laid out, before any CSS `transform`.
- * What `offsetWidth`, `clientWidth`, `scrollWidth` and ResizeObserver report in
- * a browser, which all ignore transforms. `getBoundingClientRect()` is
- * {@link paintedRectOf}.
- */
+/** The node's LAYOUT box, before any CSS `transform`: what `offsetWidth`, `clientWidth` and ResizeObserver report. */
 function rectOf(node: MirrorNode, kind?: string): MirrorRect {
   return rectFrom(boundsOf(node, kind), 0);
 }
 /**
- * Where the node was DRAWN: the bounding box of its border box under its own
- * `transform` and its ancestors'. `getBoundingClientRect()`, `getClientRects()`
- * and IntersectionObserver report this in a browser. A popper is laid out at
- * (0, 0) and moved by `transform: translate()`, and a dialog is centred with
- * `translate(-50%, -50%)`: their contents measured from the layout box put
- * anything anchored to them in the window's corner. The host appends these four
+ * Where the node was DRAWN: its border box under its own and its ancestors' `transform`, as
+ * `getBoundingClientRect()` reports. Poppers are laid out at (0, 0) and moved by `translate()`, so
+ * layout-box measurements would anchor to the window's corner. The host appends these four
  * numbers to `__vn_bounds` only when a transform moved the box.
  */
 function paintedRectOf(node: MirrorNode, kind?: string): MirrorRect {
   return rectFrom(boundsOf(node, kind), 4);
 }
 function rectFrom(raw: VnRect, at: 0 | 4): MirrorRect {
-  // A node that was not painted (detached, `display: none`, parked in a
-  // <KeepAlive> cache) reports nothing — and an all-zero rect is exactly what a
-  // browser reports for those, so no advisory is warranted.
+  // Not painted (detached, `display: none`, parked in <KeepAlive>): all-zero, as in a browser.
   if (!raw) return { ...ZERO_RECT, toJSON() { return this; } };
   const n = raw.split(",").map(Number);
   const [x, y, w, h] = n.length >= at + 4 ? n.slice(at, at + 4) : n;
@@ -2927,7 +2379,6 @@ function rectFrom(raw: VnRect, at: 0 | 4): MirrorRect {
   };
 }
 
-// -- truthful: the mirror IS the tree
 defineDom(
   "contains",
   function (this: MirrorNode, other: MirrorNode | null | undefined) {
@@ -2958,9 +2409,7 @@ defineDomGet(
 defineDomGet(
   "nodeName",
   function (this: MirrorNode) {
-    // `tagName` is an ELEMENT field; on a text/comment mirror it is genuinely
-    // absent, which is what the `??` is reading. The cast says so out loud
-    // rather than pretending the union has it.
+    // `tagName` is absent on a text/comment mirror, which the `??` reads.
     return (this as Partial<MirrorElement>).tagName ?? (this.kind === 2 ? "#text" : "#comment");
   },
   undefined,
@@ -2998,11 +2447,8 @@ defineDomGet(
   },
   [TextProto],
 );
-// `parentElement` is `parentNode` when that parent is an Element, else null
-// (DOM §4.4). A mirror's parent is always an element; the one parent that is
-// not a mirror is `document.head`, the property bag a `<style>` injected there
-// reports, and head IS an element in a browser. So the test is "an element
-// node, or an object shaped like one" rather than `kind === 1`.
+// `parentElement`: the parent when it is an Element. The one non-mirror parent is `document.head`
+// (an element in a browser), so the test is "an element node or an object shaped like one".
 defineDomGet(
   "parentElement",
   function (this: MirrorNode) {
@@ -3013,8 +2459,7 @@ defineDomGet(
   undefined,
   NODE_MEMBERS,
 );
-// The Node-level walk (`for (let n = el.firstChild; n; n = n.nextSibling)`),
-// from the same lists the renderer's own `nodeOps.nextSibling` reads.
+// The Node-level walk, from the same lists `nodeOps.nextSibling` reads.
 function siblingOf(node: MirrorNode, step: 1 | -1): MirrorNode | null {
   const p = node.parentNode;
   if (!p || !p.childNodes) return null;
@@ -3035,9 +2480,7 @@ defineDomGet(
   NODE_MEMBERS,
 );
 defineDom("hasChildNodes", function (this: MirrorNode) { return !!this.childNodes?.length; }, NODE_MEMBERS);
-// `getRootNode()`: the document when connected (the root's parent is the
-// document in a browser), otherwise the topmost ancestor. There is no shadow
-// DOM here, so `{ composed }` changes nothing.
+// `getRootNode()`: the document when connected, else the topmost ancestor (no shadow DOM).
 defineDom(
   "getRootNode",
   function (this: MirrorNode) {
@@ -3047,11 +2490,8 @@ defineDom(
   },
   NODE_MEMBERS,
 );
-// `childNodes` is the renderer's own list: every child node, in order.
-// `children` is the DOM's ELEMENT-only view of it, and the distinction is
-// load-bearing — `aria-hidden` (which reka's Dialog uses to hide the rest of
-// the page) walks `parent.children` and calls `getAttribute` on each, so
-// handing it text and comment mirrors made it log one failure per node.
+// `children` is the element-only view of `childNodes`; `aria-hidden` (reka's Dialog) walks it and
+// calls `getAttribute` on each, so text and comment mirrors must not appear.
 const elementChildren = (n: MirrorNode): MirrorElement[] =>
   (n.childNodes || []).filter((c): c is MirrorElement => c.kind === 1);
 // A live HTMLCollection, the same object on every read, as a browser's is.
@@ -3117,7 +2557,6 @@ defineDomGet(
   } as (value: never) => void,
 );
 
-// -- selector matching, through the real cascade matcher
 defineDom("matches", function (this: MirrorElement, selector: string) {
   return hostQuery(selector, this.__vnId, 1).length > 0;
 });
@@ -3131,9 +2570,7 @@ defineDom("querySelectorAll", function (this: MirrorElement, selector: string) {
   return staticList(NodeListProto, hostQuery(selector, this.__vnId, 0));
 });
 
-// -- getElementsByTagName / getElementsByClassName: live HTMLCollections, from
-//    a walk of the mirror tree (not the selector matcher: `foo:bar` is a tag
-//    name here and an invalid selector there).
+// Live collections walk the mirror tree, not the selector matcher: `foo:bar` is a tag name here and an invalid selector there.
 /** The elements under `root` (and `root` itself when `inclusive`) that `test` takes, in tree order. */
 function elementsUnder(root: MirrorNode | null, inclusive: boolean, test: (el: MirrorElement) => boolean): MirrorElement[] {
   const out: MirrorElement[] = [];
@@ -3178,10 +2615,7 @@ defineDom("getElementsByClassName", function (this: MirrorElement, classNames: u
   return liveCollection(HTMLCollectionProto, true, () => elementsUnder(this, false, test));
 });
 
-// -- namespaceURI / localName / prefix (DOM §4.9). A mirror's namespace is
-//    `_ns`; any other element on this prototype (the engine's detached ones)
-//    is HTML. Vue's own `getContainerType`, VueUse's `isSVG` and
-//    `instanceof SVGElement` all read it.
+// A mirror's namespace is `_ns`; any other element on this prototype (the engine's detached ones) is HTML.
 defineDomGet("namespaceURI", function (this: MirrorElement) {
   return this._ns === "svg" ? SVG_NS : this._ns === "mathml" ? MATHML_NS : HTML_NS;
 });
@@ -3193,9 +2627,7 @@ defineDomGet("prefix", function (this: MirrorElement) {
   return null;
 });
 
-// -- layout, off the bounds gpui recorded for the last painted frame. The two
-// rect methods answer where the box was DRAWN (transforms applied); the size
-// and scroll accessors below answer the layout box, as in a browser.
+// Bounds come from the last painted frame. The rect methods answer where the box was DRAWN (transforms applied); the size accessors answer the layout box.
 defineDom("getBoundingClientRect", function (this: MirrorElement) {
   return asDomRect(paintedRectOf(this, "getBoundingClientRect()"));
 });
@@ -3213,12 +2645,7 @@ for (const [name, pick] of [
     return Math.round(pick(rectOf(this, name)));
   });
 }
-// `scrollWidth` / `scrollHeight` are the CONTENT box, not the painted one.
-// For a scroll container the two differ by exactly the thing that makes the
-// box a scroll container, and `el.scrollTop = el.scrollHeight` — the
-// scroll-to-bottom idiom — is wrong by the whole overflow if this answers the
-// viewport. For everything else a browser reports the border box, which is
-// what the rectangle already is.
+// `scrollWidth` / `scrollHeight` are the CONTENT box: `el.scrollTop = el.scrollHeight` is wrong by the whole overflow if this answers the viewport.
 for (const [name, pick, fallback] of [
   ["scrollWidth", (s: ScrollPos) => s.scrollWidth, (r: MirrorRect) => r.width],
   ["scrollHeight", (s: ScrollPos) => s.scrollHeight, (r: MirrorRect) => r.height],
@@ -3228,8 +2655,7 @@ for (const [name, pick, fallback] of [
     return Math.round(s ? pick(s) : fallback(rectOf(this, name)));
   });
 }
-// `offset*` is measured from the offsetParent in the DOM; we have no positioned
-// -ancestor chain to measure from, so these are window-relative.
+// `offset*` is measured from the offsetParent in the DOM; with no positioned-ancestor chain these are window-relative.
 for (const [name, pick] of [
   ["offsetTop", (r: MirrorRect) => r.top],
   ["offsetLeft", (r: MirrorRect) => r.left],
@@ -3244,28 +2670,12 @@ for (const [name, pick] of [
   });
 }
 defineDomGet("offsetParent", () => null);
-// The border widths a browser reports here. gpui's painted rectangle is the
-// BORDER box and the cascade's border widths are not published, so 0 is the
-// honest constant — @floating-ui adds these to every clipping rect, and
-// `undefined` there turns the whole computation into NaN.
+// Border widths are not published (the painted rect is the border box); 0, because @floating-ui adds these to every clipping rect and `undefined` makes it NaN.
 defineDomGet("clientTop", () => 0);
 defineDomGet("clientLeft", () => 0);
 
-// ---- programmatic scrolling ----------------------------------------------
-//
-// `scrollTop` / `scrollLeft` / `scrollTo` / `scrollBy` / `scrollIntoView` all
-// drive the host's real `ScrollHandle` — the same object the wheel, the
-// scrollbar thumb and the devtools `scroll` command move
-// (`crates/vn-tree/src/scroll.rs`). Three properties carry over from a
-// browser and are worth stating, because each one is load-bearing somewhere:
-//
-//  * the write is CLAMPED to what the box can cover, and the getter answers
-//    the clamped value SYNCHRONOUSLY — `el.scrollTop = 1e9` then reading it
-//    back gives the bottom, with no frame in between;
-//  * a write on an element that does not scroll does nothing and says
-//    nothing, exactly as in a browser;
-//  * the `scroll` EVENT is asynchronous. CSSOM-View fires it from the
-//    update-the-rendering loop, not from the assignment, and so does the host.
+// Programmatic scrolling drives the host's real `ScrollHandle`. A write is CLAMPED and the
+// getter answers the clamped value synchronously; the `scroll` EVENT is asynchronous, as in CSSOM-View.
 
 /** What `__vn_scroll` answers, decoded. */
 interface ScrollPos {
@@ -3278,12 +2688,8 @@ interface ScrollPos {
 }
 
 /**
- * One host call for every scroll accessor. `null` means "this element is not a
- * scroll container", which is the answer a browser gives by reporting zeros.
- *
- * `sizeMatters` asks for the advisory in `noteStale` when the answer's CONTENT
- * half is a frame old. The offset half never is, so a plain `scrollTop` read
- * passes `false` and stays silent.
+ * One host call for every scroll accessor; `null` when the element is not a scroll container.
+ * `sizeMatters` enables the `noteStale` advisory (the offset half is never stale).
  */
 function hostScroll(
   node: MirrorElement,
@@ -3301,24 +2707,10 @@ function hostScroll(
 }
 
 /**
- * The one honest gap in this surface, named once per session.
- *
- * A browser lays out on read, so `list.append(row); list.scrollTop =
- * list.scrollHeight` sees the row. Here layout is a frame, and the host forces
- * one wherever a draw is legal: boot, timers, rAF, fetch/XHR/WebSocket
- * callbacks, mousemove, mouseup, a mouse click, contextmenu and a text field's
- * `input` all lay out on read (m26 #8). The exception is a handler that a gpui
- * listener calls directly — keydown/keyup (and the click Enter or Space
- * makes), mousedown, wheel, the clipboard events, and focus/blur, which run
- * inside gpui's own draw — because a draw there would
- * swap or nest the frame gpui is dispatching from (`vn_tree::
- * in_input_dispatch`). Only there does a content-size read (or the clamp that
- * uses it) in the same JS wave as a DOM change answer the last painted frame,
- * so "scroll to bottom" from a keydown lands one item short.
- *
- * The offset itself is never stale — `el.scrollTop` is exact at all times, and
- * so is a scroll to a position the app computed itself. This is only about
- * `scrollWidth` / `scrollHeight` and the clamp derived from them.
+ * Layout is a frame here, and the host forces one on read wherever a draw is legal. It cannot inside
+ * handlers gpui calls directly (keydown/keyup, mousedown, wheel, clipboard, focus/blur): a draw there
+ * would nest the frame gpui is dispatching from (`vn_tree::in_input_dispatch`). There a content-size
+ * read (or the clamp using it) in the same JS wave as a DOM change answers the last painted frame.
  */
 function noteStale(): void {
   warnCompat(
@@ -3334,16 +2726,8 @@ function noteStale(): void {
 }
 
 /**
- * `behavior: "smooth"` — performed instantly, once per session.
- *
- * The final position is identical, which is the half app logic reads back; the
- * interpolation is the half that is missing. It is not faked with the CSS
- * animator on purpose: a scroll offset is not a style property, a running
- * animation switches the retained-render cache off document-wide (so a smooth
- * scroll would cost exactly the frames caching a long list saves), and a
- * smooth scroll that cannot be cancelled by the wheel and never fires
- * `scrollend` is a worse divergence than an instant jump that says so.
- * See research/reports/m23/scroll.md.
+ * `behavior: "smooth"` is performed instantly, with an advisory. Not faked with the CSS animator:
+ * a running animation switches the retained-render cache off document-wide.
  */
 function noteBehavior(behavior: unknown): void {
   if (behavior !== "smooth") return;
@@ -3372,8 +2756,6 @@ for (const [name, axis] of [
   defineDomGet(
     name,
     function (this: MirrorElement) {
-      // A browser rounds these to integers for a non-fractional layout; ours
-      // are gpui pixels, which are already the units the box was laid out in.
       const s = hostScroll(this, 0);
       return s ? s[axis] : 0;
     },
@@ -3381,8 +2763,7 @@ for (const [name, axis] of [
       const v = Number(value);
       // A browser ignores a non-finite assignment rather than throwing.
       if (!Number.isFinite(v)) return;
-      // `sizeMatters`: the write is CLAMPED against the content size, so a
-      // stale content size makes a stale landing.
+      // The write is clamped against the content size, so a stale size lands stale.
       hostScroll(this, 1, axis === "left" ? v : NaN, axis === "top" ? v : NaN, true);
     },
   );
@@ -3409,9 +2790,7 @@ const SCROLL_ALIGN: Record<string, VnScrollAlign> = {
 
 defineDom("scrollIntoView", function (this: MirrorElement, arg: unknown) {
   if (!this.__vnId) return;
-  // The three spellings a browser takes: nothing / `true` is
-  // `{block: "start", inline: "nearest"}`, `false` is `{block: "end"}`, and an
-  // object names either axis.
+  // Nothing / `true`: block start, inline nearest; `false`: block end; an object names either axis.
   let block: VnScrollAlign = 0;
   let inline: VnScrollAlign = 3;
   if (arg === false) block = 2;
@@ -3421,20 +2800,14 @@ defineDom("scrollIntoView", function (this: MirrorElement, arg: unknown) {
     if (o.block !== undefined) block = SCROLL_ALIGN[String(o.block)] ?? 0;
     if (o.inline !== undefined) inline = SCROLL_ALIGN[String(o.inline)] ?? 3;
   }
-  // `block` / `inline` are writing-mode relative in CSS; we have one writing
-  // mode (horizontal-tb, ltr), so block is vertical and inline horizontal.
-  // That is stated rather than assumed because `direction: rtl` would flip the
-  // inline axis and nothing here would notice.
+  // Only horizontal-tb ltr exists: block is vertical, inline horizontal (`direction: rtl` would not flip it).
   const out = __vn_scroll_into_view(this.__vnId, block, inline);
   if (out.charCodeAt(0) === 33 /* ! */) warnCompat("scrollIntoView", out.slice(1));
   else if (out === "stale") noteStale();
 });
 
-// -- the attribute channel (`patchProp` is the writer; see `mk`)
-// `style` is the one attribute whose value is not stored as text: it IS the
-// inline declaration block (`InlineStyleState`), so `getAttribute("style")`
-// reads what `:style` and `el.style` wrote. `attrs.style` is only a marker
-// that keeps `hasAttribute` / `getAttributeNames` (and their order) honest.
+// `style` is not stored as text: it IS the inline declaration block, so `getAttribute("style")` reads what
+// `:style` and `el.style` wrote. `attrs.style` is only a marker for `hasAttribute` / `getAttributeNames`.
 const isStyleAttr = (name: unknown): boolean => String(name).toLowerCase() === "style";
 defineDom("getAttribute", function (this: MirrorElement, name: unknown) {
   if (isStyleAttr(name)) return styleAttribute(this);
@@ -3450,8 +2823,7 @@ defineDom("getAttributeNames", function (this: MirrorElement) {
 });
 defineDom("setAttribute", function (this: MirrorElement, name: unknown, value: unknown) {
   const key = String(name);
-  // `style` is a declaration BODY as an attribute: the block is replaced by
-  // its parse, and the attribute keeps the text verbatim, as in a browser.
+  // The block is replaced by the parse; the attribute keeps the text verbatim.
   if (isStyleAttr(key)) {
     replaceInline(this, String(value), true);
     return;
@@ -3465,9 +2837,6 @@ defineDom("removeAttribute", function (this: MirrorElement, name: unknown) {
   }
   writeAttribute(this, String(name), null);
 });
-// `el.id` reflects the `id` attribute, as in a browser. (The host node id is
-// `__vnId`; `id` named it until m26 client sweep #5a, so a library's
-// `el.id = "x"` used to overwrite the node's address.)
 defineDomGet(
   "id",
   function (this: MirrorElement) {
@@ -3479,11 +2848,8 @@ defineDomGet(
   } as (value: never) => void,
 );
 
-// The reflected properties of `REFLECTED` (above `patchProp`) as accessors:
-// each reads and writes its attribute, so `el.hidden = true`,
-// `input.placeholder` and `el.tabIndex` behave as a browser's (m26 #32). An
-// element whose tag does not have the property reads `undefined` and keeps an
-// assignment as an expando, as a browser's `<div>` keeps `div.placeholder`.
+// `REFLECTED` properties as accessors over their attributes. An element whose tag lacks the property
+// reads `undefined` and keeps an assignment as an expando.
 /** HTML: tabIndex defaults to 0 on these, -1 elsewhere (and on a summary that summarizes its details). */
 const TAB_INDEX_ZERO = new Set(["a", "area", "button", "frame", "iframe", "input", "object", "select", "textarea"]);
 /** HTML's "rules for parsing integers", or `null` for an error. */
@@ -3552,8 +2918,7 @@ const INPUT_TYPES = new Set(
     "checkbox radio file submit image reset button").split(" "),
 );
 const TYPE_STRING_TAGS = new Set(["a", "link", "ol", "li", "source", "embed", "object", "script", "style"]);
-// `type`: an enumerated attribute on <input> and <button>, read-only and
-// derived on <select> / <textarea>, a plain string on the rest.
+// `type`: enumerated on <input> / <button>, read-only and derived on <select> / <textarea>, a plain string elsewhere.
 defineDomGet(
   "type",
   function (this: MirrorElement) {
@@ -3595,8 +2960,6 @@ defineDomGet(
     this.setAttribute("dir", String(v));
   } as (value: never) => void,
 );
-// DOM §4.9 `toggleAttribute`: `force` true keeps an existing value, false
-// removes; it answers whether the attribute is there afterwards.
 defineDom("toggleAttribute", function (this: MirrorElement, name: string, force?: boolean) {
   const has = this.hasAttribute(name);
   const on = force === undefined ? !has : !!force;
@@ -3605,24 +2968,10 @@ defineDom("toggleAttribute", function (this: MirrorElement, name: string, force?
   return on;
 });
 
-// -- `el.attributes`, `Attr` nodes and the namespaced attribute methods
-//    (DOM §4.9, §4.9.1 NamedNodeMap, §4.9.2 Attr)
-//
-// `attributes` is a live `NamedNodeMap` over the element's attribute list
-// (`attrs`, in the order the attributes were added, as a browser keeps them):
-// `length`, `item(i)`, `[i]`, `[name]`, iteration, and the get / set / remove
-// methods. It is the same object on every read. Each attribute is one `Attr`
-// for as long as the element has it, so `el.attributes[0] ===
-// el.getAttributeNode(name)`. An Attr reads and writes through the element
-// (`attr.value = "x"` is `setAttribute`), so `style` and `class` keep their
-// own rules. Removing the attribute detaches its Attr (`ownerElement` null),
-// which keeps the value it had.
-//
-// Names are kept as written, as `getAttribute` keeps them here; a browser
-// lowercases them on an HTML element. The mirror has no element namespaces,
-// so an attribute's namespace comes from its prefix: `xlink:`, `xml:` and
-// `xmlns` are the XLink, XML and XMLNS namespaces, the way Vue's renderer
-// sets them on SVG; any other name has none.
+// `el.attributes` is a live `NamedNodeMap` over `attrs`; each attribute is one `Attr` while the element
+// has it, reading and writing through the element. Removing it detaches the Attr, which keeps its value.
+// Names are kept as written (a browser lowercases them on HTML elements). Namespaces come from the
+// prefix: `xlink:`, `xml:`, `xmlns`; any other name has none.
 
 const XLINK_NS = "http://www.w3.org/1999/xlink";
 const XML_NS = "http://www.w3.org/XML/1998/namespace";
@@ -3901,9 +3250,7 @@ defineDom("getAttributeNS", function (this: MirrorElement, ns: unknown, local: u
 defineDom("hasAttributeNS", function (this: MirrorElement, ns: unknown, local: unknown) {
   return attrNameNS(this, ns, local) !== null;
 });
-// The qualified name is the key, so `setAttributeNS(XLINK_NS, "xlink:href", v)`
-// and `getAttribute("xlink:href")` meet, and `setAttributeNS(null, "x", v)` is
-// `setAttribute("x", v)`.
+// The qualified name is the key, so `setAttributeNS(XLINK_NS, "xlink:href", v)` and `getAttribute("xlink:href")` meet.
 defineDom("setAttributeNS", function (this: MirrorElement, ns: unknown, qualifiedName: unknown, value: unknown) {
   const q = String(qualifiedName);
   const existing = attrNameNS(this, ns, q.slice(q.indexOf(":") + 1));
@@ -3937,10 +3284,6 @@ defineDomGet("dataset", function (this: MirrorElement) {
   return proxy;
 });
 
-// -- className and classList, over the class ATTRIBUTE: what Vue assigned plus
-//    the transition classes (`writeClass`), as a browser's are (m26 #19).
-//    `className` was a plain field: a script's `el.className = …` changed the
-//    mirror only, and `getAttribute("class")` read null.
 defineDomGet(
   "className",
   function (this: MirrorElement) {
@@ -3982,22 +3325,13 @@ defineDomGet("classList", function (this: MirrorElement) {
   return list;
 });
 
-// -- inline style: `el.style` is a CSSStyleDeclaration over the element's
-//    `InlineStyleState`, so it reads what `:style` and `setAttribute("style")`
-//    wrote, and its writes go through the same host call `:style` makes —
-//    CUSTOM PROPERTIES INCLUDED, which is how reka-ui's `--reka-popper-*`
-//    sizing variables reach the cascade.
+// `el.style` is a CSSStyleDeclaration over `InlineStyleState`; writes go through the same host call as
+// `:style`, custom properties included (reka-ui's `--reka-popper-*` variables rely on it).
 
 /**
- * `style.backgroundColor = v`, the IDL attribute setter. `null` is the empty
- * string ([LegacyNullToEmptyString]), which removes the declaration. A browser
- * ignores a value it cannot parse, and two are knowable here without a parser:
- * `undefined` (the text "undefined" is no property's value) and a value that
- * carries `!important` (a priority is only `setProperty`'s third argument).
- *
- * `style["--x"] = v` sets the custom property. In a browser a custom property
- * is not an attribute of the declaration and the write is an expando; here it
- * is kept as the cascade write it has always been (docs/RUNTIME.md §5.3).
+ * `style.backgroundColor = v`. `null` removes the declaration; `undefined` and a value carrying
+ * `!important` are ignored (a priority is only `setProperty`'s third argument).
+ * `style["--x"] = v` sets the custom property, though in a browser it is only an expando.
  */
 function assignInlineProperty(node: MirrorElement, key: string, v: unknown): void {
   if (v === undefined) return;
@@ -4022,12 +3356,9 @@ function assignInlineProperty(node: MirrorElement, key: string, v: unknown): voi
 defineDomGet("style", function (this: MirrorElement) {
   const node = this;
   const decls = () => node._inline?.decls;
-  // The target carries the REAL members; the handler routes everything else
-  // to the declarations. `as MirrorStyle` is the one place the two halves are
-  // joined: a Proxy's type is its target's, and the target deliberately does
-  // not carry the open-ended `[property: string]` half that the handler serves.
+  // The target carries the real members; the handler routes the rest to the declarations. The
+  // `as MirrorStyle` cast joins the halves: the target lacks the open-ended `[property: string]` the handler serves.
   const target = {
-    /** CSSOM `setProperty(property, value, priority)`. */
     setProperty(k: unknown, v: unknown, priority?: unknown) {
       const name = cssomName(String(k));
       const custom = name.startsWith("--");
@@ -4098,42 +3429,25 @@ defineDomGet("style", function (this: MirrorElement) {
   return style;
 });
 
-// -- focus: `el.focus()` / `el.blur()` are defined with the forms, below
-//    (`__vn_focus`; crates/vn-tree/src/render.rs, "Programmatic focus").
-
-// -- dispatchEvent: a component's own events, through the SAME capture/bubble
-//    walk the host's events take. reka-ui builds its whole selection protocol
-//    out of this (`select.select`, `menu.itemSelect`,
-//    `dismissableLayer.pointerDownOutside`, `focusScope.autoFocusOnMount`): it
-//    adds a one-shot listener for a custom name and immediately dispatches it,
-//    so without this an option click reaches a handler that is never called.
+// dispatchEvent runs a component's own events through the same capture/bubble walk as host events;
+// reka-ui's selection protocol (`select.select`, `menu.itemSelect`) is built on it.
 defineDom(
   "dispatchEvent",
   function (this: MirrorNode, ev: VnEvent) {
     if (!ev || typeof ev.type !== "string") return true;
     const name = canonicalEvent(ev.type);
     const proceed = propagate(this, name, ev);
-    // The DOM's activation step: a dispatched `MouseEvent("click")` that
-    // nobody cancelled follows a link exactly as a real click does — which is
-    // the FileSaver.js / "build an <a>, dispatch a click" idiom, and what
-    // `el.click()` below is built on.
+    // DOM activation step: an uncancelled dispatched `MouseEvent("click")` acts like a real click
+    // (the FileSaver.js idiom; `el.click()` is built on it).
     if (proceed && name === "click" && isActivationEvent(ev)) activate(this, !!ev.bubbles);
     return proceed;
   },
   NODE_MEMBERS,
 );
 
-// -- links: activation behaviour (docs/SHELL.md §1; desktop-apis-design §5.1)
-//
-//    There is no document to navigate, so a link's activation hands its URL
-//    to the system — the system browser is the only honest "browsing context"
-//    a desktop app has. And because a link is reachable by CONTENT (a chat
-//    message, a rendered Markdown file), the scheme allowlist is the security
-//    line: http, https and mailto only. `file:`, custom protocols and
-//    `ms-settings:` are refused with an advisory naming
-//    `appShell.openExternal`, which is the call for a URL the app's own code
-//    trusts. That closes `openExternal(untrusted)` → `file:///…/calc.exe` by
-//    default.
+// There is no document to navigate, so a link hands its URL to the system. Links are reachable by
+// CONTENT, so the scheme allowlist (http, https, mailto) is the security line; other schemes are
+// refused with an advisory naming `appShell.openExternal`, the call for URLs the app trusts.
 
 /** What content may hand to the OS. Mirrors `shell::CONTENT_SCHEMES`. */
 const CONTENT_SCHEMES = new Set(["http", "https", "mailto"]);
@@ -4150,25 +3464,14 @@ const ACTIVATABLE = new Set(["button", "input", "label", "summary"]);
 const hasActivationBehaviour = (n: MirrorNode): n is MirrorElement =>
   n.kind === 1 && (ACTIVATABLE.has(n.tag) || isLink(n));
 
-/**
- * DOM "dispatch" step 5.5: is this event an activation event? A `MouseEvent`
- * whose type is `click`. A `CustomEvent("click")` is not — and an engine
- * with no MouseEvent class at all cannot make that distinction, so there any
- * click counts (that is only ever the unit-test world).
- */
+/** DOM "dispatch" step 5.5: only a `MouseEvent` click activates; an engine without MouseEvent (unit tests) counts any click. */
 function isActivationEvent(ev: VnEvent): boolean {
   return typeof MouseEvent !== "function" || ev instanceof MouseEvent;
 }
 
-/**
- * The activation target: the event's target if it has an activation
- * behaviour, else — for a bubbling event — the nearest ancestor that does.
- * A `<button>` inside an `<a>` is therefore the button's click, not the
- * link's, exactly as the DOM spec words it.
- */
+/** The activation target: the event's target if it has activation behaviour, else (when bubbling) the nearest ancestor that does. */
 function activate(target: MirrorNode, bubbles: boolean): void {
-  // redjs's own `document.createElement("a" | "input")` elements are not in
-  // the tree; the FileSaver.js and VueUse `useFileDialog` idioms click them.
+  // Detached `document.createElement("a" | "input")` elements are not in the tree; FileSaver.js and `useFileDialog` click them.
   if (!isMirrorNode(target)) return activateDetached(target);
   for (let n: MirrorNode | null = target; n; n = n.parentNode) {
     if (hasActivationBehaviour(n)) {
@@ -4190,8 +3493,7 @@ function followLink(a: MirrorElement): void {
 /** A link's activation, by its `href` and its `download` attribute (null: none). */
 function followHref(href: string, download: string | null): void {
   const raw = href.trim();
-  // `href=""` and `href="#…"` are the in-page idioms (a JS-handled link); a
-  // browser would scroll, there is nothing to do here.
+  // `href=""` and `href="#…"` are JS-handled in-page links; nothing to scroll here.
   if (raw === "" || raw.startsWith("#")) return;
   const m = SCHEME_RE.exec(raw);
   if (!m) {
@@ -4205,8 +3507,7 @@ function followHref(href: string, download: string | null): void {
   }
   const scheme = m[1].toLowerCase();
   if (scheme === "javascript") {
-    // `javascript:void(0)` is the old "a link that only has a click handler"
-    // idiom and means nothing either way; anything else asked for code to run.
+    // `javascript:void(0)` is the "link with only a click handler" idiom; anything else asked for code to run.
     if (!/^javascript:\s*(void\s*\(?\s*0\s*\)?\s*;?\s*|;?)$/i.test(raw)) {
       warnCompat(
         "link:javascript",
@@ -4217,9 +3518,7 @@ function followHref(href: string, download: string | null): void {
     return;
   }
   if (download != null && (scheme === "blob" || scheme === "data")) {
-    // Save As, then the bytes (desktop.ts; D-F6). Resolved now, at the click,
-    // so `a.click(); URL.revokeObjectURL(url)` still saves. No activation is
-    // needed: Chromium lets a page start a download without one.
+    // Resolved now, at the click, so `a.click(); URL.revokeObjectURL(url)` still saves.
     desktopApi.download(raw, download);
     return;
   }
@@ -4230,39 +3529,28 @@ function followHref(href: string, download: string | null): void {
   openContentUrl(raw, "<a href>");
 }
 
-/** A-F1: a content link with a scheme the allowlist does not hold. */
+/** A content link with a scheme the allowlist does not hold. */
 function adviseScheme(scheme: string, via: string): void {
   warnCompat(
     `link-scheme:${scheme}`,
     `${via} with a ${scheme}: URL was refused: links and window.open() only hand http, https ` +
       `and mailto to the system, because content can reach them. If the app trusts this URL, ` +
-      `open it from your own code with appShell.openExternal(url) (docs/SHELL.md)`,
+      `open it from your own code with appShell.openExternal(url)`,
   );
 }
 
-// -- <input type=file> and <label>: activation behaviour (docs/DESKTOP.md
-//    "<input type=file>"; desktop-apis-design §4.1, §4.2)
-//
-//    A file input's click opens the picker, through desktop.ts and the host's
-//    dialog. Its `files`, `value`, `accept`, `multiple` and `webkitdirectory`
-//    are own accessors, installed when `type` becomes "file". Its `input`,
-//    `change` and `cancel` are fired from here and walk the tree like any
-//    host event. A `<label>` clicks its control. The same behaviour serves
-//    redjs's detached `document.createElement("input")`, which is how VueUse's
-//    `useFileDialog` picks files without an element in the tree.
+// A file input's click opens the picker via desktop.ts. Its `files`, `value`, `accept`, `multiple` and
+// `webkitdirectory` are own accessors installed when `type` becomes "file". The same behaviour serves
+// detached `document.createElement("input")` (VueUse's `useFileDialog`).
 
-/** Chromium's English status strings (D-F12): what `:file-label` pushes. */
+/** Chromium's English status strings: what `:file-label` pushes. */
 function fileStatus(files: ArrayLike<{ name?: unknown }> | null): string {
   const n = files?.length ?? 0;
   if (n === 0) return "No file chosen";
   return n === 1 ? String(files![0]?.name ?? "") : `${n} files`;
 }
 
-/**
- * Is this a mirror `<input type=file>`? (Any casing of the attribute, as HTML
- * says.) Deliberately not a type guard: an element that is not one is still
- * an element.
- */
+/** Is this a mirror `<input type=file>`? Not a type guard: an element that is not one is still an element. */
 function isFileInput(n: unknown): boolean {
   const e = n as MirrorElement | null | undefined;
   return !!e && e.kind === 1 && e.tag === "input" && String(e.attrs?.type ?? "").trim().toLowerCase() === "file";
@@ -4354,7 +3642,6 @@ function isFileList(v: unknown): boolean {
     typeof (v as { item?: unknown }).item === "function";
 }
 
-/** An empty FileList: what `files` is before anything is picked. */
 function emptyFileList(): unknown {
   const DT = (globalThis as { DataTransfer?: new () => { files: unknown } }).DataTransfer;
   if (typeof DT === "function") {
@@ -4367,10 +3654,7 @@ function emptyFileList(): unknown {
   return Object.freeze(Object.assign([], { item: () => null }));
 }
 
-/**
- * A file input's selected files (`null`: none yet), mirror or detached alike,
- * and what to do when they change (push the status to the host).
- */
+/** A file input's selected files (`null`: none yet) and the hook that pushes the status to the host. */
 interface FileState {
   files: unknown;
   changed: () => void;
@@ -4384,11 +3668,9 @@ const VALUE_REFUSED =
 const FILES_REFUSED = "Failed to set the 'files' property on 'HTMLInputElement': The provided value is not of type 'FileList'.";
 
 /**
- * HTML's `files` and filename-mode `value` over one state, for either kind of
- * element. `files` is a FileList always (an empty one before a pick); setting
- * it takes a FileList (`input.files = dataTransfer.files`) and fires nothing;
- * `null` is ignored. `value` is `C:\fakepath\<name>`. Setting it to "" clears
- * the selection; anything else throws.
+ * HTML's `files` and filename-mode `value` over one state, for mirror and detached elements.
+ * `files` is always a FileList; setting it takes a FileList and fires nothing. `value` is
+ * `C:\fakepath\<name>`; "" clears the selection, anything else throws.
  */
 function fileAccessors(state: FileState, isFile: () => boolean, other?: { value: string }) {
   const list = () => (state.files ??= emptyFileList()) as ArrayLike<{ name?: unknown }>;
@@ -4427,10 +3709,7 @@ function fileAccessors(state: FileState, isFile: () => boolean, other?: { value:
 
 let advisedFileLook = false;
 
-/**
- * `type` was patched on an `<input>`: become a file input (the accessors, the
- * status prop, the click/Enter/Space bits) or stop being one.
- */
+/** `type` was patched on an `<input>`: become a file input (accessors, status prop, listener flags) or stop being one. */
 function syncFileInput(el: MirrorElement): void {
   const file = isFileInput(el);
   const had = fileStates.has(el);
@@ -4463,7 +3742,7 @@ function syncFileInput(el: MirrorElement): void {
       advisedFileLook = true;
       warnCompat(
         "input-file:look",
-        "<input type=file> (D-F12): the button and status are an approximation of Chromium's, with its " +
+        "<input type=file>: the button and status are an approximation of Chromium's, with its " +
           "English strings (\"Choose File\", \"No file chosen\"); restyle it with ::file-selector-button",
       );
     }
@@ -4509,12 +3788,9 @@ function fileInputOps(el: MirrorElement): FileInputOps {
 }
 
 /**
- * HTML "show the picker, if applicable", for a click (`via` null) or for
- * `showPicker()`, which has already thrown for what it throws. A click with
- * no transient activation does nothing but say so, in Chromium's words.
- * Picked: `files` changes, then `input` and `change`. Dismissed, or the same
- * selection again: `cancel`. Another dialog already open on the window: the
- * request is dropped, as Chromium drops it.
+ * HTML "show the picker, if applicable", for a click (`via` null) or `showPicker()`. A click without
+ * transient activation only warns, in Chromium's words. Picked: `files` changes, then `input` and
+ * `change`; dismissed or the same selection: `cancel`.
  */
 function showFilePicker(ops: FileInputOps, via: "showPicker" | null): void {
   if (ops.disabled) return;
@@ -4567,12 +3843,7 @@ function labelControl(label: MirrorElement): MirrorElement | null {
 /** The controls a label click would focus in a browser (and cannot here). */
 const FOCUS_ONLY_TYPES = new Set(["button", "submit", "reset", "image", "file", "checkbox", "radio", "range", "color"]);
 
-/**
- * A `<label>`'s activation: a click on its control, unless the click came
- * from inside the control (then it already was one). A text control is also
- * focused, as in a browser (D-F23 until m26 phase 2, when `focus()` became
- * real).
- */
+/** A `<label>`'s activation: click its control unless the click came from inside it; a text control is also focused. */
 function activateLabel(label: MirrorElement, target: MirrorNode): void {
   const control = labelControl(label);
   if (!control) return;
@@ -4598,13 +3869,9 @@ function adviseJsSourced(el: MirrorElement, name: string, via: string): void {
   });
 }
 
-// -- detached elements: redjs's `document.createElement("a" | "input")`
-//
-//    They are plain objects on HTMLElement.prototype, outside the tree, and
-//    their attribute methods are no-ops. `wrapDetached` gives the two the
-//    idioms need a reflected attribute map, and an input the same
-//    `files`/`value` accessors a mirror file input has. Their events go
-//    through the engine's own EventTarget (`input.onchange = …` included).
+// Detached `document.createElement("a" | "input")` are plain objects on HTMLElement.prototype with no-op
+// attribute methods; `wrapDetached` gives them a reflected attribute map and an input the file accessors.
+// Their events go through the engine's own EventTarget.
 
 const REFLECTED_BOOL = new Set(["multiple", "webkitdirectory", "disabled"]);
 const REFLECTED_STR = new Set(["href", "download", "type", "accept", "rel", "target"]);
@@ -4669,9 +3936,7 @@ function fireDetached(el: Detached, type: string): void {
     if (!nativeDispatch) throw new TypeError("no EventTarget");
     nativeDispatch.call(el, ev);
   } catch {
-    // Not an EventTarget the engine will dispatch on: the handler attribute,
-    // with the target a browser would give it (VueUse reads
-    // `event.target.files`).
+    // Not dispatchable: call the handler attribute with a target (VueUse reads `event.target.files`).
     const h = el[`on${type}`];
     Object.defineProperty(ev, "target", { value: el, configurable: true });
     if (typeof h === "function") callListener(h as (this: unknown, ev: VnEvent) => unknown, el, ev);
@@ -4707,9 +3972,7 @@ function activateDetached(target: object): void {
   }
 }
 
-// -- showPicker() (HTML): the picker without the click. Chromium's checks and
-//    words: an immutable control is InvalidStateError, no user activation is
-//    NotAllowedError. File and color inputs have native pickers.
+// showPicker(): Chromium's checks (immutable -> InvalidStateError, no user activation -> NotAllowedError).
 defineDom("showPicker", function (this: MirrorElement) {
   const mirror = isMirrorNode(this);
   const raw = this as unknown as Detached;
@@ -4727,22 +3990,18 @@ defineDom("showPicker", function (this: MirrorElement) {
   if (!activation.isActive()) throw fail("NotAllowedError", "HTMLInputElement::showPicker() requires a user gesture.");
   if (type === "color") return showColorPicker(mirror ? this : raw, "showPicker");
   if (type !== "file") {
-    warnCompat(`showPicker:${type}`, `showPicker() on <input type=${type}> is a no-op: only file and color pickers exist here (A-F6)`);
+    warnCompat(`showPicker:${type}`, `showPicker() on <input type=${type}> is a no-op: only file and color pickers exist here`);
     return;
   }
   showFilePicker(mirror ? fileInputOps(this) : detachedFileOps(raw), "showPicker");
 });
 
-// -- el.click(): HTML's synthetic click. A real `MouseEvent`, through the same
-//    walk a host click takes, then the activation behaviour if nobody
-//    cancelled it. `click()` on a disabled form control does nothing at all,
-//    and a click() from inside its own click handler is ignored (HTML's
-//    "click in progress" flag).
+// el.click(): a MouseEvent through the host-click walk, then activation unless cancelled.
+// A disabled control, or a click() inside its own click handler (HTML's "click in progress"), does nothing.
 const DISABLEABLE = new Set(["button", "input", "select", "textarea", "fieldset", "optgroup", "option"]);
 const clicking = new Set<MirrorElement>();
 defineDom("click", function (this: MirrorElement) {
-  // A mirror control is "actually disabled" (its own attribute or a disabled
-  // fieldset); a detached one has only its own attribute.
+  // A mirror control may be disabled by a fieldset; a detached one only by its own attribute.
   const mirror: boolean = isMirrorNode(this);
   if (mirror ? isDisabledControl(this) : DISABLEABLE.has(this.tag) && this.attrs.disabled != null && this.attrs.disabled !== "false") return;
   if (clicking.has(this)) return;
@@ -4761,31 +4020,9 @@ defineDom("click", function (this: MirrorElement) {
   }
 });
 
-// -- forms: submission (HTML §4.10.21; m26 phase 2)
-//
-//    There was none. `@submit` had no host code, so patchProp dropped the
-//    handler with an advisory: Enter in a field did nothing, and so did a
-//    click on `<button type=submit>`. Login forms are the case that matters
-//    (`<form @submit.prevent>` plus a submit button).
-//
-//    What is here, in the spec's own terms:
-//    - a submit button's activation behaviour: a click (host or `el.click()`)
-//      submits its form owner, unless it is disabled;
-//    - implicit submission: Enter in a field (keydown, not cancelled) clicks
-//      the form's default button (the first submit button in tree order;
-//      nothing if it is disabled), or, with no submit button, submits the form
-//      when at most one field blocks implicit submission;
-//    - `form.requestSubmit(submitter?)` with the spec's TypeError and
-//      NotFoundError, `form.submit()` (no event, as in a browser), and
-//      `form.reset()` / a reset button (fires `reset`);
-//    - the `submit` event is a `SubmitEvent` (bubbles, cancelable,
-//      `submitter`), walked like any other event; `SubmitEvent` is defined if
-//      the engine lacks it.
-//
-//    Divergences, each an advisory: constraint validation is not run (a
-//    form without `novalidate` submits anyway, and no bubble is shown); a
-//    submission nobody cancelled has no document to navigate, so it does
-//    nothing; a reset does not restore the controls' values.
+// -- forms: submission (HTML §4.10.21)
+// Divergences, each advised once: no constraint validation, no navigation after an
+// uncancelled submit, and reset does not restore control values.
 
 /** Events the runtime itself fires, for which no host code exists. Their handlers are kept. */
 const RUNTIME_FIRED_EVENTS = new Set<string>([
@@ -5000,8 +4237,7 @@ function implicitSubmit(field: MirrorElement): void {
   const controls = formControls(form);
   const defaultButton = controls.find(isSubmitButton);
   if (defaultButton) {
-    // "If the form has no submit button…" — it has one, so the button is
-    // clicked, and a disabled default button means nothing happens at all.
+    // A disabled default button means nothing happens at all.
     if (!isDisabledControl(defaultButton)) defaultButton.click();
     return;
   }
@@ -5035,30 +4271,14 @@ defineDom("reset", function (this: MirrorElement) {
   resetForm(asForm(this, "reset"));
 });
 
-// -- focus: `el.focus()` / `el.blur()` / `document.activeElement` (m26 phase 2)
+// -- focus: `el.focus()` / `el.blur()` / `document.activeElement`
+// The host moves focus (`__vn_focus`); the four events fire here in browser order. A node not
+// yet built is queued and its events arrive a frame later (advised). `focus()` never scrolls.
 //
-//    The host moves gpui's focus (`__vn_focus`, crates/vn-tree/src/lib.rs and
-//    render.rs "Programmatic focus"). A node that can take focus NOW gets it
-//    synchronously, and the four events fire here, in the browser's order:
-//    blur and focusout on the old node, then focus and focusin on the new one,
-//    each with its `relatedTarget`. A node that has not been built yet (mounted
-//    in this same update) is queued; its events come from the host a frame
-//    later, which is one advisory. Not focusable, disabled or detached: a
-//    no-op, as in a browser. Divergence, named: `focus()` does not scroll the
-//    element into view (`preventScroll` is the only behaviour).
-//
-//    A handler that moves the focus while another move's events are running
-//    abandons that move, as every browser does (Chromium's
-//    `Document::SetFocusedElement`, "handler shifted focus"). While the old
-//    node hears `blur` and `focusout`, nothing is focused, so
-//    `document.activeElement` is `body`. A `focus()` from one of those handlers
-//    wins: the node the first move was going to gets no `focus` and no
-//    `focusin`. reka's FocusScope relies on this when it traps focus in a
-//    dialog: its `focusout` handler pulls the focus back. Without it, a focus
-//    handed back to a menu's trigger after the dialog opened still reached the
-//    trigger's `focus` listener, and a tooltip opened above the dialog
-//    (docs/RUNTIME.md §5.21). A `focus` handler that moves the focus on
-//    likewise cancels its own node's `focusin`.
+// A handler that moves focus while another move's events run abandons that move, as in
+// Chromium; during `blur`/`focusout` nothing is focused (`activeElement` is `body`). reka's
+// FocusScope relies on this: its `focusout` handler pulls focus back into a dialog, and the
+// abandoned target must not get `focus`.
 
 /** The element JS last learned has focus: a move from here, or a host focus/blur event. */
 let focusedNode: MirrorElement | null = null;
@@ -5066,12 +4286,7 @@ let focusedNode: MirrorElement | null = null;
 /** Bumped by every focus change. A move whose count changed while its handlers ran was overtaken. */
 let focusChanges = 0;
 
-/**
- * The node a `focus()` is moving to while the old node hears `blur` and
- * `focusout`. The host has already given it the focus, but in a browser
- * nothing is focused yet: `blur()` on it does nothing, and `focus()` on it
- * focuses it now.
- */
+/** The node a `focus()` is moving to while the old node hears `blur`/`focusout`: the host has focused it, a browser has not yet. */
 let arriving: MirrorElement | null = null;
 
 function fireFocusEvent(target: MirrorElement, name: string, related: MirrorElement | null): void {
@@ -5088,12 +4303,7 @@ function withRelatedTarget(ev: VnEvent, related: MirrorNode | null): VnEvent {
   return ev;
 }
 
-/**
- * The events of a move the host has already made, in the browser's order:
- * `blur` and `focusout` on `old` with nothing focused, then `focus` and
- * `focusin` on `next`. A handler that moves the focus ends the move there.
- * `focusout` then has no `relatedTarget`, as in Chromium.
- */
+/** Events of a move the host already made: blur/focusout on `old`, then focus/focusin on `next`; a handler that moves focus ends it. */
 function focusMoved(next: MirrorElement, old: MirrorElement | null): void {
   const change = ++focusChanges;
   // Any move whose blur phase is still running is overtaken by this one.
@@ -5125,8 +4335,7 @@ defineDom("focus", function (this: MirrorElement) {
     warnCompat("focus", "element.focus() is a no-op: this host has no programmatic focus (__vn_focus)");
     return;
   }
-  // From a handler of a move to this very node: the host already gave it the
-  // focus, and a browser focuses it now, with no old node.
+  // Called from a handler of a move to this very node: focus it now, no old node.
   if (this === arriving) {
     focusMoved(this, null);
     return;
@@ -5134,8 +4343,7 @@ defineDom("focus", function (this: MirrorElement) {
   const answer = __vn_focus(this.__vnId, 0);
   if (answer.startsWith("moved:")) {
     const old = (nodeById(Number(answer.slice(6))) as MirrorElement | undefined) ?? null;
-    // The host's old node is the one a move in progress was going to. It
-    // never got the focus, so there is nothing to blur.
+    // The host's old node may be the target of a move in progress: it never got focus, nothing to blur.
     focusMoved(this, old === arriving || old === this ? null : old);
   } else if (answer === "pending") {
     warnCompat(
@@ -5148,7 +4356,7 @@ defineDom("focus", function (this: MirrorElement) {
 });
 defineDom("blur", function (this: MirrorElement) {
   if (!isMirrorNode(this) || typeof __vn_focus !== "function") return;
-  // Not focused yet in a browser: a move to it is still in its blur phase.
+  // A move to it is still in its blur phase: not focused yet.
   if (this === arriving) return;
   if (__vn_focus(this.__vnId, 1) === "blurred") {
     focusChanges++;
@@ -5165,30 +4373,10 @@ function activeElement(): MirrorElement | null {
   return appRoot;
 }
 
-// -- location.reload() (m26 phase 2): the host's restart path, on request
-//
-//    `location.reload()` asks the host (`__vn_reload`, crates/vn-app/src/
-//    reload.rs). At the start of the next frame the host calls
-//    `__VN_UNLOAD__`, below, and then evaluates the bundle again. A browser
-//    would throw the realm away. This one stays, so the outgoing app's own
-//    scheduling is undone here, after `pagehide` and the unmount:
-//
-//    - every timer, interval, animation frame and idle callback scheduled
-//      since this runtime loaded;
-//    - every WebSocket opened since, with its listeners removed first, so
-//      the old code's reconnect logic cannot run;
-//    - every `window` / `document` listener added through the runtime for
-//      an event the host does not source (`resize`, `message`, `storage`…).
-//
-//    The host then ends the old page's media as a navigation does
-//    (crates/vn-app/src/reload.rs `end_media`): every MediaStreamTrack stops
-//    (an unused microphone is released) and every AudioContext closes; an
-//    embedder's own sessions (a call) end in its reload hook.
-//
-//    What stays, and is said once when a reload happens: globals the old app
-//    set, fetches in flight (they settle into the old promise chains),
-//    IndexedDB connections, and the fact that `DOMContentLoaded`
-//    / `load` do not fire again. `beforeunload` is not asked.
+// -- location.reload(): the host (`__vn_reload`) calls `__VN_UNLOAD__` then re-evaluates the bundle.
+// The realm survives, so the outgoing app's timers, animation frames, idle callbacks, WebSockets
+// (listeners removed first, so reconnect logic cannot run) and window/document listeners for
+// runtime-sourced events are undone here, after `pagehide` and the unmount.
 
 type Fn = (...args: unknown[]) => unknown;
 type SocketLike = {
@@ -5198,8 +4386,7 @@ type SocketLike = {
   [handler: string]: unknown;
 };
 
-/// Called with each animation frame's timestamp before a rAF callback runs:
-/// `document.timeline` holds its time to it (src/waapi.ts, `onFrame`).
+/// Called with each frame's timestamp before a rAF callback runs, so `document.timeline` follows it.
 const frameStampers: ((timestamp: number) => void)[] = [];
 
 const realm = (() => {
@@ -5372,15 +4559,12 @@ const realm = (() => {
     }
     (globalThis as { __VN_HOST_LIFECYCLE__?: { reset: () => void } }).__VN_HOST_LIFECYCLE__?.reset();
     realm.close();
-    // The host keeps calling the observer step it was given until the next
-    // runtime installs its own; with nothing observed, the old one does
-    // nothing, and the host is told so it stops asking.
+    // The host keeps calling the old observer step until the next runtime installs its own; tell it to stop.
     resizeObservers.length = 0;
     resizeDue = [];
     intersectionObservers.clear();
     if (hostSteps) __vn_layout_watch(false);
-    // Last: the teardown and the realm hygiene above still call through the
-    // globals they are about to lose.
+    // Last: the teardown above still calls through the globals this deletes.
     const kept = resetGlobals();
     if (kept)
       warnCompat(
@@ -5391,9 +4575,7 @@ const realm = (() => {
   };
 }
 
-// -- pointer capture. The OS captures the window during a press; the host
-// bridge additionally routes input to the captured DOM node, even outside its
-// hitbox. Keep one owner per pointer, not independent sets on each element.
+// -- pointer capture: one owner per pointer; the host routes input to it even outside its hitbox.
 const pointerCaptures = new Map<number, MirrorElement>();
 const disconnectingCaptureRoots = new Set<MirrorNode>();
 let pointerButtons = 0;
@@ -5439,8 +4621,7 @@ defineDom("setPointerCapture", function (this: MirrorElement, pointerId: number)
   if (previous === this) return;
   if (!__vn_pointer_capture(this.__vnId, pointerId, true)) return;
   pointerCaptures.set(pointerId, this);
-  // A lost-capture listener may transfer capture again. Publish the new owner
-  // first and only announce it if that listener left it in place.
+  // A lost-capture listener may transfer capture again: publish the owner first, announce only if it stays.
   if (previous) captureEvent(previous, "lostpointercapture");
   if (pointerCaptures.get(pointerId) === this) captureEvent(this, "gotpointercapture");
 });
@@ -5451,21 +4632,11 @@ defineDom("releasePointerCapture", function (this: MirrorElement, pointerId: num
   releaseCapturedPointer(pointerId, this);
 });
 
-// ---- imperative tree mutation (DOM §4.2.3–§4.2.8) — m26 client sweep #5a
-//
-// `appendChild`, `insertBefore`, `removeChild`, `replaceChild`, ChildNode's
-// `remove`/`before`/`after`/`replaceWith`, ParentNode's `append`/`prepend`/
-// `replaceChildren`, and `insertAdjacentElement`/`insertAdjacentText`, with
-// the DOM's validity checks, exceptions and return values. They run through
-// the renderer's own `nodeOps.insert` (which is also a move), so the host sees
-// exactly the ops a Vue patch sends. A removal DETACHES (see `detachNode`): the
-// node keeps its listeners and its state and can be inserted again.
-//
-// One thing a script can hand in is not a tree node at all: the engine's own
-// detached `document.createElement("a" | "input" | "style" | …)` objects
-// (`ENGINE_TAGS`). A `<style>` / `<link>` one joins the stylesheet as it would
-// in `<head>` (`foreignNode`); any other is left out of the tree, with an
-// advisory.
+// ---- imperative tree mutation (DOM §4.2.3–§4.2.8)
+// Runs through the renderer's `nodeOps.insert`, so the host sees the ops a Vue patch sends.
+// A removal DETACHES (see `detachNode`): the node keeps its listeners and state.
+// A script may also pass the engine's own detached `document.createElement(...)` objects
+// (`ENGINE_TAGS`): `<style>`/`<link>` join the stylesheet (`foreignNode`), others are left out, advised.
 
 /** Tags `document.createElement` leaves to the engine (see there). */
 const ENGINE_TAGS = new Set(["a", "input", "style", "link", "script", "meta", "title", "base"]);
@@ -5779,21 +4950,9 @@ defineDom("cloneNode", function () {
   return null;
 });
 
-// -- HTMLMediaElement (crates/vn-video/CONTRACT.md §6).
-//
-//    `<video>` is the one element whose interesting state lives in the HOST and
-//    not in the mirror: `currentTime` moves inside the OS media pipeline sixty
-//    times a second and no prop write puts it there. So the surface splits the
-//    same way `getBoundingClientRect` and `getComputedStyle` already do — the
-//    accessors below read `__vn_media_state` live, per call, uncached, exactly
-//    as `rectOf` reads `__vn_bounds`. A browser's `el.currentTime` is a live
-//    property too; caching it would be the divergence.
-//
-//    The verbs go the other way, through `__vn_media_call`. They are the same
-//    seven the element layer implements (`vn_tree::video::media_call`), and
-//    nothing in Rust changed to make this work: the host has dispatched all
-//    eighteen events on the ordinary EV_* channel since the day `<video>`
-//    landed, and this file simply learned their names.
+// -- HTMLMediaElement
+// Media state lives in the HOST (`currentTime` moves in the OS pipeline), so the accessors read
+// `__vn_media_state` live, uncached; verbs go the other way through `__vn_media_call`.
 const MEDIA_CALL = {
   play: 0,
   pause: 1,
@@ -5817,9 +4976,7 @@ defineDomGet("srcObject", function (this: MirrorElement) {
   const stream = value as { getVideoTracks?: () => { __vnVideoSrc?: string }[] };
   const track = typeof stream.getVideoTracks === "function" ? stream.getVideoTracks()[0] : undefined;
   if (!track?.__vnVideoSrc?.startsWith("vn-stream://")) {
-    // An <audio> given an audio stream is what pages do to keep a remote track alive while
-    // Web Audio plays it. The element keeps the stream and plays nothing itself: native audio
-    // reaches the speakers through the engine that produced it, not through an element.
+    // An <audio> given an audio stream (kept alive while Web Audio plays it) holds the stream and plays nothing.
     if (this.tagName === "AUDIO") {
       mediaStreams.set(this, value);
       if (this.getAttribute("src")?.startsWith("vn-stream://")) this.removeAttribute("src");
@@ -5860,8 +5017,7 @@ function timeRanges(raw: string | undefined): MirrorTimeRanges {
     length: list.length,
     start: (i: number) => list[i]?.start ?? NaN,
     end: (i: number) => list[i]?.end ?? NaN,
-    // Not in the DOM, and deliberately: a TimeRanges is painful to read in a
-    // template and every transport component ends up writing this loop itself.
+    // Not in the DOM: an array form for templates.
     ranges: list,
   };
 }
@@ -5887,12 +5043,8 @@ const bool = (s: Record<string, string>, k: string, fallback: boolean): boolean 
   s[k] === undefined ? fallback : s[k] === "true";
 
 /**
- * A read-only (or verb-backed) SCALAR media property: one host call for the
- * one value (`__vn_media_prop`), not the whole state string. The state string
- * costs every engine getter at once (~0.2 ms on Media Foundation), and a
- * canvas loop that checks `video.readyState` per target per animation frame
- * (Argon's video emoji: eight targets) spent most of an idle window's JS on it.
- * A host without the call, or a test world without it, reads the state string.
+ * A SCALAR media property: one host call (`__vn_media_prop`) instead of the whole state string,
+ * which costs ~0.2 ms per read on Media Foundation. Falls back to the state string without it.
  */
 function defineMediaScalar(
   name: string,
@@ -5942,9 +5094,7 @@ defineMediaScalar("videoWidth", 11, 0);
 defineMediaScalar("videoHeight", 12, 0);
 defineMediaGet("buffered", (s) => timeRanges(s.buffered));
 defineMediaGet("seekable", (s) => timeRanges(s.seekable));
-// `MediaError`: `null` when there is none, which is the check every handler
-// makes (`if (el.error)`). `message` carries the advisory naming this machine's
-// missing decoder and the ffmpeg one-liner that fixes the file.
+// `MediaError`, or `null`; `message` names the missing decoder and an ffmpeg fix.
 defineMediaGet("error", (s) => {
   const code = num(s, "error", 0);
   return code ? { code, message: s.errorMessage ?? "" } : null;
@@ -5952,18 +5102,14 @@ defineMediaGet("error", (s) => {
 
 defineDom("play", function (this: MirrorElement) {
   mediaCall(this, MEDIA_CALL.play);
-  // HTML returns a promise that resolves when playback actually begins. The
-  // host's `play` is synchronous and the `playing` event is what says it
-  // started, so resolving immediately is the honest approximation — and it is
-  // what makes `el.play().catch(…)` (the autoplay-rejection idiom) not throw.
+  // Resolves immediately (the host's play is synchronous), so `el.play().catch(…)` does not throw.
   return Promise.resolve();
 });
 defineDom("pause", function (this: MirrorElement) {
   mediaCall(this, MEDIA_CALL.pause);
 });
 defineDom("load", function (this: MirrorElement) {
-  // The host runs the load algorithm off the `src` prop, edge-triggered, so a
-  // re-load is `src = ""` then `src = url`. There is no separate verb for it.
+  // The host loads off the `src` prop, edge-triggered; there is no load verb.
   if (isMediaEl(this)) {
     warnCompat(
       "media-load",
@@ -5974,20 +5120,13 @@ defineDom("load", function (this: MirrorElement) {
 });
 defineDom("canPlayType", function (this: MirrorElement, type: unknown) {
   if (!isMediaEl(this) || !this.__vnId) return "";
-  // A live probe of THIS machine's decoder registry, not a table — a Store
-  // codec package installed after we shipped is picked up on the next launch.
+  // A live probe of this machine's decoder registry, not a table.
   return __vn_media_can_play(this.__vnId, String(type));
 });
 
-// -- HTMLIFrameElement: `sandbox`, `contentWindow.postMessage`, `message` at
-//    `window`, `load` / `error` (docs/IFRAME.md).
-//
-//    The document is not here: it is in a platform webview the host owns
-//    (crates/vn-webview), drawn into the element's box. What a page can do
-//    with a cross-origin iframe is what there is: post to it, and hear from
-//    it. `contentWindow` is one object per element for the element's life, so
-//    `event.source === iframe.contentWindow` — the identity check a host makes
-//    for a sandboxed frame, whose origin is the string "null" — holds.
+// -- HTMLIFrameElement: `sandbox`, `contentWindow.postMessage`, `message` at `window`, `load`/`error`.
+// The document lives in a host-owned platform webview, so it is cross-origin: post to it and hear
+// from it. `contentWindow` is one object per element, so `event.source === iframe.contentWindow` holds.
 const isFrameEl = (x: unknown): x is MirrorElement => isMirrorEl(x) && x.tag === "iframe";
 const frameWindows = new WeakMap<MirrorElement, object>();
 const frameOf = new WeakMap<object, MirrorElement>();
@@ -6008,8 +5147,7 @@ function frameTargetOrigin(arg: unknown): string {
 function frameWindow(el: MirrorElement): object {
   let win = frameWindows.get(el);
   if (win) return win;
-  // No prototype: nothing of this realm (`constructor`, `__proto__`) is
-  // reachable through the handle to another origin's window.
+  // No prototype: nothing of this realm is reachable through another origin's window handle.
   win = Object.freeze(
     Object.assign(Object.create(null) as Record<string, unknown>, {
       postMessage(message: unknown, target?: unknown, transfer?: unknown[]) {
@@ -6020,8 +5158,7 @@ function frameWindow(el: MirrorElement): object {
         const origin = frameTargetOrigin(target);
         // Encoded now, in the sender, so a value that cannot cross throws HERE.
         const wire = JSON.stringify(encodeMessage(message, (o) => isMirrorNode(o)));
-        // A detached element has no document to deliver to, as a detached
-        // iframe's window has none in a browser: dropped.
+        // A detached element has no document to deliver to: dropped.
         if (!el.__vnId || !el.isConnected || typeof __vn_iframe_post !== "function") return;
         __vn_iframe_post(el.__vnId, wire, origin);
       },
@@ -6038,8 +5175,7 @@ defineDomGet("contentWindow", function (this: MirrorElement) {
   // HTML: null until the element is in a document.
   return this.isConnected ? frameWindow(this) : null;
 });
-// Cross-origin, always: the relay page that hosts the document is not the
-// app's origin, and a sandboxed game's is opaque.
+// Always cross-origin: the relay page is not the app's origin.
 defineDomGet("contentDocument", function (this: MirrorElement) {
   return isFrameEl(this) ? null : undefined;
 });
@@ -6047,8 +5183,7 @@ defineDom("getSVGDocument", function (this: MirrorElement) {
   return null;
 });
 
-// `sandbox`: a DOMTokenList over the attribute, and `iframe.sandbox = "…"`
-// forwards to its `value` (WebIDL [PutForwards]).
+// `sandbox`: a DOMTokenList over the attribute; assignment forwards to `value` (WebIDL [PutForwards]).
 defineDomGet(
   "sandbox",
   function (this: MirrorElement) {
@@ -6116,10 +5251,7 @@ const FRAME_SANDBOX_TOKENS = new Set([
   "allow-top-navigation-to-custom-protocols",
 ]);
 
-/**
- * A message from an iframe's document, as the `message` event a browser fires
- * at the parent's `window`. `key` is the host's `{"o": origin, "d": wire}`.
- */
+/** An iframe document's message, as the `message` event at `window`. `key` is the host's `{"o": origin, "d": wire}`. */
 function deliverFrameMessage(target: MirrorNode, key: string | undefined): boolean {
   if (!isFrameEl(target) || key == null) return true;
   let origin = "null";
@@ -6129,7 +5261,7 @@ function deliverFrameMessage(target: MirrorNode, key: string | undefined): boole
     origin = String(parsed.o ?? "null");
     data = decodeMessage(parsed.d);
   } catch (e) {
-    // Not what the relay page writes: a host bug, never the page's.
+    // Not what the relay page writes: a host bug.
     console.error("[vue-native] an <iframe> message that could not be decoded was dropped:", e);
     return true;
   }
@@ -6138,8 +5270,7 @@ function deliverFrameMessage(target: MirrorNode, key: string | undefined): boole
   let ev: VnEvent;
   const Ctor = (globalThis as { MessageEvent?: new (type: string, init: object) => VnEvent }).MessageEvent;
   try {
-    // A real MessageEvent refuses a `source` that is not a WindowProxy or a
-    // port of ITS realm, so the fields are defined on it either way.
+    // A real MessageEvent refuses a foreign `source`, so the fields are defined on it below.
     ev = Ctor ? new Ctor("message", { data, origin, lastEventId: "" }) : (new Event("message") as unknown as VnEvent);
   } catch {
     ev = new Event("message") as unknown as VnEvent;
@@ -6152,11 +5283,8 @@ function deliverFrameMessage(target: MirrorNode, key: string | undefined): boole
 }
 
 /**
- * `vnFeatures`: what this host can do that a page has to ask about before it
- * offers it. `iframe`: can an `<iframe>` show a document on this machine?
- * `false` where the host has no webview backend (Linux, or Windows without
- * the WebView2 runtime): the element still exists and lays out, and answers
- * every `src` with `error`. Read live: cheap, synchronous, never cached.
+ * `vnFeatures`: host capabilities a page should check. `iframe` is false without a webview
+ * backend (Linux, or Windows without WebView2): the element lays out and answers every `src` with `error`.
  */
 Object.defineProperty(globalThis, "vnFeatures", {
   value: Object.freeze(
@@ -6168,14 +5296,9 @@ Object.defineProperty(globalThis, "vnFeatures", {
   configurable: true,
 });
 
-// -- HTMLImageElement: `src`, `complete`, `naturalWidth` / `naturalHeight`,
-//    `currentSrc`, `decode()`.
-//
-//    The host answers every `src` with `load` or `error` (crates/vn-tree/src/
-//    img.rs), painted or not — `new Image()` measuring a picked file is the
-//    case that matters — and the dispatcher records the answer on the element
-//    before the event runs (`_img`). A stale answer (for a `src` the element
-//    has since dropped) is discarded there.
+// HTMLImageElement: `src`, `complete`, `naturalWidth` / `naturalHeight`, `currentSrc`, `decode()`.
+// The host answers every `src` with `load` or `error`; the dispatcher records the answer on the element
+// (`_img`) before the event runs, and discards one for a `src` the element has since dropped.
 const isImgEl = (x: unknown): x is MirrorElement => isMirrorEl(x) && x.tag === "img";
 /** The answer for the element's CURRENT `src`, if it has come. */
 const imgAnswer = (el: MirrorElement) => (el._img && el._img.src === el.attrs.src ? el._img : undefined);
@@ -6185,8 +5308,7 @@ const SRC_TAGS = new Set(["img", "video", "audio", "source", "iframe", "lottie"]
 defineDomGet(
   "src",
   function (this: MirrorElement) {
-    // A reflected URL attribute. A browser resolves it against the document
-    // URL; the attribute's own text is returned here (docs/RUNTIME.md §5.6).
+    // The attribute's own text; a browser would resolve it against the document URL.
     if (!isMirrorEl(this) || !SRC_TAGS.has(this.tag)) return undefined;
     return this.attrs.src ?? "";
   },
@@ -6207,8 +5329,7 @@ defineDomGet(
   "complete",
   function (this: MirrorElement) {
     if (!isImgEl(this)) return undefined;
-    // HTML: true with no src (or an empty one), and once the request is
-    // completely available or broken; false while it is on its way.
+    // HTML: true with no src, or once the request has loaded or failed.
     const src = this.attrs.src;
     return src == null || src === "" || !!imgAnswer(this);
   },
@@ -6251,14 +5372,9 @@ defineDom("decode", function (this: MirrorElement) {
   );
 });
 
-// -- `on<event>` IDL handler attributes (`img.onload = fn`, `el.onclick = …`).
-//
-//    One listener per element and type, added the first time a handler is set
-//    and kept in its place in the listener order while the handler changes
-//    (HTML "event handler attributes"); `null` removes it. A handler returning
-//    `false` cancels the event. On something that is not a mirror element the
-//    property stays a plain one, as it always was here (a detached engine
-//    `<input>`'s `onchange` is read back by `fireDetached`).
+// `on<event>` IDL handlers: one listener per element and type, kept in its place in the listener order while
+// the handler changes; `null` removes it; a handler returning `false` cancels the event. On a non-mirror
+// object the property stays a plain expando (a detached `<input>`'s `onchange` is read by `fireDetached`).
 const HANDLER_ATTRS = [
   "abort", "animationcancel", "animationend", "animationiteration", "animationstart", "auxclick",
   "beforeinput", "blur", "cancel", "canplay", "canplaythrough", "change", "click", "close",
@@ -6312,11 +5428,8 @@ for (const type of HANDLER_ATTRS) {
   );
 }
 
-// ---- W3C event synthesis + propagation ------------------------------------
-// The host sends ONE compact payload per input event targeted at the deepest
-// hit node; the mirror tree provides the ancestor path. Events are real redjs
-// native classes when available (KeyboardEvent & co), with a CustomEvent
-// fallback so nothing hard-depends on the engine revision.
+// W3C event synthesis + propagation. The host sends one payload per input event at the deepest hit node; the
+// mirror tree provides the ancestor path. Events use the engine's native classes when present, else CustomEvent.
 const mods = (d: number) => ({
   ctrlKey: !!(d & 1),
   shiftKey: !!(d & 2),
@@ -6324,9 +5437,7 @@ const mods = (d: number) => ({
   metaKey: !!(d & 8),
 });
 
-// The one synthetic pointer: gpui reports a single OS cursor, so there is
-// exactly one primary mouse pointer. (A pen or a touch point would have to be
-// reported by the platform layer, which does not.)
+// gpui reports a single OS cursor, so there is exactly one primary mouse pointer.
 const POINTER_INIT = {
   pointerId: 1,
   pointerType: "mouse",
@@ -6338,11 +5449,8 @@ const POINTER_INIT = {
 /** `MouseEvent.buttons` bit for a `button` index: left 1, right 2, middle 4, back 8, forward 16. */
 const BUTTON_BITS = [1, 4, 2, 8, 16];
 /**
- * `buttons` — which buttons are DOWN as the event fires. Only the host's press
- * and the moves made while one is held have one down: by a `mouseup`, a
- * `click`, a `dblclick`, an `auxclick` or a `contextmenu` (Chromium on
- * Windows opens the menu on the release) the button is already up. Other
- * buttons held at the same time are not tracked.
+ * `buttons`: which buttons are DOWN as the event fires. By `mouseup`, `click`, `dblclick`, `auxclick` and
+ * `contextmenu` the button is already up; other held buttons are not tracked.
  */
 function buttonsFor(name: string, c: number): number {
   switch (name) {
@@ -6363,10 +5471,8 @@ function buttonsFor(name: string, c: number): number {
   }
 }
 /**
- * `button`: the button whose state CHANGED. A move or an enter/leave changes
- * none — 0 for a MouseEvent (UI Events §3.5), -1 for a PointerEvent (Pointer
- * Events §4.1.1, and `pointercancel` too). The host passes the HELD button in
- * `c` for a move, which is what `buttons` reads.
+ * `button`: the button whose state CHANGED; a move or enter/leave changes none: 0 for a MouseEvent, -1 for a
+ * PointerEvent. The host passes the HELD button in `c` for a move (what `buttons` reads).
  */
 function buttonFor(name: string, c: number): number {
   switch (name) {
@@ -6386,10 +5492,8 @@ function buttonFor(name: string, c: number): number {
   }
 }
 /**
- * `detail` — the click count (UI Events §3.5): the host's `mousedown` /
- * `mouseup` / `click` / `auxclick` carry it above the four modifier bits of
- * `d`; `dblclick` is 2 by definition; everything else is 0, `contextmenu`
- * included (Blink counts only the press, release and click family).
+ * `detail`: the click count, carried by the host above the four modifier bits of `d`; `dblclick` is 2,
+ * everything else (`contextmenu` included) 0.
  */
 function detailFor(name: string, d: number): number {
   if (name === "click" || name === "auxclick" || name === "mousedown" || name === "mouseup") return (d >>> 4) & 0xff;
@@ -6397,10 +5501,8 @@ function detailFor(name: string, d: number): number {
 }
 
 /**
- * An `input` or `beforeinput` event's init from the host's payload: `a` the
- * `EDIT_TYPES` code, `b` 1 while an IME composes, `data` the eighth
- * argument. Both bubble and are composed; `input` never cancels, and
- * `beforeinput` does except while an IME composes.
+ * Init for `input` / `beforeinput`: `a` is the `EDIT_TYPES` code, `b` 1 while an IME composes, `data` the
+ * eighth argument. Both bubble; only `beforeinput` cancels, and not while composing.
  */
 function inputInit(name: string, a: number, b: number, data: unknown) {
   return {
@@ -6414,9 +5516,7 @@ function inputInit(name: string, a: number, b: number, data: unknown) {
 }
 
 /**
- * A wheel's `clientX` / `clientY`: where the pointer was, which the dispatcher
- * hands `synthesize` as the event's `data` (its `a`/`b` are the deltas). A
- * wheel built without one (a test's) is at 0, 0, as `new WheelEvent` is.
+ * A wheel's `clientX` / `clientY`, handed to `synthesize` as the event's `data` (`a`/`b` are the deltas); 0, 0 if absent.
  */
 function wheelAt(data: unknown): { clientX: number; clientY: number } {
   const at = data as { clientX?: unknown; clientY?: unknown } | null | undefined;
@@ -6439,12 +5539,10 @@ function synthesize(
   const common = { bubbles: !NO_BUBBLE.has(name), cancelable: !NO_BUBBLE.has(name) && !NOT_CANCELABLE.has(name) };
   const M = mods(d);
   try {
-    // copy / cut / paste: bubbling, cancelable and composed, carrying the
-    // host's DataTransfer (read-only for paste, read/write for copy and cut).
+    // copy / cut / paste carry the host's DataTransfer (read-only for paste).
     if ((name === "copy" || name === "cut" || name === "paste") && ClipboardEventClass)
       return new ClipboardEventClass(name, { ...common, composed: true, clipboardData: data ?? null });
-    // An image's `load` and `error` are plain Events at the element, neither
-    // bubbling nor cancelable; the picture's size is read off the element.
+    // An image's `load` / `error` are plain Events, neither bubbling nor cancelable.
     if (tag === "img" && (name === "load" || name === "error")) return new Event(name, common);
     if (POINTER_EVENTS.has(name)) {
       const buttons = buttonsFor(name, c);
@@ -6459,8 +5557,7 @@ function synthesize(
         pressure: buttons ? 0.5 : 0,
       };
       if (typeof PointerEvent === "function") return new PointerEvent(name, init);
-      // No PointerEvent class in this engine: a MouseEvent carrying the pointer
-      // fields reads identically to everything that consumes one.
+      // No PointerEvent class: a MouseEvent carrying the pointer fields reads the same.
       return withProps(new MouseEvent(name, init), { ...POINTER_INIT, pressure: init.pressure });
     }
     switch (name) {
@@ -6505,16 +5602,13 @@ function synthesize(
         break;
       case "input":
       case "beforeinput":
-        // Both bubble and are composed; only `beforeinput` cancels, and not
-        // while an IME composes (Input Events Level 1, Chromium's). `data` is
-        // the inserted text, `null` for a deletion or a line break.
+        // `data` is the inserted text, null for a deletion or a line break.
         if (typeof InputEvent === "function") return new InputEvent(name, inputInit(name, a, b, data));
         break;
       case "compositionstart":
       case "compositionupdate":
       case "compositionend": {
-        // Chromium makes all three cancelable, and cancelling one does
-        // nothing (the IME has already acted).
+        // Chromium makes all three cancelable; cancelling one does nothing.
         const Composition = theGlobal("CompositionEvent");
         if (typeof Composition === "function")
           return new (Composition as new (type: string, init: Record<string, unknown>) => VnEvent)(name, {
@@ -6542,19 +5636,13 @@ function synthesize(
       case "complete":
       case "loopComplete":
       case "enterFrame":
-        // <lottie-player> dispatches CustomEvents; lottie-web hands its own
-        // listeners a plain object with these fields. Both shapes are served:
-        // the numbers sit on `detail` AND directly on the event.
+        // Both shapes are served (lottie-player CustomEvent, lottie-web plain object): numbers on `detail` and the event.
         return withProps(new CustomEvent(name, { ...common, detail: lottieDetail(name, a, b, c, d) }),
                          lottieDetail(name, a, b, c, d));
     }
     if (MEDIA_EVENTS.has(name)) {
-      // In a browser these are plain `Event`s and everything interesting is
-      // read off `e.target` — which works here too, because the accessors
-      // below answer from the host. The numbers ride along anyway (on the
-      // event AND on `detail`) so a handler can read `e.currentTime` without a
-      // second host call per frame, which is what makes a 4 Hz `@timeupdate`
-      // readout cost nothing.
+      // Plain Events in a browser, read off `e.target`; the numbers also ride on the event and `detail` so a
+      // handler needs no host call per frame.
       const detail = mediaDetail(a, b, c, d);
       return withProps(new CustomEvent(name, { ...common, detail }), detail);
     }
@@ -6597,7 +5685,6 @@ function synthesize(
   return ev;
 }
 
-/** The per-event-family extra fields `synthesize` stamps onto a fallback event. */
 type ExtraProps = Record<string, unknown>;
 
 function withProps(ev: VnEvent, props: Record<string, unknown>): VnEvent {
@@ -6605,17 +5692,13 @@ function withProps(ev: VnEvent, props: Record<string, unknown>): VnEvent {
   return ev;
 }
 
-// The payload crates/vn-video/src/state.rs sends with every media event
-// (CONTRACT.md §4): a = currentTime, b = duration, c = readyState,
-// d = playbackRate. For `error`, a is MediaError.code and b is currentTime —
-// `e.target.error` is the shape a browser handler reads, and that one is served
-// live off `__vn_media_state` by the accessor below rather than frozen here.
+// Media event payload: a = currentTime, b = duration, c = readyState, d = playbackRate. For `error`, a is
+// MediaError.code and b is currentTime; `e.target.error` is served live off `__vn_media_state`.
 function mediaDetail(a: number, b: number, c: number, d: number) {
   return { currentTime: a, duration: b, readyState: c, playbackRate: d };
 }
 
-// The payload crates/vn-tree/src/lottie.rs sends, named the way lottie-web
-// names it (`currentTime` / `totalTime` are frame counts there too).
+// Named as lottie-web names it (`currentTime` / `totalTime` are frame counts).
 function lottieDetail(name: string, a: number, b: number, c: number, d: number) {
   if (name === "enterFrame") return { currentTime: a, totalTime: b, elapsed: c, progress: d };
   if (name === "loopComplete") return { currentTime: a, totalTime: b, currentLoop: c };
@@ -6634,15 +5717,8 @@ interface PropagationState {
 const EVENT_PHASE = { none: 0, capturing: 1, atTarget: 2, bubbling: 3 } as const;
 
 /**
- * One listener call. A listener that throws does not end the dispatch: DOM
- * §2.10 "inner invoke" REPORTS the exception and goes on to the next listener,
- * and `dispatchEvent` itself never throws a listener's error. Until m25 the
- * throw escaped the walk, so every listener after it — on that node and on
- * every ancestor — silently never ran.
- *
- * Reported from a microtask: it reaches the same uncaught-error sink a throw
- * out of a host callback always did (`[js uncaught]` in the log and the
- * devtools console), after the walk instead of in place of the rest of it.
+ * One listener call. A throwing listener does not end the dispatch (DOM "inner invoke"): the error is
+ * reported from a microtask, to the uncaught-error sink, after the walk.
  */
 function callListener(
   fn: (this: unknown, ev: VnEvent) => unknown,
@@ -6680,9 +5756,8 @@ function invoke(
   name: string,
   state: PropagationState,
 ): void {
-  // The walk is ours, not the engine's, so the engine's own `currentTarget` /
-  // `eventPhase` getters would answer "no dispatch" — own properties say what
-  // a browser's would at this step.
+  // The walk is ours, so the engine's `currentTarget` / `eventPhase` getters would say "no dispatch"; own
+  // properties stand in.
   Object.defineProperty(ev, "currentTarget", { value: node, configurable: true });
   Object.defineProperty(ev, "eventPhase", { value: eventPhase, configurable: true });
   const fn = phase === "capture" ? buckets.capture : buckets.bubble;
@@ -6718,8 +5793,7 @@ function invoke(
 function propagate(target: MirrorNode, name: string, ev: VnEvent): boolean {
   const path: PropagationTarget[] = [];
   for (let n: MirrorNode | null = target; n; n = n.parentNode) path.push(n);
-  // …and above the root, the document and the window — where a browser's event
-  // path puts them, and where every dismissable-layer implementation listens.
+  // …and the document and window above the root, where a browser's path puts them.
   if (globalHandlers.size) {
     if (globalThis.document) path.push(globalThis.document);
     path.push(globalThis);
@@ -6745,8 +5819,7 @@ function propagate(target: MirrorNode, name: string, ev: VnEvent): boolean {
       node === target ? EVENT_PHASE.atTarget : phase === "capture" ? EVENT_PHASE.capturing : EVENT_PHASE.bubbling;
     if (buckets) invoke(buckets, phase, eventPhase, ev, node, name, state);
   };
-  // `composedPath()` is the path for as long as the dispatch runs — target
-  // first, window last — and empty once it is over (DOM §2.9).
+  // `composedPath()` is the path while the dispatch runs (target first, window last), then empty.
   const composed = path.slice();
   Object.defineProperty(ev, "composedPath", { value: () => composed.slice(), configurable: true });
   try {
@@ -6758,8 +5831,7 @@ function propagate(target: MirrorNode, name: string, ev: VnEvent): boolean {
     // bubble: target.parent -> root
     if (ev.bubbles) for (let i = 1; i < path.length && !state.stopped; i++) at(path[i], "bubble");
   } finally {
-    // The dispatch is over: no current target, no phase, no path — what a
-    // handler that kept the event and reads it later sees in a browser.
+    // Dispatch over: no current target, phase or path, as a browser shows a kept event.
     Object.defineProperty(ev, "currentTarget", { value: null, configurable: true });
     Object.defineProperty(ev, "eventPhase", { value: EVENT_PHASE.none, configurable: true });
     Object.defineProperty(ev, "composedPath", { value: () => [], configurable: true });
@@ -6768,9 +5840,8 @@ function propagate(target: MirrorNode, name: string, ev: VnEvent): boolean {
 }
 
 /**
- * An event whose TARGET is the document (`selectionchange`): the window's
- * capture listeners, then the document's own, then — for one that bubbles —
- * the window's bubble listeners. No element is on its path.
+ * An event targeted at the document (`selectionchange`): the window's capture listeners, the document's own,
+ * then the window's bubble listeners if it bubbles.
  */
 function propagateAtDocument(name: string, ev: VnEvent): boolean {
   const document = globalThis.document as object | undefined;
@@ -6816,27 +5887,11 @@ const CODE_TO_NAME: Record<number, string | undefined> = Object.fromEntries(
 );
 
 /**
- * Is there anything on this event's path that would be CALLED for `name`?
- *
- * The host arms ONE BIT PER CODE, and several event names share a code — a
- * `pointermove` listener arms `mousemove`, and a `mousedown` listener arms the
- * bit `pointerdown` rides on. So the host delivering an event does not mean
- * anyone is listening for the particular NAME about to be synthesized: the
- * dispatcher below used to build, and walk, one full W3C event per derived name
- * on every delivery, whether or not a single handler existed for it.
- *
- * That is worth avoiding rather than tidying: `scripts/boundary-cost.ts`
- * measures redjs's `new MouseEvent(...)` at roughly two thirds of the entire
- * cost of dispatching an event — far more than the propagation walk it feeds —
- * and it is engine code, so no amount of work on our side makes one cheaper.
- * The only saving available is not building it.
- *
- * The walk is the same ancestor chain `propagate` would take, minus the
- * allocation: a handful of Map lookups against a 16 µs constructor. It is
- * deliberately CONSERVATIVE — it ignores `bubbles`, so a listener above a
- * non-bubbling event's target still counts as a reason to synthesize. Being
- * wrong in that direction costs an event object; being wrong in the other
- * direction would drop a handler.
+ * Is anything on this path going to be CALLED for `name`? The host arms one bit per code and several names
+ * share a code (a `pointermove` listener arms `mousemove`), so delivery does not mean a listener for the
+ * name about to be synthesized. A redjs `new MouseEvent(...)` is most of an event's dispatch cost and is
+ * engine code, so the only saving is not building it. Conservative: ignores `bubbles`, since an extra event
+ * object is cheaper than a dropped handler.
  */
 function hasListener(target: MirrorNode, name: string): boolean {
   for (let n: MirrorNode | null = target; n; n = n.parentNode) {
@@ -6851,14 +5906,10 @@ function hasListener(target: MirrorNode, name: string): boolean {
   return false;
 }
 
-/**
- * Is there an element on this node's ancestor chain (itself included) whose
- * click does something by itself: an `<a href>`, a `<label>`, an
- * `<input type=file>`?
- */
 /** Host events that mean a person just pressed something (see the dispatcher). */
 const ACTIVATING_EVENTS = new Set(["keydown", "mousedown", "pointerdown", "mouseup", "pointerup", "click", "auxclick"]);
 
+/** True when something on the path has a click default of its own (link, label, file/color input, submit/reset button). */
 function activatableOnPath(target: MirrorNode): boolean {
   for (let n: MirrorNode | null = target; n; n = n.parentNode) {
     if (isLabel(n) || isFileInput(n) || isColorInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n)) return true;
@@ -6866,24 +5917,12 @@ function activatableOnPath(target: MirrorNode): boolean {
   return false;
 }
 
-// ---- HTML drag and drop, within the app (HTML §6.11) ------------------------
-// gpui has no drag-and-drop of DOM elements, so the runtime runs the gesture
-// itself off the host's mouse events: a left press on (or in) a
-// `draggable="true"` element, then a move past Chromium's 4 px threshold,
-// starts a drag. From there the moves are not mouse events any more: each one
-// fires `drag` at the source, `dragenter` / `dragleave` as the element under
-// the pointer changes, and `dragover` at it — a cancelled `dragover` is what
-// makes the element a drop target. The release fires `drop` at an accepting
-// target, then `dragend` at the source, and the release's `click` is
-// swallowed. Escape cancels. Each event is a DragEvent carrying one
-// DataTransfer for the whole drag.
-//
-// Divergences: the DataTransfer stays read/write for the whole drag (a
-// browser protects its data outside `dragstart` and `drop`); nothing is
-// painted under the pointer (no drag image — the page's own styling of the
-// dragged and the hovered elements is the feedback); a drag ends at the
-// window's edge (it does not leave the app); `dragover` fires on each move,
-// not every 350 ms while the pointer rests.
+// HTML drag and drop within the app. gpui has no DOM drag-and-drop, so the runtime runs the gesture off the
+// host's mouse events: a left press on a `draggable="true"` element then a move past 4 px starts a drag; each
+// move fires `drag`, `dragenter` / `dragleave` and `dragover` (a cancelled one makes a drop target); the
+// release fires `drop` then `dragend` and swallows its `click`. Escape cancels.
+// Divergences: DataTransfer stays read/write for the whole drag; no drag image; a drag ends at the window's
+// edge; `dragover` fires per move, not every 350 ms.
 
 /** Chromium's mouse drag threshold (`kDragThresholdX` / `Y`), in CSS px. */
 const DRAG_THRESHOLD = 4;
@@ -7059,9 +6098,8 @@ function dndCancel(g: DndGesture, x: number, y: number, d: number, held: boolean
 }
 
 /**
- * The drag's share of a host event, ahead of everything else the dispatcher
- * does: the dispatcher's answer when the drag consumed it, undefined when it
- * goes on as the event it is.
+ * The drag's share of a host event, ahead of the rest of the dispatcher: its answer when the drag consumed
+ * the event, undefined when it goes on as usual.
  */
 function dndDispatch(name: string, nodeId: VnNodeId, x: number, y: number, d: number, key: string | undefined): boolean | undefined {
   if (dndSwallowClick && (name === "click" || name === "mousedown" || name === "keydown")) {
@@ -7127,20 +6165,16 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
   const target = (retarget && pointerCaptures.get(1)) || nodeById(nodeId);
   if (!target) return true;
   if (name === "keydown" && key === "Escape" && globalThis.__VN_WINDOW__?.escapeFullscreen?.()) return false;
-  // A wheel's pointer position rides beside its deltas (`VnDispatcher`); it
-  // reaches `synthesize` as the event's data.
+  // A wheel's pointer position rides beside its deltas and reaches `synthesize` as `data`.
   if (name === "wheel" && x !== undefined) data = { clientX: x, clientY: y ?? 0 };
   // The host delivers `selectionchange` at the root, whose listener bit the
   // document's listeners arm; a browser fires it AT the document.
   if (name === "selectionchange") return propagateAtDocument(name, synthesize(name, a, b, c, d, key));
   // An `<iframe>`'s document posted to its parent: a MessageEvent at `window`.
   if (name === "message") return deliverFrameMessage(target, key);
-  // `document.activeElement` follows the host's focus moves (a click, Tab, a
-  // queued `el.focus()`): blur arrives before the next focus, with nothing
-  // focused in between. `a` is the move's other node (0: none), which is the
-  // events' `relatedTarget`. A handler that moves the focus on cancels the
-  // rest of the move, as `focusMoved` does: the host skips the `focus`, and
-  // here `focusin` is skipped and `focusout` loses its `relatedTarget`.
+  // `document.activeElement` follows the host's focus moves; blur arrives before the next focus. `a` is the
+  // move's other node (0: none), the events' `relatedTarget`. A handler that moves the focus on cancels the rest
+  // of the move: the host skips `focus`, here `focusin` is skipped and `focusout` loses its `relatedTarget`.
   let focusChange = 0;
   let focusRelated: MirrorNode | null = null;
   if (name === "focus" || name === "blur") {
@@ -7150,35 +6184,18 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
     if (name === "focus") focusedNode = target as MirrorElement;
     else if (focusedNode === target) focusedNode = null;
   }
-  // Sticky activation (docs/WINDOWING.md §1.9). The windowing prelude arms it
-  // from `keydown`/`mousedown` on the engine's own EventTarget, which gpui
-  // events never reach — the host delivers them HERE. The prelude publishes
-  // this hook for exactly that reason; without the call, `beforeunload` could
-  // never veto a close because the window would never count as interacted with.
-  //
-  // The host forwards only the events some listener (or an armed bit) asks
-  // for, so the press itself often never arrives: a `<button @click>` gets
-  // its `click` and no `mousedown`. A host `click`, `mouseup` or
-  // `pointerup` is the proof of a press that just happened, so each counts as
-  // the activation the press would have given. Only the host's: `el.click()`
-  // and `dispatchEvent` never come through here.
+  // Sticky activation: the windowing prelude arms it from the engine's own EventTarget, which gpui events never
+  // reach, so the host's events call its hook here; without it `beforeunload` could never veto a close. The host
+  // forwards only events something listens for, so a host `click`, `mouseup` or `pointerup` stands in for the
+  // press. `el.click()` and `dispatchEvent` never come through here.
   if (ACTIVATING_EVENTS.has(name)) {
     globalThis.__vnStickyActivation?.();
     // …and TRANSIENT activation, which a file picker needs (HTML; Chromium).
     noteActivation(name, key ?? undefined);
   }
-  // input: the payload string is the new value — mirror it onto the node
-  // BEFORE dispatch so `e.target.value` reads like the browser.
-  // (`value` is an element field; the host only ever targets an element with
-  // this event, which is what the cast records — a text node reaching here
-  // would be a host bug, not a JS one.)
-  //
-  // `change` is listed with it deliberately, and is currently UNREACHABLE:
-  // `CODE_TO_NAME` is built from `EV_CODES`, which mirrors `tree.rs`, and
-  // `tree.rs` has no `EV_CHANGE`. It stays because the day the host sources one
-  // this is the line that has to already be right — and `test/protocol-codes
-  // .test.ts` is what will notice the code arriving. See `vModelText`, which is
-  // the directive that wanted it.
+  // input: the payload string is the new value; mirror it onto the node BEFORE dispatch so `e.target.value`
+  // reads like a browser's. `change` is listed too but unreachable: `EV_CODES` has no change code yet, and
+  // `test/protocol-codes.test.ts` will notice when one arrives.
   // A pick in a select's popup, or a key on a closed one: `a` is the option's
   // index. The selection changes, then `input` and `change` fire.
   if (name === "input" && isSelectEl(target)) return pickOption(target as MirrorElement, a);
@@ -7193,24 +6210,16 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
     // The storage, not the accessor: the host already holds this value, and
     // the accessor would push it straight back.
     (target as MirrorElement)._value = key;
-  // An image's answer: the state `complete` / `naturalWidth` read, BEFORE the
-  // event, so `onload` sees the size. An answer for a `src` the element no
-  // longer has is stale — a browser would have aborted that request.
+  // An image's answer is recorded BEFORE the event so `onload` sees the size; one for a `src` the element no
+  // longer has is stale and dropped.
   const isImg = target.kind === 1 && (target as MirrorElement).tag === "img";
   if (isImg && (name === "load" || name === "error")) {
     const img = target as MirrorElement;
     if (key !== img.attrs.src) return true;
     img._img = { src: key, ok: name === "load", w: name === "load" ? a : 0, h: name === "load" ? b : 0 };
   }
-  // `scroll` used to write the position onto the node here, because that was
-  // the only way `e.target.scrollTop` could answer anything. It is now an
-  // accessor over the host's live `ScrollHandle`, so writing it back would
-  // push the position the event describes into the box the event came from —
-  // a round trip with one possible outcome and one possible bug.
-  // The derived family (`pointerdown` from `mousedown`, `focusin` from `focus`,
-  // …): each one is a full W3C event of its own with its own propagation, in
-  // the order a browser fires them. `preventDefault()` on a derived pointer
-  // event cancels the source, exactly as it does in a browser.
+  // Derived events (`pointerdown` from `mousedown`, `focusin` from `focus`, …) are full events in browser
+  // order; `preventDefault()` on a derived pointer event cancels the source.
   const derived = DERIVED_OF[name];
   let proceed = true;
   if (derived) {
@@ -7220,15 +6229,9 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
       if (!propagate(target, dn, synthesize(dn, a, b, c, d, key))) proceed = false;
     }
   }
-  // Skipping the source event when nothing listens for it is exactly as safe:
-  // with no handler to run, `propagate` can only return `!ev.defaultPrevented`,
-  // and the sole thing that could have set that flag is the `preventDefault()`
-  // two lines below — whose whole job is to make `proceed` false, which it
-  // already is.
-  // A click whose path holds a link (or a label, or a file input) must be
-  // BUILT even with no handler on it: a `preventDefault()` anywhere on the
-  // path is what cancels the activation, and the walk is the only way to
-  // learn that.
+  // Skipping the source event when nothing listens is safe: the only `preventDefault()` that could set the flag
+  // is the one below, which already made `proceed` false. A click whose path holds a link, label or file input
+  // must be built regardless: a `preventDefault()` on the path cancels the activation.
   const link = name === "click" && activatableOnPath(target);
   if (link || hasListener(target, name)) {
     const ev = synthesize(name, a, b, c, d, key, data, isImg || isFrameEl(target) ? "img" : undefined);
@@ -7236,8 +6239,7 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
     if (!proceed && ev.preventDefault) ev.preventDefault();
     proceed = propagate(target, name, ev) && proceed;
     if (link && proceed) activate(target, true);
-    // A browser opens its context menu now. There is none here, by design —
-    // say so once, the first time a page leaves the default to happen.
+    // No context menu here; warn once when a page leaves the default to happen.
     if (name === "contextmenu" && proceed) {
       warnCompat(
         "contextmenu:default",
@@ -7246,15 +6248,11 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
       );
     }
   }
-  // A focused file input clicks itself on Enter (keydown; Chromium's
-  // keypress) and on Space (keyup), unless the key event was cancelled —
-  // KeyboardClickableInputTypeView.
+  // A focused file input clicks itself on Enter (keydown) and Space (keyup) unless the key event was cancelled.
   if (proceed && isFileInput(target) && ((name === "keydown" && key === "Enter") || (name === "keyup" && key === " "))) {
     (target as MirrorElement).click();
   }
-  // Enter in a text field submits its form (implicit submission, HTML
-  // §4.10.21.2), unless the keydown was cancelled. Chromium does it from
-  // keypress, which a cancelled keydown suppresses: the same rule.
+  // Enter in a text field submits its form unless the keydown was cancelled.
   if (proceed && name === "keydown" && key === "Enter" && blocksImplicitSubmission(target)) {
     implicitSubmit(target as MirrorElement);
   }
@@ -7275,21 +6273,20 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
       propagate(target, dn, synthesize(dn, a, b, c, d, key));
     }
   }
-  // L-2 (docs/RUNTIME.md §5.8): the host's text widget takes its own press
-  // before any listener runs. The host cancels a press's focus, but not on one.
+  // The host's text widget takes its own press before any listener runs.
   if (!proceed && name === "mousedown" && isTextWidget(target)) {
     warnCompat(
       "mousedown-prevent:text-field",
       "`mousedown.preventDefault()` on an <input> or <textarea> — a browser leaves the focus where it was; " +
-        "vue-native's text field has already focused itself and placed the caret (docs/RUNTIME.md §5.8 L-2)",
+        "vue-native's text field has already focused itself and placed the caret",
     );
   }
-  // W-1 (docs/RUNTIME.md §5.9): a textarea scrolls itself inside the widget.
+  // A textarea scrolls itself inside the widget.
   if (!proceed && name === "wheel" && (target as MirrorElement).tag === "textarea") {
     warnCompat(
       "wheel-prevent:textarea",
       "`wheel.preventDefault()` on a <textarea> — a browser does not scroll it; vue-native's textarea has " +
-        "already scrolled its own content (the boxes around it stay put) (docs/RUNTIME.md §5.9 W-1)",
+        "already scrolled its own content (the boxes around it stay put)",
     );
   }
   if (name === "mouseup" || name === "pointercancel") releaseCapturedPointer(1);
@@ -7314,15 +6311,11 @@ function teardownDocumentRoot(root: MirrorElement, unmount?: () => void): void {
   dndSeen = false;
   dndSwallowClick = false;
   __vn_remove(root.__vnId);
-  // Detached-but-live nodes: <KeepAlive> creates its cache container with
-  // createElement and NEVER inserts or removes it (Vue moves subtrees in
-  // and out of it), so nothing above ever tells us to free it. After
-  // app.unmount() every node Vue owns is gone from the mirror, so whatever
-  // is left is exactly that kind of orphan — free it or the host arena
-  // grows by one node per KeepAlive on every hot restart.
+  // <KeepAlive> creates its cache container with createElement and never inserts or removes it, so nothing
+  // tells us to free it. After app.unmount() whatever is left in the mirror is such an orphan; free it or the
+  // host arena grows by one node per KeepAlive on each hot restart.
   for (const id of Array.from(nodesById.keys())) __vn_remove(id);
-  // …and every loose subtree, whether or not script still holds it: the
-  // old app is going, and the next one's nodes will reuse these ids.
+  // …and every loose subtree, held by script or not: the next app's nodes reuse these ids.
   for (const [id, r] of looseRoots) __vn_remove(r.box || id);
   for (const n of nodesById.values()) n.__vnId = 0;
   for (const ref of looseById.values()) {
@@ -7348,68 +6341,30 @@ function teardownDocumentRoot(root: MirrorElement, unmount?: () => void): void {
 /** The viewport root also hosts body-level portals, independently of an app mount element. */
 function ensureDocumentRoot(): MirrorElement {
   if (appRoot) return appRoot;
-  // `HTML`, not `ROOT`. The retained tree has one root box and it answers to
-  // `document.documentElement` AND `document.body` (see the block that
-  // installs them), so whatever `nodeName` it reports is what every
-  // DOM-walking library sees at the top of the chain — and the walk has to
-  // TERMINATE there.
-  //
-  // @floating-ui/dom, which every reka-ui popper rides on, walks with
-  //
-  //     getParentNode(n) = n.assignedSlot || n.parentNode || getDocumentElement(n)
-  //     isLastTraversableNode(n) = ['html','body','#document'].includes(nodeName)
-  //
-  // and `getNearestOverflowAncestor` recurses on `getParentNode` until
-  // `isLastTraversableNode`. Our root has no `parentNode`, so `getParentNode`
-  // falls through to `getDocumentElement`, which IS the root — a self-loop.
-  // Called "ROOT" the loop never terminates, and `getOverflowAncestors(floating)`
-  // (the FIRST thing `autoUpdate` does, before it ever calls `update()`)
-  // blew the JS stack. `computePosition` then never ran: reka's PopperContent
-  // was left at its unplaced `translate(0, -200%)` with an inline
-  // `animation: none`, so every tooltip/popover/dropdown painted two of its
-  // own heights above the window origin, never animated, and — because the
-  // throw also ate the queued `useGraceArea` effect that installs the
-  // pointer-exit watcher — never closed. Naming the root `html` is the whole
-  // fix: `isLastTraversableNode` is true one step earlier, and floating-ui's
-  // own `if (getNodeName(node) === 'html') return node` guard exists for
-  // exactly this shape. See research/reports/m19/hover-anim-tooltips.md.
-  //
-  // The Rust tag stays "root" — `vn_css::element::has_local_name` already
-  // answers `html` and `body` off `is_root()`, so the cascade is unaffected
-  // and devtools still names the box for what it is.
+  // Named `html`, not `ROOT`: this one root answers to `document.documentElement` and `document.body`, and
+  // DOM-walking libraries stop at `html`. @floating-ui's `getParentNode` falls back to `getDocumentElement`,
+  // which is the root itself, so under any other name `getOverflowAncestors` loops forever, overflows the
+  // stack in `autoUpdate`, and every reka-ui popper stays unplaced. The Rust tag stays "root"; the cascade
+  // already answers `html` and `body` off `is_root()`.
   const root = mk(__vn_create_root(), 1, "html");
-  // The document roots a reused browser component reaches for (`<Teleport
-  // to="body">`, `document.querySelectorAll`, `document.body.contains`) all
-  // mean this node.
+  // `<Teleport to="body">`, `document.querySelectorAll` and `document.body.contains` all mean this node.
   appRoot = root;
   globalThis.__VN_TEARDOWN__ = () => teardownDocumentRoot(root);
-  // `document`/`window` listeners added at module scope, before there was a
-  // root to carry their bit (`addGlobalListener` only syncs one that exists):
-  // without this a `document.addEventListener("copy", …)` from before
-  // `mount()` was never delivered.
+  // Listeners added to `document`/`window` at module scope had no root to carry their bit; sync them now.
   for (const m of globalHandlers.values()) for (const name of Object.keys(m)) syncListenerFlag(root, name);
   dndRearm();
-  // Anything module-scope theme code wrote to `document.documentElement`
-  // before there was a root — the `dark` class, the `--radius` overrides —
-  // lands now, BEFORE the first render, so the first paint is themed.
+  // Module-scope writes to `document.documentElement` (the `dark` class, `--radius`) land before first render.
   if (flushDocumentElement) flushDocumentElement(root);
   return root;
 }
 
 /**
- * What `createApp` hands back: Vue's own `App`, with ONE signature different.
+ * What `createApp` hands back: Vue's `App`, except `mount()` without a container keeps the native
+ * window-root shorthand; a selector or Element mounts there, so body-level portals stay outside an app
+ * container's transforms.
  *
- * `mount()` without a container keeps the native window-root shorthand. A
- * selector or Element mounts into that element, as in a browser, so body-level
- * portals remain outside an app container's transforms.
- *
- * It EXTENDS `App` rather than `Omit`-ing `mount` out of it, and that is not a
- * style choice: `use`, `component`, `directive` and `provide` all return
- * `this`, and a mapped type resolves `this` to the type it was mapped FROM — so
- * an `Omit` version type-checks `createApp(App).mount()` and then fails on
- * `createApp(App).use(router).mount()`, which is what every real entry module
- * writes. Extending keeps `this` polymorphic, so the whole chain stays one
- * expression.
+ * Extends `App` rather than `Omit`-ing `mount`: `use` / `component` / ... return `this`, and a mapped type
+ * resolves `this` to the source type, breaking `createApp(App).use(router).mount()`.
  */
 export interface VnApp extends App<MirrorElement> {
   mount(container?: unknown): ComponentPublicInstance;
@@ -7463,14 +6418,9 @@ export function createApp(
   return app as VnApp;
 }
 
-// ---- runtime-dom's other exports ------------------------------------------
-// `import { … } from "vue"` resolves to THIS module, and `vue` is runtime-dom
-// plus runtime-core. runtime-core arrives by `export *` at the bottom; these are
-// the thirteen names runtime-dom adds on top (research/reports/m26/client-gap/
-// B-build-ui.md §1.2 #22). A missing one is a BUILD error in every app that
-// names it — `useCssVars` is what the SFC compiler emits for `v-bind()` in a
-// `<style>`, so any library using that is unbuildable — so each one exists:
-// the real thing where vue-native can do it, an advisory where it cannot.
+// runtime-dom's other exports: `vue` is runtime-dom plus runtime-core (`export *` below), and a missing name
+// breaks the build of every app using it (`useCssVars` is what `v-bind()` in `<style>` compiles to). Each
+// exists: the real thing where possible, an advisory where not.
 
 /** `render(vnode, container)` — this renderer's, exactly as runtime-dom exports its own. */
 export const render = renderer.render;
@@ -7479,13 +6429,8 @@ export const render = renderer.render;
 export { nodeOps, patchProp };
 
 /**
- * The `--hash-name` custom properties a `v-bind()` in `<style>` reads, written
- * onto the component's root element(s) — runtime-dom's `useCssVars`, line for
- * line (runtime-dom.esm-bundler.js `useCssVars` / `setVarsOnVNode`). vn-css
- * inherits custom properties down the tree (crates/vn-css/src/vars.rs), so the
- * rule `color: var(--abc-color)` under that root resolves as in a browser.
- * Teleported children are found by the `data-v-owner` attribute runtime-core's
- * Teleport stamps, as in the browser.
+ * Writes the `--hash-name` custom properties a `v-bind()` in `<style>` reads onto the component's root
+ * element(s), as runtime-dom's `useCssVars`. Teleported children are found by the `data-v-owner` attribute.
  */
 export function useCssVars(getter: (ctx: unknown) => Record<string, unknown>): void {
   const instance = getCurrentInstance() as unknown as CssVarsInstance | null;
@@ -7639,33 +6584,20 @@ export const hydrate: typeof render = (vnode, container) => {
 /** SSR's directive hooks: there is no SSR here, so there is nothing to initialize. */
 export const initDirectivesForSSR = (): void => {};
 
-// ---- missing globals (compat roadmap G5) ----------------------------------
-// Each of these is a ReferenceError today, i.e. strictly worse than a wrong
-// answer: reka-ui's FocusScope constructs a MutationObserver inside a
-// SETUP-TIME watchEffect, so every modal (Dialog, Popover, Menu, Select) dies
-// before it renders. They are installed on the global unconditionally when the
-// engine does not already have them.
+// Missing globals are ReferenceErrors, worse than a wrong answer: reka-ui's FocusScope constructs a
+// MutationObserver in a setup-time watchEffect, so every modal would die before rendering. Installed
+// unconditionally when the engine lacks them.
 
-// A hole includes a PREVIOUS runtime's install (see `REALM`): after a
-// same-realm reload this runtime's class replaces the old one, whose state
-// (queued polls, the old mirror tree) is dead.
+// A previous runtime's install counts as vacant (see `REALM`): a same-realm reload replaces it.
 const defineGlobal = (name: string, value: unknown) => {
   if (vacant(globalThis, name)) {
     Object.defineProperty(globalThis, name, { value: mark(value), configurable: true, writable: true });
   }
 };
 
-// -- the `CSS` namespace object.
-//
-// reka-ui's `Presence` matches the `animationend` it just received against the
-// element's `animationName` with `CSS.escape(...)`. `CSS is not defined` there
-// is a ReferenceError *inside an event handler*: the exit animation never
-// completes and the element never unmounts. It only became reachable when
-// `animationend` started firing at all (m12 item 3).
-//
-// `escape` is CSSOM §4.2's algorithm implemented rather than approximated — it
-// feeds a string comparison, and an under-escaped identifier silently stops
-// matching.
+// The `CSS` namespace. reka-ui's `Presence` calls `CSS.escape` inside an event handler; without it the exit
+// animation never completes and the element never unmounts. `escape` is CSSOM's algorithm, not an
+// approximation: it feeds a string comparison, and an under-escaped identifier silently stops matching.
 defineGlobal("CSS", {
   escape(value: unknown) {
     const s = String(value);
@@ -7699,9 +6631,8 @@ defineGlobal("CSS", {
     }
     return out;
   },
-  // A feature PROBE. Answering `false` for everything would be a lie in the
-  // other direction (it is how `@supports`-guarded fallbacks get chosen), so
-  // this says what vue-native can express: the properties the cascade maps.
+  // A feature probe: answers what vue-native can express (the properties the cascade maps), since `@supports`
+  // fallbacks are chosen with it.
   supports(a: unknown, b?: unknown) {
     const body = b === undefined ? String(a) : `${String(a)}:${String(b)}`;
     const colon = body.indexOf(":");
@@ -7720,9 +6651,8 @@ defineGlobal("CSS", {
   },
 });
 
-/// The property names `CSS.supports` answers `true` for: the ones vn-css maps
-/// onto a real computed value. Deliberately conservative — a probe that says
-/// yes and then does nothing is worse than one that says no.
+/// Properties `CSS.supports` answers `true` for. Conservative: a probe that
+/// says yes and then does nothing is worse than one that says no.
 const CSS_SUPPORTED = new Set<string>([
   "animation", "animation-delay", "animation-direction", "animation-duration",
   "animation-fill-mode", "animation-iteration-count", "animation-name",
@@ -7740,23 +6670,16 @@ const CSS_SUPPORTED = new Set<string>([
   "visibility", "white-space", "width", "z-index",
 ]);
 
-/// The values `CSS.supports` says no to for a property it otherwise knows.
-/// `linear(…)` easing: the parser (lightningcss alpha.72) has no such
-/// function, so a stylesheet drops the declaration and `el.animate()` refuses
-/// it (src/waapi.ts). Apps probe for it and fall back — Argon's counter
-/// (Digit.vue) picks a `cubic-bezier` when this answers no. Not
-/// `linear-gradient(`.
+/// Values `CSS.supports` rejects for a known property: `linear(…)` easing,
+/// which the parser lacks, so stylesheets drop it and `el.animate()` refuses it.
+/// Apps probe and fall back to `cubic-bezier`. Not `linear-gradient(`.
 const CSS_UNSUPPORTED_VALUE = /(?:^|[^\w-])linear\(/i;
 
-// -- MutationObserver, wired to the REAL mirror-tree mutations.
-// Records are queued at the nodeOps/patchProp call sites and delivered on a
-// microtask, which is exactly a browser's timing (the observer callback runs at
-// the end of the current task, before rendering).
-/** One `MutationRecord`, with exactly the fields this runtime can fill in. */
+// -- MutationObserver. Records are queued at the nodeOps/patchProp call sites
+// and delivered on a microtask, as a browser does.
 interface MutationRecordLike {
   type: "childList" | "attributes";
   target: MirrorNode;
-  /** Static NodeLists, as a browser's are. */
   addedNodes: MirrorCollection<MirrorNode>;
   removedNodes: MirrorCollection<MirrorNode>;
   attributeName: string | null;
@@ -7765,7 +6688,6 @@ interface MutationRecordLike {
   previousSibling: null;
   nextSibling: null;
 }
-/** What `observe()` recorded for one target. */
 interface MutationTargetEntry {
   node: MirrorElement;
   subtree: boolean;
@@ -7776,7 +6698,6 @@ interface MutationTargetEntry {
     attributeFilter: string[] | null;
   };
 }
-/** `MutationObserver`'s `observe()` options, as far as they are honoured. */
 interface MutationObserverInitLike {
   subtree?: boolean;
   childList?: boolean;
@@ -7785,7 +6706,6 @@ interface MutationObserverInitLike {
   attributeFilter?: string[];
   characterData?: boolean;
 }
-/** The instance shape `notifyMutation` and `flushMutations` drive. */
 interface MutationObserverLike {
   _callback: (records: MutationRecordLike[], ob: MutationObserverLike) => void;
   _targets: MutationTargetEntry[];
@@ -7876,14 +6796,9 @@ defineGlobal(
       this._records = [];
     }
     observe(node: unknown, options: MutationObserverInitLike = {}) {
-      // `observe(document, {subtree: true})` is how a library says "watch
-      // everything" — reka's focus scope and floating-ui's auto-update both do
-      // it. A Document is not an element here, but its element subtree is
-      // exactly the root's, so watching the root answers the same question.
-      // `document.documentElement` / `document.body` ARE real elements since
-      // m19, and arrive as themselves.
-      // Duck-typed rather than compared against the `document` global, because
-      // the same code runs in the test harness's private world.
+      // `observe(document, {subtree: true})` is how libraries (reka, floating-ui)
+      // say "watch everything". A Document is not an element here, so watch the
+      // root. Duck-typed: the same code runs in the test harness's private world.
       if (node && (node as MirrorNode).kind !== 1 && (node as VnDocument).documentElement) {
         node =
           ((node as VnDocument).documentElement as MirrorNode).kind === 1
@@ -7929,46 +6844,21 @@ defineGlobal(
   },
 );
 
-// -- ResizeObserver and IntersectionObserver, after layout and before paint.
+// -- ResizeObserver and IntersectionObserver, after layout and before paint
+// (HTML "update the rendering"): a callback sees the size the frame is about
+// to paint, and what it changes paints in that same frame.
 //
-// HTML "update the rendering" (§8.1.7.3) runs both where the document's
-// layout is fresh: after the animation frame callbacks it recalculates styles
-// and updates layout, runs ResizeObserver's loop (Resize Observer §3.4.4:
-// gather the active observations deeper than `depth`, broadcast them, lay out
-// again, gather again at the shallowest depth just broadcast, until nothing
-// is active; an observation skipped on the way raises the "loop completed
-// with undelivered notifications" error), then the update intersection
-// observations steps, and then paints. So a ResizeObserver callback sees the
-// size the frame is about to paint, and what it changes is painted in that
-// same frame.
+// The host runs one step per frame through `__vn_set_layout_hook`: it calls
+// `layoutStep` once per op, drains microtasks after each call, and lays out
+// again between rounds when callbacks changed anything.
 //
-// The host runs this once per frame as one step (`layoutStep` below, through
-// `__vn_set_layout_hook`; crates/vn-tree/src/observe.rs): it draws the frame
-// first when the frame is going to draw, calls `layoutStep` once per op, drains
-// microtasks after every call (a browser's microtask checkpoint after each
-// callback, where Vue's scheduler flushes the patch a callback asked for), and
-// lays out again between rounds when the callbacks changed anything. A frame
-// that lays nothing out runs no step, unless an `observe()` is waiting for its
-// first report.
+// It has to be real: @floating-ui's `autoUpdate` waits for a ResizeObserver
+// report before placing an element, so an inert observer leaves every popover,
+// tooltip and select at its pre-layout 0×0 position.
 //
-// Until m26 fixes-lag-1 both observers were POLLED from requestAnimationFrame,
-// which runs before the frame's layout: a callback saw the previous frame's
-// size, its response painted a frame late (the "one-frame jump"), and a target
-// mounted in the wave, which had no box yet, forced a layout from inside the
-// rAF.
-//
-// It has to be real: @floating-ui's `autoUpdate` positions an element ONCE and
-// then waits for a ResizeObserver to tell it the element has been laid out. An
-// inert observer means every popover, tooltip, dropdown and select keeps the
-// position computed from its pre-layout 0×0 box — which is to say none of them
-// is ever placed at all.
-//
-// Divergence, said in docs/RUNTIME.md §5.1: `contentRect`, `contentBoxSize`
-// and `borderBoxSize` are all the BORDER box, as `clientWidth` is here. The
-// cascade's padding and border widths are not published per node, so the
-// content box is not known; `contentRect` is at (0, 0), as for a box without
-// padding.
-/** One `ResizeObserverEntry`, with the box fields every consumer reads. */
+// Divergence: `contentRect`, `contentBoxSize` and `borderBoxSize` are all the
+// BORDER box, since padding and border widths are not published per node;
+// `contentRect` is at (0, 0).
 interface ResizeEntryLike {
   target: MirrorElement;
   contentRect: MirrorRect;
@@ -7980,14 +6870,9 @@ interface ResizeSize {
   w: number;
   h: number;
 }
-/** The instance shape the step below drives. */
 interface ResizeObserverLike {
   _callback: (this: ResizeObserverLike, entries: ResizeEntryLike[], ob: ResizeObserverLike) => void;
-  /**
-   * The observation targets, with the size last REPORTED for each; `null` =
-   * nothing reported yet, so the next gather reports it, as `observe()` does
-   * in a browser, a 0×0 or undisplayed target included.
-   */
+  /** Targets with the size last REPORTED; `null` = nothing reported yet, so the next gather reports it. */
   _targets: Map<MirrorElement, ResizeSize | null>;
   /** What the last gather found active: the target, its size, its depth. */
   _active: [MirrorElement, ResizeSize, number][];
@@ -7995,25 +6880,21 @@ interface ResizeObserverLike {
   _skipped: boolean;
 }
 
-/** The document's ResizeObservers that have observations, in the order they observed first. */
+/** ResizeObservers that have observations, in the order they observed first. */
 const resizeObservers: ResizeObserverLike[] = [];
 /** The observers the current round calls back, in order. */
 let resizeDue: ResizeObserverLike[] = [];
 /** The shallowest target depth the current round has broadcast. */
 let resizeDepth = Infinity;
 
-/**
- * Resize Observer "calculate depth for node": the nodes on the path from it
- * to the root of its tree, itself included, so a root (or a detached node) is
- * at depth 1 and the first gather, at depth 0, takes every target.
- */
+/** Nodes from `node` to its tree's root, itself included: a root or detached node is 1, so the first gather (depth 0) takes every target. */
 function nodeDepth(node: MirrorNode): number {
   let d = 1;
   for (let n = node.parentNode; n; n = n.parentNode) d++;
   return d;
 }
 
-/** Resize Observer "gather active observations at depth". Answers how many observers have entries. */
+/** Gathers active observations deeper than `depth`; answers how many observers have entries. */
 function gatherResizes(depth: number): number {
   resizeDue = [];
   resizeDepth = Infinity;
@@ -8021,8 +6902,7 @@ function gatherResizes(depth: number): number {
     ob._active = [];
     ob._skipped = false;
     for (const [target, last] of ob._targets) {
-      // The layout box (transforms ignored, as the spec's is). The step runs
-      // after the frame's layout, so nothing is owed and no read forces one.
+      // The layout box, transforms ignored, as the spec's. Layout is fresh, so no read forces one.
       const r = rectOf(target);
       if (last && last.w === r.width && last.h === r.height) continue;
       const d = nodeDepth(target);
@@ -8034,7 +6914,7 @@ function gatherResizes(depth: number): number {
   return resizeDue.length;
 }
 
-/** One observer of "broadcast active resize observations". Answers how many are left this round. */
+/** Calls back one due observer; answers how many are left this round. */
 function broadcastNextResize(): number {
   const ob = resizeDue.shift();
   // A callback earlier in the round may have disconnected it.
@@ -8075,15 +6955,11 @@ function resizeEntry(target: MirrorElement, size: ResizeSize): ResizeEntryLike {
 const RESIZE_LOOP_MESSAGE = "ResizeObserver loop completed with undelivered notifications.";
 
 /**
- * Resize Observer "deliver resize loop error notification": HTML "report an
- * exception" with no Error object, at the global. An `ErrorEvent` named
- * `error`, cancelable, for `addEventListener("error")`, and `window.onerror`
- * called the HTML way, `(message, source, lineno, colno, error)`. The engine
- * calls an `on<type>` attribute with the event alone, which would hand an
- * error reporter an event object for a message (and Sentry's default filter,
- * which drops this message, would not recognise it), so the attribute is held
- * back from the engine's dispatch and called here. Nothing is printed: a
- * browser does not print this one either.
+ * Reports the resize loop error at the global: a cancelable `ErrorEvent`, and
+ * `window.onerror` called the HTML way `(message, source, lineno, colno, error)`.
+ * The engine would call `onerror` with the event alone, handing error reporters
+ * (Sentry's filter included) an event for a message, so the attribute is held
+ * back from dispatch and called here. Nothing is printed, as in a browser.
  */
 function deliverResizeLoopError(): void {
   const g = globalThis as {
@@ -8180,7 +7056,7 @@ const ErrorEventClass: (new (type: string, init?: ErrorEventInit) => VnEvent) | 
   return ErrorEvent as unknown as new (type: string, init?: ErrorEventInit) => VnEvent;
 })();
 
-// The step's ops: the numbers are the protocol with crates/vn-tree/src/observe.rs.
+// The step's ops: the numbers are the host protocol.
 const LAYOUT_START = 0;
 const LAYOUT_NEXT = 1;
 const LAYOUT_AGAIN = 2;
@@ -8193,11 +7069,7 @@ function observingLayout(): boolean {
   return false;
 }
 
-/**
- * The runtime's half of the step (see the section header): one op per host
- * call. Anything that throws out of here would lose the step's state, so the
- * callbacks' exceptions are reported from a microtask instead.
- */
+/** The runtime's half of the step: one op per host call. A throw would lose the step's state, so callback errors are reported from a microtask. */
 function layoutStep(op: number): number {
   switch (op) {
     case LAYOUT_START:
@@ -8214,8 +7086,7 @@ function layoutStep(op: number): number {
         raised = 1;
       }
       updateIntersections();
-      // Observers that observe nothing leave the list: a browser keeps them
-      // (weakly), and nothing can tell the difference.
+      // Observers that observe nothing leave the list.
       for (let i = resizeObservers.length - 1; i >= 0; i--) if (!resizeObservers[i]!._targets.size) resizeObservers.splice(i, 1);
       return raised | (observingLayout() ? 2 : 0);
     }
@@ -8224,11 +7095,9 @@ function layoutStep(op: number): number {
   }
 }
 
-// The host runs the step; one without the two functions (an older shell, a
-// test harness that leaves them out) gets the step from requestAnimationFrame,
-// which is BEFORE layout, with no re-layout between rounds, and while nothing
-// changes it re-polls on a 250 ms timer instead of every frame. A safety net,
-// not the mechanism.
+// Without the host functions (older shell, test harness) the step falls back to
+// requestAnimationFrame: before layout, no re-layout between rounds, and a
+// 250 ms re-poll while nothing changes.
 const hostSteps = typeof __vn_set_layout_hook === "function" && typeof __vn_layout_watch === "function";
 if (hostSteps) __vn_set_layout_hook(layoutStep);
 const QUIET_STEPS = 2;
@@ -8315,31 +7184,19 @@ defineGlobal(
 
 // -- IntersectionObserver, from the host's painted bounds.
 //
-// redjs ships an INERT one ("nothing intersects in a game host"), and an inert
-// IntersectionObserver is not a harmless one in an app: every `visible` /
-// `visibleOnce` variant of @vueuse/motion waits for `isIntersecting` before it
-// animates in, so an element that starts at `opacity: 0` (the Argon client's
-// whole login card, research/reports/m26/client-gap.md §1 #12) stays invisible
-// forever; lazy loaders never load; off-screen animations never pause.
+// redjs's is inert, and that is not harmless: @vueuse/motion's `visible`
+// variants wait for `isIntersecting`, so elements that start at `opacity: 0`
+// stay invisible forever and lazy loaders never load.
 //
-// This one is the W3C algorithm, run where HTML runs it: "run the update
-// intersection observations steps" in the frame's step after layout (the
-// FINISH op above), which, for each target, intersects its painted rectangle
-// with the root's (the viewport, or the `root` element's box, grown by
-// `rootMargin`), maps the ratio onto `thresholds`, and queues an entry when the
-// threshold index or `isIntersecting` moves, so the first update always
-// reports, as `observe()` does in a browser. The callbacks run from a task
-// ("queue an intersection observer task"), after the frame has painted.
+// This runs the W3C update steps in the frame step after layout (FINISH op):
+// it queues an entry when the threshold index or `isIntersecting` moves (so the
+// first update always reports), and calls back from a task after paint.
+// Rectangles are where boxes were DRAWN (transforms applied), as
+// getBoundingClientRect, not the layout box ResizeObserver uses.
 //
-// The rectangles are where the boxes were DRAWN, transforms applied: the spec
-// takes the target's from getBoundingClientRect() ("getting the bounding box"),
-// not from its layout box as ResizeObserver does.
-//
-// Divergence, deliberate: the intersection is clipped by the ROOT only, not by
-// every scrolling ancestor between target and root, because answering "which
-// ancestors clip" per target per frame would cost a host call per ancestor; a
-// target scrolled out of an inner scroller that is still inside the window
-// reads as intersecting.
+// Divergence: clipped by the ROOT only, not by intermediate scroll ancestors
+// (that would cost a host call per ancestor per frame), so a target scrolled out
+// of an inner scroller but inside the window reads as intersecting.
 interface IntersectionTargetState {
   prevIndex: number;
   prevIntersecting: boolean;
@@ -8358,7 +7215,7 @@ let intersectionTaskQueued = false;
 /** The last update queued entries. */
 let intersectionsQueued = false;
 
-/** HTML "run the update intersection observations steps", for the document. */
+/** Runs the update-intersection-observations steps for the document. */
 function updateIntersections(): void {
   const now = (globalThis as { performance?: { now(): number } }).performance?.now() ?? Date.now();
   let queued = false;
@@ -8381,7 +7238,6 @@ function updateIntersections(): void {
   later(notifyIntersectionObservers, 0);
 }
 
-/** HTML "notify intersection observers". */
 function notifyIntersectionObservers(): void {
   intersectionTaskQueued = false;
   for (const ob of [...intersectionObservers]) {
@@ -8593,22 +7449,17 @@ for (const [name, value] of [
   }
 }
 
-// -- DocumentFragment. Vue's Teleport accepts one as a target, and reka-ui's
-//    Select CONSTRUCTS one even while closed — a missing class kills it at
-//    setup. Ours is a detached mirror element, so a Teleport into it renders
-//    into the retained tree without being painted, which is what a browser's
-//    off-document fragment does too.
-//    Script holds it (it is loose, see `looseCreated`), and inserting it
-//    inserts its children instead (`insertAll`), leaving it empty.
+// -- DocumentFragment. Vue's Teleport accepts one as a target and reka-ui's
+//    Select constructs one even while closed. Ours is a detached mirror element
+//    (loose, see `looseCreated`); inserting it inserts its children instead
+//    (`insertAll`), leaving it empty.
 {
   class DocumentFragment {
     constructor() {
       const node = mk(__vn_create_element(I("fragment")), 1, "fragment");
       Object.setPrototypeOf(node, DocumentFragment.prototype);
       fragments.add(node);
-      // A constructor that hands back a DIFFERENT object — `new
-      // DocumentFragment()` really is a detached mirror element, which is the
-      // whole point. The double cast is what says so.
+      // `new DocumentFragment()` deliberately returns a different object: a detached mirror element.
       return looseCreated(node) as unknown as DocumentFragment;
     }
   }
@@ -8624,9 +7475,7 @@ for (const [name, value] of [
   defineGlobal("DocumentFragment", DocumentFragment);
 }
 
-// -- NodeFilter. `document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, …)`
-//    is what reka's FocusScope walks with; the missing GLOBAL is what throws
-//    first, before the walker is even built.
+// -- NodeFilter. reka's FocusScope calls `createTreeWalker(root, NodeFilter.SHOW_ELEMENT, …)`.
 defineGlobal("NodeFilter", {
   SHOW_ALL: 0xffffffff,
   SHOW_ELEMENT: 1,
@@ -8637,18 +7486,11 @@ defineGlobal("NodeFilter", {
   FILTER_SKIP: 3,
 });
 
-// -- Tag-specific element classes. redjs ships Element/HTMLElement/SVGElement
-//    only, and reka-ui brands nodes with `instanceof HTMLInputElement`
-//    (FocusScope's isSelectableInput). A MISSING class is a ReferenceError,
-//    which is strictly worse than a false `instanceof` — so each one exists and
-//    answers for the tag it names.
-//
-//    Every HTML element interface Chrome has for a tag, by `tagName` (a list
-//    where one interface serves several tags). HTMLMediaElement comes before
-//    the two that extend it (`TAG_PARENTS`). `<audio>` matters most: the
-//    client's AudioManager tests `instanceof HTMLAudioElement` inside a
-//    MutationObserver callback, so a missing global threw on every mutation
-//    (research/reports/m26/dom-globals-1.md).
+// -- Tag-specific element classes. redjs ships only Element/HTMLElement/SVGElement,
+//    and reka-ui brands nodes with `instanceof HTMLInputElement`. A missing class
+//    is a ReferenceError, worse than a false `instanceof`, so each exists and
+//    answers for its tag(s) by `tagName`. HTMLMediaElement comes before the two
+//    that extend it (`TAG_PARENTS`).
 const TAG_CLASSES: Record<string, string | readonly string[]> = {
   HTMLInputElement: "INPUT",
   HTMLTextAreaElement: "TEXTAREA",
@@ -8719,7 +7561,7 @@ const TAG_PARENTS: Record<string, string> = {
   HTMLVideoElement: "HTMLMediaElement",
   HTMLAudioElement: "HTMLMediaElement",
 };
-/** HTMLMediaElement's constants (HTML §4.8.11): `readyState` and `networkState` values. */
+/** HTMLMediaElement's `readyState` and `networkState` constants. */
 const MEDIA_CONSTANTS: readonly (readonly [string, number])[] = [
   ["NETWORK_EMPTY", 0],
   ["NETWORK_IDLE", 1],
@@ -8733,17 +7575,11 @@ const MEDIA_CONSTANTS: readonly (readonly [string, number])[] = [
 ];
 // -- Form-control `value` / `checked` are real accessors.
 //
-// reka-ui's VisuallyHiddenInputBubble (Checkbox, Switch, RadioGroup inside a
-// form) and BubbleSelect do what React taught a generation of libraries:
-//
+// reka-ui's hidden inputs call
 //   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, v)
-//
-// and then dispatch `input` and `change` themselves. Against tag classes with
-// no `value` member that is `undefined.set`, and the Argon client died right
-// after sign-in. Two halves: a mirror element's own `value` is an accessor
-// that reaches the host (below), and the tag classes carry OWN accessors that
-// delegate to it (`TAG_ACCESSORS`), refusing a receiver of the wrong kind with
-// the browser's "Illegal invocation".
+// and dispatch `input`/`change` themselves. So a mirror element's own `value`
+// reaches the host (below), and the tag classes carry OWN accessors delegating
+// to it (`TAG_ACCESSORS`), refusing a wrong receiver with "Illegal invocation".
 
 /** Is `x` a mirror element (not a detached engine element, not a stranger)? */
 function isMirrorEl(x: unknown): x is MirrorElement {
@@ -8792,11 +7628,9 @@ function syncRangeValue(el: MirrorElement): void {
 const VALUE_TAGS = new Set(["input", "textarea", "select"]);
 
 /**
- * `el.value = v` on a form control: the mirror and the host, on EVERY
- * assignment. The host ticks a write counter even for the same string, so an
- * assignment re-forces a field the user has typed over since, as in a
- * browser. No `input` / `change` fires (HTML: setting the IDL attribute is not
- * a user edit). `<input>` / `<textarea>` take null as "" ([LegacyNullToEmptyString]).
+ * `el.value = v` on a form control: updates mirror and host on EVERY assignment
+ * (the host's write counter re-forces a field the user has typed over). Fires no
+ * `input` / `change`. `<input>` / `<textarea>` take null as "".
  */
 function writeControlValue(el: MirrorElement, v: unknown, dirty = true): void {
   if (dirty && isRangeInput(el)) el._rangeDirty = true;
@@ -8877,8 +7711,7 @@ defineDomGet(
       this._checked = v as boolean;
       return;
     }
-    // Every input renders as a text field today (no native checkbox), so the
-    // host keeps this for whatever reads it; the mirror is what JS sees.
+    // No native checkbox: the host just keeps this for whatever reads it.
     this._checked = !!v;
     __vn_set_prop(this.__vnId, I("checked"), String(!!v));
   } as (value: never) => void,
@@ -8911,20 +7744,14 @@ defineDomGet(
   } as (value: never) => void,
 );
 
-// ---- <select> and <option>: the selection model -----------------------------
+// ---- <select> and <option>: the selection model
 //
-// HTML §4.10.7 and §4.10.10, kept in the mirror: each option's selectedness
-// and dirtiness, the selectedness setting algorithm whenever a select's list
-// of options or its `multiple` / `size` changes, and the members scripts and
-// `v-model` use (`value`, `selectedIndex`, `options`, `selectedOptions`,
-// `option.selected`, `option.index`, `option.text`, `option.label`).
-//
-// The host draws the select (crates/vn-tree/src/select.rs) from the reserved
-// `:selected` prop, the selected index, and reports a user's pick as the
-// select's `input` host event with the option's index (`pickOption`), which
-// changes the selection and fires `input` and `change`, as Chromium does.
-// The host draws a drop-down whatever `multiple` and `size` say
-// (`adviseListBox`).
+// Each option's selectedness and dirtiness live in the mirror, and the
+// selectedness setting algorithm reruns when a select's options, `multiple` or
+// `size` change. The host draws the select from the reserved `:selected` prop
+// and reports a user's pick as the select's `input` host event with the
+// option's index (`pickOption`). It draws a drop-down whatever `multiple` and
+// `size` say (`adviseListBox`).
 
 // Plain predicates, not type guards: `this` in an accessor is already a
 // MirrorElement, and a guard's false branch would narrow it to `never`.
@@ -9052,7 +7879,7 @@ function selectednessChanged(o: MirrorElement): void {
   resetSelect(sel);
 }
 
-/** `option.selected = on`: the selectedness, dirty (HTML §4.10.10). */
+/** `option.selected = on`: sets selectedness and marks it dirty. */
 function setOptionSelected(o: MirrorElement, on: boolean): void {
   o._dirty = true;
   o._selected = on;
@@ -9085,12 +7912,9 @@ function setSelectValue(sel: MirrorElement, v: string): void {
 }
 
 /**
- * A select's or an option's `value` prop. runtime-dom assigns the PROPERTY:
- * on a select that selects the first option with the value (and only when
- * the value read differs); on an option it is the `value` attribute, and the
- * value as bound is kept for `v-model` (`_rawValue`, runtime-dom's `_value`),
- * so `<option :value="1">` gives the model a number, and `:value="obj"` the
- * object.
+ * A select's or an option's `value` prop (runtime-dom assigns the PROPERTY).
+ * An option keeps the value as bound in `_rawValue` for `v-model`, so
+ * `<option :value="1">` gives the model a number.
  */
 function patchSelectValue(el: MirrorElement, next: unknown): void {
   if (isOptionEl(el)) {
@@ -9102,12 +7926,7 @@ function patchSelectValue(el: MirrorElement, next: unknown): void {
   if (selectValue(el) !== v) setSelectValue(el, v);
 }
 
-/**
- * The user picked option `ix` (the host's `input` on the select): it alone is
- * selected, and `input` then `change` fire, as Chromium fires them for a
- * drop-down. Nothing happens for the option already selected, a disabled one,
- * or a disabled select.
- */
+/** The user picked option `ix`: it alone is selected, then `input` and `change` fire. No-op for the already-selected option, a disabled one, or a disabled select. */
 function pickOption(sel: MirrorElement, ix: number): boolean {
   const opts = selectOptions(sel);
   const o = opts[ix];
@@ -9185,12 +8004,7 @@ function defineOptionMembers(o: MirrorElement): void {
   });
 }
 
-/**
- * The members each tag class's PROTOTYPE carries as own accessors, for
- * `Object.getOwnPropertyDescriptor(X.prototype, name).get/.set.call(el)`.
- * Each delegates to the element's own path (the accessors above, or a file
- * input's own `value`), so there is one behaviour however it is reached.
- */
+/** Members each tag class's PROTOTYPE carries as own accessors; each delegates to the element's own path, so behaviour is the same however it is reached. */
 const TAG_ACCESSORS: Record<string, readonly string[]> = {
   INPUT: ["value", "checked", "defaultValue", "defaultChecked"],
   TEXTAREA: ["value", "defaultValue"],
@@ -9209,10 +8023,8 @@ for (const [name, spec] of Object.entries(TAG_CLASSES)) {
   const parentProto =
     (parentName && (globalThis as Record<string, { prototype?: object } | undefined>)[parentName]?.prototype) || ElementProto;
   if (typeof existing === "function" && !ours) {
-    // The ENGINE's class — redjs ships HTMLImageElement, the offscreen image
-    // `new Image()` and `document.createElement("img")` make (and a canvas
-    // draws). It knows nothing of mirror elements, so `<img>` in the tree was
-    // not `instanceof HTMLImageElement`; it is now, as well as the engine's own.
+    // The ENGINE's class (redjs's HTMLImageElement, for `new Image()`) knows
+    // nothing of mirror elements; extend its `instanceof` to cover them.
     try {
       const own = Function.prototype[Symbol.hasInstance];
       Object.defineProperty(existing, Symbol.hasInstance, {
@@ -9231,11 +8043,8 @@ for (const [name, spec] of Object.entries(TAG_CLASSES)) {
     continue;
   }
   if (!ours) continue;
-  // Mirror nodes are all plain HTMLElement, so `instanceof` is answered by the
-  // tag name instead of by the prototype chain — which is the ONLY way to make
-  // `el instanceof HTMLInputElement` true for a real `<input>` here. The
-  // prototype is still on HTMLElement's chain, so `HTMLInputElement.prototype.focus`
-  // is HTMLElement's, as in a browser.
+  // Mirror nodes are all plain HTMLElement, so `instanceof` is answered by tag
+  // name; the prototype stays on HTMLElement's chain, as in a browser.
   const klass = class {};
   Object.defineProperty(klass, "name", { value: name });
   Object.defineProperty(klass, Symbol.hasInstance, {
@@ -9271,17 +8080,7 @@ for (const [name, spec] of Object.entries(TAG_CLASSES)) {
   defineGlobal(name, klass);
 }
 
-// -- WebIDL interface objects the realm lacks.
-//
-// Code names these interfaces without constructing them, and a missing one is
-// a ReferenceError at CLASS DEFINITION: tsyringe-style DI emits
-// `__metadata("design:paramtypes", [Window])` for a constructor parameter typed
-// `Window` (the Xsolla pay SDK's `psdk-*` elements), and the Argon home screen
-// died on "Window is not defined". Each one here is what a browser's is: an
-// interface object whose constructor throws "Illegal constructor" (unless the
-// browser lets you construct it), with a prototype on the right parent, and an
-// `instanceof` that is true for the objects this realm already has — which it
-// never built, so the answer is by identity or by kind (`Symbol.hasInstance`).
+// WebIDL interface objects the realm lacks: code that merely names one (tsyringe's `design:paramtypes` with `Window`) must not throw a ReferenceError.
 
 type Iface = { prototype: object };
 
@@ -9315,12 +8114,7 @@ function defineInterface(
 const theGlobal = (k: string) => (globalThis as Record<string, unknown>)[k];
 const ET: Iface | null = typeof EventTarget === "function" ? (EventTarget as unknown as Iface) : null;
 
-/**
- * An interface whose prototype object already exists: NodeList.prototype and
- * its kin, made before the first mirror. `instanceof` is the prototype chain's
- * answer. When the engine has an interface of the same name, ours goes under
- * it, so `instanceof` holds for both.
- */
+/** An interface whose prototype object already exists (NodeList.prototype and kin); goes under the engine's same-named one if any. */
 function adoptInterface(
   name: string,
   proto: object,
@@ -9371,12 +8165,7 @@ adoptInterface("NodeList", NodeListProto, null, isChildList);
 adoptInterface("HTMLCollection", HTMLCollectionProto, null);
 adoptInterface("DOMRectList", DOMRectListProto, null);
 
-// -- Node: an interface of its own (DOM §4.4), the parent of Element,
-//    CharacterData, Attr and Document. redjs aliases `Node` to `Element`, so
-//    `Node.TEXT_NODE` was undefined (emojix compares `node.nodeType` with it)
-//    and a text node was not `instanceof Node` (the client's EnterText.vue,
-//    DOMPurify). The engine's Element.prototype is re-parented onto it, and so
-//    are the text mirrors' prototype and Attr's (below).
+// redjs aliases `Node` to `Element`; this gives Node its own interface (constants, text nodes `instanceof`) and re-parents Element, text mirrors and Attr under it.
 const NODE_CONSTANTS: readonly (readonly [string, number])[] = [
   ["ELEMENT_NODE", 1],
   ["ATTRIBUTE_NODE", 2],
@@ -9413,13 +8202,11 @@ const NodeIface: Iface | null = (() => {
     constructor: { value: iface, writable: true, configurable: true },
   }) as object;
   Object.defineProperty(iface, "prototype", { value: proto, writable: false });
-  // WebIDL constants: on the interface object and its prototype, read-only.
   for (const [k, v] of NODE_CONSTANTS) {
     Object.defineProperty(iface, k, { value: v, enumerable: true });
     Object.defineProperty(proto, k, { value: v, enumerable: true });
   }
-  // The chain answers for elements and text; `document` (redjs's own object)
-  // and a mirror whose chain a page re-parented answer by kind.
+  // `document` and re-parented mirrors answer by kind; the chain covers the rest.
   Object.defineProperty(iface, Symbol.hasInstance, {
     value: (x: unknown) =>
       !!x && typeof x === "object" && (proto.isPrototypeOf(x) || isMirrorNode(x) || isDocument(x) || x instanceof AttrImpl),
@@ -9430,8 +8217,7 @@ const NodeIface: Iface | null = (() => {
     warnCompat("global:Node", "Node could not be installed over the engine's own: Node.TEXT_NODE and the other constants are missing");
     return null;
   }
-  // The engine's Element.prototype, under Node.prototype. A realm with no
-  // Element of its own (the test harness) gets one below.
+  // The engine's Element.prototype goes under Node.prototype (a realm with no Element gets one below).
   if (typeof engineElement === "function" && !vacant(globalThis, "Element")) {
     try {
       const elementProto = (engineElement as unknown as Iface).prototype;
@@ -9442,9 +8228,7 @@ const NodeIface: Iface | null = (() => {
   }
   return iface as unknown as Iface;
 })();
-// A realm with no Element at all (the bun test harness): Element and
-// HTMLElement are made here, with the mirrors' prototype as
-// HTMLElement.prototype, as it is redjs's.
+// A realm with no Element (the bun test harness) gets Element and HTMLElement here.
 const ElementIface: Iface | null = (() => {
   if (!vacant(globalThis, "Element")) return (theGlobal("Element") as Iface | undefined) ?? null;
   const iface = defineInterface("Element", () => false, NodeIface) ?? null;
@@ -9452,11 +8236,7 @@ const ElementIface: Iface | null = (() => {
   return iface;
 })();
 
-/**
- * `instanceof` for an element interface whose prototype all mirror elements
- * share (they are all on HTMLElement.prototype): a mirror answers by its
- * namespace, anything else by the prototype chain, as before.
- */
+/** `instanceof` for an element interface whose prototype all mirror elements share: a mirror answers by namespace. */
 function wrapElementHasInstance(iface: unknown, mirrorIs: (el: MirrorElement) => boolean): void {
   if (typeof iface !== "function") return;
   const own = Function.prototype[Symbol.hasInstance];
@@ -9471,8 +8251,7 @@ function wrapElementHasInstance(iface: unknown, mirrorIs: (el: MirrorElement) =>
     /* an interface that refuses the property keeps its own answer */
   }
 }
-// An `<svg>` or `<math>` element is not an HTMLElement, and a fragment is
-// not an element at all, although each is on HTMLElement.prototype here.
+// `<svg>`/`<math>` and fragments sit on HTMLElement.prototype but are not HTMLElements.
 wrapElementHasInstance(theGlobal("HTMLElement"), (el) => !el._ns && !fragments.has(el));
 
 // `window` is the global (or the global's proxy, which is what `window` names).
@@ -9500,8 +8279,6 @@ defineInterface("Screen", (x) => x != null && x === theGlobal("screen"), ET);
 const mirrorKind = (x: unknown) =>
   !!x && typeof x === "object" && Object.getPrototypeOf(x) === TextProto ? (x as MirrorNode).kind : 0;
 const CharacterDataIface = defineInterface("CharacterData", (x) => mirrorKind(x) === 2 || mirrorKind(x) === 3, NodeIface);
-// Text and comment mirrors inherit Node's constants and EventTarget's methods,
-// as a browser's Text and Comment do.
 if (CharacterDataIface && Object.getPrototypeOf(TextProto) !== CharacterDataIface.prototype) {
   try {
     Object.setPrototypeOf(TextProto, CharacterDataIface.prototype);
@@ -9519,7 +8296,7 @@ defineInterface("Comment", (x) => mirrorKind(x) === 3, CharacterDataIface ?? nul
 });
 // No shadow DOM here, so nothing is a ShadowRoot.
 defineInterface("ShadowRoot", () => false, theGlobal("DocumentFragment") as Iface | null);
-// `el.attributes` and its Attr nodes (DOM §4.9). `document.createAttribute` makes one.
+// `el.attributes` and its Attr nodes; `document.createAttribute` makes one.
 defineInterface("Attr", (x) => x instanceof AttrImpl, NodeIface);
 if (NodeIface && Object.getPrototypeOf(AttrImpl.prototype) !== NodeIface.prototype) {
   Object.setPrototypeOf(AttrImpl.prototype, NodeIface.prototype);
@@ -9529,14 +8306,8 @@ defineInterface("NamedNodeMap", (x) => x instanceof NamedNodeMapImpl, null);
 const styleDecls = new WeakSet<object>();
 defineInterface("CSSStyleDeclaration", (x) => !!x && typeof x === "object" && styleDecls.has(x), null);
 
-// -- SVG and MathML elements. An element Vue renders inside `<svg>` (or
-//    `createElementNS(svgNS, …)` makes) is `instanceof SVGElement` and of its
-//    tag's interface, and not `instanceof HTMLElement`; `<math>` likewise for
-//    MathMLElement. Vue's Teleport asks `instanceof SVGElement` /
-//    `MathMLElement` of its target, and motion's scroll offsets ask
-//    `instanceof SVGGraphicsElement`, a ReferenceError while it was missing.
-//    Each interface answers by tag; one with no tag of its own answers for
-//    the tags of those under it.
+// -- SVG and MathML elements: `instanceof SVGElement` / `MathMLElement` / the tag's interface, never HTMLElement (Vue's Teleport and motion's scroll offsets test these).
+// Each interface answers by tag; one with no tag of its own answers for the tags under it.
 const SVG_INTERFACES: readonly (readonly [name: string, parent: string, tags: readonly string[]])[] = [
   ["SVGGraphicsElement", "SVGElement", []],
   ["SVGGeometryElement", "SVGGraphicsElement", []],
@@ -9583,9 +8354,7 @@ const SVG_INTERFACES: readonly (readonly [name: string, parent: string, tags: re
   const SVGElementIface = defineInterface("SVGElement", isSvg, ElementIface);
   wrapElementHasInstance(SVGElementIface, (el) => el._ns === "svg");
   defineInterface("MathMLElement", (x) => isMirrorEl(x) && x._ns === "mathml", ElementIface);
-  // Each interface's tags and those of every interface under it. The table
-  // lists a parent before its children, so walking it backwards completes a
-  // child's set before it is added to its parent's.
+  // Each interface's tags plus those under it; the table lists parents first, so walking backwards completes a child before its parent.
   const tagsOf = new Map<string, Set<string>>(SVG_INTERFACES.map(([name, , tags]) => [name, new Set(tags)]));
   for (let i = SVG_INTERFACES.length - 1; i >= 0; i--) {
     const [name, parent] = SVG_INTERFACES[i]!;
@@ -9598,10 +8367,7 @@ const SVG_INTERFACES: readonly (readonly [name: string, parent: string, tags: re
   }
 }
 
-// -- Interfaces over objects that already exist here: a `classList`, a
-//    `dataset`, a MutationRecord, a ResizeObserver entry and its sizes, a
-//    TreeWalker (each branded where it is made, `BRANDS`), `matchMedia()`'s
-//    answer, `performance` and `crypto`.
+// -- Interfaces over objects that already exist here (branded where made, `BRANDS`), `matchMedia()`'s answer, `performance` and `crypto`.
 for (const [name, set] of Object.entries(BRANDS)) {
   defineInterface(name, (x) => !!x && typeof x === "object" && set.has(x), null);
 }
@@ -9614,11 +8380,7 @@ defineInterface(
 defineInterface("Performance", (x) => x != null && x === theGlobal("performance"), ET);
 defineInterface("Crypto", (x) => x != null && x === theGlobal("crypto"), null);
 
-// -- Event interfaces the engine lacks, each constructible with its init
-//    dictionary as a browser's is, its members read-only prototype getters.
-//    The runtime makes its `transitionend` / `animation*` events with the
-//    first two when they exist (`makeEvent`); the rest exist so `instanceof`
-//    and `new` work in code that names them.
+// -- Event interfaces the engine lacks: constructible with an init dictionary, members as read-only prototype getters.
 const EVENT_INTERFACES: readonly (readonly [name: string, parent: "Event" | "UIEvent", members: Readonly<Record<string, unknown>>])[] = [
   ["TransitionEvent", "Event", { propertyName: "", elapsedTime: 0, pseudoElement: "" }],
   ["AnimationEvent", "Event", { animationName: "", elapsedTime: 0, pseudoElement: "" }],
@@ -9646,7 +8408,6 @@ const EVENT_INTERFACES: readonly (readonly [name: string, parent: "Event" | "UIE
         for (const k in members) {
           const d = members[k];
           const v = init?.[k];
-          // WebIDL's conversions for each member's type, from its default.
           own[k] =
             v === undefined
               ? d
@@ -9696,18 +8457,12 @@ const EVENT_INTERFACES: readonly (readonly [name: string, parent: "Event" | "UIE
     });
 }
 
-// -- Touch: what desktop Chrome (Electron, where the client runs today) shows
-//    on a Windows machine without a touch screen. The interfaces exist and
-//    construct (`TouchEvent`, `Touch`; `TouchList` is not constructible),
-//    `'ontouchstart' in window` is false (no `ontouch*` handler attribute is
-//    defined anywhere), `navigator.maxTouchPoints` is 0, and no touch event
-//    is ever delivered. A library that feature-tests any of these takes the
-//    path it takes in Electron (naive-ui's `window.TouchEvent && e instanceof
-//    TouchEvent`, a "touch device" test on `maxTouchPoints`).
+// -- Touch: the interfaces exist and construct, but as on desktop Chrome without a touch screen `'ontouchstart' in window` is false,
+//    `maxTouchPoints` is 0 and no touch event is delivered, so libraries that feature-test touch take their non-touch path.
 const TouchListProto = collectionProto("TouchList");
 adoptInterface("TouchList", TouchListProto, null);
 {
-  /** TouchInit's members and their defaults (Touch Events §4.1). */
+  /** TouchInit's members and their defaults. */
   const TOUCH_MEMBERS: Readonly<Record<string, number | string>> = {
     clientX: 0,
     clientY: 0,
@@ -9805,7 +8560,6 @@ adoptInterface("TouchList", TouchListProto, null);
     defineGlobal("TouchEvent", TouchEvent);
   }
 }
-// `navigator.maxTouchPoints`: 0, a machine with no touch screen.
 {
   const nav = typeof navigator !== "undefined" && navigator ? (navigator as object) : null;
   if (nav && vacant(nav, "maxTouchPoints")) {
@@ -9817,9 +8571,7 @@ adoptInterface("TouchList", TouchListProto, null);
   }
 }
 
-// -- DOMRectReadOnly / DOMRect: constructible, with OWN data members (so a
-//    `{ ...rect }` spread keeps them, as the rects built here already do), and
-//    `getBoundingClientRect()` answers are DOMRects.
+// -- DOMRectReadOnly / DOMRect: constructible, with OWN data members so a `{ ...rect }` spread keeps them.
 class DOMRectReadOnlyImpl {
   declare x: number;
   declare y: number;
@@ -9857,31 +8609,16 @@ function asDomRect<T extends object>(r: T): T {
   return r;
 }
 
-// -- getComputedStyle. The values come from the REAL cascade (see
-//    `crates/vn-tree/src/dom.rs`): the properties reused components actually
-//    read at runtime, the USED width/height off the painted rectangle, and
-//    every custom property. A property nothing declared reads `""`, exactly as
-//    an unsupported one would in a browser — with one advisory naming it.
+// -- getComputedStyle: values come from the real cascade (the properties components read, used width/height, every custom property).
+//    A property nothing declared reads `""`, as an unsupported one would in a browser, with one advisory.
 const computedCache = new WeakMap<object, unknown>();
 function computedStyleFor(node: unknown) {
-  // `document.body` / `documentElement` are not nodes in the retained tree;
-  // they stand for the app root, so that is whose style they report.
+  // `document.body` / `documentElement` are not retained-tree nodes; they stand for the app root.
   const id = typeof (node as MirrorNode)?.__vnId === "number" ? (node as MirrorNode).__vnId : appRoot?.__vnId;
   const raw = id ? __vn_computed_style(id) : "";
   /**
-   * One property, scanned out of the answer — NOT a parsed map.
-   *
-   * This function runs once per PROPERTY READ. The host call above has to: it
-   * is `dom::computed_style`, which flushes pending style before answering, so
-   * a cached answer would be the pre-mutation one — the exact bug reka-ui's
-   * `<Presence>` hit, and the reason that flush exists. Splitting the ~20
-   * `name=value` lines into an object to answer ONE of them does not have to:
-   * `scripts/boundary-cost.ts` measured that parse at roughly three quarters of
-   * what a property read cost, repeated for every property a component looked
-   * at. A `<Transition>` reads two, @floating-ui reads six.
-   *
-   * The `\n` in front of the key is what stops a SUFFIX from matching — a
-   * lookup of `width` must not find the `max-width=` line.
+   * One property scanned out of the answer, not a parsed map: this runs per property read, and parsing cost about three quarters of a read.
+   * The host call itself stays uncached (it flushes pending style). The `\n` before the key stops suffix matches (`width` vs `max-width`).
    */
   const lookup = (css: string): string | undefined => {
     const head = css + "=";
@@ -9893,21 +8630,13 @@ function computedStyleFor(node: unknown) {
   };
   const read = (k: string | symbol): string | undefined => {
     const key = String(k);
-    // Framework probes, not CSS: Vue's reactivity asks every object it touches
-    // for `__v_isReadonly`/`__v_raw`, promise-detection asks for `then`. None
-    // of those are properties a stylesheet can declare, so they answer
-    // `undefined` (not `""`) and never warn.
+    // Framework probes (Vue's `__v_*`, promise `then`) are not CSS: `undefined`, no advisory.
     if (!/^[a-zA-Z-]/.test(key) || key.startsWith("__") || key === "then") return undefined;
     const css = key.startsWith("--") ? key : hyphenate(key);
     const value = lookup(css);
     if (value !== undefined) return value;
-    // No answer at all: the node is not in the tree (removed, or a stale
-    // reference after an unmount) or there is no root yet. CSSOM gives an
-    // element that is not connected an EMPTY declaration list, so every
-    // property reads "" in a browser too, and that is not a gap to advise on.
-    // A late floating-ui or <Presence> read on an unmounted node is what made
-    // width, position, animationName and the rest look missing (m26 client
-    // sweep #30).
+    // No answer: the node is not in the tree (removed, unmounted) or there is no root yet. CSSOM gives a disconnected element an empty
+    // declaration, so "" is right and not a gap to advise on.
     if (!raw) return "";
     // A custom property nothing declared is "" in a browser as well.
     if (css.startsWith("--")) return "";
@@ -9930,8 +8659,7 @@ function computedStyleFor(node: unknown) {
 }
 defineGlobal("getComputedStyle", (node: unknown) => {
   let cached = computedCache.get(node as object);
-  // One live object per element, as in a browser — but the VALUES are read at
-  // access time, so it tracks the cascade instead of freezing it.
+  // One live object per element; values are read at access time so it tracks the cascade.
   if (!cached) {
     cached = new Proxy(
       {},
@@ -9946,8 +8674,7 @@ defineGlobal("getComputedStyle", (node: unknown) => {
   return cached;
 });
 
-// -- the document surface. redjs ships a `document` object with no tree behind
-//    it; these are the entry points a reused component reaches through.
+// -- the document surface: entry points reused components reach through (redjs's `document` has no tree behind it).
 const doc = globalThis.document;
 if (doc) {
   // Filled in where the engine has none; a previous runtime's counts as none.
@@ -9957,17 +8684,13 @@ if (doc) {
   const defDocGet = (name: string, get: () => unknown) => {
     if (vacant(doc, name)) Object.defineProperty(doc, name, { get: mark(get), configurable: true });
   };
-  // These three are FORCE-installed, not filled in: redjs ships its own
-  // `querySelector`/`getElementById` backed by a registry of the elements IT
-  // created, which is empty here — the retained tree is ours. Leaving the
-  // engine's in place is the difference between "finds the node" and "silently
-  // finds nothing", which is what made every `DialogContent` log a false
+  // Force-installed: redjs's own `querySelector`/`getElementById` search a registry of elements it created, which is empty here,
+  // so leaving them finds nothing, silently.
   // "requires a DialogTitle" accessibility warning.
   const forceDoc = (name: string, value: unknown) =>
     Object.defineProperty(doc, name, { value, configurable: true, writable: true });
   const rootId = () => (appRoot ? appRoot.__vnId : 0);
-  // A Document's candidates include documentElement; an Element's queries
-  // still search descendants only (mode 0), never the element itself.
+  // A Document's candidates include documentElement; an Element's search descendants only.
   forceDoc("querySelector", (sel: string) => queryOne(sel, rootId(), 3));
   forceDoc("querySelectorAll", (sel: string) => staticList(NodeListProto, hostQuery(sel, rootId(), 3)));
   // Live, over the whole tree (`getElementsByTagName` is with `<head>`, below).
@@ -9985,15 +8708,9 @@ if (doc) {
   forceDoc("getElementById", (id: unknown) =>
     queryOne(`[id=${JSON.stringify(String(id))}]`, rootId()),
   );
-  // `document.createElement(tag)` is a mirror element: a host node made by
-  // the renderer's own `nodeOps.createElement`, loose until it is inserted, so
-  // a script can build a subtree and append it anywhere (m26 client sweep
-  // #5a). The `ENGINE_TAGS` stay the engine's detached elements: `<a>` and
-  // `<input>` carry the download and pick idioms (FileSaver.js, VueUse
-  // `useFileDialog`; see `wrapDetached`), and the head-only ones are not boxes
-  // (a `<style>` joins the sheet wherever it is inserted).
-  // The engine's, not a previous runtime's wrapper (`original`): a reload would
-  // otherwise wrap the old wrapper, and every reload would add a layer.
+  // A mirror element, loose until inserted. `ENGINE_TAGS` stay the engine's detached elements: `<a>`/`<input>` carry download and pick
+  // idioms (see `wrapDetached`), and head-only tags are not boxes.
+  // The engine's, not a previous runtime's wrapper (`original`): a reload would stack wrappers.
   const engineCreate = original(doc, "createElement", (doc as { createElement?: unknown }).createElement);
   const nativeCreate =
     typeof engineCreate === "function"
@@ -10025,17 +8742,14 @@ if (doc) {
     const space = ns === SVG_NS ? "svg" : ns === MATHML_NS ? "mathml" : undefined;
     return looseCreated(nodeOps.createElement(local, space));
   });
-  // A browser's Text node, here a mirror text node: Vue-created and
-  // library-created text are the same kind of object, so either can be
-  // inserted anywhere in the tree. Replaced after a reload as well: the old
-  // one made nodes in the OLD mirror.
+  // A mirror text node, so Vue- and library-created text are interchangeable; replaced on reload too (the old one made nodes in the OLD mirror).
   defDoc("createTextNode", (data: unknown) => looseCreated(nodeOps.createText(String(data))));
   defDoc("createComment", (data: unknown) => {
     const c = looseCreated(nodeOps.createComment(String(data)));
     c.text = String(data);
     return c;
   });
-  // A detached Attr, for `setAttributeNode` (DOM §4.5).
+  // A detached Attr, for `setAttributeNode`.
   defDoc("createAttribute", (name: unknown) => {
     const n = String(name);
     if (!VALID_ELEMENT_NAME.test(n)) {
@@ -10050,8 +8764,7 @@ if (doc) {
       .DocumentFragment(),
   );
   defDoc("createTreeWalker", (root: MirrorNode | null, whatToShow = 0xffffffff, filter: TreeWalkerFilter = null) => {
-    // A real pre-order walker over the mirror tree — focus traps use it to
-    // collect tabbable candidates, and an empty one silently traps nothing.
+    // Pre-order walker over the mirror tree; focus traps use it to collect tabbables.
     const flat: MirrorNode[] = [];
     const walk = (n: MirrorNode) => {
       for (const c of n.childNodes || []) {
@@ -10091,24 +8804,12 @@ if (doc) {
   } catch (e) {
     warnCompat("activeElement", `document.activeElement could not be installed on this engine and reads null (${e})`);
   }
-  // `document.addEventListener("keydown"|"pointerdown"|…)` is how every
-  // dismissable layer in the ecosystem closes itself.
+  // Dismissable layers close themselves from document-level keydown/pointerdown listeners.
   interceptGlobalTarget(doc);
   interceptGlobalTarget(globalThis);
-  // The window's own viewport metrics. redjs reports 0 for these; the window IS
-  // the app root here, so they are the root's painted box — and floating
-  // positioning reads them.
-  //
-  // …EXCEPT when the windowing host is present (crates/vn-app/src/
-  // window.prelude.js). Then these four are real: `inner*` is the client area
-  // the host pushes through `redjs_dom_resize` (and re-pushes with every
-  // trusted `resize` event), and `outer*` is `GetWindowRect` — a window fact
-  // the app root cannot know, and one that is deliberately NOT equal to
-  // `inner*` (docs/WINDOWING.md §1.2). Clobbering them with the root's box
-  // would make `outerWidth === innerWidth` and silently break `screenX`'s
-  // neighbours. The root box stays the source for `document.documentElement`
-  // and `getBoundingClientRect` below, which is what floating positioning
-  // measures against.
+  // Viewport metrics: redjs reports 0; the window IS the app root, so use its painted box (floating positioning reads them).
+  // Except with the windowing host present: then inner* (client area) and outer* (GetWindowRect) are real and deliberately
+  // differ, so they are left alone.
   if (!globalThis.__VN_WINDOW__) {
     for (const [name, axis] of [
       ["innerWidth", "width"],
@@ -10135,23 +8836,8 @@ if (doc) {
       /* ditto */
     }
   }
-  // `document.documentElement` and `document.body` are REAL STYLE HOSTS: both
-  // ARE the app root element, the one node `:root`, `html` and `body` all match
-  // (crates/vn-tree/src/tree.rs). So `documentElement.classList.add("dark")`
-  // reaches the cascade root and every `hsl(var(--foreground))` under it
-  // recomputes, and `documentElement.style.setProperty("--radius", "1rem")`
-  // declares a root-level custom property the whole tree inherits — which is
-  // how every shadcn/Tailwind theme in existence is switched.
-  //
-  // They are the SAME object, and that is the honest shape rather than a
-  // shortcut: the retained tree has one root, there is no separate `<html>` and
-  // `<body>` box to distinguish, and handing out two objects would only make
-  // `el.parentNode === document.body` lie. `document.head` stays a property bag
-  // — it is not a box at all.
-  //
-  // Before a body insertion or `mount()` the root does not exist, while
-  // module-scope theme code already writes to it. The pre-root object buffers
-  // those writes until the native viewport root is first needed.
+  // `documentElement` and `body` are both the app root (the one node `:root`, `html` and `body` match), so theme code such as `classList.add("dark")` or `style.setProperty("--radius", ...)` reaches the cascade root.
+  // Before `mount()` the root does not exist but module-scope theme code already writes to it; the pre-root object buffers those writes.
   {
     const pending: {
       classes: string[];
@@ -10187,9 +8873,7 @@ if (doc) {
         item: (i: number) => pending.classes[i] ?? null,
         toString: () => pending.classes.join(" "),
       },
-      // Keyed by the CSS spelling, as the real block is, so the replay below
-      // is `setProperty` with names it accepts (`documentElement.style.fontSize`
-      // is `font-size`), and `getPropertyValue("font-size")` reads it back.
+      // Keyed by the CSS spelling, as the real block is, so the replay uses names `setProperty` accepts.
       style: new Proxy(
         {
           setProperty(k: unknown, v: unknown) {
@@ -10274,9 +8958,7 @@ if (doc) {
         /* a non-configurable engine property — leave it alone */
       }
     }
-    // `<head>` is not a box: a `<style>` or `<link>` appended to it must not
-    // become a child of the root. It stays the property bag redjs ships, with
-    // the members a library reaches for filled in.
+    // `<head>` is not a box (a `<style>` appended must not become a child of the root): it stays redjs's property bag, common members filled in.
     const head = doc.head;
     if (head && typeof head === "object") {
       if (!head.style || typeof head.style !== "object") head.style = {};
@@ -10309,15 +8991,11 @@ if (doc) {
   }
 }
 
-// -- web fonts: `FontFace`, `FontFaceSet` and `document.fonts` (src/fonts.ts).
-//    Inert without the host's loader. A reload installs a fresh set over the
-//    old one and takes over the host's listener.
+// -- web fonts: `FontFace`, `FontFaceSet`, `document.fonts`. Inert without the host's loader; a reload takes over the host's listener.
 installFonts(globalThis as unknown as Record<string, unknown>, doc);
 
-// -- Web Animations: `el.animate()` (src/waapi.ts). On HTMLElement.prototype
-//    and SVGElement.prototype only — not Element.prototype, so motion /
-//    framer-motion keep their JS animations (docs/RUNTIME.md §5.23). Inert
-//    without the host's native WAAPI core.
+// -- Web Animations: `el.animate()` on HTMLElement/SVGElement prototypes only, not Element.prototype, so motion / framer-motion keep
+//    their JS animations. Inert without the host's native WAAPI core.
 if (typeof __vn_waapi_core === "object" && __vn_waapi_core !== null) {
   const g = globalThis as unknown as Record<string, unknown>;
   const svg = (g.SVGElement as { prototype?: object } | undefined)?.prototype;
@@ -10345,9 +9023,7 @@ if (typeof __vn_waapi_core === "object" && __vn_waapi_core !== null) {
   });
 }
 
-// -- the text selection: `getSelection()`, `Selection`, `Range`,
-//    `document.createRange()` (src/selection.ts) over the host's selection
-//    (crates/vn-tree/src/selection.rs). Inert without the host's half.
+// -- text selection: `getSelection()`, `Selection`, `Range`, `document.createRange()` over the host's selection. Inert without it.
 installSelection({
   host:
     typeof __vn_selection_get === "function"
@@ -10371,8 +9047,7 @@ installSelection({
     if (doc && vacant(doc, name)) Object.defineProperty(doc, name, { value: mark(value), configurable: true, writable: true });
   },
 });
-// `document.onselectionchange` / `onselectstart`: the IDL handler over the
-// document's listener registry (an element's are `HANDLER_ATTRS`).
+// `document.onselectionchange` / `onselectstart`: the IDL handler over the document's listener registry.
 for (const type of ["selectionchange", "selectstart"]) {
   const prop = `on${type}`;
   if (!doc || !vacant(doc, prop)) continue;
@@ -10403,13 +9078,8 @@ for (const type of ["selectionchange", "selectstart"]) {
 }
 
 // ---- document.elementFromPoint / elementsFromPoint
-// The host's own hit test (crates/vn-tree/src/pointer.rs), the one a press
-// resolves its target with: the topmost element under the point, skipping
-// `pointer-events: none` and `visibility: hidden`, in the coordinates
-// `clientX` / `getBoundingClientRect()` use. `elementsFromPoint` is every
-// element whose box is under the point, topmost first. A point outside the
-// viewport is null / []. Coordinates are a WebIDL `double`, so a non-finite one
-// throws.
+// The host's hit test (what a press resolves with): skips `pointer-events: none` and `visibility: hidden`, viewport coordinates, null / [] outside
+// the viewport; a non-finite coordinate throws (WebIDL `double`).
 if (doc && typeof __vn_hit_at === "function") {
   const hitAt = (name: string, x: unknown, y: unknown, all: boolean): MirrorElement[] => {
     const px = Number(x);
@@ -10435,28 +9105,15 @@ if (doc && typeof __vn_hit_at === "function") {
 }
 
 // ---- <style> injected into document.head, createTextNode, getElementsByTagName
-// The runtime-CSS idiom of half the npm ecosystem (style-inject, which
-// vue3-spinners runs at MODULE SCOPE; css-in-js; toast libraries):
-//
-//     const s = document.createElement("style");
-//     document.getElementsByTagName("head")[0].appendChild(s);   // or insertBefore
-//     s.appendChild(document.createTextNode(css));               // AFTER insertion
-//
-// `document.head` is not a box (see above), so a `<style>` there is not a
-// node of the tree. It IS a stylesheet: its text joins the app's sheet, after
-// the bundle's CSS, in insertion order, and follows later edits to the
-// element (appendChild of text, `textContent =`, removal). Injection before
-// mount, the usual case, costs nothing extra because it rides the first
-// `__vn_set_stylesheet`. After mount, each change re-sets the whole sheet once
-// per microtask. A `<link rel=stylesheet>` appended to head is not fetched;
-// that is an advisory.
+// `document.head` is not a box, so a head `<style>` is a stylesheet rather than a tree node: its text joins the app's sheet after the bundle's CSS,
+// in insertion order, and follows later edits. Before mount it rides the first `__vn_set_stylesheet`; after, each change re-sets the sheet once
+// per microtask. A `<link rel=stylesheet>` appended to head is not fetched (advisory).
 /** What `mount()` installs the stylesheet through: the host's, or the head-style-aware one below. */
 let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css);
 {
   const d = globalThis.document as unknown as Record<string, unknown> | undefined;
   const head = d?.head as Record<string, unknown> | undefined;
-  // The HOST's function, even after a reload: the global of that name is the
-  // previous runtime's `install` by then (see `original`).
+  // The HOST's function, even after a reload (the global of that name is then the previous runtime's `install`; see `original`).
   const hostSetSheet =
     typeof __vn_set_stylesheet === "function" ? original(globalThis, "__vn_set_stylesheet", __vn_set_stylesheet) : null;
   if (d && head && typeof head === "object" && hostSetSheet) {
@@ -10465,18 +9122,13 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
     /** The last sheet anyone else installed (the bundle's, or the dev loader's). */
     let base: string | null = null;
     let queued = false;
-    // Each injected sheet goes to the host as its OWN text, not concatenated
-    // onto the bundle's: the host parses (and keeps) one parse per distinct
-    // text, so a concatenation would re-parse the whole bundle sheet — and
-    // keep another copy of it — every time an injected one changed
-    // (research/reports/m26/perf-mem-1.md §3).
+    // Each injected sheet goes to the host as its own text: the host keeps one parse per distinct text, so concatenating
+    // would re-parse the whole bundle sheet on every change.
     const install = (css: string) => {
       base = String(css);
       hostSetSheet(base, injected.map((s) => s.text).filter(Boolean));
     };
-    // Every installer goes through this — the mount below by name, loader.ts's
-    // flushCss through the global — so the injected sheets survive a hot
-    // reload's re-aggregation.
+    // Every installer goes through this (the mount, loader.ts's flushCss via the global), so injected sheets survive a hot reload's re-aggregation.
     installStylesheet = install;
     try {
       Object.defineProperty(globalThis, "__vn_set_stylesheet", { value: install, configurable: true, writable: true });
@@ -10558,17 +9210,14 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
     def("insertBefore", (n: unknown) => adopt(n));
     def("append", (...kids: unknown[]) => void kids.forEach(adopt));
     def("prepend", (...kids: unknown[]) => void kids.forEach(adopt));
-    // style-inject's own spelling ("afterbegin" for `prepend: true`). The
-    // position is not honoured: an injected sheet always lands after the
-    // bundle's CSS, where an append would put it.
+    // style-inject's `afterbegin`: position is not honoured; an injected sheet always lands after the bundle's CSS.
     def("insertAdjacentElement", (_where: unknown, n: unknown) => adopt(n));
     def("removeChild", (n: unknown) => {
       untrack(n);
       return n;
     });
     if (!("tagName" in head)) def("tagName", "HEAD");
-    // A previous runtime's getter (a same-realm reload, see `REALM`) read ITS
-    // injected list, so it is replaced too.
+    // A previous runtime's getter (same-realm reload, see `REALM`) read ITS injected list, so it is replaced.
     if (vacant(head, "childNodes")) {
       Object.defineProperty(head, "childNodes", {
         get: mark(() => staticList(NodeListProto, injected.map((s) => s.el))),
@@ -10576,17 +9225,14 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
       });
     }
 
-    // A `<style>` / `<link>` from the engine inserted anywhere else (a
-    // browser applies a `<style>` in `<body>` too), and taken out again.
+    // A `<style>` / `<link>` from the engine inserted anywhere else (a browser applies `<style>` in `<body>` too), and taken out again.
     foreignStyle = (n, inserted) => {
       if (!isStyle(n) && !isLink(n)) return false;
       if (inserted) adopt(n);
       else untrack(n);
       return true;
     };
-    // A live HTMLCollection. `head`, `html` and `body` are the document's own
-    // (`html` and `body` are both the root here), `style` includes the sheets
-    // injected into `<head>`, and anything else is the tree's elements.
+    // A live HTMLCollection: `head`, `html` and `body` are the document's own (`html` and `body` are both the root), `style` includes head-injected sheets.
     if (vacant(d, "getElementsByTagName")) {
       Object.defineProperty(d, "getElementsByTagName", {
         value: mark((tag: unknown) => {
@@ -10606,10 +9252,7 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
   }
 }
 
-// ---- runtime-dom-shaped directives ----------------------------------------
-// Standard compiled output (`<input v-model="x">` etc.) must run UNMODIFIED —
-// we implement the directives against our host instead of forking the
-// compiler (compat-first policy).
+// ---- runtime-dom-shaped directives: compiled output (`<input v-model>`) runs unmodified against our host.
 const assignKey = Symbol("vnModelAssign");
 
 /** The binding object Vue hands a directive hook, as these four hooks read it. */
@@ -10634,15 +9277,7 @@ function setElValue(el: MirrorElement, value: unknown): void {
 export const vModelText = {
   created(el: MirrorElement, { modifiers = {} }: DirectiveBindingLike, vnode: VNodeLike) {
     el[assignKey] = vnode.props && vnode.props["onUpdate:modelValue"];
-    // `.lazy` asks to update on `change` instead of `input`. There is no
-    // `change` in `tree.rs` — the host sources no such event — so binding one
-    // registered a listener that could never fire, and `v-model.lazy` simply
-    // never updated the model. The only sign was one advisory about an unknown
-    // event NAME, which reads like a typo rather than like a broken directive.
-    //
-    // Falling back to `input` makes the binding work and says exactly how it
-    // differs. That is the compat-first order of preference: a named
-    // divergence beats a silent nothing.
+    // `.lazy` listens for `change`, which the host never sources; fall back to `input` and say so.
     if (modifiers.lazy) {
       warnCompat(
         "v-model:lazy",
@@ -10651,11 +9286,9 @@ export const vModelText = {
       );
     }
     el.addEventListener("input", () => {
-      // Runtime-dom's rule: no model update in the middle of an IME
-      // composition. The composition's end assigns the committed text.
+      // No model update in the middle of an IME composition; its end assigns the committed text.
       if (el.composing) return;
-      // `.trim` runs before `.number`, so `v` is still a string at both string
-      // uses below — which is exactly what the two casts assert.
+      // `.trim` runs before `.number`, so `v` is still a string at both casts.
       let v: string | number = el.value;
       if (modifiers.trim) v = (v as string).trim();
       if (modifiers.number) {
@@ -10664,10 +9297,8 @@ export const vModelText = {
       }
       if (el[assignKey]) (el[assignKey] as (value: unknown) => void)(v);
     });
-    // …and the composition's two ends, as runtime-dom binds them: the end
-    // re-dispatches `input`, which assigns what the IME committed. (Runtime-dom
-    // binds them only without `.lazy`, which listens for `change`; here
-    // `.lazy` listens for `input`, so it needs them too.)
+    // The composition ends re-dispatch `input`, which assigns the IME's text. Runtime-dom binds them only without `.lazy`;
+    // here `.lazy` listens for `input`, so it needs them too.
     el.addEventListener("compositionstart", () => {
       el.composing = true;
     });
@@ -10682,16 +9313,13 @@ export const vModelText = {
   },
   beforeUpdate(el: MirrorElement, { value }: DirectiveBindingLike, vnode: VNodeLike) {
     el[assignKey] = vnode.props && vnode.props["onUpdate:modelValue"];
-    // Runtime-dom leaves a composing field alone: assigning it would end the
-    // IME's composition (vuejs/core#2302).
+    // Leave a composing field alone: assigning would end the IME's composition (vuejs/core#2302).
     if (el.composing) return;
     setElValue(el, value);
   },
 };
 
-// v1: every input renders as a text field, so the dynamic/checkbox/radio
-// variants fall back to the text behavior with an advisory. (`<select>` has
-// its own, `vModelSelect`, below.)
+// Every input renders as a text field: dynamic/checkbox/radio fall back to text behavior with an advisory.
 function modelFallback(kind: string) {
   return {
     created(el: MirrorElement, binding: DirectiveBindingLike, vnode: VNodeLike) {
@@ -10710,8 +9338,7 @@ export const vModelDynamic = modelFallback("dynamic");
 export const vModelCheckbox = modelFallback("checkbox");
 export const vModelRadio = modelFallback("radio");
 
-// @vue/shared's `looseEqual`, `looseIndexOf` and `looseToNumber`, which
-// `vModelSelect` matches option values with.
+// @vue/shared's `looseEqual`, `looseIndexOf` and `looseToNumber`, for `vModelSelect`'s option matching.
 function looseEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   const date = (x: unknown): x is Date => x instanceof Date;
@@ -10783,13 +9410,7 @@ function setModelSelected(el: MirrorElement, value: unknown): void {
   if (!multiple && selectedIndexOf(el) !== -1) setSelectedIndex(el, -1);
 }
 
-/**
- * runtime-dom's `vModelSelect`, over the select model above: `change` assigns
- * the selected option's value as Vue bound it (`.number` through
- * `looseToNumber`), or an array / Set of them for `multiple`, and the model
- * selects the matching option once the options are mounted and after every
- * update but the one its own assignment caused.
- */
+/** runtime-dom's `vModelSelect`: `change` assigns the picked value(s); the model skips the update its own assignment caused. */
 export const vModelSelect = {
   deep: true,
   created(el: MirrorElement, { value, modifiers = {} }: DirectiveBindingLike, vnode: VNodeLike) {
@@ -10809,8 +9430,7 @@ export const vModelSelect = {
     });
     el[assignKey] = modelAssigner(vnode);
   },
-  // Set in `mounted` and `updated`: a select's value depends on its options,
-  // which are mounted (and updated) before it.
+  // A select's value depends on its options, which mount and update before it.
   mounted(el: MirrorElement, { value }: DirectiveBindingLike) {
     setModelSelected(el, value);
   },
@@ -10823,11 +9443,7 @@ export const vModelSelect = {
   },
 };
 
-// runtime-dom's `vShow`: the element's own inline `display` is remembered
-// before the first hide and restored on show, so `<div v-show="x"
-// style="display: flex">` shows as flex again. `patchStyle` keeps the two in
-// step when `:style` changes `display` while it is hidden. (`<Transition>`
-// around `v-show` is not wired: the display flips without the phases.)
+// runtime-dom's `vShow`: the inline `display` is remembered before the first hide and restored on show.
 function setVShowDisplay(el: MirrorElement, value: unknown): void {
   const d = value ? String(el[vShowOriginalDisplay] ?? "") : "none";
   if (d === "") removeInlineDecl(el, "display");
@@ -10856,7 +9472,6 @@ export const vShow = {
   },
 };
 
-// ---- template helpers (compiler-dom emits these for @event modifiers) -----
 const modifierGuards: Record<string, ((e: VnEvent, m: string[]) => unknown) | undefined> = {
   stop: (e) => e.stopPropagation(),
   prevent: (e) => e.preventDefault(),
@@ -10905,40 +9520,24 @@ export function withKeys(fn: (event: VnEvent) => unknown, keys: string[]) {
   };
 }
 
-// ---- windowing (docs/WINDOWING.md tier 3) ---------------------------------
-//
-// `appWindow` itself is built in the host's JS prelude (crates/vn-app/src/
-// window.prelude.js) because the host observer, the state snapshot and the
-// standard tier-1 globals all have to exist before the app bundle evaluates.
-// This module is only its NAMESPACE: apps say
-//
-//     import { appWindow } from "vue-native";
-//
-// rather than reaching for a global, which is what keeps the extension
-// namespaced (tier 3) instead of pretending to be a web API.
-//
-// `getCurrentWindow()` exists only so ported Tauri code runs unmodified. When
-// multi-window lands it keeps meaning "this window" and `appWindow` keeps being
-// its binding — neither gets renamed.
+// `appWindow` is built in the host's JS prelude, which must evaluate before the app bundle; this
+// module is only its namespace. `getCurrentWindow()` exists so ported Tauri code runs unmodified.
 const windowHost = globalThis.__VN_WINDOW__;
-// The advisory is LAZY, not eager: a host without the window prelude (the unit
-// test harness, a future embedder) must not be scolded for an API it never
-// touches — an advisory that fires on code nobody wrote is noise.
+// Lazy: a host without the window prelude (e.g. the unit test harness) must not be warned about an
+// API it never touches.
 const missing = () =>
   warnCompat(
     "appWindow",
-    "the windowing host is missing (crates/vn-app/src/window.prelude.js did not evaluate) — " +
-      "`appWindow` is inert. See docs/WINDOWING.md.",
+    "the windowing host is missing (the window prelude did not evaluate) — " +
+      "`appWindow` is inert; run the app in the vue-native host.",
   );
-// The inert stand-in is a Proxy over `{}`, so only a cast can give it the
-// shape: it answers for members that do not exist, which is the point.
+// A Proxy over `{}` answers for members that do not exist, so only a cast gives it the shape.
 const inertWindow = new Proxy(
   {},
   {
     get(_t, key) {
       missing();
-      // `isMaximized()` and friends must still answer a boolean, and every
-      // verb must still be callable, so inert code paths do not throw.
+      // Verbs stay callable and `is*` answers false, so inert code paths do not throw.
       return typeof key === "string" && key.startsWith("is") ? () => false : () => undefined;
     },
     set() {
@@ -10956,24 +9555,8 @@ export const defineWindow: (options: Record<string, unknown>) => void = windowHo
   : missing;
 export const getCurrentWindow = (): VnAppWindow => appWindow;
 
-// ---- permissions (docs/PERMISSIONS.md tier 2) ------------------------------
-//
-// The STANDARD surface is `navigator.permissions.query({ name })`, installed by
-// redjs, and an app that only needs to read a state should use it — it is the
-// same code a browser build runs. `appPermissions` is the deliberately
-// namespaced extension for the two things the web has no words for:
-//
-//   1. REQUESTING outside a capture call. A browser asks for the microphone as
-//      a side effect of `getUserMedia()` and for notifications through
-//      `Notification.requestPermission()`; there is no standalone request, and a
-//      desktop settings screen with a "Grant access" button needs one.
-//   2. The FOURTH state, `"unsupported"` — "this platform has no such concept",
-//      which `navigator.permissions` has to report as `"denied"` because the web
-//      only has three words.
-//
-// Named after `appWindow` for the same reason: an extension must not be able to
-// pass for a web API.
-/** The five host fns, gathered so the inert branch is a single `null` check. */
+// `appPermissions` extends `navigator.permissions` with what the web lacks: requesting outside a
+// capture call, and the fourth state "unsupported" (which the standard API must report as "denied").
 interface PermissionsHost {
   query: typeof __vn_permissions_query;
   list: typeof __vn_permissions_list;
@@ -10982,20 +9565,14 @@ interface PermissionsHost {
   setDispatcher: typeof __vn_permissions_set_dispatcher;
 }
 
-/** One row of `appPermissions.list()`. */
 interface PermissionRow {
   name: string;
   state: VnPermissionState;
   canRequest: boolean;
-  /**
-   * A `denied` that the platform's own settings decide (a settings page is
-   * the way back), not the user's Block in the app's prompt (`request()` asks
-   * again). False for every other state.
-   */
+  /** A `denied` decided by platform settings, not the user's Block in the app's prompt. */
   deniedBySystem?: boolean;
 }
 
-/** The tier-2 surface, in both its live and its inert spelling. */
 interface AppPermissions extends VnEventTarget {
   readonly platform: string;
   readonly names: string[];
@@ -11036,11 +9613,8 @@ function createPermissions(host: PermissionsHost): AppPermissions {
     resolve(state);
   });
 
-  // One `change` stream for the whole surface, re-broadcast from the STANDARD
-  // objects rather than from a second native subscription: `navigator.
-  // permissions` is the source of truth for change delivery, and two drains of
-  // one queue would race. Subscribing is best-effort — a runtime without
-  // `navigator.permissions` still gets working `query`/`request`.
+  // One `change` stream re-broadcast from the standard objects: a second native subscription would
+  // race for the same queue. Best-effort; without `navigator.permissions` query/request still work.
   const statuses = new Map<string, VnPermissionStatus>();
   if (typeof navigator === "object" && navigator && navigator.permissions) {
     for (const name of PERMISSION_NAMES) {
@@ -11065,47 +9639,32 @@ function createPermissions(host: PermissionsHost): AppPermissions {
     warnCompat(
       `appPermissions:${name}`,
       `the '${name}' permission has no equivalent on ${host.platform()} — ` +
-        `appPermissions.query('${name}') is 'unsupported' and request() is a no-op. ` +
-        `See docs/PERMISSIONS.md.`,
+        `appPermissions.query('${name}') is 'unsupported' and request() is a no-op.`,
     );
   };
 
   return Object.assign(target, {
-    /** The platform name an advisory would use: "Windows", "macOS". */
     get platform() {
       return host.platform();
     },
-    /** Every known permission name. */
     get names() {
       return PERMISSION_NAMES.slice();
     },
-    /**
-     * SYNCHRONOUS four-state read: "granted" | "denied" | "prompt" |
-     * "unsupported". Deliberately not a promise — the standard, promise-shaped
-     * read is `navigator.permissions.query()`, and having the extension differ
-     * in shape as well as in name makes it obvious which one a call site used.
-     */
+    /** Synchronous four-state read; the standard promise-shaped read is `navigator.permissions.query()`. */
     query(name: string) {
       const state = host.query(name);
       if (!state) throw new TypeError(`'${name}' is not a permission name`);
       if (state === "unsupported") adviseUnsupported(name);
       return state;
     },
-    /** All of them at once, as `{ name, state, canRequest }[]`. */
     list(): PermissionRow[] {
       const rows = JSON.parse(host.list()) as PermissionRow[];
       for (const r of rows) if (r.state === "unsupported") adviseUnsupported(r.name);
       return rows;
     },
     /**
-     * Ask for a permission. Resolves with the resulting four-state string.
-     *
-     * THE DIVERGENCE, stated plainly: no browser has this call. What it does is
-     * platform-shaped — on Windows it opens the relevant Settings page and
-     * resolves when the toggle actually moves (or after a timeout, with the
-     * unchanged state, so an `await` can never hang); on macOS it will raise the
-     * real system dialog. It never resolves optimistically: the value is always
-     * a fresh read of what the OS now says.
+     * Asks for a permission and resolves with a fresh OS read, never optimistically. On Windows it
+     * opens Settings and resolves when the toggle moves, or on timeout with the unchanged state.
      */
     request(name: string): Promise<VnPermissionState> {
       const out = JSON.parse(host.request(name)) as {
@@ -11130,8 +9689,7 @@ const inertPermissions = new Proxy(
       warnCompat(
         "appPermissions",
         "the permissions host is missing (vn_permissions::install did not run) — " +
-          "`appPermissions` is inert and every capability reads as 'unsupported'. " +
-          "See docs/PERMISSIONS.md.",
+          "`appPermissions` is inert and every capability reads as 'unsupported'.",
       );
       if (key === "platform") return "this platform";
       if (key === "names") return PERMISSION_NAMES.slice();
@@ -11149,32 +9707,9 @@ export const appPermissions: AppPermissions = permHost
   ? createPermissions(permHost)
   : (inertPermissions as unknown as AppPermissions);
 
-// ---- storage (docs/STORAGE.md tier 2) --------------------------------------
-//
-// The STANDARD surface is `localStorage` / `sessionStorage`, installed by redjs,
-// and an app that just wants to remember a preference should use it and nothing
-// else — it is the same code a browser build runs, down to the
-// `QuotaExceededError`. `appStorage` is the deliberately namespaced extension
-// for the two things a browser has no words for, because a browser decides them
-// for you:
-//
-//   1. WHERE the bytes go. A browser has one profile directory and no API to
-//      ask about it; a desktop app has %APPDATA% vs %LOCALAPPDATA% vs a
-//      portable folder next to the exe, and the choice is the app's to make.
-//   2. WHETHER they are encrypted at rest. There is no browser spelling for
-//      "and please use DPAPI".
-//
-// Named after `appWindow`/`appPermissions` for the same reason: an extension
-// must not be able to pass for a web API. It is NOT called `app` — which is
-// what the original sketch said — because `const app = createApp(...)` is the
-// first line of nearly every Vue entry module, and `import { app } from
-// "vue-native"` next to it is a redeclaration error in the same scope. The
-// verbs are exactly as sketched.
-//
-// Synchronous, like `appPermissions.query` and for the same reason: these are
-// boot-time calls that touch a path and a directory, and a promise would imply
-// a wait that does not exist.
-/** The four host fns, gathered so the inert branch is a single `null` check. */
+// `appStorage` extends `localStorage` with where the bytes go and whether they are encrypted at
+// rest. Synchronous: boot-time calls with no real wait. Not named `app`, which would collide with
+// the `const app = createApp(...)` of a typical entry module.
 interface StorageHost {
   userFolder: typeof __vn_storage_user_folder;
   setFolder: typeof __vn_storage_set_folder;
@@ -11183,12 +9718,9 @@ interface StorageHost {
 }
 
 /**
- * IndexedDB's half of `appStorage.info()` (crates/vn-storage/src/idb.rs): the
- * databases live in `<folder>\indexeddb`. `mode` is what IndexedDB is running
- * in — `null` until the app's first `indexedDB` use, when the folder and the
- * key are latched for the run; a `setStorageFolder` after that applies at the
- * next start. `key`: a sealed key exists in that folder. `null` as a whole in
- * a host built without on-disk IndexedDB.
+ * IndexedDB's half of `appStorage.info()`: databases live in `<folder>\indexeddb`. `mode` is null
+ * until the first `indexedDB` use, which latches folder and key for the run. `key`: a sealed key
+ * exists there. `null` as a whole in a host built without on-disk IndexedDB.
  */
 interface IndexedDbInfo {
   folder: string;
@@ -11200,11 +9732,8 @@ interface IndexedDbInfo {
 }
 
 /**
- * The cookie jar's half of `appStorage.info()` (crates/vn-storage/src/cookies.rs):
- * `<folder at startup>\cookies.sealed`, always sealed whatever `encrypted` says
- * (cookies are credentials). `persisted` counts the persistent cookies last
- * loaded or staged; session cookies are never written. `file` is null when the
- * host has no jar backend.
+ * The cookie jar's half of `appStorage.info()`: always sealed (cookies are credentials); session
+ * cookies are never written. `file` is null with no jar backend.
  */
 interface CookieJarInfo {
   file: string | null;
@@ -11231,7 +9760,6 @@ interface StorageInfo {
   cookies?: CookieJarInfo;
 }
 
-/** The tier-2 surface, in both its live and its inert spelling. */
 interface AppStorage {
   readonly kinds: string[];
   readonly folder: string;
@@ -11261,26 +9789,16 @@ function storageResult<T extends object>(json: VnJson, what: string): T {
 
 function createStorage(host: StorageHost): AppStorage {
   return {
-    /** The folder kinds `getUserFolder` accepts. */
     get kinds() {
       return (JSON.parse(host.info()) as StorageInfo).kinds;
     },
-    /** Where `localStorage` is being kept right now. */
     get folder() {
       return (JSON.parse(host.info()) as StorageInfo).folder;
     },
-    /** Is it encrypted at rest? */
     get encrypted() {
       return (JSON.parse(host.info()) as StorageInfo).encrypted;
     },
-    /**
-     * `getUserFolder("APPDATA", "myAppFolder")` → an absolute path.
-     *
-     * Creates nothing — a path is not a directory, and an app that only wants
-     * to SHOW a user where its data would go should not leave a folder behind.
-     * Throws a TypeError for an unknown kind or a `subfolder` that tries to
-     * climb out of it, rather than returning a path nobody checked.
-     */
+    /** Absolute path for a folder kind; creates nothing. Throws TypeError for an unknown kind or a `subfolder` that climbs out. */
     getUserFolder(kind: string, subfolder = "") {
       return storageResult<{ path: string }>(
         host.userFolder(String(kind), String(subfolder)),
@@ -11288,34 +9806,14 @@ function createStorage(host: StorageHost): AppStorage {
       ).path;
     },
     /**
-     * Points `localStorage` at `path`, creating it. Returns the canonical path.
-     *
-     * `{ encrypted: true }` encrypts the file at rest (Windows: DPAPI, tied to
-     * the Windows user — see docs/STORAGE.md for what that does and does not
-     * protect). Turning it on for a folder that already holds a plaintext area
-     * MIGRATES that area and removes the plaintext copy; turning it off does
-     * the reverse. On a platform with no encryption provider this THROWS rather
-     * than quietly writing plaintext. Leaving `encrypted` out keeps the current
-     * format — a folder that is encrypted stays encrypted; only an explicit
-     * `{ encrypted: false }` decrypts.
-     *
-     * Best called before the first `localStorage` touch. Called later it still
-     * works: the area this process is holding is written to the new place.
-     *
-     * IndexedDB follows the same folder (`<path>\indexeddb`) and the same
-     * encryption, with the same sticky rule — but it latches both at its first
-     * use and never moves open databases, so call this BEFORE the first
-     * `indexedDB` call. Later, the change applies at the next start (said once
-     * on stderr; the encryption half is remembered even if that start calls
-     * late again). docs/STORAGE.md "IndexedDB".
-     *
-     * The HTTP cache (docs/STORAGE.md §12) follows `encrypted` at once: its
-     * folder is purged and refills in the new format. It does not follow
-     * `path`; it lives beside the default storage folder.
+     * Points `localStorage` at `path`, creating it; returns the canonical path.
+     * `{ encrypted: true }` encrypts at rest (Windows: DPAPI) and migrates an existing plaintext area;
+     * omitting it keeps the current format, and a platform with no provider throws.
+     * IndexedDB follows the same folder and encryption but latches both at its first use, so call
+     * this before the first `indexedDB` call. The HTTP cache follows `encrypted` but not `path`.
      */
     setStorageFolder(path: string, options: { encrypted?: boolean } = {}) {
-      // No `encrypted` is "keep the format", not "plaintext": a folder change
-      // must never silently decrypt (the sticky rule, docs/STORAGE.md §5).
+      // No `encrypted` means "keep the format", never "plaintext": a folder change must not silently decrypt.
       const said = options ? options.encrypted : undefined;
       const encrypted = said === undefined ? "keep" : said ? "true" : "false";
       return storageResult<{ path: string }>(
@@ -11323,22 +9821,10 @@ function createStorage(host: StorageHost): AppStorage {
         "setStorageFolder",
       ).path;
     },
-    /**
-     * Everything at once: `{ folder, file, encrypted, bytes, loaded, pending,
-     * provider, kinds, error }`. `error` is the last thing that went wrong
-     * (a folder that could not be written, a file that could not be decrypted)
-     * or null.
-     */
     info(): StorageInfo {
       return JSON.parse(host.info()) as StorageInfo;
     },
-    /**
-     * Writes any pending change to disk NOW and reports whether there was one.
-     *
-     * Writes are normally coalesced to one per frame, so a hard kill can lose
-     * the last frame's. This is the escape hatch for the moment where that
-     * matters — and what the persistence test calls before restarting the host.
-     */
+    /** Writes any pending change now and reports whether there was one; writes normally coalesce per frame. */
     flush() {
       return storageResult<{ wrote: boolean }>(host.flush(), "flush").wrote;
     },
@@ -11353,7 +9839,7 @@ const inertStorage = new Proxy(
         "appStorage",
         "the storage host is missing (vn_storage::install did not run, or the host was built " +
           "without the `storages` feature) — `appStorage` is inert and localStorage does not " +
-          "persist. See docs/STORAGE.md.",
+          "persist.",
       );
       if (key === "kinds") return [];
       if (key === "folder") return "";
@@ -11371,9 +9857,7 @@ const inertStorage = new Proxy(
           error: "no storage host",
         });
       if (key === "flush") return () => false;
-      // `getUserFolder` and `setStorageFolder` cannot answer with a plausible
-      // path — a wrong path is worse than no path, because the app would then
-      // write somewhere real.
+      // A wrong path is worse than none: the app would write somewhere real.
       return () => {
         throw new TypeError(`appStorage.${String(key)} is unavailable: no storage host`);
       };
@@ -11385,16 +9869,9 @@ export const appStorage: AppStorage = storageHost
   ? createStorage(storageHost)
   : (inertStorage as unknown as AppStorage);
 
-// ---- the desktop host: settle channel (crates/vn-desktop) -------------------
-//
-// Every async desktop call answers `{token}` (or a synchronous refusal) and is
-// settled later through ONE dispatcher by `vn_desktop::pump()` in the frame
-// pump — the permissions shape. Token 0 is an UNSOLICITED host event (a second
-// instance's `launch`) and is handed to `desktopEvents`. A settle may carry a
-// VALUE the host made on delivery (a picked file's `File`, an input's
-// `FileList`) as the dispatcher's fourth argument.
+// Async desktop calls answer `{token}` and settle through one dispatcher in the frame pump. Token 0
+// is an unsolicited host event; a settle may carry a host-made value (a `File`, a `FileList`).
 
-/** The host fns, gathered so the inert branch is a single `null` check. */
 interface DesktopHost {
   setDispatcher: typeof __vn_desktop_set_dispatcher;
   screenSources: typeof __vn_desktop_get_screen_sources | null;
@@ -11402,7 +9879,6 @@ interface DesktopHost {
   openPath: typeof __vn_shell_open_path;
   showItem: typeof __vn_shell_show_item;
   trash: typeof __vn_shell_trash;
-  /** The File System Access and dialog half, or null on a host from before it. */
   fs: DesktopFsHost | null;
 }
 
@@ -11444,7 +9920,6 @@ const desktopHost: DesktopHost | null =
       }
     : null;
 
-/** A rejection as the host serialises it (`Fail::to_json` / `to_sync_json`). */
 interface DesktopFailure {
   name: string;
   message?: string;
@@ -11453,12 +9928,7 @@ interface DesktopFailure {
   osError?: number;
 }
 
-/**
- * The error a tier-2 desktop call rejects with: an `Error` whose `name` is the
- * DOMException-style name (`NotFoundError`, `NotAllowedError`, …), plus the
- * Node-style `code` an app can switch on and the raw Win32 `osError`
- * (desktop-apis-design §3.3). A refused argument is a plain `TypeError`.
- */
+/** A tier-2 desktop rejection: `name` is DOMException-style, `code` Node-style, `osError` the raw Win32 code. */
 export interface AppDesktopError extends Error {
   code?: string;
   osError?: number;
@@ -11474,16 +9944,13 @@ function desktopError(f: DesktopFailure): AppDesktopError {
 }
 
 /**
- * A pending call. `raw` ones (desktop.ts's) resolve `{payload, value}` and
- * reject with the host's failure object, which desktop.ts turns into the
- * DOMException its spec names; the rest resolve the payload and reject with
- * `desktopError`.
+ * A pending call. `raw` ones (desktop.ts's) resolve `{payload, value}` and reject with the host's
+ * failure object; the rest resolve the payload and reject with `desktopError`.
  */
 const desktopPending = new Map<
   number,
   { resolve: (v: unknown) => void; reject: (e: unknown) => void; raw: boolean }
 >();
-/** Consumers of token-0 events, by `payload.kind`. */
 const desktopEvents = new Map<string, (payload: Record<string, unknown>) => void>();
 
 if (desktopHost) {
@@ -11506,12 +9973,10 @@ if (desktopHost) {
   });
 }
 
-/** One host answer → a promise: `{token}` waits for the pump, a refusal rejects now. */
 function desktopCall(json: VnJson): Promise<Record<string, unknown>> {
   return desktopAwait(json, false) as Promise<Record<string, unknown>>;
 }
 
-/** {@link desktopCall} for desktop.ts: `{payload, value}`, and raw failures. */
 function desktopCallRaw(json: VnJson): Promise<DesktopSettle> {
   return desktopAwait(json, true) as Promise<DesktopSettle>;
 }
@@ -11531,15 +9996,9 @@ function desktopAwait(json: VnJson, raw: boolean): Promise<unknown> {
   return new Promise((resolve, reject) => desktopPending.set(token, { resolve, reject, raw }));
 }
 
-// ---- transient activation (HTML "user activation") ---------------------------
-//
-// What a picker needs and a `<input type=file>` click checks: a keydown or a
-// mousedown the HOST delivered in the last five seconds (Chromium's lifespan).
-// `el.click()` and `dispatchEvent` never activate — script cannot vouch for a
-// user. Escape and a lone modifier do not count (HTML: "the Esc key" is
-// excluded; Chromium skips modifier-only presses). The host dispatcher below
-// calls `noteActivation`, beside the sticky-activation hook.
-
+// Transient activation: a keydown or mousedown the host delivered in the last five seconds
+// (Chromium's lifespan). `el.click()` and `dispatchEvent` never activate; neither do Escape or a
+// lone modifier.
 const ACTIVATION_MS = 5000;
 let activationAt = -Infinity;
 let hasBeenActive = false;
@@ -11557,9 +10016,7 @@ const activation = {
   consume: () => void (activationAt = -Infinity),
 };
 
-// `navigator.userActivation` (HTML), where the engine has none: the read side
-// of the same state, for an app that wants to know before it asks.
-// A previous runtime's (a same-realm reload) read ITS activation, so it goes too.
+// `navigator.userActivation` where the engine has none; a previous runtime's own is replaced.
 if (typeof navigator !== "undefined" && navigator && vacant(navigator, "userActivation")) {
   try {
     Object.defineProperty(navigator, "userActivation", {
@@ -11578,8 +10035,6 @@ if (typeof navigator !== "undefined" && navigator && vacant(navigator, "userActi
   }
 }
 
-// ---- File System Access, FileReader, the pickers (desktop.ts) ---------------
-
 const desktopApi: DesktopApi = installDesktop(globalThis as unknown as Record<string, unknown>, {
   host: desktopHost?.fs ?? null,
   engine: globalThis as unknown as DesktopEngine,
@@ -11589,26 +10044,20 @@ const desktopApi: DesktopApi = installDesktop(globalThis as unknown as Record<st
   realm: { vacant, mark },
 });
 
-// ---- links and window.open: the tier-1 path to the shell --------------------
-
 /**
- * Hands a CONTENT URL (an `<a href>`, a `window.open`) to the system. The
- * allowlist has already been applied by the caller and is applied AGAIN by the
- * host (`content = true`), so neither side alone is the security line. Never
- * throws and returns nothing, as a browser's navigation does not; a failure
- * (no mail client for `mailto:`) is a console warning.
+ * Hands a content URL to the system. The caller's allowlist is applied again by the host, so
+ * neither side alone is the security line. Never throws; a failure is a console warning.
  */
 function openContentUrl(url: string, via: string): void {
   if (!desktopHost) {
     warnCompat(
       "shell:absent",
       `${via}: the desktop host is missing (vn_desktop::install did not run) — the link was not ` +
-        `opened. See docs/SHELL.md`,
+        `opened.`,
     );
     return;
   }
-  // The serialised form a browser's `a.href` reports: spaces and non-ASCII
-  // percent-encoded, which is also what the shell wants.
+  // The serialised form a browser's `a.href` reports, which is also what the shell wants.
   let href = url;
   try {
     if (typeof URL === "function") href = new URL(url).href;
@@ -11621,14 +10070,8 @@ function openContentUrl(url: string, via: string): void {
   });
 }
 
-// `window.open(url)` for an EXTERNAL url opens the system browser and returns
-// `null` — `noopener` semantics, and what an Electron app whose
-// `setWindowOpenHandler` answers `{action: "deny"}` returns (D-F7). Everything
-// else — no url, a relative one, `about:blank` — is still the prelude's A-22
-// ("a second document" stays reserved, docs/WINDOWING.md §8). Wrapped HERE
-// rather than in window.prelude.ts because this is where the link path and the
-// desktop host live; the prelude evaluates first, so its `open` is the
-// fallback.
+// `window.open(url)` for an external URL opens the system browser and returns `null` (noopener
+// semantics). Anything else falls through to the prelude's `open`, which evaluates first.
 {
   type OpenFn = (url?: unknown, target?: unknown, features?: unknown) => unknown;
   const g = globalThis as unknown as { open?: OpenFn };
@@ -11649,26 +10092,11 @@ function openContentUrl(url: string, via: string): void {
   };
 }
 
-// ---- shell (docs/SHELL.md tier 2) -------------------------------------------
-//
-// What a browser cannot do, so there is no tier-1 spelling to prefer: open a
-// FILE with its default app, reveal one in Explorer, move one to the Recycle
-// Bin, and open a URL of a scheme content may not reach. Electron's
-// `shell.openExternal` / `openPath` / `showItemInFolder` / `trashItem`, with
-// two deliberate differences, both of them in the safe direction:
-//
-//   * `openPath` REFUSES programs and scripts (`.exe`, `.bat`, `.lnk`, `.ps1`,
-//     `.js`, every PATHEXT entry, …) unless `{ allowExecutable: true }` — a
-//     Save-dialog-then-open flow must not launch an attacker-named
-//     `report.pdf.exe`;
-//   * `openExternal` refuses `file:` (a TypeError naming `openPath`), so a URL
-//     is never a way around the executable guard.
-//
-// Every call is a promise that REJECTS on failure — `NotFoundError`/`ENOENT`
-// for a missing file, `NotFoundError`/`ENOASSOC` for "nothing is associated
-// with .xyz" — instead of Electron's resolve-with-an-error-string.
+// `appShell`: what a browser cannot do. Like Electron's `shell`, with two safer differences:
+// `openPath` refuses programs and scripts unless `{ allowExecutable: true }`, and `openExternal`
+// refuses `file:`, so a URL is never a way around that guard. Calls reject on failure
+// (`ENOENT`, `ENOASSOC`) instead of resolving an error string.
 
-/** The tier-2 surface, in both its live and its inert spelling. */
 interface AppShell {
   openExternal(url: string): Promise<void>;
   openPath(path: string, options?: { allowExecutable?: boolean }): Promise<void>;
@@ -11679,33 +10107,18 @@ interface AppShell {
 function createShell(host: DesktopHost): AppShell {
   const done = (p: Promise<unknown>): Promise<void> => p.then(() => undefined);
   return {
-    /**
-     * Opens `url` with whatever the system has registered for its scheme —
-     * the default browser for https, the mail client for mailto, an app's own
-     * protocol, `ms-settings:`. Any scheme but `file:`. Resolves once the shell
-     * has accepted it (not when the browser has loaded the page).
-     */
+    /** Opens `url` with the system handler for its scheme (any but `file:`); resolves once the shell accepts it. */
     openExternal(url: string) {
       return done(desktopCall(host.openExternal(String(url), false)));
     },
-    /**
-     * Opens a FILE (or folder) with its default application, as a double-click
-     * in Explorer does. `path` must be absolute. Programs and scripts are
-     * refused (`NotAllowedError`, code `EEXECUTABLE`) unless
-     * `{ allowExecutable: true }`.
-     */
+    /** Opens a file or folder with its default app; `path` must be absolute. Programs and scripts are refused (`EEXECUTABLE`) unless `allowExecutable`. */
     openPath(path: string, options: { allowExecutable?: boolean } = {}) {
       return done(desktopCall(host.openPath(String(path), !!(options && options.allowExecutable))));
     },
-    /** Opens the containing folder in Explorer with `path` selected. */
     showItemInFolder(path: string) {
       return done(desktopCall(host.showItem(String(path))));
     },
-    /**
-     * Moves `path` to the Recycle Bin. NEVER a permanent delete: on a drive
-     * with no Recycle Bin (or an item too large for it) this rejects
-     * (`InvalidStateError`, code `ENOTRASH`) and nothing is deleted.
-     */
+    /** Moves `path` to the Recycle Bin, never a permanent delete: rejects (`ENOTRASH`) when there is none. */
     trashItem(path: string) {
       return done(desktopCall(host.trash(String(path))));
     },
@@ -11719,7 +10132,7 @@ const inertShell = new Proxy(
       warnCompat(
         "appShell",
         "the desktop host is missing (vn_desktop::install did not run) — `appShell` is inert and " +
-          "every call rejects. See docs/SHELL.md.",
+          "every call rejects.",
       );
       return () =>
         Promise.reject(
@@ -11740,7 +10153,6 @@ export interface ScreenCaptureSource {
   displayId: string;
   [key: string]: unknown;
 }
-/** A capture source, as `appCapture`'s permission calls name it. */
 export type CaptureSource = "microphone" | "camera" | "screen_share";
 /** `appCapture.permission()`: a capture source's permission, read without asking. */
 export interface CapturePermission {
@@ -11763,11 +10175,7 @@ function capturePermissionName(source: unknown): VnPermissionName {
   return name;
 }
 export const appCapture = {
-  /**
-   * The source's permission, read now and never asked for. A settings
-   * screen shows its "Grant access" from this; a capture asks only from
-   * `prompt` (after a Block it refuses without asking, as a browser does).
-   */
+  /** The source's permission, read now and never asked for; a capture asks only from `prompt`. */
   permission(source: CaptureSource): CapturePermission {
     const name = capturePermissionName(source);
     if (typeof __vn_permissions_list !== "function") return { state: "unsupported", canRequest: false, deniedBySystem: false };
@@ -11779,9 +10187,8 @@ export const appCapture = {
     };
   },
   /**
-   * Asks for the source, as a "Grant access" button does: from `prompt` or
-   * the user's Block the app's own prompt, from a platform denial its
-   * settings page (`appPermissions.request`).
+   * Asks for the source: the app's own prompt from `prompt` or a user Block, the platform's
+   * settings page from a platform denial.
    */
   async requestPermission(source: CaptureSource): Promise<VnPermissionState> {
     return appPermissions.request(capturePermissionName(source));
@@ -11816,21 +10223,11 @@ export const appCapture = {
 // An app also built by Vite cannot import vue-native, so it uses this same API.
 (globalThis as { __VN_CAPTURE__?: typeof appCapture }).__VN_CAPTURE__ = mark(appCapture);
 
-// ---- launch (docs/LAUNCH.md) ------------------------------------------------
-//
-// TIER 1 is the Launch Handler API: `launchQueue.setConsumer(params => …)`,
-// with `params.targetURL` the deep link and `params.files` the file handles.
-// This process's own launch is one `LaunchParams`, buffered until a consumer
-// is set (per spec); every launch a SECOND process forwards here (with
-// `singleInstance`) is another one — the `"focus-existing"` client mode.
-//
-// TIER 2, `appLaunch`, is what a browser cannot say: the raw argv (Electron's
-// `process.argv` shape), the launch directory, which arguments are existing
-// paths, whether this process holds the single-instance lock, and the
-// `launch` event with its `source`. Deep links and argv are UNTRUSTED INPUT —
-// a web page can start `myapp://anything` — so they are strings, never code.
+// Tier 1 is the Launch Handler API (`launchQueue.setConsumer`): this process's own launch is
+// buffered until a consumer is set, and every launch a second process forwards (`singleInstance`)
+// is another. Tier 2, `appLaunch`, adds what a browser cannot say: raw argv, cwd, existing-path
+// arguments, the single-instance lock, the `launch` event. Deep links and argv are untrusted input.
 
-/** What `__vn_launch_info` reports. */
 interface LaunchInfo {
   argv: string[];
   cwd: string;
@@ -11843,7 +10240,6 @@ interface LaunchInfo {
   name?: string;
 }
 
-/** The `launch` event (`appLaunch.addEventListener("launch", …)`). */
 export interface VnLaunchEvent extends VnEvent {
   readonly argv: readonly string[];
   readonly cwd: string;
@@ -11852,7 +10248,6 @@ export interface VnLaunchEvent extends VnEvent {
   readonly source: "second-instance" | "open-url" | "reopen";
 }
 
-/** The tier-2 surface, in both its live and its host-less spelling. */
 interface AppLaunch extends VnEventTarget {
   readonly argv: readonly string[];
   readonly cwd: string;
@@ -11875,11 +10270,8 @@ const launchInfo: LaunchInfo = (() => {
 })();
 
 /**
- * `LaunchParams` (WICG Launch Handler + File Handling). `targetURL` is the RAW
- * deep link — there is no app URL scope to template it into — and `files`
- * holds a `FileSystemFileHandle` / `FileSystemDirectoryHandle` for EVERY
- * existing path argument, where a PWA gets only those its manifest's
- * `file_handlers` accept: there is no such list. Both are D-F8.
+ * `LaunchParams`: `targetURL` is the raw deep link; `files` holds a handle for every existing path
+ * argument, where a PWA gets only those its manifest accepts.
  */
 class LaunchParams {
   readonly targetURL: string | null;
@@ -11892,15 +10284,11 @@ class LaunchParams {
 
 type LaunchConsumer = (params: LaunchParams) => unknown;
 
-/** `window.launchQueue`. */
 class LaunchQueue {
   #consumer: LaunchConsumer | null = null;
   #pending: LaunchParams[] = [];
 
-  /**
-   * Sets the consumer and hands it every launch that arrived before it —
-   * synchronously, in order, as Chromium's `LaunchQueue::setConsumer` does.
-   */
+  /** Sets the consumer and synchronously hands it every earlier launch, in order. */
   setConsumer(consumer: LaunchConsumer): void {
     if (typeof consumer !== "function") {
       throw new TypeError("Failed to execute 'setConsumer' on 'LaunchQueue': parameter 1 is not a function.");
@@ -11910,7 +10298,6 @@ class LaunchQueue {
     for (const p of queued) this.#deliver(p);
   }
 
-  /** Host side: a launch happened. */
   _enqueue(params: LaunchParams): void {
     if (this.#consumer) this.#deliver(params);
     else this.#pending.push(params);
@@ -11936,17 +10323,14 @@ function launchParamsFor(url: string | null, handles: unknown): LaunchParams {
 const launchQueue = new LaunchQueue();
 {
   const g = globalThis as unknown as { launchQueue?: unknown; LaunchParams?: unknown; LaunchQueue?: unknown };
-  // Installed only where the engine has none (redjs does not), never over one.
-  // A previous runtime's counts as none (`REALM`).
+  // Only where the engine has none; a previous runtime's counts as none (`REALM`).
   if (vacant(g, "launchQueue")) {
     g.launchQueue = mark(launchQueue);
     g.LaunchParams = mark(LaunchParams);
     g.LaunchQueue = mark(LaunchQueue);
   }
 }
-// This process's own launch, once per process. A reload is not a launch, and a
-// browser hands a reloaded page no LaunchParams either. A host without
-// vn-desktop has no launch to report.
+// This process's own launch, once per process: a reload is not a launch.
 if (typeof __vn_launch_info === "function" && REALM.runs === 1) {
   launchQueue._enqueue(launchParamsFor(launchInfo.url, launchInfo.handles));
 }
@@ -11970,9 +10354,7 @@ function createLaunch(): AppLaunch {
     })) {
       Object.defineProperty(ev, k, { value: v, enumerable: true, configurable: true });
     }
-    // The tier-2 event first, then the tier-1 queue — the order docs/LAUNCH.md
-    // §4 documents. Either may be the one an app listens to; neither waits on
-    // the other.
+    // Tier-2 event first, then the tier-1 queue; neither waits on the other.
     try {
       target.dispatchEvent(ev);
     } finally {
@@ -11982,21 +10364,15 @@ function createLaunch(): AppLaunch {
   return Object.defineProperties(target, {
     /** Electron's `process.argv` shape: the exe first, then the arguments (no `--vn-*`). */
     argv: { get: () => argv, enumerable: true },
-    /** The directory the app was launched from. */
     cwd: { get: () => launchInfo.cwd, enumerable: true },
     /** The deep link this process was started for (`myapp://…`), or null. UNTRUSTED. */
     url: { get: () => launchInfo.url, enumerable: true },
-    /** The arguments that name an existing file or folder, absolute. */
     paths: { get: () => paths, enumerable: true },
     /** Does THIS process hold the single-instance lock (`"singleInstance": true` and it was first)? */
     singleInstance: { get: () => launchInfo.singleInstance, enumerable: true },
     /**
-     * Registers `scheme://` for THIS exe, per user (HKCU — never machine-wide).
-     * Synchronous: three registry writes. Throws a TypeError for an invalid
-     * or reserved scheme (http, file, ms-*, …) and for one that another app
-     * already owns — vue-native never takes over a scheme. A packaged app
-     * registers its declared `protocols` itself at startup; in a DEV host this
-     * points the scheme at the dev slot (advisory A-F10).
+     * Registers `scheme://` for this exe, per user (HKCU). Throws TypeError for an invalid or
+     * reserved scheme or one another app owns. In a dev host it points the scheme at the dev slot.
      */
     registerProtocol: {
       value(scheme: string): void {
@@ -12007,13 +10383,11 @@ function createLaunch(): AppLaunch {
         if (out.error !== undefined) throw desktopError({ name: out.name ?? "TypeError", ...out });
       },
     },
-    /** Removes a registration of OURS that points at THIS exe. Returns whether it did. */
     unregisterProtocol: {
       value(scheme: string): boolean {
         return typeof __vn_launch_unregister_protocol === "function" && __vn_launch_unregister_protocol(String(scheme));
       },
     },
-    /** Is `scheme://` registered to this app AND to this exe? */
     isProtocolRegistered: {
       value(scheme: string): boolean {
         return (
@@ -12026,50 +10400,18 @@ function createLaunch(): AppLaunch {
 
 export const appLaunch: AppLaunch = createLaunch();
 
-// ---- devtools (docs/DEVTOOLS.md, tier 3) -----------------------------------
-//
-// Since m22 the devtools — the protocol listener, the embedded inspector and
-// F12 — are compiled into EVERY build, `--features prod` included. That is the
-// owner's decision (docs/ARCHITECTURE.md §11 decision 12) and it is what a
-// browser and what Electron do; the thing an app gets in exchange is the
-// ability to turn them off HERE, at runtime, in its own JS:
-//
-//     import { appDevtools } from "vue-native";
-//     appDevtools.disable();     // …or `"devtools": false` in vn.config.json,
-//                                //   which is the same decision made earlier
-//
-// Named after `appWindow`/`appPermissions`/`appStorage` for the same reason:
-// an extension must not be able to pass for a web API. There is no browser
-// spelling of any of this — a page cannot disable F12 and has no idea whether
-// a debugger is attached — so the whole surface is tier 3 by construction, and
-// nothing here shadows or weakens a standard API.
-//
-// WHAT "DISABLED" MEANS, and why it is the stronger of the two possible
-// answers: the devtools port carries `eval`. A shipped app whose author turned
-// the devtools off must not still be holding a localhost socket that runs
-// arbitrary JS inside it — "the key is refused but the port is open" would be
-// a security posture nobody asked for. So `disable()` closes the listener,
-// drops every attached inspector socket, blanks the token and deletes the
-// handshake file; `enable()` binds a FRESH port with a FRESH token, so a client
-// that was shown the door cannot walk back in on the old one.
-//
-// THE ONE OVERRIDE: `VN_DEVTOOLS=1` in the environment forces them on and
-// refuses `disable()`. It exists so a developer can debug a binary somebody
-// shipped with them off. It hands out no authority its user did not already
-// have — the port is localhost-only and token-guarded, so reaching it already
-// needs local code execution as the same user, and somebody who can set this
-// process's environment could equally replace its executable. What it buys back
-// is the property this whole project runs on: an app must not be able to make
+// `appDevtools` lets an app turn the devtools off at runtime (`disable()`, or `"devtools": false`
+// in vn.config.json). Since the devtools port carries `eval`, disabling closes the listener, drops
+// attached inspectors, blanks the token and deletes the handshake file; `enable()` binds a fresh
+// port and token. `VN_DEVTOOLS=1` forces them on and refuses `disable()`, so an app cannot make
 // itself undebuggable.
 
-/** The three host fns, gathered so the inert branch is a single `null` check. */
 interface DevtoolsHost {
   state: typeof __vn_devtools_state;
   setEnabled: typeof __vn_devtools_set_enabled;
   open: typeof __vn_devtools_open;
 }
 
-/** Everything `appDevtools.info()` reports. */
 export interface DevtoolsInfo {
   /** Are they on? Off means there is no listener at all. */
   enabled: boolean;
@@ -12087,16 +10429,8 @@ export interface DevtoolsInfo {
   slot: string;
 }
 
-/** The tier-3 surface, in both its live and its inert spelling. */
 interface AppDevtools {
-  /**
-   * Does this BUILD have the devtools at all?
-   *
-   * `false` only for `--features no-devtools`, and it is a different fact from
-   * `isEnabled()`: "turned off" is a decision this process can reverse, "not in
-   * the binary" is not. An app that draws a devtools toggle should hide it
-   * rather than draw a switch that cannot move.
-   */
+  /** False only for `--features no-devtools`; unlike `isEnabled()`, "not in the binary" cannot be reversed. */
   readonly available: boolean;
   isEnabled(): boolean;
   enable(): boolean;
@@ -12115,16 +10449,7 @@ const devtoolsHost: DevtoolsHost | null =
       }
     : null;
 
-/**
- * The `onChange` registry.
- *
- * JS-side, and that is honest rather than a shortcut: every transition goes
- * through `enable()`/`disable()` in this module (the boot state is settled
- * before the app bundle evaluates, and nothing else in the process moves the
- * switch), so a listener here sees exactly the set of changes that exist. If
- * the host ever grows a second mover — a menu item in the shell, say — this
- * becomes a host callback and the signature does not change.
- */
+/** `onChange` listeners; every transition goes through `enable()`/`disable()` here, so a JS-side registry sees them all. */
 const devtoolsWatchers = new Set<(enabled: boolean) => void>();
 
 function notifyDevtools(enabled: boolean) {
@@ -12132,8 +10457,7 @@ function notifyDevtools(enabled: boolean) {
     try {
       fn(enabled);
     } catch (e) {
-      // One listener's throw must not stop the others, and must not turn a
-      // successful `disable()` into a failed one.
+      // One listener's throw must not stop the others or fail a successful `disable()`.
       warnCompat(
         "appDevtools.onChange",
         `a change listener threw and was ignored: ${String(e)}`,
@@ -12148,10 +10472,7 @@ function createDevtools(host: DevtoolsHost): AppDevtools {
     const was = read().enabled;
     const out = JSON.parse(host.setEnabled(on)) as DevtoolsInfo & { error?: string };
     if (out.error) {
-      // Refused, not failed — and refusal has exactly one cause. An advisory
-      // rather than a throw: the app asked for something reasonable and the
-      // machine's owner overruled it, which must not take a shipped app's boot
-      // code down.
+      // Refused (only by `VN_DEVTOOLS=1`), not failed: warn rather than throw so a shipped app's boot survives.
       warnCompat("appDevtools", `${on ? "enable" : "disable"}() was refused: ${out.error}`);
       return was;
     }
@@ -12160,30 +10481,12 @@ function createDevtools(host: DevtoolsHost): AppDevtools {
   };
   return {
     available: true,
-    /** Are the devtools on in this process right now? */
     isEnabled: () => read().enabled,
-    /**
-     * Turns them on: binds a fresh localhost port with a fresh token and
-     * republishes `<dist>/devtools.json`. Idempotent — enabling a host that is
-     * already listening keeps the port it has, so calling this on every route
-     * change does not hand an attached inspector a new port each time.
-     */
+    /** Binds a fresh port and token and republishes `<dist>/devtools.json`; idempotent, so an attached inspector keeps its port. */
     enable: () => set(true),
-    /**
-     * Turns them off: closes the listener, drops every attached inspector
-     * socket, blanks the token and deletes the handshake. F12 becomes a no-op
-     * that says why, once, in the log.
-     *
-     * Returns the state AFTERWARDS, so `false` means it worked and `true` means
-     * `VN_DEVTOOLS=1` overruled it (with an advisory naming that).
-     */
+    /** Closes the listener and inspector sockets, blanks the token, deletes the handshake. Returns the state afterwards: `true` means `VN_DEVTOOLS=1` overruled it. */
     disable: () => set(false),
-    /**
-     * Programmatic F12 — for an app that wants its own "Open devtools" menu
-     * item. The same entry point the key uses, so it shares the debounce and
-     * the "raise the one that is already open" behaviour, and it does not take
-     * focus. `false` when the devtools are disabled.
-     */
+    /** Programmatic F12: shares its debounce and raise-existing behaviour; false when disabled. */
     open: () => {
       const out = JSON.parse(host.open()) as { opened?: boolean; error?: string };
       if (out.error) {
@@ -12192,9 +10495,7 @@ function createDevtools(host: DevtoolsHost): AppDevtools {
       }
       return !!out.opened;
     },
-    /** Everything at once: `{ enabled, locked, port, pid, key, inspectors, slot }`. */
     info: () => read(),
-    /** Calls `fn(enabled)` on every settled change. Returns the unsubscriber. */
     onChange(fn: (enabled: boolean) => void) {
       devtoolsWatchers.add(fn);
       return () => {
@@ -12204,14 +10505,7 @@ function createDevtools(host: DevtoolsHost): AppDevtools {
   };
 }
 
-/**
- * `--features no-devtools`: there is nothing to switch.
- *
- * It answers rather than throws — `appDevtools.disable()` in an app's entry
- * module is the most likely single caller, and a build that already has no
- * devtools must not crash on being asked to turn them off. One advisory, on
- * the first touch, so the absence is stated rather than mimed.
- */
+/** `--features no-devtools`: nothing to switch; answers instead of throwing so `disable()` in an entry module is harmless. */
 const inertDevtools: AppDevtools = {
   available: false,
   isEnabled: () => false,
@@ -12219,7 +10513,7 @@ const inertDevtools: AppDevtools = {
     warnCompat(
       "appDevtools",
       "this host was built with `--features no-devtools`, so there are no devtools to enable " +
-        "— `appDevtools.enable()` did nothing. See docs/DEVTOOLS.md.",
+        "— `appDevtools.enable()` did nothing.",
     );
     return false;
   },
@@ -12228,7 +10522,7 @@ const inertDevtools: AppDevtools = {
     warnCompat(
       "appDevtools",
       "this host was built with `--features no-devtools` — `appDevtools.open()` has no " +
-        "inspector to open. See docs/DEVTOOLS.md.",
+        "inspector to open.",
     );
     return false;
   },
@@ -12241,9 +10535,7 @@ const inertDevtools: AppDevtools = {
     inspectors: 0,
     slot: "",
   }),
-  // Still a real registry: a listener registered here is simply never called,
-  // which is the truth, and the unsubscriber still works so no caller special-
-  // cases the inert build.
+  // A real registry so callers need not special-case the inert build; its listeners never fire.
   onChange(fn: (enabled: boolean) => void) {
     devtoolsWatchers.add(fn);
     return () => {
@@ -12256,19 +10548,9 @@ export const appDevtools: AppDevtools = devtoolsHost
   ? createDevtools(devtoolsHost)
   : inertDevtools;
 
-// ---- <Transition> / <TransitionGroup> (compat roadmap G9) ------------------
-// runtime-core exports BaseTransition (the state machine) but NOT these two —
-// they live in runtime-dom, because the CSS half is DOM-specific. Libraries
-// import them from "vue" unconditionally (@vueuse/core does, at MODULE SCOPE),
-// so their absence is `undefined` in dev and a hard build failure in prod.
-//
-// This is runtime-dom's implementation, ported onto our host: the same class
-// phases, the same hook shapes, the same `mode`/`appear` handling (which is
-// BaseTransition's, so it comes for free), riding vn-css's REAL transition
-// engine. One divergence, stated once at runtime: there is no `transitionend`
-// event, so the end of a transition is detected purely by the timer runtime-dom
-// itself already uses as its fallback — read off the element's computed
-// `transition-duration`/`transition-delay`.
+// `<Transition>`/`<TransitionGroup>` live in runtime-dom, not runtime-core, but libraries import
+// them from "vue" at module scope, so their absence breaks builds. Ported from runtime-dom onto our
+// transition engine.
 
 const TRANSITION_PROPS = {
   name: String,
@@ -12286,10 +10568,8 @@ const TRANSITION_PROPS = {
   leaveToClass: String,
 };
 
-// runtime-dom adds the phase class to `el.classList` AND records it in `_vtc`,
-// because in a browser those are two views of the same attribute. Here they are
-// two SOURCES for one attribute (`writeClass` joins them), so recording it once
-// is the whole job — adding it to `className` as well would emit it twice.
+// runtime-dom records the phase class in `_vtc` and `classList`; here `writeClass` joins two
+// sources, so record it once or it is emitted twice.
 function addTransitionClass(el: MirrorElement, cls: string): void {
   (el._vtc || (el._vtc = new Set())).add(cls);
   writeClass(el);
@@ -12299,15 +10579,13 @@ function removeTransitionClass(el: MirrorElement, cls: string): void {
     el._vtc.delete(cls);
     if (!el._vtc.size) el._vtc = undefined;
   }
-  // runtime-dom's `classList.remove(cls)` takes it out of the whole attribute,
-  // so a copy a script wrote back into the class goes too.
+  // Like `classList.remove`: also drop a copy a script wrote into the class.
   const base = (el._class || "").split(/\s+/);
   if (base.includes(cls)) el._class = base.filter((c) => c && c !== cls).join(" ");
   writeClass(el);
 }
 
-/// Two frames, as runtime-dom does it: one to let the *-from class be committed
-/// and cascaded, the next to swap in *-to so the engine sees a real change.
+/// Two frames: one to commit the *-from class, the next to swap in *-to so the engine sees a real change.
 function nextFrame(cb: () => void): void {
   const raf = globalThis.requestAnimationFrame;
   if (typeof raf === "function") raf(() => raf(cb));
@@ -12321,12 +10599,8 @@ function listTimeout(delays: string[], durations: string[]): number {
   return Math.max(0, ...durations.map((d: string, i: number) => toMs(d) + toMs(delays[i])));
 }
 
-/// How long the element's CSS says its transition takes. Same computation
-/// runtime-dom does, off the same two properties.
 function transitionTimeout(el: MirrorElement): number {
-  // `getComputedStyle` is one of the globals THIS FILE installs (see
-  // `defineGlobal` above), so it is not on the engine's declared surface and
-  // the cast is what says where it came from.
+  // `getComputedStyle` is installed by this file, so it is off the engine's declared surface; hence the cast.
   const styles = (
     globalThis as unknown as { getComputedStyle: (el: MirrorElement) => Record<string, string> }
   ).getComputedStyle(el);
@@ -12335,20 +10609,9 @@ function transitionTimeout(el: MirrorElement): number {
 }
 
 let endId = 0;
-/// End a `<Transition>` phase on the REAL `transitionend`, with the computed
-/// timeout as the safety net — which is exactly runtime-dom's own strategy, and
-/// is now possible because vn-css's animator sources the event (m12 item 6).
-///
-/// The event matters rather than merely being tidier: the timer reports the
-/// declared duration whatever actually happened, so a transition the engine cut
-/// short (reduced motion, a competing write to the same property, the element
-/// being restyled mid-flight) left the phase class on for its full nominal
-/// length. The event fires when the track actually settles.
-///
-/// The net is still armed, and for the same two reasons runtime-dom arms it: an
-/// element whose transition never starts (the property did not actually change)
-/// fires nothing at all, and a property that is not animatable here settles
-/// without an event.
+/// Ends a phase on the real `transitionend`, with the computed timeout as a safety net (a transition
+/// that never starts, or settles without an event, fires nothing). The timer alone reports the
+/// declared duration even when the engine cut the transition short.
 function whenTransitionEnds(
   el: MirrorElement,
   explicitTimeout: number | null | undefined,
@@ -12363,8 +10626,7 @@ function whenTransitionEnds(
     resolve();
   };
   const onEnd = (e: VnEvent) => {
-    // Only this element's own transitions end this phase — a descendant's
-    // bubbles through, and runtime-dom filters it the same way.
+    // Only this element's own transitions end the phase; a descendant's bubbles through.
     if (e.target === el) resolveIfNotStale();
   };
   if (explicitTimeout != null) {
@@ -12380,9 +10642,7 @@ function whenTransitionEnds(
   setTimeout(resolveIfNotStale, timeout + 1);
 }
 
-// A `<Transition>` hook prop is whatever the app passed: one function, an array
-// of them, or nothing. Vue's own runtime-dom types it the same open way, so the
-// casts below are at the call, where the arity is known.
+// A hook prop is one function, an array of them, or nothing.
 const callHook = (hook: unknown, args: unknown[] = []) => {
   if (Array.isArray(hook)) for (const h2 of hook) (h2 as (...a: unknown[]) => void)(...args);
   else if (hook) (hook as (...a: unknown[]) => void)(...args);
@@ -12395,7 +10655,6 @@ const hasExplicitCallback = (hook: unknown): boolean =>
       : (hook as { length: number }).length > 1
     : false;
 
-/** `:duration="{ enter, leave }"` — the object form of the prop. */
 type DurationPair = { enter: unknown; leave: unknown };
 
 function normalizeDuration(duration: unknown): [number, number] | null {
@@ -12406,11 +10665,7 @@ function normalizeDuration(duration: unknown): [number, number] | null {
   return [n, n];
 }
 
-/**
- * `<Transition>`'s own props, plus whatever else the app put on the component —
- * everything not in `TRANSITION_PROPS` is forwarded to `BaseTransition`, which
- * is what the index signature stands for.
- */
+/** `<Transition>`'s own props plus anything else, which is forwarded to `BaseTransition`. */
 interface TransitionRawProps {
   name?: string;
   type?: string;
@@ -12569,17 +10824,11 @@ export const TransitionGroup = /*@__PURE__*/ defineComponent({
   },
 });
 
-// `<VnWindow>` — a second OS window painting part of this tree
-// (docs/MULTIWINDOW.md). Tier 3, so it is a NAMESPACED import an app opts into
-// by name: `import { VnWindow } from "vue-native"`. Nothing in the renderer
-// above knows about it — a pop-out is addressed by `mirrorNode.__vnId`, which every
-// template ref already hands you, so the component is a leaf of this module
-// rather than a change to it.
+// `<VnWindow>`: a second OS window painting part of this tree, addressed by `mirrorNode.__vnId`.
 export { VnWindow, VN_WINDOW_CREATION_TIME_PROPS } from "./vnwindow";
 export type { VnWindowBounds, VnWindowMetrics, VnWindowTarget } from "./vnwindow";
 
-// `appHost` — the functions and events of a program that embeds vue-native as
-// a library (docs/EMBEDDING.md). Inert, and saying so, in the exe.
+// `appHost`: functions and events of a program embedding vue-native as a library; inert in the exe.
 export { appHost } from "./apphost";
 export { appTray } from "./tray";
 export type { AppTray, TrayOptions, TrayPixels, TrayMenuItem, TrayMenuEntry } from "./tray";

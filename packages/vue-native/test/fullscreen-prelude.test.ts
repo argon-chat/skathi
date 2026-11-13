@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const source = readFileSync(join(import.meta.dir, "../../../crates/vn-app/src/window.prelude.ts"), "utf8");
-const fragment = source.slice(source.indexOf("  // ---- Fullscreen API"), source.indexOf("  // ---- windowControlsOverlay"));
+const FULLSCREEN_END = "(document!.documentElement as VnFullscreenTarget).requestFullscreen = requestFullscreen;\n";
+const fragment = source.slice(source.indexOf("  let fsStack"), source.indexOf(FULLSCREEN_END) + FULLSCREEN_END.length);
 const body = new Bun.Transpiler({ loader: "ts" }).transformSync(fragment);
 
 function world(initialFullscreen = false) {
@@ -210,7 +211,7 @@ describe("element fullscreen lifecycle", () => {
 describe("native window fullscreen notifications", () => {
   test("window listeners see the new state without a DOM fullscreen owner", () => {
     const observerSource = source.slice(source.indexOf("  __vn_window_observe("),
-      source.indexOf("  // The three return annotations"));
+      source.indexOf("  globalThis.__VN_WINDOW__ = {"));
     let observe: (kinds: string, json: string) => boolean;
     const nativeChanges: boolean[] = [];
     const appWindow = new Function("EventTarget", "Event", "emit", "onFullscreenWindowChanged", "__vn_window_observe", "liveQueries",

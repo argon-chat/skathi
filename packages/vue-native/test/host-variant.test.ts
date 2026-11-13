@@ -1,11 +1,6 @@
-// Host variants: which engine parts a bare host carries (docs/PACKAGING.md
-// §7.1, cli/config.ts `OPTIONAL`).
-//
-//   bun test packages/vue-native/test/host-variant.test.ts
-//
-// A variant is the name a host reports in `--vn-host-info` and the key `vn
-// build` finds it by, so the CLI and crates/vn-app/src/payload.rs must spell it
-// the same way. The last test reads payload.rs to hold the two lists together.
+// Host variants: which engine parts a bare host carries (cli/config.ts `OPTIONAL`). A variant is the name a host
+// reports in `--vn-host-info` and the key `vn build` finds it by, so the CLI and crates/vn-app/src/payload.rs must
+// spell it the same way; the last test reads payload.rs to hold the two lists together.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";

@@ -1,14 +1,3 @@
-// One `keydown` and one `keyup` per key, at the focused element, bubbling to
-// `document` (m26, docs/RUNTIME.md §5.19, crates/vn-tree/src/render.rs
-// `claim_key_event`). Until then every listening box on gpui's focus path, and
-// a text field's editor before them, dispatched a DOM event of its own: one
-// Escape reached a `document` listener two or three times, and a field that
-// closed itself on Escape still had the root deliver the key again.
-//
-//   bun test packages/vn-test/specs/keys.spec.ts
-//
-// Real keystrokes through gpui's key dispatch (devtools `key` / `type`).
-
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { launch } from "../src/index";
 
@@ -47,7 +36,6 @@ describe("one key, one keydown", () => {
       "field:keydown:Escape t=field",
       "document:keydown:Escape t=field",
     ]);
-    // The keyup comes after the field is gone: once, wherever the focus went.
     bunExpect(log.filter((l) => l.startsWith("document:keyup:Escape")).length).toBe(1);
     bunExpect((await app.query("#field")).count).toBe(0);
   }, T);
@@ -67,8 +55,8 @@ describe("one key, one keydown", () => {
   }, T);
 
   test("a field's keydown handler may ask where the focus is and focus the field", async () => {
-    // An emoji suggestion list picked with the arrows: Argon crashed with
-    // "cannot read TextInputState while it is already being updated".
+    // An emoji suggestion list picked with the arrows: Argon crashed with "cannot read
+    // TextInputState while it is already being updated".
     const log = await logOf(async () => {
       await app.locator("#suggest").press("ArrowDown");
       await app.locator("#suggest").press("ArrowUp");
@@ -79,7 +67,6 @@ describe("one key, one keydown", () => {
       "suggest:keydown:ArrowUp active=suggest",
       "suggest:keydown:Enter active=suggest",
     ]);
-    // Still alive: a native panic poisons the bridge and JS stops answering.
     bunExpect(await app.eval("1 + 1")).toBe(2);
   }, T);
 });

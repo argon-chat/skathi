@@ -1,12 +1,7 @@
-// Imperative tree mutation (m26 client sweep #5a): `appendChild`,
-// `insertBefore`, `removeChild`, `replaceChild`, ChildNode and ParentNode, and
-// `insertAdjacent*`, on mirror nodes, with the DOM's semantics. Every case
-// checks the host tree too (`host.tree`, a model of crates/vn-tree's), because
-// the mirror and the host must never disagree about who is whose child.
-//
-// The client case: useCustomEmojiOverlay.ts builds an <img>, a mask <span> or
-// a <canvas> with document.createElement and appends it to a placeholder the
-// renderer made, and removes it again when the placeholder goes.
+// Imperative tree mutation: `appendChild`, `insertBefore`, `removeChild`, `replaceChild`, ChildNode and ParentNode,
+// and `insertAdjacent*`, on mirror nodes, with the DOM's semantics. Every case also checks the host tree
+// (`host.tree`, a model of crates/vn-tree's), since the mirror and the host must never disagree about who is whose
+// child.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";

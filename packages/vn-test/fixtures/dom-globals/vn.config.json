@@ -1,6 +1,4 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/dom-globals.spec.ts: NodeList, HTMLCollection, Node and the element interfaces in the real engine (docs/RUNTIME.md §5.24). See ../README.md.",
-
   "name": "vn-test-dom-globals",
 
   "window": {

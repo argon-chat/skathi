@@ -1,23 +1,13 @@
-// Two hosts, one `bun test`, no cross-talk.
-//
-// `bun test` runs SPEC FILES serially in one process, so hello.spec.ts and
-// shadcn.spec.ts each get the machine to themselves and never test the thing
-// their separate slots exist for. This file does: it brings up two apps at the
-// same time and drives them alternately.
-//
-// The isolation is structural rather than negotiated. Each instance gets a
-// private dist directory, the host binds `127.0.0.1:0` and writes ITS port and
-// token into ITS own `<dist>/devtools.json`, and every client here reads the
-// handshake from the slot it allocated. There is no shared registry to race, no
-// fixed port to collide on, and no name to guess wrong.
+// `bun test` runs SPEC FILES serially in one process, so hello.spec.ts and shadcn.spec.ts each get
+// the machine to themselves and never test the thing their separate slots exist for.
 
 import { afterAll, describe, test } from "bun:test";
 import { expect, launch } from "../src/index";
 
 const T = 60_000;
 
-// Concurrently, on purpose: two builders, two slot copies and two host boots
-// overlapping is the case that would expose a shared temp path.
+// Concurrently, on purpose: two builders, two slot copies and two host boots overlapping is the
+// case that would expose a shared temp path.
 const [a, b] = await Promise.all([
   launch({ app: "hello", window: [900, 700], label: "par-a" }),
   launch({ app: "hello", window: [900, 700], label: "par-b" }),
@@ -68,9 +58,7 @@ describe("parallel", () => {
   }, T);
 
   test("commands issued at the same moment do not cross wires", async () => {
-    // Both connections are pipelined and both hosts execute one command per
-    // frame. Interleaving ten round trips is what would surface a reply
-    // matched to the wrong request.
+    // Interleaving ten round trips is what would surface a reply matched to the wrong request.
     const work = [];
     for (let i = 0; i < 5; i++) {
       work.push(a.locator(".bar .store").textContent());

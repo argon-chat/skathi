@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/shell.spec.ts: links, window.open and appShell. The spec runs it with VN_SHELL=record, so nothing it does reaches the OS — see docs/SHELL.md §4.",
+  "$comment": "Links, window.open and appShell.",
 
   "name": "vn-test-shell",
 

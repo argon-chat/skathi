@@ -1,15 +1,9 @@
-//! Raw FFI declarations for the vendored [ThorVG] 1.1.0 C API.
+//! Raw FFI declarations for the vendored [ThorVG] 1.1.0 C API, with no safe wrapper: the only
+//! consumer is `vn-lottie`'s ThorVG backend, which owns the lifetimes.
 //!
-//! There is no safe wrapper here on purpose — the only consumer is
-//! `vn-lottie`'s ThorVG backend, which owns the lifetimes and is the right
-//! place for the safety argument. This crate's whole job is to make
-//! `tvg_*` callable with no system dependencies:
-//!
-//! * `thorvg/` is a **pristine** subset of the upstream release tarball
-//!   (`tools/vendor-thorvg.sh`, sha256-pinned) — no patches, no fetch at
-//!   build time.
-//! * `src/bindings.rs` is **checked in**. `build.rs` never runs `bindgen`,
-//!   so `libclang` is not a build dependency. Regenerate with
+//! * `thorvg/` is a pristine subset of the upstream release tarball (`tools/vendor-thorvg.sh`,
+//!   sha256-pinned).
+//! * `src/bindings.rs` is checked in and `build.rs` never runs `bindgen`; regenerate it with
 //!   `tools/regen-bindings` after bumping the vendored version.
 //!
 //! See `VENDOR.md` for the pin, the copied paths and the update procedure.
@@ -20,11 +14,8 @@
 
 include!("bindings.rs");
 
-/// The vendored upstream release, as `(major, minor, micro)`.
-///
-/// Compared against [`tvg_engine_version`] at runtime by `vn-lottie`, which
-/// is the cheapest possible check that the checked-in bindings and the
-/// compiled archive did not drift apart.
+/// The vendored upstream release as `(major, minor, micro)`, compared against
+/// [`tvg_engine_version`] by `vn-lottie` to catch drift between the bindings and the archive.
 pub const VENDORED_VERSION: (u32, u32, u32) =
     (TVG_VERSION_MAJOR, TVG_VERSION_MINOR, TVG_VERSION_MICRO);
 
@@ -56,9 +47,7 @@ impl Tvg_Result {
 mod tests {
     use super::*;
 
-    /// The archive and the checked-in bindings must describe the same
-    /// ThorVG. A stale `src/bindings.rs` after a version bump fails here
-    /// rather than at some subtly wrong struct offset.
+    /// A stale `src/bindings.rs` after a version bump fails here rather than at a wrong struct offset.
     #[test]
     fn the_linked_engine_is_the_version_the_bindings_were_generated_from() {
         let (mut major, mut minor, mut micro) = (0, 0, 0);
@@ -69,8 +58,7 @@ mod tests {
         assert_eq!((major, minor, micro), VENDORED_VERSION);
     }
 
-    /// The software canvas comes up, renders nothing, and tears down —
-    /// i.e. the vendored engine actually linked.
+    /// The software canvas comes up, renders nothing and tears down: the engine linked.
     #[test]
     fn a_software_canvas_initialises_and_destroys() {
         unsafe {

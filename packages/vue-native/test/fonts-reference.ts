@@ -1,36 +1,20 @@
-// TEST ONLY: the pre-native Font Loading model, retained as a behavioral oracle.
-// Never imported by src or included in production bundles. Native behavior is
-// tested against actual JSC in crates/vn-tree/src/font_api.rs.
-// Web fonts: `FontFace`, `FontFaceSet` and `document.fonts` (the host+media
-// stream's module; CSS Font Loading Module Level 3).
+// TEST ONLY: the pre-native Font Loading model, retained as a behavioral oracle. Never imported by src or
+// included in production bundles; native behavior is tested against actual JSC in
+// crates/vn-tree/src/font_api.rs.
 //
-// The host does the work (crates/vn-tree/src/fonts.rs): it reads the
-// stylesheet's `@font-face` rules every time the sheet is compiled, loads every
-// face it declares (eagerly; the app's own files), unpacks WOFF/WOFF2, hands the
-// fonts to gpui's text system and compiles the sheet again so `font-family`
-// reaches them. A script's `new FontFace(…)` goes through the same loader. This
-// module is the object model over it:
+// Web fonts: `FontFace`, `FontFaceSet` and `document.fonts`. The host does the work
+// (crates/vn-tree/src/fonts.rs); this module is the object model over it: a `FontFace` per face (the
+// stylesheet's included) and `document.fonts`, the set, with `ready`, `status`, `check()`, `load()`, the
+// set methods and the `loading` / `loadingdone` / `loadingerror` events. Statuses move by the host's events
+// (`__vn_fonts_set_listener`), delivered from the frame tick.
 //
-// * a `FontFace` per face, the stylesheet's ("CSS-connected") included, with
-//   its descriptors, `status` and `loaded`;
-// * `document.fonts`, the set: the sheet's faces in rule order, then the ones a
-//   script added; `ready`, `status`, `check()`, `load()`, the set methods and
-//   the `loading` / `loadingdone` / `loadingerror` events.
-//
-// Statuses move by the host's events (`__vn_fonts_set_listener`), delivered
-// from the frame tick. A face is `loaded` once its file is read and unpacked;
-// one in the set is registered with the text system in the same tick.
-//
-// runtime.ts calls `installFonts(globalThis, document)` once. It must stay
-// importable on its own: every host function is read off `g` at install time,
-// and without them (bun, a host without crates/vn-tree's fonts) nothing is
-// installed — `FontFace` stays undefined, as it was.
+// `installFonts(globalThis, document)` must stay importable on its own: host functions are read off `g` at
+// install time, and without them nothing is installed and `FontFace` stays undefined.
 
 /** The host's half (crates/vn-tree/src/lib.rs, "web fonts"). */
 export interface FontNatives {
   /** Status changes: `(id, "loading" | "loaded" | "error", message)`; id 0 + "list" = the sheet's faces changed. */
   __vn_fonts_set_listener(fn: (id: number, status: string, message: string) => void): void;
-  /** Every face, as JSON (`FaceRecord[]`). */
   __vn_fonts_list(): string;
   /** A script face: its id, or why it is a SyntaxError. */
   __vn_font_create(family: string, source: string, packed: string, now: boolean): number | string;
@@ -40,7 +24,6 @@ export interface FontNatives {
   __vn_fonts_match(font: string, text: string): string | null;
 }
 
-/** One face as the host lists it (`fonts::list_json`). */
 interface FaceRecord {
   id: number;
   css: boolean;
@@ -56,7 +39,6 @@ interface FaceRecord {
 
 type FontFaceLoadStatus = "unloaded" | "loading" | "loaded" | "error";
 
-/** `FontFaceDescriptors`. */
 interface Descriptors {
   style?: string;
   weight?: string;
@@ -90,7 +72,6 @@ const PACKED = ["style", "weight", "stretch", "unicodeRange", "display"] as cons
 
 type Listener = (ev: object) => unknown;
 
-/** The engine's constructors this module builds on (read off the global at install). */
 interface Engine {
   EventTarget: { new (): VnEventTarget };
   Event: { new (type: string): VnEvent };
@@ -114,13 +95,9 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     return e;
   };
 
-  /** id → its object, the sheet's faces and every script face. */
   const byId = new Map<number, FontFaceImpl>();
-  /** The sheet's faces, in rule order. */
   let cssFaces: FontFaceImpl[] = [];
-  /** Script faces in the set, in insertion order. */
   const added: FontFaceImpl[] = [];
-  /** A host record being adopted by the constructor (the sheet's faces have no script caller). */
   let adopting: FaceRecord | null = null;
 
   class FontFaceImpl {
@@ -176,9 +153,8 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
       if (typeof source === "string") {
         src = source;
       } else if (source instanceof ArrayBuffer || ArrayBuffer.isView(source)) {
-        // The bytes go over as a `blob:` URL: the host reads in-memory blobs by
-        // URL already (crates/vn-tree/src/img.rs), and a constructor with a
-        // binary source starts loading at once.
+        // The bytes go over as a `blob:` URL: the host reads in-memory blobs by URL (crates/vn-tree/src/img.rs)
+        // and a constructor with a binary source starts loading at once.
         const url = n.URL;
         if (typeof n.Blob !== "function" || typeof url?.createObjectURL !== "function") {
           this.#fail("SyntaxError", "FontFace: a binary source needs Blob and URL.createObjectURL");
@@ -222,7 +198,6 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
       this.#reject(domError(message, name));
     }
 
-    /** The host's word on this face (module-internal). */
     settle(status: string, message: string): void {
       if (status === "loading") {
         if (this.#status === "unloaded") this.#status = "loading";
@@ -244,7 +219,6 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
       this.#blobUrl = null;
     }
 
-    /** Module-internal. */
     get hostId(): number {
       return this.#id;
     }
@@ -279,12 +253,7 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     }
   };
 
-  /**
-   * The sheet's faces, again from the host's list (a recompile can add or
-   * drop rules). Read on every use of the set as well as on the host's
-   * `list` event: the sheet a `mount()` installs is the host's at once, and
-   * its event comes with the next frame.
-   */
+  /** The sheet's faces, again from the host's list (a recompile can add or drop rules); read on every use as well as on the `list` event, since a `mount()` sheet is the host's at once and its event arrives next frame. */
   let lastList = "";
   const syncCss = (): void => {
     const raw = host.__vn_fonts_list();
@@ -306,7 +275,6 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     for (const f of cssFaces) if (!next.includes(f)) byId.delete(f.hostId);
     cssFaces = next;
   };
-  /** Up to date with the host, and the set's state with it. */
   const fresh = (): void => {
     syncCss();
     state();
@@ -315,7 +283,6 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
   const members = (): FontFaceImpl[] => [...cssFaces, ...added];
   const inSet = (f: FontFaceImpl): boolean => cssFaces.includes(f) || added.includes(f);
 
-  // -- the set's own state: `status`, `ready`, the loading events.
   let setStatus: "loading" | "loaded" = "loaded";
   let ready!: Promise<FontFaceSetImpl>;
   let resolveReady: ((s: FontFaceSetImpl) => void) | null = null;
@@ -341,15 +308,9 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     }
   };
 
-  /**
-   * The host laid out a frame with nothing loading and nothing new asked for
-   * (crates/vn-tree/src/fonts.rs `tick`). Faces load lazily, when text drawn
-   * with them asks, so until then the page's text may still ask: `ready`
-   * waits for it, as a browser's waits for pending layout.
-   */
+  /** The host laid out a frame with nothing loading or newly asked for. Faces load lazily when drawn text asks, so `ready` waits for this, as a browser's waits for pending layout. */
   let hostQuiet = false;
 
-  /** Moves the set between `loading` and `loaded`, firing what the spec fires. */
   const state = (): void => {
     const loading = members().some((f) => f.status === "loading");
     if (loading && setStatus === "loaded") {

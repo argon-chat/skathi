@@ -1,8 +1,6 @@
-//! `parcel_selectors::Element` over an abstract DOM view (`MatchDom`), so the
-//! matcher can walk vue-native's retained tree without vn-css depending on
-//! vn-tree. The `ExtractImpl` projection recovers lightningcss's private
-//! `Selectors` impl type through the public `Selector` alias — the one
-//! non-obvious trick, proven by the research spike.
+//! `parcel_selectors::Element` over an abstract DOM view (`MatchDom`), so the matcher can walk the
+//! retained tree without vn-css depending on vn-tree. `ExtractImpl` recovers lightningcss's private
+//! `Selectors` impl type through the public `Selector` alias.
 
 use lightningcss::selector::{PseudoClass, Selector as LcssSelector};
 use parcel_selectors::attr::{AttrSelectorOperation, CaseSensitivity, NamespaceConstraint};
@@ -20,16 +18,10 @@ impl<'i, I: SelectorImpl<'i>> ExtractImpl for parcel_selectors::parser::Selector
 /// `lightningcss::selector::Selectors`, recovered by projection.
 pub(crate) type Impl = <LcssSelector<'static> as ExtractImpl>::I;
 
-/// The minimal element view the matcher needs. Siblings are ELEMENT siblings
-/// (text/anchor nodes skipped). `Copy` because matching walks freely.
+/// The minimal element view the matcher needs. `Copy` because matching walks freely.
 pub trait MatchDom: Copy {
-    /// A stable identity for this node, unique within one document.
-    ///
-    /// The cascade needs it for exactly one thing: naming the ANCESTOR a
-    /// `group-hover:` rule points at, so the renderer can put gpui's
-    /// `.group(name)` on that element and `.group_hover(name, …)` on this one
-    /// (see `ComputedStates::group_hover`). Nothing else reads it, and it never
-    /// has to survive a reload.
+    /// Identity of the node, unique within a document; also names the ancestor a `group-hover:`
+    /// rule points at.
     fn key(&self) -> u64;
     fn parent(&self) -> Option<Self>;
     fn prev_sibling(&self) -> Option<Self>;
@@ -37,49 +29,24 @@ pub trait MatchDom: Copy {
     fn has_tag(&self, name: &str) -> bool;
     fn tag_eq(&self, other: &Self) -> bool;
     fn has_class(&self, name: &str) -> bool;
-    /// This element's tag name, for the rule index — the same string
-    /// [`Self::has_tag`] compares against. (`has_tag` stays: the matcher asks
-    /// the question that way, and a node kind with no tag can answer `false` to
-    /// everything while still reporting `""` here.)
     fn tag_name(&self) -> &str;
-    /// Calls `f` once per class on this element, for the rule index. Order is
-    /// irrelevant — the cascade re-sorts by `(specificity, order)`.
     fn each_class(&self, f: &mut dyn FnMut(&str));
-    /// Vue `<style scoped>` hash: does the node carry `data-v-...`?
     fn has_scope(&self, name: &str) -> bool;
-    /// An attribute's value, or `None` when the node does not carry it. This is
-    /// the DOM attribute channel — everything Vue assigns that is not `class`,
-    /// `style` or an `on*` listener lands here, so it backs `[disabled]`,
-    /// `[data-state="open"]`, `[aria-expanded]`, `#id`, `:disabled` and
-    /// `:checked` alike. There is no separate "is the attribute present"
-    /// question: a present attribute with no value is `Some("")`, as in HTML.
+    /// An attribute's value, or `None` when the node does not carry it.
     fn attr(&self, name: &str) -> Option<&str>;
     fn is_empty(&self) -> bool;
     fn is_root(&self) -> bool;
-    /// Calls `f` once per ELEMENT child, for `:has()`.
-    ///
-    /// The matcher never walks downwards on its own — a selector is matched
-    /// right-to-left from its subject — so this exists for exactly one
-    /// question: does anything under here match the relative selector inside a
-    /// `:has()`. Implementations with no tree (the compile-time probe, the
-    /// unit-test doubles) yield nothing, which makes `:has()` false rather
-    /// than wrong.
+    /// Only `:has()` walks downwards. Implementations with no tree yield nothing, making `:has()`
+    /// false.
     fn each_child(&self, _f: &mut dyn FnMut(Self)) {}
-    /// Called on an element whose `:has(+ …)` / `:has(~ …)` is about to be
-    /// answered from its following siblings. The answer moves when one of
-    /// those siblings, or anything under one, changes, and the element asking
-    /// is neither their ancestor nor after them: a tree that restyles by
-    /// dependency has to hear of it here.
+    /// The answer moves when a following sibling changes, though the asker is neither its ancestor
+    /// nor after it; a dependency-driven restyle must hear of that here.
     fn note_following_sibling_anchor(&self) {}
-    /// Does [`Self::interaction`] answer the element's LIVE state? Then a
-    /// script's query (`matches`, `querySelector`, `closest`) is filtered by
-    /// it, as a browser's is ([`crate::query_all_in`]).
+    /// Then a script's query (`matches`, `querySelector`, `closest`) is filtered by it, as a
+    /// browser's is ([`crate::query_all_in`]).
     const LIVE_STATE: bool = false;
-    /// Is this element in `state` right now? `None`, the default, is the
-    /// cascade's view: an interaction pseudo-class matches as "would match
-    /// when in that state", because the cascade sorts such rules into gpui's
-    /// state ladder and gpui applies the rung live. A view for a script's
-    /// query answers `Some`.
+    /// `None` (default): the cascade's view, where an interaction pseudo-class matches as "would
+    /// match in that state" because gpui applies the rung live.
     fn interaction(&self, _state: Interaction) -> Option<bool> {
         None
     }
@@ -88,23 +55,15 @@ pub trait MatchDom: Copy {
 /// The interaction states a selector can name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Interaction {
-    /// `:hover`
     Hover,
-    /// `:active`
     Active,
-    /// `:focus`
     Focus,
-    /// `:focus-visible`
     FocusVisible,
-    /// `:focus-within`
     FocusWithin,
 }
 
-/// The HTML rule for a boolean attribute (`disabled`, `checked`): present is
-/// true whatever the value — except that Vue writes `:disabled="false"` through
-/// as the string `"false"`, and `<input :disabled="false">` must NOT be
-/// disabled. (In a browser Vue removes the attribute instead; our prop channel
-/// keeps it and carries the value, so the value is what we read.)
+/// Present is true whatever the value, except that Vue writes `:disabled="false"` as the string
+/// `"false"`, which must not disable.
 fn boolean_attr<D: MatchDom>(node: &D, name: &str) -> bool {
     node.attr(name).is_some_and(|v| v != "false")
 }
@@ -114,9 +73,6 @@ pub(crate) struct El<D: MatchDom>(pub D);
 
 impl<D: MatchDom> PartialEq for El<D> {
     fn eq(&self, other: &Self) -> bool {
-        // Only used by the matcher for sibling/parent identity walks it
-        // reached through us, where pointer-ish identity via tag_eq + position
-        // is not required: parcel compares via `opaque()` in the paths we use.
         self.0.tag_eq(&other.0)
     }
 }
@@ -132,25 +88,11 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
     type Impl = Impl;
 
     fn opaque(&self) -> OpaqueElement {
-        // `OpaqueElement` is parcel's identity token, and it is compared for
-        // EQUALITY — `:scope` is `element.opaque() == scope_element`. `El` is a
-        // `Copy` wrapper the matcher creates and drops freely, so
-        // `OpaqueElement::new(self)` would hand out the address of a temporary:
-        // two tokens for the same node whenever they were taken at different
-        // moments, and occasionally one token for two different nodes that
-        // happened to reuse a stack slot. The identity has to come from the
-        // NODE, and `MatchDom::key` is exactly that — stable, unique within a
-        // document, and already required by the group-anchor pass.
-        //
-        // `OpaqueElement::new` only stores the pointer, so a reference to a
-        // zero-sized type at the synthesized address is enough: a `&()` needs
-        // to be non-null and aligned (`()` has alignment 1) and never needs to
-        // point at readable memory, which is the same rule that makes
-        // `NonNull::<()>::dangling()` a valid reference. `+ 1` keeps it
-        // non-null for a node whose key is 0.
+        // `El` is a `Copy` wrapper, so `OpaqueElement::new(self)` would hand out the address of a
+        // temporary: identity must come from the node key.
         let address = (self.0.key() as usize).wrapping_add(1).max(1);
-        // SAFETY: see above — a dangling reference to a ZST at a non-null,
-        // trivially-aligned address, immediately turned back into a pointer.
+        // SAFETY: see above — a dangling reference to a ZST at a non-null, trivially-aligned
+        // address, immediately turned back into a pointer.
         OpaqueElement::new::<()>(unsafe { &*(address as *const ()) })
     }
 
@@ -173,22 +115,13 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
         self.0.next_sibling().map(El)
     }
     fn is_html_element_in_html_document(&self) -> bool {
-        false // class/id matching stays case sensitive
+        false
     }
 
     fn has_local_name(&self, local_name: &<Self::Impl as SelectorImpl<'i>>::BorrowedLocalName) -> bool {
         let name = local_name.0.as_ref();
         self.0.has_tag(name)
-            // The document ROOT answers to `html` and `body` as well as to its
-            // own tag. A retained tree has one root box, `document
-            // .documentElement` and `document.body` both point at it (see
-            // `packages/vue-native/src/runtime.js`), and a real app styles its
-            // palette through `html.dark { … }` while Tailwind's preflight
-            // resets `body { margin: 0 }`. Both have to land somewhere, and
-            // there is exactly one somewhere.
-            //
-            // `Engine::candidates` offers the root those rules for the same
-            // reason; the two must stay in step.
+            // The root answers to both `html` and `body`.
             || (self.0.is_root() && matches!(name, "html" | "body"))
     }
     fn has_namespace(&self, _ns: &<Self::Impl as SelectorImpl<'i>>::BorrowedNamespaceUrl) -> bool {
@@ -204,21 +137,13 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
         local_name: &<Self::Impl as SelectorImpl<'i>>::LocalName,
         operation: &AttrSelectorOperation<&<Self::Impl as SelectorImpl<'i>>::AttrValue>,
     ) -> bool {
-        // Vue scoped CSS: `[data-v-xxxx]` is a bare-presence test on the hot
-        // path of every scoped rule, and scope hashes live in their own list
-        // rather than the property map.
+        // Vue scoped CSS: `[data-v-xxxx]` is a bare-presence test on the hot path of every scoped
+        // rule, and scope hashes live in their own list rather than the property map.
         let name: &str = local_name.0.as_ref();
         if name.starts_with("data-v-") {
             return matches!(operation, AttrSelectorOperation::Exists) && self.0.has_scope(name);
         }
-        // Everything else comes off the property map. `eval_str` is
-        // parcel's own operator implementation (`=`, `~=`, `|=`, `^=`, `$=`,
-        // `*=`, plus the `i`/`s` case flags), so the semantics are the
-        // browser's by construction.
-        //
-        // Namespaces are ignored: `@namespace` is not implemented, and the
-        // audit rejects `[ns|attr]` at compile time rather than answering it
-        // wrongly here.
+        // Everything else comes off the property map.
         match self.0.attr(name) {
             Some(value) => operation.eval_str(value),
             None => false,
@@ -235,10 +160,6 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
         F: FnMut(&Self, ElementSelectorFlags),
     {
         match pc {
-            // Interaction states: the cascade computes "would this match WHEN
-            // in the state" — the buckets are classified separately and gpui's
-            // ladder picks them live, so for it they are unconditionally true.
-            // A script's query asks a view that knows the live state.
             PseudoClass::Hover => self.0.interaction(Interaction::Hover).unwrap_or(true),
             PseudoClass::Active => self.0.interaction(Interaction::Active).unwrap_or(true),
             PseudoClass::Focus => self.0.interaction(Interaction::Focus).unwrap_or(true),
@@ -248,22 +169,11 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
             PseudoClass::FocusWithin => {
                 self.0.interaction(Interaction::FocusWithin).unwrap_or(true)
             }
-            // Property states: the element property IS the state, so these are
-            // matched for real and their rules fold into the base bucket. A
-            // property write already marks the tree dirty, so the next restyle
-            // picks the change up — no ladder, no round trip.
             PseudoClass::Disabled => boolean_attr(&self.0, "disabled"),
             PseudoClass::Enabled => !boolean_attr(&self.0, "disabled"),
             PseudoClass::Checked => boolean_attr(&self.0, "checked"),
             PseudoClass::Fullscreen(_) => self.0.attr(":fullscreen").is_some(),
-            // `:has()`. parcel's matcher hits an `unreachable!()` on
-            // `Component::Has`, so the sheet compiler rewrites every `:has(S)`
-            // into a custom pseudo-class naming a stored copy of `S` and the
-            // question lands HERE, where the tree is reachable. See
-            // `crate::has`.
             PseudoClass::Custom { name } => crate::has::matches(name.as_ref(), &self.0),
-            // Everything else is rejected by the compile-time audit, so a rule
-            // carrying it never reaches the matcher.
             _ => false,
         }
     }
@@ -287,7 +197,6 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
         id: &<Self::Impl as SelectorImpl<'i>>::Identifier,
         case_sensitivity: CaseSensitivity,
     ) -> bool {
-        // `id` is a plain DOM attribute on the property channel.
         self.0
             .attr("id")
             .is_some_and(|v| case_sensitivity.eq(v.as_bytes(), id.0.as_ref().as_bytes()))

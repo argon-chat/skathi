@@ -1,16 +1,6 @@
 <script setup lang="ts">
-// Storage and clipboard, both tiers — docs/STORAGE.md.
-//
-//   tier 1  localStorage / sessionStorage      the Web Storage API, byte for
-//           navigator.clipboard.readText()     byte what a browser build runs
-//   tier 2  appStorage.getUserFolder(...)      the vue-native extension: WHERE
-//           appStorage.setStorageFolder(...)   the bytes go, and whether they
-//                                              are encrypted at rest
-//
-// The two counters below are the whole persistence story in one screen. Both
-// are incremented once per mount; `localStorage` remembers across a restart of
-// the process and `sessionStorage` does not. Restart the host and the left one
-// keeps climbing while the right one is 1 again.
+// Both are incremented once per mount; `localStorage` remembers across a restart of the process
+// and `sessionStorage` does not.
 import { onMounted, ref } from "vue";
 import { appStorage } from "vue-native";
 
@@ -19,14 +9,10 @@ defineOptions({ name: "StoragePage" });
 const BOOTS = "vn.demo.boots";
 const NOTE = "vn.demo.note";
 
-// `appStorage.info()`'s answer, taken FROM the function rather than restated:
-// runtime.ts's `StorageInfo` is not exported, and a hand-copied interface here
-// would be free to drift from the JSON `__vn_storage_info` actually returns.
 type StorageInfo = ReturnType<typeof appStorage.info>;
 
-// Starts empty on purpose — `refresh()` fills it in `onMounted`, and the
-// template reads through `info.folder` etc. `Partial` is what "not asked yet"
-// actually is; the alternative is inventing a fake row of zeroes.
+// Starts empty on purpose — `refresh()` fills it in `onMounted`, and the template reads through
+// `info.folder` etc.
 const info = ref<Partial<StorageInfo>>({});
 const localBoots = ref(0);
 const sessionBoots = ref(0);
@@ -40,13 +26,6 @@ function refresh() {
 }
 
 onMounted(() => {
-  // Ordinary Web Storage. Nothing on this line is a vue-native API.
-  //
-  // The `String(...)` is new, and it is the one thing the type-checker caught
-  // on this page: both `setItem` calls used to hand a NUMBER to an API whose
-  // second argument is a string. It worked — a browser coerces, and so does
-  // this host — but it worked by accident, and an area whose values are
-  // sometimes numbers is a `getItem(...)!.length` away from a surprise.
   localBoots.value = Number(localStorage.getItem(BOOTS) || 0) + 1;
   localStorage.setItem(BOOTS, String(localBoots.value));
   sessionBoots.value = Number(sessionStorage.getItem(BOOTS) || 0) + 1;
@@ -57,8 +36,6 @@ onMounted(() => {
 
 function saveNote() {
   localStorage.setItem(NOTE, note.value);
-  // Writes are coalesced to one file write per frame; `flush()` is the "and I
-  // mean now" escape hatch. A demo that says "saved" should have saved.
   const wrote = appStorage.flush();
   status.value = wrote ? "written to disk" : "no change to write";
   refresh();
@@ -73,27 +50,19 @@ function clearLocal() {
   refresh();
 }
 
-// THE EXTENSION, and the owner's original sketch verbatim:
-//   app.setStorageFolder(app.getUserFolder("APPDATA", "myAppFolder"))
 function moveTo(kind: string, sub: string, encrypted: boolean) {
   try {
     const folder = appStorage.getUserFolder(kind, sub);
     const at = appStorage.setStorageFolder(folder, { encrypted });
-    // The area this process is holding follows the folder, so the note and the
-    // boot count are already in the new place (and, with `encrypted`, in the
-    // new format — the plaintext copy beside it is removed).
     status.value = `storage is now ${at}${encrypted ? " (encrypted)" : ""}`;
   } catch (e) {
-    // `appStorage` throws a TypeError for an unknown kind, or for a subfolder
-    // that tries to climb out of it.
     status.value = e instanceof Error ? e.message : String(e);
   }
   refresh();
 }
 
-// A `storage` listener is the one thing on this page that does NOT work like a
-// browser, so the page says so rather than leaving a dead handler behind. The
-// host advises once on stderr the moment this runs.
+// A `storage` listener is the one thing on this page that does NOT work like a browser, so the
+// page says so rather than leaving a dead handler behind.
 function listenForStorage() {
   addEventListener("storage", () => {});
   status.value =
@@ -101,13 +70,9 @@ function listenForStorage() {
     "context that ANOTHER wrote a key, and there is only one here.";
 }
 
-/** Both clipboard buttons want the same "NotAllowedError: …" rendering, and a
- *  rejection is only guaranteed to BE an Error by convention. */
 const describe = (e: unknown) =>
   e instanceof Error ? `${e.name}: ${e.message}` : String(e);
 
-// engine.d.ts types `navigator` as optional — it is installed by redjs when the
-// host registered a backend. Asserted once here, as `document` is above.
 const nav = navigator!;
 
 async function clipboardRoundTrip() {
@@ -138,11 +103,10 @@ function tryExecCommand() {
   <div class="page">
     <div class="hd">
       <span class="h1">Storage</span>
-      <span class="sub">docs/STORAGE.md — Web Storage on a disk, and the clipboard</span>
+      <span class="sub">Web Storage on a disk, and the clipboard</span>
       <span class="pill live" id="st-encrypted">{{ info.encrypted ? "encrypted" : "plaintext" }}</span>
     </div>
 
-    <!-- persistence -------------------------------------------------------- -->
     <section class="card">
       <div class="cap">
         <span>persistence</span>
@@ -168,7 +132,6 @@ function tryExecCommand() {
       <div class="note" id="st-status">{{ status || "nothing done yet" }}</div>
     </section>
 
-    <!-- where the bytes are ------------------------------------------------ -->
     <section class="card">
       <div class="cap">
         <span>where the bytes are</span>
@@ -201,7 +164,6 @@ function tryExecCommand() {
       </div>
     </section>
 
-    <!-- clipboard ---------------------------------------------------------- -->
     <section class="card">
       <div class="cap">
         <span>clipboard</span>
@@ -226,7 +188,6 @@ function tryExecCommand() {
       </div>
     </section>
 
-    <!-- the divergence ----------------------------------------------------- -->
     <section class="card">
       <div class="cap">the one divergence worth clicking</div>
       <div class="row">

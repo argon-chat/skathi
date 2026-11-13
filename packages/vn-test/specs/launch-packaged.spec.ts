@@ -1,22 +1,4 @@
-// Single instance and protocols in a PACKAGED exe (docs/LAUNCH.md,
-// docs/PACKAGING.md §3).
-//
-//   bun test packages/vn-test/specs/launch-packaged.spec.ts
-//
-// launch.spec.ts holds these down on a dev host; this file is about the
-// shipped artifact, where two things differ and both matter:
-//
-// * the launch keys come from the payload's META, not from a manifest beside
-//   the exe — so a `vn build` that dropped them would ship an app that
-//   silently runs N copies;
-// * the declared `protocols` are registered BY THE EXE ITSELF at startup,
-//   with no `--vn-dist` in the command (owner decision: per user, idempotent,
-//   never over another app's scheme).
-//
-// The app is the `launch` fixture's code under a vn.config.json written here,
-// so its scheme is test-only and per run (`vntest-pkg-<runner pid>`). The key
-// is deleted in teardown whatever happened, and the last test asserts the
-// hive is clean. The host is whatever `vn build` would find (`bareHost`).
+// The host is whatever `vn build` would find (`bareHost`).
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -26,14 +8,12 @@ import { expect, launch, packagedExe, REPO, WORK_DIR } from "../src/index";
 import { KIND, NAMES, readVnpk } from "../../vue-native/cli/vnpk";
 
 const T = 30_000;
-/** A packaged build; a missing host is built (debug) once — see `bareHost`. */
 const BUILD_T = 20 * 60_000;
 
 const scheme = `vntest-pkg-${process.pid}`;
 const id = "gl.argon.vn-test.launch-packaged";
 const keyOf = (s: string) => `HKCU\\Software\\Classes\\${s}`;
 const regExists = (key: string) => spawnSync("reg", ["query", key], { stdio: "ignore" }).status === 0;
-/** A key's value (`/ve` = the default one), or null. */
 function regValue(key: string, name: string | null): string | null {
   const r = spawnSync("reg", ["query", key, ...(name === null ? ["/ve"] : ["/v", name])], { encoding: "utf8" });
   if (r.status !== 0) return null;
@@ -41,7 +21,6 @@ function regValue(key: string, name: string | null): string | null {
   return line ? line.replace(/^.*?\sREG_SZ\s+/, "") : "";
 }
 
-// The app: the launch fixture's source, this run's config.
 const appDir = join(WORK_DIR, "launch-packaged", `app-${process.pid}`);
 rmSync(appDir, { recursive: true, force: true });
 mkdirSync(appDir, { recursive: true });
@@ -65,8 +44,8 @@ writeFileSync(
   ),
 );
 
-// Nothing of ours may exist before the exe starts: the registration below
-// must be the exe's own doing.
+// Nothing of ours may exist before the exe starts: the registration below must be the exe's own
+// doing.
 spawnSync("reg", ["delete", keyOf(scheme), "/f"], { stdio: "ignore" });
 
 const scratch = join(WORK_DIR, "launch-packaged", `cwd-${process.pid}`);
@@ -86,7 +65,6 @@ const app = await launch({
 
 afterAll(() => {
   app.close();
-  // Belt and braces: the uninstaller's hook first, then the key by name.
   spawnSync(p.exe, ["--vn-unregister-protocols"], { cwd: REPO, stdio: "ignore", timeout: 15_000 });
   spawnSync("reg", ["delete", keyOf(scheme), "/f"], { stdio: "ignore" });
   rmSync(scratch, { recursive: true, force: true });
@@ -118,8 +96,8 @@ async function untilEvents(n: number, ms = 5_000): Promise<Record_> {
 
 describe("the packaged exe", () => {
   test("carries the launch keys in its payload and holds the lock", async () => {
-    // The payload that was stamped, read back: META's `launch` is what the
-    // host enforces before anything else exists.
+    // The payload that was stamped, read back: META's `launch` is what the host enforces before
+    // anything else exists.
     const v = readVnpk(new Uint8Array(readFileSync(p.result.vnpk)));
     const meta = v.find(KIND.META, NAMES.META);
     bunExpect(meta).toBeDefined();
@@ -159,11 +137,9 @@ describe("a second launch of the packaged exe", () => {
   }, T);
 
   test("a link to its scheme, opened through the SHELL, reaches the running instance", async () => {
-    // ShellExecuteExW → the command the exe registered for itself → a second
-    // process of the packaged exe → the instance pipe → `launch`.
     const before = (await rec()).events.length;
-    // (Quotes and spaces byte-exact are launch.spec's, through a hand-built
-    // command line: what the shell itself does to them is Windows' business.)
+    // (Quotes and spaces byte-exact are launch.spec's, through a hand-built command line: what the
+    // shell itself does to them is Windows' business.)
     const url = `${scheme}://open/item?id=7&q=x`;
     await app.eval(`__VN_TEST_LAUNCH__.api.open(${JSON.stringify(url)})`);
     const got = await untilEvents(before + 1, 15_000);

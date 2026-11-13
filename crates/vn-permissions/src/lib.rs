@@ -1,53 +1,12 @@
-//! vn-permissions — the platform half of vue-native's permission layer.
+//! Platform backends for `navigator.permissions` (the `PermissionHost` trait lives in redjs)
+//! and the `__vn_permissions_*` host fns behind vue-native's `appPermissions`.
 //!
-//! # What is where, and why
+//! `appPermissions.request(name)` is an extension because the web has no standalone request;
+//! it also exposes a fourth state, `unsupported`.
 //!
-//! The browser-shaped surface (`navigator.permissions`, `PermissionStatus`, the
-//! `change` event, the W3C name table) lives in **redjs**
-//! (`redjs::webapi::permissions`), because it is browser semantics and redjs is
-//! where browser semantics live. So does the [`PermissionHost`] trait it reads
-//! through — a trait consumed by redjs has to be declared by redjs.
-//!
-//! This crate is the other half: the **backends** that implement that trait, and
-//! the small `__vn_permissions_*` host-fn surface behind vue-native's own
-//! `appPermissions` extension. That split is what keeps redjs shippable to a consumer
-//! (PEWPEW) that has no consent store, no `ms-settings:` and no opinion about
-//! Windows privacy toggles.
-//!
-//! ```text
-//!   apps/hello  ──import { appPermissions } from "vue-native"──┐
-//!                                                              │  tier 2: extension
-//!   packages/vue-native/src/runtime.ts ──__vn_permissions_*────┤  (request, 4 states)
-//!                                                              │
-//!   apps/*      ──navigator.permissions.query(…)───────────────┤  tier 1: W3C
-//!                                                              │
-//!   redjs::webapi::permissions  ── dyn PermissionHost ─────────┘
-//!                                        ▲
-//!                          vn_permissions::{win,mac,stub}
-//! ```
-//!
-//! # The two tiers, and the divergence between them
-//!
-//! Tier 1 is exactly the web: `navigator.permissions.query({name})` resolving a
-//! `PermissionStatus` whose `state` is one of `granted | denied | prompt`.
-//! Nothing about it is ours.
-//!
-//! Tier 2 exists because **the web has no standalone request**. A browser asks
-//! for the microphone as a side effect of `getUserMedia`, for notifications
-//! through `Notification.requestPermission()`, and for nothing at all through
-//! `navigator.permissions`. A desktop app has a settings screen with a "grant
-//! access" button next to a toggle, and there is no browser spelling for that
-//! button. So `appPermissions.request(name)` is a documented vue-native
-//! extension, named after the `appWindow` precedent, and it is where the fourth
-//! state — `unsupported` — is visible too. See `docs/PERMISSIONS.md`.
-//!
-//! # Windows, in one paragraph
-//!
-//! Nothing to prompt for. An unpackaged win32 process is gated by pre-answered
-//! privacy toggles in the consent store, so [`win`]'s `status()` reads them
-//! honestly, never returns `Prompt`, and `request()` opens the relevant
-//! `ms-settings:` page and waits for the store to change. `win.rs`'s module
-//! header carries the probe evidence for every one of those decisions.
+//! Windows: an unpackaged win32 process is gated by pre-answered privacy toggles in the consent
+//! store, so [`win`] reads them, never returns `Prompt`, and `request()` opens the `ms-settings:`
+//! page and waits for the store to change.
 
 use std::ffi::c_void;
 
@@ -74,38 +33,28 @@ mod tcc;
 pub use consent::{set_app_name, set_asker, set_camera_capture, Asker, Question};
 pub use vn_runtime::redjs::webapi::permissions::{Capability as Cap, PermissionState as State};
 
-/// How many settled requests one frame may deliver. One native prompt can
-/// settle many waiting requests; the rest stay in the permission router for
-/// later waves instead of extending this frame's callback work without bound.
+/// Settled requests delivered per frame; the rest wait for a later one.
 const DRAIN_CAP: usize = 16;
 
 thread_local! {
-    /// The one protected JS callback the runtime hands over at boot.
     static DISPATCHER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// The backend for this build: the platform's, with the app's own prompt on
-/// top for the microphone ([`consent`]).
-///
-/// A `&'static` because [`api::set_host`] stores one for the life of the
-/// process; there is exactly one OS under one process and no reason to make it
-/// swappable at runtime.
+/// The backend for this build: the platform's, with the app's own microphone prompt on top
+/// ([`consent`]).
 fn backend() -> &'static consent::AppConsent {
     static C: std::sync::OnceLock<consent::AppConsent> = std::sync::OnceLock::new();
     C.get_or_init(|| consent::AppConsent::new(platform(), consent::Hooks::process()))
 }
 
-/// Where the app's answers to its prompt are kept: `permissions.json` in its
-/// storage folder (vn-app passes it once storage is installed). `None`, or
-/// never called: for this run only.
+/// `permissions.json` in the app's storage folder, where its answers to the prompt are kept.
+/// `None`, or never called: for this run only.
 pub fn set_decisions_file(path: Option<std::path::PathBuf>) {
     backend().set_decisions_file(path);
 }
 
-/// Forgets the stored answer for `name` (a permission name), or for every
-/// capability with a prompt when `None`, so the next `getUserMedia` asks
-/// again. The devtools `permissions reset` (docs/DEVTOOLS.md). Returns the
-/// names forgotten.
+/// Forgets the stored answer for `name`, or for every capability with a prompt when `None`, so
+/// the next `getUserMedia` asks again. Returns the names forgotten.
 pub fn reset(name: Option<&str>) -> Result<Vec<&'static str>, String> {
     let cap = match name {
         None => None,
@@ -119,8 +68,7 @@ pub fn reset(name: Option<&str>) -> Result<Vec<&'static str>, String> {
     Ok(backend().reset(cap).into_iter().map(Capability::web_name).collect())
 }
 
-/// The devtools `permissions` listing: every capability's four-state status,
-/// the stored answers and where they are kept.
+/// Every capability's four-state status, the stored answers and their file, as JSON.
 pub fn describe_json() -> String {
     let b = backend();
     let mut s = String::from("{\"states\":[");
@@ -147,10 +95,8 @@ pub fn describe_json() -> String {
     s
 }
 
-/// Where the user turns a capability back on once the platform has refused
-/// it, for the message a refusal carries (`__vn_permissions_hint`,
-/// `appCapture.permissionHint`); `None` where there is no such page. macOS
-/// screen recording also needs a relaunch: TCC prompts once per app, ever.
+/// Where the user re-enables a capability the platform refused, for the refusal message; `None`
+/// where there is no such page. macOS screen recording also needs a relaunch (TCC prompts once).
 pub fn refusal_hint(cap: Capability) -> Option<String> {
     #[cfg(target_os = "macos")]
     match cap {
@@ -179,7 +125,6 @@ fn screen_recording_hint(app: &str) -> String {
     )
 }
 
-/// A microphone or camera pane (`tcc::media`): its page and its anchor.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn mac_privacy_hint(app: &str, page: &str, anchor: &str) -> String {
     format!(
@@ -188,7 +133,6 @@ fn mac_privacy_hint(app: &str, page: &str, anchor: &str) -> String {
     )
 }
 
-/// The two consent-store toggles (`win.rs`), by the names Settings shows.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn windows_hint(page: &str, device: &str, uri: &str) -> String {
     format!(
@@ -197,22 +141,18 @@ fn windows_hint(page: &str, device: &str, uri: &str) -> String {
     )
 }
 
-/// The refusal of a `display-capture` the platform does not allow, as a
-/// DOMException `(name, message)`: Chrome's "Permission denied by system",
-/// plus the [`refusal_hint`].
+/// The DOMException `(name, message)` for a refused `display-capture`.
 pub fn display_capture_refusal() -> (&'static str, String) {
     capture_refusal(Capability::DisplayCapture)
 }
 
-/// The refusal of a capture of `cap` whose state is `denied`, as a
-/// DOMException `(name, message)`, in Chrome's words: "Permission denied by
-/// system" plus the [`refusal_hint`] when the platform's settings say no,
-/// "Permission denied" when the user blocked it in this app's prompt.
+/// The DOMException `(name, message)` for a denied capture of `cap`: Chrome's "Permission denied
+/// by system" plus the [`refusal_hint`] when the platform refused, "Permission denied" when the
+/// user blocked it in this app's prompt.
 pub fn capture_refusal(cap: Capability) -> (&'static str, String) {
     refusal_by(api::host(), cap)
 }
 
-/// [`capture_refusal`], as `host` tells whose denial it is.
 pub fn refusal_by(host: Option<&dyn PermissionHost>, cap: Capability) -> (&'static str, String) {
     if (consent::Hooks::process().forbidden)() {
         return ("NotAllowedError", "Permission denied: media capture is switched off for this process.".into());
@@ -229,15 +169,12 @@ fn refusal_message(system: bool, hint: Option<String>) -> String {
     }
 }
 
-/// `cap`'s state as the installed host reads it (`Unsupported` with none).
 pub fn status(cap: Capability) -> PermissionState {
     state_of(cap)
 }
 
-/// Blocks a worker thread, never the VM's, until `display-capture` is
-/// decided, asking the platform first when nobody has. For native work that
-/// reads the desktop outside `getDisplayMedia` (source thumbnails). Without a
-/// host there is nobody to ask, and nothing is refused.
+/// Blocks a worker thread (never the VM's) until `display-capture` is decided, asking if nobody
+/// has. Without a host nothing is refused.
 pub fn require_display_capture() -> Result<(), (&'static str, String)> {
     let Some(host) = api::host() else {
         return Ok(());
@@ -249,8 +186,7 @@ pub fn require_display_capture() -> Result<(), (&'static str, String)> {
     }
 }
 
-/// Whether a request about `cap` is still waiting for its answer (a question
-/// on screen, a settings page being watched). A `prompt` with nothing in
+/// Whether a request about `cap` is still waiting for its answer; a `prompt` with nothing in
 /// flight was dismissed.
 pub fn in_flight(cap: Capability) -> bool {
     backend().in_flight(cap)
@@ -270,9 +206,8 @@ pub fn wait_for_decision(
     wait(host, cap, std::time::Instant::now() + timeout, &in_flight, cancelled)
 }
 
-/// `cap`'s state once it is no longer `prompt`, requesting it if it is, or
-/// `prompt` when the request was dismissed or `timeout` passes first. The
-/// request's token settles into the router like any other and is ignored.
+/// `cap`'s state once it is no longer `prompt`, requesting it first if it is; `prompt` when the
+/// request was dismissed or `timeout` passes.
 fn await_decision(
     host: &dyn PermissionHost,
     cap: Capability,
@@ -323,7 +258,6 @@ fn json_string(s: &str) -> String {
     out
 }
 
-/// The platform's own backend.
 fn platform() -> &'static dyn PermissionHost {
     #[cfg(target_os = "windows")]
     {
@@ -343,37 +277,21 @@ fn platform() -> &'static dyn PermissionHost {
     }
 }
 
-// ---------------------------------------------------------------------------
-// host functions
-// ---------------------------------------------------------------------------
-
-// `__vn_permissions_platform() -> string` — the name an advisory uses.
 host_fn!(fn vn_permissions_platform(_g, _args) {
     let name = api::host().map(|h| h.platform()).unwrap_or("this platform");
     JsRuntime::with(|rt| rt.ctx().string(name).0)
 });
 
-// `__vn_permissions_query(name) -> string` — the FOUR-state answer, or `""`
-// for a name that is not a capability.
-//
-// `""` rather than a throw: this is the extension tier's read, and the
-// browser-shaped `TypeError` for an unknown name is already delivered by
-// `navigator.permissions.query`. Two different errors for one typo is worse
-// than one.
+// `__vn_permissions_query(name) -> string`: the four-state answer, or `""` for an unknown name
+// (`navigator.permissions.query` already delivers the TypeError).
 host_fn!(fn vn_permissions_query(g, args) {
     let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     let state = Capability::from_web_name(&name).map(state_of).map(PermissionState::as_str).unwrap_or("");
     JsRuntime::with(|rt| rt.ctx().string(state).0)
 });
 
-// `__vn_permissions_list() -> json` — every capability, its four-state status,
-// and whether `request()` on it would do anything on this platform. One call
-// because a settings screen wants the whole table at once and seven host-fn
-// round trips per repaint is silly.
-//
-// `deniedBySystem` tells a `denied` from the platform's own settings (a
-// settings page is the way back) from the user's Block in this app's prompt
-// (`request()` asks again); false for any other state.
+// `__vn_permissions_list() -> json`: the whole table in one call. `deniedBySystem` tells a
+// platform denial (settings is the way back) from the user's Block in this app's prompt.
 host_fn!(fn vn_permissions_list(_g, _args) {
     let mut s = String::from("[");
     for (i, cap) in Capability::ALL.iter().copied().enumerate() {
@@ -394,22 +312,15 @@ host_fn!(fn vn_permissions_list(_g, _args) {
     JsRuntime::with(|rt| rt.ctx().string(&s).0)
 });
 
-// `__vn_permissions_request(name) -> json`.
-//
-// `{"state":"granted"}` — settled synchronously, resolve now.
-// `{"token":3}`         — a flow started; the dispatcher settles it later.
-// `{"error":"..."}`     — not a capability name.
-//
-// Synchronous like every other host fn: the promise lives in JS, and the pump
-// settles it by reqId, because there is no async `host_fn!`.
+// `__vn_permissions_request(name) -> json`: `{"state":..}` settled now, `{"token":n}` settled
+// later through the dispatcher, `{"error":..}` for an unknown name.
 host_fn!(fn vn_permissions_request(g, args) {
     let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     let json = request_json(&name, api::host());
     JsRuntime::with(|rt| rt.ctx().string(&json).0)
 });
 
-/// `__vn_permissions_request`'s answer. The name is the page's own string,
-/// so it goes into the error escaped, never spliced.
+/// The name is the page's own string: escaped into the error, never spliced.
 fn request_json(name: &str, host: Option<&dyn PermissionHost>) -> String {
     match Capability::from_web_name(name) {
         None => format!("{{\"error\":{}}}", json_string(&format!("{name} is not a permission name"))),
@@ -423,7 +334,6 @@ fn request_json(name: &str, host: Option<&dyn PermissionHost>) -> String {
     }
 }
 
-// `__vn_permissions_hint(name) -> string` — the [`refusal_hint`], or `""`.
 host_fn!(fn vn_permissions_hint(g, args) {
     let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     let hint = Capability::from_web_name(&name).and_then(refusal_hint).unwrap_or_default();
@@ -433,17 +343,14 @@ host_fn!(fn vn_permissions_hint(g, args) {
 host_fn!(fn vn_permissions_set_dispatcher(g, args) {
     let f = args.arg(0);
     unsafe { vn_runtime::redjs::ffi::redjs_protect(g, f.0) };
-    // A reload evaluates the runtime again, and it sets its own dispatcher:
-    // the old one is let go rather than kept alive for the life of the
-    // process.
+    // A reload sets its own dispatcher; release the old one.
     if let Some(old) = replace_dispatcher(f.0) {
         unsafe { vn_runtime::redjs::ffi::redjs_unprotect(g, old) };
     }
     Value::undefined().0
 });
 
-/// Installs `new` as the dispatcher; the previous one, when it is another
-/// value, is returned for unprotecting.
+/// Installs `new`; returns the previous dispatcher, if another value, for unprotecting.
 fn replace_dispatcher(new: u64) -> Option<u64> {
     let old = DISPATCHER.with(|d| d.replace(new));
     (old != 0 && old != new).then_some(old)
@@ -453,22 +360,12 @@ fn state_of(cap: Capability) -> PermissionState {
     api::host().map(|h| h.status(cap)).unwrap_or(PermissionState::Unsupported)
 }
 
-/// Would `request()` do anything here? Drives whether the demo page's button is
-/// enabled — a button that is guaranteed to be a no-op should not be offered.
-/// Testable without a host being installed process-wide.
+/// Whether `request()` would do anything: false when granted or unsupported.
 fn can_request_state(state: PermissionState) -> bool {
     !matches!(state, PermissionState::Granted | PermissionState::Unsupported)
 }
 
-// ---------------------------------------------------------------------------
-// install & pump
-// ---------------------------------------------------------------------------
-
-/// Installs the platform backend into redjs and registers the extension surface.
-///
-/// Called from `vn-app`'s boot, unconditionally: the
-/// backend is a few registry reads and one lazily-spawned watcher thread that
-/// only starts once something actually subscribes.
+/// Installs the platform backend into redjs and registers the extension host fns.
 pub fn install(rt: &JsRuntime) {
     let host: &'static dyn PermissionHost = backend();
     api::set_host(host);
@@ -485,16 +382,10 @@ pub fn install(rt: &JsRuntime) {
     }
 }
 
-/// Settles finished requests into JS.
+/// Settles finished requests into JS, inside the frame's Commit publication.
 ///
-/// Goes in `vn-app`'s `pump_frame`, inside the same
-/// `Phase::Commit` publication, and is **not** dev-gated.
-///
-/// The `change` half of the story is not here: `PermissionStatus` events are
-/// dispatched by redjs's own `webapi::permissions::pump`, from inside
-/// `rt.pump()`, because that is where the status objects live. Two drains of one
-/// queue would race; `drain_changes` therefore has exactly one caller and this
-/// function drains a different one.
+/// `PermissionStatus` change events are dispatched by redjs's own pump; this drains a different
+/// queue.
 pub fn pump() {
     let dispatcher = DISPATCHER.with(|d| d.get());
     if dispatcher == 0 {
@@ -521,8 +412,7 @@ pub fn pump() {
                 eprintln!("[permissions dispatch] {}\n{}", err.header, err.stack);
             }
         }
-        // The awaiting `.then()` and the Vue patch it triggers land inside this
-        // same Commit publication.
+        // The awaiting `.then()` lands in this same Commit publication.
         rt.ctx().drain_microtasks();
     });
 }
@@ -538,8 +428,7 @@ mod tests {
         for cap in Capability::ALL.iter().copied() {
             assert_eq!(h.status(cap), PermissionState::Unsupported, "{cap:?}");
         }
-        // And it must NOT claim a change subscription it does not have, or the
-        // surface would promise `change` events that never arrive.
+        // It must not claim a change subscription it lacks.
         assert!(h.drain_changes().is_none());
     }
 
@@ -558,15 +447,12 @@ mod tests {
         assert_eq!(h.status(Capability::Camera).as_str(), "denied");
         assert_eq!(h.status(Capability::DisplayCapture).as_str(), "prompt");
         assert_eq!(h.status(Capability::Notifications).as_str(), "unsupported");
-        // And the browser projection of the same four.
         assert_eq!(h.status(Capability::DisplayCapture).web_state(), "prompt");
         assert_eq!(h.status(Capability::Notifications).web_state(), "denied");
     }
 
     #[test]
     fn a_request_for_something_already_granted_settles_without_asking() {
-        // The behaviour that keeps a "grant access" button from throwing a
-        // Settings window at a user who already granted it.
         let h = StubHost::scripted("test", &[(Capability::Microphone, PermissionState::Granted)])
             .granting(PermissionState::Granted);
         assert_eq!(
@@ -598,9 +484,8 @@ mod tests {
 
     #[test]
     fn a_state_change_queues_exactly_one_change_and_only_when_it_really_changed() {
-        // The invariant that makes `change` trustworthy: re-setting the same
-        // state is not an event. On Windows this is the difference between
-        // silence and one `change` per microphone use by any app on the box.
+        // Re-setting the same state is not an event, or Windows would emit one `change` per
+        // microphone use by any app.
         let h = StubHost::scripted("test", &[(Capability::Microphone, PermissionState::Granted)]);
         assert_eq!(h.drain_changes(), Some(vec![]));
         h.set(Capability::Microphone, PermissionState::Granted);
@@ -618,17 +503,14 @@ mod tests {
         let h = StubHost::scripted("test", &[(cap, PermissionState::Prompt)]).granting(PermissionState::Denied);
         assert_eq!(await_decision(&h, cap, Duration::from_secs(5), &pending), PermissionState::Denied);
         assert_eq!(h.drain_settled().len(), 1, "asked exactly once");
-        // Already decided: read, not asked again (a refused request would
-        // otherwise open System Settings on every thumbnail refresh).
+        // Already decided: read, not asked again (a refused request would reopen System Settings).
         assert_eq!(await_decision(&h, cap, Duration::from_secs(5), &pending), PermissionState::Denied);
         assert!(h.drain_settled().is_empty());
         let h = StubHost::scripted("test", &[(cap, PermissionState::Granted)]);
         assert_eq!(await_decision(&h, cap, Duration::from_secs(5), &pending), PermissionState::Granted);
-        // A platform that cannot ask settles with the truth at once.
         let h = StubHost::scripted("test", &[(cap, PermissionState::Prompt)]);
         assert_eq!(await_decision(&h, cap, Duration::from_secs(5), &pending), PermissionState::Prompt);
 
-        /// A request that never settles.
         struct Stuck;
         impl PermissionHost for Stuck {
             fn platform(&self) -> &'static str { "test" }
@@ -636,12 +518,10 @@ mod tests {
             fn request(&self, _: Capability) -> RequestOutcome { RequestOutcome::Pending(1) }
         }
         assert_eq!(await_decision(&Stuck, cap, Duration::from_millis(60), &pending), PermissionState::Prompt, "bounded");
-        // Dismissed: `prompt` with nothing left in flight is the answer, now,
-        // not after the timeout.
+        // Dismissed: `prompt` with nothing in flight answers now, not after the timeout.
         let t = std::time::Instant::now();
         assert_eq!(await_decision(&Stuck, cap, Duration::from_secs(60), &|_| false), PermissionState::Prompt);
         assert!(t.elapsed() < Duration::from_secs(5), "a dismissal does not wait out the timeout");
-        // And a waiter whose capture was stopped lets go too.
         let start = std::time::Instant::now();
         let deadline = start + Duration::from_secs(60);
         assert_eq!(wait(&Stuck, cap, deadline, &pending, &|| true), PermissionState::Prompt);
@@ -725,9 +605,6 @@ mod tests {
 
     #[test]
     fn can_request_is_false_for_granted_and_for_unsupported() {
-        // The rule the demo page's button state is derived from: there is
-        // nothing to ask for when you already have it, and nobody to ask when
-        // the platform has no notion of it.
         assert!(!can_request_state(PermissionState::Granted));
         assert!(!can_request_state(PermissionState::Unsupported));
         assert!(can_request_state(PermissionState::Denied));

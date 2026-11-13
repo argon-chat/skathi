@@ -1,24 +1,6 @@
 <script setup lang="ts">
-// The request details pane: everything behind one Network row.
-//
-// Chromium's shape — Headers / Payload / Response / Timing for a request,
-// Socket / Timing for a WebSocket — over what `net_detail` returns
-// (crates/vn-app/src/devtools/net.rs, `Ring::detail`). Nothing here is pushed:
-// the pane asks once per row it is opened on (`store.selectNet`), and asks again
-// only when ↻ is pressed or the body was still being read.
-//
-// Two things a browser's panel does not have to say, and this one does:
-//
-//   * which headers it CANNOT know. Script never sees the transport's own
-//     request headers (Host, Content-Length, …), nor `Cookie` / `Set-Cookie`.
-//     The cookie rows come from the host's cookie jar instead and are labelled
-//     as such; the transport's rows are not invented.
-//   * what was not kept. Bodies are capped and evicted (net.rs BODY_CAP /
-//     BODY_BUDGET), and each body view says so on its own bar.
-//
-// Credentials (`Cookie`, `Set-Cookie`, `Authorization`) are MASKED until
-// clicked: a screenshot of this pane is the most common way a session token
-// leaves a machine. The reveal is per row and forgotten when the row changes.
+// Chromium's shape — Headers / Payload / Response / Timing for a request, Socket / Timing for a
+// WebSocket — over what `net_detail` returns (crates/vn-app/src/devtools/net.rs, `Ring::detail`).
 import { computed, reactive, watch } from "vue";
 import { BODY_BAR_H, DETAIL_TABS_H, MONO_W } from "../layout";
 import { closeNetDetail, copyText, flash, loadNetDetail, state } from "../store";
@@ -42,13 +24,11 @@ import type { NetBody, NetDetail, NetTab } from "../protocol";
 
 const props = defineProps<{ width: number; height: number }>();
 
-/** One key/value row. `sensitive` rows are masked until clicked. */
 interface KV {
   name: string;
   value: string;
   sensitive?: boolean;
   note?: string;
-  /** "not reported", "none": a fact about absence, drawn dim. */
   faint?: boolean;
   tone?: "ok" | "warn" | "bad";
 }
@@ -57,9 +37,7 @@ interface Section {
   id: string;
   title: string;
   rows: KV[];
-  /** What the section's ⧉ puts on the clipboard. */
   copy?: () => string;
-  /** Shown when `rows` is empty. */
   empty?: string;
 }
 
@@ -84,8 +62,6 @@ const tabs = computed<{ id: NetTab; label: string }[]>(() =>
 
 const contentH = computed(() => Math.max(60, props.height - DETAIL_TABS_H));
 
-// ---- the reveal, and the hard wrap ----------------------------------------
-
 const revealed = reactive<Record<string, boolean>>({});
 const collapsed = reactive<Record<string, boolean>>({});
 watch(
@@ -95,9 +71,6 @@ watch(
   },
 );
 
-// The value column is wrapped here (`wrapWords`): the engine does not break a
-// word that is wider than its box (`word-break` / `overflow-wrap` are not
-// applied), and a URL or a cookie IS one long word.
 const nameW = computed(() => Math.round(Math.max(110, Math.min(210, props.width * 0.3))));
 const EYE_W = 38;
 const valueCols = computed(() =>
@@ -116,9 +89,6 @@ function reveal(kv: KV, key: string): void {
   if (kv.sensitive) revealed[key] = !revealed[key];
 }
 
-// ---- headers ----------------------------------------------------------------
-
-/** What the HTTP cache did (redjs `cache::Outcome`, docs/STORAGE.md §12). */
 const CACHE_LABEL: Record<string, string> = {
   hit: "(disk cache) — served from disk, no request was made",
   revalidated: "revalidated — the server answered 304; the body came from disk",
@@ -126,12 +96,7 @@ const CACHE_LABEL: Record<string, string> = {
   miss: "not stored — from the network",
 };
 
-/**
- * Why a connection fact is missing. The transport reports it (redjs
- * `fetch::net_info`) for every response that crossed a network; what is left
- * is a response that did not, a request that never got one, or an API the
- * host has no hook for.
- */
+/** Why a connection fact is missing. */
 const noTransport = computed(() => {
   const e = entry.value;
   if (!e) return "—";
@@ -272,8 +237,6 @@ const headerNotes = computed<string[]>(() => {
   return out;
 });
 
-// ---- payload ----------------------------------------------------------------
-
 const query = computed<KV[]>(() => (entry.value ? queryOf(entry.value.url).map(([name, value]) => ({ name, value })) : []));
 
 const formFields = computed<KV[]>(() => {
@@ -325,7 +288,6 @@ const payloadSections = computed<Section[]>(() => {
 
 const SEC_HEAD_H = 24;
 const KV_H = 18;
-/** The tables over the body view get what they need, up to 45% of the pane. */
 const payloadTablesH = computed(() => {
   if (!showReqBody.value) return contentH.value;
   let need = 0;
@@ -338,8 +300,6 @@ const noPayload = computed(
   () => recorded.value && !payloadSections.value.length && !reqBody.value,
 );
 
-// ---- response ---------------------------------------------------------------
-
 const errorText = computed(() => {
   const det = d.value;
   const err = det?.error;
@@ -348,9 +308,8 @@ const errorText = computed(() => {
 });
 
 /**
- * `null` from the wire means "not handed over yet" for a response (the tee
- * always reports one, with data or with a reason) — unless the request failed,
- * in which case there is simply none.
+ * `null` from the wire means "not handed over yet" for a response (the tee always reports one,
+ * with data or with a reason) — unless the request failed, in which case there is simply none.
  */
 const resBody = computed<NetBody | null | undefined>(() => {
   const b = d.value?.response?.body;
@@ -361,7 +320,7 @@ const waitingForResponse = computed(
   () => recorded.value && !errorText.value && d.value?.response?.status === undefined,
 );
 
-// ---- timing -----------------------------------------------------------------
+// timing
 
 const timing = computed<KV[]>(() => {
   const e = entry.value;
@@ -386,7 +345,6 @@ const timing = computed<KV[]>(() => {
   return rows;
 });
 
-/** The two-segment bar: waiting for the response, then the tee's read. */
 const timingBar = computed(() => {
   const t = d.value?.timing;
   if (!t || isWs.value) return null;
@@ -399,8 +357,6 @@ const timingBar = computed(() => {
     failed: t.failedMs !== undefined,
   };
 });
-
-// ---- socket -----------------------------------------------------------------
 
 const CLOSE_CODES: Record<number, string> = {
   1000: "normal closure",
@@ -473,8 +429,6 @@ const socketNotes = computed<string[]>(() => {
   return out;
 });
 
-// ---- the memory line --------------------------------------------------------
-
 const limitsText = computed(() => {
   const l = d.value?.limits;
   if (!l) return "";
@@ -483,8 +437,6 @@ const limitsText = computed(() => {
     `(${l.evicted} so far) · each body capped at ${formatBytes(l.bodyCap)}`
   );
 });
-
-// ---- copy -------------------------------------------------------------------
 
 function copyUrl(): void {
   if (entry.value) void copyText(entry.value.url, "the URL");
@@ -529,7 +481,6 @@ function reload(): void {
     <div v-if="state.netDetailError" class="empty bad-text">{{ state.netDetailError }}</div>
     <div v-else-if="!d" class="empty">Asking the target…</div>
 
-    <!-- Headers ---------------------------------------------------------- -->
     <div v-else-if="state.netTab === 'headers'" class="scroll" :style="{ height: contentH + 'px' }">
       <div v-for="s in headerSections" :key="s.id" class="sec">
         <div class="sec-head" @click="collapsed[s.id] = !collapsed[s.id]">
@@ -566,7 +517,6 @@ function reload(): void {
       </div>
     </div>
 
-    <!-- Payload ---------------------------------------------------------- -->
     <div v-else-if="state.netTab === 'payload'" class="col" :style="{ height: contentH + 'px' }">
       <div v-if="!recorded" class="empty">{{ d.note || "No details were recorded for this request." }}</div>
       <div v-else-if="noPayload" class="empty">No payload — no query string and no request body.</div>
@@ -611,7 +561,6 @@ function reload(): void {
       </template>
     </div>
 
-    <!-- Response --------------------------------------------------------- -->
     <div v-else-if="state.netTab === 'response'" class="col" :style="{ height: contentH + 'px' }">
       <div v-if="!recorded" class="empty">{{ d.note || "No details were recorded for this request." }}</div>
       <div v-else-if="waitingForResponse" class="empty">Waiting for the response…</div>
@@ -627,7 +576,7 @@ function reload(): void {
       </template>
     </div>
 
-    <!-- Timing ----------------------------------------------------------- -->
+    <!-- Timing -->
     <div v-else-if="state.netTab === 'timing'" class="scroll" :style="{ height: contentH + 'px' }">
       <div v-if="timingBar" class="bar-wrap">
         <div class="tbar">
@@ -661,7 +610,6 @@ function reload(): void {
       </div>
     </div>
 
-    <!-- Socket ----------------------------------------------------------- -->
     <div v-else-if="state.netTab === 'socket'" class="scroll" :style="{ height: contentH + 'px' }">
       <div v-for="s in socketSections" :key="s.id" class="sec">
         <div class="sec-head" @click="collapsed[s.id] = !collapsed[s.id]">
@@ -777,8 +725,8 @@ function reload(): void {
 .mini.busy {
   color: #6cb6ff;
 }
-/* The details are text to copy from (a header value, a timing); the section
- * heads, which fold, are not. */
+/* The details are text to copy from (a header value, a timing); the section heads, which fold, are
+   not. */
 .scroll {
   overflow-y: auto;
   overflow-x: hidden;

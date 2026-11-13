@@ -1,5 +1,5 @@
 {
-  "$comment": "A fixture for packages/vn-test/specs/call-timer.spec.ts: Argon's titlebar call timer (Counter.vue + Digit.vue), whose digit cells are `width: 1ch`. See ../README.md.",
+  "$comment": "Argon's titlebar call timer (Counter.vue + Digit.vue), whose digit cells are `width: 1ch`.",
 
   "name": "vn-test-call-timer",
 

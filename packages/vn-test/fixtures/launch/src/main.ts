@@ -1,17 +1,10 @@
-// A fixture for packages/vn-test/specs/launch.spec.ts (docs/LAUNCH.md).
-//
-// Records, as plain JSON the devtools `eval` can read back, every launch this
-// process hears about: its own (`appLaunch` fields, the first LaunchParams)
-// and each forwarded one (the `launch` event and the LaunchParams that
-// follows it). A module export is not a global in either boot mode, hence the
-// `globalThis` hand-off (see devtools-on/main.ts).
 import { appLaunch, appShell, createApp, h, ref } from "vue-native";
 
 const opened: string[] = [];
 const record = {
   opened,
-  // The tier-2 verbs the spec drives. `register` answers instead of throwing,
-  // because an exception would come back through eval as a failed command.
+  // `register` answers instead of throwing, because an exception would come back through eval as a
+  // failed command.
   api: {
     register(scheme: string): string {
       try {

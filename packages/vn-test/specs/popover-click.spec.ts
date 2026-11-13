@@ -1,17 +1,3 @@
-// A real click that opens a reka-style popover, which focuses itself and
-// measures on mount (fixtures/popover-click): the Argon member click that
-// aborted the host.
-//
-//   bun test packages/vn-test/specs/popover-click.spec.ts
-//
-// The press focuses the trigger, and gpui reports that from the next draw. The
-// popover's onMounted runs in JSC's own drain at the end of the click's call,
-// and its layout reads force that draw. So the trigger's `focus` was
-// dispatched inside the running script. It owed a checkpoint there, kept the
-// engine lock past the drain's release of the heap access, and the next
-// release aborted the process: "FATAL: Attempting to release access but the
-// mutator does not have access" (crates/vn-runtime/src/bridge.rs `owe_drain`).
-
 import { afterAll, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { launch } from "../src/index";
@@ -46,10 +32,8 @@ async function opened(n: number): Promise<State> {
   }
 }
 
-/** The host is still running, and its log has no engine abort. */
 async function alive() {
-  // The abort came from the settle deferred after gpui's dispatch, well
-  // inside a second.
+  // The abort came from the settle deferred after gpui's dispatch, well inside a second.
   await Bun.sleep(1_500);
   expect(readFileSync(app.hostLog, "utf8")).not.toContain("FATAL");
   expect(app.child.exitCode).toBeNull();
@@ -61,11 +45,9 @@ test("a real click opens the popover, which focuses and measures itself, and the
   const s = await opened(1);
   expect(s.opened).toBe(1);
   await alive();
-  // The press focused the trigger, and the popover then took focus.
   expect(s.active).toEqual(["content"]);
   const after = await state();
   expect(after.focusLog).toEqual(["focus-member", "blur-member", "focus-content"]);
-  // Measured on mount: the trigger's real box, and the content's.
   const { trigger, content } = s.measured[0]!;
   expect(trigger[2]).toBe(160);
   expect(trigger[3]).toBe(36);

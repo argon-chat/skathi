@@ -1,41 +1,15 @@
 //! The Windows backend: `IMFMediaEngine` in frame-server mode.
 //!
-//! # Why this object and not a decoder
+//! `IMFMediaEngine` is Microsoft's `HTMLMediaElement` (events below 1000 are the HTML 5 set,
+//! methods map 1:1) and renders the audio itself, so A/V sync and the master clock are the OS's
+//! problem. Frame-server mode (no window, no DirectComposition visual) decodes into textures handed
+//! over by `OnVideoStreamTick` + `TransferVideoFrame`, which keeps the video in our scene graph so
+//! `border-radius`, `overflow`, `opacity` and z-order work.
 //!
-//! `IMFMediaEngine` is Microsoft's implementation of `HTMLMediaElement`. Its
-//! event enumeration is documented as *"values below 1000 correspond to events
-//! defined in HTML 5 for media elements"*, and its methods are
-//! `Play`/`Pause`/`SetCurrentTime`/`GetDuration`/`SetVolume`/`SetMuted`/
-//! `SetLoop`/`SetPlaybackRate`/`GetBuffered`/`GetSeekable`/`GetReadyState`/
-//! `CanPlayType` — a 1:1 map onto the spec. It renders the audio itself, so
-//! **A/V sync, the audio clock, the endpoint and rate control are the OS's
-//! problem, not ours**. Choosing the layer below (`IMFSourceReader`) would mean
-//! hand-writing `readyState` transitions, the seek algorithm, `TimeRanges`, an
-//! audio renderer and a master clock — weeks of work to reimplement, less
-//! correctly, something `mfmediaengine.dll` already does.
-//!
-//! Frame-server mode is selected by *not* giving the engine a window or a
-//! DirectComposition visual: it then decodes into textures and hands them over
-//! on request through `OnVideoStreamTick` + `TransferVideoFrame`, which keeps
-//! the video inside our scene graph (so `border-radius`, `overflow: hidden`,
-//! `opacity` and z-order all work on it) instead of on a sibling visual that
-//! escapes CSS entirely.
-//!
-//! # The device
-//!
-//! The engine decodes onto whatever `ID3D11Device` we give it through an
-//! `IMFDXGIDeviceManager`. Given the renderer's own device — which
-//! `gpui_windows::renderer_d3d11_device()` now publishes — decoded samples come
-//! back as `ID3D11Texture2D` **on that device**, so the eventual zero-copy path
-//! is a pure-VRAM blit. Given none, we create a private one; the v1 present
-//! path reads frames back to system memory anyway (§5 of CONTRACT.md), so a
-//! private device is a correct, slightly slower fallback rather than a failure.
-//!
-//! Asking for `DXGI_FORMAT_B8G8R8A8_UNORM` output makes MF insert its D3D11
-//! video processor, which crops to the display aperture (1080, not the coded
-//! 1088), converts colour on the GPU's fixed-function block and hands back
-//! exactly the format gpui's atlas uses. No NV12 shader, no colour matrix, no
-//! BT.601-vs-709 decision.
+//! The engine decodes onto the `ID3D11Device` it is given through an `IMFDXGIDeviceManager`: the
+//! renderer's own (`gpui_windows::renderer_d3d11_device()`) when published, else a private one.
+//! Asking for `DXGI_FORMAT_B8G8R8A8_UNORM` makes MF insert its D3D11 video processor, which crops to
+//! the display aperture, converts colour on the GPU and returns the format gpui's atlas uses.
 
 mod codecs;
 mod notify;
@@ -75,16 +49,11 @@ use crate::backend::{
 
 pub use notify::EngineNotify;
 
-// ---------------------------------------------------------------------------
-// the shared device
-// ---------------------------------------------------------------------------
-
 static SHARED_DEVICE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static SHARED_GENERATION: AtomicU64 = AtomicU64::new(0);
 
-/// An owned lease on a renderer generation, borrowed only while cloning the
-/// D3D11 COM interface. The lease prevents a concurrent device replacement from
-/// invalidating the raw ABI pointer before AddRef.
+/// An owned lease on a renderer generation, held only while cloning the D3D11 interface so a
+/// concurrent device replacement cannot invalidate the raw pointer before AddRef.
 pub struct SharedVideoDevice {
     pub device: *mut c_void,
     pub generation: u64,
@@ -94,8 +63,8 @@ pub struct SharedVideoDevice {
 pub type SharedDeviceProvider = fn() -> Result<Option<SharedVideoDevice>, String>;
 static SHARED_DEVICE_PROVIDER: OnceLock<SharedDeviceProvider> = OnceLock::new();
 
-/// Installs a device factory without opening a decoder or initializing D3D11.
-/// The provider runs only when a Media Foundation backend needs a device.
+/// Installs a device factory without opening a decoder or initializing D3D11; the provider runs
+/// only when a backend needs a device.
 ///
 /// # Safety
 /// A successful provider lease must own a live ID3D11Device through keep_alive.
@@ -103,17 +72,9 @@ pub unsafe fn install_shared_device_provider(provider: SharedDeviceProvider) -> 
     SHARED_DEVICE_PROVIDER.set(provider).map_err(|_| "video device provider already installed")
 }
 
-/// Publishes the renderer's `ID3D11Device` so decoded frames land on it.
-///
-/// The host calls this once at boot with what
-/// `gpui_windows::renderer_d3d11_device()` returns. The pointer is BORROWED —
-/// this crate clones the interface (which AddRefs) when it builds an engine.
-///
-/// Raw rather than `ID3D11Device` on purpose: `gpui_windows` compiles against
-/// `windows` 0.61 and this crate against 0.62, and a COM interface pointer is
-/// an ABI, not a type. Coupling the two versions would mean this crate's
-/// Media Foundation coverage was hostage to whatever version the fork happens
-/// to be on.
+/// Publishes the renderer's `ID3D11Device` so decoded frames land on it. The pointer is borrowed;
+/// the interface is cloned (AddRef) when an engine is built. Raw because `gpui_windows` uses
+/// `windows` 0.61 and this crate 0.62: a COM pointer is an ABI, not a type.
 ///
 /// # Safety
 /// `ptr` must be a valid `ID3D11Device` COM pointer that outlives the process's
@@ -146,13 +107,9 @@ pub(crate) unsafe fn release_texture(texture: *mut c_void) {
     }
 }
 
-/// The renderer's device if one was published, else a private one built the
-/// same way. `bool` = "this is the renderer's own device".
+/// The renderer's device if one was published (`bool` = true), else a private one built the same way.
 fn device() -> Result<(ID3D11Device, bool, Option<Arc<dyn std::any::Any + Send + Sync>>), MediaError> {
-    // `VN_VIDEO_DEVICE=private` forces the fallback. An escape hatch worth
-    // keeping: sharing the renderer's device is the whole zero-copy argument,
-    // so when a machine misbehaves the first question is always "is it the
-    // sharing?", and answering it should not need a rebuild.
+    // `VN_VIDEO_DEVICE=private` forces the fallback, to tell whether device sharing is the problem without a rebuild.
     if std::env::var("VN_VIDEO_DEVICE").is_ok_and(|v| v == "private") {
         return Ok((private_device()?, false, None));
     }
@@ -163,8 +120,7 @@ fn device() -> Result<(ID3D11Device, bool, Option<Arc<dyn std::any::Any + Send +
                 .ok_or_else(|| MediaError::new(MediaErrorCode::Decode, "renderer video provider returned a null D3D11 device"))?;
             return Ok((borrowed.clone(), true, Some(lease.keep_alive)));
         }
-        // The provider owns its generations. Its old borrowed atomic pointer
-        // may already be dead, so do not fall through to the legacy cache.
+        // The provider owns its generations; the legacy cache's pointer may already be dead.
         return Ok((private_device()?, false, None));
     }
     let raw = SHARED_DEVICE.load(Ordering::Acquire);
@@ -177,8 +133,7 @@ fn device() -> Result<(ID3D11Device, bool, Option<Arc<dyn std::any::Any + Send +
     Ok((private_device()?, false, None))
 }
 
-/// The fallback device: same flags the renderer uses, so the two paths differ
-/// only in *whose* VRAM the frame lands in.
+/// The fallback device, created with the renderer's flags.
 fn private_device() -> Result<ID3D11Device, MediaError> {
     let mut device: Option<ID3D11Device> = None;
     let mut context: Option<ID3D11DeviceContext> = None;
@@ -220,9 +175,7 @@ fn ensure_platform() -> Result<(), MediaError> {
     static mut RESULT: Option<MediaError> = None;
     ONCE.call_once(|| {
         unsafe {
-            // The host thread may already be initialised, in either apartment.
-            // `RPC_E_CHANGED_MODE` means "already in the other one", which is
-            // fine — the Media Engine works from both.
+            // The host thread may already be initialised in either apartment; `RPC_E_CHANGED_MODE` is fine.
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             if let Err(e) = MFStartup(MF_VERSION, MFSTARTUP_FULL) {
                 RESULT = Some(
@@ -245,43 +198,27 @@ fn ensure_platform() -> Result<(), MediaError> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// the backend
-// ---------------------------------------------------------------------------
-
 pub struct MediaEngineBackend {
     engine: IMFMediaEngine,
-    /// Kept alive for the engine's lifetime: MF holds a weak-ish reference and
-    /// dropping this would leave it calling into freed memory.
+    /// Kept alive for the engine's lifetime; MF calls into it.
     _notify: IMFMediaEngineNotify,
     queue: Arc<Mutex<Vec<u32>>>,
     presenter: present::Presenter,
-    /// The last PTS `OnVideoStreamTick` reported, so an unchanged one is
-    /// recognised as "no new frame" (`windows-rs` collapses `S_FALSE` into
-    /// `Ok(())`, so the HRESULT cannot be used for that).
+    /// The last PTS `OnVideoStreamTick` reported, so an unchanged one means "no new frame"
+    /// (`windows-rs` collapses `S_FALSE` into `Ok(())`).
     last_pts: i64,
     shared_device: bool,
-    /// The bytes of a `data:` source that was handed to the engine IN MEMORY
-    /// and has not yet been proved to work.
-    ///
-    /// `SetSourceFromByteStream` reports its verdict asynchronously, like every
-    /// other load: it returns `S_OK` and the engine raises `MF_MEDIA_ENGINE_
-    /// EVENT_ERROR` a moment later if the resolver could not make sense of the
-    /// stream. So the temp-file fallback cannot be a `?` on the call — it has
-    /// to hang off the error, which is what [`Self::retry_bytes_from_file`]
-    /// does. Cleared the moment the load succeeds far enough to raise
-    /// `loadedmetadata`, and after one retry either way.
+    /// The bytes of a `data:` source handed to the engine in memory and not yet proved to work.
+    /// `SetSourceFromByteStream` reports its verdict asynchronously, so the temp-file fallback hangs
+    /// off the error ([`Self::retry_bytes_from_file`]). Cleared at `loadedmetadata` and after one retry.
     bytes_retry: Option<(String, Arc<Vec<u8>>)>,
-    /// Has `play()` been called more recently than `pause()`? The engine's own
-    /// `GetPaused` cannot answer this across a reload, and the reload in
-    /// [`Self::retry_bytes_from_file`] has to put the transport back.
+    /// Whether `play()` was called more recently than `pause()`; the engine's `GetPaused` cannot
+    /// answer that across the reload in [`Self::retry_bytes_from_file`].
     wants_playing: bool,
-    /// The `src` last handed to the engine, for the error advisories.
     current_src: String,
     _source_extension: windows::Win32::Media::MediaFoundation::IMFMediaEngineExtension,
     source_control: source::Control,
-    /// Last field: release the host video facade only after engine and texture
-    /// COM references are gone, letting a pure-chat session return to idle.
+    /// Last field: drops the host video facade only after the engine and texture COM references are gone.
     _renderer_owner: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
@@ -290,7 +227,6 @@ impl MediaEngineBackend {
         ensure_platform()?;
         let (device, shared_device, renderer_owner) = device()?;
 
-        // The DXGI device manager is how MF is told "decode onto THIS device".
         let mut token = 0u32;
         let mut manager: Option<IMFDXGIDeviceManager> = None;
         unsafe { MFCreateDXGIDeviceManager(&mut token, &mut manager) }.map_err(|e| {
@@ -307,8 +243,7 @@ impl MediaEngineBackend {
             )
             .with_advisory(
                 "the renderer's Direct3D device was refused by Media Foundation — it must be \
-                 created with D3D11_CREATE_DEVICE_VIDEO_SUPPORT (gpui_windows does this since \
-                 the m12 fork commit).",
+                 created with D3D11_CREATE_DEVICE_VIDEO_SUPPORT.",
             )
         })?;
 
@@ -351,8 +286,7 @@ impl MediaEngineBackend {
         unsafe { attributes.SetUnknown(&MF_MEDIA_ENGINE_EXTENSION, &source_extension) }.map_err(|error| {
             MediaError::new(MediaErrorCode::Decode, format!("media source extension: {error}"))
         })?;
-        // No playback HWND and no DirectComposition visual => frame-server
-        // mode, which is what keeps the video inside our scene graph.
+        // No playback HWND and no DirectComposition visual => frame-server mode.
         let engine = unsafe { factory.CreateInstance(0, &attributes) }.map_err(|e| {
             MediaError::new(
                 MediaErrorCode::Decode,
@@ -376,7 +310,6 @@ impl MediaEngineBackend {
         })
     }
 
-    /// `SetSource(url)` — the whole of what `Path` and `Uri` need.
     fn set_source_url(&self, url: &str) -> Result<(), MediaError> {
         unsafe { self.engine.SetSource(&BSTR::from(url)) }.map_err(|e| {
             MediaError::new(
@@ -386,49 +319,17 @@ impl MediaEngineBackend {
         })
     }
 
-    /// `data:` — the bytes without a file.
-    ///
-    /// # The in-memory path, and why it is not the default
-    ///
-    /// `IMFMediaEngineEx::SetSourceFromByteStream(stream, url)` looks like the
-    /// answer: `MFCreateMFByteStreamOnStream` wraps any `IStream` (and
-    /// `CreateStreamOnHGlobal` makes one over a block of memory), so the whole
-    /// path would be HGLOBAL → `IStream` → `IMFByteStream` → engine, with the
-    /// bytes copied once and never touching the filesystem. It is what m12's
-    /// report named as the shape of this feature.
-    ///
-    /// It does not work, and the reason is the second argument. [measured, this
-    /// machine, a 6 KB baseline-H.264 MP4 that plays fine from a file]
-    ///
-    /// | `url` passed | result |
-    /// | --- | --- |
-    /// | `"video/mp4"` (the MIME type — the obvious misreading) | `MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED` |
-    /// | `"file:///vn-media.mp4"` (synthesised, right extension) | **`0x80070002 ERROR_FILE_NOT_FOUND`** |
-    /// | `""` | `0x80004003 E_POINTER`, synchronously |
-    ///
-    /// The middle row is the finding: MF **opens the URL** rather than reading
-    /// the stream it was just handed, so the parameter is not a hint — it is
-    /// the source. A byte stream that has no URL therefore has nothing to put
-    /// there, and `SetSourceFromByteStream` cannot serve one.
-    ///
-    /// So the default is the temp file, which always works. `MF_BYTESTREAM_
-    /// CONTENT_TYPE` and the extension logic are kept because they are correct
-    /// and cost nothing, and the byte-stream attempt is kept behind
-    /// `VN_VIDEO_DATA_BYTESTREAM=1` so a future Windows build (or a media type
-    /// whose handler behaves differently) can be re-tested in one environment
-    /// variable rather than one rebuild.
-    ///
-    /// The temp file is named by the content hash, so re-mounting the same
-    /// `data:` URI writes once, and it is left in the OS temp directory rather
-    /// than deleted — Media Foundation reads it lazily for as long as the
-    /// element lives, so deleting it on return would break playback rather than
-    /// tidy up.
+    /// `data:` bytes. `SetSourceFromByteStream` is not the default: MF opens the `url` argument
+    /// instead of reading the stream (measured: `"video/mp4"` gives SRC_NOT_SUPPORTED, a synthesised
+    /// `file:///...` gives `ERROR_FILE_NOT_FOUND`, `""` gives `E_POINTER`), so a stream with no URL
+    /// cannot be served. The default stages a temp file named by content hash; it is not deleted
+    /// because MF reads it lazily for as long as the element lives. `VN_VIDEO_DATA_BYTESTREAM=1`
+    /// re-enables the byte-stream attempt.
     fn set_source_bytes(&mut self, mime: &str, data: &Arc<Vec<u8>>) -> Result<(), MediaError> {
         if std::env::var("VN_VIDEO_DATA_BYTESTREAM").is_ok_and(|v| v == "1") {
             match self.set_source_from_memory(mime, data) {
                 Ok(()) => {
-                    // It returned S_OK; the engine's verdict arrives later, and
-                    // `retry_bytes_from_file` is what catches a refusal.
+                    // S_OK now; a refusal arrives later and `retry_bytes_from_file` catches it.
                     self.bytes_retry = Some((mime.to_string(), data.clone()));
                     return Ok(());
                 }
@@ -437,7 +338,6 @@ impl MediaEngineBackend {
                 )),
             }
         }
-        // Straight to the file: there is no later attempt to make.
         self.bytes_retry = None;
         let path = temp_file_for(mime, data).map_err(|e| {
             MediaError::new(
@@ -454,21 +354,15 @@ impl MediaEngineBackend {
         self.set_source_url(&file_url(&path))
     }
 
-    /// Second attempt at a `data:` source that went out as a byte stream and
-    /// was refused ASYNCHRONOUSLY: stage the bytes as a file and load that.
-    /// Returns `true` when a retry actually started, so the error that
-    /// triggered it should be swallowed rather than raised at the element.
-    ///
-    /// Only reachable under `VN_VIDEO_DATA_BYTESTREAM=1` — the default path
-    /// stages the file up front, because the byte-stream API cannot serve a
-    /// stream with no URL (see [`Self::set_source_bytes`]).
+    /// Second attempt at a `data:` source that went out as a byte stream and was refused
+    /// asynchronously: stage the bytes as a file and load that. `true` when a retry started, so the
+    /// triggering error is swallowed. Only reachable under `VN_VIDEO_DATA_BYTESTREAM=1`.
     fn retry_bytes_from_file(&mut self) -> bool {
         let Some((mime, data)) = self.bytes_retry.take() else {
             return false;
         };
-        // The reload runs the load algorithm again, which puts the engine back
-        // at paused/0. Whatever the element already asked for has to be
-        // re-asserted afterwards, or an `autoplay` clip sits on its first frame.
+        // The reload resets the engine to paused/0, so re-assert what the element asked for or an
+        // `autoplay` clip sits on its first frame.
         let was_playing = self.wants_playing;
         trace(format_args!(
             "  in-memory byte stream refused: {:?}",
@@ -499,9 +393,7 @@ impl MediaEngineBackend {
         use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 
         unsafe {
-            // `fDeleteOnRelease: TRUE` hands ownership of the HGLOBAL to the
-            // stream, so the block lives exactly as long as the engine's
-            // reference to it — which is longer than this function.
+            // `fDeleteOnRelease: TRUE` gives the HGLOBAL to the stream, so it lives as long as the engine's reference.
             let global = GlobalAlloc(GMEM_MOVEABLE, data.len())?;
             let locked = GlobalLock(global);
             if locked.is_null() {
@@ -512,34 +404,26 @@ impl MediaEngineBackend {
             let stream = CreateStreamOnHGlobal(global, true)?;
             let byte_stream = MFCreateMFByteStreamOnStream(&stream)?;
 
-            // The MIME type goes where it belongs: `MF_BYTESTREAM_CONTENT_TYPE`
-            // on the stream, which is the same attribute MF's own network
-            // source sets from a `Content-Type` header.
+            // The MIME type goes in `MF_BYTESTREAM_CONTENT_TYPE`, as MF's network source does from `Content-Type`.
             if !mime.is_empty() {
                 if let Ok(attributes) = byte_stream.cast::<IMFAttributes>() {
                     let _ =
                         attributes.SetString(&MF_BYTESTREAM_CONTENT_TYPE, &HSTRING::from(mime));
                 }
             }
-            // The best of three bad options — see `set_source_bytes` for the
-            // measurements. Never `BSTR::new()`: that is a NULL BSTR, and
-            // handing one to `mfmediaengine.dll` takes the process down with
-            // no panic and no message (m12 §6.6 found that the hard way).
+            // Never `BSTR::new()`: a NULL BSTR crashes `mfmediaengine.dll` with no panic or message.
             let url = format!("file:///vn-media{}", extension_for(mime));
             let engine_ex: IMFMediaEngineEx = self.engine.cast()?;
             engine_ex.SetSourceFromByteStream(&byte_stream, &BSTR::from(url.as_str()))
         }
     }
 
-    /// True when frames are being decoded onto the renderer's own device — the
-    /// precondition for the eventual zero-copy present path. Reported by the
-    /// element layer so a machine where it is false says so.
+    /// True when frames are decoded onto the renderer's own device (the zero-copy precondition).
     pub fn uses_renderer_device(&self) -> bool {
         self.shared_device
     }
 
-    /// The engine's `IMFMediaError`, translated, with the advisory that turns
-    /// "MEDIA_ERR_SRC_NOT_SUPPORTED" into something actionable.
+    /// The engine's `IMFMediaError`, translated, with an actionable advisory.
     fn engine_error(&self) -> Option<MediaError> {
         let error = unsafe { self.engine.GetError() }.ok()?;
         let code = unsafe { error.GetErrorCode() };
@@ -567,18 +451,10 @@ impl MediaEngineBackend {
             5 => MediaError::new(MediaErrorCode::Decode, "the media is encrypted")
                 .with_advisory(
                     "<video>: encrypted media (EME / PlayReady / Widevine) is not supported and \
-                     is not planned — see crates/vn-video/CONTRACT.md §7.",
+                     is not planned.",
                 ),
-            // 4 = MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED, and everything
-            // unknown.
-            //
-            // A NETWORK source that never arrived lands here too — MF reports
-            // "not supported" for a URL it could not open, which is technically
-            // true and completely unhelpful. [measured: a `<video>` pointed at
-            // a dead port reported code 4 with the codec advisory, blaming this
-            // machine's decoder set for a connection that was refused.] A
-            // browser answers MEDIA_ERR_NETWORK there, so we do too, and the
-            // advisory says what actually happened.
+            // 4 = SRC_NOT_SUPPORTED and everything unknown. MF also reports that for a network source
+            // that never arrived (measured: a dead port), so answer MEDIA_ERR_NETWORK as a browser does.
             _ if src.starts_with("http://") || src.starts_with("https://") => MediaError::new(
                 MediaErrorCode::Network,
                 format!("the source could not be opened{extended}"),
@@ -599,13 +475,8 @@ impl MediaEngineBackend {
         })
     }
 
-    /// The advisory for "this machine cannot play this file" — the one place
-    /// the owner constraint "no reliance on Store codec extensions" turns into
-    /// something a developer can act on.
-    ///
-    /// Built from a LIVE registry probe at the moment of failure, never a
-    /// build-time table: what is decodable here is a property of this machine's
-    /// installed Store packages, and one of them can appear after we shipped.
+    /// The advisory for "this machine cannot play this file", built from a live registry probe at
+    /// failure time (a Store codec package can appear after shipping).
     fn unsupported_advisory(&self) -> String {
         let src = &self.current_src;
         let (installed, missing) = codecs::installed_summary();
@@ -655,17 +526,9 @@ impl MediaEngineBackend {
     }
 }
 
-/// `IMFMediaEngine::Shutdown` before the last reference goes, as the API
-/// requires ("call this method when you are done using the Media Engine,
-/// before calling Release").
-///
-/// Without it, releasing the engine frees almost nothing. Its pipeline (the
-/// media source, the decoder MFTs, their work-queue threads and buffers) holds
-/// references back to it, so the cycle outlives every reference we drop. In
-/// the Argon client each channel switch unmounts and mounts `<video>`s, and
-/// every one left behind ~3.5 MB of process heap and two to three threads:
-/// 145 → 283 threads and +176 MB of C/C++ heap over 40 switches, and then
-/// the process exited (research/reports/m26/perf-mem-3.md §1).
+/// `IMFMediaEngine::Shutdown` before the last reference goes, as the API requires. Without it the
+/// pipeline (source, decoder MFTs, work-queue threads) holds references back to the engine and
+/// outlives every reference we drop: ~3.5 MB of heap and 2-3 threads per unmounted `<video>`.
 impl Drop for MediaEngineBackend {
     fn drop(&mut self) {
         if let Err(e) = unsafe { self.engine.Shutdown() } {
@@ -674,12 +537,8 @@ impl Drop for MediaEngineBackend {
     }
 }
 
-/// `VN_VIDEO_LOG=1` — a trace of the load handshake, on stderr.
-///
-/// Kept because the failure it exists for is invisible otherwise: `SetSource`
-/// and `Load` can both return `S_OK` and leave `networkState` at EMPTY, and
-/// there is no error anywhere to notice. Two lines of trace is the difference
-/// between "the video does not play" and "the URL was malformed".
+/// `VN_VIDEO_LOG=1`: a load-handshake trace on stderr. `SetSource` and `Load` can both return
+/// `S_OK` and leave `networkState` at EMPTY with no error.
 fn trace(args: std::fmt::Arguments<'_>) {
     use std::sync::atomic::{AtomicU8, Ordering};
     static ON: AtomicU8 = AtomicU8::new(2);
@@ -717,10 +576,8 @@ impl VideoBackend for MediaEngineBackend {
                     ))
                 })?;
             }
-            // Handed to MF verbatim. Its scheme handler reads ahead and seeks
-            // by HTTP range request, so a long clip starts playing while it is
-            // still arriving and never becomes a file or a `Vec<u8>` — the same
-            // reason `Path` is a path and not bytes.
+            // Handed to MF verbatim: its scheme handler reads ahead and seeks by range request, so the
+            // clip never becomes a file or a `Vec<u8>`.
             MediaSource::Uri(url) => {
                 trace(format_args!("load {url}  (MF network source)"));
                 self.current_src = url.clone();
@@ -734,9 +591,7 @@ impl VideoBackend for MediaEngineBackend {
                     ))
                 })?;
             }
-            // A `data:` URI. The bytes are already in memory, so they are
-            // wrapped as an `IMFByteStream` over an `IStream` rather than
-            // written out — see `set_source_bytes`.
+            // A `data:` URI: see `set_source_bytes`.
             MediaSource::StaticBytes { mime, data } => {
                 trace(format_args!("load package: {} bytes, mapped native source", data.len()));
                 self.bytes_retry = None;
@@ -753,12 +608,9 @@ impl VideoBackend for MediaEngineBackend {
                 self.set_source_bytes(mime, data)?;
             }
         }
-        // `SetSource` alone leaves `networkState` at EMPTY: unlike the DOM,
-        // where assigning `src` runs the media element load algorithm, the
-        // Media Engine wants to be told. `SetPreload(AUTOMATIC)` then says
-        // "fetch the whole thing", which is what a local file wants.
-        // [measured: without the Load() below, readyState and networkState both
-        // stay 0 forever and no event is ever raised.]
+        // Unlike the DOM, `SetSource` alone leaves `networkState` at EMPTY: the engine must be told
+        // to `Load()` (measured: without it no state changes and no event is raised).
+        // `SetPreload(AUTOMATIC)` fetches the whole file.
         let _ = unsafe { self.engine.SetPreload(MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC) };
         unsafe { self.engine.Load() }.map_err(|e| {
             MediaError::new(
@@ -825,7 +677,6 @@ impl VideoBackend for MediaEngineBackend {
     }
 
     fn audible(&self) -> bool {
-        // The engine's own answers: what it renders, not what was pushed.
         unsafe {
             self.engine.HasAudio().as_bool()
                 && !self.engine.IsPaused().as_bool()
@@ -861,13 +712,9 @@ impl VideoBackend for MediaEngineBackend {
         self.engine_error()
     }
 
-    /// **Not `IMFMediaEngine::CanPlayType`.** [measured] that method answers
-    /// `"probably"` for `video/ogg; codecs="theora"` on this machine — a
-    /// container Media Foundation has no source for, carrying a codec with no
-    /// decoder installed. It appears to answer on the shape of the MIME string
-    /// rather than on the registry, which makes it worse than useless for the
-    /// one question that matters: can THIS machine play THIS file. `codecs.rs`
-    /// asks `MFTEnumEx` instead.
+    /// Not `IMFMediaEngine::CanPlayType`, which answers on the MIME string's shape (measured:
+    /// "probably" for `video/ogg; codecs="theora"` with no source or decoder); `codecs.rs` asks
+    /// `MFTEnumEx` instead.
     fn can_play_type(&self, mime_type: &str) -> CanPlay {
         codecs::can_play_type(mime_type)
     }
@@ -879,16 +726,9 @@ impl VideoBackend for MediaEngineBackend {
             return None;
         }
 
-        // `OnVideoStreamTick` answers "is there a new frame" with S_OK vs
-        // S_FALSE, and `windows-rs` maps BOTH to `Ok` (S_FALSE is a success
-        // code) — leaving the PTS at its zeroed default on S_FALSE. So the PTS
-        // is what actually distinguishes them, and an unchanged one means the
-        // engine has nothing new.
-        //
-        // Two cases must transfer regardless: the very first frame (a video
-        // seeked to 0 has PTS 0, which is also what S_FALSE leaves behind) and
-        // a resize, whose new texture is empty until something is blitted into
-        // it.
+        // `OnVideoStreamTick` signals S_OK vs S_FALSE but `windows-rs` maps both to `Ok`, leaving the
+        // PTS zeroed on S_FALSE, so an unchanged PTS means nothing new. Two cases transfer regardless:
+        // the very first frame (PTS 0 is also what S_FALSE leaves) and a resize (the new texture is empty).
         let pts = unsafe { self.engine.OnVideoStreamTick() }.ok()?;
         let forced = self.last_pts == i64::MIN || self.presenter.size() != size;
         if !forced && pts == self.last_pts {
@@ -907,10 +747,8 @@ impl VideoBackend for MediaEngineBackend {
             });
         }
 
-        // Pipeline only while PLAYING. A paused element produces one frame per
-        // seek with nothing behind it, so a frame of latency there is not
-        // latency at all — it is the wrong picture, permanently. See
-        // `Presenter::transfer`.
+        // Pipeline only while PLAYING: a paused element's seek frame must be the right picture, not a
+        // frame late. See `Presenter::transfer`.
         let pipeline = !self.paused();
         let (image, frame_pts) = self.presenter.transfer(&self.engine, size, pts, pipeline)?;
         Some(VideoFrame {
@@ -924,9 +762,8 @@ impl VideoBackend for MediaEngineBackend {
     /// The renderer's atlas refused the zero-copy blit; fall back permanently.
     fn gpu_upload_failed(&mut self) {
         self.presenter.demote_to_readback();
-        // The next `present` must produce a frame even though the PTS has not
-        // moved, or a paused element would sit on the transparent placeholder
-        // for ever.
+        // The next `present` must produce a frame even if the PTS has not moved, or a paused element
+        // keeps the placeholder.
         self.last_pts = i64::MIN;
     }
 
@@ -937,18 +774,14 @@ impl VideoBackend for MediaEngineBackend {
         };
         for code in raw {
             let Some(event) = notify::translate(code) else { continue };
-            // A `data:` source that the in-memory byte stream could not open
-            // gets exactly one more try, from a temp file. The error is
-            // SWALLOWED for that attempt: the element is not broken yet, and
-            // raising `error` here would fire a JS handler and set
-            // `MediaError` for a source that is about to start playing.
+            // A `data:` source the byte stream could not open gets one more try from a temp file; the
+            // error is swallowed since the element is not broken yet.
             if event == MediaEvent::Error && self.bytes_retry.is_some() {
                 if self.retry_bytes_from_file() {
                     continue;
                 }
             }
-            // Anything that means the load got somewhere retires the retry:
-            // whatever path we are on is working.
+            // Anything that got the load somewhere retires the retry.
             if event == MediaEvent::LoadedMetadata {
                 self.bytes_retry = None;
             }
@@ -958,29 +791,17 @@ impl VideoBackend for MediaEngineBackend {
 
     fn suspend(&mut self) {
         self.pause();
-        // Our own textures go back — two staging surfaces plus the transfer
-        // target, i.e. 3 x (painted area x 4 bytes).
+        // Our textures go back: two staging surfaces plus the transfer target.
         self.presenter.reset();
         self.last_pts = i64::MIN;
-        // NOT `SetSource("")`. Tearing the engine's pipeline down here and
-        // rebuilding it in `resume` is what a browser effectively does with a
-        // detached video, and it does release ~20 MiB of the ~28 MiB a 1080p
-        // pipeline holds — but [measured] it also grows the process by ~5 MiB
-        // per park/unpark cycle and takes it down after about ten. A bounded
-        // resident cost beats an unbounded one, so the decoder stays. See
-        // CONTRACT.md section 5 for the diagnosis this needs before it can come
-        // back.
+        // Not `SetSource("")`: rebuilding the pipeline in `resume` frees ~20 MiB of ~28 MiB but
+        // (measured) grows the process ~5 MiB per park/unpark cycle until it dies. A bounded
+        // resident cost beats an unbounded one, so the decoder stays.
     }
 }
 
-/// `C:\x\a.mp4` → `file:/// The filename extension Media Foundation's source resolver should see for a
-/// `data:` URI's media type.
-///
-/// Not a codec table and not a claim about what plays — it is a HINT that picks
-/// a byte-stream handler, and the handler then reads the actual bytes. An
-/// unknown type gets no extension, which leaves `MF_BYTESTREAM_CONTENT_TYPE`
-/// and content sniffing to do the work, exactly as an unknown `Content-Type`
-/// would over http.
+/// The file extension MF's source resolver should see for a `data:` URI's media type: a hint that
+/// picks a byte-stream handler; unknown types get none.
 fn extension_for(mime: &str) -> &'static str {
     match mime.trim() {
         "video/mp4" | "video/x-m4v" | "audio/mp4" => ".mp4",
@@ -1000,24 +821,16 @@ fn extension_for(mime: &str) -> &'static str {
     }
 }
 
-/// Stages `data:` bytes as a file, named by their content hash so the same URI
-/// mounted twice writes once.
-///
-/// Deliberately NOT deleted on return: Media Foundation opens the file lazily
-/// and keeps reading it for as long as the element lives, so removing it here
-/// would break playback rather than tidy up. It lands in the OS temp directory,
-/// which is what that directory is for, and is reused across process runs (the
-/// name is a pure function of the bytes).
+/// Stages `data:` bytes as a file named by their content hash, so the same URI mounted twice
+/// writes once. Not deleted on return: MF reads it lazily for as long as the element lives.
 fn temp_file_for(mime: &str, data: &[u8]) -> std::io::Result<std::path::PathBuf> {
-    // FNV-1a. A collision here costs the wrong video, not memory safety, and at
-    // 64 bits with a handful of clips per app it is not a risk anyone meets.
+    // FNV-1a: a collision costs the wrong video, not memory safety.
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in data {
         hash ^= *byte as u64;
         hash = hash.wrapping_mul(0x1000_0000_01b3);
     }
-    // The extension is a real hint here, not decoration: the source resolver
-    // picks a byte-stream handler from it before anything reads the bytes.
+    // The extension picks the byte-stream handler before anything reads the bytes.
     let ext = match extension_for(mime) {
         "" => ".bin",
         other => other,
@@ -1030,18 +843,12 @@ fn temp_file_for(mime: &str, data: &[u8]) -> std::io::Result<std::path::PathBuf>
     Ok(path)
 }
 
-///C:/x/a.mp4`, percent-escaping what a URL must.
-///
-/// Media Foundation accepts a bare path too, but only sometimes — a path with
-/// a `#` or a `%` in it is read as a URL fragment/escape and the open fails
-/// with a "file not found" that names a file the user can see is there.
+/// `C:\x\a.mp4` → `file:///C:/x/a.mp4`, percent-escaping what a URL must. A bare path fails when it
+/// contains `#` or `%`, which MF reads as a fragment or escape.
 fn file_url(path: &Path) -> String {
     let raw = path.to_string_lossy();
-    // Strip Windows extended-length prefixes first. `Path::canonicalize`
-    // produces them, and they are FILESYSTEM syntax, not URL syntax: Media
-    // Foundation fails such a URL with ERROR_INVALID_NAME (0x8007007B), which
-    // surfaces as "the source is not supported" for a file that plainly exists
-    // and plainly decodes. [measured — this one cost an hour.]
+    // Strip Windows extended-length prefixes (from `Path::canonicalize`): they are filesystem
+    // syntax, and MF fails such URLs with `ERROR_INVALID_NAME`, reported as "not supported".
     let stripped = raw
         .strip_prefix(r"\\?\UNC\")
         .map(|rest| format!(r"\\{rest}"))
@@ -1070,7 +877,6 @@ mod tests {
             file_url(Path::new(r"C:\apps\hello\assets\clip.mp4")),
             "file:///C:/apps/hello/assets/clip.mp4"
         );
-        // The characters that make a bare path fail are escaped, not passed on.
         assert_eq!(
             file_url(Path::new(r"C:\a b\c#d%e.mp4")),
             "file:///C:/a%20b/c%23d%25e.mp4"

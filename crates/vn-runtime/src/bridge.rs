@@ -4,8 +4,7 @@
 //! [`with_app`]. Outside a published scope those return `None` and the caller
 //! must throw a JS error rather than touch gpui.
 //!
-//! This is the `ElementArenaScope` pattern from gpui itself: teardown lives in
-//! `Drop`, so a panic cannot leave a dangling pointer published.
+//! Teardown lives in `Drop` (as gpui's `ElementArenaScope`), so a panic cannot leave a dangling pointer published.
 
 use std::any::Any;
 use std::cell::Cell;
@@ -39,42 +38,25 @@ thread_local! {
     static DRAIN_OWED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// A dispatch made under a gpui listener leaves its microtask checkpoint OWED
-/// instead of running it there (vn-tree's `dispatch_event`; docs/RUNTIME.md
-/// §5.8). The listener's host queues a deferred checkpoint for after gpui's
-/// dispatch, where a layout read may lay out. Until then, every JS entry
-/// settles it first ([`settle_owed_drain`]), so no script runs ahead of the
-/// microtasks of the dispatch before it: there is still a checkpoint between
-/// any two events.
+/// A dispatch made under a gpui listener leaves its microtask checkpoint owed instead of running
+/// it there; every JS entry settles it first ([`settle_owed_drain`]), so there is still a
+/// checkpoint between any two events. Call it BEFORE the dispatch's call into JS.
 ///
-/// Call it BEFORE the dispatch's call into JS. It takes the engine's API lock
-/// and keeps it until the checkpoint is settled: JSC drains the microtask
-/// queue by itself whenever the OUTERMOST API lock is released, which, for a
-/// call made without the lock, is the end of that call (redjs `web::checkpoint`).
+/// It takes the engine's API lock and keeps it until settled: JSC drains microtasks whenever the
+/// outermost API lock is released.
 ///
-/// Returns `false`, and owes nothing, when JS is already running below the
-/// dispatch: a gpui listener that a forced layout's draw ran from inside a
-/// script (`getBoundingClientRect` → `sync_layout` → `Window::draw` → a focus
-/// observer). That dispatch is nested, so it gets no checkpoint of its own, as
-/// in a browser, where one runs only once the script stack is empty: the
-/// enclosing script's checkpoint runs its microtasks. Owing there would also
-/// break the engine. The enclosing script may be a microtask that JSC's own
-/// drain runs from `JSLock::willReleaseLock`, after that unlock has decided it
-/// is the last one. A lock taken there and kept outlives the release of the
-/// heap access, so the API lock stays held WITHOUT heap access; the next
-/// release aborts the process: "FATAL: Attempting to release access but the
-/// mutator does not have access" (a member click in the Argon client, whose
-/// popover focuses and measures on mount).
+/// Returns `false`, and owes nothing, when JS is already running below the dispatch (a listener run
+/// by a forced layout's draw from inside a script): that dispatch is nested and the enclosing
+/// script's checkpoint covers it. Owing there would keep a lock past the release of heap access,
+/// and JSC aborts ("Attempting to release access but the mutator does not have access").
 pub fn owe_drain() -> bool {
     if DRAIN_OWED.with(|c| c.get()) {
         return true;
     }
     let owed = crate::JsRuntime::try_with(|rt| {
         let g = rt.raw();
-        // SAFETY: the context is live and this is its VM thread. `rjs_in_js`
-        // runs under the lock just taken, so its own lock holder is nested and
-        // cannot drain. With JS on the stack the lock was already held, so the
-        // unlock only counts down and releases nothing.
+        // SAFETY: the context is live and this is its VM thread; `rjs_in_js` runs under the lock
+        // just taken, so with JS on the stack the unlock only counts down.
         unsafe {
             redjs::ffi::redjs_lock(g);
             if redjs::glue::rjs_in_js(g) != 0 {
@@ -154,12 +136,9 @@ impl Drop for Guard {
     }
 }
 
-/// Publishes `window` + `cx` for the duration of `f`, after settling an owed
-/// microtask checkpoint ([`owe_drain`]) inside the publication.
+/// Publishes `window` + `cx` for the duration of `f`, after settling an owed checkpoint.
 ///
-/// Takes `&mut` for the whole call so the borrow checker guarantees the caller
-/// cannot touch them while the raw pointers are live: exactly one live `&mut`
-/// exists at any instant and the reborrow is well-nested.
+/// Takes `&mut` for the whole call so the caller cannot touch them while the raw pointers are live.
 pub fn with_published<R>(
     window: &mut Window,
     cx: &mut App,
@@ -187,17 +166,11 @@ pub fn with_published_app<R>(cx: &mut App, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Runs `f`, a `Window::draw` made from inside a publication, as
-/// [`Phase::Draw`]: nothing is reachable through [`with_commit`] or
-/// [`with_app`] until it returns.
+/// Runs `f`, a `Window::draw` made from inside a publication, as [`Phase::Draw`]: nothing is
+/// reachable through [`with_commit`] or [`with_app`] until it returns.
 ///
-/// A real frame draws with nothing published. A layout forced from a script
-/// (`getBoundingClientRect` → the host's `sync_layout`) draws from inside the
-/// script's own `Phase::Commit`, whose pointers are the very `Window` and
-/// `App` gpui is then working through; anything in that draw that asked for
-/// them would be handed a second `&mut` to each. A gpui listener the draw
-/// runs publishes its own, as it does in a frame, and that is put back when
-/// it returns.
+/// A forced layout draws from inside a script's `Phase::Commit`, whose pointers are the `Window` and
+/// `App` gpui is already working through; handing them out again would alias the `&mut`s.
 pub fn with_draw<R>(f: impl FnOnce() -> R) -> R {
     let _g = Guard(
         APP.with(|c| c.get()),
@@ -263,9 +236,8 @@ pub fn throw_error(g: *mut c_void, kind: u32, msg: &str) -> u64 {
     redjs::api::Value::undefined().0
 }
 
-/// The `host_fn!` catch arm: converts a caught panic payload into a thrown JS
-/// `Error` and poisons the runtime (I9 — gpui state cannot be trusted after an
-/// unwound host fn; the pump checks `poisoned()` and stops scheduling JS).
+/// The `host_fn!` catch arm: converts a caught panic payload into a thrown JS `Error` and poisons
+/// the runtime.
 pub fn panic_to_js(g: *mut c_void, payload: Box<dyn Any + Send>) -> u64 {
     let (msg, loc) = LAST_PANIC.with(|c| c.take()).unwrap_or_default();
     let text = payload
@@ -283,9 +255,8 @@ mod tests {
     use crate::JsRuntime;
     use redjs::api::Value;
 
-    /// `owe()` stands for a listener's dispatch: it owes the checkpoint as
-    /// vn-tree's `dispatch_event` does under a gpui listener, and answers
-    /// whether it did.
+    /// `owe()` owes the checkpoint as vn-tree's `dispatch_event` does under a gpui listener, and
+    /// answers whether it did.
     fn install_owe(rt: &JsRuntime) {
         let f = rt.ctx().function("owe", 0, |_g, _frame| Value::boolean(owe_drain()).0).unwrap();
         rt.ctx().global_set("owe", f).unwrap();
@@ -296,24 +267,18 @@ mod tests {
         rt.ctx().to_rust_string(v).unwrap()
     }
 
-    /// The Argon member-click crash. A call made without the lock ends in
-    /// JSC's own drain, inside `JSLock::willReleaseLock`, after that unlock has
-    /// decided it is the last one; there a microtask (Vue's flush, a popover's
-    /// onMounted that focuses and measures) reached a listener's dispatch
-    /// through a forced layout's draw. Owing there kept a lock that outlived
-    /// the heap access, and the next release aborted the process: "FATAL:
-    /// Attempting to release access but the mutator does not have access".
+    /// Regression: a microtask run by JSC's own drain in `JSLock::willReleaseLock` reached a
+    /// listener's dispatch through a forced layout's draw; owing there kept a lock past the heap
+    /// access and the next release aborted the process.
     #[test]
     fn a_dispatch_inside_running_js_owes_nothing() {
         crate::testing::on_js_thread(|| {
             JsRuntime::with(|rt| {
                 install_owe(rt);
-                // No explicit drain anywhere: the reaction runs from the eval's
-                // final unlock, which is the case under test.
+                // No explicit drain: the reaction runs from the eval's final unlock, the case under test.
                 rt.ctx().eval("globalThis.seen = []; Promise.resolve().then(() => seen.push(owe()))").unwrap();
             });
             assert!(!drain_owed(), "a dispatch nested in running JS owes nothing");
-            // With a lock kept from inside that drain, this release aborted.
             settle_owed_drain();
             JsRuntime::with(|rt| {
                 unsafe { redjs::ffi::redjs_gc(rt.raw(), 0) };
@@ -322,8 +287,7 @@ mod tests {
         });
     }
 
-    /// Outside JS, the dispatch still owes: the end of the next call does not
-    /// drain, and the settle runs the checkpoint and gives the lock back.
+    /// Outside JS, the dispatch still owes; the settle runs the checkpoint and gives the lock back.
     #[test]
     fn a_dispatch_outside_js_owes_its_checkpoint_until_it_is_settled() {
         crate::testing::on_js_thread(|| {
@@ -358,9 +322,7 @@ mod tests {
         .unwrap();
     }
 
-    /// A second boot in one process is a panic that says what to do, not the
-    /// fast-fail it used to be. Runs on the JS thread, where the runtime has
-    /// booted, so it holds whichever test boots first.
+    /// A second boot in one process panics with a message saying what to do.
     #[test]
     fn a_second_init_is_refused_with_a_message() {
         let message = crate::testing::on_js_thread(|| {
@@ -370,8 +332,8 @@ mod tests {
         assert!(message.contains("vn_runtime::testing::on_js_thread"), "{message}");
     }
 
-    /// The crash dialog names the panic that broke the runtime, not one that
-    /// followed from it. A test thread of its own: the poison is per thread.
+    /// The crash dialog names the panic that broke the runtime, not one that followed from it.
+    /// Runs on a thread of its own: the poison is per thread.
     #[test]
     fn the_first_poison_reason_is_kept() {
         std::thread::spawn(|| {

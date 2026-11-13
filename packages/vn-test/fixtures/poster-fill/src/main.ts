@@ -1,20 +1,6 @@
-// A fixture for packages/vn-test/specs/poster-fill.spec.ts: a replaced
-// element laid over its box. Argon's media grid (AttachmentImageGrid.vue) is
-// flex rows of fixed height holding cells of fixed width, and a video cell is
-// VideoAttachment.vue: a `relative; overflow: hidden; width: 100%; height:
-// 100%` box with a grey background, and over it a poster `<img>` (or a
-// thumbhash `<canvas>`, or a `<video>` still) at `position: absolute; inset:
-// 0; width: 100%; height: 100%; object-fit: cover`. In Chromium the poster
-// fills the cell and is cropped; on vue-native it sat at the top at its own
-// aspect ratio, with the grey below it.
-//
-// Every source is three bands, green | red | blue, across its long side, so
-// `cover` puts red at the centre of the cell and fills the cell to its edges.
-// Render functions rather than an SFC, for the reason fixtures/layout gives.
 import { createApp, h, onMounted, ref } from "vue-native";
 import "./poster.css";
 
-/** Three equal bands across the long side of a w x h picture. */
 function bands(w: number, h: number): string {
   const wide = w >= h;
   const step = (wide ? w : h) / 3;
@@ -34,7 +20,6 @@ function bands(w: number, h: number): string {
 const WIDE = bands(160, 90);
 const TALL = bands(90, 160);
 
-/** The same bands on a canvas, as the thumbhash placeholder is drawn. */
 function paint(canvas: HTMLCanvasElement) {
   const ctx = canvas.getContext("2d")!;
   const step = canvas.width / 3;
@@ -44,7 +29,6 @@ function paint(canvas: HTMLCanvasElement) {
   });
 }
 
-/** One grid cell: a VideoAttachment box with `poster` laid over it. */
 const cell = (id: string, width: number, poster: ReturnType<typeof h>, fit: "cover" | "contain" = "cover") =>
   h("div", { class: "grid-cell", style: { width: `${width}px` } }, [
     h("div", { id, class: fit === "contain" ? "video-attachment va-contain" : "video-attachment" }, [
@@ -53,17 +37,11 @@ const cell = (id: string, width: number, poster: ReturnType<typeof h>, fit: "cov
     ]),
   ]);
 
-/**
- * VideoAttachment.vue as it renders a poster: the thumbhash canvas while the
- * poster loads, the `<img>` at `opacity: 0` until its `load`, then `.visible`
- * (an opacity transition).
- */
 const Attachment = {
   props: { id: String, src: String },
   setup(props: { id: string; src?: string }) {
     const loaded = ref(false);
     const thumb = ref<HTMLCanvasElement | null>(null);
-    // renderThumbHash(): the canvas is resized from script, then filled.
     onMounted(() => {
       const canvas = thumb.value;
       if (!canvas) return;
@@ -113,19 +91,12 @@ const Grid = {
           ),
         ]),
         h("div", { class: "grid-row", style: { height: "120px" } }, [
-          // The single-attachment wrapper's `fit="contain"`: letterboxed,
-          // centred, grey above and below.
           cell("c-contain", 200, h("img", { id: "p-contain", class: "va-poster", src: WIDE, alt: "" }), "contain"),
-          // Raster posters, 1280x720 and 720x1280: drawn at a fraction of
-          // their size, as a CDN poster is.
           h("div", { class: "grid-cell", style: { width: "100px" } }, [h(Attachment, { id: "c-png-wide", src: "/src/wide.png" })]),
           h("div", { class: "grid-cell", style: { width: "220px" } }, [h(Attachment, { id: "c-png-tall", src: "/src/tall.png" })]),
         ]),
         h("div", { class: "grid-row", style: { height: "120px" } }, [
-          // No poster yet: the blurred thumbhash canvas is what shows.
           h("div", { class: "grid-cell", style: { width: "100px" } }, [h(Attachment, { id: "c-thumb" })]),
-          // The same picture IN FLOW at `width: 100%; height: 100%`, in a
-          // block box and in a flex box.
           h("div", { id: "c-inflow-block", class: "inflow" }, [
             h("img", { id: "p-inflow-block", class: "fill-img", src: "/src/wide.png", alt: "" }),
           ]),

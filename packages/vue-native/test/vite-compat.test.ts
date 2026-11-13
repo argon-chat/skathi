@@ -1,8 +1,5 @@
-// vitecompat.ts — the Vite behaviours vue-native's builders reproduce — and
-// prod.ts over test/fixtures/vite-app, which uses every one of them
-// (research/reports/m26/client-gap.md §3.1).
-//
-//   bun test test/vite-compat.test.ts      (from packages/vue-native)
+// vitecompat.ts (the Vite behaviours the builders reproduce) and prod.ts over test/fixtures/vite-app, which uses every
+// one of them.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -175,7 +172,6 @@ describe("workers and svg", () => {
   });
 });
 
-// m26 client sweep #2: lazy components rendered nothing (see vitecompat.ts).
 describe("module namespaces", () => {
   const MINIFIED =
     "var p=Object.defineProperty;var s=(o)=>o;function x(o,t){this[o]=s.bind(null,t)}" +
@@ -510,10 +506,6 @@ describe("build.ts (dev) over test/fixtures/vite-dev-app", () => {
   });
 
   test("an import.meta.glob it cannot expand fails the build with a sentence, not at eval", () => {
-    // Every literal call expands in dev, `query` ones included
-    // (test/build-graph.test.ts, esm-app). A mention that is not a call is left
-    // for the define, whose tripwire names it.
-    // Inside the workspace, as an app is: module ids are workspace-relative.
     const root = mkdtempSync(join(HERE, "fixtures", "glob-mention-"));
     tmpDirs.push(root);
     mkdirSync(join(root, "src"), { recursive: true });

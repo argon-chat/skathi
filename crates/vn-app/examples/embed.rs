@@ -1,6 +1,5 @@
-//! A program that embeds vue-native (docs/EMBEDDING.md): a console app that
-//! runs the engine on a thread of its own, gives the app four functions and
-//! sends it events.
+//! A program that embeds vue-native: a console app that runs the engine on a thread of its own,
+//! gives the app four functions and sends it events.
 //!
 //! ```text
 //! cargo build -p vn-app --example embed --features prod

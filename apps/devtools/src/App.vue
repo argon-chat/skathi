@@ -1,33 +1,4 @@
 <script setup lang="ts">
-// The shell: the dock, the splitters, the global keyboard, and the clocks.
-//
-// ## The dock
-//
-// Chrome's shape, because it is the one every web developer already knows: a
-// tab strip across the top, one panel under it, and a console DRAWER that
-// toggles with Escape over whatever the panel is. Elements splits into tree +
-// styles with a draggable divider; the drawer has one of its own.
-//
-// The splitters are hand-rolled because they have to be: a drag needs pointer
-// events that keep arriving after the pointer has left the 5-pixel divider, and
-// the way to get those without a `setPointerCapture` is a full-window shield
-// that appears for the duration of the drag. That is also what stops the drag
-// from selecting text or hovering things underneath it.
-//
-// ## The clocks
-//
-// v1 had five. Three of them are gone — logs, the tree and the status line are
-// PUSHED now (`store.ts`, `crates/vn-app/src/devtools/ws.rs`). What is left is
-// the two that genuinely cannot be:
-//
-//   picker  150 ms  only while picking, and it is a question about where the
-//                   POINTER is — the host keeps no picker state to push from
-//   targets   3 s   a local directory scan; no target is involved at all
-//
-// …plus a 4 s re-arm of the selection outline (the target forgets a highlight
-// it has not been told about, so a crashed inspector cannot leave a rectangle
-// painted on somebody's app) and a 1 s fallback poll that only runs when the
-// push socket could not be opened.
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import Titlebar from "./components/Titlebar.vue";
 import Toolbar from "./components/Toolbar.vue";
@@ -71,7 +42,6 @@ const mainH = computed(() =>
   mainHeight(state.consoleOpen, state.consoleHeight, !!state.error),
 );
 
-/** Drag state for the three splitters. */
 const dragFrom = ref(0);
 const dragBase = ref(0);
 
@@ -88,11 +58,9 @@ function onDrag(event: VnMouseEvent): void {
     const next = dragBase.value + (event.clientX - dragFrom.value);
     state.treeWidth = Math.max(220, Math.min(viewport.w - 280, next));
   } else if (state.dragging === "net") {
-    // The Network list against its details pane; the pane keeps 320 px.
     const next = dragBase.value + (event.clientX - dragFrom.value);
     state.netListWidth = Math.max(220, Math.min(viewport.w - 320, next));
   } else if (state.dragging === "console") {
-    // Dragging the drawer's top edge DOWN makes it shorter, hence the sign.
     const next = dragBase.value - (event.clientY - dragFrom.value);
     state.consoleHeight = Math.max(80, Math.min(viewport.h - 220, next));
   }
@@ -101,8 +69,6 @@ function onDrag(event: VnMouseEvent): void {
 function endDrag(): void {
   state.dragging = null;
 }
-
-// ---- the keyboard ---------------------------------------------------------
 
 function onKey(event: VnKeyboardEvent): void {
   const ctrl = event.ctrlKey || event.metaKey;
@@ -132,12 +98,6 @@ function onKey(event: VnKeyboardEvent): void {
   }
   if (event.key === "Escape") {
     if (state.picking) { event.preventDefault(); void cancelPick(); return; }
-    // ONE owner for Escape. The layers close innermost first — the right-click
-    // menu, the Elements search, the Network details pane — and the drawer
-    // keeps its state until nothing is left over it. The panels do not handle
-    // the key themselves: two listeners on one target cannot stop each other's
-    // propagation, and the child's runs first, so a panel that closed its own
-    // layer would have this line toggle the drawer on the same press.
     if (ui.menu) {
       closeMenu();
       return;
@@ -154,8 +114,6 @@ function onKey(event: VnKeyboardEvent): void {
     resubscribe();
   }
 }
-
-// ---- clocks ---------------------------------------------------------------
 
 let timers: ReturnType<typeof setInterval>[] = [];
 const every = (ms: number, fn: () => void) => timers.push(setInterval(fn, ms));
@@ -178,15 +136,13 @@ onMounted(async () => {
       highlight(state.selected, SELECT_REFRESH_MS + 2000);
     }
   });
-  // The window list only changes when an app opens or closes a pop-out, which
-  // is rare — so it is refreshed while the panel that shows it is open, and
-  // once per attach otherwise.
+  // The window list only changes when an app opens or closes a pop-out, which is rare — so it is
+  // refreshed while the panel that shows it is open, and once per attach otherwise.
   every(4000, () => {
     if (state.status === "attached" && (state.tab === "targets" || state.windows.length > 1)) {
       void refreshWindows();
     }
   });
-  // Only ever runs when the socket is not live; see `store.pollFallback`.
   every(1000, () => pollFallback());
   // Heap/address-space walks are explicit snapshots, never a periodic UI task.
 
@@ -252,20 +208,15 @@ onUnmounted(() => {
       }}</span>
     </footer>
 
-    <!-- The drag shield. It exists only while a splitter is held, and it is what
-         makes the drag keep working after the pointer leaves the 5-px divider. -->
     <div v-if="state.dragging" class="shield" @mousemove="onDrag" @mouseup="endDrag"></div>
 
-    <!-- The right-click menu, over everything (it carries its own shield). -->
     <ContextMenu />
   </div>
 </template>
 
 <style scoped>
-/* The chrome (tabs, toolbars, buttons, labels) is not text to select, as in a
- * browser's devtools: a drag across it must not paint a highlight. The panes a
- * developer copies FROM — console messages, the request details, a response
- * body — opt back in with `user-select: text`. */
+/* The chrome (tabs, toolbars, buttons, labels) is not text to select, as in a browser's devtools:
+   a drag across it must not paint a highlight. */
 .app {
   position: relative;
   display: flex;

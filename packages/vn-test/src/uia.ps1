@@ -1,16 +1,8 @@
-# Walks a process's UI Automation tree and prints it as JSON, one flat row per
-# node with its depth.
+# Walks a process's UI Automation tree and prints it as JSON, one flat row per node with its depth.
+# Read-only: no activation, focus or synthetic input.
 #
-# This is the OUTSIDE view of `crates/vn-tree/src/aria.rs`: it asks Windows what
-# a screen reader would see, through the same client API Narrator and every
-# other AT uses. Nothing here touches the window — no activation, no focus, no
-# synthetic input — so a suite can read the accessibility tree of an app the
-# user is not looking at without stealing their cursor.
-#
-# Attaching a UIA client is also what ACTIVATES AccessKit inside the process:
-# gpui builds no accessibility tree until something asks for one, so the first
-# walk of a freshly launched window can come back with the tree still empty.
-# Callers retry.
+# Attaching a UIA client is what activates AccessKit in the process, so the first walk of a fresh
+# window can return an empty tree. Callers retry.
 
 param(
   [Parameter(Mandatory=$true)][int]$ProcessId,

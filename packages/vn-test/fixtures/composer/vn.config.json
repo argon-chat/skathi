@@ -1,6 +1,4 @@
 {
-  "$comment": "A chat composer's key handling against a text field's default action (m26 client sweep #8) — see ../README.md and packages/vn-test/specs/composer.spec.ts.",
-
   "name": "composer",
 
   "window": {

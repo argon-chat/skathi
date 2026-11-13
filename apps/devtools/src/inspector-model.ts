@@ -1,4 +1,3 @@
-// Inspector payloads and bounded view calculations; no runtime or DOM state.
 export type InspectorRequest = <T>(command: Record<string, unknown>) => Promise<T>;
 export interface TraceHint { code: string; severity: string; message: string; count: number; spanId?: number }
 export interface TraceCategory { category: string; selfMs: number; totalMs: number; count: number }
@@ -69,7 +68,6 @@ export function spanRows(spans: TraceSpan[], collapsed: ReadonlySet<number> = ne
     }
   }
   for (const root of roots) visit(root);
-  // A damaged/partial capture can contain cycles; every record stays inspectable.
   for (const span of [...unique.values()].sort(compare)) if (!visited.has(span.id)) visit(span);
   return rows;
 }

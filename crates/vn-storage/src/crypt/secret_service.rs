@@ -1,26 +1,13 @@
-//! The Linux provider's key store: the Secret Service, else a key file. The
-//! envelope and the master key are `envelope.rs`, as on macOS.
+//! The Linux provider's key store: the Secret Service, else a key file; envelope and master key
+//! are `envelope.rs`, as on macOS. One item per app in the default collection: service
+//! `gl.argon.vue-native.storage`, account `exe:<file stem>`, secret = the 32-byte master key.
 //!
-//! One item per app in the user's default collection ("login"):
-//!
-//! ```text
-//!   service  gl.argon.vue-native.storage
-//!   account  exe:<file stem>
-//!   secret   32 random bytes — the master key
-//! ```
-//!
-//! - **No add-only call.** `CreateItem` with `replace = false` adds a second
-//!   item rather than failing, so two processes racing on first run each add
-//!   one. Every read takes the OLDEST matching item; the loser of a race sees
-//!   that its own is not it, deletes it and uses the winner's.
-//! - **Absent, not refused.** The key file is used only where nothing owns
-//!   `org.freedesktop.secrets` on the session bus (or there is no session bus).
-//!   A service that is there but locked, or whose unlock prompt was dismissed,
-//!   is an error latched for the process: a new key would orphan the data
-//!   sealed under the one the keyring holds.
-//! - **A key file is sticky.** Once one exists it is the key, whatever the
-//!   bus offers later.
-//! - **Loaded once per process**, success or failure, like the Keychain.
+//! `CreateItem` with `replace = false` adds a second item instead of failing, so racing
+//! first runs each add one; every read takes the oldest item and the loser deletes its own.
+//! The key file is used only where nothing owns `org.freedesktop.secrets` on the session bus
+//! (or there is no bus); a service that is present but locked or dismissed is an error latched
+//! for the process, since a new key would orphan sealed data. Once a key file exists it stays
+//! the key. Loaded once per process, failure included.
 
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
@@ -126,12 +113,7 @@ fn fresh() -> Result<[u8; KEY_LEN], String> {
     Ok(k)
 }
 
-// ---------------------------------------------------------------------------
-// The Secret Service
-// ---------------------------------------------------------------------------
-
-/// No Secret Service to ask: nothing owns the name and nothing can be
-/// activated for it, or there is no session bus at all.
+/// No Secret Service to ask: nothing owns the name or can be activated for it, or no session bus.
 fn absent(e: &DbusError) -> bool {
     let what = format!("{e:?}");
     ["ServiceUnknown", "NameHasNoOwner", "Address(", "InputOutput("].iter().any(|s| what.contains(s))
@@ -213,12 +195,7 @@ fn describe(op: &str, e: &KeyringError) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The key file
-// ---------------------------------------------------------------------------
-
-/// `$XDG_DATA_HOME/vue-native/keys/<account>.key`, `~/.local/share` without
-/// an absolute `XDG_DATA_HOME`.
+/// `$XDG_DATA_HOME/vue-native/keys/<account>.key` (`~/.local/share` without an absolute `XDG_DATA_HOME`).
 fn key_file(account: &str) -> Result<PathBuf, String> {
     let data = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)

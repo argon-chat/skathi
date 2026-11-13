@@ -1,7 +1,5 @@
-//! The crash dialog's window on its own, for a look at it
-//! (src/crash_window.rs, docs/ARCHITECTURE.md §1 "The fatal surface").
-//! Nothing crashes: the buttons print what they would do (Copy really
-//! copies). Windows only.
+//! The crash dialog's window on its own, for a look at it (src/crash_window.rs). Nothing crashes:
+//! the buttons print what they would do (Copy really copies). Windows only.
 //!
 //! ```text
 //! cargo run -p vn-app --example crash_dialog -- [ru] [light|dark] [owner] [expanded] [embedded] [solid]

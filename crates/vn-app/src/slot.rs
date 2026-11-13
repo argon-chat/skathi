@@ -1,56 +1,33 @@
-//! Where THIS process keeps the files that identify it: the dist slot.
+//! Where this process keeps the files that identify it: the dist slot.
 //!
-//! One place, because three subsystems have to agree on it and two of them now
-//! exist in builds the third does not:
+//! One place, because the dev transport (`crate::dev`, dev builds only: `manifest.json`,
+//! `changes.json`, module scripts), the devtools listener (`crate::devtools`: publishes
+//! `devtools.json`, scans its siblings) and the embedded inspector (`--target`) must agree on it.
 //!
-//! * the dev transport reads `manifest.json` / `changes.json` / the module
-//!   scripts out of it (`crate::dev`, `not(feature = "prod")` only);
-//! * the devtools listener publishes its handshake `devtools.json` into it, and
-//!   discovery scans its siblings (`crate::devtools`, `cfg(vn_devtools)`);
-//! * the embedded inspector is pointed at a slot by `--target`.
-//!
-//! `--features prod` is the build where those two sets stop overlapping: there
-//! is no `dist/`, no manifest and no HMR, but there IS a devtools port that has
-//! to be discoverable. Until m25 the slot degraded to the exe's own directory —
-//! which put a `devtools.json` beside an installed `Hello.exe` (a folder the
-//! user may not be able to write, and one two copies of the app SHARE, so the
-//! second instance overwrote the first one's handshake). Now a packaged exe's
-//! slot is
+//! A packaged exe has no `dist/`, but its devtools port must be discoverable, so its slot is
 //!
 //! ```text
 //!   %TEMP%\vue-native\apps\<vn.config name>\<pid>\devtools.json
 //! ```
 //!
-//! — per app (the `name` that also keys its storage, docs/STORAGE.md §3), per
-//! instance, always writable, and pruned of dead instances on the way in
-//! (docs/DEVTOOLS.md "Handshake").
+//! per app (the `name` that also keys its storage), per instance, always writable (unlike the exe's
+//! own folder, which two copies of the app would share), and pruned of dead instances on the way in.
 
 use std::path::{Path, PathBuf};
 
-/// The compile-time default: the dev builder's output directory.
-///
-/// Only a dev build has one, which is also the only build that reads it — a
-/// prod host derives its slot from its payload. `cfg`'d rather than
-/// `allow(dead_code)`'d so the constant is genuinely absent rather than
-/// silently unused.
+/// The compile-time default: the dev builder's output directory. Only a dev build has one; `cfg`'d
+/// rather than `allow(dead_code)`'d so it is genuinely absent otherwise.
 #[cfg(not(feature = "prod"))]
 const DEV_DIST: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../packages/vue-native/dist"
 );
 
-/// This process's slot directory.
+/// This process's slot directory. `VN_DIST` wins everywhere: it points one exe at another app's
+/// build output and keeps every parallel host (the e2e slot pool, the inspector itself) addressable.
 ///
-/// `VN_DIST` wins everywhere — it is what points one exe at another app's build
-/// output, and it is how every parallel host in this repo (the e2e slot pool,
-/// the two-window voice demo, the inspector itself) stays independently
-/// addressable.
-///
-/// `prod` + `no-devtools` is the one build with no caller at all: no dev
-/// transport to read a manifest, no listener to publish a handshake. The
-/// function stays rather than being `cfg`'d away, because it is the definition
-/// of "this process's slot" and a build that happens to ask nothing of it is
-/// not a reason to make the definition conditional.
+/// `prod` + `no-devtools` has no caller; the function stays rather than being `cfg`'d away, as it
+/// is the definition of "this process's slot".
 #[cfg_attr(all(feature = "prod", not(vn_devtools)), allow(dead_code))]
 pub fn dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("VN_DIST").filter(|v| !v.is_empty()) {
@@ -96,26 +73,19 @@ fn prod_dir() -> &'static PathBuf {
     })
 }
 
-/// Deletes the sibling slot directories of processes that are no longer
-/// running.
+/// Deletes the sibling slot directories of processes that are no longer running.
 ///
-/// A host that CRASHES leaves its slot behind. That is not a disk-space problem
-/// — it is 60 bytes — it is a DISCOVERY problem: those slots are siblings, so
-/// every later scan lists half a dozen dead instances (`targets_json`). Pruning
-/// on the way in keeps the list to what is actually running, and it is the one
-/// moment we are certainly allowed to touch that directory.
+/// A crashed host leaves its slot behind, which is a discovery problem: later scans
+/// (`targets_json`) would list dead instances. Pruning on the way in is the one moment we may touch
+/// that directory. "No longer running":
 ///
-/// "No longer running":
+/// * a slot with a handshake is answered by its port, as `read_target` does: a pid can be recycled,
+///   a refused connect on loopback cannot lie;
+/// * a slot with no handshake and a pid for a name (`apps\<name>\<pid>`, or an inspector's
+///   `devtools\<parent pid>` before its child has published) is answered by the pid, which a live
+///   process keeps even with devtools turned off.
 ///
-/// * a slot WITH a handshake is answered by its PORT, as `read_target` does: a
-///   pid can be recycled, a refused connect on loopback cannot lie, and it is
-///   instant;
-/// * a slot with NO handshake and a pid for a name (a packaged app's
-///   `apps\<name>\<pid>`, or an inspector's `devtools\<parent pid>` before its
-///   child has published) is answered by the pid — a live process keeps it
-///   even if it has turned its devtools off.
-///
-/// Anything else is left alone: it is not ours to judge.
+/// Anything else is left alone.
 #[cfg_attr(not(vn_devtools), allow(dead_code))]
 pub fn prune_dead_slots(keep: &Path) {
     let Some(root) = keep.parent() else { return };
@@ -194,9 +164,7 @@ mod tests {
     #[cfg(not(feature = "prod"))]
     #[test]
     fn the_dev_default_is_the_builders_output_directory() {
-        // Not asserting the absolute path (it embeds the checkout), only that
-        // the two halves agree about the name — `dev.rs` used to own this
-        // constant and `devtools` reached into it.
+        // Only that the two halves agree about the name; the absolute path embeds the checkout.
         assert!(super::DEV_DIST.ends_with("packages/vue-native/dist"));
     }
 

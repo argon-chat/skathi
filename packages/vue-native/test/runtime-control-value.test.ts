@@ -1,10 +1,6 @@
-// Form-control `value` / `checked` as real accessors (m26 fixes, URGENT 1).
-//
-// reka-ui's VisuallyHiddenInputBubble (Checkbox / Switch / RadioGroup in a
-// form) and BubbleSelect set a control's value through the PROTOTYPE's
-// descriptor and dispatch `input` / `change` themselves. With tag classes that
-// had no `value` member that was `undefined.set` — the Argon client crashed
-// right after sign-in ("Object.getOwnPropertyDescriptor(u,"value").set").
+// Form-control `value` / `checked` as real accessors: reka-ui's VisuallyHiddenInputBubble and BubbleSelect set a
+// control's value through the prototype's descriptor and dispatch `input` / `change` themselves, which needs a
+// `value` member on the tag classes.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime } from "./runtime-harness";

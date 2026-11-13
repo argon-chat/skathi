@@ -1,11 +1,3 @@
-/* Argon's message row (apps/client MessageItem.vue), the utilities spelled out:
-   a row of avatar and body, the body a column capped at 85%, the bubble an
-   `inline-flex` column inside a flex row, and the text bubble `break-words
-   whitespace-pre-wrap max-w-[520px]`. UrlSegment.vue adds
-   `[overflow-wrap:anywhere]` to a link. */
-
-/* Tailwind's preflight, which Argon has: the bubble's `max-w-[520px]` is
-   its border box. */
 *,
 *::before,
 *::after {
@@ -15,8 +7,8 @@ body {
   margin: 0;
   background: #313338;
 }
-/* Three stacks side by side, so the whole fixture fits the window: the
-   messages, the one-property boxes, the fit-content probes. */
+/* Three stacks side by side, so the whole fixture fits the window: the messages, the one-property
+   boxes, the fit-content probes. */
 .page {
   display: flex;
   align-items: flex-start;
@@ -93,7 +85,6 @@ body {
   font-weight: 600;
 }
 
-/* Fixed-width boxes, one property each. */
 .box {
   width: 120px;
   font-size: 14px;
@@ -133,7 +124,6 @@ body {
 .no-hyphens {
   hyphens: none;
 }
-/* min-content: a row that only fits if the text's min-content allows it. */
 .mc-row {
   display: flex;
   width: 120px;
@@ -143,8 +133,8 @@ body {
   background: #404249;
   line-height: 20px;
 }
-/* fit-content: a flex column that does not stretch its items sizes each
-   between its min-content and max-content, at the room it has. */
+/* fit-content: a flex column that does not stretch its items sizes each between its min-content
+   and max-content, at the room it has. */
 .fc {
   display: flex;
   flex-direction: column;

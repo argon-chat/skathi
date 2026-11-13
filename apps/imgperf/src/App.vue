@@ -1,23 +1,11 @@
 <script setup lang="ts">
-// imgperf — the <img> performance harness (milestone 10, track D).
-//
-// Every scenario is a tab; switching tabs calls __vn_perf_mark(), which flushes
-// the host profiler's window and relabels the following seconds, so the log
-// reads as one block per scenario. Run with:
-//
-//   VN_PERF=1 VN_WINDOW=1280x900 VN_DIST=.../dist-imgperf vn-app-img.exe
-//
-// Nothing here is vue-native-specific: it is the same template a browser would
-// render, which is the whole point of the compat policy.
+// Every scenario is a tab; switching tabs calls __vn_perf_mark(), which flushes the host
+// profiler's window and relabels the following seconds, so the log reads as one block per
+// scenario.
 import { ref, computed, onMounted, onUnmounted } from "vue";
 
 // `__vn_perf_mark` exists only under VN_PERF=1, so the guard is real.
 const mark = (name: string) => globalThis.__vn_perf_mark?.(name);
-// `__vn_log` is the app host's; a bare engine has no such global. protocol.d.ts
-// declares it as a plain `declare function`, i.e. always present, which
-// contradicts its own doc comment ("Present in the app host; absent in bare
-// engines") — so the optional call below has to reach for it off `globalThis`.
-// Reported; the fix is a `declare var … | undefined` there.
 const log = (msg: string) =>
   (globalThis as { __vn_log?: (m: string) => void }).__vn_log?.(msg);
 
@@ -25,12 +13,8 @@ const pad = (n: number) => String(n).padStart(2, "0");
 const thumb = (i: number) => `assets/thumbs/t${pad(i % 50)}.png`;
 const photo = (i: number) => `assets/photos/p${pad(i % 50)}.png`;
 
-// (a) 400 nodes drawn from 50 distinct files — every file after the first 50
-//     uses is a CACHE HIT, which is the gallery-scroll case.
 const grid400 = Array.from({ length: 400 }, (_, i) => thumb(i));
-// (b) 50 nodes, 50 distinct 512px files — 50 real decodes, no hits.
 const grid50 = Array.from({ length: 50 }, (_, i) => photo(i));
-// (c) a long scrollbox of mixed sizes.
 const scrollRows = Array.from({ length: 120 }, (_, i) => ({
   id: i,
   a: thumb(i * 7),
@@ -38,13 +22,8 @@ const scrollRows = Array.from({ length: 120 }, (_, i) => ({
   c: thumb(i * 13 + 5),
 }));
 
-// The control for (a): 400 plain <div>s with the same box and a flat colour.
-// Same node count, same layout, no image element — the only way to tell
-// "images are expensive" apart from "400 nodes are expensive".
 const divs400 = Array.from({ length: 400 }, (_, i) => `hsl(${(i * 37) % 360} 60% 45%)`);
 
-/** Every scenario the harness can be on — also the key set of `counts` below,
- *  which is what the tab strip's node-count readout indexes. */
 type Tab =
   | "idle"
   | "grid400"
@@ -69,9 +48,6 @@ const TABS: Tab[] = [
 
 const tab = ref<Tab>("idle");
 const setTab = (t: Tab) => {
-  // engine.d.ts declares `requestAnimationFrame`/`cancelAnimationFrame`
-  // optional — the unit-test harness has no frame pump. Under vn-app they are
-  // the host's, driven once per PAINTED frame, so they are always there.
   if (tab.value === "pan" && t !== "pan") {
     cancelAnimationFrame!(panRaf);
     panRaf = 0;
@@ -82,9 +58,6 @@ const setTab = (t: Tab) => {
   if (t === "pan" && !panRaf) panRaf = requestAnimationFrame!(panTick);
 };
 
-// (d) v-for swap stress: replace the whole list every 500ms for 10s. Keyed by
-//     src, so Vue unmounts and remounts nodes rather than patching one prop —
-//     node churn plus decode churn.
 const churnPool = [...Array(50).keys()].map(thumb).concat([...Array(50).keys()].map(photo));
 const churnList = ref(churnPool.slice(0, 60));
 let churnTimer: number | undefined;
@@ -116,11 +89,8 @@ onUnmounted(() => {
   if (panRaf) cancelAnimationFrame!(panRaf);
 });
 
-// (c2) "pan": a virtualised window sliding over 400 distinct images at frame
-// rate. It is what a scroll costs MINUS gpui's scroll-offset machinery — new
-// images enter every frame, so it isolates decode + atlas upload under
-// continuous motion. (The real wheel-driven scrollbox is the `scroll` tab; it
-// needs input, which a fullscreen-occluded window does not reliably get.)
+// It is what a scroll costs MINUS gpui's scroll-offset machinery — new images enter every frame,
+// so it isolates decode + atlas upload under continuous motion.
 const panPool = Array.from({ length: 400 }, (_, i) =>
   i % 4 === 0 ? photo(i) : thumb(i),
 );
@@ -134,15 +104,8 @@ const panTick = () => {
   panRaf = requestAnimationFrame!(panTick);
 };
 
-// (e) one 2048px source, five object-fit values, one box size.
 const fits = ["fill", "contain", "cover", "scale-down", "none"];
 
-// ---------------------------------------------------------------------------
-// The director. gpui hit-tests a click against the hovered hitbox, and a window
-// buried under a fullscreen app does not stay hovered — so the harness drives
-// ITSELF and the log is reproducible without any input at all. Buttons still
-// work; the first click stops the director.
-// ---------------------------------------------------------------------------
 const SEQUENCE: [Tab, number][] = [
   ["idle", 6000],
   ["divs400", 8000],
@@ -159,8 +122,6 @@ const auto = ref(true);
 const runSequence = (i: number) => {
   if (!auto.value) return;
   if (i >= SEQUENCE.length) {
-    // Loop: the visual scenarios have to stay on screen long enough to be
-    // screenshotted, and a second pass is a free repeatability check.
     log("director: sequence done, looping");
     i = 0;
   }
@@ -175,12 +136,8 @@ const stopDirector = () => {
   directorTimer = undefined;
 };
 onMounted(() => {
-  // VN_SCENARIO=<tab> pins one screen for the whole process — one scenario per
-  // launch is what makes a working-set delta attributable to anything.
-  // `VN_SCENARIO` is an arbitrary string off the environment, so it is CHECKED
-  // against the tab list rather than trusted. It used to be passed straight to
-  // `setTab`, and a typo ("gird400") silently left the harness on the compat
-  // pane — the `v-else` — and logged a scenario name that never ran.
+  // `VN_SCENARIO` is an arbitrary string off the environment, so it is CHECKED against the tab
+  // list rather than trusted.
   const pinned = globalThis.__VN_SCENARIO__;
   if (pinned) {
     auto.value = false;
@@ -200,8 +157,6 @@ onMounted(() => {
   setTimeout(() => runSequence(0), 1500);
 });
 
-// Compat corner: every src form in one place.
-// A real 16x16 RGB ramp, so this cell proves the decode rather than the error path.
 const DATA_PNG =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACx" +
   "jwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAH1SURBVDhPFczBFEUhAADRhxBCCCGEEEIIIYQQQgghtJxlCCFkMP/8C3C/78Pw" +
@@ -243,28 +198,24 @@ const counts = computed(() => ({
       <p class="lead">the SVG above goes through gpui's resvg path, from the same img() element.</p>
     </div>
 
-    <!-- (a) 400 nodes / 50 unique files -->
     <div v-else-if="tab === 'grid400'" class="pane scroller">
       <div class="wrap">
         <img v-for="(s, i) in grid400" :key="i" :src="s" alt="" class="thumb" />
       </div>
     </div>
 
-    <!-- control: 400 divs, no images -->
     <div v-else-if="tab === 'divs400'" class="pane scroller">
       <div class="wrap">
         <div v-for="(c, i) in divs400" :key="i" class="thumb" :style="{ backgroundColor: c }"></div>
       </div>
     </div>
 
-    <!-- (b) 50 unique 512px files -->
     <div v-else-if="tab === 'grid50'" class="pane scroller">
       <div class="wrap">
         <img v-for="(s, i) in grid50" :key="i" :src="s" alt="" class="photo" />
       </div>
     </div>
 
-    <!-- (c) long scrollbox, mixed sizes -->
     <div v-else-if="tab === 'scroll'" class="pane scroller">
       <div v-for="row in scrollRows" :key="row.id" class="row">
         <img :src="row.a" alt="" class="thumb" />
@@ -274,14 +225,12 @@ const counts = computed(() => ({
       </div>
     </div>
 
-    <!-- (c2) virtualised pan: a 60-image window sliding at frame rate -->
     <div v-else-if="tab === 'pan'" class="pane scroller">
       <div class="wrap">
         <img v-for="(s, i) in panList" :key="i" :src="s" alt="" class="thumb" />
       </div>
     </div>
 
-    <!-- (d) v-for swap stress -->
     <div v-else-if="tab === 'churn'" class="pane scroller">
       <div class="controls">
         <button class="btn" @click="startChurn">shuffle every 500ms for 10s</button>
@@ -293,7 +242,6 @@ const counts = computed(() => ({
       </div>
     </div>
 
-    <!-- (e) object-fit on one 2048px source -->
     <div v-else-if="tab === 'fit'" class="pane scroller">
       <div class="fits">
         <div v-for="f in fits" :key="f" class="fitcell">
@@ -307,7 +255,6 @@ const counts = computed(() => ({
       </div>
     </div>
 
-    <!-- src forms + failure modes -->
     <div v-else class="pane scroller">
       <div class="compat">
         <div class="cell"><b>data: png</b><img :src="DATA_PNG" alt="data png" class="one" /></div>

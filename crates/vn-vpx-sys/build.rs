@@ -1,27 +1,19 @@
-//! Compiles the vendored libvpx VP9 decoder with `cc`.
+//! Compiles the vendored libvpx VP9 decoder with `cc`: no `configure`, `make`, nasm or fetching.
+//! The headers configure and rtcd.pl would generate are checked in under `config/`
+//! (`tools/vendor-libvpx.ts` regenerates them) and `sources.txt` lists the C files.
 //!
-//! No `configure`, `make`, nasm or yasm runs here, and nothing is fetched: the
-//! headers configure and rtcd.pl would generate are checked in under
-//! `config/` (`tools/vendor-libvpx.ts` regenerates them), and `sources.txt`
-//! lists the C files. Two configurations:
+//! * `x86_64-msvc`: SSE2/SSSE3/AVX2 intrinsics with runtime CPU detection. libvpx's assembly is
+//!   not built: rtcd entries with only an asm version point at C (`config/asm-only.txt`), and the
+//!   asm helpers the intrinsics call are `csrc/vn_vpx_asm_shim.c`.
+//! * `generic`: plain C, every other target. `VN_VPX_CONFIG=generic` forces it on x86_64 too, as
+//!   the reference the intrinsics build must match bit for bit (VENDOR.md).
 //!
-//! * `x86_64-msvc` — x86_64 with MSVC: libvpx's SSE2/SSSE3/AVX2 intrinsics with
-//!   runtime CPU detection. libvpx's assembly is not built: the rtcd entries
-//!   with only an asm version point at C (`config/asm-only.txt`), and the asm
-//!   helpers the intrinsics call are `csrc/vn_vpx_asm_shim.c`.
-//! * `generic` — every other target: plain C.
+//! Every C file is compiled with `config/prefix/<configuration>.h` force-included, renaming each
+//! symbol libvpx defines to `vnvpx_*` so this copy links next to libwebrtc's libvpx
+//! (`tools/prefix-symbols.ts` generates it; `VN_VPX_PREFIX=0` omits it, for that tool only).
 //!
-//! `VN_VPX_CONFIG=generic` forces the C build on x86_64 too. The tests use it
-//! as the reference the intrinsics build must match bit for bit (VENDOR.md).
-//!
-//! Every C file is compiled with `config/prefix/<configuration>.h`
-//! force-included: it renames each symbol libvpx defines to `vnvpx_*`, so this
-//! copy links next to libwebrtc's libvpx (`tools/prefix-symbols.ts` generates
-//! it; `VN_VPX_PREFIX=0` leaves it out, for that tool only: the Rust side
-//! links to the prefixed names).
-//!
-//! libvpx is always compiled optimised, whatever the cargo profile: a debug
-//! build of the decoder is ten times slower and nobody steps through it.
+//! libvpx is always compiled optimised, whatever the cargo profile: a debug build of the decoder is
+//! ten times slower.
 
 use std::env;
 use std::path::{Path, PathBuf};

@@ -1,15 +1,8 @@
 //! Production boot: the app comes out of the payload stamped into this exe.
 //!
-//! Enabled by `--features prod`. There is no manifest, no module registry, no
-//! watcher and no polling — [`poll_frame`] is an empty inline function, so the
-//! frame pump costs nothing extra.
-//!
-//! Until m25 this file `include_str!`d `packages/vue-native/dist/app.prod.js`,
-//! `dist/window.json` and a hand-rolled table of `apps/hello/assets/**`, which
-//! meant the prod exe WAS apps/hello: every other app needed a Rust edit and a
-//! full engine build. Now a prod build is a BARE HOST and `vn build` stamps an
-//! app into a copy of it (docs/PACKAGING.md); everything app-specific reads the
-//! payload ([`crate::payload`]):
+//! Enabled by `--features prod`. There is no manifest, module registry, watcher or polling:
+//! [`poll_frame`] is an empty inline function. Everything app-specific reads the payload
+//! ([`crate::payload`]):
 //!
 //! | what | from |
 //! |---|---|
@@ -19,8 +12,7 @@
 //! | `fetch()` / `Image` | the content provider below, over the payload's assets |
 //! | `<img>` / `<lottie>` / `<video>` | `vn_tree::set_asset_store` (lib.rs) — the same lookup |
 //!
-//! The inspector bundle and the preludes stay `include_str!`: they belong to
-//! the host, not to the app.
+//! The inspector bundle and the preludes stay `include_str!`: they belong to the host, not the app.
 
 use vn_runtime::JsRuntime;
 
@@ -129,13 +121,11 @@ pub fn launch_config() -> Option<String> {
     payload::get()?.meta.launch.clone()
 }
 
-/// The app's name — see [`crate::dev::app_name`] for what it is for.
+/// The app's name; see [`crate::dev::app_name`] for what it is for.
 ///
-/// The payload's `name`, resolved by `vn build` with dev's own chain
-/// (`vn.config.json` `"name"`, else the app directory). It beats the exe's file
-/// stem: renaming `Hello.exe` must not lose a user's data, and before m25 every
-/// prod exe was `vn-app.exe` and so every prod app shared ONE storage folder
-/// (docs/STORAGE.md §3 row 4, owner decision m25). `VN_APP_NAME` still wins.
+/// The payload's `name`, resolved by `vn build` with dev's own chain (`vn.config.json` `"name"`, else
+/// the app directory). It beats the exe's file stem, so renaming `Hello.exe` does not lose a user's
+/// data and prod apps do not share one storage folder. `VN_APP_NAME` still wins.
 pub fn app_name() -> Option<String> {
     payload::get()
         .map(|l| l.meta.name.clone())
@@ -145,9 +135,8 @@ pub fn app_name() -> Option<String> {
 /// `<img>`, `<lottie>`, `<video>`, `poster`: resolve relative URLs out of the
 /// payload instead of the disk. Returns whether a store was installed.
 ///
-/// `VN_APP_ROOT` is ignored in a packaged exe — the package IS the document,
-/// and an env var that pointed `<img>` at a directory while `fetch()` kept
-/// reading the payload would be exactly the dev/prod split this replaced.
+/// `VN_APP_ROOT` is ignored in a packaged exe: the package is the document, and an env var pointing
+/// `<img>` at a directory while `fetch()` read the payload would be a dev/prod split.
 pub fn publish_asset_store() -> bool {
     if payload::get().is_none() {
         return false;

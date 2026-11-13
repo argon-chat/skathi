@@ -1,26 +1,3 @@
-// A fixture for packages/vn-test/specs/hit-target.spec.ts (m26, docs/RUNTIME.md
-// §5.18): a mouse event goes to the TOPMOST element under the pointer, whether
-// it listens or not, and bubbles from there. Each area is one shape the old
-// rule ("the innermost box that listens takes it") got wrong:
-//
-// * `#backdrop` listens, `#card` is its SIBLING painted over it and listens for
-//   nothing: a press on the card is not the backdrop's.
-// * `#overlay` closes on `click.self`; `#pic` inside it listens for nothing: a
-//   click on the picture is not the overlay's own.
-// * `#btn` holds `#btn-label`: the click's target is the label.
-// * `#decor` is `pointer-events: none` over the listening `#under`, and
-//   `#decor-auto` inside it opts back in.
-// * `#outside` is positioned below its listening `#parent`'s box.
-// * `#field-cover` lies over `<input id=field>` and listens for nothing.
-// * `#list-cover` lies over the top of the scroll box `#list`.
-// * `#row` holds `#ra` and `#rb`: a press on one and a release on the other
-//   click their common ancestor.
-// * `#clist` holds rows a retained-render cache boundary replays (`#tick`
-//   repaints the window ten times a second): in each, `.c-cover` overlaps the
-//   listening `.c-under` by a negative margin.
-//
-// `__VN_TEST_HIT__.log` records what each listener saw: `<event>:<listener>
-// t=<target id>`. A `document` mousedown listener logs every press's target.
 import { createApp, h, ref } from "vue-native";
 
 const state = { log: [] as string[] };
@@ -46,7 +23,6 @@ setInterval(() => tick.value++, 100);
 const App = {
   render: () =>
     h("div", { id: "page", style: { position: "relative", width: "100%", height: "100%", background: "#fff" } }, [
-      // A: a backdrop and a sibling card over it.
       h("div", {
         id: "backdrop",
         style: abs(10, 10, 150, 90, { background: "#ddd" }),
@@ -56,7 +32,6 @@ const App = {
       h("div", { id: "card", style: abs(30, 30, 110, 50, { background: "#fff" }) }, [
         h("span", { id: "card-text" }, "card"),
       ]),
-      // B: `click.self` around a picture.
       h(
         "div",
         {
@@ -68,37 +43,30 @@ const App = {
         },
         [h("div", { id: "pic", style: { width: "40px", height: "40px", margin: "25px", background: "#88a" } })],
       ),
-      // C: a button with a label inside.
       h(
         "button",
         { id: "btn", style: abs(330, 10, 120, 40), onClick: note("btn") },
         [h("span", { id: "btn-label" }, "Label")],
       ),
-      // D: pointer-events: none over a listener, and auto inside it.
       h("div", { id: "under", style: abs(10, 110, 150, 60, { background: "#dfd" }), onClick: note("under") }),
       h("div", { id: "decor", style: abs(10, 110, 150, 60, { pointerEvents: "none", background: "rgba(0,0,0,0.1)" }) }, [
         h("div", { id: "decor-auto", style: abs(110, 0, 40, 60, { pointerEvents: "auto", background: "#afa" }) }),
       ]),
-      // E: a child positioned outside its listening parent's box.
       h("div", { id: "parent", style: abs(170, 110, 150, 30, { background: "#fdd" }), onClick: note("parent") }, [
         h("div", { id: "outside", style: abs(0, 40, 150, 20, { background: "#faa" }) }),
       ]),
-      // F: a text field under a cover.
       h("input", { id: "field", value: "field", style: abs(330, 110, 120, 28) }),
       h("div", { id: "field-cover", style: abs(330, 110, 120, 28, { background: "rgba(0,0,255,0.15)" }) }),
-      // G: a scroll box, the top of it covered.
       h(
         "div",
         { id: "list", style: abs(10, 190, 150, 80, { overflow: "auto", background: "#eef" }) },
         Array.from({ length: 12 }, (_, i) => h("div", { id: `line${i + 1}`, style: { height: "24px" } }, `Line ${i + 1}`)),
       ),
       h("div", { id: "list-cover", style: abs(10, 190, 150, 30, { background: "rgba(255,0,0,0.2)" }) }),
-      // H: a press and a release on two children.
       h("div", { id: "row", style: abs(170, 190, 150, 40, { display: "flex" }), onClick: note("row") }, [
         h("div", { id: "ra", style: { width: "75px", height: "40px", background: "#ffd" } }),
         h("div", { id: "rb", style: { width: "75px", height: "40px", background: "#dff" } }),
       ]),
-      // J: rows a cache boundary replays.
       h(
         "div",
         { id: "clist", style: abs(330, 190, 150, 160) },
