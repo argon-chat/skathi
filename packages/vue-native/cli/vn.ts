@@ -17,6 +17,7 @@ import {
 } from "./config";
 import { dev } from "./dev";
 import { addHost, buildHost, CLI_VERSION, HostError, hostInfo, resolveHost } from "./host";
+import { fetchHost } from "./host-fetch";
 import { create } from "./create";
 import { currentPlatform, parsePlatform } from "./platform";
 
@@ -29,6 +30,9 @@ usage
   vn dev   [app] [--exe <h>]   the in-repo dev loop: build.ts --watch + the dev host (HMR)
   vn host info [exe]           what a host exe says about itself (--vn-host-info)
   vn host path [selection]     which host \`vn build\` would stamp
+  vn host fetch [selection | --variant both]
+                               download prebuilt hosts of this version from its GitHub
+                               release into the local cache (vn build does it on demand)
   vn host add <exe>            verify a prod host and copy it into the local cache
   vn host build [selection | --variant both]
                                maintainers, in a checkout: cargo-build the bare host(s)
@@ -41,7 +45,8 @@ build options
   --out <dir>                  output directory (default <app>/dist)
   --config <path>              external config; entry and relative assets stay under [app]
   --host <exe>                 the bare host to stamp (default: VN_HOST, the checkout's
-                               target/…/release/vn-app.exe, then the local cache)
+                               target/…/release/vn-app.exe, the local cache, then a
+                               download from the release; VN_HOST_OFFLINE=1 skips that)
   selection — which engine parts the host carries (default: vn.config.json
   "windows": "without" / "features" / "host", else every part). One of:
   --without audio,clipboard    leave these parts out
@@ -235,6 +240,11 @@ async function main(argv: string[]): Promise<number> {
       addHost(arg, console.log);
       return 0;
     }
+    if (sub === "fetch") {
+      const v = flags.variant === "both" ? "both" : (variantOf(flags) ?? "both");
+      for (const variant of v === "both" ? VARIANTS : [v]) await fetchHost({ variant, log: console.log });
+      return 0;
+    }
     if (sub === "build") {
       const v = flags.variant === "both" ? "both" : (variantOf(flags) ?? "both");
       for (const variant of v === "both" ? VARIANTS : [v]) {
@@ -243,7 +253,7 @@ async function main(argv: string[]): Promise<number> {
       }
       return 0;
     }
-    throw new HostError("vn host info|path|add|build");
+    throw new HostError("vn host info|path|fetch|add|build");
   }
 
   if (command === "create") {

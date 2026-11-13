@@ -3,9 +3,22 @@
 Desktop-app framework: **Vue 3** SFCs → **gpui** (Zed's GPU UI, D3D11 on Windows) with the
 JS running in **JavaScriptCore** via [redjs](https://github.com/argon-chat/redjs)
 (Bun's JSC prebuilt, ~3 ns host calls). Windows-first (native Acrylic/Mica window chrome),
-macOS later.
+with macOS and Linux hosts.
 
-## Prerequisites
+## Packaging an app
+
+`vn build` bundles an app and stamps it onto a prebuilt host; it needs bun, not Rust. The host
+comes from the GitHub release of the CLI's version (`vn host fetch`, or on demand) and is cached;
+`--host <exe>` stamps one of your own.
+
+```sh
+vn create my-app
+vn build my-app
+```
+
+## Building from source
+
+### Prerequisites
 
 - Rust 1.97.1 MSVC (pinned by `rust-toolchain.toml`), VS Build Tools + Windows SDK
 - LLVM (`clang-cl` on PATH) — redjs compiles its JSC glue with it
@@ -13,7 +26,7 @@ macOS later.
 - `git submodule update --init` then `vendor/redjs/setup.ps1` (fetches the ~1.1 GB
   bun-webkit prebuilt); the lean build vue-native uses needs no vendored yoga
 
-## Dev loop
+### Dev loop
 
 ```powershell
 cd packages/vue-native

@@ -15,7 +15,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { join, relative, resolve, sep } from "node:path";
 import { collectAssets, type AssetFile } from "./assets";
 import { loadAppConfig, partsLeftOut, variantWarnings, type AppConfig, type PackConfig, type Variant } from "./config";
-import { CLI_VERSION, PKG_DIR, resolveHost, type ResolvedHost } from "./host";
+import { CLI_VERSION, PKG_DIR, type ResolvedHost } from "./host";
+import { resolveOrFetchHost } from "./host-fetch";
 import { iconImagesFrom } from "./icon";
 import {
   entitlements,
@@ -309,7 +310,13 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   // The host first: a missing or mismatched host should fail before a bundle is spent on it.
   const host = options.payloadOnly
     ? null
-    : resolveHost({ host: options.host, variant, allowMismatch: options.allowHostMismatch, platform, log });
+    : await resolveOrFetchHost({
+        host: options.host,
+        variant,
+        allowMismatch: options.allowHostMismatch,
+        platform,
+        log,
+      });
   if (host) {
     log(
       `[vn] host: ${host.exe} (${host.source}; ${host.info.variant}, vue-native ${host.info.vueNative}, ${host.info.profile})`,

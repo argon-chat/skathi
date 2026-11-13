@@ -4,8 +4,8 @@
 //
 // Resolution, first hit wins: 1. `--host <exe>` or `VN_HOST`; 2. in-repo
 // target/x86_64-pc-windows-msvc/release/vn-app.exe, when that is a prod host of this variant and
-// version; 3. the local cache (`vn host add <exe>` or `vn host build`); 4. an error naming the three.
-// Paths for macOS are in platform.ts.
+// version; 3. the local cache (`vn host add <exe>`, `vn host build`, or a download from this
+// version's GitHub release: host-fetch.ts); 4. an error naming them. Paths for macOS are in platform.ts.
 //
 // A host for another OS cannot be run to ask what it is: only `--host` / `VN_HOST` names one, its
 // format is sniffed, and what it is comes from a `host.json` beside it or is taken on trust, with a warning.
@@ -275,6 +275,7 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
       tried.map((t) => `  - ${t}`).join("\n") +
       "\nSupply one of:\n" +
       `  ${`--host <${hostsFor(platform).exeFile}>`.padEnd(21)}(or VN_HOST=<exe>)   a prod host built from this version\n` +
+      `  vn host fetch                              download it from the vue-native ${CLI_VERSION} release\n` +
       "  vn host add <exe>                          import one into the local cache\n" +
       (REPO_ROOT
         ? options.variant === "standard" || options.variant === "no-devtools"
@@ -311,24 +312,42 @@ function cargo(): string {
   throw new HostError("cargo is not on PATH — building a host needs the Rust toolchain (vn build does not)");
 }
 
+export const hostCargoArgs = (variant: Variant): string[] => [
+  "build",
+  "--release",
+  "-p",
+  "vn-app",
+  ...hostsFor(currentPlatform()).cargoTarget,
+  ...cargoFeatureArgs(variant),
+];
+
+/** MAINTAINERS ONLY, in a checkout: cargo-builds the bare host for `variant` into the checkout's target/; returns its path. */
+export function cargoBuildHost(
+  variant: Variant,
+  log: (line: string) => void = console.log,
+): { exe: string; ms: number } {
+  if (!REPO_ROOT || !REPO_RELEASE_EXE) {
+    throw new HostError(
+      "vn host build runs from a vue-native checkout; elsewhere, use vn host fetch or vn host add <exe>",
+    );
+  }
+  const args = hostCargoArgs(variant);
+  log(`[vn] cargo ${args.join(" ")}`);
+  const t0 = performance.now();
+  const r = spawnSync(cargo(), args, { cwd: REPO_ROOT, stdio: "inherit" });
+  if (r.status !== 0) throw new HostError(`cargo ${args.join(" ")} failed (exit ${r.status})`);
+  return { exe: REPO_RELEASE_EXE, ms: Math.round(performance.now() - t0) };
+}
+
 /** MAINTAINERS ONLY, in a checkout: builds the bare host for `variant` and imports it into the cache. */
 export function buildHost(
   variant: Variant,
   log: (line: string) => void = console.log,
 ): { path: string; info: HostInfo; ms: number } {
-  if (!REPO_ROOT || !REPO_RELEASE_EXE) {
-    throw new HostError("vn host build runs from a vue-native checkout; elsewhere, use vn host add <exe>");
-  }
-  const features = cargoFeatureArgs(variant);
-  const args = ["build", "--release", "-p", "vn-app", ...hostsFor(currentPlatform()).cargoTarget, ...features];
-  log(`[vn] cargo ${args.join(" ")}`);
-  const t0 = performance.now();
-  const r = spawnSync(cargo(), args, { cwd: REPO_ROOT, stdio: "inherit" });
-  if (r.status !== 0) throw new HostError(`cargo ${args.join(" ")} failed (exit ${r.status})`);
-  const ms = Math.round(performance.now() - t0);
-  const added = addHost(REPO_RELEASE_EXE, log);
+  const { exe, ms } = cargoBuildHost(variant, log);
+  const added = addHost(exe, log);
   if (added.info.variant !== variant) {
-    throw new HostError(`built ${features.join(" ")} but the exe reports variant ${added.info.variant}`);
+    throw new HostError(`built the ${variant} variant but the exe reports ${added.info.variant}`);
   }
   return { ...added, ms };
 }

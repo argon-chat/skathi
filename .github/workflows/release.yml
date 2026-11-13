@@ -1,0 +1,119 @@
+name: Release
+
+# A `v<version>` tag publishes the prebuilt bare hosts `vn build` downloads (cli/host-fetch.ts):
+# every published variant for Windows x64 and macOS arm64, gzipped, plus hosts.json.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "An existing tag, v<packages/vue-native version>"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  hosts:
+    name: Hosts (${{ matrix.platform }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: windows
+            os: windows-latest
+          - platform: macos
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+          submodules: recursive
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Install JS dependencies
+        working-directory: packages/vue-native
+        run: bun install --frozen-lockfile
+      - name: Check the tag
+        run: bun packages/vue-native/scripts/release-hosts.ts --check-tag "$TAG"
+      - name: Put clang-cl on PATH
+        if: matrix.platform == 'windows'
+        run: command -v clang-cl || echo "C:\\Program Files\\LLVM\\bin" >> "$GITHUB_PATH"
+      - name: Install Xcode's Metal toolchain
+        if: matrix.platform == 'macos'
+        run: xcrun -f metal >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+      - name: Set up Rust
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Add the macOS target
+        if: matrix.platform == 'macos'
+        run: rustup target add aarch64-apple-darwin
+      - name: Cache pinned native dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/redjs/prebuilt
+            vendor/redjs/redjs/cpp/mimalloc
+          key: redjs-native-${{ matrix.platform }}-${{ runner.arch }}-${{ hashFiles('vendor/redjs/pins.txt') }}
+      - name: Fetch and verify native dependencies (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: ./vendor/redjs/setup.ps1
+      - name: Fetch and verify native dependencies (macOS)
+        if: matrix.platform == 'macos'
+        run: bash vendor/redjs/setup.sh
+      - name: Build and pack the hosts
+        working-directory: packages/vue-native
+        run: bun scripts/release-hosts.ts --out ../../release-hosts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hosts-${{ matrix.platform }}
+          path: release-hosts/
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: hosts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hosts-*
+          path: release-hosts
+          merge-multiple: true
+      - name: Install JS dependencies
+        working-directory: packages/vue-native
+        run: bun install --frozen-lockfile
+      - name: Write hosts.json
+        run: bun packages/vue-native/scripts/release-hosts.ts --merge release-hosts
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes --verify-tag
+          gh release upload "$TAG" release-hosts/*.gz release-hosts/hosts.json --repo "$GITHUB_REPOSITORY" --clobber
