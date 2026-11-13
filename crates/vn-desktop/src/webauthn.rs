@@ -159,26 +159,26 @@ pub fn available() -> bool {
     unsafe { WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable() }.is_ok_and(|b| b.as_bool())
 }
 
-fn spawn(token: u32, work: impl FnOnce() -> Result<String, Fail> + Send + 'static) -> String {
+fn spawn(token: u32, work: impl FnOnce() -> Result<String, Fail> + Send + 'static) -> Result<u32, Fail> {
     let started = std::thread::Builder::new().name("vn-webauthn".into()).spawn(move || {
         let r = work();
         finished(token);
         crate::settle(token, r);
     });
     match started {
-        Ok(_) => json!({ "token": token }).to_string(),
-        Err(e) => Fail::new("UnknownError", format!("could not start the request: {e}")).to_sync_json(),
+        Ok(_) => Ok(token),
+        Err(e) => Err(Fail::new("UnknownError", format!("could not start the request: {e}"))),
     }
 }
 
-/// `navigator.credentials.create`: `{ token }`, settled with the attestation.
-pub fn start_create(hwnd: isize, req: Value) -> String {
+/// `navigator.credentials.create`: the token settled with the attestation.
+pub fn start_create(hwnd: isize, req: Value) -> Result<u32, Fail> {
     let token = crate::next_token();
     spawn(token, move || create(hwnd, token, &req))
 }
 
-/// `navigator.credentials.get`: `{ token }`, settled with the assertion.
-pub fn start_get(hwnd: isize, req: Value) -> String {
+/// `navigator.credentials.get`: the token settled with the assertion.
+pub fn start_get(hwnd: isize, req: Value) -> Result<u32, Fail> {
     let token = crate::next_token();
     spawn(token, move || get(hwnd, token, &req))
 }

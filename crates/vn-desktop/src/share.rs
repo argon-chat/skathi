@@ -118,8 +118,8 @@ fn manager(hwnd: HWND) -> windows::core::Result<(IDataTransferManagerInterop, Da
     Ok((interop, m))
 }
 
-/// `{token}` settled when the sheet completes or is dismissed, or `{error, name}`.
-pub fn start(hwnd: isize, req: Request) -> String {
+/// The token settled when the sheet completes or is dismissed.
+pub fn start(hwnd: isize, req: Request) -> Result<u32, Fail> {
     let token = crate::next_token();
     if let Some(prev) = PENDING.with(|p| p.borrow_mut().take()) {
         crate::settle(prev.token, Err(Fail::new("AbortError", "Share canceled")));
@@ -133,10 +133,10 @@ pub fn start(hwnd: isize, req: Request) -> String {
         unsafe { interop.ShowShareUIForWindow(hwnd) }
     })();
     match shown {
-        Ok(()) => serde_json::json!({ "token": token }).to_string(),
+        Ok(()) => Ok(token),
         Err(e) => {
             PENDING.with(|p| p.borrow_mut().take());
-            Fail::new("NotAllowedError", format!("The share sheet could not be shown ({e})")).to_sync_json()
+            Err(Fail::new("NotAllowedError", format!("The share sheet could not be shown ({e})")))
         }
     }
 }

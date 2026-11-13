@@ -400,20 +400,6 @@ declare function __vn_dialog_open(requestJson: VnJson, currentFiles: unknown): V
 /** Save As for a `blob:`/`data:` URL, resolved at the call. Settles `{ saved }` or `{ cancelled }`. */
 declare function __vn_download(url: string, downloadAttribute: string): VnJson;
 declare function __vn_desktop_get_screen_sources(typesJson: string, optionsJson: string): VnJson;
-/** `-1` a flag, `0` none, otherwise the count. Windows only, like the next one. */
-declare function __vn_badge_set(contents: number): void;
-/** Takes or drops the keep-the-screen-on request; false when the system refused. */
-declare function __vn_wake_lock_hold(on: boolean): boolean;
-/** `{ metadata: { title, artist, album, artworkUrl? } | null, playbackState, actions, position }`; `artwork` the image bytes when it is not http(s). Button presses come back as token-0 `kind: "mediasession"` events. */
-declare function __vn_media_session_update(stateJson: string, artwork: ArrayBuffer | undefined): void;
-/** `{ title, text?, url?, files: names }` with the files' bytes in order. `{ token }` settles when the share sheet completes, or fails `AbortError` when dismissed. */
-declare function __vn_share(requestJson: string, buffers: ArrayBuffer[]): VnJson;
-/** Passkeys through the system authenticator. Binary fields are base64url; `{ token }` settles with `{ id, attestationObject, authenticatorData, transports, attachment, publicKey?, publicKeyAlgorithm, residentKey? }`. */
-declare function __vn_webauthn_create(requestJson: string): VnJson;
-/** `{ token }` settling with `{ id, authenticatorData, signature, userHandle?, attachment }`. */
-declare function __vn_webauthn_get(requestJson: string): VnJson;
-declare function __vn_webauthn_cancel(token: number): void;
-declare function __vn_webauthn_available(): boolean;
 
 /** Every SFC's `<style>` block, collected at module-eval time and joined into the first stylesheet by `mount()`. */
 declare var __VN_CSS__: string[] | undefined;

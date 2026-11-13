@@ -27,12 +27,6 @@ import {
 } from "@vue/runtime-core";
 import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/runtime-core";
 import { installDesktop } from "./desktop";
-import { installBadge } from "./badge";
-import { installCredentials } from "./credentials";
-import { installMediaSession } from "./mediasession";
-import { installShare } from "./share";
-import { installWakeLock } from "./wakelock";
-import type { WakeLockDeps } from "./wakelock";
 import "./apphost";
 import type { DesktopApi, DesktopEngine, DesktopFsHost, DesktopSettle, HandleWire } from "./desktop";
 import { adoptCanvas } from "./canvas";
@@ -9929,86 +9923,6 @@ const desktopApi: DesktopApi = installDesktop(globalThis as unknown as Record<st
   activation,
   realm: { vacant, mark },
 });
-
-const installNavigator = (nav: object): void => {
-  const marked = (...names: string[]): void => {
-    for (const n of names) mark((nav as Record<string, unknown>)[n]);
-  };
-  if (typeof __vn_badge_set === "function" && vacant(nav, "setAppBadge")) {
-    installBadge(nav, { set: __vn_badge_set });
-    marked("setAppBadge", "clearAppBadge");
-  }
-  if (typeof __vn_media_session_update === "function" && vacant(nav, "mediaSession")) {
-    installMediaSession(nav, {
-      host: { update: __vn_media_session_update },
-      resolveUrl: (src) => new URL(src, (globalThis as { location?: { href: string } }).location?.href).href,
-      fetchBytes: (url) =>
-        (globalThis.fetch as unknown as (u: string) => Promise<{ arrayBuffer(): Promise<ArrayBuffer> }>)(url).then(
-          (r) => r.arrayBuffer(),
-        ),
-      onAction: (fn) => void desktopEvents.set("mediasession", fn),
-      reportError: (e) => (globalThis as { reportError?: (e: unknown) => void }).reportError?.(e),
-    });
-    marked("mediaSession");
-  }
-  if (typeof __vn_share === "function" && vacant(nav, "share")) {
-    const FileCtor = (globalThis as { File?: abstract new (...args: never[]) => object }).File;
-    installShare(nav, {
-      host: { share: __vn_share },
-      call: desktopCallRaw,
-      resolveUrl: (u) => new URL(u, (globalThis as { location?: { href: string } }).location?.href).href,
-      isFile: (v): v is { name: string; arrayBuffer(): Promise<ArrayBuffer> } =>
-        typeof FileCtor === "function" && v instanceof FileCtor,
-      activation,
-      documentTitle: () => document?.title ?? "",
-      DOMException: (globalThis as unknown as DesktopEngine).DOMException,
-    });
-    marked("share", "canShare");
-  }
-  if (typeof __vn_webauthn_create === "function" && vacant(nav, "credentials")) {
-    installCredentials(nav, {
-      host: {
-        create: __vn_webauthn_create,
-        get: __vn_webauthn_get,
-        cancel: __vn_webauthn_cancel,
-        available: __vn_webauthn_available,
-      },
-      call: desktopCall,
-      pageUrl: () => (globalThis as { location?: { href: string } }).location?.href ?? "",
-      DOMException: (globalThis as unknown as DesktopEngine).DOMException,
-    });
-    marked("credentials");
-  }
-  if (typeof __vn_wake_lock_hold === "function" && vacant(nav, "wakeLock")) {
-    let hidden = false;
-    const hiddenListeners: (() => void)[] = [];
-    const hide = (): void => {
-      hidden = true;
-      for (const fn of hiddenListeners) fn();
-    };
-    (globalThis as unknown as Partial<VnEventTarget>).addEventListener?.("pagehide", hide);
-    const appWindow = globalThis.__VN_WINDOW__?.appWindow;
-    appWindow?.addEventListener("minimize", hide);
-    appWindow?.addEventListener("restore", () => void (hidden = false));
-    installWakeLock(nav, {
-      host: { hold: __vn_wake_lock_hold },
-      engine: globalThis as unknown as WakeLockDeps["engine"],
-      isHidden: () => hidden || appWindow?.isMinimized() === true,
-      onHidden: (fn) => void hiddenListeners.push(fn),
-    });
-    marked("wakeLock");
-  }
-};
-
-if (typeof navigator !== "undefined" && navigator) {
-  try {
-    installNavigator(navigator);
-  } catch (e) {
-    console.warn(
-      `[vue-native] navigator: a system API could not be installed — ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-}
 
 /**
  * Hands a content URL to the system. The caller's allowlist is applied again by the host, so

@@ -35,6 +35,8 @@ pub mod share;
 pub mod shell;
 pub mod tray;
 #[cfg(target_os = "windows")]
+mod web;
+#[cfg(target_os = "windows")]
 pub mod webauthn;
 
 /// A failure JS turns into a rejection: `name` is a DOMException name or `TypeError`.
@@ -231,6 +233,10 @@ unsafe fn src_drain(g: *mut c_void) -> usize {
 }
 
 fn deliver(g: *mut c_void, token: u32, ok: bool, payload: &str, make: Option<Maker>) {
+    #[cfg(target_os = "windows")]
+    if unsafe { web::deliver(g, token, ok, payload) } {
+        return;
+    }
     let dispatcher = DISPATCHER.with(|d| d.get());
     if dispatcher == 0 {
         return;
@@ -542,84 +548,6 @@ host_fn!(fn vn_launch_is_protocol_registered(g, args) {
     Value::boolean(launch::js_is_registered(&scheme)).0
 });
 
-#[cfg(target_os = "windows")]
-host_fn!(fn vn_badge_set(_g, args) {
-    let contents = args.arg(0).as_number().filter(|n| n.is_finite()).unwrap_or(0.0) as i64;
-    if let Some(owner) = dialog::current_owner() {
-        badge::set(owner.hwnd, contents);
-    }
-    Value::undefined().0
-});
-
-#[cfg(target_os = "windows")]
-host_fn!(fn vn_wake_lock_hold(_g, args) {
-    Value::boolean(power::hold_screen(args.arg(0).as_bool().unwrap_or(false))).0
-});
-
-#[cfg(target_os = "windows")]
-host_fn!(fn vn_media_session_update(g, args) {
-    let state: serde_json::Value = serde_json::from_str(&read_arg_string(g, args.arg(0).0)).unwrap_or_default();
-    let artwork = unsafe { vn_runtime::redjs::webapi::util::bufferish(g, args.arg(1).0) }.map(|b| b.to_vec());
-    if let Some(owner) = dialog::current_owner() {
-        if let Err(e) = media_session::update(owner.hwnd, &state, artwork.as_deref()) {
-            advise(&format!("navigator.mediaSession: the system media controls refused the update ({e})"));
-        }
-    }
-    Value::undefined().0
-});
-
-#[cfg(target_os = "windows")]
-host_fn!(fn vn_share(g, args) {
-    use vn_runtime::redjs::webapi::util;
-    let req: serde_json::Value = serde_json::from_str(&read_arg_string(g, args.arg(0).0)).unwrap_or_default();
-    let s = |k: &str| req[k].as_str().map(str::to_string);
-    let names: Vec<String> = req["files"].as_array().map(|a| a.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect()).unwrap_or_default();
-    let buffers = args.arg(1).0;
-    let files = names
-        .into_iter()
-        .enumerate()
-        .map(|(i, name)| {
-            let bytes = unsafe { util::bufferish(g, util::get_i(g, buffers, i as u32)) }.map(|b| b.to_vec()).unwrap_or_default();
-            share::SharedFile { name, bytes }
-        })
-        .collect();
-    let Some(owner) = dialog::current_owner() else {
-        return js_string(&Fail::new("NotAllowedError", "There is no window to share from").to_sync_json());
-    };
-    let request = share::Request { title: s("title").unwrap_or_default(), text: s("text"), url: s("url"), files };
-    js_string(&share::start(owner.hwnd, request))
-});
-
-#[cfg(target_os = "windows")]
-fn webauthn_start(g: *mut c_void, v: u64, start: fn(isize, serde_json::Value) -> String) -> u64 {
-    let req: serde_json::Value = serde_json::from_str(&read_arg_string(g, v)).unwrap_or_default();
-    match dialog::current_owner() {
-        Some(owner) => js_string(&start(owner.hwnd, req)),
-        None => js_string(&Fail::new("NotAllowedError", "There is no window to ask from").to_sync_json()),
-    }
-}
-
-#[cfg(target_os = "windows")]
-host_fn!(fn vn_webauthn_create(g, args) {
-    webauthn_start(g, args.arg(0).0, webauthn::start_create)
-});
-
-#[cfg(target_os = "windows")]
-host_fn!(fn vn_webauthn_get(g, args) {
-    webauthn_start(g, args.arg(0).0, webauthn::start_get)
-});
-
-#[cfg(target_os = "windows")]
-host_fn!(fn vn_webauthn_cancel(_g, args) {
-    webauthn::cancel(arg_id(&args, 0) as u32);
-    Value::undefined().0
-});
-
-#[cfg(target_os = "windows")]
-host_fn!(fn vn_webauthn_available(_g, _args) {
-    Value::boolean(webauthn::available()).0
-});
-
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
         ("__vn_desktop_set_dispatcher", 1, vn_desktop_set_dispatcher as *const _),
@@ -657,18 +585,11 @@ pub fn install(rt: &JsRuntime) {
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);
     }
-    #[cfg(target_os = "windows")]
-    {
-        rt.register("__vn_badge_set", 1, vn_badge_set as *const _);
-        rt.register("__vn_wake_lock_hold", 1, vn_wake_lock_hold as *const _);
-        rt.register("__vn_media_session_update", 2, vn_media_session_update as *const _);
-        rt.register("__vn_share", 2, vn_share as *const _);
-        rt.register("__vn_webauthn_create", 1, vn_webauthn_create as *const _);
-        rt.register("__vn_webauthn_get", 1, vn_webauthn_get as *const _);
-        rt.register("__vn_webauthn_cancel", 1, vn_webauthn_cancel as *const _);
-        rt.register("__vn_webauthn_available", 0, vn_webauthn_available as *const _);
-    }
     let g = rt.raw();
+    #[cfg(target_os = "windows")]
+    unsafe {
+        web::install(g)
+    };
     RT_G.store(g as usize, Ordering::Release);
     if let Some(id) = vn_runtime::redjs::context::id_of(g) {
         RT_ID.store(id.0, Ordering::Release);
