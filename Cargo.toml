@@ -18,6 +18,7 @@ members = [
     "crates/vn-yuv",        # I420 + alpha to straight BGRA at any size, SIMD (optimised in dev, below)
     "crates/vn-payload",    # VNPK v1 (a packaged exe's app payload) + the one URL→asset-key normaliser
     "crates/vn-desktop",    # argv parser, shell (open/reveal/trash), single instance, custom protocols
+    "crates/vn-hotkeys",    # system-wide hotkeys: Windows low-level hooks, macOS event tap, chord engine
     "crates/vn-resample",   # the downscaled image copies' pixel kernel (optimised in dev, below)
     "crates/vn-app",        # host binary shell
 ]

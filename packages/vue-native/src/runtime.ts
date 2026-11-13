@@ -10099,6 +10099,8 @@ export type { VnWindowBounds, VnWindowMetrics, VnWindowTarget } from "./vnwindow
 export { appHost } from "./apphost";
 export { appTray } from "./tray";
 export type { AppTray, TrayOptions, TrayPixels, TrayMenuItem, TrayMenuEntry } from "./tray";
+export { appHotkeys } from "./hotkeys";
+export type { AppHotkeys, HotkeyBinding, HotkeyButton, HotkeyChord, HotkeyEvent, HotkeyStatus } from "./hotkeys";
 export type { AppHost, AppHostError } from "./apphost";
 
 // Compiled SFC code and app code import everything Vue-ish from here

@@ -7346,6 +7346,7 @@ dependencies = [
  "vn-css",
  "vn-desktop",
  "vn-elements",
+ "vn-hotkeys",
  "vn-payload",
  "vn-permissions",
  "vn-runtime",
@@ -7415,6 +7416,13 @@ name = "vn-elements"
 version = "0.1.0"
 dependencies = [
  "gpui",
+]
+
+[[package]]
+name = "vn-hotkeys"
+version = "0.1.0"
+dependencies = [
+ "windows 0.62.2",
 ]
 
 [[package]]

@@ -68,6 +68,7 @@ vn-payload = { path = "../vn-payload" }
 memmap2 = "0.9"
 self_cell = "1"
 vn-desktop = { path = "../vn-desktop" }
+vn-hotkeys = { path = "../vn-hotkeys" }
 vn-permissions = { path = "../vn-permissions" }
 vn-storage = { path = "../vn-storage", optional = true }
 vn-clipboard = { path = "../vn-clipboard", optional = true }

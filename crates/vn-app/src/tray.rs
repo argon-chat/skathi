@@ -23,18 +23,18 @@ struct State {
 }
 thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
 
-struct Roots<'a> {
+pub(crate) struct Roots<'a> {
     context: &'a Context,
     values: Vec<Value>,
 }
 impl<'a> Roots<'a> {
-    fn new(context: &'a Context) -> Self {
+    pub(crate) fn new(context: &'a Context) -> Self {
         Self {
             context,
             values: Vec::new(),
         }
     }
-    fn keep(&mut self, value: Value) -> Value {
+    pub(crate) fn keep(&mut self, value: Value) -> Value {
         if value.is_cell() {
             self.context.protect(value);
             self.values.push(value);

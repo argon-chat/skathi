@@ -49,6 +49,7 @@ mod content_dialog;
 pub mod crash_window;
 pub mod js;
 pub mod embed;
+pub mod hotkeys;
 pub mod tray;
 #[cfg(vn_devtools)]
 mod inspector;
@@ -1137,6 +1138,7 @@ fn run_app() {
             // Embedding plugins initialize against the installed storage and cookie jar.
             if !devtools_mode {
                 tray::install(rt)?;
+                hotkeys::install(rt)?;
                 embed::setup(rt)?;
             }
             #[cfg(vn_devtools)]
