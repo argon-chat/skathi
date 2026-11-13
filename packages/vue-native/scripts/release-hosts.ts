@@ -1,7 +1,7 @@
 // The hosts a vue-native release carries (.github/workflows/release.yml; read by cli/host-fetch.ts).
 //
 //   bun scripts/release-hosts.ts --out <dir> [--variant <name>]...
-//     on each OS: cargo-build each variant (default: every published one), gzip it into <dir>
+//     on each OS: cargo-build each variant (default: every published one and the dev host), gzip it into <dir>
 //     and describe it in <dir>/hosts-<platform>-<arch>.json
 //   bun scripts/release-hosts.ts --merge <dir>
 //     once, over every OS's output: <dir>/hosts.json
@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { VARIANTS } from "../cli/config";
 import { hostAssetName, MANIFEST_NAME, sha256, type HostManifest, type HostManifestEntry } from "../cli/host-fetch";
-import { CLI_VERSION, cargoBuildHost, checkHost, hostInfo } from "../cli/host";
+import { CLI_VERSION, cargoBuildHost, checkHost, DEV_HOST, hostInfo } from "../cli/host";
 import { currentPlatform } from "../cli/platform";
 
 const { values } = parseArgs({
@@ -57,7 +57,7 @@ mkdirSync(out, { recursive: true });
 const platform = currentPlatform();
 const arch = process.arch;
 const entries: HostManifestEntry[] = [];
-for (const variant of values.variant ?? VARIANTS) {
+for (const variant of values.variant ?? [...VARIANTS, DEV_HOST]) {
   const { exe, ms } = cargoBuildHost(variant);
   const info = hostInfo(exe);
   const problem = checkHost(exe, info, variant, false);

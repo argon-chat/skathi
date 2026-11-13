@@ -149,19 +149,26 @@ export function cacheRoot(platform: Platform = currentPlatform()): string {
 export const cachedHost = (version: string, variant: Variant, platform: Platform = currentPlatform()) =>
   join(cacheRoot(platform), version, variant, hostsFor(platform).cachedFile);
 
+/** The host `vn dev` runs: every part, built without `prod`, so it reads a dev dist and hot-reloads. Cached and released beside the prod variants under this name. */
+export const DEV_HOST: Variant = "dev";
+
 export function checkHost(exe: string, info: HostInfo, variant: Variant | null, allowMismatch: boolean): string | null {
+  const mismatch =
+    info.vueNative !== CLI_VERSION && !allowMismatch
+      ? `${exe} is vue-native ${info.vueNative}, this CLI is ${CLI_VERSION} — the bundle carries the JS half of the ` +
+        `host protocol, so the two must match (--allow-host-mismatch overrides, for maintainers)`
+      : null;
+  if (variant === DEV_HOST) {
+    return info.mode === "dev"
+      ? mismatch
+      : `${exe} is a ${info.mode} host — vn dev needs one built without --features prod`;
+  }
   if (info.mode !== "prod") return `${exe} is a ${info.mode} host — vn build needs one built with --features prod`;
   if (variant && info.variant !== variant) return `${exe} is the ${info.variant} variant, not ${variant}`;
   if (!partsLeftOut(variant ?? info.variant).includes("webgpu") && !info.features?.includes("webgpu")) {
     return `${exe} lacks native WebGPU required by ${variant} — rebuild or replace the cached host`;
   }
-  if (info.vueNative !== CLI_VERSION && !allowMismatch) {
-    return (
-      `${exe} is vue-native ${info.vueNative}, this CLI is ${CLI_VERSION} — the bundle carries the JS half of the ` +
-      `host protocol, so the two must match (--allow-host-mismatch overrides, for maintainers)`
-    );
-  }
-  return null;
+  return mismatch;
 }
 
 function newestHostSource(): number {
@@ -318,7 +325,7 @@ export const hostCargoArgs = (variant: Variant): string[] => [
   "-p",
   "vn-app",
   ...hostsFor(currentPlatform()).cargoTarget,
-  ...cargoFeatureArgs(variant),
+  ...(variant === DEV_HOST ? [] : cargoFeatureArgs(variant)),
 ];
 
 /** MAINTAINERS ONLY, in a checkout: cargo-builds the bare host for `variant` into the checkout's target/; returns its path. */

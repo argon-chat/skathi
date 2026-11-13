@@ -57,7 +57,7 @@ const positional = argv.filter((a) => !a.startsWith("--"));
 const WATCH = argv.includes("--watch");
 
 const PKG_DIR = import.meta.dir; // .../packages/vue-native
-const WS_ROOT = resolve(PKG_DIR, "../.."); // repo root — module ids are relative to this
+const WS_ROOT = resolve(PKG_DIR, "../.."); // the checkout root, when this package is in one
 const RUNTIME_SRC_DIR = join(PKG_DIR, "src");
 const LOADER_ENTRY = join(RUNTIME_SRC_DIR, "loader.ts");
 
@@ -137,7 +137,14 @@ function readLaunchConfig(): Record<string, unknown> | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
-const toId = (abs: string) => relative(WS_ROOT, abs).split(sep).join("/");
+// Ids are relative to the checkout for its own apps, else to the app: an app elsewhere (or a package
+// installed outside its tree) must not get ids that climb out of it. A file on another drive keeps its
+// absolute path, minus the drive's colon, which a module file name cannot hold.
+const toId = (abs: string) =>
+  relative(ID_ROOT, abs)
+    .split(sep)
+    .join("/")
+    .replace(/^([A-Za-z]):/, "$1");
 const encId = (id: string) => id.split("/").join("__") + ".js";
 const J = (v: unknown) => JSON.stringify(v);
 
@@ -156,6 +163,11 @@ const APP_ROOT = appRootArg ? resolve(appRootArg) : findAppRoot(APP_SRC_DIR, WS_
 if (appRootArg && !existsSync(join(APP_ROOT, "package.json"))) {
   throw new Error(`--app-root must name an application with package.json: ${APP_ROOT}`);
 }
+const inside = (dir: string, root: string) => {
+  const rel = relative(root, dir);
+  return !rel.startsWith("..") && !isAbsolute(rel);
+};
+const ID_ROOT = inside(APP_ROOT, WS_ROOT) ? WS_ROOT : APP_ROOT;
 const appRequire = createRequire(join(APP_ROOT, "package.json"));
 const runtimeRequire = createRequire(join(PKG_DIR, "package.json"));
 const APP_PKG = APP_ROOT === PKG_DIR ? null : readPackageJson(APP_ROOT);
@@ -501,7 +513,7 @@ const noteInlined = (abs: string) => void inlinedNow?.add(abs);
 const DEV_ASSET_FILES = new Map<string, string>();
 const shapesOptions = (dev: boolean) => ({
   docRoot: VN_CONFIG_DIR,
-  wsRoot: WS_ROOT,
+  wsRoot: ID_ROOT,
   svgDefault: svgDefaultOf(APP_PKG),
   compileSfc: (absPath: string, source: string) => compileVue(absPath, source, false),
   assets: DEV_ASSET_FILES,
@@ -950,7 +962,7 @@ async function syncNpmModules(): Promise<string[]> {
   return added.filter((id) => npmBuilt.has(id));
 }
 
-const TW_CONFIG = findConfig(appRootArg ? APP_ROOT : APP_SRC_DIR, WS_ROOT);
+const TW_CONFIG = findConfig(appRootArg ? APP_ROOT : APP_SRC_DIR, ID_ROOT);
 let twCss: string | null = null;
 const TW_HASH = Bun.hash("").toString(16);
 

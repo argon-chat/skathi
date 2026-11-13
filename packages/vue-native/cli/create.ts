@@ -1,4 +1,5 @@
-// `vn create <dir>` — the smallest app `vn build` turns into an exe: vn.config.json, src/main.ts,
+// `vn create <dir>` — the smallest app `vn build` turns into an exe: package.json (the app root the
+// builders resolve npm dependencies from), vn.config.json, src/main.ts,
 // src/App.vue (a counter and a fetch), assets/ (what gets packaged), a generated 256² icon.png so
 // the first exe has one, and a tsconfig.json that type-checks against the runtime, not lib.dom.
 // Nothing is overwritten: an existing file is an error, not a merge.
@@ -43,6 +44,12 @@ export function create(target: string, options: { name?: string | undefined } = 
     .join("/");
 
   const files: Record<string, string | Uint8Array> = {
+    "package.json":
+      JSON.stringify(
+        { name, version: "0.1.0", private: true, type: "module", scripts: { dev: "vn dev", build: "vn build" } },
+        null,
+        2,
+      ) + "\n",
     "vn.config.json":
       JSON.stringify(
         {

@@ -1,7 +1,7 @@
 name: Release
 
-# A `v<version>` tag publishes the prebuilt bare hosts `vn build` downloads (cli/host-fetch.ts):
-# every published variant for Windows x64 and macOS arm64, gzipped, plus hosts.json.
+# A `v<version>` tag publishes the prebuilt hosts `vn build` and `vn dev` download (cli/host-fetch.ts):
+# every published variant and the dev host for Windows x64 and macOS arm64, gzipped, plus hosts.json.
 
 on:
   push:

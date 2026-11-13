@@ -16,7 +16,7 @@ import {
   type Variant,
 } from "./config";
 import { dev } from "./dev";
-import { addHost, buildHost, CLI_VERSION, HostError, hostInfo, resolveHost } from "./host";
+import { addHost, buildHost, CLI_VERSION, DEV_HOST, HostError, hostInfo, resolveHost } from "./host";
 import { fetchHost } from "./host-fetch";
 import { create } from "./create";
 import { currentPlatform, parsePlatform } from "./platform";
@@ -27,12 +27,15 @@ usage
   vn build [app] [options]     bundle the app, pack its assets, stamp a prebuilt host
                                (macOS: copy it into <exeName>.app beside the payload)
   vn run   [app] [options]     build, then start the exe with its stderr in this terminal
-  vn dev   [app] [--exe <h>]   the in-repo dev loop: build.ts --watch + the dev host (HMR)
+  vn dev   [app] [--exe <h>]   the dev loop: build.ts --watch + a dev host (HMR); the host is
+                               the checkout's debug vn-app, else this version's, cached or
+                               downloaded from its release
   vn host info [exe]           what a host exe says about itself (--vn-host-info)
   vn host path [selection]     which host \`vn build\` would stamp
-  vn host fetch [selection | --variant both]
+  vn host fetch [selection | --variant both | --variant dev]
                                download prebuilt hosts of this version from its GitHub
-                               release into the local cache (vn build does it on demand)
+                               release into the local cache (no selection: every published
+                               one and the dev host; vn build and vn dev do it on demand)
   vn host add <exe>            verify a prod host and copy it into the local cache
   vn host build [selection | --variant both]
                                maintainers, in a checkout: cargo-build the bare host(s)
@@ -241,8 +244,9 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     if (sub === "fetch") {
-      const v = flags.variant === "both" ? "both" : (variantOf(flags) ?? "both");
-      for (const variant of v === "both" ? VARIANTS : [v]) await fetchHost({ variant, log: console.log });
+      const named = flags.variant === "both" || flags.variant === DEV_HOST ? flags.variant : variantOf(flags);
+      const variants = named === undefined ? [...VARIANTS, DEV_HOST] : named === "both" ? VARIANTS : [named];
+      for (const variant of variants) await fetchHost({ variant, log: console.log });
       return 0;
     }
     if (sub === "build") {

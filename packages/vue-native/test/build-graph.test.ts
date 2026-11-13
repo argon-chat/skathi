@@ -608,3 +608,19 @@ describe("module namespaces in a prod bundle", () => {
     expect(lazy).toBe(probe.all);
   });
 });
+
+test("an app outside the checkout gets ids relative to its own root", () => {
+  const app = mkdtempSync(join(tmpdir(), "vn-outside-"));
+  tmpDirs.push(app);
+  mkdirSync(join(app, "src"));
+  writeFileSync(join(app, "package.json"), '{ "name": "outside", "private": true }\n');
+  writeFileSync(join(app, "src/util.ts"), "export const answer = 42;\n");
+  writeFileSync(join(app, "src/main.ts"), 'import { answer } from "./util";\nconsole.log(answer);\n');
+  const dist = join(app, "dist");
+  const proc = Bun.spawnSync(["bun", "build.ts", join(app, "src/main.ts"), dist], { cwd: PKG_DIR });
+  expect(proc.exitCode).toBe(0);
+  const manifest = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8")) as Manifest;
+  expect(manifest.entry).toBe("src/main.ts");
+  expect(manifest.modules.sort()).toEqual(["src/main.ts", "src/util.ts"]);
+  expect(readFileSync(join(dist, "modules", "src__util.ts.js"), "utf8")).toContain("42");
+});
