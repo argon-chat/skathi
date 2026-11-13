@@ -110,6 +110,8 @@ export interface WindowsConfig {
   features?: Part[];
   without?: Part[];
   variant: Variant;
+  /** Whether the config chose the engine parts (`host`, `features` or `without`). */
+  selected?: boolean;
 }
 
 /** `"macos"`, defaults applied. Read on every platform, so a typo fails a Windows build too. */
@@ -570,6 +572,7 @@ export function loadAppConfig(
     if (w.features !== undefined) windows.features = parseParts(w.features, where("windows.features"));
     if (w.without !== undefined) windows.without = parseParts(w.without, where("windows.without"));
     windows.variant = selectVariant(windows, where('"windows"'));
+    windows.selected = windows.host !== undefined || windows.features !== undefined || windows.without !== undefined;
   }
 
   if (raw.httpCache !== undefined && raw.httpCache !== false) {

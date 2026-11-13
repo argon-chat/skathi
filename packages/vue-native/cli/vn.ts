@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
-// vn — turn a vue-native app into a Windows exe or a macOS .app, without a Rust toolchain.
-//
-//   bun packages/vue-native/cli/vn.ts build apps/hello
+// vn — create, develop and package a vue-native app as a Windows exe or a macOS .app, without a
+// Rust toolchain.
 
 import { spawn } from "node:child_process";
 import { buildApp, summary } from "./build-app";
@@ -24,12 +23,15 @@ import { currentPlatform, parsePlatform } from "./platform";
 const USAGE = `vn ${CLI_VERSION} — package a vue-native app as a Windows exe or a macOS .app
 
 usage
-  vn build [app] [options]     bundle the app, pack its assets, stamp a prebuilt host
-                               (macOS: copy it into <exeName>.app beside the payload)
-  vn run   [app] [options]     build, then start the exe with its stderr in this terminal
-  vn dev   [app] [--exe <h>]   the dev loop: build.ts --watch + a dev host (HMR); the host is
-                               the checkout's debug vn-app, else this version's, cached or
-                               downloaded from its release
+  vn dev     [app] [--exe <h>] the dev loop: build.ts --watch + a dev host (hot reload); the
+                               host is the checkout's debug vn-app, else this version's,
+                               cached or downloaded from its release
+  vn build   [app] [options]   a debug exe in <app>/dist/debug: devtools (F12) in, the bundle
+                               not minified
+  vn publish [app] [options]   the release exe in <app>/dist/release: the engine parts
+                               vn.config.json selects, and without a selection no devtools;
+                               minified (macOS: <exeName>.app, signed per macos.sign)
+  vn run     [app] [options]   vn build, then start the exe with its stderr in this terminal
   vn host info [exe]           what a host exe says about itself (--vn-host-info)
   vn host path [selection]     which host \`vn build\` would stamp
   vn host fetch [selection | --variant both | --variant dev]
@@ -44,14 +46,15 @@ usage
 
   [app] is an app directory (default: .), its entry module, or its vn.config.json.
 
-build options
-  --out <dir>                  output directory (default <app>/dist)
+build and publish options
+  --out <dir>                  output directory (default <app>/dist/debug or dist/release)
   --config <path>              external config; entry and relative assets stay under [app]
   --host <exe>                 the bare host to stamp (default: VN_HOST, the checkout's
                                target/…/release/vn-app.exe, the local cache, then a
                                download from the release; VN_HOST_OFFLINE=1 skips that)
   selection — which engine parts the host carries (default: vn.config.json
-  "windows": "without" / "features" / "host", else every part). One of:
+  "windows": "without" / "features" / "host", else every part; vn build always keeps
+  devtools, vn publish drops them unless the config selects them). One of:
   --without audio,clipboard    leave these parts out
   --features audio,storages    take only these parts
   --variant no-devtools+no-audio
@@ -140,7 +143,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  if (command === "build" || command === "run") {
+  if (command === "build" || command === "publish" || command === "run") {
     const platform = flags.platform === undefined ? undefined : parsePlatform(flags.platform);
     if (command === "run" && platform && platform !== currentPlatform()) {
       throw new ConfigError(
@@ -165,6 +168,7 @@ async function main(argv: string[]): Promise<number> {
       aotInputs: flags["aot-inputs"] === true,
       platform,
       sign: flags["no-sign"] ? false : typeof flags.sign === "string" ? flags.sign.trim() : undefined,
+      mode: command === "publish" ? "release" : "debug",
     });
     if (flags.json) {
       const s = result.stamp;
@@ -211,7 +215,7 @@ async function main(argv: string[]): Promise<number> {
     } else {
       console.log(summary(result));
     }
-    if (command === "build" || !result.exe) return 0;
+    if (command !== "run" || !result.exe) return 0;
     // `run`: inherited handles, so a GUI-subsystem exe's stderr still lands in this terminal.
     const child = spawn(result.exe, rest, { stdio: "inherit" });
     return await new Promise<number>((done) => child.on("exit", (c) => done(c ?? 0)));

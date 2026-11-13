@@ -7,14 +7,17 @@ with macOS and Linux hosts.
 
 ## Packaging an app
 
-`vn build` bundles an app and stamps it onto a prebuilt host; it needs bun, not Rust. The host
-comes from the GitHub release of the CLI's version (`vn host fetch`, or on demand) and is cached;
-`--host <exe>` stamps one of your own.
+The CLI needs bun, not Rust: the hosts it runs and stamps come from the GitHub release of its
+version (`vn host fetch`, or on demand) and are cached; `--host <exe>` stamps one of your own.
 
 ```sh
-vn create my-app
-vn build my-app
+vn create my-app    # a new app
+vn dev my-app       # run it with hot reload
+vn build my-app     # a debug exe: devtools in, not minified (dist/debug)
+vn publish my-app   # the release exe (dist/release)
 ```
+
+`vn publish` leaves devtools out unless `vn.config.json` selects the engine parts and keeps them.
 
 ## Building from source
 

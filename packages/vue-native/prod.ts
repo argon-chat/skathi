@@ -42,11 +42,13 @@ const { defines: cliDefines, rest: argv } = takeDefineArgs(process.argv.slice(2)
 let configOverride: string | undefined;
 let appRootOverride: string | undefined;
 let aotInputsDir: string | undefined;
+let minify = true;
 const positional: string[] = [];
 for (let i = 0; i < argv.length; i++) {
   const arg = argv[i]!;
   const flag = arg.split("=", 1)[0];
-  if (flag === "--config" || flag === "--app-root" || flag === "--aot-inputs") {
+  if (arg === "--no-minify") minify = false;
+  else if (flag === "--config" || flag === "--app-root" || flag === "--aot-inputs") {
     const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : argv[++i];
     if (!value?.trim() || value.startsWith("--")) throw new Error(`${flag} needs a path`);
     if (flag === "--config") configOverride = resolve(value);
@@ -508,7 +510,7 @@ async function build() {
     target: "browser",
     define: DEFINES,
     plugins: [viteShapesPlugin(SHAPES), vuePlugin, entryPlugin],
-    minify: { whitespace: true, identifiers: true, syntax: true },
+    minify: minify ? { whitespace: true, identifiers: true, syntax: true } : false,
     sourcemap: "none",
   });
   if (!result.success) {

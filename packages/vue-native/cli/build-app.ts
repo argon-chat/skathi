@@ -14,7 +14,15 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { collectAssets, type AssetFile } from "./assets";
-import { loadAppConfig, partsLeftOut, variantWarnings, type AppConfig, type PackConfig, type Variant } from "./config";
+import {
+  loadAppConfig,
+  partsLeftOut,
+  variantFor,
+  variantWarnings,
+  type AppConfig,
+  type PackConfig,
+  type Variant,
+} from "./config";
 import { CLI_VERSION, PKG_DIR, type ResolvedHost } from "./host";
 import { resolveOrFetchHost } from "./host-fetch";
 import { iconImagesFrom } from "./icon";
@@ -55,7 +63,21 @@ export interface BuildOptions {
   platform?: Platform | undefined;
   /** macOS: a codesign identity (`-` = ad hoc), or false for none; over `macos.sign`. */
   sign?: string | false | undefined;
+  /**
+   * `vn build` is "debug": devtools always in, the bundle not minified, <app>/dist/debug. `vn publish` is
+   * "release": vn.config.json's engine selection, and without one, no devtools; <app>/dist/release. Unset:
+   * the config's selection into <app>/dist, as the API always did.
+   */
+  mode?: "debug" | "release" | undefined;
   log?: (line: string) => void;
+}
+
+/** The variant a mode builds when neither `--variant` nor a selection flag names one. */
+export function modeVariant(config: AppConfig, mode: BuildOptions["mode"]): Variant {
+  const selected = config.windows.variant;
+  if (mode === "debug") return variantFor(partsLeftOut(selected).filter((p) => p !== "devtools"));
+  if (mode === "release" && !config.windows.selected) return "no-devtools";
+  return selected;
 }
 
 interface BuilderAsset {
@@ -300,10 +322,10 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   const platform = options.platform ?? currentPlatform();
   const config = loadAppConfig(options.target, { configPath: options.configPath, platform });
   const warnings = [...config.warnings];
-  const variant: Variant = options.variant ?? config.windows.variant;
+  const variant: Variant = options.variant ?? modeVariant(config, options.mode);
   partsLeftOut(variant);
   warnings.push(...variantWarnings(variant));
-  const outDir = resolve(options.out ?? join(config.appRoot, "dist"));
+  const outDir = resolve(options.out ?? join(config.appRoot, "dist", ...(options.mode ? [options.mode] : [])));
   const work = join(outDir, ".vn");
   mkdirSync(work, { recursive: true });
 
@@ -334,6 +356,7 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     `--app-root=${config.appRoot}`,
     ...(config.configPath ? [`--config=${config.configPath}`] : []),
     ...(options.aotInputs ? [`--aot-inputs=${join(work, "aot-inputs")}`] : []),
+    ...(options.mode === "debug" ? ["--no-minify"] : []),
   ];
   const r = spawnSync(process.execPath, [PROD_TS, config.entry, jsOut, ...pathArgs, ...defineArgs], {
     cwd: PKG_DIR,
