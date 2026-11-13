@@ -5,9 +5,6 @@ JS running in **JavaScriptCore** via [redjs](https://github.com/argon-chat/redjs
 (Bun's JSC prebuilt, ~3 ns host calls). Windows-first (native Acrylic/Mica window chrome),
 macOS later.
 
-- Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- Research corpus (feasibility spikes, gpui/redjs/Vue deep-dives): `research/reports/`
-
 ## Prerequisites
 
 - Rust 1.97.1 MSVC (pinned by `rust-toolchain.toml`), VS Build Tools + Windows SDK
