@@ -87,6 +87,8 @@ mod inspector; // the EMBEDDED inspector: F12, `--devtools` mode, the child regi
 #[cfg(all(vn_devtools, feature = "native-aot"))]
 mod native_aot; // explicitly selected, ABI-checked native inspector images
 mod json; // the dev transport, the devtools wire and vn.config.json share one codec
+#[cfg(feature = "audio")]
+mod microphone; // getUserMedia's capture gate (VN_MEDIA_CAPTURE) and device notifications
 mod mapped_file; // read-only disk payloads, borrowed without a full heap copy
 mod owner; // VN_OWNER_PID: a test host dies with the runner that launched it
 mod payload; // the app stamped into a packaged exe (VNPK), and `--vn-host-info`
@@ -180,73 +182,27 @@ fn first_wave_waits(window: &mut Window) -> bool {
 // `VN_LOG=info` (or `error`/`warn`/`debug`/`trace`) writes them to stderr.
 //
 // `VN_LOG` takes either a bare level (`VN_LOG=debug`) or `RUST_LOG`-shaped
-// per-target directives (`VN_LOG=off,livekit=debug,libwebrtc=debug`). The
-// second form is not a convenience: at a bare `debug` this process emits
-// thousands of `parcel_selectors::matching` lines per restyle, so the one
-// setting that makes a chatty subsystem readable also makes the host slow
-// enough to move the timing of whatever is being debugged. A directive list
-// keeps the cost where the interest is.
+// per-target directives (`VN_LOG=off,gpui=debug,vn_tree=trace`). The second
+// form is not a convenience: at a bare `debug` this process emits thousands of
+// `parcel_selectors::matching` lines per restyle, so the one setting that makes
+// a chatty subsystem readable also makes the host slow enough to move the
+// timing of whatever is being debugged. A directive list keeps the cost where
+// the interest is.
 //
-// ---------------------------------------------------------------------------
-// THE FLOOR — why a logger is installed even when `VN_LOG` is unset
-// ---------------------------------------------------------------------------
-//
-// libwebrtc reports its own **fatal** conditions (`RTC_CHECK`, `RTC_DCHECK`)
-// through the same sink it uses for ordinary logging, and then calls `abort()`.
-// Until m14 this process installed no `log` sink unless `VN_LOG` was set, so an
-// `RTC_CHECK` failure inside the prebuilt `webrtc.lib` wrote its diagnosis into
-// a sink that did not exist and the host died with no message at all
-// (research/reports/m13/voice-flake.md §5 — the shape `voice-impl.md` reported
-// as "an abort, no panic message, nothing in the log ring").
-//
-// So [`FLOOR`] is applied unconditionally and is a **floor, not a default**:
-// `level_for` takes the MAX of the matching directive and the matching floor
-// entry. `log::set_max_level` stays at Warn when `VN_LOG` is unset, so every
-// `debug!`/`trace!` call site in the process still short-circuits inside the
-// macro, and a run that never constructs a `Room` prints nothing at all.
-//
-// It is not silent when voice IS running: a full two-window scenario with a
-// server restart produces ~530 warn-or-worse records, 312 of them one benign
-// libwebrtc line (`webrtc_video_engine.cc: Factory produced duplicate codecs`)
-// that no configuration of ours affects. An operator has to be able to turn
-// that down, so the floor is escapable — but only so far. Naming a floored
-// target in `VN_LOG` explicitly (`VN_LOG=libwebrtc=error`) drops the floor to
-// [`HARD_FLOOR`], and nothing drops it below that. `VN_LOG=libwebrtc=off` still
-// prints errors, because an abort must not be silenceable by accident.
-//
+// The logger is installed even when `VN_LOG` is unset (it then passes nothing),
+// so the process never has two candidate sinks depending on the environment.
 // The message is teed into `vn_tree::log`'s ring as well as stderr, so
-// `ctl.ts logs` sees it too. That ring is thread-local and everything libwebrtc
-// logs arrives on a webrtc thread, hence [`OFF_THREAD`] and [`drain_log_tee`].
-const FLOOR: &[(&str, log::LevelFilter)] = &[
-    // Everything the voice stack can die inside. `libwebrtc` is the one that
-    // matters — see `vn_voice::rtclog`, which is what gives these records a
-    // severity at all.
-    ("libwebrtc", log::LevelFilter::Warn),
-    ("webrtc_sys", log::LevelFilter::Warn),
-    ("livekit", log::LevelFilter::Warn),
-    ("livekit_api", log::LevelFilter::Warn),
-    ("livekit_protocol", log::LevelFilter::Warn),
-    ("vn_voice", log::LevelFilter::Warn),
-];
-
-/// The loosest level any [`FLOOR`] entry asks for — the global gate can never
-/// be tighter than this, or the facade drops the record before `enabled` runs.
-const FLOOR_MAX: log::LevelFilter = log::LevelFilter::Warn;
-
-/// What a floored target is held to even when `VN_LOG` names it explicitly.
-/// This is the line that makes "an abort never dies into a void" a property
-/// rather than a default.
-const HARD_FLOOR: log::LevelFilter = log::LevelFilter::Error;
-
+// `ctl.ts logs` sees it too. That ring is thread-local and a worker thread can
+// log too, hence [`OFF_THREAD`] and [`drain_log_tee`].
 struct StderrLogger {
-    /// `(target prefix, level)`, longest prefix first, so `livekit::room` beats
-    /// `livekit`.
+    /// `(target prefix, level)`, longest prefix first, so `gpui::window` beats
+    /// `gpui`.
     directives: Vec<(String, log::LevelFilter)>,
     default: log::LevelFilter,
 }
 
-/// `::`-boundary-aware prefix match: `livekit_api` must not match a `livekit`
-/// directive, but `livekit::room` must.
+/// `::`-boundary-aware prefix match: `gpui_windows` must not match a `gpui`
+/// directive, but `gpui::window` must.
 fn target_matches(target: &str, prefix: &str) -> bool {
     target.len() >= prefix.len()
         && target.starts_with(prefix)
@@ -255,25 +211,12 @@ fn target_matches(target: &str, prefix: &str) -> bool {
 
 impl StderrLogger {
     fn level_for(&self, target: &str) -> log::LevelFilter {
-        let mut level = self.default;
-        let mut named = false;
         for (prefix, l) in &self.directives {
             if target_matches(target, prefix) {
-                level = *l;
-                // The operator asked about THIS target by name, which is what
-                // buys them the reduced floor below.
-                named = true;
-                break; // longest prefix first, so the first hit is the best one
+                return *l; // longest prefix first, so the first hit is the best one
             }
         }
-        // The floor is a MAX, not a fallback: whatever `VN_LOG` says, a floored
-        // target keeps at least this much.
-        for (prefix, l) in FLOOR {
-            if target_matches(target, prefix) {
-                return level.max(if named { HARD_FLOOR } else { *l });
-            }
-        }
-        level
+        self.default
     }
 }
 
@@ -301,7 +244,7 @@ impl log::Log for StderrLogger {
 /// The thread `install_logger` ran on — the only one whose `vn_tree::log` ring
 /// `ctl.ts logs` reads.
 static MAIN_THREAD: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
-/// Records made on a webrtc/livekit worker thread, waiting for a frame.
+/// Records made on a worker thread, waiting for a frame.
 static OFF_THREAD: std::sync::Mutex<Vec<(&'static str, String)>> =
     std::sync::Mutex::new(Vec::new());
 /// A wedged subsystem logging in a loop must not grow the process; the drain
@@ -360,8 +303,8 @@ fn parse_level(word: &str) -> Option<log::LevelFilter> {
 
 fn install_logger() {
     let _ = MAIN_THREAD.set(std::thread::current().id());
-    // NOT `else { return }` any more: an unset `VN_LOG` still installs the
-    // logger, it just has nothing but the FLOOR in it.
+    // NOT `else { return }`: an unset `VN_LOG` still installs the logger, it
+    // just passes nothing.
     let spec = std::env::var("VN_LOG").unwrap_or_default();
     let mut default = log::LevelFilter::Off;
     let mut directives: Vec<(String, log::LevelFilter)> = Vec::new();
@@ -385,10 +328,10 @@ fn install_logger() {
             },
         }
     }
-    // `VN_LOG=livekit=debug` alone means "that target, nothing else" rather
-    // than "that target plus everything at info". An UNSET `VN_LOG` is a third
-    // case and must stay `Off` + FLOOR, so this only fires when the variable
-    // was actually present.
+    // `VN_LOG=gpui=debug` alone means "that target, nothing else" rather than
+    // "that target plus everything at info". An UNSET `VN_LOG` is a third case
+    // and must stay `Off`, so this only fires when the variable was actually
+    // present.
     if !saw_bare && directives.is_empty() && !spec.is_empty() {
         default = log::LevelFilter::Info;
     }
@@ -398,9 +341,9 @@ fn install_logger() {
     let max = directives
         .iter()
         .map(|(_, l)| *l)
-        .chain([default, FLOOR_MAX])
+        .chain([default])
         .max()
-        .unwrap_or(FLOOR_MAX);
+        .unwrap_or(default);
     let logger: &'static StderrLogger =
         Box::leak(Box::new(StderrLogger { directives, default }));
     if log::set_logger(logger).is_ok() {
@@ -449,52 +392,25 @@ mod logger_tests {
     }
 
     #[test]
-    fn an_unset_vn_log_still_logs_the_voice_stack_at_warn() {
+    fn an_unset_vn_log_passes_nothing() {
         let l = logger(&[], L::Off);
-        assert_eq!(l.level_for("libwebrtc"), L::Warn);
-        assert_eq!(l.level_for("livekit::rtc_engine"), L::Warn);
-        assert_eq!(l.level_for("vn_voice::engine"), L::Warn);
-        // …and nothing else. This is what keeps the floor free.
         assert_eq!(l.level_for("parcel_selectors::matching"), L::Off);
         assert_eq!(l.level_for("gpui::platform"), L::Off);
     }
 
     #[test]
-    fn a_directive_can_turn_a_floored_target_up() {
-        let l = logger(&[("libwebrtc", L::Debug)], L::Off);
-        assert_eq!(l.level_for("libwebrtc"), L::Debug);
-    }
-
-    #[test]
-    fn naming_a_floored_target_lowers_the_floor_to_error_and_no_further() {
-        for asked in [L::Error, L::Warn, L::Off] {
-            let l = logger(&[("libwebrtc", asked)], L::Off);
-            let got = l.level_for("libwebrtc");
-            assert!(got >= L::Error, "asked {asked:?}, got {got:?}");
-        }
-        // Explicitly asking for `error` gets exactly error — the escape hatch
-        // that makes 300 benign warnings per call suppressible.
-        assert_eq!(logger(&[("libwebrtc", L::Error)], L::Off).level_for("libwebrtc"), L::Error);
-        // NOT naming it leaves the full warn floor in place.
-        assert_eq!(logger(&[("gpui", L::Error)], L::Off).level_for("libwebrtc"), L::Warn);
-    }
-
-    #[test]
-    fn a_bare_level_never_drops_a_floored_target_below_warn() {
-        // `VN_LOG=off` is the case the m13 hunt would have hit.
-        assert_eq!(logger(&[], L::Off).level_for("libwebrtc"), L::Warn);
-        assert_eq!(logger(&[], L::Error).level_for("libwebrtc"), L::Warn);
-        assert_eq!(logger(&[], L::Trace).level_for("libwebrtc"), L::Trace);
+    fn the_longest_matching_directive_wins() {
+        let l = logger(&[("gpui", L::Warn), ("gpui::window", L::Debug)], L::Off);
+        assert_eq!(l.level_for("gpui::window"), L::Debug);
+        assert_eq!(l.level_for("gpui::platform"), L::Warn);
+        assert_eq!(l.level_for("vn_tree"), L::Off);
     }
 
     #[test]
     fn target_boundaries_are_module_separators() {
-        // The trap `livekit_api` sets for a `livekit` directive.
-        assert!(target_matches("livekit::room", "livekit"));
-        assert!(target_matches("livekit", "livekit"));
-        assert!(!target_matches("livekit_api::signal_client", "livekit"));
-        // …and it has its own floor entry, so it is covered anyway.
-        assert_eq!(logger(&[], L::Off).level_for("livekit_api::signal_client"), L::Warn);
+        assert!(target_matches("gpui::window", "gpui"));
+        assert!(target_matches("gpui", "gpui"));
+        assert!(!target_matches("gpui_windows::events", "gpui"));
     }
 }
 
@@ -593,6 +509,35 @@ mod startup_tests {
             assert!(base.contains("0.75"), "the first draw must not await pump_frame to cascade boot opacity: {base}");
         }));
     }
+}
+
+/// How long a hidden start may go without a tray icon before the window is
+/// shown anyway. Generous: the app's own boot (bundle, first request) puts
+/// the icon up, and a slow disk must not flash the window.
+const HIDDEN_START_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The safety net under a hidden start (`Builder::visible(false)`, an
+/// autostart): the only ways back to such a window are a tray icon and a
+/// second launch. If the app has put up no tray icon (Rust or `appTray`) and
+/// nothing has shown the window by [`HIDDEN_START_GRACE`], it is shown, so a
+/// tray that failed or was never written cannot strand a running app.
+fn reveal_if_unreachable(cx: &mut App) {
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(HIDDEN_START_GRACE).await;
+        let _ = cx.update(|_| {
+            if shutdown::is_closing() || window::revealed() || vn_desktop::tray::Tray::app_shown() {
+                return;
+            }
+            let line = format!(
+                "[vn] started hidden, and no tray icon is up after {} s: showing the window so the app can be reached",
+                HIDDEN_START_GRACE.as_secs()
+            );
+            eprintln!("{line}");
+            vn_tree::log::record("warn", line);
+            window::request_activate();
+        });
+    })
+    .detach();
 }
 
 #[cfg(target_os = "windows")]
@@ -750,7 +695,7 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     perf::frame();
     // The background tick stands down while frames arrive (src/background.rs).
     background::note_frame();
-    // Before the poison gate: what a libwebrtc/livekit worker logged is exactly
+    // Before the poison gate: what a worker thread logged is exactly
     // what an agent wants to read when the JS side has already given up.
     drain_log_tee();
     if vn_runtime::bridge::poisoned() {
@@ -896,16 +841,12 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
         {
             devtools::pump();
         }
-        // Voice events, drained bounded, in this SAME publication — and NOT
-        // dev-gated, because voice is an application capability rather than an
-        // automation surface. A room event therefore can never observe a
-        // half-applied patch, and whatever its JS handler schedules (a Vue
-        // patch off `RoomEvent.ParticipantConnected`, say) drains in this
-        // frame's wave. `on_next_frame` re-arms unconditionally, so a queued
-        // event is at most ONE frame late — 6 ms at 165 Hz — and no new wake
-        // seam was needed. See crates/vn-voice/CONTRACT.md §3.
-        #[cfg(feature = "voice")]
-        vn_voice::pump();
+        // The embedder's frame hooks (`HostContext::on_frame`), in this SAME
+        // publication: what a native extension delivers to JS can never
+        // observe a half-applied patch, and whatever its JS handler schedules
+        // drains in this frame's wave. `on_next_frame` re-arms
+        // unconditionally, so a queued event is at most ONE frame late.
+        js::frame();
         // Settled `appPermissions.request()` promises, same publication, same
         // reasoning. The `change` half is not here: `PermissionStatus` events
         // are dispatched from inside `rt.pump()` above, by redjs, because that
@@ -1554,15 +1495,6 @@ fn run_app() {
             }
             std::future::ready(())
         }));
-        // Voice rooms are left while their engine threads are still alive.
-        // Left to `vn_voice`'s thread-local destructor, the engines would be
-        // dropped after `ExitProcess` killed those threads: nobody sees the
-        // leave until the server times the peer out. Bounded like IndexedDB's.
-        #[cfg(feature = "voice")]
-        std::mem::forget(cx.on_app_quit(|_| {
-            shutdown::step("voice", || vn_voice::shutdown_all(std::time::Duration::from_secs(2)));
-            std::future::ready(())
-        }));
         shutdown::install_test_delay(cx);
         // Before the runtime exists, so the log ring is already recording when
         // the first advisory fires — and before the window config is read, for
@@ -1639,14 +1571,10 @@ fn run_app() {
             // SPIKE: `__vn_window_open` / `_close` / `_popouts` / `_click` —
             // one Vue subtree painted by a second OS window (docs/MULTIWINDOW.md).
             popout::install(rt);
-            // `__vn_voice_*` — the five host fns behind "livekit-client".
-            // Registered in every build with the `voice` feature; the JS shim
-            // is pre-seeded into the vendor bundle either way, and an app that
-            // never constructs a Room costs one idle registration. Without the
-            // feature the globals do not exist, and the shim says so at the
-            // first `new Room()` (src/livekit.ts).
-            #[cfg(feature = "voice")]
-            vn_voice::install(rt);
+            // `getUserMedia({ audio })`: the capture gate and the system's
+            // device notifications (src/microphone.rs).
+            #[cfg(feature = "audio")]
+            microphone::install();
             // `navigator.clipboard` over gpui's clipboard — the same one the
             // native <input> uses for Ctrl+C, so there is never a second owner
             // of `OpenClipboard`. No host fns and no pump: the clipboard is
@@ -1736,10 +1664,6 @@ fn run_app() {
             }
             #[cfg(vn_devtools)]
             devtools::install(rt);
-            // `__vn_dev_voice_token` — the LiveKit dev token minter. Dev only,
-            // on purpose: an API secret must not exist in a shipped binary.
-            #[cfg(not(feature = "prod"))]
-            dev::install(rt);
             // `__vn_host_*` for `appHost`, when another program embeds us
             // (src/embed.rs). In the exe they do not exist.
             embed::install(rt);
@@ -1949,23 +1873,6 @@ fn run_app() {
                         eprintln!("[js boot] {}\n{}", e.header, e.stack);
                     }
                 }
-                // `VN_VOICE_IDENTITY=<name>` — which participant THIS process is
-                // in a voice room. The two-instance demo runs the same app in
-                // two VN_DIST slots against one SFU, and without a per-process
-                // identity they would collide on it. Same publishing shape and
-                // the same filter as VN_SCENARIO above; an app that does not
-                // look for it never notices. (docs/VOICE.md §3.1)
-                let identity = std::env::var("VN_VOICE_IDENTITY").unwrap_or_default();
-                if !identity.is_empty() {
-                    let safe: String = identity
-                        .chars()
-                        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-                        .collect();
-                    let js = format!("globalThis.__VN_VOICE_IDENTITY__ = \"{safe}\";");
-                    if let Err(e) = rt.eval(&js, "vn://voice-identity.js") {
-                        eprintln!("[js boot] {}\n{}", e.header, e.stack);
-                    }
-                }
                 #[cfg(vn_devtools)]
                 if devtools_mode {
                     if let Err(error) = inspector::boot(rt) {
@@ -2007,6 +1914,7 @@ fn run_app() {
         // so timers, native completions and reload work without showing a window.
         if !embed::visible() {
             background::note_frame();
+            reveal_if_unreachable(cx);
         }
         // An inspector never comes to the front on its own — see
         // `inspector::install_hotkey`. Everything else does, exactly as before.

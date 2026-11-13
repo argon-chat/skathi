@@ -43,43 +43,43 @@ describe("variant names", () => {
   });
 
   test("the parts left out, in OPTIONAL's order whatever order they were given in", () => {
-    expect(variantFor(["voice"])).toBe("no-voice");
-    expect(variantFor(["voice", "devtools"])).toBe("no-devtools+no-voice");
-    expect(variantFor(["indexeddb", "audio", "voice"])).toBe("no-voice+no-audio+no-indexeddb");
+    expect(variantFor(["audio"])).toBe("no-audio");
+    expect(variantFor(["audio", "devtools"])).toBe("no-devtools+no-audio");
+    expect(variantFor(["indexeddb", "clipboard", "audio"])).toBe("no-audio+no-clipboard+no-indexeddb");
   });
 
   test("a name reads back as its parts, and an unknown one is an error", () => {
     expect(partsLeftOut("standard")).toEqual([]);
-    expect(partsLeftOut("no-voice+no-devtools")).toEqual(["devtools", "voice"]);
+    expect(partsLeftOut("no-audio+no-devtools")).toEqual(["devtools", "audio"]);
     expect(() => partsLeftOut("no-video")).toThrow(ConfigError);
+    expect(() => partsLeftOut("no-voice")).toThrow(ConfigError);
     expect(() => partsLeftOut("lite")).toThrow(ConfigError);
   });
 });
 
 describe("selection", () => {
   test("features names what to take; without names what to leave out", () => {
-    const taken = OPTIONAL.filter((p) => p !== "voice");
-    expect(selectVariant({ features: [...taken] }, "t")).toBe("no-voice");
-    expect(selectVariant({ without: ["voice"] }, "t")).toBe("no-voice");
+    const taken = OPTIONAL.filter((p) => p !== "audio");
+    expect(selectVariant({ features: [...taken] }, "t")).toBe("no-audio");
+    expect(selectVariant({ without: ["audio"] }, "t")).toBe("no-audio");
     expect(selectVariant({ host: "no-devtools" }, "t")).toBe("no-devtools");
     expect(selectVariant({}, "t")).toBe("standard");
   });
 
   test("two ways of saying it at once is an error, not a guess", () => {
-    expect(() => selectVariant({ features: ["audio"], without: ["voice"] }, "t")).toThrow(/one of/);
+    expect(() => selectVariant({ features: ["audio"], without: ["clipboard"] }, "t")).toThrow(/one of/);
   });
 
   test("a list is a comma string or an array of known parts", () => {
-    expect(parseParts("voice, audio", "t")).toEqual(["voice", "audio"]);
-    expect(parseParts("voice audio", "t")).toEqual(["voice", "audio"]); // PowerShell's unquoted voice,audio
-    expect(parseParts(["audio", "voice", "audio"], "t")).toEqual(["voice", "audio"]);
-    expect(() => parseParts(["livekit"], "t")).toThrow(/not a part/);
+    expect(parseParts("audio, clipboard", "t")).toEqual(["audio", "clipboard"]);
+    expect(parseParts("audio clipboard", "t")).toEqual(["audio", "clipboard"]); // PowerShell's unquoted audio,clipboard
+    expect(parseParts(["clipboard", "audio", "clipboard"], "t")).toEqual(["audio", "clipboard"]);
+    expect(() => parseParts(["voice"], "t")).toThrow(/not a part/);
     expect(() => parseParts(3, "t")).toThrow(ConfigError);
   });
 
-  test("a host with voice but no audio, or indexedDB but no storages, is warned about", () => {
-    expect(variantWarnings("no-audio")[0]).toMatch(/nothing it receives is heard/);
-    expect(variantWarnings("no-voice+no-audio")).toEqual([]);
+  test("a host with indexedDB but no storages is warned about", () => {
+    expect(variantWarnings("no-audio")).toEqual([]);
     expect(variantWarnings("no-storages")[0]).toMatch(/in memory/);
     expect(variantWarnings("standard")).toEqual([]);
   });
@@ -97,12 +97,12 @@ describe("cargo", () => {
   });
 
   test("leaving out a default feature drops the defaults and names the rest", () => {
-    expect(cargoFeatureArgs("no-voice")).toEqual([
+    expect(cargoFeatureArgs("no-clipboard")).toEqual([
       "--no-default-features",
       "--features",
-      "prod,audio,clipboard,storages,indexeddb,webgpu",
+      "prod,audio,storages,indexeddb,webgpu",
     ]);
-    expect(cargoFeatureArgs("no-devtools+no-voice+no-audio")).toEqual([
+    expect(cargoFeatureArgs("no-devtools+no-audio")).toEqual([
       "--no-default-features",
       "--features",
       "prod,no-devtools,clipboard,storages,indexeddb,webgpu",
@@ -112,9 +112,9 @@ describe("cargo", () => {
 
 describe("vn.config.json", () => {
   test('"without", "features" and "host" each select a variant', () => {
-    expect(loadAppConfig(app({ without: ["voice"] })).windows.variant).toBe("no-voice");
+    expect(loadAppConfig(app({ without: ["audio"] })).windows.variant).toBe("no-audio");
     expect(loadAppConfig(app({ features: ["audio", "storages"] })).windows.variant).toBe(
-      "no-devtools+no-voice+no-clipboard+no-indexeddb+no-webgpu",
+      "no-devtools+no-clipboard+no-indexeddb+no-webgpu",
     );
     expect(loadAppConfig(app({ host: "no-devtools" })).windows.variant).toBe("no-devtools");
     expect(loadAppConfig(app({})).windows.variant).toBe("standard");
@@ -123,7 +123,7 @@ describe("vn.config.json", () => {
   test("an unknown part, a bad host name, or two selections are build errors", () => {
     expect(() => loadAppConfig(app({ without: ["video"] }))).toThrow(/not a part/);
     expect(() => loadAppConfig(app({ host: "lite" }))).toThrow(/not a host variant/);
-    expect(() => loadAppConfig(app({ host: "no-devtools", without: ["voice"] }))).toThrow(/one of/);
+    expect(() => loadAppConfig(app({ host: "no-devtools", without: ["audio"] }))).toThrow(/one of/);
   });
 });
 
@@ -138,7 +138,7 @@ test("the parts are the ones crates/vn-app/src/payload.rs names the host's varia
 test("standard packaging refuses an old cached host without WebGPU", async () => {
   const { checkHost, CLI_VERSION } = await import("../cli/host");
   const info = { mode: "prod" as const, vueNative: CLI_VERSION, crate: "0.1.0", variant: "standard",
-    devtools: true, features: ["prod", "audio", "voice", "clipboard", "storages", "indexeddb"],
+    devtools: true, features: ["prod", "audio", "clipboard", "storages", "indexeddb"],
     jscPin: "test", payloadFormat: 1, profile: "release" };
   expect(checkHost("cached.exe", info, null, false)).toMatch(/lacks native WebGPU/);
   expect(checkHost("cached.exe", info, "standard", false)).toMatch(/lacks native WebGPU/);

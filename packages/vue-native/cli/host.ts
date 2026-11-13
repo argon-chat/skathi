@@ -4,8 +4,8 @@
 // `prod,no-devtools`): the whole engine, no app. It is built once per
 // vue-native version and VARIANT, never per app — the app arrives later as a
 // payload (research/reports/m25/packaging-design.md §4.9). A variant names the
-// engine parts left out (config.ts `OPTIONAL`): `no-voice` is
-// `--no-default-features --features prod,audio,clipboard,storages,indexeddb`.
+// engine parts left out (config.ts `OPTIONAL`): `no-audio` is
+// `--no-default-features --features prod,clipboard,storages,indexeddb,webgpu`.
 //
 // Resolution, first hit wins:
 //   1. `--host <exe>` or `VN_HOST`;

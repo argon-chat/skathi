@@ -102,8 +102,6 @@ for (let i = 0; i < argv.length; i++) {
 const PKG_DIR = import.meta.dir; // .../packages/vue-native
 const WS_ROOT = resolve(PKG_DIR, "../.."); // repo root — module ids are relative to this
 const RUNTIME_ENTRY = join(PKG_DIR, "src", "runtime.ts");
-/** vue-native's LiveKit, the module `livekit-client` means here (docs/VOICE.md). */
-const LIVEKIT_ENTRY = join(PKG_DIR, "src", "livekit.ts");
 
 const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.ts"));
 const APP_SRC_DIR = dirname(ENTRY_ABS);
@@ -172,8 +170,8 @@ const TW_CONFIG = findConfig(APP_SRC_DIR, WS_ROOT);
 // `registerTS` are both required to compile a component that writes
 // `defineProps<SomeImportedType>()`. npm DEPENDENCIES need nothing special
 // here: prod is a single Bun bundle, so a bare specifier resolves and inlines
-// like any other import (only "vue"/"vue-native"/"livekit-client" are
-// re-pointed, and pinia/vue-router chosen, below).
+// like any other import (only "vue"/"vue-native" and the app's own
+// vn.config.json "aliases" are re-pointed, and pinia/vue-router chosen, below).
 function findAppRoot(startDir: string, stopDir: string): string {
   let dir = startDir;
   for (;;) {
@@ -515,23 +513,44 @@ const FRAMEWORK = new Map(
   }),
 );
 
-/** Does the app have the browser SDK installed — the case where the substitution is worth a line? */
-const APP_HAS_LIVEKIT = (() => {
-  if (!APP_PKG) return false;
-  try {
-    appRequire.resolve("livekit-client");
-    return true;
-  } catch {
-    return false;
+/**
+ * vn.config.json `"aliases"`: a bare module name and the app's own file that
+ * stands in for it, relative to the app root —
+ * `{ "some-sdk": "native/some-sdk.ts" }`. It is how a native extension's JS
+ * half ships: the embedding host provides the native functions, the app
+ * provides the module that drives them, and every importer of the npm name
+ * (app code or a library) lands on that one file, never on the npm package.
+ */
+function appAliases(raw: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  if (raw === undefined) return out;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`${VN_CONFIG_PATH}: "aliases" must be an object of { "module": "file" }`);
   }
-})();
+  for (const [name, target] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^(@[\w.-]+\/)?[\w.-]+(\/[\w.-]+)*$/.test(name) || name.startsWith(".")) {
+      throw new Error(`${VN_CONFIG_PATH}: alias "${name}" is not a bare module name`);
+    }
+    if (name === "vue" || name === "vue-native" || name === "vue-router" || name === "pinia") {
+      throw new Error(`${VN_CONFIG_PATH}: "${name}" is the engine's own module and cannot be aliased`);
+    }
+    if (typeof target !== "string" || !target.trim()) {
+      throw new Error(`${VN_CONFIG_PATH}: alias "${name}" needs a file path`);
+    }
+    const file = resolve(VN_CONFIG_DIR, target.trim());
+    if (!existsSync(file)) throw new Error(`${VN_CONFIG_PATH}: alias "${name}" → ${file}: no such file`);
+    out.set(name, file);
+  }
+  return out;
+}
+const APP_ALIASES = appAliases(VN_CONFIG.aliases);
 
 const AOT_INPUTS = aotInputsDir ? new AotInputs({
   out: aotInputsDir,
   appRoot: VN_CONFIG_DIR,
   entry: ENTRY_ABS,
   typescript: runtimeRequire("typescript"),
-  aliases: { vue: RUNTIME_ENTRY, "vue-native": RUNTIME_ENTRY, "livekit-client": LIVEKIT_ENTRY, ...Object.fromEntries([...FRAMEWORK].map(([name, dependency]) => [name, dependency.path])) },
+  aliases: { vue: RUNTIME_ENTRY, "vue-native": RUNTIME_ENTRY, ...Object.fromEntries(APP_ALIASES), ...Object.fromEntries([...FRAMEWORK].map(([name, dependency]) => [name, dependency.path])) },
   sourceRoots: { sdk: PKG_DIR },
   declarations: [...new Bun.Glob("*.d.ts").scanSync({ cwd: join(PKG_DIR, "src"), absolute: true })],
 }) : null;
@@ -572,16 +591,15 @@ const vuePlugin = {
     // helpers) and "vue-native" (app code) have to resolve somewhere: both are
     // our runtime module, exactly as the loader aliases them at runtime.
     build.onResolve({ filter: /^(vue|vue-native)$/ }, () => ({ path: RUNTIME_ENTRY }));
-    // "livekit-client" is vue-native's LiveKit, as in dev (build.ts PRESEEDED,
-    // where the reason is written out): an app with the npm SDK installed —
-    // for its typings, or because it also ships a browser build — must not get
-    // the browser SDK silently bundled into its exe.
-    build.onResolve({ filter: /^livekit-client$/ }, () => {
-      if (APP_HAS_LIVEKIT) {
-        advise("livekit-client → vue-native's LiveKit (src/livekit.ts); the app's npm SDK is not bundled (docs/VOICE.md)");
-      }
-      return { path: LIVEKIT_ENTRY };
-    });
+    // The app's own "aliases" (appAliases above): an app with the npm package
+    // installed — for its typings, or because it also ships a browser build —
+    // gets its stand-in file, never the npm package, from every importer.
+    if (APP_ALIASES.size) {
+      const names = [...APP_ALIASES.keys()].map((name) => name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
+      build.onResolve({ filter: new RegExp(`^(${names.join("|")})$`) }, (args: any) => ({
+        path: APP_ALIASES.get(args.path)!,
+      }));
+    }
     // The other two pre-seeded ids ride vendor.js in dev, which means they are
     // resolved from THIS package's node_modules there. Prod resolves them once,
     // up front (FRAMEWORK above), so every importer — app code, a workspace

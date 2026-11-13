@@ -338,18 +338,16 @@ declare var URL: VnURLConstructor;
 // ---- Web Audio ------------------------------------------------------------
 
 /**
- * redjs's Web Audio, as much of it as the voice shim touches and no more.
+ * redjs's Web Audio, as much of it as a native stream source touches and no
+ * more.
  *
- * Note what is NOT here: `declare var AudioContext`. `livekit.ts` never reads
- * the global — it only ever receives a context the application already built
- * (`new Room({ webAudioMix: { audioContext } })`, or
- * `remoteAudioTrack.setAudioContext(ctx)`). Whether the global exists at all is
- * a BUILD property: `redjs::webapi::pcm` sits behind vn-app's `audio` cargo
- * feature, and `vn-app --no-default-features` is a legitimate host with no Web
- * Audio at all (vn-voice/CONTRACT.md §5). That is exactly why the shim probes
- * the OBJECT it was handed — `typeof ctx.createRedStreamSource === "function"` —
- * rather than the name, and adding the global here would make that probe look
- * redundant when it is the whole safety story.
+ * Note what is NOT here: `declare var AudioContext`. Whether the global exists
+ * at all is a BUILD property: `redjs::webapi::pcm` sits behind vn-app's `audio`
+ * cargo feature, and `vn-app --no-default-features` is a legitimate host with
+ * no Web Audio at all. Code handed a context probes the OBJECT —
+ * `typeof ctx.createRedStreamSource === "function"` — rather than the name, and
+ * adding the global here would make that probe look redundant when it is the
+ * whole safety story.
  */
 interface VnAudioNode {
   connect(to: VnAudioNode): unknown;

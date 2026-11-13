@@ -10,8 +10,7 @@
 //!
 //! This crate is the other half: the **backends** that implement that trait, and
 //! the small `__vn_permissions_*` host-fn surface behind vue-native's own
-//! `appPermissions` extension. That split is the same one `vn-voice` has with
-//! `redjs::webapi::pcm`, and it is what keeps redjs shippable to a consumer
+//! `appPermissions` extension. That split is what keeps redjs shippable to a consumer
 //! (PEWPEW) that has no consent store, no `ms-settings:` and no opinion about
 //! Windows privacy toggles.
 //!
@@ -72,7 +71,7 @@ pub mod mac;
 #[cfg(any(target_os = "macos", test))]
 mod tcc;
 
-pub use consent::{set_app_name, set_asker, Asker, Question};
+pub use consent::{set_app_name, set_asker, set_camera_capture, Asker, Question};
 pub use vn_runtime::redjs::webapi::permissions::{Capability as Cap, PermissionState as State};
 
 /// How many settled requests one frame may deliver. One native prompt can
@@ -81,7 +80,7 @@ pub use vn_runtime::redjs::webapi::permissions::{Capability as Cap, PermissionSt
 const DRAIN_CAP: usize = 16;
 
 thread_local! {
-    /// The one protected JS callback, exactly as `vn-voice`'s dispatcher works.
+    /// The one protected JS callback the runtime hands over at boot.
     static DISPATCHER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -402,8 +401,7 @@ host_fn!(fn vn_permissions_list(_g, _args) {
 // `{"error":"..."}`     — not a capability name.
 //
 // Synchronous like every other host fn: the promise lives in JS, and the pump
-// settles it. Same shape as `__vn_voice_call`'s reqId (`vn-voice/src/lib.rs`),
-// for the same reason — there is no async `host_fn!`.
+// settles it by reqId, because there is no async `host_fn!`.
 host_fn!(fn vn_permissions_request(g, args) {
     let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     let json = request_json(&name, api::host());
@@ -437,7 +435,7 @@ host_fn!(fn vn_permissions_set_dispatcher(g, args) {
     unsafe { vn_runtime::redjs::ffi::redjs_protect(g, f.0) };
     // A reload evaluates the runtime again, and it sets its own dispatcher:
     // the old one is let go rather than kept alive for the life of the
-    // process (as `vn-voice`'s is).
+    // process.
     if let Some(old) = replace_dispatcher(f.0) {
         unsafe { vn_runtime::redjs::ffi::redjs_unprotect(g, old) };
     }
@@ -468,7 +466,7 @@ fn can_request_state(state: PermissionState) -> bool {
 
 /// Installs the platform backend into redjs and registers the extension surface.
 ///
-/// Called from `vn-app`'s boot beside `vn_voice::install`, unconditionally: the
+/// Called from `vn-app`'s boot, unconditionally: the
 /// backend is a few registry reads and one lazily-spawned watcher thread that
 /// only starts once something actually subscribes.
 pub fn install(rt: &JsRuntime) {
@@ -489,7 +487,7 @@ pub fn install(rt: &JsRuntime) {
 
 /// Settles finished requests into JS.
 ///
-/// Goes in `vn-app`'s `pump_frame` beside `vn_voice::pump()`, inside the same
+/// Goes in `vn-app`'s `pump_frame`, inside the same
 /// `Phase::Commit` publication, and is **not** dev-gated.
 ///
 /// The `change` half of the story is not here: `PermissionStatus` events are
@@ -524,7 +522,7 @@ pub fn pump() {
             }
         }
         // The awaiting `.then()` and the Vue patch it triggers land inside this
-        // same Commit publication — the rule `vn-voice::pump` documents.
+        // same Commit publication.
         rt.ctx().drain_microtasks();
     });
 }

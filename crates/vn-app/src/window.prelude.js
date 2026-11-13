@@ -384,6 +384,7 @@
   appWindow.restore = verb("unmaximize");
   appWindow.close = closeWindow;
   appWindow.center = verb("center");
+  appWindow.show = verb("show");
   appWindow.startDragging = verb("startDragging");
   appWindow.setFullscreen = (on) => __vn_window_set_fullscreen(!!on);
   appWindow.isMaximized = () => refresh().maximized;

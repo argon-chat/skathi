@@ -607,7 +607,7 @@ export async function launch(options: LaunchOptions): Promise<VnApp> {
   Object.assign(env, options.env ?? {});
   // A test never opens the machine's microphone, whatever the app or a spec
   // asks for: getUserMedia is a NotAllowedError for the whole run, and no
-  // prompt is shown (crates/vn-voice/src/lib.rs, `capture_gate`). Set after
+  // prompt is shown (crates/vn-app/src/microphone.rs). Set after
   // the spec's env on purpose, so no spec can turn it off. The one other
   // value a spec may ask for is `fake`: a synthetic 440 Hz microphone that
   // opens no device, behind the same prompt (answered with `chooseDialog`).

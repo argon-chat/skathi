@@ -1,6 +1,5 @@
 // MediaStream and the two MediaStream audio nodes, in a real host (m26 fixes,
-// research/reports/m26/client-sweep-1.md finding 11; redjs webapi/mediastream.rs,
-// crates/vn-voice/src/track_capture.rs).
+// research/reports/m26/client-sweep-1.md finding 11; redjs webapi/mediastream.rs).
 //
 //   bun test packages/vn-test/specs/media.spec.ts
 //

@@ -417,14 +417,18 @@ const TS_AVAILABLE = (() => {
 // Provided by vendor.js and pre-seeded in the loader's registry: they must stay
 // external everywhere (a second copy of Vue would be a second reactivity
 // system), and they are never emitted as modules.
-//
-// "livekit-client" is not a convenience entry. Without it, an app author who
-// runs `bun add livekit-client` for the TypeScript typings — a LIKELY thing to
-// do — gets the real browser SDK silently bundled into dist/modules/ by the
-// npm path below, and the failure is `WebSocket is not defined` deep inside
-// minified code. This entry is what makes that substitution impossible.
-const PRESEEDED = ["vue", "vue-native", "vue-router", "pinia", "livekit-client"];
+const PRESEEDED = ["vue", "vue-native", "vue-router", "pinia"];
 const isPreseeded = (spec: string) => PRESEEDED.includes(spec);
+
+// vn.config.json `"aliases"` are applied by `vn build` only (prod.ts
+// `appAliases`). Said once, so a dev run that resolves the npm package instead
+// is not a surprise.
+{
+  const aliases = readVnConfig()?.aliases;
+  if (aliases && typeof aliases === "object" && Object.keys(aliases).length) {
+    console.warn(`[build] vn.config.json "aliases" (${Object.keys(aliases).join(", ")}) are applied by vn build only; this dev build resolves them from node_modules`);
+  }
+}
 
 // The app's own defines: vn.config.json `"define"` plus `--define K=V`, with
 // Vite's semantics (vitecompat.ts `appDefines`). Read once at startup — a

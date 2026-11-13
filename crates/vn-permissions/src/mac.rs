@@ -191,7 +191,7 @@ fn open_privacy_pane(anchor: &str) {
 
 /// Whether the app's Info.plist says why it wants `cap` (the microphone or
 /// the camera). TCC terminates an app that requests or captures without it,
-/// so nothing may touch the device unless this is true; vn-voice's camera
+/// so nothing may touch the device unless this is true; a camera backend
 /// checks it too before it opens one.
 pub fn usage_description_present(cap: Capability) -> bool {
     let Some(media) = tcc::media(cap) else {

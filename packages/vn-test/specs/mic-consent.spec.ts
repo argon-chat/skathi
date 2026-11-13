@@ -43,8 +43,8 @@ async function host(capture: "fake" | "deny", label: string): Promise<VnApp> {
     app: ENTRY,
     window: [420, 200],
     label: `mic-${label}`,
-    // vn_voice at info: the device notifier says it registered.
-    env: { VN_MEDIA_CAPTURE: capture, VN_APP_NAME: APP_NAME, VN_LOG: "vn_voice=info" },
+    // The microphone module at info: the device notifier says it registered.
+    env: { VN_MEDIA_CAPTURE: capture, VN_APP_NAME: APP_NAME, VN_LOG: "vn_app::microphone=info" },
   });
   apps.push(app);
   return app;
@@ -92,7 +92,7 @@ async function inputs(app: VnApp): Promise<string> {
   throw new Error("enumerateDevices never settled");
 }
 
-/** livekit-client's `Room.getLocalDevices(kind, request)`, settled. */
+/** The fixture's `devices(kind, request)` (a call SDK's device listing), settled. */
 async function listed(app: VnApp, kind: string, request = true): Promise<string> {
   const before = Number(await app.eval("__VN_TEST_MIC__.listed.length"));
   await app.eval(`__VN_TEST_MIC__.devices(${JSON.stringify(kind)}, ${request}), 0`);
@@ -156,21 +156,21 @@ test(
 );
 
 test(
-  "Room.getLocalDevices lists the inputs, and the OS device notifications are on",
+  "the inputs are listed by name, and the OS device notifications are on",
   async () => {
-    // Granted, so livekit-client's DeviceManager has names and asks nothing.
+    // Granted, so the listing has names and asks nothing.
     expect(await listed(app, "audioinput")).toBe("ok:default/Default - Fake Microphone,fake/Fake Microphone");
     expect(await app.questions()).toEqual([]);
     expect(await listed(app, "videoinput")).toBe("ok:");
     // devicechange comes from IMMNotificationClient, not a poll
-    // (crates/vn-voice/src/devices.rs). A listener arms it.
+    // (crates/vn-app/src/microphone/devices.rs). A listener arms it.
     await app.eval("navigator.mediaDevices.addEventListener('devicechange', () => {}), 0");
     let log = "";
     for (let i = 0; i < 100 && !log.includes("audio device notifications"); i++) {
       log = readFileSync(app.hostLog, "utf8");
       await Bun.sleep(50);
     }
-    expect(log).toContain("vn-voice: audio device notifications on");
+    expect(log).toContain("[vn] audio device notifications on");
   },
   T,
 );
@@ -217,10 +217,11 @@ test(
 );
 
 test(
-  "processing is on by default as in Chrome, and getSettings reports what runs",
+  "without an embedder's processing, getSettings reports that none runs",
   async () => {
-    // The fake microphone runs through libwebrtc's APM like a device
-    // (crates/vn-voice/src/apm.rs).
+    // Echo cancellation and the rest are the embedder's
+    // (`mediastream::set_capture_processing`); the engine has none, and says so
+    // whatever the constraints ask for.
     const opened = async (constraints: string) => {
       const before = Number(await app.eval("__VN_TEST_MIC__.settings.length"));
       await app.eval(`__VN_TEST_MIC__.open(${constraints}), 0`);
@@ -230,11 +231,10 @@ test(
       }
       return String(await app.eval(`__VN_TEST_MIC__.settings[${before}]`));
     };
-    expect(await opened("{ audio: true }")).toBe("true|true|true|1");
+    expect(await opened("{ audio: true }")).toBe("false|false|false|1");
     expect(await opened("{ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }")).toBe(
       "false|false|false|1",
     );
-    expect(await opened("{ audio: { noiseSuppression: { exact: false } } }")).toBe("true|false|true|1");
     await app.eval("__VN_TEST_MIC__.stopAll(), 0");
   },
   T,
@@ -247,8 +247,8 @@ test(
     app = await host("deny", "deny");
     expect(await state(app)).toBe("denied");
     expect(await open(app)).toBe("err:NotAllowedError: Permission denied: microphone capture is switched off for this process.");
-    // livekit-client's getLocalDevices asks getUserMedia for the names, and
-    // the refusal is its result. Without the request, the nameless entry.
+    // The listing asks getUserMedia for the names, and the refusal is its
+    // result. Without the request, the nameless entry.
     expect(await listed(app, "audioinput")).toBe(
       "err:NotAllowedError: Permission denied: microphone capture is switched off for this process.",
     );

@@ -13,10 +13,10 @@
 // - `open(constraints?)`, a getUserMedia whose result lands in `results` as
 //   `ok:<readyState>:<label>` or `err:<name>: <message>`, the track kept in
 //   `tracks` until `stopAll()`, and its processing in `settings`;
-// - `devices(kind, request?)`, livekit-client's `Room.getLocalDevices`, whose
-//   result lands in `listed` as `ok:<deviceId>/<label>,...` or
+// - `devices(kind, request?)`, the device listing a call SDK does (a
+//   microphone opened and closed for the names, then `enumerateDevices`),
+//   whose result lands in `listed` as `ok:<deviceId>/<label>,...` or
 //   `err:<name>: <message>`.
-import { Room } from "livekit-client";
 import { appPermissions, createApp, h } from "vue-native";
 
 const results: string[] = [];
@@ -47,8 +47,16 @@ function stopAll() {
   for (const t of tracks.splice(0)) t.stop();
 }
 
+async function localDevices(kind: string, request: boolean): Promise<MediaDeviceInfo[]> {
+  if (request && kind === "audioinput") {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    for (const track of stream.getTracks()) track.stop();
+  }
+  return (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === kind);
+}
+
 function devices(kind: string, request = true) {
-  Room.getLocalDevices(kind as MediaDeviceKind, request).then(
+  localDevices(kind, request).then(
     (ds) => listed.push("ok:" + ds.map((d) => `${d.deviceId}/${d.label}`).join(",")),
     (e: DOMException) => listed.push(`err:${e.name}: ${e.message}`),
   );

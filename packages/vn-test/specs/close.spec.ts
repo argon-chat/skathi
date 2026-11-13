@@ -48,7 +48,7 @@ async function start(env: Record<string, string> = {}) {
     backend: "render_to_image",
   });
   rmSync(shot.path, { force: true });
-  // Somebody listening for `pagehide`, as LiveKit's leave does.
+  // Somebody listening for `pagehide`, as a call's leave does.
   await app.eval(`addEventListener("pagehide", () => console.log("[close-spec] pagehide")); "ok"`);
   return { app, appName, hwnd: BigInt(shot.hwnd) };
 }

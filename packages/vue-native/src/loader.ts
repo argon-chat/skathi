@@ -37,11 +37,6 @@ import * as runtimeNs from "./runtime";
 //   pinia       store library; `createPinia()` is an ordinary app plugin.
 import * as vueRouterNs from "vue-router";
 import * as piniaNs from "pinia";
-//   livekit-client  NOT the npm package — the name. The real SDK needs
-//                   WebSocket / RTCPeerConnection / MediaStream / getUserMedia,
-//                   none of which redjs has; ours drives the native LiveKit
-//                   engine in crates/vn-voice instead (docs/VOICE.md).
-import * as livekitNs from "./livekit";
 
 /** A module id: a workspace-relative POSIX path, or a bare registry key. */
 type ModuleId = string;
@@ -319,14 +314,9 @@ for (const alias of ["vue", "vue-native"]) {
 // pinia's active-pinia pointer), so dropping them on a hard restart would hand
 // the fresh app a second copy of every library.
 const VENDOR_IDS = new Set(["vue", "vue-native"]);
-// `livekit-client` is here for a stronger reason than the other two: a Room
-// holds a live native engine thread and a published track, so a second module
-// copy during a hot restart would strand the first one's actor and its
-// publication. VENDOR_IDS is what keeps the restart paths from dropping it.
 for (const [name, ns] of [
   ["vue-router", vueRouterNs],
   ["pinia", piniaNs],
-  ["livekit-client", livekitNs],
 ] as [ModuleId, Record<string, unknown>][]) {
   factories.set(name, () => {});
   cache.set(name, { id: name, exports: ns });

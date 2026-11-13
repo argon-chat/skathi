@@ -130,7 +130,7 @@ export function infoPlist(m: MacInfo): { [key: string]: PlistValue } {
   if (m.cameraUsageDescription) {
     d.NSCameraUsageDescription = m.cameraUsageDescription;
     // macOS 14+ lists an iPhone as a camera of its own type only for an app
-    // that opts in; the native camera then discovers it (vn-voice video/avf.rs).
+    // that opts in; a native camera backend then discovers it.
     d.NSCameraUseContinuityCameraDeviceType = true;
   }
   d.NSHighResolutionCapable = true;

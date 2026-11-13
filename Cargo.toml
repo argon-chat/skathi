@@ -9,7 +9,6 @@ members = [
     "crates/vn-lottie",     # Lottie/.tgs playback behind the `<lottie>` element
     "crates/vn-sticker",    # <vn-sticker>: Lottie + VP9-alpha stickers, shared decoders, loop cache
     "crates/vn-video",      # <video> playback: portable core + the Media Foundation backend
-    "crates/vn-voice",      # LiveKit voice: the actor, the playout mixer, the JS host fns
     "crates/vn-permissions",# platform permission backends behind redjs's navigator.permissions
     "crates/vn-storage",    # localStorage on a disk: folders, atomic writes, DPAPI at rest
     "crates/vn-clipboard",  # navigator.clipboard over the SAME gpui clipboard the <input> uses
@@ -66,12 +65,6 @@ async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "
 # onto the new tag; the aspect-ratio and fit-content fixes are spec fixes
 # worth offering upstream, the calc one is gpui's encoding.
 taffy = { path = "vendor/taffy" }
-# m26: webrtc-sys 0.3.41 (pinned `=0.3.41` by crates/vn-voice) as published,
-# plus vue-native hooks libwebrtc has and the crate does not expose — the
-# network-adapter filter (crates/vn-voice/src/netfilter.rs) and the TURN-over-
-# TLS certificate verifier (crates/vn-voice/src/tlsverify.rs). The exact hunks
-# are listed in vendor/webrtc-sys/VENDOR.md, so a bump is mechanical.
-webrtc-sys = { path = "vendor/webrtc-sys" }
 
 # vendor/redjs is a git submodule (https://github.com/argon-chat/redjs) consumed as a
 # path dep (vendor/redjs/redjs).

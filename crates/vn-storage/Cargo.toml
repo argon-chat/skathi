@@ -10,7 +10,7 @@ publish = false
 # reason `PermissionHost` is: `localStorage` has to behave like `localStorage`
 # without knowing which OS is underneath, so the browser-shaped half belongs on
 # the redjs side of the seam and only the BYTES live here. Same layering as
-# `vn-permissions` and `vn-voice`.
+# `vn-permissions`.
 vn-runtime = { path = "../vn-runtime", default-features = false, features = ["storages"] }
 
 [features]

@@ -28,8 +28,9 @@
 //!   advisory);
 //! - fetches in flight still settle into the old app's promise chains;
 //! - IndexedDB connections stay open until the old code closes them.
-//!   (Voice rooms, captures and `AudioContext`s do NOT: [`end_media`] ends
-//!   them as a browser's navigation does);
+//!   (Captures and `AudioContext`s do NOT: [`end_media`] ends them as a
+//!   browser's navigation does; an embedder's own sessions end in its
+//!   `HostContext::on_reload` hook, which runs right after);
 //! - `beforeunload` is not asked (a reload the app requested is not vetoed);
 //! - `DOMContentLoaded` / `load` fired once per process and do not fire again
 //!   (`document.readyState` stays `"complete"`).
@@ -84,18 +85,13 @@ fn run(rt: &JsRuntime) {
 }
 
 /// What a browser's navigation ends with the old document, after its
-/// `pagehide` and teardown have run: its calls (every voice room leaves, and
-/// with it its peer connections and the capture feeding them), its captures
-/// (every `MediaStreamTrack` stops and an unused microphone is released) and
-/// its `AudioContext`s (a looping ringtone stops with them).
+/// `pagehide` and teardown have run: its captures (every `MediaStreamTrack`
+/// stops and an unused microphone is released) and its `AudioContext`s (a
+/// looping ringtone stops with them). An embedder's own sessions (a call, say)
+/// end in its `on_reload` hook, which the caller runs next.
 ///
-/// Never blocks the frame: each voice engine leaves on its own thread, within
-/// about a second (`vn_voice::close_all`). `why` names the caller in the log.
+/// Never blocks the frame. `why` names the caller in the log.
 pub fn end_media(rt: &JsRuntime, why: &str) {
-    #[cfg(feature = "voice")]
-    let rooms = vn_voice::close_all();
-    #[cfg(not(feature = "voice"))]
-    let rooms = 0usize;
     #[cfg(feature = "audio")]
     let (tracks, contexts) = {
         use vn_runtime::redjs::webapi::{audio, mediastream};
@@ -107,10 +103,10 @@ pub fn end_media(rt: &JsRuntime, why: &str) {
         let _ = rt;
         (0usize, 0usize)
     };
-    if rooms + tracks + contexts > 0 {
+    if tracks + contexts > 0 {
         eprintln!(
-            "[vn] {why}: the old page's media ended — {rooms} voice room(s) leaving, {tracks} capture track(s) \
-             stopped, {contexts} AudioContext(s) closed"
+            "[vn] {why}: the old page's media ended — {tracks} capture track(s) stopped, \
+             {contexts} AudioContext(s) closed"
         );
     }
 }

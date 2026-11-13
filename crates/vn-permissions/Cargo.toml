@@ -17,7 +17,7 @@ audio = ["vn-runtime/audio"]
 # `RedStreamSourceNode` is: the browser-shaped surface has to be able to answer
 # a `navigator.permissions.query()` without knowing which OS is underneath, so
 # the abstraction belongs on the redjs side of the seam and only the *backends*
-# live here. Exactly the layering `vn-voice` has with `redjs::webapi::pcm`.
+# live here.
 vn-runtime = { path = "../vn-runtime", default-features = false }
 # `permissions.json`, the app's answers to its own prompt (src/decisions.rs).
 # Already in the graph (gpui, vn-desktop), so it adds no crate to the build.

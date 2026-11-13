@@ -1,8 +1,7 @@
 // The TIER-1 surface the app host installs — what an APP may assume exists.
 //
 // `packages/vue-native/src/engine.d.ts` is deliberately not this file. It is
-// scoped to what `runtime.ts` and `livekit.ts` themselves touch ("as much of it
-// as the voice shim touches and no more"), and the runtime package exports no
+// scoped to what `runtime.ts` itself touches, and the runtime package exports no
 // ambient types for its consumers at all. So an app that writes the ordinary
 // browser code the compat policy promises — `localStorage.setItem`,
 // `matchMedia`, `navigator.clipboard`, `new AudioContext()` — had nothing
@@ -743,7 +742,7 @@ declare global {
 
 declare global {
   /** Merged onto engine.d.ts's `VnAudioContext`, which types only the two
-   *  members the LiveKit shim uses. */
+   *  members a native stream source uses. */
   interface VnAudioContext {
     readonly state: "suspended" | "running" | "closed";
     readonly sampleRate: number;
@@ -772,8 +771,8 @@ declare global {
     createRedStreamSource(options?: Partial<VnRedStreamSourceOptions>): VnRedStreamSourceNode;
   }
 
-  /** The PUSH seam. engine.d.ts types `streamId` and `close?` — what the voice
-   *  shim needs — and not the producer-side surface a JS feeder uses, which is
+  /** The PUSH seam. engine.d.ts types `streamId` and `close?` — what a native
+   *  stream source needs — and not the producer-side surface a JS feeder uses, which is
    *  the rest of this. redjs::webapi::pcm. */
   interface VnRedStreamSourceNode {
     /** Frames actually accepted; less than `block.length` means the channel
@@ -794,8 +793,7 @@ declare global {
    * A `GainNode` whose `gain` is the WHOLE AudioParam.
    *
    * NOT a merge onto engine.d.ts's `VnGainNode`, which already declares
-   * `readonly gain: { value: number }` — the `.value` half, which is all the
-   * LiveKit shim writes — and a merge cannot narrow a property that is already
+   * `readonly gain: { value: number }` — the `.value` half — and a merge cannot narrow a property that is already
    * there. The timeline half is just as real: `webapi/audio.rs` implements
    * `setValueAtTime` / `linearRampToValueAtTime` /
    * `exponentialRampToValueAtTime` / `cancelScheduledValues`, and AudioPage.vue
@@ -935,19 +933,6 @@ declare global {
   /** `VN_HTTP_ORIGIN` — where MediaPage points its http(s) `src` demos, so the
    *  page can be aimed at a real server without an internet dependency. */
   var __VN_HTTP_ORIGIN__: string | undefined;
-
-  /** `VN_VOICE_IDENTITY` — which participant this PROCESS is, so two instances
-   *  in two VN_DIST slots never collide on the SFU. */
-  var __VN_VOICE_IDENTITY__: string | undefined;
-
-  /**
-   * The dev host's local JWT minter, COMPILED OUT of a production build — a
-   * browser app fetches this from its own backend instead, and
-   * `TokenSource.endpoint()` is the same shape. The `typeof !== "function"`
-   * guard in VoicePage.vue is what makes the absence a message rather than a
-   * crash, so this must stay optional.
-   */
-  var __vn_dev_voice_token: ((identity: string, room: string) => string) | undefined;
 
   /** Flushes the host profiler's window and relabels the following seconds, so
    *  `VN_PERF=1`'s log reads as one block per imgperf scenario. Installed only

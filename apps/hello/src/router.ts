@@ -13,7 +13,6 @@ import MotionPage from "./pages/MotionPage.vue";
 import PermissionsPage from "./pages/PermissionsPage.vue";
 import StoragePage from "./pages/StoragePage.vue";
 import StylesPage from "./pages/StylesPage.vue";
-import VoicePage from "./pages/VoicePage.vue";
 import WindowPage from "./pages/WindowPage.vue";
 import LabPage from "./App.vue";
 
@@ -26,7 +25,6 @@ const routes = [
   { path: "/media", name: "media", component: MediaPage },
   { path: "/audio", name: "audio", component: AudioPage },
   { path: "/styles", name: "styles", component: StylesPage },
-  { path: "/voice", name: "voice", component: VoicePage },
   { path: "/window", name: "window", component: WindowPage },
   { path: "/permissions", name: "permissions", component: PermissionsPage },
   { path: "/storage", name: "storage", component: StoragePage },

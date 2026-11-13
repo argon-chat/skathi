@@ -123,8 +123,8 @@ pub fn sources(options: Options) -> Result<Vec<Value>, Fail> {
     if !options.screens && !options.windows {
         return Ok(Vec::new());
     }
-    // A fake capture shows no desktop of the machine's (vn-voice video.rs
-    // `fake_loop`), so its picker lists none either: one synthetic screen,
+    // A fake capture shows no desktop of the machine's, so its picker lists
+    // none either: one synthetic screen,
     // on every platform, whatever the platform's state.
     if fake_capture() {
         return fake_sources(options);
@@ -166,7 +166,7 @@ fn refuse_denied(state: vn_permissions::State) -> Result<(), Fail> {
     Err(Fail::new(name, message))
 }
 
-/// `VN_MEDIA_CAPTURE=fake` (any case), as vn-voice reads it.
+/// `VN_MEDIA_CAPTURE=fake` (any case), as a capture backend reads it.
 fn fake_capture() -> bool {
     std::env::var("VN_MEDIA_CAPTURE").is_ok_and(|v| v.trim().eq_ignore_ascii_case("fake"))
 }

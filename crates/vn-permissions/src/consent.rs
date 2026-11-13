@@ -63,13 +63,19 @@ use crate::decisions::{Decision, Entry, Store};
 /// the camera is the platform's (`unsupported` on Linux today). On macOS
 /// both are TCC's to ask (`has_native_prompt`), which this layer defers to.
 pub fn prompts(cap: Capability) -> bool {
-    prompts_with(cap, CAMERA_CAPTURE)
+    prompts_with(cap, CAMERA_CAPTURE.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-/// Whether vn-voice has a camera backend on this platform (`video.rs`:
-/// Media Foundation and DirectShow on Windows, AVFoundation on macOS; Linux
-/// has none).
-const CAMERA_CAPTURE: bool = cfg!(any(target_os = "windows", target_os = "macos"));
+/// Whether this process has a camera backend. The engine itself has none; an
+/// embedder that brings one (a native extension that opens the camera) says so
+/// with [`set_camera_capture`] before app code runs.
+static CAMERA_CAPTURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Declares that this process can capture a camera, so the consent layer asks
+/// about it instead of reporting the platform's own state.
+pub fn set_camera_capture(available: bool) {
+    CAMERA_CAPTURE.store(available, std::sync::atomic::Ordering::Relaxed);
+}
 
 fn prompts_with(cap: Capability, camera_capture: bool) -> bool {
     match cap {

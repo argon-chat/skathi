@@ -5181,9 +5181,9 @@ function activeElement(): MirrorElement | null {
 //      an event the host does not source (`resize`, `message`, `storage`…).
 //
 //    The host then ends the old page's media as a navigation does
-//    (crates/vn-app/src/reload.rs `end_media`): every voice room leaves, with
-//    its peer connections, every MediaStreamTrack stops (an unused microphone
-//    is released) and every AudioContext closes.
+//    (crates/vn-app/src/reload.rs `end_media`): every MediaStreamTrack stops
+//    (an unused microphone is released) and every AudioContext closes; an
+//    embedder's own sessions (a call) end in its reload hook.
 //
 //    What stays, and is said once when a reload happens: globals the old app
 //    set, fetches in flight (they settle into the old promise chains),
@@ -5350,7 +5350,7 @@ const realm = (() => {
     warnCompat(
       "location.reload",
       "location.reload() re-runs the app in the SAME JavaScript realm: its timers, animation frames, " +
-        "WebSockets, window/document listeners, voice rooms (with their peer connections), media tracks " +
+        "WebSockets, window/document listeners, media tracks " +
         "and AudioContexts are closed and the globals it added are deleted, but " +
         "changes it made to built-in objects and to globals that were already there stay, fetches in " +
         "flight settle into the old code, IndexedDB connections stay until the old code " +
@@ -5819,7 +5819,7 @@ defineDomGet("srcObject", function (this: MirrorElement) {
   if (!track?.__vnVideoSrc?.startsWith("vn-stream://")) {
     // An <audio> given an audio stream is what pages do to keep a remote track alive while
     // Web Audio plays it. The element keeps the stream and plays nothing itself: native audio
-    // reaches the speakers through the voice engine, not through an element.
+    // reaches the speakers through the engine that produced it, not through an element.
     if (this.tagName === "AUDIO") {
       mediaStreams.set(this, value);
       if (this.getAttribute("src")?.startsWith("vn-stream://")) this.removeAttribute("src");
@@ -11027,8 +11027,7 @@ const PERMISSION_NAMES: VnPermissionName[] = [
 
 function createPermissions(host: PermissionsHost): AppPermissions {
   const target = new EventTarget();
-  // reqId -> resolve. Settled by the host's per-frame pump, exactly as the
-  // LiveKit shim settles `__vn_voice_call` (packages/vue-native/src/livekit.ts).
+  // reqId -> resolve. Settled by the host's per-frame pump.
   const pending = new Map<number, (state: VnPermissionState) => void>();
   host.setDispatcher((token, state) => {
     const resolve = pending.get(token);

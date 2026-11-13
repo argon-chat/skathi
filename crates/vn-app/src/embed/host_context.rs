@@ -32,6 +32,7 @@ pub struct HostCookie {
 /// Cookie and secret operations require `vn-app`'s `storages` feature. Secrets use
 /// the existing sealed storage format and OS encryption provider; no plaintext fallback.
 pub struct HostContext<'a> {
+    runtime: Option<&'a vn_runtime::JsRuntime>,
     js: Option<&'a crate::js::Context>,
     storage_dir: Option<PathBuf>,
 }
@@ -39,6 +40,7 @@ pub struct HostContext<'a> {
 impl<'a> HostContext<'a> {
     pub(super) fn installed(runtime: Option<&'a vn_runtime::JsRuntime>) -> Self {
         Self {
+            runtime,
             js: runtime.map(vn_runtime::JsRuntime::ctx),
             #[cfg(feature = "storages")]
             storage_dir: vn_storage::cookies::folder(),
@@ -72,6 +74,23 @@ impl<'a> HostContext<'a> {
     /// to one: `run_on_main_thread` keeps the process and returns no handle.
     pub fn handle(&self) -> super::Handle {
         super::Handle { _private: () }
+    }
+
+    /// The engine's own runtime, for a native extension built against the
+    /// same `vn-runtime`: it registers `__vn_*`-style host fns with
+    /// `vn_runtime::host_fn!` and `JsRuntime::register`, which [`Self::expose`]
+    /// refuses on purpose. Prefer `expose` unless the extension needs that.
+    pub fn runtime(&self) -> &'a vn_runtime::JsRuntime {
+        self.runtime.expect("HostContext::runtime is only available inside Builder::setup")
+    }
+
+    /// Called on the VM thread once per frame, in the frame pump, before the
+    /// frame's wave drains: the place for a native extension to deliver what
+    /// its worker threads queued (events, settled promises), so a JS handler
+    /// never observes a half-applied patch. Keep it bounded; it is on the
+    /// frame's critical path. Runs until shutdown.
+    pub fn on_frame(&self, hook: impl Fn() + 'static) {
+        crate::js::on_frame(hook);
     }
 
     /// Called on the VM thread after old-page teardown, before its replacement.
@@ -211,7 +230,7 @@ mod tests {
 
     #[test]
     fn context_without_storage_refuses_credential_operations() {
-        let ctx = HostContext { js: None, storage_dir: None };
+        let ctx = HostContext { runtime: None, js: None, storage_dir: None };
         assert!(ctx.storage_dir().is_err());
         assert!(ctx.read_secret("test.sealed").is_err());
         assert!(ctx.write_secret("test.sealed", "secret").is_err());
@@ -230,7 +249,7 @@ mod tests {
     fn secrets_preserve_the_existing_sealed_format_and_refuse_corruption() {
         let folder = std::env::temp_dir().join(format!("vn-host-secret-{}-{}", std::process::id(),
             SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
-        let ctx = HostContext { js: None, storage_dir: Some(folder.clone()) };
+        let ctx = HostContext { runtime: None, js: None, storage_dir: Some(folder.clone()) };
         let name = "device-id.sealed";
         assert_eq!(ctx.read_secret(name).unwrap(), None);
         ctx.write_secret(name, "stable-device-id").unwrap();
@@ -251,7 +270,7 @@ mod tests {
     #[test]
     #[cfg(feature = "storages")]
     fn generic_cookie_setter_obeys_origin_and_domain_rules() {
-        let ctx = HostContext { js: None, storage_dir: Some(PathBuf::from("unused-cookie-test-folder")) };
+        let ctx = HostContext { runtime: None, js: None, storage_dir: Some(PathBuf::from("unused-cookie-test-folder")) };
         let mut cookie = HostCookie {
             url: "https://host-context.test".into(), name: "vn-host-bootstrap-test".into(), value: "value".into(),
             domain: Some("elsewhere.test".into()), path: Some("/".into()), secure: true,

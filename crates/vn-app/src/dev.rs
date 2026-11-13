@@ -21,136 +21,6 @@ use vn_runtime::JsRuntime;
 
 use crate::json;
 
-// ---------------------------------------------------------------------------
-// the dev voice token (docs/VOICE.md §2.6, D-15)
-// ---------------------------------------------------------------------------
-//
-// An API secret in a client binary is the classic LiveKit footgun, so the
-// minter lives HERE — in the dev half, compiled out of `--features prod`
-// entirely — and never in `vn-voice`. `apps/hello`'s Voice page calls
-// `__vn_dev_voice_token(identity, room)`, gets a JWT, and passes it to
-// `room.connect()` exactly as a browser app would pass one fetched from its
-// backend. In a prod build the host fn does not exist and the app falls back to
-// `TokenSource.endpoint`.
-//
-// The key/secret pair matches `tools/livekit/livekit-dev.yaml`. The secret is
-// >= 32 characters because livekit-server refuses to start otherwise ("secret
-// is too short"), and it is a well-known dev value on a LOOPBACK-ONLY server —
-// there is nothing here to leak.
-
-// All of it goes with the `voice` feature: a host without LiveKit has no room
-// to hand a token to.
-
-/// Where the loopback dev server listens. Handed to JS alongside the token so
-/// the app never hard-codes a URL.
-#[cfg(feature = "voice")]
-const DEV_URL: &str = "ws://127.0.0.1:7880";
-#[cfg(feature = "voice")]
-const DEV_API_KEY: &str = "devkey";
-#[cfg(feature = "voice")]
-const DEV_API_SECRET: &str = "secret-secret-secret-secret-1234";
-
-// ---------------------------------------------------------------------------
-// pointing the dev host at a server that is not the loopback one
-// ---------------------------------------------------------------------------
-//
-// Two environment overrides, both generic and neither carrying a credential:
-//
-//   VN_VOICE_URL              the server to hand JS, instead of DEV_URL
-//   VN_VOICE_TOKEN_<IDENTITY> a ready-made JWT for that identity
-//   VN_VOICE_TOKEN            a ready-made JWT for any identity (fallback)
-//
-// `<IDENTITY>` is the `identity` argument upper-cased with every character
-// outside `[A-Z0-9]` folded to `_`, so the two-window rig's `alice`/`bob` read
-// `VN_VOICE_TOKEN_ALICE` / `VN_VOICE_TOKEN_BOB`, and slots named `a`/`b` read
-// `VN_VOICE_TOKEN_A` / `VN_VOICE_TOKEN_B`. Per-identity is the only shape that
-// generalises: a token names the participant it was minted for, so N
-// participants need N tokens.
-//
-// **A supplied token is used verbatim and nothing is minted** — which is the
-// point. An API key/secret for somebody's real server must never have to be
-// handed to this process (or written into this file) merely to point a dev
-// build at it; a token minted elsewhere, out of band, is enough. `VN_VOICE_URL`
-// on its own still mints with the loopback dev key, which is what you want when
-// the thing that moved is the address of *our* dev SFU.
-//
-// This is not staging-specific and not test-specific: it is the one seam that
-// makes "which server does the Voice page join?" answerable without a rebuild.
-
-#[cfg(feature = "voice")]
-fn env_nonempty(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
-}
-
-/// `alice` -> `VN_VOICE_TOKEN_ALICE`
-#[cfg(feature = "voice")]
-fn token_var_for(identity: &str) -> String {
-    let mut name = String::from("VN_VOICE_TOKEN_");
-    for c in identity.chars() {
-        name.push(match c.to_ascii_uppercase() {
-            c @ ('A'..='Z' | '0'..='9') => c,
-            _ => '_',
-        });
-    }
-    name
-}
-
-// `__vn_dev_voice_token(identity, room)` -> {"serverUrl":…,"participantToken":…}
-//
-// The shape `TokenSource.endpoint()` resolves to, so an app can swap between
-// this and a real backend by changing one line.
-#[cfg(feature = "voice")]
-vn_runtime::host_fn!(fn vn_dev_voice_token(g, args) {
-    use livekit_api::access_token::{AccessToken, VideoGrants};
-
-    let identity = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }
-        .unwrap_or_default();
-    let room = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(1).0) }
-        .unwrap_or_default();
-    if identity.is_empty() || room.is_empty() {
-        return vn_runtime::bridge::throw_error(
-            g,
-            1,
-            "__vn_dev_voice_token(identity, room): both arguments are required",
-        );
-    }
-
-    let url = env_nonempty("VN_VOICE_URL").unwrap_or_else(|| DEV_URL.to_string());
-
-    // An override is used AS IS: no minting, so no key or secret is needed for
-    // a server whose credentials we do not have.
-    let supplied =
-        env_nonempty(&token_var_for(&identity)).or_else(|| env_nonempty("VN_VOICE_TOKEN"));
-
-    let token = match supplied {
-        Some(jwt) => Ok(jwt),
-        None => {
-            // `VideoGrants` defaults can_publish / can_subscribe /
-            // can_publish_data to TRUE, so naming the room and `room_join` is
-            // the whole grant.
-            let grants = VideoGrants { room_join: true, room: room.clone(), ..Default::default() };
-            AccessToken::with_api_key(DEV_API_KEY, DEV_API_SECRET)
-                .with_identity(&identity)
-                .with_name(&identity)
-                .with_ttl(std::time::Duration::from_secs(3600))
-                .with_grants(grants)
-                .to_jwt()
-        }
-    };
-
-    match token {
-        Ok(jwt) => {
-            let payload = format!(
-                "{{\"serverUrl\":{},\"participantToken\":{}}}",
-                json::quote(&url),
-                json::quote(&jwt)
-            );
-            JsRuntime::with(|rt| rt.ctx().string(&payload).0)
-        }
-        Err(e) => vn_runtime::bridge::throw_error(g, 0, &format!("could not mint a dev token: {e}")),
-    }
-});
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -169,24 +39,6 @@ mod tests {
         assert_eq!(super::app_dir_of(""), None);
         assert_eq!(super::app_dir_of("src/main.js"), None);
     }
-
-    #[test]
-    #[cfg(feature = "voice")]
-    fn token_var_names_are_derived_from_the_identity() {
-        assert_eq!(super::token_var_for("alice"), "VN_VOICE_TOKEN_ALICE");
-        assert_eq!(super::token_var_for("a"), "VN_VOICE_TOKEN_A");
-        // Anything an identity may legally contain that an env var may not.
-        assert_eq!(super::token_var_for("user-1.x"), "VN_VOICE_TOKEN_USER_1_X");
-    }
-}
-
-/// Registers the dev-only host fns. Called from `main` next to
-/// `devtools::install`, inside the same `#[cfg(not(feature = "prod"))]`.
-pub fn install(rt: &JsRuntime) {
-    #[cfg(feature = "voice")]
-    rt.register("__vn_dev_voice_token", 2, vn_dev_voice_token as *const _);
-    #[cfg(not(feature = "voice"))]
-    let _ = rt;
 }
 
 /// How often the frame pump calls [`poll`] — every 30th frame, ~2×/s at 60 fps.
@@ -443,9 +295,8 @@ fn cold_restart(rt: &JsRuntime) {
     ) {
         eprintln!("[dev] teardown: {}\n{}", e.header, e.stack);
     }
-    // A new vendor.js is a new `livekit-client` shim that can never reach the
-    // old rooms: end them, and the old page's captures and AudioContexts, as
-    // a reload does. (A hot restart keeps them — the shim reseeds.)
+    // A new vendor.js is a new runtime that can never reach the old page's
+    // captures and AudioContexts: end them, as a reload does.
     crate::reload::end_media(rt, "cold restart");
     crate::js::reload(rt.ctx());
     // The Network panel's divider between the two runs (devtools/net.rs).

@@ -52,7 +52,7 @@ let osc: VnOscillatorNode | null = null;
 let preAnalyser: VnAnalyserNode | null = null;
 let postAnalyser: VnAnalyserNode | null = null;
 // `VnGainNodeWithParam`, not `VnGainNode`: engine.d.ts types the latter's
-// `gain` as `{ value: number }` — the half the LiveKit shim writes — and
+// `gain` as `{ value: number }` — the half a native producer writes — and
 // `rampGain()` below drives the AudioParam TIMELINE, which redjs implements in
 // full. See the note on the type in apps/env.d.ts.
 let gainNode: VnGainNodeWithParam | null = null;

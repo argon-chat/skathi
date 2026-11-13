@@ -2,6 +2,7 @@
 //! Windows they run on the tray's own thread; on macOS on the main thread
 //! (which is also the VM's), from AppKit's event dispatch.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 pub type Callback = Arc<dyn Fn() + Send + Sync + 'static>;
@@ -219,6 +220,9 @@ pub struct Tray {
     owner: Arc<Owner>,
 }
 static APP: OnceLock<Mutex<Weak<Owner>>> = OnceLock::new();
+/// Whether the last model given to the application's icon ([`Tray::app`]) was
+/// one to show, rather than a removal.
+static APP_SHOWN: AtomicBool = AtomicBool::new(false);
 impl Tray {
     pub const fn is_available() -> bool {
         cfg!(any(windows, target_os = "macos"))
@@ -251,7 +255,23 @@ impl Tray {
         if let Some(options) = &options {
             options.validate()?;
         }
-        self.owner.0.set(options)
+        let shown = options.is_some();
+        let revision = self.owner.0.set(options)?;
+        if self.is_app() {
+            APP_SHOWN.store(shown, Ordering::Release);
+        }
+        Ok(revision)
+    }
+    fn is_app(&self) -> bool {
+        APP.get()
+            .and_then(|slot| slot.lock().ok()?.upgrade())
+            .is_some_and(|owner| Arc::ptr_eq(&owner, &self.owner))
+    }
+    /// Whether the application's icon is up: its last model was one to show
+    /// (from Rust or JavaScript) and it has not been dropped since. What a
+    /// hidden start asks before it trusts the user to have a way back in.
+    pub fn app_shown() -> bool {
+        APP_SHOWN.load(Ordering::Acquire) && Self::existing_app().is_some()
     }
     pub fn revision(&self) -> u64 {
         self.owner.0.revision()

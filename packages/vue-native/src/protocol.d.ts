@@ -3,7 +3,7 @@
 // Every function below is registered on the JS global by a Rust `install()`
 // (the file is named on each block), and every one of them is the ONLY way the
 // JS runtime can reach the retained tree, the cascade, the media pipeline, the
-// permission backend, the storage area or the voice engine. Until this file
+// permission backend or the storage area. Until this file
 // existed the whole seam was untyped: a call with the arguments in the wrong
 // order, or a `number` where the host reads a string, produced a silently
 // wrong-but-plausible result rather than a build error.
@@ -20,9 +20,9 @@
 //   * STRUCTURED ANSWERS ARE STRINGS, in one of three shapes: comma-joined
 //     numbers (`__vn_query`, `__vn_bounds`), `name=value` lines
 //     (`__vn_computed_style`, `__vn_media_state`), or JSON
-//     (`__vn_permissions_*`, `__vn_storage_*`, `__vn_voice_*`). The alias types
+//     (`__vn_permissions_*`, `__vn_storage_*`). The alias types
 //     below say which, so a caller cannot `JSON.parse` a line-shaped answer.
-//   * A HOST FN MAY BE ABSENT. `vn-storage`, `vn-permissions` and `vn-voice`
+//   * A HOST FN MAY BE ABSENT. `vn-storage` and `vn-permissions`
 //     are installed by the app host, not by the engine, and a build without
 //     them (or the unit-test harness) simply has no such global. The runtime
 //     probes with `typeof __vn_storage_info === "function"` and falls back to
@@ -853,209 +853,8 @@ declare function __vn_fs_permission(h: number, request: boolean): "granted" | "p
 declare function __vn_dialog_open(requestJson: VnJson, currentFiles: unknown): VnJson;
 /** Save As for a `blob:`/`data:` URL, resolved at the call. Settles `{ saved }` or `{ cancelled }`. */
 declare function __vn_download(url: string, downloadAttribute: string): VnJson;
-
-// ---------------------------------------------------------------------------
-// voice — crates/vn-voice/src/lib.rs (CONTRACT.md, docs/VOICE.md)
-// ---------------------------------------------------------------------------
-
-/** Starts an engine for one room. `0` means "could not start". */
-declare function __vn_voice_create(optionsJson: VnJson): number;
-/**
- * Posts one op to the room's actor and returns its request id. `0` is the
- * SYNCHRONOUS-REFUSAL sentinel — an unknown room id, or an engine whose channel
- * is closed — never a real request id, which is what lets the shim reject
- * immediately instead of leaving a promise pending forever.
- */
-declare function __vn_voice_call(roomId: number, op: number, argJson: VnJson): number;
-/** A live read of the actor's plain-data mirror. `""` for an unknown room. */
-declare function __vn_voice_snapshot(roomId: number): VnJson;
-/**
- * A new page `MediaStreamTrack` of a subscribed remote audio track, or `null`
- * (unsubscribed, or no Web Audio in this host). The page plays it once its
- * graph reaches a destination, and the room's mix then leaves it out
- * (docs/VOICE.md D-23).
- */
-declare function __vn_voice_remote_track(roomId: number, trackSid: string): object | null;
-declare function __vn_voice_video_create(optionsJson: string): string;
-declare function __vn_voice_video_state(captureId: number): string;
-declare function __vn_voice_video_stop(captureId: number): void;
-declare function __vn_voice_video_devices(): string;
-declare function __vn_voice_screen_audio_create(optionsJson: string): string;
-declare function __vn_voice_screen_audio_state(captureId: number): string;
-declare function __vn_voice_screen_audio_stop(captureId: number): void;
-declare function __vn_voice_screen_audio_track(captureId: number): object | null;
+/** `getDisplayMedia`'s picker: the screens and windows a capture may show (vn-desktop capture.rs). */
 declare function __vn_desktop_get_screen_sources(typesJson: string, optionsJson: string): VnJson;
-/** Installs the one callback every room's results and events arrive through. */
-declare function __vn_voice_set_dispatcher(fn: VnVoiceDispatcher): void;
-/** Posts Shutdown and JOINS the thread, so no callback can still be in flight. */
-declare function __vn_voice_destroy(roomId: number): void;
-
-/**
- * `(roomId, kind, reqId, payload)`.
- *
- * `kind` 0 = a request RESOLVED (payload is its JSON result), 1 = a request
- * REJECTED (payload is the message); anything >= 16 is a room EVENT code from
- * `crates/vn-voice/src/proto.rs` and `reqId` is 0.
- */
-type VnVoiceDispatcher = (
-  roomId: number,
-  kind: number,
-  reqId: number,
-  payload: string,
-) => void;
-
-// --- what crosses in the payload -------------------------------------------
-//
-// Read off `crates/vn-voice/src/engine.rs`'s `Obj::new().str(…)` builders, not
-// off the shim: these are what the ACTOR emits, and the point of writing them
-// down is that a disagreement between the two sides becomes a type error
-// instead of a field that silently reads `undefined`.
-//
-// Every field is optional here even where engine.rs always emits it, because
-// the shim guards each one with `!== undefined` and the unit harness sends
-// partial payloads on purpose. Where the guarantee matters it is stated in the
-// doc comment rather than in the `?`.
-
-/** `kind_str` — engine.rs. Never "unknown" on the wire; the shim's own
- *  `Track.Kind.Unknown` is a local default, not something the actor sends. */
-type VnVoiceTrackKind = "audio" | "video" | "unknown";
-/** `source_str` — engine.rs. */
-type VnVoiceTrackSource =
-  | "camera"
-  | "microphone"
-  | "screen_share"
-  | "screen_share_audio"
-  | "unknown";
-/** 45 TRACK_STREAM_STATE sends the first two; "unknown" is the shim's own. */
-type VnVoiceStreamState = "active" | "paused" | "unknown";
-
-/** livekit-client's `ParticipantPermission` — `permissions_json!` in engine.rs.
- *  `canPublishSources` holds the protocol's TrackSource numbers. */
-interface VnVoicePermissions {
-  canSubscribe: boolean;
-  canPublish: boolean;
-  canPublishData: boolean;
-  canPublishSources: number[];
-  hidden: boolean;
-  recorder: boolean;
-  canUpdateMetadata: boolean;
-  agent: boolean;
-  canSubscribeMetrics: boolean;
-  canManageAgentSession: boolean;
-}
-/** `state_str` — engine.rs. "signalReconnecting" is the shim's own enum member
- *  and is never emitted: the Rust SDK exposes three states (voice:signal-substates). */
-type VnVoiceConnectionState =
-  | "disconnected"
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "signalReconnecting";
-/** `quality_str` — engine.rs emits only the first four. "unknown" is the shim's
- *  own default, and `""` (below) is what a default-constructed roster carries. */
-type VnVoiceConnectionQuality = "excellent" | "good" | "poor" | "lost" | "unknown";
-
-/** `TrackState::json()` — all eight keys are always present on the wire. */
-interface VnVoiceTrackState {
-  sid: string;
-  videoSrc?: string;
-  audioCaptureId?: number;
-  name?: string;
-  /** Present on the track itself, in addition to the event's flat `identity`. */
-  ownerIdentity?: string;
-  kind?: VnVoiceTrackKind;
-  source?: VnVoiceTrackSource;
-  muted?: boolean;
-  /** Always `true` for a LOCAL publication, whatever the SDK thinks. */
-  subscribed?: boolean;
-  isLocal?: boolean;
-}
-
-/** `ParticipantState::json()` — all eleven keys are always present on the wire. */
-interface VnVoiceParticipantState {
-  identity?: string;
-  sid?: string;
-  name?: string;
-  /** `""` when unset, never null. */
-  metadata?: string;
-  /** Always an object, possibly empty. A FRESH object every event — see the
-   *  ParticipantAttributesChanged note in the conversion report. */
-  attributes?: Record<string, string>;
-  isLocal?: boolean;
-  isSpeaking?: boolean;
-  /** DERIVED by the actor: "no unmuted audio publication exists". */
-  isMuted?: boolean;
-  audioLevel?: number;
-  /** `""` from a `ParticipantState::default()` — i.e. the local participant
-   *  before connect, and every participant after `reset_roster`. */
-  connectionQuality?: VnVoiceConnectionQuality | "";
-  tracks?: VnVoiceTrackState[];
-  /** Absent until the server has sent the participant's permission. */
-  permissions?: VnVoicePermissions;
-}
-
-/** The union of every room event's payload (dispatcher `kind >= 16`). One flat
- *  interface rather than a discriminated union because the discriminant is the
- *  dispatcher's separate `kind` argument, not a field. The comment on each
- *  field names the event code that sends it. */
-interface VnVoiceEventData {
-  /** 17 CONNECTION_STATE; 45 TRACK_STREAM_STATE ("active" / "paused"). */
-  state?: VnVoiceConnectionState | VnVoiceStreamState;
-  /** 18 CONNECTED, 41 ROOM_MOVING, 42 MOVED — the room NAME. */
-  room?: string;
-  /** 18 CONNECTED. */
-  localParticipant?: VnVoiceParticipantState;
-  /** 22 PARTICIPANT_CONNECTED, 23 PARTICIPANT_DISCONNECTED, 25 PARTICIPANT_UPDATED. */
-  participant?: VnVoiceParticipantState;
-  /** 24 PARTICIPANT_ACTIVE, 26-34 track events, 36 PARTICIPANT_STATE,
-   *  37 CONNECTION_QUALITY, 38 DATA_RECEIVED (`""` for an anonymous packet). */
-  identity?: string;
-  /** 19 DISCONNECTED and 23 PARTICIPANT_DISCONNECTED: a `DisconnectReason`
-   *  name (`"PARTICIPANT_REMOVED"`). 44 TRACK_SUBSCRIPTION_FAILED: a
-   *  `SubscriptionError` name. */
-  reason?: string;
-  /** 43 PARTICIPANT_PERMISSIONS; null when the server took them away. */
-  permissions?: VnVoicePermissions | null;
-  /** 44 TRACK_SUBSCRIPTION_FAILED, 45 TRACK_STREAM_STATE. */
-  trackSid?: string;
-  /** 39 CONNECT_FAILED. Nothing in the shim reads it. */
-  error?: string;
-  /** 36 PARTICIPANT_STATE. */
-  isSpeaking?: boolean;
-  /** 36 PARTICIPANT_STATE. */
-  audioLevel?: number;
-  /** 36 PARTICIPANT_STATE. */
-  isMuted?: boolean;
-  /** 36 PARTICIPANT_STATE. */
-  connectionQuality?: VnVoiceConnectionQuality | "";
-  /** 37 CONNECTION_QUALITY. */
-  quality?: VnVoiceConnectionQuality;
-  /** 35 ACTIVE_SPEAKERS. Unordered — a HashSet on the far side. */
-  identities?: string[];
-  /** 26-34, the track events. */
-  track?: VnVoiceTrackState;
-  /** 34 LOCAL_TRACK_REPUBLISHED, and only when the mic sid actually changed. */
-  previousSid?: string;
-  /** 38 DATA_RECEIVED — base64. */
-  payload?: string;
-  /** 38 DATA_RECEIVED. */
-  reliable?: boolean;
-  /** 38 DATA_RECEIVED — `""` when the packet carried none, never null. */
-  topic?: string;
-  /** 40 RTT. `-1` means unknown. */
-  rttMs?: number;
-}
-
-/** `Roster::json()` — what `__vn_voice_snapshot` answers. All five keys are
- *  always present; `""` (not `"{}"`) comes back for an unknown room id. */
-interface VnVoiceSnapshot {
-  state?: VnVoiceConnectionState;
-  /** The room NAME. `Room._seed` does not read it. */
-  room?: string;
-  rttMs?: number;
-  localParticipant?: VnVoiceParticipantState;
-  participants?: VnVoiceParticipantState[];
-}
 
 // ---------------------------------------------------------------------------
 // the `__VN_*` globals — not host FUNCTIONS, but part of the same contract
@@ -1133,6 +932,8 @@ interface VnAppWindow extends VnEventTarget {
   restore(): void;
   close(): void;
   center(): void;
+  /** Shows and raises the window, including one that started hidden (a tray click). */
+  show(): void;
   startDragging(): void;
   startResizeDragging(): void;
   setFullscreen(on: boolean): void;

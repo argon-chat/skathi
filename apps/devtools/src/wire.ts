@@ -172,7 +172,7 @@ async function request<T>(
     clearTimeout(timer);
   }
   // Same story as `fetch` above: `VnFetchResponse.text` is declared optional
-  // because engine.d.ts types only what the voice shim reads. redjs's response
+  // because engine.d.ts types only what the runtime reads. redjs's response
   // has it (`webapi::fetch`), and this app cannot work without it.
   if (!res.text) throw new Error(`${cmd}: this host's fetch response has no \`text()\``);
   const text = await res.text();

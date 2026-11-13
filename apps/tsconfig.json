@@ -45,8 +45,8 @@
     // bare specifiers into the loader's registry (`PRESEEDED` in build.ts,
     // `registry` in src/loader.ts). These paths are that same mapping, so the
     // checker sees the module the app will actually import at runtime — which
-    // is what puts `appWindow`, `appStorage`, `appPermissions` and the LiveKit
-    // shim under the compiler for the first time. Diverging from build.ts here
+    // is what puts `appWindow`, `appStorage` and `appPermissions` under the
+    // compiler for the first time. Diverging from build.ts here
     // would mean checking against a package that never ships.
     "baseUrl": ".",
     "paths": {
@@ -56,10 +56,6 @@
       // exactly as the loader seeds them.
       "vue": ["../packages/vue-native/src/runtime.ts"],
       "vue-native": ["../packages/vue-native/src/runtime.ts"],
-      // NOT the npm package: the name is bound to our shim (loader.ts line
-      // ~326). Pointing tsc at the real SDK's typings would type-check code
-      // against an API that is not the one being called.
-      "livekit-client": ["../packages/vue-native/src/livekit.ts"],
       // These two ARE the real published packages, vendored once under the
       // runtime and pre-seeded from there.
       "vue-router": ["../packages/vue-native/node_modules/vue-router"],
@@ -77,7 +73,7 @@
     // The runtime's ambient declarations. They are NOT pulled in by importing
     // `vue-native`: a `.d.ts` that declares only globals is reached through
     // `include`/`files`/`types` or not at all, and without them every
-    // `__vn_*` host call inside `runtime.ts` and `livekit.ts` is an unresolved
+    // `__vn_*` host call inside `runtime.ts` is an unresolved
     // name. Listing them here is also what puts the host protocol in scope for
     // the apps themselves (imgperf calls `__vn_log`).
     "../packages/vue-native/src/engine.d.ts",

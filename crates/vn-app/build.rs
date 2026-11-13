@@ -308,12 +308,11 @@ fn thread_stack_commit() {
 /// The macOS counterparts of the link.exe switches above, for vn-app's
 /// executable.
 ///
-/// - `-ObjC`: libwebrtc's Objective-C categories (vn-voice) are only kept when
-///   the final link asks for them. webrtc-sys prints the flag itself, but a
-///   library's link args never reach the binary's link.
+/// - `-ObjC`: Objective-C categories in a static library are only kept when
+///   the final link asks for them; a library's own link args never reach the
+///   binary's link.
 /// - `-rpath /usr/lib/swift`: frameworks that load the system Swift runtime
-///   (ScreenCaptureKit, through libwebrtc) find it there, as Zed's own build
-///   sets it.
+///   (ScreenCaptureKit) find it there, as Zed's own build sets it.
 /// - `-no_deduplicate`: ld64's identical-code folding, which would do to JSC's
 ///   constructor identity what `/OPT:NOICF` prevents on Windows (see
 ///   `no_identical_code_folding`). Not yet measured on a Mac: check that

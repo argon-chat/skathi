@@ -135,6 +135,21 @@ type LifecycleHook = std::rc::Rc<dyn Fn(&Context)>;
 thread_local! {
     static RELOAD_HOOKS: std::cell::RefCell<Vec<LifecycleHook>> = const { std::cell::RefCell::new(Vec::new()) };
     static SHUTDOWN_HOOKS: std::cell::RefCell<Vec<LifecycleHook>> = const { std::cell::RefCell::new(Vec::new()) };
+    static FRAME_HOOKS: std::cell::RefCell<Vec<std::rc::Rc<dyn Fn()>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn on_frame(hook: impl Fn() + 'static) {
+    FRAME_HOOKS.with(|hooks| hooks.borrow_mut().push(std::rc::Rc::new(hook)));
+}
+/// Runs the embedder's frame hooks, from the frame pump. Cloned out first, so
+/// a hook may register another without a `RefCell` double borrow.
+pub(crate) fn frame() {
+    let hooks = FRAME_HOOKS.with(|hooks| hooks.borrow().clone());
+    for hook in hooks {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook())).is_err() {
+            eprintln!("[embed] a plugin frame hook panicked");
+        }
+    }
 }
 
 pub(crate) fn on_reload(hook: impl Fn(&Context) + 'static) {
@@ -174,6 +189,7 @@ pub(crate) fn shutdown(context: &Context) {
     }
     run_hooks(SHUTDOWN_HOOKS.with(|hooks| std::mem::take(&mut *hooks.borrow_mut())), context);
     RELOAD_HOOKS.with(|hooks| hooks.borrow_mut().clear());
+    FRAME_HOOKS.with(|hooks| hooks.borrow_mut().clear());
 }
 
 #[cfg(test)]

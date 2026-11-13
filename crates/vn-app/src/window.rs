@@ -2198,6 +2198,7 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
         Op::Activate(_) if crate::quiet::never_focus() => {}
         Op::Activate(raise) => {
             if raise {
+                REVEALED.store(true, std::sync::atomic::Ordering::Release);
                 window.activate_window();
             } else {
                 window.request_attention();
@@ -2343,6 +2344,16 @@ pub(crate) fn request_activate() {
     submit(Op::Activate(true));
 }
 
+/// Set the first time the primary window is raised (`appWindow.show()`, a
+/// tray click through `Handle::show`, a second launch): after it, an initially
+/// hidden window is no longer hidden for want of a way to show it.
+static REVEALED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Has anything shown the primary window since a hidden start?
+pub(crate) fn revealed() -> bool {
+    REVEALED.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// `submit` needs the op twice (apply it, or queue it) and `Op` is not `Clone`
 /// because `Op::Title` owns a `String`. Rather than clone every op on the hot
 /// path, take it by reference and rebuild — the enum is tiny.
@@ -2439,6 +2450,9 @@ host_fn!(fn vn_window_verb(g, args) {
         "close" => submit(Op::Close),
         "center" => submit(Op::Center),
         "startDragging" => submit(Op::StartDragging),
+        // Shows and raises the window, including the first show of one that
+        // started hidden: what a tray icon's click does.
+        "show" => request_activate(),
         other => advise(&format!("unknown appWindow verb {other:?} (host protocol mismatch)")),
     }
     UNDEF

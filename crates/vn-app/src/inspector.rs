@@ -524,7 +524,7 @@ fn spawn(window: Option<u64>) -> Result<u32, String> {
     // (or an `appDevtools.disable()` this app later reversed) would otherwise
     // produce a child window nothing can reach or close politely.
     cmd.env("VN_DEVTOOLS", "1");
-    for name in ["VN_WINDOW", "VN_SCENARIO", "VN_VOICE_IDENTITY", "VN_APP_ROOT", "VN_PERF"] {
+    for name in ["VN_WINDOW", "VN_SCENARIO", "VN_APP_ROOT", "VN_PERF"] {
         cmd.env_remove(name);
     }
     cmd.stdin(std::process::Stdio::null());

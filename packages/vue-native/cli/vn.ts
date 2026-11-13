@@ -38,9 +38,9 @@ build options
                                target/…/release/vn-app.exe, then the local cache)
   selection — which engine parts the host carries (default: vn.config.json
   "windows": "without" / "features" / "host", else every part). One of:
-  --without voice,audio        leave these parts out
+  --without audio,clipboard    leave these parts out
   --features audio,storages    take only these parts
-  --variant no-devtools+no-voice
+  --variant no-devtools+no-audio
                                a host variant by name ("standard" = every part)
   parts: ${OPTIONAL.join(", ")}
   --console                    keep the console subsystem (a console window opens with it)
@@ -105,7 +105,7 @@ function variantOf(flags: Flags): Variant | undefined {
   if (host !== undefined && (typeof host !== "string" || !host.trim())) throw new ConfigError("--variant needs a variant name");
   const sel = { features: list("features"), without: list("without"), host: host as string | undefined };
   if (!sel.features && !sel.without && !sel.host) return undefined;
-  // Normalised: `no-voice+no-devtools` and `no-devtools+no-voice` are one host.
+  // Normalised: `no-audio+no-devtools` and `no-devtools+no-audio` are one host.
   return variantFor(partsLeftOut(selectVariant(sel, "the command line")));
 }
 

@@ -70,21 +70,8 @@ devtools = []
 # default; `cargo build -p vn-app --no-default-features` builds a host with no
 # audio at all, which is ~40 fewer crates to compile. The reasoning for the
 # default living on rather than off is in crates/vn-runtime/Cargo.toml.
-default = ["audio", "storages", "clipboard", "indexeddb", "voice", "webgpu", "native-dx12"]
-# `vn-voice/audio` rides along: it is the flag that lets the voice mixer see
-# `redjs::webapi::pcm` and route a room's playout into the app's graph. The two
-# must move together — a host with `AudioContext` but no way to reach it from
-# voice would be a silent room with no explanation.
-audio = ["vn-runtime/audio", "vn-voice?/audio", "vn-permissions/audio"]
-# LiveKit voice — `livekit-client` (docs/VOICE.md): the `livekit` crate and the
-# whole prebuilt libwebrtc linked statically, the largest optional piece of
-# the image. ON by default. An app with no calls ships a host without it —
-# `vn build --without voice` (docs/PACKAGING.md §7.1). Off, the
-# `__vn_voice_*` globals do not exist and the `livekit-client` shim advises
-# once at the first `new Room()`, whose `connect()` then rejects; nothing else
-# in the app changes. `getUserMedia` and Web Audio are not voice's: they stay
-# with `audio`.
-voice = ["dep:vn-voice", "dep:livekit-api"]
+default = ["audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12"]
+audio = ["vn-runtime/audio", "vn-permissions/audio"]
 
 # `localStorage` / `sessionStorage`, plus the `appStorage` folder + encryption
 # extension. ON by default for the same reason `audio` is: an app written
@@ -166,7 +153,7 @@ self_cell = "1"
 vn-desktop = { path = "../vn-desktop" }
 # The platform backends behind redjs's `navigator.permissions`, plus the
 # `appPermissions` extension surface. NOT dev-gated, for the same reason
-# vn-voice is not: an app asking whether it may use the microphone is doing
+# an app asking whether it may use the microphone is doing
 # application work, not automation.
 vn-permissions = { path = "../vn-permissions" }
 # `localStorage`'s bytes: the storage folder, the atomic writes, DPAPI. Optional
@@ -176,18 +163,6 @@ vn-storage = { path = "../vn-storage", optional = true }
 # `navigator.clipboard` over gpui's clipboard — the same one vn-elements' text
 # input uses for Ctrl+C. Optional for the same reason.
 vn-clipboard = { path = "../vn-clipboard", optional = true }
-# LiveKit voice. NOT dev-gated: `vn_voice::pump()` runs in every build that has
-# the `voice` feature, because voice is an application capability rather than
-# an automation surface.
-vn-voice = { path = "../vn-voice", optional = true }
-# The DEV token minter only (`dev.rs`, behind `#[cfg(not(feature = "prod"))]`).
-# `access-token` is just `jsonwebtoken` + `hmac` — no HTTP client — and it lives
-# here rather than in vn-voice on purpose: an API secret compiled into a client
-# binary is the classic LiveKit footgun, so the half of the app that ships
-# (`--features prod`) must not be able to mint one (docs/VOICE.md D-15).
-# Cargo has no per-feature exclusion for a dependency a prod build never calls,
-# same as `image` above. It goes with `voice`.
-livekit-api = { version = "0.6", default-features = false, features = ["access-token"], optional = true }
 # The fork's own client (vendor/zed/crates/reqwest_client). Since m26 gpui's
 # loaders fetch through redjs's stack instead (src/http_client.rs); this one is
 # the fallback for a request that stack does not carry as is (a body, or a
@@ -237,6 +212,9 @@ gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-featur
 libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# `#[implement]` for the audio device notifier (src/microphone/devices.rs)
+# names `windows_core` from the crate root.
+windows-core = "0.62"
 # WebGPU joins the native renderer device on first requestAdapter.
 # Compiling the API does not initialize its guest device or shader caches.
 wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "3b3506ea31154edc04de64debda0e780cba2639c", default-features = false, features = ["std", "wgsl", "dx12"], optional = true }
@@ -255,6 +233,10 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    # `IMMNotificationClient` — the system's audio device changes, for
+    # getUserMedia and the default sink (src/microphone/devices.rs). Already
+    # compiled for the graph: cpal enables it.
+    "Win32_Media_Audio",
     # `GetUserDefaultUILanguage` — the crash dialog's language
     # (src/crash_window.rs). Already compiled for the graph: vn-permissions
     # picks its prompt's language the same way.

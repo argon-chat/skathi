@@ -796,7 +796,7 @@ pub fn pump() {
     }
     if called {
         // The awaiting `.then()` and the Vue patch it triggers land inside this
-        // same Commit publication — the rule vn-voice::pump documents.
+        // same Commit publication.
         JsRuntime::with(|rt| rt.ctx().drain_microtasks());
     }
 }

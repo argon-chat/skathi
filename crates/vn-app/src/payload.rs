@@ -527,9 +527,8 @@ pub fn slot_name() -> String {
 /// [`host_variant`] names them — the same list, in the same order, as
 /// `OPTIONAL` in packages/vue-native/cli/config.ts. `devtools` is the inverse
 /// of the `no-devtools` feature; the rest are default features of their own.
-pub const OPTIONAL: [(&str, bool); 7] = [
+pub const OPTIONAL: [(&str, bool); 6] = [
     ("devtools", cfg!(vn_devtools)),
-    ("voice", cfg!(feature = "voice")),
     ("audio", cfg!(feature = "audio")),
     ("clipboard", cfg!(feature = "clipboard")),
     ("storages", cfg!(feature = "storages")),
@@ -539,7 +538,7 @@ pub const OPTIONAL: [(&str, bool); 7] = [
 
 /// This host's variant: `standard` when nothing optional was left out, else
 /// what was, as `no-<part>` joined by `+` in [`OPTIONAL`]'s order —
-/// `no-devtools`, `no-voice`, `no-devtools+no-voice`. `vn build` keys its host
+/// `no-devtools`, `no-audio`, `no-devtools+no-audio`. `vn build` keys its host
 /// cache by it, and asks for one by it.
 pub fn host_variant() -> String {
     let off: Vec<String> = OPTIONAL.iter().filter(|(_, on)| !on).map(|(name, _)| format!("no-{name}")).collect();
@@ -564,7 +563,6 @@ pub fn host_info_json() -> String {
         (cfg!(feature = "storages"), "storages"),
         (cfg!(feature = "clipboard"), "clipboard"),
         (cfg!(feature = "indexeddb"), "indexeddb"),
-        (cfg!(feature = "voice"), "voice"),
         (cfg!(feature = "webgpu"), "webgpu"),
     ] {
         if on {

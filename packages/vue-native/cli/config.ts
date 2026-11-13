@@ -23,10 +23,12 @@
 //       { "name": "assets" }      no "match": every asset no earlier pack took
 //     ],
 //     "define": { "K": … },       Vite's `define` — read by the builders (vitecompat.ts appDefines)
+//     "aliases": { "sdk": "native/sdk.ts" },  a bare module name → the app's own file that stands in
+//                                 for it, app-root-relative (prod.ts appAliases; `vn build` only)
 //     "windows": {                Windows exe identity — only `vn build` reads it
 //       "exeName": "Hello", "icon": "icon.png", "company": "…", "copyright": "…",
 //       "description": "…", "console": false,
-//       "without": ["voice"]      the engine parts the host leaves out (OPTIONAL below);
+//       "without": ["audio"]      the engine parts the host leaves out (OPTIONAL below);
 //                                 or "features": [...] — the parts it TAKES;
 //                                 or "host": "no-devtools" — a whole variant, by name
 //     },
@@ -56,7 +58,6 @@ import { numericVersion } from "./versioninfo";
  *
  * - `devtools`  — the devtools listener, the embedded inspector, F12
  *                 (`--features no-devtools`; a runtime switch exists too);
- * - `voice`     — `livekit-client`: LiveKit and the prebuilt libwebrtc;
  * - `audio`     — Web Audio and `getUserMedia`;
  * - `clipboard` — `navigator.clipboard`;
  * - `storages`  — `localStorage` / `sessionStorage` / `appStorage`;
@@ -65,13 +66,13 @@ import { numericVersion } from "./versioninfo";
  *
  * Each but `devtools` is a default cargo feature of vn-app of the same name.
  */
-export const OPTIONAL = ["devtools", "voice", "audio", "clipboard", "storages", "indexeddb", "webgpu"] as const;
+export const OPTIONAL = ["devtools", "audio", "clipboard", "storages", "indexeddb", "webgpu"] as const;
 export type Part = (typeof OPTIONAL)[number];
 
 /**
  * A host's name for what is in it: `standard` with every part, else the parts
  * left out as `no-<part>` joined by `+`, in {@link OPTIONAL}'s order —
- * `no-devtools`, `no-voice`, `no-devtools+no-voice`. The host cache is keyed
+ * `no-devtools`, `no-audio`, `no-devtools+no-audio`. The host cache is keyed
  * by it, and a host is asked for by it.
  */
 export type Variant = string;
@@ -105,9 +106,9 @@ export function partsLeftOut(variant: Variant): Part[] {
 }
 
 /**
- * A list of part names, checked: `"voice,audio"`, or an array of them. Spaces
- * separate too: PowerShell hands an unquoted `voice,audio` over as
- * `"voice audio"`.
+ * A list of part names, checked: `"audio,clipboard"`, or an array of them.
+ * Spaces separate too: PowerShell hands an unquoted `audio,clipboard` over as
+ * `"audio clipboard"`.
  */
 export function parseParts(list: unknown, where: string): Part[] {
   const items = typeof list === "string" ? list.split(/[\s,]+/).filter(Boolean) : list;
@@ -138,9 +139,6 @@ export function selectVariant(sel: { features?: Part[]; without?: Part[]; host?:
 export function variantWarnings(variant: Variant): string[] {
   const off = new Set(partsLeftOut(variant));
   const out: string[] = [];
-  if (!off.has("voice") && off.has("audio")) {
-    out.push("the host has voice but no audio: a voice room connects, but nothing it receives is heard");
-  }
   if (!off.has("indexeddb") && off.has("storages")) {
     out.push("the host has indexedDB but no storages: its databases are in memory and nothing survives a restart");
   }
@@ -291,6 +289,7 @@ const TOP_LEVEL = new Set([
   "publicDir",
   "packs",
   "define",
+  "aliases",
   "windows",
   "macos",
   "id",
