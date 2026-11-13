@@ -9930,12 +9930,16 @@ const desktopApi: DesktopApi = installDesktop(globalThis as unknown as Record<st
   realm: { vacant, mark },
 });
 
-if (typeof navigator !== "undefined" && navigator) {
-  if (typeof __vn_badge_set === "function" && vacant(navigator, "setAppBadge")) {
-    installBadge(navigator, { set: __vn_badge_set });
+const installNavigator = (nav: object): void => {
+  const marked = (...names: string[]): void => {
+    for (const n of names) mark((nav as Record<string, unknown>)[n]);
+  };
+  if (typeof __vn_badge_set === "function" && vacant(nav, "setAppBadge")) {
+    installBadge(nav, { set: __vn_badge_set });
+    marked("setAppBadge", "clearAppBadge");
   }
-  if (typeof __vn_media_session_update === "function" && vacant(navigator, "mediaSession")) {
-    installMediaSession(navigator, {
+  if (typeof __vn_media_session_update === "function" && vacant(nav, "mediaSession")) {
+    installMediaSession(nav, {
       host: { update: __vn_media_session_update },
       resolveUrl: (src) => new URL(src, (globalThis as { location?: { href: string } }).location?.href).href,
       fetchBytes: (url) =>
@@ -9945,10 +9949,11 @@ if (typeof navigator !== "undefined" && navigator) {
       onAction: (fn) => void desktopEvents.set("mediasession", fn),
       reportError: (e) => (globalThis as { reportError?: (e: unknown) => void }).reportError?.(e),
     });
+    marked("mediaSession");
   }
-  if (typeof __vn_share === "function" && vacant(navigator, "share")) {
+  if (typeof __vn_share === "function" && vacant(nav, "share")) {
     const FileCtor = (globalThis as { File?: abstract new (...args: never[]) => object }).File;
-    installShare(navigator, {
+    installShare(nav, {
       host: { share: __vn_share },
       call: desktopCallRaw,
       resolveUrl: (u) => new URL(u, (globalThis as { location?: { href: string } }).location?.href).href,
@@ -9958,9 +9963,10 @@ if (typeof navigator !== "undefined" && navigator) {
       documentTitle: () => document?.title ?? "",
       DOMException: (globalThis as unknown as DesktopEngine).DOMException,
     });
+    marked("share", "canShare");
   }
-  if (typeof __vn_webauthn_create === "function" && vacant(navigator, "credentials")) {
-    installCredentials(navigator, {
+  if (typeof __vn_webauthn_create === "function" && vacant(nav, "credentials")) {
+    installCredentials(nav, {
       host: {
         create: __vn_webauthn_create,
         get: __vn_webauthn_get,
@@ -9971,8 +9977,9 @@ if (typeof navigator !== "undefined" && navigator) {
       pageUrl: () => (globalThis as { location?: { href: string } }).location?.href ?? "",
       DOMException: (globalThis as unknown as DesktopEngine).DOMException,
     });
+    marked("credentials");
   }
-  if (typeof __vn_wake_lock_hold === "function" && vacant(navigator, "wakeLock")) {
+  if (typeof __vn_wake_lock_hold === "function" && vacant(nav, "wakeLock")) {
     let hidden = false;
     const hiddenListeners: (() => void)[] = [];
     const hide = (): void => {
@@ -9983,12 +9990,23 @@ if (typeof navigator !== "undefined" && navigator) {
     const appWindow = globalThis.__VN_WINDOW__?.appWindow;
     appWindow?.addEventListener("minimize", hide);
     appWindow?.addEventListener("restore", () => void (hidden = false));
-    installWakeLock(navigator, {
+    installWakeLock(nav, {
       host: { hold: __vn_wake_lock_hold },
       engine: globalThis as unknown as WakeLockDeps["engine"],
       isHidden: () => hidden || appWindow?.isMinimized() === true,
       onHidden: (fn) => void hiddenListeners.push(fn),
     });
+    marked("wakeLock");
+  }
+};
+
+if (typeof navigator !== "undefined" && navigator) {
+  try {
+    installNavigator(navigator);
+  } catch (e) {
+    console.warn(
+      `[vue-native] navigator: a system API could not be installed — ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 }
 
