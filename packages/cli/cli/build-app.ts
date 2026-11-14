@@ -14,15 +14,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { collectAssets, type AssetFile } from "./assets";
-import {
-  loadAppConfig,
-  partsLeftOut,
-  variantFor,
-  variantWarnings,
-  type AppConfig,
-  type PackConfig,
-  type Variant,
-} from "./config";
+import { loadAppConfig, parseVariant, type AppConfig, type PackConfig, type Variant } from "./config";
 import { stampElf, type ElfStampResult } from "./elf";
 import { CLI_VERSION, PKG_DIR, type ResolvedHost } from "./host";
 import { resolveOrFetchHost } from "./host-fetch";
@@ -55,7 +47,7 @@ export interface BuildOptions {
   configPath?: string | undefined;
   out?: string | undefined;
   host?: string | undefined;
-  /** The host variant; overrides sk.config.json's `windows` selection. */
+  /** The host variant (standard or no-devtools); overrides the mode's. */
   variant?: Variant | undefined;
   console?: boolean;
   payloadOnly?: boolean;
@@ -67,8 +59,8 @@ export interface BuildOptions {
   sign?: string | false | undefined;
   /**
    * `sk build` is "debug": devtools always in, the bundle not minified, <app>/dist/debug. `sk publish` is
-   * "release": sk.config.json's engine selection, and without one, no devtools; <app>/dist/release. Unset:
-   * the config's selection into <app>/dist, as the API always did.
+   * "release": no devtools unless sk.config.json has "publishDevtools": true; <app>/dist/release. Unset:
+   * the standard host into <app>/dist.
    */
   mode?: "debug" | "release" | undefined;
   /** Plain lines instead of the default progress on stderr. */
@@ -76,12 +68,9 @@ export interface BuildOptions {
   progress?: Progress;
 }
 
-/** The variant a mode builds when neither `--variant` nor a selection flag names one. */
+/** The variant a mode builds when `--variant` names none. */
 export function modeVariant(config: AppConfig, mode: BuildOptions["mode"]): Variant {
-  const selected = config.windows.variant;
-  if (mode === "debug") return variantFor(partsLeftOut(selected).filter((p) => p !== "devtools"));
-  if (mode === "release" && !config.windows.selected) return "no-devtools";
-  return selected;
+  return mode === "release" && !config.publishDevtools ? "no-devtools" : "standard";
 }
 
 interface BuilderAsset {
@@ -354,9 +343,8 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   const platform = options.platform ?? currentPlatform();
   const config = loadAppConfig(options.target, { configPath: options.configPath, platform });
   const warnings = [...config.warnings];
-  const asked: Variant = options.variant ?? modeVariant(config, options.mode);
-  partsLeftOut(asked);
-  warnings.push(...variantWarnings(asked));
+  const variant: Variant =
+    options.variant === undefined ? modeVariant(config, options.mode) : parseVariant(options.variant, "--variant");
   const outDir = resolve(options.out ?? join(config.appRoot, "dist", ...(options.mode ? [options.mode] : [])));
   const work = join(outDir, ".sk");
   mkdirSync(work, { recursive: true });
@@ -367,7 +355,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     ? null
     : await resolveOrFetchHost({
         host: options.host,
-        variant: asked,
+        variant,
         allowMismatch: options.allowHostMismatch,
         platform,
         log,
@@ -375,10 +363,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   if (host) {
     progress.detail(`${host.info.variant} · Skathi ${host.info.skathi} ${host.info.profile} · ${host.source}`);
     if (host.unverified) warnings.push(host.unverified);
-    if (host.substitute) warnings.push(host.substitute);
   }
-  // The payload names the host it runs on, which a stand-in changes.
-  const variant: Variant = host?.substitute ? host.info.variant : asked;
 
   const jsOut = join(work, "app.prod.js");
   const assetsJson = join(work, "assets.json");

@@ -524,8 +524,8 @@ describe("hosts per platform", () => {
     expect(hostsFor("macos", "arm64").triple).toBe("aarch64-apple-darwin");
     expect(hostsFor("macos", "x64").triple).toBe("x86_64-apple-darwin");
     expect(hostsFor("macos", "arm64").cargoTarget).toEqual(["--target", "aarch64-apple-darwin"]);
-    expect(cachedHost("1.2.3", "no-audio", "macos")).toMatch(
-      /Library[\\/]Caches[\\/]skathi[\\/]hosts[\\/]1\.2\.3[\\/]no-audio[\\/]sk-host$/,
+    expect(cachedHost("1.2.3", "no-devtools", "macos")).toMatch(
+      /Library[\\/]Caches[\\/]skathi[\\/]hosts[\\/]1\.2\.3[\\/]no-devtools[\\/]sk-host$/,
     );
   });
 
@@ -573,9 +573,9 @@ describe("hosts per platform", () => {
       );
 
       const host = fakeMachO(join(d, "sk-app"));
-      const trusted = resolveHost({ variant: "no-audio", platform: "macos", host });
-      expect(trusted.info.variant).toBe("no-audio");
-      expect(trusted.info.features).not.toContain("voice");
+      const trusted = resolveHost({ variant: "no-devtools", platform: "macos", host });
+      expect(trusted.info.variant).toBe("no-devtools");
+      expect(trusted.info.devtools).toBe(false);
       expect(trusted.info.features).toContain("webgpu");
       expect(trusted.unverified).toMatch(/cannot be run/);
 
@@ -590,7 +590,7 @@ describe("hosts per platform", () => {
       const mismatchAllowed = resolveHost({ variant: "standard", platform: "macos", host, allowMismatch: true });
       expect(mismatchAllowed.info.profile).toBe("release");
       expect(mismatchAllowed.unverified).toMatch(/described by/);
-      expect(() => resolveHost({ variant: "no-audio", platform: "macos", host, allowMismatch: true })).toThrow(
+      expect(() => resolveHost({ variant: "no-devtools", platform: "macos", host, allowMismatch: true })).toThrow(
         HostError,
       );
     });

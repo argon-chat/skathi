@@ -25,18 +25,19 @@ const pkg = (dir: string) =>
 
 test("the answers land in sk.config.json, and the builders read them back", () => {
   const dir = fresh();
-  create(dir, { platforms: ["windows", "macos"], without: ["audio"], keepDevtools: false });
+  create(dir, { platforms: ["windows", "macos"], keepDevtools: false });
   const config = loadAppConfig(dir);
   expect(config.name).toBe("my-app");
   expect(config.productName).toBe("My App");
   expect(config.platforms).toEqual(["windows", "macos"]);
   expect(config.macos.bundleId).toBe("com.example.my-app");
-  expect(modeVariant(config, "release")).toBe("no-devtools+no-audio");
-  expect(modeVariant(config, "debug")).toBe("no-audio");
+  expect(config.publishDevtools).toBe(false);
+  expect(modeVariant(config, "release")).toBe("no-devtools");
+  expect(modeVariant(config, "debug")).toBe("standard");
   expect(pkg(dir).scripts.dev).toBe("sk dev");
 });
 
-test("defaults: the showcase, this OS, every part, devtools only in sk build", () => {
+test("defaults: the showcase, this OS, devtools only in sk build", () => {
   const dir = fresh();
   create(dir);
   const config = loadAppConfig(dir);
@@ -63,6 +64,7 @@ test("the showcase copies its pages and media, and packs the media", () => {
     "icon.png",
     "tsconfig.json",
     ".gitignore",
+    ".vscode/settings.json",
   ]) {
     expect(existsSync(join(dir, f))).toBe(true);
   }
@@ -90,6 +92,15 @@ test("the minimal template is one component, with OS chrome and no router", () =
   const config = loadAppConfig(dir);
   expect(config.packs).toEqual([]);
   expect((config.raw.window as Record<string, unknown>).titleBarStyle).toBe("default");
+});
+
+test("both templates point VS Code at the runtime's CSS custom data", () => {
+  for (const template of TEMPLATES) {
+    const dir = fresh();
+    create(dir, { template });
+    const settings = JSON.parse(read(dir, ".vscode/settings.json")) as Record<string, unknown>;
+    expect(settings["css.customData"]).toEqual(["./node_modules/@skathi-native/runtime/css-data.json"]);
+  }
 });
 
 test("pinia and vue-router are dependencies only of the templates that use them", () => {

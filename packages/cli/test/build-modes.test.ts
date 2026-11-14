@@ -18,18 +18,15 @@ function config(body: Record<string, unknown>) {
   return loadAppConfig(dir);
 }
 
-test("without a selection, build keeps devtools and publish drops them", () => {
+test("by default, build keeps devtools and publish drops them", () => {
   const c = config({});
   expect(modeVariant(c, "debug")).toBe("standard");
   expect(modeVariant(c, "release")).toBe("no-devtools");
   expect(modeVariant(c, undefined)).toBe("standard");
 });
 
-test("publish follows a selection that keeps devtools; build adds them to one that does not", () => {
-  const keeps = config({ windows: { without: ["audio"] } });
-  expect(modeVariant(keeps, "release")).toBe("no-audio");
-  expect(modeVariant(keeps, "debug")).toBe("no-audio");
-  const drops = config({ windows: { without: ["devtools", "webgpu"] } });
-  expect(modeVariant(drops, "release")).toBe("no-devtools+no-webgpu");
-  expect(modeVariant(drops, "debug")).toBe("no-webgpu");
+test('"publishDevtools": true keeps them in publish too', () => {
+  const c = config({ publishDevtools: true });
+  expect(modeVariant(c, "release")).toBe("standard");
+  expect(modeVariant(c, "debug")).toBe("standard");
 });

@@ -13,7 +13,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { partsLeftOut, VARIANTS } from "../packages/cli/cli/config";
+import { VARIANTS } from "../packages/cli/cli/config";
 import {
   hostAssetName,
   MANIFEST_NAME,
@@ -101,7 +101,7 @@ const inspectorEnv: Record<string, string> = inspector
 
 const entries: HostManifestEntry[] = [];
 for (const variant of values.variant ?? [...VARIANTS, DEV_HOST]) {
-  const devtools = variant === DEV_HOST || !partsLeftOut(variant).includes("devtools");
+  const devtools = variant !== "no-devtools";
   const { exe, ms } = cargoBuildHost(variant, console.log, {
     env: inspectorEnv,
     features: inspector && devtools ? ["native-inspector"] : [],

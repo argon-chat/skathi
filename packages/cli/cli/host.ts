@@ -1,6 +1,6 @@
 // Where `sk build` gets the prebuilt bare host it stamps: `cargo build --release -p sk-app
-// --features prod` (the whole engine, no app), built once per Skathi version and variant. A
-// variant names the engine parts left out (config.ts `OPTIONAL`).
+// --features prod` (the whole engine, no app), built once per Skathi version and variant: `standard`, or
+// `no-devtools` with the devtools compiled out.
 //
 // Resolution, first hit wins: 1. `--host <exe>` or `SK_HOST`; 2. in-repo
 // target/x86_64-pc-windows-msvc/release/sk-app.exe, when that is a prod host of this variant and
@@ -29,7 +29,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { cargoFeatureArgs, OPTIONAL, partsLeftOut, type Variant } from "./config";
+import { cargoFeatureArgs, ENGINE_FEATURES, VARIANTS, type Variant } from "./config";
 import { appendedPayloadOf, elfMachineOf } from "./elf";
 import { bundlePayloadPath, machOArchs } from "./macos-bundle";
 import { readPe, RT } from "./pe";
@@ -110,14 +110,14 @@ export function crossHostInfo(
       }
     } catch {}
   }
-  const off = partsLeftOut(variant);
+  const devtools = variant !== "no-devtools";
   const info: HostInfo = {
     mode: "prod",
     skathi: CLI_VERSION,
     crate: "unknown",
     variant,
-    devtools: !off.includes("devtools"),
-    features: ["prod", ...OPTIONAL.filter((p) => p !== "devtools" && !off.includes(p))],
+    devtools,
+    features: ["prod", ...(devtools ? [] : ["no-devtools"]), ...ENGINE_FEATURES],
     jscPin: "unknown",
     payloadFormat: 1,
     profile: "unknown",
@@ -173,9 +173,11 @@ export function checkHost(exe: string, info: HostInfo, variant: Variant | null, 
   }
   if (info.mode !== "prod") return `${exe} is a ${info.mode} host — sk build needs one built with --features prod`;
   if (variant && info.variant !== variant) return `${exe} is the ${info.variant} variant, not ${variant}`;
-  if (!partsLeftOut(variant ?? info.variant).includes("webgpu") && !info.features?.includes("webgpu")) {
-    return `${exe} lacks native WebGPU required by ${variant} — rebuild or replace the cached host`;
+  if (!VARIANTS.includes(info.variant)) {
+    return `${exe} is the ${info.variant} variant, which leaves engine parts out — sk build stamps only ${VARIANTS.join(" or ")} hosts`;
   }
+  const missing = ENGINE_FEATURES.filter((f) => !info.features?.includes(f));
+  if (missing.length) return `${exe} lacks ${missing.join(", ")} — rebuild or replace the cached host`;
   return mismatch;
 }
 

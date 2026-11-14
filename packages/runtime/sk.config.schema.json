@@ -1,0 +1,278 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/argon-chat/skathi/blob/master/packages/runtime/sk.config.schema.json",
+  "title": "sk.config.json",
+  "description": "A Skathi app's configuration, read by sk dev, sk build, sk publish and sk check. Unknown top-level keys are warnings; unknown keys under \"windows\", \"macos\" and a pack are errors.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "The JSON Schema this file is checked against in the editor; ignored by sk.",
+      "type": "string"
+    },
+    "name": {
+      "description": "The app's identity: names its storage directory (%LOCALAPPDATA%\\<name>\\storage on Windows) and its devtools slot. Default: the app directory's name.",
+      "type": "string",
+      "minLength": 1
+    },
+    "productName": {
+      "description": "The display name, stamped into the exe and the bundle. Default: window.title, else name.",
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "description": "The app's version: semver (\"1.2.3\", \"1.2.3-beta.1\"), up to four numeric parts of at most 65535. Default: package.json \"version\", else 0.0.0 with a warning.",
+      "type": "string",
+      "pattern": "^\\s*v?\\d+(\\.\\d+){0,3}([-+].*)?\\s*$"
+    },
+    "platforms": {
+      "description": "The OSes sk publish packages for. Default: this OS only.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "enum": ["windows", "macos", "linux"] }
+    },
+    "window": {
+      "description": "The main window, as the host opens it.",
+      "type": "object",
+      "properties": {
+        "title": { "description": "The window title.", "type": "string" },
+        "width": { "description": "Initial width in logical pixels.", "type": "number", "exclusiveMinimum": 0 },
+        "height": { "description": "Initial height in logical pixels.", "type": "number", "exclusiveMinimum": 0 },
+        "minWidth": {
+          "description": "Minimum width in logical pixels. Above 500, Windows 11 snap layouts reject the window.",
+          "type": "number",
+          "minimum": 0
+        },
+        "minHeight": { "description": "Minimum height in logical pixels.", "type": "number", "minimum": 0 },
+        "frame": {
+          "description": "false is treated as titleBarStyle \"hidden\": the window keeps its shadow, animations and edge resizing.",
+          "type": "boolean"
+        },
+        "titleBarStyle": {
+          "description": "\"default\": the OS draws the title bar. \"hidden\": the app draws it (default). \"hiddenInset\": macOS inset traffic lights; \"hidden\" elsewhere.",
+          "type": "string",
+          "enum": ["default", "hidden", "hiddenInset"]
+        },
+        "titleBarHeight": {
+          "description": "Height of the app-drawn title bar strip, in logical pixels.",
+          "type": "number",
+          "minimum": 0
+        },
+        "titleBarFallback": {
+          "description": "Draw a host title bar strip under a hidden title bar. Ignored with titleBarStyle \"default\".",
+          "type": "boolean"
+        },
+        "titleBarOverlay": {
+          "description": "The caption buttons drawn over the app's own title bar: true, false, or their height and colors.",
+          "oneOf": [
+            { "type": "boolean" },
+            {
+              "type": "object",
+              "properties": {
+                "height": { "description": "Overlay height; sets titleBarHeight.", "type": "number", "minimum": 0 },
+                "color": { "description": "Background color of the caption buttons (a CSS color).", "type": "string" },
+                "symbolColor": { "description": "Glyph color of the caption buttons (a CSS color).", "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "backdrop": {
+          "description": "The window material behind transparent content. blur is acrylic; tabbed is mica-alt; opaque is none.",
+          "type": "string",
+          "enum": ["mica", "mica-alt", "tabbed", "acrylic", "blur", "transparent", "none", "opaque"]
+        },
+        "resizable": { "description": "Whether the user can resize the window.", "type": "boolean" },
+        "minimizable": { "description": "Whether the window has a minimize button.", "type": "boolean" },
+        "maximizable": { "description": "Whether the window can be maximized.", "type": "boolean" },
+        "alwaysOnTop": { "description": "Keep the window above other windows.", "type": "boolean" },
+        "focus": {
+          "description": "\"raise\": bring the window to the front when it opens.",
+          "type": "string",
+          "enum": ["raise"]
+        },
+        "devtools": {
+          "description": "Overrides the top-level \"devtools\" for this window.",
+          "type": "boolean"
+        },
+        "httpCache": { "$ref": "#/definitions/httpCache" }
+      }
+    },
+    "devtools": {
+      "description": "false turns the devtools listener and F12 off at start in a host that carries them; the app can turn them on later.",
+      "type": "boolean"
+    },
+    "publishDevtools": {
+      "description": "true: sk publish keeps devtools (F12, the inspector) in the published app. Default false; sk build always has them.",
+      "type": "boolean",
+      "default": false
+    },
+    "httpCache": { "$ref": "#/definitions/httpCache" },
+    "assets": {
+      "description": "Directories or globs, relative to the app root, packaged with the app. Default: [\"assets\"].",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "pattern": "\\S" }
+    },
+    "publicDir": {
+      "description": "Vite's public/ directory, relative to the app root and inside it: its files are packaged keyed relative to it. false or absent: none.",
+      "oneOf": [{ "type": "string", "minLength": 1 }, { "const": false }]
+    },
+    "packs": {
+      "description": "Assets in their own .skpk files beside the app, in order. A pack without \"match\" takes every asset no earlier pack took.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The pack's file name, <name>.skpk: lowercase letters, digits, \"-\" or \"_\", not \"app\".",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "not": { "const": "app" }
+          },
+          "match": {
+            "description": "Globs over asset keys that go in this pack. Absent: the rest.",
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1, "pattern": "\\S" }
+          }
+        },
+        "required": ["name"],
+        "patternProperties": { "^\\$": {} },
+        "additionalProperties": false
+      }
+    },
+    "define": {
+      "description": "Vite's define: global names replaced by these values in the bundle.",
+      "type": "object"
+    },
+    "aliases": {
+      "description": "A bare module name and the app file, relative to the app root, standing in for it everywhere (the JS half of a native extension).",
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "check": {
+      "description": "sk check settings.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "A check code and the package names or app-relative globs whose diagnostics of that code are not reported.",
+          "type": "object",
+          "propertyNames": { "pattern": "^SK[0-9]{4}$" },
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      },
+      "patternProperties": { "^\\$": {} },
+      "additionalProperties": false
+    },
+    "id": {
+      "description": "The launch identity, reverse-DNS style (\"gl.argon.notes\"): names the single-instance lock and the URL scheme registration. Default: name.",
+      "type": "string",
+      "pattern": "^\\s*[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\s*$"
+    },
+    "singleInstance": {
+      "description": "A second launch hands its arguments to the running instance and exits. Default false.",
+      "type": "boolean",
+      "default": false
+    },
+    "raiseOnSecondInstance": {
+      "description": "With singleInstance, a second launch brings the running window to the front. Default true.",
+      "type": "boolean",
+      "default": true
+    },
+    "protocols": {
+      "description": "URL schemes the app registers for (\"myapp\" for myapp://...). Browser and Windows schemes (http, file, ms-*, ...) are refused. Use with singleInstance.",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^\\s*[A-Za-z][A-Za-z0-9+.-]{0,62}(:/*)?\\s*$" }
+    },
+    "windows": {
+      "description": "The Windows exe. Unknown keys are errors.",
+      "type": "object",
+      "properties": {
+        "exeName": {
+          "description": "The exe's file name, without .exe. Default: productName.",
+          "type": "string"
+        },
+        "icon": {
+          "description": "An .ico or a square .png, relative to the app root. Also the macOS icon unless macos.icon is set.",
+          "type": "string"
+        },
+        "company": { "description": "CompanyName in the exe's version info.", "type": "string" },
+        "copyright": {
+          "description": "LegalCopyright in the exe's version info; also the macOS copyright unless macos.copyright is set.",
+          "type": "string"
+        },
+        "description": { "description": "FileDescription in the exe's version info.", "type": "string" },
+        "console": {
+          "description": "Build a console-subsystem exe that keeps its console window.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "patternProperties": { "^\\$": {} },
+      "additionalProperties": false
+    },
+    "macos": {
+      "description": "The macOS .app bundle. Unknown keys are errors.",
+      "type": "object",
+      "properties": {
+        "bundleId": {
+          "description": "CFBundleIdentifier, reverse-DNS (\"gl.argon.notes\"). Default: id, with \"_\" as \"-\".",
+          "type": "string",
+          "pattern": "^\\s*[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+\\s*$"
+        },
+        "exeName": { "description": "The bundle's name, <exeName>.app. Default: productName.", "type": "string" },
+        "icon": {
+          "description": "A square .png or an .icns, relative to the app root. Default: windows.icon.",
+          "type": "string"
+        },
+        "category": {
+          "description": "LSApplicationCategoryType: \"developer-tools\" or \"public.app-category.developer-tools\".",
+          "type": "string",
+          "pattern": "^\\s*(public\\.app-category\\.)?[a-z]+(-[a-z]+)*\\s*$"
+        },
+        "minimumSystemVersion": {
+          "description": "LSMinimumSystemVersion. Default and lowest supported: 13.0.",
+          "type": "string",
+          "pattern": "^\\s*\\d+(\\.\\d+){0,2}\\s*$",
+          "default": "13.0"
+        },
+        "copyright": {
+          "description": "NSHumanReadableCopyright. Default: windows.copyright.",
+          "type": "string"
+        },
+        "microphoneUsageDescription": {
+          "description": "NSMicrophoneUsageDescription: why the app asks for the microphone.",
+          "type": "string"
+        },
+        "cameraUsageDescription": {
+          "description": "NSCameraUsageDescription: why the app asks for the camera.",
+          "type": "string"
+        },
+        "sign": {
+          "description": "A codesign identity, \"-\" to sign ad hoc, or false to leave the bundle unsigned. Default: ad hoc where codesign exists.",
+          "oneOf": [{ "type": "string", "minLength": 1, "pattern": "\\S" }, { "const": false }]
+        }
+      },
+      "patternProperties": { "^\\$": {} },
+      "additionalProperties": false
+    }
+  },
+  "definitions": {
+    "httpCache": {
+      "description": "The disk HTTP cache: { \"maxMB\": N } caps it (0 turns it off); false turns it off. Default 256 MB.",
+      "oneOf": [
+        { "const": false },
+        {
+          "type": "object",
+          "properties": {
+            "maxMB": { "description": "The cap in megabytes; 0 = no cache.", "type": "number", "minimum": 0 }
+          },
+          "required": ["maxMB"]
+        }
+      ]
+    }
+  }
+}

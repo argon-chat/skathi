@@ -1,0 +1,66 @@
+{
+  "version": 1.1,
+  "properties": [
+    {
+      "name": "window-drag",
+      "description": "Skathi: whether pressing on this element moves the window, as on a title bar. Inherited: mark the bar with `move` and its buttons and inputs with `none`. The CSSWG spelling of Electron's `-webkit-app-region`.",
+      "syntax": "move | none",
+      "values": [
+        { "name": "move", "description": "Dragging the element moves the window." },
+        { "name": "none", "description": "The element takes its own clicks inside a `move` region." }
+      ]
+    },
+    {
+      "name": "app-region",
+      "description": "Skathi: the Electron spelling of `window-drag`. Prefer `window-drag: move | none`.",
+      "syntax": "drag | no-drag",
+      "values": [
+        { "name": "drag", "description": "As `window-drag: move`." },
+        { "name": "no-drag", "description": "As `window-drag: none`." }
+      ]
+    },
+    {
+      "name": "-webkit-app-region",
+      "description": "Skathi: the Electron spelling of `window-drag`. Prefer `window-drag: move | none`.",
+      "syntax": "drag | no-drag",
+      "values": [
+        { "name": "drag", "description": "As `window-drag: move`." },
+        { "name": "no-drag", "description": "As `window-drag: none`." }
+      ]
+    },
+    {
+      "name": "--window-control",
+      "description": "Skathi: marks an app-drawn caption button, so the OS treats it as its own. On Windows 11, `maximize` brings the snap layouts flyout on hover. A custom property, so a browser ignores it.",
+      "syntax": "minimize | maximize | close | none",
+      "values": [
+        { "name": "minimize", "description": "The minimize button." },
+        { "name": "maximize", "description": "The maximize / restore button; shows snap layouts on Windows 11." },
+        { "name": "close", "description": "The close button." },
+        { "name": "none", "description": "Not a caption button; cancels an earlier rule." }
+      ]
+    },
+    {
+      "name": "--shading",
+      "description": "Skathi: a GPU shader effect on this element only (not inherited, unlike other custom properties). One effect function, or `none`. Out-of-range arguments are clamped. An app's own effects, compiled with the Skathi shader tool, are named the same way.",
+      "syntax": "none | frost( <number> , <length>? , <color>? ) | noise( <number> , <length>? , <number>? ) | glow( <color>? , <length> , <number> )",
+      "values": [
+        { "name": "none", "description": "No effect; cancels an earlier rule." },
+        {
+          "name": "frost()",
+          "description": "Blurred backdrop, crystalline grain and a rim highlight. `frost(<strength 0..1>, <radius 0..25px = 12px>?, <tint = rgba(255,255,255,.06)>?)`."
+        },
+        {
+          "name": "noise()",
+          "description": "Film grain over the element. `noise(<amount 0..1>, <scale 0.05..64px = 1.5px>?, <speed 0..120 = 0, animated when above 0>?)`."
+        },
+        {
+          "name": "glow()",
+          "description": "A soft halo centred on the element's rounded edge. `glow(<color = white>?, <radius 0..256px>, <strength 0..1>)`."
+        }
+      ]
+    }
+  ],
+  "atDirectives": [],
+  "pseudoClasses": [],
+  "pseudoElements": []
+}

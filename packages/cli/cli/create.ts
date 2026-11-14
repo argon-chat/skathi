@@ -1,5 +1,5 @@
 // `sk create [dir]`: a new app. In a terminal it asks for what the flags do not say: the directory, the
-// name, the template, the OSes to package for, the engine parts, whether published builds keep devtools,
+// name, the template, the OSes to package for, whether published builds keep devtools,
 // and the package manager. `--yes` (or no terminal) takes the defaults.
 //
 // It copies templates/<template>/ (src/, assets/) with the placeholders filled in, and writes
@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { basename, extname, join, relative, resolve } from "node:path";
 import * as p from "@clack/prompts";
 import { runtimeRequire } from "../runtime-path";
-import { ConfigError, OPTIONAL, parseParts, sanitizeExeName, type Part } from "./config";
+import { ConfigError, sanitizeExeName } from "./config";
 import { CLI_VERSION } from "./host";
 import { encodePng } from "./icon";
 import { currentPlatform, parsePlatform, type Platform } from "./platform";
@@ -47,6 +47,8 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
 
 export const TEMPLATES_DIR = resolve(import.meta.dir, "..", "templates");
 
+export const CONFIG_SCHEMA = "./node_modules/@skathi-native/runtime/sk.config.schema.json";
+
 /** Files whose text has its `{{key}}` placeholders filled in; anything else is copied byte for byte. */
 const TEXT_FILES = new Set([".vue", ".ts", ".css", ".txt", ".json", ".html", ".svg"]);
 
@@ -54,20 +56,10 @@ export interface CreateOptions {
   name?: string | undefined;
   template?: Template | undefined;
   platforms?: Platform[] | undefined;
-  /** Engine parts left out of every build; devtools is {@link CreateOptions.keepDevtools}'s. */
-  without?: Part[] | undefined;
   /** Whether `sk publish` keeps devtools (`sk build` always has them). */
   keepDevtools?: boolean | undefined;
   packageManager?: PackageManager | undefined;
 }
-
-const ENGINE_PARTS: { value: Exclude<Part, "devtools">; label: string; hint: string }[] = [
-  { value: "audio", label: "Audio", hint: "Web Audio, <audio>, sound from <video>" },
-  { value: "clipboard", label: "Clipboard", hint: "navigator.clipboard" },
-  { value: "storages", label: "Storage on disk", hint: "localStorage and IndexedDB that survive a restart" },
-  { value: "indexeddb", label: "IndexedDB", hint: "indexedDB" },
-  { value: "webgpu", label: "WebGPU", hint: "navigator.gpu" },
-];
 
 /** The package manager this was started from (`npm_config_user_agent`), else bun. */
 export function detectPackageManager(agent = process.env.npm_config_user_agent ?? ""): PackageManager {
@@ -143,9 +135,6 @@ export function create(target: string, options: CreateOptions = {}): string[] {
   const template = options.template ?? "showcase";
   const info = TEMPLATE_INFO[template];
   const platforms = options.platforms?.length ? options.platforms : [currentPlatform()];
-  const without: Part[] = OPTIONAL.filter((part) =>
-    part === "devtools" ? !options.keepDevtools : (options.without ?? []).includes(part),
-  );
   const runtimeDeps = (runtimeRequire("./package.json") as { dependencies: Record<string, string> }).dependencies;
   const sdk = `^${CLI_VERSION}`;
 
@@ -170,14 +159,16 @@ export function create(target: string, options: CreateOptions = {}): string[] {
       devDependencies: { "@skathi-native/cli": sdk, typescript: "^5", "vue-tsc": "^3" },
     }),
     "sk.config.json": json({
+      $schema: CONFIG_SCHEMA,
       name,
       productName,
       version: "0.1.0",
       platforms,
+      publishDevtools: options.keepDevtools === true,
       window: { title: productName, ...info.window, backdrop: "mica" },
       assets: ["assets"],
       ...(info.packs ? { packs: info.packs } : {}),
-      windows: { exeName, icon: "icon.png", without },
+      windows: { exeName, icon: "icon.png" },
       ...(platforms.includes("macos") ? { macos: { bundleId: `com.example.${slug}` } } : {}),
     }),
     "icon.png": icon(),
@@ -206,7 +197,6 @@ export interface CreateFlags {
   name?: string | undefined;
   template?: string | undefined;
   os?: string | undefined;
-  without?: string | undefined;
   devtools?: boolean | undefined;
   pm?: string | undefined;
   yes?: boolean | undefined;
@@ -242,7 +232,6 @@ export async function createCommand(target: string | undefined, flags: CreateFla
       ?.split(/[\s,]+/)
       .filter(Boolean)
       .map(parsePlatform),
-    without: flags.without !== undefined ? parseParts(flags.without, "--without") : undefined,
     keepDevtools: flags.devtools,
     packageManager: flags.pm !== undefined ? parsePm(flags.pm) : undefined,
   };
@@ -285,17 +274,6 @@ export async function createCommand(target: string | undefined, flags: CreateFla
         required: true,
       }),
     );
-    if (!options.without) {
-      const kept = answered(
-        await p.multiselect<Exclude<Part, "devtools">>({
-          message: "Engine parts (leaving one out makes the exe smaller)",
-          options: ENGINE_PARTS,
-          initialValues: ENGINE_PARTS.map((e) => e.value),
-          required: false,
-        }),
-      );
-      options.without = ENGINE_PARTS.map((e) => e.value).filter((v) => !kept.includes(v));
-    }
     options.keepDevtools ??= answered(
       await p.confirm({
         message: "Keep devtools (F12) in published builds? sk build always has them",

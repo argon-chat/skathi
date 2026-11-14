@@ -1,4 +1,3 @@
-import { OPTIONAL } from "./config";
 import { CLI_VERSION } from "./host";
 import { paint, type Paint } from "./term";
 
@@ -21,7 +20,6 @@ const BUILD: Section[] = [
     title: "Options",
     rows: [
       ["--platform <os>", "windows, macos or linux (default: this OS)"],
-      ["--without <parts>", `Leave engine parts out: ${OPTIONAL.join(", ")}`],
       ["--out <dir>", "Output directory (default: <app>/dist/debug or dist/release)"],
       ["--define K=V", "A Vite-style define; repeatable"],
       ["--config <path>", "An sk.config.json outside the app"],
@@ -34,7 +32,6 @@ const BUILD: Section[] = [
   {
     title: "Advanced",
     rows: [
-      ["--features <parts>", "Take only these engine parts"],
       ["--host <exe>", "Stamp this host instead of the cached one"],
       ["--payload-only", "Write dist/.sk/app.skpk and stop"],
       ["--aot-inputs", "Keep the typed sources for a later AOT compile"],
@@ -53,7 +50,6 @@ const HELP: Record<string, { usage: string; about: string; sections: Section[] }
           ["--name <name>", "The app's name (default: the directory's)"],
           ["--template <name>", "showcase (every feature) or minimal"],
           ["--os <list>", "What to package for: windows, macos, linux"],
-          ["--without <parts>", "Engine parts to leave out"],
           ["--devtools", "Keep devtools (F12) in published builds"],
           ["--pm <name>", "bun, npm, pnpm or yarn"],
           ["-y, --yes", "Ask nothing, take the defaults"],
@@ -73,7 +69,8 @@ const HELP: Record<string, { usage: string; about: string; sections: Section[] }
   },
   publish: {
     usage: "sk publish [app] [options]",
-    about: "The release build in <app>/dist/release: minified, devtools only if sk.config.json keeps them.",
+    about:
+      'The release build in <app>/dist/release: minified, devtools only with "publishDevtools": true in sk.config.json.',
     sections: BUILD,
   },
   run: {

@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cachedHost, type HostInfo } from "../cli/host";
-import { fetchHost, hostAssetName, sha256, standIn, type HostManifest } from "../cli/host-fetch";
+import { fetchHost, hostAssetName, sha256, type HostManifest } from "../cli/host-fetch";
 
 const VERSION = "9.9.9-test";
 const host = new TextEncoder().encode("MZ pretend host");
@@ -106,9 +106,9 @@ test("a host that does not match its sha256 is not cached", async () => {
 
 test("a variant the release does not carry names the ones it does", async () => {
   publish();
-  await expect(fetchHost({ variant: "no-audio", version: VERSION, platform: "windows", arch: "x64" })).rejects.toThrow(
-    /no no-audio host for windows-x64 \(it has: standard\)/,
-  );
+  await expect(
+    fetchHost({ variant: "no-devtools", version: VERSION, platform: "windows", arch: "x64" }),
+  ).rejects.toThrow(/no no-devtools host for windows-x64 \(it has: standard\)/);
 });
 
 test("a Linux host is named without .exe and cached under the XDG cache", async () => {
@@ -140,11 +140,4 @@ test("a missing release says a private repository needs a token", async () => {
   publish();
   release = 404;
   await expect(fetchStandard()).rejects.toThrow(/has no v9\.9\.9-test release \(a private repository needs GH_TOKEN/);
-});
-
-test("a variant no release carries stands in with the published one that has every part it needs", () => {
-  expect(standIn("no-devtools+no-audio")).toBe("no-devtools");
-  expect(standIn("no-audio+no-webgpu")).toBe("standard");
-  expect(standIn("no-devtools")).toBe("no-devtools");
-  expect(standIn("no-devtools", ["standard"])).toBe(null);
 });

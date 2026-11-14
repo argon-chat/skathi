@@ -8,8 +8,8 @@
 //   "packs": [{ "name": "fonts", "match": ["**/*.woff2"] }, { "name": "assets" }]
 //                                assets in their own .skpk files, in order; no "match" takes the rest
 //   "define", "aliases"          Vite's `define`; a bare module name -> the app's own stand-in file
-//   "windows": { exeName, icon, company, copyright, description, console,
-//                without | features | host }   engine parts left out / taken / a whole variant by name
+//   "publishDevtools": true      sk publish keeps devtools (the standard host instead of no-devtools)
+//   "windows": { exeName, icon, company, copyright, description, console }
 //   "macos": { bundleId, exeName, icon, category, minimumSystemVersion, copyright,
 //              microphoneUsageDescription, cameraUsageDescription, sign }
 //
@@ -21,82 +21,26 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { Platform } from "./platform";
 import { numericVersion } from "./versioninfo";
 
-/**
- * The parts of the engine a host can be built WITHOUT: the same list and order as `OPTIONAL` in
- * crates/sk-app/src/payload.rs. `devtools` is the listener, inspector and F12; the rest are cargo features of sk-app.
- */
-export const OPTIONAL = ["devtools", "audio", "clipboard", "storages", "indexeddb", "webgpu"] as const;
-export type Part = (typeof OPTIONAL)[number];
-
-/** A host's name: `standard`, else the parts left out as `no-<part>` joined by `+` in {@link OPTIONAL}'s order. The host cache is keyed by it. */
+/** A prod host's name, the key the host cache and the release find it by: the whole engine, with or without devtools. */
 export type Variant = string;
-export const VARIANTS: Variant[] = ["standard", "no-devtools"];
+export const VARIANTS: readonly Variant[] = ["standard", "no-devtools"];
 
-const isPart = (p: unknown): p is Part => typeof p === "string" && (OPTIONAL as readonly string[]).includes(p);
+/** The cargo features of sk-app every published host carries (crates/sk-app/src/payload.rs `OPTIONAL`, after devtools). */
+export const ENGINE_FEATURES = ["audio", "clipboard", "storages", "indexeddb", "webgpu"] as const;
 
-export function variantFor(without: Iterable<Part>): Variant {
-  const off = new Set(without);
-  const names = OPTIONAL.filter((p) => off.has(p)).map((p) => `no-${p}`);
-  return names.length ? names.join("+") : "standard";
-}
+export const PARTS_NOT_SELECTABLE =
+  "engine parts are no longer selectable: every published app carries the whole engine. " +
+  '"publishDevtools": true in sk.config.json keeps devtools in sk publish builds; ' +
+  "to trim the engine, embed it with the sk-app crate (sk_app::embed) and its cargo features";
 
-export function partsLeftOut(variant: Variant): Part[] {
-  if (variant === "standard") return [];
-  const off = new Set<Part>();
-  for (const name of variant.split("+")) {
-    const p = name.startsWith("no-") ? name.slice(3) : "";
-    if (!isPart(p)) {
-      throw new ConfigError(
-        `${JSON.stringify(variant)} is not a host variant — "standard", or the parts left out as no-<part> joined by "+" ` +
-          `(parts: ${OPTIONAL.join(", ")})`,
-      );
-    }
-    off.add(p);
-  }
-  return OPTIONAL.filter((p) => off.has(p));
-}
-
-/** A list of part names: `"audio,clipboard"` or an array; spaces separate too (PowerShell passes an unquoted `audio,clipboard` as `"audio clipboard"`). */
-export function parseParts(list: unknown, where: string): Part[] {
-  const items = typeof list === "string" ? list.split(/[\s,]+/).filter(Boolean) : list;
-  if (!Array.isArray(items)) throw new ConfigError(`${where} must be a list of parts (${OPTIONAL.join(", ")})`);
-  const out = new Set<Part>();
-  for (const p of items) {
-    if (!isPart(p))
-      throw new ConfigError(`${where}: ${JSON.stringify(p)} is not a part — known parts are ${OPTIONAL.join(", ")}`);
-    out.add(p);
-  }
-  return OPTIONAL.filter((p) => out.has(p));
-}
-
-/** The variant a selection asks for (`host` is the legacy whole-variant spelling). */
-export function selectVariant(
-  sel: { features?: Part[] | undefined; without?: Part[] | undefined; host?: Variant | undefined },
-  where: string,
-): Variant {
-  const given = [sel.features && "features", sel.without && "without", sel.host && "host"].filter(Boolean);
-  if (given.length > 1) throw new ConfigError(`${where}: give one of ${given.join(" / ")}, not several`);
-  if (sel.features) return variantFor(OPTIONAL.filter((p) => !sel.features!.includes(p)));
-  if (sel.without) return variantFor(sel.without);
-  if (sel.host) return variantFor(partsLeftOut(sel.host));
-  return "standard";
-}
-
-export function variantWarnings(variant: Variant): string[] {
-  const off = new Set(partsLeftOut(variant));
-  const out: string[] = [];
-  if (!off.has("indexeddb") && off.has("storages")) {
-    out.push("the host has indexedDB but no storages: its databases are in memory and nothing survives a restart");
-  }
-  return out;
+export function parseVariant(v: unknown, where: string): Variant {
+  const name = typeof v === "string" ? v.trim() : "";
+  if (VARIANTS.includes(name)) return name;
+  throw new ConfigError(`${where}: ${JSON.stringify(v)} is not a host variant — ${VARIANTS.join(" or ")}`);
 }
 
 export function cargoFeatureArgs(variant: Variant): string[] {
-  const off = partsLeftOut(variant);
-  const features = ["prod", ...(off.includes("devtools") ? ["no-devtools"] : [])];
-  const defaults = OPTIONAL.filter((p) => p !== "devtools");
-  if (!off.some((p) => p !== "devtools")) return ["--features", features.join(",")];
-  return ["--no-default-features", "--features", [...features, ...defaults.filter((p) => !off.includes(p))].join(",")];
+  return ["--features", parseVariant(variant, "cargo") === "no-devtools" ? "prod,no-devtools" : "prod"];
 }
 
 export interface WindowsConfig {
@@ -106,12 +50,6 @@ export interface WindowsConfig {
   copyright?: string | undefined;
   description?: string | undefined;
   console?: boolean;
-  host?: Variant;
-  features?: Part[];
-  without?: Part[];
-  variant: Variant;
-  /** Whether the config chose the engine parts (`host`, `features` or `without`). */
-  selected?: boolean;
 }
 
 /** `"macos"`, defaults applied. Read on every platform, so a typo fails a Windows build too. */
@@ -144,6 +82,8 @@ export interface AppConfig {
   assetsDeclared: boolean;
   publicDir: string | null;
   packs: PackConfig[];
+  /** Whether `sk publish` stamps the standard host (devtools in) instead of no-devtools. */
+  publishDevtools: boolean;
   windows: WindowsConfig;
   macos: MacConfig;
   exeName: string;
@@ -162,6 +102,7 @@ export interface PackConfig {
 }
 
 const PACK_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+export const PACK_KEYS: ReadonlySet<string> = new Set(["name", "match"]);
 
 function parsePacks(raw: unknown): PackConfig[] {
   if (raw === undefined) return [];
@@ -170,11 +111,11 @@ function parsePacks(raw: unknown): PackConfig[] {
   const seen = new Set<string>();
   return raw.map((p, i) => {
     if (!p || typeof p !== "object" || Array.isArray(p)) throw bad(`entry ${i} must be an object`);
-    const { name, match, ...rest } = p as Record<string, unknown>;
-    const extra = Object.keys(rest).filter((k) => !k.startsWith("$"));
+    const { name, match } = p as Record<string, unknown>;
+    const extra = Object.keys(p).filter((k) => !k.startsWith("$") && !PACK_KEYS.has(k));
     if (extra.length)
       throw bad(
-        `entry ${i} has unknown key(s) ${extra.map((k) => JSON.stringify(k)).join(", ")} — known keys are name, match`,
+        `entry ${i} has unknown key(s) ${extra.map((k) => JSON.stringify(k)).join(", ")} — known keys are ${[...PACK_KEYS].join(", ")}`,
       );
     if (typeof name !== "string" || !PACK_NAME.test(name) || name === "app") {
       throw bad(
@@ -202,13 +143,14 @@ export interface LaunchConfig {
   protocols: string[];
 }
 
-const TOP_LEVEL = new Set([
+export const TOP_LEVEL: ReadonlySet<string> = new Set([
   "name",
   "platforms",
   "productName",
   "version",
   "window",
   "devtools",
+  "publishDevtools",
   "httpCache",
   "assets",
   "publicDir",
@@ -285,18 +227,16 @@ function readLaunch(raw: Record<string, unknown>, name: string): LaunchConfig {
     protocols,
   };
 }
-const WINDOWS_KEYS = new Set([
+export const WINDOWS_KEYS: ReadonlySet<string> = new Set([
   "exeName",
   "icon",
   "company",
   "copyright",
   "description",
   "console",
-  "host",
-  "features",
-  "without",
 ]);
-const MACOS_KEYS = new Set([
+const REMOVED_WINDOWS_KEYS = new Set(["host", "features", "without"]);
+export const MACOS_KEYS: ReadonlySet<string> = new Set([
   "bundleId",
   "exeName",
   "icon",
@@ -539,7 +479,12 @@ export function loadAppConfig(
     throw new ConfigError('sk.config.json "define" must be an object of { "NAME": value }');
   }
 
-  const windows: WindowsConfig = { variant: "standard" };
+  if (raw.publishDevtools !== undefined && typeof raw.publishDevtools !== "boolean") {
+    throw new ConfigError('sk.config.json "publishDevtools" must be true or false');
+  }
+  const publishDevtools = raw.publishDevtools === true;
+
+  const windows: WindowsConfig = {};
   if (raw.windows !== undefined) {
     if (!raw.windows || typeof raw.windows !== "object" || Array.isArray(raw.windows)) {
       throw new ConfigError('sk.config.json "windows" must be an object');
@@ -547,6 +492,9 @@ export function loadAppConfig(
     const w = raw.windows as Record<string, unknown>;
     for (const key of Object.keys(w)) {
       if (key.startsWith("$")) continue;
+      if (REMOVED_WINDOWS_KEYS.has(key)) {
+        throw new ConfigError(`sk.config.json "windows.${key}": ${PARTS_NOT_SELECTABLE}`);
+      }
       if (!WINDOWS_KEYS.has(key)) {
         throw new ConfigError(
           `sk.config.json "windows": unknown key ${JSON.stringify(key)} — known keys are ${[...WINDOWS_KEYS].join(", ")}`,
@@ -563,20 +511,6 @@ export function loadAppConfig(
         throw new ConfigError('sk.config.json "windows.console" must be true or false');
       windows.console = w.console;
     }
-    if (w.host !== undefined) {
-      if (typeof w.host !== "string")
-        throw new ConfigError('sk.config.json "windows.host" must be a host variant, e.g. "no-devtools"');
-      try {
-        partsLeftOut(w.host);
-      } catch (e) {
-        throw new ConfigError(`sk.config.json "windows.host": ${(e as Error).message}`);
-      }
-      windows.host = w.host;
-    }
-    if (w.features !== undefined) windows.features = parseParts(w.features, where("windows.features"));
-    if (w.without !== undefined) windows.without = parseParts(w.without, where("windows.without"));
-    windows.variant = selectVariant(windows, where('"windows"'));
-    windows.selected = windows.host !== undefined || windows.features !== undefined || windows.without !== undefined;
   }
 
   if (raw.httpCache !== undefined && raw.httpCache !== false) {
@@ -624,6 +558,7 @@ export function loadAppConfig(
     assetsDeclared,
     publicDir,
     packs,
+    publishDevtools,
     windows,
     macos,
     exeName,

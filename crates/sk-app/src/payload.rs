@@ -503,7 +503,8 @@ pub fn slot_name() -> String {
     }
 }
 
-/// Must match `OPTIONAL` in packages/cli/cli/config.ts, in order.
+/// After devtools, the same list and order as `ENGINE_FEATURES` in packages/cli/cli/config.ts:
+/// `sk build` stamps only hosts that carry all of them.
 pub const OPTIONAL: [(&str, bool); 6] = [
     ("devtools", cfg!(sk_devtools)),
     ("audio", cfg!(feature = "audio")),

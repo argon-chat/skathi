@@ -4,16 +4,7 @@
 
 import { spawn } from "node:child_process";
 import { buildApp, summary } from "./build-app";
-import {
-  ConfigError,
-  OPTIONAL,
-  parseParts,
-  partsLeftOut,
-  selectVariant,
-  VARIANTS,
-  variantFor,
-  type Variant,
-} from "./config";
+import { ConfigError, parseVariant, PARTS_NOT_SELECTABLE, VARIANTS, type Variant } from "./config";
 import { dev } from "./dev";
 import { addHost, buildHost, CLI_VERSION, DEV_HOST, HostError, hostInfo, resolveHost } from "./host";
 import { fetchHost } from "./host-fetch";
@@ -76,21 +67,15 @@ function parse(argv: string[]): {
   return { positional, flags, repeated, rest };
 }
 
+function refuseParts(flags: Flags): void {
+  for (const gone of ["without", "features"]) {
+    if (flags[gone] !== undefined) throw new ConfigError(`--${gone}: ${PARTS_NOT_SELECTABLE}`);
+  }
+}
+
 function variantOf(flags: Flags): Variant | undefined {
-  const list = (name: string) => {
-    const v = flags[name];
-    if (v === undefined) return undefined;
-    if (typeof v !== "string" || !v.trim())
-      throw new ConfigError(`--${name} needs a list of parts (${OPTIONAL.join(", ")})`);
-    return parseParts(v, `--${name}`);
-  };
-  const host = flags.variant;
-  if (host !== undefined && (typeof host !== "string" || !host.trim()))
-    throw new ConfigError("--variant needs a variant name");
-  const sel = { features: list("features"), without: list("without"), host: host as string | undefined };
-  if (!sel.features && !sel.without && !sel.host) return undefined;
-  // Normalised: `no-audio+no-devtools` and `no-devtools+no-audio` are one host.
-  return variantFor(partsLeftOut(selectVariant(sel, "the command line")));
+  refuseParts(flags);
+  return flags.variant === undefined ? undefined : parseVariant(flags.variant, "--variant");
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -255,12 +240,12 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (command === "create") {
+    refuseParts(flags);
     const str = (k: string) => (typeof flags[k] === "string" ? (flags[k] as string) : undefined);
     const yesNo = (k: string) => (flags[k] ? true : flags[`no-${k}`] ? false : undefined);
     return await createCommand(args[0], {
       name: str("name"),
       os: str("os"),
-      without: str("without"),
       devtools: yesNo("devtools"),
       template: str("template"),
       pm: str("pm"),
