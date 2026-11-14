@@ -93,7 +93,16 @@ function codegen() {
     const root = drive ? `${drive}\\bun` : bun;
     const home = drive ? `${drive}\\home` : join(cache, "home");
     mkdirSync(join(cache, "home"), { recursive: true });
-    const env = { USERPROFILE: home, HOME: home, AOT_ENGINE_DIRECTORY: engine };
+    const env: Record<string, string> = { USERPROFILE: home, HOME: home, AOT_ENGINE_DIRECTORY: engine };
+    // Bun's codegen needs perl; Git for Windows carries one. Appended, so nothing else on PATH is shadowed.
+    const git = Bun.which("git");
+    if (!Bun.which("perl") && git) {
+      const gitUsrBin = ["../..", "../../..", "../../../.."]
+        .map((up) => resolve(git, up, "usr/bin"))
+        .find((dir) => existsSync(join(dir, "perl.exe")));
+      const key = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+      if (gitUsrBin) env[key] = `${process.env[key] ?? ""};${gitUsrBin}`;
+    }
     rmSync(join(bun, "build/release-codegen"), { recursive: true, force: true });
     // Bindgen fails here and nothing that sk-aot builds needs it: what is needed is checked below.
     run([process.execPath, "scripts/build.ts", "--mode=codegen", "--profile=release", "--target=codegen", "-k0"], {
