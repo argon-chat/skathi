@@ -1,0 +1,117 @@
+name: Native toolchain
+description: Bun, the pinned Rust toolchain, the platform's build tools and redjs's verified native inputs.
+
+inputs:
+  target:
+    description: The Rust target triple
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.4.4
+
+    - if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+    - if: runner.os == 'Windows'
+      name: Rust and LLVM
+      shell: pwsh
+      run: |
+        $llvm = Join-Path $env:ProgramFiles 'LLVM/bin'
+        if (Test-Path -LiteralPath $llvm) { Add-Content -LiteralPath $env:GITHUB_PATH -Value $llvm }
+        rustup toolchain install 1.97.1 --profile minimal --target ${{ inputs.target }}
+
+    - if: runner.os != 'Windows'
+      name: Rust
+      shell: bash
+      run: |
+        if ! command -v rustup >/dev/null; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+        fi
+        rustup toolchain install 1.97.1 --profile minimal --target ${{ inputs.target }}
+
+    - if: runner.os == 'macOS'
+      name: Metal toolchain
+      shell: bash
+      run: xcrun -f metal >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+
+    # A hosted Ubuntu image has ~14 GB free; the toolchains nothing here uses take ~25 GB more.
+    - if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+      name: Free disk space
+      shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+        df -h /
+
+    # The headers the -sys crates probe through pkg-config, and clang-20 with libstdc++ 12+ for redjs's
+    # C++23 (std::expected). Installed when missing, through apt and passwordless sudo.
+    - if: runner.os == 'Linux'
+      name: Build packages
+      shell: bash
+      run: |
+        echo "CC=clang-20" >> "$GITHUB_ENV"
+        echo "CXX=clang++-20" >> "$GITHUB_ENV"
+        . /etc/os-release
+        echo "$PRETTY_NAME, glibc $(ldd --version | head -n1 | awk '{print $NF}')"
+        packages=(pkg-config build-essential cmake binutils libasound2-dev libfontconfig-dev libfreetype-dev
+          libglib2.0-dev libssl-dev libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev
+          libxkbcommon-x11-dev libzstd-dev)
+        check() {
+          missing=()
+          for tool in clang-20 clang++-20 pkg-config cmake; do
+            command -v "$tool" >/dev/null || missing+=("$tool")
+          done
+          for lib in alsa fontconfig freetype2 glib-2.0 openssl wayland-client x11 x11-xcb xcb xkbcommon xkbcommon-x11 libzstd; do
+            pkg-config --exists "$lib" 2>/dev/null || missing+=("$lib")
+          done
+        }
+        check
+        (( ${#missing[@]} )) || exit 0
+        echo "Missing: ${missing[*]}"
+        if ! command -v apt-get >/dev/null || ! sudo -n true 2>/dev/null; then
+          echo "::error::The runner lacks ${missing[*]} and cannot install them (apt-get with passwordless sudo). Install clang-20 ${packages[*]}."
+          exit 1
+        fi
+        export DEBIAN_FRONTEND=noninteractive
+        sudo -n apt-get update -q
+        if ! apt-cache show clang-20 >/dev/null 2>&1; then
+          sudo -n apt-get install -y -q --no-install-recommends wget gnupg lsb-release software-properties-common ca-certificates
+          wget -qO "$RUNNER_TEMP/llvm.sh" https://apt.llvm.org/llvm.sh
+          sudo -n bash "$RUNNER_TEMP/llvm.sh" 20
+        fi
+        stdcxx=$(apt-cache search --names-only '^libstdc\+\+-1[2-9]-dev$' | awk '{print $1}' | sort -V | tail -n1)
+        sudo -n apt-get install -y -q --no-install-recommends clang-20 ${stdcxx:+"$stdcxx"} "${packages[@]}"
+        check
+        if (( ${#missing[@]} )); then
+          echo "::error::Still missing after the install: ${missing[*]}"
+          exit 1
+        fi
+
+    - name: JS dependencies
+      shell: bash
+      run: bun install --frozen-lockfile
+
+    - uses: actions/cache@v4
+      with:
+        path: |
+          vendor/redjs/prebuilt
+          vendor/redjs/redjs/cpp/mimalloc
+        key: native-inputs-${{ inputs.target }}-${{ hashFiles('vendor/redjs/pins.txt') }}
+    - if: runner.os == 'Windows'
+      name: Native dependencies
+      shell: pwsh
+      run: ./vendor/redjs/setup.ps1
+    - if: runner.os == 'macOS'
+      name: Native dependencies
+      shell: bash
+      run: bash vendor/redjs/setup.sh
+    - if: runner.os == 'Linux'
+      name: Native dependencies
+      shell: bash
+      run: bash vendor/redjs/setup.sh --platform linux-amd64

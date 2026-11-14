@@ -1,0 +1,35 @@
+#!/bin/sh
+# Refuses a commit whose staged Rust or JS/TS/Vue/JSON/CSS/YAML/Markdown files are not formatted.
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+failed=0
+
+rust=$(printf '%s\n' "$staged" | grep '\.rs$')
+if [ -n "$rust" ]; then
+  unformatted=""
+  for file in $rust; do
+    crate=$(printf '%s' "$file" | sed -n 's#^\(crates/[^/]*\)/.*#\1#p')
+    edition=2021
+    if [ -n "$crate" ] && [ -f "$crate/Cargo.toml" ]; then
+      edition=$(sed -n 's/^edition *= *"\([0-9]*\)".*/\1/p' "$crate/Cargo.toml" | head -n1)
+      [ -n "$edition" ] || edition=2021
+    fi
+    rustfmt --check --edition "$edition" "$file" >/dev/null 2>&1 || unformatted="$unformatted $file"
+  done
+  if [ -n "$unformatted" ]; then
+    echo "Not formatted (run cargo fmt):" >&2
+    printf '  %s\n' $unformatted >&2
+    failed=1
+  fi
+fi
+
+web=$(printf '%s\n' "$staged" | grep -E '\.(js|mjs|cjs|ts|mts|cts|tsx|jsx|vue|json|jsonc|css|scss|md|ya?ml|html)$')
+if [ -n "$web" ]; then
+  if ! out=$(bun fmt --check $web 2>&1); then
+    echo "Not formatted (run bun fmt):" >&2
+    printf '%s\n' "$out" >&2
+    failed=1
+  fi
+fi
+
+exit $failed

@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  js:
+    name: JS (types, tests, format)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      # The AOT input tests read vendor/redjs/pins.txt.
+      - name: Check out pinned redjs metadata
+        run: git submodule update --init --depth 1 -- vendor/redjs
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      # vue-tsc patches tsc through Node's fs.readFileSync; run by bun it is plain tsc and .vue imports fail.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+      - name: Types
+        run: bun run typecheck
+      - name: Tests
+        run: bun run test
+      - name: Format
+        run: bun fmt --check
+      - name: Generated preludes are current
+        run: bun run preludes:check
+
+  rust:
+    name: Rust (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - name: macOS arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+          - name: Linux x64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      # Debug info is most of a test build's disk; a hosted runner has little.
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: ./.github/actions/native
+        with:
+          target: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Tests
+        run: cargo test --locked --workspace --target ${{ matrix.target }}
+      - name: Release host builds
+        run: cargo check --locked -p sk-app --features prod --target ${{ matrix.target }}
+
+  rustfmt:
+    name: Rust format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt
+      - run: cargo fmt --check
+
+  licenses:
+    name: Crate licenses
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          # cargo metadata resolves the path dependencies in vendor/.
+          submodules: recursive
+      - run: rustup toolchain install 1.97.1 --profile minimal
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny check licenses

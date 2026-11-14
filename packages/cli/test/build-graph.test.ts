@@ -525,6 +525,8 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
         readFileSync(join(dir, "src/main.ts"), "utf8") + "export const edited = 1;\n",
       );
       expect(await until(() => script(MAIN).includes("edited"))).toBe(true);
+      // The module is written before changes.json.
+      expect(await until(() => read("changes.json").includes(MAIN))).toBe(true);
       const changes = JSON.parse(read("changes.json")) as Changes;
       expect(changes.changed).toContainEqual({ id: MAIN, kind: "reload" });
       expect(changes.changed.filter((c: { id: string }) => npm.includes(c.id))).toEqual([]);
@@ -572,6 +574,7 @@ describe("build.ts (dev): an edit to an inlined file rebuilds its importer", () 
       await Bun.sleep(300); // past the watcher's first events
       writeFileSync(join(dir, "src/data.json"), '{ "v": 2 }\n');
       expect(await until(() => /v:\s*2\b/.test(script()))).toBe(true);
+      expect(await until(() => read("changes.json").includes(rel))).toBe(true);
       const changes = JSON.parse(read("changes.json")) as Changes;
       expect(changes.changed).toContainEqual({ id: rel, kind: "reload" });
     } finally {
