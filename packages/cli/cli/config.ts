@@ -9,6 +9,7 @@
 //                                assets in their own .skpk files, in order; no "match" takes the rest
 //   "define", "aliases"          Vite's `define`; a bare module name -> the app's own stand-in file
 //   "publishDevtools": true      sk publish keeps devtools (the standard host instead of no-devtools)
+//   "aot": true                  sk build and sk publish compile the app to a native image (Windows x64)
 //   "windows": { exeName, icon, company, copyright, description, console }
 //   "macos": { bundleId, exeName, icon, category, minimumSystemVersion, copyright,
 //              microphoneUsageDescription, cameraUsageDescription, sign }
@@ -82,6 +83,8 @@ export interface AppConfig {
   assetsDeclared: boolean;
   publicDir: string | null;
   packs: PackConfig[];
+  /** Whether `sk build` and `sk publish` compile the app to a native image (`--aot` / `--no-aot` win). */
+  aot: boolean;
   /** Whether `sk publish` stamps the standard host (devtools in) instead of no-devtools. */
   publishDevtools: boolean;
   windows: WindowsConfig;
@@ -151,6 +154,7 @@ export const TOP_LEVEL: ReadonlySet<string> = new Set([
   "window",
   "devtools",
   "publishDevtools",
+  "aot",
   "httpCache",
   "assets",
   "publicDir",
@@ -483,6 +487,9 @@ export function loadAppConfig(
     throw new ConfigError('sk.config.json "publishDevtools" must be true or false');
   }
   const publishDevtools = raw.publishDevtools === true;
+  if (raw.aot !== undefined && typeof raw.aot !== "boolean") {
+    throw new ConfigError('sk.config.json "aot" must be true or false');
+  }
 
   const windows: WindowsConfig = {};
   if (raw.windows !== undefined) {
@@ -559,6 +566,7 @@ export function loadAppConfig(
     publicDir,
     packs,
     publishDevtools,
+    aot: raw.aot === true,
     windows,
     macos,
     exeName,

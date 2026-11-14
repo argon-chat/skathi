@@ -58,7 +58,7 @@ mod linux_chrome;
 mod mapped_file;
 #[cfg(feature = "audio")]
 mod microphone;
-#[cfg(all(sk_devtools, feature = "native-aot"))]
+#[cfg(feature = "native-aot")]
 mod native_aot;
 mod occlusion;
 mod owner;
@@ -1085,10 +1085,23 @@ fn run_app() {
             cx.quit();
             return;
         }
-        #[cfg(all(sk_devtools, feature = "native-aot"))]
+        #[cfg(feature = "native-aot")]
         if let Err(error) = native_aot::prepare(devtools_mode) {
-            let summary = format!("native inspector preparation failed: {error}");
+            let summary = if devtools_mode {
+                format!("native inspector preparation failed: {error}")
+            } else {
+                format!(
+                    "this app's native image cannot run on this host ({error}). \
+                     Rebuild the app with `sk build --aot` from the sk that matches this host."
+                )
+            };
             eprintln!("[native-aot] {summary}");
+            let embedded =
+                payload::get().is_some_and(|l| matches!(l.source, payload::Source::Embedder(_)));
+            if !devtools_mode && !embedded {
+                payload::message_box(&summary);
+                std::process::exit(3);
+            }
             embed::finished(false, summary);
             cx.quit();
             return;
@@ -1288,7 +1301,7 @@ fn run_app() {
                 if let Err(e) = perf::boot_eval("preludes", || rt.eval(PRELUDE_JS, "sk://prelude.js")) {
                     eprintln!("[js boot] {}\n{}", e.header, e.stack);
                     #[cfg(all(sk_devtools, feature = "native-aot"))]
-                    if sk_runtime::redjs::aot::is_active() {
+                    if devtools_mode && sk_runtime::redjs::aot::is_active() {
                         startup_error = Some(format!("native inspector prelude failed: {}", e.header));
                         return;
                     }
@@ -1296,7 +1309,7 @@ fn run_app() {
                 if let Err(e) = perf::boot_eval("preludes", || rt.eval(WINDOW_PRELUDE_JS, "sk://window.js")) {
                     eprintln!("[js boot] {}\n{}", e.header, e.stack);
                     #[cfg(all(sk_devtools, feature = "native-aot"))]
-                    if sk_runtime::redjs::aot::is_active() {
+                    if devtools_mode && sk_runtime::redjs::aot::is_active() {
                         startup_error = Some(format!("native inspector prelude failed: {}", e.header));
                         return;
                     }

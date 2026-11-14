@@ -6,5 +6,5 @@
     "useDefineForClassFields": false,
     "types": ["bun"]
   },
-  "include": ["*.ts", "devtools/**/*.ts", "cli/**/*.ts", "check/**/*.ts"]
+  "include": ["*.ts", "aot/**/*.ts", "devtools/**/*.ts", "cli/**/*.ts", "check/**/*.ts"]
 }

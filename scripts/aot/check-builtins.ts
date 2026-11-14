@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { loadPin } from "./toolchain";
 
 const SDK = resolve(import.meta.dir, "../..");
-const PIN = loadPin(join(import.meta.dir, "toolchain.lock.json"));
+const PIN = loadPin();
 const OUT = join(SDK, "packages/cli/check/builtins.json");
 
 interface Entry {

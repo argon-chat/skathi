@@ -29,6 +29,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import type { CompilerInfo } from "../aot/pin";
 import { cargoFeatureArgs, ENGINE_FEATURES, VARIANTS, type Variant } from "./config";
 import { appendedPayloadOf, elfMachineOf } from "./elf";
 import { bundlePayloadPath, machOArchs } from "./macos-bundle";
@@ -56,6 +57,13 @@ export interface HostInfo {
   jscPin: string;
   payloadFormat: number;
   profile: string;
+  /** A host built with the native AOT loader: what an app image must be compiled against. */
+  aot?: HostAot | null;
+}
+
+export interface HostAot extends CompilerInfo {
+  transform: string;
+  preludeSha256: string;
 }
 
 export interface ResolvedHost {

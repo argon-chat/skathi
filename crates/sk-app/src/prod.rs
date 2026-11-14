@@ -72,6 +72,16 @@ pub fn boot(rt: &JsRuntime) {
         }
     });
 
+    #[cfg(feature = "native-aot")]
+    if crate::native_aot::selected(crate::native_aot::Kind::Application) {
+        let ran = crate::perf::boot_eval("app native image (+mount)", || {
+            crate::native_aot::boot(rt, crate::native_aot::Kind::Application)
+        });
+        if let Err(e) = ran {
+            eprintln!("[prod] app.prod.js (native image): {e}");
+        }
+        return;
+    }
     let Some(script) = loaded.payload.script() else {
         eprintln!("[prod] the payload has no sk/app.js — nothing to run");
         return;
@@ -86,6 +96,17 @@ pub fn reboot(rt: &JsRuntime) {
         eprintln!("[prod] reload: the payload has no sk/app.js — nothing to run");
         return;
     };
+    // A native entry is a module: it evaluates once per process, so a reload runs the source.
+    #[cfg(feature = "native-aot")]
+    if crate::native_aot::selected(crate::native_aot::Kind::Application) {
+        eprintln!(
+            "[native-aot] reload: running app.prod.js; the native entry runs once per process"
+        );
+        if let Err(e) = rt.eval(script, "sk://app.prod.js") {
+            eprintln!("[prod] app.prod.js (reload): {}\n{}", e.header, e.stack);
+        }
+        return;
+    }
     if let Err(e) = crate::bytecode::eval(rt, script) {
         eprintln!("[prod] app.prod.js (reload): {}\n{}", e.header, e.stack);
     }

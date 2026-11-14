@@ -10,7 +10,7 @@ import { ALL_CODES } from "../../packages/cli/check/codes";
 import { loadPin, verifyFile } from "./toolchain";
 
 const SDK = resolve(import.meta.dir, "../..");
-const PIN = loadPin(join(import.meta.dir, "toolchain.lock.json"));
+const PIN = loadPin();
 const MARK = "SKPROBE ";
 
 function option(name: string): string | undefined {
@@ -26,7 +26,7 @@ function frontendPath(): string {
   if (given) return given;
   const rel = join(".tools", "native-aot", `frontend-${PIN.frontend.revision}`, "package", "bin", "bun.exe");
   for (const root of [SDK, resolve(SDK, "../..")]) if (existsSync(join(root, rel))) return join(root, rel);
-  throw Error(`No pinned frontend at ${rel}; pass --frontend <bun.exe> (scripts/aot/download.ts fetches it)`);
+  throw Error(`No pinned frontend at ${rel}; pass --frontend <bun.exe> (scripts/aot/prepare-inspector.ts fetches it)`);
 }
 
 interface Run {

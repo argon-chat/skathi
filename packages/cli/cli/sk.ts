@@ -3,6 +3,7 @@
 // Rust toolchain.
 
 import { spawn } from "node:child_process";
+import { aotFlags } from "./aot-build";
 import { buildApp, summary } from "./build-app";
 import { ConfigError, parseVariant, PARTS_NOT_SELECTABLE, VARIANTS, type Variant } from "./config";
 import { dev } from "./dev";
@@ -22,6 +23,8 @@ const BOOLEAN = new Set([
   "payload-only",
   "allow-host-mismatch",
   "aot-inputs",
+  "aot",
+  "no-aot",
   "help",
   "version",
   "json",
@@ -124,6 +127,8 @@ async function main(argv: string[]): Promise<number> {
       allowHostMismatch: flags["allow-host-mismatch"] === true,
       defines: repeated.define,
       aotInputs: flags["aot-inputs"] === true,
+      ...aotFlags(flags),
+      color: colorEnabled(process.stderr, colorFlag(flags)),
       platform,
       sign: flags["no-sign"] ? false : typeof flags.sign === "string" ? flags.sign.trim() : undefined,
       mode: command === "publish" ? "release" : "debug",
@@ -135,6 +140,7 @@ async function main(argv: string[]): Promise<number> {
           exe: result.exe,
           skpk: result.skpk,
           aotInputs: result.aotInputs,
+          native: result.native,
           name: result.config.name,
           productName: result.config.productName,
           version: result.config.version,

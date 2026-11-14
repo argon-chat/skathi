@@ -67,7 +67,7 @@ pub fn prepare(repo: &Path, out: &Path) {
     let selected = std::env::var_os("SK_DEVTOOLS_NATIVE_MANIFEST")
         .map(PathBuf::from).expect("native-inspector requires SK_DEVTOOLS_NATIVE_MANIFEST; run scripts/aot/prepare-inspector.ts first");
     let (manifest_text, manifest) = watched_json(&selected);
-    let (_, pin) = watched_json(&repo.join("scripts/aot/toolchain.lock.json"));
+    let (_, pin) = watched_json(&repo.join("packages/cli/aot/toolchain.lock.json"));
     require(&pin, "schema", "skathi.native-aot-toolchain");
     assert_eq!(
         pin.get("version").and_then(serde_json::Value::as_u64),

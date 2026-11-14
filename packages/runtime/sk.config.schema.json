@@ -107,6 +107,11 @@
       "type": "boolean",
       "default": false
     },
+    "aot": {
+      "description": "true: sk build and sk publish compile the app's JavaScript to a native image the exe runs instead of interpreting it (Windows x64 only for now). sk check errors refuse the build. --aot and --no-aot override it; sk dev always runs the JavaScript.",
+      "type": "boolean",
+      "default": false
+    },
     "httpCache": { "$ref": "#/definitions/httpCache" },
     "assets": {
       "description": "Directories or globs, relative to the app root, packaged with the app. Default: [\"assets\"].",

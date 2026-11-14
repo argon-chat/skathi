@@ -25,6 +25,8 @@ export const KIND = {
   WINDOW: 2,
   SCRIPT: 3,
   BYTECODE: 4,
+  NATIVE_MANIFEST: 5,
+  NATIVE_IMAGE: 6,
   ASSET: 16,
 } as const;
 
@@ -33,6 +35,8 @@ export const NAMES = {
   WINDOW: "sk/window.json",
   SCRIPT: "sk/app.js",
   BYTECODE: "sk/app.bc",
+  NATIVE_MANIFEST: "sk/app.native.json",
+  NATIVE_IMAGE: "sk/app.image",
 } as const;
 
 export const FLAG_HAS_BYTECODE = 1;

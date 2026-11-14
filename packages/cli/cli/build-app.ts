@@ -8,13 +8,15 @@
 // without a re-stamp. On macOS (or `--platform macos` with `--host <mac sk-app>`) the last step is
 // macos-bundle.ts: the host is copied into `<exeName>.app`, the SKPK goes in Contents/Resources,
 // and the bundle is signed (ad hoc unless an identity is given). On Linux the SKPK is appended to a
-// copy of the host ELF (elf.ts). `PACKAGERS` holds the three.
+// copy of the host ELF (elf.ts). `PACKAGERS` holds the three. With `--aot` (Windows x64), aot-build.ts adds
+// the app's native image to the SKPK.
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
+import { aotCheck, aotPlatformProblem, buildNative, hostAot, type NativeBuild } from "./aot-build";
 import { collectAssets, type AssetFile } from "./assets";
-import { loadAppConfig, parseVariant, type AppConfig, type PackConfig, type Variant } from "./config";
+import { ConfigError, loadAppConfig, parseVariant, type AppConfig, type PackConfig, type Variant } from "./config";
 import { stampElf, type ElfStampResult } from "./elf";
 import { CLI_VERSION, PKG_DIR, type ResolvedHost } from "./host";
 import { resolveOrFetchHost } from "./host-fetch";
@@ -54,6 +56,12 @@ export interface BuildOptions {
   allowHostMismatch?: boolean;
   defines?: string[] | undefined;
   aotInputs?: boolean;
+  /** Compile the app to a native image (over sk.config.json "aot"). */
+  aot?: boolean | undefined;
+  /** The native image compiler to use instead of the release's (SDK development). */
+  aotCompiler?: string | undefined;
+  /** Colors in a report that refuses the build. */
+  color?: boolean;
   platform?: Platform | undefined;
   /** macOS: a codesign identity (`-` = ad hoc), or false for none; over `macos.sign`. */
   sign?: string | false | undefined;
@@ -111,6 +119,14 @@ export interface BuildResult {
   payloadBytes: number;
   packs: { name: string; path: string; bytes: number; assets: number }[];
   aotInputs: string | null;
+  native: {
+    manifest: string;
+    imageBytes: number;
+    compressedBytes: number;
+    entry: number;
+    compiler: string;
+    ms: number;
+  } | null;
   warnings: string[];
   ms: { bundle: number; assets: number; stamp: number; total: number };
 }
@@ -345,6 +361,13 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   const warnings = [...config.warnings];
   const variant: Variant =
     options.variant === undefined ? modeVariant(config, options.mode) : parseVariant(options.variant, "--variant");
+  const aot = options.aot ?? config.aot;
+  if (aot) {
+    const problem = aotPlatformProblem(platform);
+    if (problem) throw new ConfigError(problem);
+    if (options.payloadOnly)
+      throw new ConfigError("--aot compiles against the host it stamps, so it cannot be combined with --payload-only");
+  }
   const outDir = resolve(options.out ?? join(config.appRoot, "dist", ...(options.mode ? [options.mode] : [])));
   const work = join(outDir, ".sk");
   mkdirSync(work, { recursive: true });
@@ -364,6 +387,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     progress.detail(`${host.info.variant} · Skathi ${host.info.skathi} ${host.info.profile} · ${host.source}`);
     if (host.unverified) warnings.push(host.unverified);
   }
+  const hostNative = aot && host ? hostAot(host) : null;
 
   const jsOut = join(work, "app.prod.js");
   const assetsJson = join(work, "assets.json");
@@ -402,6 +426,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   const script = readFileSync(jsOut);
   const windowJson = readFileSync(join(work, "window.json"));
   const msBundle = performance.now() - tb;
+  if (aot) await aotCheck(options.target, options.configPath, progress, options.color ?? false);
 
   progress.step("assets");
   const ta = performance.now();
@@ -462,6 +487,21 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   for (const p of packs) writeFileSync(join(work, p.file), p.blob);
   progress.detail(`${collected.files.length} files · ${kib(collected.totalBytes)}`);
 
+  let native: NativeBuild | null = null;
+  const tn = performance.now();
+  if (hostNative) {
+    native = await buildNative({
+      source: script,
+      aot: hostNative,
+      compilerPath: options.aotCompiler,
+      work: join(work, "aot"),
+      progress,
+      log,
+    });
+    inputs.push(...native.inputs);
+  }
+  const msNative = performance.now() - tn;
+
   let packaged: Packaged | null = null;
   const ts = performance.now();
   progress.step(options.payloadOnly || !host ? "payload" : platform === "macos" ? "app bundle" : "exe");
@@ -495,6 +535,14 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     assets: collected.files,
     bundleBytes: script.length,
     aotInputs: options.aotInputs ? join(work, "aot-inputs", "manifest.json") : null,
+    native: native && {
+      manifest: native.manifestPath,
+      imageBytes: native.imageBytes,
+      compressedBytes: native.compressedBytes,
+      entry: native.entry,
+      compiler: native.compiler.path,
+      ms: Math.round(msNative),
+    },
     payloadBytes: packaged?.payload.length ?? readFileSync(skpk).length,
     packs: packs.map((p) => ({
       name: p.name,
@@ -565,6 +613,15 @@ export function summary(r: BuildResult, color = false): string {
     ),
     row("payload", `${kib(r.payloadBytes)} ${p.dim(r.skpk)}`),
   );
+  if (r.native) {
+    lines.push(
+      row(
+        "native",
+        `${mib(r.native.imageBytes)} image (${mib(r.native.compressedBytes)} in the payload), entry ${r.native.entry} ` +
+          p.dim(r.native.manifest),
+      ),
+    );
+  }
   for (const pk of r.packs)
     lines.push(row("pack", `${pk.name}: ${pk.assets} asset(s), ${kib(pk.bytes)} ${p.dim(pk.path)}`));
   lines.push(`${p.green("done")} in ${seconds(r.ms.total)}`);

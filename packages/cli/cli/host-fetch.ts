@@ -8,10 +8,12 @@
 
 import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { CompilerInfo } from "../aot/pin";
 import type { Variant } from "./config";
 import {
   CLI_VERSION,
   cachedHost,
+  cacheRoot,
   HostError,
   resolveHost,
   type HostInfo,
@@ -35,13 +37,30 @@ export interface HostManifestEntry {
   info: HostInfo;
 }
 
+/** The native image compiler (`sk build --aot`) matching the release's hosts. */
+export interface AotCompilerEntry {
+  platform: Platform;
+  arch: string;
+  /** The release asset: the compiler, gzipped. */
+  file: string;
+  /** Of the compiler itself, not of the gzip. */
+  sha256: string;
+  size: number;
+  /** What `<compiler> info` prints: the frontend, engine and builtin table it compiles for. */
+  info: CompilerInfo;
+}
+
 export interface HostManifest {
   skathi: string;
   hosts: HostManifestEntry[];
+  aot?: AotCompilerEntry[];
 }
 
 export const hostAssetName = (platform: Platform, arch: string, variant: Variant): string =>
   `sk-host-${platform}-${arch}-${variant}${platform === "windows" ? ".exe" : ""}.gz`;
+
+export const aotCompilerAssetName = (platform: Platform, arch: string): string =>
+  `sk-aot-compiler-${platform}-${arch}${platform === "windows" ? ".exe" : ""}.gz`;
 
 export const sha256 = (bytes: Uint8Array): string =>
   new Bun.CryptoHasher("sha256").update(new Uint8Array(bytes)).digest("hex");
@@ -75,14 +94,16 @@ async function download(asset: ReleaseAsset, headers: Record<string, string>): P
   return new Uint8Array(await res.arrayBuffer());
 }
 
-/** Downloads the host for `variant` from the release of `version` into the local cache, checked against `hosts.json`. */
-export async function fetchHost(options: FetchOptions): Promise<{ path: string; info: HostInfo }> {
-  const version = options.version ?? CLI_VERSION;
-  const platform = options.platform ?? currentPlatform();
-  const arch = options.arch ?? process.arch;
-  const log = options.log ?? (() => {});
-  const { repo, api, headers } = source();
+interface Release {
+  tag: string;
+  repo: string;
+  headers: Record<string, string>;
+  manifest: HostManifest;
+  asset: (name: string) => ReleaseAsset | undefined;
+}
 
+async function readRelease(version: string): Promise<Release> {
+  const { repo, api, headers } = source();
   const tag = `v${version}`;
   const res = await fetch(`${api}/repos/${repo}/releases/tags/${tag}`, {
     headers: { ...headers, Accept: "application/vnd.github+json" },
@@ -100,6 +121,41 @@ export async function fetchHost(options: FetchOptions): Promise<{ path: string; 
   const manifestAsset = asset(MANIFEST_NAME);
   if (!manifestAsset) throw new HostError(`release ${tag} of github.com/${repo} has no ${MANIFEST_NAME}`);
   const manifest = JSON.parse(new TextDecoder().decode(await download(manifestAsset, headers))) as HostManifest;
+  return { tag, repo, headers, manifest, asset };
+}
+
+/** Gunzips `name` and writes it to `dest` only when it matches `size` and `sha256`. */
+async function cacheAsset(
+  release: Release,
+  name: string,
+  size: number,
+  digest: string,
+  dest: string,
+  log: (line: string) => void,
+): Promise<void> {
+  const asset = release.asset(name);
+  if (!asset) throw new HostError(`release ${release.tag} lists ${name} in ${MANIFEST_NAME} but does not carry it`);
+  log(`downloading ${name} (${(asset.size / 1048576).toFixed(1)} MB) from github.com/${release.repo} ${release.tag}`);
+  const bytes = Bun.gunzipSync(await download(asset, release.headers));
+  if (bytes.length !== size || sha256(bytes) !== digest) {
+    throw new HostError(`${name} does not match the sha256 in ${MANIFEST_NAME}; nothing was cached`);
+  }
+  mkdirSync(dirname(dest), { recursive: true });
+  const tmp = `${dest}.partial`;
+  writeFileSync(tmp, bytes);
+  if (process.platform !== "win32") chmodSync(tmp, 0o755);
+  rmSync(dest, { force: true });
+  renameSync(tmp, dest);
+}
+
+/** Downloads the host for `variant` from the release of `version` into the local cache, checked against `hosts.json`. */
+export async function fetchHost(options: FetchOptions): Promise<{ path: string; info: HostInfo }> {
+  const version = options.version ?? CLI_VERSION;
+  const platform = options.platform ?? currentPlatform();
+  const arch = options.arch ?? process.arch;
+  const log = options.log ?? (() => {});
+  const release = await readRelease(version);
+  const { manifest, tag } = release;
   const entry = manifest.hosts.find((h) => h.platform === platform && h.arch === arch && h.variant === options.variant);
   if (!entry) {
     const offered = manifest.hosts
@@ -111,24 +167,32 @@ export async function fetchHost(options: FetchOptions): Promise<{ path: string; 
         (offered ? ` (it has: ${offered}); other variants are built from a checkout with sk host build` : ""),
     );
   }
-  const hostAsset = asset(entry.file);
-  if (!hostAsset) throw new HostError(`release ${tag} lists ${entry.file} in ${MANIFEST_NAME} but does not carry it`);
-
-  log(`downloading ${entry.file} (${(hostAsset.size / 1048576).toFixed(1)} MB) from github.com/${repo} ${tag}`);
-  const bytes = Bun.gunzipSync(await download(hostAsset, headers));
-  if (bytes.length !== entry.size || sha256(bytes) !== entry.sha256) {
-    throw new HostError(`${entry.file} does not match the sha256 in ${MANIFEST_NAME}; nothing was cached`);
-  }
-
   const dest = cachedHost(version, options.variant, platform);
-  mkdirSync(dirname(dest), { recursive: true });
-  const tmp = `${dest}.partial`;
-  writeFileSync(tmp, bytes);
-  if (process.platform !== "win32") chmodSync(tmp, 0o755);
-  rmSync(dest, { force: true });
-  renameSync(tmp, dest);
+  await cacheAsset(release, entry.file, entry.size, entry.sha256, dest, log);
   writeFileSync(join(dirname(dest), "host.json"), JSON.stringify(entry.info, null, 2) + "\n");
   log(`cached ${options.variant} host ${version} → ${dest}`);
+  return { path: dest, info: entry.info };
+}
+
+/** Where the native image compiler of Skathi `version` is cached. */
+export const cachedAotCompiler = (version: string, platform: Platform = currentPlatform()) =>
+  join(cacheRoot(platform), version, "aot", `sk-aot-compiler${platform === "windows" ? ".exe" : ""}`);
+
+/** Downloads the native image compiler from the release of `version` into the local cache, checked against `hosts.json`. */
+export async function fetchAotCompiler(
+  options: Omit<FetchOptions, "variant"> = {},
+): Promise<{ path: string; info: CompilerInfo }> {
+  const version = options.version ?? CLI_VERSION;
+  const platform = options.platform ?? currentPlatform();
+  const arch = options.arch ?? process.arch;
+  const log = options.log ?? (() => {});
+  const release = await readRelease(version);
+  const entry = release.manifest.aot?.find((c) => c.platform === platform && c.arch === arch);
+  if (!entry) throw new HostError(`release ${release.tag} has no native image compiler for ${platform}-${arch}`);
+  const dest = cachedAotCompiler(version, platform);
+  await cacheAsset(release, entry.file, entry.size, entry.sha256, dest, log);
+  writeFileSync(join(dirname(dest), "compiler.json"), JSON.stringify(entry.info, null, 2) + "\n");
+  log(`cached the native image compiler ${version} → ${dest}`);
   return { path: dest, info: entry.info };
 }
 

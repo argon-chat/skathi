@@ -127,7 +127,7 @@ pub fn boot(rt: &JsRuntime) -> Result<(), String> {
         eprintln!("[devtools-host] args: {}\n{}", e.header, e.stack);
     }
     #[cfg(feature = "native-aot")]
-    match crate::native_aot::boot(rt) {
+    match crate::native_aot::boot(rt, crate::native_aot::Kind::Inspector) {
         Ok(true) => return Ok(()),
         Ok(false) => {}
         Err(error) => {

@@ -14,9 +14,9 @@ import {
   verifyTable,
 } from "../../../scripts/aot/toolchain";
 
-import { downloadVerified } from "../../../scripts/aot/download";
+import { downloadVerified } from "../aot/download";
 
-const pinPath = resolve(import.meta.dir, "../../../scripts/aot/toolchain.lock.json");
+const pinPath = resolve(import.meta.dir, "../aot/toolchain.lock.json");
 const pin = loadPin(pinPath);
 function fixture(run: (root: string) => void | Promise<void>): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "sk-aot-pins-"));

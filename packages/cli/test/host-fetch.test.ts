@@ -3,7 +3,15 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cachedHost, type HostInfo } from "../cli/host";
-import { fetchHost, hostAssetName, sha256, type HostManifest } from "../cli/host-fetch";
+import {
+  aotCompilerAssetName,
+  cachedAotCompiler,
+  fetchAotCompiler,
+  fetchHost,
+  hostAssetName,
+  sha256,
+  type HostManifest,
+} from "../cli/host-fetch";
 
 const VERSION = "9.9.9-test";
 const host = new TextEncoder().encode("MZ pretend host");
@@ -140,4 +148,35 @@ test("a missing release says a private repository needs a token", async () => {
   publish();
   release = 404;
   await expect(fetchStandard()).rejects.toThrow(/has no v9\.9\.9-test release \(a private repository needs GH_TOKEN/);
+});
+
+test("the native image compiler comes from the same release, checked and cached with what it compiles for", async () => {
+  const compiler = new TextEncoder().encode("MZ pretend compiler");
+  const compilerFile = aotCompilerAssetName("windows", "x64");
+  expect(compilerFile).toBe("sk-aot-compiler-windows-x64.exe.gz");
+  const compiles = { target: "x86_64-windows", frontend: "f", engine: "e", tableId: "t", compileOptions: "o" };
+  const entry = {
+    platform: "windows" as const,
+    arch: "x64",
+    file: compilerFile,
+    sha256: sha256(compiler),
+    size: compiler.length,
+  };
+  const fetchCompiler = () => fetchAotCompiler({ version: VERSION, platform: "windows", arch: "x64" });
+
+  publish({ aot: [{ ...entry, info: compiles }] });
+  served[compilerFile] = Bun.gzipSync(compiler);
+  const { path, info: got } = await fetchCompiler();
+  expect(path).toBe(cachedAotCompiler(VERSION, "windows"));
+  expect(new Uint8Array(readFileSync(path))).toEqual(compiler);
+  expect(got).toEqual(compiles);
+  expect(JSON.parse(readFileSync(join(path, "..", "compiler.json"), "utf8"))).toEqual(compiles);
+
+  publish({ aot: [{ ...entry, sha256: "0".repeat(64), info: compiles }] });
+  served[compilerFile] = Bun.gzipSync(compiler);
+  await expect(fetchCompiler()).rejects.toThrow(/does not match the sha256/);
+  expect(existsSync(cachedAotCompiler(VERSION, "windows"))).toBe(false);
+
+  publish();
+  await expect(fetchCompiler()).rejects.toThrow(/has no native image compiler for windows-x64/);
 });

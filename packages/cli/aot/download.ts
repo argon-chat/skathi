@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, renameSync } from "node:fs";
 import { open, unlink } from "node:fs/promises";
-import { verifyFile } from "./toolchain";
+import { verifyFile } from "./pin";
 
 export async function downloadVerified(
   url: string,
@@ -23,10 +23,10 @@ export async function downloadVerified(
     ownsTemporary = true;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
-    const response = await fetcher(url, { headers: { "User-Agent": "skathi-native-aot-build" } });
+    const response = await fetcher(url, { headers: { "User-Agent": "skathi-cli" } });
     if (!response.ok || !response.body)
       throw Error(
-        `Pinned native-AOT frontend download failed (${response.status}); no moving canary fallback is allowed. Supply a hash-verified --frontend or seed the build-tool cache.`,
+        `downloading the pinned native AOT frontend from ${url} failed (HTTP ${response.status}); only that exact build is accepted — check the network or proxy and retry`,
       );
     reader = response.body.getReader();
     const declared = Number(response.headers.get("content-length"));

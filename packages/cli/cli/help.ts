@@ -26,6 +26,7 @@ const BUILD: Section[] = [
       ["--sign <identity>", "macOS: codesign identity (- for ad hoc)"],
       ["--no-sign", "macOS: leave the bundle unsigned"],
       ["--console", "Windows: keep the console window"],
+      ["--aot", "Windows x64: compile the app to a native image (--no-aot: don't)"],
       ["--json", "Print the result as JSON"],
     ],
   },
@@ -35,6 +36,7 @@ const BUILD: Section[] = [
       ["--host <exe>", "Stamp this host instead of the cached one"],
       ["--payload-only", "Write dist/.sk/app.skpk and stop"],
       ["--aot-inputs", "Keep the typed sources for a later AOT compile"],
+      ["--aot-compiler <exe>", "Compile native images with this aot-image.exe"],
     ],
   },
 ];

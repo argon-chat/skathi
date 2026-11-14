@@ -41,6 +41,10 @@ pub mod kind {
     pub const WINDOW: u16 = 2;
     pub const SCRIPT: u16 = 3;
     pub const BYTECODE: u16 = 4;
+    /// The manifest of the app's native AOT image (`sk build --aot`).
+    pub const NATIVE_MANIFEST: u16 = 5;
+    /// That image, raw-DEFLATE compressed.
+    pub const NATIVE_IMAGE: u16 = 6;
     pub const ASSET: u16 = 16;
 }
 
@@ -49,6 +53,8 @@ pub mod name {
     pub const WINDOW: &str = "sk/window.json";
     pub const SCRIPT: &str = "sk/app.js";
     pub const BYTECODE: &str = "sk/app.bc";
+    pub const NATIVE_MANIFEST: &str = "sk/app.native.json";
+    pub const NATIVE_IMAGE: &str = "sk/app.image";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,8 +206,10 @@ impl<'a> Payload<'a> {
                 })?;
             within(&format!("the bytes of {name:?}"), start, n)?;
             let data = &bytes[start as usize..(start + n) as usize];
-            if matches!(kind, kind::META | kind::WINDOW | kind::SCRIPT)
-                && std::str::from_utf8(data).is_err()
+            if matches!(
+                kind,
+                kind::META | kind::WINDOW | kind::SCRIPT | kind::NATIVE_MANIFEST
+            ) && std::str::from_utf8(data).is_err()
             {
                 return Err(Error::BadUtf8(format!("{name:?}")));
             }
@@ -252,6 +260,18 @@ impl<'a> Payload<'a> {
 
     pub fn script(&self) -> Option<&'a str> {
         self.text(kind::SCRIPT, name::SCRIPT)
+    }
+
+    pub fn native_manifest(&self) -> Option<&'a str> {
+        self.text(kind::NATIVE_MANIFEST, name::NATIVE_MANIFEST)
+    }
+
+    /// The compressed native image; only meaningful beside [`Self::native_manifest`].
+    pub fn native_image(&self) -> Option<&'a [u8]> {
+        self.entries
+            .iter()
+            .find(|e| e.kind == kind::NATIVE_IMAGE && e.name == name::NATIVE_IMAGE)
+            .map(|e| e.data)
     }
 
     pub fn assets(&self) -> &[Entry<'a>] {
@@ -313,6 +333,39 @@ impl<'a> Payload<'a> {
     pub fn as_ptr(&self) -> *const u8 {
         self.bytes.as_ptr()
     }
+}
+
+/// A payload with no skew and no data alignment, for tests: `sk build` writes the real ones.
+/// `entries` must already be sorted by (kind, name bytes).
+pub fn write_unaligned(entries: &[(u16, &str, &[u8])]) -> Vec<u8> {
+    let names: Vec<u8> = entries.iter().flat_map(|e| e.1.bytes()).collect();
+    let names_off = HEADER_SIZE + entries.len() * TOC_ENTRY_SIZE;
+    let data_off = names_off + names.len();
+    let mut toc = Vec::new();
+    let (mut name_at, mut data) = (0usize, Vec::new());
+    for (kind, name, bytes) in entries {
+        toc.extend_from_slice(&(name_at as u32).to_le_bytes());
+        toc.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        toc.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        toc.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        toc.extend_from_slice(&kind.to_le_bytes());
+        toc.extend_from_slice(&[0; 6]);
+        name_at += name.len();
+        data.extend_from_slice(bytes);
+    }
+    let mut blob = vec![0u8; HEADER_SIZE];
+    blob[..4].copy_from_slice(MAGIC);
+    blob[4..6].copy_from_slice(&FORMAT.to_le_bytes());
+    blob[8..12].copy_from_slice(&(entries.len() as u32).to_le_bytes());
+    blob[12..16].copy_from_slice(&(HEADER_SIZE as u32).to_le_bytes());
+    blob[16..20].copy_from_slice(&(names_off as u32).to_le_bytes());
+    blob[20..24].copy_from_slice(&(names.len() as u32).to_le_bytes());
+    blob[32..40].copy_from_slice(&(data_off as u64).to_le_bytes());
+    blob[40..48].copy_from_slice(&((data_off + data.len()) as u64).to_le_bytes());
+    blob.extend(toc);
+    blob.extend(names);
+    blob.extend(data);
+    blob
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -458,6 +511,28 @@ mod tests {
         assert_eq!(p.asset(name::SCRIPT), None);
         assert_eq!(p.asset(name::META), None);
         assert!(p.asset_ignoring_case("SK/APP.JS").is_none());
+    }
+
+    #[test]
+    fn a_native_image_rides_beside_the_script_and_is_not_an_asset() {
+        let blob = write_unaligned(&[
+            (kind::SCRIPT, name::SCRIPT, b"app()"),
+            (kind::NATIVE_MANIFEST, name::NATIVE_MANIFEST, b"{}"),
+            (kind::NATIVE_IMAGE, name::NATIVE_IMAGE, &[0xff, 0, 1]),
+            (kind::ASSET, "assets/a.txt", b"a"),
+        ]);
+        let p = Payload::parse(&blob).unwrap();
+        assert_eq!(p.script(), Some("app()"));
+        assert_eq!(p.native_manifest(), Some("{}"));
+        assert_eq!(p.native_image(), Some(&[0xff, 0, 1][..]));
+        assert_eq!(p.asset_count(), 1);
+        assert_eq!(p.asset(name::NATIVE_IMAGE), None);
+        assert_eq!(Payload::parse(GOLDEN).unwrap().native_manifest(), None);
+        let bad = write_unaligned(&[(kind::NATIVE_MANIFEST, name::NATIVE_MANIFEST, &[0xff])]);
+        assert_eq!(
+            Payload::parse(&bad).unwrap_err(),
+            Error::BadUtf8("\"sk/app.native.json\"".into())
+        );
     }
 
     #[test]

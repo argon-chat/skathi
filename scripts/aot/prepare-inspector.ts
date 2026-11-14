@@ -5,7 +5,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { downloadVerified } from "./download";
+import { downloadVerified } from "../../packages/cli/aot/download";
 import {
   fileDigest,
   loadPin,
@@ -38,7 +38,7 @@ function run(command: string[], cwd = sdk, extra: Record<string, string> = {}): 
 export async function prepare(): Promise<void> {
   if (process.platform !== "win32" || process.arch !== "x64")
     throw Error("Native inspector packaging currently requires Windows x64");
-  const pin = loadPin(join(import.meta.dir, "toolchain.lock.json"));
+  const pin = loadPin();
   verifyEngine(sdk, pin);
   const out = argument("--out")!,
     cache = argument("--cache")!,

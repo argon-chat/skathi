@@ -3,7 +3,9 @@ name: Release
 # A `v<version>` tag publishes the prebuilt hosts `sk build` and `sk dev` download (cli/host-fetch.ts):
 # every published variant and the dev host for Windows x64, macOS arm64 and Linux x64, gzipped, plus
 # hosts.json; then @skathi-native/runtime and @skathi-native/cli at that version to npm.
-# The Windows hosts with devtools embed the inspector's native AOT image (scripts/aot/prepare-inspector.ts).
+# Every Windows host carries the native AOT loader (apps built with --aot run from their image), the
+# ones with devtools embed the inspector's native image (scripts/aot/prepare-inspector.ts), and the
+# matching image compiler is published beside them for `sk build --aot`.
 
 on:
   push:
@@ -63,9 +65,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .tools/native-aot
-          key: windows-native-inspector-${{ hashFiles('scripts/aot/toolchain.lock.json', 'scripts/aot/generate-table.ts', 'vendor/redjs/pins.txt') }}
+          key: windows-native-inspector-${{ hashFiles('packages/cli/aot/toolchain.lock.json', 'scripts/aot/generate-table.ts', 'vendor/redjs/pins.txt') }}
       - if: runner.os == 'Windows'
-        name: Build the hosts (with the native inspector)
+        name: Build the hosts (with the native AOT loader, inspector and compiler)
         shell: pwsh
         run: |
           bun scripts/aot/prepare-inspector.ts --out release-inspector --cache .tools/native-aot --target-dir target

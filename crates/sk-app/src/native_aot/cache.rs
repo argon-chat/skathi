@@ -1,4 +1,4 @@
-//! Only an inspector child expands these application-owned executable bytes.
+//! Expands an embedded native image into a per-user cache keyed by its digest.
 //! The path is never trusted: the exact opened file is hashed while denying
 //! writes and its handle is handed directly to the native loader.
 use super::{aot, open_image};
@@ -27,7 +27,7 @@ fn root() -> Result<PathBuf, String> {
         return Ok(path);
     }
     let local = std::env::var_os("LOCALAPPDATA")
-        .ok_or("LOCALAPPDATA is required for the native inspector cache")?;
+        .ok_or("LOCALAPPDATA is required for the native image cache")?;
     let path = PathBuf::from(local);
     if !path.is_absolute() {
         return Err("LOCALAPPDATA must be absolute".into());
@@ -61,7 +61,7 @@ impl Drop for Temporary {
 fn create_temporary(directory: &Path) -> Result<Temporary, String> {
     for _ in 0..32 {
         let path = directory.join(format!(
-            ".inspector-{}-{}.part",
+            ".image-{}-{}.part",
             std::process::id(),
             NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed)
         ));
@@ -80,6 +80,7 @@ fn create_temporary(directory: &Path) -> Result<Temporary, String> {
     Err("native image staging names are exhausted".into())
 }
 fn materialize_in(
+    name: &str,
     directory: &Path,
     compressed: &[u8],
     expected: &str,
@@ -89,7 +90,7 @@ fn materialize_in(
         return Err("invalid embedded native image digest or size".into());
     }
     let directory = directory.join(expected);
-    let destination = directory.join("inspector.image");
+    let destination = directory.join(name);
     if let Ok(file) = verified(&destination, expected, size) {
         return Ok(file);
     }
@@ -125,13 +126,19 @@ fn materialize_in(
     verified(&destination, expected, size)
 }
 
-pub(super) fn materialize(compressed: &[u8], expected: &str, size: u64) -> Result<File, String> {
-    materialize_in(&root()?, compressed, expected, size)
+pub(super) fn materialize(
+    name: &str,
+    compressed: &[u8],
+    expected: &str,
+    size: u64,
+) -> Result<File, String> {
+    materialize_in(name, &root()?, compressed, expected, size)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    const IMAGE: &str = "inspector.image";
     struct Directory(PathBuf);
     impl Directory {
         fn new() -> Self {
@@ -173,11 +180,12 @@ mod tests {
         let bytes = b"trusted native image";
         let digest = aot::digest_hex(bytes);
         let mut file =
-            materialize_in(&root.0, &packed(bytes), &digest, bytes.len() as u64).unwrap();
+            materialize_in(IMAGE, &root.0, &packed(bytes), &digest, bytes.len() as u64).unwrap();
         assert_eq!(aot::digest_reader(&mut file).unwrap(), digest);
         drop(file);
         // The warm path must not read the compressed bytes.
         let mut warm = materialize_in(
+            IMAGE,
             &root.0,
             b"broken compressed bytes",
             &digest,
@@ -193,12 +201,19 @@ mod tests {
         let digest = aot::digest_hex(bytes);
         let directory = root.0.join(&digest);
         std::fs::create_dir(&directory).unwrap();
-        let path = directory.join("inspector.image");
+        let path = directory.join(IMAGE);
         std::fs::write(&path, b"changed").unwrap();
-        assert!(materialize_in(&root.0, &packed(b"tainted"), &digest, bytes.len() as u64).is_err());
+        assert!(materialize_in(
+            IMAGE,
+            &root.0,
+            &packed(b"tainted"),
+            &digest,
+            bytes.len() as u64
+        )
+        .is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"changed");
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
-        drop(materialize_in(&root.0, &packed(bytes), &digest, bytes.len() as u64).unwrap());
+        drop(materialize_in(IMAGE, &root.0, &packed(bytes), &digest, bytes.len() as u64).unwrap());
         assert_eq!(std::fs::read(path).unwrap(), bytes);
     }
     #[test]
@@ -206,10 +221,12 @@ mod tests {
         let root = Directory::new();
         let bytes = b"too much output";
         let digest = aot::digest_hex(bytes);
-        assert!(materialize_in(&root.0, &packed(bytes), &digest, 1).is_err());
-        assert!(materialize_in(&root.0, &packed(bytes), "../outside", 1).is_err());
-        assert!(materialize_in(&root.0, &packed(bytes), &digest, MAX_IMAGE_BYTES + 1).is_err());
-        assert!(!root.0.join(digest).join("inspector.image").exists());
+        assert!(materialize_in(IMAGE, &root.0, &packed(bytes), &digest, 1).is_err());
+        assert!(materialize_in(IMAGE, &root.0, &packed(bytes), "../outside", 1).is_err());
+        assert!(
+            materialize_in(IMAGE, &root.0, &packed(bytes), &digest, MAX_IMAGE_BYTES + 1).is_err()
+        );
+        assert!(!root.0.join(digest).join(IMAGE).exists());
     }
     #[test]
     fn concurrent_publishers_both_return_matching_immutable_handles() {
@@ -221,9 +238,14 @@ mod tests {
             let workers: Vec<_> = (0..4)
                 .map(|_| {
                     scope.spawn(|| {
-                        let mut file =
-                            materialize_in(&root.0, &compressed, &digest, bytes.len() as u64)
-                                .unwrap();
+                        let mut file = materialize_in(
+                            IMAGE,
+                            &root.0,
+                            &compressed,
+                            &digest,
+                            bytes.len() as u64,
+                        )
+                        .unwrap();
                         assert_eq!(aot::digest_reader(&mut file).unwrap(), digest);
                     })
                 })

@@ -3,8 +3,9 @@
 //   bun scripts/release-hosts.ts --out <dir> [--variant <name>]... [--native-inspector <build.json>]
 //     on each OS: cargo-build each variant (default: every published one and the dev host), gzip it into <dir>
 //     and describe it in <dir>/hosts-<platform>-<arch>.json. With --native-inspector (Windows x64: the
-//     build.json of scripts/aot/prepare-inspector.ts), every host with devtools embeds the inspector's
-//     native AOT image.
+//     build.json of scripts/aot/prepare-inspector.ts), every host carries the native AOT loader (an app
+//     built with --aot runs from its image), every host with devtools embeds the inspector's native
+//     image, and the matching image compiler is published beside them (<dir>/aot-<platform>-<arch>.json).
 //   bun scripts/release-hosts.ts --merge <dir>
 //     once, over every OS's output: <dir>/hosts.json
 //   bun scripts/release-hosts.ts --check-tag <tag>
@@ -14,10 +15,13 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { VARIANTS } from "../packages/cli/cli/config";
+import { compilerInfo, compilerMismatch } from "../packages/cli/aot/native";
 import {
+  aotCompilerAssetName,
   hostAssetName,
   MANIFEST_NAME,
   sha256,
+  type AotCompilerEntry,
   type HostManifest,
   type HostManifestEntry,
 } from "../packages/cli/cli/host-fetch";
@@ -55,12 +59,14 @@ if (values.merge) {
   const dir = resolve(values.merge);
   const parts = readdirSync(dir).filter((n) => /^hosts-.+\.json$/.test(n));
   const hosts = parts.flatMap((n) => JSON.parse(readFileSync(join(dir, n), "utf8")) as HostManifestEntry[]);
-  for (const h of hosts) {
-    if (!existsSync(join(dir, h.file))) throw new Error(`${h.file} is listed but missing from ${dir}`);
+  const aotParts = readdirSync(dir).filter((n) => /^aot-.+\.json$/.test(n));
+  const aot = aotParts.flatMap((n) => JSON.parse(readFileSync(join(dir, n), "utf8")) as AotCompilerEntry[]);
+  for (const { file } of [...hosts, ...aot]) {
+    if (!existsSync(join(dir, file))) throw new Error(`${file} is listed but missing from ${dir}`);
   }
-  const manifest: HostManifest = { skathi: CLI_VERSION, hosts };
+  const manifest: HostManifest = { skathi: CLI_VERSION, hosts, ...(aot.length ? { aot } : {}) };
   writeFileSync(join(dir, MANIFEST_NAME), JSON.stringify(manifest, null, 2) + "\n");
-  for (const n of parts) rmSync(join(dir, n));
+  for (const n of [...parts, ...aotParts]) rmSync(join(dir, n));
   console.log(`[release] ${MANIFEST_NAME}: ${hosts.map((h) => `${h.platform}-${h.arch}-${h.variant}`).join(", ")}`);
   process.exit(0);
 }
@@ -82,6 +88,7 @@ interface InspectorReceipt {
   manifest: string;
   bundle: string;
   table: string;
+  compiler: string;
 }
 let inspector: InspectorReceipt | null = null;
 if (values["native-inspector"]) {
@@ -99,16 +106,23 @@ const inspectorEnv: Record<string, string> = inspector
     }
   : {};
 
+// Every host must load what this compiler makes: `sk build --aot` downloads it to match them.
+const aotCompiler = inspector ? { path: inspector.compiler, info: await compilerInfo(inspector.compiler) } : null;
+
 const entries: HostManifestEntry[] = [];
 for (const variant of values.variant ?? [...VARIANTS, DEV_HOST]) {
   const devtools = variant !== "no-devtools";
   const { exe, ms } = cargoBuildHost(variant, console.log, {
     env: inspectorEnv,
-    features: inspector && devtools ? ["native-inspector"] : [],
+    features: inspector ? (devtools ? ["native-aot", "native-inspector"] : ["native-aot"]) : [],
   });
   const info = hostInfo(exe);
   const problem = checkHost(exe, info, variant, false);
   if (problem) throw new Error(problem);
+  if (aotCompiler) {
+    const mismatch = info.aot ? compilerMismatch(aotCompiler.info, info.aot) : "the host has no native AOT loader";
+    if (mismatch) throw new Error(`${exe} (${variant}) and ${aotCompiler.path} disagree: ${mismatch}`);
+  }
   const bytes = new Uint8Array(readFileSync(exe));
   const file = hostAssetName(platform, arch, variant);
   writeFileSync(join(out, file), Bun.gzipSync(bytes, { level: 9 }));
@@ -116,3 +130,18 @@ for (const variant of values.variant ?? [...VARIANTS, DEV_HOST]) {
   console.log(`[release] ${file}: ${(bytes.length / 1048576).toFixed(1)} MB, cargo ${(ms / 1000).toFixed(0)} s`);
 }
 writeFileSync(join(out, `hosts-${platform}-${arch}.json`), JSON.stringify(entries, null, 2) + "\n");
+if (aotCompiler) {
+  const bytes = new Uint8Array(readFileSync(aotCompiler.path));
+  const file = aotCompilerAssetName(platform, arch);
+  writeFileSync(join(out, file), Bun.gzipSync(bytes, { level: 9 }));
+  const entry: AotCompilerEntry = {
+    platform,
+    arch,
+    file,
+    sha256: sha256(bytes),
+    size: bytes.length,
+    info: aotCompiler.info,
+  };
+  writeFileSync(join(out, `aot-${platform}-${arch}.json`), JSON.stringify([entry], null, 2) + "\n");
+  console.log(`[release] ${file}: ${(bytes.length / 1048576).toFixed(1)} MB`);
+}

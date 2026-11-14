@@ -84,6 +84,11 @@ impl AppPayload {
             .map_err(|e| format!("the app payload is unreadable — {e}"))
     }
 
+    #[cfg(all(test, feature = "native-aot"))]
+    pub(crate) fn from_bytes(bytes: Vec<u8>) -> Result<Self, String> {
+        Self::parse(PayloadBytes::Owned(bytes))
+    }
+
     fn meta(&self) -> Option<&str> {
         self.0.borrow_dependent().meta()
     }
@@ -98,6 +103,14 @@ impl AppPayload {
     }
     pub fn window_json(&self) -> Option<&str> {
         self.0.borrow_dependent().window_json()
+    }
+    #[cfg(feature = "native-aot")]
+    pub fn native_manifest(&self) -> Option<&str> {
+        self.0.borrow_dependent().native_manifest()
+    }
+    #[cfg(feature = "native-aot")]
+    pub fn native_image(&self) -> Option<&[u8]> {
+        self.0.borrow_dependent().native_image()
     }
     pub fn assets(&self) -> &[sk_payload::Entry<'_>] {
         self.0.borrow_dependent().assets()
@@ -550,6 +563,10 @@ pub fn host_info_json() -> String {
             features.push(Json::s(name));
         }
     }
+    #[cfg(feature = "native-aot")]
+    let aot = crate::native_aot::host_identity();
+    #[cfg(not(feature = "native-aot"))]
+    let aot = Json::Null;
     Json::obj(vec![
         (
             "mode",
@@ -559,6 +576,7 @@ pub fn host_info_json() -> String {
                 "dev"
             }),
         ),
+        ("aot", aot),
         ("skathi", Json::s(env!("SK_PKG_VERSION"))),
         ("crate", Json::s(env!("CARGO_PKG_VERSION"))),
         ("variant", Json::s(host_variant())),
