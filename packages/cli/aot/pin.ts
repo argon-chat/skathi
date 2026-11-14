@@ -66,7 +66,7 @@ export function pinnedCompilerInfo(pin: ToolchainPin): CompilerInfo {
     frontend: pin.frontend.revision,
     engine: pin.engine.revision,
     tableId: pin.table.id,
-    compileOptions: `x86_64;references=narrow;image=pic;threads=1;default-options@${pin.engine.revision}`,
+    compileOptions: `x86_64;references=narrow;image=pic;threads=1;admit=FilesRunByHost;default-options@${pin.engine.revision}`,
   };
 }
 

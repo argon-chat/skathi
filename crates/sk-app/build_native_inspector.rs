@@ -94,7 +94,7 @@ pub fn prepare(repo: &Path, out: &Path) {
     require(
         &manifest,
         "compileOptions",
-        &format!("x86_64;references=narrow;image=pic;threads=1;default-options@{engine}"),
+        &format!("x86_64;references=narrow;image=pic;threads=1;admit=FilesRunByHost;default-options@{engine}"),
     );
     require(
         &manifest,

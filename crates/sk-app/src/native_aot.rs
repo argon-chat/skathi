@@ -238,6 +238,10 @@ fn select(
     // checksum on a manually selected external image is only integrity/ABI.
     unsafe { aot::load_image_file_with_profile(&file, id, profile) }?;
     drop(file);
+    // Its typeof and global reads would assume that the preludes and host functions never ran.
+    if !aot::admits_host_files() {
+        return Err(format!("{description} was compiled without admitting the host's own code; rebuild it with this SDK's compiler"));
+    }
     if let Some(settings) = aot::memory_settings() {
         eprintln!(
             "[native-aot] structure heap {} KiB; cell cage {} MiB; source view read-only {}",

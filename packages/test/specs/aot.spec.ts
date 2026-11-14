@@ -7,7 +7,7 @@
 // checkout's aot-image example, SK_AOT_COMPILER, or the release's). Without them it skips and says why.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { bareHost, expect, launch, REPO, WORK_DIR, type SkApp } from "../src/index";
 import { KIND, NAMES, readSkpk } from "../../cli/cli/skpk";
@@ -110,9 +110,7 @@ describe.skipIf("skip" in ready)("sk build --aot", () => {
     T,
   );
 
-  // In the image, `typeof` of a global-object property the builtin table does not list answers
-  // "undefined", so the runtime's `typeof __sk_reload === "function"` never wires location.reload.
-  test.failing(
+  test(
     "location.reload() runs app.prod.js, since the native entry evaluates once per process",
     async () => {
       const { app } = await run(build, "aot-hello-reload", { SK_AOT_CACHE_DIR: join(caches, "native") });
@@ -143,5 +141,56 @@ describe.skipIf("skip" in ready)("sk build --aot", () => {
       await app.close();
     },
     T,
+  );
+
+  // The runtime wires these by `typeof` of host functions that the preludes and the host bind before
+  // the entry, outside the image.
+  test(
+    "host functions bound outside the image wire focus() and the native locale",
+    async () => {
+      const root = join(WORK_DIR, `aot-probe-${process.pid}`);
+      mkdirSync(join(root, "src"), { recursive: true });
+      writeFileSync(
+        join(root, "sk.config.json"),
+        JSON.stringify({ name: "aotprobe", productName: "AotProbe", version: "0.1.0" }),
+      );
+      writeFileSync(
+        join(root, "src", "main.ts"),
+        [
+          'import { appLocale, createApp, h } from "vue";',
+          'appLocale.define({ en: { "aot.probe": "from the host catalog" } });',
+          'createApp({ render: () => h("input", { class: "probe" }) }).mount();',
+        ].join("\n"),
+      );
+      const { buildApp } = await import("../../cli/cli/build-app");
+      const probe = await buildApp({
+        target: root,
+        out: join(WORK_DIR, "packaged", `aot-probe-${process.pid}`),
+        host: "host" in ready ? ready.host : undefined,
+        variant: "standard",
+        aot: true,
+        log: (l) => console.log(`[aot.spec] ${l}`),
+      });
+      const app = await launch({
+        app: "aot-probe",
+        exe: probe.exe!,
+        packaged: probe.config.name,
+        label: "aot-probe",
+        window: [600, 400],
+        env: { SK_AOT_CACHE_DIR: join(caches, "native") },
+      });
+      opened.push(app);
+      await expect(app.locator(".probe")).toHaveCount(1);
+      bunExpect(lines(app, /\[native-aot\] application native entry completed/)).toHaveLength(1);
+      bunExpect(await app.eval(`__sk_locale_t("aot.probe", "{}")`)).toBe("from the host catalog");
+      bunExpect(
+        await app.eval(
+          `(() => { const input = document.querySelector(".probe"); input.focus(); return document.activeElement === input; })()`,
+        ),
+      ).toBe(true);
+      bunExpect(lines(app, /no programmatic focus/)).toEqual([]);
+      await app.close();
+    },
+    BUILD_T,
   );
 });
