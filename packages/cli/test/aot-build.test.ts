@@ -1,11 +1,18 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { compilerMismatch, nativeManifest, tarEntry, type NativeImage } from "../aot/native";
+import {
+  compileNative,
+  compilerInfo,
+  compilerMismatch,
+  nativeManifest,
+  repoSkAot,
+  type NativeImage,
+} from "../aot/native";
 import { loadPin, pinnedCompilerInfo } from "../aot/pin";
 import { opaqueGlobals, opaqueHost, TABLE_ID, TRANSFORM } from "../aot/transform";
-import { aotCheck, aotFlags, aotPlatformProblem, hostAot } from "../cli/aot-build";
+import { aotCheck, aotFlags, aotPlatformProblem, hostAot, resolveAotCompiler } from "../cli/aot-build";
 import { buildApp } from "../cli/build-app";
 import { ConfigError, loadAppConfig } from "../cli/config";
 import { HostError, type HostInfo, type ResolvedHost } from "../cli/host";
@@ -57,7 +64,7 @@ describe("flags and config", () => {
     expect(aotFlags({ aot: true }).aot).toBe(true);
     expect(aotFlags({ "no-aot": true }).aot).toBe(false);
     expect(() => aotFlags({ aot: true, "no-aot": true })).toThrow("contradict");
-    expect(aotFlags({ "aot-compiler": "tools/aot-image.exe" }).aotCompiler).toBe(resolve("tools/aot-image.exe"));
+    expect(aotFlags({ "aot-compiler": "tools/sk-aot.exe" }).aotCompiler).toBe(resolve("tools/sk-aot.exe"));
     expect(() => aotFlags({ "aot-compiler": " " })).toThrow("--aot-compiler needs");
     expect(() => aotFlags({ "aot-compiler": true })).toThrow("--aot-compiler needs");
   });
@@ -96,6 +103,40 @@ describe("the host decides what an image is compiled against", () => {
     for (const name of ["target", "frontend", "engine", "tableId", "compileOptions"] as const)
       expect(compilerMismatch({ ...pinnedCompilerInfo(pin), [name]: "stale" }, aot)).toStartWith(`${name} stale`);
   });
+
+  test("a named sk-aot wins and must exist; SK_AOT_COMPILER names one too", async () => {
+    const missing = join(tmpdir(), `sk-aot-missing-${process.pid}.exe`);
+    await expect(resolveAotCompiler(aot, missing, () => {})).rejects.toThrow(`${missing} does not exist`);
+    const before = process.env.SK_AOT_COMPILER;
+    process.env.SK_AOT_COMPILER = missing;
+    try {
+      await expect(resolveAotCompiler(aot, undefined, () => {})).rejects.toThrow(`${missing} does not exist`);
+    } finally {
+      if (before === undefined) delete process.env.SK_AOT_COMPILER;
+      else process.env.SK_AOT_COMPILER = before;
+    }
+  });
+
+  const built = repoSkAot(resolve(import.meta.dir, "../../.."));
+  test.skipIf(!existsSync(built))("the checkout's sk-aot build reports the pinned toolchain", async () => {
+    expect(await compilerInfo(built)).toEqual(pinnedCompilerInfo(pin));
+  });
+
+  test.skipIf(!existsSync(built))(
+    "the checkout's sk-aot compiles a bundle inside a package",
+    async () => {
+      const root = app({});
+      writeFileSync(join(root, "package.json"), '{"name":"aot-test","type":"module"}\n');
+      const native = await compileNative({
+        compiler: built,
+        source: "globalThis.answer = 6 * 7;\n",
+        work: join(root, "dist", ".sk", "aot"),
+      });
+      expect(native.entry).toBe(1);
+      expect(native.image.length).toBeGreaterThan(0);
+    },
+    60_000,
+  );
 
   test("the application manifest names everything the host checks", () => {
     const native: NativeImage = {
@@ -143,41 +184,6 @@ describe("the opaque-host transform", () => {
         "const globalThis = __sk_host;\nconst {a,b} = __sk_host;\napp();\n})(__SK_AOT_HOST__);\n",
     );
   });
-});
-
-test("one file comes out of a tar, ustar prefix and pax path included", () => {
-  const block = (fields: { name: string; size: number; type: string; prefix?: string }) => {
-    const header = new Uint8Array(512);
-    const put = (at: number, text: string) => header.set(new TextEncoder().encode(text), at);
-    put(0, fields.name);
-    put(124, fields.size.toString(8).padStart(11, "0"));
-    put(156, fields.type);
-    put(257, "ustar");
-    if (fields.prefix) put(345, fields.prefix);
-    return header;
-  };
-  const padded = (bytes: Uint8Array) => {
-    const out = new Uint8Array(Math.ceil(bytes.length / 512) * 512);
-    out.set(bytes);
-    return out;
-  };
-  const enc = (text: string) => new TextEncoder().encode(text);
-  const pax = enc("28 path=package/bin/bun.exe\n");
-  const tar = new Uint8Array([
-    ...block({ name: "package/README.md", size: 3, type: "0" }),
-    ...padded(enc("doc")),
-    ...block({ name: "PaxHeader", size: pax.length, type: "x" }),
-    ...padded(pax),
-    ...block({ name: "truncated", size: 4, type: "0" }),
-    ...padded(enc("MZ!!")),
-    ...block({ name: "x.txt", size: 1, type: "0", prefix: "package/lib" }),
-    ...padded(enc("x")),
-    ...new Uint8Array(1024),
-  ]);
-  expect(new TextDecoder().decode(tarEntry(tar, "package/bin/bun.exe")!)).toBe("MZ!!");
-  expect(new TextDecoder().decode(tarEntry(tar, "package/lib/x.txt")!)).toBe("x");
-  expect(tarEntry(tar, "truncated")).toBeNull();
-  expect(tarEntry(tar, "missing")).toBeNull();
 });
 
 describe("sk check gates an AOT build", () => {

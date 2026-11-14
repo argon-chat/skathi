@@ -36,7 +36,7 @@ const BUILD: Section[] = [
       ["--host <exe>", "Stamp this host instead of the cached one"],
       ["--payload-only", "Write dist/.sk/app.skpk and stop"],
       ["--aot-inputs", "Keep the typed sources for a later AOT compile"],
-      ["--aot-compiler <exe>", "Compile native images with this aot-image.exe"],
+      ["--aot-compiler <exe>", "Compile native images with this sk-aot.exe (or SK_AOT_COMPILER)"],
     ],
   },
 ];

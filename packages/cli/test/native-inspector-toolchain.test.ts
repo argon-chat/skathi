@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -13,8 +13,6 @@ import {
   verifyFile,
   verifyTable,
 } from "../../../scripts/aot/toolchain";
-
-import { downloadVerified } from "../aot/download";
 
 const pinPath = resolve(import.meta.dir, "../aot/toolchain.lock.json");
 const pin = loadPin(pinPath);
@@ -54,14 +52,8 @@ describe("native inspector build provenance", () => {
     await fixture((root) => {
       for (const change of [
         { frontend: { ...pin.frontend, sourceRepository: "https://example.com/bun.git" } },
-        {
-          frontend: {
-            ...pin.frontend,
-            archiveUrl: "https://github.com/oven-sh/bun/releases/latest/download/bun-windows-x64.zip",
-          },
-        },
-        { frontend: { ...pin.frontend, executableSha256: "" } },
-        { frontend: { ...pin.frontend, packageVersion: "canary" } },
+        { frontend: { ...pin.frontend, revision: "main" } },
+        { engine: { ...pin.engine, archiveSha256: "" } },
         { table: { ...pin.table, id: "not-a-digest" } },
         { target: "aarch64-macos" },
       ]) {
@@ -127,68 +119,5 @@ describe("native inspector build provenance", () => {
       writeFileSync(wire, "// schema v1\n");
       writeFileSync(dump, '{"entries":["changed"]}');
       await expect(verifyTable(table, root, expected)).rejects.toThrow("digest mismatch");
-    }));
-});
-
-describe("exclusive native frontend download staging", () => {
-  const data = Buffer.from("official immutable frontend archive");
-  const digest = createHash("sha256").update(data).digest("hex");
-  const response = (() => Promise.resolve(new Response(data))) as unknown as typeof fetch;
-  test("atomically publishes verified bytes and reuses a valid cache without a fetch", () =>
-    fixture(async (root) => {
-      const path = join(root, "frontend.tgz");
-      await downloadVerified("https://example.invalid/fixture", path, digest, response);
-      expect(readFileSync(path)).toEqual(data);
-      await downloadVerified("https://example.invalid/fixture", path, digest, (() => {
-        throw Error("cache should be reused");
-      }) as unknown as typeof fetch);
-      expect(readdirSync(root)).toEqual(["frontend.tgz"]);
-    }));
-  test("HTTP, stream, oversized and wrong-hash failures clean only their staging files", () =>
-    fixture(async (root) => {
-      const other = join(root, "unrelated");
-      writeFileSync(other, "keep");
-      const failures = [
-        {
-          fetcher: (() => Promise.resolve(new Response("missing", { status: 404 }))) as unknown as typeof fetch,
-          maximum: 256,
-        },
-        { fetcher: response, maximum: 2 },
-        {
-          fetcher: (() => Promise.resolve(new Response("different archive"))) as unknown as typeof fetch,
-          maximum: 256,
-        },
-        {
-          fetcher: (() =>
-            Promise.resolve(
-              new Response(
-                new ReadableStream({
-                  start(controller) {
-                    controller.error(Error("interrupted stream"));
-                  },
-                }),
-              ),
-            )) as unknown as typeof fetch,
-          maximum: 256,
-        },
-      ];
-      for (const { fetcher, maximum } of failures) {
-        const path = join(root, "frontend.tgz");
-        await expect(
-          downloadVerified("https://example.invalid/fixture", path, digest, fetcher, maximum),
-        ).rejects.toThrow();
-        expect(existsSync(path)).toBe(false);
-        expect(readdirSync(root)).toEqual(["unrelated"]);
-      }
-      expect(readFileSync(other, "utf8")).toBe("keep");
-    }));
-  test("simultaneous publishers retain one matching archive and no orphan staging files", () =>
-    fixture(async (root) => {
-      const path = join(root, "frontend.tgz");
-      await Promise.all(
-        Array.from({ length: 4 }, () => downloadVerified("https://example.invalid/fixture", path, digest, response)),
-      );
-      expect(readFileSync(path)).toEqual(data);
-      expect(readdirSync(root)).toEqual(["frontend.tgz"]);
     }));
 });

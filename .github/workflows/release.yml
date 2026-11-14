@@ -4,8 +4,8 @@ name: Release
 # every published variant and the dev host for Windows x64, macOS arm64 and Linux x64, gzipped, plus
 # hosts.json; then @skathi-native/runtime and @skathi-native/cli at that version to npm.
 # Every Windows host carries the native AOT loader (apps built with --aot run from their image), the
-# ones with devtools embed the inspector's native image (scripts/aot/prepare-inspector.ts), and the
-# matching image compiler is published beside them for `sk build --aot`.
+# ones with devtools embed the inspector's native image (scripts/aot/prepare-inspector.ts), and the sk-aot
+# that compiled it (.github/workflows/sk-aot.yml) is published beside them for `sk build --aot`.
 
 on:
   push:
@@ -28,8 +28,14 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  sk-aot:
+    uses: ./.github/workflows/sk-aot.yml
+    with:
+      ref: ${{ github.event.inputs.tag || github.ref_name }}
+
   hosts:
     name: Hosts (${{ matrix.name }})
+    needs: [sk-aot]
     strategy:
       matrix:
         include:
@@ -67,10 +73,16 @@ jobs:
           path: .tools/native-aot
           key: windows-native-inspector-${{ hashFiles('packages/cli/aot/toolchain.lock.json', 'scripts/aot/generate-table.ts', 'vendor/redjs/pins.txt') }}
       - if: runner.os == 'Windows'
-        name: Build the hosts (with the native AOT loader, inspector and compiler)
-        shell: pwsh
+        uses: actions/download-artifact@v4
+        with:
+          name: sk-aot-windows-x64
+          path: .tools/sk-aot
+      - if: runner.os == 'Windows'
+        name: Build the hosts (with the native AOT loader, inspector and sk-aot)
+        shell: bash
         run: |
-          bun scripts/aot/prepare-inspector.ts --out release-inspector --cache .tools/native-aot --target-dir target
+          gzip -dc .tools/sk-aot/sk-aot-windows-x64.exe.gz > .tools/sk-aot/sk-aot.exe
+          bun scripts/aot/prepare-inspector.ts --out release-inspector --cache .tools/native-aot --compiler .tools/sk-aot/sk-aot.exe
           bun scripts/release-hosts.ts --out release-hosts --native-inspector release-inspector/build.json
       - if: runner.os != 'Windows'
         name: Build the hosts

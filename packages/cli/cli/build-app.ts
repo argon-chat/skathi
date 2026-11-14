@@ -58,7 +58,7 @@ export interface BuildOptions {
   aotInputs?: boolean;
   /** Compile the app to a native image (over sk.config.json "aot"). */
   aot?: boolean | undefined;
-  /** The native image compiler to use instead of the release's (SDK development). */
+  /** The sk-aot to use instead of the checkout's or the release's. */
   aotCompiler?: string | undefined;
   /** Colors in a report that refuses the build. */
   color?: boolean;

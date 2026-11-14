@@ -4,12 +4,7 @@
   "target": "x86_64-windows",
   "frontend": {
     "revision": "7ca0042d3ba23ed60fd9cd8af1a1ce6ec3f8d074",
-    "archiveUrl": "https://registry.npmjs.org/@oven/bun-windows-x64/-/bun-windows-x64-1.4.4-canary.20261107.1.tgz",
-    "archiveSha256": "cd49a97c171ce7205837ee70ec2f6d6078a4b074fcbcae3c6e1cb440122273f5",
-    "executableSha256": "4043880232499ab1bd8baf68e171e6e71829ccf13edc5f75e7b8172a34d2df04",
-    "sourceRepository": "https://github.com/oven-sh/bun.git",
-    "archiveFormat": "npm-tgz",
-    "packageVersion": "1.4.4-canary.20261107.1"
+    "sourceRepository": "https://github.com/oven-sh/bun.git"
   },
   "engine": {
     "revision": "4d45755fed4aeef19e95beb90d3d0c884a2812bd",

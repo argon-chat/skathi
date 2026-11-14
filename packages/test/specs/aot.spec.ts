@@ -3,12 +3,12 @@
 // compares startup with the same exe told to run its JavaScript (SK_APP_ENGINE=jit).
 //
 // Needs a standard host with the native AOT loader (a release host, or `cargo build --release -p sk-app
-// --features prod,native-aot` with REDJS_AOT_BUILTIN_TABLE_DIR) and a matching image compiler (the
-// checkout's aot-image example, SK_AOT_COMPILER, or the release's). Without them it skips and says why.
+// --features prod,native-aot` with REDJS_AOT_BUILTIN_TABLE_DIR) and a matching sk-aot (SK_AOT_COMPILER, the
+// checkout's tools/sk-aot build, or the release's). Without them it skips and says why.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { bareHost, expect, launch, REPO, WORK_DIR, type SkApp } from "../src/index";
 import { KIND, NAMES, readSkpk } from "../../cli/cli/skpk";
 import { hostInfo } from "../../cli/cli/host";
@@ -77,6 +77,7 @@ describe.skipIf("skip" in ready)("sk build --aot", () => {
         log: (l) => console.log(`[aot.spec] ${l}`),
       });
       bunExpect(build.native).not.toBeNull();
+      bunExpect(basename(build.native!.compiler)).toBe("sk-aot.exe");
       const native = build.native!;
       const payload = readSkpk(new Uint8Array(readFileSync(build.skpk)));
       const kinds = payload.entries.map((e) => [e.kind, e.name]);
@@ -88,7 +89,7 @@ describe.skipIf("skip" in ready)("sk build --aot", () => {
       bunExpect(manifest.imageBytes).toBe(native.imageBytes);
       console.log(
         `[aot.spec] bundle ${(build.bundleBytes / 1024).toFixed(0)} KiB -> image ${(native.imageBytes / 2 ** 20).toFixed(1)} MiB ` +
-          `(${(native.compressedBytes / 2 ** 20).toFixed(1)} MiB packed), frontend + compiler ${native.ms} ms`,
+          `(${(native.compressedBytes / 2 ** 20).toFixed(1)} MiB packed), sk-aot ${native.ms} ms`,
       );
     },
     BUILD_T,

@@ -1,11 +1,12 @@
 /** Build a fresh native inspector from one production bundle, for embedding in
  * the ordinary host executable. Heavy subprocesses run only from this CLI.
- * bun scripts/aot/prepare-inspector.ts --out DIR --cache DIR --target-dir DIR
- * Optional verified local inputs: --frontend FILE --bun-source DIR --table DIR --compiler FILE.
+ * bun scripts/aot/prepare-inspector.ts --out DIR --cache DIR
+ * Optional verified local inputs: --compiler <sk-aot.exe> (default: tools/sk-aot's release build)
+ * --bun-source DIR --table DIR.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { downloadVerified } from "../../packages/cli/aot/download";
+import { compilerInfo, repoSkAot } from "../../packages/cli/aot/native";
 import {
   fileDigest,
   loadPin,
@@ -41,21 +42,15 @@ export async function prepare(): Promise<void> {
   const pin = loadPin();
   verifyEngine(sdk, pin);
   const out = argument("--out")!,
-    cache = argument("--cache")!,
-    target = argument("--target-dir")!;
+    cache = argument("--cache")!;
   mkdirSync(out, { recursive: true });
   mkdirSync(cache, { recursive: true });
-  const frontendDirectory = join(cache, `frontend-${pin.frontend.revision}`);
-  mkdirSync(frontendDirectory, { recursive: true });
-  const frontend = argument("--frontend", true) ?? join(frontendDirectory, "package/bin/bun.exe");
-  if (!existsSync(frontend) && !process.argv.includes("--frontend")) {
-    const archive = join(frontendDirectory, `bun-windows-x64-${pin.frontend.packageVersion}.tgz`);
-    await downloadVerified(pin.frontend.archiveUrl, archive, pin.frontend.archiveSha256);
-    run(["tar", "-xzf", archive, "-C", frontendDirectory]);
-  }
-  await verifyFile(frontend, pin.frontend.executableSha256);
-  if (!run([frontend, "--revision"]).trim().endsWith(pin.frontend.revision.slice(0, 9)))
-    throw Error("Pinned AOT frontend reported a different revision");
+  const compiler = argument("--compiler", true) ?? repoSkAot(sdk);
+  if (!existsSync(compiler))
+    throw Error(
+      `No sk-aot at ${compiler}; build it (bun tools/sk-aot/setup.ts, then cargo build --release in tools/sk-aot) or pass --compiler`,
+    );
+  verifyCompilerInfo({ ...(await compilerInfo(compiler)) }, pin);
   const table = argument("--table", true) ?? join(cache, `table-${pin.table.id}`);
   if (needsTable(table)) {
     const source = argument("--bun-source", true) ?? join(cache, `source-${pin.frontend.revision}`);
@@ -89,33 +84,6 @@ export async function prepare(): Promise<void> {
     run([process.execPath, join(sdk, "scripts/aot/generate-table.ts"), "--bun-source", source, "--out", table]);
   }
   await verifyTable(table, sdk, pin);
-  const compilerOverride = argument("--compiler", true);
-  const compiler = compilerOverride ?? join(target, "x86_64-pc-windows-msvc/release/examples/aot-image.exe");
-  if (!compilerOverride) {
-    console.log("Building the matching native image compiler (not part of the shipped core)");
-    run(
-      [
-        "cargo",
-        "build",
-        "--manifest-path",
-        join(sdk, "vendor/redjs/redjs/Cargo.toml"),
-        "--example",
-        "aot-image",
-        "--no-default-features",
-        "--features",
-        "native-aot",
-        "--release",
-        "--locked",
-        "--target",
-        "x86_64-pc-windows-msvc",
-        "--target-dir",
-        target,
-      ],
-      sdk,
-      { REDJS_AOT_BUILTIN_TABLE_DIR: table },
-    );
-  }
-  verifyCompilerInfo(JSON.parse(run([compiler, "info"])), pin);
   const source = join(out, "source");
   mkdirSync(source, { recursive: true });
   const bundle = join(source, "app.prod.js");
@@ -136,8 +104,6 @@ export async function prepare(): Promise<void> {
     run([
       process.execPath,
       join(sdk, "scripts/aot/build-devtools.ts"),
-      "--frontend",
-      frontend,
       "--compiler",
       compiler,
       "--table",
@@ -160,11 +126,10 @@ export async function prepare(): Promise<void> {
     manifest,
     bundle: join(out, "app.prod.js"),
     table,
-    frontend,
     compiler,
     imageSha256: document.imageSha256,
     sourceBundleSha256: document.sourceBundleSha256,
-    frontendSha256: await fileDigest(frontend),
+    compilerSha256: await fileDigest(compiler),
   };
   writeFileSync(join(out, "build.json"), JSON.stringify(receipt, null, 2) + "\n");
   console.log(`Embedded inspector build inputs: ${join(out, "build.json")}`);

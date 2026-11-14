@@ -1,20 +1,20 @@
 // `sk build --aot`: the app's production bundle compiled to a native image that travels in the
 // payload beside app.prod.js (which stays: the host checks the image against it, and stacks name it).
 //
-//   sk check (errors refuse the build) -> the pinned frontend (npm, cached) -> the image compiler
-//   matching the host (the release asset, cached; or --aot-compiler) -> image + manifest
+//   sk check (errors refuse the build) -> sk-aot matching the host (--aot-compiler, the checkout's
+//   build, or the release asset, cached) -> image + manifest
 //
 // The host checks the manifest against itself before it loads the image (crates/sk-app/src/native_aot.rs).
 
 import { deflateRawSync } from "node:zlib";
 import { existsSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { AotError, compileNative, compilerInfo, compilerMismatch, ensureFrontend, nativeManifest } from "../aot/native";
-import { loadPin, type CompilerInfo } from "../aot/pin";
+import { join, resolve } from "node:path";
+import { AotError, compileNative, compilerInfo, compilerMismatch, nativeManifest, repoSkAot } from "../aot/native";
+import type { CompilerInfo } from "../aot/pin";
 import { TRANSFORM } from "../aot/transform";
 import { exitCode, formatPretty, runCheck, type CheckReport } from "../check/index";
 import { ConfigError } from "./config";
-import { CLI_VERSION, HostError, REPO_ROOT, cacheRoot, type HostAot, type ResolvedHost } from "./host";
+import { CLI_VERSION, HostError, REPO_ROOT, type HostAot, type ResolvedHost } from "./host";
 import { cachedAotCompiler, fetchAotCompiler } from "./host-fetch";
 import type { Platform } from "./platform";
 import { KIND, NAMES, type SkpkInput } from "./skpk";
@@ -30,7 +30,7 @@ export function aotFlags(flags: Record<string, string | boolean>): {
   if (flags.aot === true && flags["no-aot"] === true) throw new ConfigError("--aot and --no-aot contradict each other");
   const compiler = flags["aot-compiler"];
   if (compiler !== undefined && (typeof compiler !== "string" || !compiler.trim()))
-    throw new ConfigError("--aot-compiler needs the path of a native image compiler (aot-image.exe)");
+    throw new ConfigError("--aot-compiler needs the path of sk-aot.exe");
   return {
     aot: flags["no-aot"] === true ? false : flags.aot === true ? true : undefined,
     aotCompiler: typeof compiler === "string" ? resolve(compiler.trim()) : undefined,
@@ -67,9 +67,6 @@ export function hostAot(host: ResolvedHost): HostAot {
   return aot;
 }
 
-/** The pinned frontend, compilers and their caches live beside the host cache. */
-export const aotToolchainCache = () => join(dirname(cacheRoot()), "aot-toolchain");
-
 export interface CompilerChoice {
   path: string;
   info: CompilerInfo;
@@ -77,8 +74,8 @@ export interface CompilerChoice {
 }
 
 /**
- * The image compiler matching `aot`, first hit wins: --aot-compiler or SK_AOT_COMPILER (must match);
- * the checkout's own build (aot-image); the cache; a download from this version's release.
+ * The sk-aot matching `aot`, first hit wins: --aot-compiler or SK_AOT_COMPILER (must match);
+ * the checkout's own build; the cache; a download from this version's release.
  */
 export async function resolveAotCompiler(
   aot: HostAot,
@@ -94,11 +91,7 @@ export async function resolveAotCompiler(
   }
   const tried: string[] = [];
   const candidates: { path: string; source: "repo" | "cache" }[] = [];
-  if (REPO_ROOT)
-    candidates.push({
-      path: join(REPO_ROOT, "target", "x86_64-pc-windows-msvc", "release", "examples", "aot-image.exe"),
-      source: "repo",
-    });
+  if (REPO_ROOT) candidates.push({ path: repoSkAot(REPO_ROOT), source: "repo" });
   candidates.push({ path: cachedAotCompiler(CLI_VERSION), source: "cache" });
   for (const c of candidates) {
     if (!existsSync(c.path)) continue;
@@ -109,13 +102,13 @@ export async function resolveAotCompiler(
   }
   if (process.env.SK_HOST_OFFLINE === "1") {
     throw new AotError(
-      `no native image compiler matches the host${tried.length ? `:\n  ${tried.join("\n  ")}` : ""}\n` +
-        "SK_HOST_OFFLINE=1 forbids downloading it; pass --aot-compiler <exe>",
+      `no sk-aot matches the host${tried.length ? `:\n  ${tried.join("\n  ")}` : ""}\n` +
+        "SK_HOST_OFFLINE=1 forbids downloading it; pass --aot-compiler <sk-aot.exe>",
     );
   }
   const fetched = await fetchAotCompiler({ log });
   const mismatch = compilerMismatch(fetched.info, aot);
-  if (mismatch) throw new AotError(`the Skathi ${CLI_VERSION} release's native image compiler: ${mismatch}`);
+  if (mismatch) throw new AotError(`the Skathi ${CLI_VERSION} release's sk-aot: ${mismatch}`);
   return { path: fetched.path, info: await compilerInfo(fetched.path), source: "release" };
 }
 
@@ -163,16 +156,13 @@ export async function buildNative(options: {
 }): Promise<NativeBuild> {
   const { progress, log, aot, work } = options;
   progress.step("AOT toolchain");
-  const pin = loadPin();
-  const frontend = await ensureFrontend(aotToolchainCache(), pin, log);
   const compiler = await resolveAotCompiler(aot, options.compilerPath, log);
-  progress.detail(`frontend ${pin.frontend.packageVersion} · compiler (${compiler.source})`);
+  progress.detail(`sk-aot (${compiler.source})`);
+  progress.step("native image");
   const native = await compileNative({
-    frontend,
     compiler: compiler.path,
     source: new TextDecoder().decode(options.source),
     work,
-    phase: (step) => progress.step(step === "frontend" ? "AOT frontend" : "native image"),
   });
   const compressed = deflateRawSync(native.image, { level: 9 });
   progress.detail(

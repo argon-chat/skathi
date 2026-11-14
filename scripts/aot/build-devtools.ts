@@ -1,12 +1,12 @@
 /** The devtools inspector -> JSC native image. This is not Bun standalone packaging.
- * bun scripts/aot/build-devtools.ts --frontend <pinned bun.exe> --compiler <aot-image.exe>
- *   --table <generated matching table> --out <artifact directory> [--bundle <production JS>]
+ * bun scripts/aot/build-devtools.ts --compiler <sk-aot.exe> --table <generated matching table>
+ *   --out <artifact directory> [--bundle <production JS>]
  */
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { compileNative, compilerInfo, nativeManifest } from "../../packages/cli/aot/native";
 import { hostGlobalsFromTable, opaqueGlobals, TABLE_ID, type BuiltinEntry } from "../../packages/cli/aot/transform";
-import { loadPin, verifyCompilerInfo, verifyEngine, verifyFile, verifyTable } from "./toolchain";
+import { loadPin, verifyCompilerInfo, verifyEngine, verifyTable } from "./toolchain";
 const PIN = loadPin();
 const sdk = resolve(import.meta.dir, "../..");
 function argument(name: string, optional = false): string | undefined {
@@ -16,8 +16,7 @@ function argument(name: string, optional = false): string | undefined {
   if (index < 0 || !value || value.startsWith("--")) throw new Error(`${name} needs a path`);
   return resolve(value);
 }
-const frontend = argument("--frontend")!,
-  compiler = argument("--compiler")!;
+const compiler = argument("--compiler")!;
 const table = argument("--table")!,
   out = argument("--out")!;
 const digest = (bytes: string | Uint8Array): string => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
@@ -30,10 +29,7 @@ function run(command: string[], cwd = sdk): string {
   return stdout;
 }
 verifyEngine(sdk, PIN);
-await verifyFile(frontend, PIN.frontend.executableSha256);
 await verifyTable(table, sdk, PIN);
-if (!run([frontend, "--revision"]).trim().endsWith(PIN.frontend.revision.slice(0, 9)))
-  throw new Error(`Frontend must be Bun ${PIN.frontend.revision}`);
 const info = await compilerInfo(compiler);
 verifyCompilerInfo({ ...info }, PIN);
 const dump = JSON.parse(readFileSync(join(table, "aot_builtin_table.json"), "utf8")) as { entries: BuiltinEntry[] };
@@ -60,7 +56,7 @@ if (!process.argv.includes("--bundle")) {
 }
 const source = readFileSync(bundle, "utf8");
 writeFileSync(join(stage, "opaque-host-globals.json"), JSON.stringify(derived, null, 2));
-const native = await compileNative({ frontend, compiler, source, work: stage });
+const native = await compileNative({ compiler, source, work: stage });
 console.log(native.diagnostics);
 const prelude = Buffer.concat([
   readFileSync(join(sdk, "crates/sk-app/src/prelude.js")),

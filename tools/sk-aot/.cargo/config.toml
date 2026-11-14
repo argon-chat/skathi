@@ -1,9 +1,18 @@
 [build]
 target = "x86_64-pc-windows-msvc"
 
-# The JSC prebuilt and redjs's C++ are /MT.
+# The JSC prebuilt and redjs's C++ are /MT. bun_core::return_address() reads the frame pointer:
+# without one, the resolver crashes reading any package.json above the input.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608", "--cfg=bun_sema_mimalloc"]
+rustflags = [
+  "-C",
+  "target-feature=+crt-static",
+  "-C",
+  "force-frame-pointers=yes",
+  "-C",
+  "link-arg=/STACK:8388608",
+  "--cfg=bun_sema_mimalloc",
+]
 
 [env]
 BUN_CODEGEN_DIR = { value = ".cache/bun/build/release-codegen/codegen", relative = true }

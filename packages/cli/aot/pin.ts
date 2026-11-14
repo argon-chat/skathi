@@ -1,5 +1,5 @@
-// The reviewed native-AOT toolchain: the frontend (an exact official @oven/bun-windows-x64 build), the
-// engine revision and the builtin table id an image compiler must report. Reading it runs nothing.
+// The reviewed native-AOT toolchain: the Bun revision sk-aot's frontend is built from, the engine
+// revision and the builtin table id that sk-aot must report. Reading it runs nothing.
 import { createHash } from "node:crypto";
 import { createReadStream, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -10,20 +10,12 @@ export interface ToolchainPin {
   schema: string;
   version: number;
   target: string;
-  frontend: {
-    revision: string;
-    archiveUrl: string;
-    archiveFormat: string;
-    packageVersion: string;
-    archiveSha256: string;
-    executableSha256: string;
-    sourceRepository: string;
-  };
+  frontend: { revision: string; sourceRepository: string };
   engine: { revision: string; archiveSha256: string };
   table: { id: string; dumpSha256: string };
 }
 
-/** What `aot-image info` prints, and what a host's `--sk-host-info` `aot` names. */
+/** What `sk-aot info` prints, and what a host's `--sk-host-info` `aot` names. */
 export interface CompilerInfo {
   target: string;
   frontend: string;
@@ -40,23 +32,10 @@ export function loadPin(path: string = PIN_PATH): ToolchainPin {
     throw Error("Unsupported native AOT toolchain pin");
   for (const revision of [pin.frontend?.revision, pin.engine?.revision])
     if (!/^[a-f0-9]{40}$/.test(revision || "")) throw Error("Invalid native AOT revision");
-  for (const digest of [
-    pin.frontend?.archiveSha256,
-    pin.frontend?.executableSha256,
-    pin.engine?.archiveSha256,
-    pin.table?.id,
-    pin.table?.dumpSha256,
-  ])
+  for (const digest of [pin.engine?.archiveSha256, pin.table?.id, pin.table?.dumpSha256])
     if (!/^[a-f0-9]{64}$/.test(digest || "")) throw Error("Invalid native AOT digest");
-  const version = pin.frontend.packageVersion;
-  if (
-    pin.frontend.sourceRepository !== "https://github.com/oven-sh/bun.git" ||
-    pin.frontend.archiveFormat !== "npm-tgz" ||
-    !/^\d+\.\d+\.\d+-canary\.\d{8}\.\d+$/.test(version || "") ||
-    pin.frontend.archiveUrl !== `https://registry.npmjs.org/@oven/bun-windows-x64/-/bun-windows-x64-${version}.tgz`
-  ) {
-    throw Error("AOT frontend must come from an exact official @oven package and pinned source repository");
-  }
+  if (pin.frontend.sourceRepository !== "https://github.com/oven-sh/bun.git")
+    throw Error("The AOT frontend must be built from the official Bun repository");
   return pin;
 }
 

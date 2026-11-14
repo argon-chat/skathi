@@ -37,16 +37,16 @@ export interface HostManifestEntry {
   info: HostInfo;
 }
 
-/** The native image compiler (`sk build --aot`) matching the release's hosts. */
+/** sk-aot (`sk build --aot`), matching the release's hosts. */
 export interface AotCompilerEntry {
   platform: Platform;
   arch: string;
-  /** The release asset: the compiler, gzipped. */
+  /** The release asset: sk-aot, gzipped. */
   file: string;
-  /** Of the compiler itself, not of the gzip. */
+  /** Of sk-aot itself, not of the gzip. */
   sha256: string;
   size: number;
-  /** What `<compiler> info` prints: the frontend, engine and builtin table it compiles for. */
+  /** What `sk-aot info` prints: the frontend, engine and builtin table it compiles for. */
   info: CompilerInfo;
 }
 
@@ -60,7 +60,7 @@ export const hostAssetName = (platform: Platform, arch: string, variant: Variant
   `sk-host-${platform}-${arch}-${variant}${platform === "windows" ? ".exe" : ""}.gz`;
 
 export const aotCompilerAssetName = (platform: Platform, arch: string): string =>
-  `sk-aot-compiler-${platform}-${arch}${platform === "windows" ? ".exe" : ""}.gz`;
+  `sk-aot-${platform}-${arch}${platform === "windows" ? ".exe" : ""}.gz`;
 
 export const sha256 = (bytes: Uint8Array): string =>
   new Bun.CryptoHasher("sha256").update(new Uint8Array(bytes)).digest("hex");
@@ -174,11 +174,11 @@ export async function fetchHost(options: FetchOptions): Promise<{ path: string; 
   return { path: dest, info: entry.info };
 }
 
-/** Where the native image compiler of Skathi `version` is cached. */
+/** Where the sk-aot of Skathi `version` is cached. */
 export const cachedAotCompiler = (version: string, platform: Platform = currentPlatform()) =>
-  join(cacheRoot(platform), version, "aot", `sk-aot-compiler${platform === "windows" ? ".exe" : ""}`);
+  join(cacheRoot(platform), version, "aot", `sk-aot${platform === "windows" ? ".exe" : ""}`);
 
-/** Downloads the native image compiler from the release of `version` into the local cache, checked against `hosts.json`. */
+/** Downloads sk-aot from the release of `version` into the local cache, checked against `hosts.json`. */
 export async function fetchAotCompiler(
   options: Omit<FetchOptions, "variant"> = {},
 ): Promise<{ path: string; info: CompilerInfo }> {
@@ -188,11 +188,11 @@ export async function fetchAotCompiler(
   const log = options.log ?? (() => {});
   const release = await readRelease(version);
   const entry = release.manifest.aot?.find((c) => c.platform === platform && c.arch === arch);
-  if (!entry) throw new HostError(`release ${release.tag} has no native image compiler for ${platform}-${arch}`);
+  if (!entry) throw new HostError(`release ${release.tag} has no sk-aot for ${platform}-${arch}`);
   const dest = cachedAotCompiler(version, platform);
   await cacheAsset(release, entry.file, entry.size, entry.sha256, dest, log);
   writeFileSync(join(dirname(dest), "compiler.json"), JSON.stringify(entry.info, null, 2) + "\n");
-  log(`cached the native image compiler ${version} → ${dest}`);
+  log(`cached sk-aot ${version} → ${dest}`);
   return { path: dest, info: entry.info };
 }
 

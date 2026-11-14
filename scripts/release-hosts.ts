@@ -5,7 +5,7 @@
 //     and describe it in <dir>/hosts-<platform>-<arch>.json. With --native-inspector (Windows x64: the
 //     build.json of scripts/aot/prepare-inspector.ts), every host carries the native AOT loader (an app
 //     built with --aot runs from its image), every host with devtools embeds the inspector's native
-//     image, and the matching image compiler is published beside them (<dir>/aot-<platform>-<arch>.json).
+//     image, and the sk-aot that compiled it is published beside them (<dir>/aot-<platform>-<arch>.json).
 //   bun scripts/release-hosts.ts --merge <dir>
 //     once, over every OS's output: <dir>/hosts.json
 //   bun scripts/release-hosts.ts --check-tag <tag>
@@ -106,7 +106,7 @@ const inspectorEnv: Record<string, string> = inspector
     }
   : {};
 
-// Every host must load what this compiler makes: `sk build --aot` downloads it to match them.
+// Every host must load what this sk-aot makes: `sk build --aot` downloads it to match them.
 const aotCompiler = inspector ? { path: inspector.compiler, info: await compilerInfo(inspector.compiler) } : null;
 
 const entries: HostManifestEntry[] = [];

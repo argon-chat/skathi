@@ -150,10 +150,10 @@ test("a missing release says a private repository needs a token", async () => {
   await expect(fetchStandard()).rejects.toThrow(/has no v9\.9\.9-test release \(a private repository needs GH_TOKEN/);
 });
 
-test("the native image compiler comes from the same release, checked and cached with what it compiles for", async () => {
-  const compiler = new TextEncoder().encode("MZ pretend compiler");
+test("sk-aot comes from the same release, checked and cached with what it compiles for", async () => {
+  const compiler = new TextEncoder().encode("MZ pretend sk-aot");
   const compilerFile = aotCompilerAssetName("windows", "x64");
-  expect(compilerFile).toBe("sk-aot-compiler-windows-x64.exe.gz");
+  expect(compilerFile).toBe("sk-aot-windows-x64.exe.gz");
   const compiles = { target: "x86_64-windows", frontend: "f", engine: "e", tableId: "t", compileOptions: "o" };
   const entry = {
     platform: "windows" as const,
@@ -178,5 +178,5 @@ test("the native image compiler comes from the same release, checked and cached 
   expect(existsSync(cachedAotCompiler(VERSION, "windows"))).toBe(false);
 
   publish();
-  await expect(fetchCompiler()).rejects.toThrow(/has no native image compiler for windows-x64/);
+  await expect(fetchCompiler()).rejects.toThrow(/has no sk-aot for windows-x64/);
 });

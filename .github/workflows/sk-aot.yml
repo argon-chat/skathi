@@ -1,0 +1,107 @@
+name: sk-aot
+
+# sk-aot (tools/sk-aot) for Windows x64, uploaded as the artifact sk-aot-windows-x64
+# (sk-aot-windows-x64.exe.gz). release.yml calls it; it is not part of ci.yml.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "The ref to build (default: the caller's)"
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "The ref to build (default: the selected branch)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: sk-aot (Windows x64)
+    runs-on: windows-2025
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      # sk-aot links redjs; the other submodules are not inputs.
+      - name: Check out redjs
+        run: git submodule update --init --depth 1 -- vendor/redjs
+      - uses: ./.github/actions/native
+        with:
+          target: x86_64-pc-windows-msvc
+      - name: Pinned nightly
+        shell: bash
+        working-directory: tools/sk-aot
+        run: |
+          rustup toolchain install
+          rustc --version
+
+      - name: Cache the Bun sources, table and codegen
+        id: setup-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            tools/sk-aot/.cache/bun
+            tools/sk-aot/.cache/table
+            tools/sk-aot/.cache/home
+          key: sk-aot-setup-${{ hashFiles('packages/cli/aot/toolchain.lock.json', 'tools/sk-aot/setup.ts', 'scripts/aot/generate-table.ts', 'scripts/aot/toolchain.ts', 'vendor/redjs/pins.txt') }}
+      # Takes a free drive letter with subst for Bun's codegen and removes it before it exits.
+      - if: steps.setup-cache.outputs.cache-hit != 'true'
+        name: Set up (Bun sources at the pin, C dependencies, table, codegen)
+        run: bun tools/sk-aot/setup.ts
+
+      - name: Cache the cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: sk-aot-cargo-${{ hashFiles('tools/sk-aot/Cargo.lock') }}
+      - name: Build
+        shell: bash
+        working-directory: tools/sk-aot
+        run: |
+          cargo fmt --check
+          cargo build --release --locked
+
+      - name: Check
+        shell: bash
+        run: |
+          exe="$PWD/tools/sk-aot/target/x86_64-pc-windows-msvc/release/sk-aot.exe"
+          "$exe" info | tee "$RUNNER_TEMP/sk-aot-info.json"
+          bun -e "
+            import { loadPin, verifyCompilerInfo } from './packages/cli/aot/pin';
+            verifyCompilerInfo(JSON.parse(await Bun.file(process.argv[1]).text()), loadPin());
+          " "$RUNNER_TEMP/sk-aot-info.json"
+          df -h .
+          mkdir -p "$RUNNER_TEMP/probe"
+          cd "$RUNNER_TEMP/probe"
+          echo 'globalThis.__sk_aot_probe = String(6 * 7);' > probe.js
+          "$exe" compile probe.js probe.ir probe.image
+          "$exe" run probe.image | tee run.txt
+          grep -q 'aot_active=true probe=42' run.txt
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p sk-aot-out
+          gzip -9 -c tools/sk-aot/target/x86_64-pc-windows-msvc/release/sk-aot.exe > sk-aot-out/sk-aot-windows-x64.exe.gz
+          cp "$RUNNER_TEMP/sk-aot-info.json" sk-aot-out/sk-aot-windows-x64.info.json
+          ls -l sk-aot-out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sk-aot-windows-x64
+          path: sk-aot-out/
+          if-no-files-found: error
