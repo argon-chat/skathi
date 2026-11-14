@@ -19,7 +19,7 @@ declare function __sk_window_set_title(title: string): void;
 
 /**
  * The arity-0 verbs, by name: `minimize`, `maximize`, `unmaximize`,
- * `toggleMaximize`, `close`, `center`, `startDragging`. An unknown name is an
+ * `toggleMaximize`, `close`, `center`, `show`, `hide`, `startDragging`. An unknown name is an
  * advisory on the Rust side, not a throw.
  */
 declare function __sk_window_verb(verb: string): void;
@@ -64,6 +64,7 @@ interface SkWindowState {
   devicePixelRatio: number;
   maximized: boolean;
   minimized: boolean;
+  visible: boolean;
   fullscreen: boolean;
   focused: boolean;
   cloaked: boolean;

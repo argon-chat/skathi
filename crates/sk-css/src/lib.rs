@@ -4977,7 +4977,7 @@ mod tests {
 
     fn titlebar_env(x: f32, y: f32, w: f32, h: f32) -> Env {
         Env {
-            titlebar_area: [x, y, w, h],
+            titlebar_area: Some([x, y, w, h]),
             ..Env::default()
         }
     }
@@ -5010,13 +5010,23 @@ mod tests {
     }
 
     #[test]
-    fn env_titlebar_area_is_zero_when_the_overlay_is_hidden() {
+    fn env_titlebar_area_is_undefined_when_the_overlay_is_hidden() {
+        let hidden = Env {
+            titlebar_area: None,
+            ..Env::default()
+        };
         let (base, diags) = computed_with_env(
-            ".box { height: env(titlebar-area-height) }",
-            &titlebar_env(0.0, 0.0, 0.0, 0.0),
+            ".box { height: env(titlebar-area-height, 40px); padding-left: env(titlebar-area-x, 3px) }",
+            &hidden,
         );
         assert!(diags.is_empty(), "{diags:?}");
-        assert_eq!(base.size.height, Some(gpui::px(0.0).into()));
+        assert_eq!(base.size.height, Some(gpui::px(40.0).into()));
+        assert_eq!(base.padding.left, Some(gpui::px(3.0).into()));
+
+        let (base, diags) =
+            computed_with_env(".box { height: env(titlebar-area-height) }", &hidden);
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(base.size.height, None);
     }
 
     #[test]

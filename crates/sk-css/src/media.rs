@@ -16,9 +16,9 @@ pub struct Env {
     pub reduce_motion: bool,
     pub scale_factor: f32,
     pub display_mode: DisplayMode,
-    /// All zero when the overlay is not visible (OS chrome, fullscreen, minimised) — exactly what a
-    /// PWA in a tab reports, so a component written for a real PWA takes the right branch.
-    pub titlebar_area: [f32; 4],
+    /// `None` while the overlay is not visible (OS chrome, fullscreen, minimised): the variables are
+    /// then undefined and `env(titlebar-area-height, 40px)` takes its fallback, as in a browser.
+    pub titlebar_area: Option<[f32; 4]>,
     /// The primary pointer of a desktop window is always the mouse (`pointer: fine`, `hover:
     /// hover`); only `any-pointer` can widen to other hardware.
     pub coarse_pointer: bool,
@@ -53,7 +53,7 @@ impl Default for Env {
             reduce_motion: false,
             scale_factor: 1.0,
             display_mode: DisplayMode::WindowControlsOverlay,
-            titlebar_area: [0.0, 0.0, 1024.0, 32.0],
+            titlebar_area: Some([0.0, 0.0, 1024.0, 32.0]),
             coarse_pointer: false,
             safe_area_insets: [0.0; 4],
         }

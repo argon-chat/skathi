@@ -1,0 +1,19 @@
+#app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+#bar {
+  height: env(titlebar-area-height, 40px);
+  display: flex;
+  align-items: center;
+  window-drag: move;
+  border-bottom: 1px solid #444;
+}
+#brand {
+  height: 20px;
+  padding-left: 14px;
+}
+#main {
+  flex: 1;
+}

@@ -25,7 +25,7 @@
     "titleBarStyle": "hidden",
     "titleBarHeight": 36,
 
-    "$comment-titleBarFallback": "Left at its default (true) on purpose: the fallback titlebar retires on the first drag region, and env(titlebar-area-height) is 0 for that one frame.",
+    "$comment-titleBarFallback": "Left at its default (true) on purpose: the fallback titlebar retires on the first drag region, and env(titlebar-area-*) is undefined (its fallback applies) for that one frame.",
 
     "backdrop": "mica",
     "resizable": true,

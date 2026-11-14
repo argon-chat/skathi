@@ -1,0 +1,13 @@
+{
+  "$comment": "The showcase template's titlebar: content-drawn, its height from env(titlebar-area-height, 40px).",
+
+  "name": "sk-test-fullscreen",
+
+  "window": {
+    "title": "Skathi — fullscreen (fixture)",
+    "width": 480,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarHeight": 40
+  }
+}

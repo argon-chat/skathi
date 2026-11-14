@@ -62,6 +62,11 @@ onUnmounted(() => {
   user-select: none;
   border-bottom: 1px solid var(--line);
 }
+@media (display-mode: fullscreen) {
+  .titlebar {
+    display: none;
+  }
+}
 .brand {
   display: flex;
   align-items: center;

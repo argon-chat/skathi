@@ -376,6 +376,8 @@ interface SkWindowHost {
   appWindow: SkAppWindow;
   escapeFullscreen?: () => boolean;
   defineWindow: (options: Record<string, unknown>) => void;
+  /** Calls `fn` after any `appWindow` state may have changed (a new snapshot, a title set). Returns the unsubscribe. */
+  onChange?: (fn: () => void) => () => void;
 }
 
 interface SkWindowRect {
@@ -397,7 +399,14 @@ interface SkWindowChrome {
   contentInset: { left: number; top: number; right: number; bottom: number };
 }
 
-/** The window facade: an `EventTarget` (`resize`/`move`/`focus`) with Tauri/Electron-shaped verbs. Every verb is SYNCHRONOUS (JS and the UI thread are the same thread) and returns `undefined`. */
+/**
+ * The window facade: an `EventTarget` (`resize`/`move`/`focus`) with Tauri/Electron-shaped verbs. Every verb is SYNCHRONOUS (JS and the UI thread are the same thread) and returns `undefined`.
+ * Its state reads (getters, `is*()`, `get*()`) are reactive in Vue templates, `computed` and `watch`.
+ *
+ * `close-requested` (cancelable) fires when the user asks to close the window (title bar, Alt+F4, taskbar);
+ * `preventDefault()` keeps it open, e.g. to `hide()` it to a tray. `close()`, a tray `role: "quit"` item and the
+ * session ending are not asked.
+ */
 interface SkAppWindow extends EventTarget {
   minimize(): void;
   maximize(): void;
@@ -406,8 +415,11 @@ interface SkAppWindow extends EventTarget {
   restore(): void;
   close(): void;
   center(): void;
-  /** Shows and raises the window, including one that started hidden (a tray click). */
+  /** Shows and raises the window, including one that started hidden or was `hide()`n (a tray click). */
   show(): void;
+  /** Hides the window and its taskbar button; the app keeps running. Where hiding is unsupported, minimizes. */
+  hide(): void;
+  isVisible(): boolean;
   startDragging(): void;
   startResizeDragging(): void;
   setFullscreen(on: boolean): void;

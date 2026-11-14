@@ -1,9 +1,9 @@
 //! Closing the app: the windows go at once, the teardown runs behind them, under a deadline.
 //!
-//! A close the app accepts (`appWindow.close()` / `window.close()`, or a WM_CLOSE that
-//! `beforeunload` did not veto) hides every window of the process first, as a browser does. What
-//! follows runs with nothing on screen: gpui's quit, the `on_app_quit` hooks (IndexedDB's
-//! checkpoint, the cookie jar, the voice rooms' leave) and the end of the process.
+//! A close the app accepts (`appWindow.close()` / `window.close()`, or a WM_CLOSE that neither
+//! `close-requested` nor `beforeunload` vetoed) hides every window of the process first, as a
+//! browser does. What follows runs with nothing on screen: gpui's quit, the `on_app_quit` hooks
+//! (IndexedDB's checkpoint, the cookie jar, the voice rooms' leave) and the end of the process.
 //!
 //! **The deadline.** [`DEADLINE`] after the close the process ends whatever is still running, and
 //! says on stderr what it was doing. Each quit hook has its own shorter budget, so it fires only

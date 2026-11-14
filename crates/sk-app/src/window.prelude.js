@@ -20,16 +20,41 @@
     console.warn(`[skathi compat] ${msg}`);
     __sk_window_advise(msg);
   };
-  let S = JSON.parse(__sk_window_state());
-  const refresh = () => S = JSON.parse(__sk_window_state());
+  let raw = __sk_window_state();
+  let S = JSON.parse(raw);
+  const changeListeners = new Set;
+  const changed = () => {
+    for (const fn of changeListeners) {
+      try {
+        fn();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  };
+  const publish = (json) => {
+    if (json === raw)
+      return;
+    raw = json;
+    S = JSON.parse(json);
+    changed();
+  };
+  const refresh = () => {
+    publish(__sk_window_state());
+    return S;
+  };
   const ro = (obj, name, get) => Object.defineProperty(obj, name, { get, configurable: true, enumerable: true });
   const normalizeTitle = (v) => String(v).replace(/[\t\n\f\r ]+/g, " ").replace(/^ | $/g, "");
   let titleSlot = normalizeTitle(S.title);
   Object.defineProperty(document, "title", {
     get: () => titleSlot,
     set(v) {
-      titleSlot = normalizeTitle(v);
+      const next = normalizeTitle(v);
       __sk_window_set_title(String(v));
+      if (next === titleSlot)
+        return;
+      titleSlot = next;
+      changed();
     },
     configurable: true,
     enumerable: true
@@ -385,12 +410,14 @@
   appWindow.close = closeWindow;
   appWindow.center = verb("center");
   appWindow.show = verb("show");
+  appWindow.hide = verb("hide");
   appWindow.startDragging = verb("startDragging");
   appWindow.setFullscreen = (on) => __sk_window_set_fullscreen(!!on);
   appWindow.isMaximized = () => refresh().maximized;
   appWindow.isMinimized = () => refresh().minimized;
   appWindow.isFullscreen = () => refresh().fullscreen;
   appWindow.isFocused = () => refresh().focused;
+  appWindow.isVisible = () => refresh().visible;
   appWindow.getBounds = () => ({ ...S.outer });
   appWindow.getContentBounds = () => ({ ...S.content });
   appWindow.setBounds = (r) => setBounds(r, false);
@@ -517,21 +544,23 @@
   };
   const emit = (target, name, init) => target.dispatchEvent(new Event(name, init));
   __sk_window_observe((kinds, json) => {
-    S = JSON.parse(json);
+    publish(json);
     if (kinds === "sync")
       return true;
     if (kinds === "close-requested") {
+      const request = new Event("close-requested", { cancelable: true });
+      appWindow.dispatchEvent(request);
+      if (request.defaultPrevented)
+        return false;
       const ev = new Event("beforeunload", { cancelable: true });
       globalThis.dispatchEvent(ev);
-      const vetoed = sticky && ev.defaultPrevented;
-      if (!vetoed) {
+      if (!sticky || !ev.defaultPrevented) {
         hidePage();
         return true;
       }
       if (closeRequestedListeners === 0) {
-        warn("beforeunload-trap", "`beforeunload` cancelled the close, but skathi shows no confirmation dialog (v1) " + "and nothing is listening for `close-requested`. THIS WINDOW CAN NO LONGER BE CLOSED. " + "Listen for `close-requested` on `appWindow` and call `window.close()` when the user " + "confirms.");
+        warn("beforeunload-trap", "`beforeunload` cancelled the close, but Skathi shows no confirmation dialog, so the " + "close button does nothing. Cancel `close-requested` on `appWindow` instead, ask the " + "user, and call `appWindow.close()` when they confirm.");
       }
-      emit(appWindow, "close-requested", { cancelable: true });
       return false;
     }
     for (const kind of kinds.split(",")) {
@@ -570,6 +599,10 @@
     escapeFullscreen: exitAllFullscreen,
     defineWindow,
     getCurrentWindow: () => appWindow,
+    onChange: (fn) => {
+      changeListeners.add(fn);
+      return () => void changeListeners.delete(fn);
+    },
     refresh,
     warn,
     controlHitboxes: (windowId) => JSON.parse(__sk_window_hitboxes(windowId)),

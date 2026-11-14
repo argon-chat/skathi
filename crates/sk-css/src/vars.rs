@@ -214,6 +214,13 @@ fn find_subst(bytes: &[u8], from: usize) -> Option<(usize, Subst)> {
     None
 }
 
+const TITLEBAR_AREA: [&str; 4] = [
+    "titlebar-area-x",
+    "titlebar-area-y",
+    "titlebar-area-width",
+    "titlebar-area-height",
+];
+
 /// `env()` names are ASCII case-sensitive identifiers; the indexed form has no members here, so a
 /// name with an index is unknown.
 fn env_value(name: &str, env: &crate::Env) -> Option<String> {
@@ -224,13 +231,11 @@ fn env_value(name: &str, env: &crate::Env) -> Option<String> {
             format!("{v}px")
         }
     };
-    let t = env.titlebar_area;
     let s = env.safe_area_insets;
+    if let Some(i) = TITLEBAR_AREA.iter().position(|n| *n == name) {
+        return env.titlebar_area.map(|t| px(t[i]));
+    }
     Some(match name {
-        "titlebar-area-x" => px(t[0]),
-        "titlebar-area-y" => px(t[1]),
-        "titlebar-area-width" => px(t[2]),
-        "titlebar-area-height" => px(t[3]),
         "safe-area-inset-top" => px(s[0]),
         "safe-area-inset-right" => px(s[1]),
         "safe-area-inset-bottom" => px(s[2]),
@@ -314,9 +319,12 @@ pub(crate) fn substitute(
                 Some(f) => out.push_str(&substitute(f, env, lookup)?),
                 None => {
                     return Err(match kind {
-                        Subst::Var => VarError::Unresolved(name.to_string()),
-                        Subst::Env => VarError::UnknownEnv(name.to_string()),
-                    })
+                        Subst::Env if !TITLEBAR_AREA.contains(&name) => {
+                            VarError::UnknownEnv(name.to_string())
+                        }
+                        // A known variable the window does not define now: as routine as an unset var().
+                        Subst::Var | Subst::Env => VarError::Unresolved(name.to_string()),
+                    });
                 }
             },
         }

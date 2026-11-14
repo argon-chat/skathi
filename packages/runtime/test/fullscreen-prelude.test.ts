@@ -308,7 +308,8 @@ describe("native window fullscreen notifications", () => {
       "onFullscreenWindowChanged",
       "__sk_window_observe",
       "liveQueries",
-      "let S; const appWindow = new EventTarget(); appWindow.isFullscreen = () => S.fullscreen;\n" +
+      "let S; const publish = (json) => { S = JSON.parse(json); };\n" +
+        "const appWindow = new EventTarget(); appWindow.isFullscreen = () => S.fullscreen;\n" +
         new Bun.Transpiler({ loader: "ts" }).transformSync(observerSource) +
         "\nreturn appWindow;",
     )(

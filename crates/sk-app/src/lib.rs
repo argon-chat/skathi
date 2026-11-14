@@ -1236,7 +1236,7 @@ fn run_app() {
                 if let Some(hwnd) = window::capture_hwnd(window) {
                     sk_desktop::launch::set_window(hwnd);
                 }
-                // `beforeunload`: a synchronous boolean.
+                // `close-requested` and `beforeunload`: a synchronous boolean.
                 window.on_window_should_close(cx, |window, cx| {
                     let closing = window::should_close();
                     if closing {

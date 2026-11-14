@@ -19,8 +19,28 @@
   };
 
   // One snapshot per frame, pushed by the host; `refresh()` re-reads it, since geometry writes lag a frame.
-  let S: SkWindowState = JSON.parse(__sk_window_state());
-  const refresh = (): SkWindowState => (S = JSON.parse(__sk_window_state()));
+  let raw = __sk_window_state();
+  let S: SkWindowState = JSON.parse(raw);
+  const changeListeners = new Set<() => void>();
+  const changed = () => {
+    for (const fn of changeListeners) {
+      try {
+        fn();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  };
+  const publish = (json: string) => {
+    if (json === raw) return;
+    raw = json;
+    S = JSON.parse(json);
+    changed();
+  };
+  const refresh = (): SkWindowState => {
+    publish(__sk_window_state());
+    return S;
+  };
 
   const ro = (obj: object, name: string, get: () => unknown) =>
     Object.defineProperty(obj, name, { get, configurable: true, enumerable: true });
@@ -33,9 +53,12 @@
   Object.defineProperty(document, "title", {
     get: () => titleSlot,
     set(v: unknown) {
-      titleSlot = normalizeTitle(v);
+      const next = normalizeTitle(v);
       // The raw string goes to the OS.
       __sk_window_set_title(String(v));
+      if (next === titleSlot) return;
+      titleSlot = next;
+      changed();
     },
     configurable: true,
     enumerable: true,
@@ -441,12 +464,14 @@
   appWindow.close = closeWindow;
   appWindow.center = verb("center");
   appWindow.show = verb("show");
+  appWindow.hide = verb("hide");
   appWindow.startDragging = verb("startDragging");
   appWindow.setFullscreen = (on) => __sk_window_set_fullscreen(!!on);
   appWindow.isMaximized = () => refresh().maximized;
   appWindow.isMinimized = () => refresh().minimized;
   appWindow.isFullscreen = () => refresh().fullscreen;
   appWindow.isFocused = () => refresh().focused;
+  appWindow.isVisible = () => refresh().visible;
   appWindow.getBounds = () => ({ ...S.outer });
   appWindow.getContentBounds = () => ({ ...S.content });
   appWindow.setBounds = (r) => setBounds(r, false);
@@ -597,7 +622,7 @@
   };
 
   // One callback, called with a comma-separated kind list and the new snapshot.
-  // Its boolean return is the `beforeunload` veto.
+  // Its boolean return is the close veto.
   let closeRequestedListeners = 0;
   const origAdd = appWindow.addEventListener.bind(appWindow);
   appWindow.addEventListener = (type, fn, opts) => {
@@ -609,28 +634,30 @@
     target.dispatchEvent(new Event(name, init));
 
   __sk_window_observe((kinds, json) => {
-    S = JSON.parse(json);
+    publish(json);
     // "sync" publishes the snapshot before the trusted `resize`, so getters are current in handlers.
     if (kinds === "sync") return true;
     if (kinds === "close-requested") {
-      // A cancelled `beforeunload` vetoes the close and raises `close-requested`; no dialog is shown.
+      // The user asked to close (title bar, Alt+F4, taskbar). `close()`, the tray's quit item and
+      // the session ending close without asking. Not gated on sticky activation: an untouched
+      // app may still keep its window, e.g. to hide it to a tray.
+      const request = new Event("close-requested", { cancelable: true });
+      appWindow.dispatchEvent(request);
+      if (request.defaultPrevented) return false;
       const ev = new Event("beforeunload", { cancelable: true });
       globalThis.dispatchEvent(ev);
-      const vetoed = sticky && ev.defaultPrevented;
-      if (!vetoed) {
+      if (!sticky || !ev.defaultPrevented) {
         hidePage();
         return true;
       }
       if (closeRequestedListeners === 0) {
         warn(
           "beforeunload-trap",
-          "`beforeunload` cancelled the close, but skathi shows no confirmation dialog (v1) " +
-            "and nothing is listening for `close-requested`. THIS WINDOW CAN NO LONGER BE CLOSED. " +
-            "Listen for `close-requested` on `appWindow` and call `window.close()` when the user " +
-            "confirms.",
+          "`beforeunload` cancelled the close, but Skathi shows no confirmation dialog, so the " +
+            "close button does nothing. Cancel `close-requested` on `appWindow` instead, ask the " +
+            "user, and call `appWindow.close()` when they confirm.",
         );
       }
-      emit(appWindow, "close-requested", { cancelable: true });
       return false;
     }
     for (const kind of kinds.split(",")) {
@@ -670,6 +697,10 @@
     escapeFullscreen: exitAllFullscreen,
     defineWindow,
     getCurrentWindow: () => appWindow,
+    onChange: (fn: () => void) => {
+      changeListeners.add(fn);
+      return () => void changeListeners.delete(fn);
+    },
     refresh,
     warn,
     // Debug hook: WM_NCHITTEST cannot be synthesised, so this reports the last painted frame's hitboxes.

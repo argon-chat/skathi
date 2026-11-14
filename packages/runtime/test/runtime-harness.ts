@@ -21,6 +21,7 @@ import {
   queuePostFlushCb,
   resolveTransitionHooks,
   setTransitionHooks,
+  shallowRef,
   Static,
   Teleport,
   toRaw,
@@ -687,6 +688,7 @@ export function createRuntime(
     "Static",
     "watch",
     "nextTick",
+    "shallowRef",
     "globalThis",
     "console",
     "__sk_intern",
@@ -779,6 +781,7 @@ export function createRuntime(
     Static,
     watch,
     nextTick,
+    shallowRef,
     fakeGlobal,
     {
       log: (m: unknown) => host.logs.push(String(m)),

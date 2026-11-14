@@ -523,6 +523,12 @@ mod win {
         }
     }
 
+    pub fn hide() -> bool {
+        let Some(h) = hwnd() else { return false };
+        let _ = unsafe { ShowWindowAsync(h, SW_HIDE) };
+        true
+    }
+
     pub fn set_position(x: f32, y: f32) {
         if let Some(h) = hwnd() {
             let _ = unsafe {
@@ -709,6 +715,9 @@ mod win {
         true
     }
     pub fn restore() {}
+    pub fn hide() -> bool {
+        false
+    }
     pub fn set_position(_x: f32, _y: f32) {}
     pub fn set_outer_size(_w: f32, _h: f32) {}
     pub fn set_always_on_top(_on: bool) {}
@@ -1315,7 +1324,7 @@ fn titlebar_area(s: &Snapshot) -> (bool, (f32, f32, f32, f32)) {
 }
 
 fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> sk_css::Env {
-    let (_, t) = titlebar_area(s);
+    let (visible, t) = titlebar_area(s);
     sk_css::Env {
         viewport_width: s.inner_width,
         viewport_height: s.inner_height,
@@ -1323,7 +1332,7 @@ fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> sk_css::Env {
         reduce_motion,
         scale_factor: s.scale,
         display_mode: display_mode(s.fullscreen),
-        titlebar_area: [t.0, t.1, t.2, t.3],
+        titlebar_area: visible.then_some([t.0, t.1, t.2, t.3]),
         coarse_pointer: coarse_pointer(),
         safe_area_insets: [0.0; 4],
     }
@@ -1387,11 +1396,7 @@ pub fn popout_env(
     } else {
         sk_css::DisplayMode::WindowControlsOverlay
     };
-    let titlebar_area = if os_chrome {
-        [0.0; 4]
-    } else {
-        [0.0, 0.0, viewport.0, title_bar_height]
-    };
+    let titlebar_area = (!os_chrome).then_some([0.0, 0.0, viewport.0, title_bar_height]);
     sk_css::Env {
         viewport_width: viewport.0,
         viewport_height: viewport.1,
@@ -1675,7 +1680,7 @@ pub fn content_loaded() {
     JsRuntime::with(|rt| unsafe { sk_runtime::redjs::ffi::redjs_dom_content_loaded(rt.raw()) });
 }
 
-/// Calls the registered observer; its boolean is the `beforeunload` veto when `kind` is `close-requested`.
+/// Calls the registered observer; its boolean is the close veto when `kind` is `close-requested`.
 fn notify(kind: &str, state_json: &str) -> bool {
     let f = OBSERVER.with(|o| o.get());
     // No JS after a caught native panic: nothing can veto a close, so the window's own X still works.
@@ -1701,7 +1706,7 @@ fn notify(kind: &str, state_json: &str) -> bool {
     })
 }
 
-/// `beforeunload`: a synchronous bool. No UA confirmation is shown (`Window::prompt` is async); a veto leaves the app `close-requested`.
+/// A user close request: `close-requested`, then `beforeunload`; either may keep the window.
 pub fn should_close() -> bool {
     let json = SNAPSHOT.with(|s| snapshot_json(&s.borrow()));
     notify("close-requested", &json)
@@ -1728,6 +1733,7 @@ enum Op {
     SetBackdrop(Backdrop),
     SetTheme(Theme),
     StartDragging,
+    Hide,
 }
 
 /// `SetWindowPos` sends `WM_SIZE`/`WM_MOVE` re-entrantly inside `Phase::Commit`, where `App` is
@@ -1777,6 +1783,16 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
                 window.toggle_fullscreen();
             }
         }
+        Op::Activate(raise)
+            if raise && APP_HIDDEN.swap(false, std::sync::atomic::Ordering::AcqRel) =>
+        {
+            let focus = !crate::quiet::never_focus();
+            window.show_window(focus, || true, |_| {});
+            if focus {
+                REVEALED.store(true, std::sync::atomic::Ordering::Release);
+                window.activate_window();
+            }
+        }
         // A test host neither raises nor flashes the taskbar.
         Op::Activate(_) if crate::quiet::never_focus() => {}
         Op::Activate(raise) => {
@@ -1816,6 +1832,12 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
             window.refresh();
         }
         Op::StartDragging => win::start_dragging(),
+        Op::Hide => {
+            if !win::hide() {
+                window.minimize_window();
+            }
+            APP_HIDDEN.store(true, std::sync::atomic::Ordering::Release);
+        }
     }
 }
 
@@ -1913,6 +1935,8 @@ pub(crate) fn request_activate() {
 
 /// Set once the primary window is first raised; after that a hidden start is no longer unreachable.
 static REVEALED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// `appWindow.hide()` ran; the next raise shows the window again (gpui's activation only shows a hidden start).
+static APP_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub(crate) fn revealed() -> bool {
     REVEALED.load(std::sync::atomic::Ordering::Acquire)
@@ -1946,6 +1970,7 @@ fn op_take(op: &Op) -> Op {
         Op::SetBackdrop(b) => Op::SetBackdrop(*b),
         Op::SetTheme(t) => Op::SetTheme(*t),
         Op::StartDragging => Op::StartDragging,
+        Op::Hide => Op::Hide,
     }
 }
 
@@ -2001,6 +2026,7 @@ host_fn!(fn sk_window_verb(g, args) {
         "close" => submit(Op::Close),
         "center" => submit(Op::Center),
         "startDragging" => submit(Op::StartDragging),
+        "hide" => submit(Op::Hide),
         "show" => request_activate(),
         other => advise(&format!("unknown appWindow verb {other:?} (host protocol mismatch)")),
     }
@@ -2330,6 +2356,11 @@ mod tests {
             ..base.clone()
         };
         assert_eq!(titlebar_area(&full), (false, (0.0, 0.0, 0.0, 0.0)));
+        assert_eq!(
+            css_env(&full, false, false).titlebar_area,
+            None,
+            "`env(titlebar-area-height, 40px)` must not collapse a titlebar to zero in fullscreen"
+        );
 
         let min = Snapshot {
             minimized: true,
@@ -2524,7 +2555,7 @@ mod tests {
             ..Snapshot::default()
         };
         let env = css_env(&s, false, false);
-        assert_eq!(env.titlebar_area, [0.0, 0.0, 800.0, 36.0]);
+        assert_eq!(env.titlebar_area, Some([0.0, 0.0, 800.0, 36.0]));
         assert_eq!(env.viewport_width, 800.0);
         assert_eq!(env.viewport_height, 600.0);
         assert_eq!(env.safe_area_insets, [0.0; 4]);
@@ -2557,10 +2588,10 @@ mod tests {
         assert_eq!(titlebar_area(&boot), (true, (0.0, 0.0, 980.0, 36.0)));
         assert_eq!(
             css_env(&boot, false, false).titlebar_area,
-            [0.0, 0.0, 980.0, 36.0]
+            Some([0.0, 0.0, 980.0, 36.0])
         );
 
-        // The default (fallback ON) is the zero rect until it retires.
+        // The default (fallback ON) has no area until it retires.
         let default_cfg = load_config(Some(
             r#"{"titleBarStyle":"hidden","titleBarHeight":36}"#.to_string(),
         ));
@@ -2570,7 +2601,7 @@ mod tests {
             ..boot.clone()
         };
         assert_eq!(titlebar_area(&first_frame), (false, (0.0, 0.0, 0.0, 0.0)));
-        assert_eq!(css_env(&first_frame, false, false).titlebar_area, [0.0; 4]);
+        assert_eq!(css_env(&first_frame, false, false).titlebar_area, None);
     }
 
     #[test]
