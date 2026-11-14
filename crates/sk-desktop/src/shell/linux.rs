@@ -20,7 +20,11 @@ fn run(verb: &str, program: &str, args: &[&std::ffi::OsStr]) -> Result<(), Fail>
         .status()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                Fail::new("NotSupportedError", format!("{verb}: {program} is not installed")).code("ENOSYS")
+                Fail::new(
+                    "NotSupportedError",
+                    format!("{verb}: {program} is not installed"),
+                )
+                .code("ENOSYS")
             } else {
                 failed(verb, format!("{program}: {e}"))
             }
@@ -83,6 +87,9 @@ fn file_uri(path: &Path) -> String {
 mod tests {
     #[test]
     fn file_uris_are_percent_encoded() {
-        assert_eq!(super::file_uri("/home/a b/ф,x.txt".as_ref()), "file:///home/a%20b/%D1%84%2Cx.txt");
+        assert_eq!(
+            super::file_uri("/home/a b/ф,x.txt".as_ref()),
+            "file:///home/a%20b/%D1%84%2Cx.txt"
+        );
     }
 }

@@ -3,26 +3,28 @@
 
 #[cfg(target_os = "windows")]
 mod imp {
+    use windows::core::{w, BOOL};
     use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
     use windows::Win32::Graphics::Dwm::{
-        DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmSetWindowAttribute,
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DWMWCP_DONOTROUND,
     };
     use windows::Win32::Graphics::Gdi::{
-        ClientToScreen, EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST,
-        MONITORINFO, MonitorFromWindow,
+        ClientToScreen, EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR,
+        MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
     use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GWL_STYLE, GWLP_HWNDPARENT, GetClientRect, GetForegroundWindow, GetPropW,
-        GetWindowDisplayAffinity, GetWindowLongPtrW, GetWindowRect, IsWindowVisible, LWA_ALPHA,
-        MA_NOACTIVATE, RemovePropW, SW_HIDE, SW_SHOW, SW_SHOWNA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-        SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
+        GetClientRect, GetForegroundWindow, GetPropW, GetWindowDisplayAffinity, GetWindowLongPtrW,
+        GetWindowRect, IsWindowVisible, RemovePropW, SendMessageW, SetForegroundWindow,
         SetLayeredWindowAttributes, SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos,
-        ShowWindow, WDA_EXCLUDEFROMCAPTURE, WDA_MONITOR, WDA_NONE, WM_MOUSEACTIVATE, WM_NCDESTROY,
-        WM_PAINT, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+        ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, LWA_ALPHA, MA_NOACTIVATE,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
+        SW_HIDE, SW_SHOW, SW_SHOWNA, WDA_EXCLUDEFROMCAPTURE, WDA_MONITOR, WDA_NONE,
+        WM_MOUSEACTIVATE, WM_NCDESTROY, WM_PAINT, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+        WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
     };
-    use windows::core::{BOOL, w};
 
     fn h(raw: isize) -> HWND {
         HWND(raw as *mut _)
@@ -41,8 +43,13 @@ mod imp {
         if m.is_invalid() {
             return None;
         }
-        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-        unsafe { GetMonitorInfoW(m, &mut info) }.as_bool().then(|| rect(info.rcMonitor))
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        unsafe { GetMonitorInfoW(m, &mut info) }
+            .as_bool()
+            .then(|| rect(info.rcMonitor))
     }
 
     pub fn window_rect(raw: isize) -> Option<Rect> {
@@ -75,7 +82,8 @@ mod imp {
         let hwnd = h(raw);
         unsafe {
             let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-            let strip = (WS_THICKFRAME | WS_CAPTION | WS_SYSMENU | WS_MAXIMIZEBOX | WS_MINIMIZEBOX).0 as isize;
+            let strip = (WS_THICKFRAME | WS_CAPTION | WS_SYSMENU | WS_MAXIMIZEBOX | WS_MINIMIZEBOX)
+                .0 as isize;
             SetWindowLongPtrW(hwnd, GWL_STYLE, (style & !strip) | WS_POPUP.0 as isize);
             let _ = RemovePropW(hwnd, w!("NonRudeHWND"));
             let corner = DWMWCP_DONOTROUND;
@@ -99,7 +107,12 @@ mod imp {
                 0,
                 0,
                 0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE,
+                SWP_FRAMECHANGED
+                    | SWP_NOMOVE
+                    | SWP_NOSIZE
+                    | SWP_NOZORDER
+                    | SWP_NOOWNERZORDER
+                    | SWP_NOACTIVATE,
             );
         }
     }
@@ -187,14 +200,19 @@ mod imp {
     /// `EnumDisplayMonitors` order. Physical px.
     pub fn monitor_rect_at(index: usize) -> Option<Rect> {
         unsafe extern "system" fn each(m: HMONITOR, _: HDC, _: *mut RECT, out: LPARAM) -> BOOL {
-            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
             if unsafe { GetMonitorInfoW(m, &mut info) }.as_bool() {
                 unsafe { (*(out.0 as *mut Vec<Rect>)).push(rect(info.rcMonitor)) };
             }
             true.into()
         }
         let mut all: Vec<Rect> = Vec::new();
-        let _ = unsafe { EnumDisplayMonitors(None, None, Some(each), LPARAM(&mut all as *mut _ as isize)) };
+        let _ = unsafe {
+            EnumDisplayMonitors(None, None, Some(each), LPARAM(&mut all as *mut _ as isize))
+        };
         all.get(index).copied()
     }
 
@@ -221,7 +239,12 @@ mod imp {
                 0,
                 0,
                 0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE,
+                SWP_FRAMECHANGED
+                    | SWP_NOMOVE
+                    | SWP_NOSIZE
+                    | SWP_NOZORDER
+                    | SWP_NOOWNERZORDER
+                    | SWP_NOACTIVATE,
             );
         }
     }
@@ -258,7 +281,8 @@ mod imp {
         let hwnd = h(raw);
         unsafe {
             let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            let want = (ex | (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW).0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
+            let want = (ex | (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW).0 as isize)
+                & !(WS_EX_APPWINDOW.0 as isize);
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
             let _ = SetWindowSubclass(hwnd, Some(no_activate_proc), NO_ACTIVATE, 0);
             let _ = SetWindowPos(
@@ -268,7 +292,12 @@ mod imp {
                 0,
                 0,
                 0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE,
+                SWP_FRAMECHANGED
+                    | SWP_NOMOVE
+                    | SWP_NOSIZE
+                    | SWP_NOZORDER
+                    | SWP_NOOWNERZORDER
+                    | SWP_NOACTIVATE,
             );
         }
     }
@@ -306,24 +335,46 @@ mod imp {
 #[cfg(not(target_os = "windows"))]
 mod imp {
     pub type Rect = [i32; 4];
-    pub fn monitor_rect(_of: isize) -> Option<Rect> { None }
-    pub fn window_rect(_raw: isize) -> Option<Rect> { None }
-    pub fn client_rect_on_screen(_raw: isize) -> Option<Rect> { None }
+    pub fn monitor_rect(_of: isize) -> Option<Rect> {
+        None
+    }
+    pub fn window_rect(_raw: isize) -> Option<Rect> {
+        None
+    }
+    pub fn client_rect_on_screen(_raw: isize) -> Option<Rect> {
+        None
+    }
     pub fn make_owned(_raw: isize, _owner: isize) {}
     pub fn make_cover(_raw: isize) {}
-    pub fn set_rect(_raw: isize, _r: Rect) -> Option<Rect> { None }
+    pub fn set_rect(_raw: isize, _r: Rect) -> Option<Rect> {
+        None
+    }
     pub fn show(_raw: isize, _activate: bool) {}
     pub fn hide(_raw: isize, _return_to: Option<isize>) {}
-    pub fn is_visible(_raw: isize) -> bool { false }
-    pub fn is_foreground(_raw: isize) -> bool { false }
+    pub fn is_visible(_raw: isize) -> bool {
+        false
+    }
+    pub fn is_foreground(_raw: isize) -> bool {
+        false
+    }
     pub fn paint_now(_raw: isize) {}
-    pub fn describe(_raw: isize) -> (isize, bool, bool, bool, bool, bool) { (0, false, false, false, false, false) }
-    pub fn monitor_rect_at(_index: usize) -> Option<Rect> { None }
+    pub fn describe(_raw: isize) -> (isize, bool, bool, bool, bool, bool) {
+        (0, false, false, false, false, false)
+    }
+    pub fn monitor_rect_at(_index: usize) -> Option<Rect> {
+        None
+    }
     pub fn set_click_through(_raw: isize, _on: bool) {}
     pub fn make_unfocusable(_raw: isize) {}
-    pub fn set_content_protection(_raw: isize, _on: bool) -> u32 { 0 }
-    pub fn display_affinity(_raw: isize) -> u32 { 0 }
-    pub fn describe_input(_raw: isize) -> (bool, bool, bool) { (false, false, false) }
+    pub fn set_content_protection(_raw: isize, _on: bool) -> u32 {
+        0
+    }
+    pub fn display_affinity(_raw: isize) -> u32 {
+        0
+    }
+    pub fn describe_input(_raw: isize) -> (bool, bool, bool) {
+        (false, false, false)
+    }
 }
 
 pub use imp::*;
@@ -356,7 +407,13 @@ mod tests {
     fn a_rect_crosses_windows_through_the_screen() {
         let r = map_rect((100.0, 50.0, 40.0, 20.0), (300, 200), 1.5, (0, 0), 1.0);
         assert_eq!(r, (450.0, 275.0, 60.0, 30.0));
-        let r = map_rect((100.0, 50.0, 40.0, 20.0), (-1500, 200), 1.0, (-1920, 0), 1.0);
+        let r = map_rect(
+            (100.0, 50.0, 40.0, 20.0),
+            (-1500, 200),
+            1.0,
+            (-1920, 0),
+            1.0,
+        );
         assert_eq!(r, (520.0, 250.0, 40.0, 20.0));
         let r = map_rect((0.0, 0.0, 80.0, 40.0), (250, 125), 1.25, (0, 0), 1.25);
         assert_eq!(r, (200.0, 100.0, 80.0, 40.0));

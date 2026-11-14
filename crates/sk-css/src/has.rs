@@ -105,8 +105,9 @@ fn compile_new(argument: &str) -> Option<usize> {
     }
 
     let source: &'static str = Box::leak(format!("{body}{{color:red}}").into_boxed_str());
-    let sheet: &'static StyleSheet<'static> =
-        Box::leak(Box::new(StyleSheet::parse(source, ParserOptions::default()).ok()?));
+    let sheet: &'static StyleSheet<'static> = Box::leak(Box::new(
+        StyleSheet::parse(source, ParserOptions::default()).ok()?,
+    ));
     let mut selectors: Vec<&'static Selector<'static>> = Vec::new();
     for rule in &sheet.rules.0 {
         let lightningcss::rules::CssRule::Style(style) = rule else {
@@ -114,7 +115,10 @@ fn compile_new(argument: &str) -> Option<usize> {
         };
         for selector in &style.selectors.0 {
             let mut probe = Vec::new();
-            let stateless = matches!(crate::classify_states(selector, &mut probe), Some((0, None)));
+            let stateless = matches!(
+                crate::classify_states(selector, &mut probe),
+                Some((0, None))
+            );
             if !stateless
                 || !crate::probe_runnable(selector)
                 || !crate::audit_selector(selector, &mut probe)
@@ -140,7 +144,10 @@ pub(crate) fn registry_len() -> usize {
 }
 
 pub(crate) fn matches<D: MatchDom>(name: &str, node: &D) -> bool {
-    let Some(index) = name.strip_prefix(PREFIX).and_then(|n| n.parse::<usize>().ok()) else {
+    let Some(index) = name
+        .strip_prefix(PREFIX)
+        .and_then(|n| n.parse::<usize>().ok())
+    else {
         return false;
     };
     REGISTRY.with(|registry| {
@@ -172,9 +179,9 @@ pub(crate) fn matches<D: MatchDom>(name: &str, node: &D) -> bool {
                 }
                 false
             }
-            Anchor::Descendant => any_descendant(node, &|candidate| {
-                matches_any(&entry.selectors, candidate)
-            }),
+            Anchor::Descendant => {
+                any_descendant(node, &|candidate| matches_any(&entry.selectors, candidate))
+            }
         }
     })
 }
@@ -191,7 +198,7 @@ fn any_descendant<D: MatchDom>(node: &D, hit: &dyn Fn(&D) -> bool) -> bool {
 }
 
 fn matches_any<D: MatchDom>(selectors: &[&'static Selector<'static>], node: &D) -> bool {
-    use parcel_selectors::matching::{MatchingContext, MatchingMode, QuirksMode, matches_selector};
+    use parcel_selectors::matching::{matches_selector, MatchingContext, MatchingMode, QuirksMode};
     let element = El(*node);
     selectors.iter().any(|selector| {
         let mut context: MatchingContext<'_, '_, crate::element::Impl> =

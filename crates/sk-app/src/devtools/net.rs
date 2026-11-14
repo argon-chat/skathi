@@ -51,7 +51,7 @@ struct Conn {
     reused: bool,
     id: u64,
     remote: Option<String>,
-/// HTTP cache outcome; `"hit"` has no connection (`protocol` "", `id` 0).
+    /// HTTP cache outcome; `"hit"` has no connection (`protocol` "", `id` 0).
     cache: &'static str,
 }
 
@@ -81,9 +81,9 @@ enum Which {
 
 struct Body {
     bytes: Vec<u8>,
-/// Came from a JS string: text whatever the bytes look like.
+    /// Came from a JS string: text whatever the bytes look like.
     text: bool,
-/// Cut by the host at [`BODY_CAP`] (the tee caps too).
+    /// Cut by the host at [`BODY_CAP`] (the tee caps too).
     cut: bool,
     meta: Vec<(String, Json)>,
     evicted: bool,
@@ -126,7 +126,7 @@ struct Record {
     cookies: Option<Cookies>,
     ws: Option<WsCount>,
     conn: Option<Conn>,
-/// The final hop's `Set-Cookie` lines as received; present exactly when `conn` is.
+    /// The final hop's `Set-Cookie` lines as received; present exactly when `conn` is.
     wire_cookies: Option<Vec<String>>,
 }
 
@@ -136,13 +136,17 @@ impl Record {
     }
 
     fn kind(&self) -> &str {
-        self.meta.iter().find(|(k, _)| k == "kind").and_then(|(_, v)| v.as_str()).unwrap_or("")
+        self.meta
+            .iter()
+            .find(|(k, _)| k == "kind")
+            .and_then(|(_, v)| v.as_str())
+            .unwrap_or("")
     }
 
-/// Merges two levels deep: `{timing:{bodyMs}}` lands beside an earlier `headersMs`.
+    /// Merges two levels deep: `{timing:{bodyMs}}` lands beside an earlier `headersMs`.
     fn merge(&mut self, meta: Json, size: usize) {
         let Json::Obj(entries) = meta else { return };
-// A big update past the cap is refused; a small one always lands, so a record with huge headers still finishes.
+        // A big update past the cap is refused; a small one always lands, so a record with huge headers still finishes.
         if self.meta_bytes + size > META_CAP && size > 1024 {
             self.meta_truncated = true;
             return;
@@ -195,7 +199,9 @@ fn obj_at<'a>(obj: &'a mut Vec<(String, Json)>, key: &str) -> &'a mut Vec<(Strin
 }
 
 fn take_flag(meta: &mut Json, key: &str) -> bool {
-    let Json::Obj(entries) = meta else { return false };
+    let Json::Obj(entries) = meta else {
+        return false;
+    };
     match entries.iter().position(|(k, _)| k == key) {
         Some(i) => entries.remove(i).1.as_bool().unwrap_or(false),
         None => false,
@@ -203,12 +209,12 @@ fn take_flag(meta: &mut Json, key: &str) -> bool {
 }
 
 struct Ring {
-/// `(seq, JSON the JS side built)`, kept as text to skip a parse/print round trip.
+    /// `(seq, JSON the JS side built)`, kept as text to skip a parse/print round trip.
     entries: VecDeque<(u64, String)>,
     pending: Vec<String>,
     next_seq: u64,
     dropped: u64,
-/// Ascending `rid` (pushed at the back), so a binary search finds one.
+    /// Ascending `rid` (pushed at the back), so a binary search finds one.
     records: VecDeque<Record>,
     by_seq: HashMap<u64, u64>,
     next_rid: u64,
@@ -219,10 +225,19 @@ struct Ring {
 /// `(summary rows, their JSON bytes, records, body bytes held, metadata bytes, bodies evicted)` for devtools `mem`.
 pub(crate) fn mem_stats() -> (usize, usize, usize, usize, usize, u64) {
     let ring = RING.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(r) = ring.as_ref() else { return (0, 0, 0, 0, 0, 0) };
+    let Some(r) = ring.as_ref() else {
+        return (0, 0, 0, 0, 0, 0);
+    };
     let row_bytes = r.entries.iter().map(|(_, s)| s.capacity()).sum();
     let meta: usize = r.records.iter().map(|x| x.meta_bytes).sum();
-    (r.entries.len(), row_bytes, r.records.len(), r.held, meta, r.evicted)
+    (
+        r.entries.len(),
+        row_bytes,
+        r.records.len(),
+        r.held,
+        meta,
+        r.evicted,
+    )
 }
 
 impl Ring {
@@ -248,13 +263,13 @@ impl Ring {
         let seq = self.next_seq;
         self.next_seq += 1;
         let rid = rid_of(raw).filter(|rid| self.index_of(*rid).is_some());
-// The connection is spliced in host-side (script never sees it) so the list can show Protocol /
-// Connection without a `net_detail` per row.
+        // The connection is spliced in host-side (script never sees it) so the list can show Protocol /
+        // Connection without a `net_detail` per row.
         let conn = rid
             .and_then(|rid| self.records[self.index_of(rid)?].conn.as_ref())
             .map(Conn::columns)
             .unwrap_or_default();
-// Spliced rather than enveloped: the panel wants one flat object.
+        // Spliced rather than enveloped: the panel wants one flat object.
         let stamped = splice_seq(raw, seq, &conn);
         if self.entries.len() == CAPACITY {
             if let Some((old, _)) = self.entries.pop_front() {
@@ -295,7 +310,9 @@ impl Ring {
 
     /// A summary row left the ring; its record goes with its LAST row.
     fn forget_seq(&mut self, seq: u64) {
-        let Some(rid) = self.by_seq.remove(&seq) else { return };
+        let Some(rid) = self.by_seq.remove(&seq) else {
+            return;
+        };
         let Some(i) = self.index_of(rid) else { return };
         self.records[i].seqs.retain(|s| *s != seq);
         if self.records[i].seqs.is_empty() {
@@ -305,7 +322,12 @@ impl Ring {
         }
     }
 
-    fn begin(&mut self, meta: Json, size: usize, jar: Option<(String, Vec<cookies::Cookie>)>) -> u64 {
+    fn begin(
+        &mut self,
+        meta: Json,
+        size: usize,
+        jar: Option<(String, Vec<cookies::Cookie>)>,
+    ) -> u64 {
         if self.records.iter().filter(|r| r.seqs.is_empty()).count() >= OPEN_CAP {
             if let Some(i) = self.records.iter().position(|r| r.seqs.is_empty()) {
                 if let Some(gone) = self.records.remove(i) {
@@ -315,10 +337,16 @@ impl Ring {
         }
         let rid = self.next_rid;
         self.next_rid += 1;
-        let mut r = Record { rid, ..Default::default() };
+        let mut r = Record {
+            rid,
+            ..Default::default()
+        };
         r.merge(meta, size);
         if let Some((url, jar)) = jar {
-            r.cookies = Some(Cookies { sent: cookie_header(&jar), set: Vec::new() });
+            r.cookies = Some(Cookies {
+                sent: cookie_header(&jar),
+                set: Vec::new(),
+            });
             r.jar_before = Some(jar.iter().map(print).collect());
             r.jar_url = Some(url);
         }
@@ -341,7 +369,9 @@ impl Ring {
     fn jar_after(&mut self, rid: u64, after: Vec<cookies::Cookie>) {
         let Some(i) = self.index_of(rid) else { return };
         let r = &mut self.records[i];
-        let Some(before) = r.jar_before.take() else { return };
+        let Some(before) = r.jar_before.take() else {
+            return;
+        };
         let lines = set_cookie_diff(&before, &after);
         if let Some(c) = r.cookies.as_mut() {
             c.set = lines;
@@ -384,7 +414,7 @@ impl Ring {
         }
     }
 
-/// Counted, never kept: a chatty socket would evict every other row.
+    /// Counted, never kept: a chatty socket would evict every other row.
     fn ws_count(&mut self, rid: u64, received: bool, bytes: f64, at: f64) {
         let Some(i) = self.index_of(rid) else { return };
         let w = self.records[i].ws.get_or_insert_with(WsCount::default);
@@ -415,10 +445,15 @@ impl Ring {
             ("used", Json::n(self.held as f64)),
             ("evicted", Json::n(self.evicted as f64)),
         ]);
-        let Some(r) = self.by_seq.get(&seq).and_then(|rid| self.index_of(*rid)).map(|i| &self.records[i])
+        let Some(r) = self
+            .by_seq
+            .get(&seq)
+            .and_then(|rid| self.index_of(*rid))
+            .map(|i| &self.records[i])
         else {
             let marker = raw.contains("\"reload\"")
-                && json::parse(raw).is_some_and(|j| j.get("kind").and_then(Json::as_str) == Some("reload"));
+                && json::parse(raw)
+                    .is_some_and(|j| j.get("kind").and_then(Json::as_str) == Some("reload"));
             let note = if marker {
                 "a reload marker: the host ran the app again here (`cause` says why), and the rows \
                  before it are the previous run's. There is no exchange behind it"
@@ -436,13 +471,25 @@ impl Ring {
         let mut out = r.meta.clone();
         set(&mut out, "entry", entry);
         set(&mut out, "rid", Json::n(r.rid as f64));
-        set(&mut out, "seqs", Json::arr(r.seqs.iter().map(|s| Json::n(*s as f64)).collect()));
+        set(
+            &mut out,
+            "seqs",
+            Json::arr(r.seqs.iter().map(|s| Json::n(*s as f64)).collect()),
+        );
         if r.kind() != "ws" {
-            set(obj_at(&mut out, "request"), "body", body_json(r.req.as_ref()));
-            set(obj_at(&mut out, "response"), "body", body_json(r.res.as_ref()));
+            set(
+                obj_at(&mut out, "request"),
+                "body",
+                body_json(r.req.as_ref()),
+            );
+            set(
+                obj_at(&mut out, "response"),
+                "body",
+                body_json(r.res.as_ref()),
+            );
         }
         if let Some(c) = &r.conn {
-// The transport's account replaces the tee's `nextHopProtocol` guess.
+            // The transport's account replaces the tee's `nextHopProtocol` guess.
             set(
                 &mut out,
                 "transport",
@@ -457,15 +504,25 @@ impl Ring {
         }
         if r.cookies.is_some() || r.wire_cookies.is_some() {
             let sent = r.cookies.as_ref().and_then(|c| c.sent.clone());
-            let set_lines = r.cookies.as_ref().map(|c| c.set.clone()).unwrap_or_default();
+            let set_lines = r
+                .cookies
+                .as_ref()
+                .map(|c| c.set.clone())
+                .unwrap_or_default();
             let mut cookies = vec![
                 ("sent", sent.map_or(Json::Null, Json::s)),
-                ("set", Json::arr(set_lines.into_iter().map(Json::s).collect())),
+                (
+                    "set",
+                    Json::arr(set_lines.into_iter().map(Json::s).collect()),
+                ),
                 ("pending", Json::Bool(r.jar_before.is_some())),
             ];
             match &r.wire_cookies {
                 Some(lines) => {
-                    cookies.push(("wire", Json::arr(lines.iter().cloned().map(Json::s).collect())));
+                    cookies.push((
+                        "wire",
+                        Json::arr(lines.iter().cloned().map(Json::s).collect()),
+                    ));
                     cookies.push(("note", Json::s(WIRE_NOTE)));
                 }
                 None => cookies.push(("note", Json::s(COOKIE_NOTE))),
@@ -478,7 +535,11 @@ impl Ring {
             set(ws, "sent", Json::n(w.map_or(0, |w| w.sent) as f64));
             set(ws, "received", Json::n(w.map_or(0, |w| w.received) as f64));
             set(ws, "sentBytes", Json::n(w.map_or(0.0, |w| w.sent_bytes)));
-            set(ws, "receivedBytes", Json::n(w.map_or(0.0, |w| w.received_bytes)));
+            set(
+                ws,
+                "receivedBytes",
+                Json::n(w.map_or(0.0, |w| w.received_bytes)),
+            );
             if let Some(w) = w {
                 set(ws, "lastAt", Json::n(w.last_at));
             }
@@ -492,7 +553,7 @@ impl Ring {
 }
 
 fn rid_of(raw: &str) -> Option<u64> {
-// Cheap pre-check: rows without a rid are common, and a parse is the only other test.
+    // Cheap pre-check: rows without a rid are common, and a parse is the only other test.
     if !raw.contains("\"rid\"") {
         return None;
     }
@@ -502,13 +563,21 @@ fn rid_of(raw: &str) -> Option<u64> {
 
 /// `{"url":…}` → `{"seq":7,"url":…}` by text surgery on `JSON.stringify` output; `extra` is more leading members, serialized.
 fn splice_seq(raw: &str, seq: u64, extra: &str) -> String {
-    let head = if extra.is_empty() { format!("\"seq\":{seq}") } else { format!("\"seq\":{seq},{extra}") };
+    let head = if extra.is_empty() {
+        format!("\"seq\":{seq}")
+    } else {
+        format!("\"seq\":{seq},{extra}")
+    };
     let trimmed = raw.trim_start();
     if let Some(rest) = trimmed.strip_prefix('{') {
-        let sep = if rest.trim_start().starts_with('}') { "" } else { "," };
+        let sep = if rest.trim_start().starts_with('}') {
+            ""
+        } else {
+            ","
+        };
         return format!("{{{head}{sep}{rest}");
     }
-// Not an object: keep it, wrapped, rather than drop the line.
+    // Not an object: keep it, wrapped, rather than drop the line.
     format!("{{{head},\"raw\":{}}}", crate::json::quote(raw))
 }
 
@@ -577,10 +646,19 @@ fn encode(bytes: &[u8], mime: &str, from_string: bool) -> (&'static str, String)
     };
     match text {
         Some(s) if from_string => ("utf8", s.to_string()),
-        Some(s) if !binary(mime) && (textual(mime) || !s.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))) => {
+        Some(s)
+            if !binary(mime)
+                && (textual(mime)
+                    || !s
+                        .chars()
+                        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))) =>
+        {
             ("utf8", s.to_string())
         }
-        _ => ("base64", sk_runtime::redjs::webapi::fsutil::b64_encode(bytes)),
+        _ => (
+            "base64",
+            sk_runtime::redjs::webapi::fsutil::b64_encode(bytes),
+        ),
     }
 }
 
@@ -591,13 +669,20 @@ fn body_json(b: Option<&Body>) -> Json {
         set(&mut o, "evicted", Json::Bool(true));
         set(&mut o, "stored", Json::n(0.0));
     } else {
-        let mime = o.iter().find(|(k, _)| k == "mime").and_then(|(_, v)| v.as_str()).unwrap_or("").to_string();
+        let mime = o
+            .iter()
+            .find(|(k, _)| k == "mime")
+            .and_then(|(_, v)| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let (encoding, data) = encode(&b.bytes, &mime, b.text);
         set(&mut o, "encoding", Json::s(encoding));
         set(&mut o, "data", Json::s(data));
         set(&mut o, "stored", Json::n(b.bytes.len() as f64));
     }
-    let incomplete = o.iter().any(|(k, v)| k == "complete" && v.as_bool() == Some(false));
+    let incomplete = o
+        .iter()
+        .any(|(k, v)| k == "complete" && v.as_bool() == Some(false));
     set(&mut o, "truncated", Json::Bool(b.cut || incomplete));
     Json::Obj(o)
 }
@@ -627,7 +712,12 @@ fn cookie_header(jar: &[cookies::Cookie]) -> Option<String> {
         return None;
     }
     let mut sorted: Vec<&cookies::Cookie> = jar.iter().collect();
-    sorted.sort_by(|a, b| b.path.len().cmp(&a.path.len()).then(a.creation.cmp(&b.creation)));
+    sorted.sort_by(|a, b| {
+        b.path
+            .len()
+            .cmp(&a.path.len())
+            .then(a.creation.cmp(&b.creation))
+    });
     let mut out = String::new();
     for c in sorted {
         if !out.is_empty() {
@@ -652,8 +742,19 @@ fn cookie_header(jar: &[cookies::Cookie]) -> Option<String> {
 
 fn print(c: &cookies::Cookie) -> Print {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (&c.value, c.expires, c.secure, c.http_only, c.host_only, c.same_site.as_str()).hash(&mut h);
-    ((c.name.clone(), c.domain.clone(), c.path.clone()), h.finish())
+    (
+        &c.value,
+        c.expires,
+        c.secure,
+        c.http_only,
+        c.host_only,
+        c.same_site.as_str(),
+    )
+        .hash(&mut h);
+    (
+        (c.name.clone(), c.domain.clone(), c.path.clone()),
+        h.finish(),
+    )
 }
 
 fn set_cookie_diff(before: &[Print], after: &[cookies::Cookie]) -> Vec<String> {
@@ -666,8 +767,13 @@ fn set_cookie_diff(before: &[Print], after: &[cookies::Cookie]) -> Vec<String> {
         lines.push(set_cookie_line(c));
     }
     for ((name, domain, path), _) in before {
-        if !after.iter().any(|c| c.name == *name && c.domain == *domain && c.path == *path) {
-            lines.push(format!("{name}=; Domain={domain}; Path={path}; (deleted or expired)"));
+        if !after
+            .iter()
+            .any(|c| c.name == *name && c.domain == *domain && c.path == *path)
+        {
+            lines.push(format!(
+                "{name}=; Domain={domain}; Path={path}; (deleted or expired)"
+            ));
         }
     }
     lines.truncate(SET_COOKIE_LINES_CAP);
@@ -675,7 +781,11 @@ fn set_cookie_diff(before: &[Print], after: &[cookies::Cookie]) -> Vec<String> {
 }
 
 fn set_cookie_line(c: &cookies::Cookie) -> String {
-    let mut s = if c.name.is_empty() { c.value.clone() } else { format!("{}={}", c.name, c.value) };
+    let mut s = if c.name.is_empty() {
+        c.value.clone()
+    } else {
+        format!("{}={}", c.name, c.value)
+    };
     if !c.host_only {
         s.push_str(&format!("; Domain={}", c.domain));
     }
@@ -699,7 +809,9 @@ fn set_cookie_line(c: &cookies::Cookie) -> String {
 /// IMF-fixdate, the `Expires` format.
 fn http_date(secs: i64) -> String {
     const WD: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const MON: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const MON: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
     // Howard Hinnant's civil_from_days.
@@ -738,7 +850,9 @@ fn with_ring<T>(f: impl FnOnce(&mut Ring) -> T) -> T {
 }
 
 fn rid_arg(v: Value) -> Option<u64> {
-    v.as_number().filter(|n| n.is_finite() && *n >= 1.0).map(|n| n as u64)
+    v.as_number()
+        .filter(|n| n.is_finite() && *n >= 1.0)
+        .map(|n| n as u64)
 }
 
 // One summary row: the host parses only its `rid`, stamps a seq and stores the text.
@@ -853,7 +967,10 @@ pub fn record_loader(
     url: &str,
     at: f64,
     ms: f64,
-    result: &Result<sk_runtime::redjs::webapi::http::Response, sk_runtime::redjs::webapi::http::HttpError>,
+    result: &Result<
+        sk_runtime::redjs::webapi::http::Response,
+        sk_runtime::redjs::webapi::http::HttpError,
+    >,
 ) {
     let mut fields = vec![
         ("url", Json::s(url)),
@@ -863,7 +980,8 @@ pub fn record_loader(
     ];
     let kind = match result {
         Ok(r) => {
-            let ty = sk_runtime::redjs::webapi::http::header(&r.headers, "content-type").unwrap_or("");
+            let ty =
+                sk_runtime::redjs::webapi::http::header(&r.headers, "content-type").unwrap_or("");
             fields.push(("status", Json::n(r.status as f64)));
             fields.push(("ok", Json::Bool((200..300).contains(&r.status))));
             if !ty.is_empty() {
@@ -898,12 +1016,20 @@ pub fn record_loader(
 
 /// The HTTP cache's counters plus the host's account of the folder; `null` when none is installed.
 pub fn cache_json() -> Json {
-    let Some(s) = sk_runtime::redjs::webapi::http::cache::stats() else { return Json::Null };
+    let Some(s) = sk_runtime::redjs::webapi::http::cache::stats() else {
+        return Json::Null;
+    };
     Json::obj(vec![
         ("dir", Json::s(s.dir.display().to_string())),
-        ("maxMB", Json::n((s.max_bytes as f64 / 1048576.0 * 10.0).round() / 10.0)),
+        (
+            "maxMB",
+            Json::n((s.max_bytes as f64 / 1048576.0 * 10.0).round() / 10.0),
+        ),
         ("entries", Json::n(s.entries as f64)),
-        ("MB", Json::n((s.bytes as f64 / 1048576.0 * 10.0).round() / 10.0)),
+        (
+            "MB",
+            Json::n((s.bytes as f64 / 1048576.0 * 10.0).round() / 10.0),
+        ),
         ("writable", Json::Bool(s.writable)),
         ("sealed", Json::Bool(s.sealed)),
         ("hits", Json::n(s.hits as f64)),
@@ -931,11 +1057,27 @@ pub fn pool_json() -> Json {
 /// Registers the host fns the tee calls.
 pub fn install(rt: &JsRuntime) {
     rt.register("__sk_devtools_net", 1, sk_devtools_net as *const _);
-    rt.register("__sk_devtools_net_begin", 1, sk_devtools_net_begin as *const _);
-    rt.register("__sk_devtools_net_meta", 2, sk_devtools_net_meta as *const _);
-    rt.register("__sk_devtools_net_body", 4, sk_devtools_net_body as *const _);
+    rt.register(
+        "__sk_devtools_net_begin",
+        1,
+        sk_devtools_net_begin as *const _,
+    );
+    rt.register(
+        "__sk_devtools_net_meta",
+        2,
+        sk_devtools_net_meta as *const _,
+    );
+    rt.register(
+        "__sk_devtools_net_body",
+        4,
+        sk_devtools_net_body as *const _,
+    );
     rt.register("__sk_devtools_net_ws", 3, sk_devtools_net_ws as *const _);
-    rt.register("__sk_devtools_net_conn", 2, sk_devtools_net_conn as *const _);
+    rt.register(
+        "__sk_devtools_net_conn",
+        2,
+        sk_devtools_net_conn as *const _,
+    );
 }
 
 /// Separate from [`install`]: a host whose app has the devtools off leaves the engine's `fetch` alone.
@@ -968,8 +1110,12 @@ pub fn drain() -> Vec<String> {
 /// `(entries, next, dropped)` from `since`: the `net` command's answer.
 pub fn since(since: u64) -> (Vec<String>, u64, u64) {
     with_ring(|ring| {
-        let out: Vec<String> =
-            ring.entries.iter().filter(|(seq, _)| *seq >= since).map(|(_, t)| t.clone()).collect();
+        let out: Vec<String> = ring
+            .entries
+            .iter()
+            .filter(|(seq, _)| *seq >= since)
+            .map(|(_, t)| t.clone())
+            .collect();
         (out, ring.next_seq, ring.dropped)
     })
 }
@@ -1502,7 +1648,10 @@ mod tests {
     }
 
     fn begun(ring: &mut Ring, kind: &str) -> u64 {
-        let meta = json::parse(&format!("{{\"kind\":\"{kind}\",\"url\":\"https://a.test/x\"}}")).unwrap();
+        let meta = json::parse(&format!(
+            "{{\"kind\":\"{kind}\",\"url\":\"https://a.test/x\"}}"
+        ))
+        .unwrap();
         ring.begin(meta, 40, None)
     }
 
@@ -1511,7 +1660,13 @@ mod tests {
             Some(Json::Obj(o)) => o,
             _ => Vec::new(),
         };
-        Body { bytes, text: false, cut: false, meta, evicted: false }
+        Body {
+            bytes,
+            text: false,
+            cut: false,
+            meta,
+            evicted: false,
+        }
     }
 
     #[test]
@@ -1519,10 +1674,26 @@ mod tests {
         let mut ring = Ring::new();
         let rid = begun(&mut ring, "fetch");
         let seq = summary(&mut ring, Some(rid));
-        ring.merge_meta(rid, json::parse(r#"{"response":{"status":201}}"#).unwrap(), 30);
-        ring.attach_body(rid, Which::Res, body(b"{\"a\":1}".to_vec(), r#"{"mime":"application/json","complete":true}"#));
+        ring.merge_meta(
+            rid,
+            json::parse(r#"{"response":{"status":201}}"#).unwrap(),
+            30,
+        );
+        ring.attach_body(
+            rid,
+            Which::Res,
+            body(
+                b"{\"a\":1}".to_vec(),
+                r#"{"mime":"application/json","complete":true}"#,
+            ),
+        );
         let d = ring.detail(seq).unwrap();
-        assert_eq!(d.get("entry").and_then(|e| e.get("seq")).and_then(Json::as_f64), Some(seq as f64));
+        assert_eq!(
+            d.get("entry")
+                .and_then(|e| e.get("seq"))
+                .and_then(Json::as_f64),
+            Some(seq as f64)
+        );
         let res = d.get("response").unwrap();
         assert_eq!(res.get("status").and_then(Json::as_f64), Some(201.0));
         let b = res.get("body").unwrap();
@@ -1536,14 +1707,29 @@ mod tests {
         let mut ring = Ring::new();
         let rid = begun(&mut ring, "fetch");
         let before = summary(&mut ring, Some(rid));
-        let marker = ring.record(r#"{"kind":"reload","url":"","cause":"location.reload()","at":1}"#);
+        let marker =
+            ring.record(r#"{"kind":"reload","url":"","cause":"location.reload()","at":1}"#);
         assert_eq!(marker, before + 1, "the seqs run on through a reload");
         let d = ring.detail(marker).unwrap();
         assert!(matches!(d.get("detail"), Some(Json::Null)));
-        assert!(d.get("note").and_then(Json::as_str).is_some_and(|n| n.starts_with("a reload marker")));
-        assert_eq!(ring.detail(before).unwrap().get("rid").and_then(Json::as_f64), Some(rid as f64));
+        assert!(d
+            .get("note")
+            .and_then(Json::as_str)
+            .is_some_and(|n| n.starts_with("a reload marker")));
+        assert_eq!(
+            ring.detail(before)
+                .unwrap()
+                .get("rid")
+                .and_then(Json::as_f64),
+            Some(rid as f64)
+        );
         let plain = summary(&mut ring, None);
-        let note = ring.detail(plain).unwrap().get("note").and_then(Json::as_str).map(str::to_string);
+        let note = ring
+            .detail(plain)
+            .unwrap()
+            .get("note")
+            .and_then(Json::as_str)
+            .map(str::to_string);
         assert!(note.is_some_and(|n| n.starts_with("no details were recorded")));
     }
 
@@ -1551,8 +1737,18 @@ mod tests {
     fn the_connection_rides_the_row_and_answers_transport_and_raw_set_cookie() {
         let mut ring = Ring::new();
         let rid = begun(&mut ring, "fetch");
-        let conn = Conn { protocol: "h2", reused: true, id: 7, remote: Some("93.184.215.14:443".into()), cache: "off" };
-        ring.conn(rid, conn, vec!["sid=abc; Path=/; HttpOnly".into(), "theme=dark".into()]);
+        let conn = Conn {
+            protocol: "h2",
+            reused: true,
+            id: 7,
+            remote: Some("93.184.215.14:443".into()),
+            cache: "off",
+        };
+        ring.conn(
+            rid,
+            conn,
+            vec!["sid=abc; Path=/; HttpOnly".into(), "theme=dark".into()],
+        );
         let seq = summary(&mut ring, Some(rid));
         let row = json::parse(&ring.entries.back().unwrap().1).unwrap();
         assert_eq!(row.get("proto").and_then(Json::as_str), Some("h2"));
@@ -1563,7 +1759,10 @@ mod tests {
         let t = d.get("transport").unwrap();
         assert_eq!(t.get("protocol").and_then(Json::as_str), Some("h2"));
         assert_eq!(t.get("connectionId").and_then(Json::as_f64), Some(7.0));
-        assert_eq!(t.get("remote").and_then(Json::as_str), Some("93.184.215.14:443"));
+        assert_eq!(
+            t.get("remote").and_then(Json::as_str),
+            Some("93.184.215.14:443")
+        );
         let c = d.get("cookies").unwrap();
         assert_eq!(c.get("sent"), Some(&Json::Null));
         let wire = match c.get("wire") {
@@ -1571,23 +1770,57 @@ mod tests {
             _ => panic!("no wire cookies"),
         };
         assert_eq!(wire, ["sid=abc; Path=/; HttpOnly", "theme=dark"]);
-        assert!(c.get("note").and_then(Json::as_str).unwrap().contains("exactly as the transport received"));
+        assert!(c
+            .get("note")
+            .and_then(Json::as_str)
+            .unwrap()
+            .contains("exactly as the transport received"));
     }
 
     #[test]
     fn a_disk_cache_hit_has_no_connection_columns_and_says_where_it_came_from() {
         let mut ring = Ring::new();
         let rid = begun(&mut ring, "fetch");
-        ring.conn(rid, Conn { protocol: "", reused: false, id: 0, remote: None, cache: "hit" }, vec![]);
+        ring.conn(
+            rid,
+            Conn {
+                protocol: "",
+                reused: false,
+                id: 0,
+                remote: None,
+                cache: "hit",
+            },
+            vec![],
+        );
         let seq = summary(&mut ring, Some(rid));
         let row = json::parse(&ring.entries.back().unwrap().1).unwrap();
         assert_eq!(row.get("cache").and_then(Json::as_str), Some("hit"));
         assert!(row.get("proto").is_none() && row.get("conn").is_none());
         let t = ring.detail(seq).unwrap();
-        assert_eq!(t.get("transport").and_then(|t| t.get("cache")).and_then(Json::as_str), Some("hit"));
-        let c = Conn { protocol: "h2", reused: true, id: 3, remote: None, cache: "revalidated" };
-        assert_eq!(c.columns(), "\"proto\":\"h2\",\"conn\":3,\"reused\":true,\"cache\":\"revalidated\"");
-        let off = Conn { protocol: "h2", reused: false, id: 4, remote: None, cache: "off" };
+        assert_eq!(
+            t.get("transport")
+                .and_then(|t| t.get("cache"))
+                .and_then(Json::as_str),
+            Some("hit")
+        );
+        let c = Conn {
+            protocol: "h2",
+            reused: true,
+            id: 3,
+            remote: None,
+            cache: "revalidated",
+        };
+        assert_eq!(
+            c.columns(),
+            "\"proto\":\"h2\",\"conn\":3,\"reused\":true,\"cache\":\"revalidated\""
+        );
+        let off = Conn {
+            protocol: "h2",
+            reused: false,
+            id: 4,
+            remote: None,
+            cache: "off",
+        };
         assert!(!off.columns().contains("cache"));
     }
 
@@ -1595,9 +1828,17 @@ mod tests {
     fn raw_set_cookie_lines_are_capped_per_line_and_per_response() {
         let mut ring = Ring::new();
         let rid = begun(&mut ring, "fetch");
-        let conn = Conn { protocol: "http/1.1", reused: false, id: 1, remote: None, cache: "off" };
+        let conn = Conn {
+            protocol: "http/1.1",
+            reused: false,
+            id: 1,
+            remote: None,
+            cache: "off",
+        };
         let huge = format!("big={}", "x".repeat(10_000));
-        let lines: Vec<String> = std::iter::once(huge).chain((0..100).map(|i| format!("c{i}=v"))).collect();
+        let lines: Vec<String> = std::iter::once(huge)
+            .chain((0..100).map(|i| format!("c{i}=v")))
+            .collect();
         ring.conn(rid, conn, lines);
         let r = &ring.records[ring.index_of(rid).unwrap()];
         let wire = r.wire_cookies.as_ref().unwrap();
@@ -1615,15 +1856,26 @@ mod tests {
         let seq = summary(&mut ring, None);
         let d = ring.detail(seq).unwrap();
         assert_eq!(d.get("detail"), Some(&Json::Null));
-        assert!(d.get("note").and_then(Json::as_str).unwrap().contains("no details"));
-        assert!(ring.detail(seq + 10).unwrap_err().contains("no network entry"));
+        assert!(d
+            .get("note")
+            .and_then(Json::as_str)
+            .unwrap()
+            .contains("no details"));
+        assert!(ring
+            .detail(seq + 10)
+            .unwrap_err()
+            .contains("no network entry"));
     }
 
     #[test]
     fn meta_merges_two_levels_deep() {
         let mut ring = Ring::new();
         let rid = begun(&mut ring, "fetch");
-        ring.merge_meta(rid, json::parse(r#"{"timing":{"headersMs":12}}"#).unwrap(), 30);
+        ring.merge_meta(
+            rid,
+            json::parse(r#"{"timing":{"headersMs":12}}"#).unwrap(),
+            30,
+        );
         ring.merge_meta(rid, json::parse(r#"{"timing":{"bodyMs":20}}"#).unwrap(), 30);
         let seq = summary(&mut ring, Some(rid));
         let t = ring.detail(seq).unwrap();
@@ -1638,12 +1890,21 @@ mod tests {
         let rid = begun(&mut ring, "fetch");
         let big = format!("{{\"request\":{{\"x\":\"{}\"}}}}", "y".repeat(META_CAP));
         ring.merge_meta(rid, json::parse(&big).unwrap(), big.len());
-        ring.merge_meta(rid, json::parse(r#"{"timing":{"headersMs":3}}"#).unwrap(), 30);
+        ring.merge_meta(
+            rid,
+            json::parse(r#"{"timing":{"headersMs":3}}"#).unwrap(),
+            30,
+        );
         let seq = summary(&mut ring, Some(rid));
         let d = ring.detail(seq).unwrap();
         assert_eq!(d.get("metaTruncated").and_then(Json::as_bool), Some(true));
         assert!(d.get("request").and_then(|r| r.get("x")).is_none());
-        assert_eq!(d.get("timing").and_then(|t| t.get("headersMs")).and_then(Json::as_f64), Some(3.0));
+        assert_eq!(
+            d.get("timing")
+                .and_then(|t| t.get("headersMs"))
+                .and_then(Json::as_f64),
+            Some(3.0)
+        );
     }
 
     #[test]
@@ -1654,7 +1915,11 @@ mod tests {
         for _ in 0..60 {
             let rid = begun(&mut ring, "fetch");
             seqs.push(summary(&mut ring, Some(rid)));
-            ring.attach_body(rid, Which::Res, body(vec![b'a'; BODY_CAP], r#"{"mime":"text/plain"}"#));
+            ring.attach_body(
+                rid,
+                Which::Res,
+                body(vec![b'a'; BODY_CAP], r#"{"mime":"text/plain"}"#),
+            );
             assert!(ring.held <= BODY_BUDGET, "held {} > budget", ring.held);
         }
         assert_eq!(ring.held, (BODY_BUDGET / BODY_CAP) * BODY_CAP);
@@ -1665,7 +1930,10 @@ mod tests {
         assert!(b.get("data").is_none());
         let newest = ring.detail(*seqs.last().unwrap()).unwrap();
         let b = newest.get("response").and_then(|r| r.get("body")).unwrap();
-        assert_eq!(b.get("stored").and_then(Json::as_f64), Some(BODY_CAP as f64));
+        assert_eq!(
+            b.get("stored").and_then(Json::as_f64),
+            Some(BODY_CAP as f64)
+        );
     }
 
     #[test]
@@ -1707,8 +1975,14 @@ mod tests {
             assert_eq!(ws.get("sent").and_then(Json::as_f64), Some(1.0));
             assert_eq!(ws.get("received").and_then(Json::as_f64), Some(2.0));
             assert_eq!(ws.get("receivedBytes").and_then(Json::as_f64), Some(10.0));
-            assert!(d.get("request").is_none(), "a socket has no request body slot");
-            assert_eq!(d.get("seqs").and_then(Json::as_arr).map(<[Json]>::len), Some(2));
+            assert!(
+                d.get("request").is_none(),
+                "a socket has no request body slot"
+            );
+            assert_eq!(
+                d.get("seqs").and_then(Json::as_arr).map(<[Json]>::len),
+                Some(2)
+            );
         }
     }
 
@@ -1716,7 +1990,10 @@ mod tests {
     fn binary_media_types_are_base64_even_when_they_decode() {
         assert_eq!(encode(b"abc", "application/ion", false).0, "base64");
         assert_eq!(encode(&[0xe0, 0x01, 0x00, 0xea], "", false).0, "base64");
-        assert_eq!(encode(b"{\"a\":1}", "application/json; charset=utf-8", false).0, "utf8");
+        assert_eq!(
+            encode(b"{\"a\":1}", "application/json; charset=utf-8", false).0,
+            "utf8"
+        );
         assert_eq!(encode(b"plain words", "", false).0, "utf8");
         assert_eq!(encode(b"a\x00b", "", false).0, "base64");
         // A cut through a multi-byte character keeps the text, minus the tail.
@@ -1753,21 +2030,38 @@ mod tests {
 
     #[test]
     fn the_cookie_header_is_longest_path_then_oldest() {
-        let jar = vec![cookie("a", "1", "/", 2), cookie("b", "2", "/api", 3), cookie("c", "3", "/", 1)];
+        let jar = vec![
+            cookie("a", "1", "/", 2),
+            cookie("b", "2", "/api", 3),
+            cookie("c", "3", "/", 1),
+        ];
         assert_eq!(cookie_header(&jar).as_deref(), Some("b=2; c=3; a=1"));
         assert_eq!(cookie_header(&[]), None);
     }
 
     #[test]
     fn set_cookie_is_reconstructed_from_what_the_jar_changed() {
-        let before: Vec<Print> =
-            [cookie("keep", "1", "/", 1), cookie("rot", "old", "/", 2), cookie("gone", "x", "/", 3)].iter().map(print).collect();
-        let after = vec![cookie("keep", "1", "/", 1), cookie("rot", "new", "/", 2), cookie("fresh", "y", "/", 4)];
+        let before: Vec<Print> = [
+            cookie("keep", "1", "/", 1),
+            cookie("rot", "old", "/", 2),
+            cookie("gone", "x", "/", 3),
+        ]
+        .iter()
+        .map(print)
+        .collect();
+        let after = vec![
+            cookie("keep", "1", "/", 1),
+            cookie("rot", "new", "/", 2),
+            cookie("fresh", "y", "/", 4),
+        ];
         let lines = set_cookie_diff(&before, &after);
         assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(lines[0].starts_with("rot=new; Path=/; Expires=Wed, 21 Oct 2015 07:28:00 GMT; Secure; HttpOnly; SameSite=None"), "{lines:?}");
         assert!(lines[1].starts_with("fresh=y;"), "{lines:?}");
-        assert!(lines[2].starts_with("gone=;") && lines[2].contains("deleted"), "{lines:?}");
+        assert!(
+            lines[2].starts_with("gone=;") && lines[2].contains("deleted"),
+            "{lines:?}"
+        );
     }
 
     #[test]
@@ -1781,7 +2075,10 @@ mod tests {
     fn splice_seq_keeps_the_object_flat() {
         assert_eq!(splice_seq("{\"a\":1}", 7, ""), "{\"seq\":7,\"a\":1}");
         assert_eq!(splice_seq("{}", 2, ""), "{\"seq\":2}");
-        assert_eq!(splice_seq("{\"a\":1}", 3, "\"conn\":9"), "{\"seq\":3,\"conn\":9,\"a\":1}");
+        assert_eq!(
+            splice_seq("{\"a\":1}", 3, "\"conn\":9"),
+            "{\"seq\":3,\"conn\":9,\"a\":1}"
+        );
         assert_eq!(splice_seq("{}", 4, "\"conn\":9"), "{\"seq\":4,\"conn\":9}");
         assert_eq!(rid_of("{\"rid\":4,\"x\":1}"), Some(4));
         assert_eq!(rid_of("{\"x\":1}"), None);

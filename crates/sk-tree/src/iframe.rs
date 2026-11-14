@@ -56,7 +56,10 @@ pub enum FrameEvent {
     Failed(String),
     /// `window.parent.postMessage(..)` in the document: the sender's serialized origin (`"null"`
     /// for an opaque one) and the payload's wire text.
-    Message { origin: String, wire: String },
+    Message {
+        origin: String,
+        wire: String,
+    },
     Cursor(gpui::CursorStyle),
 }
 
@@ -115,7 +118,13 @@ pub trait Frame {
 pub trait Backend {
     /// Cheap: asked by `skFeatures.iframe` on every read.
     fn supported(&self) -> bool;
-    fn create(&self, node: u32, sink: Sink, window: &mut Window, cx: &mut App) -> Option<Box<dyn Frame>>;
+    fn create(
+        &self,
+        node: u32,
+        sink: Sink,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Box<dyn Frame>>;
 }
 
 struct Live {
@@ -152,7 +161,10 @@ pub fn supported() -> bool {
 }
 
 pub(crate) fn is_frame_attr(name: &str) -> bool {
-    matches!(name, "src" | "srcdoc" | "sandbox" | "allow" | "referrerpolicy" | "name" | "allowfullscreen")
+    matches!(
+        name,
+        "src" | "srcdoc" | "sandbox" | "allow" | "referrerpolicy" | "name" | "allowfullscreen"
+    )
 }
 
 pub(crate) fn note(id: u32) {
@@ -201,7 +213,9 @@ enum Step {
 }
 
 fn step(t: &Tree, id: u32) -> Step {
-    let Some(node) = t.node(id) else { return Step::Drop };
+    let Some(node) = t.node(id) else {
+        return Step::Drop;
+    };
     if t.name(node.tag) != "iframe" {
         return Step::Drop;
     }
@@ -209,7 +223,11 @@ fn step(t: &Tree, id: u32) -> Step {
     if !attrs.has_document() {
         return Step::Drop;
     }
-    if connected(t, id) { Step::Show(attrs) } else { Step::Wait }
+    if connected(t, id) {
+        Step::Show(attrs)
+    } else {
+        Step::Wait
+    }
 }
 
 pub(crate) fn tick(window: &mut Window, cx: &mut App) {
@@ -237,19 +255,34 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) {
     deliver(window, cx);
 }
 
-fn show(id: u32, attrs: FrameAttrs, win: crate::windows::WinKey, window: &mut Window, cx: &mut App) {
-    let backend = BACKEND.with(|b| b.borrow().clone()).filter(|b| b.supported());
+fn show(
+    id: u32,
+    attrs: FrameAttrs,
+    win: crate::windows::WinKey,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let backend = BACKEND
+        .with(|b| b.borrow().clone())
+        .filter(|b| b.supported());
     let Some(backend) = backend else {
         let again = REFUSED.with(|r| r.borrow().get(&id) == Some(&attrs));
         if !again {
             EVENTS.with(|q| {
-                q.borrow_mut().push_back((id, FrameEvent::Failed("no webview backend on this system".into())))
+                q.borrow_mut().push_back((
+                    id,
+                    FrameEvent::Failed("no webview backend on this system".into()),
+                ))
             });
             REFUSED.with(|r| r.borrow_mut().insert(id, attrs));
         }
         return;
     };
-    let existing = FRAMES.with(|f| f.borrow().get(&id).map(|l| (l.attrs == attrs, l.win == win)));
+    let existing = FRAMES.with(|f| {
+        f.borrow()
+            .get(&id)
+            .map(|l| (l.attrs == attrs, l.win == win))
+    });
     match existing {
         Some((true, _)) => {}
         Some((false, _)) => FRAMES.with(|f| {
@@ -266,7 +299,9 @@ fn show(id: u32, attrs: FrameAttrs, win: crate::windows::WinKey, window: &mut Wi
                 EVENTS.with(|q| {
                     q.borrow_mut().push_back((
                         id,
-                        FrameEvent::Failed(format!("{MAX_FRAMES} documents are already open; this one was not loaded")),
+                        FrameEvent::Failed(format!(
+                            "{MAX_FRAMES} documents are already open; this one was not loaded"
+                        )),
                     ))
                 });
                 REFUSED.with(|r| r.borrow_mut().insert(id, attrs));
@@ -274,23 +309,32 @@ fn show(id: u32, attrs: FrameAttrs, win: crate::windows::WinKey, window: &mut Wi
         }
         None => {
             REFUSED.with(|r| r.borrow_mut().remove(&id));
-            let sink = Sink { node: id, wake: WAKE.with(|w| w.borrow().clone()) };
+            let sink = Sink {
+                node: id,
+                wake: WAKE.with(|w| w.borrow().clone()),
+            };
             match backend.create(id, sink, window, cx) {
                 Some(mut frame) => {
                     frame.navigate(&attrs);
                     FRAMES.with(|f| {
-                        f.borrow_mut().insert(id, Live {
-                            frame,
-                            attrs,
-                            win,
-                            answered: false,
-                            placed: None,
-                            cursor: gpui::CursorStyle::Arrow,
-                        })
+                        f.borrow_mut().insert(
+                            id,
+                            Live {
+                                frame,
+                                attrs,
+                                win,
+                                answered: false,
+                                placed: None,
+                                cursor: gpui::CursorStyle::Arrow,
+                            },
+                        )
                     });
                 }
                 None => EVENTS.with(|q| {
-                    q.borrow_mut().push_back((id, FrameEvent::Failed("the webview could not be created".into())))
+                    q.borrow_mut().push_back((
+                        id,
+                        FrameEvent::Failed("the webview could not be created".into()),
+                    ))
                 }),
             }
         }
@@ -371,9 +415,12 @@ pub(crate) fn placed(id: u32, placement: Placement) {
 
 fn deliver(window: &mut Window, cx: &mut App) {
     loop {
-        let Some((id, event)) = EVENTS.with(|q| q.borrow_mut().pop_front()) else { break };
+        let Some((id, event)) = EVENTS.with(|q| q.borrow_mut().pop_front()) else {
+            break;
+        };
         let key = FRAMES.with(|f| f.borrow().get(&id).map(|l| l.attrs.key().to_string()));
-        let key = key.or_else(|| REFUSED.with(|r| r.borrow().get(&id).map(|a| a.key().to_string())));
+        let key =
+            key.or_else(|| REFUSED.with(|r| r.borrow().get(&id).map(|a| a.key().to_string())));
         let Some(key) = key else { continue };
         match event {
             FrameEvent::Loaded | FrameEvent::Failed(_) => {
@@ -384,11 +431,18 @@ fn deliver(window: &mut Window, cx: &mut App) {
                 if !first {
                     continue;
                 }
-                let code = if matches!(event, FrameEvent::Loaded) { tree::EV_LOAD } else { tree::EV_ERROR };
+                let code = if matches!(event, FrameEvent::Loaded) {
+                    tree::EV_LOAD
+                } else {
+                    tree::EV_ERROR
+                };
                 if let FrameEvent::Failed(why) = &event {
                     crate::log::record("warn", format!("<iframe> {key}: {why}"));
                 }
-                let payload = EventPayload { key: Some(&key), ..Default::default() };
+                let payload = EventPayload {
+                    key: Some(&key),
+                    ..Default::default()
+                };
                 crate::render::js_dispatch_app(id, code, &payload, window, cx);
             }
             FrameEvent::Cursor(style) => {
@@ -402,7 +456,10 @@ fn deliver(window: &mut Window, cx: &mut App) {
             }
             FrameEvent::Message { origin, wire } => {
                 let text = message_key(&origin, &wire);
-                let payload = EventPayload { key: Some(&text), ..Default::default() };
+                let payload = EventPayload {
+                    key: Some(&text),
+                    ..Default::default()
+                };
                 crate::render::js_dispatch_app(id, tree::EV_MESSAGE, &payload, window, cx);
             }
         }
@@ -443,12 +500,26 @@ pub(crate) fn focus(id: u32, on: bool) {
     });
 }
 
-pub(crate) fn pointer(id: u32, kind: PointerKind, at: (f32, f32), buttons: u8, shift: bool, control: bool) {
+pub(crate) fn pointer(
+    id: u32,
+    kind: PointerKind,
+    at: (f32, f32),
+    buttons: u8,
+    shift: bool,
+    control: bool,
+) {
     FRAMES.with(|f| {
         if let Some(live) = f.borrow_mut().get_mut(&id) {
             // Not painted: there is no box to be relative to.
             let Some(place) = live.placed else { return };
-            let input = PointerInput { kind, x: at.0 - place.bounds[0], y: at.1 - place.bounds[1], buttons, shift, control };
+            let input = PointerInput {
+                kind,
+                x: at.0 - place.bounds[0],
+                y: at.1 - place.bounds[1],
+                buttons,
+                shift,
+                control,
+            };
             live.frame.pointer(input);
         }
     });
@@ -480,7 +551,11 @@ fn sync_focus(win: crate::windows::WinKey, window: &Window) {
     }
     FOCUSED.with(|f| {
         let mut f = f.borrow_mut();
-        if want == 0 { f.remove(&win) } else { f.insert(win, want) };
+        if want == 0 {
+            f.remove(&win)
+        } else {
+            f.insert(win, want)
+        };
     });
 }
 
@@ -498,7 +573,9 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
     drop(FRAMES.with(|f| {
         let mut f = f.borrow_mut();
         let gone: Vec<u32> = f.keys().copied().filter(|&id| !live(id)).collect();
-        gone.into_iter().filter_map(|id| f.remove(&id)).collect::<Vec<_>>()
+        gone.into_iter()
+            .filter_map(|id| f.remove(&id))
+            .collect::<Vec<_>>()
     }));
     WAITING.with(|w| w.borrow_mut().retain(|&id| live(id)));
     REFUSED.with(|r| r.borrow_mut().retain(|&id, _| live(id)));
@@ -509,7 +586,11 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
 pub(crate) fn forget_window(win: crate::windows::WinKey) {
     let gone: Vec<Live> = FRAMES.with(|f| {
         let mut f = f.borrow_mut();
-        let ids: Vec<u32> = f.iter().filter(|(_, l)| l.win == win).map(|(id, _)| *id).collect();
+        let ids: Vec<u32> = f
+            .iter()
+            .filter(|(_, l)| l.win == win)
+            .map(|(id, _)| *id)
+            .collect();
         ids.into_iter().filter_map(|id| f.remove(&id)).collect()
     });
     drop(gone);
@@ -537,7 +618,13 @@ pub(crate) fn placement(
             f32::from(b.size.height) * scale,
         ]
     };
-    Placement { bounds: rect(bounds), clip: rect(bounds.intersect(&mask)), radii: radii.map(|r| r * scale), scale, opacity }
+    Placement {
+        bounds: rect(bounds),
+        clip: rect(bounds.intersect(&mask)),
+        radii: radii.map(|r| r * scale),
+        scale,
+        opacity,
+    }
 }
 
 #[cfg(test)]
@@ -557,20 +644,28 @@ mod tests {
 
     impl Frame for FakeFrame {
         fn navigate(&mut self, attrs: &FrameAttrs) {
-            self.1.borrow_mut().push(format!("navigate {} {}", self.0, attrs.key()));
+            self.1
+                .borrow_mut()
+                .push(format!("navigate {} {}", self.0, attrs.key()));
         }
         fn post(&mut self, wire: &str, target: &str) {
-            self.1.borrow_mut().push(format!("post {} {wire} {target}", self.0));
+            self.1
+                .borrow_mut()
+                .push(format!("post {} {wire} {target}", self.0));
         }
         fn place(&mut self, placement: Option<Placement>) {
-            self.1.borrow_mut().push(format!("place {} {}", self.0, placement.is_some()));
+            self.1
+                .borrow_mut()
+                .push(format!("place {} {}", self.0, placement.is_some()));
         }
         fn rehome(&mut self, _: &mut Window) {}
         fn focus(&mut self, on: bool) {
             self.1.borrow_mut().push(format!("focus {} {on}", self.0));
         }
         fn pointer(&mut self, input: PointerInput) {
-            self.1.borrow_mut().push(format!("pointer {} {:?}", self.0, input.kind));
+            self.1
+                .borrow_mut()
+                .push(format!("pointer {} {:?}", self.0, input.kind));
         }
     }
 
@@ -603,7 +698,9 @@ mod tests {
         let empty = iframe(None, true);
         assert_eq!(read_tree(|t| step(t, empty)), Step::Drop);
         let ready = iframe(Some("/game.html"), true);
-        assert!(matches!(read_tree(|t| step(t, ready)), Step::Show(a) if a.src.as_deref() == Some("/game.html")));
+        assert!(
+            matches!(read_tree(|t| step(t, ready)), Step::Show(a) if a.src.as_deref() == Some("/game.html"))
+        );
         assert_eq!(read_tree(|t| step(t, 999_999)), Step::Drop);
     }
 
@@ -614,14 +711,22 @@ mod tests {
             let key = t.intern("srcdoc");
             t.set_prop(el, key, Some("<p>hi</p>".into()));
         });
-        let Step::Show(attrs) = read_tree(|t| step(t, el)) else { panic!("srcdoc alone is a document") };
+        let Step::Show(attrs) = read_tree(|t| step(t, el)) else {
+            panic!("srcdoc alone is a document")
+        };
         assert_eq!(attrs.key(), "about:srcdoc");
     }
 
     #[test]
     fn a_message_key_is_json_with_the_wire_embedded() {
-        assert_eq!(message_key("null", "[\"o\",[]]"), "{\"o\":\"null\",\"d\":[\"o\",[]]}");
-        assert_eq!(message_key("a\"b\\c", "1"), "{\"o\":\"a\\\"b\\\\c\",\"d\":1}");
+        assert_eq!(
+            message_key("null", "[\"o\",[]]"),
+            "{\"o\":\"null\",\"d\":[\"o\",[]]}"
+        );
+        assert_eq!(
+            message_key("a\"b\\c", "1"),
+            "{\"o\":\"a\\\"b\\\\c\",\"d\":1}"
+        );
     }
 
     #[test]
@@ -640,7 +745,13 @@ mod tests {
         fn supported(&self) -> bool {
             self.on.get()
         }
-        fn create(&self, node: u32, sink: Sink, _: &mut Window, _: &mut App) -> Option<Box<dyn Frame>> {
+        fn create(
+            &self,
+            node: u32,
+            sink: Sink,
+            _: &mut Window,
+            _: &mut App,
+        ) -> Option<Box<dyn Frame>> {
             self.sinks.borrow_mut().push(sink);
             Some(Box::new(FakeFrame(node, self.log.clone())))
         }
@@ -651,16 +762,25 @@ mod tests {
         let log = Rc::new(RefCell::new(Vec::new()));
         let id = 77_001;
         FRAMES.with(|f| {
-            f.borrow_mut().insert(id, Live {
-                frame: Box::new(FakeFrame(id, log.clone())),
-                attrs: FrameAttrs::default(),
-                win: 5,
-                answered: false,
-                placed: None,
-                cursor: gpui::CursorStyle::Arrow,
-            })
+            f.borrow_mut().insert(
+                id,
+                Live {
+                    frame: Box::new(FakeFrame(id, log.clone())),
+                    attrs: FrameAttrs::default(),
+                    win: 5,
+                    answered: false,
+                    placed: None,
+                    cursor: gpui::CursorStyle::Arrow,
+                },
+            )
         });
-        let at = Placement { bounds: [0.0, 0.0, 10.0, 10.0], clip: [0.0, 0.0, 10.0, 10.0], radii: [0.0; 4], scale: 1.0, opacity: 1.0 };
+        let at = Placement {
+            bounds: [0.0, 0.0, 10.0, 10.0],
+            clip: [0.0, 0.0, 10.0, 10.0],
+            radii: [0.0; 4],
+            scale: 1.0,
+            opacity: 1.0,
+        };
         drawing(5);
         placed(id, at);
         placed(id, at);
@@ -676,7 +796,12 @@ mod tests {
         gc(|_| false);
         assert_eq!(
             *log.borrow(),
-            ["place 77001 true", "place 77001 false", "post 77001 1 *", "drop 77001"],
+            [
+                "place 77001 true",
+                "place 77001 false",
+                "post 77001 1 *",
+                "drop 77001"
+            ],
             "same place: no call; not painted: hidden; gone: dropped"
         );
     }
@@ -684,8 +809,14 @@ mod tests {
     #[test]
     fn a_placement_is_in_device_pixels_and_clipped() {
         use gpui::{point, px, size};
-        let bounds = Bounds { origin: point(px(10.0), px(20.0)), size: size(px(100.0), px(50.0)) };
-        let mask = Bounds { origin: point(px(0.0), px(0.0)), size: size(px(60.0), px(40.0)) };
+        let bounds = Bounds {
+            origin: point(px(10.0), px(20.0)),
+            size: size(px(100.0), px(50.0)),
+        };
+        let mask = Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: size(px(60.0), px(40.0)),
+        };
         let p = placement(bounds, mask, [4.0; 4], 2.0, 0.5);
         assert_eq!(p.bounds, [20.0, 40.0, 200.0, 100.0]);
         assert_eq!(p.clip, [20.0, 40.0, 100.0, 40.0]);

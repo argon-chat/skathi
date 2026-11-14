@@ -47,7 +47,12 @@ pub struct Fail {
 
 impl Fail {
     pub fn new(name: &'static str, message: impl Into<String>) -> Self {
-        Fail { name, message: message.into(), code: None, os_error: None }
+        Fail {
+            name,
+            message: message.into(),
+            code: None,
+            os_error: None,
+        }
     }
     pub fn type_error(message: impl Into<String>) -> Self {
         Fail::new("TypeError", message)
@@ -84,16 +89,33 @@ pub(crate) struct Done {
 
 impl Done {
     pub fn json(payload: &str) -> Done {
-        Done { payload: payload.to_string(), make: None }
+        Done {
+            payload: payload.to_string(),
+            make: None,
+        }
     }
-    pub fn with_value(payload: String, make: impl FnOnce(*mut c_void) -> u64 + Send + 'static) -> Done {
-        Done { payload, make: Some(Box::new(make)) }
+    pub fn with_value(
+        payload: String,
+        make: impl FnOnce(*mut c_void) -> u64 + Send + 'static,
+    ) -> Done {
+        Done {
+            payload,
+            make: Some(Box::new(make)),
+        }
     }
 }
 
 enum Item {
-    Settle { token: u32, ok: bool, payload: String, make: Option<Maker> },
-    Log { kind: &'static str, text: String },
+    Settle {
+        token: u32,
+        ok: bool,
+        payload: String,
+        make: Option<Maker>,
+    },
+    Log {
+        kind: &'static str,
+        text: String,
+    },
 }
 
 static QUEUE: Mutex<VecDeque<Item>> = Mutex::new(VecDeque::new());
@@ -124,26 +146,51 @@ fn push_settle(item: Item) {
 }
 
 pub(crate) fn settle(token: u32, result: Result<String, Fail>) {
-    settle_done(token, result.map(|payload| Done { payload, make: None }));
+    settle_done(
+        token,
+        result.map(|payload| Done {
+            payload,
+            make: None,
+        }),
+    );
 }
 
 pub(crate) fn settle_done(token: u32, result: Result<Done, Fail>) {
     push_settle(match result {
-        Ok(Done { payload, make }) => Item::Settle { token, ok: true, payload, make },
-        Err(f) => Item::Settle { token, ok: false, payload: f.to_json(), make: None },
+        Ok(Done { payload, make }) => Item::Settle {
+            token,
+            ok: true,
+            payload,
+            make,
+        },
+        Err(f) => Item::Settle {
+            token,
+            ok: false,
+            payload: f.to_json(),
+            make: None,
+        },
     });
 }
 
 pub(crate) fn emit(payload: String) {
-    push_settle(Item::Settle { token: 0, ok: true, payload, make: None });
+    push_settle(Item::Settle {
+        token: 0,
+        ok: true,
+        payload,
+        make: None,
+    });
 }
 
 #[cfg(test)]
 pub(crate) fn take_emitted() -> Vec<String> {
-    let Ok(mut q) = QUEUE.lock() else { return Vec::new() };
+    let Ok(mut q) = QUEUE.lock() else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     q.retain(|item| match item {
-        Item::Settle { token: 0, payload, .. } => {
+        Item::Settle {
+            token: 0, payload, ..
+        } => {
             out.push(payload.clone());
             SETTLES_QUEUED.fetch_sub(1, Ordering::AcqRel);
             false
@@ -158,7 +205,9 @@ pub(crate) fn take_settled(tokens: &[u32]) -> std::collections::HashMap<u32, (bo
     let mut out = std::collections::HashMap::new();
     let Ok(mut q) = QUEUE.lock() else { return out };
     q.retain(|item| match item {
-        Item::Settle { token, ok, payload, .. } if tokens.contains(token) => {
+        Item::Settle {
+            token, ok, payload, ..
+        } if tokens.contains(token) => {
             out.insert(*token, (*ok, payload.clone()));
             SETTLES_QUEUED.fetch_sub(1, Ordering::AcqRel);
             false
@@ -175,7 +224,12 @@ pub(crate) fn take_settled_with_makers(tokens: &[u32]) -> Vec<(u32, bool, String
     let mut keep = VecDeque::new();
     for item in q.drain(..) {
         match item {
-            Item::Settle { token, ok, payload, make } if tokens.contains(&token) => {
+            Item::Settle {
+                token,
+                ok,
+                payload,
+                make,
+            } if tokens.contains(&token) => {
                 SETTLES_QUEUED.fetch_sub(1, Ordering::AcqRel);
                 out.push((token, ok, payload, make));
             }
@@ -219,11 +273,21 @@ unsafe fn src_drain(g: *mut c_void) -> usize {
     loop {
         let item = {
             let Ok(mut q) = QUEUE.lock() else { break };
-            let Some(i) = q.iter().position(|it| matches!(it, Item::Settle { .. })) else { break };
+            let Some(i) = q.iter().position(|it| matches!(it, Item::Settle { .. })) else {
+                break;
+            };
             SETTLES_QUEUED.fetch_sub(1, Ordering::AcqRel);
             q.remove(i)
         };
-        let Some(Item::Settle { token, ok, payload, make }) = item else { break };
+        let Some(Item::Settle {
+            token,
+            ok,
+            payload,
+            make,
+        }) = item
+        else {
+            break;
+        };
         deliver(g, token, ok, &payload, make);
         sk_runtime::redjs::web::checkpoint(g);
         n += 1;
@@ -295,7 +359,10 @@ pub fn pump() {
             let mut logs = Vec::new();
             q.retain(|item| match item {
                 Item::Log { kind, text } => {
-                    logs.push(Item::Log { kind, text: text.clone() });
+                    logs.push(Item::Log {
+                        kind,
+                        text: text.clone(),
+                    });
                     false
                 }
                 Item::Settle { .. } => true,
@@ -304,7 +371,10 @@ pub fn pump() {
         } else {
             let n = q.len().min(DRAIN_CAP);
             let batch: Vec<Item> = q.drain(..n).collect();
-            let settles = batch.iter().filter(|i| matches!(i, Item::Settle { .. })).count();
+            let settles = batch
+                .iter()
+                .filter(|i| matches!(i, Item::Settle { .. }))
+                .count();
             SETTLES_QUEUED.fetch_sub(settles, Ordering::AcqRel);
             batch
         }
@@ -314,7 +384,12 @@ pub fn pump() {
     for item in batch {
         match item {
             Item::Log { kind, text } => log_now(kind, text),
-            Item::Settle { token, ok, payload, make } => {
+            Item::Settle {
+                token,
+                ok,
+                payload,
+                make,
+            } => {
                 called = true;
                 deliver(g, token, ok, &payload, make);
             }
@@ -329,12 +404,17 @@ pub fn pump() {
 pub(crate) mod tests {
     use super::*;
 
-    pub(crate) fn wait_for_settles(tokens: &[u32]) -> std::collections::HashMap<u32, (bool, String)> {
+    pub(crate) fn wait_for_settles(
+        tokens: &[u32],
+    ) -> std::collections::HashMap<u32, (bool, String)> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut got = std::collections::HashMap::new();
         while got.len() < tokens.len() {
             got.extend(take_settled(tokens));
-            assert!(std::time::Instant::now() < deadline, "timed out waiting for {tokens:?}; have {got:?}");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {tokens:?}; have {got:?}"
+            );
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         got
@@ -357,8 +437,14 @@ pub(crate) mod tests {
         let (ok, payload) = &got[&t];
         assert!(ok);
         let v: serde_json::Value = serde_json::from_str(payload).unwrap();
-        assert_eq!((v["name"].as_str(), v["kind"].as_str()), (Some("a.txt"), Some("file")));
-        assert!(!payload.contains(&*dir.to_string_lossy()), "no path in what JS sees: {payload}");
+        assert_eq!(
+            (v["name"].as_str(), v["kind"].as_str()),
+            (Some("a.txt"), Some("file"))
+        );
+        assert!(
+            !payload.contains(&*dir.to_string_lossy()),
+            "no path in what JS sees: {payload}"
+        );
         fs::release(v["h"].as_u64().unwrap());
         fs::release(h);
         assert_eq!(got[&missing].0, false);
@@ -368,13 +454,16 @@ pub(crate) mod tests {
 
     #[test]
     fn a_failure_serialises() {
-        let f = Fail::new("NotFoundError", "gone \"x\"").code("ENOENT").os(2);
+        let f = Fail::new("NotFoundError", "gone \"x\"")
+            .code("ENOENT")
+            .os(2);
         let v: serde_json::Value = serde_json::from_str(&f.to_json()).unwrap();
         assert_eq!(v["name"], "NotFoundError");
         assert_eq!(v["message"], "gone \"x\"");
         assert_eq!(v["code"], "ENOENT");
         assert_eq!(v["osError"], 2);
-        let t: serde_json::Value = serde_json::from_str(&Fail::type_error("bad").to_json()).unwrap();
+        let t: serde_json::Value =
+            serde_json::from_str(&Fail::type_error("bad").to_json()).unwrap();
         assert!(t.get("code").is_none());
     }
 

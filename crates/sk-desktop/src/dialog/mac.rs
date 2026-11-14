@@ -31,13 +31,15 @@ use objc2::rc::{autoreleasepool, Retained, Weak};
 use objc2::runtime::{AnyClass, AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSAlertStyle, NSApplication, NSButton, NSColor, NSColorPanel, NSColorSpace, NSModalResponse,
-    NSModalResponseCancel, NSModalResponseOK, NSOpenPanel, NSPopUpButton, NSRequestUserAttentionType, NSSavePanel,
-    NSTextField, NSView, NSWindow, NSWindowWillCloseNotification,
+    NSAlert, NSAlertStyle, NSApplication, NSButton, NSColor, NSColorPanel, NSColorSpace,
+    NSModalResponse, NSModalResponseCancel, NSModalResponseOK, NSOpenPanel, NSPopUpButton,
+    NSRequestUserAttentionType, NSSavePanel, NSTextField, NSView, NSWindow,
+    NSWindowWillCloseNotification,
 };
 use objc2_foundation::{
-    NSArray, NSFileManager, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol, NSPoint, NSRect,
-    NSSearchPathDirectory, NSSearchPathDomainMask, NSSize, NSString, NSUserDefaults, NSURL,
+    NSArray, NSFileManager, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol,
+    NSPoint, NSRect, NSSearchPathDirectory, NSSearchPathDomainMask, NSSize, NSString,
+    NSUserDefaults, NSURL,
 };
 
 use super::ask::label_of;
@@ -69,7 +71,16 @@ static NEXT: AtomicU64 = AtomicU64::new(1);
 
 /// Registered before the panel begins, so a completion handler AppKit calls at once finds it to forget.
 fn register(id: u64, close: Rc<dyn Fn()>, force: Box<dyn FnOnce()>) {
-    LIVE.with(|l| l.borrow_mut().insert(id, Live { close, force, asked: false }));
+    LIVE.with(|l| {
+        l.borrow_mut().insert(
+            id,
+            Live {
+                close,
+                force,
+                asked: false,
+            },
+        )
+    });
 }
 
 fn forget(id: u64) {
@@ -122,7 +133,11 @@ fn run<T: Send + 'static>(
             }
             autoreleasepool(|_| match MainThreadMarker::new() {
                 Some(mtm) => show(mtm, id, tx),
-                None => Err(Fail::new("InvalidStateError", "the main queue ran off the main thread").code("EIO")),
+                None => Err(Fail::new(
+                    "InvalidStateError",
+                    "the main queue ran off the main thread",
+                )
+                .code("EIO")),
             })
         }));
         let failure = match shown {
@@ -130,7 +145,11 @@ fn run<T: Send + 'static>(
             Ok(Err(f)) => f,
             Err(_) => {
                 forget(id);
-                Fail::new("InvalidStateError", format!("the {what} panel could not be shown")).code("EIO")
+                Fail::new(
+                    "InvalidStateError",
+                    format!("the {what} panel could not be shown"),
+                )
+                .code("EIO")
             }
         };
         let _ = failed.send(Err(failure));
@@ -156,8 +175,9 @@ fn run<T: Send + 'static>(
 
 /// Runs a completion handler's body; a panic answers with a failure instead of unwinding into AppKit.
 fn guarded<T>(reply: &Reply<T>, body: impl FnOnce() -> Answer<T>) {
-    let answer = std::panic::catch_unwind(AssertUnwindSafe(body))
-        .unwrap_or_else(|_| Err(Fail::new("InvalidStateError", "the dialog's answer could not be read").code("EIO")));
+    let answer = std::panic::catch_unwind(AssertUnwindSafe(body)).unwrap_or_else(|_| {
+        Err(Fail::new("InvalidStateError", "the dialog's answer could not be read").code("EIO"))
+    });
     let _ = reply.send(answer);
 }
 
@@ -173,11 +193,15 @@ pub(crate) fn window_of(mtm: MainThreadMarker, owner: isize) -> Option<Retained<
     if owner == 0 {
         return None;
     }
-    NSApplication::sharedApplication(mtm).windows().iter().find(|w| Retained::as_ptr(w) as isize == owner)
+    NSApplication::sharedApplication(mtm)
+        .windows()
+        .iter()
+        .find(|w| Retained::as_ptr(w) as isize == owner)
 }
 
 fn sheet_parent(mtm: MainThreadMarker, owner: isize) -> Option<Retained<NSWindow>> {
-    window_of(mtm, owner).filter(|w| w.isVisible() && !w.isMiniaturized() && w.attachedSheet().is_none())
+    window_of(mtm, owner)
+        .filter(|w| w.isVisible() && !w.isMiniaturized() && w.attachedSheet().is_none())
 }
 
 pub(super) fn known_folder(k: Known) -> Option<PathBuf> {
@@ -195,12 +219,15 @@ pub(super) fn known_folder(k: Known) -> Option<PathBuf> {
             .firstObject()
             .and_then(|url| url.to_file_path())
     });
-    found.or_else(|| std::env::var_os("HOME").map(|home| mac_plan::home_folder(Path::new(&home), k)))
+    found
+        .or_else(|| std::env::var_os("HOME").map(|home| mac_plan::home_folder(Path::new(&home), k)))
 }
 
 pub(super) fn pick(n: &Native, owner: isize, cancel: &Cancellation) -> Answer<Vec<PathBuf>> {
     let n = n.clone();
-    run("file", cancel, move |mtm, id, reply| show_panel(mtm, id, &n, owner, reply))
+    run("file", cancel, move |mtm, id, reply| {
+        show_panel(mtm, id, &n, owner, reply)
+    })
 }
 
 fn content_types(exts: Option<&[String]>) -> Retained<NSArray<AnyObject>> {
@@ -249,15 +276,27 @@ define_class!(
 );
 
 impl FormatTarget {
-    fn new(mtm: MainThreadMarker, panel: &NSSavePanel, types: Vec<Retained<NSArray<AnyObject>>>) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(FormatIvars { panel: Weak::new(panel), types });
+    fn new(
+        mtm: MainThreadMarker,
+        panel: &NSSavePanel,
+        types: Vec<Retained<NSArray<AnyObject>>>,
+    ) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(FormatIvars {
+            panel: Weak::new(panel),
+            types,
+        });
         unsafe { msg_send![super(this), init] }
     }
 }
 
-fn format_view(mtm: MainThreadMarker, formats: &[Format], target: &FormatTarget) -> Retained<NSView> {
+fn format_view(
+    mtm: MainThreadMarker,
+    formats: &[Format],
+    target: &FormatTarget,
+) -> Retained<NSView> {
     let label = NSTextField::labelWithString(&NSString::from_str("Format:"), mtm);
-    let popup = NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), NSRect::ZERO, false);
+    let popup =
+        NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), NSRect::ZERO, false);
     for f in formats {
         popup.addItemWithTitle(&NSString::from_str(&f.name));
     }
@@ -273,9 +312,15 @@ fn format_view(mtm: MainThreadMarker, formats: &[Format], target: &FormatTarget)
     let popup_width = p.width.max(160.0);
     let height = l.height.max(p.height) + 2.0 * pad;
     let width = pad + l.width + gap + popup_width + pad;
-    let view = NSView::initWithFrame(NSView::alloc(mtm), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, height)));
+    let view = NSView::initWithFrame(
+        NSView::alloc(mtm),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, height)),
+    );
     label.setFrameOrigin(NSPoint::new(pad, (height - l.height) / 2.0));
-    popup.setFrame(NSRect::new(NSPoint::new(pad + l.width + gap, (height - p.height) / 2.0), NSSize::new(popup_width, p.height)));
+    popup.setFrame(NSRect::new(
+        NSPoint::new(pad + l.width + gap, (height - p.height) / 2.0),
+        NSSize::new(popup_width, p.height),
+    ));
     view.addSubview(&label);
     view.addSubview(&popup);
     view
@@ -287,11 +332,21 @@ fn picked(panel: &NSSavePanel, open: Option<&NSOpenPanel>) -> Result<Vec<PathBuf
         None => panel.URL().into_iter().collect(),
     };
     urls.iter()
-        .map(|url| url.to_file_path().ok_or_else(|| Fail::new("InvalidStateError", "a picked item is not a file path").code("EIO")))
+        .map(|url| {
+            url.to_file_path().ok_or_else(|| {
+                Fail::new("InvalidStateError", "a picked item is not a file path").code("EIO")
+            })
+        })
         .collect()
 }
 
-fn show_panel(mtm: MainThreadMarker, id: u64, n: &Native, owner: isize, reply: Reply<Vec<PathBuf>>) -> Result<(), Fail> {
+fn show_panel(
+    mtm: MainThreadMarker,
+    id: u64,
+    n: &Native,
+    owner: isize,
+    reply: Reply<Vec<PathBuf>>,
+) -> Result<(), Fail> {
     let open = (n.kind != Kind::Save).then(|| NSOpenPanel::openPanel(mtm));
     let panel: Retained<NSSavePanel> = match &open {
         Some(open) => Retained::into_super(open.clone()),
@@ -313,18 +368,26 @@ fn show_panel(mtm: MainThreadMarker, id: u64, n: &Native, owner: isize, reply: R
 
     let defaults = NSUserDefaults::standardUserDefaults();
     let key = NSString::from_str(&mac_plan::remembered_key(n.client));
-    let remembered = defaults.stringForKey(&key).map(|s| PathBuf::from(s.to_string())).filter(|p| p.is_dir());
+    let remembered = defaults
+        .stringForKey(&key)
+        .map(|s| PathBuf::from(s.to_string()))
+        .filter(|p| p.is_dir());
     let start = match &n.start {
         Some(Start::Known(k)) => known_folder(*k),
         Some(Start::Path(p)) => Some(p.clone()),
         None => None,
     };
-    if let Some(url) = mac_plan::start_folder(start, n.force_start, remembered).and_then(NSURL::from_directory_path) {
+    if let Some(url) = mac_plan::start_folder(start, n.force_start, remembered)
+        .and_then(NSURL::from_directory_path)
+    {
         panel.setDirectoryURL(Some(&url));
     }
 
     let formats = mac_plan::formats(n);
-    let types: Vec<_> = formats.iter().map(|f| content_types(f.exts.as_deref())).collect();
+    let types: Vec<_> = formats
+        .iter()
+        .map(|f| content_types(f.exts.as_deref()))
+        .collect();
     if let Some(first) = types.first() {
         set_allowed(&panel, first);
     }
@@ -381,12 +444,23 @@ fn show_panel(mtm: MainThreadMarker, id: u64, n: &Native, owner: isize, reply: R
 /// Asks `q` in an `NSAlert` sheet on `owner`: the index of the button pressed, or `Ok(None)` when the owner's closing ends it.
 pub(super) fn ask(q: &Ask, owner: isize, cancel: &Cancellation) -> Answer<usize> {
     let q = q.clone();
-    run("question", cancel, move |mtm, id, reply| show_alert(mtm, id, &q, owner, reply))
+    run("question", cancel, move |mtm, id, reply| {
+        show_alert(mtm, id, &q, owner, reply)
+    })
 }
 
-fn show_alert(mtm: MainThreadMarker, id: u64, q: &Ask, owner: isize, reply: Reply<usize>) -> Result<(), Fail> {
+fn show_alert(
+    mtm: MainThreadMarker,
+    id: u64,
+    q: &Ask,
+    owner: isize,
+    reply: Reply<usize>,
+) -> Result<(), Fail> {
     let Some(parent) = window_of(mtm, owner).filter(|w| w.isVisible() || w.isMiniaturized()) else {
-        return Err(Fail::new("NotSupportedError", "the question has no window on screen to be asked in"));
+        return Err(Fail::new(
+            "NotSupportedError",
+            "the question has no window on screen to be asked in",
+        ));
     };
     let alert = NSAlert::new(mtm);
     alert.setAlertStyle(NSAlertStyle::Informational);
@@ -394,8 +468,11 @@ fn show_alert(mtm: MainThreadMarker, id: u64, q: &Ask, owner: isize, reply: Repl
     if !q.content.is_empty() {
         alert.setInformativeText(&NSString::from_str(&q.content));
     }
-    let buttons: Vec<Retained<NSButton>> =
-        q.buttons.iter().map(|b| alert.addButtonWithTitle(&NSString::from_str(&label_of(b)))).collect();
+    let buttons: Vec<Retained<NSButton>> = q
+        .buttons
+        .iter()
+        .map(|b| alert.addButtonWithTitle(&NSString::from_str(&label_of(b))))
+        .collect();
     let count = buttons.len();
     let default = q.default.min(count.saturating_sub(1));
     if default != 0 {
@@ -447,7 +524,9 @@ pub(super) fn color(value: &str, _owner: isize, cancel: &Cancellation) -> Answer
     }
     let _open = Open;
     let initial = value.to_string();
-    run("colour", cancel, move |mtm, id, reply| show_color(mtm, id, initial, reply))
+    run("colour", cancel, move |mtm, id, reply| {
+        show_color(mtm, id, initial, reply)
+    })
 }
 
 fn hex_of_color(color: &NSColor, fallback: &str) -> String {
@@ -461,11 +540,19 @@ type Observer = Rc<RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>
 
 fn stop_observing(observer: &Observer) {
     if let Some(token) = observer.borrow_mut().take() {
-        unsafe { NSNotificationCenter::defaultCenter().removeObserver(AsRef::<AnyObject>::as_ref(&*token)) };
+        unsafe {
+            NSNotificationCenter::defaultCenter()
+                .removeObserver(AsRef::<AnyObject>::as_ref(&*token))
+        };
     }
 }
 
-fn show_color(mtm: MainThreadMarker, id: u64, initial: String, reply: Reply<String>) -> Result<(), Fail> {
+fn show_color(
+    mtm: MainThreadMarker,
+    id: u64,
+    initial: String,
+    reply: Reply<String>,
+) -> Result<(), Fail> {
     let panel = NSColorPanel::sharedColorPanel(mtm);
     let (r, g, b) = mac_plan::rgb_of(&initial);
     panel.setShowsAlpha(false);

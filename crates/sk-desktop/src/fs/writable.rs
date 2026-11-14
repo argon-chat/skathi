@@ -39,16 +39,30 @@ fn open_swaps() -> &'static Mutex<HashSet<PathBuf>> {
 }
 
 fn is_swap_of(candidate: &str, name: &str) -> bool {
-    let Some(rest) = candidate.strip_prefix(name) else { return false };
-    let Some(rest) = rest.strip_prefix(".vnswap") else { return false };
-    rest.is_empty() || rest.strip_prefix('-').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    let Some(rest) = candidate.strip_prefix(name) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(".vnswap") else {
+        return false;
+    };
+    rest.is_empty()
+        || rest
+            .strip_prefix('-')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 pub fn sweep_orphans(target: &Path) {
-    let (Some(dir), Some(name)) = (target.parent(), target.file_name()) else { return };
+    let (Some(dir), Some(name)) = (target.parent(), target.file_name()) else {
+        return;
+    };
     let name = name.to_string_lossy();
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    let ours = open_swaps().lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let ours = open_swaps()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone();
     for e in rd.flatten() {
         let n = e.file_name();
         if is_swap_of(&n.to_string_lossy(), &name) && !ours.contains(&e.path()) {
@@ -62,12 +76,21 @@ fn open_swap_file(p: &Path) -> std::io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt;
     const FILE_SHARE_READ: u32 = 1;
     const FILE_SHARE_WRITE: u32 = 2;
-    std::fs::OpenOptions::new().read(true).write(true).create_new(true).share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).open(p)
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(p)
 }
 
 #[cfg(not(windows))]
 fn open_swap_file(p: &Path) -> std::io::Result<File> {
-    std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(p)
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(p)
 }
 
 impl Writable {
@@ -80,17 +103,36 @@ impl Writable {
             Err(e) => return Err(fail_io(&e, Access::Read)),
         }
         sweep_orphans(target);
-        let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let dir = target.parent().ok_or_else(|| Fail::new("NotFoundError", NOT_FOUND))?;
+        let name = target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let dir = target
+            .parent()
+            .ok_or_else(|| Fail::new("NotFoundError", NOT_FOUND))?;
         let mut last = None;
         for n in 0..64 {
-            let swap = if n == 0 { dir.join(format!("{name}.vnswap")) } else { dir.join(format!("{name}.vnswap-{n}")) };
+            let swap = if n == 0 {
+                dir.join(format!("{name}.vnswap"))
+            } else {
+                dir.join(format!("{name}.vnswap-{n}"))
+            };
             match open_swap_file(&swap) {
                 Ok(mut file) => {
-                    open_swaps().lock().unwrap_or_else(|p| p.into_inner()).insert(swap.clone());
-                    let mut w = Writable { target: target.to_path_buf(), swap, file: None, cursor: 0, finished: false };
+                    open_swaps()
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .insert(swap.clone());
+                    let mut w = Writable {
+                        target: target.to_path_buf(),
+                        swap,
+                        file: None,
+                        cursor: 0,
+                        finished: false,
+                    };
                     if keep_existing {
-                        let copied = File::open(target).and_then(|mut src| std::io::copy(&mut src, &mut file));
+                        let copied = File::open(target)
+                            .and_then(|mut src| std::io::copy(&mut src, &mut file));
                         if let Err(e) = copied {
                             w.file = Some(file);
                             w.abort();
@@ -104,15 +146,23 @@ impl Writable {
                 Err(e) => return Err(fail_io(&e, Access::Write)),
             }
         }
-        Err(fail_io(&last.unwrap_or_else(|| std::io::Error::from_raw_os_error(80)), Access::Write))
+        Err(fail_io(
+            &last.unwrap_or_else(|| std::io::Error::from_raw_os_error(80)),
+            Access::Write,
+        ))
     }
 
     fn file(&mut self) -> Result<&mut File, Fail> {
-        self.file.as_mut().ok_or_else(|| Fail::new("InvalidStateError", super::INVALID_STATE))
+        self.file
+            .as_mut()
+            .ok_or_else(|| Fail::new("InvalidStateError", super::INVALID_STATE))
     }
 
     fn len(&mut self) -> Result<u64, Fail> {
-        self.file()?.metadata().map(|m| m.len()).map_err(|e| fail_io(&e, Access::Write))
+        self.file()?
+            .metadata()
+            .map(|m| m.len())
+            .map_err(|e| fail_io(&e, Access::Write))
     }
 
     pub fn write(&mut self, position: Option<u64>, data: &Data) -> Result<(), Fail> {
@@ -122,11 +172,14 @@ impl Writable {
         let len = self.len()?;
         let cursor = self.cursor;
         if cursor > len {
-            self.file()?.set_len(cursor).map_err(|e| fail_io(&e, Access::Write))?;
+            self.file()?
+                .set_len(cursor)
+                .map_err(|e| fail_io(&e, Access::Write))?;
         }
         let at = self.cursor;
         let file = self.file()?;
-        file.seek(SeekFrom::Start(at)).map_err(|e| fail_io(&e, Access::Write))?;
+        file.seek(SeekFrom::Start(at))
+            .map_err(|e| fail_io(&e, Access::Write))?;
         let written = match data {
             Data::Bytes(b) => {
                 file.write_all(b).map_err(|e| fail_io(&e, Access::Write))?;
@@ -139,7 +192,14 @@ impl Writable {
                     Ok(()) => counted.n,
                     Err(CopyError::Write(e)) => return Err(fail_io(&e, Access::Write)),
                     Err(CopyError::Read(r)) => {
-                        return Err(Fail::new(r.name(), if r.name() == "NotFoundError" { NOT_FOUND } else { NOT_READABLE }))
+                        return Err(Fail::new(
+                            r.name(),
+                            if r.name() == "NotFoundError" {
+                                NOT_FOUND
+                            } else {
+                                NOT_READABLE
+                            },
+                        ))
                     }
                 }
             }
@@ -153,7 +213,9 @@ impl Writable {
     }
 
     pub fn truncate(&mut self, size: u64) -> Result<(), Fail> {
-        self.file()?.set_len(size).map_err(|e| fail_io(&e, Access::Write))?;
+        self.file()?
+            .set_len(size)
+            .map_err(|e| fail_io(&e, Access::Write))?;
         if self.cursor > size {
             self.cursor = size;
         }
@@ -184,7 +246,10 @@ impl Writable {
     }
 
     fn forget_swap(&self) {
-        open_swaps().lock().unwrap_or_else(|p| p.into_inner()).remove(&self.swap);
+        open_swaps()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.swap);
     }
 
     #[cfg(test)]
@@ -220,18 +285,29 @@ impl Write for Counting<'_> {
 #[cfg(windows)]
 fn replace(target: &Path, swap: &Path) -> std::io::Result<()> {
     use windows::Win32::Storage::FileSystem::{
-        MoveFileExW, ReplaceFileW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, REPLACEFILE_IGNORE_ACL_ERRORS,
-        REPLACEFILE_IGNORE_MERGE_ERRORS,
+        MoveFileExW, ReplaceFileW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        REPLACEFILE_IGNORE_ACL_ERRORS, REPLACEFILE_IGNORE_MERGE_ERRORS,
     };
     let (t, s) = (win_path(target), win_path(swap));
     if target.exists() {
         let r = unsafe {
-            ReplaceFileW(&t, &s, None, REPLACEFILE_IGNORE_MERGE_ERRORS | REPLACEFILE_IGNORE_ACL_ERRORS, None, None)
+            ReplaceFileW(
+                &t,
+                &s,
+                None,
+                REPLACEFILE_IGNORE_MERGE_ERRORS | REPLACEFILE_IGNORE_ACL_ERRORS,
+                None,
+                None,
+            )
         };
         match r {
             Ok(()) => return Ok(()),
             Err(e) if (e.code().0 as u32 & 0xFFFF) == 2 => {}
-            Err(e) => return Err(std::io::Error::from_raw_os_error((e.code().0 as u32 & 0xFFFF) as i32)),
+            Err(e) => {
+                return Err(std::io::Error::from_raw_os_error(
+                    (e.code().0 as u32 & 0xFFFF) as i32,
+                ))
+            }
         }
     }
     unsafe { MoveFileExW(&s, &t, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) }
@@ -263,7 +339,6 @@ fn writables() -> &'static Mutex<HashMap<u64, Arc<Mutex<Writable>>>> {
 
 static NEXT_WRITABLE: AtomicU64 = AtomicU64::new(1);
 
-
 fn closed() -> Fail {
     Fail::new("InvalidStateError", super::INVALID_STATE)
 }
@@ -280,18 +355,30 @@ pub fn start_open(file: u64, keep: bool) -> Result<u32, Fail> {
     pool::submit(token, move || {
         let w = Writable::open(&e.path, keep, true)?;
         let id = NEXT_WRITABLE.fetch_add(1, Ordering::Relaxed);
-        writables().lock().unwrap_or_else(|p| p.into_inner()).insert(id, Arc::new(Mutex::new(w)));
+        writables()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(id, Arc::new(Mutex::new(w)));
         Ok(Done::json(&json!({ "w": id }).to_string()))
     });
     Ok(token)
 }
 
 fn get(w: u64) -> Option<Arc<Mutex<Writable>>> {
-    writables().lock().unwrap_or_else(|p| p.into_inner()).get(&w).cloned()
+    writables()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&w)
+        .cloned()
 }
 
-fn run_on(w: u64, op: impl FnOnce(&mut Writable) -> Result<(), Fail> + Send + 'static) -> Result<u32, Fail> {
-    let Some(wr) = get(w) else { return Err(closed()) };
+fn run_on(
+    w: u64,
+    op: impl FnOnce(&mut Writable) -> Result<(), Fail> + Send + 'static,
+) -> Result<u32, Fail> {
+    let Some(wr) = get(w) else {
+        return Err(closed());
+    };
     let token = crate::next_token();
     pool::submit(token, move || {
         op(&mut wr.lock().unwrap_or_else(|p| p.into_inner()))?;
@@ -316,7 +403,11 @@ pub fn start_truncate(w: u64, size: u64) -> Result<u32, Fail> {
 }
 
 fn finish(w: u64, close: bool) -> Result<u32, Fail> {
-    let Some(wr) = writables().lock().unwrap_or_else(|p| p.into_inner()).remove(&w) else {
+    let Some(wr) = writables()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(&w)
+    else {
         return Err(closed());
     };
     let token = crate::next_token();
@@ -324,7 +415,13 @@ fn finish(w: u64, close: bool) -> Result<u32, Fail> {
         let mut guard = wr.lock().unwrap_or_else(|p| p.into_inner());
         let taken = std::mem::replace(
             &mut *guard,
-            Writable { target: PathBuf::new(), swap: PathBuf::new(), file: None, cursor: 0, finished: true },
+            Writable {
+                target: PathBuf::new(),
+                swap: PathBuf::new(),
+                file: None,
+                cursor: 0,
+                finished: true,
+            },
         );
         drop(guard);
         if close {
@@ -410,7 +507,10 @@ mod tests {
             w.write(None, &bytes(b"dropped")).unwrap();
         }
         assert_eq!(std::fs::read(&target).unwrap(), b"keep");
-        assert!(std::fs::read_dir(&s.0).unwrap().count() == 1, "only the target is left");
+        assert!(
+            std::fs::read_dir(&s.0).unwrap().count() == 1,
+            "only the target is left"
+        );
     }
 
     #[test]
@@ -423,13 +523,26 @@ mod tests {
         std::fs::write(s.0.join("t.txt.vnswap-x"), b"not ours").unwrap();
         std::fs::write(s.0.join("other.txt.vnswap"), b"another file's").unwrap();
         let live = Writable::open(&target, false, true).unwrap();
-        assert_eq!(live.swap_path().file_name().unwrap(), "t.txt.vnswap", "the orphan's name was freed");
+        assert_eq!(
+            live.swap_path().file_name().unwrap(),
+            "t.txt.vnswap",
+            "the orphan's name was freed"
+        );
         assert!(!s.0.join("t.txt.vnswap-3").exists());
-        assert!(s.0.join("t.txt.vnswap-x").exists(), "only our exact pattern is swept");
-        assert!(s.0.join("other.txt.vnswap").exists(), "another target's swap is not ours to sweep");
+        assert!(
+            s.0.join("t.txt.vnswap-x").exists(),
+            "only our exact pattern is swept"
+        );
+        assert!(
+            s.0.join("other.txt.vnswap").exists(),
+            "another target's swap is not ours to sweep"
+        );
         let second = Writable::open(&target, false, true).unwrap();
         assert_eq!(second.swap_path().file_name().unwrap(), "t.txt.vnswap-1");
-        assert!(live.swap_path().exists(), "a live swap survives the second open's sweep");
+        assert!(
+            live.swap_path().exists(),
+            "a live swap survives the second open's sweep"
+        );
         drop(second);
         drop(live);
     }
@@ -438,8 +551,14 @@ mod tests {
     fn a_missing_target_is_not_found_unless_it_is_a_download() {
         let s = Scratch::new("missing");
         let target = s.0.join("new.txt");
-        assert_eq!(Writable::open(&target, false, true).err().map(|f| f.name), Some("NotFoundError"));
-        assert_eq!(Writable::open(&s.0, false, true).err().map(|f| f.name), Some("TypeMismatchError"));
+        assert_eq!(
+            Writable::open(&target, false, true).err().map(|f| f.name),
+            Some("NotFoundError")
+        );
+        assert_eq!(
+            Writable::open(&s.0, false, true).err().map(|f| f.name),
+            Some("TypeMismatchError")
+        );
         write_whole(&target, &bytes(b"downloaded")).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"downloaded");
         write_whole(&target, &bytes(b"again")).unwrap();
@@ -448,23 +567,44 @@ mod tests {
 
     #[test]
     fn a_blob_range_is_copied_and_its_snapshot_is_honoured() {
-        use std::sync::Arc;
         use sk_runtime::redjs::webapi::blob::{DiskFile, Range, Source};
+        use std::sync::Arc;
         let s = Scratch::new("blobcopy");
         let src = s.0.join("src.bin");
         std::fs::write(&src, b"0123456789").unwrap();
         let m = std::fs::metadata(&src).unwrap();
-        let disk = Arc::new(DiskFile { path: src.clone(), size: m.len(), mtime: m.modified().ok() });
+        let disk = Arc::new(DiskFile {
+            path: src.clone(),
+            size: m.len(),
+            mtime: m.modified().ok(),
+        });
         let target = s.0.join("dst.bin");
         std::fs::write(&target, b"").unwrap();
         let mut w = Writable::open(&target, false, true).unwrap();
-        w.write(None, &Data::Blob(Range { source: Source::Disk(disk.clone()), offset: 3, len: 4 })).unwrap();
+        w.write(
+            None,
+            &Data::Blob(Range {
+                source: Source::Disk(disk.clone()),
+                offset: 3,
+                len: 4,
+            }),
+        )
+        .unwrap();
         w.write(None, &bytes(b"!")).unwrap();
         w.close().unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"3456!");
         std::fs::write(&src, b"changed").unwrap();
         let mut w = Writable::open(&target, false, true).unwrap();
-        let e = w.write(None, &Data::Blob(Range { source: Source::Disk(disk), offset: 0, len: 2 })).unwrap_err();
+        let e = w
+            .write(
+                None,
+                &Data::Blob(Range {
+                    source: Source::Disk(disk),
+                    offset: 0,
+                    len: 2,
+                }),
+            )
+            .unwrap_err();
         assert_eq!(e.name, "NotReadableError");
     }
 

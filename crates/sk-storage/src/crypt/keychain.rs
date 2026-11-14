@@ -26,11 +26,16 @@ pub struct Keychain {
 
 impl Keychain {
     pub const fn new() -> Keychain {
-        Keychain { key: OnceLock::new() }
+        Keychain {
+            key: OnceLock::new(),
+        }
     }
 
     fn key(&self) -> Result<&MasterKey, String> {
-        self.key.get_or_init(|| load(&account())).as_ref().map_err(String::clone)
+        self.key
+            .get_or_init(|| load(&account()))
+            .as_ref()
+            .map_err(String::clone)
     }
 }
 
@@ -137,7 +142,9 @@ mod tests {
         let account = format!("sk-storage-race-{}", std::process::id());
         let _ = delete_generic_password(SERVICE, &account);
         let keys: Vec<MasterKey> = std::thread::scope(|s| {
-            let hs: Vec<_> = (0..8).map(|_| s.spawn(|| load(&account).expect("load"))).collect();
+            let hs: Vec<_> = (0..8)
+                .map(|_| s.spawn(|| load(&account).expect("load")))
+                .collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
         let sealed = keys[0].seal(b"one key").unwrap();

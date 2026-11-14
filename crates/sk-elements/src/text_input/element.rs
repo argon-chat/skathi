@@ -12,14 +12,14 @@
 use std::ops::Range;
 
 use gpui::{
-    App, Bounds, ContentMask, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
-    GlobalElementId, Hsla, InspectorElementId, LayoutId, MouseButton, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style, TextAlign, TextRun, UnderlineStyle,
-    Window, fill, point, px, relative, size,
+    fill, point, px, relative, size, App, Bounds, ContentMask, DispatchPhase, Element, ElementId,
+    ElementInputHandler, Entity, GlobalElementId, Hsla, InspectorElementId, LayoutId, MouseButton,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style, TextAlign,
+    TextRun, UnderlineStyle, Window,
 };
 
+use super::state::{LineBox, TextInputState, CARET_WIDTH};
 use super::TextInputOptions;
-use super::state::{CARET_WIDTH, LineBox, TextInputState};
 
 const SCROLLBAR_WIDTH: Pixels = px(4.0);
 const SCROLLBAR_INSET: Pixels = px(2.0);
@@ -92,7 +92,10 @@ impl Element for TextElement {
             let inherited = window.text_style().color;
             self.options.text_color = inherited;
             self.options.caret_color = inherited;
-            self.options.placeholder_color = gpui::Hsla { a: inherited.a * 0.45, ..inherited };
+            self.options.placeholder_color = gpui::Hsla {
+                a: inherited.a * 0.45,
+                ..inherited
+            };
         }
         let (content, marked_range) = self.state.update(cx, |state, _| {
             state.set_masked(self.options.masked);
@@ -171,30 +174,31 @@ impl Element for TextElement {
             (quads, None)
         };
 
-        let scrollbar = (self.options.multiline && content_height > bounds.size.height).then(|| {
-            let track = bounds.size.height;
-            let thumb = (track * (f32::from(track) / f32::from(content_height)))
-                .max(SCROLLBAR_MIN_THUMB)
-                .min(track);
-            let travel = (content_height - track).max(px(1.0));
-            let t = (f32::from(scroll_top) / f32::from(travel)).clamp(0.0, 1.0);
-            let mut color = self.options.text_color;
-            color.a *= 0.30;
-            gpui::quad(
-                Bounds::new(
-                    point(
-                        bounds.right() - SCROLLBAR_WIDTH - SCROLLBAR_INSET,
-                        bounds.top() + (track - thumb) * t,
+        let scrollbar =
+            (self.options.multiline && content_height > bounds.size.height).then(|| {
+                let track = bounds.size.height;
+                let thumb = (track * (f32::from(track) / f32::from(content_height)))
+                    .max(SCROLLBAR_MIN_THUMB)
+                    .min(track);
+                let travel = (content_height - track).max(px(1.0));
+                let t = (f32::from(scroll_top) / f32::from(travel)).clamp(0.0, 1.0);
+                let mut color = self.options.text_color;
+                color.a *= 0.30;
+                gpui::quad(
+                    Bounds::new(
+                        point(
+                            bounds.right() - SCROLLBAR_WIDTH - SCROLLBAR_INSET,
+                            bounds.top() + (track - thumb) * t,
+                        ),
+                        size(SCROLLBAR_WIDTH, thumb),
                     ),
-                    size(SCROLLBAR_WIDTH, thumb),
-                ),
-                SCROLLBAR_WIDTH / 2.0,
-                color,
-                px(0.0),
-                gpui::transparent_black(),
-                gpui::BorderStyle::default(),
-            )
-        });
+                    SCROLLBAR_WIDTH / 2.0,
+                    color,
+                    px(0.0),
+                    gpui::transparent_black(),
+                    gpui::BorderStyle::default(),
+                )
+            });
 
         TextPrepaint {
             origin,
@@ -428,7 +432,10 @@ mod tests {
         let next = |index| boundaries::next_grapheme(text, index);
         assert_eq!(last_on_row(6, text.len(), snap, next, |_| true), text.len());
         let wrap = "Пароль ёж".len();
-        assert_eq!(last_on_row(6, text.len(), snap, next, |index| index <= wrap), wrap);
+        assert_eq!(
+            last_on_row(6, text.len(), snap, next, |index| index <= wrap),
+            wrap
+        );
         assert_eq!(last_on_row(0, "😀".len(), snap, next, |_| true), "😀".len());
     }
 }

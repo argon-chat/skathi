@@ -10,19 +10,19 @@
 use std::cell::RefCell;
 
 use gpui::{
-    App, Bounds, Context, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowControlArea,
-    WindowOptions, div, prelude::*, px, rgba, size,
+    div, prelude::*, px, rgba, size, App, Bounds, Context, TitlebarOptions, WeakEntity, Window,
+    WindowBounds, WindowControlArea, WindowOptions,
 };
 use gpui_platform::application;
-use sk_runtime::{JsRuntime, Phase, host_fn, with_published, with_published_app};
 use sk_runtime::runtime::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
+use sk_runtime::{host_fn, with_published, with_published_app, JsRuntime, Phase};
 
 mod background;
-mod idle;
 #[cfg(feature = "prod")]
 mod bytecode;
 #[cfg(not(feature = "prod"))]
 mod dev;
+mod idle;
 // `sk_devtools` is emitted by build.rs: every dev build, plus a release that asked for devtools.
 #[cfg(sk_devtools)]
 mod devtools;
@@ -39,7 +39,6 @@ mod http_client;
 #[cfg(all(sk_devtools, test))]
 #[global_allocator]
 static GLOBAL: heapcount::Counting = heapcount::Counting;
-mod dialogs;
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
 pub mod consent_window;
@@ -47,36 +46,37 @@ pub mod consent_window;
 mod content_dialog;
 #[doc(hidden)]
 pub mod crash_window;
-pub mod js;
+mod dialogs;
 pub mod embed;
 pub mod hotkeys;
-pub mod tray;
 #[cfg(sk_devtools)]
 mod inspector;
-#[cfg(all(sk_devtools, feature = "native-aot"))]
-mod native_aot;
+pub mod js;
 mod json;
+#[cfg(target_os = "linux")]
+mod linux_chrome;
+mod mapped_file;
 #[cfg(feature = "audio")]
 mod microphone;
-mod mapped_file;
+#[cfg(all(sk_devtools, feature = "native-aot"))]
+mod native_aot;
+mod occlusion;
 mod owner;
 mod payload;
-mod occlusion;
 mod perf;
-mod reclaim;
 mod popout;
 mod popout_win;
 #[cfg(feature = "prod")]
 mod prod;
+mod quiet;
+mod reclaim;
+mod reload;
 #[cfg(all(feature = "webgpu", target_os = "windows"))]
 mod shared_gpu;
-mod quiet;
-mod reload;
 mod shutdown;
 mod slot;
+pub mod tray;
 mod window;
-#[cfg(target_os = "linux")]
-mod linux_chrome;
 
 #[cfg(not(feature = "prod"))]
 use dev as boot_mode;
@@ -186,7 +186,9 @@ fn drain_log_tee() {
     if !sk_tree::log::is_enabled() {
         return;
     }
-    let Ok(mut queue) = OFF_THREAD.try_lock() else { return };
+    let Ok(mut queue) = OFF_THREAD.try_lock() else {
+        return;
+    };
     for (kind, line) in queue.drain(..) {
         sk_tree::log::record(kind, line);
     }
@@ -240,8 +242,10 @@ fn install_logger() {
         .chain([default])
         .max()
         .unwrap_or(default);
-    let logger: &'static StderrLogger =
-        Box::leak(Box::new(StderrLogger { directives, default }));
+    let logger: &'static StderrLogger = Box::leak(Box::new(StderrLogger {
+        directives,
+        default,
+    }));
     if log::set_logger(logger).is_ok() {
         // Must be the loosest directive, or records are dropped before `enabled` sees their target.
         log::set_max_level(max);
@@ -253,7 +257,10 @@ fn install_logger() {
 fn devtools_are_in_every_build_that_did_not_opt_out() {
     assert_eq!(cfg!(sk_devtools), !cfg!(feature = "no-devtools"));
     if cfg!(feature = "prod") && !cfg!(feature = "no-devtools") {
-        assert!(cfg!(sk_devtools), "a shipped build must carry its own devtools");
+        assert!(
+            cfg!(sk_devtools),
+            "a shipped build must carry its own devtools"
+        );
     }
 }
 
@@ -266,7 +273,10 @@ mod logger_tests {
         let mut directives: Vec<(String, L)> =
             spec.iter().map(|(t, l)| ((*t).to_string(), *l)).collect();
         directives.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
-        StderrLogger { directives, default }
+        StderrLogger {
+            directives,
+            default,
+        }
     }
 
     #[test]
@@ -313,9 +323,15 @@ thread_local! {
 /// Never inside a gpui input listener: gpui has the frame's listeners taken out, and a draw would
 /// swap the frame under them. The read stays stale there.
 fn sync_layout() {
-    let Some(handle) = MAIN_WINDOW.with(|w| w.get()) else { return };
-    let draw = |window: &mut gpui::Window, cx: &mut gpui::App| sk_runtime::bridge::with_draw(|| window.draw(cx).clear(cx));
-    let drew = sk_runtime::bridge::with_app(|cx| handle.update(cx, |_, window, cx| draw(window, cx)).is_ok());
+    let Some(handle) = MAIN_WINDOW.with(|w| w.get()) else {
+        return;
+    };
+    let draw = |window: &mut gpui::Window, cx: &mut gpui::App| {
+        sk_runtime::bridge::with_draw(|| window.draw(cx).clear(cx))
+    };
+    let drew = sk_runtime::bridge::with_app(|cx| {
+        handle.update(cx, |_, window, cx| draw(window, cx)).is_ok()
+    });
     if drew != Some(false) || sk_tree::in_input_dispatch() {
         return;
     }
@@ -336,9 +352,10 @@ fn commit_boot_tree(runtime: &JsRuntime) {
 mod startup_tests {
     #[test]
     fn boot_microtask_styles_are_computed_before_any_frame_pump() {
-        sk_runtime::testing::on_js_thread(|| sk_runtime::JsRuntime::with(|runtime| {
-            sk_tree::install(runtime);
-            runtime.eval(
+        sk_runtime::testing::on_js_thread(|| {
+            sk_runtime::JsRuntime::with(|runtime| {
+                sk_tree::install(runtime);
+                runtime.eval(
                 "globalThis.__startupRoot = __sk_create_root(); \
                  globalThis.__startupNode = __sk_create_element(__sk_intern('button')); \
                  __sk_insert(__startupNode, __startupRoot, 0); \
@@ -346,13 +363,23 @@ mod startup_tests {
                  queueMicrotask(() => __sk_set_style(__startupNode, __sk_intern('opacity'), '0.75'));",
                 "sk://startup-regression.js",
             ).expect("queue the mount/load microtask through the native DOM bridge");
-            super::commit_boot_tree(runtime);
-            let node = runtime.ctx().global_get("__startupNode").unwrap().as_number().unwrap() as u32;
-            // Reads existing computed state without forcing the cascade (getComputedStyle would flush it).
-            let styles = sk_tree::devtools::computed_styles(node).expect("boot writes must already be cascaded");
-            let base = &styles.iter().find(|(name, _)| *name == "base").unwrap().1;
-            assert!(base.contains("0.75"), "the first draw must not await pump_frame to cascade boot opacity: {base}");
-        }));
+                super::commit_boot_tree(runtime);
+                let node = runtime
+                    .ctx()
+                    .global_get("__startupNode")
+                    .unwrap()
+                    .as_number()
+                    .unwrap() as u32;
+                // Reads existing computed state without forcing the cascade (getComputedStyle would flush it).
+                let styles = sk_tree::devtools::computed_styles(node)
+                    .expect("boot writes must already be cascaded");
+                let base = &styles.iter().find(|(name, _)| *name == "base").unwrap().1;
+                assert!(
+                    base.contains("0.75"),
+                    "the first draw must not await pump_frame to cascade boot opacity: {base}"
+                );
+            })
+        });
     }
 }
 
@@ -401,32 +428,37 @@ fn reveal_startup_window(cx: &mut App, activate: bool) {
             window::cancel_startup_reveal();
             return;
         }
-        let shown = cx.update(|cx| handle.update(cx, |_, window, _| {
-            window.show_window(
-                activate,
-                || !shutdown::is_closing() && !sk_runtime::bridge::poisoned(),
-                move |shown| {
-                    window::cancel_startup_reveal();
-                    if shown {
-                        quiet::send_hwnd_to_back(hwnd);
-                    }
-                    if !shown && !shutdown::is_closing() {
-                        eprintln!("[window] the prepared startup window could not be shown");
-                    }
-                },
-            )
-        }));
+        let shown = cx.update(|cx| {
+            handle.update(cx, |_, window, _| {
+                window.show_window(
+                    activate,
+                    || !shutdown::is_closing() && !sk_runtime::bridge::poisoned(),
+                    move |shown| {
+                        window::cancel_startup_reveal();
+                        if shown {
+                            quiet::send_hwnd_to_back(hwnd);
+                        }
+                        if !shown && !shutdown::is_closing() {
+                            eprintln!("[window] the prepared startup window could not be shown");
+                        }
+                    },
+                )
+            })
+        });
         if !matches!(shown, Ok(true)) {
             window::cancel_startup_reveal();
             eprintln!("[window] failed to reveal the prepared startup window");
         }
-    }).detach();
+    })
+    .detach();
 }
 
 /// The primary window's gpui id (devtools `windows` calls it `main`).
 #[cfg(sk_devtools)]
 pub(crate) fn main_window_id() -> Option<u64> {
-    MAIN_WINDOW.with(|w| w.get()).map(|h| h.window_id().as_u64())
+    MAIN_WINDOW
+        .with(|w| w.get())
+        .map(|h| h.window_id().as_u64())
 }
 
 /// Not `Window::refresh`: that raises gpui's `refreshing` flag, which makes the frame ignore every
@@ -499,7 +531,11 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     if devtools::busy() {
         idle::note_moved();
     }
-    idle::rearm(window, pump_frame, window::app_focused(cx) || quiet::never_focus());
+    idle::rearm(
+        window,
+        pump_frame,
+        window::app_focused(cx) || quiet::never_focus(),
+    );
     perf::pump_done();
     // Observers run after layout and before paint, so this draws ahead of gpui's draw. After
     // `pump_done` so that draw stays in gpui's bucket of the frame trace.
@@ -558,7 +594,11 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
                     format!("[js uncaught] {}\n{}", err.header, err.stack),
                 );
             }
-            reclaim::after_wave(rt, focused, wave == Wave::Background || window::page_hidden());
+            reclaim::after_wave(
+                rt,
+                focused,
+                wave == Wave::Background || window::page_hidden(),
+            );
         });
         // One devtools command per frame, in this publication, so it never sees a half-applied patch.
         #[cfg(sk_devtools)]
@@ -730,7 +770,12 @@ fn window_controls_overlay() -> Option<gpui::Div> {
         strip
             .child(button("wco-min", MIN, WindowControlArea::Min, 0xffffff1a))
             .child(button("wco-max", MAX, WindowControlArea::Max, 0xffffff1a))
-            .child(button("wco-close", CLOSE, WindowControlArea::Close, 0xc42b1cff)),
+            .child(button(
+                "wco-close",
+                CLOSE,
+                WindowControlArea::Close,
+                0xc42b1cff,
+            )),
     )
 }
 
@@ -752,10 +797,16 @@ fn install_iframe_backend() {
     #[cfg(feature = "storages")]
     let data = embed::data_dir()
         .map(std::path::Path::to_path_buf)
-        .or_else(|| sk_storage::default_folder(boot_mode::app_name().as_deref()).parent().map(std::path::Path::to_path_buf));
+        .or_else(|| {
+            sk_storage::default_folder(boot_mode::app_name().as_deref())
+                .parent()
+                .map(std::path::Path::to_path_buf)
+        });
     #[cfg(not(feature = "storages"))]
     let data: Option<std::path::PathBuf> = None;
-    let user_data = data.unwrap_or_else(|| std::env::temp_dir().join("skathi")).join("webview");
+    let user_data = data
+        .unwrap_or_else(|| std::env::temp_dir().join("skathi"))
+        .join("webview");
     let config = sk_webview::Config {
         assets: std::rc::Rc::new(|path| sk_tree::read_app_asset(path)),
         user_data,
@@ -787,12 +838,16 @@ fn publish_video_device() {
         INSTALL.call_once(|| {
             fn provide() -> Result<Option<sk_tree::SharedVideoDevice>, String> {
                 gpui_windows::ensure_renderer_d3d11_device()
-                    .map(|lease| lease.map(|lease| sk_tree::SharedVideoDevice {
-                        device: lease.device,
-                        generation: lease.generation,
-                        keep_alive: lease.keep_alive,
-                    }))
-                    .map_err(|error| format!("Could not initialize renderer video bridge: {error:#}"))
+                    .map(|lease| {
+                        lease.map(|lease| sk_tree::SharedVideoDevice {
+                            device: lease.device,
+                            generation: lease.generation,
+                            keep_alive: lease.keep_alive,
+                        })
+                    })
+                    .map_err(|error| {
+                        format!("Could not initialize renderer video bridge: {error:#}")
+                    })
             }
             // The renderer's owned lease keeps the raw COM pointer valid.
             if let Err(error) = unsafe { sk_tree::install_video_device_provider(provide) } {
@@ -833,7 +888,10 @@ fn publish_video_device() {}
 /// `NullHttpClient` fails every request. `SK_HTTP_CLIENT=reqwest` swaps in `ReqwestClient`.
 fn install_http_client(app: gpui::Application) -> gpui::Application {
     if std::env::var("SK_HTTP_CLIENT").is_ok_and(|v| v.eq_ignore_ascii_case("reqwest")) {
-        return match reqwest_client::ReqwestClient::user_agent(concat!("skathi/", env!("CARGO_PKG_VERSION"))) {
+        return match reqwest_client::ReqwestClient::user_agent(concat!(
+            "skathi/",
+            env!("CARGO_PKG_VERSION")
+        )) {
             Ok(client) => app.with_http_client(std::sync::Arc::new(client)),
             Err(e) => {
                 log::warn!("SK_HTTP_CLIENT=reqwest: the client could not be built ({e}); http(s) images will not load");
@@ -862,13 +920,21 @@ pub fn run_exe() {
     // Single instance, before the inspector, logger and gpui: a second launch forwards its
     // argv/url/cwd and exits without a window. The inspector (`--devtools`) is never an instance.
     {
-        let launch_cfg = if args.host.devtools { None } else { boot_mode::launch_config() };
+        let launch_cfg = if args.host.devtools {
+            None
+        } else {
+            boot_mode::launch_config()
+        };
         // The instance key is the app's id and storage folder, not the slot.
         #[cfg(not(feature = "prod"))]
         let dev_slot = Some(slot::dir());
         #[cfg(feature = "prod")]
         let dev_slot = None;
-        let build_name = if args.host.devtools { None } else { boot_mode::app_name() };
+        let build_name = if args.host.devtools {
+            None
+        } else {
+            boot_mode::app_name()
+        };
         if let sk_desktop::launch::Outcome::Exit(code) =
             sk_desktop::launch::start(args, launch_cfg.as_deref(), build_name, dev_slot)
         {
@@ -919,13 +985,16 @@ fn run_app() {
         sk_tree::devtools::set_image_tracking(true);
     }
     // The primary window owns the JS pump; closing it ends the host on every OS (AppKit otherwise keeps a windowless app running).
-    let app = install_http_client(application())
-        .with_quit_mode(gpui::QuitMode::LastWindowClosed);
+    let app = install_http_client(application()).with_quit_mode(gpui::QuitMode::LastWindowClosed);
     // The show is queued, never applied inside AppKit's callback.
     #[cfg(target_os = "macos")]
     app.on_reopen(|_| embed::reopen());
     #[cfg(feature = "prod")]
-    let app = if payload::get().is_some() { app.with_assets(payload::GpuiAssets) } else { app };
+    let app = if payload::get().is_some() {
+        app.with_assets(payload::GpuiAssets)
+    } else {
+        app
+    };
     app.run(|cx: &mut App| {
         // `--devtools`: the app is the inspector, from this executable.
         #[cfg(sk_devtools)]

@@ -6,7 +6,10 @@
 use gpui::VnPathVerb;
 
 pub(crate) fn parse(d: &str) -> Result<Vec<VnPathVerb>, String> {
-    let mut p = Parser { s: d.as_bytes(), i: 0 };
+    let mut p = Parser {
+        s: d.as_bytes(),
+        i: 0,
+    };
     let mut out = Vec::new();
     let mut current = [0f32; 2];
     let mut start = [0f32; 2];
@@ -126,7 +129,9 @@ pub(crate) fn parse(d: &str) -> Result<Vec<VnPathVerb>, String> {
         }
         match p.peek() {
             Some(c) if c.is_ascii_alphabetic() => {
-                command = p.next_command().ok_or_else(|| format!("`{}` is not a path command", c as char))?;
+                command = p
+                    .next_command()
+                    .ok_or_else(|| format!("`{}` is not a path command", c as char))?;
                 first_of_command = true;
             }
             _ if command.eq_ignore_ascii_case(&b'Z') => {
@@ -253,7 +258,13 @@ mod tests {
     fn absolute_and_relative_lines_close_and_repeat() {
         assert_eq!(
             ok("M10 20 L30 40 H50 V60 Z"),
-            vec![MoveTo([10., 20.]), LineTo([30., 40.]), LineTo([50., 40.]), LineTo([50., 60.]), Close]
+            vec![
+                MoveTo([10., 20.]),
+                LineTo([30., 40.]),
+                LineTo([50., 40.]),
+                LineTo([50., 60.]),
+                Close
+            ]
         );
         assert_eq!(
             ok("m10,20 10,0 0,10 z l5 5 h-5 v-5"),
@@ -267,16 +278,28 @@ mod tests {
                 LineTo([10., 20.]),
             ]
         );
-        assert_eq!(ok("M0 0 L1 1 2 2"), vec![MoveTo([0., 0.]), LineTo([1., 1.]), LineTo([2., 2.])]);
+        assert_eq!(
+            ok("M0 0 L1 1 2 2"),
+            vec![MoveTo([0., 0.]), LineTo([1., 1.]), LineTo([2., 2.])]
+        );
         assert_eq!(ok(""), vec![]);
         assert_eq!(ok("  \n "), vec![]);
     }
 
     #[test]
     fn numbers_take_the_compact_forms() {
-        assert_eq!(ok("M.5.5-1-2"), vec![MoveTo([0.5, 0.5]), LineTo([-1., -2.])]);
-        assert_eq!(ok("M1e1 2E-1L+3 -4.25e+0"), vec![MoveTo([10., 0.2]), LineTo([3., -4.25])]);
-        assert_eq!(ok("M0 0 H12.150600000000001"), vec![MoveTo([0., 0.]), LineTo([12.1506, 0.])]);
+        assert_eq!(
+            ok("M.5.5-1-2"),
+            vec![MoveTo([0.5, 0.5]), LineTo([-1., -2.])]
+        );
+        assert_eq!(
+            ok("M1e1 2E-1L+3 -4.25e+0"),
+            vec![MoveTo([10., 0.2]), LineTo([3., -4.25])]
+        );
+        assert_eq!(
+            ok("M0 0 H12.150600000000001"),
+            vec![MoveTo([0., 0.]), LineTo([12.1506, 0.])]
+        );
     }
 
     #[test]
@@ -291,7 +314,11 @@ mod tests {
         );
         assert_eq!(
             ok("M10 10 q10 0 10 10 t10 10"),
-            vec![MoveTo([10., 10.]), QuadTo([20., 10.], [20., 20.]), QuadTo([20., 30.], [30., 30.])]
+            vec![
+                MoveTo([10., 10.]),
+                QuadTo([20., 10.], [20., 20.]),
+                QuadTo([20., 30.], [30., 30.])
+            ]
         );
         assert_eq!(
             ok("M0 0 L10 0 S20 10 20 20 T30 30"),
@@ -308,10 +335,17 @@ mod tests {
     fn arcs_become_cubics_and_flags_need_no_separator() {
         let v = ok("M0 50 a50 50 0 0110 0");
         assert!(v.len() >= 2, "{v:?}");
-        assert_eq!(v.last().map(|verb| matches!(verb, CubicTo(_, _, [x, y]) if *x == 10. && *y == 50.)), Some(true));
+        assert_eq!(
+            v.last()
+                .map(|verb| matches!(verb, CubicTo(_, _, [x, y]) if *x == 10. && *y == 50.)),
+            Some(true)
+        );
         let half = ok("M0 50 A50 50 0 0 1 100 50");
         assert!(half[1..].iter().all(|verb| matches!(verb, CubicTo(..))));
-        assert_eq!(ok("M0 0 A0 5 0 0 0 10 0"), vec![MoveTo([0., 0.]), LineTo([10., 0.])]);
+        assert_eq!(
+            ok("M0 0 A0 5 0 0 0 10 0"),
+            vec![MoveTo([0., 0.]), LineTo([10., 0.])]
+        );
     }
 
     #[test]
@@ -328,7 +362,15 @@ mod tests {
 
     #[test]
     fn broken_data_is_an_error() {
-        for bad in ["L0 0", "M0", "M0 0 L1", "M0 0 X1 1", "M0 0 A1 1 0 2 0 1 1", "M0 0 Z 1", "M1e 2"] {
+        for bad in [
+            "L0 0",
+            "M0",
+            "M0 0 L1",
+            "M0 0 X1 1",
+            "M0 0 A1 1 0 2 0 1 1",
+            "M0 0 Z 1",
+            "M1e 2",
+        ] {
             assert!(parse(bad).is_err(), "{bad} parsed: {:?}", parse(bad));
         }
     }

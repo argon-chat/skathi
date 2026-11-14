@@ -357,13 +357,7 @@ fn score_against(bytes: &[u8], backend: Backend, reference: &image::RgbaImage) -
     let mut state = LottieState::load_with(backend, bytes).ok()?;
     state.seek_frame(state.meta().in_point);
     // Goldens are at the authored size, so scale 1 and a box shaped like the animation land exactly on it.
-    let image = state.render_frame(
-        (
-            state.meta().width as f32,
-            state.meta().height as f32,
-        ),
-        1.0,
-    )?;
+    let image = state.render_frame((state.meta().width as f32, state.meta().height as f32), 1.0)?;
     if (image.size(0).width.0 as u32, image.size(0).height.0 as u32)
         != (reference.width(), reference.height())
     {

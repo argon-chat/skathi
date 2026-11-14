@@ -19,8 +19,8 @@ use windows::core::Interface;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
-    D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ,
-    D3D11_MAP_FLAG_DO_NOT_WAIT, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+    D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE,
+    D3D11_MAP_FLAG_DO_NOT_WAIT, D3D11_MAP_READ, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     D3D11_USAGE_STAGING,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
@@ -108,7 +108,10 @@ impl Presenter {
                     MipLevels: 1,
                     ArraySize: 1,
                     Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
                     Usage: D3D11_USAGE_DEFAULT,
                     BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
                     ..Default::default()
@@ -122,7 +125,9 @@ impl Presenter {
         let buffer = RgbaImage::from_raw(size.0, size.1, pixels)?;
         // `dynamic`: the GPU fills its tile, so its zeroed pixels must never be resampled into a
         // smaller copy (gpui `ImageResampler`).
-        self.placeholder = Some(Arc::new(RenderImage::new(vec![Frame::new(buffer)]).dynamic()));
+        self.placeholder = Some(Arc::new(
+            RenderImage::new(vec![Frame::new(buffer)]).dynamic(),
+        ));
         self.target = target;
         self.slots.clear();
         self.write = 0;
@@ -142,12 +147,25 @@ impl Presenter {
         self.ensure_gpu(size)?;
         let target = self.target.as_ref()?.clone();
 
-        let dst = RECT { left: 0, top: 0, right: size.0 as i32, bottom: size.1 as i32 };
-        let border = MFARGB { rgbAlpha: 0, rgbRed: 0, rgbGreen: 0, rgbBlue: 0 };
+        let dst = RECT {
+            left: 0,
+            top: 0,
+            right: size.0 as i32,
+            bottom: size.1 as i32,
+        };
+        let border = MFARGB {
+            rgbAlpha: 0,
+            rgbRed: 0,
+            rgbGreen: 0,
+            rgbBlue: 0,
+        };
         unsafe { engine.TransferVideoFrame(&target, None, &dst, Some(&border)) }.ok()?;
 
         let image = self.placeholder.as_ref()?.clone();
-        let gpu = GpuFrame { texture: target.as_raw(), size };
+        let gpu = GpuFrame {
+            texture: target.as_raw(),
+            size,
+        };
         Some((image, pts, gpu))
     }
 
@@ -162,7 +180,10 @@ impl Presenter {
             ArraySize: 1,
             // gpui's `RENDER_TARGET_FORMAT` and Polychrome atlas format; asking the engine for it makes MF insert its video processor.
             Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
             ..Default::default()
         };
         let mut target = None;
@@ -194,7 +215,11 @@ impl Presenter {
                 )
             }
             .ok()?;
-            slots.push(Slot { texture: staging?, pts: 0, filled: false });
+            slots.push(Slot {
+                texture: staging?,
+                pts: 0,
+                filled: false,
+            });
         }
         self.target = target;
         self.slots = slots;
@@ -222,12 +247,25 @@ impl Presenter {
         self.ensure(size)?;
         let target = self.target.as_ref()?.clone();
 
-        let dst = RECT { left: 0, top: 0, right: size.0 as i32, bottom: size.1 as i32 };
-        let border = MFARGB { rgbAlpha: 0, rgbRed: 0, rgbGreen: 0, rgbBlue: 0 };
+        let dst = RECT {
+            left: 0,
+            top: 0,
+            right: size.0 as i32,
+            bottom: size.1 as i32,
+        };
+        let border = MFARGB {
+            rgbAlpha: 0,
+            rgbRed: 0,
+            rgbGreen: 0,
+            rgbBlue: 0,
+        };
         unsafe { engine.TransferVideoFrame(&target, None, &dst, Some(&border)) }.ok()?;
 
         let write = self.write;
-        unsafe { self.context.CopyResource(&self.slots[write].texture, &target) };
+        unsafe {
+            self.context
+                .CopyResource(&self.slots[write].texture, &target)
+        };
         self.slots[write].pts = pts;
         self.slots[write].filled = true;
 
@@ -260,7 +298,11 @@ impl Presenter {
             .is_ok();
         if !ok {
             // Still drawing. Block rather than drop: a missing frame is visible.
-            unsafe { self.context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)) }.ok()?;
+            unsafe {
+                self.context
+                    .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+            }
+            .ok()?;
         }
         let row_bytes = size.0 as usize * 4;
         let pitch = mapped.RowPitch as usize;
@@ -272,13 +314,20 @@ impl Presenter {
             let src = mapped.pData as *const u8;
             let dst = pixels.as_mut_ptr();
             for y in 0..size.1 as usize {
-                std::ptr::copy_nonoverlapping(src.add(y * pitch), dst.add(y * row_bytes), row_bytes);
+                std::ptr::copy_nonoverlapping(
+                    src.add(y * pitch),
+                    dst.add(y * row_bytes),
+                    row_bytes,
+                );
             }
             pixels.set_len(row_bytes * size.1 as usize);
         }
         unsafe { self.context.Unmap(&staging, 0) };
 
         let buffer = RgbaImage::from_raw(size.0, size.1, pixels)?;
-        Some((Arc::new(RenderImage::new(vec![Frame::new(buffer)]).dynamic()), frame_pts))
+        Some((
+            Arc::new(RenderImage::new(vec![Frame::new(buffer)]).dynamic()),
+            frame_pts,
+        ))
     }
 }

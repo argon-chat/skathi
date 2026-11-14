@@ -72,12 +72,18 @@ impl MacHost {
         if !usage_description_present(media.cap) {
             static MICROPHONE: std::sync::Once = std::sync::Once::new();
             static CAMERA: std::sync::Once = std::sync::Once::new();
-            let once = if media.cap == Capability::Camera { &CAMERA } else { &MICROPHONE };
-            once.call_once(|| eprintln!(
+            let once = if media.cap == Capability::Camera {
+                &CAMERA
+            } else {
+                &MICROPHONE
+            };
+            once.call_once(|| {
+                eprintln!(
                 "[permissions] {} access requires a macOS .app with a nonempty {} in Info.plist",
                 media.cap.web_name(),
                 media.usage_key
-            ));
+            )
+            });
             return RequestOutcome::Settled(PermissionState::Denied);
         }
         let state = self.media_state(media);
@@ -193,7 +199,10 @@ impl PermissionHost for MacHost {
     }
 
     fn has_native_prompt(&self, cap: Capability) -> bool {
-        matches!(cap, Capability::Microphone | Capability::Camera | Capability::DisplayCapture)
+        matches!(
+            cap,
+            Capability::Microphone | Capability::Camera | Capability::DisplayCapture
+        )
     }
 
     fn status(&self, cap: Capability) -> PermissionState {

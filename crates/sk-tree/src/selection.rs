@@ -21,7 +21,6 @@ use crate::windows::{self, WinKey};
 /// `selectstart` (cancelable, bubbles) and `selectionchange` (at `document`).
 pub(crate) use crate::tree::{EV_SELECTIONCHANGE, EV_SELECTSTART};
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Pos {
     pub(crate) node: u32,
@@ -32,10 +31,18 @@ pub(crate) struct Pos {
 
 impl Pos {
     pub(crate) fn at(node: u32, offset: u32) -> Pos {
-        Pos { node, offset, own: false }
+        Pos {
+            node,
+            offset,
+            own: false,
+        }
     }
     fn own(node: u32, offset: u32) -> Pos {
-        Pos { node, offset, own: true }
+        Pos {
+            node,
+            offset,
+            own: true,
+        }
     }
 }
 
@@ -109,7 +116,6 @@ fn set_work(s: &State) {
     WORK.with(|c| c.set(s.gesture.is_some() || s.change_owed));
 }
 
-
 fn path(t: &Tree, id: u32) -> Option<Vec<u32>> {
     let mut out = Vec::new();
     let mut cur = id;
@@ -159,7 +165,13 @@ fn ordered(t: &Tree, a: Pos, f: Pos) -> Option<(Vec<u32>, Vec<u32>)> {
 enum Step {
     Enter(u32),
     Leave(u32),
-    Text { holder: u32, from: u32, to: u32, ws: Option<WhiteSpaceMode>, case: Option<TextTransform> },
+    Text {
+        holder: u32,
+        from: u32,
+        to: u32,
+        ws: Option<WhiteSpaceMode>,
+        case: Option<TextTransform>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -172,8 +184,13 @@ struct Ctx {
 fn skipped(t: &Tree, n: &Node) -> bool {
     let tag = t.name(n.tag);
     crate::render::is_metadata(tag)
-        || matches!(tag, "input" | "textarea" | "select" | "svg" | "video" | "canvas" | "img")
-        || n.computed.as_ref().is_some_and(|cs| cs.base.display == Some(gpui::Display::None))
+        || matches!(
+            tag,
+            "input" | "textarea" | "select" | "svg" | "video" | "canvas" | "img"
+        )
+        || n.computed
+            .as_ref()
+            .is_some_and(|cs| cs.base.display == Some(gpui::Display::None))
 }
 
 fn clip(p: &[u32], start: &[u32], end: &[u32], len: u32) -> (u32, u32) {
@@ -196,7 +213,11 @@ fn clip(p: &[u32], start: &[u32], end: &[u32], len: u32) -> (u32, u32) {
 
 fn walk(t: &Tree, start: &[u32], end: &[u32], f: &mut dyn FnMut(&Tree, Step, Ctx)) {
     let mut p = Vec::new();
-    let ctx = Ctx { us: Us::Text, ws: None, case: None };
+    let ctx = Ctx {
+        us: Us::Text,
+        ws: None,
+        case: None,
+    };
     walk_node(t, t.root, &mut p, start, end, ctx, f);
 }
 
@@ -216,7 +237,17 @@ fn walk_node(
             if !n.text.is_empty() {
                 let (from, to) = clip(p, start, end, utf16_len(&n.text));
                 if from < to {
-                    f(t, Step::Text { holder: id, from, to, ws: ctx.ws, case: ctx.case }, ctx);
+                    f(
+                        t,
+                        Step::Text {
+                            holder: id,
+                            from,
+                            to,
+                            ws: ctx.ws,
+                            case: ctx.case,
+                        },
+                        ctx,
+                    );
                 }
             }
         }
@@ -236,7 +267,17 @@ fn walk_node(
                 let (from, to) = clip(p, start, end, utf16_len(&n.text));
                 p.pop();
                 if from < to {
-                    f(t, Step::Text { holder: id, from, to, ws: ctx.ws, case: ctx.case }, ctx);
+                    f(
+                        t,
+                        Step::Text {
+                            holder: id,
+                            from,
+                            to,
+                            ws: ctx.ws,
+                            case: ctx.case,
+                        },
+                        ctx,
+                    );
                 }
             } else {
                 for (i, &c) in n.children.iter().enumerate() {
@@ -256,7 +297,6 @@ fn walk_node(
         }
     }
 }
-
 
 /// The text a holder paints, as the build shapes it (white-space, trim, text-transform), with the
 /// DOM offset each painted character came from.
@@ -313,9 +353,16 @@ impl TextMap {
     ) -> TextMap {
         let all = collapse(raw, ws.unwrap_or(WhiteSpaceMode::Normal));
         let end = lead + len;
-        let shown: Vec<(char, u32)> =
-            all.iter().filter(|(b, ..)| *b >= lead && *b < end).map(|&(_, c, at)| (c, at)).collect();
-        let dom_end = all.iter().find(|(b, ..)| *b >= end).map(|x| x.2).unwrap_or_else(|| utf16_len(raw));
+        let shown: Vec<(char, u32)> = all
+            .iter()
+            .filter(|(b, ..)| *b >= lead && *b < end)
+            .map(|&(_, c, at)| (c, at))
+            .collect();
+        let dom_end = all
+            .iter()
+            .find(|(b, ..)| *b >= end)
+            .map(|x| x.2)
+            .unwrap_or_else(|| utf16_len(raw));
         let plain: String = shown.iter().map(|x| x.0).collect();
         let display = case.and_then(|c| c.apply(&plain)).unwrap_or(plain);
         let (n, m) = (shown.len(), display.chars().count());
@@ -326,7 +373,12 @@ impl TextMap {
             let i = if m == n { j } else { j * n / m.max(1) };
             dom.push(shown.get(i).map(|x| x.1).unwrap_or(dom_end));
         }
-        TextMap { display, starts, dom, dom_end }
+        TextMap {
+            display,
+            starts,
+            dom,
+            dom_end,
+        }
     }
 
     pub(crate) fn to_dom(&self, byte: usize) -> u32 {
@@ -336,7 +388,9 @@ impl TextMap {
 
     pub(crate) fn to_display(&self, dom: u32) -> usize {
         let i = self.dom.partition_point(|&d| d < dom);
-        self.starts.get(i).map_or(self.display.len(), |&s| s as usize)
+        self.starts
+            .get(i)
+            .map_or(self.display.len(), |&s| s as usize)
     }
 
     fn slice(&self, from: u32, to: u32) -> &str {
@@ -344,7 +398,12 @@ impl TextMap {
     }
 }
 
-fn map_of(t: &Tree, holder: u32, ws: Option<WhiteSpaceMode>, case: Option<TextTransform>) -> Option<TextMap> {
+fn map_of(
+    t: &Tree,
+    holder: u32,
+    ws: Option<WhiteSpaceMode>,
+    case: Option<TextTransform>,
+) -> Option<TextMap> {
     let n = t.node(holder)?;
     let collapsed = crate::render::processed_text(&n.text, ws.unwrap_or(WhiteSpaceMode::Normal));
     let shown = match n.kind {
@@ -358,12 +417,17 @@ fn map_of(t: &Tree, holder: u32, ws: Option<WhiteSpaceMode>, case: Option<TextTr
 fn painted_of(t: &Tree, sel: Option<(Pos, Pos)>) -> HashMap<u32, (u32, u32)> {
     let mut out = HashMap::new();
     let Some((a, f)) = sel else { return out };
-    let Some((start, end)) = ordered(t, a, f) else { return out };
+    let Some((start, end)) = ordered(t, a, f) else {
+        return out;
+    };
     if start == end {
         return out;
     }
     walk(t, &start, &end, &mut |_, step, ctx| {
-        if let Step::Text { holder, from, to, .. } = step {
+        if let Step::Text {
+            holder, from, to, ..
+        } = step
+        {
             if ctx.us != Us::None {
                 out.insert(holder, (from, to));
             }
@@ -422,11 +486,19 @@ fn text_between(t: &Tree, start: &[u32], end: &[u32]) -> String {
             }
             breaks = breaks.max(breaks_of(t, n));
         }
-        Step::Text { holder, from, to, ws, case } => {
+        Step::Text {
+            holder,
+            from,
+            to,
+            ws,
+            case,
+        } => {
             if ctx.us == Us::None {
                 return;
             }
-            let Some(map) = map_of(t, holder, ws, case) else { return };
+            let Some(map) = map_of(t, holder, ws, case) else {
+                return;
+            };
             let piece = map.slice(from, to);
             if piece.is_empty() {
                 return;
@@ -443,7 +515,11 @@ fn text_between(t: &Tree, start: &[u32], end: &[u32]) -> String {
                     out.push('\t');
                 }
             }
-            let piece = if out.is_empty() || out.ends_with('\n') { piece.trim_start_matches(' ') } else { piece };
+            let piece = if out.is_empty() || out.ends_with('\n') {
+                piece.trim_start_matches(' ')
+            } else {
+                piece
+            };
             out.push_str(piece);
             breaks = 0;
             tab = false;
@@ -455,7 +531,9 @@ fn text_between(t: &Tree, start: &[u32], end: &[u32]) -> String {
 }
 
 pub(crate) fn selected_text() -> String {
-    let Some((a, f)) = STATE.with(|s| s.borrow().sel) else { return String::new() };
+    let Some((a, f)) = STATE.with(|s| s.borrow().sel) else {
+        return String::new();
+    };
     tree::read_tree(|t| match ordered(t, a, f) {
         Some((start, end)) if start != end => text_between(t, &start, &end),
         _ => String::new(),
@@ -469,7 +547,6 @@ pub(crate) fn text_for_copy(focused: u32) -> Option<String> {
     }
     Some(selected_text()).filter(|s| !s.is_empty())
 }
-
 
 fn replace(t: &mut Tree, sel: Option<(Pos, Pos)>) -> bool {
     let next = painted_of(t, sel);
@@ -534,7 +611,10 @@ pub(crate) fn gc(t: &mut Tree) {
     let fixed = sel.and_then(|(a, f)| {
         let fix = |p: Pos| -> Option<Pos> {
             path(t, p.node)?;
-            Some(Pos { offset: p.offset.min(length(t, p.node, p.own)), ..p })
+            Some(Pos {
+                offset: p.offset.min(length(t, p.node, p.own)),
+                ..p
+            })
         };
         Some((fix(a)?, fix(f)?))
     });
@@ -544,7 +624,13 @@ pub(crate) fn gc(t: &mut Tree) {
 pub(crate) fn rebase(element: u32, text: u32) {
     let sel = STATE.with(|s| s.borrow().sel);
     let Some((a, f)) = sel else { return };
-    let move_one = |p: Pos| if p.own && p.node == element { Pos::at(text, p.offset) } else { p };
+    let move_one = |p: Pos| {
+        if p.own && p.node == element {
+            Pos::at(text, p.offset)
+        } else {
+            p
+        }
+    };
     let moved = (move_one(a), move_one(f));
     if moved != (a, f) {
         replace_from_js(Some(moved));
@@ -573,7 +659,10 @@ pub(crate) fn set_from_js(points: Option<(Pos, Pos)>) -> bool {
                     let len = utf16_len(&n.text);
                     return Some(Pos::own(p.node, if p.offset == 0 { 0 } else { len }));
                 }
-                Some(Pos { offset: p.offset.min(length(t, p.node, p.own)), ..p })
+                Some(Pos {
+                    offset: p.offset.min(length(t, p.node, p.own)),
+                    ..p
+                })
             };
             Some((fix(a)?, fix(f)?))
         })
@@ -599,7 +688,6 @@ fn select_all(window: &mut Window, cx: &mut App) {
     });
     replace_live(sel, window, cx);
 }
-
 
 pub(crate) fn text_element(
     t: &Tree,
@@ -629,14 +717,27 @@ pub(crate) fn text_element(
         }
     }
     if record {
-        Recorder { holder, ws, case, lead, len: shown.len(), inner: styled }.into_any_element()
+        Recorder {
+            holder,
+            ws,
+            case,
+            lead,
+            len: shown.len(),
+            inner: styled,
+        }
+        .into_any_element()
     } else {
         styled.into_any_element()
     }
 }
 
 /// The default highlight: the translucent blue a text field paints its own selection with.
-const DEFAULT_HIGHLIGHT: gpui::Hsla = gpui::Hsla { h: 0.6, s: 0.8, l: 0.6, a: 0.35 };
+const DEFAULT_HIGHLIGHT: gpui::Hsla = gpui::Hsla {
+    h: 0.6,
+    s: 0.8,
+    l: 0.6,
+    a: 0.35,
+};
 
 /// `::selection` for a holder: the nearest element up whose cascade gave it one (Chromium's inheritance).
 fn highlight(t: &Tree, holder: u32) -> HighlightStyle {
@@ -647,7 +748,11 @@ fn highlight(t: &Tree, holder: u32) -> HighlightStyle {
     for _ in 0..256 {
         let Some(n) = t.node(cur) else { break };
         if let Some(sel) = n.computed.as_ref().and_then(|cs| cs.selection.as_ref()) {
-            let bg = sel.background.as_ref().and_then(gpui::Fill::color).and_then(|b| b.as_solid());
+            let bg = sel
+                .background
+                .as_ref()
+                .and_then(gpui::Fill::color)
+                .and_then(|b| b.as_solid());
             return HighlightStyle {
                 background_color: Some(bg.unwrap_or(DEFAULT_HIGHLIGHT)),
                 color: sel.text.color,
@@ -659,7 +764,10 @@ fn highlight(t: &Tree, holder: u32) -> HighlightStyle {
         }
         cur = n.parent;
     }
-    HighlightStyle { background_color: Some(DEFAULT_HIGHLIGHT), ..Default::default() }
+    HighlightStyle {
+        background_color: Some(DEFAULT_HIGHLIGHT),
+        ..Default::default()
+    }
 }
 
 struct Recorder {
@@ -702,7 +810,8 @@ impl Element for Recorder {
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.inner.prepaint(id, inspector_id, bounds, &mut (), window, cx);
+        self.inner
+            .prepaint(id, inspector_id, bounds, &mut (), window, cx);
         let layout = self.inner.layout().clone();
         let visible = layout.bounds().intersect(&window.content_mask().bounds);
         let rec = Recorded {
@@ -727,13 +836,15 @@ impl Element for Recorder {
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.inner.paint(id, inspector_id, bounds, &mut (), &mut (), window, cx);
+        self.inner
+            .paint(id, inspector_id, bounds, &mut (), &mut (), window, cx);
     }
 }
 
-
 fn editable_at(t: &Tree, id: u32) -> bool {
-    up(t, id, |t, n| matches!(t.name(n.tag), "input" | "textarea" | "select"))
+    up(t, id, |t, n| {
+        matches!(t.name(n.tag), "input" | "textarea" | "select")
+    })
 }
 
 fn up(t: &Tree, id: u32, pred: impl Fn(&Tree, &Node) -> bool) -> bool {
@@ -801,7 +912,10 @@ fn deepest_at(t: &Tree, k: WinKey, from: u32, p: Point<Pixels>) -> u32 {
             if kid.kind != Kind::Element || skipped(t, kid) {
                 continue;
             }
-            if windows::peek(k, |w| w.bounds.get(&c).copied()).flatten().is_some_and(|r| contains(r, p)) {
+            if windows::peek(k, |w| w.bounds.get(&c).copied())
+                .flatten()
+                .is_some_and(|r| contains(r, p))
+            {
                 cur = c;
                 continue 'down;
             }
@@ -842,8 +956,16 @@ fn offset_in(t: &Tree, holder: u32, rec: &Recorded, p: Point<Pixels>) -> u32 {
             Ok(i) => {
                 let text = layout.text();
                 let next = text[i..].chars().next().map_or(i, |c| i + c.len_utf8());
-                match (layout.position_for_index(i), layout.position_for_index(next)) {
-                    (Some(a), Some(b)) if a.y == b.y && f32::from(p.x) > (f32::from(a.x) + f32::from(b.x)) / 2.0 => next,
+                match (
+                    layout.position_for_index(i),
+                    layout.position_for_index(next),
+                ) {
+                    (Some(a), Some(b))
+                        if a.y == b.y
+                            && f32::from(p.x) > (f32::from(a.x) + f32::from(b.x)) / 2.0 =>
+                    {
+                        next
+                    }
                     _ => i,
                 }
             }
@@ -917,7 +1039,11 @@ fn hit(window: &Window, p: Point<Pixels>) -> Hit {
                     let rec = &s.layouts[&id];
                     let own = t.node(id).is_some_and(|n| n.kind == Kind::Element);
                     let offset = offset_in(t, id, rec, p);
-                    return Hit::At(Pos { node: id, offset, own });
+                    return Hit::At(Pos {
+                        node: id,
+                        offset,
+                        own,
+                    });
                 }
                 match t.node(scope).map(|n| n.parent) {
                     Some(parent) if parent != 0 && scope != root => scope = parent,
@@ -930,7 +1056,9 @@ fn hit(window: &Window, p: Point<Pixels>) -> Hit {
 }
 
 fn word_at(t: &Tree, p: Pos) -> (Pos, Pos) {
-    let Some(n) = t.node(p.node) else { return (p, p) };
+    let Some(n) = t.node(p.node) else {
+        return (p, p);
+    };
     if n.kind == Kind::Element && !p.own {
         return (p, p);
     }
@@ -955,7 +1083,9 @@ fn word_at(t: &Tree, p: Pos) -> (Pos, Pos) {
             2
         }
     };
-    let mut i = units.partition_point(|&(at, _)| at < p.offset).min(units.len() - 1);
+    let mut i = units
+        .partition_point(|&(at, _)| at < p.offset)
+        .min(units.len() - 1);
     if units[i].0 > p.offset && i > 0 {
         i -= 1;
     }
@@ -970,7 +1100,13 @@ fn word_at(t: &Tree, p: Pos) -> (Pos, Pos) {
         }
     }
     let end = units[b].0 + units[b].1.len_utf16() as u32;
-    (Pos { offset: units[a].0, ..p }, Pos { offset: end, ..p })
+    (
+        Pos {
+            offset: units[a].0,
+            ..p
+        },
+        Pos { offset: end, ..p },
+    )
 }
 
 fn block_at(t: &Tree, p: Pos) -> (Pos, Pos) {
@@ -1019,7 +1155,9 @@ fn take_all(t: &Tree, a: Pos, f: Pos) -> (Pos, Pos) {
         }
         let Some(el) = found else { return p };
         let Some(n) = t.node(el) else { return p };
-        let Some(parent) = t.node(n.parent) else { return p };
+        let Some(parent) = t.node(n.parent) else {
+            return p;
+        };
         let i = parent.children.iter().position(|&c| c == el).unwrap_or(0) as u32;
         Pos::at(n.parent, if toward_end { i + 1 } else { i })
     };
@@ -1050,7 +1188,11 @@ pub(crate) fn bind_root<E: InteractiveElement>(e: E) -> E {
         .on_key_down(|ev, window, cx| {
             let k = &ev.keystroke;
             let m = &k.modifiers;
-            let primary = if cfg!(target_os = "macos") { m.platform } else { m.control };
+            let primary = if cfg!(target_os = "macos") {
+                m.platform
+            } else {
+                m.control
+            };
             if k.key != "a" || !primary || m.shift || m.alt || m.function {
                 return;
             }
@@ -1114,7 +1256,13 @@ fn press(ev: &MouseDownEvent, window: &mut Window, cx: &mut App) {
     }
     let listening = tree::read_tree(|t| listened(t, target, EV_SELECTSTART));
     if listening
-        && !crate::render::js_dispatch_app(target, EV_SELECTSTART, &crate::EventPayload::default(), window, cx)
+        && !crate::render::js_dispatch_app(
+            target,
+            EV_SELECTSTART,
+            &crate::EventPayload::default(),
+            window,
+            cx,
+        )
     {
         return;
     }
@@ -1123,7 +1271,11 @@ fn press(ev: &MouseDownEvent, window: &mut Window, cx: &mut App) {
         2 => Grain::Word,
         _ => Grain::Block,
     };
-    let anchor = if extend { STATE.with(|s| s.borrow().sel.map(|(a, _)| (a, a))) } else { None };
+    let anchor = if extend {
+        STATE.with(|s| s.borrow().sel.map(|(a, _)| (a, a)))
+    } else {
+        None
+    };
     STATE.with(|s| {
         let mut s = s.borrow_mut();
         s.gesture = Some(Gesture {
@@ -1149,7 +1301,9 @@ fn press(ev: &MouseDownEvent, window: &mut Window, cx: &mut App) {
 /// The root's paint while a gesture lasts: every move, since the window has the mouse captured.
 pub(crate) fn paint_listeners(window: &mut Window) {
     let k = windows::key(window);
-    if !WORK.with(|c| c.get()) || STATE.with(|s| s.borrow().gesture.as_ref().is_none_or(|g| g.win != k)) {
+    if !WORK.with(|c| c.get())
+        || STATE.with(|s| s.borrow().gesture.as_ref().is_none_or(|g| g.win != k))
+    {
         return;
     }
     window.on_mouse_event(move |ev: &MouseMoveEvent, phase, window, cx| {
@@ -1172,7 +1326,9 @@ fn moved(p: Point<Pixels>, pressed: Option<MouseButton>, window: &mut Window, cx
     let k = windows::key(window);
     let go = STATE.with(|s| {
         let mut s = s.borrow_mut();
-        let Some(g) = s.gesture.as_mut().filter(|g| g.win == k && !g.released) else { return None };
+        let Some(g) = s.gesture.as_mut().filter(|g| g.win == k && !g.released) else {
+            return None;
+        };
         if pressed != Some(MouseButton::Left) {
             return Some(None);
         }
@@ -1223,7 +1379,9 @@ fn advance(window: &mut Window, cx: &mut App) {
     let Some((press, last, grain, dragging, released, anchor, extend, waits)) = STATE.with(|s| {
         let s = s.borrow();
         let g = s.gesture.as_ref().filter(|g| g.win == k)?;
-        Some((g.press, g.last, g.grain, g.dragging, g.released, g.anchor, g.extend, g.waits))
+        Some((
+            g.press, g.last, g.grain, g.dragging, g.released, g.anchor, g.extend, g.waits,
+        ))
     }) else {
         return;
     };
@@ -1318,7 +1476,12 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     }
     let k = windows::key(window);
     let mut moved = false;
-    let gesture = STATE.with(|s| s.borrow().gesture.as_ref().map(|g| (g.win, g.dragging, g.released, g.last)));
+    let gesture = STATE.with(|s| {
+        s.borrow()
+            .gesture
+            .as_ref()
+            .map(|g| (g.win, g.dragging, g.released, g.last))
+    });
     if let Some((win, dragging, released, last)) = gesture.filter(|g| g.0 == k) {
         let _ = win;
         if dragging && !released {
@@ -1334,9 +1497,18 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     });
     if owed {
         let root = tree::read_tree(|t| t.root);
-        let listening = tree::read_tree(|t| t.node(root).is_some_and(|n| n.listeners & (1u64 << EV_SELECTIONCHANGE) != 0));
+        let listening = tree::read_tree(|t| {
+            t.node(root)
+                .is_some_and(|n| n.listeners & (1u64 << EV_SELECTIONCHANGE) != 0)
+        });
         if listening {
-            crate::render::js_dispatch_app(root, EV_SELECTIONCHANGE, &crate::EventPayload::default(), window, cx);
+            crate::render::js_dispatch_app(
+                root,
+                EV_SELECTIONCHANGE,
+                &crate::EventPayload::default(),
+                window,
+                cx,
+            );
             moved = true;
         }
     }
@@ -1344,7 +1516,13 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
 }
 
 fn autoscroll(k: WinKey, last: Point<Pixels>) -> bool {
-    let anchor = STATE.with(|s| s.borrow().gesture.as_ref().and_then(|g| g.anchor).map(|a| a.0.node));
+    let anchor = STATE.with(|s| {
+        s.borrow()
+            .gesture
+            .as_ref()
+            .and_then(|g| g.anchor)
+            .map(|a| a.0.node)
+    });
     let Some(node) = anchor else { return false };
     let scroller = tree::read_tree(|t| {
         let mut cur = node;
@@ -1361,7 +1539,9 @@ fn autoscroll(k: WinKey, last: Point<Pixels>) -> bool {
         None
     });
     let Some(id) = scroller else { return false };
-    let Some(r) = windows::peek(k, |w| w.bounds.get(&id).copied()).flatten() else { return false };
+    let Some(r) = windows::peek(k, |w| w.bounds.get(&id).copied()).flatten() else {
+        return false;
+    };
     let y = f32::from(last.y);
     let (top, bottom) = (r.1, r.1 + r.3);
     let dy = if y < top {
@@ -1375,7 +1555,6 @@ fn autoscroll(k: WinKey, last: Point<Pixels>) -> bool {
     let after = crate::scroll::by(id, 0.0, dy).map(|i| i.top);
     before != after
 }
-
 
 use sk_runtime::redjs::api::Value;
 use sk_runtime::{host_fn, JsRuntime};
@@ -1451,9 +1630,22 @@ mod tests {
             WhiteSpaceMode::PreLine,
             WhiteSpaceMode::BreakSpaces,
         ];
-        for raw in ["plain", "  lead and trail  ", "a\n\n  b\t\tc", "x \n y", "émoji 😀  two", "", "  ", "\n"] {
+        for raw in [
+            "plain",
+            "  lead and trail  ",
+            "a\n\n  b\t\tc",
+            "x \n y",
+            "émoji 😀  two",
+            "",
+            "  ",
+            "\n",
+        ] {
             for mode in modes {
-                assert_eq!(text(raw, mode), crate::render::processed_text(raw, mode).as_ref(), "{raw:?} {mode:?}");
+                assert_eq!(
+                    text(raw, mode),
+                    crate::render::processed_text(raw, mode).as_ref(),
+                    "{raw:?} {mode:?}"
+                );
             }
         }
     }
@@ -1472,7 +1664,11 @@ mod tests {
         assert_eq!(map.to_dom(6), 7);
         assert_eq!(map.to_dom(map.display.len()), 8);
         assert_eq!(map.to_display(0), 0, "trimmed lead space -> first glyph");
-        assert_eq!(map.to_display(4), 2, "inside a collapsed run -> the glyph after it");
+        assert_eq!(
+            map.to_display(4),
+            2,
+            "inside a collapsed run -> the glyph after it"
+        );
         assert_eq!(map.to_display(7), 6);
         assert_eq!(map.to_display(9), map.display.len());
         assert_eq!(map.slice(2, 7), "a 😀");
@@ -1483,7 +1679,13 @@ mod tests {
         let map = TextMap::new("abc", None, 0, 3, Some(TextTransform::Uppercase));
         assert_eq!(map.display, "ABC");
         assert_eq!(map.slice(1, 3), "BC");
-        let map = TextMap::new("straße", None, 0, "straße".len(), Some(TextTransform::Uppercase));
+        let map = TextMap::new(
+            "straße",
+            None,
+            0,
+            "straße".len(),
+            Some(TextTransform::Uppercase),
+        );
         assert_eq!(map.display, "STRASSE");
         let dom: Vec<u32> = (0..=map.display.len()).map(|b| map.to_dom(b)).collect();
         assert!(dom.windows(2).all(|w| w[0] <= w[1]), "{dom:?}");
@@ -1493,9 +1695,17 @@ mod tests {
     #[test]
     fn clip_takes_the_part_inside_the_range() {
         let p = [1, 2];
-        assert_eq!(clip(&p, &[1, 2, 3], &[1, 2, 7], 10), (3, 7), "both ends inside");
+        assert_eq!(
+            clip(&p, &[1, 2, 3], &[1, 2, 7], 10),
+            (3, 7),
+            "both ends inside"
+        );
         assert_eq!(clip(&p, &[0], &[5], 10), (0, 10), "around it");
-        assert_eq!(clip(&p, &[1, 2], &[1, 3], 10), (0, 10), "(parent, i) .. (parent, i+1)");
+        assert_eq!(
+            clip(&p, &[1, 2], &[1, 3], 10),
+            (0, 10),
+            "(parent, i) .. (parent, i+1)"
+        );
         assert_eq!(clip(&p, &[1, 3], &[2], 10), (10, 10), "after it");
         assert_eq!(clip(&p, &[0], &[1, 2], 10), (0, 0), "before it");
         assert_eq!(clip(&p, &[1, 2, 4], &[3], 10), (4, 10));
@@ -1503,7 +1713,6 @@ mod tests {
 
     fn doc() -> (u32, u32, u32, u32, u32, u32) {
         tree::with_tree(|t| {
-
             let root = t.create_root();
             let el = |t: &mut Tree, tag: &str, parent: u32| {
                 let tag = t.intern(tag);
@@ -1539,15 +1748,27 @@ mod tests {
         let (_, div, hello, _b, world, p2) = doc();
         let all = tree::read_tree(|t| {
             let n = t.node(div).unwrap().children.len() as u32;
-            text_between(t, &key(t, Pos::at(div, 0)).unwrap(), &key(t, Pos::at(div, n)).unwrap())
+            text_between(
+                t,
+                &key(t, Pos::at(div, 0)).unwrap(),
+                &key(t, Pos::at(div, n)).unwrap(),
+            )
         });
         assert_eq!(all, "Hello big world\n\nSecond");
         let part = tree::read_tree(|t| {
-            text_between(t, &key(t, Pos::at(hello, 2)).unwrap(), &key(t, Pos::own(p2, 3)).unwrap())
+            text_between(
+                t,
+                &key(t, Pos::at(hello, 2)).unwrap(),
+                &key(t, Pos::own(p2, 3)).unwrap(),
+            )
         });
         assert_eq!(part, "llo big world\n\nSec");
         let inside = tree::read_tree(|t| {
-            text_between(t, &key(t, Pos::at(world, 1)).unwrap(), &key(t, Pos::at(world, 4)).unwrap())
+            text_between(
+                t,
+                &key(t, Pos::at(world, 1)).unwrap(),
+                &key(t, Pos::at(world, 4)).unwrap(),
+            )
         });
         assert_eq!(inside, "wor");
     }
@@ -1562,15 +1783,23 @@ mod tests {
         assert_eq!(painted.get(&world), Some(&(0, 6)));
         assert_eq!(painted.get(&p2), Some(&(0, 2)));
         assert_eq!(painted.len(), 4, "user-select: none paints nothing");
-        assert_eq!(tree::read_tree(|t| painted_of(t, Some((Pos::own(p2, 2), Pos::at(hello, 3))))), painted);
+        assert_eq!(
+            tree::read_tree(|t| painted_of(t, Some((Pos::own(p2, 2), Pos::at(hello, 3))))),
+            painted
+        );
 
         tree::with_tree(|t| replace(t, sel));
-        let revs = |ids: &[u32]| tree::read_tree(|t| ids.iter().map(|&i| t.sub_rev(i)).collect::<Vec<_>>());
+        let revs = |ids: &[u32]| {
+            tree::read_tree(|t| ids.iter().map(|&i| t.sub_rev(i)).collect::<Vec<_>>())
+        };
         let before = revs(&[hello, b, world, p2]);
         tree::with_tree(|t| replace(t, Some((Pos::at(hello, 3), Pos::own(p2, 4)))));
         let after = revs(&[hello, b, world, p2]);
         assert_eq!(before[1], after[1], "<b> kept its part: not touched");
-        assert_ne!(before[3], after[3], "the second paragraph's part grew: touched");
+        assert_ne!(
+            before[3], after[3],
+            "the second paragraph's part grew: touched"
+        );
         assert!(PAINTING.with(|c| c.get()));
         tree::with_tree(|t| replace(t, None));
         assert!(!PAINTING.with(|c| c.get()));
@@ -1582,11 +1811,25 @@ mod tests {
     fn a_double_click_takes_a_word_and_a_triple_click_the_paragraph() {
         let (_, _, hello, _, world, _) = doc();
         tree::read_tree(|t| {
-            assert_eq!(word_at(t, Pos::at(world, 3)), (Pos::at(world, 1), Pos::at(world, 6)));
-            assert_eq!(word_at(t, Pos::at(world, 0)), (Pos::at(world, 0), Pos::at(world, 1)), "the space");
-            assert_eq!(word_at(t, Pos::at(hello, 6)), (Pos::at(hello, 5), Pos::at(hello, 6)), "at the end");
+            assert_eq!(
+                word_at(t, Pos::at(world, 3)),
+                (Pos::at(world, 1), Pos::at(world, 6))
+            );
+            assert_eq!(
+                word_at(t, Pos::at(world, 0)),
+                (Pos::at(world, 0), Pos::at(world, 1)),
+                "the space"
+            );
+            assert_eq!(
+                word_at(t, Pos::at(hello, 6)),
+                (Pos::at(hello, 5), Pos::at(hello, 6)),
+                "at the end"
+            );
             let p1 = t.node(hello).unwrap().parent;
-            assert_eq!(block_at(t, Pos::at(world, 2)), (Pos::at(p1, 0), Pos::at(p1, 3)));
+            assert_eq!(
+                block_at(t, Pos::at(world, 2)),
+                (Pos::at(p1, 0), Pos::at(p1, 3))
+            );
         });
     }
 

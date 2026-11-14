@@ -12,8 +12,8 @@ use gpui::{div, AnyElement, App, Context, ImageSource, RenderImage, Window, Wind
 use sk_sticker::{Frame, Kind, SourceInfo, SourceStatus, TargetKey};
 
 use super::{
-    apply_computed_style, bind_events, focus_handle_for, is_sized, pointer_mask, presentational_size, tab_index_of,
-    warn_compat, watch_focus, with_control_area,
+    apply_computed_style, bind_events, focus_handle_for, is_sized, pointer_mask,
+    presentational_size, tab_index_of, warn_compat, watch_focus, with_control_area,
 };
 use crate::live::{self, LiveTile, Shown};
 use crate::tree::{self, Tree};
@@ -25,7 +25,6 @@ use crate::EventPayload;
 pub(crate) const TILE_IDLE: Duration = Duration::from_secs(3);
 
 const MAX_LOTTIE_PX: u32 = 1024;
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Play {
@@ -88,7 +87,10 @@ fn props_of(t: &Tree, id: u32, node: &crate::tree::Node, prev: Option<&Arc<str>>
         _ => Arc::from(src),
     };
     let kind = t.prop(id, "kind").map(|k| k.trim().to_ascii_lowercase());
-    if let Some(k) = kind.as_deref().filter(|k| !matches!(*k, "" | "auto" | "lottie" | "video" | "image")) {
+    if let Some(k) = kind
+        .as_deref()
+        .filter(|k| !matches!(*k, "" | "auto" | "lottie" | "video" | "image"))
+    {
         warn_compat(
             &format!("sk-sticker-kind:{k}"),
             &format!("<sk-sticker kind=\"{k}\"> is not a kind: use auto, lottie, video or image. It plays as auto"),
@@ -101,7 +103,11 @@ fn props_of(t: &Tree, id: u32, node: &crate::tree::Node, prev: Option<&Arc<str>>
         );
         Play::Auto
     });
-    let max_fps = max_fps_from(t.prop(id, "max-fps").or_else(|| t.prop(id, "maxFps")).or_else(|| t.prop(id, "maxfps")));
+    let max_fps = max_fps_from(
+        t.prop(id, "max-fps")
+            .or_else(|| t.prop(id, "maxFps"))
+            .or_else(|| t.prop(id, "maxfps")),
+    );
     let fit = match node.computed.as_ref().and_then(|cs| cs.extras.object_fit) {
         Some(sk_css::ObjectFit::Cover) => Fit::Cover,
         Some(sk_css::ObjectFit::Fill) => Fit::Fill,
@@ -135,11 +141,15 @@ fn props_of(t: &Tree, id: u32, node: &crate::tree::Node, prev: Option<&Arc<str>>
     }
 }
 
-
 /// The size a source is drawn at for a box of `boxed` device px: the picture's size under `fit`, its
 /// longest side rounded up to a 4 px step (8 above 128, 16 above 256), capped at a video's own size
 /// or [`MAX_LOTTIE_PX`].
-fn target_size(intrinsic: (u32, u32), boxed: (f32, f32), fit: Fit, kind: Kind) -> Option<(u32, u32)> {
+fn target_size(
+    intrinsic: (u32, u32),
+    boxed: (f32, f32),
+    fit: Fit,
+    kind: Kind,
+) -> Option<(u32, u32)> {
     let (iw, ih) = (intrinsic.0 as f32, intrinsic.1 as f32);
     let (bw, bh) = boxed;
     if iw < 1.0 || ih < 1.0 || !(bw >= 0.5 && bh >= 0.5) {
@@ -163,10 +173,20 @@ fn target_size(intrinsic: (u32, u32), boxed: (f32, f32), fit: Fit, kind: Kind) -
     };
     let long = long.div_ceil(step).saturating_mul(step).min(cap).max(1);
     let short = ((iw.min(ih) / own) * long as f32).round().max(1.0) as u32;
-    Some(if iw >= ih { (long, short) } else { (short, long) })
+    Some(if iw >= ih {
+        (long, short)
+    } else {
+        (short, long)
+    })
 }
 
-fn key_for(id: u32, props: &Props, info: &SourceInfo, boxed: (f32, f32), reduce_motion: bool) -> Option<TargetKey> {
+fn key_for(
+    id: u32,
+    props: &Props,
+    info: &SourceInfo,
+    boxed: (f32, f32),
+    reduce_motion: bool,
+) -> Option<TargetKey> {
     let (width, height) = target_size((info.width, info.height), boxed, props.fit, info.kind)?;
     let mut key = TargetKey::new(props.src.clone(), width, height);
     // A tinted video needs only its alpha; a Lottie is tinted when painted.
@@ -181,7 +201,6 @@ fn key_for(id: u32, props: &Props, info: &SourceInfo, boxed: (f32, f32), reduce_
     key.once = (props.once && !key.still).then_some(id);
     Some(key)
 }
-
 
 struct Entry {
     props: Props,
@@ -238,7 +257,10 @@ pub(crate) fn mem_stats() -> (usize, usize, usize) {
     let nodes = NODES.with(|m| m.borrow().len());
     TILES.with(|m| {
         let m = m.borrow();
-        let bytes = m.keys().map(|(k, _)| k.width as usize * k.height as usize * 4 * 2).sum();
+        let bytes = m
+            .keys()
+            .map(|(k, _)| k.width as usize * k.height as usize * 4 * 2)
+            .sum();
         (nodes, m.len(), bytes)
     })
 }
@@ -258,7 +280,6 @@ pub(crate) fn forget_window(key: WinKey) {
     });
 }
 
-
 enum Picture {
     Nothing,
     Tile(Arc<RenderImage>),
@@ -276,7 +297,9 @@ fn note_build(
         let mut m = m.borrow_mut();
         let prev = m.get(&id).map(|e| e.props.src.clone());
         let props = props_of(t, id, node, prev.as_ref());
-        let e = m.entry(id).or_insert_with(|| Entry::new(props.clone(), win));
+        let e = m
+            .entry(id)
+            .or_insert_with(|| Entry::new(props.clone(), win));
         if e.props.src != props.src || e.props.image != props.image {
             *e = Entry::new(props.clone(), win);
         }
@@ -285,16 +308,29 @@ fn note_build(
         e.sized = sized;
         let (fit, tint) = (e.props.fit, e.props.tint);
         if e.props.image {
-            let picture = crate::img::source_for(id, &e.props.src).map_or(Picture::Nothing, Picture::Image);
+            let picture =
+                crate::img::source_for(id, &e.props.src).map_or(Picture::Nothing, Picture::Image);
             return (picture, None, fit, tint);
         }
         let picture = e
             .shows
             .as_ref()
             .filter(|(_, w)| *w == win)
-            .and_then(|k| TILES.with(|t| t.borrow().get(k).filter(|t| t.seq != 0).map(|t| t.live.image())))
+            .and_then(|k| {
+                TILES.with(|t| {
+                    t.borrow()
+                        .get(k)
+                        .filter(|t| t.seq != 0)
+                        .map(|t| t.live.image())
+                })
+            })
             .map_or(Picture::Nothing, Picture::Tile);
-        (picture, e.info.as_ref().map(|i| (i.width, i.height)), fit, tint)
+        (
+            picture,
+            e.info.as_ref().map(|i| (i.width, i.height)),
+            fit,
+            tint,
+        )
     })
 }
 
@@ -405,7 +441,10 @@ pub(super) fn build<V: 'static>(
         Picture::Image(source) => Some(gpui::img(source)),
     };
     if let Some(picture) = picture {
-        let mut picture = picture.object_fit(fit.gpui()).size_full().into_any_element();
+        let mut picture = picture
+            .object_fit(fit.gpui())
+            .size_full()
+            .into_any_element();
         if tint {
             picture = Tinted(picture).into_any_element();
         }
@@ -416,7 +455,10 @@ pub(super) fn build<V: 'static>(
     let mask = pointer_mask(node);
     let tab_index = tab_index_of(t, id);
     let focusable = tab_index.is_some();
-    let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
+    let styled_focus = node
+        .computed
+        .as_ref()
+        .is_some_and(|cs| cs.needs_focus_handle());
     let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
     if let Some(h) = &handle {
         d = d.track_focus(h);
@@ -428,20 +470,36 @@ pub(super) fn build<V: 'static>(
     bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
 }
 
-
 enum Event {
-    Load { id: u32, src: Arc<str>, size: (f64, f64) },
-    Error { id: u32, src: Arc<str>, why: Option<Arc<str>> },
-    Ended { id: u32 },
+    Load {
+        id: u32,
+        src: Arc<str>,
+        size: (f64, f64),
+    },
+    Error {
+        id: u32,
+        src: Arc<str>,
+        why: Option<Arc<str>>,
+    },
+    Ended {
+        id: u32,
+    },
 }
 
 /// The fetch of `src`, once: http(s) on gpui's HTTP client, anything else read here.
 fn fetch(src: &Arc<str>, cx: &mut App) {
-    if !fetching().lock().unwrap_or_else(|p| p.into_inner()).insert(src.clone()) {
+    if !fetching()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(src.clone())
+    {
         return;
     }
     let stickers = sk_sticker::global();
-    let scheme = src.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
+    let scheme = src
+        .split_once(':')
+        .map(|(s, _)| s.to_ascii_lowercase())
+        .unwrap_or_default();
     if matches!(scheme.as_str(), "http" | "https") {
         let client = cx.http_client();
         let src = src.clone();
@@ -451,7 +509,10 @@ fn fetch(src: &Arc<str>, cx: &mut App) {
                     Ok(bytes) => stickers.provide(&src, bytes.into()),
                     Err(why) => stickers.fail(&src, &format!("could not be fetched: {why}")),
                 }
-                fetching().lock().unwrap_or_else(|p| p.into_inner()).remove(&src);
+                fetching()
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .remove(&src);
             })
             .detach();
         return;
@@ -463,7 +524,10 @@ fn fetch(src: &Arc<str>, cx: &mut App) {
             stickers.fail(src, why.strip_prefix(&prefix).unwrap_or(&why));
         }
     }
-    fetching().lock().unwrap_or_else(|p| p.into_inner()).remove(src);
+    fetching()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(src);
 }
 
 /// Every `<sk-sticker>`, once a frame from the pump before the draw.
@@ -498,14 +562,20 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
                 }
                 continue;
             }
-            let status = statuses.entry(e.props.src.clone()).or_insert_with_key(|src| stickers.status(src));
+            let status = statuses
+                .entry(e.props.src.clone())
+                .or_insert_with_key(|src| stickers.status(src));
             match status {
                 SourceStatus::NeedsBytes => fetches.push(e.props.src.clone()),
                 SourceStatus::Loading => {}
                 SourceStatus::Failed(why) => {
                     if !e.failed {
                         e.failed = true;
-                        events.push(Event::Error { id, src: e.props.src.clone(), why: Some(why.clone()) });
+                        events.push(Event::Error {
+                            id,
+                            src: e.props.src.clone(),
+                            why: Some(why.clone()),
+                        });
                     }
                 }
                 SourceStatus::Ready(info) => {
@@ -529,7 +599,11 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     for (id, src) in images {
         let event = match crate::img::probe(id, &src, cx) {
             crate::img::Probe::Pending => continue,
-            crate::img::Probe::Loaded(w, h) => Event::Load { id, src, size: (w, h) },
+            crate::img::Probe::Loaded(w, h) => Event::Load {
+                id,
+                src,
+                size: (w, h),
+            },
             crate::img::Probe::Failed => Event::Error { id, src, why: None },
         };
         NODES.with(|m| {
@@ -553,8 +627,10 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     for (key, visible) in &demand {
         stickers.demand(key, *visible);
     }
-    let frames: HashMap<TargetKey, Frame> =
-        demand.keys().filter_map(|k| stickers.frame(k).map(|f| (k.clone(), f))).collect();
+    let frames: HashMap<TargetKey, Frame> = demand
+        .keys()
+        .filter_map(|k| stickers.frame(k).map(|f| (k.clone(), f)))
+        .collect();
 
     let shown = write(window, here, &frames, &mut touch);
     live::note(shown);
@@ -564,7 +640,8 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
             e.win != here
                 && e.visible
                 && e.want.as_ref().is_some_and(|k| {
-                    let written = TILES.with(|t| t.borrow().get(&(k.clone(), e.win)).map_or(0, |t| t.seq));
+                    let written =
+                        TILES.with(|t| t.borrow().get(&(k.clone(), e.win)).map_or(0, |t| t.seq));
                     frames.get(k).is_some_and(|f| f.seq != written)
                 })
         })
@@ -579,10 +656,20 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
             }
             if !e.loaded && e.shows.is_some() {
                 e.loaded = true;
-                let size = e.info.as_ref().map_or((0.0, 0.0), |i| (i.width as f64, i.height as f64));
-                events.push(Event::Load { id, src: e.props.src.clone(), size });
+                let size = e
+                    .info
+                    .as_ref()
+                    .map_or((0.0, 0.0), |i| (i.width as f64, i.height as f64));
+                events.push(Event::Load {
+                    id,
+                    src: e.props.src.clone(),
+                    size,
+                });
             }
-            let ended = e.shows.as_ref().is_some_and(|(k, _)| k.once.is_some() && frames.get(k).is_some_and(|f| f.ended));
+            let ended = e
+                .shows
+                .as_ref()
+                .is_some_and(|(k, _)| k.once.is_some() && frames.get(k).is_some_and(|f| f.ended));
             if ended && !e.ended {
                 e.ended = true;
                 events.push(Event::Ended { id });
@@ -604,14 +691,20 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
 pub(crate) fn window_tick(window: &mut Window) {
     let here = windows::key(window);
     let keys: HashSet<TargetKey> = NODES.with(|m| {
-        m.borrow().values().filter(|e| e.win == here && e.visible).filter_map(|e| e.want.clone()).collect()
+        m.borrow()
+            .values()
+            .filter(|e| e.win == here && e.visible)
+            .filter_map(|e| e.want.clone())
+            .collect()
     });
     if keys.is_empty() && TILES.with(|m| m.borrow().keys().all(|(_, w)| *w != here)) {
         return;
     }
     let stickers = sk_sticker::global();
-    let frames: HashMap<TargetKey, Frame> =
-        keys.into_iter().filter_map(|k| stickers.frame(&k).map(|f| (k, f))).collect();
+    let frames: HashMap<TargetKey, Frame> = keys
+        .into_iter()
+        .filter_map(|k| stickers.frame(&k).map(|f| (k, f)))
+        .collect();
     let mut touch = Vec::new();
     write(window, here, &frames, &mut touch);
     if !touch.is_empty() {
@@ -626,12 +719,20 @@ pub(crate) fn window_tick(window: &mut Window) {
 fn want_of(id: u32, e: &Entry, info: &SourceInfo) -> Option<TargetKey> {
     let (_, _, w, h) = windows::peek(e.win, |w| w.bounds.get(&id).copied()).flatten()?;
     let env = windows::env_of(e.win);
-    let scale = env.map(|e| e.scale_factor).filter(|s| *s > 0.0).unwrap_or(1.0);
+    let scale = env
+        .map(|e| e.scale_factor)
+        .filter(|s| *s > 0.0)
+        .unwrap_or(1.0);
     let reduce_motion = env.is_some_and(|e| e.reduce_motion);
     key_for(id, &e.props, info, (w * scale, h * scale), reduce_motion)
 }
 
-fn write(window: &mut Window, here: WinKey, frames: &HashMap<TargetKey, Frame>, touch: &mut Vec<u32>) -> Shown {
+fn write(
+    window: &mut Window,
+    here: WinKey,
+    frames: &HashMap<TargetKey, Frame>,
+    touch: &mut Vec<u32>,
+) -> Shown {
     let needed: HashMap<TargetKey, bool> = NODES.with(|m| {
         let mut needed: HashMap<TargetKey, bool> = HashMap::new();
         for e in m.borrow().values().filter(|e| e.win == here) {
@@ -646,7 +747,9 @@ fn write(window: &mut Window, here: WinKey, frames: &HashMap<TargetKey, Frame>, 
     TILES.with(|tiles| {
         let mut tiles = tiles.borrow_mut();
         for (key, &visible) in &needed {
-            let Some(frame) = frames.get(key) else { continue };
+            let Some(frame) = frames.get(key) else {
+                continue;
+            };
             if frame.width != key.width || frame.height != key.height {
                 continue;
             }
@@ -656,7 +759,13 @@ fn write(window: &mut Window, here: WinKey, frames: &HashMap<TargetKey, Frame>, 
                 if !visible {
                     continue;
                 }
-                tiles.insert(slot.clone(), Tile { live: LiveTile::new(here, key.width, key.height), seq: 0 });
+                tiles.insert(
+                    slot.clone(),
+                    Tile {
+                        live: LiveTile::new(here, key.width, key.height),
+                        seq: 0,
+                    },
+                );
             }
             let tile = tiles.get_mut(&slot).expect("just made");
             if tile.seq == frame.seq {
@@ -673,14 +782,24 @@ fn write(window: &mut Window, here: WinKey, frames: &HashMap<TargetKey, Frame>, 
     NODES.with(|m| {
         for (&id, e) in m.borrow_mut().iter_mut().filter(|(_, e)| e.win == here) {
             // A tile that moved: a cache boundary over the node would replay a sprite pointing at the old place.
-            if e.shows.as_ref().is_some_and(|(k, w)| *w == here && moved.contains(k)) {
+            if e.shows
+                .as_ref()
+                .is_some_and(|(k, w)| *w == here && moved.contains(k))
+            {
                 touch.push(id);
             }
             let Some(want) = &e.want else { continue };
-            if e.shows.as_ref().is_some_and(|(k, w)| k == want && *w == here) {
+            if e.shows
+                .as_ref()
+                .is_some_and(|(k, w)| k == want && *w == here)
+            {
                 continue;
             }
-            let ready = TILES.with(|t| t.borrow().get(&(want.clone(), here)).is_some_and(|t| t.seq != 0));
+            let ready = TILES.with(|t| {
+                t.borrow()
+                    .get(&(want.clone(), here))
+                    .is_some_and(|t| t.seq != 0)
+            });
             if ready {
                 e.shows = Some((want.clone(), here));
                 touch.push(id);
@@ -733,18 +852,35 @@ fn dispatch(events: Vec<Event>, window: &mut Window, cx: &mut App) {
     for event in events {
         match event {
             Event::Load { id, src, size } => {
-                let payload = EventPayload { a: size.0, b: size.1, key: Some(&src), ..Default::default() };
+                let payload = EventPayload {
+                    a: size.0,
+                    b: size.1,
+                    key: Some(&src),
+                    ..Default::default()
+                };
                 crate::render::js_dispatch_app(id, tree::EV_LOAD, &payload, window, cx);
             }
             Event::Error { id, src, why } => {
                 if let Some(why) = why {
-                    warn_compat(&format!("sk-sticker:{src}"), &format!("<sk-sticker src=\"{src}\">: {why}"));
+                    warn_compat(
+                        &format!("sk-sticker:{src}"),
+                        &format!("<sk-sticker src=\"{src}\">: {why}"),
+                    );
                 }
-                let payload = EventPayload { key: Some(&src), ..Default::default() };
+                let payload = EventPayload {
+                    key: Some(&src),
+                    ..Default::default()
+                };
                 crate::render::js_dispatch_app(id, tree::EV_ERROR, &payload, window, cx);
             }
             Event::Ended { id } => {
-                crate::render::js_dispatch_app(id, tree::EV_ENDED, &EventPayload::default(), window, cx);
+                crate::render::js_dispatch_app(
+                    id,
+                    tree::EV_ENDED,
+                    &EventPayload::default(),
+                    window,
+                    cx,
+                );
             }
         }
     }
@@ -767,34 +903,82 @@ mod tests {
     }
 
     fn info(kind: Kind, width: u32, height: u32, frames: u32) -> SourceInfo {
-        SourceInfo { kind, width, height, frames, fps: 60.0 }
+        SourceInfo {
+            kind,
+            width,
+            height,
+            frames,
+            fps: 60.0,
+        }
     }
 
     #[test]
     fn a_target_is_the_picture_under_object_fit_rounded_up_to_a_step() {
         // A 512 sticker in a 200 × 200 box at 1.5: 300 device px, a 16 step.
-        assert_eq!(target_size((512, 512), (300.0, 300.0), Fit::Contain, Kind::Lottie), Some((304, 304)));
-        assert_eq!(target_size((100, 100), (36.0, 36.0), Fit::Contain, Kind::Video), Some((36, 36)));
-        assert_eq!(target_size((100, 100), (35.2, 35.2), Fit::Contain, Kind::Video), Some((36, 36)));
-        assert_eq!(target_size((200, 100), (100.0, 100.0), Fit::Contain, Kind::Lottie), Some((100, 50)));
-        assert_eq!(target_size((200, 100), (100.0, 100.0), Fit::Cover, Kind::Lottie), Some((200, 100)));
-        assert_eq!(target_size((200, 100), (100.0, 100.0), Fit::Fill, Kind::Lottie), Some((200, 100)));
-        assert_eq!(target_size((512, 512), (130.0, 130.0), Fit::Contain, Kind::Lottie), Some((136, 136)));
+        assert_eq!(
+            target_size((512, 512), (300.0, 300.0), Fit::Contain, Kind::Lottie),
+            Some((304, 304))
+        );
+        assert_eq!(
+            target_size((100, 100), (36.0, 36.0), Fit::Contain, Kind::Video),
+            Some((36, 36))
+        );
+        assert_eq!(
+            target_size((100, 100), (35.2, 35.2), Fit::Contain, Kind::Video),
+            Some((36, 36))
+        );
+        assert_eq!(
+            target_size((200, 100), (100.0, 100.0), Fit::Contain, Kind::Lottie),
+            Some((100, 50))
+        );
+        assert_eq!(
+            target_size((200, 100), (100.0, 100.0), Fit::Cover, Kind::Lottie),
+            Some((200, 100))
+        );
+        assert_eq!(
+            target_size((200, 100), (100.0, 100.0), Fit::Fill, Kind::Lottie),
+            Some((200, 100))
+        );
+        assert_eq!(
+            target_size((512, 512), (130.0, 130.0), Fit::Contain, Kind::Lottie),
+            Some((136, 136))
+        );
     }
 
     #[test]
     fn a_video_is_never_drawn_above_its_size_and_a_lottie_not_above_the_cap() {
-        assert_eq!(target_size((100, 100), (540.0, 540.0), Fit::Contain, Kind::Video), Some((100, 100)));
-        assert_eq!(target_size((98, 98), (97.0, 97.0), Fit::Contain, Kind::Video), Some((98, 98)));
-        assert_eq!(target_size((512, 512), (4000.0, 4000.0), Fit::Contain, Kind::Lottie), Some((1024, 1024)));
-        assert_eq!(target_size((512, 256), (4000.0, 4000.0), Fit::Contain, Kind::Lottie), Some((1024, 512)));
+        assert_eq!(
+            target_size((100, 100), (540.0, 540.0), Fit::Contain, Kind::Video),
+            Some((100, 100))
+        );
+        assert_eq!(
+            target_size((98, 98), (97.0, 97.0), Fit::Contain, Kind::Video),
+            Some((98, 98))
+        );
+        assert_eq!(
+            target_size((512, 512), (4000.0, 4000.0), Fit::Contain, Kind::Lottie),
+            Some((1024, 1024))
+        );
+        assert_eq!(
+            target_size((512, 256), (4000.0, 4000.0), Fit::Contain, Kind::Lottie),
+            Some((1024, 512))
+        );
     }
 
     #[test]
     fn an_empty_box_or_source_has_no_target() {
-        assert_eq!(target_size((512, 512), (0.0, 300.0), Fit::Contain, Kind::Lottie), None);
-        assert_eq!(target_size((0, 512), (300.0, 300.0), Fit::Contain, Kind::Lottie), None);
-        assert_eq!(target_size((512, 512), (f32::NAN, 300.0), Fit::Contain, Kind::Lottie), None);
+        assert_eq!(
+            target_size((512, 512), (0.0, 300.0), Fit::Contain, Kind::Lottie),
+            None
+        );
+        assert_eq!(
+            target_size((0, 512), (300.0, 300.0), Fit::Contain, Kind::Lottie),
+            None
+        );
+        assert_eq!(
+            target_size((512, 512), (f32::NAN, 300.0), Fit::Contain, Kind::Lottie),
+            None
+        );
     }
 
     #[test]
@@ -810,28 +994,86 @@ mod tests {
         let key = key_for(7, &props("s"), &lottie, (300.0, 300.0), false).unwrap();
         assert!(!key.still && key.once.is_none() && !key.alpha_only);
 
-        assert!(key_for(7, &props("s"), &lottie, (300.0, 300.0), true).unwrap().still);
-        let on = Props { play: Play::On, ..props("s") };
-        assert!(!key_for(7, &on, &lottie, (300.0, 300.0), true).unwrap().still);
-        let off = Props { play: Play::Off, ..props("s") };
-        assert!(key_for(7, &off, &lottie, (300.0, 300.0), false).unwrap().still);
+        assert!(
+            key_for(7, &props("s"), &lottie, (300.0, 300.0), true)
+                .unwrap()
+                .still
+        );
+        let on = Props {
+            play: Play::On,
+            ..props("s")
+        };
+        assert!(
+            !key_for(7, &on, &lottie, (300.0, 300.0), true)
+                .unwrap()
+                .still
+        );
+        let off = Props {
+            play: Play::Off,
+            ..props("s")
+        };
+        assert!(
+            key_for(7, &off, &lottie, (300.0, 300.0), false)
+                .unwrap()
+                .still
+        );
 
-        let once = Props { once: true, ..props("s") };
-        assert_eq!(key_for(7, &once, &lottie, (300.0, 300.0), false).unwrap().once, Some(7));
-        let once_off = Props { once: true, play: Play::Off, ..props("s") };
-        assert_eq!(key_for(7, &once_off, &lottie, (300.0, 300.0), false).unwrap().once, None, "a still never ends");
+        let once = Props {
+            once: true,
+            ..props("s")
+        };
+        assert_eq!(
+            key_for(7, &once, &lottie, (300.0, 300.0), false)
+                .unwrap()
+                .once,
+            Some(7)
+        );
+        let once_off = Props {
+            once: true,
+            play: Play::Off,
+            ..props("s")
+        };
+        assert_eq!(
+            key_for(7, &once_off, &lottie, (300.0, 300.0), false)
+                .unwrap()
+                .once,
+            None,
+            "a still never ends"
+        );
 
         let single = info(Kind::Lottie, 512, 512, 1);
-        assert!(key_for(7, &on, &single, (300.0, 300.0), false).unwrap().still);
+        assert!(
+            key_for(7, &on, &single, (300.0, 300.0), false)
+                .unwrap()
+                .still
+        );
     }
 
     #[test]
     fn a_tinted_video_decodes_its_alpha_and_a_tinted_lottie_does_not() {
-        let tint = Props { tint: true, max_fps: Some(24), ..props("s") };
-        let video = key_for(1, &tint, &info(Kind::Video, 100, 100, 90), (48.0, 48.0), false).unwrap();
+        let tint = Props {
+            tint: true,
+            max_fps: Some(24),
+            ..props("s")
+        };
+        let video = key_for(
+            1,
+            &tint,
+            &info(Kind::Video, 100, 100, 90),
+            (48.0, 48.0),
+            false,
+        )
+        .unwrap();
         assert!(video.alpha_only);
         assert_eq!(video.max_fps, Some(24));
-        let lottie = key_for(1, &tint, &info(Kind::Lottie, 100, 100, 90), (48.0, 48.0), false).unwrap();
+        let lottie = key_for(
+            1,
+            &tint,
+            &info(Kind::Lottie, 100, 100, 90),
+            (48.0, 48.0),
+            false,
+        )
+        .unwrap();
         assert!(!lottie.alpha_only, "a Lottie is tinted when painted");
     }
 
@@ -839,7 +1081,16 @@ mod tests {
     fn two_copies_at_one_size_share_a_target_and_a_tint_does_not_split_a_lottie() {
         let lottie = info(Kind::Lottie, 100, 100, 90);
         let a = key_for(1, &props("s"), &lottie, (48.0, 48.0), false);
-        let b = key_for(2, &Props { tint: true, ..props("s") }, &lottie, (47.0, 47.0), false);
+        let b = key_for(
+            2,
+            &Props {
+                tint: true,
+                ..props("s")
+            },
+            &lottie,
+            (47.0, 47.0),
+            false,
+        );
         assert_eq!(a, b);
     }
 

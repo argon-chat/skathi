@@ -71,7 +71,9 @@ pub fn start(cx: &mut App) {
         if !due(LAST_FRAME.with(|c| c.get()), Instant::now()) {
             continue;
         }
-        let Some(handle) = crate::MAIN_WINDOW.with(|w| w.get()) else { continue };
+        let Some(handle) = crate::MAIN_WINDOW.with(|w| w.get()) else {
+            continue;
+        };
         let _ = handle.update(cx, |_, window, cx| wave(window, cx));
     })
     .detach();
@@ -115,7 +117,10 @@ mod tests {
         let now = Instant::now();
         for interval_ms in [4u64, 7, 16, 33, 100, 200] {
             let last = now - Duration::from_millis(interval_ms);
-            assert!(!due(Some(last), now), "{interval_ms} ms since the last frame is not a stall");
+            assert!(
+                !due(Some(last), now),
+                "{interval_ms} ms since the last frame is not a stall"
+            );
         }
     }
 

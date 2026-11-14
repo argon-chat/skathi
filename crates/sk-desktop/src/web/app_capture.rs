@@ -57,9 +57,18 @@ host_fn!(fn permission_hint(g, args) {
     }
 });
 
-unsafe fn sources(g: *mut c_void, _token: u32, v: &serde_json::Value, _made: u64) -> Result<u64, u64> {
+unsafe fn sources(
+    g: *mut c_void,
+    _token: u32,
+    v: &serde_json::Value,
+    _made: u64,
+) -> Result<u64, u64> {
     if !v.is_array() {
-        return Err(host::error(g, "TypeError", "the desktop capture host returned an invalid source list"));
+        return Err(host::error(
+            g,
+            "TypeError",
+            "the desktop capture host returned an invalid source list",
+        ));
     }
     Ok(host::to_js(g, v))
 }

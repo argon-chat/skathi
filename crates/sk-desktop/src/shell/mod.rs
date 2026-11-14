@@ -75,10 +75,14 @@ pub fn validate_external(url: &str, content: bool) -> Result<String, Fail> {
         return Err(Fail::type_error("openExternal: the URL is empty"));
     }
     if url.chars().any(|c| (c as u32) < 0x20 || c == '\u{7f}') {
-        return Err(Fail::type_error("openExternal: the URL contains a control character"));
+        return Err(Fail::type_error(
+            "openExternal: the URL contains a control character",
+        ));
     }
     let Some(scheme) = scheme_of(url) else {
-        return Err(Fail::type_error(format!("openExternal: {url:?} is not an absolute URL")));
+        return Err(Fail::type_error(format!(
+            "openExternal: {url:?} is not an absolute URL"
+        )));
     };
     if scheme.len() == 1 {
         return Err(Fail::type_error(format!(
@@ -132,7 +136,10 @@ fn alternate_stream(p: &Path) -> bool {
         .or_else(|| s.strip_prefix(r"\\?\"))
         .or_else(|| s.strip_prefix(r"\\.\"))
         .unwrap_or(&s);
-    let rest = if rest.len() >= 2 && rest.as_bytes()[1] == b':' && rest.as_bytes()[0].is_ascii_alphabetic() {
+    let rest = if rest.len() >= 2
+        && rest.as_bytes()[1] == b':'
+        && rest.as_bytes()[0].is_ascii_alphabetic()
+    {
         &rest[2..]
     } else {
         rest
@@ -143,20 +150,82 @@ fn alternate_stream(p: &Path) -> bool {
 /// Extensions `openPath` refuses without `{ allowExecutable: true }`: everything Windows will run, install,
 /// or hand to a script host when "opened". Keeps a save-then-open flow from launching `report.pdf.exe`.
 const EXECUTABLE_EXTS: &[&str] = &[
-    "exe", "com", "bat", "cmd", "scr", "pif", "cpl", "msc", "msi", "msp", "mst", "lnk", "url",
-    "scf", "hta", "ps1", "psm1", "psd1", "ps1xml", "ps2", "ps2xml", "psc1", "psc2", "vb", "vbs",
-    "vbe", "js", "jse", "ws", "wsf", "wsc", "wsh", "reg", "inf", "ins", "isp", "jar", "chm", "hlp",
-    "gadget", "application", "appref-ms", "settingcontent-ms", "msix", "msixbundle", "appx",
-    "appxbundle", "appinstaller", "diagcab", "library-ms", "search-ms", "searchconnector-ms",
-    "xbap", "msh", "msh1", "msh2", "mshxml", "msh1xml", "msh2xml", "sct", "shb", "xll", "website",
+    "exe",
+    "com",
+    "bat",
+    "cmd",
+    "scr",
+    "pif",
+    "cpl",
+    "msc",
+    "msi",
+    "msp",
+    "mst",
+    "lnk",
+    "url",
+    "scf",
+    "hta",
+    "ps1",
+    "psm1",
+    "psd1",
+    "ps1xml",
+    "ps2",
+    "ps2xml",
+    "psc1",
+    "psc2",
+    "vb",
+    "vbs",
+    "vbe",
+    "js",
+    "jse",
+    "ws",
+    "wsf",
+    "wsc",
+    "wsh",
+    "reg",
+    "inf",
+    "ins",
+    "isp",
+    "jar",
+    "chm",
+    "hlp",
+    "gadget",
+    "application",
+    "appref-ms",
+    "settingcontent-ms",
+    "msix",
+    "msixbundle",
+    "appx",
+    "appxbundle",
+    "appinstaller",
+    "diagcab",
+    "library-ms",
+    "search-ms",
+    "searchconnector-ms",
+    "xbap",
+    "msh",
+    "msh1",
+    "msh2",
+    "mshxml",
+    "msh1xml",
+    "msh2xml",
+    "sct",
+    "shb",
+    "xll",
+    "website",
 ];
 
 /// Would the shell RUN this rather than open it? The extension is read as Windows reads it: trailing dots
 /// and spaces stripped, case-insensitive; `PATHEXT` only ever ADDS refusals.
 pub fn is_executable(path: &Path, pathext: Option<&str>) -> bool {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let name = name.trim_end_matches(['.', ' ']);
-    let Some(dot) = name.rfind('.') else { return false };
+    let Some(dot) = name.rfind('.') else {
+        return false;
+    };
     let ext = name[dot + 1..].to_ascii_lowercase();
     if ext.is_empty() {
         return false;
@@ -211,7 +280,10 @@ pub fn start_open_path(path: &str, allow_executable: bool) -> Result<u32, Fail> 
 }
 
 pub fn start_show_item(path: &str) -> Result<u32, Fail> {
-    Ok(submit(Op::ShowItem(validate_path(path, "showItemInFolder")?)))
+    Ok(submit(Op::ShowItem(validate_path(
+        path,
+        "showItemInFolder",
+    )?)))
 }
 
 pub fn start_trash(path: &str) -> Result<u32, Fail> {
@@ -245,9 +317,21 @@ fn submit(op: Op) -> u32 {
             .expect("spawning the sk-shell thread");
         Mutex::new(tx)
     });
-    let sent = tx.lock().map(|tx| tx.send(Job { token, op: op.clone() }).is_ok()).unwrap_or(false);
+    let sent = tx
+        .lock()
+        .map(|tx| {
+            tx.send(Job {
+                token,
+                op: op.clone(),
+            })
+            .is_ok()
+        })
+        .unwrap_or(false);
     if !sent {
-        crate::settle(token, Err(Fail::new("InvalidStateError", "the shell thread is gone").code("EIO")));
+        crate::settle(
+            token,
+            Err(Fail::new("InvalidStateError", "the shell thread is gone").code("EIO")),
+        );
     }
     token
 }
@@ -262,7 +346,14 @@ fn run(op: &Op) -> Result<(), Fail> {
         }
     }
     if recording() {
-        crate::log_later("shell", format!("[shell] {} {} (recorded — SK_SHELL=record)", op.verb(), op.target()));
+        crate::log_later(
+            "shell",
+            format!(
+                "[shell] {} {} (recorded — SK_SHELL=record)",
+                op.verb(),
+                op.target()
+            ),
+        );
         return Ok(());
     }
     match op {
@@ -282,7 +373,10 @@ mod tests {
         assert_eq!(scheme_of("https://x").as_deref(), Some("https"));
         assert_eq!(scheme_of("MAILTO:a@b").as_deref(), Some("mailto"));
         assert_eq!(scheme_of("web+app:x").as_deref(), Some("web+app"));
-        assert_eq!(scheme_of("ms-settings:privacy").as_deref(), Some("ms-settings"));
+        assert_eq!(
+            scheme_of("ms-settings:privacy").as_deref(),
+            Some("ms-settings")
+        );
         assert_eq!(scheme_of("1x:y"), None);
         assert_eq!(scheme_of("/relative"), None);
         assert_eq!(scheme_of("no colon"), None);
@@ -295,7 +389,13 @@ mod tests {
         assert!(validate_external("https://example.com/a?b", true).is_ok());
         assert!(validate_external("http://example.com", true).is_ok());
         assert!(validate_external("mailto:a@example.com", true).is_ok());
-        for refused in ["file:///C:/Windows/System32/calc.exe", "myapp://x", "ms-settings:privacy", "javascript:alert(1)", "search-ms:query=x"] {
+        for refused in [
+            "file:///C:/Windows/System32/calc.exe",
+            "myapp://x",
+            "ms-settings:privacy",
+            "javascript:alert(1)",
+            "search-ms:query=x",
+        ] {
             let e = validate_external(refused, true).unwrap_err();
             assert_eq!(e.name, "NotAllowedError", "{refused}");
             assert_eq!(e.code, Some("ESCHEME"));
@@ -306,12 +406,31 @@ mod tests {
     fn tier_two_takes_any_scheme_but_file() {
         assert!(validate_external("myapp://x", false).is_ok());
         assert!(validate_external("ms-settings:privacy", false).is_ok());
-        assert_eq!(validate_external("file:///C:/x.txt", false).unwrap_err().name, "TypeError");
-        assert_eq!(validate_external("FILE:///C:/x.txt", false).unwrap_err().name, "TypeError");
-        assert_eq!(validate_external(r"C:\x.txt", false).unwrap_err().name, "TypeError");
-        assert_eq!(validate_external("relative/x", false).unwrap_err().name, "TypeError");
+        assert_eq!(
+            validate_external("file:///C:/x.txt", false)
+                .unwrap_err()
+                .name,
+            "TypeError"
+        );
+        assert_eq!(
+            validate_external("FILE:///C:/x.txt", false)
+                .unwrap_err()
+                .name,
+            "TypeError"
+        );
+        assert_eq!(
+            validate_external(r"C:\x.txt", false).unwrap_err().name,
+            "TypeError"
+        );
+        assert_eq!(
+            validate_external("relative/x", false).unwrap_err().name,
+            "TypeError"
+        );
         assert_eq!(validate_external("", false).unwrap_err().name, "TypeError");
-        assert_eq!(validate_external("https://x/\na", false).unwrap_err().name, "TypeError");
+        assert_eq!(
+            validate_external("https://x/\na", false).unwrap_err().name,
+            "TypeError"
+        );
     }
 
     #[cfg(windows)]
@@ -321,10 +440,21 @@ mod tests {
         assert!(validate_path(r"\\server\share\a.txt", "t").is_ok());
         assert!(validate_path(r"\\?\C:\very\long\a.txt", "t").is_ok());
         assert_eq!(validate_path("a.txt", "t").unwrap_err().name, "TypeError");
-        assert_eq!(validate_path(r"..\a.txt", "t").unwrap_err().name, "TypeError");
+        assert_eq!(
+            validate_path(r"..\a.txt", "t").unwrap_err().name,
+            "TypeError"
+        );
         assert_eq!(validate_path("", "t").unwrap_err().name, "TypeError");
-        assert_eq!(validate_path(r"C:\x\report.txt:evil.exe", "t").unwrap_err().name, "TypeError");
-        assert_eq!(validate_path(r"\\?\C:\x\a.txt:s", "t").unwrap_err().name, "TypeError");
+        assert_eq!(
+            validate_path(r"C:\x\report.txt:evil.exe", "t")
+                .unwrap_err()
+                .name,
+            "TypeError"
+        );
+        assert_eq!(
+            validate_path(r"\\?\C:\x\a.txt:s", "t").unwrap_err().name,
+            "TypeError"
+        );
     }
 
     #[cfg(unix)]
@@ -332,7 +462,10 @@ mod tests {
     fn paths_must_be_absolute() {
         assert!(validate_path("/home/x/a.txt", "t").is_ok());
         assert_eq!(validate_path("a.txt", "t").unwrap_err().name, "TypeError");
-        assert_eq!(validate_path("../a.txt", "t").unwrap_err().name, "TypeError");
+        assert_eq!(
+            validate_path("../a.txt", "t").unwrap_err().name,
+            "TypeError"
+        );
         assert_eq!(validate_path("", "t").unwrap_err().name, "TypeError");
     }
 
@@ -340,34 +473,74 @@ mod tests {
     fn the_executable_guard_reads_extensions_the_way_windows_does() {
         let exe = |p: &str| is_executable(Path::new(p), None);
         for yes in [
-            r"C:\a\setup.exe", r"C:\a\SETUP.EXE", r"C:\a\report.pdf.exe", r"C:\a\x.bat", r"C:\a\x.cmd",
-            r"C:\a\x.lnk", r"C:\a\x.url", r"C:\a\x.ps1", r"C:\a\x.vbs", r"C:\a\x.js", r"C:\a\x.hta",
-            r"C:\a\x.msi", r"C:\a\x.reg", r"C:\a\x.cpl", r"C:\a\x.scr", r"C:\a\x.settingcontent-ms",
-            r"C:\a\x.appref-ms", r"C:\a\x.msix",
-            r"C:\a\evil.exe.", r"C:\a\evil.exe ", r"C:\a\evil.exe. . ",
+            r"C:\a\setup.exe",
+            r"C:\a\SETUP.EXE",
+            r"C:\a\report.pdf.exe",
+            r"C:\a\x.bat",
+            r"C:\a\x.cmd",
+            r"C:\a\x.lnk",
+            r"C:\a\x.url",
+            r"C:\a\x.ps1",
+            r"C:\a\x.vbs",
+            r"C:\a\x.js",
+            r"C:\a\x.hta",
+            r"C:\a\x.msi",
+            r"C:\a\x.reg",
+            r"C:\a\x.cpl",
+            r"C:\a\x.scr",
+            r"C:\a\x.settingcontent-ms",
+            r"C:\a\x.appref-ms",
+            r"C:\a\x.msix",
+            r"C:\a\evil.exe.",
+            r"C:\a\evil.exe ",
+            r"C:\a\evil.exe. . ",
         ] {
             assert!(exe(yes), "{yes} must be refused");
         }
-        for no in [r"C:\a\report.pdf", r"C:\a\notes.txt", r"C:\a\photo.PNG", r"C:\a\folder", r"C:\a\.gitignore", r"C:\a\archive.tar.gz", r"C:\a\exe"] {
+        for no in [
+            r"C:\a\report.pdf",
+            r"C:\a\notes.txt",
+            r"C:\a\photo.PNG",
+            r"C:\a\folder",
+            r"C:\a\.gitignore",
+            r"C:\a\archive.tar.gz",
+            r"C:\a\exe",
+        ] {
             assert!(!exe(no), "{no} must be allowed");
         }
-        assert!(is_executable(Path::new(r"C:\a\x.foo"), Some(".COM;.EXE;.FOO")));
-        assert!(!is_executable(Path::new(r"C:\a\x.txt"), Some(".COM;.EXE;.FOO")));
+        assert!(is_executable(
+            Path::new(r"C:\a\x.foo"),
+            Some(".COM;.EXE;.FOO")
+        ));
+        assert!(!is_executable(
+            Path::new(r"C:\a\x.txt"),
+            Some(".COM;.EXE;.FOO")
+        ));
     }
 
     #[test]
     fn io_errors_map_to_dom_names() {
         let nf = std::io::Error::from_raw_os_error(2);
         let f = fail_from_io(&nf, "openPath", "C:\\x");
-        assert_eq!((f.name, f.code, f.os_error), ("NotFoundError", Some("ENOENT"), Some(2)));
+        assert_eq!(
+            (f.name, f.code, f.os_error),
+            ("NotFoundError", Some("ENOENT"), Some(2))
+        );
         let ad = std::io::Error::from_raw_os_error(if cfg!(windows) { 5 } else { 13 });
         assert_eq!(fail_from_io(&ad, "t", "x").name, "NotAllowedError");
     }
 
     #[test]
     fn a_refused_call_answers_synchronously_without_a_token() {
-        assert_eq!(start_open_external("file:///x", false).unwrap_err().name, "TypeError");
-        let setup = if cfg!(windows) { r"C:\x\setup.exe" } else { "/x/setup.exe" };
+        assert_eq!(
+            start_open_external("file:///x", false).unwrap_err().name,
+            "TypeError"
+        );
+        let setup = if cfg!(windows) {
+            r"C:\x\setup.exe"
+        } else {
+            "/x/setup.exe"
+        };
         let f = start_open_path(setup, false).unwrap_err();
         assert_eq!((f.name, f.code), ("NotAllowedError", Some("EEXECUTABLE")));
     }

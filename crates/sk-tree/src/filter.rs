@@ -13,7 +13,10 @@ thread_local! {
 pub(crate) fn resolve(tree: &Tree, url: &str, target: u32) -> Option<VnColorMatrix> {
     let result = resolve_inner(tree, url);
     match result {
-        Ok(mut matrix) => { matrix.group_id = target as u64; Some(matrix) },
+        Ok(mut matrix) => {
+            matrix.group_id = target as u64;
+            Some(matrix)
+        }
         Err(message) => {
             if WARNED.with(|warned| warned.borrow_mut().insert(format!("{url}:{message}"))) {
                 crate::log::record("css", format!("[css] filter: url({url}): {message}"));
@@ -110,7 +113,11 @@ fn resolve_inner(tree: &Tree, url: &str) -> Result<VnColorMatrix, &'static str> 
         }
         cursor = node.parent;
     }
-    Ok(VnColorMatrix { group_id: 0, values, linear_rgb })
+    Ok(VnColorMatrix {
+        group_id: 0,
+        values,
+        linear_rgb,
+    })
 }
 
 fn parse_matrix(text: &str) -> Option<[f32; 20]> {

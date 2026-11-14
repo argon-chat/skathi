@@ -9,26 +9,28 @@ use std::path::PathBuf;
 
 use windows::core::{s, w, Interface, BOOL, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{ERROR_CANCELLED, HWND, LPARAM, TRUE, WPARAM};
-use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-use windows::Win32::UI::Controls::{
-    TASKDIALOGCONFIG, TASKDIALOG_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION, TDF_POSITION_RELATIVE_TO_WINDOW,
-    TDF_USE_HICON_MAIN,
-};
-use windows::Win32::UI::WindowsAndMessaging::{GetClassLongPtrW, GCLP_HICON, HICON};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
-    COINIT_DISABLE_OLE1DDE,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER,
+    COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
 };
+use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::Controls::{
+    TASKDIALOGCONFIG, TASKDIALOG_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION,
+    TDF_POSITION_RELATIVE_TO_WINDOW, TDF_USE_HICON_MAIN,
+};
 use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::Shell::{
-    FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IShellItem, SHCreateItemFromParsingName,
-    SHGetKnownFolderItem, SHGetKnownFolderPath, FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads,
-    FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Videos, FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST,
-    FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, KF_FLAG_DEFAULT,
-    SIGDN_FILESYSPATH,
+    FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music, FOLDERID_Pictures,
+    FOLDERID_Videos, FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IShellItem,
+    SHCreateItemFromParsingName, SHGetKnownFolderItem, SHGetKnownFolderPath, FOS_ALLOWMULTISELECT,
+    FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR, FOS_OVERWRITEPROMPT,
+    FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, KF_FLAG_DEFAULT, SIGDN_FILESYSPATH,
 };
-use windows::Win32::UI::WindowsAndMessaging::{EnumThreadWindows, GetClassNameW, KillTimer, PostMessageW, SetTimer, WM_CLOSE};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumThreadWindows, GetClassNameW, KillTimer, PostMessageW, SetTimer, WM_CLOSE,
+};
+use windows::Win32::UI::WindowsAndMessaging::{GetClassLongPtrW, GCLP_HICON, HICON};
 
 use super::{Cancellation, Kind, Known, Native, Start, ALL_FILES};
 use crate::Fail;
@@ -54,7 +56,12 @@ pub(super) fn known_folder(k: Known) -> Option<PathBuf> {
 }
 
 fn fail(what: &str, e: &windows::core::Error) -> Fail {
-    Fail::new("InvalidStateError", format!("the file dialog failed ({what}): {}", e.message())).code("EIO").os(e.code().0)
+    Fail::new(
+        "InvalidStateError",
+        format!("the file dialog failed ({what}): {}", e.message()),
+    )
+    .code("EIO")
+    .os(e.code().0)
 }
 
 struct Apartment;
@@ -101,7 +108,11 @@ impl Drop for CancellationTimer {
 }
 
 unsafe extern "system" fn cancel_dialog(_: HWND, _: u32, _: usize, _: u32) {
-    let requested = CANCELLATION.with(|slot| slot.borrow().as_ref().is_some_and(Cancellation::is_requested));
+    let requested = CANCELLATION.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(Cancellation::is_requested)
+    });
     if requested {
         unsafe {
             let _ = EnumThreadWindows(GetCurrentThreadId(), Some(close_dialog), LPARAM(0));
@@ -142,7 +153,11 @@ fn task_dialog_indirect() -> Option<TaskDialogIndirectFn> {
 const BUTTON_BASE: i32 = 100;
 
 /// Asks `q` in a TaskDialog owned by `owner` (0 = none): the button index, or `Ok(None)` for Esc, the close box, or the owner closing.
-pub(super) fn ask(q: &super::Ask, owner: isize, cancel: &Cancellation) -> Result<Option<usize>, Fail> {
+pub(super) fn ask(
+    q: &super::Ask,
+    owner: isize,
+    cancel: &Cancellation,
+) -> Result<Option<usize>, Fail> {
     let Some(show) = task_dialog_indirect() else {
         return Err(Fail::new(
             "NotSupportedError",
@@ -156,17 +171,28 @@ pub(super) fn ask(q: &super::Ask, owner: isize, cancel: &Cancellation) -> Result
     let title = HSTRING::from(q.title.as_str());
     let instruction = HSTRING::from(q.instruction.as_str());
     let content = HSTRING::from(q.content.as_str());
-    let labels: Vec<HSTRING> = q.buttons.iter().map(|b| HSTRING::from(b.as_str())).collect();
+    let labels: Vec<HSTRING> = q
+        .buttons
+        .iter()
+        .map(|b| HSTRING::from(b.as_str()))
+        .collect();
     let buttons: Vec<TASKDIALOG_BUTTON> = labels
         .iter()
         .enumerate()
-        .map(|(i, l)| TASKDIALOG_BUTTON { nButtonID: BUTTON_BASE + i as i32, pszButtonText: PCWSTR(l.as_ptr()) })
+        .map(|(i, l)| TASKDIALOG_BUTTON {
+            nButtonID: BUTTON_BASE + i as i32,
+            pszButtonText: PCWSTR(l.as_ptr()),
+        })
         .collect();
     let mut config = TASKDIALOGCONFIG::default();
     config.cbSize = std::mem::size_of::<TASKDIALOGCONFIG>() as u32;
     config.hwndParent = HWND(owner as *mut core::ffi::c_void);
     let mut flags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW;
-    let icon = if owner != 0 { unsafe { GetClassLongPtrW(HWND(owner as *mut core::ffi::c_void), GCLP_HICON) } } else { 0 };
+    let icon = if owner != 0 {
+        unsafe { GetClassLongPtrW(HWND(owner as *mut core::ffi::c_void), GCLP_HICON) }
+    } else {
+        0
+    };
     if icon != 0 {
         flags |= TDF_USE_HICON_MAIN;
         config.Anonymous1.hMainIcon = HICON(icon as *mut core::ffi::c_void);
@@ -182,7 +208,14 @@ pub(super) fn ask(q: &super::Ask, owner: isize, cancel: &Cancellation) -> Result
     config.pButtons = buttons.as_ptr();
     config.nDefaultButton = BUTTON_BASE + q.default.min(buttons.len().saturating_sub(1)) as i32;
     let mut pressed = 0i32;
-    let hr = unsafe { show(&config, &mut pressed, std::ptr::null_mut(), std::ptr::null_mut()) };
+    let hr = unsafe {
+        show(
+            &config,
+            &mut pressed,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
     if let Err(e) = hr.ok() {
         return Err(fail("TaskDialogIndirect", &e));
     }
@@ -193,7 +226,11 @@ pub(super) fn ask(q: &super::Ask, owner: isize, cancel: &Cancellation) -> Result
     Ok((0..buttons.len() as i32).contains(&i).then_some(i as usize))
 }
 
-pub(super) fn pick(n: &Native, owner: isize, cancel: &Cancellation) -> Result<Option<Vec<PathBuf>>, Fail> {
+pub(super) fn pick(
+    n: &Native,
+    owner: isize,
+    cancel: &Cancellation,
+) -> Result<Option<Vec<PathBuf>>, Fail> {
     let _apartment = Apartment::new()?;
     let _timer = CancellationTimer::new(cancel.clone())?;
     if cancel.is_requested() {
@@ -214,18 +251,26 @@ fn item_at(path: &std::path::Path) -> Option<IShellItem> {
 
 fn path_of(item: &IShellItem) -> Result<PathBuf, Fail> {
     unsafe {
-        let p = item.GetDisplayName(SIGDN_FILESYSPATH).map_err(|e| fail("GetDisplayName", &e))?;
+        let p = item
+            .GetDisplayName(SIGDN_FILESYSPATH)
+            .map_err(|e| fail("GetDisplayName", &e))?;
         let s = p.to_string();
         CoTaskMemFree(Some(p.0 as *const _));
-        s.map(PathBuf::from).map_err(|_| Fail::new("InvalidStateError", "a picked path is not valid UTF-16").code("EIO"))
+        s.map(PathBuf::from).map_err(|_| {
+            Fail::new("InvalidStateError", "a picked path is not valid UTF-16").code("EIO")
+        })
     }
 }
 
 unsafe fn show(n: &Native, owner: isize) -> Result<Option<Vec<PathBuf>>, Fail> {
     let dialog: IFileDialog = unsafe {
         match n.kind {
-            Kind::Save => CoCreateInstance::<_, IFileDialog>(&FileSaveDialog, None, CLSCTX_INPROC_SERVER),
-            Kind::Open | Kind::Folder => CoCreateInstance::<_, IFileDialog>(&FileOpenDialog, None, CLSCTX_INPROC_SERVER),
+            Kind::Save => {
+                CoCreateInstance::<_, IFileDialog>(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)
+            }
+            Kind::Open | Kind::Folder => {
+                CoCreateInstance::<_, IFileDialog>(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
+            }
         }
     }
     .map_err(|e| fail("CoCreateInstance", &e))?;
@@ -261,7 +306,10 @@ unsafe fn show(n: &Native, owner: isize) -> Result<Option<Vec<PathBuf>>, Fail> {
         let filter: Vec<COMDLG_FILTERSPEC> = names
             .iter()
             .zip(&specs)
-            .map(|(name, spec)| COMDLG_FILTERSPEC { pszName: PCWSTR(name.as_ptr()), pszSpec: PCWSTR(spec.as_ptr()) })
+            .map(|(name, spec)| COMDLG_FILTERSPEC {
+                pszName: PCWSTR(name.as_ptr()),
+                pszSpec: PCWSTR(spec.as_ptr()),
+            })
             .collect();
         unsafe { dialog.SetFileTypes(&filter) }.map_err(|e| fail("SetFileTypes", &e))?;
         unsafe { dialog.SetFileTypeIndex(1) }.map_err(|e| fail("SetFileTypeIndex", &e))?;
@@ -271,12 +319,20 @@ unsafe fn show(n: &Native, owner: isize) -> Result<Option<Vec<PathBuf>>, Fail> {
     unsafe { dialog.SetClientGuid(&guid) }.map_err(|e| fail("SetClientGuid", &e))?;
 
     let start = match &n.start {
-        Some(Start::Known(k)) => unsafe { SHGetKnownFolderItem::<IShellItem>(&known_id(*k), KF_FLAG_DEFAULT, None) }.ok(),
+        Some(Start::Known(k)) => {
+            unsafe { SHGetKnownFolderItem::<IShellItem>(&known_id(*k), KF_FLAG_DEFAULT, None) }.ok()
+        }
         Some(Start::Path(p)) => item_at(p),
         None => None,
     };
     if let Some(item) = start {
-        let _ = unsafe { if n.force_start { dialog.SetFolder(&item) } else { dialog.SetDefaultFolder(&item) } };
+        let _ = unsafe {
+            if n.force_start {
+                dialog.SetFolder(&item)
+            } else {
+                dialog.SetDefaultFolder(&item)
+            }
+        };
     }
     if let Some(name) = &n.suggested_name {
         let _ = unsafe { dialog.SetFileName(&HSTRING::from(name.as_str())) };
@@ -312,10 +368,18 @@ unsafe fn show(n: &Native, owner: isize) -> Result<Option<Vec<PathBuf>>, Fail> {
     Ok(Some(out))
 }
 
-pub(super) fn color(value: &str, owner: isize, cancel: &Cancellation) -> Result<Option<String>, Fail> {
+pub(super) fn color(
+    value: &str,
+    owner: isize,
+    cancel: &Cancellation,
+) -> Result<Option<String>, Fail> {
     use windows::Win32::Foundation::COLORREF;
-    use windows::Win32::UI::Controls::Dialogs::{ChooseColorW, CommDlgExtendedError, CHOOSECOLORW, CC_FULLOPEN, CC_RGBINIT};
-    if cancel.is_requested() { return Ok(None); }
+    use windows::Win32::UI::Controls::Dialogs::{
+        ChooseColorW, CommDlgExtendedError, CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW,
+    };
+    if cancel.is_requested() {
+        return Ok(None);
+    }
     let _timer = CancellationTimer::new(cancel.clone())?;
     let number = u32::from_str_radix(value.trim_start_matches('#'), 16).unwrap_or(0);
     let rgb = ((number & 0xff) << 16) | (number & 0xff00) | ((number >> 16) & 0xff);
@@ -334,8 +398,14 @@ pub(super) fn color(value: &str, owner: isize, cancel: &Cancellation) -> Result<
         Ok(Some(format!("#{rgb:06x}")))
     } else {
         let error = unsafe { CommDlgExtendedError() }.0;
-        if error == 0 { Ok(None) } else {
-            Err(Fail::new("InvalidStateError", format!("the color dialog failed ({error})")).code("EIO"))
+        if error == 0 {
+            Ok(None)
+        } else {
+            Err(Fail::new(
+                "InvalidStateError",
+                format!("the color dialog failed ({error})"),
+            )
+            .code("EIO"))
         }
     }
 }

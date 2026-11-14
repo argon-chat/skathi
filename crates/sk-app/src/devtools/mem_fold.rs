@@ -104,7 +104,10 @@ impl Region {
     }
 
     pub fn shared(&self) -> bool {
-        matches!(self.share_mode, SM_SHARED | SM_TRUESHARED | SM_SHARED_ALIASED)
+        matches!(
+            self.share_mode,
+            SM_SHARED | SM_TRUESHARED | SM_SHARED_ALIASED
+        )
     }
 }
 
@@ -134,13 +137,27 @@ pub(super) fn thread_group(name: &str) -> String {
             out.push(c);
         }
     }
-    if out.is_empty() { "(unnamed)".into() } else { out }
+    if out.is_empty() {
+        "(unnamed)".into()
+    } else {
+        out
+    }
 }
 
 /// The group of the thread whose `[low, high)` stack contains the region, with its thread count.
-pub(super) fn stack_slice(start: u64, stacks: &[(u64, u64, String)], counts: &HashMap<String, usize>) -> String {
-    match stacks.iter().find(|(low, high, _)| *low <= start && start < *high) {
-        Some((_, _, g)) => format!("thread stacks: {g} ×{}", counts.get(g).copied().unwrap_or(1)),
+pub(super) fn stack_slice(
+    start: u64,
+    stacks: &[(u64, u64, String)],
+    counts: &HashMap<String, usize>,
+) -> String {
+    match stacks
+        .iter()
+        .find(|(low, high, _)| *low <= start && start < *high)
+    {
+        Some((_, _, g)) => format!(
+            "thread stacks: {g} ×{}",
+            counts.get(g).copied().unwrap_or(1)
+        ),
         None => format!("{STACKS}: no live pthread (exited, or not a pthread)"),
     }
 }
@@ -203,28 +220,49 @@ pub(super) fn tag_name(t: u32) -> String {
 /// The region's category and slice. `mi_tag` is mimalloc's OS-memory tag.
 pub(super) fn classify(r: &Region, mi_tag: u32) -> (Cat, String) {
     match r.backing {
-        Backing::Image if r.shared_cache => (Cat::Images, "dyld shared cache (system libraries' written __DATA)".into()),
-        Backing::Image => (Cat::Images, r.name.clone().unwrap_or_else(|| "(unnamed image)".into())),
-        Backing::File => (Cat::Mapped, r.name.clone().unwrap_or_else(|| "(unnamed file)".into())),
+        Backing::Image if r.shared_cache => (
+            Cat::Images,
+            "dyld shared cache (system libraries' written __DATA)".into(),
+        ),
+        Backing::Image => (
+            Cat::Images,
+            r.name.clone().unwrap_or_else(|| "(unnamed image)".into()),
+        ),
+        Backing::File => (
+            Cat::Mapped,
+            r.name.clone().unwrap_or_else(|| "(unnamed file)".into()),
+        ),
         Backing::Anonymous => {
             let t = r.tag;
             let s = |s: &str| s.to_string();
             match t {
                 _ if t == mi_tag => (Cat::Jsc, s(MIMALLOC)),
-                tag::JAVASCRIPT_CORE => (Cat::Jsc, s("JavaScriptCore VM regions (tag 63: Gigacage, structure heap)")),
-                tag::JAVASCRIPT_JIT_EXECUTABLE_ALLOCATOR => (Cat::Jsc, s("JIT code (executable pages)")),
-                tag::JAVASCRIPT_JIT_REGISTER_FILE => (Cat::Jsc, s("JS stack / register file (tag 65)")),
+                tag::JAVASCRIPT_CORE => (
+                    Cat::Jsc,
+                    s("JavaScriptCore VM regions (tag 63: Gigacage, structure heap)"),
+                ),
+                tag::JAVASCRIPT_JIT_EXECUTABLE_ALLOCATOR => {
+                    (Cat::Jsc, s("JIT code (executable pages)"))
+                }
+                tag::JAVASCRIPT_JIT_REGISTER_FILE => {
+                    (Cat::Jsc, s("JS stack / register file (tag 65)"))
+                }
                 0 if r.exec => (Cat::Jsc, s("JIT code (executable pages)")),
                 tag::MALLOC => (Cat::Rust, s("malloc: zone metadata")),
                 tag::MALLOC_TINY => (Cat::Rust, s("malloc: tiny")),
                 tag::MALLOC_SMALL => (Cat::Rust, s("malloc: small")),
                 tag::MALLOC_MEDIUM => (Cat::Rust, s("malloc: medium")),
-                tag::MALLOC_LARGE | tag::MALLOC_LARGE_REUSABLE | tag::MALLOC_LARGE_REUSED | tag::MALLOC_HUGE | tag::REALLOC => {
-                    (Cat::Rust, s("malloc: large"))
-                }
+                tag::MALLOC_LARGE
+                | tag::MALLOC_LARGE_REUSABLE
+                | tag::MALLOC_LARGE_REUSED
+                | tag::MALLOC_HUGE
+                | tag::REALLOC => (Cat::Rust, s("malloc: large")),
                 tag::MALLOC_NANO => (Cat::Rust, s("malloc: nano")),
                 tag::MALLOC_PROB_GUARD => (Cat::Rust, s("malloc: probabilistic guard")),
-                tag::IOACCELERATOR => (Cat::Graphics, s("IOAccelerator (Metal buffers and textures mapped here)")),
+                tag::IOACCELERATOR => (
+                    Cat::Graphics,
+                    s("IOAccelerator (Metal buffers and textures mapped here)"),
+                ),
                 tag::IOSURFACE => (Cat::Graphics, s("IOSurface (window and layer backing)")),
                 tag::IOKIT => (Cat::Graphics, s("IOKit mappings")),
                 tag::LAYERKIT => (Cat::Graphics, s("CoreAnimation")),
@@ -239,7 +277,10 @@ pub(super) fn classify(r: &Region, mi_tag: u32) -> (Cat, String) {
                 tag::COREIMAGE => (Cat::Graphics, s("CoreImage")),
                 tag::GLSL | tag::OPENCL => (Cat::Graphics, s("GLSL / OpenCL")),
                 tag::STACK => (Cat::Other, s(STACKS)),
-                0 if r.shared() => (Cat::Mapped, s("shared memory (anonymous, shared with another process)")),
+                0 if r.shared() => (
+                    Cat::Mapped,
+                    s("shared memory (anonymous, shared with another process)"),
+                ),
                 _ => (Cat::Other, tag_name(t)),
             }
         }
@@ -273,16 +314,28 @@ impl Fold {
 
     /// Biggest first.
     pub fn slices_of(&self, cat: Cat) -> Vec<(String, f64)> {
-        let mut v: Vec<(String, f64)> =
-            self.slices.iter().filter(|((c, _), _)| *c == cat).map(|((_, s), b)| (s.clone(), *b)).collect();
+        let mut v: Vec<(String, f64)> = self
+            .slices
+            .iter()
+            .filter(|((c, _), _)| *c == cat)
+            .map(|((_, s), b)| (s.clone(), *b))
+            .collect();
         v.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         v
     }
 
     /// The biggest `n` slices as rows, then the rest as one (`what` names them).
     fn rows(&self, cat: Cat, n: usize, what: &str, skip: &[&str]) -> Vec<Json> {
-        let all: Vec<(String, f64)> = self.slices_of(cat).into_iter().filter(|(s, _)| !skip.contains(&s.as_str())).collect();
-        let mut rows: Vec<Json> = all.iter().take(n).map(|(s, b)| item(s.clone(), *b)).collect();
+        let all: Vec<(String, f64)> = self
+            .slices_of(cat)
+            .into_iter()
+            .filter(|(s, _)| !skip.contains(&s.as_str()))
+            .collect();
+        let mut rows: Vec<Json> = all
+            .iter()
+            .take(n)
+            .map(|(s, b)| item(s.clone(), *b))
+            .collect();
         if all.len() > n {
             let rest: f64 = all.iter().skip(n).map(|(_, b)| *b).sum();
             rows.push(item(format!("{} other {what}", all.len() - n), rest));
@@ -332,9 +385,14 @@ pub(super) fn breakdown(i: &Inputs) -> Json {
     ));
     let mapped_items = f.rows(Cat::Mapped, 8, "files", &[]);
 
-    let mi_pages = f.slices.get(&(Cat::Jsc, MIMALLOC.to_string())).copied().unwrap_or(0.0);
+    let mi_pages = f
+        .slices
+        .get(&(Cat::Jsc, MIMALLOC.to_string()))
+        .copied()
+        .unwrap_or(0.0);
     let mi_live = i.mi_live.min(mi_pages);
-    let mut jsc_items = vec![
+    let mut jsc_items =
+        vec![
         item(
             "mimalloc: live allocations (GC heap blocks, strings, bytecode, the bundle's source)",
             mi_live,
@@ -381,7 +439,10 @@ pub(super) fn breakdown(i: &Inputs) -> Json {
         ));
     }
     if i.graphics_ledger > 0.0 {
-        graphics_items.push(info("graphics ledger: all GPU memory charged to this process", i.graphics_ledger));
+        graphics_items.push(info(
+            "graphics ledger: all GPU memory charged to this process",
+            i.graphics_ledger,
+        ));
     }
     let graphics = f.of(Cat::Graphics) + gpu_unmapped;
 
@@ -400,7 +461,10 @@ pub(super) fn breakdown(i: &Inputs) -> Json {
     }
     let other = f.of(Cat::Other) + rest_unmapped;
 
-    let res = |c: Cat| i.with_resident.then(|| f.resident.get(&c).copied().unwrap_or([0.0, 0.0]));
+    let res = |c: Cat| {
+        i.with_resident
+            .then(|| f.resident.get(&c).copied().unwrap_or([0.0, 0.0]))
+    };
     let cats = vec![
         with_resident(
             category(
@@ -495,7 +559,13 @@ mod tests {
     const PAGE: u64 = 16384;
 
     fn anon(tag: u32, resident: u64) -> Region {
-        Region { tag, share_mode: SM_PRIVATE, resident, size: resident * PAGE, ..Default::default() }
+        Region {
+            tag,
+            share_mode: SM_PRIVATE,
+            resident,
+            size: resident * PAGE,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -503,12 +573,30 @@ mod tests {
         let mut r = anon(tag::MALLOC_TINY, 10);
         r.swapped = 3;
         r.reusable = 4;
-        assert_eq!(r.charged_pages(), 10 - 4 + 3, "anonymous: resident − reusable + compressed");
+        assert_eq!(
+            r.charged_pages(),
+            10 - 4 + 3,
+            "anonymous: resident − reusable + compressed"
+        );
         r.share_mode = SM_EMPTY;
         assert_eq!(r.charged_pages(), 0, "nothing behind it");
-        let file = Region { backing: Backing::Image, share_mode: SM_COW, resident: 50, dirtied: 2, swapped: 1, ..Default::default() };
-        assert_eq!(file.charged_pages(), 3, "a file's clean pages are the file cache's");
-        let more = Region { reusable: 20, ..anon(0, 5) };
+        let file = Region {
+            backing: Backing::Image,
+            share_mode: SM_COW,
+            resident: 50,
+            dirtied: 2,
+            swapped: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            file.charged_pages(),
+            3,
+            "a file's clean pages are the file cache's"
+        );
+        let more = Region {
+            reusable: 20,
+            ..anon(0, 5)
+        };
         assert_eq!(more.charged_pages(), 0, "reusable never underflows");
     }
 
@@ -521,37 +609,103 @@ mod tests {
         // MIMALLOC_OS_TAG=250: 240 is then an ordinary tag.
         assert_eq!(classify(&anon(250, 1), 250).0, Cat::Jsc);
         assert_eq!(classify(&anon(240, 1), 250).0, Cat::Other);
-        for t in [tag::JAVASCRIPT_CORE, tag::JAVASCRIPT_JIT_EXECUTABLE_ALLOCATOR, tag::JAVASCRIPT_JIT_REGISTER_FILE] {
+        for t in [
+            tag::JAVASCRIPT_CORE,
+            tag::JAVASCRIPT_JIT_EXECUTABLE_ALLOCATOR,
+            tag::JAVASCRIPT_JIT_REGISTER_FILE,
+        ] {
             assert_eq!(cat(anon(t, 1)), Cat::Jsc, "tag {t}");
         }
-        assert_eq!(cat(Region { exec: true, ..anon(0, 1) }), Cat::Jsc, "untagged executable: JIT");
+        assert_eq!(
+            cat(Region {
+                exec: true,
+                ..anon(0, 1)
+            }),
+            Cat::Jsc,
+            "untagged executable: JIT"
+        );
         for t in [1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13] {
             assert_eq!(cat(anon(t, 1)), Cat::Rust, "malloc tag {t}");
         }
-        for t in [tag::IOACCELERATOR, tag::IOSURFACE, tag::IOKIT, tag::LAYERKIT, tag::CGIMAGE, 54, 57] {
+        for t in [
+            tag::IOACCELERATOR,
+            tag::IOSURFACE,
+            tag::IOKIT,
+            tag::LAYERKIT,
+            tag::CGIMAGE,
+            54,
+            57,
+        ] {
             assert_eq!(cat(anon(t, 1)), Cat::Graphics, "tag {t}");
         }
-        assert_eq!(classify(&anon(tag::STACK, 1), mi), (Cat::Other, STACKS.to_string()));
+        assert_eq!(
+            classify(&anon(tag::STACK, 1), mi),
+            (Cat::Other, STACKS.to_string())
+        );
         assert_eq!(cat(anon(0, 1)), Cat::Other);
-        assert_eq!(cat(Region { share_mode: SM_SHARED, ..anon(0, 1) }), Cat::Mapped, "shared anonymous memory");
-        assert_eq!(cat(Region { share_mode: SM_TRUESHARED, ..anon(tag::IOACCELERATOR, 1) }), Cat::Graphics, "the tag wins");
-        let dylib = Region { backing: Backing::Image, name: Some("libvn.dylib".into()), ..Default::default() };
-        assert_eq!(classify(&dylib, mi), (Cat::Images, "libvn.dylib".to_string()));
-        let cache = Region { backing: Backing::Image, shared_cache: true, ..Default::default() };
+        assert_eq!(
+            cat(Region {
+                share_mode: SM_SHARED,
+                ..anon(0, 1)
+            }),
+            Cat::Mapped,
+            "shared anonymous memory"
+        );
+        assert_eq!(
+            cat(Region {
+                share_mode: SM_TRUESHARED,
+                ..anon(tag::IOACCELERATOR, 1)
+            }),
+            Cat::Graphics,
+            "the tag wins"
+        );
+        let dylib = Region {
+            backing: Backing::Image,
+            name: Some("libvn.dylib".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            classify(&dylib, mi),
+            (Cat::Images, "libvn.dylib".to_string())
+        );
+        let cache = Region {
+            backing: Backing::Image,
+            shared_cache: true,
+            ..Default::default()
+        };
         assert_eq!(cat(cache), Cat::Images);
-        let font = Region { backing: Backing::File, name: Some("SFNS.ttf".into()), ..Default::default() };
+        let font = Region {
+            backing: Backing::File,
+            name: Some("SFNS.ttf".into()),
+            ..Default::default()
+        };
         assert_eq!(classify(&font, mi), (Cat::Mapped, "SFNS.ttf".to_string()));
     }
 
     #[test]
     fn stacks_group_by_thread_name() {
-        assert_eq!(thread_group("tokio-runtime-worker-12"), "tokio-runtime-worker-#");
-        assert_eq!(thread_group(" JSC Heap Collector Thread 3 "), "JSC Heap Collector Thread #");
+        assert_eq!(
+            thread_group("tokio-runtime-worker-12"),
+            "tokio-runtime-worker-#"
+        );
+        assert_eq!(
+            thread_group(" JSC Heap Collector Thread 3 "),
+            "JSC Heap Collector Thread #"
+        );
         assert_eq!(thread_group(""), "(unnamed)");
-        let stacks = vec![(0x1000, 0x9000, "main".to_string()), (0x10000, 0x20000, "worker #".to_string())];
+        let stacks = vec![
+            (0x1000, 0x9000, "main".to_string()),
+            (0x10000, 0x20000, "worker #".to_string()),
+        ];
         let counts = HashMap::from([("main".to_string(), 1), ("worker #".to_string(), 4)]);
-        assert_eq!(stack_slice(0x1000, &stacks, &counts), "thread stacks: main ×1");
-        assert_eq!(stack_slice(0x1ffff, &stacks, &counts), "thread stacks: worker # ×4");
+        assert_eq!(
+            stack_slice(0x1000, &stacks, &counts),
+            "thread stacks: main ×1"
+        );
+        assert_eq!(
+            stack_slice(0x1ffff, &stacks, &counts),
+            "thread stacks: worker # ×4"
+        );
         assert!(stack_slice(0x9000, &stacks, &counts).starts_with("thread stacks: no live pthread"));
     }
 
@@ -591,8 +745,21 @@ mod tests {
             anon(tag::IOACCELERATOR, 5),
             anon(tag::STACK, 1),
             anon(60, 1),
-            Region { backing: Backing::Image, name: Some("sk-app".into()), share_mode: SM_COW, resident: 9, dirtied: 2, ..Default::default() },
-            Region { backing: Backing::File, name: Some("icu.dat".into()), share_mode: SM_PRIVATE, resident: 7, ..Default::default() },
+            Region {
+                backing: Backing::Image,
+                name: Some("sk-app".into()),
+                share_mode: SM_COW,
+                resident: 9,
+                dirtied: 2,
+                ..Default::default()
+            },
+            Region {
+                backing: Backing::File,
+                name: Some("icu.dat".into()),
+                share_mode: SM_PRIVATE,
+                resident: 7,
+                ..Default::default()
+            },
         ];
         for r in &regions {
             let (cat, slice) = classify(r, tag::MIMALLOC_DEFAULT);
@@ -606,12 +773,23 @@ mod tests {
             .and_then(Json::as_arr)
             .unwrap()
             .iter()
-            .map(|c| (c.get("key").and_then(Json::as_str).unwrap().to_string(), c.get("bytes").and_then(Json::as_f64).unwrap()))
+            .map(|c| {
+                (
+                    c.get("key").and_then(Json::as_str).unwrap().to_string(),
+                    c.get("bytes").and_then(Json::as_f64).unwrap(),
+                )
+            })
             .collect()
     }
 
     fn slices(b: &Json, key: &str) -> Vec<(String, f64, bool)> {
-        let c = b.get("categories").and_then(Json::as_arr).unwrap().iter().find(|c| c.get("key").and_then(Json::as_str) == Some(key)).unwrap();
+        let c = b
+            .get("categories")
+            .and_then(Json::as_arr)
+            .unwrap()
+            .iter()
+            .find(|c| c.get("key").and_then(Json::as_str) == Some(key))
+            .unwrap();
         c.get("items")
             .and_then(Json::as_arr)
             .unwrap()
@@ -642,24 +820,41 @@ mod tests {
         let total = b.get("totalBytes").and_then(Json::as_f64).unwrap();
         assert_eq!(total, 25.0 * p);
         assert_eq!(c.iter().map(|(_, v)| v).sum::<f64>(), total);
-        assert_eq!(c[4].1, 9.0 * p, "graphics: 5 mapped IOAccelerator pages + 4 from the ledger");
-        assert_eq!(c[5].1, 4.0 * p, "other: a stack page, a dyld page, 2 pages of page tables");
+        assert_eq!(
+            c[4].1,
+            9.0 * p,
+            "graphics: 5 mapped IOAccelerator pages + 4 from the ledger"
+        );
+        assert_eq!(
+            c[5].1,
+            4.0 * p,
+            "other: a stack page, a dyld page, 2 pages of page tables"
+        );
         assert_eq!(c[1].1, 0.0, "a clean mapped file costs no footprint");
         // Every category's slices add up to it.
         for (key, bytes) in &c {
-            let sum: f64 = slices(&b, key).iter().filter(|s| !s.2).map(|s| s.1.max(0.0)).sum();
+            let sum: f64 = slices(&b, key)
+                .iter()
+                .filter(|s| !s.2)
+                .map(|s| s.1.max(0.0))
+                .sum();
             assert_eq!(sum, *bytes, "{key}");
         }
         let jsc = slices(&b, "jsc");
         assert_eq!(jsc[0].1, p, "mimalloc live");
         assert_eq!(jsc[1].1, 3.0 * p, "mimalloc pages not allocated");
         let rust = slices(&b, "rust");
-        assert!(rust.iter().any(|s| s.0 == "by region: malloc: small" && s.1 == 3.0 * p && s.2));
+        assert!(rust
+            .iter()
+            .any(|s| s.0 == "by region: malloc: small" && s.1 == 3.0 * p && s.2));
         let gpu = b.get("gpu").unwrap();
         assert_eq!(gpu.get("sharedBytes").and_then(Json::as_f64), Some(9.0 * p));
         assert_eq!(gpu.get("inBar").and_then(Json::as_bool), Some(true));
         let images = b.get("categories").and_then(Json::as_arr).unwrap()[0].clone();
-        assert_eq!(images.get("residentBytes").and_then(Json::as_f64), Some(9.0 * p));
+        assert_eq!(
+            images.get("residentBytes").and_then(Json::as_f64),
+            Some(9.0 * p)
+        );
     }
 
     #[test]
@@ -671,10 +866,22 @@ mod tests {
         let total = b.get("totalBytes").and_then(Json::as_f64).unwrap();
         assert_eq!(total, 19.0 * p);
         assert_eq!(c.iter().map(|(_, v)| v).sum::<f64>(), total);
-        assert_eq!(b.get("privateBytes").and_then(Json::as_f64), Some(15.0 * p), "the kernel's figure is kept");
+        assert_eq!(
+            b.get("privateBytes").and_then(Json::as_f64),
+            Some(15.0 * p),
+            "the kernel's figure is kept"
+        );
         let other = slices(&b, "other");
-        assert!(other.iter().any(|s| s.2 && s.1 == 4.0 * p), "an info row names the overshoot");
-        assert!(!slices(&b, "graphics").iter().any(|s| !s.2 && s.0.contains("ledger")), "no unmapped GPU slice");
+        assert!(
+            other.iter().any(|s| s.2 && s.1 == 4.0 * p),
+            "an info row names the overshoot"
+        );
+        assert!(
+            !slices(&b, "graphics")
+                .iter()
+                .any(|s| !s.2 && s.0.contains("ledger")),
+            "no unmapped GPU slice"
+        );
     }
 
     #[test]

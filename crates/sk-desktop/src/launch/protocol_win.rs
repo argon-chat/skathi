@@ -13,11 +13,14 @@
 //! never overwritten: registering it is a TypeError naming the owner. Writes are idempotent.
 
 use windows::core::{HSTRING, PWSTR};
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR};
+use windows::Win32::Foundation::{
+    ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR,
+};
 use windows::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
-    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ, REG_VALUE_TYPE,
+    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW,
+    RegSetValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE,
+    REG_OPTION_NON_VOLATILE, REG_SZ, REG_VALUE_TYPE,
 };
 use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
 
@@ -34,7 +37,11 @@ pub struct Hive {
 
 impl Hive {
     pub fn user() -> Hive {
-        Hive { classes: r"Software\Classes".into(), machine: Some(r"Software\Classes".into()), notify: true }
+        Hive {
+            classes: r"Software\Classes".into(),
+            machine: Some(r"Software\Classes".into()),
+            notify: true,
+        }
     }
 }
 
@@ -56,7 +63,19 @@ impl Drop for Key {
 
 fn open(root: HKEY, path: &str, write: bool) -> Result<Option<Key>, WIN32_ERROR> {
     let mut h = HKEY::default();
-    let r = unsafe { RegOpenKeyExW(root, &HSTRING::from(path), None, if write { KEY_READ | KEY_WRITE } else { KEY_READ }, &mut h) };
+    let r = unsafe {
+        RegOpenKeyExW(
+            root,
+            &HSTRING::from(path),
+            None,
+            if write {
+                KEY_READ | KEY_WRITE
+            } else {
+                KEY_READ
+            },
+            &mut h,
+        )
+    };
     if r == ERROR_SUCCESS {
         Ok(Some(Key(h)))
     } else if r == ERROR_FILE_NOT_FOUND {
@@ -92,7 +111,9 @@ fn read_sz(key: &Key, name: &str) -> Option<String> {
     let name = HSTRING::from(name);
     let mut ty = REG_VALUE_TYPE::default();
     let mut len = 0u32;
-    if unsafe { RegQueryValueExW(key.0, &name, None, Some(&mut ty), None, Some(&mut len)) } != ERROR_SUCCESS {
+    if unsafe { RegQueryValueExW(key.0, &name, None, Some(&mut ty), None, Some(&mut len)) }
+        != ERROR_SUCCESS
+    {
         return None;
     }
     if ty != REG_SZ {
@@ -100,10 +121,23 @@ fn read_sz(key: &Key, name: &str) -> Option<String> {
     }
     let mut buf = vec![0u8; len as usize + 2];
     let mut len2 = buf.len() as u32;
-    if unsafe { RegQueryValueExW(key.0, &name, None, None, Some(buf.as_mut_ptr()), Some(&mut len2)) } != ERROR_SUCCESS {
+    if unsafe {
+        RegQueryValueExW(
+            key.0,
+            &name,
+            None,
+            None,
+            Some(buf.as_mut_ptr()),
+            Some(&mut len2),
+        )
+    } != ERROR_SUCCESS
+    {
         return None;
     }
-    let wide: Vec<u16> = buf[..len2 as usize].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let wide: Vec<u16> = buf[..len2 as usize]
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
     let end = wide.iter().position(|&c| c == 0).unwrap_or(wide.len());
     Some(String::from_utf16_lossy(&wide[..end]))
 }
@@ -126,7 +160,9 @@ fn describe_owner(key: &Key, scheme: &str) -> String {
     if let Some(owner) = read_sz(key, OWNER_VALUE).filter(|o| !o.is_empty()) {
         return format!("the Skathi app \"{owner}\"");
     }
-    match read_sz(key, "").filter(|d| !d.is_empty() && !d.eq_ignore_ascii_case(&format!("URL:{scheme}"))) {
+    match read_sz(key, "")
+        .filter(|d| !d.is_empty() && !d.eq_ignore_ascii_case(&format!("URL:{scheme}")))
+    {
         Some(desc) => format!("another application (\"{desc}\")"),
         None => "another application".into(),
     }
@@ -134,24 +170,34 @@ fn describe_owner(key: &Key, scheme: &str) -> String {
 
 pub fn status(hive: &Hive, scheme: &str, id: &str) -> Result<Status, String> {
     let path = format!(r"{}\{scheme}", hive.classes);
-    match open(HKEY_CURRENT_USER, &path, false).map_err(|e| format!("reading HKCU\\{path}: {e:?}"))? {
+    match open(HKEY_CURRENT_USER, &path, false)
+        .map_err(|e| format!("reading HKCU\\{path}: {e:?}"))?
+    {
         Some(key) => {
             if read_sz(&key, OWNER_VALUE).as_deref() == Some(id) {
-                let command = open(HKEY_CURRENT_USER, &format!(r"{path}\shell\open\command"), false)
-                    .ok()
-                    .flatten()
-                    .and_then(|k| read_sz(&k, ""))
-                    .unwrap_or_default();
+                let command = open(
+                    HKEY_CURRENT_USER,
+                    &format!(r"{path}\shell\open\command"),
+                    false,
+                )
+                .ok()
+                .flatten()
+                .and_then(|k| read_sz(&k, ""))
+                .unwrap_or_default();
                 Ok(Status::Ours { command })
             } else {
-                Ok(Status::Foreign { owner: describe_owner(&key, scheme) })
+                Ok(Status::Foreign {
+                    owner: describe_owner(&key, scheme),
+                })
             }
         }
         None => {
             if let Some(machine) = &hive.machine {
                 let mpath = format!(r"{machine}\{scheme}");
                 if let Ok(Some(_)) = open(HKEY_LOCAL_MACHINE, &mpath, false) {
-                    return Ok(Status::Foreign { owner: "a machine-wide registration (HKLM)".into() });
+                    return Ok(Status::Foreign {
+                        owner: "a machine-wide registration (HKLM)".into(),
+                    });
                 }
             }
             Ok(Status::Absent)
@@ -159,7 +205,13 @@ pub fn status(hive: &Hive, scheme: &str, id: &str) -> Result<Status, String> {
     }
 }
 
-pub fn register(hive: &Hive, scheme: &str, id: &str, exe: &str, dev_slot: Option<&str>) -> Result<bool, String> {
+pub fn register(
+    hive: &Hive,
+    scheme: &str,
+    id: &str,
+    exe: &str,
+    dev_slot: Option<&str>,
+) -> Result<bool, String> {
     if let Status::Foreign { owner } = status(hive, scheme, id)? {
         return Err(format!("the \"{scheme}\" scheme is registered to {owner}; Skathi never takes over another app's scheme"));
     }
@@ -170,11 +222,13 @@ pub fn register(hive: &Hive, scheme: &str, id: &str, exe: &str, dev_slot: Option
     wrote |= write_sz(&root, OWNER_VALUE, id).map_err(|e| fail("", e))?;
     wrote |= write_sz(&root, "", &format!("URL:{scheme}")).map_err(|e| fail("", e))?;
     wrote |= write_sz(&root, "URL Protocol", "").map_err(|e| fail("", e))?;
-    let icon = create(HKEY_CURRENT_USER, &format!(r"{path}\DefaultIcon")).map_err(|e| fail(r"\DefaultIcon", e))?;
+    let icon = create(HKEY_CURRENT_USER, &format!(r"{path}\DefaultIcon"))
+        .map_err(|e| fail(r"\DefaultIcon", e))?;
     wrote |= write_sz(&icon, "", &format!("\"{exe}\",0")).map_err(|e| fail(r"\DefaultIcon", e))?;
     let cmd = create(HKEY_CURRENT_USER, &format!(r"{path}\shell\open\command"))
         .map_err(|e| fail(r"\shell\open\command", e))?;
-    wrote |= write_sz(&cmd, "", &command_line(exe, dev_slot)).map_err(|e| fail(r"\shell\open\command", e))?;
+    wrote |= write_sz(&cmd, "", &command_line(exe, dev_slot))
+        .map_err(|e| fail(r"\shell\open\command", e))?;
     if wrote && hive.notify {
         unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None) };
     }
@@ -186,7 +240,9 @@ pub fn is_registered(hive: &Hive, scheme: &str, id: &str, exe: &str) -> bool {
 }
 
 fn delete(hive: &Hive, scheme: &str) -> bool {
-    let Ok(Some(classes)) = open(HKEY_CURRENT_USER, &hive.classes, true) else { return false };
+    let Ok(Some(classes)) = open(HKEY_CURRENT_USER, &hive.classes, true) else {
+        return false;
+    };
     let ok = unsafe { RegDeleteTreeW(classes.0, &HSTRING::from(scheme)) } == ERROR_SUCCESS;
     if ok && hive.notify {
         unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None) };
@@ -199,13 +255,26 @@ pub fn unregister(hive: &Hive, scheme: &str, id: &str, exe: &str) -> bool {
 }
 
 pub fn unregister_all(hive: &Hive, id: &str) -> Vec<String> {
-    let Ok(Some(classes)) = open(HKEY_CURRENT_USER, &hive.classes, false) else { return Vec::new() };
+    let Ok(Some(classes)) = open(HKEY_CURRENT_USER, &hive.classes, false) else {
+        return Vec::new();
+    };
     let mut ours = Vec::new();
     let mut i = 0u32;
     loop {
         let mut name = vec![0u16; 256];
         let mut len = name.len() as u32;
-        let r = unsafe { RegEnumKeyExW(classes.0, i, Some(PWSTR(name.as_mut_ptr())), &mut len, None, None, None, None) };
+        let r = unsafe {
+            RegEnumKeyExW(
+                classes.0,
+                i,
+                Some(PWSTR(name.as_mut_ptr())),
+                &mut len,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
         if r == ERROR_NO_MORE_ITEMS {
             break;
         }
@@ -217,7 +286,11 @@ pub fn unregister_all(hive: &Hive, id: &str) -> Vec<String> {
         if sub.starts_with('.') || sub.starts_with('{') {
             continue;
         }
-        if let Ok(Some(k)) = open(HKEY_CURRENT_USER, &format!(r"{}\{sub}", hive.classes), false) {
+        if let Ok(Some(k)) = open(
+            HKEY_CURRENT_USER,
+            &format!(r"{}\{sub}", hive.classes),
+            false,
+        ) {
             if read_sz(&k, OWNER_VALUE).as_deref() == Some(id) {
                 ours.push(sub);
             }
@@ -242,7 +315,11 @@ mod tests {
     impl Scratch {
         fn new(tag: &str) -> Scratch {
             let base = format!(r"Software\skathi-test-{}-{tag}", std::process::id());
-            let hive = Hive { classes: format!(r"{base}\Classes"), machine: None, notify: false };
+            let hive = Hive {
+                classes: format!(r"{base}\Classes"),
+                machine: None,
+                notify: false,
+            };
             create(HKEY_CURRENT_USER, &hive.classes).expect("scratch hive");
             Scratch(hive, base)
         }
@@ -269,22 +346,49 @@ mod tests {
     fn register_writes_the_documented_shape_and_is_idempotent() {
         let s = Scratch::new("shape");
         assert_eq!(status(&s.0, "vntest", "gl.argon.notes"), Ok(Status::Absent));
-        assert_eq!(register(&s.0, "vntest", "gl.argon.notes", EXE, None), Ok(true));
-        assert_eq!(register(&s.0, "vntest", "gl.argon.notes", EXE, None), Ok(false), "nothing changed, nothing written");
-        let root = open(HKEY_CURRENT_USER, &format!(r"{}\vntest", s.0.classes), false).unwrap().unwrap();
+        assert_eq!(
+            register(&s.0, "vntest", "gl.argon.notes", EXE, None),
+            Ok(true)
+        );
+        assert_eq!(
+            register(&s.0, "vntest", "gl.argon.notes", EXE, None),
+            Ok(false),
+            "nothing changed, nothing written"
+        );
+        let root = open(
+            HKEY_CURRENT_USER,
+            &format!(r"{}\vntest", s.0.classes),
+            false,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(read_sz(&root, "").as_deref(), Some("URL:vntest"));
         assert_eq!(read_sz(&root, "URL Protocol").as_deref(), Some(""));
-        assert_eq!(read_sz(&root, OWNER_VALUE).as_deref(), Some("gl.argon.notes"));
-        let icon = open(HKEY_CURRENT_USER, &format!(r"{}\vntest\DefaultIcon", s.0.classes), false).unwrap().unwrap();
+        assert_eq!(
+            read_sz(&root, OWNER_VALUE).as_deref(),
+            Some("gl.argon.notes")
+        );
+        let icon = open(
+            HKEY_CURRENT_USER,
+            &format!(r"{}\vntest\DefaultIcon", s.0.classes),
+            false,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(read_sz(&icon, "").unwrap(), format!("\"{EXE}\",0"));
         assert_eq!(
             status(&s.0, "vntest", "gl.argon.notes"),
-            Ok(Status::Ours { command: command_line(EXE, None) })
+            Ok(Status::Ours {
+                command: command_line(EXE, None)
+            })
         );
         assert!(is_registered(&s.0, "vntest", "gl.argon.notes", EXE));
         let moved = r"D:\Notes\Notes.exe";
         assert!(!is_registered(&s.0, "vntest", "gl.argon.notes", moved));
-        assert_eq!(register(&s.0, "vntest", "gl.argon.notes", moved, Some(r"C:\slot")), Ok(true));
+        assert_eq!(
+            register(&s.0, "vntest", "gl.argon.notes", moved, Some(r"C:\slot")),
+            Ok(true)
+        );
         assert!(is_registered(&s.0, "vntest", "gl.argon.notes", moved));
     }
 
@@ -296,8 +400,15 @@ mod tests {
         drop(k);
         let e = register(&s.0, "other", "gl.argon.notes", EXE, None).unwrap_err();
         assert!(e.contains("Other App Protocol"), "{e}");
-        assert!(!unregister(&s.0, "other", "gl.argon.notes", EXE), "and never deleted");
-        assert!(open(HKEY_CURRENT_USER, &format!(r"{}\other", s.0.classes), false).unwrap().is_some());
+        assert!(
+            !unregister(&s.0, "other", "gl.argon.notes", EXE),
+            "and never deleted"
+        );
+        assert!(
+            open(HKEY_CURRENT_USER, &format!(r"{}\other", s.0.classes), false)
+                .unwrap()
+                .is_some()
+        );
         register(&s.0, "theirs", "gl.argon.other", EXE, None).unwrap();
         let e = register(&s.0, "theirs", "gl.argon.notes", EXE, None).unwrap_err();
         assert!(e.contains("gl.argon.other"), "{e}");
@@ -307,11 +418,20 @@ mod tests {
     fn unregister_needs_our_marker_and_our_exe() {
         let s = Scratch::new("unreg");
         register(&s.0, "vntest", "gl.argon.notes", EXE, None).unwrap();
-        assert!(!unregister(&s.0, "vntest", "gl.argon.notes", r"D:\elsewhere\Notes.exe"), "another copy's");
-        assert!(!unregister(&s.0, "vntest", "gl.argon.other", EXE), "another app's");
+        assert!(
+            !unregister(&s.0, "vntest", "gl.argon.notes", r"D:\elsewhere\Notes.exe"),
+            "another copy's"
+        );
+        assert!(
+            !unregister(&s.0, "vntest", "gl.argon.other", EXE),
+            "another app's"
+        );
         assert!(unregister(&s.0, "vntest", "gl.argon.notes", EXE));
         assert_eq!(status(&s.0, "vntest", "gl.argon.notes"), Ok(Status::Absent));
-        assert!(!unregister(&s.0, "vntest", "gl.argon.notes", EXE), "already gone");
+        assert!(
+            !unregister(&s.0, "vntest", "gl.argon.notes", EXE),
+            "already gone"
+        );
     }
 
     #[test]
@@ -324,7 +444,10 @@ mod tests {
         let mut gone = unregister_all(&s.0, "gl.argon.notes");
         gone.sort();
         assert_eq!(gone, vec!["one".to_string(), "two".to_string()]);
-        assert!(matches!(status(&s.0, "three", "gl.argon.other"), Ok(Status::Ours { .. })));
+        assert!(matches!(
+            status(&s.0, "three", "gl.argon.other"),
+            Ok(Status::Ours { .. })
+        ));
     }
 
     #[test]

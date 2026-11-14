@@ -148,7 +148,14 @@ pub unsafe fn method(g: *mut c_void, obj: u64, name: &str, arity: u32, f: HostFn
 
 pub unsafe fn getter(g: *mut c_void, obj: u64, name: &str, f: HostFn) {
     let a = atom(g, name);
-    glue::rjs_define_accessor(g, obj, a, make_fn(g, &format!("get {name}"), 0, f), UNDEF, 0);
+    glue::rjs_define_accessor(
+        g,
+        obj,
+        a,
+        make_fn(g, &format!("get {name}"), 0, f),
+        UNDEF,
+        0,
+    );
     glue::rjs_atom_free(g, a);
 }
 
@@ -171,6 +178,11 @@ pub unsafe fn warn_compat(g: *mut c_void, key: &str, msg: &str) {
     }
     let console = get(g, global(g), "console");
     if is_cell(console) {
-        let _ = call(g, get(g, console, "warn"), console, &[js_string(g, &format!("[skathi compat] {msg}"))]);
+        let _ = call(
+            g,
+            get(g, console, "warn"),
+            console,
+            &[js_string(g, &format!("[skathi compat] {msg}"))],
+        );
     }
 }

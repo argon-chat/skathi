@@ -93,13 +93,22 @@ pub struct Colorimetry {
 
 impl Colorimetry {
     pub const fn new(matrix: Matrix, full_range: bool) -> Colorimetry {
-        Colorimetry { matrix, full_range, primaries: Primaries::Bt709, transfer: Transfer::Srgb }
+        Colorimetry {
+            matrix,
+            full_range,
+            primaries: Primaries::Bt709,
+            transfer: Transfer::Srgb,
+        }
     }
 
     fn coeffs(self) -> Coeffs {
         let (kr, kb) = self.matrix.kr_kb();
         let kg = 1.0 - kr - kb;
-        let (ky, kc, yoff) = if self.full_range { (1.0, 1.0, 0) } else { (255.0 / 219.0, 255.0 / 224.0, 16) };
+        let (ky, kc, yoff) = if self.full_range {
+            (1.0, 1.0, 0)
+        } else {
+            (255.0 / 219.0, 255.0 / 224.0, 16)
+        };
         let q = |x: f64| (x * (1 << SHIFT) as f64).round() as i16;
         Coeffs {
             yoff,
@@ -125,7 +134,12 @@ impl<'a> Plane<'a> {
     }
 
     fn holds(&self, width: usize, height: usize) -> bool {
-        self.stride >= width && height.checked_sub(1).is_some_and(|h| h.checked_mul(self.stride).and_then(|n| n.checked_add(width)).is_some_and(|n| n <= self.data.len()))
+        self.stride >= width
+            && height.checked_sub(1).is_some_and(|h| {
+                h.checked_mul(self.stride)
+                    .and_then(|n| n.checked_add(width))
+                    .is_some_and(|n| n <= self.data.len())
+            })
     }
 }
 
@@ -180,8 +194,19 @@ impl Converter {
 
     /// At `level`, which must be one of [`Level::available`] (else the best).
     pub fn with_level(level: Level) -> Converter {
-        let level = if Level::available().contains(&level) { level } else { Level::best() };
-        Converter { level, tmp: Vec::new(), u: Vec::new(), v: Vec::new(), scaler: Scaler::default(), gamut: None }
+        let level = if Level::available().contains(&level) {
+            level
+        } else {
+            Level::best()
+        };
+        Converter {
+            level,
+            tmp: Vec::new(),
+            u: Vec::new(),
+            v: Vec::new(),
+            scaler: Scaler::default(),
+            gamut: None,
+        }
     }
 
     pub fn level(&self) -> Level {
@@ -189,11 +214,22 @@ impl Converter {
     }
 
     pub fn memory_bytes(&self) -> usize {
-        self.tmp.capacity() * 2 + self.u.capacity() + self.v.capacity() + self.scaler.bytes() + self.gamut.as_ref().map_or(0, Gamut::bytes)
+        self.tmp.capacity() * 2
+            + self.u.capacity()
+            + self.v.capacity()
+            + self.scaler.bytes()
+            + self.gamut.as_ref().map_or(0, Gamut::bytes)
     }
 
     /// `frame` into `pixels`, `width` × `height` straight BGRA, rows packed.
-    pub fn to_bgra(&mut self, frame: &I420, colour: Colorimetry, pixels: &mut [u8], width: u32, height: u32) -> Result<(), Error> {
+    pub fn to_bgra(
+        &mut self,
+        frame: &I420,
+        colour: Colorimetry,
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(), Error> {
         let (w, h) = (frame.width as usize, frame.height as usize);
         let (tw, th) = (width as usize, height as usize);
         if pixels.len() != tw * th * 4 {
@@ -230,13 +266,27 @@ impl Converter {
         // scaling (growing, or 1:1), or the target's after (shrinking).
         let before = gamut.filter(|_| tw * th >= w * h);
         let after = gamut.filter(|_| tw * th < w * h);
-        let Converter { tmp, u, v, scaler, .. } = self;
+        let Converter {
+            tmp, u, v, scaler, ..
+        } = self;
         let mut convert = |sy: usize, out: &mut [u8]| {
             let j = sy / 2;
-            let far = if sy.is_multiple_of(2) { j.saturating_sub(1) } else { (j + 1).min(ch - 1) };
+            let far = if sy.is_multiple_of(2) {
+                j.saturating_sub(1)
+            } else {
+                (j + 1).min(ch - 1)
+            };
             chroma_row(level, frame.u.row(j, cw), frame.u.row(far, cw), tmp, u);
             chroma_row(level, frame.v.row(j, cw), frame.v.row(far, cw), tmp, v);
-            yuva_row(level, &k, frame.y.row(sy, w), u, v, frame.a.map(|a| a.row(sy, w)), out);
+            yuva_row(
+                level,
+                &k,
+                frame.y.row(sy, w),
+                u,
+                v,
+                frame.a.map(|a| a.row(sy, w)),
+                out,
+            );
             if let Some(g) = before {
                 g.apply(out);
             }
@@ -296,7 +346,10 @@ impl Converter {
             (tw, th),
             |sy, row| row.copy_from_slice(plane.row(sy, w)),
             |oy, row| {
-                for (p, &a) in pixels[oy * tw * 4..(oy + 1) * tw * 4].chunks_exact_mut(4).zip(row) {
+                for (p, &a) in pixels[oy * tw * 4..(oy + 1) * tw * 4]
+                    .chunks_exact_mut(4)
+                    .zip(row)
+                {
                     p.copy_from_slice(&[255, 255, 255, (a + 0.5) as u8]);
                 }
             },

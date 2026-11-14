@@ -51,7 +51,9 @@ pub struct FileStorage {
 
 fn storage() -> &'static FileStorage {
     static S: OnceLock<FileStorage> = OnceLock::new();
-    S.get_or_init(|| FileStorage { state: Mutex::new(State::default()) })
+    S.get_or_init(|| FileStorage {
+        state: Mutex::new(State::default()),
+    })
 }
 
 impl FileStorage {
@@ -74,26 +76,31 @@ impl FileStorage {
             st.encrypted = true;
         }
 
-        let (want, other) =
-            if st.encrypted { (&sealed, &plain) } else { (&plain, &sealed) };
+        let (want, other) = if st.encrypted {
+            (&sealed, &plain)
+        } else {
+            (&plain, &sealed)
+        };
 
         match self.read_one(st, want) {
             Some(entries) => (entries, false),
-            None => {
-                match self.read_one(st, other) {
-                    Some(entries) => {
-                        eprintln!(
-                            "[storage] migrating {} into {} ({})",
-                            other.display(),
-                            want.display(),
-                            if st.encrypted { "encrypting" } else { "decrypting" }
-                        );
-                        st.retire = Some(other.clone());
-                        (entries, true)
-                    }
-                    None => (Vec::new(), false),
+            None => match self.read_one(st, other) {
+                Some(entries) => {
+                    eprintln!(
+                        "[storage] migrating {} into {} ({})",
+                        other.display(),
+                        want.display(),
+                        if st.encrypted {
+                            "encrypting"
+                        } else {
+                            "decrypting"
+                        }
+                    );
+                    st.retire = Some(other.clone());
+                    (entries, true)
                 }
-            }
+                None => (Vec::new(), false),
+            },
         }
     }
 
@@ -128,7 +135,10 @@ impl FileStorage {
             match String::from_utf8(raw) {
                 Ok(t) => t,
                 Err(e) => {
-                    self.note(st, format!("{} is not UTF-8: {e} — starting empty", path.display()));
+                    self.note(
+                        st,
+                        format!("{} is not UTF-8: {e} — starting empty", path.display()),
+                    );
                     return Some(Vec::new());
                 }
             }
@@ -136,7 +146,10 @@ impl FileStorage {
         match file::decode(&text) {
             Ok(entries) => Some(entries),
             Err(e) => {
-                self.note(st, format!("could not read {}: {e} — starting empty", path.display()));
+                self.note(
+                    st,
+                    format!("could not read {}: {e} — starting empty", path.display()),
+                );
                 Some(Vec::new())
             }
         }
@@ -159,9 +172,8 @@ impl FileStorage {
         }
         let json = file::encode(&st.snapshot);
         let (path, bytes) = if st.encrypted {
-            let p = crypt::provider().ok_or_else(|| {
-                String::from("this platform has no encryption provider")
-            })?;
+            let p = crypt::provider()
+                .ok_or_else(|| String::from("this platform has no encryption provider"))?;
             (file::sealed_path(&st.folder), file::seal(p, &json)?)
         } else {
             (file::plain_path(&st.folder), json.into_bytes())
@@ -172,7 +184,12 @@ impl FileStorage {
             match std::fs::remove_file(old) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(format!("could not retire migrated {}: {error}", old.display())),
+                Err(error) => {
+                    return Err(format!(
+                        "could not retire migrated {}: {error}",
+                        old.display()
+                    ))
+                }
             }
             st.retire = None;
         }
@@ -239,13 +256,19 @@ pub(crate) fn exe_stem() -> Option<String> {
     } else {
         exe
     };
-    program.file_stem().map(|s| s.to_string_lossy().into_owned())
+    program
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
 }
 
 fn is_dynamic_loader(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| ["ld-linux", "ld64.so", "ld-musl"].iter().any(|p| name.starts_with(p)))
+        .is_some_and(|name| {
+            ["ld-linux", "ld64.so", "ld-musl"]
+                .iter()
+                .any(|p| name.starts_with(p))
+        })
 }
 
 fn pick_app_name(env: Option<&str>, embedder: Option<&str>, exe_stem: &str) -> String {
@@ -315,7 +338,9 @@ fn relocate(folder: &Path, encrypted: Option<bool>) -> Result<(), String> {
     };
     let moved = !same_folder || was_encrypted != encrypted;
     st.folder = folder.clone();
-    if moved { st.retry_after = None; }
+    if moved {
+        st.retry_after = None;
+    }
     st.encrypted = encrypted;
     st.error = None;
     if moved && st.loaded {
@@ -362,11 +387,15 @@ fn strip_verbatim(p: &Path) -> PathBuf {
 /// Converts an existing localStorage file without loading the backend; the source is removed only
 /// after a verified sealed file exists.
 pub fn encrypt_local_storage_at(folder: &Path) -> Result<bool, String> {
-    let provider = crypt::provider().ok_or("localStorage encryption is unavailable on this platform")?;
+    let provider =
+        crypt::provider().ok_or("localStorage encryption is unavailable on this platform")?;
     encrypt_local_storage_with(folder, provider)
 }
 
-fn encrypt_local_storage_with(folder: &Path, provider: &dyn crypt::SecretProvider) -> Result<bool, String> {
+fn encrypt_local_storage_with(
+    folder: &Path,
+    provider: &dyn crypt::SecretProvider,
+) -> Result<bool, String> {
     if !folder.is_absolute() {
         return Err("localStorage encryption requires an absolute profile directory".into());
     }
@@ -386,14 +415,19 @@ fn encrypt_local_storage_with(folder: &Path, provider: &dyn crypt::SecretProvide
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
                 Err(error) => return Err(format!("reading {}: {error}", plain.display())),
             };
-            let text = std::str::from_utf8(&source).map_err(|e| format!("reading {}: {e}", plain.display()))?;
-            let entries = file::decode(text).map_err(|e| format!("reading {}: {e}", plain.display()))?;
+            let text = std::str::from_utf8(&source)
+                .map_err(|e| format!("reading {}: {e}", plain.display()))?;
+            let entries =
+                file::decode(text).map_err(|e| format!("reading {}: {e}", plain.display()))?;
             let bytes = file::seal(provider, &file::encode(&entries))?;
             file::write_atomic(&sealed, &bytes)
                 .map_err(|e| format!("sealing {}: {e}", plain.display()))?;
-            let written = std::fs::read(&sealed).map_err(|e| format!("verifying {}: {e}", sealed.display()))?;
+            let written = std::fs::read(&sealed)
+                .map_err(|e| format!("verifying {}: {e}", sealed.display()))?;
             if read_sealed(&written)? != entries {
-                return Err("encrypted localStorage did not round-trip; keeping plaintext source".into());
+                return Err(
+                    "encrypted localStorage did not round-trip; keeping plaintext source".into(),
+                );
             }
             changed = true;
         }
@@ -402,7 +436,12 @@ fn encrypt_local_storage_with(folder: &Path, provider: &dyn crypt::SecretProvide
     match std::fs::remove_file(&plain) {
         Ok(()) => changed = true,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("could not retire plaintext {}: {error}", plain.display())),
+        Err(error) => {
+            return Err(format!(
+                "could not retire plaintext {}: {error}",
+                plain.display()
+            ))
+        }
     }
     Ok(changed)
 }
@@ -521,7 +560,11 @@ fn info_json() -> String {
     } else {
         st.folder.clone()
     };
-    let path = if st.encrypted { file::sealed_path(&folder) } else { file::plain_path(&folder) };
+    let path = if st.encrypted {
+        file::sealed_path(&folder)
+    } else {
+        file::plain_path(&folder)
+    };
     let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     let provider = crypt::provider().map(|p| p.name()).unwrap_or("");
     #[cfg(feature = "indexeddb")]
@@ -591,32 +634,66 @@ mod tests {
     #[test]
     fn a_failed_sealed_write_or_plaintext_retirement_keeps_the_snapshot_pending() {
         use std::os::windows::fs::OpenOptionsExt;
-        let base = std::env::temp_dir().join(format!("sk-sealed-retry-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let base = std::env::temp_dir().join(format!(
+            "sk-sealed-retry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         std::fs::create_dir_all(&base).unwrap();
         let entries = vec![("preference".to_string(), "preserved".to_string())];
         let plain = file::plain_path(&base);
         let sealed = file::sealed_path(&base);
         std::fs::write(&plain, file::encode(&entries)).unwrap();
-        let backend = FileStorage { state: Mutex::new(State::default()) };
-        let mut state = State { folder: base.clone(), encrypted: true, loaded: true,
-            dirty: true, snapshot: entries.clone(), retire: Some(plain.clone()), ..State::default() };
+        let backend = FileStorage {
+            state: Mutex::new(State::default()),
+        };
+        let mut state = State {
+            folder: base.clone(),
+            encrypted: true,
+            loaded: true,
+            dirty: true,
+            snapshot: entries.clone(),
+            retire: Some(plain.clone()),
+            ..State::default()
+        };
         std::fs::create_dir(&sealed).unwrap();
         let now = Instant::now();
         assert!(backend.write_due(&mut state, now).is_err());
         assert!(state.dirty && plain.exists());
         std::fs::remove_dir(&sealed).unwrap();
-        assert!(!backend.write_due(&mut state, now + Duration::from_millis(500)).unwrap());
+        assert!(!backend
+            .write_due(&mut state, now + Duration::from_millis(500))
+            .unwrap());
         assert!(!sealed.exists());
-        let locked = std::fs::OpenOptions::new().read(true).share_mode(1).open(&plain).unwrap();
-        assert!(backend.write_due(&mut state, now + Duration::from_secs(1)).is_err());
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&plain)
+            .unwrap();
+        assert!(backend
+            .write_due(&mut state, now + Duration::from_secs(1))
+            .is_err());
         assert!(state.dirty && state.retire.is_some() && plain.exists());
         drop(locked);
-        assert!(!backend.write_due(&mut state, now + Duration::from_millis(1500)).unwrap());
+        assert!(!backend
+            .write_due(&mut state, now + Duration::from_millis(1500))
+            .unwrap());
         assert!(plain.exists());
         assert!(backend.write_now(&mut state).unwrap());
-        assert!(!state.dirty && state.retry_after.is_none() && state.retire.is_none() && !plain.exists());
+        assert!(
+            !state.dirty
+                && state.retry_after.is_none()
+                && state.retire.is_none()
+                && !plain.exists()
+        );
         let bytes = std::fs::read(&sealed).unwrap();
-        assert_eq!(file::decode(&file::unseal(crypt::provider().unwrap(), &bytes).unwrap()).unwrap(), entries);
+        assert_eq!(
+            file::decode(&file::unseal(crypt::provider().unwrap(), &bytes).unwrap()).unwrap(),
+            entries
+        );
         std::fs::remove_file(sealed).unwrap();
         std::fs::remove_dir(base).unwrap();
     }
@@ -625,22 +702,46 @@ mod tests {
     fn startup_encryption_preserves_values_and_retires_plaintext_only_after_verification() {
         struct Protector;
         impl crypt::SecretProvider for Protector {
-            fn name(&self) -> &'static str { "test envelope" }
-            fn id(&self) -> u8 { 98 }
-            fn protect(&self, bytes: &[u8]) -> Result<Vec<u8>, String> { Ok(bytes.iter().map(|byte| byte ^ 0x5a).collect()) }
-            fn unprotect(&self, bytes: &[u8]) -> Result<Vec<u8>, String> { self.protect(bytes) }
+            fn name(&self) -> &'static str {
+                "test envelope"
+            }
+            fn id(&self) -> u8 {
+                98
+            }
+            fn protect(&self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+                Ok(bytes.iter().map(|byte| byte ^ 0x5a).collect())
+            }
+            fn unprotect(&self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+                self.protect(bytes)
+            }
         }
-        let base = std::env::temp_dir().join(format!("sk-encrypt-startup-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let base = std::env::temp_dir().join(format!(
+            "sk-encrypt-startup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         std::fs::create_dir_all(&base).unwrap();
         let entries = vec![("settings".to_string(), "private value π".to_string())];
         std::fs::write(file::plain_path(&base), file::encode(&entries)).unwrap();
         assert!(encrypt_local_storage_with(&base, &Protector).unwrap());
         assert!(!file::plain_path(&base).exists());
         let sealed = std::fs::read(file::sealed_path(&base)).unwrap();
-        assert_eq!(file::decode(&file::unseal(&Protector, &sealed).unwrap()).unwrap(), entries);
-        assert!(!sealed.windows(b"private value".len()).any(|bytes| bytes == b"private value"));
+        assert_eq!(
+            file::decode(&file::unseal(&Protector, &sealed).unwrap()).unwrap(),
+            entries
+        );
+        assert!(!sealed
+            .windows(b"private value".len())
+            .any(|bytes| bytes == b"private value"));
         assert!(!encrypt_local_storage_with(&base, &Protector).unwrap());
-        std::fs::write(file::plain_path(&base), file::encode(&[("stale".into(), "old".into())])).unwrap();
+        std::fs::write(
+            file::plain_path(&base),
+            file::encode(&[("stale".into(), "old".into())]),
+        )
+        .unwrap();
         assert!(encrypt_local_storage_with(&base, &Protector).unwrap());
         assert_eq!(std::fs::read(file::sealed_path(&base)).unwrap(), sealed);
         std::fs::write(file::plain_path(&base), file::encode(&entries)).unwrap();
@@ -651,7 +752,10 @@ mod tests {
         std::fs::remove_file(file::sealed_path(&base)).unwrap();
         std::fs::write(file::plain_path(&base), b"broken json").unwrap();
         assert!(encrypt_local_storage_with(&base, &Protector).is_err());
-        assert_eq!(std::fs::read(file::plain_path(&base)).unwrap(), b"broken json");
+        assert_eq!(
+            std::fs::read(file::plain_path(&base)).unwrap(),
+            b"broken json"
+        );
         assert!(!file::sealed_path(&base).exists());
         std::fs::remove_file(file::plain_path(&base)).unwrap();
         std::fs::remove_dir(base).unwrap();
@@ -671,10 +775,16 @@ mod tests {
 
     #[test]
     fn the_env_override_wins_over_the_embedder_and_the_exe() {
-        assert_eq!(pick_app_name(Some("pinned"), Some("config"), "sk-app"), "pinned");
+        assert_eq!(
+            pick_app_name(Some("pinned"), Some("config"), "sk-app"),
+            "pinned"
+        );
         assert_eq!(pick_app_name(None, Some("config"), "sk-app"), "config");
         assert_eq!(pick_app_name(Some(""), Some("config"), "sk-app"), "config");
-        assert_eq!(pick_app_name(None, None, "my-shipped-app"), "my-shipped-app");
+        assert_eq!(
+            pick_app_name(None, None, "my-shipped-app"),
+            "my-shipped-app"
+        );
         assert_eq!(pick_app_name(None, None, ""), "vue-native-app");
         assert!(!resolve_app_name(None).is_empty());
     }
@@ -712,7 +822,10 @@ mod tests {
                            try { s.getUserFolder('nope'); } catch (e) { r.push(e instanceof TypeError, e.message.startsWith('appStorage.getUserFolder: ')); } \
                            try { s.setStorageFolder('  '); } catch (e) { r.push(e.message); } \
                            r.push(typeof s.flush()); r.join('|')";
-                rt.ctx().eval(src).and_then(|v| rt.ctx().to_rust_string(v)).unwrap_or_else(|_| "<threw>".into())
+                rt.ctx()
+                    .eval(src)
+                    .and_then(|v| rt.ctx().to_rust_string(v))
+                    .unwrap_or_else(|_| "<threw>".into())
             })
         });
         assert_eq!(out, "string|true|boolean|number|true|true|true|appStorage.setStorageFolder: setStorageFolder needs a path|boolean");
@@ -781,7 +894,10 @@ mod tests {
         cycle(&t.0, true, &entries);
         let path = file::sealed_path(&t.0);
         assert!(path.exists(), "the sealed file was written");
-        assert!(!file::plain_path(&t.0).exists(), "no plaintext file alongside it");
+        assert!(
+            !file::plain_path(&t.0).exists(),
+            "no plaintext file alongside it"
+        );
         let raw = std::fs::read(&path).unwrap();
         assert!(
             !raw.windows(12).any(|w| w == b"s3cr3t-value"),
@@ -801,7 +917,10 @@ mod tests {
         assert!(file::plain_path(&t.0).exists());
 
         assert_eq!(read_back(&t.0, true), entries, "the data came across");
-        assert!(flush().expect("the migration write"), "the migration owes a write");
+        assert!(
+            flush().expect("the migration write"),
+            "the migration owes a write"
+        );
         assert!(file::sealed_path(&t.0).exists(), "sealed file written");
         assert!(
             !file::plain_path(&t.0).exists(),
@@ -820,7 +939,10 @@ mod tests {
         cycle(&t.0, false, &entries);
         set_storage_folder(&t.0, Some(true)).expect("flip to encrypted");
         assert!(file::sealed_path(&t.0).exists());
-        assert!(!file::plain_path(&t.0).exists(), "the plaintext copy is retired");
+        assert!(
+            !file::plain_path(&t.0).exists(),
+            "the plaintext copy is retired"
+        );
         assert_eq!(read_back(&t.0, true), entries);
     }
 
@@ -835,15 +957,24 @@ mod tests {
         assert!(file::sealed_path(&t.0).exists());
 
         assert_eq!(read_back_unconfigured(&t.0), entries, "the data came back");
-        assert!(storage().state.lock().unwrap().encrypted, "and it is still encrypted");
+        assert!(
+            storage().state.lock().unwrap().encrypted,
+            "and it is still encrypted"
+        );
         assert!(flush().is_ok());
-        assert!(!file::plain_path(&t.0).exists(), "nothing was written in plaintext");
+        assert!(
+            !file::plain_path(&t.0).exists(),
+            "nothing was written in plaintext"
+        );
         assert!(file::sealed_path(&t.0).exists());
 
         assert_eq!(read_back(&t.0, false), entries);
         assert!(flush().expect("the decryption write"));
         assert!(file::plain_path(&t.0).exists());
-        assert!(!file::sealed_path(&t.0).exists(), "the sealed copy is retired");
+        assert!(
+            !file::sealed_path(&t.0).exists(),
+            "the sealed copy is retired"
+        );
     }
 
     #[test]
@@ -870,7 +1001,10 @@ mod tests {
         assert_eq!(storage().load(), entries);
         let st = storage().state.lock().unwrap();
         assert!(st.encrypted, "the sealed area kept its format");
-        assert!(!st.encryption_explicit, "and nothing was recorded as the app's choice");
+        assert!(
+            !st.encryption_explicit,
+            "and nothing was recorded as the app's choice"
+        );
     }
 
     #[test]
@@ -897,7 +1031,10 @@ mod tests {
         assert_eq!(read_back(&t.0, false), Vec::<(String, String)>::new());
         let err = storage().state.lock().unwrap().error.clone();
         assert!(err.is_some(), "the failure has to be visible in info()");
-        assert!(err.unwrap().contains("could not read"), "and it has to say what happened");
+        assert!(
+            err.unwrap().contains("could not read"),
+            "and it has to say what happened"
+        );
     }
 
     #[test]
@@ -910,7 +1047,10 @@ mod tests {
         cycle(&a.0, false, &entries);
         set_storage_folder(&b.0, Some(false)).expect("move");
         assert_eq!(read_back(&b.0, false), entries);
-        assert!(file::plain_path(&a.0).exists(), "the old folder is left alone");
+        assert!(
+            file::plain_path(&a.0).exists(),
+            "the old folder is left alone"
+        );
     }
 
     #[test]
@@ -937,9 +1077,14 @@ mod tests {
         let sealed = std::fs::read(file::sealed_path(&base)).unwrap();
         assert_eq!(&sealed[..8], b"VNSTOR\x01\x02");
         assert!(!sealed.windows(13).any(|w| w == b"private-token"));
-        assert_eq!(file::decode(&file::unseal(&p, &sealed).unwrap()).unwrap(), entries);
+        assert_eq!(
+            file::decode(&file::unseal(&p, &sealed).unwrap()).unwrap(),
+            entries
+        );
         let other = crypt::envelope::FixedKey::new(9);
-        assert!(encrypt_local_storage_with(&base, &other).unwrap_err().contains("different storage key"));
+        assert!(encrypt_local_storage_with(&base, &other)
+            .unwrap_err()
+            .contains("different storage key"));
         assert_eq!(std::fs::read(file::sealed_path(&base)).unwrap(), sealed);
     }
 

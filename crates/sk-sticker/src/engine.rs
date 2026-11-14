@@ -38,7 +38,13 @@ pub trait Engine: Send {
     fn timeline(&self) -> Timeline;
     /// Source frame `frame` filling `width × height`: BGRA, straight alpha, rows packed. `alpha_only`:
     /// B = G = R = 255 with the frame's alpha (a tinted video, whose colour stream is never decoded).
-    fn draw(&mut self, frame: u32, alpha_only: bool, width: u32, height: u32) -> Result<Vec<u8>, String>;
+    fn draw(
+        &mut self,
+        frame: u32,
+        alpha_only: bool,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, String>;
     fn estimated_bytes(&self) -> usize;
 }
 
@@ -51,7 +57,13 @@ pub fn load(bytes: &Arc<[u8]>) -> Result<Box<dyn Engine>, String> {
             .map(|animation| Box::new(LottieEngine { animation }) as Box<dyn Engine>)
             .map_err(|error| error.to_string()),
         Some(Kind::Video) => VideoSource::open(bytes.clone())
-            .map(|source| Box::new(VideoEngine { source, color: None, alpha: None }) as Box<dyn Engine>)
+            .map(|source| {
+                Box::new(VideoEngine {
+                    source,
+                    color: None,
+                    alpha: None,
+                }) as Box<dyn Engine>
+            })
             .map_err(|error| error.to_string()),
         None => Err("neither a Lottie (.json, .tgs) nor a WebM file".into()),
     }
@@ -72,15 +84,29 @@ impl Engine for LottieEngine {
     }
 
     fn timeline(&self) -> Timeline {
-        Timeline::Uniform { frames: self.animation.frame_count(), fps: self.animation.meta().frame_rate }
+        Timeline::Uniform {
+            frames: self.animation.frame_count(),
+            fps: self.animation.meta().frame_rate,
+        }
     }
 
     // The tint applies at paint time to a Lottie's own colours: no alpha-only mode.
-    fn draw(&mut self, frame: u32, _alpha_only: bool, width: u32, height: u32) -> Result<Vec<u8>, String> {
+    fn draw(
+        &mut self,
+        frame: u32,
+        _alpha_only: bool,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, String> {
         self.animation
             .render(frame, width, height)
             .map(<[u8]>::to_vec)
-            .ok_or_else(|| format!("the {} renderer could not draw frame {frame}", self.animation.backend()))
+            .ok_or_else(|| {
+                format!(
+                    "the {} renderer could not draw frame {frame}",
+                    self.animation.backend()
+                )
+            })
     }
 
     fn estimated_bytes(&self) -> usize {
@@ -101,10 +127,20 @@ struct VideoEngine {
 
 impl VideoEngine {
     fn cursor(&mut self, alpha_only: bool) -> Result<&mut Cursor, String> {
-        let slot = if alpha_only { &mut self.alpha } else { &mut self.color };
+        let slot = if alpha_only {
+            &mut self.alpha
+        } else {
+            &mut self.color
+        };
         if slot.is_none() {
-            let decoder = self.source.decoder(DecodeOptions { alpha_only }).map_err(|e| e.to_string())?;
-            *slot = Some(Cursor { decoder, current: None });
+            let decoder = self
+                .source
+                .decoder(DecodeOptions { alpha_only })
+                .map_err(|e| e.to_string())?;
+            *slot = Some(Cursor {
+                decoder,
+                current: None,
+            });
         }
         Ok(slot.as_mut().expect("just made"))
     }
@@ -122,15 +158,26 @@ impl Engine for VideoEngine {
 
     fn timeline(&self) -> Timeline {
         let meta = self.source.meta();
-        Timeline::Pts { pts_ms: meta.pts_ms.clone(), duration_ms: meta.duration_ms }
+        Timeline::Pts {
+            pts_ms: meta.pts_ms.clone(),
+            duration_ms: meta.duration_ms,
+        }
     }
 
     /// Decodes forward to `frame`. A frame just behind the one held (a 30 fps
     /// target next to a 60 fps one) is drawn as the one held rather than
     /// rewinding to the keyframe; an earlier one rewinds.
-    fn draw(&mut self, frame: u32, alpha_only: bool, width: u32, height: u32) -> Result<Vec<u8>, String> {
+    fn draw(
+        &mut self,
+        frame: u32,
+        alpha_only: bool,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, String> {
         let c = self.cursor(alpha_only)?;
-        if c.current.is_some_and(|held| frame < held && held - frame > 2) {
+        if c.current
+            .is_some_and(|held| frame < held && held - frame > 2)
+        {
             c.decoder.rewind().map_err(|e| e.to_string())?;
             c.current = None;
         }
@@ -143,14 +190,22 @@ impl Engine for VideoEngine {
         }
         let mut pixels = vec![0u8; width as usize * height as usize * 4];
         c.decoder
-            .convert(&mut VideoTarget { pixels: &mut pixels, width, height })
+            .convert(&mut VideoTarget {
+                pixels: &mut pixels,
+                width,
+                height,
+            })
             .map_err(|e| e.to_string())?;
         Ok(pixels)
     }
 
     fn estimated_bytes(&self) -> usize {
         self.source.memory_bytes()
-            + [&self.color, &self.alpha].iter().filter_map(|c| c.as_ref()).map(|c| c.decoder.memory_bytes()).sum::<usize>()
+            + [&self.color, &self.alpha]
+                .iter()
+                .filter_map(|c| c.as_ref())
+                .map(|c| c.decoder.memory_bytes())
+                .sum::<usize>()
     }
 }
 
@@ -170,14 +225,22 @@ mod tests {
 
     #[test]
     fn a_tgs_loads_and_draws_straight_bytes() {
-        let bytes: Arc<[u8]> =
-            std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sk-lottie/tests/fixtures/spinning-star.tgs"))
-                .unwrap()
-                .into();
+        let bytes: Arc<[u8]> = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../sk-lottie/tests/fixtures/spinning-star.tgs"
+        ))
+        .unwrap()
+        .into();
         let mut engine = load(&bytes).unwrap();
         assert_eq!(engine.kind(), Kind::Lottie);
         assert_eq!(engine.size(), (512, 512));
-        assert_eq!(engine.timeline(), Timeline::Uniform { frames: 120, fps: 60.0 });
+        assert_eq!(
+            engine.timeline(),
+            Timeline::Uniform {
+                frames: 120,
+                fps: 60.0
+            }
+        );
         let px = engine.draw(3, false, 48, 48).unwrap();
         assert_eq!(px.len(), 48 * 48 * 4);
         assert!(px.chunks_exact(4).any(|p| p[3] == 255), "something opaque");

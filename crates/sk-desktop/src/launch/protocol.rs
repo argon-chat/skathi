@@ -3,23 +3,41 @@
 use crate::args::quote_always;
 
 const RESERVED: &[&str] = &[
-    "http", "https", "file", "ftp", "mailto", "tel", "data", "blob", "javascript", "about", "vbscript", "search-ms",
+    "http",
+    "https",
+    "file",
+    "ftp",
+    "mailto",
+    "tel",
+    "data",
+    "blob",
+    "javascript",
+    "about",
+    "vbscript",
+    "search-ms",
 ];
 
 /// A scheme as the registry will hold it, or why not: `[a-z][a-z0-9+.-]{0,62}` lowercased, none of [`RESERVED`].
 pub fn validate_scheme(raw: &str) -> Result<String, String> {
-    let s = raw.trim().trim_end_matches('/').trim_end_matches(':').to_ascii_lowercase();
+    let s = raw
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches(':')
+        .to_ascii_lowercase();
     let mut chars = s.chars();
     let ok = chars.next().is_some_and(|c| c.is_ascii_lowercase())
         && s.len() <= 63
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '+' | '-' | '.'));
+        && chars
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '+' | '-' | '.'));
     if !ok {
         return Err(format!(
             "{raw:?} is not a URL scheme (a letter, then up to 62 letters, digits, \"+\", \"-\" or \".\")"
         ));
     }
     if RESERVED.contains(&s.as_str()) || s.starts_with("ms-") {
-        return Err(format!("\"{s}\" belongs to the browser or to Windows and cannot be registered by an app"));
+        return Err(format!(
+            "\"{s}\" belongs to the browser or to Windows and cannot be registered by an app"
+        ));
     }
     Ok(s)
 }
@@ -55,8 +73,22 @@ mod tests {
         for bad in ["", "1notes", "no tes", "nötes", "a/b", &"a".repeat(64)] {
             assert!(validate_scheme(bad).is_err(), "{bad:?}");
         }
-        for reserved in ["http", "HTTPS", "file", "mailto", "javascript", "ms-settings", "ms-msdt", "search-ms"] {
-            assert!(validate_scheme(reserved).unwrap_err().contains("cannot be registered"), "{reserved}");
+        for reserved in [
+            "http",
+            "HTTPS",
+            "file",
+            "mailto",
+            "javascript",
+            "ms-settings",
+            "ms-msdt",
+            "search-ms",
+        ] {
+            assert!(
+                validate_scheme(reserved)
+                    .unwrap_err()
+                    .contains("cannot be registered"),
+                "{reserved}"
+            );
         }
     }
 
@@ -80,7 +112,10 @@ mod tests {
             (r"C:\sk\sk-app.exe", Some(r"C:\slots\one\")),
         ] {
             let raw = command_line(exe, slot).replace("%1", url);
-            let argv: Vec<String> = split_command_line(&raw).into_iter().map(|t| t.text).collect();
+            let argv: Vec<String> = split_command_line(&raw)
+                .into_iter()
+                .map(|t| t.text)
+                .collect();
             let a = parse(&argv, Some(&raw));
             assert!(a.protocol_launch);
             assert_eq!(a.url.as_deref(), Some(url));

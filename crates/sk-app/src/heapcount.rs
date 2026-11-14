@@ -15,7 +15,7 @@
 //! first byte and a free can never be of something that was not counted.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicI64, AtomicU8, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicU8, Ordering::Relaxed};
 
 pub struct Counting;
 
@@ -203,8 +203,8 @@ pub mod recording {
         marker::PhantomData,
         rc::Rc,
         sync::{
-            Mutex, OnceLock,
             atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
+            Mutex, OnceLock,
         },
         time::{Instant, SystemTime, UNIX_EPOCH},
     };

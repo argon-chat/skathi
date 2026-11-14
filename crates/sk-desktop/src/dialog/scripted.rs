@@ -46,11 +46,31 @@ fn remove(id: u64) -> Option<Pending> {
     Some(p.remove(i))
 }
 
-fn wait(window: u64, what: &'static str, expect: Expect, summary: Json, waiting: String, cancel: &Cancellation) -> Option<Answer> {
+fn wait(
+    window: u64,
+    what: &'static str,
+    expect: Expect,
+    summary: Json,
+    waiting: String,
+    cancel: &Cancellation,
+) -> Option<Answer> {
     let (tx, rx) = channel();
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
-    crate::log_later("dialog", format!("[dialog] #{id} {waiting} is waiting for a scripted answer (SK_DIALOGS=scripted)"));
-    PENDING.lock().unwrap_or_else(|p| p.into_inner()).push(Pending { id, window, what, expect, summary, tx });
+    crate::log_later(
+        "dialog",
+        format!("[dialog] #{id} {waiting} is waiting for a scripted answer (SK_DIALOGS=scripted)"),
+    );
+    PENDING
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push(Pending {
+            id,
+            window,
+            what,
+            expect,
+            summary,
+            tx,
+        });
     loop {
         match rx.recv_timeout(Duration::from_millis(25)) {
             Ok(a) => return Some(a),
@@ -58,7 +78,10 @@ fn wait(window: u64, what: &'static str, expect: Expect, summary: Json, waiting:
             Err(RecvTimeoutError::Timeout) => {
                 if cancel.is_requested() {
                     remove(id);
-                    crate::log_later("dialog", format!("[dialog] #{id} was closed with its window"));
+                    crate::log_later(
+                        "dialog",
+                        format!("[dialog] #{id} was closed with its window"),
+                    );
                     return None;
                 }
             }
@@ -66,13 +89,23 @@ fn wait(window: u64, what: &'static str, expect: Expect, summary: Json, waiting:
     }
 }
 
-pub(super) fn pick(n: &Native, window: u64, what: &'static str, cancel: &Cancellation) -> Result<Option<Vec<PathBuf>>, Fail> {
-    let expect = Expect::Paths { kind: n.kind, multiple: n.multiple };
+pub(super) fn pick(
+    n: &Native,
+    window: u64,
+    what: &'static str,
+    cancel: &Cancellation,
+) -> Result<Option<Vec<PathBuf>>, Fail> {
+    let expect = Expect::Paths {
+        kind: n.kind,
+        multiple: n.multiple,
+    };
     let waiting = format!("{what} ({})", n.kind.as_str());
-    Ok(match wait(window, what, expect, describe(n), waiting, cancel) {
-        Some(Answer::Paths(p)) => Some(p),
-        _ => None,
-    })
+    Ok(
+        match wait(window, what, expect, describe(n), waiting, cancel) {
+            Some(Answer::Paths(p)) => Some(p),
+            _ => None,
+        },
+    )
 }
 
 pub(super) fn ask(q: &Ask, window: u64, cancel: &Cancellation) -> Option<usize> {
@@ -86,17 +119,37 @@ pub(super) fn ask(q: &Ask, window: u64, cancel: &Cancellation) -> Option<usize> 
         "default": labels.get(q.default),
     });
     let waiting = format!("{} (ask: {})", q.what, labels.join(" / "));
-    match wait(window, q.what, Expect::Button { labels }, summary, waiting, cancel) {
+    match wait(
+        window,
+        q.what,
+        Expect::Button { labels },
+        summary,
+        waiting,
+        cancel,
+    ) {
         Some(Answer::Button(i)) => Some(i),
         _ => None,
     }
 }
 
-pub(super) fn color(value: &str, window: u64, cancel: &Cancellation) -> Result<Option<String>, Fail> {
-    Ok(match wait(window, "color", Expect::Color, json!({ "kind": "color", "value": value }), "color picker".into(), cancel) {
-        Some(Answer::Color(color)) => Some(color),
-        _ => None,
-    })
+pub(super) fn color(
+    value: &str,
+    window: u64,
+    cancel: &Cancellation,
+) -> Result<Option<String>, Fail> {
+    Ok(
+        match wait(
+            window,
+            "color",
+            Expect::Color,
+            json!({ "kind": "color", "value": value }),
+            "color picker".into(),
+            cancel,
+        ) {
+            Some(Answer::Color(color)) => Some(color),
+            _ => None,
+        },
+    )
 }
 
 pub fn list() -> Json {
@@ -119,7 +172,11 @@ pub fn validate(kind: Kind, multiple: bool, paths: &[PathBuf]) -> Result<(), Str
         return Err("an answer needs at least one path (use `cancel` to dismiss)".into());
     }
     if paths.len() > 1 && !(kind == Kind::Open && multiple) {
-        return Err(format!("this {} dialog takes one path, not {}", kind.as_str(), paths.len()));
+        return Err(format!(
+            "this {} dialog takes one path, not {}",
+            kind.as_str(),
+            paths.len()
+        ));
     }
     for p in paths {
         if !p.is_absolute() {
@@ -143,19 +200,32 @@ pub fn validate(kind: Kind, multiple: bool, paths: &[PathBuf]) -> Result<(), Str
 
 pub fn answer(id: u64, paths: Vec<PathBuf>) -> Result<Json, String> {
     let mut pending = PENDING.lock().unwrap_or_else(|p| p.into_inner());
-    let i = pending.iter().position(|x| x.id == id).ok_or_else(|| format!("no dialog #{id} is waiting"))?;
+    let i = pending
+        .iter()
+        .position(|x| x.id == id)
+        .ok_or_else(|| format!("no dialog #{id} is waiting"))?;
     match &pending[i].expect {
-        Expect::Color => return Err(format!("dialog #{id} is a color picker: use `choose` with #rrggbb")),
+        Expect::Color => {
+            return Err(format!(
+                "dialog #{id} is a color picker: use `choose` with #rrggbb"
+            ))
+        }
         Expect::Paths { kind, multiple } => validate(*kind, *multiple, &paths)?,
         Expect::Button { labels } => {
-            return Err(format!("dialog #{id} is a question: answer it with `choose` and one of {labels:?}"))
+            return Err(format!(
+                "dialog #{id} is a question: answer it with `choose` and one of {labels:?}"
+            ))
         }
     }
     let p = pending.remove(i);
     drop(pending);
     let n = paths.len();
-    p.tx.send(Answer::Paths(paths)).map_err(|_| format!("dialog #{id} is gone"))?;
-    crate::log_later("dialog", format!("[dialog] #{id} answered with {n} path(s)"));
+    p.tx.send(Answer::Paths(paths))
+        .map_err(|_| format!("dialog #{id} is gone"))?;
+    crate::log_later(
+        "dialog",
+        format!("[dialog] #{id} answered with {n} path(s)"),
+    );
     Ok(json!({ "id": id, "answered": n }))
 }
 
@@ -170,19 +240,30 @@ fn button_index(labels: &[String], button: &str) -> Option<usize> {
 
 pub fn choose(id: u64, button: &str) -> Result<Json, String> {
     let mut pending = PENDING.lock().unwrap_or_else(|p| p.into_inner());
-    let i = pending.iter().position(|x| x.id == id).ok_or_else(|| format!("no dialog #{id} is waiting"))?;
+    let i = pending
+        .iter()
+        .position(|x| x.id == id)
+        .ok_or_else(|| format!("no dialog #{id} is waiting"))?;
     if matches!(pending[i].expect, Expect::Color) {
         let color = super::color::normalize(button).ok_or("a color picker needs #rrggbb")?;
         let dialog = pending.remove(i);
         drop(pending);
-        dialog.tx.send(Answer::Color(color.clone())).map_err(|_| format!("dialog #{id} is gone"))?;
+        dialog
+            .tx
+            .send(Answer::Color(color.clone()))
+            .map_err(|_| format!("dialog #{id} is gone"))?;
         return Ok(json!({ "id": id, "color": color }));
     }
     let index = match &pending[i].expect {
-        Expect::Button { labels } => button_index(labels, button)
-            .ok_or_else(|| format!("dialog #{id} has no button {button:?}: its buttons are {labels:?}"))?,
+        Expect::Button { labels } => button_index(labels, button).ok_or_else(|| {
+            format!("dialog #{id} has no button {button:?}: its buttons are {labels:?}")
+        })?,
         Expect::Color => unreachable!(),
-        Expect::Paths { .. } => return Err(format!("dialog #{id} is a file dialog: answer it with `answer` and paths")),
+        Expect::Paths { .. } => {
+            return Err(format!(
+                "dialog #{id} is a file dialog: answer it with `answer` and paths"
+            ))
+        }
     };
     let label = match &pending[i].expect {
         Expect::Button { labels } => labels[index].clone(),
@@ -190,7 +271,8 @@ pub fn choose(id: u64, button: &str) -> Result<Json, String> {
     };
     let p = pending.remove(i);
     drop(pending);
-    p.tx.send(Answer::Button(index)).map_err(|_| format!("dialog #{id} is gone"))?;
+    p.tx.send(Answer::Button(index))
+        .map_err(|_| format!("dialog #{id} is gone"))?;
     crate::log_later("dialog", format!("[dialog] #{id} answered \"{label}\""));
     Ok(json!({ "id": id, "chose": label }))
 }

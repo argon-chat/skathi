@@ -30,7 +30,8 @@ impl LiveStates {
         let mut live = LiveStates::default();
         for (root, focused, keyboard, active) in windows_now {
             if focused != 0 && t.node(focused).is_some() {
-                live.focused.push((focused, keyboard || is_text_field(t, focused)));
+                live.focused
+                    .push((focused, keyboard || is_text_field(t, focused)));
                 chain(t, focused, root, &mut live.focus_within);
             }
             if let Some(target) = active.filter(|&id| t.node(id).is_some()) {
@@ -45,7 +46,9 @@ impl LiveStates {
             Interaction::Hover => tree::is_hovered(id),
             Interaction::Active => self.active.contains(&id),
             Interaction::Focus => self.focused.iter().any(|&(f, _)| f == id),
-            Interaction::FocusVisible => self.focused.iter().any(|&(f, visible)| f == id && visible),
+            Interaction::FocusVisible => {
+                self.focused.iter().any(|&(f, visible)| f == id && visible)
+            }
             Interaction::FocusWithin => self.focus_within.contains(&id),
         }
     }
@@ -73,7 +76,11 @@ pub(crate) fn is_text_field(t: &Tree, id: u32) -> bool {
     match t.name(node.tag) {
         "textarea" => true,
         "input" => {
-            let kind = t.prop(id, "type").unwrap_or("text").trim().to_ascii_lowercase();
+            let kind = t
+                .prop(id, "type")
+                .unwrap_or("text")
+                .trim()
+                .to_ascii_lowercase();
             matches!(
                 kind.as_str(),
                 "" | "text" | "search" | "url" | "tel" | "email" | "password" | "number"
@@ -96,11 +103,17 @@ pub(crate) struct LiveRef<'t> {
 
 impl<'t> LiveRef<'t> {
     pub(crate) fn new(tree: &'t Tree, id: u32, live: &'t LiveStates) -> Self {
-        LiveRef { node: NodeRef { tree, id }, live }
+        LiveRef {
+            node: NodeRef { tree, id },
+            live,
+        }
     }
 
     fn wrap(&self, node: NodeRef<'t>) -> Self {
-        LiveRef { node, live: self.live }
+        LiveRef {
+            node,
+            live: self.live,
+        }
     }
 }
 
@@ -197,9 +210,15 @@ mod tests {
         assert!(q(":focus, :focus-visible, :focus-within", root).is_empty());
         windows::of(1, |w| (w.focused_node, w.keyboard_input) = (button, false));
         assert_eq!(q(":focus", root), vec![button]);
-        assert!(q(":focus-visible", root).is_empty(), "a click shows no focus on a button");
+        assert!(
+            q(":focus-visible", root).is_empty(),
+            "a click shows no focus on a button"
+        );
         assert_eq!(q(":focus-within", root), vec![nav, button]);
-        assert!(is(":focus-within", root), "up to the root the primary window paints");
+        assert!(
+            is(":focus-within", root),
+            "up to the root the primary window paints"
+        );
         assert_eq!(q("button:not(:focus-visible)", root), vec![button]);
         windows::of(1, |w| w.keyboard_input = true);
         assert_eq!(q(":focus-visible", root), vec![button]);

@@ -13,7 +13,9 @@
 //! variable (`inspector::spawn` passes the environment through) and goes the same way.
 
 pub fn watch() {
-    let Ok(raw) = std::env::var("SK_OWNER_PID") else { return };
+    let Ok(raw) = std::env::var("SK_OWNER_PID") else {
+        return;
+    };
     let Ok(pid) = raw.trim().parse::<u32>() else {
         eprintln!("[sk-app] SK_OWNER_PID={raw:?} is not a pid — ignored");
         return;

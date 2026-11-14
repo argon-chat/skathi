@@ -32,10 +32,16 @@ fn main() {
 
     println!("-- canPlayType on this machine --");
     for (label, mime) in [
-        ("H.264 + AAC (MP4)", "video/mp4; codecs=\"avc1.42E01E, mp4a.40.2\""),
+        (
+            "H.264 + AAC (MP4)",
+            "video/mp4; codecs=\"avc1.42E01E, mp4a.40.2\"",
+        ),
         ("H.264 High (MP4)", "video/mp4; codecs=\"avc1.640028\""),
         ("HEVC Main (MP4)", "video/mp4; codecs=\"hev1.1.6.L93.B0\""),
-        ("HEVC Main10 (MP4)", "video/mp4; codecs=\"hev1.2.4.L120.B0\""),
+        (
+            "HEVC Main10 (MP4)",
+            "video/mp4; codecs=\"hev1.2.4.L120.B0\"",
+        ),
         ("AV1 Main (MP4)", "video/mp4; codecs=\"av01.0.05M.08\""),
         ("VP9 (WebM)", "video/webm; codecs=\"vp9\""),
         ("VP8 + Vorbis (WebM)", "video/webm; codecs=\"vp8, vorbis\""),
@@ -58,7 +64,9 @@ fn main() {
     state.play();
 
     let start = Instant::now();
-    let request = FrameRequest { max_size: (width, width) };
+    let request = FrameRequest {
+        max_size: (width, width),
+    };
     let mut frames = 0u64;
     let mut present_ms: Vec<f64> = Vec::new();
     let mut last_report = Instant::now();
@@ -108,7 +116,10 @@ fn main() {
     println!("\n-- summary --");
     println!("  native size      {:?}", state.native_size());
     println!("  duration         {:.3}s", state.duration());
-    println!("  frames presented {frames} in {:.2}s", start.elapsed().as_secs_f64());
+    println!(
+        "  frames presented {frames} in {:.2}s",
+        start.elapsed().as_secs_f64()
+    );
     println!("  request cap      {width}px");
     println!(
         "  present cost     mean {mean:.3} ms  p50 {:.3}  p95 {:.3}  p99 {:.3}  max {:.3}",

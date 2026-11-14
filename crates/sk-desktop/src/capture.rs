@@ -89,14 +89,20 @@ pub fn start_sources(types: &str, options: &str) -> Result<u32, Fail> {
     // The Screen Recording prompt can wait on the user: its own thread, since a pool job would count as in flight.
     #[cfg(target_os = "macos")]
     if options.screens || options.windows {
-        let asked = std::thread::Builder::new().name("sk-capture-consent".into()).spawn(move || {
-            match sk_permissions::require_display_capture() {
+        let asked = std::thread::Builder::new()
+            .name("sk-capture-consent".into())
+            .spawn(move || match sk_permissions::require_display_capture() {
                 Ok(()) => enumerate(),
                 Err((name, message)) => crate::settle(token, Err(Fail::new(name, message))),
-            }
-        });
+            });
         if asked.is_err() {
-            crate::settle(token, Err(Fail::new("OperationError", "could not start the screen recording check")));
+            crate::settle(
+                token,
+                Err(Fail::new(
+                    "OperationError",
+                    "could not start the screen recording check",
+                )),
+            );
         }
         return Ok(token);
     }
@@ -113,7 +119,8 @@ pub fn sources(options: Options) -> Result<Vec<Value>, Fail> {
     }
     // Names and thumbnails count as screen recording to TCC: ask first, never on the frame thread.
     #[cfg(target_os = "macos")]
-    sk_permissions::require_display_capture().map_err(|(name, message)| Fail::new(name, message))?;
+    sk_permissions::require_display_capture()
+        .map_err(|(name, message)| Fail::new(name, message))?;
     #[cfg(target_os = "windows")]
     {
         refuse_denied(sk_permissions::status(sk_permissions::Cap::DisplayCapture))?;
@@ -158,7 +165,11 @@ fn fake_sources(options: Options) -> Result<Vec<Value>, Fail> {
         for y in 0..h {
             for x in 0..w {
                 let (fx, fy) = (x * sw / w, y * sh / h);
-                let v = if (fx / 40 + fy / 40) % 2 == 0 { 220 } else { 40 };
+                let v = if (fx / 40 + fy / 40) % 2 == 0 {
+                    220
+                } else {
+                    40
+                };
                 let o = ((y * w + x) * 4) as usize;
                 rgba[o..o + 4].copy_from_slice(&[(fy % 256) as u8, (fx % 256) as u8, v, 255]);
             }
@@ -245,8 +256,16 @@ mod tests {
     fn a_denied_display_capture_refuses_the_listing() {
         let refused = refuse_denied(sk_permissions::State::Denied).unwrap_err();
         assert_eq!(refused.name, "NotAllowedError");
-        assert!(refused.message.starts_with("Permission denied"), "{}", refused.message);
-        for state in [sk_permissions::State::Granted, sk_permissions::State::Prompt, sk_permissions::State::Unsupported] {
+        assert!(
+            refused.message.starts_with("Permission denied"),
+            "{}",
+            refused.message
+        );
+        for state in [
+            sk_permissions::State::Granted,
+            sk_permissions::State::Prompt,
+            sk_permissions::State::Unsupported,
+        ] {
             assert!(refuse_denied(state).is_ok(), "{state:?}");
         }
     }
@@ -265,10 +284,18 @@ mod tests {
             .unwrap();
         let image = image::load_from_memory(&data).unwrap().into_rgba8();
         assert_eq!(image.dimensions(), (320, 180));
-        assert_ne!(image.get_pixel(0, 0), image.get_pixel(12, 0), "the fake frame's checkerboard");
+        assert_ne!(
+            image.get_pixel(0, 0),
+            image.get_pixel(12, 0),
+            "the fake frame's checkerboard"
+        );
         let windows = Options::parse("[\"window\"]", "{}").unwrap();
         assert!(fake_sources(windows).unwrap().is_empty());
-        let none = Options::parse("[\"screen\"]", "{\"thumbnailSize\":{\"width\":0,\"height\":0}}").unwrap();
+        let none = Options::parse(
+            "[\"screen\"]",
+            "{\"thumbnailSize\":{\"width\":0,\"height\":0}}",
+        )
+        .unwrap();
         assert_eq!(fake_sources(none).unwrap()[0]["thumbnailDataUrl"], "");
     }
 

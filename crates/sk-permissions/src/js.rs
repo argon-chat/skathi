@@ -7,9 +7,11 @@ use std::ffi::c_void;
 
 use sk_runtime::host::{self, Settler};
 use sk_runtime::host_fn;
-use sk_runtime::redjs::webapi::permissions::{self as api, Capability, PermissionState, RequestOutcome};
-use sk_runtime::redjs::webapi::util::*;
 use sk_runtime::redjs::webapi::events;
+use sk_runtime::redjs::webapi::permissions::{
+    self as api, Capability, PermissionState, RequestOutcome,
+};
+use sk_runtime::redjs::webapi::util::*;
 
 thread_local! {
     static OBJ: Cell<u64> = const { Cell::new(0) };
@@ -133,7 +135,9 @@ host_fn!(fn on_status_change(g, args) {
 pub(crate) unsafe fn settle(g: *mut c_void, settled: Vec<(u32, PermissionState)>) -> bool {
     let mut ran = false;
     for (token, state) in settled {
-        let Some(waiters) = PENDING.with(|m| m.borrow_mut().remove(&token)) else { continue };
+        let Some(waiters) = PENDING.with(|m| m.borrow_mut().remove(&token)) else {
+            continue;
+        };
         for s in waiters {
             s.resolve(g, js_string(g, state.as_str()));
             ran = true;
@@ -158,9 +162,23 @@ pub(crate) unsafe fn install(g: *mut c_void) {
     // One `change` stream from the standard objects: a second native subscription would race for the same queue.
     let listener = make_fn(g, "", 1, on_status_change);
     for cap in Capability::ALL.iter().copied() {
-        let Some(status) = api::status_object(g, cap) else { continue };
-        let Ok(bound) = call(g, get(g, listener, "bind"), listener, &[UNDEF, js_string(g, cap.web_name())]) else { continue };
-        let _ = call(g, get(g, status, "addEventListener"), status, &[js_string(g, "change"), bound]);
+        let Some(status) = api::status_object(g, cap) else {
+            continue;
+        };
+        let Ok(bound) = call(
+            g,
+            get(g, listener, "bind"),
+            listener,
+            &[UNDEF, js_string(g, cap.web_name())],
+        ) else {
+            continue;
+        };
+        let _ = call(
+            g,
+            get(g, status, "addEventListener"),
+            status,
+            &[js_string(g, "change"), bound],
+        );
     }
 }
 
@@ -190,7 +208,10 @@ mod tests {
     }
 
     fn eval(rt: &JsRuntime, src: &str) -> String {
-        rt.ctx().eval(src).and_then(|v: Value| rt.ctx().to_rust_string(v)).unwrap_or_else(|_| "<threw>".into())
+        rt.ctx()
+            .eval(src)
+            .and_then(|v: Value| rt.ctx().to_rust_string(v))
+            .unwrap_or_else(|_| "<threw>".into())
     }
 
     #[test]
@@ -224,7 +245,10 @@ mod tests {
                 api::pump(rt.raw());
                 settle(rt.raw(), api::take_settled());
                 rt.ctx().drain_microtasks();
-                assert_eq!(eval(rt, "seen.join()"), "now:granted,TypeError,camera:granted,microphone:denied,req:granted");
+                assert_eq!(
+                    eval(rt, "seen.join()"),
+                    "now:granted,TypeError,camera:granted,microphone:denied,req:granted"
+                );
             });
         });
     }

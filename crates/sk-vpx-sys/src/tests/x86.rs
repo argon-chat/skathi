@@ -4,7 +4,19 @@
 use super::*;
 
 type Helper = unsafe extern "C" fn(*const u8, isize, *mut u8, isize, u32, *const i16);
-type Convolve = unsafe extern "C" fn(*const u8, isize, *mut u8, isize, *const [i16; 8], c_int, c_int, c_int, c_int, c_int, c_int);
+type Convolve = unsafe extern "C" fn(
+    *const u8,
+    isize,
+    *mut u8,
+    isize,
+    *const [i16; 8],
+    c_int,
+    c_int,
+    c_int,
+    c_int,
+    c_int,
+    c_int,
+);
 
 // libvpx's symbols are `vnvpx_`-prefixed (VENDOR.md, "Symbol prefix").
 extern "C" {
@@ -23,8 +35,12 @@ macro_rules! convolves {
     };
 }
 convolves!(
-    vpx_convolve8_horiz_c, vpx_convolve8_vert_c, vpx_convolve8_avg_horiz_c, vpx_convolve8_avg_vert_c,
-    vpx_convolve8_c, vpx_convolve8_avg_c,
+    vpx_convolve8_horiz_c,
+    vpx_convolve8_vert_c,
+    vpx_convolve8_avg_horiz_c,
+    vpx_convolve8_avg_vert_c,
+    vpx_convolve8_c,
+    vpx_convolve8_avg_c,
 );
 
 macro_rules! helpers {
@@ -38,31 +54,72 @@ macro_rules! helpers {
     };
 }
 helpers!(
-    vpx_filter_block1d16_h8_ssse3, vpx_filter_block1d16_v8_ssse3, vpx_filter_block1d4_v8_ssse3,
-    vpx_filter_block1d16_h8_avg_ssse3, vpx_filter_block1d16_v8_avg_ssse3,
-    vpx_filter_block1d8_h8_avg_ssse3, vpx_filter_block1d8_v8_avg_ssse3,
-    vpx_filter_block1d4_h8_avg_ssse3, vpx_filter_block1d4_v8_avg_ssse3,
-    vpx_filter_block1d16_h2_ssse3, vpx_filter_block1d16_v2_ssse3, vpx_filter_block1d8_h2_ssse3,
-    vpx_filter_block1d8_v2_ssse3, vpx_filter_block1d4_h2_ssse3, vpx_filter_block1d4_v2_ssse3,
-    vpx_filter_block1d16_h2_avg_ssse3, vpx_filter_block1d16_v2_avg_ssse3, vpx_filter_block1d8_h2_avg_ssse3,
-    vpx_filter_block1d8_v2_avg_ssse3, vpx_filter_block1d4_h2_avg_ssse3, vpx_filter_block1d4_v2_avg_ssse3,
-    vpx_filter_block1d16_h2_sse2, vpx_filter_block1d16_v2_sse2, vpx_filter_block1d8_h2_sse2,
-    vpx_filter_block1d8_v2_sse2, vpx_filter_block1d4_h2_sse2, vpx_filter_block1d4_v2_sse2,
-    vpx_filter_block1d16_h2_avg_sse2, vpx_filter_block1d16_v2_avg_sse2, vpx_filter_block1d8_h2_avg_sse2,
-    vpx_filter_block1d8_v2_avg_sse2, vpx_filter_block1d4_h2_avg_sse2, vpx_filter_block1d4_v2_avg_sse2,
-    vpx_filter_block1d16_h8_sse2, vpx_filter_block1d16_v8_sse2, vpx_filter_block1d8_h8_sse2,
-    vpx_filter_block1d8_v8_sse2, vpx_filter_block1d4_h8_sse2, vpx_filter_block1d4_v8_sse2,
-    vpx_filter_block1d16_h8_avg_sse2, vpx_filter_block1d16_v8_avg_sse2, vpx_filter_block1d8_h8_avg_sse2,
-    vpx_filter_block1d8_v8_avg_sse2, vpx_filter_block1d4_h8_avg_sse2, vpx_filter_block1d4_v8_avg_sse2,
+    vpx_filter_block1d16_h8_ssse3,
+    vpx_filter_block1d16_v8_ssse3,
+    vpx_filter_block1d4_v8_ssse3,
+    vpx_filter_block1d16_h8_avg_ssse3,
+    vpx_filter_block1d16_v8_avg_ssse3,
+    vpx_filter_block1d8_h8_avg_ssse3,
+    vpx_filter_block1d8_v8_avg_ssse3,
+    vpx_filter_block1d4_h8_avg_ssse3,
+    vpx_filter_block1d4_v8_avg_ssse3,
+    vpx_filter_block1d16_h2_ssse3,
+    vpx_filter_block1d16_v2_ssse3,
+    vpx_filter_block1d8_h2_ssse3,
+    vpx_filter_block1d8_v2_ssse3,
+    vpx_filter_block1d4_h2_ssse3,
+    vpx_filter_block1d4_v2_ssse3,
+    vpx_filter_block1d16_h2_avg_ssse3,
+    vpx_filter_block1d16_v2_avg_ssse3,
+    vpx_filter_block1d8_h2_avg_ssse3,
+    vpx_filter_block1d8_v2_avg_ssse3,
+    vpx_filter_block1d4_h2_avg_ssse3,
+    vpx_filter_block1d4_v2_avg_ssse3,
+    vpx_filter_block1d16_h2_sse2,
+    vpx_filter_block1d16_v2_sse2,
+    vpx_filter_block1d8_h2_sse2,
+    vpx_filter_block1d8_v2_sse2,
+    vpx_filter_block1d4_h2_sse2,
+    vpx_filter_block1d4_v2_sse2,
+    vpx_filter_block1d16_h2_avg_sse2,
+    vpx_filter_block1d16_v2_avg_sse2,
+    vpx_filter_block1d8_h2_avg_sse2,
+    vpx_filter_block1d8_v2_avg_sse2,
+    vpx_filter_block1d4_h2_avg_sse2,
+    vpx_filter_block1d4_v2_avg_sse2,
+    vpx_filter_block1d16_h8_sse2,
+    vpx_filter_block1d16_v8_sse2,
+    vpx_filter_block1d8_h8_sse2,
+    vpx_filter_block1d8_v8_sse2,
+    vpx_filter_block1d4_h8_sse2,
+    vpx_filter_block1d4_v8_sse2,
+    vpx_filter_block1d16_h8_avg_sse2,
+    vpx_filter_block1d16_v8_avg_sse2,
+    vpx_filter_block1d8_h8_avg_sse2,
+    vpx_filter_block1d8_v8_avg_sse2,
+    vpx_filter_block1d4_h8_avg_sse2,
+    vpx_filter_block1d4_v8_avg_sse2,
 );
 
 convolves!(
-    vpx_convolve8_horiz_sse2, vpx_convolve8_vert_sse2, vpx_convolve8_avg_horiz_sse2, vpx_convolve8_avg_vert_sse2,
-    vpx_convolve8_sse2, vpx_convolve8_avg_sse2,
-    vpx_convolve8_horiz_ssse3, vpx_convolve8_vert_ssse3, vpx_convolve8_avg_horiz_ssse3, vpx_convolve8_avg_vert_ssse3,
-    vpx_convolve8_ssse3, vpx_convolve8_avg_ssse3,
-    vpx_convolve8_horiz_avx2, vpx_convolve8_vert_avx2, vpx_convolve8_avg_horiz_avx2, vpx_convolve8_avg_vert_avx2,
-    vpx_convolve8_avx2, vpx_convolve8_avg_avx2,
+    vpx_convolve8_horiz_sse2,
+    vpx_convolve8_vert_sse2,
+    vpx_convolve8_avg_horiz_sse2,
+    vpx_convolve8_avg_vert_sse2,
+    vpx_convolve8_sse2,
+    vpx_convolve8_avg_sse2,
+    vpx_convolve8_horiz_ssse3,
+    vpx_convolve8_vert_ssse3,
+    vpx_convolve8_avg_horiz_ssse3,
+    vpx_convolve8_avg_vert_ssse3,
+    vpx_convolve8_ssse3,
+    vpx_convolve8_avg_ssse3,
+    vpx_convolve8_horiz_avx2,
+    vpx_convolve8_vert_avx2,
+    vpx_convolve8_avg_horiz_avx2,
+    vpx_convolve8_avg_vert_avx2,
+    vpx_convolve8_avx2,
+    vpx_convolve8_avg_avx2,
 );
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -92,7 +149,10 @@ impl Planes {
                 _ => {}
             }
         }
-        Planes { src, dst: noise.bytes(STRIDE * ROWS) }
+        Planes {
+            src,
+            dst: noise.bytes(STRIDE * ROWS),
+        }
     }
 }
 
@@ -100,7 +160,15 @@ fn kernel(table: usize, phase: usize) -> *const i16 {
     unsafe { vp9_filter_kernels[table].add(phase) as *const i16 }
 }
 
-fn reference(planes: &Planes, dst: &mut [u8], pass: Pass, table: usize, phase: usize, w: usize, h: usize) {
+fn reference(
+    planes: &Planes,
+    dst: &mut [u8],
+    pass: Pass,
+    table: usize,
+    phase: usize,
+    w: usize,
+    h: usize,
+) {
     let kernels = unsafe { vp9_filter_kernels[table] };
     let (src, d) = (planes.src[ORIGIN..].as_ptr(), dst[ORIGIN..].as_mut_ptr());
     let (s, w, h, p) = (STRIDE as isize, w as c_int, h as c_int, phase as c_int);
@@ -125,11 +193,25 @@ fn check_helper(name: &str, helper: Helper, w: usize, taps: usize, pass: Pass, t
                 reference(&planes, &mut expected, pass, table, phase, w, h);
                 let mut actual = planes.dst.clone();
                 // A vertical helper gets src already moved up taps/2 - 1 rows.
-                let up = if matches!(pass, Pass::V | Pass::VAvg) { (taps / 2 - 1) * STRIDE } else { 0 };
+                let up = if matches!(pass, Pass::V | Pass::VAvg) {
+                    (taps / 2 - 1) * STRIDE
+                } else {
+                    0
+                };
                 unsafe {
-                    helper(planes.src[ORIGIN - up..].as_ptr(), STRIDE as isize, actual[ORIGIN..].as_mut_ptr(), STRIDE as isize, h as u32, kernel(table, phase));
+                    helper(
+                        planes.src[ORIGIN - up..].as_ptr(),
+                        STRIDE as isize,
+                        actual[ORIGIN..].as_mut_ptr(),
+                        STRIDE as isize,
+                        h as u32,
+                        kernel(table, phase),
+                    );
                 }
-                assert!(actual == expected, "{name}: table {table}, phase {phase}, h {h} differs from vpx_convolve8_*_c");
+                assert!(
+                    actual == expected,
+                    "{name}: table {table}, phase {phase}, h {h} differs from vpx_convolve8_*_c"
+                );
             }
         }
     }
@@ -146,8 +228,18 @@ fn every_shim_helper_matches_libvpx_c() {
         ("16_h8_ssse3", vpx_filter_block1d16_h8_ssse3, 16, H),
         ("16_v8_ssse3", vpx_filter_block1d16_v8_ssse3, 16, V),
         ("4_v8_ssse3", vpx_filter_block1d4_v8_ssse3, 4, V),
-        ("16_h8_avg_ssse3", vpx_filter_block1d16_h8_avg_ssse3, 16, HAvg),
-        ("16_v8_avg_ssse3", vpx_filter_block1d16_v8_avg_ssse3, 16, VAvg),
+        (
+            "16_h8_avg_ssse3",
+            vpx_filter_block1d16_h8_avg_ssse3,
+            16,
+            HAvg,
+        ),
+        (
+            "16_v8_avg_ssse3",
+            vpx_filter_block1d16_v8_avg_ssse3,
+            16,
+            VAvg,
+        ),
         ("8_h8_avg_ssse3", vpx_filter_block1d8_h8_avg_ssse3, 8, HAvg),
         ("8_v8_avg_ssse3", vpx_filter_block1d8_v8_avg_ssse3, 8, VAvg),
         ("4_h8_avg_ssse3", vpx_filter_block1d4_h8_avg_ssse3, 4, HAvg),
@@ -175,8 +267,18 @@ fn every_shim_helper_matches_libvpx_c() {
         ("8_v2_ssse3", vpx_filter_block1d8_v2_ssse3, 8, V),
         ("4_h2_ssse3", vpx_filter_block1d4_h2_ssse3, 4, H),
         ("4_v2_ssse3", vpx_filter_block1d4_v2_ssse3, 4, V),
-        ("16_h2_avg_ssse3", vpx_filter_block1d16_h2_avg_ssse3, 16, HAvg),
-        ("16_v2_avg_ssse3", vpx_filter_block1d16_v2_avg_ssse3, 16, VAvg),
+        (
+            "16_h2_avg_ssse3",
+            vpx_filter_block1d16_h2_avg_ssse3,
+            16,
+            HAvg,
+        ),
+        (
+            "16_v2_avg_ssse3",
+            vpx_filter_block1d16_v2_avg_ssse3,
+            16,
+            VAvg,
+        ),
         ("8_h2_avg_ssse3", vpx_filter_block1d8_h2_avg_ssse3, 8, HAvg),
         ("8_v2_avg_ssse3", vpx_filter_block1d8_v2_avg_ssse3, 8, VAvg),
         ("4_h2_avg_ssse3", vpx_filter_block1d4_h2_avg_ssse3, 4, HAvg),
@@ -207,13 +309,50 @@ fn has_avx2() -> bool {
 #[test]
 fn every_simd_convolution_matches_libvpx_c() {
     let mut sets: Vec<(&str, [Convolve; 6])> = vec![
-        ("sse2", [vpx_convolve8_horiz_sse2, vpx_convolve8_vert_sse2, vpx_convolve8_avg_horiz_sse2, vpx_convolve8_avg_vert_sse2, vpx_convolve8_sse2, vpx_convolve8_avg_sse2]),
-        ("ssse3", [vpx_convolve8_horiz_ssse3, vpx_convolve8_vert_ssse3, vpx_convolve8_avg_horiz_ssse3, vpx_convolve8_avg_vert_ssse3, vpx_convolve8_ssse3, vpx_convolve8_avg_ssse3]),
+        (
+            "sse2",
+            [
+                vpx_convolve8_horiz_sse2,
+                vpx_convolve8_vert_sse2,
+                vpx_convolve8_avg_horiz_sse2,
+                vpx_convolve8_avg_vert_sse2,
+                vpx_convolve8_sse2,
+                vpx_convolve8_avg_sse2,
+            ],
+        ),
+        (
+            "ssse3",
+            [
+                vpx_convolve8_horiz_ssse3,
+                vpx_convolve8_vert_ssse3,
+                vpx_convolve8_avg_horiz_ssse3,
+                vpx_convolve8_avg_vert_ssse3,
+                vpx_convolve8_ssse3,
+                vpx_convolve8_avg_ssse3,
+            ],
+        ),
     ];
     if has_avx2() {
-        sets.push(("avx2", [vpx_convolve8_horiz_avx2, vpx_convolve8_vert_avx2, vpx_convolve8_avg_horiz_avx2, vpx_convolve8_avg_vert_avx2, vpx_convolve8_avx2, vpx_convolve8_avg_avx2]));
+        sets.push((
+            "avx2",
+            [
+                vpx_convolve8_horiz_avx2,
+                vpx_convolve8_vert_avx2,
+                vpx_convolve8_avg_horiz_avx2,
+                vpx_convolve8_avg_vert_avx2,
+                vpx_convolve8_avx2,
+                vpx_convolve8_avg_avx2,
+            ],
+        ));
     }
-    let c: [Convolve; 6] = [vpx_convolve8_horiz_c, vpx_convolve8_vert_c, vpx_convolve8_avg_horiz_c, vpx_convolve8_avg_vert_c, vpx_convolve8_c, vpx_convolve8_avg_c];
+    let c: [Convolve; 6] = [
+        vpx_convolve8_horiz_c,
+        vpx_convolve8_vert_c,
+        vpx_convolve8_avg_horiz_c,
+        vpx_convolve8_avg_vert_c,
+        vpx_convolve8_c,
+        vpx_convolve8_avg_c,
+    ];
     let names = ["horiz", "vert", "avg_horiz", "avg_vert", "2d", "avg_2d"];
     let mut noise = Noise(0xfeed_beef);
     for (isa, set) in &sets {
@@ -223,7 +362,10 @@ fn every_simd_convolution_matches_libvpx_c() {
                     for h in [4, 8, 16, 32, 64] {
                         // A 1-D pass gets a sub-pixel phase in its own direction
                         // (phase 0 is a copy, never sent to these); 2-D both.
-                        let (px, py) = (1 + (noise.next() % 15) as c_int, 1 + (noise.next() % 15) as c_int);
+                        let (px, py) = (
+                            1 + (noise.next() % 15) as c_int,
+                            1 + (noise.next() % 15) as c_int,
+                        );
                         let (x0, y0) = match k {
                             0 | 2 => (px, 0),
                             1 | 3 => (0, py),
@@ -234,10 +376,38 @@ fn every_simd_convolution_matches_libvpx_c() {
                         let src = planes.src[ORIGIN + 16 * STRIDE..].as_ptr();
                         let s = STRIDE as isize;
                         unsafe {
-                            c(src, s, expected[ORIGIN..].as_mut_ptr(), s, kernels, x0, 16, y0, 16, w, h);
-                            simd(src, s, actual[ORIGIN..].as_mut_ptr(), s, kernels, x0, 16, y0, 16, w, h);
+                            c(
+                                src,
+                                s,
+                                expected[ORIGIN..].as_mut_ptr(),
+                                s,
+                                kernels,
+                                x0,
+                                16,
+                                y0,
+                                16,
+                                w,
+                                h,
+                            );
+                            simd(
+                                src,
+                                s,
+                                actual[ORIGIN..].as_mut_ptr(),
+                                s,
+                                kernels,
+                                x0,
+                                16,
+                                y0,
+                                16,
+                                w,
+                                h,
+                            );
                         }
-                        assert!(actual == expected, "vpx_convolve8_{}_{isa}: table {table}, {w}x{h}, phase {x0}/{y0}", names[k]);
+                        assert!(
+                            actual == expected,
+                            "vpx_convolve8_{}_{isa}: table {table}, {w}x{h}, phase {x0}/{y0}",
+                            names[k]
+                        );
                     }
                 }
             }
@@ -345,13 +515,27 @@ fn every_simd_level_decodes_bit_exact() {
     let mut hashes = Vec::new();
     for level in ["c", "sse2", "ssse3", "avx2"] {
         let mut cmd = std::process::Command::new(&exe);
-        cmd.args(["--ignored", "--exact", "tests::x86::simd_level_child", "--nocapture", "--test-threads=1"]);
+        cmd.args([
+            "--ignored",
+            "--exact",
+            "tests::x86::simd_level_child",
+            "--nocapture",
+            "--test-threads=1",
+        ]);
         cmd.env("SK_VPX_LEVEL", level);
         let out = cmd.output().unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(out.status.success(), "{level}: {stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{level}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         // The harness prints "test <name> ... " before the test's own output.
-        let tagged = |tag: &str| stdout.lines().find_map(|l| l.find(tag).map(|at| l[at..].to_string()));
+        let tagged = |tag: &str| {
+            stdout
+                .lines()
+                .find_map(|l| l.find(tag).map(|at| l[at..].to_string()))
+        };
         let line = tagged("HASH ").unwrap_or_else(|| panic!("{level}: no hash in {stdout}"));
         if let Some(shim) = tagged("SHIM ") {
             println!("{level}: {shim} (calls: ssse3 8-tap, ssse3 8-tap avg, bilinear, sse2 8-tap)");

@@ -7,7 +7,11 @@ use crate::Fail;
 pub fn thread_init() {}
 
 fn unsupported(verb: &str) -> Fail {
-    Fail::new("NotSupportedError", format!("{verb} is not implemented on this platform yet")).code("ENOSYS")
+    Fail::new(
+        "NotSupportedError",
+        format!("{verb} is not implemented on this platform yet"),
+    )
+    .code("ENOSYS")
 }
 
 pub fn open_external(_url: &str) -> Result<(), Fail> {

@@ -73,7 +73,11 @@ pub struct MediaError {
 
 impl MediaError {
     pub fn new(code: MediaErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), advisory: None }
+        Self {
+            code,
+            message: message.into(),
+            advisory: None,
+        }
     }
 
     pub fn with_advisory(mut self, advisory: impl Into<String>) -> Self {
@@ -159,7 +163,10 @@ pub enum MediaSource {
         data: Arc<Vec<u8>>,
     },
     /// Immutable mapped package bytes. A backend reads/seeks ranges directly; it must not copy them.
-    StaticBytes { mime: String, data: &'static [u8] },
+    StaticBytes {
+        mime: String,
+        data: &'static [u8],
+    },
 }
 
 /// Answers "is this the source already loaded?", so [`MediaSource::Bytes`] compares by identity (the
@@ -170,8 +177,9 @@ impl PartialEq for MediaSource {
             (Self::Path(a), Self::Path(b)) => a == b,
             (Self::Uri(a), Self::Uri(b)) => a == b,
             (Self::Bytes { data: a, .. }, Self::Bytes { data: b, .. }) => Arc::ptr_eq(a, b),
-            (Self::StaticBytes { data: a, .. }, Self::StaticBytes { data: b, .. }) =>
-                a.as_ptr() == b.as_ptr() && a.len() == b.len(),
+            (Self::StaticBytes { data: a, .. }, Self::StaticBytes { data: b, .. }) => {
+                a.as_ptr() == b.as_ptr() && a.len() == b.len()
+            }
             _ => false,
         }
     }

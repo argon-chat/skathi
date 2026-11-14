@@ -106,9 +106,31 @@ unsafe fn illegal(g: *mut c_void, method: &str, iface: &str) -> u64 {
 
 /// A handle object for `{ h, name, kind }`.
 pub(crate) unsafe fn from_wire(g: *mut c_void, w: &Json) -> u64 {
-    let kind = if w["kind"] == "directory" { Kind::Directory } else { Kind::File };
-    let (cls, proto) = classes(|c| (c.handle, if kind == Kind::Directory { c.dir_proto } else { c.file_proto }));
-    host_create(g, cls as JSClassRef, proto, Handle { id: w["h"].as_u64().unwrap_or(0), name: w["name"].as_str().unwrap_or("").to_string(), kind })
+    let kind = if w["kind"] == "directory" {
+        Kind::Directory
+    } else {
+        Kind::File
+    };
+    let (cls, proto) = classes(|c| {
+        (
+            c.handle,
+            if kind == Kind::Directory {
+                c.dir_proto
+            } else {
+                c.file_proto
+            },
+        )
+    });
+    host_create(
+        g,
+        cls as JSClassRef,
+        proto,
+        Handle {
+            id: w["h"].as_u64().unwrap_or(0),
+            name: w["name"].as_str().unwrap_or("").to_string(),
+            kind,
+        },
+    )
 }
 
 unsafe fn activation(g: *mut c_void, method: &str) -> bool {
@@ -166,7 +188,11 @@ unsafe fn to_same(_g: *mut c_void, _t: u32, v: &Json, _m: u64) -> Result<u64, u6
 }
 
 unsafe fn to_path(g: *mut c_void, _t: u32, v: &Json, _m: u64) -> Result<u64, u64> {
-    Ok(if v["path"].is_array() { host::to_js(g, &v["path"]) } else { NULL })
+    Ok(if v["path"].is_array() {
+        host::to_js(g, &v["path"])
+    } else {
+        NULL
+    })
 }
 
 // FileSystemHandle
@@ -203,7 +229,9 @@ host_fn!(fn is_same_entry(g, args) {
 });
 
 unsafe fn permission(g: *mut c_void, this: u64, d: u64, method: &str, request: bool) -> u64 {
-    let Some(h) = handle(g, this) else { return illegal(g, method, "FileSystemHandle") };
+    let Some(h) = handle(g, this) else {
+        return illegal(g, method, "FileSystemHandle");
+    };
     let id = h.id;
     let mode = host::string_arg(g, member(g, d, "mode")).unwrap_or_else(|| "read".into());
     if mode != "read" && mode != "readwrite" {
@@ -215,10 +243,17 @@ unsafe fn permission(g: *mut c_void, this: u64, d: u64, method: &str, request: b
     }
     // Chromium's browser-side words: no "Failed to execute" prefix.
     if !activation(g, "isActive") {
-        return rejected(g, "SecurityError", "User activation is required to request permissions.");
+        return rejected(
+            g,
+            "SecurityError",
+            "User activation is required to request permissions.",
+        );
     }
     grant_on_gesture(g, id);
-    host::resolved(g, js_string(g, fs::permission(id, false).unwrap_or("prompt")))
+    host::resolved(
+        g,
+        js_string(g, fs::permission(id, false).unwrap_or("prompt")),
+    )
 }
 
 host_fn!(fn query_permission(g, args) {
@@ -249,11 +284,21 @@ host_fn!(fn get_file(g, args) {
 unsafe fn to_writable(g: *mut c_void, _t: u32, v: &Json, _m: u64) -> Result<u64, u64> {
     let w = v["w"].as_u64().unwrap_or(0);
     let (sink_cls, sink_proto, writable) = classes(|c| (c.sink, c.sink_proto, c.writable));
-    let s = host_create(g, sink_cls as JSClassRef, sink_proto, Sink { w, done: false });
+    let s = host_create(
+        g,
+        sink_cls as JSClassRef,
+        sink_proto,
+        Sink { w, done: false },
+    );
     let reflect = get(g, global(g), "Reflect");
     let args = new_array(g);
     set_i(g, args, 0, s);
-    call(g, get(g, reflect, "construct"), reflect, &[get(g, global(g), "WritableStream"), args, writable])
+    call(
+        g,
+        get(g, reflect, "construct"),
+        reflect,
+        &[get(g, global(g), "WritableStream"), args, writable],
+    )
 }
 
 host_fn!(fn create_writable(g, args) {
@@ -268,8 +313,17 @@ host_fn!(fn create_writable(g, args) {
 
 // FileSystemDirectoryHandle
 
-unsafe fn child(g: *mut c_void, this: u64, name: u64, options: u64, method: &str, kind: Kind) -> u64 {
-    let Some(h) = dir_handle(g, this) else { return illegal(g, method, "FileSystemDirectoryHandle") };
+unsafe fn child(
+    g: *mut c_void,
+    this: u64,
+    name: u64,
+    options: u64,
+    method: &str,
+    kind: Kind,
+) -> u64 {
+    let Some(h) = dir_handle(g, this) else {
+        return illegal(g, method, "FileSystemDirectoryHandle");
+    };
     let id = h.id;
     let create = member(g, options, "create") == TRUE;
     if create {
@@ -312,10 +366,25 @@ host_fn!(fn resolve(g, args) {
 
 unsafe fn iterate(g: *mut c_void, this: u64, mode: Mode, method: &str) -> u64 {
     let Some(h) = dir_handle(g, this) else {
-        return throw_type_error(g, &failed(method, "FileSystemDirectoryHandle", "Illegal invocation"));
+        return throw_type_error(
+            g,
+            &failed(method, "FileSystemDirectoryHandle", "Illegal invocation"),
+        );
     };
     let (cls, proto) = classes(|c| (c.iter, c.iter_proto));
-    host_create(g, cls as JSClassRef, proto, DirIter { dir: h.id, cursor: 0, buffer: VecDeque::new(), done: false, mode, busy: 0 })
+    host_create(
+        g,
+        cls as JSClassRef,
+        proto,
+        DirIter {
+            dir: h.id,
+            cursor: 0,
+            buffer: VecDeque::new(),
+            done: false,
+            mode,
+            busy: 0,
+        },
+    )
 }
 
 host_fn!(fn entries(g, args) {
@@ -353,9 +422,14 @@ unsafe fn take(g: *mut c_void, it: &mut DirIter) -> Option<u64> {
 }
 
 unsafe fn fetch(g: *mut c_void, obj: u64) -> u64 {
-    let Some(it) = dir_iter(g, obj) else { return UNDEF };
-    let (started, convert): (Result<u32, Fail>, super::Convert) =
-        if it.cursor == 0 { (fs::start_dir_open(it.dir), opened) } else { (fs::start_dir_next(it.cursor), batch) };
+    let Some(it) = dir_iter(g, obj) else {
+        return UNDEF;
+    };
+    let (started, convert): (Result<u32, Fail>, super::Convert) = if it.cursor == 0 {
+        (fs::start_dir_open(it.dir), opened)
+    } else {
+        (fs::start_dir_next(it.cursor), batch)
+    };
     if let Ok(t) = started {
         redjs_protect(g, obj);
         ITERS.with(|m| m.borrow_mut().insert(t, obj));
@@ -364,7 +438,9 @@ unsafe fn fetch(g: *mut c_void, obj: u64) -> u64 {
 }
 
 unsafe fn iter_of(g: *mut c_void, token: u32) -> u64 {
-    let obj = ITERS.with(|m| m.borrow_mut().remove(&token)).unwrap_or(UNDEF);
+    let obj = ITERS
+        .with(|m| m.borrow_mut().remove(&token))
+        .unwrap_or(UNDEF);
     if obj != UNDEF {
         redjs_unprotect(g, obj);
     }
@@ -373,15 +449,20 @@ unsafe fn iter_of(g: *mut c_void, token: u32) -> u64 {
 
 unsafe fn opened(g: *mut c_void, token: u32, v: &Json, _m: u64) -> Result<u64, u64> {
     let obj = iter_of(g, token);
-    let Some(it) = dir_iter(g, obj) else { return Ok(result(g, UNDEF, true)) };
+    let Some(it) = dir_iter(g, obj) else {
+        return Ok(result(g, UNDEF, true));
+    };
     it.cursor = v["cursor"].as_u64().unwrap_or(0);
     Ok(fetch(g, obj))
 }
 
 unsafe fn batch(g: *mut c_void, token: u32, v: &Json, _m: u64) -> Result<u64, u64> {
     let obj = iter_of(g, token);
-    let Some(it) = dir_iter(g, obj) else { return Ok(result(g, UNDEF, true)) };
-    it.buffer.extend(v["entries"].as_array().into_iter().flatten().cloned());
+    let Some(it) = dir_iter(g, obj) else {
+        return Ok(result(g, UNDEF, true));
+    };
+    it.buffer
+        .extend(v["entries"].as_array().into_iter().flatten().cloned());
     if v["done"] == true {
         it.done = true;
         it.cursor = 0;
@@ -480,7 +561,9 @@ host_fn!(fn iter_self(_g, args) {
 
 unsafe fn data_of(g: *mut c_void, v: u64) -> Option<Data> {
     if host::is_string(g, v) {
-        return Some(Data::Bytes(read_string(g, v).unwrap_or_default().into_bytes()));
+        return Some(Data::Bytes(
+            read_string(g, v).unwrap_or_default().into_bytes(),
+        ));
     }
     if let Some(range) = blob::range_of(g, v) {
         return Some(Data::Blob(range));
@@ -500,7 +583,9 @@ unsafe fn offset(g: *mut c_void, v: u64) -> Option<u64> {
     if v == UNDEF || v == NULL {
         return None;
     }
-    let n = call(g, get(g, global(g), "Number"), UNDEF, &[v]).ok().and_then(|n| number(g, n))?;
+    let n = call(g, get(g, global(g), "Number"), UNDEF, &[v])
+        .ok()
+        .and_then(|n| number(g, n))?;
     (n.is_finite() && n >= 0.0).then_some(n as u64)
 }
 
@@ -543,9 +628,15 @@ host_fn!(fn sink_write(g, args) {
 });
 
 unsafe fn finish(g: *mut c_void, this: u64, close: bool) -> u64 {
-    let Some(s) = sink(g, this) else { return rejected(g, "TypeError", "Illegal invocation") };
+    let Some(s) = sink(g, this) else {
+        return rejected(g, "TypeError", "Illegal invocation");
+    };
     s.done = true;
-    let started = if close { fs::writable::start_close(s.w) } else { fs::writable::start_abort(s.w) };
+    let started = if close {
+        fs::writable::start_close(s.w)
+    } else {
+        fs::writable::start_abort(s.w)
+    };
     awaiting(g, started, to_undefined)
 }
 
@@ -588,7 +679,14 @@ host_fn!(fn writable_truncate(g, args) {
 
 // Pickers
 
-const WELL_KNOWN: &[&str] = &["desktop", "documents", "downloads", "music", "pictures", "videos"];
+const WELL_KNOWN: &[&str] = &[
+    "desktop",
+    "documents",
+    "downloads",
+    "music",
+    "pictures",
+    "videos",
+];
 
 fn token_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b"!#$%&'*+.^_`|~-".contains(&b)
@@ -598,7 +696,11 @@ fn is_token(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(token_char)
 }
 
-unsafe fn validate(g: *mut c_void, method: &str, o: u64) -> Result<serde_json::Map<String, Json>, String> {
+unsafe fn validate(
+    g: *mut c_void,
+    method: &str,
+    o: u64,
+) -> Result<serde_json::Map<String, Json>, String> {
     let fail = |m: String| failed(method, "Window", &m);
     let mut req = serde_json::Map::new();
     let id = member(g, o, "id");
@@ -607,7 +709,10 @@ unsafe fn validate(g: *mut c_void, method: &str, o: u64) -> Result<serde_json::M
         if id.chars().count() > 32 {
             return Err(fail("ID too long".into()));
         }
-        if !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        if !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
             return Err(fail("ID contains invalid characters".into()));
         }
         req.insert("id".into(), id.into());
@@ -628,7 +733,13 @@ unsafe fn validate(g: *mut c_void, method: &str, o: u64) -> Result<serde_json::M
     let types_v = member(g, o, "types");
     let mut types = Vec::new();
     if types_v != UNDEF {
-        let arr = call(g, get(g, get(g, global(g), "Array"), "from"), UNDEF, &[types_v]).map_err(|_| fail("types is not iterable".into()))?;
+        let arr = call(
+            g,
+            get(g, get(g, global(g), "Array"), "from"),
+            UNDEF,
+            &[types_v],
+        )
+        .map_err(|_| fail("types is not iterable".into()))?;
         for i in 0..array_len(g, arr) {
             let t = get_i(g, arr, i);
             let mut accept = serde_json::Map::new();
@@ -641,7 +752,11 @@ unsafe fn validate(g: *mut c_void, method: &str, o: u64) -> Result<serde_json::M
                     let mime = read_string(g, get_i(g, pair, 0)).unwrap_or_default();
                     let raw = get_i(g, pair, 1);
                     let mut parts = mime.trim().split('/');
-                    let (ty, sub, rest) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next());
+                    let (ty, sub, rest) = (
+                        parts.next().unwrap_or(""),
+                        parts.next().unwrap_or(""),
+                        parts.next(),
+                    );
                     if rest.is_some() || !is_token(ty) || !is_token(sub) {
                         return Err(fail(format!("Invalid type: {mime}")));
                     }
@@ -650,21 +765,32 @@ unsafe fn validate(g: *mut c_void, method: &str, o: u64) -> Result<serde_json::M
                     } else if raw == UNDEF || raw == NULL {
                         Vec::new()
                     } else {
-                        let a = call(g, get(g, get(g, global(g), "Array"), "from"), UNDEF, &[raw]).unwrap_or(UNDEF);
-                        (0..array_len(g, a)).map(|k| host::string_arg(g, get_i(g, a, k)).unwrap_or_default()).collect()
+                        let a = call(g, get(g, get(g, global(g), "Array"), "from"), UNDEF, &[raw])
+                            .unwrap_or(UNDEF);
+                        (0..array_len(g, a))
+                            .map(|k| host::string_arg(g, get_i(g, a, k)).unwrap_or_default())
+                            .collect()
                     };
                     for e in &exts {
                         if !e.starts_with('.') {
                             return Err(fail(format!("Extension '{e}' must start with '.'.")));
                         }
-                        if e.len() < 2 || !e[1..].bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'.') {
-                            return Err(fail(format!("Extension '{e}' contains invalid characters.")));
+                        if e.len() < 2
+                            || !e[1..]
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'.')
+                        {
+                            return Err(fail(format!(
+                                "Extension '{e}' contains invalid characters."
+                            )));
                         }
                         if e.ends_with('.') {
                             return Err(fail(format!("Extension '{e}' must not end with '.'.")));
                         }
                         if e.chars().count() > 16 {
-                            return Err(fail(format!("Extension '{e}' cannot be longer than 16 characters.")));
+                            return Err(fail(format!(
+                                "Extension '{e}' cannot be longer than 16 characters."
+                            )));
                         }
                     }
                     accept.insert(mime.trim().to_lowercase(), exts.into());
@@ -690,7 +816,9 @@ unsafe fn validate(g: *mut c_void, method: &str, o: u64) -> Result<serde_json::M
 }
 
 unsafe fn picked(g: *mut c_void, token: u32, v: &Json, _m: u64) -> Result<u64, u64> {
-    let method = PICKS.with(|m| m.borrow_mut().remove(&token)).unwrap_or("showOpenFilePicker");
+    let method = PICKS
+        .with(|m| m.borrow_mut().remove(&token))
+        .unwrap_or("showOpenFilePicker");
     if v["cancelled"] == true {
         return Err(error(g, "AbortError", "The user aborted a request."));
     }
@@ -713,14 +841,28 @@ unsafe fn pick(g: *mut c_void, method: &'static str, kind: &str, o: u64) -> u64 
     req.insert("kind".into(), kind.into());
     req.insert("result".into(), "handles".into());
     if kind == "open" {
-        req.insert("multiple".into(), host::truthy(g, member(g, o, "multiple")).into());
+        req.insert(
+            "multiple".into(),
+            host::truthy(g, member(g, o, "multiple")).into(),
+        );
     }
     let suggested = member(g, o, "suggestedName");
     if kind == "save" && suggested != UNDEF {
-        req.insert("suggestedName".into(), host::string_arg(g, suggested).unwrap_or_default().into());
+        req.insert(
+            "suggestedName".into(),
+            host::string_arg(g, suggested).unwrap_or_default().into(),
+        );
     }
     if !activation(g, "isActive") {
-        return rejected(g, "SecurityError", &failed(method, "Window", "Must be handling a user gesture to show a file picker."));
+        return rejected(
+            g,
+            "SecurityError",
+            &failed(
+                method,
+                "Window",
+                "Must be handling a user gesture to show a file picker.",
+            ),
+        );
     }
     activation(g, "consume");
     match dialog::start_open(&Json::Object(req).to_string(), Vec::new()) {
@@ -728,7 +870,11 @@ unsafe fn pick(g: *mut c_void, method: &'static str, kind: &str, o: u64) -> u64 
             PICKS.with(|m| m.borrow_mut().insert(t, method));
             awaiting(g, Ok(t), picked)
         }
-        Err(f) if f.name == "NotAllowedError" && f.code == Some("EBUSY") => rejected(g, "NotAllowedError", &failed(method, "Window", "File picker already active.")),
+        Err(f) if f.name == "NotAllowedError" && f.code == Some("EBUSY") => rejected(
+            g,
+            "NotAllowedError",
+            &failed(method, "Window", "File picker already active."),
+        ),
         Err(f) => awaiting(g, Err(f), picked),
     }
 }
@@ -757,18 +903,30 @@ unsafe fn accept_tokens(g: *mut c_void, accept: &str) -> Vec<String> {
 }
 
 fn split_accept(accept: &str) -> (Vec<String>, Vec<String>) {
-    accept.split(',').map(|raw| raw.trim().to_lowercase()).filter(|t| !t.is_empty()).partition(|t| {
-        let mut parts = t.split('/');
-        let (ty, sub, rest) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next());
-        (t.starts_with('.') && t.len() > 1) || (rest.is_none() && is_token(ty) && is_token(sub))
-    })
+    accept
+        .split(',')
+        .map(|raw| raw.trim().to_lowercase())
+        .filter(|t| !t.is_empty())
+        .partition(|t| {
+            let mut parts = t.split('/');
+            let (ty, sub, rest) = (
+                parts.next().unwrap_or(""),
+                parts.next().unwrap_or(""),
+                parts.next(),
+            );
+            (t.starts_with('.') && t.len() > 1) || (rest.is_none() && is_token(ty) && is_token(sub))
+        })
 }
 
 unsafe fn input_result(g: *mut c_void, _t: u32, v: &Json, made: u64) -> Result<u64, u64> {
     if v["cancelled"] == true {
         return Ok(NULL);
     }
-    Ok(if v["color"].is_string() { js_string(g, v["color"].as_str().unwrap_or("")) } else { made })
+    Ok(if v["color"].is_string() {
+        js_string(g, v["color"].as_str().unwrap_or(""))
+    } else {
+        made
+    })
 }
 
 host_fn!(fn input_failed(g, args) {
@@ -817,7 +975,11 @@ host_fn!(fn pick_color(g, args) {
 });
 
 unsafe fn download_failed(g: *mut c_void, name: &str, msg: &str) {
-    host::warn_compat(g, &format!("download:{name}"), &format!("<a download>: nothing was saved — {msg}"));
+    host::warn_compat(
+        g,
+        &format!("download:{name}"),
+        &format!("<a download>: nothing was saved — {msg}"),
+    );
 }
 
 host_fn!(fn download_failed_fn(g, args) {
@@ -832,8 +994,13 @@ host_fn!(fn download_failed_fn(g, args) {
 
 unsafe fn start_download(g: *mut c_void, url: &str, attr: &str) -> Result<u32, Fail> {
     let (data, mime) = if url.starts_with("blob:") {
-        let t = sk_runtime::redjs::webapi::url::resolve_blob_url(g, url)
-            .ok_or_else(|| Fail::new("NotFoundError", "the blob: URL was revoked, or was never created here; nothing to save").code("ENOENT"))?;
+        let t = sk_runtime::redjs::webapi::url::resolve_blob_url(g, url).ok_or_else(|| {
+            Fail::new(
+                "NotFoundError",
+                "the blob: URL was revoked, or was never created here; nothing to save",
+            )
+            .code("ENOENT")
+        })?;
         let mime = t.mime().to_string();
         (dialog::data_of_blob_target(t), mime)
     } else if url.starts_with("data:") {
@@ -843,7 +1010,9 @@ unsafe fn start_download(g: *mut c_void, url: &str, attr: &str) -> Result<u32, F
         }
         (Data::Bytes(f.bytes), f.mime)
     } else {
-        return Err(Fail::type_error("only blob: and data: URLs are saved as downloads"));
+        return Err(Fail::type_error(
+            "only blob: and data: URLs are saved as downloads",
+        ));
     };
     dialog::start_download(data, dialog::download_name(attr, url, &mime))
 }
@@ -872,14 +1041,19 @@ host_fn!(fn download(g, args) {
 
 unsafe fn drop_hook(g: *mut c_void, path: &std::path::Path, is_dir: bool) -> Result<u64, u64> {
     let kind = if is_dir { Kind::Directory } else { Kind::File };
-    Ok(from_wire(g, &fs::granted_handle_json(path.to_path_buf(), kind)))
+    Ok(from_wire(
+        g,
+        &fs::granted_handle_json(path.to_path_buf(), kind),
+    ))
 }
 
 const NOT_CLONED: &str = "FileSystemHandle object could not be cloned.";
 const NOT_DESERIALIZED: &str = "Unable to deserialize cloned data.";
 
 unsafe fn encode(g: *mut c_void, v: u64) -> Result<Vec<u8>, String> {
-    let id = handle(g, v).map(|h| h.id).ok_or_else(|| NOT_CLONED.to_string())?;
+    let id = handle(g, v)
+        .map(|h| h.id)
+        .ok_or_else(|| NOT_CLONED.to_string())?;
     fs::to_wire(id).ok_or_else(|| NOT_CLONED.to_string())
 }
 
@@ -895,58 +1069,91 @@ unsafe fn define_symbol_method(g: *mut c_void, proto: u64, symbol: &str, f: u64)
     define(g, desc, "value", f, 0);
     define(g, desc, "writable", TRUE, 0);
     define(g, desc, "configurable", TRUE, 0);
-    let _ = call(g, get(g, object, "defineProperty"), object, &[proto, sym, desc]);
+    let _ = call(
+        g,
+        get(g, object, "defineProperty"),
+        object,
+        &[proto, sym, desc],
+    );
 }
 
 pub(super) unsafe fn install(g: *mut c_void) {
     let handle_cls = make_host_class::<Handle>("FileSystemHandle");
-    let base = define_class(g, &ClassSpec {
-        name: "FileSystemHandle",
-        arity: 0,
-        construct: None,
-        parent_proto: 0,
-        methods: &[("isSameEntry", 1, is_same_entry), ("queryPermission", 0, query_permission), ("requestPermission", 0, request_permission)],
-        getters: &[("kind", handle_kind), ("name", handle_name)],
-        accessors: &[],
-    });
-    let file_cls = define_class(g, &ClassSpec {
-        name: "FileSystemFileHandle",
-        arity: 0,
-        construct: None,
-        parent_proto: base.proto,
-        methods: &[("getFile", 0, get_file), ("createWritable", 0, create_writable)],
-        getters: &[],
-        accessors: &[],
-    });
-    let dir_cls = define_class(g, &ClassSpec {
-        name: "FileSystemDirectoryHandle",
-        arity: 0,
-        construct: None,
-        parent_proto: base.proto,
-        methods: &[
-            ("getFileHandle", 1, get_file_handle),
-            ("getDirectoryHandle", 1, get_directory_handle),
-            ("removeEntry", 1, remove_entry),
-            ("resolve", 1, resolve),
-            ("entries", 0, entries),
-            ("keys", 0, keys),
-            ("values", 0, values),
-        ],
-        getters: &[],
-        accessors: &[],
-    });
-    define_symbol_method(g, dir_cls.proto, "asyncIterator", get(g, dir_cls.proto, "entries"));
+    let base = define_class(
+        g,
+        &ClassSpec {
+            name: "FileSystemHandle",
+            arity: 0,
+            construct: None,
+            parent_proto: 0,
+            methods: &[
+                ("isSameEntry", 1, is_same_entry),
+                ("queryPermission", 0, query_permission),
+                ("requestPermission", 0, request_permission),
+            ],
+            getters: &[("kind", handle_kind), ("name", handle_name)],
+            accessors: &[],
+        },
+    );
+    let file_cls = define_class(
+        g,
+        &ClassSpec {
+            name: "FileSystemFileHandle",
+            arity: 0,
+            construct: None,
+            parent_proto: base.proto,
+            methods: &[
+                ("getFile", 0, get_file),
+                ("createWritable", 0, create_writable),
+            ],
+            getters: &[],
+            accessors: &[],
+        },
+    );
+    let dir_cls = define_class(
+        g,
+        &ClassSpec {
+            name: "FileSystemDirectoryHandle",
+            arity: 0,
+            construct: None,
+            parent_proto: base.proto,
+            methods: &[
+                ("getFileHandle", 1, get_file_handle),
+                ("getDirectoryHandle", 1, get_directory_handle),
+                ("removeEntry", 1, remove_entry),
+                ("resolve", 1, resolve),
+                ("entries", 0, entries),
+                ("keys", 0, keys),
+                ("values", 0, values),
+            ],
+            getters: &[],
+            accessors: &[],
+        },
+    );
+    define_symbol_method(
+        g,
+        dir_cls.proto,
+        "asyncIterator",
+        get(g, dir_cls.proto, "entries"),
+    );
 
     let stream_proto = get(g, get(g, global(g), "WritableStream"), "prototype");
-    let writable = define_class(g, &ClassSpec {
-        name: "FileSystemWritableFileStream",
-        arity: 0,
-        construct: None,
-        parent_proto: stream_proto,
-        methods: &[("write", 1, writable_write), ("seek", 1, writable_seek), ("truncate", 1, writable_truncate)],
-        getters: &[],
-        accessors: &[],
-    });
+    let writable = define_class(
+        g,
+        &ClassSpec {
+            name: "FileSystemWritableFileStream",
+            arity: 0,
+            construct: None,
+            parent_proto: stream_proto,
+            methods: &[
+                ("write", 1, writable_write),
+                ("seek", 1, writable_seek),
+                ("truncate", 1, writable_truncate),
+            ],
+            getters: &[],
+            accessors: &[],
+        },
+    );
     redjs_protect(g, writable.ctor);
 
     let sink_cls = make_host_class::<Sink>("FileSystemWritableFileStreamSink");
@@ -961,7 +1168,12 @@ pub(super) unsafe fn install(g: *mut c_void) {
     redjs_protect(g, iter_proto);
     host::method(g, iter_proto, "next", 0, iter_next);
     host::method(g, iter_proto, "return", 1, iter_return);
-    define_symbol_method(g, iter_proto, "asyncIterator", make_fn(g, "[Symbol.asyncIterator]", 0, iter_self));
+    define_symbol_method(
+        g,
+        iter_proto,
+        "asyncIterator",
+        make_fn(g, "[Symbol.asyncIterator]", 0, iter_self),
+    );
     to_string_tag(g, iter_proto, "FileSystemDirectoryHandle AsyncIterator");
 
     C.with(|c| {
@@ -986,7 +1198,12 @@ pub(super) unsafe fn install(g: *mut c_void) {
     }
 
     // Both kinds clone through their base; a writable stream does not, as in Chromium.
-    serialize::serialize_platform_prototype(g, base.proto, "FileSystemHandle", serialize::HostCodec { encode, decode });
+    serialize::serialize_platform_prototype(
+        g,
+        base.proto,
+        "FileSystemHandle",
+        serialize::HostCodec { encode, decode },
+    );
     serialize::refuse_platform_prototype(g, writable.proto, "FileSystemWritableFileStream");
     uievents::set_file_system_handle_hook(g, Some(drop_hook));
 

@@ -5,8 +5,8 @@
 //! than a panel, so a wedged frame pump or poisoned JS bridge in the app cannot take the inspector
 //! down with it; the same binary, so nothing extra ships.
 
-use std::path::{Path, PathBuf};
 use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui::App;
@@ -84,7 +84,10 @@ pub(crate) fn engine_policy(value: Option<&OsStr>) -> Result<EnginePolicy, Strin
 }
 
 #[cfg(not(feature = "native-aot"))]
-pub(crate) fn engine_without_native(policy: Option<&std::ffi::OsStr>, external: bool) -> Result<(), String> {
+pub(crate) fn engine_without_native(
+    policy: Option<&std::ffi::OsStr>,
+    external: bool,
+) -> Result<(), String> {
     match engine_policy(policy)? {
         EnginePolicy::Jit => Ok(()),
         EnginePolicy::Auto if !external => Ok(()),
@@ -126,9 +129,11 @@ pub fn boot(rt: &JsRuntime) -> Result<(), String> {
     #[cfg(feature = "native-aot")]
     match crate::native_aot::boot(rt) {
         Ok(true) => return Ok(()),
-        Ok(false) => {},
+        Ok(false) => {}
         Err(error) => {
-            return Err(format!("native inspector: {error}; restart a fresh inspector with SK_DEVTOOLS_ENGINE=jit"));
+            return Err(format!(
+                "native inspector: {error}; restart a fresh inspector with SK_DEVTOOLS_ENGINE=jit"
+            ));
         }
     }
     let js = match inspector_js() {
@@ -139,7 +144,10 @@ pub fn boot(rt: &JsRuntime) -> Result<(), String> {
         }
     };
     if let Err(e) = rt.eval(&js, "sk://devtools.prod.js") {
-        eprintln!("[devtools-host] inspector bundle: {}\n{}", e.header, e.stack);
+        eprintln!(
+            "[devtools-host] inspector bundle: {}\n{}",
+            e.header, e.stack
+        );
     }
     Ok(())
 }
@@ -149,7 +157,10 @@ pub fn window_config() -> Option<String> {
 }
 
 fn default_child_slot(key: u32) -> PathBuf {
-    std::env::temp_dir().join("skathi").join("devtools").join(key.to_string())
+    std::env::temp_dir()
+        .join("skathi")
+        .join("devtools")
+        .join(key.to_string())
 }
 
 fn child_slot(parent_pid: u32, window: Option<u64>) -> PathBuf {
@@ -157,7 +168,10 @@ fn child_slot(parent_pid: u32, window: Option<u64>) -> PathBuf {
         Some(w) => format!("{parent_pid}-w{w}"),
         None => format!("{parent_pid}"),
     };
-    std::env::temp_dir().join("skathi").join("devtools").join(leaf)
+    std::env::temp_dir()
+        .join("skathi")
+        .join("devtools")
+        .join(leaf)
 }
 
 struct Child {
@@ -244,7 +258,9 @@ pub fn open_for_window(window: Option<u64>, cx: &mut App) {
         return;
     }
     if let Some(existing) = raise_existing(window) {
-        let msg = format!("F12: raising the inspector already open on window {window:?} (pid {existing})");
+        let msg = format!(
+            "F12: raising the inspector already open on window {window:?} (pid {existing})"
+        );
         eprintln!("[devtools] {msg}");
         sk_tree::log::record("dev", format!("[devtools] {msg}"));
         return;
@@ -269,10 +285,11 @@ pub fn open_for_window(window: Option<u64>, cx: &mut App) {
 
 fn reap() {
     CHILDREN.with(|c| {
-        c.borrow_mut().retain_mut(|child| match child.proc.try_wait() {
-            Ok(Some(_)) => false,
-            _ => true,
-        })
+        c.borrow_mut()
+            .retain_mut(|child| match child.proc.try_wait() {
+                Ok(Some(_)) => false,
+                _ => true,
+            })
     });
 }
 
@@ -319,9 +336,11 @@ fn send_raise(slot: &Path) -> Result<(), String> {
         .and_then(crate::json::Json::as_str)
         .ok_or("the inspector's handshake has no token")?;
     let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
-    let mut sock = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(400))
-        .map_err(|e| format!("connect {port}: {e}"))?;
-    sock.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok();
+    let mut sock =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(400))
+            .map_err(|e| format!("connect {port}: {e}"))?;
+    sock.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .ok();
     let req = crate::json::Json::obj(vec![
         ("token", crate::json::Json::s(token)),
         ("cmd", crate::json::Json::s("raise")),
@@ -331,7 +350,9 @@ fn send_raise(slot: &Path) -> Result<(), String> {
     sock.write_all(b"\n").map_err(|e| e.to_string())?;
     sock.flush().ok();
     let mut line = String::new();
-    BufReader::new(&sock).read_line(&mut line).map_err(|e| e.to_string())?;
+    BufReader::new(&sock)
+        .read_line(&mut line)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -385,7 +406,14 @@ fn spawn(window: Option<u64>) -> Result<u32, String> {
 
     let proc = cmd.spawn().map_err(|e| format!("{}: {e}", exe.display()))?;
     let pid = proc.id();
-    CHILDREN.with(|c| c.borrow_mut().push(Child { window, slot, pid, proc }));
+    CHILDREN.with(|c| {
+        c.borrow_mut().push(Child {
+            window,
+            slot,
+            pid,
+            proc,
+        })
+    });
     Ok(pid)
 }
 
@@ -400,7 +428,12 @@ pub fn close_children() {
 
 pub fn children() -> Vec<(Option<u64>, u32)> {
     reap();
-    CHILDREN.with(|c| c.borrow().iter().map(|child| (child.window, child.pid)).collect())
+    CHILDREN.with(|c| {
+        c.borrow()
+            .iter()
+            .map(|child| (child.window, child.pid))
+            .collect()
+    })
 }
 
 static PARENT_GONE: AtomicBool = AtomicBool::new(false);
@@ -409,7 +442,9 @@ static PARENT_GONE: AtomicBool = AtomicBool::new(false);
 /// consecutive refusals are required, so a host mid-restart does not make the inspector vanish.
 pub fn watch_parent() {
     let Some(mode) = mode() else { return };
-    let Some(target) = mode.target.clone() else { return };
+    let Some(target) = mode.target.clone() else {
+        return;
+    };
     let expect_pid = mode.parent;
     std::thread::Builder::new()
         .name("sk-devtools-parent".into())
@@ -437,14 +472,21 @@ pub fn watch_parent() {
 }
 
 fn parent_alive(slot: &Path, expect_pid: Option<u32>) -> bool {
-    let Ok(text) = std::fs::read_to_string(slot.join("devtools.json")) else { return false };
-    let Some(doc) = crate::json::parse(&text) else { return false };
-    let Some(port) = doc.get("port").and_then(crate::json::Json::as_f64) else { return false };
+    let Ok(text) = std::fs::read_to_string(slot.join("devtools.json")) else {
+        return false;
+    };
+    let Some(doc) = crate::json::parse(&text) else {
+        return false;
+    };
+    let Some(port) = doc.get("port").and_then(crate::json::Json::as_f64) else {
+        return false;
+    };
     // A handshake rewritten by a DIFFERENT process on the same slot means the
     // app we were opened for is gone even though a host is listening.
-    if let (Some(want), Some(have)) =
-        (expect_pid, doc.get("pid").and_then(crate::json::Json::as_f64))
-    {
+    if let (Some(want), Some(have)) = (
+        expect_pid,
+        doc.get("pid").and_then(crate::json::Json::as_f64),
+    ) {
         if have as u32 != want {
             return false;
         }

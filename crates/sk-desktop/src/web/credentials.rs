@@ -915,7 +915,10 @@ mod tests {
         let reqs = REQUESTS.lock().unwrap().drain(..).collect::<Vec<_>>();
         assert_eq!(reqs[0]["rpId"], "example.com");
         assert_eq!(reqs[0]["algs"], json!([-7]));
-        assert_eq!((reqs[0]["challenge"].as_str(), reqs[1]["challenge"].as_str()), (Some("AQID"), Some("CQ")));
+        assert_eq!(
+            (reqs[0]["challenge"].as_str(), reqs[1]["challenge"].as_str()),
+            (Some("AQID"), Some("CQ"))
+        );
         assert_eq!(reqs[1]["allow"], json!([{ "id": "BQ", "transports": [] }]));
 
         *HANG.lock().unwrap() = true;

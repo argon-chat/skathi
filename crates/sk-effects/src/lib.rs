@@ -207,8 +207,12 @@ pub fn parse_manifest(
         let mut params = Vec::with_capacity(raw.params.len());
         let mut used = [false; 8];
         for param in &raw.params {
-            let kind = ParamKind::parse(&param.kind)
-                .ok_or_else(|| format!("{origin}: {}: unknown parameter kind `{}`", raw.name, param.kind))?;
+            let kind = ParamKind::parse(&param.kind).ok_or_else(|| {
+                format!(
+                    "{origin}: {}: unknown parameter kind `{}`",
+                    raw.name, param.kind
+                )
+            })?;
             for offset in 0..kind.slots() {
                 let slot = (param.slot + offset) as usize;
                 if slot >= used.len() {
@@ -254,7 +258,11 @@ pub fn parse_manifest(
         out.push(&*Box::leak(Box::new(EffectSchema {
             name: Box::leak(raw.name.into_boxed_str()),
             id: first_id + index as u32,
-            flags: if raw.backdrop { EFFECT_FLAG_NEEDS_BACKDROP } else { 0 },
+            flags: if raw.backdrop {
+                EFFECT_FLAG_NEEDS_BACKDROP
+            } else {
+                0
+            },
             params: Box::leak(params.into_boxed_slice()),
             backdrop_radius_param: raw.backdrop_radius_param,
             bleed_param: raw.bleed_param,
@@ -313,7 +321,9 @@ fn load_user(dir: &Path, first_id: u32) -> Vec<&'static EffectSchema> {
         Err(error) => {
             // A broken manifest must not take the app down: every built-in
             // still works and every other style still renders.
-            advisory(format!("{error} — the app's own `--shading` effects are unavailable"));
+            advisory(format!(
+                "{error} — the app's own `--shading` effects are unavailable"
+            ));
             Vec::new()
         }
     }
@@ -364,7 +374,8 @@ pub fn effects() -> &'static [&'static EffectSchema] {
 pub fn install_user_effects(user: Vec<&'static EffectSchema>) {
     let mut effects: Vec<&'static EffectSchema> = builtins().to_vec();
     effects.extend(user);
-    *REGISTRY.write().unwrap_or_else(|e| e.into_inner()) = Some(Box::leak(effects.into_boxed_slice()));
+    *REGISTRY.write().unwrap_or_else(|e| e.into_inner()) =
+        Some(Box::leak(effects.into_boxed_slice()));
 }
 
 /// The registry as a value usable where a slice was: a zero-sized handle that derefs to the live slice.
@@ -442,7 +453,10 @@ mod tests {
     fn the_builtins_are_the_three_gpui_knows_about() {
         let names: Vec<_> = builtins().iter().map(|e| e.name).collect();
         assert_eq!(names, ["frost", "noise", "glow"]);
-        assert_eq!(builtins()[effect_id::FROST as usize].flags, EFFECT_FLAG_NEEDS_BACKDROP);
+        assert_eq!(
+            builtins()[effect_id::FROST as usize].flags,
+            EFFECT_FLAG_NEEDS_BACKDROP
+        );
         assert_eq!(builtins()[effect_id::NOISE as usize].flags, 0);
         assert_eq!(builtins()[effect_id::GLOW as usize].flags, 0);
     }
@@ -454,7 +468,12 @@ mod tests {
             for param in effect.params {
                 for offset in 0..param.kind.slots() {
                     let slot = (param.slot + offset) as usize;
-                    assert!(slot < 8, "{}.{} overflows the 8 slots", effect.name, param.name);
+                    assert!(
+                        slot < 8,
+                        "{}.{} overflows the 8 slots",
+                        effect.name,
+                        param.name
+                    );
                     assert!(
                         !used[slot],
                         "{}.{} overlaps slot {slot}",

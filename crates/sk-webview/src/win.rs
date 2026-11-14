@@ -12,14 +12,17 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
-use sk_tree::iframe::{Backend, Frame, FrameAttrs, FrameEvent, Placement, PointerInput, PointerKind, Sink};
+use sk_tree::iframe::{
+    Backend, Frame, FrameAttrs, FrameEvent, Placement, PointerInput, PointerKind, Sink,
+};
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
 use webview2_com::{
     AcceleratorKeyPressedEventHandler, CoreWebView2EnvironmentOptions,
-    CreateCoreWebView2CompositionControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
-    CursorChangedEventHandler, NavigationCompletedEventHandler,
-    NavigationStartingEventHandler, NewWindowRequestedEventHandler, PermissionRequestedEventHandler,
-    ProcessFailedEventHandler, WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
+    CreateCoreWebView2CompositionControllerCompletedHandler,
+    CreateCoreWebView2EnvironmentCompletedHandler, CursorChangedEventHandler,
+    NavigationCompletedEventHandler, NavigationStartingEventHandler,
+    NewWindowRequestedEventHandler, PermissionRequestedEventHandler, ProcessFailedEventHandler,
+    WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
 };
 use windows::core::{Interface, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
@@ -27,9 +30,13 @@ use windows::Win32::Graphics::DirectComposition::{IDCompositionDevice, IDComposi
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::Shell::SHCreateMemStream;
-use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP};
+use windows::Win32::UI::WindowsAndMessaging::{
+    PostMessageW, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+};
 
-use crate::{content_type, external_origin, internal_origin, internal_url, Config, APP_ORIGIN, RELAY_PATH};
+use crate::{
+    content_type, external_origin, internal_origin, internal_url, Config, APP_ORIGIN, RELAY_PATH,
+};
 
 const RELAY_HTML: &str = include_str!("relay.html");
 
@@ -61,7 +68,11 @@ pub(crate) struct WebView2 {
 
 impl WebView2 {
     pub(crate) fn new(config: Config) -> Rc<dyn Backend> {
-        Rc::new(Self { config: Rc::new(config), env: Rc::new(RefCell::new(Env::None)), installed: Cell::new(None) })
+        Rc::new(Self {
+            config: Rc::new(config),
+            env: Rc::new(RefCell::new(Env::None)),
+            installed: Cell::new(None),
+        })
     }
 
     fn with_env(&self, then: Box<dyn FnOnce(Option<&ICoreWebView2Environment>)>) {
@@ -88,10 +99,13 @@ impl WebView2 {
     fn create_env(&self) {
         let slot = self.env.clone();
         let settle = move |made: Option<ICoreWebView2Environment>| {
-            let waiting = match std::mem::replace(&mut *slot.borrow_mut(), match &made {
-                Some(env) => Env::Ready(env.clone()),
-                None => Env::Failed,
-            }) {
+            let waiting = match std::mem::replace(
+                &mut *slot.borrow_mut(),
+                match &made {
+                    Some(env) => Env::Ready(env.clone()),
+                    None => Env::Failed,
+                },
+            ) {
                 Env::Creating(waiting) => waiting,
                 _ => Vec::new(),
             };
@@ -101,20 +115,23 @@ impl WebView2 {
         };
         let _ = std::fs::create_dir_all(&self.config.user_data);
         let folder = HSTRING::from(self.config.user_data.as_os_str());
-        let options: ICoreWebView2EnvironmentOptions = CoreWebView2EnvironmentOptions::default().into();
+        let options: ICoreWebView2EnvironmentOptions =
+            CoreWebView2EnvironmentOptions::default().into();
         let settle = Rc::new(RefCell::new(Some(settle)));
         let done = settle.clone();
-        let handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(move |result, env| {
-            if let Err(e) = &result {
-                log(format!("the browser environment could not be created: {e}"));
-            }
-            if let Some(settle) = done.borrow_mut().take() {
-                settle(result.ok().and(env));
-            }
-            Ok(())
-        }));
-        let started =
-            unsafe { CreateCoreWebView2EnvironmentWithOptions(PCWSTR::null(), &folder, &options, &handler) };
+        let handler =
+            CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(move |result, env| {
+                if let Err(e) = &result {
+                    log(format!("the browser environment could not be created: {e}"));
+                }
+                if let Some(settle) = done.borrow_mut().take() {
+                    settle(result.ok().and(env));
+                }
+                Ok(())
+            }));
+        let started = unsafe {
+            CreateCoreWebView2EnvironmentWithOptions(PCWSTR::null(), &folder, &options, &handler)
+        };
         if let Err(e) = started {
             log(format!("the browser environment could not be started: {e}"));
             if let Some(settle) = settle.borrow_mut().take() {
@@ -133,7 +150,9 @@ impl Backend for WebView2 {
             return known;
         }
         let mut version = PWSTR::null();
-        let found = unsafe { GetAvailableCoreWebView2BrowserVersionString(PCWSTR::null(), &mut version) }.is_ok();
+        let found =
+            unsafe { GetAvailableCoreWebView2BrowserVersionString(PCWSTR::null(), &mut version) }
+                .is_ok();
         let version = unsafe { take(version) };
         let installed = found && !version.is_empty();
         if !installed {
@@ -143,7 +162,13 @@ impl Backend for WebView2 {
         installed
     }
 
-    fn create(&self, node: u32, sink: Sink, window: &mut gpui::Window, _cx: &mut gpui::App) -> Option<Box<dyn Frame>> {
+    fn create(
+        &self,
+        node: u32,
+        sink: Sink,
+        window: &mut gpui::Window,
+        _cx: &mut gpui::App,
+    ) -> Option<Box<dyn Frame>> {
         let hwnd = hwnd_of(window)?;
         let Some((device, underlay)) = window.vn_composition_underlay() else {
             log("this window does not present through DirectComposition, so there is nowhere to draw a document");
@@ -172,11 +197,15 @@ impl Backend for WebView2 {
         self.with_env(Box::new(move |env| {
             let Some(inner) = weak.upgrade() else { return };
             let Some(env) = env else {
-                inner.borrow().sink.send(FrameEvent::Failed("the browser environment is not available".into()));
+                inner.borrow().sink.send(FrameEvent::Failed(
+                    "the browser environment is not available".into(),
+                ));
                 return;
             };
             if let Err(e) = start(&inner, env) {
-                inner.borrow().sink.send(FrameEvent::Failed(format!("the webview could not be created: {e}")));
+                inner.borrow().sink.send(FrameEvent::Failed(format!(
+                    "the webview could not be created: {e}"
+                )));
             }
         }));
         Some(Box::new(Handle(inner)))
@@ -213,24 +242,28 @@ fn start(inner: &Rc<RefCell<Inner>>, env: &ICoreWebView2Environment) -> windows:
     let env3: ICoreWebView2Environment3 = env.cast()?;
     let weak = Rc::downgrade(inner);
     let env = env.clone();
-    let handler = CreateCoreWebView2CompositionControllerCompletedHandler::create(Box::new(move |result, made| {
-        let why = format!("no webview: {result:?}");
-        let Some(composition) = result.ok().and(made) else {
-            if let Some(inner) = weak.upgrade() {
-                inner.borrow().sink.send(FrameEvent::Failed(why));
+    let handler = CreateCoreWebView2CompositionControllerCompletedHandler::create(Box::new(
+        move |result, made| {
+            let why = format!("no webview: {result:?}");
+            let Some(composition) = result.ok().and(made) else {
+                if let Some(inner) = weak.upgrade() {
+                    inner.borrow().sink.send(FrameEvent::Failed(why));
+                }
+                return Ok(());
+            };
+            let controller: ICoreWebView2Controller = composition.cast()?;
+            let Some(inner) = weak.upgrade() else {
+                let _ = unsafe { controller.Close() };
+                return Ok(());
+            };
+            if let Err(e) = attach(&inner, &env, composition, controller) {
+                inner.borrow().sink.send(FrameEvent::Failed(format!(
+                    "the webview could not be set up: {e}"
+                )));
             }
-            return Ok(());
-        };
-        let controller: ICoreWebView2Controller = composition.cast()?;
-        let Some(inner) = weak.upgrade() else {
-            let _ = unsafe { controller.Close() };
-            return Ok(());
-        };
-        if let Err(e) = attach(&inner, &env, composition, controller) {
-            inner.borrow().sink.send(FrameEvent::Failed(format!("the webview could not be set up: {e}")));
-        }
-        Ok(())
-    }));
+            Ok(())
+        },
+    ));
     let hwnd = inner.borrow().hwnd;
     unsafe { env3.CreateCoreWebView2CompositionController(hwnd, &handler) }
 }
@@ -264,7 +297,12 @@ fn attach(
             settings.SetIsSwipeNavigationEnabled(false)?;
         }
         if let Ok(controller2) = controller.cast::<ICoreWebView2Controller2>() {
-            controller2.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR { A: 0, R: 0, G: 0, B: 0 })?;
+            controller2.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR {
+                A: 0,
+                R: 0,
+                G: 0,
+                B: 0,
+            })?;
         }
         if let Ok(controller3) = controller.cast::<ICoreWebView2Controller3>() {
             controller3.SetBoundsMode(COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS)?;
@@ -280,7 +318,8 @@ fn attach(
         let me = inner.borrow();
         let visual = me.device.CreateVisual()?;
         composition.SetRootVisualTarget(&visual)?;
-        me.underlay.AddVisual(&visual, true, None::<&IDCompositionVisual>)?;
+        me.underlay
+            .AddVisual(&visual, true, None::<&IDCompositionVisual>)?;
         me.device.Commit()?;
         visual
     };
@@ -294,14 +333,17 @@ fn attach(
         let weak = Rc::downgrade(inner);
         controller.add_AcceleratorKeyPressed(
             &AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
-                let (Some(args), Some(inner)) = (args, weak.upgrade()) else { return Ok(()) };
+                let (Some(args), Some(inner)) = (args, weak.upgrade()) else {
+                    return Ok(());
+                };
                 let mut kind = COREWEBVIEW2_KEY_EVENT_KIND(0);
                 args.KeyEventKind(&mut kind)?;
                 let mut key = 0u32;
                 args.VirtualKey(&mut key)?;
                 let mut lparam = 0i32;
                 args.KeyEventLParam(&mut lparam)?;
-                let reserved = RESERVED_KEYS.contains(&key) || (key == VK_ESCAPE && sk_tree::iframe::fullscreen_active());
+                let reserved = RESERVED_KEYS.contains(&key)
+                    || (key == VK_ESCAPE && sk_tree::iframe::fullscreen_active());
                 let message = match kind {
                     COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN => WM_SYSKEYDOWN,
                     COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_UP => WM_SYSKEYUP,
@@ -309,9 +351,16 @@ fn attach(
                     COREWEBVIEW2_KEY_EVENT_KIND_KEY_UP if reserved => WM_KEYUP,
                     _ => return Ok(()),
                 };
-                let Ok(me) = inner.try_borrow() else { return Ok(()) };
+                let Ok(me) = inner.try_borrow() else {
+                    return Ok(());
+                };
                 args.SetHandled(true)?;
-                let _ = PostMessageW(Some(me.hwnd), message, WPARAM(key as usize), LPARAM(lparam as isize));
+                let _ = PostMessageW(
+                    Some(me.hwnd),
+                    message,
+                    WPARAM(key as usize),
+                    LPARAM(lparam as isize),
+                );
                 Ok(())
             })),
             &mut token,
@@ -322,7 +371,9 @@ fn attach(
         let sink = inner.borrow().sink.clone();
         composition.add_CursorChanged(
             &CursorChangedEventHandler::create(Box::new(move |composition, _| {
-                let Some(composition) = composition else { return Ok(()) };
+                let Some(composition) = composition else {
+                    return Ok(());
+                };
                 let mut id = 0u32;
                 composition.SystemCursorId(&mut id)?;
                 sink.send(FrameEvent::Cursor(cursor_style(id)));
@@ -333,7 +384,10 @@ fn attach(
     }
 
     unsafe {
-        webview.AddWebResourceRequestedFilter(&HSTRING::from(format!("{APP_ORIGIN}/*")), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL)?;
+        webview.AddWebResourceRequestedFilter(
+            &HSTRING::from(format!("{APP_ORIGIN}/*")),
+            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+        )?;
         let env = env.clone();
         let assets = config.assets.clone();
         webview.add_WebResourceRequested(
@@ -373,7 +427,9 @@ fn attach(
         let relay = relay_url.clone();
         webview.add_WebMessageReceived(
             &WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
-                let (Some(args), Some(inner)) = (args, weak.upgrade()) else { return Ok(()) };
+                let (Some(args), Some(inner)) = (args, weak.upgrade()) else {
+                    return Ok(());
+                };
                 // Only the relay page itself: a frame inside it has `chrome.webview` too, and must not speak as the relay.
                 let mut source = PWSTR::null();
                 args.Source(&mut source)?;
@@ -393,7 +449,9 @@ fn attach(
         let weak = Rc::downgrade(inner);
         webview.add_FrameNavigationCompleted(
             &NavigationCompletedEventHandler::create(Box::new(move |_, args| {
-                let (Some(args), Some(inner)) = (args, weak.upgrade()) else { return Ok(()) };
+                let (Some(args), Some(inner)) = (args, weak.upgrade()) else {
+                    return Ok(());
+                };
                 let mut ok = windows::core::BOOL(0);
                 args.IsSuccess(&mut ok)?;
                 let event = if ok.as_bool() {
@@ -401,7 +459,10 @@ fn attach(
                 } else {
                     let mut status = COREWEBVIEW2_WEB_ERROR_STATUS(0);
                     let _ = args.WebErrorStatus(&mut status);
-                    FrameEvent::Failed(format!("the navigation failed (web error status {})", status.0))
+                    FrameEvent::Failed(format!(
+                        "the navigation failed (web error status {})",
+                        status.0
+                    ))
                 };
                 inner.borrow().sink.send(event);
                 Ok(())
@@ -446,7 +507,10 @@ fn attach(
         webview.add_ProcessFailed(
             &ProcessFailedEventHandler::create(Box::new(move |_, _| {
                 if let Some(inner) = weak.upgrade() {
-                    inner.borrow().sink.send(FrameEvent::Failed("the browser process stopped".into()));
+                    inner
+                        .borrow()
+                        .sink
+                        .send(FrameEvent::Failed("the browser process stopped".into()));
                 }
                 Ok(())
             })),
@@ -455,11 +519,16 @@ fn attach(
         let weak = Rc::downgrade(inner);
         webview.add_NavigationCompleted(
             &NavigationCompletedEventHandler::create(Box::new(move |_, args| {
-                let (Some(args), Some(inner)) = (args, weak.upgrade()) else { return Ok(()) };
+                let (Some(args), Some(inner)) = (args, weak.upgrade()) else {
+                    return Ok(());
+                };
                 let mut ok = windows::core::BOOL(0);
                 args.IsSuccess(&mut ok)?;
                 if !ok.as_bool() {
-                    inner.borrow().sink.send(FrameEvent::Failed("the relay page did not load".into()));
+                    inner
+                        .borrow()
+                        .sink
+                        .send(FrameEvent::Failed("the relay page did not load".into()));
                 }
                 Ok(())
             })),
@@ -501,7 +570,9 @@ fn cursor_style(id: u32) -> gpui::CursorStyle {
 }
 
 fn received(inner: &Rc<RefCell<Inner>>, json: &str) {
-    let Ok(message) = serde_json::from_str::<serde_json::Value>(json) else { return };
+    let Ok(message) = serde_json::from_str::<serde_json::Value>(json) else {
+        return;
+    };
     match message.get("t").and_then(|t| t.as_str()) {
         Some("ready") => {
             let mut me = inner.borrow_mut();
@@ -517,8 +588,14 @@ fn received(inner: &Rc<RefCell<Inner>>, json: &str) {
         Some("msg") => {
             let me = inner.borrow();
             let origin = message.get("o").and_then(|o| o.as_str()).unwrap_or("null");
-            let wire = message.get("w").map(|w| w.to_string()).unwrap_or_else(|| "null".into());
-            me.sink.send(FrameEvent::Message { origin: external_origin(origin, &me.config.page_origin), wire });
+            let wire = message
+                .get("w")
+                .map(|w| w.to_string())
+                .unwrap_or_else(|| "null".into());
+            me.sink.send(FrameEvent::Message {
+                origin: external_origin(origin, &me.config.page_origin),
+                wire,
+            });
         }
         _ => {}
     }
@@ -538,7 +615,9 @@ impl Inner {
 
     fn apply_placement(&mut self, placement: Option<Placement>) {
         self.placement = placement;
-        let (Some(controller), Some(visual)) = (&self.controller, &self.visual) else { return };
+        let (Some(controller), Some(visual)) = (&self.controller, &self.visual) else {
+            return;
+        };
         let result: windows::core::Result<()> = (|| unsafe {
             match placement.filter(|p| p.clip[2] > 0.0 && p.clip[3] > 0.0) {
                 None => {
@@ -581,7 +660,9 @@ impl Inner {
     }
 
     fn rehome(&mut self, window: &gpui::Window) {
-        let (Some(hwnd), Some((device, underlay))) = (hwnd_of(window), window.vn_composition_underlay()) else {
+        let (Some(hwnd), Some((device, underlay))) =
+            (hwnd_of(window), window.vn_composition_underlay())
+        else {
             return;
         };
         let device = unsafe { IDCompositionDevice::from_raw(device as *mut _) };
@@ -598,7 +679,8 @@ impl Inner {
             self.hwnd = hwnd;
             self.device = device;
             self.underlay = underlay;
-            let (Some(controller), Some(composition)) = (&self.controller, &self.composition) else {
+            let (Some(controller), Some(composition)) = (&self.controller, &self.composition)
+            else {
                 return Ok(());
             };
             if moved {
@@ -607,13 +689,16 @@ impl Inner {
             // A visual belongs to the device that made it.
             let visual = self.device.CreateVisual()?;
             composition.SetRootVisualTarget(&visual)?;
-            self.underlay.AddVisual(&visual, true, None::<&IDCompositionVisual>)?;
+            self.underlay
+                .AddVisual(&visual, true, None::<&IDCompositionVisual>)?;
             self.device.Commit()?;
             self.visual = Some(visual);
             Ok(())
         })();
         if let Err(e) = result {
-            log(format!("the document could not follow its element to another window: {e}"));
+            log(format!(
+                "the document could not follow its element to another window: {e}"
+            ));
         }
         let placement = self.placement;
         self.apply_placement(placement);
@@ -621,10 +706,15 @@ impl Inner {
 
     fn focus(&mut self, on: bool) {
         self.want_focus = on;
-        let Some(controller) = &self.controller else { return };
+        let Some(controller) = &self.controller else {
+            return;
+        };
         unsafe {
             if on {
-                if controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC).is_ok() {
+                if controller
+                    .MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC)
+                    .is_ok()
+                {
                     self.send("{\"t\":\"focus\"}".into());
                 }
             } else {
@@ -646,7 +736,10 @@ impl Frame for Handle {
                 message.insert("srcdoc".into(), doc.clone().into());
             }
             (None, Some(src)) => {
-                message.insert("src".into(), internal_url(src, &me.config.page_origin).into());
+                message.insert(
+                    "src".into(),
+                    internal_url(src, &me.config.page_origin).into(),
+                );
             }
             (None, None) => return,
         }
@@ -667,7 +760,8 @@ impl Frame for Handle {
 
     fn post(&mut self, wire: &str, target_origin: &str) {
         let mut me = self.0.borrow_mut();
-        let origin = serde_json::Value::String(internal_origin(target_origin, &me.config.page_origin));
+        let origin =
+            serde_json::Value::String(internal_origin(target_origin, &me.config.page_origin));
         me.send(format!("{{\"t\":\"post\",\"o\":{origin},\"w\":{wire}}}"));
     }
 
@@ -685,7 +779,9 @@ impl Frame for Handle {
 
     fn pointer(&mut self, input: PointerInput) {
         let me = self.0.borrow();
-        let Some(composition) = &me.composition else { return };
+        let Some(composition) = &me.composition else {
+            return;
+        };
         let (kind, data) = match input.kind {
             PointerKind::Move => (COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE, 0u32),
             PointerKind::Leave => (COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE, 0),
@@ -697,10 +793,14 @@ impl Frame for Handle {
             PointerKind::Up(2) => (COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_UP, 0),
             PointerKind::Down(_) | PointerKind::Up(_) => return,
             // Win32 wheel units: 120 per notch, positive AWAY from the user; one notch is taken as 100 px.
-            PointerKind::Wheel(dx, dy) if dy != 0.0 || dx == 0.0 => {
-                (COREWEBVIEW2_MOUSE_EVENT_KIND_WHEEL, ((-dy * 1.2).round() as i32) as u32)
-            }
-            PointerKind::Wheel(dx, _) => (COREWEBVIEW2_MOUSE_EVENT_KIND_HORIZONTAL_WHEEL, ((dx * 1.2).round() as i32) as u32),
+            PointerKind::Wheel(dx, dy) if dy != 0.0 || dx == 0.0 => (
+                COREWEBVIEW2_MOUSE_EVENT_KIND_WHEEL,
+                ((-dy * 1.2).round() as i32) as u32,
+            ),
+            PointerKind::Wheel(dx, _) => (
+                COREWEBVIEW2_MOUSE_EVENT_KIND_HORIZONTAL_WHEEL,
+                ((dx * 1.2).round() as i32) as u32,
+            ),
         };
         let mut keys = COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE.0;
         for (bit, key) in [
@@ -718,16 +818,27 @@ impl Frame for Handle {
         if input.control {
             keys |= COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_CONTROL.0;
         }
-        let mut point = POINT { x: input.x.round() as i32, y: input.y.round() as i32 };
+        let mut point = POINT {
+            x: input.x.round() as i32,
+            y: input.y.round() as i32,
+        };
         if input.kind == PointerKind::Leave {
             point = POINT::default();
             keys = COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE.0;
         }
         let sent = unsafe {
-            composition.SendMouseInput(kind, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS(keys), data, point)
+            composition.SendMouseInput(
+                kind,
+                COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS(keys),
+                data,
+                point,
+            )
         };
         if let Err(e) = sent {
-            log(format!("a pointer event ({:?}, buttons {}) was not delivered: {e}", input.kind, input.buttons));
+            log(format!(
+                "a pointer event ({:?}, buttons {}) was not delivered: {e}",
+                input.kind, input.buttons
+            ));
         }
     }
 }

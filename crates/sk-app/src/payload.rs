@@ -84,13 +84,27 @@ impl AppPayload {
             .map_err(|e| format!("the app payload is unreadable — {e}"))
     }
 
-    fn meta(&self) -> Option<&str> { self.0.borrow_dependent().meta() }
-    pub fn len(&self) -> usize { self.0.borrow_dependent().len() }
-    pub fn asset_count(&self) -> usize { self.0.borrow_dependent().asset_count() }
-    pub fn script(&self) -> Option<&str> { self.0.borrow_dependent().script() }
-    pub fn window_json(&self) -> Option<&str> { self.0.borrow_dependent().window_json() }
-    pub fn assets(&self) -> &[sk_payload::Entry<'_>] { self.0.borrow_dependent().assets() }
-    pub fn asset(&self, key: &str) -> Option<&[u8]> { self.0.borrow_dependent().asset(key) }
+    fn meta(&self) -> Option<&str> {
+        self.0.borrow_dependent().meta()
+    }
+    pub fn len(&self) -> usize {
+        self.0.borrow_dependent().len()
+    }
+    pub fn asset_count(&self) -> usize {
+        self.0.borrow_dependent().asset_count()
+    }
+    pub fn script(&self) -> Option<&str> {
+        self.0.borrow_dependent().script()
+    }
+    pub fn window_json(&self) -> Option<&str> {
+        self.0.borrow_dependent().window_json()
+    }
+    pub fn assets(&self) -> &[sk_payload::Entry<'_>] {
+        self.0.borrow_dependent().assets()
+    }
+    pub fn asset(&self, key: &str) -> Option<&[u8]> {
+        self.0.borrow_dependent().asset(key)
+    }
     pub fn asset_ignoring_case(&self, key: &str) -> Option<(&str, &[u8])> {
         self.0.borrow_dependent().asset_ignoring_case(key)
     }
@@ -105,17 +119,28 @@ pub struct Loaded {
 
 impl Loaded {
     pub fn asset_count(&self) -> usize {
-        self.payload.asset_count() + self.packs.iter().map(|p| p.payload.asset_count()).sum::<usize>()
+        self.payload.asset_count()
+            + self
+                .packs
+                .iter()
+                .map(|p| p.payload.asset_count())
+                .sum::<usize>()
     }
 
     pub fn assets(&self) -> impl Iterator<Item = &sk_payload::Entry<'_>> {
-        self.payload.assets().iter().chain(self.packs.iter().flat_map(|p| p.payload.assets().iter()))
+        self.payload
+            .assets()
+            .iter()
+            .chain(self.packs.iter().flat_map(|p| p.payload.assets().iter()))
     }
 }
 
 pub fn pack_id(payload: &AppPayload) -> String {
     use sha2::{Digest, Sha256};
-    Sha256::digest(payload.0.borrow_dependent().index()).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(payload.0.borrow_dependent().index())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn open_packs(meta: &Meta, dir: Option<&std::path::Path>) -> Result<Vec<Pack>, String> {
@@ -165,7 +190,11 @@ pub fn get() -> Option<&'static Loaded> {
 
 /// The embedder's payload (src/embed.rs), parsed now so a bad one is the embedder's `Err` rather
 /// than [`fatal`]. Before the first [`get`]; it then wins over a stamped resource and `SK_PAYLOAD`.
-pub(crate) fn set_external(bytes: PayloadBytes, label: String, dir: Option<&std::path::Path>) -> Result<(), String> {
+pub(crate) fn set_external(
+    bytes: PayloadBytes,
+    label: String,
+    dir: Option<&std::path::Path>,
+) -> Result<(), String> {
     let payload = AppPayload::parse(bytes)?;
     let meta = payload.meta().map(parse_meta).unwrap_or_default();
     if !meta.skathi.is_empty() && meta.skathi != env!("SK_PKG_VERSION") {
@@ -178,7 +207,12 @@ pub(crate) fn set_external(bytes: PayloadBytes, label: String, dir: Option<&std:
     }
     let packs = open_packs(&meta, dir)?;
     LOADED
-        .set(Some(Loaded { payload, packs, meta, source: Source::Embedder(label) }))
+        .set(Some(Loaded {
+            payload,
+            packs,
+            meta,
+            source: Source::Embedder(label),
+        }))
         .map_err(|_| "a payload was already resolved in this process".to_string())
 }
 
@@ -231,7 +265,9 @@ fn load() -> Option<Loaded> {
         );
     }
     let dir = match &source {
-        Source::Bundled(path) | Source::File(path) => path.parent().map(std::path::Path::to_path_buf),
+        Source::Bundled(path) | Source::File(path) => {
+            path.parent().map(std::path::Path::to_path_buf)
+        }
         Source::Embedded | Source::Embedder(_) => None,
     };
     let packs = open_packs(&meta, dir.as_deref()).unwrap_or_else(|e| fatal(&e));
@@ -271,8 +307,17 @@ fn parse_meta(text: &str) -> Meta {
             .unwrap_or_default()
             .iter()
             .map(|p| {
-                let s = |k: &str| p.get(k).and_then(crate::json::Json::as_str).unwrap_or_default().to_string();
-                PackRef { name: s("name"), file: s("file"), id: s("id") }
+                let s = |k: &str| {
+                    p.get(k)
+                        .and_then(crate::json::Json::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                PackRef {
+                    name: s("name"),
+                    file: s("file"),
+                    id: s("id"),
+                }
             })
             .collect(),
     }
@@ -375,7 +420,9 @@ fn bundle_payload_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
     let macos = exe.parent()?;
     let contents = macos.parent()?;
     let bundle = contents.parent()?;
-    let is_app = bundle.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("app"));
+    let is_app = bundle
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("app"));
     (macos.file_name()? == "MacOS" && contents.file_name()? == "Contents" && is_app)
         .then(|| contents.join("Resources").join("app.skpk"))
 }
@@ -470,7 +517,11 @@ pub const OPTIONAL: [(&str, bool); 6] = [
 /// what was, as `no-<part>` joined by `+` in [`OPTIONAL`]'s order. `sk build` keys its host
 /// cache by it, and asks for one by it.
 pub fn host_variant() -> String {
-    let off: Vec<String> = OPTIONAL.iter().filter(|(_, on)| !on).map(|(name, _)| format!("no-{name}")).collect();
+    let off: Vec<String> = OPTIONAL
+        .iter()
+        .filter(|(_, on)| !on)
+        .map(|(name, _)| format!("no-{name}"))
+        .collect();
     if off.is_empty() {
         "standard".to_string()
     } else {
@@ -553,16 +604,26 @@ mod tests {
         let path = files.write("app.skpk", GOLDEN);
         let mapping = crate::mapped_file::MappedFile::open(&path).unwrap();
         let address = mapping.as_bytes().as_ptr() as usize;
-        let payload = Box::new(super::AppPayload::parse(super::PayloadBytes::File(mapping)).unwrap());
-        assert_eq!(payload.0.borrow_owner().as_bytes().as_ptr() as usize, address);
+        let payload =
+            Box::new(super::AppPayload::parse(super::PayloadBytes::File(mapping)).unwrap());
+        assert_eq!(
+            payload.0.borrow_owner().as_bytes().as_ptr() as usize,
+            address
+        );
         assert_eq!(payload.len(), GOLDEN.len());
         assert_eq!(payload.asset_count(), 4);
         let script = payload.script().unwrap();
         assert_eq!(script, "globalThis.__golden = 42;\n");
         assert!((address..address + GOLDEN.len()).contains(&(script.as_ptr() as usize)));
-        assert_eq!(payload.window_json(), Some(r#"{"title":"Golden","width":640}"#));
+        assert_eq!(
+            payload.window_json(),
+            Some(r#"{"title":"Golden","width":640}"#)
+        );
         assert_eq!(payload.asset("assets/hello.txt"), Some(&b"hello\n"[..]));
-        assert_eq!(payload.asset_ignoring_case("ASSETS/HELLO.TXT").unwrap().0, "assets/hello.txt");
+        assert_eq!(
+            payload.asset_ignoring_case("ASSETS/HELLO.TXT").unwrap().0,
+            "assets/hello.txt"
+        );
         assert_eq!(payload.assets().len(), 4);
         assert_eq!(super::parse_meta(payload.meta().unwrap()).name, "golden");
         drop(payload);
@@ -579,7 +640,9 @@ mod tests {
         ] {
             let path = files.write(name, bytes);
             let mapping = crate::mapped_file::MappedFile::open(&path).unwrap();
-            let error = super::AppPayload::parse(super::PayloadBytes::File(mapping)).err().unwrap();
+            let error = super::AppPayload::parse(super::PayloadBytes::File(mapping))
+                .err()
+                .unwrap();
             assert!(error.contains(diagnostic), "{error}");
             std::fs::write(&path, b"released").unwrap();
         }
@@ -592,12 +655,16 @@ mod tests {
         let original = sk_payload::Payload::parse(GOLDEN).unwrap();
         let version = super::parse_meta(original.meta().unwrap()).skathi;
         let field = format!("\"skathi\":\"{version}\"");
-        let start = bytes.windows(field.len()).position(|part| part == field.as_bytes()).unwrap()
+        let start = bytes
+            .windows(field.len())
+            .position(|part| part == field.as_bytes())
+            .unwrap()
             + "\"skathi\":\"".len();
         bytes[start..start + version.len()].fill(b'x');
         let path = files.write("mismatch.skpk", &bytes);
         let mapping = crate::mapped_file::MappedFile::open(&path).unwrap();
-        let error = super::set_external(super::PayloadBytes::File(mapping), "test".into(), None).unwrap_err();
+        let error = super::set_external(super::PayloadBytes::File(mapping), "test".into(), None)
+            .unwrap_err();
         assert!(error.contains("rebuild it with the matching sk"), "{error}");
         std::fs::write(&path, b"released").unwrap();
     }
@@ -605,7 +672,10 @@ mod tests {
     #[test]
     fn payload_owned_bytes_and_embedded_resources_keep_their_original_allocations() {
         let embedded = super::AppPayload::parse(super::PayloadBytes::Embedded(GOLDEN)).unwrap();
-        assert_eq!(embedded.0.borrow_owner().as_bytes().as_ptr(), GOLDEN.as_ptr());
+        assert_eq!(
+            embedded.0.borrow_owner().as_bytes().as_ptr(),
+            GOLDEN.as_ptr()
+        );
         let bytes = GOLDEN.to_vec();
         let address = bytes.as_ptr();
         let owned = super::AppPayload::parse(super::PayloadBytes::Owned(bytes)).unwrap();
@@ -618,26 +688,45 @@ mod tests {
         let mut files = crate::mapped_file::tests::Files::new();
         let path = files.write("fonts.skpk", GOLDEN);
         let dir = path.parent().unwrap();
-        let id = super::pack_id(&super::AppPayload::parse(super::PayloadBytes::Embedded(GOLDEN)).unwrap());
+        let id = super::pack_id(
+            &super::AppPayload::parse(super::PayloadBytes::Embedded(GOLDEN)).unwrap(),
+        );
         assert_eq!(id.len(), 64);
         let meta_with = |file: &str, id: &str| {
-            super::parse_meta(&format!(r#"{{"name":"a","packs":[{{"name":"fonts","file":"{file}","id":"{id}"}}]}}"#))
+            super::parse_meta(&format!(
+                r#"{{"name":"a","packs":[{{"name":"fonts","file":"{file}","id":"{id}"}}]}}"#
+            ))
         };
         let meta = meta_with("fonts.skpk", &id);
-        assert_eq!(meta.packs, vec![super::PackRef { name: "fonts".into(), file: "fonts.skpk".into(), id: id.clone() }]);
+        assert_eq!(
+            meta.packs,
+            vec![super::PackRef {
+                name: "fonts".into(),
+                file: "fonts.skpk".into(),
+                id: id.clone()
+            }]
+        );
         let packs = super::open_packs(&meta, Some(dir)).unwrap();
         assert_eq!(packs.len(), 1);
         assert_eq!(packs[0].payload.asset_count(), 4);
         drop(packs);
-        let error = super::open_packs(&meta_with("fonts.skpk", &"0".repeat(64)), Some(dir)).err().unwrap();
+        let error = super::open_packs(&meta_with("fonts.skpk", &"0".repeat(64)), Some(dir))
+            .err()
+            .unwrap();
         assert!(error.contains("another build"), "{error}");
         for file in ["../fonts.skpk", "sub/fonts.skpk", "C:fonts.skpk", ""] {
-            let error = super::open_packs(&meta_with(file, &id), Some(dir)).err().unwrap();
+            let error = super::open_packs(&meta_with(file, &id), Some(dir))
+                .err()
+                .unwrap();
             assert!(error.contains("not a plain file name"), "{error}");
         }
-        let error = super::open_packs(&meta_with("missing.skpk", &id), Some(dir)).err().unwrap();
+        let error = super::open_packs(&meta_with("missing.skpk", &id), Some(dir))
+            .err()
+            .unwrap();
         assert!(error.contains("missing.skpk"), "{error}");
-        assert!(super::open_packs(&super::Meta::default(), None).unwrap().is_empty());
+        assert!(super::open_packs(&super::Meta::default(), None)
+            .unwrap()
+            .is_empty());
         std::fs::write(&path, b"released").unwrap();
     }
 
@@ -676,7 +765,10 @@ mod tests {
             .and_then(crate::json::Json::as_str)
             .unwrap();
         assert_eq!(variant, super::host_variant());
-        assert_eq!(variant == "standard", super::OPTIONAL.iter().all(|(_, on)| *on));
+        assert_eq!(
+            variant == "standard",
+            super::OPTIONAL.iter().all(|(_, on)| *on)
+        );
         assert_eq!(variant.contains("no-devtools"), !cfg!(sk_devtools));
         assert_eq!(
             v.get("payloadFormat").and_then(crate::json::Json::as_f64),

@@ -28,7 +28,9 @@ use windows::Win32::System::Registry::{
     HKEY_LOCAL_MACHINE, KEY_NOTIFY, KEY_READ, REG_NOTIFY_CHANGE_LAST_SET, REG_NOTIFY_CHANGE_NAME,
     REG_NOTIFY_THREAD_AGNOSTIC, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
 };
-use windows::Win32::System::Threading::{CreateEventW, ResetEvent, WaitForMultipleObjects, INFINITE};
+use windows::Win32::System::Threading::{
+    CreateEventW, ResetEvent, WaitForMultipleObjects, INFINITE,
+};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
@@ -83,8 +85,15 @@ fn read_sz(root: HKEY, path: &str, name: &str) -> Option<String> {
     let name = HSTRING::from(name);
     let mut len: u32 = 0;
     unsafe {
-        if RegGetValueW(root, &path, &name, RRF_RT_REG_SZ, None, None, Some(&mut len))
-            != ERROR_SUCCESS
+        if RegGetValueW(
+            root,
+            &path,
+            &name,
+            RRF_RT_REG_SZ,
+            None,
+            None,
+            Some(&mut len),
+        ) != ERROR_SUCCESS
         {
             return None;
         }
@@ -102,7 +111,11 @@ fn read_sz(root: HKEY, path: &str, name: &str) -> Option<String> {
             return None;
         }
         let chars = (len as usize / 2).min(buf.len());
-        let s: Vec<u16> = buf[..chars].iter().copied().take_while(|c| *c != 0).collect();
+        let s: Vec<u16> = buf[..chars]
+            .iter()
+            .copied()
+            .take_while(|c| *c != 0)
+            .collect();
         Some(String::from_utf16_lossy(&s))
     }
 }
@@ -140,7 +153,9 @@ fn consent_value(path: &str) -> Option<bool> {
 
 /// The group-policy overlay; only the deny direction is honoured (documented scope: packaged apps).
 fn policy_denies(cap: Capability) -> bool {
-    let Some(name) = policy_value(cap) else { return false };
+    let Some(name) = policy_value(cap) else {
+        return false;
+    };
     for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
         if read_dword(root, APP_PRIVACY_POLICY, name) == Some(2) {
             return true;
@@ -160,7 +175,9 @@ pub fn read_state(cap: Capability) -> PermissionState {
         Capability::Notifications => notifications_state(),
 
         _ => {
-            let Some(key) = consent_key(cap) else { return PermissionState::Unsupported };
+            let Some(key) = consent_key(cap) else {
+                return PermissionState::Unsupported;
+            };
             let master = consent_value(&format!(r"{CONSENT}\{key}"));
             let desktop = consent_value(&format!(r"{CONSENT}\{key}\NonPackaged"));
             // Both gates, and absent means "nothing denies it".
@@ -216,11 +233,20 @@ fn join_or_open(
     now: PermissionState,
     open: impl FnOnce() -> bool,
 ) -> bool {
-    let joined = pending.lock().unwrap().iter().find(|(_, p)| p.cap == cap).map(|(_, p)| *p);
+    let joined = pending
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(_, p)| p.cap == cap)
+        .map(|(_, p)| *p);
     let request = match joined {
         Some(p) => p,
         // Not under the lock: ShellExecute is slow.
-        None if open() => PendingRequest { cap, was: now, started: Instant::now() },
+        None if open() => PendingRequest {
+            cap,
+            was: now,
+            started: Instant::now(),
+        },
         None => return false,
     };
     pending.lock().unwrap().push((token, request));
@@ -272,7 +298,11 @@ impl PermissionHost for WindowsHost {
         let Some(uri) = settings_uri(cap) else {
             return RequestOutcome::Settled(now);
         };
-        let token = self.next_token.fetch_add(1, Ordering::SeqCst).wrapping_add(1).max(1);
+        let token = self
+            .next_token
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1)
+            .max(1);
         if !join_or_open(&self.pending, token, cap, now, || open_uri(uri)) {
             return RequestOutcome::Settled(now);
         }
@@ -313,7 +343,14 @@ fn open_uri(uri: &str) -> bool {
     let uri = HSTRING::from(uri);
     let verb = HSTRING::from("open");
     let rc = unsafe {
-        ShellExecuteW(None, PCWSTR(verb.as_ptr()), PCWSTR(uri.as_ptr()), None, None, SW_SHOWNORMAL)
+        ShellExecuteW(
+            None,
+            PCWSTR(verb.as_ptr()),
+            PCWSTR(uri.as_ptr()),
+            None,
+            None,
+            SW_SHOWNORMAL,
+        )
     };
     rc.0 as usize > 32
 }
@@ -328,10 +365,18 @@ fn watched_keys() -> Vec<(HKEY, String, Vec<Capability>)> {
     for cap in Capability::ALL.iter().copied() {
         if let Some(key) = consent_key(cap) {
             out.push((HKEY_CURRENT_USER, format!(r"{CONSENT}\{key}"), vec![cap]));
-            out.push((HKEY_CURRENT_USER, format!(r"{CONSENT}\{key}\NonPackaged"), vec![cap]));
+            out.push((
+                HKEY_CURRENT_USER,
+                format!(r"{CONSENT}\{key}\NonPackaged"),
+                vec![cap],
+            ));
         }
     }
-    out.push((HKEY_CURRENT_USER, PUSH_NOTIFICATIONS.to_string(), vec![Capability::Notifications]));
+    out.push((
+        HKEY_CURRENT_USER,
+        PUSH_NOTIFICATIONS.to_string(),
+        vec![Capability::Notifications],
+    ));
     if let Some(id) = aumid() {
         out.push((
             HKEY_CURRENT_USER,
@@ -339,7 +384,11 @@ fn watched_keys() -> Vec<(HKEY, String, Vec<Capability>)> {
             vec![Capability::Notifications],
         ));
     }
-    let policed: Vec<Capability> = Capability::ALL.iter().copied().filter(|c| policy_value(*c).is_some()).collect();
+    let policed: Vec<Capability> = Capability::ALL
+        .iter()
+        .copied()
+        .filter(|c| policy_value(*c).is_some())
+        .collect();
     for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
         out.push((root, APP_PRIVACY_POLICY.to_string(), policed.clone()));
     }
@@ -349,7 +398,8 @@ fn watched_keys() -> Vec<(HKEY, String, Vec<Capability>)> {
 fn open_key(root: HKEY, path: &str) -> Option<HKEY> {
     let mut key = HKEY::default();
     let wide = HSTRING::from(path);
-    (unsafe { RegOpenKeyExW(root, &wide, None, KEY_READ | KEY_NOTIFY, &mut key) } == ERROR_SUCCESS).then_some(key)
+    (unsafe { RegOpenKeyExW(root, &wide, None, KEY_READ | KEY_NOTIFY, &mut key) } == ERROR_SUCCESS)
+        .then_some(key)
 }
 
 /// One key a state depends on, and the key actually watched for it (see the module header).
@@ -365,7 +415,14 @@ struct Watch {
 impl Watch {
     fn new(root: HKEY, path: String) -> Option<Watch> {
         let event = unsafe { CreateEventW(None, true, false, None) }.ok()?;
-        let mut w = Watch { root, path, key: None, open: 0, armed: false, event };
+        let mut w = Watch {
+            root,
+            path,
+            key: None,
+            open: 0,
+            armed: false,
+            event,
+        };
         w.reopen();
         Some(w)
     }
@@ -407,9 +464,19 @@ impl Watch {
             let Some(key) = self.key else { return };
             // Not a subtree watch, LAST_SET only (see the module header); an ancestor is watched
             // for a missing key.
-            let filter = if self.exact() { REG_NOTIFY_CHANGE_LAST_SET } else { REG_NOTIFY_CHANGE_NAME };
+            let filter = if self.exact() {
+                REG_NOTIFY_CHANGE_LAST_SET
+            } else {
+                REG_NOTIFY_CHANGE_NAME
+            };
             let rc = unsafe {
-                RegNotifyChangeKeyValue(key, false, filter | REG_NOTIFY_THREAD_AGNOSTIC, Some(self.event), true)
+                RegNotifyChangeKeyValue(
+                    key,
+                    false,
+                    filter | REG_NOTIFY_THREAD_AGNOSTIC,
+                    Some(self.event),
+                    true,
+                )
             };
             if rc == ERROR_SUCCESS {
                 self.armed = true;
@@ -447,7 +514,12 @@ struct Watcher {
 
 impl Watcher {
     fn new(keys: impl IntoIterator<Item = (HKEY, String)>) -> Watcher {
-        Watcher { watches: keys.into_iter().filter_map(|(root, path)| Watch::new(root, path)).collect() }
+        Watcher {
+            watches: keys
+                .into_iter()
+                .filter_map(|(root, path)| Watch::new(root, path))
+                .collect(),
+        }
     }
 
     /// Blocks until a key changes (`Some(index)`) or the timeout/failure (`None`).
@@ -485,9 +557,15 @@ impl Watcher {
 
 /// Reports only effective changes: re-reads every capability, since a wakeup often changes nothing.
 fn watch_loop() {
-    let mut watcher = Watcher::new(watched_keys().into_iter().map(|(root, path, _)| (root, path)));
-    let mut snapshot: HashMap<Capability, PermissionState> =
-        Capability::ALL.iter().map(|c| (*c, read_state(*c))).collect();
+    let mut watcher = Watcher::new(
+        watched_keys()
+            .into_iter()
+            .map(|(root, path, _)| (root, path)),
+    );
+    let mut snapshot: HashMap<Capability, PermissionState> = Capability::ALL
+        .iter()
+        .map(|c| (*c, read_state(*c)))
+        .collect();
     while watcher.wait(INFINITE).is_some() {
         let mut hit: Vec<Capability> = Vec::new();
         for cap in Capability::ALL.iter().copied() {
@@ -535,15 +613,24 @@ mod tests {
         // `camera` -> `webcam` and `display-capture` -> `graphicsCaptureProgrammatic`: a "tidy"
         // into non-existent keys reads as absent, i.e. granted.
         assert_eq!(consent_key(Capability::Camera), Some("webcam"));
-        assert_eq!(consent_key(Capability::DisplayCapture), Some("graphicsCaptureProgrammatic"));
+        assert_eq!(
+            consent_key(Capability::DisplayCapture),
+            Some("graphicsCaptureProgrammatic")
+        );
         assert_eq!(consent_key(Capability::Microphone), Some("microphone"));
         assert_eq!(consent_key(Capability::Geolocation), Some("location"));
     }
 
     #[test]
     fn the_clipboard_is_granted_because_windows_has_no_gate_for_it() {
-        assert_eq!(read_state(Capability::ClipboardRead), PermissionState::Granted);
-        assert_eq!(read_state(Capability::ClipboardWrite), PermissionState::Granted);
+        assert_eq!(
+            read_state(Capability::ClipboardRead),
+            PermissionState::Granted
+        );
+        assert_eq!(
+            read_state(Capability::ClipboardWrite),
+            PermissionState::Granted
+        );
     }
 
     #[test]
@@ -560,7 +647,10 @@ mod tests {
 
     #[test]
     fn a_missing_key_reads_as_granted_rather_than_denied() {
-        assert_eq!(consent_value(&format!(r"{CONSENT}\skProbeNoSuchCapability")), None);
+        assert_eq!(
+            consent_value(&format!(r"{CONSENT}\skProbeNoSuchCapability")),
+            None
+        );
     }
 
     #[test]
@@ -584,20 +674,26 @@ mod tests {
             for suffix in ["", r"\NonPackaged"] {
                 let want = format!(r"{CONSENT}\{k}{suffix}");
                 assert!(
-                    keys.iter().any(|(r, p, c)| *r == HKEY_CURRENT_USER && *p == want && c.contains(&cap)),
+                    keys.iter()
+                        .any(|(r, p, c)| *r == HKEY_CURRENT_USER && *p == want && c.contains(&cap)),
                     "missing {want}"
                 );
             }
         }
         for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
-            assert!(keys.iter().any(|(r, p, c)| *r == root && p == APP_PRIVACY_POLICY && c.contains(&Capability::Microphone)));
+            assert!(keys.iter().any(|(r, p, c)| *r == root
+                && p == APP_PRIVACY_POLICY
+                && c.contains(&Capability::Microphone)));
         }
     }
 
     struct ScratchKey(String);
     impl ScratchKey {
         fn new(name: &str) -> ScratchKey {
-            let k = ScratchKey(format!(r"Software\sk-permissions-test-{name}-{}", std::process::id()));
+            let k = ScratchKey(format!(
+                r"Software\sk-permissions-test-{name}-{}",
+                std::process::id()
+            ));
             k.delete();
             k
         }
@@ -609,12 +705,25 @@ mod tests {
             let mut key = HKEY::default();
             unsafe {
                 assert_eq!(
-                    RegCreateKeyExW(HKEY_CURRENT_USER, &path, None, None, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, None, &mut key, None),
+                    RegCreateKeyExW(
+                        HKEY_CURRENT_USER,
+                        &path,
+                        None,
+                        None,
+                        REG_OPTION_NON_VOLATILE,
+                        KEY_SET_VALUE,
+                        None,
+                        &mut key,
+                        None
+                    ),
                     ERROR_SUCCESS
                 );
                 let wide: Vec<u16> = value.encode_utf16().chain([0]).collect();
                 let bytes = std::slice::from_raw_parts(wide.as_ptr().cast::<u8>(), wide.len() * 2);
-                assert_eq!(RegSetValueExW(key, &HSTRING::from("Value"), None, REG_SZ, Some(bytes)), ERROR_SUCCESS);
+                assert_eq!(
+                    RegSetValueExW(key, &HSTRING::from("Value"), None, REG_SZ, Some(bytes)),
+                    ERROR_SUCCESS
+                );
                 let _ = RegCloseKey(key);
             }
         }
@@ -637,17 +746,31 @@ mod tests {
         base.set("present", "Allow");
         let lazy = format!(r"{}\webcam\NonPackaged", base.0);
         let mut w = Watcher::new([(HKEY_CURRENT_USER, lazy.clone())]);
-        assert!(!w.watches[0].exact(), "missing: its nearest ancestor is watched");
+        assert!(
+            !w.watches[0].exact(),
+            "missing: its nearest ancestor is watched"
+        );
         assert_eq!(w.watches[0].open, base.0.len());
         assert_eq!(w.wait(50), None, "nothing happened");
 
         base.set(r"webcam\NonPackaged", "Deny");
         assert_eq!(w.wait(5000), Some(0), "the ancestor saw the key created");
-        assert!(w.watches[0].exact(), "and the key itself is watched from now on");
+        assert!(
+            w.watches[0].exact(),
+            "and the key itself is watched from now on"
+        );
         let _ = w.wait(100);
         base.set(r"webcam\NonPackaged", "Allow");
-        assert_eq!(w.wait(5000), Some(0), "a toggle of the new key wakes the watcher");
-        assert_eq!(consent_value(&lazy), Some(true), "the value the watcher woke for");
+        assert_eq!(
+            w.wait(5000),
+            Some(0),
+            "a toggle of the new key wakes the watcher"
+        );
+        assert_eq!(
+            consent_value(&lazy),
+            Some(true),
+            "the value the watcher woke for"
+        );
     }
 
     #[test]
@@ -659,16 +782,46 @@ mod tests {
             true
         };
         let cap = Capability::Camera;
-        assert!(join_or_open(&pending, 1, cap, PermissionState::Denied, open));
-        assert!(join_or_open(&pending, 2, cap, PermissionState::Denied, open));
+        assert!(join_or_open(
+            &pending,
+            1,
+            cap,
+            PermissionState::Denied,
+            open
+        ));
+        assert!(join_or_open(
+            &pending,
+            2,
+            cap,
+            PermissionState::Denied,
+            open
+        ));
         assert_eq!(opened.get(), 1, "Settings is opened once");
-        assert!(join_or_open(&pending, 3, Capability::Microphone, PermissionState::Denied, open));
+        assert!(join_or_open(
+            &pending,
+            3,
+            Capability::Microphone,
+            PermissionState::Denied,
+            open
+        ));
         assert_eq!(opened.get(), 2, "another capability has a page of its own");
         let p = pending.lock().unwrap();
-        assert_eq!(p[0].1.started, p[1].1.started, "one wait: the two settle together");
+        assert_eq!(
+            p[0].1.started, p[1].1.started,
+            "one wait: the two settle together"
+        );
         drop(p);
         let failed = Mutex::new(Vec::new());
-        assert!(!join_or_open(&failed, 4, cap, PermissionState::Denied, || false));
-        assert!(failed.lock().unwrap().is_empty(), "nothing waits on a page that never opened");
+        assert!(!join_or_open(
+            &failed,
+            4,
+            cap,
+            PermissionState::Denied,
+            || false
+        ));
+        assert!(
+            failed.lock().unwrap().is_empty(),
+            "nothing waits on a page that never opened"
+        );
     }
 }

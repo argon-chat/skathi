@@ -144,7 +144,10 @@ pub mod ffi {
             deadline: c_long,
         ) -> vpx_codec_err_t;
         #[link_name = "vnvpx_vpx_codec_get_frame"]
-        pub fn vpx_codec_get_frame(ctx: *mut vpx_codec_ctx_t, iter: *mut vpx_codec_iter_t) -> *mut vpx_image_t;
+        pub fn vpx_codec_get_frame(
+            ctx: *mut vpx_codec_ctx_t,
+            iter: *mut vpx_codec_iter_t,
+        ) -> *mut vpx_image_t;
         #[link_name = "vnvpx_vpx_codec_destroy"]
         pub fn vpx_codec_destroy(ctx: *mut vpx_codec_ctx_t) -> vpx_codec_err_t;
         #[link_name = "vnvpx_vpx_codec_err_to_string"]
@@ -179,7 +182,9 @@ pub mod ffi {
 
 pub fn version() -> &'static str {
     // SAFETY: a static NUL-terminated string from libvpx.
-    unsafe { CStr::from_ptr(ffi::vpx_codec_version_str()) }.to_str().unwrap_or("")
+    unsafe { CStr::from_ptr(ffi::vpx_codec_version_str()) }
+        .to_str()
+        .unwrap_or("")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,10 +220,12 @@ impl Error {
     fn new(err: ffi::vpx_codec_err_t, detail: *const c_char) -> Error {
         let code = match err {
             ffi::VPX_CODEC_MEM_ERROR => ErrorCode::Mem,
-            ffi::VPX_CODEC_UNSUP_BITSTREAM | ffi::VPX_CODEC_UNSUP_FEATURE | ffi::VPX_CODEC_INCAPABLE => {
-                ErrorCode::Unsupported
+            ffi::VPX_CODEC_UNSUP_BITSTREAM
+            | ffi::VPX_CODEC_UNSUP_FEATURE
+            | ffi::VPX_CODEC_INCAPABLE => ErrorCode::Unsupported,
+            ffi::VPX_CODEC_CORRUPT_FRAME | ffi::VPX_CODEC_ERROR | ffi::VPX_CODEC_INVALID_PARAM => {
+                ErrorCode::Corrupt
             }
-            ffi::VPX_CODEC_CORRUPT_FRAME | ffi::VPX_CODEC_ERROR | ffi::VPX_CODEC_INVALID_PARAM => ErrorCode::Corrupt,
             other => ErrorCode::Other(other),
         };
         // SAFETY: both are NULL or static/context-owned NUL-terminated strings.
@@ -233,7 +240,10 @@ impl Error {
     }
 
     fn invalid(message: &str) -> Error {
-        Error { code: ErrorCode::Corrupt, message: message.to_string() }
+        Error {
+            code: ErrorCode::Corrupt,
+            message: message.to_string(),
+        }
     }
 }
 
@@ -249,10 +259,21 @@ pub struct StreamInfo {
 /// (or intra-only frame) packet, or `None` when the packet is not one.
 pub fn peek(packet: &[u8]) -> Option<StreamInfo> {
     let len = c_uint::try_from(packet.len()).ok()?;
-    let mut si = ffi::vpx_codec_stream_info_t { sz: std::mem::size_of::<ffi::vpx_codec_stream_info_t>() as c_uint, w: 0, h: 0, is_kf: 0 };
+    let mut si = ffi::vpx_codec_stream_info_t {
+        sz: std::mem::size_of::<ffi::vpx_codec_stream_info_t>() as c_uint,
+        w: 0,
+        h: 0,
+        is_kf: 0,
+    };
     // SAFETY: the packet outlives the call; peek allocates nothing.
-    let err = unsafe { ffi::vpx_codec_peek_stream_info(ffi::vpx_codec_vp9_dx(), packet.as_ptr(), len, &mut si) };
-    (err == ffi::VPX_CODEC_OK && si.w > 0 && si.h > 0).then_some(StreamInfo { width: si.w, height: si.h, keyframe: si.is_kf != 0 })
+    let err = unsafe {
+        ffi::vpx_codec_peek_stream_info(ffi::vpx_codec_vp9_dx(), packet.as_ptr(), len, &mut si)
+    };
+    (err == ffi::VPX_CODEC_OK && si.w > 0 && si.h > 0).then_some(StreamInfo {
+        width: si.w,
+        height: si.h,
+        keyframe: si.is_kf != 0,
+    })
 }
 
 /// Bytes a decoder holds through libvpx's allocator, allocator overhead included.
@@ -315,7 +336,11 @@ impl<'a> Plane<'a> {
 
 impl fmt::Debug for Plane<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Plane({}x{}, stride {})", self.width, self.height, self.stride)
+        write!(
+            f,
+            "Plane({}x{}, stride {})",
+            self.width, self.height, self.stride
+        )
     }
 }
 
@@ -390,7 +415,11 @@ impl Decoder {
         // SAFETY: a zeroed vpx_codec_ctx_t is what libvpx expects to fill.
         let mut decoder = Decoder {
             ctx: Box::new(unsafe { std::mem::zeroed() }),
-            cfg: Box::new(ffi::vpx_codec_dec_cfg_t { threads: 1, w: 0, h: 0 }),
+            cfg: Box::new(ffi::vpx_codec_dec_cfg_t {
+                threads: 1,
+                w: 0,
+                h: 0,
+            }),
             account: Box::new(UnsafeCell::new(ffi::sk_vpx_account::default())),
             frame: ptr::null(),
             failed: false,
@@ -405,7 +434,15 @@ impl Decoder {
         *self.ctx = unsafe { std::mem::zeroed() };
         let _charging = Charging::to(&self.account);
         // SAFETY: ctx and cfg are boxed and live as long as the decoder.
-        let err = unsafe { ffi::vpx_codec_dec_init_ver(&mut *self.ctx, ffi::vpx_codec_vp9_dx(), &*self.cfg, 0, ffi::VPX_DECODER_ABI_VERSION) };
+        let err = unsafe {
+            ffi::vpx_codec_dec_init_ver(
+                &mut *self.ctx,
+                ffi::vpx_codec_vp9_dx(),
+                &*self.cfg,
+                0,
+                ffi::VPX_DECODER_ABI_VERSION,
+            )
+        };
         if err != ffi::VPX_CODEC_OK {
             // A failed init has released what it took (vpx_decoder.h).
             return Err(Error::new(err, self.ctx.err_detail));
@@ -433,7 +470,10 @@ impl Decoder {
     pub fn memory(&self) -> MemoryUse {
         // SAFETY: no libvpx call is running on this decoder (&self, !Sync).
         let account = unsafe { &*self.account.get() };
-        MemoryUse { live: account.live, peak: account.peak }
+        MemoryUse {
+            live: account.live,
+            peak: account.peak,
+        }
     }
 
     /// Decodes one packet: a VP9 frame, or a superframe (at most one frame shown). `Ok(true)` when
@@ -449,18 +489,23 @@ impl Decoder {
             // An empty packet is libvpx's "flush", not a frame.
             return Err(Error::invalid("empty VP9 packet"));
         }
-        let len = c_uint::try_from(packet.len()).map_err(|_| Error::invalid("VP9 packet over 4 GiB"))?;
+        let len =
+            c_uint::try_from(packet.len()).map_err(|_| Error::invalid("VP9 packet over 4 GiB"))?;
         if self.failed {
             self.destroy();
             self.init()?;
         }
         let _charging = Charging::to(&self.account);
         // SAFETY: the packet outlives the call; libvpx copies what it keeps.
-        let err = unsafe { ffi::vpx_codec_decode(&mut *self.ctx, packet.as_ptr(), len, ptr::null_mut(), 0) };
+        let err = unsafe {
+            ffi::vpx_codec_decode(&mut *self.ctx, packet.as_ptr(), len, ptr::null_mut(), 0)
+        };
         if err != ffi::VPX_CODEC_OK {
             self.failed = true;
             // SAFETY: the context is valid; the detail string is owned by it.
-            return Err(Error::new(err, unsafe { ffi::vpx_codec_error_detail(&*self.ctx) }));
+            return Err(Error::new(err, unsafe {
+                ffi::vpx_codec_error_detail(&*self.ctx)
+            }));
         }
         let mut iter: ffi::vpx_codec_iter_t = ptr::null();
         loop {
@@ -501,7 +546,12 @@ impl Decoder {
             let len = stride * (height - 1) + width;
             // SAFETY: libvpx's plane holds `height` rows of `stride` bytes.
             let data = unsafe { std::slice::from_raw_parts(img.planes[i], len) };
-            Some(Plane { data, stride, width, height })
+            Some(Plane {
+                data,
+                stride,
+                width,
+                height,
+            })
         };
         let (cw, ch) = ((w + xs) >> xs, (h + ys) >> ys);
         Some(Frame {

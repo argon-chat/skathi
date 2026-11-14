@@ -76,10 +76,7 @@ fn fill_terminator_keyframes(map: &mut Map<String, Value>, stats: &mut Normaliza
                 stats.terminator_keyframes += 1;
             }
         }
-        carried = keyframe
-            .get("e")
-            .or_else(|| keyframe.get("s"))
-            .cloned();
+        carried = keyframe.get("e").or_else(|| keyframe.get("s")).cloned();
     }
 }
 

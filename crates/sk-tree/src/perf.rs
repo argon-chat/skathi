@@ -132,8 +132,14 @@ pub enum FullReason {
 
 impl FullReason {
     pub const COUNT: usize = 6;
-    pub const NAMES: [&'static str; Self::COUNT] =
-        ["stylesheet", "env", "style-element", "fonts", "viewport-basis", "rem-basis"];
+    pub const NAMES: [&'static str; Self::COUNT] = [
+        "stylesheet",
+        "env",
+        "style-element",
+        "fonts",
+        "viewport-basis",
+        "rem-basis",
+    ];
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -174,8 +180,9 @@ pub enum DomOp {
 
 impl DomOp {
     pub const COUNT: usize = 8;
-    pub const NAMES: [&'static str; Self::COUNT] =
-        ["create", "insert", "remove", "class", "style", "prop", "text", "other"];
+    pub const NAMES: [&'static str; Self::COUNT] = [
+        "create", "insert", "remove", "class", "style", "prop", "text", "other",
+    ];
 }
 
 const ZERO: Phases = Phases {
@@ -190,7 +197,10 @@ const ZERO: Phases = Phases {
     store_ms: 0.0,
     nodes_cascaded: 0,
     rules_tested: 0,
-    rules_split: sk_css::perf::Split { by_bucket: [0; 6], matched: 0 },
+    rules_split: sk_css::perf::Split {
+        by_bucket: [0; 6],
+        matched: 0,
+    },
     share_asked: 0,
     share_hits: 0,
     build_passes: 0,
@@ -375,7 +385,9 @@ pub fn note_taffy_gap() {
     if !enabled() {
         return;
     }
-    let Some(t) = LAYOUT_DONE.with(|c| c.borrow_mut().take()) else { return };
+    let Some(t) = LAYOUT_DONE.with(|c| c.borrow_mut().take()) else {
+        return;
+    };
     let ended = Instant::now();
     let ms = ended.duration_since(t).as_secs_f32() * 1000.0;
     sk_runtime::redjs::profiling::interval("layout", "Taffy layout", t, ended);
@@ -452,7 +464,9 @@ pub fn sheet_compiles() -> (u64, f64, u64, Option<i64>) {
         SHEET_COMPILES.load(Relaxed),
         SHEET_COMPILE_US.load(Relaxed) as f64 / 1000.0,
         SHEET_SOURCE_BYTES.load(Relaxed),
-        SHEET_GROWTH_SEEN.load(Relaxed).then(|| SHEET_GROWTH.load(Relaxed)),
+        SHEET_GROWTH_SEEN
+            .load(Relaxed)
+            .then(|| SHEET_GROWTH.load(Relaxed)),
     )
 }
 
@@ -498,7 +512,9 @@ pub fn note_sync_layout(caller: SyncCaller, drew: bool, ms: f32) {
     if !enabled() {
         return;
     }
-    if drew { sk_runtime::redjs::profiling::counter("forcedLayouts", 1); }
+    if drew {
+        sk_runtime::redjs::profiling::counter("forcedLayouts", 1);
+    }
     with(|p| {
         p.sync_by[caller as usize] += 1;
         if drew {
@@ -543,7 +559,15 @@ pub fn note_read(kind: Read) {
     if !enabled() {
         return;
     }
-    sk_runtime::redjs::profiling::counter(match kind { Read::Layout => "layoutReads", Read::Scroll => "scrollReads", Read::Style => "styleReads", Read::Query => "selectorQueries" }, 1);
+    sk_runtime::redjs::profiling::counter(
+        match kind {
+            Read::Layout => "layoutReads",
+            Read::Scroll => "scrollReads",
+            Read::Style => "styleReads",
+            Read::Query => "selectorQueries",
+        },
+        1,
+    );
     with(|p| match kind {
         Read::Layout => p.layout_reads += 1,
         Read::Scroll => p.scroll_reads += 1,

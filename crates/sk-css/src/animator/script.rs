@@ -69,7 +69,9 @@ impl ScriptTiming {
     }
 
     pub fn sample(&self, local: Option<f64>, backwards: bool) -> ScriptSample {
-        let Some(local) = local else { return ScriptSample::default(); };
+        let Some(local) = local else {
+            return ScriptSample::default();
+        };
         let active = self.active_duration();
         let end = self.end_time();
         let before_active = self.delay.min(end).max(0.0);
@@ -88,7 +90,9 @@ impl ScriptTiming {
             Phase::After => matches!(self.fill, FillMode::Forwards | FillMode::Both)
                 .then(|| (local - self.delay).min(active).max(0.0)),
         };
-        let Some(active_time) = active_time else { return ScriptSample::default(); };
+        let Some(active_time) = active_time else {
+            return ScriptSample::default();
+        };
         let overall = if self.duration == 0.0 {
             if phase == Phase::Before {
                 self.iteration_start
@@ -105,7 +109,11 @@ impl ScriptTiming {
         };
         // The end of an iteration is 1, not the 0 of the next one — but only where the active
         // interval actually ends.
-        if simple == 0.0 && phase != Phase::Before && active_time == active && self.iterations != 0.0 {
+        if simple == 0.0
+            && phase != Phase::Before
+            && active_time == active
+            && self.iterations != 0.0
+        {
             simple = 1.0;
         }
         let iteration = if phase == Phase::After && self.iterations.is_infinite() {
@@ -119,7 +127,11 @@ impl ScriptTiming {
             Direction::Normal => true,
             Direction::Reverse => false,
             Direction::Alternate | Direction::AlternateReverse => {
-                let d = if self.direction == Direction::AlternateReverse { iteration + 1.0 } else { iteration };
+                let d = if self.direction == Direction::AlternateReverse {
+                    iteration + 1.0
+                } else {
+                    iteration
+                };
                 !d.is_finite() || d % 2.0 == 0.0
             }
         };
@@ -140,7 +152,11 @@ pub struct ScriptClock {
 
 impl Default for ScriptClock {
     fn default() -> Self {
-        ScriptClock { start: None, hold: None, rate: 1.0 }
+        ScriptClock {
+            start: None,
+            hold: None,
+            rate: 1.0,
+        }
     }
 }
 
@@ -212,7 +228,15 @@ impl Animator {
         // Ids grow with creation order, so a target change keeps the animation at its composite
         // position.
         let at = list.iter().position(|a| a.id > id).unwrap_or(list.len());
-        list.insert(at, ScriptAnim { id, frames, timing, clock });
+        list.insert(
+            at,
+            ScriptAnim {
+                id,
+                frames,
+                timing,
+                clock,
+            },
+        );
     }
 
     pub fn script_node(&self, id: u32) -> Option<u32> {
@@ -221,7 +245,11 @@ impl Animator {
 
     pub fn script_clock(&mut self, id: u32, clock: ScriptClock) -> Option<u32> {
         let node = *self.script_nodes.get(&id)?;
-        let a = self.scripts.get_mut(&node)?.iter_mut().find(|a| a.id == id)?;
+        let a = self
+            .scripts
+            .get_mut(&node)?
+            .iter_mut()
+            .find(|a| a.id == id)?;
         a.clock = clock;
         Some(node)
     }
@@ -237,7 +265,12 @@ impl Animator {
         Some(node)
     }
 
-    pub fn script_values(&self, id: u32, base: &StyleRefinement, now: Instant) -> Option<Vec<(String, String)>> {
+    pub fn script_values(
+        &self,
+        id: u32,
+        base: &StyleRefinement,
+        now: Instant,
+    ) -> Option<Vec<(String, String)>> {
         let node = *self.script_nodes.get(&id)?;
         let a = self.scripts.get(&node)?.iter().find(|a| a.id == id)?;
         let mut out = Vec::new();
@@ -277,11 +310,20 @@ impl Animator {
     }
 }
 
-fn apply_script_keyframes(out: &mut StyleRefinement, base: &StyleRefinement, frames: &Keyframes, progress: f64) {
+fn apply_script_keyframes(
+    out: &mut StyleRefinement,
+    base: &StyleRefinement,
+    frames: &Keyframes,
+    progress: f64,
+) {
     let p = progress as f32;
     for property in TransitionProperty::animatable() {
         let mut list: Vec<(f32, Option<&Keyframe>)> = Vec::new();
-        for k in frames.steps.iter().filter(|k| slot_of(&k.style, &property) != Slot::Missing) {
+        for k in frames
+            .steps
+            .iter()
+            .filter(|k| slot_of(&k.style, &property) != Slot::Missing)
+        {
             list.push((k.offset, Some(k)));
         }
         let (Some(&(first, _)), Some(&(last, _))) = (list.first(), list.last()) else {
@@ -297,7 +339,8 @@ fn apply_script_keyframes(out: &mut StyleRefinement, base: &StyleRefinement, fra
             Slot::Missing => initial(&property).map_or(Slot::Missing, Slot::Value),
             slot => slot,
         };
-        let value = |k: Option<&Keyframe>| k.map_or_else(implicit, |k| slot_of(&k.style, &property));
+        let value =
+            |k: Option<&Keyframe>| k.map_or_else(implicit, |k| slot_of(&k.style, &property));
         let zeros = list.iter().filter(|(o, _)| *o == 0.0).count();
         let ones = list.iter().filter(|(o, _)| *o == 1.0).count();
         let lone = if p < 0.0 && zeros > 1 {
@@ -318,11 +361,16 @@ fn apply_script_keyframes(out: &mut StyleRefinement, base: &StyleRefinement, fra
         } else if p >= 1.0 {
             list.len() - 2
         } else {
-            list.iter().rposition(|(o, _)| *o <= p && *o < 1.0).unwrap_or(0)
+            list.iter()
+                .rposition(|(o, _)| *o <= p && *o < 1.0)
+                .unwrap_or(0)
         };
         let ((o0, k0), (o1, k1)) = (list[start], list[start + 1]);
         let distance = if o1 > o0 { (p - o0) / (o1 - o0) } else { 0.0 };
-        let eased = k0.and_then(|k| k.easing).unwrap_or(Easing::Linear).eval(distance);
+        let eased = k0
+            .and_then(|k| k.easing)
+            .unwrap_or(Easing::Linear)
+            .eval(distance);
         let (Slot::Value(a), Slot::Value(b)) = (value(k0), value(k1)) else {
             if let Slot::Value(v) = value(k0) {
                 install(out, base, &property, v);
@@ -357,7 +405,10 @@ fn css_color(c: Hsla) -> String {
     if c.a >= 1.0 {
         format!("rgb({r}, {g}, {b})")
     } else {
-        format!("rgba({r}, {g}, {b}, {})", (c.a.clamp(0.0, 1.0) * 1000.0).round() / 1000.0)
+        format!(
+            "rgba({r}, {g}, {b}, {})",
+            (c.a.clamp(0.0, 1.0) * 1000.0).round() / 1000.0
+        )
     }
 }
 
@@ -398,7 +449,15 @@ pub fn script_keyframes(
         let mut style = parsed.refinement.map(|r| (*r).clone()).unwrap_or_default();
         let mut extras = crate::Extras::default();
         for (name, raw) in &parsed.dynamic {
-            crate::mapper::apply_dynamic(name, raw, vars, env, &mut style, &mut extras, &mut notes.diagnostics);
+            crate::mapper::apply_dynamic(
+                name,
+                raw,
+                vars,
+                env,
+                &mut style,
+                &mut extras,
+                &mut notes.diagnostics,
+            );
         }
         steps.push(Keyframe {
             offset: frame.offset,
@@ -409,7 +468,13 @@ pub fn script_keyframes(
         });
     }
     steps.sort_by(|a, b| a.offset.total_cmp(&b.offset));
-    (Rc::new(Keyframes { steps, dynamic: false }), notes)
+    (
+        Rc::new(Keyframes {
+            steps,
+            dynamic: false,
+        }),
+        notes,
+    )
 }
 
 #[cfg(test)]
@@ -419,7 +484,10 @@ mod tests {
     use std::time::Duration;
 
     fn timing(duration: f64) -> ScriptTiming {
-        ScriptTiming { duration, ..ScriptTiming::default() }
+        ScriptTiming {
+            duration,
+            ..ScriptTiming::default()
+        }
     }
 
     fn frames(list: &[(f32, &str)]) -> Rc<Keyframes> {
@@ -450,15 +518,22 @@ mod tests {
     }
 
     fn playing(start: f64) -> ScriptClock {
-        ScriptClock { start: Some(start), hold: None, rate: 1.0 }
+        ScriptClock {
+            start: Some(start),
+            hold: None,
+            rate: 1.0,
+        }
     }
 
     fn opacity(a: &Animator, node: u32, now: Instant) -> Option<f32> {
-        a.overlay(node, &StyleRefinement::default(), now).and_then(|r| r.opacity)
+        a.overlay(node, &StyleRefinement::default(), now)
+            .and_then(|r| r.opacity)
     }
 
     fn translate_y(a: &Animator, node: u32, now: Instant) -> f32 {
-        let r = a.overlay(node, &StyleRefinement::default(), now).expect("in effect");
+        let r = a
+            .overlay(node, &StyleRefinement::default(), now)
+            .expect("in effect");
         match r.vn_transform.expect("a transform").translate.1 {
             gpui::TransformLength::Pixels(p) => p,
             other => panic!("{other:?}"),
@@ -475,12 +550,28 @@ mod tests {
         assert_eq!(sample.progress, Some(local / t.duration));
         assert_eq!(sample.current_iteration, Some(0.0));
         assert_eq!(sample.progress, t.progress(local, false));
-        let t = ScriptTiming { duration: 1000.0, iterations: 3.0,
-            direction: Direction::Alternate, fill: FillMode::Both, ..t };
-        assert_eq!(t.sample(Some(3000.0), false), ScriptSample {
-            progress: Some(1.0), current_iteration: Some(2.0) });
-        let infinite = ScriptTiming { duration: f64::INFINITY, ..t };
-        assert_eq!(infinite.sample(Some(f64::INFINITY), false).progress, Some(1.0));
+        let t = ScriptTiming {
+            duration: 1000.0,
+            iterations: 3.0,
+            direction: Direction::Alternate,
+            fill: FillMode::Both,
+            ..t
+        };
+        assert_eq!(
+            t.sample(Some(3000.0), false),
+            ScriptSample {
+                progress: Some(1.0),
+                current_iteration: Some(2.0)
+            }
+        );
+        let infinite = ScriptTiming {
+            duration: f64::INFINITY,
+            ..t
+        };
+        assert_eq!(
+            infinite.sample(Some(f64::INFINITY), false).progress,
+            Some(1.0)
+        );
     }
 
     #[test]
@@ -492,36 +583,90 @@ mod tests {
         assert_eq!(t.progress(1000.0, false), None);
         assert_eq!(t.progress(1000.0, true), Some(1.0));
 
-        let filled = ScriptTiming { fill: FillMode::Both, delay: 100.0, ..t };
-        assert_eq!(filled.progress(0.0, false), Some(0.0), "backwards fill holds the start");
-        assert_eq!(filled.progress(5000.0, false), Some(1.0), "forwards fill holds the end");
+        let filled = ScriptTiming {
+            fill: FillMode::Both,
+            delay: 100.0,
+            ..t
+        };
+        assert_eq!(
+            filled.progress(0.0, false),
+            Some(0.0),
+            "backwards fill holds the start"
+        );
+        assert_eq!(
+            filled.progress(5000.0, false),
+            Some(1.0),
+            "forwards fill holds the end"
+        );
 
-        let alt = ScriptTiming { iterations: 3.0, direction: Direction::Alternate, fill: FillMode::Forwards, ..t };
+        let alt = ScriptTiming {
+            iterations: 3.0,
+            direction: Direction::Alternate,
+            fill: FillMode::Forwards,
+            ..t
+        };
         assert_eq!(alt.progress(250.0, false), Some(0.25));
         assert_eq!(alt.progress(1250.0, false), Some(0.75));
         assert_eq!(alt.progress(2250.0, false), Some(0.25));
         assert_eq!(alt.progress(9000.0, false), Some(1.0));
-        let two = ScriptTiming { iterations: 2.0, ..alt };
+        let two = ScriptTiming {
+            iterations: 2.0,
+            ..alt
+        };
         assert_eq!(two.progress(9000.0, false), Some(0.0));
 
-        let shifted = ScriptTiming { iteration_start: 0.5, ..t };
+        let shifted = ScriptTiming {
+            iteration_start: 0.5,
+            ..t
+        };
         assert_eq!(shifted.progress(250.0, false), Some(0.75));
 
-        let instant = ScriptTiming { duration: 0.0, fill: FillMode::Forwards, ..t };
+        let instant = ScriptTiming {
+            duration: 0.0,
+            fill: FillMode::Forwards,
+            ..t
+        };
         assert_eq!(instant.progress(10.0, false), Some(1.0));
 
-        let stepped = ScriptTiming { easing: Easing::Steps(4, StepPosition::JumpEnd), ..t };
+        let stepped = ScriptTiming {
+            easing: Easing::Steps(4, StepPosition::JumpEnd),
+            ..t
+        };
         assert_eq!(stepped.progress(600.0, false), Some(0.5));
         assert_eq!(t.end_time(), 1000.0);
-        assert_eq!(ScriptTiming { end_delay: 500.0, delay: 200.0, ..t }.end_time(), 1700.0);
-        assert_eq!(ScriptTiming { end_delay: -5000.0, ..t }.end_time(), 0.0);
+        assert_eq!(
+            ScriptTiming {
+                end_delay: 500.0,
+                delay: 200.0,
+                ..t
+            }
+            .end_time(),
+            1700.0
+        );
+        assert_eq!(
+            ScriptTiming {
+                end_delay: -5000.0,
+                ..t
+            }
+            .end_time(),
+            0.0
+        );
     }
 
     #[test]
     fn a_playing_animation_paints_from_its_clock_and_stops_at_the_end() {
         let (mut a, t0) = animator();
-        a.script_set(1, 7, frames(&[(0.0, "opacity: 0"), (1.0, "opacity: 1")]), timing(1000.0));
-        assert_eq!(opacity(&a, 7, at(t0, 100)), None, "idle until it has a clock");
+        a.script_set(
+            1,
+            7,
+            frames(&[(0.0, "opacity: 0"), (1.0, "opacity: 1")]),
+            timing(1000.0),
+        );
+        assert_eq!(
+            opacity(&a, 7, at(t0, 100)),
+            None,
+            "idle until it has a clock"
+        );
         assert!(!a.any_animation(at(t0, 100)));
 
         a.script_clock(1, playing(100.0));
@@ -537,12 +682,34 @@ mod tests {
     #[test]
     fn a_held_clock_paints_its_time_and_is_not_moving() {
         let (mut a, t0) = animator();
-        a.script_set(1, 7, frames(&[(0.0, "opacity: 0"), (1.0, "opacity: 1")]), timing(1000.0));
-        a.script_clock(1, ScriptClock { start: None, hold: Some(250.0), rate: 1.0 });
+        a.script_set(
+            1,
+            7,
+            frames(&[(0.0, "opacity: 0"), (1.0, "opacity: 1")]),
+            timing(1000.0),
+        );
+        a.script_clock(
+            1,
+            ScriptClock {
+                start: None,
+                hold: Some(250.0),
+                rate: 1.0,
+            },
+        );
         let v = opacity(&a, 7, at(t0, 5000)).unwrap();
         assert!((v - 0.25).abs() < 1e-3, "{v}");
-        assert!(!a.any_animation(at(t0, 5000)), "paused: no reason to repaint");
-        a.script_clock(1, ScriptClock { start: Some(2000.0), hold: None, rate: -1.0 });
+        assert!(
+            !a.any_animation(at(t0, 5000)),
+            "paused: no reason to repaint"
+        );
+        a.script_clock(
+            1,
+            ScriptClock {
+                start: Some(2000.0),
+                hold: None,
+                rate: -1.0,
+            },
+        );
         let v = opacity(&a, 7, at(t0, 1250)).unwrap();
         assert!((v - 0.75).abs() < 1e-3, "{v}");
         assert!(a.any_animation(at(t0, 1250)));
@@ -555,11 +722,19 @@ mod tests {
         a.script_set(
             1,
             3,
-            frames(&[(0.0, "transform: translateY(-100px)"), (1.0, "transform: translateY(-120px)")]),
-            ScriptTiming { easing: back_out, ..timing(900.0) },
+            frames(&[
+                (0.0, "transform: translateY(-100px)"),
+                (1.0, "transform: translateY(-120px)"),
+            ]),
+            ScriptTiming {
+                easing: back_out,
+                ..timing(900.0)
+            },
         );
         a.script_clock(1, playing(0.0));
-        let deepest = (1..90).map(|i| translate_y(&a, 3, at(t0, i * 10))).fold(f32::MAX, f32::min);
+        let deepest = (1..90)
+            .map(|i| translate_y(&a, 3, at(t0, i * 10)))
+            .fold(f32::MAX, f32::min);
         assert!(deepest < -121.0, "no overshoot: {deepest}");
     }
 
@@ -572,7 +747,12 @@ mod tests {
         a.script_clock(1, playing(0.0));
         let v = a.overlay(9, &base, at(t0, 500)).unwrap().opacity.unwrap();
         assert!((v - 0.6).abs() < 1e-3, "{v}");
-        a.script_set(2, 9, frames(&[(0.0, "opacity: 0"), (1.0, "opacity: 0")]), timing(1000.0));
+        a.script_set(
+            2,
+            9,
+            frames(&[(0.0, "opacity: 0"), (1.0, "opacity: 0")]),
+            timing(1000.0),
+        );
         a.script_clock(2, playing(0.0));
         assert_eq!(a.overlay(9, &base, at(t0, 500)).unwrap().opacity, Some(0.0));
         assert_eq!(a.script_drop(2), Some(9));
@@ -583,7 +763,12 @@ mod tests {
     #[test]
     fn script_animations_sit_above_css_ones_and_survive_a_sheet_swap() {
         let (mut a, t0) = animator();
-        a.script_set(1, 4, frames(&[(0.0, "opacity: 0.5"), (1.0, "opacity: 0.5")]), timing(1000.0));
+        a.script_set(
+            1,
+            4,
+            frames(&[(0.0, "opacity: 0.5"), (1.0, "opacity: 0.5")]),
+            timing(1000.0),
+        );
         a.script_clock(1, playing(0.0));
         a.clear();
         assert_eq!(opacity(&a, 4, at(t0, 100)), Some(0.5));
@@ -608,9 +793,21 @@ mod tests {
     fn keyframe_easing_shapes_its_own_interval() {
         let (mut a, t0) = animator();
         let f = vec![
-            ScriptFrame { offset: 0.0, easing: Some(Easing::Steps(2, StepPosition::JumpEnd)), decls: vec![("opacity".into(), "0".into())] },
-            ScriptFrame { offset: 0.5, easing: None, decls: vec![("opacity".into(), "1".into())] },
-            ScriptFrame { offset: 1.0, easing: None, decls: vec![("opacity".into(), "0".into())] },
+            ScriptFrame {
+                offset: 0.0,
+                easing: Some(Easing::Steps(2, StepPosition::JumpEnd)),
+                decls: vec![("opacity".into(), "0".into())],
+            },
+            ScriptFrame {
+                offset: 0.5,
+                easing: None,
+                decls: vec![("opacity".into(), "1".into())],
+            },
+            ScriptFrame {
+                offset: 1.0,
+                easing: None,
+                decls: vec![("opacity".into(), "0".into())],
+            },
         ];
         let (k, _) = script_keyframes(&f, &crate::Vars::default(), &crate::Env::default());
         a.script_set(1, 2, k, timing(1000.0));
@@ -633,7 +830,10 @@ mod tests {
             ],
         }];
         let (k, notes) = script_keyframes(&f, &crate::Vars::default(), &crate::Env::default());
-        assert_eq!(notes.ignored, vec!["filter".to_string(), "display".to_string()]);
+        assert_eq!(
+            notes.ignored,
+            vec!["filter".to_string(), "display".to_string()]
+        );
         assert_eq!(k.steps[0].style.opacity, Some(0.5));
         assert_eq!(k.steps[0].style.display, None);
     }
@@ -642,8 +842,17 @@ mod tests {
     fn a_keyframe_value_resolves_against_the_target_s_custom_properties() {
         let env = crate::Env::default();
         let own = ("--to".to_string(), "0.25".to_string());
-        let vars = crate::vars::resolve(&Rc::new(crate::Vars::default()), &[&own], &env, &mut Vec::new());
-        let f = vec![ScriptFrame { offset: 1.0, easing: None, decls: vec![("opacity".into(), "var(--to)".into())] }];
+        let vars = crate::vars::resolve(
+            &Rc::new(crate::Vars::default()),
+            &[&own],
+            &env,
+            &mut Vec::new(),
+        );
+        let f = vec![ScriptFrame {
+            offset: 1.0,
+            easing: None,
+            decls: vec![("opacity".into(), "var(--to)".into())],
+        }];
         let (k, _) = script_keyframes(&f, &vars, &env);
         assert_eq!(k.steps[0].style.opacity, Some(0.25));
     }
@@ -654,13 +863,27 @@ mod tests {
         a.script_set(
             1,
             2,
-            frames(&[(0.0, "opacity: 0; transform: translateY(0px)"), (1.0, "opacity: 1; transform: translateY(-20px)")]),
-            ScriptTiming { fill: FillMode::Forwards, ..timing(1000.0) },
+            frames(&[
+                (0.0, "opacity: 0; transform: translateY(0px)"),
+                (1.0, "opacity: 1; transform: translateY(-20px)"),
+            ]),
+            ScriptTiming {
+                fill: FillMode::Forwards,
+                ..timing(1000.0)
+            },
         );
         a.script_clock(1, playing(0.0));
-        let values = a.script_values(1, &StyleRefinement::default(), at(t0, 2000)).unwrap();
-        assert!(values.contains(&("opacity".to_string(), "1".to_string())), "{values:?}");
-        assert!(values.contains(&("transform".to_string(), "translate(0px, -20px)".to_string())), "{values:?}");
+        let values = a
+            .script_values(1, &StyleRefinement::default(), at(t0, 2000))
+            .unwrap();
+        assert!(
+            values.contains(&("opacity".to_string(), "1".to_string())),
+            "{values:?}"
+        );
+        assert!(
+            values.contains(&("transform".to_string(), "translate(0px, -20px)".to_string())),
+            "{values:?}"
+        );
         assert_eq!(a.script_values(9, &StyleRefinement::default(), t0), None);
     }
 
@@ -668,8 +891,14 @@ mod tests {
     fn easing_text_parses_like_the_cascade_and_refuses_linear_functions() {
         use crate::transition::parse_easing;
         assert_eq!(parse_easing("ease-out"), Some(Easing::EaseOut));
-        assert_eq!(parse_easing("cubic-bezier(0.34, 1.56, 0.64, 1)"), Some(Easing::CubicBezier(0.34, 1.56, 0.64, 1.0)));
-        assert_eq!(parse_easing("steps(4, end)"), Some(Easing::Steps(4, StepPosition::JumpEnd)));
+        assert_eq!(
+            parse_easing("cubic-bezier(0.34, 1.56, 0.64, 1)"),
+            Some(Easing::CubicBezier(0.34, 1.56, 0.64, 1.0))
+        );
+        assert_eq!(
+            parse_easing("steps(4, end)"),
+            Some(Easing::Steps(4, StepPosition::JumpEnd))
+        );
         assert_eq!(parse_easing("linear(0, 1)"), None);
         assert_eq!(parse_easing("bogus"), None);
         assert!(crate::transition::animates("transform"));
@@ -684,7 +913,15 @@ mod border_css_regression {
     use super::*;
     #[test]
     fn committed_border_animation_keeps_four_side_colours() {
-        let colors=[gpui::red(), gpui::green(), gpui::blue(), Hsla::transparent_black()];
-        assert_eq!(css_value(Animatable::BorderColors(colors)), Some(colors.map(css_color).join(" ")));
+        let colors = [
+            gpui::red(),
+            gpui::green(),
+            gpui::blue(),
+            Hsla::transparent_black(),
+        ];
+        assert_eq!(
+            css_value(Animatable::BorderColors(colors)),
+            Some(colors.map(css_color).join(" "))
+        );
     }
 }

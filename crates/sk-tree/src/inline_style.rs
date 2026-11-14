@@ -32,7 +32,10 @@ pub fn css_name(k: &str) -> String {
             out.push(c);
         }
     }
-    if ["webkit-", "moz-", "ms-"].iter().any(|p| out.starts_with(p)) {
+    if ["webkit-", "moz-", "ms-"]
+        .iter()
+        .any(|p| out.starts_with(p))
+    {
         out.insert(0, '-');
     }
     out
@@ -40,14 +43,22 @@ pub fn css_name(k: &str) -> String {
 
 /// A name as `getPropertyValue`/`setProperty` take it: ASCII-lowercased unless custom.
 pub fn cssom_name(k: &str) -> String {
-    if k.starts_with("--") { k.to_string() } else { k.to_ascii_lowercase() }
+    if k.starts_with("--") {
+        k.to_string()
+    } else {
+        k.to_ascii_lowercase()
+    }
 }
 
 /// A declaration's value as stored, trimmed. An empty custom property is valid CSS, but `""` means
 /// "remove", so it is kept as one space.
 pub fn stored_value(v: &str, custom: bool) -> String {
     let t = v.trim();
-    if t.is_empty() && custom { " ".into() } else { t.into() }
+    if t.is_empty() && custom {
+        " ".into()
+    } else {
+        t.into()
+    }
 }
 
 /// `v` without a trailing `! important` (any case, any spacing), when it has one.
@@ -63,11 +74,16 @@ pub fn strip_important(v: &str) -> Option<&str> {
 
 fn valid_name(n: &str) -> bool {
     if let Some(rest) = n.strip_prefix("--") {
-        return !rest.is_empty() && !rest.chars().any(|c| c.is_whitespace() || c == ':' || c == ';');
+        return !rest.is_empty()
+            && !rest
+                .chars()
+                .any(|c| c.is_whitespace() || c == ':' || c == ';');
     }
     let body = n.strip_prefix('-').unwrap_or(n);
     let mut chars = body.chars();
-    let starts = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || !c.is_ascii());
+    let starts = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || !c.is_ascii());
     starts && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || !c.is_ascii())
 }
 
@@ -77,7 +93,9 @@ fn valid_name(n: &str) -> bool {
 pub fn parse_declarations(text: &str) -> Vec<(String, String, bool)> {
     let mut out: Vec<(String, String, bool)> = Vec::new();
     let mut flush = |seg: &str| {
-        let Some(colon) = seg.find(':').filter(|&c| c > 0) else { return };
+        let Some(colon) = seg.find(':').filter(|&c| c > 0) else {
+            return;
+        };
         let raw = seg[..colon].trim();
         let mut value = &seg[colon + 1..];
         let important = match strip_important(value) {
@@ -160,13 +178,19 @@ fn split(stored: &str) -> (&str, bool) {
 }
 
 fn joined(value: &str, important: bool) -> String {
-    if important { format!("{value}{IMPORTANT}") } else { value.to_string() }
+    if important {
+        format!("{value}{IMPORTANT}")
+    } else {
+        value.to_string()
+    }
 }
 
 impl Tree {
     /// `(name, value, important)` per inline declaration, in order.
     pub fn style_entries(&self, id: u32) -> Vec<(String, String, bool)> {
-        let Some(n) = self.node(id) else { return Vec::new() };
+        let Some(n) = self.node(id) else {
+            return Vec::new();
+        };
         n.style
             .iter()
             .map(|(k, v)| {
@@ -178,7 +202,10 @@ impl Tree {
 
     pub fn style_value(&self, id: u32, name: &str) -> Option<(&str, bool)> {
         let n = self.node(id)?;
-        n.style.iter().find(|(k, _)| self.name(*k) == name).map(|(_, v)| split(v))
+        n.style
+            .iter()
+            .find(|(k, _)| self.name(*k) == name)
+            .map(|(_, v)| split(v))
     }
 
     /// The `style` attribute: `None` when absent, else its text as written or the declarations serialized.
@@ -250,9 +277,17 @@ impl Tree {
         }
         let next = parse_declarations(text);
         let old = self.style_entries(id);
-        let kept = old.iter().filter(|(k, _, _)| next.iter().any(|(n, _, _)| n == k)).map(|(k, _, _)| k.as_str());
-        let added = next.iter().filter(|(n, _, _)| !old.iter().any(|(k, _, _)| k == n)).map(|(n, _, _)| n.as_str());
-        let in_place = kept.chain(added).eq(next.iter().map(|(n, _, _)| n.as_str()));
+        let kept = old
+            .iter()
+            .filter(|(k, _, _)| next.iter().any(|(n, _, _)| n == k))
+            .map(|(k, _, _)| k.as_str());
+        let added = next
+            .iter()
+            .filter(|(n, _, _)| !old.iter().any(|(k, _, _)| k == n))
+            .map(|(n, _, _)| n.as_str());
+        let in_place = kept
+            .chain(added)
+            .eq(next.iter().map(|(n, _, _)| n.as_str()));
         for (k, _, _) in &old {
             if !in_place || !next.iter().any(|(n, _, _)| n == k) {
                 let key = self.intern(k);
@@ -260,7 +295,9 @@ impl Tree {
             }
         }
         for (name, value, important) in &next {
-            let same = old.iter().any(|(k, v, i)| k == name && v == value && i == important);
+            let same = old
+                .iter()
+                .any(|(k, v, i)| k == name && v == value && i == important);
             if in_place && same {
                 continue;
             }
@@ -322,13 +359,36 @@ mod tests {
     fn declarations_split_outside_strings_comments_and_brackets() {
         assert_eq!(
             parsed("color: red; background: url('a;b.png') /* x; y */ ; --e: ; content: \"a;b\""),
-            vec![d("color", "red", false), d("background", "url('a;b.png')", false), d("--e", " ", false), d("content", "\"a;b\"", false)]
+            vec![
+                d("color", "red", false),
+                d("background", "url('a;b.png')", false),
+                d("--e", " ", false),
+                d("content", "\"a;b\"", false)
+            ]
         );
-        assert_eq!(parsed("grid-template-areas: [a;b] x; width: calc((1px;2px))"), vec![d("grid-template-areas", "[a;b] x", false), d("width", "calc((1px;2px))", false)]);
-        assert_eq!(parsed("COLOR: red; color: blue"), vec![d("color", "blue", false)]);
-        assert_eq!(parsed("color: red !important; color: blue; width: 1px"), vec![d("color", "red", true), d("width", "1px", false)]);
-        assert_eq!(parsed("width: 1px; height: 2px; width: 3px"), vec![d("height", "2px", false), d("width", "3px", false)]);
-        assert_eq!(parsed(": x; 1a: b; margin: ; ok: y"), vec![d("ok", "y", false)]);
+        assert_eq!(
+            parsed("grid-template-areas: [a;b] x; width: calc((1px;2px))"),
+            vec![
+                d("grid-template-areas", "[a;b] x", false),
+                d("width", "calc((1px;2px))", false)
+            ]
+        );
+        assert_eq!(
+            parsed("COLOR: red; color: blue"),
+            vec![d("color", "blue", false)]
+        );
+        assert_eq!(
+            parsed("color: red !important; color: blue; width: 1px"),
+            vec![d("color", "red", true), d("width", "1px", false)]
+        );
+        assert_eq!(
+            parsed("width: 1px; height: 2px; width: 3px"),
+            vec![d("height", "2px", false), d("width", "3px", false)]
+        );
+        assert_eq!(
+            parsed(": x; 1a: b; margin: ; ok: y"),
+            vec![d("ok", "y", false)]
+        );
     }
 
     #[test]
@@ -342,17 +402,27 @@ mod tests {
             assert!(t.style_write(el, "color", "red", false));
             assert!(!t.style_write(el, "color", "red", false));
             assert!(t.style_write(el, "width", "1px", true));
-            assert_eq!(t.style_attr(el).as_deref(), Some("color: red; width: 1px !important;"));
+            assert_eq!(
+                t.style_attr(el).as_deref(),
+                Some("color: red; width: 1px !important;")
+            );
             assert_eq!(t.style_value(el, "width"), Some(("1px", true)));
 
             t.style_replace(el, "color:red;height: 2px", true);
             assert_eq!(t.style_attr(el).as_deref(), Some("color:red;height: 2px"));
             assert_eq!(t.style_text(el), "color: red; height: 2px;");
             t.style_write(el, "color", "blue", false);
-            assert_eq!(t.style_attr(el).as_deref(), Some("color: blue; height: 2px;"));
+            assert_eq!(
+                t.style_attr(el).as_deref(),
+                Some("color: blue; height: 2px;")
+            );
 
             t.style_replace(el, "height: 2px; color: blue", false);
-            assert_eq!(t.style_text(el), "height: 2px; color: blue;", "a new order rewrites the block");
+            assert_eq!(
+                t.style_text(el),
+                "height: 2px; color: blue;",
+                "a new order rewrites the block"
+            );
 
             assert_eq!(t.style_remove(el, "height").as_deref(), Some("2px"));
             assert!(t.style_clear(el));

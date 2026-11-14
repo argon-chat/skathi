@@ -251,7 +251,11 @@ fn note_name_read(asked: u32, subject: u32, subject_tag: u32, name: &str, kind: 
     if subject == 0 || subject == asked {
         return;
     }
-    let key = (name.as_ptr() as usize, name.len() * 4 + kind as usize, subject_tag);
+    let key = (
+        name.as_ptr() as usize,
+        name.len() * 4 + kind as usize,
+        subject_tag,
+    );
     let slot = ((key.0 >> 3) ^ key.2 as usize) & 127;
     if READ_CACHE.with(|c| c[slot].get()) == key {
         return;
@@ -279,7 +283,9 @@ fn reach_of<'a>(names: impl IntoIterator<Item = (&'a str, NameKind)>) -> Reach {
         let r = r.borrow();
         let mut tags: Vec<u32> = Vec::new();
         for (name, kind) in names {
-            let Some(readers) = r.names[kind as usize].get(name) else { continue };
+            let Some(readers) = r.names[kind as usize].get(name) else {
+                continue;
+            };
             if readers.all {
                 return Reach::Subtree;
             }
@@ -411,7 +417,10 @@ impl Tree {
     }
 
     pub fn name(&self, id: u32) -> &str {
-        self.names.get(id as usize).map(String::as_str).unwrap_or("")
+        self.names
+            .get(id as usize)
+            .map(String::as_str)
+            .unwrap_or("")
     }
 
     pub fn is_group_anchor(&self, id: u32) -> bool {
@@ -421,7 +430,10 @@ impl Tree {
     /// `id` joined or left the hover path: touch its `:hover` rung and the `group-hover:` watchers
     /// so cached subtrees render again.
     pub(crate) fn touch_hover_styled(&mut self, id: u32) -> bool {
-        let own = self.node(id).and_then(|n| n.computed.as_ref()).is_some_and(|cs| cs.hover.is_some() || cs.control_state(1));
+        let own = self
+            .node(id)
+            .and_then(|n| n.computed.as_ref())
+            .is_some_and(|cs| cs.hover.is_some() || cs.control_state(1));
         if own {
             self.touch(id);
         }
@@ -514,7 +526,10 @@ impl Tree {
                 while let Some(p) = self.node(parent).filter(|p| p.kind == Kind::Anchor) {
                     parent = p.parent;
                 }
-                if self.node(parent).is_some_and(|p| p.sel_flags.get() & sel::EMPTY != 0) {
+                if self
+                    .node(parent)
+                    .is_some_and(|p| p.sel_flags.get() & sel::EMPTY != 0)
+                {
                     self.mark_with_followers(parent);
                 }
                 self.touch_mutated(id, false);
@@ -536,7 +551,10 @@ impl Tree {
             n.text = text;
         }
         self.dirty = true;
-        if self.node(id).is_some_and(|n| n.sel_flags.get() & sel::EMPTY != 0) {
+        if self
+            .node(id)
+            .is_some_and(|n| n.sel_flags.get() & sel::EMPTY != 0)
+        {
             self.mark_with_followers(id);
         } else {
             self.mark_restyle(id);
@@ -560,7 +578,9 @@ impl Tree {
         // An element with inline text gaining a real child: the inline text is stale
         // (setElementText always precedes), so drop it.
         let idx = {
-            let Some(p) = self.node_mut(parent) else { return };
+            let Some(p) = self.node_mut(parent) else {
+                return;
+            };
             p.text.clear();
             match p.children.iter().position(|&c| c == anchor) {
                 Some(i) => i,
@@ -574,7 +594,10 @@ impl Tree {
             c.parent = parent;
         }
         self.mark_restyle(child);
-        if self.node(child).is_some_and(|c| c.desc_gen == self.restyle_gen) {
+        if self
+            .node(child)
+            .is_some_and(|c| c.desc_gen == self.restyle_gen)
+        {
             self.flag_path(parent);
         }
         self.child_list_changed(parent, idx, true, was_bare);
@@ -643,7 +666,14 @@ impl Tree {
             if flags & sel::NEXT_WALK != 0 {
                 marks.extend(children.iter().take(at).copied());
             } else if flags & sel::NEXT_EDGE != 0 {
-                marks.extend(children.iter().take(at).rev().find(|c| is_element(c)).copied());
+                marks.extend(
+                    children
+                        .iter()
+                        .take(at)
+                        .rev()
+                        .find(|c| is_element(c))
+                        .copied(),
+                );
             }
             marks
         };
@@ -659,7 +689,9 @@ impl Tree {
     /// [`Tree::is_bare`] for a node whose cascade asked `:empty`, else `false`; spares a child-list
     /// walk on every insert.
     fn bare_if_asked(&self, id: u32) -> bool {
-        self.node(id).is_some_and(|n| n.sel_flags.get() & sel::EMPTY != 0) && self.is_bare(id)
+        self.node(id)
+            .is_some_and(|n| n.sel_flags.get() & sel::EMPTY != 0)
+            && self.is_bare(id)
     }
 
     fn is_bare(&self, id: u32) -> bool {
@@ -692,8 +724,13 @@ impl Tree {
     pub(crate) fn hidden_above(&self, id: u32) -> bool {
         let mut cur = self.node(id).map_or(0, |n| n.parent);
         while cur != 0 {
-            let Some(n) = self.node(cur) else { return false };
-            if n.computed.as_ref().is_some_and(|c| c.base.display == Some(gpui::Display::None)) {
+            let Some(n) = self.node(cur) else {
+                return false;
+            };
+            if n.computed
+                .as_ref()
+                .is_some_and(|c| c.base.display == Some(gpui::Display::None))
+            {
                 return true;
             }
             cur = n.parent;
@@ -814,9 +851,16 @@ impl Tree {
             Reach::Tags(tags) => tags,
         };
         self.mark_self(id);
-        let mut stack: Vec<u32> = self.node(id).map(|n| n.children.clone()).unwrap_or_default();
+        let mut stack: Vec<u32> = self
+            .node(id)
+            .map(|n| n.children.clone())
+            .unwrap_or_default();
         if later_siblings {
-            if let Some(siblings) = self.node(id).and_then(|n| self.node(n.parent)).map(|p| &p.children) {
+            if let Some(siblings) = self
+                .node(id)
+                .and_then(|n| self.node(n.parent))
+                .map(|p| &p.children)
+            {
                 if let Some(at) = siblings.iter().position(|&c| c == id) {
                     stack.extend_from_slice(&siblings[at + 1..]);
                 }
@@ -837,7 +881,8 @@ impl Tree {
     }
 
     fn mark_self(&mut self, id: u32) {
-        if self.dirty_all || id == 0 || self.node(id).is_none_or(|n| n.mark_gen == self.restyle_gen) {
+        if self.dirty_all || id == 0 || self.node(id).is_none_or(|n| n.mark_gen == self.restyle_gen)
+        {
             return;
         }
         self.self_marks.push(id);
@@ -879,11 +924,16 @@ impl Tree {
     pub(crate) fn mem_estimate(&self) -> TreeMem {
         use std::collections::HashSet;
         use std::mem::size_of;
-        let mut m = TreeMem { slots: self.nodes.len(), slot_bytes: self.nodes.capacity() * size_of::<Option<Node>>(), ..TreeMem::default() };
+        let mut m = TreeMem {
+            slots: self.nodes.len(),
+            slot_bytes: self.nodes.capacity() * size_of::<Option<Node>>(),
+            ..TreeMem::default()
+        };
         let mut refinements: HashSet<*const gpui::StyleRefinement> = HashSet::new();
         let mut vars: HashSet<*const sk_css::Vars> = HashSet::new();
         let mut inlines: HashSet<*const sk_css::InlineStyle> = HashSet::new();
-        let note_ref = |r: &std::rc::Rc<gpui::StyleRefinement>, set: &mut HashSet<*const gpui::StyleRefinement>| {
+        let note_ref = |r: &std::rc::Rc<gpui::StyleRefinement>,
+                        set: &mut HashSet<*const gpui::StyleRefinement>| {
             set.insert(std::rc::Rc::as_ptr(r));
         };
         for n in self.nodes.iter().flatten() {
@@ -894,10 +944,14 @@ impl Tree {
                 Kind::Anchor => m.anchors += 1,
             }
             let mut own = n.children.capacity() * 4 + n.text.capacity() + n.class_attr.capacity();
-            own += n.style.capacity() * size_of::<(u32, String)>() + n.style.iter().map(|(_, v)| v.capacity()).sum::<usize>();
-            own += n.classes.capacity() * size_of::<String>() + n.classes.iter().map(|c| c.capacity()).sum::<usize>();
-            own += n.props.capacity() * size_of::<(u32, String, u32)>() + n.props.iter().map(|(_, v, _)| v.capacity()).sum::<usize>();
-            own += n.scopes.capacity() * size_of::<String>() + n.scopes.iter().map(|s| s.capacity()).sum::<usize>();
+            own += n.style.capacity() * size_of::<(u32, String)>()
+                + n.style.iter().map(|(_, v)| v.capacity()).sum::<usize>();
+            own += n.classes.capacity() * size_of::<String>()
+                + n.classes.iter().map(|c| c.capacity()).sum::<usize>();
+            own += n.props.capacity() * size_of::<(u32, String, u32)>()
+                + n.props.iter().map(|(_, v, _)| v.capacity()).sum::<usize>();
+            own += n.scopes.capacity() * size_of::<String>()
+                + n.scopes.iter().map(|s| s.capacity()).sum::<usize>();
             m.owned_bytes += own;
             if let Some(i) = &n.inline {
                 inlines.insert(std::rc::Rc::as_ptr(i));
@@ -905,9 +959,18 @@ impl Tree {
             if let Some(cs) = &n.computed {
                 m.computed += 1;
                 note_ref(&cs.base, &mut refinements);
-                for r in [&cs.hover, &cs.active, &cs.focus, &cs.focus_visible, &cs.focus_within, &cs.placeholder, &cs.selection, &cs.file_selector_button]
-                    .into_iter()
-                    .flatten()
+                for r in [
+                    &cs.hover,
+                    &cs.active,
+                    &cs.focus,
+                    &cs.focus_visible,
+                    &cs.focus_within,
+                    &cs.placeholder,
+                    &cs.selection,
+                    &cs.file_selector_button,
+                ]
+                .into_iter()
+                .flatten()
                 {
                     note_ref(r, &mut refinements);
                 }
@@ -924,11 +987,17 @@ impl Tree {
         m.refinement_bytes = refinements.len() * (size_of::<gpui::StyleRefinement>() + 16);
         m.vars_maps = vars.len();
         // Strings are shared down the tree and not counted.
-        m.vars_bytes = vars.len() * (size_of::<sk_css::Vars>() + 16) + m.var_entries * 2 * size_of::<std::rc::Rc<str>>();
+        m.vars_bytes = vars.len() * (size_of::<sk_css::Vars>() + 16)
+            + m.var_entries * 2 * size_of::<std::rc::Rc<str>>();
         m.inlines = inlines.len();
         m.inline_bytes = inlines.len() * (size_of::<sk_css::InlineStyle>() + 16);
         m.names = self.names.len();
-        m.total_bytes = m.slot_bytes + m.owned_bytes + m.computed_bytes + m.refinement_bytes + m.vars_bytes + m.inline_bytes;
+        m.total_bytes = m.slot_bytes
+            + m.owned_bytes
+            + m.computed_bytes
+            + m.refinement_bytes
+            + m.vars_bytes
+            + m.inline_bytes;
         m
     }
 
@@ -988,9 +1057,12 @@ impl Tree {
             // A `:has(+ …)` / `:has(~ …)` anchor among the earlier siblings reads this node and
             // what is under it.
             let earlier: Vec<u32> = match self.node(parent) {
-                Some(p) if p.sel_flags.get() & sel::HAS_NEXT != 0 => {
-                    p.children.iter().take_while(|&&c| c != cur).copied().collect()
-                }
+                Some(p) if p.sel_flags.get() & sel::HAS_NEXT != 0 => p
+                    .children
+                    .iter()
+                    .take_while(|&&c| c != cur)
+                    .copied()
+                    .collect(),
                 _ => Vec::new(),
             };
             for sibling in earlier {
@@ -1043,7 +1115,14 @@ impl Tree {
         let later: Vec<u32> = self
             .node(id)
             .and_then(|n| self.node(n.parent))
-            .map(|p| p.children.iter().skip_while(|&&c| c != id).skip(1).copied().collect())
+            .map(|p| {
+                p.children
+                    .iter()
+                    .skip_while(|&&c| c != id)
+                    .skip(1)
+                    .copied()
+                    .collect()
+            })
             .unwrap_or_default();
         for s in later {
             self.mark_restyle(s);
@@ -1094,7 +1173,10 @@ impl Tree {
             .enumerate()
             .filter_map(|(i, n)| {
                 let n = n.as_ref()?;
-                n.style.iter().any(|(_, v)| names_the_unit(v)).then_some(i as u32)
+                n.style
+                    .iter()
+                    .any(|(_, v)| names_the_unit(v))
+                    .then_some(i as u32)
             })
             .collect();
         for &id in &hits {
@@ -1114,7 +1196,10 @@ impl Tree {
     /// A web font was registered: re-parse inline `font-family`/`font` bodies, since sk-css picks
     /// the family at parse time from the fonts installed then.
     pub(crate) fn invalidate_font_inline(&mut self) -> usize {
-        let keys: Vec<u32> = ["font", "font-family"].iter().filter_map(|k| self.name_ids.get(*k).copied()).collect();
+        let keys: Vec<u32> = ["font", "font-family"]
+            .iter()
+            .filter_map(|k| self.name_ids.get(*k).copied())
+            .collect();
         if keys.is_empty() {
             return 0;
         }
@@ -1124,7 +1209,10 @@ impl Tree {
             .enumerate()
             .filter_map(|(i, n)| {
                 let n = n.as_ref()?;
-                n.style.iter().any(|(k, _)| keys.contains(k)).then_some(i as u32)
+                n.style
+                    .iter()
+                    .any(|(k, _)| keys.contains(k))
+                    .then_some(i as u32)
             })
             .collect();
         for &id in &hits {
@@ -1240,7 +1328,10 @@ impl Tree {
             n.inline.as_deref()
         };
         let states = engine.compute_node_at(
-            NodeRef { tree: self, id: self.root },
+            NodeRef {
+                tree: self,
+                id: self.root,
+            },
             inline,
             &std::rc::Rc::new(sk_css::Vars::default()),
             None,
@@ -1264,7 +1355,13 @@ impl Tree {
         r: u32,
         env: &sk_css::Env,
         root_vars: &std::rc::Rc<sk_css::Vars>,
-    ) -> (std::rc::Rc<sk_css::Vars>, bool, Inherited, sk_css::InheritedRadii, sk_css::Env) {
+    ) -> (
+        std::rc::Rc<sk_css::Vars>,
+        bool,
+        Inherited,
+        sk_css::InheritedRadii,
+        sk_css::Env,
+    ) {
         let root_env = crate::windows::env_for_node(self, r, env);
         let mut cur = self.node(r).map_or(0, |n| n.parent);
         let mut parent_computed = None;
@@ -1279,17 +1376,30 @@ impl Tree {
             }
             cur = p.parent;
         }
-        let inherited = parent_computed.map(|c| c.vars.clone()).unwrap_or_else(|| root_vars.clone());
-        let inherited_inert = parent_computed.is_some_and(|c| c.extras.pointer_events_none == Some(true));
+        let inherited = parent_computed
+            .map(|c| c.vars.clone())
+            .unwrap_or_else(|| root_vars.clone());
+        let inherited_inert =
+            parent_computed.is_some_and(|c| c.extras.pointer_events_none == Some(true));
         // `currentColor` resolves against the computed `color`, inherited when none is declared, so
         // the effective colour rides down beside the vars map.
         let inherited_text = Inherited {
             color: parent_computed.and_then(|c| c.color),
             font_size: parent_computed.map_or(ROOT_PARENT_FONT_SIZE, |c| c.font_size),
-            font: parent_computed.map(|c| c.computed_font.clone()).unwrap_or_default(),
+            font: parent_computed
+                .map(|c| c.computed_font.clone())
+                .unwrap_or_default(),
         };
-        let inherited_radii = parent_computed.map(|c| sk_css::InheritedRadii::of(&c.base)).unwrap_or_default();
-        (inherited, inherited_inert, inherited_text, inherited_radii, root_env)
+        let inherited_radii = parent_computed
+            .map(|c| sk_css::InheritedRadii::of(&c.base))
+            .unwrap_or_default();
+        (
+            inherited,
+            inherited_inert,
+            inherited_text,
+            inherited_radii,
+            root_env,
+        )
     }
 
     fn cascade_one(
@@ -1329,7 +1439,11 @@ impl Tree {
     /// The nodes whose own style alone may have moved ([`Tree::mark_self`]). A result that changes
     /// what children inherit becomes an ordinary subtree mark, so a Vue `<Transition>` on a
     /// page-sized container does not re-cascade the page per phase.
-    fn settle_self_marks(&mut self, engine: &sk_css::Engine, env: &sk_css::Env) -> Vec<(u32, sk_css::ComputedStates)> {
+    fn settle_self_marks(
+        &mut self,
+        engine: &sk_css::Engine,
+        env: &sk_css::Env,
+    ) -> Vec<(u32, sk_css::ComputedStates)> {
         let mut marks = std::mem::take(&mut self.self_marks);
         if marks.is_empty() || self.dirty_all {
             return Vec::new();
@@ -1346,9 +1460,16 @@ impl Tree {
                 continue;
             }
             let (vars, inert, text, radii, here_env) = self.walk_inputs(id, env, &root_vars);
-            let (states, child_radii) =
-                self.cascade_one(engine, id, (&vars, inert, text, radii), &here_env, &mut diagnostics);
-            let Some(old) = n.computed.as_ref() else { continue };
+            let (states, child_radii) = self.cascade_one(
+                engine,
+                id,
+                (&vars, inert, text, radii),
+                &here_env,
+                &mut diagnostics,
+            );
+            let Some(old) = n.computed.as_ref() else {
+                continue;
+            };
             if *old == states {
                 continue;
             }
@@ -1443,27 +1564,50 @@ impl Tree {
                 // window; that window's `@media` environment applies.
                 let (inherited, inherited_inert, inherited_text, inherited_radii, root_env) =
                     this.walk_inputs(r, env, &root_vars);
-                stack.push((r, inherited, inherited_inert, inherited_text, inherited_radii, root_env));
-                while let Some((id, parent_vars, parent_inert, parent_text, parent_radii, here_env)) =
-                    stack.pop()
+                stack.push((
+                    r,
+                    inherited,
+                    inherited_inert,
+                    inherited_text,
+                    inherited_radii,
+                    root_env,
+                ));
+                while let Some((
+                    id,
+                    parent_vars,
+                    parent_inert,
+                    parent_text,
+                    parent_radii,
+                    here_env,
+                )) = stack.pop()
                 {
                     let Some(n) = this.node(id) else { continue };
-                    let (child_vars, child_inert, child_text, child_radii) = if n.kind == Kind::Element {
-                        let (states, radii) = this.cascade_one(
-                            engine,
-                            id,
-                            (&parent_vars, parent_inert, parent_text.clone(), parent_radii),
-                            &here_env,
-                            &mut diagnostics,
-                        );
-                        let inert = states.extras.pointer_events_none == Some(true);
-                        let vars = states.vars.clone();
-                        let text = Inherited { color: states.color, font_size: states.font_size, font: states.computed_font.clone() };
-                        out.push((id, states));
-                        (vars, inert, text, radii)
-                    } else {
-                        (parent_vars, parent_inert, parent_text, parent_radii)
-                    };
+                    let (child_vars, child_inert, child_text, child_radii) =
+                        if n.kind == Kind::Element {
+                            let (states, radii) = this.cascade_one(
+                                engine,
+                                id,
+                                (
+                                    &parent_vars,
+                                    parent_inert,
+                                    parent_text.clone(),
+                                    parent_radii,
+                                ),
+                                &here_env,
+                                &mut diagnostics,
+                            );
+                            let inert = states.extras.pointer_events_none == Some(true);
+                            let vars = states.vars.clone();
+                            let text = Inherited {
+                                color: states.color,
+                                font_size: states.font_size,
+                                font: states.computed_font.clone(),
+                            };
+                            out.push((id, states));
+                            (vars, inert, text, radii)
+                        } else {
+                            (parent_vars, parent_inert, parent_text, parent_radii)
+                        };
                     for &c in n.children.iter().rev() {
                         // The window boundary: a popped-out node is painted by another window, so
                         // its subtree answers that window's environment, on a full-document pass
@@ -1491,7 +1635,8 @@ impl Tree {
         let computed = if settled.is_empty() {
             computed
         } else {
-            let walked: std::collections::HashSet<u32> = computed.iter().map(|(id, _)| *id).collect();
+            let walked: std::collections::HashSet<u32> =
+                computed.iter().map(|(id, _)| *id).collect();
             let mut computed = computed;
             computed.extend(settled.into_iter().filter(|(id, _)| !walked.contains(id)));
             computed
@@ -1545,7 +1690,11 @@ impl Tree {
                         // Against the painting window's environment: `@keyframes` inside `@media`
                         // exist only where the query holds. They are document-scoped, so a sheet
                         // without any skips the check.
-                        if !hidden && (has_keyframes || !states.animations.is_empty() || animator.has_animations(id)) {
+                        if !hidden
+                            && (has_keyframes
+                                || !states.animations.is_empty()
+                                || animator.has_animations(id))
+                        {
                             animator.on_computed_animations(id, &states, now, &|name| {
                                 engine.keyframes_for(
                                     name,
@@ -1583,7 +1732,10 @@ impl Tree {
                 if !none && self.hidden_above(id) {
                     continue; // shown, but still under a hidden ancestor
                 }
-                let mut stack: Vec<u32> = self.node(id).map(|n| n.children.clone()).unwrap_or_default();
+                let mut stack: Vec<u32> = self
+                    .node(id)
+                    .map(|n| n.children.clone())
+                    .unwrap_or_default();
                 while let Some(c) = stack.pop() {
                     let Some(node) = self.node(c) else { continue };
                     if none {
@@ -1591,13 +1743,18 @@ impl Tree {
                             animator.cancel_animations(c, now);
                         }
                     } else {
-                        let Some(cs) = node.computed.as_ref() else { continue };
+                        let Some(cs) = node.computed.as_ref() else {
+                            continue;
+                        };
                         if cs.base.display == Some(gpui::Display::None) {
                             continue; // its subtree stays hidden
                         }
                         if !cs.animations.is_empty() {
-                            let node_env =
-                                if multiwindow { crate::windows::env_for_node(self, c, env) } else { *env };
+                            let node_env = if multiwindow {
+                                crate::windows::env_for_node(self, c, env)
+                            } else {
+                                *env
+                            };
                             animator.on_computed_animations(c, cs, now, &|name| {
                                 engine.keyframes_for(
                                     name,
@@ -1634,7 +1791,10 @@ impl Tree {
                 if let Some(cs) = &slot.computed {
                     if let Some((key, _)) = &cs.group_hover {
                         self.group_anchors.insert(*key as u32);
-                        self.group_hover_deps.entry(*key as u32).or_default().push(i as u32);
+                        self.group_hover_deps
+                            .entry(*key as u32)
+                            .or_default()
+                            .push(i as u32);
                     }
                     if let Some((key, _)) = &cs.group_active {
                         self.group_anchors.insert(*key as u32);
@@ -1722,7 +1882,11 @@ thread_local! {
 pub fn note_hover(id: u32, hovered: bool) {
     let changed = HOVERED.with(|h| {
         let mut h = h.borrow_mut();
-        if hovered { h.insert(id) } else { h.remove(&id) }
+        if hovered {
+            h.insert(id)
+        } else {
+            h.remove(&id)
+        }
     });
     if !changed {
         return;
@@ -1865,8 +2029,11 @@ pub(crate) fn script_anim_set(
     frames: &[sk_css::ScriptFrame],
     timing: sk_css::ScriptTiming,
 ) -> sk_css::ScriptKeyframeNotes {
-    let vars = read_tree(|t| t.node(node).and_then(|n| n.computed.as_ref().map(|c| c.vars.clone())))
-        .unwrap_or_default();
+    let vars = read_tree(|t| {
+        t.node(node)
+            .and_then(|n| n.computed.as_ref().map(|c| c.vars.clone()))
+    })
+    .unwrap_or_default();
     let (keyframes, notes) = sk_css::script_keyframes(frames, &vars, &env());
     let previous = ANIMATOR.with(|a| {
         let mut a = a.borrow_mut();
@@ -1898,8 +2065,11 @@ pub(crate) fn script_anim_values(id: u32) -> Option<Vec<(String, String)>> {
     ANIMATOR.with(|a| {
         let a = a.borrow();
         let node = a.script_node(id)?;
-        let base = read_tree(|t| t.node(node).and_then(|n| n.computed.as_ref().map(|c| c.base.clone())))
-            .unwrap_or_default();
+        let base = read_tree(|t| {
+            t.node(node)
+                .and_then(|n| n.computed.as_ref().map(|c| c.base.clone()))
+        })
+        .unwrap_or_default();
         a.script_values(id, &base, now)
     })
 }
@@ -1914,8 +2084,7 @@ pub(crate) fn take_script_dirty() -> bool {
 
 pub fn animator_gc() {
     ANIMATOR.with(|a| {
-        a.borrow_mut()
-            .gc(&|id| read_tree(|t| t.node(id).is_some()));
+        a.borrow_mut().gc(&|id| read_tree(|t| t.node(id).is_some()));
     });
     // An unmounted node never gets a leave edge (gpui drops the listener), so sweep the set or a
     // reused id comes up pre-hovered.
@@ -1958,8 +2127,16 @@ fn sync_runtime_sheets() {
                     break;
                 }
                 let Some(node) = t.node(ancestor) else { break };
-                let Some(parent) = t.node(node.parent) else { break };
-                path.push(parent.children.iter().position(|&c| c == ancestor).unwrap_or(usize::MAX));
+                let Some(parent) = t.node(node.parent) else {
+                    break;
+                };
+                path.push(
+                    parent
+                        .children
+                        .iter()
+                        .position(|&c| c == ancestor)
+                        .unwrap_or(usize::MAX),
+                );
                 ancestor = node.parent;
             }
             let Some(top) = top else { continue };
@@ -2026,7 +2203,12 @@ pub fn set_stylesheet_with_head(css: String, head: Vec<String>) -> bool {
     set_engine(engine);
     let len = sources.iter().map(String::len).sum();
     drop(sources);
-    crate::perf::note_sheet_compile(took.elapsed().as_secs_f32() * 1000.0, len, before, crate::perf::live_bytes());
+    crate::perf::note_sheet_compile(
+        took.elapsed().as_secs_f32() * 1000.0,
+        len,
+        before,
+        crate::perf::live_bytes(),
+    );
     true
 }
 
@@ -2041,7 +2223,10 @@ fn compile(sources: &[String]) -> sk_css::Engine {
 /// Web fonts were registered: sk-css chose every `font-family` against the fonts installed when it
 /// compiled and parsed, so recompile, re-parse inline styles and restyle.
 pub(crate) fn recompile_for_fonts() {
-    recompile_sheet(crate::perf::FullReason::Fonts, "web fonts were registered — recompiling the stylesheet");
+    recompile_sheet(
+        crate::perf::FullReason::Fonts,
+        "web fonts were registered — recompiling the stylesheet",
+    );
     with_tree(|t| {
         t.invalidate_font_inline();
         t.mark_dirty();
@@ -2154,7 +2339,11 @@ pub fn restyle_all() {
                 "rem basis is now {next}px (the root element's font-size) — recompiling \n             the stylesheet"
             ));
         if at_initial.is_some() {
-            let settled = if recompiled { probe() } else { Some(root_font_size) };
+            let settled = if recompiled {
+                probe()
+            } else {
+                Some(root_font_size)
+            };
             REM_SETTLED.with(|c| c.set(settled.map(|size| (sk_css::rem_basis(), size))));
             break;
         }
@@ -2174,8 +2363,8 @@ pub fn restyle_all() {
 
 fn has_viewport_unit(value: &str) -> bool {
     const UNITS: [&str; 24] = [
-        "vw", "vh", "vi", "vb", "vmin", "vmax", "svw", "svh", "svi", "svb", "svmin", "svmax", "lvw", "lvh",
-        "lvi", "lvb", "lvmin", "lvmax", "dvw", "dvh", "dvi", "dvb", "dvmin", "dvmax",
+        "vw", "vh", "vi", "vb", "vmin", "vmax", "svw", "svh", "svi", "svb", "svmin", "svmax",
+        "lvw", "lvh", "lvi", "lvb", "lvmin", "lvmax", "dvw", "dvh", "dvi", "dvb", "dvmin", "dvmax",
     ];
     has_unit(value, &UNITS)
 }
@@ -2202,7 +2391,9 @@ fn has_unit(value: &str, units: &[&str]) -> bool {
             }
         } else if b[i].is_ascii_alphabetic()
             || b[i] == b'_'
-            || (b[i] == b'-' && b.get(i + 1).is_some_and(|c| c.is_ascii_alphabetic() || *c == b'-' || *c == b'_'))
+            || (b[i] == b'-'
+                && b.get(i + 1)
+                    .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'-' || *c == b'_'))
         {
             // An identifier (`var(--x9vw)`): its digits are not a number.
             while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'-' || b[i] == b'_') {
@@ -2253,7 +2444,12 @@ fn recompile_sheet(reason: crate::perf::FullReason, why: &str) -> bool {
     set_engine(engine);
     let len = sources.iter().map(String::len).sum();
     drop(sources);
-    crate::perf::note_sheet_compile(took.elapsed().as_secs_f32() * 1000.0, len, before, crate::perf::live_bytes());
+    crate::perf::note_sheet_compile(
+        took.elapsed().as_secs_f32() * 1000.0,
+        len,
+        before,
+        crate::perf::live_bytes(),
+    );
     with_tree(|t| t.mark_dirty());
     true
 }
@@ -2299,7 +2495,9 @@ pub struct NodeRef<'t> {
 
 impl<'t> NodeRef<'t> {
     fn node(&self) -> &'t Node {
-        self.tree.node(self.id).expect("NodeRef points at a live node")
+        self.tree
+            .node(self.id)
+            .expect("NodeRef points at a live node")
     }
 
     fn element_sibling(&self, forward: bool) -> Option<NodeRef<'t>> {
@@ -2316,7 +2514,10 @@ impl<'t> NodeRef<'t> {
         };
         for id in range {
             if self.tree.node(id).is_some_and(|n| n.kind == Kind::Element) {
-                return Some(NodeRef { tree: self.tree, id });
+                return Some(NodeRef {
+                    tree: self.tree,
+                    id,
+                });
             }
         }
         None
@@ -2379,7 +2580,10 @@ impl<'t> sk_css::MatchDom for NodeRef<'t> {
     }
     fn parent(&self) -> Option<Self> {
         let p = self.node().parent;
-        (p != 0).then(|| NodeRef { tree: self.tree, id: p })
+        (p != 0).then(|| NodeRef {
+            tree: self.tree,
+            id: p,
+        })
     }
     fn prev_sibling(&self) -> Option<Self> {
         self.note_sibling_question(sel::PREV_EDGE, sel::PREV_WALK);
@@ -2493,11 +2697,25 @@ mod tests {
             t.insert(right, root, 0);
             (root, left, leaf, right)
         });
-        let before = read_tree(|t| (t.sub_rev(root), t.sub_rev(left), t.sub_rev(leaf), t.sub_rev(right)));
+        let before = read_tree(|t| {
+            (
+                t.sub_rev(root),
+                t.sub_rev(left),
+                t.sub_rev(leaf),
+                t.sub_rev(right),
+            )
+        });
 
         with_tree(|t| t.set_class(leaf, "hot"));
 
-        let after = read_tree(|t| (t.sub_rev(root), t.sub_rev(left), t.sub_rev(leaf), t.sub_rev(right)));
+        let after = read_tree(|t| {
+            (
+                t.sub_rev(root),
+                t.sub_rev(left),
+                t.sub_rev(leaf),
+                t.sub_rev(right),
+            )
+        });
         assert!(after.0 > before.0, "the root is an ancestor of the change");
         assert!(after.1 > before.1, "so is the parent");
         assert!(after.2 > before.2, "and the node itself");
@@ -2543,11 +2761,17 @@ mod tests {
 
         let after = read_tree(|t| (t.sub_rev(leaf), t.sub_rev(bystander)));
         assert_eq!(
-            read_tree(|t| t.node(leaf).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.opacity)),
+            read_tree(|t| t
+                .node(leaf)
+                .and_then(|n| n.computed.as_ref())
+                .and_then(|c| c.base.opacity)),
             Some(0.5),
             "the descendant combinator reached the leaf",
         );
-        assert!(after.0 > before.0, "…so the leaf's subtree revision moved with it");
+        assert!(
+            after.0 > before.0,
+            "…so the leaf's subtree revision moved with it"
+        );
         assert_eq!(after.1, before.1, "the bystander's fold did not move");
     }
 
@@ -2557,7 +2781,11 @@ mod tests {
     #[test]
     fn a_runtime_style_element_reaches_the_cascade_and_recompiles_when_its_text_moves() {
         let opacity = |id: u32| {
-            read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.opacity))
+            read_tree(|t| {
+                t.node(id)
+                    .and_then(|n| n.computed.as_ref())
+                    .and_then(|c| c.base.opacity)
+            })
         };
 
         set_stylesheet(".probe { opacity: 0.25 }".into());
@@ -2573,23 +2801,39 @@ mod tests {
             (probe, sheet)
         });
         restyle_all();
-        assert_eq!(opacity(probe), Some(0.25), "the build's sheet, with an empty <style>");
+        assert_eq!(
+            opacity(probe),
+            Some(0.25),
+            "the build's sheet, with an empty <style>"
+        );
 
         // Created, then filled, as Vue and reka do.
         with_tree(|t| t.set_element_text(sheet, ".probe { opacity: 0.5 }".into()));
         restyle_all();
-        assert_eq!(opacity(probe), Some(0.5), "a runtime <style> installs its rules");
+        assert_eq!(
+            opacity(probe),
+            Some(0.5),
+            "a runtime <style> installs its rules"
+        );
 
         with_tree(|t| t.set_element_text(sheet, ".probe { opacity: 0.75 }".into()));
         restyle_all();
         assert_eq!(opacity(probe), Some(0.75), "changed text re-installs");
 
         restyle_all();
-        assert_eq!(opacity(probe), Some(0.75), "an unchanged sheet is not recompiled away");
+        assert_eq!(
+            opacity(probe),
+            Some(0.75),
+            "an unchanged sheet is not recompiled away"
+        );
 
         with_tree(|t| t.set_element_text(sheet, String::new()));
         restyle_all();
-        assert_eq!(opacity(probe), Some(0.25), "removing the rules restores the build's sheet");
+        assert_eq!(
+            opacity(probe),
+            Some(0.25),
+            "removing the rules restores the build's sheet"
+        );
     }
 
     #[test]
@@ -2607,7 +2851,13 @@ mod tests {
         });
         restyle_all();
         let sheets = RUNTIME_CSS.with(|r| r.borrow().clone());
-        assert_eq!(sheets, vec![".b { opacity: 0.5 }".to_string(), ".a { opacity: 0.5 }".to_string()]);
+        assert_eq!(
+            sheets,
+            vec![
+                ".b { opacity: 0.5 }".to_string(),
+                ".a { opacity: 0.5 }".to_string()
+            ]
+        );
     }
 
     fn runtime_sheet_probe() -> (u32, u32, u32, u32) {
@@ -2628,29 +2878,53 @@ mod tests {
     }
 
     fn runtime_sheet_opacity(node: u32) -> Option<f32> {
-        read_tree(|t| t.node(node).unwrap().computed.as_ref().unwrap().base.opacity)
+        read_tree(|t| {
+            t.node(node)
+                .unwrap()
+                .computed
+                .as_ref()
+                .unwrap()
+                .base
+                .opacity
+        })
     }
 
     #[test]
     fn detached_fragment_styles_are_inert_until_connected_and_stop_on_detach() {
         let (root, probe, fragment, sheet) = runtime_sheet_probe();
         restyle_all();
-        assert_eq!(runtime_sheet_opacity(probe), Some(0.25), "closed Select fragments install no rules");
+        assert_eq!(
+            runtime_sheet_opacity(probe),
+            Some(0.25),
+            "closed Select fragments install no rules"
+        );
 
         with_tree(|t| t.insert(fragment, root, 0));
         restyle_all();
-        assert_eq!(runtime_sheet_opacity(probe), Some(0.75), "connecting the fragment activates its style");
+        assert_eq!(
+            runtime_sheet_opacity(probe),
+            Some(0.75),
+            "connecting the fragment activates its style"
+        );
 
         with_tree(|t| {
             let other_fragment = t.create_anchor();
             t.insert(fragment, other_fragment, 0);
         });
         restyle_all();
-        assert_eq!(runtime_sheet_opacity(probe), Some(0.25), "detaching removes its rules without freeing the style");
+        assert_eq!(
+            runtime_sheet_opacity(probe),
+            Some(0.25),
+            "detaching removes its rules without freeing the style"
+        );
 
         with_tree(|t| t.set_element_text(sheet, ".probe { opacity: 0.9 }".into()));
         restyle_all();
-        assert_eq!(runtime_sheet_opacity(probe), Some(0.25), "editing detached CSS remains inert");
+        assert_eq!(
+            runtime_sheet_opacity(probe),
+            Some(0.25),
+            "editing detached CSS remains inert"
+        );
     }
 
     #[test]
@@ -2661,18 +2935,30 @@ mod tests {
 
         crate::windows::set_painted_root(9001, secondary_root);
         restyle_all();
-        assert_eq!(runtime_sheet_opacity(probe), Some(0.75), "SkWindow styles share the live document cascade");
+        assert_eq!(
+            runtime_sheet_opacity(probe),
+            Some(0.75),
+            "SkWindow styles share the live document cascade"
+        );
 
         crate::windows::set_painted_root(9001, 0);
         restyle_all();
-        assert_eq!(runtime_sheet_opacity(probe), Some(0.25), "unpainting a detached root deactivates its style");
+        assert_eq!(
+            runtime_sheet_opacity(probe),
+            Some(0.25),
+            "unpainting a detached root deactivates its style"
+        );
         crate::windows::forget(9001);
     }
 
     #[test]
     fn empty_ignores_vue_anchors_and_empty_text() {
         let opacity = |id: u32| {
-            read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.opacity))
+            read_tree(|t| {
+                t.node(id)
+                    .and_then(|n| n.computed.as_ref())
+                    .and_then(|c| c.base.opacity)
+            })
         };
         set_stylesheet(".box:empty { opacity: 0.5 }".into());
         let (bare, anchored, texted, text) = with_tree(|t| {
@@ -2697,7 +2983,11 @@ mod tests {
         });
         restyle_all();
         assert_eq!(opacity(bare), Some(0.5), "no children");
-        assert_eq!(opacity(anchored), Some(0.5), "anchors and an empty text node only");
+        assert_eq!(
+            opacity(anchored),
+            Some(0.5),
+            "anchors and an empty text node only"
+        );
         assert_eq!(opacity(texted), Some(0.5), "a text node with no data");
 
         with_tree(|t| t.set_text(text, " ".into()));
@@ -2718,10 +3008,29 @@ mod tests {
 
     #[test]
     fn a_viewport_unit_is_a_dimension_token_not_a_substring() {
-        for yes in ["100vw", "100svh", "calc(100vh - 2rem)", "-5vh", "-.5vmin", "85DVH", "min(50vw, 40rem)", "1.5lvmax"] {
+        for yes in [
+            "100vw",
+            "100svh",
+            "calc(100vh - 2rem)",
+            "-5vh",
+            "-.5vmin",
+            "85DVH",
+            "min(50vw, 40rem)",
+            "1.5lvmax",
+        ] {
             assert!(has_viewport_unit(yes), "{yes:?}");
         }
-        for no in ["10px", "var(--x9vw)", "abc12vh", "2rem", "", "50%", "url(a1vw.png)", "100v", "3vws"] {
+        for no in [
+            "10px",
+            "var(--x9vw)",
+            "abc12vh",
+            "2rem",
+            "",
+            "50%",
+            "url(a1vw.png)",
+            "100v",
+            "3vws",
+        ] {
             assert!(!has_viewport_unit(no), "{no:?}");
         }
     }
@@ -2730,7 +3039,9 @@ mod tests {
     fn inline_viewport_units_and_var_composed_ones_follow_the_viewport() {
         fn px(l: Option<gpui::Length>) -> Option<f32> {
             match l? {
-                gpui::Length::Definite(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Pixels(p))) => Some(f32::from(p)),
+                gpui::Length::Definite(gpui::DefiniteLength::Absolute(
+                    gpui::AbsoluteLength::Pixels(p),
+                )) => Some(f32::from(p)),
                 _ => None,
             }
         }
@@ -2741,7 +3052,11 @@ mod tests {
             })
         };
         let resize = |w: f32, h: f32| {
-            if set_env(sk_css::Env { viewport_width: w, viewport_height: h, ..sk_css::Env::default() }) {
+            if set_env(sk_css::Env {
+                viewport_width: w,
+                viewport_height: h,
+                ..sk_css::Env::default()
+            }) {
                 with_tree(|t| t.mark_dirty());
             }
             restyle_all();
@@ -2771,14 +3086,25 @@ mod tests {
         assert_eq!(size(child).and_then(|s| s.0), Some(826.0));
 
         resize(1700.0, 800.0);
-        assert_eq!(size(shell), Some((Some(1700.0), Some(800.0))), "the inline svw/svh re-resolved");
-        assert_eq!(size(child).and_then(|s| s.0), Some(850.0), "and the var()-composed vw with it");
+        assert_eq!(
+            size(shell),
+            Some((Some(1700.0), Some(800.0))),
+            "the inline svw/svh re-resolved"
+        );
+        assert_eq!(
+            size(child).and_then(|s| s.0),
+            Some(850.0),
+            "and the var()-composed vw with it"
+        );
         assert_eq!(size(plain).and_then(|s| s.0), Some(40.0));
 
         // Without the host's full invalidation (a scoped pass), the marks alone still reach both.
         assert!(sk_css::set_viewport_basis(1000.0, 500.0));
         let marked = with_tree(|t| t.invalidate_viewport_inline());
-        assert_eq!(marked, 2, "the shell and the --w parent; never the px-only node");
+        assert_eq!(
+            marked, 2,
+            "the shell and the --w parent; never the px-only node"
+        );
         ENGINE.with(|eng| with_tree(|t| t.restyle(eng.borrow().as_ref(), &env())));
         assert_eq!(size(shell), Some((Some(1000.0), Some(500.0))));
         assert_eq!(size(child).and_then(|s| s.0), Some(500.0));
@@ -2788,20 +3114,27 @@ mod tests {
     fn sheet_viewport_units_follow_the_viewport() {
         let width = |id: u32| {
             read_tree(|t| match t.node(id)?.computed.as_ref()?.base.size.width? {
-                gpui::Length::Definite(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Pixels(p))) => {
-                    Some(f32::from(p))
-                }
+                gpui::Length::Definite(gpui::DefiniteLength::Absolute(
+                    gpui::AbsoluteLength::Pixels(p),
+                )) => Some(f32::from(p)),
                 _ => None,
             })
         };
         let resize = |w: f32, h: f32| {
-            if set_env(sk_css::Env { viewport_width: w, viewport_height: h, ..sk_css::Env::default() }) {
+            if set_env(sk_css::Env {
+                viewport_width: w,
+                viewport_height: h,
+                ..sk_css::Env::default()
+            }) {
                 with_tree(|t| t.mark_dirty());
             }
             restyle_all();
         };
         resize(1000.0, 800.0);
-        assert!(set_stylesheet_with_head(".box, .wide { width: 50vw } .wide { min-height: 10vh }".into(), vec![]));
+        assert!(set_stylesheet_with_head(
+            ".box, .wide { width: 50vw } .wide { min-height: 10vh }".into(),
+            vec![]
+        ));
         let (bx, wide) = with_tree(|t| {
             let root = t.create_root();
             let div = t.intern("div");
@@ -2817,7 +3150,11 @@ mod tests {
         restyle_all();
         assert_eq!((width(bx), width(wide)), (Some(500.0), Some(500.0)));
         resize(1200.0, 800.0);
-        assert_eq!((width(bx), width(wide)), (Some(600.0), Some(600.0)), "rebased");
+        assert_eq!(
+            (width(bx), width(wide)),
+            (Some(600.0), Some(600.0)),
+            "rebased"
+        );
 
         assert!(set_stylesheet_with_head(
             ".box, .wide { width: 50vw } @keyframes k { from { height: 10vh } }".into(),
@@ -2826,19 +3163,42 @@ mod tests {
         with_tree(|t| t.mark_dirty());
         restyle_all();
         resize(800.0, 800.0);
-        assert_eq!((width(bx), width(wide)), (Some(400.0), Some(400.0)), "recompiled");
-        sk_css::set_viewport_basis(sk_css::INITIAL_VIEWPORT_BASIS.0, sk_css::INITIAL_VIEWPORT_BASIS.1);
+        assert_eq!(
+            (width(bx), width(wide)),
+            (Some(400.0), Some(400.0)),
+            "recompiled"
+        );
+        sk_css::set_viewport_basis(
+            sk_css::INITIAL_VIEWPORT_BASIS.0,
+            sk_css::INITIAL_VIEWPORT_BASIS.1,
+        );
     }
 
     #[test]
     fn an_unchanged_sheet_resent_compiles_nothing() {
-        assert!(set_stylesheet_with_head(".a { opacity: 0.5 }".into(), vec![".b {}".into()]));
-        assert!(!set_stylesheet_with_head(".a { opacity: 0.5 }".into(), vec![".b {}".into()]));
-        assert!(set_stylesheet_with_head(".a { opacity: 0.5 }".into(), vec![".b {}".into(), ".c {}".into()]));
-        assert!(set_stylesheet_with_head(".a { opacity: 0.6 }".into(), vec![".b {}".into(), ".c {}".into()]));
+        assert!(set_stylesheet_with_head(
+            ".a { opacity: 0.5 }".into(),
+            vec![".b {}".into()]
+        ));
+        assert!(!set_stylesheet_with_head(
+            ".a { opacity: 0.5 }".into(),
+            vec![".b {}".into()]
+        ));
+        assert!(set_stylesheet_with_head(
+            ".a { opacity: 0.5 }".into(),
+            vec![".b {}".into(), ".c {}".into()]
+        ));
+        assert!(set_stylesheet_with_head(
+            ".a { opacity: 0.6 }".into(),
+            vec![".b {}".into(), ".c {}".into()]
+        ));
         assert_eq!(
             sheet_sources(),
-            vec![".a { opacity: 0.6 }".to_string(), ".b {}".into(), ".c {}".into()],
+            vec![
+                ".a { opacity: 0.6 }".to_string(),
+                ".b {}".into(),
+                ".c {}".into()
+            ],
             "the build's sheet, then each head text on its own"
         );
     }
@@ -2866,7 +3226,15 @@ mod tests {
     }
 
     fn motion_opacity_at(node: u32, at: std::time::Instant) -> Option<f32> {
-        let base = read_tree(|t| t.node(node).unwrap().computed.as_ref().unwrap().base.clone());
+        let base = read_tree(|t| {
+            t.node(node)
+                .unwrap()
+                .computed
+                .as_ref()
+                .unwrap()
+                .base
+                .clone()
+        });
         animation_overlay(node, &base, at).and_then(|style| style.opacity)
     }
 
@@ -2878,15 +3246,22 @@ mod tests {
         let at = start + std::time::Duration::from_millis(200);
         assert!((motion_opacity_at(node, at).unwrap() - 0.4).abs() < 1e-5);
 
-        assert!(set_stylesheet_with_head(sheet.into(), vec![".late-panel { color: red }".into()]));
+        assert!(set_stylesheet_with_head(
+            sheet.into(),
+            vec![".late-panel { color: red }".into()]
+        ));
         flush_motion_styles();
-        assert!((motion_opacity_at(node, at).unwrap() - 0.4).abs() < 1e-5,
-            "unrelated CSS must retain the elapsed clock, not drop/restart the run");
+        assert!(
+            (motion_opacity_at(node, at).unwrap() - 0.4).abs() < 1e-5,
+            "unrelated CSS must retain the elapsed clock, not drop/restart the run"
+        );
 
         recompile_for_fonts();
         flush_motion_styles();
-        assert!((motion_opacity_at(node, at).unwrap() - 0.4).abs() < 1e-5,
-            "registering a font must not erase the running animation");
+        assert!(
+            (motion_opacity_at(node, at).unwrap() - 0.4).abs() < 1e-5,
+            "registering a font must not erase the running animation"
+        );
     }
 
     #[test]
@@ -2897,15 +3272,26 @@ mod tests {
         let at = start + std::time::Duration::from_millis(200);
         set_stylesheet(sheet.replace("opacity: 1", "opacity: 0.5"));
         flush_motion_styles();
-        assert!((motion_opacity_at(node, at).unwrap() - 0.2).abs() < 1e-5,
-            "same-name definition changes sample new frames on the existing timeline");
+        assert!(
+            (motion_opacity_at(node, at).unwrap() - 0.2).abs() < 1e-5,
+            "same-name definition changes sample new frames on the existing timeline"
+        );
 
         set_stylesheet(".motion { animation: enter 500ms linear }".into());
         flush_motion_styles();
-        assert!(motion_opacity_at(node, at).is_none(), "deleted frames must not keep painting");
+        assert!(
+            motion_opacity_at(node, at).is_none(),
+            "deleted frames must not keep painting"
+        );
         let events = take_anim_events();
-        assert_eq!(events.iter().filter(|event| event.node == node
-            && event.kind == sk_css::AnimEventKind::AnimationCancel).count(), 1);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.node == node
+                    && event.kind == sk_css::AnimEventKind::AnimationCancel)
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -2917,8 +3303,9 @@ mod tests {
         set_stylesheet(".motion { opacity: 1 }".into());
         flush_motion_styles();
         assert!(motion_opacity_at(node, start).is_none());
-        assert!(take_anim_events().iter().any(|event| event.node == node
-            && event.kind == sk_css::AnimEventKind::AnimationCancel));
+        assert!(take_anim_events().iter().any(
+            |event| event.node == node && event.kind == sk_css::AnimEventKind::AnimationCancel
+        ));
     }
 
     #[test]
@@ -2932,10 +3319,15 @@ mod tests {
         let at = start + std::time::Duration::from_millis(200);
         let before = motion_opacity_at(node, at).unwrap();
         assert!(before > 0.39 && before < 0.42, "{before}");
-        assert!(set_stylesheet_with_head(sheet.into(), vec![".late-panel { color: red }".into()]));
+        assert!(set_stylesheet_with_head(
+            sheet.into(),
+            vec![".late-panel { color: red }".into()]
+        ));
         flush_motion_styles();
-        assert!((motion_opacity_at(node, at).unwrap() - before).abs() < 1e-5,
-            "a late sheet must not snap or restart an unrelated transition");
+        assert!(
+            (motion_opacity_at(node, at).unwrap() - before).abs() < 1e-5,
+            "a late sheet must not snap or restart an unrelated transition"
+        );
     }
 
     /// A `rem` recompile is the engine correcting its own basis, not an author change, so it must
@@ -2960,26 +3352,40 @@ mod tests {
             let eng = eng.borrow();
             read_tree(|t| t.probe_root_font_size(eng.as_ref(), &env()))
         });
-        assert_eq!(probed, Some(14.0), "the root's own inline font-size, without a cascade");
+        assert_eq!(
+            probed,
+            Some(14.0),
+            "the root's own inline font-size, without a cascade"
+        );
         assert!(
             read_tree(|t| t.node(t.root).is_some_and(|n| n.computed.is_none())),
             "probing the basis must not commit a computed style"
         );
 
         restyle_all();
-        assert_eq!(sk_css::rem_basis(), 14.0, "the sheet was recompiled against the root");
+        assert_eq!(
+            sk_css::rem_basis(),
+            14.0,
+            "the sheet was recompiled against the root"
+        );
 
         let padding = read_tree(|t| {
-            t.node(card).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.padding.top)
+            t.node(card)
+                .and_then(|n| n.computed.as_ref())
+                .and_then(|c| c.base.padding.top)
         });
         assert_eq!(
             padding,
-            Some(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Pixels(gpui::px(21.0)))),
+            Some(gpui::DefiniteLength::Absolute(
+                gpui::AbsoluteLength::Pixels(gpui::px(21.0))
+            )),
             "the ONE committed cascade ran under the settled basis"
         );
 
         let base = read_tree(|t| {
-            t.node(card).and_then(|n| n.computed.as_ref()).map(|c| c.base.clone())
+            t.node(card)
+                .and_then(|n| n.computed.as_ref())
+                .map(|c| c.base.clone())
         })
         .expect("the card is cascaded");
         assert!(
@@ -2991,7 +3397,11 @@ mod tests {
     #[test]
     fn several_style_elements_concatenate_in_document_order() {
         let opacity = |id: u32| {
-            read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.opacity))
+            read_tree(|t| {
+                t.node(id)
+                    .and_then(|n| n.computed.as_ref())
+                    .and_then(|c| c.base.opacity)
+            })
         };
         set_stylesheet(String::new());
         let probe = with_tree(|t| {
@@ -3009,7 +3419,11 @@ mod tests {
             probe
         });
         restyle_all();
-        assert_eq!(opacity(probe), Some(0.9), "the later sheet wins at equal specificity");
+        assert_eq!(
+            opacity(probe),
+            Some(0.9),
+            "the later sheet wins at equal specificity"
+        );
     }
 
     fn cascaded_comb(n: usize) -> (u32, Vec<u32>, Vec<u32>) {
@@ -3112,7 +3526,10 @@ mod tests {
         let env = env();
 
         let settled_ids = |engine: &sk_css::Engine| {
-            with_tree(|t| t.settle_self_marks(engine, &env)).into_iter().map(|(id, _)| id).collect::<Vec<_>>()
+            with_tree(|t| t.settle_self_marks(engine, &env))
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>()
         };
 
         with_tree(|t| t.set_class(grandkids[1], "x"));
@@ -3138,9 +3555,14 @@ mod tests {
         let env = env();
         let x = with_tree(|t| t.intern("data-x"));
         with_tree(|t| t.set_prop(kids[1], x, Some(String::new())));
-        let settled: Vec<u32> =
-            with_tree(|t| t.settle_self_marks(&engine, &env)).into_iter().map(|(id, _)| id).collect();
-        assert!(settled.contains(&kids[0]), "the earlier sibling's answer moved: {settled:?}");
+        let settled: Vec<u32> = with_tree(|t| t.settle_self_marks(&engine, &env))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert!(
+            settled.contains(&kids[0]),
+            "the earlier sibling's answer moved: {settled:?}"
+        );
     }
 
     #[test]
@@ -3164,8 +3586,16 @@ mod tests {
         let env = env();
         with_tree(|t| t.set_text(text, "3".into()));
         let settled = with_tree(|t| t.settle_self_marks(&engine, &env));
-        let card_now = settled.iter().find(|(id, _)| *id == card).map(|(_, s)| s.base.opacity);
-        assert_eq!(card_now, Some(None), "the badge has text now: {:?}", settled.iter().map(|s| s.0).collect::<Vec<_>>());
+        let card_now = settled
+            .iter()
+            .find(|(id, _)| *id == card)
+            .map(|(_, s)| s.base.opacity);
+        assert_eq!(
+            card_now,
+            Some(None),
+            "the badge has text now: {:?}",
+            settled.iter().map(|s| s.0).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -3181,7 +3611,11 @@ mod tests {
             read_tree(|t| t.prop_write(id, "value").map(|(_, write)| write))
         };
         let first = write(Some("a")).unwrap();
-        assert_ne!(write(Some("a")).unwrap(), first, "the same string again is still a write");
+        assert_ne!(
+            write(Some("a")).unwrap(),
+            first,
+            "the same string again is still a write"
+        );
         assert_eq!(write(None), None);
         assert_ne!(write(Some("a")).unwrap(), first);
     }
@@ -3213,7 +3647,10 @@ mod tests {
 
         with_tree(|t| t.set_class(kids[0], "hot on"));
         let settled = with_tree(|t| t.settle_self_marks(&engine, &env));
-        assert_eq!(settled.iter().map(|s| s.0).collect::<Vec<_>>(), vec![kids[0]]);
+        assert_eq!(
+            settled.iter().map(|s| s.0).collect::<Vec<_>>(),
+            vec![kids[0]]
+        );
         assert_eq!(roots_of(), vec![grandkids[0]]);
         let _ = root;
     }
@@ -3245,9 +3682,16 @@ mod tests {
         });
         restyle_all();
         let opacity = |id: u32| {
-            read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.opacity))
+            read_tree(|t| {
+                t.node(id)
+                    .and_then(|n| n.computed.as_ref())
+                    .and_then(|c| c.base.opacity)
+            })
         };
-        assert_eq!((opacity(rows[1]), opacity(cells[0])), (Some(0.5), Some(0.25)));
+        assert_eq!(
+            (opacity(rows[1]), opacity(cells[0])),
+            (Some(0.5), Some(0.25))
+        );
 
         let engine = sk_css::Engine::compile(sheet);
         let env = env();
@@ -3259,10 +3703,17 @@ mod tests {
             added
         });
         let settled = with_tree(|t| t.settle_self_marks(&engine, &env));
-        assert_eq!(settled.iter().map(|s| s.0).collect::<Vec<_>>(), vec![rows[0], rows[1]]);
+        assert_eq!(
+            settled.iter().map(|s| s.0).collect::<Vec<_>>(),
+            vec![rows[0], rows[1]]
+        );
         let mut want = vec![added, cells[0], cells[1], cells[2]];
         want.sort_unstable();
-        assert_eq!(roots_of(), want, "the new row and the cells, none of the rows' other children");
+        assert_eq!(
+            roots_of(),
+            want,
+            "the new row and the cells, none of the rows' other children"
+        );
 
         with_tree(|t| t.remove(added));
         restyle_all();
@@ -3304,17 +3755,28 @@ mod tests {
         });
         restyle_all();
         let opacity = |id: u32| {
-            read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.opacity))
+            read_tree(|t| {
+                t.node(id)
+                    .and_then(|n| n.computed.as_ref())
+                    .and_then(|c| c.base.opacity)
+            })
         };
         assert_eq!(opacity(buttons[0]), None);
 
         let engine = sk_css::Engine::compile(sheet);
         let env = env();
         with_tree(|t| t.set_class(panel, "submit-row"));
-        assert!(with_tree(|t| t.settle_self_marks(&engine, &env)).is_empty(), "the panel's own style did not move");
+        assert!(
+            with_tree(|t| t.settle_self_marks(&engine, &env)).is_empty(),
+            "the panel's own style did not move"
+        );
         let mut want = buttons.clone();
         want.sort_unstable();
-        assert_eq!(roots_of(), want, "the buttons, and none of the divs around them");
+        assert_eq!(
+            roots_of(),
+            want,
+            "the buttons, and none of the divs around them"
+        );
 
         with_tree(|t| t.set_class(panel, "submit-row wide"));
         restyle_all();
@@ -3382,7 +3844,11 @@ mod tests {
         set_engine(sk_css::Engine::compile(sheet));
         let (root, kids, grandkids) = cascaded_comb(5);
         let opacity = |id: u32| {
-            read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.opacity))
+            read_tree(|t| {
+                t.node(id)
+                    .and_then(|n| n.computed.as_ref())
+                    .and_then(|c| c.base.opacity)
+            })
         };
         with_tree(|t| kids.iter().for_each(|&k| t.set_class(k, "b")));
         restyle_all();
@@ -3405,7 +3871,11 @@ mod tests {
         let mut marked = with_tree(|t| std::mem::take(&mut t.self_marks));
         marked.sort_unstable();
         marked.dedup();
-        assert_eq!(marked, vec![first, third], "the class change, and the one whose `+` steps across");
+        assert_eq!(
+            marked,
+            vec![first, third],
+            "the class change, and the one whose `+` steps across"
+        );
 
         with_tree(|t| t.set_class(first, "b"));
         restyle_all();
@@ -3438,11 +3908,20 @@ mod tests {
     }
 
     fn font_size_of(id: u32) -> f32 {
-        read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).map(|c| c.font_size)).expect("cascaded")
+        read_tree(|t| {
+            t.node(id)
+                .and_then(|n| n.computed.as_ref())
+                .map(|c| c.font_size)
+        })
+        .expect("cascaded")
     }
 
     fn padding_top_of(id: u32) -> Option<gpui::DefiniteLength> {
-        read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.padding.top))
+        read_tree(|t| {
+            t.node(id)
+                .and_then(|n| n.computed.as_ref())
+                .and_then(|c| c.base.padding.top)
+        })
     }
 
     fn px_len(v: f32) -> Option<gpui::DefiniteLength> {
@@ -3468,9 +3947,16 @@ mod tests {
             with_tree(|t| t.take_dirty());
             restyle_all();
             assert_eq!(sk_css::rem_basis(), 14.0, "pass {pass}");
-            assert!(!read_tree(|t| t.dirty), "pass {pass} left a restyle pending");
-            let computed = read_tree(|t| t.node(w).and_then(|n| n.computed.as_ref()).map(|c| c.base.clone()))
-                .expect("cascaded");
+            assert!(
+                !read_tree(|t| t.dirty),
+                "pass {pass} left a restyle pending"
+            );
+            let computed = read_tree(|t| {
+                t.node(w)
+                    .and_then(|n| n.computed.as_ref())
+                    .map(|c| c.base.clone())
+            })
+            .expect("cascaded");
             let rem2 = Some(gpui::Length::Definite(gpui::px(28.0).into()));
             assert_eq!(computed.size.width, rem2, "the sheet's 2rem, pass {pass}");
             assert_eq!(computed.size.height, rem2, "the inline 2rem, pass {pass}");
@@ -3503,22 +3989,52 @@ mod tests {
             (root, a, b, c, n)
         });
         restyle_all();
-        assert_eq!(sk_css::rem_basis(), 10.0, "the root's 62.5% of 16px is the rem basis");
+        assert_eq!(
+            sk_css::rem_basis(),
+            10.0,
+            "the root's 62.5% of 16px is the rem basis"
+        );
         assert_eq!(
             [root, a, b, c, n].map(font_size_of),
             [10.0, 20.0, 15.0, 15.0, 15.0],
             "each size of its parent's, and inherited as px"
         );
         assert_eq!(padding_top_of(b), px_len(7.5), "`.5em` of its own 15px");
-        let computed = read_tree(|t| t.node(c).and_then(|n| n.computed.as_ref()).map(|c| c.base.clone()))
-            .expect("cascaded");
-        assert_eq!(computed.margin.top, Some(gpui::Length::Definite(gpui::px(15.0).into())));
-        assert_eq!(computed.size.width, Some(gpui::Length::Definite(gpui::px(20.0).into())), "2rem");
-        assert_eq!(computed.text.line_height, px_len(22.5), "an em line-height is px");
-        let number = read_tree(|t| t.node(n).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.text.line_height));
-        assert_eq!(number, Some(gpui::relative(1.5)), "a number line-height stays a number");
+        let computed = read_tree(|t| {
+            t.node(c)
+                .and_then(|n| n.computed.as_ref())
+                .map(|c| c.base.clone())
+        })
+        .expect("cascaded");
+        assert_eq!(
+            computed.margin.top,
+            Some(gpui::Length::Definite(gpui::px(15.0).into()))
+        );
+        assert_eq!(
+            computed.size.width,
+            Some(gpui::Length::Definite(gpui::px(20.0).into())),
+            "2rem"
+        );
+        assert_eq!(
+            computed.text.line_height,
+            px_len(22.5),
+            "an em line-height is px"
+        );
+        let number = read_tree(|t| {
+            t.node(n)
+                .and_then(|n| n.computed.as_ref())
+                .and_then(|c| c.base.text.line_height)
+        });
+        assert_eq!(
+            number,
+            Some(gpui::relative(1.5)),
+            "a number line-height stays a number"
+        );
         let reported = crate::dom::computed_style(c).unwrap_or_default();
-        assert!(reported.lines().any(|l| l == "font-size=15px"), "getComputedStyle: {reported}");
+        assert!(
+            reported.lines().any(|l| l == "font-size=15px"),
+            "getComputedStyle: {reported}"
+        );
     }
 
     #[test]
@@ -3542,41 +4058,89 @@ mod tests {
             (big, plain, leaves)
         });
         restyle_all();
-        assert_eq!(leaves.iter().map(|&l| padding_top_of(l)).collect::<Vec<_>>(), vec![px_len(20.0), px_len(16.0)]);
+        assert_eq!(
+            leaves
+                .iter()
+                .map(|&l| padding_top_of(l))
+                .collect::<Vec<_>>(),
+            vec![px_len(20.0), px_len(16.0)]
+        );
 
         with_tree(|t| {
             t.set_class(plain, "big");
             t.set_class(big, "");
         });
         restyle_all();
-        assert_eq!(leaves.iter().map(|&l| padding_top_of(l)).collect::<Vec<_>>(), vec![px_len(16.0), px_len(20.0)]);
+        assert_eq!(
+            leaves
+                .iter()
+                .map(|&l| padding_top_of(l))
+                .collect::<Vec<_>>(),
+            vec![px_len(16.0), px_len(20.0)]
+        );
         assert_eq!(font_size_of(leaves[1]), 20.0);
     }
     #[test]
     fn character_width_follows_inherited_face_and_restyles_descendants() {
         sk_css::set_font_source(|| vec!["SK Metric Narrow".into(), "SK Metric Wide".into()]);
-        sk_css::set_font_metric_source(|font, size| Some(sk_css::FontRelativeMetrics {
-            zero_advance: size * if font.family.as_ref() == "SK Metric Wide" {0.8} else {0.6},
-            x_height: size * 0.4,
-        }));
+        sk_css::set_font_metric_source(|font, size| {
+            Some(sk_css::FontRelativeMetrics {
+                zero_advance: size
+                    * if font.family.as_ref() == "SK Metric Wide" {
+                        0.8
+                    } else {
+                        0.6
+                    },
+                x_height: size * 0.4,
+            })
+        });
         struct Reset;
-        impl Drop for Reset {fn drop(&mut self) {sk_css::set_font_metric_source(|_, _| None);}}
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                sk_css::set_font_metric_source(|_, _| None);
+            }
+        }
         let _reset = Reset;
         set_stylesheet(".narrow {font-family:'SK Metric Narrow';font-size:10px} .wide {font-family:'SK Metric Wide';font-size:10px} .leaf{width:1ch}".into());
         let (parent, leaves) = with_tree(|tree| {
-            let root=tree.create_root(); let tag=tree.intern("div"); let mut parents=Vec::new(); let mut leaves=Vec::new();
-            for class in ["narrow","wide"] {
-                let parent=tree.create_element(tag);tree.set_class(parent,class);tree.insert(parent,root,0);parents.push(parent);
-                let leaf=tree.create_element(tag);tree.set_class(leaf,"leaf");tree.insert(leaf,parent,0);leaves.push(leaf);
+            let root = tree.create_root();
+            let tag = tree.intern("div");
+            let mut parents = Vec::new();
+            let mut leaves = Vec::new();
+            for class in ["narrow", "wide"] {
+                let parent = tree.create_element(tag);
+                tree.set_class(parent, class);
+                tree.insert(parent, root, 0);
+                parents.push(parent);
+                let leaf = tree.create_element(tag);
+                tree.set_class(leaf, "leaf");
+                tree.insert(leaf, parent, 0);
+                leaves.push(leaf);
             }
             (parents[0], leaves)
         });
-        let widths = || read_tree(|tree| leaves.iter().map(|&id| tree.node(id).and_then(|node|node.computed.as_ref()).and_then(|computed|computed.base.size.width)).collect::<Vec<_>>());
+        let widths = || {
+            read_tree(|tree| {
+                leaves
+                    .iter()
+                    .map(|&id| {
+                        tree.node(id)
+                            .and_then(|node| node.computed.as_ref())
+                            .and_then(|computed| computed.base.size.width)
+                    })
+                    .collect::<Vec<_>>()
+            })
+        };
         restyle_all();
-        assert_eq!(widths(),vec![Some(gpui::px(6.0).into()),Some(gpui::px(8.0).into())]);
-        with_tree(|tree|tree.set_class(parent,"wide"));
+        assert_eq!(
+            widths(),
+            vec![Some(gpui::px(6.0).into()), Some(gpui::px(8.0).into())]
+        );
+        with_tree(|tree| tree.set_class(parent, "wide"));
         restyle_all();
-        assert_eq!(widths(),vec![Some(gpui::px(8.0).into()),Some(gpui::px(8.0).into())]);
+        assert_eq!(
+            widths(),
+            vec![Some(gpui::px(8.0).into()), Some(gpui::px(8.0).into())]
+        );
     }
-
 }

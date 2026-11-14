@@ -73,7 +73,11 @@ struct Latched {
 }
 
 /// Lock order: `LATCHED` is never held while the storage `State` is taken.
-static LATCHED: Mutex<Latched> = Mutex::new(Latched { folder: None, mode: None, error: None });
+static LATCHED: Mutex<Latched> = Mutex::new(Latched {
+    folder: None,
+    mode: None,
+    error: None,
+});
 
 fn latched_or_current() -> PathBuf {
     let latched = LATCHED.lock().unwrap().folder.clone();
@@ -86,7 +90,8 @@ pub static HOST: Host = Host;
 impl IndexedDbHost for Host {
     fn folder(&self) -> Result<PathBuf, String> {
         let dir = folder_of(&crate::current_folder());
-        std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
         LATCHED.lock().unwrap().folder = Some(dir.clone());
         Ok(dir)
     }
@@ -125,11 +130,17 @@ impl IndexedDbHost for Host {
                     let p = dir.join(name);
                     if p.exists() {
                         if let Err(e) = std::fs::remove_file(&p) {
-                            eprintln!("[storage] IndexedDB is decrypted but {} could not be removed: {e}", p.display());
+                            eprintln!(
+                                "[storage] IndexedDB is decrypted but {} could not be removed: {e}",
+                                p.display()
+                            );
                         }
                     }
                 }
-                eprintln!("[storage] IndexedDB in {} is decrypted (the sealed key is removed)", dir.display());
+                eprintln!(
+                    "[storage] IndexedDB in {} is decrypted (the sealed key is removed)",
+                    dir.display()
+                );
                 l.mode = Some(Mode::Plaintext);
             }
             Some(Mode::Encrypted) => {
@@ -168,11 +179,18 @@ fn decide(
             Ok(None) => {
                 let k = new_key()?;
                 write_key(p, &key_path, &k)?;
-                eprintln!("[storage] IndexedDB in {} is encrypted at rest (a new key, sealed by {})", dir.display(), p.name());
+                eprintln!(
+                    "[storage] IndexedDB in {} is encrypted at rest (a new key, sealed by {})",
+                    dir.display(),
+                    p.name()
+                );
                 k
             }
             Err(e) if p.ready().is_err() => {
-                return Err(format!("the IndexedDB key {} cannot be unsealed right now ({e})", key_path.display()));
+                return Err(format!(
+                    "the IndexedDB key {} cannot be unsealed right now ({e})",
+                    key_path.display()
+                ));
             }
             Err(e) => {
                 let aside = move_aside(&key_path);
@@ -191,7 +209,10 @@ fn decide(
     }
     match provider.map(|p| read_key(p, &key_path)) {
         Some(Ok(Some(old_key))) => {
-            eprintln!("[storage] IndexedDB in {} is being decrypted, as asked", dir.display());
+            eprintln!(
+                "[storage] IndexedDB in {} is being decrypted, as asked",
+                dir.display()
+            );
             Ok((Mode::Decrypting, IdbEncryption::Decrypting { old_key }))
         }
         Some(Err(e)) => {
@@ -211,14 +232,16 @@ fn read_key(p: &dyn SecretProvider, path: &Path) -> Result<Option<[u8; 32]>, Str
     let mut hex = file::unseal(p, &raw)?;
     let key = parse_hex(hex.trim());
     unsafe { hex.as_bytes_mut().fill(0) };
-    key.map(Some).ok_or_else(|| String::from("it does not hold a 256-bit key"))
+    key.map(Some)
+        .ok_or_else(|| String::from("it does not hold a 256-bit key"))
 }
 
 fn write_key(p: &dyn SecretProvider, path: &Path, key: &[u8; 32]) -> Result<(), String> {
     let mut hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
     let sealed = file::seal(p, &hex);
     unsafe { hex.as_bytes_mut().fill(0) };
-    file::write_atomic(path, &sealed?).map_err(|e| format!("could not write {}: {e}", path.display()))
+    file::write_atomic(path, &sealed?)
+        .map_err(|e| format!("could not write {}: {e}", path.display()))
 }
 
 fn parse_hex(s: &str) -> Option<[u8; 32]> {
@@ -233,7 +256,10 @@ fn parse_hex(s: &str) -> Option<[u8; 32]> {
 }
 
 fn move_aside(path: &Path) -> PathBuf {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let aside = path.with_file_name(format!("key.unreadable-{secs}.sealed"));
     if let Err(e) = std::fs::rename(path, &aside) {
         eprintln!("[storage] could not move {} aside: {e}", path.display());
@@ -243,7 +269,9 @@ fn move_aside(path: &Path) -> PathBuf {
 
 #[cfg(target_os = "windows")]
 fn new_key() -> Result<[u8; 32], String> {
-    use windows::Win32::Security::Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
+    use windows::Win32::Security::Cryptography::{
+        BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+    };
     let mut k = [0u8; 32];
     let st = unsafe { BCryptGenRandom(None, &mut k, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
     if st.0 < 0 {
@@ -283,7 +311,15 @@ fn disk(dir: &Path) -> Option<(u64, u64)> {
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
     let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
     let (mut free, mut total) = (0u64, 0u64);
-    unsafe { GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&mut free), Some(&mut total), None) }.ok()?;
+    unsafe {
+        GetDiskFreeSpaceExW(
+            PCWSTR(wide.as_ptr()),
+            Some(&mut free),
+            Some(&mut total),
+            None,
+        )
+    }
+    .ok()?;
     (total > 0).then_some((free, total))
 }
 
@@ -298,7 +334,10 @@ fn disk(dir: &Path) -> Option<(u64, u64)> {
         return None;
     }
     let block = u64::from(st.f_bsize);
-    let (free, total) = (st.f_bavail.saturating_mul(block), st.f_blocks.saturating_mul(block));
+    let (free, total) = (
+        st.f_bavail.saturating_mul(block),
+        st.f_blocks.saturating_mul(block),
+    );
     (total > 0).then_some((free, total))
 }
 
@@ -313,7 +352,10 @@ fn disk(dir: &Path) -> Option<(u64, u64)> {
         return None;
     }
     let block = st.f_frsize as u64;
-    let (free, total) = ((st.f_bavail as u64).saturating_mul(block), (st.f_blocks as u64).saturating_mul(block));
+    let (free, total) = (
+        (st.f_bavail as u64).saturating_mul(block),
+        (st.f_blocks as u64).saturating_mul(block),
+    );
     (total > 0).then_some((free, total))
 }
 
@@ -393,11 +435,20 @@ fn persist_intent(dir: &Path, encrypted: bool) -> Result<(), String> {
             }
             write_key(p, &key_path, &new_key()?)?;
         }
-        eprintln!("[storage] IndexedDB in {} will be encrypted from the next start", dir.display());
+        eprintln!(
+            "[storage] IndexedDB in {} will be encrypted from the next start",
+            dir.display()
+        );
     } else if key_path.exists() {
-        file::write_atomic(&retire, b"decrypt at the next start (appStorage.setStorageFolder { encrypted: false })\n")
-            .map_err(|e| format!("could not write {}: {e}", retire.display()))?;
-        eprintln!("[storage] IndexedDB in {} will be decrypted at the next start", dir.display());
+        file::write_atomic(
+            &retire,
+            b"decrypt at the next start (appStorage.setStorageFolder { encrypted: false })\n",
+        )
+        .map_err(|e| format!("could not write {}: {e}", retire.display()))?;
+        eprintln!(
+            "[storage] IndexedDB in {} will be decrypted at the next start",
+            dir.display()
+        );
     }
     Ok(())
 }
@@ -410,7 +461,9 @@ pub fn info_json(storage: &Path) -> String {
         "{{\"folder\":\"{}\",\"started\":{},\"mode\":{},\"encrypted\":{},\"key\":{},\"error\":{}}}",
         crate::json_escape(&folder.display().to_string()),
         l.mode.is_some(),
-        l.mode.map(|m| format!("\"{}\"", m.name())).unwrap_or_else(|| "null".into()),
+        l.mode
+            .map(|m| format!("\"{}\"", m.name()))
+            .unwrap_or_else(|| "null".into()),
         match l.mode {
             Some(m) => (m == Mode::Encrypted).to_string(),
             None => "null".into(),
@@ -430,7 +483,8 @@ mod tests {
     struct Temp(PathBuf);
     impl Temp {
         fn new(tag: &str) -> Temp {
-            let p = std::env::temp_dir().join(format!("sk-storage-idb-{}-{tag}", std::process::id()));
+            let p =
+                std::env::temp_dir().join(format!("sk-storage-idb-{}-{tag}", std::process::id()));
             let _ = std::fs::remove_dir_all(&p);
             std::fs::create_dir_all(p.join(FOLDER_NAME)).unwrap();
             Temp(p)
@@ -461,9 +515,21 @@ mod tests {
     #[test]
     fn the_quota_is_sixty_percent_of_the_disk_and_never_more_than_fits() {
         const G: u64 = 1 << 30;
-        assert_eq!(quota_from(800 * G, 1000 * G, 0), 600 * G, "60% of the volume");
-        assert_eq!(quota_from(500 * G, 1000 * G, 0), 500 * G, "never more than is free");
-        assert_eq!(quota_from(10 * G, 1000 * G, 3 * G), 13 * G, "what is used + what is free");
+        assert_eq!(
+            quota_from(800 * G, 1000 * G, 0),
+            600 * G,
+            "60% of the volume"
+        );
+        assert_eq!(
+            quota_from(500 * G, 1000 * G, 0),
+            500 * G,
+            "never more than is free"
+        );
+        assert_eq!(
+            quota_from(10 * G, 1000 * G, 3 * G),
+            13 * G,
+            "what is used + what is free"
+        );
         assert!(quota_for(&std::env::temp_dir(), 0) > 0);
     }
 
@@ -476,15 +542,23 @@ mod tests {
 
         let (m, e) = mode(&t, Some(true));
         assert_eq!(m, Mode::Encrypted);
-        let IdbEncryption::Encrypted(k1) = e else { panic!("{e:?}") };
+        let IdbEncryption::Encrypted(k1) = e else {
+            panic!("{e:?}")
+        };
         let raw = std::fs::read(t.dir().join(KEY_NAME)).unwrap();
         let hex: String = k1.iter().map(|b| format!("{b:02x}")).collect();
-        assert!(!raw.windows(64).any(|w| w == hex.as_bytes()), "the key is legible in key.sealed");
+        assert!(
+            !raw.windows(64).any(|w| w == hex.as_bytes()),
+            "the key is legible in key.sealed"
+        );
 
         assert_eq!(mode(&t, None).1, IdbEncryption::Encrypted(k1));
         assert_eq!(mode(&t, Some(true)).1, IdbEncryption::Encrypted(k1));
 
-        assert_eq!(mode(&t, Some(false)).1, IdbEncryption::Decrypting { old_key: k1 });
+        assert_eq!(
+            mode(&t, Some(false)).1,
+            IdbEncryption::Decrypting { old_key: k1 }
+        );
         assert!(t.dir().join(KEY_NAME).exists());
     }
 
@@ -515,7 +589,12 @@ mod tests {
             .filter(|n| n.starts_with("key.unreadable-"))
             .collect();
         assert_eq!(aside.len(), 1, "the unreadable key is kept, not deleted");
-        assert!(read_key(crypt::provider().unwrap(), &t.dir().join(KEY_NAME)).unwrap().is_some(), "and a new one is in place");
+        assert!(
+            read_key(crypt::provider().unwrap(), &t.dir().join(KEY_NAME))
+                .unwrap()
+                .is_some(),
+            "and a new one is in place"
+        );
     }
 
     #[test]
@@ -523,7 +602,9 @@ mod tests {
     fn a_late_call_is_remembered_for_the_next_start() {
         let t = Temp::new("late");
         persist_intent(&t.dir(), true).unwrap();
-        let IdbEncryption::Encrypted(k) = mode(&t, None).1 else { panic!() };
+        let IdbEncryption::Encrypted(k) = mode(&t, None).1 else {
+            panic!()
+        };
         persist_intent(&t.dir(), false).unwrap();
         assert!(t.dir().join(RETIRE_NAME).exists());
         assert_eq!(mode(&t, None).1, IdbEncryption::Decrypting { old_key: k });
@@ -538,29 +619,47 @@ mod tests {
         let t = Temp::new("envelope");
         let (m, e) = decide(&t.dir(), &t.0, Some(true), Some(p)).unwrap();
         assert_eq!(m, Mode::Encrypted);
-        let IdbEncryption::Encrypted(k) = e else { panic!("{e:?}") };
+        let IdbEncryption::Encrypted(k) = e else {
+            panic!("{e:?}")
+        };
         let raw = std::fs::read(t.dir().join(KEY_NAME)).unwrap();
         assert_eq!(&raw[..8], b"VNSTOR\x01\x02");
         let hex: String = k.iter().map(|b| format!("{b:02x}")).collect();
         assert!(!raw.windows(64).any(|w| w == hex.as_bytes()));
-        assert_eq!(decide(&t.dir(), &t.0, None, Some(p)).unwrap().1, IdbEncryption::Encrypted(k));
+        assert_eq!(
+            decide(&t.dir(), &t.0, None, Some(p)).unwrap().1,
+            IdbEncryption::Encrypted(k)
+        );
     }
 
     #[test]
     fn a_provider_that_is_not_ready_refuses_without_moving_the_key_aside() {
         struct Locked;
         impl SecretProvider for Locked {
-            fn name(&self) -> &'static str { "locked" }
-            fn id(&self) -> u8 { 2 }
-            fn ready(&self) -> Result<(), String> { Err("macOS Keychain: locked".into()) }
-            fn protect(&self, _: &[u8]) -> Result<Vec<u8>, String> { Err("locked".into()) }
-            fn unprotect(&self, _: &[u8]) -> Result<Vec<u8>, String> { Err("locked".into()) }
+            fn name(&self) -> &'static str {
+                "locked"
+            }
+            fn id(&self) -> u8 {
+                2
+            }
+            fn ready(&self) -> Result<(), String> {
+                Err("macOS Keychain: locked".into())
+            }
+            fn protect(&self, _: &[u8]) -> Result<Vec<u8>, String> {
+                Err("locked".into())
+            }
+            fn unprotect(&self, _: &[u8]) -> Result<Vec<u8>, String> {
+                Err("locked".into())
+            }
         }
         static LOCKED: Locked = Locked;
         let t = Temp::new("not-ready");
         std::fs::write(t.dir().join(KEY_NAME), b"VNSTOR\x01\x02sealed key").unwrap();
         assert!(decide(&t.dir(), &t.0, None, Some(&LOCKED)).is_err());
-        assert_eq!(std::fs::read(t.dir().join(KEY_NAME)).unwrap(), b"VNSTOR\x01\x02sealed key");
+        assert_eq!(
+            std::fs::read(t.dir().join(KEY_NAME)).unwrap(),
+            b"VNSTOR\x01\x02sealed key"
+        );
         let others = std::fs::read_dir(t.dir()).unwrap().count();
         assert_eq!(others, 1, "nothing was moved aside or created");
     }
@@ -574,9 +673,18 @@ mod tests {
         assert_eq!(late_change(Encrypted, true, None), (true, Some(true)));
         assert_eq!(late_change(Plaintext, true, None), (true, None));
         assert_eq!(late_change(Decrypting, true, None), (true, None));
-        assert_eq!(late_change(Encrypted, false, Some(false)), (true, Some(false)));
+        assert_eq!(
+            late_change(Encrypted, false, Some(false)),
+            (true, Some(false))
+        );
         assert_eq!(late_change(Encrypted, false, Some(true)), (false, None));
-        assert_eq!(late_change(Plaintext, false, Some(true)), (true, Some(true)));
-        assert_eq!(late_change(Plaintext, true, Some(false)), (true, Some(false)));
+        assert_eq!(
+            late_change(Plaintext, false, Some(true)),
+            (true, Some(true))
+        );
+        assert_eq!(
+            late_change(Plaintext, true, Some(false)),
+            (true, Some(false))
+        );
     }
 }

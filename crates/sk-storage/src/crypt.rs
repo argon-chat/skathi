@@ -65,7 +65,9 @@ pub fn provider() -> Option<&'static dyn SecretProvider> {
 pub fn random_bytes(buf: &mut [u8]) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Security::Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
+        use windows::Win32::Security::Cryptography::{
+            BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        };
         let st = unsafe { BCryptGenRandom(None, buf, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
         if st.0 < 0 {
             return Err(format!("BCryptGenRandom failed: 0x{:08x}", st.0 as u32));
@@ -107,9 +109,9 @@ impl SecretProvider for Dpapi {
 
 #[cfg(target_os = "windows")]
 unsafe fn dpapi(input: &[u8], protect: bool) -> Result<Vec<u8>, String> {
-    use windows::Win32::Foundation::{HLOCAL, LocalFree};
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
     use windows::Win32::Security::Cryptography::{
-        CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
+        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
 
     let mut inb = CRYPT_INTEGER_BLOB {
@@ -145,7 +147,11 @@ unsafe fn dpapi(input: &[u8], protect: bool) -> Result<Vec<u8>, String> {
         )
     };
 
-    let verb = if protect { "CryptProtectData" } else { "CryptUnprotectData" };
+    let verb = if protect {
+        "CryptProtectData"
+    } else {
+        "CryptUnprotectData"
+    };
     r.map_err(|e| format!("{verb} failed: {e}"))?;
 
     let bytes = if out.pbData.is_null() {
@@ -189,7 +195,10 @@ mod tests {
             !blob.windows(secret.len()).any(|w| w == secret),
             "the plaintext survived into the ciphertext"
         );
-        assert!(blob.len() > secret.len(), "a DPAPI blob carries its own header");
+        assert!(
+            blob.len() > secret.len(),
+            "a DPAPI blob carries its own header"
+        );
     }
 
     #[test]
@@ -199,7 +208,10 @@ mod tests {
         let mut blob = p.protect(b"payload").unwrap();
         let last = blob.len() - 1;
         blob[last] ^= 0xff;
-        assert!(p.unprotect(&blob).is_err(), "a flipped bit must not decrypt");
+        assert!(
+            p.unprotect(&blob).is_err(),
+            "a flipped bit must not decrypt"
+        );
         assert!(p.unprotect(b"not a dpapi blob at all").is_err());
     }
 

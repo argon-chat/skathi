@@ -25,7 +25,8 @@ pub fn ask(q: Ask, reply: Reply) {
 
 /// Shows a question in place of the platform's dialog, on the `sk-ask` thread. It must watch the
 /// [`Cancellation`]: the owner is destroyed only after it returns. `Err` falls back to the platform's dialog.
-pub type Present = Box<dyn FnOnce(&Ask, isize, &Cancellation) -> Result<Option<usize>, Fail> + Send>;
+pub type Present =
+    Box<dyn FnOnce(&Ask, isize, &Cancellation) -> Result<Option<usize>, Fail> + Send>;
 
 pub fn ask_with(q: Ask, present: Present, reply: Reply) {
     ask_owned(RESOLVER.get().and_then(|f| f()), q, Some(present), reply)
@@ -76,43 +77,60 @@ pub(super) fn ask_owned(owner: Option<Owner>, q: Ask, present: Option<Present>, 
         return;
     }
     let ticket = st.ticket.fetch_add(1, Ordering::AcqRel);
-    st.queue.lock().unwrap_or_else(|p| p.into_inner()).push_back(ticket);
+    st.queue
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push_back(ticket);
     let cancel = Cancellation(st.clone());
-    let spawned = std::thread::Builder::new().name("sk-ask".into()).spawn(move || {
-        if !wait_turn(&st, ticket, &cancel) {
-            reply.send(None);
-            return;
-        }
-        let answer = if scripted_mode() {
-            scripted::ask(&q, key, &cancel)
-        } else {
-            let shown = match present {
-                Some(present) => present(&q, hwnd, &cancel).or_else(|f| {
-                    crate::log_later(
-                        "dialog",
-                        format!("[dialog] the {} window could not be shown ({}): asking natively", q.what, f.message),
-                    );
-                    imp::ask(&q, hwnd, &cancel)
-                }),
-                None => imp::ask(&q, hwnd, &cancel),
-            };
-            match shown {
-                Ok(a) => a,
-                Err(f) => {
-                    crate::log_later("dialog", format!("[dialog] the {} dialog could not be shown: {}", q.what, f.message));
-                    None
-                }
+    let spawned = std::thread::Builder::new()
+        .name("sk-ask".into())
+        .spawn(move || {
+            if !wait_turn(&st, ticket, &cancel) {
+                reply.send(None);
+                return;
             }
-        };
-        st.active.store(false, Ordering::Release);
-        let answer = answer.filter(|&i| i < q.buttons.len() && !cancel.is_requested());
-        let said = match answer {
-            Some(i) => format!("\"{}\"", label_of(&q.buttons[i])),
-            None => "dismissed".to_string(),
-        };
-        crate::log_later("dialog", format!("[dialog] {} \"{}\": {said}", q.what, q.instruction));
-        reply.send(answer);
-    });
+            let answer = if scripted_mode() {
+                scripted::ask(&q, key, &cancel)
+            } else {
+                let shown = match present {
+                    Some(present) => present(&q, hwnd, &cancel).or_else(|f| {
+                        crate::log_later(
+                            "dialog",
+                            format!(
+                                "[dialog] the {} window could not be shown ({}): asking natively",
+                                q.what, f.message
+                            ),
+                        );
+                        imp::ask(&q, hwnd, &cancel)
+                    }),
+                    None => imp::ask(&q, hwnd, &cancel),
+                };
+                match shown {
+                    Ok(a) => a,
+                    Err(f) => {
+                        crate::log_later(
+                            "dialog",
+                            format!(
+                                "[dialog] the {} dialog could not be shown: {}",
+                                q.what, f.message
+                            ),
+                        );
+                        None
+                    }
+                }
+            };
+            st.active.store(false, Ordering::Release);
+            let answer = answer.filter(|&i| i < q.buttons.len() && !cancel.is_requested());
+            let said = match answer {
+                Some(i) => format!("\"{}\"", label_of(&q.buttons[i])),
+                None => "dismissed".to_string(),
+            };
+            crate::log_later(
+                "dialog",
+                format!("[dialog] {} \"{}\": {said}", q.what, q.instruction),
+            );
+            reply.send(answer);
+        });
     if spawned.is_err() {
         owner_state(key).leave_queue(ticket);
     }
@@ -127,7 +145,10 @@ mod tests {
     static KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1 << 41);
 
     fn owner() -> Option<Owner> {
-        Some(Owner { key: KEY.fetch_add(1, Ordering::Relaxed), hwnd: 0 })
+        Some(Owner {
+            key: KEY.fetch_add(1, Ordering::Relaxed),
+            hwnd: 0,
+        })
     }
 
     fn question() -> Ask {
@@ -144,10 +165,18 @@ mod tests {
     fn pending_of(window: u64) -> u64 {
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
         loop {
-            if let Some(v) = scripted::list().as_array().unwrap().iter().find(|v| v["window"] == window) {
+            if let Some(v) = scripted::list()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["window"] == window)
+            {
                 return v["id"].as_u64().unwrap();
             }
-            assert!(std::time::Instant::now() < deadline, "no scripted question appeared for window {window}");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no scripted question appeared for window {window}"
+            );
             std::thread::sleep(Duration::from_millis(2));
         }
     }
@@ -163,8 +192,14 @@ mod tests {
         let o = owner();
         let key = o.unwrap().key;
         let (tx, rx) = channel();
-        let present: Present = Box::new(|_, _, _| panic!("SK_DIALOGS=scripted must never show a window"));
-        ask_owned(o, question(), Some(present), Box::new(move |a| tx.send(a).unwrap()));
+        let present: Present =
+            Box::new(|_, _, _| panic!("SK_DIALOGS=scripted must never show a window"));
+        ask_owned(
+            o,
+            question(),
+            Some(present),
+            Box::new(move |a| tx.send(a).unwrap()),
+        );
         scripted::choose(pending_of(key), "allow").unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(20)).unwrap(), Some(0));
         assert!(is_idle(key));
@@ -184,7 +219,13 @@ mod tests {
         let rx = asked(o);
         let id = pending_of(key);
         let listed = scripted::list();
-        let v = listed.as_array().unwrap().iter().find(|v| v["id"] == id).unwrap().clone();
+        let v = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["id"] == id)
+            .unwrap()
+            .clone();
         assert_eq!(v["kind"], "ask");
         assert_eq!(v["what"], "permission");
         assert_eq!(v["buttons"], serde_json::json!(["Allow", "Block"]));
@@ -213,7 +254,12 @@ mod tests {
         let rx = asked(o);
         std::thread::sleep(QUEUE_POLL * 3);
         assert_eq!(
-            scripted::list().as_array().unwrap().iter().filter(|v| v["window"] == key).count(),
+            scripted::list()
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|v| v["window"] == key)
+                .count(),
             1,
             "only the picker is in front of the user"
         );

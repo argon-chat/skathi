@@ -231,7 +231,11 @@ impl<'a> Parser<'a> {
                 Ok(())
             }
             Some(b'[') | Some(b'{') => {
-                let (open, close) = if self.b[self.i] == b'[' { (b'[', b']') } else { (b'{', b'}') };
+                let (open, close) = if self.b[self.i] == b'[' {
+                    (b'[', b']')
+                } else {
+                    (b'{', b'}')
+                };
                 let mut depth = 0usize;
                 while let Some(&c) = self.b.get(self.i) {
                     match c {
@@ -370,13 +374,19 @@ mod tests {
         let text = r#"{"format":"vue-native/storage","version":1,
             "writtenBy":{"app":"hello","pid":123},"tags":[1,2,3],"encrypted":false,
             "entries":[["k","v"]]}"#;
-        assert_eq!(decode(text).unwrap(), vec![("k".to_string(), "v".to_string())]);
+        assert_eq!(
+            decode(text).unwrap(),
+            vec![("k".to_string(), "v".to_string())]
+        );
     }
 
     #[test]
     fn entries_may_come_before_other_members() {
         let text = r#"{"entries":[["a","1"]],"version":1}"#;
-        assert_eq!(decode(text).unwrap(), vec![("a".to_string(), "1".to_string())]);
+        assert_eq!(
+            decode(text).unwrap(),
+            vec![("a".to_string(), "1".to_string())]
+        );
     }
 
     #[test]
@@ -418,7 +428,10 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().to_string())
             .filter(|n| n.contains(".tmp"))
             .collect();
-        assert!(leftovers.is_empty(), "scratch files left behind: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "scratch files left behind: {leftovers:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -431,7 +444,11 @@ mod tests {
         assert_eq!(&sealed[..6], MAGIC);
         assert_eq!(sealed[6], FORMAT_VERSION);
         assert_eq!(sealed[7], p.id());
-        for needle in [b"hunter2".as_slice(), b"token".as_slice(), b"entries".as_slice()] {
+        for needle in [
+            b"hunter2".as_slice(),
+            b"token".as_slice(),
+            b"entries".as_slice(),
+        ] {
             assert!(
                 !sealed.windows(needle.len()).any(|w| w == needle),
                 "{:?} is legible in the sealed file",
@@ -439,7 +456,10 @@ mod tests {
             );
         }
         assert_eq!(unseal(p, &sealed).unwrap(), json);
-        assert_eq!(decode(&unseal(p, &sealed).unwrap()).unwrap(), vec![("token".to_string(), "hunter2".to_string())]);
+        assert_eq!(
+            decode(&unseal(p, &sealed).unwrap()).unwrap(),
+            vec![("token".to_string(), "hunter2".to_string())]
+        );
     }
 
     #[test]
@@ -447,12 +467,16 @@ mod tests {
     fn unsealing_something_that_is_not_ours_says_which_check_failed() {
         let p = crate::crypt::provider().unwrap();
         assert!(unseal(p, b"").unwrap_err().contains("bad magic"));
-        assert!(unseal(p, b"not-a-sealed-file").unwrap_err().contains("bad magic"));
+        assert!(unseal(p, b"not-a-sealed-file")
+            .unwrap_err()
+            .contains("bad magic"));
         let mut wrong_version = seal(p, "{}").unwrap();
         wrong_version[6] = 9;
         assert!(unseal(p, &wrong_version).unwrap_err().contains("version 9"));
         let mut wrong_provider = seal(p, "{}").unwrap();
         wrong_provider[7] = 7;
-        assert!(unseal(p, &wrong_provider).unwrap_err().contains("provider 7"));
+        assert!(unseal(p, &wrong_provider)
+            .unwrap_err()
+            .contains("provider 7"));
     }
 }

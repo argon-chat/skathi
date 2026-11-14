@@ -13,15 +13,14 @@ mod clipboard;
 mod color;
 mod cull;
 mod dom;
+mod filter;
 mod font_api;
 mod fonts;
-mod filter;
 mod fullscreen;
 mod idmap;
 pub mod iframe;
 mod img;
 mod inline_style;
-mod style_decl;
 mod live;
 mod live_state;
 pub mod log;
@@ -35,6 +34,7 @@ mod resample;
 mod scroll;
 mod select;
 mod selection;
+mod style_decl;
 mod svg;
 mod tree;
 mod video;
@@ -43,25 +43,28 @@ pub mod windows;
 
 pub mod devtools;
 
+pub use img::{
+    asset_base, asset_store, content_key, dev_asset_file, read_app_asset, set_asset_base,
+    set_asset_store, set_dev_asset_files, AssetLookup,
+};
 pub use observe::update_layout_observers;
-pub use img::{asset_base, asset_store, read_app_asset, content_key, dev_asset_file, set_asset_base, set_asset_store, set_dev_asset_files, AssetLookup};
 pub use render::{
     bounds_in, build_root, build_subtree, control_hitboxes, control_hitboxes_in,
     enable_pick_hitboxes, flush_pending_mouse_move, painted_bounds_in, painted_drag_region,
     painted_drag_region_in, popped_out, root_bounds, root_bounds_in, set_os_chrome,
     set_os_chrome_in, set_popped_out, set_repaint_all,
 };
-pub use windows::WinKey;
 pub use tree::{
-    with_tree, EV_AUXCLICK, EV_BEFOREINPUT, EV_BLUR, EV_CANPLAY, EV_CANPLAYTHROUGH, EV_CLICK, EV_COMPLETE,
-    EV_COMPOSITIONEND, EV_COMPOSITIONSTART, EV_COMPOSITIONUPDATE, EV_CONTEXTMENU,
-    EV_COPY, EV_CUT, EV_DURATIONCHANGE, EV_PASTE,
-    EV_EMPTIED, EV_ENDED, EV_ENTERFRAME, EV_ERROR, EV_FOCUS, EV_INPUT, EV_KEYDOWN, EV_KEYUP,
-    EV_LOAD, EV_LOADEDDATA, EV_LOADEDMETADATA, EV_LOADSTART, EV_LOOPCOMPLETE, EV_MOUSEDOWN,
-    EV_MOUSEENTER, EV_MOUSELEAVE, EV_MOUSEMOVE, EV_MOUSEUP, EV_PAUSE, EV_PLAY, EV_PLAYING,
-    EV_POINTERCANCEL, EV_RATECHANGE, EV_SCROLL, EV_SEEKED, EV_SEEKING, EV_TIMEUPDATE,
-    EV_MESSAGE, EV_VOLUMECHANGE, EV_WAITING, EV_WHEEL, EVENT_NAMES,
+    with_tree, EVENT_NAMES, EV_AUXCLICK, EV_BEFOREINPUT, EV_BLUR, EV_CANPLAY, EV_CANPLAYTHROUGH,
+    EV_CLICK, EV_COMPLETE, EV_COMPOSITIONEND, EV_COMPOSITIONSTART, EV_COMPOSITIONUPDATE,
+    EV_CONTEXTMENU, EV_COPY, EV_CUT, EV_DURATIONCHANGE, EV_EMPTIED, EV_ENDED, EV_ENTERFRAME,
+    EV_ERROR, EV_FOCUS, EV_INPUT, EV_KEYDOWN, EV_KEYUP, EV_LOAD, EV_LOADEDDATA, EV_LOADEDMETADATA,
+    EV_LOADSTART, EV_LOOPCOMPLETE, EV_MESSAGE, EV_MOUSEDOWN, EV_MOUSEENTER, EV_MOUSELEAVE,
+    EV_MOUSEMOVE, EV_MOUSEUP, EV_PASTE, EV_PAUSE, EV_PLAY, EV_PLAYING, EV_POINTERCANCEL,
+    EV_RATECHANGE, EV_SCROLL, EV_SEEKED, EV_SEEKING, EV_TIMEUPDATE, EV_VOLUMECHANGE, EV_WAITING,
+    EV_WHEEL,
 };
+pub use windows::WinKey;
 
 /// The numeric payload a native input event carries into JS. Mouse: a=x b=y c=button, d=modifier
 /// bits | click count << 4. Wheel: a=deltaX b=deltaY. Input: `key` = the new value. Scroll:
@@ -242,7 +245,6 @@ host_fn!(fn sk_set_dispatcher(g, args) {
     UNDEF
 });
 
-
 fn ret_string(s: &str) -> u64 {
     JsRuntime::with(|rt| rt.ctx().string(s).0)
 }
@@ -278,7 +280,6 @@ host_fn!(fn sk_bounds(_g, args) {
     };
     ret_string(&out)
 });
-
 
 // op 0 read, 1 set absolute (NaN leaves an axis alone), 2 scroll by (NaN is 0). Answers
 // `"left,top,scrollWidth,scrollHeight"` in CSS px, or `""` for a node that is not a scroll container.
@@ -356,7 +357,6 @@ host_fn!(fn sk_focus(_g, args) {
 host_fn!(fn sk_input_select(_g, args) {
     Value::boolean(render::select_input_text(arg_id(args.arg(0)))).0
 });
-
 
 // `name=value` lines, empty for a node that is not a loaded `<video>`.
 host_fn!(fn sk_media_state(_g, args) {
@@ -441,7 +441,11 @@ pub fn install(rt: &JsRuntime) {
         ("__sk_set_stylesheet", 1, sk_set_stylesheet as *const _),
         ("__sk_set_listener", 3, sk_set_listener as *const _),
         ("__sk_create_root", 0, sk_create_root as *const _),
-        ("__sk_fullscreen_element", 1, sk_fullscreen_element as *const _),
+        (
+            "__sk_fullscreen_element",
+            1,
+            sk_fullscreen_element as *const _,
+        ),
         ("__sk_set_dispatcher", 1, sk_set_dispatcher as *const _),
         ("__sk_query", 3, sk_query as *const _),
         ("__sk_bounds", 1, sk_bounds as *const _),
@@ -528,7 +532,8 @@ pub(crate) fn off_input<R>(f: impl FnOnce() -> R) -> R {
 }
 
 pub(crate) fn layout_owed() -> bool {
-    tree::read_tree(|t| t.is_dirty()) || FLUSHED_AT_BUILD.with(|c| c.get()) == Some(render::build_count())
+    tree::read_tree(|t| t.is_dirty())
+        || FLUSHED_AT_BUILD.with(|c| c.get()) == Some(render::build_count())
 }
 
 /// Installs the host's "draw one frame now" callback (`sk-tree` cannot depend on `sk-app`).
@@ -550,11 +555,14 @@ pub(crate) fn sync_layout_by(caller: perf::SyncCaller) {
     if IN_SYNC_LAYOUT.with(|c| c.get()) {
         return;
     }
-    let _profile = sk_runtime::redjs::profiling::span("layout", match caller {
-        perf::SyncCaller::Bounds => "Forced layout: bounds read",
-        perf::SyncCaller::Scroll => "Forced layout: scroll read",
-        perf::SyncCaller::Focus => "Forced layout: focus",
-    });
+    let _profile = sk_runtime::redjs::profiling::span(
+        "layout",
+        match caller {
+            perf::SyncCaller::Bounds => "Forced layout: bounds read",
+            perf::SyncCaller::Scroll => "Forced layout: scroll read",
+            perf::SyncCaller::Focus => "Forced layout: focus",
+        },
+    );
     if !perf::enabled() {
         sync_layout_inner();
         return;
@@ -566,7 +574,9 @@ pub(crate) fn sync_layout_by(caller: perf::SyncCaller) {
 }
 
 fn sync_layout_inner() {
-    let Some(f) = SYNC_LAYOUT.with(|c| c.get()) else { return };
+    let Some(f) = SYNC_LAYOUT.with(|c| c.get()) else {
+        return;
+    };
     IN_SYNC_LAYOUT.with(|c| c.set(true));
     if flush_changes() {
         FLUSHED_BY_SYNC.with(|c| c.set(true));
@@ -638,7 +648,9 @@ pub use sk_video::mf::{SharedDeviceProvider, SharedVideoDevice};
 /// # Safety
 /// The provider's successful lease must retain its live D3D11 device.
 #[cfg(windows)]
-pub unsafe fn install_video_device_provider(provider: SharedDeviceProvider) -> Result<(), &'static str> {
+pub unsafe fn install_video_device_provider(
+    provider: SharedDeviceProvider,
+) -> Result<(), &'static str> {
     unsafe { sk_video::mf::install_shared_device_provider(provider) }
 }
 
@@ -675,9 +687,17 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let resampled = resample::tick(window, cx);
     let restored = img::residency_tick(window, cx);
     let selecting = selection::tick(window, cx);
-    let draw =
-        anim | scripted | lottie_moved | video_moved | stickers_moved | canvas_moved | scrolled | fonts_moved
-            | resampled | restored | selecting;
+    let draw = anim
+        | scripted
+        | lottie_moved
+        | video_moved
+        | stickers_moved
+        | canvas_moved
+        | scrolled
+        | fonts_moved
+        | resampled
+        | restored
+        | selecting;
     match live::take() {
         live::Shown::Draw => true,
         live::Shown::Present if !draw => {
@@ -850,7 +870,11 @@ mod tests {
         assert!(flush_changes());
         assert_eq!(dom::bounds(child), (None, true), "flushed is not laid out");
         render::note_build();
-        assert_eq!(dom::bounds(child), (None, false), "built and still unpainted: not painted");
+        assert_eq!(
+            dom::bounds(child),
+            (None, false),
+            "built and still unpainted: not painted"
+        );
     }
 
     #[test]
@@ -859,8 +883,15 @@ mod tests {
         set_sync_layout(refuse);
         let child = mounted_child();
         assert_eq!(dom::bounds(child), (None, true));
-        assert!(!tree::read_tree(|t| t.is_dirty()), "the forced layout flushed");
-        assert_eq!(flush_changes_kind(), Flush::Changed, "…and the wave still draws, as nothing did");
+        assert!(
+            !tree::read_tree(|t| t.is_dirty()),
+            "the forced layout flushed"
+        );
+        assert_eq!(
+            flush_changes_kind(),
+            Flush::Changed,
+            "…and the wave still draws, as nothing did"
+        );
         assert!(!flush_changes(), "once");
 
         fn draw() {
@@ -943,7 +974,10 @@ mod tests {
         });
         assert_eq!(name_now(), "exit", "the read must see its own mutation");
 
-        assert!(flush_changes(), "a forced flush still owes the frame a repaint");
+        assert!(
+            flush_changes(),
+            "a forced flush still owes the frame a repaint"
+        );
     }
 
     #[test]
@@ -1011,7 +1045,10 @@ mod tests {
             late
         });
         flush_changes();
-        assert!(!animating(), "a node mounted under display: none does not start ({late})");
+        assert!(
+            !animating(),
+            "a node mounted under display: none does not start ({late})"
+        );
 
         tree::with_tree(|t| t.set_class(panel, ""));
         flush_changes();
@@ -1112,7 +1149,6 @@ mod tests {
         assert_eq!(opacity_of(leaf), Some(0.35));
     }
 
-
     #[test]
     fn a_class_change_restyles_the_whole_subtree_under_it() {
         let (mid, leaf) = tree::with_tree(|t| {
@@ -1154,15 +1190,24 @@ mod tests {
              #list > * { opacity: 0.3 }",
         ));
         tree::restyle_all();
-        assert_eq!((opacity_of(first), opacity_of(second)), (Some(0.1), Some(0.1)));
+        assert_eq!(
+            (opacity_of(first), opacity_of(second)),
+            (Some(0.1), Some(0.1))
+        );
 
         tree::with_tree(|t| t.set_class(mid, "stack"));
         flush_changes();
-        assert_eq!((opacity_of(first), opacity_of(second)), (Some(0.5), Some(0.5)));
+        assert_eq!(
+            (opacity_of(first), opacity_of(second)),
+            (Some(0.5), Some(0.5))
+        );
 
         tree::with_tree(|t| t.set_class(mid, "space"));
         flush_changes();
-        assert_eq!((opacity_of(first), opacity_of(second)), (Some(0.1), Some(0.9)));
+        assert_eq!(
+            (opacity_of(first), opacity_of(second)),
+            (Some(0.1), Some(0.9))
+        );
 
         tree::with_tree(|t| {
             t.set_class(mid, "");
@@ -1170,7 +1215,10 @@ mod tests {
             t.set_prop(mid, key, Some("list".into()));
         });
         flush_changes();
-        assert_eq!((opacity_of(first), opacity_of(second)), (Some(0.3), Some(0.3)));
+        assert_eq!(
+            (opacity_of(first), opacity_of(second)),
+            (Some(0.3), Some(0.3))
+        );
     }
 
     /// The class list is a set, as `classList` is: a repeated class must not run its rules twice.
@@ -1251,7 +1299,11 @@ mod tests {
             ".item { opacity: 0.3 } .item:last-child { opacity: 0.7 }",
         ));
         tree::restyle_all();
-        assert_eq!(opacity_of(only), Some(0.7), "the only child is the last child");
+        assert_eq!(
+            opacity_of(only),
+            Some(0.7),
+            "the only child is the last child"
+        );
 
         tree::with_tree(|t| {
             let div = t.intern("div");
@@ -1293,8 +1345,16 @@ mod tests {
             first
         });
         flush_changes();
-        assert_eq!(opacity_of(items[2]), Some(0.7), "third item is the fourth child now");
-        assert_eq!(opacity_of(items[3]), Some(0.3), "and the last one the fifth");
+        assert_eq!(
+            opacity_of(items[2]),
+            Some(0.7),
+            "third item is the fourth child now"
+        );
+        assert_eq!(
+            opacity_of(items[3]),
+            Some(0.3),
+            "and the last one the fifth"
+        );
 
         tree::with_tree(|t| t.remove(first));
         flush_changes();
@@ -1312,7 +1372,9 @@ mod tests {
             t.set_class(boxed, "box");
             boxed
         });
-        tree::set_engine(sk_css::Engine::compile(".box { opacity: 0.3 } .box:empty { opacity: 0.7 }"));
+        tree::set_engine(sk_css::Engine::compile(
+            ".box { opacity: 0.3 } .box:empty { opacity: 0.7 }",
+        ));
         tree::restyle_all();
         assert_eq!(opacity_of(boxed), Some(0.7));
 
@@ -1335,7 +1397,11 @@ mod tests {
             text
         });
         flush_changes();
-        assert_eq!(opacity_of(boxed), Some(0.7), "an empty text node is still empty");
+        assert_eq!(
+            opacity_of(boxed),
+            Some(0.7),
+            "an empty text node is still empty"
+        );
         tree::with_tree(|t| t.set_text(text, "hi".into()));
         flush_changes();
         assert_eq!(opacity_of(boxed), Some(0.3), "text with data");
@@ -1414,7 +1480,11 @@ mod tests {
             t.insert(editor, slot, 0);
         });
         flush_changes();
-        assert_eq!(opacity_of(title), Some(0.8), "the editor arrived next door to the title");
+        assert_eq!(
+            opacity_of(title),
+            Some(0.8),
+            "the editor arrived next door to the title"
+        );
         let _ = panel;
     }
 
@@ -1472,7 +1542,9 @@ mod tests {
     fn inert_of(id: u32) -> Option<bool> {
         tree::read_tree(|t| {
             t.node(id).and_then(|n| n.computed.as_ref()).map(|c| {
-                c.extras.pointer_events_none.expect("the cascade resolves this for every element")
+                c.extras
+                    .pointer_events_none
+                    .expect("the cascade resolves this for every element")
             })
         })
     }
@@ -1533,12 +1605,26 @@ mod tests {
         ));
         flush_changes();
         let [under_hidden, shown, under_gone, sr, plain] = ids;
-        assert!(render::style_refuses_focus(under_hidden), "visibility inherits");
-        assert!(!render::style_refuses_focus(shown), "the nearest declaration decides");
-        assert!(render::style_refuses_focus(under_gone), "a display: none subtree is not rendered");
-        assert!(!render::style_refuses_focus(sr), "a screen-reader-only box is visible to CSS");
+        assert!(
+            render::style_refuses_focus(under_hidden),
+            "visibility inherits"
+        );
+        assert!(
+            !render::style_refuses_focus(shown),
+            "the nearest declaration decides"
+        );
+        assert!(
+            render::style_refuses_focus(under_gone),
+            "a display: none subtree is not rendered"
+        );
+        assert!(
+            !render::style_refuses_focus(sr),
+            "a screen-reader-only box is visible to CSS"
+        );
         assert!(!render::style_refuses_focus(plain));
-        assert!(tree::read_tree(|t| !render::css_visible(t, under_hidden) && render::css_visible(t, sr)));
+        assert!(tree::read_tree(
+            |t| !render::css_visible(t, under_hidden) && render::css_visible(t, sr)
+        ));
     }
 }
 
@@ -1563,7 +1649,12 @@ pub(crate) fn pointer_at_next_dispatch(x: f64, y: f64) {
 
 /// [`dispatch_event`] with an object for the event to carry, passed as the dispatcher's eighth
 /// argument: a ClipboardEvent's `clipboardData` (`crate::clipboard`).
-pub fn dispatch_event_with(node: u32, event: u32, payload: &EventPayload, data: Option<Value>) -> bool {
+pub fn dispatch_event_with(
+    node: u32,
+    event: u32,
+    payload: &EventPayload,
+    data: Option<Value>,
+) -> bool {
     // Taken first, so a position set for a dispatch that goes nowhere never reaches the next one.
     let at = POINTER_AT.with(|c| c.take());
     let f = tree::dispatcher();
@@ -1576,7 +1667,14 @@ pub fn dispatch_event_with(node: u32, event: u32, payload: &EventPayload, data: 
     proceed
 }
 
-fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload, data: Option<Value>, at: Option<(f64, f64)>) -> bool {
+fn dispatch_event_inner(
+    f: u64,
+    node: u32,
+    event: u32,
+    payload: &EventPayload,
+    data: Option<Value>,
+    at: Option<(f64, f64)>,
+) -> bool {
     sk_runtime::bridge::settle_owed_drain();
     // Under a gpui listener, owe the checkpoint before the call (owing holds the engine lock, or JSC
     // drains when the call ends). Nested under a script, the script's own checkpoint runs it.
@@ -1586,7 +1684,9 @@ fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload, d
     }
     JsRuntime::with(|rt| {
         let key = payload.key.map(|k| rt.ctx().string(k));
-        let (x, y) = at.map_or((Value::undefined(), Value::undefined()), |(x, y)| (Value::double(x), Value::double(y)));
+        let (x, y) = at.map_or((Value::undefined(), Value::undefined()), |(x, y)| {
+            (Value::double(x), Value::double(y))
+        });
         let args = [
             Value::int32(node as i32),
             Value::int32(event as i32),

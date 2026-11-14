@@ -62,7 +62,10 @@ thread_local! {
 }
 
 fn epoch_ms() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
 }
 
 fn active() -> bool {
@@ -71,9 +74,11 @@ fn active() -> bool {
 
 pub(crate) fn start(cap: Option<usize>) -> Result<Json, String> {
     if sk_tree::perf::env_enabled() {
-        return Err("SK_PERF is on and owns the phase counters (it drains them every second); \
+        return Err(
+            "SK_PERF is on and owns the phase counters (it drains them every second); \
                     a trace would read zeros. Restart the host without SK_PERF."
-            .into());
+                .into(),
+        );
     }
     sk_tree::perf::set_tracing(true);
     let _ = sk_tree::perf::take_all();
@@ -95,7 +100,10 @@ pub(crate) fn start(cap: Option<usize>) -> Result<Json, String> {
             total_frames: 0,
         })
     });
-    Ok(Json::obj(vec![("started", Json::Bool(true)), ("startEpochMs", Json::n(at))]))
+    Ok(Json::obj(vec![
+        ("started", Json::Bool(true)),
+        ("startEpochMs", Json::n(at)),
+    ]))
 }
 
 pub(crate) fn mark(label: &str) {
@@ -252,15 +260,24 @@ pub(crate) fn report(stop: bool, frames: bool) -> Result<Json, String> {
     };
     let mut out = vec![
         ("startEpochMs", Json::n(tr.start_epoch_ms)),
-        ("elapsedMs", Json::n(round1(tr.start.elapsed().as_secs_f64() * 1000.0))),
+        (
+            "elapsedMs",
+            Json::n(round1(tr.start.elapsed().as_secs_f64() * 1000.0)),
+        ),
         ("framesTotal", Json::n(tr.total_frames as f64)),
         ("framesStored", Json::n(tr.frames.len() as f64)),
-        ("framesIdle", Json::n((tr.total_frames as f64) - tr.frames.len() as f64)),
+        (
+            "framesIdle",
+            Json::n((tr.total_frames as f64) - tr.frames.len() as f64),
+        ),
         ("dropped", Json::n(tr.dropped as f64)),
         ("summary", summary(&tr.frames)),
     ];
     if frames {
-        out.push(("frames", Json::arr(tr.frames.iter().map(frame_json).collect())));
+        out.push((
+            "frames",
+            Json::arr(tr.frames.iter().map(frame_json).collect()),
+        ));
     }
     Ok(Json::obj(out))
 }
@@ -296,10 +313,19 @@ fn frame_json(f: &Frame) -> Json {
         o.push(("idleBefore", Json::n(f64::from(f.idle_before))));
     }
     if !f.marks.is_empty() {
-        o.push(("marks", Json::arr(f.marks.iter().map(|m| Json::s(m.clone())).collect())));
+        o.push((
+            "marks",
+            Json::arr(f.marks.iter().map(|m| Json::s(m.clone())).collect()),
+        ));
     }
     if p.js_passes > 0 {
-        o.push(("inputJs", Json::obj(vec![("n", Json::n(f64::from(p.js_passes))), ("ms", r2(p.js_ms))])));
+        o.push((
+            "inputJs",
+            Json::obj(vec![
+                ("n", Json::n(f64::from(p.js_passes))),
+                ("ms", r2(p.js_ms)),
+            ]),
+        ));
     }
     if dom_total(p) > 0 {
         let mut d: Vec<(&str, Json)> = DomOp::NAMES
@@ -346,7 +372,17 @@ fn frame_json(f: &Frame) -> Json {
         ));
     }
     if p.observer_steps > 0 {
-        o.push(("observers", observers_json(p.observer_steps, p.observer_rounds, p.observer_relayouts, p.observer_relayout_ms, p.observer_ms, p.observer_loop_errors)));
+        o.push((
+            "observers",
+            observers_json(
+                p.observer_steps,
+                p.observer_rounds,
+                p.observer_relayouts,
+                p.observer_relayout_ms,
+                p.observer_ms,
+                p.observer_loop_errors,
+            ),
+        ));
     }
     if p.restyle_passes > 0 || p.recompiles > 0 || p.full_reasons.iter().any(|&n| n > 0) {
         let reasons: Vec<(&str, Json)> = FullReason::NAMES
@@ -384,11 +420,14 @@ fn frame_json(f: &Frame) -> Json {
                 ("ms", r2(p.build_ms)),
                 ("elements", Json::n(p.elements_built as f64)),
                 ("renderMs", r2(f.render_ms)),
-                ("cache", Json::arr(vec![
-                    Json::n(f64::from(p.cache_offers.saturating_sub(p.cached_renders))),
-                    Json::n(f64::from(p.cached_renders)),
-                    Json::n(f64::from(p.cache_standdowns)),
-                ])),
+                (
+                    "cache",
+                    Json::arr(vec![
+                        Json::n(f64::from(p.cache_offers.saturating_sub(p.cached_renders))),
+                        Json::n(f64::from(p.cached_renders)),
+                        Json::n(f64::from(p.cache_standdowns)),
+                    ]),
+                ),
             ]),
         ));
     }
@@ -439,7 +478,14 @@ fn frame_json(f: &Frame) -> Json {
     Json::obj(o)
 }
 
-fn observers_json(steps: u32, rounds: u32, relayouts: u32, relayout_ms: f32, ms: f32, loop_errors: u32) -> Json {
+fn observers_json(
+    steps: u32,
+    rounds: u32,
+    relayouts: u32,
+    relayout_ms: f32,
+    ms: f32,
+    loop_errors: u32,
+) -> Json {
     Json::obj(vec![
         ("n", Json::n(f64::from(steps))),
         ("rounds", Json::n(f64::from(rounds))),
@@ -456,7 +502,11 @@ fn summary(frames: &[Frame]) -> Json {
         s.add(f);
     }
     let mut longest: Vec<&Frame> = frames.iter().collect();
-    longest.sort_by(|a, b| b.dur_ms.partial_cmp(&a.dur_ms).unwrap_or(std::cmp::Ordering::Equal));
+    longest.sort_by(|a, b| {
+        b.dur_ms
+            .partial_cmp(&a.dur_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     longest.truncate(10);
     let over = |ms: f32| frames.iter().filter(|f| f.dur_ms > ms).count() as f64;
     let reasons: Vec<(&str, Json)> = FullReason::NAMES
@@ -504,7 +554,14 @@ fn summary(frames: &[Frame]) -> Json {
         ),
         (
             "observers",
-            observers_json(s.observer_steps, s.observer_rounds, s.observer_relayouts, s.observer_relayout_ms, s.observer_ms, s.observer_loop_errors),
+            observers_json(
+                s.observer_steps,
+                s.observer_rounds,
+                s.observer_relayouts,
+                s.observer_relayout_ms,
+                s.observer_ms,
+                s.observer_loop_errors,
+            ),
         ),
         (
             "restyle",
@@ -581,7 +638,10 @@ fn summary(frames: &[Frame]) -> Json {
                             ("paint", r2(p.paint_ms)),
                             ("shapeMs", r2(f.shape_ms)),
                             ("dom", Json::n(f64::from(dom_total(p)))),
-                            ("marks", Json::arr(f.marks.iter().map(|m| Json::s(m.clone())).collect())),
+                            (
+                                "marks",
+                                Json::arr(f.marks.iter().map(|m| Json::s(m.clone())).collect()),
+                            ),
                         ])
                     })
                     .collect(),
@@ -704,31 +764,44 @@ impl Totals {
     }
 }
 
-
 pub(crate) fn recording_start(cap: Option<usize>) -> Result<Json, String> {
     let limits = sk_runtime::redjs::profiling::Limits {
-        frames: cap.unwrap_or(1200), ..Default::default()
+        frames: cap.unwrap_or(1200),
+        ..Default::default()
     };
     let context = sk_runtime::JsRuntime::try_with(|runtime| runtime.ctx().raw() as usize);
     sk_tree::perf::set_tracing(true);
     let status = sk_runtime::redjs::profiling::start(limits, context);
     #[cfg(target_os = "windows")]
-    gpui_windows::set_frame_profiler(Some(gpui_windows::FrameProfilerCallbacks { begin: native_profile_begin, end: sk_runtime::redjs::profiling::external_end }));
+    gpui_windows::set_frame_profiler(Some(gpui_windows::FrameProfilerCallbacks {
+        begin: native_profile_begin,
+        end: sk_runtime::redjs::profiling::external_end,
+    }));
     Ok(recording_status_json(&status))
 }
 
 pub(crate) fn recording_stop() -> Result<Json, String> {
     #[cfg(target_os = "windows")]
     gpui_windows::set_frame_profiler(None);
-    let status = sk_runtime::redjs::profiling::stop().ok_or_else(|| "no frame recording exists".to_string())?;
-    if !active() { sk_tree::perf::set_tracing(false); }
+    let status = sk_runtime::redjs::profiling::stop()
+        .ok_or_else(|| "no frame recording exists".to_string())?;
+    if !active() {
+        sk_tree::perf::set_tracing(false);
+    }
     Ok(recording_status_json(&status))
 }
 
 pub(crate) fn recording_status() -> Result<Json, String> {
-    let status = sk_runtime::redjs::profiling::status().unwrap_or(sk_runtime::redjs::profiling::Status {
-        recording: false, session_id: 0, start_epoch_ms: 0., limits: Default::default(), frame_count: 0, dropped_frames: 0, dropped_spans: 0,
-    });
+    let status =
+        sk_runtime::redjs::profiling::status().unwrap_or(sk_runtime::redjs::profiling::Status {
+            recording: false,
+            session_id: 0,
+            start_epoch_ms: 0.,
+            limits: Default::default(),
+            frame_count: 0,
+            dropped_frames: 0,
+            dropped_spans: 0,
+        });
     Ok(recording_status_json(&status))
 }
 
@@ -737,86 +810,204 @@ pub(crate) fn cancel_recording() {
     gpui_windows::set_frame_profiler(None);
     NATIVE_PROFILE_WINDOW.with(|target| target.set(0));
     sk_runtime::redjs::profiling::clear();
-    TRACE.with(|trace| { trace.borrow_mut().take(); });
+    TRACE.with(|trace| {
+        trace.borrow_mut().take();
+    });
     sk_tree::perf::set_tracing(false);
 }
 
 pub(crate) fn frame_page(offset: usize, limit: usize) -> Result<Json, String> {
-    let page = sk_runtime::redjs::profiling::frames(offset, limit).ok_or_else(|| "no frame recording exists".to_string())?;
+    let page = sk_runtime::redjs::profiling::frames(offset, limit)
+        .ok_or_else(|| "no frame recording exists".to_string())?;
     Ok(Json::obj(vec![
-        ("sessionId", Json::n(page.status.session_id as f64)), ("recording", Json::Bool(page.status.recording)),
-        ("total", Json::n(page.total as f64)), ("offset", Json::n(page.offset as f64)),
+        ("sessionId", Json::n(page.status.session_id as f64)),
+        ("recording", Json::Bool(page.status.recording)),
+        ("total", Json::n(page.total as f64)),
+        ("offset", Json::n(page.offset as f64)),
         ("nextOffset", offset_json(page.next_offset)),
-        ("frames", Json::arr(page.frames.iter().map(recording_frame_json).collect())),
+        (
+            "frames",
+            Json::arr(page.frames.iter().map(recording_frame_json).collect()),
+        ),
     ]))
 }
 
 pub(crate) fn frame_detail(frame_id: u64, offset: usize, limit: usize) -> Result<Json, String> {
-    let page = sk_runtime::redjs::profiling::frame_detail(frame_id, offset, limit)
-        .ok_or_else(|| "frame is unavailable (it may have been evicted by the recording limits)".to_string())?;
+    let page =
+        sk_runtime::redjs::profiling::frame_detail(frame_id, offset, limit).ok_or_else(|| {
+            "frame is unavailable (it may have been evicted by the recording limits)".to_string()
+        })?;
     Ok(Json::obj(vec![
-        ("sessionId", Json::n(page.session_id as f64)), ("frame", recording_frame_json(&page.frame)),
-        ("offset", Json::n(page.offset as f64)), ("total", Json::n(page.total as f64)),
-        ("nextOffset", offset_json(page.next_offset)), ("truncated", Json::Bool(page.truncated)),
-        ("spans", Json::arr(page.spans.iter().map(recording_span_json).collect())),
+        ("sessionId", Json::n(page.session_id as f64)),
+        ("frame", recording_frame_json(&page.frame)),
+        ("offset", Json::n(page.offset as f64)),
+        ("total", Json::n(page.total as f64)),
+        ("nextOffset", offset_json(page.next_offset)),
+        ("truncated", Json::Bool(page.truncated)),
+        (
+            "spans",
+            Json::arr(page.spans.iter().map(recording_span_json).collect()),
+        ),
     ]))
 }
 
-fn offset_json(offset: Option<usize>) -> Json { offset.map_or(Json::Null, |offset| Json::n(offset as f64)) }
-fn milliseconds(value: f64) -> Json { Json::n((value * 1000.).round() / 1000.) }
+fn offset_json(offset: Option<usize>) -> Json {
+    offset.map_or(Json::Null, |offset| Json::n(offset as f64))
+}
+fn milliseconds(value: f64) -> Json {
+    Json::n((value * 1000.).round() / 1000.)
+}
 fn recording_status_json(status: &sk_runtime::redjs::profiling::Status) -> Json {
     Json::obj(vec![
-        ("recording", Json::Bool(status.recording)), ("sessionId", Json::n(status.session_id as f64)),
-        ("startEpochMs", Json::n(status.start_epoch_ms)), ("frameCount", Json::n(status.frame_count as f64)),
-        ("droppedFrames", Json::n(status.dropped_frames as f64)), ("droppedSpans", Json::n(status.dropped_spans as f64)),
-        ("limits", Json::obj(vec![("frames", Json::n(status.limits.frames as f64)), ("spansPerFrame", Json::n(status.limits.spans_per_frame as f64)), ("totalSpans", Json::n(status.limits.total_spans as f64))])),
-        ("timing", Json::s("instrumented main-thread elapsed time; not GPU timestamps or sampled CPU cycles")),
-        ("coverage", Json::obj(vec![("javascript", Json::s("native-invoked callbacks and their host calls")), ("microtasks", Json::s("checkpoint batches; individual Promise reactions are not sampled"))])),
+        ("recording", Json::Bool(status.recording)),
+        ("sessionId", Json::n(status.session_id as f64)),
+        ("startEpochMs", Json::n(status.start_epoch_ms)),
+        ("frameCount", Json::n(status.frame_count as f64)),
+        ("droppedFrames", Json::n(status.dropped_frames as f64)),
+        ("droppedSpans", Json::n(status.dropped_spans as f64)),
+        (
+            "limits",
+            Json::obj(vec![
+                ("frames", Json::n(status.limits.frames as f64)),
+                (
+                    "spansPerFrame",
+                    Json::n(status.limits.spans_per_frame as f64),
+                ),
+                ("totalSpans", Json::n(status.limits.total_spans as f64)),
+            ]),
+        ),
+        (
+            "timing",
+            Json::s(
+                "instrumented main-thread elapsed time; not GPU timestamps or sampled CPU cycles",
+            ),
+        ),
+        (
+            "coverage",
+            Json::obj(vec![
+                (
+                    "javascript",
+                    Json::s("native-invoked callbacks and their host calls"),
+                ),
+                (
+                    "microtasks",
+                    Json::s("checkpoint batches; individual Promise reactions are not sampled"),
+                ),
+            ]),
+        ),
     ])
 }
 fn recording_frame_json(frame: &sk_runtime::redjs::profiling::FrameSummary) -> Json {
     Json::obj(vec![
-        ("id", Json::n(frame.id as f64)), ("startMs", milliseconds(frame.start_ms)),
-        ("durationMs", milliseconds(frame.duration_ms)), ("cpuMs", milliseconds(frame.cpu_ms)),
-        ("spanCount", Json::n(frame.span_count as f64)), ("droppedSpans", Json::n(frame.dropped_spans as f64)),
-        ("categories", Json::arr(frame.categories.iter().map(|category| Json::obj(vec![
-            ("category", Json::s(category.category)), ("selfMs", milliseconds(category.self_ms)),
-            ("totalMs", milliseconds(category.total_ms)), ("count", Json::n(category.count as f64)),
-        ])).collect())),
-        ("hints", Json::arr(frame.hints.iter().map(|hint| {
-            let mut values = vec![("code", Json::s(hint.code)), ("severity", Json::s(hint.severity)), ("message", Json::s(&hint.message)), ("count", Json::n(hint.count as f64))];
-            if let Some(id) = hint.span_id { values.push(("spanId", Json::n(id as f64))); }
-            Json::obj(values)
-        }).collect())),
+        ("id", Json::n(frame.id as f64)),
+        ("startMs", milliseconds(frame.start_ms)),
+        ("durationMs", milliseconds(frame.duration_ms)),
+        ("cpuMs", milliseconds(frame.cpu_ms)),
+        ("spanCount", Json::n(frame.span_count as f64)),
+        ("droppedSpans", Json::n(frame.dropped_spans as f64)),
+        (
+            "categories",
+            Json::arr(
+                frame
+                    .categories
+                    .iter()
+                    .map(|category| {
+                        Json::obj(vec![
+                            ("category", Json::s(category.category)),
+                            ("selfMs", milliseconds(category.self_ms)),
+                            ("totalMs", milliseconds(category.total_ms)),
+                            ("count", Json::n(category.count as f64)),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "hints",
+            Json::arr(
+                frame
+                    .hints
+                    .iter()
+                    .map(|hint| {
+                        let mut values = vec![
+                            ("code", Json::s(hint.code)),
+                            ("severity", Json::s(hint.severity)),
+                            ("message", Json::s(&hint.message)),
+                            ("count", Json::n(hint.count as f64)),
+                        ];
+                        if let Some(id) = hint.span_id {
+                            values.push(("spanId", Json::n(id as f64)));
+                        }
+                        Json::obj(values)
+                    })
+                    .collect(),
+            ),
+        ),
     ])
 }
 fn recording_span_json(span: &sk_runtime::redjs::profiling::EventSpan) -> Json {
     let mut values = vec![
-        ("id", Json::n(span.id as f64)), ("parentId", span.parent_id.map_or(Json::Null, |id| Json::n(id as f64))),
-        ("category", Json::s(span.category)), ("name", Json::s(&span.name)),
-        ("startMs", milliseconds(span.start_ms)), ("durationMs", milliseconds(span.duration_ms)), ("selfMs", milliseconds(span.self_ms)),
-        ("depth", Json::n(span.depth as f64)), ("count", Json::n(1.)),
+        ("id", Json::n(span.id as f64)),
+        (
+            "parentId",
+            span.parent_id.map_or(Json::Null, |id| Json::n(id as f64)),
+        ),
+        ("category", Json::s(span.category)),
+        ("name", Json::s(&span.name)),
+        ("startMs", milliseconds(span.start_ms)),
+        ("durationMs", milliseconds(span.duration_ms)),
+        ("selfMs", milliseconds(span.self_ms)),
+        ("depth", Json::n(span.depth as f64)),
+        ("count", Json::n(1.)),
     ];
     if let Some(site) = &span.callsite {
         let mut callsite = vec![("kind", Json::s(site.kind))];
-        if !site.function.is_empty() { callsite.push(("function", Json::s(&site.function))); }
-        if !site.url.is_empty() { callsite.push(("url", Json::s(&site.url))); }
-        if site.line > 0 { callsite.push(("line", Json::n(f64::from(site.line)))); }
-        if site.column > 0 { callsite.push(("column", Json::n(f64::from(site.column)))); }
+        if !site.function.is_empty() {
+            callsite.push(("function", Json::s(&site.function)));
+        }
+        if !site.url.is_empty() {
+            callsite.push(("url", Json::s(&site.url)));
+        }
+        if site.line > 0 {
+            callsite.push(("line", Json::n(f64::from(site.line))));
+        }
+        if site.column > 0 {
+            callsite.push(("column", Json::n(f64::from(site.column))));
+        }
         values.push(("callsite", Json::obj(callsite)));
     }
     if !span.counters.is_empty() {
-        values.push(("counters", Json::Obj(span.counters.iter().map(|(name, value)| (name.clone(), Json::n(*value as f64))).collect())));
+        values.push((
+            "counters",
+            Json::Obj(
+                span.counters
+                    .iter()
+                    .map(|(name, value)| (name.clone(), Json::n(*value as f64)))
+                    .collect(),
+            ),
+        ));
     }
     Json::obj(values)
 }
 
-
-pub(crate) fn set_recording_native_window(window: usize) { NATIVE_PROFILE_WINDOW.with(|target| target.set(window)); }
+pub(crate) fn set_recording_native_window(window: usize) {
+    NATIVE_PROFILE_WINDOW.with(|target| target.set(window));
+}
 #[cfg(target_os = "windows")]
-fn native_profile_begin(window: usize, category: &'static str, name: &'static str, file: &'static str, line: u32, column: u32) -> u64 {
-    if !NATIVE_PROFILE_WINDOW.with(|target| target.get() != 0 && target.get() == window) { return 0; }
+fn native_profile_begin(
+    window: usize,
+    category: &'static str,
+    name: &'static str,
+    file: &'static str,
+    line: u32,
+    column: u32,
+) -> u64 {
+    if !NATIVE_PROFILE_WINDOW.with(|target| target.get() != 0 && target.get() == window) {
+        return 0;
+    }
     sk_runtime::redjs::profiling::external_begin(category, name, file, line, column)
 }
 
-pub(crate) fn set_recording_window_id(window: u64) { sk_runtime::redjs::profiling::set_window_target(window); }
+pub(crate) fn set_recording_window_id(window: u64) {
+    sk_runtime::redjs::profiling::set_window_target(window);
+}

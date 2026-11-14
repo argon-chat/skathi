@@ -37,9 +37,16 @@ pub struct Wave {
 
 impl Wave {
     pub fn from_stats(stats: &sk_runtime::redjs::ffi::RjsPumpStats, elapsed: Duration) -> Self {
-        let next_timer = (stats.next_timer_deadline >= 0.0)
-            .then(|| Duration::from_secs_f64((stats.next_timer_deadline - stats.now).max(0.0) / 1000.0));
-        Wave { raf_fired: stats.raf_fired, raf_pending: stats.raf_pending, next_timer, elapsed, audio: false }
+        let next_timer = (stats.next_timer_deadline >= 0.0).then(|| {
+            Duration::from_secs_f64((stats.next_timer_deadline - stats.now).max(0.0) / 1000.0)
+        });
+        Wave {
+            raf_fired: stats.raf_fired,
+            raf_pending: stats.raf_pending,
+            next_timer,
+            elapsed,
+            audio: false,
+        }
     }
 
     fn quiet(&self) -> bool {
@@ -68,7 +75,9 @@ pub fn decide(streak: u32, wave: Option<Wave>, frame: Frame) -> (u32, Option<Dur
     if streak < QUIET_FRAMES {
         return (streak, None);
     }
-    let wait = wave.and_then(|w| w.next_timer).map_or(IDLE_INTERVAL, |due| due.min(IDLE_INTERVAL));
+    let wait = wave
+        .and_then(|w| w.next_timer)
+        .map_or(IDLE_INTERVAL, |due| due.min(IDLE_INTERVAL));
     (streak, Some(wait))
 }
 
@@ -84,7 +93,9 @@ thread_local! {
 pub fn status() -> crate::json::Json {
     use crate::json::Json;
     let ms = |d: Duration| Json::n((d.as_secs_f64() * 10_000.0).round() / 10.0);
-    let Some((wave, frame, wait)) = LAST.with(Cell::get) else { return Json::Null };
+    let Some((wave, frame, wait)) = LAST.with(Cell::get) else {
+        return Json::Null;
+    };
     let wave = wave.map_or(Json::Null, |w| {
         Json::obj(vec![
             ("quiet", Json::Bool(w.quiet())),
@@ -109,7 +120,11 @@ pub fn status() -> crate::json::Json {
 /// Whether the last frame handed the clock a deliberate wait, so the gap to the next frame is pacing.
 #[cfg_attr(not(sk_devtools), allow(dead_code))]
 pub fn last_paced() -> bool {
-    cfg!(target_os = "windows") && enabled() && LAST.with(Cell::get).is_some_and(|(_, _, wait)| wait.is_some())
+    cfg!(target_os = "windows")
+        && enabled()
+        && LAST
+            .with(Cell::get)
+            .is_some_and(|(_, _, wait)| wait.is_some())
 }
 
 fn enabled() -> bool {
@@ -170,11 +185,21 @@ mod tests {
     use super::*;
 
     fn idle() -> Wave {
-        Wave { elapsed: Duration::from_micros(40), ..Wave::default() }
+        Wave {
+            elapsed: Duration::from_micros(40),
+            ..Wave::default()
+        }
     }
 
-    const STILL: Frame = Frame { moved: false, animating: false, focused: true };
-    const MOVED: Frame = Frame { moved: true, ..STILL };
+    const STILL: Frame = Frame {
+        moved: false,
+        animating: false,
+        focused: true,
+    };
+    const MOVED: Frame = Frame {
+        moved: true,
+        ..STILL
+    };
 
     #[test]
     fn the_clock_slows_only_after_a_run_of_quiet_frames() {
@@ -184,38 +209,98 @@ mod tests {
             assert_eq!(wait, None);
             streak = next;
         }
-        assert_eq!(decide(streak, Some(idle()), STILL), (QUIET_FRAMES, Some(IDLE_INTERVAL)));
+        assert_eq!(
+            decide(streak, Some(idle()), STILL),
+            (QUIET_FRAMES, Some(IDLE_INTERVAL))
+        );
     }
 
     #[test]
     fn an_unfocused_window_paces_its_css_animations() {
-        let animating = Frame { animating: true, ..STILL };
+        let animating = Frame {
+            animating: true,
+            ..STILL
+        };
         let paced = QUIET_FRAMES + 5;
-        assert_eq!(decide(paced, Some(idle()), animating), (0, None), "focused: the display rate");
-        let behind = Frame { focused: false, ..animating };
+        assert_eq!(
+            decide(paced, Some(idle()), animating),
+            (0, None),
+            "focused: the display rate"
+        );
+        let behind = Frame {
+            focused: false,
+            ..animating
+        };
         let mut streak = 0;
         for _ in 0..QUIET_FRAMES - 1 {
             let (next, wait) = decide(streak, Some(idle()), behind);
-            assert_eq!(wait, None, "a short transition (a hover) keeps the display rate");
+            assert_eq!(
+                wait, None,
+                "a short transition (a hover) keeps the display rate"
+            );
             streak = next;
         }
-        assert_eq!(decide(streak, Some(idle()), behind), (QUIET_FRAMES, Some(IDLE_INTERVAL)));
+        assert_eq!(
+            decide(streak, Some(idle()), behind),
+            (QUIET_FRAMES, Some(IDLE_INTERVAL))
+        );
         // Work in an unfocused window still runs at the display rate.
-        assert_eq!(decide(paced, Some(idle()), Frame { moved: true, ..behind }), (0, None), "the tree moved");
-        assert_eq!(decide(paced, Some(Wave { raf_fired: 1, ..idle() }), behind), (0, None), "rAF");
+        assert_eq!(
+            decide(
+                paced,
+                Some(idle()),
+                Frame {
+                    moved: true,
+                    ..behind
+                }
+            ),
+            (0, None),
+            "the tree moved"
+        );
+        assert_eq!(
+            decide(
+                paced,
+                Some(Wave {
+                    raf_fired: 1,
+                    ..idle()
+                }),
+                behind
+            ),
+            (0, None),
+            "rAF"
+        );
     }
 
     #[test]
     fn any_activity_restores_the_display_rate() {
         let paced = QUIET_FRAMES + 5;
-        assert_eq!(decide(paced, Some(idle()), MOVED), (0, None), "the tree moved");
+        assert_eq!(
+            decide(paced, Some(idle()), MOVED),
+            (0, None),
+            "the tree moved"
+        );
         assert_eq!(decide(paced, None, STILL), (0, None), "no wave ran");
         for busy in [
-            Wave { raf_pending: 1, ..idle() },
-            Wave { raf_fired: 1, ..idle() },
-            Wave { elapsed: BUSY_WAVE, ..idle() },
-            Wave { next_timer: Some(Duration::ZERO), ..idle() },
-            Wave { audio: true, ..idle() },
+            Wave {
+                raf_pending: 1,
+                ..idle()
+            },
+            Wave {
+                raf_fired: 1,
+                ..idle()
+            },
+            Wave {
+                elapsed: BUSY_WAVE,
+                ..idle()
+            },
+            Wave {
+                next_timer: Some(Duration::ZERO),
+                ..idle()
+            },
+            Wave {
+                audio: true,
+                ..idle()
+            },
         ] {
             assert_eq!(decide(paced, Some(busy), STILL), (0, None), "{busy:?}");
         }
@@ -223,10 +308,22 @@ mod tests {
 
     #[test]
     fn a_timer_due_sooner_than_the_interval_sets_the_wait() {
-        let soon = Wave { next_timer: Some(Duration::from_millis(5)), ..idle() };
-        assert_eq!(decide(QUIET_FRAMES, Some(soon), STILL).1, Some(Duration::from_millis(5)));
-        let later = Wave { next_timer: Some(Duration::from_secs(10)), ..idle() };
-        assert_eq!(decide(QUIET_FRAMES, Some(later), STILL).1, Some(IDLE_INTERVAL));
+        let soon = Wave {
+            next_timer: Some(Duration::from_millis(5)),
+            ..idle()
+        };
+        assert_eq!(
+            decide(QUIET_FRAMES, Some(soon), STILL).1,
+            Some(Duration::from_millis(5))
+        );
+        let later = Wave {
+            next_timer: Some(Duration::from_secs(10)),
+            ..idle()
+        };
+        assert_eq!(
+            decide(QUIET_FRAMES, Some(later), STILL).1,
+            Some(IDLE_INTERVAL)
+        );
     }
 
     #[test]
@@ -238,7 +335,10 @@ mod tests {
         };
         let wave = Wave::from_stats(&stats, Duration::ZERO);
         assert_eq!(wave.next_timer, Some(Duration::from_micros(12_500)));
-        let none = sk_runtime::redjs::ffi::RjsPumpStats { next_timer_deadline: -1.0, ..Default::default() };
+        let none = sk_runtime::redjs::ffi::RjsPumpStats {
+            next_timer_deadline: -1.0,
+            ..Default::default()
+        };
         assert_eq!(Wave::from_stats(&none, Duration::ZERO).next_timer, None);
     }
 }

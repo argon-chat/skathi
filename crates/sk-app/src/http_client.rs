@@ -36,13 +36,18 @@ pub struct RedjsHttpClient {
 
 impl RedjsHttpClient {
     pub fn new() -> Self {
-        RedjsHttpClient { fallback: OnceLock::new() }
+        RedjsHttpClient {
+            fallback: OnceLock::new(),
+        }
     }
 
     fn fallback(&self) -> Option<Arc<dyn HttpClient>> {
         self.fallback
             .get_or_init(|| {
-                match reqwest_client::ReqwestClient::user_agent(concat!("skathi/", env!("CARGO_PKG_VERSION"))) {
+                match reqwest_client::ReqwestClient::user_agent(concat!(
+                    "skathi/",
+                    env!("CARGO_PKG_VERSION")
+                )) {
                     Ok(client) => Some(Arc::new(client) as Arc<dyn HttpClient>),
                     Err(e) => {
                         log::warn!("could not build the fallback HTTP client ({e})");
@@ -89,10 +94,16 @@ pub fn cache_mb(window_json: Option<&str>) -> u64 {
 
 #[cfg_attr(not(feature = "storages"), allow(dead_code))]
 fn config_mb(window_json: Option<&str>) -> Option<u64> {
-    window_json.and_then(crate::json::parse).and_then(|w| match w.get("httpCache")? {
-        crate::json::Json::Bool(false) => Some(0),
-        o => o.get("maxMB").and_then(crate::json::Json::as_f64).filter(|n| *n >= 0.0).map(|n| n as u64),
-    })
+    window_json
+        .and_then(crate::json::parse)
+        .and_then(|w| match w.get("httpCache")? {
+            crate::json::Json::Bool(false) => Some(0),
+            o => o
+                .get("maxMB")
+                .and_then(crate::json::Json::as_f64)
+                .filter(|n| *n >= 0.0)
+                .map(|n| n as u64),
+        })
 }
 
 /// The HTTP cache's cap when neither the environment nor the config names one. A fixed cap is easier
@@ -106,7 +117,10 @@ fn plain_get(parts: &http::request::Parts, body: &AsyncBody) -> bool {
         Inner::Bytes(b) => b.get_ref().is_empty(),
         Inner::AsyncReader(_) => false,
     };
-    let follows = !matches!(parts.extensions.get::<RedirectPolicy>(), None | Some(RedirectPolicy::NoFollow));
+    let follows = !matches!(
+        parts.extensions.get::<RedirectPolicy>(),
+        None | Some(RedirectPolicy::NoFollow)
+    );
     empty && follows && (parts.method == http::Method::GET || parts.method == http::Method::HEAD)
 }
 
@@ -119,11 +133,16 @@ impl HttpClient for RedjsHttpClient {
         None
     }
 
-    fn send(&self, req: http::Request<AsyncBody>) -> BoxFuture<'static, AnyResult<http::Response<AsyncBody>>> {
+    fn send(
+        &self,
+        req: http::Request<AsyncBody>,
+    ) -> BoxFuture<'static, AnyResult<http::Response<AsyncBody>>> {
         let (mut parts, body) = req.into_parts();
         if !plain_get(&parts, &body) {
             if !parts.headers.contains_key(http::header::ACCEPT_LANGUAGE) {
-                if let Ok(v) = http::HeaderValue::from_str(&sk_runtime::redjs::webapi::navigator::accept_language()) {
+                if let Ok(v) = http::HeaderValue::from_str(
+                    &sk_runtime::redjs::webapi::navigator::accept_language(),
+                ) {
                     parts.headers.insert(http::header::ACCEPT_LANGUAGE, v);
                 }
             }
@@ -137,7 +156,10 @@ impl HttpClient for RedjsHttpClient {
             .iter()
             .filter_map(|(k, v)| Some((k.as_str().to_string(), v.to_str().ok()?.to_string())))
             .collect();
-        let io_timeout = parts.extensions.get::<RequestTimeout>().map_or(IO_TIMEOUT, |t| t.0);
+        let io_timeout = parts
+            .extensions
+            .get::<RequestTimeout>()
+            .map_or(IO_TIMEOUT, |t| t.0);
         let request = net::Request {
             method: parts.method.as_str().to_string(),
             url: parts.uri.to_string(),

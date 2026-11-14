@@ -31,16 +31,26 @@ pub fn formats(n: &Native) -> Vec<Format> {
             name = format!("{} ({i})", f.name);
             i += 1;
         }
-        out.push(Format { name, exts: Some(f.exts.clone()) });
+        out.push(Format {
+            name,
+            exts: Some(f.exts.clone()),
+        });
     }
     if n.allow_all {
-        out.push(Format { name: ALL_FILES_MAC.to_string(), exts: None });
+        out.push(Format {
+            name: ALL_FILES_MAC.to_string(),
+            exts: None,
+        });
     }
     out
 }
 
 /// Where the panel opens. `force` is `startIn` given; `remembered` is the folder this picker's `id` was left in.
-pub fn start_folder(start: Option<PathBuf>, force: bool, remembered: Option<PathBuf>) -> Option<PathBuf> {
+pub fn start_folder(
+    start: Option<PathBuf>,
+    force: bool,
+    remembered: Option<PathBuf>,
+) -> Option<PathBuf> {
     if force && start.is_some() {
         return start;
     }
@@ -67,7 +77,13 @@ pub fn rgb_of(hex: &str) -> (f64, f64, f64) {
 
 /// sRGB components → `#rrggbb`, clamped (wide-gamut pickers can fall outside 0..=1).
 pub fn hex_of(r: f64, g: f64, b: f64) -> String {
-    let c = |v: f64| if v.is_nan() { 0 } else { (v.clamp(0.0, 1.0) * 255.0).round() as u8 };
+    let c = |v: f64| {
+        if v.is_nan() {
+            0
+        } else {
+            (v.clamp(0.0, 1.0) * 255.0).round() as u8
+        }
+    };
     format!("#{:02x}{:02x}{:02x}", c(r), c(g), c(b))
 }
 
@@ -94,7 +110,10 @@ mod tests {
             multiple: false,
             filters: filters
                 .iter()
-                .map(|(n, e)| Filter { name: n.to_string(), exts: e.iter().map(|e| e.to_string()).collect() })
+                .map(|(n, e)| Filter {
+                    name: n.to_string(),
+                    exts: e.iter().map(|e| e.to_string()).collect(),
+                })
                 .collect(),
             allow_all,
             client: 0,
@@ -110,17 +129,43 @@ mod tests {
         let n = native(Kind::Open, &[("Image Files", &["png", "jpg"])], true);
         let f = formats(&n);
         assert_eq!(f.len(), 2);
-        assert_eq!(f[0], Format { name: "Image Files".into(), exts: Some(vec!["png".into(), "jpg".into()]) });
-        assert_eq!(f[1], Format { name: ALL_FILES_MAC.into(), exts: None });
+        assert_eq!(
+            f[0],
+            Format {
+                name: "Image Files".into(),
+                exts: Some(vec!["png".into(), "jpg".into()])
+            }
+        );
+        assert_eq!(
+            f[1],
+            Format {
+                name: ALL_FILES_MAC.into(),
+                exts: None
+            }
+        );
         let f = formats(&native(Kind::Save, &[("CSV", &["csv"])], false));
-        assert_eq!(f, vec![Format { name: "CSV".into(), exts: Some(vec!["csv".into()]) }]);
+        assert_eq!(
+            f,
+            vec![Format {
+                name: "CSV".into(),
+                exts: Some(vec!["csv".into()])
+            }]
+        );
         assert!(formats(&native(Kind::Open, &[], true)).is_empty());
         assert!(formats(&native(Kind::Folder, &[("Text", &["txt"])], true)).is_empty());
     }
 
     #[test]
     fn format_names_are_unique_for_the_popup() {
-        let n = native(Kind::Open, &[("Text", &["txt"]), ("Text", &["log"]), ("All Files", &["md"])], true);
+        let n = native(
+            Kind::Open,
+            &[
+                ("Text", &["txt"]),
+                ("Text", &["log"]),
+                ("All Files", &["md"]),
+            ],
+            true,
+        );
         let names: Vec<String> = formats(&n).into_iter().map(|f| f.name).collect();
         assert_eq!(names, ["Text", "Text (2)", "All Files (2)", "All Files"]);
     }
@@ -130,11 +175,17 @@ mod tests {
         let start = Some(PathBuf::from("/Users/me/Documents"));
         let remembered = Some(PathBuf::from("/Users/me/Projects"));
         assert_eq!(start_folder(start.clone(), true, remembered.clone()), start);
-        assert_eq!(start_folder(start.clone(), false, remembered.clone()), remembered);
+        assert_eq!(
+            start_folder(start.clone(), false, remembered.clone()),
+            remembered
+        );
         assert_eq!(start_folder(start.clone(), false, None), start);
         assert_eq!(start_folder(None, false, None), None);
         assert_eq!(start_folder(None, true, remembered.clone()), remembered);
-        assert_eq!(remembered_key(0xab), "VueNativeDialogFolder.000000000000000000000000000000ab");
+        assert_eq!(
+            remembered_key(0xab),
+            "VueNativeDialogFolder.000000000000000000000000000000ab"
+        );
     }
 
     #[test]
@@ -163,7 +214,13 @@ mod tests {
     #[test]
     fn known_folders_fall_back_to_the_home_folder_names() {
         let home = Path::new("/Users/me");
-        assert_eq!(home_folder(home, Known::Videos), Path::new("/Users/me/Movies"));
-        assert_eq!(home_folder(home, Known::Downloads), Path::new("/Users/me/Downloads"));
+        assert_eq!(
+            home_folder(home, Known::Videos),
+            Path::new("/Users/me/Movies")
+        );
+        assert_eq!(
+            home_folder(home, Known::Downloads),
+            Path::new("/Users/me/Downloads")
+        );
     }
 }

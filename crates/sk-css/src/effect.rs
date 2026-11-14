@@ -49,7 +49,10 @@ pub fn parse(value: &TokenList, diagnostics: &mut Vec<String>) -> Option<EffectS
 
     match significant.as_slice() {
         [] => {
-            advise(diagnostics, "`--shading` is empty — expected `none` or an effect function");
+            advise(
+                diagnostics,
+                "`--shading` is empty — expected `none` or an effect function",
+            );
             None
         }
         [TokenOrValue::Token(Token::Ident(ident))] if ident.eq_ignore_ascii_case("none") => {
@@ -138,7 +141,10 @@ fn build(
             Err(reason) => {
                 advise(
                     diagnostics,
-                    &format!("`--shading: {}(…)`: {reason} — expected {}", schema.name, schema.signature),
+                    &format!(
+                        "`--shading: {}(…)`: {reason} — expected {}",
+                        schema.name, schema.signature
+                    ),
                 );
                 return None;
             }
@@ -265,7 +271,10 @@ fn argument(group: &[&TokenOrValue]) -> Result<Arg, String> {
         return Err(if group.is_empty() {
             "empty argument".to_string()
         } else {
-            format!("an argument must be a single value, got {} tokens", group.len())
+            format!(
+                "an argument must be a single value, got {} tokens",
+                group.len()
+            )
         });
     };
     match token {
@@ -277,10 +286,9 @@ fn argument(group: &[&TokenOrValue]) -> Result<Arg, String> {
              are not computed in v1)"
                 .to_string(),
         ),
-        TokenOrValue::Length(length) => length
-            .to_px()
-            .map(Arg::Length)
-            .ok_or_else(|| "a length in a relative unit (em/rem/vw/… are not resolved in v1)".to_string()),
+        TokenOrValue::Length(length) => length.to_px().map(Arg::Length).ok_or_else(|| {
+            "a length in a relative unit (em/rem/vw/… are not resolved in v1)".to_string()
+        }),
         TokenOrValue::Var(_) | TokenOrValue::Env(_) => Err(
             "a var()/env() reference (custom property resolution is not implemented in v1)"
                 .to_string(),
@@ -290,7 +298,9 @@ fn argument(group: &[&TokenOrValue]) -> Result<Arg, String> {
         TokenOrValue::Token(Token::Dimension { value, unit, .. }) => {
             match unit.as_ref().to_ascii_lowercase().as_str() {
                 "px" => Ok(Arg::Length(*value)),
-                other => Err(format!("a length in `{other}` (only absolute units are resolved in v1)")),
+                other => Err(format!(
+                    "a length in `{other}` (only absolute units are resolved in v1)"
+                )),
             }
         }
         other => Err(format!("an unsupported value ({other:?})")),
@@ -325,7 +335,7 @@ mod tests {
     use super::*;
     use gpui::effect_id;
     use lightningcss::declaration::DeclarationBlock;
-    use lightningcss::properties::custom::{CustomPropertyName, CustomProperty};
+    use lightningcss::properties::custom::{CustomProperty, CustomPropertyName};
     use lightningcss::properties::Property;
     use lightningcss::stylesheet::ParserOptions;
 
@@ -349,7 +359,10 @@ mod tests {
 
     fn spec(body: &str) -> EffectSpec {
         let (spec, diagnostics) = shading(body);
-        assert!(diagnostics.is_empty(), "unexpected advisories: {diagnostics:?}");
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected advisories: {diagnostics:?}"
+        );
         spec.expect("parsed")
     }
 
@@ -505,7 +518,10 @@ mod tests {
         let (s, diagnostics) = shading("--shading: ripple(#ff0000)");
         assert!(s.is_none());
         assert!(diagnostics[0].contains("speed"), "{diagnostics:?}");
-        assert!(diagnostics[0].contains("ripple(<number:speed>"), "{diagnostics:?}");
+        assert!(
+            diagnostics[0].contains("ripple(<number:speed>"),
+            "{diagnostics:?}"
+        );
 
         let (clamped, diagnostics) = shading("--shading: ripple(99)");
         assert_eq!(clamped.unwrap().params[0], 8.0);
@@ -556,7 +572,10 @@ mod tests {
     fn a_second_effect_function_is_dropped_with_an_advisory() {
         let (s, diagnostics) = shading("--shading: frost(0.5) noise(0.2)");
         assert_eq!(s.unwrap().id, effect_id::FROST);
-        assert!(diagnostics[0].contains("only one effect function"), "{diagnostics:?}");
+        assert!(
+            diagnostics[0].contains("only one effect function"),
+            "{diagnostics:?}"
+        );
         assert!(diagnostics[0].contains("noise"), "{diagnostics:?}");
     }
 
@@ -579,11 +598,9 @@ mod tests {
         with_user_effects();
         let mut diagnostics = Vec::new();
         for _ in 0..3 {
-            let block = DeclarationBlock::parse_string(
-                "--shading: plasma(1)",
-                ParserOptions::default(),
-            )
-            .unwrap();
+            let block =
+                DeclarationBlock::parse_string("--shading: plasma(1)", ParserOptions::default())
+                    .unwrap();
             for property in block.declarations.iter() {
                 if let Property::Custom(CustomProperty { value, .. }) = property {
                     parse(value, &mut diagnostics);

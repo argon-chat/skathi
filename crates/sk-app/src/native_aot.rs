@@ -1,17 +1,17 @@
 //! Embedded native inspector. A selected image is trusted executable code.
 //! Its compiler, host table, preludes and embedded Vue bundle must all match.
-use crate::json::{self, Json};
 use crate::inspector::{engine_policy, EnginePolicy};
+use crate::json::{self, Json};
+use sk_runtime::{
+    redjs::{aot, api::Error},
+    JsRuntime,
+};
 use std::{
     cell::RefCell,
     ffi::OsStr,
     fs::File,
     io::Read,
     path::{Path, PathBuf},
-};
-use sk_runtime::{
-    redjs::{aot, api::Error},
-    JsRuntime,
 };
 
 mod cache;
@@ -142,7 +142,10 @@ fn image_resource(dll: &str) -> Result<&'static [u8], String> {
     };
     const RT_RCDATA: PCWSTR = PCWSTR(10 as _);
     let exe = std::env::current_exe().map_err(|e| format!("native inspector: {e}"))?;
-    let path = exe.parent().ok_or("native inspector: the executable has no folder")?.join(dll);
+    let path = exe
+        .parent()
+        .ok_or("native inspector: the executable has no folder")?
+        .join(dll);
     let missing = |what: &str| format!("{}: {what}", path.display());
     unsafe {
         let module = LoadLibraryExW(
@@ -256,7 +259,9 @@ pub(crate) fn boot(rt: &JsRuntime) -> Result<bool, String> {
     let ctx = rt.ctx();
     // JS sees the realm's globalThis proxy, not JSC's raw JSGlobalObject.
     // Preserve identity for host WeakMaps and window/document event routing.
-    let host = ctx.global_get("globalThis").map_err(|error| error.to_string())?;
+    let host = ctx
+        .global_get("globalThis")
+        .map_err(|error| error.to_string())?;
     ctx.global_set("__SK_AOT_HOST__", host)
         .map_err(|e| e.to_string())?;
     match ctx.run_aot_module(entry) {

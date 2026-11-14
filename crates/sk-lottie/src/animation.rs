@@ -61,13 +61,15 @@ impl Animation {
     pub fn render(&mut self, n: u32, width: u32, height: u32) -> Option<&[u8]> {
         let frame = self.meta.in_point + (n % self.frame_count) as f32;
         let intrinsic = (self.meta.width.max(1), self.meta.height.max(1));
-        self.renderer.render_straight(frame, intrinsic, width, height)
+        self.renderer
+            .render_straight(frame, intrinsic, width, height)
     }
 
     /// Draws absolute, fractional source `frame` filling `width × height`, as [`Self::render`].
     pub fn render_at(&mut self, frame: f32, width: u32, height: u32) -> Option<&[u8]> {
         let intrinsic = (self.meta.width.max(1), self.meta.height.max(1));
-        self.renderer.render_straight(frame, intrinsic, width, height)
+        self.renderer
+            .render_straight(frame, intrinsic, width, height)
     }
 
     /// An estimate of the bytes held, for the engine's budget: three times the document's JSON plus the raster buffer.

@@ -3,15 +3,9 @@
 //! last in the bubble phase, so a node that wants `Tab` can still win, and `Tab` works when nothing
 //! is focused yet.
 
-use gpui::{App, actions};
+use gpui::{actions, App};
 
-actions!(
-    sk_focus,
-    [
-        FocusNext,
-        FocusPrev,
-    ]
-);
+actions!(sk_focus, [FocusNext, FocusPrev,]);
 
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([

@@ -92,11 +92,7 @@ pub(crate) enum Rasteriser {
 impl Rasteriser {
     // `meta` is only read by the ThorVG arm; without the feature it is dead.
     #[cfg_attr(not(feature = "thorvg"), allow(unused_variables))]
-    pub fn load(
-        backend: Backend,
-        document: Value,
-        meta: &LottieMeta,
-    ) -> Result<Self, LottieError> {
+    pub fn load(backend: Backend, document: Value, meta: &LottieMeta) -> Result<Self, LottieError> {
         match backend {
             Backend::Rasterlottie => raster::Rasterlottie::load(document)
                 .map(|inner| Self::Rasterlottie(Box::new(inner))),
@@ -131,7 +127,13 @@ impl Rasteriser {
 
     /// Draws absolute source `frame` filling a `width × height` raster: straight-alpha BGRA, rows packed, borrowed until the next call.
     #[cfg_attr(not(feature = "thorvg"), allow(unused_variables))]
-    pub fn render_straight(&mut self, frame: f32, intrinsic: (u32, u32), width: u32, height: u32) -> Option<&[u8]> {
+    pub fn render_straight(
+        &mut self,
+        frame: f32,
+        intrinsic: (u32, u32),
+        width: u32,
+        height: u32,
+    ) -> Option<&[u8]> {
         match self {
             Self::Rasterlottie(inner) => inner.render_straight(frame, intrinsic, width, height),
             #[cfg(feature = "thorvg")]

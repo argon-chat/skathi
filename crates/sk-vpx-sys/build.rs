@@ -38,7 +38,9 @@ fn main() {
         None if native_x86 => "x86_64-msvc",
         None | Some("generic") => "generic",
         Some("x86_64-msvc") if native_x86 => "x86_64-msvc",
-        Some(other) => panic!("SK_VPX_CONFIG={other}: expected `generic`, or `x86_64-msvc` on an x86_64 MSVC target"),
+        Some(other) => panic!(
+            "SK_VPX_CONFIG={other}: expected `generic`, or `x86_64-msvc` on an x86_64 MSVC target"
+        ),
     };
     let x86 = config == "x86_64-msvc";
     if x86 {
@@ -46,8 +48,12 @@ fn main() {
     }
 
     let (common, x86_sources) = sources(&manifest.join("sources.txt"));
-    let prefix = (env::var("SK_VPX_PREFIX").as_deref() != Ok("0"))
-        .then(|| manifest.join("config").join("prefix").join(format!("{config}.h")));
+    let prefix = (env::var("SK_VPX_PREFIX").as_deref() != Ok("0")).then(|| {
+        manifest
+            .join("config")
+            .join("prefix")
+            .join(format!("{config}.h"))
+    });
 
     let base = |build: &mut cc::Build| {
         if let Some(header) = &prefix {

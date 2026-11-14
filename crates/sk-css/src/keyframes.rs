@@ -137,13 +137,8 @@ impl AnimationSpec {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Phase {
     Delayed,
-    Running {
-        iteration: f32,
-        progress: f32,
-    },
-    Finished {
-        progress: f32,
-    },
+    Running { iteration: f32, progress: f32 },
+    Finished { progress: f32 },
 }
 
 impl Keyframes {
@@ -155,7 +150,11 @@ impl Keyframes {
         self.segment_steps(&|step| declares(&step.style), progress)
     }
 
-    pub(crate) fn segment_steps<'a>(&'a self, declares: &dyn Fn(&Keyframe) -> bool, progress: f32) -> Option<Segment<'a>> {
+    pub(crate) fn segment_steps<'a>(
+        &'a self,
+        declares: &dyn Fn(&Keyframe) -> bool,
+        progress: f32,
+    ) -> Option<Segment<'a>> {
         let mut before: Option<&Keyframe> = None;
         let mut after: Option<&Keyframe> = None;
         for step in self.steps.iter().filter(|s| declares(s)) {

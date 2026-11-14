@@ -7,9 +7,7 @@
 use std::sync::{Arc, Mutex};
 
 use windows::core::implement;
-use windows::Win32::Media::MediaFoundation::{
-    IMFMediaEngineNotify, IMFMediaEngineNotify_Impl,
-};
+use windows::Win32::Media::MediaFoundation::{IMFMediaEngineNotify, IMFMediaEngineNotify_Impl};
 
 use crate::backend::MediaEvent;
 

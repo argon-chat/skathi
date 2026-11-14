@@ -39,8 +39,23 @@ impl<'a> Key<'a> {
             }
         }
         let (w, h) = crate::mapper::viewport_basis();
-        let bases = [crate::mapper::rem_basis().to_bits(), w.to_bits(), h.to_bits(), parent_font_size.to_bits(), crate::mapper::font_metric_generation()];
-        Key { generation, hash, rules, parent_vars, parent_color, parent_font, env, bases }
+        let bases = [
+            crate::mapper::rem_basis().to_bits(),
+            w.to_bits(),
+            h.to_bits(),
+            parent_font_size.to_bits(),
+            crate::mapper::font_metric_generation(),
+        ];
+        Key {
+            generation,
+            hash,
+            rules,
+            parent_vars,
+            parent_color,
+            parent_font,
+            env,
+            bases,
+        }
     }
 }
 
@@ -67,7 +82,8 @@ impl Entry {
             && self.env == *key.env
             && self.bases == key.bases
             && self.parent_font == *key.parent_font
-            && (Rc::ptr_eq(&self.parent_vars, key.parent_vars) || *self.parent_vars == **key.parent_vars)
+            && (Rc::ptr_eq(&self.parent_vars, key.parent_vars)
+                || *self.parent_vars == **key.parent_vars)
     }
 }
 
@@ -86,7 +102,13 @@ thread_local! {
 }
 
 pub(crate) fn lookup(key: &Key<'_>) -> Option<ComputedStates> {
-    RING.with(|ring| ring.borrow().entries.iter().find(|e| e.answers(key)).map(|e| e.states.clone()))
+    RING.with(|ring| {
+        ring.borrow()
+            .entries
+            .iter()
+            .find(|e| e.answers(key))
+            .map(|e| e.states.clone())
+    })
 }
 
 pub(crate) fn insert(key: Key<'_>, states: &ComputedStates) {
@@ -125,7 +147,10 @@ pub(crate) fn enabled() -> bool {
                     !(v.is_empty() || v == "0" || v == "false" || v == "off")
                 })
                 .unwrap_or(false);
-            ON.store(if off { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
+            ON.store(
+                if off { 1 } else { 2 },
+                std::sync::atomic::Ordering::Relaxed,
+            );
             !off
         }
     }

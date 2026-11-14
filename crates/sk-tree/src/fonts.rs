@@ -11,10 +11,7 @@ use gpui::App;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Src {
-    Url {
-        url: String,
-        format: Option<String>,
-    },
+    Url { url: String, format: Option<String> },
     Local(String),
     Bytes(Vec<u8>),
 }
@@ -184,7 +181,6 @@ struct Drawn {
 /// Registrations arriving this close together fold into one recompile.
 const SETTLE: Duration = Duration::from_millis(120);
 
-
 /// The stylesheet about to be compiled: its `@font-face` blocks become the CSS faces. A registered
 /// font stays registered (DirectWrite cannot remove one) but leaves `document.fonts`.
 pub(crate) fn note_sheet(css: &str) {
@@ -271,7 +267,6 @@ fn publish_waiting() -> bool {
         joined
     })
 }
-
 
 pub(crate) fn want_for_text(t: &crate::tree::Tree, parent: u32, text: &str) {
     if WAITING.with(|w| w.borrow().is_empty()) || text.trim().is_empty() {
@@ -837,7 +832,6 @@ fn split_families(list: &str) -> Vec<&str> {
     out
 }
 
-
 /// Once per frame (`crate::frame_tick`). `document.fonts.ready` resolves only on a quiet frame, or
 /// a `ready` read right after `mount()` would resolve before the first text asked for its fonts.
 pub(crate) fn tick(window: &mut gpui::Window, cx: &mut App) -> bool {
@@ -1017,9 +1011,12 @@ fn register_finished(cx: &mut App) {
                     sk_runtime::redjs::webapi::canvas2d::text::register_font(
                         id,
                         sk_runtime::redjs::webapi::canvas2d::text::FontRegistration {
-                            family: x.desc.family.clone(), data: bytes.clone(),
-                            weight: x.desc.weight.clone(), style: x.desc.style.clone(),
-                            stretch: x.desc.stretch.clone(), unicode_range: x.desc.unicode_range.clone(),
+                            family: x.desc.family.clone(),
+                            data: bytes.clone(),
+                            weight: x.desc.weight.clone(),
+                            style: x.desc.style.clone(),
+                            stretch: x.desc.stretch.clone(),
+                            unicode_range: x.desc.unicode_range.clone(),
                         },
                     );
                 }
@@ -1027,7 +1024,11 @@ fn register_finished(cx: &mut App) {
             let own = face_family(&x.desc.family, x.id);
             // Elsewhere a renamed face is found by no name the page uses (`Inter` would fall back to
             // the system font), so it keeps its declared family.
-            let renamed = if COMPOSES_FAMILIES { rename_family(&bytes, &own) } else { None };
+            let renamed = if COMPOSES_FAMILIES {
+                rename_family(&bytes, &own)
+            } else {
+                None
+            };
             let bytes = match renamed {
                 Some(renamed) => {
                     x.registered_as = Some(own);
@@ -1189,7 +1190,6 @@ fn deliver_events(window: &mut gpui::Window, cx: &mut App) {
     });
 }
 
-
 enum Fetch {
     Bytes(Vec<u8>),
     Path(PathBuf),
@@ -1319,7 +1319,6 @@ fn unpack(bytes: &[u8]) -> Result<Vec<u8>, String> {
     };
     unpacked.map_err(|e| format!("the WOFF container could not be unpacked: {e:?}"))
 }
-
 
 fn tables(sfnt: &[u8]) -> Option<Vec<([u8; 4], usize, usize)>> {
     if sfnt.starts_with(b"ttcf") || sfnt.len() < 12 {
@@ -1461,7 +1460,6 @@ fn checksum(data: &[u8]) -> u32 {
         sum.wrapping_add(u32::from_be_bytes(w))
     })
 }
-
 
 pub(crate) fn font_face_blocks(css: &str) -> Vec<&str> {
     let b = css.as_bytes();
@@ -2150,8 +2148,14 @@ mod tests {
 
     #[test]
     fn generated_dev_font_urls_share_the_explicit_file_map_with_media_and_fetch() {
-        let root = std::env::temp_dir().join(format!("sk-font-assets-{}-{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = std::env::temp_dir().join(format!(
+            "sk-font-assets-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let app = root.join("app");
         let external = root.join("shared");
         std::fs::create_dir_all(&app).unwrap();
@@ -2161,23 +2165,44 @@ mod tests {
         std::fs::write(&path, &data).unwrap();
         let key = "_vn/fs/1234/A%20 Font[wght].ttf".to_string();
         crate::img::set_asset_base(app.clone());
-        crate::img::set_dev_asset_files([(key.clone(), path.clone()),
-            ("../outside.ttf".to_string(), path.clone()),
-            ("_vn/fs/invalid/relative.ttf".to_string(), PathBuf::from("relative.ttf"))].into_iter().collect());
+        crate::img::set_dev_asset_files(
+            [
+                (key.clone(), path.clone()),
+                ("../outside.ttf".to_string(), path.clone()),
+                (
+                    "_vn/fs/invalid/relative.ttf".to_string(),
+                    PathBuf::from("relative.ttf"),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
         let url = "/_vn/fs/1234/A%2520%20Font%5Bwght%5D.ttf?v=2#face";
-        match plan(&[Src::Url { url: url.into(), format: Some("truetype".into()) }]).unwrap() {
+        match plan(&[Src::Url {
+            url: url.into(),
+            format: Some("truetype".into()),
+        }])
+        .unwrap()
+        {
             Fetch::Path(got) => assert_eq!(got, path),
             _ => panic!("a dev font must stream from its explicitly mapped file"),
         }
         assert_eq!(crate::img::read_bytes("font", url).unwrap(), data);
         assert_eq!(crate::img::resolve_path("img", url).unwrap(), path);
-        assert!(matches!(crate::img::resolve_media("video", url), Ok(sk_video::MediaSource::Path(got)) if got == path));
-        let fetched_path = std::thread::spawn(move || crate::dev_asset_file(url)).join().unwrap();
+        assert!(
+            matches!(crate::img::resolve_media("video", url), Ok(sk_video::MediaSource::Path(got)) if got == path)
+        );
+        let fetched_path = std::thread::spawn(move || crate::dev_asset_file(url))
+            .join()
+            .unwrap();
         assert_eq!(fetched_path, Some(path));
         assert!(crate::dev_asset_file("../outside.ttf").is_none());
         assert!(crate::dev_asset_file("/_vn/fs/invalid/relative.ttf").is_none());
         assert!(crate::dev_asset_file("/_vn/fs/missing/font.ttf").is_none());
-        assert_eq!(crate::img::resolve_path("font", "/assets/local.ttf").unwrap(), app.join("assets").join("local.ttf"));
+        assert_eq!(
+            crate::img::resolve_path("font", "/assets/local.ttf").unwrap(),
+            app.join("assets").join("local.ttf")
+        );
         crate::img::set_dev_asset_files(Default::default());
         std::fs::remove_dir_all(root).unwrap();
     }

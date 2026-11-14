@@ -178,10 +178,12 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
         return true;
     }
     let tag = t.name(node.tag);
-    if (tag == "svg" && !crate::svg::can_replay(t, id)) || matches!(
-        tag,
-        "input" | "textarea" | "img" | "video" | "canvas" | "iframe"
-    ) {
+    if (tag == "svg" && !crate::svg::can_replay(t, id))
+        || matches!(
+            tag,
+            "input" | "textarea" | "img" | "video" | "canvas" | "iframe"
+        )
+    {
         return true;
     }
     let Some(cs) = &node.computed else {
@@ -189,7 +191,9 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     };
     // A referenced definition can change outside this subtree, so its matrix must be resolved
     // afresh; descendants still reuse the matrix-aware cache.
-    if cs.extras.filter_url.is_some() { return true; }
+    if cs.extras.filter_url.is_some() {
+        return true;
+    }
     // The wheel registry is rebuilt from the paint walk, which a replay skips: the span is recorded
     // and re-registered in place ([`Boundary`]).
     if refuse_scroll_containers()
@@ -198,9 +202,7 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     {
         return true;
     }
-    if cs.base.position == Some(gpui::Position::Absolute)
-        || cs.extras.may_defer()
-    {
+    if cs.base.position == Some(gpui::Position::Absolute) || cs.extras.may_defer() {
         return true;
     }
     // `position: relative` with an inset SHIFTS the box: the wrapper would have to carry the shift
@@ -246,7 +248,9 @@ fn margin_leaks(t: &Tree, node: &Node) -> bool {
     if !block_flow(cs) || parent.is_some_and(|p| !block_flow(p)) {
         return false;
     }
-    [false, true].into_iter().any(|bottom| edge_leaks(t, node, bottom))
+    [false, true]
+        .into_iter()
+        .any(|bottom| edge_leaks(t, node, bottom))
 }
 
 fn edge_leaks(t: &Tree, node: &Node, bottom: bool) -> bool {
@@ -281,7 +285,11 @@ fn edge_leaks(t: &Tree, node: &Node, bottom: bool) -> bool {
         let Some(cs) = &child.computed else {
             return false;
         };
-        let margin = if bottom { &cs.base.margin.bottom } else { &cs.base.margin.top };
+        let margin = if bottom {
+            &cs.base.margin.bottom
+        } else {
+            &cs.base.margin.top
+        };
         if matches!(margin, Some(gpui::Length::Definite(m)) if !m.is_zero()) {
             return true;
         }
@@ -300,7 +308,10 @@ fn stats(t: &Tree, id: u32) -> Stats {
             return hit.1;
         }
     }
-    let mut out = Stats { nodes: 1, blocked: node_blocks(t, id, node) };
+    let mut out = Stats {
+        nodes: 1,
+        blocked: node_blocks(t, id, node),
+    };
     // SVG serializes its children into one leaf; counting shape nodes would offer a cache wrapper
     // for a single native element with a large XML tree.
     if node.kind != Kind::Element || t.name(node.tag) != "svg" {
@@ -398,10 +409,13 @@ pub(crate) fn boundary<V: 'static>(
         with_entry(id, |e| e.offered = false);
         return None;
     }
-    let rect = render::prev_rect_of(id).filter(|(_, _, width, height)| *width > 0.0 && *height > 0.0)?;
+    let rect =
+        render::prev_rect_of(id).filter(|(_, _, width, height)| *width > 0.0 && *height > 0.0)?;
     let size = (rect.2, rect.3);
 
-    let parent_rect = (node.parent != 0).then(|| render::prev_rect_of(node.parent)).flatten();
+    let parent_rect = (node.parent != 0)
+        .then(|| render::prev_rect_of(node.parent))
+        .flatten();
 
     let sub_rev = node.sub_rev;
     // `size` as on [`Entry::size`]; the rest: nothing inside changed, nothing threaded down changed,
@@ -441,12 +455,11 @@ pub(crate) fn boundary<V: 'static>(
             crate::perf::note_cache_offer(true);
             return None;
         }
-        let fresh =
-            e.sub_rev == sub_rev
-                && e.ctx == ctx
-                && e.parent_rect == parent_rect
-                && e.size == Some(size)
-                && e.rect == Some(rect);
+        let fresh = e.sub_rev == sub_rev
+            && e.ctx == ctx
+            && e.parent_rect == parent_rect
+            && e.size == Some(size)
+            && e.rect == Some(rect);
         if !fresh {
             e.sub_rev = sub_rev;
             e.ctx = ctx.clone();
@@ -479,8 +492,11 @@ pub(crate) fn boundary<V: 'static>(
     crate::perf::note_cache_offer(false);
     carry_bounds(id, win);
     Some(
-        Boundary { id, inner: entity.cached(wrapper_style(node, size)).into_any_element() }
-            .into_any_element(),
+        Boundary {
+            id,
+            inner: entity.cached(wrapper_style(node, size)).into_any_element(),
+        }
+        .into_any_element(),
     )
 }
 
@@ -541,9 +557,14 @@ impl Element for Boundary {
         with_entry(self.id, |entry| {
             if entry.rendered {
                 entry.controls = windows::peek(win, |state| {
-                    state.control_hitboxes.iter()
-                        .filter(|(id, _)| entry.ids.contains(id)).copied().collect()
-                }).unwrap_or_default();
+                    state
+                        .control_hitboxes
+                        .iter()
+                        .filter(|(id, _)| entry.ids.contains(id))
+                        .copied()
+                        .collect()
+                })
+                .unwrap_or_default();
             }
         });
         let span = sk_elements::scrollbar::chain_since(mark);
@@ -608,7 +629,11 @@ pub(crate) fn subtree_ids(t: &Tree, id: u32, out: &mut Vec<u32>) {
 pub(crate) fn mem_stats() -> (usize, usize, usize) {
     ENTRIES.with(|m| {
         let m = m.borrow();
-        (m.len(), m.values().filter(|e| e.entity.is_some()).count(), m.values().map(|e| e.ids.len()).sum())
+        (
+            m.len(),
+            m.values().filter(|e| e.entity.is_some()).count(),
+            m.values().map(|e| e.ids.len()).sum(),
+        )
     })
 }
 
@@ -630,19 +655,46 @@ mod tests {
     fn cached_registry_keeps_caption_regions_after_frame_reset_and_nested_restore() {
         let win = 81231;
         let id = 81232;
-        let controls = vec![(id, gpui::WindowControlArea::Drag), (id + 1, gpui::WindowControlArea::NoDrag)];
-        ENTRIES.with(|entries| entries.borrow_mut().insert(id, Entry {
-            entity: None, sub_rev: 0, ctx: Default::default(), parent_rect: None,
-            size: Some((200., 40.)), rect: Some((0., 0., 200., 40.)), offered: true, ids: vec![id, id + 1], controls: controls.clone(),
-            chain: Default::default(), rendered: false, misses: 0, cooldown: 0,
-        }));
+        let controls = vec![
+            (id, gpui::WindowControlArea::Drag),
+            (id + 1, gpui::WindowControlArea::NoDrag),
+        ];
+        ENTRIES.with(|entries| {
+            entries.borrow_mut().insert(
+                id,
+                Entry {
+                    entity: None,
+                    sub_rev: 0,
+                    ctx: Default::default(),
+                    parent_rect: None,
+                    size: Some((200., 40.)),
+                    rect: Some((0., 0., 200., 40.)),
+                    offered: true,
+                    ids: vec![id, id + 1],
+                    controls: controls.clone(),
+                    chain: Default::default(),
+                    rendered: false,
+                    misses: 0,
+                    cooldown: 0,
+                },
+            )
+        });
         for _ in 0..20 {
-            windows::of(win, |state| { state.control_hitboxes.clear(); state.any_drag_region = false; });
+            windows::of(win, |state| {
+                state.control_hitboxes.clear();
+                state.any_drag_region = false;
+            });
             carry_bounds(id, win);
             carry_bounds(id, win);
             windows::of(win, |state| {
-                assert_eq!(state.control_hitboxes, controls, "nested restoration must not duplicate caption areas");
-                assert!(state.any_drag_region, "a replayed caption is still a painted drag region");
+                assert_eq!(
+                    state.control_hitboxes, controls,
+                    "nested restoration must not duplicate caption areas"
+                );
+                assert!(
+                    state.any_drag_region,
+                    "a replayed caption is still a painted drag region"
+                );
             });
         }
         ENTRIES.with(|entries| entries.borrow_mut().remove(&id));
@@ -689,7 +741,10 @@ mod tests {
     #[test]
     fn a_box_a_childs_margin_collapses_through_is_not_a_boundary() {
         let (group, rows, last) = group_of_rows(".row { margin-bottom: 1px; height: 30px }");
-        assert!(leaks(group), "the last row's margin spaces the GROUP in the list");
+        assert!(
+            leaks(group),
+            "the last row's margin spaces the GROUP in the list"
+        );
         assert!(leaks(rows));
         assert!(!leaks(last), "a row's own margin is in its wrapper");
     }
@@ -703,11 +758,15 @@ mod tests {
             ".rows { height: 80px }",
             ".rows { display: flex; flex-direction: column }",
         ] {
-            let (group, rows, _) = group_of_rows(&format!(".row {{ margin-bottom: 1px; height: 30px }} {closed}"));
+            let (group, rows, _) = group_of_rows(&format!(
+                ".row {{ margin-bottom: 1px; height: 30px }} {closed}"
+            ));
             assert!(!leaks(group), "{closed}");
             assert!(!leaks(rows), "{closed}");
         }
-        let (group, _, _) = group_of_rows(".row { margin-bottom: 1px } .list { display: flex; flex-direction: column }");
+        let (group, _, _) = group_of_rows(
+            ".row { margin-bottom: 1px } .list { display: flex; flex-direction: column }",
+        );
         assert!(!leaks(group), "a flex item is its own formatting context");
         let (group, rows, _) = group_of_rows(".row { height: 30px }");
         assert!(!leaks(group) && !leaks(rows), "no margin, nothing to lose");
@@ -717,16 +776,20 @@ mod tests {
     fn a_top_margin_leaks_like_a_bottom_one() {
         let (group, rows, _) = group_of_rows(".row { margin-top: 4px }");
         assert!(leaks(group) && leaks(rows));
-        let (group, rows, _) = group_of_rows(".row { margin-top: 4px } .group { padding-top: 2px }");
+        let (group, rows, _) =
+            group_of_rows(".row { margin-top: 4px } .group { padding-top: 2px }");
         assert!(!leaks(group), "the group's padding stops it");
         assert!(leaks(rows));
     }
 
-
     fn mono_icon(t: &mut Tree, parent: u32) -> (u32, u32) {
         let svg_tag = t.intern("svg");
         let svg = t.create_element(svg_tag);
-        for (name, value) in [("viewBox", "0 0 24 24"), ("fill", "none"), ("stroke", "currentColor")] {
+        for (name, value) in [
+            ("viewBox", "0 0 24 24"),
+            ("fill", "none"),
+            ("stroke", "currentColor"),
+        ] {
             let key = t.intern(name);
             t.set_prop(svg, key, Some(value.into()));
         }
@@ -754,7 +817,10 @@ mod tests {
         });
         restyle_all();
         forget_shapes();
-        assert!(shape(svg).1, "transparent fragments must not hide dependencies from replay eligibility");
+        assert!(
+            shape(svg).1,
+            "transparent fragments must not hide dependencies from replay eligibility"
+        );
     }
 
     #[test]
@@ -780,7 +846,11 @@ mod tests {
         restyle_all();
         forget_shapes();
         assert_eq!(shape(svg), (1, false));
-        assert_eq!(shape(row), (5, false), "SVG shape nodes are not native layout nodes");
+        assert_eq!(
+            shape(row),
+            (5, false),
+            "SVG shape nodes are not native layout nodes"
+        );
     }
 
     #[test]
@@ -802,21 +872,34 @@ mod tests {
             t.set_prop(svg, stroke, Some("red".into()));
         });
         restyle_all();
-        assert!(shape(row).1, "late concrete paint must invalidate the memoized eligibility");
+        assert!(
+            shape(row).1,
+            "late concrete paint must invalidate the memoized eligibility"
+        );
         with_tree(|t| {
             let stroke = t.intern("stroke");
             t.set_prop(svg, stroke, Some("currentColor".into()));
             let href = t.intern("href");
-            t.set_prop(path, href, Some("https://example.invalid/icon.svg#shape".into()));
+            t.set_prop(
+                path,
+                href,
+                Some("https://example.invalid/icon.svg#shape".into()),
+            );
         });
         restyle_all();
-        assert!(shape(row).1, "an href blocks even when the classifier still says Mono");
+        assert!(
+            shape(row).1,
+            "an href blocks even when the classifier still says Mono"
+        );
         with_tree(|t| {
             let href = t.intern("href");
             t.set_prop(path, href, None);
         });
         restyle_all();
-        assert!(!shape(row).1, "removing the resource dependency restores eligibility");
+        assert!(
+            !shape(row).1,
+            "removing the resource dependency restores eligibility"
+        );
     }
 
     #[test]
@@ -834,23 +917,66 @@ mod tests {
         restyle_all();
         forget_shapes();
         assert!(!shape(row).1);
-        let before = read_tree(|t| (t.sub_rev(row), t.node(svg).unwrap().computed.as_ref().unwrap().base.text.color));
+        let before = read_tree(|t| {
+            (
+                t.sub_rev(row),
+                t.node(svg)
+                    .unwrap()
+                    .computed
+                    .as_ref()
+                    .unwrap()
+                    .base
+                    .text
+                    .color,
+            )
+        });
         set_stylesheet(".icon { color: blue }".into());
         with_tree(|t| t.mark_dirty());
         restyle_all();
-        let after = read_tree(|t| (t.sub_rev(row), t.node(svg).unwrap().computed.as_ref().unwrap().base.text.color));
-        assert_ne!(before.0, after.0, "a cached ancestor must rebuild its recorded tint");
+        let after = read_tree(|t| {
+            (
+                t.sub_rev(row),
+                t.node(svg)
+                    .unwrap()
+                    .computed
+                    .as_ref()
+                    .unwrap()
+                    .base
+                    .text
+                    .color,
+            )
+        });
+        assert_ne!(
+            before.0, after.0,
+            "a cached ancestor must rebuild its recorded tint"
+        );
         assert_ne!(before.1, after.1);
-        assert!(!shape(row).1, "currentColor tint changes do not require a colour raster");
+        assert!(
+            !shape(row).1,
+            "currentColor tint changes do not require a colour raster"
+        );
         set_stylesheet(".icon { color: blue } .icon path { stroke: red }".into());
         with_tree(|t| t.mark_dirty());
         restyle_all();
-        assert!(shape(row).1, "a descendant's computed concrete stroke invalidates cached Stats");
+        assert!(
+            shape(row).1,
+            "a descendant's computed concrete stroke invalidates cached Stats"
+        );
     }
 
     #[test]
     fn svg_resource_and_progress_forms_stay_excluded() {
-        for tag in ["use", "image", "text", "filter", "foreignObject", "animate", "animateTransform", "set", "svg"] {
+        for tag in [
+            "use",
+            "image",
+            "text",
+            "filter",
+            "foreignObject",
+            "animate",
+            "animateTransform",
+            "set",
+            "svg",
+        ] {
             set_stylesheet(String::new());
             let svg = with_tree(|t| {
                 let root = t.create_root();
@@ -864,7 +990,13 @@ mod tests {
             forget_shapes();
             assert!(shape(svg).1, "<{tag}> cannot enter static geometry replay");
         }
-        for (name, value) in [("xlink:href", "#local"), ("begin", "1s"), ("dur", "2s"), ("clip-path", "url(#external)"), ("stroke", "context-stroke")] {
+        for (name, value) in [
+            ("xlink:href", "#local"),
+            ("begin", "1s"),
+            ("dur", "2s"),
+            ("clip-path", "url(#external)"),
+            ("stroke", "context-stroke"),
+        ] {
             set_stylesheet(String::new());
             let svg = with_tree(|t| {
                 let root = t.create_root();
@@ -886,12 +1018,17 @@ mod tests {
         });
         restyle_all();
         forget_shapes();
-        assert!(shape(svg).1, "drop-shadow selects the colour raster branch even for a Mono document");
+        assert!(
+            shape(svg).1,
+            "drop-shadow selects the colour raster branch even for a Mono document"
+        );
     }
 
     #[test]
     fn svg_own_hover_and_transition_keep_the_normal_hot_exclusion() {
-        set_stylesheet(".icon { color: red; transition: color 100ms } .icon:hover { color: blue }".into());
+        set_stylesheet(
+            ".icon { color: red; transition: color 100ms } .icon:hover { color: blue }".into(),
+        );
         let svg = with_tree(|t| {
             let root = t.create_root();
             let (svg, _) = mono_icon(t, root);
@@ -905,17 +1042,32 @@ mod tests {
             assert!(cs.hover.is_some());
             assert!(!cs.transitions.is_empty());
         });
-        assert!(!shape(svg).1, "root states use native replayed listeners, not a raster clock");
+        assert!(
+            !shape(svg).1,
+            "root states use native replayed listeners, not a raster clock"
+        );
         let before_hover = std::time::Instant::now();
         crate::tree::note_hover(svg, true);
         let mut moving = HashSet::new();
         crate::tree::moving_paths(before_hover, &mut moving);
-        assert!(moving.contains(&svg), "the eligible root's colour transition must remain HOT");
+        assert!(
+            moving.contains(&svg),
+            "the eligible root's colour transition must remain HOT"
+        );
         let parent = read_tree(|t| t.node(svg).unwrap().parent);
-        assert!(moving.contains(&parent), "a boundary over the icon must also be HOT");
+        assert!(
+            moving.contains(&parent),
+            "a boundary over the icon must also be HOT"
+        );
         moving.clear();
-        crate::tree::moving_paths(std::time::Instant::now() + std::time::Duration::from_millis(200), &mut moving);
-        assert!(!moving.contains(&svg), "finished transitions may become cacheable again");
+        crate::tree::moving_paths(
+            std::time::Instant::now() + std::time::Duration::from_millis(200),
+            &mut moving,
+        );
+        assert!(
+            !moving.contains(&svg),
+            "finished transitions may become cacheable again"
+        );
         crate::tree::note_hover(svg, false);
     }
 
@@ -953,31 +1105,51 @@ mod tests {
         let border = inner.border_widths.clone();
         let alignment = inner.align_items;
         pin_inner_style(&mut inner, (520.0, 148.0));
-        assert_eq!(inner.size.width, Some(gpui::px(520.0).into()), "520px must not become 85% of 520px");
+        assert_eq!(
+            inner.size.width,
+            Some(gpui::px(520.0).into()),
+            "520px must not become 85% of 520px"
+        );
         assert_eq!(inner.size.height, Some(gpui::px(148.0).into()));
         assert_eq!(inner.max_size.width, Some(gpui::Length::Auto));
         assert_eq!(inner.max_size.height, Some(gpui::Length::Auto));
         assert_eq!(inner.min_size.width, Some(gpui::px(0.0).into()));
         assert_eq!(inner.min_size.height, Some(gpui::px(0.0).into()));
-        assert_eq!(inner.padding, padding, "padding remains inside the recorded border box");
+        assert_eq!(
+            inner.padding, padding,
+            "padding remains inside the recorded border box"
+        );
         assert_eq!(inner.border_widths, border);
-        assert_eq!(inner.align_items, alignment, "right-aligned children keep their alignment");
+        assert_eq!(
+            inner.align_items, alignment,
+            "right-aligned children keep their alignment"
+        );
         assert_eq!(inner.flex_direction, Some(gpui::FlexDirection::Column));
         assert_eq!(inner.flex_basis, Some(gpui::Length::Auto));
-        assert_eq!(inner.margin.left, Some(gpui::px(0.0).into()), "the cache wrapper alone owns the margin");
+        assert_eq!(
+            inner.margin.left,
+            Some(gpui::px(0.0).into()),
+            "the cache wrapper alone owns the margin"
+        );
         assert_eq!(inner.margin.top, Some(gpui::px(0.0).into()));
     }
 
     #[test]
     fn ordinary_nodes_keep_authored_percent_geometry() {
         let mut diagnostics = Vec::new();
-        let parsed = sk_css::parse_inline_style("max-width: 85%; margin-left: auto; padding: 8px", &mut diagnostics);
+        let parsed = sk_css::parse_inline_style(
+            "max-width: 85%; margin-left: auto; padding: 8px",
+            &mut diagnostics,
+        );
         let mut style = (*parsed.refinement.unwrap()).clone();
         let authored = style.clone();
         let previous = IN_RENDER.replace(1234);
         normalize_inner_root(5678, &mut style);
         IN_RENDER.set(previous);
-        assert_eq!(style, authored, "normalization is only for the current cached root");
+        assert_eq!(
+            style, authored,
+            "normalization is only for the current cached root"
+        );
     }
 
     #[test]
@@ -999,7 +1171,11 @@ mod tests {
         });
         restyle_all();
         forget_shapes();
-        assert_eq!(shape(outer), (4, false), "four nodes, and the scroll box does not block");
+        assert_eq!(
+            shape(outer),
+            (4, false),
+            "four nodes, and the scroll box does not block"
+        );
         assert!(!shape(plain).1, "nor does it block any ancestor of itself");
         assert!(!shape(box_).1, "nor itself");
     }
@@ -1042,6 +1218,9 @@ mod tests {
 
         with_tree(|t| t.set_class(inner, "floats"));
         restyle_all();
-        assert!(shape(wrap).1, "the memo was invalidated by the mutation, not by a timer");
+        assert!(
+            shape(wrap).1,
+            "the memo was invalidated by the mutation, not by a timer"
+        );
     }
 }

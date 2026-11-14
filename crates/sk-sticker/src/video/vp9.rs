@@ -21,7 +21,10 @@ impl Frames {
 /// The frames of `packet`: the ranges its superframe index names, or the whole packet when it has
 /// no index. `None` for an index whose sizes run past the packet.
 pub(crate) fn frames(packet: &[u8]) -> Option<Frames> {
-    let mut out = Frames { count: 1, ranges: [(0, 0); MAX_FRAMES] };
+    let mut out = Frames {
+        count: 1,
+        ranges: [(0, 0); MAX_FRAMES],
+    };
     out.ranges[0] = (0, packet.len());
     let Some(&marker) = packet.last() else {
         return Some(Frames { count: 0, ..out });
@@ -40,7 +43,10 @@ pub(crate) fn frames(packet: &[u8]) -> Option<Frames> {
     let mut at = 0usize;
     out.count = 0;
     for i in 0..count {
-        let size = index[i * mag..(i + 1) * mag].iter().rev().fold(0usize, |s, &b| (s << 8) | b as usize);
+        let size = index[i * mag..(i + 1) * mag]
+            .iter()
+            .rev()
+            .fold(0usize, |s, &b| (s << 8) | b as usize);
         if size > data_len - at {
             return None;
         }
@@ -67,7 +73,10 @@ pub(crate) struct FrameHeader {
 
 /// The header of one frame (not a superframe); `None` when it is not a VP9 frame header.
 pub(crate) fn frame_header(frame: &[u8]) -> Option<FrameHeader> {
-    let mut b = Bits { data: frame, pos: 0 };
+    let mut b = Bits {
+        data: frame,
+        pos: 0,
+    };
     if b.read(2)? != 2 {
         return None; // frame_marker
     }
@@ -77,7 +86,13 @@ pub(crate) fn frame_header(frame: &[u8]) -> Option<FrameHeader> {
     if profile == 3 && b.read(1)? != 0 {
         return None; // reserved_zero
     }
-    let mut header = FrameHeader { profile, shows: false, keyframe: false, size: None, color: None };
+    let mut header = FrameHeader {
+        profile,
+        shows: false,
+        keyframe: false,
+        size: None,
+        color: None,
+    };
     if b.read(1)? == 1 {
         header.shows = true;
         return Some(header);
@@ -221,14 +236,30 @@ pub(crate) mod tests {
         }
 
         fn bytes(&self) -> Vec<u8> {
-            self.bits.chunks(8).map(|c| c.iter().enumerate().fold(0u8, |b, (i, &on)| b | (on as u8) << (7 - i))).collect()
+            self.bits
+                .chunks(8)
+                .map(|c| {
+                    c.iter()
+                        .enumerate()
+                        .fold(0u8, |b, (i, &on)| b | (on as u8) << (7 - i))
+                })
+                .collect()
         }
     }
 
     #[test]
     fn a_keyframe_header_gives_its_profile_size_and_colour() {
         let h = frame_header(&keyframe(100, 60)).unwrap();
-        assert_eq!(h, FrameHeader { profile: 0, shows: true, keyframe: true, size: Some((100, 60)), color: Some((1, false)) });
+        assert_eq!(
+            h,
+            FrameHeader {
+                profile: 0,
+                shows: true,
+                keyframe: true,
+                size: Some((100, 60)),
+                color: Some((1, false))
+            }
+        );
         let mut bad = keyframe(100, 60);
         bad[1] ^= 0x10; // inside the sync code
         assert_eq!(frame_header(&bad), None);
@@ -257,7 +288,15 @@ pub(crate) mod tests {
         let f = frames(&packet).unwrap();
         assert_eq!(f.iter().collect::<Vec<_>>(), vec![(0, 3), (3, 3 + a.len())]);
         let info = packet_info(&packet).unwrap();
-        assert_eq!(info, PacketInfo { profile: 0, shows: true, keyframe: false, size: Some((16, 16)) });
+        assert_eq!(
+            info,
+            PacketInfo {
+                profile: 0,
+                shows: true,
+                keyframe: false,
+                size: Some((16, 16))
+            }
+        );
 
         // Sizes past the data: refused, as libvpx refuses them.
         let mut bad = packet.clone();

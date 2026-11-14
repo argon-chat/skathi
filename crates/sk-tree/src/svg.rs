@@ -78,39 +78,89 @@ pub(crate) fn can_replay(t: &Tree, id: u32) -> bool {
 fn replayable_geometry(t: &Tree, id: u32, root: bool, metadata: bool) -> bool {
     let Some(node) = t.node(id) else { return false };
     match node.kind {
-        Kind::Anchor => return !root && node.children.iter().all(|&child| replayable_geometry(t, child, false, metadata)),
+        Kind::Anchor => {
+            return !root
+                && node
+                    .children
+                    .iter()
+                    .all(|&child| replayable_geometry(t, child, false, metadata))
+        }
         Kind::Text => return !root && (metadata || node.text.trim().is_empty()),
         Kind::Element => {}
     }
     let tag = t.name(node.tag);
     let metadata = matches!(tag, "title" | "desc");
-    if (root && tag != "svg") || (!root && !matches!(
-        tag, "g" | "path" | "rect" | "circle" | "ellipse" | "line" | "polyline" | "polygon" | "title" | "desc"
-    )) {
+    if (root && tag != "svg")
+        || (!root
+            && !matches!(
+                tag,
+                "g" | "path"
+                    | "rect"
+                    | "circle"
+                    | "ellipse"
+                    | "line"
+                    | "polyline"
+                    | "polygon"
+                    | "title"
+                    | "desc"
+            ))
+    {
         return false;
     }
     if (!metadata && !node.text.trim().is_empty()) || t.is_group_anchor(id) {
         return false;
     }
     if let Some(cs) = &node.computed {
-        if cs.extras.drop_shadow.is_some() || cs.extras.filter_url.is_some() || !cs.animations.is_empty()
-            || cs.extras.background_urls.as_ref().is_some_and(|urls| !urls.is_empty())
-            || cs.extras.mask_images.is_some() {
+        if cs.extras.drop_shadow.is_some()
+            || cs.extras.filter_url.is_some()
+            || !cs.animations.is_empty()
+            || cs
+                .extras
+                .background_urls
+                .as_ref()
+                .is_some_and(|urls| !urls.is_empty())
+            || cs.extras.mask_images.is_some()
+        {
             return false;
         }
-        if !root && (cs.hover.is_some() || cs.active.is_some() || cs.focus.is_some()
-            || cs.focus_visible.is_some() || cs.focus_within.is_some()
-            || cs.group_hover.is_some() || cs.group_active.is_some()
-            || !cs.transitions.is_empty()) {
+        if !root
+            && (cs.hover.is_some()
+                || cs.active.is_some()
+                || cs.focus.is_some()
+                || cs.focus_visible.is_some()
+                || cs.focus_within.is_some()
+                || cs.group_hover.is_some()
+                || cs.group_active.is_some()
+                || !cs.transitions.is_empty())
+        {
             return false;
         }
     }
     for (key, value, _) in &node.props {
         let name = t.name(*key);
-        if matches_ascii(name, &["href", "xlink:href", "src", "xml:base", "externalResourcesRequired",
-            "begin", "end", "dur", "repeatCount", "repeatDur", "keyTimes", "keySplines",
-            "calcMode", "attributeName", "attributeType", "restart", "syncBehavior", "syncTolerance"])
-            || (name.eq_ignore_ascii_case("style") && !value.trim().is_empty())
+        if matches_ascii(
+            name,
+            &[
+                "href",
+                "xlink:href",
+                "src",
+                "xml:base",
+                "externalResourcesRequired",
+                "begin",
+                "end",
+                "dur",
+                "repeatCount",
+                "repeatDur",
+                "keyTimes",
+                "keySplines",
+                "calcMode",
+                "attributeName",
+                "attributeType",
+                "restart",
+                "syncBehavior",
+                "syncTolerance",
+            ],
+        ) || (name.eq_ignore_ascii_case("style") && !value.trim().is_empty())
             || replay_context_value(value)
         {
             return false;
@@ -121,7 +171,9 @@ fn replayable_geometry(t: &Tree, id: u32, root: bool, metadata: bool) -> bool {
             return false;
         }
     }
-    node.children.iter().all(|&child| replayable_geometry(t, child, false, metadata))
+    node.children
+        .iter()
+        .all(|&child| replayable_geometry(t, child, false, metadata))
 }
 
 fn matches_ascii(value: &str, names: &[&str]) -> bool {
@@ -129,9 +181,14 @@ fn matches_ascii(value: &str, names: &[&str]) -> bool {
 }
 
 fn replay_context_value(value: &str) -> bool {
-    ["url(", "context-fill", "context-stroke", "@import"].into_iter().any(|dependency| {
-        value.as_bytes().windows(dependency.len()).any(|part| part.eq_ignore_ascii_case(dependency.as_bytes()))
-    })
+    ["url(", "context-fill", "context-stroke", "@import"]
+        .into_iter()
+        .any(|dependency| {
+            value
+                .as_bytes()
+                .windows(dependency.len())
+                .any(|part| part.eq_ignore_ascii_case(dependency.as_bytes()))
+        })
 }
 
 fn build(t: &Tree, id: u32) -> SvgDoc {
@@ -151,9 +208,10 @@ fn build(t: &Tree, id: u32) -> SvgDoc {
     }
 }
 
-
 fn cascaded(n: &crate::tree::Node, root: bool) -> Vec<(&'static str, Cow<'static, str>)> {
-    let Some(cs) = &n.computed else { return Vec::new() };
+    let Some(cs) = &n.computed else {
+        return Vec::new();
+    };
     let x = &cs.extras;
     let mut out: Vec<(&'static str, Cow<'static, str>)> = Vec::new();
     if let Some(p) = x.fill {
@@ -195,7 +253,11 @@ fn hash_cascaded(n: &crate::tree::Node, root: bool, h: &mut impl Hasher) {
     x.stroke.hash(h);
     x.svg_presentation.hash(h);
     if root {
-        cs.base.overflow.x.map(|o| o == gpui::Overflow::Visible).hash(h);
+        cs.base
+            .overflow
+            .x
+            .map(|o| o == gpui::Overflow::Visible)
+            .hash(h);
     } else {
         cs.base.opacity.map(f32::to_bits).hash(h);
         (cs.base.display == Some(gpui::Display::None)).hash(h);
@@ -205,7 +267,6 @@ fn hash_cascaded(n: &crate::tree::Node, root: bool, h: &mut impl Hasher) {
 fn overridden(declared: &[(&'static str, Cow<'static, str>)], name: &str) -> bool {
     declared.iter().any(|(p, _)| name.eq_ignore_ascii_case(p))
 }
-
 
 #[derive(Clone, Debug, PartialEq)]
 enum Eff {
@@ -223,7 +284,10 @@ enum Spec {
 }
 
 fn normalized(v: &str) -> String {
-    v.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase()
+    v.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
 }
 
 fn paint_spec(v: &str) -> Spec {
@@ -249,7 +313,12 @@ struct Inherited {
 
 impl Inherited {
     fn root() -> Self {
-        Inherited { fill: Eff::Concrete("black".into()), stroke: Eff::None, color: None, painted: true }
+        Inherited {
+            fill: Eff::Concrete("black".into()),
+            stroke: Eff::None,
+            color: None,
+            painted: true,
+        }
     }
 }
 
@@ -288,7 +357,9 @@ impl Class {
         match (self.reason, self.paints.len()) {
             (Some(why), _) => Paint::Colour(why),
             (None, 0) => Paint::Mono,
-            (None, 1) => Paint::Colour("a concrete fill/stroke colour (SVG's default fill is black)"),
+            (None, 1) => {
+                Paint::Colour("a concrete fill/stroke colour (SVG's default fill is black)")
+            }
             (None, _) => Paint::Colour("more than one fill/stroke colour"),
         }
     }
@@ -299,7 +370,16 @@ const NO_VIEWBOX: &str = "no viewBox (its user units are the CSS pixels of its b
 fn is_shape(tag: &str) -> bool {
     matches!(
         tag,
-        "path" | "rect" | "circle" | "ellipse" | "line" | "polyline" | "polygon" | "text" | "tspan" | "textPath"
+        "path"
+            | "rect"
+            | "circle"
+            | "ellipse"
+            | "line"
+            | "polyline"
+            | "polygon"
+            | "text"
+            | "tspan"
+            | "textPath"
     )
 }
 
@@ -327,24 +407,27 @@ fn classify(
     let mut own_stroke = Spec::Unset;
     let mut own_color: Option<String> = None;
     let mut color_inherit = false;
-    let mut look = |name: &str, value: &str, own_fill: &mut Spec, own_stroke: &mut Spec, class: &mut Class| {
-        match name {
-            "fill" => *own_fill = paint_spec(value),
-            "stroke" => *own_stroke = paint_spec(value),
-            "color" => match normalized(value).as_str() {
-                "" | "inherit" | "currentcolor" => color_inherit = true,
-                c => {
-                    color_inherit = false;
-                    own_color = Some(c.to_string());
+    let mut look =
+        |name: &str, value: &str, own_fill: &mut Spec, own_stroke: &mut Spec, class: &mut Class| {
+            match name {
+                "fill" => *own_fill = paint_spec(value),
+                "stroke" => *own_stroke = paint_spec(value),
+                "color" => match normalized(value).as_str() {
+                    "" | "inherit" | "currentcolor" => color_inherit = true,
+                    c => {
+                        color_inherit = false;
+                        own_color = Some(c.to_string());
+                    }
+                },
+                "filter" if !matches!(normalized(value).as_str(), "" | "none") => {
+                    class.colour("a filter")
                 }
-            },
-            "filter" if !matches!(normalized(value).as_str(), "" | "none") => class.colour("a filter"),
-            "mix-blend-mode" if !matches!(normalized(value).as_str(), "" | "normal") => {
-                class.colour("a blend mode")
+                "mix-blend-mode" if !matches!(normalized(value).as_str(), "" | "normal") => {
+                    class.colour("a blend mode")
+                }
+                _ => {}
             }
-            _ => {}
-        }
-    };
+        };
     for (k, v, _) in &n.props {
         look(t.name(*k), v, &mut own_fill, &mut own_stroke, class);
     }
@@ -368,7 +451,11 @@ fn classify(
     let here = Inherited {
         fill: resolve(own_fill, &parent.fill),
         stroke: resolve(own_stroke, &parent.stroke),
-        color: if own_color.is_some() && !color_inherit { own_color } else { parent.color.clone() },
+        color: if own_color.is_some() && !color_inherit {
+            own_color
+        } else {
+            parent.color.clone()
+        },
         painted: parent.painted && !matches!(tag, "clipPath" | "mask"),
     };
     if let Some(why) = colour_element(tag) {
@@ -386,7 +473,6 @@ fn classify(
     }
     here
 }
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct RasterKey {
@@ -433,7 +519,10 @@ impl Shadow {
     }
 
     fn key(&self) -> ([u32; 3], [u8; 4]) {
-        ([self.dx.to_bits(), self.dy.to_bits(), self.sigma.to_bits()], self.color)
+        (
+            [self.dx.to_bits(), self.dy.to_bits(), self.sigma.to_bits()],
+            self.color,
+        )
     }
 }
 
@@ -447,7 +536,11 @@ const SHADOW_ID: &str = "__sk_drop_shadow";
 
 impl RasterKey {
     fn recolour_of(&self, other: &RasterKey) -> bool {
-        self.color != other.color && RasterKey { color: other.color, ..*self } == *other
+        self.color != other.color
+            && RasterKey {
+                color: other.color,
+                ..*self
+            } == *other
     }
 }
 
@@ -465,7 +558,9 @@ pub(crate) fn raster_key(
     let [l, t, r, b] = shadow.map_or([0.0; 4], Shadow::margins);
     let w = ((bw + l + r) * scale).round();
     let h = ((bh + t + b) * scale).round();
-    let color = doc.uses_current.then(|| rgba8(color.unwrap_or_else(gpui::black)));
+    let color = doc
+        .uses_current
+        .then(|| rgba8(color.unwrap_or_else(gpui::black)));
     Some(RasterKey {
         source: doc.source,
         width: w as u32,
@@ -488,7 +583,9 @@ pub(crate) fn raster_source(
 ) -> Vec<u8> {
     let inner = root_source(doc, css_w, css_h, color, shadow.map(|s| s.margins()));
     let Some(s) = shadow else { return inner };
-    let Ok(inner) = String::from_utf8(inner) else { return doc.bytes.clone() };
+    let Ok(inner) = String::from_utf8(inner) else {
+        return doc.bytes.clone();
+    };
     let [l, t, r, b] = s.margins();
     let (w, h) = (css_w + l + r, css_h + t + b);
     let [cr, cg, cb, ca] = s.color;
@@ -507,7 +604,13 @@ pub(crate) fn raster_source(
     .into_bytes()
 }
 
-fn root_source(doc: &SvgDoc, css_w: f32, css_h: f32, color: Option<[u8; 4]>, offset: Option<[f32; 4]>) -> Vec<u8> {
+fn root_source(
+    doc: &SvgDoc,
+    css_w: f32,
+    css_h: f32,
+    color: Option<[u8; 4]>,
+    offset: Option<[f32; 4]>,
+) -> Vec<u8> {
     let Ok(text) = std::str::from_utf8(&doc.bytes) else {
         return doc.bytes.clone();
     };
@@ -543,13 +646,20 @@ fn root_source(doc: &SvgDoc, css_w: f32, css_h: f32, color: Option<[u8; 4]>, off
     }
     out.push_str(&format!(" width=\"{css_w}\" height=\"{css_h}\""));
     if let (Some([r, g, b, a]), false) = (color, has_color) {
-        out.push_str(&format!(" color=\"rgba({r},{g},{b},{})\"", a as f32 / 255.0));
+        out.push_str(&format!(
+            " color=\"rgba({r},{g},{b},{})\"",
+            a as f32 / 255.0
+        ));
     }
     out.push_str(&text[end..]);
     out.into_bytes()
 }
 
-pub(crate) fn rasterize(renderer: &gpui::SvgRenderer, src: &[u8], key: &RasterKey) -> Option<Arc<RenderImage>> {
+pub(crate) fn rasterize(
+    renderer: &gpui::SvgRenderer,
+    src: &[u8],
+    key: &RasterKey,
+) -> Option<Arc<RenderImage>> {
     let parsed = renderer.parse_svg(src).ok()?;
     renderer
         .render_parsed(
@@ -592,7 +702,12 @@ pub(crate) fn mem_stats() -> (usize, usize, usize) {
     let docs = CACHE.with(|c| c.borrow().len());
     let (n, bytes) = RASTERS.with(|m| {
         let m = m.borrow();
-        (m.len(), m.values().map(|r| r.image.as_bytes(0).map_or(0, <[u8]>::len)).sum())
+        (
+            m.len(),
+            m.values()
+                .map(|r| r.image.as_bytes(0).map_or(0, <[u8]>::len))
+                .sum(),
+        )
     });
     (docs, n, bytes)
 }
@@ -607,13 +722,22 @@ fn paint_colour(
     cx: &mut App,
 ) {
     let shadow = shadow.map(|s| Shadow::of(s, color));
-    let Some(key) = raster_key(doc, bounds.size, window.scale_factor(), color, shadow.as_ref()) else {
+    let Some(key) = raster_key(
+        doc,
+        bounds.size,
+        window.scale_factor(),
+        color,
+        shadow.as_ref(),
+    ) else {
         return;
     };
     let [l, t, r, b] = shadow.as_ref().map_or([0.0; 4], Shadow::margins);
     let area = Bounds {
         origin: gpui::point(bounds.origin.x - gpui::px(l), bounds.origin.y - gpui::px(t)),
-        size: gpui::size(bounds.size.width + gpui::px(l + r), bounds.size.height + gpui::px(t + b)),
+        size: gpui::size(
+            bounds.size.width + gpui::px(l + r),
+            bounds.size.height + gpui::px(t + b),
+        ),
     };
     let now = Instant::now();
     let held = RASTERS.with(|m| m.borrow().get(&id).map(|r| (r.key, r.image.clone(), r.at)));
@@ -641,7 +765,15 @@ fn paint_colour(
             };
             let win = windows::key(window);
             let old = RASTERS.with(|m| {
-                m.borrow_mut().insert(id, NodeRaster { key, image: image.clone(), at: now, win })
+                m.borrow_mut().insert(
+                    id,
+                    NodeRaster {
+                        key,
+                        image: image.clone(),
+                        at: now,
+                        win,
+                    },
+                )
             });
             if let Some(old) = old {
                 windows::queue_drops(old.win, [old.image]);
@@ -662,7 +794,12 @@ pub(crate) struct SvgRaster {
 }
 
 pub(crate) fn raster(id: u32, doc: Rc<SvgDoc>, shadow: Option<ShadowSpec>) -> SvgRaster {
-    SvgRaster { interactivity: gpui::Interactivity::new(), id, doc, shadow }
+    SvgRaster {
+        interactivity: gpui::Interactivity::new(),
+        id,
+        doc,
+        shadow,
+    }
 }
 
 impl gpui::Element for SvgRaster {
@@ -684,9 +821,13 @@ impl gpui::Element for SvgRaster {
         window: &mut Window,
         cx: &mut App,
     ) -> (gpui::LayoutId, ()) {
-        let layout_id = self.interactivity.request_layout(global_id, inspector_id, window, cx, |style, window, cx| {
-            window.request_layout(style, None, cx)
-        });
+        let layout_id = self.interactivity.request_layout(
+            global_id,
+            inspector_id,
+            window,
+            cx,
+            |style, window, cx| window.request_layout(style, None, cx),
+        );
         (layout_id, ())
     }
 
@@ -699,8 +840,15 @@ impl gpui::Element for SvgRaster {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<gpui::Hitbox> {
-        self.interactivity
-            .prepaint(global_id, inspector_id, bounds, bounds.size, window, cx, |_, _, hitbox, _, _| hitbox)
+        self.interactivity.prepaint(
+            global_id,
+            inspector_id,
+            bounds,
+            bounds.size,
+            window,
+            cx,
+            |_, _, hitbox, _, _| hitbox,
+        )
     }
 
     fn paint(
@@ -714,10 +862,25 @@ impl gpui::Element for SvgRaster {
         cx: &mut App,
     ) {
         let (id, doc, shadow) = (self.id, self.doc.clone(), self.shadow);
-        self.interactivity
-            .paint(global_id, inspector_id, bounds, hitbox.as_ref(), window, cx, |style, window, cx| {
-                paint_colour(id, &doc, bounds, style.text.color, shadow.as_ref(), window, cx);
-            });
+        self.interactivity.paint(
+            global_id,
+            inspector_id,
+            bounds,
+            hitbox.as_ref(),
+            window,
+            cx,
+            |style, window, cx| {
+                paint_colour(
+                    id,
+                    &doc,
+                    bounds,
+                    style.text.color,
+                    shadow.as_ref(),
+                    window,
+                    cx,
+                );
+            },
+        );
     }
 }
 
@@ -732,7 +895,6 @@ impl gpui::InteractiveElement for SvgRaster {
         &mut self.interactivity
     }
 }
-
 
 fn hash_subtree(t: &Tree, id: u32) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -767,11 +929,17 @@ fn hash_node(t: &Tree, id: u32, root: bool, h: &mut impl Hasher) {
     }
 }
 
-
 /// SVG's namespace: usvg refuses a document without it, and the HTML parser supplies it for inline `<svg>`.
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
-fn write_element(t: &Tree, id: u32, root: bool, parent: &Inherited, class: &mut Class, out: &mut String) {
+fn write_element(
+    t: &Tree,
+    id: u32,
+    root: bool,
+    parent: &Inherited,
+    class: &mut Class,
+    out: &mut String,
+) {
     let Some(n) = t.node(id) else { return };
     match n.kind {
         Kind::Anchor => return,
@@ -811,7 +979,10 @@ fn write_element(t: &Tree, id: u32, root: bool, parent: &Inherited, class: &mut 
         write_attr("xmlns", SVG_NS, out);
     }
     // Inline `style` travels on its own channel (`__sk_set_style`), so it is rebuilt into the declaration body.
-    if n.style.iter().any(|(k, _)| !overridden(&declared, t.name(*k))) {
+    if n.style
+        .iter()
+        .any(|(k, _)| !overridden(&declared, t.name(*k)))
+    {
         let mut body = String::new();
         for (k, v) in &n.style {
             let name = t.name(*k);
@@ -903,7 +1074,12 @@ mod tests {
         t.node_mut(id).unwrap().computed = Some(cs);
     }
 
-    fn paints(t: &mut Tree, id: u32, fill: Option<sk_css::SvgPaint>, stroke: Option<sk_css::SvgPaint>) {
+    fn paints(
+        t: &mut Tree,
+        id: u32,
+        fill: Option<sk_css::SvgPaint>,
+        stroke: Option<sk_css::SvgPaint>,
+    ) {
         computed(
             t,
             id,
@@ -944,14 +1120,34 @@ mod tests {
     #[test]
     fn currentcolor_icons_are_mono() {
         let lucide = doc_of(|t| {
-            let s = el(t, "svg", &[NS, ("viewBox", "0 0 24 24"), ("fill", "none"), ("stroke", "currentColor")], 0);
+            let s = el(
+                t,
+                "svg",
+                &[
+                    NS,
+                    ("viewBox", "0 0 24 24"),
+                    ("fill", "none"),
+                    ("stroke", "currentColor"),
+                ],
+                0,
+            );
             el(t, "path", &[("d", "M20 6 9 17l-5-5")], s);
-            el(t, "line", &[("x1", "0"), ("y1", "0"), ("x2", "4"), ("y2", "4")], s);
+            el(
+                t,
+                "line",
+                &[("x1", "0"), ("y1", "0"), ("x2", "4"), ("y2", "4")],
+                s,
+            );
             s
         });
         assert_eq!(lucide.paint, Paint::Mono);
         let solid = doc_of(|t| {
-            let s = el(t, "svg", &[NS, ("viewBox", "0 0 24 24"), ("fill", "currentColor")], 0);
+            let s = el(
+                t,
+                "svg",
+                &[NS, ("viewBox", "0 0 24 24"), ("fill", "currentColor")],
+                0,
+            );
             el(t, "path", &[("d", "M0 0h4v4z")], s);
             s
         });
@@ -962,7 +1158,12 @@ mod tests {
     #[test]
     fn opacity_and_clipping_stay_mono_because_the_mask_carries_coverage() {
         let duotone = doc_of(|t| {
-            let s = el(t, "svg", &[NS, ("viewBox", "0 0 24 24"), ("fill", "currentColor")], 0);
+            let s = el(
+                t,
+                "svg",
+                &[NS, ("viewBox", "0 0 24 24"), ("fill", "currentColor")],
+                0,
+            );
             el(t, "path", &[("d", "M0 0h4v4z"), ("opacity", "0.2")], s);
             el(t, "path", &[("d", "M4 4h4v4z"), ("fill-opacity", "0.5")], s);
             let clip = el(t, "clipPath", &[("id", "c")], s);
@@ -976,7 +1177,12 @@ mod tests {
     fn what_needs_full_colour() {
         let reason = |f: &dyn Fn(&mut Tree, u32)| {
             doc_of(|t| {
-                let s = el(t, "svg", &[NS, ("viewBox", "0 0 24 24"), ("fill", "currentColor")], 0);
+                let s = el(
+                    t,
+                    "svg",
+                    &[NS, ("viewBox", "0 0 24 24"), ("fill", "currentColor")],
+                    0,
+                );
                 f(t, s);
                 s
             })
@@ -988,7 +1194,12 @@ mod tests {
             s
         });
         assert!(matches!(bare.paint, Paint::Colour(_)));
-        assert!(matches!(reason(&|t, s| { el(t, "rect", &[("fill", "#3b82f6")], s); }), Paint::Colour(_)));
+        assert!(matches!(
+            reason(&|t, s| {
+                el(t, "rect", &[("fill", "#3b82f6")], s);
+            }),
+            Paint::Colour(_)
+        ));
         assert_eq!(
             reason(&|t, s| {
                 el(t, "rect", &[("fill", "#f00")], s);
@@ -1004,9 +1215,24 @@ mod tests {
             }),
             Paint::Colour("a gradient or pattern")
         );
-        assert_eq!(reason(&|t, s| { el(t, "image", &[("href", "a.png")], s); }), Paint::Colour("an <image>"));
-        assert_eq!(reason(&|t, s| { el(t, "rect", &[("filter", "url(#f)")], s); }), Paint::Colour("a filter"));
-        assert_eq!(reason(&|t, s| { el(t, "rect", &[("mix-blend-mode", "multiply")], s); }), Paint::Colour("a blend mode"));
+        assert_eq!(
+            reason(&|t, s| {
+                el(t, "image", &[("href", "a.png")], s);
+            }),
+            Paint::Colour("an <image>")
+        );
+        assert_eq!(
+            reason(&|t, s| {
+                el(t, "rect", &[("filter", "url(#f)")], s);
+            }),
+            Paint::Colour("a filter")
+        );
+        assert_eq!(
+            reason(&|t, s| {
+                el(t, "rect", &[("mix-blend-mode", "multiply")], s);
+            }),
+            Paint::Colour("a blend mode")
+        );
         assert!(matches!(
             reason(&|t, s| {
                 let g = el(t, "g", &[("color", "red")], s);
@@ -1021,14 +1247,29 @@ mod tests {
         let rope = with_tree(|t| {
             let s = el(t, "svg", &[("class", "broadcast-connectors")], 0);
             el(t, "path", &[("d", "M3.5 106.5 V169.5 M3.5 169.5 h4")], s);
-            paints(t, s, Some(sk_css::SvgPaint::None), Some(sk_css::SvgPaint::Current));
+            paints(
+                t,
+                s,
+                Some(sk_css::SvgPaint::None),
+                Some(sk_css::SvgPaint::Current),
+            );
             build(t, s)
         });
         assert_eq!(rope.paint, Paint::Colour(NO_VIEWBOX));
-        let src = String::from_utf8(raster_source(&rope, 240.0, 372.0, Some([0, 0, 0, 255]), None)).unwrap();
+        let src = String::from_utf8(raster_source(
+            &rope,
+            240.0,
+            372.0,
+            Some([0, 0, 0, 255]),
+            None,
+        ))
+        .unwrap();
         assert!(src.contains(r#"width="240" height="372""#), "{src}");
         assert!(!src.contains("viewBox"), "{src}");
-        let faint: Vec<(&'static str, Rc<str>)> = vec![("stroke-opacity", "0.28".into()), ("stroke-width", "1".into())];
+        let faint: Vec<(&'static str, Rc<str>)> = vec![
+            ("stroke-opacity", "0.28".into()),
+            ("stroke-width", "1".into()),
+        ];
         let doc = with_tree(|t| {
             let s = el(t, "svg", &[("stroke-width", "2")], 0);
             el(t, "path", &[("d", "M3.5 106.5 V169.5")], s);
@@ -1044,9 +1285,22 @@ mod tests {
             serialize(t, s)
         });
         assert!(doc.contains(r#"stroke-opacity="0.28""#), "{doc}");
-        assert!(doc.contains(r#"stroke-width="1""#) && !doc.contains(r#"stroke-width="2""#), "{doc}");
+        assert!(
+            doc.contains(r#"stroke-width="1""#) && !doc.contains(r#"stroke-width="2""#),
+            "{doc}"
+        );
         let icon = doc_of(|t| {
-            let s = el(t, "svg", &[NS, ("viewBox", "0 0 24 24"), ("fill", "none"), ("stroke", "currentColor")], 0);
+            let s = el(
+                t,
+                "svg",
+                &[
+                    NS,
+                    ("viewBox", "0 0 24 24"),
+                    ("fill", "none"),
+                    ("stroke", "currentColor"),
+                ],
+                0,
+            );
             el(t, "path", &[("d", "M3 3h4")], s);
             s
         });
@@ -1068,7 +1322,12 @@ mod tests {
     #[test]
     fn a_paint_server_from_a_rule_is_drawn_in_currentcolor_and_said() {
         let doc = with_tree(|t| {
-            let s = el(t, "svg", &[NS, ("viewBox", "0 0 24 24"), ("fill", "#f00")], 0);
+            let s = el(
+                t,
+                "svg",
+                &[NS, ("viewBox", "0 0 24 24"), ("fill", "#f00")],
+                0,
+            );
             el(t, "path", &[("d", "M0 0h4v4z")], s);
             paints(t, s, Some(sk_css::SvgPaint::Server), None);
             build(t, s)
@@ -1097,7 +1356,12 @@ mod tests {
 
     #[test]
     fn a_concrete_paint_from_a_rule_is_drawn_as_computed() {
-        let faint = sk_css::SvgPaint::Color(gpui::Hsla::from(gpui::Rgba { r: 219.0 / 255.0, g: 232.0 / 255.0, b: 1.0, a: 0.17 }));
+        let faint = sk_css::SvgPaint::Color(gpui::Hsla::from(gpui::Rgba {
+            r: 219.0 / 255.0,
+            g: 232.0 / 255.0,
+            b: 1.0,
+            a: 0.17,
+        }));
         let doc = notch(faint);
         let src = String::from_utf8(doc.bytes.clone()).unwrap();
         assert!(src.contains(r#"fill="rgb(6,8,11)""#), "{src}");
@@ -1107,7 +1371,11 @@ mod tests {
         assert!(matches!(doc.paint, Paint::Colour(_)));
         let white = Some(gpui::Hsla::from(gpui::rgb(0xf4f4f6)));
         let image = render(&doc, (40.0, 20.0), 1.0, white);
-        assert!(close(pixel(&image, 20, 10), [6, 8, 11, 255]), "{:?}", pixel(&image, 20, 10));
+        assert!(
+            close(pixel(&image, 20, 10), [6, 8, 11, 255]),
+            "{:?}",
+            pixel(&image, 20, 10)
+        );
         let other = notch(colour(0x7c99f4));
         assert_ne!(doc.source, other.source);
     }
@@ -1117,9 +1385,29 @@ mod tests {
         let src = with_tree(|t| {
             let s = el(t, "svg", &[NS, ("viewBox", "0 0 30 10")], 0);
             let g = el(t, "g", &[("fill", "#00f")], s);
-            let a = el(t, "rect", &[("x", "0"), ("width", "10"), ("height", "10")], g);
-            let b = el(t, "rect", &[("x", "10"), ("width", "10"), ("height", "10"), ("fill", "#000")], g);
-            let c = el(t, "rect", &[("x", "20"), ("width", "10"), ("height", "10")], g);
+            let a = el(
+                t,
+                "rect",
+                &[("x", "0"), ("width", "10"), ("height", "10")],
+                g,
+            );
+            let b = el(
+                t,
+                "rect",
+                &[
+                    ("x", "10"),
+                    ("width", "10"),
+                    ("height", "10"),
+                    ("fill", "#000"),
+                ],
+                g,
+            );
+            let c = el(
+                t,
+                "rect",
+                &[("x", "20"), ("width", "10"), ("height", "10")],
+                g,
+            );
             paints(t, g, Some(colour(0xff0000)), None);
             paints(t, b, Some(colour(0x00ff00)), None);
             let fill = t.intern("fill");
@@ -1132,36 +1420,78 @@ mod tests {
         });
         assert!(src.contains(r##"<g fill="rgb(255,0,0)">"##), "{src}");
         assert!(src.contains(r#"opacity="0.5""#), "{src}");
-        assert!(src.contains(r#"x="10" width="10" height="10" fill="rgb(0,255,0)""#), "{src}");
+        assert!(
+            src.contains(r#"x="10" width="10" height="10" fill="rgb(0,255,0)""#),
+            "{src}"
+        );
         assert!(!src.contains("#000") && !src.contains("#00f"), "{src}");
-        assert!(src.contains(r#"fill="rgb(0,0,255)""#) && !src.contains("var("), "{src}");
+        assert!(
+            src.contains(r#"fill="rgb(0,0,255)""#) && !src.contains("var("),
+            "{src}"
+        );
         assert!(src.contains(r#"display="none""#), "{src}");
-        assert!(usvg::Tree::from_data(src.as_bytes(), &usvg::Options::default()).is_ok(), "{src}");
+        assert!(
+            usvg::Tree::from_data(src.as_bytes(), &usvg::Options::default()).is_ok(),
+            "{src}"
+        );
     }
 
     #[test]
     fn a_drop_shadow_follows_the_shape_and_grows_the_raster() {
         let doc = doc_of(|t| {
             let s = el(t, "svg", &[NS, ("viewBox", "0 0 20 20")], 0);
-            el(t, "rect", &[("width", "10"), ("height", "10"), ("fill", "#0000ff")], s);
+            el(
+                t,
+                "rect",
+                &[("width", "10"), ("height", "10"), ("fill", "#0000ff")],
+                s,
+            );
             s
         });
-        let shadow = Shadow { dx: 10.0, dy: 10.0, sigma: 0.0, color: [255, 0, 0, 255] };
+        let shadow = Shadow {
+            dx: 10.0,
+            dy: 10.0,
+            sigma: 0.0,
+            color: [255, 0, 0, 255],
+        };
         assert_eq!(shadow.margins(), [0.0, 0.0, 10.0, 10.0]);
-        let key = raster_key(&doc, gpui::size(gpui::px(20.0), gpui::px(20.0)), 1.0, None, Some(&shadow)).unwrap();
+        let key = raster_key(
+            &doc,
+            gpui::size(gpui::px(20.0), gpui::px(20.0)),
+            1.0,
+            None,
+            Some(&shadow),
+        )
+        .unwrap();
         assert_eq!((key.width, key.height), (30, 30));
         let src = raster_source(&doc, 20.0, 20.0, key.color, Some(&shadow));
-        let image = rasterize(&gpui::SvgRenderer::new(Arc::new(())), &src, &key).expect("resvg renders it");
+        let image =
+            rasterize(&gpui::SvgRenderer::new(Arc::new(())), &src, &key).expect("resvg renders it");
         assert_eq!(pixel(&image, 5, 5), [0, 0, 255, 255], "the shape");
         assert_eq!(pixel(&image, 15, 15), [255, 0, 0, 255], "its shadow");
         assert_eq!(pixel(&image, 15, 5)[3], 0, "beside the shape, no shadow");
-        assert_eq!(pixel(&image, 25, 25)[3], 0, "the box's shadow corner stays empty");
-        let soft = Shadow { dx: 0.0, dy: 18.0, sigma: 30.0, color: [0, 0, 0, 115] };
+        assert_eq!(
+            pixel(&image, 25, 25)[3],
+            0,
+            "the box's shadow corner stays empty"
+        );
+        let soft = Shadow {
+            dx: 0.0,
+            dy: 18.0,
+            sigma: 30.0,
+            color: [0, 0, 0, 115],
+        };
         assert_eq!(soft.margins(), [90.0, 72.0, 90.0, 108.0]);
     }
 
     fn sample_doc(uses_current: bool) -> SvgDoc {
-        SvgDoc { bytes: Vec::new(), source: 7, paint: Paint::Colour("t"), uses_current, css_paint_server: false }
+        SvgDoc {
+            bytes: Vec::new(),
+            source: 7,
+            paint: Paint::Colour("t"),
+            uses_current,
+            css_paint_server: false,
+        }
     }
 
     #[test]
@@ -1172,36 +1502,73 @@ mod tests {
         let doc = sample_doc(true);
         let a = raster_key(&doc, size, 1.25, blue, None).unwrap();
         assert_eq!((a.width, a.height, a.scale_milli), (30, 30, 1250));
-        assert!(close(a.color.unwrap(), [0x3b, 0x82, 0xf6, 255]), "{:?}", a.color);
+        assert!(
+            close(a.color.unwrap(), [0x3b, 0x82, 0xf6, 255]),
+            "{:?}",
+            a.color
+        );
         assert_eq!(raster_key(&doc, size, 1.25, blue, None), Some(a));
         let b = raster_key(&doc, size, 1.25, red, None).unwrap();
         assert!(a.recolour_of(&b));
-        let c = raster_key(&doc, gpui::size(gpui::px(48.0), gpui::px(24.0)), 1.25, red, None).unwrap();
+        let c = raster_key(
+            &doc,
+            gpui::size(gpui::px(48.0), gpui::px(24.0)),
+            1.25,
+            red,
+            None,
+        )
+        .unwrap();
         assert!(!a.recolour_of(&c) && a != c);
         let d = raster_key(&doc, size, 1.5, blue, None).unwrap();
         assert_eq!(d.width, 36);
         assert!(!a.recolour_of(&d) && a != d);
         let fixed = sample_doc(false);
-        assert_eq!(raster_key(&fixed, size, 1.0, blue, None), raster_key(&fixed, size, 1.0, red, None));
-        assert_eq!(raster_key(&doc, gpui::size(gpui::px(0.0), gpui::px(24.0)), 1.0, blue, None), None);
+        assert_eq!(
+            raster_key(&fixed, size, 1.0, blue, None),
+            raster_key(&fixed, size, 1.0, red, None)
+        );
+        assert_eq!(
+            raster_key(
+                &doc,
+                gpui::size(gpui::px(0.0), gpui::px(24.0)),
+                1.0,
+                blue,
+                None
+            ),
+            None
+        );
     }
 
     #[test]
     fn the_raster_source_takes_the_box_as_its_viewport_and_the_colour_as_currentcolor() {
         let doc = doc_of(|t| {
-            let s = el(t, "svg", &[NS, ("width", "24"), ("height", "24"), ("viewBox", "0 0 24 24"), ("fill", "currentColor")], 0);
+            let s = el(
+                t,
+                "svg",
+                &[
+                    NS,
+                    ("width", "24"),
+                    ("height", "24"),
+                    ("viewBox", "0 0 24 24"),
+                    ("fill", "currentColor"),
+                ],
+                0,
+            );
             el(t, "path", &[("d", "M0 0h4v4z")], s);
             s
         });
-        let src = String::from_utf8(raster_source(&doc, 48.0, 32.0, Some([1, 2, 3, 255]), None)).unwrap();
+        let src =
+            String::from_utf8(raster_source(&doc, 48.0, 32.0, Some([1, 2, 3, 255]), None)).unwrap();
         assert!(src.contains(r#"width="48" height="32""#), "{src}");
         assert!(!src.contains(r#"width="24""#), "{src}");
         assert!(src.contains(r#"color="rgba(1,2,3,1)""#), "{src}");
         assert!(src.ends_with("</svg>"), "{src}");
-        let tree = usvg::Tree::from_data(src.as_bytes(), &usvg::Options::default()).expect("usvg parses it");
+        let tree = usvg::Tree::from_data(src.as_bytes(), &usvg::Options::default())
+            .expect("usvg parses it");
         assert_eq!((tree.size().width(), tree.size().height()), (48.0, 32.0));
         let own = doc_of(|t| el(t, "svg", &[NS, ("color", "red")], 0));
-        let src = String::from_utf8(raster_source(&own, 10.0, 10.0, Some([1, 2, 3, 255]), None)).unwrap();
+        let src =
+            String::from_utf8(raster_source(&own, 10.0, 10.0, Some([1, 2, 3, 255]), None)).unwrap();
         assert!(!src.contains("rgba"), "{src}");
     }
 
@@ -1216,8 +1583,20 @@ mod tests {
         [b[i + 2], b[i + 1], b[i], b[i + 3]]
     }
 
-    fn render(doc: &SvgDoc, css: (f32, f32), scale: f32, color: Option<gpui::Hsla>) -> Arc<RenderImage> {
-        let key = raster_key(doc, gpui::size(gpui::px(css.0), gpui::px(css.1)), scale, color, None).unwrap();
+    fn render(
+        doc: &SvgDoc,
+        css: (f32, f32),
+        scale: f32,
+        color: Option<gpui::Hsla>,
+    ) -> Arc<RenderImage> {
+        let key = raster_key(
+            doc,
+            gpui::size(gpui::px(css.0), gpui::px(css.1)),
+            scale,
+            color,
+            None,
+        )
+        .unwrap();
         let src = raster_source(doc, css.0, css.1, key.color, None);
         let renderer = gpui::SvgRenderer::new(Arc::new(()));
         rasterize(&renderer, &src, &key).expect("resvg renders it")
@@ -1227,8 +1606,28 @@ mod tests {
     fn a_two_colour_svg_rasterises_with_both_colours_at_the_device_size() {
         let doc = doc_of(|t| {
             let s = el(t, "svg", &[NS, ("viewBox", "0 0 2 1")], 0);
-            el(t, "rect", &[("x", "0"), ("width", "1"), ("height", "1"), ("fill", "#ff0000")], s);
-            el(t, "rect", &[("x", "1"), ("width", "1"), ("height", "1"), ("fill", "#0000ff")], s);
+            el(
+                t,
+                "rect",
+                &[
+                    ("x", "0"),
+                    ("width", "1"),
+                    ("height", "1"),
+                    ("fill", "#ff0000"),
+                ],
+                s,
+            );
+            el(
+                t,
+                "rect",
+                &[
+                    ("x", "1"),
+                    ("width", "1"),
+                    ("height", "1"),
+                    ("fill", "#0000ff"),
+                ],
+                s,
+            );
             s
         });
         assert!(matches!(doc.paint, Paint::Colour(_)));
@@ -1242,30 +1641,87 @@ mod tests {
     fn currentcolor_in_a_colour_raster_is_the_elements_color() {
         let doc = doc_of(|t| {
             let s = el(t, "svg", &[NS, ("viewBox", "0 0 2 1")], 0);
-            el(t, "rect", &[("x", "0"), ("width", "1"), ("height", "1"), ("fill", "currentColor")], s);
-            el(t, "rect", &[("x", "1"), ("width", "1"), ("height", "1"), ("fill", "#ff0000")], s);
+            el(
+                t,
+                "rect",
+                &[
+                    ("x", "0"),
+                    ("width", "1"),
+                    ("height", "1"),
+                    ("fill", "currentColor"),
+                ],
+                s,
+            );
+            el(
+                t,
+                "rect",
+                &[
+                    ("x", "1"),
+                    ("width", "1"),
+                    ("height", "1"),
+                    ("fill", "#ff0000"),
+                ],
+                s,
+            );
             s
         });
         let green = Some(gpui::Hsla::from(gpui::rgb(0x00ff00)));
         let image = render(&doc, (20.0, 10.0), 1.0, green);
-        assert!(close(pixel(&image, 5, 5), [0, 255, 0, 255]), "{:?}", pixel(&image, 5, 5));
+        assert!(
+            close(pixel(&image, 5, 5), [0, 255, 0, 255]),
+            "{:?}",
+            pixel(&image, 5, 5)
+        );
         assert_eq!(pixel(&image, 15, 5), [255, 0, 0, 255]);
     }
 
     #[test]
     fn preserve_aspect_ratio_fits_the_viewbox_into_the_box() {
         let doc = doc_of(|t| {
-            let s = el(t, "svg", &[NS, ("viewBox", "0 0 10 10"), ("width", "10"), ("height", "10")], 0);
-            el(t, "rect", &[("width", "10"), ("height", "10"), ("fill", "#ff0000")], s);
+            let s = el(
+                t,
+                "svg",
+                &[
+                    NS,
+                    ("viewBox", "0 0 10 10"),
+                    ("width", "10"),
+                    ("height", "10"),
+                ],
+                0,
+            );
+            el(
+                t,
+                "rect",
+                &[("width", "10"), ("height", "10"), ("fill", "#ff0000")],
+                s,
+            );
             s
         });
         let image = render(&doc, (20.0, 10.0), 1.0, None);
-        assert_eq!(pixel(&image, 2, 5)[3], 0, "left of the centred square is empty");
+        assert_eq!(
+            pixel(&image, 2, 5)[3],
+            0,
+            "left of the centred square is empty"
+        );
         assert_eq!(pixel(&image, 10, 5), [255, 0, 0, 255]);
         assert_eq!(pixel(&image, 17, 5)[3], 0, "right of it too");
         let stretched = doc_of(|t| {
-            let s = el(t, "svg", &[NS, ("viewBox", "0 0 10 10"), ("preserveAspectRatio", "none")], 0);
-            el(t, "rect", &[("width", "10"), ("height", "10"), ("fill", "#ff0000")], s);
+            let s = el(
+                t,
+                "svg",
+                &[
+                    NS,
+                    ("viewBox", "0 0 10 10"),
+                    ("preserveAspectRatio", "none"),
+                ],
+                0,
+            );
+            el(
+                t,
+                "rect",
+                &[("width", "10"), ("height", "10"), ("fill", "#ff0000")],
+                s,
+            );
             s
         });
         let image = render(&stretched, (20.0, 10.0), 1.0, None);
@@ -1333,7 +1789,10 @@ mod tests {
         let (svg, _) = lucide_check();
         let a = with_tree(|t| document(t, svg));
         let b = with_tree(|t| document(t, svg));
-        assert!(Rc::ptr_eq(&a, &b), "an unchanged subtree must not re-serialize");
+        assert!(
+            Rc::ptr_eq(&a, &b),
+            "an unchanged subtree must not re-serialize"
+        );
         with_tree(|t| {
             let d = t.intern("d");
             let child = t.node(svg).unwrap().children[0];
@@ -1368,6 +1827,9 @@ mod tests {
             serialize(t, svg)
         });
         assert!(!doc.contains("2bad"), "{doc}");
-        assert!(usvg::Tree::from_data(doc.as_bytes(), &usvg::Options::default()).is_ok(), "{doc}");
+        assert!(
+            usvg::Tree::from_data(doc.as_bytes(), &usvg::Options::default()).is_ok(),
+            "{doc}"
+        );
     }
 }

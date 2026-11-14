@@ -83,16 +83,28 @@ fn transfer(h273: u64) -> Transfer {
     }
 }
 
-pub(crate) fn colorimetry(container: Option<&Colour>, cs: ColorSpace, full_range: bool, alpha: bool) -> Colorimetry {
+pub(crate) fn colorimetry(
+    container: Option<&Colour>,
+    cs: ColorSpace,
+    full_range: bool,
+    alpha: bool,
+) -> Colorimetry {
     if let Some(c) = container {
         if let (Some(m), Some(t), Some(p)) = (c.matrix, c.transfer, c.primaries) {
             if known_matrix(m) && known_transfer(t) && known_primaries(p) {
-                return Colorimetry { matrix: matrix(m), full_range: c.range == Some(2), primaries: primaries(p), transfer: transfer(t) };
+                return Colorimetry {
+                    matrix: matrix(m),
+                    full_range: c.range == Some(2),
+                    primaries: primaries(p),
+                    transfer: transfer(t),
+                };
             }
         }
     }
     let (matrix, primaries, transfer) = match cs {
-        ColorSpace::Bt601 | ColorSpace::Smpte170 => (Matrix::Bt601, Primaries::Smpte170, Transfer::Srgb),
+        ColorSpace::Bt601 | ColorSpace::Smpte170 => {
+            (Matrix::Bt601, Primaries::Smpte170, Transfer::Srgb)
+        }
         ColorSpace::Srgb => (Matrix::Bt601, Primaries::Bt709, Transfer::Srgb),
         ColorSpace::Smpte240 => (Matrix::Smpte240, Primaries::Smpte240, Transfer::Smpte240),
         ColorSpace::Bt709 => (Matrix::Bt709, Primaries::Bt709, Transfer::Srgb),
@@ -101,19 +113,44 @@ pub(crate) fn colorimetry(container: Option<&Colour>, cs: ColorSpace, full_range
             return Colorimetry::new(if alpha { Matrix::Bt601 } else { Matrix::Bt709 }, false);
         }
     };
-    Colorimetry { matrix, full_range, primaries, transfer }
+    Colorimetry {
+        matrix,
+        full_range,
+        primaries,
+        transfer,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn colour(matrix: Option<u64>, transfer: Option<u64>, primaries: Option<u64>, range: Option<u64>) -> Colour {
-        Colour { matrix, transfer, primaries, range }
+    fn colour(
+        matrix: Option<u64>,
+        transfer: Option<u64>,
+        primaries: Option<u64>,
+        range: Option<u64>,
+    ) -> Colour {
+        Colour {
+            matrix,
+            transfer,
+            primaries,
+            range,
+        }
     }
 
-    const fn c(matrix: Matrix, full_range: bool, primaries: Primaries, transfer: Transfer) -> Colorimetry {
-        Colorimetry { matrix, full_range, primaries, transfer }
+    const fn c(
+        matrix: Matrix,
+        full_range: bool,
+        primaries: Primaries,
+        transfer: Transfer,
+    ) -> Colorimetry {
+        Colorimetry {
+            matrix,
+            full_range,
+            primaries,
+            transfer,
+        }
     }
 
     const fn plain(matrix: Matrix, full_range: bool) -> Colorimetry {
@@ -124,24 +161,55 @@ mod tests {
     fn a_complete_container_colour_wins() {
         for alpha in [true, false] {
             let bt709 = colour(Some(1), Some(1), Some(1), None);
-            assert_eq!(colorimetry(Some(&bt709), ColorSpace::Bt601, true, alpha), plain(Matrix::Bt709, false), "no Range: studio");
+            assert_eq!(
+                colorimetry(Some(&bt709), ColorSpace::Bt601, true, alpha),
+                plain(Matrix::Bt709, false),
+                "no Range: studio"
+            );
             let emoji1 = colour(Some(6), Some(1), Some(6), Some(1));
             let smpte170 = c(Matrix::Bt601, false, Primaries::Smpte170, Transfer::Srgb);
-            assert_eq!(colorimetry(Some(&emoji1), ColorSpace::Smpte170, false, alpha), smpte170);
+            assert_eq!(
+                colorimetry(Some(&emoji1), ColorSpace::Smpte170, false, alpha),
+                smpte170
+            );
             let full = colour(Some(6), Some(13), Some(5), Some(2));
-            assert_eq!(colorimetry(Some(&full), ColorSpace::Unknown, false, alpha), c(Matrix::Bt601, true, Primaries::Bt470Bg, Transfer::Srgb));
+            assert_eq!(
+                colorimetry(Some(&full), ColorSpace::Unknown, false, alpha),
+                c(Matrix::Bt601, true, Primaries::Bt470Bg, Transfer::Srgb)
+            );
             let bt2020 = colour(Some(9), Some(14), Some(9), Some(1));
-            assert_eq!(colorimetry(Some(&bt2020), ColorSpace::Bt709, false, alpha), c(Matrix::Bt2020, false, Primaries::Bt2020, Transfer::Srgb));
+            assert_eq!(
+                colorimetry(Some(&bt2020), ColorSpace::Bt709, false, alpha),
+                c(Matrix::Bt2020, false, Primaries::Bt2020, Transfer::Srgb)
+            );
             let fcc = colour(Some(4), Some(4), Some(4), None);
-            assert_eq!(colorimetry(Some(&fcc), ColorSpace::Unknown, false, alpha), c(Matrix::Fcc, false, Primaries::Bt470M, Transfer::Gamma22));
+            assert_eq!(
+                colorimetry(Some(&fcc), ColorSpace::Unknown, false, alpha),
+                c(Matrix::Fcc, false, Primaries::Bt470M, Transfer::Gamma22)
+            );
             let bt240 = colour(Some(7), Some(7), Some(7), Some(3));
-            let want = c(Matrix::Smpte240, false, Primaries::Smpte240, Transfer::Smpte240);
-            assert_eq!(colorimetry(Some(&bt240), ColorSpace::Unknown, false, alpha), want, "Range 3: studio");
+            let want = c(
+                Matrix::Smpte240,
+                false,
+                Primaries::Smpte240,
+                Transfer::Smpte240,
+            );
+            assert_eq!(
+                colorimetry(Some(&bt240), ColorSpace::Unknown, false, alpha),
+                want,
+                "Range 3: studio"
+            );
             let p3 = colour(Some(1), Some(8), Some(12), None);
-            assert_eq!(colorimetry(Some(&p3), ColorSpace::Unknown, false, alpha), c(Matrix::Bt709, false, Primaries::P3, Transfer::Linear));
+            assert_eq!(
+                colorimetry(Some(&p3), ColorSpace::Unknown, false, alpha),
+                c(Matrix::Bt709, false, Primaries::P3, Transfer::Linear)
+            );
             // A transfer Chromium tone-maps (PQ) is drawn with sRGB's here.
             let pq = colour(Some(9), Some(16), Some(22), None);
-            assert_eq!(colorimetry(Some(&pq), ColorSpace::Unknown, false, alpha), c(Matrix::Bt2020, false, Primaries::Ebu3213, Transfer::Srgb));
+            assert_eq!(
+                colorimetry(Some(&pq), ColorSpace::Unknown, false, alpha),
+                c(Matrix::Bt2020, false, Primaries::Ebu3213, Transfer::Srgb)
+            );
         }
     }
 
@@ -149,20 +217,53 @@ mod tests {
     fn an_incomplete_or_unknown_container_colour_defers_to_the_bitstream() {
         for alpha in [true, false] {
             let range_only = colour(None, None, None, Some(1));
-            assert_eq!(colorimetry(Some(&range_only), ColorSpace::Bt709, false, alpha), plain(Matrix::Bt709, false));
+            assert_eq!(
+                colorimetry(Some(&range_only), ColorSpace::Bt709, false, alpha),
+                plain(Matrix::Bt709, false)
+            );
             let smpte170 = c(Matrix::Bt601, true, Primaries::Smpte170, Transfer::Srgb);
-            assert_eq!(colorimetry(Some(&range_only), ColorSpace::Smpte170, true, alpha), smpte170);
-            assert_eq!(colorimetry(None, ColorSpace::Bt601, true, alpha), smpte170, "BT.601 is SMPTE 170M");
-            assert_eq!(colorimetry(None, ColorSpace::Bt2020, false, alpha), c(Matrix::Bt2020, false, Primaries::Bt2020, Transfer::Srgb));
-            let smpte240 = c(Matrix::Smpte240, true, Primaries::Smpte240, Transfer::Smpte240);
-            assert_eq!(colorimetry(None, ColorSpace::Smpte240, true, alpha), smpte240);
-            assert_eq!(colorimetry(None, ColorSpace::Srgb, true, alpha), plain(Matrix::Bt601, true));
+            assert_eq!(
+                colorimetry(Some(&range_only), ColorSpace::Smpte170, true, alpha),
+                smpte170
+            );
+            assert_eq!(
+                colorimetry(None, ColorSpace::Bt601, true, alpha),
+                smpte170,
+                "BT.601 is SMPTE 170M"
+            );
+            assert_eq!(
+                colorimetry(None, ColorSpace::Bt2020, false, alpha),
+                c(Matrix::Bt2020, false, Primaries::Bt2020, Transfer::Srgb)
+            );
+            let smpte240 = c(
+                Matrix::Smpte240,
+                true,
+                Primaries::Smpte240,
+                Transfer::Smpte240,
+            );
+            assert_eq!(
+                colorimetry(None, ColorSpace::Smpte240, true, alpha),
+                smpte240
+            );
+            assert_eq!(
+                colorimetry(None, ColorSpace::Srgb, true, alpha),
+                plain(Matrix::Bt601, true)
+            );
             let unspecified = colour(Some(1), Some(2), Some(1), Some(2));
-            assert_eq!(colorimetry(Some(&unspecified), ColorSpace::Bt709, true, alpha), plain(Matrix::Bt709, true));
+            assert_eq!(
+                colorimetry(Some(&unspecified), ColorSpace::Bt709, true, alpha),
+                plain(Matrix::Bt709, true)
+            );
             let reserved = colour(Some(3), Some(1), Some(1), Some(2));
-            assert_eq!(colorimetry(Some(&reserved), ColorSpace::Bt601, false, alpha), c(Matrix::Bt601, false, Primaries::Smpte170, Transfer::Srgb));
+            assert_eq!(
+                colorimetry(Some(&reserved), ColorSpace::Bt601, false, alpha),
+                c(Matrix::Bt601, false, Primaries::Smpte170, Transfer::Srgb)
+            );
             let reserved = colour(Some(1), Some(1), Some(13), None);
-            assert_eq!(colorimetry(Some(&reserved), ColorSpace::Bt709, true, alpha), plain(Matrix::Bt709, true));
+            assert_eq!(
+                colorimetry(Some(&reserved), ColorSpace::Bt709, true, alpha),
+                plain(Matrix::Bt709, true)
+            );
         }
     }
 
@@ -170,9 +271,18 @@ mod tests {
     fn no_colour_space_is_studio_range_bt601_with_alpha_and_bt709_without() {
         let range_full = colour(None, None, None, Some(2));
         for (alpha, matrix) in [(true, Matrix::Bt601), (false, Matrix::Bt709)] {
-            assert_eq!(colorimetry(None, ColorSpace::Unknown, true, alpha), plain(matrix, false));
-            assert_eq!(colorimetry(None, ColorSpace::Reserved, true, alpha), plain(matrix, false));
-            assert_eq!(colorimetry(Some(&range_full), ColorSpace::Unknown, true, alpha), plain(matrix, false));
+            assert_eq!(
+                colorimetry(None, ColorSpace::Unknown, true, alpha),
+                plain(matrix, false)
+            );
+            assert_eq!(
+                colorimetry(None, ColorSpace::Reserved, true, alpha),
+                plain(matrix, false)
+            );
+            assert_eq!(
+                colorimetry(Some(&range_full), ColorSpace::Unknown, true, alpha),
+                plain(matrix, false)
+            );
         }
     }
 }

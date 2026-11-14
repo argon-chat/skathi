@@ -12,10 +12,10 @@ use std::sync::OnceLock;
 
 use windows::core::GUID;
 use windows::Win32::Media::MediaFoundation::{
-    IMFActivate, MFTEnumEx, MFMediaType_Video, MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG_ALL,
-    MFT_REGISTER_TYPE_INFO, MFVideoFormat_AV1, MFVideoFormat_H264, MFVideoFormat_H265,
-    MFVideoFormat_HEVC, MFVideoFormat_MPEG2, MFVideoFormat_Theora, MFVideoFormat_VP80,
-    MFVideoFormat_VP90,
+    IMFActivate, MFMediaType_Video, MFTEnumEx, MFVideoFormat_AV1, MFVideoFormat_H264,
+    MFVideoFormat_H265, MFVideoFormat_HEVC, MFVideoFormat_MPEG2, MFVideoFormat_Theora,
+    MFVideoFormat_VP80, MFVideoFormat_VP90, MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG_ALL,
+    MFT_REGISTER_TYPE_INFO,
 };
 use windows::Win32::System::Com::CoTaskMemFree;
 
@@ -106,7 +106,10 @@ pub fn have_decoder(codec: Codec) -> bool {
 }
 
 fn enumerate(subtype: GUID) -> u32 {
-    let input = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: subtype };
+    let input = MFT_REGISTER_TYPE_INFO {
+        guidMajorType: MFMediaType_Video,
+        guidSubtype: subtype,
+    };
     let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
     let mut count = 0u32;
     let ok = unsafe {
@@ -176,7 +179,9 @@ pub fn can_play_type(mime_type: &str) -> CanPlay {
     }
     let mut named = 0;
     for part in parts {
-        let Some((key, value)) = part.split_once('=') else { continue };
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
         if key.trim() != "codecs" {
             continue;
         }
@@ -245,7 +250,10 @@ mod tests {
             // `mp4a` is an audio codec we do not judge, so the answer drops from probably to maybe.
             CanPlay::Maybe
         );
-        assert_eq!(can_play_type("video/mp4; codecs=\"avc1.640028\""), CanPlay::Probably);
+        assert_eq!(
+            can_play_type("video/mp4; codecs=\"avc1.640028\""),
+            CanPlay::Probably
+        );
         assert_eq!(can_play_type("video/mp4"), CanPlay::Maybe);
     }
 }

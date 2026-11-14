@@ -303,7 +303,10 @@ impl<'a> Payload<'a> {
 
     /// The header, TOC and names: an asset pack's identity is a hash of this.
     pub fn index(&self) -> &'a [u8] {
-        let end = self.data_off.saturating_sub(u64::from(self.skew)).min(self.bytes.len() as u64);
+        let end = self
+            .data_off
+            .saturating_sub(u64::from(self.skew))
+            .min(self.bytes.len() as u64);
         &self.bytes[..(end as usize).max(HEADER_SIZE.min(self.bytes.len()))]
     }
 

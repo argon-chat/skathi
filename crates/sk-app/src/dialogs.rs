@@ -38,7 +38,9 @@ pub fn ask_permission(q: sk_permissions::Question, reply: Box<dyn FnOnce(Option<
     #[cfg(target_os = "windows")]
     sk_desktop::dialog::ask_with(
         ask,
-        Box::new(move |q, owner, cancel| crate::consent_window::present(capability, q, owner, cancel)),
+        Box::new(move |q, owner, cancel| {
+            crate::consent_window::present(capability, q, owner, cancel)
+        }),
         reply,
     );
     #[cfg(target_os = "linux")]
@@ -71,12 +73,17 @@ pub fn may_close_now(handle: AnyWindowHandle, cx: &mut App) -> bool {
 
 fn remove_when_idle(handle: AnyWindowHandle, cx: &mut App) {
     let key = handle.window_id().as_u64();
-    sk_tree::log::record("dialog", format!("[dialog] window {key} closes once its file dialog has closed"));
+    sk_tree::log::record(
+        "dialog",
+        format!("[dialog] window {key} closes once its file dialog has closed"),
+    );
     // A gpui task rather than the frame pump: the pump is the primary
     // window's, and this may be a pop-out outliving it by those 100 ms.
     cx.spawn(async move |cx| {
         while !sk_desktop::dialog::is_idle(key) {
-            cx.background_executor().timer(Duration::from_millis(16)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(16))
+                .await;
         }
         let _ = handle.update(cx, |_, window, _| window.remove_window());
     })

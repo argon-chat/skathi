@@ -81,7 +81,11 @@ pub(crate) fn present_count() -> u64 {
 pub(crate) fn visible(id: u32, win: WinKey) -> bool {
     let Some(Some((rect, viewport))) = windows::peek(win, |w| {
         let env = w.env.as_ref()?;
-        let rect = w.transformed.get(&id).or_else(|| w.bounds.get(&id)).copied();
+        let rect = w
+            .transformed
+            .get(&id)
+            .or_else(|| w.bounds.get(&id))
+            .copied();
         Some((rect, (0.0, 0.0, env.viewport_width, env.viewport_height)))
     }) else {
         return true;
@@ -102,15 +106,22 @@ pub(crate) fn visible(id: u32, win: WinKey) -> bool {
             }
             cur = n.parent;
             let Some(p) = t.node(cur) else { break };
-            let Some(cs) = p.computed.as_ref() else { continue };
-            let clips = |o: Option<gpui::Overflow>| !matches!(o, None | Some(gpui::Overflow::Visible));
+            let Some(cs) = p.computed.as_ref() else {
+                continue;
+            };
+            let clips =
+                |o: Option<gpui::Overflow>| !matches!(o, None | Some(gpui::Overflow::Visible));
             let (cx, cy) = (clips(cs.base.overflow.x), clips(cs.base.overflow.y));
             if !cx && !cy {
                 continue;
             }
-            let Some(prect) = windows::peek(win, |w| w.transformed.get(&cur).or_else(|| w.bounds.get(&cur)).copied())
-                .flatten()
-            else {
+            let Some(prect) = windows::peek(win, |w| {
+                w.transformed
+                    .get(&cur)
+                    .or_else(|| w.bounds.get(&cur))
+                    .copied()
+            })
+            .flatten() else {
                 continue;
             };
             cut = cut.and_then(|c| clip_rect(c, prect, cx, cy));
@@ -148,7 +159,10 @@ impl LiveTile {
         let height = height.max(1);
         let buffer = image::RgbaImage::new(width, height);
         let image = RenderImage::new(vec![image::Frame::new(buffer)]).dynamic();
-        LiveTile { image: Arc::new(image), win }
+        LiveTile {
+            image: Arc::new(image),
+            win,
+        }
     }
 
     pub(crate) fn image(&self) -> Arc<RenderImage> {
@@ -166,22 +180,45 @@ impl LiveTile {
 
     /// Writes a CPU frame: BGRA, the tile's size, rows packed, STRAIGHT alpha (gpui's polychrome
     /// pipeline blends `SRC_ALPHA`, so a premultiplied raster comes out darker where translucent).
-    pub(crate) fn write_bgra(&mut self, window: &mut Window, bgra: Vec<u8>, visible: bool) -> Shown {
-        debug_assert_eq!(windows::key(window), self.win, "a tile is written with its own window");
+    pub(crate) fn write_bgra(
+        &mut self,
+        window: &mut Window,
+        bgra: Vec<u8>,
+        visible: bool,
+    ) -> Shown {
+        debug_assert_eq!(
+            windows::key(window),
+            self.win,
+            "a tile is written with its own window"
+        );
         let (w, h) = self.size();
         let Some(buffer) = image::RgbaImage::from_raw(w, h, bgra) else {
             return Shown::Draw;
         };
         let next = Arc::new(self.image.successor(vec![image::Frame::new(buffer)]));
-        let write = window.write_image_tile(&next, 0, TileSource::Bytes).unwrap_or(TileWrite::Placed);
+        let write = window
+            .write_image_tile(&next, 0, TileSource::Bytes)
+            .unwrap_or(TileWrite::Placed);
         self.image = next;
         shown(write, visible)
     }
 
     /// `None` when the renderer refused the texture: fall back to [`LiveTile::write_bgra`].
-    pub(crate) fn write_gpu(&mut self, window: &mut Window, texture: GpuTextureHandle, visible: bool) -> Option<Shown> {
-        debug_assert_eq!(windows::key(window), self.win, "a tile is written with its own window");
-        match window.write_image_tile(&self.image, 0, TileSource::Gpu(texture)).unwrap_or(TileWrite::Refused) {
+    pub(crate) fn write_gpu(
+        &mut self,
+        window: &mut Window,
+        texture: GpuTextureHandle,
+        visible: bool,
+    ) -> Option<Shown> {
+        debug_assert_eq!(
+            windows::key(window),
+            self.win,
+            "a tile is written with its own window"
+        );
+        match window
+            .write_image_tile(&self.image, 0, TileSource::Gpu(texture))
+            .unwrap_or(TileWrite::Refused)
+        {
             TileWrite::Refused => None,
             write => Some(shown(write, visible)),
         }
@@ -200,14 +237,16 @@ mod tests {
 
     fn on_screen(id: u32, win: WinKey) -> bool {
         windows::peek(win, |w| {
-            let Some(env) = w.env.as_ref() else { return true };
+            let Some(env) = w.env.as_ref() else {
+                return true;
+            };
             let (vw, vh) = (env.viewport_width, env.viewport_height);
-            let meets = |&(x, y, bw, bh): &windows::Rect| x + bw > 0.0 && y + bh > 0.0 && x < vw && y < vh;
+            let meets =
+                |&(x, y, bw, bh): &windows::Rect| x + bw > 0.0 && y + bh > 0.0 && x < vw && y < vh;
             w.bounds.get(&id).is_some_and(meets) || w.transformed.get(&id).is_some_and(meets)
         })
         .unwrap_or(true)
     }
-
 
     #[test]
     fn a_write_in_place_is_a_present_and_a_new_tile_a_draw() {
@@ -215,7 +254,11 @@ mod tests {
         assert_eq!(shown(TileWrite::Placed, true), Shown::Draw);
         assert_eq!(shown(TileWrite::Refused, true), Shown::Draw);
         for w in [TileWrite::InPlace, TileWrite::Placed, TileWrite::Refused] {
-            assert_eq!(shown(w, false), Shown::Nowhere, "nothing to show off screen");
+            assert_eq!(
+                shown(w, false),
+                Shown::Nowhere,
+                "nothing to show off screen"
+            );
         }
     }
 
@@ -237,7 +280,9 @@ mod tests {
     #[test]
     fn a_box_clipped_away_by_an_ancestor_is_not_visible() {
         use crate::tree;
-        tree::set_engine(sk_css::Engine::compile(".clip { overflow: hidden } .abs { position: absolute }"));
+        tree::set_engine(sk_css::Engine::compile(
+            ".clip { overflow: hidden } .abs { position: absolute }",
+        ));
         let (list, inside, outside, escaped) = tree::with_tree(|t| {
             let root = t.create_root();
             let div = t.intern("div");
@@ -255,7 +300,14 @@ mod tests {
         });
         crate::flush_changes();
         let win: WinKey = 0x51_7E;
-        windows::set_env(win, sk_css::Env { viewport_width: 400.0, viewport_height: 300.0, ..Default::default() });
+        windows::set_env(
+            win,
+            sk_css::Env {
+                viewport_width: 400.0,
+                viewport_height: 300.0,
+                ..Default::default()
+            },
+        );
         windows::of(win, |w| {
             w.bounds.insert(list, (0.0, 0.0, 100.0, 100.0));
             w.bounds.insert(inside, (0.0, 10.0, 100.0, 20.0));
@@ -265,7 +317,10 @@ mod tests {
         assert!(visible(inside, win));
         assert!(on_screen(outside, win), "inside the viewport");
         assert!(!visible(outside, win), "but cut away by the list's clip");
-        assert!(visible(escaped, win), "an absolute box may escape it: the safe side");
+        assert!(
+            visible(escaped, win),
+            "an absolute box may escape it: the safe side"
+        );
         assert!(!visible(0xDEAD, win), "never painted");
         windows::forget(win);
     }
@@ -275,7 +330,10 @@ mod tests {
         let tile = LiveTile::new(windows::UNBOUND, 4, 2);
         assert_eq!(tile.size(), (4, 2));
         let image = tile.image();
-        assert!(image.is_dynamic(), "the resampler must never swap in a copy");
+        assert!(
+            image.is_dynamic(),
+            "the resampler must never swap in a copy"
+        );
         let next = image.successor(vec![image::Frame::new(image::RgbaImage::new(4, 2))]);
         assert_eq!(next.id, image.id, "one id, one atlas tile");
         assert!(next.is_dynamic());

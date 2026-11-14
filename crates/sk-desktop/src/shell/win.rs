@@ -8,15 +8,16 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 
 use windows::core::{implement, Ref, HRESULT, HSTRING, PCWSTR};
-use windows::Win32::Foundation::{E_ABORT, ERROR_FILE_NOT_FOUND};
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, E_ABORT};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
 };
 use windows::Win32::UI::Shell::{
-    FileOperation, IFileOperation, IFileOperationProgressSink, IFileOperationProgressSink_Impl, IShellItem,
-    ILCreateFromPathW, ILFree, SHCreateItemFromParsingName, SHOpenFolderAndSelectItems, ShellExecuteExW,
-    FOFX_ADDUNDORECORD, FOFX_EARLYFAILURE, FOFX_RECYCLEONDELETE, FOF_ALLOWUNDO, FOF_NO_UI, SEE_MASK_FLAG_NO_UI,
-    SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, TSF_DELETE_RECYCLE_IF_POSSIBLE,
+    FileOperation, IFileOperation, IFileOperationProgressSink, IFileOperationProgressSink_Impl,
+    ILCreateFromPathW, ILFree, IShellItem, SHCreateItemFromParsingName, SHOpenFolderAndSelectItems,
+    ShellExecuteExW, FOFX_ADDUNDORECORD, FOFX_EARLYFAILURE, FOFX_RECYCLEONDELETE, FOF_ALLOWUNDO,
+    FOF_NO_UI, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW,
+    TSF_DELETE_RECYCLE_IF_POSSIBLE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, SW_SHOWNORMAL,
@@ -150,7 +151,8 @@ pub fn show_item(path: &Path) -> Result<(), Fail> {
         .code("ENOENT")
     };
     let Some(parent) = path.parent() else {
-        return shell_execute(&shell_path(path), None).map_err(|e| fail("showItemInFolder", &target, &e));
+        return shell_execute(&shell_path(path), None)
+            .map_err(|e| fail("showItemInFolder", &target, &e));
     };
     let dir = Pidl::of(parent).ok_or_else(not_found)?;
     let item = Pidl::of(path).ok_or_else(not_found)?;
@@ -161,7 +163,8 @@ pub fn show_item(path: &Path) -> Result<(), Fail> {
         Ok(()) => Ok(()),
         // On some systems this fails with "file not found" although the file exists; opening the folder still works.
         Err(e) if win32_of(e.code()) == Some(ERROR_FILE_NOT_FOUND.0) => {
-            shell_execute(&shell_path(parent), None).map_err(|e| fail("showItemInFolder", &target, &e))
+            shell_execute(&shell_path(parent), None)
+                .map_err(|e| fail("showItemInFolder", &target, &e))
         }
         Err(e) => Err(fail("showItemInFolder", &target, &e)),
     }
@@ -181,22 +184,62 @@ impl IFileOperationProgressSink_Impl for TrashSink_Impl {
     fn FinishOperations(&self, _hr: HRESULT) -> windows::core::Result<()> {
         Ok(())
     }
-    fn PreRenameItem(&self, _f: u32, _i: Ref<IShellItem>, _n: &PCWSTR) -> windows::core::Result<()> {
+    fn PreRenameItem(
+        &self,
+        _f: u32,
+        _i: Ref<IShellItem>,
+        _n: &PCWSTR,
+    ) -> windows::core::Result<()> {
         Ok(())
     }
-    fn PostRenameItem(&self, _f: u32, _i: Ref<IShellItem>, _n: &PCWSTR, _hr: HRESULT, _c: Ref<IShellItem>) -> windows::core::Result<()> {
+    fn PostRenameItem(
+        &self,
+        _f: u32,
+        _i: Ref<IShellItem>,
+        _n: &PCWSTR,
+        _hr: HRESULT,
+        _c: Ref<IShellItem>,
+    ) -> windows::core::Result<()> {
         Ok(())
     }
-    fn PreMoveItem(&self, _f: u32, _i: Ref<IShellItem>, _d: Ref<IShellItem>, _n: &PCWSTR) -> windows::core::Result<()> {
+    fn PreMoveItem(
+        &self,
+        _f: u32,
+        _i: Ref<IShellItem>,
+        _d: Ref<IShellItem>,
+        _n: &PCWSTR,
+    ) -> windows::core::Result<()> {
         Ok(())
     }
-    fn PostMoveItem(&self, _f: u32, _i: Ref<IShellItem>, _d: Ref<IShellItem>, _n: &PCWSTR, _hr: HRESULT, _c: Ref<IShellItem>) -> windows::core::Result<()> {
+    fn PostMoveItem(
+        &self,
+        _f: u32,
+        _i: Ref<IShellItem>,
+        _d: Ref<IShellItem>,
+        _n: &PCWSTR,
+        _hr: HRESULT,
+        _c: Ref<IShellItem>,
+    ) -> windows::core::Result<()> {
         Ok(())
     }
-    fn PreCopyItem(&self, _f: u32, _i: Ref<IShellItem>, _d: Ref<IShellItem>, _n: &PCWSTR) -> windows::core::Result<()> {
+    fn PreCopyItem(
+        &self,
+        _f: u32,
+        _i: Ref<IShellItem>,
+        _d: Ref<IShellItem>,
+        _n: &PCWSTR,
+    ) -> windows::core::Result<()> {
         Ok(())
     }
-    fn PostCopyItem(&self, _f: u32, _i: Ref<IShellItem>, _d: Ref<IShellItem>, _n: &PCWSTR, _hr: HRESULT, _c: Ref<IShellItem>) -> windows::core::Result<()> {
+    fn PostCopyItem(
+        &self,
+        _f: u32,
+        _i: Ref<IShellItem>,
+        _d: Ref<IShellItem>,
+        _n: &PCWSTR,
+        _hr: HRESULT,
+        _c: Ref<IShellItem>,
+    ) -> windows::core::Result<()> {
         Ok(())
     }
     fn PreDeleteItem(&self, dwflags: u32, _i: Ref<IShellItem>) -> windows::core::Result<()> {
@@ -206,16 +249,33 @@ impl IFileOperationProgressSink_Impl for TrashSink_Impl {
         }
         Ok(())
     }
-    fn PostDeleteItem(&self, _f: u32, _i: Ref<IShellItem>, hr: HRESULT, _c: Ref<IShellItem>) -> windows::core::Result<()> {
+    fn PostDeleteItem(
+        &self,
+        _f: u32,
+        _i: Ref<IShellItem>,
+        hr: HRESULT,
+        _c: Ref<IShellItem>,
+    ) -> windows::core::Result<()> {
         if hr.is_err() {
-            let _ = self.item_error.compare_exchange(0, hr.0, Ordering::SeqCst, Ordering::SeqCst);
+            let _ = self
+                .item_error
+                .compare_exchange(0, hr.0, Ordering::SeqCst, Ordering::SeqCst);
         }
         Ok(())
     }
     fn PreNewItem(&self, _f: u32, _d: Ref<IShellItem>, _n: &PCWSTR) -> windows::core::Result<()> {
         Ok(())
     }
-    fn PostNewItem(&self, _f: u32, _d: Ref<IShellItem>, _n: &PCWSTR, _t: &PCWSTR, _a: u32, _hr: HRESULT, _c: Ref<IShellItem>) -> windows::core::Result<()> {
+    fn PostNewItem(
+        &self,
+        _f: u32,
+        _d: Ref<IShellItem>,
+        _n: &PCWSTR,
+        _t: &PCWSTR,
+        _a: u32,
+        _hr: HRESULT,
+        _c: Ref<IShellItem>,
+    ) -> windows::core::Result<()> {
         Ok(())
     }
     fn UpdateProgress(&self, _total: u32, _so_far: u32) -> windows::core::Result<()> {
@@ -240,14 +300,24 @@ pub fn trash(path: &Path) -> Result<(), Fail> {
         unsafe {
             let op: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)?;
             op.SetOperationFlags(
-                FOF_NO_UI | FOF_ALLOWUNDO | FOFX_ADDUNDORECORD | FOFX_RECYCLEONDELETE | FOFX_EARLYFAILURE,
+                FOF_NO_UI
+                    | FOF_ALLOWUNDO
+                    | FOFX_ADDUNDORECORD
+                    | FOFX_RECYCLEONDELETE
+                    | FOFX_EARLYFAILURE,
             )?;
             let item: IShellItem = SHCreateItemFromParsingName(&shell_path(path), None)?;
-            let sink: IFileOperationProgressSink =
-                TrashSink { vetoed: vetoed.clone(), item_error: item_error.clone() }.into();
+            let sink: IFileOperationProgressSink = TrashSink {
+                vetoed: vetoed.clone(),
+                item_error: item_error.clone(),
+            }
+            .into();
             op.DeleteItem(&item, &sink)?;
             let performed = op.PerformOperations();
-            let aborted = op.GetAnyOperationsAborted().map(|b| b.as_bool()).unwrap_or(false);
+            let aborted = op
+                .GetAnyOperationsAborted()
+                .map(|b| b.as_bool())
+                .unwrap_or(false);
             performed?;
             Ok(aborted)
         }
@@ -264,11 +334,19 @@ pub fn trash(path: &Path) -> Result<(), Fail> {
     }
     let item_hr = item_error.load(Ordering::SeqCst);
     if item_hr != 0 {
-        return Err(fail("trashItem", &target, &windows::core::Error::from(HRESULT(item_hr))));
+        return Err(fail(
+            "trashItem",
+            &target,
+            &windows::core::Error::from(HRESULT(item_hr)),
+        ));
     }
     match result {
         Ok(false) => Ok(()),
-        Ok(true) => Err(Fail::new("AbortError", format!("trashItem: {target} — the operation was aborted")).code("ECANCELED")),
+        Ok(true) => Err(Fail::new(
+            "AbortError",
+            format!("trashItem: {target} — the operation was aborted"),
+        )
+        .code("ECANCELED")),
         Err(e) => Err(fail("trashItem", &target, &e)),
     }
 }
@@ -279,8 +357,14 @@ mod tests {
 
     #[test]
     fn long_path_prefixes_are_stripped_for_the_shell() {
-        assert_eq!(shell_path(Path::new(r"\\?\C:\a\b.txt")).to_string(), r"C:\a\b.txt");
-        assert_eq!(shell_path(Path::new(r"\\?\UNC\srv\share\b.txt")).to_string(), r"\\srv\share\b.txt");
+        assert_eq!(
+            shell_path(Path::new(r"\\?\C:\a\b.txt")).to_string(),
+            r"C:\a\b.txt"
+        );
+        assert_eq!(
+            shell_path(Path::new(r"\\?\UNC\srv\share\b.txt")).to_string(),
+            r"\\srv\share\b.txt"
+        );
         assert_eq!(shell_path(Path::new(r"C:\a")).to_string(), r"C:\a");
     }
 
@@ -289,7 +373,11 @@ mod tests {
         assert_eq!(win32_of(HRESULT(0x8007_0483_u32 as i32)), Some(1155));
         assert_eq!(win32_of(HRESULT(2)), Some(2));
         assert_eq!(win32_of(E_ABORT), None);
-        let f = fail("openPath", "x.xyz", &windows::core::Error::from(HRESULT(0x8007_0483_u32 as i32)));
+        let f = fail(
+            "openPath",
+            "x.xyz",
+            &windows::core::Error::from(HRESULT(0x8007_0483_u32 as i32)),
+        );
         assert_eq!((f.name, f.code), ("NotFoundError", Some("ENOASSOC")));
     }
 
@@ -311,10 +399,15 @@ mod tests {
         let mut purged = false;
         if let Ok(sids) = std::fs::read_dir(&bin) {
             for sid in sids.flatten() {
-                let Ok(items) = std::fs::read_dir(sid.path()) else { continue };
+                let Ok(items) = std::fs::read_dir(sid.path()) else {
+                    continue;
+                };
                 for it in items.flatten() {
                     let name = it.file_name().to_string_lossy().into_owned();
-                    if name.starts_with("$R") && std::fs::read_to_string(it.path()).ok().as_deref() == Some(marker.as_str()) {
+                    if name.starts_with("$R")
+                        && std::fs::read_to_string(it.path()).ok().as_deref()
+                            == Some(marker.as_str())
+                    {
                         let _ = std::fs::remove_file(it.path());
                         let _ = std::fs::remove_file(sid.path().join(name.replacen("$R", "$I", 1)));
                         purged = true;
@@ -322,6 +415,9 @@ mod tests {
                 }
             }
         }
-        assert!(purged, "the probe was found in (and purged from) the Recycle Bin");
+        assert!(
+            purged,
+            "the probe was found in (and purged from) the Recycle Bin"
+        );
     }
 }

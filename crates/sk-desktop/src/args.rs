@@ -54,7 +54,10 @@ fn is_host_flag(a: &str) -> bool {
 
 /// Parses `argv` (argv[0] included). `raw` is the unsplit command line, used only to recover a protocol URL.
 pub fn parse(argv: &[String], raw: Option<&str>) -> Args {
-    let mut out = Args { exe: argv.first().cloned().unwrap_or_default(), ..Args::default() };
+    let mut out = Args {
+        exe: argv.first().cloned().unwrap_or_default(),
+        ..Args::default()
+    };
     let mut seen: Vec<(String, Option<String>)> = Vec::new();
     let mut i = 1;
     let mut protocol_at: Option<usize> = None;
@@ -96,7 +99,9 @@ pub fn parse(argv: &[String], raw: Option<&str>) -> Args {
             .and_then(|r| url_from_raw(r, p))
             .or_else(|| url_from_argv(argv, p))
             .filter(|u| !u.is_empty());
-        out.argv = std::iter::once(out.exe.clone()).chain(out.url.clone()).collect();
+        out.argv = std::iter::once(out.exe.clone())
+            .chain(out.url.clone())
+            .collect();
         return out;
     }
 
@@ -145,7 +150,10 @@ fn url_from_argv(argv: &[String], marker: usize) -> Option<String> {
 
 fn url_from_raw(raw: &str, marker: usize) -> Option<String> {
     let tokens = split_command_line(raw);
-    if !tokens.get(marker).is_some_and(|t| is_protocol_launch(&t.text)) {
+    if !tokens
+        .get(marker)
+        .is_some_and(|t| is_protocol_launch(&t.text))
+    {
         return None;
     }
     let mut k = marker + 1;
@@ -200,7 +208,10 @@ pub fn split_command_line(raw: &str) -> Vec<Token> {
         }
     }
     if !raw.is_empty() {
-        out.push(Token { text: String::from_utf8_lossy(&text).into_owned(), start });
+        out.push(Token {
+            text: String::from_utf8_lossy(&text).into_owned(),
+            start,
+        });
     }
 
     loop {
@@ -248,7 +259,10 @@ pub fn split_command_line(raw: &str) -> Vec<Token> {
             text.push(c);
             i += 1;
         }
-        out.push(Token { text: String::from_utf8_lossy(&text).into_owned(), start });
+        out.push(Token {
+            text: String::from_utf8_lossy(&text).into_owned(),
+            start,
+        });
     }
     out
 }
@@ -289,13 +303,20 @@ static ARGS: OnceLock<Args> = OnceLock::new();
 pub fn set_embedded(exe: String, app_args: Vec<String>) -> bool {
     let mut argv = vec![exe.clone()];
     argv.extend(app_args.iter().cloned());
-    ARGS.set(Args { exe, app_args, argv, ..Args::default() }).is_ok()
+    ARGS.set(Args {
+        exe,
+        app_args,
+        argv,
+        ..Args::default()
+    })
+    .is_ok()
 }
 
 pub fn process() -> &'static Args {
     ARGS.get_or_init(|| {
-        let argv: Vec<String> =
-            std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
+        let argv: Vec<String> = std::env::args_os()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         parse(&argv, raw_command_line().as_deref())
     })
 }
@@ -335,7 +356,10 @@ mod tests {
     }
 
     fn both(raw: &str) -> Args {
-        let argv: Vec<String> = split_command_line(raw).into_iter().map(|t| t.text).collect();
+        let argv: Vec<String> = split_command_line(raw)
+            .into_iter()
+            .map(|t| t.text)
+            .collect();
         parse(&argv, Some(raw))
     }
 
@@ -351,7 +375,19 @@ mod tests {
 
     #[test]
     fn the_inspector_command_line_still_parses() {
-        let a = parse(&v(&["sk-app.exe", "--devtools", "--target", "C:\\slot", "--parent", "42", "--window", "7"]), None);
+        let a = parse(
+            &v(&[
+                "sk-app.exe",
+                "--devtools",
+                "--target",
+                "C:\\slot",
+                "--parent",
+                "42",
+                "--window",
+                "7",
+            ]),
+            None,
+        );
         assert!(a.host.devtools);
         assert_eq!(a.host.target.as_deref(), Some("C:\\slot"));
         assert_eq!(a.host.parent.as_deref(), Some("42"));
@@ -384,7 +420,10 @@ mod tests {
 
     #[test]
     fn a_value_flag_does_not_swallow_the_next_flag() {
-        let a = parse(&v(&["app.exe", "--devtools", "--target", "--parent", "9"]), None);
+        let a = parse(
+            &v(&["app.exe", "--devtools", "--target", "--parent", "9"]),
+            None,
+        );
         assert!(a.host.devtools);
         assert_eq!(a.host.target, None);
         assert_eq!(a.host.parent.as_deref(), Some("9"));
@@ -404,23 +443,41 @@ mod tests {
     #[test]
     fn host_info_and_unregister_are_leading_flags() {
         assert!(parse(&v(&["h.exe", "--sk-host-info"]), None).host.host_info);
-        assert!(!parse(&v(&["h.exe", "x", "--sk-host-info"]), None).host.host_info);
-        assert!(parse(&v(&["h.exe", "--sk-unregister-protocols"]), None).host.unregister_protocols);
+        assert!(
+            !parse(&v(&["h.exe", "x", "--sk-host-info"]), None)
+                .host
+                .host_info
+        );
+        assert!(
+            parse(&v(&["h.exe", "--sk-unregister-protocols"]), None)
+                .host
+                .unregister_protocols
+        );
     }
 
     #[test]
     fn a_protocol_launch_recovers_the_url_byte_exact() {
-        let a = both(r#""C:\Program Files\Hello\Hello.exe" --sk-protocol-launch -- "myapp://a?b="c d"""#);
+        let a = both(
+            r#""C:\Program Files\Hello\Hello.exe" --sk-protocol-launch -- "myapp://a?b="c d"""#,
+        );
         assert!(a.protocol_launch);
         assert_eq!(a.url.as_deref(), Some(r#"myapp://a?b="c d""#));
         assert!(a.app_args.is_empty());
-        assert_eq!(a.argv, v(&["C:\\Program Files\\Hello\\Hello.exe", r#"myapp://a?b="c d""#]));
+        assert_eq!(
+            a.argv,
+            v(&[
+                "C:\\Program Files\\Hello\\Hello.exe",
+                r#"myapp://a?b="c d""#
+            ])
+        );
     }
 
     #[test]
     fn the_legacy_protocol_flag_still_parses() {
         for flag in [PROTOCOL_LAUNCH, LEGACY_PROTOCOL_LAUNCH] {
-            let a = both(&format!(r#""C:\h.exe" --sk-dist "D:\s" {flag} -- "myapp://x?y=1""#));
+            let a = both(&format!(
+                r#""C:\h.exe" --sk-dist "D:\s" {flag} -- "myapp://x?y=1""#
+            ));
             assert!(a.protocol_launch, "{flag}");
             assert_eq!(a.url.as_deref(), Some("myapp://x?y=1"), "{flag}");
             assert_eq!(a.host.sk_dist.as_deref(), Some("D:\\s"), "{flag}");
@@ -447,7 +504,9 @@ mod tests {
 
     #[test]
     fn host_flags_in_front_of_the_marker_are_ignored_except_sk_dist() {
-        let a = both(r#""C:\h.exe" --devtools --sk-dist "D:\dev slot" --target x --sk-protocol-launch -- "myapp://y""#);
+        let a = both(
+            r#""C:\h.exe" --devtools --sk-dist "D:\dev slot" --target x --sk-protocol-launch -- "myapp://y""#,
+        );
         assert!(a.protocol_launch);
         assert!(!a.host.devtools);
         assert_eq!(a.host.target, None);
@@ -458,7 +517,10 @@ mod tests {
 
     #[test]
     fn without_the_raw_line_the_url_is_rejoined() {
-        let a = parse(&v(&["h.exe", "--sk-protocol-launch", "--", "myapp://a", "b"]), None);
+        let a = parse(
+            &v(&["h.exe", "--sk-protocol-launch", "--", "myapp://a", "b"]),
+            None,
+        );
         assert_eq!(a.url.as_deref(), Some("myapp://a b"));
     }
 
@@ -472,20 +534,40 @@ mod tests {
 
     #[test]
     fn the_tokenizer_follows_the_c_runtime_rules() {
-        let t = |raw: &str| -> Vec<String> { split_command_line(raw).into_iter().map(|t| t.text).collect() };
-        assert_eq!(t(r#""C:\a b\x.exe" one "two three""#), v(&["C:\\a b\\x.exe", "one", "two three"]));
+        let t = |raw: &str| -> Vec<String> {
+            split_command_line(raw)
+                .into_iter()
+                .map(|t| t.text)
+                .collect()
+        };
+        assert_eq!(
+            t(r#""C:\a b\x.exe" one "two three""#),
+            v(&["C:\\a b\\x.exe", "one", "two three"])
+        );
         assert_eq!(t(r#"C:\x\y.exe a"#), v(&["C:\\x\\y.exe", "a"]));
         assert_eq!(t(r#"x "a\\" b"#), v(&["x", "a\\", "b"]));
         assert_eq!(t(r#"x a\"b"#), v(&["x", "a\"b"]));
         assert_eq!(t(r#"x a\\b"#), v(&["x", "a\\\\b"]));
         assert_eq!(t(r#"x "a""b""#), v(&["x", "a\"b"]));
         let toks = split_command_line("x   a\tb");
-        assert_eq!(toks.iter().map(|t| t.start).collect::<Vec<_>>(), vec![0, 4, 6]);
+        assert_eq!(
+            toks.iter().map(|t| t.start).collect::<Vec<_>>(),
+            vec![0, 4, 6]
+        );
     }
 
     #[test]
     fn quote_arg_round_trips_through_the_tokenizer() {
-        for arg in ["plain", "with space", "C:\\dir with space\\", "a\"b", "", "trail\\", "x\\\"y", "\t"] {
+        for arg in [
+            "plain",
+            "with space",
+            "C:\\dir with space\\",
+            "a\"b",
+            "",
+            "trail\\",
+            "x\\\"y",
+            "\t",
+        ] {
             let raw = format!("exe {}", quote_arg(arg));
             let toks = split_command_line(&raw);
             assert_eq!(toks.len(), 2, "{raw}");

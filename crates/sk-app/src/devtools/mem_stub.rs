@@ -7,7 +7,13 @@ use gpui::{App, Window};
 
 use crate::json::Json;
 
-pub(crate) fn report(_gc: bool, _code: bool, _regions: bool, _window: &mut Window, _cx: &mut App) -> Json {
+pub(crate) fn report(
+    _gc: bool,
+    _code: bool,
+    _regions: bool,
+    _window: &mut Window,
+    _cx: &mut App,
+) -> Json {
     Json::obj(vec![
         ("supported", Json::Bool(false)),
         (

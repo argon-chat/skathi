@@ -21,14 +21,19 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use sk_runtime::redjs::webapi::permissions::{Capability, PermissionHost, PermissionState, RequestOutcome};
+use sk_runtime::redjs::webapi::permissions::{
+    Capability, PermissionHost, PermissionState, RequestOutcome,
+};
 
 use crate::decisions::{Decision, Entry, Store};
 
 /// The capabilities this layer asks about itself: the microphone, and the camera where this build
 /// can capture one. Where the OS prompts itself (macOS TCC), this layer defers to it.
 pub fn prompts(cap: Capability) -> bool {
-    prompts_with(cap, CAMERA_CAPTURE.load(std::sync::atomic::Ordering::Relaxed))
+    prompts_with(
+        cap,
+        CAMERA_CAPTURE.load(std::sync::atomic::Ordering::Relaxed),
+    )
 }
 
 static CAMERA_CAPTURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -75,11 +80,17 @@ static APP_NAME: Mutex<Option<String>> = Mutex::new(None);
 
 pub fn set_app_name(name: &str) {
     let name = name.trim();
-    *APP_NAME.lock().unwrap_or_else(|p| p.into_inner()) = (!name.is_empty()).then(|| name.to_string());
+    *APP_NAME.lock().unwrap_or_else(|p| p.into_inner()) =
+        (!name.is_empty()).then(|| name.to_string());
 }
 
 pub(crate) fn app_name() -> String {
-    sk_locale::app_name(APP_NAME.lock().unwrap_or_else(|p| p.into_inner()).as_deref())
+    sk_locale::app_name(
+        APP_NAME
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_deref(),
+    )
 }
 
 pub fn question(cap: Capability, app: &str, lang: &str) -> Question {
@@ -88,7 +99,10 @@ pub fn question(cap: Capability, app: &str, lang: &str) -> Question {
     let (instruction, content) = if cap == Capability::Camera {
         (keys::CONSENT_CAMERA_TITLE, keys::CONSENT_CAMERA_BODY)
     } else {
-        (keys::CONSENT_MICROPHONE_TITLE, keys::CONSENT_MICROPHONE_BODY)
+        (
+            keys::CONSENT_MICROPHONE_TITLE,
+            keys::CONSENT_MICROPHONE_BODY,
+        )
     };
     let named = [("app", app)];
     Question {
@@ -111,18 +125,33 @@ impl Hooks {
     #[cfg(feature = "audio")]
     pub fn process() -> Hooks {
         use sk_runtime::redjs::webapi::mediastream;
-        Hooks { forbidden: mediastream::capture_forbidden, fake: mediastream::fake_capture, asker: installed_asker }
+        Hooks {
+            forbidden: mediastream::capture_forbidden,
+            fake: mediastream::fake_capture,
+            asker: installed_asker,
+        }
     }
 
     #[cfg(not(feature = "audio"))]
     pub fn process() -> Hooks {
-        Hooks { forbidden: || false, fake: || false, asker: installed_asker }
+        Hooks {
+            forbidden: || false,
+            fake: || false,
+            asker: installed_asker,
+        }
     }
 }
 
 enum Waiter {
-    Os { outer: u32, inner: u32, cap: Capability },
-    Asked { outer: u32, cap: Capability },
+    Os {
+        outer: u32,
+        inner: u32,
+        cap: Capability,
+    },
+    Asked {
+        outer: u32,
+        cap: Capability,
+    },
 }
 
 #[derive(Default)]
@@ -180,7 +209,11 @@ impl Shared {
     fn status(&self, cap: Capability) -> PermissionState {
         if !prompts(cap) {
             // The latches still govern one that only the OS asks about (macOS screen recording).
-            return if self.os.has_native_prompt(cap) { self.os_state(cap) } else { self.os.status(cap) };
+            return if self.os.has_native_prompt(cap) {
+                self.os_state(cap)
+            } else {
+                self.os.status(cap)
+            };
         }
         // TCC already asks for this app: a saved Allow must not turn its Prompt/Denied into a grant.
         if self.native_prompt(cap) {
@@ -269,7 +302,11 @@ impl AppConsent {
     pub fn reset(&self, cap: Option<Capability>) -> Vec<Capability> {
         let caps: Vec<Capability> = match cap {
             Some(c) => vec![c],
-            None => Capability::ALL.iter().copied().filter(|c| prompts(*c)).collect(),
+            None => Capability::ALL
+                .iter()
+                .copied()
+                .filter(|c| prompts(*c))
+                .collect(),
         };
         let mut forgotten = Vec::new();
         for c in caps {
@@ -380,9 +417,14 @@ impl PermissionHost for AppConsent {
         let mut chained = Vec::new();
         let mut i = self.shared.lock_inner();
         for (inner_token, os_state) in from_os {
-            let pos = i.waiting.iter().position(|w| matches!(w, Waiter::Os { inner, .. } if *inner == inner_token));
+            let pos = i
+                .waiting
+                .iter()
+                .position(|w| matches!(w, Waiter::Os { inner, .. } if *inner == inner_token));
             let Some(pos) = pos else { continue };
-            let Waiter::Os { outer, cap, .. } = i.waiting.remove(pos) else { continue };
+            let Waiter::Os { outer, cap, .. } = i.waiting.remove(pos) else {
+                continue;
+            };
             let state = if prompts(cap) {
                 drop(i);
                 let s = self.shared.status(cap);
@@ -458,13 +500,28 @@ mod tests {
 
     fn consent_over(os: PermissionState, hooks: Hooks) -> AppConsent {
         let os: &'static StubHost = Box::leak(Box::new(
-            StubHost::scripted("test", &[(Capability::Microphone, os), (Capability::Camera, Denied), (Capability::DisplayCapture, Denied)]).granting(Granted),
+            StubHost::scripted(
+                "test",
+                &[
+                    (Capability::Microphone, os),
+                    (Capability::Camera, Denied),
+                    (Capability::DisplayCapture, Denied),
+                ],
+            )
+            .granting(Granted),
         ));
         AppConsent::new(os, hooks)
     }
 
     fn consent(os: PermissionState) -> AppConsent {
-        consent_over(os, Hooks { forbidden: no, fake: no, asker: with_asker })
+        consent_over(
+            os,
+            Hooks {
+                forbidden: no,
+                fake: no,
+                asker: with_asker,
+            },
+        )
     }
 
     fn pending(o: RequestOutcome) -> u32 {
@@ -481,11 +538,18 @@ mod tests {
     }
 
     impl PermissionHost for NativeConsent {
-        fn platform(&self) -> &'static str { "native-test" }
-        fn has_native_prompt(&self, cap: Capability) -> bool { cap == Capability::Microphone }
-        fn status(&self, _cap: Capability) -> PermissionState { *self.state.lock().unwrap() }
+        fn platform(&self) -> &'static str {
+            "native-test"
+        }
+        fn has_native_prompt(&self, cap: Capability) -> bool {
+            cap == Capability::Microphone
+        }
+        fn status(&self, _cap: Capability) -> PermissionState {
+            *self.state.lock().unwrap()
+        }
         fn request(&self, _cap: Capability) -> RequestOutcome {
-            self.requested.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.requested
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             RequestOutcome::Pending(37)
         }
         fn drain_settled(&self) -> Vec<(u32, PermissionState)> {
@@ -496,34 +560,81 @@ mod tests {
     #[test]
     fn native_per_app_consent_bypasses_the_app_dialog_and_stored_answers() {
         let os = Box::leak(Box::new(NativeConsent {
-            state: Mutex::new(Prompt), settled: Mutex::new(Vec::new()),
+            state: Mutex::new(Prompt),
+            settled: Mutex::new(Vec::new()),
             requested: std::sync::atomic::AtomicUsize::new(0),
         }));
-        let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
-        h.shared.lock_store().set(Capability::Microphone, Some(Decision::Allow));
-        assert_eq!(h.status(Capability::Microphone), Prompt, "a saved app Allow cannot grant TCC");
+        let h = AppConsent::new(
+            os,
+            Hooks {
+                forbidden: no,
+                fake: no,
+                asker: with_asker,
+            },
+        );
+        h.shared
+            .lock_store()
+            .set(Capability::Microphone, Some(Decision::Allow));
+        assert_eq!(
+            h.status(Capability::Microphone),
+            Prompt,
+            "a saved app Allow cannot grant TCC"
+        );
         let token = pending(h.request(Capability::Microphone));
         assert_eq!(asked(), 0, "the OS owns the only prompt");
         assert!(h.drain_settled().is_empty());
         *os.state.lock().unwrap() = Granted;
         os.settled.lock().unwrap().push((37, Granted));
-        assert_eq!(h.drain_settled(), vec![(token, Granted)], "native token maps to the outer request exactly once");
+        assert_eq!(
+            h.drain_settled(),
+            vec![(token, Granted)],
+            "native token maps to the outer request exactly once"
+        );
         assert!(h.drain_settled().is_empty());
         assert_eq!(h.status(Capability::Microphone), Granted);
         *os.state.lock().unwrap() = Denied;
-        assert_eq!(h.status(Capability::Microphone), Denied, "revoked native access overrides the saved app Allow");
+        assert_eq!(
+            h.status(Capability::Microphone),
+            Denied,
+            "revoked native access overrides the saved app Allow"
+        );
         assert!(h.denied_by_system(Capability::Microphone));
 
-        let fake = AppConsent::new(os, Hooks { forbidden: no, fake: yes, asker: with_asker });
+        let fake = AppConsent::new(
+            os,
+            Hooks {
+                forbidden: no,
+                fake: yes,
+                asker: with_asker,
+            },
+        );
         let fake_token = pending(fake.request(Capability::Microphone));
-        assert_eq!(asked(), 1, "fake capture still uses this app's ordinary test consent");
+        assert_eq!(
+            asked(),
+            1,
+            "fake capture still uses this app's ordinary test consent"
+        );
         answer(Some(0));
         assert_eq!(fake.drain_settled(), vec![(fake_token, Granted)]);
         assert_eq!(os.requested.load(std::sync::atomic::Ordering::SeqCst), 1);
 
-        let forbidden = AppConsent::new(os, Hooks { forbidden: yes, fake: no, asker: with_asker });
-        assert_eq!(forbidden.request(Capability::Microphone), RequestOutcome::Settled(Denied));
-        assert_eq!(os.requested.load(std::sync::atomic::Ordering::SeqCst), 1, "the deny latch never calls native APIs");
+        let forbidden = AppConsent::new(
+            os,
+            Hooks {
+                forbidden: yes,
+                fake: no,
+                asker: with_asker,
+            },
+        );
+        assert_eq!(
+            forbidden.request(Capability::Microphone),
+            RequestOutcome::Settled(Denied)
+        );
+        assert_eq!(
+            os.requested.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the deny latch never calls native APIs"
+        );
     }
 
     struct NativeScreen {
@@ -532,15 +643,24 @@ mod tests {
     }
 
     impl PermissionHost for NativeScreen {
-        fn platform(&self) -> &'static str { "native-test" }
-        fn has_native_prompt(&self, cap: Capability) -> bool { cap == Capability::DisplayCapture }
-        fn status(&self, _cap: Capability) -> PermissionState { *self.state.lock().unwrap() }
+        fn platform(&self) -> &'static str {
+            "native-test"
+        }
+        fn has_native_prompt(&self, cap: Capability) -> bool {
+            cap == Capability::DisplayCapture
+        }
+        fn status(&self, _cap: Capability) -> PermissionState {
+            *self.state.lock().unwrap()
+        }
         fn request(&self, _cap: Capability) -> RequestOutcome {
-            self.requested.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.requested
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             *self.state.lock().unwrap() = Denied;
             RequestOutcome::Pending(51)
         }
-        fn drain_settled(&self) -> Vec<(u32, PermissionState)> { vec![(51, Denied)] }
+        fn drain_settled(&self) -> Vec<(u32, PermissionState)> {
+            vec![(51, Denied)]
+        }
     }
 
     #[test]
@@ -551,18 +671,53 @@ mod tests {
         }));
         let requested = || os.requested.load(std::sync::atomic::Ordering::SeqCst);
 
-        let forbidden = AppConsent::new(os, Hooks { forbidden: yes, fake: no, asker: with_asker });
+        let forbidden = AppConsent::new(
+            os,
+            Hooks {
+                forbidden: yes,
+                fake: no,
+                asker: with_asker,
+            },
+        );
         assert_eq!(forbidden.status(Capability::DisplayCapture), Denied);
-        assert_eq!(forbidden.request(Capability::DisplayCapture), RequestOutcome::Settled(Denied));
-        let fake = AppConsent::new(os, Hooks { forbidden: no, fake: yes, asker: with_asker });
-        assert_eq!(fake.status(Capability::DisplayCapture), Granted, "a fake desktop is not the OS's to refuse");
-        assert_eq!(fake.request(Capability::DisplayCapture), RequestOutcome::Settled(Granted));
+        assert_eq!(
+            forbidden.request(Capability::DisplayCapture),
+            RequestOutcome::Settled(Denied)
+        );
+        let fake = AppConsent::new(
+            os,
+            Hooks {
+                forbidden: no,
+                fake: yes,
+                asker: with_asker,
+            },
+        );
+        assert_eq!(
+            fake.status(Capability::DisplayCapture),
+            Granted,
+            "a fake desktop is not the OS's to refuse"
+        );
+        assert_eq!(
+            fake.request(Capability::DisplayCapture),
+            RequestOutcome::Settled(Granted)
+        );
         assert_eq!(requested(), 0, "neither latch raises the system prompt");
 
-        let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
+        let h = AppConsent::new(
+            os,
+            Hooks {
+                forbidden: no,
+                fake: no,
+                asker: with_asker,
+            },
+        );
         assert_eq!(h.status(Capability::DisplayCapture), Prompt);
         let token = pending(h.request(Capability::DisplayCapture));
-        assert_eq!((requested(), asked()), (1, 0), "the OS prompts; the app's dialog does not");
+        assert_eq!(
+            (requested(), asked()),
+            (1, 0),
+            "the OS prompts; the app's dialog does not"
+        );
         assert_eq!(h.drain_settled(), vec![(token, Denied)]);
         assert!(h.denied_by_system(Capability::DisplayCapture));
     }
@@ -570,17 +725,32 @@ mod tests {
     #[test]
     fn nothing_decided_is_prompt_and_one_question_answers_every_waiter() {
         let h = consent(Granted);
-        assert_eq!(h.status(Capability::Microphone), Prompt, "the OS allows desktop apps; this app was never asked");
+        assert_eq!(
+            h.status(Capability::Microphone),
+            Prompt,
+            "the OS allows desktop apps; this app was never asked"
+        );
         let a = pending(h.request(Capability::Microphone));
         let b = pending(h.request(Capability::Microphone));
         assert_ne!(a, b);
         assert_eq!(asked(), 1, "a second request shares the question on screen");
-        assert!(h.drain_settled().is_empty(), "nothing settles before the answer");
+        assert!(
+            h.drain_settled().is_empty(),
+            "nothing settles before the answer"
+        );
         answer(Some(0));
         assert_eq!(h.drain_settled(), vec![(a, Granted), (b, Granted)]);
         assert_eq!(h.status(Capability::Microphone), Granted);
-        assert_eq!(h.drain_changes(), Some(vec![Capability::Microphone]), "an answer is a `change`");
-        assert_eq!(h.request(Capability::Microphone), RequestOutcome::Settled(Granted), "granted: nothing to ask");
+        assert_eq!(
+            h.drain_changes(),
+            Some(vec![Capability::Microphone]),
+            "an answer is a `change`"
+        );
+        assert_eq!(
+            h.request(Capability::Microphone),
+            RequestOutcome::Settled(Granted),
+            "granted: nothing to ask"
+        );
         assert_eq!(asked(), 0);
         assert_eq!(h.decisions().len(), 1);
     }
@@ -592,7 +762,10 @@ mod tests {
         answer(Some(1));
         assert_eq!(h.drain_settled(), vec![(t, Denied)]);
         assert_eq!(h.status(Capability::Microphone), Denied);
-        assert!(!h.denied_by_system(Capability::Microphone), "the user said no, not the OS");
+        assert!(
+            !h.denied_by_system(Capability::Microphone),
+            "the user said no, not the OS"
+        );
         let t = pending(h.request(Capability::Microphone));
         assert_eq!(asked(), 1);
         answer(Some(0));
@@ -624,9 +797,15 @@ mod tests {
         let t = pending(h.request(Capability::Microphone));
         assert_eq!(asked(), 0, "the OS is asked first, not the user");
         assert!(h.in_flight(Capability::Microphone));
-        assert!(h.drain_settled().is_empty(), "the OS let it through: the question is next");
+        assert!(
+            h.drain_settled().is_empty(),
+            "the OS let it through: the question is next"
+        );
         assert_eq!(asked(), 1);
-        assert!(h.in_flight(Capability::Microphone), "still waiting, now on the question");
+        assert!(
+            h.in_flight(Capability::Microphone),
+            "still waiting, now on the question"
+        );
         answer(Some(0));
         assert_eq!(h.drain_settled(), vec![(t, Granted)]);
         assert!(!h.in_flight(Capability::Microphone));
@@ -634,9 +813,17 @@ mod tests {
 
     #[test]
     fn an_os_request_that_ends_still_denied_settles_without_asking() {
-        let os: &'static StubHost =
-            Box::leak(Box::new(StubHost::scripted("test", &[(Capability::Microphone, Denied)]).granting(Denied)));
-        let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
+        let os: &'static StubHost = Box::leak(Box::new(
+            StubHost::scripted("test", &[(Capability::Microphone, Denied)]).granting(Denied),
+        ));
+        let h = AppConsent::new(
+            os,
+            Hooks {
+                forbidden: no,
+                fake: no,
+                asker: with_asker,
+            },
+        );
         let t = pending(h.request(Capability::Microphone));
         assert_eq!(h.drain_settled(), vec![(t, Denied)]);
         assert_eq!(asked(), 0, "nothing to ask while the OS refuses");
@@ -645,15 +832,33 @@ mod tests {
 
     #[test]
     fn a_lifted_os_denial_asks_again_after_an_earlier_block() {
-        let os: &'static StubHost =
-            Box::leak(Box::new(StubHost::scripted("test", &[(Capability::Microphone, Denied)]).granting(Granted)));
-        let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
-        h.shared.lock_store().set(Capability::Microphone, Some(Decision::Block));
+        let os: &'static StubHost = Box::leak(Box::new(
+            StubHost::scripted("test", &[(Capability::Microphone, Denied)]).granting(Granted),
+        ));
+        let h = AppConsent::new(
+            os,
+            Hooks {
+                forbidden: no,
+                fake: no,
+                asker: with_asker,
+            },
+        );
+        h.shared
+            .lock_store()
+            .set(Capability::Microphone, Some(Decision::Block));
         let t = pending(h.request(Capability::Microphone));
         assert!(h.drain_settled().is_empty());
-        assert_eq!(asked(), 1, "the explicit request is the way back from the Block too");
+        assert_eq!(
+            asked(),
+            1,
+            "the explicit request is the way back from the Block too"
+        );
         answer(None);
-        assert_eq!(h.drain_settled(), vec![(t, Denied)], "dismissed: the Block stands");
+        assert_eq!(
+            h.drain_settled(),
+            vec![(t, Denied)],
+            "dismissed: the Block stands"
+        );
         assert!(!h.denied_by_system(Capability::Microphone));
     }
 
@@ -665,7 +870,10 @@ mod tests {
         assert!(h.in_flight(Capability::Microphone));
         assert_eq!(h.status(Capability::Microphone), Prompt);
         answer(None);
-        assert!(!h.in_flight(Capability::Microphone), "dismissed: prompt, and nothing left to wait for");
+        assert!(
+            !h.in_flight(Capability::Microphone),
+            "dismissed: prompt, and nothing left to wait for"
+        );
         assert_eq!(h.drain_settled(), vec![(t, Prompt)]);
     }
 
@@ -674,27 +882,67 @@ mod tests {
         set_camera_capture(true);
         assert!(prompts_with(Capability::Microphone, false));
         assert!(prompts_with(Capability::Camera, true));
-        assert!(!prompts_with(Capability::Camera, false), "no backend: the platform's own state");
+        assert!(
+            !prompts_with(Capability::Camera, false),
+            "no backend: the platform's own state"
+        );
         assert!(!prompts_with(Capability::DisplayCapture, true));
-        assert_eq!(prompts(Capability::Camera), cfg!(any(target_os = "windows", target_os = "macos")));
+        assert_eq!(
+            prompts(Capability::Camera),
+            cfg!(any(target_os = "windows", target_os = "macos"))
+        );
         if !prompts(Capability::Camera) {
-            let os: &'static StubHost = Box::leak(Box::new(StubHost::scripted("test", &[(Capability::Camera, Unsupported)])));
-            let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
+            let os: &'static StubHost = Box::leak(Box::new(StubHost::scripted(
+                "test",
+                &[(Capability::Camera, Unsupported)],
+            )));
+            let h = AppConsent::new(
+                os,
+                Hooks {
+                    forbidden: no,
+                    fake: no,
+                    asker: with_asker,
+                },
+            );
             assert_eq!(h.status(Capability::Camera), Unsupported);
-            assert_eq!(h.request(Capability::Camera), RequestOutcome::Settled(Unsupported));
+            assert_eq!(
+                h.request(Capability::Camera),
+                RequestOutcome::Settled(Unsupported)
+            );
             assert_eq!(asked(), 0);
         }
     }
 
     #[test]
     fn deny_never_asks_and_fake_leaves_the_os_out() {
-        let h = consent_over(Granted, Hooks { forbidden: yes, fake: no, asker: with_asker });
+        let h = consent_over(
+            Granted,
+            Hooks {
+                forbidden: yes,
+                fake: no,
+                asker: with_asker,
+            },
+        );
         assert_eq!(h.status(Capability::Microphone), Denied);
         assert!(h.denied_by_system(Capability::Microphone));
-        assert_eq!(h.request(Capability::Microphone), RequestOutcome::Settled(Denied));
+        assert_eq!(
+            h.request(Capability::Microphone),
+            RequestOutcome::Settled(Denied)
+        );
         assert_eq!(asked(), 0, "SK_MEDIA_CAPTURE=deny never shows a prompt");
-        let h = consent_over(Denied, Hooks { forbidden: no, fake: yes, asker: with_asker });
-        assert_eq!(h.status(Capability::Microphone), Prompt, "a fake microphone is not the OS's to deny");
+        let h = consent_over(
+            Denied,
+            Hooks {
+                forbidden: no,
+                fake: yes,
+                asker: with_asker,
+            },
+        );
+        assert_eq!(
+            h.status(Capability::Microphone),
+            Prompt,
+            "a fake microphone is not the OS's to deny"
+        );
         let t = pending(h.request(Capability::Microphone));
         answer(Some(0));
         assert_eq!(h.drain_settled(), vec![(t, Granted)]);
@@ -702,7 +950,14 @@ mod tests {
 
     #[test]
     fn without_a_dialog_every_question_is_dismissed() {
-        let h = consent_over(Granted, Hooks { forbidden: no, fake: no, asker: without_asker });
+        let h = consent_over(
+            Granted,
+            Hooks {
+                forbidden: no,
+                fake: no,
+                asker: without_asker,
+            },
+        );
         let t = pending(h.request(Capability::Microphone));
         assert_eq!(h.drain_settled(), vec![(t, Prompt)]);
     }
@@ -715,7 +970,11 @@ mod tests {
         let mic = pending(h.request(Capability::Microphone));
         let cam = pending(h.request(Capability::DisplayCapture));
         assert_ne!(mic, cam, "one namespace for both kinds of request");
-        assert_eq!(h.drain_settled(), vec![(cam, Granted)], "the platform's answer, as it gave it");
+        assert_eq!(
+            h.drain_settled(),
+            vec![(cam, Granted)],
+            "the platform's answer, as it gave it"
+        );
         answer(Some(0));
         assert_eq!(h.drain_settled(), vec![(mic, Granted)]);
     }
@@ -728,9 +987,16 @@ mod tests {
         let _ = h.drain_settled();
         let _ = h.drain_changes();
         assert_eq!(h.reset(None), vec![Capability::Microphone]);
-        assert_eq!(h.status(Capability::Microphone), Prompt, "asked again next time");
+        assert_eq!(
+            h.status(Capability::Microphone),
+            Prompt,
+            "asked again next time"
+        );
         assert_eq!(h.drain_changes(), Some(vec![Capability::Microphone]));
-        assert!(h.reset(Some(Capability::Microphone)).is_empty(), "nothing left to forget");
+        assert!(
+            h.reset(Some(Capability::Microphone)).is_empty(),
+            "nothing left to forget"
+        );
     }
 
     #[test]
@@ -747,8 +1013,14 @@ mod tests {
         assert_eq!(q.instruction, "Argon запрашивает доступ к камере");
         assert!(q.content.contains("записывать видео"));
         assert!(!q.content.contains("микрофон"));
-        assert_eq!(question(Capability::Camera, "Argon", "ja").buttons[0], "許可(&A)");
-        assert_eq!(question(Capability::Camera, "Argon", "en").instruction, "Argon wants to use your camera");
+        assert_eq!(
+            question(Capability::Camera, "Argon", "ja").buttons[0],
+            "許可(&A)"
+        );
+        assert_eq!(
+            question(Capability::Camera, "Argon", "en").instruction,
+            "Argon wants to use your camera"
+        );
     }
     #[test]
     fn native_camera_consent_is_the_microphones_model() {
@@ -768,12 +1040,19 @@ mod tests {
             }
         }
         impl PermissionHost for NativeAv {
-            fn platform(&self) -> &'static str { "native-test" }
+            fn platform(&self) -> &'static str {
+                "native-test"
+            }
             fn has_native_prompt(&self, cap: Capability) -> bool {
                 matches!(cap, Capability::Microphone | Capability::Camera)
             }
             fn status(&self, cap: Capability) -> PermissionState {
-                self.states.lock().unwrap().iter().find(|(c, _)| *c == cap).map_or(Unsupported, |(_, s)| *s)
+                self.states
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|(c, _)| *c == cap)
+                    .map_or(Unsupported, |(_, s)| *s)
             }
             fn request(&self, cap: Capability) -> RequestOutcome {
                 self.requested.lock().unwrap().push(cap);
@@ -784,13 +1063,29 @@ mod tests {
             }
         }
         let os = Box::leak(Box::new(NativeAv {
-            states: Mutex::new(vec![(Capability::Microphone, Granted), (Capability::Camera, Prompt)]),
+            states: Mutex::new(vec![
+                (Capability::Microphone, Granted),
+                (Capability::Camera, Prompt),
+            ]),
             settled: Mutex::new(Vec::new()),
             requested: Mutex::new(Vec::new()),
         }));
-        let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
-        h.shared.lock_store().set(Capability::Camera, Some(Decision::Allow));
-        assert_eq!(h.status(Capability::Camera), Prompt, "a saved app Allow cannot grant TCC");
+        let h = AppConsent::new(
+            os,
+            Hooks {
+                forbidden: no,
+                fake: no,
+                asker: with_asker,
+            },
+        );
+        h.shared
+            .lock_store()
+            .set(Capability::Camera, Some(Decision::Allow));
+        assert_eq!(
+            h.status(Capability::Camera),
+            Prompt,
+            "a saved app Allow cannot grant TCC"
+        );
         let token = pending(h.request(Capability::Camera));
         assert_eq!(asked(), 0, "TCC owns the only prompt");
         assert_eq!(*os.requested.lock().unwrap(), vec![Capability::Camera]);
@@ -800,15 +1095,29 @@ mod tests {
         assert_eq!(h.drain_settled(), vec![(token, Granted)]);
         assert!(!h.in_flight(Capability::Camera));
         assert_eq!(h.status(Capability::Camera), Granted);
-        assert_eq!(h.status(Capability::Microphone), Granted, "the microphone's state is its own");
+        assert_eq!(
+            h.status(Capability::Microphone),
+            Granted,
+            "the microphone's state is its own"
+        );
         os.set(Capability::Camera, Denied);
         assert_eq!(h.status(Capability::Camera), Denied);
         assert!(h.denied_by_system(Capability::Camera));
         let _ = h.request(Capability::Camera);
         assert_eq!(os.requested.lock().unwrap().len(), 2);
         assert_eq!(asked(), 0);
-        let forbidden = AppConsent::new(os, Hooks { forbidden: yes, fake: no, asker: with_asker });
-        assert_eq!(forbidden.request(Capability::Camera), RequestOutcome::Settled(Denied));
+        let forbidden = AppConsent::new(
+            os,
+            Hooks {
+                forbidden: yes,
+                fake: no,
+                asker: with_asker,
+            },
+        );
+        assert_eq!(
+            forbidden.request(Capability::Camera),
+            RequestOutcome::Settled(Denied)
+        );
         assert_eq!(os.requested.lock().unwrap().len(), 2);
     }
 
@@ -816,14 +1125,30 @@ mod tests {
     #[test]
     fn camera_consent_is_separate_from_microphone_consent() {
         set_camera_capture(true);
-        let os = Box::leak(Box::new(StubHost::scripted("test", &[(Capability::Microphone, Granted), (Capability::Camera, Granted)])));
-        let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
+        let os = Box::leak(Box::new(StubHost::scripted(
+            "test",
+            &[
+                (Capability::Microphone, Granted),
+                (Capability::Camera, Granted),
+            ],
+        )));
+        let h = AppConsent::new(
+            os,
+            Hooks {
+                forbidden: no,
+                fake: no,
+                asker: with_asker,
+            },
+        );
         let mic = pending(h.request(Capability::Microphone));
         answer(Some(0));
         assert_eq!(h.drain_settled(), vec![(mic, Granted)]);
         assert_eq!(h.status(Capability::Camera), Prompt);
         let cam = pending(h.request(Capability::Camera));
-        assert_eq!(ASKED.with(|q| q.borrow()[0].0.capability), Capability::Camera);
+        assert_eq!(
+            ASKED.with(|q| q.borrow()[0].0.capability),
+            Capability::Camera
+        );
         answer(Some(1));
         assert_eq!(h.drain_settled(), vec![(cam, Denied)]);
         assert_eq!(h.status(Capability::Microphone), Granted);

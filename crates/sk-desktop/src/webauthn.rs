@@ -83,7 +83,10 @@ impl<'a> Cbor<'a> {
 /// The `authData` of an attestation object.
 #[cfg(any(target_os = "macos", test))]
 fn auth_data_of(attestation: &[u8]) -> Option<&[u8]> {
-    let mut r = Cbor { b: attestation, at: 0 };
+    let mut r = Cbor {
+        b: attestation,
+        at: 0,
+    };
     let (major, n) = r.head()?;
     if major != 5 {
         return None;
@@ -108,7 +111,10 @@ fn cose_map(auth: &[u8]) -> Option<HashMap<i64, Item<'_>>> {
         return None;
     }
     let id_len = u16::from_be_bytes([auth[53], auth[54]]) as usize;
-    let mut r = Cbor { b: auth, at: 55 + id_len };
+    let mut r = Cbor {
+        b: auth,
+        at: 55 + id_len,
+    };
     let (major, n) = r.head()?;
     if major != 5 {
         return None;
@@ -144,7 +150,10 @@ fn der(tag: u8, body: &[u8]) -> Vec<u8> {
 }
 
 fn der_uint(v: &[u8]) -> Vec<u8> {
-    let v = &v[v.iter().position(|&b| b != 0).unwrap_or(v.len().saturating_sub(1))..];
+    let v = &v[v
+        .iter()
+        .position(|&b| b != 0)
+        .unwrap_or(v.len().saturating_sub(1))..];
     let mut body = Vec::with_capacity(v.len() + 1);
     if v.first().is_some_and(|&b| b & 0x80 != 0) {
         body.push(0);
@@ -204,7 +213,10 @@ fn cose_public_key(auth: &[u8]) -> Option<(i64, Vec<u8>)> {
 }
 
 fn hex(s: &str) -> Vec<u8> {
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap_or(0)).collect()
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap_or(0))
+        .collect()
 }
 
 #[cfg(test)]
@@ -230,13 +242,18 @@ mod tests {
         let (alg, spki) = cose_public_key(&auth_with_key(&key)).unwrap();
         assert_eq!(alg, -7);
         assert_eq!(spki.len(), 91);
-        assert_eq!(&spki[..27], &hex("3059301306072a8648ce3d020106082a8648ce3d03010703420004")[..]);
+        assert_eq!(
+            &spki[..27],
+            &hex("3059301306072a8648ce3d020106082a8648ce3d03010703420004")[..]
+        );
         assert_eq!(&spki[27..59], &[1u8; 32]);
     }
 
     #[test]
     fn an_rs256_key_becomes_its_spki() {
-        let mut key = vec![0xA4, 0x01, 0x03, 0x03, 0x39, 0x01, 0x00, 0x20, 0x59, 0x01, 0x00];
+        let mut key = vec![
+            0xA4, 0x01, 0x03, 0x03, 0x39, 0x01, 0x00, 0x20, 0x59, 0x01, 0x00,
+        ];
         key.extend([0x80u8; 256]);
         key.extend([0x21, 0x43, 0x01, 0x00, 0x01]);
         let (alg, spki) = cose_public_key(&auth_with_key(&key)).unwrap();

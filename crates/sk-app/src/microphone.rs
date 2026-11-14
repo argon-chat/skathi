@@ -101,7 +101,10 @@ mod tests {
             assert!(hint.unwrap().contains("ms-settings:privacy-microphone"));
         } else if cfg!(target_os = "macos") {
             let hint = hint.unwrap();
-            assert!(hint.contains("Privacy_Microphone") && !hint.contains("Windows"), "{hint}");
+            assert!(
+                hint.contains("Privacy_Microphone") && !hint.contains("Windows"),
+                "{hint}"
+            );
         } else {
             assert_eq!(hint, None, "no page to name");
         }

@@ -16,7 +16,9 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
     RegisterClipboardFormatW, SetClipboardData,
 };
-use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::Memory::{
+    GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+};
 
 pub(crate) const TYPES: &[&str] = &["text/plain", "text/html", "image/png"];
 
@@ -43,7 +45,10 @@ impl Open {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        Err(format!("the clipboard is held by another process ({})", std::io::Error::last_os_error()))
+        Err(format!(
+            "the clipboard is held by another process ({})",
+            std::io::Error::last_os_error()
+        ))
     }
 }
 
@@ -82,14 +87,21 @@ pub(crate) fn write(items: &[(String, Vec<u8>)]) -> Result<(), String> {
 pub(crate) fn read() -> Result<Vec<(String, Vec<u8>)>, String> {
     let _open = Open::new()?;
     let mut out = Vec::new();
-    let png = get(png_format()).or_else(|| get(CF_DIBV5).or_else(|| get(CF_DIB)).and_then(|d| dib_to_png(&d)));
+    let png = get(png_format()).or_else(|| {
+        get(CF_DIBV5)
+            .or_else(|| get(CF_DIB))
+            .and_then(|d| dib_to_png(&d))
+    });
     if let Some(png) = png {
         out.push(("image/png".to_string(), png));
     }
     if let Some(fragment) = get(html_format()).and_then(|h| html_fragment(&h)) {
         out.push(("text/html".to_string(), fragment.into_bytes()));
     }
-    if let Some(text) = get(CF_UNICODETEXT).map(|b| from_utf16z(&b)).filter(|t| !t.is_empty()) {
+    if let Some(text) = get(CF_UNICODETEXT)
+        .map(|b| from_utf16z(&b))
+        .filter(|t| !t.is_empty())
+    {
         out.push(("text/plain".to_string(), text.into_bytes()));
     }
     Ok(out)
@@ -97,7 +109,8 @@ pub(crate) fn read() -> Result<Vec<(String, Vec<u8>)>, String> {
 
 fn set(format: u32, data: &[u8]) -> Result<(), String> {
     unsafe {
-        let global = GlobalAlloc(GMEM_MOVEABLE, data.len().max(1)).map_err(|e| format!("out of memory for the clipboard: {e}"))?;
+        let global = GlobalAlloc(GMEM_MOVEABLE, data.len().max(1))
+            .map_err(|e| format!("out of memory for the clipboard: {e}"))?;
         let ptr = GlobalLock(global);
         if ptr.is_null() {
             let _ = GlobalFree(Some(global));
@@ -140,7 +153,11 @@ fn utf16z(text: &str) -> Vec<u8> {
 }
 
 fn from_utf16z(bytes: &[u8]) -> String {
-    let units: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&u| u != 0).collect();
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .take_while(|&u| u != 0)
+        .collect();
     String::from_utf16_lossy(&units)
 }
 
@@ -223,7 +240,11 @@ fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
     }
     let (w, top_down, h) = (w as u32, h < 0, h.unsigned_abs());
     // BI_BITFIELDS after a plain 40-byte header carries its three masks after it.
-    let masks = if compression == 3 && header == 40 { 12 } else { 0 };
+    let masks = if compression == 3 && header == 40 {
+        12
+    } else {
+        0
+    };
     // Alpha only where the header says there is some: a V4/V5 alpha mask.
     let has_alpha = bits == 32 && header >= 108 && u32_at(52).is_some_and(|m| m != 0);
     let stride = (w as usize * bits as usize / 8 + 3) & !3;
@@ -243,7 +264,8 @@ fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
     }
     let img = image::RgbaImage::from_raw(w, h, rgba)?;
     let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
     Some(png)
 }
 
@@ -253,16 +275,22 @@ mod tests {
 
     #[test]
     fn a_dib_round_trips_through_the_png_a_read_makes_of_it() {
-        let rgba = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 128];
+        let rgba = [
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 128,
+        ];
         for v5 in [true, false] {
             let png = dib_to_png(&dib(2, 2, &rgba, v5)).expect("a 32-bit DIB reads");
-            let back = image::load_from_memory_with_format(&png, image::ImageFormat::Png).unwrap().to_rgba8();
+            let back = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+                .unwrap()
+                .to_rgba8();
             assert_eq!(back.dimensions(), (2, 2));
             let expected: Vec<u8> = if v5 {
                 rgba.to_vec()
             } else {
                 // A BI_RGB bitmap has no alpha to speak of: opaque.
-                rgba.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect()
+                rgba.chunks(4)
+                    .flat_map(|p| [p[0], p[1], p[2], 255])
+                    .collect()
             };
             assert_eq!(back.as_raw(), &expected, "v5 = {v5}");
         }
@@ -272,9 +300,15 @@ mod tests {
     fn cf_html_offsets_frame_the_fragment() {
         let block = cf_html("<b>héllo</b>");
         assert_eq!(block.last(), Some(&0));
-        assert_eq!(html_fragment(&block[..block.len() - 1]).as_deref(), Some("<b>héllo</b>"));
+        assert_eq!(
+            html_fragment(&block[..block.len() - 1]).as_deref(),
+            Some("<b>héllo</b>")
+        );
         let text = String::from_utf8_lossy(&block);
-        assert!(text.starts_with("Version:0.9\r\nStartHTML:0000000"), "{text}");
+        assert!(
+            text.starts_with("Version:0.9\r\nStartHTML:0000000"),
+            "{text}"
+        );
     }
 
     #[test]

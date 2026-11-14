@@ -55,10 +55,19 @@ static TREE_REV: AtomicU64 = AtomicU64::new(0);
 
 /// Serves the connection until it closes. The token is read from the query string (`/?token=…`):
 /// a browser `WebSocket` cannot set a header.
-pub fn serve(target: &str, headers: &[(String, String)], mut out: TcpStream, reader: BufReader<TcpStream>) {
+pub fn serve(
+    target: &str,
+    headers: &[(String, String)],
+    mut out: TcpStream,
+    reader: BufReader<TcpStream>,
+) {
     let generation = super::ACCEPT_GEN.load(Ordering::SeqCst);
     let header = |name: &str| {
-        headers.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str()).unwrap_or("")
+        headers
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("")
     };
     let key = header("sec-websocket-key");
     if key.is_empty() {
@@ -74,11 +83,15 @@ pub fn serve(target: &str, headers: &[(String, String)], mut out: TcpStream, rea
         );
         return;
     }
-    if !session_matches(super::enabled(), generation, super::ACCEPT_GEN.load(Ordering::SeqCst)) || !token_ok(target) {
+    if !session_matches(
+        super::enabled(),
+        generation,
+        super::ACCEPT_GEN.load(Ordering::SeqCst),
+    ) || !token_ok(target)
+    {
         // Not a 401: it is the same "bad or missing token" the other framings answer.
-        let _ = out.write_all(
-            b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        );
+        let _ = out
+            .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         return;
     }
     let accept = accept_key(key);
@@ -97,12 +110,29 @@ pub fn serve(target: &str, headers: &[(String, String)], mut out: TcpStream, rea
     let queued = Arc::new(AtomicUsize::new(0));
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let since = query_number(target, "since").unwrap_or(0.0) as u64;
-    let socket = match out.try_clone() { Ok(socket) => socket, Err(_) => return };
+    let socket = match out.try_clone() {
+        Ok(socket) => socket,
+        Err(_) => return,
+    };
     {
         // Linearize admission with close_all: a handshake accepted before disable cannot register after its session was revoked.
         let mut subs = SUBS.lock().unwrap_or_else(|error| error.into_inner());
-        if !session_matches(super::enabled(), generation, super::ACCEPT_GEN.load(Ordering::SeqCst)) || !token_ok(target) { return; }
-        subs.push(Sub { id, tx: tx.clone(), queued: queued.clone(), cursor: since, want: WANT_ALL, socket });
+        if !session_matches(
+            super::enabled(),
+            generation,
+            super::ACCEPT_GEN.load(Ordering::SeqCst),
+        ) || !token_ok(target)
+        {
+            return;
+        }
+        subs.push(Sub {
+            id,
+            tx: tx.clone(),
+            queued: queued.clone(),
+            cursor: since,
+            want: WANT_ALL,
+            socket,
+        });
     }
 
     // The writer owns the write half, so the main thread never does I/O: `broadcast` only queues.
@@ -144,12 +174,21 @@ pub fn serve(target: &str, headers: &[(String, String)], mut out: TcpStream, rea
 }
 
 fn token_ok(target: &str) -> bool {
-    let Some(token) = query_string(target, "token") else { return false };
-    super::TOKEN.lock().map(|expected| token_matches(&expected, &token)).unwrap_or(false)
+    let Some(token) = query_string(target, "token") else {
+        return false;
+    };
+    super::TOKEN
+        .lock()
+        .map(|expected| token_matches(&expected, &token))
+        .unwrap_or(false)
 }
 
-fn token_matches(expected: &str, supplied: &str) -> bool { !expected.is_empty() && expected == supplied }
-fn session_matches(enabled: bool, requested: u64, current: u64) -> bool { enabled && requested == current }
+fn token_matches(expected: &str, supplied: &str) -> bool {
+    !expected.is_empty() && expected == supplied
+}
+fn session_matches(enabled: bool, requested: u64, current: u64) -> bool {
+    enabled && requested == current
+}
 
 /// `/?token=abc&since=12` → the value of one parameter.
 fn query_string(target: &str, name: &str) -> Option<String> {
@@ -200,7 +239,12 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn read_loop(id: u64, mut reader: BufReader<TcpStream>, tx: &Sender<Vec<u8>>, queued: &Arc<AtomicUsize>) {
+fn read_loop(
+    id: u64,
+    mut reader: BufReader<TcpStream>,
+    tx: &Sender<Vec<u8>>,
+    queued: &Arc<AtomicUsize>,
+) {
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
     loop {
@@ -237,7 +281,9 @@ fn read_loop(id: u64, mut reader: BufReader<TcpStream>, tx: &Sender<Vec<u8>>, qu
 fn on_text(id: u64, text: &str) {
     let Some(doc) = json::parse(text) else { return };
     let mut subs = SUBS.lock().unwrap();
-    let Some(sub) = subs.iter_mut().find(|s| s.id == id) else { return };
+    let Some(sub) = subs.iter_mut().find(|s| s.id == id) else {
+        return;
+    };
     if let Some(since) = doc.get("since").and_then(Json::as_f64) {
         sub.cursor = since.max(0.0) as u64;
     }
@@ -445,10 +491,11 @@ pub fn broadcast_frame() {
     // The tree revision: a number, not a tree, so the client decides whether to spend the target's frame on a `tree` command.
     let rev = TREE_REV.load(Ordering::Relaxed);
     if LAST_TREE_REV.with(|c| c.replace(rev)) != rev {
-        broadcast(&mut subs, WANT_TREE, &Json::obj(vec![
-            ("t", Json::s("tree")),
-            ("rev", Json::n(rev as f64)),
-        ]).to_json());
+        broadcast(
+            &mut subs,
+            WANT_TREE,
+            &Json::obj(vec![("t", Json::s("tree")), ("rev", Json::n(rev as f64))]).to_json(),
+        );
     }
 
     if let Some(status) = sk_tree::log::status() {
@@ -461,21 +508,30 @@ pub fn broadcast_frame() {
             }
         });
         if changed {
-            broadcast(&mut subs, WANT_STATUS, &Json::obj(vec![
-                ("t", Json::s("status")),
-                ("text", Json::s(status)),
-            ]).to_json());
+            broadcast(
+                &mut subs,
+                WANT_STATUS,
+                &Json::obj(vec![("t", Json::s("status")), ("text", Json::s(status))]).to_json(),
+            );
         }
     }
 
     let net = super::net::drain();
     if !net.is_empty() {
-        broadcast(&mut subs, WANT_NET, &Json::obj(vec![
-            ("t", Json::s("net")),
-            ("entries", Json::arr(net.into_iter().map(|raw| Json::from(Raw(raw))).collect())),
-            // Transport counters only move when a request does, so they ride the entries.
-            ("pool", super::net::pool_json()),
-        ]).to_json());
+        broadcast(
+            &mut subs,
+            WANT_NET,
+            &Json::obj(vec![
+                ("t", Json::s("net")),
+                (
+                    "entries",
+                    Json::arr(net.into_iter().map(|raw| Json::from(Raw(raw))).collect()),
+                ),
+                // Transport counters only move when a request does, so they ride the entries.
+                ("pool", super::net::pool_json()),
+            ])
+            .to_json(),
+        );
     }
 
     let now = std::time::Instant::now();

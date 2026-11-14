@@ -51,7 +51,9 @@ impl Reclaim {
             _ if away >= AWAY_AFTER => Release::Data,
             _ => return None,
         };
-        let repeated = self.last.is_some_and(|(at, done)| want <= done && now.saturating_duration_since(at) < REPEAT);
+        let repeated = self
+            .last
+            .is_some_and(|(at, done)| want <= done && now.saturating_duration_since(at) < REPEAT);
         if repeated {
             return None;
         }
@@ -73,7 +75,8 @@ pub fn after_wave(rt: &sk_runtime::JsRuntime, focused: bool, hidden: bool) {
     if !enabled() {
         return;
     }
-    let Some(release) = STATE.with(|s| s.borrow_mut().decide(Instant::now(), focused, hidden)) else {
+    let Some(release) = STATE.with(|s| s.borrow_mut().decide(Instant::now(), focused, hidden))
+    else {
         return;
     };
     let started = Instant::now();
@@ -122,8 +125,14 @@ mod tests {
         assert_eq!(r.decide(at(t0, 59), false, false), None);
         assert_eq!(r.decide(at(t0, 60), false, false), Some(Release::Data));
         assert_eq!(r.decide(at(t0, 61), false, false), None, "once");
-        assert_eq!(r.decide(at(t0, 60 + REPEAT.as_secs() - 1), false, false), None);
-        assert_eq!(r.decide(at(t0, 60 + REPEAT.as_secs()), false, false), Some(Release::Data));
+        assert_eq!(
+            r.decide(at(t0, 60 + REPEAT.as_secs() - 1), false, false),
+            None
+        );
+        assert_eq!(
+            r.decide(at(t0, 60 + REPEAT.as_secs()), false, false),
+            Some(Release::Data)
+        );
     }
 
     #[test]
@@ -133,8 +142,15 @@ mod tests {
         assert_eq!(r.decide(t0, false, true), None);
         assert_eq!(r.decide(at(t0, 10), false, true), Some(Release::Data));
         assert_eq!(r.decide(at(t0, 100), false, true), None);
-        assert_eq!(r.decide(at(t0, CODE_AFTER.as_secs()), false, true), Some(Release::Code), "more than last time");
-        assert_eq!(r.decide(at(t0, CODE_AFTER.as_secs() + 1), false, true), None);
+        assert_eq!(
+            r.decide(at(t0, CODE_AFTER.as_secs()), false, true),
+            Some(Release::Code),
+            "more than last time"
+        );
+        assert_eq!(
+            r.decide(at(t0, CODE_AFTER.as_secs() + 1), false, true),
+            None
+        );
     }
 
     #[test]
@@ -144,7 +160,11 @@ mod tests {
         r.decide(t0, false, false);
         assert_eq!(r.decide(at(t0, 60), false, false), Some(Release::Data));
         assert_eq!(r.decide(at(t0, 61), true, false), None);
-        assert_eq!(r.decide(at(t0, 62), false, false), None, "the minute counts from leaving again");
+        assert_eq!(
+            r.decide(at(t0, 62), false, false),
+            None,
+            "the minute counts from leaving again"
+        );
         assert_eq!(r.decide(at(t0, 122), false, false), Some(Release::Data));
     }
 
@@ -154,7 +174,11 @@ mod tests {
         let mut r = Reclaim::default();
         r.decide(t0, false, true);
         assert_eq!(r.decide(at(t0, 5), false, false), None, "shown, unfocused");
-        assert_eq!(r.decide(at(t0, 6), false, true), None, "hidden again: 10 s from here");
+        assert_eq!(
+            r.decide(at(t0, 6), false, true),
+            None,
+            "hidden again: 10 s from here"
+        );
         assert_eq!(r.decide(at(t0, 16), false, true), Some(Release::Data));
     }
 }

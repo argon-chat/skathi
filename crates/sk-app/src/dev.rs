@@ -18,10 +18,22 @@ mod tests {
     fn the_app_name_is_the_app_directory_of_the_entry_module() {
         // What names `%LOCALAPPDATA%\<app>\storage` in a dev host. Getting this
         // wrong would let two apps share one localStorage.
-        assert_eq!(super::app_dir_of("apps/hello/src/main.js").as_deref(), Some("hello"));
-        assert_eq!(super::app_dir_of("apps/shadcn/src/main.ts").as_deref(), Some("shadcn"));
-        assert_eq!(super::app_dir_of("apps/imgperf/main.js").as_deref(), Some("imgperf"));
-        assert_eq!(super::app_dir_of("apps\\hello\\src\\main.js").as_deref(), Some("hello"));
+        assert_eq!(
+            super::app_dir_of("apps/hello/src/main.js").as_deref(),
+            Some("hello")
+        );
+        assert_eq!(
+            super::app_dir_of("apps/shadcn/src/main.ts").as_deref(),
+            Some("shadcn")
+        );
+        assert_eq!(
+            super::app_dir_of("apps/imgperf/main.js").as_deref(),
+            Some("imgperf")
+        );
+        assert_eq!(
+            super::app_dir_of("apps\\hello\\src\\main.js").as_deref(),
+            Some("hello")
+        );
         assert_eq!(super::app_dir_of("main.js"), None);
         assert_eq!(super::app_dir_of(""), None);
         assert_eq!(super::app_dir_of("src/main.js"), None);
@@ -52,17 +64,28 @@ struct Manifest {
 fn read_manifest() -> Option<Manifest> {
     let path = dist("manifest.json");
     let text = std::fs::read_to_string(&path)
-        .map_err(|e| eprintln!("[dev] read {}: {e} — run `bun build.ts` in packages/cli", path.display()))
+        .map_err(|e| {
+            eprintln!(
+                "[dev] read {}: {e} — run `bun build.ts` in packages/cli",
+                path.display()
+            )
+        })
         .ok()?;
     let v = json::parse(&text)?;
     Some(Manifest {
         asset_files: match v.get("assetFiles") {
-            Some(json::Json::Obj(files)) => files.iter().filter_map(|(key, value)| {
-                Some((key.clone(), std::path::PathBuf::from(value.as_str()?)))
-            }).collect(),
+            Some(json::Json::Obj(files)) => files
+                .iter()
+                .filter_map(|(key, value)| {
+                    Some((key.clone(), std::path::PathBuf::from(value.as_str()?)))
+                })
+                .collect(),
             _ => Default::default(),
         },
-        vendor_rev: v.get("vendorRev").and_then(json::Json::as_f64).unwrap_or(0.0),
+        vendor_rev: v
+            .get("vendorRev")
+            .and_then(json::Json::as_f64)
+            .unwrap_or(0.0),
         entry: v.get("entry").and_then(json::Json::as_str)?.to_string(),
         modules: v
             .get("modules")
@@ -103,7 +126,9 @@ fn publish_asset_base(entry: &str) {
     }
     const WORKSPACE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let entry_path = std::path::Path::new(WORKSPACE).join(entry);
-    let Some(dir) = entry_path.parent() else { return };
+    let Some(dir) = entry_path.parent() else {
+        return;
+    };
     let base = match dir.file_name() {
         Some(name) if name == "src" => dir.parent().unwrap_or(dir),
         _ => dir,
@@ -131,7 +156,11 @@ pub fn launch_config() -> Option<String> {
 pub fn app_name() -> Option<String> {
     let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
     let v = json::parse(&text)?;
-    if let Some(n) = v.get("name").and_then(json::Json::as_str).filter(|n| !n.is_empty()) {
+    if let Some(n) = v
+        .get("name")
+        .and_then(json::Json::as_str)
+        .filter(|n| !n.is_empty())
+    {
         return Some(n.to_string());
     }
     app_dir_of(v.get("entry").and_then(json::Json::as_str)?)
@@ -156,7 +185,9 @@ fn install_asset_provider(rt: &JsRuntime) {
     // `boot` runs again on a cold restart, and the provider is process-wide and
     // set-once; re-registering would only print an advisory.
     static ONCE: std::sync::Once = std::sync::Once::new();
-    let Some(base) = sk_tree::asset_base() else { return };
+    let Some(base) = sk_tree::asset_base() else {
+        return;
+    };
     ONCE.call_once(move || {
         rt.set_content_provider(move |raw| {
             let key = sk_payload::content_key(raw)?;
@@ -192,7 +223,9 @@ fn cwd_advisory(raw: &str) {
 }
 
 pub fn boot(rt: &JsRuntime) {
-    let Some(manifest) = read_manifest() else { return };
+    let Some(manifest) = read_manifest() else {
+        return;
+    };
     publish_asset_base(&manifest.entry);
     sk_tree::set_dev_asset_files(manifest.asset_files);
     install_asset_provider(rt);
@@ -248,14 +281,21 @@ pub fn poll_frame(frame_no: u32) {
     if !moved {
         return;
     }
-    let Ok(text) = std::fs::read_to_string(&changes_path) else { return };
+    let Ok(text) = std::fs::read_to_string(&changes_path) else {
+        return;
+    };
     let Some(changes) = json::parse(&text) else {
         eprintln!("[dev] changes.json is not valid JSON");
         return;
     };
-    let vendor_rev = changes.get("vendorRev").and_then(json::Json::as_f64).unwrap_or(0.0);
+    let vendor_rev = changes
+        .get("vendorRev")
+        .and_then(json::Json::as_f64)
+        .unwrap_or(0.0);
 
-    if let Some(manifest) = read_manifest() { sk_tree::set_dev_asset_files(manifest.asset_files); }
+    if let Some(manifest) = read_manifest() {
+        sk_tree::set_dev_asset_files(manifest.asset_files);
+    }
     JsRuntime::with(|rt| {
         if VENDOR_REV.with(|v| v.get()) != vendor_rev {
             cold_restart(rt);

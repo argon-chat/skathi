@@ -32,7 +32,12 @@ fn folder() -> PathBuf {
 
 /// A name that stays inside the folder.
 fn safe_name(name: &str, i: usize) -> String {
-    let clean: String = name.chars().filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') && !c.is_control()).collect();
+    let clean: String = name
+        .chars()
+        .filter(|c| {
+            !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') && !c.is_control()
+        })
+        .collect();
     let clean = clean.trim().trim_matches('.');
     if clean.is_empty() {
         format!("file-{i}")

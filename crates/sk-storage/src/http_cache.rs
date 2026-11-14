@@ -27,10 +27,17 @@ struct State {
     error: Option<String>,
 }
 
-static STATE: Mutex<State> = Mutex::new(State { dir: None, max_bytes: 0, sealed: false, error: None });
+static STATE: Mutex<State> = Mutex::new(State {
+    dir: None,
+    max_bytes: 0,
+    sealed: false,
+    error: None,
+});
 
 pub fn folder_for(app_name: &str) -> Result<PathBuf, String> {
-    Ok(folders::user_folder("LOCALAPPDATA", app_name)?.join("cache").join("http"))
+    Ok(folders::user_folder("LOCALAPPDATA", app_name)?
+        .join("cache")
+        .join("http"))
 }
 
 /// Turns the cache on; `max_mb` is the cap (0 = no cache). Call after [`crate::install`], before any JS.
@@ -83,7 +90,9 @@ pub fn info_json() -> String {
         "{{\"dir\":{},\"sealed\":{},\"error\":{}}}",
         dir.map_or("null".into(), |d| crate::json_escape(&d)),
         st.sealed,
-        st.error.as_deref().map_or("null".into(), crate::json_escape)
+        st.error
+            .as_deref()
+            .map_or("null".into(), crate::json_escape)
     )
 }
 
@@ -95,7 +104,12 @@ fn apply(dir: PathBuf, max_bytes: u64, sealed: bool) {
                 let msg = format!("the storage is encrypted and the HTTP cache's key could not be had ({e}); running without a cache");
                 eprintln!("[storage] {msg}");
                 cache::uninstall();
-                *STATE.lock().unwrap() = State { dir: Some(dir), max_bytes, sealed, error: Some(msg) };
+                *STATE.lock().unwrap() = State {
+                    dir: Some(dir),
+                    max_bytes,
+                    sealed,
+                    error: Some(msg),
+                };
                 return;
             }
         }
@@ -104,14 +118,23 @@ fn apply(dir: PathBuf, max_bytes: u64, sealed: bool) {
         let _ = std::fs::remove_file(dir.join(KEY_NAME));
         None
     };
-    let error = match cache::install(Config { dir: dir.clone(), max_bytes, sealer }) {
+    let error = match cache::install(Config {
+        dir: dir.clone(),
+        max_bytes,
+        sealer,
+    }) {
         Ok(_) => None,
         Err(e) => {
             eprintln!("[storage] the HTTP cache is off: {e}");
             Some(e)
         }
     };
-    *STATE.lock().unwrap() = State { dir: Some(dir), max_bytes, sealed, error };
+    *STATE.lock().unwrap() = State {
+        dir: Some(dir),
+        max_bytes,
+        sealed,
+        error,
+    };
 }
 
 #[cfg(target_os = "windows")]
@@ -122,10 +145,11 @@ mod gcm {
     use std::sync::{Arc, Mutex};
 
     use windows::Win32::Security::Cryptography::{
-        BCryptCloseAlgorithmProvider, BCryptDecrypt, BCryptDestroyKey, BCryptEncrypt, BCryptGenerateSymmetricKey,
-        BCryptOpenAlgorithmProvider, BCryptSetProperty, BCRYPT_AES_ALGORITHM, BCRYPT_ALG_HANDLE,
-        BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO, BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO_VERSION, BCRYPT_CHAINING_MODE,
-        BCRYPT_CHAIN_MODE_GCM, BCRYPT_FLAGS, BCRYPT_HANDLE, BCRYPT_KEY_HANDLE, BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS,
+        BCryptCloseAlgorithmProvider, BCryptDecrypt, BCryptDestroyKey, BCryptEncrypt,
+        BCryptGenerateSymmetricKey, BCryptOpenAlgorithmProvider, BCryptSetProperty,
+        BCRYPT_AES_ALGORITHM, BCRYPT_ALG_HANDLE, BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO,
+        BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO_VERSION, BCRYPT_CHAINING_MODE, BCRYPT_CHAIN_MODE_GCM,
+        BCRYPT_FLAGS, BCRYPT_HANDLE, BCRYPT_KEY_HANDLE, BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS,
     };
 
     use super::KEY_NAME;
@@ -178,7 +202,12 @@ mod gcm {
             unsafe {
                 let mut alg = BCRYPT_ALG_HANDLE::default();
                 check(
-                    BCryptOpenAlgorithmProvider(&mut alg, BCRYPT_AES_ALGORITHM, windows::core::PCWSTR::null(), BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS(0)),
+                    BCryptOpenAlgorithmProvider(
+                        &mut alg,
+                        BCRYPT_AES_ALGORITHM,
+                        windows::core::PCWSTR::null(),
+                        BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS(0),
+                    ),
                     "BCryptOpenAlgorithmProvider(AES)",
                 )?;
                 let mode: Vec<u8> = BCRYPT_CHAIN_MODE_GCM
@@ -187,16 +216,26 @@ mod gcm {
                     .chain(std::iter::once(&0u16))
                     .flat_map(|c| c.to_le_bytes())
                     .collect();
-                if let Err(e) = check(BCryptSetProperty(BCRYPT_HANDLE(alg.0), BCRYPT_CHAINING_MODE, &mode, 0), "GCM mode") {
+                if let Err(e) = check(
+                    BCryptSetProperty(BCRYPT_HANDLE(alg.0), BCRYPT_CHAINING_MODE, &mode, 0),
+                    "GCM mode",
+                ) {
                     let _ = BCryptCloseAlgorithmProvider(alg, 0);
                     return Err(e);
                 }
                 let mut key = BCRYPT_KEY_HANDLE::default();
-                if let Err(e) = check(BCryptGenerateSymmetricKey(alg, &mut key, None, secret, 0), "BCryptGenerateSymmetricKey") {
+                if let Err(e) = check(
+                    BCryptGenerateSymmetricKey(alg, &mut key, None, secret, 0),
+                    "BCryptGenerateSymmetricKey",
+                ) {
                     let _ = BCryptCloseAlgorithmProvider(alg, 0);
                     return Err(e);
                 }
-                Ok(Gcm { alg, key: Mutex::new(key), id })
+                Ok(Gcm {
+                    alg,
+                    key: Mutex::new(key),
+                    id,
+                })
             }
         }
     }
@@ -287,18 +326,22 @@ mod gcm {
         let p = crypt::provider().ok_or("no DPAPI on this platform")?;
         let path = dir.join(KEY_NAME);
         let existing = match std::fs::read(&path) {
-            Ok(raw) => match file::unseal(p, &raw) {
-                Ok(mut text) => {
-                    let parsed = text.split_once(' ').and_then(|(k, id)| Some((unhex::<32>(k)?, unhex::<8>(id.trim())?)));
-                    unsafe { text.as_bytes_mut().fill(0) };
-                    parsed
+            Ok(raw) => {
+                match file::unseal(p, &raw) {
+                    Ok(mut text) => {
+                        let parsed = text
+                            .split_once(' ')
+                            .and_then(|(k, id)| Some((unhex::<32>(k)?, unhex::<8>(id.trim())?)));
+                        unsafe { text.as_bytes_mut().fill(0) };
+                        parsed
+                    }
+                    Err(e) => {
+                        // The entries are lost with the key; a cache can afford that.
+                        eprintln!("[storage] the HTTP cache key cannot be unsealed ({e}); making a new one");
+                        None
+                    }
                 }
-                Err(e) => {
-                    // The entries are lost with the key; a cache can afford that.
-                    eprintln!("[storage] the HTTP cache key cannot be unsealed ({e}); making a new one");
-                    None
-                }
-            },
+            }
             Err(_) => None,
         };
         let (mut key, id) = match existing {
@@ -308,11 +351,13 @@ mod gcm {
                 let mut id = [0u8; 8];
                 crypt::random_bytes(&mut key)?;
                 crypt::random_bytes(&mut id)?;
-                std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+                std::fs::create_dir_all(dir)
+                    .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
                 let mut text = format!("{} {}", hex(&key), hex(&id));
                 let sealed = file::seal(p, &text);
                 unsafe { text.as_bytes_mut().fill(0) };
-                file::write_atomic(&path, &sealed?).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+                file::write_atomic(&path, &sealed?)
+                    .map_err(|e| format!("could not write {}: {e}", path.display()))?;
                 (key, id)
             }
         };
@@ -352,14 +397,17 @@ mod gcm {
 
         #[test]
         fn the_key_file_is_made_once_and_read_back() {
-            let dir = std::env::temp_dir().join(format!("sk-storage-http-key-{}", std::process::id()));
+            let dir =
+                std::env::temp_dir().join(format!("sk-storage-http-key-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             let first = sealer(&dir).unwrap();
             let raw = std::fs::read(dir.join(KEY_NAME)).unwrap();
             let again = sealer(&dir).unwrap();
             assert_eq!(first.tag(), again.tag());
             assert_eq!(again.open(&first.seal(b"x").unwrap()).unwrap(), b"x");
-            assert!(!raw.windows(8).any(|w| w.iter().all(|c| c.is_ascii_hexdigit())));
+            assert!(!raw
+                .windows(8)
+                .any(|w| w.iter().all(|c| c.is_ascii_hexdigit())));
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
@@ -384,7 +432,10 @@ mod ring_gcm {
 
     impl Gcm {
         pub fn new(secret: &[u8; 32], id: String) -> Result<Gcm, String> {
-            Ok(Gcm { aead: Aes256Gcm::new(secret)?, id })
+            Ok(Gcm {
+                aead: Aes256Gcm::new(secret)?,
+                id,
+            })
         }
     }
 
@@ -424,17 +475,21 @@ mod ring_gcm {
         p.ready()?;
         let path = dir.join(KEY_NAME);
         let existing = match std::fs::read(&path) {
-            Ok(raw) => match file::unseal(p, &raw) {
-                Ok(mut text) => {
-                    let parsed = text.split_once(' ').and_then(|(k, id)| Some((unhex::<32>(k)?, unhex::<8>(id.trim())?)));
-                    unsafe { text.as_bytes_mut().fill(0) };
-                    parsed
+            Ok(raw) => {
+                match file::unseal(p, &raw) {
+                    Ok(mut text) => {
+                        let parsed = text
+                            .split_once(' ')
+                            .and_then(|(k, id)| Some((unhex::<32>(k)?, unhex::<8>(id.trim())?)));
+                        unsafe { text.as_bytes_mut().fill(0) };
+                        parsed
+                    }
+                    Err(e) => {
+                        eprintln!("[storage] the HTTP cache key cannot be unsealed ({e}); making a new one");
+                        None
+                    }
                 }
-                Err(e) => {
-                    eprintln!("[storage] the HTTP cache key cannot be unsealed ({e}); making a new one");
-                    None
-                }
-            },
+            }
             Err(_) => None,
         };
         let (mut key, id) = match existing {
@@ -444,11 +499,13 @@ mod ring_gcm {
                 let mut id = [0u8; 8];
                 fill_random(&mut key)?;
                 fill_random(&mut id)?;
-                std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+                std::fs::create_dir_all(dir)
+                    .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
                 let mut text = format!("{} {}", hex(&key), hex(&id));
                 let sealed = file::seal(p, &text);
                 unsafe { text.as_bytes_mut().fill(0) };
-                file::write_atomic(&path, &sealed?).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+                file::write_atomic(&path, &sealed?)
+                    .map_err(|e| format!("could not write {}: {e}", path.display()))?;
                 (key, id)
             }
         };
@@ -481,13 +538,18 @@ mod ring_gcm {
 
         #[test]
         fn the_key_file_is_made_once_read_back_and_replaced_only_when_unreadable() {
-            let dir = std::env::temp_dir().join(format!("sk-storage-http-ring-key-{}", std::process::id()));
+            let dir = std::env::temp_dir()
+                .join(format!("sk-storage-http-ring-key-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             let p = FixedKey::new(3);
             let first = sealer_with(&dir, &p).unwrap();
             let raw = std::fs::read(dir.join(KEY_NAME)).unwrap();
             assert_eq!(&raw[..8], b"VNSTOR\x01\x02");
-            assert!(!raw.windows(8).any(|w| w.iter().all(|c| c.is_ascii_hexdigit())), "the key is legible");
+            assert!(
+                !raw.windows(8)
+                    .any(|w| w.iter().all(|c| c.is_ascii_hexdigit())),
+                "the key is legible"
+            );
             let again = sealer_with(&dir, &p).unwrap();
             assert_eq!(first.tag(), again.tag());
             assert_eq!(again.open(&first.seal(b"x").unwrap()).unwrap(), b"x");
@@ -501,18 +563,34 @@ mod ring_gcm {
         fn a_provider_that_is_not_ready_leaves_the_key_file_alone() {
             struct Locked;
             impl SecretProvider for Locked {
-                fn name(&self) -> &'static str { "locked" }
-                fn id(&self) -> u8 { 2 }
-                fn ready(&self) -> Result<(), String> { Err("macOS Keychain: locked".into()) }
-                fn protect(&self, _: &[u8]) -> Result<Vec<u8>, String> { Err("locked".into()) }
-                fn unprotect(&self, _: &[u8]) -> Result<Vec<u8>, String> { Err("locked".into()) }
+                fn name(&self) -> &'static str {
+                    "locked"
+                }
+                fn id(&self) -> u8 {
+                    2
+                }
+                fn ready(&self) -> Result<(), String> {
+                    Err("macOS Keychain: locked".into())
+                }
+                fn protect(&self, _: &[u8]) -> Result<Vec<u8>, String> {
+                    Err("locked".into())
+                }
+                fn unprotect(&self, _: &[u8]) -> Result<Vec<u8>, String> {
+                    Err("locked".into())
+                }
             }
-            let dir = std::env::temp_dir().join(format!("sk-storage-http-ring-locked-{}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!(
+                "sk-storage-http-ring-locked-{}",
+                std::process::id()
+            ));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join(KEY_NAME), b"an existing key file").unwrap();
             assert!(sealer_with(&dir, &Locked).err().unwrap().contains("locked"));
-            assert_eq!(std::fs::read(dir.join(KEY_NAME)).unwrap(), b"an existing key file");
+            assert_eq!(
+                std::fs::read(dir.join(KEY_NAME)).unwrap(),
+                b"an existing key file"
+            );
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
@@ -520,9 +598,9 @@ mod ring_gcm {
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod gcm {
+    use sk_runtime::redjs::webapi::http::cache::Sealer;
     use std::path::Path;
     use std::sync::Arc;
-    use sk_runtime::redjs::webapi::http::cache::Sealer;
 
     pub fn sealer(dir: &Path) -> Result<Arc<dyn Sealer>, String> {
         let p = crate::crypt::provider().ok_or("no storage key provider on this platform")?;
@@ -532,9 +610,9 @@ mod gcm {
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 mod gcm {
+    use sk_runtime::redjs::webapi::http::cache::Sealer;
     use std::path::Path;
     use std::sync::Arc;
-    use sk_runtime::redjs::webapi::http::cache::Sealer;
 
     pub fn sealer(_dir: &Path) -> Result<Arc<dyn Sealer>, String> {
         Err(String::from("no cipher on this platform"))
@@ -548,13 +626,18 @@ mod tests {
     #[test]
     fn the_folder_is_beside_storage_under_the_app_name() {
         let d = folder_for("my-app").unwrap();
-        assert!(d.ends_with(Path::new("my-app").join("cache").join("http")), "{}", d.display());
+        assert!(
+            d.ends_with(Path::new("my-app").join("cache").join("http")),
+            "{}",
+            d.display()
+        );
         assert!(folder_for("../escape").is_err());
     }
 
     #[test]
     fn the_sticky_rule_reads_the_storage_folder() {
-        let dir = std::env::temp_dir().join(format!("sk-storage-http-sticky-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("sk-storage-http-sticky-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("indexeddb")).unwrap();
         assert!(!storage_is_encrypted(&dir));

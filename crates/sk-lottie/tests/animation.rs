@@ -11,7 +11,8 @@ fn bytes(name: &str) -> Vec<u8> {
 }
 
 fn load(backend: Backend, name: &str) -> Animation {
-    Animation::load_with(backend, &bytes(name)).unwrap_or_else(|error| panic!("load {name} on {backend}: {error}"))
+    Animation::load_with(backend, &bytes(name))
+        .unwrap_or_else(|error| panic!("load {name} on {backend}: {error}"))
 }
 
 fn backends() -> Vec<Backend> {
@@ -42,29 +43,52 @@ fn render_at_draws_render_frames_picture_at_a_fractional_playhead() {
     use sk_lottie::raster_size_for;
     for backend in backends() {
         for name in ["star.json", "spinning-star.tgs", "position-linear.json"] {
-            let Ok(mut state) = LottieState::load_with(backend, &bytes(name)) else { continue };
+            let Ok(mut state) = LottieState::load_with(backend, &bytes(name)) else {
+                continue;
+            };
             let mut animation = load(backend, name);
-            for (size, scale, at) in [((128.0, 128.0), 1.0, 7.5), ((90.0, 40.0), 1.5, 12.25), ((33.0, 77.0), 1.25, 0.0)] {
+            for (size, scale, at) in [
+                ((128.0, 128.0), 1.0, 7.5),
+                ((90.0, 40.0), 1.5, 12.25),
+                ((33.0, 77.0), 1.25, 0.0),
+            ] {
                 let frame = state.meta().in_point + at;
                 state.seek_frame(frame);
                 let image = state.render_frame(size, scale).expect("a frame");
                 let (w, h) = raster_size_for(state.meta(), size, scale).expect("a raster");
                 let got = image.size(0);
-                assert_eq!((w, h), (got.width.0 as u32, got.height.0 as u32), "{name} on {backend} at {size:?}×{scale}");
+                assert_eq!(
+                    (w, h),
+                    (got.width.0 as u32, got.height.0 as u32),
+                    "{name} on {backend} at {size:?}×{scale}"
+                );
                 let premultiplied = image.as_bytes(0).expect("bytes").to_vec();
                 let straight = animation.render_at(frame, w, h).expect("a frame").to_vec();
                 assert_eq!(straight.len(), premultiplied.len());
                 for (s, p) in straight.chunks_exact(4).zip(premultiplied.chunks_exact(4)) {
-                    assert!((s[3] as i32 - p[3] as i32).abs() <= 1, "{name} on {backend}: alpha {s:?} vs {p:?}");
+                    assert!(
+                        (s[3] as i32 - p[3] as i32).abs() <= 1,
+                        "{name} on {backend}: alpha {s:?} vs {p:?}"
+                    );
                     for c in 0..3 {
                         let again = (s[c] as u32 * s[3] as u32 + 127) / 255;
-                        assert!((again as i32 - p[c] as i32).abs() <= 2, "{name} on {backend}: {s:?} vs {p:?}");
+                        assert!(
+                            (again as i32 - p[c] as i32).abs() <= 2,
+                            "{name} on {backend}: {s:?} vs {p:?}"
+                        );
                     }
                 }
             }
         }
     }
-    assert_eq!(raster_size_for(load(Backend::preferred(), "star.json").meta(), (0.0, 50.0), 1.0), None);
+    assert_eq!(
+        raster_size_for(
+            load(Backend::preferred(), "star.json").meta(),
+            (0.0, 50.0),
+            1.0
+        ),
+        None
+    );
 }
 
 /// The same frame through `<lottie>`'s premultiplied path and `Animation`'s straight one: only the alpha convention differs.
@@ -85,8 +109,16 @@ fn straight_bytes_premultiply_to_the_lottie_elements_frame() {
                 let (w, h) = (size.width.0 as u32, size.height.0 as u32);
                 let premultiplied = image.as_bytes(0).expect("bytes").to_vec();
                 let straight = animation.render(n, w, h).expect("a frame").to_vec();
-                assert_eq!(straight.len(), (w * h * 4) as usize, "{name} on {backend}: rows packed");
-                for (i, (s, p)) in straight.chunks_exact(4).zip(premultiplied.chunks_exact(4)).enumerate() {
+                assert_eq!(
+                    straight.len(),
+                    (w * h * 4) as usize,
+                    "{name} on {backend}: rows packed"
+                );
+                for (i, (s, p)) in straight
+                    .chunks_exact(4)
+                    .zip(premultiplied.chunks_exact(4))
+                    .enumerate()
+                {
                     let a = s[3] as u32;
                     assert!(
                         (s[3] as i32 - p[3] as i32).abs() <= 1,
@@ -107,7 +139,10 @@ fn straight_bytes_premultiply_to_the_lottie_elements_frame() {
                 }
             }
         }
-        assert!(translucent > 1000, "{backend}: too few antialiased edge pixels compared ({translucent})");
+        assert!(
+            translucent > 1000,
+            "{backend}: too few antialiased edge pixels compared ({translucent})"
+        );
     }
 }
 

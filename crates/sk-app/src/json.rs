@@ -51,7 +51,6 @@ impl Json {
         }
     }
 
-
     pub fn s(v: impl Into<String>) -> Json {
         Json::Str(v.into())
     }
@@ -59,7 +58,12 @@ impl Json {
         Json::Num(v.into())
     }
     pub fn obj(entries: Vec<(&str, Json)>) -> Json {
-        Json::Obj(entries.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+        Json::Obj(
+            entries
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        )
     }
     pub fn arr(items: Vec<Json>) -> Json {
         Json::Arr(items)
@@ -126,7 +130,10 @@ impl From<Raw> for Json {
 }
 
 pub fn parse(text: &str) -> Option<Json> {
-    let mut p = Parser { b: text.as_bytes(), i: 0 };
+    let mut p = Parser {
+        b: text.as_bytes(),
+        i: 0,
+    };
     let v = p.value()?;
     p.ws();
     (p.i == p.b.len()).then_some(v)
@@ -289,11 +296,18 @@ impl<'a> Parser<'a> {
     fn number(&mut self) -> Option<Json> {
         let start = self.i;
         while self.i < self.b.len()
-            && matches!(self.b[self.i], b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')
+            && matches!(
+                self.b[self.i],
+                b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E'
+            )
         {
             self.i += 1;
         }
-        std::str::from_utf8(&self.b[start..self.i]).ok()?.parse().ok().map(Json::Num)
+        std::str::from_utf8(&self.b[start..self.i])
+            .ok()?
+            .parse()
+            .ok()
+            .map(Json::Num)
     }
 }
 

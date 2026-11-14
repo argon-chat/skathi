@@ -51,16 +51,26 @@ static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn register(path: PathBuf, kind: Kind) -> u64 {
     let id = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
-    handles().lock().unwrap_or_else(|p| p.into_inner()).insert(id, Entry { path, kind });
+    handles()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(id, Entry { path, kind });
     id
 }
 
 fn lookup(id: u64) -> Option<Entry> {
-    handles().lock().unwrap_or_else(|p| p.into_inner()).get(&id).cloned()
+    handles()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&id)
+        .cloned()
 }
 
 pub fn release(id: u64) {
-    handles().lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+    handles()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(&id);
 }
 
 pub fn name_of(path: &Path) -> String {
@@ -92,10 +102,18 @@ fn grant_key(p: &Path) -> String {
     if cfg!(windows) {
         let s = s.replace('/', "\\").to_lowercase();
         let t = s.trim_end_matches('\\');
-        if t.ends_with(':') || t.is_empty() { s } else { t.to_string() }
+        if t.ends_with(':') || t.is_empty() {
+            s
+        } else {
+            t.to_string()
+        }
     } else {
         let t = s.trim_end_matches('/');
-        if t.is_empty() { s.to_string() } else { t.to_string() }
+        if t.is_empty() {
+            s.to_string()
+        } else {
+            t.to_string()
+        }
     }
 }
 
@@ -110,9 +128,15 @@ pub(crate) fn grant(path: &Path) {
 pub fn is_granted(path: &Path) -> bool {
     let k = grant_key(path);
     let sep = if cfg!(windows) { '\\' } else { '/' };
-    grants().lock().unwrap_or_else(|p| p.into_inner()).iter().any(|g| {
-        k == *g || (k.starts_with(g.as_str()) && (g.ends_with(sep) || k[g.len()..].starts_with(sep)))
-    })
+    grants()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .any(|g| {
+            k == *g
+                || (k.starts_with(g.as_str())
+                    && (g.ends_with(sep) || k[g.len()..].starts_with(sep)))
+        })
 }
 
 /// `"granted"` or `"prompt"`; `request` grants the handle's path (only on a user activation). `None` for an unknown id.
@@ -121,7 +145,11 @@ pub fn permission(id: u64, request: bool) -> Option<&'static str> {
     if request {
         grant(&e.path);
     }
-    Some(if is_granted(&e.path) { "granted" } else { "prompt" })
+    Some(if is_granted(&e.path) {
+        "granted"
+    } else {
+        "prompt"
+    })
 }
 
 fn not_granted() -> Fail {
@@ -138,7 +166,11 @@ fn granted(id: u64) -> Result<Entry, Fail> {
 
 pub(crate) fn to_wire(id: u64) -> Option<Vec<u8>> {
     let e = lookup(id)?;
-    Some(json!({ "v": 1, "kind": e.kind.as_str(), "path": e.path.to_string_lossy() }).to_string().into_bytes())
+    Some(
+        json!({ "v": 1, "kind": e.kind.as_str(), "path": e.path.to_string_lossy() })
+            .to_string()
+            .into_bytes(),
+    )
 }
 
 pub(crate) fn from_wire(bytes: &[u8]) -> Option<(PathBuf, Kind)> {
@@ -155,19 +187,21 @@ pub(crate) fn from_wire(bytes: &[u8]) -> Option<(PathBuf, Kind)> {
     path.is_absolute().then_some((path, kind))
 }
 
-
 fn gone() -> Fail {
     // A released or unknown handle id: the nearest honest name is the one for stale cached state.
     Fail::new("InvalidStateError", INVALID_STATE)
 }
 
-pub const NOT_FOUND: &str = "A requested file or directory could not be found at the time an operation was processed.";
+pub const NOT_FOUND: &str =
+    "A requested file or directory could not be found at the time an operation was processed.";
 pub const TYPE_MISMATCH: &str = "The path supplied exists, but was not an entry of requested type.";
 pub const INVALID_MODIFICATION: &str = "The object can not be modified in this way.";
-pub const NOT_ALLOWED: &str = "The request is not allowed by the user agent or the platform in the current context.";
+pub const NOT_ALLOWED: &str =
+    "The request is not allowed by the user agent or the platform in the current context.";
 pub const NO_MODIFICATION: &str =
     "An attempt was made to write to a file or directory which could not be modified due to the state of the underlying filesystem.";
-pub const QUOTA: &str = "The operation failed because it would cause the application to exceed its storage quota.";
+pub const QUOTA: &str =
+    "The operation failed because it would cause the application to exceed its storage quota.";
 pub const INVALID_STATE: &str =
     "An operation that depends on state cached in an interface object was made but the state had changed since it was read from disk.";
 pub const NOT_READABLE: &str =
@@ -191,20 +225,23 @@ pub fn fail_io(e: &std::io::Error, access: Access) -> Fail {
     let f = match (os, e.kind()) {
         (Some(2 | 3), _) | (_, K::NotFound) => named("NotFoundError", NOT_FOUND),
         // ERROR_DIR_NOT_EMPTY: removeEntry without `recursive`.
-        (Some(145), _) | (_, K::DirectoryNotEmpty) => named("InvalidModificationError", INVALID_MODIFICATION),
+        (Some(145), _) | (_, K::DirectoryNotEmpty) => {
+            named("InvalidModificationError", INVALID_MODIFICATION)
+        }
         // ERROR_DISK_FULL, ERROR_HANDLE_DISK_FULL.
         (Some(112 | 39), _) | (_, K::StorageFull) => named("QuotaExceededError", QUOTA),
         // ERROR_DIRECTORY ("the directory name is invalid": a file where a
         // folder was expected) and its std spellings.
-        (Some(267), _) | (_, K::NotADirectory | K::IsADirectory) => named("TypeMismatchError", TYPE_MISMATCH),
+        (Some(267), _) | (_, K::NotADirectory | K::IsADirectory) => {
+            named("TypeMismatchError", TYPE_MISMATCH)
+        }
         // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION,
         // ERROR_WRITE_PROTECT, and ReplaceFileW's three "could not swap" codes.
-        (Some(5 | 32 | 33 | 19 | 1175 | 1176 | 1177), _) | (_, K::PermissionDenied | K::ReadOnlyFilesystem) => {
-            match access {
-                Access::Read => named("NotAllowedError", NOT_ALLOWED),
-                Access::Write => named("NoModificationAllowedError", NO_MODIFICATION),
-            }
-        }
+        (Some(5 | 32 | 33 | 19 | 1175 | 1176 | 1177), _)
+        | (_, K::PermissionDenied | K::ReadOnlyFilesystem) => match access {
+            Access::Read => named("NotAllowedError", NOT_ALLOWED),
+            Access::Write => named("NoModificationAllowedError", NO_MODIFICATION),
+        },
         _ => Fail::new("InvalidStateError", format!("{INVALID_STATE} ({e})")),
     };
     match os {
@@ -214,9 +251,9 @@ pub fn fail_io(e: &std::io::Error, access: Access) -> Fail {
 }
 
 const DEVICE_NAMES: &[&str] = &[
-    "con", "prn", "aux", "nul", "conin$", "conout$", "com0", "com1", "com2", "com3", "com4", "com5", "com6", "com7",
-    "com8", "com9", "com¹", "com²", "com³", "lpt0", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8",
-    "lpt9", "lpt¹", "lpt²", "lpt³",
+    "con", "prn", "aux", "nul", "conin$", "conout$", "com0", "com1", "com2", "com3", "com4",
+    "com5", "com6", "com7", "com8", "com9", "com¹", "com²", "com³", "lpt0", "lpt1", "lpt2", "lpt3",
+    "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9", "lpt¹", "lpt²", "lpt³",
 ];
 
 /// The traversal fence of `getFileHandle` / `getDirectoryHandle` / `removeEntry`: not empty, not `.` or
@@ -228,13 +265,20 @@ pub fn check_name(name: &str) -> Result<(), Fail> {
     if name.is_empty() || name == "." || name == ".." {
         return bad();
     }
-    if name.chars().any(|c| matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*') || (c as u32) < 0x20) {
+    if name.chars().any(|c| {
+        matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*') || (c as u32) < 0x20
+    }) {
         return bad();
     }
     if name.ends_with('.') || name.ends_with(' ') {
         return bad();
     }
-    let stem = name.split('.').next().unwrap_or(name).trim_end().to_lowercase();
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .trim_end()
+        .to_lowercase();
     if DEVICE_NAMES.contains(&stem.as_str()) {
         return bad();
     }
@@ -273,11 +317,17 @@ pub fn op_child(dir: &Path, name: &str, kind: Kind, create: bool) -> Result<Path
             let made = match kind {
                 Kind::Directory => std::fs::create_dir(&child),
                 // `create_new`: two racing creates must not truncate each other's file.
-                Kind::File => std::fs::OpenOptions::new().write(true).create_new(true).open(&child).map(|_| ()),
+                Kind::File => std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&child)
+                    .map(|_| ()),
             };
             match made {
                 Ok(()) => Ok(child),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => op_child(dir, name, kind, false),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    op_child(dir, name, kind, false)
+                }
                 Err(e) => Err(fail_io(&e, Access::Write)),
             }
         }
@@ -305,7 +355,8 @@ pub fn op_remove(dir: &Path, name: &str, recursive: bool) -> Result<(), Fail> {
 }
 
 fn identity(p: &Path) -> String {
-    let canon = std::fs::canonicalize(p).unwrap_or_else(|_| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()));
+    let canon = std::fs::canonicalize(p)
+        .unwrap_or_else(|_| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()));
     let s = canon.to_string_lossy();
     let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
     if cfg!(windows) {
@@ -325,12 +376,22 @@ pub fn op_resolve(root: &Path, desc: &Path) -> Option<Vec<String>> {
     if d == r {
         return Some(Vec::new());
     }
-    let prefix = if r.ends_with(sep) { r.clone() } else { format!("{r}{sep}") };
+    let prefix = if r.ends_with(sep) {
+        r.clone()
+    } else {
+        format!("{r}{sep}")
+    };
     if !d.starts_with(&prefix) {
         return None;
     }
-    let below = d[prefix.len()..].split(sep).filter(|c| !c.is_empty()).count();
-    let comps: Vec<String> = desc.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    let below = d[prefix.len()..]
+        .split(sep)
+        .filter(|c| !c.is_empty())
+        .count();
+    let comps: Vec<String> = desc
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
     if comps.len() < below {
         return None;
     }
@@ -348,12 +409,17 @@ impl Cursor {
     pub fn open(dir: &Path) -> Result<Cursor, Fail> {
         ensure_dir(dir)?;
         let iter = std::fs::read_dir(dir).map_err(|e| fail_io(&e, Access::Read))?;
-        Ok(Cursor { dir: dir.to_path_buf(), iter: Some(iter) })
+        Ok(Cursor {
+            dir: dir.to_path_buf(),
+            iter: Some(iter),
+        })
     }
 
     pub fn next(&mut self, max: usize) -> Result<(Vec<(PathBuf, Kind)>, bool), Fail> {
         let mut out = Vec::new();
-        let Some(iter) = self.iter.as_mut() else { return Ok((out, true)) };
+        let Some(iter) = self.iter.as_mut() else {
+            return Ok((out, true));
+        };
         while out.len() < max {
             match iter.next() {
                 None => {
@@ -458,17 +524,29 @@ pub fn start_remove(dir: u64, name: &str, recursive: bool) -> Result<u32, Fail> 
 }
 
 pub fn start_same(a: u64, b: u64) -> Result<u32, Fail> {
-    let (Some(ea), Some(eb)) = (lookup(a), lookup(b)) else { return Err(gone()) };
+    let (Some(ea), Some(eb)) = (lookup(a), lookup(b)) else {
+        return Err(gone());
+    };
     let token = crate::next_token();
-    pool::submit(token, move || Ok(Done::json(&json!({ "same": op_same(&ea.path, ea.kind, &eb.path, eb.kind) }).to_string())));
+    pool::submit(token, move || {
+        Ok(Done::json(
+            &json!({ "same": op_same(&ea.path, ea.kind, &eb.path, eb.kind) }).to_string(),
+        ))
+    });
     Ok(token)
 }
 
 pub fn start_resolve(root: u64, other: u64) -> Result<u32, Fail> {
-    let (Some(er), Some(eo)) = (lookup(root), lookup(other)) else { return Err(gone()) };
+    let (Some(er), Some(eo)) = (lookup(root), lookup(other)) else {
+        return Err(gone());
+    };
     let token = crate::next_token();
     pool::submit(token, move || {
-        let path = if er.kind == Kind::Directory { op_resolve(&er.path, &eo.path) } else { op_same(&er.path, er.kind, &eo.path, eo.kind).then(Vec::new) };
+        let path = if er.kind == Kind::Directory {
+            op_resolve(&er.path, &eo.path)
+        } else {
+            op_same(&er.path, er.kind, &eo.path, eo.kind).then(Vec::new)
+        };
         Ok(Done::json(&json!({ "path": path }).to_string()))
     });
     Ok(token)
@@ -486,30 +564,50 @@ pub fn start_dir_open(dir: u64) -> Result<u32, Fail> {
     pool::submit(token, move || {
         let c = Cursor::open(&e.path)?;
         let id = NEXT_CURSOR.fetch_add(1, Ordering::Relaxed);
-        cursors().lock().unwrap_or_else(|p| p.into_inner()).insert(id, Arc::new(Mutex::new(c)));
+        cursors()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(id, Arc::new(Mutex::new(c)));
         Ok(Done::json(&json!({ "cursor": id }).to_string()))
     });
     Ok(token)
 }
 
 pub fn start_dir_next(cursor: u64) -> Result<u32, Fail> {
-    let Some(c) = cursors().lock().unwrap_or_else(|p| p.into_inner()).get(&cursor).cloned() else {
+    let Some(c) = cursors()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&cursor)
+        .cloned()
+    else {
         return Err(gone());
     };
     let token = crate::next_token();
     pool::submit(token, move || {
-        let (batch, done) = c.lock().unwrap_or_else(|p| p.into_inner()).next(DIR_BATCH)?;
-        let entries: Vec<serde_json::Value> = batch.into_iter().map(|(p, k)| handle_json(p, k)).collect();
+        let (batch, done) = c
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .next(DIR_BATCH)?;
+        let entries: Vec<serde_json::Value> =
+            batch.into_iter().map(|(p, k)| handle_json(p, k)).collect();
         if done {
-            cursors().lock().unwrap_or_else(|p| p.into_inner()).remove(&cursor);
+            cursors()
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&cursor);
         }
-        Ok(Done::json(&json!({ "entries": entries, "done": done }).to_string()))
+        Ok(Done::json(
+            &json!({ "entries": entries, "done": done }).to_string(),
+        ))
     });
     Ok(token)
 }
 
 pub fn dir_close(cursor: u64) {
-    cursors().lock().unwrap_or_else(|p| p.into_inner()).remove(&cursor);
+    cursors()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(&cursor);
 }
 
 pub(crate) fn path_of(id: u64) -> Option<(PathBuf, Kind)> {
@@ -525,8 +623,11 @@ pub(crate) mod tests {
     impl Scratch {
         pub fn new(tag: &str) -> Scratch {
             static N: AtomicU64 = AtomicU64::new(0);
-            let p = std::env::temp_dir()
-                .join(format!("sk-desktop-fs-{tag}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+            let p = std::env::temp_dir().join(format!(
+                "sk-desktop-fs-{tag}-{}-{}",
+                std::process::id(),
+                N.fetch_add(1, Ordering::Relaxed)
+            ));
             std::fs::create_dir_all(&p).unwrap();
             Scratch(p)
         }
@@ -540,15 +641,48 @@ pub(crate) mod tests {
 
     #[test]
     fn the_name_fence_refuses_everything_that_leaves_the_folder() {
-        for ok in ["a.txt", "notes", ".gitignore", "Ünïcødé ✓.md", "con-sole.txt", "a..b", "my console"] {
+        for ok in [
+            "a.txt",
+            "notes",
+            ".gitignore",
+            "Ünïcødé ✓.md",
+            "con-sole.txt",
+            "a..b",
+            "my console",
+        ] {
             assert!(check_name(ok).is_ok(), "{ok:?} must pass");
         }
         for bad in [
-            "", ".", "..", "a/b", r"a\b", "../x", r"..\x", "a.txt:stream", "C:x", "CON", "con", "NUL.txt", "com1",
-            "LPT9.log", "trailing.", "trailing ", "a<b", "a|b", "a?b", "a*b", "a\"b", "tab\there", "nul\u{0}",
+            "",
+            ".",
+            "..",
+            "a/b",
+            r"a\b",
+            "../x",
+            r"..\x",
+            "a.txt:stream",
+            "C:x",
+            "CON",
+            "con",
+            "NUL.txt",
+            "com1",
+            "LPT9.log",
+            "trailing.",
+            "trailing ",
+            "a<b",
+            "a|b",
+            "a?b",
+            "a*b",
+            "a\"b",
+            "tab\there",
+            "nul\u{0}",
         ] {
             let f = check_name(bad).expect_err(bad);
-            assert_eq!((f.name, f.message.as_str()), ("TypeError", BAD_NAME), "{bad:?}");
+            assert_eq!(
+                (f.name, f.message.as_str()),
+                ("TypeError", BAD_NAME),
+                "{bad:?}"
+            );
         }
     }
 
@@ -557,15 +691,28 @@ pub(crate) mod tests {
         let os = std::io::Error::from_raw_os_error;
         assert_eq!(fail_io(&os(2), Access::Read).name, "NotFoundError");
         assert_eq!(fail_io(&os(3), Access::Write).name, "NotFoundError");
-        assert_eq!(fail_io(&os(145), Access::Write).name, "InvalidModificationError");
+        assert_eq!(
+            fail_io(&os(145), Access::Write).name,
+            "InvalidModificationError"
+        );
         assert_eq!(fail_io(&os(5), Access::Read).name, "NotAllowedError");
-        assert_eq!(fail_io(&os(32), Access::Write).name, "NoModificationAllowedError");
-        assert_eq!(fail_io(&os(1175), Access::Write).name, "NoModificationAllowedError");
+        assert_eq!(
+            fail_io(&os(32), Access::Write).name,
+            "NoModificationAllowedError"
+        );
+        assert_eq!(
+            fail_io(&os(1175), Access::Write).name,
+            "NoModificationAllowedError"
+        );
         assert_eq!(fail_io(&os(112), Access::Write).name, "QuotaExceededError");
         assert_eq!(fail_io(&os(267), Access::Read).name, "TypeMismatchError");
         let other = fail_io(&os(1117), Access::Read);
         assert_eq!(other.name, "InvalidStateError");
-        assert!(other.message.starts_with(INVALID_STATE), "{}", other.message);
+        assert!(
+            other.message.starts_with(INVALID_STATE),
+            "{}",
+            other.message
+        );
         assert_eq!(fail_io(&os(2), Access::Read).message, NOT_FOUND);
         assert_eq!(fail_io(&os(2), Access::Read).os_error, Some(2));
     }
@@ -575,18 +722,52 @@ pub(crate) mod tests {
         let s = Scratch::new("child");
         std::fs::write(s.0.join("a.txt"), b"x").unwrap();
         std::fs::create_dir(s.0.join("sub")).unwrap();
-        assert_eq!(op_child(&s.0, "a.txt", Kind::File, false).unwrap(), s.0.join("a.txt"));
-        assert_eq!(op_child(&s.0, "a.txt", Kind::Directory, false).unwrap_err().name, "TypeMismatchError");
-        assert_eq!(op_child(&s.0, "a.txt", Kind::Directory, true).unwrap_err().name, "TypeMismatchError");
-        assert_eq!(op_child(&s.0, "sub", Kind::File, false).unwrap_err().name, "TypeMismatchError");
-        assert_eq!(op_child(&s.0, "missing", Kind::File, false).unwrap_err().name, "NotFoundError");
+        assert_eq!(
+            op_child(&s.0, "a.txt", Kind::File, false).unwrap(),
+            s.0.join("a.txt")
+        );
+        assert_eq!(
+            op_child(&s.0, "a.txt", Kind::Directory, false)
+                .unwrap_err()
+                .name,
+            "TypeMismatchError"
+        );
+        assert_eq!(
+            op_child(&s.0, "a.txt", Kind::Directory, true)
+                .unwrap_err()
+                .name,
+            "TypeMismatchError"
+        );
+        assert_eq!(
+            op_child(&s.0, "sub", Kind::File, false).unwrap_err().name,
+            "TypeMismatchError"
+        );
+        assert_eq!(
+            op_child(&s.0, "missing", Kind::File, false)
+                .unwrap_err()
+                .name,
+            "NotFoundError"
+        );
         let made = op_child(&s.0, "new.txt", Kind::File, true).unwrap();
         assert_eq!(std::fs::read(&made).unwrap(), b"");
-        assert_eq!(op_child(&s.0, "a.txt", Kind::File, true).unwrap(), s.0.join("a.txt"));
+        assert_eq!(
+            op_child(&s.0, "a.txt", Kind::File, true).unwrap(),
+            s.0.join("a.txt")
+        );
         assert_eq!(std::fs::read(s.0.join("a.txt")).unwrap(), b"x");
-        assert!(op_child(&s.0, "newdir", Kind::Directory, true).unwrap().is_dir());
-        assert_eq!(op_child(&s.0.join("a.txt"), "x", Kind::File, false).unwrap_err().name, "TypeMismatchError");
-        assert_eq!(op_stat_file(&s.0.join("sub")).unwrap_err().name, "TypeMismatchError");
+        assert!(op_child(&s.0, "newdir", Kind::Directory, true)
+            .unwrap()
+            .is_dir());
+        assert_eq!(
+            op_child(&s.0.join("a.txt"), "x", Kind::File, false)
+                .unwrap_err()
+                .name,
+            "TypeMismatchError"
+        );
+        assert_eq!(
+            op_stat_file(&s.0.join("sub")).unwrap_err().name,
+            "TypeMismatchError"
+        );
         assert_eq!(op_stat_file(&s.0.join("a.txt")).unwrap().0, 1);
     }
 
@@ -597,13 +778,19 @@ pub(crate) mod tests {
         std::fs::write(s.0.join("full/deeper/f"), b"1").unwrap();
         std::fs::create_dir(s.0.join("empty")).unwrap();
         std::fs::write(s.0.join("f.txt"), b"1").unwrap();
-        assert_eq!(op_remove(&s.0, "full", false).unwrap_err().name, "InvalidModificationError");
+        assert_eq!(
+            op_remove(&s.0, "full", false).unwrap_err().name,
+            "InvalidModificationError"
+        );
         assert!(s.0.join("full/deeper/f").exists());
         op_remove(&s.0, "full", true).unwrap();
         assert!(!s.0.join("full").exists());
         op_remove(&s.0, "empty", false).unwrap();
         op_remove(&s.0, "f.txt", false).unwrap();
-        assert_eq!(op_remove(&s.0, "f.txt", false).unwrap_err().name, "NotFoundError");
+        assert_eq!(
+            op_remove(&s.0, "f.txt", false).unwrap_err().name,
+            "NotFoundError"
+        );
     }
 
     #[test]
@@ -612,13 +799,29 @@ pub(crate) mod tests {
         std::fs::create_dir_all(s.0.join("Sub/Deep")).unwrap();
         std::fs::write(s.0.join("Sub/Deep/File.txt"), b"1").unwrap();
         let file = s.0.join("Sub/Deep/File.txt");
-        assert!(op_same(&file, Kind::File, &s.0.join("Sub").join("Deep").join("File.txt"), Kind::File));
+        assert!(op_same(
+            &file,
+            Kind::File,
+            &s.0.join("Sub").join("Deep").join("File.txt"),
+            Kind::File
+        ));
         if cfg!(windows) {
-            assert!(op_same(&file, Kind::File, &s.0.join("sub/deep/file.TXT"), Kind::File));
+            assert!(op_same(
+                &file,
+                Kind::File,
+                &s.0.join("sub/deep/file.TXT"),
+                Kind::File
+            ));
         }
-        assert!(!op_same(&file, Kind::File, &file, Kind::Directory), "a different kind is never the same entry");
+        assert!(
+            !op_same(&file, Kind::File, &file, Kind::Directory),
+            "a different kind is never the same entry"
+        );
         assert!(!op_same(&file, Kind::File, &s.0.join("Sub"), Kind::File));
-        assert_eq!(op_resolve(&s.0, &file), Some(vec!["Sub".into(), "Deep".into(), "File.txt".into()]));
+        assert_eq!(
+            op_resolve(&s.0, &file),
+            Some(vec!["Sub".into(), "Deep".into(), "File.txt".into()])
+        );
         assert_eq!(op_resolve(&s.0, &s.0), Some(vec![]));
         assert_eq!(op_resolve(&s.0.join("Sub"), &s.0), None);
         std::fs::create_dir(s.0.join("Sub2")).unwrap();
@@ -650,14 +853,24 @@ pub(crate) mod tests {
         assert!(sizes.iter().all(|&n| n <= DIR_BATCH));
         assert_eq!(all.iter().filter(|(_, k)| *k == Kind::Directory).count(), 1);
         assert_eq!(c.next(DIR_BATCH).unwrap(), (vec![], true));
-        assert_eq!(Cursor::open(&s.0.join("f000")).err().map(|f| f.name), Some("TypeMismatchError"));
+        assert_eq!(
+            Cursor::open(&s.0.join("f000")).err().map(|f| f.name),
+            Some("TypeMismatchError")
+        );
     }
 
     #[test]
     fn handles_are_granted_and_released_by_id() {
-        let report = PathBuf::from(if cfg!(windows) { r"C:\x\report.txt" } else { "/x/report.txt" });
+        let report = PathBuf::from(if cfg!(windows) {
+            r"C:\x\report.txt"
+        } else {
+            "/x/report.txt"
+        });
         let v = handle_json(report.clone(), Kind::File);
-        assert_eq!((v["name"].as_str(), v["kind"].as_str()), (Some("report.txt"), Some("file")));
+        assert_eq!(
+            (v["name"].as_str(), v["kind"].as_str()),
+            (Some("report.txt"), Some("file"))
+        );
         let id = v["h"].as_u64().unwrap();
         assert_eq!(lookup(id).map(|e| e.path), Some(report));
         release(id);
@@ -677,15 +890,25 @@ pub(crate) mod tests {
         std::fs::write(s.0.join("Picked2.txt"), b"b").unwrap();
         let h = register(root.clone(), Kind::Directory);
         assert_eq!(permission(h, false), Some("prompt"));
-        for refused in [start_dir_open(h), start_child(h, "inner", Kind::Directory, false), start_remove(h, "inner", true)] {
+        for refused in [
+            start_dir_open(h),
+            start_child(h, "inner", Kind::Directory, false),
+            start_remove(h, "inner", true),
+        ] {
             let f = refused.unwrap_err();
-            assert_eq!((f.name, f.message.as_str()), ("NotAllowedError", NOT_ALLOWED));
+            assert_eq!(
+                (f.name, f.message.as_str()),
+                ("NotAllowedError", NOT_ALLOWED)
+            );
         }
         assert!(root.join("inner/a.txt").exists(), "nothing ran");
         assert_eq!(permission(h, true), Some("granted"));
         assert!(is_granted(&root.join("inner").join("a.txt")));
         if cfg!(windows) {
-            assert!(is_granted(Path::new(&root.to_string_lossy().to_uppercase())), "NTFS names compare without case");
+            assert!(
+                is_granted(Path::new(&root.to_string_lossy().to_uppercase())),
+                "NTFS names compare without case"
+            );
             assert!(is_granted(&PathBuf::from(format!("{}\\", root.display()))));
         }
         assert!(!is_granted(&s.0.join("Picked2.txt")));
@@ -693,22 +916,36 @@ pub(crate) mod tests {
         let f = register(s.0.join("Picked2.txt"), Kind::File);
         assert_eq!(start_get_file(f).unwrap_err().name, "NotAllowedError");
         assert_eq!(permission(f, false), Some("prompt"));
-        assert_eq!(permission(u64::MAX, true), None, "an unknown id grants nothing");
-        assert_eq!(writable::start_open(f, false).unwrap_err().name, "NotAllowedError");
+        assert_eq!(
+            permission(u64::MAX, true),
+            None,
+            "an unknown id grants nothing"
+        );
+        assert_eq!(
+            writable::start_open(f, false).unwrap_err().name,
+            "NotAllowedError"
+        );
         release(h);
         release(f);
     }
 
     #[test]
     fn a_serialized_handle_is_its_path_and_kind_and_nothing_else_parses() {
-        let path = if cfg!(windows) { PathBuf::from(r"C:\data\ünï\report.txt") } else { PathBuf::from("/data/report.txt") };
+        let path = if cfg!(windows) {
+            PathBuf::from(r"C:\data\ünï\report.txt")
+        } else {
+            PathBuf::from("/data/report.txt")
+        };
         let id = register(path.clone(), Kind::File);
         let bytes = to_wire(id).unwrap();
         assert_eq!(from_wire(&bytes), Some((path.clone(), Kind::File)));
         release(id);
         assert_eq!(to_wire(id), None, "a released handle has nothing to write");
         let dir = register(path.parent().unwrap().to_path_buf(), Kind::Directory);
-        assert_eq!(from_wire(&to_wire(dir).unwrap()).map(|(_, k)| k), Some(Kind::Directory));
+        assert_eq!(
+            from_wire(&to_wire(dir).unwrap()).map(|(_, k)| k),
+            Some(Kind::Directory)
+        );
         release(dir);
         for bad in [
             &br#"{"v":2,"kind":"file","path":"C:\\x"}"#[..],
@@ -726,7 +963,10 @@ pub(crate) mod tests {
         let dir = register(std::env::temp_dir(), Kind::Directory);
         let f = start_child(dir, "..", Kind::File, true).unwrap_err();
         assert_eq!((f.name, f.message.as_str()), ("TypeError", BAD_NAME));
-        assert_eq!(start_remove(dir, "a:b", false).unwrap_err().name, "TypeError");
+        assert_eq!(
+            start_remove(dir, "a:b", false).unwrap_err().name,
+            "TypeError"
+        );
         release(dir);
     }
 }

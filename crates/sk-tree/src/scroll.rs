@@ -56,7 +56,10 @@ thread_local! {
 
 pub(crate) fn note_built(id: u32, handle: &ScrollHandle) {
     let o = handle.offset();
-    AT_BUILD.with(|m| m.borrow_mut().insert(id, (-f32::from(o.x), -f32::from(o.y))));
+    AT_BUILD.with(|m| {
+        m.borrow_mut()
+            .insert(id, (-f32::from(o.x), -f32::from(o.y)))
+    });
 }
 
 pub(crate) fn unpainted_shift(id: u32) -> (f32, f32) {
@@ -70,7 +73,9 @@ pub(crate) fn unpainted_shift(id: u32) -> (f32, f32) {
             break;
         }
         if let Some(handle) = render::scroll_handle_of(cur) {
-            let at_build = AT_BUILD.with(|m| m.borrow().get(&cur).copied()).unwrap_or((0.0, 0.0));
+            let at_build = AT_BUILD
+                .with(|m| m.borrow().get(&cur).copied())
+                .unwrap_or((0.0, 0.0));
             let now = handle.offset();
             dx -= (-f32::from(now.x)) - at_build.0;
             dy -= (-f32::from(now.y)) - at_build.1;
@@ -118,7 +123,10 @@ pub(crate) fn set(id: u32, left: Option<f32>, top: Option<f32>) -> Option<Info> 
 pub(crate) fn by(id: u32, dx: f32, dy: f32) -> Option<Info> {
     let (handle, stale) = layout_then_handle(id)?;
     let current = handle.offset();
-    let want = Point { x: current.x - px(dx), y: current.y - px(dy) };
+    let want = Point {
+        x: current.x - px(dx),
+        y: current.y - px(dy),
+    };
     Some(apply(id, &handle, want, stale))
 }
 
@@ -155,7 +163,9 @@ pub(crate) fn into_view(id: u32, block: Align, inline: Align) -> Result<bool, St
     // The same correction `dom::bounds` applies, for the same reason: two `scrollIntoView()` calls
     // in one JS wave must not both aim at the position the first one moved away from.
     let shift = unpainted_shift(id);
-    let Some((mut x, mut y, w, h)) = render::bounds_of(id).map(|(x, y, w, h)| (x + shift.0, y + shift.1, w, h)) else {
+    let Some((mut x, mut y, w, h)) =
+        render::bounds_of(id).map(|(x, y, w, h)| (x + shift.0, y + shift.1, w, h))
+    else {
         return Err(format!(
             "scrollIntoView(): node {id} has no rectangle — it is detached, \
              `display: none`, or parked in a <KeepAlive> cache, and a browser \
@@ -178,15 +188,32 @@ pub(crate) fn into_view(id: u32, block: Align, inline: Align) -> Result<bool, St
     });
     let mut scrolled = false;
     for ancestor in chain {
-        let Some(handle) = render::scroll_handle_of(ancestor) else { continue };
+        let Some(handle) = render::scroll_handle_of(ancestor) else {
+            continue;
+        };
         let viewport = handle.bounds();
         if viewport.size.width <= px(0.) && viewport.size.height <= px(0.) {
             continue;
         }
-        let dx = align_delta(inline, x, w, f32::from(viewport.origin.x), f32::from(viewport.size.width));
-        let dy = align_delta(block, y, h, f32::from(viewport.origin.y), f32::from(viewport.size.height));
+        let dx = align_delta(
+            inline,
+            x,
+            w,
+            f32::from(viewport.origin.x),
+            f32::from(viewport.size.width),
+        );
+        let dy = align_delta(
+            block,
+            y,
+            h,
+            f32::from(viewport.origin.y),
+            f32::from(viewport.size.height),
+        );
         let before = handle.offset();
-        let want = Point { x: before.x - px(dx), y: before.y - px(dy) };
+        let want = Point {
+            x: before.x - px(dx),
+            y: before.y - px(dy),
+        };
         apply(ancestor, &handle, want, stale);
         let after = handle.offset();
         x -= f32::from(before.x - after.x);
@@ -197,7 +224,13 @@ pub(crate) fn into_view(id: u32, block: Align, inline: Align) -> Result<bool, St
     Ok(stale)
 }
 
-fn align_delta(align: Align, target_start: f32, target_len: f32, view_start: f32, view_len: f32) -> f32 {
+fn align_delta(
+    align: Align,
+    target_start: f32,
+    target_len: f32,
+    view_start: f32,
+    view_len: f32,
+) -> f32 {
     let target_end = target_start + target_len;
     let view_end = view_start + view_len;
     match align {
@@ -227,7 +260,9 @@ pub(crate) fn dispatch_pending(window: &mut gpui::Window, cx: &mut gpui::App) ->
         return false;
     }
     for id in pending {
-        let Some(handle) = render::scroll_handle_of(id) else { continue };
+        let Some(handle) = render::scroll_handle_of(id) else {
+            continue;
+        };
         render::report_scroll(id, &handle, window, cx);
     }
     true

@@ -84,7 +84,15 @@ pub(crate) fn chroma_row(level: Level, near: &[u8], far: &[u8], tmp: &mut [u16],
 }
 
 /// Converts one row: `y`, `u`, `v` (chroma at luma resolution) and `a` (or 255) to BGRA.
-pub(crate) fn yuva_row(level: Level, k: &Coeffs, y: &[u8], u: &[u8], v: &[u8], a: Option<&[u8]>, out: &mut [u8]) {
+pub(crate) fn yuva_row(
+    level: Level,
+    k: &Coeffs,
+    y: &[u8],
+    u: &[u8],
+    v: &[u8],
+    a: Option<&[u8]>,
+    out: &mut [u8],
+) {
     let w = y.len();
     assert!(u.len() == w && v.len() == w && a.is_none_or(|a| a.len() == w) && out.len() == 4 * w);
     let clamp = |v: i32| v.clamp(0, 255) as u8;
@@ -112,7 +120,15 @@ mod simd {
         0
     }
 
-    pub fn yuva(_: Level, _: &Coeffs, _: &[u8], _: &[u8], _: &[u8], _: Option<&[u8]>, _: &mut [u8]) -> usize {
+    pub fn yuva(
+        _: Level,
+        _: &Coeffs,
+        _: &[u8],
+        _: &[u8],
+        _: &[u8],
+        _: Option<&[u8]>,
+        _: &mut [u8],
+    ) -> usize {
         0
     }
 }
@@ -141,7 +157,15 @@ mod simd {
         }
     }
 
-    pub fn yuva(level: Level, k: &Coeffs, y: &[u8], u: &[u8], v: &[u8], a: Option<&[u8]>, out: &mut [u8]) -> usize {
+    pub fn yuva(
+        level: Level,
+        k: &Coeffs,
+        y: &[u8],
+        u: &[u8],
+        v: &[u8],
+        a: Option<&[u8]>,
+        out: &mut [u8],
+    ) -> usize {
         match level {
             Level::Avx2 => unsafe { yuva_avx2(k, y, u, v, a, out) },
             Level::Sse2 => unsafe { yuva_sse2(k, y, u, v, a, out) },
@@ -253,7 +277,14 @@ mod simd {
     }
 
     #[target_feature(enable = "sse2")]
-    unsafe fn yuva_sse2(k: &Coeffs, y: &[u8], u: &[u8], v: &[u8], a: Option<&[u8]>, out: &mut [u8]) -> usize {
+    unsafe fn yuva_sse2(
+        k: &Coeffs,
+        y: &[u8],
+        u: &[u8],
+        v: &[u8],
+        a: Option<&[u8]>,
+        out: &mut [u8],
+    ) -> usize {
         let zero = _mm_setzero_si128();
         let one = _mm_set1_epi16(1);
         let max = _mm_set1_epi16(255);
@@ -278,9 +309,28 @@ mod simd {
                 None => max,
             };
             let (lo, hi) = yuva_body!(
-                k, yy, uu, vv, aa, zero, one, max, ky, kr, kg, kb,
-                _mm_unpacklo_epi16, _mm_unpackhi_epi16, _mm_madd_epi16, _mm_add_epi32, _mm_srai_epi32,
-                _mm_packs_epi32, _mm_max_epi16, _mm_min_epi16, _mm_or_si128, _mm_slli_epi16
+                k,
+                yy,
+                uu,
+                vv,
+                aa,
+                zero,
+                one,
+                max,
+                ky,
+                kr,
+                kg,
+                kb,
+                _mm_unpacklo_epi16,
+                _mm_unpackhi_epi16,
+                _mm_madd_epi16,
+                _mm_add_epi32,
+                _mm_srai_epi32,
+                _mm_packs_epi32,
+                _mm_max_epi16,
+                _mm_min_epi16,
+                _mm_or_si128,
+                _mm_slli_epi16
             );
             let dst = out.as_mut_ptr().add(4 * x);
             _mm_storeu_si128(dst.cast(), lo);
@@ -291,7 +341,14 @@ mod simd {
     }
 
     #[target_feature(enable = "avx2")]
-    unsafe fn yuva_avx2(k: &Coeffs, y: &[u8], u: &[u8], v: &[u8], a: Option<&[u8]>, out: &mut [u8]) -> usize {
+    unsafe fn yuva_avx2(
+        k: &Coeffs,
+        y: &[u8],
+        u: &[u8],
+        v: &[u8],
+        a: Option<&[u8]>,
+        out: &mut [u8],
+    ) -> usize {
         let zero = _mm256_setzero_si256();
         let one = _mm256_set1_epi16(1);
         let max = _mm256_set1_epi16(255);
@@ -318,13 +375,35 @@ mod simd {
             // unpacklo/hi work per 128-bit lane, so the packs and the last unpack restore pixel
             // order from (lo: 0..4, 8..12; hi: 4..8, 12..16).
             let (lo, hi) = yuva_body!(
-                k, yy, uu, vv, aa, zero, one, max, ky, kr, kg, kb,
-                _mm256_unpacklo_epi16, _mm256_unpackhi_epi16, _mm256_madd_epi16, _mm256_add_epi32, _mm256_srai_epi32,
-                _mm256_packs_epi32, _mm256_max_epi16, _mm256_min_epi16, _mm256_or_si256, _mm256_slli_epi16
+                k,
+                yy,
+                uu,
+                vv,
+                aa,
+                zero,
+                one,
+                max,
+                ky,
+                kr,
+                kg,
+                kb,
+                _mm256_unpacklo_epi16,
+                _mm256_unpackhi_epi16,
+                _mm256_madd_epi16,
+                _mm256_add_epi32,
+                _mm256_srai_epi32,
+                _mm256_packs_epi32,
+                _mm256_max_epi16,
+                _mm256_min_epi16,
+                _mm256_or_si256,
+                _mm256_slli_epi16
             );
             let dst = out.as_mut_ptr().add(4 * x);
             _mm256_storeu_si256(dst.cast(), _mm256_permute2x128_si256::<0x20>(lo, hi));
-            _mm256_storeu_si256(dst.add(32).cast(), _mm256_permute2x128_si256::<0x31>(lo, hi));
+            _mm256_storeu_si256(
+                dst.add(32).cast(),
+                _mm256_permute2x128_si256::<0x31>(lo, hi),
+            );
             x += 16;
         }
         x

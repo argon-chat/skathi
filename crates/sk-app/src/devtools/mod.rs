@@ -7,16 +7,10 @@
 //! Discovery is `<dist>/devtools.json` (`{port, pid, token}`) via [`crate::slot`]. The same port
 //! also answers HTTP/1.1 (`POST /`, one command per connection) so JS can reach it with `fetch()`.
 
-mod eval;
-mod net;
-mod picker;
 mod allocations;
-mod leases;
+mod eval;
 mod indexeddb;
-#[cfg(any(windows, target_os = "macos"))]
-mod mem_common;
-#[cfg(any(target_os = "macos", all(test, windows)))]
-mod mem_fold;
+mod leases;
 #[cfg(windows)]
 mod mem;
 #[cfg(target_os = "macos")]
@@ -25,8 +19,14 @@ mod mem;
 #[cfg(not(any(windows, target_os = "macos")))]
 #[path = "mem_stub.rs"]
 mod mem;
-pub(crate) mod trace;
+#[cfg(any(windows, target_os = "macos"))]
+mod mem_common;
+#[cfg(any(target_os = "macos", all(test, windows)))]
+mod mem_fold;
+mod net;
+mod picker;
 mod screenshot;
+pub(crate) mod trace;
 pub mod ws;
 
 use std::collections::VecDeque;
@@ -105,7 +105,11 @@ pub fn boot(config_enabled: bool) {
 /// `SK_DEVTOOLS=1|on|true|yes` forces the devtools on and locks them against `disable()`;
 /// `0|off|false|no` only sets the initial state. An empty value counts as unset.
 fn resolve_initial(config_enabled: bool) -> (bool, bool) {
-    match std::env::var("SK_DEVTOOLS").unwrap_or_default().to_ascii_lowercase().as_str() {
+    match std::env::var("SK_DEVTOOLS")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "" => (config_enabled, false),
         "1" | "on" | "true" | "yes" => (true, true),
         "0" | "off" | "false" | "no" => (false, false),
@@ -209,7 +213,10 @@ fn start_listener() {
         ("token", Json::s(&token)),
     ]);
     if let Err(e) = std::fs::write(&path, format!("{}\n", doc.to_json())) {
-        eprintln!("[devtools] cannot write {}: {e} — devtools disabled", path.display());
+        eprintln!(
+            "[devtools] cannot write {}: {e} — devtools disabled",
+            path.display()
+        );
         return;
     }
     PORT.store(port, Ordering::SeqCst);
@@ -446,7 +453,13 @@ fn read_target(dir: &std::path::Path) -> Option<Json> {
     )
     .is_ok();
     Some(Json::obj(vec![
-        ("slot", Json::s(dir.file_name().map_or_else(|| dir.display().to_string(), |n| n.to_string_lossy().to_string()))),
+        (
+            "slot",
+            Json::s(dir.file_name().map_or_else(
+                || dir.display().to_string(),
+                |n| n.to_string_lossy().to_string(),
+            )),
+        ),
         ("dir", Json::s(dir.display().to_string())),
         ("port", Json::n(f64::from(port))),
         ("pid", Json::n(pid)),
@@ -485,7 +498,9 @@ fn collect_targets_json() -> String {
         dirs.push(std::path::PathBuf::from(&preferred));
     }
     for root in scan_roots() {
-        let Ok(entries) = std::fs::read_dir(&root) else { continue };
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() && path.join("devtools.json").is_file() && !dirs.contains(&path) {
@@ -495,11 +510,21 @@ fn collect_targets_json() -> String {
     }
     let targets: Vec<Json> = dirs.iter().filter_map(|d| read_target(d)).collect();
     Json::obj(vec![
-        ("preferred", if preferred.is_empty() { Json::Null } else { Json::s(preferred) }),
-        ("self", Json::obj(vec![
-            ("pid", Json::n(std::process::id() as f64)),
-            ("dir", Json::s(crate::slot::dir().display().to_string())),
-        ])),
+        (
+            "preferred",
+            if preferred.is_empty() {
+                Json::Null
+            } else {
+                Json::s(preferred)
+            },
+        ),
+        (
+            "self",
+            Json::obj(vec![
+                ("pid", Json::n(std::process::id() as f64)),
+                ("dir", Json::s(crate::slot::dir().display().to_string())),
+            ]),
+        ),
         ("targets", Json::arr(targets)),
     ])
     .to_json()
@@ -588,12 +613,24 @@ sk_runtime::raw_host_fn! { fn sk_trace_callback_end(_g, cf) {
 /// Call before the app bundle boots. Unconditional so `appDevtools` can answer while devtools are
 /// off; the JS tees are not (see [`install_tees_once`]).
 pub fn install(rt: &JsRuntime) {
-    rt.register("__sk_trace_callback_begin", 1, sk_trace_callback_begin as *const _);
-    rt.register("__sk_trace_callback_end", 1, sk_trace_callback_end as *const _);
+    rt.register(
+        "__sk_trace_callback_begin",
+        1,
+        sk_trace_callback_begin as *const _,
+    );
+    rt.register(
+        "__sk_trace_callback_end",
+        1,
+        sk_trace_callback_end as *const _,
+    );
     rt.register("__sk_devtools_console", 3, sk_devtools_console as *const _);
     rt.register("__sk_devtools_targets", 0, sk_devtools_targets as *const _);
     rt.register("__sk_devtools_state", 0, sk_devtools_state as *const _);
-    rt.register("__sk_devtools_set_enabled", 1, sk_devtools_set_enabled as *const _);
+    rt.register(
+        "__sk_devtools_set_enabled",
+        1,
+        sk_devtools_set_enabled as *const _,
+    );
     rt.register("__sk_devtools_open", 0, sk_devtools_open as *const _);
     net::install(rt);
     if enabled() {
@@ -635,15 +672,29 @@ impl LoaderRow {
         let at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
-        LoaderRow(Some((method.to_string(), url.to_string(), at, std::time::Instant::now())))
+        LoaderRow(Some((
+            method.to_string(),
+            url.to_string(),
+            at,
+            std::time::Instant::now(),
+        )))
     }
 
     pub fn finish(
         self,
-        result: &Result<sk_runtime::redjs::webapi::http::Response, sk_runtime::redjs::webapi::http::HttpError>,
+        result: &Result<
+            sk_runtime::redjs::webapi::http::Response,
+            sk_runtime::redjs::webapi::http::HttpError,
+        >,
     ) {
         if let Some((method, url, at, t0)) = self.0 {
-            net::record_loader(&method, &url, at, t0.elapsed().as_secs_f64() * 1000.0, result);
+            net::record_loader(
+                &method,
+                &url,
+                at,
+                t0.elapsed().as_secs_f64() * 1000.0,
+                result,
+            );
         }
     }
 }
@@ -659,10 +710,15 @@ fn cmd_net_cache(op: Option<&str>) -> String {
             ok(net::cache_json())
         }
         "clear" => match cache::clear() {
-            Ok(freed) => ok(Json::obj(vec![("freed", Json::n(freed as f64)), ("now", net::cache_json())])),
+            Ok(freed) => ok(Json::obj(vec![
+                ("freed", Json::n(freed as f64)),
+                ("now", net::cache_json()),
+            ])),
             Err(e) => err(format!("net_cache clear: {e}")),
         },
-        other => err(format!("net_cache: unknown op {other:?} — \"stats\" (default) or \"clear\"")),
+        other => err(format!(
+            "net_cache: unknown op {other:?} — \"stats\" (default) or \"clear\""
+        )),
     }
 }
 
@@ -672,7 +728,11 @@ fn fresh_token() -> String {
     use std::hash::{BuildHasher, Hasher, RandomState};
     let mut h = RandomState::new().build_hasher();
     h.write_u64(std::process::id() as u64);
-    h.write_u64(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64));
+    h.write_u64(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64),
+    );
     let a = h.finish();
     let mut h2 = RandomState::new().build_hasher();
     h2.write_u64(a);
@@ -705,7 +765,9 @@ fn accept_loop(listener: TcpListener, generation: u64) {
 /// Newline-delimited JSON (pipelining allowed) or HTTP/1.1 (one `POST /` per connection), told
 /// apart by the first line: JSON starts with `{`, an HTTP request line ends with ` HTTP/1.x`.
 fn serve(stream: TcpStream) {
-    let Ok(write_half) = stream.try_clone() else { return };
+    let Ok(write_half) = stream.try_clone() else {
+        return;
+    };
     let mut out = write_half;
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
@@ -743,7 +805,10 @@ fn handle_request(line: &str) -> String {
             // `disable()` is refused.
             let want = TOKEN.lock().unwrap().clone();
             let ok_token = !want.is_empty()
-                && req.get("token").and_then(Json::as_str).is_some_and(|t| t == want);
+                && req
+                    .get("token")
+                    .and_then(Json::as_str)
+                    .is_some_and(|t| t == want);
             if !ok_token {
                 err("bad or missing token — read it from <dist>/devtools.json")
             } else {
@@ -754,14 +819,16 @@ fn handle_request(line: &str) -> String {
                     Some("allocations") => {
                         let result = allocations::command_authenticated(&req, generation);
                         if result.is_ok() && req.get("op").and_then(Json::as_str) == Some("start") {
-                            if let Some(ms) = req.get("leaseMs").and_then(Json::as_f64) { leases::arm(ms as u64); }
+                            if let Some(ms) = req.get("leaseMs").and_then(Json::as_f64) {
+                                leases::arm(ms as u64);
+                            }
                         }
                         result.map_or_else(err, ok)
-                    },
+                    }
                     Some("capture-heartbeat") => {
                         leases::refresh();
                         ok(Json::obj(vec![("renewed", Json::Bool(true))]))
-                    },
+                    }
                     _ => submit(req, generation),
                 }
             }
@@ -773,7 +840,9 @@ const MAX_HTTP_BODY: usize = 4 << 20;
 
 fn http_request_line(line: &str) -> Option<(String, String)> {
     let line = line.trim_end();
-    let rest = line.strip_suffix(" HTTP/1.1").or_else(|| line.strip_suffix(" HTTP/1.0"))?;
+    let rest = line
+        .strip_suffix(" HTTP/1.1")
+        .or_else(|| line.strip_suffix(" HTTP/1.0"))?;
     let (method, target) = rest.split_once(' ')?;
     if !method.chars().all(|c| c.is_ascii_uppercase()) || method.is_empty() {
         return None;
@@ -782,7 +851,9 @@ fn http_request_line(line: &str) -> Option<(String, String)> {
 }
 
 fn serve_http(request_line: &str, mut reader: BufReader<TcpStream>, mut out: TcpStream) {
-    let Some((method, target)) = http_request_line(request_line) else { return };
+    let Some((method, target)) = http_request_line(request_line) else {
+        return;
+    };
     // `Transfer-Encoding: chunked` is refused by name rather than mis-framed. The header count
     // is bounded so a client that never sends the blank line cannot hold this thread.
     let mut headers: Vec<(String, String)> = Vec::new();
@@ -796,11 +867,17 @@ fn serve_http(request_line: &str, mut reader: BufReader<TcpStream>, mut out: Tcp
         if header.is_empty() {
             break;
         }
-        let Some((name, value)) = header.split_once(':') else { continue };
+        let Some((name, value)) = header.split_once(':') else {
+            continue;
+        };
         headers.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
     }
     let head = |name: &str| {
-        headers.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str()).unwrap_or("")
+        headers
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("")
     };
     let length: Option<usize> = head("content-length").parse::<usize>().ok();
     let chunked = head("transfer-encoding").eq_ignore_ascii_case("chunked");
@@ -876,7 +953,11 @@ fn submit(req: Json, generation: u64) -> String {
         if !enabled() || generation != ACCEPT_GEN.load(Ordering::SeqCst) {
             return err("the app revoked this devtools session");
         }
-        queue.push_back(Job { generation, req, reply: tx });
+        queue.push_back(Job {
+            generation,
+            req,
+            reply: tx,
+        });
     }
     sk_runtime::frames::wake();
     match rx.recv_timeout(REPLY_TIMEOUT) {
@@ -941,8 +1022,14 @@ pub fn pump() {
         PENDING.with(|p| *p.borrow_mut() = still_pending);
         return;
     }
-    let Some(job) = QUEUE.lock().unwrap().pop_front() else { return };
-    let Job { generation, req, reply } = job;
+    let Some(job) = QUEUE.lock().unwrap().pop_front() else {
+        return;
+    };
+    let Job {
+        generation,
+        req,
+        reply,
+    } = job;
     if !enabled() || generation != ACCEPT_GEN.load(Ordering::SeqCst) {
         let _ = reply.send(err("the app revoked this devtools session"));
         return;
@@ -956,7 +1043,7 @@ pub fn pump() {
         Outcome::Parked(mut pending) => {
             pending.generation = generation;
             PENDING.with(|p| *p.borrow_mut() = Some(pending));
-        },
+        }
     }
 }
 
@@ -1051,7 +1138,9 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             arg("selector").as_deref(),
             num("depth"),
             num("node").or_else(|| {
-                window_arg.map(|id| f64::from(window_root(id))).filter(|r| *r > 0.0)
+                window_arg
+                    .map(|id| f64::from(window_root(id)))
+                    .filter(|r| *r > 0.0)
             }),
         ),
         "styles" => cmd_styles(arg("selector").as_deref(), num("index"), num("node")),
@@ -1137,29 +1226,48 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
                 None => err("no such window"),
             }
         }
-        "trace" if matches!(arg("op").as_deref(), Some("recording-start" | "recording-stop" | "recording-status" | "frames" | "frame")) => {
+        "trace"
+            if matches!(
+                arg("op").as_deref(),
+                Some(
+                    "recording-start" | "recording-stop" | "recording-status" | "frames" | "frame"
+                )
+            ) =>
+        {
             let result = match arg("op").as_deref() {
                 Some("recording-start") => {
                     #[cfg(target_os = "windows")]
                     {
                         let native = with_target(|window, _| crate::window::capture_hwnd(window))
-                            .flatten().unwrap_or(0);
+                            .flatten()
+                            .unwrap_or(0);
                         trace::set_recording_native_window(native as usize);
                     }
                     let result = trace::recording_start(num("cap").map(|n| n.max(0.0) as usize));
                     if result.is_ok() {
-                        if let Some(ms) = num("leaseMs") { leases::arm(ms as u64); }
+                        if let Some(ms) = num("leaseMs") {
+                            leases::arm(ms as u64);
+                        }
                         if let Some(key) = with_target(|window, _| sk_tree::windows::key(window)) {
                             trace::set_recording_window_id(key);
                         }
                     }
                     result
-                },
+                }
                 Some("recording-stop") => trace::recording_stop(),
                 Some("recording-status") => trace::recording_status(),
-                Some("frames") => trace::frame_page(num("offset").unwrap_or(0.0).max(0.0) as usize, num("limit").unwrap_or(240.0).clamp(1.0, 240.0) as usize),
+                Some("frames") => trace::frame_page(
+                    num("offset").unwrap_or(0.0).max(0.0) as usize,
+                    num("limit").unwrap_or(240.0).clamp(1.0, 240.0) as usize,
+                ),
                 Some("frame") => match num("frameId") {
-                    Some(id) if id.is_finite() && id >= 0.0 && id.fract() == 0.0 => trace::frame_detail(id as u64, num("offset").unwrap_or(0.0).max(0.0) as usize, num("limit").unwrap_or(1000.0).clamp(1.0, 1000.0) as usize),
+                    Some(id) if id.is_finite() && id >= 0.0 && id.fract() == 0.0 => {
+                        trace::frame_detail(
+                            id as u64,
+                            num("offset").unwrap_or(0.0).max(0.0) as usize,
+                            num("limit").unwrap_or(1000.0).clamp(1.0, 1000.0) as usize,
+                        )
+                    }
                     _ => Err("trace frame needs an integer frameId".into()),
                 },
                 _ => unreachable!(),
@@ -1249,7 +1357,10 @@ fn window_root(id: u64) -> u32 {
     if crate::main_window_id() == Some(id) {
         return 0;
     }
-    crate::popout::list().into_iter().find(|(w, _, _)| *w == id).map_or(0, |(_, node, _)| node)
+    crate::popout::list()
+        .into_iter()
+        .find(|(w, _, _)| *w == id)
+        .map_or(0, |(_, node, _)| node)
 }
 
 fn window_ids() -> Vec<u64> {
@@ -1265,7 +1376,10 @@ fn resolve_one(selector: &str, index: Option<f64>) -> Result<u32, String> {
         (_, Some(i)) => {
             let i = i as usize;
             ids.get(i).copied().ok_or_else(|| {
-                format!("--index {i} is out of range: `{selector}` matched {} nodes", ids.len())
+                format!(
+                    "--index {i} is out of range: `{selector}` matched {} nodes",
+                    ids.len()
+                )
             })
         }
         (1, None) => Ok(ids[0]),
@@ -1308,19 +1422,28 @@ fn bounds_json(b: Option<(f32, f32, f32, f32)>) -> Json {
 
 fn node_json(id: u32, with_text: bool) -> Json {
     let Some(n) = sk_tree::devtools::node_info(id) else {
-        return Json::obj(vec![("id", Json::n(f64::from(id))), ("gone", Json::Bool(true))]);
+        return Json::obj(vec![
+            ("id", Json::n(f64::from(id))),
+            ("gone", Json::Bool(true)),
+        ]);
     };
     let mut entries = vec![
         ("id", Json::n(f64::from(id))),
         ("tag", Json::s(n.tag)),
-        ("classes", Json::arr(n.classes.into_iter().map(Json::Str).collect())),
+        (
+            "classes",
+            Json::arr(n.classes.into_iter().map(Json::Str).collect()),
+        ),
     ];
     if with_text {
         let text = sk_tree::devtools::text_content(id).unwrap_or_default();
         entries.push(("text", Json::s(text)));
     }
     entries.push(("bounds", bounds_json(n.bounds)));
-    entries.push(("scopes", Json::arr(n.scopes.into_iter().map(Json::Str).collect())));
+    entries.push((
+        "scopes",
+        Json::arr(n.scopes.into_iter().map(Json::Str).collect()),
+    ));
     if n.group_anchor {
         entries.push(("groupAnchor", Json::Bool(true)));
     }
@@ -1336,10 +1459,16 @@ fn cmd_query(selector: &str) -> String {
         Ok((ids, warnings)) => {
             let mut entries = vec![
                 ("count", Json::n(ids.len() as f64)),
-                ("nodes", Json::arr(ids.iter().map(|&id| node_json(id, true)).collect())),
+                (
+                    "nodes",
+                    Json::arr(ids.iter().map(|&id| node_json(id, true)).collect()),
+                ),
             ];
             if !warnings.is_empty() {
-                entries.push(("warnings", Json::arr(warnings.into_iter().map(Json::Str).collect())));
+                entries.push((
+                    "warnings",
+                    Json::arr(warnings.into_iter().map(Json::Str).collect()),
+                ));
             }
             ok(Json::obj(entries))
         }
@@ -1359,7 +1488,14 @@ fn cmd_text(selector: &str, index: Option<f64>) -> String {
             ok(Json::obj(vec![
                 ("id", Json::n(f64::from(id))),
                 ("text", Json::s(text)),
-                ("source", Json::s(if live.is_some() { "input-widget" } else { "textContent" })),
+                (
+                    "source",
+                    Json::s(if live.is_some() {
+                        "input-widget"
+                    } else {
+                        "textContent"
+                    }),
+                ),
             ]))
         }
     }
@@ -1387,16 +1523,27 @@ fn cmd_tree(selector: Option<&str>, depth: Option<f64>, node: Option<f64>) -> St
             ("tag", Json::s(n.tag)),
         ];
         if !n.classes.is_empty() {
-            entries.push(("classes", Json::arr(n.classes.into_iter().map(Json::Str).collect())));
+            entries.push((
+                "classes",
+                Json::arr(n.classes.into_iter().map(Json::Str).collect()),
+            ));
         }
         if !n.props.is_empty() {
             entries.push((
                 "props",
-                Json::Obj(n.props.into_iter().map(|(k, v)| (k, Json::Str(v))).collect()),
+                Json::Obj(
+                    n.props
+                        .into_iter()
+                        .map(|(k, v)| (k, Json::Str(v)))
+                        .collect(),
+                ),
             ));
         }
         if !n.scopes.is_empty() {
-            entries.push(("scopes", Json::arr(n.scopes.into_iter().map(Json::Str).collect())));
+            entries.push((
+                "scopes",
+                Json::arr(n.scopes.into_iter().map(Json::Str).collect()),
+            ));
         }
         if !n.listeners.is_empty() {
             entries.push((
@@ -1440,10 +1587,7 @@ fn cmd_styles(selector: Option<&str>, index: Option<f64>, node: Option<f64>) -> 
                         buckets
                             .into_iter()
                             .map(|(k, v)| {
-                                (
-                                    k.to_string(),
-                                    Json::arr(v.lines().map(Json::s).collect()),
-                                )
+                                (k.to_string(), Json::arr(v.lines().map(Json::s).collect()))
                             })
                             .collect(),
                     ),
@@ -1569,7 +1713,10 @@ fn overlay_for(window: Option<u64>, root: u32) -> Option<gpui::Div> {
     }
     // Not `node_info().bounds`: during render the live bounds map is cleared and not yet refilled.
     let (x, y, w, height) = sk_tree::painted_bounds_in(root, h.node)?;
-    let label = h.label.clone().unwrap_or_else(|| describe(h.node, w, height));
+    let label = h
+        .label
+        .clone()
+        .unwrap_or_else(|| describe(h.node, w, height));
     Some(
         div()
             .absolute()
@@ -1615,7 +1762,11 @@ fn describe(id: u32, w: f32, h: f32) -> String {
     format!("{head} · {}×{}", w.round(), h.round())
 }
 
-fn resolve_target(selector: Option<&str>, index: Option<f64>, node: Option<f64>) -> Result<u32, String> {
+fn resolve_target(
+    selector: Option<&str>,
+    index: Option<f64>,
+    node: Option<f64>,
+) -> Result<u32, String> {
     match (selector, node) {
         (Some(sel), _) => resolve_one(sel, index),
         (None, Some(id)) => {
@@ -1647,10 +1798,15 @@ fn cmd_highlight(
         Ok(id) => id,
         Err(e) => return err(e),
     };
-    let ttl = ttl_ms.filter(|ms| *ms > 0.0).map(|ms| {
-        std::time::Instant::now() + std::time::Duration::from_millis(ms as u64)
+    let ttl = ttl_ms
+        .filter(|ms| *ms > 0.0)
+        .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms as u64));
+    *HIGHLIGHT.lock().unwrap() = Some(Highlight {
+        node: id,
+        window,
+        until: ttl,
+        label,
     });
-    *HIGHLIGHT.lock().unwrap() = Some(Highlight { node: id, window, until: ttl, label });
     // Refresh the window that paints it; a pop-out does not repaint off the primary's refresh.
     let _ = with_target(|window, _| window.refresh());
     let bounds = sk_tree::devtools::node_info(id).and_then(|n| n.bounds);
@@ -1707,8 +1863,14 @@ fn cmd_pick(window_arg: Option<u64>) -> String {
         ("y", Json::n(y)),
         ("insideWindow", Json::Bool(inside)),
         ("window", Json::n(id as f64)),
-        ("viewport", Json::obj(vec![("w", Json::n(vw)), ("h", Json::n(vh))])),
-        ("path", Json::arr(path.iter().map(|&id| Json::n(f64::from(id))).collect())),
+        (
+            "viewport",
+            Json::obj(vec![("w", Json::n(vw)), ("h", Json::n(vh))]),
+        ),
+        (
+            "path",
+            Json::arr(path.iter().map(|&id| Json::n(f64::from(id))).collect()),
+        ),
     ];
     match node {
         None => entries.push(("node", Json::Null)),
@@ -1725,7 +1887,9 @@ fn cmd_click(selector: &str, index: Option<f64>, button: Option<f64>) -> String 
         Err(e) => return err(e),
     };
     let Some(info) = sk_tree::devtools::node_info(id) else {
-        return err(format!("node {id} vanished between the query and the click"));
+        return err(format!(
+            "node {id} vanished between the query and the click"
+        ));
     };
     let Some((x, y, w, h)) = info.bounds else {
         return err(format!(
@@ -1745,7 +1909,10 @@ fn cmd_click(selector: &str, index: Option<f64>, button: Option<f64>) -> String 
         None => err("not in a commit phase"),
         Some(proceed) => ok(Json::obj(vec![
             ("id", Json::n(f64::from(id))),
-            ("at", Json::obj(vec![("x", Json::n(cx_)), ("y", Json::n(cy))])),
+            (
+                "at",
+                Json::obj(vec![("x", Json::n(cx_)), ("y", Json::n(cy))]),
+            ),
             ("defaultPrevented", Json::Bool(!proceed)),
         ])),
     }
@@ -1757,7 +1924,13 @@ fn cmd_scroll(selector: &str, index: Option<f64>, dx: Option<f64>, dy: Option<f6
         Err(e) => return err(e),
     };
     let out = with_node_window(id, |window, app| {
-        sk_tree::devtools::scroll(id, dx.unwrap_or(0.0) as f32, dy.unwrap_or(0.0) as f32, window, app)
+        sk_tree::devtools::scroll(
+            id,
+            dx.unwrap_or(0.0) as f32,
+            dy.unwrap_or(0.0) as f32,
+            window,
+            app,
+        )
     });
     match out {
         None => err("not in a commit phase"),
@@ -1832,12 +2005,19 @@ fn mouse_inputs(
     }));
     if matches!(kind, "down" | "click") {
         events.push(gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
-            button, position, modifiers, click_count: extras.clicks, first_mouse: false,
+            button,
+            position,
+            modifiers,
+            click_count: extras.clicks,
+            first_mouse: false,
         }));
     }
     if matches!(kind, "up" | "click") {
         events.push(gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
-            button, position, modifiers, click_count: extras.clicks,
+            button,
+            position,
+            modifiers,
+            click_count: extras.clicks,
         }));
     }
     events
@@ -1873,7 +2053,9 @@ fn cmd_mouse(
         (Some(id), _, _) => {
             // Not the centre of `bounds` (untransformed): gpui's matrix maps it, and gpui's hit
             // test then confirms the point lands on the node, so an unreachable control is reported.
-            match in_window(Some(id), |window, _| sk_tree::devtools::aim_point(id, window)) {
+            match in_window(Some(id), |window, _| {
+                sk_tree::devtools::aim_point(id, window)
+            }) {
                 None => return err("not in a commit phase"),
                 Some(Some(p)) => p,
                 Some(None) => {
@@ -1888,20 +2070,31 @@ fn cmd_mouse(
             }
         }
         (None, Some(x), Some(y)) => (x as f32, y as f32),
-        _ => return err("mouse needs either a `selector` or both `x` and `y` (window coordinates)"),
+        _ => {
+            return err("mouse needs either a `selector` or both `x` and `y` (window coordinates)")
+        }
     };
     let kind = kind.unwrap_or("move");
     if !matches!(kind, "move" | "down" | "up" | "click") {
-        return err(format!("unknown mouse kind `{kind}` — move | down | up | click"));
+        return err(format!(
+            "unknown mouse kind `{kind}` — move | down | up | click"
+        ));
     }
     let button = match button.unwrap_or(0.0) as i64 {
         0 => gpui::MouseButton::Left,
         1 => gpui::MouseButton::Middle,
         2 => gpui::MouseButton::Right,
-        other => return err(format!("unknown mouse button {other} — 0 left, 1 middle, 2 right")),
+        other => {
+            return err(format!(
+                "unknown mouse button {other} — 0 left, 1 middle, 2 right"
+            ))
+        }
     };
     let position = gpui::Point::new(gpui::px(point.0), gpui::px(point.1));
-    let modifiers = gpui::Modifiers { shift: extras.shift, ..Default::default() };
+    let modifiers = gpui::Modifiers {
+        shift: extras.shift,
+        ..Default::default()
+    };
     // Not `with_commit`: a coordinate needs its window, and a pop-out has its own client space.
     let done = in_window(node, |window, app| {
         for input in mouse_inputs(kind, button, position, modifiers, &extras) {
@@ -2032,7 +2225,9 @@ fn start_input_command(cmd: &str, req: &Json, reply: &Sender<String>) -> Outcome
         }
         None => return Outcome::Done(err("type needs a `selector`")),
     };
-    let focus = with_node_window(node, |window, app| sk_tree::devtools::focus(node, window, app));
+    let focus = with_node_window(node, |window, app| {
+        sk_tree::devtools::focus(node, window, app)
+    });
     match focus {
         None => return Outcome::Done(err("not in a commit phase")),
         Some(Err(e)) => return Outcome::Done(err(e)),
@@ -2119,7 +2314,11 @@ fn parse_keystroke(spec: &str) -> Result<gpui::Keystroke, String> {
     let key_char = (raw.chars().count() == 1 && !modifiers.control && !modifiers.platform)
         .then(|| raw.to_string())
         .or_else(|| (name == "space").then(|| " ".to_string()));
-    Ok(gpui::Keystroke { modifiers, key: name, key_char })
+    Ok(gpui::Keystroke {
+        modifiers,
+        key: name,
+        key_char,
+    })
 }
 
 /// Unlike `scroll` (which drives a `ScrollHandle` directly). Deltas are the DOM's: `dy > 0` scrolls down.
@@ -2137,11 +2336,17 @@ fn cmd_wheel(
             Err(e) => return err(e),
             Ok(id) => match sk_tree::devtools::node_info(id).and_then(|n| n.bounds) {
                 Some((bx, by, bw, bh)) => ((bx + bw / 2.0, by + bh / 2.0), Some(id)),
-                None => return err(format!("`{sel}` is not painted, so it has no centre to aim at")),
+                None => {
+                    return err(format!(
+                        "`{sel}` is not painted, so it has no centre to aim at"
+                    ))
+                }
             },
         },
         (None, Some(x), Some(y)) => ((x as f32, y as f32), None),
-        _ => return err("wheel needs either a `selector` or both `x` and `y` (window coordinates)"),
+        _ => {
+            return err("wheel needs either a `selector` or both `x` and `y` (window coordinates)")
+        }
     };
     let (dx, dy) = (dx.unwrap_or(0.0) as f32, dy.unwrap_or(0.0) as f32);
     if dx == 0.0 && dy == 0.0 {
@@ -2198,7 +2403,10 @@ fn cmd_windows() -> String {
         let title = if Some(id) == main {
             crate::window::config().title
         } else {
-            popouts.iter().find(|(w, _, _)| *w == id).map_or_else(String::new, |(_, _, t)| t.clone())
+            popouts
+                .iter()
+                .find(|(w, _, _)| *w == id)
+                .map_or_else(String::new, |(_, _, t)| t.clone())
         };
         let facts = with_window_id(id, |window, _| {
             let size = window.viewport_size();
@@ -2213,10 +2421,16 @@ fn cmd_windows() -> String {
         let (w, h, active, hovered, scale) = facts.unwrap_or((0.0, 0.0, false, false, 1.0));
         out.push(Json::obj(vec![
             ("id", Json::n(id as f64)),
-            ("kind", Json::s(if Some(id) == main { "main" } else { "popout" })),
+            (
+                "kind",
+                Json::s(if Some(id) == main { "main" } else { "popout" }),
+            ),
             ("title", Json::s(title)),
             ("root", Json::n(f64::from(root))),
-            ("viewport", Json::obj(vec![("w", Json::n(w)), ("h", Json::n(h))])),
+            (
+                "viewport",
+                Json::obj(vec![("w", Json::n(w)), ("h", Json::n(h))]),
+            ),
             ("scale", Json::n(scale)),
             ("focused", Json::Bool(active)),
             ("hovered", Json::Bool(hovered)),
@@ -2276,7 +2490,9 @@ fn cmd_trace(op: Option<&str>, frames: bool, label: Option<&str>, cap: Option<f6
             trace::mark(label.unwrap_or(""));
             Ok(Json::obj(vec![("marked", Json::Bool(true))]))
         }
-        other => Err(format!("trace: unknown op `{other}` — start, stop, peek or mark")),
+        other => Err(format!(
+            "trace: unknown op `{other}` — start, stop, peek or mark"
+        )),
     };
     match result {
         Ok(data) => ok(data),
@@ -2294,9 +2510,18 @@ fn perf_data() -> Json {
     let (work_p50, work_p95, work_max) = snap.work_stats();
     let round2 = |v: f32| f64::from((v * 100.0).round() / 100.0);
     let skip = snap.samples.len().saturating_sub(PERF_SAMPLES);
-    let tail: Vec<Json> = snap.samples[skip..].iter().map(|ms| Json::n(round2(*ms))).collect();
-    let work: Vec<Json> = snap.work[skip..].iter().map(|ms| Json::n(round2(*ms))).collect();
-    let flags: Vec<Json> = snap.flags[skip..].iter().map(|f| Json::n(f64::from(*f))).collect();
+    let tail: Vec<Json> = snap.samples[skip..]
+        .iter()
+        .map(|ms| Json::n(round2(*ms)))
+        .collect();
+    let work: Vec<Json> = snap.work[skip..]
+        .iter()
+        .map(|ms| Json::n(round2(*ms)))
+        .collect();
+    let flags: Vec<Json> = snap.flags[skip..]
+        .iter()
+        .map(|f| Json::n(f64::from(*f)))
+        .collect();
     let share = |flag: u8| Json::n(f64::from((snap.share(flag) * 1000.0).round() / 1000.0));
     Json::obj(vec![
         ("frames", Json::n(snap.frames as f64)),
@@ -2346,18 +2571,29 @@ fn perf_data() -> Json {
         ("throttledShare", share(crate::perf::FLAG_THROTTLED)),
         ("idle", crate::idle::status()),
         ("nodes", Json::n(f64::from(sk_tree::devtools::node_count()))),
-        ("builds", Json::n(sk_tree::devtools::frame_counts().0 as f64)),
-        ("presents", Json::n(sk_tree::devtools::frame_counts().1 as f64)),
+        (
+            "builds",
+            Json::n(sk_tree::devtools::frame_counts().0 as f64),
+        ),
+        (
+            "presents",
+            Json::n(sk_tree::devtools::frame_counts().1 as f64),
+        ),
         // Scroll containers registered with the wheel router last frame. Filled by the paint walk,
         // so a retained-render replay cannot rebuild it.
-        ("scrollChain", Json::n(f64::from(sk_tree::devtools::scroll_chain_count()))),
+        (
+            "scrollChain",
+            Json::n(f64::from(sk_tree::devtools::scroll_chain_count())),
+        ),
         ("windows", Json::n(window_ids().len() as f64)),
         ("phases", Json::Bool(sk_tree::perf::env_enabled())),
     ])
 }
 
 pub(crate) fn perf_json() -> String {
-    let Json::Obj(mut entries) = perf_data() else { return String::new() };
+    let Json::Obj(mut entries) = perf_data() else {
+        return String::new();
+    };
     entries.insert(0, ("t".to_string(), Json::s("perf")));
     Json::Obj(entries).to_json()
 }
@@ -2374,7 +2610,9 @@ fn cmd_storage(
         "local" | "localStorage" => "localStorage",
         "session" | "sessionStorage" => "sessionStorage",
         other => {
-            return err(format!("unknown storage area {other:?} — use \"local\" or \"session\""))
+            return err(format!(
+                "unknown storage area {other:?} — use \"local\" or \"session\""
+            ))
         }
     };
     let quoted_area = json::quote(area);
@@ -2385,7 +2623,9 @@ fn cmd_storage(
              return {{area:{quoted_area},length:a.length,entries:o}};}})()"
         ),
         "set" => {
-            let Some(k) = key else { return err("storage set needs a `key`") };
+            let Some(k) = key else {
+                return err("storage set needs a `key`");
+            };
             let k = json::quote(k);
             let v = json::quote(value.unwrap_or(""));
             format!(
@@ -2394,7 +2634,9 @@ fn cmd_storage(
             )
         }
         "remove" => {
-            let Some(k) = key else { return err("storage remove needs a `key`") };
+            let Some(k) = key else {
+                return err("storage remove needs a `key`");
+            };
             let k = json::quote(k);
             format!(
                 "(function(){{var a=globalThis.{global};if(!a)return null;a.removeItem({k});\
@@ -2412,7 +2654,9 @@ fn cmd_storage(
         }
     };
     let reply = cmd_eval(&js);
-    let Some(parsed) = json::parse(&reply) else { return reply };
+    let Some(parsed) = json::parse(&reply) else {
+        return reply;
+    };
     if parsed.get("ok").and_then(Json::as_bool) != Some(true) {
         return reply;
     }
@@ -2427,7 +2671,12 @@ fn cmd_storage(
 /// Scripted answers for waiting dialogs; only under `SK_DIALOGS=scripted` (the devtools never
 /// answer a real dialog). `list` (default); `answer` with `paths` (a JSON array, or one string
 /// split by `|`); `choose` a question's `button` (label or index); `cancel`.
-fn cmd_dialog(op: Option<&str>, id: Option<f64>, paths: Option<&Json>, button: Option<String>) -> String {
+fn cmd_dialog(
+    op: Option<&str>,
+    id: Option<f64>,
+    paths: Option<&Json>,
+    button: Option<String>,
+) -> String {
     use sk_desktop::dialog::{scripted, scripted_mode};
     if !scripted_mode() {
         return err(
@@ -2442,7 +2691,9 @@ fn cmd_dialog(op: Option<&str>, id: Option<f64>, paths: Option<&Json>, button: O
     match op.unwrap_or("list") {
         "list" => ok(embed(scripted::list())),
         "answer" => {
-            let Some(id) = id else { return err("dialog answer needs the dialog's `id` (see `dialog list`)") };
+            let Some(id) = id else {
+                return err("dialog answer needs the dialog's `id` (see `dialog list`)");
+            };
             let list: Vec<std::path::PathBuf> = match paths {
                 Some(Json::Arr(items)) => items.iter().filter_map(Json::as_str).map(Into::into).collect(),
                 Some(Json::Str(s)) => s.split('|').map(str::trim).filter(|p| !p.is_empty()).map(Into::into).collect(),
@@ -2454,21 +2705,29 @@ fn cmd_dialog(op: Option<&str>, id: Option<f64>, paths: Option<&Json>, button: O
             }
         }
         "choose" => {
-            let Some(id) = id else { return err("dialog choose needs the dialog's `id` (see `dialog list`)") };
-            let Some(button) = button else { return err("dialog choose needs a `button`: its label or its index") };
+            let Some(id) = id else {
+                return err("dialog choose needs the dialog's `id` (see `dialog list`)");
+            };
+            let Some(button) = button else {
+                return err("dialog choose needs a `button`: its label or its index");
+            };
             match scripted::choose(id, &button) {
                 Ok(v) => ok(embed(v)),
                 Err(e) => err(e),
             }
         }
         "cancel" => {
-            let Some(id) = id else { return err("dialog cancel needs the dialog's `id` (see `dialog list`)") };
+            let Some(id) = id else {
+                return err("dialog cancel needs the dialog's `id` (see `dialog list`)");
+            };
             match scripted::cancel(id) {
                 Ok(v) => ok(embed(v)),
                 Err(e) => err(e),
             }
         }
-        other => err(format!("unknown dialog op {other:?} — use \"list\", \"answer\", \"choose\" or \"cancel\"")),
+        other => err(format!(
+            "unknown dialog op {other:?} — use \"list\", \"answer\", \"choose\" or \"cancel\""
+        )),
     }
 }
 
@@ -2484,7 +2743,9 @@ fn cmd_permissions(op: Option<&str>, name: Option<&str>) -> String {
             ])),
             Err(e) => err(e),
         },
-        other => err(format!("unknown permissions op {other:?} — use \"list\" or \"reset\"")),
+        other => err(format!(
+            "unknown permissions op {other:?} — use \"list\" or \"reset\""
+        )),
     }
 }
 
@@ -2492,7 +2753,10 @@ fn cmd_net(since: Option<f64>) -> String {
     let since = since.unwrap_or(0.0).max(0.0) as u64;
     let (entries, next, dropped) = net::since(since);
     ok(Json::obj(vec![
-        ("entries", Json::arr(entries.into_iter().map(|t| Json::from(Raw(t))).collect())),
+        (
+            "entries",
+            Json::arr(entries.into_iter().map(|t| Json::from(Raw(t))).collect()),
+        ),
         ("next", Json::n(next as f64)),
         ("dropped", Json::n(dropped as f64)),
         ("pool", net::pool_json()),
@@ -2546,14 +2810,13 @@ fn cmd_screenshot(path: Option<&str>, backend: Option<&str>) -> String {
             if let Some(why) = shot.fallback {
                 entries.push((
                     "fallback",
-                    Json::s(format!("render_to_image unavailable ({why}) — used PrintWindow")),
+                    Json::s(format!(
+                        "render_to_image unavailable ({why}) — used PrintWindow"
+                    )),
                 ));
             }
             if shot.has_alpha {
-                entries.push((
-                    "hasAlpha",
-                    Json::Bool(true),
-                ));
+                entries.push(("hasAlpha", Json::Bool(true)));
                 entries.push((
                     "note",
                     Json::s(
@@ -2590,21 +2853,43 @@ mod tests {
     fn mouse_release_does_not_insert_an_unpressed_move_into_a_captured_drag() {
         use gpui::{MouseButton, PlatformInput};
         let at = gpui::point(gpui::px(120.0), gpui::px(-10.0));
-        let extras = super::MouseExtras { held: false, clicks: 2, shift: false };
+        let extras = super::MouseExtras {
+            held: false,
+            clicks: 2,
+            shift: false,
+        };
         let events = super::mouse_inputs("up", MouseButton::Left, at, Default::default(), &extras);
         assert_eq!(events.len(), 2);
-        let PlatformInput::MouseMove(before_up) = &events[0] else { panic!("move must precede release") };
+        let PlatformInput::MouseMove(before_up) = &events[0] else {
+            panic!("move must precede release")
+        };
         assert_eq!(before_up.pressed_button, Some(MouseButton::Left));
-        assert_eq!(before_up.position, at, "outside-window coordinates are preserved");
-        let PlatformInput::MouseUp(up) = &events[1] else { panic!("the button must release next") };
+        assert_eq!(
+            before_up.position, at,
+            "outside-window coordinates are preserved"
+        );
+        let PlatformInput::MouseUp(up) = &events[1] else {
+            panic!("the button must release next")
+        };
         assert_eq!(up.button, MouseButton::Left);
         assert_eq!(up.click_count, 2);
-        let events = super::mouse_inputs("move", MouseButton::Left, at, Default::default(), &extras);
-        let PlatformInput::MouseMove(hover) = &events[0] else { unreachable!() };
-        assert_eq!(hover.pressed_button, None, "an ordinary hover still reports no held button");
-        let held = super::MouseExtras { held: true, ..extras };
+        let events =
+            super::mouse_inputs("move", MouseButton::Left, at, Default::default(), &extras);
+        let PlatformInput::MouseMove(hover) = &events[0] else {
+            unreachable!()
+        };
+        assert_eq!(
+            hover.pressed_button, None,
+            "an ordinary hover still reports no held button"
+        );
+        let held = super::MouseExtras {
+            held: true,
+            ..extras
+        };
         let events = super::mouse_inputs("move", MouseButton::Left, at, Default::default(), &held);
-        let PlatformInput::MouseMove(drag) = &events[0] else { unreachable!() };
+        let PlatformInput::MouseMove(drag) = &events[0] else {
+            unreachable!()
+        };
         assert_eq!(drag.pressed_button, Some(MouseButton::Left));
     }
 
@@ -2694,8 +2979,14 @@ mod tests {
             http_request_line("OPTIONS /any/path HTTP/1.0\r\n"),
             Some(("OPTIONS".into(), "/any/path".into()))
         );
-        assert_eq!(http_request_line("{\"token\":\"x\",\"cmd\":\"ping\"}"), None);
-        assert_eq!(http_request_line("{\"cmd\":\"eval\",\"js\":\"'GET / HTTP/1.1'\"}"), None);
+        assert_eq!(
+            http_request_line("{\"token\":\"x\",\"cmd\":\"ping\"}"),
+            None
+        );
+        assert_eq!(
+            http_request_line("{\"cmd\":\"eval\",\"js\":\"'GET / HTTP/1.1'\"}"),
+            None
+        );
         assert_eq!(http_request_line(""), None);
         assert_eq!(http_request_line("POST /"), None);
         assert_eq!(http_request_line("post / HTTP/1.1"), None);

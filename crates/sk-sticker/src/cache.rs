@@ -16,7 +16,12 @@ pub struct LoopCache {
 
 impl LoopCache {
     pub fn new(slots: u32, now: Us) -> LoopCache {
-        LoopCache { slots: vec![None; slots as usize], filled: 0, bytes: 0, last_used: now }
+        LoopCache {
+            slots: vec![None; slots as usize],
+            filled: 0,
+            bytes: 0,
+            last_used: now,
+        }
     }
 
     pub fn bytes(&self) -> usize {
@@ -40,7 +45,9 @@ impl LoopCache {
 
     /// Stores slot `slot`. Returns the bytes added (0 when already there or out of range).
     pub fn put(&mut self, slot: u32, compressed: Box<[u8]>, now: Us) -> usize {
-        let Some(entry) = self.slots.get_mut(slot as usize) else { return 0 };
+        let Some(entry) = self.slots.get_mut(slot as usize) else {
+            return 0;
+        };
         if entry.is_some() {
             return 0;
         }
@@ -67,7 +74,11 @@ mod tests {
         let frame: Vec<u8> = (0..48 * 48 * 4).map(|i| (i % 7) as u8).collect();
         let added = cache.put(1, compress(&frame), 5);
         assert!(added > 0 && added < frame.len(), "compressed");
-        assert_eq!(cache.put(1, compress(&frame), 6), 0, "a slot is stored once");
+        assert_eq!(
+            cache.put(1, compress(&frame), 6),
+            0,
+            "a slot is stored once"
+        );
         assert_eq!(cache.put(9, compress(&frame), 6), 0, "out of range");
         assert!(cache.has(1) && !cache.has(0) && !cache.is_complete());
         assert_eq!(cache.get(1, frame.len(), 7).unwrap(), frame);

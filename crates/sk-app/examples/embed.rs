@@ -19,7 +19,7 @@ use std::io::BufRead;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sk_app::embed::{Builder, Call};
 
 fn args_of(call: &Call) -> Vec<Value> {
@@ -80,10 +80,12 @@ fn main() {
 
     if self_test {
         let wait = |what: &str| {
-            reports.recv_timeout(Duration::from_secs(60)).unwrap_or_else(|_| {
-                eprintln!("embed: no {what} from the app within 60 s");
-                std::process::exit(3);
-            })
+            reports
+                .recv_timeout(Duration::from_secs(60))
+                .unwrap_or_else(|_| {
+                    eprintln!("embed: no {what} from the app within 60 s");
+                    std::process::exit(3);
+                })
         };
         let first = wait("first report");
         ui.emit("tick", r#"{"n":1}"#).expect("emit");
@@ -109,7 +111,11 @@ fn main() {
     let watcher = ui.clone();
     std::thread::spawn(move || {
         let exit = watcher.wait();
-        println!("the app closed ({}): {}", if exit.clean { "clean" } else { "NOT clean" }, exit.summary);
+        println!(
+            "the app closed ({}): {}",
+            if exit.clean { "clean" } else { "NOT clean" },
+            exit.summary
+        );
         std::process::exit(0);
     });
     for line in std::io::stdin().lock().lines() {

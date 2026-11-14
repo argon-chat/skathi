@@ -51,14 +51,27 @@ use linux as imp;
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 mod imp {
     use super::*;
-    pub(super) fn pick(_: &Native, _: isize, _: &Cancellation) -> Result<Option<Vec<PathBuf>>, Fail> {
-        Err(Fail::new("NotSupportedError", "file dialogs are not implemented on this platform yet"))
+    pub(super) fn pick(
+        _: &Native,
+        _: isize,
+        _: &Cancellation,
+    ) -> Result<Option<Vec<PathBuf>>, Fail> {
+        Err(Fail::new(
+            "NotSupportedError",
+            "file dialogs are not implemented on this platform yet",
+        ))
     }
     pub(super) fn ask(_: &Ask, _: isize, _: &Cancellation) -> Result<Option<usize>, Fail> {
-        Err(Fail::new("NotSupportedError", "native questions are not implemented on this platform yet"))
+        Err(Fail::new(
+            "NotSupportedError",
+            "native questions are not implemented on this platform yet",
+        ))
     }
     pub(super) fn color(_: &str, _: isize, _: &Cancellation) -> Result<Option<String>, Fail> {
-        Err(Fail::new("NotSupportedError", "color pickers are not implemented on this platform yet"))
+        Err(Fail::new(
+            "NotSupportedError",
+            "color pickers are not implemented on this platform yet",
+        ))
     }
     pub(super) fn known_folder(_: Known) -> Option<PathBuf> {
         None
@@ -90,7 +103,11 @@ pub struct Filter {
 
 impl Filter {
     pub fn spec(&self) -> String {
-        self.exts.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(";")
+        self.exts
+            .iter()
+            .map(|e| format!("*.{e}"))
+            .collect::<Vec<_>>()
+            .join(";")
     }
 }
 
@@ -152,7 +169,10 @@ pub struct Native {
 
 pub enum Then {
     /// `<input type=file>`; `walk` is `webkitdirectory`; `prev` is the current selection, so re-picking it is a `cancel`.
-    Files { walk: bool, prev: Vec<PathBuf> },
+    Files {
+        walk: bool,
+        prev: Vec<PathBuf>,
+    },
     Handles,
     SaveHandle,
     Download(Data),
@@ -196,7 +216,10 @@ pub fn filters_for_accept(tokens: &[String]) -> Vec<Filter> {
         (1, Some("video/*")) => "Video Files",
         _ => "Custom Files",
     };
-    vec![Filter { name: name.to_string(), exts }]
+    vec![Filter {
+        name: name.to_string(),
+        exts,
+    }]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,7 +244,11 @@ pub fn filters_for_types(types: &[AcceptType]) -> Vec<Filter> {
         if exts.is_empty() {
             continue;
         }
-        let name = if t.description.trim().is_empty() { "Custom Files".to_string() } else { t.description.clone() };
+        let name = if t.description.trim().is_empty() {
+            "Custom Files".to_string()
+        } else {
+            t.description.clone()
+        };
         out.push(Filter { name, exts });
     }
     out
@@ -251,11 +278,17 @@ pub fn client_guid(app_id: &str, id: Option<&str>) -> u128 {
 const DOWNLOAD_ID: &str = "<download>";
 
 fn app_id() -> String {
-    crate::launch::identity().map(|i| i.id.clone()).unwrap_or_else(|| "vue-native-app".to_string())
+    crate::launch::identity()
+        .map(|i| i.id.clone())
+        .unwrap_or_else(|| "vue-native-app".to_string())
 }
 
 pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    !id.is_empty()
+        && id.len() <= 32
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 fn bad(msg: impl Into<String>) -> Fail {
@@ -263,16 +296,27 @@ fn bad(msg: impl Into<String>) -> Fail {
 }
 
 fn strings(v: Option<&Json>) -> Vec<String> {
-    v.and_then(Json::as_array).map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect()).unwrap_or_default()
+    v.and_then(Json::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub fn parse(req: &str, prev: Vec<PathBuf>) -> Result<(Native, Then), Fail> {
-    let v: Json = serde_json::from_str(req).map_err(|e| bad(format!("dialog request is not JSON: {e}")))?;
+    let v: Json =
+        serde_json::from_str(req).map_err(|e| bad(format!("dialog request is not JSON: {e}")))?;
     let kind = match v.get("kind").and_then(Json::as_str) {
         Some("open") => Kind::Open,
         Some("save") => Kind::Save,
         Some("folder") => Kind::Folder,
-        other => return Err(bad(format!("dialog kind {other:?} is not open, save or folder"))),
+        other => {
+            return Err(bad(format!(
+                "dialog kind {other:?} is not open, save or folder"
+            )))
+        }
     };
     let flag = |k: &str| v.get(k).and_then(Json::as_bool).unwrap_or(false);
     let files = v.get("result").and_then(Json::as_str) == Some("files");
@@ -281,11 +325,19 @@ pub fn parse(req: &str, prev: Vec<PathBuf>) -> Result<(Native, Then), Fail> {
             let types: Vec<AcceptType> = types
                 .iter()
                 .map(|t| AcceptType {
-                    description: t.get("description").and_then(Json::as_str).unwrap_or("").to_string(),
+                    description: t
+                        .get("description")
+                        .and_then(Json::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                     accept: t
                         .get("accept")
                         .and_then(Json::as_object)
-                        .map(|o| o.iter().map(|(m, exts)| (m.clone(), strings(Some(exts)))).collect())
+                        .map(|o| {
+                            o.iter()
+                                .map(|(m, exts)| (m.clone(), strings(Some(exts))))
+                                .collect()
+                        })
                         .unwrap_or_default(),
                 })
                 .collect();
@@ -298,10 +350,15 @@ pub fn parse(req: &str, prev: Vec<PathBuf>) -> Result<(Native, Then), Fail> {
     };
     let id = v.get("id").and_then(Json::as_str).filter(|id| valid_id(id));
     let start = match v.get("startIn") {
-        Some(Json::String(s)) => Some(Start::Known(Known::parse(s).ok_or_else(|| bad(format!("{s:?} is not a WellKnownDirectory")))?)),
+        Some(Json::String(s)) => {
+            Some(Start::Known(Known::parse(s).ok_or_else(|| {
+                bad(format!("{s:?} is not a WellKnownDirectory"))
+            })?))
+        }
         Some(Json::Object(o)) => {
             let h = o.get("h").and_then(Json::as_u64).unwrap_or(0);
-            let (path, k) = fs::path_of(h).ok_or_else(|| Fail::new("InvalidStateError", fs::INVALID_STATE))?;
+            let (path, k) =
+                fs::path_of(h).ok_or_else(|| Fail::new("InvalidStateError", fs::INVALID_STATE))?;
             let dir = match k {
                 fs::Kind::Directory => path,
                 fs::Kind::File => path.parent().map(Path::to_path_buf).unwrap_or(path),
@@ -310,7 +367,11 @@ pub fn parse(req: &str, prev: Vec<PathBuf>) -> Result<(Native, Then), Fail> {
         }
         _ => None,
     };
-    let suggested_name = v.get("suggestedName").and_then(Json::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+    let suggested_name = v
+        .get("suggestedName")
+        .and_then(Json::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     let default_ext = match kind {
         Kind::Save => filters.first().and_then(|f| f.exts.first()).cloned(),
         _ => None,
@@ -328,15 +389,18 @@ pub fn parse(req: &str, prev: Vec<PathBuf>) -> Result<(Native, Then), Fail> {
     };
     let then = match (kind, files) {
         (Kind::Save, _) => Then::SaveHandle,
-        (_, true) => Then::Files { walk: kind == Kind::Folder, prev },
+        (_, true) => Then::Files {
+            walk: kind == Kind::Folder,
+            prev,
+        },
         (_, false) => Then::Handles,
     };
     Ok((native, then))
 }
 
 const RESERVED_NAMES: &[&str] = &[
-    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1",
-    "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
 
 /// A download's file name, as Chromium's `net::GenerateFileName` makes it.
@@ -344,9 +408,21 @@ pub fn download_name(attr: &str, url: &str, mime: &str) -> String {
     fn clean(s: &str) -> String {
         let s: String = s
             .chars()
-            .map(|c| if (c as u32) < 0x20 || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\u{7f}') { '_' } else { c })
+            .map(|c| {
+                if (c as u32) < 0x20
+                    || matches!(
+                        c,
+                        '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\u{7f}'
+                    )
+                {
+                    '_'
+                } else {
+                    c
+                }
+            })
             .collect();
-        s.trim_matches(|c: char| c == '.' || c.is_whitespace()).to_string()
+        s.trim_matches(|c: char| c == '.' || c.is_whitespace())
+            .to_string()
     }
     let leaf = attr.rsplit(['/', '\\']).next().unwrap_or(attr);
     let mut name = clean(leaf);
@@ -377,12 +453,26 @@ pub fn data_of_blob_target(t: sk_runtime::redjs::webapi::url::BlobTarget) -> Dat
     use sk_runtime::redjs::webapi::blob::{DiskFile, Range, Source};
     use sk_runtime::redjs::webapi::url::BlobTarget;
     match t {
-        BlobTarget::Bytes { bytes, offset, len, .. } => {
-            Data::Blob(Range { source: Source::Memory(bytes), offset: offset as u64, len: len as u64 })
-        }
-        BlobTarget::Path { path, range, size, mtime, .. } => {
+        BlobTarget::Bytes {
+            bytes, offset, len, ..
+        } => Data::Blob(Range {
+            source: Source::Memory(bytes),
+            offset: offset as u64,
+            len: len as u64,
+        }),
+        BlobTarget::Path {
+            path,
+            range,
+            size,
+            mtime,
+            ..
+        } => {
             let (offset, len) = range.unwrap_or((0, size));
-            Data::Blob(Range { source: Source::Disk(Arc::new(DiskFile { path, size, mtime })), offset, len })
+            Data::Blob(Range {
+                source: Source::Disk(Arc::new(DiskFile { path, size, mtime })),
+                offset,
+                len,
+            })
         }
     }
 }
@@ -414,7 +504,10 @@ struct OwnerState {
 
 impl OwnerState {
     fn leave_queue(&self, ticket: u64) {
-        self.queue.lock().unwrap_or_else(|p| p.into_inner()).retain(|&t| t != ticket);
+        self.queue
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|&t| t != ticket);
     }
 }
 
@@ -424,13 +517,20 @@ fn owners() -> &'static Mutex<std::collections::HashMap<u64, Arc<OwnerState>>> {
 }
 
 fn owner_state(key: u64) -> Arc<OwnerState> {
-    owners().lock().unwrap_or_else(|p| p.into_inner()).entry(key).or_default().clone()
+    owners()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .entry(key)
+        .or_default()
+        .clone()
 }
 
 /// Window `key` is about to be destroyed: its open dialog is told to close. `true` while one is still running on it.
 pub fn owner_closing(key: u64) -> bool {
     let mut map = owners().lock().unwrap_or_else(|p| p.into_inner());
-    let Some(st) = map.get(&key).cloned() else { return false };
+    let Some(st) = map.get(&key).cloned() else {
+        return false;
+    };
     st.closed.store(true, Ordering::Release);
     let active = st.active.load(Ordering::Acquire);
     if !active {
@@ -461,7 +561,10 @@ impl Cancellation {
 /// `SK_DIALOGS=scripted`. Unit tests are always scripted, so none opens a window on the host.
 pub fn scripted_mode() -> bool {
     static S: OnceLock<bool> = OnceLock::new();
-    cfg!(test) || *S.get_or_init(|| std::env::var("SK_DIALOGS").is_ok_and(|v| v.eq_ignore_ascii_case("scripted")))
+    cfg!(test)
+        || *S.get_or_init(|| {
+            std::env::var("SK_DIALOGS").is_ok_and(|v| v.eq_ignore_ascii_case("scripted"))
+        })
 }
 
 pub const ALREADY_ACTIVE: &str = "File picker already active.";
@@ -494,7 +597,12 @@ fn wait_turn(st: &OwnerState, ticket: u64, cancel: &Cancellation) -> bool {
     true
 }
 
-fn start_owned(owner: Option<Owner>, native: Native, then: Then, label: &'static str) -> Result<u32, Fail> {
+fn start_owned(
+    owner: Option<Owner>,
+    native: Native,
+    then: Then,
+    label: &'static str,
+) -> Result<u32, Fail> {
     let key = owner.map(|o| o.key).unwrap_or(0);
     let hwnd = owner.map(|o| o.hwnd).unwrap_or(0);
     let st = owner_state(key);
@@ -509,27 +617,34 @@ fn start_owned(owner: Option<Owner>, native: Native, then: Then, label: &'static
     }
     let ticket = st.ticket.fetch_add(1, Ordering::AcqRel);
     if queued {
-        st.queue.lock().unwrap_or_else(|p| p.into_inner()).push_back(ticket);
+        st.queue
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push_back(ticket);
     }
     let cancel = Cancellation(st.clone());
-    let spawned = std::thread::Builder::new().name("sk-dialog".into()).spawn(move || {
-        if queued && !wait_turn(&st, ticket, &cancel) {
-            crate::settle(token, Ok(cancelled()));
-            return;
-        }
-        let picked = if scripted_mode() {
-            scripted::pick(&native, key, label, &cancel)
-        } else {
-            imp::pick(&native, hwnd, &cancel)
-        };
-        st.active.store(false, Ordering::Release);
-        let result = match picked {
-            Ok(Some(paths)) if !paths.is_empty() && !cancel.is_requested() => finish(paths, then),
-            Ok(_) => Ok(Done::json(&cancelled())),
-            Err(f) => Err(f),
-        };
-        crate::settle_done(token, result);
-    });
+    let spawned = std::thread::Builder::new()
+        .name("sk-dialog".into())
+        .spawn(move || {
+            if queued && !wait_turn(&st, ticket, &cancel) {
+                crate::settle(token, Ok(cancelled()));
+                return;
+            }
+            let picked = if scripted_mode() {
+                scripted::pick(&native, key, label, &cancel)
+            } else {
+                imp::pick(&native, hwnd, &cancel)
+            };
+            st.active.store(false, Ordering::Release);
+            let result = match picked {
+                Ok(Some(paths)) if !paths.is_empty() && !cancel.is_requested() => {
+                    finish(paths, then)
+                }
+                Ok(_) => Ok(Done::json(&cancelled())),
+                Err(f) => Err(f),
+            };
+            crate::settle_done(token, result);
+        });
     if spawned.is_err() {
         // The closure went down with the failed spawn; a queued download claimed only its queue slot.
         let st = owner_state(key);
@@ -538,7 +653,9 @@ fn start_owned(owner: Option<Owner>, native: Native, then: Then, label: &'static
         } else {
             st.active.store(false, Ordering::Release);
         }
-        return Err(Fail::new("InvalidStateError", "could not start the dialog thread").code("EIO"));
+        return Err(
+            Fail::new("InvalidStateError", "could not start the dialog thread").code("EIO"),
+        );
     }
     Ok(token)
 }
@@ -549,7 +666,9 @@ fn cancelled() -> String {
 
 pub fn start_open(req: &str, prev: Vec<PathBuf>) -> Result<u32, Fail> {
     if let Ok(request) = serde_json::from_str::<Json>(req) {
-        if request["kind"] == "color" { return color::start(request["value"].as_str().unwrap_or("#000000")); }
+        if request["kind"] == "color" {
+            return color::start(request["value"].as_str().unwrap_or("#000000"));
+        }
     }
     match parse(req, prev) {
         Ok((native, then)) => start(native, then, "picker"),
@@ -566,7 +685,10 @@ pub fn start_download(data: Data, name: String) -> Result<u32, Fail> {
         client: client_guid(&app_id(), Some(DOWNLOAD_ID)),
         start: Some(Start::Known(Known::Downloads)),
         force_start: false,
-        default_ext: name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).filter(|e| !e.is_empty()),
+        default_ext: name
+            .rsplit_once('.')
+            .map(|(_, e)| e.to_ascii_lowercase())
+            .filter(|e| !e.is_empty()),
         suggested_name: Some(name),
     };
     start(native, Then::Download(data), "download")
@@ -583,7 +705,13 @@ struct Picked {
 fn stat_picked(path: PathBuf, rel: String) -> Result<Picked, Fail> {
     let (size, mtime) = fs::op_stat_file(&path)?;
     let name = fs::name_of(&path);
-    Ok(Picked { path, name, size, mtime, rel })
+    Ok(Picked {
+        path,
+        name,
+        size,
+        mtime,
+        rel,
+    })
 }
 
 /// `webkitdirectory`: every file under `root`, sorted by relative path. Directory links are not followed.
@@ -592,7 +720,9 @@ pub fn walk(root: &Path) -> Result<Vec<(PathBuf, String)>, Fail> {
     let mut out = Vec::new();
     let mut stack = vec![(root.to_path_buf(), base)];
     while let Some((dir, rel)) = stack.pop() {
-        let entries = std::fs::read_dir(&dir).map_err(|e| fail_io(&e, Access::Read))?.filter_map(Result::ok);
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|e| fail_io(&e, Access::Read))?
+            .filter_map(Result::ok);
         let mut subdirs = Vec::new();
         for e in entries {
             let Ok(ft) = e.file_type() else { continue };
@@ -616,39 +746,68 @@ fn finish(paths: Vec<PathBuf>, then: Then) -> Result<Done, Fail> {
     match then {
         Then::Files { walk: walked, prev } => {
             let picked: Vec<Picked> = if walked {
-                let root = paths.into_iter().next().ok_or_else(|| Fail::new("AbortError", "nothing was picked"))?;
-                walk(&root)?.into_iter().map(|(p, rel)| stat_picked(p, rel)).collect::<Result<_, _>>()?
+                let root = paths
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| Fail::new("AbortError", "nothing was picked"))?;
+                walk(&root)?
+                    .into_iter()
+                    .map(|(p, rel)| stat_picked(p, rel))
+                    .collect::<Result<_, _>>()?
             } else {
-                paths.into_iter().map(|p| stat_picked(p, String::new())).collect::<Result<_, _>>()?
+                paths
+                    .into_iter()
+                    .map(|p| stat_picked(p, String::new()))
+                    .collect::<Result<_, _>>()?
             };
-            let same = picked.len() == prev.len() && picked.iter().zip(&prev).all(|(a, b)| &a.path == b);
+            let same =
+                picked.len() == prev.len() && picked.iter().zip(&prev).all(|(a, b)| &a.path == b);
             if same {
                 return Ok(Done::json(&cancelled()));
             }
             let payload = json!({ "files": picked.len() }).to_string();
-            Ok(Done::with_value(payload, move |g| unsafe { make_file_list(g, &picked) }))
+            Ok(Done::with_value(payload, move |g| unsafe {
+                make_file_list(g, &picked)
+            }))
         }
         Then::Handles => {
             let mut handles = Vec::new();
             for p in paths {
                 let meta = std::fs::metadata(&p).map_err(|e| fail_io(&e, Access::Read))?;
-                let kind = if meta.is_dir() { fs::Kind::Directory } else { fs::Kind::File };
+                let kind = if meta.is_dir() {
+                    fs::Kind::Directory
+                } else {
+                    fs::Kind::File
+                };
                 handles.push(fs::granted_handle_json(p, kind));
             }
-            Ok(Done { payload: json!({ "handles": handles }).to_string(), make: None })
+            Ok(Done {
+                payload: json!({ "handles": handles }).to_string(),
+                make: None,
+            })
         }
         Then::SaveHandle => {
-            let p = paths.into_iter().next().ok_or_else(|| Fail::new("AbortError", "nothing was picked"))?;
+            let p = paths
+                .into_iter()
+                .next()
+                .ok_or_else(|| Fail::new("AbortError", "nothing was picked"))?;
             std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
                 .truncate(true)
                 .open(&p)
                 .map_err(|e| fail_io(&e, Access::Write))?;
-            Ok(Done { payload: json!({ "handles": [fs::granted_handle_json(p, fs::Kind::File)] }).to_string(), make: None })
+            Ok(Done {
+                payload: json!({ "handles": [fs::granted_handle_json(p, fs::Kind::File)] })
+                    .to_string(),
+                make: None,
+            })
         }
         Then::Download(data) => {
-            let p = paths.into_iter().next().ok_or_else(|| Fail::new("AbortError", "nothing was picked"))?;
+            let p = paths
+                .into_iter()
+                .next()
+                .ok_or_else(|| Fail::new("AbortError", "nothing was picked"))?;
             crate::fs::writable::write_whole(&p, &data)?;
             let name = fs::name_of(&p);
             crate::log_later("dialog", format!("[download] saved {name}"));
@@ -712,11 +871,26 @@ mod tests {
         let image = filters_for_accept(&toks(&["image/*"]));
         assert_eq!(image.len(), 1);
         assert_eq!(image[0].name, "Image Files");
-        assert!(image[0].exts.contains(&"png".to_string()) && image[0].exts.contains(&"jpg".to_string()));
-        assert_eq!(filters_for_accept(&toks(&["audio/*"]))[0].name, "Audio Files");
-        assert_eq!(filters_for_accept(&toks(&["video/*"]))[0].name, "Video Files");
+        assert!(
+            image[0].exts.contains(&"png".to_string())
+                && image[0].exts.contains(&"jpg".to_string())
+        );
+        assert_eq!(
+            filters_for_accept(&toks(&["audio/*"]))[0].name,
+            "Audio Files"
+        );
+        assert_eq!(
+            filters_for_accept(&toks(&["video/*"]))[0].name,
+            "Video Files"
+        );
         let one = filters_for_accept(&toks(&[".csv"]));
-        assert_eq!(one, vec![Filter { name: "Custom Files".into(), exts: vec!["csv".into()] }]);
+        assert_eq!(
+            one,
+            vec![Filter {
+                name: "Custom Files".into(),
+                exts: vec!["csv".into()]
+            }]
+        );
         let mixed = filters_for_accept(&toks(&[".png", "image/*", "application/pdf"]));
         assert_eq!(mixed[0].name, "Custom Files");
         assert_eq!(mixed[0].exts[0], "png");
@@ -730,9 +904,18 @@ mod tests {
     #[test]
     fn fsa_types_become_one_filter_each_with_their_mime_extensions() {
         let types = vec![
-            AcceptType { description: "Text".into(), accept: vec![("text/plain".into(), vec![".txt".into(), ".LOG".into()])] },
-            AcceptType { description: "".into(), accept: vec![("image/png".into(), vec![])] },
-            AcceptType { description: "Nothing".into(), accept: vec![("x-unknown/nothing".into(), vec![])] },
+            AcceptType {
+                description: "Text".into(),
+                accept: vec![("text/plain".into(), vec![".txt".into(), ".LOG".into()])],
+            },
+            AcceptType {
+                description: "".into(),
+                accept: vec![("image/png".into(), vec![])],
+            },
+            AcceptType {
+                description: "Nothing".into(),
+                accept: vec![("x-unknown/nothing".into(), vec![])],
+            },
         ];
         let f = filters_for_types(&types);
         assert_eq!(f.len(), 2, "a type with no extension is left out: {f:?}");
@@ -748,7 +931,10 @@ mod tests {
         assert_eq!(fnv128(b"a"), 0xd228cb696f1a8caf78912b704e4a8964);
         assert_eq!(client_guid("app", Some("x")), fnv128(b"app\0x"));
         assert_eq!(client_guid("app", None), fnv128(b"app"));
-        assert_ne!(client_guid("app", Some("x")), client_guid("other", Some("x")));
+        assert_ne!(
+            client_guid("app", Some("x")),
+            client_guid("other", Some("x"))
+        );
         assert_ne!(client_guid("app", Some("x")), client_guid("app", Some("y")));
         assert!(valid_id("Recent_files-2"));
         for bad in ["", "has space", "a/b", &"x".repeat(33)] {
@@ -769,7 +955,11 @@ mod tests {
             assert_eq!(Known::parse(s), Some(k));
             assert_eq!(k.as_str(), s);
         }
-        assert_eq!(Known::parse("Documents"), None, "the enum is case-sensitive, as in WebIDL");
+        assert_eq!(
+            Known::parse("Documents"),
+            None,
+            "the enum is case-sensitive, as in WebIDL"
+        );
         if cfg!(any(windows, target_os = "macos", target_os = "linux")) {
             assert!(known_folder(Known::Downloads).is_some_and(|p| p.is_absolute()));
         }
@@ -777,10 +967,18 @@ mod tests {
 
     #[test]
     fn a_request_parses_into_the_dialog_and_what_follows_it() {
-        let (n, then) = parse(r#"{"kind":"open","multiple":true,"accept":[".txt"],"result":"files"}"#, vec![]).unwrap();
+        let (n, then) = parse(
+            r#"{"kind":"open","multiple":true,"accept":[".txt"],"result":"files"}"#,
+            vec![],
+        )
+        .unwrap();
         assert_eq!((n.kind, n.multiple, n.allow_all), (Kind::Open, true, true));
         assert!(matches!(then, Then::Files { walk: false, .. }));
-        let (n, then) = parse(r#"{"kind":"folder","multiple":true,"result":"files"}"#, vec![]).unwrap();
+        let (n, then) = parse(
+            r#"{"kind":"folder","multiple":true,"result":"files"}"#,
+            vec![],
+        )
+        .unwrap();
         assert!(!n.multiple, "only an Open picks several");
         assert!(matches!(then, Then::Files { walk: true, .. }));
         let (n, then) = parse(
@@ -798,43 +996,87 @@ mod tests {
         let s = Scratch::new("dialog-start");
         std::fs::write(s.0.join("f.txt"), b"x").unwrap();
         let h = fs::register(s.0.join("f.txt"), fs::Kind::File);
-        let (n, _) = parse(&format!(r#"{{"kind":"open","startIn":{{"h":{h}}}}}"#), vec![]).unwrap();
+        let (n, _) = parse(
+            &format!(r#"{{"kind":"open","startIn":{{"h":{h}}}}}"#),
+            vec![],
+        )
+        .unwrap();
         assert_eq!(n.start, Some(Start::Path(s.0.clone())));
         fs::release(h);
-        assert_eq!(parse(&format!(r#"{{"kind":"open","startIn":{{"h":{h}}}}}"#), vec![]).err().map(|f| f.name), Some("InvalidStateError"));
-        assert_eq!(parse(r#"{"kind":"open","startIn":"home"}"#, vec![]).err().map(|f| f.name), Some("TypeError"));
-        assert_eq!(parse(r#"{"kind":"run"}"#, vec![]).err().map(|f| f.name), Some("TypeError"));
-        let (n, _) = parse(r#"{"kind":"open","types":[],"excludeAcceptAllOption":true}"#, vec![]).unwrap();
+        assert_eq!(
+            parse(
+                &format!(r#"{{"kind":"open","startIn":{{"h":{h}}}}}"#),
+                vec![]
+            )
+            .err()
+            .map(|f| f.name),
+            Some("InvalidStateError")
+        );
+        assert_eq!(
+            parse(r#"{"kind":"open","startIn":"home"}"#, vec![])
+                .err()
+                .map(|f| f.name),
+            Some("TypeError")
+        );
+        assert_eq!(
+            parse(r#"{"kind":"run"}"#, vec![]).err().map(|f| f.name),
+            Some("TypeError")
+        );
+        let (n, _) = parse(
+            r#"{"kind":"open","types":[],"excludeAcceptAllOption":true}"#,
+            vec![],
+        )
+        .unwrap();
         assert!(n.allow_all);
     }
 
     #[test]
     fn download_names_follow_chromium() {
-        assert_eq!(download_name("report.csv", "blob:x/1", "text/csv"), "report.csv");
+        assert_eq!(
+            download_name("report.csv", "blob:x/1", "text/csv"),
+            "report.csv"
+        );
         assert_eq!(download_name("dir/sub\\a:b.txt", "blob:x/1", ""), "a_b.txt");
-        assert_eq!(download_name("", "data:text/plain,hi", "text/plain"), "download.txt");
+        assert_eq!(
+            download_name("", "data:text/plain,hi", "text/plain"),
+            "download.txt"
+        );
         assert_eq!(
             download_name("", "blob:http://localhost/5b1f-77aa", "application/pdf"),
             "5b1f-77aa.pdf"
         );
         assert_eq!(download_name(" ..x.. ", "blob:x/1", ""), "x");
         assert_eq!(download_name("con.txt", "blob:x/1", ""), "_con.txt");
-        assert_eq!(download_name("a?b", "data:,x", "application/x-unknown"), "a_b");
+        assert_eq!(
+            download_name("a?b", "data:,x", "application/x-unknown"),
+            "a_b"
+        );
     }
 
     static KEY: AtomicU64 = AtomicU64::new(1 << 40);
 
     fn owner() -> Option<Owner> {
-        Some(Owner { key: KEY.fetch_add(1, Ordering::Relaxed), hwnd: 0 })
+        Some(Owner {
+            key: KEY.fetch_add(1, Ordering::Relaxed),
+            hwnd: 0,
+        })
     }
 
     fn pending_of(window: u64) -> u64 {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
-            if let Some(v) = scripted::list().as_array().unwrap().iter().find(|v| v["window"] == window) {
+            if let Some(v) = scripted::list()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["window"] == window)
+            {
                 return v["id"].as_u64().unwrap();
             }
-            assert!(std::time::Instant::now() < deadline, "no scripted dialog appeared for window {window}");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no scripted dialog appeared for window {window}"
+            );
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
     }
@@ -856,7 +1098,10 @@ mod tests {
         let t = token_of(open(o, req, vec![]));
         let id = pending_of(key);
         let second = open(o, req, vec![]).unwrap_err();
-        assert_eq!((second.name, second.message.as_str()), ("NotAllowedError", ALREADY_ACTIVE));
+        assert_eq!(
+            (second.name, second.message.as_str()),
+            ("NotAllowedError", ALREADY_ACTIVE)
+        );
         assert!(scripted::answer(id, vec![s.0.join("missing.txt")]).is_err());
         assert!(scripted::answer(id, vec![PathBuf::from("relative.txt")]).is_err());
         scripted::answer(id, vec![a.clone(), b.clone()]).unwrap();
@@ -876,8 +1121,17 @@ mod tests {
         let (ok, payload) = wait_for_settles(&[t]).remove(&t).unwrap();
         assert!(ok);
         let v: Json = serde_json::from_str(&payload).unwrap();
-        assert_eq!((v["handles"][0]["name"].as_str(), v["handles"][0]["kind"].as_str()), (Some("a.txt"), Some("file")));
-        assert!(!payload.contains(&*s.0.to_string_lossy()), "no path in what JS sees: {payload}");
+        assert_eq!(
+            (
+                v["handles"][0]["name"].as_str(),
+                v["handles"][0]["kind"].as_str()
+            ),
+            (Some("a.txt"), Some("file"))
+        );
+        assert!(
+            !payload.contains(&*s.0.to_string_lossy()),
+            "no path in what JS sees: {payload}"
+        );
         fs::release(v["handles"][0]["h"].as_u64().unwrap());
     }
 
@@ -913,13 +1167,22 @@ mod tests {
         std::fs::write(root.join("a/x.txt"), b"x").unwrap();
         std::fs::write(root.join("a/y/z.txt"), b"z").unwrap();
         let rel: Vec<String> = walk(&root).unwrap().into_iter().map(|(_, r)| r).collect();
-        assert_eq!(rel, ["proj/a/x.txt", "proj/a/y/z.txt", "proj/b.txt", "proj/c.txt"]);
+        assert_eq!(
+            rel,
+            ["proj/a/x.txt", "proj/a/y/z.txt", "proj/b.txt", "proj/c.txt"]
+        );
         let o = owner();
         let t = token_of(open(o, r#"{"kind":"folder","result":"files"}"#, vec![]));
         let id = pending_of(o.unwrap().key);
-        assert!(scripted::answer(id, vec![root.join("b.txt")]).is_err(), "a folder pick takes a folder");
+        assert!(
+            scripted::answer(id, vec![root.join("b.txt")]).is_err(),
+            "a folder pick takes a folder"
+        );
         scripted::answer(id, vec![root.clone()]).unwrap();
-        assert_eq!(wait_for_settles(&[t])[&t], (true, r#"{"files":4}"#.to_string()));
+        assert_eq!(
+            wait_for_settles(&[t])[&t],
+            (true, r#"{"files":4}"#.to_string())
+        );
     }
 
     #[test]
@@ -929,13 +1192,21 @@ mod tests {
         std::fs::write(&target, b"old contents").unwrap();
         let o = owner();
         let key = o.unwrap().key;
-        let t = token_of(open(o, r#"{"kind":"save","suggestedName":"out.txt"}"#, vec![]));
+        let t = token_of(open(
+            o,
+            r#"{"kind":"save","suggestedName":"out.txt"}"#,
+            vec![],
+        ));
         let id = pending_of(key);
         assert!(scripted::answer(id, vec![s.0.join("no-such-dir").join("x.txt")]).is_err());
         scripted::answer(id, vec![target.clone()]).unwrap();
         let (ok, payload) = wait_for_settles(&[t]).remove(&t).unwrap();
         assert!(ok, "{payload}");
-        assert_eq!(std::fs::read(&target).unwrap(), b"", "FSA step 7.7: the picked file starts empty");
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"",
+            "FSA step 7.7: the picked file starts empty"
+        );
         let v: Json = serde_json::from_str(&payload).unwrap();
         fs::release(v["handles"][0]["h"].as_u64().unwrap());
 
@@ -951,18 +1222,39 @@ mod tests {
             suggested_name: Some("report.csv".into()),
             default_ext: Some("csv".into()),
         };
-        let t = token_of(start_owned(o, n, Then::Download(Data::Bytes(b"a,b\n1,2\n".to_vec())), "download"));
+        let t = token_of(start_owned(
+            o,
+            n,
+            Then::Download(Data::Bytes(b"a,b\n1,2\n".to_vec())),
+            "download",
+        ));
         let id = pending_of(key);
         let listed = scripted::list();
-        let v = listed.as_array().unwrap().iter().find(|v| v["id"] == id).unwrap();
-        assert_eq!((v["what"].as_str(), v["startIn"].as_str()), (Some("download"), Some("downloads")));
+        let v = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["id"] == id)
+            .unwrap();
+        assert_eq!(
+            (v["what"].as_str(), v["startIn"].as_str()),
+            (Some("download"), Some("downloads"))
+        );
         assert_eq!(v["suggestedName"], "report.csv");
         scripted::answer(id, vec![saved.clone()]).unwrap();
-        assert_eq!(wait_for_settles(&[t])[&t], (true, r#"{"saved":"report.csv"}"#.to_string()));
+        assert_eq!(
+            wait_for_settles(&[t])[&t],
+            (true, r#"{"saved":"report.csv"}"#.to_string())
+        );
         assert_eq!(std::fs::read(&saved).unwrap(), b"a,b\n1,2\n");
-        let names: Vec<String> =
-            std::fs::read_dir(&s.0).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
-        assert!(!names.iter().any(|n| n.contains(".vnswap")), "no swap left: {names:?}");
+        let names: Vec<String> = std::fs::read_dir(&s.0)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n.contains(".vnswap")),
+            "no swap left: {names:?}"
+        );
     }
 
     fn download(o: Option<Owner>, name: &str, bytes: &[u8]) -> Result<u32, Fail> {
@@ -977,11 +1269,21 @@ mod tests {
             suggested_name: Some(name.into()),
             default_ext: None,
         };
-        start_owned(o, n, Then::Download(Data::Bytes(bytes.to_vec())), "download")
+        start_owned(
+            o,
+            n,
+            Then::Download(Data::Bytes(bytes.to_vec())),
+            "download",
+        )
     }
 
     fn pending_count(window: u64) -> usize {
-        scripted::list().as_array().unwrap().iter().filter(|v| v["window"] == window).count()
+        scripted::list()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| v["window"] == window)
+            .count()
     }
 
     #[test]
@@ -994,18 +1296,33 @@ mod tests {
         let d1 = token_of(download(o, "one.txt", b"1"));
         let d2 = token_of(download(o, "two.txt", b"2"));
         std::thread::sleep(QUEUE_POLL * 3);
-        assert_eq!(pending_count(key), 1, "only the picker is in front of the user");
+        assert_eq!(
+            pending_count(key),
+            1,
+            "only the picker is in front of the user"
+        );
         scripted::cancel(first).unwrap();
         assert_eq!(wait_for_settles(&[picker])[&picker], (true, cancelled()));
         for name in ["one.txt", "two.txt"] {
             let id = pending_of(key);
             assert_eq!(pending_count(key), 1);
             let listed = scripted::list();
-            let v = listed.as_array().unwrap().iter().find(|v| v["id"] == id).unwrap();
+            let v = listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["id"] == id)
+                .unwrap();
             assert_eq!(v["suggestedName"], name);
             scripted::answer(id, vec![s.0.join(name)]).unwrap();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-            while scripted::list().as_array().unwrap().iter().any(|v| v["id"] == id) || !s.0.join(name).exists() {
+            while scripted::list()
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["id"] == id)
+                || !s.0.join(name).exists()
+            {
                 assert!(std::time::Instant::now() < deadline);
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
@@ -1021,7 +1338,10 @@ mod tests {
         let queued = token_of(download(o, "never.txt", b"x"));
         assert!(owner_closing(key));
         let got = wait_for_settles(&[picker, queued]);
-        assert_eq!((got[&picker].1.as_str(), got[&queued].1.as_str()), (cancelled().as_str(), cancelled().as_str()));
+        assert_eq!(
+            (got[&picker].1.as_str(), got[&queued].1.as_str()),
+            (cancelled().as_str(), cancelled().as_str())
+        );
         assert!(!s.0.join("never.txt").exists());
     }
 }

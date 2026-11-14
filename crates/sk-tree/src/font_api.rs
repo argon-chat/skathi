@@ -1,11 +1,11 @@
 //! Native CSS Font Loading objects.
 use crate::fonts::{self, Descriptors, Snapshot, Status};
-use std::{cell::RefCell, collections::HashMap, ffi::c_void};
 use sk_runtime::redjs::{
     context, ffi, glue,
     webapi::{domexception, events, util as u},
 };
 use sk_runtime::{host_fn, JsRuntime};
+use std::{cell::RefCell, collections::HashMap, ffi::c_void};
 
 #[derive(Clone, Copy)]
 struct Api {

@@ -45,11 +45,18 @@ impl Rasterlottie {
     }
 
     /// The sticker engine's raster: straight-alpha BGRA. rasterlottie scales uniformly only, so the animation is drawn top-left, leaving at most a pixel of transparent edge.
-    pub fn render_straight(&mut self, frame: f32, intrinsic: (u32, u32), width: u32, height: u32) -> Option<&[u8]> {
+    pub fn render_straight(
+        &mut self,
+        frame: f32,
+        intrinsic: (u32, u32),
+        width: u32,
+        height: u32,
+    ) -> Option<&[u8]> {
         if width == 0 || height == 0 {
             return None;
         }
-        let scale = (width as f32 / intrinsic.0.max(1) as f32).min(height as f32 / intrinsic.1.max(1) as f32);
+        let scale = (width as f32 / intrinsic.0.max(1) as f32)
+            .min(height as f32 / intrinsic.1.max(1) as f32);
         let raster = self.render(frame, scale)?;
         let out = &mut self.straight;
         out.clear();

@@ -34,13 +34,14 @@ pub mod state;
 pub mod transport;
 
 pub use animation::Animation;
-pub use transport::Transport;
 pub use backend::Backend;
 pub use element::{lottie, LottieFit, LottieOptions};
 pub use normalize::Normalization;
 pub use state::{
-    raster_size_for, Advance, Direction, LoopMode, LottieError, LottieEvent, LottieMeta, LottieState, PlayMode,
+    raster_size_for, Advance, Direction, LoopMode, LottieError, LottieEvent, LottieMeta,
+    LottieState, PlayMode,
 };
+pub use transport::Transport;
 
 /// True if any state in `states` still needs the frame pump running.
 pub fn any_playing<'a>(states: impl IntoIterator<Item = &'a LottieState>) -> bool {

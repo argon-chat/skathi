@@ -109,7 +109,10 @@ fn the_compound_clip_decodes_frame_by_frame() {
     for (i, packet) in packets.iter().enumerate() {
         assert!(decoder.decode(packet).unwrap(), "packet {i} shows a frame");
         let frame = decoder.frame().unwrap();
-        assert_eq!((frame.width, frame.height, frame.format), (72, 56, Format::I420));
+        assert_eq!(
+            (frame.width, frame.height, frame.format),
+            (72, 56, Format::I420)
+        );
         assert_eq!((frame.planes[1].width, frame.planes[1].height), (36, 28));
         assert_eq!(frame.color_space, ColorSpace::Unknown);
         assert!(!frame.full_range);
@@ -122,16 +125,33 @@ fn the_compound_clip_decodes_frame_by_frame() {
 fn the_compound_clip_is_bit_exact() {
     let (shown, hash) = decode_all(&ivf(COMPOUND));
     assert_eq!(shown, COMPOUND_FRAMES);
-    println!("compound.ivf hash {hash:#018x} (config {})", if cfg!(sk_vpx_x86) { "x86_64-msvc" } else { "generic" });
+    println!(
+        "compound.ivf hash {hash:#018x} (config {})",
+        if cfg!(sk_vpx_x86) {
+            "x86_64-msvc"
+        } else {
+            "generic"
+        }
+    );
     if COMPOUND_HASH != 0 {
-        assert_eq!(hash, COMPOUND_HASH, "decoded frames differ from the pure-C build");
+        assert_eq!(
+            hash, COMPOUND_HASH,
+            "decoded frames differ from the pure-C build"
+        );
     }
 }
 
 #[test]
 fn peek_reads_a_keyframe_size() {
     let packets = ivf(COMPOUND);
-    assert_eq!(peek(packets[0]), Some(StreamInfo { width: 72, height: 56, keyframe: true }));
+    assert_eq!(
+        peek(packets[0]),
+        Some(StreamInfo {
+            width: 72,
+            height: 56,
+            keyframe: true
+        })
+    );
     assert_eq!(peek(b"\x00\x01\x02"), None);
 }
 
@@ -147,9 +167,16 @@ fn memory_is_charged_to_the_decoder_that_allocated_it() {
         a.decode(packet).unwrap();
     }
     let after = a.memory();
-    assert!(after.live > before.live, "frame buffers are charged: {before:?} -> {after:?}");
+    assert!(
+        after.live > before.live,
+        "frame buffers are charged: {before:?} -> {after:?}"
+    );
     assert!(after.peak >= after.live);
-    assert_eq!(b.memory(), b_before, "another decoder's allocations are not b's");
+    assert_eq!(
+        b.memory(),
+        b_before,
+        "another decoder's allocations are not b's"
+    );
 }
 
 #[test]
@@ -214,7 +241,9 @@ fn garbage_truncation_and_bit_flips_are_errors_not_crashes() {
 #[test]
 fn decoders_on_many_threads_at_once() {
     let expected = decode_all(&ivf(COMPOUND));
-    let threads: Vec<_> = (0..8).map(|_| std::thread::spawn(|| decode_all(&ivf(COMPOUND)))).collect();
+    let threads: Vec<_> = (0..8)
+        .map(|_| std::thread::spawn(|| decode_all(&ivf(COMPOUND))))
+        .collect();
     for t in threads {
         assert_eq!(t.join().unwrap(), expected);
     }

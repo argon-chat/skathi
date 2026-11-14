@@ -2,6 +2,8 @@
 //! Values and callbacks stay on the VM thread; the native pump carries only IDs.
 
 use crate::js::{self, Context, JsDispatcher, Value};
+pub use sk_desktop::tray::{Callback, Error, Icon, MenuItem, Options, Tray, WeakTray};
+use sk_runtime::{redjs, JsRuntime};
 use std::{
     cell::RefCell,
     sync::{
@@ -9,8 +11,6 @@ use std::{
         Arc,
     },
 };
-pub use sk_desktop::tray::{Callback, Error, Icon, MenuItem, Options, Tray, WeakTray};
-use sk_runtime::{redjs, JsRuntime};
 
 type Result<T> = crate::js::Result<T>;
 #[derive(Default)]

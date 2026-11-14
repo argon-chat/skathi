@@ -37,7 +37,11 @@ pub struct Strings {
 pub fn strings(lang: &str) -> &'static Strings {
     use sk_locale::keys;
     let t = |key: &str| -> &'static str {
-        Box::leak(sk_locale::text_in(lang, key).unwrap_or_else(|| key.to_string()).into_boxed_str())
+        Box::leak(
+            sk_locale::text_in(lang, key)
+                .unwrap_or_else(|| key.to_string())
+                .into_boxed_str(),
+        )
     };
     Box::leak(Box::new(Strings {
         title: t(keys::CRASH_TITLE),
@@ -61,15 +65,27 @@ pub enum Action {
 /// The footer, in order. Embedded there is no Restart: the process is the
 /// embedder's to start again.
 pub fn actions(embedded: bool) -> &'static [Action] {
-    if embedded { &[Action::Copy, Action::Close] } else { &[Action::Restart, Action::Copy, Action::Close] }
+    if embedded {
+        &[Action::Copy, Action::Close]
+    } else {
+        &[Action::Restart, Action::Copy, Action::Close]
+    }
 }
 
 pub fn primary(actions: &[Action]) -> usize {
-    actions.iter().position(|a| *a == Action::Restart).or_else(|| actions.iter().position(|a| *a == Action::Close)).unwrap_or(0)
+    actions
+        .iter()
+        .position(|a| *a == Action::Restart)
+        .or_else(|| actions.iter().position(|a| *a == Action::Close))
+        .unwrap_or(0)
 }
 
 pub fn body(s: &Strings, actions: &[Action]) -> &'static str {
-    if actions.contains(&Action::Restart) { s.body } else { s.body_no_restart }
+    if actions.contains(&Action::Restart) {
+        s.body
+    } else {
+        s.body_no_restart
+    }
 }
 
 impl Action {
@@ -98,7 +114,11 @@ impl Report {
 
     pub fn about(&self, s: &Strings) -> String {
         match &self.version {
-            Some(v) => format!("{} · {}", sk_locale::format(s.version, &[("version", v)]), self.os),
+            Some(v) => format!(
+                "{} · {}",
+                sk_locale::format(s.version, &[("version", v)]),
+                self.os
+            ),
             None => self.os.clone(),
         }
     }
@@ -127,7 +147,10 @@ impl Report {
 }
 
 pub fn utc(t: SystemTime) -> String {
-    let secs = t.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let secs = t
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Howard Hinnant's civil_from_days.
     let z = days + 719_468;
@@ -139,7 +162,12 @@ pub fn utc(t: SystemTime) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC", rem / 3600, rem % 3600 / 60, rem % 60)
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 pub fn os_version() -> String {
@@ -147,8 +175,10 @@ pub fn os_version() -> String {
     {
         use windows::Wdk::System::SystemServices::RtlGetVersion;
         use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
-        let mut vi =
-            OSVERSIONINFOW { dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32, ..Default::default() };
+        let mut vi = OSVERSIONINFOW {
+            dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
+            ..Default::default()
+        };
         // `RtlGetVersion`: `GetVersionEx` reports 6.2 to an unmanifested process.
         if unsafe { RtlGetVersion(&mut vi) }.is_ok() {
             return format!(
@@ -170,7 +200,9 @@ pub fn os_version() -> String {
 pub fn app_version() -> Option<String> {
     #[cfg(feature = "prod")]
     {
-        crate::payload::get().map(|l| l.meta.version.clone()).filter(|v| !v.is_empty())
+        crate::payload::get()
+            .map(|l| l.meta.version.clone())
+            .filter(|v| !v.is_empty())
     }
     #[cfg(not(feature = "prod"))]
     {
@@ -225,17 +257,26 @@ static DECIDED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn set_app_name(name: &str) {
     let name = name.trim();
-    *APP_NAME.lock().unwrap_or_else(|p| p.into_inner()) = (!name.is_empty()).then(|| name.to_string());
+    *APP_NAME.lock().unwrap_or_else(|p| p.into_inner()) =
+        (!name.is_empty()).then(|| name.to_string());
 }
 
 fn app_name() -> String {
-    APP_NAME.lock().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_else(|| "Skathi".to_string())
+    APP_NAME
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .unwrap_or_else(|| "Skathi".to_string())
 }
 
 /// Called where JS would have run; only the first call logs and opens the dialog.
 pub(crate) fn on_poisoned(cx: &mut App) {
     let first = !DECIDED.swap(true, Ordering::SeqCst);
-    let decision = decide(first, crate::quiet::never_focus(), crate::shutdown::is_closing());
+    let decision = decide(
+        first,
+        crate::quiet::never_focus(),
+        crate::shutdown::is_closing(),
+    );
     if decision == Decision::Nothing {
         return;
     }
@@ -246,7 +287,10 @@ pub(crate) fn on_poisoned(cx: &mut App) {
         time: SystemTime::now(),
         reason: sk_runtime::bridge::poison_reason().unwrap_or_else(|| "(no message)".to_string()),
     };
-    let line = format!("[crash] a native panic stopped the app's JavaScript (I9): {}", report.reason);
+    let line = format!(
+        "[crash] a native panic stopped the app's JavaScript (I9): {}",
+        report.reason
+    );
     eprintln!("{line}");
     sk_tree::log::record("crash", line);
     if decision == Decision::Dialog {
@@ -263,12 +307,19 @@ pub(crate) fn on_poisoned(cx: &mut App) {
 
 pub(crate) fn quit(action: Action, cx: &mut App) {
     let relaunch = action == Action::Restart && !crate::embed::active();
-    crate::shutdown::begin(if relaunch { "restart after a crash" } else { "close after a crash" });
+    crate::shutdown::begin(if relaunch {
+        "restart after a crash"
+    } else {
+        "close after a crash"
+    });
     // After `begin`: a single-instance app's new process is told this one is
     // closing, and waits for it to end before it opens its window.
     if relaunch {
         match relaunch_now() {
-            Ok(pid) => sk_tree::log::record("crash", format!("[crash] restarting: started process {pid}")),
+            Ok(pid) => sk_tree::log::record(
+                "crash",
+                format!("[crash] restarting: started process {pid}"),
+            ),
             Err(e) => {
                 let line = format!("[crash] the app could not be started again: {e}");
                 eprintln!("{line}");
@@ -278,7 +329,10 @@ pub(crate) fn quit(action: Action, cx: &mut App) {
     }
     let main = crate::MAIN_WINDOW.with(|w| w.get());
     let closed = main.is_some_and(|h| {
-        h.update(cx, |_, window, cx| crate::window::close_primary("close after a crash", window, cx)).is_ok()
+        h.update(cx, |_, window, cx| {
+            crate::window::close_primary("close after a crash", window, cx)
+        })
+        .is_ok()
     });
     if !closed {
         cx.quit();
@@ -318,7 +372,11 @@ fn show(report: Report, cx: &mut App) {
 #[cfg(not(target_os = "windows"))]
 fn show(report: Report, cx: &mut App) {
     let s = strings(&ui_lang());
-    let acts = actions(crate::embed::active()).iter().copied().filter(|a| *a != Action::Copy).collect::<Vec<_>>();
+    let acts = actions(crate::embed::active())
+        .iter()
+        .copied()
+        .filter(|a| *a != Action::Copy)
+        .collect::<Vec<_>>();
     if let Some(h) = crate::MAIN_WINDOW.with(|w| w.get()) {
         let _ = h.update(cx, |_, window, _| window.activate_window());
     }
@@ -326,14 +384,22 @@ fn show(report: Report, cx: &mut App) {
         what: "crash",
         title: report.app.clone(),
         instruction: report.title(s),
-        content: format!("{}\n\n{}\n{}", body(s, &acts), report.reason, report.about(s)),
+        content: format!(
+            "{}\n\n{}\n{}",
+            body(s, &acts),
+            report.reason,
+            report.about(s)
+        ),
         buttons: acts.iter().map(|a| a.label(s).to_string()).collect(),
         default: primary(&acts),
     };
     let (tx, rx) = futures::channel::oneshot::channel::<Option<usize>>();
-    sk_desktop::dialog::ask(ask, Box::new(move |a| {
-        let _ = tx.send(a);
-    }));
+    sk_desktop::dialog::ask(
+        ask,
+        Box::new(move |a| {
+            let _ = tx.send(a);
+        }),
+    );
     cx.spawn(async move |cx| {
         // A dismissal leaves the app as it is: its window's own close works
         // (`window::should_close` runs no JS once poisoned).
@@ -357,12 +423,15 @@ mod view {
     use std::time::{Duration, Instant};
 
     use gpui::{
-        div, prelude::*, px, App, AsyncApp, ClickEvent, ClipboardItem, Context, FocusHandle, FontWeight, Image,
-        ImageFormat, KeyDownEvent, MouseButton, Role, Subscription, Window, WindowAppearance, WindowHandle,
+        div, prelude::*, px, App, AsyncApp, ClickEvent, ClipboardItem, Context, FocusHandle,
+        FontWeight, Image, ImageFormat, KeyDownEvent, MouseButton, Role, Subscription, Window,
+        WindowAppearance, WindowHandle,
     };
 
     use super::{actions, primary, strings, ui_lang, Action, Report, Strings};
-    use crate::content_dialog::{self as card, fonts, hwnd_of, parse_label, win, Accent, Fonts, Guard, Label, Theme};
+    use crate::content_dialog::{
+        self as card, fonts, hwnd_of, parse_label, win, Accent, Fonts, Guard, Label, Theme,
+    };
 
     const WIDTH: f32 = 500.0;
 
@@ -408,7 +477,10 @@ mod view {
 
     impl Crash {
         fn dark(&self, window: &Window) -> bool {
-            self.spec.dark.unwrap_or(matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark))
+            self.spec.dark.unwrap_or(matches!(
+                window.appearance(),
+                WindowAppearance::Dark | WindowAppearance::VibrantDark
+            ))
         }
 
         fn release_owner(&mut self) {
@@ -420,7 +492,9 @@ mod view {
         /// The answer, once: the owner back, the window gone, then the app
         /// told (after this update, so its close runs outside this window's).
         fn finish(&mut self, action: Action, window: &mut Window, cx: &mut App) {
-            let Some(outcome) = self.outcome.take() else { return };
+            let Some(outcome) = self.outcome.take() else {
+                return;
+            };
             self.release_owner();
             window.remove_window();
             cx.defer(move |cx| outcome(action, cx));
@@ -458,11 +532,16 @@ mod view {
             self.expanded = !self.expanded;
             cx.notify();
             let (handle, hwnd, height) = (window.window_handle(), self.hwnd, self.height.clone());
-            cx.spawn(async move |_, cx: &mut AsyncApp| card::refit(handle, hwnd, WIDTH, &height, cx).await).detach();
+            cx.spawn(async move |_, cx: &mut AsyncApp| {
+                card::refit(handle, hwnd, WIDTH, &height, cx).await
+            })
+            .detach();
         }
 
         fn ring_order(&self) -> Vec<FocusHandle> {
-            std::iter::once(self.expander.clone()).chain(self.focus.iter().cloned()).collect()
+            std::iter::once(self.expander.clone())
+                .chain(self.focus.iter().cloned())
+                .collect()
         }
 
         fn key_down(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -475,16 +554,26 @@ mod view {
                 "escape" if plain => self.finish(Action::Close, window, cx),
                 "tab" if plain => {
                     let order = self.ring_order();
-                    let at = order.iter().position(|f| f.is_focused(window)).unwrap_or(default + 1);
+                    let at = order
+                        .iter()
+                        .position(|f| f.is_focused(window))
+                        .unwrap_or(default + 1);
                     let n = order.len();
-                    let next = if m.shift { (at + n - 1) % n } else { (at + 1) % n };
+                    let next = if m.shift {
+                        (at + n - 1) % n
+                    } else {
+                        (at + 1) % n
+                    };
                     window.focus(&order[next], cx);
                 }
                 "left" | "right" | "up" | "down" if plain => {
                     let n = self.focus.len();
                     let at = button.unwrap_or(default);
                     let back = matches!(k.key.as_str(), "left" | "up");
-                    window.focus(&self.focus[if back { (at + n - 1) % n } else { (at + 1) % n }], cx);
+                    window.focus(
+                        &self.focus[if back { (at + n - 1) % n } else { (at + 1) % n }],
+                        cx,
+                    );
                 }
                 "enter" | "space" if plain && !m.shift && !e.is_held => {
                     if self.expander.is_focused(window) {
@@ -493,42 +582,77 @@ mod view {
                         self.press(button.unwrap_or(default), window, cx);
                     }
                 }
-                _ if m.alt && !m.control && !m.platform && !e.is_held => match card::access_key_hit(&self.labels, k) {
-                    Some(i) => {
-                        window.focus(&self.focus[i], cx);
-                        self.press(i, window, cx);
+                _ if m.alt && !m.control && !m.platform && !e.is_held => {
+                    match card::access_key_hit(&self.labels, k) {
+                        Some(i) => {
+                            window.focus(&self.focus[i], cx);
+                            self.press(i, window, cx);
+                        }
+                        None => return,
                     }
-                    None => return,
-                },
+                }
                 _ => return,
             }
             cx.stop_propagation();
             cx.notify();
         }
 
-        fn button(&self, i: usize, t: &Theme, alt: bool, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        fn button(
+            &self,
+            i: usize,
+            t: &Theme,
+            alt: bool,
+            window: &Window,
+            cx: &mut Context<Self>,
+        ) -> impl IntoElement {
             let action = self.spec.actions[i];
             let copied = action == Action::Copy && self.copied.is_some();
-            let label = if copied { parse_label(self.s.copied) } else { self.labels[i].clone() };
+            let label = if copied {
+                parse_label(self.s.copied)
+            } else {
+                self.labels[i].clone()
+            };
             let accent = i == primary(self.spec.actions);
-            card::button(("sk-crash-button", i), &label, accent, t, alt, &self.focus[i], window, |b| {
-                b.on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _, _, _| {
-                        this.pressing = this.guard.allows(Instant::now()).then_some(i);
-                    }),
-                )
-                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                    if matches!(e, ClickEvent::Mouse(_)) && this.pressing.take() == Some(i) {
-                        this.press(i, window, cx);
-                    }
-                }))
-            })
+            card::button(
+                ("sk-crash-button", i),
+                &label,
+                accent,
+                t,
+                alt,
+                &self.focus[i],
+                window,
+                |b| {
+                    b.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, _| {
+                            this.pressing = this.guard.allows(Instant::now()).then_some(i);
+                        }),
+                    )
+                    .on_click(cx.listener(
+                        move |this, e: &ClickEvent, window, cx| {
+                            if matches!(e, ClickEvent::Mouse(_)) && this.pressing.take() == Some(i)
+                            {
+                                this.press(i, window, cx);
+                            }
+                        },
+                    ))
+                },
+            )
         }
 
-        fn details(&self, t: &Theme, f: &Fonts, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        fn details(
+            &self,
+            t: &Theme,
+            f: &Fonts,
+            window: &Window,
+            cx: &mut Context<Self>,
+        ) -> impl IntoElement {
             let ring = window.last_input_was_keyboard() && self.expander.is_focused(window);
-            let chevron = if self.expanded { '\u{E70E}' } else { '\u{E70D}' };
+            let chevron = if self.expanded {
+                '\u{E70E}'
+            } else {
+                '\u{E70D}'
+            };
             let hover = t.subtle;
             let toggle = div()
                 .id("sk-crash-details")
@@ -563,7 +687,12 @@ mod view {
                 .mt(px(12.0))
                 .flex()
                 .flex_col()
-                .child(div().flex().ml(px(-8.0)).child(card::with_ring(div().relative().child(toggle), ring, t, 4.0)))
+                .child(div().flex().ml(px(-8.0)).child(card::with_ring(
+                    div().relative().child(toggle),
+                    ring,
+                    t,
+                    4.0,
+                )))
                 .when(self.expanded, |d| {
                     d.child(
                         div()
@@ -587,7 +716,10 @@ mod view {
                                     .font_family(f.mono)
                                     .text_size(px(12.0))
                                     .line_height(px(16.0))
-                                    .child(super::breakable(&self.spec.report.reason, DETAILS_COLUMNS)),
+                                    .child(super::breakable(
+                                        &self.spec.report.reason,
+                                        DETAILS_COLUMNS,
+                                    )),
                             )
                             .child(
                                 div()
@@ -608,14 +740,22 @@ mod view {
             let t = Theme::new(dark, self.acrylic, self.accent);
             let f = fonts(cx);
             let alt = window.modifiers().alt;
-            let buttons: Vec<_> = (0..self.labels.len()).map(|i| self.button(i, &t, alt, window, cx)).collect();
+            let buttons: Vec<_> = (0..self.labels.len())
+                .map(|i| self.button(i, &t, alt, window, cx))
+                .collect();
             let title = self.spec.report.title(self.s);
             let sentence = super::body(self.s, self.spec.actions);
-            let body = card::body("sk-crash-body", &self.spec.report.app, card::app_icon(&self.icon, &t, f), &t, f)
-                .child(card::glyph_badge(GLYPH, t.critical_tint, t.critical, f))
-                .child(card::title(title.clone(), f))
-                .child(card::content(sentence.to_string(), &t))
-                .child(self.details(&t, f, window, cx));
+            let body = card::body(
+                "sk-crash-body",
+                &self.spec.report.app,
+                card::app_icon(&self.icon, &t, f),
+                &t,
+                f,
+            )
+            .child(card::glyph_badge(GLYPH, t.critical_tint, t.critical, f))
+            .child(card::title(title.clone(), f))
+            .child(card::content(sentence.to_string(), &t))
+            .child(self.details(&t, f, window, cx));
             div()
                 .id("sk-crash")
                 .role(Role::Dialog)
@@ -631,7 +771,11 @@ mod view {
                 .font_weight(FontWeight::NORMAL)
                 .text_color(t.text)
                 .bg(t.footer)
-                .child(card::card(self.height.clone(), body, card::footer(&t, buttons)))
+                .child(card::card(
+                    self.height.clone(),
+                    body,
+                    card::footer(&t, buttons),
+                ))
         }
     }
 
@@ -687,15 +831,20 @@ mod view {
             move |window, cx| {
                 cx.new(|cx| {
                     let s = strings(&spec.lang);
-                    let labels: Vec<Label> = spec.actions.iter().map(|a| parse_label(a.label(s))).collect();
+                    let labels: Vec<Label> = spec
+                        .actions
+                        .iter()
+                        .map(|a| parse_label(a.label(s)))
+                        .collect();
                     let expander = cx.focus_handle().tab_index(0).tab_stop(true);
                     let focus: Vec<FocusHandle> = (0..labels.len())
                         .map(|i| cx.focus_handle().tab_index(i as isize + 1).tab_stop(true))
                         .collect();
                     window.focus(&focus[primary(spec.actions)], cx);
                     let hwnd = hwnd_of(window).unwrap_or(0);
-                    let icon = win::icon_png(owner, hwnd, (16.0 * window.scale_factor()).round() as i32)
-                        .map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png)));
+                    let icon =
+                        win::icon_png(owner, hwnd, (16.0 * window.scale_factor()).round() as i32)
+                            .map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png)));
                     let subs = vec![
                         cx.observe_window_appearance(window, |_, _, cx| cx.notify()),
                         cx.observe_window_activation(window, |p: &mut Crash, window, cx| {
@@ -748,13 +897,22 @@ mod view {
             anyhow::bail!("the crash dialog has no HWND");
         }
         card::prepare(hwnd, owner, handle.update(cx, |p, _, _| p.spec.dark)?);
-        cx.spawn(async move |cx: &mut AsyncApp| reveal(handle, hwnd, owner, height, cx).await).detach();
+        cx.spawn(async move |cx: &mut AsyncApp| reveal(handle, hwnd, owner, height, cx).await)
+            .detach();
         Ok(handle)
     }
 
-    async fn reveal(handle: WindowHandle<Crash>, hwnd: isize, owner: isize, height: Rc<Cell<f32>>, cx: &mut AsyncApp) {
+    async fn reveal(
+        handle: WindowHandle<Crash>,
+        hwnd: isize,
+        owner: isize,
+        height: Rc<Cell<f32>>,
+        cx: &mut AsyncApp,
+    ) {
         card::fit(handle.into(), hwnd, owner, WIDTH, &height, cx).await;
-        let Ok(live) = handle.update(cx, |p, _, _| p.outcome.is_some()) else { return };
+        let Ok(live) = handle.update(cx, |p, _, _| p.outcome.is_some()) else {
+            return;
+        };
         if !live {
             return;
         }
@@ -797,7 +955,11 @@ mod view {
             let _ = card::PREVIEW_ICON.set(exe);
         }
         gpui_platform::application().run(move |cx: &mut App| {
-            let owner = if p.owner { card::preview_owner(&p.app, cx) } else { 0 };
+            let owner = if p.owner {
+                card::preview_owner(&p.app, cx)
+            } else {
+                0
+            };
             let spec = Spec {
                 report: Report {
                     app: p.app.clone(),
@@ -806,7 +968,11 @@ mod view {
                     time: std::time::SystemTime::now(),
                     reason: p.reason.clone(),
                 },
-                lang: if p.lang.is_empty() { super::ui_lang() } else { p.lang.clone() },
+                lang: if p.lang.is_empty() {
+                    super::ui_lang()
+                } else {
+                    p.lang.clone()
+                },
                 actions: actions(p.embedded),
                 owner,
                 dark: p.dark,
@@ -849,12 +1015,23 @@ mod tests {
     }
     #[test]
     fn embedded_there_is_no_restart_and_close_is_the_default() {
-        assert_eq!(body(strings("en"), actions(true)), strings("en").body_no_restart, "it does not say Restart");
+        assert_eq!(
+            body(strings("en"), actions(true)),
+            strings("en").body_no_restart,
+            "it does not say Restart"
+        );
         assert_eq!(body(strings("ru"), actions(false)), strings("ru").body);
-        assert_eq!(actions(false), &[Action::Restart, Action::Copy, Action::Close]);
+        assert_eq!(
+            actions(false),
+            &[Action::Restart, Action::Copy, Action::Close]
+        );
         assert_eq!(primary(actions(false)), 0);
         assert_eq!(actions(true), &[Action::Copy, Action::Close]);
-        assert_eq!(primary(actions(true)), 1, "Close, not Copy, is what Enter does embedded");
+        assert_eq!(
+            primary(actions(true)),
+            1,
+            "Close, not Copy, is what Enter does embedded"
+        );
     }
 
     #[test]
@@ -863,34 +1040,72 @@ mod tests {
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines[0], "Argon ran into a problem");
         assert_eq!(lines[1], "App: Argon 1.4.2");
-        assert_eq!(lines[2], concat!("Host: Skathi ", env!("CARGO_PKG_VERSION")));
+        assert_eq!(
+            lines[2],
+            concat!("Host: Skathi ", env!("CARGO_PKG_VERSION"))
+        );
         assert_eq!(lines[3], "OS: Windows 10.0.26100 (x86_64)");
         assert_eq!(lines[4], "Time: 2023-11-14 22:13:20 UTC");
         assert_eq!(lines[5], "Error: native panic: already borrowed: BorrowMutError at crates/sk-tree/src/lib.rs:120:9");
-        assert!(text.ends_with("\r\n"), "Windows line ends, for Notepad and the clipboard");
-        assert_eq!(report(None).text().lines().nth(1), Some("App: Argon"), "no version, no dangling space");
+        assert!(
+            text.ends_with("\r\n"),
+            "Windows line ends, for Notepad and the clipboard"
+        );
+        assert_eq!(
+            report(None).text().lines().nth(1),
+            Some("App: Argon"),
+            "no version, no dangling space"
+        );
     }
 
     #[test]
     fn details_name_the_version_and_the_os() {
-        assert_eq!(report(Some("1.4.2")).about(strings("en")), "Version 1.4.2 · Windows 10.0.26100 (x86_64)");
-        assert_eq!(report(Some("1.4.2")).about(strings("ru")), "Версия 1.4.2 · Windows 10.0.26100 (x86_64)");
-        assert_eq!(report(None).about(strings("en")), "Windows 10.0.26100 (x86_64)");
+        assert_eq!(
+            report(Some("1.4.2")).about(strings("en")),
+            "Version 1.4.2 · Windows 10.0.26100 (x86_64)"
+        );
+        assert_eq!(
+            report(Some("1.4.2")).about(strings("ru")),
+            "Версия 1.4.2 · Windows 10.0.26100 (x86_64)"
+        );
+        assert_eq!(
+            report(None).about(strings("en")),
+            "Windows 10.0.26100 (x86_64)"
+        );
     }
 
     #[test]
     fn utc_is_the_civil_date() {
         assert_eq!(utc(UNIX_EPOCH), "1970-01-01 00:00:00 UTC");
-        assert_eq!(utc(UNIX_EPOCH + Duration::from_secs(951_782_400)), "2000-02-29 00:00:00 UTC", "a leap day");
-        assert_eq!(utc(UNIX_EPOCH + Duration::from_secs(1_798_761_599)), "2026-12-31 23:59:59 UTC");
+        assert_eq!(
+            utc(UNIX_EPOCH + Duration::from_secs(951_782_400)),
+            "2000-02-29 00:00:00 UTC",
+            "a leap day"
+        );
+        assert_eq!(
+            utc(UNIX_EPOCH + Duration::from_secs(1_798_761_599)),
+            "2026-12-31 23:59:59 UTC"
+        );
     }
 
     #[test]
     fn the_dialog_opens_once_and_never_in_a_test_host() {
         assert_eq!(decide(true, false, false), Decision::Dialog);
-        assert_eq!(decide(false, false, false), Decision::Nothing, "the pump and the tick both ask; one dialog");
-        assert_eq!(decide(true, true, false), Decision::Log, "a test host logs and carries on");
-        assert_eq!(decide(true, false, true), Decision::Log, "a closing app is already going");
+        assert_eq!(
+            decide(false, false, false),
+            Decision::Nothing,
+            "the pump and the tick both ask; one dialog"
+        );
+        assert_eq!(
+            decide(true, true, false),
+            Decision::Log,
+            "a test host logs and carries on"
+        );
+        assert_eq!(
+            decide(true, false, true),
+            Decision::Log,
+            "a closing app is already going"
+        );
         assert_eq!(decide(false, true, false), Decision::Nothing);
     }
 
@@ -899,15 +1114,36 @@ mod tests {
         let ordinary = "already borrowed: BorrowMutError at crates/sk-tree/src/lib.rs:120:9";
         assert_eq!(breakable(ordinary, 60), ordinary);
         assert_eq!(breakable("abcdefgh", 3), "abc\ndef\ngh");
-        assert_eq!(breakable("abc def", 3), "abc def", "a run of exactly `columns` stays whole");
-        assert_eq!(breakable("ab\ncdef", 3), "ab\ncde\nf", "a line break ends a run");
-        assert_eq!(breakable("ёжикжук", 3), "ёжи\nкжу\nк", "by characters, not bytes");
+        assert_eq!(
+            breakable("abc def", 3),
+            "abc def",
+            "a run of exactly `columns` stays whole"
+        );
+        assert_eq!(
+            breakable("ab\ncdef", 3),
+            "ab\ncde\nf",
+            "a line break ends a run"
+        );
+        assert_eq!(
+            breakable("ёжикжук", 3),
+            "ёжи\nкжу\nк",
+            "by characters, not bytes"
+        );
     }
 
     #[test]
     fn a_relaunch_has_the_arguments_without_the_program() {
-        let argv = ["C:\\Apps\\Argon.exe", "--profile", "work space", "argon://invite/x"].map(OsString::from);
-        assert_eq!(relaunch_args(argv), ["--profile", "work space", "argon://invite/x"].map(OsString::from));
+        let argv = [
+            "C:\\Apps\\Argon.exe",
+            "--profile",
+            "work space",
+            "argon://invite/x",
+        ]
+        .map(OsString::from);
+        assert_eq!(
+            relaunch_args(argv),
+            ["--profile", "work space", "argon://invite/x"].map(OsString::from)
+        );
         assert!(relaunch_args([OsString::from("argon")]).is_empty());
         assert!(relaunch_args(std::iter::empty()).is_empty());
     }

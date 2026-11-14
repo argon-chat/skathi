@@ -118,8 +118,8 @@ fn sources(src: &Path) -> Vec<PathBuf> {
 
 fn include_dirs(thorvg: &Path, src: &Path, out_dir: &Path) -> Vec<PathBuf> {
     let mut dirs = vec![
-        out_dir.to_path_buf(),  // the generated config.h
-        thorvg.join("inc"),     // the public C++ header
+        out_dir.to_path_buf(), // the generated config.h
+        thorvg.join("inc"),    // the public C++ header
         src.join("renderer"),
         src.join("renderer/cpu_engine"),
         src.join("common"),
@@ -198,7 +198,10 @@ fn write_config_h(out_dir: &Path) {
 
 fn push_cpp(out: &mut Vec<PathBuf>, dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        panic!("ThorVG source directory missing: {} (git submodule update --init)", dir.display());
+        panic!(
+            "ThorVG source directory missing: {} (git submodule update --init)",
+            dir.display()
+        );
     };
     let mut found: Vec<PathBuf> = entries
         .flatten()

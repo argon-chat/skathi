@@ -70,7 +70,10 @@ impl Taps {
 
     #[inline]
     pub fn get(&self, o: usize) -> (usize, &[f32]) {
-        (self.first[o] as usize, &self.weights[o * self.n..(o + 1) * self.n])
+        (
+            self.first[o] as usize,
+            &self.weights[o * self.n..(o + 1) * self.n],
+        )
     }
 
     pub fn is_identity(&self) -> bool {
@@ -151,7 +154,11 @@ impl Scaler {
                 if weight != 0.0 && self.ring_rows[slot] != sy {
                     source(sy, &mut self.bytes);
                     to_f32::<C>(level, &self.bytes, &mut self.src);
-                    horizontal::<C>(&self.xt, &self.src, &mut self.ring[slot * width..(slot + 1) * width]);
+                    horizontal::<C>(
+                        &self.xt,
+                        &self.src,
+                        &mut self.ring[slot * width..(slot + 1) * width],
+                    );
                     self.ring_rows[slot] = sy;
                 }
             }
@@ -159,7 +166,12 @@ impl Scaler {
             for (k, &weight) in wy.iter().enumerate() {
                 if weight != 0.0 {
                     let slot = (first + k) % slots;
-                    axpy(level, &mut self.acc, weight, &self.ring[slot * width..(slot + 1) * width]);
+                    axpy(
+                        level,
+                        &mut self.acc,
+                        weight,
+                        &self.ring[slot * width..(slot + 1) * width],
+                    );
                 }
             }
             finish(oy, &self.acc);
@@ -170,7 +182,11 @@ impl Scaler {
         self.xt.bytes()
             + self.yt.bytes()
             + self.bytes.capacity()
-            + (self.src.capacity() + self.acc.capacity() + self.row.capacity() + self.ring.capacity()) * 4
+            + (self.src.capacity()
+                + self.acc.capacity()
+                + self.row.capacity()
+                + self.ring.capacity())
+                * 4
             + self.ring_rows.capacity() * std::mem::size_of::<usize>()
     }
 }
@@ -200,9 +216,17 @@ fn accumulate<const C: usize>(level: Level, acc: &mut [f32], weight: f32, bytes:
         0
     };
     if C == 4 {
-        for (a, s) in as_pixels_mut::<4>(&mut acc[done..]).iter_mut().zip(bytes[done..].chunks_exact(4)) {
+        for (a, s) in as_pixels_mut::<4>(&mut acc[done..])
+            .iter_mut()
+            .zip(bytes[done..].chunks_exact(4))
+        {
             let alpha = s[3] as f32;
-            let p = [s[0] as f32 * alpha, s[1] as f32 * alpha, s[2] as f32 * alpha, alpha];
+            let p = [
+                s[0] as f32 * alpha,
+                s[1] as f32 * alpha,
+                s[2] as f32 * alpha,
+                alpha,
+            ];
             for c in 0..4 {
                 a[c] += weight * p[c];
             }
@@ -258,8 +282,14 @@ fn taps_n<const C: usize, const N: usize>(xt: &Taps, src: &[f32], out: &mut [f32
         return;
     }
     let src: &[[f32; C]] = as_pixels(src);
-    for ((px, &first), weights) in as_pixels_mut::<C>(out).iter_mut().zip(&xt.first).zip(xt.weights.chunks_exact(N)) {
-        let taps: &[[f32; C]; N] = src[first as usize..first as usize + N].try_into().expect("N taps");
+    for ((px, &first), weights) in as_pixels_mut::<C>(out)
+        .iter_mut()
+        .zip(&xt.first)
+        .zip(xt.weights.chunks_exact(N))
+    {
+        let taps: &[[f32; C]; N] = src[first as usize..first as usize + N]
+            .try_into()
+            .expect("N taps");
         let mut acc = [0f32; C];
         for k in 0..N {
             for c in 0..C {
@@ -297,7 +327,10 @@ pub(crate) fn premultiply(level: Level, bgra: &[u8], out: &mut [f32]) {
         let _ = level;
         0
     };
-    for (p, s) in as_pixels_mut::<4>(&mut out[done * 4..]).iter_mut().zip(bgra[done * 4..].chunks_exact(4)) {
+    for (p, s) in as_pixels_mut::<4>(&mut out[done * 4..])
+        .iter_mut()
+        .zip(bgra[done * 4..].chunks_exact(4))
+    {
         let a = s[3] as f32;
         *p = [s[0] as f32 * a, s[1] as f32 * a, s[2] as f32 * a, a];
     }
@@ -309,7 +342,10 @@ pub(crate) fn unpremultiply(row: &[f32], out: &mut [u8]) {
     let done = sse::unpremultiply(row, out);
     #[cfg(not(target_arch = "x86_64"))]
     let done = 0;
-    for (p, o) in as_pixels::<4>(&row[done * 4..]).iter().zip(out[done * 4..].chunks_exact_mut(4)) {
+    for (p, o) in as_pixels::<4>(&row[done * 4..])
+        .iter()
+        .zip(out[done * 4..].chunks_exact_mut(4))
+    {
         let a = p[3];
         let inv = if a > 0.0 { 1.0 / a } else { 0.0 };
         // `as u8` truncates and saturates; the + 0.5 rounds (all are >= 0).
@@ -341,12 +377,20 @@ mod sse {
                 let v = _mm_loadu_si128(bytes.as_ptr().add(4 * i).cast());
                 let lo = _mm_unpacklo_epi8(v, zero);
                 let hi = _mm_unpackhi_epi8(v, zero);
-                let px = [_mm_unpacklo_epi16(lo, zero), _mm_unpackhi_epi16(lo, zero), _mm_unpacklo_epi16(hi, zero), _mm_unpackhi_epi16(hi, zero)];
+                let px = [
+                    _mm_unpacklo_epi16(lo, zero),
+                    _mm_unpackhi_epi16(lo, zero),
+                    _mm_unpacklo_epi16(hi, zero),
+                    _mm_unpackhi_epi16(hi, zero),
+                ];
                 for (k, p) in px.into_iter().enumerate() {
                     let f = _mm_cvtepi32_ps(p);
                     let m = _mm_or_ps(_mm_and_ps(_mm_shuffle_ps::<0xFF>(f, f), colour), one_w);
                     let dst = acc.as_mut_ptr().add(4 * (i + k));
-                    _mm_storeu_ps(dst, _mm_add_ps(_mm_loadu_ps(dst), _mm_mul_ps(w, _mm_mul_ps(f, m))));
+                    _mm_storeu_ps(
+                        dst,
+                        _mm_add_ps(_mm_loadu_ps(dst), _mm_mul_ps(w, _mm_mul_ps(f, m))),
+                    );
                 }
                 i += 4;
             }
@@ -367,7 +411,12 @@ mod sse {
                 let v = _mm_loadu_si128(bgra.as_ptr().add(4 * i).cast());
                 let lo = _mm_unpacklo_epi8(v, zero);
                 let hi = _mm_unpackhi_epi8(v, zero);
-                let px = [_mm_unpacklo_epi16(lo, zero), _mm_unpackhi_epi16(lo, zero), _mm_unpacklo_epi16(hi, zero), _mm_unpackhi_epi16(hi, zero)];
+                let px = [
+                    _mm_unpacklo_epi16(lo, zero),
+                    _mm_unpackhi_epi16(lo, zero),
+                    _mm_unpacklo_epi16(hi, zero),
+                    _mm_unpackhi_epi16(hi, zero),
+                ];
                 for (k, p) in px.into_iter().enumerate() {
                     let f = _mm_cvtepi32_ps(p);
                     let m = _mm_or_ps(_mm_and_ps(_mm_shuffle_ps::<0xFF>(f, f), colour), one_w);
@@ -392,7 +441,10 @@ mod sse {
                 let s = src.as_ptr().add(4 * *xt.first.get_unchecked(o) as usize);
                 let mut acc = _mm_setzero_ps();
                 for k in 0..N {
-                    acc = _mm_add_ps(acc, _mm_mul_ps(_mm_set1_ps(*w.add(o * N + k)), _mm_loadu_ps(s.add(4 * k))));
+                    acc = _mm_add_ps(
+                        acc,
+                        _mm_mul_ps(_mm_set1_ps(*w.add(o * N + k)), _mm_loadu_ps(s.add(4 * k))),
+                    );
                 }
                 _mm_storeu_ps(out.as_mut_ptr().add(4 * o), acc);
             }
@@ -412,11 +464,17 @@ mod sse {
                 let a = _mm_shuffle_ps::<0xFF>(p, p);
                 // 1 / a where a > 0, else 0 (the division's inf is masked).
                 let inv = _mm_and_ps(_mm_div_ps(one, a), _mm_cmpgt_ps(a, zero));
-                let v = _mm_or_ps(_mm_and_ps(_mm_mul_ps(p, inv), colour), _mm_andnot_ps(colour, p));
+                let v = _mm_or_ps(
+                    _mm_and_ps(_mm_mul_ps(p, inv), colour),
+                    _mm_andnot_ps(colour, p),
+                );
                 let q = _mm_cvttps_epi32(_mm_add_ps(v, half));
                 let b = _mm_packus_epi16(_mm_packs_epi32(q, q), q);
                 let px = _mm_cvtsi128_si32(b) as u32;
-                out.as_mut_ptr().add(4 * i).cast::<u32>().write_unaligned(px);
+                out.as_mut_ptr()
+                    .add(4 * i)
+                    .cast::<u32>()
+                    .write_unaligned(px);
             }
             n
         }
@@ -435,10 +493,18 @@ mod avx2 {
         let w = _mm256_set1_ps(weight);
         let mut i = 0;
         while i + 2 <= n {
-            let f = _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64(bytes.as_ptr().add(4 * i).cast())));
-            let m = _mm256_or_ps(_mm256_and_ps(_mm256_shuffle_ps::<0xFF>(f, f), colour), one_w);
+            let f = _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64(
+                bytes.as_ptr().add(4 * i).cast(),
+            )));
+            let m = _mm256_or_ps(
+                _mm256_and_ps(_mm256_shuffle_ps::<0xFF>(f, f), colour),
+                one_w,
+            );
             let dst = acc.as_mut_ptr().add(4 * i);
-            _mm256_storeu_ps(dst, _mm256_add_ps(_mm256_loadu_ps(dst), _mm256_mul_ps(w, _mm256_mul_ps(f, m))));
+            _mm256_storeu_ps(
+                dst,
+                _mm256_add_ps(_mm256_loadu_ps(dst), _mm256_mul_ps(w, _mm256_mul_ps(f, m))),
+            );
             i += 2;
         }
         4 * i
@@ -460,9 +526,18 @@ mod avx2 {
         let mut i = 0;
         while i + 4 <= n {
             let v = _mm_loadu_si128(bgra.as_ptr().add(4 * i).cast());
-            for (k, p) in [_mm256_cvtepu8_epi32(v), _mm256_cvtepu8_epi32(_mm_unpackhi_epi64(v, v))].into_iter().enumerate() {
+            for (k, p) in [
+                _mm256_cvtepu8_epi32(v),
+                _mm256_cvtepu8_epi32(_mm_unpackhi_epi64(v, v)),
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 let f = _mm256_cvtepi32_ps(p);
-                let m = _mm256_or_ps(_mm256_and_ps(_mm256_shuffle_ps::<0xFF>(f, f), colour), one_w);
+                let m = _mm256_or_ps(
+                    _mm256_and_ps(_mm256_shuffle_ps::<0xFF>(f, f), colour),
+                    one_w,
+                );
                 _mm256_storeu_ps(out.as_mut_ptr().add(4 * (i + 2 * k)), _mm256_mul_ps(f, m));
             }
             i += 4;

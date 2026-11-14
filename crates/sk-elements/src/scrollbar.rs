@@ -14,10 +14,10 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    px, size, point, App, Axis, Bounds, ContentMask, Element, ElementId, GlobalElementId, Hitbox,
-    HitboxBehavior, Hsla, InspectorElementId, LayoutId, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Position, ScrollHandle, ScrollEvent, Style,
-    Window, WindowControlArea, fill, relative,
+    fill, point, px, relative, size, App, Axis, Bounds, ContentMask, Element, ElementId,
+    GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, LayoutId, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Position, ScrollEvent, ScrollHandle, Style,
+    Window, WindowControlArea,
 };
 
 const TRACK_AUTO: Pixels = px(14.);
@@ -38,7 +38,10 @@ pub struct Overscroll {
 }
 
 impl Overscroll {
-    pub const CHAINING: Self = Self { x_chains: true, y_chains: true };
+    pub const CHAINING: Self = Self {
+        x_chains: true,
+        y_chains: true,
+    };
 
     fn chains(self, axis: Axis) -> bool {
         match axis {
@@ -198,7 +201,9 @@ fn state_for(id: &ElementId) -> Rc<Cell<State>> {
     let frame = FRAME.with(|c| c.get());
     STATES.with(|m| {
         let mut m = m.borrow_mut();
-        let slot = m.entry(key).or_insert_with(|| (frame, Rc::new(Cell::new(State::default()))));
+        let slot = m
+            .entry(key)
+            .or_insert_with(|| (frame, Rc::new(Cell::new(State::default()))));
         slot.0 = frame;
         slot.1.clone()
     })
@@ -215,7 +220,10 @@ pub fn reset_frame() {
         n
     });
     if frame % STATE_TTL == 0 {
-        STATES.with(|m| m.borrow_mut().retain(|_, (seen, _)| frame.saturating_sub(*seen) < STATE_TTL));
+        STATES.with(|m| {
+            m.borrow_mut()
+                .retain(|_, (seen, _)| frame.saturating_sub(*seen) < STATE_TTL)
+        });
     }
 }
 
@@ -237,7 +245,9 @@ impl ChainSpan {
 
 impl std::fmt::Debug for ChainSpan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ChainSpan").field("entries", &self.0.len()).finish()
+        f.debug_struct("ChainSpan")
+            .field("entries", &self.0.len())
+            .finish()
     }
 }
 
@@ -433,7 +443,12 @@ impl Element for Scrollbar {
 
         let viewport = self.handle.bounds();
         if viewport.size.width <= px(0.) || viewport.size.height <= px(0.) {
-            return Prepaint { viewport: None, axes: Vec::new(), state, opacity: 0.0 };
+            return Prepaint {
+                viewport: None,
+                axes: Vec::new(),
+                state,
+                opacity: 0.0,
+            };
         }
 
         let mut inner = state.get();
@@ -447,7 +462,10 @@ impl Element for Scrollbar {
         let held = inner
             .last_scroll
             .is_some_and(|t| now.saturating_duration_since(t) < IDLE);
-        let want = self.style.always_visible || held || inner.hovered.is_some() || inner.dragging.is_some();
+        let want = self.style.always_visible
+            || held
+            || inner.hovered.is_some()
+            || inner.dragging.is_some();
         if want != inner.visible {
             inner.fade_from = sample_opacity(&inner, now);
             inner.fade_at = now;
@@ -457,7 +475,8 @@ impl Element for Scrollbar {
         if (opacity - if inner.visible { 1.0 } else { 0.0 }).abs() > f32::EPSILON {
             window.request_animation_frame();
         }
-        if want && !self.style.always_visible && inner.hovered.is_none() && inner.dragging.is_none() {
+        if want && !self.style.always_visible && inner.hovered.is_none() && inner.dragging.is_none()
+        {
             if let Some(last) = inner.last_scroll {
                 let elapsed = now.saturating_duration_since(last);
                 if elapsed < IDLE && !inner.idle_timer {
@@ -488,14 +507,17 @@ impl Element for Scrollbar {
             && max.x > px(0.5);
 
         // Wheel box over the whole viewport; tagged passive (`gpui::VN_TAG_PASSIVE`) so embedder hit tests look through it.
-        let hitbox = window
-            .with_content_mask(Some(ContentMask::rect(viewport)), |window| {
-                let tag = window.set_hitbox_tag(0);
-                window.set_hitbox_tag(if tag == 0 { 0 } else { tag | gpui::VN_TAG_PASSIVE });
-                let hitbox = window.insert_hitbox(viewport, HitboxBehavior::Normal);
-                window.set_hitbox_tag(tag);
-                hitbox
+        let hitbox = window.with_content_mask(Some(ContentMask::rect(viewport)), |window| {
+            let tag = window.set_hitbox_tag(0);
+            window.set_hitbox_tag(if tag == 0 {
+                0
+            } else {
+                tag | gpui::VN_TAG_PASSIVE
             });
+            let hitbox = window.insert_hitbox(viewport, HitboxBehavior::Normal);
+            window.set_hitbox_tag(tag);
+            hitbox
+        });
 
         let mut axes = Vec::new();
         if let Some(width) = track_width {
@@ -515,25 +537,42 @@ impl Element for Scrollbar {
                 let margin_end = if both && !vertical { width } else { px(0.) };
                 let track = if vertical {
                     Bounds {
-                        origin: point(viewport.origin.x + viewport.size.width - width, viewport.origin.y),
+                        origin: point(
+                            viewport.origin.x + viewport.size.width - width,
+                            viewport.origin.y,
+                        ),
                         size: size(width, viewport.size.height),
                     }
                 } else {
                     Bounds {
-                        origin: point(viewport.origin.x, viewport.origin.y + viewport.size.height - width),
+                        origin: point(
+                            viewport.origin.x,
+                            viewport.origin.y + viewport.size.height - width,
+                        ),
                         size: size(viewport.size.width, width),
                     }
                 };
 
-                let track_len = if vertical { track.size.height } else { track.size.width } - margin_end;
+                let track_len = if vertical {
+                    track.size.height
+                } else {
+                    track.size.width
+                } - margin_end;
                 let content = viewport_len + max_offset;
-                let thumb_len = (track_len * (viewport_len / content)).max(MIN_THUMB).min(track_len);
+                let thumb_len = (track_len * (viewport_len / content))
+                    .max(MIN_THUMB)
+                    .min(track_len);
                 let travel = track_len - thumb_len;
                 let scrolled = if vertical { -offset.y } else { -offset.x };
                 let start = (travel * (scrolled / max_offset).clamp(0., 1.)).max(px(0.));
 
-                let hovered = state.get().hovered == Some(axis) || state.get().dragging == Some(axis);
-                let target = if hovered { width - INSET * 2. } else { (width - INSET * 2.) * 0.66 };
+                let hovered =
+                    state.get().hovered == Some(axis) || state.get().dragging == Some(axis);
+                let target = if hovered {
+                    width - INSET * 2.
+                } else {
+                    (width - INSET * 2.) * 0.66
+                };
                 let mut s = state.get();
                 let idx = if vertical { 0 } else { 1 };
                 let fill_w = animate_width(&mut s, idx, target, now);
@@ -588,7 +627,12 @@ impl Element for Scrollbar {
             }
         }
 
-        Prepaint { viewport: Some(hitbox), axes, state, opacity }
+        Prepaint {
+            viewport: Some(hitbox),
+            axes,
+            state,
+            opacity,
+        }
     }
 
     fn paint(
@@ -601,7 +645,9 @@ impl Element for Scrollbar {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let Some(viewport) = prepaint.viewport.clone() else { return };
+        let Some(viewport) = prepaint.viewport.clone() else {
+            return;
+        };
         let view = window.current_view();
         let state = prepaint.state.clone();
         let opacity = prepaint.opacity;
@@ -667,11 +713,14 @@ impl Element for Scrollbar {
                     let chain = c.borrow();
                     chain_position(
                         container_path(&ancestry),
-                        chain.iter()
+                        chain
+                            .iter()
                             .filter(|entry| entry.hitbox.should_handle_scroll(window))
                             .map(|entry| {
                                 let (entry_axis, entry_delta) = effective_delta(
-                                    gesture_axis, raw, (entry.scrolls_x, entry.scrolls_y),
+                                    gesture_axis,
+                                    raw,
+                                    (entry.scrolls_x, entry.scrolls_y),
                                 );
                                 let usable = match entry_axis {
                                     Axis::Vertical => entry.scrolls_y,
@@ -696,8 +745,8 @@ impl Element for Scrollbar {
                 // Take over only when that changes something: if this box is at its edge and the
                 // axis chains, gpui's listener already does the right thing. Dispatching `wheel`
                 // here too would fire `@wheel` twice (once here, once from the renderer's `on_scroll`).
-                let will_stop = (usable && can_move(&handle, axis, delta))
-                    || !overscroll.chains(axis);
+                let will_stop =
+                    (usable && can_move(&handle, axis, delta)) || !overscroll.chains(axis);
                 if !will_stop {
                     return;
                 }
@@ -746,7 +795,9 @@ impl Element for Scrollbar {
 
         // Release is handled per axis, so a drag whose track vanished (content shrank) would stay `dragging`.
         let mut s = state.get();
-        if s.dragging.is_some_and(|axis| !prepaint.axes.iter().any(|ax| ax.axis == axis)) {
+        if s.dragging
+            .is_some_and(|axis| !prepaint.axes.iter().any(|ax| ax.axis == axis))
+        {
             s.dragging = None;
             state.set(s);
         }
@@ -761,13 +812,19 @@ impl Element for Scrollbar {
                 // A `window-drag: move` titlebar reaching the viewport edge would make Win32 start a
                 // window drag before the press reaches us (`WM_NCHITTEST` is answered first); `NoDrag`
                 // opts back out. Paint-phase only.
-                window.insert_window_control_hitbox(
-                    WindowControlArea::NoDrag,
-                    ax.hitbox.clone(),
-                );
-                let hovered = state.get().hovered == Some(axis) || state.get().dragging == Some(axis);
-                let track_bg = if hovered { self.style.track_active } else { self.style.track };
-                let thumb_bg = if hovered { self.style.thumb_active } else { self.style.thumb };
+                window.insert_window_control_hitbox(WindowControlArea::NoDrag, ax.hitbox.clone());
+                let hovered =
+                    state.get().hovered == Some(axis) || state.get().dragging == Some(axis);
+                let track_bg = if hovered {
+                    self.style.track_active
+                } else {
+                    self.style.track
+                };
+                let thumb_bg = if hovered {
+                    self.style.thumb_active
+                } else {
+                    self.style.thumb
+                };
                 let radius = (ax.thumb_fill.size.width.min(ax.thumb_fill.size.height)) / 2.;
 
                 window.paint_layer(bounds, |window| {
@@ -787,7 +844,10 @@ impl Element for Scrollbar {
                     let hitbox = ax.hitbox.clone();
                     let on_scrolled = self.on_scrolled.clone();
                     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-                        if !phase.bubble() || !hitbox.is_hovered(window) || !track.contains(&event.position) {
+                        if !phase.bubble()
+                            || !hitbox.is_hovered(window)
+                            || !track.contains(&event.position)
+                        {
                             return;
                         }
                         cx.stop_propagation();
@@ -801,7 +861,11 @@ impl Element for Scrollbar {
                                 event.position.x - thumb_hit.origin.x
                             };
                         } else {
-                            let half = if vertical { thumb_hit.size.height } else { thumb_hit.size.width } / 2.;
+                            let half = if vertical {
+                                thumb_hit.size.height
+                            } else {
+                                thumb_hit.size.width
+                            } / 2.;
                             s.grab = half;
                             let along = if vertical {
                                 event.position.y - track.origin.y
@@ -815,7 +879,11 @@ impl Element for Scrollbar {
                             };
                             let mut o = handle.offset();
                             let next = -max_offset * fraction;
-                            if vertical { o.y = next } else { o.x = next }
+                            if vertical {
+                                o.y = next
+                            } else {
+                                o.x = next
+                            }
                             handle.set_offset(o);
                             s.last_offset = o;
                             jumped = true;
@@ -873,12 +941,21 @@ impl Element for Scrollbar {
                                 0.
                             };
                             let next = -max_offset * fraction;
-                            let current = if vertical { handle.offset().y } else { handle.offset().x };
+                            let current = if vertical {
+                                handle.offset().y
+                            } else {
+                                handle.offset().x
+                            };
                             if (next - current).abs() > px(1.)
-                                && Instant::now().saturating_duration_since(s.last_drag_update) >= throttle
+                                && Instant::now().saturating_duration_since(s.last_drag_update)
+                                    >= throttle
                             {
                                 let mut o = handle.offset();
-                                if vertical { o.y = next } else { o.x = next }
+                                if vertical {
+                                    o.y = next
+                                } else {
+                                    o.x = next
+                                }
                                 handle.set_offset(o);
                                 s.last_offset = o;
                                 s.last_drag_update = Instant::now();
@@ -929,7 +1006,11 @@ impl Element for Scrollbar {
                             };
                             let moved = (next - current).abs() > px(0.5);
                             if moved {
-                                if vertical { o.y = next } else { o.x = next }
+                                if vertical {
+                                    o.y = next
+                                } else {
+                                    o.x = next
+                                }
                                 handle.set_offset(o);
                                 s.last_offset = o;
                             }
@@ -957,7 +1038,10 @@ fn dom_delta(delta: Point<Pixels>) -> Point<Pixels> {
 }
 
 fn faded(color: Hsla, opacity: f32) -> Hsla {
-    Hsla { a: color.a * opacity, ..color }
+    Hsla {
+        a: color.a * opacity,
+        ..color
+    }
 }
 
 fn sample_opacity(state: &State, now: Instant) -> f32 {
@@ -985,7 +1069,11 @@ fn animate_width(state: &mut State, idx: usize, target: Pixels, now: Instant) ->
         return target;
     }
     let t = now.saturating_duration_since(state.width_at).as_secs_f32() / EXPAND.as_secs_f32();
-    let next = if t >= 1.0 { target } else { from + (target - from) * ease_out(t) };
+    let next = if t >= 1.0 {
+        target
+    } else {
+        from + (target - from) * ease_out(t)
+    };
     if t >= 1.0 || (next - from).abs() > px(0.05) {
         state.width[idx] = next;
         state.width_at = now;
@@ -1002,8 +1090,19 @@ mod tests {
         let root = [1u32];
         let parent = [1, 2];
         let child = [1, 2, 3];
-        let entries: [(&[u32], bool, bool); 3] = [(&root, true, true), (&parent, true, true), (&child, true, true)];
-        for order in [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]] {
+        let entries: [(&[u32], bool, bool); 3] = [
+            (&root, true, true),
+            (&parent, true, true),
+            (&child, true, true),
+        ];
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
             let painted = order.map(|index| entries[index]);
             assert_eq!(chain_position(&child, painted), (true, true));
             assert_eq!(chain_position(&parent, painted), (false, false));
@@ -1017,11 +1116,29 @@ mod tests {
         let parent = [1, 2];
         let child = [1, 2, 3];
         for child_chains in [true, false] {
-            let entries: [(&[u32], bool, bool); 3] = [(&root, true, true), (&parent, true, true), (&child, false, child_chains)];
-            for order in [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]] {
+            let entries: [(&[u32], bool, bool); 3] = [
+                (&root, true, true),
+                (&parent, true, true),
+                (&child, false, child_chains),
+            ];
+            for order in [
+                [0, 1, 2],
+                [0, 2, 1],
+                [1, 0, 2],
+                [1, 2, 0],
+                [2, 0, 1],
+                [2, 1, 0],
+            ] {
                 let painted = order.map(|index| entries[index]);
                 assert_eq!(chain_position(&root, painted), (false, false));
-                assert_eq!(chain_position(&parent, painted), if child_chains { (true, true) } else { (false, false) });
+                assert_eq!(
+                    chain_position(&parent, painted),
+                    if child_chains {
+                        (true, true)
+                    } else {
+                        (false, false)
+                    }
+                );
                 assert_eq!(chain_position(&child, painted), (true, true));
             }
         }
@@ -1032,7 +1149,11 @@ mod tests {
         let root = [1u32];
         let child = [1, 2, 3];
         let sibling = [1, 4, 5, 6];
-        let entries: [(&[u32], bool, bool); 3] = [(&sibling, true, false), (&root, false, true), (&child, true, true)];
+        let entries: [(&[u32], bool, bool); 3] = [
+            (&sibling, true, false),
+            (&root, false, true),
+            (&child, true, true),
+        ];
         assert_eq!(chain_position(&child, entries), (true, false));
         let ancestors: [(&[u32], bool, bool); 2] = [(&root, true, true), (&child, false, true)];
         assert_eq!(chain_position(&child, ancestors), (true, true));
@@ -1046,16 +1167,31 @@ mod tests {
         let span = span_since(&recorded, 1);
         let mut replayed: Vec<(&[u32], bool, bool)> = vec![(&root, true, true)];
         replayed.extend(span);
-        assert_eq!(chain_position(&root, replayed.iter().copied()), (false, false));
-        assert_eq!(chain_position(&child, replayed.iter().copied()), (true, true));
+        assert_eq!(
+            chain_position(&root, replayed.iter().copied()),
+            (false, false)
+        );
+        assert_eq!(
+            chain_position(&child, replayed.iter().copied()),
+            (true, true)
+        );
     }
 
     #[test]
     fn each_chain_candidate_maps_the_gesture_to_its_own_scroll_axis() {
         let raw = point(px(0.), px(-80.));
-        assert_eq!(effective_delta(Axis::Vertical, raw, (false, true)), (Axis::Vertical, px(-80.)));
-        assert_eq!(effective_delta(Axis::Vertical, raw, (true, false)), (Axis::Horizontal, px(-80.)));
-        assert_eq!(effective_delta(Axis::Vertical, raw, (true, true)), (Axis::Vertical, px(-80.)));
+        assert_eq!(
+            effective_delta(Axis::Vertical, raw, (false, true)),
+            (Axis::Vertical, px(-80.))
+        );
+        assert_eq!(
+            effective_delta(Axis::Vertical, raw, (true, false)),
+            (Axis::Horizontal, px(-80.))
+        );
+        assert_eq!(
+            effective_delta(Axis::Vertical, raw, (true, true)),
+            (Axis::Vertical, px(-80.))
+        );
     }
 
     fn thumb_len(viewport: f32, content: f32, track: f32) -> f32 {
@@ -1082,7 +1218,10 @@ mod tests {
 
         let mut next = vec![10u32];
         let mark = next.len();
-        assert!(span_since(&next, mark).is_empty(), "a replay contributes nothing itself");
+        assert!(
+            span_since(&next, mark).is_empty(),
+            "a replay contributes nothing itself"
+        );
         next.extend(span.iter().copied());
         next.push(11);
         assert_eq!(next, vec![10, 20, 21, 11]);
@@ -1102,7 +1241,10 @@ mod tests {
         let auto = Overscroll::CHAINING;
         assert!(auto.chains(Axis::Vertical));
         assert!(auto.chains(Axis::Horizontal));
-        let contained = Overscroll { x_chains: true, y_chains: false };
+        let contained = Overscroll {
+            x_chains: true,
+            y_chains: false,
+        };
         assert!(!contained.chains(Axis::Vertical));
         assert!(contained.chains(Axis::Horizontal));
     }
@@ -1113,14 +1255,22 @@ mod tests {
         let mut s = State::default();
         assert_eq!(animate_width(&mut s, 0, px(6.), t0), px(6.));
         let mid = animate_width(&mut s, 0, px(8.), t0 + EXPAND / 4);
-        assert!(mid > px(6.) && mid < px(8.), "{mid:?} is between the two widths");
+        assert!(
+            mid > px(6.) && mid < px(8.),
+            "{mid:?} is between the two widths"
+        );
         assert_eq!(animate_width(&mut s, 0, px(8.), t0 + EXPAND * 2), px(8.));
     }
 
     #[test]
     fn visibility_fades_from_wherever_it_was() {
         let t0 = Instant::now();
-        let mut s = State { visible: true, fade_from: 0.0, fade_at: t0, ..State::default() };
+        let mut s = State {
+            visible: true,
+            fade_from: 0.0,
+            fade_at: t0,
+            ..State::default()
+        };
         assert_eq!(sample_opacity(&s, t0), 0.0);
         assert!(sample_opacity(&s, t0 + FADE / 2) > 0.3);
         assert_eq!(sample_opacity(&s, t0 + FADE * 2), 1.0);
@@ -1147,8 +1297,14 @@ mod tests {
         let light_text = gpui::hsla(0., 0., 0.95, 1.0);
         let on_light = ScrollbarStyle::from_text_color(dark_text);
         let on_dark = ScrollbarStyle::from_text_color(light_text);
-        assert!(on_light.thumb.l < 0.5, "dark text (light page) → dark thumb");
-        assert!(on_dark.thumb.l > 0.5, "light text (dark page) → light thumb");
+        assert!(
+            on_light.thumb.l < 0.5,
+            "dark text (light page) → dark thumb"
+        );
+        assert!(
+            on_dark.thumb.l > 0.5,
+            "light text (dark page) → light thumb"
+        );
         assert!(on_light.thumb.a < 0.5 && on_light.thumb_active.a > on_light.thumb.a);
         assert_eq!(on_light.track.a, 0.0);
     }

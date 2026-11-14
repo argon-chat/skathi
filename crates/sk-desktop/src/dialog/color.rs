@@ -23,9 +23,7 @@ fn start_owned(owner: Option<Owner>, value: &str) -> Result<u32, Fail> {
         return Ok(token);
     }
     if state.active.swap(true, Ordering::AcqRel) {
-        return Err(Fail::new("NotAllowedError", "Color picker already active.")
-            .code("EBUSY")
-            );
+        return Err(Fail::new("NotAllowedError", "Color picker already active.").code("EBUSY"));
     }
     let cancel = Cancellation(state.clone());
     let worker = std::thread::Builder::new()
@@ -52,8 +50,7 @@ fn start_owned(owner: Option<Owner>, value: &str) -> Result<u32, Fail> {
             "InvalidStateError",
             "Could not start the color picker thread.",
         )
-        .code("EIO")
-        );
+        .code("EIO"));
     }
     Ok(token)
 }
@@ -111,7 +108,10 @@ mod tests {
         };
         let token = start_token(start_owned(owner, "#aabbcc"));
         let id = pending();
-        assert_eq!(start_owned(owner, "#ff0000").unwrap_err().code, Some("EBUSY"));
+        assert_eq!(
+            start_owned(owner, "#ff0000").unwrap_err().code,
+            Some("EBUSY")
+        );
         assert!(scripted::choose(id, "red").is_err());
         scripted::choose(id, "#12ABEF").unwrap();
         let (ok, result) = settled(token);

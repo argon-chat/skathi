@@ -28,11 +28,17 @@ fn dev_asset_files() -> &'static RwLock<HashMap<String, PathBuf>> {
 /// Replaces the dev manifest's imported-file map, also visible to fetch's background threads. Only
 /// canonical generated keys and absolute paths pass.
 pub fn set_dev_asset_files(files: HashMap<String, PathBuf>) {
-    let files = files.into_iter().filter(|(key, path)| {
-        key.starts_with("_vn/fs/") && path.is_absolute()
-            && !key.contains(['\\', '\0'])
-            && key.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
-    }).collect();
+    let files = files
+        .into_iter()
+        .filter(|(key, path)| {
+            key.starts_with("_vn/fs/")
+                && path.is_absolute()
+                && !key.contains(['\\', '\0'])
+                && key
+                    .split('/')
+                    .all(|part| !part.is_empty() && part != "." && part != "..")
+        })
+        .collect();
     *dev_asset_files().write().unwrap() = files;
 }
 
@@ -100,8 +106,18 @@ struct Memo {
 /// a blob source is handed back when no node shows it, and a picked file whose snapshot changed
 /// loses its stale decode.
 fn release(map: &HashMap<u32, Memo>, gone: Memo) {
-    let Memo { source: Some(source), blob: true, .. } = gone else { return };
-    if map.values().any(|m| m.source.as_ref().is_some_and(|s| same_source(s, &source))) {
+    let Memo {
+        source: Some(source),
+        blob: true,
+        ..
+    } = gone
+    else {
+        return;
+    };
+    if map
+        .values()
+        .any(|m| m.source.as_ref().is_some_and(|s| same_source(s, &source)))
+    {
         return;
     }
     if let ImageSource::Resource(Resource::Path(p)) = &source {
@@ -121,7 +137,9 @@ fn same_source(a: &ImageSource, b: &ImageSource) -> bool {
 /// Records that `path` goes to gpui as the file with `snap`; a decode of a different file is queued
 /// for eviction.
 fn note_blob_path(path: &Path, snap: Snapshot) {
-    let stale = BLOB_PATHS.with(|b| b.borrow_mut().insert(path.to_path_buf(), snap)).is_some_and(|old| old != snap);
+    let stale = BLOB_PATHS
+        .with(|b| b.borrow_mut().insert(path.to_path_buf(), snap))
+        .is_some_and(|old| old != snap);
     if stale {
         EVICT.with(|e| e.borrow_mut().push(path_source(path.to_path_buf())));
     }
@@ -216,7 +234,9 @@ thread_local! {
 
 fn note_known(source: Option<&ImageSource>) {
     let Some(source) = source else { return };
-    let Some(key) = source_key(source) else { return };
+    let Some(key) = source_key(source) else {
+        return;
+    };
     let now = std::time::Instant::now();
     RESIDENCY.with(|r| r.borrow_mut().known.insert(key, (source.clone(), now)));
 }
@@ -224,7 +244,10 @@ fn note_known(source: Option<&ImageSource>) {
 pub fn residency_stats() -> ResidencyStats {
     RESIDENCY.with(|r| {
         let r = r.borrow();
-        ResidencyStats { known: r.known.len(), ..r.stats }
+        ResidencyStats {
+            known: r.known.len(),
+            ..r.stats
+        }
     })
 }
 
@@ -238,7 +261,12 @@ fn pixel_bytes(image: &gpui::RenderImage) -> usize {
 }
 
 fn shown_sources() -> Vec<ImageSource> {
-    let mut out: Vec<ImageSource> = RESOLVED.with(|m| m.borrow().values().filter_map(|memo| memo.source.clone()).collect());
+    let mut out: Vec<ImageSource> = RESOLVED.with(|m| {
+        m.borrow()
+            .values()
+            .filter_map(|memo| memo.source.clone())
+            .collect()
+    });
     BACKGROUNDS.with(|b| {
         for layers in b.borrow().values() {
             out.extend(layers.iter().filter_map(|(_, s)| s.clone()));
@@ -252,11 +280,17 @@ pub(crate) fn residency_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> b
     let wanted = crate::resample::take_wanted_full();
     let (replaced, restored, due) = RESIDENCY.with(|r| {
         let mut r = r.borrow_mut();
-        let due = r.last_sweep.is_none_or(|t| now.duration_since(t) >= SWEEP_EVERY);
+        let due = r
+            .last_sweep
+            .is_none_or(|t| now.duration_since(t) >= SWEEP_EVERY);
         if due {
             r.last_sweep = Some(now);
         }
-        (std::mem::take(&mut r.replaced), std::mem::replace(&mut r.restored, false), due)
+        (
+            std::mem::take(&mut r.replaced),
+            std::mem::replace(&mut r.restored, false),
+            due,
+        )
     });
     let mut moved_tiles = !replaced.is_empty();
     for image in replaced {
@@ -277,8 +311,12 @@ pub(crate) fn residency_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> b
 fn restore(wanted: &std::collections::HashSet<gpui::ImageId>, cx: &mut gpui::App) {
     let shown = shown_sources();
     for source in shown {
-        let Some(key) = source_key(&source) else { continue };
-        let Some(cached) = source.cached(cx) else { continue };
+        let Some(key) = source_key(&source) else {
+            continue;
+        };
+        let Some(cached) = source.cached(cx) else {
+            continue;
+        };
         if !cached.is_reduced() || !wanted.contains(&cached.id) {
             continue;
         }
@@ -294,7 +332,9 @@ fn restore(wanted: &std::collections::HashSet<gpui::ImageId>, cx: &mut gpui::App
             cx.update(|cx| {
                 RESIDENCY.with(|r| r.borrow_mut().restoring.remove(&key));
                 let Ok(full) = loaded else { return };
-                let Some(reduced) = source.cached(cx).filter(|c| c.is_reduced()) else { return };
+                let Some(reduced) = source.cached(cx).filter(|c| c.is_reduced()) else {
+                    return;
+                };
                 if source.replace_cached(full, cx) {
                     RESIDENCY.with(|r| {
                         let mut r = r.borrow_mut();
@@ -329,7 +369,9 @@ fn sweep(now: std::time::Instant, window: &mut gpui::Window, cx: &mut gpui::App)
             .filter(|(_, (_, seen))| now.duration_since(*seen) >= EVICT_AFTER)
             .map(|(k, _)| k.clone())
             .collect();
-        keys.into_iter().filter_map(|k| r.known.remove(&k).map(|(s, _)| (k, s))).collect()
+        keys.into_iter()
+            .filter_map(|k| r.known.remove(&k).map(|(s, _)| (k, s)))
+            .collect()
     });
     for (key, source) in stale {
         if let Some(image) = source.cached(cx) {
@@ -349,11 +391,15 @@ fn sweep(now: std::time::Instant, window: &mut gpui::Window, cx: &mut gpui::App)
     let mut seen = std::collections::HashSet::new();
     let pinned = full_res_sources();
     for source in &shown {
-        let Some(key) = source_key(source) else { continue };
+        let Some(key) = source_key(source) else {
+            continue;
+        };
         if !seen.insert(key.clone()) {
             continue;
         }
-        let Some(full) = source.cached(cx) else { continue };
+        let Some(full) = source.cached(cx) else {
+            continue;
+        };
         if full.is_reduced() {
             continue;
         }
@@ -414,7 +460,9 @@ fn full_res_sources() -> std::collections::HashSet<SourceKey> {
 }
 
 fn keep_full(source: &ImageSource, image: &gpui::RenderImage) -> bool {
-    let Some(key) = source_key(source) else { return true };
+    let Some(key) = source_key(source) else {
+        return true;
+    };
     RESIDENCY.with(|r| r.borrow_mut().keep_full.insert(key));
     if image.is_reduced() {
         crate::resample::want_full(image.id);
@@ -454,7 +502,9 @@ pub fn read_app_asset(src: &str) -> Option<Vec<u8>> {
     }
     let base = asset_base()?;
     let relative = key.replace('/', std::path::MAIN_SEPARATOR_STR);
-    std::fs::read(base.join(&relative)).or_else(|_| std::fs::read(base.join("public").join(&relative))).ok()
+    std::fs::read(base.join(&relative))
+        .or_else(|_| std::fs::read(base.join("public").join(&relative)))
+        .ok()
 }
 
 pub fn asset_store() -> Option<AssetLookup> {
@@ -526,8 +576,18 @@ pub(crate) fn source_for(id: u32, src: &str) -> Option<ImageSource> {
         }
         let source = resolve(src);
         note_known(source.as_ref());
-        let blob = src.trim().get(..5).is_some_and(|s| s.eq_ignore_ascii_case("blob:"));
-        let old = map.insert(id, Memo { src: src.to_string(), source: source.clone(), blob });
+        let blob = src
+            .trim()
+            .get(..5)
+            .is_some_and(|s| s.eq_ignore_ascii_case("blob:"));
+        let old = map.insert(
+            id,
+            Memo {
+                src: src.to_string(),
+                source: source.clone(),
+                blob,
+            },
+        );
         if let Some(old) = old {
             release(&map, old);
         }
@@ -556,7 +616,9 @@ pub(crate) enum Probe {
 pub(crate) fn tick(window: &mut gpui::Window, cx: &mut gpui::App) {
     let pending: Vec<u32> = LOADS.with(|l| l.borrow().iter().copied().collect());
     for id in pending {
-        let Some(src) = crate::tree::read_tree(|t| t.node(id).map(|_| t.prop(id, "src").map(str::to_string))) else {
+        let Some(src) =
+            crate::tree::read_tree(|t| t.node(id).map(|_| t.prop(id, "src").map(str::to_string)))
+        else {
             LOADS.with(|l| l.borrow_mut().remove(&id));
             continue;
         };
@@ -571,7 +633,12 @@ pub(crate) fn tick(window: &mut gpui::Window, cx: &mut gpui::App) {
             Probe::Failed => (crate::tree::EV_ERROR, 0.0, 0.0),
         };
         LOADS.with(|l| l.borrow_mut().remove(&id));
-        let payload = crate::EventPayload { a, b, key: Some(&src), ..Default::default() };
+        let payload = crate::EventPayload {
+            a,
+            b,
+            key: Some(&src),
+            ..Default::default()
+        };
         crate::render::js_dispatch_app(id, event, &payload, window, cx);
     }
 }
@@ -591,7 +658,11 @@ pub(crate) fn probe(id: u32, src: &str, cx: &mut gpui::App) -> Probe {
                 Some(Ok(image)) => {
                     let size = image.natural_size(0);
                     // gpui rasterises an SVG at twice its size for smoothness.
-                    let scale = if svg_named { gpui::SMOOTH_SVG_SCALE_FACTOR as f64 } else { 1.0 };
+                    let scale = if svg_named {
+                        gpui::SMOOTH_SVG_SCALE_FACTOR as f64
+                    } else {
+                        1.0
+                    };
                     Probe::Loaded(size.width.0 as f64 / scale, size.height.0 as f64 / scale)
                 }
             }
@@ -610,7 +681,9 @@ pub(crate) fn probe(id: u32, src: &str, cx: &mut gpui::App) -> Probe {
 
 pub(crate) fn names_svg(src: &str) -> bool {
     let path = src.split(['?', '#']).next().unwrap_or(src).trim();
-    path.len() > 4 && path.is_char_boundary(path.len() - 4) && path[path.len() - 4..].eq_ignore_ascii_case(".svg")
+    path.len() > 4
+        && path.is_char_boundary(path.len() - 4)
+        && path[path.len() - 4..].eq_ignore_ascii_case(".svg")
 }
 
 /// A file's natural size: only the header of a raster (a picked photo is measured, not loaded); an
@@ -653,7 +726,10 @@ fn upright_size<R: std::io::BufRead + std::io::Seek>(reader: image::ImageReader<
     }
     let turned = matches!(
         decoder.orientation(),
-        Ok(Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH)
+        Ok(Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH)
     );
     if turned {
         Probe::Loaded(h as f64, w as f64)
@@ -673,7 +749,11 @@ fn svg_size(bytes: &[u8]) -> Probe {
 // else is read and decoded here, synchronously, since gpui cannot be asked without starting a load.
 
 pub(crate) enum Pixels {
-    Ready { width: u32, height: u32, rgba: Vec<u8> },
+    Ready {
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    },
     NotYet,
     Broken(String),
 }
@@ -690,8 +770,12 @@ pub(crate) fn pixels(id: u32, cx: Option<&mut gpui::App>) -> Pixels {
         let Some(cx) = cx else { return Pixels::NotYet };
         let source = source_for(id, &raw);
         let Some(Ok(image)) = (match &source {
-            Some(ImageSource::Resource(r @ Resource::Uri(_))) => cx.fetch_asset::<gpui::ImgResourceLoader>(r),
-            _ => return Pixels::Broken(format!("<img src=\"{}\">: not a URL gpui loads", head(src))),
+            Some(ImageSource::Resource(r @ Resource::Uri(_))) => {
+                cx.fetch_asset::<gpui::ImgResourceLoader>(r)
+            }
+            _ => {
+                return Pixels::Broken(format!("<img src=\"{}\">: not a URL gpui loads", head(src)))
+            }
         }) else {
             return Pixels::NotYet;
         };
@@ -704,8 +788,14 @@ pub(crate) fn pixels(id: u32, cx: Option<&mut gpui::App>) -> Pixels {
         }
         let size = image.size(0);
         let (w, h) = (size.width.0.max(0) as u32, size.height.0.max(0) as u32);
-        let Some(bgra) = image.as_bytes(0).filter(|b| w > 0 && h > 0 && b.len() >= (w * h * 4) as usize) else {
-            return Pixels::Broken(format!("<img src=\"{}\">: the decoded image has no pixels", head(src)));
+        let Some(bgra) = image
+            .as_bytes(0)
+            .filter(|b| w > 0 && h > 0 && b.len() >= (w * h * 4) as usize)
+        else {
+            return Pixels::Broken(format!(
+                "<img src=\"{}\">: the decoded image has no pixels",
+                head(src)
+            ));
         };
         let mut rgba = bgra[..(w * h * 4) as usize].to_vec();
         for px in rgba.chunks_exact_mut(4) {
@@ -713,17 +803,32 @@ pub(crate) fn pixels(id: u32, cx: Option<&mut gpui::App>) -> Pixels {
         }
         if names_svg(src) {
             let (rgba, w, h) = halve(&rgba, w, h);
-            return Pixels::Ready { width: w, height: h, rgba };
+            return Pixels::Ready {
+                width: w,
+                height: h,
+                rgba,
+            };
         }
-        return Pixels::Ready { width: w, height: h, rgba };
+        return Pixels::Ready {
+            width: w,
+            height: h,
+            rgba,
+        };
     }
     let bytes = match read_bytes("img", src) {
         Ok(b) => b,
         Err(why) => return Pixels::Broken(why),
     };
     match redjs::webapi::image::decode(&bytes, None) {
-        Some(b) => Pixels::Ready { width: b.width, height: b.height, rgba: b.rgba },
-        None => Pixels::Broken(format!("<img src=\"{}\">: the bytes are not an image this build decodes", head(src))),
+        Some(b) => Pixels::Ready {
+            width: b.width,
+            height: b.height,
+            rgba: b.rgba,
+        },
+        None => Pixels::Broken(format!(
+            "<img src=\"{}\">: the bytes are not an image this build decodes",
+            head(src)
+        )),
     }
 }
 
@@ -760,7 +865,9 @@ fn halve(rgba: &[u8], w: u32, h: u32) -> (Vec<u8>, u32, u32) {
 pub(crate) fn read_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
     let src = src.trim();
     if src.is_empty() {
-        return Err(format!("<{tag} src=\"\">: the src is empty — nothing to load"));
+        return Err(format!(
+            "<{tag} src=\"\">: the src is empty — nothing to load"
+        ));
     }
     if scheme_of(src) == "data" {
         return data_bytes(tag, src);
@@ -799,7 +906,12 @@ pub(crate) fn readable(tag: &str, src: &str) -> Result<Readable, String> {
 }
 
 pub(crate) fn read_file(tag: &str, src: &str, path: &std::path::Path) -> Result<Vec<u8>, String> {
-    std::fs::read(path).map_err(|e| format!("<{tag} src=\"{src}\">: could not read {} — {e}", path.display()))
+    std::fs::read(path).map_err(|e| {
+        format!(
+            "<{tag} src=\"{src}\">: could not read {} — {e}",
+            path.display()
+        )
+    })
 }
 
 /// The file PATH behind a `src`, for `<video>`: the OS owns the read-ahead, so a long clip never
@@ -807,7 +919,9 @@ pub(crate) fn read_file(tag: &str, src: &str, path: &std::path::Path) -> Result<
 pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
     let src = src.trim();
     if src.is_empty() {
-        return Err(format!("<{tag} src=\"\">: the src is empty — nothing to load"));
+        return Err(format!(
+            "<{tag} src=\"\">: the src is empty — nothing to load"
+        ));
     }
     match scheme_of(src).as_str() {
         "data" => Err(format!(
@@ -825,7 +939,9 @@ pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
         "blob" => match blob_target(src) {
             Some(t @ BlobTarget::Path { range: None, .. }) => {
                 check_snapshot(tag, src, &t)?;
-                let BlobTarget::Path { path, .. } = t else { unreachable!() };
+                let BlobTarget::Path { path, .. } = t else {
+                    unreachable!()
+                };
                 Ok(path)
             }
             Some(_) => Err(format!(
@@ -848,7 +964,9 @@ pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
 pub(crate) fn resolve_media(tag: &str, src: &str) -> Result<sk_video::MediaSource, String> {
     let src = src.trim();
     if src.is_empty() {
-        return Err(format!("<{tag} src=\"\">: the src is empty — nothing to load"));
+        return Err(format!(
+            "<{tag} src=\"\">: the src is empty — nothing to load"
+        ));
     }
     match scheme_of(src).as_str() {
         "data" => {
@@ -858,7 +976,11 @@ pub(crate) fn resolve_media(tag: &str, src: &str) -> Result<sk_video::MediaSourc
                 .unwrap_or_default()
                 .split_once(',')
                 .map(|(meta, _)| {
-                    meta.split(';').next().unwrap_or("").trim().to_ascii_lowercase()
+                    meta.split(';')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_ascii_lowercase()
                 })
                 .unwrap_or_default();
             let data = data_bytes(tag, src)?;
@@ -878,7 +1000,8 @@ pub(crate) fn resolve_media(tag: &str, src: &str) -> Result<sk_video::MediaSourc
         "" if asset_store().is_some() => {
             let (key, bytes) = stored(tag, src).expect("asset_store() is set")?;
             Ok(sk_video::MediaSource::StaticBytes {
-                mime: sk_payload::media_type_for(&key).to_string(), data: bytes,
+                mime: sk_payload::media_type_for(&key).to_string(),
+                data: bytes,
             })
         }
         _ => resolve_path(tag, src).map(sk_video::MediaSource::Path),
@@ -899,7 +1022,11 @@ fn data_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
             head(src)
         ));
     };
-    if meta.to_ascii_lowercase().split(';').any(|p| p.trim() == "base64") {
+    if meta
+        .to_ascii_lowercase()
+        .split(';')
+        .any(|p| p.trim() == "base64")
+    {
         base64_decode(payload).ok_or_else(|| {
             format!(
                 "<{tag} src=\"{}…\">: data: URL payload is not valid base64",
@@ -971,7 +1098,9 @@ fn path_source(p: PathBuf) -> ImageSource {
 
 /// Joins a relative or root-relative `src` onto the app root through [`content_key`], as `fetch()` does.
 fn relative_to_base(tag: &str, src: &str) -> PathBuf {
-    if let Some(path) = dev_asset_file(src) { return path; }
+    if let Some(path) = dev_asset_file(src) {
+        return path;
+    }
     let base = match asset_base() {
         Some(b) => b,
         None => {
@@ -1106,16 +1235,29 @@ fn check_snapshot(tag: &str, src: &str, t: &BlobTarget) -> Result<(), String> {
 fn blob_bytes(tag: &str, src: &str, target: Option<BlobTarget>) -> Result<Vec<u8>, String> {
     match target {
         None => Err(unknown_blob(tag, src)),
-        Some(BlobTarget::Bytes { bytes, offset, len, .. }) => match bytes.get(offset..offset + len) {
+        Some(BlobTarget::Bytes {
+            bytes, offset, len, ..
+        }) => match bytes.get(offset..offset + len) {
             Some(b) => Ok(b.to_vec()),
-            None => Err(format!("<{tag} src=\"{src}\">: the blob: URL's window lies outside its bytes")),
+            None => Err(format!(
+                "<{tag} src=\"{src}\">: the blob: URL's window lies outside its bytes"
+            )),
         },
         Some(t @ BlobTarget::Path { .. }) => {
             check_snapshot(tag, src, &t)?;
-            let BlobTarget::Path { path, range, size, .. } = t else { unreachable!() };
+            let BlobTarget::Path {
+                path, range, size, ..
+            } = t
+            else {
+                unreachable!()
+            };
             let (offset, len) = range.unwrap_or((0, size));
-            read_window(&path, offset, len)
-                .map_err(|e| format!("<{tag} src=\"{src}\">: could not read {} — {e}", path.display()))
+            read_window(&path, offset, len).map_err(|e| {
+                format!(
+                    "<{tag} src=\"{src}\">: could not read {} — {e}",
+                    path.display()
+                )
+            })
         }
     }
 }
@@ -1125,15 +1267,23 @@ fn read_window(path: &Path, offset: u64, len: u64) -> std::io::Result<Vec<u8>> {
     use std::io::{Error, ErrorKind, Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path)?;
     f.seek(SeekFrom::Start(offset))?;
-    let want = usize::try_from(len).map_err(|_| Error::new(ErrorKind::OutOfMemory, "too large to hold in memory"))?;
+    let want = usize::try_from(len)
+        .map_err(|_| Error::new(ErrorKind::OutOfMemory, "too large to hold in memory"))?;
     let mut out = Vec::new();
-    out.try_reserve_exact(want)
-        .map_err(|_| Error::new(ErrorKind::OutOfMemory, format!("{len} bytes could not be held in memory")))?;
+    out.try_reserve_exact(want).map_err(|_| {
+        Error::new(
+            ErrorKind::OutOfMemory,
+            format!("{len} bytes could not be held in memory"),
+        )
+    })?;
     f.take(len).read_to_end(&mut out)?;
     if out.len() != want {
         return Err(Error::new(
             ErrorKind::UnexpectedEof,
-            format!("the file ended after {} of the {len} bytes the blob: URL names", out.len()),
+            format!(
+                "the file ended after {} of the {len} bytes the blob: URL names",
+                out.len()
+            ),
         ));
     }
     Ok(out)
@@ -1145,11 +1295,19 @@ fn blob_image(src: &str, target: Option<BlobTarget>) -> Option<ImageSource> {
             warn(msg);
             return None;
         }
-        let BlobTarget::Path { path, size, mtime, .. } = t else { unreachable!() };
+        let BlobTarget::Path {
+            path, size, mtime, ..
+        } = t
+        else {
+            unreachable!()
+        };
         note_blob_path(path, (*size, *mtime));
         return Some(path_source(path.clone()));
     }
-    let mime = target.as_ref().map(|t| t.mime().to_ascii_lowercase()).unwrap_or_default();
+    let mime = target
+        .as_ref()
+        .map(|t| t.mime().to_ascii_lowercase())
+        .unwrap_or_default();
     let bytes = match blob_bytes("img", src, target) {
         Ok(b) => b,
         Err(msg) => {
@@ -1164,24 +1322,40 @@ fn blob_image(src: &str, target: Option<BlobTarget>) -> Option<ImageSource> {
         ));
         return None;
     };
-    Some(ImageSource::Image(std::sync::Arc::new(Image::from_bytes(format, bytes))))
+    Some(ImageSource::Image(std::sync::Arc::new(Image::from_bytes(
+        format, bytes,
+    ))))
 }
 
 /// `<video src="blob:…">`: a whole picked file is a path (the OS streams it); an in-memory Blob is
 /// its own `Arc`.
-fn blob_media(tag: &str, src: &str, target: Option<BlobTarget>) -> Result<sk_video::MediaSource, String> {
+fn blob_media(
+    tag: &str,
+    src: &str,
+    target: Option<BlobTarget>,
+) -> Result<sk_video::MediaSource, String> {
     match target {
         None => Err(unknown_blob(tag, src)),
         Some(t @ BlobTarget::Path { range: None, .. }) => {
             check_snapshot(tag, src, &t)?;
-            let BlobTarget::Path { path, .. } = t else { unreachable!() };
+            let BlobTarget::Path { path, .. } = t else {
+                unreachable!()
+            };
             Ok(sk_video::MediaSource::Path(path))
         }
-        Some(BlobTarget::Bytes { bytes, offset: 0, len, mime }) if len == bytes.len() => {
+        Some(BlobTarget::Bytes {
+            bytes,
+            offset: 0,
+            len,
+            mime,
+        }) if len == bytes.len() => {
             if len == 0 {
                 return Err(format!("<{tag} src=\"{src}\">: the Blob is empty"));
             }
-            Ok(sk_video::MediaSource::Bytes { mime: mime.to_ascii_lowercase(), data: bytes })
+            Ok(sk_video::MediaSource::Bytes {
+                mime: mime.to_ascii_lowercase(),
+                data: bytes,
+            })
         }
         Some(t) => {
             let mime = t.mime().to_ascii_lowercase();
@@ -1189,11 +1363,13 @@ fn blob_media(tag: &str, src: &str, target: Option<BlobTarget>) -> Result<sk_vid
             if data.is_empty() {
                 return Err(format!("<{tag} src=\"{src}\">: the Blob is empty"));
             }
-            Ok(sk_video::MediaSource::Bytes { mime, data: std::sync::Arc::new(data) })
+            Ok(sk_video::MediaSource::Bytes {
+                mime,
+                data: std::sync::Arc::new(data),
+            })
         }
     }
 }
-
 
 /// `data:[<mediatype>][;base64],<data>` (RFC 2397).
 fn data_url(src: &str) -> Option<ImageSource> {
@@ -1201,13 +1377,21 @@ fn data_url(src: &str) -> Option<ImageSource> {
     let (meta, payload) = match body.split_once(',') {
         Some(pair) => pair,
         None => {
-            warn(format!("<img src=\"{}…\">: malformed data: URL (no comma)", head(src)));
+            warn(format!(
+                "<img src=\"{}…\">: malformed data: URL (no comma)",
+                head(src)
+            ));
             return None;
         }
     };
     let meta_lower = meta.to_ascii_lowercase();
     let is_base64 = meta_lower.split(';').any(|p| p.trim() == "base64");
-    let mime = meta_lower.split(';').next().unwrap_or("").trim().to_string();
+    let mime = meta_lower
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
 
     let bytes = if is_base64 {
         match base64_decode(payload) {
@@ -1315,7 +1499,9 @@ mod tests {
 
     fn png(w: u32, h: u32) -> Vec<u8> {
         let mut out = std::io::Cursor::new(Vec::new());
-        image::RgbaImage::new(w, h).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        image::RgbaImage::new(w, h)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
         out.into_inner()
     }
 
@@ -1341,7 +1527,11 @@ mod tests {
             })
         };
         match pixels(node(Some(&good.to_string_lossy())), None) {
-            Pixels::Ready { width, height, rgba } => {
+            Pixels::Ready {
+                width,
+                height,
+                rgba,
+            } => {
                 assert_eq!((width, height), (3, 2));
                 assert_eq!(&rgba[..4], &[10, 20, 30, 255]);
             }
@@ -1353,10 +1543,20 @@ mod tests {
         assert_eq!(natural_size(&sideways_jpeg()), Probe::Loaded(16.0, 32.0));
         assert!(matches!(
             pixels(node(Some(&turned.to_string_lossy())), None),
-            Pixels::Ready { width: 16, height: 32, .. }
+            Pixels::Ready {
+                width: 16,
+                height: 32,
+                ..
+            }
         ));
-        assert!(matches!(pixels(node(Some(&bad.to_string_lossy())), None), Pixels::Broken(_)));
-        assert!(matches!(pixels(node(Some("https://cdn.example/a.png")), None), Pixels::NotYet));
+        assert!(matches!(
+            pixels(node(Some(&bad.to_string_lossy())), None),
+            Pixels::Broken(_)
+        ));
+        assert!(matches!(
+            pixels(node(Some("https://cdn.example/a.png")), None),
+            Pixels::NotYet
+        ));
         assert!(matches!(pixels(node(None), None), Pixels::NotYet));
         assert!(matches!(pixels(node(Some("  ")), None), Pixels::NotYet));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1369,7 +1569,10 @@ mod tests {
             .write_to(&mut out, image::ImageFormat::Jpeg)
             .unwrap();
         let jpeg = out.into_inner();
-        let tiff = [0x4D, 0x4D, 0, 0x2A, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0];
+        let tiff = [
+            0x4D, 0x4D, 0, 0x2A, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0,
+            0, 0,
+        ];
         let len = (2 + 6 + tiff.len()) as u16;
         let mut with = jpeg[..2].to_vec();
         with.extend_from_slice(&[0xFF, 0xE1, (len >> 8) as u8, len as u8]);
@@ -1382,8 +1585,10 @@ mod tests {
     #[test]
     fn halving_weighs_colour_by_alpha() {
         let px = [
-            [255, 0, 0, 255], [0, 0, 255, 0],
-            [255, 0, 0, 255], [0, 0, 255, 0],
+            [255, 0, 0, 255],
+            [0, 0, 255, 0],
+            [255, 0, 0, 255],
+            [0, 0, 255, 0],
         ]
         .concat();
         let (out, w, h) = halve(&px, 2, 2);
@@ -1410,7 +1615,11 @@ mod tests {
         std::fs::write(&raster, png(9, 4)).unwrap();
         assert_eq!(file_natural_size(&raster), Probe::Loaded(9.0, 4.0));
         let svg = dir.join("b.svg");
-        std::fs::write(&svg, br#"<svg xmlns="http://www.w3.org/2000/svg" width="3" height="2"/>"#).unwrap();
+        std::fs::write(
+            &svg,
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="3" height="2"/>"#,
+        )
+        .unwrap();
         assert_eq!(file_natural_size(&svg), Probe::Loaded(3.0, 2.0));
         assert_eq!(file_natural_size(&dir.join("missing.png")), Probe::Failed);
         std::fs::remove_dir_all(&dir).ok();
@@ -1465,11 +1674,20 @@ mod tests {
     #[test]
     fn file_urls_keep_their_path_off_windows() {
         let unix = |src| file_url_for(src, false).map(|p| p.to_string_lossy().into_owned());
-        assert_eq!(unix("file:///home/u/my%20pics/a.png").as_deref(), Some("/home/u/my pics/a.png"));
-        assert_eq!(unix("file://localhost/home/u/a.png").as_deref(), Some("/home/u/a.png"));
+        assert_eq!(
+            unix("file:///home/u/my%20pics/a.png").as_deref(),
+            Some("/home/u/my pics/a.png")
+        );
+        assert_eq!(
+            unix("file://localhost/home/u/a.png").as_deref(),
+            Some("/home/u/a.png")
+        );
         assert_eq!(unix("file:/home/u/a.png").as_deref(), Some("/home/u/a.png"));
         let windows = |src| file_url_for(src, true).map(|p| p.to_string_lossy().into_owned());
-        assert_eq!(windows("file:///C:/x/a.png").as_deref(), Some("C:\\x\\a.png"));
+        assert_eq!(
+            windows("file:///C:/x/a.png").as_deref(),
+            Some("C:\\x\\a.png")
+        );
     }
 
     #[test]
@@ -1523,17 +1741,22 @@ mod tests {
         let sniffed = resolve("data:;base64,iVBORw0KGgoAAAANSUhEUg==");
         assert!(matches!(sniffed, Some(ImageSource::Image(_))));
 
-        let svg = resolve("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22/%3E");
+        let svg =
+            resolve("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22/%3E");
         let Some(ImageSource::Image(img)) = svg else {
             panic!("percent-encoded data: URL did not resolve");
         };
         assert_eq!(img.format, ImageFormat::Svg);
         assert!(String::from_utf8_lossy(&img.bytes).starts_with("<svg"));
 
-        let Some(ImageSource::Image(img)) = resolve("data:image/png,%89PNG%0D%0A%1A%0A%FF%00") else {
+        let Some(ImageSource::Image(img)) = resolve("data:image/png,%89PNG%0D%0A%1A%0A%FF%00")
+        else {
             panic!("percent-encoded binary data: URL did not resolve");
         };
-        assert_eq!(&img.bytes[..], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0xFF, 0x00]);
+        assert_eq!(
+            &img.bytes[..],
+            &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0xFF, 0x00]
+        );
     }
 
     #[test]
@@ -1550,7 +1773,6 @@ mod tests {
         assert_eq!(base64_decode("QQ==").unwrap(), b"A");
         assert!(base64_decode("**").is_none());
     }
-
 
     const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
     static FAKE: &[(&str, &[u8])] = &[
@@ -1577,12 +1799,21 @@ mod tests {
     #[test]
     fn a_packaged_app_resolves_relative_srcs_out_of_its_store() {
         let _g = packaged();
-        for src in ["assets/a.png", "./assets/a.png", "/assets/a.png", "assets/a.png?v=2", "assets/x/../a.png"] {
+        for src in [
+            "assets/a.png",
+            "./assets/a.png",
+            "/assets/a.png",
+            "assets/a.png?v=2",
+            "assets/x/../a.png",
+        ] {
             match resolve(src) {
                 Some(ImageSource::Resource(Resource::Embedded(key))) => {
                     assert_eq!(key.as_ref(), "assets/a.png", "{src}")
                 }
-                other => panic!("{src}: not an embedded resource (some: {})", other.is_some()),
+                other => panic!(
+                    "{src}: not an embedded resource (some: {})",
+                    other.is_some()
+                ),
             }
         }
         assert!(matches!(
@@ -1593,9 +1824,18 @@ mod tests {
         set_asset_base(PathBuf::from("Y:\\skathi\\apps\\hello"));
         assert!(resolve("assets/nope.png").is_none());
         assert!(resolve("../hello/assets/a.png").is_none());
-        assert!(matches!(resolve("C:/pics/a.png"), Some(ImageSource::Resource(Resource::Path(_)))));
-        assert!(matches!(resolve("https://example.com/a.png"), Some(ImageSource::Resource(Resource::Uri(_)))));
-        assert!(matches!(resolve("data:;base64,iVBORw0KGgo="), Some(ImageSource::Image(_))));
+        assert!(matches!(
+            resolve("C:/pics/a.png"),
+            Some(ImageSource::Resource(Resource::Path(_)))
+        ));
+        assert!(matches!(
+            resolve("https://example.com/a.png"),
+            Some(ImageSource::Resource(Resource::Uri(_)))
+        ));
+        assert!(matches!(
+            resolve("data:;base64,iVBORw0KGgo="),
+            Some(ImageSource::Image(_))
+        ));
     }
 
     #[test]
@@ -1610,12 +1850,18 @@ mod tests {
             Ok(MediaSource::StaticBytes { mime, data }) => {
                 assert_eq!(mime, "video/mp4");
                 assert_eq!(data, &b"mp4bytes"[..]);
-                assert!(std::ptr::eq(data, fake_store("assets/clip.mp4").unwrap()), "mapped package bytes must be borrowed");
+                assert!(
+                    std::ptr::eq(data, fake_store("assets/clip.mp4").unwrap()),
+                    "mapped package bytes must be borrowed"
+                );
             }
             other => panic!("{other:?}"),
         }
         assert!(resolve_media("video", "assets/missing.mp4").is_err());
-        assert!(matches!(resolve_media("video", "https://example.com/a.mp4"), Ok(MediaSource::Uri(_))));
+        assert!(matches!(
+            resolve_media("video", "https://example.com/a.mp4"),
+            Ok(MediaSource::Uri(_))
+        ));
     }
 
     #[test]
@@ -1623,12 +1869,27 @@ mod tests {
         assert!(asset_store().is_none());
         set_asset_base(PathBuf::from("Y:\\base"));
         // Browser-shaped: the server never sees the query, and decodes escapes.
-        assert_eq!(as_path(resolve("a.png?v=2")), Some(PathBuf::from("Y:\\base\\a.png")));
-        assert_eq!(as_path(resolve("my%20pic.png")), Some(PathBuf::from("Y:\\base\\my pic.png")));
-        assert_eq!(as_path(resolve("dir\\a.png")), Some(PathBuf::from("Y:\\base\\dir\\a.png")));
+        assert_eq!(
+            as_path(resolve("a.png?v=2")),
+            Some(PathBuf::from("Y:\\base\\a.png"))
+        );
+        assert_eq!(
+            as_path(resolve("my%20pic.png")),
+            Some(PathBuf::from("Y:\\base\\my pic.png"))
+        );
+        assert_eq!(
+            as_path(resolve("dir\\a.png")),
+            Some(PathBuf::from("Y:\\base\\dir\\a.png"))
+        );
         // A decoded drive letter must not replace the app root.
-        assert_eq!(as_path(resolve("C%3A/x.png")), Some(PathBuf::from("Y:\\base\\C%3A\\x.png")));
-        assert!(matches!(resolve_media("video", "assets/clip.mp4"), Ok(sk_video::MediaSource::Path(_))));
+        assert_eq!(
+            as_path(resolve("C%3A/x.png")),
+            Some(PathBuf::from("Y:\\base\\C%3A\\x.png"))
+        );
+        assert!(matches!(
+            resolve_media("video", "assets/clip.mp4"),
+            Ok(sk_video::MediaSource::Path(_))
+        ));
     }
 
     /// The memo must follow the `src`, not the node id — Vue reuses ids.
@@ -1645,13 +1906,13 @@ mod tests {
         );
     }
 
-
     /// A temp file with the target a picked File over it would resolve to; removed on drop.
     struct Picked(PathBuf);
 
     impl Picked {
         fn new(name: &str, bytes: &[u8]) -> Picked {
-            let dir = std::env::temp_dir().join(format!("sk-tree-blob-{}-{name}", std::process::id()));
+            let dir =
+                std::env::temp_dir().join(format!("sk-tree-blob-{}-{name}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             let p = dir.join(name);
             std::fs::write(&p, bytes).unwrap();
@@ -1660,7 +1921,13 @@ mod tests {
 
         fn target(&self, range: Option<(u64, u64)>, mime: &str) -> BlobTarget {
             let m = std::fs::metadata(&self.0).unwrap();
-            BlobTarget::Path { path: self.0.clone(), range, size: m.len(), mtime: m.modified().ok(), mime: mime.into() }
+            BlobTarget::Path {
+                path: self.0.clone(),
+                range,
+                size: m.len(),
+                mtime: m.modified().ok(),
+                mime: mime.into(),
+            }
         }
     }
 
@@ -1672,15 +1939,18 @@ mod tests {
     }
 
     const PNG_1PX: &[u8] = &[
-        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R', 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
-        0, 0, 0x1F, 0x15, 0xC4, 0x89,
+        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R', 0,
+        0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0x1F, 0x15, 0xC4, 0x89,
     ];
 
     #[test]
     fn a_whole_picked_file_loads_by_path_without_a_copy() {
         let f = Picked::new("pic.png", PNG_1PX);
         let src = "blob:app://redjs/00000000-0000-4000-8000-000000000001";
-        assert_eq!(as_path(blob_image(src, Some(f.target(None, "image/png")))), Some(f.0.clone()));
+        assert_eq!(
+            as_path(blob_image(src, Some(f.target(None, "image/png")))),
+            Some(f.0.clone())
+        );
         assert!(matches!(
             blob_media("video", src, Some(f.target(None, "video/mp4"))),
             Ok(sk_video::MediaSource::Path(p)) if p == f.0
@@ -1694,9 +1964,17 @@ mod tests {
         let f = Picked::new("two.bin", &body);
         let src = "blob:app://redjs/00000000-0000-4000-8000-000000000002";
         let t = f.target(Some((2, PNG_1PX.len() as u64)), "");
-        assert!(matches!(blob_image(src, Some(t)), Some(ImageSource::Image(_))));
+        assert!(matches!(
+            blob_image(src, Some(t)),
+            Some(ImageSource::Image(_))
+        ));
         let arc = std::sync::Arc::new(PNG_1PX.to_vec());
-        let whole = BlobTarget::Bytes { bytes: arc.clone(), offset: 0, len: arc.len(), mime: "video/mp4".into() };
+        let whole = BlobTarget::Bytes {
+            bytes: arc.clone(),
+            offset: 0,
+            len: arc.len(),
+            mime: "video/mp4".into(),
+        };
         match blob_media("video", src, Some(whole)) {
             Ok(sk_video::MediaSource::Bytes { data, mime }) => {
                 assert!(std::sync::Arc::ptr_eq(&data, &arc));
@@ -1704,9 +1982,19 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        let part = BlobTarget::Bytes { bytes: arc.clone(), offset: 1, len: 3, mime: String::new() };
+        let part = BlobTarget::Bytes {
+            bytes: arc.clone(),
+            offset: 1,
+            len: 3,
+            mime: String::new(),
+        };
         assert_eq!(blob_bytes("lottie", src, Some(part)).unwrap(), b"PNG");
-        let text = BlobTarget::Bytes { bytes: std::sync::Arc::new(b"hello".to_vec()), offset: 0, len: 5, mime: "text/plain".into() };
+        let text = BlobTarget::Bytes {
+            bytes: std::sync::Arc::new(b"hello".to_vec()),
+            offset: 0,
+            len: 5,
+            mime: "text/plain".into(),
+        };
         assert!(blob_image(src, Some(text)).is_none());
     }
 
@@ -1717,9 +2005,13 @@ mod tests {
         let t = f.target(None, "image/png");
         std::fs::write(&f.0, b"a different file now").unwrap();
         assert!(blob_image(src, Some(t.clone())).is_none());
-        assert!(blob_media("video", src, Some(t)).unwrap_err().contains("changed"));
+        assert!(blob_media("video", src, Some(t))
+            .unwrap_err()
+            .contains("changed"));
         assert!(resolve(src).is_none());
-        assert!(read_bytes("lottie", src).unwrap_err().contains("blob URL store"));
+        assert!(read_bytes("lottie", src)
+            .unwrap_err()
+            .contains("blob URL store"));
         assert!(resolve_media("video", src).unwrap_err().contains("revoked"));
     }
 
@@ -1740,33 +2032,59 @@ mod tests {
         sk_runtime::testing::on_js_thread(move || {
             let eval = |src: &str| -> String {
                 JsRuntime::with(|rt| {
-                    let v = rt.ctx().eval(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
+                    let v = rt
+                        .ctx()
+                        .eval(src)
+                        .unwrap_or_else(|e| panic!("{src}: {e:?}"));
                     rt.ctx().to_rust_string(v).unwrap()
                 })
             };
             let bytes: Vec<String> = PNG_1PX.iter().map(|b| b.to_string()).collect();
-            let mem = eval(&format!("URL.createObjectURL(new Blob([new Uint8Array([{}])], {{ type: 'image/png' }}))", bytes.join(",")));
-            assert!(matches!(resolve(&mem), Some(ImageSource::Image(_))), "{mem}");
+            let mem = eval(&format!(
+                "URL.createObjectURL(new Blob([new Uint8Array([{}])], {{ type: 'image/png' }}))",
+                bytes.join(",")
+            ));
+            assert!(
+                matches!(resolve(&mem), Some(ImageSource::Image(_))),
+                "{mem}"
+            );
             JsRuntime::with(|rt| unsafe {
                 let g = rt.raw();
                 let file = redjs::webapi::file::file_from_path(g, &f.0, "").unwrap();
                 redjs::webapi::util::define(g, redjs::glue::rjs_global(g), "picked", file, 0);
             });
             let by_path = eval("URL.createObjectURL(picked)");
-            assert_eq!(as_path(resolve(&by_path)), Some(f.0.clone()), "a picked file is handed on by path");
-            assert!(matches!(resolve_media("video", &by_path), Ok(sk_video::MediaSource::Path(p)) if p == f.0));
+            assert_eq!(
+                as_path(resolve(&by_path)),
+                Some(f.0.clone()),
+                "a picked file is handed on by path"
+            );
+            assert!(
+                matches!(resolve_media("video", &by_path), Ok(sk_video::MediaSource::Path(p)) if p == f.0)
+            );
             let again = eval("URL.createObjectURL(picked)");
             let _ = take_evictions();
             assert!(source_for(901, &mem).is_some());
             assert!(source_for(902, &by_path).is_some());
-            assert!(source_for(903, &again).is_some(), "a second URL of the same File: the same path");
+            assert!(
+                source_for(903, &again).is_some(),
+                "a second URL of the same File: the same path"
+            );
             gc(|id| id != 901 && id != 902);
             let ev = take_evictions();
-            assert_eq!(ev.len(), 1, "the memory decode goes; the path is still shown by 903");
+            assert_eq!(
+                ev.len(),
+                1,
+                "the memory decode goes; the path is still shown by 903"
+            );
             assert!(matches!(&ev[0], ImageSource::Image(_)));
             gc(|id| id != 903);
             let ev = take_evictions();
-            assert!(matches!(&ev[..], [ImageSource::Resource(Resource::Path(p))] if p.as_ref() == f.0), "{} queued", ev.len());
+            assert!(
+                matches!(&ev[..], [ImageSource::Resource(Resource::Path(p))] if p.as_ref() == f.0),
+                "{} queued",
+                ev.len()
+            );
             eval(&format!("URL.revokeObjectURL('{mem}'); 'ok'"));
             assert!(resolve(&mem).is_none(), "revoked");
         });
@@ -1778,15 +2096,29 @@ mod tests {
         let first = "blob:app://redjs/00000000-0000-4000-8000-0000000000a1";
         let t1 = f.target(None, "image/png");
         assert!(blob_image(first, Some(t1.clone())).is_some());
-        assert!(take_evictions().is_empty(), "first sight: nothing of it is cached");
+        assert!(
+            take_evictions().is_empty(),
+            "first sight: nothing of it is cached"
+        );
         assert!(blob_image(first, Some(t1)).is_some());
-        assert!(take_evictions().is_empty(), "the same file again: the cached decode is right");
+        assert!(
+            take_evictions().is_empty(),
+            "the same file again: the cached decode is right"
+        );
         let mut edited = PNG_1PX.to_vec();
         edited.extend([0u8; 16]);
         std::fs::write(&f.0, &edited).unwrap();
         let t2 = f.target(None, "image/png");
-        assert!(blob_image("blob:app://redjs/00000000-0000-4000-8000-0000000000a2", Some(t2)).is_some());
+        assert!(blob_image(
+            "blob:app://redjs/00000000-0000-4000-8000-0000000000a2",
+            Some(t2)
+        )
+        .is_some());
         let ev = take_evictions();
-        assert!(matches!(&ev[..], [ImageSource::Resource(Resource::Path(p))] if p.as_ref() == f.0), "{} queued", ev.len());
+        assert!(
+            matches!(&ev[..], [ImageSource::Resource(Resource::Path(p))] if p.as_ref() == f.0),
+            "{} queued",
+            ev.len()
+        );
     }
 }

@@ -49,13 +49,16 @@ impl<'a> HostContext<'a> {
 
     /// Direct JavaScriptCore API; UI/VM thread only.
     pub fn js(&self) -> &'a crate::js::Context {
-        self.js.expect("HostContext::js is only available inside Builder::setup")
+        self.js
+            .expect("HostContext::js is only available inside Builder::setup")
     }
 
     /// Installs a native namespace before app code, built with `js.object`, `js.set` and `sk_app::js::function`.
     pub fn expose(&self, name: &str, value: crate::js::Value) -> crate::js::Result<()> {
-        if name.is_empty() || name.to_ascii_lowercase().starts_with("__sk")
-            || !self.js().global_get(name)?.is_undefined() {
+        if name.is_empty()
+            || name.to_ascii_lowercase().starts_with("__sk")
+            || !self.js().global_get(name)?.is_undefined()
+        {
             return Err(crate::js::Error::BadArg);
         }
         self.js().global_set(name, value)
@@ -75,7 +78,8 @@ impl<'a> HostContext<'a> {
     /// The engine's runtime, for an extension built against the same `sk-runtime` that registers
     /// `__sk_*` host fns, which [`Self::expose`] refuses on purpose. Prefer `expose`.
     pub fn runtime(&self) -> &'a sk_runtime::JsRuntime {
-        self.runtime.expect("HostContext::runtime is only available inside Builder::setup")
+        self.runtime
+            .expect("HostContext::runtime is only available inside Builder::setup")
     }
 
     /// Called on the VM thread once per frame before the frame's wave drains: deliver what worker
@@ -133,7 +137,9 @@ impl<'a> HostContext<'a> {
 
     pub fn random_bytes(&self, bytes: &mut [u8]) -> Result<(), String> {
         #[cfg(feature = "storages")]
-        { sk_storage::crypt::random_bytes(bytes) }
+        {
+            sk_storage::crypt::random_bytes(bytes)
+        }
         #[cfg(not(feature = "storages"))]
         {
             let _ = bytes;
@@ -147,15 +153,17 @@ impl<'a> HostContext<'a> {
         let folder = self.storage_dir()?;
         #[cfg(feature = "storages")]
         {
-            let provider = sk_storage::crypt::provider()
-                .ok_or_else(|| "host secrets: no OS encryption provider on this platform".to_string())?;
+            let provider = sk_storage::crypt::provider().ok_or_else(|| {
+                "host secrets: no OS encryption provider on this platform".to_string()
+            })?;
             let path = folder.join(name);
             let bytes = match std::fs::read(&path) {
                 Ok(bytes) => bytes,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
                 Err(e) => return Err(format!("host secrets: could not read {name}: {e}")),
             };
-            sk_storage::file::unseal(provider, &bytes).map(Some)
+            sk_storage::file::unseal(provider, &bytes)
+                .map(Some)
                 .map_err(|e| format!("host secrets: could not decrypt {name}: {e}"))
         }
         #[cfg(not(feature = "storages"))]
@@ -170,8 +178,9 @@ impl<'a> HostContext<'a> {
         let folder = self.storage_dir()?;
         #[cfg(feature = "storages")]
         {
-            let provider = sk_storage::crypt::provider()
-                .ok_or_else(|| "host secrets: no OS encryption provider on this platform".to_string())?;
+            let provider = sk_storage::crypt::provider().ok_or_else(|| {
+                "host secrets: no OS encryption provider on this platform".to_string()
+            })?;
             let bytes = sk_storage::file::seal(provider, value)?;
             std::fs::create_dir_all(&folder)
                 .map_err(|e| format!("host secrets: could not create storage directory: {e}"))?;
@@ -193,13 +202,23 @@ fn storage_unavailable() -> String {
 fn validate_secret_name(name: &str) -> Result<(), String> {
     let stem = name.split('.').next().unwrap_or("").to_ascii_lowercase();
     let reserved = matches!(stem.as_str(), "con" | "prn" | "aux" | "nul")
-        || (stem.len() == 4 && (stem.starts_with("com") || stem.starts_with("lpt"))
+        || (stem.len() == 4
+            && (stem.starts_with("com") || stem.starts_with("lpt"))
             && matches!(stem.as_bytes()[3], b'1'..=b'9'));
-    if name.is_empty() || name.len() > 128 || name == "." || name == ".."
-        || name.ends_with('.') || reserved
-        || !name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    if name.is_empty()
+        || name.len() > 128
+        || name == "."
+        || name == ".."
+        || name.ends_with('.')
+        || reserved
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
     {
-        return Err("host secrets: name must be one ordinary filename (letters, digits, '.', '_' or '-')".into());
+        return Err(
+            "host secrets: name must be one ordinary filename (letters, digits, '.', '_' or '-')"
+                .into(),
+        );
     }
     Ok(())
 }
@@ -210,7 +229,21 @@ mod tests {
 
     #[test]
     fn secret_names_cannot_escape_the_storage_directory_or_name_windows_devices() {
-        for name in ["", ".", "..", "../secret", "x/y", r"x\y", "C:secret", "secret:stream", "con", "NUL.sealed", "COM1", "lpt9.txt", "trailing."] {
+        for name in [
+            "",
+            ".",
+            "..",
+            "../secret",
+            "x/y",
+            r"x\y",
+            "C:secret",
+            "secret:stream",
+            "con",
+            "NUL.sealed",
+            "COM1",
+            "lpt9.txt",
+            "trailing.",
+        ] {
             assert!(validate_secret_name(name).is_err(), "{name:?}");
         }
         assert!(validate_secret_name("device-id.sealed").is_ok());
@@ -218,14 +251,24 @@ mod tests {
 
     #[test]
     fn context_without_storage_refuses_credential_operations() {
-        let ctx = HostContext { runtime: None, js: None, storage_dir: None };
+        let ctx = HostContext {
+            runtime: None,
+            js: None,
+            storage_dir: None,
+        };
         assert!(ctx.storage_dir().is_err());
         assert!(ctx.read_secret("test.sealed").is_err());
         assert!(ctx.write_secret("test.sealed", "secret").is_err());
         let cookie = HostCookie {
-            url: "https://host-context.test".into(), name: "bootstrap".into(), value: "value".into(),
-            domain: None, path: Some("/".into()), secure: true, http_only: true,
-            same_site: SameSite::None, expires: None,
+            url: "https://host-context.test".into(),
+            name: "bootstrap".into(),
+            value: "value".into(),
+            domain: None,
+            path: Some("/".into()),
+            secure: true,
+            http_only: true,
+            same_site: SameSite::None,
+            expires: None,
         };
         assert!(ctx.set_cookie(cookie).is_err());
         #[cfg(not(feature = "storages"))]
@@ -235,20 +278,39 @@ mod tests {
     #[test]
     #[cfg(all(feature = "storages", target_os = "windows"))]
     fn secrets_preserve_the_existing_sealed_format_and_refuse_corruption() {
-        let folder = std::env::temp_dir().join(format!("sk-host-secret-{}-{}", std::process::id(),
-            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
-        let ctx = HostContext { runtime: None, js: None, storage_dir: Some(folder.clone()) };
+        let folder = std::env::temp_dir().join(format!(
+            "sk-host-secret-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let ctx = HostContext {
+            runtime: None,
+            js: None,
+            storage_dir: Some(folder.clone()),
+        };
         let name = "device-id.sealed";
         assert_eq!(ctx.read_secret(name).unwrap(), None);
         ctx.write_secret(name, "stable-device-id").unwrap();
-        assert_eq!(ctx.read_secret(name).unwrap().as_deref(), Some("stable-device-id"));
+        assert_eq!(
+            ctx.read_secret(name).unwrap().as_deref(),
+            Some("stable-device-id")
+        );
         let bytes = std::fs::read(folder.join(name)).unwrap();
         assert!(!bytes.windows(16).any(|b| b == b"stable-device-id"));
         let provider = sk_storage::crypt::provider().unwrap();
-        assert_eq!(sk_storage::file::unseal(provider, &bytes).unwrap(), "stable-device-id");
+        assert_eq!(
+            sk_storage::file::unseal(provider, &bytes).unwrap(),
+            "stable-device-id"
+        );
         let legacy = sk_storage::file::seal(provider, "legacy-device-id").unwrap();
         std::fs::write(folder.join(name), legacy).unwrap();
-        assert_eq!(ctx.read_secret(name).unwrap().as_deref(), Some("legacy-device-id"));
+        assert_eq!(
+            ctx.read_secret(name).unwrap().as_deref(),
+            Some("legacy-device-id")
+        );
         std::fs::write(folder.join(name), b"corrupt").unwrap();
         assert!(ctx.read_secret(name).is_err());
         std::fs::remove_file(folder.join(name)).unwrap();
@@ -258,15 +320,28 @@ mod tests {
     #[test]
     #[cfg(feature = "storages")]
     fn generic_cookie_setter_obeys_origin_and_domain_rules() {
-        let ctx = HostContext { runtime: None, js: None, storage_dir: Some(PathBuf::from("unused-cookie-test-folder")) };
+        let ctx = HostContext {
+            runtime: None,
+            js: None,
+            storage_dir: Some(PathBuf::from("unused-cookie-test-folder")),
+        };
         let mut cookie = HostCookie {
-            url: "https://host-context.test".into(), name: "sk-host-bootstrap-test".into(), value: "value".into(),
-            domain: Some("elsewhere.test".into()), path: Some("/".into()), secure: true,
-            http_only: true, same_site: SameSite::None, expires: None,
+            url: "https://host-context.test".into(),
+            name: "sk-host-bootstrap-test".into(),
+            value: "value".into(),
+            domain: Some("elsewhere.test".into()),
+            path: Some("/".into()),
+            secure: true,
+            http_only: true,
+            same_site: SameSite::None,
+            expires: None,
         };
         assert!(ctx.set_cookie(cookie.clone()).is_err());
         cookie.domain = None;
         assert!(ctx.set_cookie(cookie).is_ok());
-        sk_runtime::redjs::webapi::cookies::remove("https://host-context.test", "sk-host-bootstrap-test");
+        sk_runtime::redjs::webapi::cookies::remove(
+            "https://host-context.test",
+            "sk-host-bootstrap-test",
+        );
     }
 }

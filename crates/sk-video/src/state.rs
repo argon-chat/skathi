@@ -45,7 +45,13 @@ struct Pushed {
 
 impl Default for Pushed {
     fn default() -> Self {
-        Self { volume: 1.0, muted: false, rate: 1.0, looping: false, playing: false }
+        Self {
+            volume: 1.0,
+            muted: false,
+            rate: 1.0,
+            looping: false,
+            playing: false,
+        }
     }
 }
 
@@ -305,10 +311,12 @@ impl VideoState {
         // `timeupdate`: on the 250 ms clock while the position moves, and at every boundary (a seek
         // that landed, the end).
         let time = self.backend.current_time();
-        let boundary = out
-            .events
-            .iter()
-            .any(|e| matches!(e, MediaEvent::Seeked | MediaEvent::Ended | MediaEvent::LoadedData));
+        let boundary = out.events.iter().any(|e| {
+            matches!(
+                e,
+                MediaEvent::Seeked | MediaEvent::Ended | MediaEvent::LoadedData
+            )
+        });
         let due = self
             .last_timeupdate
             .is_none_or(|last| now.saturating_duration_since(last) >= TIMEUPDATE_PERIOD);
@@ -346,7 +354,11 @@ impl VideoState {
             }
             self.previous = self.cached.take().map(|c| c.image);
         }
-        self.cached = Some(Cached { image: frame.image, size: frame.size, pts: frame.pts });
+        self.cached = Some(Cached {
+            image: frame.image,
+            size: frame.size,
+            pts: frame.pts,
+        });
     }
 
     /// The GPU texture this tick produced and the image whose atlas tile it must be blitted into.
@@ -417,7 +429,9 @@ mod tests {
         let mut s = state();
         s.set_source(MediaSource::Path("synthetic".into())).unwrap();
         s.set_playing(true);
-        let request = FrameRequest { max_size: (320, 180) };
+        let request = FrameRequest {
+            max_size: (320, 180),
+        };
         let start = Instant::now();
         let mut ticks = 0;
         for i in 0..60u32 {
@@ -429,7 +443,10 @@ mod tests {
                 .filter(|e| **e == MediaEvent::TimeUpdate)
                 .count();
         }
-        assert!((3..=6).contains(&ticks), "timeupdate fired {ticks} times in ~1s");
+        assert!(
+            (3..=6).contains(&ticks),
+            "timeupdate fired {ticks} times in ~1s"
+        );
     }
 
     #[test]
@@ -437,7 +454,9 @@ mod tests {
         let mut s = state();
         s.set_source(MediaSource::Path("synthetic".into())).unwrap();
         s.set_playing(true);
-        let request = FrameRequest { max_size: (320, 180) };
+        let request = FrameRequest {
+            max_size: (320, 180),
+        };
         let start = Instant::now();
         let mut produced = 0;
         let mut retired = 0;
@@ -450,7 +469,10 @@ mod tests {
         }
         retired += s.take_all_images().len();
         assert!(produced > 0, "the stub produced no frames at all");
-        assert_eq!(produced, retired, "{produced} frames produced, {retired} released");
+        assert_eq!(
+            produced, retired,
+            "{produced} frames produced, {retired} released"
+        );
     }
 
     #[test]
@@ -458,17 +480,25 @@ mod tests {
         let mut s = state();
         s.set_source(MediaSource::Path("synthetic".into())).unwrap();
         s.set_playing(true);
-        let request = FrameRequest { max_size: (320, 180) };
+        let request = FrameRequest {
+            max_size: (320, 180),
+        };
         let start = Instant::now();
         for i in 0..30u32 {
             s.advance(start + Duration::from_millis(16 * i as u64), &request);
         }
         let left_at = s.current_time();
-        assert!(left_at > 0.0, "the clock did not move, so the test proves nothing");
+        assert!(
+            left_at > 0.0,
+            "the clock did not move, so the test proves nothing"
+        );
         assert!(s.needs_frames());
 
         s.suspend();
-        assert!(!s.needs_frames(), "a parked element must stop asking for frames");
+        assert!(
+            !s.needs_frames(),
+            "a parked element must stop asking for frames"
+        );
         assert!(s.suspended());
 
         s.resume();

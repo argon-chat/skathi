@@ -56,7 +56,15 @@ pub struct TargetKey {
 
 impl TargetKey {
     pub fn new(src: Arc<str>, width: u32, height: u32) -> TargetKey {
-        TargetKey { src, width, height, alpha_only: false, max_fps: None, still: false, once: None }
+        TargetKey {
+            src,
+            width,
+            height,
+            alpha_only: false,
+            max_fps: None,
+            still: false,
+            once: None,
+        }
     }
 
     pub fn is_small(&self) -> bool {
@@ -166,9 +174,9 @@ impl Source {
     }
 
     fn is_large_video(&self) -> bool {
-        self.info
-            .as_ref()
-            .is_some_and(|i| i.kind == Kind::Video && i.width as u64 * i.height as u64 > LARGE_VIDEO_AREA)
+        self.info.as_ref().is_some_and(|i| {
+            i.kind == Kind::Video && i.width as u64 * i.height as u64 > LARGE_VIDEO_AREA
+        })
     }
 }
 
@@ -199,27 +207,50 @@ pub struct Req {
 }
 
 pub enum Job {
-    Load { src: Arc<str>, bytes: Arc<[u8]>, loader: Loader },
-    Draw { src: Arc<str>, engine: Box<dyn Engine>, reqs: Vec<Req> },
+    Load {
+        src: Arc<str>,
+        bytes: Arc<[u8]>,
+        loader: Loader,
+    },
+    Draw {
+        src: Arc<str>,
+        engine: Box<dyn Engine>,
+        reqs: Vec<Req>,
+    },
 }
 
 pub type Drawn = (Req, Result<Vec<u8>, String>, Option<Box<[u8]>>);
 
 pub enum Done {
-    Loaded { src: Arc<str>, result: Result<Box<dyn Engine>, String> },
-    Drawn { src: Arc<str>, engine: Box<dyn Engine>, frames: Vec<Drawn> },
+    Loaded {
+        src: Arc<str>,
+        result: Result<Box<dyn Engine>, String>,
+    },
+    Drawn {
+        src: Arc<str>,
+        engine: Box<dyn Engine>,
+        frames: Vec<Drawn>,
+    },
 }
 
 /// Does a job: loads, or draws (in frame order, which a video decoder needs) and compresses.
 pub fn run(job: Job) -> Done {
     match job {
-        Job::Load { src, bytes, loader } => Done::Loaded { src, result: loader(&bytes) },
-        Job::Draw { src, mut engine, mut reqs } => {
+        Job::Load { src, bytes, loader } => Done::Loaded {
+            src,
+            result: loader(&bytes),
+        },
+        Job::Draw {
+            src,
+            mut engine,
+            mut reqs,
+        } => {
             reqs.sort_by_key(|r| r.frame);
             let frames = reqs
                 .into_iter()
                 .map(|req| {
-                    let drawn = engine.draw(req.frame, req.key.alpha_only, req.key.width, req.key.height);
+                    let drawn =
+                        engine.draw(req.frame, req.key.alpha_only, req.key.width, req.key.height);
                     let packed = match (&drawn, req.cache) {
                         (Ok(px), true) => Some(compress(px)),
                         _ => None,
@@ -227,7 +258,11 @@ pub fn run(job: Job) -> Done {
                     (req, drawn, packed)
                 })
                 .collect();
-            Done::Drawn { src, engine, frames }
+            Done::Drawn {
+                src,
+                engine,
+                frames,
+            }
         }
     }
 }
@@ -280,7 +315,9 @@ impl Core {
         match &s.state {
             State::Pending => SourceStatus::NeedsBytes,
             State::Loading => SourceStatus::Loading,
-            State::Ready => SourceStatus::Ready(s.info.clone().expect("a ready source has its info")),
+            State::Ready => {
+                SourceStatus::Ready(s.info.clone().expect("a ready source has its info"))
+            }
             State::Failed(why) => SourceStatus::Failed(why.clone()),
         }
     }
@@ -291,7 +328,11 @@ impl Core {
             return false;
         }
         s.bytes = Some(bytes);
-        s.state = if s.info.is_some() { State::Ready } else { State::Loading };
+        s.state = if s.info.is_some() {
+            State::Ready
+        } else {
+            State::Loading
+        };
         true
     }
 
@@ -332,7 +373,9 @@ impl Core {
 
     /// `key`'s frame at `now`, promoting the next one when it is due (the bool says one was).
     pub fn frame(&mut self, key: &TargetKey, now: Us) -> (Option<Frame>, bool) {
-        let Some(t) = self.targets.get_mut(key) else { return (None, false) };
+        let Some(t) = self.targets.get_mut(key) else {
+            return (None, false);
+        };
         let due = t.ready.as_ref().is_some_and(|r| r.due <= now);
         // A hidden target keeps the frame it has: the one drawn ahead belongs to a clock that has
         // stopped and would put the target ahead of it when it resumes.
@@ -343,9 +386,11 @@ impl Core {
             t.ready = None;
         }
         let mut frame = t.current.clone();
-        if let (Some(f), Some(clock), Some(timeline)) =
-            (frame.as_mut(), t.clock.as_ref(), self.sources.get(&key.src).and_then(|s| s.timeline.as_ref()))
-        {
+        if let (Some(f), Some(clock), Some(timeline)) = (
+            frame.as_mut(),
+            t.clock.as_ref(),
+            self.sources.get(&key.src).and_then(|s| s.timeline.as_ref()),
+        ) {
             let pace = Pace::new(timeline, key.cap());
             f.ended = clock.elapsed(now) >= pace.duration() && f.slot + 1 == pace.slots();
         }
@@ -387,7 +432,11 @@ impl Core {
             }
             let s = self.sources.get_mut(&src).expect("listed");
             s.busy = true;
-            jobs.push(Job::Load { src: src.clone(), bytes: s.bytes.clone().expect("checked"), loader: self.loader });
+            jobs.push(Job::Load {
+                src: src.clone(),
+                bytes: s.bytes.clone().expect("checked"),
+                loader: self.loader,
+            });
         }
 
         let filling = self.caches.values().filter(|c| !c.is_complete()).count();
@@ -395,21 +444,31 @@ impl Core {
         let mut draws: HashMap<Arc<str>, Vec<Req>> = HashMap::new();
         let keys: Vec<TargetKey> = self.targets.keys().cloned().collect();
         for key in keys {
-            let Some(s) = self.sources.get(&key.src) else { continue };
+            let Some(s) = self.sources.get(&key.src) else {
+                continue;
+            };
             if s.state != State::Ready {
                 continue;
             }
-            let Some(timeline) = s.timeline.clone() else { continue };
+            let Some(timeline) = s.timeline.clone() else {
+                continue;
+            };
             let t = &self.targets[&key];
             if t.drawing {
                 continue;
             }
-            let Some((slot, due)) = next_slot(&key, t, s.clock.as_ref(), &timeline, now) else { continue };
+            let Some((slot, due)) = next_slot(&key, t, s.clock.as_ref(), &timeline, now) else {
+                continue;
+            };
             let pace = Pace::new(&timeline, key.cap());
             let len = key.width as usize * key.height as usize * 4;
             let cacheable = key.cacheable() && !t.no_cache;
             if cacheable {
-                if let Some(px) = self.caches.get_mut(&key).and_then(|c| c.get(slot, len, now)) {
+                if let Some(px) = self
+                    .caches
+                    .get_mut(&key)
+                    .and_then(|c| c.get(slot, len, now))
+                {
                     self.seq += 1;
                     self.from_cache += 1;
                     let frame = Frame {
@@ -435,7 +494,14 @@ impl Core {
                     new_fills += usize::from(room);
                     room
                 });
-            let req = Req { key: key.clone(), slot, slots: pace.slots(), frame: pace.frame(&timeline, slot), due, cache: fill };
+            let req = Req {
+                key: key.clone(),
+                slot,
+                slots: pace.slots(),
+                frame: pace.frame(&timeline, slot),
+                due,
+                cache: fill,
+            };
             self.targets.get_mut(&key).expect("listed").drawing = true;
             draws.entry(key.src.clone()).or_default().push(req);
         }
@@ -452,7 +518,9 @@ impl Core {
         for d in done {
             match d {
                 Done::Loaded { src, result } => {
-                    let Some(s) = self.sources.get_mut(&src) else { continue };
+                    let Some(s) = self.sources.get_mut(&src) else {
+                        continue;
+                    };
                     s.busy = false;
                     match result {
                         Ok(engine) => {
@@ -481,10 +549,16 @@ impl Core {
                         }
                     }
                 }
-                Done::Drawn { src, engine, frames } => {
+                Done::Drawn {
+                    src,
+                    engine,
+                    frames,
+                } => {
                     let mut failed = None;
                     for (req, drawn, packed) in frames {
-                        let Some(t) = self.targets.get_mut(&req.key) else { continue };
+                        let Some(t) = self.targets.get_mut(&req.key) else {
+                            continue;
+                        };
                         t.drawing = false;
                         match drawn {
                             Ok(px) => {
@@ -507,7 +581,9 @@ impl Core {
                         }
                     }
                     let keep = self.needs_engine(&src);
-                    let Some(s) = self.sources.get_mut(&src) else { continue };
+                    let Some(s) = self.sources.get_mut(&src) else {
+                        continue;
+                    };
                     s.busy = false;
                     if let Some(why) = failed {
                         self.failures += 1;
@@ -539,12 +615,30 @@ impl Core {
         let frame_bytes = |f: &Option<Frame>| f.as_ref().map_or(0, |f| f.bytes.len());
         Stats {
             sources: self.sources.len(),
-            file_bytes: self.sources.values().filter_map(|s| s.bytes.as_ref()).map(|b| b.len()).sum(),
-            engines: self.sources.values().filter(|s| s.engine.is_some() || (s.busy && s.state == State::Ready)).count(),
-            engine_bytes: self.sources.values().filter_map(|s| s.engine.as_ref()).map(|e| e.estimated_bytes()).sum(),
+            file_bytes: self
+                .sources
+                .values()
+                .filter_map(|s| s.bytes.as_ref())
+                .map(|b| b.len())
+                .sum(),
+            engines: self
+                .sources
+                .values()
+                .filter(|s| s.engine.is_some() || (s.busy && s.state == State::Ready))
+                .count(),
+            engine_bytes: self
+                .sources
+                .values()
+                .filter_map(|s| s.engine.as_ref())
+                .map(|e| e.estimated_bytes())
+                .sum(),
             targets: self.targets.len(),
             visible_targets: self.targets.values().filter(|t| t.visible).count(),
-            frame_bytes: self.targets.values().map(|t| frame_bytes(&t.current) + frame_bytes(&t.ready)).sum(),
+            frame_bytes: self
+                .targets
+                .values()
+                .map(|t| frame_bytes(&t.current) + frame_bytes(&t.ready))
+                .sum(),
             loops: self.caches.len(),
             loops_complete: self.caches.values().filter(|c| c.is_complete()).count(),
             cache_bytes: self.cache_bytes,
@@ -557,7 +651,8 @@ impl Core {
     }
 
     fn maintain(&mut self, now: Us) {
-        self.targets.retain(|_, t| t.drawing || now.saturating_sub(t.last_demand) <= TARGET_IDLE);
+        self.targets
+            .retain(|_, t| t.drawing || now.saturating_sub(t.last_demand) <= TARGET_IDLE);
         let cached: HashSet<Arc<str>> = self.caches.keys().map(|k| k.src.clone()).collect();
         self.sources.retain(|src, s| {
             if s.busy {
@@ -605,7 +700,9 @@ impl Core {
         if key.still {
             return !t.has_frame();
         }
-        !(key.cacheable() && !t.no_cache && self.caches.get(key).is_some_and(LoopCache::is_complete))
+        !(key.cacheable()
+            && !t.no_cache
+            && self.caches.get(key).is_some_and(LoopCache::is_complete))
     }
 
     fn wants_engine_now(&self, key: &TargetKey, t: &Target) -> bool {
@@ -613,19 +710,27 @@ impl Core {
     }
 
     fn needs_engine(&self, src: &Arc<str>) -> bool {
-        self.targets.iter().any(|(k, t)| &k.src == src && self.target_needs_engine(k, t))
+        self.targets
+            .iter()
+            .any(|(k, t)| &k.src == src && self.target_needs_engine(k, t))
     }
 
     /// Below [`MAX_LARGE_VIDEO`] large video engines, unloading one that is not playing if need be.
     fn make_room_for_large_video(&mut self, active: &HashSet<Arc<str>>) -> bool {
-        let loaded = self.sources.values().filter(|s| s.is_large_video() && (s.engine.is_some() || s.busy)).count();
+        let loaded = self
+            .sources
+            .values()
+            .filter(|s| s.is_large_video() && (s.engine.is_some() || s.busy))
+            .count();
         if loaded < MAX_LARGE_VIDEO {
             return true;
         }
         let victim = self
             .sources
             .iter()
-            .filter(|(src, s)| s.is_large_video() && s.engine.is_some() && !s.busy && !active.contains(*src))
+            .filter(|(src, s)| {
+                s.is_large_video() && s.engine.is_some() && !s.busy && !active.contains(*src)
+            })
             .min_by_key(|(_, s)| s.last_active)
             .map(|(src, _)| src.clone());
         match victim {
@@ -642,14 +747,20 @@ impl Core {
     fn trim_large_videos(&mut self, loaded: &Arc<str>) {
         let active = self.playing();
         loop {
-            let count = self.sources.values().filter(|s| s.is_large_video() && (s.engine.is_some() || s.busy)).count();
+            let count = self
+                .sources
+                .values()
+                .filter(|s| s.is_large_video() && (s.engine.is_some() || s.busy))
+                .count();
             if count <= MAX_LARGE_VIDEO {
                 return;
             }
             let victim = self
                 .sources
                 .iter()
-                .filter(|(src, s)| s.is_large_video() && s.engine.is_some() && !s.busy && !active.contains(*src))
+                .filter(|(src, s)| {
+                    s.is_large_video() && s.engine.is_some() && !s.busy && !active.contains(*src)
+                })
                 .min_by_key(|(src, s)| (*src == loaded, s.last_active))
                 .map(|(src, _)| src.clone());
             match victim {
@@ -660,7 +771,11 @@ impl Core {
     }
 
     fn playing(&self) -> HashSet<Arc<str>> {
-        self.targets.iter().filter(|(k, t)| t.visible && k.shares_clock()).map(|(k, _)| k.src.clone()).collect()
+        self.targets
+            .iter()
+            .filter(|(k, t)| t.visible && k.shares_clock())
+            .map(|(k, _)| k.src.clone())
+            .collect()
     }
 
     /// Keeps a compressed frame of `key`'s loop, evicting the least recently used loops of targets
@@ -689,7 +804,10 @@ impl Core {
             let c = self.caches.remove(&gone).expect("found");
             self.cache_bytes -= c.bytes();
         }
-        let c = self.caches.entry(key.clone()).or_insert_with(|| LoopCache::new(slots, now));
+        let c = self
+            .caches
+            .entry(key.clone())
+            .or_insert_with(|| LoopCache::new(slots, now));
         self.cache_bytes += c.put(slot, packed, now);
     }
 }
@@ -698,7 +816,13 @@ impl Core {
 /// frame gets the one playing now; a hidden target, or one whose clock is stopped, keeps its frame;
 /// a shown one behind its clock catches up, one on time gets the next slot, due at its start on the
 /// present grid; a `once` target stops at its last slot.
-fn next_slot(key: &TargetKey, t: &Target, shared: Option<&Clock>, timeline: &Timeline, now: Us) -> Option<(u32, Us)> {
+fn next_slot(
+    key: &TargetKey,
+    t: &Target,
+    shared: Option<&Clock>,
+    timeline: &Timeline,
+    now: Us,
+) -> Option<(u32, Us)> {
     if t.ready.is_some() {
         return None;
     }
@@ -706,7 +830,11 @@ fn next_slot(key: &TargetKey, t: &Target, shared: Option<&Clock>, timeline: &Tim
         return (!t.has_frame()).then_some((0, now));
     }
     let pace = Pace::new(timeline, key.cap());
-    let clock = if key.once.is_some() { t.clock.as_ref() } else { shared };
+    let clock = if key.once.is_some() {
+        t.clock.as_ref()
+    } else {
+        shared
+    };
     let Some(clock) = clock else {
         return t.current.is_none().then_some((0, now));
     };

@@ -87,7 +87,8 @@ impl VideoBackend for StubBackend {
     fn seek(&mut self, seconds: f64) {
         self.time = seconds.clamp(0.0, self.duration);
         self.ended = false;
-        self.events.extend([MediaEvent::Seeking, MediaEvent::Seeked]);
+        self.events
+            .extend([MediaEvent::Seeking, MediaEvent::Seeked]);
     }
 
     fn set_volume(&mut self, volume: f64) {
@@ -113,7 +114,11 @@ impl VideoBackend for StubBackend {
         self.time
     }
     fn duration(&self) -> f64 {
-        if self.loaded { self.duration } else { f64::NAN }
+        if self.loaded {
+            self.duration
+        } else {
+            f64::NAN
+        }
     }
     fn paused(&self) -> bool {
         self.paused
@@ -125,16 +130,28 @@ impl VideoBackend for StubBackend {
         false
     }
     fn ready_state(&self) -> ReadyState {
-        if self.loaded { ReadyState::HaveEnoughData } else { ReadyState::HaveNothing }
+        if self.loaded {
+            ReadyState::HaveEnoughData
+        } else {
+            ReadyState::HaveNothing
+        }
     }
     fn network_state(&self) -> NetworkState {
-        if self.loaded { NetworkState::Idle } else { NetworkState::Empty }
+        if self.loaded {
+            NetworkState::Idle
+        } else {
+            NetworkState::Empty
+        }
     }
     fn native_size(&self) -> Option<(u32, u32)> {
         self.loaded.then_some(self.native)
     }
     fn buffered(&self) -> Vec<(f64, f64)> {
-        if self.loaded { vec![(0.0, self.duration)] } else { Vec::new() }
+        if self.loaded {
+            vec![(0.0, self.duration)]
+        } else {
+            Vec::new()
+        }
     }
     fn seekable(&self) -> Vec<(f64, f64)> {
         self.buffered()
@@ -173,7 +190,11 @@ impl VideoBackend for StubBackend {
         if w == 0 || h == 0 {
             return None;
         }
-        let progress = if self.duration > 0.0 { self.time / self.duration } else { 0.0 };
+        let progress = if self.duration > 0.0 {
+            self.time / self.duration
+        } else {
+            0.0
+        };
         let bar = (progress * w as f64) as u32;
         let mut buf = vec![0u8; (w * h * 4) as usize];
         for y in 0..h {

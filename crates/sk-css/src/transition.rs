@@ -167,7 +167,9 @@ impl Easing {
             Easing::EaseIn => cubic_bezier(0.42, 0.0, 1.0, 1.0, t),
             Easing::EaseOut => cubic_bezier(0.0, 0.0, 0.58, 1.0, t),
             Easing::EaseInOut => cubic_bezier(0.42, 0.0, 0.58, 1.0, t),
-            Easing::CubicBezier(x1, y1, x2, y2) => cubic_bezier(x1 as f64, y1 as f64, x2 as f64, y2 as f64, t),
+            Easing::CubicBezier(x1, y1, x2, y2) => {
+                cubic_bezier(x1 as f64, y1 as f64, x2 as f64, y2 as f64, t)
+            }
             Easing::Steps(count, position) => steps(count, position, t),
         }
     }
@@ -538,16 +540,14 @@ fn expand(id: &PropertyId) -> Expansion {
 pub(crate) fn animates(name: &str) -> bool {
     match expand(&PropertyId::from(name)) {
         Expansion::None => false,
-        Expansion::Props(list) => list
-            .iter()
-            .any(|p| {
-                !matches!(
-                    p,
-                    TransitionProperty::All
-                        | TransitionProperty::Other(_)
-                        | TransitionProperty::Shading
-                )
-            }),
+        Expansion::Props(list) => list.iter().any(|p| {
+            !matches!(
+                p,
+                TransitionProperty::All
+                    | TransitionProperty::Other(_)
+                    | TransitionProperty::Shading
+            )
+        }),
     }
 }
 
@@ -860,7 +860,11 @@ mod tests {
         let step = Easing::Steps(10, StepPosition::JumpEnd);
         assert_eq!(step.eval_f64(0.3 - 1e-12), 0.2);
         assert_eq!(step.eval_f64(0.3), 0.3);
-        assert!((Easing::Ease.eval_f64(0.5) - Easing::CubicBezier(0.25, 0.1, 0.25, 1.0).eval_f64(0.5)).abs() < 1e-8);
+        assert!(
+            (Easing::Ease.eval_f64(0.5) - Easing::CubicBezier(0.25, 0.1, 0.25, 1.0).eval_f64(0.5))
+                .abs()
+                < 1e-8
+        );
     }
 
     #[test]

@@ -12,15 +12,20 @@ use lightningcss::properties::align::{ContentPosition, SelfPosition};
 use lightningcss::properties::border::LineStyle;
 use lightningcss::properties::display::{DisplayInside, DisplayKeyword};
 use lightningcss::properties::flex::FlexDirection as CssFlexDirection;
-use lightningcss::properties::font::{AbsoluteFontWeight, FontFamily as CssFontFamily, FontWeight as CssFontWeight, LineHeight as CssLineHeight};
+use lightningcss::properties::font::{
+    AbsoluteFontWeight, FontFamily as CssFontFamily, FontWeight as CssFontWeight,
+    LineHeight as CssLineHeight,
+};
+use lightningcss::properties::masking::ClipPath as CssClipPath;
 use lightningcss::properties::overflow::OverflowKeyword;
 use lightningcss::properties::size::Size as CssSize;
 use lightningcss::properties::text::TextAlign as CssTextAlign;
 use lightningcss::properties::{Property, PropertyId};
 use lightningcss::stylesheet::{ParserOptions, PrinterOptions};
-use lightningcss::properties::masking::ClipPath as CssClipPath;
 use lightningcss::values::color::CssColor;
-use lightningcss::values::length::{Length as CssLength, LengthPercentage, LengthPercentageOrAuto, LengthValue};
+use lightningcss::values::length::{
+    Length as CssLength, LengthPercentage, LengthPercentageOrAuto, LengthValue,
+};
 use lightningcss::values::percentage::DimensionPercentage;
 
 use crate::keyframes::{AnimationCollector, AnimationPatch, AnimationSpec};
@@ -262,7 +267,10 @@ pub enum WhiteSpaceMode {
 
 impl WhiteSpaceMode {
     pub fn collapses_spaces(self) -> bool {
-        matches!(self, WhiteSpaceMode::Normal | WhiteSpaceMode::Nowrap | WhiteSpaceMode::PreLine)
+        matches!(
+            self,
+            WhiteSpaceMode::Normal | WhiteSpaceMode::Nowrap | WhiteSpaceMode::PreLine
+        )
     }
 
     pub fn preserves_newlines(self) -> bool {
@@ -374,7 +382,8 @@ impl DecorationPatch {
                 }
             }
         }
-        if let (Some(strikethrough), Some(Some(color))) = (text.strikethrough.as_mut(), self.color) {
+        if let (Some(strikethrough), Some(Some(color))) = (text.strikethrough.as_mut(), self.color)
+        {
             if !cancelled(strikethrough.thickness, strikethrough.color) {
                 strikethrough.color = Some(color);
             }
@@ -410,7 +419,11 @@ impl OutlinePatch {
         }
     }
 
-    pub(crate) fn merge_over(&self, earlier: Option<gpui::Outline>, slot: &mut Option<gpui::Outline>) {
+    pub(crate) fn merge_over(
+        &self,
+        earlier: Option<gpui::Outline>,
+        slot: &mut Option<gpui::Outline>,
+    ) {
         let Some(mut ring) = earlier else { return };
         if *self == Self::default() {
             return;
@@ -602,8 +615,8 @@ impl Extras {
         if other.mask_composite.is_some() {
             self.mask_composite = other.mask_composite;
         }
-        self.current_color.0 = (self.current_color.0 & !other.current_color_overrides.0)
-            | other.current_color.0;
+        self.current_color.0 =
+            (self.current_color.0 & !other.current_color_overrides.0) | other.current_color.0;
         self.current_color_overrides.0 |= other.current_color_overrides.0;
         self.radius_inherit.refine(&other.radius_inherit);
     }
@@ -618,8 +631,10 @@ impl Extras {
         let Some(images) = self.background_images.as_ref() else {
             return Vec::new();
         };
-        let mut out: Vec<gpui::Background> =
-            images.iter().map(|layer| self.tiled_gradient(layer)).collect();
+        let mut out: Vec<gpui::Background> = images
+            .iter()
+            .map(|layer| self.tiled_gradient(layer))
+            .collect();
         out.reverse();
         out
     }
@@ -628,7 +643,10 @@ impl Extras {
         let urls = self.background_urls.as_ref().filter(|u| !u.is_empty())?;
         let mut stack: Vec<(u16, PaintLayer)> = Vec::new();
         for layer in self.background_images.iter().flat_map(|l| l.iter()) {
-            stack.push((layer.index, PaintLayer::Gradient(self.tiled_gradient(layer))));
+            stack.push((
+                layer.index,
+                PaintLayer::Gradient(self.tiled_gradient(layer)),
+            ));
         }
         for u in urls.iter() {
             let i = u.index as usize;
@@ -733,7 +751,8 @@ fn apply_static<'i>(
     use lightningcss::traits::IntoOwned as _;
     let ((), relative) = noting_font_units(|| apply(p, r, x, diagnostics));
     if relative || font.is_some() {
-        font.get_or_insert_with(Vec::new).push(p.clone().into_owned());
+        font.get_or_insert_with(Vec::new)
+            .push(p.clone().into_owned());
     }
 }
 
@@ -753,10 +772,7 @@ fn value_text(p: &Property) -> Option<String> {
 
 /// Insets do not inherit, so both keywords mean `auto`, including the logical spellings under this
 /// engine's horizontal-tb/ltr model.
-fn initial_inset_sides(
-    name: &str,
-    value: &lightningcss::properties::custom::TokenList<'_>,
-) -> u8 {
+fn initial_inset_sides(name: &str, value: &lightningcss::properties::custom::TokenList<'_>) -> u8 {
     if !single_ident_is(value, "initial") && !single_ident_is(value, "unset") {
         return 0;
     }
@@ -774,7 +790,10 @@ fn initial_inset_sides(
 
 pub(crate) fn decl_pairs(block: &DeclarationBlock) -> Vec<(String, String, bool)> {
     let mut out = Vec::new();
-    for (props, important) in [(&block.declarations, false), (&block.important_declarations, true)] {
+    for (props, important) in [
+        (&block.declarations, false),
+        (&block.important_declarations, true),
+    ] {
         for p in props.iter() {
             let Some(css) = p.to_css_string(false, PrinterOptions::default()).ok() else {
                 continue;
@@ -796,8 +815,12 @@ fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
     use lightningcss::properties::custom::CustomPropertyName;
     match p {
         Property::Custom(c) => match &c.name {
-            CustomPropertyName::Custom(name) if name.0.as_ref() == effect::SHADING => Channel::Static,
-            CustomPropertyName::Custom(name) if name.0.as_ref() == WINDOW_CONTROL => Channel::Static,
+            CustomPropertyName::Custom(name) if name.0.as_ref() == effect::SHADING => {
+                Channel::Static
+            }
+            CustomPropertyName::Custom(name) if name.0.as_ref() == WINDOW_CONTROL => {
+                Channel::Static
+            }
             CustomPropertyName::Custom(name) => match value_text(p) {
                 Some(v) => Channel::Custom(name.0.as_ref().to_string(), v),
                 None => {
@@ -949,17 +972,17 @@ pub(crate) fn apply_dynamic(
             return;
         }
     };
-    let property = match Property::parse_string(PropertyId::from(name), &value, ParserOptions::default())
-    {
-        Ok(p) => p,
-        Err(_) => {
-            once(
-                diagnostics,
-                format!("`{name}: {value}` did not parse after var() substitution (v1)"),
-            );
-            return;
-        }
-    };
+    let property =
+        match Property::parse_string(PropertyId::from(name), &value, ParserOptions::default()) {
+            Ok(p) => p,
+            Err(_) => {
+                once(
+                    diagnostics,
+                    format!("`{name}: {value}` did not parse after var() substitution (v1)"),
+                );
+                return;
+            }
+        };
     // A `transition` is folded into its own list at sheet-compile time and the list is per rule,
     // not per element — so a var()-composed one has nowhere to land.
     if matches!(
@@ -1020,7 +1043,9 @@ pub struct InlineMotion {
     pub(crate) animations: Option<AnimationPatch>,
 }
 impl InlineMotion {
-    fn is_empty(&self) -> bool { self.transitions.is_none() && self.animations.is_none() }
+    fn is_empty(&self) -> bool {
+        self.transitions.is_none() && self.animations.is_none()
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1080,14 +1105,20 @@ pub fn accepts_declaration(name: &str, value: &str) -> bool {
     if block.len() != 1 {
         return false;
     }
-    let p = block.declarations.iter().chain(block.important_declarations.iter()).next();
+    let p = block
+        .declarations
+        .iter()
+        .chain(block.important_declarations.iter())
+        .next();
     if p.is_some_and(crate::prefix::property_dropped) {
         return false;
     }
     if let Some(Property::Unparsed(u)) = p {
         return has_substitution(&u.value)
             || matches!(
-                single_ident_raw(&u.value).map(str::to_ascii_lowercase).as_deref(),
+                single_ident_raw(&u.value)
+                    .map(str::to_ascii_lowercase)
+                    .as_deref(),
                 Some("inherit" | "initial" | "unset" | "revert" | "revert-layer")
             );
     }
@@ -1118,50 +1149,90 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
     let parsed = DeclarationBlock::parse_string(body, options);
     if let Ok(skipped) = warnings.read() {
         for e in skipped.iter() {
-            diagnostics.push(format!("inline style: {e} in {body:?} — skipped, as a browser skips it"));
+            diagnostics.push(format!(
+                "inline style: {e} in {body:?} — skipped, as a browser skips it"
+            ));
         }
     }
     match parsed {
         Ok(block) => {
-            for (important, declarations) in [(false, &block.declarations), (true, &block.important_declarations)] {
-            let transitions = if important { &mut important_transitions } else { &mut normal_transitions };
-            let animations = if important { &mut important_animations } else { &mut normal_animations };
-            for p in declarations {
-                if crate::prefix::property_dropped(p) {
-                    continue;
-                }
-                match channel(p, diagnostics) {
-                    Channel::Custom(name, value) => custom.push((name, value)),
-                    Channel::Dynamic(name, value) => dynamic.push((name, value)),
-                    Channel::Static => {
-                        if transitions.take(p, diagnostics) {
-                            continue;
+            for (important, declarations) in [
+                (false, &block.declarations),
+                (true, &block.important_declarations),
+            ] {
+                let transitions = if important {
+                    &mut important_transitions
+                } else {
+                    &mut normal_transitions
+                };
+                let animations = if important {
+                    &mut important_animations
+                } else {
+                    &mut normal_animations
+                };
+                for p in declarations {
+                    if crate::prefix::property_dropped(p) {
+                        continue;
+                    }
+                    match channel(p, diagnostics) {
+                        Channel::Custom(name, value) => custom.push((name, value)),
+                        Channel::Dynamic(name, value) => dynamic.push((name, value)),
+                        Channel::Static => {
+                            if transitions.take(p, diagnostics) {
+                                continue;
+                            }
+                            if animations.take(p, diagnostics) {
+                                continue;
+                            }
+                            apply_static(p, &mut r, &mut extras, &mut font, diagnostics);
+                            styled = true;
                         }
-                        if animations.take(p, diagnostics) {
-                            continue;
-                        }
-                        apply_static(p, &mut r, &mut extras, &mut font, diagnostics);
-                        styled = true;
                     }
                 }
             }
-            }
-            if !custom.is_empty() || !dynamic.is_empty() || !block.important_declarations.is_empty() {
+            if !custom.is_empty() || !dynamic.is_empty() || !block.important_declarations.is_empty()
+            {
                 let converted = convert_block(&block);
                 let half = |important| InlinePriority {
-                    refinement: if important { converted.important.clone() } else { converted.normal.clone() },
-                    extras: if important { converted.important_extras.clone() } else { converted.normal_extras.clone() },
-                    custom: if important { converted.important_custom.clone() } else { converted.normal_custom.clone() },
-                    dynamic: if important { converted.important_dynamic.clone() } else { converted.normal_dynamic.clone() },
-                    font: if important { converted.important_font.clone() } else { converted.normal_font.clone() },
+                    refinement: if important {
+                        converted.important.clone()
+                    } else {
+                        converted.normal.clone()
+                    },
+                    extras: if important {
+                        converted.important_extras.clone()
+                    } else {
+                        converted.normal_extras.clone()
+                    },
+                    custom: if important {
+                        converted.important_custom.clone()
+                    } else {
+                        converted.normal_custom.clone()
+                    },
+                    dynamic: if important {
+                        converted.important_dynamic.clone()
+                    } else {
+                        converted.normal_dynamic.clone()
+                    },
+                    font: if important {
+                        converted.important_font.clone()
+                    } else {
+                        converted.normal_font.clone()
+                    },
                 };
                 priority = Some(Rc::new([half(false), half(true)]));
             }
         }
         Err(e) => diagnostics.push(format!("inline style parse error: {e} in {body:?}")),
     }
-    let normal_motion = InlineMotion { transitions: normal_transitions.declarations(), animations: normal_animations.clone().finish().1 };
-    let important_motion = InlineMotion { transitions: important_transitions.declarations(), animations: important_animations.clone().finish().1 };
+    let normal_motion = InlineMotion {
+        transitions: normal_transitions.declarations(),
+        animations: normal_animations.clone().finish().1,
+    };
+    let important_motion = InlineMotion {
+        transitions: important_transitions.declarations(),
+        animations: important_animations.clone().finish().1,
+    };
     normal_transitions.merge(&important_transitions);
     normal_animations.merge(&important_animations);
     let (animation_list, animation_patch) = normal_animations.finish();
@@ -1227,8 +1298,12 @@ fn waiting_web_font(families: &[CssFontFamily]) -> Option<Rc<[String]>> {
         }
         let mut out = Vec::new();
         for f in families {
-            let CssFontFamily::FamilyName(name) = f else { break };
-            let Ok(css) = name.to_css_string(Default::default()) else { continue };
+            let CssFontFamily::FamilyName(name) = f else {
+                break;
+            };
+            let Ok(css) = name.to_css_string(Default::default()) else {
+                continue;
+            };
             let clean = css.trim_matches('"');
             if w.contains(&clean.to_lowercase()) {
                 out.push(clean.to_string());
@@ -1279,7 +1354,13 @@ fn generic_family(g: &lightningcss::properties::font::GenericFontFamily) -> Opti
         G::SystemUI => return Some(".SystemUIFont".into()),
         G::SansSerif => &["Arial", "Helvetica", "Liberation Sans"],
         G::Serif => &["Times New Roman", "Times", "Liberation Serif"],
-        G::Monospace => &["Consolas", "Menlo", "DejaVu Sans Mono", "Liberation Mono", "Courier New"],
+        G::Monospace => &[
+            "Consolas",
+            "Menlo",
+            "DejaVu Sans Mono",
+            "Liberation Mono",
+            "Courier New",
+        ],
         G::Cursive => &["Comic Sans MS"],
         G::Fantasy => &["Impact"],
         _ => return None,
@@ -1300,7 +1381,9 @@ fn first_available_family(families: &[CssFontFamily]) -> Option<String> {
     for (i, f) in families.iter().enumerate() {
         let found = match f {
             CssFontFamily::FamilyName(name) => {
-                let Ok(css) = name.to_css_string(Default::default()) else { continue };
+                let Ok(css) = name.to_css_string(Default::default()) else {
+                    continue;
+                };
                 let clean = css.trim_matches('"').to_string();
                 if font_installed(&clean) == Some(false) {
                     if i == 0 {
@@ -1333,7 +1416,10 @@ thread_local! {
 }
 
 pub fn set_composed_font_families(families: impl IntoIterator<Item = (String, bool)>) {
-    let list = families.into_iter().map(|(f, latin)| (f.to_lowercase(), latin)).collect();
+    let list = families
+        .into_iter()
+        .map(|(f, latin)| (f.to_lowercase(), latin))
+        .collect();
     COMPOSED_FONTS.with(|c| *c.borrow_mut() = list);
 }
 
@@ -1351,7 +1437,9 @@ fn composed_font_stack(families: &[CssFontFamily]) -> Option<(String, gpui::Font
     for f in families {
         let (name, generic) = match f {
             CssFontFamily::FamilyName(name) => {
-                let Ok(css) = name.to_css_string(Default::default()) else { continue };
+                let Ok(css) = name.to_css_string(Default::default()) else {
+                    continue;
+                };
                 (css.trim_matches('"').to_string(), false)
             }
             CssFontFamily::Generic(g) => match generic_family(g) {
@@ -1359,7 +1447,10 @@ fn composed_font_stack(families: &[CssFontFamily]) -> Option<(String, gpui::Font
                 None => continue,
             },
         };
-        let latin = composed.iter().find(|(c, _)| c.eq_ignore_ascii_case(&name)).map(|c| c.1);
+        let latin = composed
+            .iter()
+            .find(|(c, _)| c.eq_ignore_ascii_case(&name))
+            .map(|c| c.1);
         if latin.is_none() && !generic && font_installed(&name) == Some(false) {
             continue;
         }
@@ -1467,9 +1558,13 @@ fn viewport_value_px(v: &LengthValue) -> Option<f32> {
         | LengthValue::Svb(p)
         | LengthValue::Lvb(p)
         | LengthValue::Dvb(p) => p / 100.0 * h,
-        LengthValue::Vmin(p) | LengthValue::Svmin(p) | LengthValue::Lvmin(p)
+        LengthValue::Vmin(p)
+        | LengthValue::Svmin(p)
+        | LengthValue::Lvmin(p)
         | LengthValue::Dvmin(p) => p / 100.0 * w.min(h),
-        LengthValue::Vmax(p) | LengthValue::Svmax(p) | LengthValue::Lvmax(p)
+        LengthValue::Vmax(p)
+        | LengthValue::Svmax(p)
+        | LengthValue::Lvmax(p)
         | LengthValue::Dvmax(p) => p / 100.0 * w.max(h),
         _ => return None,
     };
@@ -1519,7 +1614,9 @@ thread_local! {
 
 /// Installs the host's font metrics. Replacing the source invalidates cached folds, so a style
 /// computed before host setup cannot retain fallback widths.
-pub fn set_font_metric_source(source: impl Fn(&gpui::Font, f32) -> Option<FontRelativeMetrics> + 'static) {
+pub fn set_font_metric_source(
+    source: impl Fn(&gpui::Font, f32) -> Option<FontRelativeMetrics> + 'static,
+) {
     FONT_METRIC_SOURCE.with(|slot| *slot.borrow_mut() = Some(Box::new(source)));
     FONT_METRIC_GENERATION.with(|generation| generation.set(generation.get().wrapping_add(1)));
 }
@@ -1542,10 +1639,22 @@ pub(crate) fn with_font_face<R>(font: &gpui::Font, f: impl FnOnce() -> R) -> R {
 fn character_basis(x_height: bool) -> f32 {
     let size = em_basis();
     let font = FONT_FACE.with(|slot| slot.borrow().clone());
-    font.and_then(|font| FONT_METRIC_SOURCE.with(|slot| slot.borrow().as_ref().and_then(|source| source(&font, size))))
-        .map(|metrics| if x_height { metrics.x_height } else { metrics.zero_advance })
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or(HALF_EM * size)
+    font.and_then(|font| {
+        FONT_METRIC_SOURCE.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .and_then(|source| source(&font, size))
+        })
+    })
+    .map(|metrics| {
+        if x_height {
+            metrics.x_height
+        } else {
+            metrics.zero_advance
+        }
+    })
+    .filter(|value| value.is_finite() && *value > 0.0)
+    .unwrap_or(HALF_EM * size)
 }
 
 fn font_unit_px(unit: &str, value: f32) -> Option<f32> {
@@ -1632,11 +1741,17 @@ fn absolute_font_size_px(k: &lightningcss::properties::font::AbsoluteFontSize) -
 
 /// Resolves a linear `calc()` to px; needed for shadcn's radius scale (`calc(var(--radius) -
 /// 2px)`). A non-finite result is unresolved (`calc(100px / 0)`).
-fn calc_px<V>(calc: &lightningcss::values::calc::Calc<V>, leaf: &dyn Fn(&V) -> Option<f32>) -> Option<f32> {
+fn calc_px<V>(
+    calc: &lightningcss::values::calc::Calc<V>,
+    leaf: &dyn Fn(&V) -> Option<f32>,
+) -> Option<f32> {
     calc_term(calc, leaf).filter(|px| px.is_finite())
 }
 
-fn calc_term<V>(calc: &lightningcss::values::calc::Calc<V>, leaf: &dyn Fn(&V) -> Option<f32>) -> Option<f32> {
+fn calc_term<V>(
+    calc: &lightningcss::values::calc::Calc<V>,
+    leaf: &dyn Fn(&V) -> Option<f32>,
+) -> Option<f32> {
     use lightningcss::values::calc::{Calc, MathFunction};
     match calc {
         Calc::Value(v) => leaf(v),
@@ -1654,9 +1769,11 @@ fn calc_term<V>(calc: &lightningcss::values::calc::Calc<V>, leaf: &dyn Fn(&V) ->
                 .map(|c| calc_term(c, leaf))
                 .try_fold(f32::NEG_INFINITY, |acc, v| Some(acc.max(v?))),
             // `f32::clamp` panics on that, and on a NaN bound.
-            MathFunction::Clamp(lo, v, hi) => {
-                Some(calc_term(v, leaf)?.min(calc_term(hi, leaf)?).max(calc_term(lo, leaf)?))
-            }
+            MathFunction::Clamp(lo, v, hi) => Some(
+                calc_term(v, leaf)?
+                    .min(calc_term(hi, leaf)?)
+                    .max(calc_term(lo, leaf)?),
+            ),
             MathFunction::Abs(v) => Some(calc_term(v, leaf)?.abs()),
             MathFunction::Sign(v) => Some(calc_term(v, leaf)?.signum()),
             _ => None,
@@ -1748,9 +1865,10 @@ fn lp_definite(lp: &LengthPercentage) -> Option<DefiniteLength> {
             Some(p) => Some(px(p).into()),
             None => match calc_linear(c) {
                 Some((fraction, pixels)) if fraction == 0.0 => Some(px(pixels).into()),
-                Some((fraction, pixels)) => {
-                    Some(DefiniteLength::Calc { fraction, pixels: px(pixels) })
-                }
+                Some((fraction, pixels)) => Some(DefiniteLength::Calc {
+                    fraction,
+                    pixels: px(pixels),
+                }),
                 None => {
                     calc_dropped();
                     None
@@ -1856,7 +1974,9 @@ fn grid_template(v: &lightningcss::properties::grid::TrackSizing) -> Option<gpui
         return None;
     }
     let min_size = match min {
-        TrackBreadth::Length(DimensionPercentage::Dimension(l)) if length_value_px(l) == Some(0.0) => {
+        TrackBreadth::Length(DimensionPercentage::Dimension(l))
+            if length_value_px(l) == Some(0.0) =>
+        {
             gpui::GridTemplateMinSize::Zero
         }
         TrackBreadth::MinContent => gpui::GridTemplateMinSize::MinContent,
@@ -1872,8 +1992,8 @@ fn grid_template(v: &lightningcss::properties::grid::TrackSizing) -> Option<gpui
 /// `None` is a breadth gpui cannot express; the caller drops the whole list, since a
 /// half-understood track list lays out worse than none.
 fn track_breadth(b: &lightningcss::properties::grid::TrackBreadth) -> Option<gpui::GridTrackSize> {
-    use lightningcss::properties::grid::TrackBreadth as B;
     use gpui::GridTrackSize as G;
+    use lightningcss::properties::grid::TrackBreadth as B;
     Some(match b {
         B::Auto => G::Auto,
         B::MinContent => G::MinContent,
@@ -1901,7 +2021,11 @@ fn track_size(s: &lightningcss::properties::grid::TrackSize) -> Option<gpui::Gri
 
 /// Written with every list: a refinement cannot unset a field, so an earlier rule's auto-repeat
 /// would otherwise outlive a later plain list.
-const NO_AUTO_REPEAT: gpui::GridAutoRepeat = gpui::GridAutoRepeat { fit: false, start: 0, len: 0 };
+const NO_AUTO_REPEAT: gpui::GridAutoRepeat = gpui::GridAutoRepeat {
+    fit: false,
+    start: 0,
+    len: 0,
+};
 
 fn grid_tracks(
     v: &lightningcss::properties::grid::TrackSizing,
@@ -1916,8 +2040,11 @@ fn grid_tracks(
         match item {
             TrackListItem::TrackSize(s) => out.push(track_size(s)?),
             TrackListItem::TrackRepeat(rep) => {
-                let one: Vec<gpui::GridTrack> =
-                    rep.track_sizes.iter().map(track_size).collect::<Option<_>>()?;
+                let one: Vec<gpui::GridTrack> = rep
+                    .track_sizes
+                    .iter()
+                    .map(track_size)
+                    .collect::<Option<_>>()?;
                 let fit = match rep.count {
                     RepeatCount::Number(count) => {
                         if count < 0 || count > 1024 {
@@ -2030,7 +2157,11 @@ impl ListMarker {
                     n -= value;
                 }
             }
-            if upper { out.to_uppercase() } else { out }
+            if upper {
+                out.to_uppercase()
+            } else {
+                out
+            }
         }
         match self {
             ListMarker::None => None,
@@ -2253,9 +2384,7 @@ fn stop_position_angle(
 ) -> Option<StopPosition> {
     match v {
         DimensionPercentage::Percentage(p) => Some(StopPosition::Fraction(p.0)),
-        DimensionPercentage::Dimension(a) => {
-            Some(StopPosition::Fraction(a.to_degrees() / 360.0))
-        }
+        DimensionPercentage::Dimension(a) => Some(StopPosition::Fraction(a.to_degrees() / 360.0)),
         DimensionPercentage::Calc(_) => {
             calc_dropped();
             None
@@ -2436,7 +2565,9 @@ fn mask_clips<'a>(
     use lightningcss::properties::masking::{GeometryBox as B, MaskClip as C};
     let clips: Vec<_> = clips.collect();
     match clips.as_slice() {
-        [C::GeometryBox(B::ContentBox), C::GeometryBox(B::BorderBox)] => MaskClips::ContentThenBorder,
+        [C::GeometryBox(B::ContentBox), C::GeometryBox(B::BorderBox)] => {
+            MaskClips::ContentThenBorder
+        }
         _ => MaskClips::Other,
     }
 }
@@ -2613,9 +2744,13 @@ fn gradient_layer(
     img: &lightningcss::values::image::Image<'_>,
     diagnostics: &mut Vec<String>,
 ) -> Option<(Vec<gpui::Background>, Hsla)> {
-    use lightningcss::values::gradient::{Circle, Ellipse, EndingShape, Gradient, LineDirection, ShapeExtent};
+    use lightningcss::values::gradient::{
+        Circle, Ellipse, EndingShape, Gradient, LineDirection, ShapeExtent,
+    };
     use lightningcss::values::image::Image;
-    use lightningcss::values::position::{HorizontalPositionKeyword as H, VerticalPositionKeyword as V};
+    use lightningcss::values::position::{
+        HorizontalPositionKeyword as H, VerticalPositionKeyword as V,
+    };
 
     let gradient = match img {
         Image::Gradient(g) => g.as_ref(),
@@ -2645,17 +2780,19 @@ fn gradient_layer(
             let background = match angle {
                 Some(angle) => gpui::linear_gradient_stops(angle, &[]),
                 None => {
-                    let LineDirection::Corner { horizontal, vertical } = &l.direction else {
+                    let LineDirection::Corner {
+                        horizontal,
+                        vertical,
+                    } = &l.direction
+                    else {
                         unreachable!("only a corner direction leaves the angle unresolved")
                     };
-                    gpui::linear_gradient_stops(0.0, &[]).to_corner(
-                        match (horizontal, vertical) {
-                            (H::Right, V::Top) => 0,
-                            (H::Right, V::Bottom) => 1,
-                            (H::Left, V::Bottom) => 2,
-                            (H::Left, V::Top) => 3,
-                        },
-                    )
+                    gpui::linear_gradient_stops(0.0, &[]).to_corner(match (horizontal, vertical) {
+                        (H::Right, V::Top) => 0,
+                        (H::Right, V::Bottom) => 1,
+                        (H::Left, V::Bottom) => 2,
+                        (H::Left, V::Top) => 3,
+                    })
                 }
             };
             (background, stops)
@@ -2681,9 +2818,7 @@ fn gradient_layer(
                     let axis = |v: &LengthPercentage| match v {
                         DimensionPercentage::Percentage(p) => Some((p.0, false)),
                         DimensionPercentage::Dimension(d) => length_value_px(d).map(|v| (v, true)),
-                        DimensionPercentage::Calc(c) => {
-                            lp_calc_px(c).map(|v| (v, true))
-                        }
+                        DimensionPercentage::Calc(c) => lp_calc_px(c).map(|v| (v, true)),
                     };
                     match (axis(x), axis(y)) {
                         // Both axes have to agree on the unit, because one flag covers the pair.
@@ -2754,20 +2889,30 @@ pub(crate) fn apply_current_color(
     targets: CurrentColorTargets,
     color: Hsla,
 ) {
-    let sides = [r.vn_border_colors.top, r.vn_border_colors.right,
-        r.vn_border_colors.bottom, r.vn_border_colors.left];
+    let sides = [
+        r.vn_border_colors.top,
+        r.vn_border_colors.right,
+        r.vn_border_colors.bottom,
+        r.vn_border_colors.left,
+    ];
     if sides.iter().all(|side| *side == Some(None))
-        || (targets.has(CurrentColorTargets::BORDER) && r.border_color.is_none()
+        || (targets.has(CurrentColorTargets::BORDER)
+            && r.border_color.is_none()
             && sides.iter().all(Option::is_none))
     {
         r.border_color = Some(color);
     }
     // A currentColor placeholder belongs to this refinement, not every state that contributed to
     // Extras.
-    for slot in [&mut r.vn_border_colors.top, &mut r.vn_border_colors.right,
-        &mut r.vn_border_colors.bottom, &mut r.vn_border_colors.left]
-    {
-        if *slot == Some(None) { *slot = Some(Some(color)); }
+    for slot in [
+        &mut r.vn_border_colors.top,
+        &mut r.vn_border_colors.right,
+        &mut r.vn_border_colors.bottom,
+        &mut r.vn_border_colors.left,
+    ] {
+        if *slot == Some(None) {
+            *slot = Some(Some(color));
+        }
     }
     if targets.has(CurrentColorTargets::OUTLINE) {
         if let Some(outline) = r.vn_outline.as_mut() {
@@ -2780,34 +2925,79 @@ pub(crate) fn apply_current_color(
 }
 
 pub(crate) fn border_needs_current_color(r: &StyleRefinement) -> bool {
-    [r.vn_border_colors.top, r.vn_border_colors.right,
-        r.vn_border_colors.bottom, r.vn_border_colors.left].contains(&Some(None))
+    [
+        r.vn_border_colors.top,
+        r.vn_border_colors.right,
+        r.vn_border_colors.bottom,
+        r.vn_border_colors.left,
+    ]
+    .contains(&Some(None))
 }
 
 fn border_side_color(
-    slot: &mut Option<Option<Hsla>>, bit: u16, value: &CssColor,
-    extras: &mut Extras, diagnostics: &mut Vec<String>,
+    slot: &mut Option<Option<Hsla>>,
+    bit: u16,
+    value: &CssColor,
+    extras: &mut Extras,
+    diagnostics: &mut Vec<String>,
 ) {
     let resolved = match value {
         CssColor::CurrentColor => None,
         value => match color(value) {
             Some(color) => Some(color),
-            None => { unresolved_color(diagnostics, "border-color"); return; }
+            None => {
+                unresolved_color(diagnostics, "border-color");
+                return;
+            }
         },
     };
     *slot = Some(resolved);
     extras.current_color_overrides.0 |= bit | CurrentColorTargets::BORDER;
     extras.current_color.0 &= !(bit | CurrentColorTargets::BORDER);
-    if matches!(value, CssColor::CurrentColor) { extras.current_color.0 |= bit; }
+    if matches!(value, CssColor::CurrentColor) {
+        extras.current_color.0 |= bit;
+    }
 }
 
-fn all_border_colors(r: &mut StyleRefinement, x: &mut Extras, colors: [&CssColor; 4], diagnostics: &mut Vec<String>) {
-    border_side_color(&mut r.vn_border_colors.top, CurrentColorTargets::BORDER_TOP, colors[0], x, diagnostics);
-    border_side_color(&mut r.vn_border_colors.right, CurrentColorTargets::BORDER_RIGHT, colors[1], x, diagnostics);
-    border_side_color(&mut r.vn_border_colors.bottom, CurrentColorTargets::BORDER_BOTTOM, colors[2], x, diagnostics);
-    border_side_color(&mut r.vn_border_colors.left, CurrentColorTargets::BORDER_LEFT, colors[3], x, diagnostics);
+fn all_border_colors(
+    r: &mut StyleRefinement,
+    x: &mut Extras,
+    colors: [&CssColor; 4],
+    diagnostics: &mut Vec<String>,
+) {
+    border_side_color(
+        &mut r.vn_border_colors.top,
+        CurrentColorTargets::BORDER_TOP,
+        colors[0],
+        x,
+        diagnostics,
+    );
+    border_side_color(
+        &mut r.vn_border_colors.right,
+        CurrentColorTargets::BORDER_RIGHT,
+        colors[1],
+        x,
+        diagnostics,
+    );
+    border_side_color(
+        &mut r.vn_border_colors.bottom,
+        CurrentColorTargets::BORDER_BOTTOM,
+        colors[2],
+        x,
+        diagnostics,
+    );
+    border_side_color(
+        &mut r.vn_border_colors.left,
+        CurrentColorTargets::BORDER_LEFT,
+        colors[3],
+        x,
+        diagnostics,
+    );
     r.border_color = color(colors[0]);
-    if colors.iter().all(|value| matches!(value, CssColor::CurrentColor)) {
+    if colors
+        .iter()
+        .all(|value| matches!(value, CssColor::CurrentColor))
+    {
         x.current_color.0 |= CurrentColorTargets::BORDER;
     }
 }
@@ -2822,11 +3012,13 @@ fn unresolved_color(diagnostics: &mut Vec<String>, what: &str) {
     );
 }
 
-
 #[path = "effect.rs"]
 pub(crate) mod effect;
 
-fn object_fit(value: &lightningcss::properties::custom::TokenList, diagnostics: &mut Vec<String>) -> Option<ObjectFit> {
+fn object_fit(
+    value: &lightningcss::properties::custom::TokenList,
+    diagnostics: &mut Vec<String>,
+) -> Option<ObjectFit> {
     match single_ident(value, "object-fit", diagnostics) {
         Some("fill") => Some(ObjectFit::Fill),
         Some("contain") => Some(ObjectFit::Contain),
@@ -2893,29 +3085,58 @@ fn clip_path(v: &CssClipPath<'_>, diagnostics: &mut Vec<String>) -> Option<gpui:
         CssClipPath::None => Some(VnClipPath::None),
         CssClipPath::Box(b) => Some(VnClipPath::Box(reference(b))),
         CssClipPath::Url(_) => unsupported(diagnostics, "url()"),
-        CssClipPath::Shape { shape, reference_box } => {
+        CssClipPath::Shape {
+            shape,
+            reference_box,
+        } => {
             let reference = reference(reference_box);
             match &**shape {
                 BasicShape::Inset(inset) => {
                     let r = &inset.rect;
-                    let insets = [lp_definite(&r.0)?, lp_definite(&r.1)?, lp_definite(&r.2)?, lp_definite(&r.3)?];
+                    let insets = [
+                        lp_definite(&r.0)?,
+                        lp_definite(&r.1)?,
+                        lp_definite(&r.2)?,
+                        lp_definite(&r.3)?,
+                    ];
                     let corner = |c: &lightningcss::values::size::Size2D<LengthPercentage>| {
-                        Some(gpui::VnCornerRadius { x: lp_definite(&c.0)?, y: lp_definite(&c.1)? })
+                        Some(gpui::VnCornerRadius {
+                            x: lp_definite(&c.0)?,
+                            y: lp_definite(&c.1)?,
+                        })
                     };
                     let b = &inset.radius;
-                    let radii =
-                        [corner(&b.top_left)?, corner(&b.top_right)?, corner(&b.bottom_right)?, corner(&b.bottom_left)?];
-                    Some(VnClipPath::Inset { reference, insets, radii })
+                    let radii = [
+                        corner(&b.top_left)?,
+                        corner(&b.top_right)?,
+                        corner(&b.bottom_right)?,
+                        corner(&b.bottom_left)?,
+                    ];
+                    Some(VnClipPath::Inset {
+                        reference,
+                        insets,
+                        radii,
+                    })
                 }
                 BasicShape::Circle(c) => {
                     let r = radius(&c.radius)?;
                     let center = shape_center(&c.position)?;
-                    Some(VnClipPath::Ellipse { reference, center, radius: [r, r], circle: true })
+                    Some(VnClipPath::Ellipse {
+                        reference,
+                        center,
+                        radius: [r, r],
+                        circle: true,
+                    })
                 }
                 BasicShape::Ellipse(e) => {
                     let (rx, ry) = (radius(&e.radius_x)?, radius(&e.radius_y)?);
                     let center = shape_center(&e.position)?;
-                    Some(VnClipPath::Ellipse { reference, center, radius: [rx, ry], circle: false })
+                    Some(VnClipPath::Ellipse {
+                        reference,
+                        center,
+                        radius: [rx, ry],
+                        circle: false,
+                    })
                 }
                 BasicShape::Polygon(polygon) => match clip_path_polygon(polygon) {
                     Some(points) => Some(VnClipPath::Polygon {
@@ -2923,7 +3144,10 @@ fn clip_path(v: &CssClipPath<'_>, diagnostics: &mut Vec<String>) -> Option<gpui:
                         fill_rule: fill_rule(polygon.fill_rule),
                         points: points.into(),
                     }),
-                    None => unsupported(diagnostics, "polygon() with a vertex that is no length or percentage"),
+                    None => unsupported(
+                        diagnostics,
+                        "polygon() with a vertex that is no length or percentage",
+                    ),
                 },
             }
         }
@@ -2948,13 +3172,17 @@ fn fill_rule(rule: lightningcss::values::shape::FillRule) -> gpui::VnFillRule {
     }
 }
 
-fn clip_path_polygon(polygon: &lightningcss::values::shape::Polygon) -> Option<Vec<[DefiniteLength; 2]>> {
+fn clip_path_polygon(
+    polygon: &lightningcss::values::shape::Polygon,
+) -> Option<Vec<[DefiniteLength; 2]>> {
     use lightningcss::traits::{Parse, ToCss};
     polygon
         .points
         .iter()
         .map(|point| {
-            let text = point.to_css_string(lightningcss::stylesheet::PrinterOptions::default()).ok()?;
+            let text = point
+                .to_css_string(lightningcss::stylesheet::PrinterOptions::default())
+                .ok()?;
             let mut depth = 0i32;
             let split = text.char_indices().find_map(|(i, c)| {
                 match c {
@@ -2981,7 +3209,9 @@ fn clip_path_path(
     let mut reference = None;
     for t in &tokens.0 {
         match t {
-            TokenOrValue::Function(f) if f.name.0.as_ref().eq_ignore_ascii_case("path") && path.is_none() => {
+            TokenOrValue::Function(f)
+                if f.name.0.as_ref().eq_ignore_ascii_case("path") && path.is_none() =>
+            {
                 path = Some(&f.arguments);
             }
             TokenOrValue::Token(Token::Ident(id)) if path.is_some() && reference.is_none() => {
@@ -3013,23 +3243,33 @@ fn clip_path_path(
                 });
             }
             TokenOrValue::Token(Token::Comma) if fill_rule.is_some() && !comma => comma = true,
-            TokenOrValue::Token(Token::String(d)) if data.is_none() && (fill_rule.is_none() || comma) => {
+            TokenOrValue::Token(Token::String(d))
+                if data.is_none() && (fill_rule.is_none() || comma) =>
+            {
                 data = Some(d.as_ref().to_string());
             }
-            _ => return Some(Err("`path()` takes an optional fill rule, a comma and a string".into())),
+            _ => {
+                return Some(Err(
+                    "`path()` takes an optional fill rule, a comma and a string".into(),
+                ))
+            }
         }
     }
     let Some(data) = data else {
         return Some(Err("`path()` has no path string".into()));
     };
-    Some(crate::path_data::parse(&data).map(|verbs| gpui::VnClipPath::Path {
-        reference: reference.unwrap_or_default(),
-        fill_rule: fill_rule.unwrap_or_default(),
-        verbs: verbs.into(),
-    }))
+    Some(
+        crate::path_data::parse(&data).map(|verbs| gpui::VnClipPath::Path {
+            reference: reference.unwrap_or_default(),
+            fill_rule: fill_rule.unwrap_or_default(),
+            verbs: verbs.into(),
+        }),
+    )
 }
 
-fn shape_center(position: &lightningcss::values::position::Position) -> Option<[DefiniteLength; 2]> {
+fn shape_center(
+    position: &lightningcss::values::position::Position,
+) -> Option<[DefiniteLength; 2]> {
     use lightningcss::values::position::PositionComponent as P;
     fn component<S: PositionSide + Copy>(c: &P<S>) -> Option<DefiniteLength> {
         match c {
@@ -3037,7 +3277,9 @@ fn shape_center(position: &lightningcss::values::position::Position) -> Option<[
             P::Length(lp) => lp_definite(lp),
             P::Side { side, offset } => {
                 let near = side.is_near_edge();
-                let Some(offset) = offset else { return Some(relative(if near { 0.0 } else { 1.0 })) };
+                let Some(offset) = offset else {
+                    return Some(relative(if near { 0.0 } else { 1.0 }));
+                };
                 let offset = lp_definite(offset)?;
                 if near {
                     return Some(offset);
@@ -3045,11 +3287,15 @@ fn shape_center(position: &lightningcss::values::position::Position) -> Option<[
                 match offset {
                     DefiniteLength::Fraction(f) => Some(relative(1.0 - f)),
                     DefiniteLength::Absolute(AbsoluteLength::Pixels(p)) => {
-                        Some(DefiniteLength::Calc { fraction: 1.0, pixels: -p })
+                        Some(DefiniteLength::Calc {
+                            fraction: 1.0,
+                            pixels: -p,
+                        })
                     }
-                    DefiniteLength::Calc { fraction, pixels } => {
-                        Some(DefiniteLength::Calc { fraction: 1.0 - fraction, pixels: -pixels })
-                    }
+                    DefiniteLength::Calc { fraction, pixels } => Some(DefiniteLength::Calc {
+                        fraction: 1.0 - fraction,
+                        pixels: -pixels,
+                    }),
                     DefiniteLength::Absolute(AbsoluteLength::Rems(_)) => None,
                 }
             }
@@ -3105,7 +3351,10 @@ fn is_css_wide_keyword(value: &lightningcss::properties::custom::TokenList<'_>) 
     })
 }
 
-fn single_ident_is(value: &lightningcss::properties::custom::TokenList<'_>, expected: &str) -> bool {
+fn single_ident_is(
+    value: &lightningcss::properties::custom::TokenList<'_>,
+    expected: &str,
+) -> bool {
     single_ident_raw(value).is_some_and(|v| v.eq_ignore_ascii_case(expected))
 }
 
@@ -3120,7 +3369,9 @@ fn font_features(
     let mut pairs: Vec<(String, u32)> = Vec::new();
     if property == "font-variant-numeric" {
         for t in value.0.iter() {
-            let TokenOrValue::Token(Token::Ident(name)) = t else { continue };
+            let TokenOrValue::Token(Token::Ident(name)) = t else {
+                continue;
+            };
             let tag = match name.as_ref() {
                 "normal" => continue,
                 "lining-nums" => "lnum",
@@ -3140,16 +3391,27 @@ fn font_features(
     if property == "font-kerning" {
         return match single_ident_raw(value)?.to_ascii_lowercase().as_str() {
             "auto" | "normal" => Some(gpui::FontFeatures::default()),
-            "none" => Some(gpui::FontFeatures(std::sync::Arc::new(vec![("kern".into(), 0)]))),
+            "none" => Some(gpui::FontFeatures(std::sync::Arc::new(vec![(
+                "kern".into(),
+                0,
+            )]))),
             _ => None,
         };
     }
     if property == "font-variant-ligatures" {
         for t in value.0.iter() {
-            let TokenOrValue::Token(Token::Ident(name)) = t else { continue };
+            let TokenOrValue::Token(Token::Ident(name)) = t else {
+                continue;
+            };
             let set: &[(&str, u32)] = match name.as_ref() {
                 "normal" => continue,
-                "none" => &[("liga", 0), ("clig", 0), ("dlig", 0), ("hlig", 0), ("calt", 0)],
+                "none" => &[
+                    ("liga", 0),
+                    ("clig", 0),
+                    ("dlig", 0),
+                    ("hlig", 0),
+                    ("calt", 0),
+                ],
                 "common-ligatures" => &[("liga", 1), ("clig", 1)],
                 "no-common-ligatures" => &[("liga", 0), ("clig", 0)],
                 "discretionary-ligatures" => &[("dlig", 1)],
@@ -3214,7 +3476,9 @@ fn single_length_px(value: &lightningcss::properties::custom::TokenList<'_>) -> 
                 }
                 found = match unit.as_ref() {
                     "px" => Some(*value),
-                    other => match font_unit_px(other, *value).or_else(|| viewport_unit_px(other, *value)) {
+                    other => match font_unit_px(other, *value)
+                        .or_else(|| viewport_unit_px(other, *value))
+                    {
                         Some(px) => Some(px),
                         None => return None,
                     },
@@ -3237,10 +3501,12 @@ fn has_substitution(value: &lightningcss::properties::custom::TokenList<'_>) -> 
     value.0.iter().any(|token| match token {
         TokenOrValue::Var(_) | TokenOrValue::Env(_) => true,
         TokenOrValue::Function(function) => has_substitution(&function.arguments),
-        TokenOrValue::UnresolvedColor(UnresolvedColor::RGB { alpha, .. }
-            | UnresolvedColor::HSL { alpha, .. }) => has_substitution(alpha),
-        TokenOrValue::UnresolvedColor(UnresolvedColor::LightDark { light, dark }) =>
-            has_substitution(light) || has_substitution(dark),
+        TokenOrValue::UnresolvedColor(
+            UnresolvedColor::RGB { alpha, .. } | UnresolvedColor::HSL { alpha, .. },
+        ) => has_substitution(alpha),
+        TokenOrValue::UnresolvedColor(UnresolvedColor::LightDark { light, dark }) => {
+            has_substitution(light) || has_substitution(dark)
+        }
         _ => false,
     })
 }
@@ -3283,7 +3549,9 @@ fn content_string(value: &lightningcss::properties::custom::TokenList<'_>) -> Co
     }
 }
 
-fn single_ident_raw<'a>(value: &'a lightningcss::properties::custom::TokenList<'_>) -> Option<&'a str> {
+fn single_ident_raw<'a>(
+    value: &'a lightningcss::properties::custom::TokenList<'_>,
+) -> Option<&'a str> {
     use lightningcss::properties::custom::{Token, TokenOrValue};
     let mut found = None;
     for t in value.0.iter() {
@@ -3375,25 +3643,41 @@ fn scrollbar_color(
     value: &lightningcss::properties::custom::TokenList,
     diagnostics: &mut Vec<String>,
 ) -> Option<(Hsla, Hsla)> {
-    use lightningcss::properties::custom::{CustomProperty, CustomPropertyName, Token, TokenOrValue};
-    let tokens: Vec<_> = value.0.iter().filter(|token| !token.is_whitespace()).collect();
-    if matches!(tokens.as_slice(), [TokenOrValue::Token(Token::Ident(id))] if id.as_ref().eq_ignore_ascii_case("auto")) {
+    use lightningcss::properties::custom::{
+        CustomProperty, CustomPropertyName, Token, TokenOrValue,
+    };
+    let tokens: Vec<_> = value
+        .0
+        .iter()
+        .filter(|token| !token.is_whitespace())
+        .collect();
+    if matches!(tokens.as_slice(), [TokenOrValue::Token(Token::Ident(id))] if id.as_ref().eq_ignore_ascii_case("auto"))
+    {
         return None;
     }
     let property = Property::Custom(CustomProperty {
-        name: CustomPropertyName::Unknown(lightningcss::values::ident::Ident("scrollbar-color".into())),
+        name: CustomPropertyName::Unknown(lightningcss::values::ident::Ident(
+            "scrollbar-color".into(),
+        )),
         value: value.clone(),
     });
     if tokens.len() == 2 {
         if let Some(raw) = value_text(&property) {
-            if let Ok(Property::BorderColor(pair)) = Property::parse_string(PropertyId::from("border-color"), &raw, ParserOptions::default()) {
+            if let Ok(Property::BorderColor(pair)) = Property::parse_string(
+                PropertyId::from("border-color"),
+                &raw,
+                ParserOptions::default(),
+            ) {
                 if let (Some(thumb), Some(track)) = (color(&pair.top), color(&pair.right)) {
                     return Some((thumb, track));
                 }
             }
         }
     }
-    once(diagnostics, "`scrollbar-color` requires auto or two valid colours (thumb then track)".to_string());
+    once(
+        diagnostics,
+        "`scrollbar-color` requires auto or two valid colours (thumb then track)".to_string(),
+    );
     None
 }
 
@@ -3480,13 +3764,11 @@ fn apply_property(
             ));
             r.display = Some(match d {
                 D::Keyword(DisplayKeyword::None) => gpui::Display::None,
-                D::Pair(pair) => {
-                    match pair.inside {
-                        DisplayInside::Flex(_) => gpui::Display::Flex,
-                        DisplayInside::Grid => gpui::Display::Grid,
-                        _ => gpui::Display::Block,
-                    }
-                }
+                D::Pair(pair) => match pair.inside {
+                    DisplayInside::Flex(_) => gpui::Display::Flex,
+                    DisplayInside::Grid => gpui::Display::Grid,
+                    _ => gpui::Display::Block,
+                },
                 _ => gpui::Display::Block,
             });
         }
@@ -3521,7 +3803,9 @@ fn apply_property(
                 lightningcss::properties::align::AlignItems::SelfPosition { value, .. } => {
                     Some(self_position(value))
                 }
-                lightningcss::properties::align::AlignItems::BaselinePosition(_) => Some(G::Baseline),
+                lightningcss::properties::align::AlignItems::BaselinePosition(_) => {
+                    Some(G::Baseline)
+                }
                 _ => None,
             };
             match mapped {
@@ -3589,13 +3873,13 @@ fn apply_property(
                         CD::Stretch => G::Stretch,
                     })
                 }
-                lightningcss::properties::align::JustifyContent::ContentPosition { value, .. } => {
-                    match value {
-                        ContentPosition::Center => Some(G::Center),
-                        ContentPosition::Start | ContentPosition::FlexStart => Some(G::FlexStart),
-                        ContentPosition::End | ContentPosition::FlexEnd => Some(G::FlexEnd),
-                    }
-                }
+                lightningcss::properties::align::JustifyContent::ContentPosition {
+                    value, ..
+                } => match value {
+                    ContentPosition::Center => Some(G::Center),
+                    ContentPosition::Start | ContentPosition::FlexStart => Some(G::FlexStart),
+                    ContentPosition::End | ContentPosition::FlexEnd => Some(G::FlexEnd),
+                },
                 _ => None,
             };
             match mapped {
@@ -3692,7 +3976,8 @@ fn apply_property(
         // `transform: none`.
         TransformOrigin(pos, _) => {
             use lightningcss::values::position::{
-                HorizontalPositionKeyword as H, PositionComponent as P, VerticalPositionKeyword as V,
+                HorizontalPositionKeyword as H, PositionComponent as P,
+                VerticalPositionKeyword as V,
             };
             fn axis<S: Copy>(
                 c: &P<S>,
@@ -3892,7 +4177,10 @@ fn apply_property(
             Some(ratio) if !v.auto && ratio.1 != 0.0 => r.aspect_ratio = Some(ratio.0 / ratio.1),
             // `aspect-auto` / `auto <ratio>`: a refinement cannot say "clear", so an earlier ratio
             // survives.
-            _ => unsupported(diagnostics, "aspect-ratio: auto — cannot undo an earlier ratio"),
+            _ => unsupported(
+                diagnostics,
+                "aspect-ratio: auto — cannot undo an earlier ratio",
+            ),
         },
         Opacity(v) => r.opacity = Some(v.0),
         // `color: currentColor` IS `color: inherit` — the property resolves against itself — and
@@ -3919,11 +4207,7 @@ fn apply_property(
                     x.background_key_color = Some(c);
                 }
             }
-            collect_background_images(
-                layers.iter().map(|l| &l.image),
-                x,
-                diagnostics,
-            );
+            collect_background_images(layers.iter().map(|l| &l.image), x, diagnostics);
             x.background_size = Some(Rc::new(
                 layers.iter().map(|l| background_size(&l.size)).collect(),
             ));
@@ -3934,7 +4218,10 @@ fn apply_property(
                     .collect(),
             ));
             x.background_repeat = Some(Rc::new(
-                layers.iter().map(|l| background_repeat(&l.repeat)).collect(),
+                layers
+                    .iter()
+                    .map(|l| background_repeat(&l.repeat))
+                    .collect(),
             ));
         }
         BackgroundImage(images) => {
@@ -4002,8 +4289,11 @@ fn apply_property(
         Mask(layers, _) => {
             x.mask_images = Some(mask_images(layers.iter().map(|l| &l.image)));
             x.mask_clips = Some(mask_clips(layers.iter().map(|l| &l.clip)));
-            x.mask_composite =
-                Some(layers.first().map_or(MaskCompositing::Add, |l| mask_compositing(l.composite)));
+            x.mask_composite = Some(
+                layers
+                    .first()
+                    .map_or(MaskCompositing::Add, |l| mask_compositing(l.composite)),
+            );
             advise_mask(x, diagnostics);
         }
         MaskImage(images, _) => {
@@ -4012,17 +4302,25 @@ fn apply_property(
         }
         MaskClip(clips, _) => x.mask_clips = Some(mask_clips(clips.iter())),
         MaskComposite(list) => {
-            x.mask_composite = Some(list.first().map_or(MaskCompositing::Add, |c| mask_compositing(*c)));
+            x.mask_composite = Some(
+                list.first()
+                    .map_or(MaskCompositing::Add, |c| mask_compositing(*c)),
+            );
             advise_mask(x, diagnostics);
         }
         WebKitMaskComposite(list) => {
             use lightningcss::traits::ToCss;
-            let first = list.first().and_then(|c| c.to_css_string(Default::default()).ok());
-            x.mask_composite =
-                Some(webkit_mask_compositing(first.as_deref().unwrap_or("source-over")));
+            let first = list
+                .first()
+                .and_then(|c| c.to_css_string(Default::default()).ok());
+            x.mask_composite = Some(webkit_mask_compositing(
+                first.as_deref().unwrap_or("source-over"),
+            ));
             advise_mask(x, diagnostics);
         }
-        BorderColor(v) => all_border_colors(r, x, [&v.top, &v.right, &v.bottom, &v.left], diagnostics),
+        BorderColor(v) => {
+            all_border_colors(r, x, [&v.top, &v.right, &v.bottom, &v.left], diagnostics)
+        }
         Border(b) => {
             if let Some(w) = border_width_px(&b.width) {
                 let w: AbsoluteLength = px(w).into();
@@ -4040,28 +4338,76 @@ fn apply_property(
             r.border_widths.bottom = border_width_px(&v.bottom).map(|w| px(w).into());
             r.border_widths.left = border_width_px(&v.left).map(|w| px(w).into());
         }
-        BorderTopColor(c) => border_side_color(&mut r.vn_border_colors.top, CurrentColorTargets::BORDER_TOP, c, x, diagnostics),
-        BorderRightColor(c) => border_side_color(&mut r.vn_border_colors.right, CurrentColorTargets::BORDER_RIGHT, c, x, diagnostics),
-        BorderBottomColor(c) => border_side_color(&mut r.vn_border_colors.bottom, CurrentColorTargets::BORDER_BOTTOM, c, x, diagnostics),
-        BorderLeftColor(c) => border_side_color(&mut r.vn_border_colors.left, CurrentColorTargets::BORDER_LEFT, c, x, diagnostics),
+        BorderTopColor(c) => border_side_color(
+            &mut r.vn_border_colors.top,
+            CurrentColorTargets::BORDER_TOP,
+            c,
+            x,
+            diagnostics,
+        ),
+        BorderRightColor(c) => border_side_color(
+            &mut r.vn_border_colors.right,
+            CurrentColorTargets::BORDER_RIGHT,
+            c,
+            x,
+            diagnostics,
+        ),
+        BorderBottomColor(c) => border_side_color(
+            &mut r.vn_border_colors.bottom,
+            CurrentColorTargets::BORDER_BOTTOM,
+            c,
+            x,
+            diagnostics,
+        ),
+        BorderLeftColor(c) => border_side_color(
+            &mut r.vn_border_colors.left,
+            CurrentColorTargets::BORDER_LEFT,
+            c,
+            x,
+            diagnostics,
+        ),
         BorderTop(b) => {
             r.border_widths.top = border_width_px(&b.width).map(|w| px(w).into());
-            border_side_color(&mut r.vn_border_colors.top, CurrentColorTargets::BORDER_TOP, &b.color, x, diagnostics);
+            border_side_color(
+                &mut r.vn_border_colors.top,
+                CurrentColorTargets::BORDER_TOP,
+                &b.color,
+                x,
+                diagnostics,
+            );
             set_border_style(r, b.style, SIDE_TOP, diagnostics);
         }
         BorderRight(b) => {
             r.border_widths.right = border_width_px(&b.width).map(|w| px(w).into());
-            border_side_color(&mut r.vn_border_colors.right, CurrentColorTargets::BORDER_RIGHT, &b.color, x, diagnostics);
+            border_side_color(
+                &mut r.vn_border_colors.right,
+                CurrentColorTargets::BORDER_RIGHT,
+                &b.color,
+                x,
+                diagnostics,
+            );
             set_border_style(r, b.style, SIDE_RIGHT, diagnostics);
         }
         BorderBottom(b) => {
             r.border_widths.bottom = border_width_px(&b.width).map(|w| px(w).into());
-            border_side_color(&mut r.vn_border_colors.bottom, CurrentColorTargets::BORDER_BOTTOM, &b.color, x, diagnostics);
+            border_side_color(
+                &mut r.vn_border_colors.bottom,
+                CurrentColorTargets::BORDER_BOTTOM,
+                &b.color,
+                x,
+                diagnostics,
+            );
             set_border_style(r, b.style, SIDE_BOTTOM, diagnostics);
         }
         BorderLeft(b) => {
             r.border_widths.left = border_width_px(&b.width).map(|w| px(w).into());
-            border_side_color(&mut r.vn_border_colors.left, CurrentColorTargets::BORDER_LEFT, &b.color, x, diagnostics);
+            border_side_color(
+                &mut r.vn_border_colors.left,
+                CurrentColorTargets::BORDER_LEFT,
+                &b.color,
+                x,
+                diagnostics,
+            );
             set_border_style(r, b.style, SIDE_LEFT, diagnostics);
         }
         BorderTopWidth(v) => r.border_widths.top = border_width_px(v).map(|w| px(w).into()),
@@ -4080,11 +4426,18 @@ fn apply_property(
         BorderLeftStyle(v) => set_border_style(r, *v, SIDE_LEFT, diagnostics),
         BorderRadius(v, _) => {
             let mut wrote = 0;
-            if corner(&mut r.corner_radii.top_left, &mut r.vn_corner_radii.top_left, &v.top_left) {
+            if corner(
+                &mut r.corner_radii.top_left,
+                &mut r.vn_corner_radii.top_left,
+                &v.top_left,
+            ) {
                 wrote |= RadiusInherit::TOP_LEFT;
             }
-            if corner(&mut r.corner_radii.top_right, &mut r.vn_corner_radii.top_right, &v.top_right)
-            {
+            if corner(
+                &mut r.corner_radii.top_right,
+                &mut r.vn_corner_radii.top_right,
+                &v.top_right,
+            ) {
                 wrote |= RadiusInherit::TOP_RIGHT;
             }
             if corner(
@@ -4104,22 +4457,38 @@ fn apply_property(
             x.radius_inherit.write(wrote, false);
         }
         BorderTopLeftRadius(v, _) => {
-            if corner(&mut r.corner_radii.top_left, &mut r.vn_corner_radii.top_left, v) {
+            if corner(
+                &mut r.corner_radii.top_left,
+                &mut r.vn_corner_radii.top_left,
+                v,
+            ) {
                 x.radius_inherit.write(RadiusInherit::TOP_LEFT, false);
             }
         }
         BorderTopRightRadius(v, _) => {
-            if corner(&mut r.corner_radii.top_right, &mut r.vn_corner_radii.top_right, v) {
+            if corner(
+                &mut r.corner_radii.top_right,
+                &mut r.vn_corner_radii.top_right,
+                v,
+            ) {
                 x.radius_inherit.write(RadiusInherit::TOP_RIGHT, false);
             }
         }
         BorderBottomRightRadius(v, _) => {
-            if corner(&mut r.corner_radii.bottom_right, &mut r.vn_corner_radii.bottom_right, v) {
+            if corner(
+                &mut r.corner_radii.bottom_right,
+                &mut r.vn_corner_radii.bottom_right,
+                v,
+            ) {
                 x.radius_inherit.write(RadiusInherit::BOTTOM_RIGHT, false);
             }
         }
         BorderBottomLeftRadius(v, _) => {
-            if corner(&mut r.corner_radii.bottom_left, &mut r.vn_corner_radii.bottom_left, v) {
+            if corner(
+                &mut r.corner_radii.bottom_left,
+                &mut r.vn_corner_radii.bottom_left,
+                v,
+            ) {
                 x.radius_inherit.write(RadiusInherit::BOTTOM_LEFT, false);
             }
         }
@@ -4174,30 +4543,26 @@ fn apply_property(
                 _ => loc.row.end = placement,
             }
         }
-        GridColumn(v) => {
-            match (grid_line(&v.start), grid_line(&v.end)) {
-                (Some(s), Some(e)) => {
-                    let loc = r.grid_location.get_or_insert_default();
-                    loc.column = s..e;
-                }
-                _ => unsupported(
-                    diagnostics,
-                    "grid-column with a NAMED line or area — use line numbers or `span N`",
-                ),
+        GridColumn(v) => match (grid_line(&v.start), grid_line(&v.end)) {
+            (Some(s), Some(e)) => {
+                let loc = r.grid_location.get_or_insert_default();
+                loc.column = s..e;
             }
-        }
-        GridRow(v) => {
-            match (grid_line(&v.start), grid_line(&v.end)) {
-                (Some(s), Some(e)) => {
-                    let loc = r.grid_location.get_or_insert_default();
-                    loc.row = s..e;
-                }
-                _ => unsupported(
-                    diagnostics,
-                    "grid-row with a NAMED line or area — use line numbers or `span N`",
-                ),
+            _ => unsupported(
+                diagnostics,
+                "grid-column with a NAMED line or area — use line numbers or `span N`",
+            ),
+        },
+        GridRow(v) => match (grid_line(&v.start), grid_line(&v.end)) {
+            (Some(s), Some(e)) => {
+                let loc = r.grid_location.get_or_insert_default();
+                loc.row = s..e;
             }
-        }
+            _ => unsupported(
+                diagnostics,
+                "grid-row with a NAMED line or area — use line numbers or `span N`",
+            ),
+        },
         GridArea(v) => {
             match (
                 grid_line(&v.row_start),
@@ -4387,9 +4752,11 @@ fn apply_property(
         BoxShadow(shadows, _) => {
             let mut out = Vec::new();
             for s in shadows.iter() {
-                let (Some(c), Some(x), Some(y)) =
-                    (color(&s.color), css_length_px(&s.x_offset), css_length_px(&s.y_offset))
-                else {
+                let (Some(c), Some(x), Some(y)) = (
+                    color(&s.color),
+                    css_length_px(&s.x_offset),
+                    css_length_px(&s.y_offset),
+                ) else {
                     // One unresolvable shadow drops ITSELF, not the list — but it does not drop in
                     // silence, because a missing ring in a stack of three is invisible to read
                     // back.
@@ -4455,7 +4822,9 @@ fn apply_property(
                 // A number inherits as the number: gpui's fraction is taken of each element's own
                 // font size at paint.
                 CssLineHeight::Number(n) => Some(relative(*n)),
-                CssLineHeight::Length(DimensionPercentage::Percentage(p)) => Some(px(p.0 * em_basis()).into()),
+                CssLineHeight::Length(DimensionPercentage::Percentage(p)) => {
+                    Some(px(p.0 * em_basis()).into())
+                }
                 CssLineHeight::Length(lp) => lp_definite(lp),
                 CssLineHeight::Normal => Some(relative(1.2)),
             };
@@ -4505,7 +4874,9 @@ fn apply_property(
         TextOverflow(v, _) => {
             use lightningcss::properties::overflow::TextOverflow as TO;
             match v {
-                TO::Ellipsis => r.text.text_overflow = Some(gpui::TextOverflow::Truncate("…".into())),
+                TO::Ellipsis => {
+                    r.text.text_overflow = Some(gpui::TextOverflow::Truncate("…".into()))
+                }
                 // A refinement cannot express "clear", so `text-clip` after an `text-ellipsis` is a
                 // no-op rather than a reset.
                 TO::Clip => unsupported(
@@ -4542,8 +4913,8 @@ fn apply_property(
             }
         }
         Cursor(c) => {
-            use lightningcss::properties::ui::CursorKeyword as K;
             use gpui::CursorStyle as C;
+            use lightningcss::properties::ui::CursorKeyword as K;
             let mapped = match c.keyword {
                 K::Pointer => C::PointingHand,
                 K::Default | K::Auto => C::Arrow,
@@ -4677,7 +5048,10 @@ fn apply_property(
                 }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
-                if name.0.as_ref().eq_ignore_ascii_case("-webkit-text-fill-color") =>
+                if name
+                    .0
+                    .as_ref()
+                    .eq_ignore_ascii_case("-webkit-text-fill-color") =>
             {
                 use lightningcss::properties::custom::{Token, TokenOrValue};
                 let mut tokens = c
@@ -4700,7 +5074,10 @@ fn apply_property(
                 match fill {
                     Some(f) => x.text_fill_color = Some(f),
                     None if is_css_wide_keyword(&c.value) => {}
-                    None => unsupported(diagnostics, "-webkit-text-fill-color (a <color> is expected)"),
+                    None => unsupported(
+                        diagnostics,
+                        "-webkit-text-fill-color (a <color> is expected)",
+                    ),
                 }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
@@ -4713,7 +5090,10 @@ fn apply_property(
                         u.offset = px(offset);
                     }
                 } else {
-                    unsupported(diagnostics, "text-underline-offset (a <length> is expected)");
+                    unsupported(
+                        diagnostics,
+                        "text-underline-offset (a <length> is expected)",
+                    );
                 }
             }
             // `text-decoration-skip-ink` decides whether an underline BREAKS around descenders.
@@ -4850,7 +5230,10 @@ fn apply_property(
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(
                     name.0.as_ref(),
-                    "border-collapse" | "border-spacing" | "caption-side" | "table-layout"
+                    "border-collapse"
+                        | "border-spacing"
+                        | "caption-side"
+                        | "table-layout"
                         | "empty-cells"
                 ) =>
             {
@@ -4882,7 +5265,10 @@ fn apply_property(
             // prefix first, finds the unprefixed `mask-composite` (which takes no prefix), and
             // gives up.
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
-                if name.0.as_ref().eq_ignore_ascii_case("-webkit-mask-composite") =>
+                if name
+                    .0
+                    .as_ref()
+                    .eq_ignore_ascii_case("-webkit-mask-composite") =>
             {
                 use lightningcss::properties::custom::{Token, TokenOrValue};
                 let first = c.value.0.iter().find_map(|t| match t {
@@ -4971,8 +5357,8 @@ fn apply_property(
             }
         }
         UserSelect(v, _) => {
-            use lightningcss::properties::ui::UserSelect as U;
             use crate::mapper::UserSelect as S;
+            use lightningcss::properties::ui::UserSelect as U;
             x.user_select = Some(match v {
                 U::Auto => S::Auto,
                 U::None => S::None,
@@ -4995,7 +5381,9 @@ fn apply_property(
                 ColorOrAuto::Color(c) => color(c),
             });
         }
-        Appearance(a, _) => x.appearance_none = Some(matches!(a, lightningcss::properties::ui::Appearance::None)),
+        Appearance(a, _) => {
+            x.appearance_none = Some(matches!(a, lightningcss::properties::ui::Appearance::None))
+        }
         // Whitespace is always collapsed here, so a tab is one space and `tab-size` could not
         // change the result.
         TabSize(..) => {}
@@ -5040,11 +5428,22 @@ fn apply_property(
                 }
             });
         }
-        ScrollMarginTop(_) | ScrollMarginBottom(_) | ScrollMarginLeft(_) | ScrollMarginRight(_)
-        | ScrollMargin(_) | ScrollMarginBlock(_) | ScrollMarginInline(_)
-        | ScrollMarginBlockStart(_) | ScrollMarginBlockEnd(_) | ScrollMarginInlineStart(_)
-        | ScrollMarginInlineEnd(_) | ScrollPaddingTop(_) | ScrollPaddingBottom(_)
-        | ScrollPaddingLeft(_) | ScrollPaddingRight(_) | ScrollPadding(_) => {}
+        ScrollMarginTop(_)
+        | ScrollMarginBottom(_)
+        | ScrollMarginLeft(_)
+        | ScrollMarginRight(_)
+        | ScrollMargin(_)
+        | ScrollMarginBlock(_)
+        | ScrollMarginInline(_)
+        | ScrollMarginBlockStart(_)
+        | ScrollMarginBlockEnd(_)
+        | ScrollMarginInlineStart(_)
+        | ScrollMarginInlineEnd(_)
+        | ScrollPaddingTop(_)
+        | ScrollPaddingBottom(_)
+        | ScrollPaddingLeft(_)
+        | ScrollPaddingRight(_)
+        | ScrollPadding(_) => {}
         TextTransform(t) => {
             use crate::mapper::TextTransform as TT;
             use lightningcss::properties::text::TextTransformCase as C;
@@ -5105,7 +5504,9 @@ fn apply_property(
                 }
                 let what = u.value.0.iter().find_map(|t| match t {
                     TokenOrValue::Function(f) => Some(format!("{}()", f.name.0.as_ref())),
-                    TokenOrValue::Token(Token::Function(name)) => Some(format!("{}()", name.as_ref())),
+                    TokenOrValue::Token(Token::Function(name)) => {
+                        Some(format!("{}()", name.as_ref()))
+                    }
                     _ => None,
                 });
                 clip_path_unsupported(diagnostics, what.as_deref().unwrap_or("this value"));
@@ -5215,28 +5616,52 @@ fn apply_transform(
     const ZERO: [[f64; 3]; 2] = [[0.0; 3]; 2];
     fn len(v: &LengthPercentage, axis: usize) -> Option<[f64; 3]> {
         match v {
-            DimensionPercentage::Dimension(l) => length_value_px(l).map(|p| [f64::from(p), 0.0, 0.0]),
-            DimensionPercentage::Percentage(p) => {
-                let mut row = [0.0; 3]; row[axis + 1] = f64::from(p.0); Some(row)
+            DimensionPercentage::Dimension(l) => {
+                length_value_px(l).map(|p| [f64::from(p), 0.0, 0.0])
             }
-            DimensionPercentage::Calc(_) => { calc_dropped(); None }
+            DimensionPercentage::Percentage(p) => {
+                let mut row = [0.0; 3];
+                row[axis + 1] = f64::from(p.0);
+                Some(row)
+            }
+            DimensionPercentage::Calc(_) => {
+                calc_dropped();
+                None
+            }
         }
     }
     fn factor(v: &NumberOrPercentage) -> f64 {
-        f64::from(match v { NumberOrPercentage::Number(n) => *n, NumberOrPercentage::Percentage(p) => p.0 })
+        f64::from(match v {
+            NumberOrPercentage::Number(n) => *n,
+            NumberOrPercentage::Percentage(p) => p.0,
+        })
     }
-    fn append(linear: &mut [[f64; 2]; 2], offset: &mut [[f64; 3]; 2], m: [[f64; 2]; 2], t: [[f64; 3]; 2]) {
+    fn append(
+        linear: &mut [[f64; 2]; 2],
+        offset: &mut [[f64; 3]; 2],
+        m: [[f64; 2]; 2],
+        t: [[f64; 3]; 2],
+    ) {
         let old = *linear;
         for row in 0..2 {
-            for term in 0..3 { offset[row][term] += old[row][0] * t[0][term] + old[row][1] * t[1][term]; }
-            for column in 0..2 { linear[row][column] = old[row][0] * m[0][column] + old[row][1] * m[1][column]; }
+            for term in 0..3 {
+                offset[row][term] += old[row][0] * t[0][term] + old[row][1] * t[1][term];
+            }
+            for column in 0..2 {
+                linear[row][column] = old[row][0] * m[0][column] + old[row][1] * m[1][column];
+            }
         }
     }
     fn slot(row: [f32; 3], axis: usize) -> Option<TransformLength> {
-        let own = row[axis + 1]; let cross = row[2 - axis];
-        if cross != 0.0 || (row[0] != 0.0 && own != 0.0) { None }
-        else if own != 0.0 { Some(TransformLength::Fraction(own)) }
-        else { Some(TransformLength::Pixels(row[0])) }
+        let own = row[axis + 1];
+        let cross = row[2 - axis];
+        if cross != 0.0 || (row[0] != 0.0 && own != 0.0) {
+            None
+        } else if own != 0.0 {
+            Some(TransformLength::Fraction(own))
+        } else {
+            Some(TransformLength::Pixels(row[0]))
+        }
     }
     let mut linear = UNIT;
     let mut offset = ZERO;
@@ -5249,98 +5674,217 @@ fn apply_transform(
         let mut t = ZERO;
         match transform {
             T::Translate(a, b) | T::Translate3d(a, b, _) => {
-                let (Some(x), Some(y)) = (len(a, 0), len(b, 1)) else { dropped.push("translate() with a calc() length"); continue; };
+                let (Some(x), Some(y)) = (len(a, 0), len(b, 1)) else {
+                    dropped.push("translate() with a calc() length");
+                    continue;
+                };
                 t = [x, y];
                 if let T::Translate3d(_, _, z) = transform {
-                    if !matches!(css_length_px(z), Some(0.0)) { dropped.push("the Z axis of a 3D translate"); }
+                    if !matches!(css_length_px(z), Some(0.0)) {
+                        dropped.push("the Z axis of a 3D translate");
+                    }
                 }
             }
             T::TranslateX(v) => {
-                let Some(value) = len(v, 0) else { dropped.push("translateX() with a calc() length"); continue; }; t[0] = value;
+                let Some(value) = len(v, 0) else {
+                    dropped.push("translateX() with a calc() length");
+                    continue;
+                };
+                t[0] = value;
             }
             T::TranslateY(v) => {
-                let Some(value) = len(v, 1) else { dropped.push("translateY() with a calc() length"); continue; }; t[1] = value;
+                let Some(value) = len(v, 1) else {
+                    dropped.push("translateY() with a calc() length");
+                    continue;
+                };
+                t[1] = value;
             }
             T::Rotate(a) | T::RotateZ(a) => {
                 let angle = f64::from(a.to_radians());
-                let (sin, cos) = angle.sin_cos(); m = [[cos, -sin], [sin, cos]]; authored_rotate += angle;
+                let (sin, cos) = angle.sin_cos();
+                m = [[cos, -sin], [sin, cos]];
+                authored_rotate += angle;
             }
             T::RotateX(a) | T::RotateY(a) if a.to_degrees() == 0.0 => {}
-            T::RotateX(_) | T::RotateY(_) | T::Rotate3d(..) => { dropped.push("rotate3d()/rotateX()/rotateY()"); continue; }
+            T::RotateX(_) | T::RotateY(_) | T::Rotate3d(..) => {
+                dropped.push("rotate3d()/rotateX()/rotateY()");
+                continue;
+            }
             T::Scale(a, b) | T::Scale3d(a, b, _) => {
-                let (x, y) = (factor(a), factor(b)); m = [[x, 0.0], [0.0, y]];
+                let (x, y) = (factor(a), factor(b));
+                m = [[x, 0.0], [0.0, y]];
                 authored_scale = (authored_scale.0 * x, authored_scale.1 * y);
             }
-            T::ScaleX(value) => { let x = factor(value); m[0][0] = x; authored_scale.0 *= x; }
-            T::ScaleY(value) => { let y = factor(value); m[1][1] = y; authored_scale.1 *= y; }
-            T::ScaleZ(_) => {}
-            T::Skew(a, b) => { m = [[1.0, f64::from(a.to_radians()).tan()], [f64::from(b.to_radians()).tan(), 1.0]]; affine |= a.to_degrees() != 0.0 || b.to_degrees() != 0.0; }
-            T::SkewX(a) => { m[0][1] = f64::from(a.to_radians()).tan(); affine |= a.to_degrees() != 0.0; }
-            T::SkewY(a) => { m[1][0] = f64::from(a.to_radians()).tan(); affine |= a.to_degrees() != 0.0; }
-            T::Matrix(value) => {
-                m = [[f64::from(value.a), f64::from(value.c)], [f64::from(value.b), f64::from(value.d)]];
-                t[0][0] = f64::from(value.e); t[1][0] = f64::from(value.f); affine = true;
+            T::ScaleX(value) => {
+                let x = factor(value);
+                m[0][0] = x;
+                authored_scale.0 *= x;
             }
-            T::Matrix3d(_) => { dropped.push("matrix3d()"); continue; }
-            T::Perspective(_) => { dropped.push("perspective()"); continue; }
-            T::TranslateZ(_) => { dropped.push("the Z axis of a 3D translate"); continue; }
+            T::ScaleY(value) => {
+                let y = factor(value);
+                m[1][1] = y;
+                authored_scale.1 *= y;
+            }
+            T::ScaleZ(_) => {}
+            T::Skew(a, b) => {
+                m = [
+                    [1.0, f64::from(a.to_radians()).tan()],
+                    [f64::from(b.to_radians()).tan(), 1.0],
+                ];
+                affine |= a.to_degrees() != 0.0 || b.to_degrees() != 0.0;
+            }
+            T::SkewX(a) => {
+                m[0][1] = f64::from(a.to_radians()).tan();
+                affine |= a.to_degrees() != 0.0;
+            }
+            T::SkewY(a) => {
+                m[1][0] = f64::from(a.to_radians()).tan();
+                affine |= a.to_degrees() != 0.0;
+            }
+            T::Matrix(value) => {
+                m = [
+                    [f64::from(value.a), f64::from(value.c)],
+                    [f64::from(value.b), f64::from(value.d)],
+                ];
+                t[0][0] = f64::from(value.e);
+                t[1][0] = f64::from(value.f);
+                affine = true;
+            }
+            T::Matrix3d(_) => {
+                dropped.push("matrix3d()");
+                continue;
+            }
+            T::Perspective(_) => {
+                dropped.push("perspective()");
+                continue;
+            }
+            T::TranslateZ(_) => {
+                dropped.push("the Z axis of a 3D translate");
+                continue;
+            }
         }
-        if m.iter().flatten().chain(t.iter().flatten()).any(|v| !v.is_finite()) {
-            dropped.push("a non-finite 2D transform"); continue;
+        if m.iter()
+            .flatten()
+            .chain(t.iter().flatten())
+            .any(|v| !v.is_finite())
+        {
+            dropped.push("a non-finite 2D transform");
+            continue;
         }
         append(&mut linear, &mut offset, m, t);
     }
     let (sin, cos) = authored_rotate.sin_cos();
-    let expected = [[cos * authored_scale.0, -sin * authored_scale.1], [sin * authored_scale.0, cos * authored_scale.1]];
-    affine |= linear.iter().flatten().zip(expected.iter().flatten()).any(|(a,b)| (a-b).abs() > 1e-6 * a.abs().max(b.abs()).max(1.0));
-    let (mut rotate, mut scale, mut shear) = (authored_rotate as f32, (authored_scale.0 as f32, authored_scale.1 as f32), 0.0f32);
+    let expected = [
+        [cos * authored_scale.0, -sin * authored_scale.1],
+        [sin * authored_scale.0, cos * authored_scale.1],
+    ];
+    affine |= linear
+        .iter()
+        .flatten()
+        .zip(expected.iter().flatten())
+        .any(|(a, b)| (a - b).abs() > 1e-6 * a.abs().max(b.abs()).max(1.0));
+    let (mut rotate, mut scale, mut shear) = (
+        authored_rotate as f32,
+        (authored_scale.0 as f32, authored_scale.1 as f32),
+        0.0f32,
+    );
     if affine {
         let [[a, c], [b, d]] = linear;
         let sx = a.hypot(b);
         if sx != 0.0 {
             rotate = b.atan2(a) as f32;
-            scale = (sx as f32, ((a*d-b*c)/sx) as f32);
-            shear = ((a*c+b*d)/sx) as f32;
+            scale = (sx as f32, ((a * d - b * c) / sx) as f32);
+            shear = ((a * c + b * d) / sx) as f32;
         } else {
-            rotate = (-c).atan2(d) as f32; scale = (0.0, c.hypot(d) as f32);
+            rotate = (-c).atan2(d) as f32;
+            scale = (0.0, c.hypot(d) as f32);
         }
     }
     let basis = offset.map(|row| row.map(|value| value as f32));
     let (x, y) = (slot(basis[0], 0), slot(basis[1], 1));
-    let origin = r.vn_transform.map(|t| t.origin).unwrap_or(TransformSpec::CENTRE_ORIGIN);
+    let origin = r
+        .vn_transform
+        .map(|t| t.origin)
+        .unwrap_or(TransformSpec::CENTRE_ORIGIN);
     let mut spec = TransformSpec {
-        translate: (x.unwrap_or(TransformLength::ZERO), y.unwrap_or(TransformLength::ZERO)),
-        rotate, scale, shear, origin,
+        translate: (
+            x.unwrap_or(TransformLength::ZERO),
+            y.unwrap_or(TransformLength::ZERO),
+        ),
+        rotate,
+        scale,
+        shear,
+        origin,
         translation_basis: (x.is_none() || y.is_none()).then_some(basis),
     };
-    if [rotate, scale.0, scale.1, shear].iter().chain(basis.iter().flatten()).any(|v| !v.is_finite()) {
+    if [rotate, scale.0, scale.1, shear]
+        .iter()
+        .chain(basis.iter().flatten())
+        .any(|v| !v.is_finite())
+    {
         dropped.push("an out-of-range 2D composition");
-        spec = TransformSpec { origin, ..TransformSpec::IDENTITY };
+        spec = TransformSpec {
+            origin,
+            ..TransformSpec::IDENTITY
+        };
     }
     r.vn_transform = Some(spec);
     if !dropped.is_empty() {
-        dropped.sort_unstable(); dropped.dedup();
+        dropped.sort_unstable();
+        dropped.dedup();
         once(diagnostics, format!("`transform` supports ordered 2D translate(), rotate(), scale(), skew(), matrix() and `transform-origin` at paint time — dropped {}", dropped.join(", ")));
     }
 }
 pub fn transform_css(spec: TransformSpec) -> String {
-    if spec.is_identity() { return "none".into(); }
+    if spec.is_identity() {
+        return "none".into();
+    }
     let mut parts = Vec::new();
     let len = |value: TransformLength| match value {
         TransformLength::Pixels(value) => format!("{value}px"),
         TransformLength::Fraction(value) => format!("{}%", value * 100.0),
     };
     if let Some([[px, width, cross_x], [py, cross_y, height]]) = spec.translation_basis {
-        if px != 0.0 || py != 0.0 { parts.push(format!("translate({px}px, {py}px)")); }
-        if width != 0.0 || height != 0.0 { parts.push(format!("translate({}%, {}%)", width * 100.0, height * 100.0)); }
-        if cross_x != 0.0 { parts.push(format!("rotate(-90deg) translateY({}%) rotate(90deg)", cross_x * 100.0)); }
-        if cross_y != 0.0 { parts.push(format!("rotate(90deg) translateX({}%) rotate(-90deg)", cross_y * 100.0)); }
+        if px != 0.0 || py != 0.0 {
+            parts.push(format!("translate({px}px, {py}px)"));
+        }
+        if width != 0.0 || height != 0.0 {
+            parts.push(format!(
+                "translate({}%, {}%)",
+                width * 100.0,
+                height * 100.0
+            ));
+        }
+        if cross_x != 0.0 {
+            parts.push(format!(
+                "rotate(-90deg) translateY({}%) rotate(90deg)",
+                cross_x * 100.0
+            ));
+        }
+        if cross_y != 0.0 {
+            parts.push(format!(
+                "rotate(90deg) translateX({}%) rotate(-90deg)",
+                cross_y * 100.0
+            ));
+        }
     } else if !spec.translate.0.is_zero() || !spec.translate.1.is_zero() {
-        parts.push(format!("translate({}, {})", len(spec.translate.0), len(spec.translate.1)));
+        parts.push(format!(
+            "translate({}, {})",
+            len(spec.translate.0),
+            len(spec.translate.1)
+        ));
     }
-    if spec.rotate != 0.0 { parts.push(format!("rotate({}deg)", spec.rotate.to_degrees())); }
-    if spec.shear != 0.0 { parts.push(format!("matrix({},0,{},{},0,0)", spec.scale.0, spec.shear, spec.scale.1)); }
-    else if spec.scale != (1.0, 1.0) { parts.push(format!("scale({}, {})", spec.scale.0, spec.scale.1)); }
+    if spec.rotate != 0.0 {
+        parts.push(format!("rotate({}deg)", spec.rotate.to_degrees()));
+    }
+    if spec.shear != 0.0 {
+        parts.push(format!(
+            "matrix({},0,{},{},0,0)",
+            spec.scale.0, spec.shear, spec.scale.1
+        ));
+    } else if spec.scale != (1.0, 1.0) {
+        parts.push(format!("scale({}, {})", spec.scale.0, spec.scale.1));
+    }
     parts.join(" ")
 }
 fn apply_backdrop_filter(
@@ -5476,7 +6020,12 @@ const SIDE_BOTTOM: u8 = 4;
 const SIDE_LEFT: u8 = 8;
 const SIDES_ALL: u8 = SIDE_TOP | SIDE_RIGHT | SIDE_BOTTOM | SIDE_LEFT;
 
-fn set_border_style(r: &mut StyleRefinement, s: LineStyle, sides: u8, diagnostics: &mut Vec<String>) {
+fn set_border_style(
+    r: &mut StyleRefinement,
+    s: LineStyle,
+    sides: u8,
+    diagnostics: &mut Vec<String>,
+) {
     if matches!(s, LineStyle::None | LineStyle::Hidden) {
         let zero: AbsoluteLength = px(0.0).into();
         if sides & SIDE_TOP != 0 {
@@ -5644,21 +6193,34 @@ mod tests {
     fn visible_beside_a_scrolling_axis_computes_to_auto() {
         let (r, names) = computed_overflow("overflow-y: auto");
         assert_eq!(names, ["auto", "auto"]);
-        assert_eq!(r.overflow.x, Some(Overflow::Scroll), "x scrolls too, it is not just clipped");
+        assert_eq!(
+            r.overflow.x,
+            Some(Overflow::Scroll),
+            "x scrolls too, it is not just clipped"
+        );
         assert_eq!(r.overflow.y, Some(Overflow::Scroll));
 
         let (r, names) = computed_overflow("overflow-x: hidden");
         assert_eq!(names, ["hidden", "auto"]);
         assert_eq!(r.overflow.y, Some(Overflow::Scroll));
 
-        assert_eq!(computed_overflow("overflow-x: scroll").1, ["scroll", "auto"]);
+        assert_eq!(
+            computed_overflow("overflow-x: scroll").1,
+            ["scroll", "auto"]
+        );
         assert_eq!(computed_overflow("overflow: auto").1, ["auto", "auto"]);
-        assert_eq!(computed_overflow("overflow: hidden scroll").1, ["hidden", "scroll"]);
+        assert_eq!(
+            computed_overflow("overflow: hidden scroll").1,
+            ["hidden", "scroll"]
+        );
     }
 
     #[test]
     fn clip_beside_a_scrolling_axis_computes_to_hidden_and_beside_visible_stays() {
-        assert_eq!(computed_overflow("overflow-x: clip; overflow-y: auto").1, ["hidden", "auto"]);
+        assert_eq!(
+            computed_overflow("overflow-x: clip; overflow-y: auto").1,
+            ["hidden", "auto"]
+        );
         let (r, names) = computed_overflow("overflow-x: clip");
         assert_eq!(names, ["clip", "visible"]);
         assert_eq!(r.overflow.y, None);
@@ -5749,7 +6311,10 @@ mod tests {
 
     #[test]
     fn relative_and_elliptical_radii_resolve_at_paint() {
-        let half = gpui::VnCornerRadius { x: relative(0.5), y: relative(0.5) };
+        let half = gpui::VnCornerRadius {
+            x: relative(0.5),
+            y: relative(0.5),
+        };
         let r = clean("border-radius: 50%");
         for (length, relative) in [
             (r.corner_radii.top_left, r.vn_corner_radii.top_left),
@@ -5762,13 +6327,22 @@ mod tests {
         }
 
         let r = clean("border-top-left-radius: calc(50% - 2px)");
-        let calc = DefiniteLength::Calc { fraction: 0.5, pixels: px(-2.) };
-        assert_eq!(r.vn_corner_radii.top_left, Some(Some(gpui::VnCornerRadius { x: calc, y: calc })));
+        let calc = DefiniteLength::Calc {
+            fraction: 0.5,
+            pixels: px(-2.),
+        };
+        assert_eq!(
+            r.vn_corner_radii.top_left,
+            Some(Some(gpui::VnCornerRadius { x: calc, y: calc }))
+        );
 
         let r = clean("border-radius: 10px / 20px");
         assert_eq!(
             r.vn_corner_radii.bottom_left,
-            Some(Some(gpui::VnCornerRadius { x: px(10.).into(), y: px(20.).into() }))
+            Some(Some(gpui::VnCornerRadius {
+                x: px(10.).into(),
+                y: px(20.).into()
+            }))
         );
 
         let r = clean("border-radius: 6px / 6px");
@@ -5791,7 +6365,10 @@ mod tests {
 
     #[test]
     fn flex_wrap_maps_all_three_keywords() {
-        assert_eq!(clean("flex-wrap: wrap").flex_wrap, Some(gpui::FlexWrap::Wrap));
+        assert_eq!(
+            clean("flex-wrap: wrap").flex_wrap,
+            Some(gpui::FlexWrap::Wrap)
+        );
         assert_eq!(
             clean("flex-wrap: wrap-reverse").flex_wrap,
             Some(gpui::FlexWrap::WrapReverse)
@@ -5847,8 +6424,14 @@ mod tests {
         assert_eq!(
             clean("grid-template-rows: repeat(2, minmax(min-content, 1fr)) 40px").vn_grid_rows,
             Some(vec![
-                GridTrack { min: G::MinContent, max: G::Fr(1.0) },
-                GridTrack { min: G::MinContent, max: G::Fr(1.0) },
+                GridTrack {
+                    min: G::MinContent,
+                    max: G::Fr(1.0)
+                },
+                GridTrack {
+                    min: G::MinContent,
+                    max: G::Fr(1.0)
+                },
                 GridTrack::fixed(G::Px(40.0)),
             ])
         );
@@ -5866,8 +6449,21 @@ mod tests {
         use gpui::{GridAutoRepeat, GridTrack, GridTrackSize as G};
         let r = clean("grid-template-columns: repeat(auto-fill, minmax(120px, 1fr))");
         assert_eq!(r.grid_cols, None);
-        assert_eq!(r.vn_grid_cols, Some(vec![GridTrack { min: G::Px(120.0), max: G::Fr(1.0) }]));
-        assert_eq!(r.vn_grid_cols_auto, Some(GridAutoRepeat { fit: false, start: 0, len: 1 }));
+        assert_eq!(
+            r.vn_grid_cols,
+            Some(vec![GridTrack {
+                min: G::Px(120.0),
+                max: G::Fr(1.0)
+            }])
+        );
+        assert_eq!(
+            r.vn_grid_cols_auto,
+            Some(GridAutoRepeat {
+                fit: false,
+                start: 0,
+                len: 1
+            })
+        );
 
         let r = clean("grid-template-rows: 40px repeat(auto-fit, 10px 20%) 1rem");
         assert_eq!(
@@ -5879,11 +6475,22 @@ mod tests {
                 GridTrack::fixed(G::Px(16.0)),
             ])
         );
-        assert_eq!(r.vn_grid_rows_auto, Some(GridAutoRepeat { fit: true, start: 1, len: 2 }));
+        assert_eq!(
+            r.vn_grid_rows_auto,
+            Some(GridAutoRepeat {
+                fit: true,
+                start: 1,
+                len: 2
+            })
+        );
 
         assert_eq!(
             clean("grid-template-columns: 1fr auto").vn_grid_cols_auto,
-            Some(GridAutoRepeat { fit: false, start: 0, len: 0 })
+            Some(GridAutoRepeat {
+                fit: false,
+                start: 0,
+                len: 0
+            })
         );
     }
 
@@ -5897,7 +6504,10 @@ mod tests {
             let (r, d) = map(body);
             assert_eq!(r.grid_cols, None, "{body}");
             assert_eq!(r.vn_grid_cols, None, "{body}");
-            assert!(d.iter().any(|m| m.contains("grid-template-columns")), "{body}: {d:?}");
+            assert!(
+                d.iter().any(|m| m.contains("grid-template-columns")),
+                "{body}: {d:?}"
+            );
         }
     }
 
@@ -5919,17 +6529,39 @@ mod tests {
     #[test]
     fn implicit_track_lists_map_fractional_and_repeating_patterns() {
         use gpui::{GridTrack, GridTrackSize as Track};
-        assert_eq!(clean("grid-auto-columns: 1fr").vn_grid_auto_cols, Some(vec![GridTrack::fr(1.0)]));
-        assert_eq!(clean("grid-auto-rows: 20px 2rem 25% minmax(min-content, 1fr)").vn_grid_auto_rows,
-            Some(vec![GridTrack::fixed(Track::Px(20.0)), GridTrack::fixed(Track::Px(32.0)),
-                GridTrack::fixed(Track::Percent(0.25)), GridTrack { min: Track::MinContent, max: Track::Fr(1.0) }]));
+        assert_eq!(
+            clean("grid-auto-columns: 1fr").vn_grid_auto_cols,
+            Some(vec![GridTrack::fr(1.0)])
+        );
+        assert_eq!(
+            clean("grid-auto-rows: 20px 2rem 25% minmax(min-content, 1fr)").vn_grid_auto_rows,
+            Some(vec![
+                GridTrack::fixed(Track::Px(20.0)),
+                GridTrack::fixed(Track::Px(32.0)),
+                GridTrack::fixed(Track::Percent(0.25)),
+                GridTrack {
+                    min: Track::MinContent,
+                    max: Track::Fr(1.0)
+                }
+            ])
+        );
         // lightningcss canonicalizes a sole `auto` to an empty track list. It must remain Some so
         // the cascade can reset an earlier pattern.
-        assert_eq!(clean("grid-auto-rows: 20px; grid-auto-rows: auto").vn_grid_auto_rows,
-            Some(Vec::new()));
+        assert_eq!(
+            clean("grid-auto-rows: 20px; grid-auto-rows: auto").vn_grid_auto_rows,
+            Some(Vec::new())
+        );
         let (style, diagnostics) = map("grid-auto-columns: 12px fit-content(30px)");
-        assert!(style.vn_grid_auto_cols.is_none(), "unsupported tracks cannot leave a truncated pattern");
-        assert!(diagnostics.iter().any(|message| message.contains("grid-auto-columns / grid-auto-rows")), "{diagnostics:?}");
+        assert!(
+            style.vn_grid_auto_cols.is_none(),
+            "unsupported tracks cannot leave a truncated pattern"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|message| message.contains("grid-auto-columns / grid-auto-rows")),
+            "{diagnostics:?}"
+        );
     }
 
     #[test]
@@ -5938,7 +6570,10 @@ mod tests {
             ("grid-auto-flow: row", gpui::GridAutoFlow::Row),
             ("grid-auto-flow: column", gpui::GridAutoFlow::Column),
             ("grid-auto-flow: row dense", gpui::GridAutoFlow::RowDense),
-            ("grid-auto-flow: column dense", gpui::GridAutoFlow::ColumnDense),
+            (
+                "grid-auto-flow: column dense",
+                gpui::GridAutoFlow::ColumnDense,
+            ),
         ] {
             assert_eq!(clean(body).vn_grid_auto_flow, Some(want), "{body}");
         }
@@ -5980,13 +6615,23 @@ mod tests {
     #[test]
     fn declared_visibility_is_not_the_paint_switch() {
         assert_eq!(extras("visibility: hidden").0.visibility_hidden, Some(true));
-        assert_eq!(extras("visibility: collapse").0.visibility_hidden, Some(true));
-        assert_eq!(extras("visibility: visible").0.visibility_hidden, Some(false));
+        assert_eq!(
+            extras("visibility: collapse").0.visibility_hidden,
+            Some(true)
+        );
+        assert_eq!(
+            extras("visibility: visible").0.visibility_hidden,
+            Some(false)
+        );
         assert_eq!(extras("color: red").0.visibility_hidden, None);
         for sr_only in ["clip: rect(0, 0, 0, 0)"] {
             let mut d = Vec::new();
             let inline = parse_inline_style(sr_only, &mut d);
-            assert_eq!(inline.refinement.and_then(|r| r.visibility), Some(gpui::Visibility::Hidden), "{sr_only}");
+            assert_eq!(
+                inline.refinement.and_then(|r| r.visibility),
+                Some(gpui::Visibility::Hidden),
+                "{sr_only}"
+            );
             assert_eq!(inline.extras.visibility_hidden, None, "{sr_only}");
         }
         let mut d = Vec::new();
@@ -6030,13 +6675,24 @@ mod tests {
         let mut d = Vec::new();
         let vars = crate::vars::resolve(
             &Rc::new(Vars::default()),
-            &[&("--tw-shadow".to_string(), "0 1px 2px 0 rgb(0 0 0 / 0.5)".to_string())],
+            &[&(
+                "--tw-shadow".to_string(),
+                "0 1px 2px 0 rgb(0 0 0 / 0.5)".to_string(),
+            )],
             &crate::Env::default(),
             &mut d,
         );
         let mut r = StyleRefinement::default();
         let mut x = Extras::default();
-        apply_dynamic("box-shadow", "var(--tw-shadow)", &vars, &crate::Env::default(), &mut r, &mut x, &mut d);
+        apply_dynamic(
+            "box-shadow",
+            "var(--tw-shadow)",
+            &vars,
+            &crate::Env::default(),
+            &mut r,
+            &mut x,
+            &mut d,
+        );
         assert!(d.is_empty(), "{d:?}");
         let shadows = r.box_shadow.expect("box-shadow mapped");
         assert_eq!(shadows.len(), 1);
@@ -6048,7 +6704,15 @@ mod tests {
         let mut d = Vec::new();
         let mut r = StyleRefinement::default();
         let mut x = Extras::default();
-        apply_dynamic("box-shadow", "var(--nope)", &Vars::default(), &crate::Env::default(), &mut r, &mut x, &mut d);
+        apply_dynamic(
+            "box-shadow",
+            "var(--nope)",
+            &Vars::default(),
+            &crate::Env::default(),
+            &mut r,
+            &mut x,
+            &mut d,
+        );
         assert_eq!(r.box_shadow, None);
         assert!(d.is_empty(), "{d:?}");
     }
@@ -6068,7 +6732,8 @@ mod tests {
             &mut d,
         );
         assert!(
-            d.iter().any(|m| m.contains("invalid at computed-value time")),
+            d.iter()
+                .any(|m| m.contains("invalid at computed-value time")),
             "{d:?}"
         );
     }
@@ -6109,11 +6774,19 @@ mod tests {
     #[test]
     fn calc_sums_and_products_resolve_to_pixels() {
         assert_eq!(
-            clean("border-radius: calc(0.5rem - 2px)").corner_radii.top_left,
+            clean("border-radius: calc(0.5rem - 2px)")
+                .corner_radii
+                .top_left,
             Some(px(6.0).into())
         );
-        assert_eq!(clean("padding-top: calc(1rem + 4px)").padding.top, Some(px(20.0).into()));
-        assert_eq!(clean("width: calc(2 * 8px)").size.width, Some(Length::Definite(px(16.0).into())));
+        assert_eq!(
+            clean("padding-top: calc(1rem + 4px)").padding.top,
+            Some(px(20.0).into())
+        );
+        assert_eq!(
+            clean("width: calc(2 * 8px)").size.width,
+            Some(Length::Definite(px(16.0).into()))
+        );
         assert_eq!(
             clean("border-top-width: calc(4px + 1px)").border_widths.top,
             Some(px(5.0).into())
@@ -6131,15 +6804,30 @@ mod tests {
     #[test]
     fn a_percentage_inside_calc_is_resolved_by_the_layout() {
         let calc = |fraction: f32, pixels: f32| {
-            Some(Length::Definite(DefiniteLength::Calc { fraction, pixels: px(pixels) }))
+            Some(Length::Definite(DefiniteLength::Calc {
+                fraction,
+                pixels: px(pixels),
+            }))
         };
-        assert_eq!(clean("left: calc(38.89% + 13.33px)").inset.left, calc(0.3889, 13.33));
+        assert_eq!(
+            clean("left: calc(38.89% + 13.33px)").inset.left,
+            calc(0.3889, 13.33)
+        );
         assert_eq!(clean("width: calc(100% - 8px)").size.width, calc(1.0, -8.0));
-        assert_eq!(clean("max-width: calc((100% - 1rem) * 0.5)").max_size.width, calc(0.5, -8.0));
-        assert_eq!(clean("margin-left: calc(-50% + 2px)").margin.left, calc(-0.5, 2.0));
+        assert_eq!(
+            clean("max-width: calc((100% - 1rem) * 0.5)").max_size.width,
+            calc(0.5, -8.0)
+        );
+        assert_eq!(
+            clean("margin-left: calc(-50% + 2px)").margin.left,
+            calc(-0.5, 2.0)
+        );
         assert_eq!(
             clean("padding-top: calc(10% - 1px)").padding.top,
-            Some(DefiniteLength::Calc { fraction: 0.1, pixels: px(-1.0) })
+            Some(DefiniteLength::Calc {
+                fraction: 0.1,
+                pixels: px(-1.0)
+            })
         );
         assert_eq!(
             clean("width: calc(50% - 50% + 3px)").size.width,
@@ -6152,13 +6840,17 @@ mod tests {
         let advised = |body: &str, property: &str| {
             let (_, d) = map(body);
             assert!(
-                d.iter().any(|m| m.starts_with(&format!("`{property}`: this calc() is dropped"))),
+                d.iter()
+                    .any(|m| m.starts_with(&format!("`{property}`: this calc() is dropped"))),
                 "{body:?} produced {d:?}"
             );
         };
         advised("width: min(100%, 10px)", "width");
         advised("left: clamp(0px, 50%, 100px)", "left");
-        advised("background-position: calc(100% - 4px) 0", "background-position");
+        advised(
+            "background-position: calc(100% - 4px) 0",
+            "background-position",
+        );
         advised("border-radius: max(50%, 10px)", "border-radius");
         let (r, _) = map("width: min(100%, 10px)");
         assert_eq!(r.size.width, None);
@@ -6168,26 +6860,47 @@ mod tests {
     fn editor_cursor_shapes_map_to_native_platform_shapes() {
         use gpui::CursorStyle as C;
         for (value, shape) in [
-            ("crosshair", C::Crosshair), ("grab", C::OpenHand), ("grabbing", C::ClosedHand),
-            ("move", C::OpenHand), ("all-scroll", C::OpenHand),
-            ("n-resize", C::ResizeUp), ("s-resize", C::ResizeDown),
-            ("e-resize", C::ResizeRight), ("w-resize", C::ResizeLeft),
-            ("ns-resize", C::ResizeUpDown), ("ew-resize", C::ResizeLeftRight),
-            ("nw-resize", C::ResizeUpLeftDownRight), ("se-resize", C::ResizeUpLeftDownRight),
+            ("crosshair", C::Crosshair),
+            ("grab", C::OpenHand),
+            ("grabbing", C::ClosedHand),
+            ("move", C::OpenHand),
+            ("all-scroll", C::OpenHand),
+            ("n-resize", C::ResizeUp),
+            ("s-resize", C::ResizeDown),
+            ("e-resize", C::ResizeRight),
+            ("w-resize", C::ResizeLeft),
+            ("ns-resize", C::ResizeUpDown),
+            ("ew-resize", C::ResizeLeftRight),
+            ("nw-resize", C::ResizeUpLeftDownRight),
+            ("se-resize", C::ResizeUpLeftDownRight),
             ("nwse-resize", C::ResizeUpLeftDownRight),
-            ("ne-resize", C::ResizeUpRightDownLeft), ("sw-resize", C::ResizeUpRightDownLeft),
+            ("ne-resize", C::ResizeUpRightDownLeft),
+            ("sw-resize", C::ResizeUpRightDownLeft),
             ("nesw-resize", C::ResizeUpRightDownLeft),
-            ("col-resize", C::ResizeColumn), ("row-resize", C::ResizeRow),
+            ("col-resize", C::ResizeColumn),
+            ("row-resize", C::ResizeRow),
             ("vertical-text", C::IBeamCursorForVerticalLayout),
-            ("not-allowed", C::OperationNotAllowed), ("no-drop", C::OperationNotAllowed),
-            ("alias", C::DragLink), ("copy", C::DragCopy), ("context-menu", C::ContextualMenu),
+            ("not-allowed", C::OperationNotAllowed),
+            ("no-drop", C::OperationNotAllowed),
+            ("alias", C::DragLink),
+            ("copy", C::DragCopy),
+            ("context-menu", C::ContextualMenu),
         ] {
-            assert_eq!(clean(&format!("cursor: {value}")).mouse_cursor, Some(shape), "{value}");
+            assert_eq!(
+                clean(&format!("cursor: {value}")).mouse_cursor,
+                Some(shape),
+                "{value}"
+            );
         }
-        assert_eq!(clean("cursor: url(brush.svg) 8 8, crosshair").mouse_cursor, Some(C::Crosshair));
+        assert_eq!(
+            clean("cursor: url(brush.svg) 8 8, crosshair").mouse_cursor,
+            Some(C::Crosshair)
+        );
         let (style, diagnostics) = map("cursor: wait");
         assert_eq!(style.mouse_cursor, Some(C::Arrow));
-        assert!(diagnostics.iter().any(|d| d.contains("no native platform shape")));
+        assert!(diagnostics
+            .iter()
+            .any(|d| d.contains("no native platform shape")));
     }
 
     fn extras(body: &str) -> (Extras, Vec<String>) {
@@ -6270,17 +6983,29 @@ mod tests {
 
     #[test]
     fn positioned_records_a_declared_non_static_position() {
-        for decl in ["position: relative", "position: absolute", "position: fixed", "position: sticky"] {
+        for decl in [
+            "position: relative",
+            "position: absolute",
+            "position: fixed",
+            "position: sticky",
+        ] {
             assert_eq!(extras(decl).0.positioned, Some(true), "{decl}");
         }
         assert_eq!(extras("position: static").0.positioned, Some(false));
         assert_eq!(extras("z-index: 10").0.positioned, None, "no declaration");
-        assert_eq!(extras("position: absolute; position: static").0.positioned, Some(false));
+        assert_eq!(
+            extras("position: absolute; position: static").0.positioned,
+            Some(false)
+        );
         let mut folded = extras("position: relative").0;
         folded.refine(&extras("position: static").0);
         assert_eq!(folded.positioned, Some(false));
         folded.refine(&extras("color: red").0);
-        assert_eq!(folded.positioned, Some(false), "a block that says nothing keeps it");
+        assert_eq!(
+            folded.positioned,
+            Some(false),
+            "a block that says nothing keeps it"
+        );
     }
 
     #[test]
@@ -6307,7 +7032,11 @@ mod tests {
         folded.refine(&extras("z-index: auto").0);
         assert_eq!(folded.z(), None);
         folded.refine(&extras("color: red").0);
-        assert_eq!(folded.z_index, Some(None), "a block that says nothing keeps it");
+        assert_eq!(
+            folded.z_index,
+            Some(None),
+            "a block that says nothing keeps it"
+        );
     }
 
     #[test]
@@ -6323,27 +7052,56 @@ mod tests {
 
     #[test]
     fn user_select_is_carried_to_the_selection() {
-        assert_eq!(extras("user-select: none").0.user_select, Some(UserSelect::None));
-        assert_eq!(extras("-webkit-user-select: none").0.user_select, Some(UserSelect::None));
-        assert_eq!(extras("user-select: text").0.user_select, Some(UserSelect::Text));
-        assert_eq!(extras("user-select: all").0.user_select, Some(UserSelect::All));
-        assert_eq!(extras("user-select: auto").0.user_select, Some(UserSelect::Auto));
+        assert_eq!(
+            extras("user-select: none").0.user_select,
+            Some(UserSelect::None)
+        );
+        assert_eq!(
+            extras("-webkit-user-select: none").0.user_select,
+            Some(UserSelect::None)
+        );
+        assert_eq!(
+            extras("user-select: text").0.user_select,
+            Some(UserSelect::Text)
+        );
+        assert_eq!(
+            extras("user-select: all").0.user_select,
+            Some(UserSelect::All)
+        );
+        assert_eq!(
+            extras("user-select: auto").0.user_select,
+            Some(UserSelect::Auto)
+        );
         assert_eq!(extras("color: red").0.user_select, None);
         let mut folded = extras("user-select: none").0;
         folded.refine(&extras("user-select: auto").0);
         assert_eq!(folded.user_select, Some(UserSelect::Auto));
         let (x, d) = extras("user-select: contain");
         assert_eq!(x.user_select, Some(UserSelect::Text));
-        assert!(d.iter().any(|m| m.contains("user-select: contain")), "{d:?}");
-        for quiet in ["user-select: none", "user-select: text", "user-select: auto", "user-select: all"] {
+        assert!(
+            d.iter().any(|m| m.contains("user-select: contain")),
+            "{d:?}"
+        );
+        for quiet in [
+            "user-select: none",
+            "user-select: text",
+            "user-select: auto",
+            "user-select: all",
+        ] {
             assert!(extras(quiet).1.is_empty(), "{quiet}: {:?}", extras(quiet).1);
         }
     }
 
     #[test]
     fn pointer_events_maps_both_keywords() {
-        assert_eq!(extras("pointer-events: none").0.pointer_events_none, Some(true));
-        assert_eq!(extras("pointer-events: auto").0.pointer_events_none, Some(false));
+        assert_eq!(
+            extras("pointer-events: none").0.pointer_events_none,
+            Some(true)
+        );
+        assert_eq!(
+            extras("pointer-events: auto").0.pointer_events_none,
+            Some(false)
+        );
         let (x, d) = extras("pointer-events: visiblePainted");
         assert_eq!(x.pointer_events_none, None);
         assert!(d.iter().any(|m| m.contains("pointer-events")), "{d:?}");
@@ -6356,11 +7114,16 @@ mod tests {
         let t = r.expect("declared");
         assert_eq!(
             t.translate,
-            (TransformLength::Fraction(-0.5), TransformLength::Fraction(-0.5))
+            (
+                TransformLength::Fraction(-0.5),
+                TransformLength::Fraction(-0.5)
+            )
         );
         assert_eq!(TransformLength::Fraction(-0.5).resolve(400.0), -200.0);
 
-        let t = transform("transform: translateX(1.25rem)").0.expect("declared");
+        let t = transform("transform: translateX(1.25rem)")
+            .0
+            .expect("declared");
         assert_eq!(
             t.translate,
             (TransformLength::Pixels(20.0), TransformLength::Pixels(0.0))
@@ -6376,7 +7139,10 @@ mod tests {
         let t = r.expect("declared");
         assert_eq!(
             t.translate,
-            (TransformLength::Fraction(-0.5), TransformLength::Fraction(-0.5))
+            (
+                TransformLength::Fraction(-0.5),
+                TransformLength::Fraction(-0.5)
+            )
         );
         assert_eq!(t.rotate, 0.0);
         assert_eq!(t.scale, (1.0, 1.0));
@@ -6400,13 +7166,24 @@ mod tests {
             t.translate,
             (TransformLength::Pixels(0.0), TransformLength::Pixels(4.0))
         );
-        assert!((t.rotate - std::f32::consts::FRAC_PI_4).abs() < 1e-5, "{}", t.rotate);
+        assert!(
+            (t.rotate - std::f32::consts::FRAC_PI_4).abs() < 1e-5,
+            "{}",
+            t.rotate
+        );
         assert_eq!(t.scale, (1.5, 1.5));
 
         let spin = transform("transform: rotate(360deg)").0.expect("declared");
-        assert!((spin.rotate - std::f32::consts::TAU).abs() < 1e-4, "{}", spin.rotate);
+        assert!(
+            (spin.rotate - std::f32::consts::TAU).abs() < 1e-4,
+            "{}",
+            spin.rotate
+        );
         assert_eq!(
-            transform("transform: scaleX(-1)").0.expect("declared").scale,
+            transform("transform: scaleX(-1)")
+                .0
+                .expect("declared")
+                .scale,
             (-1.0, 1.0)
         );
 
@@ -6430,27 +7207,43 @@ mod tests {
 
         let right = one("background-image: linear-gradient(to right, #ff0000, #0000ff)");
         let ninety = one("background: linear-gradient(90deg, #ff0000 0%, #0000ff 100%)");
-        assert_eq!(format!("{right:?}"), format!("{ninety:?}"), "`to right` is 90deg");
+        assert_eq!(
+            format!("{right:?}"),
+            format!("{ninety:?}"),
+            "`to right` is 90deg"
+        );
         let down = one("background-image: linear-gradient(#fff, #000)");
         let explicit = one("background-image: linear-gradient(180deg, #fff, #000)");
-        assert_eq!(format!("{down:?}"), format!("{explicit:?}"), "the default is `to bottom`");
+        assert_eq!(
+            format!("{down:?}"),
+            format!("{explicit:?}"),
+            "the default is `to bottom`"
+        );
 
-        assert!(format!("{:?}", one("background-image: radial-gradient(#fff, #000)"))
-            .starts_with("RadialGradient"));
-        assert!(format!("{:?}", one("background-image: conic-gradient(#fff, #000)"))
-            .starts_with("ConicGradient"));
+        assert!(
+            format!("{:?}", one("background-image: radial-gradient(#fff, #000)"))
+                .starts_with("RadialGradient")
+        );
+        assert!(
+            format!("{:?}", one("background-image: conic-gradient(#fff, #000)"))
+                .starts_with("ConicGradient")
+        );
 
         let three = one("background-image: linear-gradient(#f00, #0f0, #00f)");
         assert_eq!(three.live_stops().len(), 3);
 
         let repeating = one("background-image: repeating-linear-gradient(#f00 0px, #00f 10px)");
         assert_eq!(repeating.live_stops().len(), 2);
-        assert_ne!(format!("{repeating:?}"), format!("{:?}", one(
-            "background-image: linear-gradient(#f00 0px, #00f 10px)")));
-
-        let stack = layers(
-            "background-image: linear-gradient(#f00, #f00), linear-gradient(#00f, #00f)",
+        assert_ne!(
+            format!("{repeating:?}"),
+            format!(
+                "{:?}",
+                one("background-image: linear-gradient(#f00 0px, #00f 10px)")
+            )
         );
+
+        let stack =
+            layers("background-image: linear-gradient(#f00, #f00), linear-gradient(#00f, #00f)");
         assert_eq!(stack.len(), 2);
     }
 
@@ -6498,30 +7291,54 @@ mod tests {
              background-position: -88px -44px",
         );
         let stack = x.resolve_background_stack().unwrap();
-        let [PaintLayer::Image { size, position, repeat, .. }] = stack.as_slice() else {
+        let [PaintLayer::Image {
+            size,
+            position,
+            repeat,
+            ..
+        }] = stack.as_slice()
+        else {
             panic!("one image layer: {stack:?}");
         };
         assert_eq!(
             *size,
-            BackgroundSize::Explicit(Some(TileLength::Pixels(1342.0)), Some(TileLength::Pixels(268.0)))
+            BackgroundSize::Explicit(
+                Some(TileLength::Pixels(1342.0)),
+                Some(TileLength::Pixels(268.0))
+            )
         );
-        assert_eq!(*position, (TileLength::Pixels(-88.0), TileLength::Pixels(-44.0)));
+        assert_eq!(
+            *position,
+            (TileLength::Pixels(-88.0), TileLength::Pixels(-44.0))
+        );
         assert_eq!(*repeat, (true, true));
         let size_of = |body: &str| match map_full(body).1.resolve_background_stack().unwrap()[0] {
             PaintLayer::Image { size, .. } => size,
             ref other => panic!("{other:?}"),
         };
-        assert_eq!(size_of("background: url(b.png) center / cover no-repeat"), BackgroundSize::Cover);
-        assert_eq!(size_of("background-image: url(b.png); background-size: contain"), BackgroundSize::Contain);
+        assert_eq!(
+            size_of("background: url(b.png) center / cover no-repeat"),
+            BackgroundSize::Cover
+        );
+        assert_eq!(
+            size_of("background-image: url(b.png); background-size: contain"),
+            BackgroundSize::Contain
+        );
 
-        let (_, x, _) = map_full("background-image: linear-gradient(#0008, #0008), url(banner.png)");
+        let (_, x, _) =
+            map_full("background-image: linear-gradient(#0008, #0008), url(banner.png)");
         let stack = x.resolve_background_stack().unwrap();
         assert!(matches!(stack[0], PaintLayer::Image { .. }), "{stack:?}");
         assert!(matches!(stack[1], PaintLayer::Gradient(_)), "{stack:?}");
 
         let (_, x, _) = map_full("background-image: linear-gradient(#f00, #00f)");
         assert_eq!(x.resolve_background_stack(), None);
-        assert_eq!(map_full("background-image: url(\"\")").1.resolve_background_stack(), None);
+        assert_eq!(
+            map_full("background-image: url(\"\")")
+                .1
+                .resolve_background_stack(),
+            None
+        );
     }
 
     #[test]
@@ -6537,15 +7354,23 @@ mod tests {
     fn an_image_set_names_the_alternative() {
         let (r, d) = map("background-image: image-set(\"a.png\" 1x, \"a-2x.png\" 2x)");
         assert_eq!(r.background, None);
-        assert!(d.iter().any(|m| m.contains("image-set() is not painted")), "{d:?}");
+        assert!(
+            d.iter().any(|m| m.contains("image-set() is not painted")),
+            "{d:?}"
+        );
     }
-
 
     #[test]
     fn letter_and_word_spacing_reach_the_text_style() {
-        assert_eq!(clean("letter-spacing: 6.3px").text.letter_spacing, Some(px(6.3)));
+        assert_eq!(
+            clean("letter-spacing: 6.3px").text.letter_spacing,
+            Some(px(6.3))
+        );
         assert_eq!(clean("word-spacing: 2px").text.word_spacing, Some(px(2.0)));
-        assert_eq!(clean("letter-spacing: normal").text.letter_spacing, Some(px(0.0)));
+        assert_eq!(
+            clean("letter-spacing: normal").text.letter_spacing,
+            Some(px(0.0))
+        );
         assert_eq!(
             clean("letter-spacing: 0.5em").text.letter_spacing,
             Some(px(0.5 * crate::rem_basis()))
@@ -6555,7 +7380,10 @@ mod tests {
     #[test]
     fn no_underline_cancels_an_earlier_one() {
         let r = clean("text-decoration-line: underline; text-decoration-line: none");
-        let u = r.text.underline.expect("declared, so it wins over the earlier one");
+        let u = r
+            .text
+            .underline
+            .expect("declared, so it wins over the earlier one");
         assert_eq!(u.thickness, px(0.0));
         assert_eq!(u.color.map(|c| c.a), Some(0.0));
         let strike = r.text.strikethrough.expect("cleared too");
@@ -6576,9 +7404,18 @@ mod tests {
 
     #[test]
     fn relative_font_weights_resolve_through_the_table() {
-        assert_eq!(clean("font-weight: bolder").text.font_weight, Some(gpui::FontWeight(700.0)));
-        assert_eq!(clean("font-weight: lighter").text.font_weight, Some(gpui::FontWeight(100.0)));
-        assert_eq!(clean("font-weight: 500").text.font_weight, Some(gpui::FontWeight(500.0)));
+        assert_eq!(
+            clean("font-weight: bolder").text.font_weight,
+            Some(gpui::FontWeight(700.0))
+        );
+        assert_eq!(
+            clean("font-weight: lighter").text.font_weight,
+            Some(gpui::FontWeight(100.0))
+        );
+        assert_eq!(
+            clean("font-weight: 500").text.font_weight,
+            Some(gpui::FontWeight(500.0))
+        );
     }
 
     #[test]
@@ -6587,7 +7424,10 @@ mod tests {
             .text
             .font_features
             .expect("declared");
-        assert_eq!(&*features.0, &[("ss01".into(), 1u32), ("liga".into(), 0u32)]);
+        assert_eq!(
+            &*features.0,
+            &[("ss01".into(), 1u32), ("liga".into(), 0u32)]
+        );
 
         let numeric = clean("font-variant-numeric: tabular-nums")
             .text
@@ -6596,13 +7436,20 @@ mod tests {
         assert_eq!(&*numeric.0, &[("tnum".into(), 1u32)]);
 
         let (_, d) = map("font-variation-settings: \"wdth\" 80");
-        assert!(d.iter().any(|m| m.contains("font-variation-settings")), "{d:?}");
+        assert!(
+            d.iter().any(|m| m.contains("font-variation-settings")),
+            "{d:?}"
+        );
     }
 
     #[test]
     fn kerning_and_ligature_keywords_become_features() {
         let features = |css: &str| {
-            clean(css).text.font_features.map(|f| (*f.0).clone()).unwrap_or_default()
+            clean(css)
+                .text
+                .font_features
+                .map(|f| (*f.0).clone())
+                .unwrap_or_default()
         };
         let pairs = |p: &[(&str, u32)]| -> Vec<(String, u32)> {
             p.iter().map(|(t, v)| (t.to_string(), *v)).collect()
@@ -6613,13 +7460,22 @@ mod tests {
         assert!(features("font-variant-ligatures: normal").is_empty());
         assert_eq!(
             features("font-variant-ligatures: none"),
-            pairs(&[("liga", 0), ("clig", 0), ("dlig", 0), ("hlig", 0), ("calt", 0)])
+            pairs(&[
+                ("liga", 0),
+                ("clig", 0),
+                ("dlig", 0),
+                ("hlig", 0),
+                ("calt", 0)
+            ])
         );
         assert_eq!(
             features("font-variant-ligatures: no-common-ligatures discretionary-ligatures"),
             pairs(&[("liga", 0), ("clig", 0), ("dlig", 1)])
         );
-        assert_eq!(features("font-variant-ligatures: no-contextual"), pairs(&[("calt", 0)]));
+        assert_eq!(
+            features("font-variant-ligatures: no-contextual"),
+            pairs(&[("calt", 0)])
+        );
         assert_eq!(
             features(
                 "font-variant-numeric: tabular-nums; font-kerning: none; \
@@ -6634,7 +7490,10 @@ mod tests {
     #[test]
     fn font_family_takes_the_first_installed_family() {
         let family = |css: &str| clean(css).text.font_family.map(|f| f.to_string());
-        assert_eq!(family("font-family: Inter, sans-serif").as_deref(), Some("Inter"));
+        assert_eq!(
+            family("font-family: Inter, sans-serif").as_deref(),
+            Some("Inter")
+        );
 
         set_font_source(|| vec!["Segoe UI".into(), "Consolas".into(), "Arial".into()]);
         assert_eq!(
@@ -6657,10 +7516,19 @@ mod tests {
             .as_deref(),
             Some(".SystemUIFont")
         );
-        assert_eq!(family("font-family: monospace").as_deref(), Some("Consolas"));
+        assert_eq!(
+            family("font-family: monospace").as_deref(),
+            Some("Consolas")
+        );
         assert_eq!(family("font-family: sans-serif").as_deref(), Some("Arial"));
-        assert_eq!(family("font-family: serif").as_deref(), Some(".SystemUIFont"));
-        assert_eq!(family("font-family: Roboto, Helvetica").as_deref(), Some("Roboto"));
+        assert_eq!(
+            family("font-family: serif").as_deref(),
+            Some(".SystemUIFont")
+        );
+        assert_eq!(
+            family("font-family: Roboto, Helvetica").as_deref(),
+            Some("Roboto")
+        );
         let misses = take_font_misses();
         assert_eq!(
             misses,
@@ -6687,14 +7555,29 @@ mod tests {
 
         set_composed_font_families([("Mix".to_string(), true), ("SK PUA".to_string(), false)]);
         let some = |f: &str, rest: &str| (Some(f.to_string()), Some(rest.to_string()));
-        assert_eq!(font("font-family: Mix, \"Segoe UI\", sans-serif"), some("Mix", "Segoe UI|Arial"));
-        assert_eq!(font("font-family: \"SK PUA\", Nowhere, mix, sans-serif"), some("SK PUA", "mix|Arial"));
-        assert_eq!(font("font-family: Nowhere, \"SK PUA\", Mix"), some("SK PUA", "Mix"));
+        assert_eq!(
+            font("font-family: Mix, \"Segoe UI\", sans-serif"),
+            some("Mix", "Segoe UI|Arial")
+        );
+        assert_eq!(
+            font("font-family: \"SK PUA\", Nowhere, mix, sans-serif"),
+            some("SK PUA", "mix|Arial")
+        );
+        assert_eq!(
+            font("font-family: Nowhere, \"SK PUA\", Mix"),
+            some("SK PUA", "Mix")
+        );
         assert!(take_unreached_fonts().is_empty());
-        assert_eq!(font("font-family: Arial, Mix, \"SK PUA\""), some("Arial", ""));
+        assert_eq!(
+            font("font-family: Arial, Mix, \"SK PUA\""),
+            some("Arial", "")
+        );
         assert_eq!(
             take_unreached_fonts(),
-            vec![("Mix".to_string(), "Arial".to_string()), ("SK PUA".to_string(), "Arial".to_string())]
+            vec![
+                ("Mix".to_string(), "Arial".to_string()),
+                ("SK PUA".to_string(), "Arial".to_string())
+            ]
         );
         assert_eq!(font("font-family: Arial"), some("Arial", ""));
         assert!(take_unreached_fonts().is_empty());
@@ -6708,14 +7591,39 @@ mod tests {
         set_font_source(|| vec!["Arial".into(), "SK Half".into()]);
         assert_eq!(web("font-family: \"SK Web\", Arial"), None);
 
-        set_web_font_families(["SK Web".to_string(), "sk half".to_string(), "SK PUA".to_string()]);
-        assert_eq!(web("font-family: \"SK Web\", Arial").as_deref(), Some("SK Web"));
-        assert_eq!(clean("font-family: \"SK Web\", Arial").text.font_family.as_deref(), Some("Arial"));
-        assert_eq!(web("font-family: Nowhere, sk web, sans-serif").as_deref(), Some("sk web"));
-        assert_eq!(web("font-family: \"SK PUA\", \"SK Web\", serif").as_deref(), Some("SK PUA|SK Web"));
+        set_web_font_families([
+            "SK Web".to_string(),
+            "sk half".to_string(),
+            "SK PUA".to_string(),
+        ]);
+        assert_eq!(
+            web("font-family: \"SK Web\", Arial").as_deref(),
+            Some("SK Web")
+        );
+        assert_eq!(
+            clean("font-family: \"SK Web\", Arial")
+                .text
+                .font_family
+                .as_deref(),
+            Some("Arial")
+        );
+        assert_eq!(
+            web("font-family: Nowhere, sk web, sans-serif").as_deref(),
+            Some("sk web")
+        );
+        assert_eq!(
+            web("font-family: \"SK PUA\", \"SK Web\", serif").as_deref(),
+            Some("SK PUA|SK Web")
+        );
         assert_eq!(web("font-family: Arial, \"SK Web\"").as_deref(), Some(""));
-        assert_eq!(web("font-family: sans-serif, \"SK Web\"").as_deref(), Some(""));
-        assert_eq!(web("font-family: \"SK Half\", \"SK Web\"").as_deref(), Some("SK Half"));
+        assert_eq!(
+            web("font-family: sans-serif, \"SK Web\"").as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            web("font-family: \"SK Half\", \"SK Web\"").as_deref(),
+            Some("SK Half")
+        );
         assert_eq!(web("color: red"), None);
         set_web_font_families(Vec::new());
     }
@@ -6735,7 +7643,6 @@ mod tests {
         assert!(d.iter().any(|m| m.contains("legacy `clip")), "{d:?}");
     }
 
-
     #[test]
     fn list_markers_map_to_their_counter_style() {
         use crate::ListMarker;
@@ -6743,8 +7650,14 @@ mod tests {
         assert_eq!(marker("list-style-type: disc"), Some(ListMarker::Disc));
         assert_eq!(marker("list-style-type: circle"), Some(ListMarker::Circle));
         assert_eq!(marker("list-style-type: square"), Some(ListMarker::Square));
-        assert_eq!(marker("list-style-type: decimal"), Some(ListMarker::Decimal));
-        assert_eq!(marker("list-style-type: lower-roman"), Some(ListMarker::LowerRoman));
+        assert_eq!(
+            marker("list-style-type: decimal"),
+            Some(ListMarker::Decimal)
+        );
+        assert_eq!(
+            marker("list-style-type: lower-roman"),
+            Some(ListMarker::LowerRoman)
+        );
         let (_, x, d) = map_full("list-style: square inside");
         assert!(d.is_empty(), "{d:?}");
         assert_eq!(x.list_marker, Some(ListMarker::Square));
@@ -6759,13 +7672,19 @@ mod tests {
         assert_eq!(ListMarker::Disc.render(3).as_deref(), Some("\u{2022}"));
         assert_eq!(ListMarker::None.render(3), None);
         assert_eq!(ListMarker::Decimal.render(1).as_deref(), Some("1."));
-        assert_eq!(ListMarker::DecimalLeadingZero.render(7).as_deref(), Some("07."));
+        assert_eq!(
+            ListMarker::DecimalLeadingZero.render(7).as_deref(),
+            Some("07.")
+        );
         assert_eq!(ListMarker::LowerAlpha.render(1).as_deref(), Some("a."));
         assert_eq!(ListMarker::LowerAlpha.render(26).as_deref(), Some("z."));
         assert_eq!(ListMarker::LowerAlpha.render(27).as_deref(), Some("aa."));
         assert_eq!(ListMarker::UpperAlpha.render(28).as_deref(), Some("AB."));
         assert_eq!(ListMarker::LowerRoman.render(4).as_deref(), Some("iv."));
-        assert_eq!(ListMarker::UpperRoman.render(1994).as_deref(), Some("MCMXCIV."));
+        assert_eq!(
+            ListMarker::UpperRoman.render(1994).as_deref(),
+            Some("MCMXCIV.")
+        );
     }
 
     #[test]
@@ -6785,8 +7704,14 @@ mod tests {
         assert_eq!(o.width, px(2.0));
         assert_eq!(o.color.a, 0.0, "transparent paints nothing");
 
-        assert_eq!(clean("outline-color: #ff0000").vn_outline.unwrap().width, px(0.0));
-        assert_eq!(clean("outline-style: solid").vn_outline.unwrap().width, px(3.0));
+        assert_eq!(
+            clean("outline-color: #ff0000").vn_outline.unwrap().width,
+            px(0.0)
+        );
+        assert_eq!(
+            clean("outline-style: solid").vn_outline.unwrap().width,
+            px(3.0)
+        );
         assert_eq!(
             clean("outline-style: dashed").vn_outline.unwrap().style,
             gpui::BorderStyle::Dashed
@@ -6815,7 +7740,15 @@ mod tests {
             spread_radius: px(0.0),
             inset: false,
         }]);
-        apply_dynamic("box-shadow", "none", &Vars::default(), &crate::Env::default(), &mut r, &mut Extras::default(), &mut d);
+        apply_dynamic(
+            "box-shadow",
+            "none",
+            &Vars::default(),
+            &crate::Env::default(),
+            &mut r,
+            &mut Extras::default(),
+            &mut d,
+        );
         assert_eq!(r.box_shadow, Some(Vec::new()), "{d:?}");
         assert!(d.is_empty(), "{d:?}");
     }
@@ -6827,23 +7760,45 @@ mod tests {
         assert!(d.is_empty(), "{d:?}");
         assert_eq!(extras(r#"content: """#).0.content.as_deref(), Some(""));
         assert_eq!(extras("content: none").0.content, None);
-        for body in ["content: counter(x)", "content: attr(data-x)", "content: url(a.png)"] {
+        for body in [
+            "content: counter(x)",
+            "content: attr(data-x)",
+            "content: url(a.png)",
+        ] {
             let (x, d) = extras(body);
             assert_eq!(x.content, None, "{body}");
-            assert!(d.iter().any(|m| m.contains("does not generate a box")), "{body}: {d:?}");
+            assert!(
+                d.iter().any(|m| m.contains("does not generate a box")),
+                "{body}: {d:?}"
+            );
         }
     }
 
     #[test]
     fn text_transform_folds_onto_the_extras() {
         use crate::mapper::TextTransform as TT;
-        assert_eq!(extras("text-transform: uppercase").0.text_transform, Some(TT::Uppercase));
-        assert_eq!(extras("text-transform: lowercase").0.text_transform, Some(TT::Lowercase));
-        assert_eq!(extras("text-transform: capitalize").0.text_transform, Some(TT::Capitalize));
-        assert_eq!(extras("text-transform: none").0.text_transform, Some(TT::None));
+        assert_eq!(
+            extras("text-transform: uppercase").0.text_transform,
+            Some(TT::Uppercase)
+        );
+        assert_eq!(
+            extras("text-transform: lowercase").0.text_transform,
+            Some(TT::Lowercase)
+        );
+        assert_eq!(
+            extras("text-transform: capitalize").0.text_transform,
+            Some(TT::Capitalize)
+        );
+        assert_eq!(
+            extras("text-transform: none").0.text_transform,
+            Some(TT::None)
+        );
         assert_eq!(TT::Uppercase.apply("Sign in").as_deref(), Some("SIGN IN"));
         assert_eq!(TT::Lowercase.apply("Sign In").as_deref(), Some("sign in"));
-        assert_eq!(TT::Capitalize.apply("sign iN now").as_deref(), Some("Sign IN Now"));
+        assert_eq!(
+            TT::Capitalize.apply("sign iN now").as_deref(),
+            Some("Sign IN Now")
+        );
         assert_eq!(TT::None.apply("Sign in"), None);
     }
 
@@ -6854,15 +7809,24 @@ mod tests {
         assert_eq!(referenced.filter_url.as_deref(), Some("#color-matrix"));
         referenced.refine(&extras("filter:none").0);
         assert!(referenced.filter_url.is_none());
-        assert!(extras("filter:url('#color-matrix'); filter:none").0.filter_url.is_none());
-        assert!(extras("filter:drop-shadow(1px 2px red); filter:none").0.drop_shadow.is_none());
+        assert!(extras("filter:url('#color-matrix'); filter:none")
+            .0
+            .filter_url
+            .is_none());
+        assert!(extras("filter:drop-shadow(1px 2px red); filter:none")
+            .0
+            .drop_shadow
+            .is_none());
     }
 
     #[test]
     fn a_lone_blur_is_recorded_and_the_other_filters_are_still_advised() {
         let (x, d) = extras("filter: blur(64px)");
         assert_eq!(x.blur, Some(64.0));
-        assert!(d.is_empty(), "a lone blur() is implemented, not advised: {d:?}");
+        assert!(
+            d.is_empty(),
+            "a lone blur() is implemented, not advised: {d:?}"
+        );
 
         assert_eq!(extras("filter: none").0.blur, Some(0.0));
 
@@ -6880,23 +7844,45 @@ mod tests {
     fn nickname_six_color_and_thirteen_stop_travelling_gradients_keep_every_stop() {
         let palette = [0xff3355, 0xffaa00, 0x00ff44, 0x0088ff, 0x9933ff, 0xff55bb];
         for travelling in [false, true] {
-            let colors: Vec<_> = if travelling { palette.iter().chain(palette.iter()).chain(palette[..1].iter()).copied().collect() }
-                else { palette.to_vec() };
+            let colors: Vec<_> = if travelling {
+                palette
+                    .iter()
+                    .chain(palette.iter())
+                    .chain(palette[..1].iter())
+                    .copied()
+                    .collect()
+            } else {
+                palette.to_vec()
+            };
             let css = format!("background-image:linear-gradient(90deg,{});background-clip:text;color:transparent;background-size:200% 100%;background-position:-100% 0",
                 colors.iter().map(|color| format!("#{color:06x}")).collect::<Vec<_>>().join(","));
             let (extras, diagnostics) = extras(&css);
             assert!(diagnostics.is_empty(), "{diagnostics:?}");
-            let layers = extras.background_images.as_ref().expect("gradient brush stack");
+            let layers = extras
+                .background_images
+                .as_ref()
+                .expect("gradient brush stack");
             for (index, color) in colors.iter().enumerate() {
                 let expected: Hsla = gpui::rgb(*color).into();
                 let position = index as f32 / (colors.len() - 1) as f32;
-                assert!(layers.iter().flat_map(|layer| layer.background.live_stops()).any(|stop|
-                    stop.color == expected && (stop.percentage - position).abs() < 1e-5),
-                    "stop {index}/{} must survive transparent-band packing", colors.len());
+                assert!(
+                    layers
+                        .iter()
+                        .flat_map(|layer| layer.background.live_stops())
+                        .any(|stop| stop.color == expected
+                            && (stop.percentage - position).abs() < 1e-5),
+                    "stop {index}/{} must survive transparent-band packing",
+                    colors.len()
+                );
             }
-            assert!(layers.iter().all(|layer| layer.background.live_stops().len() <= gpui::GRADIENT_STOPS));
+            assert!(layers
+                .iter()
+                .all(|layer| layer.background.live_stops().len() <= gpui::GRADIENT_STOPS));
             assert_eq!(extras.background_clip_text, Some(true));
-            assert_eq!(extras.background_position.as_ref().unwrap()[0].0, TileLength::Fraction(-1.));
+            assert_eq!(
+                extras.background_position.as_ref().unwrap()[0].0,
+                TileLength::Fraction(-1.)
+            );
         }
     }
 
@@ -6907,9 +7893,14 @@ mod tests {
              background-clip: text; color: transparent",
         );
         assert_eq!(x.background_clip_text, Some(true));
-        let key = x.background_key_color.expect("a gradient contributes a key colour");
+        let key = x
+            .background_key_color
+            .expect("a gradient contributes a key colour");
         assert!(key.s > 0.8 && key.l > 0.4 && key.l < 0.7, "{key:?}");
-        assert!(key.h < 0.15, "an amber ramp must not average to a cold hue: {key:?}");
+        assert!(
+            key.h < 0.15,
+            "an amber ramp must not average to a cold hue: {key:?}"
+        );
 
         let (x, _) = extras("background-color: #ff0000; -webkit-background-clip: text");
         assert_eq!(x.background_clip_text, Some(true));
@@ -6919,11 +7910,17 @@ mod tests {
     #[test]
     fn rem_resolves_against_the_root_font_size() {
         assert_eq!(rem_basis(), INITIAL_REM_BASIS);
-        assert_eq!(clean("width: 32rem").size.width, Some(Length::Definite(px(512.0).into())));
+        assert_eq!(
+            clean("width: 32rem").size.width,
+            Some(Length::Definite(px(512.0).into()))
+        );
 
         assert!(set_rem_basis(14.0), "a new basis is a change");
         assert!(!set_rem_basis(14.0), "the same basis is not");
-        assert_eq!(clean("width: 32rem").size.width, Some(Length::Definite(px(448.0).into())));
+        assert_eq!(
+            clean("width: 32rem").size.width,
+            Some(Length::Definite(px(448.0).into()))
+        );
 
         // A basis that would silently rescale the whole app is refused, and "the root has no
         // font-size yet" is a normal state, not a change.
@@ -6941,7 +7938,10 @@ mod tests {
         assert_eq!(w("width: 3ex"), Some(Length::Definite(px(24.0).into())));
         assert_eq!(w("width: 2rch"), Some(Length::Definite(px(16.0).into())));
         assert_eq!(w("width: 2rex"), Some(Length::Definite(px(16.0).into())));
-        assert_eq!(w("width: calc(2ch + 1px)"), Some(Length::Definite(px(17.0).into())));
+        assert_eq!(
+            w("width: calc(2ch + 1px)"),
+            Some(Length::Definite(px(17.0).into()))
+        );
 
         assert!(set_rem_basis(14.0));
         assert_eq!(w("width: 1ch"), Some(Length::Definite(px(7.0).into())));
@@ -6966,24 +7966,56 @@ mod tests {
     fn border_radius_inherit_is_recorded_per_corner() {
         let inherit = |name: &str| {
             let (mut r, mut x, mut d) = (StyleRefinement::default(), Extras::default(), Vec::new());
-            apply_dynamic(name, "inherit", &Vars::default(), &crate::Env::default(), &mut r, &mut x, &mut d);
+            apply_dynamic(
+                name,
+                "inherit",
+                &Vars::default(),
+                &crate::Env::default(),
+                &mut r,
+                &mut x,
+                &mut d,
+            );
             assert!(d.is_empty(), "{name}: {d:?}");
             (r, x)
         };
         let (r, x) = inherit("border-radius");
-        assert_eq!(x.radius_inherit, RadiusInherit { declared: 15, inherit: 15 });
-        assert_eq!(r.corner_radii.top_left, None, "nothing to write until the parent is known");
+        assert_eq!(
+            x.radius_inherit,
+            RadiusInherit {
+                declared: 15,
+                inherit: 15
+            }
+        );
+        assert_eq!(
+            r.corner_radii.top_left, None,
+            "nothing to write until the parent is known"
+        );
         let (_, x) = inherit("border-bottom-left-radius");
         let bl = RadiusInherit::BOTTOM_LEFT;
-        assert_eq!(x.radius_inherit, RadiusInherit { declared: bl, inherit: bl });
+        assert_eq!(
+            x.radius_inherit,
+            RadiusInherit {
+                declared: bl,
+                inherit: bl
+            }
+        );
         assert_eq!(inherit("color").1.radius_inherit, RadiusInherit::default());
 
         let (_, x, d) = map_full("border-radius: 4px; border-top-left-radius: 50%");
         assert!(d.is_empty(), "{d:?}");
-        assert_eq!(x.radius_inherit, RadiusInherit { declared: 15, inherit: 0 });
+        assert_eq!(
+            x.radius_inherit,
+            RadiusInherit {
+                declared: 15,
+                inherit: 0
+            }
+        );
         let mut folded = inherit("border-radius").1;
         folded.refine(&map_full("border-top-right-radius: 2px").1);
-        assert_eq!(folded.radius_inherit.inherit, RadiusInherit::ALL & !RadiusInherit::TOP_RIGHT);
+        assert_eq!(
+            folded.radius_inherit.inherit,
+            RadiusInherit::ALL & !RadiusInherit::TOP_RIGHT
+        );
         folded.refine(&inherit("border-top-right-radius").1);
         assert_eq!(folded.radius_inherit.inherit, RadiusInherit::ALL);
     }
@@ -6999,13 +8031,22 @@ mod tests {
         for (body, needle) in [
             ("vertical-align: middle", "vertical-align"),
             ("text-indent: 2em", "text-indent"),
-            ("list-style-image: url(dot.png)", "this list marker is not generated"),
+            (
+                "list-style-image: url(dot.png)",
+                "this list marker is not generated",
+            ),
             ("resize: both", "resize"),
             ("user-select: contain", "user-select"),
-            ("filter: grayscale(1)", "supported functions are blur(), drop-shadow()"),
+            (
+                "filter: grayscale(1)",
+                "supported functions are blur(), drop-shadow()",
+            ),
             ("border-collapse: collapse", "table properties"),
             ("clip: rect(0,0,10px,10px)", "legacy `clip"),
-            ("font-variation-settings: \"wdth\" 80", "font-variation-settings"),
+            (
+                "font-variation-settings: \"wdth\" 80",
+                "font-variation-settings",
+            ),
         ] {
             let (_, d) = map(body);
             assert!(
@@ -7088,8 +8129,14 @@ mod tests {
         let (r, diagnostics) = map("border-top: 1px solid #ff0000; border-left-color: #00ff00");
         assert_eq!(r.border_widths.top, Some(px(1.0).into()));
         assert_eq!(r.border_widths.bottom, None);
-        assert_eq!(r.vn_border_colors.top, Some(Some(gpui::rgb(0xff0000).into())));
-        assert_eq!(r.vn_border_colors.left, Some(Some(gpui::rgb(0x00ff00).into())));
+        assert_eq!(
+            r.vn_border_colors.top,
+            Some(Some(gpui::rgb(0xff0000).into()))
+        );
+        assert_eq!(
+            r.vn_border_colors.left,
+            Some(Some(gpui::rgb(0x00ff00).into()))
+        );
         assert_eq!(r.vn_border_colors.right, None);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
@@ -7097,21 +8144,39 @@ mod tests {
     #[test]
     fn border_color_shorthand_retains_four_colours_and_resets_side_overrides() {
         let (r, diagnostics) = map("border-color: red green blue transparent");
-        assert_eq!(r.vn_border_colors.top, Some(Some(gpui::rgb(0xff0000).into())));
-        assert_eq!(r.vn_border_colors.right, Some(Some(gpui::rgb(0x008000).into())));
-        assert_eq!(r.vn_border_colors.bottom, Some(Some(gpui::rgb(0x0000ff).into())));
-        assert!(r.vn_border_colors.left.flatten().is_some_and(|c| c.is_transparent()));
+        assert_eq!(
+            r.vn_border_colors.top,
+            Some(Some(gpui::rgb(0xff0000).into()))
+        );
+        assert_eq!(
+            r.vn_border_colors.right,
+            Some(Some(gpui::rgb(0x008000).into()))
+        );
+        assert_eq!(
+            r.vn_border_colors.bottom,
+            Some(Some(gpui::rgb(0x0000ff).into()))
+        );
+        assert!(r
+            .vn_border_colors
+            .left
+            .flatten()
+            .is_some_and(|c| c.is_transparent()));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let (r, diagnostics) = map("border-left-color: blue; border-color: red");
-        assert_eq!(r.vn_border_colors.left, Some(Some(gpui::rgb(0xff0000).into())));
+        assert_eq!(
+            r.vn_border_colors.left,
+            Some(Some(gpui::rgb(0xff0000).into()))
+        );
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
     #[test]
     fn scrollbar_color_accepts_functional_colours() {
-        for body in ["scrollbar-color: hsl(240 5% 64% / 0.35) transparent",
+        for body in [
+            "scrollbar-color: hsl(240 5% 64% / 0.35) transparent",
             "scrollbar-color: rgba(128, 24, 255, 0.5) #0000",
-            "scrollbar-color: hsl(0 0% 10%) transparent"] {
+            "scrollbar-color: hsl(0 0% 10%) transparent",
+        ] {
             let (_, extras, diagnostics) = map_full(body);
             assert!(extras.scrollbar_color.is_some(), "{body}: {diagnostics:?}");
             assert!(diagnostics.is_empty(), "{body}: {diagnostics:?}");
@@ -7125,7 +8190,10 @@ mod tests {
             .expect("declared");
         assert_eq!(
             spec.origin,
-            (TransformLength::Fraction(0.0), TransformLength::Fraction(0.0))
+            (
+                TransformLength::Fraction(0.0),
+                TransformLength::Fraction(0.0)
+            )
         );
         let spec = transform("transform: rotate(45deg); transform-origin: 100% 0")
             .0
@@ -7146,8 +8214,14 @@ mod tests {
     fn a_corner_transform_origin_pins_that_corner() {
         use gpui::{Bounds, Point, Size};
         let bounds = Bounds {
-            origin: Point { x: px(100.0), y: px(50.0) },
-            size: Size { width: px(200.0), height: px(100.0) },
+            origin: Point {
+                x: px(100.0),
+                y: px(50.0),
+            },
+            size: Size {
+                width: px(200.0),
+                height: px(100.0),
+            },
         };
         let spec = transform("transform-origin: left top; transform: scale(2)")
             .0
@@ -7156,19 +8230,29 @@ mod tests {
         let pinned = m.apply(bounds.origin);
         assert!((f32::from(pinned.x) - 100.0).abs() < 1e-3, "{pinned:?}");
         assert!((f32::from(pinned.y) - 50.0).abs() < 1e-3, "{pinned:?}");
-        let far = m.apply(Point { x: px(300.0), y: px(150.0) });
+        let far = m.apply(Point {
+            x: px(300.0),
+            y: px(150.0),
+        });
         assert!((f32::from(far.x) - 500.0).abs() < 1e-3, "{far:?}");
         assert!((f32::from(far.y) - 250.0).abs() < 1e-3, "{far:?}");
     }
 
     #[test]
     fn a_matrix_decomposes_into_translate_rotate_scale() {
-        let spec = transform("transform: matrix(2, 0, 0, 2, 10, 20)").0.expect("declared");
-        assert_eq!(spec.translate, (TransformLength::Pixels(10.0), TransformLength::Pixels(20.0)));
+        let spec = transform("transform: matrix(2, 0, 0, 2, 10, 20)")
+            .0
+            .expect("declared");
+        assert_eq!(
+            spec.translate,
+            (TransformLength::Pixels(10.0), TransformLength::Pixels(20.0))
+        );
         assert!((spec.scale.0 - 2.0).abs() < 1e-4, "{spec:?}");
         assert!((spec.scale.1 - 2.0).abs() < 1e-4, "{spec:?}");
         assert!(spec.rotate.abs() < 1e-4, "{spec:?}");
-        let spec = transform("transform: matrix(0, 1, -1, 0, 0, 0)").0.expect("declared");
+        let spec = transform("transform: matrix(0, 1, -1, 0, 0, 0)")
+            .0
+            .expect("declared");
         assert!(
             (spec.rotate - std::f32::consts::FRAC_PI_2).abs() < 1e-4,
             "{spec:?}"
@@ -7181,16 +8265,32 @@ mod tests {
     #[test]
     fn finite_affine_matrices_keep_every_coefficient_including_singular_ones() {
         use gpui::{Bounds, Point, Size};
-        let bounds = Bounds { origin: Point::new(px(100.0), px(50.0)), size: Size::new(px(200.0), px(100.0)) };
-        for [a,b,c,d,e,f] in [[1.0,0.25,0.5,1.0,10.0,20.0], [-2.0,0.0,0.5,3.0,-10.0,4.0],
-            [0.0,0.0,2.0,3.0,0.0,0.0], [1.0,2.0,2.0,4.0,0.0,0.0], [0.0;6]] {
-            let (spec, diagnostics) = transform(&format!("transform-origin:0 0; transform:matrix({a},{b},{c},{d},{e},{f})"));
+        let bounds = Bounds {
+            origin: Point::new(px(100.0), px(50.0)),
+            size: Size::new(px(200.0), px(100.0)),
+        };
+        for [a, b, c, d, e, f] in [
+            [1.0, 0.25, 0.5, 1.0, 10.0, 20.0],
+            [-2.0, 0.0, 0.5, 3.0, -10.0, 4.0],
+            [0.0, 0.0, 2.0, 3.0, 0.0, 0.0],
+            [1.0, 2.0, 2.0, 4.0, 0.0, 0.0],
+            [0.0; 6],
+        ] {
+            let (spec, diagnostics) = transform(&format!(
+                "transform-origin:0 0; transform:matrix({a},{b},{c},{d},{e},{f})"
+            ));
             assert!(diagnostics.is_empty(), "{diagnostics:?}");
             let matrix = spec.unwrap().to_matrix(bounds, 1.0);
-            for (x,y) in [(0.0,0.0), (1.0,0.0), (0.0,1.0), (30.0,-17.0)] {
-                let point = matrix.apply(Point::new(px(100.0+x),px(50.0+y)));
-                assert!((f32::from(point.x)-(100.0+a*x+c*y+e)).abs()<0.001, "{matrix:?} {point:?}");
-                assert!((f32::from(point.y)-(50.0+b*x+d*y+f)).abs()<0.001, "{matrix:?} {point:?}");
+            for (x, y) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (30.0, -17.0)] {
+                let point = matrix.apply(Point::new(px(100.0 + x), px(50.0 + y)));
+                assert!(
+                    (f32::from(point.x) - (100.0 + a * x + c * y + e)).abs() < 0.001,
+                    "{matrix:?} {point:?}"
+                );
+                assert!(
+                    (f32::from(point.y) - (50.0 + b * x + d * y + f)).abs() < 0.001,
+                    "{matrix:?} {point:?}"
+                );
             }
         }
     }
@@ -7198,31 +8298,54 @@ mod tests {
     #[test]
     fn projected_editor_matrix_preserves_centring_and_post_rotation_scale() {
         use gpui::{Bounds, Point, Size};
-        let bounds = Bounds { origin: Point::new(px(0.0),px(0.0)), size: Size::new(px(200.0),px(100.0)) };
-        let (spec, diagnostics) = transform("transform:translate(-50%,-50%) matrix(1,.25,.5,1,0,0) rotate(90deg) scale(2,3)");
+        let bounds = Bounds {
+            origin: Point::new(px(0.0), px(0.0)),
+            size: Size::new(px(200.0), px(100.0)),
+        };
+        let (spec, diagnostics) = transform(
+            "transform:translate(-50%,-50%) matrix(1,.25,.5,1,0,0) rotate(90deg) scale(2,3)",
+        );
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        let spec = spec.unwrap(); assert!(spec.translation_basis.is_none());
+        let spec = spec.unwrap();
+        assert!(spec.translation_basis.is_none());
         let matrix = spec.to_matrix(bounds, 1.0);
-        for (x,y,ex,ey) in [(100.0,50.0,0.0,0.0),(101.0,50.0,1.0,2.0),(100.0,51.0,-3.0,-0.75)] {
-            let point=matrix.apply(Point::new(px(x),px(y)));
-            assert!((f32::from(point.x)-ex).abs()<0.001 && (f32::from(point.y)-ey).abs()<0.001, "{point:?} vs {ex},{ey}");
+        for (x, y, ex, ey) in [
+            (100.0, 50.0, 0.0, 0.0),
+            (101.0, 50.0, 1.0, 2.0),
+            (100.0, 51.0, -3.0, -0.75),
+        ] {
+            let point = matrix.apply(Point::new(px(x), px(y)));
+            assert!(
+                (f32::from(point.x) - ex).abs() < 0.001 && (f32::from(point.y) - ey).abs() < 0.001,
+                "{point:?} vs {ex},{ey}"
+            );
         }
     }
 
     #[test]
     fn ordered_translation_can_mix_pixels_and_both_box_axes_at_any_dpi() {
         use gpui::{Bounds, Point, Size};
-        let bounds = Bounds { origin: Point::new(px(0.0),px(0.0)), size: Size::new(px(200.0),px(100.0)) };
-        for (css,x,y) in [
-            ("rotate(90deg) translate(50%,25%)", -25.0,100.0),
-            ("translate(-50%,25%) matrix(1,0,0,1,10,-4)", -90.0,21.0),
-            ("matrix(1,.25,.5,1,10,20) translate(8px,4px)", 20.0,26.0),
+        let bounds = Bounds {
+            origin: Point::new(px(0.0), px(0.0)),
+            size: Size::new(px(200.0), px(100.0)),
+        };
+        for (css, x, y) in [
+            ("rotate(90deg) translate(50%,25%)", -25.0, 100.0),
+            ("translate(-50%,25%) matrix(1,0,0,1,10,-4)", -90.0, 21.0),
+            ("matrix(1,.25,.5,1,10,20) translate(8px,4px)", 20.0, 26.0),
         ] {
-            let (spec, diagnostics)=transform(&format!("transform-origin:0 0; transform:{css}"));
+            let (spec, diagnostics) = transform(&format!("transform-origin:0 0; transform:{css}"));
             assert!(diagnostics.is_empty(), "{diagnostics:?}");
-            for dpi in [1.0,2.0] {
-                let point=spec.unwrap().to_matrix(bounds,dpi).apply(Point::new(px(0.0),px(0.0)));
-                assert!((f32::from(point.x)-x*dpi).abs()<0.001 && (f32::from(point.y)-y*dpi).abs()<0.001, "{css}: {point:?}");
+            for dpi in [1.0, 2.0] {
+                let point = spec
+                    .unwrap()
+                    .to_matrix(bounds, dpi)
+                    .apply(Point::new(px(0.0), px(0.0)));
+                assert!(
+                    (f32::from(point.x) - x * dpi).abs() < 0.001
+                        && (f32::from(point.y) - y * dpi).abs() < 0.001,
+                    "{css}: {point:?}"
+                );
             }
         }
     }
@@ -7230,35 +8353,62 @@ mod tests {
     #[test]
     fn shear_and_mixed_translation_survive_cssom_and_waapi_serialization() {
         use gpui::{Bounds, Point, Size};
-        let bounds=Bounds {origin:Point::new(px(0.0),px(0.0)),size:Size::new(px(200.0),px(100.0))};
-        for css in ["matrix(1,.25,.5,1,10,20)","rotate(90deg) translate(50%,25%) skewX(20deg)","translate(-50%,25%) matrix(1,0,.5,1,10,-4)"] {
-            let original=transform(&format!("transform:{css}")).0.unwrap();
-            let text=transform_css(original);
-            let replayed=transform(&format!("transform:{text}")).0.unwrap();
-            for (x,y) in [(0.0,0.0),(20.0,30.0),(200.0,100.0)] {
-                let p=Point::new(px(x),px(y)); let a=original.to_matrix(bounds,1.0).apply(p); let b=replayed.to_matrix(bounds,1.0).apply(p);
-                assert!((f32::from(a.x)-f32::from(b.x)).abs()<0.001 && (f32::from(a.y)-f32::from(b.y)).abs()<0.001, "{css} -> {text}: {a:?} vs {b:?}");
+        let bounds = Bounds {
+            origin: Point::new(px(0.0), px(0.0)),
+            size: Size::new(px(200.0), px(100.0)),
+        };
+        for css in [
+            "matrix(1,.25,.5,1,10,20)",
+            "rotate(90deg) translate(50%,25%) skewX(20deg)",
+            "translate(-50%,25%) matrix(1,0,.5,1,10,-4)",
+        ] {
+            let original = transform(&format!("transform:{css}")).0.unwrap();
+            let text = transform_css(original);
+            let replayed = transform(&format!("transform:{text}")).0.unwrap();
+            for (x, y) in [(0.0, 0.0), (20.0, 30.0), (200.0, 100.0)] {
+                let p = Point::new(px(x), px(y));
+                let a = original.to_matrix(bounds, 1.0).apply(p);
+                let b = replayed.to_matrix(bounds, 1.0).apply(p);
+                assert!(
+                    (f32::from(a.x) - f32::from(b.x)).abs() < 0.001
+                        && (f32::from(a.y) - f32::from(b.y)).abs() < 0.001,
+                    "{css} -> {text}: {a:?} vs {b:?}"
+                );
             }
         }
-        let spin=transform("transform:rotate(360deg) skew(0deg,0deg)").0.unwrap();
-        assert!((TransformSpec::IDENTITY.interpolate(spin,0.5).rotate-std::f32::consts::PI).abs()<0.0001);
-        let shear=transform("transform:matrix(1,0,1,1,0,0)").0.unwrap();
-        assert!((TransformSpec::IDENTITY.interpolate(shear,0.5).shear-0.5).abs()<0.0001);
+        let spin = transform("transform:rotate(360deg) skew(0deg,0deg)")
+            .0
+            .unwrap();
+        assert!(
+            (TransformSpec::IDENTITY.interpolate(spin, 0.5).rotate - std::f32::consts::PI).abs()
+                < 0.0001
+        );
+        let shear = transform("transform:matrix(1,0,1,1,0,0)").0.unwrap();
+        assert!((TransformSpec::IDENTITY.interpolate(shear, 0.5).shear - 0.5).abs() < 0.0001);
     }
 
     #[test]
     fn resize_none_is_silent_and_user_resize_requests_keep_the_advisory() {
         assert!(map("resize:none").1.is_empty());
-        for value in ["both","horizontal","vertical"] {
-            assert!(map(&format!("resize:{value}")).1.iter().any(|message|message.contains("`resize` is not applied")));
+        for value in ["both", "horizontal", "vertical"] {
+            assert!(map(&format!("resize:{value}"))
+                .1
+                .iter()
+                .any(|message| message.contains("`resize` is not applied")));
         }
     }
     #[test]
     fn the_matrix_turns_about_the_box_centre() {
         use gpui::{Bounds, Point, Size};
         let bounds = Bounds {
-            origin: Point { x: px(100.0), y: px(50.0) },
-            size: Size { width: px(200.0), height: px(100.0) },
+            origin: Point {
+                x: px(100.0),
+                y: px(50.0),
+            },
+            size: Size {
+                width: px(200.0),
+                height: px(100.0),
+            },
         };
         let quarter = transform("transform: rotate(90deg)").0.expect("declared");
         let m = quarter.to_matrix(bounds, 1.0);
@@ -7269,7 +8419,9 @@ mod tests {
         assert!((f32::from(corner.x) - 250.0).abs() < 1e-3, "{corner:?}");
         assert!(f32::from(corner.y).abs() < 1e-3, "{corner:?}");
 
-        let half = transform("transform: translate(-50%, -50%)").0.expect("declared");
+        let half = transform("transform: translate(-50%, -50%)")
+            .0
+            .expect("declared");
         let m = half.to_matrix(bounds, 1.0);
         let moved = m.apply(bounds.origin);
         assert!((f32::from(moved.x) - 0.0).abs() < 1e-3, "{moved:?}");
@@ -7283,9 +8435,15 @@ mod tests {
         let red = extras("fill: #ff0000").0.fill;
         assert!(matches!(red, Some(SvgPaint::Color(_))), "{red:?}");
         assert_eq!(red.unwrap().as_attr(), "rgb(255,0,0)");
-        let faint = extras("stroke: rgba(219, 232, 255, 0.17)").0.stroke.expect("declared");
+        let faint = extras("stroke: rgba(219, 232, 255, 0.17)")
+            .0
+            .stroke
+            .expect("declared");
         assert_eq!(faint.as_attr(), "rgba(219,232,255,0.169)");
-        assert_eq!(extras("stroke: currentColor").0.stroke, Some(SvgPaint::Current));
+        assert_eq!(
+            extras("stroke: currentColor").0.stroke,
+            Some(SvgPaint::Current)
+        );
         assert_eq!(SvgPaint::None.as_attr(), "none");
         assert_eq!(extras("fill: url(#g)").0.fill, Some(SvgPaint::Server));
         assert_eq!(SvgPaint::Server.as_attr(), "currentColor");
@@ -7300,7 +8458,9 @@ mod tests {
         );
         assert!(d.is_empty(), "{d:?}");
         let list = x.svg_presentation.clone().expect("carried");
-        let get = |l: &[(&'static str, Rc<str>)], n: &str| l.iter().find(|(k, _)| *k == n).map(|(_, v)| v.to_string());
+        let get = |l: &[(&'static str, Rc<str>)], n: &str| {
+            l.iter().find(|(k, _)| *k == n).map(|(_, v)| v.to_string())
+        };
         assert_eq!(get(&list, "stroke-opacity").as_deref(), Some(".28")); // lightningcss's minified text, a valid SVG <number>
         assert_eq!(get(&list, "stroke-width").as_deref(), Some("1px"));
         assert_eq!(get(&list, "shape-rendering").as_deref(), Some("crispEdges"));
@@ -7335,9 +8495,18 @@ mod tests {
         assert_eq!(r.inset.bottom, Some(gpui::relative(0.05).into()));
 
         let later = |body: &str| clean(body).margin.left;
-        assert_eq!(later("margin-left: 3px; margin-inline-start: 5px"), Some(px(5.0).into()));
-        assert_eq!(later("margin-inline-start: 5px; margin-left: 3px"), Some(px(3.0).into()));
-        assert_eq!(clean("margin: 1px; margin-inline-end: 9px").margin.right, Some(px(9.0).into()));
+        assert_eq!(
+            later("margin-left: 3px; margin-inline-start: 5px"),
+            Some(px(5.0).into())
+        );
+        assert_eq!(
+            later("margin-inline-start: 5px; margin-left: 3px"),
+            Some(px(3.0).into())
+        );
+        assert_eq!(
+            clean("margin: 1px; margin-inline-end: 9px").margin.right,
+            Some(px(9.0).into())
+        );
     }
 
     #[test]
@@ -7361,7 +8530,10 @@ mod tests {
     #[test]
     fn drop_shadow_parses_into_extras_and_says_nothing() {
         let (_, x, d) = map_full("filter: drop-shadow(2px 4px 6px rgb(0 0 0 / 0.5))");
-        assert!(d.is_empty(), "the shape gpui can draw exactly must not advise: {d:?}");
+        assert!(
+            d.is_empty(),
+            "the shape gpui can draw exactly must not advise: {d:?}"
+        );
         let s = x.drop_shadow.expect("drop-shadow() reached Extras");
         assert_eq!((s.dx, s.dy, s.blur), (2.0, 4.0, 6.0));
         assert!(s.color.is_some(), "an explicit colour is flattened here");
@@ -7375,7 +8547,10 @@ mod tests {
         let (_, x, d) =
             map_full("filter: drop-shadow(1px 1px 1px red) drop-shadow(2px 2px 2px blue)");
         assert!(x.drop_shadow.is_some(), "the first one is still honoured");
-        assert!(d.iter().any(|m| m.contains("a second drop-shadow()")), "{d:?}");
+        assert!(
+            d.iter().any(|m| m.contains("a second drop-shadow()")),
+            "{d:?}"
+        );
     }
 
     #[test]
@@ -7387,13 +8562,17 @@ mod tests {
         let (_, x, d) = map_full(ring);
         assert!(d.is_empty(), "{d:?}");
         assert!(x.mask_ring());
-        for composite in ["-webkit-mask-composite: xor", "-webkit-mask-composite: destination-out"] {
+        for composite in [
+            "-webkit-mask-composite: xor",
+            "-webkit-mask-composite: destination-out",
+        ] {
             let (_, x, d) = map_full(&format!(
                 "mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); {composite}"
             ));
             assert!(d.is_empty() && x.mask_ring(), "{composite}: {d:?}");
         }
-        let (_, x, d) = map_full("mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)");
+        let (_, x, d) =
+            map_full("mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)");
         assert!(d.is_empty(), "{d:?}");
         assert!(!x.mask_ring());
         let (_, x, d) = map_full(
@@ -7402,7 +8581,9 @@ mod tests {
         );
         assert!(d.is_empty() && x.mask_ring(), "{d:?}");
         // A shorthand AFTER the composite resets it to `add`.
-        let (_, x, _) = map_full(&format!("{ring}; mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)"));
+        let (_, x, _) = map_full(&format!(
+            "{ring}; mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)"
+        ));
         assert!(!x.mask_ring());
 
         for other in [
@@ -7421,19 +8602,27 @@ mod tests {
     #[test]
     fn clip_path_is_a_rounded_mask_and_the_other_shapes_advise() {
         use gpui::{VnClipBox as B, VnClipPath as C, VnCornerRadius, VnShapeRadius as R};
-        let at = |x: f32, y: f32| VnCornerRadius { x: px(x).into(), y: px(y).into() };
+        let at = |x: f32, y: f32| VnCornerRadius {
+            x: px(x).into(),
+            y: px(y).into(),
+        };
         let half = relative(0.5);
         for sr_only in ["clip-path: inset(50%)", "clip-path: inset(50% 50% 50% 50%)"] {
             let r = clean(sr_only);
             assert_eq!(r.visibility, None, "{sr_only}");
             assert_eq!(
                 r.vn_clip_path,
-                Some(C::Inset { reference: B::Border, insets: [half; 4], radii: [at(0., 0.); 4] }),
+                Some(C::Inset {
+                    reference: B::Border,
+                    insets: [half; 4],
+                    radii: [at(0., 0.); 4]
+                }),
                 "{sr_only}"
             );
         }
         assert_eq!(
-            clean("clip-path: inset(10px 20% round 8px 8px 8px 4px / 8px 8px 8px 6px) padding-box").vn_clip_path,
+            clean("clip-path: inset(10px 20% round 8px 8px 8px 4px / 8px 8px 8px 6px) padding-box")
+                .vn_clip_path,
             Some(C::Inset {
                 reference: B::Padding,
                 insets: [px(10.).into(), relative(0.2), px(10.).into(), relative(0.2)],
@@ -7453,7 +8642,13 @@ mod tests {
             clean("clip-path: circle(at right 10px top) content-box").vn_clip_path,
             Some(C::Ellipse {
                 reference: B::Content,
-                center: [DefiniteLength::Calc { fraction: 1.0, pixels: px(-10.) }, relative(0.)],
+                center: [
+                    DefiniteLength::Calc {
+                        fraction: 1.0,
+                        pixels: px(-10.)
+                    },
+                    relative(0.)
+                ],
                 radius: [R::ClosestSide; 2],
                 circle: true,
             })
@@ -7467,14 +8662,34 @@ mod tests {
                 circle: false,
             })
         );
-        assert!(clean("clip-path: ellipse(20px 20px)").vn_clip_path.is_some());
-        assert_eq!(clean("clip-path: margin-box").vn_clip_path, Some(C::Box(B::Margin)));
-        assert_eq!(clean("clip-path: fill-box").vn_clip_path, Some(C::Box(B::Content)));
-        assert_eq!(clean("clip-path: stroke-box").vn_clip_path, Some(C::Box(B::Border)));
-        for other in ["url(#c)", "rect(0 10px 10px 0)", "xywh(0 0 10px 10px)", "shape(from 0 0, line to 10px 10px)"] {
+        assert!(clean("clip-path: ellipse(20px 20px)")
+            .vn_clip_path
+            .is_some());
+        assert_eq!(
+            clean("clip-path: margin-box").vn_clip_path,
+            Some(C::Box(B::Margin))
+        );
+        assert_eq!(
+            clean("clip-path: fill-box").vn_clip_path,
+            Some(C::Box(B::Content))
+        );
+        assert_eq!(
+            clean("clip-path: stroke-box").vn_clip_path,
+            Some(C::Box(B::Border))
+        );
+        for other in [
+            "url(#c)",
+            "rect(0 10px 10px 0)",
+            "xywh(0 0 10px 10px)",
+            "shape(from 0 0, line to 10px 10px)",
+        ] {
             let (r, d) = map(&format!("clip-path: {other}"));
             assert_eq!(r.vn_clip_path, None, "{other}");
-            assert!(d.iter().any(|m| m.contains("clip-path") && m.contains("not applied")), "{other}: {d:?}");
+            assert!(
+                d.iter()
+                    .any(|m| m.contains("clip-path") && m.contains("not applied")),
+                "{other}: {d:?}"
+            );
         }
         let r = clean("clip-path: none");
         assert_eq!((r.vn_clip_path, r.visibility), (Some(C::None), None));
@@ -7484,7 +8699,11 @@ mod tests {
     fn clip_path_polygon_and_path_are_shapes() {
         use gpui::{VnClipBox as B, VnClipPath as C, VnFillRule as F, VnPathVerb::*};
         let polygon = |r: &StyleRefinement| match &r.vn_clip_path {
-            Some(C::Polygon { reference, fill_rule, points }) => (*reference, *fill_rule, points.to_vec()),
+            Some(C::Polygon {
+                reference,
+                fill_rule,
+                points,
+            }) => (*reference, *fill_rule, points.to_vec()),
             other => panic!("{other:?}"),
         };
         assert_eq!(
@@ -7492,17 +8711,35 @@ mod tests {
             (
                 B::Border,
                 F::NonZero,
-                vec![[relative(0.5), px(0.).into()], [relative(1.), relative(1.)], [px(0.).into(), relative(1.)]]
+                vec![
+                    [relative(0.5), px(0.).into()],
+                    [relative(1.), relative(1.)],
+                    [px(0.).into(), relative(1.)]
+                ]
             )
         );
-        let (rb, rule, points) =
-            polygon(&clean("clip-path: polygon(evenodd, calc(100% - 8px) 0, 8px 100%) content-box"));
+        let (rb, rule, points) = polygon(&clean(
+            "clip-path: polygon(evenodd, calc(100% - 8px) 0, 8px 100%) content-box",
+        ));
         assert_eq!((rb, rule), (B::Content, F::EvenOdd));
-        assert_eq!(points[0], [DefiniteLength::Calc { fraction: 1., pixels: px(-8.) }, px(0.).into()]);
+        assert_eq!(
+            points[0],
+            [
+                DefiniteLength::Calc {
+                    fraction: 1.,
+                    pixels: px(-8.)
+                },
+                px(0.).into()
+            ]
+        );
         assert_eq!(points[1], [px(8.).into(), relative(1.)]);
 
         let path = |r: &StyleRefinement| match &r.vn_clip_path {
-            Some(C::Path { reference, fill_rule, verbs }) => (*reference, *fill_rule, verbs.to_vec()),
+            Some(C::Path {
+                reference,
+                fill_rule,
+                verbs,
+            }) => (*reference, *fill_rule, verbs.to_vec()),
             other => panic!("{other:?}"),
         };
         let notch = "clip-path: path('M0 0 C12.1506 0 22 9.8494 22 22 V42 Q22 64 44 64 H420 Q442 64 442 42 V22 C442 9.8494 451.8494 0 464 0 Z')";
@@ -7513,14 +8750,26 @@ mod tests {
         let inline = parse_inline_style(notch, &mut d);
         assert!(d.is_empty(), "{d:?}");
         assert!(format!("{inline:?}").contains("Path"), "{inline:?}");
-        let (rb, rule, verbs) = path(&clean(r#"clip-path: path(evenodd, "M0 0 h10 v10 h-10 z M2 2 h6 v6 h-6 z") padding-box"#));
+        let (rb, rule, verbs) = path(&clean(
+            r#"clip-path: path(evenodd, "M0 0 h10 v10 h-10 z M2 2 h6 v6 h-6 z") padding-box"#,
+        ));
         assert_eq!((rb, rule, verbs.len()), (B::Padding, F::EvenOdd, 10));
         assert_eq!(verbs[5], MoveTo([2., 2.]));
         assert_eq!(path(&clean("clip-path: path('')")).2, vec![]);
-        for bad in ["path('M0 0 L')", "path('L10 10')", "path(round, 'M0 0')", "path(evenodd)", "path('M0 0') blue"] {
+        for bad in [
+            "path('M0 0 L')",
+            "path('L10 10')",
+            "path(round, 'M0 0')",
+            "path(evenodd)",
+            "path('M0 0') blue",
+        ] {
             let (r, d) = map(&format!("clip-path: {bad}"));
             assert_eq!(r.vn_clip_path, None, "{bad}");
-            assert!(d.iter().any(|m| m.contains("path()") && m.contains("invalid")), "{bad}: {d:?}");
+            assert!(
+                d.iter()
+                    .any(|m| m.contains("path()") && m.contains("invalid")),
+                "{bad}: {d:?}"
+            );
         }
     }
 
@@ -7542,11 +8791,20 @@ mod tests {
         ] {
             assert_eq!(clean(body).text.word_break, Some(want), "{body}");
         }
-        assert_eq!(clean("hyphens: none").text.hyphens, Some(gpui::Hyphens::None));
-        assert_eq!(clean("-webkit-hyphens: manual").text.hyphens, Some(gpui::Hyphens::Manual));
+        assert_eq!(
+            clean("hyphens: none").text.hyphens,
+            Some(gpui::Hyphens::None)
+        );
+        assert_eq!(
+            clean("-webkit-hyphens: manual").text.hyphens,
+            Some(gpui::Hyphens::Manual)
+        );
         let (r, d) = map("hyphens: auto");
         assert_eq!(r.text.hyphens, Some(gpui::Hyphens::Manual));
-        assert!(d.len() == 1 && d[0].contains("hyphenation dictionary"), "{d:?}");
+        assert!(
+            d.len() == 1 && d[0].contains("hyphenation dictionary"),
+            "{d:?}"
+        );
     }
 
     #[test]
@@ -7562,7 +8820,6 @@ mod tests {
             assert!(d.is_empty(), "{decl:?} must say nothing: {d:?}");
         }
     }
-
 }
 
 #[cfg(test)]
@@ -7576,9 +8833,18 @@ mod scrollbar_tests {
 
     #[test]
     fn scrollbar_width_parses_from_an_inline_body() {
-        assert_eq!(extras_of("scrollbar-width: none").scrollbar_width, Some(ScrollbarWidth::None));
-        assert_eq!(extras_of("scrollbar-width: thin").scrollbar_width, Some(ScrollbarWidth::Thin));
-        assert_eq!(extras_of("scrollbar-width: auto").scrollbar_width, Some(ScrollbarWidth::Auto));
+        assert_eq!(
+            extras_of("scrollbar-width: none").scrollbar_width,
+            Some(ScrollbarWidth::None)
+        );
+        assert_eq!(
+            extras_of("scrollbar-width: thin").scrollbar_width,
+            Some(ScrollbarWidth::Thin)
+        );
+        assert_eq!(
+            extras_of("scrollbar-width: auto").scrollbar_width,
+            Some(ScrollbarWidth::Auto)
+        );
         assert_eq!(extras_of("color: red").scrollbar_width, None);
     }
 
@@ -7586,14 +8852,27 @@ mod scrollbar_tests {
     fn scrollbar_color_takes_two_colours_thumb_first() {
         let x = extras_of("scrollbar-color: #ff0000 #0000ff");
         let (thumb, track) = x.scrollbar_color.expect("a pair");
-        assert!(thumb.h < 0.02, "thumb is the first colour (red), got {thumb:?}");
-        assert!((track.h - 0.6667).abs() < 0.02, "track is the second (blue), got {track:?}");
+        assert!(
+            thumb.h < 0.02,
+            "thumb is the first colour (red), got {thumb:?}"
+        );
+        assert!(
+            (track.h - 0.6667).abs() < 0.02,
+            "track is the second (blue), got {track:?}"
+        );
         assert_eq!(extras_of("scrollbar-color: auto").scrollbar_color, None);
-        assert_eq!(extras_of("scrollbar-color: red").scrollbar_color, None, "one colour is not a pair");
+        assert_eq!(
+            extras_of("scrollbar-color: red").scrollbar_color,
+            None,
+            "one colour is not a pair"
+        );
         let named = extras_of("scrollbar-color: red blue");
         let (thumb, track) = named.scrollbar_color.expect("a pair of named colours");
         assert!(thumb.h < 0.02, "thumb is red, got {thumb:?}");
-        assert!((track.h - 0.6667).abs() < 0.02, "track is blue, got {track:?}");
+        assert!(
+            (track.h - 0.6667).abs() < 0.02,
+            "track is blue, got {track:?}"
+        );
     }
 
     #[test]
@@ -7613,9 +8892,14 @@ mod scrollbar_tests {
     fn a_malformed_inline_declaration_is_skipped_and_the_rest_applies() {
         let mut d = Vec::new();
         let inline = parse_inline_style("0: d; display: flex; }; gap: 4px", &mut d);
-        let r = inline.refinement.expect("the valid declarations still apply");
+        let r = inline
+            .refinement
+            .expect("the valid declarations still apply");
         assert_eq!(r.display, Some(gpui::Display::Flex));
-        assert!(r.gap.width.is_some(), "gap after the bad declarations applies too");
+        assert!(
+            r.gap.width.is_some(),
+            "gap after the bad declarations applies too"
+        );
         assert!(d.iter().any(|m| m.contains("skipped")), "{d:?}");
     }
 
@@ -7681,7 +8965,10 @@ mod prefix_tests {
     #[test]
     fn a_dropped_prefix_never_reaches_a_rule_and_an_honoured_one_does() {
         assert_eq!(extras("-moz-user-select: none").0.user_select, None);
-        assert_eq!(extras("-webkit-user-select: none").0.user_select, Some(UserSelect::None));
+        assert_eq!(
+            extras("-webkit-user-select: none").0.user_select,
+            Some(UserSelect::None)
+        );
         fn block(body: &str) -> DeclarationBlock<'_> {
             DeclarationBlock::parse_string(body, ParserOptions::default()).expect("parses")
         }
@@ -7690,7 +8977,9 @@ mod prefix_tests {
         ));
         assert!(c.normal.is_none() && c.normal_transitions.is_none());
         assert!(c.diagnostics.is_none(), "{:?}", c.diagnostics);
-        let c = convert_block(&block("-webkit-transition: opacity 1s; -webkit-transform: scale(2)"));
+        let c = convert_block(&block(
+            "-webkit-transition: opacity 1s; -webkit-transform: scale(2)",
+        ));
         assert!(c.normal.is_some() && c.normal_transitions.is_some());
         assert!(c.diagnostics.is_none(), "{:?}", c.diagnostics);
         let (_, d) = extras("-webkit-text-stroke: 1px red");
@@ -7700,16 +8989,27 @@ mod prefix_tests {
     #[test]
     fn webkit_text_fill_color_is_a_glyph_colour() {
         let is_red = |f: Option<TextFill>| match f {
-            Some(TextFill::Color(c)) => c.h.abs() < 1e-3 && (c.s - 1.0).abs() < 1e-3 && (c.l - 0.5).abs() < 1e-3,
+            Some(TextFill::Color(c)) => {
+                c.h.abs() < 1e-3 && (c.s - 1.0).abs() < 1e-3 && (c.l - 0.5).abs() < 1e-3
+            }
             _ => false,
         };
-        assert!(is_red(extras("-webkit-text-fill-color: #ff0000").0.text_fill_color));
-        assert!(is_red(extras("-webkit-text-fill-color: red").0.text_fill_color));
+        assert!(is_red(
+            extras("-webkit-text-fill-color: #ff0000").0.text_fill_color
+        ));
+        assert!(is_red(
+            extras("-webkit-text-fill-color: red").0.text_fill_color
+        ));
         assert_eq!(
-            extras("-webkit-text-fill-color: currentColor").0.text_fill_color,
+            extras("-webkit-text-fill-color: currentColor")
+                .0
+                .text_fill_color,
             Some(TextFill::CurrentColor)
         );
-        match extras("-webkit-text-fill-color: transparent").0.text_fill_color {
+        match extras("-webkit-text-fill-color: transparent")
+            .0
+            .text_fill_color
+        {
             Some(TextFill::Color(c)) => assert_eq!(c.a, 0.0),
             other => panic!("{other:?}"),
         }

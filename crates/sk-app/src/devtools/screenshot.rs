@@ -23,12 +23,12 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, TRUE};
 #[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, ClientToScreen, CreateCompatibleDC, CreateDIBSection,
-    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HBITMAP, HDC, ReleaseDC, SelectObject,
+    ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC,
+    SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC,
 };
 // `PrintWindow` is under Storage::Xps in windows-rs' metadata; its flag is a plain `u32` in WindowsAndMessaging.
 #[cfg(windows)]
-use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
+use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
@@ -182,16 +182,14 @@ fn capture_render_to_image(path: &Path) -> Result<Shot, String> {
     // Not `?`: the handle is reply metadata only; the readback never touches the HWND.
     let hwnd_raw = hwnd_of_window();
     #[cfg(windows)]
-    let iconic = hwnd_raw.is_some_and(|raw| {
-        unsafe { IsIconic(HWND(raw as *mut core::ffi::c_void)) }.as_bool()
-    });
+    let iconic = hwnd_raw
+        .is_some_and(|raw| unsafe { IsIconic(HWND(raw as *mut core::ffi::c_void)) }.as_bool());
     #[cfg(not(windows))]
     let iconic = false;
 
-    let captured = super::with_target(|window, _| {
-        (window.render_to_image(), window.scale_factor())
-    })
-    .ok_or_else(|| "no live gpui window (not inside a committed frame)".to_string())?;
+    let captured =
+        super::with_target(|window, _| (window.render_to_image(), window.scale_factor()))
+            .ok_or_else(|| "no live gpui window (not inside a committed frame)".to_string())?;
     let (image, scale) = captured;
     let image = image.map_err(|e| format!("render_to_image failed: {e}"))?;
 
@@ -226,13 +224,12 @@ fn capture_render_to_image(path: &Path) -> Result<Shot, String> {
 
 #[cfg(windows)]
 fn capture_print_window(path: &Path) -> Result<Shot, String> {
-    let hwnd_raw = hwnd_of_window()
-        .ok_or_else(|| "could not find this process' window handle".to_string())?;
+    let hwnd_raw =
+        hwnd_of_window().ok_or_else(|| "could not find this process' window handle".to_string())?;
     let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
 
     let mut rect = RECT::default();
-    unsafe { GetWindowRect(hwnd, &mut rect) }
-        .map_err(|e| format!("GetWindowRect failed: {e}"))?;
+    unsafe { GetWindowRect(hwnd, &mut rect) }.map_err(|e| format!("GetWindowRect failed: {e}"))?;
     let width = (rect.right - rect.left).max(0);
     let height = (rect.bottom - rect.top).max(0);
     if width == 0 || height == 0 {
@@ -274,10 +271,16 @@ fn capture_print_window(path: &Path) -> Result<Shot, String> {
             }
         };
         let old = SelectObject(mem, bitmap.into());
-        Gdi { screen, mem, bitmap, old }
+        Gdi {
+            screen,
+            mem,
+            bitmap,
+            old,
+        }
     };
 
-    let ok = unsafe { PrintWindow(hwnd, gdi.mem, PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT)) }.as_bool();
+    let ok =
+        unsafe { PrintWindow(hwnd, gdi.mem, PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT)) }.as_bool();
     if !ok {
         return Err(
             "PrintWindow(PW_RENDERFULLCONTENT) failed — the window may have been destroyed".into(),
@@ -302,8 +305,14 @@ fn capture_print_window(path: &Path) -> Result<Shot, String> {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    image::save_buffer(path, &rgba, width as u32, height as u32, image::ColorType::Rgba8)
-        .map_err(|e| format!("writing {}: {e}", path.display()))?;
+    image::save_buffer(
+        path,
+        &rgba,
+        width as u32,
+        height as u32,
+        image::ColorType::Rgba8,
+    )
+    .map_err(|e| format!("writing {}: {e}", path.display()))?;
 
     Ok(Shot {
         path: path.to_path_buf(),

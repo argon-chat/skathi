@@ -51,7 +51,11 @@ pub struct Store {
 
 impl Store {
     pub const fn new() -> Store {
-        Store { path: None, loaded: false, map: BTreeMap::new() }
+        Store {
+            path: None,
+            loaded: false,
+            map: BTreeMap::new(),
+        }
     }
 
     pub fn set_path(&mut self, path: Option<PathBuf>) {
@@ -82,11 +86,17 @@ impl Store {
                         let newer = std::mem::replace(&mut self.map, map);
                         self.map.extend(newer);
                     }
-                    Err(e) => eprintln!("[permissions] {} is not readable ({e}); it is replaced at the next answer", path.display()),
+                    Err(e) => eprintln!(
+                        "[permissions] {} is not readable ({e}); it is replaced at the next answer",
+                        path.display()
+                    ),
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => self.loaded = true,
-            Err(e) => eprintln!("[permissions] could not read {}: {e} (read again at the next question)", path.display()),
+            Err(e) => eprintln!(
+                "[permissions] could not read {}: {e} (read again at the next question)",
+                path.display()
+            ),
         }
     }
 
@@ -104,7 +114,13 @@ impl Store {
         }
         match decision {
             Some(d) => {
-                self.map.insert(cap.web_name(), Entry { decision: d, at: now_ms() });
+                self.map.insert(
+                    cap.web_name(),
+                    Entry {
+                        decision: d,
+                        at: now_ms(),
+                    },
+                );
             }
             None => {
                 self.map.remove(cap.web_name());
@@ -115,7 +131,10 @@ impl Store {
                 // Unreadable file: writing now would drop every answer in it but this one.
                 eprintln!("[permissions] {} was not read; the answer holds for this run and is not written", path.display());
             } else if let Err(e) = write(path, &encode(&self.map)) {
-                eprintln!("[permissions] could not write {}: {e} (the answer holds for this run)", path.display());
+                eprintln!(
+                    "[permissions] could not write {}: {e} (the answer holds for this run)",
+                    path.display()
+                );
             }
         }
         true
@@ -123,20 +142,30 @@ impl Store {
 
     pub fn list(&mut self) -> Vec<(Capability, Entry)> {
         self.load();
-        self.map.iter().filter_map(|(name, e)| Capability::from_web_name(name).map(|c| (c, *e))).collect()
+        self.map
+            .iter()
+            .filter_map(|(name, e)| Capability::from_web_name(name).map(|c| (c, *e)))
+            .collect()
     }
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn encode(map: &BTreeMap<&'static str, Entry>) -> String {
     let mut permissions = serde_json::Map::new();
     for (name, e) in map {
-        permissions.insert((*name).to_string(), json!({ "decision": e.decision.as_str(), "at": e.at }));
+        permissions.insert(
+            (*name).to_string(),
+            json!({ "decision": e.decision.as_str(), "at": e.at }),
+        );
     }
-    serde_json::to_string_pretty(&json!({ "version": 1, "permissions": permissions })).unwrap_or_default()
+    serde_json::to_string_pretty(&json!({ "version": 1, "permissions": permissions }))
+        .unwrap_or_default()
 }
 
 /// Unknown names and unreadable entries are skipped: a newer build's file still works.
@@ -147,8 +176,16 @@ fn parse(text: &str) -> Result<BTreeMap<&'static str, Entry>, String> {
     };
     let mut map = BTreeMap::new();
     for (name, e) in perms {
-        let Some(cap) = Capability::from_web_name(name) else { continue };
-        let Some(decision) = e.get("decision").and_then(Json::as_str).and_then(Decision::parse) else { continue };
+        let Some(cap) = Capability::from_web_name(name) else {
+            continue;
+        };
+        let Some(decision) = e
+            .get("decision")
+            .and_then(Json::as_str)
+            .and_then(Decision::parse)
+        else {
+            continue;
+        };
         let at = e.get("at").and_then(Json::as_u64).unwrap_or(0);
         map.insert(cap.web_name(), Entry { decision, at });
     }
@@ -164,7 +201,9 @@ fn read(path: &Path) -> std::io::Result<String> {
 fn read(path: &Path) -> std::io::Result<String> {
     if tests::FAIL_READS.with(|f| f.get() > 0) {
         tests::FAIL_READS.with(|f| f.set(f.get() - 1));
-        return Err(std::io::Error::other("the process cannot access the file because it is being used by another process"));
+        return Err(std::io::Error::other(
+            "the process cannot access the file because it is being used by another process",
+        ));
     }
     std::fs::read_to_string(path)
 }
@@ -202,7 +241,8 @@ mod tests {
     struct Scratch(PathBuf);
     impl Scratch {
         fn new(name: &str) -> Scratch {
-            let p = std::env::temp_dir().join(format!("sk-permissions-{name}-{}", std::process::id()));
+            let p =
+                std::env::temp_dir().join(format!("sk-permissions-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&p);
             Scratch(p)
         }
@@ -221,7 +261,10 @@ mod tests {
         s.set_path(Some(file.clone()));
         assert_eq!(s.get(Capability::Microphone), None);
         assert!(s.set(Capability::Microphone, Some(Decision::Block)));
-        assert!(!s.set(Capability::Microphone, Some(Decision::Block)), "the same answer is not a change");
+        assert!(
+            !s.set(Capability::Microphone, Some(Decision::Block)),
+            "the same answer is not a change"
+        );
         assert!(file.is_file(), "written through, creating the folder");
         let mut again = Store::new();
         again.set_path(Some(file.clone()));
@@ -237,7 +280,11 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(left, vec!["permissions.json".to_string()], "no temporary file is left");
+        assert_eq!(
+            left,
+            vec!["permissions.json".to_string()],
+            "no temporary file is left"
+        );
     }
 
     #[test]
@@ -251,28 +298,63 @@ mod tests {
         let mut again = Store::new();
         again.set_path(Some(file.clone()));
         FAIL_READS.with(|f| f.set(2));
-        assert_eq!(again.get(Capability::Microphone), None, "unread: nothing known yet");
+        assert_eq!(
+            again.get(Capability::Microphone),
+            None,
+            "unread: nothing known yet"
+        );
         assert!(again.set(Capability::Geolocation, Some(Decision::Allow)));
         let on_disk = parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(on_disk.len(), 2, "the camera's and the microphone's answers survive: {on_disk:?}");
-        assert_eq!(again.get(Capability::Microphone).map(|e| e.decision), Some(Decision::Block));
-        assert_eq!(again.get(Capability::Camera).map(|e| e.decision), Some(Decision::Allow));
-        assert_eq!(again.get(Capability::Geolocation).map(|e| e.decision), Some(Decision::Allow), "and this run's answer stays");
+        assert_eq!(
+            on_disk.len(),
+            2,
+            "the camera's and the microphone's answers survive: {on_disk:?}"
+        );
+        assert_eq!(
+            again.get(Capability::Microphone).map(|e| e.decision),
+            Some(Decision::Block)
+        );
+        assert_eq!(
+            again.get(Capability::Camera).map(|e| e.decision),
+            Some(Decision::Allow)
+        );
+        assert_eq!(
+            again.get(Capability::Geolocation).map(|e| e.decision),
+            Some(Decision::Allow),
+            "and this run's answer stays"
+        );
         assert!(again.set(Capability::Microphone, Some(Decision::Allow)));
         let on_disk = parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(on_disk["microphone"].decision, Decision::Allow);
-        assert_eq!(on_disk["camera"].decision, Decision::Allow, "kept once read");
-        assert_eq!(on_disk["geolocation"].decision, Decision::Allow, "written with the rest");
+        assert_eq!(
+            on_disk["camera"].decision,
+            Decision::Allow,
+            "kept once read"
+        );
+        assert_eq!(
+            on_disk["geolocation"].decision,
+            Decision::Allow,
+            "written with the rest"
+        );
     }
 
     #[test]
     fn the_file_is_versioned_json_with_web_names() {
         let mut map = BTreeMap::new();
-        map.insert("microphone", Entry { decision: Decision::Allow, at: 5 });
+        map.insert(
+            "microphone",
+            Entry {
+                decision: Decision::Allow,
+                at: 5,
+            },
+        );
         let text = encode(&map);
         let v: Json = serde_json::from_str(&text).unwrap();
         assert_eq!(v["version"], 1);
-        assert_eq!(v["permissions"]["microphone"], json!({ "decision": "allow", "at": 5 }));
+        assert_eq!(
+            v["permissions"]["microphone"],
+            json!({ "decision": "allow", "at": 5 })
+        );
         assert_eq!(parse(&text).unwrap(), map);
     }
 
@@ -282,7 +364,13 @@ mod tests {
                        "camera":{"decision":"maybe"}}}"#;
         let map = parse(text).unwrap();
         assert_eq!(map.len(), 1);
-        assert_eq!(map["microphone"], Entry { decision: Decision::Block, at: 0 });
+        assert_eq!(
+            map["microphone"],
+            Entry {
+                decision: Decision::Block,
+                at: 0
+            }
+        );
         assert!(parse("not json").is_err());
         assert!(parse("{}").is_err());
         let dir = Scratch::new("broken");
@@ -293,7 +381,10 @@ mod tests {
         s.set_path(Some(file.clone()));
         assert_eq!(s.get(Capability::Microphone), None);
         assert!(s.set(Capability::Microphone, Some(Decision::Allow)));
-        assert!(parse(&std::fs::read_to_string(&file).unwrap()).is_ok(), "the next answer replaces it");
+        assert!(
+            parse(&std::fs::read_to_string(&file).unwrap()).is_ok(),
+            "the next answer replaces it"
+        );
     }
 
     #[test]
@@ -301,7 +392,10 @@ mod tests {
         let mut s = Store::new();
         assert!(s.path().is_none());
         assert!(s.set(Capability::Microphone, Some(Decision::Allow)));
-        assert_eq!(s.get(Capability::Microphone).map(|e| e.decision), Some(Decision::Allow));
+        assert_eq!(
+            s.get(Capability::Microphone).map(|e| e.decision),
+            Some(Decision::Allow)
+        );
         assert_eq!(s.list().len(), 1);
     }
 }

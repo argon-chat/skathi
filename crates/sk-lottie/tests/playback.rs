@@ -92,7 +92,10 @@ fn metadata_matches_the_source_document() {
     assert!(!meta.telegram_sticker);
 
     assert_eq!(
-        (load("rectangle.json").meta().width, load("rectangle.json").meta().height),
+        (
+            load("rectangle.json").meta().width,
+            load("rectangle.json").meta().height
+        ),
         (100, 50),
     );
 }
@@ -105,7 +108,10 @@ fn every_fixture_rasterises_something_visible() {
             .iter()
             .filter(|bytes| opaque_pixels(bytes) > 0)
             .count();
-        assert!(visible >= 3, "{name}: only {visible}/5 sampled frames drew anything");
+        assert!(
+            visible >= 3,
+            "{name}: only {visible}/5 sampled frames drew anything"
+        );
     }
 }
 
@@ -201,7 +207,10 @@ fn the_terminator_keyframe_animates_to_the_right_place() {
     // the motion: a 16px square slides from x=16 to x=48 on a 64px canvas.
     let mut state = load("terminator-keyframe.json");
     assert!(
-        state.advisories().iter().any(|note| note.contains("terminator")),
+        state
+            .advisories()
+            .iter()
+            .any(|note| note.contains("terminator")),
         "the rewrite was not advertised: {:?}",
         state.advisories(),
     );
@@ -224,7 +233,11 @@ fn seeking_is_deterministic() {
     let first = raster(&mut state, 40.0);
     let _ = raster(&mut state, 0.0);
     let _ = raster(&mut state, 119.0);
-    assert_eq!(first, raster(&mut state, 40.0), "same frame, different raster");
+    assert_eq!(
+        first,
+        raster(&mut state, 40.0),
+        "same frame, different raster"
+    );
 }
 
 #[test]
@@ -237,7 +250,10 @@ fn resizing_re_renders_and_paused_playback_does_not() {
     // Same frame, same size: the cache must return the very same image (a new `RenderImage` id means a new atlas tile).
     let again = state.render_frame((64.0, 64.0), 1.0).unwrap();
     assert_eq!(small.id, again.id, "paused playback re-rendered");
-    assert!(state.take_retired().is_empty(), "cache hit retired an image");
+    assert!(
+        state.take_retired().is_empty(),
+        "cache hit retired an image"
+    );
 
     let large = state.render_frame((128.0, 128.0), 1.0).unwrap();
     assert_ne!(small.id, large.id, "resize did not re-render");
@@ -303,11 +319,17 @@ fn garbage_is_rejected_with_a_useful_error() {
 fn solid_layers_are_rewritten_and_advertised() {
     let mut state = load("solid-layer.json");
     assert!(
-        state.advisories().iter().any(|note| note.contains("solid layer")),
+        state
+            .advisories()
+            .iter()
+            .any(|note| note.contains("solid layer")),
         "the rewrite was not advertised: {:?}",
         state.advisories(),
     );
-    assert!(opaque_pixels(&raster(&mut state, 0.0)) > 0, "the solid drew nothing");
+    assert!(
+        opaque_pixels(&raster(&mut state, 0.0)) > 0,
+        "the solid drew nothing"
+    );
 }
 
 const TICK: Duration = Duration::from_nanos(16_666_667);
@@ -317,7 +339,11 @@ fn autoplay_is_on_by_default_matching_lottie_web() {
     let state = load("star.json");
     assert!(state.is_playing(), "lottie-web's loadAnimation autoplays");
     assert!(state.needs_frame());
-    assert_eq!(state.loop_mode(), LoopMode::Loop, "lottie-web loops by default");
+    assert_eq!(
+        state.loop_mode(),
+        LoopMode::Loop,
+        "lottie-web loops by default"
+    );
     assert_eq!(state.frame(), state.meta().in_point);
 }
 
@@ -327,7 +353,11 @@ fn advancing_moves_the_playhead_and_emits_enter_frame() {
     let advance = state.advance(TICK);
     assert!(advance.needs_repaint);
     assert_eq!(advance.entered_frame, Some(state.frame()));
-    assert!((state.frame() - 1.0).abs() < 1e-3, "frame = {}", state.frame());
+    assert!(
+        (state.frame() - 1.0).abs() < 1e-3,
+        "frame = {}",
+        state.frame()
+    );
     assert!(matches!(
         advance.events().next(),
         Some(LottieEvent::EnterFrame { .. }),
@@ -350,7 +380,11 @@ fn speed_scales_wall_clock_time() {
     let mut state = load("star.json");
     state.set_speed(2.0);
     state.advance(TICK);
-    assert!((state.frame() - 2.0).abs() < 1e-3, "frame = {}", state.frame());
+    assert!(
+        (state.frame() - 2.0).abs() < 1e-3,
+        "frame = {}",
+        state.frame()
+    );
 
     let mut stalled = load("star.json");
     stalled.set_speed(0.0);
@@ -366,7 +400,11 @@ fn reverse_plays_from_the_end() {
     assert_eq!(state.frame(), 120.0, "reverse rewinds to the out point");
     state.play();
     state.advance(TICK);
-    assert!((state.frame() - 119.0).abs() < 1e-3, "frame = {}", state.frame());
+    assert!(
+        (state.frame() - 119.0).abs() < 1e-3,
+        "frame = {}",
+        state.frame()
+    );
 }
 
 #[test]
@@ -434,7 +472,11 @@ fn bounce_mode_reverses_at_the_boundary() {
     state.set_play_mode(PlayMode::Bounce);
     state.advance(Duration::from_millis(2500));
     assert_eq!(state.direction(), Direction::Reverse);
-    assert!((state.frame() - 90.0).abs() < 1e-2, "frame = {}", state.frame());
+    assert!(
+        (state.frame() - 90.0).abs() < 1e-2,
+        "frame = {}",
+        state.frame()
+    );
     assert!(!state.is_finished(), "bounce is still looping");
 }
 
@@ -482,7 +524,11 @@ fn segments_confine_playback_and_pull_the_playhead_in() {
     state.seek_frame(100.0);
     state.set_segment(Some((10.0, 40.0)));
     assert_eq!(state.active_segment(), (10.0, 40.0));
-    assert_eq!(state.frame(), 40.0, "the playhead was left outside the segment");
+    assert_eq!(
+        state.frame(),
+        40.0,
+        "the playhead was left outside the segment"
+    );
 
     state.set_loop_mode(LoopMode::None);
     state.play();
@@ -503,7 +549,11 @@ fn progress_within_a_segment_is_relative_to_it() {
     let mut state = load("star.json");
     state.set_segment(Some((20.0, 40.0)));
     state.seek_progress(0.5);
-    assert!((state.frame() - 30.0).abs() < 1e-3, "frame = {}", state.frame());
+    assert!(
+        (state.frame() - 30.0).abs() < 1e-3,
+        "frame = {}",
+        state.frame()
+    );
 }
 
 #[test]
@@ -520,7 +570,10 @@ fn rendering_retires_superseded_rasters_for_the_atlas() {
     let first = state.render_frame((64.0, 64.0), 1.0).unwrap();
     state.seek_frame(30.0);
     state.render_frame((64.0, 64.0), 1.0).unwrap();
-    assert!(state.take_retired().is_empty(), "retired a still-live raster");
+    assert!(
+        state.take_retired().is_empty(),
+        "retired a still-live raster"
+    );
 
     state.seek_frame(60.0);
     state.render_frame((64.0, 64.0), 1.0).unwrap();
@@ -653,8 +706,15 @@ fn a_transport_alone_plays_as_the_state_does() {
         let a = state.advance(Duration::from_millis(*ms));
         let b = transport.advance(Duration::from_millis(*ms));
         assert_eq!(a, b, "tick {step}");
-        assert_eq!(state.frame().to_bits(), transport.frame().to_bits(), "tick {step}");
+        assert_eq!(
+            state.frame().to_bits(),
+            transport.frame().to_bits(),
+            "tick {step}"
+        );
         assert_eq!(state.is_finished(), transport.is_finished(), "tick {step}");
-        assert_eq!(a.events().collect::<Vec<LottieEvent>>(), b.events().collect::<Vec<LottieEvent>>());
+        assert_eq!(
+            a.events().collect::<Vec<LottieEvent>>(),
+            b.events().collect::<Vec<LottieEvent>>()
+        );
     }
 }

@@ -347,11 +347,9 @@ mod tests {
         let stale = super::super::ACCEPT_GEN
             .load(std::sync::atomic::Ordering::SeqCst)
             .wrapping_add(1);
-        assert!(
-            command_authenticated(&request, stale)
-                .unwrap_err()
-                .contains("revoked")
-        );
+        assert!(command_authenticated(&request, stale)
+            .unwrap_err()
+            .contains("revoked"));
     }
 }
 

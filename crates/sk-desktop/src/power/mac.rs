@@ -8,7 +8,12 @@ use objc2_foundation::NSString;
 
 #[link(name = "IOKit", kind = "framework")]
 unsafe extern "C" {
-    fn IOPMAssertionCreateWithName(kind: *const c_void, level: u32, name: *const c_void, id: *mut u32) -> i32;
+    fn IOPMAssertionCreateWithName(
+        kind: *const c_void,
+        level: u32,
+        name: *const c_void,
+        id: *mut u32,
+    ) -> i32;
     fn IOPMAssertionRelease(id: u32) -> i32;
 }
 
@@ -31,7 +36,14 @@ pub fn hold_screen(on: bool) -> bool {
     let name = NSString::from_str("Screen Wake Lock");
     let mut id = 0u32;
     // SAFETY: both strings outlive the call, which copies what it keeps.
-    let r = unsafe { IOPMAssertionCreateWithName(Retained::as_ptr(&kind).cast(), ASSERTION_LEVEL_ON, Retained::as_ptr(&name).cast(), &mut id) };
+    let r = unsafe {
+        IOPMAssertionCreateWithName(
+            Retained::as_ptr(&kind).cast(),
+            ASSERTION_LEVEL_ON,
+            Retained::as_ptr(&name).cast(),
+            &mut id,
+        )
+    };
     if r != 0 {
         return false;
     }

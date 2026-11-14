@@ -26,11 +26,16 @@ pub fn in_flight() -> usize {
 fn queue() -> &'static Queue {
     static Q: OnceLock<Queue> = OnceLock::new();
     static STARTED: OnceLock<usize> = OnceLock::new();
-    let q = Q.get_or_init(|| Queue { jobs: Mutex::new(VecDeque::new()), ready: Condvar::new() });
+    let q = Q.get_or_init(|| Queue {
+        jobs: Mutex::new(VecDeque::new()),
+        ready: Condvar::new(),
+    });
     STARTED.get_or_init(|| {
         let mut started = 0;
         for i in 0..WORKERS {
-            let spawned = std::thread::Builder::new().name(format!("sk-fs-{i}")).spawn(worker);
+            let spawned = std::thread::Builder::new()
+                .name(format!("sk-fs-{i}"))
+                .spawn(worker);
             if spawned.is_ok() {
                 started += 1;
             }
@@ -66,9 +71,13 @@ fn run(job: Job) {
 pub(crate) fn submit(token: u32, op: impl FnOnce() -> Result<crate::Done, Fail> + Send + 'static) {
     IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
     let job: Job = Box::new(move || {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(op)).unwrap_or_else(|_| {
-            Err(Fail::new("InvalidStateError", "the file operation failed inside the host (a panic on the I/O pool)"))
-        });
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(op)).unwrap_or_else(|_| {
+                Err(Fail::new(
+                    "InvalidStateError",
+                    "the file operation failed inside the host (a panic on the I/O pool)",
+                ))
+            });
         crate::settle_done(token, result);
     });
     let q = queue();

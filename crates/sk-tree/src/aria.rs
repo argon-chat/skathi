@@ -65,7 +65,11 @@ pub(crate) fn role_from_attr(role: &str) -> Result<Option<Role>, ()> {
             }
         }
     }
-    if saw_token { Err(()) } else { Ok(None) }
+    if saw_token {
+        Err(())
+    } else {
+        Ok(None)
+    }
 }
 
 fn known_role(role: &str) -> Option<Role> {
@@ -334,7 +338,11 @@ fn implicit_from(t: &Tree, id: u32, tag: &str) -> Option<Role> {
 }
 
 pub(crate) fn accessible_label(t: &Tree, id: u32) -> Option<String> {
-    if let Some(label) = t.prop(id, "aria-label").map(str::trim).filter(|l| !l.is_empty()) {
+    if let Some(label) = t
+        .prop(id, "aria-label")
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+    {
         return Some(label.to_string());
     }
     if let Some(refs) = t.prop(id, "aria-labelledby") {
@@ -347,12 +355,16 @@ pub(crate) fn accessible_label(t: &Tree, id: u32) -> Option<String> {
         return Some(format!("{button}, {status}"));
     }
     // (`alt=""` never reaches here: an empty alt keeps the element out of the tree entirely.)
-    t.prop(id, "alt").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string)
+    t.prop(id, "alt")
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_string)
 }
 
 pub(crate) fn is_file_input(t: &Tree, id: u32) -> bool {
     t.node(id).is_some_and(|n| t.name(n.tag) == "input")
-        && t.prop(id, "type").is_some_and(|ty| ty.trim().eq_ignore_ascii_case("file"))
+        && t.prop(id, "type")
+            .is_some_and(|ty| ty.trim().eq_ignore_ascii_case("file"))
 }
 
 /// A file input's two strings, Chromium's English UA text: the button ("Choose File", plural only
@@ -362,8 +374,15 @@ pub(crate) fn file_input_labels(t: &Tree, id: u32) -> Option<(&'static str, Stri
         return None;
     }
     let several = t.prop(id, "multiple").is_some_and(|v| v != "false");
-    let button = if several { "Choose Files" } else { "Choose File" };
-    let status = t.prop(id, ":file-label").filter(|s| !s.is_empty()).unwrap_or("No file chosen");
+    let button = if several {
+        "Choose Files"
+    } else {
+        "Choose File"
+    };
+    let status = t
+        .prop(id, ":file-label")
+        .filter(|s| !s.is_empty())
+        .unwrap_or("No file chosen");
     Some((button, status.to_string()))
 }
 
@@ -424,7 +443,11 @@ fn names_from_text(role: Role) -> bool {
 }
 
 pub(crate) fn accessible_description(t: &Tree, id: u32) -> Option<String> {
-    if let Some(d) = t.prop(id, "aria-description").map(str::trim).filter(|d| !d.is_empty()) {
+    if let Some(d) = t
+        .prop(id, "aria-description")
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    {
         return Some(d.to_string());
     }
     let refs = t.prop(id, "aria-describedby")?;
@@ -513,7 +536,10 @@ pub(crate) fn apply<E: StatefulInteractiveElement>(mut e: E, t: &Tree, id: u32, 
     if let Some(description) = accessible_description(t, id) {
         e = e.aria_description(description);
     }
-    if let Some(shortcut) = t.prop(id, "aria-keyshortcuts").filter(|s| !s.trim().is_empty()) {
+    if let Some(shortcut) = t
+        .prop(id, "aria-keyshortcuts")
+        .filter(|s| !s.trim().is_empty())
+    {
         e = e.aria_keyshortcuts(shortcut.to_string());
     }
 
@@ -542,47 +568,76 @@ pub(crate) fn apply<E: StatefulInteractiveElement>(mut e: E, t: &Tree, id: u32, 
         e = e.aria_orientation(orientation);
     }
     let disabled = t.prop(id, "disabled").map(html_bool).unwrap_or(false)
-        || t.prop(id, "aria-disabled").and_then(aria_bool).unwrap_or(false);
+        || t.prop(id, "aria-disabled")
+            .and_then(aria_bool)
+            .unwrap_or(false);
     if disabled {
         e = e.aria_disabled(true);
     }
     if t.prop(id, "readonly").map(html_bool).unwrap_or(false)
-        || t.prop(id, "aria-readonly").and_then(aria_bool).unwrap_or(false)
+        || t.prop(id, "aria-readonly")
+            .and_then(aria_bool)
+            .unwrap_or(false)
     {
         e = e.aria_read_only(true);
     }
     if t.prop(id, "required").map(html_bool).unwrap_or(false)
-        || t.prop(id, "aria-required").and_then(aria_bool).unwrap_or(false)
+        || t.prop(id, "aria-required")
+            .and_then(aria_bool)
+            .unwrap_or(false)
     {
         e = e.aria_required(true);
     }
-    if t.prop(id, "aria-modal").and_then(aria_bool).unwrap_or(false) {
+    if t.prop(id, "aria-modal")
+        .and_then(aria_bool)
+        .unwrap_or(false)
+    {
         e = e.aria_modal(true);
     }
     // HTML's own `hidden` attribute means the same thing and more (it also hides the box), and
     // reka-ui uses it for the tab panel that is not showing — so both spellings land here.
-    if t.prop(id, "aria-hidden").and_then(aria_bool).unwrap_or(false)
+    if t.prop(id, "aria-hidden")
+        .and_then(aria_bool)
+        .unwrap_or(false)
         || t.prop(id, "hidden").map(html_bool).unwrap_or(false)
     {
         e = e.aria_hidden(true);
     }
 
-    if let Some(n) = t.prop(id, "aria-posinset").and_then(|v| v.trim().parse::<usize>().ok()) {
+    if let Some(n) = t
+        .prop(id, "aria-posinset")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
         e = e.aria_position_in_set(n);
     }
-    if let Some(n) = t.prop(id, "aria-setsize").and_then(|v| v.trim().parse::<usize>().ok()) {
+    if let Some(n) = t
+        .prop(id, "aria-setsize")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
         e = e.aria_size_of_set(n);
     }
-    if let Some(n) = t.prop(id, "aria-rowindex").and_then(|v| v.trim().parse::<usize>().ok()) {
+    if let Some(n) = t
+        .prop(id, "aria-rowindex")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
         e = e.aria_row_index(n);
     }
-    if let Some(n) = t.prop(id, "aria-colindex").and_then(|v| v.trim().parse::<usize>().ok()) {
+    if let Some(n) = t
+        .prop(id, "aria-colindex")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
         e = e.aria_column_index(n);
     }
-    if let Some(n) = t.prop(id, "aria-rowcount").and_then(|v| v.trim().parse::<usize>().ok()) {
+    if let Some(n) = t
+        .prop(id, "aria-rowcount")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
         e = e.aria_row_count(n);
     }
-    if let Some(n) = t.prop(id, "aria-colcount").and_then(|v| v.trim().parse::<usize>().ok()) {
+    if let Some(n) = t
+        .prop(id, "aria-colcount")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
         e = e.aria_column_count(n);
     }
 
@@ -602,7 +657,10 @@ pub(crate) fn apply<E: StatefulInteractiveElement>(mut e: E, t: &Tree, id: u32, 
         if let Some(v) = number(t, id, "step") {
             e = e.aria_numeric_value_step(v);
         }
-        if let Some(text) = t.prop(id, "aria-valuetext").filter(|s| !s.trim().is_empty()) {
+        if let Some(text) = t
+            .prop(id, "aria-valuetext")
+            .filter(|s| !s.trim().is_empty())
+        {
             e = e.aria_value(text.to_string());
         }
     } else if matches!(
@@ -710,11 +768,28 @@ mod tests {
             let input = element(t, "input", &[("type", "file")]);
             let node = t.node(input).unwrap();
             assert_eq!(resolved_role(t, input, &node), Some(Role::Button));
-            assert_eq!(accessible_label(t, input).as_deref(), Some("Choose File, No file chosen"));
-            let many = element(t, "input", &[("type", "File"), ("multiple", ""), (":file-label", "3 files")]);
-            assert_eq!(accessible_label(t, many).as_deref(), Some("Choose Files, 3 files"));
+            assert_eq!(
+                accessible_label(t, input).as_deref(),
+                Some("Choose File, No file chosen")
+            );
+            let many = element(
+                t,
+                "input",
+                &[
+                    ("type", "File"),
+                    ("multiple", ""),
+                    (":file-label", "3 files"),
+                ],
+            );
+            assert_eq!(
+                accessible_label(t, many).as_deref(),
+                Some("Choose Files, 3 files")
+            );
             let folder = element(t, "input", &[("type", "file"), ("webkitdirectory", "")]);
-            assert_eq!(accessible_label(t, folder).as_deref(), Some("Choose File, No file chosen"));
+            assert_eq!(
+                accessible_label(t, folder).as_deref(),
+                Some("Choose File, No file chosen")
+            );
             let named = element(t, "input", &[("type", "file"), ("aria-label", "Avatar")]);
             assert_eq!(accessible_label(t, named).as_deref(), Some("Avatar"));
             let text = element(t, "input", &[("type", "text")]);
@@ -738,7 +813,11 @@ mod tests {
             let dialog = element(
                 t,
                 "div",
-                &[("role", "dialog"), ("aria-labelledby", "t"), ("aria-describedby", "b")],
+                &[
+                    ("role", "dialog"),
+                    ("aria-labelledby", "t"),
+                    ("aria-describedby", "b"),
+                ],
             );
             t.insert(dialog, root, 0);
 
@@ -851,7 +930,10 @@ mod tests {
     /// `role` is a fallback list, first understood token wins (`role="doc-subtitle heading"`).
     #[test]
     fn a_role_list_takes_the_first_token_it_knows() {
-        assert_eq!(role_from_attr("doc-subtitle heading"), Ok(Some(Role::Heading)));
+        assert_eq!(
+            role_from_attr("doc-subtitle heading"),
+            Ok(Some(Role::Heading))
+        );
         assert_eq!(role_from_attr("nonsense also-nonsense"), Err(()));
     }
 
@@ -872,10 +954,22 @@ mod tests {
             ("label", Role::Label),
             ("progress", Role::ProgressIndicator),
         ] {
-            assert_eq!(implicit_role(tag, None, false, false), Some(want), "<{tag}>");
+            assert_eq!(
+                implicit_role(tag, None, false, false),
+                Some(want),
+                "<{tag}>"
+            );
         }
-        assert_eq!(implicit_role("div", None, false, false), None, "<div> is generic");
-        assert_eq!(implicit_role("span", None, false, false), None, "<span> is generic");
+        assert_eq!(
+            implicit_role("div", None, false, false),
+            None,
+            "<div> is generic"
+        );
+        assert_eq!(
+            implicit_role("span", None, false, false),
+            None,
+            "<span> is generic"
+        );
     }
 
     #[test]
@@ -908,9 +1002,16 @@ mod tests {
             (Some("submit"), Role::Button),
             (Some("nonsense"), Role::TextInput),
         ] {
-            assert_eq!(implicit_role("input", ty, false, false), Some(want), "type={ty:?}");
+            assert_eq!(
+                implicit_role("input", ty, false, false),
+                Some(want),
+                "type={ty:?}"
+            );
         }
-        assert_eq!(implicit_role("input", Some("file"), false, false), Some(Role::Button));
+        assert_eq!(
+            implicit_role("input", Some("file"), false, false),
+            Some(Role::Button)
+        );
         assert_eq!(implicit_role("input", Some("hidden"), false, false), None);
     }
 

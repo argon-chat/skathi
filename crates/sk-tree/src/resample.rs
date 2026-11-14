@@ -98,7 +98,11 @@ fn note_use(image: &Arc<RenderImage>, device: Size<DevicePixels>, now: Instant) 
         });
         let since = now.duration_since(e.rotated);
         if since >= USE_WINDOW {
-            e.prev = if since >= USE_WINDOW * 2 { (0, 0) } else { e.cur };
+            e.prev = if since >= USE_WINDOW * 2 {
+                (0, 0)
+            } else {
+                e.cur
+            };
             e.cur = (0, 0);
             e.rotated = now;
         }
@@ -139,7 +143,10 @@ pub(crate) enum KeepFull {
     SmallSaving,
 }
 
-pub(crate) fn reduced_copy(full: &Arc<RenderImage>, now: Instant) -> Result<Arc<RenderImage>, KeepFull> {
+pub(crate) fn reduced_copy(
+    full: &Arc<RenderImage>,
+    now: Instant,
+) -> Result<Arc<RenderImage>, KeepFull> {
     if full.is_reduced() || full.is_dynamic() || full.frame_count() != 1 {
         return Err(KeepFull::NotStill);
     }
@@ -155,7 +162,10 @@ pub(crate) fn reduced_copy(full: &Arc<RenderImage>, now: Instant) -> Result<Arc<
     if nw <= 0 || nh <= 0 {
         return Err(KeepFull::NotStill);
     }
-    let need = (step(drawn.0 as f32 / nw as f32), step(drawn.1 as f32 / nh as f32));
+    let need = (
+        step(drawn.0 as f32 / nw as f32),
+        step(drawn.1 as f32 / nh as f32),
+    );
     if need.0 == 0 || need.1 == 0 {
         return Err(KeepFull::DrawnLarge);
     }
@@ -223,7 +233,12 @@ fn enabled() -> bool {
 pub(crate) fn forget(image: &RenderImage) {
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
-        let keys: Vec<Key> = c.copies.keys().filter(|k| k.0 == image.id).copied().collect();
+        let keys: Vec<Key> = c
+            .copies
+            .keys()
+            .filter(|k| k.0 == image.id)
+            .copied()
+            .collect();
         for k in keys {
             evict(&mut c, k);
         }
@@ -249,7 +264,11 @@ pub(crate) fn stepped(natural: u32, step: i32) -> u32 {
     ((natural as f32 * (step as f32 / STEPS).exp2()).ceil() as u32).clamp(1, natural)
 }
 
-fn resampler(image: &Arc<RenderImage>, frame: usize, device: Size<DevicePixels>) -> Option<Arc<RenderImage>> {
+fn resampler(
+    image: &Arc<RenderImage>,
+    frame: usize,
+    device: Size<DevicePixels>,
+) -> Option<Arc<RenderImage>> {
     note_use(image, device, Instant::now());
     let out = choose(image, frame, device);
     if TRACK.load(std::sync::atomic::Ordering::Relaxed) {
@@ -297,7 +316,10 @@ fn note_seen(image: &Arc<RenderImage>, device: Size<DevicePixels>, full: bool) {
                 full_drawn: false,
             }
         });
-        e.drawn = (e.drawn.0.max(device.width.0), e.drawn.1.max(device.height.0));
+        e.drawn = (
+            e.drawn.0.max(device.width.0),
+            e.drawn.1.max(device.height.0),
+        );
         e.full_drawn |= full;
     });
 }
@@ -321,7 +343,10 @@ pub struct ImageStats {
 }
 
 pub fn image_stats() -> ImageStats {
-    let mut out = ImageStats { tracking: TRACK.load(std::sync::atomic::Ordering::Relaxed), ..Default::default() };
+    let mut out = ImageStats {
+        tracking: TRACK.load(std::sync::atomic::Ordering::Relaxed),
+        ..Default::default()
+    };
     CACHE.with(|c| {
         let c = c.borrow();
         out.copies = c.copies.len();
@@ -343,7 +368,10 @@ pub fn image_stats() -> ImageStats {
             out.live += 1;
             out.live_bytes += e.bytes;
             let (nw, nh) = (e.natural.0.max(1) as usize, e.natural.1.max(1) as usize);
-            let (dw, dh) = (e.drawn.0.clamp(1, nw as i32) as usize, e.drawn.1.clamp(1, nh as i32) as usize);
+            let (dw, dh) = (
+                e.drawn.0.clamp(1, nw as i32) as usize,
+                e.drawn.1.clamp(1, nh as i32) as usize,
+            );
             let ratio = (dw * dh) as f64 / (nw * nh) as f64;
             out.live_bytes_at_drawn += (e.bytes as f64 * ratio) as usize;
             if nw * nh >= 4 * dw * dh {
@@ -359,7 +387,11 @@ pub fn image_stats() -> ImageStats {
     out
 }
 
-fn choose(image: &Arc<RenderImage>, frame: usize, device: Size<DevicePixels>) -> Option<Arc<RenderImage>> {
+fn choose(
+    image: &Arc<RenderImage>,
+    frame: usize,
+    device: Size<DevicePixels>,
+) -> Option<Arc<RenderImage>> {
     let natural = image.size(frame);
     let (nw, nh) = (natural.width.0, natural.height.0);
     if nw <= 0 || nh <= 0 || device.width.0 <= 0 || device.height.0 <= 0 {
@@ -397,13 +429,19 @@ fn choose(image: &Arc<RenderImage>, frame: usize, device: Size<DevicePixels>) ->
                 } else {
                     c.in_flight.insert(key);
                     crate::perf::note_resample(None);
-                    submit(Job { key, source: image.clone(), target });
+                    submit(Job {
+                        key,
+                        source: image.clone(),
+                        target,
+                    });
                     None
                 }
             }
             Some(near) => {
                 if !c.in_flight.contains(&key) {
-                    c.waiting.entry(key).or_insert_with(|| (Arc::downgrade(image), Instant::now()));
+                    c.waiting
+                        .entry(key)
+                        .or_insert_with(|| (Arc::downgrade(image), Instant::now()));
                 }
                 let copy = c.copies.get_mut(&near)?;
                 copy.used = clock;
@@ -429,7 +467,15 @@ fn insert(c: &mut Cache, key: Key, image: Arc<RenderImage>, source: Weak<RenderI
     let size = image.size(0);
     let bytes = (size.width.0.max(0) as usize) * (size.height.0.max(0) as usize) * 4;
     c.bytes += bytes;
-    if let Some(old) = c.copies.insert(key, Copy { image, source, bytes, used: clock }) {
+    if let Some(old) = c.copies.insert(
+        key,
+        Copy {
+            image,
+            source,
+            bytes,
+            used: clock,
+        },
+    ) {
         c.bytes -= old.bytes;
         c.retired.push(old.image);
     }
@@ -445,9 +491,19 @@ fn evict(c: &mut Cache, key: Key) {
 fn make(image: &RenderImage, frame: usize, target: (u32, u32)) -> Option<RenderImage> {
     let size = image.size(frame);
     let bytes = image.as_bytes(frame)?;
-    let out = downscale(bytes, size.width.0 as u32, size.height.0 as u32, target.0, target.1, false);
+    let out = downscale(
+        bytes,
+        size.width.0 as u32,
+        size.height.0 as u32,
+        target.0,
+        target.1,
+        false,
+    );
     let buffer = image::RgbaImage::from_raw(target.0, target.1, out)?;
-    Some(RenderImage::new(vec![image::Frame::new(buffer)]).with_natural_size(image.natural_size(frame)))
+    Some(
+        RenderImage::new(vec![image::Frame::new(buffer)])
+            .with_natural_size(image.natural_size(frame)),
+    )
 }
 
 fn submit(job: Job) {
@@ -493,26 +549,46 @@ pub(crate) fn tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
         let due: Vec<Key> = c
             .waiting
             .iter()
-            .filter(|(_, (source, since))| source.strong_count() == 0 || now.duration_since(*since) >= SETTLE)
+            .filter(|(_, (source, since))| {
+                source.strong_count() == 0 || now.duration_since(*since) >= SETTLE
+            })
             .map(|(k, _)| *k)
             .collect();
         for key in due {
-            let Some((source, _)) = c.waiting.remove(&key) else { continue };
-            let Some(source) = source.upgrade() else { continue };
+            let Some((source, _)) = c.waiting.remove(&key) else {
+                continue;
+            };
+            let Some(source) = source.upgrade() else {
+                continue;
+            };
             if c.copies.contains_key(&key) || c.in_flight.contains(&key) {
                 continue;
             }
             let natural = source.size(key.1);
-            let target = (stepped(natural.width.0 as u32, key.2), stepped(natural.height.0 as u32, key.3));
+            let target = (
+                stepped(natural.width.0 as u32, key.2),
+                stepped(natural.height.0 as u32, key.3),
+            );
             c.in_flight.insert(key);
-            submit(Job { key, source, target });
+            submit(Job {
+                key,
+                source,
+                target,
+            });
         }
-        let gone: Vec<Key> = c.copies.iter().filter(|(_, v)| v.source.strong_count() == 0).map(|(k, _)| *k).collect();
+        let gone: Vec<Key> = c
+            .copies
+            .iter()
+            .filter(|(_, v)| v.source.strong_count() == 0)
+            .map(|(k, _)| *k)
+            .collect();
         for key in gone {
             evict(&mut c, key);
         }
         while c.bytes > BUDGET_BYTES {
-            let Some(oldest) = c.copies.iter().min_by_key(|(_, v)| v.used).map(|(k, _)| *k) else { break };
+            let Some(oldest) = c.copies.iter().min_by_key(|(_, v)| v.used).map(|(k, _)| *k) else {
+                break;
+            };
             evict(&mut c, oldest);
         }
         (moved, std::mem::take(&mut c.retired))
@@ -540,11 +616,16 @@ mod tests {
     }
 
     fn image(bytes: Vec<u8>, w: u32, h: u32) -> Arc<RenderImage> {
-        Arc::new(RenderImage::new(vec![image::Frame::new(image::RgbaImage::from_raw(w, h, bytes).unwrap())]))
+        Arc::new(RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::from_raw(w, h, bytes).unwrap(),
+        )]))
     }
 
     fn device(w: i32, h: i32) -> Size<DevicePixels> {
-        Size { width: DevicePixels(w), height: DevicePixels(h) }
+        Size {
+            width: DevicePixels(w),
+            height: DevicePixels(h),
+        }
     }
 
     #[test]
@@ -557,7 +638,10 @@ mod tests {
         assert_eq!(step(40.0 / 1080.0), -19);
         for drawn in [40u32, 41, 57, 80, 120, 333] {
             let s = stepped(1080, step(drawn as f32 / 1080.0));
-            assert!(s >= drawn && s as f32 <= drawn as f32 * 1.19 + 1.0, "{drawn} -> {s}");
+            assert!(
+                s >= drawn && s as f32 <= drawn as f32 * 1.19 + 1.0,
+                "{drawn} -> {s}"
+            );
         }
         assert_eq!(stepped(1080, 0), 1080);
         assert_eq!(stepped(3, -40), 1);
@@ -572,12 +656,22 @@ mod tests {
         new_frame();
         let img = image(checker(200, 200), 200, 200);
         assert!(resampler(&img, 0, device(200, 200)).is_none());
-        assert!(resampler(&img, 0, device(180, 180)).is_none(), "0.9 of its size: drawn as it is");
-        assert!(resampler(&img, 0, device(400, 400)).is_none(), "drawn larger: as it is");
-        let first = resampler(&img, 0, device(40, 40)).expect("a small image's first copy is made on the spot");
+        assert!(
+            resampler(&img, 0, device(180, 180)).is_none(),
+            "0.9 of its size: drawn as it is"
+        );
+        assert!(
+            resampler(&img, 0, device(400, 400)).is_none(),
+            "drawn larger: as it is"
+        );
+        let first = resampler(&img, 0, device(40, 40))
+            .expect("a small image's first copy is made on the spot");
         let size = first.size(0);
         assert!(size.width.0 >= 40 && size.width.0 <= 48, "{size:?}");
-        assert!(Arc::ptr_eq(&first, &resampler(&img, 0, device(41, 41)).unwrap()), "same step, same copy");
+        assert!(
+            Arc::ptr_eq(&first, &resampler(&img, 0, device(41, 41)).unwrap()),
+            "same step, same copy"
+        );
 
         let other = resampler(&img, 0, device(100, 100)).unwrap();
         assert!(Arc::ptr_eq(&first, &other));
@@ -591,7 +685,10 @@ mod tests {
         new_frame();
         let wide = image(checker(400, 2), 400, 2);
         let copy = resampler(&wide, 0, device(40, 2)).unwrap();
-        assert_eq!((copy.size(0).height.0, copy.size(0).width.0 >= 40), (2, true));
+        assert_eq!(
+            (copy.size(0).height.0, copy.size(0).width.0 >= 40),
+            (2, true)
+        );
 
         forget(&img);
         assert!(CACHE.with(|c| c.borrow().copies.keys().all(|k| k.0 != img.id)));
@@ -609,8 +706,14 @@ mod tests {
     #[test]
     fn a_large_image_is_resampled_off_the_painting_thread() {
         let img = image(checker(1200, 1200), 1200, 1200);
-        assert!(resampler(&img, 0, device(60, 60)).is_none(), "drawn as it is until the copy lands");
-        assert!(resampler(&img, 0, device(60, 60)).is_none(), "and asked for once");
+        assert!(
+            resampler(&img, 0, device(60, 60)).is_none(),
+            "drawn as it is until the copy lands"
+        );
+        assert!(
+            resampler(&img, 0, device(60, 60)).is_none(),
+            "and asked for once"
+        );
         assert_eq!(CACHE.with(|c| c.borrow().in_flight.len()), 1);
         let deadline = Instant::now() + Duration::from_secs(20);
         let landed = loop {
@@ -642,10 +745,19 @@ mod tests {
         new_frame();
         let img = image(checker(600, 600), 600, 600);
         let copy = resampler(&img, 0, device(40, 40)).expect("the first copy, on the spot");
-        assert_eq!(copy.natural_size(0), img.size(0), "a copy carries the picture's size");
-        assert_eq!(reduced_copy(&img, Instant::now()).err(), Some(KeepFull::Young), "drawn for less than REDUCE_AFTER: the decode stays");
+        assert_eq!(
+            copy.natural_size(0),
+            img.size(0),
+            "a copy carries the picture's size"
+        );
+        assert_eq!(
+            reduced_copy(&img, Instant::now()).err(),
+            Some(KeepFull::Young),
+            "drawn for less than REDUCE_AFTER: the decode stays"
+        );
 
-        let reduced = reduced_copy(&img, settled()).expect("drawn only at 40 px: the copy stands in");
+        let reduced =
+            reduced_copy(&img, settled()).expect("drawn only at 40 px: the copy stands in");
         assert!(Arc::ptr_eq(&reduced, &copy));
         assert!(reduced.is_reduced());
         // Out of the copy cache and NOT retired: its atlas tile is what is drawn from next.
@@ -658,7 +770,10 @@ mod tests {
         let _ = take_wanted_full();
         assert!(resampler(&reduced, 0, device(40, 40)).is_none());
         assert!(take_wanted_full().is_empty());
-        assert_eq!(reduced_copy(&reduced, settled()).err(), Some(KeepFull::NotStill));
+        assert_eq!(
+            reduced_copy(&reduced, settled()).err(),
+            Some(KeepFull::NotStill)
+        );
         let _ = resampler(&reduced, 0, device(300, 300));
         assert!(take_wanted_full().contains(&reduced.id));
     }
@@ -673,8 +788,14 @@ mod tests {
         new_frame();
         let small = image(checker(120, 120), 120, 120);
         assert!(resampler(&small, 0, device(20, 20)).is_some());
-        assert_eq!(reduced_copy(&small, settled()).err(), Some(KeepFull::SmallSaving));
+        assert_eq!(
+            reduced_copy(&small, settled()).err(),
+            Some(KeepFull::SmallSaving)
+        );
         let unseen = image(checker(600, 600), 600, 600);
-        assert_eq!(reduced_copy(&unseen, settled()).err(), Some(KeepFull::Undrawn));
+        assert_eq!(
+            reduced_copy(&unseen, settled()).err(),
+            Some(KeepFull::Undrawn)
+        );
     }
 }

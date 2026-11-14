@@ -106,10 +106,12 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
         false
     }
 
-    fn has_local_name(&self, local_name: &<Self::Impl as SelectorImpl<'i>>::BorrowedLocalName) -> bool {
+    fn has_local_name(
+        &self,
+        local_name: &<Self::Impl as SelectorImpl<'i>>::BorrowedLocalName,
+    ) -> bool {
         let name = local_name.0.as_ref();
-        self.0.has_tag(name)
-            || (self.0.is_root() && matches!(name, "html" | "body"))
+        self.0.has_tag(name) || (self.0.is_root() && matches!(name, "html" | "body"))
     }
     fn has_namespace(&self, _ns: &<Self::Impl as SelectorImpl<'i>>::BorrowedNamespaceUrl) -> bool {
         true
@@ -149,9 +151,10 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
             PseudoClass::Hover => self.0.interaction(Interaction::Hover).unwrap_or(true),
             PseudoClass::Active => self.0.interaction(Interaction::Active).unwrap_or(true),
             PseudoClass::Focus => self.0.interaction(Interaction::Focus).unwrap_or(true),
-            PseudoClass::FocusVisible => {
-                self.0.interaction(Interaction::FocusVisible).unwrap_or(true)
-            }
+            PseudoClass::FocusVisible => self
+                .0
+                .interaction(Interaction::FocusVisible)
+                .unwrap_or(true),
             PseudoClass::FocusWithin => {
                 self.0.interaction(Interaction::FocusWithin).unwrap_or(true)
             }

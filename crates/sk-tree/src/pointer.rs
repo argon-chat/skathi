@@ -51,7 +51,10 @@ fn path_if_hittable(t: &Tree, id: u32, root: u32) -> Option<Vec<u32>> {
     if node.kind != Kind::Element {
         return None;
     }
-    let inert = node.computed.as_ref().is_some_and(|cs| cs.extras.pointer_events_none == Some(true));
+    let inert = node
+        .computed
+        .as_ref()
+        .is_some_and(|cs| cs.extras.pointer_events_none == Some(true));
     if inert && id != root {
         return None;
     }
@@ -59,7 +62,10 @@ fn path_if_hittable(t: &Tree, id: u32, root: u32) -> Option<Vec<u32>> {
     let mut cur = id;
     for _ in 0..4096 {
         let n = t.node(cur)?;
-        if n.computed.as_ref().is_some_and(|cs| cs.base.visibility == Some(gpui::Visibility::Hidden)) {
+        if n.computed
+            .as_ref()
+            .is_some_and(|cs| cs.base.visibility == Some(gpui::Visibility::Hidden))
+        {
             return None;
         }
         path.push(cur);
@@ -84,18 +90,29 @@ struct Resolved {
 fn resolve(t: &Tree, tags: Vec<u32>, root: u32) -> Resolved {
     for (at, &tag) in tags.iter().enumerate() {
         if let Some(path) = path_if_hittable(t, tag, root) {
-            return Resolved { target: tag, path, tags, at };
+            return Resolved {
+                target: tag,
+                path,
+                tags,
+                at,
+            };
         }
     }
     let at = tags.len();
-    Resolved { target: root, path: vec![root], tags, at }
+    Resolved {
+        target: root,
+        path: vec![root],
+        tags,
+        at,
+    }
 }
 
 pub(crate) fn topmost(window: &Window, p: Point<Pixels>) -> Option<u32> {
     let tags = window.vn_tags_at(p);
     tree::read_tree(|t| {
         let root = window_root(t, window);
-        tags.into_iter().find(|&tag| path_if_hittable(t, tag, root).is_some())
+        tags.into_iter()
+            .find(|&tag| path_if_hittable(t, tag, root).is_some())
     })
 }
 
@@ -146,7 +163,9 @@ pub(crate) fn capture_listeners(window: &mut Window) {
         if phase != DispatchPhase::Capture {
             return;
         }
-        let Some(id) = captured_target(window) else { return };
+        let Some(id) = captured_target(window) else {
+            return;
+        };
         windows::here(window, |w| {
             w.pending_mouse_move = Some(windows::PendingMouseMove {
                 id,
@@ -165,7 +184,9 @@ pub(crate) fn capture_listeners(window: &mut Window) {
 }
 
 fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) {
-    let capture = (kind != VnHitKind::Scroll).then(|| captured_target(window)).flatten();
+    let capture = (kind != VnHitKind::Scroll)
+        .then(|| captured_target(window))
+        .flatten();
     if capture.is_none() && crate::select::refine(kind, p, window, cx) {
         return;
     }
@@ -198,7 +219,10 @@ fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) 
     });
     let mut path = resolved.path;
     path.sort_unstable();
-    window.vn_restrict_mouse_hit(&|tag| path.binary_search(&tag).is_ok(), kind != VnHitKind::Scroll);
+    window.vn_restrict_mouse_hit(
+        &|tag| path.binary_search(&tag).is_ok(),
+        kind != VnHitKind::Scroll,
+    );
 }
 
 pub(crate) fn target_or(window: &Window, fallback: u32) -> u32 {
@@ -214,13 +238,22 @@ pub(crate) fn click_target(window: &Window, down: u32, fallback: u32) -> Option<
     tree::read_tree(|t| click_target_in_tree(t, down, up, window_root(t, window), capture))
 }
 
-fn click_target_in_tree(t: &Tree, down: u32, up: u32, root: u32, capture: Option<u32>) -> Option<u32> {
+fn click_target_in_tree(
+    t: &Tree,
+    down: u32,
+    up: u32,
+    root: u32,
+    capture: Option<u32>,
+) -> Option<u32> {
     // A fieldset itself must not suppress the enabled first legend.
     let enabled_path = |id| {
         let path = capture_path(t, id, root)?;
         (!path.iter().any(|&id| {
-            t.node(id).is_some_and(|n| t.name(n.tag) != "fieldset" && crate::render::actually_disabled(t, id))
-        })).then_some(())
+            t.node(id).is_some_and(|n| {
+                t.name(n.tag) != "fieldset" && crate::render::actually_disabled(t, id)
+            })
+        }))
+        .then_some(())
     };
     enabled_path(down)?;
     let up = capture.unwrap_or(up);
@@ -252,7 +285,6 @@ fn common_ancestor(t: &Tree, a: u32, b: u32) -> Option<u32> {
     }
     None
 }
-
 
 fn hit_ids(window: &Window, p: Point<Pixels>, all: bool) -> Vec<u32> {
     let tags = window.vn_tags_at(p);
@@ -295,13 +327,25 @@ fn hit_ids_in_primary(p: Point<Pixels>, all: bool) -> Vec<u32> {
     match in_hand {
         Some(Some(ids)) => ids,
         Some(None) => Vec::new(),
-        None => sk_runtime::with_app(|cx| other_window(cx, primary, p, all)).flatten().unwrap_or_default(),
+        None => sk_runtime::with_app(|cx| other_window(cx, primary, p, all))
+            .flatten()
+            .unwrap_or_default(),
     }
 }
 
-fn other_window(cx: &mut App, key: windows::WinKey, p: Point<Pixels>, all: bool) -> Option<Vec<u32>> {
-    let handle = cx.windows().into_iter().find(|h| h.window_id().as_u64() == key)?;
-    handle.update(cx, |_, window, _| hit_ids(window, p, all)).ok()
+fn other_window(
+    cx: &mut App,
+    key: windows::WinKey,
+    p: Point<Pixels>,
+    all: bool,
+) -> Option<Vec<u32>> {
+    let handle = cx
+        .windows()
+        .into_iter()
+        .find(|h| h.window_id().as_u64() == key)?;
+    handle
+        .update(cx, |_, window, _| hit_ids(window, p, all))
+        .ok()
 }
 
 host_fn!(fn sk_hit_at(_g, args) {
@@ -353,7 +397,11 @@ host_fn!(fn sk_pointer_capture(_g, args) {
 
 pub(crate) fn install(rt: &JsRuntime) {
     rt.register("__sk_hit_at", 3, sk_hit_at as *const std::ffi::c_void);
-    rt.register("__sk_pointer_capture", 3, sk_pointer_capture as *const std::ffi::c_void);
+    rt.register(
+        "__sk_pointer_capture",
+        3,
+        sk_pointer_capture as *const std::ffi::c_void,
+    );
 }
 
 thread_local! {
@@ -371,7 +419,10 @@ fn note_covered(t: &Tree, r: &Resolved, p: Point<Pixels>) {
         if node.kind != Kind::Element {
             continue;
         }
-        let inert = node.computed.as_ref().is_some_and(|cs| cs.extras.pointer_events_none == Some(true));
+        let inert = node
+            .computed
+            .as_ref()
+            .is_some_and(|cs| cs.extras.pointer_events_none == Some(true));
         if !inert && node.listeners & PRESS_BITS != 0 {
             listener = Some(tag);
             break;
@@ -400,7 +451,6 @@ fn note_covered(t: &Tree, r: &Resolved, p: Point<Pixels>) {
     }
 }
 
-
 #[derive(Default)]
 pub struct Hover {
     path: Vec<u32>,
@@ -423,9 +473,10 @@ pub(crate) fn resolve_hover(window: &mut Window, cx: &mut App) {
     let due = windows::here(window, |w| match w.hover.from {
         None => true,
         Some((p, i, _)) if p != pos || i != inside => true,
-        Some((_, _, b)) if b != built => {
-            w.hover.when.is_none_or(|t| now.duration_since(t) >= STILL_POINTER_INTERVAL)
-        }
+        Some((_, _, b)) if b != built => w
+            .hover
+            .when
+            .is_none_or(|t| now.duration_since(t) >= STILL_POINTER_INTERVAL),
         Some(_) => false,
     });
     if !due {
@@ -452,7 +503,12 @@ pub(crate) fn resolve_hover(window: &mut Window, cx: &mut App) {
 
 fn boundary(old: &[u32], new: &[u32]) -> (Vec<u32>, Vec<u32>) {
     let left = old.iter().copied().filter(|id| !new.contains(id)).collect();
-    let entered = new.iter().rev().copied().filter(|id| !old.contains(id)).collect();
+    let entered = new
+        .iter()
+        .rev()
+        .copied()
+        .filter(|id| !old.contains(id))
+        .collect();
     (left, entered)
 }
 
@@ -478,19 +534,30 @@ fn hover_moved(old: &[u32], new: &[u32], pos: Point<Pixels>, window: &mut Window
     }
     // `mouseenter` and `mouseleave` fire at every element that joins or leaves the path and listens
     // for them, `pointer-events` notwithstanding: it decides what is hit, not who hears about it.
-    let has = |t: &Tree, id: u32, ev: u32| t.node(id).is_some_and(|n| n.listeners & (1u64 << ev) != 0);
+    let has =
+        |t: &Tree, id: u32, ev: u32| t.node(id).is_some_and(|n| n.listeners & (1u64 << ev) != 0);
     let (leaves, enters): (Vec<u32>, Vec<u32>) = tree::read_tree(|t| {
         let root = window_root(t, window);
         (
-            left.iter().copied().filter(|&id| has(t, id, tree::EV_MOUSELEAVE) && path_to(t, id, root)).collect(),
-            entered.iter().copied().filter(|&id| has(t, id, tree::EV_MOUSEENTER)).collect(),
+            left.iter()
+                .copied()
+                .filter(|&id| has(t, id, tree::EV_MOUSELEAVE) && path_to(t, id, root))
+                .collect(),
+            entered
+                .iter()
+                .copied()
+                .filter(|&id| has(t, id, tree::EV_MOUSEENTER))
+                .collect(),
         )
     });
     if leaves.is_empty() && enters.is_empty() {
         return;
     }
     let payload = crate::render::mouse_payload(pos, -1.0, &window.modifiers());
-    let events = leaves.into_iter().map(|id| (id, tree::EV_MOUSELEAVE)).chain(enters.into_iter().map(|id| (id, tree::EV_MOUSEENTER)));
+    let events = leaves
+        .into_iter()
+        .map(|id| (id, tree::EV_MOUSELEAVE))
+        .chain(enters.into_iter().map(|id| (id, tree::EV_MOUSEENTER)));
     crate::off_input(|| {
         for (id, ev) in events {
             if tree::read_tree(|t| t.node(id).is_some()) {
@@ -518,7 +585,9 @@ fn path_to(t: &Tree, id: u32, root: u32) -> bool {
 /// `mousemove` are delivered from a per-frame callback armed here once, from its build.
 pub(crate) fn arm_hover_tick(window: &mut Window) {
     let k = windows::key(window);
-    if windows::is_primary(k) || windows::here(window, |w| std::mem::replace(&mut w.hover.ticking, true)) {
+    if windows::is_primary(k)
+        || windows::here(window, |w| std::mem::replace(&mut w.hover.ticking, true))
+    {
         return;
     }
     window.on_next_frame(hover_tick);
@@ -530,7 +599,9 @@ fn hover_tick(window: &mut Window, cx: &mut App) {
 }
 
 fn describe(t: &Tree, id: u32) -> String {
-    let Some(node) = t.node(id) else { return format!("node {id}") };
+    let Some(node) = t.node(id) else {
+        return format!("node {id}");
+    };
     let mut out = format!("node {id} (<{}", t.name(node.tag));
     if let Some(el_id) = t.prop(id, "id").filter(|v| !v.is_empty()) {
         out.push_str(&format!(" id=\"{el_id}\""));
@@ -577,10 +648,16 @@ mod tests {
             t.insert(a1, a, 0);
             vec![root, list, a, b, a1]
         });
-        let [root, list, a, b, a1] = ids[..] else { unreachable!() };
+        let [root, list, a, b, a1] = ids[..] else {
+            unreachable!()
+        };
         tree::read_tree(|t| {
             assert_eq!(common_ancestor(t, a1, a1), Some(a1), "the same element");
-            assert_eq!(common_ancestor(t, a1, a), Some(a), "an ancestor of the other");
+            assert_eq!(
+                common_ancestor(t, a1, a),
+                Some(a),
+                "an ancestor of the other"
+            );
             assert_eq!(common_ancestor(t, a1, b), Some(list), "two branches");
             assert_eq!(common_ancestor(t, root, b), Some(root));
         });
@@ -599,12 +676,23 @@ mod tests {
             t.insert(down, parent, 0);
             t.insert(up, parent, 1);
             assert_eq!(click_target_in_tree(t, down, up, root, None), Some(parent));
-            assert_eq!(click_target_in_tree(t, down, up, root, Some(down)), Some(down));
+            assert_eq!(
+                click_target_in_tree(t, down, up, root, Some(down)),
+                Some(down)
+            );
             assert_eq!(click_target_in_tree(t, down, up, other_window, None), None);
             t.insert(down, other_window, 0);
-            assert_eq!(click_target_in_tree(t, down, up, root, None), None, "detached from the original window");
+            assert_eq!(
+                click_target_in_tree(t, down, up, root, None),
+                None,
+                "detached from the original window"
+            );
             t.remove(down);
-            assert_eq!(click_target_in_tree(t, down, up, root, None), None, "removed press must not retarget to a listener");
+            assert_eq!(
+                click_target_in_tree(t, down, up, root, None),
+                None,
+                "removed press must not retarget to a listener"
+            );
             vec![root, other_window, parent, up]
         });
     }
@@ -621,11 +709,18 @@ mod tests {
             let child = t.create_element(span_tag);
             t.insert(button, root, 0);
             t.insert(child, button, 0);
-            assert_eq!(click_target_in_tree(t, child, child, root, None), Some(child));
+            assert_eq!(
+                click_target_in_tree(t, child, child, root, None),
+                Some(child)
+            );
             let disabled = t.intern("disabled");
             t.set_prop(button, disabled, Some(String::new()));
             assert_eq!(click_target_in_tree(t, child, child, root, None), None);
-            assert_eq!(click_target_in_tree(t, root, child, root, None), None, "disabled release target");
+            assert_eq!(
+                click_target_in_tree(t, root, child, root, None),
+                None,
+                "disabled release target"
+            );
             t.set_prop(button, disabled, None);
             let fieldset = t.create_element(fieldset_tag);
             let legend = t.create_element(legend_tag);
@@ -636,9 +731,23 @@ mod tests {
             t.insert(enabled, legend, 0);
             t.insert(disabled_button, fieldset, 1);
             t.set_prop(fieldset, disabled, Some(String::new()));
-            assert_eq!(click_target_in_tree(t, enabled, enabled, root, None), Some(enabled));
-            assert_eq!(click_target_in_tree(t, disabled_button, disabled_button, root, None), None);
-            vec![root, button, child, fieldset, legend, enabled, disabled_button]
+            assert_eq!(
+                click_target_in_tree(t, enabled, enabled, root, None),
+                Some(enabled)
+            );
+            assert_eq!(
+                click_target_in_tree(t, disabled_button, disabled_button, root, None),
+                None
+            );
+            vec![
+                root,
+                button,
+                child,
+                fieldset,
+                legend,
+                enabled,
+                disabled_button,
+            ]
         });
     }
 
@@ -665,10 +774,21 @@ mod tests {
             t.insert(other, root, 1);
             set(t, parent, Some(true), true);
             assert!(path_if_hittable(t, child, root).is_none());
-            assert_eq!(capture_path(t, child, root), Some(vec![child, parent, root]));
-            assert_eq!(capture_path(t, child, other), None, "capture never crosses windows");
+            assert_eq!(
+                capture_path(t, child, root),
+                Some(vec![child, parent, root])
+            );
+            assert_eq!(
+                capture_path(t, child, other),
+                None,
+                "capture never crosses windows"
+            );
             t.insert(child, other, 0);
-            assert_eq!(capture_path(t, child, parent), None, "detached from old painted root");
+            assert_eq!(
+                capture_path(t, child, parent),
+                None,
+                "detached from old painted root"
+            );
             vec![root, parent, child, other]
         });
     }
@@ -694,16 +814,27 @@ mod tests {
             set(t, under_hidden, None, false);
             vec![root, decor, inside, hidden, under_hidden, plain]
         });
-        let [root, decor, inside, hidden, under_hidden, plain] = ids[..] else { unreachable!() };
+        let [root, decor, inside, hidden, under_hidden, plain] = ids[..] else {
+            unreachable!()
+        };
         tree::read_tree(|t| {
-            assert!(path_if_hittable(t, decor, root).is_none(), "pointer-events: none");
+            assert!(
+                path_if_hittable(t, decor, root).is_none(),
+                "pointer-events: none"
+            );
             assert_eq!(
                 path_if_hittable(t, inside, root),
                 Some(vec![inside, decor, root]),
                 "auto under none is hit, and its path runs through the none parent"
             );
-            assert!(path_if_hittable(t, hidden, root).is_none(), "visibility: hidden");
-            assert!(path_if_hittable(t, under_hidden, root).is_none(), "inside a hidden subtree");
+            assert!(
+                path_if_hittable(t, hidden, root).is_none(),
+                "visibility: hidden"
+            );
+            assert!(
+                path_if_hittable(t, under_hidden, root).is_none(),
+                "inside a hidden subtree"
+            );
             assert_eq!(path_if_hittable(t, plain, root), Some(vec![plain, root]));
             let r = resolve(t, vec![decor, under_hidden, plain, root], root);
             assert_eq!((r.target, r.at), (plain, 2));

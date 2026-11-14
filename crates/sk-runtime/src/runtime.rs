@@ -107,11 +107,20 @@ impl JsRuntime {
             // Relative reads go through the content provider; empty roots would make a miss read relative to the
             // process cwd, so a root that cannot exist turns every miss into a 404.
             let root: Vec<u16> = NO_DISK_ROOT.encode_utf16().collect();
-            let rc = ffi::redjs_webshim_install(ctx.raw(), root.as_ptr(), root.len(), root.as_ptr(), root.len());
+            let rc = ffi::redjs_webshim_install(
+                ctx.raw(),
+                root.as_ptr(),
+                root.len(),
+                root.as_ptr(),
+                root.len(),
+            );
             assert_eq!(rc, 0, "redjs_webshim_install failed: {rc}");
             ffi::redjs_set_uncaught_handler(on_uncaught as *const c_void);
         }
-        RUNTIME.with(|r| r.set(JsRuntime { ctx }).unwrap_or_else(|_| unreachable!("BOOTED admits one init")));
+        RUNTIME.with(|r| {
+            r.set(JsRuntime { ctx })
+                .unwrap_or_else(|_| unreachable!("BOOTED admits one init"))
+        });
     }
 
     pub fn with<R>(f: impl FnOnce(&JsRuntime) -> R) -> R {
@@ -134,7 +143,10 @@ impl JsRuntime {
         match self.ctx.eval_named(src, url) {
             Ok(_) => Ok(()),
             Err(Error::Exception(e)) => Err(self.describe(e)),
-            Err(e) => Err(JsError { header: format!("engine error: {e}"), stack: String::new() }),
+            Err(e) => Err(JsError {
+                header: format!("engine error: {e}"),
+                stack: String::new(),
+            }),
         }
     }
 
@@ -170,9 +182,14 @@ impl JsRuntime {
     /// Installs the host content provider consulted by `fetch()` and image loads before the disk roots. The
     /// closure lives in a process global behind a trampoline (the raw ABI has no user-data pointer), hence
     /// `Send + Sync`. One provider per process; a second call is a no-op with an advisory.
-    pub fn set_content_provider(&self, f: impl Fn(&str) -> Option<Vec<u8>> + Send + Sync + 'static) {
+    pub fn set_content_provider(
+        &self,
+        f: impl Fn(&str) -> Option<Vec<u8>> + Send + Sync + 'static,
+    ) {
         if PROVIDER.set(Box::new(f)).is_err() {
-            eprintln!("[sk-runtime] set_content_provider called twice — keeping the first provider");
+            eprintln!(
+                "[sk-runtime] set_content_provider called twice — keeping the first provider"
+            );
             return;
         }
         unsafe { ffi::redjs_content_provider_set(self.ctx.raw(), content_read as *const c_void) };
@@ -213,12 +230,16 @@ unsafe extern "C" fn content_read(
     sink_ctx: *mut c_void,
 ) -> i32 {
     const MISS: i32 = 1;
-    let Some(provider) = PROVIDER.get() else { return MISS };
+    let Some(provider) = PROVIDER.get() else {
+        return MISS;
+    };
     if path_ptr.is_null() {
         return MISS;
     }
     let bytes = core::slice::from_raw_parts(path_ptr, path_len);
-    let Ok(key) = std::str::from_utf8(bytes) else { return MISS };
+    let Ok(key) = std::str::from_utf8(bytes) else {
+        return MISS;
+    };
     let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| provider(key)));
     match found {
         Ok(Some(data)) => {
@@ -250,7 +271,11 @@ fn describe_raw(g: *mut c_void, exc: u64) -> JsError {
         let stack = redjs::webapi::util::read_string(g, stack_v).unwrap_or_default();
         let name_v = redjs::webapi::util::get(g, exc, "name");
         let name = redjs::webapi::util::read_string(g, name_v).unwrap_or_default();
-        let header = if name.is_empty() { msg } else { format!("{name}: {msg}") };
+        let header = if name.is_empty() {
+            msg
+        } else {
+            format!("{name}: {msg}")
+        };
         JsError { header, stack }
     }
 }
@@ -268,12 +293,27 @@ mod tests {
         unsafe {
             assert_eq!(ffi::redjs_web_install(ctx.raw()), 0);
             let root: Vec<u16> = NO_DISK_ROOT.encode_utf16().collect();
-            assert_eq!(ffi::redjs_webshim_install(ctx.raw(), root.as_ptr(), root.len(), root.as_ptr(), root.len()), 0);
+            assert_eq!(
+                ffi::redjs_webshim_install(
+                    ctx.raw(),
+                    root.as_ptr(),
+                    root.len(),
+                    root.as_ptr(),
+                    root.len()
+                ),
+                0
+            );
         }
         let read = |src: &str| ctx.to_rust_string(ctx.eval(src).unwrap()).unwrap();
         assert_eq!(read("navigator.userAgent"), SK_USER_AGENT);
-        assert_eq!(read("navigator.appVersion"), redjs::webapi::navigator::app_version(SK_USER_AGENT));
-        assert_eq!(read("navigator.platform"), redjs::webapi::navigator::platform(SK_USER_AGENT));
+        assert_eq!(
+            read("navigator.appVersion"),
+            redjs::webapi::navigator::app_version(SK_USER_AGENT)
+        );
+        assert_eq!(
+            read("navigator.platform"),
+            redjs::webapi::navigator::platform(SK_USER_AGENT)
+        );
         #[cfg(target_os = "macos")]
         assert_eq!(read("navigator.platform"), "MacIntel");
         #[cfg(target_os = "windows")]
@@ -284,14 +324,29 @@ mod tests {
     #[test]
     fn the_delivery_budget_is_a_quarter_of_the_frame() {
         assert_eq!(delivery_budget_us(None), SK_PUMP_DELIVERY_BUDGET_US);
-        assert_eq!(delivery_budget_us(Some(1000.0 / 60.0)), 4000, "60 Hz: the cap (a quarter is 4.17 ms)");
+        assert_eq!(
+            delivery_budget_us(Some(1000.0 / 60.0)),
+            4000,
+            "60 Hz: the cap (a quarter is 4.17 ms)"
+        );
         assert_eq!(delivery_budget_us(Some(1000.0 / 120.0)), 2083);
         assert_eq!(delivery_budget_us(Some(1000.0 / 144.0)), 1736);
         assert_eq!(delivery_budget_us(Some(1000.0 / 240.0)), 1041);
-        assert_eq!(delivery_budget_us(Some(1000.0 / 1000.0)), SK_PUMP_DELIVERY_MIN_US);
-        assert_eq!(delivery_budget_us(Some(100.0)), SK_PUMP_DELIVERY_BUDGET_US, "30 Hz and slower: still the cap");
+        assert_eq!(
+            delivery_budget_us(Some(1000.0 / 1000.0)),
+            SK_PUMP_DELIVERY_MIN_US
+        );
+        assert_eq!(
+            delivery_budget_us(Some(100.0)),
+            SK_PUMP_DELIVERY_BUDGET_US,
+            "30 Hz and slower: still the cap"
+        );
         for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
-            assert_eq!(delivery_budget_us(Some(bad)), SK_PUMP_DELIVERY_BUDGET_US, "{bad}");
+            assert_eq!(
+                delivery_budget_us(Some(bad)),
+                SK_PUMP_DELIVERY_BUDGET_US,
+                "{bad}"
+            );
         }
     }
 
@@ -305,7 +360,16 @@ mod tests {
         unsafe {
             assert_eq!(ffi::redjs_web_install(ctx.raw()), 0);
             let root: Vec<u16> = NO_DISK_ROOT.encode_utf16().collect();
-            assert_eq!(ffi::redjs_webshim_install(ctx.raw(), root.as_ptr(), root.len(), root.as_ptr(), root.len()), 0);
+            assert_eq!(
+                ffi::redjs_webshim_install(
+                    ctx.raw(),
+                    root.as_ptr(),
+                    root.len(),
+                    root.as_ptr(),
+                    root.len()
+                ),
+                0
+            );
         }
         let read = |src: &str| ctx.to_rust_string(ctx.eval(src).unwrap()).unwrap();
         assert_eq!(read("typeof indexedDB + ',' + typeof IDBKeyRange + ',' + typeof navigator.storage.estimate"), "object,function,function");
@@ -329,7 +393,11 @@ mod tests {
         let out = loop {
             unsafe {
                 ffi::redjs_lock(ctx.raw());
-                ffi::redjs_pump(ctx.raw(), PUMP_TIMERS | PUMP_RAF | PUMP_MICROTASKS, std::ptr::null_mut());
+                ffi::redjs_pump(
+                    ctx.raw(),
+                    PUMP_TIMERS | PUMP_RAF | PUMP_MICROTASKS,
+                    std::ptr::null_mut(),
+                );
                 ffi::redjs_unlock(ctx.raw());
             }
             frames += 1;

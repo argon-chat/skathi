@@ -20,7 +20,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use gpui::{App, RenderImage, Window};
-use sk_lottie::{Advance, Animation, Direction, LoopMode, LottieEvent, LottieMeta, PlayMode, Transport};
+use sk_lottie::{
+    Advance, Animation, Direction, LoopMode, LottieEvent, LottieMeta, PlayMode, Transport,
+};
 
 use crate::live::{self, LiveTile, Shown};
 use crate::tree::{self, Tree};
@@ -103,11 +105,14 @@ pub(crate) fn count() -> usize {
 /// clamped, so an animation does not teleport.
 const MAX_DT: Duration = Duration::from_millis(250);
 
-
 static PENDING: AtomicUsize = AtomicUsize::new(0);
 
 enum Work {
-    Load { job: Arc<Job>, src: String, from: From },
+    Load {
+        job: Arc<Job>,
+        src: String,
+        from: From,
+    },
     Draw(Arc<Job>),
 }
 
@@ -130,14 +135,20 @@ fn queue() -> &'static Queue {
             .name("sk-lottie".into())
             .spawn(worker)
             .expect("spawn the sk-lottie thread");
-        Queue { work: Mutex::new(VecDeque::new()), ready: Condvar::new() }
+        Queue {
+            work: Mutex::new(VecDeque::new()),
+            ready: Condvar::new(),
+        }
     })
 }
 
 fn submit(work: Work) {
     PENDING.fetch_add(1, Ordering::SeqCst);
     let q = queue();
-    q.work.lock().unwrap_or_else(|p| p.into_inner()).push_back(work);
+    q.work
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push_back(work);
     q.ready.notify_one();
 }
 
@@ -177,7 +188,10 @@ fn load_on_worker(job: &Job, src: &str, from: From) {
                 (Ok(animation.meta().clone()), Some(animation), advisories)
             }
             Err(error) => (
-                Err(("lottie-load", format!("<lottie src=\"{src}\"> could not be loaded — {error}"))),
+                Err((
+                    "lottie-load",
+                    format!("<lottie src=\"{src}\"> could not be loaded — {error}"),
+                )),
                 None,
                 error.advisories().to_vec(),
             ),
@@ -232,7 +246,10 @@ fn ask(job: &Arc<Job>, frame: f32, w: u32, h: u32) {
 /// HTTP client, anything else (`data:`, `blob:`, the package) is in memory already.
 fn start_load(job: &Arc<Job>, src: &str, cx: &mut App) -> Result<(), String> {
     let trimmed = src.trim();
-    let scheme = trimmed.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
+    let scheme = trimmed
+        .split_once(':')
+        .map(|(s, _)| s.to_ascii_lowercase())
+        .unwrap_or_default();
     if matches!(scheme.as_str(), "http" | "https") {
         PENDING.fetch_add(1, Ordering::SeqCst);
         let client = cx.http_client();
@@ -240,7 +257,11 @@ fn start_load(job: &Arc<Job>, src: &str, cx: &mut App) -> Result<(), String> {
         cx.background_executor()
             .spawn(async move {
                 match crate::fonts::http_bytes(client, &url).await {
-                    Ok(bytes) => submit(Work::Load { job, src, from: From::Bytes(bytes) }),
+                    Ok(bytes) => submit(Work::Load {
+                        job,
+                        src,
+                        from: From::Bytes(bytes),
+                    }),
                     Err(why) => {
                         let msg = format!("<lottie src=\"{src}\">: could not be fetched — {why}");
                         job.slot().loaded = Some(Err(("lottie-src", msg)));
@@ -255,7 +276,11 @@ fn start_load(job: &Arc<Job>, src: &str, cx: &mut App) -> Result<(), String> {
         crate::img::Readable::Bytes(bytes) => From::Bytes(bytes),
         crate::img::Readable::File(path) => From::File(path),
     };
-    submit(Work::Load { job: job.clone(), src: src.to_string(), from });
+    submit(Work::Load {
+        job: job.clone(),
+        src: src.to_string(),
+        from,
+    });
     Ok(())
 }
 
@@ -311,8 +336,6 @@ fn warn_unsupported_props(t: &Tree, id: u32) {
         }
     }
 }
-
-
 
 pub(crate) fn sync(t: &Tree, id: u32, win: WinKey, cx: &mut App) -> Option<(u32, u32)> {
     warn_unsupported_props(t, id);
@@ -378,12 +401,21 @@ fn apply_props(t: &Tree, id: u32, entry: &mut Entry, loaded: bool, autoplay: boo
     entry.autoplay = autoplay;
 }
 
-pub(crate) fn paint(id: u32, win: WinKey, size: (f32, f32), scale: f32) -> Option<Arc<RenderImage>> {
+pub(crate) fn paint(
+    id: u32,
+    win: WinKey,
+    size: (f32, f32),
+    scale: f32,
+) -> Option<Arc<RenderImage>> {
     LOTTIE_STATES.with(|m| {
         let mut map = m.borrow_mut();
         let entry = map.get_mut(&id)?;
         entry.boxed = Some((size, scale));
-        entry.tile.as_ref().filter(|tile| tile.live.window() == win).map(|tile| tile.live.image())
+        entry
+            .tile
+            .as_ref()
+            .filter(|tile| tile.live.window() == win)
+            .map(|tile| tile.live.image())
     })
 }
 
@@ -412,14 +444,17 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
 pub(crate) fn forget_window(key: WinKey) {
     LOTTIE_STATES.with(|m| {
         for entry in m.borrow_mut().values_mut() {
-            if entry.tile.as_ref().is_some_and(|tile| tile.live.window() == key) {
+            if entry
+                .tile
+                .as_ref()
+                .is_some_and(|tile| tile.live.window() == key)
+            {
                 entry.tile = None;
                 entry.asked = None;
             }
         }
     });
 }
-
 
 pub fn any_playing() -> bool {
     PENDING.load(Ordering::SeqCst) > 0
@@ -456,7 +491,12 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     let mut draw = false;
     let mut touch: Vec<u32> = Vec::new();
 
-    let mut landed: Vec<(u32, String, Result<LottieMeta, (&'static str, String)>, Vec<String>)> = Vec::new();
+    let mut landed: Vec<(
+        u32,
+        String,
+        Result<LottieMeta, (&'static str, String)>,
+        Vec<String>,
+    )> = Vec::new();
     LOTTIE_STATES.with(|m| {
         for (&id, entry) in m.borrow_mut().iter_mut() {
             let mut slot = entry.job.slot();
@@ -522,9 +562,16 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     live::note(shown);
     LOTTIE_STATES.with(|m| {
         for (&id, entry) in m.borrow_mut().iter_mut() {
-            let Some((key, frame)) = entry.want() else { continue };
-            let visible = !page_hidden && (entry.window != here || here_shown) && live::visible(id, entry.window);
-            let holds = entry.tile.as_ref().is_some_and(|tile| tile.shows == key && tile.live.window() == entry.window);
+            let Some((key, frame)) = entry.want() else {
+                continue;
+            };
+            let visible = !page_hidden
+                && (entry.window != here || here_shown)
+                && live::visible(id, entry.window);
+            let holds = entry
+                .tile
+                .as_ref()
+                .is_some_and(|tile| tile.shows == key && tile.live.window() == entry.window);
             if !visible || holds || entry.asked == Some(key) {
                 continue;
             }
@@ -554,14 +601,22 @@ fn write(window: &mut Window, here: WinKey, touch: &mut Vec<u32>, draw: &mut boo
                 *draw |= entry.job.slot().drawn.is_some();
                 continue;
             }
-            let Some((key, bytes)) = entry.job.slot().drawn.take() else { continue };
+            let Some((key, bytes)) = entry.job.slot().drawn.take() else {
+                continue;
+            };
             let (_, w, h) = key;
-            let fits = entry.tile.as_ref().is_some_and(|tile| tile.live.window() == here && tile.live.size() == (w, h));
+            let fits = entry
+                .tile
+                .as_ref()
+                .is_some_and(|tile| tile.live.window() == here && tile.live.size() == (w, h));
             if !fits {
                 if let Some(old) = entry.tile.take() {
                     old.live.retire();
                 }
-                entry.tile = Some(Tile { live: LiveTile::new(here, w, h), shows: key });
+                entry.tile = Some(Tile {
+                    live: LiveTile::new(here, w, h),
+                    shows: key,
+                });
             }
             let tile = entry.tile.as_mut().expect("just made");
             tile.shows = key;
@@ -602,7 +657,11 @@ fn drain_pending_drops(window: &mut Window, cx: &mut App) {
     }
 }
 
-fn report_load(src: &str, loaded: &Result<LottieMeta, (&'static str, String)>, advisories: &[String]) {
+fn report_load(
+    src: &str,
+    loaded: &Result<LottieMeta, (&'static str, String)>,
+    advisories: &[String],
+) {
     match loaded {
         Ok(_) => {
             for advisory in advisories {
@@ -625,7 +684,13 @@ fn report_load(src: &str, loaded: &Result<LottieMeta, (&'static str, String)>, a
 }
 
 fn dispatch_events(ticked: &Ticked, window: &mut Window, cx: &mut App) {
-    let Ticked { id, advance, total_frames, frame, progress } = *ticked;
+    let Ticked {
+        id,
+        advance,
+        total_frames,
+        frame,
+        progress,
+    } = *ticked;
     let listeners = tree::read_tree(|t| t.node(id).map(|n| n.listeners)).unwrap_or(0);
     let listens = |ev: u32| listeners & (1u64 << ev) != 0;
     if listeners == 0 {

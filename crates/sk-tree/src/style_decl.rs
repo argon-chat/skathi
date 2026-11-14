@@ -72,7 +72,9 @@ fn css_shaped(name: &str) -> bool {
 }
 
 fn index(name: &str) -> Option<usize> {
-    (!name.is_empty() && name.bytes().all(|b| b.is_ascii_digit())).then(|| name.parse().ok()).flatten()
+    (!name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| name.parse().ok())
+        .flatten()
 }
 
 unsafe fn decl<'a>(g: *mut c_void, v: u64) -> Option<&'a mut Decl> {
@@ -83,7 +85,11 @@ unsafe fn decl<'a>(g: *mut c_void, v: u64) -> Option<&'a mut Decl> {
 /// the root's).
 unsafe fn node_id(g: *mut c_void, this: u64, computed: bool) -> Option<u32> {
     let node = named_slot_get(g, this, C.with(|c| c.borrow().node) as *mut c_void);
-    let id = if is_cell(node) { dec_f64(get(g, node, "__skId")) } else { None };
+    let id = if is_cell(node) {
+        dec_f64(get(g, node, "__skId"))
+    } else {
+        None
+    };
     match id {
         Some(id) if id > 0.0 => Some(id as u32),
         Some(_) => None,
@@ -131,7 +137,10 @@ fn inline_read(id: Option<u32>, css: &str) -> (String, bool) {
 unsafe fn mutate(g: *mut c_void, id: u32, change: impl FnOnce(&mut tree::Tree) -> bool) -> bool {
     let observing = OBSERVING.get();
     let (before, was) = tree::read_tree(|t| {
-        (observing.then(|| t.style_attr(id)).flatten(), t.node(id).is_some_and(|n| n.style_present))
+        (
+            observing.then(|| t.style_attr(id)).flatten(),
+            t.node(id).is_some_and(|n| n.style_present),
+        )
     });
     perf::note_dom(perf::DomOp::Style);
     if !tree::with_tree(change) {
@@ -166,7 +175,11 @@ unsafe fn assign(g: *mut c_void, id: u32, key: &str, v: u64) {
             ),
         );
     }
-    let value = if v == NULL { String::new() } else { string_of(g, v) };
+    let value = if v == NULL {
+        String::new()
+    } else {
+        string_of(g, v)
+    };
     if value.is_empty() {
         mutate(g, id, |t| t.style_remove(id, &name).is_some());
     } else if custom || strip_important(&value).is_none() {
@@ -176,7 +189,10 @@ unsafe fn assign(g: *mut c_void, id: u32, key: &str, v: u64) {
 }
 
 unsafe fn string_of(g: *mut c_void, v: u64) -> String {
-    to_js_string(g, v).ok().and_then(|s| read_string(g, s)).unwrap_or_default()
+    to_js_string(g, v)
+        .ok()
+        .and_then(|s| read_string(g, s))
+        .unwrap_or_default()
 }
 
 unsafe fn read_only(g: *mut c_void, what: &str) -> u64 {
@@ -200,11 +216,21 @@ impl NamedProps for Decl {
             return Ok(None);
         }
         let css = css_name(name);
-        let value = if self.computed { computed_read(g, id, &css, name) } else { inline_read(id, &css).0 };
+        let value = if self.computed {
+            computed_read(g, id, &css, name)
+        } else {
+            inline_read(id, &css).0
+        };
         Ok(Some(js_string(g, &value)))
     }
 
-    unsafe fn set(&mut self, g: *mut c_void, this: u64, name: &str, value: u64) -> Result<bool, u64> {
+    unsafe fn set(
+        &mut self,
+        g: *mut c_void,
+        this: u64,
+        name: &str,
+        value: u64,
+    ) -> Result<bool, u64> {
         if index(name).is_some() {
             return Ok(true);
         }
@@ -221,16 +247,25 @@ impl NamedProps for Decl {
     }
 
     unsafe fn names(&mut self, g: *mut c_void, this: u64) -> Vec<String> {
-        (0..len(node_id(g, this, self.computed), self.computed)).map(|i| i.to_string()).collect()
+        (0..len(node_id(g, this, self.computed), self.computed))
+            .map(|i| i.to_string())
+            .collect()
     }
 }
 
 fn entries(id: Option<u32>, computed: bool) -> Vec<String> {
     let Some(id) = id else { return Vec::new() };
     if computed {
-        dom::computed_entries(id).unwrap_or_default().into_iter().map(|(k, _)| k).collect()
+        dom::computed_entries(id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect()
     } else {
-        tree::read_tree(|t| t.style_entries(id)).into_iter().map(|(k, _, _)| k).collect()
+        tree::read_tree(|t| t.style_entries(id))
+            .into_iter()
+            .map(|(k, _, _)| k)
+            .collect()
     }
 }
 
@@ -517,19 +552,37 @@ pub(crate) fn install(rt: &JsRuntime) {
                     ("item", 1, item_fn),
                 ],
                 getters: &[("length", length_get), ("parentRule", parent_rule_get)],
-                accessors: &[("cssText", css_text_get, css_text_set), ("cssFloat", css_float_get, css_float_set)],
+                accessors: &[
+                    ("cssText", css_text_get, css_text_set),
+                    ("cssFloat", css_float_get, css_float_set),
+                ],
             },
         );
-        let values = get(g, get(g, get(g, glue::rjs_global(g), "Array"), "prototype"), "values");
+        let values = get(
+            g,
+            get(g, get(g, glue::rjs_global(g), "Array"), "prototype"),
+            "values",
+        );
         let sym = get(g, get(g, glue::rjs_global(g), "Symbol"), "iterator");
         let object = get(g, glue::rjs_global(g), "Object");
         let desc = new_object(g, UNDEF);
         define(g, desc, "value", values, 0);
         define(g, desc, "writable", enc_bool(true), 0);
         define(g, desc, "configurable", enc_bool(true), 0);
-        let _ = call(g, get(g, object, "defineProperty"), object, &[class.proto, sym, desc]);
+        let _ = call(
+            g,
+            get(g, object, "defineProperty"),
+            object,
+            &[class.proto, sym, desc],
+        );
         redjs_protect(g, class.proto);
-        C.with(|c| *c.borrow_mut() = Classes { cls: cls as usize, proto: class.proto, node: atom_priv(g, "node") as usize });
+        C.with(|c| {
+            *c.borrow_mut() = Classes {
+                cls: cls as usize,
+                proto: class.proto,
+                node: atom_priv(g, "node") as usize,
+            }
+        });
     }
 }
 
@@ -539,7 +592,10 @@ mod tests {
 
     fn js(src: &str) -> String {
         JsRuntime::with(|rt| {
-            let v = rt.ctx().eval(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
+            let v = rt
+                .ctx()
+                .eval(src)
+                .unwrap_or_else(|e| panic!("{src}: {e:?}"));
             rt.ctx().to_rust_string(v).unwrap()
         })
     }
@@ -573,10 +629,17 @@ mod tests {
                 js("[s.backgroundColor, s.fontSize, s.getPropertyValue('--Brand'), s.getPropertyPriority('--Brand'), s.length, s[1], s[9], [...s].join(), Object.keys(s).join()].join('|')"),
                 "red|12px|blue|important|3|font-size||background-color,font-size,--Brand|0,1,2"
             );
-            assert_eq!(js("seen.join()"), format!("{el}|null|true"), "only the attribute appearing is reported");
+            assert_eq!(
+                js("seen.join()"),
+                format!("{el}|null|true"),
+                "only the attribute appearing is reported"
+            );
 
             js("s.color = 'red !important'; s.width = undefined; s.fontSize = null; s._x = 1; s.cssFloat = 'left'");
-            assert_eq!(tree::read_tree(|t| t.style_text(el)), "background-color: red; --Brand: blue !important; float: left;");
+            assert_eq!(
+                tree::read_tree(|t| t.style_text(el)),
+                "background-color: red; --Brand: blue !important; float: left;"
+            );
             assert_eq!(js("String(s._x === 1 && Object.prototype.hasOwnProperty.call(s, '_x') && s.cssFloat === 'left')"), "true");
 
             js("__sk_style_observe(true); seen.length = 0; s.cssText = 'color: green; margin: 0 !important'");
@@ -587,8 +650,15 @@ mod tests {
             js("__sk_style_observe(false)");
 
             js("node.__skId = 0");
-            assert_eq!(js("String(s.margin === '' && s.length === 0 && (s.color = 'red', true))"), "true");
-            assert_eq!(tree::read_tree(|t| t.style_text(el)), "margin: 0 !important;", "a freed node's object writes nothing");
+            assert_eq!(
+                js("String(s.margin === '' && s.length === 0 && (s.color = 'red', true))"),
+                "true"
+            );
+            assert_eq!(
+                tree::read_tree(|t| t.style_text(el)),
+                "margin: 0 !important;",
+                "a freed node's object writes nothing"
+            );
         });
     }
 
@@ -597,12 +667,17 @@ mod tests {
         sk_runtime::testing::on_js_thread(|| {
             JsRuntime::with(install);
             let el = element();
-            js(&format!("globalThis.c = __sk_computed_object({{ __skId: {el} }}); ''"));
+            js(&format!(
+                "globalThis.c = __sk_computed_object({{ __skId: {el} }}); ''"
+            ));
             assert_eq!(
                 js("[c.display, c['z-index'], c.getPropertyValue('position'), c.width, c.getPropertyValue('--unset'), 'display' in c, c.length > 20].join('|')"),
                 "block|auto|static|0px||true|true"
             );
-            assert_eq!(js("c.getPropertyPriority('display') + c.cssText + c.parentRule"), "null");
+            assert_eq!(
+                js("c.getPropertyPriority('display') + c.cssText + c.parentRule"),
+                "null"
+            );
             assert_eq!(
                 js("(() => { try { c.color = 'red'; } catch (e) { return e.name + ': ' + e.message; } })()"),
                 "NoModificationAllowedError: Failed to set the 'color' property on 'CSSStyleDeclaration': These styles are computed, and therefore the 'color' property is read-only."

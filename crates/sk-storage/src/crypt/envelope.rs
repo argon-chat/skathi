@@ -47,9 +47,13 @@ pub struct Aes256Gcm(LessSafeKey);
 impl Aes256Gcm {
     pub fn new(key: &[u8]) -> Result<Aes256Gcm, String> {
         if key.len() != KEY_LEN {
-            return Err(format!("an AES-256 key is {KEY_LEN} bytes, not {}", key.len()));
+            return Err(format!(
+                "an AES-256 key is {KEY_LEN} bytes, not {}",
+                key.len()
+            ));
         }
-        let key = UnboundKey::new(&AES_256_GCM, key).map_err(|_| String::from("AES-256-GCM refused the key"))?;
+        let key = UnboundKey::new(&AES_256_GCM, key)
+            .map_err(|_| String::from("AES-256-GCM refused the key"))?;
         Ok(Aes256Gcm(LessSafeKey::new(key)))
     }
 
@@ -61,7 +65,11 @@ impl Aes256Gcm {
         out.extend_from_slice(plain);
         let tag = self
             .0
-            .seal_in_place_separate_tag(Nonce::assume_unique_for_key(nonce), Aad::from(aad), &mut out[NONCE_LEN..])
+            .seal_in_place_separate_tag(
+                Nonce::assume_unique_for_key(nonce),
+                Aad::from(aad),
+                &mut out[NONCE_LEN..],
+            )
             .map_err(|_| String::from("AES-256-GCM sealing failed"))?;
         out.extend_from_slice(tag.as_ref());
         Ok(out)
@@ -69,7 +77,9 @@ impl Aes256Gcm {
 
     pub fn open(&self, aad: &[u8], sealed: &[u8]) -> Result<Vec<u8>, String> {
         if sealed.len() < NONCE_LEN + TAG_LEN {
-            return Err(String::from("a sealed entry shorter than its nonce and tag"));
+            return Err(String::from(
+                "a sealed entry shorter than its nonce and tag",
+            ));
         }
         let nonce = Nonce::try_assume_unique_for_key(&sealed[..NONCE_LEN])
             .map_err(|_| String::from("a sealed entry with a malformed nonce"))?;
@@ -82,7 +92,9 @@ impl Aes256Gcm {
             }
             Err(_) => {
                 buf.fill(0);
-                Err(String::from("AES-256-GCM authentication failed (wrong key or damaged data)"))
+                Err(String::from(
+                    "AES-256-GCM authentication failed (wrong key or damaged data)",
+                ))
             }
         }
     }
@@ -114,7 +126,10 @@ pub struct MasterKey {
 
 impl MasterKey {
     pub fn new(key: &[u8]) -> Result<MasterKey, String> {
-        Ok(MasterKey { aead: Aes256Gcm::new(key)?, id: key_id(key) })
+        Ok(MasterKey {
+            aead: Aes256Gcm::new(key)?,
+            id: key_id(key),
+        })
     }
 
     pub fn seal(&self, plain: &[u8]) -> Result<Vec<u8>, String> {
@@ -283,7 +298,12 @@ mod tests {
     #[test]
     fn an_envelope_round_trips_and_has_the_documented_layout() {
         let k = key(1);
-        for plain in [&b""[..], b"a", b"{\"entries\":[[\"token\",\"hunter2\"]]}", &[0u8, 255, 128][..]] {
+        for plain in [
+            &b""[..],
+            b"a",
+            b"{\"entries\":[[\"token\",\"hunter2\"]]}",
+            &[0u8, 255, 128][..],
+        ] {
             let blob = k.seal(plain).unwrap();
             assert_eq!(blob.len(), HEADER_LEN + NONCE_LEN + plain.len() + TAG_LEN);
             assert_eq!(blob[0], VERSION);
@@ -299,7 +319,10 @@ mod tests {
         let a = k.seal(secret).unwrap();
         let b = k.seal(secret).unwrap();
         assert!(!a.windows(secret.len()).any(|w| w == secret));
-        assert_ne!(a[HEADER_LEN..HEADER_LEN + NONCE_LEN], b[HEADER_LEN..HEADER_LEN + NONCE_LEN]);
+        assert_ne!(
+            a[HEADER_LEN..HEADER_LEN + NONCE_LEN],
+            b[HEADER_LEN..HEADER_LEN + NONCE_LEN]
+        );
         assert_ne!(a, b);
     }
 
@@ -308,11 +331,17 @@ mod tests {
         let k = key(3);
         let blob = k.seal(b"payload").unwrap();
         assert!(k.open(b"").unwrap_err().contains("shorter than its header"));
-        assert!(k.open(&blob[..HEADER_LEN + 3]).unwrap_err().contains("damaged"));
+        assert!(k
+            .open(&blob[..HEADER_LEN + 3])
+            .unwrap_err()
+            .contains("damaged"));
         let mut v = blob.clone();
         v[0] = 9;
         assert!(k.open(&v).unwrap_err().contains("version 9"));
-        assert!(key(4).open(&blob).unwrap_err().contains("different storage key"));
+        assert!(key(4)
+            .open(&blob)
+            .unwrap_err()
+            .contains("different storage key"));
         let mut id = blob.clone();
         id[2] ^= 1;
         assert!(k.open(&id).unwrap_err().contains("different storage key"));
@@ -326,9 +355,17 @@ mod tests {
     #[test]
     fn the_header_is_authenticated_not_just_checked() {
         let raw = Aes256Gcm::new(&[5; KEY_LEN]).unwrap();
-        let sealed = raw.seal(&aad(VERSION, &key_id(&[5; KEY_LEN])), b"x").unwrap();
-        assert_eq!(raw.open(&aad(VERSION, &key_id(&[5; KEY_LEN])), &sealed).unwrap(), b"x");
-        assert!(raw.open(&aad(VERSION + 1, &key_id(&[5; KEY_LEN])), &sealed).is_err());
+        let sealed = raw
+            .seal(&aad(VERSION, &key_id(&[5; KEY_LEN])), b"x")
+            .unwrap();
+        assert_eq!(
+            raw.open(&aad(VERSION, &key_id(&[5; KEY_LEN])), &sealed)
+                .unwrap(),
+            b"x"
+        );
+        assert!(raw
+            .open(&aad(VERSION + 1, &key_id(&[5; KEY_LEN])), &sealed)
+            .is_err());
         assert!(raw.open(b"", &sealed).is_err());
     }
 
@@ -349,7 +386,10 @@ mod tests {
     }
 
     fn hex(s: &str) -> Vec<u8> {
-        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     #[test]
@@ -390,7 +430,11 @@ mod tests {
         let (k, origin) = load_or_create(
             || {
                 reads.set(reads.get() + 1);
-                Ok(if reads.get() == 1 { None } else { Some(vec![0xAA; KEY_LEN]) })
+                Ok(if reads.get() == 1 {
+                    None
+                } else {
+                    Some(vec![0xAA; KEY_LEN])
+                })
             },
             |_| Err(ERR_DUPLICATE_ITEM),
             || Ok([0x55; KEY_LEN]),
@@ -403,7 +447,12 @@ mod tests {
     #[test]
     fn a_failed_read_never_creates_a_key() {
         for code in [-25308, -128, -25293] {
-            let e = load_or_create(|| Err(code), |_| panic!("no add after a failed read"), || panic!("no new key")).unwrap_err();
+            let e = load_or_create(
+                || Err(code),
+                |_| panic!("no add after a failed read"),
+                || panic!("no new key"),
+            )
+            .unwrap_err();
             assert!(e.contains(&format!("OSStatus {code}")), "{e}");
             assert!(e.contains("could not read"), "{e}");
         }
@@ -411,17 +460,31 @@ mod tests {
 
     #[test]
     fn a_malformed_item_is_refused_not_replaced() {
-        let e = load_or_create(|| Ok(Some(vec![1; 16])), |_| panic!("never replaced"), || panic!("never regenerated")).unwrap_err();
+        let e = load_or_create(
+            || Ok(Some(vec![1; 16])),
+            |_| panic!("never replaced"),
+            || panic!("never regenerated"),
+        )
+        .unwrap_err();
         assert!(e.contains("16 bytes"), "{e}");
     }
 
     #[test]
     fn a_failed_add_or_a_vanished_item_is_an_error() {
         let e = load_or_create(|| Ok(None), |_| Err(-61), || Ok([1; KEY_LEN])).unwrap_err();
-        assert!(e.contains("could not store") && e.contains("not writable"), "{e}");
-        let e = load_or_create(|| Ok(None), |_| Err(ERR_DUPLICATE_ITEM), || Ok([1; KEY_LEN])).unwrap_err();
+        assert!(
+            e.contains("could not store") && e.contains("not writable"),
+            "{e}"
+        );
+        let e = load_or_create(
+            || Ok(None),
+            |_| Err(ERR_DUPLICATE_ITEM),
+            || Ok([1; KEY_LEN]),
+        )
+        .unwrap_err();
         assert!(e.contains("both present"), "{e}");
-        let e = load_or_create(|| Ok(None), |_| Ok(()), || Err(String::from("no entropy"))).unwrap_err();
+        let e = load_or_create(|| Ok(None), |_| Ok(()), || Err(String::from("no entropy")))
+            .unwrap_err();
         assert_eq!(e, "no entropy");
     }
 
@@ -429,12 +492,18 @@ mod tests {
     fn keychain_statuses_are_named_and_always_carry_the_code() {
         assert!(keychain_error("read", -25308).contains("locked"));
         assert!(keychain_error("read", -34018).contains("entitlement"));
-        assert!(keychain_error("read", -1).contains("unexpected") && keychain_error("read", -1).contains("OSStatus -1"));
+        assert!(
+            keychain_error("read", -1).contains("unexpected")
+                && keychain_error("read", -1).contains("OSStatus -1")
+        );
     }
 
     #[test]
     fn the_account_is_the_bundle_id_else_the_executable() {
-        assert_eq!(account_for(Some("gl.argon.client"), Some("argon")), "gl.argon.client");
+        assert_eq!(
+            account_for(Some("gl.argon.client"), Some("argon")),
+            "gl.argon.client"
+        );
         assert_eq!(account_for(Some(""), Some("sk-app")), "exe:sk-app");
         assert_eq!(account_for(None, Some("sk-app")), "exe:sk-app");
         assert_eq!(account_for(None, None), "vue-native-app");
@@ -449,6 +518,8 @@ mod tests {
         assert_eq!(crate::file::unseal(&p, &sealed).unwrap(), "{\"secret\":1}");
         let mut dpapi = sealed.clone();
         dpapi[7] = 1;
-        assert!(crate::file::unseal(&p, &dpapi).unwrap_err().contains("provider 1"));
+        assert!(crate::file::unseal(&p, &dpapi)
+            .unwrap_err()
+            .contains("provider 1"));
     }
 }

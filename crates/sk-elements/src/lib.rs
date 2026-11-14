@@ -19,13 +19,13 @@ pub mod scrollbar;
 pub mod tab_nav;
 pub mod text_input;
 
-pub use scrollbar::{ChainSpan, Overscroll, Scrollbar, ScrollbarStyle, undo_wheel_scroll};
+pub use scrollbar::{undo_wheel_scroll, ChainSpan, Overscroll, Scrollbar, ScrollbarStyle};
 pub use tab_nav::{FocusNext, FocusPrev};
 pub use text_input::{
-    ClipboardCommand, CompositionPhase, ControlledValue, DEFAULT_ROWS, InputAttributes, InputIntent,
-    InputType, KEY_CONTEXT, MappedConfiguration, OnBeforeInput, OnChange, OnClipboard,
-    OnComposition, OnKeyDown, OnKeyUp, TEXTAREA_KEY_CONTEXT, TextInputHandlers, TextInputOptions,
-    TextInputState, configuration, text_input,
+    configuration, text_input, ClipboardCommand, CompositionPhase, ControlledValue,
+    InputAttributes, InputIntent, InputType, MappedConfiguration, OnBeforeInput, OnChange,
+    OnClipboard, OnComposition, OnKeyDown, OnKeyUp, TextInputHandlers, TextInputOptions,
+    TextInputState, DEFAULT_ROWS, KEY_CONTEXT, TEXTAREA_KEY_CONTEXT,
 };
 
 /// One-time setup (key bindings, actions, `Tab`/`Shift-Tab` focus traversal); call before opening a window.

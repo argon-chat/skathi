@@ -29,7 +29,9 @@ impl Wide {
 }
 
 fn bytes(v: &Value) -> Vec<u8> {
-    v.as_str().and_then(|s| B64.decode(s).ok()).unwrap_or_default()
+    v.as_str()
+        .and_then(|s| B64.decode(s).ok())
+        .unwrap_or_default()
 }
 
 fn b64(p: *const u8, n: u32) -> String {
@@ -110,9 +112,18 @@ fn cred_list(v: &Value) -> Box<CredList> {
             dwTransports: transport_mask(&e["transports"]),
         })
         .collect();
-    let mut ptrs: Vec<*mut WEBAUTHN_CREDENTIAL_EX> = items.iter_mut().map(|i| i as *mut _).collect();
-    let list = WEBAUTHN_CREDENTIAL_LIST { cCredentials: ptrs.len() as u32, ppCredentials: ptrs.as_mut_ptr() };
-    Box::new(CredList { _ids: ids, _items: items, _ptrs: ptrs, list })
+    let mut ptrs: Vec<*mut WEBAUTHN_CREDENTIAL_EX> =
+        items.iter_mut().map(|i| i as *mut _).collect();
+    let list = WEBAUTHN_CREDENTIAL_LIST {
+        cCredentials: ptrs.len() as u32,
+        ppCredentials: ptrs.as_mut_ptr(),
+    };
+    Box::new(CredList {
+        _ids: ids,
+        _items: items,
+        _ptrs: ptrs,
+        list,
+    })
 }
 
 fn failure(e: windows::core::Error) -> Fail {
@@ -137,7 +148,11 @@ fn failure(e: windows::core::Error) -> Fail {
 fn cancellation(token: u32) -> Option<GUID> {
     // SAFETY: no arguments.
     let id = unsafe { WebAuthNGetCancellationId() }.ok()?;
-    CANCEL.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(HashMap::new).insert(token, id);
+    CANCEL
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .insert(token, id);
     Some(id)
 }
 
@@ -148,7 +163,11 @@ fn finished(token: u32) {
 }
 
 pub fn cancel(token: u32) {
-    let id = CANCEL.lock().unwrap_or_else(|p| p.into_inner()).as_ref().and_then(|m| m.get(&token).copied());
+    let id = CANCEL
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(&token).copied());
     if let Some(id) = id {
         // SAFETY: `id` came from WebAuthNGetCancellationId.
         let _ = unsafe { WebAuthNCancelCurrentOperation(&id) };
@@ -160,15 +179,23 @@ pub fn available() -> bool {
     unsafe { WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable() }.is_ok_and(|b| b.as_bool())
 }
 
-fn spawn(token: u32, work: impl FnOnce() -> Result<String, Fail> + Send + 'static) -> Result<u32, Fail> {
-    let started = std::thread::Builder::new().name("sk-webauthn".into()).spawn(move || {
-        let r = work();
-        finished(token);
-        crate::settle(token, r);
-    });
+fn spawn(
+    token: u32,
+    work: impl FnOnce() -> Result<String, Fail> + Send + 'static,
+) -> Result<u32, Fail> {
+    let started = std::thread::Builder::new()
+        .name("sk-webauthn".into())
+        .spawn(move || {
+            let r = work();
+            finished(token);
+            crate::settle(token, r);
+        });
     match started {
         Ok(_) => Ok(token),
-        Err(e) => Err(Fail::new("UnknownError", format!("could not start the request: {e}"))),
+        Err(e) => Err(Fail::new(
+            "UnknownError",
+            format!("could not start the request: {e}"),
+        )),
     }
 }
 
@@ -215,7 +242,10 @@ fn create(hwnd: isize, token: u32, req: &Value) -> Result<String, Fail> {
             lAlg: alg as i32,
         })
         .collect();
-    let cose = WEBAUTHN_COSE_CREDENTIAL_PARAMETERS { cCredentialParameters: params.len() as u32, pCredentialParameters: params.as_mut_ptr() };
+    let cose = WEBAUTHN_COSE_CREDENTIAL_PARAMETERS {
+        cCredentialParameters: params.len() as u32,
+        pCredentialParameters: params.as_mut_ptr(),
+    };
     let client = WEBAUTHN_CLIENT_DATA {
         dwVersion: WEBAUTHN_CLIENT_DATA_CURRENT_VERSION,
         cbClientDataJSON: client_data.len() as u32,
@@ -255,12 +285,23 @@ fn create(hwnd: isize, token: u32, req: &Value) -> Result<String, Fail> {
         opts.bPreferResidentKey = (resident == "preferred").into();
     }
     // SAFETY: every pointer above refers to locals that outlive this blocking call.
-    let att = unsafe { WebAuthNAuthenticatorMakeCredential(HWND(hwnd as *mut c_void), &rp, &user, &cose, &client, Some(&opts)) }.map_err(failure)?;
+    let att = unsafe {
+        WebAuthNAuthenticatorMakeCredential(
+            HWND(hwnd as *mut c_void),
+            &rp,
+            &user,
+            &cose,
+            &client,
+            Some(&opts),
+        )
+    }
+    .map_err(failure)?;
     // SAFETY: `att` is the attestation webauthn.dll allocated, read per its version, then freed.
     unsafe {
         let a = &*att;
         let out = (a.dwVersion >= 3).then(|| {
-            let auth = std::slice::from_raw_parts(a.pbAuthenticatorData, a.cbAuthenticatorData as usize);
+            let auth =
+                std::slice::from_raw_parts(a.pbAuthenticatorData, a.cbAuthenticatorData as usize);
             let key = cose_public_key(auth);
             json!({
                 "id": b64(a.pbCredentialId, a.cbCredentialId),
@@ -274,13 +315,22 @@ fn create(hwnd: isize, token: u32, req: &Value) -> Result<String, Fail> {
             })
         });
         WebAuthNFreeCredentialAttestation(Some(att));
-        out.map(|v| v.to_string()).ok_or_else(|| Fail::new("NotSupportedError", "This version of Windows returns no attestation object."))
+        out.map(|v| v.to_string()).ok_or_else(|| {
+            Fail::new(
+                "NotSupportedError",
+                "This version of Windows returns no attestation object.",
+            )
+        })
     }
 }
 
 fn get(hwnd: isize, token: u32, req: &Value) -> Result<String, Fail> {
     let rp_id = Wide::new(req["rpId"].as_str().unwrap_or(""));
-    let mut client_data = req["clientDataJSON"].as_str().unwrap_or("").as_bytes().to_vec();
+    let mut client_data = req["clientDataJSON"]
+        .as_str()
+        .unwrap_or("")
+        .as_bytes()
+        .to_vec();
     let client = WEBAUTHN_CLIENT_DATA {
         dwVersion: WEBAUTHN_CLIENT_DATA_CURRENT_VERSION,
         cbClientDataJSON: client_data.len() as u32,
@@ -303,11 +353,23 @@ fn get(hwnd: isize, token: u32, req: &Value) -> Result<String, Fail> {
         ..Default::default()
     };
     // SAFETY: every pointer above refers to locals that outlive this blocking call.
-    let a = unsafe { WebAuthNAuthenticatorGetAssertion(HWND(hwnd as *mut c_void), rp_id.ptr(), &client, Some(&opts)) }.map_err(failure)?;
+    let a = unsafe {
+        WebAuthNAuthenticatorGetAssertion(
+            HWND(hwnd as *mut c_void),
+            rp_id.ptr(),
+            &client,
+            Some(&opts),
+        )
+    }
+    .map_err(failure)?;
     // SAFETY: `a` is the assertion webauthn.dll allocated, read per its version, then freed.
     unsafe {
         let r = &*a;
-        let transport = if r.dwVersion >= 4 { r.dwUsedTransport } else { 0 };
+        let transport = if r.dwVersion >= 4 {
+            r.dwUsedTransport
+        } else {
+            0
+        };
         let out = json!({
             "id": b64(r.Credential.pbId, r.Credential.cbId),
             "authenticatorData": b64(r.pbAuthenticatorData, r.cbAuthenticatorData),
@@ -328,7 +390,10 @@ mod tests {
     fn transports_round_trip() {
         let m = transport_mask(&json!(["usb", "hybrid", "bogus"]));
         assert_eq!(transports_of(m), vec!["usb", "hybrid"]);
-        assert_eq!(attachment_of(WEBAUTHN_CTAP_TRANSPORT_INTERNAL), json!("platform"));
+        assert_eq!(
+            attachment_of(WEBAUTHN_CTAP_TRANSPORT_INTERNAL),
+            json!("platform")
+        );
         assert!(api_version() >= 1);
     }
 }

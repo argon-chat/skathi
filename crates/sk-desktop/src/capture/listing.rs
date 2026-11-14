@@ -19,7 +19,11 @@ impl Rect {
     fn overlap(&self, other: &Rect) -> f64 {
         let w = (self.x + self.width).min(other.x + other.width) - self.x.max(other.x);
         let h = (self.y + self.height).min(other.y + other.height) - self.y.max(other.y);
-        if w > 0.0 && h > 0.0 { w * h } else { 0.0 }
+        if w > 0.0 && h > 0.0 {
+            w * h
+        } else {
+            0.0
+        }
     }
 
     fn center_distance(&self, other: &Rect) -> f64 {
@@ -38,7 +42,10 @@ impl Rect {
 
 /// AppKit's frames are bottom-left based; this is the same rectangle in CoreGraphics' top-left space.
 pub(super) fn flip(rect: Rect, primary_height: f64) -> Rect {
-    Rect { y: primary_height - (rect.y + rect.height), ..rect }
+    Rect {
+        y: primary_height - (rect.y + rect.height),
+        ..rect
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +112,11 @@ pub(super) fn display_for(frame: &Rect, displays: &[DisplayRow]) -> Option<u32> 
     }
     displays
         .iter()
-        .min_by(|a, b| frame.center_distance(&a.frame).total_cmp(&frame.center_distance(&b.frame)))
+        .min_by(|a, b| {
+            frame
+                .center_distance(&a.frame)
+                .total_cmp(&frame.center_distance(&b.frame))
+        })
         .map(|d| d.id)
 }
 
@@ -116,7 +127,11 @@ pub(super) fn preview(value: Result<String, Fail>) -> (String, Option<String>) {
     }
 }
 
-pub(super) fn screen_json(index: usize, display: &DisplayRow, thumbnail: Result<String, Fail>) -> Value {
+pub(super) fn screen_json(
+    index: usize,
+    display: &DisplayRow,
+    thumbnail: Result<String, Fail>,
+) -> Value {
     let (thumbnail, error) = preview(thumbnail);
     json!({
         "id": format!("screen:{}", display.id),
@@ -177,7 +192,12 @@ mod tests {
     use super::*;
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
-        Rect { x, y, width, height }
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     fn window(title: &str) -> WindowRow {
@@ -194,7 +214,14 @@ mod tests {
     }
 
     fn display(id: u32, frame: Rect, primary: bool) -> DisplayRow {
-        DisplayRow { id, frame, scale: 2.0, primary, work_area: None, name: None }
+        DisplayRow {
+            id,
+            frame,
+            scale: 2.0,
+            primary,
+            work_area: None,
+            name: None,
+        }
     }
 
     #[test]
@@ -202,11 +229,41 @@ mod tests {
         assert!(keep_window(&window("Notes"), 1));
         assert!(!keep_window(&window("Notes"), 42), "this app's own window");
         assert!(!keep_window(&window("  "), 1), "untitled");
-        assert!(!keep_window(&WindowRow { layer: 25, ..window("Menu") }, 1), "a panel above the normal layer");
-        assert!(!keep_window(&WindowRow { on_screen: false, ..window("Hidden") }, 1));
-        assert!(!keep_window(&WindowRow { pid: None, ..window("Orphan") }, 1));
-        assert!(!keep_window(&WindowRow { frame: rect(0.0, 0.0, 0.0, 30.0), ..window("Empty") }, 1));
-        let dock = WindowRow { bundle_id: "com.apple.dock".into(), ..window("Dock") };
+        assert!(
+            !keep_window(
+                &WindowRow {
+                    layer: 25,
+                    ..window("Menu")
+                },
+                1
+            ),
+            "a panel above the normal layer"
+        );
+        assert!(!keep_window(
+            &WindowRow {
+                on_screen: false,
+                ..window("Hidden")
+            },
+            1
+        ));
+        assert!(!keep_window(
+            &WindowRow {
+                pid: None,
+                ..window("Orphan")
+            },
+            1
+        ));
+        assert!(!keep_window(
+            &WindowRow {
+                frame: rect(0.0, 0.0, 0.0, 30.0),
+                ..window("Empty")
+            },
+            1
+        ));
+        let dock = WindowRow {
+            bundle_id: "com.apple.dock".into(),
+            ..window("Dock")
+        };
         assert!(!keep_window(&dock, 1), "system UI");
     }
 
@@ -216,9 +273,20 @@ mod tests {
             display(1, rect(0.0, 0.0, 1440.0, 900.0), true),
             display(2, rect(1440.0, 0.0, 1920.0, 1080.0), false),
         ];
-        assert_eq!(display_for(&rect(100.0, 100.0, 400.0, 300.0), &displays), Some(1));
-        assert_eq!(display_for(&rect(1300.0, 100.0, 800.0, 300.0), &displays), Some(2), "mostly on the second");
-        assert_eq!(display_for(&rect(4000.0, 100.0, 100.0, 100.0), &displays), Some(2), "off every display");
+        assert_eq!(
+            display_for(&rect(100.0, 100.0, 400.0, 300.0), &displays),
+            Some(1)
+        );
+        assert_eq!(
+            display_for(&rect(1300.0, 100.0, 800.0, 300.0), &displays),
+            Some(2),
+            "mostly on the second"
+        );
+        assert_eq!(
+            display_for(&rect(4000.0, 100.0, 100.0, 100.0), &displays),
+            Some(2),
+            "off every display"
+        );
         assert_eq!(display_for(&rect(0.0, 0.0, 1.0, 1.0), &[]), None);
     }
 
@@ -245,27 +313,68 @@ mod tests {
         let mut screen = display(5, rect(0.0, 0.0, 1440.5, 900.0), true);
         screen.name = Some("Built-in Retina Display".into());
         let value = screen_json(0, &screen, Ok("data:image/png;base64,AA==".into()));
-        for key in ["id", "name", "kind", "displayId", "deviceName", "bounds", "workArea", "width", "height",
-            "isPrimary", "thumbnailDataUrl", "thumbnailError", "appIconDataUrl"] {
+        for key in [
+            "id",
+            "name",
+            "kind",
+            "displayId",
+            "deviceName",
+            "bounds",
+            "workArea",
+            "width",
+            "height",
+            "isPrimary",
+            "thumbnailDataUrl",
+            "thumbnailError",
+            "appIconDataUrl",
+        ] {
             assert!(value.get(key).is_some(), "screen {key}");
         }
         assert_eq!(value["id"], "screen:5");
         assert_eq!(value["name"], "Screen 1");
         assert_eq!(value["displayId"], "5");
         assert_eq!(value["width"], 1441);
-        assert_eq!(value["workArea"], value["bounds"], "without NSScreen, the whole display");
+        assert_eq!(
+            value["workArea"], value["bounds"],
+            "without NSScreen, the whole display"
+        );
         assert!(value["thumbnailError"].is_null() && value["appIconDataUrl"].is_null());
 
-        let value = window_json(&window("Notes"), Some(5), Err(Fail::new("TimeoutError", "late")), Some("icon".into()));
-        for key in ["id", "name", "kind", "processId", "displayId", "bounds", "width", "height",
-            "thumbnailDataUrl", "thumbnailError", "appIconDataUrl"] {
+        let value = window_json(
+            &window("Notes"),
+            Some(5),
+            Err(Fail::new("TimeoutError", "late")),
+            Some("icon".into()),
+        );
+        for key in [
+            "id",
+            "name",
+            "kind",
+            "processId",
+            "displayId",
+            "bounds",
+            "width",
+            "height",
+            "thumbnailDataUrl",
+            "thumbnailError",
+            "appIconDataUrl",
+        ] {
             assert!(value.get(key).is_some(), "window {key}");
         }
         assert_eq!(value["id"], "window:7");
         assert_eq!(value["processId"], 42);
         assert_eq!(value["displayId"], "5");
-        assert_eq!(value["bounds"], json!({"x": 10, "y": 20, "width": 800, "height": 600}));
-        assert_eq!((value["thumbnailDataUrl"].as_str(), value["thumbnailError"].as_str()), (Some(""), Some("late")));
+        assert_eq!(
+            value["bounds"],
+            json!({"x": 10, "y": 20, "width": 800, "height": 600})
+        );
+        assert_eq!(
+            (
+                value["thumbnailDataUrl"].as_str(),
+                value["thumbnailError"].as_str()
+            ),
+            (Some(""), Some("late"))
+        );
         assert_eq!(value["appIconDataUrl"], "icon");
     }
 

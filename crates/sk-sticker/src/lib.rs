@@ -53,7 +53,9 @@ impl Shared {
     fn lock(&self) -> MutexGuard<'_, Core> {
         // A panic mid-turn leaves the maps consistent (every mutation is a
         // single insert or field store), so carrying on is right.
-        self.core.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -70,7 +72,11 @@ pub fn stats() -> Option<Stats> {
 
 impl Stickers {
     pub fn start(loader: engine::Loader) -> Stickers {
-        let shared = Arc::new(Shared { core: Mutex::new(Core::new(loader)), wake: Condvar::new(), epoch: Instant::now() });
+        let shared = Arc::new(Shared {
+            core: Mutex::new(Core::new(loader)),
+            wake: Condvar::new(),
+            epoch: Instant::now(),
+        });
         let worker = shared.clone();
         std::thread::Builder::new()
             .name("sk-sticker".into())
@@ -145,14 +151,21 @@ mod tests {
         let stickers = Stickers::start(engine::load);
         let src = "fixture://spinning-star.tgs";
         assert_eq!(stickers.status(src), SourceStatus::NeedsBytes);
-        let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sk-lottie/tests/fixtures/spinning-star.tgs"))
-            .unwrap();
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../sk-lottie/tests/fixtures/spinning-star.tgs"
+        ))
+        .unwrap();
         stickers.provide(src, bytes.into());
         let key = TargetKey::new(Arc::from(src), 48, 48);
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut seqs = Vec::new();
         while seqs.len() < 3 {
-            assert!(Instant::now() < deadline, "no frames: {:?}", stickers.stats());
+            assert!(
+                Instant::now() < deadline,
+                "no frames: {:?}",
+                stickers.stats()
+            );
             stickers.demand(&key, true);
             if let Some(f) = stickers.frame(&key) {
                 assert_eq!(f.bytes.len(), 48 * 48 * 4);
@@ -163,7 +176,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         let stats = stickers.stats();
-        assert!(matches!(stickers.status(src), SourceStatus::Ready(SourceInfo { frames: 120, .. })));
+        assert!(matches!(
+            stickers.status(src),
+            SourceStatus::Ready(SourceInfo { frames: 120, .. })
+        ));
         assert!(stats.drawn >= 3, "{stats:?}");
     }
 }

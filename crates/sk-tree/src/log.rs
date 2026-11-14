@@ -78,7 +78,11 @@ pub fn mem_stats() -> (usize, usize) {
         let r = r.borrow();
         let bytes = r
             .iter()
-            .map(|e| std::mem::size_of::<Entry>() + e.text.capacity() + e.styles.as_ref().map_or(0, String::capacity))
+            .map(|e| {
+                std::mem::size_of::<Entry>()
+                    + e.text.capacity()
+                    + e.styles.as_ref().map_or(0, String::capacity)
+            })
             .sum();
         (r.len(), bytes)
     })
@@ -93,8 +97,17 @@ pub fn record_styled(kind: &'static str, text: impl Into<String>, styles: Option
         return;
     }
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let at_ms = START.with(|s| s.get()).map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
-    let entry = Entry { seq, at_ms, kind, text: text.into(), styles };
+    let at_ms = START
+        .with(|s| s.get())
+        .map(|t| t.elapsed().as_millis() as u64)
+        .unwrap_or(0);
+    let entry = Entry {
+        seq,
+        at_ms,
+        kind,
+        text: text.into(),
+        styles,
+    };
     RING.with(|r| {
         let mut r = r.borrow_mut();
         if r.len() == CAPACITY {
@@ -109,7 +122,10 @@ pub fn record_styled(kind: &'static str, text: impl Into<String>, styles: Option
 pub fn since(since: u64) -> (Vec<Entry>, u64) {
     RING.with(|r| {
         let r = r.borrow();
-        let oldest = r.front().map(|e| e.seq).unwrap_or(SEQ.load(Ordering::Relaxed));
+        let oldest = r
+            .front()
+            .map(|e| e.seq)
+            .unwrap_or(SEQ.load(Ordering::Relaxed));
         let missed = oldest.saturating_sub(since).min(u64::from(u32::MAX));
         let out: Vec<Entry> = r.iter().filter(|e| e.seq >= since).cloned().collect();
         (out, if since == 0 { 0 } else { missed })

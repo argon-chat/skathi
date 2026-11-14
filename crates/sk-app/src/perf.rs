@@ -90,7 +90,10 @@ pub fn boot() {
             drew: false,
         });
     });
-    eprintln!("[sk-perf] probe on (SK_PERF) — frame stats every {}s", HOW_OFTEN.as_secs());
+    eprintln!(
+        "[sk-perf] probe on (SK_PERF) — frame stats every {}s",
+        HOW_OFTEN.as_secs()
+    );
 }
 
 // The rolling window the devtools Performance panel reads: unlike `SK_PERF`'s report, an
@@ -161,7 +164,13 @@ impl Snapshot {
         let sum: f32 = sorted.iter().sum();
         let avg = sum / sorted.len() as f32;
         let at = |q: f32| sorted[((sorted.len() as f32 - 1.0) * q).round() as usize];
-        (avg, at(0.5), at(0.95), sorted[sorted.len() - 1], if avg > 0.0 { 1000.0 / avg } else { 0.0 })
+        (
+            avg,
+            at(0.5),
+            at(0.95),
+            sorted[sorted.len() - 1],
+            if avg > 0.0 { 1000.0 / avg } else { 0.0 },
+        )
     }
 
     /// p50, p95 and the worst of the frames' work.
@@ -223,7 +232,11 @@ fn roll_frame(now: Instant) {
             let head = r.head;
             r.ms[head] = (now - prev).as_secs_f32() * 1000.0;
             r.work[head] = 0.0;
-            r.flags[head] = if crate::idle::last_paced() { FLAG_PACED } else { 0 };
+            r.flags[head] = if crate::idle::last_paced() {
+                FLAG_PACED
+            } else {
+                0
+            };
             r.head = (head + 1) % ROLL_LEN;
             r.filled = (r.filled + 1).min(ROLL_LEN);
             r.frames += 1;
@@ -244,7 +257,11 @@ fn on_frame_work(frame: gpui::FrameWork) {
         match frame.outcome {
             gpui::FrameOutcome::Throttled => r.flags[at] |= FLAG_THROTTLED,
             outcome => {
-                r.work[at] += frame.ended.saturating_duration_since(frame.started).as_secs_f32() * 1000.0;
+                r.work[at] += frame
+                    .ended
+                    .saturating_duration_since(frame.started)
+                    .as_secs_f32()
+                    * 1000.0;
                 if outcome == gpui::FrameOutcome::Drew {
                     r.flags[at] |= FLAG_DREW;
                 }
@@ -300,12 +317,22 @@ fn boot_js_line(boot_ms: f32) -> String {
     let total: f32 = parts.iter().map(|p| p.2).sum();
     let detail: Vec<String> = parts
         .iter()
-        .map(|(label, n, ms)| if *n > 1 { format!("{label}×{n} {ms:.1}") } else { format!("{label} {ms:.1}") })
+        .map(|(label, n, ms)| {
+            if *n > 1 {
+                format!("{label}×{n} {ms:.1}")
+            } else {
+                format!("{label} {ms:.1}")
+            }
+        })
         .collect();
     format!(
         "[sk-perf]   boot js {:.1}ms ({:.0}% of boot)  {}",
         total,
-        if boot_ms > 0.0 { total / boot_ms * 100.0 } else { 0.0 },
+        if boot_ms > 0.0 {
+            total / boot_ms * 100.0
+        } else {
+            0.0
+        },
         detail.join(" · ")
     )
 }
@@ -462,7 +489,9 @@ fn report_frame_split(st: &mut State) {
 }
 
 fn report_phases() {
-    let Some(p) = sk_tree::perf::take() else { return };
+    let Some(p) = sk_tree::perf::take() else {
+        return;
+    };
     if p.restyle_passes > 0 {
         eprintln!(
             "[sk-perf]   restyle passes={:<4} nodes={:<7} sel={:<7} total={:.1}ms  \

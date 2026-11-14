@@ -102,7 +102,10 @@ unsafe impl Send for Sent {}
 
 fn class(name: &CStr) -> Result<&'static AnyClass, Fail> {
     AnyClass::get(name).ok_or_else(|| {
-        Fail::new("NotSupportedError", format!("{} is unavailable", name.to_string_lossy()))
+        Fail::new(
+            "NotSupportedError",
+            format!("{} is unavailable", name.to_string_lossy()),
+        )
     })
 }
 
@@ -112,7 +115,10 @@ unsafe fn error_info(error: *mut AnyObject) -> (isize, String) {
     };
     let code: isize = unsafe { msg_send![error, code] };
     let text: Option<Retained<NSString>> = unsafe { msg_send![error, localizedDescription] };
-    (code, text.map_or_else(|| "unknown error".into(), |t| t.to_string()))
+    (
+        code,
+        text.map_or_else(|| "unknown error".into(), |t| t.to_string()),
+    )
 }
 
 fn sck_failure(code: isize, text: &str) -> Fail {
@@ -120,13 +126,18 @@ fn sck_failure(code: isize, text: &str) -> Fail {
         let (name, message) = sk_permissions::display_capture_refusal();
         return Fail::new(name, message);
     }
-    Fail::new("OperationError", format!("ScreenCaptureKit: {text} ({code})"))
+    Fail::new(
+        "OperationError",
+        format!("ScreenCaptureKit: {text} ({code})"),
+    )
 }
 
 unsafe fn objects(array: &AnyObject) -> Vec<Retained<AnyObject>> {
     let count: usize = unsafe { msg_send![array, count] };
     (0..count)
-        .filter_map(|i| -> Option<Retained<AnyObject>> { unsafe { msg_send![array, objectAtIndex: i] } })
+        .filter_map(|i| -> Option<Retained<AnyObject>> {
+            unsafe { msg_send![array, objectAtIndex: i] }
+        })
         .collect()
 }
 
@@ -135,11 +146,19 @@ fn text(value: Option<Retained<NSString>>) -> String {
 }
 
 fn rect(frame: CGRect) -> Rect {
-    Rect { x: frame.origin.x, y: frame.origin.y, width: frame.size.width, height: frame.size.height }
+    Rect {
+        x: frame.origin.x,
+        y: frame.origin.y,
+        width: frame.size.width,
+        height: frame.size.height,
+    }
 }
 
 fn cg_rect(rect: Rect) -> CGRect {
-    CGRect::new(CGPoint::new(rect.x, rect.y), CGSize::new(rect.width, rect.height))
+    CGRect::new(
+        CGPoint::new(rect.x, rect.y),
+        CGSize::new(rect.width, rect.height),
+    )
 }
 
 pub(super) fn sources(options: Options) -> Result<Vec<Value>, Fail> {
@@ -183,12 +202,19 @@ unsafe fn list(options: Options) -> Result<Vec<Value>, Fail> {
 
     let modern = AnyClass::get(c"SCScreenshotManager").is_some();
     let size = |frame: &Rect| {
-        fit(frame.width.round() as u32, frame.height.round() as u32, options.thumbnail_width, options.thumbnail_height)
+        fit(
+            frame.width.round() as u32,
+            frame.height.round() as u32,
+            options.thumbnail_width,
+            options.thumbnail_height,
+        )
     };
     let mut screen_shots = Vec::new();
     if options.screens {
         for display in &displays {
-            let target = display_objects.get(&display.id).map(|d| Target::Display(d, display.frame));
+            let target = display_objects
+                .get(&display.id)
+                .map(|d| Target::Display(d, display.frame));
             let size = size(&display.frame);
             screen_shots.push((unsafe { start_preview(target, size, modern) }, size));
         }
@@ -196,23 +222,31 @@ unsafe fn list(options: Options) -> Result<Vec<Value>, Fail> {
     let mut window_shots = Vec::new();
     for (row, window) in &windows {
         let size = size(&row.frame);
-        window_shots.push((unsafe { start_preview(Some(Target::Window(window, row.id)), size, modern) }, size));
+        window_shots.push((
+            unsafe { start_preview(Some(Target::Window(window, row.id)), size, modern) },
+            size,
+        ));
     }
     let deadline = Instant::now() + PREVIEW_DEADLINE;
 
     let mut result = Vec::new();
     if options.screens {
         for (index, (display, (shot, size))) in displays.iter().zip(screen_shots).enumerate() {
-            result.push(listing::screen_json(index, display, finish_preview(shot, size, deadline)));
+            result.push(listing::screen_json(
+                index,
+                display,
+                finish_preview(shot, size, deadline),
+            ));
         }
     }
     let mut icons: HashMap<i32, Option<String>> = HashMap::new();
     for ((row, _), (shot, size)) in windows.iter().zip(window_shots) {
         let thumbnail = finish_preview(shot, size, deadline);
         let icon = match row.pid {
-            Some(pid) if options.with_icons => {
-                icons.entry(pid).or_insert_with(|| unsafe { app_icon(pid) }).clone()
-            }
+            Some(pid) if options.with_icons => icons
+                .entry(pid)
+                .or_insert_with(|| unsafe { app_icon(pid) })
+                .clone(),
             _ => None,
         };
         let display = listing::display_for(&row.frame, &displays);
@@ -242,7 +276,10 @@ fn shareable_content() -> Result<Retained<AnyObject>, Fail> {
     match receive.recv_timeout(Duration::from_secs(10)) {
         Ok(Ok(content)) => Ok(content.0),
         Ok(Err((code, text))) => Err(sck_failure(code, &text)),
-        Err(_) => Err(Fail::new("TimeoutError", "ScreenCaptureKit did not list the shareable content within 10s")),
+        Err(_) => Err(Fail::new(
+            "TimeoutError",
+            "ScreenCaptureKit did not list the shareable content within 10s",
+        )),
     }
 }
 
@@ -253,7 +290,11 @@ unsafe fn pixel_scale(display: u32, width: f64) -> f64 {
     }
     let pixels = unsafe { CGDisplayModeGetPixelWidth(mode) };
     unsafe { CGDisplayModeRelease(mode) };
-    if pixels == 0 { 1.0 } else { pixels as f64 / width }
+    if pixels == 0 {
+        1.0
+    } else {
+        pixels as f64 / width
+    }
 }
 
 unsafe fn window_row(window: &AnyObject) -> WindowRow {
@@ -312,14 +353,19 @@ unsafe fn read_screens() -> Vec<(u32, Rect, Option<String>)> {
     let key = NSString::from_str("NSScreenNumber");
     let mut out = Vec::new();
     for screen in &screens {
-        let description: Option<Retained<AnyObject>> = unsafe { msg_send![&**screen, deviceDescription] };
+        let description: Option<Retained<AnyObject>> =
+            unsafe { msg_send![&**screen, deviceDescription] };
         let number: Option<Retained<AnyObject>> =
             description.and_then(|d| unsafe { msg_send![&*d, objectForKey: &*key] });
         let Some(number) = number else { continue };
         let id: u32 = unsafe { msg_send![&*number, unsignedIntValue] };
         let visible: CGRect = unsafe { msg_send![&**screen, visibleFrame] };
         let name: Option<Retained<NSString>> = unsafe { msg_send![&**screen, localizedName] };
-        out.push((id, listing::flip(rect(visible), primary.size.height), name.map(|n| n.to_string())));
+        out.push((
+            id,
+            listing::flip(rect(visible), primary.size.height),
+            name.map(|n| n.to_string()),
+        ));
     }
     out
 }
@@ -337,9 +383,16 @@ enum Preview {
     Waiting(mpsc::Receiver<Shot>),
 }
 
-unsafe fn start_preview(target: Option<Target<'_>>, (width, height): (u32, u32), modern: bool) -> Preview {
+unsafe fn start_preview(
+    target: Option<Target<'_>>,
+    (width, height): (u32, u32),
+    modern: bool,
+) -> Preview {
     let Some(target) = target else {
-        return Preview::Ready(Err(Fail::new("NotFoundError", "the display is no longer available")));
+        return Preview::Ready(Err(Fail::new(
+            "NotFoundError",
+            "the display is no longer available",
+        )));
     };
     if width == 0 || height == 0 {
         return Preview::None;
@@ -352,13 +405,22 @@ unsafe fn start_preview(target: Option<Target<'_>>, (width, height): (u32, u32),
     result.unwrap_or_else(|error| Preview::Ready(Err(error)))
 }
 
-fn finish_preview(preview: Preview, (width, height): (u32, u32), deadline: Instant) -> Result<String, Fail> {
+fn finish_preview(
+    preview: Preview,
+    (width, height): (u32, u32),
+    deadline: Instant,
+) -> Result<String, Fail> {
     let image = match preview {
         Preview::None => return Ok(String::new()),
         Preview::Ready(image) => image?,
         Preview::Waiting(receive) => receive
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .map_err(|_| Fail::new("TimeoutError", "the source did not supply a preview within 2s"))?
+            .map_err(|_| {
+                Fail::new(
+                    "TimeoutError",
+                    "the source did not supply a preview within 2s",
+                )
+            })?
             .map_err(|(code, text)| sck_failure(code, &text))?,
     };
     let mut rgba = render(&image, width, height)?;
@@ -373,9 +435,16 @@ unsafe fn content_filter(target: &Target<'_>) -> Result<Retained<AnyObject>, Fai
             let none: Retained<AnyObject> = unsafe { msg_send![class(c"NSArray")?, array] };
             unsafe { msg_send![filter, initWithDisplay: &***display, excludingWindows: &*none] }
         }
-        Target::Window(window, _) => unsafe { msg_send![filter, initWithDesktopIndependentWindow: &***window] },
+        Target::Window(window, _) => unsafe {
+            msg_send![filter, initWithDesktopIndependentWindow: &***window]
+        },
     };
-    filter.ok_or_else(|| Fail::new("OperationError", "ScreenCaptureKit refused the content filter"))
+    filter.ok_or_else(|| {
+        Fail::new(
+            "OperationError",
+            "ScreenCaptureKit refused the content filter",
+        )
+    })
 }
 
 unsafe fn screenshot(
@@ -413,18 +482,36 @@ type WindowListCreateImage = unsafe extern "C" fn(CGRect, u32, u32, u32) -> *mut
 unsafe fn window_list_image(target: &Target<'_>) -> Result<CgImage, Fail> {
     let symbol = unsafe { dlsym(RTLD_DEFAULT, c"CGWindowListCreateImage".as_ptr()) };
     if symbol.is_null() {
-        return Err(Fail::new("NotSupportedError", "CGWindowListCreateImage is unavailable"));
+        return Err(Fail::new(
+            "NotSupportedError",
+            "CGWindowListCreateImage is unavailable",
+        ));
     }
     // SAFETY: the C prototype is `CGImageRef (CGRect, CGWindowListOption,
     // CGWindowID, CGWindowImageOption)`, both options `uint32_t`.
     let create: WindowListCreateImage = unsafe { std::mem::transmute(symbol) };
     let image = match target {
         Target::Display(_, frame) => unsafe {
-            create(cg_rect(*frame), LIST_ON_SCREEN_ONLY, 0, IMAGE_NOMINAL_RESOLUTION)
+            create(
+                cg_rect(*frame),
+                LIST_ON_SCREEN_ONLY,
+                0,
+                IMAGE_NOMINAL_RESOLUTION,
+            )
         },
         Target::Window(_, id) => {
-            let null = CGRect::new(CGPoint::new(f64::INFINITY, f64::INFINITY), CGSize::new(0.0, 0.0));
-            unsafe { create(null, LIST_INCLUDING_WINDOW, *id, IMAGE_IGNORE_FRAMING | IMAGE_NOMINAL_RESOLUTION) }
+            let null = CGRect::new(
+                CGPoint::new(f64::INFINITY, f64::INFINITY),
+                CGSize::new(0.0, 0.0),
+            );
+            unsafe {
+                create(
+                    null,
+                    LIST_INCLUDING_WINDOW,
+                    *id,
+                    IMAGE_IGNORE_FRAMING | IMAGE_NOMINAL_RESOLUTION,
+                )
+            }
         }
     };
     unsafe { CgImage::adopt(image) }
@@ -436,7 +523,10 @@ fn render(image: &CgImage, width: u32, height: u32) -> Result<Vec<u8>, Fail> {
     unsafe {
         let space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         if space.is_null() {
-            return Err(Fail::new("OperationError", "CGColorSpaceCreateWithName failed"));
+            return Err(Fail::new(
+                "OperationError",
+                "CGColorSpaceCreateWithName failed",
+            ));
         }
         let context = CGBitmapContextCreate(
             rgba.as_mut_ptr().cast(),
@@ -452,7 +542,15 @@ fn render(image: &CgImage, width: u32, height: u32) -> Result<Vec<u8>, Fail> {
             return Err(Fail::new("OperationError", "CGBitmapContextCreate failed"));
         }
         CGContextSetInterpolationQuality(context, INTERPOLATION_HIGH);
-        CGContextDrawImage(context, cg_rect(Rect { width: width as f64, height: height as f64, ..Rect::default() }), image.0.as_ptr());
+        CGContextDrawImage(
+            context,
+            cg_rect(Rect {
+                width: width as f64,
+                height: height as f64,
+                ..Rect::default()
+            }),
+            image.0.as_ptr(),
+        );
         CGContextRelease(context);
     }
     Ok(rgba)
@@ -460,7 +558,8 @@ fn render(image: &CgImage, width: u32, height: u32) -> Result<Vec<u8>, Fail> {
 
 unsafe fn app_icon(pid: i32) -> Option<String> {
     let cls = AnyClass::get(c"NSRunningApplication")?;
-    let app: Option<Retained<AnyObject>> = unsafe { msg_send![cls, runningApplicationWithProcessIdentifier: pid] };
+    let app: Option<Retained<AnyObject>> =
+        unsafe { msg_send![cls, runningApplicationWithProcessIdentifier: pid] };
     let icon: Option<Retained<AnyObject>> = unsafe { msg_send![&*app?, icon] };
     let mut proposed = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(32.0, 32.0));
     let image: *mut CGImage = unsafe {

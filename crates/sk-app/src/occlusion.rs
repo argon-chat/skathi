@@ -47,7 +47,11 @@ fn subtract(r: Rect, cut: Rect, out: &mut Vec<Rect>) {
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn covered(target: Rect, displays: &[Rect], above: impl IntoIterator<Item = Rect>) -> bool {
-    let mut visible: Vec<Rect> = displays.iter().map(|&d| intersect(target, d)).filter(|&r| !empty(r)).collect();
+    let mut visible: Vec<Rect> = displays
+        .iter()
+        .map(|&d| intersect(target, d))
+        .filter(|&r| !empty(r))
+        .collect();
     if visible.is_empty() {
         return true;
     }
@@ -72,11 +76,13 @@ pub fn covered(target: Rect, displays: &[Rect], above: impl IntoIterator<Item = 
 mod win {
     use super::Rect;
     use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT};
-    use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+    use windows::Win32::Graphics::Dwm::{
+        DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
+    };
     use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetWindowRgnBox, HDC, HMONITOR};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GW_HWNDPREV, GWL_EXSTYLE, GetForegroundWindow, GetLayeredWindowAttributes, GetWindow,
-        GetWindowLongW, GetWindowRect, IsIconic, IsWindowVisible, LAYERED_WINDOW_ATTRIBUTES_FLAGS,
+        GetForegroundWindow, GetLayeredWindowAttributes, GetWindow, GetWindowLongW, GetWindowRect,
+        IsIconic, IsWindowVisible, GWL_EXSTYLE, GW_HWNDPREV, LAYERED_WINDOW_ATTRIBUTES_FLAGS,
         LWA_ALPHA, LWA_COLORKEY, WS_EX_LAYERED, WS_EX_TRANSPARENT,
     };
 
@@ -101,7 +107,12 @@ mod win {
     fn cloaked(h: HWND) -> bool {
         let mut c: u32 = 0;
         let ok = unsafe {
-            DwmGetWindowAttribute(h, DWMWA_CLOAKED, &mut c as *mut u32 as *mut _, std::mem::size_of::<u32>() as u32)
+            DwmGetWindowAttribute(
+                h,
+                DWMWA_CLOAKED,
+                &mut c as *mut u32 as *mut _,
+                std::mem::size_of::<u32>() as u32,
+            )
         };
         ok.is_ok() && c != 0
     }
@@ -125,8 +136,13 @@ mod win {
             let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
             // Fails for a window that draws with per-pixel alpha
             // (`UpdateLayeredWindow`): it may be transparent anywhere.
-            let ok = unsafe { GetLayeredWindowAttributes(h, Some(&mut key), Some(&mut alpha), Some(&mut flags)) };
-            if ok.is_err() || flags.0 & LWA_COLORKEY.0 != 0 || (flags.0 & LWA_ALPHA.0 != 0 && alpha != 255) {
+            let ok = unsafe {
+                GetLayeredWindowAttributes(h, Some(&mut key), Some(&mut alpha), Some(&mut flags))
+            };
+            if ok.is_err()
+                || flags.0 & LWA_COLORKEY.0 != 0
+                || (flags.0 & LWA_ALPHA.0 != 0 && alpha != 255)
+            {
                 return false;
             }
         }
@@ -138,14 +154,26 @@ mod win {
     }
 
     fn displays() -> Vec<Rect> {
-        unsafe extern "system" fn each(_: HMONITOR, _: HDC, r: *mut RECT, data: LPARAM) -> windows::core::BOOL {
+        unsafe extern "system" fn each(
+            _: HMONITOR,
+            _: HDC,
+            r: *mut RECT,
+            data: LPARAM,
+        ) -> windows::core::BOOL {
             let out = unsafe { &mut *(data.0 as *mut Vec<Rect>) };
             let r = unsafe { *r };
             out.push((r.left, r.top, r.right, r.bottom));
             true.into()
         }
         let mut out: Vec<Rect> = Vec::new();
-        let _ = unsafe { EnumDisplayMonitors(None, None, Some(each), LPARAM(&mut out as *mut Vec<Rect> as isize)) };
+        let _ = unsafe {
+            EnumDisplayMonitors(
+                None,
+                None,
+                Some(each),
+                LPARAM(&mut out as *mut Vec<Rect> as isize),
+            )
+        };
         out
     }
 
@@ -154,7 +182,9 @@ mod win {
         if unsafe { GetForegroundWindow() } == h {
             return false;
         }
-        let Some(target) = bounds(h) else { return false };
+        let Some(target) = bounds(h) else {
+            return false;
+        };
         let displays = displays();
         let mut above = Vec::new();
         let mut w = unsafe { GetWindow(h, GW_HWNDPREV) }.ok();
@@ -194,19 +224,35 @@ mod tests {
 
     #[test]
     fn a_window_under_a_bigger_one_is_covered() {
-        assert!(covered((100, 100, 900, 700), &[SCREEN], [(0, 0, 1920, 1040)]));
+        assert!(covered(
+            (100, 100, 900, 700),
+            &[SCREEN],
+            [(0, 0, 1920, 1040)]
+        ));
     }
 
     #[test]
     fn a_sliver_left_uncovered_is_enough_to_draw() {
-        assert!(!covered((100, 100, 900, 700), &[SCREEN], [(101, 100, 900, 700)]));
-        assert!(!covered((100, 100, 900, 700), &[SCREEN], [(100, 100, 900, 699)]));
+        assert!(!covered(
+            (100, 100, 900, 700),
+            &[SCREEN],
+            [(101, 100, 900, 700)]
+        ));
+        assert!(!covered(
+            (100, 100, 900, 700),
+            &[SCREEN],
+            [(100, 100, 900, 699)]
+        ));
     }
 
     #[test]
     fn several_windows_can_cover_it_together() {
         let target = (0, 0, 1000, 1000);
-        let halves = [(0, 0, 500, 1000), (500, 0, 1000, 600), (400, 500, 1200, 1100)];
+        let halves = [
+            (0, 0, 500, 1000),
+            (500, 0, 1000, 600),
+            (400, 500, 1200, 1100),
+        ];
         assert!(covered(target, &[SCREEN], halves));
         assert!(!covered(target, &[SCREEN], halves[..2].iter().copied()));
     }
@@ -220,7 +266,11 @@ mod tests {
     fn only_the_part_on_a_display_counts() {
         let target = (1500, 100, 2300, 700);
         assert!(covered(target, &[SCREEN], [(1400, 0, 1920, 1080)]));
-        assert!(!covered(target, &[SCREEN, (1920, 0, 3840, 1080)], [(1400, 0, 1920, 1080)]));
+        assert!(!covered(
+            target,
+            &[SCREEN, (1920, 0, 3840, 1080)],
+            [(1400, 0, 1920, 1080)]
+        ));
         assert!(covered((-3000, 0, -2000, 500), &[SCREEN], []));
     }
 
@@ -239,7 +289,8 @@ mod tests {
 
     #[test]
     fn a_pathological_tiling_gives_up_and_draws() {
-        let cuts = (0..40).flat_map(|y| (0..40).map(move |x| (x * 20 + 5, y * 20 + 5, x * 20 + 6, y * 20 + 6)));
+        let cuts = (0..40)
+            .flat_map(|y| (0..40).map(move |x| (x * 20 + 5, y * 20 + 5, x * 20 + 6, y * 20 + 6)));
         assert!(!covered((0, 0, 800, 800), &[SCREEN], cuts));
     }
 }

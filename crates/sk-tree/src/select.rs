@@ -10,8 +10,10 @@ use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
-use gpui::{div, px, relative, AnyElement, App, Bounds, Hsla, KeyDownEvent, KeyUpEvent, MouseButton, Pixels, Point,
-    ScrollHandle, VnHitKind, Window};
+use gpui::{
+    div, px, relative, AnyElement, App, Bounds, Hsla, KeyDownEvent, KeyUpEvent, MouseButton,
+    Pixels, Point, ScrollHandle, VnHitKind, Window,
+};
 
 use crate::tree::{self, Kind, Tree};
 use crate::windows::{self, WinKey};
@@ -32,17 +34,29 @@ const MAX_ROWS: usize = 20;
 /// A pause this long starts a new type-ahead search.
 const TYPEAHEAD_RESET: Duration = Duration::from_millis(1000);
 
-
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Row {
-    Group { label: String },
-    Opt { index: usize, label: String, disabled: bool, hidden: bool, grouped: bool },
+    Group {
+        label: String,
+    },
+    Opt {
+        index: usize,
+        label: String,
+        disabled: bool,
+        hidden: bool,
+        grouped: bool,
+    },
 }
 
 impl Row {
     fn pickable(&self) -> Option<usize> {
         match self {
-            Row::Opt { index, disabled: false, hidden: false, .. } => Some(*index),
+            Row::Opt {
+                index,
+                disabled: false,
+                hidden: false,
+                ..
+            } => Some(*index),
             _ => None,
         }
     }
@@ -53,7 +67,8 @@ fn flag(t: &Tree, id: u32, name: &str) -> bool {
 }
 
 fn element_named(t: &Tree, id: u32, tag: &str) -> bool {
-    t.node(id).is_some_and(|n| n.kind == Kind::Element && t.name(n.tag) == tag)
+    t.node(id)
+        .is_some_and(|n| n.kind == Kind::Element && t.name(n.tag) == tag)
 }
 
 pub(crate) fn is_select(t: &Tree, id: u32) -> bool {
@@ -68,7 +83,10 @@ pub(crate) fn option_label(t: &Tree, id: u32) -> String {
     }
     let mut raw = String::new();
     collect_text(t, id, &mut raw, 0);
-    raw.split([' ', '\t', '\n', '\x0c', '\r']).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
+    raw.split([' ', '\t', '\n', '\x0c', '\r'])
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn collect_text(t: &Tree, id: u32, out: &mut String, depth: usize) {
@@ -106,7 +124,9 @@ pub(crate) fn rows(t: &Tree, select: u32) -> Vec<Row> {
         if element_named(t, c, "option") {
             push(&mut out, c, false, false);
         } else if element_named(t, c, "optgroup") {
-            out.push(Row::Group { label: t.prop(c, "label").unwrap_or("").to_string() });
+            out.push(Row::Group {
+                label: t.prop(c, "label").unwrap_or("").to_string(),
+            });
             let disabled = flag(t, c, "disabled");
             for &g in &t.node(c).map(|g| g.children.clone()).unwrap_or_default() {
                 if element_named(t, g, "option") {
@@ -127,7 +147,6 @@ fn usable(t: &Tree, select: u32) -> bool {
     is_select(t, select) && !crate::render::actually_disabled(t, select)
 }
 
-
 fn choices(rows: &[Row]) -> Vec<usize> {
     rows.iter().filter_map(Row::pickable).collect()
 }
@@ -147,7 +166,11 @@ fn step(rows: &[Row], from: Option<usize>, delta: isize) -> Option<usize> {
             None => c.len() as isize + delta,
         }
     };
-    Some(if at < 0 { first } else { c.get(at as usize).copied().unwrap_or(last) })
+    Some(if at < 0 {
+        first
+    } else {
+        c.get(at as usize).copied().unwrap_or(last)
+    })
 }
 
 fn moved(rows: &[Row], from: Option<usize>, key: &str) -> Option<Option<usize>> {
@@ -171,7 +194,10 @@ struct Typeahead {
 
 impl Typeahead {
     fn active(&self, now: Instant) -> bool {
-        !self.text.is_empty() && self.at.is_some_and(|t| now.duration_since(t) < TYPEAHEAD_RESET)
+        !self.text.is_empty()
+            && self
+                .at
+                .is_some_and(|t| now.duration_since(t) < TYPEAHEAD_RESET)
     }
 
     fn find(&mut self, rows: &[Row], from: Option<usize>, ch: char, now: Instant) -> Option<usize> {
@@ -182,22 +208,33 @@ impl Typeahead {
         self.text.extend(ch.to_lowercase());
         let first = self.text.chars().next()?;
         let cycle = self.text.chars().all(|c| c == first);
-        let needle: String = if cycle { first.to_string() } else { self.text.clone() };
+        let needle: String = if cycle {
+            first.to_string()
+        } else {
+            self.text.clone()
+        };
         let c = choices(rows);
         if c.is_empty() {
             return None;
         }
         let start = match from {
-            Some(f) => c.iter().position(|&i| if cycle { i > f } else { i >= f }).unwrap_or(0),
+            Some(f) => c
+                .iter()
+                .position(|&i| if cycle { i > f } else { i >= f })
+                .unwrap_or(0),
             None => 0,
         };
         let label = |ix: usize| {
             rows.iter().find_map(|r| match r {
-                Row::Opt { index, label, .. } if *index == ix => Some(label.trim_start().to_lowercase()),
+                Row::Opt { index, label, .. } if *index == ix => {
+                    Some(label.trim_start().to_lowercase())
+                }
                 _ => None,
             })
         };
-        (0..c.len()).map(|k| c[(start + k) % c.len()]).find(|&ix| label(ix).is_some_and(|l| l.starts_with(&needle)))
+        (0..c.len())
+            .map(|k| c[(start + k) % c.len()])
+            .find(|&ix| label(ix).is_some_and(|l| l.starts_with(&needle)))
     }
 }
 
@@ -211,7 +248,6 @@ fn typed(ev: &KeyDownEvent) -> Option<char> {
     let ch = chars.next()?;
     (chars.next().is_none() && !ch.is_control()).then_some(ch)
 }
-
 
 struct Open {
     select: u32,
@@ -232,15 +268,23 @@ thread_local! {
 }
 
 fn open_in(k: WinKey) -> Option<u32> {
-    OPEN.with(|o| o.borrow().as_ref().filter(|o| o.window == k).map(|o| o.select))
+    OPEN.with(|o| {
+        o.borrow()
+            .as_ref()
+            .filter(|o| o.window == k)
+            .map(|o| o.select)
+    })
 }
 
 /// The open select if it still paints; otherwise it closes, without a repaint (the caller is mid-event, or mid-build).
 fn still_open(k: WinKey) -> Option<u32> {
     let select = open_in(k)?;
-    let painted = windows::peek(k, |w| w.bounds.contains_key(&select) || w.prev_bounds.contains_key(&select))
-        .unwrap_or(false);
-    let ok = painted && windows::focused_node(k) == select && tree::read_tree(|t| usable(t, select));
+    let painted = windows::peek(k, |w| {
+        w.bounds.contains_key(&select) || w.prev_bounds.contains_key(&select)
+    })
+    .unwrap_or(false);
+    let ok =
+        painted && windows::focused_node(k) == select && tree::read_tree(|t| usable(t, select));
     if ok {
         return Some(select);
     }
@@ -254,7 +298,9 @@ fn changed(select: u32, window: &mut Window, cx: &mut App) {
 }
 
 fn open(select: u32, window: &mut Window, cx: &mut App) {
-    let Some(highlight) = tree::read_tree(|t| usable(t, select).then(|| shown(t, select))) else { return };
+    let Some(highlight) = tree::read_tree(|t| usable(t, select).then(|| shown(t, select))) else {
+        return;
+    };
     let previous = OPEN.with(|o| {
         o.borrow_mut().replace(Open {
             select,
@@ -284,7 +330,10 @@ fn pick(select: u32, index: usize, window: &mut Window, cx: &mut App) {
 }
 
 fn commit(select: u32, index: usize, window: &mut Window, cx: &mut App) {
-    let payload = EventPayload { a: index as f64, ..Default::default() };
+    let payload = EventPayload {
+        a: index as f64,
+        ..Default::default()
+    };
     crate::render::js_dispatch_app(select, tree::EV_INPUT, &payload, window, cx);
 }
 
@@ -304,7 +353,6 @@ fn highlight(index: Option<usize>, reveal: bool, window: &mut Window, cx: &mut A
     }
 }
 
-
 pub(crate) fn bind_press<E: InteractiveElement>(e: E, id: u32) -> E {
     e.on_mouse_down(MouseButton::Left, move |_, window, _| {
         PRESSED.with(|p| p.set(Some((windows::key(window), id))));
@@ -312,7 +360,9 @@ pub(crate) fn bind_press<E: InteractiveElement>(e: E, id: u32) -> E {
 }
 
 pub(crate) fn press_settled(cancelled: bool, window: &mut Window, cx: &mut App) {
-    let Some((k, select)) = PRESSED.with(|p| p.take()) else { return };
+    let Some((k, select)) = PRESSED.with(|p| p.take()) else {
+        return;
+    };
     if cancelled || k != windows::key(window) {
         return;
     }
@@ -329,7 +379,12 @@ pub(crate) fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx:
     if still_open(k).is_none() {
         return false;
     }
-    let inside = OPEN.with(|o| o.borrow().as_ref().and_then(|o| o.bounds).is_some_and(|b| b.contains(&p)));
+    let inside = OPEN.with(|o| {
+        o.borrow()
+            .as_ref()
+            .and_then(|o| o.bounds)
+            .is_some_and(|b| b.contains(&p))
+    });
     if inside {
         hit_nothing(kind, window);
         return true;
@@ -366,9 +421,14 @@ fn hit_nothing(kind: VnHitKind, window: &mut Window) {
 
 pub(crate) fn covers(window: &Window, p: Point<Pixels>) -> bool {
     let k = windows::key(window);
-    OPEN.with(|o| o.borrow().as_ref().filter(|o| o.window == k).and_then(|o| o.bounds).is_some_and(|b| b.contains(&p)))
+    OPEN.with(|o| {
+        o.borrow()
+            .as_ref()
+            .filter(|o| o.window == k)
+            .and_then(|o| o.bounds)
+            .is_some_and(|b| b.contains(&p))
+    })
 }
-
 
 /// The build root's key listeners: the popup's keys in the capture phase; a closed select's in the
 /// bubble phase after every `keydown` handler, so a cancelled one does nothing.
@@ -388,13 +448,22 @@ pub(crate) fn bind_root<E: InteractiveElement>(e: E) -> E {
 
 fn popup_key(ev: &KeyDownEvent, window: &mut Window, cx: &mut App) -> bool {
     let k = windows::key(window);
-    let Some(select) = still_open(k) else { return false };
+    let Some(select) = still_open(k) else {
+        return false;
+    };
     let rows = tree::read_tree(|t| rows(t, select));
-    let (current, searching) =
-        OPEN.with(|o| o.borrow().as_ref().map(|o| (o.highlight, o.typeahead.active(Instant::now())))).unwrap_or_default();
+    let (current, searching) = OPEN
+        .with(|o| {
+            o.borrow()
+                .as_ref()
+                .map(|o| (o.highlight, o.typeahead.active(Instant::now())))
+        })
+        .unwrap_or_default();
     let m = &ev.keystroke.modifiers;
     let key = ev.keystroke.key.as_str();
-    let accept = |window: &mut Window, cx: &mut App| match current.filter(|&i| rows.iter().any(|r| r.pickable() == Some(i))) {
+    let accept = |window: &mut Window, cx: &mut App| match current
+        .filter(|&i| rows.iter().any(|r| r.pickable() == Some(i)))
+    {
         Some(i) => pick(select, i, window, cx),
         None => close(window, cx),
     };
@@ -409,7 +478,9 @@ fn popup_key(ev: &KeyDownEvent, window: &mut Window, cx: &mut App) -> bool {
                 highlight(to, true, window, cx);
             } else if let Some(ch) = typed(ev) {
                 let found = OPEN.with(|o| {
-                    o.borrow_mut().as_mut().and_then(|o| o.typeahead.find(&rows, current, ch, Instant::now()))
+                    o.borrow_mut()
+                        .as_mut()
+                        .and_then(|o| o.typeahead.find(&rows, current, ch, Instant::now()))
                 });
                 if found.is_some() {
                     highlight(found, true, window, cx);
@@ -426,7 +497,8 @@ fn closed_key(ev: &KeyDownEvent, window: &mut Window, cx: &mut App) {
         return;
     }
     let select = windows::focused_node(k);
-    let Some((rows, current)) = tree::read_tree(|t| usable(t, select).then(|| (rows(t, select), shown(t, select))))
+    let Some((rows, current)) =
+        tree::read_tree(|t| usable(t, select).then(|| (rows(t, select), shown(t, select))))
     else {
         return;
     };
@@ -455,7 +527,6 @@ fn closed_key(ev: &KeyDownEvent, window: &mut Window, cx: &mut App) {
         _ => {}
     }
 }
-
 
 pub(crate) fn closed_children(
     t: &Tree,
@@ -585,7 +656,13 @@ pub(crate) fn popup_child(
         .and_then(gpui::Fill::color)
         .and_then(|b| b.as_solid())
         .filter(|c| c.a > 0.0);
-    let rect = windows::peek(k, |w| w.bounds.get(&id).or_else(|| w.prev_bounds.get(&id)).copied()).flatten();
+    let rect = windows::peek(k, |w| {
+        w.bounds
+            .get(&id)
+            .or_else(|| w.prev_bounds.get(&id))
+            .copied()
+    })
+    .flatten();
     let (width, room) = match rect {
         Some((_, y, w, h)) => {
             let viewport = f32::from(window.viewport_size().height);
@@ -614,20 +691,38 @@ pub(crate) fn popup_child(
                         .py(px(PAD_BLOCK))
                         .whitespace_nowrap()
                         .font_weight(gpui::FontWeight::BOLD)
-                        .child(if label.is_empty() { "\u{200b}".into() } else { crate::render::transformed_text(label, case) }),
+                        .child(if label.is_empty() {
+                            "\u{200b}".into()
+                        } else {
+                            crate::render::transformed_text(label, case)
+                        }),
                 );
             }
             Row::Opt { hidden: true, .. } => {}
-            Row::Opt { index, label, disabled, grouped, .. } => {
+            Row::Opt {
+                index,
+                label,
+                disabled,
+                grouped,
+                ..
+            } => {
                 let index = *index;
                 let lit = current == Some(index);
                 if lit {
                     reveal_row = Some(row_ix);
                 }
-                let text = if label.is_empty() { "\u{200b}".into() } else { crate::render::transformed_text(label, case) };
+                let text = if label.is_empty() {
+                    "\u{200b}".into()
+                } else {
+                    crate::render::transformed_text(label, case)
+                };
                 let mut row = div()
                     .id(("sk-select-option", index))
-                    .pl(px(if *grouped { PAD_START + 12.0 } else { PAD_START }))
+                    .pl(px(if *grouped {
+                        PAD_START + 12.0
+                    } else {
+                        PAD_START
+                    }))
                     .pr(px(PAD_START))
                     .py(px(PAD_BLOCK))
                     .whitespace_nowrap()
@@ -639,8 +734,12 @@ pub(crate) fn popup_child(
                         row = row.bg(pal.highlight).text_color(pal.highlight_text);
                     }
                     row = row
-                        .on_mouse_move(move |_, window, cx| highlight(Some(index), false, window, cx))
-                        .on_mouse_up(MouseButton::Left, move |_, window, cx| pick(id, index, window, cx));
+                        .on_mouse_move(move |_, window, cx| {
+                            highlight(Some(index), false, window, cx)
+                        })
+                        .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                            pick(id, index, window, cx)
+                        });
                 }
                 list = list.child(row);
             }
@@ -648,7 +747,10 @@ pub(crate) fn popup_child(
     }
     if reveal {
         if let Some(r) = reveal_row {
-            let shown_before = rows[..r].iter().filter(|r| !matches!(r, Row::Opt { hidden: true, .. })).count();
+            let shown_before = rows[..r]
+                .iter()
+                .filter(|r| !matches!(r, Row::Opt { hidden: true, .. }))
+                .count();
             scroll.scroll_to_item(shown_before);
         }
     }
@@ -663,8 +765,16 @@ pub(crate) fn popup_child(
         .border_color(pal.border)
         .line_height(relative(1.2))
         .child(list);
-    let placed = Placed { select: id, child: frame.into_any_element() };
-    Some(gpui::deferred(placed).priority(1).with_stack_key(std::rc::Rc::from([u128::MAX])).into_any_element())
+    let placed = Placed {
+        select: id,
+        child: frame.into_any_element(),
+    };
+    Some(
+        gpui::deferred(placed)
+            .priority(1)
+            .with_stack_key(std::rc::Rc::from([u128::MAX]))
+            .into_any_element(),
+    )
 }
 
 /// The popup's placement: under the select's box, or above when it does not fit and fits better
@@ -694,7 +804,11 @@ impl gpui::Element for Placed {
         cx: &mut App,
     ) -> (gpui::LayoutId, gpui::LayoutId) {
         let child = self.child.request_layout(window, cx);
-        let style = gpui::Style { position: gpui::Position::Absolute, display: gpui::Display::Flex, ..Default::default() };
+        let style = gpui::Style {
+            position: gpui::Position::Absolute,
+            display: gpui::Display::Flex,
+            ..Default::default()
+        };
         (window.request_layout(style, [child], cx), child)
     }
 
@@ -709,18 +823,30 @@ impl gpui::Element for Placed {
     ) {
         let laid = window.layout_bounds(*child);
         let k = windows::key(window);
-        let rect = windows::peek(k, |w| w.bounds.get(&self.select).or_else(|| w.prev_bounds.get(&self.select)).copied())
-            .flatten()
-            .unwrap_or_default();
+        let rect = windows::peek(k, |w| {
+            w.bounds
+                .get(&self.select)
+                .or_else(|| w.prev_bounds.get(&self.select))
+                .copied()
+        })
+        .flatten()
+        .unwrap_or_default();
         let viewport = window.viewport_size();
         let origin = place(rect, laid.size, viewport);
-        let placed = Bounds { origin, size: laid.size };
+        let placed = Bounds {
+            origin,
+            size: laid.size,
+        };
         let offset = origin - laid.origin;
         window.with_element_offset(gpui::point(offset.x.round(), offset.y.round()), |window| {
             self.child.prepaint(window, cx)
         });
         OPEN.with(|o| {
-            if let Some(o) = o.borrow_mut().as_mut().filter(|o| o.select == self.select && o.window == k) {
+            if let Some(o) = o
+                .borrow_mut()
+                .as_mut()
+                .filter(|o| o.select == self.select && o.window == k)
+            {
                 o.bounds = Some(placed);
             }
         });
@@ -740,12 +866,20 @@ impl gpui::Element for Placed {
     }
 }
 
-fn place(rect: windows::Rect, size: gpui::Size<Pixels>, viewport: gpui::Size<Pixels>) -> Point<Pixels> {
+fn place(
+    rect: windows::Rect,
+    size: gpui::Size<Pixels>,
+    viewport: gpui::Size<Pixels>,
+) -> Point<Pixels> {
     let (x, y, _, h) = rect;
     let (vw, vh) = (f32::from(viewport.width), f32::from(viewport.height));
     let (pw, ph) = (f32::from(size.width), f32::from(size.height));
     let below = vh - (y + h);
-    let top = if ph <= below || below >= y { y + h } else { (y - ph).max(0.0) };
+    let top = if ph <= below || below >= y {
+        y + h
+    } else {
+        (y - ph).max(0.0)
+    };
     let left = x.min(vw - pw).max(0.0);
     gpui::point(px(left), px(top))
 }
@@ -755,11 +889,23 @@ mod tests {
     use super::*;
 
     fn opt(index: usize, label: &str) -> Row {
-        Row::Opt { index, label: label.into(), disabled: false, hidden: false, grouped: false }
+        Row::Opt {
+            index,
+            label: label.into(),
+            disabled: false,
+            hidden: false,
+            grouped: false,
+        }
     }
 
     fn off(index: usize, label: &str) -> Row {
-        Row::Opt { index, label: label.into(), disabled: true, hidden: false, grouped: false }
+        Row::Opt {
+            index,
+            label: label.into(),
+            disabled: true,
+            hidden: false,
+            grouped: false,
+        }
     }
 
     /// select > (option "  Every\n body ", optgroup[label=G] > (option[label=Lbl] "x",
@@ -795,8 +941,20 @@ mod tests {
             vec![
                 opt(0, "Every body"),
                 Row::Group { label: "G".into() },
-                Row::Opt { index: 1, label: "Lbl".into(), disabled: false, hidden: false, grouped: true },
-                Row::Opt { index: 2, label: "C".into(), disabled: true, hidden: false, grouped: true },
+                Row::Opt {
+                    index: 1,
+                    label: "Lbl".into(),
+                    disabled: false,
+                    hidden: false,
+                    grouped: true
+                },
+                Row::Opt {
+                    index: 2,
+                    label: "C".into(),
+                    disabled: true,
+                    hidden: false,
+                    grouped: true
+                },
                 opt(3, ""),
             ]
         );
@@ -815,33 +973,86 @@ mod tests {
 
     #[test]
     fn keys_move_over_the_enabled_options_and_stop_at_the_ends() {
-        let rows = vec![off(0, "a"), opt(1, "b"), Row::Group { label: "g".into() }, off(2, "c"), opt(3, "d"), opt(4, "e")];
-        assert_eq!(moved(&rows, Some(1), "down"), Some(Some(3)), "past the group and the disabled one");
+        let rows = vec![
+            off(0, "a"),
+            opt(1, "b"),
+            Row::Group { label: "g".into() },
+            off(2, "c"),
+            opt(3, "d"),
+            opt(4, "e"),
+        ];
+        assert_eq!(
+            moved(&rows, Some(1), "down"),
+            Some(Some(3)),
+            "past the group and the disabled one"
+        );
         assert_eq!(moved(&rows, Some(3), "up"), Some(Some(1)));
-        assert_eq!(moved(&rows, Some(1), "up"), Some(Some(1)), "the first stays");
-        assert_eq!(moved(&rows, Some(4), "right"), Some(Some(4)), "the last stays");
-        assert_eq!(moved(&rows, Some(2), "down"), Some(Some(3)), "on from a disabled selected one");
+        assert_eq!(
+            moved(&rows, Some(1), "up"),
+            Some(Some(1)),
+            "the first stays"
+        );
+        assert_eq!(
+            moved(&rows, Some(4), "right"),
+            Some(Some(4)),
+            "the last stays"
+        );
+        assert_eq!(
+            moved(&rows, Some(2), "down"),
+            Some(Some(3)),
+            "on from a disabled selected one"
+        );
         assert_eq!(moved(&rows, Some(2), "up"), Some(Some(1)));
-        assert_eq!(moved(&rows, None, "down"), Some(Some(1)), "nothing selected: the first");
+        assert_eq!(
+            moved(&rows, None, "down"),
+            Some(Some(1)),
+            "nothing selected: the first"
+        );
         assert_eq!(moved(&rows, Some(1), "end"), Some(Some(4)));
         assert_eq!(moved(&rows, Some(4), "home"), Some(Some(1)));
         assert_eq!(moved(&rows, Some(1), "pagedown"), Some(Some(4)));
         assert_eq!(moved(&rows, Some(4), "pageup"), Some(Some(1)));
         assert_eq!(moved(&rows, Some(1), "a"), None);
-        assert_eq!(moved(&[off(0, "x")], Some(0), "down"), Some(None), "nothing to move to");
+        assert_eq!(
+            moved(&[off(0, "x")], Some(0), "down"),
+            Some(None),
+            "nothing to move to"
+        );
     }
 
     #[test]
     fn typing_finds_by_prefix_and_a_repeated_letter_cycles() {
-        let rows = vec![opt(0, "Apple"), opt(1, "  banana"), opt(2, "Blueberry"), off(3, "Bad"), opt(4, "cherry")];
+        let rows = vec![
+            opt(0, "Apple"),
+            opt(1, "  banana"),
+            opt(2, "Blueberry"),
+            off(3, "Bad"),
+            opt(4, "cherry"),
+        ];
         let t0 = Instant::now();
         let mut ta = Typeahead::default();
-        assert_eq!(ta.find(&rows, Some(0), 'b', t0), Some(1), "leading white space and case do not count");
-        assert_eq!(ta.find(&rows, Some(1), 'b', t0), Some(2), "the same letter again: the next one");
-        assert_eq!(ta.find(&rows, Some(2), 'b', t0), Some(1), "…cycling, past the disabled one");
+        assert_eq!(
+            ta.find(&rows, Some(0), 'b', t0),
+            Some(1),
+            "leading white space and case do not count"
+        );
+        assert_eq!(
+            ta.find(&rows, Some(1), 'b', t0),
+            Some(2),
+            "the same letter again: the next one"
+        );
+        assert_eq!(
+            ta.find(&rows, Some(2), 'b', t0),
+            Some(1),
+            "…cycling, past the disabled one"
+        );
         let mut ta = Typeahead::default();
         assert_eq!(ta.find(&rows, Some(0), 'b', t0), Some(1));
-        assert_eq!(ta.find(&rows, Some(1), 'l', t0), Some(2), "a prefix, from the current one");
+        assert_eq!(
+            ta.find(&rows, Some(1), 'l', t0),
+            Some(2),
+            "a prefix, from the current one"
+        );
         assert_eq!(ta.find(&rows, Some(2), 'x', t0), None);
         let later = t0 + TYPEAHEAD_RESET + Duration::from_millis(1);
         assert_eq!(ta.find(&rows, Some(2), 'c', later), Some(4));
@@ -853,9 +1064,21 @@ mod tests {
     fn the_popup_goes_under_the_box_and_above_it_when_only_that_fits() {
         let vp = gpui::size(px(800.), px(600.));
         let sz = |w: f32, h: f32| gpui::size(px(w), px(h));
-        assert_eq!(place((10., 100., 200., 30.), sz(200., 300.), vp), gpui::point(px(10.), px(130.)));
-        assert_eq!(place((10., 500., 200., 30.), sz(200., 300.), vp), gpui::point(px(10.), px(200.)));
-        assert_eq!(place((10., 100., 200., 30.), sz(200., 550.), vp), gpui::point(px(10.), px(130.)));
-        assert_eq!(place((700., 100., 80., 30.), sz(200., 100.), vp), gpui::point(px(600.), px(130.)));
+        assert_eq!(
+            place((10., 100., 200., 30.), sz(200., 300.), vp),
+            gpui::point(px(10.), px(130.))
+        );
+        assert_eq!(
+            place((10., 500., 200., 30.), sz(200., 300.), vp),
+            gpui::point(px(10.), px(200.))
+        );
+        assert_eq!(
+            place((10., 100., 200., 30.), sz(200., 550.), vp),
+            gpui::point(px(10.), px(130.))
+        );
+        assert_eq!(
+            place((700., 100., 80., 30.), sz(200., 100.), vp),
+            gpui::point(px(600.), px(130.))
+        );
     }
 }

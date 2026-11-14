@@ -42,7 +42,9 @@ fn check(info: &vp9::PacketInfo, stream: &str) -> Result<(), VideoError> {
     }
     if let Some((w, h)) = info.size {
         if w as u64 > MAX_SIDE || h as u64 > MAX_SIDE {
-            return Err(unsupported(format!("its {stream}frames are {w}×{h}, over the {MAX_SIDE} px a side a sticker may have")));
+            return Err(unsupported(format!(
+                "its {stream}frames are {w}×{h}, over the {MAX_SIDE} px a side a sticker may have"
+            )));
         }
     }
     Ok(())
@@ -57,7 +59,8 @@ pub(crate) fn index(bytes: &[u8]) -> Result<Index, VideoError> {
     let mut shown: Vec<&Block> = Vec::with_capacity(webm.blocks.len());
     let mut keyframe_size = None;
     for (i, block) in webm.blocks.iter().enumerate() {
-        let info = vp9::packet_info(block.data.of(bytes)).map_err(|why| malformed(format!("video packet {i}: {why}")))?;
+        let info = vp9::packet_info(block.data.of(bytes))
+            .map_err(|why| malformed(format!("video packet {i}: {why}")))?;
         check(&info, "")?;
         if i == 0 && !info.keyframe {
             return Err(malformed("the video does not start with a keyframe"));
@@ -65,13 +68,18 @@ pub(crate) fn index(bytes: &[u8]) -> Result<Index, VideoError> {
         keyframe_size = keyframe_size.or(info.size);
         let alpha = block.alpha.filter(|_| has_alpha);
         if let Some(a) = alpha {
-            let info = vp9::packet_info(a.of(bytes)).map_err(|why| malformed(format!("the alpha of video packet {i}: {why}")))?;
+            let info = vp9::packet_info(a.of(bytes))
+                .map_err(|why| malformed(format!("the alpha of video packet {i}: {why}")))?;
             check(&info, "alpha ")?;
         }
         if info.shows {
             shown.push(block);
         }
-        packets.push(Packet { color: block.data, alpha, shows: info.shows });
+        packets.push(Packet {
+            color: block.data,
+            alpha,
+            shows: info.shows,
+        });
     }
     if shown.is_empty() {
         return Err(malformed("the video track shows no frame"));
@@ -87,7 +95,9 @@ pub(crate) fn index(bytes: &[u8]) -> Result<Index, VideoError> {
         pts_ms.push(prev);
     }
     let last = prev;
-    let from_info = webm.duration.map(|d| (d * webm.timestamp_scale as f64 - first as f64 * webm.timestamp_scale as f64) / 1e6);
+    let from_info = webm.duration.map(|d| {
+        (d * webm.timestamp_scale as f64 - first as f64 * webm.timestamp_scale as f64) / 1e6
+    });
     let duration_ms = match from_info.map(f64::round) {
         Some(d) if d > last as f64 && d <= u32::MAX as f64 => d as u32,
         _ => {
@@ -95,7 +105,10 @@ pub(crate) fn index(bytes: &[u8]) -> Result<Index, VideoError> {
             let gap = last_block
                 .duration
                 .map(|d| (d as i128 * scale + 500_000) / 1_000_000)
-                .or(webm.track.default_duration.map(|ns| (ns as i128 + 500_000) / 1_000_000))
+                .or(webm
+                    .track
+                    .default_duration
+                    .map(|ns| (ns as i128 + 500_000) / 1_000_000))
                 .or((pts_ms.len() >= 2).then(|| (last - pts_ms[pts_ms.len() - 2]) as i128))
                 .filter(|&g| g > 0)
                 .unwrap_or(FALLBACK_FRAME_MS as i128);
@@ -109,7 +122,9 @@ pub(crate) fn index(bytes: &[u8]) -> Result<Index, VideoError> {
         .or(keyframe_size.map(|(w, h)| (w as u64, h as u64)))
         .ok_or_else(|| malformed("its video track has no size"))?;
     if pw > MAX_SIDE || ph > MAX_SIDE {
-        return Err(unsupported(format!("its video is {pw}×{ph}, over the {MAX_SIDE} px a side a sticker may have")));
+        return Err(unsupported(format!(
+            "its video is {pw}×{ph}, over the {MAX_SIDE} px a side a sticker may have"
+        )));
     }
     let (dw, dh) = webm.track.display;
     let (width, height) = match webm.track.display_unit {
@@ -118,10 +133,20 @@ pub(crate) fn index(bytes: &[u8]) -> Result<Index, VideoError> {
         _ => (pw, ph),
     };
     // A display size past what a frame may be is not believed.
-    let (width, height) = if (1..=MAX_SIDE).contains(&width) && (1..=MAX_SIDE).contains(&height) { (width, height) } else { (pw, ph) };
+    let (width, height) = if (1..=MAX_SIDE).contains(&width) && (1..=MAX_SIDE).contains(&height) {
+        (width, height)
+    } else {
+        (pw, ph)
+    };
 
     Ok(Index {
-        meta: VideoMeta { width: width as u32, height: height as u32, pts_ms: pts_ms.into(), duration_ms, has_alpha },
+        meta: VideoMeta {
+            width: width as u32,
+            height: height as u32,
+            pts_ms: pts_ms.into(),
+            duration_ms,
+            has_alpha,
+        },
         packets: packets.into_boxed_slice(),
         colour: webm.track.colour,
     })
@@ -162,28 +187,81 @@ mod tests {
         let bytes = with(
             &size(64, 48),
             &[info(1_000_000, Some(100.0))],
-            &[simple_block(1, 0, &k), simple_block(1, 20, &inter(false)), simple_block(1, 33, &inter(true)), simple_block(1, 67, &inter(true))],
+            &[
+                simple_block(1, 0, &k),
+                simple_block(1, 20, &inter(false)),
+                simple_block(1, 33, &inter(true)),
+                simple_block(1, 67, &inter(true)),
+            ],
         );
         let index = index(&bytes).unwrap();
         assert_eq!(&*index.meta.pts_ms, &[0, 33, 67]);
         assert_eq!(index.meta.duration_ms, 100);
-        assert_eq!(index.packets.iter().map(|p| p.shows).collect::<Vec<_>>(), vec![true, false, true, true]);
-        assert_eq!((index.meta.width, index.meta.height, index.meta.has_alpha), (64, 48, false));
+        assert_eq!(
+            index.packets.iter().map(|p| p.shows).collect::<Vec<_>>(),
+            vec![true, false, true, true]
+        );
+        assert_eq!(
+            (index.meta.width, index.meta.height, index.meta.has_alpha),
+            (64, 48, false)
+        );
     }
 
     #[test]
     fn without_a_duration_the_last_frame_lasts_its_block_its_track_or_the_gap_before_it() {
         let k = keyframe(8, 8);
-        let blocks = |last: Vec<u8>| vec![simple_block(1, 0, &k), simple_block(1, 40, &inter(true)), last];
-        let dur = |video: &[Vec<u8>], blocks: Vec<Vec<u8>>| index(&with(video, &[], &blocks)).unwrap().meta.duration_ms;
-        assert_eq!(dur(&size(8, 8), blocks(simple_block(1, 100, &inter(true)))), 160, "the gap before it");
-        assert_eq!(dur(&size(8, 8), blocks(block_group(1, 100, &inter(true), None, Some(25)))), 125, "its BlockDuration");
-        let track = master(0xAE, &[uint(0xD7, 1), el(0x86, b"V_VP9"), uint(DEFAULT_DURATION, 16_666_667), master(0xE0, &size(8, 8))]);
-        let bytes = file(&[master(TRACKS, &[track]), cluster(0, &blocks(simple_block(1, 100, &inter(true))))]);
-        assert_eq!(index(&bytes).unwrap().meta.duration_ms, 117, "the track's DefaultDuration");
-        assert_eq!(dur(&size(8, 8), vec![simple_block(1, 0, &k)]), FALLBACK_FRAME_MS, "one frame, nothing said");
+        let blocks = |last: Vec<u8>| {
+            vec![
+                simple_block(1, 0, &k),
+                simple_block(1, 40, &inter(true)),
+                last,
+            ]
+        };
+        let dur = |video: &[Vec<u8>], blocks: Vec<Vec<u8>>| {
+            index(&with(video, &[], &blocks)).unwrap().meta.duration_ms
+        };
+        assert_eq!(
+            dur(&size(8, 8), blocks(simple_block(1, 100, &inter(true)))),
+            160,
+            "the gap before it"
+        );
+        assert_eq!(
+            dur(
+                &size(8, 8),
+                blocks(block_group(1, 100, &inter(true), None, Some(25)))
+            ),
+            125,
+            "its BlockDuration"
+        );
+        let track = master(
+            0xAE,
+            &[
+                uint(0xD7, 1),
+                el(0x86, b"V_VP9"),
+                uint(DEFAULT_DURATION, 16_666_667),
+                master(0xE0, &size(8, 8)),
+            ],
+        );
+        let bytes = file(&[
+            master(TRACKS, &[track]),
+            cluster(0, &blocks(simple_block(1, 100, &inter(true)))),
+        ]);
+        assert_eq!(
+            index(&bytes).unwrap().meta.duration_ms,
+            117,
+            "the track's DefaultDuration"
+        );
+        assert_eq!(
+            dur(&size(8, 8), vec![simple_block(1, 0, &k)]),
+            FALLBACK_FRAME_MS,
+            "one frame, nothing said"
+        );
         // An Info Duration short of the last frame is not believed.
-        let short = with(&size(8, 8), &[info(1_000_000, Some(50.0))], &blocks(simple_block(1, 100, &inter(true))));
+        let short = with(
+            &size(8, 8),
+            &[info(1_000_000, Some(50.0))],
+            &blocks(simple_block(1, 100, &inter(true))),
+        );
         assert_eq!(index(&short).unwrap().meta.duration_ms, 160);
     }
 
@@ -191,9 +269,26 @@ mod tests {
     fn times_are_from_the_first_frame_in_any_timestamp_scale() {
         // 10 µs units; the first block at 1000 units (10 ms).
         let k = keyframe(8, 8);
-        let head = master(INFO, &[uint(TIMESTAMP_SCALE, 10_000), el(0x4489, &(1000.0f64 + 5000.0).to_be_bytes())]);
+        let head = master(
+            INFO,
+            &[
+                uint(TIMESTAMP_SCALE, 10_000),
+                el(0x4489, &(1000.0f64 + 5000.0).to_be_bytes()),
+            ],
+        );
         let tracks = master(TRACKS, &[video_track(1, "V_VP9", &size(8, 8))]);
-        let bytes = file(&[head, tracks, cluster(1000, &[simple_block(1, 0, &k), simple_block(1, 1667, &inter(true)), simple_block(1, 3333, &inter(true))])]);
+        let bytes = file(&[
+            head,
+            tracks,
+            cluster(
+                1000,
+                &[
+                    simple_block(1, 0, &k),
+                    simple_block(1, 1667, &inter(true)),
+                    simple_block(1, 3333, &inter(true)),
+                ],
+            ),
+        ]);
         let index = index(&bytes).unwrap();
         assert_eq!(&*index.meta.pts_ms, &[0, 17, 33]);
         assert_eq!(index.meta.duration_ms, 50);
@@ -203,30 +298,68 @@ mod tests {
     fn the_display_size_is_the_meta_size() {
         let k = keyframe(100, 50);
         let size_of = |video: Vec<Vec<u8>>| {
-            let m = index(&with(&video, &[], &[simple_block(1, 0, &k)])).unwrap().meta;
+            let m = index(&with(&video, &[], &[simple_block(1, 0, &k)]))
+                .unwrap()
+                .meta;
             (m.width, m.height)
         };
         assert_eq!(size_of(size(100, 50)), (100, 50));
-        assert_eq!(size_of([size(100, 50), vec![uint(DISPLAY_WIDTH, 200)]].concat()), (200, 50));
-        assert_eq!(size_of([size(100, 50), vec![uint(DISPLAY_WIDTH, 16), uint(DISPLAY_HEIGHT, 9), uint(DISPLAY_UNIT, 3)]].concat()), (89, 50));
-        assert_eq!(size_of([size(100, 50), vec![uint(DISPLAY_WIDTH, 99_999)]].concat()), (100, 50), "not believed");
+        assert_eq!(
+            size_of([size(100, 50), vec![uint(DISPLAY_WIDTH, 200)]].concat()),
+            (200, 50)
+        );
+        assert_eq!(
+            size_of(
+                [
+                    size(100, 50),
+                    vec![
+                        uint(DISPLAY_WIDTH, 16),
+                        uint(DISPLAY_HEIGHT, 9),
+                        uint(DISPLAY_UNIT, 3)
+                    ]
+                ]
+                .concat()
+            ),
+            (89, 50)
+        );
+        assert_eq!(
+            size_of([size(100, 50), vec![uint(DISPLAY_WIDTH, 99_999)]].concat()),
+            (100, 50),
+            "not believed"
+        );
         assert_eq!(size_of(vec![]), (100, 50), "no PixelWidth: the keyframe's");
     }
 
     #[test]
     fn what_libvpx_would_refuse_is_refused_first_with_a_reason() {
-        let err = |video: &[Vec<u8>], blocks: &[Vec<u8>]| index(&with(video, &[], blocks)).err().unwrap();
+        let err =
+            |video: &[Vec<u8>], blocks: &[Vec<u8>]| index(&with(video, &[], blocks)).err().unwrap();
         let k = keyframe(8, 8);
-        assert!(matches!(err(&size(8, 8), &[simple_block(1, 0, &inter(true))]), VideoError::Malformed(w) if w.contains("keyframe")));
-        assert!(matches!(err(&size(8, 8), &[simple_block(1, 0, b"\x00junk")]), VideoError::Malformed(w) if w.contains("not a VP9 frame")));
+        assert!(
+            matches!(err(&size(8, 8), &[simple_block(1, 0, &inter(true))]), VideoError::Malformed(w) if w.contains("keyframe"))
+        );
+        assert!(
+            matches!(err(&size(8, 8), &[simple_block(1, 0, b"\x00junk")]), VideoError::Malformed(w) if w.contains("not a VP9 frame"))
+        );
         let mut p1 = k.clone();
         p1[0] |= 0b0010_0000; // profile_low_bit: profile 1
-        assert!(matches!(err(&size(8, 8), &[simple_block(1, 0, &p1)]), VideoError::Unsupported(w) if w.contains("profile 1")));
-        assert!(matches!(err(&size(8, 8), &[simple_block(1, 0, &keyframe(5000, 8))]), VideoError::Unsupported(w) if w.contains("5000×8")));
-        assert!(matches!(err(&size(5000, 8), &[simple_block(1, 0, &k)]), VideoError::Unsupported(w) if w.contains("5000×8")));
-        assert!(matches!(err(&size(8, 8), &[simple_block(1, 0, &inter(false))]), VideoError::Malformed(_)));
+        assert!(
+            matches!(err(&size(8, 8), &[simple_block(1, 0, &p1)]), VideoError::Unsupported(w) if w.contains("profile 1"))
+        );
+        assert!(
+            matches!(err(&size(8, 8), &[simple_block(1, 0, &keyframe(5000, 8))]), VideoError::Unsupported(w) if w.contains("5000×8"))
+        );
+        assert!(
+            matches!(err(&size(5000, 8), &[simple_block(1, 0, &k)]), VideoError::Unsupported(w) if w.contains("5000×8"))
+        );
+        assert!(matches!(
+            err(&size(8, 8), &[simple_block(1, 0, &inter(false))]),
+            VideoError::Malformed(_)
+        ));
         let alpha_p1 = [size(8, 8), vec![uint(ALPHA_MODE, 1)]].concat();
-        assert!(matches!(err(&alpha_p1, &[block_group(1, 0, &k, Some(&p1), None)]), VideoError::Unsupported(w) if w.contains("alpha video is VP9 profile 1")));
+        assert!(
+            matches!(err(&alpha_p1, &[block_group(1, 0, &k, Some(&p1), None)]), VideoError::Unsupported(w) if w.contains("alpha video is VP9 profile 1"))
+        );
     }
 
     #[test]
@@ -235,11 +368,25 @@ mod tests {
         let alpha_mode = [size(8, 8), vec![uint(ALPHA_MODE, 1)]].concat();
         let has = |video: &[Vec<u8>], blocks: &[Vec<u8>]| {
             let i = index(&with(video, &[], blocks)).unwrap();
-            (i.meta.has_alpha, i.packets.iter().filter(|p| p.alpha.is_some()).count())
+            (
+                i.meta.has_alpha,
+                i.packets.iter().filter(|p| p.alpha.is_some()).count(),
+            )
         };
-        assert_eq!(has(&alpha_mode, &[block_group(1, 0, &k, Some(&k), None)]), (true, 1));
-        assert_eq!(has(&size(8, 8), &[block_group(1, 0, &k, Some(&k), None)]), (false, 0), "no AlphaMode");
-        assert_eq!(has(&alpha_mode, &[simple_block(1, 0, &k)]), (false, 0), "no BlockAdditional");
+        assert_eq!(
+            has(&alpha_mode, &[block_group(1, 0, &k, Some(&k), None)]),
+            (true, 1)
+        );
+        assert_eq!(
+            has(&size(8, 8), &[block_group(1, 0, &k, Some(&k), None)]),
+            (false, 0),
+            "no AlphaMode"
+        );
+        assert_eq!(
+            has(&alpha_mode, &[simple_block(1, 0, &k)]),
+            (false, 0),
+            "no BlockAdditional"
+        );
     }
 
     /// `SK_STICKER_SAMPLES=<dir> cargo test -p sk-sticker samples -- --ignored --nocapture`: indexes
@@ -248,9 +395,15 @@ mod tests {
     #[ignore]
     fn samples() {
         let dir = std::env::var("SK_STICKER_SAMPLES").expect("SK_STICKER_SAMPLES=<dir of .webm>");
-        let mut paths: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
+        let mut paths: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
         paths.sort();
-        for path in paths.iter().filter(|p| p.extension().is_some_and(|e| e == "webm")) {
+        for path in paths
+            .iter()
+            .filter(|p| p.extension().is_some_and(|e| e == "webm"))
+        {
             let bytes = std::fs::read(path).unwrap();
             match index(&bytes) {
                 Ok(i) => {
@@ -277,12 +430,30 @@ mod tests {
     fn the_checked_in_clips_index() {
         let alpha = index(include_bytes!("testdata/alpha.webm")).unwrap();
         let m = &alpha.meta;
-        assert_eq!((m.width, m.height, m.frame_count(), m.duration_ms, m.has_alpha), (41, 29, 48, 1600, true));
+        assert_eq!(
+            (
+                m.width,
+                m.height,
+                m.frame_count(),
+                m.duration_ms,
+                m.has_alpha
+            ),
+            (41, 29, 48, 1600, true)
+        );
         assert_eq!(&m.pts_ms[..4], &[0, 33, 67, 100]);
         assert!(alpha.packets.iter().all(|p| p.alpha.is_some()));
         let sf = index(include_bytes!("testdata/superframe.webm")).unwrap();
         let m = &sf.meta;
-        assert_eq!((m.width, m.height, m.frame_count(), m.duration_ms, m.has_alpha), (72, 56, 48, 1600, false));
+        assert_eq!(
+            (
+                m.width,
+                m.height,
+                m.frame_count(),
+                m.duration_ms,
+                m.has_alpha
+            ),
+            (72, 56, 48, 1600, false)
+        );
         assert!((m.fps() - 30.0).abs() < 0.01);
     }
 }

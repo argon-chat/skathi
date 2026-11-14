@@ -27,8 +27,8 @@ use std::time::{Duration, Instant};
 use futures::channel::mpsc::{unbounded, UnboundedSender};
 use futures::StreamExt;
 use gpui::{
-    div, prelude::*, App, AsyncApp, ClickEvent, Context, FocusHandle, Image, ImageFormat, KeyDownEvent,
-    MouseButton, Role, Subscription, Window, WindowAppearance, WindowHandle,
+    div, prelude::*, App, AsyncApp, ClickEvent, Context, FocusHandle, Image, ImageFormat,
+    KeyDownEvent, MouseButton, Role, Subscription, Window, WindowAppearance, WindowHandle,
 };
 use sk_desktop::dialog::{Ask, Cancellation};
 use sk_desktop::Fail;
@@ -36,8 +36,8 @@ use sk_runtime::redjs::webapi::permissions::Capability;
 
 use crate::content_dialog::{self as card, fonts, hwnd_of, win, Fonts, Theme, WIDTH};
 pub use crate::content_dialog::{
-    access_key_matches, center_in, contrast, glyph_in_accent, parse_label, text_on, Accent, Guard, Label, Rect, Rgb,
-    INPUT_DELAY,
+    access_key_matches, center_in, contrast, glyph_in_accent, parse_label, text_on, Accent, Guard,
+    Label, Rect, Rgb, INPUT_DELAY,
 };
 
 const ACCENT: usize = 0;
@@ -68,7 +68,11 @@ pub struct Spec {
 type Answer = Result<Option<usize>, String>;
 
 enum Msg {
-    Open { id: u64, spec: Spec, reply: mpsc::Sender<Answer> },
+    Open {
+        id: u64,
+        spec: Spec,
+        reply: mpsc::Sender<Answer>,
+    },
     Close(u64),
 }
 
@@ -87,10 +91,17 @@ pub fn install(cx: &mut App) {
     .detach();
 }
 
-pub fn present(capability: Capability, q: &Ask, owner: isize, cancel: &Cancellation) -> Result<Option<usize>, Fail> {
+pub fn present(
+    capability: Capability,
+    q: &Ask,
+    owner: isize,
+    cancel: &Cancellation,
+) -> Result<Option<usize>, Fail> {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let fail = |m: &str| Fail::new("NotSupportedError", m.to_string());
-    let Some(tx) = TX.get() else { return Err(fail("the prompt window is not installed")) };
+    let Some(tx) = TX.get() else {
+        return Err(fail("the prompt window is not installed"));
+    };
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let (reply, answer) = mpsc::channel();
     let spec = Spec {
@@ -103,7 +114,8 @@ pub fn present(capability: Capability, q: &Ask, owner: isize, cancel: &Cancellat
         owner,
         dark: None,
     };
-    tx.unbounded_send(Msg::Open { id, spec, reply }).map_err(|_| fail("the main thread has stopped"))?;
+    tx.unbounded_send(Msg::Open { id, spec, reply })
+        .map_err(|_| fail("the main thread has stopped"))?;
     let mut closing: Option<Instant> = None;
     loop {
         match answer.recv_timeout(Duration::from_millis(50)) {
@@ -176,7 +188,10 @@ struct Prompt {
 
 impl Prompt {
     fn dark(&self, window: &Window) -> bool {
-        self.spec.dark.unwrap_or(matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark))
+        self.spec.dark.unwrap_or(matches!(
+            window.appearance(),
+            WindowAppearance::Dark | WindowAppearance::VibrantDark
+        ))
     }
 
     fn finish(&mut self, answer: Option<usize>, window: &mut Window) {
@@ -223,42 +238,73 @@ impl Prompt {
                 let i = self.focused(window).unwrap_or(self.spec.default);
                 self.press(i, window);
             }
-            _ if m.alt && !m.control && !m.platform && !e.is_held => match card::access_key_hit(&self.labels, k) {
-                Some(i) => {
-                    window.focus(&self.focus[i], cx);
-                    self.press(i, window);
+            _ if m.alt && !m.control && !m.platform && !e.is_held => {
+                match card::access_key_hit(&self.labels, k) {
+                    Some(i) => {
+                        window.focus(&self.focus[i], cx);
+                        self.press(i, window);
+                    }
+                    None => return,
                 }
-                None => return,
-            },
+            }
             _ => return,
         }
         cx.stop_propagation();
         cx.notify();
     }
 
-    fn button(&self, i: usize, t: &Theme, alt: bool, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        card::button(("sk-consent-button", i), &self.labels[i], i == ACCENT, t, alt, &self.focus[i], window, |b| {
-            b.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, _| {
-                    this.pressing = this.guard.allows(Instant::now()).then_some(i);
-                }),
-            )
-            // A mouse click only: the keyboard's Enter and Space are
-            // `key_down`'s, on the key's down stroke and not repeated.
-            .on_click(cx.listener(move |this, e: &ClickEvent, window, _| {
-                if matches!(e, ClickEvent::Mouse(_)) && this.pressing.take() == Some(i) {
-                    this.press(i, window);
-                }
-            }))
-        })
+    fn button(
+        &self,
+        i: usize,
+        t: &Theme,
+        alt: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        card::button(
+            ("sk-consent-button", i),
+            &self.labels[i],
+            i == ACCENT,
+            t,
+            alt,
+            &self.focus[i],
+            window,
+            |b| {
+                b.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, _| {
+                        this.pressing = this.guard.allows(Instant::now()).then_some(i);
+                    }),
+                )
+                // A mouse click only: the keyboard's Enter and Space are
+                // `key_down`'s, on the key's down stroke and not repeated.
+                .on_click(cx.listener(move |this, e: &ClickEvent, window, _| {
+                    if matches!(e, ClickEvent::Mouse(_)) && this.pressing.take() == Some(i) {
+                        this.press(i, window);
+                    }
+                }))
+            },
+        )
     }
 
     fn body(&self, t: &Theme, f: &Fonts) -> impl IntoElement {
-        card::body("sk-consent-body", &self.spec.app, card::app_icon(&self.icon, t, f), t, f)
-            .child(card::glyph_badge(glyph(self.spec.capability), t.tint, t.glyph, f))
-            .child(card::title(self.spec.instruction.clone(), f))
-            .when(!self.spec.content.is_empty(), |d| d.child(card::content(self.spec.content.clone(), t)))
+        card::body(
+            "sk-consent-body",
+            &self.spec.app,
+            card::app_icon(&self.icon, t, f),
+            t,
+            f,
+        )
+        .child(card::glyph_badge(
+            glyph(self.spec.capability),
+            t.tint,
+            t.glyph,
+            f,
+        ))
+        .child(card::title(self.spec.instruction.clone(), f))
+        .when(!self.spec.content.is_empty(), |d| {
+            d.child(card::content(self.spec.content.clone(), t))
+        })
     }
 }
 
@@ -268,7 +314,9 @@ impl Render for Prompt {
         let t = Theme::new(dark, self.acrylic, self.accent);
         let f = fonts(cx);
         let alt = window.modifiers().alt;
-        let buttons: Vec<_> = (0..self.labels.len()).map(|i| self.button(i, &t, alt, window, cx)).collect();
+        let buttons: Vec<_> = (0..self.labels.len())
+            .map(|i| self.button(i, &t, alt, window, cx))
+            .collect();
         div()
             .id("sk-consent")
             .role(Role::Dialog)
@@ -283,7 +331,11 @@ impl Render for Prompt {
             .font_family(f.text)
             .text_color(t.text)
             .bg(t.footer)
-            .child(card::card(self.height.clone(), self.body(&t, f), card::footer(&t, buttons)))
+            .child(card::card(
+                self.height.clone(),
+                self.body(&t, f),
+                card::footer(&t, buttons),
+            ))
     }
 }
 
@@ -314,13 +366,15 @@ fn open(id: u64, spec: Spec, done: Done, cx: &mut App) -> anyhow::Result<WindowH
         move |window, cx| {
             cx.new(|cx| {
                 let labels: Vec<Label> = spec.buttons.iter().map(|b| parse_label(b)).collect();
-                let focus: Vec<FocusHandle> =
-                    (0..labels.len()).map(|i| cx.focus_handle().tab_index(i as isize).tab_stop(true)).collect();
+                let focus: Vec<FocusHandle> = (0..labels.len())
+                    .map(|i| cx.focus_handle().tab_index(i as isize).tab_stop(true))
+                    .collect();
                 let default = spec.default.min(labels.len() - 1);
                 window.focus(&focus[default], cx);
                 let hwnd = hwnd_of(window).unwrap_or(0);
-                let icon = win::icon_png(owner, hwnd, (16.0 * window.scale_factor()).round() as i32)
-                    .map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png)));
+                let icon =
+                    win::icon_png(owner, hwnd, (16.0 * window.scale_factor()).round() as i32)
+                        .map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png)));
                 let subs = vec![
                     cx.observe_window_appearance(window, |_, _, cx| cx.notify()),
                     cx.observe_window_activation(window, |p: &mut Prompt, window, cx| {
@@ -368,13 +422,22 @@ fn open(id: u64, spec: Spec, done: Done, cx: &mut App) -> anyhow::Result<WindowH
         anyhow::bail!("the prompt window has no HWND");
     }
     card::prepare(hwnd, owner, handle.update(cx, |p, _, _| p.spec.dark)?);
-    cx.spawn(async move |cx: &mut AsyncApp| reveal(handle, hwnd, owner, height, cx).await).detach();
+    cx.spawn(async move |cx: &mut AsyncApp| reveal(handle, hwnd, owner, height, cx).await)
+        .detach();
     Ok(handle)
 }
 
-async fn reveal(handle: WindowHandle<Prompt>, hwnd: isize, owner: isize, height: Rc<Cell<f32>>, cx: &mut AsyncApp) {
+async fn reveal(
+    handle: WindowHandle<Prompt>,
+    hwnd: isize,
+    owner: isize,
+    height: Rc<Cell<f32>>,
+    cx: &mut AsyncApp,
+) {
     card::fit(handle.into(), hwnd, owner, WIDTH, &height, cx).await;
-    let Ok(live) = handle.update(cx, |p, _, _| p.done.is_some()) else { return };
+    let Ok(live) = handle.update(cx, |p, _, _| p.done.is_some()) else {
+        return;
+    };
     if !live {
         return;
     }
@@ -419,15 +482,26 @@ pub fn preview(p: Preview) {
         let _ = card::PREVIEW_ICON.set(exe);
     }
     gpui_platform::application().run(move |cx: &mut App| {
-        let lang = if p.lang.is_empty() { sk_locale::language() } else { p.lang.clone() };
+        let lang = if p.lang.is_empty() {
+            sk_locale::language()
+        } else {
+            p.lang.clone()
+        };
         let q = sk_permissions::consent::question(p.capability, &p.app, &lang);
-        let owner = if p.owner { card::preview_owner(&p.app, cx) } else { 0 };
+        let owner = if p.owner {
+            card::preview_owner(&p.app, cx)
+        } else {
+            0
+        };
         if p.through_desktop {
             install(cx);
             PREVIEW_OWNER.store(owner, Ordering::Relaxed);
             sk_desktop::dialog::set_owner_resolver(|| {
                 let hwnd = PREVIEW_OWNER.load(Ordering::Relaxed);
-                (hwnd != 0).then_some(sk_desktop::dialog::Owner { key: PREVIEW_KEY, hwnd })
+                (hwnd != 0).then_some(sk_desktop::dialog::Owner {
+                    key: PREVIEW_KEY,
+                    hwnd,
+                })
             });
             let capability = p.capability;
             let waits_for_close = p.close_owner_after.is_some();
@@ -454,9 +528,14 @@ pub fn preview(p: Preview) {
                     let waits = sk_desktop::dialog::owner_closing(PREVIEW_KEY);
                     let started = Instant::now();
                     while !sk_desktop::dialog::is_idle(PREVIEW_KEY) {
-                        cx.background_executor().timer(Duration::from_millis(16)).await;
+                        cx.background_executor()
+                            .timer(Duration::from_millis(16))
+                            .await;
                     }
-                    println!("owner closing: waited={waits} idle after {} ms", started.elapsed().as_millis());
+                    println!(
+                        "owner closing: waited={waits} idle after {} ms",
+                        started.elapsed().as_millis()
+                    );
                     cx.update(|cx| cx.quit());
                 })
                 .detach();
@@ -507,7 +586,10 @@ mod tests {
     fn an_access_key_matches_the_letter_or_the_key_it_is_on() {
         assert!(access_key_matches('a', "a", Some("a"), Some('a')));
         assert!(access_key_matches('a', "A", None, None));
-        assert!(!access_key_matches('a', "b", Some("b"), Some('a')), "the key must be the access key's");
+        assert!(
+            !access_key_matches('a', "b", Some("b"), Some('a')),
+            "the key must be the access key's"
+        );
         // A Russian layout: `р` is on the H key. gpui names it either way.
         assert!(access_key_matches('р', "h", None, Some('h')));
         assert!(access_key_matches('р', "р", None, Some('h')));
@@ -552,9 +634,18 @@ mod tests {
     fn the_prompt_is_centred_on_its_owner_and_kept_on_its_monitor() {
         let work = [0, 0, 1920, 1040];
         assert_eq!(center_in([100, 100, 1100, 700], work, 440, 300), (380, 250));
-        assert_eq!(center_in([1700, 100, 2700, 700], work, 440, 300), (1480, 250));
-        assert_eq!(center_in([-1500, 0, -500, 600], [-1920, 0, 0, 1040], 440, 300), (-1220, 150));
-        assert_eq!(center_in([0, 0, 100, 100], [0, 0, 400, 200], 440, 300), (0, 0));
+        assert_eq!(
+            center_in([1700, 100, 2700, 700], work, 440, 300),
+            (1480, 250)
+        );
+        assert_eq!(
+            center_in([-1500, 0, -500, 600], [-1920, 0, 0, 1040], 440, 300),
+            (-1220, 150)
+        );
+        assert_eq!(
+            center_in([0, 0, 100, 100], [0, 0, 400, 200], 440, 300),
+            (0, 0)
+        );
     }
 
     #[test]
@@ -562,7 +653,10 @@ mod tests {
         assert_eq!(glyph(Capability::Microphone), '\u{E720}');
         assert_eq!(glyph(Capability::Camera), '\u{E722}');
         for &c in Capability::ALL {
-            assert!(('\u{E000}'..='\u{F8FF}').contains(&glyph(c)), "a private-use icon glyph");
+            assert!(
+                ('\u{E000}'..='\u{F8FF}').contains(&glyph(c)),
+                "a private-use icon glyph"
+            );
         }
     }
 }

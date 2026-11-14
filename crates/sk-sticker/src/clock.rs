@@ -40,8 +40,14 @@ fn ceil_us(n: u64, fps: f64) -> Us {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Timeline {
-    Uniform { frames: u32, fps: f32 },
-    Pts { pts_ms: Arc<[u32]>, duration_ms: u32 },
+    Uniform {
+        frames: u32,
+        fps: f32,
+    },
+    Pts {
+        pts_ms: Arc<[u32]>,
+        duration_ms: u32,
+    },
 }
 
 impl Timeline {
@@ -55,7 +61,9 @@ impl Timeline {
     pub fn fps(&self) -> f32 {
         let fps = match self {
             Timeline::Uniform { fps, .. } => *fps,
-            Timeline::Pts { duration_ms, .. } => self.frames() as f32 * 1000.0 / (*duration_ms).max(1) as f32,
+            Timeline::Pts { duration_ms, .. } => {
+                self.frames() as f32 * 1000.0 / (*duration_ms).max(1) as f32
+            }
         };
         if fps.is_finite() && fps > 0.0 {
             fps
@@ -66,7 +74,9 @@ impl Timeline {
 
     pub fn duration(&self) -> Us {
         let us = match self {
-            Timeline::Uniform { frames, .. } => (*frames).max(1) as f64 * SECOND as f64 / self.fps() as f64,
+            Timeline::Uniform { frames, .. } => {
+                (*frames).max(1) as f64 * SECOND as f64 / self.fps() as f64
+            }
             Timeline::Pts { duration_ms, .. } => *duration_ms as f64 * 1000.0,
         };
         (us.round() as Us).max(1)
@@ -98,8 +108,14 @@ impl Pace {
             fps = fps.min(cap as f64);
         }
         let duration = timeline.duration();
-        let slots = ((duration as f64 * fps / SECOND as f64) - 1e-6).ceil().max(1.0) as u32;
-        Pace { fps, slots, duration }
+        let slots = ((duration as f64 * fps / SECOND as f64) - 1e-6)
+            .ceil()
+            .max(1.0) as u32;
+        Pace {
+            fps,
+            slots,
+            duration,
+        }
     }
 
     pub fn slots(&self) -> u32 {
@@ -146,11 +162,17 @@ pub struct Clock {
 
 impl Clock {
     pub fn new(now: Us) -> Clock {
-        Clock { origin: grid_ceil(now), paused_at: None }
+        Clock {
+            origin: grid_ceil(now),
+            paused_at: None,
+        }
     }
 
     pub fn stopped(now: Us) -> Clock {
-        Clock { origin: now, paused_at: Some(now) }
+        Clock {
+            origin: now,
+            paused_at: Some(now),
+        }
     }
 
     pub fn elapsed(&self, now: Us) -> Us {
@@ -189,16 +211,29 @@ mod tests {
         assert_eq!(grid_ceil(16_667), 16_667);
         assert_eq!(grid_ceil(16_668), 33_334);
         assert_eq!(grid_ceil(SECOND), SECOND);
-        let thirty = Pace::new(&Timeline::Uniform { frames: 90, fps: 30.0 }, None);
+        let thirty = Pace::new(
+            &Timeline::Uniform {
+                frames: 90,
+                fps: 30.0,
+            },
+            None,
+        );
         for k in 0..90 {
             let start = thirty.slot_start(k);
-            assert_eq!(grid_ceil(start), start, "a 30 fps slot starts on a line: {k}");
+            assert_eq!(
+                grid_ceil(start),
+                start,
+                "a 30 fps slot starts on a line: {k}"
+            );
         }
     }
 
     #[test]
     fn a_uniform_timeline_plays_whole_frames() {
-        let t = Timeline::Uniform { frames: 180, fps: 60.0 };
+        let t = Timeline::Uniform {
+            frames: 180,
+            fps: 60.0,
+        };
         assert_eq!(t.duration(), 3 * SECOND);
         assert_eq!(t.frame_at(0), 0);
         assert_eq!(t.frame_at(16_666), 0);
@@ -208,7 +243,10 @@ mod tests {
 
     #[test]
     fn a_pts_timeline_plays_the_frame_due() {
-        let t = Timeline::Pts { pts_ms: Arc::from(&[0u32, 40, 80][..]), duration_ms: 120 };
+        let t = Timeline::Pts {
+            pts_ms: Arc::from(&[0u32, 40, 80][..]),
+            duration_ms: 120,
+        };
         assert_eq!(t.frames(), 3);
         assert_eq!(t.fps(), 25.0);
         assert_eq!(t.frame_at(39_999), 0);
@@ -218,7 +256,10 @@ mod tests {
 
     #[test]
     fn a_capped_pace_shows_every_other_frame_of_a_60_fps_file() {
-        let t = Timeline::Uniform { frames: 180, fps: 60.0 };
+        let t = Timeline::Uniform {
+            frames: 180,
+            fps: 60.0,
+        };
         let p = Pace::new(&t, Some(30.0));
         assert_eq!(p.slots(), 90);
         assert_eq!(p.frame(&t, 0), 0);
@@ -226,16 +267,27 @@ mod tests {
         assert_eq!(p.frame(&t, 89), 178);
         let full = Pace::new(&t, None);
         assert_eq!(full.slots(), 180);
-        assert_eq!(Pace::new(&t, Some(120.0)), full, "a cap above the file's rate changes nothing");
+        assert_eq!(
+            Pace::new(&t, Some(120.0)),
+            full,
+            "a cap above the file's rate changes nothing"
+        );
     }
 
     #[test]
     fn a_pace_loops_and_says_when_the_next_slot_starts() {
-        let t = Timeline::Uniform { frames: 4, fps: 10.0 };
+        let t = Timeline::Uniform {
+            frames: 4,
+            fps: 10.0,
+        };
         let p = Pace::new(&t, None);
         assert_eq!(p.at(0), (0, 100_000));
         assert_eq!(p.at(150_000), (1, 200_000));
-        assert_eq!(p.at(399_999), (3, 400_000), "the last slot ends with the loop");
+        assert_eq!(
+            p.at(399_999),
+            (3, 400_000),
+            "the last slot ends with the loop"
+        );
         assert_eq!(p.at(400_000), (0, 500_000), "a loop later");
     }
 
@@ -250,7 +302,10 @@ mod tests {
         c.resume(10 * SECOND);
         assert!(c.is_running());
         let e = c.elapsed(10 * SECOND + 20_000);
-        assert!(e <= 120_000 && e + 16_667 >= 120_000, "picks up where it stopped, within a grid step: {e}");
+        assert!(
+            e <= 120_000 && e + 16_667 >= 120_000,
+            "picks up where it stopped, within a grid step: {e}"
+        );
         assert_eq!(grid_ceil(c.when(0)), c.when(0), "the origin is on the grid");
         let s = Clock::stopped(7);
         assert_eq!(s.elapsed(SECOND), 0);

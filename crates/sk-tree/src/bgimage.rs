@@ -64,7 +64,12 @@ fn paint_stack(
                     gpui::BorderStyle::default(),
                 ));
             }
-            PaintLayer::Image { url, size: bg_size, position, repeat } => {
+            PaintLayer::Image {
+                url,
+                size: bg_size,
+                position,
+                repeat,
+            } => {
                 let Some(source) = crate::img::background_source(id, url) else {
                     continue; // the resolver has said why
                 };
@@ -86,7 +91,11 @@ fn paint_stack(
                     Load::Ready(image) => image,
                 };
                 let raw = image.natural_size(0);
-                let scale = if is_svg(&source, url) { gpui::SMOOTH_SVG_SCALE_FACTOR } else { 1.0 };
+                let scale = if is_svg(&source, url) {
+                    gpui::SMOOTH_SVG_SCALE_FACTOR
+                } else {
+                    1.0
+                };
                 let natural = (raw.width.0 as f32 / scale, raw.height.0 as f32 / scale);
                 let natural = (natural.0 > 0.0 && natural.1 > 0.0).then_some(natural);
                 let frame = (
@@ -110,7 +119,10 @@ fn paint_stack(
                     }
                 };
                 for (x, y, w, h) in tiles {
-                    let tile = Bounds { origin: point(px(x), px(y)), size: size(px(w), px(h)) };
+                    let tile = Bounds {
+                        origin: point(px(x), px(y)),
+                        size: size(px(w), px(h)),
+                    };
                     let corners = corners_for(area, tile, radii);
                     let _ = window.paint_image(area, tile, corners, image.clone(), 0, false);
                 }
@@ -127,11 +139,13 @@ enum Load {
 
 fn load(source: &ImageSource, window: &mut Window, cx: &mut App) -> Load {
     match source {
-        ImageSource::Resource(resource) => match window.use_asset::<gpui::ImgResourceLoader>(resource, cx) {
-            None => Load::Pending,
-            Some(Ok(image)) => Load::Ready(image),
-            Some(Err(_)) => Load::Failed,
-        },
+        ImageSource::Resource(resource) => {
+            match window.use_asset::<gpui::ImgResourceLoader>(resource, cx) {
+                None => Load::Pending,
+                Some(Ok(image)) => Load::Ready(image),
+                Some(Err(_)) => Load::Failed,
+            }
+        }
         ImageSource::Image(image) => match image.clone().use_render_image(window, cx) {
             Some(image) => Load::Ready(image),
             None => Load::Pending,
@@ -163,7 +177,11 @@ fn head(url: &str) -> String {
 /// The box's corner radii where the visible part of `tile` reaches a corner of the box, and square
 /// corners elsewhere: gpui rounds the corners of each sprite it paints, and only the ones on the
 /// box's own corners are round.
-fn corners_for(area: Bounds<Pixels>, tile: Bounds<Pixels>, radii: Corners<Pixels>) -> Corners<Pixels> {
+fn corners_for(
+    area: Bounds<Pixels>,
+    tile: Bounds<Pixels>,
+    radii: Corners<Pixels>,
+) -> Corners<Pixels> {
     let visible = area.intersect(&tile);
     let near = |a: Pixels, b: Pixels| (f32::from(a) - f32::from(b)).abs() < 0.5;
     let left = near(visible.left(), area.left());
@@ -172,9 +190,21 @@ fn corners_for(area: Bounds<Pixels>, tile: Bounds<Pixels>, radii: Corners<Pixels
     let bottom = near(visible.bottom(), area.bottom());
     Corners {
         top_left: if top && left { radii.top_left } else { px(0.) },
-        top_right: if top && right { radii.top_right } else { px(0.) },
-        bottom_right: if bottom && right { radii.bottom_right } else { px(0.) },
-        bottom_left: if bottom && left { radii.bottom_left } else { px(0.) },
+        top_right: if top && right {
+            radii.top_right
+        } else {
+            px(0.)
+        },
+        bottom_right: if bottom && right {
+            radii.bottom_right
+        } else {
+            px(0.)
+        },
+        bottom_left: if bottom && left {
+            radii.bottom_left
+        } else {
+            px(0.)
+        },
     }
 }
 
@@ -227,7 +257,11 @@ fn tile_size(area: (f32, f32), natural: Option<(f32, f32)>, bg_size: BackgroundS
         BackgroundSize::Cover | BackgroundSize::Contain => match natural {
             Some((iw, ih)) => {
                 let (sx, sy) = (aw / iw, ah / ih);
-                let s = if bg_size == BackgroundSize::Cover { sx.max(sy) } else { sx.min(sy) };
+                let s = if bg_size == BackgroundSize::Cover {
+                    sx.max(sy)
+                } else {
+                    sx.min(sy)
+                };
                 (iw * s, ih * s)
             }
             None => (aw, ah),
@@ -264,7 +298,10 @@ mod tests {
         let t = tiles((0.0, 0.0, 22.0, 22.0), Some((iw, ih)), size, position, NO).unwrap();
         assert_eq!(t.len(), 1);
         let (x, y, w, h) = t[0];
-        assert!((w - 660.0).abs() < 0.01 && (h - 132.0).abs() < 0.01, "{t:?}");
+        assert!(
+            (w - 660.0).abs() < 0.01 && (h - 132.0).abs() < 0.01,
+            "{t:?}"
+        );
         assert!((x + 19.0 * 22.0).abs() < 0.01, "{x}");
         assert!((y + 3.0 * 22.0).abs() < 0.01, "{y}");
     }
@@ -272,17 +309,37 @@ mod tests {
     #[test]
     fn a_pixel_sprite_keeps_the_one_tile_that_shows() {
         let size = BackgroundSize::Explicit(Some(P(660.0)), Some(P(132.0)));
-        let t = tiles((10.0, 20.0, 22.0, 22.0), Some((2040.0, 408.0)), size, (P(-418.0), P(-66.0)), YES)
-            .unwrap();
+        let t = tiles(
+            (10.0, 20.0, 22.0, 22.0),
+            Some((2040.0, 408.0)),
+            size,
+            (P(-418.0), P(-66.0)),
+            YES,
+        )
+        .unwrap();
         assert_eq!(t, vec![(10.0 - 418.0, 20.0 - 66.0, 660.0, 132.0)]);
     }
 
     #[test]
     fn cover_and_contain_scale_to_the_box() {
         let area = (0.0, 0.0, 300.0, 100.0);
-        let cover = tiles(area, Some((100.0, 100.0)), BackgroundSize::Cover, (F(0.5), F(0.5)), NO).unwrap();
+        let cover = tiles(
+            area,
+            Some((100.0, 100.0)),
+            BackgroundSize::Cover,
+            (F(0.5), F(0.5)),
+            NO,
+        )
+        .unwrap();
         assert_eq!(cover, vec![(0.0, -100.0, 300.0, 300.0)]);
-        let contain = tiles(area, Some((100.0, 100.0)), BackgroundSize::Contain, (F(0.5), F(0.5)), NO).unwrap();
+        let contain = tiles(
+            area,
+            Some((100.0, 100.0)),
+            BackgroundSize::Contain,
+            (F(0.5), F(0.5)),
+            NO,
+        )
+        .unwrap();
         assert_eq!(contain, vec![(100.0, 0.0, 100.0, 100.0)]);
     }
 
@@ -290,15 +347,28 @@ mod tests {
     fn auto_takes_the_natural_size_and_one_auto_axis_keeps_the_ratio() {
         let area = (0.0, 0.0, 100.0, 100.0);
         let auto = BackgroundSize::Explicit(None, None);
-        assert_eq!(tiles(area, Some((40.0, 20.0)), auto, (F(0.0), F(0.0)), NO).unwrap(), vec![(0.0, 0.0, 40.0, 20.0)]);
+        assert_eq!(
+            tiles(area, Some((40.0, 20.0)), auto, (F(0.0), F(0.0)), NO).unwrap(),
+            vec![(0.0, 0.0, 40.0, 20.0)]
+        );
         let half = BackgroundSize::Explicit(Some(F(0.5)), None);
-        assert_eq!(tiles(area, Some((40.0, 20.0)), half, (F(0.0), F(0.0)), NO).unwrap(), vec![(0.0, 0.0, 50.0, 25.0)]);
+        assert_eq!(
+            tiles(area, Some((40.0, 20.0)), half, (F(0.0), F(0.0)), NO).unwrap(),
+            vec![(0.0, 0.0, 50.0, 25.0)]
+        );
     }
 
     #[test]
     fn a_repeat_covers_the_box_from_the_positioned_tile() {
         let size = BackgroundSize::Explicit(Some(P(40.0)), Some(P(40.0)));
-        let t = tiles((0.0, 0.0, 100.0, 40.0), None, size, (P(10.0), P(0.0)), (true, false)).unwrap();
+        let t = tiles(
+            (0.0, 0.0, 100.0, 40.0),
+            None,
+            size,
+            (P(10.0), P(0.0)),
+            (true, false),
+        )
+        .unwrap();
         let xs: Vec<f32> = t.iter().map(|t| t.0).collect();
         assert_eq!(xs, vec![-30.0, 10.0, 50.0, 90.0]);
         assert!(t.iter().all(|t| t.1 == 0.0));
@@ -307,16 +377,42 @@ mod tests {
     #[test]
     fn a_layer_that_needs_too_many_tiles_is_refused() {
         let size = BackgroundSize::Explicit(Some(P(1.0)), Some(P(1.0)));
-        assert_eq!(tiles((0.0, 0.0, 1000.0, 1000.0), None, size, (F(0.0), F(0.0)), YES), Err(1_000_000));
+        assert_eq!(
+            tiles(
+                (0.0, 0.0, 1000.0, 1000.0),
+                None,
+                size,
+                (F(0.0), F(0.0)),
+                YES
+            ),
+            Err(1_000_000)
+        );
     }
 
     #[test]
     fn only_the_tiles_on_the_box_corners_are_rounded() {
-        let area = Bounds { origin: point(px(0.), px(0.)), size: size(px(100.), px(100.)) };
+        let area = Bounds {
+            origin: point(px(0.), px(0.)),
+            size: size(px(100.), px(100.)),
+        };
         let r = Corners::all(px(8.));
-        let whole = corners_for(area, Bounds { origin: point(px(-10.), px(-10.)), size: size(px(200.), px(200.)) }, r);
+        let whole = corners_for(
+            area,
+            Bounds {
+                origin: point(px(-10.), px(-10.)),
+                size: size(px(200.), px(200.)),
+            },
+            r,
+        );
         assert_eq!(whole, r);
-        let top_left = corners_for(area, Bounds { origin: point(px(0.), px(0.)), size: size(px(50.), px(50.)) }, r);
+        let top_left = corners_for(
+            area,
+            Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(50.), px(50.)),
+            },
+            r,
+        );
         assert_eq!(top_left.top_left, px(8.));
         assert_eq!(top_left.bottom_right, px(0.));
         assert_eq!(top_left.top_right, px(0.));

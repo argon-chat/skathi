@@ -29,11 +29,17 @@ pub struct SecretService {
 
 impl SecretService {
     pub const fn new() -> SecretService {
-        SecretService { key: OnceLock::new() }
+        SecretService {
+            key: OnceLock::new(),
+        }
     }
 
     fn key(&self) -> Result<&MasterKey, String> {
-        self.key.get_or_init(|| load(&account())).as_ref().map(|(k, _)| k).map_err(String::clone)
+        self.key
+            .get_or_init(|| load(&account()))
+            .as_ref()
+            .map(|(k, _)| k)
+            .map_err(String::clone)
     }
 }
 
@@ -81,7 +87,9 @@ fn load(account: &str) -> Result<(MasterKey, &'static str), String> {
                 (bytes, origin, KEYRING)
             }
             Err(e) if absent(&e) => {
-                eprintln!("[storage] no Secret Service on this session ({e}); the storage key is a file");
+                eprintln!(
+                    "[storage] no Secret Service on this session ({e}); the storage key is a file"
+                );
                 let (bytes, origin) = from_file(&file)?;
                 (bytes, origin, KEY_FILE)
             }
@@ -111,7 +119,14 @@ fn fresh() -> Result<[u8; KEY_LEN], String> {
 
 fn absent(e: &DbusError) -> bool {
     let what = format!("{e:?}");
-    ["ServiceUnknown", "NameHasNoOwner", "Address(", "InputOutput("].iter().any(|s| what.contains(s))
+    [
+        "ServiceUnknown",
+        "NameHasNoOwner",
+        "Address(",
+        "InputOutput(",
+    ]
+    .iter()
+    .any(|s| what.contains(s))
 }
 
 enum KeyringError {
@@ -139,7 +154,10 @@ fn from_keyring(service: &Service, account: &str) -> Result<([u8; KEY_LEN], Orig
                 .await
                 .map_err(KeyringError::Failed)?;
             // Another process may have added one first; the oldest is the key.
-            match oldest_item(&collection, &attributes).await.map_err(KeyringError::Failed)? {
+            match oldest_item(&collection, &attributes)
+                .await
+                .map_err(KeyringError::Failed)?
+            {
                 Some(winner) if winner.path() != ours.path() => {
                     let _ = ours.delete(None).await;
                     Err(KeyringError::Raced)
@@ -158,7 +176,10 @@ fn from_keyring(service: &Service, account: &str) -> Result<([u8; KEY_LEN], Orig
     )
 }
 
-async fn oldest_item(collection: &Collection, attributes: &[(&str, &str); 2]) -> Result<Option<oo7::dbus::Item>, DbusError> {
+async fn oldest_item(
+    collection: &Collection,
+    attributes: &[(&str, &str); 2],
+) -> Result<Option<oo7::dbus::Item>, DbusError> {
     let mut best: Option<(std::time::Duration, oo7::dbus::Item)> = None;
     for item in collection.search_items(attributes).await? {
         let created = item.created().await?;
@@ -169,7 +190,10 @@ async fn oldest_item(collection: &Collection, attributes: &[(&str, &str); 2]) ->
     Ok(best.map(|(_, item)| item))
 }
 
-async fn oldest(collection: &Collection, attributes: &[(&str, &str); 2]) -> Result<Option<Vec<u8>>, DbusError> {
+async fn oldest(
+    collection: &Collection,
+    attributes: &[(&str, &str); 2],
+) -> Result<Option<Vec<u8>>, DbusError> {
     let Some(item) = oldest_item(collection, attributes).await? else {
         return Ok(None);
     };
@@ -181,9 +205,13 @@ async fn oldest(collection: &Collection, attributes: &[(&str, &str); 2]) -> Resu
 
 fn describe(op: &str, e: &KeyringError) -> String {
     match e {
-        KeyringError::Raced => format!("Secret Service: could not {op} the storage key: another process added one"),
+        KeyringError::Raced => {
+            format!("Secret Service: could not {op} the storage key: another process added one")
+        }
         KeyringError::Failed(DbusError::Dismissed) => {
-            format!("Secret Service: could not {op} the storage key: the unlock prompt was dismissed")
+            format!(
+                "Secret Service: could not {op} the storage key: the unlock prompt was dismissed"
+            )
         }
         KeyringError::Failed(e) => format!("Secret Service: could not {op} the storage key: {e}"),
     }
@@ -196,7 +224,16 @@ fn key_file(account: &str) -> Result<PathBuf, String> {
         .filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
         .ok_or("neither XDG_DATA_HOME nor HOME is set")?;
-    let name: String = account.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' }).collect();
+    let name: String = account
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "-_.".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     Ok(data.join("vue-native/keys").join(format!("{name}.key")))
 }
 
@@ -213,9 +250,16 @@ fn from_file(path: &PathBuf) -> Result<([u8; KEY_LEN], Origin), String> {
     // create_new: add-only, so a racing process gets AlreadyExists and re-reads.
     let add = |key: &[u8; KEY_LEN]| {
         if let Some(dir) = path.parent() {
-            fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(dir)?;
         }
-        let mut f = OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?;
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)?;
         f.write_all(key)?;
         f.sync_all()
     };
@@ -225,7 +269,12 @@ fn from_file(path: &PathBuf) -> Result<([u8; KEY_LEN], Origin), String> {
         add,
         fresh,
         |e: &std::io::Error| e.kind() == ErrorKind::AlreadyExists,
-        |op, e| format!("Key file: could not {op} the storage key at {}: {e}", path.display()),
+        |op, e| {
+            format!(
+                "Key file: could not {op} the storage key at {}: {e}",
+                path.display()
+            )
+        },
     )
 }
 
@@ -240,8 +289,18 @@ mod tests {
         let path = dir.join("keys/exe_test.key");
         let (a, origin) = from_file(&path).unwrap();
         assert_eq!(origin, Origin::Created);
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
-        assert_eq!(fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
         let (b, origin) = from_file(&path).unwrap();
         assert_eq!((a, origin), (b, Origin::Found));
         let _ = fs::remove_dir_all(dir);

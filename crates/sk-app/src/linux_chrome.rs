@@ -7,8 +7,8 @@
 //! areas, so the shell does what the OS would.
 
 use gpui::{
-    div, px, CursorStyle, Decorations, Div, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Point,
-    ResizeEdge, Styled, Window, WindowControlArea,
+    div, px, CursorStyle, Decorations, Div, InteractiveElement, IntoElement, MouseButton,
+    ParentElement, Pixels, Point, ResizeEdge, Styled, Window, WindowControlArea,
 };
 
 use crate::window;
@@ -17,7 +17,9 @@ const EDGE: f32 = 6.;
 
 fn resizable(window: &Window) -> bool {
     match window.window_decorations() {
-        Decorations::Client { tiling } => !window.is_maximized() && !window.is_fullscreen() && !tiling.is_tiled(),
+        Decorations::Client { tiling } => {
+            !window.is_maximized() && !window.is_fullscreen() && !tiling.is_tiled()
+        }
         Decorations::Server => false,
     }
 }
@@ -25,7 +27,10 @@ fn resizable(window: &Window) -> bool {
 fn on_edge(window: &Window, position: Point<Pixels>) -> bool {
     let size = window.viewport_size();
     let edge = px(EDGE);
-    position.x < edge || position.y < edge || position.x > size.width - edge || position.y > size.height - edge
+    position.x < edge
+        || position.y < edge
+        || position.x > size.width - edge
+        || position.y > size.height - edge
 }
 
 pub(crate) fn wrap(shell: Div, window: &Window) -> Div {
@@ -74,7 +79,10 @@ pub(crate) fn wrap(shell: Div, window: &Window) -> Div {
 }
 
 fn edge(edge: ResizeEdge, cursor: CursorStyle) -> impl IntoElement {
-    let strip = div().id(("resize-edge", edge as usize)).absolute().cursor(cursor);
+    let strip = div()
+        .id(("resize-edge", edge as usize))
+        .absolute()
+        .cursor(cursor);
     let strip = match edge {
         ResizeEdge::Top => strip.top_0().left_0().right_0().h(px(EDGE)),
         ResizeEdge::Bottom => strip.bottom_0().left_0().right_0().h(px(EDGE)),

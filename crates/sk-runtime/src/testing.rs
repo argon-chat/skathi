@@ -39,7 +39,10 @@ where
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .send(job)
         .expect("the JS test thread has exited");
-    match result.recv().expect("the JS test thread exited while running a test body") {
+    match result
+        .recv()
+        .expect("the JS test thread exited while running a test body")
+    {
         Ok(value) => value,
         Err(payload) => panic::resume_unwind(payload),
     }

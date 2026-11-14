@@ -27,12 +27,20 @@ pub struct Debounce {
 
 impl Debounce {
     pub fn new(announced: bool) -> Self {
-        Debounce { announced, pending: announced, deadline: None }
+        Debounce {
+            announced,
+            pending: announced,
+            deadline: None,
+        }
     }
 
     pub fn hint(&mut self, online: bool, now: Instant) {
         self.pending = online;
-        let delay = if self.announced { OFFLINE_DELAY } else { ONLINE_DELAY };
+        let delay = if self.announced {
+            OFFLINE_DELAY
+        } else {
+            ONLINE_DELAY
+        };
         self.deadline = Some(now + delay);
     }
 
@@ -79,7 +87,11 @@ fn run() {
             continue;
         }
         guard = match guard.as_ref().and_then(Debounce::deadline) {
-            Some(d) => WAKE.wait_timeout(guard, d.saturating_duration_since(now)).unwrap_or_else(|e| e.into_inner()).0,
+            Some(d) => {
+                WAKE.wait_timeout(guard, d.saturating_duration_since(now))
+                    .unwrap_or_else(|e| e.into_inner())
+                    .0
+            }
             None => WAKE.wait(guard).unwrap_or_else(|e| e.into_inner()),
         };
     }
@@ -95,11 +107,13 @@ mod imp {
     use std::ffi::c_void;
 
     use windows::core::{s, w};
-    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
+    use windows::Win32::System::LibraryLoader::{
+        GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
+    };
 
     use super::{calc, level_is_online, navigator, on_hint, Debounce};
 
-/// The BOOLEANs are `u8`: the OS writes them, and a byte other than 0 or 1 must not be UB.
+    /// The BOOLEANs are `u8`: the OS writes them, and a byte other than 0 or 1 must not be UB.
     #[repr(C)]
     #[derive(Clone, Copy, Default)]
     pub(super) struct Hint {
@@ -112,7 +126,12 @@ mod imp {
 
     type Callback = unsafe extern "system" fn(ctx: *const c_void, hint: Hint);
     type GetHint = unsafe extern "system" fn(hint: *mut Hint) -> u32;
-    type NotifyHint = unsafe extern "system" fn(cb: Callback, ctx: *const c_void, initial: u8, handle: *mut *mut c_void) -> u32;
+    type NotifyHint = unsafe extern "system" fn(
+        cb: Callback,
+        ctx: *const c_void,
+        initial: u8,
+        handle: *mut *mut c_void,
+    ) -> u32;
 
     unsafe extern "system" fn callback(_ctx: *const c_void, hint: Hint) {
         on_hint(level_is_online(hint.level));
@@ -120,10 +139,14 @@ mod imp {
 
     pub(super) fn resolve() -> Option<(GetHint, NotifyHint)> {
         unsafe {
-            let lib = LoadLibraryExW(w!("iphlpapi.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32).ok()?;
+            let lib =
+                LoadLibraryExW(w!("iphlpapi.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32).ok()?;
             let get = GetProcAddress(lib, s!("GetNetworkConnectivityHint"))?;
             let notify = GetProcAddress(lib, s!("NotifyNetworkConnectivityHintChange"))?;
-            Some((std::mem::transmute::<_, GetHint>(get), std::mem::transmute::<_, NotifyHint>(notify)))
+            Some((
+                std::mem::transmute::<_, GetHint>(get),
+                std::mem::transmute::<_, NotifyHint>(notify),
+            ))
         }
     }
 
@@ -135,7 +158,8 @@ mod imp {
         }
     }
 
-    const UNSET: &str = "so it reads true, Chromium's answer when it cannot tell, and online/offline never fire";
+    const UNSET: &str =
+        "so it reads true, Chromium's answer when it cannot tell, and online/offline never fire";
 
     pub(super) fn install() {
         let Some((get, notify)) = resolve() else {
@@ -145,7 +169,9 @@ mod imp {
         let level = match current(get) {
             Ok(level) => level,
             Err(err) => {
-                crate::advise_later(&format!("navigator.onLine: GetNetworkConnectivityHint failed (error {err}), {UNSET}"));
+                crate::advise_later(&format!(
+                    "navigator.onLine: GetNetworkConnectivityHint failed (error {err}), {UNSET}"
+                ));
                 return;
             }
         };
@@ -160,7 +186,10 @@ mod imp {
             crate::advise_later(&format!("navigator.onLine: NotifyNetworkConnectivityHintChange failed (error {err}), {UNSET}"));
             return;
         }
-        if let Err(e) = std::thread::Builder::new().name("sk-net".into()).spawn(super::run) {
+        if let Err(e) = std::thread::Builder::new()
+            .name("sk-net".into())
+            .spawn(super::run)
+        {
             crate::advise_later(&format!("navigator.onLine: the sk-net thread did not start ({e}), so onLine keeps its startup value"));
         }
     }
@@ -173,7 +202,8 @@ mod imp {
 
     use super::{calc, navigator, on_hint, Debounce};
 
-    const UNSET: &str = "so it reads true, Chromium's answer when it cannot tell, and online/offline never fire";
+    const UNSET: &str =
+        "so it reads true, Chromium's answer when it cannot tell, and online/offline never fire";
 
     pub(super) fn online_now() -> io::Result<bool> {
         let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
@@ -187,14 +217,21 @@ mod imp {
             // SAFETY: a node of the list getifaddrs returned, freed below.
             let ifa = unsafe { &*cursor };
             cursor = ifa.ifa_next;
-            if ifa.ifa_addr.is_null() || ifa.ifa_flags & wanted != wanted || ifa.ifa_flags & libc::IFF_LOOPBACK as u32 != 0 {
+            if ifa.ifa_addr.is_null()
+                || ifa.ifa_flags & wanted != wanted
+                || ifa.ifa_flags & libc::IFF_LOOPBACK as u32 != 0
+            {
                 continue;
             }
             online = match i32::from(unsafe { (*ifa.ifa_addr).sa_family }) {
                 libc::AF_INET => true,
                 libc::AF_INET6 => {
                     // SAFETY: an AF_INET6 address is a sockaddr_in6.
-                    let octets = unsafe { (*ifa.ifa_addr.cast::<libc::sockaddr_in6>()).sin6_addr.s6_addr };
+                    let octets = unsafe {
+                        (*ifa.ifa_addr.cast::<libc::sockaddr_in6>())
+                            .sin6_addr
+                            .s6_addr
+                    };
                     !(octets[0] == 0xfe && octets[1] & 0xc0 == 0x80)
                 }
                 _ => false,
@@ -205,7 +242,13 @@ mod imp {
     }
 
     fn subscribe() -> io::Result<OwnedFd> {
-        let fd = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, libc::NETLINK_ROUTE) };
+        let fd = unsafe {
+            libc::socket(
+                libc::AF_NETLINK,
+                libc::SOCK_RAW | libc::SOCK_CLOEXEC,
+                libc::NETLINK_ROUTE,
+            )
+        };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -213,9 +256,17 @@ mod imp {
         let fd = unsafe { OwnedFd::from_raw_fd(fd) };
         let mut addr: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
         addr.nl_family = libc::AF_NETLINK as libc::sa_family_t;
-        addr.nl_groups = (libc::RTMGRP_LINK | libc::RTMGRP_IPV4_IFADDR | libc::RTMGRP_IPV6_IFADDR) as u32;
+        addr.nl_groups =
+            (libc::RTMGRP_LINK | libc::RTMGRP_IPV4_IFADDR | libc::RTMGRP_IPV6_IFADDR) as u32;
         let size = std::mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t;
-        if unsafe { libc::bind(fd.as_raw_fd(), (&addr as *const libc::sockaddr_nl).cast(), size) } != 0 {
+        if unsafe {
+            libc::bind(
+                fd.as_raw_fd(),
+                (&addr as *const libc::sockaddr_nl).cast(),
+                size,
+            )
+        } != 0
+        {
             return Err(io::Error::last_os_error());
         }
         Ok(fd)
@@ -224,7 +275,8 @@ mod imp {
     fn watch(fd: OwnedFd) {
         let mut buffer = [0u8; 16 * 1024];
         loop {
-            let n = unsafe { libc::recv(fd.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len(), 0) };
+            let n =
+                unsafe { libc::recv(fd.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len(), 0) };
             if n < 0 {
                 let error = io::Error::last_os_error();
                 match error.raw_os_error() {
@@ -246,22 +298,31 @@ mod imp {
         let fd = match subscribe() {
             Ok(fd) => fd,
             Err(error) => {
-                crate::advise_later(&format!("navigator.onLine: no rtnetlink socket ({error}), {UNSET}"));
+                crate::advise_later(&format!(
+                    "navigator.onLine: no rtnetlink socket ({error}), {UNSET}"
+                ));
                 return;
             }
         };
         let seed = match online_now() {
             Ok(online) => online,
             Err(error) => {
-                crate::advise_later(&format!("navigator.onLine: getifaddrs failed ({error}), {UNSET}"));
+                crate::advise_later(&format!(
+                    "navigator.onLine: getifaddrs failed ({error}), {UNSET}"
+                ));
                 return;
             }
         };
         *calc() = Some(Debounce::new(seed));
         navigator::set_on_line(Some(seed));
-        let started = std::thread::Builder::new().name("sk-netlink".into()).spawn(move || watch(fd)).and_then(|_| {
-            std::thread::Builder::new().name("sk-net".into()).spawn(super::run)
-        });
+        let started = std::thread::Builder::new()
+            .name("sk-netlink".into())
+            .spawn(move || watch(fd))
+            .and_then(|_| {
+                std::thread::Builder::new()
+                    .name("sk-net".into())
+                    .spawn(super::run)
+            });
         if let Err(e) = started {
             crate::advise_later(&format!("navigator.onLine: its threads did not start ({e}), so onLine keeps its startup value"));
         }
@@ -302,7 +363,11 @@ mod tests {
 
         d.hint(false, ms(3000));
         d.hint(true, ms(3100));
-        assert_eq!(d.deadline(), Some(ms(4600)), "restarted, still the offline delay");
+        assert_eq!(
+            d.deadline(),
+            Some(ms(4600)),
+            "restarted, still the offline delay"
+        );
         assert_eq!(d.fire(ms(4600)), None);
 
         d.hint(false, ms(5000));
@@ -326,7 +391,7 @@ mod tests {
         assert!((0..=5).contains(&level), "a known level: {level}");
         install();
         assert_eq!(navigator::on_line_state(), Some(level_is_online(level)));
-        install(); 
+        install();
         assert!(navigator::on_line_state().is_some());
     }
 

@@ -97,10 +97,7 @@ impl Render for Preview {
 
 fn benchmark(state: &mut LottieState) {
     let total = state.meta().total_frames;
-    println!(
-        "  {:>4}  {:>10}  {:>10}",
-        "size", "ms/frame", "max fps"
-    );
+    println!("  {:>4}  {:>10}  {:>10}", "size", "ms/frame", "max fps");
     for target in [128.0f32, 256.0, 512.0] {
         let iterations = 120;
         let started = Instant::now();
@@ -161,7 +158,9 @@ fn bench_all() {
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let name = args.next().unwrap_or_else(|| "terminator-keyframe.json".into());
+    let name = args
+        .next()
+        .unwrap_or_else(|| "terminator-keyframe.json".into());
     if name == "--bench" {
         bench_all();
         return;

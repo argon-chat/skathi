@@ -141,7 +141,12 @@ impl VideoSource {
     /// cache miss.
     pub fn open(bytes: Arc<[u8]>) -> Result<Arc<VideoSource>, VideoError> {
         let index = index::index(&bytes)?;
-        Ok(Arc::new(VideoSource { meta: index.meta, bytes, packets: index.packets, colour: index.colour }))
+        Ok(Arc::new(VideoSource {
+            meta: index.meta,
+            bytes,
+            packets: index.packets,
+            colour: index.colour,
+        }))
     }
 
     pub fn meta(&self) -> &VideoMeta {
@@ -150,15 +155,28 @@ impl VideoSource {
 
     /// Bytes held beyond the file itself: the block index.
     pub fn memory_bytes(&self) -> usize {
-        std::mem::size_of::<Self>() + self.meta.pts_ms.len() * 4 + self.packets.len() * std::mem::size_of::<Packet>()
+        std::mem::size_of::<Self>()
+            + self.meta.pts_ms.len() * 4
+            + self.packets.len() * std::mem::size_of::<Packet>()
     }
 
     /// A decoder at frame 0. [`VideoError::Malformed`] when libvpx will not start.
     pub fn decoder(self: &Arc<Self>, options: DecodeOptions) -> Result<VideoDecoder, VideoError> {
-        let start = || Decoder::new().map_err(|e| VideoError::Malformed(format!("the VP9 decoder would not start: {e}")));
+        let start = || {
+            Decoder::new()
+                .map_err(|e| VideoError::Malformed(format!("the VP9 decoder would not start: {e}")))
+        };
         // A tinted decoder needs no colour; a file without alpha needs no alpha decoder.
-        let color = if options.alpha_only { None } else { Some(start()?) };
-        let alpha = if self.meta.has_alpha { Some(start()?) } else { None };
+        let color = if options.alpha_only {
+            None
+        } else {
+            Some(start()?)
+        };
+        let alpha = if self.meta.has_alpha {
+            Some(start()?)
+        } else {
+            None
+        };
         Ok(VideoDecoder {
             source: self.clone(),
             options,
@@ -194,7 +212,10 @@ pub struct VideoDecoder {
 }
 
 fn yuv_plane<'a>(p: &sk_vpx_sys::Plane<'a>) -> sk_yuv::Plane<'a> {
-    sk_yuv::Plane { data: p.data, stride: p.stride }
+    sk_yuv::Plane {
+        data: p.data,
+        stride: p.stride,
+    }
 }
 
 fn decode_error(what: String, e: sk_vpx_sys::Error) -> VideoError {
@@ -222,7 +243,9 @@ impl VideoDecoder {
     /// `rewind`. After an error the decoder is only good for `rewind` or dropping.
     pub fn decode_next(&mut self) -> Result<Option<u32>, VideoError> {
         if self.failed {
-            return Err(VideoError::Malformed("an earlier frame failed to decode; the decoder needs a rewind".into()));
+            return Err(VideoError::Malformed(
+                "an earlier frame failed to decode; the decoder needs a rewind".into(),
+            ));
         }
         let source = self.source.clone();
         while let Some(packet) = source.packets.get(self.next) {
@@ -230,7 +253,11 @@ impl VideoDecoder {
             let frame = self.position;
             // Every packet goes to both streams, shown or not: a hidden
             // frame is a reference the next ones need.
-            let color_shown = match self.color.as_mut().map(|c| c.decode(packet.color.of(&source.bytes))) {
+            let color_shown = match self
+                .color
+                .as_mut()
+                .map(|c| c.decode(packet.color.of(&source.bytes)))
+            {
                 Some(Err(e)) => {
                     self.failed = true;
                     return Err(decode_error(format!("video frame {frame}"), e));
@@ -253,11 +280,15 @@ impl VideoDecoder {
             // The index and libvpx agree on what shows, or the file lies.
             if self.color.is_some() && !color_shown {
                 self.failed = true;
-                return Err(VideoError::Malformed(format!("video frame {frame} decoded to no picture")));
+                return Err(VideoError::Malformed(format!(
+                    "video frame {frame} decoded to no picture"
+                )));
             }
             if self.alpha.is_some() && packet.alpha.is_some() && !alpha_shown {
                 self.failed = true;
-                return Err(VideoError::Malformed(format!("the alpha of video frame {frame} decoded to no picture")));
+                return Err(VideoError::Malformed(format!(
+                    "the alpha of video frame {frame} decoded to no picture"
+                )));
             }
             self.alpha_now = alpha_shown;
             self.current = true;
@@ -275,21 +306,38 @@ impl VideoDecoder {
             out.width as usize * out.height as usize * 4
         );
         if !self.current || self.failed {
-            return Err(VideoError::Malformed("no video frame is decoded to convert".into()));
+            return Err(VideoError::Malformed(
+                "no video frame is decoded to convert".into(),
+            ));
         }
         let plane = yuv_plane;
-        let alpha = if self.alpha_now { self.alpha.as_ref().and_then(Decoder::frame) } else { None };
+        let alpha = if self.alpha_now {
+            self.alpha.as_ref().and_then(Decoder::frame)
+        } else {
+            None
+        };
         let result = if self.options.alpha_only {
             let size = alpha.map_or((0, 0), |a| (a.width, a.height));
-            self.converter.alpha_to_bgra(alpha.map(|a| plane(&a.planes[0])), size, out.pixels, out.width, out.height)
+            self.converter.alpha_to_bgra(
+                alpha.map(|a| plane(&a.planes[0])),
+                size,
+                out.pixels,
+                out.width,
+                out.height,
+            )
         } else {
             let frame = self
                 .color
                 .as_ref()
                 .and_then(Decoder::frame)
-                .ok_or_else(|| VideoError::Malformed("no video frame is decoded to convert".into()))?;
+                .ok_or_else(|| {
+                    VideoError::Malformed("no video frame is decoded to convert".into())
+                })?;
             if frame.format != Format::I420 {
-                return Err(VideoError::Unsupported(format!("its frames are {:?}; video stickers are 4:2:0", frame.format)));
+                return Err(VideoError::Unsupported(format!(
+                    "its frames are {:?}; video stickers are 4:2:0",
+                    frame.format
+                )));
             }
             if let Some(a) = alpha {
                 if (a.width, a.height) != (frame.width, frame.height) {
@@ -299,7 +347,12 @@ impl VideoDecoder {
                     )));
                 }
             }
-            let colorimetry = colour::colorimetry(self.source.colour.as_ref(), frame.color_space, frame.full_range, self.source.meta.has_alpha);
+            let colorimetry = colour::colorimetry(
+                self.source.colour.as_ref(),
+                frame.color_space,
+                frame.full_range,
+                self.source.meta.has_alpha,
+            );
             let i420 = sk_yuv::I420 {
                 width: frame.width,
                 height: frame.height,
@@ -308,7 +361,8 @@ impl VideoDecoder {
                 v: plane(&frame.planes[2]),
                 a: alpha.map(|a| plane(&a.planes[0])),
             };
-            self.converter.to_bgra(&i420, colorimetry, out.pixels, out.width, out.height)
+            self.converter
+                .to_bgra(&i420, colorimetry, out.pixels, out.width, out.height)
         };
         result.map_err(|e| VideoError::Malformed(format!("converting a video frame: {e}")))
     }
@@ -330,7 +384,11 @@ impl VideoDecoder {
     /// charges a live decoder.
     pub fn memory_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
-            + [&self.color, &self.alpha].iter().filter_map(|d| d.as_ref()).map(|d| d.memory().live).sum::<usize>()
+            + [&self.color, &self.alpha]
+                .iter()
+                .filter_map(|d| d.as_ref())
+                .map(|d| d.memory().live)
+                .sum::<usize>()
             + self.converter.memory_bytes()
     }
 }
@@ -372,8 +430,12 @@ mod tests {
     #[test]
     fn a_file_opens_and_its_frames_decode() {
         let bytes: Arc<[u8]> = Arc::from(&b"\x1a\x45\xdf\xa3"[..]);
-        assert!(matches!(VideoSource::open(bytes), Err(VideoError::Malformed(_))));
-        let source = VideoSource::open(Arc::from(&include_bytes!("testdata/alpha.webm")[..])).unwrap();
+        assert!(matches!(
+            VideoSource::open(bytes),
+            Err(VideoError::Malformed(_))
+        ));
+        let source =
+            VideoSource::open(Arc::from(&include_bytes!("testdata/alpha.webm")[..])).unwrap();
         assert_eq!(source.meta().frame_count(), 48);
         assert!(source.memory_bytes() > 48 * 4);
         let mut decoder = source.decoder(DecodeOptions::default()).unwrap();

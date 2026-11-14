@@ -95,7 +95,11 @@ pub fn poison_with(reason: String) {
 }
 
 pub fn describe_panic(message: &str, location: &str) -> String {
-    if location.is_empty() { message.to_string() } else { format!("{message} at {location}") }
+    if location.is_empty() {
+        message.to_string()
+    } else {
+        format!("{message} at {location}")
+    }
 }
 
 struct Guard(*mut App, *mut Window, Phase);
@@ -214,7 +218,10 @@ mod tests {
     use redjs::api::Value;
 
     fn install_owe(rt: &JsRuntime) {
-        let f = rt.ctx().function("owe", 0, |_g, _frame| Value::boolean(owe_drain()).0).unwrap();
+        let f = rt
+            .ctx()
+            .function("owe", 0, |_g, _frame| Value::boolean(owe_drain()).0)
+            .unwrap();
         rt.ctx().global_set("owe", f).unwrap();
     }
 
@@ -229,13 +236,22 @@ mod tests {
         crate::testing::on_js_thread(|| {
             JsRuntime::with(|rt| {
                 install_owe(rt);
-                rt.ctx().eval("globalThis.seen = []; Promise.resolve().then(() => seen.push(owe()))").unwrap();
+                rt.ctx()
+                    .eval("globalThis.seen = []; Promise.resolve().then(() => seen.push(owe()))")
+                    .unwrap();
             });
-            assert!(!drain_owed(), "a dispatch nested in running JS owes nothing");
+            assert!(
+                !drain_owed(),
+                "a dispatch nested in running JS owes nothing"
+            );
             settle_owed_drain();
             JsRuntime::with(|rt| {
                 unsafe { redjs::ffi::redjs_gc(rt.raw(), 0) };
-                assert_eq!(read(rt, "String(seen)"), "false", "the reaction ran in JSC's drain, and owed nothing");
+                assert_eq!(
+                    read(rt, "String(seen)"),
+                    "false",
+                    "the reaction ran in JSC's drain, and owed nothing"
+                );
             });
         });
     }
@@ -246,14 +262,24 @@ mod tests {
             assert!(owe_drain());
             assert!(owe_drain(), "owing twice is one owed checkpoint");
             JsRuntime::with(|rt| {
-                rt.ctx().eval("globalThis.ran = false; Promise.resolve().then(() => { ran = true; })").unwrap();
-                assert_eq!(read(rt, "String(ran)"), "false", "a call's end does not drain while the checkpoint is owed");
+                rt.ctx()
+                    .eval("globalThis.ran = false; Promise.resolve().then(() => { ran = true; })")
+                    .unwrap();
+                assert_eq!(
+                    read(rt, "String(ran)"),
+                    "false",
+                    "a call's end does not drain while the checkpoint is owed"
+                );
             });
             settle_owed_drain();
             assert!(!drain_owed());
             JsRuntime::with(|rt| {
                 unsafe { redjs::ffi::redjs_gc(rt.raw(), 0) };
-                assert_eq!(read(rt, "String(ran)"), "true", "the settle ran the checkpoint");
+                assert_eq!(
+                    read(rt, "String(ran)"),
+                    "true",
+                    "the settle ran the checkpoint"
+                );
             });
         });
     }
@@ -276,10 +302,17 @@ mod tests {
     #[test]
     fn a_second_init_is_refused_with_a_message() {
         let message = crate::testing::on_js_thread(|| {
-            let payload = std::panic::catch_unwind(JsRuntime::init).expect_err("a second init panics");
-            payload.downcast_ref::<String>().cloned().unwrap_or_default()
+            let payload =
+                std::panic::catch_unwind(JsRuntime::init).expect_err("a second init panics");
+            payload
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_default()
         });
-        assert!(message.contains("sk_runtime::testing::on_js_thread"), "{message}");
+        assert!(
+            message.contains("sk_runtime::testing::on_js_thread"),
+            "{message}"
+        );
     }
 
     /// Runs on a thread of its own: the poison is per thread.
@@ -288,13 +321,26 @@ mod tests {
         std::thread::spawn(|| {
             assert!(!poisoned());
             assert_eq!(poison_reason(), None);
-            poison_with(describe_panic("index out of bounds", "crates/x/src/lib.rs:12:5"));
-            poison_with(describe_panic("already borrowed", "crates/y/src/lib.rs:1:1"));
+            poison_with(describe_panic(
+                "index out of bounds",
+                "crates/x/src/lib.rs:12:5",
+            ));
+            poison_with(describe_panic(
+                "already borrowed",
+                "crates/y/src/lib.rs:1:1",
+            ));
             assert!(poisoned());
-            assert_eq!(poison_reason().as_deref(), Some("index out of bounds at crates/x/src/lib.rs:12:5"));
+            assert_eq!(
+                poison_reason().as_deref(),
+                Some("index out of bounds at crates/x/src/lib.rs:12:5")
+            );
         })
         .join()
         .unwrap();
-        assert_eq!(describe_panic("boom", ""), "boom", "no location, no dangling `at`");
+        assert_eq!(
+            describe_panic("boom", ""),
+            "boom",
+            "no location, no dangling `at`"
+        );
     }
 }

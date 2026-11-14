@@ -12,19 +12,19 @@
 
 mod animator;
 mod element;
+#[cfg(test)]
+mod em_tests;
 mod has;
 mod keyframes;
 mod mapper;
-mod path_data;
 mod media;
-mod prefix;
+mod path_data;
 pub mod perf;
+mod prefix;
+mod registered;
 mod share;
 mod transition;
 mod vars;
-mod registered;
-#[cfg(test)]
-mod em_tests;
 
 use std::rc::Rc;
 
@@ -38,33 +38,36 @@ use parcel_selectors::matching::matches_selector;
 use parcel_selectors::parser::Component;
 
 pub use animator::{
-    script_keyframes, strip_transitioned, AnimEvent, AnimEventKind, Animator, ScriptClock, ScriptFrame,
-    ScriptKeyframeNotes, ScriptSample, ScriptTiming,
+    script_keyframes, strip_transitioned, AnimEvent, AnimEventKind, Animator, ScriptClock,
+    ScriptFrame, ScriptKeyframeNotes, ScriptSample, ScriptTiming,
 };
 pub use element::{Interaction, MatchDom};
-pub use mapper::{set_composed_font_families, take_unreached_fonts, transform_css};
-pub use mapper::{
-    accepts_declaration, parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
-    set_font_source, set_font_metric_source, FontRelativeMetrics, set_rem_basis, set_viewport_basis, set_web_font_families, take_font_misses, uses_viewport_units,
-    viewport_basis, BackgroundLayer, BackgroundSize, BackgroundUrl, PaintLayer,
-    CurrentColorTargets, Decls, Extras, InlineMotion, InlineStyle, InlinePriority, ListMarker, MaskClips, MaskCompositing,
-    MaskImages, ObjectFit, OverscrollBehavior, RadiusInherit, ScrollbarWidth, SvgPaint, TextFill, TextTransform,
-    TileLength, UserSelect, WhiteSpaceMode, WindowControl, WindowDrag,
-    INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
-};
-pub use media::{match_media, DisplayMode, Env};
+#[doc(hidden)]
+pub use keyframes::AnimationDeclarations;
 pub use keyframes::{
     AnimationPatch, AnimationSpec, Direction as AnimationDirection, FillMode, Keyframe, Keyframes,
     PlayState,
 };
-#[doc(hidden)]
-pub use keyframes::AnimationDeclarations;
-pub use vars::Vars;
+pub use mapper::{
+    accepts_declaration, parse_inline, parse_inline_full, parse_inline_style,
+    parse_inline_with_transitions, rem_basis, set_font_metric_source, set_font_source,
+    set_rem_basis, set_viewport_basis, set_web_font_families, take_font_misses,
+    uses_viewport_units, viewport_basis, BackgroundLayer, BackgroundSize, BackgroundUrl,
+    CurrentColorTargets, Decls, Extras, FontRelativeMetrics, InlineMotion, InlinePriority,
+    InlineStyle, ListMarker, MaskClips, MaskCompositing, MaskImages, ObjectFit, OverscrollBehavior,
+    PaintLayer, RadiusInherit, ScrollbarWidth, SvgPaint, TextFill, TextTransform, TileLength,
+    UserSelect, WhiteSpaceMode, WindowControl, WindowDrag, INITIAL_REM_BASIS,
+    INITIAL_VIEWPORT_BASIS,
+};
+pub use mapper::{set_composed_font_families, take_unreached_fonts, transform_css};
+pub use media::{match_media, DisplayMode, Env};
 #[doc(hidden)]
 pub use registered::CustomAnimationContext;
 pub use transition::{
-    covered, parse_easing, spec_for, Easing, StepPosition, TransitionProperty, TransitionSpec, ANIMATABLE_COUNT,
+    covered, parse_easing, spec_for, Easing, StepPosition, TransitionProperty, TransitionSpec,
+    ANIMATABLE_COUNT,
 };
+pub use vars::Vars;
 
 /// These are exactly the states gpui's own interactivity ladder can pick live, in gpui's
 /// application order (later wins — see `Interactivity::compute_style_internal`).
@@ -143,8 +146,10 @@ pub enum PseudoElement {
 impl PseudoElement {
     fn control_index(self) -> Option<usize> {
         match self {
-            Self::RangeTrack => Some(0), Self::RangeThumb => Some(1),
-            Self::ColorSwatch => Some(2), Self::ColorSwatchWrapper => Some(3),
+            Self::RangeTrack => Some(0),
+            Self::RangeThumb => Some(1),
+            Self::ColorSwatch => Some(2),
+            Self::ColorSwatchWrapper => Some(3),
             _ => None,
         }
     }
@@ -158,11 +163,22 @@ pub struct ControlPseudo {
 }
 
 impl ControlPseudo {
-    pub fn resolve(&self, active: bool, hover: bool, focus_visible: bool, focus: bool, focus_within: bool)
-        -> (&StyleRefinement, &Extras) {
-        for (index, on) in [active, hover, focus_visible, focus, focus_within].into_iter().enumerate() {
+    pub fn resolve(
+        &self,
+        active: bool,
+        hover: bool,
+        focus_visible: bool,
+        focus: bool,
+        focus_within: bool,
+    ) -> (&StyleRefinement, &Extras) {
+        for (index, on) in [active, hover, focus_visible, focus, focus_within]
+            .into_iter()
+            .enumerate()
+        {
             if on {
-                if let Some((style, extras)) = &self.states[index] { return (style, extras); }
+                if let Some((style, extras)) = &self.states[index] {
+                    return (style, extras);
+                }
             }
         }
         (&self.base, &self.extras)
@@ -176,7 +192,10 @@ struct ControlFold {
 
 impl Default for ControlFold {
     fn default() -> Self {
-        Self { slots: (0..=STATE_RUNGS).map(|_| Default::default()).collect(), states: [false; STATE_RUNGS] }
+        Self {
+            slots: (0..=STATE_RUNGS).map(|_| Default::default()).collect(),
+            states: [false; STATE_RUNGS],
+        }
     }
 }
 
@@ -188,7 +207,11 @@ impl ControlFold {
             let (style, extras) = slots.next().expect("control state");
             self.states[index].then(|| (Rc::new(style), extras))
         });
-        Rc::new(ControlPseudo { base: Rc::new(base), extras, states })
+        Rc::new(ControlPseudo {
+            base: Rc::new(base),
+            extras,
+            states,
+        })
     }
 }
 
@@ -233,7 +256,11 @@ impl InheritedRadii {
 
 /// `radius_inherit` is shared by every rung but filled into the base style only, so `.x:hover {
 /// border-radius: 8px }` must not cancel `.x { border-radius: inherit }` outside the hover.
-fn keep_base_radius_inherit(extras: &mut Extras, before: RadiusInherit, diagnostics: &mut Vec<String>) {
+fn keep_base_radius_inherit(
+    extras: &mut Extras,
+    before: RadiusInherit,
+    diagnostics: &mut Vec<String>,
+) {
     if extras.radius_inherit.inherit & !before.inherit != 0 {
         mapper::once(
             diagnostics,
@@ -246,7 +273,11 @@ fn keep_base_radius_inherit(extras: &mut Extras, before: RadiusInherit, diagnost
     extras.radius_inherit = before;
 }
 
-type SvgBase = (Option<SvgPaint>, Option<SvgPaint>, Option<Rc<Vec<(&'static str, Rc<str>)>>>);
+type SvgBase = (
+    Option<SvgPaint>,
+    Option<SvgPaint>,
+    Option<Rc<Vec<(&'static str, Rc<str>)>>>,
+);
 
 fn svg_base(extras: &Extras) -> SvgBase {
     (extras.fill, extras.stroke, extras.svg_presentation.clone())
@@ -270,13 +301,19 @@ fn keep_base_svg_paint(extras: &mut Extras, before: SvgBase, diagnostics: &mut V
     extras.svg_presentation = presentation;
 }
 
-pub fn resolve_inherited_radii(states: &mut ComputedStates, parent: InheritedRadii) -> InheritedRadii {
+pub fn resolve_inherited_radii(
+    states: &mut ComputedStates,
+    parent: InheritedRadii,
+) -> InheritedRadii {
     let corners = states.extras.radius_inherit.inherit;
     if corners != 0 {
         parent.fill(Rc::make_mut(&mut states.base), corners);
     }
     let own = InheritedRadii::of(&states.base);
-    for slot in [&mut states.before, &mut states.after].into_iter().flatten() {
+    for slot in [&mut states.before, &mut states.after]
+        .into_iter()
+        .flatten()
+    {
         let corners = slot.extras.radius_inherit.inherit;
         if corners != 0 {
             own.fill(Rc::make_mut(&mut Rc::make_mut(slot).style), corners);
@@ -289,13 +326,22 @@ impl ComputedStates {
     /// True when the renderer has to give this node a focus handle for gpui to have anything to
     /// hang the focus rungs on.
     pub fn needs_focus_handle(&self) -> bool {
-        self.focus.is_some() || self.focus_visible.is_some() || self.focus_within.is_some()
+        self.focus.is_some()
+            || self.focus_visible.is_some()
+            || self.focus_within.is_some()
             || (2..STATE_RUNGS).any(|rung| self.control_state(rung))
     }
 
     pub fn control_state(&self, rung: usize) -> bool {
-        [&self.range_track, &self.range_thumb, &self.color_swatch, &self.color_swatch_wrapper]
-            .into_iter().flatten().any(|part| part.states[rung].is_some())
+        [
+            &self.range_track,
+            &self.range_thumb,
+            &self.color_swatch,
+            &self.color_swatch_wrapper,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|part| part.states[rung].is_some())
     }
 
     pub fn hover_transitions(&self) -> bool {
@@ -402,9 +448,18 @@ impl RuleEntry {
 
 fn refine_font(parent: &gpui::Font, refinement: &gpui::TextStyleRefinement) -> gpui::Font {
     gpui::Font {
-        family: refinement.font_family.clone().unwrap_or_else(|| parent.family.clone()),
-        features: refinement.font_features.clone().unwrap_or_else(|| parent.features.clone()),
-        fallbacks: refinement.font_fallbacks.clone().or_else(|| parent.fallbacks.clone()),
+        family: refinement
+            .font_family
+            .clone()
+            .unwrap_or_else(|| parent.family.clone()),
+        features: refinement
+            .font_features
+            .clone()
+            .unwrap_or_else(|| parent.features.clone()),
+        fallbacks: refinement
+            .font_fallbacks
+            .clone()
+            .or_else(|| parent.fallbacks.clone()),
         weight: refinement.font_weight.unwrap_or(parent.weight),
         style: refinement.font_style.unwrap_or(parent.style),
     }
@@ -482,37 +537,74 @@ impl<'a> Half<'a> {
         self.outline.merge_over(outline, &mut bucket.vn_outline);
         if let Some(list) = self.font {
             for p in list.iter() {
-                let at = if mapper::sets_font_size(p) { parent } else { basis };
-                let face = if mapper::sets_font_size(p) { parent_font } else { font };
-                mapper::with_font_face(face, || mapper::apply_at(p, at, bucket, extras, diagnostics));
+                let at = if mapper::sets_font_size(p) {
+                    parent
+                } else {
+                    basis
+                };
+                let face = if mapper::sets_font_size(p) {
+                    parent_font
+                } else {
+                    font
+                };
+                mapper::with_font_face(face, || {
+                    mapper::apply_at(p, at, bucket, extras, diagnostics)
+                });
             }
         }
         if let Some(list) = self.dynamic {
             for (name, raw) in list {
                 let at = if name == "font-size" { parent } else { basis };
-                let face = if name == "font-size" { parent_font } else { font };
-                mapper::with_font_face(face, || mapper::with_font_basis(at, || {
-                    mapper::apply_dynamic(name, raw, vars, env, bucket, extras, diagnostics)
-                }));
+                let face = if name == "font-size" {
+                    parent_font
+                } else {
+                    font
+                };
+                mapper::with_font_face(face, || {
+                    mapper::with_font_basis(at, || {
+                        mapper::apply_dynamic(name, raw, vars, env, bucket, extras, diagnostics)
+                    })
+                });
             }
         }
     }
 
     fn font_descriptor(&self, vars: &Vars, env: &Env, into: &mut gpui::TextStyleRefinement) {
-        if let Some(refinement) = self.refinement { into.refine(&refinement.text); }
+        if let Some(refinement) = self.refinement {
+            into.refine(&refinement.text);
+        }
         let mut scratch = StyleRefinement::default();
         let mut extras = Extras::default();
         let mut quiet = Vec::new();
         if let Some(properties) = self.font {
-            for property in properties.iter().filter(|property| matches!(property,
-                lightningcss::properties::Property::FontFamily(_)
-                | lightningcss::properties::Property::FontWeight(_)
-                | lightningcss::properties::Property::FontStyle(_))) {
-                mapper::apply_at(property, mapper::rem_basis(), &mut scratch, &mut extras, &mut quiet);
+            for property in properties.iter().filter(|property| {
+                matches!(
+                    property,
+                    lightningcss::properties::Property::FontFamily(_)
+                        | lightningcss::properties::Property::FontWeight(_)
+                        | lightningcss::properties::Property::FontStyle(_)
+                )
+            }) {
+                mapper::apply_at(
+                    property,
+                    mapper::rem_basis(),
+                    &mut scratch,
+                    &mut extras,
+                    &mut quiet,
+                );
             }
         }
         if let Some(properties) = self.dynamic {
-            for (name, raw) in properties.iter().filter(|(name, _)| matches!(name.as_str(), "font-family" | "font-weight" | "font-style" | "font-feature-settings" | "font-variant-numeric")) {
+            for (name, raw) in properties.iter().filter(|(name, _)| {
+                matches!(
+                    name.as_str(),
+                    "font-family"
+                        | "font-weight"
+                        | "font-style"
+                        | "font-feature-settings"
+                        | "font-variant-numeric"
+                )
+            }) {
                 mapper::apply_dynamic(name, raw, vars, env, &mut scratch, &mut extras, &mut quiet);
             }
         }
@@ -520,9 +612,16 @@ impl<'a> Half<'a> {
     }
 
     fn font_size(&self, vars: &Vars, env: &Env, parent: f32) -> Option<f32> {
-        let mut size = self.refinement.and_then(|r| r.text.font_size).map(mapper::font_size_px);
-        let sets = self.font.is_some_and(|l| l.iter().any(mapper::sets_font_size))
-            || self.dynamic.is_some_and(|l| l.iter().any(|(n, _)| n == "font-size"));
+        let mut size = self
+            .refinement
+            .and_then(|r| r.text.font_size)
+            .map(mapper::font_size_px);
+        let sets = self
+            .font
+            .is_some_and(|l| l.iter().any(mapper::sets_font_size))
+            || self
+                .dynamic
+                .is_some_and(|l| l.iter().any(|(n, _)| n == "font-size"));
         if sets {
             let mut scratch = StyleRefinement::default();
             let mut extras = Extras::default();
@@ -535,7 +634,15 @@ impl<'a> Half<'a> {
             if let Some(list) = self.dynamic {
                 for (name, raw) in list.iter().filter(|(n, _)| n == "font-size") {
                     mapper::with_font_basis(parent, || {
-                        mapper::apply_dynamic(name, raw, vars, env, &mut scratch, &mut extras, &mut quiet)
+                        mapper::apply_dynamic(
+                            name,
+                            raw,
+                            vars,
+                            env,
+                            &mut scratch,
+                            &mut extras,
+                            &mut quiet,
+                        )
                     });
                 }
             }
@@ -636,7 +743,10 @@ macro_rules! compound_key {
                 _ => {}
             }
         }
-        let key = id.map(Key::Id).or(class.map(Key::Class)).or(tag.map(Key::Tag));
+        let key = id
+            .map(Key::Id)
+            .or(class.map(Key::Class))
+            .or(tag.map(Key::Tag));
         (key, root)
     }};
 }
@@ -675,7 +785,12 @@ fn bucket_of(sel: &Selector<'_>) -> Bucket {
 
 type KeyMap = std::collections::HashMap<Box<str>, Vec<u32>>;
 
-fn offer_keyed<D: MatchDom>(node: &D, maps: [&KeyMap; 3], buckets: [usize; 3], f: &mut dyn FnMut(u32, usize)) {
+fn offer_keyed<D: MatchDom>(
+    node: &D,
+    maps: [&KeyMap; 3],
+    buckets: [usize; 3],
+    f: &mut dyn FnMut(u32, usize),
+) {
     let [by_tag, by_class, by_id] = maps;
     if !by_tag.is_empty() {
         if let Some(v) = by_tag.get(node.tag_name()) {
@@ -804,7 +919,10 @@ fn rule_index_enabled() -> bool {
                     !(v.is_empty() || v == "0" || v == "false" || v == "off")
                 })
                 .unwrap_or(false);
-            ON.store(if off { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
+            ON.store(
+                if off { 1 } else { 2 },
+                std::sync::atomic::Ordering::Relaxed,
+            );
             !off
         }
     }
@@ -864,7 +982,10 @@ impl Engine {
     pub fn compile_sheets(sheets: &[&str]) -> Engine {
         let mut engine = Engine {
             rules: Vec::new(),
-            index: RuleIndex { enabled: rule_index_enabled(), ..RuleIndex::default() },
+            index: RuleIndex {
+                enabled: rule_index_enabled(),
+                ..RuleIndex::default()
+            },
             conditions: Vec::new(),
             condition_text: Vec::new(),
             sibling_combinators: false,
@@ -903,14 +1024,18 @@ impl Engine {
 
     fn collect_ua(&mut self, order: &mut u32) {
         let parsed = UA_PARSED.with(|ua| {
-            *ua.get_or_init(|| match StyleSheet::parse(UA_SHEET, ParserOptions::default()) {
-                Ok(sheet) => Some(&*Box::leak(Box::new(sheet))),
-                Err(_) => None,
-            })
+            *ua.get_or_init(
+                || match StyleSheet::parse(UA_SHEET, ParserOptions::default()) {
+                    Ok(sheet) => Some(&*Box::leak(Box::new(sheet))),
+                    Err(_) => None,
+                },
+            )
         });
         match parsed {
             Some(sheet) => self.collect(&sheet.rules.0, None, order),
-            None => self.diagnostics.push("Skathi's UA defaults did not parse".into()),
+            None => self
+                .diagnostics
+                .push("Skathi's UA defaults did not parse".into()),
         }
     }
 
@@ -929,12 +1054,14 @@ impl Engine {
     /// The last block of that name whose condition holds in `env` (CSS duplicate-name rule). `Rc`
     /// because a running animation keeps the block it started with.
     pub fn keyframes(&self, name: &str, env: &Env) -> Option<Rc<keyframes::Keyframes>> {
-        self.keyframes.get(name)?.iter().rev().find_map(|entry| {
-            match entry.condition {
+        self.keyframes
+            .get(name)?
+            .iter()
+            .rev()
+            .find_map(|entry| match entry.condition {
                 Some(c) if !self.conditions[c as usize].eval(env) => None,
                 _ => Some(entry.block.clone()),
-            }
-        })
+            })
     }
 
     pub fn keyframes_for(
@@ -976,7 +1103,10 @@ impl Engine {
                 }
             })
             .collect();
-        Some(Rc::new(keyframes::Keyframes { steps, dynamic: false }))
+        Some(Rc::new(keyframes::Keyframes {
+            steps,
+            dynamic: false,
+        }))
     }
 
     pub fn has_keyframes(&self) -> bool {
@@ -994,7 +1124,12 @@ impl Engine {
         for &i in &ix.any {
             f(i, BUCKET_ANY);
         }
-        offer_keyed(node, [&ix.by_tag, &ix.by_class, &ix.by_id], [BUCKET_TAG, BUCKET_CLASS, BUCKET_ID], f);
+        offer_keyed(
+            node,
+            [&ix.by_tag, &ix.by_class, &ix.by_id],
+            [BUCKET_TAG, BUCKET_CLASS, BUCKET_ID],
+            f,
+        );
         // The root answers to `html` and `body` too (`MatchDom::has_tag`); without these a `body {
         // }` rule would never be a candidate.
         if node.is_root() {
@@ -1002,7 +1137,10 @@ impl Engine {
                 f(i, BUCKET_ROOT);
             }
         }
-        if !(ix.by_parent_tag.is_empty() && ix.by_parent_class.is_empty() && ix.by_parent_id.is_empty()) {
+        if !(ix.by_parent_tag.is_empty()
+            && ix.by_parent_class.is_empty()
+            && ix.by_parent_id.is_empty())
+        {
             if let Some(parent) = node.parent() {
                 offer_keyed(
                     &parent,
@@ -1021,7 +1159,8 @@ impl Engine {
                 CssRule::Media(m) => {
                     match media::parse_list(&m.query) {
                         Ok(cond) => {
-                            let idx = self.push_condition(cond, condition, &media::list_text(&m.query));
+                            let idx =
+                                self.push_condition(cond, condition, &media::list_text(&m.query));
                             self.collect(&m.rules.0, Some(idx), order);
                         }
                         Err(reason) => mapper::once(
@@ -1036,16 +1175,26 @@ impl Engine {
                     continue;
                 }
                 CssRule::Property(property) => {
-                    use lightningcss::values::syntax::{ParsedComponent, SyntaxString, SyntaxComponentKind};
+                    use lightningcss::values::syntax::{
+                        ParsedComponent, SyntaxComponentKind, SyntaxString,
+                    };
                     let percentage = matches!(&property.syntax, SyntaxString::Components(parts)
                         if parts.len() == 1 && matches!(parts[0].kind, SyntaxComponentKind::Percentage));
                     if percentage {
-                        if let Some(ParsedComponent::Percentage(initial)) = &property.initial_value {
-                            self.percentage_properties.push((condition, registered::PercentageRegistration {
-                                name: property.name.0.to_string(), inherits: property.inherits, initial: initial.0,
-                            }));
+                        if let Some(ParsedComponent::Percentage(initial)) = &property.initial_value
+                        {
+                            self.percentage_properties.push((
+                                condition,
+                                registered::PercentageRegistration {
+                                    name: property.name.0.to_string(),
+                                    inherits: property.inherits,
+                                    initial: initial.0,
+                                },
+                            ));
                         }
-                    } else { at_rule_ignored(rule, &mut self.diagnostics); }
+                    } else {
+                        at_rule_ignored(rule, &mut self.diagnostics);
+                    }
                     continue;
                 }
                 CssRule::Keyframes(kf) => {
@@ -1066,8 +1215,8 @@ impl Engine {
             let (converted, viewport) =
                 mapper::noting_viewport_units(|| mapper::convert_block(&style.declarations));
             let first_rule = self.rules.len() as u32;
-            let decls = capture_rule_text()
-                .then(|| Rc::new(mapper::decl_pairs(&style.declarations)));
+            let decls =
+                capture_rule_text().then(|| Rc::new(mapper::decl_pairs(&style.declarations)));
             let declares_transition =
                 converted.normal_transitions.is_some() || converted.important_transitions.is_some();
             let declares_extras = {
@@ -1100,9 +1249,13 @@ impl Engine {
                 };
                 let pseudo = sel.pseudo_element().and_then(pseudo_box);
                 let control_origin = if pseudo.is_some_and(|p| p.control_index().is_some()) {
-                    let Some(origin) = control_origin_selector(sel) else { continue };
+                    let Some(origin) = control_origin_selector(sel) else {
+                        continue;
+                    };
                     Some(Box::new(origin))
-                } else { None };
+                } else {
+                    None
+                };
                 if !probe_runnable(sel) {
                     self.diagnostics.push(format!(
                         "selector rejected (matcher cannot run it — :has()/nesting?): {}",
@@ -1117,7 +1270,9 @@ impl Engine {
                 // with no hitbox of its own — so a `:hover::after` rule has nothing to install
                 // into.
                 if pseudo.is_some()
-                    && ((states != 0 && pseudo.is_some_and(|p| p.control_index().is_none())) || ancestor.is_some()) {
+                    && ((states != 0 && pseudo.is_some_and(|p| p.control_index().is_none()))
+                        || ancestor.is_some())
+                {
                     self.diagnostics.push(format!(
                         "a state-qualified pseudo-element rule is dropped (v1) — the generated                          box is not in the pointer-state ladder. Drive it from an ATTRIBUTE on                          the originating element instead (`[data-state=open]::after`), which does                          match: {}",
                         sel_text(sel)
@@ -1126,9 +1281,14 @@ impl Engine {
                 }
                 // Advisories ride with the rule and are said when it matches: a Tailwind sheet
                 // carries a `focus:z-10` whether or not anything is focusable.
-                let mut rule_diagnostics: Vec<String> =
-                    converted.diagnostics.as_deref().cloned().unwrap_or_default();
-                if (states != 0 || ancestor.is_some()) && !pseudo.is_some_and(|p| p.control_index().is_some()) {
+                let mut rule_diagnostics: Vec<String> = converted
+                    .diagnostics
+                    .as_deref()
+                    .cloned()
+                    .unwrap_or_default();
+                if (states != 0 || ancestor.is_some())
+                    && !pseudo.is_some_and(|p| p.control_index().is_some())
+                {
                     // Only fields the author wrote count: some `Extras` are derived
                     // (`background_key_color`), and guarding on "any extra" flagged every
                     // `hover:bg-*` utility.
@@ -1160,8 +1320,12 @@ impl Engine {
                     important: converted.important.clone(),
                     normal_transitions: converted.normal_transitions.clone(),
                     important_transitions: converted.important_transitions.clone(),
-                    normal_transition_declarations: converted.normal_transition_declarations.clone(),
-                    important_transition_declarations: converted.important_transition_declarations.clone(),
+                    normal_transition_declarations: converted
+                        .normal_transition_declarations
+                        .clone(),
+                    important_transition_declarations: converted
+                        .important_transition_declarations
+                        .clone(),
                     normal_animations: converted.normal_animations.clone(),
                     important_animations: converted.important_animations.clone(),
                     normal_animation_patch: converted.normal_animation_patch.clone(),
@@ -1189,8 +1353,14 @@ impl Engine {
             let rules = first_rule..self.rules.len() as u32;
             if viewport && !rules.is_empty() {
                 use lightningcss::traits::ToCss as _;
-                match style.declarations.to_css_string(lightningcss::printer::PrinterOptions::default()) {
-                    Ok(css) => self.viewport_blocks.push(ViewportBlock { css: css.into(), rules }),
+                match style
+                    .declarations
+                    .to_css_string(lightningcss::printer::PrinterOptions::default())
+                {
+                    Ok(css) => self.viewport_blocks.push(ViewportBlock {
+                        css: css.into(),
+                        rules,
+                    }),
                     Err(_) => self.viewport_unkept = true,
                 }
             }
@@ -1199,7 +1369,10 @@ impl Engine {
 
     #[doc(hidden)]
     pub fn into_parts_for_measuring(self) -> Vec<(&'static str, usize, Box<dyn std::any::Any>)> {
-        fn part<T: 'static>(name: &'static str, v: Vec<T>) -> (&'static str, usize, Box<dyn std::any::Any>) {
+        fn part<T: 'static>(
+            name: &'static str,
+            v: Vec<T>,
+        ) -> (&'static str, usize, Box<dyn std::any::Any>) {
             (name, v.len() * std::mem::size_of::<T>(), Box::new(v))
         }
         let table = self.rules.capacity() * std::mem::size_of::<RuleEntry>();
@@ -1219,7 +1392,12 @@ impl Engine {
             selectors.push(r.selector);
             refinements.push((r.normal, r.important));
             transitions.push((r.normal_transitions, r.important_transitions));
-            animations.push((r.normal_animations, r.important_animations, r.normal_animation_patch, r.important_animation_patch));
+            animations.push((
+                r.normal_animations,
+                r.important_animations,
+                r.normal_animation_patch,
+                r.important_animation_patch,
+            ));
             extras.push((r.normal_extras, r.important_extras));
             custom.push((r.normal_custom, r.important_custom));
             dynamic.push((r.normal_dynamic, r.important_dynamic));
@@ -1227,7 +1405,11 @@ impl Engine {
             decls.push(r.decls);
         }
         vec![
-            ("rule table (every field inline, before the parts below moved out)", table, Box::new(())),
+            (
+                "rule table (every field inline, before the parts below moved out)",
+                table,
+                Box::new(()),
+            ),
             part("selectors", selectors),
             part("style refinements (normal, !important)", refinements),
             part("extras (normal, !important)", extras),
@@ -1239,7 +1421,11 @@ impl Engine {
             part("per-rule advisories", diagnostics),
             part("author text (devtools capture)", decls),
             ("rule index", 0, Box::new(self.index)),
-            ("@media conditions and their text", 0, Box::new((self.conditions, self.condition_text))),
+            (
+                "@media conditions and their text",
+                0,
+                Box::new((self.conditions, self.condition_text)),
+            ),
             ("@keyframes", 0, Box::new(self.keyframes)),
             ("viewport blocks", 0, Box::new(self.viewport_blocks)),
             ("sheet advisories", 0, Box::new(self.diagnostics)),
@@ -1251,7 +1437,10 @@ impl Engine {
             return false;
         }
         self.generation = next_generation();
-        let options = || ParserOptions { error_recovery: true, ..ParserOptions::default() };
+        let options = || ParserOptions {
+            error_recovery: true,
+            ..ParserOptions::default()
+        };
         for block in &self.viewport_blocks {
             let Ok(declarations) = DeclarationBlock::parse_string(&block.css, options()) else {
                 return false;
@@ -1336,7 +1525,15 @@ impl Engine {
         env: &Env,
         diagnostics: &mut Vec<String>,
     ) -> ComputedStates {
-        self.compute_node_at(node, inline, parent_vars, parent_color, mapper::rem_basis(), env, diagnostics)
+        self.compute_node_at(
+            node,
+            inline,
+            parent_vars,
+            parent_color,
+            mapper::rem_basis(),
+            env,
+            diagnostics,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1350,14 +1547,29 @@ impl Engine {
         env: &Env,
         diagnostics: &mut Vec<String>,
     ) -> ComputedStates {
-        self.compute_node_with_font(node, inline, parent_vars, parent_color, parent_font_size, &gpui::Font::default(), env, diagnostics)
+        self.compute_node_with_font(
+            node,
+            inline,
+            parent_vars,
+            parent_color,
+            parent_font_size,
+            &gpui::Font::default(),
+            env,
+            diagnostics,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn compute_node_with_font<D: MatchDom>(
-        &self, node: D, inline: Option<&InlineStyle>, parent_vars: &Rc<Vars>,
-        parent_color: Option<gpui::Hsla>, parent_font_size: f32, parent_font: &gpui::Font,
-        env: &Env, diagnostics: &mut Vec<String>,
+        &self,
+        node: D,
+        inline: Option<&InlineStyle>,
+        parent_vars: &Rc<Vars>,
+        parent_color: Option<gpui::Hsla>,
+        parent_font_size: f32,
+        parent_font: &gpui::Font,
+        env: &Env,
+        diagnostics: &mut Vec<String>,
     ) -> ComputedStates {
         let probe = perf_on();
         let t0 = probe.then(std::time::Instant::now);
@@ -1381,21 +1593,39 @@ impl Engine {
             };
             let mut ctx: MatchingContext<'_, '_, element::Impl> =
                 MatchingContext::new(mode, None, None, QuirksMode::NoQuirks);
-            if matches_selector(rule.control_origin.as_deref().unwrap_or(&rule.selector), 0, None, &el, &mut ctx, &mut |_, _| {}) {
+            if matches_selector(
+                rule.control_origin.as_deref().unwrap_or(&rule.selector),
+                0,
+                None,
+                &el,
+                &mut ctx,
+                &mut |_, _| {},
+            ) {
                 matched.push(rule);
             }
         });
         let base = self.rules.as_ptr() as usize;
-        let index_of =
-            |r: &RuleEntry| ((r as *const RuleEntry as usize - base) / std::mem::size_of::<RuleEntry>()) as u32;
+        let index_of = |r: &RuleEntry| {
+            ((r as *const RuleEntry as usize - base) / std::mem::size_of::<RuleEntry>()) as u32
+        };
         matched.sort_by_key(|r| (r.specificity, r.order, index_of(r)));
         let t1 = probe.then(std::time::Instant::now);
 
-        let share_key = (self.share && inline.is_none() && !matched.iter().any(|r| r.ancestor.is_some()))
-            .then(|| {
-                let rules = matched.iter().map(|r| index_of(r)).collect();
-                share::Key::new(self.generation, rules, parent_vars, parent_color, parent_font_size, parent_font, env)
-            });
+        let share_key = (self.share
+            && inline.is_none()
+            && !matched.iter().any(|r| r.ancestor.is_some()))
+        .then(|| {
+            let rules = matched.iter().map(|r| index_of(r)).collect();
+            share::Key::new(
+                self.generation,
+                rules,
+                parent_vars,
+                parent_color,
+                parent_font_size,
+                parent_font,
+                env,
+            )
+        });
         if let Some(key) = &share_key {
             let hit = share::lookup(key);
             if probe {
@@ -1417,7 +1647,11 @@ impl Engine {
         let mut state_custom: [Vec<&(String, String)>; STATE_RUNGS] = Default::default();
         for important_pass in [false, true] {
             for r in &matched {
-                let declared = if important_pass { &r.important_custom } else { &r.normal_custom };
+                let declared = if important_pass {
+                    &r.important_custom
+                } else {
+                    &r.normal_custom
+                };
                 if let Some(list) = declared {
                     match rung_of(r.states) {
                         None => own_custom.extend(list.iter()),
@@ -1427,24 +1661,38 @@ impl Engine {
             }
             if let Some(inline) = inline {
                 if let Some(priority) = &inline.priority {
-                    if let Some(custom) = &priority[important_pass as usize].custom { own_custom.extend(custom.iter()); }
-                } else if !important_pass { own_custom.extend(inline.custom.iter()); }
+                    if let Some(custom) = &priority[important_pass as usize].custom {
+                        own_custom.extend(custom.iter());
+                    }
+                } else if !important_pass {
+                    own_custom.extend(inline.custom.iter());
+                }
             }
         }
         let mut registrations = Vec::new();
         for (condition, registration) in &self.percentage_properties {
-            if condition.is_some_and(|c| !self.conditions[c as usize].eval(env)) { continue; }
-            registrations.retain(|r: &registered::PercentageRegistration| r.name != registration.name);
+            if condition.is_some_and(|c| !self.conditions[c as usize].eval(env)) {
+                continue;
+            }
+            registrations
+                .retain(|r: &registered::PercentageRegistration| r.name != registration.name);
             registrations.push(registration.clone());
         }
-        let vars = vars::resolve_registered(parent_vars, &own_custom, &registrations, env, diagnostics);
+        let vars =
+            vars::resolve_registered(parent_vars, &own_custom, &registrations, env, diagnostics);
         let state_vars: [Option<Rc<Vars>>; STATE_RUNGS] = std::array::from_fn(|rung| {
             if state_custom[rung].is_empty() {
                 return None;
             }
             let mut combined = own_custom.clone();
             combined.extend(state_custom[rung].iter().copied());
-            Some(vars::resolve_registered(parent_vars, &combined, &registrations, env, diagnostics))
+            Some(vars::resolve_registered(
+                parent_vars,
+                &combined,
+                &registrations,
+                env,
+                diagnostics,
+            ))
         });
 
         let mut font_size: Option<f32> = None;
@@ -1456,7 +1704,10 @@ impl Engine {
                 }
                 let rung = rung_of(r.states);
                 let scope = rung.and_then(|i| state_vars[i].as_ref()).unwrap_or(&vars);
-                if let Some(size) = mapper::with_font_face(parent_font, || r.half(important_pass).font_size(scope, env, parent_font_size)) {
+                if let Some(size) = mapper::with_font_face(parent_font, || {
+                    r.half(important_pass)
+                        .font_size(scope, env, parent_font_size)
+                }) {
                     match rung {
                         None => font_size = Some(size),
                         Some(i) => rung_font[i] = Some(size),
@@ -1464,7 +1715,9 @@ impl Engine {
                 }
             }
             let inline_half = inline.and_then(|i| Half::of_inline_at(i, important_pass));
-            if let Some(size) = mapper::with_font_face(parent_font, || inline_half.and_then(|(half, _)| half.font_size(&vars, env, parent_font_size))) {
+            if let Some(size) = mapper::with_font_face(parent_font, || {
+                inline_half.and_then(|(half, _)| half.font_size(&vars, env, parent_font_size))
+            }) {
                 font_size = Some(size);
             }
         }
@@ -1472,9 +1725,14 @@ impl Engine {
         let mut descriptor = gpui::TextStyleRefinement::default();
         let mut rung_descriptors: [gpui::TextStyleRefinement; STATE_RUNGS] = Default::default();
         for important in [false, true] {
-            for rule in matched.iter().filter(|rule| rule.pseudo.is_none() && rule.ancestor.is_none()) {
+            for rule in matched
+                .iter()
+                .filter(|rule| rule.pseudo.is_none() && rule.ancestor.is_none())
+            {
                 let rung = rung_of(rule.states);
-                let scope = rung.and_then(|index| state_vars[index].as_ref()).unwrap_or(&vars);
+                let scope = rung
+                    .and_then(|index| state_vars[index].as_ref())
+                    .unwrap_or(&vars);
                 let target = rung.map_or(&mut descriptor, |index| &mut rung_descriptors[index]);
                 rule.half(important).font_descriptor(scope, env, target);
             }
@@ -1483,7 +1741,8 @@ impl Engine {
             }
         }
         let computed_font = refine_font(parent_font, &descriptor);
-        let rung_faces: [gpui::Font; STATE_RUNGS] = std::array::from_fn(|index| refine_font(&computed_font, &rung_descriptors[index]));
+        let rung_faces: [gpui::Font; STATE_RUNGS] =
+            std::array::from_fn(|index| refine_font(&computed_font, &rung_descriptors[index]));
         let t2 = probe.then(std::time::Instant::now);
 
         for r in &matched {
@@ -1537,14 +1796,29 @@ impl Engine {
                     let (mut scratch, mut quiet) = (extras.clone(), Vec::new());
                     rung_outline[index].refine(&$half.outline);
                     $half.apply(
-                        state_vars[index].as_ref().unwrap_or(&vars), env, rung_font[index].unwrap_or(font_size),
-                        parent_font_size, &rung_faces[index], parent_font, bucket, &mut scratch, &mut quiet,
+                        state_vars[index].as_ref().unwrap_or(&vars),
+                        env,
+                        rung_font[index].unwrap_or(font_size),
+                        parent_font_size,
+                        &rung_faces[index],
+                        parent_font,
+                        bucket,
+                        &mut scratch,
+                        &mut quiet,
                     );
                 }
                 for (_, bucket) in group.hover.iter_mut().chain(group.active.iter_mut()) {
                     let (mut scratch, mut quiet) = (extras.clone(), Vec::new());
                     $half.apply(
-                        &vars, env, font_size, parent_font_size, &computed_font, parent_font, bucket, &mut scratch, &mut quiet,
+                        &vars,
+                        env,
+                        font_size,
+                        parent_font_size,
+                        &computed_font,
+                        parent_font,
+                        bucket,
+                        &mut scratch,
+                        &mut quiet,
                     );
                 }
             }};
@@ -1558,14 +1832,35 @@ impl Engine {
                     if let Some(index) = which.control_index() {
                         let fold = controls[index].get_or_insert_with(ControlFold::default);
                         let rung = rung_of(r.states);
-                        if let Some(rung) = rung { fold.states[rung] = true; }
+                        if let Some(rung) = rung {
+                            fold.states[rung] = true;
+                        }
                         for slot_index in 0..=STATE_RUNGS {
-                            if rung.is_some_and(|rung| slot_index != rung + 1) { continue; }
-                            let vars = if slot_index == 0 { &vars } else { state_vars[slot_index-1].as_ref().unwrap_or(&vars) };
+                            if rung.is_some_and(|rung| slot_index != rung + 1) {
+                                continue;
+                            }
+                            let vars = if slot_index == 0 {
+                                &vars
+                            } else {
+                                state_vars[slot_index - 1].as_ref().unwrap_or(&vars)
+                            };
                             let slot = &mut fold.slots[slot_index];
-                            slot.1.refine(if important_pass { &r.important_extras } else { &r.normal_extras });
-                            r.half(important_pass).apply(vars, env, font_size, font_size,
-                                &computed_font, &computed_font, &mut slot.0, &mut slot.1, diagnostics);
+                            slot.1.refine(if important_pass {
+                                &r.important_extras
+                            } else {
+                                &r.normal_extras
+                            });
+                            r.half(important_pass).apply(
+                                vars,
+                                env,
+                                font_size,
+                                font_size,
+                                &computed_font,
+                                &computed_font,
+                                &mut slot.0,
+                                &mut slot.1,
+                                diagnostics,
+                            );
                         }
                         continue;
                     }
@@ -1574,7 +1869,9 @@ impl Engine {
                         PseudoElement::After => (&mut after, &mut any_after),
                         PseudoElement::Placeholder => (&mut placeholder, &mut any_placeholder),
                         PseudoElement::Selection => (&mut selection, &mut any_selection),
-                        PseudoElement::FileSelectorButton => (&mut file_button, &mut any_file_button),
+                        PseudoElement::FileSelectorButton => {
+                            (&mut file_button, &mut any_file_button)
+                        }
                         _ => unreachable!("control pseudo-elements handled above"),
                     };
                     *seen = true;
@@ -1584,7 +1881,15 @@ impl Engine {
                         &r.normal_extras
                     });
                     r.half(important_pass).apply(
-                        &vars, env, font_size, font_size, &computed_font, &computed_font, &mut slot.0, &mut slot.1, diagnostics,
+                        &vars,
+                        env,
+                        font_size,
+                        font_size,
+                        &computed_font,
+                        &computed_font,
+                        &mut slot.0,
+                        &mut slot.1,
+                        diagnostics,
                     );
                     continue;
                 }
@@ -1621,7 +1926,17 @@ impl Engine {
                         continue;
                     };
                     let svg_before = svg_base(&extras);
-                    half.apply(&vars, env, font_size, parent_font_size, &computed_font, parent_font, bucket, &mut extras, diagnostics);
+                    half.apply(
+                        &vars,
+                        env,
+                        font_size,
+                        parent_font_size,
+                        &computed_font,
+                        parent_font,
+                        bucket,
+                        &mut extras,
+                        diagnostics,
+                    );
                     if half.font_relative() {
                         keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
                     }
@@ -1662,7 +1977,17 @@ impl Engine {
                 let basis = rung.and_then(|i| rung_font[i]).unwrap_or(font_size);
                 let radius_inherit = extras.radius_inherit;
                 let svg_before = rung.is_some().then(|| svg_base(&extras));
-                half.apply(scope, env, basis, parent_font_size, rung.map_or(&computed_font, |index| &rung_faces[index]), parent_font, bucket, &mut extras, diagnostics);
+                half.apply(
+                    scope,
+                    env,
+                    basis,
+                    parent_font_size,
+                    rung.map_or(&computed_font, |index| &rung_faces[index]),
+                    parent_font,
+                    bucket,
+                    &mut extras,
+                    diagnostics,
+                );
                 if rung.is_some() && half.font_relative() {
                     keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
                 }
@@ -1676,9 +2001,19 @@ impl Engine {
             if let Some(decoration) = held_decoration.take() {
                 extras.decoration = decoration;
             }
-            if let Some((half, inline_extras)) = inline.and_then(|i| Half::of_inline_at(i, important_pass)) {
+            if let Some((half, inline_extras)) =
+                inline.and_then(|i| Half::of_inline_at(i, important_pass))
+            {
                 half.apply(
-                    &vars, env, font_size, parent_font_size, &computed_font, parent_font, &mut base, &mut extras, diagnostics,
+                    &vars,
+                    env,
+                    font_size,
+                    parent_font_size,
+                    &computed_font,
+                    parent_font,
+                    &mut base,
+                    &mut extras,
+                    diagnostics,
                 );
                 extras.refine(inline_extras);
                 over_state_buckets!(half);
@@ -1687,30 +2022,62 @@ impl Engine {
         let mut transition_components = transition::Collector::default();
         for important in [false, true] {
             for rule in &matched {
-                if rule.pseudo.is_some() || rule.states != 0 || rule.ancestor.is_some() { continue; }
-                let declarations = if important { &rule.important_transition_declarations } else { &rule.normal_transition_declarations };
-                if let Some(declarations) = declarations { transition_components.merge(declarations); }
-                let patch = if important { &rule.important_animation_patch } else { &rule.normal_animation_patch };
-                if let Some(patch) = patch { patch.apply_over(&mut animation_patch); }
+                if rule.pseudo.is_some() || rule.states != 0 || rule.ancestor.is_some() {
+                    continue;
+                }
+                let declarations = if important {
+                    &rule.important_transition_declarations
+                } else {
+                    &rule.normal_transition_declarations
+                };
+                if let Some(declarations) = declarations {
+                    transition_components.merge(declarations);
+                }
+                let patch = if important {
+                    &rule.important_animation_patch
+                } else {
+                    &rule.normal_animation_patch
+                };
+                if let Some(patch) = patch {
+                    patch.apply_over(&mut animation_patch);
+                }
             }
             if let Some(inline) = inline {
                 if inline.normal_motion.is_some() || inline.important_motion.is_some() {
-                    let motion = if important { &inline.important_motion } else { &inline.normal_motion };
+                    let motion = if important {
+                        &inline.important_motion
+                    } else {
+                        &inline.normal_motion
+                    };
                     if let Some(motion) = motion {
-                        if let Some(declarations) = &motion.transitions { transition_components.merge(declarations); }
-                        if let Some(patch) = &motion.animations { patch.apply_over(&mut animation_patch); }
+                        if let Some(declarations) = &motion.transitions {
+                            transition_components.merge(declarations);
+                        }
+                        if let Some(patch) = &motion.animations {
+                            patch.apply_over(&mut animation_patch);
+                        }
                     }
                 } else if !important {
-                    if let Some(list) = &inline.transitions { transition_components.merge(&transition::Collector::from_specs(list)); }
+                    if let Some(list) = &inline.transitions {
+                        transition_components.merge(&transition::Collector::from_specs(list));
+                    }
                     if let Some(list) = &inline.animations {
                         animations = Some(list.clone());
-                        if let Some(patch) = keyframes::AnimationCollector::from_specs(list).finish().1 { patch.apply_over(&mut animation_patch); }
+                        if let Some(patch) =
+                            keyframes::AnimationCollector::from_specs(list).finish().1
+                        {
+                            patch.apply_over(&mut animation_patch);
+                        }
                     }
-                    if let Some(patch) = &inline.animation_patch { patch.apply_over(&mut animation_patch); }
+                    if let Some(patch) = &inline.animation_patch {
+                        patch.apply_over(&mut animation_patch);
+                    }
                 }
             }
         }
-        if let Some(list) = transition_components.finish() { transitions = Some(Rc::new(list)); }
+        if let Some(list) = transition_components.finish() {
+            transitions = Some(Rc::new(list));
+        }
 
         let base_font_relative = matched
             .iter()
@@ -1718,7 +2085,13 @@ impl Engine {
             .any(|r| r.half(false).font_relative() || r.half(true).font_relative())
             || inline.is_some_and(|i| Half::of_inline(i).font_relative());
         if base_font_relative {
-            let rungs = [&mut active, &mut hover, &mut focus_visible, &mut focus, &mut focus_within];
+            let rungs = [
+                &mut active,
+                &mut hover,
+                &mut focus_visible,
+                &mut focus,
+                &mut focus_within,
+            ];
             for (i, bucket) in rungs.into_iter().enumerate() {
                 let size = rung_font[i].unwrap_or(font_size);
                 if size == font_size && rung_faces[i] == computed_font {
@@ -1728,15 +2101,34 @@ impl Engine {
                 let mut scratch = Extras::default();
                 let mut quiet = Vec::new();
                 for important_pass in [false, true] {
-                    for r in matched.iter().filter(|r| r.pseudo.is_none() && r.ancestor.is_none() && r.states == 0) {
+                    for r in matched
+                        .iter()
+                        .filter(|r| r.pseudo.is_none() && r.ancestor.is_none() && r.states == 0)
+                    {
                         r.half(important_pass).apply(
-                            &vars, env, size, parent_font_size, &rung_faces[i], parent_font, &mut again, &mut scratch, &mut quiet,
+                            &vars,
+                            env,
+                            size,
+                            parent_font_size,
+                            &rung_faces[i],
+                            parent_font,
+                            &mut again,
+                            &mut scratch,
+                            &mut quiet,
                         );
                     }
                 }
                 if let Some(inline) = inline {
                     Half::of_inline(inline).apply(
-                        &vars, env, size, parent_font_size, &rung_faces[i], parent_font, &mut again, &mut scratch, &mut quiet,
+                        &vars,
+                        env,
+                        size,
+                        parent_font_size,
+                        &rung_faces[i],
+                        parent_font,
+                        &mut again,
+                        &mut scratch,
+                        &mut quiet,
                     );
                 }
                 again.refine(bucket);
@@ -1756,11 +2148,22 @@ impl Engine {
             let ms = |a: std::time::Instant, b: std::time::Instant| {
                 b.saturating_duration_since(a).as_secs_f32() * 1000.0
             };
-            perf::note_node(tested, ms(t0, t1), ms(t1, t2), ms(t2, std::time::Instant::now()));
+            perf::note_node(
+                tested,
+                ms(t0, t1),
+                ms(t1, t2),
+                ms(t2, std::time::Instant::now()),
+            );
             perf::note_split(by_bucket, matched.len());
         }
         if let Some(ring) = base.vn_outline {
-            let rungs = [&mut active, &mut hover, &mut focus_visible, &mut focus, &mut focus_within];
+            let rungs = [
+                &mut active,
+                &mut hover,
+                &mut focus_visible,
+                &mut focus,
+                &mut focus_within,
+            ];
             for (index, bucket) in rungs.into_iter().enumerate() {
                 if let Some(own) = bucket.vn_outline.as_mut() {
                     rung_outline[index].inherit_from(ring, own);
@@ -1771,8 +2174,16 @@ impl Engine {
         // `:hover` rule cannot change what `currentColor` means.
         let effective_color = base.text.color.or(parent_color);
         if extras.current_color != mapper::CurrentColorTargets::default()
-            || [&base, &hover, &active, &focus, &focus_visible, &focus_within]
-                .iter().any(|refinement| mapper::border_needs_current_color(refinement))
+            || [
+                &base,
+                &hover,
+                &active,
+                &focus,
+                &focus_visible,
+                &focus_within,
+            ]
+            .iter()
+            .any(|refinement| mapper::border_needs_current_color(refinement))
         {
             let value = effective_color.unwrap_or_else(gpui::black);
             let targets = extras.current_color;
@@ -1792,13 +2203,21 @@ impl Engine {
         }
         for (_, refinement) in group.hover.iter_mut().chain(group.active.iter_mut()) {
             if mapper::border_needs_current_color(refinement) {
-                let color = refinement.text.color.or(effective_color).unwrap_or_else(gpui::black);
+                let color = refinement
+                    .text
+                    .color
+                    .or(effective_color)
+                    .unwrap_or_else(gpui::black);
                 mapper::apply_current_color(refinement, CurrentColorTargets::default(), color);
             }
         }
         for (refinement, _) in [&mut before, &mut after] {
             if mapper::border_needs_current_color(refinement) {
-                let color = refinement.text.color.or(effective_color).unwrap_or_else(gpui::black);
+                let color = refinement
+                    .text
+                    .color
+                    .or(effective_color)
+                    .unwrap_or_else(gpui::black);
                 mapper::apply_current_color(refinement, CurrentColorTargets::default(), color);
             }
         }
@@ -1820,7 +2239,13 @@ impl Engine {
             }
         }
         extras.decoration.apply(&mut base.text);
-        for (refinement, own) in [&mut before, &mut after, &mut placeholder, &mut selection, &mut file_button] {
+        for (refinement, own) in [
+            &mut before,
+            &mut after,
+            &mut placeholder,
+            &mut selection,
+            &mut file_button,
+        ] {
             own.decoration.apply(&mut refinement.text);
         }
         mapper::compute_overflow(&mut base, &mut extras);
@@ -1887,15 +2312,32 @@ impl Engine {
             font_size,
             computed_font,
         };
-        let animated_registrations: Vec<_> = registrations.into_iter().filter(|registration| {
-            states.animations.iter().any(|animation| self.keyframes(&animation.name, env).is_some_and(|frames| {
-                frames.steps.iter().any(|step| step.custom.as_ref().is_some_and(|declarations|
-                    declarations.iter().any(|(name, _)| name == &registration.name)))
-            }))
-        }).collect();
+        let animated_registrations: Vec<_> = registrations
+            .into_iter()
+            .filter(|registration| {
+                states.animations.iter().any(|animation| {
+                    self.keyframes(&animation.name, env).is_some_and(|frames| {
+                        frames.steps.iter().any(|step| {
+                            step.custom.as_ref().is_some_and(|declarations| {
+                                declarations
+                                    .iter()
+                                    .any(|(name, _)| name == &registration.name)
+                            })
+                        })
+                    })
+                })
+            })
+            .collect();
         if !animated_registrations.is_empty() {
-            states.custom_animation = Some(Rc::new(CustomAnimationContext::new(animated_registrations, &states,
-                &matched, inline, *env, parent_font_size, parent_font)));
+            states.custom_animation = Some(Rc::new(CustomAnimationContext::new(
+                animated_registrations,
+                &states,
+                &matched,
+                inline,
+                *env,
+                parent_font_size,
+                parent_font,
+            )));
         }
         if let Some(key) = share_key {
             share::insert(key, &states);
@@ -1983,10 +2425,13 @@ impl Engine {
         let dynamic = steps.iter().any(|s| s.dynamic.is_some());
         // Appended, not replaced: "a later block with the same name wins" is still the rule, but
         // only among the blocks that are DECLARED — and a media-scoped one is declared per window.
-        self.keyframes.entry(name).or_default().push(KeyframesBlock {
-            condition,
-            block: Rc::new(keyframes::Keyframes { steps, dynamic }),
-        });
+        self.keyframes
+            .entry(name)
+            .or_default()
+            .push(KeyframesBlock {
+                condition,
+                block: Rc::new(keyframes::Keyframes { steps, dynamic }),
+            });
     }
 }
 
@@ -2104,7 +2549,11 @@ struct GroupFold {
 impl GroupFold {
     fn bucket(&mut self, states: u8, key: u64) -> Option<&mut StyleRefinement> {
         let conflict = &mut self.conflict;
-        let slot = if states & STATE_ACTIVE != 0 { &mut self.active } else { &mut self.hover };
+        let slot = if states & STATE_ACTIVE != 0 {
+            &mut self.active
+        } else {
+            &mut self.hover
+        };
         match slot.as_ref().map(|(owner, _)| *owner) {
             Some(owner) if owner != key => {
                 *conflict = true;
@@ -2207,7 +2656,10 @@ pub(crate) fn classify_states(
             );
             continue;
         }
-        ancestor = Some(AncestorState { offset: compound_start, states: here });
+        ancestor = Some(AncestorState {
+            offset: compound_start,
+            states: here,
+        });
     }
     Some((states, ancestor))
 }
@@ -2241,15 +2693,21 @@ fn pseudo_box(
 fn control_origin_selector(sel: &Selector<'_>) -> Option<Selector<'static>> {
     use lightningcss::selector::PseudoElement as PE;
     use lightningcss::traits::IntoOwned as _;
-    let PE::Custom { name } = sel.pseudo_element()? else { return None };
+    let PE::Custom { name } = sel.pseudo_element()? else {
+        return None;
+    };
     let mut text = sel_text(sel);
     let marker = format!("::{name}");
     let start = text.rfind(&marker)?;
-    text.replace_range(start..start+marker.len(), "");
-    if text.trim().is_empty() || text.ends_with(char::is_whitespace) { text.push('*'); }
+    text.replace_range(start..start + marker.len(), "");
+    if text.trim().is_empty() || text.ends_with(char::is_whitespace) {
+        text.push('*');
+    }
     let source = format!("{text}{{color:red}}");
     let parsed = StyleSheet::parse(&source, ParserOptions::default()).ok()?;
-    let CssRule::Style(style) = parsed.rules.0.first()? else { return None };
+    let CssRule::Style(style) = parsed.rules.0.first()? else {
+        return None;
+    };
     Some(style.selectors.0.first()?.clone().into_owned())
 }
 
@@ -2369,7 +2827,10 @@ where
 
 fn matches_from_props(pc: &PseudoClass<'_>) -> bool {
     match pc {
-        PseudoClass::Disabled | PseudoClass::Enabled | PseudoClass::Checked | PseudoClass::Fullscreen(_) => true,
+        PseudoClass::Disabled
+        | PseudoClass::Enabled
+        | PseudoClass::Checked
+        | PseudoClass::Fullscreen(_) => true,
         PseudoClass::Custom { name } => crate::has::is_marker(name.as_ref()),
         _ => false,
     }
@@ -2516,8 +2977,9 @@ fn reparse_selector(text: &str) -> Option<&'static Selector<'static>> {
     }
     let parsed = (|| {
         let source: &'static str = Box::leak(format!("{text}{{color:red}}").into_boxed_str());
-        let sheet: &'static StyleSheet<'static> =
-            Box::leak(Box::new(StyleSheet::parse(source, ParserOptions::default()).ok()?));
+        let sheet: &'static StyleSheet<'static> = Box::leak(Box::new(
+            StyleSheet::parse(source, ParserOptions::default()).ok()?,
+        ));
         match sheet.rules.0.first() {
             Some(CssRule::Style(style)) => style.selectors.0.first(),
             _ => None,
@@ -2533,8 +2995,7 @@ fn sel_text(sel: &Selector<'_>) -> String {
         .unwrap_or_else(|_| "<selector>".into())
 }
 
-static CAPTURE_RULE_TEXT: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static CAPTURE_RULE_TEXT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Turns rule-text capture on (or off) for every sheet compiled AFTER this call — the sheet already
 /// installed keeps whatever it was compiled with.
@@ -2588,7 +3049,14 @@ impl Engine {
             };
             let mut ctx: MatchingContext<'_, '_, element::Impl> =
                 MatchingContext::new(mode, None, None, QuirksMode::NoQuirks);
-            if matches_selector(rule.control_origin.as_deref().unwrap_or(&rule.selector), 0, None, &el, &mut ctx, &mut |_, _| {}) {
+            if matches_selector(
+                rule.control_origin.as_deref().unwrap_or(&rule.selector),
+                0,
+                None,
+                &el,
+                &mut ctx,
+                &mut |_, _| {},
+            ) {
                 matched.push(rule);
             }
         });
@@ -2709,7 +3177,10 @@ pub fn query_all_in<D: MatchDom>(
             matched.push(i);
         }
     }
-    Ok(QueryResult { matched, warnings: diagnostics })
+    Ok(QueryResult {
+        matched,
+        warnings: diagnostics,
+    })
 }
 
 fn join_diagnostics(diagnostics: &[String]) -> String {
@@ -2788,9 +3259,7 @@ mod tests {
     fn recompiling_the_same_text_retains_nothing_new() {
         let css = ".box { height: 10vh } .box:has(> .c) { opacity: 0.5 } \
                    @supports selector(:has(a)) { .box { width: 1px } }";
-        let counts = || {
-            (REPARSED.with(|r| r.borrow().len()), has::registry_len())
-        };
+        let counts = || (REPARSED.with(|r| r.borrow().len()), has::registry_len());
         let first = Engine::compile(css);
         let after_first = counts();
         assert!(after_first.1 >= 1, "the :has() argument was filed");
@@ -2804,18 +3273,37 @@ mod tests {
     #[test]
     fn compile_sheets_is_one_ordered_cascade_of_separate_parses() {
         let engine = Engine::compile_sheets(&[".box { opacity: 0.1 }", ".box { opacity: 0.5 }"]);
-        assert_eq!(engine.compute(box_node(), None, &Env::default()).base.opacity, Some(0.5));
+        assert_eq!(
+            engine
+                .compute(box_node(), None, &Env::default())
+                .base
+                .opacity,
+            Some(0.5)
+        );
         let engine = Engine::compile_sheets(&[".box { opacity: 0.1 } }", ".box { opacity: 0.6 }"]);
-        assert_eq!(engine.compute(box_node(), None, &Env::default()).base.opacity, Some(0.6));
+        assert_eq!(
+            engine
+                .compute(box_node(), None, &Env::default())
+                .base
+                .opacity,
+            Some(0.6)
+        );
     }
 
     fn node_with(attrs: &'static [(&'static str, &'static str)]) -> Node {
-        Node { tag: "div", class: "box", attrs }
+        Node {
+            tag: "div",
+            class: "box",
+            attrs,
+        }
     }
 
     fn transitions(css: &str) -> Vec<TransitionSpec> {
         let engine = Engine::compile(css);
-        (*engine.compute(box_node(), None, &Env::default()).transitions).clone()
+        (*engine
+            .compute(box_node(), None, &Env::default())
+            .transitions)
+            .clone()
     }
 
     #[test]
@@ -2826,17 +3314,30 @@ mod tests {
                    .box { transition: opacity 200ms linear }";
         let engine = Engine::compile(css);
         assert!(
-            !engine.diagnostics.iter().any(|d| d.starts_with("stylesheet parse error")),
+            !engine
+                .diagnostics
+                .iter()
+                .any(|d| d.starts_with("stylesheet parse error")),
             "the sheet failed as a whole: {:?}",
             engine.diagnostics
         );
         assert!(
-            engine.diagnostics.iter().any(|d| d.contains("skipped, as a browser skips it")),
+            engine
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("skipped, as a browser skips it")),
             "the skipped rule is named: {:?}",
             engine.diagnostics
         );
-        assert!(engine.keyframes.contains_key("pulse"), "the @keyframes before the stray brace survives");
-        assert_eq!(transitions(css).len(), 1, "parsing resumed: the rule after the damage applies");
+        assert!(
+            engine.keyframes.contains_key("pulse"),
+            "the @keyframes before the stray brace survives"
+        );
+        assert_eq!(
+            transitions(css).len(),
+            1,
+            "parsing resumed: the rule after the damage applies"
+        );
     }
 
     #[test]
@@ -2895,7 +3396,8 @@ mod tests {
         let engine = Engine::compile(".box:hover { transition: opacity 1s; opacity: 0.5 }");
         let said = advisories(".box:hover { transition: opacity 1s; opacity: 0.5 }");
         assert!(
-            said.iter().any(|d| d.contains("transition declared on a state selector")),
+            said.iter()
+                .any(|d| d.contains("transition declared on a state selector")),
             "{said:?}"
         );
         let states = engine.compute(box_node(), None, &Env::default());
@@ -2949,15 +3451,28 @@ mod tests {
                transition-duration: 150ms } \
              .box { /* .duration-300 */ transition-duration: 300ms }",
         );
-        assert_eq!(t.iter().map(|transition| transition.property.clone()).collect::<Vec<_>>(), vec![
-            TransitionProperty::Color, TransitionProperty::BackgroundColor,
-            TransitionProperty::BorderColor, TransitionProperty::TextDecorationColor,
-            TransitionProperty::Fill, TransitionProperty::Stroke,
-        ]);
-        assert!(t.iter().all(|transition| transition.duration == Duration::from_millis(300)
-            && transition.easing == Easing::CubicBezier(0.4, 0.0, 0.2, 1.0)));
+        assert_eq!(
+            t.iter()
+                .map(|transition| transition.property.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                TransitionProperty::Color,
+                TransitionProperty::BackgroundColor,
+                TransitionProperty::BorderColor,
+                TransitionProperty::TextDecorationColor,
+                TransitionProperty::Fill,
+                TransitionProperty::Stroke,
+            ]
+        );
+        assert!(t.iter().all(
+            |transition| transition.duration == Duration::from_millis(300)
+                && transition.easing == Easing::CubicBezier(0.4, 0.0, 0.2, 1.0)
+        ));
         assert!(spec_for(&t, &TransitionProperty::BackgroundColor).is_some());
-        assert!(spec_for(&t, &TransitionProperty::Width).is_none(), "the color-only utility must not start animating layout");
+        assert!(
+            spec_for(&t, &TransitionProperty::Width).is_none(),
+            "the color-only utility must not start animating layout"
+        );
     }
 
     #[test]
@@ -2977,7 +3492,8 @@ mod tests {
         assert_eq!(t[4].property, TransitionProperty::Fill);
         assert_eq!(t[5].property, TransitionProperty::Stroke);
         assert!(
-            !t.iter().any(|s| matches!(s.property, TransitionProperty::Other(_))),
+            !t.iter()
+                .any(|s| matches!(s.property, TransitionProperty::Other(_))),
             "nothing in `transition-colors` should still be unrecognised: {t:?}",
         );
     }
@@ -2989,8 +3505,11 @@ mod tests {
         let b = engine.compute(box_node(), None, &Env::default());
         assert_eq!(a, b);
 
-        let other = Engine::compile(".box { transition: opacity 1s; opacity: 0.6 }")
-            .compute(box_node(), None, &Env::default());
+        let other = Engine::compile(".box { transition: opacity 1s; opacity: 0.6 }").compute(
+            box_node(),
+            None,
+            &Env::default(),
+        );
         assert_ne!(a, other);
     }
 
@@ -3021,7 +3540,11 @@ mod tests {
     fn tailwinds_focus_variant_compiles_onto_the_focus_rung() {
         let engine = Engine::compile(r".focus\:opacity-100:focus { opacity: 1 }");
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
-        let node = Node { tag: "div", class: "focus:opacity-100", attrs: &[] };
+        let node = Node {
+            tag: "div",
+            class: "focus:opacity-100",
+            attrs: &[],
+        };
         let s = engine.compute(node, None, &Env::default());
         assert_eq!(s.focus.as_ref().and_then(|f| f.opacity), Some(1.0));
     }
@@ -3030,7 +3553,10 @@ mod tests {
     fn several_states_in_one_compound_pick_the_strongest_rung_and_warn() {
         let engine = Engine::compile(".box:hover:focus { opacity: 0.4 }");
         assert!(
-            engine.diagnostics.iter().any(|d| d.contains("several interaction states")),
+            engine
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("several interaction states")),
             "{:?}",
             engine.diagnostics
         );
@@ -3099,7 +3625,10 @@ mod tests {
     fn an_ancestor_focus_selector_is_dropped_with_a_diagnostic() {
         let engine = Engine::compile(".box:focus .child { opacity: 0.4 }");
         assert!(
-            engine.diagnostics.iter().any(|d| d.contains("on an ANCESTOR compound")),
+            engine
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("on an ANCESTOR compound")),
             "{:?}",
             engine.diagnostics
         );
@@ -3110,7 +3639,10 @@ mod tests {
     fn a_sibling_state_selector_is_dropped_with_a_diagnostic() {
         let engine = Engine::compile(".a:hover + .b { opacity: 0.4 }");
         assert!(
-            engine.diagnostics.iter().any(|d| d.contains("sibling-state selector")),
+            engine
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("sibling-state selector")),
             "{:?}",
             engine.diagnostics
         );
@@ -3166,7 +3698,11 @@ mod tests {
         assert!(engine.rebase_viewport());
         let fresh = Engine::compile(css);
         for class in ["box", "other", "plain"] {
-            let node = Node { tag: "div", class, attrs: &[] };
+            let node = Node {
+                tag: "div",
+                class,
+                attrs: &[],
+            };
             assert_eq!(
                 engine.compute(node, None, &Env::default()),
                 fresh.compute(node, None, &Env::default()),
@@ -3176,17 +3712,25 @@ mod tests {
         let s = engine.compute(box_node(), None, &Env::default());
         assert_eq!(s.base.size.width, Some(gpui::px(1080.0).into()));
         assert_eq!(s.base.max_size.height, Some(gpui::px(430.0).into()));
-        assert_eq!(s.transitions.len(), 1, "the rebased rule keeps its transition");
+        assert_eq!(
+            s.transitions.len(),
+            1,
+            "the rebased rule keeps its transition"
+        );
         set_viewport_basis(INITIAL_VIEWPORT_BASIS.0, INITIAL_VIEWPORT_BASIS.1);
     }
 
     #[test]
     fn a_viewport_unit_in_keyframes_asks_for_a_recompile() {
-        let mut engine = Engine::compile("@keyframes grow { from { height: 50vh } to { height: 10px } }");
+        let mut engine =
+            Engine::compile("@keyframes grow { from { height: 50vh } to { height: 10px } }");
         assert!(uses_viewport_units());
         assert!(!engine.rebase_viewport());
         let mut plain = Engine::compile(".box { width: 10px }");
-        assert!(plain.rebase_viewport(), "nothing to re-resolve is not a failure");
+        assert!(
+            plain.rebase_viewport(),
+            "nothing to re-resolve is not a failure"
+        );
     }
 
     fn engine_digest(engine: &Engine) -> Vec<String> {
@@ -3229,12 +3773,18 @@ mod tests {
             ("parent tag", &engine.index.by_parent_tag),
         ]
         .into_iter()
-        .flat_map(|(kind, map)| map.iter().map(move |(k, v)| format!("index {kind} {k}: {v:?}")))
+        .flat_map(|(kind, map)| {
+            map.iter()
+                .map(move |(k, v)| format!("index {kind} {k}: {v:?}"))
+        })
         .collect();
         buckets.sort();
         out.extend(buckets);
         out.push(format!("index root: {:?}", engine.index.root));
-        out.push(format!("index any: {:?} enabled {}", engine.index.any, engine.index.enabled));
+        out.push(format!(
+            "index any: {:?} enabled {}",
+            engine.index.any, engine.index.enabled
+        ));
         for (c, t) in engine.conditions.iter().zip(&engine.condition_text) {
             out.push(format!("media {t}: {c:?}"));
         }
@@ -3246,9 +3796,17 @@ mod tests {
                     .block
                     .steps
                     .iter()
-                    .map(|k| format!("{:?} {:?} {:?} {:?}", k.offset, k.easing, k.style, k.dynamic))
+                    .map(|k| {
+                        format!(
+                            "{:?} {:?} {:?} {:?}",
+                            k.offset, k.easing, k.style, k.dynamic
+                        )
+                    })
                     .collect();
-                out.push(format!("keyframes {name} {:?} {} {steps:?}", b.condition, b.block.dynamic));
+                out.push(format!(
+                    "keyframes {name} {:?} {} {steps:?}",
+                    b.condition, b.block.dynamic
+                ));
             }
         }
         for b in &engine.viewport_blocks {
@@ -3266,7 +3824,10 @@ mod tests {
     #[ignore = "needs SK_SHEET=<css file> and SK_ENGINE_DIGEST=<file>"]
     fn engine_digest_matches_the_recorded_one() {
         use std::hash::{Hash as _, Hasher as _};
-        let (Ok(sheet), Ok(file)) = (std::env::var("SK_SHEET"), std::env::var("SK_ENGINE_DIGEST")) else { return };
+        let (Ok(sheet), Ok(file)) = (std::env::var("SK_SHEET"), std::env::var("SK_ENGINE_DIGEST"))
+        else {
+            return;
+        };
         let css = std::fs::read_to_string(&sheet).expect("SK_SHEET is readable");
         set_viewport_basis(INITIAL_VIEWPORT_BASIS.0, INITIAL_VIEWPORT_BASIS.1);
         let lines = engine_digest(&Engine::compile(&css));
@@ -3286,7 +3847,12 @@ mod tests {
             Ok(recorded) => {
                 let recorded: Vec<&str> = recorded.lines().collect();
                 for (i, (a, b)) in recorded.iter().zip(&hashed).enumerate() {
-                    assert_eq!(*a, b.as_str(), "line {i} differs; it now reads: {}", lines[i]);
+                    assert_eq!(
+                        *a,
+                        b.as_str(),
+                        "line {i} differs; it now reads: {}",
+                        lines[i]
+                    );
                 }
                 assert_eq!(recorded.len(), hashed.len(), "line count");
                 eprintln!("{} lines, all equal to {file}", hashed.len());
@@ -3297,7 +3863,9 @@ mod tests {
     #[test]
     #[ignore = "needs SK_SHEET=<css file>"]
     fn rebase_matches_a_fresh_compile_on_a_real_sheet() {
-        let Ok(path) = std::env::var("SK_SHEET") else { return };
+        let Ok(path) = std::env::var("SK_SHEET") else {
+            return;
+        };
         let css = std::fs::read_to_string(&path).expect("SK_SHEET is readable");
         set_viewport_basis(1000.0, 800.0);
         let mut engine = Engine::compile(&css);
@@ -3325,7 +3893,11 @@ mod tests {
                 && a.important_dynamic == b.important_dynamic
                 && a.normal_font == b.normal_font
                 && a.important_font == b.important_font;
-            assert!(same, "rule {i} ({}) differs after the rebase", sel_text(&a.selector));
+            assert!(
+                same,
+                "rule {i} ({}) differs after the rebase",
+                sel_text(&a.selector)
+            );
         }
         eprintln!(
             "{} rules, {} viewport blocks filling {touched} of them: all equal to a fresh compile",
@@ -3340,9 +3912,33 @@ mod tests {
         let engine = Engine::compile(
             ".a { display: inline-flex } .b { display: flex } .c { display: inline }",
         );
-        let a = engine.compute(Node { tag: "div", class: "a", attrs: &[] }, None, &Env::default());
-        let b = engine.compute(Node { tag: "div", class: "b", attrs: &[] }, None, &Env::default());
-        let c = engine.compute(Node { tag: "div", class: "c", attrs: &[] }, None, &Env::default());
+        let a = engine.compute(
+            Node {
+                tag: "div",
+                class: "a",
+                attrs: &[],
+            },
+            None,
+            &Env::default(),
+        );
+        let b = engine.compute(
+            Node {
+                tag: "div",
+                class: "b",
+                attrs: &[],
+            },
+            None,
+            &Env::default(),
+        );
+        let c = engine.compute(
+            Node {
+                tag: "div",
+                class: "c",
+                attrs: &[],
+            },
+            None,
+            &Env::default(),
+        );
         assert_eq!(a.extras.inline_level, Some(true));
         assert_eq!(a.base.display, Some(gpui::Display::Flex));
         assert_eq!(b.extras.inline_level, Some(false));
@@ -3375,7 +3971,10 @@ mod tests {
     fn enabled_is_the_complement_and_checked_reads_its_own_property() {
         let engine = Engine::compile(".box:enabled { opacity: 1 } .box:checked { opacity: 0.5 }");
         assert_eq!(
-            engine.compute(box_node(), None, &Env::default()).base.opacity,
+            engine
+                .compute(box_node(), None, &Env::default())
+                .base
+                .opacity,
             Some(1.0)
         );
         assert_eq!(
@@ -3423,8 +4022,14 @@ mod tests {
     fn attribute_presence_and_exact_value() {
         assert!(attr_matches("[disabled]", &[("disabled", "")]));
         assert!(!attr_matches("[disabled]", &[]));
-        assert!(attr_matches(r#"[data-state="open"]"#, &[("data-state", "open")]));
-        assert!(!attr_matches(r#"[data-state="open"]"#, &[("data-state", "closed")]));
+        assert!(attr_matches(
+            r#"[data-state="open"]"#,
+            &[("data-state", "open")]
+        ));
+        assert!(!attr_matches(
+            r#"[data-state="open"]"#,
+            &[("data-state", "closed")]
+        ));
         assert!(!attr_matches(r#"[data-state="open"]"#, &[]));
         assert!(attr_matches(
             r#"[aria-expanded="true"]"#,
@@ -3438,15 +4043,33 @@ mod tests {
         let display = |css: &str, attrs: &'static [(&'static str, &'static str)]| {
             let engine = Engine::compile(css);
             assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
-            engine.compute(node_with(attrs), None, &Env::default()).base.display
+            engine
+                .compute(node_with(attrs), None, &Env::default())
+                .base
+                .display
         };
         assert_eq!(display("", &[("hidden", "")]), Some(Gone));
-        assert_eq!(display("", &[("hidden", "until-found")]), Some(Gone), "treated as hidden");
-        assert_eq!(display("", &[]), None, "no attribute, no rule");
-        assert_eq!(display("div { display: flex }", &[("hidden", "")]), Some(Flex), "a type selector");
-        assert_eq!(display("* { display: grid }", &[("hidden", "")]), Some(Grid), "even `*`");
         assert_eq!(
-            display(".box[hidden] { display: none } .box { display: flex }", &[("hidden", "")]),
+            display("", &[("hidden", "until-found")]),
+            Some(Gone),
+            "treated as hidden"
+        );
+        assert_eq!(display("", &[]), None, "no attribute, no rule");
+        assert_eq!(
+            display("div { display: flex }", &[("hidden", "")]),
+            Some(Flex),
+            "a type selector"
+        );
+        assert_eq!(
+            display("* { display: grid }", &[("hidden", "")]),
+            Some(Grid),
+            "even `*`"
+        );
+        assert_eq!(
+            display(
+                ".box[hidden] { display: none } .box { display: flex }",
+                &[("hidden", "")]
+            ),
             Some(Gone),
             "the author's own [hidden] rule is an ordinary rule"
         );
@@ -3465,22 +4088,39 @@ mod tests {
         assert!(!attr_matches(r#"[data-x~="alpha"]"#, a));
         assert!(attr_matches(r#"[lang|="en"]"#, &[("lang", "en-GB")]));
         assert!(!attr_matches(r#"[lang|="en"]"#, &[("lang", "eng")]));
-        assert!(attr_matches(r#"[data-state="OPEN" i]"#, &[("data-state", "open")]));
-        assert!(!attr_matches(r#"[data-state="OPEN"]"#, &[("data-state", "open")]));
+        assert!(attr_matches(
+            r#"[data-state="OPEN" i]"#,
+            &[("data-state", "open")]
+        ));
+        assert!(!attr_matches(
+            r#"[data-state="OPEN"]"#,
+            &[("data-state", "open")]
+        ));
     }
 
     #[test]
     fn tailwinds_data_variant_works() {
-        let engine = Engine::compile(r#".data-\[state\=open\]\:opacity-100[data-state="open"] { opacity: 1 }"#);
+        let engine = Engine::compile(
+            r#".data-\[state\=open\]\:opacity-100[data-state="open"] { opacity: 1 }"#,
+        );
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
         let on = Node {
             tag: "div",
             class: "data-[state=open]:opacity-100",
             attrs: &[("data-state", "open")],
         };
-        let off = Node { attrs: &[("data-state", "closed")], ..on };
-        assert_eq!(engine.compute(on, None, &Env::default()).base.opacity, Some(1.0));
-        assert_eq!(engine.compute(off, None, &Env::default()).base.opacity, None);
+        let off = Node {
+            attrs: &[("data-state", "closed")],
+            ..on
+        };
+        assert_eq!(
+            engine.compute(on, None, &Env::default()).base.opacity,
+            Some(1.0)
+        );
+        assert_eq!(
+            engine.compute(off, None, &Env::default()).base.opacity,
+            None
+        );
     }
 
     #[test]
@@ -3496,7 +4136,13 @@ mod tests {
     }
 
     fn env_at(width: f32, dark: bool, reduce_motion: bool) -> Env {
-        Env { viewport_width: width, viewport_height: 800.0, dark, reduce_motion, ..Env::default() }
+        Env {
+            viewport_width: width,
+            viewport_height: 800.0,
+            dark,
+            reduce_motion,
+            ..Env::default()
+        }
     }
 
     #[test]
@@ -3530,8 +4176,7 @@ mod tests {
 
     #[test]
     fn media_state_rules_still_reach_their_rung() {
-        let engine =
-            Engine::compile("@media (min-width: 640px) { .box:focus { opacity: 0.9 } }");
+        let engine = Engine::compile("@media (min-width: 640px) { .box:focus { opacity: 0.9 } }");
         assert!(engine
             .compute(box_node(), None, &env_at(500.0, false, false))
             .focus
@@ -3556,15 +4201,24 @@ mod tests {
         );
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
         assert_eq!(
-            engine.compute(box_node(), None, &env_at(700.0, false, false)).base.opacity,
+            engine
+                .compute(box_node(), None, &env_at(700.0, false, false))
+                .base
+                .opacity,
             Some(0.2)
         );
         assert_eq!(
-            engine.compute(box_node(), None, &env_at(500.0, true, false)).base.opacity,
+            engine
+                .compute(box_node(), None, &env_at(500.0, true, false))
+                .base
+                .opacity,
             Some(0.2)
         );
         assert_eq!(
-            engine.compute(box_node(), None, &env_at(700.0, true, false)).base.opacity,
+            engine
+                .compute(box_node(), None, &env_at(700.0, true, false))
+                .base
+                .opacity,
             Some(0.2)
         );
     }
@@ -3573,12 +4227,18 @@ mod tests {
     fn an_unsupported_media_feature_drops_the_block_with_an_advisory() {
         let engine = Engine::compile("@media (prefers-contrast: more) { .box { opacity: 0.9 } }");
         assert!(
-            engine.diagnostics.iter().any(|d| d.contains("@media") && d.contains("dropped")),
+            engine
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("@media") && d.contains("dropped")),
             "{:?}",
             engine.diagnostics
         );
         assert_eq!(
-            engine.compute(box_node(), None, &Env::default()).base.opacity,
+            engine
+                .compute(box_node(), None, &Env::default())
+                .base
+                .opacity,
             None
         );
     }
@@ -3588,7 +4248,10 @@ mod tests {
         let engine = Engine::compile("@media print { .box { opacity: 0.9 } }");
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
         assert_eq!(
-            engine.compute(box_node(), None, &Env::default()).base.opacity,
+            engine
+                .compute(box_node(), None, &Env::default())
+                .base
+                .opacity,
             None
         );
     }
@@ -3602,17 +4265,32 @@ mod tests {
             r"@media (prefers-reduced-motion: reduce) { .motion-reduce\:opacity-25 { opacity: .25 } }",
         ));
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
-        let node = |class: &'static str| Node { tag: "div", class, attrs: &[] };
-        let get = |class: &'static str, env: &Env| {
-            engine.compute(node(class), None, env).base.opacity
+        let node = |class: &'static str| Node {
+            tag: "div",
+            class,
+            attrs: &[],
         };
+        let get =
+            |class: &'static str, env: &Env| engine.compute(node(class), None, env).base.opacity;
         assert_eq!(get("sm:opacity-100", &env_at(500.0, false, false)), None);
-        assert_eq!(get("sm:opacity-100", &env_at(700.0, false, false)), Some(1.0));
+        assert_eq!(
+            get("sm:opacity-100", &env_at(700.0, false, false)),
+            Some(1.0)
+        );
         assert_eq!(get("md:opacity-75", &env_at(700.0, false, false)), None);
-        assert_eq!(get("md:opacity-75", &env_at(800.0, false, false)), Some(0.75));
+        assert_eq!(
+            get("md:opacity-75", &env_at(800.0, false, false)),
+            Some(0.75)
+        );
         assert_eq!(get("dark:opacity-50", &env_at(800.0, false, false)), None);
-        assert_eq!(get("dark:opacity-50", &env_at(800.0, true, false)), Some(0.5));
-        assert_eq!(get("motion-reduce:opacity-25", &env_at(800.0, false, false)), None);
+        assert_eq!(
+            get("dark:opacity-50", &env_at(800.0, true, false)),
+            Some(0.5)
+        );
+        assert_eq!(
+            get("motion-reduce:opacity-25", &env_at(800.0, false, false)),
+            None
+        );
         assert_eq!(
             get("motion-reduce:opacity-25", &env_at(800.0, false, true)),
             Some(0.25)
@@ -3641,7 +4319,10 @@ mod tests {
                 engine.diagnostics
             );
             assert_eq!(
-                engine.compute(box_node(), None, &Env::default()).base.opacity,
+                engine
+                    .compute(box_node(), None, &Env::default())
+                    .base
+                    .opacity,
                 None,
                 "{selector} must not compile into a never-matching rule"
             );
@@ -3680,12 +4361,18 @@ mod tests {
     fn a_ladder_state_inside_a_functional_pseudo_is_rejected() {
         let engine = audited(".box:not(:hover)");
         assert!(
-            engine.diagnostics.iter().any(|d| d.contains(":not()/:is()/:where()")),
+            engine
+                .diagnostics
+                .iter()
+                .any(|d| d.contains(":not()/:is()/:where()")),
             "{:?}",
             engine.diagnostics
         );
         assert_eq!(
-            engine.compute(box_node(), None, &Env::default()).base.opacity,
+            engine
+                .compute(box_node(), None, &Env::default())
+                .base
+                .opacity,
             None
         );
     }
@@ -3696,7 +4383,11 @@ mod tests {
             ".a:visited { opacity: 0.1 } .b:visited { opacity: 0.2 } .c:visited { opacity: 0.3 }",
         );
         assert_eq!(
-            engine.diagnostics.iter().filter(|d| d.contains("visited")).count(),
+            engine
+                .diagnostics
+                .iter()
+                .filter(|d| d.contains("visited"))
+                .count(),
             1,
             "{:?}",
             engine.diagnostics
@@ -3718,7 +4409,10 @@ mod tests {
                 engine.diagnostics
             );
             assert_eq!(
-                engine.compute(box_node(), None, &Env::default()).base.opacity,
+                engine
+                    .compute(box_node(), None, &Env::default())
+                    .base
+                    .opacity,
                 None
             );
         }
@@ -3734,9 +4428,16 @@ mod tests {
             ("none", ObjectFit::None),
         ] {
             let engine = Engine::compile(&format!(".box {{ object-fit: {css} }}"));
-            assert!(engine.diagnostics.is_empty(), "{css}: {:?}", engine.diagnostics);
+            assert!(
+                engine.diagnostics.is_empty(),
+                "{css}: {:?}",
+                engine.diagnostics
+            );
             assert_eq!(
-                engine.compute(box_node(), None, &Env::default()).extras.object_fit,
+                engine
+                    .compute(box_node(), None, &Env::default())
+                    .extras
+                    .object_fit,
                 Some(want),
                 "object-fit: {css}"
             );
@@ -3747,7 +4448,10 @@ mod tests {
     fn object_fit_is_absent_when_undeclared() {
         let engine = Engine::compile(".box { opacity: 0.5 }");
         assert_eq!(
-            engine.compute(box_node(), None, &Env::default()).extras.object_fit,
+            engine
+                .compute(box_node(), None, &Env::default())
+                .extras
+                .object_fit,
             None
         );
     }
@@ -3758,16 +4462,23 @@ mod tests {
             ".box { object-fit: contain } div.box { object-fit: cover } .box { object-fit: none }",
         );
         assert_eq!(
-            engine.compute(box_node(), None, &Env::default()).extras.object_fit,
+            engine
+                .compute(box_node(), None, &Env::default())
+                .extras
+                .object_fit,
             Some(ObjectFit::Cover)
         );
     }
 
     #[test]
     fn important_object_fit_wins() {
-        let engine = Engine::compile("div.box { object-fit: cover } .box { object-fit: none !important }");
+        let engine =
+            Engine::compile("div.box { object-fit: cover } .box { object-fit: none !important }");
         assert_eq!(
-            engine.compute(box_node(), None, &Env::default()).extras.object_fit,
+            engine
+                .compute(box_node(), None, &Env::default())
+                .extras
+                .object_fit,
             Some(ObjectFit::None)
         );
     }
@@ -3794,7 +4505,14 @@ mod tests {
         let inline = mapper::parse_inline_style(style, &mut diags);
         assert!(diags.is_empty(), "{diags:?}");
         engine
-            .compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &Env::default(), &mut diags)
+            .compute_node(
+                box_node(),
+                Some(&inline),
+                &Rc::new(Vars::default()),
+                None,
+                &Env::default(),
+                &mut diags,
+            )
             .base
     }
 
@@ -3813,9 +4531,15 @@ mod tests {
             let ring = base.vn_outline.expect("an outline");
             assert_eq!(ring.width, gpui::px(2.0), "{sheet}");
             assert_eq!(ring.offset, gpui::px(4.0), "{sheet}");
-            assert!((ring.color.a - 1.0).abs() < 1e-3 && ring.color.s > 0.9, "{sheet}: {ring:?}");
+            assert!(
+                (ring.color.a - 1.0).abs() < 1e-3 && ring.color.s > 0.9,
+                "{sheet}: {ring:?}"
+            );
         }
-        let (base, _) = computed_with_env(".box { outline: 2px solid #ff0000 } .box { outline: none }", &Env::default());
+        let (base, _) = computed_with_env(
+            ".box { outline: 2px solid #ff0000 } .box { outline: none }",
+            &Env::default(),
+        );
         assert_eq!(base.vn_outline.expect("an outline").width, gpui::px(0.0));
     }
 
@@ -3826,15 +4550,38 @@ mod tests {
         );
         let states = engine.compute(box_node(), None, &Env::default());
         let base = states.base.vn_outline.expect("a base outline");
-        let focus = states.focus.as_ref().and_then(|r| r.vn_outline).expect("a focus outline");
+        let focus = states
+            .focus
+            .as_ref()
+            .and_then(|r| r.vn_outline)
+            .expect("a focus outline");
         assert_eq!(focus.offset, gpui::px(4.0));
-        assert_eq!((focus.width, focus.style, focus.color), (base.width, base.style, base.color));
-        let hover = states.hover.as_ref().and_then(|r| r.vn_outline).expect("a hover outline");
-        assert_eq!((hover.width, hover.style), (gpui::px(2.0), gpui::BorderStyle::Dashed));
+        assert_eq!(
+            (focus.width, focus.style, focus.color),
+            (base.width, base.style, base.color)
+        );
+        let hover = states
+            .hover
+            .as_ref()
+            .and_then(|r| r.vn_outline)
+            .expect("a hover outline");
+        assert_eq!(
+            (hover.width, hover.style),
+            (gpui::px(2.0), gpui::BorderStyle::Dashed)
+        );
         assert_ne!(hover.color, base.color);
-        let engine = Engine::compile(".box { outline: 2px solid #ff0000 } .box:focus { outline: none }");
+        let engine =
+            Engine::compile(".box { outline: 2px solid #ff0000 } .box:focus { outline: none }");
         let states = engine.compute(box_node(), None, &Env::default());
-        assert_eq!(states.focus.as_ref().and_then(|r| r.vn_outline).expect("a focus outline").width, gpui::px(0.0));
+        assert_eq!(
+            states
+                .focus
+                .as_ref()
+                .and_then(|r| r.vn_outline)
+                .expect("a focus outline")
+                .width,
+            gpui::px(0.0)
+        );
     }
 
     #[test]
@@ -3858,10 +4605,19 @@ mod tests {
             ".box { text-decoration-thickness: 2px } .box { text-decoration-line: none }",
             &Env::default(),
         );
-        assert_eq!(base.text.underline.expect("the cancelling underline").thickness, gpui::px(0.0));
+        assert_eq!(
+            base.text
+                .underline
+                .expect("the cancelling underline")
+                .thickness,
+            gpui::px(0.0)
+        );
         let engine = Engine::compile(".box { text-decoration-line: underline } .box:hover { text-decoration-color: #ff0000 }");
         let states = engine.compute(box_node(), None, &Env::default());
-        assert_eq!(states.base.text.underline.expect("an underline").color, None);
+        assert_eq!(
+            states.base.text.underline.expect("an underline").color,
+            None
+        );
     }
 
     #[test]
@@ -3871,8 +4627,19 @@ mod tests {
             ".box:has(.row:hover .icon) { opacity: 0.5 }",
         ] {
             let engine = Engine::compile(sheet);
-            assert!(engine.diagnostics.iter().any(|d| d.contains(":has()")), "{sheet}: {:?}", engine.diagnostics);
-            assert_eq!(engine.compute(box_node(), None, &Env::default()).base.opacity, None, "{sheet}");
+            assert!(
+                engine.diagnostics.iter().any(|d| d.contains(":has()")),
+                "{sheet}: {:?}",
+                engine.diagnostics
+            );
+            assert_eq!(
+                engine
+                    .compute(box_node(), None, &Env::default())
+                    .base
+                    .opacity,
+                None,
+                "{sheet}"
+            );
         }
         let engine = Engine::compile(".box:has(input[disabled]) { opacity: 0.5 }");
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
@@ -3881,7 +4648,13 @@ mod tests {
     #[test]
     fn sticky_reaches_the_computed_extras() {
         let engine = Engine::compile(".box { position: sticky; top: 0 }");
-        assert_eq!(engine.compute(box_node(), None, &Env::default()).extras.sticky, Some(true));
+        assert_eq!(
+            engine
+                .compute(box_node(), None, &Env::default())
+                .extras
+                .sticky,
+            Some(true)
+        );
     }
 
     #[test]
@@ -3890,12 +4663,14 @@ mod tests {
         let base = base_with_inline(sheet, "opacity: 0.9; font-size: 10px");
         assert_eq!(base.opacity, Some(0.5));
         assert_eq!(base.text.font_size, Some(gpui::px(20.0).into()));
-        assert_eq!(base_with_inline(".box { opacity: 0.5 }", "opacity: 0.9").opacity, Some(0.9));
+        assert_eq!(
+            base_with_inline(".box { opacity: 0.5 }", "opacity: 0.9").opacity,
+            Some(0.9)
+        );
         let base = base_with_inline(sheet, "opacity: 0.9 !important; font-size: 10px");
         assert_eq!(base.opacity, Some(0.9));
         assert_eq!(base.text.font_size, Some(gpui::px(20.0).into()));
     }
-
 
     fn hovered_opacity(css: &str, style: Option<&str>) -> Option<f32> {
         use gpui::Refineable as _;
@@ -3903,7 +4678,12 @@ mod tests {
         let mut diags = Vec::new();
         let inline = style.map(|style| mapper::parse_inline_style(style, &mut diags));
         let states = engine.compute_node(
-            box_node(), inline.as_ref(), &Rc::new(Vars::default()), None, &Env::default(), &mut diags,
+            box_node(),
+            inline.as_ref(),
+            &Rc::new(Vars::default()),
+            None,
+            &Env::default(),
+            &mut diags,
         );
         let mut painted = (*states.base).clone();
         if let Some(hover) = &states.hover {
@@ -3914,7 +4694,10 @@ mod tests {
 
     #[test]
     fn a_state_rule_loses_to_a_stateless_one_that_outranks_it() {
-        assert_eq!(hovered_opacity(".box { opacity: 0.9 } .box:hover { opacity: 0.5 }", None), Some(0.5));
+        assert_eq!(
+            hovered_opacity(".box { opacity: 0.9 } .box:hover { opacity: 0.5 }", None),
+            Some(0.5)
+        );
         let stronger = "div.box.box { opacity: 0.9 } .box:hover { opacity: 0.5 }";
         assert_eq!(hovered_opacity(stronger, None), Some(0.9));
         let later = ".box:hover { opacity: 0.5 } .box.box { opacity: 0.9 }";
@@ -3923,11 +4706,21 @@ mod tests {
         assert_eq!(hovered_opacity(important, None), Some(0.9));
         let both = ".box { opacity: 0.9 !important } .box:hover { opacity: 0.5 !important }";
         assert_eq!(hovered_opacity(both, None), Some(0.5));
-        assert_eq!(hovered_opacity(".box:hover { opacity: 0.5 }", Some("opacity: 0.9")), Some(0.9));
+        assert_eq!(
+            hovered_opacity(".box:hover { opacity: 0.5 }", Some("opacity: 0.9")),
+            Some(0.9)
+        );
         let over_inline = ".box:hover { opacity: 0.5 !important }";
-        assert_eq!(hovered_opacity(over_inline, Some("opacity: 0.9")), Some(0.5));
-        let engine = Engine::compile(".box:hover { opacity: 0.5; width: 10px } .box.box { opacity: 0.9 }");
-        let hover = engine.compute(box_node(), None, &Env::default()).hover.expect("a hover rung");
+        assert_eq!(
+            hovered_opacity(over_inline, Some("opacity: 0.9")),
+            Some(0.5)
+        );
+        let engine =
+            Engine::compile(".box:hover { opacity: 0.5; width: 10px } .box.box { opacity: 0.9 }");
+        let hover = engine
+            .compute(box_node(), None, &Env::default())
+            .hover
+            .expect("a hover rung");
         assert_eq!(hover.size.width, Some(gpui::px(10.0).into()));
     }
 
@@ -3951,7 +4744,10 @@ mod tests {
         let said = advisories(".box { object-fit: squish }");
         assert!(said.iter().any(|d| d.contains("object-fit")), "{said:?}");
         assert_eq!(
-            engine.compute(box_node(), None, &Env::default()).extras.object_fit,
+            engine
+                .compute(box_node(), None, &Env::default())
+                .extras
+                .object_fit,
             None
         );
     }
@@ -3961,11 +4757,15 @@ mod tests {
         let engine = Engine::compile(".box:hover { object-fit: cover }");
         let said = advisories(".box:hover { object-fit: cover }");
         assert!(
-            said.iter().any(|d| d.contains("object-fit") && d.contains("unconditionally")),
+            said.iter()
+                .any(|d| d.contains("object-fit") && d.contains("unconditionally")),
             "{said:?}"
         );
         assert_eq!(
-            engine.compute(box_node(), None, &Env::default()).extras.object_fit,
+            engine
+                .compute(box_node(), None, &Env::default())
+                .extras
+                .object_fit,
             Some(ObjectFit::Cover)
         );
     }
@@ -3998,9 +4798,16 @@ mod tests {
             ("-webkit-app-region: no-drag", WindowDrag::None),
         ] {
             let engine = Engine::compile(&format!(".box {{ {css} }}"));
-            assert!(engine.diagnostics.is_empty(), "{css}: {:?}", engine.diagnostics);
+            assert!(
+                engine.diagnostics.is_empty(),
+                "{css}: {:?}",
+                engine.diagnostics
+            );
             assert_eq!(
-                engine.compute(box_node(), None, &Env::default()).extras.window_drag,
+                engine
+                    .compute(box_node(), None, &Env::default())
+                    .extras
+                    .window_drag,
                 Some(want),
                 "{css}"
             );
@@ -4010,7 +4817,10 @@ mod tests {
     #[test]
     fn undeclared_window_drag_is_distinct_from_an_explicit_none() {
         assert_eq!(drag_of(".box { opacity: 0.5 }"), None);
-        assert_eq!(drag_of(".box { window-drag: none }"), Some(WindowDrag::None));
+        assert_eq!(
+            drag_of(".box { window-drag: none }"),
+            Some(WindowDrag::None)
+        );
     }
 
     #[test]
@@ -4030,11 +4840,15 @@ mod tests {
         let engine = Engine::compile(".box { window-drag: sideways }");
         let said = advisories(".box { window-drag: sideways }");
         assert!(
-            said.iter().any(|d| d.contains("window-drag") && d.contains("sideways")),
+            said.iter()
+                .any(|d| d.contains("window-drag") && d.contains("sideways")),
             "{said:?}"
         );
         assert_eq!(
-            engine.compute(box_node(), None, &Env::default()).extras.window_drag,
+            engine
+                .compute(box_node(), None, &Env::default())
+                .extras
+                .window_drag,
             None
         );
     }
@@ -4048,9 +4862,16 @@ mod tests {
             ("none", WindowControl::None),
         ] {
             let engine = Engine::compile(&format!(".box {{ --window-control: {css} }}"));
-            assert!(engine.diagnostics.is_empty(), "{css}: {:?}", engine.diagnostics);
+            assert!(
+                engine.diagnostics.is_empty(),
+                "{css}: {:?}",
+                engine.diagnostics
+            );
             assert_eq!(
-                engine.compute(box_node(), None, &Env::default()).extras.window_control,
+                engine
+                    .compute(box_node(), None, &Env::default())
+                    .extras
+                    .window_control,
                 Some(want),
                 "--window-control: {css}"
             );
@@ -4072,14 +4893,19 @@ mod tests {
         );
         assert_eq!(computed.extras.window_control, Some(WindowControl::Close));
         assert_eq!(computed.vars.get(mapper::WINDOW_CONTROL), None);
-        assert!(computed.vars.get("--tw-shadow").is_some(), "{:?}", computed.vars);
+        assert!(
+            computed.vars.get("--tw-shadow").is_some(),
+            "{:?}",
+            computed.vars
+        );
     }
 
     #[test]
     fn bad_window_control_value_is_advised() {
         let said = advisories(".box { --window-control: restore }");
         assert!(
-            said.iter().any(|d| d.contains("--window-control") && d.contains("restore")),
+            said.iter()
+                .any(|d| d.contains("--window-control") && d.contains("restore")),
             "{said:?}"
         );
     }
@@ -4091,7 +4917,8 @@ mod tests {
         let engine = Engine::compile(".box:hover { window-drag: none }");
         let said = advisories(".box:hover { window-drag: none }");
         assert!(
-            said.iter().any(|d| d.contains("`window-drag`") && d.contains("unconditionally")),
+            said.iter()
+                .any(|d| d.contains("`window-drag`") && d.contains("unconditionally")),
             "{said:?}"
         );
         assert!(
@@ -4104,8 +4931,14 @@ mod tests {
     fn computed_with_env(css: &str, env: &Env) -> (Rc<StyleRefinement>, Vec<String>) {
         let engine = Engine::compile(css);
         let mut diags = engine.diagnostics.clone();
-        let states =
-            engine.compute_node(box_node(), None, &Rc::new(Vars::default()), None, env, &mut diags);
+        let states = engine.compute_node(
+            box_node(),
+            None,
+            &Rc::new(Vars::default()),
+            None,
+            env,
+            &mut diags,
+        );
         (states.base, diags)
     }
 
@@ -4122,7 +4955,10 @@ mod tests {
             Node {
                 tag: "div",
                 class: "box",
-                attrs: &[("data-vaul-drawer", ""), ("data-vaul-drawer-direction", "bottom")],
+                attrs: &[
+                    ("data-vaul-drawer", ""),
+                    ("data-vaul-drawer-direction", "bottom"),
+                ],
             },
             None,
             &Rc::new(Vars::default()),
@@ -4140,7 +4976,10 @@ mod tests {
     }
 
     fn titlebar_env(x: f32, y: f32, w: f32, h: f32) -> Env {
-        Env { titlebar_area: [x, y, w, h], ..Env::default() }
+        Env {
+            titlebar_area: [x, y, w, h],
+            ..Env::default()
+        }
     }
 
     #[test]
@@ -4199,7 +5038,9 @@ mod tests {
              transition: transform .5s cubic-bezier(.32,.72,0,1) }",
             &Env::default(),
         );
-        let transform = style.vn_transform.expect("the background transform is retained");
+        let transform = style
+            .vn_transform
+            .expect("the background transform is retained");
         assert_eq!(transform.translate.1, gpui::TransformLength::Pixels(13.44));
         assert!((transform.scale.0 - 0.96).abs() < 1e-6);
         assert!((transform.scale.1 - 0.96).abs() < 1e-6);
@@ -4219,13 +5060,17 @@ mod tests {
 
     #[test]
     fn an_unknown_env_uses_its_fallback_and_otherwise_drops_the_declaration() {
-        let (base, diags) =
-            computed_with_env(".box { height: env(keyboard-inset-height, 12px) }", &Env::default());
+        let (base, diags) = computed_with_env(
+            ".box { height: env(keyboard-inset-height, 12px) }",
+            &Env::default(),
+        );
         assert!(diags.is_empty(), "{diags:?}");
         assert_eq!(base.size.height, Some(gpui::px(12.0).into()));
 
-        let (base, diags) =
-            computed_with_env(".box { height: env(keyboard-inset-height) }", &Env::default());
+        let (base, diags) = computed_with_env(
+            ".box { height: env(keyboard-inset-height) }",
+            &Env::default(),
+        );
         assert_eq!(base.size.height, None);
         assert!(
             diags.iter().any(|d| d.contains("keyboard-inset-height")
@@ -4251,11 +5096,15 @@ mod tests {
 
     #[test]
     fn the_env_scanner_skips_identifier_tails() {
-        let (base, diags) =
-            computed_with_env(".box { height: my-env(titlebar-area-height) }", &Env::default());
+        let (base, diags) = computed_with_env(
+            ".box { height: my-env(titlebar-area-height) }",
+            &Env::default(),
+        );
         assert_eq!(base.size.height, None, "`my-env(` is not `env(`");
         assert!(
-            !diags.iter().any(|d| d.contains("is not an environment variable")),
+            !diags
+                .iter()
+                .any(|d| d.contains("is not an environment variable")),
             "{diags:?}"
         );
     }
@@ -4277,7 +5126,12 @@ mod tests {
     }
 
     struct Doc {
-        nodes: Vec<(&'static str, &'static str, usize, Vec<(&'static str, &'static str)>)>,
+        nodes: Vec<(
+            &'static str,
+            &'static str,
+            usize,
+            Vec<(&'static str, &'static str)>,
+        )>,
     }
 
     #[derive(Clone, Copy)]
@@ -4301,17 +5155,26 @@ mod tests {
         }
         fn parent(&self) -> Option<Self> {
             let p = self.doc.nodes[self.i].2;
-            (p != 0).then(|| DocRef { doc: self.doc, i: p })
+            (p != 0).then(|| DocRef {
+                doc: self.doc,
+                i: p,
+            })
         }
         fn prev_sibling(&self) -> Option<Self> {
             let sibs = self.siblings();
             let pos = sibs.iter().position(|&j| j == self.i)?;
-            (pos > 0).then(|| DocRef { doc: self.doc, i: sibs[pos - 1] })
+            (pos > 0).then(|| DocRef {
+                doc: self.doc,
+                i: sibs[pos - 1],
+            })
         }
         fn next_sibling(&self) -> Option<Self> {
             let sibs = self.siblings();
             let pos = sibs.iter().position(|&j| j == self.i)?;
-            sibs.get(pos + 1).map(|&j| DocRef { doc: self.doc, i: j })
+            sibs.get(pos + 1).map(|&j| DocRef {
+                doc: self.doc,
+                i: j,
+            })
         }
         fn has_tag(&self, name: &str) -> bool {
             self.doc.nodes[self.i].0 == name
@@ -4320,7 +5183,10 @@ mod tests {
             self.doc.nodes[self.i].0 == other.doc.nodes[other.i].0
         }
         fn has_class(&self, name: &str) -> bool {
-            self.doc.nodes[self.i].1.split_whitespace().any(|c| c == name)
+            self.doc.nodes[self.i]
+                .1
+                .split_whitespace()
+                .any(|c| c == name)
         }
         fn tag_name(&self) -> &str {
             self.doc.nodes[self.i].0
@@ -4334,7 +5200,11 @@ mod tests {
             false
         }
         fn attr(&self, name: &str) -> Option<&str> {
-            self.doc.nodes[self.i].3.iter().find(|(k, _)| *k == name).map(|(_, v)| *v)
+            self.doc.nodes[self.i]
+                .3
+                .iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| *v)
         }
         fn is_empty(&self) -> bool {
             !self.doc.nodes.iter().any(|n| n.2 == self.i)
@@ -4345,7 +5215,10 @@ mod tests {
         fn each_child(&self, f: &mut dyn FnMut(Self)) {
             for j in 1..self.doc.nodes.len() {
                 if self.doc.nodes[j].2 == self.i {
-                    f(DocRef { doc: self.doc, i: j });
+                    f(DocRef {
+                        doc: self.doc,
+                        i: j,
+                    });
                 }
             }
         }
@@ -4385,15 +5258,32 @@ mod tests {
         ));
         let ix = &engine.index;
         let names = |v: Option<&Vec<u32>>| -> Vec<String> {
-            v.map_or(vec![], |v| v.iter().map(|&i| sel_text(&engine.rules[i as usize].selector)).collect())
+            v.map_or(vec![], |v| {
+                v.iter()
+                    .map(|&i| sel_text(&engine.rules[i as usize].selector))
+                    .collect()
+            })
         };
         assert_eq!(names(ix.by_class.get("a")), [".a:before"]);
         assert_eq!(names(ix.by_class.get("b")), [".b::placeholder"]);
         assert_eq!(names(Some(&ix.root)), [":root"]);
-        assert_eq!(names(ix.by_parent_class.get("p")), [".p > :not([hidden]) ~ :not([hidden])", ".p > * + *"]);
+        assert_eq!(
+            names(ix.by_parent_class.get("p")),
+            [".p > :not([hidden]) ~ :not([hidden])", ".p > * + *"]
+        );
         assert_eq!(names(ix.by_parent_tag.get("ul")), ["ul > *"]);
         assert_eq!(names(ix.by_parent_id.get("i")), ["#i > *"]);
-        assert_eq!(names(Some(&ix.any)), [":where([hidden])", ".a *", "*", ".a ~ *", ".x > *", "[data-x]"]);
+        assert_eq!(
+            names(Some(&ix.any)),
+            [
+                ":where([hidden])",
+                ".a *",
+                "*",
+                ".a ~ *",
+                ".x > *",
+                "[data-x]"
+            ]
+        );
     }
 
     #[test]
@@ -4443,7 +5333,11 @@ mod tests {
         };
         let env = Env::default();
         let selectors = |e: &Engine, n: DocRef<'_>| {
-            let mut v: Vec<(u32, String)> = e.matched_rules(n, &env).into_iter().map(|r| (r.order, r.selector)).collect();
+            let mut v: Vec<(u32, String)> = e
+                .matched_rules(n, &env)
+                .into_iter()
+                .map(|r| (r.order, r.selector))
+                .collect();
             v.sort();
             v
         };
@@ -4453,20 +5347,30 @@ mod tests {
             matched_somewhere += want.len();
             assert_eq!(selectors(&indexed, n), want, "node {}", n.i);
         }
-        assert!(matched_somewhere > 30, "the sheet exercises the tree ({matched_somewhere} matches)");
+        assert!(
+            matched_somewhere > 30,
+            "the sheet exercises the tree ({matched_somewhere} matches)"
+        );
     }
 
     fn cascade_both(css: &str, d: &Doc, env: &Env) -> (Vec<ComputedStates>, Vec<ComputedStates>) {
         let cached = Engine::compile(css);
         let mut plain = Engine::compile(css);
         plain.share = false;
-        assert!(cached.share, "SK_CSS_NO_SHARE is set in the test environment");
+        assert!(
+            cached.share,
+            "SK_CSS_NO_SHARE is set in the test environment"
+        );
         let run = |e: &Engine| {
             let root_vars = Rc::new(Vars::default());
             let mut out = vec![ComputedStates::default()];
             for i in 1..d.nodes.len() {
                 let p = d.nodes[i].2;
-                let (vars, color) = if p == 0 { (root_vars.clone(), None) } else { (out[p].vars.clone(), out[p].color) };
+                let (vars, color) = if p == 0 {
+                    (root_vars.clone(), None)
+                } else {
+                    (out[p].vars.clone(), out[p].color)
+                };
                 let mut diags = Vec::new();
                 out.push(e.compute_node(DocRef { doc: d, i }, None, &vars, color, env, &mut diags));
             }
@@ -4474,7 +5378,10 @@ mod tests {
         };
         let (with, without) = (run(&cached), run(&plain));
         for i in 1..d.nodes.len() {
-            assert_eq!(with[i], without[i], "node {i} folds the same with the cache as without");
+            assert_eq!(
+                with[i], without[i],
+                "node {i} folds the same with the cache as without"
+            );
         }
         (with, without)
     }
@@ -4510,17 +5417,48 @@ mod tests {
 
     #[test]
     fn the_cache_keeps_apart_what_a_selector_tells_apart() {
-        type Nodes = Vec<(&'static str, &'static str, usize, Vec<(&'static str, &'static str)>)>;
-        let pair = |a: Vec<(&'static str, &'static str)>, b: Vec<(&'static str, &'static str)>| -> Nodes {
-            vec![("", "", 0, vec![]), ("div", "list", 0, vec![]), ("div", "i", 1, a), ("div", "i", 1, b)]
-        };
+        type Nodes = Vec<(
+            &'static str,
+            &'static str,
+            usize,
+            Vec<(&'static str, &'static str)>,
+        )>;
+        let pair =
+            |a: Vec<(&'static str, &'static str)>, b: Vec<(&'static str, &'static str)>| -> Nodes {
+                vec![
+                    ("", "", 0, vec![]),
+                    ("div", "list", 0, vec![]),
+                    ("div", "i", 1, a),
+                    ("div", "i", 1, b),
+                ]
+            };
         let cases: Vec<(&str, &str, Nodes)> = vec![
-            ("position", ".i:first-child { opacity: 0.5 }", pair(vec![], vec![])),
-            ("nth-child", ".i:nth-child(2n) { opacity: 0.5 }", pair(vec![], vec![])),
-            ("attribute", ".i[data-state=open] { opacity: 0.5 }", pair(vec![("data-state", "open")], vec![])),
-            ("attribute presence", ".i:not([hidden]) { opacity: 0.5 }", pair(vec![], vec![("hidden", "")])),
+            (
+                "position",
+                ".i:first-child { opacity: 0.5 }",
+                pair(vec![], vec![]),
+            ),
+            (
+                "nth-child",
+                ".i:nth-child(2n) { opacity: 0.5 }",
+                pair(vec![], vec![]),
+            ),
+            (
+                "attribute",
+                ".i[data-state=open] { opacity: 0.5 }",
+                pair(vec![("data-state", "open")], vec![]),
+            ),
+            (
+                "attribute presence",
+                ".i:not([hidden]) { opacity: 0.5 }",
+                pair(vec![], vec![("hidden", "")]),
+            ),
             ("sibling", ".i + .i { opacity: 0.5 }", pair(vec![], vec![])),
-            ("later sibling", ".i ~ .i { opacity: 0.5 }", pair(vec![], vec![])),
+            (
+                "later sibling",
+                ".i ~ .i { opacity: 0.5 }",
+                pair(vec![], vec![]),
+            ),
             (
                 ":has()",
                 ".i:has(.badge) { opacity: 0.5 }",
@@ -4548,8 +5486,14 @@ mod tests {
             let css = format!(".i {{ opacity: 0.9; padding: 2px }} {rule}");
             let d = Doc { nodes };
             let (s, _) = cascade_both(&css, &d, &Env::default());
-            assert!(!shared(&s, 2, 3), "{what}: the second element folds on its own");
-            assert_ne!(s[2].base.opacity, s[3].base.opacity, "{what}: and the two differ");
+            assert!(
+                !shared(&s, 2, 3),
+                "{what}: the second element folds on its own"
+            );
+            assert_ne!(
+                s[2].base.opacity, s[3].base.opacity,
+                "{what}: and the two differ"
+            );
         }
     }
 
@@ -4598,23 +5542,59 @@ mod tests {
         let inline = parse_inline_style("opacity: 0.25", &mut Vec::new());
         let vars = Rc::new(Vars::default());
         let fold = |i: usize| {
-            engine.compute_node(DocRef { doc: &d, i }, Some(&inline), &vars, None, &Env::default(), &mut Vec::new())
+            engine.compute_node(
+                DocRef { doc: &d, i },
+                Some(&inline),
+                &vars,
+                None,
+                &Env::default(),
+                &mut Vec::new(),
+            )
         };
-        let doc_d = Doc { nodes: vec![("", "", 0, vec![]), ("div", "d", 0, vec![]), ("div", "d", 0, vec![])] };
+        let doc_d = Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "d", 0, vec![]),
+                ("div", "d", 0, vec![]),
+            ],
+        };
         let (a, b) = (
-            engine.compute_node(DocRef { doc: &doc_d, i: 1 }, Some(&inline), &vars, None, &Env::default(), &mut Vec::new()),
-            engine.compute_node(DocRef { doc: &doc_d, i: 2 }, Some(&inline), &vars, None, &Env::default(), &mut Vec::new()),
+            engine.compute_node(
+                DocRef { doc: &doc_d, i: 1 },
+                Some(&inline),
+                &vars,
+                None,
+                &Env::default(),
+                &mut Vec::new(),
+            ),
+            engine.compute_node(
+                DocRef { doc: &doc_d, i: 2 },
+                Some(&inline),
+                &vars,
+                None,
+                &Env::default(),
+                &mut Vec::new(),
+            ),
         );
-        assert!(!Rc::ptr_eq(&a.base, &b.base), "an inline style folds on its own");
+        assert!(
+            !Rc::ptr_eq(&a.base, &b.base),
+            "an inline style folds on its own"
+        );
         assert_eq!(a, b);
         assert_eq!(fold(3).base.opacity, Some(0.25));
     }
 
     #[test]
     fn the_cache_does_not_outlive_what_the_fold_read() {
-        let node = |class| Node { tag: "div", class, attrs: &[] };
+        let node = |class| Node {
+            tag: "div",
+            class,
+            attrs: &[],
+        };
         let vars = Rc::new(Vars::default());
-        let fold = |e: &Engine, class, env: &Env| e.compute_node(node(class), None, &vars, None, env, &mut Vec::new());
+        let fold = |e: &Engine, class, env: &Env| {
+            e.compute_node(node(class), None, &vars, None, env, &mut Vec::new())
+        };
 
         let engine = Engine::compile(".c { height: env(titlebar-area-height, 32px) }");
         let low = fold(&engine, "c", &titlebar_env(0.0, 0.0, 940.0, 36.0));
@@ -4624,10 +5604,16 @@ mod tests {
 
         assert!(set_viewport_basis(1000.0, 800.0) || viewport_basis() == (1000.0, 800.0));
         let mut engine = Engine::compile(".c { width: 50vw }");
-        assert_eq!(fold(&engine, "c", &Env::default()).base.size.width, Some(gpui::px(500.0).into()));
+        assert_eq!(
+            fold(&engine, "c", &Env::default()).base.size.width,
+            Some(gpui::px(500.0).into())
+        );
         assert!(set_viewport_basis(1200.0, 600.0));
         assert!(engine.rebase_viewport());
-        assert_eq!(fold(&engine, "c", &Env::default()).base.size.width, Some(gpui::px(600.0).into()));
+        assert_eq!(
+            fold(&engine, "c", &Env::default()).base.size.width,
+            Some(gpui::px(600.0).into())
+        );
         set_viewport_basis(INITIAL_VIEWPORT_BASIS.0, INITIAL_VIEWPORT_BASIS.1);
 
         let css = ".c { --w: 2rem; width: var(--w) }";
@@ -4638,7 +5624,11 @@ mod tests {
         let after = fold(&engine, "c", &Env::default());
         let mut plain = Engine::compile(css);
         plain.share = false;
-        assert_eq!(after, fold(&plain, "c", &Env::default()), "a new rem basis folds again");
+        assert_eq!(
+            after,
+            fold(&plain, "c", &Env::default()),
+            "a new rem basis folds again"
+        );
         assert_ne!(before.base.size.width, after.base.size.width);
         set_rem_basis(old);
     }
@@ -4652,7 +5642,10 @@ mod tests {
         let d = doc();
         let states = cascade(&engine, &d, &Env::default());
         assert!(states[0].before.is_none());
-        assert_eq!(&*states[0].after.as_ref().expect("an ::after box").content, "+");
+        assert_eq!(
+            &*states[0].after.as_ref().expect("an ::after box").content,
+            "+"
+        );
     }
 
     #[test]
@@ -4693,7 +5686,10 @@ mod tests {
         let d = doc();
         let states = cascade(&engine, &d, &Env::default());
         let first = &states[1];
-        assert_eq!(first.before.as_ref().unwrap().style.size.width, Some(gpui::px(4.0).into()));
+        assert_eq!(
+            first.before.as_ref().unwrap().style.size.width,
+            Some(gpui::px(4.0).into())
+        );
         assert_eq!(&*first.after.as_ref().unwrap().content, "+");
         let second = &states[2];
         assert_eq!(&*second.after.as_ref().unwrap().content, "!");
@@ -4740,12 +5736,25 @@ mod tests {
         assert!(thumb.base.background.is_some());
         let (hover, _) = thumb.resolve(false, true, false, false, false);
         assert_eq!(hover.size.width, Some(gpui::px(13.).into()));
-        assert_eq!(hover.size.height, thumb.base.size.height, "state retains the base declarations");
+        assert_eq!(
+            hover.size.height, thumb.base.size.height,
+            "state retains the base declarations"
+        );
         let (focus, _) = thumb.resolve(false, false, true, true, true);
         assert_eq!(focus.border_widths.left, Some(gpui::px(2.).into()));
         assert!(input.color_swatch.is_some());
-        assert!(input.color_swatch_wrapper.as_ref().unwrap().base.padding.left.is_some());
-        assert!(input.base.size.height.is_none(), "parts must not style the input itself");
+        assert!(input
+            .color_swatch_wrapper
+            .as_ref()
+            .unwrap()
+            .base
+            .padding
+            .left
+            .is_some());
+        assert!(
+            input.base.size.height.is_none(),
+            "parts must not style the input itself"
+        );
     }
 
     #[test]
@@ -4758,7 +5767,10 @@ mod tests {
         let states = cascade(&engine, &d, &Env::default());
         let thumb = states[3].range_thumb.as_ref().unwrap();
         assert_eq!(thumb.base.size.width, Some(gpui::px(17.).into()));
-        assert_eq!(thumb.resolve(false, true, false, false, false).0.size.width, thumb.base.size.width);
+        assert_eq!(
+            thumb.resolve(false, true, false, false, false).0.size.width,
+            thumb.base.size.width
+        );
     }
 
     #[test]
@@ -4782,17 +5794,30 @@ mod tests {
         let d = doc();
         let states = cascade(&engine, &d, &Env::default());
         let input = &states[3];
-        let button = input.file_selector_button.as_ref().expect("the rule reaches the input's button");
+        let button = input
+            .file_selector_button
+            .as_ref()
+            .expect("the rule reaches the input's button");
         assert!(button.background.is_some());
         assert!(button.padding.left.is_some());
-        assert!(input.base.background.is_none(), "the input itself is untouched");
-        assert!(states[0].file_selector_button.is_none(), "only an element a rule matched gets one");
+        assert!(
+            input.base.background.is_none(),
+            "the input itself is untouched"
+        );
+        assert!(
+            states[0].file_selector_button.is_none(),
+            "only an element a rule matched gets one"
+        );
     }
 
     #[test]
     fn file_selector_button_rules_are_listed_with_their_pseudo() {
         let engine = Engine::compile("input::-webkit-file-upload-button { color: red }");
-        assert!(engine.diagnostics.is_empty(), "the -webkit- spelling is the same pseudo: {:?}", engine.diagnostics);
+        assert!(
+            engine.diagnostics.is_empty(),
+            "the -webkit- spelling is the same pseudo: {:?}",
+            engine.diagnostics
+        );
         let d = doc();
         let rules = engine.matched_rules(DocRef { doc: &d, i: 4 }, &Env::default());
         assert_eq!(rules.len(), 1, "{rules:?}");
@@ -4828,9 +5853,16 @@ mod tests {
         let root = &states[0];
         assert_eq!(root.base.opacity, Some(0.5), "a `body` rule matched");
         assert_eq!(root.base.flex_grow, Some(3.0), "a `:root` rule matched");
-        assert_eq!(root.vars.get("--fg").as_deref(), Some("#090909"), "the .dark override won");
+        assert_eq!(
+            root.vars.get("--fg").as_deref(),
+            Some("#090909"),
+            "the .dark override won"
+        );
         let tab = &states[1];
-        assert!(tab.base.text.color.is_some(), "the palette reached a descendant");
+        assert!(
+            tab.base.text.color.is_some(),
+            "the palette reached a descendant"
+        );
     }
 
     #[test]
@@ -4843,7 +5875,12 @@ mod tests {
             cascade(&engine, &d, &Env::default())[0].base.opacity
         };
         let base = "body:not(.oled) { opacity: 0.1 !important } ";
-        assert_eq!(opacity(&format!("{base}html.suspended body:not(.oled) {{ opacity: 0.5 !important }}")), Some(0.1));
+        assert_eq!(
+            opacity(&format!(
+                "{base}html.suspended body:not(.oled) {{ opacity: 0.5 !important }}"
+            )),
+            Some(0.1)
+        );
         assert_eq!(
             opacity(&format!(
                 "{base}html.suspended body:not(.oled), body.suspended:not(.oled) {{ opacity: 0.5 !important }}"
@@ -4857,11 +5894,17 @@ mod tests {
         let d = doc();
         let c = refs(&d);
         assert_eq!(query_all(".tab", &c).unwrap().matched, vec![1, 2]);
-        assert_eq!(query_all(".tab.router-link-active", &c).unwrap().matched, vec![1]);
+        assert_eq!(
+            query_all(".tab.router-link-active", &c).unwrap().matched,
+            vec![1]
+        );
         assert_eq!(query_all(".nav a", &c).unwrap().matched, vec![1, 2]);
         assert_eq!(query_all("input:disabled", &c).unwrap().matched, vec![3]);
         assert_eq!(query_all("[href=\"/list\"]", &c).unwrap().matched, vec![2]);
-        assert_eq!(query_all("input, .router-link-active", &c).unwrap().matched, vec![1, 3]);
+        assert_eq!(
+            query_all("input, .router-link-active", &c).unwrap().matched,
+            vec![1, 3]
+        );
         assert!(query_all(".nope", &c).unwrap().matched.is_empty());
     }
 
@@ -4876,7 +5919,9 @@ mod tests {
         assert!(query_all("a::before", &c).is_ok());
         let err = query_all("a:visited", &c).unwrap_err();
         assert!(err.contains("visited"), "{err}");
-        assert!(query_all(".a { color: red } .b", &c).unwrap_err().contains('{'));
+        assert!(query_all(".a { color: red } .b", &c)
+            .unwrap_err()
+            .contains('{'));
     }
 
     fn nested_doc() -> Doc {
@@ -4914,8 +5959,14 @@ mod tests {
         let d = nested_doc();
         let all = refs(&d);
         let nav = all[1];
-        assert_eq!(query_all_in(":scope", &[nav], Some(nav)).unwrap().matched, vec![0]);
-        assert!(query_all_in(":scope", &[all[2]], Some(nav)).unwrap().matched.is_empty());
+        assert_eq!(
+            query_all_in(":scope", &[nav], Some(nav)).unwrap().matched,
+            vec![0]
+        );
+        assert!(query_all_in(":scope", &[all[2]], Some(nav))
+            .unwrap()
+            .matched
+            .is_empty());
         assert_eq!(query_all(":scope", &all).unwrap().matched, vec![0]);
     }
 
@@ -4926,7 +5977,10 @@ mod tests {
         let d = themed_doc();
         let states = cascade(&engine, &d, &Env::default());
         assert!(states[0].base.background.is_some(), "the root is styled");
-        assert!(states[1].base.background.is_none(), "and nothing below it is");
+        assert!(
+            states[1].base.background.is_none(),
+            "and nothing below it is"
+        );
     }
 
     fn themed_doc() -> Doc {
@@ -4964,9 +6018,7 @@ mod tests {
 
     #[test]
     fn custom_properties_inherit_down_the_tree_and_substitute() {
-        let engine = Engine::compile(
-            ":root { --fg: rgb(10 20 30) } .btn { color: var(--fg) }",
-        );
+        let engine = Engine::compile(":root { --fg: rgb(10 20 30) } .btn { color: var(--fg) }");
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
         let d = themed_doc();
         let states = cascade(&engine, &d, &Env::default());
@@ -4985,10 +6037,15 @@ mod tests {
         let states = cascade(&engine, &themed_doc(), &Env::default());
         let fill = states[2].extras.fill.expect("fill computed");
         assert_eq!(fill.as_attr(), "rgb(6,8,11)");
-        assert_eq!(states[2].extras.stroke.expect("stroke computed").as_attr(), "rgba(219,232,255,0.169)");
+        assert_eq!(
+            states[2].extras.stroke.expect("stroke computed").as_attr(),
+            "rgba(219,232,255,0.169)"
+        );
         let shadow = states[2].extras.drop_shadow.expect("drop-shadow computed");
         assert_eq!((shadow.dx, shadow.dy, shadow.blur), (0.0, 18.0, 30.0));
-        let engine = Engine::compile(".btn { filter: drop-shadow(0 1px 2px #000) } .page .btn { filter: none }");
+        let engine = Engine::compile(
+            ".btn { filter: drop-shadow(0 1px 2px #000) } .page .btn { filter: none }",
+        );
         let states = cascade(&engine, &themed_doc(), &Env::default());
         assert_eq!(states[2].extras.drop_shadow, None);
     }
@@ -5002,11 +6059,26 @@ mod tests {
         let d = themed_doc();
         let mut diagnostics = Vec::new();
         let vars = Rc::new(Vars::default());
-        let btn = engine.compute_node(DocRef { doc: &d, i: 3 }, None, &vars, None, &Env::default(), &mut diagnostics);
-        assert_eq!(btn.extras.fill.map(|p| p.as_attr().into_owned()).as_deref(), Some("rgb(255,0,0)"));
+        let btn = engine.compute_node(
+            DocRef { doc: &d, i: 3 },
+            None,
+            &vars,
+            None,
+            &Env::default(),
+            &mut diagnostics,
+        );
+        assert_eq!(
+            btn.extras.fill.map(|p| p.as_attr().into_owned()).as_deref(),
+            Some("rgb(255,0,0)")
+        );
         assert_eq!(btn.extras.svg_presentation, None);
         assert_eq!(btn.extras.stroke, None);
-        assert!(diagnostics.iter().any(|m| m.contains("SVG presentation properties")), "{diagnostics:?}");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|m| m.contains("SVG presentation properties")),
+            "{diagnostics:?}"
+        );
     }
 
     #[test]
@@ -5067,7 +6139,11 @@ mod tests {
             &Env::default(),
             &mut diagnostics,
         );
-        assert_eq!(s.base.opacity, Some(0.5), "the sibling declaration survives");
+        assert_eq!(
+            s.base.opacity,
+            Some(0.5),
+            "the sibling declaration survives"
+        );
         assert_eq!(s.base.text.color, None);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
@@ -5082,17 +6158,28 @@ mod tests {
 
     #[test]
     fn a_reference_cycle_is_reported_and_invalidates_the_users() {
-        let engine = Engine::compile(":root { --a: var(--b); --b: var(--a) } .btn { opacity: var(--a, 1) }");
+        let engine =
+            Engine::compile(":root { --a: var(--b); --b: var(--a) } .btn { opacity: var(--a, 1) }");
         let d = themed_doc();
         let mut diagnostics = Vec::new();
         let mut vars = Rc::new(Vars::default());
         let mut opacity = None;
         for i in 1..d.nodes.len() {
-            let s = engine.compute_node(DocRef { doc: &d, i }, None, &vars, None, &Env::default(), &mut diagnostics);
+            let s = engine.compute_node(
+                DocRef { doc: &d, i },
+                None,
+                &vars,
+                None,
+                &Env::default(),
+                &mut diagnostics,
+            );
             vars = s.vars.clone();
             opacity = s.base.opacity;
         }
-        assert!(diagnostics.iter().any(|m| m.contains("cycle")), "{diagnostics:?}");
+        assert!(
+            diagnostics.iter().any(|m| m.contains("cycle")),
+            "{diagnostics:?}"
+        );
         assert_eq!(opacity, Some(1.0));
     }
 
@@ -5102,7 +6189,11 @@ mod tests {
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
         let d = themed_doc();
         let s = cascade(&engine, &d, &Env::default());
-        assert_eq!(s[1].vars.get("--v"), Some("2"), "the unscoped rule is the only match");
+        assert_eq!(
+            s[1].vars.get("--v"),
+            Some("2"),
+            "the unscoped rule is the only match"
+        );
     }
 
     #[test]
@@ -5235,8 +6326,21 @@ mod tests {
 
     #[test]
     fn a_live_view_filters_a_query_by_the_interaction_state() {
-        fn live<'d>(d: &'d Doc, hovered: &'d [usize], focused: usize, keyboard: bool) -> Vec<LiveRef<'d>> {
-            refs(d).into_iter().map(|r| LiveRef { r, hovered, focused, keyboard }).collect()
+        fn live<'d>(
+            d: &'d Doc,
+            hovered: &'d [usize],
+            focused: usize,
+            keyboard: bool,
+        ) -> Vec<LiveRef<'d>> {
+            refs(d)
+                .into_iter()
+                .map(|r| LiveRef {
+                    r,
+                    hovered,
+                    focused,
+                    keyboard,
+                })
+                .collect()
         }
         fn q(s: &str, c: &[LiveRef<'_>]) -> Result<(Vec<usize>, Vec<String>), String> {
             query_all(s, c).map(|r| (r.matched, r.warnings))
@@ -5257,7 +6361,6 @@ mod tests {
         assert_eq!(q(":focus-visible", &k).unwrap().0, vec![2]);
         assert!(q(":hover", &k).unwrap().0.is_empty());
     }
-
 
     #[test]
     fn has_matches_a_descendant_for_real() {
@@ -5304,7 +6407,9 @@ mod tests {
                 ("input", "bad", 0, vec![]),
             ],
         };
-        let next = Engine::compile(".label:has(+ .bad) { opacity: 0.5 } .hint:has(+ .bad) { opacity: 0.5 }");
+        let next = Engine::compile(
+            ".label:has(+ .bad) { opacity: 0.5 } .hint:has(+ .bad) { opacity: 0.5 }",
+        );
         let later = Engine::compile(".label:has(~ .bad) { opacity: 0.5 }");
         let opacity = |engine: &Engine, i: usize| {
             let mut d = Vec::new();
@@ -5365,15 +6470,25 @@ mod tests {
             states.focus_within.as_ref().and_then(|f| f.opacity),
             Some(0.5)
         );
-        assert!(states.needs_focus_handle(), "gpui needs a handle to key it on");
+        assert!(
+            states.needs_focus_handle(),
+            "gpui needs a handle to key it on"
+        );
     }
 
     #[test]
     fn supports_conditions_are_evaluated_rather_than_dropped() {
         let applies = |css: &str| {
             let engine = Engine::compile(css);
-            assert!(engine.diagnostics.is_empty(), "{css}: {:?}", engine.diagnostics);
-            engine.compute(box_node(), None, &Env::default()).base.opacity
+            assert!(
+                engine.diagnostics.is_empty(),
+                "{css}: {:?}",
+                engine.diagnostics
+            );
+            engine
+                .compute(box_node(), None, &Env::default())
+                .base
+                .opacity
         };
         assert_eq!(
             applies("@supports (display: flex) { .box { opacity: 0.5 } }"),
@@ -5444,7 +6559,11 @@ mod tests {
         let red = compute(1, None).color.expect("declared");
         let inherited = compute(2, Some(red));
         assert_eq!(inherited.base.border_color, Some(red));
-        assert_eq!(inherited.color, Some(red), "and it passes the same colour on");
+        assert_eq!(
+            inherited.color,
+            Some(red),
+            "and it passes the same colour on"
+        );
         let own = compute(3, Some(red));
         assert_ne!(own.base.border_color, Some(red));
         assert_eq!(own.base.border_color, own.color);
@@ -5492,7 +6611,11 @@ mod tests {
             );
             assert!(d.is_empty(), "{d:?}");
             let parent = doc.nodes[i].2;
-            let parent = if parent == 0 { InheritedRadii::default() } else { handed[parent] };
+            let parent = if parent == 0 {
+                InheritedRadii::default()
+            } else {
+                handed[parent]
+            };
             handed[i] = resolve_inherited_radii(&mut states, parent);
             computed.push(states);
         }
@@ -5504,13 +6627,23 @@ mod tests {
             [bg.corner_radii.top_left, bg.corner_radii.bottom_right],
             [px(16.), px(16.)]
         );
-        assert_eq!(bg.vn_corner_radii.top_left, Some(None), "a length, not a percentage");
+        assert_eq!(
+            bg.vn_corner_radii.top_left,
+            Some(None),
+            "a length, not a percentage"
+        );
         let zone = &at(3).base;
         assert_eq!(zone.corner_radii.bottom_left, px(16.));
-        assert_eq!(zone.corner_radii.top_left, None, "an undeclared corner stays undeclared");
+        assert_eq!(
+            zone.corner_radii.top_left, None,
+            "an undeclared corner stays undeclared"
+        );
         let body = &at(4).base;
         assert_eq!(
-            [body.corner_radii.bottom_left, body.corner_radii.bottom_right],
+            [
+                body.corner_radii.bottom_left,
+                body.corner_radii.bottom_right
+            ],
             [px(16.), px(16.)]
         );
         let from_pct = &at(6).base;
@@ -5544,7 +6677,9 @@ mod tests {
     #[test]
     fn border_radius_inherit_on_a_state_rule_is_advised() {
         let engine = Engine::compile(".x:hover { border-radius: inherit }");
-        let doc = Doc { nodes: vec![("", "", 0, vec![]), ("div", "x", 0, vec![])] };
+        let doc = Doc {
+            nodes: vec![("", "", 0, vec![]), ("div", "x", 0, vec![])],
+        };
         let mut d = Vec::new();
         let states = engine.compute_node(
             DocRef { doc: &doc, i: 1 },
@@ -5555,7 +6690,10 @@ mod tests {
             &mut d,
         );
         assert_eq!(states.extras.radius_inherit, RadiusInherit::default());
-        assert!(d.iter().any(|m| m.contains("border-radius: inherit")), "{d:?}");
+        assert!(
+            d.iter().any(|m| m.contains("border-radius: inherit")),
+            "{d:?}"
+        );
     }
 
     use crate::animator::{AnimEventKind, Animator};
@@ -5585,7 +6723,10 @@ mod tests {
         a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
 
         let base = StyleRefinement::default();
-        let at = |ms: u64| a.overlay(1, &base, now + Duration::from_millis(ms)).unwrap();
+        let at = |ms: u64| {
+            a.overlay(1, &base, now + Duration::from_millis(ms))
+                .unwrap()
+        };
         assert!((opacity(&at(0)) - 0.0).abs() < 1e-6);
         assert!((opacity(&at(500)) - 0.5).abs() < 1e-3);
         assert!((opacity(&at(999)) - 1.0).abs() < 1e-2);
@@ -5602,10 +6743,18 @@ mod tests {
         a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
 
         let base = StyleRefinement::default();
-        let at = |ms: u64| opacity(&a.overlay(1, &base, now + Duration::from_millis(ms)).unwrap());
+        let at = |ms: u64| {
+            opacity(
+                &a.overlay(1, &base, now + Duration::from_millis(ms))
+                    .unwrap(),
+            )
+        };
         assert!((at(0) - 1.0).abs() < 1e-6);
         assert!((at(40) - 0.6).abs() < 1e-3);
-        assert!((at(200) - 0.2).abs() < 1e-6, "forwards holds the 100 % keyframe");
+        assert!(
+            (at(200) - 0.2).abs() < 1e-6,
+            "forwards holds the 100 % keyframe"
+        );
         assert!((at(5000) - 0.2).abs() < 1e-6, "…and keeps holding it");
     }
 
@@ -5617,7 +6766,9 @@ mod tests {
         let now = Instant::now();
         a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
         let base = StyleRefinement::default();
-        assert!(a.overlay(1, &base, now + Duration::from_millis(2000)).is_none());
+        assert!(a
+            .overlay(1, &base, now + Duration::from_millis(2000))
+            .is_none());
 
         let forwards = Engine::compile(
             "@keyframes spin { from { opacity: 0 } to { opacity: 1 } } \
@@ -5625,8 +6776,12 @@ mod tests {
         );
         let cs = forwards.compute(box_node(), None, &Env::default());
         let mut a = Animator::new();
-        a.on_computed_animations(1, &cs, now, &|name| forwards.keyframes(name, &Env::default()));
-        let held = a.overlay(1, &base, now + Duration::from_millis(2000)).unwrap();
+        a.on_computed_animations(1, &cs, now, &|name| {
+            forwards.keyframes(name, &Env::default())
+        });
+        let held = a
+            .overlay(1, &base, now + Duration::from_millis(2000))
+            .unwrap();
         assert!((opacity(&held) - 1.0).abs() < 1e-6);
 
         // `backwards` freezes the START value during the delay; without it the delay paints nothing
@@ -5637,8 +6792,12 @@ mod tests {
         );
         let cs = backwards.compute(box_node(), None, &Env::default());
         let mut a = Animator::new();
-        a.on_computed_animations(1, &cs, now, &|name| backwards.keyframes(name, &Env::default()));
-        let during_delay = a.overlay(1, &base, now + Duration::from_millis(100)).unwrap();
+        a.on_computed_animations(1, &cs, now, &|name| {
+            backwards.keyframes(name, &Env::default())
+        });
+        let during_delay = a
+            .overlay(1, &base, now + Duration::from_millis(100))
+            .unwrap();
         assert!((opacity(&during_delay) - 0.25).abs() < 1e-6);
     }
 
@@ -5653,7 +6812,9 @@ mod tests {
         a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
         let mut base = StyleRefinement::default();
         base.opacity = Some(0.2);
-        let half = a.overlay(1, &base, now + Duration::from_millis(500)).unwrap();
+        let half = a
+            .overlay(1, &base, now + Duration::from_millis(500))
+            .unwrap();
         assert!((opacity(&half) - 0.6).abs() < 1e-2, "{:?}", half.opacity);
     }
 
@@ -5670,9 +6831,13 @@ mod tests {
         a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
         assert!(a.any_animation(now + Duration::from_secs(3600)));
         let base = StyleRefinement::default();
-        let mid = a.overlay(1, &base, now + Duration::from_millis(1000)).unwrap();
+        let mid = a
+            .overlay(1, &base, now + Duration::from_millis(1000))
+            .unwrap();
         assert!((opacity(&mid) - 0.5).abs() < 1e-3);
-        let back = a.overlay(1, &base, now + Duration::from_millis(1999)).unwrap();
+        let back = a
+            .overlay(1, &base, now + Duration::from_millis(1999))
+            .unwrap();
         assert!(opacity(&back) > 0.9, "{:?}", back.opacity);
     }
 
@@ -5701,7 +6866,11 @@ mod tests {
         assert_eq!(ended.len(), 1);
         assert_eq!(ended[0].kind, AnimEventKind::AnimationEnd);
         // `elapsedTime` excludes the delay: 100 ms of animation, not 150.
-        assert!((ended[0].elapsed - 0.1).abs() < 1e-6, "{}", ended[0].elapsed);
+        assert!(
+            (ended[0].elapsed - 0.1).abs() < 1e-6,
+            "{}",
+            ended[0].elapsed
+        );
 
         // Once ended, removing the animation is NOT a cancel — the DOM fires exactly one of
         // `animationend` / `animationcancel`.
@@ -5770,7 +6939,9 @@ mod tests {
         assert!(a.is_idle());
         let diagnostics = a.take_diagnostics();
         assert!(
-            diagnostics.iter().any(|d| d.contains("nope") && d.contains("@keyframes")),
+            diagnostics
+                .iter()
+                .any(|d| d.contains("nope") && d.contains("@keyframes")),
             "{diagnostics:?}"
         );
     }
@@ -5783,8 +6954,11 @@ mod tests {
                     animation-iteration-count: infinite; animation-timing-function: linear }",
         );
         assert!(
-            !engine.diagnostics.iter().any(|d| d.contains("@keyframes are dropped")
-                || d.contains("not mapped (v1): Animation")),
+            !engine
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("@keyframes are dropped")
+                    || d.contains("not mapped (v1): Animation")),
             "{:?}",
             engine.diagnostics
         );
@@ -5804,30 +6978,49 @@ mod tests {
         let engine = Engine::compile(
             "@keyframes slide { to { opacity: 0.25 } }              @media (max-width: 420px) { @keyframes slide { to { opacity: 0.75 } } }",
         );
-        let wide = Env { viewport_width: 1280.0, ..Env::default() };
-        let narrow = Env { viewport_width: 380.0, ..Env::default() };
+        let wide = Env {
+            viewport_width: 1280.0,
+            ..Env::default()
+        };
+        let narrow = Env {
+            viewport_width: 380.0,
+            ..Env::default()
+        };
 
         let opacity = |env: &Env| {
-            engine.keyframes("slide", env).map(|k| k.steps.last().unwrap().style.opacity.unwrap())
+            engine
+                .keyframes("slide", env)
+                .map(|k| k.steps.last().unwrap().style.opacity.unwrap())
         };
-        assert_eq!(opacity(&wide), Some(0.25), "the unconditional block, in a wide window");
+        assert_eq!(
+            opacity(&wide),
+            Some(0.25),
+            "the unconditional block, in a wide window"
+        );
         assert_eq!(
             opacity(&narrow),
             Some(0.75),
             "the @media block, in a window the query holds in — the SAME sheet, the same name"
         );
 
-        let only_narrow = Engine::compile(
-            "@media (max-width: 420px) { @keyframes pop { to { opacity: 0.5 } } }",
+        let only_narrow =
+            Engine::compile("@media (max-width: 420px) { @keyframes pop { to { opacity: 0.5 } } }");
+        assert!(
+            only_narrow.keyframes("pop", &narrow).is_some(),
+            "declared in the narrow window"
         );
-        assert!(only_narrow.keyframes("pop", &narrow).is_some(), "declared in the narrow window");
-        assert!(only_narrow.keyframes("pop", &wide).is_none(), "not declared in the wide one");
+        assert!(
+            only_narrow.keyframes("pop", &wide).is_none(),
+            "not declared in the wide one"
+        );
 
         let twice = Engine::compile(
             "@keyframes dup { to { opacity: 0.1 } } @keyframes dup { to { opacity: 0.9 } }",
         );
         assert_eq!(
-            twice.keyframes("dup", &wide).map(|k| k.steps.last().unwrap().style.opacity.unwrap()),
+            twice
+                .keyframes("dup", &wide)
+                .map(|k| k.steps.last().unwrap().style.opacity.unwrap()),
             Some(0.9),
             "a later block with the same name wins, as in CSS"
         );
@@ -5843,7 +7036,9 @@ mod tests {
     #[test]
     fn a_var_composed_keyframe_resolves_against_the_animating_element() {
         let engine = Engine::compile(TW_ANIMATE);
-        let raw = engine.keyframes("enter", &Env::default()).expect("@keyframes enter");
+        let raw = engine
+            .keyframes("enter", &Env::default())
+            .expect("@keyframes enter");
         assert_eq!(raw.steps.len(), 1, "the `from` step is kept, unresolved");
         assert!(raw.dynamic, "and it is flagged as needing per-element work");
 
@@ -5855,7 +7050,11 @@ mod tests {
             .expect("resolved");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let from = &frames.steps[0].style;
-        assert_eq!(from.opacity, Some(0.0), "var(--tw-enter-opacity) substituted");
+        assert_eq!(
+            from.opacity,
+            Some(0.0),
+            "var(--tw-enter-opacity) substituted"
+        );
         let t = from.vn_transform.expect("scale3d reached the refinement");
         assert!((t.scale.0 - 0.95).abs() < 1e-6, "{:?}", t.scale);
         assert!((t.scale.1 - 0.95).abs() < 1e-6, "{:?}", t.scale);
@@ -5866,9 +7065,15 @@ mod tests {
             engine.keyframes_for(name, &cs.vars, &Env::default(), &mut Vec::new())
         });
         let base = StyleRefinement::default();
-        let at = |ms: u64| a.overlay(1, &base, now + Duration::from_millis(ms)).unwrap();
+        let at = |ms: u64| {
+            a.overlay(1, &base, now + Duration::from_millis(ms))
+                .unwrap()
+        };
         assert!((opacity(&at(0)) - 0.0).abs() < 1e-6);
-        assert!((opacity(&at(100)) - 0.5).abs() < 1e-2, "halfway through the fade");
+        assert!(
+            (opacity(&at(100)) - 0.5).abs() < 1e-2,
+            "halfway through the fade"
+        );
         let half = at(100).vn_transform.expect("the zoom is interpolated too");
         assert!((half.scale.0 - 0.975).abs() < 1e-2, "{:?}", half.scale);
     }
@@ -5882,10 +7087,22 @@ mod tests {
         );
         let env = Env::default();
         let faint = engine.compute(box_node(), None, &env);
-        let half = engine.compute(Node { tag: "div", class: "box half", attrs: &[] }, None, &env);
+        let half = engine.compute(
+            Node {
+                tag: "div",
+                class: "box half",
+                attrs: &[],
+            },
+            None,
+            &env,
+        );
         let mut d = Vec::new();
-        let a = engine.keyframes_for("enter", &faint.vars, &env, &mut d).unwrap();
-        let b = engine.keyframes_for("enter", &half.vars, &env, &mut d).unwrap();
+        let a = engine
+            .keyframes_for("enter", &faint.vars, &env, &mut d)
+            .unwrap();
+        let b = engine
+            .keyframes_for("enter", &half.vars, &env, &mut d)
+            .unwrap();
         assert_eq!(a.steps[0].style.opacity, Some(0.0));
         assert_eq!(b.steps[0].style.opacity, Some(0.5));
         assert!(d.is_empty(), "{d:?}");
@@ -5912,10 +7129,18 @@ mod tests {
         let env = Env::default();
         let cs = engine.compute(box_node(), None, &env);
         let mut d = Vec::new();
-        let frames = engine.keyframes_for("enter", &cs.vars, &env, &mut d).unwrap();
+        let frames = engine
+            .keyframes_for("enter", &cs.vars, &env, &mut d)
+            .unwrap();
         assert_eq!(frames.steps[0].style.opacity, None);
-        assert!(frames.steps[0].style.size.width.is_some(), "the sibling survives");
-        assert!(d.is_empty(), "an unset var() is silent — a browser drops it too");
+        assert!(
+            frames.steps[0].style.size.width.is_some(),
+            "the sibling survives"
+        );
+        assert!(
+            d.is_empty(),
+            "an unset var() is silent — a browser drops it too"
+        );
     }
 
     #[test]
@@ -5934,12 +7159,24 @@ mod tests {
              .box { transform: translate(-50%, -50%) }",
         );
         let env = Env::default();
-        let node = Node { tag: "div", class: "box animate-in fade-in-0 zoom-in-95", attrs: &[] };
+        let node = Node {
+            tag: "div",
+            class: "box animate-in fade-in-0 zoom-in-95",
+            attrs: &[],
+        };
         let cs = engine.compute(node, None, &env);
         let mut d = Vec::new();
-        let frames = engine.keyframes_for("enter", &cs.vars, &env, &mut d).unwrap();
-        assert!(d.is_empty(), "`rotate(0)` and the rest must all parse: {d:?}");
-        let start = frames.steps[0].style.vn_transform.expect("the keyframe's transform");
+        let frames = engine
+            .keyframes_for("enter", &cs.vars, &env, &mut d)
+            .unwrap();
+        assert!(
+            d.is_empty(),
+            "`rotate(0)` and the rest must all parse: {d:?}"
+        );
+        let start = frames.steps[0]
+            .style
+            .vn_transform
+            .expect("the keyframe's transform");
         assert_eq!(start.translate.0, gpui::TransformLength::Pixels(0.0));
         assert!((start.scale.0 - 0.95).abs() < 1e-6, "{:?}", start.scale);
         assert_eq!(frames.steps[0].style.opacity, Some(0.0));
@@ -5992,7 +7229,11 @@ mod tests {
              [data-drawer] { animation-duration: 500ms; animation-timing-function: linear; animation-delay: 20ms } \
              [data-drawer][data-state=open] { animation-name: slide }",
         );
-        let node = Node { tag: "div", class: "", attrs: &[("data-drawer", ""), ("data-state", "open")] };
+        let node = Node {
+            tag: "div",
+            class: "",
+            attrs: &[("data-drawer", ""), ("data-state", "open")],
+        };
         let computed = engine.compute(node, None, &Env::default());
         assert_eq!(computed.animations[0].duration, Duration::from_millis(500));
         assert_eq!(computed.animations[0].delay, Duration::from_millis(20));
@@ -6005,17 +7246,62 @@ mod tests {
             ".box { animation-duration: 100ms, 250ms; animation-iteration-count: 2, 3; animation-delay: 30ms } \
              .box.on { animation-name: first, second, third }",
         );
-        let node = Node { tag: "div", class: "box on", attrs: &[] };
+        let node = Node {
+            tag: "div",
+            class: "box on",
+            attrs: &[],
+        };
         let computed = engine.compute(node, None, &Env::default());
-        assert_eq!(computed.animations.iter().map(|animation| animation.duration).collect::<Vec<_>>(), vec![Duration::from_millis(100), Duration::from_millis(250), Duration::from_millis(100)]);
-        assert_eq!(computed.animations.iter().map(|animation| animation.iterations).collect::<Vec<_>>(), vec![2.0, 3.0, 2.0]);
+        assert_eq!(
+            computed
+                .animations
+                .iter()
+                .map(|animation| animation.duration)
+                .collect::<Vec<_>>(),
+            vec![
+                Duration::from_millis(100),
+                Duration::from_millis(250),
+                Duration::from_millis(100)
+            ]
+        );
+        assert_eq!(
+            computed
+                .animations
+                .iter()
+                .map(|animation| animation.iterations)
+                .collect::<Vec<_>>(),
+            vec![2.0, 3.0, 2.0]
+        );
         let fold_inline = |source: &str| {
             let inline = parse_inline_style(source, &mut Vec::new());
-            engine.compute_node(node, Some(&inline), &Rc::new(Vars::default()), None, &Env::default(), &mut Vec::new())
+            engine.compute_node(
+                node,
+                Some(&inline),
+                &Rc::new(Vars::default()),
+                None,
+                &Env::default(),
+                &mut Vec::new(),
+            )
         };
-        let computed = fold_inline("animation-duration: 400ms, 600ms; animation-fill-mode: forwards");
-        assert_eq!(computed.animations.iter().map(|animation| animation.duration).collect::<Vec<_>>(), vec![Duration::from_millis(400), Duration::from_millis(600), Duration::from_millis(400)]);
-        assert!(computed.animations.iter().all(|animation| animation.fill == FillMode::Forwards && animation.delay == Duration::from_millis(30)));
+        let computed =
+            fold_inline("animation-duration: 400ms, 600ms; animation-fill-mode: forwards");
+        assert_eq!(
+            computed
+                .animations
+                .iter()
+                .map(|animation| animation.duration)
+                .collect::<Vec<_>>(),
+            vec![
+                Duration::from_millis(400),
+                Duration::from_millis(600),
+                Duration::from_millis(400)
+            ]
+        );
+        assert!(computed
+            .animations
+            .iter()
+            .all(|animation| animation.fill == FillMode::Forwards
+                && animation.delay == Duration::from_millis(30)));
         let computed = fold_inline("animation: replacement 75ms ease-in");
         assert_eq!(computed.animations.len(), 1);
         assert_eq!(computed.animations[0].duration, Duration::from_millis(75));
@@ -6029,20 +7315,44 @@ mod tests {
         let engine = Engine::compile(".box { animation: slide 2s ease-in-out; transition: opacity 2s linear } .box { animation-duration: 10ms !important; animation-iteration-count: 1 !important; transition-duration: 12ms !important }");
         let fold = |source: &str| {
             let inline = parse_inline_style(source, &mut Vec::new());
-            engine.compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &Env::default(), &mut Vec::new())
+            engine.compute_node(
+                box_node(),
+                Some(&inline),
+                &Rc::new(Vars::default()),
+                None,
+                &Env::default(),
+                &mut Vec::new(),
+            )
         };
         let computed = fold("animation-duration: 500ms; animation-fill-mode: forwards; animation-iteration-count: 3; transition-property: transform, border-radius; transition-duration: 500ms; transition-timing-function: ease-in");
         assert_eq!(computed.animations[0].duration, Duration::from_millis(10));
         assert_eq!(computed.animations[0].iterations, 1.0);
         assert_eq!(computed.animations[0].fill, FillMode::Forwards);
         assert_eq!(computed.transitions.len(), 5);
-        assert_eq!(computed.transitions[0].property, TransitionProperty::Transform);
-        assert!(computed.transitions.iter().all(|transition| transition.duration == Duration::from_millis(12) && transition.easing == Easing::EaseIn));
+        assert_eq!(
+            computed.transitions[0].property,
+            TransitionProperty::Transform
+        );
+        assert!(computed
+            .transitions
+            .iter()
+            .all(
+                |transition| transition.duration == Duration::from_millis(12)
+                    && transition.easing == Easing::EaseIn
+            ));
         let computed = fold("animation-duration: 500ms; animation-duration: 75ms !important; transition-property: transform; transition-duration: 500ms; transition-duration: 80ms !important");
         assert_eq!(computed.animations[0].duration, Duration::from_millis(75));
-        assert_eq!(computed.transitions[0].property, TransitionProperty::Transform);
+        assert_eq!(
+            computed.transitions[0].property,
+            TransitionProperty::Transform
+        );
         assert_eq!(computed.transitions[0].duration, Duration::from_millis(80));
-        let legacy = Rc::new(vec![TransitionSpec { property: TransitionProperty::Width, duration: Duration::from_millis(900), delay: Duration::ZERO, easing: Easing::Linear }]);
+        let legacy = Rc::new(vec![TransitionSpec {
+            property: TransitionProperty::Width,
+            duration: Duration::from_millis(900),
+            delay: Duration::ZERO,
+            easing: Easing::Linear,
+        }]);
         let computed = engine.compute_with(box_node(), None, Some(&legacy), &Env::default());
         assert_eq!(computed.transitions[0].property, TransitionProperty::Width);
         assert_eq!(computed.transitions[0].duration, Duration::from_millis(12));
@@ -6053,18 +7363,31 @@ mod tests {
         let engine = Engine::compile(".box { animation: sheet 10ms linear !important; transition: transform 20ms ease-in !important }");
         let fold = |source: &str| {
             let inline = parse_inline_style(source, &mut Vec::new());
-            engine.compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &Env::default(), &mut Vec::new())
+            engine.compute_node(
+                box_node(),
+                Some(&inline),
+                &Rc::new(Vars::default()),
+                None,
+                &Env::default(),
+                &mut Vec::new(),
+            )
         };
         let computed = fold("animation: normal 500ms ease-out; animation-fill-mode: forwards; transition: opacity 500ms linear");
         assert_eq!(&*computed.animations[0].name, "sheet");
         assert_eq!(computed.animations[0].duration, Duration::from_millis(10));
         assert_eq!(computed.animations[0].fill, FillMode::None);
-        assert_eq!(computed.transitions[0].property, TransitionProperty::Transform);
+        assert_eq!(
+            computed.transitions[0].property,
+            TransitionProperty::Transform
+        );
         assert_eq!(computed.transitions[0].duration, Duration::from_millis(20));
         let computed = fold("animation: own 75ms ease-out !important; animation-duration: 900ms; transition: opacity 80ms linear !important; transition-duration: 900ms");
         assert_eq!(&*computed.animations[0].name, "own");
         assert_eq!(computed.animations[0].duration, Duration::from_millis(75));
-        assert_eq!(computed.transitions[0].property, TransitionProperty::Opacity);
+        assert_eq!(
+            computed.transitions[0].property,
+            TransitionProperty::Opacity
+        );
         assert_eq!(computed.transitions[0].duration, Duration::from_millis(80));
     }
 
@@ -6074,7 +7397,9 @@ mod tests {
         let cs = engine.compute(box_node(), None, &Env::default());
         let mut a = Animator::new();
         let created = Instant::now();
-        a.on_computed_animations(1, &cs, created, &|name| engine.keyframes(name, &Env::default()));
+        a.on_computed_animations(1, &cs, created, &|name| {
+            engine.keyframes(name, &Env::default())
+        });
 
         let first_frame = created + Duration::from_millis(300);
         a.tick(first_frame);
@@ -6091,7 +7416,8 @@ mod tests {
 
     #[test]
     fn scale3d_decomposes_to_the_two_axes_that_exist() {
-        let (r, d) = computed_with_env(".box { transform: scale3d(0.95, 0.8, 1) }", &Env::default());
+        let (r, d) =
+            computed_with_env(".box { transform: scale3d(0.95, 0.8, 1) }", &Env::default());
         let t = r.vn_transform.expect("a transform");
         assert!((t.scale.0 - 0.95).abs() < 1e-6);
         assert!((t.scale.1 - 0.8).abs() < 1e-6);
@@ -6099,7 +7425,6 @@ mod tests {
         let (_, d) = computed_with_env(".box { transform: scale3d(1, 1, 2) }", &Env::default());
         assert!(!d.iter().any(|m| m.contains("transform")), "{d:?}");
     }
-
 
     #[test]
     fn a_hover_rung_gives_up_exactly_its_transitioned_properties() {
@@ -6134,7 +7459,10 @@ mod tests {
         let d = group_doc();
         let states = cascade(&engine, &d, &Env::default());
         let icon = &states[2];
-        assert!(icon.hovered(false, false).is_none(), "base state is not a fold");
+        assert!(
+            icon.hovered(false, false).is_none(),
+            "base state is not a fold"
+        );
         assert_eq!(icon.hovered(false, true).unwrap().opacity, Some(0.5));
         assert_eq!(icon.hovered(true, false).unwrap().opacity, Some(0.9));
         assert_eq!(icon.hovered(true, true).unwrap().opacity, Some(0.9));
@@ -6153,7 +7481,9 @@ mod tests {
 
         let target = cs.hovered(true, false);
         a.on_state(1, &cs, target.as_ref(), now);
-        let half = a.overlay(1, &base, now + Duration::from_millis(100)).unwrap();
+        let half = a
+            .overlay(1, &base, now + Duration::from_millis(100))
+            .unwrap();
         assert!(
             (half.opacity.unwrap() - 0.5).abs() < 1e-2,
             "midway through, not snapped: {:?}",
@@ -6167,7 +7497,9 @@ mod tests {
         assert_eq!(held.opacity, Some(1.0));
 
         a.on_state(1, &cs, None, late);
-        let back = a.overlay(1, &base, late + Duration::from_millis(100)).unwrap();
+        let back = a
+            .overlay(1, &base, late + Duration::from_millis(100))
+            .unwrap();
         assert!(
             (back.opacity.unwrap() - 0.5).abs() < 1e-2,
             "reverses: {:?}",
@@ -6208,7 +7540,10 @@ mod tests {
         let d = doc();
         let rules = engine.matched_rules(DocRef { doc: &d, i: 2 }, &Env::default());
 
-        let seen: Vec<(&str, &str)> = rules.iter().map(|r| (r.selector.as_str(), r.state)).collect();
+        let seen: Vec<(&str, &str)> = rules
+            .iter()
+            .map(|r| (r.selector.as_str(), r.state))
+            .collect();
         assert_eq!(
             seen,
             vec![
@@ -6243,7 +7578,8 @@ mod tests {
     #[test]
     fn rule_text_is_captured_only_when_asked_for() {
         let d = doc();
-        let matched = |engine: &Engine| engine.matched_rules(DocRef { doc: &d, i: 2 }, &Env::default());
+        let matched =
+            |engine: &Engine| engine.matched_rules(DocRef { doc: &d, i: 2 }, &Env::default());
 
         set_capture_rule_text(false);
         let off = Engine::compile(".tab { color: #002 }");
@@ -6261,37 +7597,71 @@ mod tests {
     #[test]
     fn border_currentcolor_cascades_per_side_without_overwriting_literal_edges() {
         let engine = Engine::compile(".box { color:#0000ff; border:1px solid currentColor } .box { border-left-color:#ff0000 }");
-        let style=engine.compute(box_node(), None, &Env::default());
-        assert_eq!(style.base.vn_border_colors.top, Some(Some(gpui::rgb(0x0000ff).into())));
-        assert_eq!(style.base.vn_border_colors.left, Some(Some(gpui::rgb(0xff0000).into())));
+        let style = engine.compute(box_node(), None, &Env::default());
+        assert_eq!(
+            style.base.vn_border_colors.top,
+            Some(Some(gpui::rgb(0x0000ff).into()))
+        );
+        assert_eq!(
+            style.base.vn_border_colors.left,
+            Some(Some(gpui::rgb(0xff0000).into()))
+        );
         let engine=Engine::compile(".box { color:#0000ff; border:1px solid #ff0000 } .box { border-left-color:currentColor }");
-        let style=engine.compute(box_node(), None, &Env::default());
-        assert_eq!(style.base.vn_border_colors.top, Some(Some(gpui::rgb(0xff0000).into())));
-        assert_eq!(style.base.vn_border_colors.left, Some(Some(gpui::rgb(0x0000ff).into())));
+        let style = engine.compute(box_node(), None, &Env::default());
+        assert_eq!(
+            style.base.vn_border_colors.top,
+            Some(Some(gpui::rgb(0xff0000).into()))
+        );
+        assert_eq!(
+            style.base.vn_border_colors.left,
+            Some(Some(gpui::rgb(0x0000ff).into()))
+        );
     }
 
     #[test]
     fn scrollbar_color_uses_theme_variables_and_transparent_track() {
         let engine=Engine::compile(".box { --muted-foreground:240 5% 64%; scrollbar-color:hsl(var(--muted-foreground) / .35) transparent }");
-        let style=engine.compute(box_node(), None, &Env::default());
-        let (thumb,track)=style.extras.scrollbar_color.expect("theme colour pair is retained");
-        assert!((thumb.a-0.35).abs()<0.01, "{thumb:?}");
+        let style = engine.compute(box_node(), None, &Env::default());
+        let (thumb, track) = style
+            .extras
+            .scrollbar_color
+            .expect("theme colour pair is retained");
+        assert!((thumb.a - 0.35).abs() < 0.01, "{thumb:?}");
         assert!(track.is_transparent());
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
     }
 
     fn test_font_metrics() -> impl Drop {
-        set_font_source(|| vec!["Arial".into(), "SK Metric Narrow".into(), "SK Metric Wide".into()]);
+        set_font_source(|| {
+            vec![
+                "Arial".into(),
+                "SK Metric Narrow".into(),
+                "SK Metric Wide".into(),
+            ]
+        });
         set_font_metric_source(|font, size| {
             let ratio = match font.family.as_ref() {
-                "SK Metric Narrow" => if font.weight == gpui::FontWeight::BOLD { 0.6 } else { 0.55 },
+                "SK Metric Narrow" => {
+                    if font.weight == gpui::FontWeight::BOLD {
+                        0.6
+                    } else {
+                        0.55
+                    }
+                }
                 "SK Metric Wide" => 0.8,
                 _ => return None,
             };
-            Some(FontRelativeMetrics { zero_advance: ratio * size, x_height: 0.4 * size })
+            Some(FontRelativeMetrics {
+                zero_advance: ratio * size,
+                x_height: 0.4 * size,
+            })
         });
         struct Reset;
-        impl Drop for Reset { fn drop(&mut self) { set_font_metric_source(|_, _| None); } }
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                set_font_metric_source(|_, _| None);
+            }
+        }
         Reset
     }
 
@@ -6301,7 +7671,10 @@ mod tests {
         let engine = Engine::compile(".box { width:1ch; height:2ex; font-family:'SK Metric Narrow'; font-weight:bold; font-size:9px } .box:hover {font-family:'SK Metric Wide'; font-size:12px}");
         let computed = engine.compute(box_node(), None, &Env::default());
         assert_eq!(computed.base.size.width, Some(gpui::px(5.4).into()));
-        assert_eq!(computed.base.size.height, Some(gpui::px(9.0 * 0.4 * 2.0).into()));
+        assert_eq!(
+            computed.base.size.height,
+            Some(gpui::px(9.0 * 0.4 * 2.0).into())
+        );
         assert_eq!(computed.computed_font.weight, gpui::FontWeight::BOLD);
         let hovered = computed.hover.expect("font state retained");
         assert_eq!(hovered.size.width, Some(gpui::px(9.6).into()));
@@ -6311,7 +7684,16 @@ mod tests {
     fn character_units_in_font_size_use_the_parent_face() {
         let _metrics = test_font_metrics();
         let engine = Engine::compile(".box {font-family:'SK Metric Wide';font-size:2ch;width:1ch}");
-        let computed = engine.compute_node_with_font(box_node(), None, &Rc::new(Vars::default()), None, 10.0, &gpui::font("SK Metric Narrow"), &Env::default(), &mut Vec::new());
+        let computed = engine.compute_node_with_font(
+            box_node(),
+            None,
+            &Rc::new(Vars::default()),
+            None,
+            10.0,
+            &gpui::font("SK Metric Narrow"),
+            &Env::default(),
+            &mut Vec::new(),
+        );
         assert_eq!(computed.font_size, 11.0);
         assert_eq!(computed.base.size.width, Some(gpui::px(11.0 * 0.8).into()));
     }
@@ -6321,58 +7703,153 @@ mod tests {
         let _metrics = test_font_metrics();
         let engine = Engine::compile(".box {width:2ch}");
         let vars = Rc::new(Vars::default());
-        let read = |family| engine.compute_node_with_font(box_node(), None, &vars, None, 10.0, &gpui::font(family), &Env::default(), &mut Vec::new());
-        assert_eq!(read("SK Metric Narrow").base.size.width, Some(gpui::px(11.0).into()));
-        assert_eq!(read("SK Metric Wide").base.size.width, Some(gpui::px(16.0).into()));
-        assert_eq!(read("SK Metric Narrow").base.size.width, Some(gpui::px(11.0).into()));
+        let read = |family| {
+            engine.compute_node_with_font(
+                box_node(),
+                None,
+                &vars,
+                None,
+                10.0,
+                &gpui::font(family),
+                &Env::default(),
+                &mut Vec::new(),
+            )
+        };
+        assert_eq!(
+            read("SK Metric Narrow").base.size.width,
+            Some(gpui::px(11.0).into())
+        );
+        assert_eq!(
+            read("SK Metric Wide").base.size.width,
+            Some(gpui::px(16.0).into())
+        );
+        assert_eq!(
+            read("SK Metric Narrow").base.size.width,
+            Some(gpui::px(11.0).into())
+        );
     }
 
     #[test]
     fn dynamic_character_units_use_variable_font_family_and_provider_changes_invalidate_cache() {
         let _metrics = test_font_metrics();
         let engine = Engine::compile(".box {--face:'SK Metric Wide'; font-family:var(--face); width:calc(2ch + 1px);font-size:10px}");
-        assert_eq!(engine.compute(box_node(), None, &Env::default()).base.size.width, Some(gpui::px(17.0).into()));
-        set_font_metric_source(|_, size| Some(FontRelativeMetrics {zero_advance:size * 0.9,x_height:size * 0.5}));
-        assert_eq!(engine.compute(box_node(), None, &Env::default()).base.size.width, Some(gpui::px(19.0).into()));
+        assert_eq!(
+            engine
+                .compute(box_node(), None, &Env::default())
+                .base
+                .size
+                .width,
+            Some(gpui::px(17.0).into())
+        );
+        set_font_metric_source(|_, size| {
+            Some(FontRelativeMetrics {
+                zero_advance: size * 0.9,
+                x_height: size * 0.5,
+            })
+        });
+        assert_eq!(
+            engine
+                .compute(box_node(), None, &Env::default())
+                .base
+                .size
+                .width,
+            Some(gpui::px(19.0).into())
+        );
         set_font_metric_source(|_, _| None);
-        assert_eq!(engine.compute(box_node(), None, &Env::default()).base.size.width, Some(gpui::px(11.0).into()), "an unavailable glyph retains the CSS half-em fallback");
+        assert_eq!(
+            engine
+                .compute(box_node(), None, &Env::default())
+                .base
+                .size
+                .width,
+            Some(gpui::px(11.0).into()),
+            "an unavailable glyph retains the CSS half-em fallback"
+        );
     }
 
     #[test]
     fn border_currentcolor_is_resolved_per_state_without_mask_bleed() {
-        for (base_color, hover_color) in [("currentColor", "#0000ff"), ("#0000ff", "currentColor")] {
+        for (base_color, hover_color) in [("currentColor", "#0000ff"), ("#0000ff", "currentColor")]
+        {
             let css=format!(".box {{ color:#ff0000; border:2px solid {base_color} }} .box:hover {{ border-top-color:{hover_color} }}");
-            let computed=Engine::compile(&css).compute(box_node(), None, &Env::default());
-            let red=gpui::rgb(0xff0000).into();
-            let blue=gpui::rgb(0x0000ff).into();
-            let base=if base_color=="currentColor" {red} else {blue};
-            let hover=if hover_color=="currentColor" {red} else {blue};
-            assert_eq!(computed.base.vn_border_colors.top, Some(Some(base)), "{css}: base top");
-            assert_eq!(computed.base.vn_border_colors.right, Some(Some(base)), "{css}: base right");
-            assert_eq!(computed.hover.as_ref().expect("hover").vn_border_colors.top, Some(Some(hover)), "{css}: hovered top");
+            let computed = Engine::compile(&css).compute(box_node(), None, &Env::default());
+            let red = gpui::rgb(0xff0000).into();
+            let blue = gpui::rgb(0x0000ff).into();
+            let base = if base_color == "currentColor" {
+                red
+            } else {
+                blue
+            };
+            let hover = if hover_color == "currentColor" {
+                red
+            } else {
+                blue
+            };
+            assert_eq!(
+                computed.base.vn_border_colors.top,
+                Some(Some(base)),
+                "{css}: base top"
+            );
+            assert_eq!(
+                computed.base.vn_border_colors.right,
+                Some(Some(base)),
+                "{css}: base right"
+            );
+            assert_eq!(
+                computed.hover.as_ref().expect("hover").vn_border_colors.top,
+                Some(Some(hover)),
+                "{css}: hovered top"
+            );
         }
     }
 
     #[test]
     fn border_currentcolor_resolves_group_and_generated_box_placeholders() {
         let engine=Engine::compile(".icon {color:#ff0000;border:2px solid blue} .group:hover .icon {border-top-color:currentColor} .group:active .icon {border-left-color:currentColor}");
-        let document=group_doc();
-        let computed=cascade(&engine,&document,&Env::default());
-        let icon=&computed[2];
-        let red=gpui::rgb(0xff0000).into();
-        let blue=gpui::rgb(0x0000ff).into();
-        assert_eq!(icon.base.vn_border_colors.top,Some(Some(blue)));
-        assert_eq!(icon.group_hover.as_ref().expect("group hover").1.vn_border_colors.top,Some(Some(red)));
-        assert_eq!(icon.group_active.as_ref().expect("group active").1.vn_border_colors.left,Some(Some(red)));
+        let document = group_doc();
+        let computed = cascade(&engine, &document, &Env::default());
+        let icon = &computed[2];
+        let red = gpui::rgb(0xff0000).into();
+        let blue = gpui::rgb(0x0000ff).into();
+        assert_eq!(icon.base.vn_border_colors.top, Some(Some(blue)));
+        assert_eq!(
+            icon.group_hover
+                .as_ref()
+                .expect("group hover")
+                .1
+                .vn_border_colors
+                .top,
+            Some(Some(red))
+        );
+        assert_eq!(
+            icon.group_active
+                .as_ref()
+                .expect("group active")
+                .1
+                .vn_border_colors
+                .left,
+            Some(Some(red))
+        );
         let engine=Engine::compile(".box {color:blue;border:2px solid red} .box::before {content:'x';color:#00ff00;border-top:2px solid currentColor}");
-        let computed=engine.compute(box_node(),None,&Env::default());
-        assert_eq!(computed.base.vn_border_colors.top,Some(Some(red)));
-        assert_eq!(computed.before.as_ref().expect("generated box").style.vn_border_colors.top,Some(Some(gpui::rgb(0x00ff00).into())));
+        let computed = engine.compute(box_node(), None, &Env::default());
+        assert_eq!(computed.base.vn_border_colors.top, Some(Some(red)));
+        assert_eq!(
+            computed
+                .before
+                .as_ref()
+                .expect("generated box")
+                .style
+                .vn_border_colors
+                .top,
+            Some(Some(gpui::rgb(0x00ff00).into()))
+        );
     }
 
     #[test]
-    fn registered_percentage_drift_remaps_background_position_without_overriding_hover_or_typed_animation() {
-        let engine = Engine::compile(r#"
+    fn registered_percentage_drift_remaps_background_position_without_overriding_hover_or_typed_animation(
+    ) {
+        let engine = Engine::compile(
+            r#"
             @property --offset { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
             @keyframes travel { to { --offset: -200%; } }
             @keyframes fade { to { opacity: 1; } }
@@ -6381,23 +7858,43 @@ mod tests {
                 animation: travel 6s linear infinite, fade 6s linear; }
             .box:hover { color: blue; transform: translateX(9px); }
             .box:focus { color: green; }
-        "#);
+        "#,
+        );
         let env = Env::default();
         let states = engine.compute(box_node(), None, &env);
         assert_eq!(states.vars.get("--offset"), Some("0%"));
-        let frames = engine.keyframes_for("travel", &states.vars, &env, &mut Vec::new()).unwrap();
-        assert_eq!(frames.steps.len(), 1, "custom-only keyframes must survive compilation");
+        let frames = engine
+            .keyframes_for("travel", &states.vars, &env, &mut Vec::new())
+            .unwrap();
+        assert_eq!(
+            frames.steps.len(),
+            1,
+            "custom-only keyframes must survive compilation"
+        );
         assert!(frames.steps[0].custom.is_some());
         let now = Instant::now();
         let mut animator = Animator::new();
-        animator.on_computed_animations(1, &states, now, &|name| engine.keyframes_for(name, &states.vars, &env, &mut Vec::new()));
+        animator.on_computed_animations(1, &states, now, &|name| {
+            engine.keyframes_for(name, &states.vars, &env, &mut Vec::new())
+        });
         for (ms, expected) in [(0, 0.), (1500, -0.5), (3000, -1.), (4500, -1.5)] {
             let at = now + Duration::from_millis(ms);
-            let extras = animator.animated_extras(1, at).expect("registered dependent paint");
-            assert_eq!(extras.background_position.as_ref().unwrap()[0].0, TileLength::Fraction(expected));
-            assert_eq!(extras.background_size, states.extras.background_size, "the travelling tile retains its authored size");
+            let extras = animator
+                .animated_extras(1, at)
+                .expect("registered dependent paint");
+            assert_eq!(
+                extras.background_position.as_ref().unwrap()[0].0,
+                TileLength::Fraction(expected)
+            );
+            assert_eq!(
+                extras.background_size, states.extras.background_size,
+                "the travelling tile retains its authored size"
+            );
             let overlay = animator.overlay(1, &states.base, at).unwrap();
-            assert!(overlay.text.color.is_none(), "unrelated base text must not override interaction rungs");
+            assert!(
+                overlay.text.color.is_none(),
+                "unrelated base text must not override interaction rungs"
+            );
             assert!(overlay.vn_transform.is_none());
             assert!((overlay.opacity.unwrap() - (0.4 + 0.6 * ms as f32 / 6000.)).abs() < 1e-5);
             let mut live = (*states.base).clone();
@@ -6412,121 +7909,210 @@ mod tests {
 
     #[test]
     fn registered_percentage_defaults_and_scoped_overrides_respect_inherits_false() {
-        let engine = Engine::compile(r#"
+        let engine = Engine::compile(
+            r#"
             @property --local { syntax: "<percentage>"; inherits: false; initial-value: 7%; }
             @property --shared { syntax: "<percentage>"; inherits: true; initial-value: 3%; }
             :root { --local: 80%; --shared: 90%; }
             .page { --local: 40%; }
             .btn { background-position: var(--local) var(--shared); }
-        "#);
+        "#,
+        );
         let states = cascade(&engine, &themed_doc(), &Env::default());
         assert_eq!(states[0].vars.get("--local"), Some("80%"));
         assert_eq!(states[1].vars.get("--local"), Some("40%"));
-        assert_eq!(states[2].vars.get("--local"), Some("7%"), "registered non-inherited values reset on each element");
+        assert_eq!(
+            states[2].vars.get("--local"),
+            Some("7%"),
+            "registered non-inherited values reset on each element"
+        );
         assert_eq!(states[2].vars.get("--shared"), Some("90%"));
-        assert_eq!(states[2].extras.background_position.as_ref().unwrap()[0], (TileLength::Fraction(0.07), TileLength::Fraction(0.9)));
+        assert_eq!(
+            states[2].extras.background_position.as_ref().unwrap()[0],
+            (TileLength::Fraction(0.07), TileLength::Fraction(0.9))
+        );
     }
 
     #[test]
     fn registered_animation_preserves_important_custom_and_dependent_declarations() {
-        for important in ["--offset: 25% !important", "background-position: 75% 0 !important"] {
-            let engine = Engine::compile(&format!(r#"
+        for important in [
+            "--offset: 25% !important",
+            "background-position: 75% 0 !important",
+        ] {
+            let engine = Engine::compile(&format!(
+                r#"
                 @property --offset {{ syntax: "<percentage>"; inherits: false; initial-value: 0%; }}
                 @keyframes travel {{ to {{ --offset: -200%; }} }}
                 .box {{ background-position: var(--offset) 0; animation: travel 6s linear infinite; }}
                 .box {{ {important}; }}
-            "#));
+            "#
+            ));
             let env = Env::default();
             let states = engine.compute(box_node(), None, &env);
             let now = Instant::now();
             let mut animator = Animator::new();
-            animator.on_computed_animations(1, &states, now, &|name| engine.keyframes_for(name, &states.vars, &env, &mut Vec::new()));
-            let extras = animator.animated_extras(1, now + Duration::from_secs(3)).unwrap_or_else(|| states.extras.clone());
-            let expected = if important.starts_with("--") { 0.25 } else { 0.75 };
-            assert_eq!(extras.background_position.as_ref().unwrap()[0].0, TileLength::Fraction(expected), "{important}");
+            animator.on_computed_animations(1, &states, now, &|name| {
+                engine.keyframes_for(name, &states.vars, &env, &mut Vec::new())
+            });
+            let extras = animator
+                .animated_extras(1, now + Duration::from_secs(3))
+                .unwrap_or_else(|| states.extras.clone());
+            let expected = if important.starts_with("--") {
+                0.25
+            } else {
+                0.75
+            };
+            assert_eq!(
+                extras.background_position.as_ref().unwrap()[0].0,
+                TileLength::Fraction(expected),
+                "{important}"
+            );
         }
     }
 
     #[test]
     fn registered_animation_implicit_endpoint_uses_each_elements_own_variables_and_pauses() {
-        let engine = Engine::compile(r#"
+        let engine = Engine::compile(
+            r#"
             @property --offset { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
             @keyframes travel { to { --offset: -200%; } }
             .box { background-position: var(--offset) 0; animation: travel 6s linear infinite paused; }
-        "#);
+        "#,
+        );
         let env = Env::default();
         for initial in ["0%", "50%"] {
             let inline = parse_inline_style(&format!("--offset:{initial}"), &mut Vec::new());
-            let states = engine.compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &env, &mut Vec::new());
+            let states = engine.compute_node(
+                box_node(),
+                Some(&inline),
+                &Rc::new(Vars::default()),
+                None,
+                &env,
+                &mut Vec::new(),
+            );
             let now = Instant::now();
             let mut animator = Animator::new();
-            animator.on_computed_animations(1, &states, now, &|name| engine.keyframes_for(name, &states.vars, &env, &mut Vec::new()));
+            animator.on_computed_animations(1, &states, now, &|name| {
+                engine.keyframes_for(name, &states.vars, &env, &mut Vec::new())
+            });
             for elapsed in [0, 3000] {
-                let extras = animator.animated_extras(1, now + Duration::from_millis(elapsed)).unwrap();
-                assert_eq!(extras.background_position.as_ref().unwrap()[0].0,
-                    TileLength::Fraction(crate::registered::percentage(initial).unwrap()));
+                let extras = animator
+                    .animated_extras(1, now + Duration::from_millis(elapsed))
+                    .unwrap();
+                assert_eq!(
+                    extras.background_position.as_ref().unwrap()[0].0,
+                    TileLength::Fraction(crate::registered::percentage(initial).unwrap())
+                );
             }
         }
     }
 
     #[test]
     fn registered_defaults_share_variables_and_unrelated_animations_keep_no_recipe() {
-        let engine = Engine::compile(r#"
+        let engine = Engine::compile(
+            r#"
             @property --offset { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
             @keyframes spin { to { transform: rotate(360deg); } }
             .btn { animation: spin 1s linear infinite; }
-        "#);
+        "#,
+        );
         let states = cascade(&engine, &themed_doc(), &Env::default());
         assert!(Rc::ptr_eq(&states[0].vars, &states[1].vars));
-        assert!(Rc::ptr_eq(&states[1].vars, &states[2].vars), "unchanged defaults retain the no-allocation inheritance path");
-        assert!(states[2].custom_animation.is_none(), "a spinner does not animate a registered property");
+        assert!(
+            Rc::ptr_eq(&states[1].vars, &states[2].vars),
+            "unchanged defaults retain the no-allocation inheritance path"
+        );
+        assert!(
+            states[2].custom_animation.is_none(),
+            "a spinner does not animate a registered property"
+        );
     }
 
     #[test]
     fn registered_sample_is_invalidated_when_same_frame_computed_values_change() {
-        let engine = Engine::compile(r#"
+        let engine = Engine::compile(
+            r#"
             @property --offset { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
             @keyframes travel { to { --offset: -200%; } }
             .box { background-position: var(--offset) 0; animation: travel 6s linear infinite; }
-        "#);
+        "#,
+        );
         let env = Env::default();
         let now = Instant::now();
         let mut animator = Animator::new();
         for value in ["0%", "50%"] {
             let inline = parse_inline_style(&format!("--offset:{value}"), &mut Vec::new());
-            let states = engine.compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &env, &mut Vec::new());
-            animator.on_computed_animations(1, &states, now, &|name| engine.keyframes_for(name, &states.vars, &env, &mut Vec::new()));
+            let states = engine.compute_node(
+                box_node(),
+                Some(&inline),
+                &Rc::new(Vars::default()),
+                None,
+                &env,
+                &mut Vec::new(),
+            );
+            animator.on_computed_animations(1, &states, now, &|name| {
+                engine.keyframes_for(name, &states.vars, &env, &mut Vec::new())
+            });
             let _ = animator.overlay(1, &states.base, now);
             let extras = animator.animated_extras(1, now).unwrap();
-            assert_eq!(extras.background_position.as_ref().unwrap()[0].0,
-                TileLength::Fraction(crate::registered::percentage(value).unwrap()));
+            assert_eq!(
+                extras.background_position.as_ref().unwrap()[0].0,
+                TileLength::Fraction(crate::registered::percentage(value).unwrap())
+            );
         }
         animator.cancel_animations(1, now);
-        assert!(animator.animated_extras(1, now).is_none(), "cancel cannot reuse a cached paint sample");
+        assert!(
+            animator.animated_extras(1, now).is_none(),
+            "cancel cannot reuse a cached paint sample"
+        );
     }
 
     #[test]
     fn registered_replay_interleaves_inline_priority_and_fences_inline_important_custom_values() {
         let env = Env::default();
         for (sheet, inline_css, expected) in [
-            ("background-position:75% 0!important", "background-position:var(--offset) 0", 0.75),
-            ("background-position:75% 0!important", "background-position:35% 0!important", 0.35),
+            (
+                "background-position:75% 0!important",
+                "background-position:var(--offset) 0",
+                0.75,
+            ),
+            (
+                "background-position:75% 0!important",
+                "background-position:35% 0!important",
+                0.35,
+            ),
             ("--offset:25%!important", "--offset:50%", 0.25),
             ("--offset:25%!important", "--offset:30%!important", 0.30),
         ] {
-            let engine = Engine::compile(&format!(r#"
+            let engine = Engine::compile(&format!(
+                r#"
                 @property --offset {{ syntax:"<percentage>"; inherits:false; initial-value:0%; }}
                 @keyframes travel {{ to {{ --offset:-200%; }} }}
                 .box {{ background-position:var(--offset) 0; animation:travel 6s linear infinite; {sheet} }}
-            "#));
+            "#
+            ));
             let inline = parse_inline_style(inline_css, &mut Vec::new());
-            let states = engine.compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &env, &mut Vec::new());
+            let states = engine.compute_node(
+                box_node(),
+                Some(&inline),
+                &Rc::new(Vars::default()),
+                None,
+                &env,
+                &mut Vec::new(),
+            );
             let now = Instant::now();
             let mut animator = Animator::new();
-            animator.on_computed_animations(1, &states, now, &|name| engine.keyframes_for(name, &states.vars, &env, &mut Vec::new()));
-            let extras = animator.animated_extras(1, now + Duration::from_secs(3)).unwrap_or_else(|| states.extras.clone());
-            assert_eq!(extras.background_position.as_ref().unwrap()[0].0, TileLength::Fraction(expected), "sheet={sheet}, inline={inline_css}");
+            animator.on_computed_animations(1, &states, now, &|name| {
+                engine.keyframes_for(name, &states.vars, &env, &mut Vec::new())
+            });
+            let extras = animator
+                .animated_extras(1, now + Duration::from_secs(3))
+                .unwrap_or_else(|| states.extras.clone());
+            assert_eq!(
+                extras.background_position.as_ref().unwrap()[0].0,
+                TileLength::Fraction(expected),
+                "sheet={sheet}, inline={inline_css}"
+            );
         }
     }
-
 }

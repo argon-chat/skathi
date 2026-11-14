@@ -35,33 +35,92 @@ impl Vars {
     }
 }
 
-pub(crate) fn resolve_registered(parent: &Rc<Vars>, own: &[&(String, String)],
-    registrations: &[crate::registered::PercentageRegistration], env: &crate::Env,
-    diagnostics: &mut Vec<String>) -> Rc<Vars> {
-    if registrations.is_empty() { return resolve(parent, own, env, diagnostics); }
-    let defaults_needed = registrations.iter().any(|r| if r.inherits { parent.get(&r.name).is_none() }
-        else { parent.get(&r.name).and_then(crate::registered::percentage) != Some(r.initial) });
-    let owns_registered = own.iter().any(|(name, _)| registrations.iter().any(|r| r.name == *name));
+pub(crate) fn resolve_registered(
+    parent: &Rc<Vars>,
+    own: &[&(String, String)],
+    registrations: &[crate::registered::PercentageRegistration],
+    env: &crate::Env,
+    diagnostics: &mut Vec<String>,
+) -> Rc<Vars> {
+    if registrations.is_empty() {
+        return resolve(parent, own, env, diagnostics);
+    }
+    let defaults_needed = registrations.iter().any(|r| {
+        if r.inherits {
+            parent.get(&r.name).is_none()
+        } else {
+            parent.get(&r.name).and_then(crate::registered::percentage) != Some(r.initial)
+        }
+    });
+    let owns_registered = own
+        .iter()
+        .any(|(name, _)| registrations.iter().any(|r| r.name == *name));
     if !defaults_needed && !owns_registered {
         return resolve(parent, own, env, diagnostics);
     }
-    let defaults: Vec<(String, String)> = registrations.iter().filter(|r| !r.inherits || parent.get(&r.name).is_none())
-        .map(|r| (r.name.clone(), format!("{}%", r.initial * 100.))).collect();
-    let basis = resolve(parent, &defaults.iter().collect::<Vec<_>>(), env, diagnostics);
-    let declarations: Vec<(String, String)> = own.iter().map(|(name, raw)| {
-        let Some(registration) = registrations.iter().find(|r| r.name == *name) else { return (name.clone(), raw.clone()); };
-        let keyword = raw.trim();
-        let value = if keyword.eq_ignore_ascii_case("inherit") {
-            parent.get(name).map(str::to_owned).unwrap_or_else(|| format!("{}%", registration.initial * 100.))
-        } else if keyword.eq_ignore_ascii_case("initial") || (!registration.inherits && ["unset", "revert", "revert-layer"].iter().any(|v| keyword.eq_ignore_ascii_case(v))) {
-            format!("{}%", registration.initial * 100.)
-        } else { raw.clone() };
-        (name.clone(), value)
-    }).collect();
-    let computed = resolve(&basis, &declarations.iter().collect::<Vec<_>>(), env, diagnostics);
-    let invalid: Vec<(String, String)> = registrations.iter().filter(|r| computed.get(&r.name).and_then(crate::registered::percentage).is_none())
-        .map(|r| (r.name.clone(), basis.get(&r.name).unwrap_or("0%").to_owned())).collect();
-    resolve(&computed, &invalid.iter().collect::<Vec<_>>(), env, diagnostics)
+    let defaults: Vec<(String, String)> = registrations
+        .iter()
+        .filter(|r| !r.inherits || parent.get(&r.name).is_none())
+        .map(|r| (r.name.clone(), format!("{}%", r.initial * 100.)))
+        .collect();
+    let basis = resolve(
+        parent,
+        &defaults.iter().collect::<Vec<_>>(),
+        env,
+        diagnostics,
+    );
+    let declarations: Vec<(String, String)> = own
+        .iter()
+        .map(|(name, raw)| {
+            let Some(registration) = registrations.iter().find(|r| r.name == *name) else {
+                return (name.clone(), raw.clone());
+            };
+            let keyword = raw.trim();
+            let value = if keyword.eq_ignore_ascii_case("inherit") {
+                parent
+                    .get(name)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("{}%", registration.initial * 100.))
+            } else if keyword.eq_ignore_ascii_case("initial")
+                || (!registration.inherits
+                    && ["unset", "revert", "revert-layer"]
+                        .iter()
+                        .any(|v| keyword.eq_ignore_ascii_case(v)))
+            {
+                format!("{}%", registration.initial * 100.)
+            } else {
+                raw.clone()
+            };
+            (name.clone(), value)
+        })
+        .collect();
+    let computed = resolve(
+        &basis,
+        &declarations.iter().collect::<Vec<_>>(),
+        env,
+        diagnostics,
+    );
+    let invalid: Vec<(String, String)> = registrations
+        .iter()
+        .filter(|r| {
+            computed
+                .get(&r.name)
+                .and_then(crate::registered::percentage)
+                .is_none()
+        })
+        .map(|r| {
+            (
+                r.name.clone(),
+                basis.get(&r.name).unwrap_or("0%").to_owned(),
+            )
+        })
+        .collect();
+    resolve(
+        &computed,
+        &invalid.iter().collect::<Vec<_>>(),
+        env,
+        diagnostics,
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,8 +329,14 @@ pub(crate) fn substitute(
     Ok(out)
 }
 
-pub(crate) fn substitute_with(text: &str, vars: &Vars, env: &crate::Env) -> Result<String, VarError> {
-    substitute(text, env, &mut |name| Ok(vars.get(name).map(str::to_string)))
+pub(crate) fn substitute_with(
+    text: &str,
+    vars: &Vars,
+    env: &crate::Env,
+) -> Result<String, VarError> {
+    substitute(text, env, &mut |name| {
+        Ok(vars.get(name).map(str::to_string))
+    })
 }
 
 enum Slot<'a> {
@@ -299,8 +364,9 @@ fn force<'a>(
                 _ => unreachable!("checked Raw above"),
             };
             slots.insert(key, Slot::Busy);
-            let resolved =
-                substitute(raw, env, &mut |inner| force(slots, parent, env, inner, diagnostics));
+            let resolved = substitute(raw, env, &mut |inner| {
+                force(slots, parent, env, inner, diagnostics)
+            });
             match resolved {
                 Ok(value) => {
                     slots.insert(key, Slot::Done(value.clone()));
@@ -457,7 +523,12 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         let mut d = Vec::new();
-        resolve(&Rc::new(Vars::default()), &refs(&own), &crate::Env::default(), &mut d)
+        resolve(
+            &Rc::new(Vars::default()),
+            &refs(&own),
+            &crate::Env::default(),
+            &mut d,
+        )
     }
 
     fn refs(own: &[(String, String)]) -> Vec<&(String, String)> {
@@ -469,8 +540,12 @@ mod tests {
         let v = vars(&[("--tw-enter-scale", "initial")]);
         assert_eq!(v.get("--tw-enter-scale"), None, "`initial` is not a value");
         assert_eq!(
-            substitute_with("scale3d(var(--tw-enter-scale, 1), 1, 1)", &v, &crate::Env::default())
-                .unwrap(),
+            substitute_with(
+                "scale3d(var(--tw-enter-scale, 1), 1, 1)",
+                &v,
+                &crate::Env::default()
+            )
+            .unwrap(),
             "scale3d(1, 1, 1)",
             "so `var()` takes the fallback"
         );
@@ -479,12 +554,21 @@ mod tests {
         let own = vec![("--x".to_string(), "initial".to_string())];
         let mut d = Vec::new();
         let child = resolve(&parent, &refs(&own), &crate::Env::default(), &mut d);
-        assert_eq!(child.get("--x"), None, "CSS Variables §3: no inheritance rescue");
+        assert_eq!(
+            child.get("--x"),
+            None,
+            "CSS Variables §3: no inheritance rescue"
+        );
         assert!(d.is_empty(), "and it is not an error: {d:?}");
 
         for keyword in ["inherit", "unset", "revert", "REVERT-LAYER"] {
             let own = vec![("--x".to_string(), keyword.to_string())];
-            let child = resolve(&parent, &refs(&own), &crate::Env::default(), &mut Vec::new());
+            let child = resolve(
+                &parent,
+                &refs(&own),
+                &crate::Env::default(),
+                &mut Vec::new(),
+            );
             assert_eq!(child.get("--x"), Some("9"), "{keyword}");
         }
     }
@@ -511,7 +595,11 @@ mod tests {
 
     #[test]
     fn fallbacks_apply_only_when_unset() {
-        let v = vars(&[("--a", "1"), ("--x", "var(--a, 9)"), ("--y", "var(--nope, 9)")]);
+        let v = vars(&[
+            ("--a", "1"),
+            ("--x", "var(--a, 9)"),
+            ("--y", "var(--nope, 9)"),
+        ]);
         assert_eq!(v.get("--x"), Some("1"));
         assert_eq!(v.get("--y"), Some("9"));
     }
@@ -520,7 +608,12 @@ mod tests {
     fn a_fallbackless_missing_reference_invalidates_the_declaration() {
         let own = vec![("--x".to_string(), "var(--nope)".to_string())];
         let mut d = Vec::new();
-        let v = resolve(&Rc::new(Vars::default()), &refs(&own), &crate::Env::default(), &mut d);
+        let v = resolve(
+            &Rc::new(Vars::default()),
+            &refs(&own),
+            &crate::Env::default(),
+            &mut d,
+        );
         assert_eq!(v.get("--x"), None);
         assert!(d.is_empty(), "{d:?}");
     }
@@ -532,7 +625,12 @@ mod tests {
             ("--b".to_string(), "var(--a)".to_string()),
         ];
         let mut d = Vec::new();
-        let v = resolve(&Rc::new(Vars::default()), &refs(&own), &crate::Env::default(), &mut d);
+        let v = resolve(
+            &Rc::new(Vars::default()),
+            &refs(&own),
+            &crate::Env::default(),
+            &mut d,
+        );
         assert!(v.get("--a").is_none() && v.get("--b").is_none(), "{v:?}");
         assert!(d.iter().any(|m| m.contains("cycle")), "{d:?}");
     }
@@ -560,7 +658,10 @@ mod tests {
             ("--b".to_string(), "0 0 #0000".to_string()),
         ];
         let child = resolve(&parent, &refs(&same), &crate::Env::default(), &mut d);
-        assert!(Rc::ptr_eq(&parent, &child), "identical declarations must not rebuild the map");
+        assert!(
+            Rc::ptr_eq(&parent, &child),
+            "identical declarations must not rebuild the map"
+        );
 
         let differs = vec![
             ("--a".to_string(), "1".to_string()),
@@ -581,15 +682,32 @@ mod tests {
             ("--a".to_string(), "1".to_string()),
             ("--a".to_string(), "2".to_string()),
         ];
-        assert_eq!(resolve(&parent, &refs(&later_differs), &crate::Env::default(), &mut d).get("--a"), Some("2"));
+        assert_eq!(
+            resolve(
+                &parent,
+                &refs(&later_differs),
+                &crate::Env::default(),
+                &mut d
+            )
+            .get("--a"),
+            Some("2")
+        );
 
         let later_matches = vec![
             ("--a".to_string(), "2".to_string()),
             ("--a".to_string(), "1".to_string()),
         ];
-        let child = resolve(&parent, &refs(&later_matches), &crate::Env::default(), &mut d);
+        let child = resolve(
+            &parent,
+            &refs(&later_matches),
+            &crate::Env::default(),
+            &mut d,
+        );
         assert_eq!(child.get("--a"), Some("1"));
-        assert!(Rc::ptr_eq(&parent, &child), "the winning declaration is inert");
+        assert!(
+            Rc::ptr_eq(&parent, &child),
+            "the winning declaration is inert"
+        );
     }
 
     #[test]
@@ -607,7 +725,11 @@ mod tests {
         let mut d = Vec::new();
         let own = vec![("--x".to_string(), "var(--nope)".to_string())];
         let child = resolve(&parent, &refs(&own), &crate::Env::default(), &mut d);
-        assert_eq!(child.get("--x"), None, "the parent's value must not come back");
+        assert_eq!(
+            child.get("--x"),
+            None,
+            "the parent's value must not come back"
+        );
         assert_eq!(child.get("--keep"), Some("k"));
     }
 
@@ -644,16 +766,31 @@ mod tests {
     #[test]
     fn substitution_skips_strings_and_identifier_tails() {
         let v = vars(&[("--a", "X")]);
-        assert_eq!(substitute_with(r#"content: "var(--a)""#, &v, &crate::Env::default()).unwrap(), r#"content: "var(--a)""#);
-        assert_eq!(substitute_with("my-var(--a)", &v, &crate::Env::default()).unwrap(), "my-var(--a)");
-        assert_eq!(substitute_with("VAR(--a)", &v, &crate::Env::default()).unwrap(), "X");
+        assert_eq!(
+            substitute_with(r#"content: "var(--a)""#, &v, &crate::Env::default()).unwrap(),
+            r#"content: "var(--a)""#
+        );
+        assert_eq!(
+            substitute_with("my-var(--a)", &v, &crate::Env::default()).unwrap(),
+            "my-var(--a)"
+        );
+        assert_eq!(
+            substitute_with("VAR(--a)", &v, &crate::Env::default()).unwrap(),
+            "X"
+        );
     }
 
     #[test]
     fn nested_fallbacks_resolve() {
         let v = vars(&[("--b", "blue")]);
-        assert_eq!(substitute_with("var(--a, var(--b, red))", &v, &crate::Env::default()).unwrap(), "blue");
-        assert_eq!(substitute_with("var(--a, var(--z, red))", &v, &crate::Env::default()).unwrap(), "red");
+        assert_eq!(
+            substitute_with("var(--a, var(--b, red))", &v, &crate::Env::default()).unwrap(),
+            "blue"
+        );
+        assert_eq!(
+            substitute_with("var(--a, var(--z, red))", &v, &crate::Env::default()).unwrap(),
+            "red"
+        );
     }
 
     #[test]
@@ -668,7 +805,10 @@ mod tests {
     #[test]
     fn an_empty_fallback_is_not_the_same_as_no_fallback() {
         let v = vars(&[]);
-        assert_eq!(substitute_with("var(--a,)", &v, &crate::Env::default()).unwrap(), "");
+        assert_eq!(
+            substitute_with("var(--a,)", &v, &crate::Env::default()).unwrap(),
+            ""
+        );
         assert!(matches!(
             substitute_with("var(--a)", &v, &crate::Env::default()),
             Err(VarError::Unresolved(_))

@@ -48,7 +48,17 @@ const BLOCK_ADDITIONAL: u32 = 0xA5;
 
 /// What an unknown-size Cluster may hold: Timestamp, SilentTracks, Position, PrevSize, SimpleBlock,
 /// BlockGroup, EncryptedBlock, Void, CRC-32. Any other ID is the element after the Cluster.
-const CLUSTER_CHILDREN: [u32; 9] = [CLUSTER_TIMESTAMP, 0x5854, 0xA7, 0xAB, SIMPLE_BLOCK, BLOCK_GROUP, 0xAF, 0xEC, 0xBF];
+const CLUSTER_CHILDREN: [u32; 9] = [
+    CLUSTER_TIMESTAMP,
+    0x5854,
+    0xA7,
+    0xAB,
+    SIMPLE_BLOCK,
+    BLOCK_GROUP,
+    0xAF,
+    0xEC,
+    0xBF,
+];
 
 /// Blocks a file may have: 18 minutes at 60 fps, far past a sticker's 3 s.
 pub(crate) const MAX_BLOCKS: usize = 1 << 16;
@@ -61,7 +71,10 @@ pub(crate) struct Span {
 
 impl Span {
     fn new(start: usize, end: usize) -> Span {
-        Span { start: start as u32, len: (end - start) as u32 }
+        Span {
+            start: start as u32,
+            len: (end - start) as u32,
+        }
     }
 
     pub fn of<'a>(&self, bytes: &'a [u8]) -> &'a [u8] {
@@ -135,9 +148,16 @@ fn element(bytes: &[u8], pos: usize, end: usize) -> Option<Element> {
     if id_len > 4 {
         return None;
     }
-    let id = b.get(pos..pos + id_len)?.iter().fold(0u32, |v, &x| v << 8 | x as u32);
+    let id = b
+        .get(pos..pos + id_len)?
+        .iter()
+        .fold(0u32, |v, &x| v << 8 | x as u32);
     let (size, size_len) = vint(b, pos + id_len)?;
-    Some(Element { id, data: pos + id_len + size_len, size })
+    Some(Element {
+        id,
+        data: pos + id_len + size_len,
+        size,
+    })
 }
 
 /// The EBML variable-size integer at `pos`: its value (`None` when every value bit is set, which a
@@ -175,9 +195,14 @@ fn float(data: &[u8], what: &str) -> Result<f64, VideoError> {
 
 fn overrun(bytes: &[u8], parent_end: usize, pos: usize, inside: &str) -> VideoError {
     if parent_end >= bytes.len() {
-        malformed(format!("the file is cut short inside {inside} (byte {pos} of {})", bytes.len()))
+        malformed(format!(
+            "the file is cut short inside {inside} (byte {pos} of {})",
+            bytes.len()
+        ))
     } else {
-        malformed(format!("an element in {inside} runs past its end (byte {pos})"))
+        malformed(format!(
+            "an element in {inside} runs past its end (byte {pos})"
+        ))
     }
 }
 
@@ -192,9 +217,13 @@ fn children(
     while pos < end {
         let e = element(bytes, pos, end).ok_or_else(|| overrun(bytes, end, pos, inside))?;
         if e.size.is_none() {
-            return Err(malformed(format!("an element of unknown size inside {inside} (byte {pos})")));
+            return Err(malformed(format!(
+                "an element of unknown size inside {inside} (byte {pos})"
+            )));
         }
-        let data_end = e.end_within(end).ok_or_else(|| overrun(bytes, end, pos, inside))?;
+        let data_end = e
+            .end_within(end)
+            .ok_or_else(|| overrun(bytes, end, pos, inside))?;
         each(e.id, e.data, data_end)?;
         pos = data_end;
     }
@@ -214,7 +243,9 @@ pub(crate) fn demux(bytes: &[u8]) -> Result<Webm, VideoError> {
     let head = element(bytes, 0, len)
         .filter(|e| e.id == EBML)
         .ok_or_else(|| malformed("not a WebM file: it does not start with an EBML header"))?;
-    let head_end = head.end_within(len).ok_or_else(|| malformed("not a WebM file: its EBML header is cut short or damaged"))?;
+    let head_end = head
+        .end_within(len)
+        .ok_or_else(|| malformed("not a WebM file: its EBML header is cut short or damaged"))?;
     let mut doc_type: &[u8] = b"matroska"; // EBML's default
     children(bytes, head.data, head_end, "the EBML header", |id, s, e| {
         if id == DOC_TYPE {
@@ -223,24 +254,45 @@ pub(crate) fn demux(bytes: &[u8]) -> Result<Webm, VideoError> {
         Ok(())
     })?;
     if doc_type != b"webm" && doc_type != b"matroska" {
-        return Err(malformed(format!("not a WebM file: its DocType is \"{}\"", String::from_utf8_lossy(doc_type))));
+        return Err(malformed(format!(
+            "not a WebM file: its DocType is \"{}\"",
+            String::from_utf8_lossy(doc_type)
+        )));
     }
 
     let mut pos = head_end;
     let segment = loop {
-        let e = element(bytes, pos, len).ok_or_else(|| malformed("not a WebM file: no Segment after its EBML header"))?;
+        let e = element(bytes, pos, len)
+            .ok_or_else(|| malformed("not a WebM file: no Segment after its EBML header"))?;
         if e.id == SEGMENT {
             break e;
         }
-        pos = e.end_within(len).ok_or_else(|| malformed("not a WebM file: no Segment after its EBML header"))?;
+        pos = e
+            .end_within(len)
+            .ok_or_else(|| malformed("not a WebM file: no Segment after its EBML header"))?;
     };
     // A Segment that claims more than the file has was cut short: read what is there.
     let segment_end = segment.end_within(len).unwrap_or(len);
     let cut = segment.size.is_some() && segment.end_within(len).is_none();
 
-    let mut parser = Parser { bytes, timestamp_scale: 1_000_000, duration: None, track: None, other_video: None, tracks_seen: false, blocks: Vec::new() };
+    let mut parser = Parser {
+        bytes,
+        timestamp_scale: 1_000_000,
+        duration: None,
+        track: None,
+        other_video: None,
+        tracks_seen: false,
+        blocks: Vec::new(),
+    };
     parser.segment(segment.data, segment_end, cut)?;
-    let Parser { timestamp_scale, duration, track, other_video, blocks, .. } = parser;
+    let Parser {
+        timestamp_scale,
+        duration,
+        track,
+        other_video,
+        blocks,
+        ..
+    } = parser;
     let Some(track) = track else {
         return Err(match other_video {
             Some(codec) => unsupported(codec_advice(&codec)),
@@ -250,7 +302,12 @@ pub(crate) fn demux(bytes: &[u8]) -> Result<Webm, VideoError> {
     if blocks.is_empty() {
         return Err(malformed("the video track has no frames"));
     }
-    Ok(Webm { timestamp_scale, duration, track, blocks })
+    Ok(Webm {
+        timestamp_scale,
+        duration,
+        track,
+        blocks,
+    })
 }
 
 fn codec_advice(codec: &[u8]) -> String {
@@ -294,7 +351,9 @@ impl Parser<'_> {
                 continue;
             }
             if e.size.is_none() {
-                return Err(malformed(format!("an element of unknown size in the Segment (byte {pos})")));
+                return Err(malformed(format!(
+                    "an element of unknown size in the Segment (byte {pos})"
+                )));
             }
             let Some(data_end) = e.end_within(end) else {
                 if self.trailing_metadata(pos, end) {
@@ -314,7 +373,9 @@ impl Parser<'_> {
             pos = data_end;
         }
         if cut && !past_blocks {
-            return Err(malformed(format!("the file is cut short (it ends at byte {end}, its Segment claims more)")));
+            return Err(malformed(format!(
+                "the file is cut short (it ends at byte {end}, its Segment claims more)"
+            )));
         }
         Ok(())
     }
@@ -326,7 +387,9 @@ impl Parser<'_> {
             return false;
         }
         let id = &self.bytes[pos..end.min(pos + 4)];
-        ![CLUSTER, INFO, TRACKS].iter().any(|needed| needed.to_be_bytes().starts_with(id))
+        ![CLUSTER, INFO, TRACKS]
+            .iter()
+            .any(|needed| needed.to_be_bytes().starts_with(id))
     }
 
     fn info(&mut self, start: usize, end: usize) -> Result<(), VideoError> {
@@ -356,7 +419,8 @@ impl Parser<'_> {
                 return Ok(());
             }
             let entry = track_entry(bytes, s, e)?;
-            let video = entry.kind == Some(1) || (entry.kind.is_none() && entry.codec.starts_with(b"V_"));
+            let video =
+                entry.kind == Some(1) || (entry.kind.is_none() && entry.codec.starts_with(b"V_"));
             if !video || entry.track.number == 0 || self.track.is_some() {
                 return Ok(());
             }
@@ -365,7 +429,9 @@ impl Parser<'_> {
                 return Ok(());
             }
             if entry.encoded {
-                return Err(unsupported("its video track is encrypted or compressed (ContentEncodings)"));
+                return Err(unsupported(
+                    "its video track is encrypted or compressed (ContentEncodings)",
+                ));
             }
             self.track = Some(entry.track);
             Ok(())
@@ -374,7 +440,12 @@ impl Parser<'_> {
 
     fn cluster(&mut self, e: Element, segment_end: usize) -> Result<usize, VideoError> {
         let known = e.size.is_some();
-        let end = if known { e.end_within(segment_end).ok_or_else(|| overrun(self.bytes, segment_end, e.data, "a Cluster"))? } else { segment_end };
+        let end = if known {
+            e.end_within(segment_end)
+                .ok_or_else(|| overrun(self.bytes, segment_end, e.data, "a Cluster"))?
+        } else {
+            segment_end
+        };
         let bytes = self.bytes;
         let mut time = 0i64;
         let mut pos = e.data;
@@ -386,9 +457,13 @@ impl Parser<'_> {
                 return Ok(pos);
             }
             if c.size.is_none() {
-                return Err(malformed(format!("an element of unknown size in a Cluster (byte {pos})")));
+                return Err(malformed(format!(
+                    "an element of unknown size in a Cluster (byte {pos})"
+                )));
             }
-            let data_end = c.end_within(end).ok_or_else(|| overrun(bytes, end, pos, "a Cluster"))?;
+            let data_end = c
+                .end_within(end)
+                .ok_or_else(|| overrun(bytes, end, pos, "a Cluster"))?;
             match c.id {
                 CLUSTER_TIMESTAMP => {
                     time = i64::try_from(uint(&bytes[c.data..data_end], "Cluster Timestamp")?)
@@ -407,7 +482,12 @@ impl Parser<'_> {
         Ok(end)
     }
 
-    fn block_group(&mut self, start: usize, end: usize, cluster_time: i64) -> Result<(), VideoError> {
+    fn block_group(
+        &mut self,
+        start: usize,
+        end: usize,
+        cluster_time: i64,
+    ) -> Result<(), VideoError> {
         let bytes = self.bytes;
         let mut block = None;
         let mut alpha = None;
@@ -450,16 +530,22 @@ impl Parser<'_> {
 
     fn block_header(&self, start: usize, end: usize) -> Result<Option<(i16, usize)>, VideoError> {
         let b = &self.bytes[..end];
-        let (track, n) = vint(b, start).ok_or_else(|| malformed(format!("a damaged block (byte {start})")))?;
+        let (track, n) =
+            vint(b, start).ok_or_else(|| malformed(format!("a damaged block (byte {start})")))?;
         let number = self.track.as_ref().map_or(0, |t| t.number);
         if track != Some(number) {
             return Ok(None);
         }
-        let head = b.get(start + n..start + n + 3).ok_or_else(|| malformed(format!("a damaged block (byte {start})")))?;
+        let head = b
+            .get(start + n..start + n + 3)
+            .ok_or_else(|| malformed(format!("a damaged block (byte {start})")))?;
         if head[2] & 0x06 != 0 {
             return Err(unsupported("its video blocks are laced (several frames to a block), which WebM video does not use"));
         }
-        Ok(Some((i16::from_be_bytes([head[0], head[1]]), start + n + 3)))
+        Ok(Some((
+            i16::from_be_bytes([head[0], head[1]]),
+            start + n + 3,
+        )))
     }
 
     fn push(
@@ -495,7 +581,12 @@ struct Entry<'a> {
 }
 
 fn track_entry(bytes: &[u8], start: usize, end: usize) -> Result<Entry<'_>, VideoError> {
-    let mut entry = Entry { track: Track::default(), kind: None, codec: b"", encoded: false };
+    let mut entry = Entry {
+        track: Track::default(),
+        kind: None,
+        codec: b"",
+        encoded: false,
+    };
     let (mut pw, mut ph) = (None, None);
     children(bytes, start, end, "a TrackEntry", |id, s, e| {
         let data = &bytes[s..e];
@@ -503,7 +594,10 @@ fn track_entry(bytes: &[u8], start: usize, end: usize) -> Result<Entry<'_>, Vide
             TRACK_NUMBER => entry.track.number = uint(data, "TrackNumber")?,
             TRACK_TYPE => entry.kind = Some(uint(data, "TrackType")?),
             CODEC_ID => entry.codec = string(data),
-            DEFAULT_DURATION => entry.track.default_duration = Some(uint(data, "DefaultDuration")?).filter(|&d| d > 0),
+            DEFAULT_DURATION => {
+                entry.track.default_duration =
+                    Some(uint(data, "DefaultDuration")?).filter(|&d| d > 0)
+            }
             CONTENT_ENCODINGS => entry.encoded = true,
             VIDEO => children(bytes, s, e, "a Video", |id, s, e| {
                 let data = &bytes[s..e];
@@ -519,8 +613,12 @@ fn track_entry(bytes: &[u8], start: usize, end: usize) -> Result<Entry<'_>, Vide
                         children(bytes, s, e, "a Colour", |id, s, e| {
                             let data = &bytes[s..e];
                             match id {
-                                MATRIX_COEFFICIENTS => c.matrix = Some(uint(data, "MatrixCoefficients")?),
-                                TRANSFER_CHARACTERISTICS => c.transfer = Some(uint(data, "TransferCharacteristics")?),
+                                MATRIX_COEFFICIENTS => {
+                                    c.matrix = Some(uint(data, "MatrixCoefficients")?)
+                                }
+                                TRANSFER_CHARACTERISTICS => {
+                                    c.transfer = Some(uint(data, "TransferCharacteristics")?)
+                                }
                                 PRIMARIES => c.primaries = Some(uint(data, "Primaries")?),
                                 RANGE => c.range = Some(uint(data, "Range")?),
                                 _ => {}

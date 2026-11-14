@@ -64,7 +64,11 @@ pub(super) fn mi_current(json: &str, name: &str) -> Option<f64> {
     let at = json.find(&format!("\"{name}\":"))?;
     let rest = &json[at..];
     let cur = rest.find("\"current\":")? + "\"current\":".len();
-    let digits: String = rest[cur..].trim_start().chars().take_while(|c| c.is_ascii_digit() || *c == '-').collect();
+    let digits: String = rest[cur..]
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '-')
+        .collect();
     digits.parse().ok()
 }
 
@@ -457,19 +461,20 @@ pub(super) fn rust_json(rust: Option<(i64, i64, i64, u64)>) -> Json {
 
 /// The Rust heap's slices, then the remainder of `live` nothing itemises. Each
 /// port's `breakdown` appends the system-allocator rows.
-pub(super) fn rust_items(live: f64, tree_bytes: f64, images: &Images, side: &[(&'static str, u64)]) -> Vec<Json> {
+pub(super) fn rust_items(
+    live: f64,
+    tree_bytes: f64,
+    images: &Images,
+    side: &[(&'static str, u64)],
+) -> Vec<Json> {
     let side = |name: &str| {
-        side
-            .iter()
+        side.iter()
             .find(|(k, _)| *k == name)
             .map_or(0.0, |(_, v)| *v as f64)
     };
     let mut rust_items = Vec::new();
     let parts = [
-        (
-            "retained tree (nodes, styles, vars) — estimate",
-            tree_bytes,
-        ),
+        ("retained tree (nodes, styles, vars) — estimate", tree_bytes),
         (
             "decoded images (gpui asset cache; a reduced one is its copy's size)",
             images.decoded,

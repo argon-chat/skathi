@@ -30,17 +30,16 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFMediaEngine, IMFMediaEngineClassFactory, IMFMediaEngineNotify,
-    IMFDXGIDeviceManager, MFCreateAttributes, MFCreateDXGIDeviceManager, MFStartup,
-    MF_BYTESTREAM_CONTENT_TYPE,
-    CLSID_MFMediaEngineClassFactory, IMFMediaEngineEx, MFCreateMFByteStreamOnStream,
-    MFSTARTUP_FULL, MF_MEDIA_ENGINE_CALLBACK,
-    MF_MEDIA_ENGINE_DXGI_MANAGER, MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC, MF_MEDIA_ENGINE_EXTENSION,
-    MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
-    MF_VERSION,
+    CLSID_MFMediaEngineClassFactory, IMFAttributes, IMFDXGIDeviceManager, IMFMediaEngine,
+    IMFMediaEngineClassFactory, IMFMediaEngineEx, IMFMediaEngineNotify, MFCreateAttributes,
+    MFCreateDXGIDeviceManager, MFCreateMFByteStreamOnStream, MFStartup, MFSTARTUP_FULL,
+    MF_BYTESTREAM_CONTENT_TYPE, MF_MEDIA_ENGINE_CALLBACK, MF_MEDIA_ENGINE_DXGI_MANAGER,
+    MF_MEDIA_ENGINE_EXTENSION, MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC,
+    MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_VERSION,
 };
-use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER,
-    COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+};
 
 use crate::backend::{
     CanPlay, FrameRequest, MediaError, MediaErrorCode, MediaEvent, MediaSource, NetworkState,
@@ -68,8 +67,12 @@ static SHARED_DEVICE_PROVIDER: OnceLock<SharedDeviceProvider> = OnceLock::new();
 ///
 /// # Safety
 /// A successful provider lease must own a live ID3D11Device through keep_alive.
-pub unsafe fn install_shared_device_provider(provider: SharedDeviceProvider) -> Result<(), &'static str> {
-    SHARED_DEVICE_PROVIDER.set(provider).map_err(|_| "video device provider already installed")
+pub unsafe fn install_shared_device_provider(
+    provider: SharedDeviceProvider,
+) -> Result<(), &'static str> {
+    SHARED_DEVICE_PROVIDER
+        .set(provider)
+        .map_err(|_| "video device provider already installed")
 }
 
 /// Publishes the renderer's `ID3D11Device` so decoded frames land on it. The pointer is borrowed and
@@ -105,16 +108,29 @@ pub(crate) unsafe fn release_texture(texture: *mut c_void) {
 }
 
 /// The renderer's device if one was published (`bool` = true), else a private one built the same way.
-fn device() -> Result<(ID3D11Device, bool, Option<Arc<dyn std::any::Any + Send + Sync>>), MediaError> {
+fn device() -> Result<
+    (
+        ID3D11Device,
+        bool,
+        Option<Arc<dyn std::any::Any + Send + Sync>>,
+    ),
+    MediaError,
+> {
     // `SK_VIDEO_DEVICE=private` forces the fallback, to tell whether device sharing is the problem without a rebuild.
     if std::env::var("SK_VIDEO_DEVICE").is_ok_and(|v| v == "private") {
         return Ok((private_device()?, false, None));
     }
     if let Some(provider) = SHARED_DEVICE_PROVIDER.get() {
-        let lease = provider().map_err(|message| MediaError::new(MediaErrorCode::Decode, message))?;
+        let lease =
+            provider().map_err(|message| MediaError::new(MediaErrorCode::Decode, message))?;
         if let Some(lease) = lease {
-            let borrowed = unsafe { ID3D11Device::from_raw_borrowed(&lease.device) }
-                .ok_or_else(|| MediaError::new(MediaErrorCode::Decode, "renderer video provider returned a null D3D11 device"))?;
+            let borrowed =
+                unsafe { ID3D11Device::from_raw_borrowed(&lease.device) }.ok_or_else(|| {
+                    MediaError::new(
+                        MediaErrorCode::Decode,
+                        "renderer video provider returned a null D3D11 device",
+                    )
+                })?;
             return Ok((borrowed.clone(), true, Some(lease.keep_alive)));
         }
         // The provider owns its generations; the legacy cache's pointer may already be dead.
@@ -174,14 +190,11 @@ fn ensure_platform() -> Result<(), MediaError> {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             if let Err(e) = MFStartup(MF_VERSION, MFSTARTUP_FULL) {
                 RESULT = Some(
-                    MediaError::new(
-                        MediaErrorCode::Decode,
-                        format!("MFStartup failed: {e}"),
-                    )
-                    .with_advisory(
-                        "Media Foundation is not available on this system — <video> needs it. \
+                    MediaError::new(MediaErrorCode::Decode, format!("MFStartup failed: {e}"))
+                        .with_advisory(
+                            "Media Foundation is not available on this system — <video> needs it. \
                          On Windows N/KN editions install the Media Feature Pack.",
-                    ),
+                        ),
                 );
             }
         }
@@ -244,8 +257,9 @@ impl MediaEngineBackend {
         let notify: IMFMediaEngineNotify = EngineNotify::new(queue.clone()).into();
 
         let mut attributes: Option<IMFAttributes> = None;
-        unsafe { MFCreateAttributes(&mut attributes, 4) }
-            .map_err(|e| MediaError::new(MediaErrorCode::Decode, format!("MFCreateAttributes: {e}")))?;
+        unsafe { MFCreateAttributes(&mut attributes, 4) }.map_err(|e| {
+            MediaError::new(MediaErrorCode::Decode, format!("MFCreateAttributes: {e}"))
+        })?;
         let attributes = attributes.expect("MFCreateAttributes succeeded without attributes");
         unsafe {
             attributes
@@ -259,26 +273,35 @@ impl MediaEngineBackend {
                 })
         }
         .map_err(|e| {
-            MediaError::new(MediaErrorCode::Decode, format!("media engine attributes: {e}"))
+            MediaError::new(
+                MediaErrorCode::Decode,
+                format!("media engine attributes: {e}"),
+            )
         })?;
 
-        let factory: IMFMediaEngineClassFactory =
-            unsafe { CoCreateInstance(&CLSID_MFMediaEngineClassFactory, None, CLSCTX_INPROC_SERVER) }
-                .map_err(|e| {
-                    MediaError::new(
-                        MediaErrorCode::Decode,
-                        format!("MFMediaEngineClassFactory: {e}"),
-                    )
-                    .with_advisory(
-                        "mfmediaengine.dll could not be created — <video> needs the Windows \
+        let factory: IMFMediaEngineClassFactory = unsafe {
+            CoCreateInstance(&CLSID_MFMediaEngineClassFactory, None, CLSCTX_INPROC_SERVER)
+        }
+        .map_err(|e| {
+            MediaError::new(
+                MediaErrorCode::Decode,
+                format!("MFMediaEngineClassFactory: {e}"),
+            )
+            .with_advisory(
+                "mfmediaengine.dll could not be created — <video> needs the Windows \
                          media stack. On N/KN editions install the Media Feature Pack.",
-                    )
-                })?;
+            )
+        })?;
 
         let (source_extension, source_control) = source::extension();
-        unsafe { attributes.SetUnknown(&MF_MEDIA_ENGINE_EXTENSION, &source_extension) }.map_err(|error| {
-            MediaError::new(MediaErrorCode::Decode, format!("media source extension: {error}"))
-        })?;
+        unsafe { attributes.SetUnknown(&MF_MEDIA_ENGINE_EXTENSION, &source_extension) }.map_err(
+            |error| {
+                MediaError::new(
+                    MediaErrorCode::Decode,
+                    format!("media source extension: {error}"),
+                )
+            },
+        )?;
         let engine = unsafe { factory.CreateInstance(0, &attributes) }.map_err(|e| {
             MediaError::new(
                 MediaErrorCode::Decode,
@@ -378,7 +401,9 @@ impl MediaEngineBackend {
 
     fn set_source_from_memory(&self, mime: &str, data: &[u8]) -> windows::core::Result<()> {
         use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
-        use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+        use windows::Win32::System::Memory::{
+            GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+        };
 
         unsafe {
             // `fDeleteOnRelease: TRUE` gives the HGLOBAL to the stream, so it lives as long as the engine's reference.
@@ -394,8 +419,7 @@ impl MediaEngineBackend {
 
             if !mime.is_empty() {
                 if let Ok(attributes) = byte_stream.cast::<IMFAttributes>() {
-                    let _ =
-                        attributes.SetString(&MF_BYTESTREAM_CONTENT_TYPE, &HSTRING::from(mime));
+                    let _ = attributes.SetString(&MF_BYTESTREAM_CONTENT_TYPE, &HSTRING::from(mime));
                 }
             }
             // Never `BSTR::new()`: a NULL BSTR crashes `mfmediaengine.dll` with no panic or message.
@@ -433,11 +457,10 @@ impl MediaEngineBackend {
                  decoder does not cover (10-bit HEVC, AV1 Professional). Re-encode to H.264 \
                  High profile 8-bit, which is inbox on every Windows install."
             )),
-            5 => MediaError::new(MediaErrorCode::Decode, "the media is encrypted")
-                .with_advisory(
-                    "<video>: encrypted media (EME / PlayReady / Widevine) is not supported and \
+            5 => MediaError::new(MediaErrorCode::Decode, "the media is encrypted").with_advisory(
+                "<video>: encrypted media (EME / PlayReady / Widevine) is not supported and \
                      is not planned.",
-                ),
+            ),
             // 4 = SRC_NOT_SUPPORTED and everything unknown. MF also reports that for a network source
             // that never arrived (measured: a dead port), so answer MEDIA_ERR_NETWORK as a browser does.
             _ if src.starts_with("http://") || src.starts_with("https://") => MediaError::new(
@@ -472,7 +495,11 @@ impl MediaEngineBackend {
         );
         out.push_str(&format!(
             " Video decoders installed on this machine: {}.",
-            if installed.is_empty() { "none".to_string() } else { installed.join(", ") }
+            if installed.is_empty() {
+                "none".to_string()
+            } else {
+                installed.join(", ")
+            }
         ));
         if !missing.is_empty() {
             out.push_str(&format!(" NOT installed: {}.", missing.join(", ")));
@@ -498,7 +525,9 @@ impl MediaEngineBackend {
         } else {
             unsafe { self.engine.GetBuffered() }
         };
-        let Ok(ranges) = ranges else { return Vec::new() };
+        let Ok(ranges) = ranges else {
+            return Vec::new();
+        };
         let count = unsafe { ranges.GetLength() };
         (0..count)
             .filter_map(|i| {
@@ -542,7 +571,9 @@ impl VideoBackend for MediaEngineBackend {
     fn load(&mut self, source: &MediaSource) -> Result<(), MediaError> {
         self.last_pts = i64::MIN;
         self.presenter.reset();
-        if !matches!(source, MediaSource::StaticBytes { .. }) { self.source_control.clear(); }
+        if !matches!(source, MediaSource::StaticBytes { .. }) {
+            self.source_control.clear();
+        }
         match source {
             MediaSource::Path(path) => {
                 let url = file_url(path);
@@ -574,7 +605,10 @@ impl VideoBackend for MediaEngineBackend {
                 })?;
             }
             MediaSource::StaticBytes { mime, data } => {
-                trace(format_args!("load package: {} bytes, mapped native source", data.len()));
+                trace(format_args!(
+                    "load package: {} bytes, mapped native source",
+                    data.len()
+                ));
                 self.bytes_retry = None;
                 self.current_src = format!("package:{mime} ({} bytes)", data.len());
                 let url = self.source_control.select(mime, data);
@@ -744,11 +778,15 @@ impl VideoBackend for MediaEngineBackend {
 
     fn drain_events(&mut self, sink: &mut dyn FnMut(MediaEvent)) {
         let raw = {
-            let Ok(mut queue) = self.queue.lock() else { return };
+            let Ok(mut queue) = self.queue.lock() else {
+                return;
+            };
             std::mem::take(&mut *queue)
         };
         for code in raw {
-            let Some(event) = notify::translate(code) else { continue };
+            let Some(event) = notify::translate(code) else {
+                continue;
+            };
             // A `data:` source the byte stream could not open gets one more try from a temp file.
             if event == MediaEvent::Error && self.bytes_retry.is_some() {
                 if self.retry_bytes_from_file() {
@@ -805,7 +843,9 @@ fn temp_file_for(mime: &str, data: &[u8]) -> std::io::Result<std::path::PathBuf>
         other => other,
     };
     let path = std::env::temp_dir().join(format!("sk-video-{hash:016x}{ext}"));
-    let already_there = path.metadata().is_ok_and(|m| m.len() as usize == data.len());
+    let already_there = path
+        .metadata()
+        .is_ok_and(|m| m.len() as usize == data.len());
     if !already_there {
         std::fs::write(&path, data)?;
     }

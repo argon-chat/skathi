@@ -25,8 +25,10 @@ pub fn query(selector: &str, root: u32, mode: QueryMode) -> Result<Vec<u32>, Str
         // Live state answers `:hover` / `:active` / `:focus*` as a browser would; the cascade's matcher
         // says "would match" (`crate::live_state`).
         let live = LiveStates::take(t);
-        let candidates: Vec<LiveRef<'_>> = ids.iter().map(|&id| LiveRef::new(t, id, &live)).collect();
-        let result = sk_css::query_all_in(selector, &candidates, Some(LiveRef::new(t, root, &live)))?;
+        let candidates: Vec<LiveRef<'_>> =
+            ids.iter().map(|&id| LiveRef::new(t, id, &live)).collect();
+        let result =
+            sk_css::query_all_in(selector, &candidates, Some(LiveRef::new(t, root, &live)))?;
         for w in &result.warnings {
             crate::log::record("css", format!("[query] {w}"));
         }
@@ -237,7 +239,12 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         .into(),
         // The CSS value, inherited, not gpui's paint switch: a screen-reader-only box paints nothing
         // but is `visible` (render::css_visible).
-        "visibility" => if crate::render::css_visible(t, id) { "visible" } else { "hidden" }.into(),
+        "visibility" => if crate::render::css_visible(t, id) {
+            "visible"
+        } else {
+            "hidden"
+        }
+        .into(),
         // `auto` and `clip` as computed (sk_css::Extras::overflow_names), not the `scroll` and
         // `hidden` gpui folds them into.
         "overflow-x" | "overflow-y" | "overflow" => {
@@ -253,8 +260,17 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         // are overlays, so no gutter is ever reserved and none can be. (Reka's scroll lock reads it.)
         "scrollbar-gutter" => "auto".into(),
         "opacity" => format!("{}", cs.base.opacity.unwrap_or(1.0)),
-        "z-index" => cs.extras.z().map(|z| z.to_string()).unwrap_or_else(|| "auto".into()),
-        "pointer-events" => if cs.extras.pointer_events_none == Some(true) { "none" } else { "auto" }.into(),
+        "z-index" => cs
+            .extras
+            .z()
+            .map(|z| z.to_string())
+            .unwrap_or_else(|| "auto".into()),
+        "pointer-events" => if cs.extras.pointer_events_none == Some(true) {
+            "none"
+        } else {
+            "auto"
+        }
+        .into(),
         // The function list, not the `matrix()` a browser resolves to: it is what the cascade holds,
         // and floating-ui only tests it against `"none"`.
         "transform" => transform_text(cs.base.vn_transform),
@@ -273,7 +289,13 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         "animation-name" if cs.animations.is_empty() => "none".into(),
         "animation-duration" | "animation-delay" if cs.animations.is_empty() => "0s".into(),
         "animation-fill-mode" if cs.animations.is_empty() => "none".into(),
-        "animation-name" => animations(&|s| if s.name.is_empty() { "none".into() } else { s.name.to_string() }),
+        "animation-name" => animations(&|s| {
+            if s.name.is_empty() {
+                "none".into()
+            } else {
+                s.name.to_string()
+            }
+        }),
         "animation-duration" => animations(&|s| secs(s.duration)),
         "animation-delay" => animations(&|s| secs(s.delay)),
         "animation-fill-mode" => animations(&|s| {
@@ -291,7 +313,9 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         "transition-duration" => transitions(&|s| secs(s.duration)),
         "transition-delay" => transitions(&|s| secs(s.delay)),
         "width" | "height" => {
-            let (w, h) = crate::render::bounds_of(id).map(|(_, _, w, h)| (w, h)).unwrap_or((0.0, 0.0));
+            let (w, h) = crate::render::bounds_of(id)
+                .map(|(_, _, w, h)| (w, h))
+                .unwrap_or((0.0, 0.0));
             format!("{}px", if name == "width" { w } else { h })
         }
         "direction" => "ltr".into(),
@@ -345,7 +369,8 @@ fn css_rgb(c: gpui::Hsla) -> String {
 }
 
 fn transform_text(t: Option<gpui::TransformSpec>) -> String {
-    t.map(sk_css::transform_css).unwrap_or_else(|| "none".into())
+    t.map(sk_css::transform_css)
+        .unwrap_or_else(|| "none".into())
 }
 
 #[cfg(test)]
@@ -372,10 +397,21 @@ mod tests {
             tree.insert(child, root, 0);
             (root, child)
         });
-        assert_eq!(query(".match", root, QueryMode::Document).unwrap(), vec![root, child]);
-        assert_eq!(query(".match", root, QueryMode::Descendants).unwrap(), vec![child]);
-        assert_eq!(query(":root", root, QueryMode::Document).unwrap(), vec![root]);
-        assert!(query(":root", root, QueryMode::Descendants).unwrap().is_empty());
+        assert_eq!(
+            query(".match", root, QueryMode::Document).unwrap(),
+            vec![root, child]
+        );
+        assert_eq!(
+            query(".match", root, QueryMode::Descendants).unwrap(),
+            vec![child]
+        );
+        assert_eq!(
+            query(":root", root, QueryMode::Document).unwrap(),
+            vec![root]
+        );
+        assert!(query(":root", root, QueryMode::Descendants)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -392,14 +428,27 @@ mod tests {
             t.insert(bare, root, 1);
             (outer, inner, bare)
         });
-        tree::set_engine(sk_css::Engine::compile(".outer { font-size: 20px; color: rgba(255, 0, 0, 0.5) }"));
+        tree::set_engine(sk_css::Engine::compile(
+            ".outer { font-size: 20px; color: rgba(255, 0, 0, 0.5) }",
+        ));
         tree::restyle_all();
         assert_eq!(prop(outer, "font-size"), "20px");
         assert_eq!(prop(inner, "font-size"), "20px", "inherited from .outer");
         assert_eq!(prop(inner, "color"), "rgba(255, 0, 0, 0.5)");
-        assert_eq!(prop(bare, "font-size"), format!("{}px", sk_css::rem_basis()));
+        assert_eq!(
+            prop(bare, "font-size"),
+            format!("{}px", sk_css::rem_basis())
+        );
         assert_eq!(prop(bare, "color"), "rgb(0, 0, 0)");
-        for name in ["width", "height", "position", "direction", "animation-name", "transition-delay", "transition-duration"] {
+        for name in [
+            "width",
+            "height",
+            "position",
+            "direction",
+            "animation-name",
+            "transition-delay",
+            "transition-duration",
+        ] {
             assert!(!prop(inner, name).is_empty(), "{name}");
         }
     }
@@ -454,18 +503,33 @@ mod tests {
                 }
                 n
             };
-            (make("list", 0), make("wide", 1), make("cut", 2), make("", 3))
+            (
+                make("list", 0),
+                make("wide", 1),
+                make("cut", 2),
+                make("", 3),
+            )
         });
         tree::set_engine(sk_css::Engine::compile(
             ".list { overflow-y: auto } .wide { overflow-x: hidden } .cut { overflow-x: clip }",
         ));
         tree::restyle_all();
-        let axes = |id| [prop(id, "overflow-x"), prop(id, "overflow-y"), prop(id, "overflow")];
+        let axes = |id| {
+            [
+                prop(id, "overflow-x"),
+                prop(id, "overflow-y"),
+                prop(id, "overflow"),
+            ]
+        };
         assert_eq!(axes(list), ["auto", "auto", "auto"]);
         assert_eq!(axes(wide), ["hidden", "auto", "hidden auto"]);
         assert_eq!(axes(cut), ["clip", "visible", "clip visible"]);
         assert_eq!(axes(plain), ["visible", "visible", "visible"]);
-        let x = tree::with_tree(|t| t.node(list).and_then(|n| n.computed.as_ref()).map(|cs| cs.base.overflow.x));
+        let x = tree::with_tree(|t| {
+            t.node(list)
+                .and_then(|n| n.computed.as_ref())
+                .map(|cs| cs.base.overflow.x)
+        });
         assert_eq!(x, Some(Some(gpui::Overflow::Scroll)));
     }
 }

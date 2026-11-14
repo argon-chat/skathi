@@ -21,12 +21,11 @@ use sk_runtime::redjs::webapi::canvas2d as rjs;
 use sk_runtime::redjs::webapi::webgpu::canvas as gpu;
 
 use super::{
-    apply_computed_style, bind_events, focus_handle_for, gpui_object_fit, pointer_mask, tab_index_of,
-    warn_compat, watch_focus, with_control_area,
+    apply_computed_style, bind_events, focus_handle_for, gpui_object_fit, pointer_mask,
+    tab_index_of, warn_compat, watch_focus, with_control_area,
 };
 use crate::tree::Tree;
 use crate::windows::{self, WinKey};
-
 
 #[derive(Clone)]
 pub(crate) enum Pixels {
@@ -125,20 +124,32 @@ impl PixelSource for CanvasBitmap {
                     if frame.opaque_blank {
                         let size = gpu::present_size(key);
                         return match size {
-                            Some((width, height)) if width > 0 && height > 0 =>
-                                Fetch::Changed(generation, Some(Pixels::SolidBlack { width, height })),
+                            Some((width, height)) if width > 0 && height > 0 => Fetch::Changed(
+                                generation,
+                                Some(Pixels::SolidBlack { width, height }),
+                            ),
                             _ => Fetch::Changed(generation, None),
                         };
                     }
                     if let Some(native) = &frame.native {
-                        if frame.width > 0 && frame.height > 0 && frame.width <= ATLAS_MAX_SIDE && frame.height <= ATLAS_MAX_SIDE {
-                            return Fetch::Changed(generation,Some(Pixels::Texture(NativePixels {
-                                frame:native.clone(),
-                                image:Arc::new(RenderImage::from_gpu(gpui::size(gpui::DevicePixels(frame.width as i32),gpui::DevicePixels(frame.height as i32)))),
-                                uploaded:std::rc::Rc::new(Cell::new(None)),
-                            })));
+                        if frame.width > 0
+                            && frame.height > 0
+                            && frame.width <= ATLAS_MAX_SIDE
+                            && frame.height <= ATLAS_MAX_SIDE
+                        {
+                            return Fetch::Changed(
+                                generation,
+                                Some(Pixels::Texture(NativePixels {
+                                    frame: native.clone(),
+                                    image: Arc::new(RenderImage::from_gpu(gpui::size(
+                                        gpui::DevicePixels(frame.width as i32),
+                                        gpui::DevicePixels(frame.height as i32),
+                                    ))),
+                                    uploaded: std::rc::Rc::new(Cell::new(None)),
+                                })),
+                            );
                         }
-                        return Fetch::Changed(generation,None);
+                        return Fetch::Changed(generation, None);
                     }
                     atlas_frame(generation, frame.width, frame.height, &frame.rgba)
                 }
@@ -167,9 +178,11 @@ const STILL: Duration = Duration::from_millis(300);
 
 fn as_painted(pixels: Pixels, moving: bool) -> Pixels {
     match pixels {
-        Pixels::Atlas(image) if moving => {
-            Pixels::Atlas(Arc::try_unwrap(image).map(|i| Arc::new(i.dynamic())).unwrap_or_else(|a| a))
-        }
+        Pixels::Atlas(image) if moving => Pixels::Atlas(
+            Arc::try_unwrap(image)
+                .map(|i| Arc::new(i.dynamic()))
+                .unwrap_or_else(|a| a),
+        ),
         Pixels::Atlas(image) => Pixels::Atlas(image),
         #[cfg(feature = "webgpu")]
         solid @ Pixels::SolidBlack { .. } => solid,
@@ -200,7 +213,6 @@ fn to_bgra(rgba: &[u8]) -> Vec<u8> {
 }
 
 type Source = CanvasBitmap;
-
 
 struct Entry {
     generation: u64,
@@ -241,7 +253,7 @@ fn retire_pixels(pixels: Option<Pixels>, window: WinKey) {
         _ => return,
     };
     crate::resample::forget(&image);
-    windows::queue_drops(window,[image]);
+    windows::queue_drops(window, [image]);
 }
 
 fn retire(entry: Entry) {
@@ -266,11 +278,14 @@ fn current_at(id: u32, win: WinKey, now: Instant) -> Option<Pixels> {
                         let next = Arc::new(RenderImage::from_gpu(native.image.size(0)));
                         let previous = std::mem::replace(&mut native.image, next);
                         native.uploaded = std::rc::Rc::new(Cell::new(None));
-                        windows::queue_drops(e.window,[previous]);
+                        windows::queue_drops(e.window, [previous]);
                         e.window = win;
                     }
                 }
-                if let Some(e) = m.get_mut(&id).filter(|e| e.moving && now.duration_since(e.changed) >= STILL) {
+                if let Some(e) = m
+                    .get_mut(&id)
+                    .filter(|e| e.moving && now.duration_since(e.changed) >= STILL)
+                {
                     e.moving = false;
                     let still = match &e.pixels {
                         Some(Pixels::Atlas(image)) => still_copy(image),
@@ -291,12 +306,23 @@ fn current_at(id: u32, win: WinKey, now: Instant) -> Option<Pixels> {
                 }
             }
             Fetch::Changed(generation, pixels) => {
-                let moving = m.get(&id).is_some_and(|e| now.duration_since(e.changed) < MOVING);
+                let moving = m
+                    .get(&id)
+                    .is_some_and(|e| now.duration_since(e.changed) < MOVING);
                 if moving {
                     STILL_AT.with(|s| s.set(Some(now + STILL)));
                 }
                 let pixels = pixels.map(|p| as_painted(p, moving));
-                if let Some(old) = m.insert(id, Entry { generation, pixels, window: win, changed: now, moving }) {
+                if let Some(old) = m.insert(
+                    id,
+                    Entry {
+                        generation,
+                        pixels,
+                        window: win,
+                        changed: now,
+                        moving,
+                    },
+                ) {
                     retire(old);
                 }
             }
@@ -346,7 +372,8 @@ pub(crate) fn tick(window: &mut Window) -> bool {
         return still;
     }
     let here = windows::key(window);
-    let built: Vec<(u32, WinKey)> = BUILT.with(|b| b.borrow().iter().map(|(&id, &w)| (id, w)).collect());
+    let built: Vec<(u32, WinKey)> =
+        BUILT.with(|b| b.borrow().iter().map(|(&id, &w)| (id, w)).collect());
     let mut draw = still;
     for (id, win) in built {
         if win != here {
@@ -439,17 +466,31 @@ fn upload_native(native: &NativePixels, window: &mut Window, win: WinKey) -> gpu
     struct FrameLease {
         _frame: Arc<dyn sk_runtime::redjs::webapi::webgpu::canvas::NativeFrame>,
     }
-    let owner = Arc::new(FrameLease { _frame: native.frame.frame.clone() });
-    let result = native.frame.frame.copy_d3d12(&mut |resource, ready_fence, ready_value| {
-        match window.write_image_tile_d3d12(
-            &native.image, 0,
-            gpui::D3D12TextureHandle { resource, ready_fence, ready_value }, owner.clone(),
-        ) {
-            Ok(result) => write = result,
-            Err(error) => warn_compat("canvas:native-d3d12-copy", &format!("D3D12 canvas import failed: {error:#}")),
-        }
-        write != gpui::TileWrite::Refused
+    let owner = Arc::new(FrameLease {
+        _frame: native.frame.frame.clone(),
     });
+    let result = native
+        .frame
+        .frame
+        .copy_d3d12(&mut |resource, ready_fence, ready_value| {
+            match window.write_image_tile_d3d12(
+                &native.image,
+                0,
+                gpui::D3D12TextureHandle {
+                    resource,
+                    ready_fence,
+                    ready_value,
+                },
+                owner.clone(),
+            ) {
+                Ok(result) => write = result,
+                Err(error) => warn_compat(
+                    "canvas:native-d3d12-copy",
+                    &format!("D3D12 canvas import failed: {error:#}"),
+                ),
+            }
+            write != gpui::TileWrite::Refused
+        });
     if result == Ok(true) && write != gpui::TileWrite::Refused {
         native.uploaded.set(Some(win));
         NATIVE_UPLOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -507,7 +548,6 @@ fn native_image(
     Some(cpu)
 }
 
-
 fn dimension(raw: Option<&str>, fallback: u32) -> u32 {
     let Some(raw) = raw else { return fallback };
     let s = raw.trim_start_matches([' ', '\t', '\n', '\x0c', '\r']);
@@ -520,7 +560,10 @@ fn dimension(raw: Option<&str>, fallback: u32) -> u32 {
 }
 
 fn intrinsic(t: &Tree, id: u32) -> (u32, u32) {
-    (dimension(t.prop(id, "width"), 300), dimension(t.prop(id, "height"), 150))
+    (
+        dimension(t.prop(id, "width"), 300),
+        dimension(t.prop(id, "height"), 150),
+    )
 }
 
 /// gpui `Img`'s sizing rule for a box holding an `iw` × `ih` image.
@@ -557,7 +600,11 @@ fn solid_bounds(
     width: u32,
     height: u32,
 ) -> Option<gpui::Bounds<gpui::Pixels>> {
-    if width == 0 || height == 0 || bounds.size.width <= gpui::px(0.) || bounds.size.height <= gpui::px(0.) {
+    if width == 0
+        || height == 0
+        || bounds.size.width <= gpui::px(0.)
+        || bounds.size.height <= gpui::px(0.)
+    {
         return None;
     }
     if !f32::from(bounds.size.width).is_finite() || !f32::from(bounds.size.height).is_finite() {
@@ -596,7 +643,9 @@ fn solid_black(width: u32, height: u32, fit: gpui::ObjectFit) -> AnyElement {
                 }
             }
         },
-    ).size_full().into_any_element()
+    )
+    .size_full()
+    .into_any_element()
 }
 
 pub(super) fn build<V: 'static>(
@@ -629,13 +678,21 @@ pub(super) fn build<V: 'static>(
         .map(gpui_object_fit)
         .unwrap_or(gpui::ObjectFit::Fill);
     let picture = match pixels {
-        Some(Pixels::Atlas(image)) => Some(gpui::img(ImageSource::Render(image))
-            .object_fit(fit).size_full().into_any_element()),
+        Some(Pixels::Atlas(image)) => Some(
+            gpui::img(ImageSource::Render(image))
+                .object_fit(fit)
+                .size_full()
+                .into_any_element(),
+        ),
         #[cfg(feature = "webgpu")]
         Some(Pixels::SolidBlack { width, height }) => Some(solid_black(width, height, fit)),
         #[cfg(feature = "webgpu")]
-        Some(Pixels::Texture(native)) => native_image(id,native,window,win).map(|image|
-            gpui::img(ImageSource::Render(image)).object_fit(fit).size_full().into_any_element()),
+        Some(Pixels::Texture(native)) => native_image(id, native, window, win).map(|image| {
+            gpui::img(ImageSource::Render(image))
+                .object_fit(fit)
+                .size_full()
+                .into_any_element()
+        }),
         None => None,
     };
     if let Some(picture) = picture {
@@ -646,7 +703,10 @@ pub(super) fn build<V: 'static>(
     let mask = pointer_mask(node);
     let tab_index = tab_index_of(t, id);
     let focusable = tab_index.is_some();
-    let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
+    let styled_focus = node
+        .computed
+        .as_ref()
+        .is_some_and(|cs| cs.needs_focus_handle());
     let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
     if let Some(h) = &handle {
         d = d.track_focus(h);
@@ -704,12 +764,18 @@ mod tests {
         s.size.height = px(20.0);
         s.aspect_ratio = Some(1.0);
         size_as_replaced(&mut s, 300.0, 150.0, rem);
-        assert_eq!((s.size.width, s.size.height, s.aspect_ratio), (px(20.0), px(20.0), Some(1.0)));
+        assert_eq!(
+            (s.size.width, s.size.height, s.aspect_ratio),
+            (px(20.0), px(20.0), Some(1.0))
+        );
     }
 
     #[test]
     fn premultiplied_rgba_becomes_straight_bgra() {
-        assert_eq!(to_bgra(&[1, 2, 3, 255, 0, 0, 0, 0]), vec![3, 2, 1, 255, 0, 0, 0, 0]);
+        assert_eq!(
+            to_bgra(&[1, 2, 3, 255, 0, 0, 0, 0]),
+            vec![3, 2, 1, 255, 0, 0, 0, 0]
+        );
         assert_eq!(to_bgra(&[128, 128, 128, 128]), vec![255, 255, 255, 128]);
         assert_eq!(to_bgra(&[64, 0, 0, 64]), vec![0, 0, 255, 64]);
     }
@@ -740,16 +806,30 @@ mod tests {
     fn opaque_blank_has_intrinsics_but_no_bitmap_memory() {
         let id = 0xC0FF_EE02;
         let before = mem_stats();
-        CANVASES.with(|m| m.borrow_mut().insert(id, Entry {
-            generation: 1 << 63,
-            pixels: Some(Pixels::SolidBlack { width: 8192, height: 4096 }),
-            window: windows::UNBOUND,
-            changed: Instant::now(),
-            moving: false,
-        }));
+        CANVASES.with(|m| {
+            m.borrow_mut().insert(
+                id,
+                Entry {
+                    generation: 1 << 63,
+                    pixels: Some(Pixels::SolidBlack {
+                        width: 8192,
+                        height: 4096,
+                    }),
+                    window: windows::UNBOUND,
+                    changed: Instant::now(),
+                    moving: false,
+                },
+            )
+        });
         assert_eq!(mem_stats(), (before.0 + 1, before.1));
         let pixels = CANVASES.with(|m| m.borrow_mut().remove(&id).unwrap().pixels);
-        assert!(matches!(as_painted(pixels.unwrap(), true), Pixels::SolidBlack { width: 8192, height: 4096 }));
+        assert!(matches!(
+            as_painted(pixels.unwrap(), true),
+            Pixels::SolidBlack {
+                width: 8192,
+                height: 4096
+            }
+        ));
         assert_eq!(mem_stats(), before);
     }
 
@@ -760,13 +840,31 @@ mod tests {
         let bounds = Bounds::new(point(px(10.), px(20.)), size(px(200.), px(100.)));
         let fitted = |fit| solid_bounds(&fit, bounds, 100, 100).unwrap();
         assert_eq!(fitted(ObjectFit::Fill), bounds);
-        assert_eq!(fitted(ObjectFit::Contain), Bounds::new(point(px(60.), px(20.)), size(px(100.), px(100.))));
-        assert_eq!(fitted(ObjectFit::Cover), Bounds::new(point(px(10.), px(-30.)), size(px(200.), px(200.))));
-        assert_eq!(fitted(ObjectFit::None), Bounds::new(point(px(60.), px(20.)), size(px(100.), px(100.))));
+        assert_eq!(
+            fitted(ObjectFit::Contain),
+            Bounds::new(point(px(60.), px(20.)), size(px(100.), px(100.)))
+        );
+        assert_eq!(
+            fitted(ObjectFit::Cover),
+            Bounds::new(point(px(10.), px(-30.)), size(px(200.), px(200.)))
+        );
+        assert_eq!(
+            fitted(ObjectFit::None),
+            Bounds::new(point(px(60.), px(20.)), size(px(100.), px(100.)))
+        );
         assert_eq!(fitted(ObjectFit::ScaleDown), fitted(ObjectFit::None));
-        assert_eq!(solid_bounds(&ObjectFit::ScaleDown, bounds, 400, 200), Some(bounds));
+        assert_eq!(
+            solid_bounds(&ObjectFit::ScaleDown, bounds, 400, 200),
+            Some(bounds)
+        );
         assert!(solid_bounds(&ObjectFit::Fill, bounds, 0, 100).is_none());
-        assert!(solid_bounds(&ObjectFit::Fill, Bounds::new(bounds.origin, size(px(0.), px(100.))), 100, 100).is_none());
+        assert!(solid_bounds(
+            &ObjectFit::Fill,
+            Bounds::new(bounds.origin, size(px(0.), px(100.))),
+            100,
+            100
+        )
+        .is_none());
     }
 
     #[test]
@@ -776,14 +874,25 @@ mod tests {
 
         let surface: SurfaceRef = Arc::new(Mutex::new(Surface::new(2, 1, rjs::Options::default())));
         rjs::register_present(key, &surface);
-        let put = |rgba: [u8; 4]| Cmd::Put { x: 0, y: 0, image: Arc::new(Image::from_premul(1, 1, rgba.to_vec(), true)) };
+        let put = |rgba: [u8; 4]| Cmd::Put {
+            x: 0,
+            y: 0,
+            image: Arc::new(Image::from_premul(1, 1, rgba.to_vec(), true)),
+        };
         surface.lock().unwrap().push(put([255, 0, 0, 255]));
 
         let Fetch::Changed(g1, Some(Pixels::Atlas(image))) = CpuBitmap::fetch(key, 0) else {
             panic!("a published bitmap is fetched");
         };
-        assert_eq!(image.size(0), gpui::size(gpui::DevicePixels(2), gpui::DevicePixels(1)));
-        assert_eq!(&image.as_bytes(0).unwrap()[..4], &[0, 0, 255, 255], "red, as BGRA");
+        assert_eq!(
+            image.size(0),
+            gpui::size(gpui::DevicePixels(2), gpui::DevicePixels(1))
+        );
+        assert_eq!(
+            &image.as_bytes(0).unwrap()[..4],
+            &[0, 0, 255, 255],
+            "red, as BGRA"
+        );
         assert!(matches!(CpuBitmap::fetch(key, g1), Fetch::Unchanged));
 
         surface.lock().unwrap().push(put([0, 0, 255, 255]));
@@ -791,10 +900,17 @@ mod tests {
             panic!("a draw is a change");
         };
         assert_ne!(g1, g2);
-        assert_eq!(&image.as_bytes(0).unwrap()[..4], &[255, 0, 0, 255], "blue, as BGRA");
+        assert_eq!(
+            &image.as_bytes(0).unwrap()[..4],
+            &[255, 0, 0, 255],
+            "blue, as BGRA"
+        );
 
         surface.lock().unwrap().reset(0, 0);
-        assert!(matches!(CpuBitmap::fetch(key, g2), Fetch::Changed(_, None)), "a 0x0 bitmap paints nothing");
+        assert!(
+            matches!(CpuBitmap::fetch(key, g2), Fetch::Changed(_, None)),
+            "a 0x0 bitmap paints nothing"
+        );
 
         rjs::unregister_present(key);
         assert!(matches!(CpuBitmap::fetch(key, g2), Fetch::Unpublished));
@@ -805,7 +921,11 @@ mod tests {
         let id: u32 = 0xC0FF_EE01;
         let surface: SurfaceRef = Arc::new(Mutex::new(Surface::new(2, 1, rjs::Options::default())));
         rjs::register_present(id as u64, &surface);
-        let put = |rgba: [u8; 4]| Cmd::Put { x: 0, y: 0, image: Arc::new(Image::from_premul(1, 1, rgba.to_vec(), true)) };
+        let put = |rgba: [u8; 4]| Cmd::Put {
+            x: 0,
+            y: 0,
+            image: Arc::new(Image::from_premul(1, 1, rgba.to_vec(), true)),
+        };
         let atlas = |p: Option<Pixels>| match p {
             Some(Pixels::Atlas(image)) => image,
             _ => panic!("a bitmap"),
@@ -814,15 +934,36 @@ mod tests {
 
         surface.lock().unwrap().push(put([255, 0, 0, 255]));
         let first = atlas(current_at(id, windows::UNBOUND, t0));
-        assert!(!first.is_dynamic(), "a canvas that drew once is a still image");
+        assert!(
+            !first.is_dynamic(),
+            "a canvas that drew once is a still image"
+        );
 
         surface.lock().unwrap().push(put([0, 255, 0, 255]));
-        let frame = atlas(current_at(id, windows::UNBOUND, t0 + Duration::from_millis(100)));
-        assert!(frame.is_dynamic(), "drawing again within MOVING: a frame of an animation");
-        let again = atlas(current_at(id, windows::UNBOUND, t0 + Duration::from_millis(200)));
-        assert!(Arc::ptr_eq(&frame, &again), "unchanged and not yet still: the same frame");
+        let frame = atlas(current_at(
+            id,
+            windows::UNBOUND,
+            t0 + Duration::from_millis(100),
+        ));
+        assert!(
+            frame.is_dynamic(),
+            "drawing again within MOVING: a frame of an animation"
+        );
+        let again = atlas(current_at(
+            id,
+            windows::UNBOUND,
+            t0 + Duration::from_millis(200),
+        ));
+        assert!(
+            Arc::ptr_eq(&frame, &again),
+            "unchanged and not yet still: the same frame"
+        );
 
-        let still = atlas(current_at(id, windows::UNBOUND, t0 + Duration::from_millis(100) + STILL));
+        let still = atlas(current_at(
+            id,
+            windows::UNBOUND,
+            t0 + Duration::from_millis(100) + STILL,
+        ));
         assert!(!still.is_dynamic(), "still again: re-wrapped");
         assert_ne!(still.id, frame.id);
         assert_eq!(still.as_bytes(0), frame.as_bytes(0), "the same pixels");

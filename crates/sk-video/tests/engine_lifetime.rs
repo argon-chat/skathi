@@ -58,9 +58,13 @@ fn threads() -> usize {
 
 /// Mounts a `<video>` on the clip, plays it until it has a frame (or 5 s), and drops it; `false` when there is no media backend.
 fn one_element(clip: &PathBuf) -> bool {
-    let Ok(backend) = sk_video::backend_for_this_platform() else { return false };
+    let Ok(backend) = sk_video::backend_for_this_platform() else {
+        return false;
+    };
     let mut state = VideoState::new(backend);
-    state.set_source(MediaSource::Path(clip.clone())).expect("set_source");
+    state
+        .set_source(MediaSource::Path(clip.clone()))
+        .expect("set_source");
     state.set_muted(true);
     state.play();
     let request = FrameRequest { max_size: (64, 64) };
@@ -93,8 +97,11 @@ fn settled_threads(ms: u64) -> usize {
 
 #[test]
 fn an_element_that_goes_leaves_no_pipeline_behind() {
-    let clip = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/hello/assets/clip-tiny.mp4");
-    let clip = clip.canonicalize().expect("apps/hello/assets/clip-tiny.mp4");
+    let clip =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/hello/assets/clip-tiny.mp4");
+    let clip = clip
+        .canonicalize()
+        .expect("apps/hello/assets/clip-tiny.mp4");
     // The first element starts Media Foundation's shared work queues, which live for the process.
     if !one_element(&clip) {
         eprintln!("no media backend on this machine: skipped");

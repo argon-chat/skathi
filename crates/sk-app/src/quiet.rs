@@ -47,7 +47,7 @@ pub(crate) fn send_hwnd_to_back(raw: isize) {
 fn to_bottom(raw: isize) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        HWND_BOTTOM, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+        SetWindowPos, HWND_BOTTOM, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     };
     let _ = unsafe {
         SetWindowPos(

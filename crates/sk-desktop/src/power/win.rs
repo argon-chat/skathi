@@ -4,9 +4,14 @@ use std::sync::Mutex;
 
 use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
-use windows::Win32::System::Power::{PowerClearRequest, PowerCreateRequest, PowerRequestDisplayRequired, PowerRequestSystemRequired, PowerSetRequest};
-use windows::Win32::System::Threading::{POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT, REASON_CONTEXT_0};
+use windows::Win32::System::Power::{
+    PowerClearRequest, PowerCreateRequest, PowerRequestDisplayRequired, PowerRequestSystemRequired,
+    PowerSetRequest,
+};
 use windows::Win32::System::SystemServices::POWER_REQUEST_CONTEXT_VERSION;
+use windows::Win32::System::Threading::{
+    POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT, REASON_CONTEXT_0,
+};
 
 struct Request(HANDLE);
 // SAFETY: a power request handle is a kernel object handle, usable from any thread.
@@ -32,12 +37,19 @@ pub fn hold_screen(on: bool) -> bool {
     let ctx = REASON_CONTEXT {
         Version: POWER_REQUEST_CONTEXT_VERSION,
         Flags: POWER_REQUEST_CONTEXT_SIMPLE_STRING,
-        Reason: REASON_CONTEXT_0 { SimpleReasonString: PWSTR(reason.as_mut_ptr()) },
+        Reason: REASON_CONTEXT_0 {
+            SimpleReasonString: PWSTR(reason.as_mut_ptr()),
+        },
     };
     // SAFETY: `ctx` and the string it points at outlive the call, which copies the reason.
-    let Ok(h) = (unsafe { PowerCreateRequest(&ctx) }) else { return false };
+    let Ok(h) = (unsafe { PowerCreateRequest(&ctx) }) else {
+        return false;
+    };
     // SAFETY: `h` is a fresh power request.
-    let ok = unsafe { PowerSetRequest(h, PowerRequestDisplayRequired).is_ok() && PowerSetRequest(h, PowerRequestSystemRequired).is_ok() };
+    let ok = unsafe {
+        PowerSetRequest(h, PowerRequestDisplayRequired).is_ok()
+            && PowerSetRequest(h, PowerRequestSystemRequired).is_ok()
+    };
     if !ok {
         // SAFETY: as above; nothing else holds it.
         unsafe {

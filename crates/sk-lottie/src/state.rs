@@ -9,8 +9,8 @@ use image::{Frame, RgbaImage};
 use serde_json::Value;
 
 use crate::backend::{self, Backend, Rasteriser};
-use crate::transport::Transport;
 use crate::normalize::{self, Normalization};
+use crate::transport::Transport;
 
 #[derive(Debug)]
 pub enum LottieError {
@@ -103,13 +103,8 @@ pub enum PlayMode {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LottieEvent {
-    EnterFrame {
-        frame: f32,
-        elapsed: f32,
-    },
-    LoopComplete {
-        count: u32,
-    },
+    EnterFrame { frame: f32, elapsed: f32 },
+    LoopComplete { count: u32 },
     Complete,
 }
 
@@ -304,8 +299,8 @@ impl LottieState {
 
         let meta = self.transport.meta();
         let intrinsic = (meta.width.max(1), meta.height.max(1));
-        let raster_scale = (width_px as f32 / intrinsic.0 as f32)
-            .min(height_px as f32 / intrinsic.1 as f32);
+        let raster_scale =
+            (width_px as f32 / intrinsic.0 as f32).min(height_px as f32 / intrinsic.1 as f32);
         let (raster_width, raster_height) = backend::raster_size(intrinsic, raster_scale);
         let raster = self
             .renderer
@@ -358,7 +353,8 @@ pub fn raster_size_for(meta: &LottieMeta, size: (f32, f32), scale: f32) -> Optio
         return None;
     }
     let intrinsic = (meta.width.max(1), meta.height.max(1));
-    let raster_scale = (width_px as f32 / intrinsic.0 as f32).min(height_px as f32 / intrinsic.1 as f32);
+    let raster_scale =
+        (width_px as f32 / intrinsic.0 as f32).min(height_px as f32 / intrinsic.1 as f32);
     Some(backend::raster_size(intrinsic, raster_scale))
 }
 

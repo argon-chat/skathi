@@ -6,14 +6,19 @@ use std::ffi::c_void;
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
-    CreateBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, DrawTextW, GdiFlush, SelectObject, SetBkMode,
-    SetTextColor, ANTIALIASED_QUALITY, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, DT_CENTER,
+    CreateBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject,
+    DrawTextW, GdiFlush, SelectObject, SetBkMode, SetTextColor, ANTIALIASED_QUALITY, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, DT_CENTER,
     DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_BOLD, HBITMAP, HDC, OUT_DEFAULT_PRECIS, TRANSPARENT,
 };
-use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+};
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
-use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, DestroyIcon, HICON, ICONINFO, SM_CXSMICON};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateIconIndirect, DestroyIcon, HICON, ICONINFO, SM_CXSMICON,
+};
 
 use super::label;
 
@@ -46,9 +51,16 @@ pub fn set(owner: Option<isize>, contents: i64) -> bool {
         return unsafe { list.SetOverlayIcon(hwnd, HICON::default(), PCWSTR::null()) }.is_ok();
     };
     // SAFETY: plain metrics queries.
-    let size = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(hwnd)) }.max(16) as usize;
-    let Some(icon) = icon(&draw(&text, size), size) else { return false };
-    let desc = HSTRING::from(if text.is_empty() { "•" } else { text.as_str() });
+    let size =
+        unsafe { GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(hwnd)) }.max(16) as usize;
+    let Some(icon) = icon(&draw(&text, size), size) else {
+        return false;
+    };
+    let desc = HSTRING::from(if text.is_empty() {
+        "•"
+    } else {
+        text.as_str()
+    });
     // SAFETY: the taskbar copies the icon, so it is destroyed right after.
     unsafe {
         let ok = list.SetOverlayIcon(hwnd, icon, &desc).is_ok();
@@ -64,7 +76,11 @@ fn draw(text: &str, size: usize) -> Vec<u8> {
     let s = size as f32;
     let c = s / 2.0;
     let r = if text.is_empty() { s * 0.32 } else { c };
-    let cov = if text.is_empty() { Vec::new() } else { coverage(text, size).unwrap_or_default() };
+    let cov = if text.is_empty() {
+        Vec::new()
+    } else {
+        coverage(text, size).unwrap_or_default()
+    };
     let mut out = vec![0u8; size * size * 4];
     for y in 0..size {
         for x in 0..size {
@@ -135,11 +151,24 @@ fn coverage(text: &str, size: usize) -> Option<Vec<u8>> {
         SetTextColor(dc, COLORREF(0x00FF_FFFF));
         SetBkMode(dc, TRANSPARENT);
         let mut wide: Vec<u16> = text.encode_utf16().collect();
-        let mut rc = RECT { left: 0, top: 0, right: size as i32, bottom: size as i32 };
-        DrawTextW(dc, &mut wide, &mut rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        let mut rc = RECT {
+            left: 0,
+            top: 0,
+            right: size as i32,
+            bottom: size as i32,
+        };
+        DrawTextW(
+            dc,
+            &mut wide,
+            &mut rc,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
         let _ = GdiFlush();
         let px = std::slice::from_raw_parts(bits, size * size * 4);
-        let cov = px.chunks_exact(4).map(|p| p[0].max(p[1]).max(p[2])).collect();
+        let cov = px
+            .chunks_exact(4)
+            .map(|p| p[0].max(p[1]).max(p[2]))
+            .collect();
         SelectObject(dc, old_font);
         SelectObject(dc, old_bmp);
         let _ = DeleteObject(font.into());
@@ -155,8 +184,20 @@ fn icon(bgra: &[u8], size: usize) -> Option<HICON> {
         let (color, bits) = dib(None, size)?;
         std::ptr::copy_nonoverlapping(bgra.as_ptr(), bits, bgra.len());
         let mask_bits = vec![0u8; size.div_ceil(16) * 2 * size];
-        let mask = CreateBitmap(size as i32, size as i32, 1, 1, Some(mask_bits.as_ptr().cast()));
-        let info = ICONINFO { fIcon: true.into(), xHotspot: 0, yHotspot: 0, hbmMask: mask, hbmColor: color };
+        let mask = CreateBitmap(
+            size as i32,
+            size as i32,
+            1,
+            1,
+            Some(mask_bits.as_ptr().cast()),
+        );
+        let info = ICONINFO {
+            fIcon: true.into(),
+            xHotspot: 0,
+            yHotspot: 0,
+            hbmMask: mask,
+            hbmColor: color,
+        };
         let icon = CreateIconIndirect(&info).ok();
         let _ = DeleteObject(color.into());
         let _ = DeleteObject(mask.into());
@@ -174,7 +215,9 @@ mod tests {
         let px = draw("7", size);
         let at = |x: usize, y: usize| &px[(y * size + x) * 4..(y * size + x) * 4 + 4];
         assert_eq!(at(0, 0)[3], 0, "the corner is outside the disc");
-        let white = (0..size * size).filter(|&i| px[i * 4] > 240 && px[i * 4 + 3] == 255).count();
+        let white = (0..size * size)
+            .filter(|&i| px[i * 4] > 240 && px[i * 4 + 3] == 255)
+            .count();
         assert!(white > 10, "the digit is drawn ({white} white pixels)");
         let dot = draw("", size);
         assert_eq!(dot[(16 * size + 16) * 4 + 3], 255);

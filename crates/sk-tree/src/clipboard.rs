@@ -6,7 +6,10 @@
 //! `clipboardData` is a real `DataTransfer`: read-only text/files/`image.png` for `paste` (gpui reads
 //! no HTML, RTF or custom formats), and for a cancelled `copy`/`cut` only `text/plain` can be written.
 
-use gpui::{App, ClipboardEntry, ClipboardItem, ImageFormat, InteractiveElement, KeyDownEvent, Keystroke, Window};
+use gpui::{
+    App, ClipboardEntry, ClipboardItem, ImageFormat, InteractiveElement, KeyDownEvent, Keystroke,
+    Window,
+};
 use sk_runtime::redjs::api::Value;
 use sk_runtime::redjs::webapi::uievents::{self, DragDataMode};
 use sk_runtime::JsRuntime;
@@ -82,7 +85,11 @@ pub(crate) fn fire(target: u32, verb: Verb, window: &mut Window, cx: &mut App) -
     if !tree::read_tree(|t| listened(t, target, verb)) {
         return true;
     }
-    let clip = if verb == Verb::Paste { cx.read_from_clipboard() } else { None };
+    let clip = if verb == Verb::Paste {
+        cx.read_from_clipboard()
+    } else {
+        None
+    };
     let mut write = None;
     let proceed = crate::render::js_wave_app(window, cx, || {
         let (proceed, w) = exchange(target, verb, clip.as_ref());
@@ -95,7 +102,11 @@ pub(crate) fn fire(target: u32, verb: Verb, window: &mut Window, cx: &mut App) -
     proceed
 }
 
-pub(crate) fn exchange(target: u32, verb: Verb, clip: Option<&ClipboardItem>) -> (bool, Option<ClipboardItem>) {
+pub(crate) fn exchange(
+    target: u32,
+    verb: Verb,
+    clip: Option<&ClipboardItem>,
+) -> (bool, Option<ClipboardItem>) {
     let data = JsRuntime::try_with(|rt| new_data(rt, verb, clip)).flatten();
     if verb == Verb::Paste {
         warn_compat(
@@ -137,11 +148,18 @@ fn fill(rt: &JsRuntime, dt: Value, item: &ClipboardItem) {
     let ctx = rt.ctx();
     for entry in item.entries() {
         if let ClipboardEntry::String(s) = entry {
-            call(rt, dt, "setData", &[ctx.string("text/plain"), ctx.string(&s.text)]);
+            call(
+                rt,
+                dt,
+                "setData",
+                &[ctx.string("text/plain"), ctx.string(&s.text)],
+            );
             break;
         }
     }
-    let Ok(items) = ctx.get(dt, &ctx.atom("items")) else { return };
+    let Ok(items) = ctx.get(dt, &ctx.atom("items")) else {
+        return;
+    };
     for entry in item.entries() {
         match entry {
             ClipboardEntry::Image(image) => {
@@ -189,8 +207,10 @@ fn png_file(rt: &JsRuntime, png: &[u8]) -> Option<Value> {
     let parts = ctx.array(1).ok()?;
     ctx.set_index(parts, 0, bytes).ok()?;
     let opts = ctx.object();
-    ctx.set(opts, &ctx.atom("type"), ctx.string("image/png")).ok()?;
-    ctx.construct(ctor, &[parts, ctx.string("image.png"), opts]).ok()
+    ctx.set(opts, &ctx.atom("type"), ctx.string("image/png"))
+        .ok()?;
+    ctx.construct(ctor, &[parts, ctx.string("image.png"), opts])
+        .ok()
 }
 
 /// A clipboard image as PNG bytes: PNG as is, any other raster re-encoded (Windows hands a screenshot
@@ -208,12 +228,18 @@ pub(crate) fn as_png(format: &ImageFormat, bytes: &[u8]) -> Option<Vec<u8>> {
     };
     let decoded = image::load_from_memory_with_format(bytes, from).ok()?;
     let mut out = Vec::new();
-    decoded.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).ok()?;
+    decoded
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .ok()?;
     Some(out)
 }
 
 fn finish(rt: &JsRuntime, dt: Value, verb: Verb, proceed: bool) -> Option<ClipboardItem> {
-    let write = if verb != Verb::Paste && !proceed { written(rt, dt) } else { None };
+    let write = if verb != Verb::Paste && !proceed {
+        written(rt, dt)
+    } else {
+        None
+    };
     // SAFETY: `dt` is a live DataTransfer of this runtime, on its thread.
     unsafe { uievents::set_drag_data_mode(rt.raw(), dt.0, DragDataMode::Disabled) };
     rt.ctx().unprotect(dt);
@@ -226,11 +252,19 @@ fn written(rt: &JsRuntime, dt: Value) -> Option<ClipboardItem> {
     let n = ctx.array_length(types).unwrap_or(0);
     let mut list = Vec::with_capacity(n as usize);
     for i in 0..n {
-        if let Some(s) = ctx.get_index(types, i).ok().and_then(|v| ctx.read_string(v).ok()) {
+        if let Some(s) = ctx
+            .get_index(types, i)
+            .ok()
+            .and_then(|v| ctx.read_string(v).ok())
+        {
             list.push(s);
         }
     }
-    let dropped: Vec<&str> = list.iter().map(String::as_str).filter(|t| *t != "text/plain").collect();
+    let dropped: Vec<&str> = list
+        .iter()
+        .map(String::as_str)
+        .filter(|t| *t != "text/plain")
+        .collect();
     if !dropped.is_empty() {
         warn_compat(
             "clipboard-write-types",
@@ -252,12 +286,18 @@ fn written(rt: &JsRuntime, dt: Value) -> Option<ClipboardItem> {
 pub(crate) fn bind_root<E: InteractiveElement>(e: E, root: u32) -> E {
     e.capture_key_down(|_, window, _| windows::here(window, |w| w.key_prevented = false))
         .on_key_down(move |ev: &KeyDownEvent, window, cx| {
-            let Some(verb) = Verb::of_keystroke(&ev.keystroke) else { return };
+            let Some(verb) = Verb::of_keystroke(&ev.keystroke) else {
+                return;
+            };
             if windows::here(window, |w| std::mem::take(&mut w.key_prevented)) {
                 return;
             }
             let focused = windows::focused_node(windows::key(window));
-            let target = if focused != 0 && tree::read_tree(|t| t.node(focused).is_some()) { focused } else { root };
+            let target = if focused != 0 && tree::read_tree(|t| t.node(focused).is_some()) {
+                focused
+            } else {
+                root
+            };
             if !fire(target, verb, window, cx) {
                 return;
             }
@@ -280,17 +320,42 @@ mod tests {
 
     #[test]
     fn the_clipboard_keys_and_nothing_else() {
-        let p = if cfg!(target_os = "macos") { "cmd" } else { "ctrl" };
-        assert_eq!(Verb::of_keystroke(&stroke(&format!("{p}-c"))), Some(Verb::Copy));
-        assert_eq!(Verb::of_keystroke(&stroke(&format!("{p}-x"))), Some(Verb::Cut));
-        assert_eq!(Verb::of_keystroke(&stroke(&format!("{p}-v"))), Some(Verb::Paste));
-        for other in ["c", "v", "shift-c", &format!("shift-{p}-v"), &format!("alt-{p}-c"), "ctrl-shift-insert", "delete", "insert"] {
+        let p = if cfg!(target_os = "macos") {
+            "cmd"
+        } else {
+            "ctrl"
+        };
+        assert_eq!(
+            Verb::of_keystroke(&stroke(&format!("{p}-c"))),
+            Some(Verb::Copy)
+        );
+        assert_eq!(
+            Verb::of_keystroke(&stroke(&format!("{p}-x"))),
+            Some(Verb::Cut)
+        );
+        assert_eq!(
+            Verb::of_keystroke(&stroke(&format!("{p}-v"))),
+            Some(Verb::Paste)
+        );
+        for other in [
+            "c",
+            "v",
+            "shift-c",
+            &format!("shift-{p}-v"),
+            &format!("alt-{p}-c"),
+            "ctrl-shift-insert",
+            "delete",
+            "insert",
+        ] {
             assert_eq!(Verb::of_keystroke(&stroke(other)), None, "{other}");
         }
         if !cfg!(target_os = "macos") {
             assert_eq!(Verb::of_keystroke(&stroke("ctrl-insert")), Some(Verb::Copy));
             assert_eq!(Verb::of_keystroke(&stroke("shift-delete")), Some(Verb::Cut));
-            assert_eq!(Verb::of_keystroke(&stroke("shift-insert")), Some(Verb::Paste));
+            assert_eq!(
+                Verb::of_keystroke(&stroke("shift-insert")),
+                Some(Verb::Paste)
+            );
         }
     }
 
@@ -331,17 +396,25 @@ mod tests {
             .unwrap();
         let png = as_png(&ImageFormat::Bmp, &bmp).expect("converted");
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
-        let back = image::load_from_memory_with_format(&png, image::ImageFormat::Png).unwrap().to_rgba8();
+        let back = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+            .unwrap()
+            .to_rgba8();
         assert_eq!(back.get_pixel(0, 0).0, [255, 0, 0, 255]);
         assert_eq!(back.get_pixel(1, 0).0, [0, 0, 255, 255]);
-        assert_eq!(as_png(&ImageFormat::Png, b"as is").as_deref(), Some(&b"as is"[..]));
+        assert_eq!(
+            as_png(&ImageFormat::Png, b"as is").as_deref(),
+            Some(&b"as is"[..])
+        );
         assert_eq!(as_png(&ImageFormat::Svg, b"<svg/>"), None);
         assert_eq!(as_png(&ImageFormat::Bmp, b"not a bmp"), None);
     }
 
     fn eval(src: &str) -> String {
         JsRuntime::with(|rt| {
-            let v = rt.ctx().eval(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
+            let v = rt
+                .ctx()
+                .eval(src)
+                .unwrap_or_else(|e| panic!("{src}: {e:?}"));
             rt.ctx().to_rust_string(v).unwrap()
         })
     }
@@ -392,18 +465,29 @@ mod tests {
                 r#"{"code":39,"isDT":true,"types":["text/plain","Files"],"text":"hello","files":1,"name":"image.png","type":"image/png","wrote":"hello"}"#,
                 "read-only: setData is a no-op"
             );
-            assert_eq!(eval("kept.getData('text/plain') + '|' + kept.files.length"), "|0", "disabled after the event");
+            assert_eq!(
+                eval("kept.getData('text/plain') + '|' + kept.files.length"),
+                "|0",
+                "disabled after the event"
+            );
 
             let (proceed, write) = exchange(node, Verb::Copy, None);
             assert!(proceed);
             assert!(write.is_none());
-            assert_eq!(last(), r#"{"code":40,"isDT":true,"types":[],"text":"","files":0,"name":"","type":"","wrote":"from js"}"#);
+            assert_eq!(
+                last(),
+                r#"{"code":40,"isDT":true,"types":[],"text":"","files":0,"name":"","type":"","wrote":"from js"}"#
+            );
 
             eval("globalThis.cancel = true; ''");
             let (proceed, write) = exchange(node, Verb::Cut, None);
             assert!(!proceed);
             assert_eq!(write.and_then(|w| w.text()).as_deref(), Some("from js"));
-            assert_eq!(eval("kept.types.length + ''"), "0", "disabled after the event");
+            assert_eq!(
+                eval("kept.types.length + ''"),
+                "0",
+                "disabled after the event"
+            );
         });
     }
 }

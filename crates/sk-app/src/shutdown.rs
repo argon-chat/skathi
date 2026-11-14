@@ -45,27 +45,35 @@ pub fn begin(why: &'static str) {
         *h = hidden;
     }
     sk_desktop::launch::closing();
-    sk_tree::log::record("shutdown", format!("[shutdown] {why}: hid {hidden} window(s); tearing down"));
-    let _ = std::thread::Builder::new().name("sk-shutdown-deadline".into()).spawn(|| {
-        std::thread::sleep(DEADLINE);
-        if ENDING.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        // Embedded, the process is the embedder's to end: it hears that the
-        // app is gone, unclean, and the teardown thread is left where it is.
-        if crate::embed::active() {
-            let line = timeline();
-            eprintln!("[shutdown] the teardown passed its {} s deadline. {line}", DEADLINE.as_secs());
-            crate::embed::finished(false, line);
-            return;
-        }
-        eprintln!(
-            "[shutdown] the teardown passed its {} s deadline; ending the process. {}",
-            DEADLINE.as_secs(),
-            timeline()
-        );
-        terminate();
-    });
+    sk_tree::log::record(
+        "shutdown",
+        format!("[shutdown] {why}: hid {hidden} window(s); tearing down"),
+    );
+    let _ = std::thread::Builder::new()
+        .name("sk-shutdown-deadline".into())
+        .spawn(|| {
+            std::thread::sleep(DEADLINE);
+            if ENDING.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            // Embedded, the process is the embedder's to end: it hears that the
+            // app is gone, unclean, and the teardown thread is left where it is.
+            if crate::embed::active() {
+                let line = timeline();
+                eprintln!(
+                    "[shutdown] the teardown passed its {} s deadline. {line}",
+                    DEADLINE.as_secs()
+                );
+                crate::embed::finished(false, line);
+                return;
+            }
+            eprintln!(
+                "[shutdown] the teardown passed its {} s deadline; ending the process. {}",
+                DEADLINE.as_secs(),
+                timeline()
+            );
+            terminate();
+        });
 }
 
 pub fn step<T>(name: &'static str, f: impl FnOnce() -> T) -> T {
@@ -104,17 +112,24 @@ pub fn finish() -> ! {
 /// `SK_SHUTDOWN_DELAY_MS=<n>`: a quit hook that takes `n` ms, the test seam for a slow teardown
 /// (packages/test/specs/close.spec.ts).
 pub fn install_test_delay(cx: &mut gpui::App) {
-    let Some(ms) = std::env::var("SK_SHUTDOWN_DELAY_MS").ok().and_then(|v| v.trim().parse::<u64>().ok()) else {
+    let Some(ms) = std::env::var("SK_SHUTDOWN_DELAY_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+    else {
         return;
     };
     std::mem::forget(cx.on_app_quit(move |_| {
-        step("SK_SHUTDOWN_DELAY_MS", || std::thread::sleep(Duration::from_millis(ms)));
+        step("SK_SHUTDOWN_DELAY_MS", || {
+            std::thread::sleep(Duration::from_millis(ms))
+        });
         std::future::ready(())
     }));
 }
 
 fn timeline() -> String {
-    let Some((t0, why)) = BEGAN.get() else { return String::new() };
+    let Some((t0, why)) = BEGAN.get() else {
+        return String::new();
+    };
     let hidden = HIDDEN.lock().map(|h| *h).unwrap_or(0);
     let steps = STEPS
         .lock()
@@ -140,7 +155,9 @@ fn hide_windows() -> usize {
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM};
     use windows::Win32::System::Threading::GetCurrentThreadId;
-    use windows::Win32::UI::WindowsAndMessaging::{EnumThreadWindows, IsWindowVisible, ShowWindow, SW_HIDE};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumThreadWindows, IsWindowVisible, ShowWindow, SW_HIDE,
+    };
 
     // Every top-level window of the UI thread, which is every gpui window (primary and pop-outs).
     // Synchronous; gpui hears `WM_SHOWWINDOW` later from its executor, so this is safe inside a
@@ -156,7 +173,11 @@ fn hide_windows() -> usize {
     }
     let mut count = 0usize;
     unsafe {
-        let _ = EnumThreadWindows(GetCurrentThreadId(), Some(hide), LPARAM(&mut count as *mut usize as isize));
+        let _ = EnumThreadWindows(
+            GetCurrentThreadId(),
+            Some(hide),
+            LPARAM(&mut count as *mut usize as isize),
+        );
     }
     count
 }

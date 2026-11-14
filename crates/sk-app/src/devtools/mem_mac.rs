@@ -22,8 +22,8 @@ use mach2::vm_region::vm_region_submap_info_64;
 use mach2::vm_types::{mach_vm_address_t, mach_vm_size_t, natural_t};
 
 use super::mem_common::{
-    bytes, collect, file_name, gpu_items, images, jsc_stats, mb, mimalloc, ms, renderer, rust_items, rust_json, side,
-    side_json, stickers, stylesheet_compiles, tree,
+    bytes, collect, file_name, gpu_items, images, jsc_stats, mb, mimalloc, ms, renderer,
+    rust_items, rust_json, side, side_json, stickers, stylesheet_compiles, tree,
 };
 use super::mem_fold::{self, classify, stack_slice, tag, thread_group, Backing, Cat, Fold, Region};
 use crate::json::Json;
@@ -46,7 +46,11 @@ const MI_OPTION_OS_TAG: c_int = 18;
 /// mimalloc's OS-memory VM tag, with its own fallback for out-of-range values.
 fn mimalloc_tag() -> u32 {
     let t = unsafe { mi_option_get(MI_OPTION_OS_TAG) };
-    if (100..=255).contains(&t) { t as u32 } else { 254 }
+    if (100..=255).contains(&t) {
+        t as u32
+    } else {
+        254
+    }
 }
 
 struct Vm {
@@ -73,25 +77,45 @@ fn vm_info() -> Vm {
     };
     let page = (unsafe { libc::vm_page_size } as u64).max(4096);
     if kr != KERN_SUCCESS {
-        return Vm { footprint: 0.0, resident: 0.0, internal: 0.0, page, graphics: 0.0, json: Json::Null };
+        return Vm {
+            footprint: 0.0,
+            resident: 0.0,
+            internal: 0.0,
+            page,
+            graphics: 0.0,
+            json: Json::Null,
+        };
     }
     // A field past what the kernel filled (`count`) is not there.
     let has = |offset: usize| count as usize * size_of::<natural_t>() >= offset + 8;
     // Packed: every field is copied out before use.
-    let (virtual_size, resident, resident_peak) = (info.virtual_size, info.resident_size, info.resident_size_peak);
+    let (virtual_size, resident, resident_peak) = (
+        info.virtual_size,
+        info.resident_size,
+        info.resident_size_peak,
+    );
     let (internal, external, compressed) = (info.internal, info.external, info.compressed);
     let (reusable, purgeable) = (info.reusable, info.purgeable_volatile_virtual);
     let page_size = info.page_size;
-    let footprint = if has(offset_of!(task_vm_info, phys_footprint)) { info.phys_footprint } else { internal + compressed };
+    let footprint = if has(offset_of!(task_vm_info, phys_footprint)) {
+        info.phys_footprint
+    } else {
+        internal + compressed
+    };
     let footprint_peak = if has(offset_of!(task_vm_info, ledger_phys_footprint_peak)) {
         Json::n((info.ledger_phys_footprint_peak as f64 / 1048576.0 * 10.0).round() / 10.0)
     } else {
         Json::Null
     };
-    let (graphics, graphics_nofootprint) = if has(offset_of!(task_vm_info, ledger_tag_graphics_nofootprint_compressed)) {
+    let (graphics, graphics_nofootprint) = if has(offset_of!(
+        task_vm_info,
+        ledger_tag_graphics_nofootprint_compressed
+    )) {
         (
-            (info.ledger_tag_graphics_footprint + info.ledger_tag_graphics_footprint_compressed).max(0) as f64,
-            (info.ledger_tag_graphics_nofootprint + info.ledger_tag_graphics_nofootprint_compressed).max(0) as f64,
+            (info.ledger_tag_graphics_footprint + info.ledger_tag_graphics_footprint_compressed)
+                .max(0) as f64,
+            (info.ledger_tag_graphics_nofootprint + info.ledger_tag_graphics_nofootprint_compressed)
+                .max(0) as f64,
         )
     } else {
         (0.0, 0.0)
@@ -100,7 +124,11 @@ fn vm_info() -> Vm {
         footprint: footprint as f64,
         resident: resident as f64,
         internal: internal as f64,
-        page: if page_size > 0 { page_size as u64 } else { page },
+        page: if page_size > 0 {
+            page_size as u64
+        } else {
+            page
+        },
         graphics,
         json: Json::obj(vec![
             ("footprintMB", mb(footprint as f64)),
@@ -134,7 +162,11 @@ fn threads() -> Threads {
     let mut list: thread_act_array_t = std::ptr::null_mut();
     let mut n: mach_msg_type_number_t = 0;
     if unsafe { task_threads(task, &mut list, &mut n) } != KERN_SUCCESS || list.is_null() {
-        return Threads { stacks: Vec::new(), groups: HashMap::new(), count: 0 };
+        return Threads {
+            stacks: Vec::new(),
+            groups: HashMap::new(),
+            count: 0,
+        };
     }
     let ports: Vec<thread_act_t> = unsafe { std::slice::from_raw_parts(list, n as usize) }.to_vec();
     let mut stacks = Vec::new();
@@ -144,7 +176,13 @@ fn threads() -> Threads {
         if t != 0 {
             let mut name = [0 as c_char; 64];
             let named = unsafe { libc::pthread_getname_np(t, name.as_mut_ptr(), name.len()) } == 0;
-            let raw = if named { unsafe { CStr::from_ptr(name.as_ptr()) }.to_string_lossy().into_owned() } else { String::new() };
+            let raw = if named {
+                unsafe { CStr::from_ptr(name.as_ptr()) }
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                String::new()
+            };
             let group = thread_group(&raw);
             let high = unsafe { libc::pthread_get_stackaddr_np(t) } as u64;
             let size = unsafe { libc::pthread_get_stacksize_np(t) } as u64;
@@ -156,9 +194,17 @@ fn threads() -> Threads {
         unsafe { mach_port_deallocate(task, *port) };
     }
     unsafe {
-        mach_vm_deallocate(task, list as mach_vm_address_t, (n as usize * size_of::<thread_act_t>()) as mach_vm_size_t)
+        mach_vm_deallocate(
+            task,
+            list as mach_vm_address_t,
+            (n as usize * size_of::<thread_act_t>()) as mach_vm_size_t,
+        )
     };
-    Threads { stacks, groups: counts, count: ports.len() }
+    Threads {
+        stacks,
+        groups: counts,
+        count: ports.len(),
+    }
 }
 
 /// File names of every image dyld has loaded: a file-backed region of one of
@@ -175,8 +221,19 @@ fn image_names() -> HashSet<String> {
 
 fn region_file(address: u64) -> Option<String> {
     let mut buf = [0u8; 1024];
-    let n = unsafe { libc::proc_regionfilename(libc::getpid(), address, buf.as_mut_ptr().cast(), buf.len() as u32) };
-    (n > 0).then(|| file_name(&String::from_utf8_lossy(&buf[..(n as usize).min(buf.len())])))
+    let n = unsafe {
+        libc::proc_regionfilename(
+            libc::getpid(),
+            address,
+            buf.as_mut_ptr().cast(),
+            buf.len() as u32,
+        )
+    };
+    (n > 0).then(|| {
+        file_name(&String::from_utf8_lossy(
+            &buf[..(n as usize).min(buf.len())],
+        ))
+    })
 }
 
 /// Every leaf region in address order, recursing into submaps.
@@ -194,7 +251,8 @@ fn regions() -> Vec<Region> {
     loop {
         let mut size: mach_vm_size_t = 0;
         let mut info = vm_region_submap_info_64::default();
-        let mut count = (size_of::<vm_region_submap_info_64>() / size_of::<natural_t>()) as mach_msg_type_number_t;
+        let mut count = (size_of::<vm_region_submap_info_64>() / size_of::<natural_t>())
+            as mach_msg_type_number_t;
         let kr = unsafe {
             mach_vm_region_recurse(
                 task,
@@ -213,12 +271,15 @@ fn regions() -> Vec<Region> {
             continue;
         }
         // `pages_reusable` is V1 (count ≥ 17); an older kernel leaves it out.
-        let reusable = if count as usize * size_of::<natural_t>() >= offset_of!(vm_region_submap_info_64, pages_reusable) + 4 {
+        let reusable = if count as usize * size_of::<natural_t>()
+            >= offset_of!(vm_region_submap_info_64, pages_reusable) + 4
+        {
             info.pages_reusable
         } else {
             0
         };
-        let shared_cache = depth > 0 || (cache_lo != 0 && address >= cache_lo && address < cache_hi);
+        let shared_cache =
+            depth > 0 || (cache_lo != 0 && address >= cache_lo && address < cache_hi);
         let file_backed = info.external_pager != 0;
         let (backing, name) = if !file_backed {
             (Backing::Anonymous, None)
@@ -226,7 +287,8 @@ fn regions() -> Vec<Region> {
             (Backing::Image, None)
         } else {
             let name = region_file(address);
-            let image = info.user_tag == tag::DYLIB || name.as_ref().is_some_and(|n| images.contains(n));
+            let image =
+                info.user_tag == tag::DYLIB || name.as_ref().is_some_and(|n| images.contains(n));
             (if image { Backing::Image } else { Backing::File }, name)
         };
         out.push(Region {
@@ -260,7 +322,12 @@ struct Zones {
 /// All malloc zones summed. mimalloc is not a zone (no override), so JSC's
 /// malloc is not in it.
 fn zones() -> Zones {
-    let mut s = libc::malloc_statistics_t { blocks_in_use: 0, size_in_use: 0, max_size_in_use: 0, size_allocated: 0 };
+    let mut s = libc::malloc_statistics_t {
+        blocks_in_use: 0,
+        size_in_use: 0,
+        max_size_in_use: 0,
+        size_allocated: 0,
+    };
     unsafe { libc::malloc_zone_statistics(std::ptr::null_mut(), &mut s) };
     Zones {
         in_use: s.size_in_use as f64,
@@ -276,11 +343,22 @@ fn zones() -> Zones {
     }
 }
 
-fn address_json(walk: &[Region], fold: &Fold, page: u64, threads: usize, stack_rows: &[(String, f64, f64)], regions: bool) -> Json {
+fn address_json(
+    walk: &[Region],
+    fold: &Fold,
+    page: u64,
+    threads: usize,
+    stack_rows: &[(String, f64, f64)],
+    regions: bool,
+) -> Json {
     let page = page as f64;
     let virtual_size: u64 = walk.iter().map(|r| r.size).sum();
     let resident: u64 = walk.iter().map(|r| r.resident).sum();
-    let images: HashSet<&str> = walk.iter().filter(|r| r.backing == Backing::Image).filter_map(|r| r.name.as_deref()).collect();
+    let images: HashSet<&str> = walk
+        .iter()
+        .filter(|r| r.backing == Backing::Image)
+        .filter_map(|r| r.name.as_deref())
+        .collect();
     let mut by_tag: HashMap<u32, [f64; 3]> = HashMap::new();
     for r in walk.iter().filter(|r| r.backing == Backing::Anonymous) {
         let t = by_tag.entry(r.tag).or_default();
@@ -349,8 +427,10 @@ fn address_json(walk: &[Region], fold: &Fold, page: u64, threads: usize, stack_r
         ),
     ];
     if regions {
-        let mut untagged: Vec<&Region> =
-            walk.iter().filter(|r| r.backing == Backing::Anonymous && r.tag == 0 && r.charged_pages() > 0).collect();
+        let mut untagged: Vec<&Region> = walk
+            .iter()
+            .filter(|r| r.backing == Backing::Anonymous && r.tag == 0 && r.charged_pages() > 0)
+            .collect();
         untagged.sort_by_key(|r| std::cmp::Reverse(r.charged_pages()));
         o.push((
             "largestUnattributed",
@@ -373,9 +453,19 @@ fn address_json(walk: &[Region], fold: &Fold, page: u64, threads: usize, stack_r
     Json::obj(o)
 }
 
-pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, cx: &mut App) -> Json {
+pub(crate) fn report(
+    gc: bool,
+    code: bool,
+    regions: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Json {
     let gc = gc || code;
-    let before = if gc { Some((vm_info(), jsc_stats())) } else { None };
+    let before = if gc {
+        Some((vm_info(), jsc_stats()))
+    } else {
+        None
+    };
     let gc_ms = gc.then(|| collect(code));
     let t = std::time::Instant::now();
     let vm = vm_info();
@@ -394,7 +484,10 @@ pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, c
         }
         fold.add(r, cat, slice, vm.page);
     }
-    let mut stack_rows: Vec<(String, f64, f64)> = stack_rows.into_iter().map(|(k, (f, v))| (k, f, v)).collect();
+    let mut stack_rows: Vec<(String, f64, f64)> = stack_rows
+        .into_iter()
+        .map(|(k, (f, v))| (k, f, v))
+        .collect();
     stack_rows.sort_by(|a, b| b.1.total_cmp(&a.1));
     let zones = zones();
     let mi = mimalloc();
@@ -417,7 +510,9 @@ pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, c
         mi_committed: mi.committed,
         jsc: [jsc.size, jsc.capacity, jsc.extra],
         rust_live,
-        rust_items: rust_live.map(|live| rust_items(live, tree_bytes, &images, &side)).unwrap_or_default(),
+        rust_items: rust_live
+            .map(|live| rust_items(live, tree_bytes, &images, &side))
+            .unwrap_or_default(),
         gpu_items: gpu_items(&renderer),
         gpu_named,
         with_resident: regions,
@@ -426,7 +521,10 @@ pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, c
     let mut o = vec![
         ("breakdown", breakdown),
         ("process", vm.json),
-        ("addressSpace", address_json(&walk, &fold, vm.page, threads.count, &stack_rows, regions)),
+        (
+            "addressSpace",
+            address_json(&walk, &fold, vm.page, threads.count, &stack_rows, regions),
+        ),
         ("heaps", zones.json),
         ("rustHeap", rust_json(rust)),
         ("mimalloc", mi.json),
@@ -473,7 +571,10 @@ pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, c
                     Json::obj(vec![("process", before_vm.json), ("jsc", before_jsc.json)]),
                 ),
                 // Footprint, under the name the inspector reads.
-                ("freedPrivateBytes", bytes(before_vm.footprint - vm.footprint)),
+                (
+                    "freedPrivateBytes",
+                    bytes(before_vm.footprint - vm.footprint),
+                ),
                 ("freedJscHeapBytes", bytes(before_jsc.size - jsc.size)),
             ]),
         ));

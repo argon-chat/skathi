@@ -54,8 +54,16 @@ host_fn!(fn sk_layout_watch(_g, args) {
 });
 
 pub(crate) fn install(rt: &JsRuntime) {
-    rt.register("__sk_set_layout_hook", 1, sk_set_layout_hook as *const std::ffi::c_void);
-    rt.register("__sk_layout_watch", 1, sk_layout_watch as *const std::ffi::c_void);
+    rt.register(
+        "__sk_set_layout_hook",
+        1,
+        sk_set_layout_hook as *const std::ffi::c_void,
+    );
+    rt.register(
+        "__sk_layout_watch",
+        1,
+        sk_layout_watch as *const std::ffi::c_void,
+    );
 }
 
 pub fn update_layout_observers(window: &mut Window, cx: &mut App) {
@@ -68,7 +76,8 @@ pub fn update_layout_observers(window: &mut Window, cx: &mut App) {
 }
 
 fn step(f: u64, window: &mut Window, cx: &mut App) {
-    let _profile_window = sk_runtime::redjs::profiling::WindowScope::enter(crate::windows::key(window));
+    let _profile_window =
+        sk_runtime::redjs::profiling::WindowScope::enter(crate::windows::key(window));
     let _profile = sk_runtime::redjs::profiling::span("layout", "Resize / intersection observers");
     if window.vn_is_dirty() {
         window.draw(cx).clear(cx);
@@ -103,15 +112,29 @@ fn step(f: u64, window: &mut Window, cx: &mut App) {
         PENDING.with(|c| c.set(true));
     }
     SEEN.with(|c| c.set(render::layout_count()));
-    perf::note_observers(rounds, relayouts, relayout_ms, span.ms() - relayout_ms, state & 1 != 0);
+    perf::note_observers(
+        rounds,
+        relayouts,
+        relayout_ms,
+        span.ms() - relayout_ms,
+        state & 1 != 0,
+    );
 }
 
 fn call(f: u64, which: f64, window: &mut Window, cx: &mut App) -> u32 {
     let mut out = 0u32;
     render::js_wave_app(window, cx, || {
         JsRuntime::with(|rt| {
-            match rt.ctx().call(Value(f), Value::undefined(), &[Value::number(which)]) {
-                Ok(v) => out = v.as_number().filter(|n| n.is_finite() && *n > 0.0).map_or(0, |n| n as u32),
+            match rt
+                .ctx()
+                .call(Value(f), Value::undefined(), &[Value::number(which)])
+            {
+                Ok(v) => {
+                    out = v
+                        .as_number()
+                        .filter(|n| n.is_finite() && *n > 0.0)
+                        .map_or(0, |n| n as u32)
+                }
                 Err(sk_runtime::redjs::api::Error::Exception(e)) => {
                     let err = rt.describe(e);
                     log::record("js", format!("[layout step] {}\n{}", err.header, err.stack));

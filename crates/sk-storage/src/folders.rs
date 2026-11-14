@@ -56,7 +56,7 @@ fn base_of(kind: &str) -> Result<PathBuf, String> {
     use windows::Win32::Storage::FileSystem::GetTempPath2W;
     use windows::Win32::UI::Shell::{
         FOLDERID_Documents, FOLDERID_LocalAppData, FOLDERID_Profile, FOLDERID_RoamingAppData,
-        KF_FLAG_DEFAULT, SHGetKnownFolderPath,
+        SHGetKnownFolderPath, KF_FLAG_DEFAULT,
     };
 
     let id = match kind {
@@ -80,9 +80,7 @@ fn base_of(kind: &str) -> Result<PathBuf, String> {
     let wide = unsafe { SHGetKnownFolderPath(&id, KF_FLAG_DEFAULT, None) }
         .map_err(|e| format!("SHGetKnownFolderPath failed for {kind}: {e}"))?;
     let path = unsafe { wide.to_string() };
-    unsafe {
-        windows::Win32::System::Com::CoTaskMemFree(Some(wide.0 as *const core::ffi::c_void))
-    };
+    unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(wide.0 as *const core::ffi::c_void)) };
     path.map(PathBuf::from)
         .map_err(|e| format!("SHGetKnownFolderPath returned an unreadable path for {kind}: {e}"))
 }
@@ -127,11 +125,17 @@ mod tests {
 
     #[test]
     fn the_kind_is_case_insensitive_but_a_typo_still_fails() {
-        assert_eq!(user_folder("appdata", "").unwrap(), user_folder("APPDATA", "").unwrap());
+        assert_eq!(
+            user_folder("appdata", "").unwrap(),
+            user_folder("APPDATA", "").unwrap()
+        );
         for bad in ["APP_DATA", "appdata2", "", "ROAMING", "LOCAL"] {
             let e = user_folder(bad, "").unwrap_err();
             assert!(e.contains("not a user folder kind"), "{bad:?}: {e}");
-            assert!(e.contains("LOCALAPPDATA"), "the error must list the kinds: {e}");
+            assert!(
+                e.contains("LOCALAPPDATA"),
+                "the error must list the kinds: {e}"
+            );
         }
     }
 
@@ -149,12 +153,18 @@ mod tests {
     #[test]
     fn a_subfolder_is_joined_and_separators_are_normalised() {
         let base = user_folder("LOCALAPPDATA", "").unwrap();
-        assert_eq!(user_folder("LOCALAPPDATA", "myApp").unwrap(), base.join("myApp"));
+        assert_eq!(
+            user_folder("LOCALAPPDATA", "myApp").unwrap(),
+            base.join("myApp")
+        );
         assert_eq!(
             user_folder("LOCALAPPDATA", "a/b").unwrap(),
             user_folder("LOCALAPPDATA", "a\\b").unwrap()
         );
-        assert_eq!(user_folder("LOCALAPPDATA", "./a//b/").unwrap(), base.join("a").join("b"));
+        assert_eq!(
+            user_folder("LOCALAPPDATA", "./a//b/").unwrap(),
+            base.join("a").join("b")
+        );
     }
 
     #[test]

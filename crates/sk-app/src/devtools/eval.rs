@@ -1,10 +1,10 @@
 //! Privileged devtools source evaluation, through the embedding API.
 //! The JS formatter receives values; it never calls eval or Function.
-use std::{cell::Cell, ffi::c_void};
 use sk_runtime::redjs::{
     api::{Context, Error, Value},
     ffi,
 };
+use std::{cell::Cell, ffi::c_void};
 
 const FORMATTER: &str = r#"
 (function (value, thrown) {

@@ -12,9 +12,9 @@ use std::ffi::c_void;
 use gpui::{App, Window};
 
 use super::mem_common::{
-    bytes, category, collect, file_name, gpu_items, images, info, item, jsc_stats, mb, mimalloc, ms, renderer,
-    rust_items as rust_items_of, rust_json, side, side_json, stickers, stylesheet_compiles, tree, with_resident, Images,
-    Jsc, Mimalloc, Renderer,
+    bytes, category, collect, file_name, gpu_items, images, info, item, jsc_stats, mb, mimalloc,
+    ms, renderer, rust_items as rust_items_of, rust_json, side, side_json, stickers,
+    stylesheet_compiles, tree, with_resident, Images, Jsc, Mimalloc, Renderer,
 };
 use crate::json::Json;
 
@@ -168,7 +168,10 @@ struct Counters {
 }
 
 fn process() -> Counters {
-    let mut c = ProcessMemoryCountersEx2 { cb: std::mem::size_of::<ProcessMemoryCountersEx2>() as u32, ..Default::default() };
+    let mut c = ProcessMemoryCountersEx2 {
+        cb: std::mem::size_of::<ProcessMemoryCountersEx2>() as u32,
+        ..Default::default()
+    };
     let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) } != 0;
     if !ok {
         return Counters {
@@ -240,7 +243,9 @@ fn resident(w: &Walk) -> Option<ResidentBytes> {
     let process = unsafe { GetCurrentProcess() };
     let mut buf: Vec<usize> = vec![0; 1 << 18];
     for _ in 0..4 {
-        let ok = unsafe { K32QueryWorkingSet(process, buf.as_mut_ptr().cast(), (buf.len() * 8) as u32) } != 0;
+        let ok =
+            unsafe { K32QueryWorkingSet(process, buf.as_mut_ptr().cast(), (buf.len() * 8) as u32) }
+                != 0;
         let n = buf[0];
         if ok && n < buf.len() {
             let mut out: ResidentBytes = [[0.0; 2]; 6];
@@ -248,7 +253,11 @@ fn resident(w: &Walk) -> Option<ResidentBytes> {
                 let page = e & !0xfff;
                 let shared = (e >> 8) & 1;
                 let i = w.ranges.partition_point(|r| r.0 <= page);
-                let class = if i > 0 && page < w.ranges[i - 1].1 { w.ranges[i - 1].2 } else { Resident::Unattributed };
+                let class = if i > 0 && page < w.ranges[i - 1].1 {
+                    w.ranges[i - 1].2
+                } else {
+                    Resident::Unattributed
+                };
                 out[class as usize][shared] += 4096.0;
             }
             return Some(out);
@@ -321,7 +330,11 @@ fn thread_group(h: isize) -> String {
             out.push(c);
         }
     }
-    if out.is_empty() { "(unnamed)".into() } else { out }
+    if out.is_empty() {
+        "(unnamed)".into()
+    } else {
+        out
+    }
 }
 
 /// `StackLimit` (third word of the TEB's `NT_TIB`) is read with `ReadProcessMemory` because a
@@ -429,7 +442,8 @@ struct Base {
 }
 
 fn walk(stacks: &HashMap<usize, String>, threads: usize, heap: Option<&HashSet<usize>>) -> Walk {
-    let (mut private, mut mapped, mut image, mut exec, mut reserved) = (0usize, 0usize, 0usize, 0usize, 0usize);
+    let (mut private, mut mapped, mut image, mut exec, mut reserved) =
+        (0usize, 0usize, 0usize, 0usize, 0usize);
     let mut modules: HashMap<usize, usize> = HashMap::new();
     let mut mapped_bases: HashMap<usize, usize> = HashMap::new();
     let mut private_bases: HashMap<usize, Base> = HashMap::new();
@@ -523,8 +537,10 @@ fn walk(stacks: &HashMap<usize, String>, threads: usize, heap: Option<&HashSet<u
     }
     unattributed.sort_by(|a, b| b.1.cmp(&a.1));
     unattributed.truncate(16);
-    let mut stack_groups: Vec<(String, usize, usize, usize)> =
-        groups.into_iter().map(|(name, (n, c, r))| (name.to_string(), n, c, r)).collect();
+    let mut stack_groups: Vec<(String, usize, usize, usize)> = groups
+        .into_iter()
+        .map(|(name, (n, c, r))| (name.to_string(), n, c, r))
+        .collect();
     stack_groups.sort_by(|a, b| b.2.cmp(&a.2));
     let ranges = committed
         .into_iter()
@@ -547,7 +563,9 @@ fn walk(stacks: &HashMap<usize, String>, threads: usize, heap: Option<&HashSet<u
         .into_iter()
         .map(|(base, bytes)| {
             let mut buf = [0u16; 260];
-            let n = unsafe { GetModuleFileNameW(base as *mut c_void, buf.as_mut_ptr(), buf.len() as u32) } as usize;
+            let n = unsafe {
+                GetModuleFileNameW(base as *mut c_void, buf.as_mut_ptr(), buf.len() as u32)
+            } as usize;
             (file_name(&String::from_utf16_lossy(&buf[..n])), bytes)
         })
         .collect();
@@ -565,7 +583,11 @@ fn walk(stacks: &HashMap<usize, String>, threads: usize, heap: Option<&HashSet<u
             )
         } as usize;
         // No name: a pagefile-backed section (shared memory).
-        let name = if n == 0 { String::new() } else { file_name(&String::from_utf16_lossy(&buf[..n])) };
+        let name = if n == 0 {
+            String::new()
+        } else {
+            file_name(&String::from_utf16_lossy(&buf[..n]))
+        };
         *files.entry(name).or_default() += bytes;
     }
     let mut mapped_files: Vec<(String, usize)> = files.into_iter().collect();
@@ -681,7 +703,10 @@ fn heaps() -> Heaps {
     let mut main_json = Json::Null;
     let (mut main_allocated, mut main_committed) = (0.0, 0.0);
     for &h in &handles[..n.min(handles.len())] {
-        let mut s = HeapSummaryInfo { cb: std::mem::size_of::<HeapSummaryInfo>() as u32, ..Default::default() };
+        let mut s = HeapSummaryInfo {
+            cb: std::mem::size_of::<HeapSummaryInfo>() as u32,
+            ..Default::default()
+        };
         if unsafe { HeapSummary(h, 0, &mut s) } == 0 {
             continue;
         }
@@ -746,7 +771,11 @@ fn adapters() -> Vec<Adapter> {
                     if out.iter().any(|(_, l, ..)| *l == luid) {
                         continue;
                     }
-                    let n = desc.Description.iter().position(|&c| c == 0).unwrap_or(desc.Description.len());
+                    let n = desc
+                        .Description
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(desc.Description.len());
                     let name = String::from_utf16_lossy(&desc.Description[..n]);
                     let hw = [desc.VendorId, desc.DeviceId, desc.SubSysId, desc.Revision];
                     let Ok(a3) = adapter.cast::<IDXGIAdapter3>() else {
@@ -769,7 +798,8 @@ struct Gpu {
 /// Per adapter: usage in the local (VRAM) and non-local (shared) segments.
 fn gpu() -> Gpu {
     use windows::Win32::Graphics::Dxgi::{
-        DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO,
+        DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL,
+        DXGI_QUERY_VIDEO_MEMORY_INFO,
     };
     let mut out = Vec::new();
     let (mut dedicated, mut shared_total) = (0.0, 0.0);
@@ -779,8 +809,12 @@ fn gpu() -> Gpu {
     for (name, luid, hw, a3) in adapters() {
         let mut local = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
         let mut shared = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
-        let ok_l = unsafe { a3.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut local) }.is_ok();
-        let ok_s = unsafe { a3.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &mut shared) }.is_ok();
+        let ok_l =
+            unsafe { a3.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut local) }
+                .is_ok();
+        let ok_s =
+            unsafe { a3.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &mut shared) }
+                .is_ok();
         if (!ok_l && !ok_s) || (local.CurrentUsage == 0 && shared.CurrentUsage == 0) {
             continue;
         }
@@ -828,7 +862,12 @@ struct Inputs<'a> {
 fn breakdown(i: &Inputs) -> Json {
     let w = i.walk;
 
-    let mut image_items: Vec<Json> = w.modules.iter().take(10).map(|(n, b)| item(n.clone(), *b as f64)).collect();
+    let mut image_items: Vec<Json> = w
+        .modules
+        .iter()
+        .take(10)
+        .map(|(n, b)| item(n.clone(), *b as f64))
+        .collect();
     if w.modules.len() > 10 {
         let rest: usize = w.modules.iter().skip(10).map(|(_, b)| *b).sum();
         image_items.push(item(
@@ -1040,7 +1079,11 @@ pub(crate) fn report(
     cx: &mut App,
 ) -> Json {
     let gc = gc || code;
-    let before = if gc { Some((process(), jsc_stats())) } else { None };
+    let before = if gc {
+        Some((process(), jsc_stats()))
+    } else {
+        None
+    };
     let gc_ms = gc.then(|| collect(code));
     let t = std::time::Instant::now();
     let counters = process();

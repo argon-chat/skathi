@@ -58,10 +58,19 @@ fn what_a_compiled_sheet_keeps() {
     let after = LIVE.load(Ordering::Relaxed) - base;
 
     println!("sheet: {} ({} bytes of source)", path, css.len());
-    println!("first compile (parse + engine): {first_ms:.0} ms, keeps {}", mb(with_engine));
-    println!("  what outlives the engine (UA sheet, memos; the parse cache, while there was one): {}", mb(parse_only));
+    println!(
+        "first compile (parse + engine): {first_ms:.0} ms, keeps {}",
+        mb(with_engine)
+    );
+    println!(
+        "  what outlives the engine (UA sheet, memos; the parse cache, while there was one): {}",
+        mb(parse_only)
+    );
     println!("  the engine: {}", mb(with_engine - parse_only));
-    println!("recompile of the same text: {second_ms:.0} ms, engine {}", mb(engine));
+    println!(
+        "recompile of the same text: {second_ms:.0} ms, engine {}",
+        mb(engine)
+    );
     println!("after both engines are dropped: {}", mb(after));
 }
 
@@ -85,11 +94,18 @@ fn where_the_engine_goes() {
     let mut accounted = 0;
     for (name, inline, value) in parts {
         // How many of the refinements are the same value: what interning them would leave.
-        type Pair = (Option<Rc<gpui::StyleRefinement>>, Option<Rc<gpui::StyleRefinement>>);
+        type Pair = (
+            Option<Rc<gpui::StyleRefinement>>,
+            Option<Rc<gpui::StyleRefinement>>,
+        );
         if let Some(pairs) = value.downcast_ref::<Vec<Pair>>() {
-            let all: Vec<&Rc<gpui::StyleRefinement>> =
-                pairs.iter().flat_map(|(a, b)| [a.as_ref(), b.as_ref()]).flatten().collect();
-            let allocations: HashSet<*const gpui::StyleRefinement> = all.iter().map(|r| Rc::as_ptr(r)).collect();
+            let all: Vec<&Rc<gpui::StyleRefinement>> = pairs
+                .iter()
+                .flat_map(|(a, b)| [a.as_ref(), b.as_ref()])
+                .flatten()
+                .collect();
+            let allocations: HashSet<*const gpui::StyleRefinement> =
+                all.iter().map(|r| Rc::as_ptr(r)).collect();
             let values: HashSet<String> = all.iter().map(|r| format!("{:?}", ***r)).collect();
             println!(
                 "  ({} refinements of {} bytes each: {} allocations, {} distinct values)",
@@ -108,7 +124,15 @@ fn where_the_engine_goes() {
             println!("{name:<70} {:>9} {:>9}", mb(inline), "");
             accounted += inline;
         } else {
-            println!("{name:<70} {:>9} {:>9}", if inline > 0 { mb(inline) } else { String::new() }, mb(freed - inline));
+            println!(
+                "{name:<70} {:>9} {:>9}",
+                if inline > 0 {
+                    mb(inline)
+                } else {
+                    String::new()
+                },
+                mb(freed - inline)
+            );
             accounted += freed - inline;
         }
     }

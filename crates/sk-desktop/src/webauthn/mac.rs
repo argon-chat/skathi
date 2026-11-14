@@ -16,18 +16,27 @@ use base64::Engine;
 use dispatch2::{DispatchQueue, DispatchTime};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
-use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
+use objc2::{
+    define_class, msg_send, sel, AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly,
+    Message,
+};
 use objc2_app_kit::{NSApplication, NSWindow};
 use objc2_authentication_services::{
     ASAuthorization, ASAuthorizationController, ASAuthorizationControllerDelegate,
-    ASAuthorizationControllerPresentationContextProviding, ASAuthorizationCredential, ASAuthorizationError,
-    ASAuthorizationPlatformPublicKeyCredentialAssertion, ASAuthorizationPlatformPublicKeyCredentialDescriptor,
-    ASAuthorizationPlatformPublicKeyCredentialProvider, ASAuthorizationPlatformPublicKeyCredentialRegistration,
-    ASAuthorizationPublicKeyCredentialAssertion, ASAuthorizationPublicKeyCredentialAssertionRequest,
+    ASAuthorizationControllerPresentationContextProviding, ASAuthorizationCredential,
+    ASAuthorizationError, ASAuthorizationPlatformPublicKeyCredentialAssertion,
+    ASAuthorizationPlatformPublicKeyCredentialDescriptor,
+    ASAuthorizationPlatformPublicKeyCredentialProvider,
+    ASAuthorizationPlatformPublicKeyCredentialRegistration,
+    ASAuthorizationPublicKeyCredentialAssertion,
+    ASAuthorizationPublicKeyCredentialAssertionRequest,
     ASAuthorizationPublicKeyCredentialAttachment, ASAuthorizationPublicKeyCredentialParameters,
-    ASAuthorizationPublicKeyCredentialRegistration, ASAuthorizationPublicKeyCredentialRegistrationRequest, ASAuthorizationRequest,
-    ASAuthorizationSecurityKeyPublicKeyCredentialAssertion, ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor,
-    ASAuthorizationSecurityKeyPublicKeyCredentialProvider, ASAuthorizationSecurityKeyPublicKeyCredentialRegistration,
+    ASAuthorizationPublicKeyCredentialRegistration,
+    ASAuthorizationPublicKeyCredentialRegistrationRequest, ASAuthorizationRequest,
+    ASAuthorizationSecurityKeyPublicKeyCredentialAssertion,
+    ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor,
+    ASAuthorizationSecurityKeyPublicKeyCredentialProvider,
+    ASAuthorizationSecurityKeyPublicKeyCredentialRegistration,
 };
 use objc2_foundation::{NSArray, NSData, NSError, NSObjectProtocol, NSString};
 use serde_json::{json, Value};
@@ -38,7 +47,11 @@ use crate::Fail;
 #[link(name = "Security", kind = "framework")]
 unsafe extern "C" {
     fn SecTaskCreateFromSelf(allocator: *const c_void) -> *mut c_void;
-    fn SecTaskCopyValueForEntitlement(task: *mut c_void, entitlement: *const c_void, error: *mut *mut c_void) -> *mut c_void;
+    fn SecTaskCopyValueForEntitlement(
+        task: *mut c_void,
+        entitlement: *const c_void,
+        error: *mut *mut c_void,
+    ) -> *mut c_void;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -56,7 +69,11 @@ fn associated_domains() -> Vec<String> {
         if task.is_null() {
             return Vec::new();
         }
-        let v = SecTaskCopyValueForEntitlement(task, Retained::as_ptr(&key).cast(), std::ptr::null_mut());
+        let v = SecTaskCopyValueForEntitlement(
+            task,
+            Retained::as_ptr(&key).cast(),
+            std::ptr::null_mut(),
+        );
         CFRelease(task);
         Retained::<AnyObject>::from_raw(v.cast())
     };
@@ -65,7 +82,10 @@ fn associated_domains() -> Vec<String> {
     };
     list.iter()
         .filter_map(|v| v.downcast_ref::<NSString>().map(|s| s.to_string()))
-        .filter_map(|s| s.strip_prefix("webcredentials:").map(|d| d.split('?').next().unwrap_or_default().to_ascii_lowercase()))
+        .filter_map(|s| {
+            s.strip_prefix("webcredentials:")
+                .map(|d| d.split('?').next().unwrap_or_default().to_ascii_lowercase())
+        })
         .collect()
 }
 
@@ -109,10 +129,19 @@ define_class!(
 
     unsafe impl ASAuthorizationControllerDelegate for Delegate {
         #[unsafe(method(authorizationController:didCompleteWithAuthorization:))]
-        fn did_complete(&self, _controller: &ASAuthorizationController, authorization: &ASAuthorization) {
+        fn did_complete(
+            &self,
+            _controller: &ASAuthorizationController,
+            authorization: &ASAuthorization,
+        ) {
             // SAFETY: the credential of a finished authorization.
             let credential = unsafe { authorization.credential() };
-            self.finish(read(&credential).ok_or_else(|| Fail::new("NotAllowedError", "The system returned no public key credential.")));
+            self.finish(read(&credential).ok_or_else(|| {
+                Fail::new(
+                    "NotAllowedError",
+                    "The system returned no public key credential.",
+                )
+            }));
         }
 
         #[unsafe(method(authorizationController:didCompleteWithError:))]
@@ -145,7 +174,9 @@ impl Delegate {
 
     fn finish(&self, result: Result<Value, Fail>) {
         let token = self.ivars().token;
-        let Some(live) = LIVE.with(|l| l.borrow_mut().remove(&token)) else { return };
+        let Some(live) = LIVE.with(|l| l.borrow_mut().remove(&token)) else {
+            return;
+        };
         crate::settle(token, result.map(|v| v.to_string()));
         // The controller is mid-callback: the run loop's autorelease pool lets go of both afterwards.
         let _ = Retained::autorelease_ptr(live.controller);
@@ -161,9 +192,15 @@ fn failure(e: &NSError, rp_id: &str) -> Fail {
             "The user attempted to register an authenticator that contains one of the credentials already registered with the relying party.".to_string(),
         )
     } else if code == ASAuthorizationError::Failed.0 || code == ASAuthorizationError::NotHandled.0 {
-        ("NotAllowedError", format!("{} {}", e.localizedDescription(), association_needed(rp_id)))
+        (
+            "NotAllowedError",
+            format!("{} {}", e.localizedDescription(), association_needed(rp_id)),
+        )
     } else {
-        ("NotAllowedError", "The operation either timed out or was not allowed.".to_string())
+        (
+            "NotAllowedError",
+            "The operation either timed out or was not allowed.".to_string(),
+        )
     };
     Fail::new(name, message).os(code as i32)
 }
@@ -172,9 +209,20 @@ fn b64(d: &NSData) -> String {
     B64.encode(d.to_vec())
 }
 
-fn registration<T: ASAuthorizationPublicKeyCredentialRegistration + Message>(r: &T, attachment: &str, transports: &[&str], resident: Option<bool>) -> Value {
+fn registration<T: ASAuthorizationPublicKeyCredentialRegistration + Message>(
+    r: &T,
+    attachment: &str,
+    transports: &[&str],
+    resident: Option<bool>,
+) -> Value {
     // SAFETY: getters of a finished registration.
-    let (id, client_data, attestation) = unsafe { (r.credentialID(), r.rawClientDataJSON(), r.rawAttestationObject()) };
+    let (id, client_data, attestation) = unsafe {
+        (
+            r.credentialID(),
+            r.rawClientDataJSON(),
+            r.rawAttestationObject(),
+        )
+    };
     let attestation = attestation.map(|d| d.to_vec()).unwrap_or_default();
     let auth = auth_data_of(&attestation).unwrap_or_default();
     let key = cose_public_key(auth);
@@ -191,10 +239,20 @@ fn registration<T: ASAuthorizationPublicKeyCredentialRegistration + Message>(r: 
     })
 }
 
-fn assertion<T: ASAuthorizationPublicKeyCredentialAssertion + Message>(a: &T, attachment: &str) -> Value {
+fn assertion<T: ASAuthorizationPublicKeyCredentialAssertion + Message>(
+    a: &T,
+    attachment: &str,
+) -> Value {
     // SAFETY: getters of a finished assertion.
-    let (id, client_data, auth, signature, user) =
-        unsafe { (a.credentialID(), a.rawClientDataJSON(), a.rawAuthenticatorData(), a.signature(), a.userID()) };
+    let (id, client_data, auth, signature, user) = unsafe {
+        (
+            a.credentialID(),
+            a.rawClientDataJSON(),
+            a.rawAuthenticatorData(),
+            a.signature(),
+            a.userID(),
+        )
+    };
     json!({
         "id": b64(&id),
         "clientDataJSON": b64(&client_data),
@@ -206,8 +264,13 @@ fn assertion<T: ASAuthorizationPublicKeyCredentialAssertion + Message>(a: &T, at
 }
 
 /// A platform credential's attachment: `cross-platform` when a phone answered over hybrid (macOS 13.5+).
-fn platform_attachment(obj: &NSObject, read: impl FnOnce() -> ASAuthorizationPublicKeyCredentialAttachment) -> &'static str {
-    if obj.respondsToSelector(sel!(attachment)) && read() == ASAuthorizationPublicKeyCredentialAttachment::CrossPlatform {
+fn platform_attachment(
+    obj: &NSObject,
+    read: impl FnOnce() -> ASAuthorizationPublicKeyCredentialAttachment,
+) -> &'static str {
+    if obj.respondsToSelector(sel!(attachment))
+        && read() == ASAuthorizationPublicKeyCredentialAttachment::CrossPlatform
+    {
         "cross-platform"
     } else {
         "platform"
@@ -219,9 +282,15 @@ fn read(credential: &ProtocolObject<dyn ASAuthorizationCredential>) -> Option<Va
     if let Some(r) = any.downcast_ref::<ASAuthorizationPlatformPublicKeyCredentialRegistration>() {
         // SAFETY: only called when the object answers `attachment`.
         let attachment = platform_attachment(r, || unsafe { r.attachment() });
-        return Some(registration(r, attachment, &["hybrid", "internal"], Some(true)));
+        return Some(registration(
+            r,
+            attachment,
+            &["hybrid", "internal"],
+            Some(true),
+        ));
     }
-    if let Some(r) = any.downcast_ref::<ASAuthorizationSecurityKeyPublicKeyCredentialRegistration>() {
+    if let Some(r) = any.downcast_ref::<ASAuthorizationSecurityKeyPublicKeyCredentialRegistration>()
+    {
         return Some(registration(r, "cross-platform", &["usb"], None));
     }
     if let Some(a) = any.downcast_ref::<ASAuthorizationPlatformPublicKeyCredentialAssertion>() {
@@ -236,7 +305,9 @@ fn read(credential: &ProtocolObject<dyn ASAuthorizationCredential>) -> Option<Va
 }
 
 fn bytes(v: &Value) -> Vec<u8> {
-    v.as_str().and_then(|s| B64.decode(s).ok()).unwrap_or_default()
+    v.as_str()
+        .and_then(|s| B64.decode(s).ok())
+        .unwrap_or_default()
 }
 
 fn user_verification(v: &Value) -> Retained<NSString> {
@@ -246,7 +317,9 @@ fn user_verification(v: &Value) -> Retained<NSString> {
     })
 }
 
-fn platform_descriptors(v: &Value) -> Retained<NSArray<ASAuthorizationPlatformPublicKeyCredentialDescriptor>> {
+fn platform_descriptors(
+    v: &Value,
+) -> Retained<NSArray<ASAuthorizationPlatformPublicKeyCredentialDescriptor>> {
     let list: Vec<_> = v
         .as_array()
         .into_iter()
@@ -254,13 +327,20 @@ fn platform_descriptors(v: &Value) -> Retained<NSArray<ASAuthorizationPlatformPu
         .map(|d| {
             let id = NSData::with_bytes(&bytes(&d["id"]));
             // SAFETY: a fresh descriptor from a credential ID.
-            unsafe { ASAuthorizationPlatformPublicKeyCredentialDescriptor::initWithCredentialID(ASAuthorizationPlatformPublicKeyCredentialDescriptor::alloc(), &id) }
+            unsafe {
+                ASAuthorizationPlatformPublicKeyCredentialDescriptor::initWithCredentialID(
+                    ASAuthorizationPlatformPublicKeyCredentialDescriptor::alloc(),
+                    &id,
+                )
+            }
         })
         .collect();
     NSArray::from_retained_slice(&list)
 }
 
-fn security_key_descriptors(v: &Value) -> Retained<NSArray<ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor>> {
+fn security_key_descriptors(
+    v: &Value,
+) -> Retained<NSArray<ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor>> {
     let list: Vec<_> = v
         .as_array()
         .into_iter()
@@ -287,7 +367,10 @@ fn registration_requests(req: &Value) -> Vec<Retained<ASAuthorizationRequest>> {
     let rp = NSString::from_str(s("rpId"));
     let challenge = NSData::with_bytes(&bytes(&req["challenge"]));
     let user_id = NSData::with_bytes(&bytes(&req["userId"]));
-    let (name, display) = (NSString::from_str(s("userName")), NSString::from_str(s("userDisplayName")));
+    let (name, display) = (
+        NSString::from_str(s("userName")),
+        NSString::from_str(s("userDisplayName")),
+    );
     let uv = user_verification(&req["userVerification"]);
     let attestation = NSString::from_str(match s("attestation") {
         a @ ("direct" | "indirect" | "enterprise") => a,
@@ -297,11 +380,14 @@ fn registration_requests(req: &Value) -> Vec<Retained<ASAuthorizationRequest>> {
     // SAFETY: requests built from fresh providers and owned values, before any is performed.
     unsafe {
         if s("attachment") != "cross-platform" {
-            let provider = ASAuthorizationPlatformPublicKeyCredentialProvider::initWithRelyingPartyIdentifier(
-                ASAuthorizationPlatformPublicKeyCredentialProvider::alloc(),
-                &rp,
+            let provider =
+                ASAuthorizationPlatformPublicKeyCredentialProvider::initWithRelyingPartyIdentifier(
+                    ASAuthorizationPlatformPublicKeyCredentialProvider::alloc(),
+                    &rp,
+                );
+            let r = provider.createCredentialRegistrationRequestWithChallenge_name_userID(
+                &challenge, &name, &user_id,
             );
-            let r = provider.createCredentialRegistrationRequestWithChallenge_name_userID(&challenge, &name, &user_id);
             r.setDisplayName(Some(&*display));
             r.setUserVerificationPreference(&uv);
             r.setAttestationPreference(&attestation);
@@ -316,13 +402,21 @@ fn registration_requests(req: &Value) -> Vec<Retained<ASAuthorizationRequest>> {
                 ASAuthorizationSecurityKeyPublicKeyCredentialProvider::alloc(),
                 &rp,
             );
-            let r = provider.createCredentialRegistrationRequestWithChallenge_displayName_name_userID(&challenge, &display, &name, &user_id);
+            let r = provider
+                .createCredentialRegistrationRequestWithChallenge_displayName_name_userID(
+                    &challenge, &display, &name, &user_id,
+                );
             let params: Vec<_> = req["algs"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter_map(|a| a.as_i64())
-                .map(|alg| ASAuthorizationPublicKeyCredentialParameters::initWithAlgorithm(ASAuthorizationPublicKeyCredentialParameters::alloc(), alg as isize))
+                .map(|alg| {
+                    ASAuthorizationPublicKeyCredentialParameters::initWithAlgorithm(
+                        ASAuthorizationPublicKeyCredentialParameters::alloc(),
+                        alg as isize,
+                    )
+                })
                 .collect();
             r.setCredentialParameters(&NSArray::from_retained_slice(&params));
             r.setExcludedCredentials(&security_key_descriptors(&req["exclude"]));
@@ -344,18 +438,20 @@ fn assertion_requests(req: &Value) -> Vec<Retained<ASAuthorizationRequest>> {
     let uv = user_verification(&req["userVerification"]);
     // SAFETY: as in `registration_requests`.
     unsafe {
-        let platform = ASAuthorizationPlatformPublicKeyCredentialProvider::initWithRelyingPartyIdentifier(
-            ASAuthorizationPlatformPublicKeyCredentialProvider::alloc(),
-            &rp,
-        )
-        .createCredentialAssertionRequestWithChallenge(&challenge);
+        let platform =
+            ASAuthorizationPlatformPublicKeyCredentialProvider::initWithRelyingPartyIdentifier(
+                ASAuthorizationPlatformPublicKeyCredentialProvider::alloc(),
+                &rp,
+            )
+            .createCredentialAssertionRequestWithChallenge(&challenge);
         platform.setAllowedCredentials(&platform_descriptors(&req["allow"]));
         platform.setUserVerificationPreference(&uv);
-        let key = ASAuthorizationSecurityKeyPublicKeyCredentialProvider::initWithRelyingPartyIdentifier(
-            ASAuthorizationSecurityKeyPublicKeyCredentialProvider::alloc(),
-            &rp,
-        )
-        .createCredentialAssertionRequestWithChallenge(&challenge);
+        let key =
+            ASAuthorizationSecurityKeyPublicKeyCredentialProvider::initWithRelyingPartyIdentifier(
+                ASAuthorizationSecurityKeyPublicKeyCredentialProvider::alloc(),
+                &rp,
+            )
+            .createCredentialAssertionRequestWithChallenge(&challenge);
         key.setAllowedCredentials(&security_key_descriptors(&req["allow"]));
         key.setUserVerificationPreference(&uv);
         vec![platform.into_super(), key.into_super()]
@@ -364,27 +460,55 @@ fn assertion_requests(req: &Value) -> Vec<Retained<ASAuthorizationRequest>> {
 
 fn start(owner: isize, req: Value, create: bool) -> Result<u32, Fail> {
     let Some(mtm) = MainThreadMarker::new() else {
-        return Err(Fail::new("NotAllowedError", "Passkey requests can only start on the main thread."));
+        return Err(Fail::new(
+            "NotAllowedError",
+            "Passkey requests can only start on the main thread.",
+        ));
     };
     let rp_id = req["rpId"].as_str().unwrap_or("").to_string();
     if associated_domains().is_empty() {
         return Err(Fail::new("NotAllowedError", association_needed(&rp_id)));
     }
-    let requests = if create { registration_requests(&req) } else { assertion_requests(&req) };
+    let requests = if create {
+        registration_requests(&req)
+    } else {
+        assertion_requests(&req)
+    };
     let token = crate::next_token();
-    let delegate = Delegate::new(mtm, Ivars { token, owner, rp_id });
+    let delegate = Delegate::new(
+        mtm,
+        Ivars {
+            token,
+            owner,
+            rp_id,
+        },
+    );
     // SAFETY: the controller and its delegate stay in `LIVE` until the delegate is told the outcome.
     let controller = unsafe {
-        let c = ASAuthorizationController::initWithAuthorizationRequests(ASAuthorizationController::alloc(), &NSArray::from_retained_slice(&requests));
+        let c = ASAuthorizationController::initWithAuthorizationRequests(
+            ASAuthorizationController::alloc(),
+            &NSArray::from_retained_slice(&requests),
+        );
         c.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         c.setPresentationContextProvider(Some(ProtocolObject::from_ref(&*delegate)));
         c
     };
-    LIVE.with(|l| l.borrow_mut().insert(token, Live { controller: controller.clone(), delegate }));
+    LIVE.with(|l| {
+        l.borrow_mut().insert(
+            token,
+            Live {
+                controller: controller.clone(),
+                delegate,
+            },
+        )
+    });
     // SAFETY: on the main thread, with the delegate set.
     unsafe { controller.performRequests() };
     let timeout = Duration::from_millis(req["timeout"].as_u64().unwrap_or(300_000));
-    let _ = DispatchQueue::main().after(DispatchTime::try_from(timeout).unwrap_or(DispatchTime::FOREVER), move || cancel(token));
+    let _ = DispatchQueue::main().after(
+        DispatchTime::try_from(timeout).unwrap_or(DispatchTime::FOREVER),
+        move || cancel(token),
+    );
     Ok(token)
 }
 

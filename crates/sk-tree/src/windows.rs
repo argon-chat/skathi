@@ -236,7 +236,6 @@ pub fn any_secondary() -> bool {
     ROOTS.with(|m| !m.borrow().is_empty())
 }
 
-
 pub fn set_env(k: WinKey, env: sk_css::Env) -> bool {
     of(k, |w| {
         if w.env == Some(env) {
@@ -268,7 +267,6 @@ pub fn env_at_root(node: u32, fallback: &sk_css::Env) -> Option<sk_css::Env> {
     let k = ROOTS.with(|m| m.borrow().get(&node).copied())?;
     Some(env_of(k).unwrap_or(*fallback))
 }
-
 
 pub fn focused_node(k: WinKey) -> u32 {
     peek(k, |w| w.focused_node).unwrap_or(0)

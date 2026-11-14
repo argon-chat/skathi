@@ -60,13 +60,18 @@ pub fn query(selector: &str) -> Result<(Vec<u32>, Vec<String>), String> {
     tree::read_tree(|t| {
         let ids = elements_in_document_order(t);
         let live = crate::live_state::LiveStates::take(t);
-        let candidates: Vec<crate::live_state::LiveRef<'_>> =
-            ids.iter().map(|&id| crate::live_state::LiveRef::new(t, id, &live)).collect();
+        let candidates: Vec<crate::live_state::LiveRef<'_>> = ids
+            .iter()
+            .map(|&id| crate::live_state::LiveRef::new(t, id, &live))
+            .collect();
         let result = sk_css::query_all(selector, &candidates)?;
         for w in &result.warnings {
             crate::log::record("css", format!("[query] {w}"));
         }
-        Ok((result.matched.iter().map(|&i| ids[i]).collect(), result.warnings))
+        Ok((
+            result.matched.iter().map(|&i| ids[i]).collect(),
+            result.warnings,
+        ))
     })
 }
 
@@ -106,7 +111,8 @@ pub fn side_stats() -> Vec<(&'static str, u64)> {
     let (canvases, canvas_bytes) = crate::render::canvas::mem_stats();
     let (svg_docs, svg_rasters, svg_bytes) = crate::svg::mem_stats();
     let (log_entries, log_bytes) = crate::log::mem_stats();
-    let (declared, waiting, waiting_bytes, registered, registered_bytes) = crate::fonts::mem_stats();
+    let (declared, waiting, waiting_bytes, registered, registered_bytes) =
+        crate::fonts::mem_stats();
     let (boundaries, entities, cached_ids) = crate::cache::mem_stats();
     let (focus, inputs, scrolls, bounds) = crate::render::side_state_counts();
     let (stickers, sticker_tiles, sticker_tile_bytes) = crate::render::sticker::mem_stats();
@@ -201,7 +207,13 @@ pub fn input_value(id: u32, cx: &App) -> Option<String> {
 
 /// A text field's IME, as the platform drives the field's input handler: `text` becomes the
 /// composition's pre-edit (`""` cancels it), or with `commit` its committed text.
-pub fn ime(id: u32, text: &str, commit: bool, window: &mut Window, cx: &mut App) -> Result<(), String> {
+pub fn ime(
+    id: u32,
+    text: &str,
+    commit: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<(), String> {
     crate::render::ime(id, text, commit, window, cx)
 }
 
@@ -232,9 +244,10 @@ pub fn computed_styles(id: u32) -> Option<Vec<(&'static str, String)>> {
         }
         // `.group:hover .this` — the ancestor is named, because "which element am I watching" is
         // the half of a group rule that can be wrong.
-        for (name, slot) in
-            [("group-hover", &cs.group_hover), ("group-active", &cs.group_active)]
-        {
+        for (name, slot) in [
+            ("group-hover", &cs.group_hover),
+            ("group-active", &cs.group_active),
+        ] {
             if let Some((anchor, r)) = slot {
                 out.push((
                     name,
@@ -310,7 +323,9 @@ pub fn hit_test_in(root: u32, x: f32, y: f32, window: &Window) -> Vec<u32> {
         if start != 0 && t.node(start).is_some() {
             walk(t, root, start, 0, point, window, &mut best);
         }
-        let Some((_, mut id)) = best else { return Vec::new() };
+        let Some((_, mut id)) = best else {
+            return Vec::new();
+        };
         let mut path = vec![id];
         for _ in 0..1024 {
             let Some(node) = t.node(id) else { break };
@@ -337,7 +352,10 @@ pub fn aim_point(id: u32, window: &Window) -> Option<(f32, f32)> {
             gpui::px(f32::from(centre.x) * scale),
             gpui::px(f32::from(centre.y) * scale),
         ));
-        gpui::Point::new(gpui::px(f32::from(d.x) / scale), gpui::px(f32::from(d.y) / scale))
+        gpui::Point::new(
+            gpui::px(f32::from(d.x) / scale),
+            gpui::px(f32::from(d.y) / scale),
+        )
     };
     hitbox
         .is_hovered_at(point, window)
@@ -370,7 +388,6 @@ fn prune(dump: &str) -> String {
     lines.join("\n")
 }
 
-
 pub fn focus(id: u32, window: &mut Window, cx: &mut App) -> Result<(), String> {
     crate::render::focus_node(id, window, cx)
 }
@@ -393,15 +410,13 @@ pub fn scroll(
     crate::render::scroll_node(id, dx, dy, window, cx)
 }
 
-pub fn click(
-    id: u32,
-    x: f32,
-    y: f32,
-    button: f64,
-    window: &mut Window,
-    cx: &mut App,
-) -> bool {
-    let payload = |b: f64| EventPayload { a: x as f64, b: y as f64, c: b, ..Default::default() };
+pub fn click(id: u32, x: f32, y: f32, button: f64, window: &mut Window, cx: &mut App) -> bool {
+    let payload = |b: f64| EventPayload {
+        a: x as f64,
+        b: y as f64,
+        c: b,
+        ..Default::default()
+    };
     crate::render::synth_event(id, tree::EV_MOUSEDOWN, &payload(button), window, cx);
     crate::render::synth_event(id, tree::EV_MOUSEUP, &payload(button), window, cx);
     // A browser's `click` carries button 0 whatever `MouseEvent.button` the press had (a right
@@ -446,4 +461,6 @@ mod tests {
 }
 
 #[cfg(feature = "webgpu")]
-pub fn gpu_canvas_presentation_stats() -> (u64,u64) { crate::render::canvas::native_stats() }
+pub fn gpu_canvas_presentation_stats() -> (u64, u64) {
+    crate::render::canvas::native_stats()
+}

@@ -15,11 +15,11 @@ use crate::Fail;
 mod app_capture;
 mod app_launch;
 mod app_shell;
-mod fsa;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod badge;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod credentials;
+mod fsa;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod media_session;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -53,11 +53,26 @@ thread_local! {
     static HANDLERS: Cell<usize> = const { Cell::new(0) };
 }
 
-unsafe fn failure(g: *mut c_void, errors: Errors, name: &str, message: &str, code: Option<&str>, os_error: Option<f64>) -> u64 {
+unsafe fn failure(
+    g: *mut c_void,
+    errors: Errors,
+    name: &str,
+    message: &str,
+    code: Option<&str>,
+    os_error: Option<f64>,
+) -> u64 {
     match errors {
         Errors::Dom => error(g, name, message),
         Errors::Desktop => {
-            let ctor = get(g, global(g), if name == "TypeError" { "TypeError" } else { "Error" });
+            let ctor = get(
+                g,
+                global(g),
+                if name == "TypeError" {
+                    "TypeError"
+                } else {
+                    "Error"
+                },
+            );
             let e = call(g, ctor, UNDEF, &[js_string(g, message)]).unwrap_or(UNDEF);
             if name != "TypeError" {
                 define(g, e, "name", js_string(g, name), 2);
@@ -74,7 +89,14 @@ unsafe fn failure(g: *mut c_void, errors: Errors, name: &str, message: &str, cod
 }
 
 pub(crate) unsafe fn fail_value(g: *mut c_void, errors: Errors, f: &Fail) -> u64 {
-    failure(g, errors, f.name, &f.message, f.code, f.os_error.map(f64::from))
+    failure(
+        g,
+        errors,
+        f.name,
+        &f.message,
+        f.code,
+        f.os_error.map(f64::from),
+    )
 }
 
 /// The promise for host work that settles `token`.
@@ -82,13 +104,27 @@ pub(crate) unsafe fn awaiting(g: *mut c_void, started: Result<u32, Fail>, conver
     awaiting_with(g, started, convert, Errors::Dom)
 }
 
-pub(crate) unsafe fn awaiting_with(g: *mut c_void, started: Result<u32, Fail>, convert: Convert, errors: Errors) -> u64 {
+pub(crate) unsafe fn awaiting_with(
+    g: *mut c_void,
+    started: Result<u32, Fail>,
+    convert: Convert,
+    errors: Errors,
+) -> u64 {
     let token = match started {
         Ok(t) => t,
         Err(f) => return rejected_with(g, fail_value(g, errors, &f)),
     };
     let (p, settler) = host::deferred(g);
-    PENDING.with(|m| m.borrow_mut().insert(token, Pending { settler, convert, errors }));
+    PENDING.with(|m| {
+        m.borrow_mut().insert(
+            token,
+            Pending {
+                settler,
+                convert,
+                errors,
+            },
+        )
+    });
     p
 }
 
@@ -104,7 +140,13 @@ pub(crate) unsafe fn abandon(g: *mut c_void, token: u32, reason: u64) {
 }
 
 /// Whether the settle or host event was this module's.
-pub(crate) unsafe fn deliver(g: *mut c_void, token: u32, ok: bool, payload: &str, make: Option<crate::Maker>) -> bool {
+pub(crate) unsafe fn deliver(
+    g: *mut c_void,
+    token: u32,
+    ok: bool,
+    payload: &str,
+    make: Option<crate::Maker>,
+) -> bool {
     let value: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
     if token == 0 {
         return match value["kind"].as_str() {
@@ -128,8 +170,18 @@ pub(crate) unsafe fn deliver(g: *mut c_void, token: u32, ok: bool, payload: &str
         (p.convert)(g, token, &value, made)
     } else {
         let name = value["name"].as_str().unwrap_or("Error");
-        let message = value["message"].as_str().or(value["error"].as_str()).unwrap_or(name);
-        Err(failure(g, p.errors, name, message, value["code"].as_str(), value["osError"].as_f64()))
+        let message = value["message"]
+            .as_str()
+            .or(value["error"].as_str())
+            .unwrap_or(name);
+        Err(failure(
+            g,
+            p.errors,
+            name,
+            message,
+            value["code"].as_str(),
+            value["osError"].as_f64(),
+        ))
     };
     p.settler.settle(g, outcome);
     true
@@ -138,7 +190,11 @@ pub(crate) unsafe fn deliver(g: *mut c_void, token: u32, ok: bool, payload: &str
 /// The `on<event>` handler attributes of objects made here.
 pub(crate) unsafe fn handler_get(g: *mut c_void, this: u64, name: &str) -> u64 {
     let bag = get_a(g, this, HANDLERS.with(|h| h.get()) as *mut c_void);
-    let v = if is_cell(bag) { get(g, bag, name) } else { NULL };
+    let v = if is_cell(bag) {
+        get(g, bag, name)
+    } else {
+        NULL
+    };
     if is_cell(v) {
         v
     } else {
@@ -163,7 +219,11 @@ pub(crate) unsafe fn handler_set(g: *mut c_void, this: u64, name: &str, v: u64) 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 unsafe fn navigator_proto(g: *mut c_void) -> u64 {
     let ctor = get(g, global(g), "Navigator");
-    let proto = if is_cell(ctor) { get(g, ctor, "prototype") } else { UNDEF };
+    let proto = if is_cell(ctor) {
+        get(g, ctor, "prototype")
+    } else {
+        UNDEF
+    };
     if is_cell(proto) {
         proto
     } else {
@@ -199,7 +259,12 @@ pub(crate) unsafe fn define_getter(g: *mut c_void, proto: u64, name: &str, f: Ho
     define(g, desc, "get", make_fn(g, name, 0, f), 0);
     define(g, desc, "enumerable", TRUE, 0);
     define(g, desc, "configurable", TRUE, 0);
-    let _ = call(g, get(g, object, "defineProperty"), object, &[proto, js_string(g, name), desc]);
+    let _ = call(
+        g,
+        get(g, object, "defineProperty"),
+        object,
+        &[proto, js_string(g, name), desc],
+    );
 }
 
 #[cfg(test)]
@@ -212,7 +277,10 @@ pub(crate) mod testing {
         run_with(src, |_| {})
     }
 
-    pub fn run_with(src: &str, setup: impl FnOnce(*mut std::ffi::c_void) + Send + 'static) -> String {
+    pub fn run_with(
+        src: &str,
+        setup: impl FnOnce(*mut std::ffi::c_void) + Send + 'static,
+    ) -> String {
         sk_runtime::testing::on_js_thread({
             let src = src.to_string();
             move || {
@@ -224,13 +292,21 @@ pub(crate) mod testing {
                         rt.ctx().drain_microtasks();
                         drain(rt.raw());
                         rt.ctx().drain_microtasks();
-                        let out = rt.ctx().eval("String(globalThis.out)").and_then(|v: Value| rt.ctx().to_rust_string(v)).unwrap_or_default();
+                        let out = rt
+                            .ctx()
+                            .eval("String(globalThis.out)")
+                            .and_then(|v: Value| rt.ctx().to_rust_string(v))
+                            .unwrap_or_default();
                         if out != "undefined" {
                             return out;
                         }
                         std::thread::sleep(std::time::Duration::from_millis(5));
                     }
-                    let at = rt.ctx().eval("String(globalThis.at)").and_then(|v: Value| rt.ctx().to_rust_string(v)).unwrap_or_default();
+                    let at = rt
+                        .ctx()
+                        .eval("String(globalThis.at)")
+                        .and_then(|v: Value| rt.ctx().to_rust_string(v))
+                        .unwrap_or_default();
                     format!("<timed out at {at}>")
                 })
             }

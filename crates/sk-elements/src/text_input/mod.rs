@@ -19,12 +19,12 @@ mod state;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Context, CursorStyle, Entity, Hsla, InteractiveElement, IntoElement,
-    KeyBinding, KeyDownEvent, KeyUpEvent, MouseButton, ParentElement, Pixels, SharedString,
-    Styled, TextInputConfiguration, Window, actions, div, hsla, px,
+    actions, div, hsla, px, AnyElement, App, Context, CursorStyle, Entity, Hsla,
+    InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, KeyUpEvent, MouseButton,
+    ParentElement, Pixels, SharedString, Styled, TextInputConfiguration, Window,
 };
 
-pub use config::{InputAttributes, MappedConfiguration, configuration};
+pub use config::{configuration, InputAttributes, MappedConfiguration};
 pub use state::TextInputState;
 
 use element::TextElement;
@@ -132,11 +132,17 @@ pub struct InputIntent {
 
 impl InputIntent {
     pub fn bare(input_type: InputType) -> Self {
-        Self { input_type, data: None }
+        Self {
+            input_type,
+            data: None,
+        }
     }
 
     pub fn with(input_type: InputType, data: &str) -> Self {
-        Self { input_type, data: Some(data.to_owned()) }
+        Self {
+            input_type,
+            data: Some(data.to_owned()),
+        }
     }
 }
 
@@ -209,7 +215,10 @@ impl std::fmt::Debug for TextInputHandlers {
 
 impl TextInputHandlers {
     pub fn with_change(on_change: OnChange) -> Self {
-        Self { on_change: Some(on_change), ..Default::default() }
+        Self {
+            on_change: Some(on_change),
+            ..Default::default()
+        }
     }
 }
 
@@ -281,7 +290,11 @@ pub fn text_input(
         this.focus_handle()
     });
 
-    let mut element = div().key_context(if multiline { BOTH_KEY_CONTEXTS } else { KEY_CONTEXT });
+    let mut element = div().key_context(if multiline {
+        BOTH_KEY_CONTEXTS
+    } else {
+        KEY_CONTEXT
+    });
     if !options.inert {
         element = element.track_focus(&focus_handle);
     }
@@ -323,9 +336,27 @@ pub fn text_input(
     element = on_state_action(element, state, TextInputState::delete_to_start);
     element = on_state_action(element, state, TextInputState::delete_to_end);
     let clip = &on_clipboard;
-    element = on_clipboard_action(element, state, clip, ClipboardCommand::Copy, TextInputState::copy);
-    element = on_clipboard_action(element, state, clip, ClipboardCommand::Cut, TextInputState::cut);
-    element = on_clipboard_action(element, state, clip, ClipboardCommand::Paste, TextInputState::paste);
+    element = on_clipboard_action(
+        element,
+        state,
+        clip,
+        ClipboardCommand::Copy,
+        TextInputState::copy,
+    );
+    element = on_clipboard_action(
+        element,
+        state,
+        clip,
+        ClipboardCommand::Cut,
+        TextInputState::cut,
+    );
+    element = on_clipboard_action(
+        element,
+        state,
+        clip,
+        ClipboardCommand::Paste,
+        TextInputState::paste,
+    );
     element = on_state_action(element, state, TextInputState::undo);
     element = on_state_action(element, state, TextInputState::redo);
     element = on_state_action(element, state, TextInputState::clear_selection);
@@ -356,7 +387,9 @@ pub fn text_input(
         });
         let menu_state = state.clone();
         element = element.on_mouse_down(MouseButton::Right, move |event, window, cx| {
-            menu_state.update(cx, |this, cx| this.on_secondary_mouse_down(event, window, cx));
+            menu_state.update(cx, |this, cx| {
+                this.on_secondary_mouse_down(event, window, cx)
+            });
         });
     }
     element
@@ -416,12 +449,20 @@ fn bindings() -> Vec<KeyBinding> {
     // The platform's modifier for "by word", spliced in at compile time: `KeyBinding::new` takes `&'static str`.
     macro_rules! primary {
         ($pre:literal, $key:literal) => {
-            if cfg!(target_os = "macos") { concat!($pre, "cmd-", $key) } else { concat!($pre, "ctrl-", $key) }
+            if cfg!(target_os = "macos") {
+                concat!($pre, "cmd-", $key)
+            } else {
+                concat!($pre, "ctrl-", $key)
+            }
         };
     }
     macro_rules! word {
         ($pre:literal, $key:literal) => {
-            if cfg!(target_os = "macos") { concat!($pre, "alt-", $key) } else { concat!($pre, "ctrl-", $key) }
+            if cfg!(target_os = "macos") {
+                concat!($pre, "alt-", $key)
+            } else {
+                concat!($pre, "ctrl-", $key)
+            }
         };
     }
 
@@ -532,7 +573,12 @@ mod tests {
             assert_eq!(t.composing(), *t == InputType::InsertCompositionText);
         }
         assert_eq!(InputType::DeleteByCut.name(), "deleteByCut");
-        assert_eq!(InputIntent::with(InputType::InsertText, "a").data.as_deref(), Some("a"));
+        assert_eq!(
+            InputIntent::with(InputType::InsertText, "a")
+                .data
+                .as_deref(),
+            Some("a")
+        );
         assert_eq!(InputIntent::bare(InputType::InsertLineBreak).data, None);
     }
 

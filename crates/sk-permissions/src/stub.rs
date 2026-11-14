@@ -34,7 +34,10 @@ impl StubHost {
     pub fn scripted(platform: &'static str, states: &[(Capability, PermissionState)]) -> StubHost {
         let h = StubHost::unsupported(platform);
         *h.states.lock().unwrap() = states.iter().copied().collect();
-        StubHost { subscribes: true, ..h }
+        StubHost {
+            subscribes: true,
+            ..h
+        }
     }
 
     pub fn granting(self, state: PermissionState) -> StubHost {
@@ -56,7 +59,12 @@ impl PermissionHost for StubHost {
     }
 
     fn status(&self, cap: Capability) -> PermissionState {
-        self.states.lock().unwrap().get(&cap).copied().unwrap_or(PermissionState::Unsupported)
+        self.states
+            .lock()
+            .unwrap()
+            .get(&cap)
+            .copied()
+            .unwrap_or(PermissionState::Unsupported)
     }
 
     fn request(&self, cap: Capability) -> RequestOutcome {

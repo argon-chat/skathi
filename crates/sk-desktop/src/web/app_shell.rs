@@ -11,7 +11,12 @@ use sk_runtime::redjs::webapi::util::*;
 use super::{awaiting_with, Errors};
 use crate::{shell, Fail};
 
-unsafe fn done(_g: *mut c_void, _token: u32, _v: &serde_json::Value, _made: u64) -> Result<u64, u64> {
+unsafe fn done(
+    _g: *mut c_void,
+    _token: u32,
+    _v: &serde_json::Value,
+    _made: u64,
+) -> Result<u64, u64> {
     Ok(UNDEF)
 }
 

@@ -22,7 +22,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use sk_runtime::redjs::api::Value;
-use sk_runtime::{JsRuntime, host_fn};
+use sk_runtime::{host_fn, JsRuntime};
 
 mod host_context;
 pub use host_context::{HostContext, HostCookie, SameSite};
@@ -35,7 +35,11 @@ struct SetupHook(Mutex<Option<Setup>>);
 
 impl SetupHook {
     fn run(&self, context: &HostContext) -> Result<(), String> {
-        let setup = self.0.lock().map_err(|_| "host setup lock was poisoned".to_string())?.take();
+        let setup = self
+            .0
+            .lock()
+            .map_err(|_| "host setup lock was poisoned".to_string())?
+            .take();
         let Some(setup) = setup else { return Ok(()) };
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| setup(context)))
             .unwrap_or_else(|_| Err("host setup panicked".into()))
@@ -80,7 +84,9 @@ pub(crate) fn desktop_launch_prepared() -> bool {
 
 /// Always, unless embedded with [`Builder::activate`]`(false)`.
 pub(crate) fn activates() -> bool {
-    CONFIG.get().is_none_or(|c| requests_activation(c.activate, c.visible))
+    CONFIG
+        .get()
+        .is_none_or(|c| requests_activation(c.activate, c.visible))
 }
 
 pub(crate) fn visible() -> bool {
@@ -90,9 +96,14 @@ pub(crate) fn visible() -> bool {
 /// Seals a dormant profile's localStorage with the OS provider, no plaintext fallback.
 pub fn encrypt_local_storage_at(directory: &Path) -> Result<bool, String> {
     #[cfg(feature = "storages")]
-    { sk_storage::encrypt_local_storage_at(directory) }
+    {
+        sk_storage::encrypt_local_storage_at(directory)
+    }
     #[cfg(not(feature = "storages"))]
-    { let _ = directory; Err("enable the storages feature to encrypt localStorage".into()) }
+    {
+        let _ = directory;
+        Err("enable the storages feature to encrypt localStorage".into())
+    }
 }
 
 #[cfg(feature = "storages")]
@@ -104,27 +115,46 @@ pub(crate) fn data_dir() -> Option<&'static Path> {
     CONFIG.get()?.data_dir.as_deref()
 }
 
-fn resolve_data_dir(configured: Option<PathBuf>, override_dir: Option<std::ffi::OsString>) -> Result<Option<PathBuf>, Error> {
-    let directory = override_dir.filter(|path| !path.is_empty()).map(PathBuf::from).or(configured);
+fn resolve_data_dir(
+    configured: Option<PathBuf>,
+    override_dir: Option<std::ffi::OsString>,
+) -> Result<Option<PathBuf>, Error> {
+    let directory = override_dir
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or(configured);
     if let Some(path) = &directory {
         if !path.is_absolute() {
-            return Err(Error::DataDirectory(format!("data directory must be absolute: {}", path.display())));
+            return Err(Error::DataDirectory(format!(
+                "data directory must be absolute: {}",
+                path.display()
+            )));
         }
     }
     Ok(directory)
 }
 
-fn prepare_directory(directory: Option<&Path>, prepare: Option<PrepareDataDir>) -> Result<(), Error> {
+fn prepare_directory(
+    directory: Option<&Path>,
+    prepare: Option<PrepareDataDir>,
+) -> Result<(), Error> {
     let Some(directory) = directory else {
-        return if prepare.is_some() { Err(Error::DataDirectory("prepare_data_dir requires a data directory".into())) } else { Ok(()) };
+        return if prepare.is_some() {
+            Err(Error::DataDirectory(
+                "prepare_data_dir requires a data directory".into(),
+            ))
+        } else {
+            Ok(())
+        };
     };
     if let Some(prepare) = prepare {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prepare(directory)))
             .unwrap_or_else(|_| Err("data directory preparation panicked".into()))
             .map_err(Error::DataDirectory)?;
     }
-    std::fs::create_dir_all(directory)
-        .map_err(|error| Error::DataDirectory(format!("could not create {}: {error}", directory.display())))
+    std::fs::create_dir_all(directory).map_err(|error| {
+        Error::DataDirectory(format!("could not create {}: {error}", directory.display()))
+    })
 }
 
 fn requests_activation(activate: bool, visible: bool) -> bool {
@@ -247,7 +277,20 @@ impl Default for Builder {
 
 impl Builder {
     pub fn new() -> Self {
-        Builder { data_dir: None, storage_encrypted: None, prepare_data_dir: None, visible: true, desktop_launch: false, setup: None, payload: None, args: Vec::new(), functions: HashMap::new(), activate: true, inspector_exe: None, desktop_id: None }
+        Builder {
+            data_dir: None,
+            storage_encrypted: None,
+            prepare_data_dir: None,
+            visible: true,
+            desktop_launch: false,
+            setup: None,
+            payload: None,
+            args: Vec::new(),
+            functions: HashMap::new(),
+            activate: true,
+            inspector_exe: None,
+            desktop_id: None,
+        }
     }
 
     /// Sets the persistent profile root, before storage and cookies load. HTTP and bytecode caches
@@ -267,7 +310,8 @@ impl Builder {
     /// Prepares or migrates the profile after single-instance handling, before any storage or VM
     /// initialization. An error or panic stops startup.
     pub fn prepare_data_dir<F>(mut self, prepare: F) -> Self
-    where F: FnOnce(&Path) -> Result<(), String> + Send + 'static,
+    where
+        F: FnOnce(&Path) -> Result<(), String> + Send + 'static,
     {
         self.prepare_data_dir = Some(Box::new(prepare));
         self
@@ -408,7 +452,9 @@ impl Builder {
         let data_dir = resolve_data_dir(self.data_dir.take(), std::env::var_os("SK_DATA_DIR"))?;
         #[cfg(not(feature = "storages"))]
         if self.storage_encrypted.is_some() {
-            return Err(Error::DataDirectory("storage_encrypted requires the storages feature".into()));
+            return Err(Error::DataDirectory(
+                "storage_encrypted requires the storages feature".into(),
+            ));
         }
         if STARTED.swap(true, Ordering::SeqCst) {
             return Err(Error::AlreadyStarted);
@@ -423,13 +469,21 @@ impl Builder {
             let args = sk_desktop::args::process();
             let launch = crate::boot_mode::launch_config();
             if let sk_desktop::launch::Outcome::Exit(code) =
-                sk_desktop::launch::start_with_activation(args, launch.as_deref(), crate::boot_mode::app_name(), None, requests_activation(self.activate, self.visible))
+                sk_desktop::launch::start_with_activation(
+                    args,
+                    launch.as_deref(),
+                    crate::boot_mode::app_name(),
+                    None,
+                    requests_activation(self.activate, self.visible),
+                )
             {
                 return Err(Error::LaunchExit(code));
             }
             sk_desktop::launch::register_declared();
         } else {
-            let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+            let exe = std::env::current_exe()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
             if !sk_desktop::args::set_embedded(exe, self.args) {
                 return Err(Error::ArgsAlreadyRead);
             }
@@ -439,9 +493,12 @@ impl Builder {
             data_dir,
             #[cfg(feature = "storages")]
             storage_encrypted: self.storage_encrypted,
-            visible: self.visible, desktop_launch: self.desktop_launch,
-            setup: SetupHook(Mutex::new(self.setup)), functions: self.functions,
-            activate: self.activate, inspector_exe: self.inspector_exe,
+            visible: self.visible,
+            desktop_launch: self.desktop_launch,
+            setup: SetupHook(Mutex::new(self.setup)),
+            functions: self.functions,
+            activate: self.activate,
+            inspector_exe: self.inspector_exe,
             desktop_id: self.desktop_id,
         };
         if CONFIG.set(config).is_err() {
@@ -453,7 +510,11 @@ impl Builder {
     #[cfg(feature = "prod")]
     fn load_payload(&mut self) -> Result<(), Error> {
         let Some(source) = self.payload.take() else {
-            return if crate::payload::get().is_some() { Ok(()) } else { Err(Error::NoPayload) };
+            return if crate::payload::get().is_some() {
+                Ok(())
+            } else {
+                Err(Error::NoPayload)
+            };
         };
         let (bytes, label, dir) = source.load()?;
         crate::payload::set_external(bytes, label, dir.as_deref()).map_err(Error::Payload)
@@ -555,7 +616,10 @@ impl Handle {
         if crate::json::parse(data).is_none() {
             return Err(EmitError::NotJson);
         }
-        let json = format!("{{\"event\":{},\"data\":{data}}}", crate::json::quote(event));
+        let json = format!(
+            "{{\"event\":{},\"data\":{data}}}",
+            crate::json::quote(event)
+        );
         push(Item::Event { json });
         Ok(())
     }
@@ -645,15 +709,27 @@ impl Reply {
         self.settled = true;
         let json = json.into();
         if crate::json::parse(&json).is_some() {
-            push(Item::Settle { token: self.token, ok: true, text: json });
+            push(Item::Settle {
+                token: self.token,
+                ok: true,
+                text: json,
+            });
         } else {
-            push(Item::Settle { token: self.token, ok: false, text: "the host answered with text that is not JSON".into() });
+            push(Item::Settle {
+                token: self.token,
+                ok: false,
+                text: "the host answered with text that is not JSON".into(),
+            });
         }
     }
 
     pub fn reject(mut self, message: impl Into<String>) {
         self.settled = true;
-        push(Item::Settle { token: self.token, ok: false, text: message.into() });
+        push(Item::Settle {
+            token: self.token,
+            ok: false,
+            text: message.into(),
+        });
     }
 }
 
@@ -667,7 +743,11 @@ impl Drop for Reply {
         } else {
             "the host dropped this call without answering"
         };
-        push(Item::Settle { token: self.token, ok: false, text: why.into() });
+        push(Item::Settle {
+            token: self.token,
+            ok: false,
+            text: why.into(),
+        });
     }
 }
 
@@ -724,7 +804,9 @@ unsafe fn src_drain(g: *mut c_void) -> usize {
     let start = std::time::Instant::now();
     let mut n = 0;
     while n < DRAIN_CAP {
-        let Some(item) = QUEUE.lock().ok().and_then(|mut q| q.pop_front()) else { break };
+        let Some(item) = QUEUE.lock().ok().and_then(|mut q| q.pop_front()) else {
+            break;
+        };
         QUEUED.fetch_sub(1, Ordering::AcqRel);
         match item {
             Item::Settle { token, ok, text } => {
@@ -747,8 +829,14 @@ fn deliver(token: u32, ok: bool, text: &str) {
         return;
     }
     JsRuntime::with(|rt| {
-        let a = [Value::number(f64::from(token)), Value::boolean(ok), rt.ctx().string(text)];
-        if let Err(sk_runtime::redjs::api::Error::Exception(e)) = rt.ctx().call(Value(dispatcher), Value::undefined(), &a) {
+        let a = [
+            Value::number(f64::from(token)),
+            Value::boolean(ok),
+            rt.ctx().string(text),
+        ];
+        if let Err(sk_runtime::redjs::api::Error::Exception(e)) =
+            rt.ctx().call(Value(dispatcher), Value::undefined(), &a)
+        {
             let err = rt.describe(e);
             eprintln!("[appHost dispatch] {}\n{}", err.header, err.stack);
         }
@@ -756,7 +844,9 @@ fn deliver(token: u32, ok: bool, text: &str) {
 }
 
 pub(crate) fn setup(runtime: &JsRuntime) -> Result<(), String> {
-    let Some(config) = CONFIG.get() else { return Ok(()) };
+    let Some(config) = CONFIG.get() else {
+        return Ok(());
+    };
     config.setup.run(&HostContext::installed(Some(runtime)))
 }
 
@@ -824,7 +914,11 @@ pub(crate) fn install(rt: &JsRuntime) {
     if !active() {
         return;
     }
-    rt.register("__sk_host_set_dispatcher", 1, sk_host_set_dispatcher as *const _);
+    rt.register(
+        "__sk_host_set_dispatcher",
+        1,
+        sk_host_set_dispatcher as *const _,
+    );
     rt.register("__sk_host_call", 2, sk_host_call as *const _);
     rt.register("__sk_host_functions", 0, sk_host_functions as *const _);
     let g = rt.raw();
@@ -863,14 +957,18 @@ mod tests {
         let pointer = bytes.as_ptr();
         let mut builder = Builder::new().payload_bytes(bytes);
         let (owned, label, _) = builder.payload.take().unwrap().load().unwrap();
-        let crate::payload::PayloadBytes::Owned(owned) = owned else { panic!("owned bytes expected") };
+        let crate::payload::PayloadBytes::Owned(owned) = owned else {
+            panic!("owned bytes expected")
+        };
         assert_eq!(label, "bytes");
         assert_eq!(owned.as_ptr(), pointer);
         assert!(builder.payload.is_none());
         static STATIC_PAYLOAD: &[u8] = b"static payload bytes";
         let mut builder = Builder::new().payload_static(STATIC_PAYLOAD);
         let (borrowed, label, _) = builder.payload.take().unwrap().load().unwrap();
-        let crate::payload::PayloadBytes::Embedded(borrowed) = borrowed else { panic!("static bytes expected") };
+        let crate::payload::PayloadBytes::Embedded(borrowed) = borrowed else {
+            panic!("static bytes expected")
+        };
         assert_eq!(borrowed.as_ptr(), STATIC_PAYLOAD.as_ptr());
         assert_eq!(borrowed.len(), STATIC_PAYLOAD.len());
         assert_eq!(label, "static bytes");
@@ -878,7 +976,9 @@ mod tests {
         let path = files.write("app.skpk", b"file bytes");
         let mut builder = Builder::new().payload_file(&path);
         let (mapped, label, dir) = builder.payload.take().unwrap().load().unwrap();
-        let crate::payload::PayloadBytes::File(mapped) = mapped else { panic!("mapped file expected") };
+        let crate::payload::PayloadBytes::File(mapped) = mapped else {
+            panic!("mapped file expected")
+        };
         assert_eq!(mapped.as_bytes(), b"file bytes");
         assert_eq!(label, path.display().to_string());
         assert_eq!(dir.as_deref(), path.parent());
@@ -891,23 +991,51 @@ mod tests {
 
     #[test]
     fn data_directory_override_and_preparation_precede_storage() {
-        let base = std::env::temp_dir().join(format!("sk-data-dir-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let base = std::env::temp_dir().join(format!(
+            "sk-data-dir-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let configured = base.join("configured");
         let overridden = base.join("override");
-        assert_eq!(resolve_data_dir(Some(configured.clone()), Some(overridden.clone().into_os_string())).unwrap(), Some(overridden));
-        assert_eq!(resolve_data_dir(Some(configured.clone()), Some("".into())).unwrap(), Some(configured.clone()));
+        assert_eq!(
+            resolve_data_dir(
+                Some(configured.clone()),
+                Some(overridden.clone().into_os_string())
+            )
+            .unwrap(),
+            Some(overridden)
+        );
+        assert_eq!(
+            resolve_data_dir(Some(configured.clone()), Some("".into())).unwrap(),
+            Some(configured.clone())
+        );
         assert_eq!(resolve_data_dir(None, None).unwrap(), None);
         assert!(resolve_data_dir(Some(PathBuf::from("relative")), None).is_err());
         assert!(prepare_directory(None, Some(Box::new(|_| Ok(())))).is_err());
         let refused = base.join("refused");
-        assert!(prepare_directory(Some(&refused), Some(Box::new(|_| Err("migration refused".into())))).is_err());
+        assert!(prepare_directory(
+            Some(&refused),
+            Some(Box::new(|_| Err("migration refused".into())))
+        )
+        .is_err());
         assert!(!refused.exists());
-        prepare_directory(Some(&configured), Some(Box::new(|path| {
-            assert!(!path.exists());
-            std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
-            std::fs::write(path.join("prepared"), "profile").map_err(|e| e.to_string())
-        }))).unwrap();
-        assert_eq!(std::fs::read_to_string(configured.join("prepared")).unwrap(), "profile");
+        prepare_directory(
+            Some(&configured),
+            Some(Box::new(|path| {
+                assert!(!path.exists());
+                std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+                std::fs::write(path.join("prepared"), "profile").map_err(|e| e.to_string())
+            })),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(configured.join("prepared")).unwrap(),
+            "profile"
+        );
         std::fs::remove_file(configured.join("prepared")).unwrap();
         std::fs::remove_dir(configured).unwrap();
         std::fs::remove_dir(base).unwrap();
@@ -917,13 +1045,21 @@ mod tests {
     #[test]
     fn appkit_rejects_worker_entry_before_startup_state_changes() {
         std::thread::spawn(|| {
-            assert!(matches!(require_main_thread(), Err(Error::MainThreadRequired)));
-            assert!(matches!(Builder::new().spawn(), Err(Error::MainThreadRequired)));
+            assert!(matches!(
+                require_main_thread(),
+                Err(Error::MainThreadRequired)
+            ));
+            assert!(matches!(
+                Builder::new().spawn(),
+                Err(Error::MainThreadRequired)
+            ));
             assert!(matches!(
                 Builder::new().run_on_main_thread(|_| 0),
                 Err(Error::MainThreadRequired)
             ));
-        }).join().unwrap();
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
@@ -941,25 +1077,49 @@ mod tests {
         let called = Arc::new(AtomicUsize::new(0));
         let observed = called.clone();
         let hook = SetupHook(Mutex::new(Some(Box::new(move |ctx| {
-            assert_eq!(ctx.storage_dir().ok(), HostContext::installed(None).storage_dir().ok());
+            assert_eq!(
+                ctx.storage_dir().ok(),
+                HostContext::installed(None).storage_dir().ok()
+            );
             observed.fetch_add(1, Ordering::SeqCst);
             Err("bootstrap refused".into())
         }))));
-        assert_eq!(hook.run(&HostContext::installed(None)), Err("bootstrap refused".into()));
+        assert_eq!(
+            hook.run(&HostContext::installed(None)),
+            Err("bootstrap refused".into())
+        );
         assert!(hook.run(&HostContext::installed(None)).is_ok());
         assert_eq!(called.load(Ordering::SeqCst), 1);
         let panic = SetupHook(Mutex::new(Some(Box::new(|_| panic!("plugin panic")))));
-        assert_eq!(panic.run(&HostContext::installed(None)), Err("host setup panicked".into()));
+        assert_eq!(
+            panic.run(&HostContext::installed(None)),
+            Err("host setup panicked".into())
+        );
     }
 
     // One test, because the queue is the process's.
     #[test]
     fn replies_settle_once_and_a_dropped_one_rejects() {
         drain_queue();
-        Reply { token: 7, settled: false }.resolve(r#"{"a":1}"#);
-        Reply { token: 8, settled: false }.resolve("not json");
-        Reply { token: 9, settled: false }.reject("nope");
-        drop(Reply { token: 10, settled: false });
+        Reply {
+            token: 7,
+            settled: false,
+        }
+        .resolve(r#"{"a":1}"#);
+        Reply {
+            token: 8,
+            settled: false,
+        }
+        .resolve("not json");
+        Reply {
+            token: 9,
+            settled: false,
+        }
+        .reject("nope");
+        drop(Reply {
+            token: 10,
+            settled: false,
+        });
         let got = drain_queue();
         assert_eq!(got[0], (7, true, r#"{"a":1}"#.to_string()));
         assert_eq!(got[1].0, 8);
@@ -971,6 +1131,9 @@ mod tests {
         let h = Handle { _private: () };
         assert_eq!(h.emit("x", "{bad"), Err(EmitError::NotJson));
         h.emit("status", r#"{"online":true}"#).unwrap();
-        assert_eq!(drain_queue()[0].2, r#"{"event":"status","data":{"online":true}}"#);
+        assert_eq!(
+            drain_queue()[0].2,
+            r#"{"event":"status","data":{"online":true}}"#
+        );
     }
 }

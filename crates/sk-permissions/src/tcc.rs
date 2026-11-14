@@ -139,13 +139,27 @@ mod tests {
     fn the_camera_is_the_microphones_model_with_its_own_key_and_pane() {
         let mic = media(Capability::Microphone).unwrap();
         let camera = media(Capability::Camera).unwrap();
-        assert_eq!((mic.usage_key, mic.page, mic.anchor), ("NSMicrophoneUsageDescription", "Microphone", "Privacy_Microphone"));
-        assert_eq!((camera.usage_key, camera.page, camera.anchor), ("NSCameraUsageDescription", "Camera", "Privacy_Camera"));
+        assert_eq!(
+            (mic.usage_key, mic.page, mic.anchor),
+            (
+                "NSMicrophoneUsageDescription",
+                "Microphone",
+                "Privacy_Microphone"
+            )
+        );
+        assert_eq!(
+            (camera.usage_key, camera.page, camera.anchor),
+            ("NSCameraUsageDescription", "Camera", "Privacy_Camera")
+        );
         assert_eq!(
             privacy_pane_url(camera.anchor),
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
         );
-        assert_eq!(media(Capability::DisplayCapture), None, "screen recording is CoreGraphics', not AVFoundation's");
+        assert_eq!(
+            media(Capability::DisplayCapture),
+            None,
+            "screen recording is CoreGraphics', not AVFoundation's"
+        );
         assert_eq!(media(Capability::Geolocation), None);
     }
 
@@ -180,31 +194,60 @@ mod tests {
         let (camera, show_camera) = requests.begin(Capability::Camera);
         assert!(show_mic && show_camera, "each has its own TCC prompt");
         requests.complete(Capability::Camera, PermissionState::Denied);
-        assert_eq!(std::mem::take(&mut requests.settled), vec![(camera, PermissionState::Denied)]);
-        assert_eq!(requests.waiting, vec![(mic, Capability::Microphone)], "the microphone waiter stays");
-        assert_eq!(std::mem::take(&mut requests.changes), vec![Capability::Camera]);
-        assert_eq!(requests.read(Capability::Camera, PermissionState::Denied), PermissionState::Denied);
+        assert_eq!(
+            std::mem::take(&mut requests.settled),
+            vec![(camera, PermissionState::Denied)]
+        );
+        assert_eq!(
+            requests.waiting,
+            vec![(mic, Capability::Microphone)],
+            "the microphone waiter stays"
+        );
+        assert_eq!(
+            std::mem::take(&mut requests.changes),
+            vec![Capability::Camera]
+        );
+        assert_eq!(
+            requests.read(Capability::Camera, PermissionState::Denied),
+            PermissionState::Denied
+        );
         assert!(requests.changes.is_empty());
     }
 
     #[test]
     fn a_toggle_in_system_settings_is_a_change_on_the_next_read() {
         let mut requests = Requests::default();
-        assert_eq!(requests.read(Capability::Camera, PermissionState::Prompt), PermissionState::Prompt);
+        assert_eq!(
+            requests.read(Capability::Camera, PermissionState::Prompt),
+            PermissionState::Prompt
+        );
         assert!(requests.changes.is_empty(), "a first read is not a change");
         requests.read(Capability::Camera, PermissionState::Prompt);
-        assert!(requests.changes.is_empty(), "a read that agrees is not a change");
+        assert!(
+            requests.changes.is_empty(),
+            "a read that agrees is not a change"
+        );
         requests.read(Capability::Camera, PermissionState::Denied);
-        assert_eq!(std::mem::take(&mut requests.changes), vec![Capability::Camera]);
+        assert_eq!(
+            std::mem::take(&mut requests.changes),
+            vec![Capability::Camera]
+        );
         requests.read(Capability::Camera, PermissionState::Granted);
         requests.read(Capability::Microphone, PermissionState::Granted);
-        assert_eq!(std::mem::take(&mut requests.changes), vec![Capability::Camera]);
+        assert_eq!(
+            std::mem::take(&mut requests.changes),
+            vec![Capability::Camera]
+        );
     }
 
     #[test]
     fn screen_recording_is_prompt_until_a_request_in_this_run_is_refused() {
         assert_eq!(screen_state(true, false), PermissionState::Granted);
-        assert_eq!(screen_state(true, true), PermissionState::Granted, "a grant wins over an earlier refusal");
+        assert_eq!(
+            screen_state(true, true),
+            PermissionState::Granted,
+            "a grant wins over an earlier refusal"
+        );
         assert_eq!(screen_state(false, false), PermissionState::Prompt);
         assert_eq!(screen_state(false, true), PermissionState::Denied);
 
@@ -214,12 +257,28 @@ mod tests {
         let (screen, show) = requests.begin(Capability::DisplayCapture);
         assert!(show, "the screen prompt is not the microphone's");
         requests.complete(Capability::DisplayCapture, PermissionState::Denied);
-        assert_eq!(std::mem::take(&mut requests.settled), vec![(screen, PermissionState::Denied)]);
-        assert_eq!(requests.waiting, vec![(mic, Capability::Microphone)], "the microphone waiter stays");
-        assert_eq!(std::mem::take(&mut requests.changes), vec![Capability::DisplayCapture]);
+        assert_eq!(
+            std::mem::take(&mut requests.settled),
+            vec![(screen, PermissionState::Denied)]
+        );
+        assert_eq!(
+            requests.waiting,
+            vec![(mic, Capability::Microphone)],
+            "the microphone waiter stays"
+        );
+        assert_eq!(
+            std::mem::take(&mut requests.changes),
+            vec![Capability::DisplayCapture]
+        );
         assert_eq!(requests.screen(false), PermissionState::Denied);
-        assert!(requests.changes.is_empty(), "a read that agrees is not a change");
+        assert!(
+            requests.changes.is_empty(),
+            "a read that agrees is not a change"
+        );
         assert_eq!(requests.screen(true), PermissionState::Granted);
-        assert_eq!(std::mem::take(&mut requests.changes), vec![Capability::DisplayCapture]);
+        assert_eq!(
+            std::mem::take(&mut requests.changes),
+            vec![Capability::DisplayCapture]
+        );
     }
 }

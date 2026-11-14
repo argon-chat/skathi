@@ -12,9 +12,10 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable, KeyDownEvent,
-    KeystrokeEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Subscription, Task,
-    TextInputConfiguration, TransformationMatrix, UTF16Selection, Window, WrappedLine, px,
+    px, App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable,
+    KeyDownEvent, KeystrokeEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    Subscription, Task, TextInputConfiguration, TransformationMatrix, UTF16Selection, Window,
+    WrappedLine,
 };
 
 /// GPUI paints affine matrices in device pixels while pointer events and IME queries use logical
@@ -27,15 +28,24 @@ struct InputTransform {
 
 impl Default for InputTransform {
     fn default() -> Self {
-        Self { matrix: TransformationMatrix::unit(), scale_factor: 1.0 }
+        Self {
+            matrix: TransformationMatrix::unit(),
+            scale_factor: 1.0,
+        }
     }
 }
 
 impl InputTransform {
     fn map(&self, matrix: TransformationMatrix, point: Point<Pixels>) -> Point<Pixels> {
         let scale = self.scale_factor;
-        let device = matrix.apply(Point::new(px(f32::from(point.x) * scale), px(f32::from(point.y) * scale)));
-        Point::new(px(f32::from(device.x) / scale), px(f32::from(device.y) / scale))
+        let device = matrix.apply(Point::new(
+            px(f32::from(point.x) * scale),
+            px(f32::from(point.y) * scale),
+        ));
+        Point::new(
+            px(f32::from(device.x) / scale),
+            px(f32::from(device.y) / scale),
+        )
     }
 
     fn layout_point(&self, window_point: Point<Pixels>) -> Option<Point<Pixels>> {
@@ -46,15 +56,23 @@ impl InputTransform {
     /// IME candidate windows need an axis-aligned rectangle in window space: transform every corner.
     fn window_bounds(&self, local: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
         self.matrix.inverse()?; // A collapsed input has no visible caret.
-        let corners = [local.origin, Point::new(local.right(), local.top()),
-            Point::new(local.left(), local.bottom()), local.bottom_right()];
+        let corners = [
+            local.origin,
+            Point::new(local.right(), local.top()),
+            Point::new(local.left(), local.bottom()),
+            local.bottom_right(),
+        ];
         let mut min = Point::new(px(f32::INFINITY), px(f32::INFINITY));
         let mut max = Point::new(px(f32::NEG_INFINITY), px(f32::NEG_INFINITY));
         for corner in corners {
             let p = self.map(self.matrix, corner);
-            if !f32::from(p.x).is_finite() || !f32::from(p.y).is_finite() { return None; }
-            min.x = min.x.min(p.x); min.y = min.y.min(p.y);
-            max.x = max.x.max(p.x); max.y = max.y.max(p.y);
+            if !f32::from(p.x).is_finite() || !f32::from(p.y).is_finite() {
+                return None;
+            }
+            min.x = min.x.min(p.x);
+            min.y = min.y.min(p.y);
+            max.x = max.x.max(p.x);
+            max.y = max.y.max(p.y);
         }
         Some(Bounds::from_corners(min, max))
     }
@@ -62,10 +80,10 @@ impl InputTransform {
 
 use super::boundaries;
 use super::{
-    Backspace, ClearSelection, CompositionPhase, Copy, Cut, Delete, DeleteToEnd, DeleteToStart,
-    DeleteWordLeft, ControlledValue, DeleteWordRight, Down, End, Home, InputIntent, InputType, Left,
-    Newline, OnBeforeInput, OnChange, OnComposition, OnKeyDown, Paste, Redo, Right,
-    SelectAll, SelectDown, SelectEnd, SelectHome, SelectLeft, SelectRight, SelectUp, SelectWordLeft,
+    Backspace, ClearSelection, CompositionPhase, ControlledValue, Copy, Cut, Delete, DeleteToEnd,
+    DeleteToStart, DeleteWordLeft, DeleteWordRight, Down, End, Home, InputIntent, InputType, Left,
+    Newline, OnBeforeInput, OnChange, OnComposition, OnKeyDown, Paste, Redo, Right, SelectAll,
+    SelectDown, SelectEnd, SelectHome, SelectLeft, SelectRight, SelectUp, SelectWordLeft,
     SelectWordRight, ShowCharacterPalette, TextInputHandlers, Undo, Up, WordLeft, WordRight,
 };
 
@@ -272,11 +290,15 @@ impl TextInputState {
         // `cx.stop_propagation()` in it suppresses binding dispatch.
         let weak = cx.weak_entity();
         let interceptor = cx.intercept_keystrokes(move |event, window, cx| {
-            weak.update(cx, |this, cx| this.on_intercept_keystroke(event, window, cx))
-                .ok();
+            weak.update(cx, |this, cx| {
+                this.on_intercept_keystroke(event, window, cx)
+            })
+            .ok();
         });
         let focus_handle = cx.focus_handle();
-        let blur = cx.on_blur(&focus_handle, window, |this, window, cx| this.finish_composition(window, cx));
+        let blur = cx.on_blur(&focus_handle, window, |this, window, cx| {
+            this.finish_composition(window, cx)
+        });
         Self {
             focus_handle,
             content: String::new(),
@@ -423,7 +445,11 @@ impl TextInputState {
         if self.focus_handle.tab_index == tab_index && self.focus_handle.tab_stop == tab_stop {
             return;
         }
-        self.focus_handle = self.focus_handle.clone().tab_index(tab_index).tab_stop(tab_stop);
+        self.focus_handle = self
+            .focus_handle
+            .clone()
+            .tab_index(tab_index)
+            .tab_stop(tab_stop);
     }
 
     fn on_intercept_keystroke(
@@ -506,7 +532,12 @@ impl TextInputState {
 
     /// `beforeinput` for an edit about to be made: `false` when a handler cancelled it. IME edits
     /// cannot be cancelled and nothing is read back mid-composition.
-    fn before_input(&mut self, intent: &InputIntent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn before_input(
+        &mut self,
+        intent: &InputIntent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(hook) = self.on_before_input.clone() else {
             return true;
         };
@@ -522,7 +553,13 @@ impl TextInputState {
     }
 
     /// One IME composition stage; `End` is deferred so it follows the commit's `input`.
-    fn composition(&mut self, phase: CompositionPhase, data: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn composition(
+        &mut self,
+        phase: CompositionPhase,
+        data: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match phase {
             CompositionPhase::Start => self.composition_open = true,
             CompositionPhase::Update => {}
@@ -537,7 +574,9 @@ impl TextInputState {
         };
         if phase == CompositionPhase::End {
             let data = data.to_owned();
-            window.defer(cx, move |window, cx| hook(CompositionPhase::End, &data, window, cx));
+            window.defer(cx, move |window, cx| {
+                hook(CompositionPhase::End, &data, window, cx)
+            });
         } else {
             hook(phase, data, window, cx);
         }
@@ -557,7 +596,8 @@ impl TextInputState {
             return;
         };
         if std::mem::take(&mut self.composition_open) {
-            self.abandoned_composition = Some(self.content.get(range).unwrap_or_default().to_owned());
+            self.abandoned_composition =
+                Some(self.content.get(range).unwrap_or_default().to_owned());
         }
     }
 
@@ -569,10 +609,18 @@ impl TextInputState {
         let Some(hook) = self.on_composition.clone() else {
             return;
         };
-        window.defer(cx, move |window, cx| hook(CompositionPhase::End, &text, window, cx));
+        window.defer(cx, move |window, cx| {
+            hook(CompositionPhase::End, &text, window, cx)
+        });
     }
 
-    fn restore(&mut self, snapshot: EditSnapshot, input_type: InputType, window: &mut Window, cx: &mut Context<Self>) {
+    fn restore(
+        &mut self,
+        snapshot: EditSnapshot,
+        input_type: InputType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.finish_composition(window, cx);
         self.content = snapshot.content;
         self.selected_range = snapshot.selected_range;
@@ -612,7 +660,13 @@ impl TextInputState {
         Some(inserted)
     }
 
-    fn replace_selection(&mut self, text: &str, intent: InputIntent, window: &mut Window, cx: &mut Context<Self>) {
+    fn replace_selection(
+        &mut self,
+        text: &str,
+        intent: InputIntent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.read_only {
             return;
         }
@@ -857,7 +911,12 @@ impl TextInputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.delete_toward(InputType::DeleteSoftLineForward, |s| s.content.len(), window, cx);
+        self.delete_toward(
+            InputType::DeleteSoftLineForward,
+            |s| s.content.len(),
+            window,
+            cx,
+        );
     }
 
     pub(crate) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
@@ -1015,7 +1074,10 @@ impl TextInputState {
     /// The composed matrix in force while this field is drawn; captured in prepaint and paint since
     /// cached layout can be reused under a wrapper whose transform changed.
     pub(crate) fn set_input_transform(&mut self, matrix: TransformationMatrix, scale_factor: f32) {
-        self.input_transform = InputTransform { matrix, scale_factor };
+        self.input_transform = InputTransform {
+            matrix,
+            scale_factor,
+        };
     }
 
     /// Called by the element every frame once the text is shaped; the lines are moved in.
@@ -1148,7 +1210,10 @@ impl TextInputState {
             .rev()
             .find(|l| index >= l.start)
             .or_else(|| boxes.first())?;
-        Some((found, (index - found.start.min(index)).min(found.line.len())))
+        Some((
+            found,
+            (index - found.start.min(index)).min(found.line.len()),
+        ))
     }
 
     pub(crate) fn position_for_index(&self, index: usize) -> Point<Pixels> {
@@ -1169,10 +1234,7 @@ impl TextInputState {
                     self.line_height * (line_box.rows.saturating_sub(1)) as f32,
                 )
             });
-        Point::new(
-            within.x,
-            within.y + self.line_height * line_box.row0 as f32,
-        )
+        Point::new(within.x, within.y + self.line_height * line_box.row0 as f32)
     }
 
     fn index_for_window_position(&self, position: Point<Pixels>) -> Option<usize> {
@@ -1213,10 +1275,7 @@ impl TextInputState {
         {
             return self.content.len();
         }
-        let within = Point::new(
-            local.x,
-            local.y - self.line_height * line_box.row0 as f32,
-        );
+        let within = Point::new(local.x, local.y - self.line_height * line_box.row0 as f32);
         let index = match line_box
             .line
             .closest_index_for_position(within, self.line_height)
@@ -1269,14 +1328,12 @@ impl TextInputState {
         }
         if self.blink_task.is_none() {
             self.reset_blink(cx);
-            self.blink_task = Some(cx.spawn(async move |this, cx| {
-                loop {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(CARET_BLINK_MS))
-                        .await;
-                    if this.update(cx, |_, cx| cx.notify()).is_err() {
-                        break;
-                    }
+            self.blink_task = Some(cx.spawn(async move |this, cx| loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(CARET_BLINK_MS))
+                    .await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
                 }
             }));
         }
@@ -1440,7 +1497,11 @@ impl EntityInputHandler for TextInputState {
                 }
                 return;
             }
-            let replaced = self.content.get(range.clone()).unwrap_or_default().to_owned();
+            let replaced = self
+                .content
+                .get(range.clone())
+                .unwrap_or_default()
+                .to_owned();
             self.composition(CompositionPhase::Start, &replaced, window, cx);
         }
         // Chromium's order for every pre-edit: `beforeinput` (not cancelable), `compositionupdate`, the edit, `input`.
@@ -1542,7 +1603,11 @@ fn secondary_press_keeps(selection: &Range<usize>, index: usize) -> bool {
 }
 
 fn masked_offset(content: &str, index: usize) -> usize {
-    content.char_indices().take_while(|(at, _)| *at < index).count() * MASK.len_utf8()
+    content
+        .char_indices()
+        .take_while(|(at, _)| *at < index)
+        .count()
+        * MASK.len_utf8()
 }
 
 fn unmasked_offset(content: &str, masked: usize) -> usize {
@@ -1583,9 +1648,17 @@ mod tests {
                 },
                 scale_factor: dpi,
             };
-            let local = transform.layout_point(gpui::point(px(52.0), px(8.0))).unwrap();
-            assert!((f32::from(local.x) - 12.0).abs() < 0.0001, "dpi {dpi}: {local:?}");
-            assert!((f32::from(local.y) - 34.0).abs() < 0.0001, "dpi {dpi}: {local:?}");
+            let local = transform
+                .layout_point(gpui::point(px(52.0), px(8.0)))
+                .unwrap();
+            assert!(
+                (f32::from(local.x) - 12.0).abs() < 0.0001,
+                "dpi {dpi}: {local:?}"
+            );
+            assert!(
+                (f32::from(local.y) - 34.0).abs() < 0.0001,
+                "dpi {dpi}: {local:?}"
+            );
             let reflected = InputTransform {
                 matrix: TransformationMatrix {
                     rotation_scale: [[-1.0, 0.5], [0.0, 2.0]],
@@ -1593,7 +1666,9 @@ mod tests {
                 },
                 scale_factor: dpi,
             };
-            let local = reflected.layout_point(gpui::point(px(205.0), px(118.0))).unwrap();
+            let local = reflected
+                .layout_point(gpui::point(px(205.0), px(118.0)))
+                .unwrap();
             assert!((f32::from(local.x) - 12.0).abs() < 0.0001);
             assert!((f32::from(local.y) - 34.0).abs() < 0.0001);
         }
@@ -1609,20 +1684,40 @@ mod tests {
                 },
                 scale_factor: dpi,
             };
-            let local = Bounds::from_corners(gpui::point(px(10.0), px(20.0)), gpui::point(px(14.0), px(28.0)));
+            let local = Bounds::from_corners(
+                gpui::point(px(10.0), px(20.0)),
+                gpui::point(px(14.0), px(28.0)),
+            );
             let window = transform.window_bounds(local).unwrap();
-            assert_eq!(window, Bounds::from_corners(gpui::point(px(64.0), px(-5.0)), gpui::point(px(80.0), px(11.0))), "dpi {dpi}");
+            assert_eq!(
+                window,
+                Bounds::from_corners(
+                    gpui::point(px(64.0), px(-5.0)),
+                    gpui::point(px(80.0), px(11.0))
+                ),
+                "dpi {dpi}"
+            );
         }
     }
 
     #[test]
     fn collapsed_input_transforms_cannot_accept_pointer_or_ime_geometry() {
         let transform = InputTransform {
-            matrix: TransformationMatrix { rotation_scale: [[0.0, 0.0], [0.0, 1.0]], translation: [10.0, 20.0] },
+            matrix: TransformationMatrix {
+                rotation_scale: [[0.0, 0.0], [0.0, 1.0]],
+                translation: [10.0, 20.0],
+            },
             scale_factor: 1.5,
         };
-        assert!(transform.layout_point(gpui::point(px(15.0), px(25.0))).is_none());
-        assert!(transform.window_bounds(Bounds::from_corners(gpui::point(px(1.0), px(2.0)), gpui::point(px(3.0), px(4.0)))).is_none());
+        assert!(transform
+            .layout_point(gpui::point(px(15.0), px(25.0)))
+            .is_none());
+        assert!(transform
+            .window_bounds(Bounds::from_corners(
+                gpui::point(px(1.0), px(2.0)),
+                gpui::point(px(3.0), px(4.0))
+            ))
+            .is_none());
     }
 
     #[test]
@@ -1644,18 +1739,39 @@ mod tests {
 
     #[test]
     fn a_released_lone_modifier_is_not_a_keydown() {
-        let stroke = |key: &str, modifiers: gpui::Modifiers, key_char: Option<&str>| gpui::Keystroke {
-            key: key.into(),
-            modifiers,
-            key_char: key_char.map(Into::into),
-        };
+        let stroke =
+            |key: &str, modifiers: gpui::Modifiers, key_char: Option<&str>| gpui::Keystroke {
+                key: key.into(),
+                modifiers,
+                key_char: key_char.map(Into::into),
+            };
         for key in ["shift", "control", "alt", "platform", "function"] {
-            assert!(is_standalone_modifier(&stroke(key, gpui::Modifiers::default(), None)));
+            assert!(is_standalone_modifier(&stroke(
+                key,
+                gpui::Modifiers::default(),
+                None
+            )));
         }
-        assert!(!is_standalone_modifier(&stroke("a", gpui::Modifiers::default(), Some("a"))));
-        assert!(!is_standalone_modifier(&stroke("a", gpui::Modifiers::shift(), Some("A"))));
-        assert!(!is_standalone_modifier(&stroke("shift", gpui::Modifiers::control(), None)));
-        assert!(!is_standalone_modifier(&stroke("f12", gpui::Modifiers::default(), None)));
+        assert!(!is_standalone_modifier(&stroke(
+            "a",
+            gpui::Modifiers::default(),
+            Some("a")
+        )));
+        assert!(!is_standalone_modifier(&stroke(
+            "a",
+            gpui::Modifiers::shift(),
+            Some("A")
+        )));
+        assert!(!is_standalone_modifier(&stroke(
+            "shift",
+            gpui::Modifiers::control(),
+            None
+        )));
+        assert!(!is_standalone_modifier(&stroke(
+            "f12",
+            gpui::Modifiers::default(),
+            None
+        )));
     }
 
     #[test]

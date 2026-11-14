@@ -40,16 +40,22 @@ pub fn internal_url(src: &str, page_origin: &str) -> String {
     let src = src.trim();
     if let Some(rest) = src.strip_prefix(page_origin) {
         if rest.is_empty() || rest.starts_with(['/', '?', '#']) {
-            return format!("{APP_ORIGIN}{}{rest}", if rest.starts_with('/') { "" } else { "/" });
+            return format!(
+                "{APP_ORIGIN}{}{rest}",
+                if rest.starts_with('/') { "" } else { "/" }
+            );
         }
     }
     // `//host/path` is another host; a scheme is another origin.
     if src.starts_with("//") {
         return format!("https:{src}");
     }
-    let has_scheme = src
-        .split_once(':')
-        .is_some_and(|(s, _)| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)) && !s.contains('/'));
+    let has_scheme = src.split_once(':').is_some_and(|(s, _)| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+            && !s.contains('/')
+    });
     if has_scheme {
         return src.to_string();
     }
@@ -57,16 +63,30 @@ pub fn internal_url(src: &str, page_origin: &str) -> String {
 }
 
 pub fn internal_origin(target: &str, page_origin: &str) -> String {
-    if target == page_origin { APP_ORIGIN.to_string() } else { target.to_string() }
+    if target == page_origin {
+        APP_ORIGIN.to_string()
+    } else {
+        target.to_string()
+    }
 }
 
 pub fn external_origin(origin: &str, page_origin: &str) -> String {
-    if origin == APP_ORIGIN { page_origin.to_string() } else { origin.to_string() }
+    if origin == APP_ORIGIN {
+        page_origin.to_string()
+    } else {
+        origin.to_string()
+    }
 }
 
 pub fn content_type(path: &str) -> &'static str {
     let path = path.split(['?', '#']).next().unwrap_or(path);
-    match path.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+    match path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "html" | "htm" => "text/html; charset=utf-8",
         "js" | "mjs" => "text/javascript; charset=utf-8",
         "css" => "text/css; charset=utf-8",
@@ -101,18 +121,37 @@ mod tests {
 
     #[test]
     fn the_apps_own_urls_become_the_internal_origin() {
-        assert_eq!(internal_url("app://redjs/games/pong/index.html", PAGE), "https://app.vn.invalid/games/pong/index.html");
-        assert_eq!(internal_url("/games/pong/index.html?x=1#y", PAGE), "https://app.vn.invalid/games/pong/index.html?x=1#y");
-        assert_eq!(internal_url("games/pong/index.html", PAGE), "https://app.vn.invalid/games/pong/index.html");
+        assert_eq!(
+            internal_url("app://redjs/games/pong/index.html", PAGE),
+            "https://app.vn.invalid/games/pong/index.html"
+        );
+        assert_eq!(
+            internal_url("/games/pong/index.html?x=1#y", PAGE),
+            "https://app.vn.invalid/games/pong/index.html?x=1#y"
+        );
+        assert_eq!(
+            internal_url("games/pong/index.html", PAGE),
+            "https://app.vn.invalid/games/pong/index.html"
+        );
         assert_eq!(internal_url("app://redjs", PAGE), "https://app.vn.invalid/");
     }
 
     #[test]
     fn other_origins_are_left_alone() {
-        assert_eq!(internal_url("https://games.example.com/a", PAGE), "https://games.example.com/a");
-        assert_eq!(internal_url("//cdn.example.com/a", PAGE), "https://cdn.example.com/a");
+        assert_eq!(
+            internal_url("https://games.example.com/a", PAGE),
+            "https://games.example.com/a"
+        );
+        assert_eq!(
+            internal_url("//cdn.example.com/a", PAGE),
+            "https://cdn.example.com/a"
+        );
         assert_eq!(internal_url("data:text/html,hi", PAGE), "data:text/html,hi");
-        assert_eq!(internal_url("app://redjsx/evil", PAGE), "app://redjsx/evil", "a longer host is another origin");
+        assert_eq!(
+            internal_url("app://redjsx/evil", PAGE),
+            "app://redjsx/evil",
+            "a longer host is another origin"
+        );
     }
 
     #[test]
@@ -126,7 +165,10 @@ mod tests {
 
     #[test]
     fn content_types_follow_the_extension() {
-        assert_eq!(content_type("/games/pong/index.html?v=2"), "text/html; charset=utf-8");
+        assert_eq!(
+            content_type("/games/pong/index.html?v=2"),
+            "text/html; charset=utf-8"
+        );
         assert_eq!(content_type("/a/b.WASM"), "application/wasm");
         assert_eq!(content_type("/noext"), "application/octet-stream");
     }

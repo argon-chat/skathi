@@ -3,6 +3,8 @@
 
 use crate::js::{self, Context, JsDispatcher, PostError, Value};
 use crate::tray::Roots;
+pub use sk_hotkeys::{Binding, Button, Chord, Fired, Hotkeys, Status};
+use sk_runtime::JsRuntime;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
@@ -12,8 +14,6 @@ use std::{
     },
     time::Duration,
 };
-pub use sk_hotkeys::{Binding, Button, Chord, Fired, Hotkeys, Status};
-use sk_runtime::JsRuntime;
 
 const MAX_LISTENERS: usize = 1024;
 const MAX_ID: u64 = (1 << 53) - 1;
@@ -208,7 +208,10 @@ fn emit(context: &Context, id: &str, down: bool) {
             )
         });
     if let Err(error) = filled {
-        sk_tree::log::record("error", format!("hotkey event: {}", describe(context, error)));
+        sk_tree::log::record(
+            "error",
+            format!("hotkey event: {}", describe(context, error)),
+        );
         return;
     }
     context.protect(payload);
@@ -303,7 +306,11 @@ fn begin_capture(context: &Context) -> js::Result<(u64, Value)> {
 fn settle(context: &Context, id: u64, result: Result<Chord, String>) {
     let pending = STATE.with(|state| {
         let mut state = state.borrow_mut();
-        if state.capture.as_ref().is_some_and(|pending| pending.id == id) {
+        if state
+            .capture
+            .as_ref()
+            .is_some_and(|pending| pending.id == id)
+        {
             state.capture.take()
         } else {
             None
@@ -343,10 +350,7 @@ struct Reader<'a> {
 }
 impl<'a> Reader<'a> {
     fn invalid(&self, message: &str) -> js::Error {
-        type_error(
-            self.context,
-            &format!("invalid hotkey bindings: {message}"),
-        )
+        type_error(self.context, &format!("invalid hotkey bindings: {message}"))
     }
     fn get(&mut self, object: Value, name: &str) -> js::Result<Value> {
         let value = self.context.get(object, &self.context.atom(name))?;
@@ -495,7 +499,11 @@ fn chord_value(context: &Context, chord: &Chord) -> js::Result<Value> {
             &context.atom("device"),
             Value::number(button.device as f64),
         )?;
-        context.set(item, &context.atom("code"), Value::number(button.code as f64))?;
+        context.set(
+            item,
+            &context.atom("code"),
+            Value::number(button.code as f64),
+        )?;
         context.set_index(buttons, index as u32, item)?;
     }
     let chord = context.object();
@@ -506,7 +514,11 @@ fn status_value(context: &Context, status: &Status) -> js::Result<Value> {
     let object = context.object();
     let mut roots = Roots::new(context);
     roots.keep(object);
-    context.set(object, &context.atom("running"), Value::boolean(status.running))?;
+    context.set(
+        object,
+        &context.atom("running"),
+        Value::boolean(status.running),
+    )?;
     context.set(
         object,
         &context.atom("platform"),
@@ -635,14 +647,15 @@ fn shutdown(context: &Context) {
 }
 
 fn install_roots(context: &Context) -> js::Result<()> {
-    let remove = js::function(context, "removeListener", 1, |context, args| {
-        if let Some(id) = args.arg(0).as_number().filter(|id| {
-            id.is_finite() && *id > 0.0 && id.fract() == 0.0 && *id <= MAX_ID as f64
-        }) {
-            remove_listener(context, id as u64);
-        }
-        Ok(Value::undefined())
-    })?;
+    let remove =
+        js::function(context, "removeListener", 1, |context, args| {
+            if let Some(id) = args.arg(0).as_number().filter(|id| {
+                id.is_finite() && *id > 0.0 && id.fract() == 0.0 && *id <= MAX_ID as f64
+            }) {
+                remove_listener(context, id as u64);
+            }
+            Ok(Value::undefined())
+        })?;
     let factory = context.eval("(function(remove){return function(id){let active=true;return function unsubscribe(){if(active){active=false;remove(id);}};};})")?;
     let unsubscribe = context.call(factory, Value::undefined(), &[remove])?;
     let is_array = context.eval("Array.isArray")?;
@@ -679,12 +692,21 @@ fn namespace(context: &Context) -> js::Result<Value> {
     method(context, r, object, "status", 0, |context, _| {
         status_value(context, &shared(context)?.service.status())
     })?;
-    method(context, r, object, "requestAccessibility", 0, |context, _| {
-        Ok(Value::boolean(
-            shared(context)?.service.request_accessibility(),
-        ))
+    method(
+        context,
+        r,
+        object,
+        "requestAccessibility",
+        0,
+        |context, _| {
+            Ok(Value::boolean(
+                shared(context)?.service.request_accessibility(),
+            ))
+        },
+    )?;
+    method(context, r, object, "restart", 0, |context, _| {
+        restart(context)
     })?;
-    method(context, r, object, "restart", 0, |context, _| restart(context))?;
     method(context, r, object, "captureOnce", 0, |context, _| {
         capture_once(context)
     })?;
@@ -929,7 +951,9 @@ mod tests {
                 assert!(STATE.with(|state| state.borrow().listeners.is_empty()));
                 context.eval("__hotkeyOff();__hotkeyOff()").unwrap();
 
-                context.eval("__hotkeyProbe.onFired(event=>__hotkeyEvents.push(event.phase))").unwrap();
+                context
+                    .eval("__hotkeyProbe.onFired(event=>__hotkeyEvents.push(event.phase))")
+                    .unwrap();
                 assert!(shared.post(&Fired {
                     id: "ptt".into(),
                     phase: "up".into(),

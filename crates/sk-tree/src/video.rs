@@ -14,9 +14,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::{App, RenderImage, Window};
-use sk_video::{
-    FrameRequest, MediaError, MediaEvent, MediaSource, VideoOptions, VideoState,
-};
+use sk_video::{FrameRequest, MediaError, MediaEvent, MediaSource, VideoOptions, VideoState};
 
 use crate::tree::{self, Tree};
 use crate::EventPayload;
@@ -73,7 +71,9 @@ fn note_api(id: u32, verb: u32, arg: f64, live: bool) {
 fn api_of(id: u32, take_playing: bool) -> Api {
     API.with(|m| {
         let mut m = m.borrow_mut();
-        let Some(api) = m.get_mut(&id) else { return Api::default() };
+        let Some(api) = m.get_mut(&id) else {
+            return Api::default();
+        };
         let out = *api;
         if take_playing {
             api.playing = None;
@@ -97,7 +97,13 @@ pub(crate) fn count() -> usize {
 }
 
 pub(crate) fn audible_count() -> usize {
-    VIDEO_STATES.with(|m| m.borrow().values().filter_map(|e| e.state.as_ref()).filter(|s| s.audible()).count())
+    VIDEO_STATES.with(|m| {
+        m.borrow()
+            .values()
+            .filter_map(|e| e.state.as_ref())
+            .filter(|s| s.audible())
+            .count()
+    })
 }
 
 fn queue_drops(win: crate::windows::WinKey, images: impl IntoIterator<Item = Arc<RenderImage>>) {
@@ -105,7 +111,6 @@ fn queue_drops(win: crate::windows::WinKey, images: impl IntoIterator<Item = Arc
 }
 
 const RING: usize = 32;
-
 
 /// The browser's boolean-attribute rule: present is true unless it spells `"false"` (`:attr="false"`).
 fn bool_attr(raw: Option<&str>) -> bool {
@@ -122,7 +127,12 @@ struct Props {
 
 impl Default for Props {
     fn default() -> Self {
-        Self { looping: false, muted: false, volume: 1.0, rate: 1.0 }
+        Self {
+            looping: false,
+            muted: false,
+            volume: 1.0,
+            rate: 1.0,
+        }
     }
 }
 
@@ -152,10 +162,7 @@ const UNSUPPORTED_PROPS: &[(&str, &str)] = &[
         "disableremoteplayback",
         "there is no remote playback to disable",
     ),
-    (
-        "autopictureinpicture",
-        "there is no picture-in-picture",
-    ),
+    ("autopictureinpicture", "there is no picture-in-picture"),
     (
         "srcobject",
         "MediaStream sources are not supported — this build exposes no getUserMedia and no \
@@ -176,8 +183,12 @@ fn warn_unsupported_props(t: &Tree, id: u32) {
     // already describes what happens.
 }
 
-
-pub(crate) fn sync(t: &Tree, id: u32, win: crate::windows::WinKey, scale: f32) -> Option<(u32, u32)> {
+pub(crate) fn sync(
+    t: &Tree,
+    id: u32,
+    win: crate::windows::WinKey,
+    scale: f32,
+) -> Option<(u32, u32)> {
     warn_unsupported_props(t, id);
     let src = t.prop(id, "src").unwrap_or("").trim().to_string();
     let autoplay = bool_attr(t.prop(id, "autoplay"));
@@ -257,7 +268,11 @@ pub(crate) fn sync(t: &Tree, id: u32, win: crate::windows::WinKey, scale: f32) -
         // A new decoder starts from what scripts set on the element (`Api`): after the attributes,
         // which are only its starting values, and before `autoplay`, so a muted preview is muted
         // before it plays.
-        let api = if fresh { api_of(id, true) } else { Api::default() };
+        let api = if fresh {
+            api_of(id, true)
+        } else {
+            Api::default()
+        };
         if let Some(looping) = api.looping {
             state.set_looping(looping);
         }
@@ -307,7 +322,10 @@ fn load(src: &str) -> Option<VideoState> {
                 state.set_source(MediaSource::Uri(src.to_string())).ok()?;
                 Some(state)
             }
-            Err(error) => { report(src, &error); None }
+            Err(error) => {
+                report(src, &error);
+                None
+            }
         };
     }
     let source = match crate::img::resolve_media("video", src) {
@@ -320,7 +338,9 @@ fn load(src: &str) -> Option<VideoState> {
     // A missing URL is not: the server's status is the useful half there, and only the network
     // source knows it.
     if matches!(&source, MediaSource::Path(p) if !p.exists()) {
-        let MediaSource::Path(path) = &source else { unreachable!() };
+        let MediaSource::Path(path) = &source else {
+            unreachable!()
+        };
         crate::render::warn_compat(
             &format!("video-src:{src}"),
             &format!(
@@ -385,13 +405,14 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
     });
 }
 
-
 pub fn device_changed() -> usize {
     VIDEO_STATES.with(|m| {
         let mut map = m.borrow_mut();
         let mut rebuilt = 0;
         for entry in map.values_mut() {
-            let Some(state) = entry.state.as_mut() else { continue };
+            let Some(state) = entry.state.as_mut() else {
+                continue;
+            };
             entry.resume = Some((
                 entry.src.clone(),
                 state.current_time(),
@@ -437,7 +458,9 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
         let mut out = Vec::new();
         for (&id, entry) in map.iter_mut() {
             let attached = attached(id);
-            let Some(state) = entry.state.as_mut() else { continue };
+            let Some(state) = entry.state.as_mut() else {
+                continue;
+            };
             // Detached (unmounted, or parked in a never-inserted `<KeepAlive>` container): stop decoding.
             if !attached {
                 if state.wants_playing() && !state.suspended() {
@@ -458,9 +481,7 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
             let max_size = if entry.frame_box == (0, 0) {
                 state
                     .native_size()
-                    .map(|(w, h)| {
-                        ((w as f32 * scale) as u32, (h as f32 * scale) as u32)
-                    })
+                    .map(|(w, h)| ((w as f32 * scale) as u32, (h as f32 * scale) as u32))
                     .unwrap_or((0, 0))
             } else {
                 entry.frame_box
@@ -476,15 +497,17 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
                     moved |= show;
                     elsewhere.push((
                         entry.window,
-                        crate::windows::PendingUpload { node: id, image, gpu: sk_video::HeldGpuFrame::new(gpu) },
+                        crate::windows::PendingUpload {
+                            node: id,
+                            image,
+                            gpu: sk_video::HeldGpuFrame::new(gpu),
+                        },
                     ));
                 }
                 None => moved |= show,
             }
             // The seek waits for `loadedmetadata`, when a browser's `currentTime` becomes settable too.
-            if entry.resume.is_some()
-                && advance.events.contains(&MediaEvent::LoadedMetadata)
-            {
+            if entry.resume.is_some() && advance.events.contains(&MediaEvent::LoadedMetadata) {
                 if let Some((_, at, playing)) = entry.resume.take() {
                     state.seek(at);
                     state.set_playing(playing);
@@ -517,7 +540,11 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     // and therefore the texture — with it.
     for (id, image, gpu, show) in uploads {
         let write = window
-            .write_image_tile(&image, 0, gpui::TileSource::Gpu(gpui::GpuTextureHandle(gpu.texture)))
+            .write_image_tile(
+                &image,
+                0,
+                gpui::TileSource::Gpu(gpui::GpuTextureHandle(gpu.texture)),
+            )
             .unwrap_or(gpui::TileWrite::Refused);
         crate::live::note(crate::live::shown(write, show));
         if write == gpui::TileWrite::Refused {
@@ -565,7 +592,8 @@ fn attached(id: u32) -> bool {
 pub(crate) fn drain_pending_uploads(window: &mut Window) {
     let queued = crate::windows::here(window, |w| std::mem::take(&mut w.pending_uploads));
     for u in queued {
-        let alive = VIDEO_STATES.with(|m| m.borrow().get(&u.node).is_some_and(|e| e.state.is_some()));
+        let alive =
+            VIDEO_STATES.with(|m| m.borrow().get(&u.node).is_some_and(|e| e.state.is_some()));
         if !alive {
             continue;
         }
@@ -581,7 +609,11 @@ pub(crate) fn drain_pending_uploads(window: &mut Window) {
              window's atlas — falling back to the CPU readback path.",
         );
         VIDEO_STATES.with(|m| {
-            if let Some(state) = m.borrow_mut().get_mut(&u.node).and_then(|e| e.state.as_mut()) {
+            if let Some(state) = m
+                .borrow_mut()
+                .get_mut(&u.node)
+                .and_then(|e| e.state.as_mut())
+            {
                 state.gpu_upload_failed();
             }
         });
@@ -688,7 +720,6 @@ fn dispatch_events(id: u32, events: &[MediaEvent], window: &mut Window, cx: &mut
         crate::render::js_dispatch_app(id, code, &payload, window, cx);
     }
 }
-
 
 /// `HTMLMediaElement`'s readable properties as `name=value` lines, the shape `dom::computed_style` uses.
 pub(crate) fn media_state(id: u32) -> Option<String> {
@@ -838,9 +869,15 @@ mod tests {
     #[test]
     fn element_api_writes_before_the_decoder_are_kept_for_it() {
         let id = 0x7fff_0001;
-        assert!(media_call(id, 4, 1.0), "muted = true is the element's, decoder or not");
+        assert!(
+            media_call(id, 4, 1.0),
+            "muted = true is the element's, decoder or not"
+        );
         assert!(media_call(id, 3, 0.25));
-        assert!(media_call(id, 0, 0.0), "play() before there is anything to play");
+        assert!(
+            media_call(id, 0, 0.0),
+            "play() before there is anything to play"
+        );
         assert!(!media_call(id, 2, 5.0), "a seek has nothing to seek yet");
         let api = api_of(id, false);
         assert_eq!(api.muted, Some(true));
@@ -876,12 +913,19 @@ mod tests {
             t.insert(node, root, 0);
             node
         });
-        let here = |k, scale| tree::read_tree(|t| {
-            sync(t, id, k, scale);
-        });
-        let recorded = || VIDEO_STATES.with(|m| {
-            m.borrow().get(&id).map(|e| (e.window, e.scale)).expect("the entry exists")
-        });
+        let here = |k, scale| {
+            tree::read_tree(|t| {
+                sync(t, id, k, scale);
+            })
+        };
+        let recorded = || {
+            VIDEO_STATES.with(|m| {
+                m.borrow()
+                    .get(&id)
+                    .map(|e| (e.window, e.scale))
+                    .expect("the entry exists")
+            })
+        };
 
         here(7u64, 1.0);
         assert_eq!(recorded(), (7u64, 1.0), "the window that created it");

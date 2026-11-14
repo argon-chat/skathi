@@ -40,7 +40,9 @@ static ENGINE: std::sync::Mutex<Option<Result<(), i32>>> = std::sync::Mutex::new
 /// refcounted and nothing proves the last `LottieState` gone.
 fn engine() -> Result<std::sync::MutexGuard<'static, Option<Result<(), i32>>>, LottieError> {
     // A poisoned lock means a previous caller panicked mid-render; ThorVG's state is still consistent, so recover.
-    let mut guard = ENGINE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = ENGINE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let started = *guard.get_or_insert_with(|| unsafe {
         tvg::tvg_engine_init(0).ok().map_err(|error| error as i32)
     });
@@ -107,10 +109,13 @@ impl ThorVg {
                 )));
             }
 
-            let canvas = tvg::tvg_swcanvas_create(tvg::Tvg_Engine_Option::TVG_ENGINE_OPTION_DEFAULT);
+            let canvas =
+                tvg::tvg_swcanvas_create(tvg::Tvg_Engine_Option::TVG_ENGINE_OPTION_DEFAULT);
             if canvas.is_null() {
                 tvg::tvg_animation_del(animation);
-                return Err(LottieError::Parse("tvg_swcanvas_create returned null".into()));
+                return Err(LottieError::Parse(
+                    "tvg_swcanvas_create returned null".into(),
+                ));
             }
             if let Err(error) = tvg::tvg_canvas_add(canvas, picture).ok() {
                 tvg::tvg_canvas_destroy(canvas);
@@ -139,7 +144,10 @@ impl ThorVg {
     pub fn render(&mut self, frame: f32, scale: f32, width: u32, height: u32) -> Option<Raster> {
         // Uniform scale from the authored size, as `rasterlottie` does; the canvas is the ceil, so a
         // fractional scale letterboxes by at most a pixel.
-        let size = (self.intrinsic.0 as f32 * scale, self.intrinsic.1 as f32 * scale);
+        let size = (
+            self.intrinsic.0 as f32 * scale,
+            self.intrinsic.1 as f32 * scale,
+        );
         let words = self.draw(frame, size, (width, height), false)?;
         let mut bgra = Vec::with_capacity(words.len() * 4);
         for word in words {
@@ -162,7 +170,13 @@ impl ThorVg {
         Some(unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), words.len() * 4) })
     }
 
-    fn draw(&mut self, frame: f32, size: (f32, f32), target: (u32, u32), straight: bool) -> Option<&[u32]> {
+    fn draw(
+        &mut self,
+        frame: f32,
+        size: (f32, f32),
+        target: (u32, u32),
+        straight: bool,
+    ) -> Option<&[u32]> {
         let (width, height) = target;
         if width == 0 || height == 0 {
             return None;

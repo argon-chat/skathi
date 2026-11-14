@@ -2,8 +2,8 @@
 //! overlay `StyleRefinement` applied on top of the computed base. An interrupted transition
 //! retargets from the value it is showing, not from the old computed value.
 
-use std::collections::{HashMap, HashSet};
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -106,8 +106,12 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
             },
         },
         BorderColor => {
-            let side_colors = [&r.vn_border_colors.top, &r.vn_border_colors.right,
-                &r.vn_border_colors.bottom, &r.vn_border_colors.left];
+            let side_colors = [
+                &r.vn_border_colors.top,
+                &r.vn_border_colors.right,
+                &r.vn_border_colors.bottom,
+                &r.vn_border_colors.left,
+            ];
             if r.border_color.is_none() && side_colors.iter().all(|color| color.is_none()) {
                 Slot::Missing
             } else {
@@ -119,7 +123,7 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
                     Slot::Value(Animatable::BorderColors(colors))
                 }
             }
-        },
+        }
         TextDecorationColor => slot_color(
             r.text
                 .underline
@@ -229,7 +233,10 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
             Animatable::Color(color) => {
                 r.border_color = Some(color);
                 r.vn_border_colors = gpui::EdgesRefinement {
-                    top: Some(None), right: Some(None), bottom: Some(None), left: Some(None),
+                    top: Some(None),
+                    right: Some(None),
+                    bottom: Some(None),
+                    left: Some(None),
                 };
             }
             _ => {}
@@ -239,13 +246,20 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
         // paint a hairline.
         TextDecorationColor => {
             if let Some(c) = color() {
-                if let Some(mut u) = r.text.underline.clone().or_else(|| base.text.underline.clone())
+                if let Some(mut u) = r
+                    .text
+                    .underline
+                    .clone()
+                    .or_else(|| base.text.underline.clone())
                 {
                     u.color = Some(c);
                     r.text.underline = Some(u);
                 }
-                if let Some(mut st) =
-                    r.text.strikethrough.clone().or_else(|| base.text.strikethrough.clone())
+                if let Some(mut st) = r
+                    .text
+                    .strikethrough
+                    .clone()
+                    .or_else(|| base.text.strikethrough.clone())
                 {
                     st.color = Some(c);
                     r.text.strikethrough = Some(st);
@@ -309,7 +323,7 @@ fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
         BorderColor => {
             r.border_color = None;
             r.vn_border_colors = Default::default();
-        },
+        }
         Width => r.size.width = None,
         Height => r.size.height = None,
         MinWidth => r.min_size.width = None,
@@ -351,7 +365,7 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
         BorderColor => {
             dst.border_color = src.border_color;
             dst.vn_border_colors = src.vn_border_colors.clone();
-        },
+        }
         Width => dst.size.width = src.size.width,
         Height => dst.size.height = src.size.height,
         MinWidth => dst.min_size.width = src.min_size.width,
@@ -408,11 +422,20 @@ fn initial(p: &TransitionProperty) -> Option<Animatable> {
             l: 0.0,
             a: 0.0,
         })),
-        PaddingTop | PaddingRight | PaddingBottom | PaddingLeft | MarginTop | MarginRight
-        | MarginBottom | MarginLeft | BorderTopLeftRadius | BorderTopRightRadius
-        | BorderBottomRightRadius | BorderBottomLeftRadius | RowGap | ColumnGap => {
-            Some(Animatable::Pixels(Pixels::from(0.0)))
-        }
+        PaddingTop
+        | PaddingRight
+        | PaddingBottom
+        | PaddingLeft
+        | MarginTop
+        | MarginRight
+        | MarginBottom
+        | MarginLeft
+        | BorderTopLeftRadius
+        | BorderTopRightRadius
+        | BorderBottomRightRadius
+        | BorderBottomLeftRadius
+        | RowGap
+        | ColumnGap => Some(Animatable::Pixels(Pixels::from(0.0))),
         Transform => Some(Animatable::Transform(TransformSpec::IDENTITY)),
         _ => None,
     }
@@ -421,12 +444,17 @@ fn initial(p: &TransitionProperty) -> Option<Animatable> {
 fn unify(a: Animatable, b: Animatable) -> Option<(Animatable, Animatable)> {
     use Animatable::*;
     match (a, b) {
-        (Number(_), Number(_)) | (Color(_), Color(_)) | (Pixels(_), Pixels(_)) | (Rems(_), Rems(_)) => {
-            Some((a, b))
-        }
+        (Number(_), Number(_))
+        | (Color(_), Color(_))
+        | (Pixels(_), Pixels(_))
+        | (Rems(_), Rems(_)) => Some((a, b)),
         (BorderColors(_), BorderColors(_)) => Some((a, b)),
-        (Color(color), BorderColors(colors)) => Some((BorderColors([color; 4]), BorderColors(colors))),
-        (BorderColors(colors), Color(color)) => Some((BorderColors(colors), BorderColors([color; 4]))),
+        (Color(color), BorderColors(colors)) => {
+            Some((BorderColors([color; 4]), BorderColors(colors)))
+        }
+        (BorderColors(colors), Color(color)) => {
+            Some((BorderColors(colors), BorderColors([color; 4])))
+        }
         (Effect(x), Effect(y)) if x.id == y.id => Some((a, b)),
         (Transform(_), Transform(_)) => Some((a, b)),
         (Pixels(p), Rems(r)) if r.0 == 0.0 => Some((Pixels(p), Pixels(gpui::Pixels::from(0.0)))),
@@ -442,8 +470,9 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
     match (from, to) {
         (Number(a), Number(b)) => Number(f32::interpolate(a, b, t)),
         (Color(a), Color(b)) => Color(lerp_color(a, b, t)),
-        (BorderColors(a), BorderColors(b)) => BorderColors(std::array::from_fn(|index|
-            lerp_color(a[index], b[index], t))),
+        (BorderColors(a), BorderColors(b)) => BorderColors(std::array::from_fn(|index| {
+            lerp_color(a[index], b[index], t)
+        })),
         (Pixels(a), Pixels(b)) => Pixels(gpui::Pixels::interpolate(a, b, t)),
         (Rems(a), Rems(b)) => Rems(gpui::Rems::interpolate(a, b, t)),
         (Effect(a), Effect(b)) => {
@@ -470,7 +499,10 @@ fn lerp_color(from: Hsla, to: Hsla, t: f32) -> Hsla {
     let (a, b) = (gpui::Rgba::from(from), gpui::Rgba::from(to));
     let alpha = f32::interpolate(a.a, b.a, t).clamp(0.0, 1.0);
     if alpha <= 0.0 {
-        return Hsla { a: 0.0, ..if t < 0.5 { from } else { to } };
+        return Hsla {
+            a: 0.0,
+            ..if t < 0.5 { from } else { to }
+        };
     }
     let channel = |x: f32, y: f32| (f32::interpolate(x * a.a, y * b.a, t) / alpha).clamp(0.0, 1.0);
     Hsla::from(gpui::Rgba {
@@ -538,7 +570,9 @@ pub struct Animator {
 }
 
 mod script;
-pub use script::{script_keyframes, ScriptClock, ScriptFrame, ScriptKeyframeNotes, ScriptSample, ScriptTiming};
+pub use script::{
+    script_keyframes, ScriptClock, ScriptFrame, ScriptKeyframeNotes, ScriptSample, ScriptTiming,
+};
 
 impl Animator {
     pub fn new() -> Animator {
@@ -778,7 +812,12 @@ impl Animator {
         self.states.contains_key(&node)
     }
 
-    pub fn overlay(&self, node: u32, base: &StyleRefinement, now: Instant) -> Option<StyleRefinement> {
+    pub fn overlay(
+        &self,
+        node: u32,
+        base: &StyleRefinement,
+        now: Instant,
+    ) -> Option<StyleRefinement> {
         let mut r = self.animation_overlay(node, base, now);
         if let Some(hold) = self.states.get(&node) {
             use gpui::Refineable as _;
@@ -1025,13 +1064,22 @@ mod tests {
 
         a.on_computed(1, Some(&old), &new, now);
         assert!(a.any_active(now));
-        assert!((opacity_of(&a.overlay(1, &StyleRefinement::default(), now).unwrap()) - 0.0).abs() < 1e-6);
+        assert!(
+            (opacity_of(&a.overlay(1, &StyleRefinement::default(), now).unwrap()) - 0.0).abs()
+                < 1e-6
+        );
 
         let half = now + Duration::from_millis(500);
-        assert!((opacity_of(&a.overlay(1, &StyleRefinement::default(), half).unwrap()) - 0.5).abs() < 1e-3);
+        assert!(
+            (opacity_of(&a.overlay(1, &StyleRefinement::default(), half).unwrap()) - 0.5).abs()
+                < 1e-3
+        );
 
         let end = now + Duration::from_millis(1000);
-        assert!((opacity_of(&a.overlay(1, &StyleRefinement::default(), end).unwrap()) - 1.0).abs() < 1e-6);
+        assert!(
+            (opacity_of(&a.overlay(1, &StyleRefinement::default(), end).unwrap()) - 1.0).abs()
+                < 1e-6
+        );
         assert!(!a.any_active(end));
 
         a.finish_settled(end);
@@ -1049,9 +1097,15 @@ mod tests {
 
         for at in [0, 200, 499] {
             let v = opacity_of(&a.overlay_test(1, now + Duration::from_millis(at)).unwrap());
-            assert!(v.abs() < 1e-6, "value moved during the delay at {at}ms: {v}");
+            assert!(
+                v.abs() < 1e-6,
+                "value moved during the delay at {at}ms: {v}"
+            );
         }
-        let v = opacity_of(&a.overlay_test(1, now + Duration::from_millis(1000)).unwrap());
+        let v = opacity_of(
+            &a.overlay_test(1, now + Duration::from_millis(1000))
+                .unwrap(),
+        );
         assert!((v - 0.5).abs() < 1e-3, "{v}");
         assert!(a.any_active(now + Duration::from_millis(1000)));
         assert!(!a.any_active(now + Duration::from_millis(1500)));
@@ -1153,26 +1207,64 @@ mod tests {
         a.on_computed(1, Some(&old), &new, now);
 
         let half = a.overlay_test(1, now + Duration::from_millis(500)).unwrap();
-        let c = half.background.unwrap().color().unwrap().as_solid().unwrap();
+        let c = half
+            .background
+            .unwrap()
+            .color()
+            .unwrap()
+            .as_solid()
+            .unwrap();
         // Half of each channel: `rgb(128 0 128)`, the purple a browser shows, not the
         // full-brightness magenta of the hue arc between them.
         let c = Rgba::from(c);
-        assert!((c.r - 0.5).abs() < 1e-3 && c.g < 1e-3 && (c.b - 0.5).abs() < 1e-3, "{c:?}");
+        assert!(
+            (c.r - 0.5).abs() < 1e-3 && c.g < 1e-3 && (c.b - 0.5).abs() < 1e-3,
+            "{c:?}"
+        );
     }
 
     /// Mixed unpremultiplied, a background fading in from it is gray at half alpha part way; a
     /// browser shows the colour it is heading for, at a growing alpha.
     #[test]
     fn a_colour_fading_in_from_transparent_keeps_its_colour() {
-        let white: Hsla = Rgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }.into();
-        let clear = Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 };
+        let white: Hsla = Rgba {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        }
+        .into();
+        let clear = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.0,
+            a: 0.0,
+        };
         let quarter = Rgba::from(lerp_color(clear, white, 0.25));
         assert!((quarter.a - 0.25).abs() < 1e-3, "{quarter:?}");
-        assert!(quarter.r > 0.999 && quarter.g > 0.999 && quarter.b > 0.999, "{quarter:?}");
-        let gray: Hsla = Rgba { r: 0.5, g: 0.5, b: 0.5, a: 1.0 }.into();
-        let blue: Hsla = Rgba { r: 0.0, g: 0.0, b: 1.0, a: 1.0 }.into();
+        assert!(
+            quarter.r > 0.999 && quarter.g > 0.999 && quarter.b > 0.999,
+            "{quarter:?}"
+        );
+        let gray: Hsla = Rgba {
+            r: 0.5,
+            g: 0.5,
+            b: 0.5,
+            a: 1.0,
+        }
+        .into();
+        let blue: Hsla = Rgba {
+            r: 0.0,
+            g: 0.0,
+            b: 1.0,
+            a: 1.0,
+        }
+        .into();
         let half = Rgba::from(lerp_color(gray, blue, 0.5));
-        assert!((half.r - 0.25).abs() < 1e-3 && (half.g - 0.25).abs() < 1e-3, "{half:?}");
+        assert!(
+            (half.r - 0.25).abs() < 1e-3 && (half.g - 0.25).abs() < 1e-3,
+            "{half:?}"
+        );
         assert!((half.b - 0.75).abs() < 1e-3, "{half:?}");
         let over = lerp_color(gray, blue, 1.4);
         assert!((0.0..=1.0).contains(&over.l) && (0.0..=1.0).contains(&over.a));
@@ -1259,8 +1351,14 @@ mod tests {
     fn all_covers_every_animatable_property() {
         let mut a = Animator::new();
         let now = t0();
-        let old = states(with_opacity_and_radius(0.0, 0.0), "transition: all 1s linear");
-        let new = states(with_opacity_and_radius(1.0, 8.0), "transition: all 1s linear");
+        let old = states(
+            with_opacity_and_radius(0.0, 0.0),
+            "transition: all 1s linear",
+        );
+        let new = states(
+            with_opacity_and_radius(1.0, 8.0),
+            "transition: all 1s linear",
+        );
         a.on_computed(1, Some(&old), &new, now);
         let overlay = a.overlay_test(1, now + Duration::from_millis(500)).unwrap();
         assert!((overlay.opacity.unwrap() - 0.5).abs() < 1e-3);
@@ -1288,11 +1386,22 @@ mod tests {
     fn narrowing_transition_property_cancels_the_dropped_one() {
         let mut a = Animator::new();
         let now = t0();
-        let old = states(with_opacity_and_radius(0.0, 0.0), "transition: all 1s linear");
-        let new = states(with_opacity_and_radius(1.0, 8.0), "transition: all 1s linear");
+        let old = states(
+            with_opacity_and_radius(0.0, 0.0),
+            "transition: all 1s linear",
+        );
+        let new = states(
+            with_opacity_and_radius(1.0, 8.0),
+            "transition: all 1s linear",
+        );
         a.on_computed(1, Some(&old), &new, now);
         let mid = now + Duration::from_millis(200);
-        assert!(a.overlay(1, &StyleRefinement::default(), mid).unwrap().corner_radii.top_left.is_some());
+        assert!(a
+            .overlay(1, &StyleRefinement::default(), mid)
+            .unwrap()
+            .corner_radii
+            .top_left
+            .is_some());
 
         let narrowed = states(
             with_opacity_and_radius(1.0, 8.0),
@@ -1477,7 +1586,10 @@ mod tests {
         assert_eq!(half.backdrop_blur_radius(), half.params[1]);
         assert!(a.take_diagnostics().is_empty());
 
-        let end = shading_of(&a.overlay_test(1, now + Duration::from_millis(1000)).unwrap());
+        let end = shading_of(
+            &a.overlay_test(1, now + Duration::from_millis(1000))
+                .unwrap(),
+        );
         assert_eq!(end.params[0], 0.8);
         assert_eq!(end.params[1], 20.0);
     }
@@ -1526,7 +1638,10 @@ mod tests {
         let old = states(with_shading("frost(0.2)"), all);
         let new = states(with_shading("frost(0.8)"), all);
         a.on_computed(1, Some(&old), &new, now);
-        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none(), "`all` must not cover --shading");
+        assert!(
+            a.overlay(1, &StyleRefinement::default(), now).is_none(),
+            "`all` must not cover --shading"
+        );
         assert!(a.take_diagnostics().is_empty());
 
         let named = "transition: all 1s linear, --shading 1s linear";
@@ -1570,7 +1685,11 @@ mod tests {
         let mut base = StyleRefinement::default();
         base.text.color = Some(c);
         let mut s = states(base, css);
-        s.extras = crate::Extras { fill: paint, stroke: paint, ..Default::default() };
+        s.extras = crate::Extras {
+            fill: paint,
+            stroke: paint,
+            ..Default::default()
+        };
         s.color = Some(c);
         s
     }
@@ -1599,9 +1718,16 @@ mod tests {
                     && (a.a - b.a).abs() < 1e-4
             };
             assert!(same(at(0), red), "{css} starts where it was: {:?}", at(0));
-            assert!(same(at(1000), blue), "{css} ends where it is going: {:?}", at(1000));
+            assert!(
+                same(at(1000), blue),
+                "{css} ends where it is going: {:?}",
+                at(1000)
+            );
             let half = at(500);
-            assert!(!same(half, red) && !same(half, blue), "{css} interpolates: {half:?}");
+            assert!(
+                !same(half, red) && !same(half, blue),
+                "{css} interpolates: {half:?}"
+            );
         }
     }
 
@@ -1614,7 +1740,10 @@ mod tests {
         let new = svg_states(rgb(0.0, 0.0, 1.0), Some(crate::SvgPaint::Current), css);
 
         a.on_computed(1, Some(&old), &new, now);
-        assert!(!a.any_active(now), "an unpainted endpoint has nothing to interpolate");
+        assert!(
+            !a.any_active(now),
+            "an unpainted endpoint has nothing to interpolate"
+        );
         assert!(a.overlay_test(1, now).is_none());
 
         let bare = svg_states(rgb(0.0, 0.0, 1.0), None, css);
@@ -1644,17 +1773,36 @@ mod tests {
         a.on_computed(1, Some(&old), &new, now);
         assert!(a.any_active(now));
         let base = decorated(red);
-        let half = a.overlay(1, &base, now + Duration::from_millis(500)).unwrap();
-        let u = half.text.underline.clone().expect("the overlay carries a decoration");
-        assert_eq!(u.thickness, px(3.0), "the base's thickness survives the overlay");
+        let half = a
+            .overlay(1, &base, now + Duration::from_millis(500))
+            .unwrap();
+        let u = half
+            .text
+            .underline
+            .clone()
+            .expect("the overlay carries a decoration");
+        assert_eq!(
+            u.thickness,
+            px(3.0),
+            "the base's thickness survives the overlay"
+        );
         assert!(u.wavy, "…and so does its waviness");
         assert_eq!(u.offset, px(2.0), "…and its offset");
         let c = u.color.expect("with a colour of its own");
         assert!(c != red && c != blue, "interpolated, not snapped: {c:?}");
 
-        let end = a.overlay(1, &base, now + Duration::from_millis(1000)).unwrap();
-        let ended = end.text.underline.and_then(|u| u.color).expect("a colour at the end");
-        assert!((ended.h - blue.h).abs() < 1e-4 && (ended.l - blue.l).abs() < 1e-4, "{ended:?}");
+        let end = a
+            .overlay(1, &base, now + Duration::from_millis(1000))
+            .unwrap();
+        let ended = end
+            .text
+            .underline
+            .and_then(|u| u.color)
+            .expect("a colour at the end");
+        assert!(
+            (ended.h - blue.h).abs() < 1e-4 && (ended.l - blue.l).abs() < 1e-4,
+            "{ended:?}"
+        );
     }
 
     #[test]
@@ -1702,13 +1850,17 @@ impl AnimRun {
     fn paint_progress(&self, now: Instant) -> Option<f32> {
         match self.phase(now) {
             Phase::Running { progress, .. } => Some(progress),
-            Phase::Delayed if matches!(self.spec.fill, FillMode::Backwards | FillMode::Both) =>
-                Some(self.spec.phase(self.spec.delay).progress_or(0.0)),
-            Phase::Finished { progress } if matches!(self.spec.fill, FillMode::Forwards | FillMode::Both) => Some(progress),
+            Phase::Delayed if matches!(self.spec.fill, FillMode::Backwards | FillMode::Both) => {
+                Some(self.spec.phase(self.spec.delay).progress_or(0.0))
+            }
+            Phase::Finished { progress }
+                if matches!(self.spec.fill, FillMode::Forwards | FillMode::Both) =>
+            {
+                Some(progress)
+            }
             _ => None,
         }
     }
-
 
     fn elapsed_seconds(&self, now: Instant) -> f32 {
         self.elapsed(now)
@@ -1746,7 +1898,11 @@ impl Animator {
         let wanted: Vec<AnimationSpec> = if self.reduce_motion {
             Vec::new()
         } else {
-            new.animations.iter().filter(|s| !s.is_inert()).cloned().collect()
+            new.animations
+                .iter()
+                .filter(|s| !s.is_inert())
+                .cloned()
+                .collect()
         };
 
         if wanted.is_empty() {
@@ -1912,10 +2068,14 @@ impl Animator {
     }
 
     pub fn any_animation(&self, now: Instant) -> bool {
-        let css = self.anims.values().flatten().any(|run| match run.phase(now) {
-            Phase::Finished { .. } => false,
-            Phase::Delayed | Phase::Running { .. } => run.paused_at.is_none(),
-        });
+        let css = self
+            .anims
+            .values()
+            .flatten()
+            .any(|run| match run.phase(now) {
+                Phase::Finished { .. } => false,
+                Phase::Delayed | Phase::Running { .. } => run.paused_at.is_none(),
+            });
         css || {
             let timeline = self.timeline_ms(now);
             self.scripts.values().flatten().any(|a| a.running(timeline))
@@ -1923,34 +2083,66 @@ impl Animator {
     }
 
     pub fn animated_extras(&self, node: u32, now: Instant) -> Option<crate::Extras> {
-        self.registered_overlay(node, now).map(|sample| sample.1.clone())
+        self.registered_overlay(node, now)
+            .map(|sample| sample.1.clone())
     }
 
-    fn registered_overlay(&self, node: u32, now: Instant) -> Option<Rc<(StyleRefinement, crate::Extras)>> {
+    fn registered_overlay(
+        &self,
+        node: u32,
+        now: Instant,
+    ) -> Option<Rc<(StyleRefinement, crate::Extras)>> {
         if let Some((at, sample)) = self.registered_samples.borrow().get(&node) {
-            if *at == now { return Some(sample.clone()); }
+            if *at == now {
+                return Some(sample.clone());
+            }
         }
         let runs = self.anims.get(&node)?;
         let mut context = None;
         let mut samples = Vec::new();
         for run in runs {
-            let Some(scope) = &run.custom_context else { continue };
-            let Some(progress) = run.paint_progress(now) else { continue };
+            let Some(scope) = &run.custom_context else {
+                continue;
+            };
+            let Some(progress) = run.paint_progress(now) else {
+                continue;
+            };
             for registration in &scope.registrations {
-                if scope.important_custom.contains(&registration.name) { continue; }
-                let declares = |step: &crate::Keyframe| scope.keyframe_value(step, &registration.name).is_some();
-                let Some(segment) = run.frames.segment_steps(&declares, progress) else { continue };
-                let implicit = scope.vars.get(&registration.name).and_then(crate::registered::percentage).unwrap_or(registration.initial);
-                let from = segment.from.and_then(|step| scope.keyframe_value(step, &registration.name)).unwrap_or(implicit);
-                let to = segment.to.and_then(|step| scope.keyframe_value(step, &registration.name)).unwrap_or(implicit);
-                let t = segment.easing.unwrap_or(run.spec.easing).eval(segment.t.clamp(0., 1.));
+                if scope.important_custom.contains(&registration.name) {
+                    continue;
+                }
+                let declares = |step: &crate::Keyframe| {
+                    scope.keyframe_value(step, &registration.name).is_some()
+                };
+                let Some(segment) = run.frames.segment_steps(&declares, progress) else {
+                    continue;
+                };
+                let implicit = scope
+                    .vars
+                    .get(&registration.name)
+                    .and_then(crate::registered::percentage)
+                    .unwrap_or(registration.initial);
+                let from = segment
+                    .from
+                    .and_then(|step| scope.keyframe_value(step, &registration.name))
+                    .unwrap_or(implicit);
+                let to = segment
+                    .to
+                    .and_then(|step| scope.keyframe_value(step, &registration.name))
+                    .unwrap_or(implicit);
+                let t = segment
+                    .easing
+                    .unwrap_or(run.spec.easing)
+                    .eval(segment.t.clamp(0., 1.));
                 samples.push((registration.name.clone(), from + (to - from) * t));
                 context = Some(scope);
             }
         }
         context.map(|scope| {
             let sample = Rc::new(scope.sample(&samples));
-            self.registered_samples.borrow_mut().insert(node, (now, sample.clone()));
+            self.registered_samples
+                .borrow_mut()
+                .insert(node, (now, sample.clone()));
             sample
         })
     }
@@ -1962,7 +2154,9 @@ impl Animator {
         now: Instant,
     ) -> Option<StyleRefinement> {
         let runs = self.anims.get(&node)?;
-        let mut out = self.registered_overlay(node, now).map(|sample| sample.0.clone());
+        let mut out = self
+            .registered_overlay(node, now)
+            .map(|sample| sample.0.clone());
         for run in runs {
             let progress = match run.phase(now) {
                 Phase::Running { progress, .. } => progress,
@@ -2035,7 +2229,12 @@ fn apply_keyframes(
             continue;
         };
         let easing = segment.easing.unwrap_or(spec.easing);
-        install(out, base, &property, lerp(a, b, easing.eval(segment.t.clamp(0.0, 1.0))));
+        install(
+            out,
+            base,
+            &property,
+            lerp(a, b, easing.eval(segment.t.clamp(0.0, 1.0))),
+        );
     }
 }
 
@@ -2049,13 +2248,27 @@ mod border_colors_regressions {
         before.vn_border_colors.left = Some(Some(gpui::blue()));
         let mut after = StyleRefinement::default();
         after.border_color = Some(gpui::green());
-        let (Slot::Value(a), Slot::Value(b)) = (slot_of(&before, &TransitionProperty::BorderColor),
-            slot_of(&after, &TransitionProperty::BorderColor)) else { panic!("border endpoints missing") };
+        let (Slot::Value(a), Slot::Value(b)) = (
+            slot_of(&before, &TransitionProperty::BorderColor),
+            slot_of(&after, &TransitionProperty::BorderColor),
+        ) else {
+            panic!("border endpoints missing")
+        };
         let (a, b) = unify(a, b).expect("uniform and per-side colours interpolate");
         let mut overlay = StyleRefinement::default();
-        install(&mut overlay, &after, &TransitionProperty::BorderColor, lerp(a, b, 0.5));
+        install(
+            &mut overlay,
+            &after,
+            &TransitionProperty::BorderColor,
+            lerp(a, b, 0.5),
+        );
         assert_ne!(overlay.vn_border_colors.left, overlay.vn_border_colors.top);
-        install(&mut overlay, &before, &TransitionProperty::BorderColor, Animatable::Color(gpui::green()));
+        install(
+            &mut overlay,
+            &before,
+            &TransitionProperty::BorderColor,
+            Animatable::Color(gpui::green()),
+        );
         assert_eq!(overlay.vn_border_colors.left, Some(None));
         clear(&mut overlay, &TransitionProperty::BorderColor);
         assert_eq!(overlay.vn_border_colors.left, None);

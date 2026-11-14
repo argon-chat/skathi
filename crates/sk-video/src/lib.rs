@@ -21,8 +21,8 @@
 pub mod backend;
 pub mod element;
 pub mod state;
-pub mod stub;
 pub mod stream;
+pub mod stub;
 
 #[cfg(windows)]
 pub mod mf;

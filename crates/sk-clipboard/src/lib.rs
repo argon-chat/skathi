@@ -26,7 +26,9 @@ impl ClipboardHost for GpuiClipboard {
 
     fn read_text(&self) -> Result<String, String> {
         with_app(|cx| {
-            cx.read_from_clipboard().and_then(|item| item.text()).unwrap_or_default()
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .unwrap_or_default()
         })
         .ok_or_else(|| NO_FRAME.to_string())
     }
@@ -49,7 +51,10 @@ impl ClipboardHost for GpuiClipboard {
         #[cfg(not(windows))]
         {
             let _ = items;
-            Err(format!("{} has no item clipboard in this build", self.platform()))
+            Err(format!(
+                "{} has no item clipboard in this build",
+                self.platform()
+            ))
         }
     }
 
@@ -59,7 +64,11 @@ impl ClipboardHost for GpuiClipboard {
         #[cfg(not(windows))]
         {
             let text = self.read_text()?;
-            Ok(if text.is_empty() { Vec::new() } else { vec![("text/plain".to_string(), text.into_bytes())] })
+            Ok(if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![("text/plain".to_string(), text.into_bytes())]
+            })
         }
     }
 }
@@ -100,7 +109,10 @@ mod tests {
     #[test]
     fn install_is_idempotent_and_leaves_a_host_behind() {
         // `set_host` is last-writer-wins; a repeated boot must still end with a host.
-        assert!(api::host().is_none(), "nothing installed a host before this test");
+        assert!(
+            api::host().is_none(),
+            "nothing installed a host before this test"
+        );
         install();
         install();
         let h = api::host().expect("a host is installed");

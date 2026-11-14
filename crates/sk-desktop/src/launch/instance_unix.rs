@@ -49,7 +49,10 @@ fn uid() -> u32 {
 }
 
 fn runtime_dir() -> Result<PathBuf, String> {
-    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|p| p.is_absolute() && p.is_dir()) {
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute() && p.is_dir())
+    {
         return Ok(dir);
     }
     let dir = std::env::temp_dir().join(format!("vn-instance-{}", uid()));
@@ -62,7 +65,10 @@ fn runtime_dir() -> Result<PathBuf, String> {
     use std::os::unix::fs::MetadataExt;
     let meta = fs::symlink_metadata(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     if !meta.is_dir() || meta.uid() != uid() || meta.mode() & 0o077 != 0 {
-        return Err(format!("{} is not a private directory of this user", dir.display()));
+        return Err(format!(
+            "{} is not a private directory of this user",
+            dir.display()
+        ));
     }
     Ok(dir)
 }
@@ -100,11 +106,14 @@ fn claim_within(id: &str, storage: &str, fwd: &Forward, patience: Duration) -> C
             Sent::Closing if !closing || Instant::now() < deadline => {
                 if !closing {
                     closing = true;
-                    deadline = deadline.max(Instant::now() + Duration::from_millis(CLOSING_PATIENCE_MS));
+                    deadline =
+                        deadline.max(Instant::now() + Duration::from_millis(CLOSING_PATIENCE_MS));
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
-            Sent::Gone if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            Sent::Gone if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50))
+            }
             Sent::Closing => return Claim::StillClosing,
             Sent::Gone | Sent::NoAnswer if closing => return Claim::StillClosing,
             Sent::Gone | Sent::NoAnswer => return Claim::NoAnswer,
@@ -119,7 +128,14 @@ enum Lock {
 }
 
 fn take_lock(path: &PathBuf) -> Lock {
-    let file = match OpenOptions::new().read(true).write(true).create(true).truncate(false).mode(0o600).open(path) {
+    let file = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)
+    {
         Ok(f) => f,
         Err(e) => return Lock::Failed(format!("opening {}: {e}", path.display())),
     };
@@ -144,7 +160,9 @@ enum Sent {
 fn forward(sock: &PathBuf, fwd: &Forward, deadline: Instant) -> Sent {
     let mut stream = match UnixStream::connect(sock) {
         Ok(s) => s,
-        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::ConnectionRefused) => return Sent::Gone,
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::ConnectionRefused) => {
+            return Sent::Gone
+        }
         Err(_) => return Sent::NoAnswer,
     };
     match peer_uid(&stream) {
@@ -152,10 +170,14 @@ fn forward(sock: &PathBuf, fwd: &Forward, deadline: Instant) -> Sent {
         Some(peer) => return Sent::Impostor(format!("the socket's server runs as uid {peer}")),
         None => return Sent::Impostor("the socket's server could not be identified".into()),
     }
-    let left = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(100));
+    let left = deadline
+        .saturating_duration_since(Instant::now())
+        .max(Duration::from_millis(100));
     let _ = stream.set_write_timeout(Some(left));
     let _ = stream.set_read_timeout(Some(left));
-    if stream.write_all(&fwd.encode()).is_err() || stream.shutdown(std::net::Shutdown::Write).is_err() {
+    if stream.write_all(&fwd.encode()).is_err()
+        || stream.shutdown(std::net::Shutdown::Write).is_err()
+    {
         return Sent::NoAnswer;
     }
     let mut ack = [0u8; 1];
@@ -186,16 +208,21 @@ fn peer_uid(stream: &UnixStream) -> Option<u32> {
 fn serve(sock: &PathBuf) -> Result<(), String> {
     // Only the lock holder gets here, so a file at this path is a dead one's.
     let _ = fs::remove_file(sock);
-    let listener = UnixListener::bind(sock).map_err(|e| format!("binding {}: {e}", sock.display()))?;
+    let listener =
+        UnixListener::bind(sock).map_err(|e| format!("binding {}: {e}", sock.display()))?;
     std::thread::Builder::new()
         .name("vn-instance".into())
         .spawn(move || {
             for stream in listener.incoming() {
                 match stream {
                     Ok(stream) => {
-                        let _ = std::thread::Builder::new().name("vn-instance-client".into()).spawn(move || handle(stream));
+                        let _ = std::thread::Builder::new()
+                            .name("vn-instance-client".into())
+                            .spawn(move || handle(stream));
                     }
-                    Err(e) => eprintln!("[launch] the single-instance socket failed to accept: {e}"),
+                    Err(e) => {
+                        eprintln!("[launch] the single-instance socket failed to accept: {e}")
+                    }
                 }
             }
         })
@@ -210,7 +237,9 @@ fn handle(mut stream: UnixStream) {
     }
     let _ = stream.set_read_timeout(Some(Duration::from_millis(FORWARD_TIMEOUT_MS)));
     let mut bytes = Vec::new();
-    let read = (&mut stream).take(MAX_MESSAGE as u64 + 1).read_to_end(&mut bytes);
+    let read = (&mut stream)
+        .take(MAX_MESSAGE as u64 + 1)
+        .read_to_end(&mut bytes);
     let msg = match read {
         Ok(_) => Forward::decode(&bytes),
         Err(e) => Err(format!("read failed: {e}")),
@@ -240,7 +269,13 @@ mod tests {
     use super::*;
 
     fn fwd(url: &str) -> Forward {
-        Forward { argv: vec!["app".into()], args: vec![], cwd: "/".into(), url: Some(url.into()), raise: false }
+        Forward {
+            argv: vec!["app".into()],
+            args: vec![],
+            cwd: "/".into(),
+            url: Some(url.into()),
+            raise: false,
+        }
     }
 
     #[test]
@@ -252,7 +287,13 @@ mod tests {
     #[test]
     fn a_second_claim_forwards_to_the_first() {
         let id = format!("sk-test-{}", std::process::id());
-        assert!(matches!(claim_within(&id, "s", &fwd("x://1"), Duration::from_secs(2)), Claim::Primary));
-        assert!(matches!(claim_within(&id, "s", &fwd("x://2"), Duration::from_secs(2)), Claim::Forwarded));
+        assert!(matches!(
+            claim_within(&id, "s", &fwd("x://1"), Duration::from_secs(2)),
+            Claim::Primary
+        ));
+        assert!(matches!(
+            claim_within(&id, "s", &fwd("x://2"), Duration::from_secs(2)),
+            Claim::Forwarded
+        ));
     }
 }

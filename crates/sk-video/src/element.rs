@@ -36,7 +36,11 @@ pub struct VideoOptions {
 
 impl Default for VideoOptions {
     fn default() -> Self {
-        Self { size: (0.0, 0.0), scale: 1.0, object_fit: VideoFit::Contain }
+        Self {
+            size: (0.0, 0.0),
+            scale: 1.0,
+            object_fit: VideoFit::Contain,
+        }
     }
 }
 

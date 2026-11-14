@@ -10,9 +10,9 @@
 //! means the pass changes what a capable renderer draws. It talks to `sk-thorvg-sys` directly
 //! because `LottieState::load` always normalises, which is what is under test.
 
+use sk_thorvg_sys as tvg;
 use std::ffi::c_char;
 use std::path::Path;
-use sk_thorvg_sys as tvg;
 
 fn render(json: &str, w: u32, h: u32, fraction: f32) -> Option<Vec<u8>> {
     unsafe {

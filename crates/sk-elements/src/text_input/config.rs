@@ -84,8 +84,8 @@ pub fn configuration(attributes: InputAttributes<'_>) -> MappedConfiguration {
 
     let input_type = attributes.input_type.map(fold);
     let inputmode = attributes.inputmode.map(fold);
-    let searching = input_type.as_deref() == Some("search")
-        || inputmode.as_deref() == Some("search");
+    let searching =
+        input_type.as_deref() == Some("search") || inputmode.as_deref() == Some("search");
     if searching && !action_from_attribute {
         config.input_action = TextInputAction::Search;
     }
@@ -96,7 +96,10 @@ pub fn configuration(attributes: InputAttributes<'_>) -> MappedConfiguration {
         config.suggestions = false;
     }
 
-    MappedConfiguration { config, unsupported }
+    MappedConfiguration {
+        config,
+        unsupported,
+    }
 }
 
 #[cfg(test)]
@@ -164,7 +167,11 @@ mod tests {
                 autocapitalize: Some(value),
                 ..attrs()
             });
-            assert_eq!(mapped.config.autocapitalize, Autocapitalize::None, "{value}");
+            assert_eq!(
+                mapped.config.autocapitalize,
+                Autocapitalize::None,
+                "{value}"
+            );
             assert!(mapped.unsupported.is_empty(), "{value}");
         }
     }
@@ -226,8 +233,14 @@ mod tests {
     #[test]
     fn search_fields_get_a_search_confirm_key() {
         for attributes in [
-            InputAttributes { input_type: Some("search"), ..attrs() },
-            InputAttributes { inputmode: Some("search"), ..attrs() },
+            InputAttributes {
+                input_type: Some("search"),
+                ..attrs()
+            },
+            InputAttributes {
+                inputmode: Some("search"),
+                ..attrs()
+            },
         ] {
             let mapped = configuration(attributes);
             assert_eq!(mapped.config.input_action, TextInputAction::Search);

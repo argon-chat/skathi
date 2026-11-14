@@ -8,12 +8,12 @@ use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, Context, Render, Subscription, TitlebarOptions, Window, WindowBounds,
-    WindowHandle, WindowId, WindowOptions, point, prelude::*, px, size,
+    point, prelude::*, px, size, App, Bounds, Context, Render, Subscription, TitlebarOptions,
+    Window, WindowBounds, WindowHandle, WindowId, WindowOptions,
 };
 use sk_runtime::redjs::api::Value;
 use sk_runtime::redjs::webapi::util::read_string;
-use sk_runtime::{JsRuntime, host_fn, with_app};
+use sk_runtime::{host_fn, with_app, JsRuntime};
 
 use crate::json::{self, Json};
 use crate::popout_win;
@@ -57,7 +57,12 @@ fn popout_inspector_overlay(window: u64, root: u32) -> Option<gpui::Div> {
 }
 
 fn publish_env(id: u64, node: u32, window: &Window, cx: &App) {
-    let Some(p) = POPOUTS.with(|p| p.borrow().iter().find(|w| w.id.as_u64() == id).map(|w| (w.os_chrome, w.title_bar_height))) else {
+    let Some(p) = POPOUTS.with(|p| {
+        p.borrow()
+            .iter()
+            .find(|w| w.id.as_u64() == id)
+            .map(|w| (w.os_chrome, w.title_bar_height))
+    }) else {
         return;
     };
     // Before the first painted frame the window's client size stands in.
@@ -147,7 +152,11 @@ pub fn notify_all(cx: &mut App) {
     cx.spawn(async move |_| {
         PAINT_ASKED.with(|asked| asked.set(false));
         let shown: Vec<isize> = POPOUTS.with(|p| {
-            p.borrow().iter().map(|w| w.hwnd).filter(|&hwnd| hwnd != 0 && popout_win::is_visible(hwnd)).collect()
+            p.borrow()
+                .iter()
+                .map(|w| w.hwnd)
+                .filter(|&hwnd| hwnd != 0 && popout_win::is_visible(hwnd))
+                .collect()
         });
         for hwnd in shown {
             popout_win::paint_now(hwnd);
@@ -213,7 +222,10 @@ fn parse_options(raw: &str) -> Options {
     let j = json::parse(raw);
     let num = |k: &str| j.as_ref().and_then(|j| j.get(k)).and_then(|v| v.as_f64());
     let text = |k: &str| {
-        j.as_ref().and_then(|j| j.get(k)).and_then(|v| v.as_str()).map(str::to_string)
+        j.as_ref()
+            .and_then(|j| j.get(k))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
     };
     let flag = |k: &str| j.as_ref().and_then(|j| j.get(k)).and_then(|v| v.as_bool());
     let backdrop = text("backdrop").and_then(|name| match Backdrop::parse(&name) {
@@ -227,8 +239,9 @@ fn parse_options(raw: &str) -> Options {
         }
     });
     let bounds = ["x", "y", "width", "height"].map(|key| {
-        num(key).map(|n| n as f32).filter(|n| n.is_finite()
-            && (matches!(key, "x" | "y") || *n > 0.0))
+        num(key)
+            .map(|n| n as f32)
+            .filter(|n| n.is_finite() && (matches!(key, "x" | "y") || *n > 0.0))
     });
     Options {
         bounds,
@@ -468,7 +481,9 @@ host_fn!(fn sk_window_set_options(g, args) {
 /// gpui has no per-window API, so this goes through the cached HWND.
 fn set_always_on_top(handle: WindowHandle<PopoutShell>, on: bool) {
     let key = handle.window_id().as_u64();
-    let Some(hwnd) = crate::window::hwnd_of(key) else { return };
+    let Some(hwnd) = crate::window::hwnd_of(key) else {
+        return;
+    };
     crate::window::set_always_on_top_hwnd(hwnd, on);
 }
 
@@ -740,7 +755,11 @@ fn report_metrics(id: u64, node: u32, window: &Window) {
         );
     }
     if focus_moved {
-        emit(on_event, if focused { "focus" } else { "blur" }, Json::obj(vec![]));
+        emit(
+            on_event,
+            if focused { "focus" } else { "blur" },
+            Json::obj(vec![]),
+        );
     }
 }
 
@@ -748,7 +767,10 @@ fn report_metrics(id: u64, node: u32, window: &Window) {
 #[cfg_attr(not(sk_devtools), allow(dead_code))]
 pub fn list() -> Vec<(u64, u32, String)> {
     POPOUTS.with(|p| {
-        p.borrow().iter().map(|w| (w.id.as_u64(), w.node, w.title.clone())).collect()
+        p.borrow()
+            .iter()
+            .map(|w| (w.id.as_u64(), w.node, w.title.clone()))
+            .collect()
     })
 }
 
@@ -759,8 +781,15 @@ pub fn with_window<R>(
     cx: &mut App,
     f: impl FnOnce(&mut Window, &mut App) -> R,
 ) -> Option<R> {
-    let handle = POPOUTS.with(|p| p.borrow().iter().find(|w| w.id.as_u64() == id).map(|w| w.handle))?;
-    gpui::AnyWindowHandle::from(handle).update(cx, |_, window, cx| f(window, cx)).ok()
+    let handle = POPOUTS.with(|p| {
+        p.borrow()
+            .iter()
+            .find(|w| w.id.as_u64() == id)
+            .map(|w| w.handle)
+    })?;
+    gpui::AnyWindowHandle::from(handle)
+        .update(cx, |_, window, cx| f(window, cx))
+        .ok()
 }
 
 fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App) {
@@ -814,7 +843,8 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             ..Default::default()
         },
         |window, cx| {
-            if std::env::var_os("SK_RETAINED_LAYOUT").as_deref() != Some(std::ffi::OsStr::new("0")) {
+            if std::env::var_os("SK_RETAINED_LAYOUT").as_deref() != Some(std::ffi::OsStr::new("0"))
+            {
                 window.vn_enable_retained_layout();
             }
             crate::quiet::send_to_back(window);
@@ -834,7 +864,9 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
     let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, cx| {
         hwnd = crate::window::capture_hwnd(window).unwrap_or(0);
         // The OS keeps an owner disabled under its modal dialog, so the X closes the dialog first.
-        window.on_window_should_close(cx, |window, cx| crate::dialogs::may_close_now(window.window_handle(), cx));
+        window.on_window_should_close(cx, |window, cx| {
+            crate::dialogs::may_close_now(window.window_handle(), cx)
+        });
     });
     // While still hidden: the taskbar reads styles on show, and a cover window's first frame must already be monitor-sized.
     if hwnd != 0 {
@@ -884,8 +916,12 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             monitor: opts.monitor,
             // gpui never applied the bounds of a window created hidden; they apply on its first show (not for cover windows).
             requested_bounds: opts.bounds,
-            first_place: ((!opts.visible || hidden_first) && !opts.cover)
-                .then_some((opts.x, opts.y, opts.width, opts.height)),
+            first_place: ((!opts.visible || hidden_first) && !opts.cover).then_some((
+                opts.x,
+                opts.y,
+                opts.width,
+                opts.height,
+            )),
             show_asked: None,
             show_drawn: None,
             last_show_ms: 0.0,
@@ -908,7 +944,10 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
         cx,
         on_event,
         "open",
-        Json::obj(vec![("windowId", Json::n(key as f64)), ("node", Json::n(node as f64))]),
+        Json::obj(vec![
+            ("windowId", Json::n(key as f64)),
+            ("node", Json::n(node as f64)),
+        ]),
     );
     // Nothing in the tree changed, but the primary window must redraw without the subtree.
     crate::notify_shell(cx);
@@ -935,7 +974,15 @@ fn show_now(id: WindowId, cx: &mut App) {
         w.epoch += 1;
         w.show_asked = Some(Instant::now());
         w.show_drawn = None;
-        Some((w.handle, w.hwnd, w.cover, w.activate, w.first_place.take(), w.monitor, w.always_on_top))
+        Some((
+            w.handle,
+            w.hwnd,
+            w.cover,
+            w.activate,
+            w.first_place.take(),
+            w.monitor,
+            w.always_on_top,
+        ))
     }) else {
         return;
     };
@@ -1006,7 +1053,9 @@ fn report_show(cx: &mut App, id: WindowId, on_event: u64, took: Duration) {
         w.last_show_ms = ms;
         Some((w.viewport, w.scale))
     });
-    let Some(((width, height), scale)) = viewport else { return };
+    let Some(((width, height), scale)) = viewport else {
+        return;
+    };
     emit_in(
         cx,
         on_event,
@@ -1069,7 +1118,9 @@ fn hide_now(id: WindowId, cx: &mut App) {
         if !cover {
             return;
         }
-        cx.background_executor().timer(SHRINK_AFTER - TIDY_AFTER).await;
+        cx.background_executor()
+            .timer(SHRINK_AFTER - TIDY_AFTER)
+            .await;
         if cx.update(|cx| still_hidden(id, epoch, cx)) {
             warm_small(hwnd);
             popout_win::paint_now(hwnd);
@@ -1095,18 +1146,37 @@ fn still_hidden(id: WindowId, epoch: u64, cx: &mut App) -> bool {
     if popout_win::is_visible(hwnd) {
         return false;
     }
-    gpui::AnyWindowHandle::from(handle).update(cx, |_, window, _| window.refresh()).is_ok()
+    gpui::AnyWindowHandle::from(handle)
+        .update(cx, |_, window, _| window.refresh())
+        .is_ok()
 }
 
-fn live_client_rect(window: popout_win::Rect, client: popout_win::Rect, scale: f32,
-    bounds: [Option<f32>; 4]) -> popout_win::Rect
-{
-    let border = [client[0] - window[0], client[1] - window[1], window[2] - client[2], window[3] - client[3]];
+fn live_client_rect(
+    window: popout_win::Rect,
+    client: popout_win::Rect,
+    scale: f32,
+    bounds: [Option<f32>; 4],
+) -> popout_win::Rect {
+    let border = [
+        client[0] - window[0],
+        client[1] - window[1],
+        window[2] - client[2],
+        window[3] - client[3],
+    ];
     let x = bounds[0].map_or(client[0], |n| (n * scale).round() as i32);
     let y = bounds[1].map_or(client[1], |n| (n * scale).round() as i32);
-    let width = bounds[2].map_or(client[2] - client[0], |n| (n * scale).round().max(1.0) as i32);
-    let height = bounds[3].map_or(client[3] - client[1], |n| (n * scale).round().max(1.0) as i32);
-    [x - border[0], y - border[1], x + width + border[2], y + height + border[3]]
+    let width = bounds[2].map_or(client[2] - client[0], |n| {
+        (n * scale).round().max(1.0) as i32
+    });
+    let height = bounds[3].map_or(client[3] - client[1], |n| {
+        (n * scale).round().max(1.0) as i32
+    });
+    [
+        x - border[0],
+        y - border[1],
+        x + width + border[2],
+        y + height + border[3],
+    ]
 }
 
 /// First-show rect of a window created hidden without `cover`: client size at `x`/`y` or centred
@@ -1117,13 +1187,32 @@ fn first_rect(
     (x, y, w, h): (Option<f32>, Option<f32>, f32, f32),
 ) -> Option<popout_win::Rect> {
     let scale = crate::window::primary_scale();
-    let (win, client) = (popout_win::window_rect(hwnd)?, popout_win::client_rect_on_screen(hwnd)?);
-    let border = [client[0] - win[0], client[1] - win[1], win[2] - client[2], win[3] - client[3]];
+    let (win, client) = (
+        popout_win::window_rect(hwnd)?,
+        popout_win::client_rect_on_screen(hwnd)?,
+    );
+    let border = [
+        client[0] - win[0],
+        client[1] - win[1],
+        win[2] - client[2],
+        win[3] - client[3],
+    ];
     let (cw, ch) = ((w * scale).round() as i32, (h * scale).round() as i32);
-    let monitor = main.and_then(popout_win::monitor_rect).unwrap_or([0, 0, cw, ch]);
-    let left = x.map_or(monitor[0] + (monitor[2] - monitor[0] - cw) / 2, |x| (x * scale).round() as i32);
-    let top = y.map_or(monitor[1] + (monitor[3] - monitor[1] - ch) / 2, |y| (y * scale).round() as i32);
-    Some([left - border[0], top - border[1], left + cw + border[2], top + ch + border[3]])
+    let monitor = main
+        .and_then(popout_win::monitor_rect)
+        .unwrap_or([0, 0, cw, ch]);
+    let left = x.map_or(monitor[0] + (monitor[2] - monitor[0] - cw) / 2, |x| {
+        (x * scale).round() as i32
+    });
+    let top = y.map_or(monitor[1] + (monitor[3] - monitor[1] - ch) / 2, |y| {
+        (y * scale).round() as i32
+    });
+    Some([
+        left - border[0],
+        top - border[1],
+        left + cw + border[2],
+        top + ch + border[3],
+    ])
 }
 
 fn ensure_close_observer(cx: &mut App) {
@@ -1159,7 +1248,8 @@ fn on_window_closed(id: WindowId, cx: &mut App) {
         JsRuntime::with(|rt| {
             let args = [Value::int32(popout.node as i32)];
             if let Err(sk_runtime::redjs::api::Error::Exception(e)) =
-                rt.ctx().call(Value(popout.on_close), Value::undefined(), &args)
+                rt.ctx()
+                    .call(Value(popout.on_close), Value::undefined(), &args)
             {
                 let err = rt.describe(e);
                 eprintln!("[window close callback] {}\n{}", err.header, err.stack);
@@ -1190,12 +1280,20 @@ pub(crate) fn repaint_all(cx: &mut App) {
 
 pub fn install(rt: &JsRuntime) {
     sk_tree::set_repaint_all(repaint_all);
-    rt.register("__sk_fullscreen_window", 2, sk_fullscreen_window as *const _);
+    rt.register(
+        "__sk_fullscreen_window",
+        2,
+        sk_fullscreen_window as *const _,
+    );
     rt.register("__sk_window_open", 4, sk_window_open as *const _);
     rt.register("__sk_window_close", 1, sk_window_close_popout as *const _);
     rt.register("__sk_window_popouts", 0, sk_window_popouts as *const _);
     rt.register("__sk_window_click", 3, sk_window_click as *const _);
-    rt.register("__sk_window_set_options", 2, sk_window_set_options as *const _);
+    rt.register(
+        "__sk_window_set_options",
+        2,
+        sk_window_set_options as *const _,
+    );
     rt.register("__sk_window_map_rect", 2, sk_window_map_rect as *const _);
 }
 
@@ -1205,9 +1303,14 @@ mod tests {
     fn live_partial_bounds_preserve_frame_and_untouched_dimensions() {
         let window = [90, 70, 530, 420];
         let client = [100, 100, 520, 410];
-        assert_eq!(super::live_client_rect(window, client, 1.5, [Some(200.0), None, Some(300.0), None]),
-            [290, 70, 760, 420]);
-        assert_eq!(super::live_client_rect(window, client, 1.0, [None; 4]), window);
+        assert_eq!(
+            super::live_client_rect(window, client, 1.5, [Some(200.0), None, Some(300.0), None]),
+            [290, 70, 760, 420]
+        );
+        assert_eq!(
+            super::live_client_rect(window, client, 1.0, [None; 4]),
+            window
+        );
     }
 
     use super::*;

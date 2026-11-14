@@ -7,15 +7,15 @@ use std::collections::{HashMap, HashSet};
 use gpui::prelude::*;
 use gpui::{
     div, AnyElement, App, ClickEvent, Context, Empty, FocusHandle, KeyDownEvent, KeyUpEvent,
-    MouseButton, MouseDownEvent, MouseUpEvent, Overflow, Point, ScrollHandle, ScrollEvent,
+    MouseButton, MouseDownEvent, MouseUpEvent, Overflow, Point, ScrollEvent, ScrollHandle,
     SharedString, Window, WindowControlArea,
 };
 use sk_css::{WindowControl, WindowDrag};
 
+use crate::img as img_src;
 use crate::tree::{self, Kind, Tree};
 use crate::windows::{self, PendingMouseMove, Rect, WinKey};
 use crate::EventPayload;
-use crate::img as img_src;
 use sk_elements::{text_input, TextInputHandlers, TextInputOptions, TextInputState};
 use sk_runtime::{with_published, Phase};
 
@@ -79,7 +79,11 @@ pub fn pick_hitbox(window: &Window, id: u32) -> Option<gpui::Hitbox> {
 pub fn set_popped_out(id: u32, on: bool) -> bool {
     POPPED_OUT.with(|s| {
         let mut s = s.borrow_mut();
-        if on { s.insert(id) } else { s.remove(&id) }
+        if on {
+            s.insert(id)
+        } else {
+            s.remove(&id)
+        }
     })
 }
 
@@ -103,7 +107,9 @@ pub(crate) fn warn_compat_at(key: &str, at: impl FnOnce() -> String, msg: &str) 
 }
 
 fn node_prefix(t: &Tree, id: u32) -> String {
-    let Some(node) = t.node(id) else { return String::new() };
+    let Some(node) = t.node(id) else {
+        return String::new();
+    };
     let tag = t.name(node.tag);
     let classes: Vec<&str> = node.classes.iter().map(String::as_str).take(3).collect();
     if classes.is_empty() {
@@ -127,7 +133,8 @@ fn reset_bounds(win: WinKey) {
         std::mem::swap(&mut w.transformed, &mut w.prev_transformed);
         w.transformed.clear();
         if w.transformed.capacity() > w.prev_transformed.len().saturating_mul(4).max(1024) {
-            w.transformed.shrink_to(w.prev_transformed.len().saturating_mul(2));
+            w.transformed
+                .shrink_to(w.prev_transformed.len().saturating_mul(2));
         }
     });
 }
@@ -192,7 +199,10 @@ pub fn bounds_here(window: &Window, id: u32) -> Option<Rect> {
 pub fn painted_bounds_in(root: u32, id: u32) -> Option<Rect> {
     let k = windows::window_of_root(root)?;
     windows::peek(k, |w| {
-        w.bounds.get(&id).copied().or_else(|| w.prev_bounds.get(&id).copied())
+        w.bounds
+            .get(&id)
+            .copied()
+            .or_else(|| w.prev_bounds.get(&id).copied())
     })
     .flatten()
 }
@@ -211,7 +221,10 @@ pub fn root_bounds_in(k: WinKey) -> Option<Rect> {
         popped => popped,
     };
     windows::peek(k, |w| {
-        w.bounds.get(&root).copied().or_else(|| w.prev_bounds.get(&root).copied())
+        w.bounds
+            .get(&root)
+            .copied()
+            .or_else(|| w.prev_bounds.get(&root).copied())
     })
     .flatten()
 }
@@ -221,7 +234,10 @@ pub fn root_bounds_in(k: WinKey) -> Option<Rect> {
 pub fn painted_bounds(id: u32) -> Option<Rect> {
     windows::keys().into_iter().find_map(|k| {
         windows::peek(k, |w| {
-            w.bounds.get(&id).copied().or_else(|| w.prev_bounds.get(&id).copied())
+            w.bounds
+                .get(&id)
+                .copied()
+                .or_else(|| w.prev_bounds.get(&id).copied())
         })
         .flatten()
     })
@@ -303,7 +319,8 @@ impl gpui::Element for BoundsProbe {
         if !self.root {
             return (self.inner.request_layout(window, cx), ());
         }
-        let _profile_window = sk_runtime::redjs::profiling::WindowScope::enter(windows::key(window));
+        let _profile_window =
+            sk_runtime::redjs::profiling::WindowScope::enter(windows::key(window));
         let _profile = sk_runtime::redjs::profiling::span("layout", "Layout requests");
         let span = crate::perf::Span::start();
         let layout = self.inner.request_layout(window, cx);
@@ -327,12 +344,17 @@ impl gpui::Element for BoundsProbe {
         record_bounds(self.id, bounds, ancestors, window);
         // Every hitbox gpui inserts below is tagged with this node id until a descendant's probe
         // overrides it; the previous tag is restored on the way out.
-        let _profile_window = self.root.then(|| sk_runtime::redjs::profiling::WindowScope::enter(windows::key(window)));
-        if self.root { crate::perf::note_taffy_gap(); }
-        let _profile = self.root.then(|| sk_runtime::redjs::profiling::span("paint", "Prepaint native tree"));
+        let _profile_window = self
+            .root
+            .then(|| sk_runtime::redjs::profiling::WindowScope::enter(windows::key(window)));
+        if self.root {
+            crate::perf::note_taffy_gap();
+        }
+        let _profile = self
+            .root
+            .then(|| sk_runtime::redjs::profiling::span("paint", "Prepaint native tree"));
         let span = self.root.then(crate::perf::Span::start);
-        let (_, own) =
-            window.with_hitbox_tag(self.id, |window| self.inner.prepaint(window, cx));
+        let (_, own) = window.with_hitbox_tag(self.id, |window| self.inner.prepaint(window, cx));
         if let Some(span) = span {
             crate::perf::note_prepaint(span.ms());
         }
@@ -355,7 +377,8 @@ impl gpui::Element for BoundsProbe {
             self.inner.paint(window, cx);
             return;
         }
-        let _profile_window = sk_runtime::redjs::profiling::WindowScope::enter(windows::key(window));
+        let _profile_window =
+            sk_runtime::redjs::profiling::WindowScope::enter(windows::key(window));
         let _profile = sk_runtime::redjs::profiling::span("paint", "Paint native tree");
         crate::selection::paint_listeners(window);
         crate::pointer::capture_listeners(window);
@@ -399,7 +422,9 @@ pub(crate) fn gc_node_state() {
         w.transformed.retain(|&id, _| live(id));
         w.prev_transformed.retain(|&id, _| live(id));
         w.focus_subs.retain(|&id, _| live(id));
-        if w.pointer_capture.is_some_and(|id| !live(id) || !tree::read_tree(|t| reaches_root(t, id))) {
+        if w.pointer_capture
+            .is_some_and(|id| !live(id) || !tree::read_tree(|t| reaches_root(t, id)))
+        {
             w.pointer_capture = None;
         }
     });
@@ -427,7 +452,9 @@ pub(crate) fn gc_node_state() {
 /// from the root with no listener; a browser moves focus to the body.
 fn keeps_focus(t: &Tree, id: u32) -> bool {
     let shown = |n: &tree::Node| {
-        !n.computed.as_ref().is_some_and(|c| c.base.display == Some(gpui::Display::None))
+        !n.computed
+            .as_ref()
+            .is_some_and(|c| c.base.display == Some(gpui::Display::None))
     };
     reaches_painted_root(t, id)
         && could_take_focus(t, id)
@@ -585,7 +612,10 @@ fn dom_key(k: &str) -> String {
         "insert" => "Insert".into(),
         // The Menu key is VK_APPS, which gpui names "menu"; the DOM's name is "ContextMenu".
         "menu" => "ContextMenu".into(),
-        f if f.len() > 1 && f.starts_with('f') && f[1..].parse::<u8>().is_ok_and(|n| (1..=24).contains(&n)) => {
+        f if f.len() > 1
+            && f.starts_with('f')
+            && f[1..].parse::<u8>().is_ok_and(|n| (1..=24).contains(&n)) =>
+        {
             f.to_ascii_uppercase()
         }
         other => other.into(),
@@ -601,12 +631,15 @@ pub fn flush_pending_mouse_move(window: &mut Window, cx: &mut App) {
     // `:focus-visible` paints it.
     crate::live_state::note_modality(window);
     crate::pointer::resolve_hover(window, cx);
-    let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else { return };
+    let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else {
+        return;
+    };
     let payload = mouse_payload(p.position, p.button, &p.modifiers);
     if p.button < 0.0 && crate::pointer::captured_target(window).is_some() {
         cancel_press(window, cx);
     }
-    let target = crate::pointer::captured_target(window).unwrap_or_else(|| crate::pointer::target_at(window, p.position));
+    let target = crate::pointer::captured_target(window)
+        .unwrap_or_else(|| crate::pointer::target_at(window, p.position));
     // The pump's, before gpui's draw: a forced layout may draw (`crate::off_input`).
     crate::off_input(|| js_dispatch_app(target, tree::EV_MOUSEMOVE, &payload, window, cx));
 }
@@ -617,7 +650,11 @@ fn dom_wheel_delta(delta: Point<gpui::Pixels>) -> (f64, f64) {
     (-f64::from(delta.x), -f64::from(delta.y))
 }
 
-pub(crate) fn mouse_payload(position: Point<gpui::Pixels>, button: f64, m: &gpui::Modifiers) -> EventPayload<'static> {
+pub(crate) fn mouse_payload(
+    position: Point<gpui::Pixels>,
+    button: f64,
+    m: &gpui::Modifiers,
+) -> EventPayload<'static> {
     EventPayload {
         a: f64::from(position.x),
         b: f64::from(position.y),
@@ -629,7 +666,12 @@ pub(crate) fn mouse_payload(position: Point<gpui::Pixels>, button: f64, m: &gpui
 
 /// [`mouse_payload`] for events whose `detail` is the click count: it rides `d` above the four
 /// modifier bits so the hot path still crosses with four doubles.
-fn mouse_payload_n(position: Point<gpui::Pixels>, button: f64, m: &gpui::Modifiers, detail: usize) -> EventPayload<'static> {
+fn mouse_payload_n(
+    position: Point<gpui::Pixels>,
+    button: f64,
+    m: &gpui::Modifiers,
+    detail: usize,
+) -> EventPayload<'static> {
     let mut p = mouse_payload(position, button, m);
     p.d += (detail.min(255) as f64) * 16.0;
     p
@@ -645,10 +687,21 @@ pub struct MousePt {
 
 impl MousePt {
     fn of(p: &EventPayload) -> Self {
-        MousePt { a: p.a, b: p.b, c: p.c, d: p.d }
+        MousePt {
+            a: p.a,
+            b: p.b,
+            c: p.c,
+            d: p.d,
+        }
     }
     fn payload(&self) -> EventPayload<'static> {
-        EventPayload { a: self.a, b: self.b, c: self.c, d: self.d, key: None }
+        EventPayload {
+            a: self.a,
+            b: self.b,
+            c: self.c,
+            d: self.d,
+            key: None,
+        }
     }
 }
 
@@ -705,7 +758,11 @@ fn open_up_wave(ev: &MouseUpEvent, window: &mut Window, cx: &mut App) {
         let press = Press::take_for_release(&mut w.press, button);
         let cancelled = press.as_ref().is_some_and(|p| p.cancelled);
         w.up_waves.retain(|wave| wave.scheduled);
-        w.up_waves.push(UpWave { press, cancelled, ..Default::default() });
+        w.up_waves.push(UpWave {
+            press,
+            cancelled,
+            ..Default::default()
+        });
     });
     // A capture must receive its release even when no hovered element has a mouse-up listener.
     if let Some(target) = crate::pointer::captured_target(window) {
@@ -738,12 +795,15 @@ fn bind_root_mouse<E: gpui::InteractiveElement>(mut e: E) -> E {
 /// A press or release delivers the coalesced `mousemove` first, as Chromium does; otherwise a move
 /// and the release after it in one frame were heard release first.
 fn deliver_move_before_button(window: &mut Window, cx: &mut App) {
-    let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else { return };
+    let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else {
+        return;
+    };
     let payload = mouse_payload(p.position, p.button, &p.modifiers);
     if p.button < 0.0 && crate::pointer::captured_target(window).is_some() {
         cancel_press(window, cx);
     }
-    let target = crate::pointer::captured_target(window).unwrap_or_else(|| crate::pointer::target_at(window, p.position));
+    let target = crate::pointer::captured_target(window)
+        .unwrap_or_else(|| crate::pointer::target_at(window, p.position));
     js_dispatch_app(target, tree::EV_MOUSEMOVE, &payload, window, cx);
 }
 
@@ -755,7 +815,9 @@ fn claim_up(
     payload: &EventPayload,
 ) {
     let schedule = windows::here(window, |w| {
-        let Some(wave) = w.up_waves.last_mut() else { return false };
+        let Some(wave) = w.up_waves.last_mut() else {
+            return false;
+        };
         let s = slot(wave);
         if s.is_none() {
             *s = Some((id, MousePt::of(payload)));
@@ -765,7 +827,9 @@ fn claim_up(
     if schedule {
         // Deferred, so no gpui listener is under the waves: a forced layout may draw in them
         // (`crate::off_input`).
-        window.defer(cx, |window, cx| crate::off_input(|| flush_up_waves(window, cx)));
+        window.defer(cx, |window, cx| {
+            crate::off_input(|| flush_up_waves(window, cx))
+        });
     }
 }
 
@@ -781,14 +845,23 @@ fn claim_mouse_click(
     }
     let down = windows::here(window, |w| w.up_waves.last().and_then(UpWave::click_press));
     let Some(down) = down else { return };
-    let Some(target) = crate::pointer::click_target(window, down, fallback) else { return };
-    let payload = mouse_payload_n(ev.position, button_code(ev.button), &ev.modifiers, ev.click_count);
+    let Some(target) = crate::pointer::click_target(window, down, fallback) else {
+        return;
+    };
+    let payload = mouse_payload_n(
+        ev.position,
+        button_code(ev.button),
+        &ev.modifiers,
+        ev.click_count,
+    );
     claim_up(window, cx, slot, target, &payload);
 }
 
 fn flush_up_waves(window: &mut Window, cx: &mut App) {
     loop {
-        let Some(wave) = windows::here(window, |w| (!w.up_waves.is_empty()).then(|| w.up_waves.remove(0))) else {
+        let Some(wave) = windows::here(window, |w| {
+            (!w.up_waves.is_empty()).then(|| w.up_waves.remove(0))
+        }) else {
             return;
         };
         if wave.cancelled {
@@ -870,18 +943,32 @@ fn bind_menu_keys<E: gpui::InteractiveElement>(e: E, root: u32) -> E {
 fn fire_keyboard_menu(root: u32, window: &mut Window, cx: &mut App) {
     let k = windows::key(window);
     let focused = windows::focused_node(k);
-    let target = if focused != 0 && tree::read_tree(|t| t.node(focused).is_some()) { focused } else { root };
+    let target = if focused != 0 && tree::read_tree(|t| t.node(focused).is_some()) {
+        focused
+    } else {
+        root
+    };
     let (x, y) = windows::of(k, |w| w.bounds.get(&target).copied())
         .filter(|_| target != root || focused == root)
         .map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0))
         .unwrap_or((1.0, 1.0));
-    let payload = EventPayload { a: f64::from(x), b: f64::from(y), ..Default::default() };
+    let payload = EventPayload {
+        a: f64::from(x),
+        b: f64::from(y),
+        ..Default::default()
+    };
     js_dispatch_app(target, tree::EV_CONTEXTMENU, &payload, window, cx);
 }
 
 /// Publish → dispatch → flush, shared by every listener. Returns `false` when a JS handler called
 /// `preventDefault()`.
-pub(crate) fn js_dispatch_app(id: u32, event: u32, payload: &EventPayload, window: &mut Window, cx: &mut App) -> bool {
+pub(crate) fn js_dispatch_app(
+    id: u32,
+    event: u32,
+    payload: &EventPayload,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
     js_wave_app(window, cx, || crate::dispatch_event(id, event, payload))
 }
 
@@ -967,7 +1054,10 @@ fn settle_owed_later(window: &Window, cx: &mut App) {
         let settle = |window: &mut Window, cx: &mut App| {
             crate::off_input(|| js_wave_app(window, cx, || true));
         };
-        if origin.update(cx, |_, window, cx| settle(window, cx)).is_ok() {
+        if origin
+            .update(cx, |_, window, cx| settle(window, cx))
+            .is_ok()
+        {
             return;
         }
         for other in cx.windows() {
@@ -989,7 +1079,11 @@ fn settle_before_default(window: &mut Window, cx: &mut App) {
 fn intent_payload(intent: &sk_elements::InputIntent) -> EventPayload<'static> {
     EventPayload {
         a: f64::from(intent.input_type.code()),
-        b: if intent.input_type.composing() { 1.0 } else { 0.0 },
+        b: if intent.input_type.composing() {
+            1.0
+        } else {
+            0.0
+        },
         ..Default::default()
     }
 }
@@ -1057,14 +1151,21 @@ fn focus_transition_app(new_focus: u32, window: &mut Window, cx: &mut App) {
     // Per window: with one slot, window B focusing an input fired `blur` on window A's. gpui hands
     // the observer the window the focus moved in.
     let k = windows::key(window);
-    let new_focus = if new_focus != 0 && new_focus == window_root(k) { 0 } else { new_focus };
+    let new_focus = if new_focus != 0 && new_focus == window_root(k) {
+        0
+    } else {
+        new_focus
+    };
     let old = windows::focused_node(k);
     if old == new_focus {
         return;
     }
     if old != 0 {
         windows::set_focused_node(k, 0);
-        let payload = EventPayload { a: new_focus as f64, ..Default::default() };
+        let payload = EventPayload {
+            a: new_focus as f64,
+            ..Default::default()
+        };
         js_dispatch_app(old, tree::EV_BLUR, &payload, window, cx);
         // `el.focus()` from a handler set the slot (`js_focus`); `el.blur()` cannot have, since
         // nothing is focused.
@@ -1075,7 +1176,10 @@ fn focus_transition_app(new_focus: u32, window: &mut Window, cx: &mut App) {
     windows::set_focused_node(k, new_focus);
     if new_focus != 0 {
         crate::selection::focus_moved(new_focus);
-        let payload = EventPayload { a: old as f64, ..Default::default() };
+        let payload = EventPayload {
+            a: old as f64,
+            ..Default::default()
+        };
         js_dispatch_app(new_focus, tree::EV_FOCUS, &payload, window, cx);
     }
 }
@@ -1089,7 +1193,12 @@ fn window_root(k: windows::WinKey) -> u32 {
 
 /// Subscribes `id` to its handle's focus changes, once. gpui fires these from the draw that first
 /// shows the new focus state, i.e. outside any tree borrow.
-fn watch_focus<V: 'static>(id: u32, handle: &FocusHandle, window: &mut Window, cx: &mut Context<V>) {
+fn watch_focus<V: 'static>(
+    id: u32,
+    handle: &FocusHandle,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) {
     // Per window: `cx.on_focus` subscribes against one window, so a node first built in the primary
     // had no subscription in the pop-out that later painted it and its `focus`/`blur` never fired
     // there.
@@ -1152,7 +1261,11 @@ fn scrollbar_for<V: 'static>(
     };
 
     // Axes this box scrolls, off the final computed overflow (what made `track_scroll` happen).
-    let overflow = node.computed.as_ref().map(|cs| cs.base.overflow.clone()).unwrap_or_default();
+    let overflow = node
+        .computed
+        .as_ref()
+        .map(|cs| cs.base.overflow.clone())
+        .unwrap_or_default();
     // The root is the viewport and always scrolls both ways, as in `build_node`.
     let scrolls_x = overflow.x == Some(Overflow::Scroll) || id == t.root;
     let scrolls_y = overflow.y == Some(Overflow::Scroll) || id == t.root;
@@ -1211,7 +1324,13 @@ thread_local! {
 
 #[derive(Clone, Copy, Debug)]
 pub enum KeyClick {
-    Click { id: u32, at: Point<gpui::Pixels>, modifiers: gpui::Modifiers, armed: bool, key: &'static str },
+    Click {
+        id: u32,
+        at: Point<gpui::Pixels>,
+        modifiers: gpui::Modifiers,
+        armed: bool,
+        key: &'static str,
+    },
     Arm(u32),
 }
 
@@ -1221,7 +1340,11 @@ pub enum KeyClick {
 fn keyboard_activates(id: u32, space: bool) -> bool {
     tree::read_tree(|t| {
         let Some(node) = t.node(id) else { return false };
-        let ty = || t.prop(id, "type").map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
+        let ty = || {
+            t.prop(id, "type")
+                .map(|v| v.trim().to_ascii_lowercase())
+                .unwrap_or_default()
+        };
         match t.name(node.tag) {
             "button" | "summary" => true,
             "a" | "area" => !space && t.prop(id, "href").is_some(),
@@ -1240,11 +1363,15 @@ fn keyboard_activates(id: u32, space: bool) -> bool {
 /// window whose root has none.
 fn owe_key_click(step: KeyClick, window: &mut Window, cx: &mut App) {
     windows::here(window, |w| w.key_click = Some(step));
-    window.defer(cx, |window, cx| crate::off_input(|| resolve_key_click(window, cx)));
+    window.defer(cx, |window, cx| {
+        crate::off_input(|| resolve_key_click(window, cx))
+    });
 }
 
 fn resolve_key_click(window: &mut Window, cx: &mut App) {
-    let Some(step) = windows::here(window, |w| w.key_click.take()) else { return };
+    let Some(step) = windows::here(window, |w| w.key_click.take()) else {
+        return;
+    };
     let prevented = windows::here(window, |w| w.key_prevented);
     match step {
         KeyClick::Arm(id) => {
@@ -1252,10 +1379,20 @@ fn resolve_key_click(window: &mut Window, cx: &mut App) {
                 windows::here(window, |w| w.space_armed = Some(id));
             }
         }
-        KeyClick::Click { id, at, modifiers, armed, key } => {
-            let go = windows::here(window, |w| !armed || w.space_armed.take() == Some(id)) && !prevented;
+        KeyClick::Click {
+            id,
+            at,
+            modifiers,
+            armed,
+            key,
+        } => {
+            let go =
+                windows::here(window, |w| !armed || w.space_armed.take() == Some(id)) && !prevented;
             if go {
-                let payload = EventPayload { key: Some(key), ..mouse_payload_n(at, 0.0, &modifiers, 0) };
+                let payload = EventPayload {
+                    key: Some(key),
+                    ..mouse_payload_n(at, 0.0, &modifiers, 0)
+                };
                 js_dispatch_app(id, tree::EV_CLICK, &payload, window, cx);
             }
         }
@@ -1280,7 +1417,9 @@ fn claim_wheel(cx: &mut App) -> bool {
 fn wheel_listener_above(t: &Tree, id: u32) -> bool {
     let mut cur = id;
     loop {
-        let Some(node) = t.node(cur) else { return false };
+        let Some(node) = t.node(cur) else {
+            return false;
+        };
         if node.listeners & (1u64 << tree::EV_WHEEL) != 0 {
             return true;
         }
@@ -1305,10 +1444,15 @@ pub(crate) fn report_scroll(id: u32, handle: &ScrollHandle, window: &mut Window,
         true
     });
     let listens = tree::read_tree(|t| {
-        t.node(id).is_some_and(|n| n.listeners & (1u64 << tree::EV_SCROLL) != 0)
+        t.node(id)
+            .is_some_and(|n| n.listeners & (1u64 << tree::EV_SCROLL) != 0)
     });
     if moved && listens {
-        let payload = EventPayload { a: left as f64, b: top as f64, ..Default::default() };
+        let payload = EventPayload {
+            a: left as f64,
+            b: top as f64,
+            ..Default::default()
+        };
         js_dispatch_app(id, tree::EV_SCROLL, &payload, window, cx);
     }
 }
@@ -1337,19 +1481,21 @@ fn default_tab_index(t: &Tree, id: u32) -> Option<isize> {
         "a" | "area" => t.prop(id, "href").is_some(),
         "summary" => summarizes_details(t, id),
         _ => false,
-    } || t.prop(id, "contenteditable").is_some_and(|v| !v.eq_ignore_ascii_case("false"));
+    } || t
+        .prop(id, "contenteditable")
+        .is_some_and(|v| !v.eq_ignore_ascii_case("false"));
     focusable.then_some(0)
 }
 
 fn summarizes_details(t: &Tree, id: u32) -> bool {
-    let Some(parent) = t.node(id).and_then(|n| t.node(n.parent)) else { return false };
+    let Some(parent) = t.node(id).and_then(|n| t.node(n.parent)) else {
+        return false;
+    };
     t.name(parent.tag) == "details"
-        && parent
-            .children
-            .iter()
-            .copied()
-            .find(|&c| t.node(c).is_some_and(|k| k.kind == Kind::Element && t.name(k.tag) == "summary"))
-            == Some(id)
+        && parent.children.iter().copied().find(|&c| {
+            t.node(c)
+                .is_some_and(|k| k.kind == Kind::Element && t.name(k.tag) == "summary")
+        }) == Some(id)
 }
 
 /// HTML's "actually disabled": a disableable form control with `disabled`, or one inside a disabled
@@ -1358,7 +1504,10 @@ pub(crate) fn actually_disabled(t: &Tree, id: u32) -> bool {
     let disabled = |id: u32| t.prop(id, "disabled").is_some_and(|v| v != "false");
     let Some(n) = t.node(id) else { return false };
     let tag = t.name(n.tag);
-    if !matches!(tag, "button" | "input" | "select" | "textarea" | "optgroup" | "option" | "fieldset") {
+    if !matches!(
+        tag,
+        "button" | "input" | "select" | "textarea" | "optgroup" | "option" | "fieldset"
+    ) {
         return false;
     }
     if disabled(id) {
@@ -1371,11 +1520,10 @@ pub(crate) fn actually_disabled(t: &Tree, id: u32) -> bool {
     for _ in 0..256 {
         let Some(p) = t.node(cur) else { return false };
         if t.name(p.tag) == "fieldset" && disabled(cur) {
-            let first_legend = p
-                .children
-                .iter()
-                .copied()
-                .find(|&c| t.node(c).is_some_and(|k| k.kind == Kind::Element && t.name(k.tag) == "legend"));
+            let first_legend = p.children.iter().copied().find(|&c| {
+                t.node(c)
+                    .is_some_and(|k| k.kind == Kind::Element && t.name(k.tag) == "legend")
+            });
             return first_legend != Some(child);
         }
         (child, cur) = (cur, p.parent);
@@ -1383,7 +1531,11 @@ pub(crate) fn actually_disabled(t: &Tree, id: u32) -> bool {
     false
 }
 
-fn focus_handle_for<V: 'static>(id: u32, tab_index: Option<isize>, cx: &mut Context<V>) -> FocusHandle {
+fn focus_handle_for<V: 'static>(
+    id: u32,
+    tab_index: Option<isize>,
+    cx: &mut Context<V>,
+) -> FocusHandle {
     FOCUS_HANDLES.with(|m| {
         let mut map = m.borrow_mut();
         let handle = map.entry(id).or_insert_with(|| cx.focus_handle());
@@ -1562,11 +1714,23 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
             Empty.into_any_element()
         } else {
             // The root inherits nothing: `window-drag`'s initial value is `none`.
-            if let Some(id) = crate::fullscreen::current(t).filter(|id| windows::window_of_node_in(t, *id) == win) {
+            if let Some(id) =
+                crate::fullscreen::current(t).filter(|id| windows::window_of_node_in(t, *id) == win)
+            {
                 build_fullscreen(t, id, t.root, window, cx, now)
             } else {
                 build_node(
-                    t, t.root, t.root, window, cx, now, None, None, None, None, Stacking::default(),
+                    t,
+                    t.root,
+                    t.root,
+                    window,
+                    cx,
+                    now,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Stacking::default(),
                 )
             }
         }
@@ -1678,15 +1842,33 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
             return Empty.into_any_element();
         }
         // A pop-out keeps its DOM ancestry even though it paints elsewhere.
-        let mut element = if let Some(fullscreen) = crate::fullscreen::current(t).filter(|node| windows::window_of_node_in(t, *node) == win) {
+        let mut element = if let Some(fullscreen) =
+            crate::fullscreen::current(t).filter(|node| windows::window_of_node_in(t, *node) == win)
+        {
             build_fullscreen(t, fullscreen, id, window, cx, now)
         } else {
-            build_node(t, id, id, window, cx, now, None, None, None, None, Stacking::default())
+            build_node(
+                t,
+                id,
+                id,
+                window,
+                cx,
+                now,
+                None,
+                None,
+                None,
+                None,
+                Stacking::default(),
+            )
         };
         let mut ancestor = t.node(id).map_or(0, |node| node.parent);
         while let Some(node) = t.node(ancestor) {
-            if let Some(matrix) = node.computed.as_ref().and_then(|computed| computed.extras.filter_url.as_ref())
-                .and_then(|url| crate::filter::resolve(t, url, ancestor)) {
+            if let Some(matrix) = node
+                .computed
+                .as_ref()
+                .and_then(|computed| computed.extras.filter_url.as_ref())
+                .and_then(|url| crate::filter::resolve(t, url, ancestor))
+            {
                 let mut layer = div().size_full();
                 layer.style().vn_color_matrix = Some(matrix);
                 element = layer.child(element).into_any_element();
@@ -1737,8 +1919,9 @@ pub(crate) fn build_cached<V: 'static>(
     // build is open.
     let open = OPEN_CONTEXTS.with(|c| std::mem::take(&mut *c.borrow_mut()));
     let (el, ids) = tree::read_tree(|t| {
-        let el =
-            build_node(t, id, root, window, cx, now, ctx.drag, ctx.case, ctx.ws, ctx.align, ctx.stack);
+        let el = build_node(
+            t, id, root, window, cx, now, ctx.drag, ctx.case, ctx.ws, ctx.align, ctx.stack,
+        );
         // The whole subtree: when this boundary replays nothing else carries a nested boundary's
         // rectangles (`cache::Entry::ids`).
         let mut ids = Vec::new();
@@ -1817,16 +2000,26 @@ fn build_node<V: 'static>(
         .or(parent_align);
     // Where the box paints (`Stacking`): a stacking context's children are built inside it so their
     // z-indices sort inside; a z-auto `absolute` box defers in the context it is in.
-    let parent_display = t.node(node.parent).and_then(|p| p.computed.as_ref()).and_then(|cs| cs.base.display);
+    let parent_display = t
+        .node(node.parent)
+        .and_then(|p| p.computed.as_ref())
+        .and_then(|cs| cs.base.display);
     let own_position = node.computed.as_ref().and_then(|cs| cs.base.position);
-    let effect = node.computed.as_ref().is_some_and(|cs| effect_context(&extras, &cs.base));
+    let effect = node
+        .computed
+        .as_ref()
+        .is_some_and(|cs| effect_context(&extras, &cs.base));
     let layer = if id == root {
         Layer::InFlow
     } else {
         layer_of(&extras, own_position, effect, parent_display)
     };
-    let Entered { own, inside: stacking, opens, negative } =
-        parent_stack.enter(layer, next_stack_ordinal());
+    let Entered {
+        own,
+        inside: stacking,
+        opens,
+        negative,
+    } = parent_stack.enter(layer, next_stack_ordinal());
     if negative {
         note_negative_z();
     }
@@ -1846,7 +2039,8 @@ fn build_node<V: 'static>(
         Kind::Text if node.text.is_empty() => Empty.into_any_element(),
         Kind::Text => {
             // Collapse first, then trim the block's edges: CSS's whitespace processing order.
-            let collapsed = processed_text(&node.text, ws.unwrap_or(sk_css::WhiteSpaceMode::Normal));
+            let collapsed =
+                processed_text(&node.text, ws.unwrap_or(sk_css::WhiteSpaceMode::Normal));
             crate::fonts::want_for_text(t, node.parent, &collapsed);
             match trim_edges(t, node, id, &collapsed, ws) {
                 "" => Empty.into_any_element(),
@@ -1854,7 +2048,8 @@ fn build_node<V: 'static>(
                 // (`crate::selection`).
                 text => {
                     let lead = text.as_ptr() as usize - collapsed.as_ptr() as usize;
-                    let text = crate::selection::text_element(t, id, &node.text, ws, lead, text, case);
+                    let text =
+                        crate::selection::text_element(t, id, &node.text, ws, lead, text, case);
                     if synthetic_inline_item(t, node) {
                         let mut anonymous = div();
                         anonymous.style().min_size.width = Some(gpui::px(0.0).into());
@@ -1895,12 +2090,18 @@ fn build_node<V: 'static>(
         Kind::Element if t.name(node.tag) == "sk-sticker" => stack(
             own.clone(),
             &extras,
-            probe(id, sticker::build(t, id, node, window, cx, now, control_area)),
+            probe(
+                id,
+                sticker::build(t, id, node, window, cx, now, control_area),
+            ),
         ),
         Kind::Element if t.name(node.tag) == "canvas" => stack(
             own.clone(),
             &extras,
-            probe(id, canvas::build(t, id, node, window, cx, now, control_area)),
+            probe(
+                id,
+                canvas::build(t, id, node, window, cx, now, control_area),
+            ),
         ),
         // Inline `<svg>` is a leaf: the subtree is serialized into a document resvg rasterises, so
         // its children must not also become taffy nodes (see crate::svg).
@@ -1909,293 +2110,330 @@ fn build_node<V: 'static>(
             &extras,
             probe(id, build_svg(t, id, node, window, cx, now, control_area)),
         ),
-        Kind::Element => stack_box(own, &split, id == root, &stacking, &extras, probe_at(id, id == root, {
-            let mut d = with_control_area(div().id(id as usize), id, control_area, win);
-            if let Some(cs) = &node.computed {
-                d = apply_computed_style(d, cs, id, now);
-            }
-            // The other half of `group-hover:`: some descendant's rule watches this element, so
-            // gpui needs a hitbox and a named group entry while its subtree paints.
-            if t.is_group_anchor(id) {
-                d = d.group(group_name(id));
-            }
-            // `role` / `aria-*` → AccessKit, so the node exists for Narrator and UI Automation.
-            d = crate::aria::apply(d, t, id, node);
-            advise_missing_font();
-            // A `url()` layer anywhere in the stack moves the whole stack into a painter child
-            // (`crate::bgimage`) so gradients and images keep CSS order; gpui keeps only the
-            // colour.
-            let bg_stack = extras.resolve_background_stack();
-            let bg_radii = bg_stack.as_ref().map(|_| padding_box_radii(d.style(), window.rem_size()));
-            apply_background_layers(d.style(), &extras, bg_stack.is_some());
-            apply_background_clip_text(d.style(), &extras, id as u64);
-            apply_self_blur(d.style(), t, id, node, &extras);
-            apply_drop_shadow(
-                d.style(),
-                &extras,
-                node.computed.as_ref().and_then(|cs| cs.color),
-                || node_prefix(t, id),
-            );
-            apply_mask_ring(d.style(), &extras, bg_stack.is_some(), paints_children(t, node), || {
-                node_prefix(t, id)
-            });
-            apply_inline_row(d.style(), t, node, align);
-            apply_inline_item_minimum(d.style(), t, node);
-            apply_inline_align(d.style(), t, node, &extras, align);
-            apply_button_content_box(d.style(), t, node);
-            advise_inline_level(t, id, node, &extras, d.style());
-            // The window is the root (`createApp().mount()`): the root element is the viewport and
-            // fills the host's box unless a rule says otherwise. Otherwise `height: 100%` on its
-            // child resolves against an indefinite parent, `overflow: auto` never scrolls and
-            // `position: fixed` lands wherever the content ends.
-            if id == root {
-                let style = d.style();
-                let full = gpui::Length::Definite(gpui::relative(1.0));
-                style.size.width.get_or_insert(full);
-                style.size.height.get_or_insert(full);
-                style.overflow.x.get_or_insert(Overflow::Scroll);
-                style.overflow.y.get_or_insert(Overflow::Scroll);
-                // It also stands in for `document`: gpui dispatches keystrokes down the focus path,
-                // so a listener off that path never fires, which would make every
-                // `document.addEventListener("keydown")` inert. Tracking a focus handle puts the
-                // root on the path; [`ensure_root_focus`] keeps something on it.
-                let h = focus_handle_for(id, None, cx);
-                d = d.track_focus(&h);
-                watch_focus(id, &h, window, cx);
-            } else if id == crate::cache::boundary_root() {
-                // A cache boundary is laid out as a root inside the box its wrapper reserved
-                // (`Entity::cached` → `layout_as_root`), and a root with `width: auto` shrinks to
-                // fit instead of stretching to its parent. Not the viewport treatment: no
-                // `Overflow::Scroll`, no root focus handle.
-                let style = d.style();
-                let full = gpui::Length::Definite(gpui::relative(1.0));
-                style.size.width.get_or_insert(full);
-                style.size.height.get_or_insert(full);
-            }
-            // `overflow: scroll|auto` on either axis, read off the final style so the root's
-            // viewport default counts. `track_scroll` supplies an offset that outlives the frame
-            // and makes gpui insert the hitbox and wheel listener that move it.
-            let scrolls = {
-                let overflow = &d.style().overflow;
-                overflow.x == Some(Overflow::Scroll) || overflow.y == Some(Overflow::Scroll)
-            };
-            let scroll_handle = scrolls.then(|| {
-                SCROLL_HANDLES.with(|m| m.borrow_mut().entry(id).or_default().clone())
-            });
-            if let Some(h) = &scroll_handle {
-                d = d.track_scroll(h);
-                // Where this container stood at build, so `getBoundingClientRect()` after a scroll
-                // and before the next paint can correct for the difference (`crate::scroll`).
-                crate::scroll::note_built(id, h);
-            }
-
-            let mask = if id == root { root_mask(t, node) } else { pointer_mask(node) };
-            let bit = move |ev: u32| mask & (1u64 << ev) != 0;
-            // `<input>` and `<textarea>` are the same native widget (only
-            // `TextInputOptions::multiline` differs, see `build_input`). `<input type=file>` is
-            // not: it keeps the ordinary wrapper's focus handle so Enter and Space reach it as
-            // keydown/keyup.
-            let is_file_input = crate::aria::is_file_input(t, id);
-            let is_range = crate::range::is_range(t, id);
-            let is_color = t.name(node.tag) == "input" && t.prop(id, "type").is_some_and(|v| v.trim().eq_ignore_ascii_case("color"));
-            let is_input = matches!(t.name(node.tag), "input" | "textarea") && !is_file_input && !is_range && !is_color;
-            // Both are tabbable by default in HTML; a plain <div> is not. A disabled file input is
-            // not focusable at all.
-            let file_tab = is_file_input && !t.prop(id, "disabled").is_some_and(|v| v != "false");
-            // So are `<button>`, `<select>`, links and the rest of HTML's focusable-by-default
-            // list; an actually-disabled control is not focusable whatever its tabindex. A key or
-            // focus listener makes nothing focusable (a `<span @focus>` never takes focus; a
-            // container's `@keydown` hears descendants by bubbling).
-            let disabled = !is_input && actually_disabled(t, id);
-            let tab_index = tab_index_of(t, id)
-                .or((is_input || file_tab || is_range || is_color).then_some(0))
-                .or_else(|| default_tab_index(t, id))
-                .filter(|_| !disabled);
-
-            let focusable = !is_input && !disabled && tab_index.is_some();
-            // gpui's `.focus()` / `.focus_visible()` rungs need a tracked focus handle, so a node
-            // with a `:focus` rule needs one even with no listeners or `tabindex`; it must not
-            // become click-focusable though.
-            let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
-            let handle =
-                (focusable || (!is_input && styled_focus)).then(|| focus_handle_for(id, tab_index, cx));
-            if let Some(h) = &handle {
-                d = d.track_focus(h);
-                if focusable {
-                    watch_focus(id, h, window, cx);
-                }
+        Kind::Element => stack_box(
+            own,
+            &split,
+            id == root,
+            &stacking,
+            &extras,
+            probe_at(id, id == root, {
+                let mut d = with_control_area(div().id(id as usize), id, control_area, win);
                 if let Some(cs) = &node.computed {
-                    if let Some(f) = cs.focus.clone() {
-                        d = d.focus(move |_| (*f).clone());
-                    }
-                    if let Some(f) = cs.focus_visible.clone() {
-                        d = d.focus_visible(move |_| (*f).clone());
-                    }
-                    if let Some(f) = cs.focus_within.clone() {
-                        d = d.in_focus(move |_| (*f).clone());
-                    }
+                    d = apply_computed_style(d, cs, id, now);
                 }
-            }
-            let click_focus = handle.clone().filter(|_| focusable);
-            // `<input>` forwards its own keystrokes from inside the widget (before gpui resolves
-            // editing key bindings), so the wrapper must not also listen: the editor is its
-            // descendant and would deliver every key twice.
-            d = bind_events(d, id, mask, click_focus, focusable, !is_input, cx);
-            let is_select = t.name(node.tag) == "select";
-            if is_select && !disabled {
-                d = crate::select::bind_press(d, id);
-            }
-            if is_range && !disabled && extras.pointer_events_none != Some(true) {
-                d = crate::range::bind_press(d, id);
-            }
-            // Copy/cut/paste outside a text field: the root is on every keystroke's path, and its
-            // listener (bound after its keydown one, so after every keydown handler) is the last
-            // stop.
-            if id == root {
-                d = crate::clipboard::bind_root(d, id);
-                // Every mouse-up's wave (`bind_events`) and the keyboard `contextmenu` (Menu key,
-                // Shift+F10), bound after the clipboard keys so they also run after every key
-                // handler.
-                d = bind_root_mouse(d);
-                d = crate::selection::bind_root(d);
-                d = bind_menu_keys(d, id);
-                // A `<select>`'s keys: its popup's before the page's, a closed one's after them.
-                d = crate::select::bind_root(d);
-                d = crate::range::bind_root(d);
-                d = bind_root_key_clicks(d);
-            }
+                // The other half of `group-hover:`: some descendant's rule watches this element, so
+                // gpui needs a hitbox and a named group entry while its subtree paints.
+                if t.is_group_anchor(id) {
+                    d = d.group(group_name(id));
+                }
+                // `role` / `aria-*` → AccessKit, so the node exists for Narrator and UI Automation.
+                d = crate::aria::apply(d, t, id, node);
+                advise_missing_font();
+                // A `url()` layer anywhere in the stack moves the whole stack into a painter child
+                // (`crate::bgimage`) so gradients and images keep CSS order; gpui keeps only the
+                // colour.
+                let bg_stack = extras.resolve_background_stack();
+                let bg_radii = bg_stack
+                    .as_ref()
+                    .map(|_| padding_box_radii(d.style(), window.rem_size()));
+                apply_background_layers(d.style(), &extras, bg_stack.is_some());
+                apply_background_clip_text(d.style(), &extras, id as u64);
+                apply_self_blur(d.style(), t, id, node, &extras);
+                apply_drop_shadow(
+                    d.style(),
+                    &extras,
+                    node.computed.as_ref().and_then(|cs| cs.color),
+                    || node_prefix(t, id),
+                );
+                apply_mask_ring(
+                    d.style(),
+                    &extras,
+                    bg_stack.is_some(),
+                    paints_children(t, node),
+                    || node_prefix(t, id),
+                );
+                apply_inline_row(d.style(), t, node, align);
+                apply_inline_item_minimum(d.style(), t, node);
+                apply_inline_align(d.style(), t, node, &extras, align);
+                apply_button_content_box(d.style(), t, node);
+                advise_inline_level(t, id, node, &extras, d.style());
+                // The window is the root (`createApp().mount()`): the root element is the viewport and
+                // fills the host's box unless a rule says otherwise. Otherwise `height: 100%` on its
+                // child resolves against an indefinite parent, `overflow: auto` never scrolls and
+                // `position: fixed` lands wherever the content ends.
+                if id == root {
+                    let style = d.style();
+                    let full = gpui::Length::Definite(gpui::relative(1.0));
+                    style.size.width.get_or_insert(full);
+                    style.size.height.get_or_insert(full);
+                    style.overflow.x.get_or_insert(Overflow::Scroll);
+                    style.overflow.y.get_or_insert(Overflow::Scroll);
+                    // It also stands in for `document`: gpui dispatches keystrokes down the focus path,
+                    // so a listener off that path never fires, which would make every
+                    // `document.addEventListener("keydown")` inert. Tracking a focus handle puts the
+                    // root on the path; [`ensure_root_focus`] keeps something on it.
+                    let h = focus_handle_for(id, None, cx);
+                    d = d.track_focus(&h);
+                    watch_focus(id, &h, window, cx);
+                } else if id == crate::cache::boundary_root() {
+                    // A cache boundary is laid out as a root inside the box its wrapper reserved
+                    // (`Entity::cached` → `layout_as_root`), and a root with `width: auto` shrinks to
+                    // fit instead of stretching to its parent. Not the viewport treatment: no
+                    // `Overflow::Scroll`, no root focus handle.
+                    let style = d.style();
+                    let full = gpui::Length::Definite(gpui::relative(1.0));
+                    style.size.width.get_or_insert(full);
+                    style.size.height.get_or_insert(full);
+                }
+                // `overflow: scroll|auto` on either axis, read off the final style so the root's
+                // viewport default counts. `track_scroll` supplies an offset that outlives the frame
+                // and makes gpui insert the hitbox and wheel listener that move it.
+                let scrolls = {
+                    let overflow = &d.style().overflow;
+                    overflow.x == Some(Overflow::Scroll) || overflow.y == Some(Overflow::Scroll)
+                };
+                let scroll_handle = scrolls.then(|| {
+                    SCROLL_HANDLES.with(|m| m.borrow_mut().entry(id).or_default().clone())
+                });
+                if let Some(h) = &scroll_handle {
+                    d = d.track_scroll(h);
+                    // Where this container stood at build, so `getBoundingClientRect()` after a scroll
+                    // and before the next paint can correct for the difference (`crate::scroll`).
+                    crate::scroll::note_built(id, h);
+                }
 
-            // `scroll` reports the position after the move, once the wheel's dispatch is over
-            // (`report_scroll_later`): after the `wheel`, and not at all if a cancelled `wheel` put
-            // the box back.
-            if let Some(scroll) = scroll_handle.clone().filter(|_| bit(tree::EV_SCROLL)) {
-                d = d.on_scroll(cx.listener(move |_, _: &ScrollEvent, window, cx| {
-                    report_scroll_later(id, &scroll, window, &mut **cx);
-                }));
-            }
+                let mask = if id == root {
+                    root_mask(t, node)
+                } else {
+                    pointer_mask(node)
+                };
+                let bit = move |ev: u32| mask & (1u64 << ev) != 0;
+                // `<input>` and `<textarea>` are the same native widget (only
+                // `TextInputOptions::multiline` differs, see `build_input`). `<input type=file>` is
+                // not: it keeps the ordinary wrapper's focus handle so Enter and Space reach it as
+                // keydown/keyup.
+                let is_file_input = crate::aria::is_file_input(t, id);
+                let is_range = crate::range::is_range(t, id);
+                let is_color = t.name(node.tag) == "input"
+                    && t.prop(id, "type")
+                        .is_some_and(|v| v.trim().eq_ignore_ascii_case("color"));
+                let is_input = matches!(t.name(node.tag), "input" | "textarea")
+                    && !is_file_input
+                    && !is_range
+                    && !is_color;
+                // Both are tabbable by default in HTML; a plain <div> is not. A disabled file input is
+                // not focusable at all.
+                let file_tab =
+                    is_file_input && !t.prop(id, "disabled").is_some_and(|v| v != "false");
+                // So are `<button>`, `<select>`, links and the rest of HTML's focusable-by-default
+                // list; an actually-disabled control is not focusable whatever its tabindex. A key or
+                // focus listener makes nothing focusable (a `<span @focus>` never takes focus; a
+                // container's `@keydown` hears descendants by bubbling).
+                let disabled = !is_input && actually_disabled(t, id);
+                let tab_index = tab_index_of(t, id)
+                    .or((is_input || file_tab || is_range || is_color).then_some(0))
+                    .or_else(|| default_tab_index(t, id))
+                    .filter(|_| !disabled);
 
-            if is_range {
-                d.style().size.width.get_or_insert(gpui::px(129.).into());
-                d.style().size.height.get_or_insert(gpui::px(16.).into());
-                d.child(crate::range::children(t, id, window)).into_any_element()
-            } else if is_color {
-                crate::color::defaults(d.style());
-                d.child(crate::color::children(t, id, node, window)).into_any_element()
-            } else if is_input {
-                let inert = extras.pointer_events_none == Some(true);
-                let (input, focus_target) = build_input(t, id, node, tab_index, window, cx);
-                // The editor's own handle carries this node's focus identity (mouse, Tab,
-                // programmatic), so focus/blur events hang off it.
-                watch_focus(id, &focus_target, window, cx);
-                // `:focus` on an `<input>` cannot ride gpui's ladder: tracking the editor's handle
-                // on the wrapper too would enter it into the tab order twice. The rungs are folded
-                // into the wrapper's style instead, read live off that handle: one tab stop.
-                if let Some(cs) = &node.computed {
-                    if focus_target.is_focused(window) {
-                        use gpui::Refineable as _;
-                        if let Some(f) = &cs.focus {
-                            d.style().refine(f);
+                let focusable = !is_input && !disabled && tab_index.is_some();
+                // gpui's `.focus()` / `.focus_visible()` rungs need a tracked focus handle, so a node
+                // with a `:focus` rule needs one even with no listeners or `tabindex`; it must not
+                // become click-focusable though.
+                let styled_focus = node
+                    .computed
+                    .as_ref()
+                    .is_some_and(|cs| cs.needs_focus_handle());
+                let handle = (focusable || (!is_input && styled_focus))
+                    .then(|| focus_handle_for(id, tab_index, cx));
+                if let Some(h) = &handle {
+                    d = d.track_focus(h);
+                    if focusable {
+                        watch_focus(id, h, window, cx);
+                    }
+                    if let Some(cs) = &node.computed {
+                        if let Some(f) = cs.focus.clone() {
+                            d = d.focus(move |_| (*f).clone());
                         }
-                        // A text field shows focus whatever moved it there, a click included, as in
-                        // Chromium; anything else only after the keyboard (`crate::live_state`).
-                        if let Some(f) = &cs.focus_visible {
-                            if window.last_input_was_keyboard()
-                                || crate::live_state::is_text_field(t, id)
-                            {
+                        if let Some(f) = cs.focus_visible.clone() {
+                            d = d.focus_visible(move |_| (*f).clone());
+                        }
+                        if let Some(f) = cs.focus_within.clone() {
+                            d = d.in_focus(move |_| (*f).clone());
+                        }
+                    }
+                }
+                let click_focus = handle.clone().filter(|_| focusable);
+                // `<input>` forwards its own keystrokes from inside the widget (before gpui resolves
+                // editing key bindings), so the wrapper must not also listen: the editor is its
+                // descendant and would deliver every key twice.
+                d = bind_events(d, id, mask, click_focus, focusable, !is_input, cx);
+                let is_select = t.name(node.tag) == "select";
+                if is_select && !disabled {
+                    d = crate::select::bind_press(d, id);
+                }
+                if is_range && !disabled && extras.pointer_events_none != Some(true) {
+                    d = crate::range::bind_press(d, id);
+                }
+                // Copy/cut/paste outside a text field: the root is on every keystroke's path, and its
+                // listener (bound after its keydown one, so after every keydown handler) is the last
+                // stop.
+                if id == root {
+                    d = crate::clipboard::bind_root(d, id);
+                    // Every mouse-up's wave (`bind_events`) and the keyboard `contextmenu` (Menu key,
+                    // Shift+F10), bound after the clipboard keys so they also run after every key
+                    // handler.
+                    d = bind_root_mouse(d);
+                    d = crate::selection::bind_root(d);
+                    d = bind_menu_keys(d, id);
+                    // A `<select>`'s keys: its popup's before the page's, a closed one's after them.
+                    d = crate::select::bind_root(d);
+                    d = crate::range::bind_root(d);
+                    d = bind_root_key_clicks(d);
+                }
+
+                // `scroll` reports the position after the move, once the wheel's dispatch is over
+                // (`report_scroll_later`): after the `wheel`, and not at all if a cancelled `wheel` put
+                // the box back.
+                if let Some(scroll) = scroll_handle.clone().filter(|_| bit(tree::EV_SCROLL)) {
+                    d = d.on_scroll(cx.listener(move |_, _: &ScrollEvent, window, cx| {
+                        report_scroll_later(id, &scroll, window, &mut **cx);
+                    }));
+                }
+
+                if is_range {
+                    d.style().size.width.get_or_insert(gpui::px(129.).into());
+                    d.style().size.height.get_or_insert(gpui::px(16.).into());
+                    d.child(crate::range::children(t, id, window))
+                        .into_any_element()
+                } else if is_color {
+                    crate::color::defaults(d.style());
+                    d.child(crate::color::children(t, id, node, window))
+                        .into_any_element()
+                } else if is_input {
+                    let inert = extras.pointer_events_none == Some(true);
+                    let (input, focus_target) = build_input(t, id, node, tab_index, window, cx);
+                    // The editor's own handle carries this node's focus identity (mouse, Tab,
+                    // programmatic), so focus/blur events hang off it.
+                    watch_focus(id, &focus_target, window, cx);
+                    // `:focus` on an `<input>` cannot ride gpui's ladder: tracking the editor's handle
+                    // on the wrapper too would enter it into the tab order twice. The rungs are folded
+                    // into the wrapper's style instead, read live off that handle: one tab stop.
+                    if let Some(cs) = &node.computed {
+                        if focus_target.is_focused(window) {
+                            use gpui::Refineable as _;
+                            if let Some(f) = &cs.focus {
                                 d.style().refine(f);
+                            }
+                            // A text field shows focus whatever moved it there, a click included, as in
+                            // Chromium; anything else only after the keyboard (`crate::live_state`).
+                            if let Some(f) = &cs.focus_visible {
+                                if window.last_input_was_keyboard()
+                                    || crate::live_state::is_text_field(t, id)
+                                {
+                                    d.style().refine(f);
+                                }
                             }
                         }
                     }
-                }
-                // Clicks on the wrapper's padding/border focus the editor, but not while the field
-                // is inert (an `opacity-0 pointer-events-none` panel parked over the visible one
-                // must not take its press).
-                if !inert {
-                    d = d.on_any_mouse_down(cx.listener(
-                        move |_, _: &MouseDownEvent, window, cx| {
-                            claim_press_focus(id, &focus_target, window, &mut **cx);
-                        },
-                    ));
-                }
-                d.child(input).into_any_element()
-            } else {
-                // `::before` / `::after` are first and last children, so they take part in
-                // flex/grid layout, `gap` and text flow like a hand-written `<span>`.
-                let (before, after) = match &node.computed {
-                    Some(cs) => (cs.before.clone(), cs.after.clone()),
-                    None => (None, None),
-                };
-                let own_display = node.computed.as_ref().and_then(|cs| cs.base.display);
-                let mut kids: Vec<AnyElement> = Vec::new();
-                if opens {
-                    open_context();
-                }
-                // The `bgimage` painter child goes first, so it paints under every real child
-                // (`crate::bgimage`).
-                if let (Some(stack), Some(radii)) = (bg_stack, bg_radii) {
-                    kids.push(crate::bgimage::layer_element(id, stack, radii));
-                }
-                let background_kids = kids.len();
-                if let Some(marker) = list_marker_for(t, id, node, &extras) {
-                    kids.push(marker);
-                }
-                if let Some(pb) = before {
-                    crate::fonts::want_for_pseudo(t, id, &pb);
-                    kids.push(pseudo_element(&pb, case, &stacking, own_display));
-                }
-                if is_file_input {
-                    kids.push(file_input_children(t, id, node, case));
-                } else if is_select {
-                    let skin = extras.appearance_none != Some(true);
-                    kids.extend(crate::select::closed_children(t, id, skin, case));
-                    if let Some(popup) = crate::select::popup_child(t, id, node, case, window) {
-                        kids.push(popup);
+                    // Clicks on the wrapper's padding/border focus the editor, but not while the field
+                    // is inert (an `opacity-0 pointer-events-none` panel parked over the visible one
+                    // must not take its press).
+                    if !inert {
+                        d = d.on_any_mouse_down(cx.listener(
+                            move |_, _: &MouseDownEvent, window, cx| {
+                                claim_press_focus(id, &focus_target, window, &mut **cx);
+                            },
+                        ));
                     }
-                } else if !node.text.is_empty() {
-                    // Inline text from `setElementText` (an element whose only child is text).
-                    let collapsed =
-                        processed_text(&node.text, ws.unwrap_or(sk_css::WhiteSpaceMode::Normal));
-                    crate::fonts::want_for_text(t, id, &collapsed);
-                    let text = trim_own_edges(t, node, &collapsed, ws);
-                    if !text.is_empty() {
-                        let lead = text.as_ptr() as usize - collapsed.as_ptr() as usize;
-                        kids.push(crate::selection::text_element(t, id, &node.text, ws, lead, text, case));
-                    }
+                    d.child(input).into_any_element()
                 } else {
-                    kids.extend(
-                        laid_out_children(t, node)
-                            .into_iter()
-                            .map(|c| {
-                                build_node(
-                                    t, c, root, window, cx, now, drag, case, ws, align,
-                                    stacking.clone(),
-                                )
-                            }),
-                    );
+                    // `::before` / `::after` are first and last children, so they take part in
+                    // flex/grid layout, `gap` and text flow like a hand-written `<span>`.
+                    let (before, after) = match &node.computed {
+                        Some(cs) => (cs.before.clone(), cs.after.clone()),
+                        None => (None, None),
+                    };
+                    let own_display = node.computed.as_ref().and_then(|cs| cs.base.display);
+                    let mut kids: Vec<AnyElement> = Vec::new();
+                    if opens {
+                        open_context();
+                    }
+                    // The `bgimage` painter child goes first, so it paints under every real child
+                    // (`crate::bgimage`).
+                    if let (Some(stack), Some(radii)) = (bg_stack, bg_radii) {
+                        kids.push(crate::bgimage::layer_element(id, stack, radii));
+                    }
+                    let background_kids = kids.len();
+                    if let Some(marker) = list_marker_for(t, id, node, &extras) {
+                        kids.push(marker);
+                    }
+                    if let Some(pb) = before {
+                        crate::fonts::want_for_pseudo(t, id, &pb);
+                        kids.push(pseudo_element(&pb, case, &stacking, own_display));
+                    }
+                    if is_file_input {
+                        kids.push(file_input_children(t, id, node, case));
+                    } else if is_select {
+                        let skin = extras.appearance_none != Some(true);
+                        kids.extend(crate::select::closed_children(t, id, skin, case));
+                        if let Some(popup) = crate::select::popup_child(t, id, node, case, window) {
+                            kids.push(popup);
+                        }
+                    } else if !node.text.is_empty() {
+                        // Inline text from `setElementText` (an element whose only child is text).
+                        let collapsed = processed_text(
+                            &node.text,
+                            ws.unwrap_or(sk_css::WhiteSpaceMode::Normal),
+                        );
+                        crate::fonts::want_for_text(t, id, &collapsed);
+                        let text = trim_own_edges(t, node, &collapsed, ws);
+                        if !text.is_empty() {
+                            let lead = text.as_ptr() as usize - collapsed.as_ptr() as usize;
+                            kids.push(crate::selection::text_element(
+                                t, id, &node.text, ws, lead, text, case,
+                            ));
+                        }
+                    } else {
+                        kids.extend(laid_out_children(t, node).into_iter().map(|c| {
+                            build_node(
+                                t,
+                                c,
+                                root,
+                                window,
+                                cx,
+                                now,
+                                drag,
+                                case,
+                                ws,
+                                align,
+                                stacking.clone(),
+                            )
+                        }));
+                    }
+                    if let Some(pb) = after {
+                        crate::fonts::want_for_pseudo(t, id, &pb);
+                        kids.push(pseudo_element(&pb, case, &stacking, own_display));
+                    }
+                    // The overlay scrollbar and its wheel routing. Last child: its hitboxes sit above
+                    // the content's and its capture-phase wheel listener registers after the
+                    // container's, so the innermost scroll box gets the wheel first.
+                    if let Some(h) = &scroll_handle {
+                        let auto_hide = cx.should_auto_hide_scrollbars();
+                        kids.push(
+                            scrollbar_for(t, id, node, h, window, auto_hide, cx).into_any_element(),
+                        );
+                    }
+                    // A negative z landed in this context: its in-flow content paints apart from its
+                    // background, after the negative ones.
+                    if opens && close_context() {
+                        split.set(true);
+                        kids = split_in_flow(kids, background_kids, &stacking);
+                    }
+                    crate::cache::normalize_inner_root(id, d.style());
+                    d.children(kids).into_any_element()
                 }
-                if let Some(pb) = after {
-                    crate::fonts::want_for_pseudo(t, id, &pb);
-                    kids.push(pseudo_element(&pb, case, &stacking, own_display));
-                }
-                // The overlay scrollbar and its wheel routing. Last child: its hitboxes sit above
-                // the content's and its capture-phase wheel listener registers after the
-                // container's, so the innermost scroll box gets the wheel first.
-                if let Some(h) = &scroll_handle {
-                    let auto_hide = cx.should_auto_hide_scrollbars();
-                    kids.push(
-                        scrollbar_for(t, id, node, h, window, auto_hide, cx).into_any_element(),
-                    );
-                }
-                // A negative z landed in this context: its in-flow content paints apart from its
-                // background, after the negative ones.
-                if opens && close_context() {
-                    split.set(true);
-                    kids = split_in_flow(kids, background_kids, &stacking);
-                }
-                crate::cache::normalize_inner_root(id, d.style());
-                d.children(kids).into_any_element()
-            }
-        })),
+            }),
+        ),
     }
 }
 
@@ -2237,7 +2475,10 @@ fn apply_background_clip_text(style: &mut gpui::StyleRefinement, extras: &sk_css
     if let Some(layers) = &style.background_layers {
         backgrounds.extend_from_slice(layers);
     }
-    style.vn_text_fill = Some(gpui::VnTextFill { group_id: id, backgrounds });
+    style.vn_text_fill = Some(gpui::VnTextFill {
+        group_id: id,
+        backgrounds,
+    });
     style.background = Some(gpui::Fill::Color(gpui::transparent_black().into()));
     style.background_layers = Some(Vec::new());
 }
@@ -2271,7 +2512,11 @@ pub(crate) struct PaddingRadii {
 }
 
 impl PaddingRadii {
-    pub(crate) fn resolve(&self, size: gpui::Size<gpui::Pixels>, rem: gpui::Pixels) -> gpui::Corners<gpui::Pixels> {
+    pub(crate) fn resolve(
+        &self,
+        size: gpui::Size<gpui::Pixels>,
+        rem: gpui::Pixels,
+    ) -> gpui::Corners<gpui::Pixels> {
         gpui::vn_resolve_corner_radii(&self.lengths, &self.relative, size, rem)
     }
 
@@ -2279,26 +2524,38 @@ impl PaddingRadii {
         let zero = gpui::AbsoluteLength::from(gpui::px(0.));
         let l = &self.lengths;
         self.relative == gpui::Corners::default()
-            && [l.top_left, l.top_right, l.bottom_right, l.bottom_left].iter().all(|c| *c == zero)
+            && [l.top_left, l.top_right, l.bottom_right, l.bottom_left]
+                .iter()
+                .all(|c| *c == zero)
     }
 
     fn apply(&self, style: &mut gpui::StyleRefinement) {
         let c = &mut style.corner_radii;
         (c.top_left, c.top_right) = (Some(self.lengths.top_left), Some(self.lengths.top_right));
-        (c.bottom_right, c.bottom_left) =
-            (Some(self.lengths.bottom_right), Some(self.lengths.bottom_left));
+        (c.bottom_right, c.bottom_left) = (
+            Some(self.lengths.bottom_right),
+            Some(self.lengths.bottom_left),
+        );
         let v = &mut style.vn_corner_radii;
         (v.top_left, v.top_right) = (Some(self.relative.top_left), Some(self.relative.top_right));
-        (v.bottom_right, v.bottom_left) =
-            (Some(self.relative.bottom_right), Some(self.relative.bottom_left));
+        (v.bottom_right, v.bottom_left) = (
+            Some(self.relative.bottom_right),
+            Some(self.relative.bottom_left),
+        );
     }
 }
 
 fn padding_box_radii(style: &gpui::StyleRefinement, rem: gpui::Pixels) -> PaddingRadii {
     let radius = |v: Option<gpui::AbsoluteLength>| v.map_or(0.0, |v| f32::from(v.to_pixels(rem)));
     let border = |v: Option<gpui::AbsoluteLength>| v.map_or(0.0, |v| f32::from(v.to_pixels(rem)));
-    let (top, right) = (border(style.border_widths.top), border(style.border_widths.right));
-    let (bottom, left) = (border(style.border_widths.bottom), border(style.border_widths.left));
+    let (top, right) = (
+        border(style.border_widths.top),
+        border(style.border_widths.right),
+    );
+    let (bottom, left) = (
+        border(style.border_widths.bottom),
+        border(style.border_widths.left),
+    );
     let inner = |r: f32, a: f32, b: f32| gpui::px((r - a.max(b)).max(0.0)).into();
     let v = &style.vn_corner_radii;
     PaddingRadii {
@@ -2383,26 +2640,37 @@ fn apply_inline_row(
 // must not inherit a flex item's min-content floor: `overflow-wrap: break-word` excludes emergency
 // breaks from min-content, so one long word would paint outside the paragraph.
 fn synthetic_inline_item(t: &Tree, node: &crate::tree::Node) -> bool {
-    let Some(parent) = t.node(node.parent) else { return false };
-    let display = parent.computed.as_ref().and_then(|style| style.base.display);
+    let Some(parent) = t.node(node.parent) else {
+        return false;
+    };
+    let display = parent
+        .computed
+        .as_ref()
+        .and_then(|style| style.base.display);
     inline_row_applies(t, parent, display)
 }
 
-fn apply_inline_item_minimum(style: &mut gpui::StyleRefinement, t: &Tree, node: &crate::tree::Node) {
-    let declared = node.computed.as_ref().and_then(|computed| computed.base.display);
+fn apply_inline_item_minimum(
+    style: &mut gpui::StyleRefinement,
+    t: &Tree,
+    node: &crate::tree::Node,
+) {
+    let declared = node
+        .computed
+        .as_ref()
+        .and_then(|computed| computed.base.display);
     if synthetic_inline_item(t, node)
-        && !matches!(declared, Some(gpui::Display::Flex) | Some(gpui::Display::Grid))
+        && !matches!(
+            declared,
+            Some(gpui::Display::Flex) | Some(gpui::Display::Grid)
+        )
         && style.size.width.is_none()
     {
         style.min_size.width.get_or_insert(gpui::px(0.0).into());
     }
 }
 
-fn inline_row_applies(
-    t: &Tree,
-    node: &crate::tree::Node,
-    display: Option<gpui::Display>,
-) -> bool {
+fn inline_row_applies(t: &Tree, node: &crate::tree::Node, display: Option<gpui::Display>) -> bool {
     // An author-declared display is authority (`display: flex` on a paragraph means flex).
     if !matches!(display, None | Some(gpui::Display::Block)) {
         return false;
@@ -2414,7 +2682,9 @@ fn inline_row_applies(
     let mut has_text = false;
     let mut has_element = false;
     for &child in &kids {
-        let Some(kid) = t.node(child) else { return false };
+        let Some(kid) = t.node(child) else {
+            return false;
+        };
         match kid.kind {
             Kind::Text => has_text = true,
             Kind::Element => {
@@ -2430,7 +2700,10 @@ fn inline_row_applies(
                     .as_ref()
                     .is_some_and(|cs| cs.extras.inline_level == Some(true));
                 if !inline_level
-                    && matches!(declared, Some(gpui::Display::Block) | Some(gpui::Display::Grid))
+                    && matches!(
+                        declared,
+                        Some(gpui::Display::Block) | Some(gpui::Display::Grid)
+                    )
                 {
                     return false;
                 }
@@ -2484,7 +2757,9 @@ fn apply_button_content_box(style: &mut gpui::StyleRefinement, t: &Tree, node: &
 }
 
 fn parent_is_flex_or_grid(t: &Tree, node: &crate::tree::Node) -> bool {
-    let Some(parent) = t.node(node.parent) else { return false };
+    let Some(parent) = t.node(node.parent) else {
+        return false;
+    };
     let display = parent.computed.as_ref().and_then(|cs| cs.base.display);
     match display {
         Some(gpui::Display::Flex) | Some(gpui::Display::Grid) => true,
@@ -2549,7 +2824,9 @@ fn apply_drop_shadow(
     inherited_color: Option<gpui::Hsla>,
     at: impl Fn() -> String,
 ) {
-    let Some(shadow) = extras.drop_shadow else { return };
+    let Some(shadow) = extras.drop_shadow else {
+        return;
+    };
     let opaque = style
         .background
         .as_ref()
@@ -2564,13 +2841,16 @@ fn apply_drop_shadow(
         .color
         .or_else(|| style.text.color.or(inherited_color))
         .unwrap_or_else(gpui::black);
-    style.box_shadow.get_or_insert_with(Vec::new).push(gpui::BoxShadow {
-        color,
-        offset: gpui::point(gpui::px(shadow.dx), gpui::px(shadow.dy)),
-        blur_radius: gpui::px(shadow.blur),
-        spread_radius: gpui::px(0.0),
-        inset: false,
-    });
+    style
+        .box_shadow
+        .get_or_insert_with(Vec::new)
+        .push(gpui::BoxShadow {
+            color,
+            offset: gpui::point(gpui::px(shadow.dx), gpui::px(shadow.dy)),
+            blur_radius: gpui::px(shadow.blur),
+            spread_radius: gpui::px(0.0),
+            inset: false,
+        });
 }
 
 /// CSS `mask` as the gradient-border idiom: the background paints only in the padding and border
@@ -2650,7 +2930,8 @@ fn pseudo_element(
     let e = if pb.content.is_empty() {
         d.into_any_element()
     } else {
-        d.child(transformed_text(&pb.content, case)).into_any_element()
+        d.child(transformed_text(&pb.content, case))
+            .into_any_element()
     };
     let effect = effect_context(&pb.extras, &pb.style);
     let layer = layer_of(&pb.extras, pb.style.position, effect, parent_display);
@@ -2678,7 +2959,9 @@ fn list_marker_for(
         let mut inside = extras.list_marker_inside;
         let mut cursor = node.parent;
         while marker.is_none() || inside.is_none() {
-            let Some(ancestor) = t.node(cursor) else { break };
+            let Some(ancestor) = t.node(cursor) else {
+                break;
+            };
             if let Some(cs) = &ancestor.computed {
                 marker = marker.or(cs.extras.list_marker);
                 inside = inside.or(cs.extras.list_marker_inside);
@@ -2699,7 +2982,10 @@ fn list_marker_for(
             parent
                 .children
                 .iter()
-                .filter(|&&c| t.node(c).is_some_and(|n| n.kind == crate::tree::Kind::Element))
+                .filter(|&&c| {
+                    t.node(c)
+                        .is_some_and(|n| n.kind == crate::tree::Kind::Element)
+                })
                 .position(|&c| c == id)
                 .unwrap_or(0)
                 + 1
@@ -2760,14 +3046,22 @@ pub(crate) fn processed_text(raw: &str, mode: sk_css::WhiteSpaceMode) -> std::bo
             continue;
         }
         if let Some(saw_newline) = run.take() {
-            out.push(if keeps_newlines && saw_newline { '\n' } else { ' ' });
+            out.push(if keeps_newlines && saw_newline {
+                '\n'
+            } else {
+                ' '
+            });
         }
         out.push(c);
     }
     // A trailing run stays a space (or break): edge trimming removes it when the node is last in
     // its block, and a run between inline siblings must survive as the word gap.
     if let Some(saw_newline) = run {
-        out.push(if keeps_newlines && saw_newline { '\n' } else { ' ' });
+        out.push(if keeps_newlines && saw_newline {
+            '\n'
+        } else {
+            ' '
+        });
     }
     std::borrow::Cow::Owned(out)
 }
@@ -2784,18 +3078,35 @@ pub(crate) fn trim_edges<'a>(
 ) -> &'a str {
     const COLLAPSIBLE: [char; 4] = [' ', '\t', '\n', '\r'];
     // `pre*` preserves the edges too: the trim is the second half of the collapsing rule.
-    if !mode.unwrap_or(sk_css::WhiteSpaceMode::Normal).collapses_spaces() {
+    if !mode
+        .unwrap_or(sk_css::WhiteSpaceMode::Normal)
+        .collapses_spaces()
+    {
         return text;
     }
-    let Some(parent) = t.node(node.parent) else { return text };
+    let Some(parent) = t.node(node.parent) else {
+        return text;
+    };
     if parent.kind == Kind::Element && INLINE_LEVEL_TAGS.contains(&t.name(parent.tag)) {
         return text;
     }
-    let mut boxes = parent.children.iter().copied().filter(|&c| generates_a_box(t, c));
+    let mut boxes = parent
+        .children
+        .iter()
+        .copied()
+        .filter(|&c| generates_a_box(t, c));
     let first = boxes.next();
     let last = boxes.last().or(first);
-    let text = if first == Some(id) { text.trim_start_matches(COLLAPSIBLE) } else { text };
-    if last == Some(id) { text.trim_end_matches(COLLAPSIBLE) } else { text }
+    let text = if first == Some(id) {
+        text.trim_start_matches(COLLAPSIBLE)
+    } else {
+        text
+    };
+    if last == Some(id) {
+        text.trim_end_matches(COLLAPSIBLE)
+    } else {
+        text
+    }
 }
 
 pub(crate) fn trim_own_edges<'a>(
@@ -2805,12 +3116,20 @@ pub(crate) fn trim_own_edges<'a>(
     mode: Option<sk_css::WhiteSpaceMode>,
 ) -> &'a str {
     const COLLAPSIBLE: [char; 4] = [' ', '\t', '\n', '\r'];
-    if !mode.unwrap_or(sk_css::WhiteSpaceMode::Normal).collapses_spaces() {
+    if !mode
+        .unwrap_or(sk_css::WhiteSpaceMode::Normal)
+        .collapses_spaces()
+    {
         return text;
     }
     if INLINE_LEVEL_TAGS.contains(&t.name(node.tag))
         && t.node(node.parent).is_some_and(|parent| {
-            parent.children.iter().filter(|&&c| generates_a_box(t, c)).count() > 1
+            parent
+                .children
+                .iter()
+                .filter(|&&c| generates_a_box(t, c))
+                .count()
+                > 1
         })
     {
         return text;
@@ -2840,7 +3159,11 @@ fn laid_out_children(t: &Tree, node: &crate::tree::Node) -> Vec<u32> {
     // Document order, negative `z-index` included: a negative-z box is a deferred draw sorted
     // before its context's in-flow content (`Stacking`), so this list, which is also taffy's, never
     // has to move.
-    node.children.iter().copied().filter(|&c| generates_a_box(t, c)).collect()
+    node.children
+        .iter()
+        .copied()
+        .filter(|&c| generates_a_box(t, c))
+        .collect()
 }
 
 /// `display: inline-*` mapped onto its block-level equivalent, advised only where it is visible: an
@@ -2862,9 +3185,14 @@ fn advise_inline_level(
     if !matches!(style.size.width, None | Some(gpui::Length::Auto)) {
         return;
     }
-    let Some(parent) = t.node(node.parent) else { return };
+    let Some(parent) = t.node(node.parent) else {
+        return;
+    };
     let parent_display = parent.computed.as_ref().and_then(|cs| cs.base.display);
-    if matches!(parent_display, Some(gpui::Display::Flex) | Some(gpui::Display::Grid)) {
+    if matches!(
+        parent_display,
+        Some(gpui::Display::Flex) | Some(gpui::Display::Grid)
+    ) {
         return;
     }
     if inline_row_applies(t, parent, parent_display) {
@@ -2970,7 +3298,9 @@ fn fixed_lands_on_the_viewport(t: &Tree, node: &crate::tree::Node, win: WinKey) 
 fn no_inner_inset(style: &gpui::StyleRefinement) -> bool {
     let zero_definite = |v: &Option<gpui::DefiniteLength>| match v {
         None => true,
-        Some(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Pixels(p))) => f32::from(*p) == 0.0,
+        Some(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Pixels(p))) => {
+            f32::from(*p) == 0.0
+        }
         Some(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Rems(r))) => r.0 == 0.0,
         Some(gpui::DefiniteLength::Fraction(f)) => *f == 0.0,
         Some(gpui::DefiniteLength::Calc { .. }) => false,
@@ -2980,9 +3310,14 @@ fn no_inner_inset(style: &gpui::StyleRefinement) -> bool {
         Some(gpui::AbsoluteLength::Pixels(p)) => f32::from(*p) == 0.0,
         Some(gpui::AbsoluteLength::Rems(r)) => r.0 == 0.0,
     };
-    [&style.padding.top, &style.padding.right, &style.padding.bottom, &style.padding.left]
-        .into_iter()
-        .all(zero_definite)
+    [
+        &style.padding.top,
+        &style.padding.right,
+        &style.padding.bottom,
+        &style.padding.left,
+    ]
+    .into_iter()
+    .all(zero_definite)
         && [
             &style.border_widths.top,
             &style.border_widths.right,
@@ -3012,11 +3347,17 @@ fn scrolling_ancestor(t: &Tree, node: &crate::tree::Node) -> bool {
 }
 
 pub(crate) fn is_metadata(tag: &str) -> bool {
-    matches!(tag, "style" | "script" | "template" | "head" | "meta" | "link" | "title" | "base")
+    matches!(
+        tag,
+        "style" | "script" | "template" | "head" | "meta" | "link" | "title" | "base"
+    )
 }
 
 fn extras_of(node: &crate::tree::Node) -> sk_css::Extras {
-    node.computed.as_ref().map(|cs| cs.extras.clone()).unwrap_or_default()
+    node.computed
+        .as_ref()
+        .map(|cs| cs.extras.clone())
+        .unwrap_or_default()
 }
 
 const POINTER_BITS: u64 = (1 << tree::EV_CLICK)
@@ -3138,11 +3479,16 @@ fn begin_press_focus(window: &mut Window, cx: &mut App) {
         if w.press_focus.pending {
             return false;
         }
-        w.press_focus = windows::PressFocus { pending: true, ..Default::default() };
+        w.press_focus = windows::PressFocus {
+            pending: true,
+            ..Default::default()
+        };
         true
     });
     if schedule {
-        window.defer(cx, |window, cx| crate::off_input(|| apply_press_focus(window, cx)));
+        window.defer(cx, |window, cx| {
+            crate::off_input(|| apply_press_focus(window, cx))
+        });
     }
 }
 
@@ -3166,7 +3512,8 @@ fn apply_press_focus(window: &mut Window, cx: &mut App) {
     let root = window_root(k);
     let root_handle = || FOCUS_HANDLES.with(|m| m.borrow().get(&root).cloned());
     if !press.cancelled && (!press.claims.is_empty() || press.reached) {
-        let in_document = |id: u32| tree::read_tree(|t| t.node(id).is_some() && reaches_painted_root(t, id));
+        let in_document =
+            |id: u32| tree::read_tree(|t| t.node(id).is_some() && reaches_painted_root(t, id));
         let target = match press.claims.into_iter().find(|(id, _)| in_document(*id)) {
             Some(claim) => Some(claim),
             None => root_handle().map(|h| (root, h)),
@@ -3184,7 +3531,11 @@ fn apply_press_focus(window: &mut Window, cx: &mut App) {
         // `:focus-within`, which HTML never focuses: put it back.
         if now != root && !windows::of(k, |w| w.focus_subs.contains_key(&now)) {
             let slot = windows::focused_node(k);
-            let back = if slot != 0 { focus_target_of(slot, cx) } else { root_handle() };
+            let back = if slot != 0 {
+                focus_target_of(slot, cx)
+            } else {
+                root_handle()
+            };
             if let Some(h) = back {
                 window.focus(&h, cx);
             }
@@ -3244,13 +3595,19 @@ const MAX_DEFERRED_NESTING: u32 = 32;
 
 pub(crate) fn z_applies(extras: &sk_css::Extras, parent_display: Option<gpui::Display>) -> bool {
     extras.positioned == Some(true)
-        || matches!(parent_display, Some(gpui::Display::Flex) | Some(gpui::Display::Grid))
+        || matches!(
+            parent_display,
+            Some(gpui::Display::Flex) | Some(gpui::Display::Grid)
+        )
 }
 
 pub(crate) fn effect_context(extras: &sk_css::Extras, style: &gpui::StyleRefinement) -> bool {
     style.opacity.is_some_and(|o| o < 1.0)
         || !matches!(style.vn_clip_path, None | Some(gpui::VnClipPath::None))
-        || style.vn_transform.as_ref().is_some_and(|t| !t.is_identity())
+        || style
+            .vn_transform
+            .as_ref()
+            .is_some_and(|t| !t.is_identity())
         || style.backdrop_blur.is_some_and(|r| r > gpui::px(0.0))
         || extras.blur.is_some_and(|b| b > 0.0)
         || extras.filter_url.is_some()
@@ -3264,7 +3621,11 @@ pub(crate) fn layer_of(
     effect: bool,
     parent_display: Option<gpui::Display>,
 ) -> Layer {
-    let z = if z_applies(extras, parent_display) { extras.z() } else { None };
+    let z = if z_applies(extras, parent_display) {
+        extras.z()
+    } else {
+        None
+    };
     let out_of_flow = position == Some(gpui::Position::Absolute);
     match z {
         Some(z) if z != 0 => Layer::Context(z),
@@ -3340,7 +3701,11 @@ pub(crate) struct Entered {
 
 impl Stacking {
     fn with_slot(&self, slot: u128) -> std::rc::Rc<[u128]> {
-        self.key.iter().copied().chain(std::iter::once(slot)).collect()
+        self.key
+            .iter()
+            .copied()
+            .chain(std::iter::once(slot))
+            .collect()
     }
 
     fn in_flow_key(&self) -> std::rc::Rc<[u128]> {
@@ -3350,7 +3715,12 @@ impl Stacking {
     fn enter(&self, layer: Layer, ordinal: u64) -> Entered {
         let (z, defer, opens) = match layer {
             Layer::InFlow => {
-                return Entered { own: None, inside: self.clone(), opens: false, negative: false }
+                return Entered {
+                    own: None,
+                    inside: self.clone(),
+                    opens: false,
+                    negative: false,
+                }
             }
             Layer::InFlowContext => (0, false, true),
             Layer::Positioned => (0, true, false),
@@ -3371,8 +3741,16 @@ impl Stacking {
             room
         };
         let deferred = self.deferred + u32::from(defer);
-        let inside = Stacking { key: if opens { key.clone() } else { self.key.clone() }, deferred };
-        Entered { own: defer.then_some(key), inside, opens, negative: defer && z < 0 }
+        let inside = Stacking {
+            key: if opens { key.clone() } else { self.key.clone() },
+            deferred,
+        };
+        Entered {
+            own: defer.then_some(key),
+            inside,
+            opens,
+            negative: defer && z < 0,
+        }
     }
 }
 
@@ -3389,7 +3767,9 @@ fn open_context() {
 }
 
 fn close_context() -> bool {
-    OPEN_CONTEXTS.with(|c| c.borrow_mut().pop()).unwrap_or(false)
+    OPEN_CONTEXTS
+        .with(|c| c.borrow_mut().pop())
+        .unwrap_or(false)
 }
 
 fn split_in_flow(kids: Vec<AnyElement>, keep: usize, inside: &Stacking) -> Vec<AnyElement> {
@@ -3440,7 +3820,9 @@ fn stack_box(
 /// update.
 fn claim_key_event(window: &Window) -> bool {
     let seq = window.vn_key_event_seq();
-    windows::here(window, |w| std::mem::replace(&mut w.key_event_claimed, seq) != seq)
+    windows::here(window, |w| {
+        std::mem::replace(&mut w.key_event_claimed, seq) != seq
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3474,12 +3856,19 @@ where
             ClickEvent::Keyboard(k) => {
                 if k.button == gpui::KeyboardButton::Space {
                     let (at, modifiers) = (ev.position(), ev.modifiers());
-                    let step = KeyClick::Click { id, at, modifiers, armed: true, key: " " };
+                    let step = KeyClick::Click {
+                        id,
+                        at,
+                        modifiers,
+                        armed: true,
+                        key: " ",
+                    };
                     owe_key_click(step, window, &mut **cx);
                 }
             }
             ClickEvent::Touch(_) => {
-                let payload = mouse_payload_n(ev.position(), 0.0, &ev.modifiers(), ev.click_count());
+                let payload =
+                    mouse_payload_n(ev.position(), 0.0, &ev.modifiers(), ev.click_count());
                 js_dispatch(id, tree::EV_CLICK, &payload, window, cx);
             }
         }));
@@ -3497,11 +3886,18 @@ where
                 }
                 match k.key.as_str() {
                     "enter" if keyboard_activates(id, false) => {
-                        let at = windows::peek(windows::key(window), |w| w.bounds.get(&id).copied())
-                            .flatten()
-                            .map(|(x, y, _, h)| gpui::point(gpui::px(x), gpui::px(y + h)))
-                            .unwrap_or_default();
-                        let step = KeyClick::Click { id, at, modifiers: k.modifiers, armed: false, key: "Enter" };
+                        let at =
+                            windows::peek(windows::key(window), |w| w.bounds.get(&id).copied())
+                                .flatten()
+                                .map(|(x, y, _, h)| gpui::point(gpui::px(x), gpui::px(y + h)))
+                                .unwrap_or_default();
+                        let step = KeyClick::Click {
+                            id,
+                            at,
+                            modifiers: k.modifiers,
+                            armed: false,
+                            key: "Enter",
+                        };
                         owe_key_click(step, window, &mut **cx);
                     }
                     "space" if keyboard_activates(id, true) => {
@@ -3521,18 +3917,24 @@ where
         }
     }
     if bit(tree::EV_MOUSEDOWN) {
-        e = e.capture_any_mouse_down(|_, window, _| windows::here(window, |w| w.down_claimed = false));
+        e = e.capture_any_mouse_down(|_, window, _| {
+            windows::here(window, |w| w.down_claimed = false)
+        });
     }
     if bit(tree::EV_MOUSEDOWN) || bit(tree::EV_CLICK) || bit(tree::EV_AUXCLICK) || focusable {
         let handle = click_focus;
         e = e.on_any_mouse_down(cx.listener(move |_, ev: &MouseDownEvent, window, cx| {
             if windows::here(window, |w| w.press.is_none()) {
                 let target = crate::pointer::target_or(window, id);
-                let clickable = !cx.has_active_drag() && crate::pointer::click_target(window, target, id).is_some();
+                let clickable = !cx.has_active_drag()
+                    && crate::pointer::click_target(window, target, id).is_some();
                 windows::here(window, |w| {
                     w.press = Some(Press {
-                        target, button: button_code(ev.button), position: ev.position,
-                        clickable, cancelled: false,
+                        target,
+                        button: button_code(ev.button),
+                        position: ev.position,
+                        clickable,
+                        cancelled: false,
                     });
                 });
                 watch_activation(window, cx);
@@ -3540,7 +3942,9 @@ where
             if let Some(h) = &handle {
                 claim_press_focus(id, h, window, &mut **cx);
             }
-            if bit(tree::EV_MOUSEDOWN) && !windows::here(window, |w| std::mem::replace(&mut w.down_claimed, true)) {
+            if bit(tree::EV_MOUSEDOWN)
+                && !windows::here(window, |w| std::mem::replace(&mut w.down_claimed, true))
+            {
                 let button = button_code(ev.button);
                 let target = crate::pointer::target_or(window, id);
                 let payload = mouse_payload_n(ev.position, button, &ev.modifiers, ev.click_count);
@@ -3556,7 +3960,12 @@ where
             e = e.on_mouse_up(
                 button,
                 cx.listener(move |_, ev: &MouseUpEvent, window, cx| {
-                    let payload = mouse_payload_n(ev.position, button_code(ev.button), &ev.modifiers, ev.click_count);
+                    let payload = mouse_payload_n(
+                        ev.position,
+                        button_code(ev.button),
+                        &ev.modifiers,
+                        ev.click_count,
+                    );
                     let target = crate::pointer::target_or(window, id);
                     claim_up(window, &mut **cx, |w| &mut w.mouseup, target, &payload);
                 }),
@@ -3579,21 +3988,23 @@ where
         // No dispatch here: stash and let the pump deliver one mousemove per frame (see
         // PendingMouseMove). An outer listener seeing the same position is the same physical move,
         // which the innermost already claimed.
-        e = e.on_mouse_move(cx.listener(move |_, ev: &gpui::MouseMoveEvent, window, _cx| {
-            windows::here(window, |w| {
-                if let Some(p) = w.pending_mouse_move.as_ref() {
-                    if p.position == ev.position {
-                        return;
+        e = e.on_mouse_move(
+            cx.listener(move |_, ev: &gpui::MouseMoveEvent, window, _cx| {
+                windows::here(window, |w| {
+                    if let Some(p) = w.pending_mouse_move.as_ref() {
+                        if p.position == ev.position {
+                            return;
+                        }
                     }
-                }
-                w.pending_mouse_move = Some(PendingMouseMove {
-                    id,
-                    position: ev.position,
-                    button: button_code_opt(ev.pressed_button),
-                    modifiers: ev.modifiers,
+                    w.pending_mouse_move = Some(PendingMouseMove {
+                        id,
+                        position: ev.position,
+                        button: button_code_opt(ev.pressed_button),
+                        modifiers: ev.modifiers,
+                    });
                 });
-            });
-        }));
+            }),
+        );
     }
     if bit(tree::EV_WHEEL) {
         e = e.on_scroll(cx.listener(move |_, ev: &ScrollEvent, window, cx| {
@@ -3701,7 +4112,9 @@ const PENDING_FOCUS_FRAMES: u32 = 10;
 pub(crate) enum FocusAnswer {
     /// Focus moved now: JS fires `blur`/`focusout` on `old` (0 = none), then `focus`/`focusin` on
     /// the node.
-    Moved { old: u32 },
+    Moved {
+        old: u32,
+    },
     Already,
     Pending,
     /// Not focusable, not in the document, or hidden by CSS: a no-op, as in a browser.
@@ -3715,7 +4128,9 @@ fn could_take_focus(t: &Tree, id: u32) -> bool {
         return false;
     }
     // A `tabindex` that is not an integer is ignored, as the build ignores it (`tab_index_of`).
-    let tab_index = t.prop(id, "tabindex").is_some_and(|v| v.trim().parse::<isize>().is_ok());
+    let tab_index = t
+        .prop(id, "tabindex")
+        .is_some_and(|v| v.trim().parse::<isize>().is_ok());
     tag == "input" || tag == "textarea" || tab_index || default_tab_index(t, id).is_some()
 }
 
@@ -3723,7 +4138,11 @@ pub(crate) fn css_visible(t: &Tree, id: u32) -> bool {
     let mut cur = id;
     for _ in 0..4096 {
         let Some(n) = t.node(cur) else { break };
-        if let Some(hidden) = n.computed.as_ref().and_then(|cs| cs.extras.visibility_hidden) {
+        if let Some(hidden) = n
+            .computed
+            .as_ref()
+            .and_then(|cs| cs.extras.visibility_hidden)
+        {
             return !hidden;
         }
         if n.parent == 0 {
@@ -3738,7 +4157,10 @@ fn in_display_none(t: &Tree, id: u32) -> bool {
     let mut cur = id;
     for _ in 0..4096 {
         let Some(n) = t.node(cur) else { return false };
-        if n.computed.as_ref().is_some_and(|cs| cs.base.display == Some(gpui::Display::None)) {
+        if n.computed
+            .as_ref()
+            .is_some_and(|cs| cs.base.display == Some(gpui::Display::None))
+        {
             return true;
         }
         if n.parent == 0 {
@@ -3771,8 +4193,12 @@ pub(crate) fn queue_focus(id: u32) {
 
 pub(crate) fn js_focus(id: u32, window: &mut Window, cx: &mut App) -> FocusAnswer {
     let k = windows::key(window);
-    let (in_document, could) =
-        tree::read_tree(|t| (t.node(id).is_some() && reaches_painted_root(t, id), could_take_focus(t, id)));
+    let (in_document, could) = tree::read_tree(|t| {
+        (
+            t.node(id).is_some() && reaches_painted_root(t, id),
+            could_take_focus(t, id),
+        )
+    });
     // Not a focusable area: a node with only a `:focus` rule has a handle, but a browser refuses to
     // focus it.
     if !in_document || !could {
@@ -3794,7 +4220,9 @@ pub(crate) fn js_focus(id: u32, window: &mut Window, cx: &mut App) -> FocusAnswe
     window.focus(&handle, cx);
     windows::set_focused_node(k, id);
     crate::log::record("dev", format!("[focus] el.focus() focused node {id}"));
-    FocusAnswer::Moved { old: if old == id { 0 } else { old } }
+    FocusAnswer::Moved {
+        old: if old == id { 0 } else { old },
+    }
 }
 
 pub(crate) fn js_blur(id: u32, window: &mut Window, cx: &mut App) -> bool {
@@ -3827,20 +4255,29 @@ pub(crate) fn apply_pending_focus(window: &mut Window, cx: &mut App) {
     // hid.
     if style_refuses_focus(id) {
         PENDING_FOCUS.with(|p| p.set((0, 0)));
-        crate::log::record("dev", format!("[focus] queued el.focus() on node {id} dropped: CSS hid it"));
+        crate::log::record(
+            "dev",
+            format!("[focus] queued el.focus() on node {id} dropped: CSS hid it"),
+        );
         return;
     }
     if let Some(handle) = focus_target_of(id, cx) {
         PENDING_FOCUS.with(|p| p.set((0, 0)));
         if !handle.is_focused(window) {
             window.focus(&handle, cx);
-            crate::log::record("dev", format!("[focus] queued el.focus() focused node {id}"));
+            crate::log::record(
+                "dev",
+                format!("[focus] queued el.focus() focused node {id}"),
+            );
         }
         return;
     }
     if left <= 1 {
         PENDING_FOCUS.with(|p| p.set((0, 0)));
-        crate::log::record("dev", format!("[focus] queued el.focus() on node {id} dropped: it never got a focus handle"));
+        crate::log::record(
+            "dev",
+            format!("[focus] queued el.focus() on node {id} dropped: it never got a focus handle"),
+        );
     } else {
         PENDING_FOCUS.with(|p| p.set((id, left - 1)));
     }
@@ -3863,12 +4300,21 @@ pub(crate) fn focused_node(window: &Window, _cx: &App) -> Option<u32> {
     });
     from_inputs.or_else(|| {
         FOCUS_HANDLES.with(|m| {
-            m.borrow().iter().find(|(_, h)| h.is_focused(window)).map(|(id, _)| *id)
+            m.borrow()
+                .iter()
+                .find(|(_, h)| h.is_focused(window))
+                .map(|(id, _)| *id)
         })
     })
 }
 
-pub(crate) fn ime(id: u32, text: &str, commit: bool, window: &mut Window, cx: &mut App) -> Result<(), String> {
+pub(crate) fn ime(
+    id: u32,
+    text: &str,
+    commit: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<(), String> {
     use gpui::EntityInputHandler;
     let Some(state) = INPUT_STATES.with(|m| m.borrow().get(&id).cloned()) else {
         return Err(format!("node {id} is not a built <input> or <textarea>"));
@@ -3889,23 +4335,41 @@ pub(crate) fn select_input_text(id: u32) -> bool {
     let info = tree::read_tree(|t| {
         let node = t.node(id)?;
         let multiline = t.name(node.tag) == "textarea";
-        if !multiline && (t.name(node.tag) != "input"
-            || matches!(t.prop(id, "type").unwrap_or("text").trim().to_ascii_lowercase().as_str(), "file" | "range" | "color")) {
+        if !multiline
+            && (t.name(node.tag) != "input"
+                || matches!(
+                    t.prop(id, "type")
+                        .unwrap_or("text")
+                        .trim()
+                        .to_ascii_lowercase()
+                        .as_str(),
+                    "file" | "range" | "color"
+                ))
+        {
             return None;
         }
-        let value = t.prop_write(id, "value").map(|(v, write)| (v.to_string(), write))
+        let value = t
+            .prop_write(id, "value")
+            .map(|(v, write)| (v.to_string(), write))
             .or_else(|| multiline.then(|| (node.text.clone(), 0)));
         Some((multiline, value))
     });
-    let Some((multiline, value)) = info else { return false };
+    let Some((multiline, value)) = info else {
+        return false;
+    };
     if !crate::in_input_dispatch() {
         let state = INPUT_STATES.with(|m| m.borrow().get(&id).cloned());
         if let Some(state) = state {
-            let applied = sk_runtime::with_app(|cx| state.update(cx, |s, cx| {
-                s.set_multiline(multiline);
-                if let Some((value, write)) = &value { s.sync_value(value, *write, cx); }
-                s.select_all_text(cx);
-            })).is_some();
+            let applied = sk_runtime::with_app(|cx| {
+                state.update(cx, |s, cx| {
+                    s.set_multiline(multiline);
+                    if let Some((value, write)) = &value {
+                        s.sync_value(value, *write, cx);
+                    }
+                    s.select_all_text(cx);
+                })
+            })
+            .is_some();
             if applied {
                 INPUT_SELECT_ALL.with(|m| m.borrow_mut().remove(&id));
                 return true;
@@ -3920,8 +4384,11 @@ pub(crate) fn select_input_text(id: u32) -> bool {
 /// The live text of a native `<input>`: the widget's buffer, not the `value` prop, so it reflects
 /// typing JS has not echoed yet.
 pub(crate) fn input_value(id: u32, cx: &App) -> Option<String> {
-    INPUT_STATES.with(|m| m.borrow().get(&id).map(|s| s.read(cx).text().to_string()))
-        .or_else(|| tree::read_tree(|t| crate::range::is_range(t, id).then(|| crate::range::value(t, id))))
+    INPUT_STATES
+        .with(|m| m.borrow().get(&id).map(|s| s.read(cx).text().to_string()))
+        .or_else(|| {
+            tree::read_tree(|t| crate::range::is_range(t, id).then(|| crate::range::value(t, id)))
+        })
 }
 
 pub(crate) fn scroll_node(
@@ -4071,7 +4538,10 @@ fn build_img<V: 'static>(
     let mask = pointer_mask(node);
     let tab_index = tab_index_of(t, id);
     let focusable = tab_index.is_some();
-    let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
+    let styled_focus = node
+        .computed
+        .as_ref()
+        .is_some_and(|cs| cs.needs_focus_handle());
     let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
     if let Some(h) = &handle {
         e = e.track_focus(h);
@@ -4149,8 +4619,15 @@ impl<E: gpui::Element + gpui::Styled> gpui::Element for SvgTint<E> {
             // in gpui's ladder.
             self.inner.style().text.color = Some(window.text_style().color);
         }
-        self.inner
-            .paint(id, inspector_id, bounds, request_layout, prepaint, window, cx)
+        self.inner.paint(
+            id,
+            inspector_id,
+            bounds,
+            request_layout,
+            prepaint,
+            window,
+            cx,
+        )
     }
 }
 
@@ -4166,12 +4643,16 @@ fn build_svg<V: 'static>(
     let win = windows::key(window);
     // An `<svg>`'s silhouette is its shapes: resvg draws a `drop-shadow()` around them
     // (`crate::svg`).
-    let shadow = node.computed.as_ref().and_then(|cs| cs.extras.drop_shadow).map(|d| crate::svg::ShadowSpec {
-        dx: d.dx,
-        dy: d.dy,
-        blur: d.blur,
-        color: d.color,
-    });
+    let shadow = node
+        .computed
+        .as_ref()
+        .and_then(|cs| cs.extras.drop_shadow)
+        .map(|d| crate::svg::ShadowSpec {
+            dx: d.dx,
+            dy: d.dy,
+            blur: d.blur,
+            color: d.color,
+        });
     if shadow.is_some() && paints_own_box(node) {
         warn_compat_at(
             "filter-drop-shadow-svg-box",
@@ -4198,22 +4679,38 @@ fn build_svg<V: 'static>(
     match (doc.paint, shadow) {
         (crate::svg::Paint::Mono, None) => {
             crate::svg::forget_raster(id);
-            let e = with_control_area(gpui::svg().data(&doc.bytes).id(id as usize), id, control_area, win);
+            let e = with_control_area(
+                gpui::svg().data(&doc.bytes).id(id as usize),
+                id,
+                control_area,
+                win,
+            );
             finish_svg(e, t, id, node, window, cx, now)
         }
         _ => {
-            let e = with_control_area(crate::svg::raster(id, doc.clone(), shadow).id(id as usize), id, control_area, win);
+            let e = with_control_area(
+                crate::svg::raster(id, doc.clone(), shadow).id(id as usize),
+                id,
+                control_area,
+                win,
+            );
             finish_svg(e, t, id, node, window, cx, now)
         }
     }
 }
 
 fn paints_own_box(node: &crate::tree::Node) -> bool {
-    let Some(cs) = &node.computed else { return false };
+    let Some(cs) = &node.computed else {
+        return false;
+    };
     let b = &cs.base.border_widths;
-    let wide = |w: Option<gpui::AbsoluteLength>| w.is_some_and(|w| w.to_pixels(gpui::px(16.0)) > gpui::px(0.0));
+    let wide = |w: Option<gpui::AbsoluteLength>| {
+        w.is_some_and(|w| w.to_pixels(gpui::px(16.0)) > gpui::px(0.0))
+    };
     let background = cs.base.background.as_ref().is_some_and(|f| {
-        f.color().and_then(|c| c.as_solid()).map_or(true, |c| c.a > 0.0)
+        f.color()
+            .and_then(|c| c.as_solid())
+            .map_or(true, |c| c.a > 0.0)
     });
     background || wide(b.top) || wide(b.right) || wide(b.bottom) || wide(b.left)
 }
@@ -4241,7 +4738,10 @@ where
     let mask = pointer_mask(node);
     let tab_index = tab_index_of(t, id);
     let focusable = tab_index.is_some();
-    let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
+    let styled_focus = node
+        .computed
+        .as_ref()
+        .is_some_and(|cs| cs.needs_focus_handle());
     let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
     if let Some(h) = &handle {
         e = e.track_focus(h);
@@ -4367,19 +4867,24 @@ fn build_lottie<V: 'static>(
         // The tile the worker's frames are written into (`crate::lottie`) and the box the next one
         // is drawn for. TODO: wire `filter: grayscale(1)` (gpui's image element does it natively)
         // once `Extras` carries `filter`.
-        d = d.child(match crate::lottie::paint(id, win, size, window.scale_factor()) {
-            Some(image) => gpui::img(gpui::ImageSource::Render(image))
-                .object_fit(object_fit.into())
-                .size_full()
-                .into_any_element(),
-            None => div().size_full().into_any_element(),
-        });
+        d = d.child(
+            match crate::lottie::paint(id, win, size, window.scale_factor()) {
+                Some(image) => gpui::img(gpui::ImageSource::Render(image))
+                    .object_fit(object_fit.into())
+                    .size_full()
+                    .into_any_element(),
+                None => div().size_full().into_any_element(),
+            },
+        );
     }
 
     let mask = pointer_mask(node);
     let tab_index = tab_index_of(t, id);
     let focusable = tab_index.is_some();
-    let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
+    let styled_focus = node
+        .computed
+        .as_ref()
+        .is_some_and(|cs| cs.needs_focus_handle());
     let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
     if let Some(h) = &handle {
         d = d.track_focus(h);
@@ -4464,12 +4969,28 @@ fn build_iframe<V: 'static>(
         d = d
             .on_mouse_move(move |ev: &gpui::MouseMoveEvent, window, _| {
                 let m = ev.modifiers;
-                crate::iframe::pointer(id, PointerKind::Move, at(ev.position, window), held(ev.pressed_button), m.shift, m.control);
+                crate::iframe::pointer(
+                    id,
+                    PointerKind::Move,
+                    at(ev.position, window),
+                    held(ev.pressed_button),
+                    m.shift,
+                    m.control,
+                );
             })
             .on_any_mouse_down(move |ev: &gpui::MouseDownEvent, window, _| {
-                let Some(button) = dom_button(ev.button) else { return };
+                let Some(button) = dom_button(ev.button) else {
+                    return;
+                };
                 let m = ev.modifiers;
-                crate::iframe::pointer(id, PointerKind::Down(button), at(ev.position, window), held(Some(ev.button)), m.shift, m.control);
+                crate::iframe::pointer(
+                    id,
+                    PointerKind::Down(button),
+                    at(ev.position, window),
+                    held(Some(ev.button)),
+                    m.shift,
+                    m.control,
+                );
             })
             .on_scroll_wheel(move |ev: &gpui::ScrollEvent, window, cx| {
                 // The wheel over a document is the document's; the app's scroll container under it
@@ -4492,9 +5013,18 @@ fn build_iframe<V: 'static>(
             });
         for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
             d = d.on_mouse_up(button, move |ev: &gpui::MouseUpEvent, window, _| {
-                let Some(button) = dom_button(ev.button) else { return };
+                let Some(button) = dom_button(ev.button) else {
+                    return;
+                };
                 let m = ev.modifiers;
-                crate::iframe::pointer(id, PointerKind::Up(button), at(ev.position, window), 0, m.shift, m.control);
+                crate::iframe::pointer(
+                    id,
+                    PointerKind::Up(button),
+                    at(ev.position, window),
+                    0,
+                    m.shift,
+                    m.control,
+                );
             });
         }
     }
@@ -4508,7 +5038,8 @@ fn build_iframe<V: 'static>(
         move |bounds, (), window, _| {
             let mask = window.content_mask().bounds;
             let rem = window.rem_size();
-            let radius = |r: Option<gpui::AbsoluteLength>| r.map_or(gpui::px(0.0), |r| r.to_pixels(rem));
+            let radius =
+                |r: Option<gpui::AbsoluteLength>| r.map_or(gpui::px(0.0), |r| r.to_pixels(rem));
             let corners = gpui::Corners {
                 top_left: radius(radii.top_left),
                 top_right: radius(radii.top_right),
@@ -4516,8 +5047,13 @@ fn build_iframe<V: 'static>(
                 bottom_left: radius(radii.bottom_left),
             };
             let s = window.scale_factor();
-            let device_radii = [corners.top_left, corners.top_right, corners.bottom_right, corners.bottom_left]
-                .map(|r| f32::from(r) * s);
+            let device_radii = [
+                corners.top_left,
+                corners.top_right,
+                corners.bottom_right,
+                corners.bottom_left,
+            ]
+            .map(|r| f32::from(r) * s);
             let place = crate::iframe::placement(bounds, mask, device_radii, s, opacity);
             crate::iframe::painted_in(id, window);
             crate::iframe::placed(id, place);
@@ -4530,7 +5066,16 @@ fn build_iframe<V: 'static>(
     )
     .absolute()
     .size_full();
-    bind_events(d.child(reporter), id, pointer_mask(node), handle, focusable, true, cx).into_any_element()
+    bind_events(
+        d.child(reporter),
+        id,
+        pointer_mask(node),
+        handle,
+        focusable,
+        true,
+        cx,
+    )
+    .into_any_element()
 }
 
 /// `<video>`: a replaced element whose content is the frame the pump last pulled from the OS media
@@ -4631,7 +5176,10 @@ fn build_video<V: 'static>(
     let mask = pointer_mask(node);
     let tab_index = tab_index_of(t, id);
     let focusable = tab_index.is_some();
-    let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
+    let styled_focus = node
+        .computed
+        .as_ref()
+        .is_some_and(|cs| cs.needs_focus_handle());
     let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
     if let Some(h) = &handle {
         d = d.track_focus(h);
@@ -4643,9 +5191,15 @@ fn build_video<V: 'static>(
     bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
 }
 
-fn file_input_children(t: &Tree, id: u32, node: &crate::tree::Node, case: Option<sk_css::TextTransform>) -> AnyElement {
+fn file_input_children(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    case: Option<sk_css::TextTransform>,
+) -> AnyElement {
     use gpui::Refineable as _;
-    let (button_text, status) = crate::aria::file_input_labels(t, id).unwrap_or(("Choose File", String::new()));
+    let (button_text, status) =
+        crate::aria::file_input_labels(t, id).unwrap_or(("Choose File", String::new()));
     let mut button = div()
         .flex_none()
         .mr(gpui::px(4.0))
@@ -4656,7 +5210,11 @@ fn file_input_children(t: &Tree, id: u32, node: &crate::tree::Node, case: Option
         .border_color(gpui::rgb(0x767676))
         .bg(gpui::rgb(0xefefef))
         .text_color(gpui::black());
-    if let Some(r) = node.computed.as_ref().and_then(|cs| cs.file_selector_button.as_ref()) {
+    if let Some(r) = node
+        .computed
+        .as_ref()
+        .and_then(|cs| cs.file_selector_button.as_ref())
+    {
         button.style().refine(r);
     }
     div()
@@ -4688,7 +5246,14 @@ fn build_input<V: 'static>(
 
     let multiline = t.name(node.tag) == "textarea";
     state.update(cx, |s, _| s.set_multiline(multiline));
-    for shown in [t.prop(id, "value"), t.prop(id, "placeholder"), Some(node.text.as_str())].into_iter().flatten() {
+    for shown in [
+        t.prop(id, "value"),
+        t.prop(id, "placeholder"),
+        Some(node.text.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    {
         crate::fonts::want_for_text(t, id, shown);
     }
 
@@ -4730,7 +5295,10 @@ fn build_input<V: 'static>(
         .and_then(|n| n.computed.as_ref())
         .and_then(|cs| cs.placeholder.as_ref())
         .and_then(|ph| ph.text.color)
-        .unwrap_or(gpui::Hsla { a: text_color.a * 0.45, ..text_color });
+        .unwrap_or(gpui::Hsla {
+            a: text_color.a * 0.45,
+            ..text_color
+        });
     // `::selection { background }`; its `color` cannot land: gpui's selection is a quad behind an
     // already shaped run, and recolouring glyphs would mean splitting the run on every caret move.
     let selection_color = t
@@ -4740,10 +5308,14 @@ fn build_input<V: 'static>(
         .and_then(|s| s.background.as_ref())
         .and_then(gpui::Fill::color)
         .and_then(|b| b.as_solid())
-        .unwrap_or(gpui::Hsla { h: 0.6, s: 0.8, l: 0.6, a: 0.35 });
+        .unwrap_or(gpui::Hsla {
+            h: 0.6,
+            s: 0.8,
+            l: 0.6,
+            a: 0.35,
+        });
     let masked = !multiline
-        && t
-            .prop(id, "type")
+        && t.prop(id, "type")
             .is_some_and(|v| v.trim().eq_ignore_ascii_case("password"));
     let options = TextInputOptions {
         placeholder: t.prop(id, "placeholder").unwrap_or("").to_string().into(),
@@ -4798,8 +5370,20 @@ fn build_input<V: 'static>(
     // sk-elements reports an edit from a `window.defer`, outside gpui's key dispatch, so a forced
     // layout may draw in the `input` handler.
     let on_change: sk_elements::OnChange = std::rc::Rc::new(move |text, intent, window, cx| {
-        let payload = EventPayload { key: Some(text), ..intent_payload(intent) };
-        crate::off_input(|| js_dispatch_text(id, tree::EV_INPUT, &payload, intent.data.as_deref(), window, cx));
+        let payload = EventPayload {
+            key: Some(text),
+            ..intent_payload(intent)
+        };
+        crate::off_input(|| {
+            js_dispatch_text(
+                id,
+                tree::EV_INPUT,
+                &payload,
+                intent.data.as_deref(),
+                window,
+                cx,
+            )
+        });
     });
 
     let on_before_input: sk_elements::OnBeforeInput =
@@ -4808,7 +5392,14 @@ fn build_input<V: 'static>(
                 return true;
             }
             let payload = intent_payload(intent);
-            let proceed = js_dispatch_text(id, tree::EV_BEFOREINPUT, &payload, intent.data.as_deref(), window, cx);
+            let proceed = js_dispatch_text(
+                id,
+                tree::EV_BEFOREINPUT,
+                &payload,
+                intent.data.as_deref(),
+                window,
+                cx,
+            );
             if proceed {
                 settle_before_default(window, cx);
             }
@@ -4836,29 +5427,31 @@ fn build_input<V: 'static>(
         });
 
     let on_key_down: Option<sk_elements::OnKeyDown> = bit(tree::EV_KEYDOWN).then(|| {
-        std::rc::Rc::new(move |ev: &gpui::KeyDownEvent, window: &mut Window, cx: &mut App| {
-            // The field's interceptor runs before any listener, so it is the one `keydown` of this
-            // key event; the root's listener, which gpui reaches afterwards even when this handler
-            // removed the field, lets it pass (`claim_key_event`).
-            if !claim_key_event(window) {
-                return true;
-            }
-            let key = dom_key(&ev.keystroke.key);
-            let payload = EventPayload {
-                d: mods_bits(&ev.keystroke.modifiers),
-                key: Some(&key),
-                ..Default::default()
-            };
-            let proceed = js_dispatch_app(id, tree::EV_KEYDOWN, &payload, window, cx);
-            if !proceed {
-                // The root's key listeners (clipboard, Shift+F10) run after the field's and read
-                // this.
-                windows::here(window, |w| w.key_prevented = true);
-            } else {
-                settle_before_default(window, cx);
-            }
-            proceed
-        }) as sk_elements::OnKeyDown
+        std::rc::Rc::new(
+            move |ev: &gpui::KeyDownEvent, window: &mut Window, cx: &mut App| {
+                // The field's interceptor runs before any listener, so it is the one `keydown` of this
+                // key event; the root's listener, which gpui reaches afterwards even when this handler
+                // removed the field, lets it pass (`claim_key_event`).
+                if !claim_key_event(window) {
+                    return true;
+                }
+                let key = dom_key(&ev.keystroke.key);
+                let payload = EventPayload {
+                    d: mods_bits(&ev.keystroke.modifiers),
+                    key: Some(&key),
+                    ..Default::default()
+                };
+                let proceed = js_dispatch_app(id, tree::EV_KEYDOWN, &payload, window, cx);
+                if !proceed {
+                    // The root's key listeners (clipboard, Shift+F10) run after the field's and read
+                    // this.
+                    windows::here(window, |w| w.key_prevented = true);
+                } else {
+                    settle_before_default(window, cx);
+                }
+                proceed
+            },
+        ) as sk_elements::OnKeyDown
     });
     let on_key_up: Option<sk_elements::OnKeyUp> = bit(tree::EV_KEYUP).then(|| {
         std::rc::Rc::new(move |ev: &KeyUpEvent, window: &mut Window, cx: &mut App| {
@@ -4879,7 +5472,8 @@ fn build_input<V: 'static>(
 
     let on_clipboard: sk_elements::OnClipboard =
         std::rc::Rc::new(move |command, window: &mut Window, cx: &mut App| {
-            let proceed = crate::clipboard::fire(id, crate::clipboard::Verb::of_command(command), window, cx);
+            let proceed =
+                crate::clipboard::fire(id, crate::clipboard::Verb::of_command(command), window, cx);
             if proceed {
                 settle_before_default(window, cx);
             }
@@ -4887,7 +5481,10 @@ fn build_input<V: 'static>(
         });
 
     let controlled_value: sk_elements::ControlledValue = std::rc::Rc::new(move |_| {
-        tree::read_tree(|t| t.prop_write(id, "value").map(|(v, write)| (v.to_string(), write)))
+        tree::read_tree(|t| {
+            t.prop_write(id, "value")
+                .map(|(v, write)| (v.to_string(), write))
+        })
     });
 
     let handlers = TextInputHandlers {
@@ -4904,9 +5501,7 @@ fn build_input<V: 'static>(
     INPUT_FOCUS.with(|m| m.borrow_mut().insert(id, focus_target.clone()));
     // Edge-triggered: only here is "gpui took the configuration" distinguishable from "we built it"
     // (`TextInputState::newly_forwarded_configuration`).
-    if let Some((config, queries)) =
-        state.update(cx, |s, _| s.newly_forwarded_configuration())
-    {
+    if let Some((config, queries)) = state.update(cx, |s, _| s.newly_forwarded_configuration()) {
         let line = format!(
             "[input] text input configuration forwarded to gpui (query {queries}): \
              autocorrect={} autocapitalize={:?} suggestions={} input_action={:?}",
@@ -4960,7 +5555,10 @@ mod tests {
             t.insert(button, root, 0);
             t.insert(plain, root, 0);
             assert!(super::keeps_focus(t, button));
-            assert!(!super::keeps_focus(t, plain), "a div was never a focusable area");
+            assert!(
+                !super::keeps_focus(t, plain),
+                "a div was never a focusable area"
+            );
             let tabindex = t.intern("tabindex");
             t.set_prop(plain, tabindex, Some("0".to_string()));
             assert!(super::keeps_focus(t, plain));
@@ -5002,7 +5600,13 @@ mod tests {
     use crate::tree::with_tree;
 
     fn dom_press(target: u32, button: f64) -> Press {
-        Press { target, button, position: Point::default(), clickable: true, cancelled: false }
+        Press {
+            target,
+            button,
+            position: Point::default(),
+            clickable: true,
+            cancelled: false,
+        }
     }
 
     #[test]
@@ -5011,11 +5615,21 @@ mod tests {
         state.press = Some(dom_press(42, 0.0));
         assert!(Press::take_for_release(&mut state.press, 2.0).is_none());
         assert_eq!(state.press.as_ref().map(|p| p.target), Some(42));
-        let wave = UpWave { press: Press::take_for_release(&mut state.press, 0.0), ..Default::default() };
+        let wave = UpWave {
+            press: Press::take_for_release(&mut state.press, 0.0),
+            ..Default::default()
+        };
         assert_eq!(wave.click_press(), Some(42));
         assert!(state.press.is_none());
-        assert!(Press::take_for_release(&mut state.press, 0.0).is_none(), "one press cannot click twice");
-        assert_eq!(UpWave::default().click_press(), None, "a release without a press cannot click");
+        assert!(
+            Press::take_for_release(&mut state.press, 0.0).is_none(),
+            "one press cannot click twice"
+        );
+        assert_eq!(
+            UpWave::default().click_press(),
+            None,
+            "a release without a press cannot click"
+        );
     }
 
     #[test]
@@ -5023,18 +5637,40 @@ mod tests {
         let mut cancelled = dom_press(42, 0.0);
         cancelled.cancelled = true;
         assert!(!cancelled.is_active());
-        assert_eq!(UpWave { press: Some(cancelled), ..Default::default() }.click_press(), None);
+        assert_eq!(
+            UpWave {
+                press: Some(cancelled),
+                ..Default::default()
+            }
+            .click_press(),
+            None
+        );
         let mut disabled_or_native_drag = dom_press(42, 0.0);
         disabled_or_native_drag.clickable = false;
-        assert_eq!(UpWave { press: Some(disabled_or_native_drag), ..Default::default() }.click_press(), None);
+        assert_eq!(
+            UpWave {
+                press: Some(disabled_or_native_drag),
+                ..Default::default()
+            }
+            .click_press(),
+            None
+        );
     }
 
     fn z(z_index: i32) -> sk_css::Extras {
-        sk_css::Extras { z_index: Some(Some(z_index)), positioned: Some(true), ..Default::default() }
+        sk_css::Extras {
+            z_index: Some(Some(z_index)),
+            positioned: Some(true),
+            ..Default::default()
+        }
     }
 
     fn fixed() -> sk_css::Extras {
-        sk_css::Extras { fixed: Some(true), positioned: Some(true), ..Default::default() }
+        sk_css::Extras {
+            fixed: Some(true),
+            positioned: Some(true),
+            ..Default::default()
+        }
     }
 
     fn layer(x: &sk_css::Extras) -> Layer {
@@ -5060,7 +5696,12 @@ mod tests {
 
     fn lower(node: &B, parent: &Stacking, is_root: bool) -> Item {
         let layer = if is_root { Layer::InFlow } else { node.layer };
-        let Entered { own, inside, opens, negative } = parent.enter(layer, next_stack_ordinal());
+        let Entered {
+            own,
+            inside,
+            opens,
+            negative,
+        } = parent.enter(layer, next_stack_ordinal());
         if negative {
             note_negative_z();
         }
@@ -5072,7 +5713,10 @@ mod tests {
         let mut split = false;
         if opens && close_context() {
             split = true;
-            kids = kids.into_iter().map(|k| Item::Deferred(inside.in_flow_key(), vec![k])).collect();
+            kids = kids
+                .into_iter()
+                .map(|k| Item::Deferred(inside.in_flow_key(), vec![k]))
+                .collect();
         }
         let own = own.or_else(|| (split && !is_root).then(|| inside.key.clone()));
         let mut body = vec![Item::Paint(node.name)];
@@ -5102,7 +5746,11 @@ mod tests {
     fn paint_order(root: &B) -> Vec<&'static str> {
         reset_stacking();
         let (mut painted, mut draws) = (Vec::new(), Vec::new());
-        flatten(lower(root, &Stacking::default(), true), &mut painted, &mut draws);
+        flatten(
+            lower(root, &Stacking::default(), true),
+            &mut painted,
+            &mut draws,
+        );
         draws.sort_by(|a, b| a.0.cmp(&b.0));
         painted.extend(draws.into_iter().flat_map(|(_, names)| names));
         painted
@@ -5110,66 +5758,144 @@ mod tests {
 
     #[test]
     fn a_context_paints_whole_before_a_later_sibling_of_the_same_z() {
-        let tree = b("root", Layer::InFlow, vec![
-            b("app", Layer::InFlow, vec![b("page", Layer::InFlow, vec![])]),
-            b("popover", layer(&z(50)), vec![b("inner", Layer::InFlow, vec![
-                b("card-bg", Layer::Context(0), vec![]),
-                b("hero", layer(&z(1)), vec![]),
-                b("glass", layer(&z(2)), vec![b("glass-body", Layer::InFlow, vec![])]),
-            ])]),
-            b("menu", layer(&z(50)), vec![b("item", Layer::InFlow, vec![])]),
-        ]);
+        let tree = b(
+            "root",
+            Layer::InFlow,
+            vec![
+                b("app", Layer::InFlow, vec![b("page", Layer::InFlow, vec![])]),
+                b(
+                    "popover",
+                    layer(&z(50)),
+                    vec![b(
+                        "inner",
+                        Layer::InFlow,
+                        vec![
+                            b("card-bg", Layer::Context(0), vec![]),
+                            b("hero", layer(&z(1)), vec![]),
+                            b(
+                                "glass",
+                                layer(&z(2)),
+                                vec![b("glass-body", Layer::InFlow, vec![])],
+                            ),
+                        ],
+                    )],
+                ),
+                b(
+                    "menu",
+                    layer(&z(50)),
+                    vec![b("item", Layer::InFlow, vec![])],
+                ),
+            ],
+        );
         assert_eq!(
             paint_order(&tree),
-            ["root", "app", "page", "popover", "inner", "card-bg", "hero", "glass", "glass-body", "menu", "item"]
+            [
+                "root",
+                "app",
+                "page",
+                "popover",
+                "inner",
+                "card-bg",
+                "hero",
+                "glass",
+                "glass-body",
+                "menu",
+                "item"
+            ]
         );
     }
 
     #[test]
     fn a_negative_z_paints_between_its_contexts_background_and_content() {
-        let tree = b("root", Layer::InFlow, vec![
-            b("card", layer(&z(1)), vec![
-                b("text", Layer::InFlow, vec![]),
-                b("glow", Layer::Context(-1), vec![]),
-                b("box", Layer::InFlow, vec![b("deep", layer(&z(-2)), vec![])]),
-            ]),
-            b("after", Layer::InFlow, vec![]),
-        ]);
-        assert_eq!(paint_order(&tree), ["root", "after", "card", "deep", "glow", "text", "box"]);
+        let tree = b(
+            "root",
+            Layer::InFlow,
+            vec![
+                b(
+                    "card",
+                    layer(&z(1)),
+                    vec![
+                        b("text", Layer::InFlow, vec![]),
+                        b("glow", Layer::Context(-1), vec![]),
+                        b("box", Layer::InFlow, vec![b("deep", layer(&z(-2)), vec![])]),
+                    ],
+                ),
+                b("after", Layer::InFlow, vec![]),
+            ],
+        );
+        assert_eq!(
+            paint_order(&tree),
+            ["root", "after", "card", "deep", "glow", "text", "box"]
+        );
 
-        let tree = b("root", Layer::InFlow, vec![
-            b("page", Layer::InFlow, vec![b("backdrop", layer(&z(-1)), vec![])]),
-            b("footer", Layer::InFlow, vec![]),
-        ]);
+        let tree = b(
+            "root",
+            Layer::InFlow,
+            vec![
+                b(
+                    "page",
+                    Layer::InFlow,
+                    vec![b("backdrop", layer(&z(-1)), vec![])],
+                ),
+                b("footer", Layer::InFlow, vec![]),
+            ],
+        );
         assert_eq!(paint_order(&tree), ["root", "backdrop", "page", "footer"]);
 
-        let tree = b("root", Layer::InFlow, vec![
-            b("avatar", Layer::InFlowContext, vec![
-                b("face", Layer::InFlow, vec![]),
-                b("frame", layer(&z(-1)), vec![]),
-            ]),
-            b("name", Layer::InFlow, vec![]),
-        ]);
-        assert_eq!(paint_order(&tree), ["root", "name", "avatar", "frame", "face"]);
+        let tree = b(
+            "root",
+            Layer::InFlow,
+            vec![
+                b(
+                    "avatar",
+                    Layer::InFlowContext,
+                    vec![
+                        b("face", Layer::InFlow, vec![]),
+                        b("frame", layer(&z(-1)), vec![]),
+                    ],
+                ),
+                b("name", Layer::InFlow, vec![]),
+            ],
+        );
+        assert_eq!(
+            paint_order(&tree),
+            ["root", "name", "avatar", "frame", "face"]
+        );
     }
 
     #[test]
     fn nested_contexts_sort_by_their_path() {
-        let tree = b("root", Layer::InFlow, vec![
-            b("a", layer(&z(1)), vec![
-                b("a1", layer(&z(3)), vec![
-                    b("a1x", layer(&z(100)), vec![]),
-                    b("a1y", layer(&z(-5)), vec![]),
-                    b("a1-text", Layer::InFlow, vec![]),
-                ]),
-                b("a2", layer(&z(2)), vec![]),
-            ]),
-            b("b", layer(&z(2)), vec![
-                b("b1", layer(&z(-1)), vec![]),
-                b("b-text", Layer::InFlow, vec![]),
-            ]),
-            b("c", layer(&z(1)), vec![]),
-        ]);
+        let tree = b(
+            "root",
+            Layer::InFlow,
+            vec![
+                b(
+                    "a",
+                    layer(&z(1)),
+                    vec![
+                        b(
+                            "a1",
+                            layer(&z(3)),
+                            vec![
+                                b("a1x", layer(&z(100)), vec![]),
+                                b("a1y", layer(&z(-5)), vec![]),
+                                b("a1-text", Layer::InFlow, vec![]),
+                            ],
+                        ),
+                        b("a2", layer(&z(2)), vec![]),
+                    ],
+                ),
+                b(
+                    "b",
+                    layer(&z(2)),
+                    vec![
+                        b("b1", layer(&z(-1)), vec![]),
+                        b("b-text", Layer::InFlow, vec![]),
+                    ],
+                ),
+                b("c", layer(&z(1)), vec![]),
+            ],
+        );
         assert_eq!(
             paint_order(&tree),
             ["root", "a", "a2", "a1", "a1y", "a1-text", "a1x", "c", "b", "b1", "b-text"]
@@ -5189,10 +5915,22 @@ mod tests {
         assert!(!effect_context(&none, &style(&|s| s.opacity = Some(1.0))));
         let mut moved = gpui::TransformSpec::IDENTITY;
         moved.scale = (0.95, 0.95);
-        assert!(effect_context(&none, &style(&|s| s.vn_transform = Some(moved))));
-        assert!(!effect_context(&none, &style(&|s| s.vn_transform = Some(gpui::TransformSpec::IDENTITY))));
-        assert!(effect_context(&none, &style(&|s| s.backdrop_blur = Some(gpui::px(8.0)))));
-        let isolated = sk_css::Extras { isolate: Some(true), ..Default::default() };
+        assert!(effect_context(
+            &none,
+            &style(&|s| s.vn_transform = Some(moved))
+        ));
+        assert!(!effect_context(
+            &none,
+            &style(&|s| s.vn_transform = Some(gpui::TransformSpec::IDENTITY))
+        ));
+        assert!(effect_context(
+            &none,
+            &style(&|s| s.backdrop_blur = Some(gpui::px(8.0)))
+        ));
+        let isolated = sk_css::Extras {
+            isolate: Some(true),
+            ..Default::default()
+        };
         assert!(effect_context(&isolated, &style(&|_| {})));
 
         let abs = Some(gpui::Position::Absolute);
@@ -5200,18 +5938,37 @@ mod tests {
         assert_eq!(layer_of(&none, abs, true, None), Layer::Context(0));
         assert_eq!(layer_of(&none, abs, false, None), Layer::Positioned);
 
-        let tree = b("root", Layer::InFlow, vec![
-            b("faded", Layer::InFlowContext, vec![b("lifted", layer(&z(100)), vec![])]),
-            b("later", layer(&z(10)), vec![]),
-        ]);
+        let tree = b(
+            "root",
+            Layer::InFlow,
+            vec![
+                b(
+                    "faded",
+                    Layer::InFlowContext,
+                    vec![b("lifted", layer(&z(100)), vec![])],
+                ),
+                b("later", layer(&z(10)), vec![]),
+            ],
+        );
         assert_eq!(paint_order(&tree), ["root", "faded", "lifted", "later"]);
 
-        let tree = b("root", Layer::InFlow, vec![
-            b("moved", layer_of(&none, abs, true, None), vec![b("inner", layer(&z(5)), vec![])]),
-            b("badge", Layer::Positioned, vec![]),
-            b("later", layer(&z(1)), vec![]),
-        ]);
-        assert_eq!(paint_order(&tree), ["root", "moved", "inner", "badge", "later"]);
+        let tree = b(
+            "root",
+            Layer::InFlow,
+            vec![
+                b(
+                    "moved",
+                    layer_of(&none, abs, true, None),
+                    vec![b("inner", layer(&z(5)), vec![])],
+                ),
+                b("badge", Layer::Positioned, vec![]),
+                b("later", layer(&z(1)), vec![]),
+            ],
+        );
+        assert_eq!(
+            paint_order(&tree),
+            ["root", "moved", "inner", "badge", "later"]
+        );
     }
 
     #[test]
@@ -5219,23 +5976,59 @@ mod tests {
         assert_eq!(layer(&fixed()), Layer::Context(0));
         let zero_rel = z(0);
         assert_eq!(layer(&zero_rel), Layer::InFlowContext);
-        assert_eq!(layer_of(&zero_rel, Some(gpui::Position::Absolute), false, None), Layer::Context(0));
-        let auto = sk_css::Extras { z_index: Some(None), positioned: Some(true), ..Default::default() };
+        assert_eq!(
+            layer_of(&zero_rel, Some(gpui::Position::Absolute), false, None),
+            Layer::Context(0)
+        );
+        let auto = sk_css::Extras {
+            z_index: Some(None),
+            positioned: Some(true),
+            ..Default::default()
+        };
         assert_eq!(layer(&auto), Layer::InFlow);
-        let sticky = sk_css::Extras { sticky: Some(true), ..auto.clone() };
+        let sticky = sk_css::Extras {
+            sticky: Some(true),
+            ..auto.clone()
+        };
         assert_eq!(layer(&sticky), Layer::InFlowContext);
 
-        let tree = b("root", Layer::InFlow, vec![
-            b("overlay", layer(&fixed()), vec![b("inside", layer(&z(1)), vec![])]),
-            b("document-z1", layer(&z(1)), vec![]),
-        ]);
-        assert_eq!(paint_order(&tree), ["root", "overlay", "inside", "document-z1"]);
-        let tree = b("root", Layer::InFlow, vec![
-            b("zero", layer(&zero_rel), vec![b("inside", layer(&z(9)), vec![])]),
-            b("auto", layer(&auto), vec![b("escapes", layer(&z(8)), vec![])]),
-            b("document-z1", layer(&z(1)), vec![]),
-        ]);
-        assert_eq!(paint_order(&tree), ["root", "zero", "auto", "inside", "document-z1", "escapes"]);
+        let tree = b(
+            "root",
+            Layer::InFlow,
+            vec![
+                b(
+                    "overlay",
+                    layer(&fixed()),
+                    vec![b("inside", layer(&z(1)), vec![])],
+                ),
+                b("document-z1", layer(&z(1)), vec![]),
+            ],
+        );
+        assert_eq!(
+            paint_order(&tree),
+            ["root", "overlay", "inside", "document-z1"]
+        );
+        let tree = b(
+            "root",
+            Layer::InFlow,
+            vec![
+                b(
+                    "zero",
+                    layer(&zero_rel),
+                    vec![b("inside", layer(&z(9)), vec![])],
+                ),
+                b(
+                    "auto",
+                    layer(&auto),
+                    vec![b("escapes", layer(&z(8)), vec![])],
+                ),
+                b("document-z1", layer(&z(1)), vec![]),
+            ],
+        );
+        assert_eq!(
+            paint_order(&tree),
+            ["root", "zero", "auto", "inside", "document-z1", "escapes"]
+        );
     }
 
     #[test]
@@ -5259,12 +6052,35 @@ mod tests {
         let grid = Some(gpui::Display::Grid);
 
         let at = |x: &sk_css::Extras, parent| layer_of(x, None, false, parent);
-        assert_eq!(at(&z10(None), block), Layer::InFlow, "static (undeclared) in a block");
-        assert_eq!(at(&z10(Some(false)), block), Layer::InFlow, "`position: static`");
-        assert_eq!(at(&z10(Some(false)), Some(gpui::Display::Block)), Layer::InFlow);
-        assert_eq!(at(&z10(None), flex), Layer::Context(10), "a static flex item");
-        assert_eq!(at(&z10(None), grid), Layer::Context(10), "a static grid item");
-        assert_eq!(at(&z10(Some(true)), block), Layer::Context(10), "relative in a block");
+        assert_eq!(
+            at(&z10(None), block),
+            Layer::InFlow,
+            "static (undeclared) in a block"
+        );
+        assert_eq!(
+            at(&z10(Some(false)), block),
+            Layer::InFlow,
+            "`position: static`"
+        );
+        assert_eq!(
+            at(&z10(Some(false)), Some(gpui::Display::Block)),
+            Layer::InFlow
+        );
+        assert_eq!(
+            at(&z10(None), flex),
+            Layer::Context(10),
+            "a static flex item"
+        );
+        assert_eq!(
+            at(&z10(None), grid),
+            Layer::Context(10),
+            "a static grid item"
+        );
+        assert_eq!(
+            at(&z10(Some(true)), block),
+            Layer::Context(10),
+            "relative in a block"
+        );
         assert!(!z_applies(&z10(None), block) && z_applies(&z10(None), flex));
 
         let root = Stacking::default();
@@ -5275,34 +6091,69 @@ mod tests {
 
     #[test]
     fn an_absolute_z_auto_box_paints_after_in_flow_content_and_opens_no_context() {
-        let absolute = sk_css::Extras { positioned: Some(true), ..Default::default() };
+        let absolute = sk_css::Extras {
+            positioned: Some(true),
+            ..Default::default()
+        };
         let abs = Some(gpui::Position::Absolute);
         assert_eq!(layer_of(&absolute, abs, false, None), Layer::Positioned);
-        assert_eq!(layer_of(&absolute, None, false, None), Layer::InFlow, "relative: the stated limit");
+        assert_eq!(
+            layer_of(&absolute, None, false, None),
+            Layer::InFlow,
+            "relative: the stated limit"
+        );
 
-        let tree = b("root", Layer::InFlow, vec![
-            b("field", Layer::InFlow, vec![
-                b("badge", Layer::Positioned, vec![
-                    b("badge-text", Layer::InFlow, vec![]),
-                    b("badge-dot", Layer::Positioned, vec![]),
-                    b("badge-tip", layer(&z(5)), vec![]),
-                ]),
-                b("input", Layer::InFlow, vec![]),
-            ]),
-            b("z1-box", layer(&z(1)), vec![]),
-            b("later-abs", Layer::Positioned, vec![]),
-        ]);
+        let tree = b(
+            "root",
+            Layer::InFlow,
+            vec![
+                b(
+                    "field",
+                    Layer::InFlow,
+                    vec![
+                        b(
+                            "badge",
+                            Layer::Positioned,
+                            vec![
+                                b("badge-text", Layer::InFlow, vec![]),
+                                b("badge-dot", Layer::Positioned, vec![]),
+                                b("badge-tip", layer(&z(5)), vec![]),
+                            ],
+                        ),
+                        b("input", Layer::InFlow, vec![]),
+                    ],
+                ),
+                b("z1-box", layer(&z(1)), vec![]),
+                b("later-abs", Layer::Positioned, vec![]),
+            ],
+        );
         assert_eq!(
             paint_order(&tree),
-            ["root", "field", "input", "badge", "badge-text", "badge-dot", "later-abs", "z1-box", "badge-tip"]
+            [
+                "root",
+                "field",
+                "input",
+                "badge",
+                "badge-text",
+                "badge-dot",
+                "later-abs",
+                "z1-box",
+                "badge-tip"
+            ]
         );
     }
 
     #[test]
     fn the_cache_does_not_compare_stacking_keys() {
         let root = Stacking::default();
-        let a = Inherited { stack: root.enter(layer(&z(1)), 3).inside, ..Default::default() };
-        let b = Inherited { stack: root.enter(layer(&z(1)), 7).inside, ..Default::default() };
+        let a = Inherited {
+            stack: root.enter(layer(&z(1)), 3).inside,
+            ..Default::default()
+        };
+        let b = Inherited {
+            stack: root.enter(layer(&z(1)), 7).inside,
+            ..Default::default()
+        };
         assert_ne!(a.stack.key, b.stack.key);
         assert!(a == b);
     }
@@ -5317,7 +6168,10 @@ mod tests {
         }
         assert!(s.enter(Layer::Positioned, 99).own.is_none());
         assert!(s.enter(Layer::Context(-1), 99).own.is_none());
-        assert!(!s.enter(Layer::Context(-1), 99).negative, "painted in flow: nothing to split");
+        assert!(
+            !s.enter(Layer::Context(-1), 99).negative,
+            "painted in flow: nothing to split"
+        );
         let e = s.enter(Layer::Context(3), 99);
         assert!(e.own.is_none() && e.opens && e.inside.key.len() == s.key.len() + 1);
     }
@@ -5359,7 +6213,11 @@ mod tests {
             (el("input", &[("type", "file")]), false, false),
             (el("input", &[]), false, false),
             (el("label", &[]), false, false),
-            (el("div", &[("role", "button"), ("tabindex", "0")]), false, false),
+            (
+                el("div", &[("role", "button"), ("tabindex", "0")]),
+                false,
+                false,
+            ),
         ];
         for (i, (id, enter, space)) in cases.into_iter().enumerate() {
             assert_eq!(
@@ -5428,10 +6286,7 @@ mod tests {
             t.insert(blank, parent, 0);
 
             let node = t.node(parent).unwrap();
-            assert_eq!(
-                laid_out_children(t, node),
-                vec![empty_div, text]
-            );
+            assert_eq!(laid_out_children(t, node), vec![empty_div, text]);
             assert!(!generates_a_box(t, blank));
             assert!(!generates_a_box(t, 99_999));
         });
@@ -5528,7 +6383,10 @@ mod tests {
 
             let off = el(t, "button", root, &[("disabled", ""), ("tabindex", "0")]);
             let on = el(t, "button", root, &[("disabled", "false")]);
-            assert!(actually_disabled(t, off) && !could_take_focus(t, off), "disabled, tabindex or not");
+            assert!(
+                actually_disabled(t, off) && !could_take_focus(t, off),
+                "disabled, tabindex or not"
+            );
             assert!(!actually_disabled(t, on), "Vue's :disabled=\"false\"");
             let fieldset = el(t, "fieldset", root, &[("disabled", "")]);
             let inside = el(t, "button", fieldset, &[]);
@@ -5607,11 +6465,19 @@ mod tests {
             let block = declared(t, button, Some(gpui::Display::Block));
             assert_eq!(laid(t, block, None), safe, "block, inline-block, inline");
             let flex = declared(t, button, Some(gpui::Display::Flex));
-            assert_eq!(laid(t, flex, None), None, "a flex button is a flex container as normal");
+            assert_eq!(
+                laid(t, flex, None),
+                None,
+                "a flex button is a flex container as normal"
+            );
             let grid = declared(t, button, Some(gpui::Display::Grid));
             assert_eq!(laid(t, grid, None), None, "and a grid one a grid container");
             let start = Some(gpui::AlignContent::Start);
-            assert_eq!(laid(t, bare, start), start, "the author's align-content wins");
+            assert_eq!(
+                laid(t, bare, start),
+                start,
+                "the author's align-content wins"
+            );
             let plain = declared(t, div, None);
             assert_eq!(laid(t, plain, None), None, "only a button");
         });
@@ -5622,10 +6488,19 @@ mod tests {
         with_tree(|t| {
             let div = t.intern("div");
             let span = t.intern("span");
-            let extras = sk_css::Extras { inline_level: Some(true), ..Default::default() };
+            let extras = sk_css::Extras {
+                inline_level: Some(true),
+                ..Default::default()
+            };
             let centred = |t: &Tree, child: u32| {
                 let mut s = gpui::StyleRefinement::default();
-                apply_inline_align(&mut s, t, t.node(child).unwrap(), &extras, Some(gpui::TextAlign::Center));
+                apply_inline_align(
+                    &mut s,
+                    t,
+                    t.node(child).unwrap(),
+                    &extras,
+                    Some(gpui::TextAlign::Center),
+                );
                 (s.margin.left, s.margin.right)
             };
             let with_display = |t: &mut Tree, id: u32, display: gpui::Display| {
@@ -5679,20 +6554,32 @@ mod tests {
     #[test]
     fn the_click_count_rides_above_the_modifiers() {
         use gpui::px;
-        let m = gpui::Modifiers { shift: true, ..Default::default() };
+        let m = gpui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
         let p = mouse_payload_n(Point::new(px(1.0), px(2.0)), 0.0, &m, 2);
         assert_eq!(p.d as u32 & 0xf, 2, "shift");
         assert_eq!(p.d as u32 >> 4, 2, "detail");
-        assert_eq!(mouse_payload_n(Point::new(px(0.0), px(0.0)), 0.0, &m, 9999).d as u32 >> 4, 255);
+        assert_eq!(
+            mouse_payload_n(Point::new(px(0.0), px(0.0)), 0.0, &m, 9999).d as u32 >> 4,
+            255
+        );
     }
 
     #[test]
     fn a_wheel_delta_reaches_js_with_the_DOM_sign() {
         use gpui::px;
         let (_, up) = dom_wheel_delta(Point::new(px(0.0), px(120.0)));
-        assert!(up < 0.0, "a scroll UP must reach JS as a negative deltaY, got {up}");
+        assert!(
+            up < 0.0,
+            "a scroll UP must reach JS as a negative deltaY, got {up}"
+        );
         let (_, down) = dom_wheel_delta(Point::new(px(0.0), px(-120.0)));
-        assert!(down > 0.0, "a scroll DOWN must reach JS as a positive deltaY, got {down}");
+        assert!(
+            down > 0.0,
+            "a scroll DOWN must reach JS as a positive deltaY, got {down}"
+        );
         let (left, _) = dom_wheel_delta(Point::new(px(80.0), px(0.0)));
         assert!(left < 0.0);
         assert_eq!(dom_wheel_delta(Point::new(px(0.0), px(0.0))), (0.0, 0.0));
@@ -5710,8 +6597,14 @@ mod tests {
         for mode in [WS::Pre, WS::PreWrap, WS::BreakSpaces] {
             assert_eq!(processed_text("a   \n   b", mode), "a   \n   b");
         }
-        assert!(matches!(processed_text("a b c", WS::Normal), std::borrow::Cow::Borrowed(_)));
-        assert!(matches!(processed_text("plain", WS::Normal), std::borrow::Cow::Borrowed(_)));
+        assert!(matches!(
+            processed_text("a b c", WS::Normal),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            processed_text("plain", WS::Normal),
+            std::borrow::Cow::Borrowed(_)
+        ));
         assert_eq!(processed_text("  a  ", WS::Normal), " a ");
     }
 
@@ -5726,7 +6619,13 @@ mod tests {
             t.set_text(only, " Secure video meetings ".to_string());
             t.insert(only, block, 0);
             assert_eq!(
-                trim_edges(t, t.node(only).unwrap(), only, &t.node(only).unwrap().text, None),
+                trim_edges(
+                    t,
+                    t.node(only).unwrap(),
+                    only,
+                    &t.node(only).unwrap().text,
+                    None
+                ),
                 "Secure video meetings"
             );
 
@@ -5739,8 +6638,26 @@ mod tests {
             let tail = t.create_text();
             t.set_text(tail, " b ".to_string());
             t.insert(tail, mixed, 0);
-            assert_eq!(trim_edges(t, t.node(head).unwrap(), head, &t.node(head).unwrap().text, None), "a ");
-            assert_eq!(trim_edges(t, t.node(tail).unwrap(), tail, &t.node(tail).unwrap().text, None), " b");
+            assert_eq!(
+                trim_edges(
+                    t,
+                    t.node(head).unwrap(),
+                    head,
+                    &t.node(head).unwrap().text,
+                    None
+                ),
+                "a "
+            );
+            assert_eq!(
+                trim_edges(
+                    t,
+                    t.node(tail).unwrap(),
+                    tail,
+                    &t.node(tail).unwrap().text,
+                    None
+                ),
+                " b"
+            );
 
             // `a<span> </span>b`: the span's only child is a space a browser renders (mid-line), so
             // an inline-level parent with siblings suppresses the trim.
@@ -5756,7 +6673,16 @@ mod tests {
             let gap = t.create_text();
             t.set_text(gap, " ".to_string());
             t.insert(gap, spacer, 0);
-            assert_eq!(trim_edges(t, t.node(gap).unwrap(), gap, &t.node(gap).unwrap().text, None), " ");
+            assert_eq!(
+                trim_edges(
+                    t,
+                    t.node(gap).unwrap(),
+                    gap,
+                    &t.node(gap).unwrap().text,
+                    None
+                ),
+                " "
+            );
         });
     }
 
@@ -5769,13 +6695,21 @@ mod tests {
             let block = t.create_element(p);
             t.set_element_text(block, " Secure video meetings ".to_string());
             assert_eq!(
-                trim_own_edges(t, t.node(block).unwrap(), &t.node(block).unwrap().text, None),
+                trim_own_edges(
+                    t,
+                    t.node(block).unwrap(),
+                    &t.node(block).unwrap().text,
+                    None
+                ),
                 "Secure video meetings"
             );
 
             let lone = t.create_element(span);
             t.set_element_text(lone, " x ".to_string());
-            assert_eq!(trim_own_edges(t, t.node(lone).unwrap(), &t.node(lone).unwrap().text, None), "x");
+            assert_eq!(
+                trim_own_edges(t, t.node(lone).unwrap(), &t.node(lone).unwrap().text, None),
+                "x"
+            );
 
             let row = t.create_element(p);
             let word = t.create_text();
@@ -5784,7 +6718,15 @@ mod tests {
             let inline = t.create_element(span);
             t.insert(inline, row, 0);
             t.set_element_text(inline, " b ".to_string());
-            assert_eq!(trim_own_edges(t, t.node(inline).unwrap(), &t.node(inline).unwrap().text, None), " b ");
+            assert_eq!(
+                trim_own_edges(
+                    t,
+                    t.node(inline).unwrap(),
+                    &t.node(inline).unwrap().text,
+                    None
+                ),
+                " b "
+            );
         });
     }
 
@@ -5793,15 +6735,25 @@ mod tests {
     }
 
     fn computed(base: gpui::StyleRefinement, extras: sk_css::Extras) -> sk_css::ComputedStates {
-        sk_css::ComputedStates { base: std::rc::Rc::new(base), extras, ..Default::default() }
+        sk_css::ComputedStates {
+            base: std::rc::Rc::new(base),
+            extras,
+            ..Default::default()
+        }
     }
 
     fn displayed(d: gpui::Display) -> gpui::StyleRefinement {
-        gpui::StyleRefinement { display: Some(d), ..Default::default() }
+        gpui::StyleRefinement {
+            display: Some(d),
+            ..Default::default()
+        }
     }
 
     fn inline_level() -> sk_css::Extras {
-        sk_css::Extras { inline_level: Some(true), ..Default::default() }
+        sk_css::Extras {
+            inline_level: Some(true),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -5829,14 +6781,18 @@ mod tests {
             assert!(!spoke(KEY), "a grid item is blockified by CSS");
 
             let block = t.create_element(div);
-            t.node_mut(block).unwrap().computed =
-                Some(computed(displayed(gpui::Display::Block), Default::default()));
+            t.node_mut(block).unwrap().computed = Some(computed(
+                displayed(gpui::Display::Block),
+                Default::default(),
+            ));
             let badge = t.create_element(span);
             t.insert(badge, block, 0);
             let sibling = t.create_element(div);
             t.insert(sibling, block, 1);
-            t.node_mut(sibling).unwrap().computed =
-                Some(computed(displayed(gpui::Display::Block), Default::default()));
+            t.node_mut(sibling).unwrap().computed = Some(computed(
+                displayed(gpui::Display::Block),
+                Default::default(),
+            ));
 
             let absolute = gpui::StyleRefinement {
                 position: Some(gpui::Position::Absolute),
@@ -5860,17 +6816,26 @@ mod tests {
                     Some(computed(Default::default(), inline_level()));
             }
             advise_inline_level(t, a, t.node(a).unwrap(), &inline_level(), &auto);
-            assert!(!spoke(KEY), "the parent becomes an inline row and sizes it to content");
+            assert!(
+                !spoke(KEY),
+                "the parent becomes an inline row and sizes it to content"
+            );
 
             advise_inline_level(t, badge, t.node(badge).unwrap(), &inline_level(), &auto);
-            assert!(spoke(KEY), "an in-flow inline box beside a block sibling really stretches");
+            assert!(
+                spoke(KEY),
+                "an in-flow inline box beside a block sibling really stretches"
+            );
         });
     }
 
     #[test]
     fn advise_out_of_flow_speaks_only_for_a_fixed_box_in_a_smaller_parent() {
         const KEY: &str = "position-fixed-not-portalled";
-        let fixed = || sk_css::Extras { fixed: Some(true), ..Default::default() };
+        let fixed = || sk_css::Extras {
+            fixed: Some(true),
+            ..Default::default()
+        };
         with_tree(|t| {
             let div = t.intern("div");
             let root = t.create_root();
@@ -5886,7 +6851,10 @@ mod tests {
             for _ in 0..4 {
                 advise_out_of_flow(t, overlay, t.node(overlay).unwrap(), &fixed(), win);
             }
-            assert!(!spoke(KEY), "a Teleport-to-body overlay lands on the viewport");
+            assert!(
+                !spoke(KEY),
+                "a Teleport-to-body overlay lands on the viewport"
+            );
 
             let wrapper = t.create_element(div);
             t.insert(wrapper, root, 1);
@@ -5898,7 +6866,10 @@ mod tests {
             for _ in 0..4 {
                 advise_out_of_flow(t, full_bleed, t.node(full_bleed).unwrap(), &fixed(), win);
             }
-            assert!(!spoke(KEY), "a full-bleed wrapper of viewport size diverges by nothing");
+            assert!(
+                !spoke(KEY),
+                "a full-bleed wrapper of viewport size diverges by nothing"
+            );
 
             // A zero-height wrapper, and not on the first two builds (the boot guard).
             let squashed = t.create_element(div);
@@ -5919,7 +6890,10 @@ mod tests {
     #[test]
     fn a_fixed_box_in_a_popout_resolves_against_that_windows_viewport() {
         const KEY: &str = "position-fixed-not-portalled";
-        let fixed = || sk_css::Extras { fixed: Some(true), ..Default::default() };
+        let fixed = || sk_css::Extras {
+            fixed: Some(true),
+            ..Default::default()
+        };
         let popout: windows::WinKey = 4242;
         let (panel, toolbar, inner, pinned) = with_tree(|t| {
             let div = t.intern("div");
@@ -5951,7 +6925,10 @@ mod tests {
             for _ in 0..3 {
                 advise_out_of_flow(t, pinned, t.node(pinned).unwrap(), &fixed(), popout);
             }
-            assert!(spoke(KEY), "a 40px-tall wrapper in a 280px window is not the viewport");
+            assert!(
+                spoke(KEY),
+                "a 40px-tall wrapper in a 280px window is not the viewport"
+            );
         });
         windows::forget(popout);
     }
@@ -5959,7 +6936,10 @@ mod tests {
     #[test]
     fn advise_sticky_needs_a_real_scroll_container_above_it() {
         const KEY: &str = "position-sticky-in-scroller";
-        let sticky = || sk_css::Extras { sticky: Some(true), ..Default::default() };
+        let sticky = || sk_css::Extras {
+            sticky: Some(true),
+            ..Default::default()
+        };
         with_tree(|t| {
             let div = t.intern("div");
             let root = t.create_root();
@@ -5967,37 +6947,65 @@ mod tests {
             t.insert(plain, root, 0);
             let header = t.create_element(div);
             t.insert(header, plain, 0);
-            advise_out_of_flow(t, header, t.node(header).unwrap(), &sticky(), windows::primary());
+            advise_out_of_flow(
+                t,
+                header,
+                t.node(header).unwrap(),
+                &sticky(),
+                windows::primary(),
+            );
             assert!(!spoke(KEY), "nothing above it scrolls");
 
             let mut scroller = gpui::StyleRefinement::default();
             scroller.overflow.y = Some(gpui::Overflow::Scroll);
-            t.node_mut(plain).unwrap().computed =
-                Some(computed(scroller, Default::default()));
-            advise_out_of_flow(t, header, t.node(header).unwrap(), &sticky(), windows::primary());
-            assert!(spoke(KEY), "inside a scroll container it really does not stay put");
+            t.node_mut(plain).unwrap().computed = Some(computed(scroller, Default::default()));
+            advise_out_of_flow(
+                t,
+                header,
+                t.node(header).unwrap(),
+                &sticky(),
+                windows::primary(),
+            );
+            assert!(
+                spoke(KEY),
+                "inside a scroll container it really does not stay put"
+            );
         });
     }
     #[test]
     fn synthetic_inline_rows_allow_text_to_shrink_but_keep_authored_flex_minimums() {
         with_tree(|tree| {
-            let div=tree.intern("div");let span=tree.intern("span");
-            let parent=tree.create_element(div);
-            let text=tree.create_text();tree.set_text(text,"unbrokenword".repeat(60));tree.insert(text,parent,0);
-            let timestamp=tree.create_element(span);tree.set_element_text(timestamp,"11:55".into());tree.insert(timestamp,parent,0);
-            assert!(synthetic_inline_item(tree,tree.node(text).expect("text")));
-            let mut style=gpui::StyleRefinement::default();
-            apply_inline_item_minimum(&mut style,tree,tree.node(timestamp).expect("timestamp"));
-            assert_eq!(style.min_size.width,Some(gpui::px(0.0).into()));
-            style.min_size.width=Some(gpui::px(12.0).into());
-            apply_inline_item_minimum(&mut style,tree,tree.node(timestamp).expect("timestamp"));
-            assert_eq!(style.min_size.width,Some(gpui::px(12.0).into()),"an authored minimum remains authoritative");
-            let parent_node=tree.node_mut(parent).expect("parent");
-            let mut computed=sk_css::ComputedStates::default();
-            computed.base=std::rc::Rc::new(gpui::StyleRefinement{display:Some(gpui::Display::Flex),..Default::default()});
-            parent_node.computed=Some(computed);
-            assert!(!synthetic_inline_item(tree,tree.node(text).expect("text")),"a real flex container keeps CSS min-content behavior");
+            let div = tree.intern("div");
+            let span = tree.intern("span");
+            let parent = tree.create_element(div);
+            let text = tree.create_text();
+            tree.set_text(text, "unbrokenword".repeat(60));
+            tree.insert(text, parent, 0);
+            let timestamp = tree.create_element(span);
+            tree.set_element_text(timestamp, "11:55".into());
+            tree.insert(timestamp, parent, 0);
+            assert!(synthetic_inline_item(tree, tree.node(text).expect("text")));
+            let mut style = gpui::StyleRefinement::default();
+            apply_inline_item_minimum(&mut style, tree, tree.node(timestamp).expect("timestamp"));
+            assert_eq!(style.min_size.width, Some(gpui::px(0.0).into()));
+            style.min_size.width = Some(gpui::px(12.0).into());
+            apply_inline_item_minimum(&mut style, tree, tree.node(timestamp).expect("timestamp"));
+            assert_eq!(
+                style.min_size.width,
+                Some(gpui::px(12.0).into()),
+                "an authored minimum remains authoritative"
+            );
+            let parent_node = tree.node_mut(parent).expect("parent");
+            let mut computed = sk_css::ComputedStates::default();
+            computed.base = std::rc::Rc::new(gpui::StyleRefinement {
+                display: Some(gpui::Display::Flex),
+                ..Default::default()
+            });
+            parent_node.computed = Some(computed);
+            assert!(
+                !synthetic_inline_item(tree, tree.node(text).expect("text")),
+                "a real flex container keeps CSS min-content behavior"
+            );
         });
     }
-
 }

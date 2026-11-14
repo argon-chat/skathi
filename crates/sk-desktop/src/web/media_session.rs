@@ -283,7 +283,9 @@ fn area(sizes: &str) -> f64 {
 }
 
 fn send(state: &serde_json::Value, bytes: Option<&[u8]>) {
-    if let Err(e) = crate::media_session::update(crate::dialog::current_owner().map(|o| o.hwnd), state, bytes) {
+    if let Err(e) =
+        crate::media_session::update(crate::dialog::current_owner().map(|o| o.hwnd), state, bytes)
+    {
         crate::advise(&format!(
             "navigator.mediaSession: the system media controls refused the update ({e})"
         ));
@@ -613,7 +615,10 @@ pub(super) mod tests {
             "position": { "duration": 100.0, "position": 5.0, "playbackRate": 1.0 },
         });
         if !crate::media_session::LOADS_ARTWORK_URLS {
-            expected["metadata"].as_object_mut().unwrap().remove("artworkUrl");
+            expected["metadata"]
+                .as_object_mut()
+                .unwrap()
+                .remove("artworkUrl");
         }
         assert_eq!(sent[0].0, expected);
         let out = sk_runtime::testing::on_js_thread(|| {

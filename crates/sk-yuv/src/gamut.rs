@@ -22,11 +22,18 @@ fn chromaticities(p: Primaries) -> [[f64; 2]; 4] {
         Primaries::Bt709 => [[0.640, 0.330], [0.300, 0.600], [0.150, 0.060], D65],
         Primaries::Bt470M => [[0.67, 0.33], [0.21, 0.71], [0.14, 0.08], C],
         Primaries::Bt470Bg => [[0.64, 0.33], [0.29, 0.60], [0.15, 0.06], D65],
-        Primaries::Smpte170 | Primaries::Smpte240 => [[0.630, 0.340], [0.310, 0.595], [0.155, 0.070], D65],
+        Primaries::Smpte170 | Primaries::Smpte240 => {
+            [[0.630, 0.340], [0.310, 0.595], [0.155, 0.070], D65]
+        }
         Primaries::Film => [[0.681, 0.319], [0.243, 0.692], [0.145, 0.049], C],
         Primaries::Bt2020 => [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046], D65],
         Primaries::Smpte428 => [[1.0, 0.0], [0.0, 1.0], [0.0, 0.0], [1.0 / 3.0, 1.0 / 3.0]],
-        Primaries::Smpte431 => [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060], [0.314, 0.351]],
+        Primaries::Smpte431 => [
+            [0.680, 0.320],
+            [0.265, 0.690],
+            [0.150, 0.060],
+            [0.314, 0.351],
+        ],
         Primaries::P3 => [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060], D65],
         Primaries::Ebu3213 => [[0.630, 0.340], [0.295, 0.605], [0.155, 0.077], D65],
     }
@@ -74,9 +81,17 @@ fn to_xyz(c: [[f64; 2]; 4]) -> M3 {
 }
 
 fn bradford(from: [f64; 3], to: [f64; 3]) -> M3 {
-    const B: M3 = [[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]];
+    const B: M3 = [
+        [0.8951, 0.2664, -0.1614],
+        [-0.7502, 1.7135, 0.0367],
+        [0.0389, -0.0685, 1.0296],
+    ];
     let (f, t) = (apply(&B, from), apply(&B, to));
-    let scale = [[t[0] / f[0], 0.0, 0.0], [0.0, t[1] / f[1], 0.0], [0.0, 0.0, t[2] / f[2]]];
+    let scale = [
+        [t[0] / f[0], 0.0, 0.0],
+        [0.0, t[1] / f[1], 0.0],
+        [0.0, 0.0, t[2] / f[2]],
+    ];
     mul(&invert(&B), &mul(&scale, &B))
 }
 
@@ -97,12 +112,30 @@ struct Curve {
 }
 
 fn curve(t: Transfer) -> Curve {
-    let power = |g: f64, a: f64| Curve { g, a, b: 0.0, c: 0.0, d: 0.0 };
+    let power = |g: f64, a: f64| Curve {
+        g,
+        a,
+        b: 0.0,
+        c: 0.0,
+        d: 0.0,
+    };
     match t {
-        Transfer::Srgb => Curve { g: 2.4, a: 1.0 / 1.055, b: 0.055 / 1.055, c: 1.0 / 12.92, d: 0.04045 },
+        Transfer::Srgb => Curve {
+            g: 2.4,
+            a: 1.0 / 1.055,
+            b: 0.055 / 1.055,
+            c: 1.0 / 12.92,
+            d: 0.04045,
+        },
         Transfer::Gamma22 => power(2.2, 1.0),
         Transfer::Gamma28 => power(2.8, 1.0),
-        Transfer::Smpte240 => Curve { g: 1.0 / 0.45, a: 1.0 / 1.1115, b: 0.1115 / 1.1115, c: 1.0 / 4.0, d: 0.0913 },
+        Transfer::Smpte240 => Curve {
+            g: 1.0 / 0.45,
+            a: 1.0 / 1.1115,
+            b: 0.1115 / 1.1115,
+            c: 1.0 / 4.0,
+            d: 0.0913,
+        },
         Transfer::Linear => power(1.0, 1.0),
         Transfer::Smpte428 => power(2.6, 1.034_080_527_699),
     }
@@ -140,8 +173,15 @@ impl Gamut {
         }
         let m = matrix(primaries).map(|row| row.map(|v| v as f32));
         let linear = std::array::from_fn(|i| decode(transfer, i as f64 / 255.0) as f32);
-        let encode = (0..=STEPS).map(|i| (encode_srgb(i as f64 / STEPS as f64) * 255.0).round() as u8).collect();
-        Some(Gamut { key: (primaries, transfer), linear, m, encode })
+        let encode = (0..=STEPS)
+            .map(|i| (encode_srgb(i as f64 / STEPS as f64) * 255.0).round() as u8)
+            .collect();
+        Some(Gamut {
+            key: (primaries, transfer),
+            linear,
+            m,
+            encode,
+        })
     }
 
     pub(crate) fn bytes(&self) -> usize {

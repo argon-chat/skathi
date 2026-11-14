@@ -1,8 +1,4 @@
 //! Stateless Web Animations conversion and timing on the VM thread.
-use std::{
-    cell::{Cell, RefCell},
-    ffi::c_void,
-};
 use sk_runtime::{
     host_fn,
     redjs::{
@@ -10,6 +6,10 @@ use sk_runtime::{
         glue,
     },
     JsRuntime,
+};
+use std::{
+    cell::{Cell, RefCell},
+    ffi::c_void,
 };
 
 type Result<T> = std::result::Result<T, Value>;

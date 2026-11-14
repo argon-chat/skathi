@@ -10,9 +10,9 @@ use std::collections::VecDeque;
 
 use gpui::{Window, WindowBackgroundAppearance};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use sk_runtime::{host_fn, with_commit, JsRuntime};
 use sk_runtime::redjs::api::Value;
 use sk_runtime::redjs::webapi::util::read_string;
+use sk_runtime::{host_fn, with_commit, JsRuntime};
 
 use crate::json::{self, Json};
 
@@ -27,10 +27,12 @@ pub enum TitleBarStyle {
 }
 
 /// AppKit's 14px button row is centred in the app's strip (AppKit resets it on fullscreen transitions).
-pub(crate) fn traffic_light_position(custom_titlebar: bool, height: f32) -> Option<gpui::Point<gpui::Pixels>> {
-    (cfg!(target_os = "macos") && custom_titlebar).then(|| {
-        gpui::point(gpui::px(12.0), gpui::px(((height - 14.0) / 2.0).max(0.0)))
-    })
+pub(crate) fn traffic_light_position(
+    custom_titlebar: bool,
+    height: f32,
+) -> Option<gpui::Point<gpui::Pixels>> {
+    (cfg!(target_os = "macos") && custom_titlebar)
+        .then(|| gpui::point(gpui::px(12.0), gpui::px(((height - 14.0) / 2.0).max(0.0))))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,10 +73,14 @@ impl Backdrop {
             Backdrop::None => WindowBackgroundAppearance::Opaque,
             // macOS has one system material (behind-window blur).
             #[cfg(target_os = "macos")]
-            Backdrop::Mica | Backdrop::MicaAlt | Backdrop::Acrylic => WindowBackgroundAppearance::Blurred,
+            Backdrop::Mica | Backdrop::MicaAlt | Backdrop::Acrylic => {
+                WindowBackgroundAppearance::Blurred
+            }
             // gpui's `Blurred` is KDE-only: opaque, reads as `none` ([`effective_backdrop`]).
             #[cfg(target_os = "linux")]
-            Backdrop::Mica | Backdrop::MicaAlt | Backdrop::Acrylic => WindowBackgroundAppearance::Opaque,
+            Backdrop::Mica | Backdrop::MicaAlt | Backdrop::Acrylic => {
+                WindowBackgroundAppearance::Opaque
+            }
             #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             Backdrop::Mica => WindowBackgroundAppearance::MicaBackdrop,
             #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -180,7 +186,10 @@ pub const OVERLAY_BUTTONS: f32 = 3.0;
 
 impl Default for Overlay {
     fn default() -> Self {
-        Overlay { color: None, symbol_color: None }
+        Overlay {
+            color: None,
+            symbol_color: None,
+        }
     }
 }
 
@@ -439,10 +448,12 @@ pub fn load_config(raw: Option<String>) -> Config {
     cfg
 }
 
-const A18: &str = "`frame: false` is treated as `titleBarStyle: \"hidden\"` in v1. A true frameless \
+const A18: &str =
+    "`frame: false` is treated as `titleBarStyle: \"hidden\"` in v1. A true frameless \
                    window would drop WS_THICKFRAME, which also removes the drop shadow, window \
                    animations and edge resizing.";
-const A26: &str = "`titleBarFallback: true` is ignored under `titleBarStyle: \"default\"` — the OS \
+const A26: &str =
+    "`titleBarFallback: true` is ignored under `titleBarStyle: \"default\"` — the OS \
                    draws the caption, so a second host-drawn strip underneath it would just eat \
                    32 px of the app. Remove one of the two.";
 
@@ -573,7 +584,15 @@ mod win {
         let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
         // `SWP_NOACTIVATE`: a palette that jumps in front must not steal the caret.
         let _ = unsafe {
-            SetWindowPos(h, Some(after), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+            SetWindowPos(
+                h,
+                Some(after),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
         };
     }
 
@@ -581,7 +600,12 @@ mod win {
         if let Some(h) = hwnd() {
             unsafe {
                 let _ = ReleaseCapture();
-                let _ = SendMessageW(h, WM_NCLBUTTONDOWN, Some(WPARAM(HTCAPTION as usize)), Some(LPARAM(0)));
+                let _ = SendMessageW(
+                    h,
+                    WM_NCLBUTTONDOWN,
+                    Some(WPARAM(HTCAPTION as usize)),
+                    Some(LPARAM(0)),
+                );
             }
         }
     }
@@ -663,17 +687,27 @@ mod win {
         let (a, w) = (info.rcMonitor, info.rcWork);
         Some((
             m.0 as isize,
-            [a.left, a.top, a.right, a.bottom, w.left, w.top, w.right, w.bottom],
+            [
+                a.left, a.top, a.right, a.bottom, w.left, w.top, w.right, w.bottom,
+            ],
         ))
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 mod win {
-    pub fn window_rect() -> Option<(f32, f32, f32, f32)> { None }
-    pub fn is_zoomed() -> bool { false }
-    pub fn is_iconic() -> bool { false }
-    pub fn is_visible() -> bool { true }
+    pub fn window_rect() -> Option<(f32, f32, f32, f32)> {
+        None
+    }
+    pub fn is_zoomed() -> bool {
+        false
+    }
+    pub fn is_iconic() -> bool {
+        false
+    }
+    pub fn is_visible() -> bool {
+        true
+    }
     pub fn restore() {}
     pub fn set_position(_x: f32, _y: f32) {}
     pub fn set_outer_size(_w: f32, _h: f32) {}
@@ -681,11 +715,21 @@ mod win {
     pub fn set_always_on_top_for(_raw: isize, _on: bool) {}
     pub fn set_dark_mode_for(_raw: isize, _dark: bool) {}
     pub fn start_dragging() {}
-    pub fn is_cloaked() -> bool { false }
-    pub fn system_backdrop() -> Option<u32> { None }
-    pub fn dark_mode() -> Option<bool> { None }
-    pub fn cursor_pos() -> Option<(f32, f32)> { None }
-    pub fn monitor_key() -> Option<(isize, [i32; 8])> { None }
+    pub fn is_cloaked() -> bool {
+        false
+    }
+    pub fn system_backdrop() -> Option<u32> {
+        None
+    }
+    pub fn dark_mode() -> Option<bool> {
+        None
+    }
+    pub fn cursor_pos() -> Option<(f32, f32)> {
+        None
+    }
+    pub fn monitor_key() -> Option<(isize, [i32; 8])> {
+        None
+    }
 }
 
 thread_local! {
@@ -709,7 +753,9 @@ pub fn set_always_on_top_hwnd(hwnd: isize, on: bool) {
 }
 
 pub fn hwnd_of(key: sk_tree::WinKey) -> Option<isize> {
-    HWND_CACHE.with(|m| m.borrow().get(&key).copied()).filter(|&h| h != 0)
+    HWND_CACHE
+        .with(|m| m.borrow().get(&key).copied())
+        .filter(|&h| h != 0)
 }
 
 pub fn capture_hwnd(window: &Window) -> Option<isize> {
@@ -731,7 +777,11 @@ pub fn primary_hwnd() -> Option<isize> {
 /// Device pixels per CSS px (1 before the first snapshot).
 pub fn primary_scale() -> f32 {
     let s = SNAPSHOT.with(|s| s.borrow().scale);
-    if s > 0.0 { s } else { 1.0 }
+    if s > 0.0 {
+        s
+    } else {
+        1.0
+    }
 }
 
 pub fn forget_window(key: sk_tree::WinKey) {
@@ -758,7 +808,9 @@ pub fn dialog_parent(window: &Window) -> Option<isize> {
 #[cfg(target_os = "macos")]
 fn capture_ns_window(window: &Window) -> Option<isize> {
     let handle = <Window as HasWindowHandle>::window_handle(window).ok()?;
-    let RawWindowHandle::AppKit(h) = handle.as_raw() else { return None };
+    let RawWindowHandle::AppKit(h) = handle.as_raw() else {
+        return None;
+    };
     let ns_window = sk_desktop::dialog::ns_window_of_view(h.ns_view.as_ptr())?;
     let key = sk_tree::windows::key(window);
     NS_WINDOW_CACHE.with(|m| m.borrow_mut().insert(key, ns_window));
@@ -767,7 +819,9 @@ fn capture_ns_window(window: &Window) -> Option<isize> {
 
 pub fn dialog_parent_of(key: sk_tree::WinKey) -> Option<isize> {
     #[cfg(target_os = "macos")]
-    return NS_WINDOW_CACHE.with(|m| m.borrow().get(&key).copied()).filter(|&w| w != 0);
+    return NS_WINDOW_CACHE
+        .with(|m| m.borrow().get(&key).copied())
+        .filter(|&w| w != 0);
     #[cfg(not(target_os = "macos"))]
     return hwnd_of(key);
 }
@@ -933,7 +987,9 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
         win::set_always_on_top(true);
     }
     // Before the first snapshot, so nothing can be read through a stale cache.
-    window.observe_window_display(|_, _| invalidate_display()).detach();
+    window
+        .observe_window_display(|_, _| invalidate_display())
+        .detach();
     cx.observe_displays(|_, _| invalidate_display()).detach();
     let s = snapshot(window, cx);
     SNAPSHOT.with(|c| *c.borrow_mut() = s);
@@ -981,19 +1037,26 @@ pub fn occluded() -> bool {
         static LAST: Cell<Option<(std::time::Instant, bool)>> = const { Cell::new(None) };
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ON.get_or_init(|| std::env::var("SK_OCCLUSION").map_or(true, |v| v.trim() != "0")) || crate::quiet::never_focus() {
+    if !*ON.get_or_init(|| std::env::var("SK_OCCLUSION").map_or(true, |v| v.trim() != "0"))
+        || crate::quiet::never_focus()
+    {
         return false;
     }
     let Some(main) = hwnd_raw() else { return false };
     let now = std::time::Instant::now();
     if let Some((at, answer)) = LAST.with(Cell::get) {
         // Brought to the front: drawing resumes at once, not on the next recheck.
-        if now.saturating_duration_since(at) < crate::occlusion::RECHECK && !(answer && is_foreground(main)) {
+        if now.saturating_duration_since(at) < crate::occlusion::RECHECK
+            && !(answer && is_foreground(main))
+        {
             return answer;
         }
     }
     let answer = crate::occlusion::hwnd_covered(main)
-        && crate::popout::ids().into_iter().filter_map(hwnd_of).all(crate::occlusion::hwnd_unseen);
+        && crate::popout::ids()
+            .into_iter()
+            .filter_map(hwnd_of)
+            .all(crate::occlusion::hwnd_unseen);
     LAST.with(|l| l.set(Some((now, answer))));
     answer
 }
@@ -1045,7 +1108,9 @@ fn publish_visibility(snapshot: &Snapshot) {
         let hidden = visibility_delta(previous.get(), snapshot)?;
         previous.set(Some(hidden));
         Some(hidden)
-    }) else { return; };
+    }) else {
+        return;
+    };
     JsRuntime::with(|rt| unsafe {
         sk_runtime::redjs::ffi::redjs_dom_set_visibility(rt.raw(), hidden as i32)
     });
@@ -1118,10 +1183,20 @@ fn display_part(window: &Window, cx: &gpui::App) -> DisplayPart {
         }
         None => ((0.0, 0.0, 0.0, 0.0, 0.0, 0.0), 1),
     };
-    let part = DisplayPart { key, screen, displays };
+    let part = DisplayPart {
+        key,
+        screen,
+        displays,
+    };
     if primary {
         DISPLAY.with(|d| *d.borrow_mut() = key.is_some().then(|| part.clone()));
-        REFRESH_MS.with(|c| c.set(window.refresh_interval(cx).map(|r| r.as_secs_f32() * 1000.0)));
+        REFRESH_MS.with(|c| {
+            c.set(
+                window
+                    .refresh_interval(cx)
+                    .map(|r| r.as_secs_f32() * 1000.0),
+            )
+        });
     }
     part
 }
@@ -1155,7 +1230,9 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
     let viewport = window.viewport_size();
     let bounds = window.bounds();
     let live = LIVE.with(|l| l.borrow().clone());
-    let DisplayPart { screen, displays, .. } = display_part(window, cx);
+    let DisplayPart {
+        screen, displays, ..
+    } = display_part(window, cx);
     let scale = window.scale_factor();
     let fullscreen = window.is_fullscreen();
     // `GetWindowRect` is physical px; everything else here is CSS px.
@@ -1220,9 +1297,21 @@ fn titlebar_area(s: &Snapshot) -> (bool, (f32, f32, f32, f32)) {
     if !visible {
         return (false, (0.0, 0.0, 0.0, 0.0));
     }
-    let cluster = if s.overlay.is_some() { Overlay::width() } else { 0.0 };
+    let cluster = if s.overlay.is_some() {
+        Overlay::width()
+    } else {
+        0.0
+    };
     // Caption buttons sit on the right: the area keeps `x = 0` and loses width.
-    (true, (0.0, 0.0, (s.inner_width - cluster).max(0.0), s.title_bar_height))
+    (
+        true,
+        (
+            0.0,
+            0.0,
+            (s.inner_width - cluster).max(0.0),
+            s.title_bar_height,
+        ),
+    )
 }
 
 fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> sk_css::Env {
@@ -1276,7 +1365,8 @@ fn keep_theme(window: &Window) {
 fn apply_theme(theme: Theme, window: &Window) {
     LIVE.with(|l| l.borrow_mut().theme = theme);
     let dark = theme.is_dark(os_dark(window));
-    let hwnds: Vec<isize> = HWND_CACHE.with(|m| m.borrow().values().copied().filter(|&h| h != 0).collect());
+    let hwnds: Vec<isize> =
+        HWND_CACHE.with(|m| m.borrow().values().copied().filter(|&h| h != 0).collect());
     for h in hwnds {
         win::set_dark_mode_for(h, dark);
     }
@@ -1326,9 +1416,11 @@ fn coarse_pointer() -> bool {
             const SM_DIGITIZER: i32 = 94;
             const ANY_DIGITIZER: i32 = 0x01 | 0x02 | 0x04 | 0x08;
             // SAFETY: a pure read of a system metric; no pointers involved.
-            let value = unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
-                windows::Win32::UI::WindowsAndMessaging::SYSTEM_METRICS_INDEX(SM_DIGITIZER),
-            ) };
+            let value = unsafe {
+                windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+                    windows::Win32::UI::WindowsAndMessaging::SYSTEM_METRICS_INDEX(SM_DIGITIZER),
+                )
+            };
             value & ANY_DIGITIZER != 0
         }
         #[cfg(not(target_os = "windows"))]
@@ -1485,7 +1577,11 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
                 kinds.push("resize");
             }
             if p.maximized != s.maximized {
-                kinds.push(if s.maximized { "maximize" } else { "unmaximize" });
+                kinds.push(if s.maximized {
+                    "maximize"
+                } else {
+                    "unmaximize"
+                });
             }
             if p.minimized != s.minimized {
                 kinds.push(if s.minimized { "minimize" } else { "restore" });
@@ -1620,7 +1716,13 @@ enum Op {
     Close,
     Fullscreen(bool),
     Activate(bool),
-    Bounds { x: Option<f32>, y: Option<f32>, w: Option<f32>, h: Option<f32>, content: bool },
+    Bounds {
+        x: Option<f32>,
+        y: Option<f32>,
+        w: Option<f32>,
+        h: Option<f32>,
+        content: bool,
+    },
     Center,
     AlwaysOnTop(bool),
     SetBackdrop(Backdrop),
@@ -1685,7 +1787,13 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
                 window.request_attention();
             }
         }
-        Op::Bounds { x, y, w, h, content } => apply_bounds(window, cx, x, y, w, h, content),
+        Op::Bounds {
+            x,
+            y,
+            w,
+            h,
+            content,
+        } => apply_bounds(window, cx, x, y, w, h, content),
         Op::Center => {
             let s = SNAPSHOT.with(|s| s.borrow().clone());
             let (_, _, ow, oh) = s.outer;
@@ -1820,7 +1928,13 @@ fn op_take(op: &Op) -> Op {
         Op::Close => Op::Close,
         Op::Fullscreen(b) => Op::Fullscreen(*b),
         Op::Activate(b) => Op::Activate(*b),
-        Op::Bounds { x, y, w, h, content } => Op::Bounds {
+        Op::Bounds {
+            x,
+            y,
+            w,
+            h,
+            content,
+        } => Op::Bounds {
             x: *x,
             y: *y,
             w: *w,
@@ -1850,7 +1964,8 @@ fn arg_f32(v: Value) -> Option<f32> {
 }
 
 fn arg_bool(v: Value) -> bool {
-    v.as_bool().unwrap_or_else(|| v.as_number().is_some_and(|n| n != 0.0))
+    v.as_bool()
+        .unwrap_or_else(|| v.as_number().is_some_and(|n| n != 0.0))
 }
 
 host_fn!(fn sk_window_state(_g, _args) {
@@ -1992,7 +2107,8 @@ host_fn!(fn sk_window_set_overlay(g, args) {
     UNDEF
 });
 
-const A27: &str = "`setTitleBarOverlay()` does nothing under `titleBarStyle: \"default\"` — the OS \
+const A27: &str =
+    "`setTitleBarOverlay()` does nothing under `titleBarStyle: \"default\"` — the OS \
                    draws the caption buttons and owns their colours. The overlay is for \
                    custom-chrome windows.";
 
@@ -2066,14 +2182,38 @@ pub fn install(rt: &JsRuntime) {
         ("__sk_window_observe", 1, sk_window_observe as *const _),
         ("__sk_window_set_title", 1, sk_window_set_title as *const _),
         ("__sk_window_verb", 1, sk_window_verb as *const _),
-        ("__sk_window_set_fullscreen", 1, sk_window_set_fullscreen as *const _),
+        (
+            "__sk_window_set_fullscreen",
+            1,
+            sk_window_set_fullscreen as *const _,
+        ),
         ("__sk_window_activate", 1, sk_window_activate as *const _),
-        ("__sk_window_set_bounds", 5, sk_window_set_bounds as *const _),
-        ("__sk_window_set_always_on_top", 1, sk_window_set_always_on_top as *const _),
-        ("__sk_window_set_backdrop", 1, sk_window_set_backdrop as *const _),
+        (
+            "__sk_window_set_bounds",
+            5,
+            sk_window_set_bounds as *const _,
+        ),
+        (
+            "__sk_window_set_always_on_top",
+            1,
+            sk_window_set_always_on_top as *const _,
+        ),
+        (
+            "__sk_window_set_backdrop",
+            1,
+            sk_window_set_backdrop as *const _,
+        ),
         ("__sk_window_set_theme", 1, sk_window_set_theme as *const _),
-        ("__sk_window_set_overlay", 4, sk_window_set_overlay as *const _),
-        ("__sk_window_match_media", 1, sk_window_match_media as *const _),
+        (
+            "__sk_window_set_overlay",
+            4,
+            sk_window_set_overlay as *const _,
+        ),
+        (
+            "__sk_window_match_media",
+            1,
+            sk_window_match_media as *const _,
+        ),
         ("__sk_window_hitboxes", 1, sk_window_hitboxes as *const _),
         ("__sk_window_cursor", 0, sk_window_cursor as *const _),
         ("__sk_window_advise", 1, sk_window_advise as *const _),
@@ -2092,7 +2232,11 @@ mod tests {
         for t in [Theme::System, Theme::Light, Theme::Dark] {
             assert_eq!(Theme::from_str(t.as_str()), Some(t));
         }
-        assert_eq!(Theme::from_str("Dark"), None, "the client's config spelling is mapped before this");
+        assert_eq!(
+            Theme::from_str("Dark"),
+            None,
+            "the client's config spelling is mapped before this"
+        );
         assert_eq!(Theme::from_str("auto"), None);
         assert!(Theme::System.is_dark(true) && !Theme::System.is_dark(false));
         assert!(!Theme::Light.is_dark(true) && Theme::Dark.is_dark(false));
@@ -2100,8 +2244,14 @@ mod tests {
 
     #[test]
     fn acrylic_is_the_system_material_and_only_its_fallback_is_advised() {
-        assert_eq!(Backdrop::from_str("acrylic"), Some((Backdrop::Acrylic, None)));
-        assert_eq!(Backdrop::from_str("blur"), Some((Backdrop::Acrylic, Some(A20))));
+        assert_eq!(
+            Backdrop::from_str("acrylic"),
+            Some((Backdrop::Acrylic, None))
+        );
+        assert_eq!(
+            Backdrop::from_str("blur"),
+            Some((Backdrop::Acrylic, Some(A20)))
+        );
         let material = if cfg!(target_os = "macos") {
             WindowBackgroundAppearance::Blurred
         } else if cfg!(target_os = "linux") {
@@ -2111,19 +2261,40 @@ mod tests {
         };
         assert_eq!(Backdrop::Acrylic.to_gpui(), material);
 
-        for b in [Backdrop::None, Backdrop::Mica, Backdrop::MicaAlt, Backdrop::Acrylic, Backdrop::Transparent] {
+        for b in [
+            Backdrop::None,
+            Backdrop::Mica,
+            Backdrop::MicaAlt,
+            Backdrop::Acrylic,
+            Backdrop::Transparent,
+        ] {
             assert_eq!(resolve_backdrop(b, true), (b, None), "{b:?} on 22621+");
         }
-        assert_eq!(resolve_backdrop(Backdrop::Acrylic, false), (Backdrop::Acrylic, Some(A20C)));
-        assert_eq!(resolve_backdrop(Backdrop::Mica, false), (Backdrop::Acrylic, Some(A20B)));
-        assert_eq!(resolve_backdrop(Backdrop::MicaAlt, false), (Backdrop::Acrylic, Some(A20B)));
-        assert_eq!(resolve_backdrop(Backdrop::None, false), (Backdrop::None, None));
+        assert_eq!(
+            resolve_backdrop(Backdrop::Acrylic, false),
+            (Backdrop::Acrylic, Some(A20C))
+        );
+        assert_eq!(
+            resolve_backdrop(Backdrop::Mica, false),
+            (Backdrop::Acrylic, Some(A20B))
+        );
+        assert_eq!(
+            resolve_backdrop(Backdrop::MicaAlt, false),
+            (Backdrop::Acrylic, Some(A20B))
+        );
+        assert_eq!(
+            resolve_backdrop(Backdrop::None, false),
+            (Backdrop::None, None)
+        );
 
         // Silent about `acrylic` where DWM draws it.
         let cfg = load_config(Some(r#"{"backdrop":"acrylic"}"#.to_string()));
         assert_eq!(cfg.backdrop, Backdrop::Acrylic);
         let advised = ADVISED.with(|s| s.borrow().contains(A20C));
-        assert_eq!(advised, cfg!(target_os = "windows") && !has_system_backdrop());
+        assert_eq!(
+            advised,
+            cfg!(target_os = "windows") && !has_system_backdrop()
+        );
     }
 
     #[test]
@@ -2148,32 +2319,79 @@ mod tests {
         };
         assert_eq!(titlebar_area(&base), (true, (0.0, 0.0, 1000.0, 32.0)));
 
-        let hosted = Snapshot { fallback_titlebar: true, ..base.clone() };
+        let hosted = Snapshot {
+            fallback_titlebar: true,
+            ..base.clone()
+        };
         assert_eq!(titlebar_area(&hosted), (false, (0.0, 0.0, 0.0, 0.0)));
 
-        let full = Snapshot { fullscreen: true, ..base.clone() };
+        let full = Snapshot {
+            fullscreen: true,
+            ..base.clone()
+        };
         assert_eq!(titlebar_area(&full), (false, (0.0, 0.0, 0.0, 0.0)));
 
-        let min = Snapshot { minimized: true, ..base.clone() };
+        let min = Snapshot {
+            minimized: true,
+            ..base.clone()
+        };
         assert_eq!(titlebar_area(&min), (false, (0.0, 0.0, 0.0, 0.0)));
-        let cloaked = Snapshot { cloaked: true, ..base.clone() };
-        let unfocused = Snapshot { focused: false, ..base.clone() };
-        let not_shown = Snapshot { visible: false, ..base.clone() };
-        assert!(!not_shown.minimized, "a hidden window need not be minimized");
-        assert_eq!((hidden(&base), hidden(&min), hidden(&cloaked), hidden(&unfocused), hidden(&not_shown)), (false, true, true, false, true));
-        let covered = Snapshot { occluded: true, ..base.clone() };
-        assert!(hidden(&covered), "a window other windows cover is a hidden page");
+        let cloaked = Snapshot {
+            cloaked: true,
+            ..base.clone()
+        };
+        let unfocused = Snapshot {
+            focused: false,
+            ..base.clone()
+        };
+        let not_shown = Snapshot {
+            visible: false,
+            ..base.clone()
+        };
+        assert!(
+            !not_shown.minimized,
+            "a hidden window need not be minimized"
+        );
+        assert_eq!(
+            (
+                hidden(&base),
+                hidden(&min),
+                hidden(&cloaked),
+                hidden(&unfocused),
+                hidden(&not_shown)
+            ),
+            (false, true, true, false, true)
+        );
+        let covered = Snapshot {
+            occluded: true,
+            ..base.clone()
+        };
+        assert!(
+            hidden(&covered),
+            "a window other windows cover is a hidden page"
+        );
 
         // A host cluster takes its width off the right (3 x 46 px).
-        let overlaid = Snapshot { overlay: Some(Overlay::default()), ..base.clone() };
+        let overlaid = Snapshot {
+            overlay: Some(Overlay::default()),
+            ..base.clone()
+        };
         assert_eq!(titlebar_area(&overlaid), (true, (0.0, 0.0, 862.0, 32.0)));
     }
 
     #[test]
     fn a_system_backdrop_is_suspended_only_while_gpui_stands_in_for_it() {
         for b in [Backdrop::Mica, Backdrop::MicaAlt, Backdrop::Acrylic] {
-            assert_eq!(effective_backdrop(b, true), b, "{b:?} drawn, windowed or fullscreen");
-            assert_eq!(effective_backdrop(b, false), Backdrop::None, "{b:?} with no desktop picture");
+            assert_eq!(
+                effective_backdrop(b, true),
+                b,
+                "{b:?} drawn, windowed or fullscreen"
+            );
+            assert_eq!(
+                effective_backdrop(b, false),
+                Backdrop::None,
+                "{b:?} with no desktop picture"
+            );
         }
         // Not a system material: what the app asked for is what it gets.
         for b in [Backdrop::None, Backdrop::Transparent] {
@@ -2184,52 +2402,116 @@ mod tests {
 
     #[test]
     fn backdropchange_follows_the_backdrop_and_what_the_window_draws() {
-        let windowed = Snapshot { backdrop: Backdrop::Acrylic, effective_backdrop: Backdrop::Acrylic, ..Snapshot::default() };
-        let full_glass = Snapshot { fullscreen: true, ..windowed.clone() };
-        assert!(!backdrop_moved(&windowed, &full_glass), "the glass stays in fullscreen");
+        let windowed = Snapshot {
+            backdrop: Backdrop::Acrylic,
+            effective_backdrop: Backdrop::Acrylic,
+            ..Snapshot::default()
+        };
+        let full_glass = Snapshot {
+            fullscreen: true,
+            ..windowed.clone()
+        };
+        assert!(
+            !backdrop_moved(&windowed, &full_glass),
+            "the glass stays in fullscreen"
+        );
         let full = Snapshot {
             fullscreen: true,
             effective_backdrop: effective_backdrop(Backdrop::Acrylic, false),
             ..windowed.clone()
         };
-        let solid = Snapshot { backdrop: Backdrop::None, effective_backdrop: Backdrop::None, ..windowed.clone() };
+        let solid = Snapshot {
+            backdrop: Backdrop::None,
+            effective_backdrop: Backdrop::None,
+            ..windowed.clone()
+        };
         assert!(backdrop_moved(&windowed, &full));
         assert!(backdrop_moved(&full, &windowed));
         assert!(backdrop_moved(&windowed, &solid));
         assert!(!backdrop_moved(&full, &full.clone()));
         // A backdrop asked for while fullscreen still fires: the app's choice moved.
-        let full_solid = Snapshot { backdrop: Backdrop::None, ..full.clone() };
+        let full_solid = Snapshot {
+            backdrop: Backdrop::None,
+            ..full.clone()
+        };
         assert!(backdrop_moved(&full, &full_solid));
     }
 
     #[test]
     fn startup_prewarm_does_not_publish_a_hidden_page_or_mask_later_hides() {
         cancel_startup_reveal();
-        assert!(!startup_visibility(false), "visible(false) embedding remains hidden");
+        assert!(
+            !startup_visibility(false),
+            "visible(false) embedding remains hidden"
+        );
         begin_startup_reveal();
-        assert!(startup_visibility(false), "the hidden HWND is only an internal first-frame warm-up");
-        assert!(startup_visibility(true), "the native show completes the warm-up");
-        assert!(!startup_visibility(false), "later explicit hides must be observable");
+        assert!(
+            startup_visibility(false),
+            "the hidden HWND is only an internal first-frame warm-up"
+        );
+        assert!(
+            startup_visibility(true),
+            "the native show completes the warm-up"
+        );
+        assert!(
+            !startup_visibility(false),
+            "later explicit hides must be observable"
+        );
         begin_startup_reveal();
         cancel_startup_reveal();
-        assert!(!startup_visibility(false), "cancelled startup must not retain the override");
+        assert!(
+            !startup_visibility(false),
+            "cancelled startup must not retain the override"
+        );
     }
 
     #[test]
     fn visibility_is_seeded_at_boot_and_only_actual_hidden_edges_publish() {
         let shown = Snapshot::default();
-        let hidden = Snapshot { visible: false, ..shown.clone() };
+        let hidden = Snapshot {
+            visible: false,
+            ..shown.clone()
+        };
         assert_eq!(visibility_delta(None, &shown), Some(false));
         assert_eq!(visibility_delta(None, &hidden), Some(true));
-        assert_eq!(visibility_delta(Some(true), &hidden), None, "the first pump must not repeat the boot publication");
-        assert_eq!(visibility_delta(Some(true), &shown), Some(false), "showing restores DOM visibility");
-        assert_eq!(visibility_delta(Some(false), &hidden), Some(true), "hiding does not require minimization");
-        let minimized = Snapshot { minimized: true, ..shown.clone() };
-        let cloaked = Snapshot { cloaked: true, ..shown.clone() };
-        assert_eq!(visibility_delta(Some(true), &minimized), None, "hidden-to-minimized is still a hidden page");
+        assert_eq!(
+            visibility_delta(Some(true), &hidden),
+            None,
+            "the first pump must not repeat the boot publication"
+        );
+        assert_eq!(
+            visibility_delta(Some(true), &shown),
+            Some(false),
+            "showing restores DOM visibility"
+        );
+        assert_eq!(
+            visibility_delta(Some(false), &hidden),
+            Some(true),
+            "hiding does not require minimization"
+        );
+        let minimized = Snapshot {
+            minimized: true,
+            ..shown.clone()
+        };
+        let cloaked = Snapshot {
+            cloaked: true,
+            ..shown.clone()
+        };
+        assert_eq!(
+            visibility_delta(Some(true), &minimized),
+            None,
+            "hidden-to-minimized is still a hidden page"
+        );
         assert_eq!(visibility_delta(Some(true), &cloaked), None);
-        let unfocused = Snapshot { focused: false, ..shown };
-        assert_eq!(visibility_delta(Some(false), &unfocused), None, "focus is independent of visibility");
+        let unfocused = Snapshot {
+            focused: false,
+            ..shown
+        };
+        assert_eq!(
+            visibility_delta(Some(false), &unfocused),
+            None,
+            "focus is independent of visibility"
+        );
     }
 
     #[test]
@@ -2273,14 +2555,20 @@ mod tests {
             ..Snapshot::default()
         };
         assert_eq!(titlebar_area(&boot), (true, (0.0, 0.0, 980.0, 36.0)));
-        assert_eq!(css_env(&boot, false, false).titlebar_area, [0.0, 0.0, 980.0, 36.0]);
+        assert_eq!(
+            css_env(&boot, false, false).titlebar_area,
+            [0.0, 0.0, 980.0, 36.0]
+        );
 
         // The default (fallback ON) is the zero rect until it retires.
         let default_cfg = load_config(Some(
             r#"{"titleBarStyle":"hidden","titleBarHeight":36}"#.to_string(),
         ));
         assert!(default_cfg.title_bar_fallback);
-        let first_frame = Snapshot { fallback_titlebar: true, ..boot.clone() };
+        let first_frame = Snapshot {
+            fallback_titlebar: true,
+            ..boot.clone()
+        };
         assert_eq!(titlebar_area(&first_frame), (false, (0.0, 0.0, 0.0, 0.0)));
         assert_eq!(css_env(&first_frame, false, false).titlebar_area, [0.0; 4]);
     }
@@ -2294,7 +2582,10 @@ mod tests {
         assert_eq!(cfg.title_bar_height, 40.0);
         assert_eq!(
             cfg.title_bar_overlay,
-            Some(Overlay { color: Some(0xff20_2020), symbol_color: Some(0xffff_ffff) })
+            Some(Overlay {
+                color: Some(0xff20_2020),
+                symbol_color: Some(0xffff_ffff)
+            })
         );
 
         let cfg = load_config(Some(r#"{"titleBarOverlay":false}"#.to_string()));

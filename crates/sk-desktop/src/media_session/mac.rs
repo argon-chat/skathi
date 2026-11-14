@@ -14,9 +14,10 @@ use objc2_app_kit::NSImage;
 use objc2_core_foundation::CGSize;
 use objc2_foundation::{NSData, NSMutableDictionary, NSNumber, NSString};
 use objc2_media_player::{
-    MPChangePlaybackPositionCommandEvent, MPMediaItemArtwork, MPMediaItemPropertyAlbumTitle, MPMediaItemPropertyArtist,
-    MPMediaItemPropertyArtwork, MPMediaItemPropertyPlaybackDuration, MPMediaItemPropertyTitle, MPNowPlayingInfoCenter,
-    MPNowPlayingInfoPropertyElapsedPlaybackTime, MPNowPlayingInfoPropertyPlaybackRate, MPNowPlayingPlaybackState, MPRemoteCommand,
+    MPChangePlaybackPositionCommandEvent, MPMediaItemArtwork, MPMediaItemPropertyAlbumTitle,
+    MPMediaItemPropertyArtist, MPMediaItemPropertyArtwork, MPMediaItemPropertyPlaybackDuration,
+    MPMediaItemPropertyTitle, MPNowPlayingInfoCenter, MPNowPlayingInfoPropertyElapsedPlaybackTime,
+    MPNowPlayingInfoPropertyPlaybackRate, MPNowPlayingPlaybackState, MPRemoteCommand,
     MPRemoteCommandCenter, MPRemoteCommandEvent, MPRemoteCommandHandlerStatus,
 };
 
@@ -53,10 +54,28 @@ fn hook(center: &MPRemoteCommandCenter) {
             on(&command, move |_| event(action, None));
         }
         on(&center.skipForwardCommand(), |_| event("seekforward", None));
-        on(&center.skipBackwardCommand(), |_| event("seekbackward", None));
-        on(&center.togglePlayPauseCommand(), |_| event(if PLAYING.load(Ordering::Relaxed) { "pause" } else { "play" }, None));
+        on(&center.skipBackwardCommand(), |_| {
+            event("seekbackward", None)
+        });
+        on(&center.togglePlayPauseCommand(), |_| {
+            event(
+                if PLAYING.load(Ordering::Relaxed) {
+                    "pause"
+                } else {
+                    "play"
+                },
+                None,
+            )
+        });
         on(&center.changePlaybackPositionCommand(), |e| {
-            event("seekto", Some(e.cast::<MPChangePlaybackPositionCommandEvent>().as_ref().positionTime()));
+            event(
+                "seekto",
+                Some(
+                    e.cast::<MPChangePlaybackPositionCommandEvent>()
+                        .as_ref()
+                        .positionTime(),
+                ),
+            );
         });
     }
 }
@@ -66,12 +85,25 @@ fn artwork(bytes: &[u8]) -> Option<Retained<MPMediaItemArtwork>> {
     let size = image.size();
     let handler = RcBlock::new(move |_: CGSize| NonNull::from(&*image));
     // SAFETY: the block keeps the image alive for as long as the artwork can ask for it.
-    Some(unsafe { MPMediaItemArtwork::initWithBoundsSize_requestHandler(MPMediaItemArtwork::alloc(), size, &handler) })
+    Some(unsafe {
+        MPMediaItemArtwork::initWithBoundsSize_requestHandler(
+            MPMediaItemArtwork::alloc(),
+            size,
+            &handler,
+        )
+    })
 }
 
 /// `state` is the session as web/media_session.rs sends it; `artwork` the image bytes.
-pub fn update(_owner: Option<isize>, state: &serde_json::Value, artwork_bytes: Option<&[u8]>) -> Result<(), String> {
-    let actions: Vec<&str> = state["actions"].as_array().map(|a| a.iter().filter_map(|v| v.as_str()).collect()).unwrap_or_default();
+pub fn update(
+    _owner: Option<isize>,
+    state: &serde_json::Value,
+    artwork_bytes: Option<&[u8]>,
+) -> Result<(), String> {
+    let actions: Vec<&str> = state["actions"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
     let has = |a: &str| actions.contains(&a);
     let playback = state["playbackState"].as_str().unwrap_or("none");
     let enabled = state["metadata"].is_object() || playback != "none";
@@ -88,8 +120,14 @@ pub fn update(_owner: Option<isize>, state: &serde_json::Value, artwork_bytes: O
             (center.nextTrackCommand(), has("nexttrack")),
             (center.previousTrackCommand(), has("previoustrack")),
             (center.skipForwardCommand().into_super(), has("seekforward")),
-            (center.skipBackwardCommand().into_super(), has("seekbackward")),
-            (center.changePlaybackPositionCommand().into_super(), has("seekto")),
+            (
+                center.skipBackwardCommand().into_super(),
+                has("seekbackward"),
+            ),
+            (
+                center.changePlaybackPositionCommand().into_super(),
+                has("seekto"),
+            ),
         ] {
             command.setEnabled(enabled && on);
         }
@@ -102,7 +140,8 @@ pub fn update(_owner: Option<isize>, state: &serde_json::Value, artwork_bytes: O
         }
         let info = NSMutableDictionary::<NSString, AnyObject>::new();
         if let Some(m) = state["metadata"].as_object() {
-            let text = |k: &str| NSString::from_str(m.get(k).and_then(|v| v.as_str()).unwrap_or(""));
+            let text =
+                |k: &str| NSString::from_str(m.get(k).and_then(|v| v.as_str()).unwrap_or(""));
             info.insert(MPMediaItemPropertyTitle, &text("title"));
             info.insert(MPMediaItemPropertyArtist, &text("artist"));
             info.insert(MPMediaItemPropertyAlbumTitle, &text("album"));
@@ -112,10 +151,23 @@ pub fn update(_owner: Option<isize>, state: &serde_json::Value, artwork_bytes: O
         }
         if let Some(p) = state["position"].as_object() {
             let n = |k: &str| p.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let rate = if playback == "playing" { n("playbackRate") } else { 0.0 };
-            info.insert(MPMediaItemPropertyPlaybackDuration, &NSNumber::new_f64(n("duration")));
-            info.insert(MPNowPlayingInfoPropertyElapsedPlaybackTime, &NSNumber::new_f64(n("position")));
-            info.insert(MPNowPlayingInfoPropertyPlaybackRate, &NSNumber::new_f64(rate));
+            let rate = if playback == "playing" {
+                n("playbackRate")
+            } else {
+                0.0
+            };
+            info.insert(
+                MPMediaItemPropertyPlaybackDuration,
+                &NSNumber::new_f64(n("duration")),
+            );
+            info.insert(
+                MPNowPlayingInfoPropertyElapsedPlaybackTime,
+                &NSNumber::new_f64(n("position")),
+            );
+            info.insert(
+                MPNowPlayingInfoPropertyPlaybackRate,
+                &NSNumber::new_f64(rate),
+            );
         }
         now.setNowPlayingInfo(Some(&**info));
         now.setPlaybackState(match playback {

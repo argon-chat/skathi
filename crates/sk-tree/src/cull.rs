@@ -97,8 +97,8 @@ pub(crate) fn begin_frame(window: &Window, now: std::time::Instant) {
         })
     });
     let k = windows::key(window);
-    let held = windows::peek(k, |w| [w.focused_node, w.pointer_capture.unwrap_or(0)])
-        .unwrap_or([0, 0]);
+    let held =
+        windows::peek(k, |w| [w.focused_node, w.pointer_capture.unwrap_or(0)]).unwrap_or([0, 0]);
     PINNED.with(|pinned| {
         let mut pinned = pinned.borrow_mut();
         pinned.clear();
@@ -112,7 +112,6 @@ pub(crate) fn begin_frame(window: &Window, now: std::time::Instant) {
         });
     });
 }
-
 
 pub(crate) fn gc(live: &dyn Fn(u32) -> bool) {
     ENTRIES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
@@ -171,11 +170,18 @@ fn view_of(t: &Tree, parent: u32, root: u32, win: WinKey) -> View {
     if let Some(view) = VIEWS.with(|v| v.borrow().get(&parent).copied()) {
         return view;
     }
-    let window_view = View { clip: Some(WINDOW.with(Cell::get)), shift: (0.0, 0.0) };
+    let window_view = View {
+        clip: Some(WINDOW.with(Cell::get)),
+        shift: (0.0, 0.0),
+    };
     let view = match t.node(parent) {
         None => window_view,
         Some(node) => {
-            let outer = if parent == root { window_view } else { view_of(t, node.parent, root, win) };
+            let outer = if parent == root {
+                window_view
+            } else {
+                view_of(t, node.parent, root, win)
+            };
             let mut clip = outer.clip;
             let cs = node.computed.as_ref();
             if MOVING.with(|m| m.borrow().contains(&parent))
@@ -190,7 +196,12 @@ fn view_of(t: &Tree, parent: u32, root: u32, win: WinKey) -> View {
                 let own = windows::peek(win, |w| w.prev_bounds.get(&parent).copied()).flatten();
                 if let Some((x, y, w, h)) = own {
                     let (x, y) = (x + outer.shift.0, y + outer.shift.1);
-                    let mut c = clip.unwrap_or([f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY]);
+                    let mut c = clip.unwrap_or([
+                        f32::NEG_INFINITY,
+                        f32::NEG_INFINITY,
+                        f32::INFINITY,
+                        f32::INFINITY,
+                    ]);
                     if clip_x {
                         c[0] = c[0].max(x);
                         c[2] = c[2].min(x + w);
@@ -206,7 +217,9 @@ fn view_of(t: &Tree, parent: u32, root: u32, win: WinKey) -> View {
             if let Some(handle) = crate::render::scroll_handle_of(parent) {
                 let offset = handle.offset();
                 let now = (f32::from(offset.x), f32::from(offset.y));
-                let before = OFFSETS.with(|m| m.borrow_mut().insert(parent, now)).unwrap_or(now);
+                let before = OFFSETS
+                    .with(|m| m.borrow_mut().insert(parent, now))
+                    .unwrap_or(now);
                 shift.0 += now.0 - before.0;
                 shift.1 += now.1 - before.1;
             }
@@ -233,7 +246,10 @@ pub(crate) fn placeholder(
     let view = view_of(t, node.parent, root, win);
     let clip = view.clip?;
     let (rect, parent) = windows::peek(win, |w| {
-        (w.prev_bounds.get(&id).copied(), w.prev_bounds.get(&node.parent).copied())
+        (
+            w.prev_bounds.get(&id).copied(),
+            w.prev_bounds.get(&node.parent).copied(),
+        )
     })?;
     let (x, y, width, height) = rect?;
     let (_, _, parent_width, parent_height) = parent?;
@@ -250,12 +266,19 @@ pub(crate) fn placeholder(
     if !outside {
         return None;
     }
-    let independent = matches!(cs.base.display, Some(gpui::Display::Flex | gpui::Display::Grid))
-        || clips(cs.base.overflow.x)
+    let independent = matches!(
+        cs.base.display,
+        Some(gpui::Display::Flex | gpui::Display::Grid)
+    ) || clips(cs.base.overflow.x)
         || clips(cs.base.overflow.y)
         || t.node(node.parent)
             .and_then(|p| p.computed.as_ref())
-            .is_some_and(|p| matches!(p.base.display, Some(gpui::Display::Flex | gpui::Display::Grid)));
+            .is_some_and(|p| {
+                matches!(
+                    p.base.display,
+                    Some(gpui::Display::Flex | gpui::Display::Grid)
+                )
+            });
     if !independent
         || HOT.with(|h| h.borrow().contains(&id))
         || PINNED.with(|p| p.borrow().contains(&id))
@@ -270,7 +293,12 @@ pub(crate) fn placeholder(
     let fresh = ENTRIES.with(|m| {
         let mut m = m.borrow_mut();
         match m.get_mut(&id) {
-            Some(e) if e.sub_rev == sub_rev && e.ctx == ctx && e.parent_size == parent_size && e.size == size => {
+            Some(e)
+                if e.sub_rev == sub_rev
+                    && e.ctx == ctx
+                    && e.parent_size == parent_size
+                    && e.size == size =>
+            {
                 if e.ids_rev != sub_rev || e.ids.is_empty() {
                     e.ids.clear();
                     crate::cache::subtree_ids(t, id, &mut e.ids);
@@ -286,7 +314,17 @@ pub(crate) fn placeholder(
                 false
             }
             None => {
-                m.insert(id, Entry { sub_rev, ctx, parent_size, size, ids: Vec::new(), ids_rev: 0 });
+                m.insert(
+                    id,
+                    Entry {
+                        sub_rev,
+                        ctx,
+                        parent_size,
+                        size,
+                        ids: Vec::new(),
+                        ids_rev: 0,
+                    },
+                );
                 false
             }
         }
@@ -296,7 +334,13 @@ pub(crate) fn placeholder(
     }
     let mut boxed = gpui::div();
     *boxed.style() = crate::cache::wrapper_style(node, size);
-    Some(Placeholder { id, inner: crate::render::probe(id, boxed.into_any_element()) }.into_any_element())
+    Some(
+        Placeholder {
+            id,
+            inner: crate::render::probe(id, boxed.into_any_element()),
+        }
+        .into_any_element(),
+    )
 }
 
 struct Placeholder {
@@ -338,7 +382,8 @@ impl Element for Placeholder {
         self.inner.prepaint(window, cx);
         let id = self.id;
         windows::here(window, |w| {
-            let (Some(now), Some(before)) = (w.bounds.get(&id).copied(), w.prev_bounds.get(&id).copied())
+            let (Some(now), Some(before)) =
+                (w.bounds.get(&id).copied(), w.prev_bounds.get(&id).copied())
             else {
                 return;
             };

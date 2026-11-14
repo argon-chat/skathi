@@ -237,7 +237,10 @@ fn parse_condition(c: &MediaCondition<'_>) -> Result<Cond, Unsupported> {
     Ok(match c {
         MediaCondition::Feature(f) => parse_feature(f)?,
         MediaCondition::Not(inner) => Cond::Not(Box::new(parse_condition(inner)?)),
-        MediaCondition::Operation { operator, conditions } => {
+        MediaCondition::Operation {
+            operator,
+            conditions,
+        } => {
             let mut parsed = Vec::with_capacity(conditions.len());
             for c in conditions {
                 parsed.push(parse_condition(c)?);
@@ -365,29 +368,41 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
             Resolution | DisplayModeId => Cond::Always,
             _ => return Err("an unsupported media feature"),
         },
-        QueryFeature::Range { name, operator, value } => match standard(name)? {
+        QueryFeature::Range {
+            name,
+            operator,
+            value,
+        } => match standard(name)? {
             id @ (Width | Height) => {
                 Cond::Feature(sized(id, Cmp::from(*operator), length_px(value)?))
             }
             Resolution => Cond::Feature(Feature::Resolution(Cmp::from(*operator), dppx(value)?)),
             _ => return Err("a range comparison on a feature that has no numeric value"),
         },
-        QueryFeature::Interval { name, start, start_operator, end, end_operator } => {
-            match standard(name)? {
-                id @ (Width | Height) => Cond::And(vec![
-                    Cond::Feature(sized(id, Cmp::from(*start_operator).flip(), length_px(start)?)),
-                    Cond::Feature(sized(id, Cmp::from(*end_operator), length_px(end)?)),
-                ]),
-                Resolution => Cond::And(vec![
-                    Cond::Feature(Feature::Resolution(
-                        Cmp::from(*start_operator).flip(),
-                        dppx(start)?,
-                    )),
-                    Cond::Feature(Feature::Resolution(Cmp::from(*end_operator), dppx(end)?)),
-                ]),
-                _ => return Err("a range comparison on a feature that has no numeric value"),
-            }
-        }
+        QueryFeature::Interval {
+            name,
+            start,
+            start_operator,
+            end,
+            end_operator,
+        } => match standard(name)? {
+            id @ (Width | Height) => Cond::And(vec![
+                Cond::Feature(sized(
+                    id,
+                    Cmp::from(*start_operator).flip(),
+                    length_px(start)?,
+                )),
+                Cond::Feature(sized(id, Cmp::from(*end_operator), length_px(end)?)),
+            ]),
+            Resolution => Cond::And(vec![
+                Cond::Feature(Feature::Resolution(
+                    Cmp::from(*start_operator).flip(),
+                    dppx(start)?,
+                )),
+                Cond::Feature(Feature::Resolution(Cmp::from(*end_operator), dppx(end)?)),
+            ]),
+            _ => return Err("a range comparison on a feature that has no numeric value"),
+        },
     })
 }
 
@@ -429,7 +444,13 @@ mod tests {
     }
 
     fn env(w: f32, dark: bool, reduce: bool) -> Env {
-        Env { viewport_width: w, viewport_height: 800.0, dark, reduce_motion: reduce, ..Env::default() }
+        Env {
+            viewport_width: w,
+            viewport_height: 800.0,
+            dark,
+            reduce_motion: reduce,
+            ..Env::default()
+        }
     }
 
     #[test]
@@ -451,8 +472,12 @@ mod tests {
 
     #[test]
     fn range_and_interval_syntax() {
-        assert!(cond("(width > 400px)").unwrap().eval(&env(500.0, false, false)));
-        assert!(!cond("(width > 400px)").unwrap().eval(&env(400.0, false, false)));
+        assert!(cond("(width > 400px)")
+            .unwrap()
+            .eval(&env(500.0, false, false)));
+        assert!(!cond("(width > 400px)")
+            .unwrap()
+            .eval(&env(400.0, false, false)));
         let i = cond("(400px < width < 800px)").unwrap();
         assert!(!i.eval(&env(400.0, false, false)));
         assert!(i.eval(&env(401.0, false, false)));
@@ -525,11 +550,17 @@ mod tests {
     #[test]
     fn the_pointer_and_hover_features_answer_for_a_desktop_window() {
         let mouse = Env::default();
-        let touch = Env { coarse_pointer: true, ..Env::default() };
+        let touch = Env {
+            coarse_pointer: true,
+            ..Env::default()
+        };
         let t = |q: &str, env: &Env| cond(q).unwrap().eval(env);
 
         for env in [&mouse, &touch] {
-            assert!(t("(pointer: fine)", env), "the primary pointer is the mouse");
+            assert!(
+                t("(pointer: fine)", env),
+                "the primary pointer is the mouse"
+            );
             assert!(!t("(pointer: coarse)", env));
             assert!(!t("(pointer: none)", env));
             assert!(t("(hover: hover)", env));
@@ -550,8 +581,14 @@ mod tests {
     /// `devicePixelRatio` has no event in any spec.
     #[test]
     fn resolution_normalises_every_unit_to_dppx() {
-        let hidpi = Env { scale_factor: 2.0, ..Env::default() };
-        let lodpi = Env { scale_factor: 1.0, ..Env::default() };
+        let hidpi = Env {
+            scale_factor: 2.0,
+            ..Env::default()
+        };
+        let lodpi = Env {
+            scale_factor: 1.0,
+            ..Env::default()
+        };
 
         let c = cond("(min-resolution: 2dppx)").unwrap();
         assert_eq!(c, Cond::Feature(Feature::Resolution(Cmp::Ge, 2.0)));
@@ -563,11 +600,15 @@ mod tests {
             Cond::Feature(Feature::Resolution(Cmp::Ge, 2.0))
         );
         let dpcm = cond("(min-resolution: 96dpcm)").unwrap();
-        assert!(dpcm.eval(&Env { scale_factor: 3.0, ..Env::default() }));
+        assert!(dpcm.eval(&Env {
+            scale_factor: 3.0,
+            ..Env::default()
+        }));
 
-        assert!(cond("(resolution: 1.5dppx)")
-            .unwrap()
-            .eval(&Env { scale_factor: 1.5, ..Env::default() }));
+        assert!(cond("(resolution: 1.5dppx)").unwrap().eval(&Env {
+            scale_factor: 1.5,
+            ..Env::default()
+        }));
         assert!(cond("(resolution > 1dppx)").unwrap().eval(&hidpi));
         let i = cond("(1dppx < resolution < 3dppx)").unwrap();
         assert!(i.eval(&hidpi));
@@ -577,16 +618,27 @@ mod tests {
 
     #[test]
     fn display_mode_reports_the_chrome_mode() {
-        let wco = Env { display_mode: DisplayMode::WindowControlsOverlay, ..Env::default() };
-        let standalone = Env { display_mode: DisplayMode::Standalone, ..Env::default() };
-        let fs = Env { display_mode: DisplayMode::Fullscreen, ..Env::default() };
+        let wco = Env {
+            display_mode: DisplayMode::WindowControlsOverlay,
+            ..Env::default()
+        };
+        let standalone = Env {
+            display_mode: DisplayMode::Standalone,
+            ..Env::default()
+        };
+        let fs = Env {
+            display_mode: DisplayMode::Fullscreen,
+            ..Env::default()
+        };
 
         let c = cond("(display-mode: window-controls-overlay)").unwrap();
         assert!(c.eval(&wco));
         assert!(!c.eval(&standalone));
         assert!(!c.eval(&fs));
 
-        assert!(cond("(display-mode: standalone)").unwrap().eval(&standalone));
+        assert!(cond("(display-mode: standalone)")
+            .unwrap()
+            .eval(&standalone));
         assert!(cond("(display-mode: fullscreen)").unwrap().eval(&fs));
 
         let browser = cond("(display-mode: browser)").unwrap();

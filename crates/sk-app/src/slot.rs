@@ -18,10 +18,7 @@ use std::path::{Path, PathBuf};
 /// The compile-time default: the dev builder's output directory. Only a dev build has one; `cfg`'d
 /// rather than `allow(dead_code)`'d so it is genuinely absent otherwise.
 #[cfg(not(feature = "prod"))]
-const DEV_DIST: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../packages/cli/dist"
-);
+const DEV_DIST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/cli/dist");
 
 /// This process's slot directory. `SK_DIST` wins everywhere: it points one exe at another app's
 /// build output and keeps every parallel host (the e2e slot pool, the inspector itself) addressable.
@@ -135,7 +132,9 @@ fn pid_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
         // 0, or above i32::MAX, would name a process group; no process has such a pid.
-        let Some(pid) = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0) else { return false };
+        let Some(pid) = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0) else {
+            return false;
+        };
         // Signal 0 checks without sending. EPERM is another user's process,
         // alive; only ESRCH is "no such process".
         let signalled = unsafe { libc::kill(pid, 0) } == 0;

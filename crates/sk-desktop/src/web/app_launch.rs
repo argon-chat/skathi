@@ -54,7 +54,12 @@ unsafe fn params<'a>(g: *mut c_void, v: u64) -> Option<&'a mut Params> {
 }
 
 unsafe fn strings(g: *mut c_void, v: &Json) -> u64 {
-    let items: Vec<&str> = v.as_array().into_iter().flatten().filter_map(Json::as_str).collect();
+    let items: Vec<&str> = v
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Json::as_str)
+        .collect();
     host::frozen_strings(g, &items)
 }
 
@@ -65,7 +70,12 @@ unsafe fn make_params(g: *mut c_void, url: Option<String>, handles: &Json) -> u6
     });
     let files = new_array(g);
     let mut n = 0;
-    for wire in handles.as_array().into_iter().flatten().filter(|w| w["h"].is_u64()) {
+    for wire in handles
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|w| w["h"].is_u64())
+    {
         set_i(g, files, n, super::fsa::from_wire(g, wire));
         n += 1;
     }
@@ -81,9 +91,25 @@ unsafe fn deliver(g: *mut c_void, consumer: u64, url: Option<String>, handles: &
     if let Err(e) = call(g, consumer, UNDEF, &[p]) {
         // A consumer that throws must not take the next launch with it.
         let stack = get(g, e, "stack");
-        let text = host::string_arg(g, if is_cell(e) && stack != UNDEF { stack } else { e }).unwrap_or_default();
+        let text = host::string_arg(
+            g,
+            if is_cell(e) && stack != UNDEF {
+                stack
+            } else {
+                e
+            },
+        )
+        .unwrap_or_default();
         let console = get(g, host::global(g), "console");
-        let _ = call(g, get(g, console, "error"), console, &[js_string(g, &format!("[skathi] launchQueue consumer threw: {text}"))]);
+        let _ = call(
+            g,
+            get(g, console, "error"),
+            console,
+            &[js_string(
+                g,
+                &format!("[skathi] launchQueue consumer threw: {text}"),
+            )],
+        );
     }
 }
 
@@ -152,10 +178,28 @@ pub(super) unsafe fn on_launch(g: *mut c_void, p: &Json) {
     let url = p["url"].as_str().map(str::to_string);
     let ev = events::new_trusted_event(g, "launch");
     define(g, ev, "argv", strings(g, &p["argv"]), 1);
-    define(g, ev, "cwd", js_string(g, p["cwd"].as_str().unwrap_or("")), 1);
-    define(g, ev, "url", url.as_deref().map_or(NULL, |u| js_string(g, u)), 1);
+    define(
+        g,
+        ev,
+        "cwd",
+        js_string(g, p["cwd"].as_str().unwrap_or("")),
+        1,
+    );
+    define(
+        g,
+        ev,
+        "url",
+        url.as_deref().map_or(NULL, |u| js_string(g, u)),
+        1,
+    );
     define(g, ev, "paths", strings(g, &p["paths"]), 1);
-    define(g, ev, "source", js_string(g, p["source"].as_str().unwrap_or("second-instance")), 1);
+    define(
+        g,
+        ev,
+        "source",
+        js_string(g, p["source"].as_str().unwrap_or("second-instance")),
+        1,
+    );
     events::dispatch(g, obj, ev);
     enqueue(g, url, p["handles"].clone());
 }
@@ -204,24 +248,30 @@ host_fn!(fn is_protocol_registered(g, args) {
 pub(super) unsafe fn install(g: *mut c_void, event_target: u64) {
     let info: Json = serde_json::from_str(&launch::info_json()).unwrap_or_default();
     let params_class = make_host_class::<Params>("LaunchParams");
-    let params_cls = define_class(g, &ClassSpec {
-        name: "LaunchParams",
-        arity: 0,
-        construct: None,
-        parent_proto: 0,
-        methods: &[],
-        getters: &[("targetURL", params_target_url), ("files", params_files)],
-        accessors: &[],
-    });
-    let queue_cls = define_class(g, &ClassSpec {
-        name: "LaunchQueue",
-        arity: 0,
-        construct: None,
-        parent_proto: 0,
-        methods: &[("setConsumer", 1, set_consumer)],
-        getters: &[],
-        accessors: &[],
-    });
+    let params_cls = define_class(
+        g,
+        &ClassSpec {
+            name: "LaunchParams",
+            arity: 0,
+            construct: None,
+            parent_proto: 0,
+            methods: &[],
+            getters: &[("targetURL", params_target_url), ("files", params_files)],
+            accessors: &[],
+        },
+    );
+    let queue_cls = define_class(
+        g,
+        &ClassSpec {
+            name: "LaunchQueue",
+            arity: 0,
+            construct: None,
+            parent_proto: 0,
+            methods: &[("setConsumer", 1, set_consumer)],
+            getters: &[],
+            accessors: &[],
+        },
+    );
     let queue = new_object(g, queue_cls.proto);
     redjs_protect(g, queue);
     define(g, host::global(g), "launchQueue", queue, 0);
@@ -256,7 +306,11 @@ pub(super) unsafe fn install(g: *mut c_void, event_target: u64) {
 
     // Once per process: a reload is not a launch.
     if !OWN_LAUNCH.swap(true, Ordering::AcqRel) {
-        enqueue(g, info["url"].as_str().map(str::to_string), info["handles"].clone());
+        enqueue(
+            g,
+            info["url"].as_str().map(str::to_string),
+            info["handles"].clone(),
+        );
     }
 }
 
@@ -280,10 +334,19 @@ mod tests {
         let log = sk_runtime::testing::on_js_thread(|| {
             JsRuntime::with(|rt| unsafe {
                 let g = rt.raw();
-                super::on_launch(g, &json!({ "kind": "launch", "source": "open-url", "argv": ["app", "x://y"], "cwd": "/", "url": "x://y", "paths": [], "handles": [] }));
+                super::on_launch(
+                    g,
+                    &json!({ "kind": "launch", "source": "open-url", "argv": ["app", "x://y"], "cwd": "/", "url": "x://y", "paths": [], "handles": [] }),
+                );
                 rt.ctx().eval("launchQueue.setConsumer(() => { throw new Error('boom'); }); launchQueue.setConsumer((p) => log.push('next:' + p.targetURL)); ''").unwrap();
-                super::on_launch(g, &json!({ "argv": [], "cwd": "", "url": null, "paths": [] }));
-                rt.ctx().eval("log.join('|')").and_then(|v| rt.ctx().to_rust_string(v)).unwrap()
+                super::on_launch(
+                    g,
+                    &json!({ "argv": [], "cwd": "", "url": null, "paths": [] }),
+                );
+                rt.ctx()
+                    .eval("log.join('|')")
+                    .and_then(|v| rt.ctx().to_rust_string(v))
+                    .unwrap()
             })
         });
         assert_eq!(log, "own:null:0:true|event:x://y:open-url:app x://y|own:x://y:0:true|event:null:second-instance:|next:null");
