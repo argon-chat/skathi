@@ -1,14 +1,13 @@
 //! The HTTP client gpui's loaders fetch through: redjs's network stack, the one `fetch` and
 //! `XMLHttpRequest` use.
 //!
-//! One stack rather than reqwest beside it: a single connection pool, TLS stack and HTTP cache under
+//! One stack: a single connection pool, TLS stack and HTTP cache under
 //! every load (`<img>`, CSS `url()`, `@font-face`, `<lottie>`, `<sk-sticker>`, video posters), all
 //! visible to devtools' Network panel.
 //!
-//! A `GET` or `HEAD` with no body that follows redirects (what every loader sends) goes to
-//! [`redjs::webapi::http::start`]: the pool decides the connection, follows redirects hop by hop and
-//! decodes the body. Anything else (a body, a request that must not follow a redirect) goes to a
-//! `ReqwestClient`, built on first use so a session that never needs it starts no runtime for it.
+//! Every request goes to [`redjs::webapi::http::start`]: the pool decides the connection, follows
+//! redirects hop by hop and decodes the body. redjs has no manual redirect mode, so a request that
+//! must not follow one fails on a redirect instead of returning it.
 //!
 //! - **No cookies on image loads.** A browser's `<img>` without `crossorigin` is a `no-cors` request
 //!   in credentials mode `include`. The loaders here cannot tell which element asked, so these
@@ -16,12 +15,13 @@
 //! - **`<video>` bytes are not here.** Media Foundation fetches an http(s) `<video src>` through its
 //!   own network source, with range requests; only the poster, an `<img>`, comes through this client.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result as AnyResult};
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
+use futures::AsyncReadExt;
 use gpui::http_client::{http, AsyncBody, HttpClient, Inner, RedirectPolicy, RequestTimeout, Url};
 use sk_runtime::redjs::webapi::{cookies::Credentials, http as net};
 
@@ -30,32 +30,11 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// download is never cut off.
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
-pub struct RedjsHttpClient {
-    fallback: OnceLock<Option<Arc<dyn HttpClient>>>,
-}
+pub struct RedjsHttpClient;
 
 impl RedjsHttpClient {
     pub fn new() -> Self {
-        RedjsHttpClient {
-            fallback: OnceLock::new(),
-        }
-    }
-
-    fn fallback(&self) -> Option<Arc<dyn HttpClient>> {
-        self.fallback
-            .get_or_init(|| {
-                match reqwest_client::ReqwestClient::user_agent(concat!(
-                    "skathi/",
-                    env!("CARGO_PKG_VERSION")
-                )) {
-                    Ok(client) => Some(Arc::new(client) as Arc<dyn HttpClient>),
-                    Err(e) => {
-                        log::warn!("could not build the fallback HTTP client ({e})");
-                        None
-                    }
-                }
-            })
-            .clone()
+        RedjsHttpClient
     }
 }
 
@@ -111,19 +90,6 @@ fn config_mb(window_json: Option<&str>) -> Option<u64> {
 #[cfg_attr(not(feature = "storages"), allow(dead_code))]
 const DEFAULT_CACHE_MB: u64 = 256;
 
-fn plain_get(parts: &http::request::Parts, body: &AsyncBody) -> bool {
-    let empty = match &body.0 {
-        Inner::Empty => true,
-        Inner::Bytes(b) => b.get_ref().is_empty(),
-        Inner::AsyncReader(_) => false,
-    };
-    let follows = !matches!(
-        parts.extensions.get::<RedirectPolicy>(),
-        None | Some(RedirectPolicy::NoFollow)
-    );
-    empty && follows && (parts.method == http::Method::GET || parts.method == http::Method::HEAD)
-}
-
 impl HttpClient for RedjsHttpClient {
     fn user_agent(&self) -> Option<&http::HeaderValue> {
         None
@@ -137,20 +103,27 @@ impl HttpClient for RedjsHttpClient {
         &self,
         req: http::Request<AsyncBody>,
     ) -> BoxFuture<'static, AnyResult<http::Response<AsyncBody>>> {
-        let (mut parts, body) = req.into_parts();
-        if !plain_get(&parts, &body) {
-            if !parts.headers.contains_key(http::header::ACCEPT_LANGUAGE) {
-                if let Ok(v) = http::HeaderValue::from_str(
-                    &sk_runtime::redjs::webapi::navigator::accept_language(),
-                ) {
-                    parts.headers.insert(http::header::ACCEPT_LANGUAGE, v);
-                }
+        let (parts, body) = req.into_parts();
+        match body.0 {
+            Inner::Empty => send(parts, None),
+            Inner::Bytes(bytes) => {
+                let bytes = bytes.into_inner().to_vec();
+                send(parts, (!bytes.is_empty()).then_some(bytes))
             }
-            return match self.fallback() {
-                Some(client) => client.send(http::Request::from_parts(parts, body)),
-                None => Box::pin(async { Err(anyhow!("no HTTP client for this request")) }),
-            };
+            reader => Box::pin(async move {
+                let mut bytes = Vec::new();
+                AsyncBody(reader).read_to_end(&mut bytes).await?;
+                send(parts, Some(bytes)).await
+            }),
         }
+    }
+}
+
+fn send(
+    parts: http::request::Parts,
+    body: Option<Vec<u8>>,
+) -> BoxFuture<'static, AnyResult<http::Response<AsyncBody>>> {
+    {
         let headers = parts
             .headers
             .iter()
@@ -164,8 +137,11 @@ impl HttpClient for RedjsHttpClient {
             method: parts.method.as_str().to_string(),
             url: parts.uri.to_string(),
             headers,
-            body: None,
-            redirect: net::Redirect::Follow,
+            body,
+            redirect: match parts.extensions.get::<RedirectPolicy>() {
+                Some(RedirectPolicy::NoFollow) => net::Redirect::Error,
+                _ => net::Redirect::Follow,
+            },
             credentials: Credentials::Omit,
             connect_timeout: CONNECT_TIMEOUT,
             io_timeout,

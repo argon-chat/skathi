@@ -74,9 +74,6 @@ sk-permissions = { path = "../sk-permissions" }
 sk-locale = { path = "../sk-locale" }
 sk-storage = { path = "../sk-storage", optional = true }
 sk-clipboard = { path = "../sk-clipboard", optional = true }
-# Fallback client for a request redjs's stack does not carry as is (a body, or a redirect that must
-# not be followed), built on first use; `SK_HTTP_CLIENT=reqwest` installs it in place of redjs's.
-reqwest_client = { path = "../../vendor/zed/crates/reqwest_client" }
 futures = "0.3"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 sha2 = "0.10"

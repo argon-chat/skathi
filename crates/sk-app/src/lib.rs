@@ -885,20 +885,8 @@ fn publish_video_device() {
 fn publish_video_device() {}
 
 /// gpui's `Resource::Uri` client is redjs's network stack ([`http_client`]); without one gpui's
-/// `NullHttpClient` fails every request. `SK_HTTP_CLIENT=reqwest` swaps in `ReqwestClient`.
+/// `NullHttpClient` fails every request.
 fn install_http_client(app: gpui::Application) -> gpui::Application {
-    if std::env::var("SK_HTTP_CLIENT").is_ok_and(|v| v.eq_ignore_ascii_case("reqwest")) {
-        return match reqwest_client::ReqwestClient::user_agent(concat!(
-            "skathi/",
-            env!("CARGO_PKG_VERSION")
-        )) {
-            Ok(client) => app.with_http_client(std::sync::Arc::new(client)),
-            Err(e) => {
-                log::warn!("SK_HTTP_CLIENT=reqwest: the client could not be built ({e}); http(s) images will not load");
-                app
-            }
-        };
-    }
     app.with_http_client(std::sync::Arc::new(http_client::RedjsHttpClient::new()))
 }
 
