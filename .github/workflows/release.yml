@@ -78,11 +78,15 @@ jobs:
           name: sk-aot-windows-x64
           path: .tools/sk-aot
       - if: runner.os == 'Windows'
-        name: Build the hosts (with the native AOT loader, inspector and sk-aot)
+        name: Unpack sk-aot
         shell: bash
-        run: |
-          gzip -dc .tools/sk-aot/sk-aot-windows-x64.exe.gz > .tools/sk-aot/sk-aot.exe
-          bun scripts/aot/prepare-inspector.ts --out release-inspector --cache .tools/native-aot --compiler .tools/sk-aot/sk-aot.exe
+        run: gzip -dc .tools/sk-aot/sk-aot-windows-x64.exe.gz > .tools/sk-aot/sk-aot.exe
+      # pwsh, not bash: Git's /usr/bin/link.exe shadows MSVC's on bash's PATH.
+      - if: runner.os == 'Windows'
+        name: Build the hosts (with the native AOT loader, inspector and sk-aot)
+        shell: pwsh
+        run: >-
+          bun scripts/aot/prepare-inspector.ts --out release-inspector --cache .tools/native-aot --compiler .tools/sk-aot/sk-aot.exe &&
           bun scripts/release-hosts.ts --out release-hosts --native-inspector release-inspector/build.json
       - if: runner.os != 'Windows'
         name: Build the hosts
