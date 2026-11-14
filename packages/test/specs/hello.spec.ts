@@ -19,9 +19,9 @@ const MOTION = 2;
 
 describe("hello", () => {
   test(
-    "the shell mounted with all twelve tabs",
+    "the shell mounted with all eleven tabs",
     async () => {
-      await expect(app.locator(".tab")).toHaveCount(12);
+      await expect(app.locator(".tab")).toHaveCount(11);
       await expect(tab(FORMS)).toHaveText("Forms");
       await expect(tab(MOTION)).toHaveText("Motion");
     },
