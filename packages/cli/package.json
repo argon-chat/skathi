@@ -4,7 +4,7 @@
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/argon-chat/vue-native.git",
+    "url": "git+https://github.com/argon-chat/skathi.git",
     "directory": "packages/cli"
   },
   "version": "0.0.1",

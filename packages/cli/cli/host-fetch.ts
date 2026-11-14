@@ -21,7 +21,7 @@ import {
 import { currentPlatform, type Platform } from "./platform";
 
 export const MANIFEST_NAME = "hosts.json";
-export const DEFAULT_REPO = "argon-chat/vue-native";
+export const DEFAULT_REPO = "argon-chat/skathi";
 
 export interface HostManifestEntry {
   platform: Platform;
