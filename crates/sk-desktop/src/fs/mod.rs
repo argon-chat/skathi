@@ -355,14 +355,33 @@ pub fn op_remove(dir: &Path, name: &str, recursive: bool) -> Result<(), Fail> {
 }
 
 fn identity(p: &Path) -> String {
-    let canon = std::fs::canonicalize(p)
-        .unwrap_or_else(|_| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()));
+    let canon = canonical_prefix(p);
     let s = canon.to_string_lossy();
     let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
     if cfg!(windows) {
         s.to_lowercase()
     } else {
         s.to_string()
+    }
+}
+
+/// A removed entry still compares equal to its live siblings: the deepest existing ancestor is
+/// canonicalized (symlinks, 8.3 names) and the missing tail is appended as written.
+fn canonical_prefix(p: &Path) -> PathBuf {
+    let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    let mut tail = Vec::new();
+    let mut at = abs.as_path();
+    loop {
+        if let Ok(c) = std::fs::canonicalize(at) {
+            return tail.iter().rev().fold(c, |acc, name| acc.join(name));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_os_string());
+                at = parent;
+            }
+            _ => return abs,
+        }
     }
 }
 

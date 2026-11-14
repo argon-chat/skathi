@@ -1490,6 +1490,15 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
+    /// `Y:\a\b` on Windows, `/Y/a/b` elsewhere.
+    fn at(windows: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(windows)
+        } else {
+            PathBuf::from(windows.replacen("Y:", "/Y", 1).replace('\\', "/"))
+        }
+    }
+
     fn as_path(s: Option<ImageSource>) -> Option<PathBuf> {
         match s {
             Some(ImageSource::Resource(Resource::Path(p))) => Some(p.to_path_buf()),
@@ -1509,6 +1518,7 @@ mod tests {
     fn an_img_hands_a_canvas_its_pixels() {
         let dir = std::env::temp_dir().join(format!("sk-img-pixels-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        set_asset_base(dir.clone());
         let good = dir.join("a.png");
         let mut out = std::io::Cursor::new(Vec::new());
         image::RgbaImage::from_pixel(3, 2, image::Rgba([10, 20, 30, 255]))
@@ -1526,7 +1536,7 @@ mod tests {
                 id
             })
         };
-        match pixels(node(Some(&good.to_string_lossy())), None) {
+        match pixels(node(Some("a.png")), None) {
             Pixels::Ready {
                 width,
                 height,
@@ -1542,7 +1552,7 @@ mod tests {
         assert_eq!(file_natural_size(&turned), Probe::Loaded(16.0, 32.0));
         assert_eq!(natural_size(&sideways_jpeg()), Probe::Loaded(16.0, 32.0));
         assert!(matches!(
-            pixels(node(Some(&turned.to_string_lossy())), None),
+            pixels(node(Some("c.jpg")), None),
             Pixels::Ready {
                 width: 16,
                 height: 32,
@@ -1550,7 +1560,7 @@ mod tests {
             }
         ));
         assert!(matches!(
-            pixels(node(Some(&bad.to_string_lossy())), None),
+            pixels(node(Some("b.png")), None),
             Pixels::Broken(_)
         ));
         assert!(matches!(
@@ -1635,23 +1645,23 @@ mod tests {
 
     #[test]
     fn relative_paths_resolve_against_the_app_root() {
-        set_asset_base(PathBuf::from("Y:\\skathi\\apps\\imgperf"));
+        set_asset_base(at("Y:\\skathi\\apps\\imgperf"));
         for src in ["assets/a.png", "./assets/a.png", "/assets/a.png"] {
             assert_eq!(
                 as_path(resolve(src)),
-                Some(PathBuf::from("Y:\\skathi\\apps\\imgperf\\assets\\a.png")),
+                Some(at("Y:\\skathi\\apps\\imgperf\\assets\\a.png")),
                 "{src}"
             );
         }
         assert_eq!(
             as_path(resolve("../hello/assets/a.png")),
-            Some(PathBuf::from("Y:\\skathi\\apps\\hello\\assets\\a.png"))
+            Some(at("Y:\\skathi\\apps\\hello\\assets\\a.png"))
         );
     }
 
     #[test]
     fn absolute_windows_paths_are_paths_not_uris() {
-        set_asset_base(PathBuf::from("Y:\\skathi\\apps\\imgperf"));
+        set_asset_base(at("Y:\\skathi\\apps\\imgperf"));
         assert_eq!(
             as_path(resolve("C:/pics/a.png")),
             Some(PathBuf::from("C:/pics/a.png"))
@@ -1821,7 +1831,7 @@ mod tests {
             Some(ImageSource::Resource(Resource::Embedded(k))) if k.as_ref() == "assets/my pic.png"
         ));
         // A miss is a broken image (alt text), NEVER the disk — even with a base set.
-        set_asset_base(PathBuf::from("Y:\\skathi\\apps\\hello"));
+        set_asset_base(at("Y:\\skathi\\apps\\hello"));
         assert!(resolve("assets/nope.png").is_none());
         assert!(resolve("../hello/assets/a.png").is_none());
         assert!(matches!(
@@ -1867,24 +1877,21 @@ mod tests {
     #[test]
     fn a_dev_host_has_no_store_and_joins_the_same_key_onto_the_app_root() {
         assert!(asset_store().is_none());
-        set_asset_base(PathBuf::from("Y:\\base"));
+        set_asset_base(at("Y:\\base"));
         // Browser-shaped: the server never sees the query, and decodes escapes.
-        assert_eq!(
-            as_path(resolve("a.png?v=2")),
-            Some(PathBuf::from("Y:\\base\\a.png"))
-        );
+        assert_eq!(as_path(resolve("a.png?v=2")), Some(at("Y:\\base\\a.png")));
         assert_eq!(
             as_path(resolve("my%20pic.png")),
-            Some(PathBuf::from("Y:\\base\\my pic.png"))
+            Some(at("Y:\\base\\my pic.png"))
         );
         assert_eq!(
             as_path(resolve("dir\\a.png")),
-            Some(PathBuf::from("Y:\\base\\dir\\a.png"))
+            Some(at("Y:\\base\\dir\\a.png"))
         );
         // A decoded drive letter must not replace the app root.
         assert_eq!(
             as_path(resolve("C%3A/x.png")),
-            Some(PathBuf::from("Y:\\base\\C%3A\\x.png"))
+            Some(at("Y:\\base\\C%3A\\x.png"))
         );
         assert!(matches!(
             resolve_media("video", "assets/clip.mp4"),
@@ -1895,15 +1902,9 @@ mod tests {
     /// The memo must follow the `src`, not the node id — Vue reuses ids.
     #[test]
     fn the_per_node_memo_follows_the_src_string() {
-        set_asset_base(PathBuf::from("Y:\\base"));
-        assert_eq!(
-            as_path(source_for(7, "a.png")),
-            Some(PathBuf::from("Y:\\base\\a.png"))
-        );
-        assert_eq!(
-            as_path(source_for(7, "b.png")),
-            Some(PathBuf::from("Y:\\base\\b.png"))
-        );
+        set_asset_base(at("Y:\\base"));
+        assert_eq!(as_path(source_for(7, "a.png")), Some(at("Y:\\base\\a.png")));
+        assert_eq!(as_path(source_for(7, "b.png")), Some(at("Y:\\base\\b.png")));
     }
 
     /// A temp file with the target a picked File over it would resolve to; removed on drop.
