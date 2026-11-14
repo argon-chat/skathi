@@ -14,7 +14,7 @@ use gpui::{
     WindowOptions, div, prelude::*, px, rgba, size,
 };
 use gpui_platform::application;
-use sk_runtime::{JsRuntime, Phase, host_fn, with_app, with_published, with_published_app};
+use sk_runtime::{JsRuntime, Phase, host_fn, with_published, with_published_app};
 use sk_runtime::runtime::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
 
 mod background;
@@ -293,8 +293,6 @@ mod logger_tests {
 }
 
 struct Shell {
-    status: String,
-    log: Vec<String>,
     title: String,
 }
 
@@ -445,29 +443,12 @@ pub(crate) fn notify_shell(cx: &mut App) {
     });
 }
 
-fn update_shell(g: *mut core::ffi::c_void, f: impl FnOnce(&mut Shell)) -> u64 {
-    let ran = with_app(|cx| {
-        SHELL.with(|s| {
-            if let Some(shell) = s.borrow().as_ref().and_then(|w| w.upgrade()) {
-                shell.update(cx, |shell, cx| {
-                    f(shell);
-                    cx.notify();
-                });
-            }
-        })
-    });
-    match ran {
-        Some(()) => sk_runtime::redjs::api::Value::undefined().0,
-        None => sk_runtime::bridge::throw_error(g, 1, "__sk_*: called outside a published phase"),
-    }
-}
-
 host_fn!(fn sk_set_status(g, args) {
     let text = unsafe { sk_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }
         .unwrap_or_default();
     // The CURRENT value, not a stream: a 2 Hz status ticker must not evict the log ring.
-    sk_tree::log::set_status(text.clone());
-    update_shell(g, move |shell| shell.status = text)
+    sk_tree::log::set_status(text);
+    sk_runtime::redjs::api::Value::undefined().0
 });
 
 host_fn!(fn sk_perf_mark(g, args) {
@@ -480,13 +461,8 @@ host_fn!(fn sk_perf_mark(g, args) {
 host_fn!(fn sk_log(g, args) {
     let text = unsafe { sk_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }
         .unwrap_or_default();
-    sk_tree::log::record("log", text.clone());
-    update_shell(g, move |shell| {
-        shell.log.push(text);
-        if shell.log.len() > 8 {
-            shell.log.remove(0);
-        }
-    })
+    sk_tree::log::record("log", text);
+    sk_runtime::redjs::api::Value::undefined().0
 });
 
 /// The per-frame JS pump: runs before the frame's draw, so `cx.notify()` from a host fn lands in the same frame.
@@ -676,42 +652,13 @@ impl Shell {
                     .text_size(px(13.))
                     .child(self.title.clone()),
             )
+            // `flex_1().min_h(0)` gives the app root a definite box; an auto-height slot would break
+            // `h-full`, `overflow: auto` and `position: fixed` inside the app.
             .child(
                 div()
                     .flex_1()
-                    .p(px(24.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(16.))
-                    // `flex_1().min_h(0)` gives the app root a definite box; an auto-height slot would
-                    // break `h-full`, `overflow: auto` and `position: fixed` inside the app.
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h(px(0.))
-                            .child(sk_tree::build_root(window, cx)),
-                    )
-                    .child(
-                        div()
-                            .p(px(12.))
-                            .bg(rgba(0xffffff0d))
-                            .rounded(px(12.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(rgba(0xffffff90))
-                                    .child(self.status.clone()),
-                            )
-                            .children(self.log.iter().map(|line| {
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(rgba(0xffffff70))
-                                    .child(line.clone())
-                            })),
-                    ),
+                    .min_h(px(0.))
+                    .child(sk_tree::build_root(window, cx)),
             )
             .children(window_controls_overlay())
             .children(inspector_overlay())
@@ -1200,11 +1147,7 @@ fn run_app() {
                 // Before the first frame is presented, so a test host is never seen in front.
                 quiet::send_to_back(window);
                 publish_video_device();
-                let shell = cx.new(|_| Shell {
-                    status: "booting JS…".into(),
-                    log: Vec::new(),
-                    title: cfg.title.clone(),
-                });
+                let shell = cx.new(|_| Shell { title: cfg.title.clone() });
                 SHELL.with(|s| *s.borrow_mut() = Some(shell.downgrade()));
                 window::init(&cfg, window, cx);
                 // The pipe thread raises it directly: the foreground grant is short-lived.
