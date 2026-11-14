@@ -69,12 +69,11 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: sk-aot-cargo-${{ hashFiles('tools/sk-aot/Cargo.lock') }}
+      # pwsh, not bash: Git's /usr/bin/link.exe shadows MSVC's on bash's PATH.
       - name: Build
-        shell: bash
+        shell: pwsh
         working-directory: tools/sk-aot
-        run: |
-          cargo fmt --check
-          cargo build --release --locked
+        run: cargo fmt --check && cargo build --release --locked
 
       - name: Check
         shell: bash
