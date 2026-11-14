@@ -19,7 +19,8 @@ dist/
 # Pinned contributor toolchain (see crates/sk-effects/tools/slang.manifest.json).
 # `bun scripts/fetch-slang.ts` populates it; nothing in `cargo build`
 # needs it, because the generated effect HLSL is checked in.
-/tools/
+/tools/*
+!/tools/sk-aot/
 
 # Fetched Lottie measurement corpus (crates/sk-lottie/tools/fetch-corpus.sh).
 # Third-party After Effects exports, pinned by commit, measured but not

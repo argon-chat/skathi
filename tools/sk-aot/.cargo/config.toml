@@ -1,0 +1,10 @@
+[build]
+target = "x86_64-pc-windows-msvc"
+
+# The JSC prebuilt and redjs's C++ are /MT.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608", "--cfg=bun_sema_mimalloc"]
+
+[env]
+BUN_CODEGEN_DIR = { value = ".cache/bun/build/release-codegen/codegen", relative = true }
+REDJS_AOT_BUILTIN_TABLE_DIR = { value = ".cache/table", relative = true }

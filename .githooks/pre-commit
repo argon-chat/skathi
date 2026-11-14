@@ -8,12 +8,10 @@ rust=$(printf '%s\n' "$staged" | grep '\.rs$')
 if [ -n "$rust" ]; then
   unformatted=""
   for file in $rust; do
-    crate=$(printf '%s' "$file" | sed -n 's#^\(crates/[^/]*\)/.*#\1#p')
-    edition=2021
-    if [ -n "$crate" ] && [ -f "$crate/Cargo.toml" ]; then
-      edition=$(sed -n 's/^edition *= *"\([0-9]*\)".*/\1/p' "$crate/Cargo.toml" | head -n1)
-      [ -n "$edition" ] || edition=2021
-    fi
+    dir=$(dirname "$file")
+    while [ "$dir" != "." ] && [ ! -f "$dir/Cargo.toml" ]; do dir=$(dirname "$dir"); done
+    edition=$(sed -n 's/^edition *= *"\([0-9]*\)".*/\1/p' "$dir/Cargo.toml" 2>/dev/null | head -n1)
+    [ -n "$edition" ] || edition=2021
     rustfmt --check --edition "$edition" "$file" >/dev/null 2>&1 || unformatted="$unformatted $file"
   done
   if [ -n "$unformatted" ]; then

@@ -1,0 +1,34 @@
+[package]
+name = "sk-aot"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Not a member of the repository's workspace: it builds on Bun's pinned nightly.
+[workspace]
+exclude = [".cache"]
+
+[dependencies]
+bun_aot = { path = ".cache/bun/src/aot" }
+bun_bundler = { path = ".cache/bun/src/bundler" }
+bun_sema_standalone = { path = ".cache/bun/src/sema/standalone" }
+bun_sema_driver = { path = ".cache/bun/src/sema/driver" }
+bun_options_types = { path = ".cache/bun/src/options_types" }
+bun_ast = { path = ".cache/bun/src/ast" }
+bun_alloc = { path = ".cache/bun/src/bun_alloc" }
+bun_core = { path = ".cache/bun/src/bun_core" }
+bun_dotenv = { path = ".cache/bun/src/dotenv" }
+bun_event_loop = { path = ".cache/bun/src/event_loop" }
+bun_resolver = { path = ".cache/bun/src/resolver" }
+bun_zstd = { path = ".cache/bun/src/zstd" }
+const_format = "0.2"
+redjs = { path = "../../vendor/redjs/redjs", default-features = false, features = ["native-aot"] }
+
+[build-dependencies]
+cc = "1"
+
+[profile.release]
+codegen-units = 16
+debug = "line-tables-only"
+panic = "abort"
