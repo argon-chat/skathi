@@ -1,7 +1,7 @@
 // It paints nothing, but its CSS `visibility` is `visible`, so it takes focus.
 import { createApp, defineComponent, h, nextTick, onMounted, ref, Teleport } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 type Out = { log: string[]; active: string[] };
 const out: Out = { log: [], active: [] };

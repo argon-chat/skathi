@@ -194,7 +194,7 @@ function removeGlobalListener(target: object, rawName: string, fn: EventHandler,
 type GlobalTargetLike = {
   addEventListener?: (name: string, fn: EventHandler, opts?: ListenerOptions) => void;
   removeEventListener?: (name: string, fn: EventHandler, opts?: ListenerOptions) => void;
-  dispatchEvent?: (event: SkEvent) => boolean;
+  dispatchEvent?: (event: Event) => boolean;
 };
 
 export type GlobalEventMethods = {
@@ -246,7 +246,7 @@ export function interceptGlobalTarget(target: object | undefined): void {
   if (bridge && !slot) throw new TypeError("The host global-events bridge has no slot for this target");
   const { add: nativeAdd, remove: nativeRemove, dispatch: nativeDispatch } = nativeListenFns(target);
   const delegate: GlobalEventMethods = {
-    dispatch: (event: SkEvent) => {
+    dispatch: (event: Event) => {
       const name = event && typeof event.type === "string" ? canonicalEvent(event.type) : "";
       if (keptByRuntime(name)) {
         if (target === globalThis.document) return propagateAtDocument(name, event);

@@ -2,19 +2,18 @@
 import { appStorage } from "@skathi-native/runtime";
 import { onMounted, ref } from "vue";
 import Card from "../components/Card.vue";
-import Missing from "../components/Missing.vue";
 import Page from "../components/Page.vue";
-import { describe, idb, storage } from "../engine";
+import { describe } from "../engine";
 import { appName } from "../product";
 
 const visits = ref(0);
 const note = ref("");
 onMounted(() => {
-  if (!storage) return;
-  visits.value = Number(storage.getItem("visits") ?? 0) + 1;
-  storage.setItem("visits", String(visits.value));
-  note.value = storage.getItem("note") ?? "";
+  visits.value = Number(localStorage.getItem("visits") ?? 0) + 1;
+  localStorage.setItem("visits", String(visits.value));
+  note.value = localStorage.getItem("note") ?? "";
 });
+const saveNote = () => localStorage.setItem("note", note.value);
 
 interface Todo {
   id: number;
@@ -24,32 +23,31 @@ const todos = ref<Todo[]>([]);
 const draft = ref("");
 const status = ref("");
 
-const done = <T,>(request: SkIDBRequest<T>) =>
+const done = <T,>(request: IDBRequest<T>) =>
   new Promise<T>((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 
-let db: SkIDBDatabase | null = null;
+let db: IDBDatabase | null = null;
 async function store(mode: "readonly" | "readwrite") {
-  if (!idb) throw new Error("no IndexedDB");
   if (!db) {
-    const open = idb.open(appName, 1);
+    const open = indexedDB.open(appName, 1);
     open.onupgradeneeded = () => open.result.createObjectStore("todos", { keyPath: "id", autoIncrement: true });
     db = await done(open);
   }
   return db.transaction("todos", mode).objectStore("todos");
 }
 
-async function update(change?: (todos: SkIDBObjectStore) => SkIDBRequest) {
+async function update(change?: (todos: IDBObjectStore) => IDBRequest) {
   try {
     if (change) await done(change(await store("readwrite")));
-    todos.value = await done((await store("readonly")).getAll() as SkIDBRequest<Todo[]>);
+    todos.value = await done((await store("readonly")).getAll() as IDBRequest<Todo[]>);
   } catch (e) {
     status.value = describe(e);
   }
 }
-onMounted(() => idb && update());
+onMounted(() => update());
 
 function add() {
   const text = draft.value.trim();
@@ -62,32 +60,21 @@ function add() {
 <template>
   <Page title="Storage" lead="The web's storage APIs, kept on disk in the app's own data folder between runs.">
     <Card title="localStorage" api="localStorage">
-      <template v-if="storage">
-        <p class="muted">This page was opened {{ visits }} times, counting earlier runs.</p>
-        <input
-          v-model="note"
-          class="input"
-          placeholder="A note that survives a restart"
-          @input="storage.setItem('note', note)"
-        />
-      </template>
-      <Missing v-else part="storages" />
+      <p class="muted">This page was opened {{ visits }} times, counting earlier runs.</p>
+      <input v-model="note" class="input" placeholder="A note that survives a restart" @input="saveNote" />
     </Card>
 
     <Card title="IndexedDB" api="indexedDB">
-      <template v-if="idb">
-        <div class="row">
-          <input v-model="draft" class="input grow" placeholder="Something to do" @keyup.enter="add" />
-          <button class="btn primary" @click="add">Add</button>
-        </div>
-        <div v-for="todo in todos" :key="todo.id" class="todo">
-          <span>{{ todo.text }}</span>
-          <button class="btn" @click="update((s) => s.delete(todo.id))">Done</button>
-        </div>
-        <p v-if="!todos.length" class="faint">Nothing yet. Items are rows in a SQLite file under the data folder.</p>
-        <p v-if="status" class="faint">{{ status }}</p>
-      </template>
-      <Missing v-else part="indexeddb" />
+      <div class="row">
+        <input v-model="draft" class="input grow" placeholder="Something to do" @keyup.enter="add" />
+        <button class="btn primary" @click="add">Add</button>
+      </div>
+      <div v-for="todo in todos" :key="todo.id" class="todo">
+        <span>{{ todo.text }}</span>
+        <button class="btn" @click="update((s) => s.delete(todo.id))">Done</button>
+      </div>
+      <p v-if="!todos.length" class="faint">Nothing yet. Items are rows in a SQLite file under the data folder.</p>
+      <p v-if="status" class="faint">{{ status }}</p>
     </Card>
 
     <Card title="Where it goes" api="appStorage">

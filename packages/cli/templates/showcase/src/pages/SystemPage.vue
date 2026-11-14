@@ -3,7 +3,7 @@ import { appDevtools, appHost, appLaunch, appShell, appStorage, type SkLaunchEve
 import { onMounted, onUnmounted, ref } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
-import { describe, storage } from "../engine";
+import { describe } from "../engine";
 
 const status = ref("");
 const launches = ref<string[]>([]);
@@ -19,7 +19,7 @@ async function run(action: Promise<void>) {
 }
 
 // Fires in the running app when the exe is started again under "singleInstance": true, or opened by a URL it owns.
-const onLaunch = (event: SkEvent) => {
+const onLaunch = (event: Event) => {
   const { source, argv } = event as SkLaunchEvent;
   launches.value = [`${source}: ${argv.join(" ")}`, ...launches.value].slice(0, 4);
 };
@@ -37,7 +37,7 @@ onUnmounted(off);
         <button class="btn" @click="run(appShell.openExternal('https://github.com/argon-chat/skathi'))">
           Open the Skathi repository
         </button>
-        <button v-if="storage" class="btn" @click="run(appShell.openPath(appStorage.folder))">
+        <button v-if="appStorage.folder" class="btn" @click="run(appShell.openPath(appStorage.folder))">
           Open the data folder
         </button>
         <span class="faint">{{ status }}</span>

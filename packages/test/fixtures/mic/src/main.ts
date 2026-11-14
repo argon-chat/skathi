@@ -6,12 +6,12 @@ const settings: string[] = [];
 const changes: string[] = [];
 const tracks: MediaStreamTrack[] = [];
 
-navigator!.permissions!.query({ name: "microphone" }).then((st) => {
+navigator.permissions.query({ name: "microphone" }).then((st) => {
   st.addEventListener("change", () => changes.push(st.state));
 });
 
 function open(constraints: MediaStreamConstraints = { audio: true }) {
-  navigator!.mediaDevices.getUserMedia(constraints).then(
+  navigator.mediaDevices.getUserMedia(constraints).then(
     (ms) => {
       const t = ms.getAudioTracks()[0]!;
       tracks.push(t);
@@ -29,10 +29,10 @@ function stopAll() {
 
 async function localDevices(kind: string, request: boolean): Promise<MediaDeviceInfo[]> {
   if (request && kind === "audioinput") {
-    const stream = await navigator!.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     for (const track of stream.getTracks()) track.stop();
   }
-  return (await navigator!.mediaDevices.enumerateDevices()).filter((d) => d.kind === kind);
+  return (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === kind);
 }
 
 function devices(kind: string, request = true) {

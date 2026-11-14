@@ -3,7 +3,7 @@ import { computed, ref, onMounted, onBeforeUnmount } from "vue";
 import { appWindow } from "@skathi-native/runtime";
 import { state, currentWindow, setTab } from "../store";
 
-const isMac = navigator!.platform.startsWith("Mac");
+const isMac = navigator.platform.startsWith("Mac");
 const isFullscreen = ref(appWindow.isFullscreen());
 const onFullscreenChanged = () => {
   isFullscreen.value = appWindow.isFullscreen();

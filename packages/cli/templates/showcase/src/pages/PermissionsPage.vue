@@ -3,7 +3,7 @@ import { appPermissions } from "@skathi-native/runtime";
 import { onMounted, onUnmounted, ref } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
-import { describe, nav } from "../engine";
+import { describe } from "../engine";
 
 const rows = ref(appPermissions.list());
 const asking = ref("");
@@ -30,7 +30,7 @@ async function request(name: string) {
 
 async function tryMicrophone() {
   try {
-    const stream = await nav.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     status.value = stream.getAudioTracks()[0]?.label ?? "a microphone";
     for (const track of stream.getTracks()) track.stop();
   } catch (e) {

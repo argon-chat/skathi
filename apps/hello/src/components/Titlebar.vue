@@ -7,9 +7,8 @@ import { appWindow } from "@skathi-native/runtime";
 
 const hostControls = ref(Boolean(appWindow.chrome.hostControls));
 const maximized = ref(appWindow.isMaximized());
-// engine.d.ts types `document` as `SkDocument | undefined` because the bun test harness has none.
-const doc = document!;
-const wco = navigator!.windowControlsOverlay;
+const doc = document;
+const wco = navigator.windowControlsOverlay;
 const title = ref(doc.title);
 
 const MIN = "–";

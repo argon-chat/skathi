@@ -115,9 +115,9 @@ for (const type of HANDLER_ATTRS) {
       const el = this;
       const entry = {
         fn,
-        listener: (ev: SkEvent) => {
+        listener: (ev: Event) => {
           if (typeof entry.fn !== "function") return;
-          const r = (entry.fn as (this: unknown, ev: SkEvent) => unknown).call(el, ev);
+          const r = (entry.fn as (this: unknown, ev: Event) => unknown).call(el, ev);
           if (r === false) ev.preventDefault?.();
         },
       };
@@ -218,7 +218,7 @@ export function synthesize(
   key: string | undefined,
   data?: unknown,
   tag?: string,
-): SkEvent {
+): Event {
   const common = { bubbles: !NO_BUBBLE.has(name), cancelable: !NO_BUBBLE.has(name) && !NOT_CANCELABLE.has(name) };
   const M = mods(d);
   try {
@@ -290,7 +290,7 @@ export function synthesize(
         // Chromium makes all three cancelable; cancelling one does nothing.
         const Composition = theGlobal("CompositionEvent");
         if (typeof Composition === "function")
-          return new (Composition as new (type: string, init: Record<string, unknown>) => SkEvent)(name, {
+          return new (Composition as new (type: string, init: Record<string, unknown>) => Event)(name, {
             bubbles: true,
             cancelable: true,
             composed: true,
@@ -376,7 +376,7 @@ export function synthesize(
 
 type ExtraProps = Record<string, unknown>;
 
-export function withProps(ev: SkEvent, props: Record<string, unknown>): SkEvent {
+export function withProps(ev: Event, props: Record<string, unknown>): Event {
   for (const k in props) Object.defineProperty(ev, k, { value: props[k], configurable: true });
   return ev;
 }
@@ -403,9 +403,9 @@ const EVENT_PHASE = { none: 0, capturing: 1, atTarget: 2, bubbling: 3 } as const
 
 /** One listener call. A throwing listener does not end the dispatch: the error is reported from a microtask, after the walk. */
 export function callListener(
-  fn: (this: unknown, ev: SkEvent) => unknown,
+  fn: (this: unknown, ev: Event) => unknown,
   self: unknown,
-  ev: SkEvent,
+  ev: Event,
   passive = false,
 ): void {
   // A passive listener's `preventDefault()` does nothing (`passiveOf`). An own
@@ -433,7 +433,7 @@ function invoke(
   buckets: Buckets,
   phase: Phase,
   eventPhase: number,
-  ev: SkEvent,
+  ev: Event,
   node: PropagationTarget,
   name: string,
   state: PropagationState,
@@ -471,7 +471,7 @@ function invoke(
   else if (appRoot) syncListenerFlag(appRoot, name);
 }
 
-export function propagate(target: MirrorNode, name: string, ev: SkEvent): boolean {
+export function propagate(target: MirrorNode, name: string, ev: Event): boolean {
   const path: PropagationTarget[] = [];
   for (let n: MirrorNode | null = target; n; n = n.parentNode) path.push(n);
   if (globalHandlers.size) {
@@ -513,12 +513,12 @@ export function propagate(target: MirrorNode, name: string, ev: SkEvent): boolea
 }
 
 /** An event targeted at the document (`selectionchange`): window capture, the document's own, then window bubble if it bubbles. */
-export function propagateAtDocument(name: string, ev: SkEvent): boolean {
+export function propagateAtDocument(name: string, ev: Event): boolean {
   const document = globalThis.document as object | undefined;
   return document ? propagateAtGlobal(document, name, ev) : true;
 }
 
-export function propagateAtGlobal(target: object, name: string, ev: SkEvent): boolean {
+export function propagateAtGlobal(target: object, name: string, ev: Event): boolean {
   const windowTarget = target === globalThis;
   Object.defineProperty(ev, "target", { value: target, configurable: true });
   const state = { stopped: false, immediate: false };

@@ -14,10 +14,8 @@ interface Geometry {
   extended: boolean;
 }
 
-// Under sk-app both exist before this module evaluates — asserted once, here, rather than at
-// twelve call sites.
-const doc = document!;
-const wco = navigator!.windowControlsOverlay;
+const doc = document;
+const wco = navigator.windowControlsOverlay;
 
 const geom = ref<Partial<Geometry>>({});
 const maximized = ref(false);
@@ -111,10 +109,7 @@ onUnmounted(() => Object.values(MQ).forEach((m) => m.removeEventListener("change
 const nudge = (dx: number, dy: number) =>
   appWindow.setBounds({ x: appWindow.getBounds().x + dx, y: appWindow.getBounds().y + dy });
 const grow = (d: number) => resizeBy(d, d);
-// `documentElement` is `unknown` on `SkDocument` and cannot be narrowed by a merge (apps/env.d.ts
-// says why), so it is cast at this one use.
-const toggleFullscreen = () =>
-  doc.fullscreenElement ? doc.exitFullscreen() : (doc.documentElement as SkElement).requestFullscreen();
+const toggleFullscreen = () => (doc.fullscreenElement ? doc.exitFullscreen() : doc.documentElement.requestFullscreen());
 </script>
 
 <template>

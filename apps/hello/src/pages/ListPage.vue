@@ -6,7 +6,7 @@ const session = useSession();
 
 const rows = Array.from({ length: 25 }, (_, i) => `row ${i + 1}`);
 const scrollTop = ref(0);
-const onScroll = (e: SkEvent) => (scrollTop.value = (e.target as SkElement).scrollTop);
+const onScroll = (e: Event) => (scrollTop.value = (e.target as HTMLElement).scrollTop);
 const wheelY = ref(0);
 
 onActivated(() => console.log("[app] ListPage ACTIVATED (scrollTop=" + scrollTop.value + ")"));

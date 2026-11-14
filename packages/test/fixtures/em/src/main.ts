@@ -2,7 +2,7 @@
 import { createApp, h } from "@skathi-native/runtime";
 import "./em.css";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 dom.documentElement.style.fontSize = "14px";
 

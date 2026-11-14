@@ -11,7 +11,7 @@ import {
   SkWindow,
 } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 interface Item {
   thumb: string;
@@ -219,7 +219,7 @@ async function copyPicture() {
   if (!item) return;
   try {
     const blob = await (await fetch!(item.full)).blob();
-    await navigator!.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
     S.actions.push(`copy:ok:${blob.size}`);
   } catch (e) {
     S.actions.push(`copy:error:${(e as Error).name}:${(e as Error).message}`);
@@ -558,7 +558,7 @@ createApp({
   /** Reads the clipboard back the way a paste would, into `S.readBack`. */
   readBack() {
     S.readBack = "";
-    navigator!.clipboard.read().then(
+    navigator.clipboard.read().then(
       async ([item]) => {
         const png = new Uint8Array(await (await item!.getType("image/png")).arrayBuffer());
         S.readBack = `${item!.types.join(",")}:${png.length}:${png[0]}`;

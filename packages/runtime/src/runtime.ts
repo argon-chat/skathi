@@ -126,8 +126,8 @@ export function createApp(rootComponent: unknown, rootProps: Record<string, unkn
     if (typeof container === "string") {
       // Root-only native entries use '#app' without an index.html container: prefer a real element, else keep that alias.
       const resolved = (
-        globalThis.document?.querySelector as ((selector: string) => MirrorElement | null) | undefined
-      )?.(container);
+        globalThis.document as unknown as { querySelector?: (selector: string) => MirrorElement | null } | undefined
+      )?.querySelector?.(container);
       const legacyRoot = !resolved && container === "#app";
       if (legacyRoot) explicitContainer = false;
       const found = resolved ?? (legacyRoot ? root : null);

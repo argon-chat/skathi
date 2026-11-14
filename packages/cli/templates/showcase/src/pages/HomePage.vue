@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import Icon from "../components/Icon.vue";
-import { http } from "../engine";
 import { productName } from "../product";
 import { pages } from "../router";
 import { useCounter } from "../stores/counter";
@@ -12,7 +11,7 @@ const features = pages.filter((p) => p.blurb);
 // A relative URL resolves against the app root in dev and against the packaged assets in a build.
 const greeting = ref("");
 onMounted(async () => {
-  const res = await http("assets/hello.txt");
+  const res = await fetch("assets/hello.txt");
   if (res.ok) greeting.value = (await res.text()).trim();
 });
 </script>

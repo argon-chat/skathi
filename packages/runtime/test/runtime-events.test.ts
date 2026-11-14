@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { createRuntime, type MirrorElement } from "./runtime-harness";
 
 type Rt = ReturnType<typeof createRuntime>;
-type MediaEv = SkEvent & { currentTime: number; detail: { duration: number } };
+type MediaEv = Event & { currentTime: number; detail: { duration: number } };
 
 const stub = (rt: Rt, id?: number) => rt.el(id) as unknown as MirrorElement;
 

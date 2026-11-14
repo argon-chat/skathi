@@ -2,7 +2,6 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
-import { dom } from "../engine";
 
 const name = ref("");
 const plan = ref("team");
@@ -14,8 +13,8 @@ const price = () => seats.value * (plan.value === "team" ? 8 : 15) * (yearly.val
 // Selection is the document's, as in a browser: drag over the paragraph, or double-click a word.
 const selected = ref("");
 const onSelection = () => (selected.value = getSelection()?.toString() ?? "");
-onMounted(() => dom.addEventListener("selectionchange", onSelection));
-onUnmounted(() => dom.removeEventListener("selectionchange", onSelection));
+onMounted(() => document.addEventListener("selectionchange", onSelection));
+onUnmounted(() => document.removeEventListener("selectionchange", onSelection));
 </script>
 
 <template>

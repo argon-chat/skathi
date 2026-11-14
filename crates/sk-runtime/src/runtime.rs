@@ -116,6 +116,7 @@ impl JsRuntime {
             );
             assert_eq!(rc, 0, "redjs_webshim_install failed: {rc}");
             ffi::redjs_set_uncaught_handler(on_uncaught as *const c_void);
+            crate::unsupported::install(ctx.raw());
         }
         RUNTIME.with(|r| {
             r.set(JsRuntime { ctx })

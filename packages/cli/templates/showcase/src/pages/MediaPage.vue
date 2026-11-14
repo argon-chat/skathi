@@ -3,7 +3,7 @@ import { ref } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
 
-const video = ref<SkMediaElement | null>(null);
+const video = ref<HTMLVideoElement | null>(null);
 const playing = ref(true);
 const toggleVideo = () => {
   if (!video.value) return;

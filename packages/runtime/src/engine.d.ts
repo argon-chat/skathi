@@ -1,15 +1,14 @@
-// What the JS engine provides. tsconfig omits lib.dom on purpose: a name missing here
-// must fail to type-check, and the `typeof X === "function"` probes stay meaningful for the
-// engine-revision-dependent classes below. Declare a symbol only if redjs really has it.
+// What the JS engine provides, under the web's names. tsconfig omits lib.dom on purpose: a name
+// missing here must fail to type-check. Declare a symbol only if redjs really has it.
 
-interface SkConsole {
+interface Console {
   log(...args: unknown[]): void;
   warn(...args: unknown[]): void;
   error(...args: unknown[]): void;
   info?(...args: unknown[]): void;
   debug?(...args: unknown[]): void;
 }
-declare var console: SkConsole;
+declare var console: Console;
 
 declare function setTimeout(fn: () => void, ms?: number): number;
 declare function clearTimeout(handle: number | undefined): void;
@@ -17,21 +16,25 @@ declare function setInterval(fn: () => void, ms?: number): number;
 declare function clearInterval(handle: number | undefined): void;
 declare var queueMicrotask: (cb: () => void) => void;
 
-/** Runs once per PAINTED frame. Absent in the unit-test harness, so callers probe; hence `var`. */
-declare var requestAnimationFrame: ((cb: (t: number) => void) => number) | undefined;
-declare var cancelAnimationFrame: ((handle: number) => void) | undefined;
+type FrameRequestCallback = (time: number) => void;
+/** Runs once per PAINTED frame. */
+declare function requestAnimationFrame(callback: FrameRequestCallback): number;
+declare function cancelAnimationFrame(handle: number): void;
 
-interface SkEventInit {
+interface EventInit {
   bubbles?: boolean;
   cancelable?: boolean;
   composed?: boolean;
 }
 
-interface SkEvent {
+interface Event {
   readonly type: string;
   readonly bubbles: boolean;
   readonly cancelable: boolean;
+  readonly composed: boolean;
   readonly defaultPrevented: boolean;
+  readonly isTrusted: boolean;
+  readonly timeStamp: number;
   target: unknown;
   currentTarget: unknown;
   readonly eventPhase: number;
@@ -40,211 +43,455 @@ interface SkEvent {
   stopPropagation(): void;
   stopImmediatePropagation(): void;
 }
-
 declare var Event: {
-  new (type: string, init?: SkEventInit): SkEvent;
-  prototype: SkEvent;
+  new (type: string, eventInitDict?: EventInit): Event;
+  prototype: Event;
 };
 
-interface SkCustomEvent<T = unknown> extends SkEvent {
+interface CustomEventInit<T = unknown> extends EventInit {
+  detail?: T;
+}
+interface CustomEvent<T = unknown> extends Event {
   readonly detail: T;
 }
 declare var CustomEvent: {
-  new <T = unknown>(type: string, init?: SkEventInit & { detail?: T }): SkCustomEvent<T>;
-  prototype: SkCustomEvent;
+  new <T = unknown>(type: string, eventInitDict?: CustomEventInit<T>): CustomEvent<T>;
+  prototype: CustomEvent;
 };
 
-interface SkEventTarget {
+interface EventListenerOptions {
+  capture?: boolean;
+}
+interface AddEventListenerOptions extends EventListenerOptions {
+  once?: boolean;
+  passive?: boolean;
+  signal?: AbortSignal;
+}
+
+interface EventTarget {
   addEventListener(
     type: string,
-    listener: (ev: SkEvent) => void,
-    options?: boolean | { capture?: boolean; once?: boolean },
+    listener: ((ev: Event) => unknown) | null,
+    options?: boolean | AddEventListenerOptions,
   ): void;
-  removeEventListener(type: string, listener: (ev: SkEvent) => void, options?: boolean | { capture?: boolean }): void;
-  dispatchEvent(ev: SkEvent): boolean;
+  removeEventListener(
+    type: string,
+    listener: ((ev: Event) => unknown) | null,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  dispatchEvent(event: Event): boolean;
 }
 declare var EventTarget: {
-  new (): SkEventTarget;
-  prototype: SkEventTarget;
+  new (): EventTarget;
+  prototype: EventTarget;
 };
 
-interface SkModifierInit {
+interface AbortSignal extends EventTarget {
+  readonly aborted: boolean;
+  readonly reason: unknown;
+  onabort: ((ev: Event) => unknown) | null;
+  throwIfAborted(): void;
+}
+declare var AbortSignal: {
+  new (): AbortSignal;
+  prototype: AbortSignal;
+  abort(reason?: unknown): AbortSignal;
+  timeout(milliseconds: number): AbortSignal;
+  any(signals: AbortSignal[]): AbortSignal;
+};
+interface AbortController {
+  readonly signal: AbortSignal;
+  abort(reason?: unknown): void;
+}
+declare var AbortController: { new (): AbortController; prototype: AbortController };
+
+interface EventModifierInit {
   ctrlKey?: boolean;
   shiftKey?: boolean;
   altKey?: boolean;
   metaKey?: boolean;
 }
 
-interface SkMouseEventInit extends SkEventInit, SkModifierInit {
-  clientX?: number;
-  clientY?: number;
-  button?: number;
-  buttons?: number;
+interface UIEventInit extends EventInit {
   detail?: number;
 }
-interface SkMouseEvent extends SkEvent, Required<SkModifierInit> {
+interface UIEvent extends Event {
+  readonly detail: number;
+  readonly view: unknown;
+  readonly which: number;
+}
+declare var UIEvent: { new (type: string, eventInitDict?: UIEventInit): UIEvent; prototype: UIEvent };
+
+interface MouseEventInit extends UIEventInit, EventModifierInit {
+  screenX?: number;
+  screenY?: number;
+  clientX?: number;
+  clientY?: number;
+  movementX?: number;
+  movementY?: number;
+  button?: number;
+  buttons?: number;
+  relatedTarget?: unknown;
+}
+interface MouseEvent extends UIEvent {
+  readonly ctrlKey: boolean;
+  readonly shiftKey: boolean;
+  readonly altKey: boolean;
+  readonly metaKey: boolean;
+  readonly screenX: number;
+  readonly screenY: number;
   readonly clientX: number;
   readonly clientY: number;
+  readonly pageX: number;
+  readonly pageY: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+  readonly movementX: number;
+  readonly movementY: number;
+  readonly x: number;
+  readonly y: number;
   readonly button: number;
   readonly buttons: number;
-  readonly detail: number;
+  readonly relatedTarget: unknown;
+  getModifierState(keyArg: string): boolean;
 }
 declare var MouseEvent: {
-  new (type: string, init?: SkMouseEventInit): SkMouseEvent;
-  prototype: SkMouseEvent;
+  new (type: string, eventInitDict?: MouseEventInit): MouseEvent;
+  prototype: MouseEvent;
 };
 
-interface SkPointerEventInit extends SkMouseEventInit {
+interface PointerEventInit extends MouseEventInit {
   pointerId?: number;
   pointerType?: string;
   isPrimary?: boolean;
   width?: number;
   height?: number;
   pressure?: number;
+  tangentialPressure?: number;
+  tiltX?: number;
+  tiltY?: number;
+  twist?: number;
 }
-interface SkPointerEvent extends SkMouseEvent {
+interface PointerEvent extends MouseEvent {
   readonly pointerId: number;
   readonly pointerType: string;
   readonly isPrimary: boolean;
+  readonly width: number;
+  readonly height: number;
   readonly pressure: number;
+  readonly tangentialPressure: number;
+  readonly tiltX: number;
+  readonly tiltY: number;
+  readonly twist: number;
+  getCoalescedEvents(): PointerEvent[];
+  getPredictedEvents(): PointerEvent[];
 }
-/** Engine-revision-dependent — probe before constructing. */
-declare var PointerEvent:
-  { new (type: string, init?: SkPointerEventInit): SkPointerEvent; prototype: SkPointerEvent } | undefined;
+declare var PointerEvent: {
+  new (type: string, eventInitDict?: PointerEventInit): PointerEvent;
+  prototype: PointerEvent;
+};
 
-interface SkKeyboardEvent extends SkEvent, Required<SkModifierInit> {
+interface KeyboardEventInit extends UIEventInit, EventModifierInit {
+  key?: string;
+  code?: string;
+  location?: number;
+  repeat?: boolean;
+  isComposing?: boolean;
+}
+interface KeyboardEvent extends UIEvent {
+  readonly ctrlKey: boolean;
+  readonly shiftKey: boolean;
+  readonly altKey: boolean;
+  readonly metaKey: boolean;
   readonly key: string;
+  readonly code: string;
+  readonly location: number;
+  readonly repeat: boolean;
+  readonly isComposing: boolean;
+  getModifierState(keyArg: string): boolean;
 }
-declare var KeyboardEvent:
-  | {
-      new (type: string, init?: SkEventInit & SkModifierInit & { key?: string }): SkKeyboardEvent;
-      prototype: SkKeyboardEvent;
-    }
-  | undefined;
+declare var KeyboardEvent: {
+  new (type: string, eventInitDict?: KeyboardEventInit): KeyboardEvent;
+  prototype: KeyboardEvent;
+};
 
-interface SkWheelEvent extends SkEvent, Required<SkModifierInit> {
+interface WheelEventInit extends MouseEventInit {
+  deltaX?: number;
+  deltaY?: number;
+  deltaZ?: number;
+  deltaMode?: number;
+}
+interface WheelEvent extends MouseEvent {
   readonly deltaX: number;
   readonly deltaY: number;
-  readonly clientX: number;
-  readonly clientY: number;
+  readonly deltaZ: number;
+  readonly deltaMode: number;
 }
-declare var WheelEvent:
-  | {
-      new (
-        type: string,
-        init?: SkEventInit & SkModifierInit & { deltaX?: number; deltaY?: number; clientX?: number; clientY?: number },
-      ): SkWheelEvent;
-      prototype: SkWheelEvent;
-    }
-  | undefined;
+declare var WheelEvent: { new (type: string, eventInitDict?: WheelEventInit): WheelEvent; prototype: WheelEvent };
 
-declare var FocusEvent: { new (type: string, init?: SkEventInit): SkEvent; prototype: SkEvent } | undefined;
+interface FocusEventInit extends UIEventInit {
+  relatedTarget?: unknown;
+}
+interface FocusEvent extends UIEvent {
+  readonly relatedTarget: unknown;
+}
+declare var FocusEvent: { new (type: string, eventInitDict?: FocusEventInit): FocusEvent; prototype: FocusEvent };
 
-interface SkInputEvent extends SkEvent {
+interface InputEventInit extends UIEventInit {
+  data?: string | null;
+  inputType?: string;
+  isComposing?: boolean;
+}
+interface InputEvent extends UIEvent {
   readonly data: string | null;
+  readonly inputType: string;
+  readonly isComposing: boolean;
 }
-declare var InputEvent:
-  | {
-      new (type: string, init?: SkEventInit & { data?: string | null }): SkInputEvent;
-      prototype: SkInputEvent;
-    }
-  | undefined;
+declare var InputEvent: { new (type: string, eventInitDict?: InputEventInit): InputEvent; prototype: InputEvent };
 
-interface SkTransitionEvent extends SkEvent {
+interface TransitionEventInit extends EventInit {
+  propertyName?: string;
+  elapsedTime?: number;
+  pseudoElement?: string;
+}
+interface TransitionEvent extends Event {
   readonly propertyName: string;
   readonly elapsedTime: number;
+  readonly pseudoElement: string;
 }
-declare var TransitionEvent:
-  | {
-      new (type: string, init?: SkEventInit & { propertyName?: string; elapsedTime?: number }): SkTransitionEvent;
-      prototype: SkTransitionEvent;
-    }
-  | undefined;
+declare var TransitionEvent: {
+  new (type: string, eventInitDict?: TransitionEventInit): TransitionEvent;
+  prototype: TransitionEvent;
+};
 
-interface SkAnimationEvent extends SkEvent {
+interface AnimationEventInit extends EventInit {
+  animationName?: string;
+  elapsedTime?: number;
+  pseudoElement?: string;
+}
+interface AnimationEvent extends Event {
   readonly animationName: string;
   readonly elapsedTime: number;
+  readonly pseudoElement: string;
 }
-declare var AnimationEvent:
-  | {
-      new (type: string, init?: SkEventInit & { animationName?: string; elapsedTime?: number }): SkAnimationEvent;
-      prototype: SkAnimationEvent;
-    }
-  | undefined;
+declare var AnimationEvent: {
+  new (type: string, eventInitDict?: AnimationEventInit): AnimationEvent;
+  prototype: AnimationEvent;
+};
 
-/** Real classes with an EMPTY prototype; `runtime.ts` installs the DOM surface on it. `| undefined`: the bun test harness has no `HTMLElement`. */
-declare var HTMLElement: { new (): object; prototype: object } | undefined;
+// Real classes; `runtime.ts` installs the DOM surface on their prototypes, and env.d.ts types it.
+interface Node extends EventTarget {}
+interface Element extends Node {}
+interface HTMLElement extends Element {}
+declare var HTMLElement: { new (): HTMLElement; prototype: HTMLElement };
 
-/** A property bag with no tree behind it; `runtime.ts` installs the entry points that answer from the mirror. */
-interface SkDocument {
+/** Its tree entry points are installed by `runtime.ts`; env.d.ts types them. */
+interface Document extends Node {
   title: string;
-  head: Record<string, unknown> | undefined;
-  body?: unknown;
-  documentElement?: unknown;
-  addEventListener?: (...args: unknown[]) => void;
-  removeEventListener?: (...args: unknown[]) => void;
-  [key: string]: unknown;
 }
-declare var document: SkDocument | undefined;
+declare var document: Document;
 
-/** The standard permission surface. `appPermissions` re-broadcasts `change` from it rather than opening a second native subscription. */
-interface SkPermissionStatus extends SkEventTarget {
+interface PermissionStatus extends EventTarget {
   readonly name: string;
   /** The three-word WEB projection: `"unsupported"` reads as `"denied"`. */
-  readonly state: "granted" | "denied" | "prompt";
+  readonly state: PermissionState;
+  onchange: ((ev: Event) => unknown) | null;
 }
-interface SkBatteryManager extends SkEventTarget {
+type PermissionState = "granted" | "denied" | "prompt";
+interface Permissions {
+  query(permissionDesc: { name: string }): Promise<PermissionStatus>;
+}
+
+interface BatteryManager extends EventTarget {
   readonly charging: boolean;
   readonly chargingTime: number;
   readonly dischargingTime: number;
   readonly level: number;
-  onchargingchange: ((this: SkBatteryManager, ev: SkEvent) => unknown) | null;
-  onchargingtimechange: ((this: SkBatteryManager, ev: SkEvent) => unknown) | null;
-  ondischargingtimechange: ((this: SkBatteryManager, ev: SkEvent) => unknown) | null;
-  onlevelchange: ((this: SkBatteryManager, ev: SkEvent) => unknown) | null;
+  onchargingchange: ((this: BatteryManager, ev: Event) => unknown) | null;
+  onchargingtimechange: ((this: BatteryManager, ev: Event) => unknown) | null;
+  ondischargingtimechange: ((this: BatteryManager, ev: Event) => unknown) | null;
+  onlevelchange: ((this: BatteryManager, ev: Event) => unknown) | null;
 }
 /** Exposed for branding / instanceof; direct construction throws TypeError. */
-declare var BatteryManager: (Function & { readonly prototype: SkBatteryManager }) | undefined;
+declare var BatteryManager: (Function & { readonly prototype: BatteryManager }) | undefined;
 
-interface SkNavigator {
-  readonly language?: string;
-  readonly languages?: readonly string[];
-  getBattery?(): Promise<SkBatteryManager>;
-  permissions?: {
-    query(descriptor: { name: string }): Promise<SkPermissionStatus>;
-  };
+interface Navigator {
+  readonly language: string;
+  readonly languages: readonly string[];
+  /** Only with the `battery` feature; probe before calling. */
+  getBattery?(): Promise<BatteryManager>;
+  readonly permissions: Permissions;
 }
-declare var navigator: SkNavigator | undefined;
+declare var navigator: Navigator;
 
-interface SkFetchResponse {
+type BlobPart = Blob | ArrayBuffer | ArrayBufferView | string;
+type BufferSource = ArrayBufferView | ArrayBuffer;
+interface BlobPropertyBag {
+  type?: string;
+  endings?: "transparent" | "native";
+}
+interface FilePropertyBag extends BlobPropertyBag {
+  lastModified?: number;
+}
+interface ReadableStreamReadResult<T> {
+  done: boolean;
+  value?: T;
+}
+interface ReadableStreamDefaultReader<R = unknown> {
+  read(): Promise<ReadableStreamReadResult<R>>;
+  cancel(reason?: unknown): Promise<void>;
+  releaseLock(): void;
+}
+interface ReadableStream<R = unknown> extends AsyncIterable<R> {
+  getReader(): ReadableStreamDefaultReader<R>;
+  cancel(reason?: unknown): Promise<void>;
+  readonly locked: boolean;
+}
+interface Blob {
+  readonly size: number;
+  readonly type: string;
+  arrayBuffer(): Promise<ArrayBuffer>;
+  bytes(): Promise<Uint8Array>;
+  text(): Promise<string>;
+  slice(start?: number, end?: number, contentType?: string): Blob;
+  stream(): ReadableStream<Uint8Array>;
+}
+declare var Blob: { new (blobParts?: Iterable<BlobPart>, options?: BlobPropertyBag): Blob; prototype: Blob };
+
+interface File extends Blob {
+  readonly name: string;
+  readonly lastModified: number;
+  readonly lastModifiedDate: Date;
+  readonly webkitRelativePath: string;
+}
+declare var File: {
+  new (fileBits: Iterable<BlobPart>, fileName: string, options?: FilePropertyBag): File;
+  prototype: File;
+};
+
+interface Headers {
+  get(name: string): string | null;
+  has(name: string): boolean;
+}
+interface Response {
   readonly ok: boolean;
   readonly status: number;
+  readonly statusText: string;
+  readonly url: string;
+  readonly redirected: boolean;
+  readonly headers: Headers;
   json(): Promise<unknown>;
   text(): Promise<string>;
+  arrayBuffer(): Promise<ArrayBuffer>;
+  blob(): Promise<Blob>;
 }
-declare var fetch: ((url: string, init?: Record<string, unknown>) => Promise<SkFetchResponse>) | undefined;
+type RequestInit = Record<string, unknown>;
+declare function fetch(input: string | URL, init?: RequestInit): Promise<Response>;
 
-interface SkURL {
+interface URL {
   readonly href: string;
   readonly protocol: string;
 }
-interface SkURLConstructor {
-  new (url: string, base?: string): SkURL;
-  prototype: SkURL;
-}
-declare var URL: SkURLConstructor;
+declare var URL: {
+  new (url: string | URL, base?: string | URL): URL;
+  prototype: URL;
+  createObjectURL(obj: Blob): string;
+  revokeObjectURL(url: string): void;
+};
 
-/**
- * The subset of redjs's Web Audio a native stream source touches. No `declare var AudioContext`:
- * the global is a build property, so code probes the object (`typeof ctx.createRedStreamSource`).
- */
-interface SkAudioNode {
-  connect(to: SkAudioNode): unknown;
-  disconnect(): void;
+// Web Audio.
+
+interface AudioParam {
+  value: number;
+  setValueAtTime(value: number, startTime: number): AudioParam;
+  linearRampToValueAtTime(value: number, endTime: number): AudioParam;
+  exponentialRampToValueAtTime(value: number, endTime: number): AudioParam;
+  setTargetAtTime(target: number, startTime: number, timeConstant: number): AudioParam;
+  cancelScheduledValues(cancelTime: number): AudioParam;
 }
 
-interface SkRedStreamSourceNode extends SkAudioNode {
+interface AudioNode {
+  readonly numberOfInputs: number;
+  readonly numberOfOutputs: number;
+  connect(destinationNode: AudioNode, output?: number, input?: number): AudioNode;
+  disconnect(outputOrDestination?: number | AudioNode, output?: number, input?: number): void;
+}
+
+interface GainNode extends AudioNode {
+  readonly gain: AudioParam;
+}
+
+interface OscillatorNode extends AudioNode {
+  type: string;
+  readonly frequency: AudioParam;
+  readonly detune: AudioParam;
+  onended: (() => void) | null;
+  start(when?: number): void;
+  stop(when?: number): void;
+}
+
+interface AnalyserNode extends AudioNode {
+  fftSize: number;
+  smoothingTimeConstant: number;
+  readonly frequencyBinCount: number;
+  getByteFrequencyData(array: Uint8Array): void;
+  getFloatTimeDomainData(array: Float32Array): void;
+}
+
+interface AudioBuffer {
+  readonly numberOfChannels: number;
+  readonly length: number;
+  readonly sampleRate: number;
+  readonly duration: number;
+  getChannelData(channel: number): Float32Array;
+  copyToChannel(source: Float32Array, channelNumber: number): void;
+}
+
+interface AudioBufferSourceNode extends AudioNode {
+  buffer: AudioBuffer | null;
+  onended: (() => void) | null;
+  start(when?: number): void;
+  stop(when?: number): void;
+}
+
+interface AudioNodeOptions {
+  channelCount?: number;
+  channelCountMode?: string;
+  channelInterpretation?: string;
+}
+interface ChannelSplitterOptions extends AudioNodeOptions {
+  numberOfOutputs?: number;
+}
+interface ChannelMergerOptions extends AudioNodeOptions {
+  numberOfInputs?: number;
+}
+interface ChannelSplitterNode extends AudioNode {
+  channelCount: number;
+  channelCountMode: string;
+  channelInterpretation: string;
+}
+interface ChannelMergerNode extends AudioNode {
+  channelCount: number;
+  channelCountMode: string;
+  channelInterpretation: string;
+}
+declare var ChannelSplitterNode: {
+  new (context: AudioContext, options?: ChannelSplitterOptions): ChannelSplitterNode;
+  prototype: ChannelSplitterNode;
+};
+declare var ChannelMergerNode: {
+  new (context: AudioContext, options?: ChannelMergerOptions): ChannelMergerNode;
+  prototype: ChannelMergerNode;
+};
+
+/** A native stream source: blocks pushed from JS or Rust play without a worklet. Not web API. */
+interface SkRedStreamSourceNode extends AudioNode {
   readonly streamId: number;
+  push(block: Float32Array): number;
+  readonly queuedSeconds?: number;
+  readonly ready: boolean;
+  readonly underflowed: boolean;
+  readonly overflowed: boolean;
   /** Makes a late native push report NotReady rather than dangle. Probe before use. */
   close?(): void;
 }
@@ -254,19 +501,6 @@ interface SkRedStreamSourceOptions {
   channelCount?: number;
   latencySeconds?: number;
   capacitySeconds?: number;
-}
-
-interface SkAudioParam {
-  value: number;
-  setValueAtTime(value: number, startTime: number): SkAudioParam;
-  linearRampToValueAtTime(value: number, endTime: number): SkAudioParam;
-  exponentialRampToValueAtTime(value: number, endTime: number): SkAudioParam;
-  setTargetAtTime(target: number, startTime: number, timeConstant: number): SkAudioParam;
-  cancelScheduledValues(startTime: number): SkAudioParam;
-}
-
-interface SkGainNode extends SkAudioNode {
-  readonly gain: SkAudioParam;
 }
 
 type SkNativeAudioProcessorName = "peak-meter-stereo" | "peak-meter-mono" | "stereo-to-mono" | "input-gate";
@@ -279,26 +513,45 @@ interface SkNativeAudioWorkletOptions {
   channelInterpretation?: "speakers" | "discrete";
   parameterData?: Record<string, number>;
 }
-interface SkNativeAudioMessage<T = unknown> extends SkEvent {
+interface SkNativeAudioMessage<T = unknown> extends Event {
   readonly data: T;
 }
-interface SkNativeAudioWorkletPort extends SkEventTarget {
+interface SkNativeAudioWorkletPort extends EventTarget {
   onmessage: ((event: SkNativeAudioMessage) => void) | null;
   start(): void;
   close(): void;
 }
-interface SkNativeAudioWorkletNode extends SkAudioNode {
+interface SkNativeAudioWorkletNode extends AudioNode {
   readonly processorName: SkNativeAudioProcessorName;
-  readonly parameters: ReadonlyMap<string, SkAudioParam>;
+  readonly parameters: ReadonlyMap<string, AudioParam>;
   readonly port: SkNativeAudioWorkletPort;
 }
 
-interface SkAudioContext {
+interface AudioContext {
+  readonly state: "suspended" | "running" | "closed";
+  readonly sampleRate: number;
+  readonly currentTime: number;
+  readonly destination: AudioNode;
+  readonly audioWorklet?: unknown;
+  createGain(): GainNode;
+  createOscillator(): OscillatorNode;
+  createAnalyser(): AnalyserNode;
+  createBuffer(numberOfChannels: number, length: number, sampleRate: number): AudioBuffer;
+  createBufferSource(): AudioBufferSourceNode;
+  createChannelSplitter(numberOfOutputs?: number): ChannelSplitterNode;
+  createChannelMerger(numberOfInputs?: number): ChannelMergerNode;
+  decodeAudioData(audioData: ArrayBuffer): Promise<AudioBuffer>;
+  resume(): Promise<void>;
+  suspend(): Promise<void>;
+  close(): Promise<void>;
+  /** Skathi's native stream source; not web API. */
+  createRedStreamSource(options?: SkRedStreamSourceOptions): SkRedStreamSourceNode;
+  /** Skathi's built-in native processors; not web API. */
   loadNativeAudioWorklet(
     name: SkNativeAudioProcessorName,
     options?: SkNativeAudioWorkletOptions,
   ): SkNativeAudioWorkletNode;
-  readonly destination: SkAudioNode;
-  createRedStreamSource(options?: SkRedStreamSourceOptions): SkRedStreamSourceNode;
-  createGain(): SkGainNode;
 }
+declare var AudioContext: { new (): AudioContext; prototype: AudioContext };
+/** Declared so a probe compiles; there is no offline rendering. */
+declare var OfflineAudioContext: undefined;

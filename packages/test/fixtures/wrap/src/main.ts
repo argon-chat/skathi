@@ -3,7 +3,7 @@
 import { createApp, h, type VNode } from "@skathi-native/runtime";
 import "./wrap.css";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 const A = "a".repeat(160);
 const URL = `https://example.com/files/${"b".repeat(40)}/${"c".repeat(60)}?token=${"d".repeat(48)}`;

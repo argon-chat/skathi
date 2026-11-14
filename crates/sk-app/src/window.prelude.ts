@@ -116,7 +116,7 @@
 
   // Exact values, not fuzzed. redjs has no Screen, MediaQueryList or WindowControlsOverlay class, so
   // each is an EventTarget grown into the interface; the `as` casts name the end result.
-  const orientation = new EventTarget() as SkScreenOrientation;
+  const orientation = new EventTarget() as ScreenOrientation;
   ro(orientation, "type", () => (S.screen.width >= S.screen.height ? "landscape-primary" : "portrait-primary"));
   ro(orientation, "angle", () => 0);
   orientation.lock = () => {
@@ -129,7 +129,7 @@
     return Promise.reject(e);
   };
   orientation.unlock = () => {};
-  const screenObj = new EventTarget() as SkScreen;
+  const screenObj = new EventTarget() as Screen;
   ro(screenObj, "width", () => S.screen.width);
   ro(screenObj, "height", () => S.screen.height);
   ro(screenObj, "availWidth", () => S.screen.availWidth);
@@ -154,7 +154,7 @@
   };
 
   // redjs's MediaQueryList never matches; this bridges to the sk-css evaluator `@media` uses.
-  const liveQueries = new Set<SkMediaQueryList>();
+  const liveQueries = new Set<MediaQueryList>();
   const evaluate = (q: string) => {
     const r: SkMatchMediaResult = JSON.parse(__sk_window_match_media(q));
     if (r.error) warn(`mq:${q}`, `matchMedia(${JSON.stringify(q)}) ${r.error}`);
@@ -162,7 +162,7 @@
   };
   globalThis.matchMedia = (query) => {
     const q = String(query);
-    const mql = new EventTarget() as SkMediaQueryList;
+    const mql = new EventTarget() as MediaQueryList;
     let current = evaluate(q);
     ro(mql, "media", () => q);
     ro(mql, "matches", () => current);
@@ -332,7 +332,7 @@
     }
     if (fsChanges.length) scheduleFsChanges();
   };
-  const requestFullscreen = function (this: SkFullscreenTarget, options?: SkFullscreenOptions) {
+  const requestFullscreen = function (this: SkFullscreenTarget, options?: FullscreenOptions) {
     const el = this;
     if (!el || el.isConnected === false || !el.__skId) {
       return Promise.reject(new TypeError("Fullscreen requires a connected element"));
@@ -377,8 +377,8 @@
 
   // The area available to app content; `x` is non-zero when the controls sit on the left.
   // redjs creates `navigator` lazily.
-  const nav = (globalThis.navigator ||= {});
-  const wco = new EventTarget() as SkWindowControlsOverlay;
+  const nav = (globalThis.navigator ||= {} as Navigator);
+  const wco = new EventTarget() as WindowControlsOverlay;
   ro(wco, "visible", () => S.titleBarOverlayVisible);
   wco.getTitlebarAreaRect = () => {
     const r = S.titleBarArea;
@@ -605,7 +605,7 @@
     return origAdd(type, fn, opts);
   };
 
-  const emit = (target: SkDispatchTarget, name: string, init?: SkEventInit) =>
+  const emit = (target: SkDispatchTarget, name: string, init?: EventInit) =>
     target.dispatchEvent(new Event(name, init));
 
   __sk_window_observe((kinds, json) => {

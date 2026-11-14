@@ -1,6 +1,6 @@
 import { createApp, h, ref, vModelText, withDirectives } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 type Edit = Event & { inputType: string; data: string | null; isComposing: boolean };
 

@@ -1,6 +1,6 @@
 import { createApp, h, nextTick, onMounted, ref } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 const STAGES = ["mounted", "nextTick", "raf", "late"] as const;
 

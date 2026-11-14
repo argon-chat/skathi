@@ -328,13 +328,13 @@ export function deliverFrameMessage(target: MirrorNode, key: string | undefined)
   }
   const source = frameWindow(target);
   const init = { data, origin, source, lastEventId: "", ports: [] as unknown[] };
-  let ev: SkEvent;
-  const Ctor = (globalThis as { MessageEvent?: new (type: string, init: object) => SkEvent }).MessageEvent;
+  let ev: Event;
+  const Ctor = (globalThis as { MessageEvent?: new (type: string, init: object) => Event }).MessageEvent;
   try {
     // A real MessageEvent refuses a foreign `source`, so the fields are defined on it below.
-    ev = Ctor ? new Ctor("message", { data, origin, lastEventId: "" }) : (new Event("message") as unknown as SkEvent);
+    ev = Ctor ? new Ctor("message", { data, origin, lastEventId: "" }) : (new Event("message") as unknown as Event);
   } catch {
-    ev = new Event("message") as unknown as SkEvent;
+    ev = new Event("message") as unknown as Event;
   }
   for (const k of Object.keys(init) as (keyof typeof init)[]) {
     Object.defineProperty(ev, k, { value: init[k], configurable: true, enumerable: true });

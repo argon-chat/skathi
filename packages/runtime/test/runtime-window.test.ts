@@ -99,7 +99,7 @@ describe("native fullscreen Escape", () => {
     const node = rt.nodeOps.createElement("button");
     rt.nodeOps.insert(node, rt.nodesById.get(1) as MirrorElement, null);
     const delivered: string[] = [];
-    node.addEventListener("keydown", (event) => void delivered.push((event as SkEvent & { key: string }).key));
+    node.addEventListener("keydown", (event) => void delivered.push((event as Event & { key: string }).key));
     expect(rt.host.dispatcher(node.__skId, rt.EV_CODES.keydown, 0, 0, 0, 0, "Escape")).toBe(false);
     expect(active).toBe(false);
     expect(delivered).toEqual([]);

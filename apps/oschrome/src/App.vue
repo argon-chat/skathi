@@ -4,7 +4,7 @@ import { appWindow } from "@skathi-native/runtime";
 
 // engine.d.ts types `navigator` as optional; under sk-app it is installed before this module
 // evaluates.
-const wco = navigator!.windowControlsOverlay;
+const wco = navigator.windowControlsOverlay;
 
 const state = ref<Record<string, unknown>>({});
 const read = () => {

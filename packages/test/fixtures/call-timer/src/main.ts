@@ -1,6 +1,6 @@
 import { createApp, h, reactive, ref, watch, type VNode } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 dom.documentElement.style.fontSize = "14px";
 

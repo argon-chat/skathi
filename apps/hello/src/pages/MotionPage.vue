@@ -6,7 +6,7 @@ const wide = ref(false);
 
 const ends = ref(0);
 const lastEnd = ref("—");
-const onTransitionEnd = (e: SkTransitionEvent) => {
+const onTransitionEnd = (e: TransitionEvent) => {
   ends.value++;
   lastEnd.value = `${e.propertyName} after ${e.elapsedTime}s`;
 };

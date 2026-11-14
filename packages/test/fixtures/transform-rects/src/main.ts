@@ -3,7 +3,7 @@
 import { createApp, defineComponent, h, onMounted, ref } from "@skathi-native/runtime";
 import "./transform.css";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 type Rect = [number, number, number, number];
 const rect = (el: Element | null): Rect | null => {

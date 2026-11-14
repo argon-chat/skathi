@@ -1,8 +1,8 @@
 import { createApp, h } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
-interface WindowMessage extends SkEvent {
+interface WindowMessage extends Event {
   readonly source: unknown;
   readonly origin: string;
   readonly data: unknown;
@@ -19,8 +19,8 @@ const App = {
 createApp(App).mount("#app");
 
 const log: string[] = [];
-let frame: SkIframeElement | null = null;
-let firstWindow: SkContentWindow | null = null;
+let frame: HTMLIFrameElement | null = null;
+let firstWindow: WindowProxy | null = null;
 
 window.addEventListener("message", (ev) => {
   const e = ev as WindowMessage;
@@ -83,8 +83,8 @@ g.__SK_TEST_IFRAME__ = {
   },
 
   state(): string {
-    const plain = dom.getElementById("plain") as SkIframeElement;
-    const rect = (el: SkElement): [number, number, number, number] => {
+    const plain = dom.getElementById("plain") as HTMLIFrameElement;
+    const rect = (el: HTMLElement): [number, number, number, number] => {
       const r = el.getBoundingClientRect();
       return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
     };

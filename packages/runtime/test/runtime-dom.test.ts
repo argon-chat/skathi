@@ -926,10 +926,10 @@ describe("custom events and dispatchEvent", () => {
     const { section: outer, button: inner } = tree(rt);
     const seen: string[] = [];
     const who = (t: unknown) => (t === inner ? "inner" : t === outer ? "outer" : String(t));
-    const note = (where: string) => (e: SkEvent) =>
-      seen.push(
-        `${where}:${e.eventPhase}:${who(e.currentTarget)}:${e.composedPath()[0] === inner}:${e.composedPath()[1] === outer}`,
-      );
+    const note = (where: string) => (e: Event) => {
+      const path: unknown[] = e.composedPath();
+      seen.push(`${where}:${e.eventPhase}:${who(e.currentTarget)}:${path[0] === inner}:${path[1] === outer}`);
+    };
     outer.addEventListener("x.probe", note("capture"), { capture: true });
     inner.addEventListener("x.probe", note("target"));
     outer.addEventListener("x.probe", note("bubble"));

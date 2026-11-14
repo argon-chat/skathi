@@ -258,8 +258,8 @@ export interface FileInputOps {
   fire(type: "input" | "change" | "cancel"): void;
 }
 
-export const fileEvent = (type: string): SkEvent =>
-  new Event(type, { bubbles: true, composed: type === "input" }) as SkEvent;
+export const fileEvent = (type: string): Event =>
+  new Event(type, { bubbles: true, composed: type === "input" }) as Event;
 
 export function fileInputOps(el: MirrorElement): FileInputOps {
   const flag = (k: string) => el.attrs[k] != null && el.attrs[k] !== "false";

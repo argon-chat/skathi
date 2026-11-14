@@ -10,7 +10,7 @@ import NetDetail from "./NetDetail.vue";
 import type { MenuItem, NetDetail as Detail, NetEntry } from "../protocol";
 
 const props = defineProps<{ height: number }>();
-const emit = defineEmits<{ (e: "drag", event: SkMouseEvent): void }>();
+const emit = defineEmits<{ (e: "drag", event: MouseEvent): void }>();
 
 const open = computed(() => state.netSelected !== null);
 const bodyH = computed(() => Math.max(60, props.height - PANE_HEAD_H));
@@ -198,13 +198,13 @@ function menuFor(entry: NetEntry): MenuItem[] {
   return items;
 }
 
-function onRowDown(entry: NetEntry, event: SkMouseEvent): void {
+function onRowDown(entry: NetEntry, event: MouseEvent): void {
   if (event.button !== 2) return;
   ui.copyTarget = "network";
   openMenu(event.clientX, event.clientY, menuFor(entry));
 }
 
-function onKey(event: SkKeyboardEvent): void {
+function onKey(event: KeyboardEvent): void {
   if (state.tab !== "network" || ui.typing || ui.menu) return;
   const ctrl = event.ctrlKey || event.metaKey;
   if (ctrl && event.key.toLowerCase() === "c" && !event.shiftKey) {

@@ -45,14 +45,14 @@ const mainH = computed(() => mainHeight(state.consoleOpen, state.consoleHeight, 
 const dragFrom = ref(0);
 const dragBase = ref(0);
 
-function startDrag(which: "tree" | "console" | "net", event: SkMouseEvent): void {
+function startDrag(which: "tree" | "console" | "net", event: MouseEvent): void {
   if (event.button !== 0) return;
   state.dragging = which;
   dragFrom.value = which === "console" ? event.clientY : event.clientX;
   dragBase.value = which === "tree" ? state.treeWidth : which === "net" ? state.netListWidth : state.consoleHeight;
 }
 
-function onDrag(event: SkMouseEvent): void {
+function onDrag(event: MouseEvent): void {
   if (state.dragging === "tree") {
     const next = dragBase.value + (event.clientX - dragFrom.value);
     state.treeWidth = Math.max(220, Math.min(viewport.w - 280, next));
@@ -69,7 +69,7 @@ function endDrag(): void {
   state.dragging = null;
 }
 
-function onKey(event: SkKeyboardEvent): void {
+function onKey(event: KeyboardEvent): void {
   const ctrl = event.ctrlKey || event.metaKey;
   if (ctrl && event.shiftKey && event.key.toLowerCase() === "c") {
     event.preventDefault();

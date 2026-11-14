@@ -24,7 +24,7 @@ const submittedText = computed(() => submitted.value.map(ellipsis).join(" · ") 
 
 const blocked = ref(0);
 const lastKey = ref("—");
-const guardDigits = (e: SkKeyboardEvent) => {
+const guardDigits = (e: KeyboardEvent) => {
   lastKey.value = JSON.stringify(e.key);
   if (e.key.length === 1 && e.key >= "0" && e.key <= "9") {
     e.preventDefault();

@@ -1,6 +1,6 @@
 import { createApp, h, ref } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 type Log = { log: string[] };
 const out: Log = { log: [] };

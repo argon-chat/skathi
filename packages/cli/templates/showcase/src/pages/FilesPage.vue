@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { ref, shallowRef } from "vue";
 import Card from "../components/Card.vue";
-import Missing from "../components/Missing.vue";
 import Page from "../components/Page.vue";
-import { clipboard, describe } from "../engine";
+import { describe } from "../engine";
 
 // The File System Access API: a picker needs a click, and a handle names its file but never shows its path.
 const TYPES = [{ description: "Text", accept: { "text/plain": [".txt", ".md", ".log"] } }];
 
 const text = ref("Write something, then save it.\n");
-const file = shallowRef<SkFileSystemFileHandle | null>(null);
+const file = shallowRef<FileSystemFileHandle | null>(null);
 const status = ref("");
 
 async function attempt(action: () => Promise<string>) {
@@ -20,7 +19,7 @@ async function attempt(action: () => Promise<string>) {
   }
 }
 
-async function write(handle: SkFileSystemFileHandle) {
+async function write(handle: FileSystemFileHandle) {
   const stream = await handle.createWritable();
   await stream.write(text.value);
   await stream.close();
@@ -43,17 +42,15 @@ const save = () =>
     return `Saved ${handle.name}`;
   });
 
-type Clipboard = SkNavigator["clipboard"];
-
-const copy = (board: Clipboard) =>
+const copy = () =>
   attempt(async () => {
-    await board.writeText(text.value);
+    await navigator.clipboard.writeText(text.value);
     return "Copied to the clipboard";
   });
 
-const paste = (board: Clipboard) =>
+const paste = () =>
   attempt(async () => {
-    text.value = await board.readText();
+    text.value = await navigator.clipboard.readText();
     return "Pasted from the clipboard";
   });
 </script>
@@ -71,12 +68,11 @@ const paste = (board: Clipboard) =>
     </Card>
 
     <Card title="Clipboard" api="navigator.clipboard">
-      <div v-if="clipboard" class="row">
-        <button class="btn" @click="copy(clipboard)">Copy the text</button>
-        <button class="btn" @click="paste(clipboard)">Paste over it</button>
+      <div class="row">
+        <button class="btn" @click="copy">Copy the text</button>
+        <button class="btn" @click="paste">Paste over it</button>
       </div>
-      <Missing v-else part="clipboard" />
-      <p class="faint">Ctrl+C and Ctrl+V in text fields work either way: they belong to the field.</p>
+      <p class="faint">Ctrl+C and Ctrl+V in text fields need none of this: they belong to the field.</p>
     </Card>
   </Page>
 </template>

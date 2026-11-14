@@ -102,7 +102,7 @@ const REFLECTED_BOOL = new Set(["multiple", "webkitdirectory", "disabled"]);
 const REFLECTED_STR = new Set(["href", "download", "type", "accept", "rel", "target"]);
 const nativeDispatch =
   typeof EventTarget === "function"
-    ? (EventTarget.prototype.dispatchEvent as (this: object, ev: SkEvent) => boolean)
+    ? (EventTarget.prototype.dispatchEvent as (this: object, ev: Event) => boolean)
     : null;
 
 export type Detached = Record<string, unknown>;
@@ -171,7 +171,7 @@ export function fireDetached(el: Detached, type: string): void {
     // Not dispatchable: call the handler attribute with a target (VueUse reads `event.target.files`).
     const h = el[`on${type}`];
     Object.defineProperty(ev, "target", { value: el, configurable: true });
-    if (typeof h === "function") callListener(h as (this: unknown, ev: SkEvent) => unknown, el, ev);
+    if (typeof h === "function") callListener(h as (this: unknown, ev: Event) => unknown, el, ev);
   }
 }
 

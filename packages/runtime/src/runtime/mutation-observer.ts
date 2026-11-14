@@ -126,12 +126,9 @@ defineGlobal(
       // `observe(document, {subtree: true})` is how libraries (reka, floating-ui)
       // say "watch everything". A Document is not an element here, so watch the
       // root. Duck-typed: the same code runs in the test harness's private world.
-      if (node && (node as MirrorNode).kind !== 1 && (node as SkDocument).documentElement) {
-        node =
-          ((node as SkDocument).documentElement as MirrorNode).kind === 1
-            ? (node as SkDocument).documentElement
-            : (appRoot ?? node);
-      }
+      const root =
+        node && (node as MirrorNode).kind !== 1 ? (node as { documentElement?: unknown }).documentElement : null;
+      if (root) node = (root as MirrorNode).kind === 1 ? root : (appRoot ?? node);
       if (!node || (node as MirrorNode).kind !== 1) {
         warnCompat(
           "MutationObserver:target",

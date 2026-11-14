@@ -28,11 +28,11 @@ const WS_URL = "ws://127.0.0.1:8787/";
 // Indexed by `readyState`, which is 0..3 — so the lookup can miss as far as the compiler is
 // concerned, and every use below falls back rather than rendering "undefined".
 const STATES = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
-const stateName = (s: SkWebSocket) => STATES[s.readyState] ?? "UNKNOWN";
+const stateName = (s: WebSocket) => STATES[s.readyState] ?? "UNKNOWN";
 
 // shallowRef, not ref: a WebSocket is a host object and wrapping it in Vue's deep reactive proxy
 // would put a Proxy between us and its native getters.
-const sock = shallowRef<SkWebSocket | null>(null);
+const sock = shallowRef<WebSocket | null>(null);
 const wsState = ref("CLOSED");
 const wsProtocol = ref("");
 const wsBuffered = ref(0);

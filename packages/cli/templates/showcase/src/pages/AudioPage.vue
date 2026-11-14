@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { onUnmounted, ref } from "vue";
 import Card from "../components/Card.vue";
-import Missing from "../components/Missing.vue";
 import Page from "../components/Page.vue";
-import { audio, everyFrame } from "../engine";
+import { everyFrame } from "../engine";
 
 const NOTES = [
   ["C", 261.63],
@@ -21,11 +20,11 @@ const BARS = 32;
 const wave = ref("triangle");
 const levels = ref<number[]>(Array.from({ length: BARS }, () => 0));
 
-let engine: { ctx: SkAudioContext; tap: SkAnalyserNode; stop: () => void } | null = null;
+let engine: { ctx: AudioContext; tap: AnalyserNode; stop: () => void } | null = null;
 
 // Created on the first note, so the audio device is not opened until something plays.
-function start(Context: NonNullable<typeof audio>) {
-  const ctx = new Context();
+function start() {
+  const ctx = new AudioContext();
   const tap = ctx.createAnalyser();
   tap.fftSize = 128;
   tap.connect(ctx.destination);
@@ -38,8 +37,7 @@ function start(Context: NonNullable<typeof audio>) {
 }
 
 function play(frequency: number) {
-  if (!audio) return;
-  engine ??= start(audio);
+  engine ??= start();
   const { ctx, tap } = engine;
   const now = ctx.currentTime;
   const osc = ctx.createOscillator();
@@ -63,7 +61,7 @@ onUnmounted(() => {
 
 <template>
   <Page title="Audio" lead="The Web Audio API on a native audio engine: oscillators, gain envelopes and an analyser.">
-    <Card v-if="audio" title="Synth" api="AudioContext">
+    <Card title="Synth" api="AudioContext">
       <div class="keys">
         <button v-for="([name, hz], i) in NOTES" :key="i" class="key" @mousedown="play(hz)">{{ name }}</button>
       </div>
@@ -74,7 +72,6 @@ onUnmounted(() => {
         <div v-for="(level, i) in levels" :key="i" class="bar" :style="{ height: `${4 + level * 96}px` }" />
       </div>
     </Card>
-    <Missing v-else part="audio" />
   </Page>
 </template>
 

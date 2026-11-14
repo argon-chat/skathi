@@ -50,9 +50,9 @@ async function readAll() {
   rows.value = out;
 }
 
-const onChange = (e: SkEvent) => {
-  // `SkEvent` has no way to say that, so the shape is named here and asserted once.
-  const { name, state } = e as SkEvent & { name: string; state: SkPermissionState };
+const onChange = (e: Event) => {
+  // `Event` has no way to say that, so the shape is named here and asserted once.
+  const { name, state } = e as Event & { name: string; state: SkPermissionState };
   changes.value = [`${name} -> ${state}`, ...changes.value].slice(0, 6);
   readAll();
 };

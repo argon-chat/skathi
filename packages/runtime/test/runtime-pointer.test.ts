@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { createRuntime, type MirrorElement } from "./runtime-harness";
 
 type Rt = ReturnType<typeof createRuntime>;
-type PointerEv = SkEvent & {
+type PointerEv = Event & {
   pointerId: number;
   clientX: number;
   clientY: number;
@@ -17,7 +17,7 @@ type PointerEv = SkEvent & {
 
 const stub = (rt: Rt, id?: number) => rt.el(id) as unknown as MirrorElement;
 const listen = (node: MirrorElement, type: string, fn: (e: PointerEv) => void) =>
-  node.addEventListener(type, fn as (ev: SkEvent) => void);
+  node.addEventListener(type, fn as (ev: Event) => void);
 
 function tree(rt: Rt) {
   const root = rt.nodeOps.createElement("root");

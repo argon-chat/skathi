@@ -86,7 +86,7 @@ function whenTransitionEnds(el: MirrorElement, explicitTimeout: number | null | 
     el.removeEventListener?.("transitionend", onEnd);
     resolve();
   };
-  const onEnd = (e: SkEvent) => {
+  const onEnd = (e: Event) => {
     // Only this element's own transitions end the phase; a descendant's bubbles through.
     if (e.target === el) resolveIfNotStale();
   };

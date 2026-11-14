@@ -3,7 +3,7 @@
 /** 1 element, 2 text, 3 comment. The mirror's own tag — not `nodeType`. */
 export type MirrorKind = 1 | 2 | 3;
 
-export type EventHandler = (ev: SkEvent) => void;
+export type EventHandler = (ev: Event) => void;
 /** …and what Vue passes for `@click="[a, b]"` — several, in order. */
 export type EventHandlerOrList = EventHandler | EventHandler[];
 export type ListenerSignal = {
@@ -90,7 +90,7 @@ interface MirrorNodeBase {
   childNodes: MirrorNode[];
   text?: string;
   contains(other: MirrorNode | null | undefined): boolean;
-  readonly ownerDocument: SkDocument | undefined;
+  readonly ownerDocument: Document | undefined;
   readonly nodeType: 1 | 3 | 8 | 11;
   readonly nodeName: string;
   readonly isConnected: boolean;
@@ -103,7 +103,7 @@ interface MirrorNodeBase {
   readonly previousElementSibling: MirrorElement | null;
   hasChildNodes(): boolean;
   getRootNode(): unknown;
-  dispatchEvent(ev: SkEvent): boolean;
+  dispatchEvent(ev: Event): boolean;
   /**
    * Event codes whose `__sk_set_listener` bit is ON in the host (see `syncListenerFlag`). Kept on the node,
    * not in a map by id: `__sk_remove` recycles ids, so a map would answer for a slot's previous occupant.
@@ -138,7 +138,7 @@ export interface MirrorElement extends MirrorNodeBase {
   _modelValue?: unknown;
   _assigning?: boolean;
   _img?: { src: string; ok: boolean; w: number; h: number };
-  _on?: Record<string, { fn: unknown; listener: (ev: SkEvent) => void }>;
+  _on?: Record<string, { fn: unknown; listener: (ev: Event) => void }>;
   attrs: Record<string, string>;
   className: string;
   /** The class Vue or a script assigned, kept apart from `<Transition>`'s `_vtc`. */

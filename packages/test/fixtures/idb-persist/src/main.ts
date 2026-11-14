@@ -1,11 +1,11 @@
 import { appLaunch, appStorage, createApp, h, onMounted, ref } from "@skathi-native/runtime";
 
-const req = <T>(q: SkIDBRequest<T>): Promise<T> =>
+const req = <T>(q: IDBRequest<T>): Promise<T> =>
   new Promise((resolve, reject) => {
     q.onsuccess = () => resolve(q.result);
     q.onerror = () => reject(q.error);
   });
-const done = (tx: SkIDBTransaction): Promise<void> =>
+const done = (tx: IDBTransaction): Promise<void> =>
   new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
     tx.onabort = () => reject(tx.error);
@@ -17,9 +17,9 @@ if (asked !== null) appStorage.setStorageFolder(appStorage.folder, { encrypted: 
 else if (argv.includes("keep")) appStorage.setStorageFolder(appStorage.folder);
 
 const status = ref("opening");
-let db: SkIDBDatabase | null = null;
+let db: IDBDatabase | null = null;
 
-function openKv(): Promise<SkIDBDatabase> {
+function openKv(): Promise<IDBDatabase> {
   const open = indexedDB.open("sk-test-persist", 1);
   open.onupgradeneeded = () => open.result.createObjectStore("kv");
   return req(open);
@@ -47,7 +47,7 @@ const scenarios: Record<string, (...args: string[]) => Promise<string>> = {
     return (await indexedDB.databases()).map((d) => `${d.name}@${d.version}`).join(",");
   },
   async estimate() {
-    const e = await navigator!.storage.estimate();
+    const e = await navigator.storage.estimate();
     return `${e.usage}|${e.quota}`;
   },
   async info() {
@@ -84,7 +84,7 @@ createApp({
         db = await openKv();
         status.value = "ready";
       } catch (e) {
-        const err = e as SkDOMException;
+        const err = e as DOMException;
         status.value = `failed: ${err.name}`;
         results.boot = `${err.name}: ${err.message}`;
       }

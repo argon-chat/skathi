@@ -23,7 +23,7 @@ defineDom("click", function (this: MirrorElement) {
   if (clicking.has(this)) return;
   clicking.add(this);
   try {
-    let ev: SkEvent;
+    let ev: Event;
     const init = { bubbles: true, cancelable: true, composed: true, detail: 1 };
     try {
       ev = new MouseEvent("click", init);
@@ -132,9 +132,9 @@ function formControls(form: MirrorElement): MirrorElement[] {
 }
 
 /** A native event class the engine provides (redjs), or `null` where it has none. */
-export function nativeEventClass<I>(name: string): (new (type: string, init?: I) => SkEvent) | null {
+export function nativeEventClass<I>(name: string): (new (type: string, init?: I) => Event) | null {
   const C = (globalThis as Record<string, unknown>)[name];
-  return typeof C === "function" ? (C as new (type: string, init?: I) => SkEvent) : null;
+  return typeof C === "function" ? (C as new (type: string, init?: I) => Event) : null;
 }
 
 type SubmitEventInit = { bubbles?: boolean; cancelable?: boolean; composed?: boolean; submitter?: unknown };

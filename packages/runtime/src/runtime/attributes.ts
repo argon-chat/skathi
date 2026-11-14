@@ -289,7 +289,7 @@ defineDomGet("style", function (this: MirrorElement) {
 // dispatchEvent runs a component's own events through the capture/bubble walk of host events (reka-ui's `select.select`, `menu.itemSelect`).
 defineDom(
   "dispatchEvent",
-  function (this: MirrorNode, ev: SkEvent) {
+  function (this: MirrorNode, ev: Event) {
     if (!ev || typeof ev.type !== "string") return true;
     const name = canonicalEvent(ev.type);
     const proceed = propagate(this, name, ev);

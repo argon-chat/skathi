@@ -31,7 +31,7 @@ createApp({
       h("a", { class: "file", href: "file:///C:/Windows/System32/calc.exe" }, "file link"),
       h(
         "a",
-        { class: "routed", href: "https://example.invalid/routed", onClick: (e: SkEvent) => e.preventDefault() },
+        { class: "routed", href: "https://example.invalid/routed", onClick: (e: Event) => e.preventDefault() },
         "cancelled link",
       ),
       h("div", { class: "count" }, `span clicks: ${spanClicks.value}`),

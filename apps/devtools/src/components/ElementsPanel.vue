@@ -32,7 +32,7 @@ const list = useVirtual(
 
 const searchOpen = ref(false);
 const searchText = ref("");
-const searchBox = ref<SkElement | null>(null);
+const searchBox = ref<HTMLElement | null>(null);
 
 const selectedIndex = computed(() => rows.value.findIndex((r) => r.id === state.selected));
 const crumbs = computed(() => ancestors(state.selected));
@@ -51,7 +51,7 @@ function rowClick(row: Row): void {
   void select(row.id);
 }
 
-function twistyClick(row: Row, event: SkMouseEvent): void {
+function twistyClick(row: Row, event: MouseEvent): void {
   event.stopPropagation();
   toggle(row.id);
   const i = selectedIndex.value;
@@ -95,7 +95,7 @@ function expandOrChild(): void {
   if (row.children) move(1);
 }
 
-function onKey(event: SkKeyboardEvent): void {
+function onKey(event: KeyboardEvent): void {
   if (state.tab !== "elements") return;
   if (ui.typing && event.key !== "Enter") return;
   switch (event.key) {

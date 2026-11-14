@@ -3,7 +3,6 @@
 // strip drag the window, and `--window-control` on each button gives it the OS behaviour (snap layouts on maximize).
 import { appWindow } from "@skathi-native/runtime";
 import { onMounted, onUnmounted, ref } from "vue";
-import { nav } from "../engine";
 import { productName } from "../product";
 
 defineProps<{ page: string }>();
@@ -16,12 +15,12 @@ const read = () => {
 };
 
 onMounted(() => {
-  nav.windowControlsOverlay.addEventListener("geometrychange", read);
+  navigator.windowControlsOverlay.addEventListener("geometrychange", read);
   appWindow.addEventListener("maximize", read);
   appWindow.addEventListener("unmaximize", read);
 });
 onUnmounted(() => {
-  nav.windowControlsOverlay.removeEventListener("geometrychange", read);
+  navigator.windowControlsOverlay.removeEventListener("geometrychange", read);
   appWindow.removeEventListener("maximize", read);
   appWindow.removeEventListener("unmaximize", read);
 });

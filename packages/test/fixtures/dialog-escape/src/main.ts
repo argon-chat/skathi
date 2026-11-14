@@ -1,6 +1,6 @@
 import { createApp, h, nextTick, onMounted, onUnmounted, ref } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 const EXIT_MS = 250;
 const OPEN_DELAY_MS = 100;

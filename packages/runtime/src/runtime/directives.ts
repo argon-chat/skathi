@@ -222,25 +222,25 @@ export const vShow = {
   },
 };
 
-const modifierGuards: Record<string, ((e: SkEvent, m: string[]) => unknown) | undefined> = {
+const modifierGuards: Record<string, ((e: Event, m: string[]) => unknown) | undefined> = {
   stop: (e) => e.stopPropagation(),
   prevent: (e) => e.preventDefault(),
   self: (e) => e.target !== e.currentTarget,
-  ctrl: (e) => !(e as SkMouseEvent).ctrlKey,
-  shift: (e) => !(e as SkMouseEvent).shiftKey,
-  alt: (e) => !(e as SkMouseEvent).altKey,
-  meta: (e) => !(e as SkMouseEvent).metaKey,
-  left: (e) => "button" in e && (e as SkMouseEvent).button !== 0,
-  middle: (e) => "button" in e && (e as SkMouseEvent).button !== 1,
-  right: (e) => "button" in e && (e as SkMouseEvent).button !== 2,
+  ctrl: (e) => !(e as MouseEvent).ctrlKey,
+  shift: (e) => !(e as MouseEvent).shiftKey,
+  alt: (e) => !(e as MouseEvent).altKey,
+  meta: (e) => !(e as MouseEvent).metaKey,
+  left: (e) => "button" in e && (e as MouseEvent).button !== 0,
+  middle: (e) => "button" in e && (e as MouseEvent).button !== 1,
+  right: (e) => "button" in e && (e as MouseEvent).button !== 2,
   exact: (e, m) =>
     ["ctrl", "shift", "alt", "meta"].some(
       (x) => (e as unknown as Record<string, unknown>)[x + "Key"] && !m.includes(x),
     ),
 };
 
-export function withModifiers(fn: (event: SkEvent, ...args: unknown[]) => unknown, modifiers: string[]) {
-  return (event: SkEvent, ...args: unknown[]) => {
+export function withModifiers(fn: (event: Event, ...args: unknown[]) => unknown, modifiers: string[]) {
+  return (event: Event, ...args: unknown[]) => {
     for (const m of modifiers) {
       const guard = modifierGuards[m];
       if (guard && guard(event, modifiers)) return;
@@ -259,10 +259,10 @@ const keyAliases: Record<string, string | undefined> = {
   delete: "backspace",
 };
 
-export function withKeys(fn: (event: SkEvent) => unknown, keys: string[]) {
-  return (event: SkEvent) => {
+export function withKeys(fn: (event: Event) => unknown, keys: string[]) {
+  return (event: Event) => {
     if (!("key" in event)) return;
-    const eventKey = hyphenate(String((event as SkKeyboardEvent).key));
+    const eventKey = hyphenate(String((event as KeyboardEvent).key));
     if (keys.some((k) => k === eventKey || keyAliases[k] === eventKey)) return fn(event);
     return undefined;
   };

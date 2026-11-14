@@ -3,7 +3,6 @@ import { appLocale } from "@skathi-native/runtime";
 import { computed, ref } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
-import { nav } from "../engine";
 import { productName } from "../product";
 
 // `{name}` is filled from the arguments to t(). `sk.*` keys reword the SDK's own text (its dialogs and prompts).
@@ -17,6 +16,7 @@ appLocale.define({
 const LANGUAGES = [null, "en", "de", "es", "ja"] as const;
 const language = ref(appLocale.language);
 const count = ref(3);
+const systemLanguages = navigator.languages.join(", ");
 
 function choose(tag: (typeof LANGUAGES)[number]) {
   appLocale.language = tag;
@@ -49,7 +49,7 @@ const text = computed(() => {
           {{ tag ?? "System" }}
         </button>
       </div>
-      <p class="faint">System follows navigator.languages: {{ nav.languages?.join(", ") }}</p>
+      <p class="faint">System follows navigator.languages: {{ systemLanguages }}</p>
     </Card>
 
     <Card title="Messages" api="appLocale.t()">

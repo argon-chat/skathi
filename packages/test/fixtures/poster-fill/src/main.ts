@@ -1,7 +1,7 @@
 import { createApp, h, onMounted, ref } from "@skathi-native/runtime";
 import "./poster.css";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 function bands(w: number, h: number): string {
   const wide = w >= h;

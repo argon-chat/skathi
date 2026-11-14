@@ -1,7 +1,7 @@
 import { createApp, h, nextTick, ref } from "@skathi-native/runtime";
 import "./fonts.css";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 const TEXT = "WWWWiiii";
 const fonts = dom.fonts;
@@ -11,8 +11,8 @@ const results: Record<string, unknown> = {};
 const showLate = ref(false);
 const face = (family: string) => [...fonts].find((f) => f.family === family);
 for (const type of ["loading", "loadingdone", "loadingerror"]) {
-  fonts.addEventListener(type, (e: SkEvent) =>
-    events.push(`${type}:${[...(e as SkFontFaceSetEvent).fontfaces].map((f) => f.family).join(",")}`),
+  fonts.addEventListener(type, (e: Event) =>
+    events.push(`${type}:${[...(e as FontFaceSetLoadEvent).fontfaces].map((f) => f.family).join(",")}`),
   );
 }
 

@@ -3,7 +3,7 @@ import { TINY_CLIP_DATA_URI } from "../tinyClip";
 
 import { computed, onMounted, reactive, ref } from "vue";
 
-const videoEl = ref<SkMediaElement | null>(null);
+const videoEl = ref<HTMLVideoElement | null>(null);
 
 const media = reactive({
   currentTime: 0,
@@ -16,9 +16,9 @@ const media = reactive({
   videoHeight: 0,
 });
 const log = ref<string[]>([]);
-const brokenError = ref<SkMediaError | null>(null);
+const brokenError = ref<MediaError | null>(null);
 
-function readBack(el: SkMediaElement | null | undefined) {
+function readBack(el: HTMLVideoElement | null | undefined) {
   if (!el) return;
   media.currentTime = el.currentTime;
   media.duration = el.duration;
@@ -31,16 +31,16 @@ function readBack(el: SkMediaElement | null | undefined) {
 }
 
 /** This handler is only ever bound to the one element above, so that is what the cast says. */
-function onMedia(e: SkEvent) {
+function onMedia(e: Event) {
   log.value.push(e.type);
   if (log.value.length > 40) log.value.shift();
-  readBack((e.target as SkMediaElement | null) ?? videoEl.value);
+  readBack((e.target as HTMLVideoElement | null) ?? videoEl.value);
 }
 
-function onBrokenError(e: SkEvent) {
+function onBrokenError(e: Event) {
   // `e.target.error` is a real MediaError: `{ code, message }`, where the message is the advisory
   // naming what THIS machine cannot decode.
-  brokenError.value = (e.target as SkMediaElement | null)?.error ?? null;
+  brokenError.value = (e.target as HTMLVideoElement | null)?.error ?? null;
 }
 
 const muted = ref(true); // browsers require it for autoplay; be a good neighbour
@@ -90,10 +90,10 @@ function formatTime(seconds: number) {
 
 const scrubbing = ref(false);
 
-function seekFromEvent(e: SkMouseEvent) {
+function seekFromEvent(e: MouseEvent) {
   // `currentTarget` is rewritten at each step of the propagation walk, so it is the `.track` div
   // this handler is bound to — not whatever was clicked.
-  const track = e.currentTarget as SkElement | null;
+  const track = e.currentTarget as HTMLElement | null;
   if (!track || !Number.isFinite(media.duration)) return;
   const rect = track.getBoundingClientRect();
   if (!rect.width) return;

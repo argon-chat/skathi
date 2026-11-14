@@ -28,7 +28,7 @@ const lines = computed(() => visibleLogs());
 const expanded = ref<Record<number, boolean>>({});
 const selected = ref<Record<number, boolean>>({});
 let anchor: number | null = null;
-const promptBox = ref<SkElement | null>(null);
+const promptBox = ref<HTMLElement | null>(null);
 const draft = ref("");
 const hint = ref<string[]>([]);
 
@@ -73,7 +73,7 @@ function selectedLines(): ConsoleLine[] {
   return lines.value.filter((line) => selected.value[uidOf(line)]);
 }
 
-function onLineClick(line: ConsoleLine, event: SkMouseEvent): void {
+function onLineClick(line: ConsoleLine, event: MouseEvent): void {
   ui.copyTarget = "console";
   if (selectedText()) return;
   const uid = uidOf(line);
@@ -104,7 +104,7 @@ function onLineClick(line: ConsoleLine, event: SkMouseEvent): void {
   }
 }
 
-function onLineDown(line: ConsoleLine, event: SkMouseEvent): void {
+function onLineDown(line: ConsoleLine, event: MouseEvent): void {
   if (event.button !== 2) return;
   ui.copyTarget = "console";
   const uid = uidOf(line);
@@ -181,7 +181,7 @@ function history(delta: number): void {
   draft.value = next >= h.length ? "" : h[next]!;
 }
 
-function onPromptKey(event: SkKeyboardEvent): void {
+function onPromptKey(event: KeyboardEvent): void {
   if (event.key === "Enter") {
     // Tab-completion's first suggestion is accepted by Enter only when the hint list is showing
     // and the caret is at a word — otherwise Enter evaluates, which is what it is for.
@@ -219,7 +219,7 @@ function focusPrompt(): void {
   promptBox.value?.focus();
 }
 
-function onKey(event: SkKeyboardEvent): void {
+function onKey(event: KeyboardEvent): void {
   const ctrl = event.ctrlKey || event.metaKey;
   const key = event.key.toLowerCase();
   if (key === "l" && ctrl && state.consoleOpen) {

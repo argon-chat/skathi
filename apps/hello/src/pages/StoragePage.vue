@@ -72,7 +72,7 @@ function listenForStorage() {
 
 const describe = (e: unknown) => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 
-const nav = navigator!;
+const nav = navigator;
 
 async function clipboardRoundTrip() {
   try {
@@ -94,7 +94,7 @@ async function clipboardImage() {
 
 const execCommandResult = ref("");
 function tryExecCommand() {
-  execCommandResult.value = String(document!.execCommand("copy"));
+  execCommandResult.value = String(document.execCommand("copy"));
 }
 </script>
 

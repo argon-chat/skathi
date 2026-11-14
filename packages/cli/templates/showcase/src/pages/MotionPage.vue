@@ -5,7 +5,7 @@ import Page from "../components/Page.vue";
 
 const expanded = ref(false);
 
-const target = shallowRef<SkElement | null>(null);
+const target = shallowRef<HTMLElement | null>(null);
 const shake = () =>
   target.value?.animate(
     [

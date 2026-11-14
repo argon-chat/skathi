@@ -35,7 +35,7 @@ function fireFocusEvent(target: MirrorElement, name: string, related: MirrorElem
   propagate(target, name, withRelatedTarget(synthesize(name, 0, 0, 0, 0, undefined), related));
 }
 
-export function withRelatedTarget(ev: SkEvent, related: MirrorNode | null): SkEvent {
+export function withRelatedTarget(ev: Event, related: MirrorNode | null): Event {
   try {
     Object.defineProperty(ev, "relatedTarget", { value: related, configurable: true });
   } catch {

@@ -105,7 +105,7 @@ if (doc) {
         `The qualified name provided ('${name}') contains the invalid name-start character '${local[0] ?? ""}'.`,
       );
     }
-    if (ns === HTML_NS) return (doc.createElement as (t: string) => unknown)(local);
+    if (ns === HTML_NS) return (doc as unknown as { createElement(t: string): unknown }).createElement(local);
     const space = ns === SVG_NS ? "svg" : ns === MATHML_NS ? "mathml" : undefined;
     return looseCreated(nodeOps.createElement(local, space));
   });
@@ -334,7 +334,7 @@ if (doc) {
       }
     }
     // `<head>` is not a box (a `<style>` appended must not become a child of the root): it stays redjs's property bag, common members filled in.
-    const head = doc.head as unknown as Record<string, unknown> | null | undefined;
+    const head = (doc as unknown as { head?: Record<string, unknown> | null }).head;
     if (head && typeof head === "object") {
       if (!head.style || typeof head.style !== "object") head.style = {};
       const hs = head.style as Record<string, unknown>;
@@ -426,7 +426,7 @@ installSelection({
 for (const type of ["selectionchange", "selectstart"]) {
   const prop = `on${type}`;
   if (!doc || !vacant(doc, prop)) continue;
-  let slot: { fn: unknown; listener: (ev: SkEvent) => void } | null = null;
+  let slot: { fn: unknown; listener: (ev: Event) => void } | null = null;
   Object.defineProperty(doc, prop, {
     get: mark(() => slot?.fn ?? null),
     set: mark((v: unknown) => {
@@ -438,9 +438,9 @@ for (const type of ["selectionchange", "selectstart"]) {
       else if (fn) {
         const entry = {
           fn,
-          listener: (ev: SkEvent) => {
+          listener: (ev: Event) => {
             if (typeof entry.fn !== "function") return;
-            const r = (entry.fn as (this: unknown, ev: SkEvent) => unknown).call(doc, ev);
+            const r = (entry.fn as (this: unknown, ev: Event) => unknown).call(doc, ev);
             if (r === false) ev.preventDefault?.();
           },
         };

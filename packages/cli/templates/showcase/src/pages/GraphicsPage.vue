@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, shallowRef } from "vue";
 import Card from "../components/Card.vue";
-import Missing from "../components/Missing.vue";
 import Page from "../components/Page.vue";
-import { describe, everyFrame, gpu } from "../engine";
+import { describe, everyFrame } from "../engine";
 
 const W = 640;
 const H = 220;
 const dpr = devicePixelRatio;
 
-const pad = shallowRef<SkCanvasElement | null>(null);
-let ctx: SkCanvas2D | null = null;
+const pad = shallowRef<HTMLCanvasElement | null>(null);
+let ctx: CanvasRenderingContext2D | null = null;
 let last: { x: number; y: number } | null = null;
 let hue = 220;
 
@@ -26,13 +25,13 @@ function clear() {
   ctx.fillText("Drag to draw", 16, 26);
 }
 
-const at = (e: SkMouseEvent) => {
+const at = (e: MouseEvent) => {
   const rect = pad.value!.getBoundingClientRect();
   return { x: e.clientX - rect.left, y: e.clientY - rect.top };
 };
-const down = (e: SkMouseEvent) => (last = at(e));
+const down = (e: MouseEvent) => (last = at(e));
 const up = () => (last = null);
-function move(e: SkMouseEvent) {
+function move(e: MouseEvent) {
   if (!ctx || !last) return;
   const next = at(e);
   hue = (hue + 2) % 360;
@@ -74,17 +73,17 @@ struct Varying { @builtin(position) position: vec4f, @location(0) uv: vec2f }
   return vec4f(c * vec3f(0.55, 0.6, 1.0), 1.0);
 }`;
 
-const surface = shallowRef<SkCanvasElement | null>(null);
+const surface = shallowRef<HTMLCanvasElement | null>(null);
 const adapterName = ref("");
 let stopGpu: (() => void) | null = null;
 
-async function startGpu(api: SkGPU, canvas: SkCanvasElement) {
-  const adapter = await api.requestAdapter();
+async function startGpu(canvas: HTMLCanvasElement) {
+  const adapter = await navigator.gpu.requestAdapter();
   const context = canvas.getContext("webgpu");
-  if (!adapter || !context || !GPUBufferUsage) throw new Error("No GPU adapter for WebGPU on this machine");
+  if (!adapter || !context) throw new Error("No GPU adapter for WebGPU on this machine");
   adapterName.value = adapter.info.description;
   const device = await adapter.requestDevice();
-  const format = api.getPreferredCanvasFormat();
+  const format = navigator.gpu.getPreferredCanvasFormat();
   context.configure({ device, format, alphaMode: "opaque" });
   const module = device.createShaderModule({ code: SHADER });
   const pipeline = device.createRenderPipeline({
@@ -116,7 +115,7 @@ async function startGpu(api: SkGPU, canvas: SkCanvasElement) {
 }
 
 onMounted(() => {
-  if (gpu && surface.value) startGpu(gpu, surface.value).catch((e: unknown) => (adapterName.value = describe(e)));
+  if (surface.value) startGpu(surface.value).catch((e: unknown) => (adapterName.value = describe(e)));
 });
 onUnmounted(() => stopGpu?.());
 </script>
@@ -140,8 +139,7 @@ onUnmounted(() => stopGpu?.());
     </Card>
 
     <Card title="WebGPU" :api="adapterName || 'navigator.gpu'">
-      <canvas v-if="gpu" ref="surface" class="canvas" :width="W * dpr" :height="H * dpr" />
-      <Missing v-else part="webgpu" />
+      <canvas ref="surface" class="canvas" :width="W * dpr" :height="H * dpr" />
       <p class="faint">A WGSL fragment shader, redrawn every frame with the time in a uniform buffer.</p>
     </Card>
   </Page>

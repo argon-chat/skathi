@@ -22,7 +22,7 @@ const hasActivationBehaviour = (n: MirrorNode): n is MirrorElement =>
   n.kind === 1 && (ACTIVATABLE.has(n.tag) || isLink(n));
 
 /** DOM "dispatch" step 5.5: only a `MouseEvent` click activates; an engine without MouseEvent (unit tests) counts any click. */
-export function isActivationEvent(ev: SkEvent): boolean {
+export function isActivationEvent(ev: Event): boolean {
   return typeof MouseEvent !== "function" || ev instanceof MouseEvent;
 }
 

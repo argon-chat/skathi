@@ -2,7 +2,7 @@
 // patch among them) run before the next event's handlers.
 import { createApp, h } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 const log: string[] = [];
 (globalThis as { __SK_TEST_ORDER__?: unknown }).__SK_TEST_ORDER__ = {

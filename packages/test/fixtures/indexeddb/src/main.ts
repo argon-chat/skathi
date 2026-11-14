@@ -4,12 +4,12 @@ import { createApp, h, onMounted, ref } from "@skathi-native/runtime";
 
 type Note = { id?: number; title: string; done: boolean };
 
-const req = <T>(q: SkIDBRequest<T>): Promise<T> =>
+const req = <T>(q: IDBRequest<T>): Promise<T> =>
   new Promise((resolve, reject) => {
     q.onsuccess = () => resolve(q.result);
     q.onerror = () => reject(q.error);
   });
-const done = (tx: SkIDBTransaction): Promise<void> =>
+const done = (tx: IDBTransaction): Promise<void> =>
   new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
     tx.onabort = () => reject(tx.error);
@@ -19,9 +19,9 @@ const frame = () => new Promise<void>((r) => requestAnimationFrame!(() => r()));
 
 const status = ref("opening");
 const notes = ref<Note[]>([]);
-let db: SkIDBDatabase | null = null;
+let db: IDBDatabase | null = null;
 
-async function openNotes(): Promise<SkIDBDatabase> {
+async function openNotes(): Promise<IDBDatabase> {
   const open = indexedDB.open("sk-test-notes", 1);
   open.onupgradeneeded = () => {
     const store = open.result.createObjectStore("notes", { keyPath: "id", autoIncrement: true });
@@ -60,7 +60,7 @@ const scenarios: Record<string, () => Promise<string>> = {
       typeof indexedDB,
       typeof IDBKeyRange,
       String(Object.prototype.toString.call(indexedDB)),
-      typeof navigator!.storage.estimate,
+      typeof navigator.storage.estimate,
     ].join("|");
   },
 
@@ -96,7 +96,7 @@ const scenarios: Record<string, () => Promise<string>> = {
     const first = await req(indexedDB.open("sk-test-vc", 1));
     const seen: string[] = [];
     first.onversionchange = (e) => {
-      const ev = e as SkIDBVersionChangeEvent;
+      const ev = e as IDBVersionChangeEvent;
       seen.push(`vc ${ev.oldVersion}->${ev.newVersion}`);
       first.close();
     };
@@ -124,11 +124,11 @@ const scenarios: Record<string, () => Promise<string>> = {
     const dup = s.add({ k: 2, mail: "a@x" });
     const failed = req(dup).then(
       () => "no error",
-      (e: SkDOMException) => e.name,
+      (e: DOMException) => e.name,
     );
     const ended = done(tx).then(
       () => "committed",
-      (e: SkDOMException) => `aborted ${e.name}`,
+      (e: DOMException) => `aborted ${e.name}`,
     );
     const out = `${await failed}|${await ended}`;
     const left = await req(udb.transaction("u").objectStore("u").count());
@@ -166,8 +166,8 @@ const scenarios: Record<string, () => Promise<string>> = {
 
   async storage() {
     const names = (await indexedDB.databases()).map((d) => d.name).sort();
-    const est = await navigator!.storage.estimate();
-    return `${names.includes("sk-test-notes")}|${est.usage > 0}|${est.quota}|${await navigator!.storage.persisted()}`;
+    const est = await navigator.storage.estimate();
+    return `${names.includes("sk-test-notes")}|${est.usage > 0}|${est.quota}|${await navigator.storage.persisted()}`;
   },
 };
 
@@ -199,7 +199,7 @@ createApp({
         await reload();
         status.value = "ready";
       } catch (e) {
-        status.value = `failed: ${(e as SkDOMException).name}`;
+        status.value = `failed: ${(e as DOMException).name}`;
       }
     });
     return () =>

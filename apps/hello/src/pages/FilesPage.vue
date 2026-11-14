@@ -14,7 +14,7 @@ const picked = ref<Picked[]>([]);
 const preview = ref("");
 const inputLog = ref<string[]>([]);
 
-function readText(file: SkFile): Promise<string> {
+function readText(file: File): Promise<string> {
   return new Promise((done, fail) => {
     const r = new FileReader();
     r.onload = () => done(String(r.result));
@@ -23,11 +23,13 @@ function readText(file: SkFile): Promise<string> {
   });
 }
 
-async function onPick(e: SkEvent) {
-  const input = e.target as SkFileInputElement;
+async function onPick(e: Event) {
+  const input = e.target as HTMLInputElement;
   inputLog.value = [...inputLog.value, `change (${input.value || "—"})`].slice(-4);
-  picked.value = [...input.files].map((f) => ({ name: f.name, size: f.size, type: f.type, rel: f.webkitRelativePath }));
-  const first = input.files.item(0);
+  const files = input.files;
+  if (!files) return;
+  picked.value = [...files].map((f) => ({ name: f.name, size: f.size, type: f.type, rel: f.webkitRelativePath }));
+  const first = files.item(0);
   preview.value = "";
   if (first && (first.type.startsWith("text/") || first.type === "application/json" || first.type === "")) {
     try {
@@ -39,7 +41,7 @@ async function onPick(e: SkEvent) {
 }
 const onCancel = () => (inputLog.value = [...inputLog.value, "cancel"].slice(-4));
 
-const handle = ref<SkFileSystemFileHandle | null>(null);
+const handle = ref<FileSystemFileHandle | null>(null);
 const text = ref("");
 const fsaStatus = ref("");
 const TEXT_TYPES = [
@@ -57,7 +59,7 @@ async function openFile() {
   }
 }
 
-async function writeTo(h: SkFileSystemFileHandle) {
+async function writeTo(h: FileSystemFileHandle) {
   const w = await h.createWritable();
   await w.write(text.value);
   await w.close();

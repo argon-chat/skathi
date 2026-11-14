@@ -37,8 +37,8 @@ const record = {
 (globalThis as unknown as { __SK_TEST_LAUNCH__: unknown }).__SK_TEST_LAUNCH__ = record;
 
 const count = ref(0);
-appLaunch.addEventListener("launch", (e: SkEvent) => {
-  const ev = e as SkEvent & Record<string, unknown>;
+appLaunch.addEventListener("launch", (e: Event) => {
+  const ev = e as Event & Record<string, unknown>;
   record.events.push({ argv: ev.argv, cwd: ev.cwd, url: ev.url, paths: ev.paths, source: ev.source });
   count.value++;
 });

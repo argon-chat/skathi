@@ -1,6 +1,6 @@
 import { createApp, h } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 type Class<Args extends unknown[] = never[], T extends object = object> = {
   new (...args: Args): T;
@@ -35,7 +35,7 @@ interface Globals {
   EventTarget: Class;
   Event: Class;
   TransitionEvent: Class<[string, { propertyName: string }], { propertyName: string }>;
-  AnimationEvent: Class<[string], SkEvent>;
+  AnimationEvent: Class<[string], Event>;
   TouchEvent: Class<[string, { touches: object[] }], { touches: { length: number } }>;
   Touch: Class<[{ identifier: number; target: unknown }]>;
   TouchList: Class;
@@ -60,7 +60,7 @@ g.__SK_TEST_DOM__ = {
   probe(): string {
     const list = dom.getElementById("list")!;
     const icon = dom.getElementById("icon")!;
-    const path = icon.firstChild as SkElement;
+    const path = icon.firstChild as HTMLElement;
     const text = list.childNodes[1]!;
     const kids = list.children;
     const byTag = dom.getElementsByTagName("li");
@@ -109,7 +109,7 @@ g.__SK_TEST_DOM__ = {
         kids instanceof g.HTMLCollection,
         kids === list.children,
         kids.namedItem("a") === list.firstChild,
-        (kids as SkElementList & Record<string, unknown>).b === list.lastChild,
+        (kids as HTMLCollection & Record<string, unknown>).b === list.lastChild,
         Object.keys(kids).join(),
       ],
       live: [before, after],
@@ -156,7 +156,7 @@ g.__SK_TEST_DOM__ = {
         "ontouchstart" in window,
         "ontouchstart" in dom.documentElement,
         "ontouchstart" in list,
-        navigator!.maxTouchPoints,
+        navigator.maxTouchPoints,
         typeof g.TouchEvent,
         typeof g.Touch,
         typeof g.TouchList,

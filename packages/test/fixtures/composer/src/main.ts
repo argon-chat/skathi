@@ -1,7 +1,7 @@
 // A browser runs it at the checkpoint after the keydown event, BEFORE the field inserts the key.
 import { createApp, h, ref } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 const text = ref("");
 const showVictim = ref(true);

@@ -2,7 +2,7 @@
 // the binary as strings and so cannot import. tsconfig.json pulls in engine.d.ts (what redjs
 // provides), protocol.d.ts (`SkAppWindow` and `__SK_WINDOW__`, shared with the runtime) and this
 // file: the `__sk_window_*` host functions, the state snapshot, and the globals the prelude
-// installs. `SkWindowHost` and `SkDocument` merge with declarations in those files.
+// installs. `SkWindowHost` and `Document` merge with declarations in those files.
 
 // `__sk_window_*` host functions, registered by window.rs with fixed arity. Four return JSON
 // strings (state, match_media, hitboxes, cursor); the rest submit an op and return undefined.
@@ -127,15 +127,12 @@ interface SkWindowHost {
   state(): SkWindowState;
 }
 
-/**
- * Members the prelude installs on redjs's `document`, plus `dispatchEvent`, which redjs has but
- * engine.d.ts never named. `documentElement` is not redeclared: a merged member must repeat its
- * type exactly.
- */
-interface SkDocument {
+/** Members the prelude installs on redjs's `document`, and the ones it reads. */
+interface Document {
+  readonly documentElement: unknown;
   hasFocus(): boolean;
   exitFullscreen(): Promise<void>;
-  dispatchEvent(ev: SkEvent): boolean;
+  dispatchEvent(ev: Event): boolean;
 }
 
 // Globals the prelude itself creates, so they cannot live in engine.d.ts. `var`, not `function`,
@@ -167,21 +164,21 @@ declare var open: () => null;
 declare var getScreenDetails: () => Promise<never>;
 
 /** `addEventListener` is optional because the prelude probes it with `?.`. */
-declare var addEventListener: ((type: string, fn: (ev: SkEvent) => void, options?: unknown) => void) | undefined;
-declare function dispatchEvent(ev: SkEvent): boolean;
+declare var addEventListener: ((type: string, fn: (ev: Event) => void, options?: unknown) => void) | undefined;
+declare function dispatchEvent(ev: Event): boolean;
 
-/** What `emit()` needs of a target. Not `SkEventTarget`: the global's `addEventListener` is only probed. */
+/** What `emit()` needs of a target. Not `EventTarget`: the global's `addEventListener` is only probed. */
 interface SkDispatchTarget {
-  dispatchEvent(ev: SkEvent): boolean;
+  dispatchEvent(ev: Event): boolean;
 }
 
-interface SkScreenOrientation extends SkEventTarget {
+interface ScreenOrientation extends EventTarget {
   readonly type: "landscape-primary" | "portrait-primary";
   readonly angle: number;
   lock(): Promise<never>;
   unlock(): void;
 }
-interface SkScreen extends SkEventTarget {
+interface Screen extends EventTarget {
   readonly width: number;
   readonly height: number;
   readonly availWidth: number;
@@ -191,20 +188,20 @@ interface SkScreen extends SkEventTarget {
   readonly colorDepth: number;
   readonly pixelDepth: number;
   readonly isExtended: boolean;
-  readonly orientation: SkScreenOrientation;
+  readonly orientation: ScreenOrientation;
 }
-declare var screen: SkScreen;
+declare var screen: Screen;
 
 /** The MediaQueryList the prelude returns. `__skReevaluate` is the observer's re-entry point, not web API. */
-interface SkMediaQueryList extends SkEventTarget {
+interface MediaQueryList extends EventTarget {
   readonly media: string;
   readonly matches: boolean;
-  onchange: ((this: SkMediaQueryList, ev: SkEvent) => void) | null;
-  addListener(fn: (ev: SkEvent) => void): void;
-  removeListener(fn: (ev: SkEvent) => void): void;
+  onchange: ((this: MediaQueryList, ev: Event) => void) | null;
+  addListener(fn: (ev: Event) => void): void;
+  removeListener(fn: (ev: Event) => void): void;
   __skReevaluate(): void;
 }
-declare var matchMedia: (query: unknown) => SkMediaQueryList;
+declare var matchMedia: (query: unknown) => MediaQueryList;
 
 /** `navigator.windowControlsOverlay`; the rect is the area for app content, so `x` is non-zero when controls sit on the left. */
 interface SkTitlebarAreaRect extends SkWindowRect {
@@ -214,10 +211,10 @@ interface SkTitlebarAreaRect extends SkWindowRect {
   bottom: number;
   toJSON(): SkWindowRect;
 }
-interface SkWindowControlsOverlay extends SkEventTarget {
+interface WindowControlsOverlay extends EventTarget {
   readonly visible: boolean;
   getTitlebarAreaRect(): SkTitlebarAreaRect;
-  ongeometrychange: ((this: SkWindowControlsOverlay, ev: SkEvent) => void) | null;
+  ongeometrychange: ((this: WindowControlsOverlay, ev: Event) => void) | null;
 }
 
 /**
@@ -230,10 +227,10 @@ interface SkFullscreenTarget {
   readonly __skId?: number;
   readonly isConnected?: boolean;
   readonly ownerDocument?: { readonly documentElement?: SkFullscreenTarget };
-  requestFullscreen?: (options?: SkFullscreenOptions) => Promise<void>;
-  dispatchEvent?: (ev: SkEvent) => boolean;
+  requestFullscreen?: (options?: FullscreenOptions) => Promise<void>;
+  dispatchEvent?: (ev: Event) => boolean;
 }
-interface SkFullscreenOptions {
+interface FullscreenOptions {
   keyboardLock?: unknown;
   screen?: unknown;
 }
@@ -245,7 +242,7 @@ declare var __VUE_OPTIONS_API__: boolean;
 declare var __VUE_PROD_DEVTOOLS__: boolean;
 declare var __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: boolean;
 
-interface SkHistoryStub {
+interface History {
   state: null;
   length: number;
   scrollRestoration: string;
@@ -255,4 +252,4 @@ interface SkHistoryStub {
   back(): void;
   forward(): void;
 }
-declare var history: SkHistoryStub;
+declare var history: History;

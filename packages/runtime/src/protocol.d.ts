@@ -398,7 +398,7 @@ interface SkWindowChrome {
 }
 
 /** The window facade: an `EventTarget` (`resize`/`move`/`focus`) with Tauri/Electron-shaped verbs. Every verb is SYNCHRONOUS (JS and the UI thread are the same thread) and returns `undefined`. */
-interface SkAppWindow extends SkEventTarget {
+interface SkAppWindow extends EventTarget {
   minimize(): void;
   maximize(): void;
   unmaximize(): void;

@@ -70,7 +70,7 @@ function dragEvent(
   d: number,
   dt: DataTransferLike,
   related: MirrorNode | null,
-): SkEvent {
+): Event {
   const init = {
     bubbles: true,
     cancelable: DRAG_CANCELABLE.has(name),
@@ -82,9 +82,9 @@ function dragEvent(
     buttons: name === "drop" || name === "dragend" ? 0 : 1,
     dataTransfer: dt,
   };
-  let ev: SkEvent;
+  let ev: Event;
   try {
-    const Drag = theGlobal("DragEvent") as (new (type: string, init: Record<string, unknown>) => SkEvent) | undefined;
+    const Drag = theGlobal("DragEvent") as (new (type: string, init: Record<string, unknown>) => Event) | undefined;
     ev =
       typeof Drag === "function" ? new Drag(name, init) : withProps(new MouseEvent(name, init), { dataTransfer: dt });
   } catch {

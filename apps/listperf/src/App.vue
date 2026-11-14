@@ -19,7 +19,7 @@ const rows = ref<Row[]>(
 );
 
 const scrollTop = ref(0);
-const onScroll = (e: SkEvent) => (scrollTop.value = (e.target as SkElement).scrollTop);
+const onScroll = (e: Event) => (scrollTop.value = (e.target as HTMLElement).scrollTop);
 const title = computed(() => `${rows.value.length} rows`);
 
 const clicked = ref(-1);

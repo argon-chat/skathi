@@ -1,24 +1,23 @@
 // IndexedDB 3.0 as `indexedDB` and `navigator.storage` in a Skathi app. Databases are SQLite
 // files under the app's storage folder (`<folder>\indexeddb\`), encrypted at rest when the storage
 // is; a host built without storage keeps them in memory. Typed at the depth an app calls it
-// directly. Merges onto engine.d.ts's `SkEvent` / `SkEventTarget` / `SkNavigator`.
+// directly. Merges onto engine.d.ts's `Event` / `EventTarget` / `Navigator`.
 
 export {};
 
 declare global {
-  type SkIDBValidKey = number | string | Date | ArrayBuffer | ArrayBufferView | SkIDBValidKey[];
-  type SkIDBMode = "readonly" | "readwrite" | "versionchange";
-  type SkIDBCursorDirection = "next" | "nextunique" | "prev" | "prevunique";
-  type SkIDBHandler = ((ev: SkEvent) => void) | null;
+  type IDBValidKey = number | string | Date | ArrayBuffer | ArrayBufferView | IDBValidKey[];
+  type IDBTransactionMode = "readonly" | "readwrite" | "versionchange";
+  type IDBCursorDirection = "next" | "nextunique" | "prev" | "prevunique";
 
-  interface SkDOMException {
+  interface DOMException {
     readonly name: string;
     readonly message: string;
     readonly code: number;
   }
-  var DOMException: { new (message?: string, name?: string): SkDOMException; prototype: SkDOMException };
+  var DOMException: { new (message?: string, name?: string): DOMException; prototype: DOMException };
 
-  interface SkDOMStringList {
+  interface DOMStringList {
     readonly length: number;
     item(index: number): string | null;
     contains(name: string): boolean;
@@ -26,145 +25,145 @@ declare global {
     [Symbol.iterator](): IterableIterator<string>;
   }
 
-  interface SkIDBRequest<T = unknown> extends SkEventTarget {
+  interface IDBRequest<T = unknown> extends EventTarget {
     readonly result: T;
-    readonly error: SkDOMException | null;
+    readonly error: DOMException | null;
     readonly readyState: "pending" | "done";
-    readonly source: SkIDBObjectStore | SkIDBIndex | SkIDBCursor | null;
-    readonly transaction: SkIDBTransaction | null;
-    onsuccess: SkIDBHandler;
-    onerror: SkIDBHandler;
+    readonly source: IDBObjectStore | IDBIndex | IDBCursor | null;
+    readonly transaction: IDBTransaction | null;
+    onsuccess: ((ev: Event) => unknown) | null;
+    onerror: ((ev: Event) => unknown) | null;
   }
-  interface SkIDBOpenDBRequest extends SkIDBRequest<SkIDBDatabase> {
-    onupgradeneeded: ((ev: SkIDBVersionChangeEvent) => void) | null;
-    onblocked: ((ev: SkIDBVersionChangeEvent) => void) | null;
+  interface IDBOpenDBRequest extends IDBRequest<IDBDatabase> {
+    onupgradeneeded: ((ev: IDBVersionChangeEvent) => void) | null;
+    onblocked: ((ev: IDBVersionChangeEvent) => void) | null;
   }
-  interface SkIDBVersionChangeEvent extends SkEvent {
+  interface IDBVersionChangeEvent extends Event {
     readonly oldVersion: number;
     readonly newVersion: number | null;
   }
 
-  interface SkIDBFactory {
-    open(name: string, version?: number): SkIDBOpenDBRequest;
-    deleteDatabase(name: string): SkIDBOpenDBRequest;
+  interface IDBFactory {
+    open(name: string, version?: number): IDBOpenDBRequest;
+    deleteDatabase(name: string): IDBOpenDBRequest;
     databases(): Promise<{ name: string; version: number }[]>;
     cmp(a: unknown, b: unknown): -1 | 0 | 1;
   }
 
-  interface SkIDBDatabase extends SkEventTarget {
+  interface IDBDatabase extends EventTarget {
     readonly name: string;
     readonly version: number;
-    readonly objectStoreNames: SkDOMStringList;
+    readonly objectStoreNames: DOMStringList;
     transaction(
       stores: string | string[],
       mode?: "readonly" | "readwrite",
       options?: { durability?: "default" | "strict" | "relaxed" },
-    ): SkIDBTransaction;
+    ): IDBTransaction;
     createObjectStore(
       name: string,
       options?: { keyPath?: string | string[] | null; autoIncrement?: boolean },
-    ): SkIDBObjectStore;
+    ): IDBObjectStore;
     deleteObjectStore(name: string): void;
     close(): void;
-    onversionchange: ((ev: SkIDBVersionChangeEvent) => void) | null;
-    onclose: SkIDBHandler;
-    onabort: SkIDBHandler;
-    onerror: SkIDBHandler;
+    onversionchange: ((ev: IDBVersionChangeEvent) => void) | null;
+    onclose: ((ev: Event) => unknown) | null;
+    onabort: ((ev: Event) => unknown) | null;
+    onerror: ((ev: Event) => unknown) | null;
   }
 
-  interface SkIDBTransaction extends SkEventTarget {
-    readonly db: SkIDBDatabase;
-    readonly mode: SkIDBMode;
+  interface IDBTransaction extends EventTarget {
+    readonly db: IDBDatabase;
+    readonly mode: IDBTransactionMode;
     readonly durability: "default" | "strict" | "relaxed";
-    readonly objectStoreNames: SkDOMStringList;
-    readonly error: SkDOMException | null;
-    objectStore(name: string): SkIDBObjectStore;
+    readonly objectStoreNames: DOMStringList;
+    readonly error: DOMException | null;
+    objectStore(name: string): IDBObjectStore;
     commit(): void;
     abort(): void;
-    oncomplete: SkIDBHandler;
-    onabort: SkIDBHandler;
-    onerror: SkIDBHandler;
+    oncomplete: ((ev: Event) => unknown) | null;
+    onabort: ((ev: Event) => unknown) | null;
+    onerror: ((ev: Event) => unknown) | null;
   }
 
   interface SkIDBReadable {
     readonly name: string;
     readonly keyPath: string | string[] | null;
-    get(query: SkIDBValidKey | SkIDBKeyRange): SkIDBRequest<unknown>;
-    getKey(query: SkIDBValidKey | SkIDBKeyRange): SkIDBRequest<SkIDBValidKey | undefined>;
-    getAll(query?: SkIDBValidKey | SkIDBKeyRange | null, count?: number): SkIDBRequest<unknown[]>;
-    getAllKeys(query?: SkIDBValidKey | SkIDBKeyRange | null, count?: number): SkIDBRequest<SkIDBValidKey[]>;
-    count(query?: SkIDBValidKey | SkIDBKeyRange): SkIDBRequest<number>;
+    get(query: IDBValidKey | IDBKeyRange): IDBRequest<unknown>;
+    getKey(query: IDBValidKey | IDBKeyRange): IDBRequest<IDBValidKey | undefined>;
+    getAll(query?: IDBValidKey | IDBKeyRange | null, count?: number): IDBRequest<unknown[]>;
+    getAllKeys(query?: IDBValidKey | IDBKeyRange | null, count?: number): IDBRequest<IDBValidKey[]>;
+    count(query?: IDBValidKey | IDBKeyRange): IDBRequest<number>;
     openCursor(
-      query?: SkIDBValidKey | SkIDBKeyRange | null,
-      direction?: SkIDBCursorDirection,
-    ): SkIDBRequest<SkIDBCursorWithValue | null>;
+      query?: IDBValidKey | IDBKeyRange | null,
+      direction?: IDBCursorDirection,
+    ): IDBRequest<IDBCursorWithValue | null>;
     openKeyCursor(
-      query?: SkIDBValidKey | SkIDBKeyRange | null,
-      direction?: SkIDBCursorDirection,
-    ): SkIDBRequest<SkIDBCursor | null>;
+      query?: IDBValidKey | IDBKeyRange | null,
+      direction?: IDBCursorDirection,
+    ): IDBRequest<IDBCursor | null>;
   }
-  interface SkIDBObjectStore extends SkIDBReadable {
+  interface IDBObjectStore extends SkIDBReadable {
     readonly autoIncrement: boolean;
-    readonly indexNames: SkDOMStringList;
-    readonly transaction: SkIDBTransaction;
-    put(value: unknown, key?: SkIDBValidKey): SkIDBRequest<SkIDBValidKey>;
-    add(value: unknown, key?: SkIDBValidKey): SkIDBRequest<SkIDBValidKey>;
-    delete(query: SkIDBValidKey | SkIDBKeyRange): SkIDBRequest<undefined>;
-    clear(): SkIDBRequest<undefined>;
-    index(name: string): SkIDBIndex;
+    readonly indexNames: DOMStringList;
+    readonly transaction: IDBTransaction;
+    put(value: unknown, key?: IDBValidKey): IDBRequest<IDBValidKey>;
+    add(value: unknown, key?: IDBValidKey): IDBRequest<IDBValidKey>;
+    delete(query: IDBValidKey | IDBKeyRange): IDBRequest<undefined>;
+    clear(): IDBRequest<undefined>;
+    index(name: string): IDBIndex;
     createIndex(
       name: string,
       keyPath: string | string[],
       options?: { unique?: boolean; multiEntry?: boolean },
-    ): SkIDBIndex;
+    ): IDBIndex;
     deleteIndex(name: string): void;
   }
-  interface SkIDBIndex extends SkIDBReadable {
-    readonly objectStore: SkIDBObjectStore;
+  interface IDBIndex extends SkIDBReadable {
+    readonly objectStore: IDBObjectStore;
     readonly unique: boolean;
     readonly multiEntry: boolean;
   }
 
-  interface SkIDBCursor {
-    readonly source: SkIDBObjectStore | SkIDBIndex;
-    readonly direction: SkIDBCursorDirection;
-    readonly key: SkIDBValidKey;
-    readonly primaryKey: SkIDBValidKey;
-    readonly request: SkIDBRequest<SkIDBCursor | null>;
+  interface IDBCursor {
+    readonly source: IDBObjectStore | IDBIndex;
+    readonly direction: IDBCursorDirection;
+    readonly key: IDBValidKey;
+    readonly primaryKey: IDBValidKey;
+    readonly request: IDBRequest<IDBCursor | null>;
     advance(count: number): void;
-    continue(key?: SkIDBValidKey): void;
-    continuePrimaryKey(key: SkIDBValidKey, primaryKey: SkIDBValidKey): void;
-    update(value: unknown): SkIDBRequest<SkIDBValidKey>;
-    delete(): SkIDBRequest<undefined>;
+    continue(key?: IDBValidKey): void;
+    continuePrimaryKey(key: IDBValidKey, primaryKey: IDBValidKey): void;
+    update(value: unknown): IDBRequest<IDBValidKey>;
+    delete(): IDBRequest<undefined>;
   }
-  interface SkIDBCursorWithValue extends SkIDBCursor {
+  interface IDBCursorWithValue extends IDBCursor {
     readonly value: unknown;
   }
 
-  interface SkIDBKeyRange {
-    readonly lower: SkIDBValidKey | undefined;
-    readonly upper: SkIDBValidKey | undefined;
+  interface IDBKeyRange {
+    readonly lower: IDBValidKey | undefined;
+    readonly upper: IDBValidKey | undefined;
     readonly lowerOpen: boolean;
     readonly upperOpen: boolean;
-    includes(key: SkIDBValidKey): boolean;
+    includes(key: IDBValidKey): boolean;
   }
 
-  var indexedDB: SkIDBFactory;
+  var indexedDB: IDBFactory;
   var IDBKeyRange: {
-    only(value: SkIDBValidKey): SkIDBKeyRange;
-    lowerBound(lower: SkIDBValidKey, open?: boolean): SkIDBKeyRange;
-    upperBound(upper: SkIDBValidKey, open?: boolean): SkIDBKeyRange;
-    bound(lower: SkIDBValidKey, upper: SkIDBValidKey, lowerOpen?: boolean, upperOpen?: boolean): SkIDBKeyRange;
-    prototype: SkIDBKeyRange;
+    only(value: IDBValidKey): IDBKeyRange;
+    lowerBound(lower: IDBValidKey, open?: boolean): IDBKeyRange;
+    upperBound(upper: IDBValidKey, open?: boolean): IDBKeyRange;
+    bound(lower: IDBValidKey, upper: IDBValidKey, lowerOpen?: boolean, upperOpen?: boolean): IDBKeyRange;
+    prototype: IDBKeyRange;
   };
 
   /** `estimate()` reports IndexedDB bytes against the quota (1 GiB by default); `persist()` and `persisted()` answer `true` because data is never evicted. */
-  interface SkStorageManager {
+  interface StorageManager {
     estimate(): Promise<{ usage: number; quota: number }>;
     persist(): Promise<boolean>;
     persisted(): Promise<boolean>;
   }
-  interface SkNavigator {
-    storage: SkStorageManager;
+  interface Navigator {
+    storage: StorageManager;
   }
 }

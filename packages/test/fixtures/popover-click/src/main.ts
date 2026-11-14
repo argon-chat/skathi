@@ -1,6 +1,6 @@
 import { createApp, defineComponent, h, onMounted, ref } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 const state = {
   opened: 0,

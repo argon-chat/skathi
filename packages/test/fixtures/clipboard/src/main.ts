@@ -1,6 +1,6 @@
 import { createApp, h } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 type Store = {
   types: readonly string[];

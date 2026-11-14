@@ -3,7 +3,7 @@
 import { createApp, h } from "@skathi-native/runtime";
 import "./fonts.css";
 
-const fonts = (document as unknown as SkDomDocument).fonts;
+const fonts = document.fonts;
 
 (globalThis as unknown as { __SK_TEST_SUBSETS__: unknown }).__SK_TEST_SUBSETS__ = {
   faces: () => [...fonts].map((f) => `${f.family}:${f.status}:${f.unicodeRange.split(",")[0]}`),

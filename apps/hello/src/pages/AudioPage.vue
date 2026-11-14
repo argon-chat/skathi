@@ -2,7 +2,7 @@
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref } from "vue";
 
 const supported = typeof AudioContext !== "undefined";
-const ctx = ref<SkAudioContext | null>(null);
+const ctx = ref<AudioContext | null>(null);
 const state = reactive({
   ctxState: "—",
   sampleRate: 0,
@@ -12,10 +12,10 @@ const state = reactive({
 
 // Nodes, kept out of `reactive()` on purpose: they are host objects with live getters, not data,
 // and wrapping them in a Proxy buys nothing but confusion.
-let osc: SkOscillatorNode | null = null;
-let preAnalyser: SkAnalyserNode | null = null;
-let postAnalyser: SkAnalyserNode | null = null;
-let gainNode: SkGainNodeWithParam | null = null;
+let osc: OscillatorNode | null = null;
+let preAnalyser: AnalyserNode | null = null;
+let postAnalyser: AnalyserNode | null = null;
+let gainNode: GainNode | null = null;
 let streamNode: SkRedStreamSourceNode | null = null;
 
 const BARS = 48;
@@ -28,7 +28,7 @@ function note(line: string) {
   if (log.value.length > 60) log.value.shift();
 }
 
-function ensureContext(): SkAudioContext {
+function ensureContext(): AudioContext {
   if (ctx.value) return ctx.value;
   const a = new AudioContext!();
   ctx.value = a;
@@ -39,7 +39,7 @@ function ensureContext(): SkAudioContext {
   postAnalyser.fftSize = 2048;
   preAnalyser.smoothingTimeConstant = 0.7;
 
-  gainNode = a.createGain() as SkGainNodeWithParam;
+  gainNode = a.createGain() as GainNode;
   gainNode.gain.value = gain.value;
 
   preAnalyser.connect(gainNode);
@@ -96,10 +96,10 @@ function setDetune(cents: number) {
   if (osc) osc.detune.value = detune.value;
 }
 
-function fraction(e: SkMouseEvent) {
+function fraction(e: MouseEvent) {
   // Rewritten at each step of the propagation walk, so it is the `.track` div this handler is
   // bound to rather than whatever was clicked inside it.
-  const track = e.currentTarget as SkElement | null;
+  const track = e.currentTarget as HTMLElement | null;
   if (!track) return 0;
   const rect = track.getBoundingClientRect();
   if (!rect.width) return 0;
@@ -127,7 +127,7 @@ function rampGain(target: number, seconds: number) {
   note(`gain: exponential ramp to ${target} over ${seconds}s`);
 }
 
-const chirp = reactive<{ buffer: SkAudioBuffer | null; playing: boolean; peak: number }>({
+const chirp = reactive<{ buffer: AudioBuffer | null; playing: boolean; peak: number }>({
   buffer: null,
   playing: false,
   peak: 0,
@@ -179,7 +179,7 @@ function playChirp() {
 }
 
 const decoded = reactive({ status: "not loaded", channels: 0, frames: 0, rate: 0, seconds: 0, peak: 0 });
-let decodedBuffer: SkAudioBuffer | null = null;
+let decodedBuffer: AudioBuffer | null = null;
 
 async function loadFixture() {
   const a = ensureContext();
@@ -461,7 +461,7 @@ const surface = computed<[string, string, string][]>(() => {
 
         <div class="slider-row">
           <span class="lbl">frequency</span>
-          <div class="track" @click="(e: SkMouseEvent) => setFreq(40 + fraction(e) * 4000)">
+          <div class="track" @click="(e: MouseEvent) => setFreq(40 + fraction(e) * 4000)">
             <div class="fill" :style="{ width: ((freq - 40) / 4000) * 100 + '%' }" />
           </div>
           <span class="val">{{ freq }} Hz</span>
@@ -469,7 +469,7 @@ const surface = computed<[string, string, string][]>(() => {
 
         <div class="slider-row">
           <span class="lbl">detune</span>
-          <div class="track" @click="(e: SkMouseEvent) => setDetune(-1200 + fraction(e) * 2400)">
+          <div class="track" @click="(e: MouseEvent) => setDetune(-1200 + fraction(e) * 2400)">
             <div class="fill" :style="{ width: ((detune + 1200) / 2400) * 100 + '%' }" />
           </div>
           <span class="val">{{ detune }} cents</span>
@@ -477,7 +477,7 @@ const surface = computed<[string, string, string][]>(() => {
 
         <div class="slider-row">
           <span class="lbl">gain</span>
-          <div class="track" @click="(e: SkMouseEvent) => setGain(fraction(e))">
+          <div class="track" @click="(e: MouseEvent) => setGain(fraction(e))">
             <div class="fill gainfill" :style="{ width: gain * 100 + '%' }" />
           </div>
           <span class="val">{{ gain.toFixed(2) }}</span>

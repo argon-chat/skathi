@@ -2,14 +2,15 @@
 import { onUnmounted, ref, shallowRef } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
-import { describe, http, nav } from "../engine";
+import { describe } from "../engine";
 
+const online = () => navigator.onLine;
 const quote = ref("");
 const took = ref("");
 async function load() {
   const start = performance.now();
   try {
-    const res = await http("https://api.github.com/zen");
+    const res = await fetch("https://api.github.com/zen");
     quote.value = res.ok ? await res.text() : `HTTP ${res.status}`;
   } catch (e) {
     quote.value = describe(e);
@@ -18,7 +19,7 @@ async function load() {
 }
 
 const ECHO = "wss://echo.websocket.org";
-const socket = shallowRef<SkWebSocket | null>(null);
+const socket = shallowRef<WebSocket | null>(null);
 const message = ref("Hello over a socket");
 const log = ref<string[]>([]);
 const note = (line: string) => (log.value = [line, ...log.value].slice(0, 6));
@@ -33,7 +34,7 @@ function connect() {
   };
   socket.value = ws;
 }
-function send(ws: SkWebSocket) {
+function send(ws: WebSocket) {
   ws.send(message.value);
   note(`→ ${message.value}`);
 }
@@ -48,7 +49,7 @@ const embedded = ref(false);
     title="Network"
     lead='fetch and WebSocket as in a browser; responses are cached on disk (sk.config.json "httpCache").'
   >
-    <Card title="fetch" :api="nav.onLine ? 'online' : 'offline'">
+    <Card title="fetch" :api="online() ? 'online' : 'offline'">
       <div class="row">
         <button class="btn primary" @click="load">GET api.github.com/zen</button>
         <span class="faint">{{ took }}</span>

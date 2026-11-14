@@ -1,6 +1,6 @@
 import { createApp, h } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 const state = { changes: 0, starts: 0, copies: [] as string[] };
 (globalThis as unknown as { __SK_TEST_SEL__: unknown }).__SK_TEST_SEL__ = state;

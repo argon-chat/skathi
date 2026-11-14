@@ -149,7 +149,7 @@ export interface PushHandlers {
 
 /** It is deliberately a THIN object. */
 export class Push {
-  private socket: SkWebSocket | null = null;
+  private socket: WebSocket | null = null;
   private closed = false;
 
   constructor(target: Target, since: number, streams: PushStream[], handlers: PushHandlers) {
@@ -158,7 +158,7 @@ export class Push {
       handlers.onClose?.("this host has no WebSocket");
       return;
     }
-    let socket: SkWebSocket;
+    let socket: WebSocket;
     try {
       socket = new WebSocket(url);
     } catch (e) {
@@ -170,7 +170,7 @@ export class Push {
       this.send({ sub: streams });
       handlers.onOpen?.();
     };
-    socket.onmessage = (event: SkMessageEvent) => {
+    socket.onmessage = (event: MessageEvent) => {
       if (this.closed) return;
       try {
         handlers.onMessage(JSON.parse(String(event.data)) as PushMessage);
@@ -179,7 +179,7 @@ export class Push {
     socket.onerror = () => {
       if (!this.closed) handlers.onClose?.("the push socket errored");
     };
-    socket.onclose = (event: SkCloseEvent) => {
+    socket.onclose = (event: CloseEvent) => {
       if (this.closed) return;
       this.closed = true;
       handlers.onClose?.(`the push socket closed (${event.code || 0})`);

@@ -186,7 +186,7 @@ const realm = (() => {
       const ev = typeof Event === "function" ? new Event("pagehide") : null;
       if (ev) {
         Object.defineProperty(ev, "persisted", { value: false });
-        (globalThis as unknown as { dispatchEvent?: (e: SkEvent) => boolean }).dispatchEvent?.(ev);
+        (globalThis as unknown as { dispatchEvent?: (e: Event) => boolean }).dispatchEvent?.(ev);
       }
     } catch (e) {
       __sk_log("reload: pagehide: " + e);

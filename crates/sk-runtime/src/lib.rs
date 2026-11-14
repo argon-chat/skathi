@@ -16,6 +16,7 @@ pub mod frames;
 pub mod host;
 pub mod runtime;
 pub mod testing;
+mod unsupported;
 
 pub use bridge::{with_app, with_commit, with_published, with_published_app, Phase};
 pub use runtime::{JsError, JsRuntime};

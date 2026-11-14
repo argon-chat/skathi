@@ -120,7 +120,7 @@ const RESIZE_LOOP_MESSAGE = "ResizeObserver loop completed with undelivered noti
 export function deliverResizeLoopError(): void {
   const g = globalThis as unknown as {
     onerror?: unknown;
-    dispatchEvent?: (e: SkEvent) => boolean;
+    dispatchEvent?: (e: Event) => boolean;
   };
   if (!ErrorEventClass) return;
   const ev = new ErrorEventClass("error", {

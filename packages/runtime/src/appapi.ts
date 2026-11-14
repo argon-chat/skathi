@@ -11,7 +11,7 @@ export interface PermissionRow {
 }
 
 /** `navigator.permissions` plus a standalone `request` and the fourth state, `unsupported`. */
-export interface AppPermissions extends SkEventTarget {
+export interface AppPermissions extends EventTarget {
   readonly platform: string;
   readonly names: string[];
   query(name: string): SkPermissionState;
@@ -119,7 +119,7 @@ export interface AppCapture {
   setPendingSource(sourceId: string, includeAudio?: boolean): boolean;
 }
 
-export interface SkLaunchEvent extends SkEvent {
+export interface SkLaunchEvent extends Event {
   readonly argv: readonly string[];
   readonly cwd: string;
   readonly url: string | null;
@@ -128,7 +128,7 @@ export interface SkLaunchEvent extends SkEvent {
 }
 
 /** Tier 2 of launching (tier 1 is `launchQueue`): raw argv, cwd, existing-path arguments, the single-instance lock, the `launch` event. Untrusted input. */
-export interface AppLaunch extends SkEventTarget {
+export interface AppLaunch extends EventTarget {
   readonly argv: readonly string[];
   readonly cwd: string;
   /** The deep link this process was started for (`myapp://…`), or null. */

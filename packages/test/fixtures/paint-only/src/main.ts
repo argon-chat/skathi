@@ -1,6 +1,6 @@
 import { createApp, h } from "@skathi-native/runtime";
 
-const dom = document as unknown as SkDomDocument;
+const dom = document;
 
 const state = {
   color: "#ff0000",

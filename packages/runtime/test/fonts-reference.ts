@@ -59,8 +59,8 @@ const PACKED = ["style", "weight", "stretch", "unicodeRange", "display"] as cons
 type Listener = (ev: object) => unknown;
 
 interface Engine {
-  EventTarget: { new (): SkEventTarget };
-  Event: { new (type: string): SkEvent };
+  EventTarget: { new (): EventTarget };
+  Event: { new (type: string): Event };
   DOMException?: { new (message: string, name: string): Error };
   Blob?: { new (parts: unknown[], options?: { type?: string }): object };
   URL?: { createObjectURL?(blob: object): string; revokeObjectURL?(url: string): void };
@@ -70,7 +70,7 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
   const n = g as unknown as Partial<FontNatives> & Partial<Engine>;
   if (typeof n.__sk_fonts_list !== "function" || typeof n.__sk_fonts_set_listener !== "function") return null;
   const host = n as FontNatives;
-  const EventTargetBase = (n.EventTarget ?? class {}) as { new (): SkEventTarget };
+  const EventTargetBase = (n.EventTarget ?? class {}) as { new (): EventTarget };
   const domError = (message: string, name: string): Error => {
     if (typeof n.DOMException === "function") return new n.DOMException(message, name);
     const e = new Error(message);
