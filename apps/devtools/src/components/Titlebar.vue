@@ -68,15 +68,15 @@ const statusText = computed(() => {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 8px;
-  height: env(titlebar-area-height, 34px);
+  gap: var(--sp-4);
+  height: env(titlebar-area-height, var(--h-titlebar));
   width: env(titlebar-area-width, 100%);
-  padding-left: env(titlebar-area-x, 0px);
+  padding-left: env(titlebar-area-x, 0);
   window-drag: move;
   user-select: none;
-  background: #0a0e16cc;
+  background: var(--surface-window);
   border-bottom-width: 1px;
-  border-color: #1e2733;
+  border-color: var(--line);
 }
 .native-controls {
   width: 70px;
@@ -85,26 +85,26 @@ const statusText = computed(() => {
   window-drag: none;
 }
 .mark {
-  margin-left: 11px;
-  font-size: 12px;
-  color: #6cb6ff;
+  margin-left: var(--sp-5);
+  font-size: var(--fs-m);
+  color: var(--accent);
 }
 .brand {
-  font-size: 12px;
-  color: #9fb0c4;
+  font-size: var(--fs-m);
+  color: var(--text-muted);
 }
 .what {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 6px;
-  height: 22px;
-  padding-left: 8px;
-  padding-right: 9px;
-  border-radius: 11px;
-  background: #141b26;
+  gap: var(--sp-3);
+  height: var(--h-tab);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-4);
+  border-radius: var(--r-pill);
+  background: var(--surface-raised);
   border-width: 1px;
-  border-color: #232c3a;
+  border-color: var(--line);
   window-drag: none;
   cursor: pointer;
   transition:
@@ -112,43 +112,43 @@ const statusText = computed(() => {
     border-color 120ms ease;
 }
 .what:hover {
-  background: #1a2330;
-  border-color: #33415a;
+  background: var(--surface-hover);
+  border-color: var(--line-strong);
 }
 .dot {
   width: 6px;
   height: 6px;
-  border-radius: 3px;
-  background: #5c6b80;
+  border-radius: var(--r-pill);
+  background: var(--surface-handle);
 }
 .dot.attached {
-  background: #56d364;
+  background: var(--ok);
 }
 .dot.attaching {
-  background: #e3b341;
+  background: var(--warn);
 }
 .dot.lost {
-  background: #ff7b72;
+  background: var(--bad);
 }
 .slot {
-  font-size: 11px;
-  color: #d7e0ea;
+  font-size: var(--fs-s);
+  color: var(--text);
 }
 .pid,
 .where {
-  font-size: 11px;
-  color: #8494a8;
+  font-size: var(--fs-s);
+  color: var(--text-muted);
 }
 .sep {
-  font-size: 11px;
-  color: #3c4859;
+  font-size: var(--fs-s);
+  color: var(--text-ghost);
 }
 .status {
-  font-size: 11px;
-  color: #8494a8;
+  font-size: var(--fs-s);
+  color: var(--text-muted);
 }
 .status.lost {
-  color: #ff7b72;
+  color: var(--bad);
 }
 .spacer {
   flex: 1;
@@ -157,23 +157,23 @@ const statusText = computed(() => {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  color: #6d7c90;
-  padding-right: 6px;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  padding-right: var(--sp-3);
   window-drag: none;
 }
 .feed.live {
-  color: #7ee08a;
+  color: var(--ok);
 }
 .pulse {
   width: 5px;
   height: 5px;
-  border-radius: 3px;
-  background: #46556a;
+  border-radius: var(--r-pill);
+  background: var(--surface-handle);
 }
 .feed.live .pulse {
-  background: #56d364;
+  background: var(--ok);
 }
 .controls {
   display: flex;
@@ -187,13 +187,13 @@ const statusText = computed(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  color: #b9c6d6;
+  font-size: var(--fs-m);
+  color: var(--text);
   transition: background-color 120ms ease;
 }
 .ctl:hover {
-  background: #ffffff14;
-  color: #ffffff;
+  background: var(--surface-active);
+  color: var(--text-strong);
 }
 .min {
   --window-control: minimize;
@@ -205,7 +205,7 @@ const statusText = computed(() => {
   --window-control: close;
 }
 .close:hover {
-  background: #c42b1c;
-  color: #ffffff;
+  background: var(--bad);
+  color: var(--text-strong);
 }
 </style>

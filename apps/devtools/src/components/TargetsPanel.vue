@@ -149,65 +149,65 @@ function pickWindow(id: number): void {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding-bottom: 16px;
+  padding-bottom: var(--sp-6);
 }
 .section {
-  padding-top: 8px;
+  padding-top: var(--sp-4);
 }
 .head {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 8px;
-  padding-left: 10px;
-  padding-right: 12px;
-  padding-bottom: 4px;
-  font-size: 10px;
-  color: #7f8ea3;
+  gap: var(--sp-4);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-5);
+  padding-bottom: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
   letter-spacing: 0.4px;
   text-transform: uppercase;
 }
 .cols {
-  height: 20px;
+  height: var(--h-head);
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 10px;
-  padding-left: 10px;
-  padding-right: 12px;
-  font-size: 10px;
-  color: #5c6b80;
-  background: #0f141d;
+  gap: var(--sp-4);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-5);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  background: var(--surface-panel);
   border-bottom-width: 1px;
-  border-color: #1a2230;
+  border-color: var(--line-subtle);
 }
 .row {
-  height: 22px;
+  height: var(--h-row-loose);
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 10px;
-  padding-left: 10px;
-  padding-right: 12px;
-  font-size: 11px;
-  color: #b9c6d6;
+  gap: var(--sp-4);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-5);
+  font-size: var(--fs-s);
+  color: var(--text);
   border-bottom-width: 1px;
-  border-color: #ffffff08;
+  border-color: var(--line-subtle);
   white-space: nowrap;
 }
 .row:hover {
-  background: #ffffff0a;
+  background: var(--surface-hover);
 }
 .row.on {
-  background: #14344f;
+  background: var(--surface-active);
 }
 .row.dead {
-  color: #4e5b6d;
+  color: var(--text-ghost);
 }
 .c-slot {
   width: 150px;
   flex-shrink: 0;
-  color: #d7e0ea;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -215,12 +215,12 @@ function pickWindow(id: number): void {
 .c-port {
   width: 80px;
   flex-shrink: 0;
-  color: #8494a8;
+  color: var(--text-muted);
 }
 .c-dir {
   flex: 1;
   min-width: 0;
-  color: #5c6b80;
+  color: var(--text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -229,53 +229,53 @@ function pickWindow(id: number): void {
   flex-shrink: 0;
   display: flex;
   flex-direction: row;
-  gap: 4px;
+  gap: var(--sp-2);
   justify-content: flex-end;
 }
 .badge {
   height: 15px;
-  padding-left: 5px;
-  padding-right: 5px;
-  border-radius: 3px;
-  font-size: 9px;
+  padding-left: var(--sp-2);
+  padding-right: var(--sp-2);
+  border-radius: var(--r-s);
+  font-size: var(--fs-2xs);
   display: flex;
   align-items: center;
-  background: #1a2230;
-  color: #8494a8;
+  background: var(--surface-hover);
+  color: var(--text-muted);
 }
 .badge.on {
-  background: #14344f;
-  color: #a8d4ff;
+  background: var(--surface-active);
+  color: var(--text);
 }
 .badge.self {
-  background: #241a33;
-  color: #d2a8ff;
+  background: var(--info-soft);
+  color: var(--info);
 }
 .badge.dead {
-  background: #22110f;
-  color: #ff7b72;
+  background: var(--bad-soft);
+  color: var(--bad);
 }
 .badge.focus {
-  background: #0f2318;
-  color: #7ee08a;
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 .badge.insp {
-  background: #16303f;
-  color: #76e3ea;
+  background: var(--surface-hover);
+  color: var(--cyan);
 }
 .shot {
-  padding: 10px;
+  padding: var(--sp-4);
 }
 .img {
   max-width: 100%;
-  border-radius: 4px;
+  border-radius: var(--r-m);
   border-width: 1px;
-  border-color: #232c3a;
+  border-color: var(--line);
 }
 .note {
-  padding-top: 6px;
-  font-size: 10px;
-  color: #6d7c90;
+  padding-top: var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
   line-height: 15px;
 }
 </style>

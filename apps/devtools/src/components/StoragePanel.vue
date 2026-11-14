@@ -154,7 +154,7 @@ button.area {
   cursor: pointer;
 }
 button:focus-visible {
-  outline: 2px solid #6cb6ff;
+  outline: 2px solid var(--line-focus);
   outline-offset: -2px;
 }
 
@@ -168,26 +168,26 @@ button:focus-visible {
 .areas {
   display: flex;
   flex-direction: row;
-  gap: 2px;
+  gap: var(--sp-1);
 }
 .area {
-  height: 18px;
-  padding-left: 8px;
-  padding-right: 8px;
-  border-radius: 4px;
-  font-size: 10px;
-  color: #8494a8;
+  height: var(--h-chip);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-4);
+  border-radius: var(--r-m);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
   display: flex;
   align-items: center;
-  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
 }
 .area:hover {
-  color: #d7e0ea;
-  background: #171e29;
+  color: var(--text);
+  background: var(--surface-raised);
 }
 .area.on {
-  background: #14344f;
-  color: #a8d4ff;
+  background: var(--surface-active);
+  color: var(--text);
 }
 .body {
   flex: 1;
@@ -196,18 +196,18 @@ button:focus-visible {
   flex-direction: column;
 }
 .cols {
-  height: 22px;
+  height: var(--h-head);
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 10px;
-  padding-left: 10px;
-  padding-right: 12px;
-  font-size: 10px;
-  color: #5c6b80;
-  background: #0f141d;
+  gap: var(--sp-4);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-5);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  background: var(--surface-panel);
   border-bottom-width: 1px;
-  border-color: #1a2230;
+  border-color: var(--line-subtle);
 }
 .rows {
   flex: 1;
@@ -215,24 +215,24 @@ button:focus-visible {
   overflow-y: auto;
 }
 .row {
-  min-height: 22px;
+  min-height: var(--h-row-loose);
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 10px;
-  padding-left: 10px;
-  padding-right: 12px;
-  font-size: 11px;
+  gap: var(--sp-4);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-5);
+  font-size: var(--fs-s);
   border-bottom-width: 1px;
-  border-color: #ffffff08;
+  border-color: var(--line-subtle);
 }
 .row:hover {
-  background: #ffffff0a;
+  background: var(--surface-hover);
 }
 .c-key {
   width: 190px;
   flex-shrink: 0;
-  color: #d2a8ff;
+  color: var(--info);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -240,7 +240,7 @@ button:focus-visible {
 .c-val {
   flex: 1;
   min-width: 0;
-  color: #a5d6ff;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -249,14 +249,14 @@ button:focus-visible {
   width: 60px;
   flex-shrink: 0;
   text-align: right;
-  color: #5c6b80;
+  color: var(--text-faint);
 }
 .c-act {
   width: 84px;
   flex-shrink: 0;
   display: flex;
   flex-direction: row;
-  gap: 4px;
+  gap: var(--sp-2);
   justify-content: flex-end;
 }
 .add {
@@ -264,12 +264,12 @@ button:focus-visible {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 6px;
-  padding-left: 10px;
-  padding-right: 12px;
+  gap: var(--sp-3);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-5);
   border-top-width: 1px;
-  border-color: #1e2733;
-  background: #0d1219;
+  border-color: var(--line);
+  background: var(--surface-base);
 }
 .add .k {
   width: 190px;

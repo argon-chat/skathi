@@ -17,8 +17,10 @@ import type {
   TraceSpan,
   TraceStatus,
 } from "../inspector-model";
+import { categoryColor, frameCeiling, traceBar, traceSummary, workClass } from "../perffmt";
 const props = defineProps<{
   height: number;
+  budgetMs: number;
   request?: InspectorRequest | undefined;
   sessionKey?: string | number | undefined;
 }>();
@@ -39,9 +41,32 @@ const range = ref({ start: 0, end: 1 });
 let epoch = 0,
   selectionEpoch = 0;
 const buckets = computed(() => frameBuckets(frames.value));
-const largestFrame = computed(() => Math.max(1, ...frames.value.map((frame) => frame.durationMs)));
+const ceiling = computed(() =>
+  frameCeiling(
+    frames.value.map((frame) => frame.cpuMs),
+    props.budgetMs,
+  ),
+);
+const bars = computed(() =>
+  buckets.value.map((bucket) => ({ ...bucket, bar: traceBar(bucket.frame, props.budgetMs, ceiling.value) })),
+);
+const budgetPct = computed(() => Math.min(100, (props.budgetMs / ceiling.value) * 100));
+const summary = computed(() => traceSummary(frames.value, props.budgetMs));
+const current = computed(() => (detail.value ? traceBar(detail.value.frame, props.budgetMs, 1) : null));
+const lanes = computed(() => {
+  const frame = detail.value?.frame;
+  if (!frame) return [];
+  const work = frame.categories.filter((lane) => lane.category !== "wait");
+  const total = work.reduce((sum, lane) => sum + lane.selfMs, 0) || 1;
+  return work
+    .map((lane) => ({ ...lane, color: categoryColor(lane.category), pct: (lane.selfMs / total) * 100 }))
+    .sort((a, b) => b.selfMs - a.selfMs);
+});
+function barTitle(id: number, work: number, wait: number, count: number) {
+  return `Frame ${id} · ${milliseconds(work)} work · ${milliseconds(wait)} waiting${count > 1 ? ` · busiest of ${count} frames` : ""}`;
+}
 const rows = computed(() => spanRows(detail.value?.spans || [], collapsed.value));
-const viewportHeight = computed(() => Math.max(72, props.height - 293));
+const viewportHeight = computed(() => Math.max(72, props.height));
 const windowed = computed(() => rowWindow(rows.value.length, scroll.value, viewportHeight.value));
 const visible = computed(() => rows.value.slice(windowed.value.start, windowed.value.end));
 const inspected = computed(() => detail.value?.spans.find((span) => span.id === selectedSpan.value));
@@ -189,22 +214,6 @@ function keys(event: { key: string; shiftKey?: boolean; preventDefault(): void }
     pan(1);
   }
 }
-function color(category: string) {
-  return (
-    (
-      {
-        js: "#c49af4",
-        dom: "#80baf2",
-        style: "#e3b341",
-        layout: "#76d4dc",
-        paint: "#69c484",
-        render: "#b69ceb",
-        wait: "#8494a8",
-        native: "#8cbee6",
-      } as Record<string, string>
-    )[category.toLowerCase()] || "#91a6bd"
-  );
-}
 function spanStyle(span: TraceSpan) {
   const start = span.startMs - (detail.value?.frame.startMs || 0),
     width = range.value.end - range.value.start;
@@ -213,7 +222,7 @@ function spanStyle(span: TraceSpan) {
   return {
     left: `${((left - range.value.start) / width) * 100}%`,
     width: `${Math.max(0, ((end - left) / width) * 100)}%`,
-    background: color(span.category),
+    background: categoryColor(span.category),
     display: end < left ? "none" : "block",
   };
 }
@@ -245,7 +254,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="capture" :style="{ height: height + 'px' }" aria-label="Frame recording" @keydown="keys">
+  <section class="capture" aria-label="Frame recording" @keydown="keys">
     <div class="capture-toolbar">
       <button class="btn record" :class="{ recording: status?.recording }" :disabled="!request || busy" @click="record">
         {{ status?.recording ? "Stop recording" : "Record interaction" }}
@@ -270,32 +279,64 @@ onBeforeUnmount(() => {
       }}
     </div>
     <template v-if="frames.length">
+      <div v-if="summary" class="facts">
+        <div class="fact">
+          <span class="v mono" :class="workClass(summary.p50, budgetMs)">{{ milliseconds(summary.p50) }}</span
+          ><span class="k">median work</span>
+        </div>
+        <div class="fact">
+          <span class="v mono" :class="workClass(summary.p95, budgetMs)">{{ milliseconds(summary.p95) }}</span
+          ><span class="k">p95 work</span>
+        </div>
+        <div class="fact">
+          <span class="v mono" :class="workClass(summary.worst, budgetMs)">{{ milliseconds(summary.worst) }}</span
+          ><span class="k">worst work</span>
+        </div>
+        <div class="fact">
+          <span class="v mono" :class="{ bad: summary.overBudget > 0 }">{{ summary.overBudget }}</span
+          ><span class="k">over the {{ milliseconds(budgetMs) }} budget</span>
+        </div>
+        <div class="fact">
+          <span class="v mono">{{ Math.round(summary.waitShare * 100) }} %</span
+          ><span class="k">of the time waiting</span>
+        </div>
+      </div>
       <div
-        class="frame-overview"
+        class="overview"
         role="group"
-        aria-label="Captured frames; tallest bar in each group"
+        aria-label="Captured frames; the busiest frame of each group"
         tabindex="0"
         @keydown.left.prevent="!$event.shiftKey && moveFrame(-1)"
         @keydown.right.prevent="!$event.shiftKey && moveFrame(1)"
       >
+        <div class="budget-line" :style="{ bottom: budgetPct + '%' }"></div>
         <button
-          v-for="bucket in buckets"
-          :key="bucket.frame.id"
+          v-for="item in bars"
+          :key="item.frame.id"
           class="frame-bar"
-          :class="{ selected: selected === bucket.frame.id }"
-          :style="{ height: Math.max(4, (bucket.frame.durationMs / largestFrame) * 66) + 'px' }"
-          :title="`Frame ${bucket.frame.id} · ${milliseconds(bucket.frame.durationMs)}${bucket.count > 1 ? ` · slowest of ${bucket.count} frames` : ''}`"
-          :aria-label="`Select frame ${bucket.frame.id}, ${milliseconds(bucket.frame.durationMs)}`"
-          :aria-pressed="selected === bucket.frame.id"
-          @click="selectFrame(bucket.frame.id)"
-        ></button>
+          :class="[item.bar.cls, { selected: selected === item.frame.id }]"
+          :title="barTitle(item.frame.id, item.bar.work, item.bar.wait, item.count)"
+          :aria-label="`Select frame ${item.frame.id}, ${milliseconds(item.bar.work)} of work`"
+          :aria-pressed="selected === item.frame.id"
+          @click="selectFrame(item.frame.id)"
+        >
+          <i class="wait" :class="{ clipped: item.bar.clipped }" :style="{ height: item.bar.waitPct + '%' }"></i
+          ><i
+            v-for="segment in item.bar.segments"
+            :key="segment.category"
+            class="seg"
+            :style="{ height: segment.pct + '%', background: segment.color }"
+          ></i>
+        </button>
       </div>
       <div class="overview-caption">
-        <span>{{ frames.length }} / {{ totalFrames }} frames · bars show CPU frame duration</span
-        ><button v-if="frameNext !== null" class="btn" :disabled="busy" @click="refresh(true)">Load next frames</button
-        ><span v-if="status && (status.droppedFrames || status.droppedSpans)"
-          >Dropped {{ status.droppedFrames }} frames / {{ status.droppedSpans }} spans</span
-        >
+        <span class="key"><i class="sw work"></i>work, by category</span
+        ><span class="key"><i class="sw wait"></i>waiting for the next frame</span
+        ><span class="key"><i class="sw budget"></i>budget</span><span class="grow"></span
+        ><span>{{ frames.length }} / {{ totalFrames }} frames · top {{ ceiling }} ms</span
+        ><span v-if="status && (status.droppedFrames || status.droppedSpans)" class="t-yellow"
+          >dropped {{ status.droppedFrames }} frames / {{ status.droppedSpans }} spans</span
+        ><button v-if="frameNext !== null" class="btn" :disabled="busy" @click="refresh(true)">Load more</button>
       </div>
     </template>
     <div v-if="detailBusy && !detail" class="feedback">Loading ordered calls for frame {{ selected }}…</div>
@@ -316,9 +357,11 @@ onBeforeUnmount(() => {
         >
           Next
         </button>
-        <strong class="frame-name">Frame {{ detail.frame.id }}</strong
-        ><span class="mono"
-          >{{ milliseconds(detail.frame.durationMs) }} total · {{ milliseconds(detail.frame.cpuMs) }} CPU</span
+        <strong class="frame-name">Frame {{ detail.frame.id }}</strong>
+        <span v-if="current" class="split mono"
+          ><span class="w" :class="current.cls">{{ milliseconds(current.work) }} work</span><span class="sep">+</span
+          ><span class="t-faint">{{ milliseconds(current.wait) }} waiting</span><span class="sep">=</span
+          ><span class="t-dim">{{ milliseconds(detail.frame.durationMs) }}</span></span
         >
         <span class="grow"></span
         ><button class="btn" :disabled="range.start <= 0" @click="pan(-1)" aria-label="Pan earlier">Earlier</button
@@ -330,10 +373,15 @@ onBeforeUnmount(() => {
         </button>
       </div>
       <div class="lanes">
-        <span v-for="lane in detail.frame.categories" :key="lane.category" class="lane"
-          ><i :style="{ background: color(lane.category) }"></i>{{ lane.category }}
-          <span class="mono">{{ milliseconds(lane.selfMs) }}</span></span
-        >
+        <div class="mix">
+          <i v-for="lane in lanes" :key="lane.category" :style="{ width: lane.pct + '%', background: lane.color }"></i>
+        </div>
+        <div class="lane-keys">
+          <span v-for="lane in lanes" :key="lane.category" class="lane"
+            ><i :style="{ background: lane.color }"></i>{{ lane.category }}
+            <span class="mono t-dim">{{ milliseconds(lane.selfMs) }}</span></span
+          >
+        </div>
       </div>
       <div class="call-columns">
         <span class="call-name">Ordered calls</span><span class="call-time">Self / total CPU</span>
@@ -343,13 +391,7 @@ onBeforeUnmount(() => {
           ><span>{{ milliseconds(range.end) }}</span>
         </div>
       </div>
-      <div
-        class="call-scroll"
-        :style="{ height: viewportHeight + 'px' }"
-        @scroll="scroll = $event.target.scrollTop"
-        role="tree"
-        aria-label="Frame calls"
-      >
+      <div class="call-scroll" @scroll="scroll = $event.target.scrollTop" role="tree" aria-label="Frame calls">
         <div :style="{ height: windowed.padTop + 'px' }"></div>
         <button
           v-for="row in visible"
@@ -426,21 +468,25 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .capture {
+  flex: 1;
+  min-height: 0;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
-  color: #d7e0ea;
-  font-size: 11px;
-  background: #10151d;
+  color: var(--text);
+  font-size: var(--fs-s);
+  background: var(--surface-panel);
 }
 .capture-toolbar,
 .detail-toolbar {
   min-height: 34px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
   flex-wrap: wrap;
-  border-bottom: 1px solid #232c3a;
+  border-bottom: 1px solid var(--line);
 }
 button {
   font-family: inherit;
@@ -451,96 +497,200 @@ button:disabled {
   cursor: default;
 }
 button:focus-visible {
-  outline: 2px solid #6cb6ff;
+  outline: 2px solid var(--line-focus);
   outline-offset: -2px;
 }
 .record {
-  color: #f1b7b2;
+  color: var(--bad);
 }
 .record.recording {
-  background: #462521;
-  border-color: #b95750;
-  color: #fff0ed;
+  background: var(--bad);
+  border-color: var(--bad);
+  color: var(--surface-base);
 }
 .summary {
-  color: #b9c6d6;
+  color: var(--text);
 }
 .cpu-label {
-  color: #8494a8;
+  color: var(--text-muted);
   margin-left: auto;
 }
 .grow {
   flex: 1;
 }
 .feedback {
-  padding: 18px 12px;
-  color: #a9b6c7;
+  padding: var(--sp-6) var(--sp-5);
+  color: var(--text-muted);
   line-height: 1.5;
 }
 .failure {
-  color: #ff9d96;
+  color: var(--bad);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-4);
 }
-.frame-overview {
-  height: 76px;
-  padding: 8px 8px 0;
+.facts {
   display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  background: #0b1018;
+  flex-direction: row;
+  gap: var(--sp-6);
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--line-subtle);
+}
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.fact .v {
+  font-size: var(--fs-xl);
+  color: var(--text-strong);
+}
+.fact .v.warn {
+  color: var(--warn);
+}
+.fact .v.bad {
+  color: var(--bad);
+}
+.fact .k {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.overview {
+  position: relative;
+  height: 88px;
+  margin: var(--sp-4) var(--sp-5) 0;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: var(--sp-1);
+  background: var(--surface-sunken);
+  border-radius: var(--r-m);
   overflow: hidden;
+}
+.budget-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--chart-guide);
 }
 .frame-bar {
   flex: 1;
   min-width: 2px;
-  max-width: 24px;
+  max-width: 14px;
   border: 0;
-  border-radius: 2px 2px 0 0;
-  background: #537eac;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: transparent;
+  opacity: 0.8;
 }
-.frame-bar:hover,
+.frame-bar:hover {
+  opacity: 1;
+  background: var(--surface-raised);
+}
 .frame-bar.selected {
-  background: #9acbff;
+  opacity: 1;
+  background: var(--surface-active);
+}
+.frame-bar .wait {
+  background: var(--chart-wait);
+}
+.frame-bar .wait.clipped {
+  border-top: 2px solid var(--line-strong);
+}
+.frame-bar .seg {
+  min-height: 0;
+}
+.frame-bar.bad .wait {
+  border-bottom: 2px solid var(--bad);
+}
+.key {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.sw {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-s);
+}
+.sw.work {
+  background: var(--cat-js);
+}
+.sw.wait {
+  background: var(--chart-wait);
+  border: 1px solid var(--line-strong);
+}
+.sw.budget {
+  height: 1px;
+  background: var(--text-muted);
 }
 .overview-caption,
 .detail-footer {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-4);
   min-height: 25px;
-  padding: 4px 8px;
-  color: #a9b6c7;
-  font-size: 10px;
+  padding: var(--sp-2) var(--sp-4);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
   flex-wrap: wrap;
-}
-.detail-toolbar .mono {
-  color: #a9b6c7;
-  font-size: 10px;
 }
 .frame-name {
   font-weight: 600;
+  color: var(--text-strong);
+}
+.split {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+}
+.split .w {
+  color: var(--text);
+}
+.split .w.warn {
+  color: var(--warn);
+}
+.split .w.bad {
+  color: var(--bad);
+}
+.sep {
+  color: var(--text-ghost);
 }
 .lanes {
   display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--line-subtle);
+  font-size: var(--fs-xs);
+}
+.mix {
+  display: flex;
+  flex-direction: row;
+  height: 6px;
+  border-radius: var(--r-s);
+  overflow: hidden;
+  background: var(--surface-raised);
+}
+.lane-keys {
+  display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  padding: 6px 8px;
-  background: #121b26;
-  color: #bcc9d8;
-  font-size: 10px;
+  gap: var(--sp-5);
+  color: var(--text);
 }
 .lane {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--sp-2);
 }
 .lane i {
-  width: 7px;
-  height: 7px;
-  border-radius: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-s);
 }
 .call-columns,
 .call-row {
@@ -552,10 +702,10 @@ button:focus-visible {
 }
 .call-columns {
   height: 24px;
-  color: #a9b6c7;
-  background: #171e29;
-  border-bottom: 1px solid #232c3a;
-  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-xs);
 }
 .call-name {
   width: 34%;
@@ -564,11 +714,11 @@ button:focus-visible {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  padding-left: 8px;
+  padding-left: var(--sp-4);
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-2);
 }
 .call-name span {
   overflow: hidden;
@@ -582,36 +732,40 @@ button:focus-visible {
   width: 105px;
   flex-shrink: 0;
   text-align: right;
-  padding-right: 8px;
+  padding-right: var(--sp-4);
   box-sizing: border-box;
-  color: #b9c6d6;
-  font-size: 10px;
+  color: var(--text);
+  font-size: var(--fs-xs);
 }
 .ruler {
   flex: 1;
   min-width: 0;
   display: flex;
   justify-content: space-between;
-  padding: 0 5px;
+  padding: 0 var(--sp-2);
 }
-.call-scroll {
-  overflow-y: auto;
+.capture > * {
+  flex-shrink: 0;
+}
+.capture > .call-scroll {
+  flex: 1 1 0px;
   min-height: 72px;
+  overflow-y: auto;
 }
 .call-row {
   height: 24px;
   border: 0;
   padding: 0;
-  background: #10151d;
-  color: #d7e0ea;
+  background: var(--surface-panel);
+  color: var(--text);
   text-align: left;
-  font-size: 11px;
+  font-size: var(--fs-s);
 }
 .call-row:hover {
-  background: #1b2735;
+  background: var(--surface-hover);
 }
 .call-row.chosen {
-  background: #163854;
+  background: var(--surface-active);
 }
 .call-track {
   height: 24px;
@@ -619,49 +773,49 @@ button:focus-visible {
   min-width: 30px;
   position: relative;
   overflow: hidden;
-  border-left: 1px solid #232c3a;
+  border-left: 1px solid var(--line);
 }
 .call-track i {
   position: absolute;
   top: 6px;
   height: 12px;
   min-width: 1px;
-  border-radius: 2px;
+  border-radius: var(--r-s);
 }
 .selection-detail {
-  border-top: 1px solid #232c3a;
-  background: #0c121b;
-  padding: 8px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-base);
+  padding: var(--sp-4);
   min-height: 55px;
-  color: #b9c6d6;
+  color: var(--text);
   line-height: 1.5;
 }
 .selection-detail > div:first-child {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-4);
   flex-wrap: wrap;
 }
 .selection-detail strong {
-  color: #e6edf3;
+  color: var(--text-strong);
 }
 .selection-detail p {
-  margin: 4px 0;
-  color: #e3b341;
+  margin: var(--sp-2) 0;
+  color: var(--warn);
 }
 .callsite {
   overflow-wrap: anywhere;
-  color: #a5c7e8;
+  color: var(--text);
 }
 .counter {
-  margin-right: 12px;
+  margin-right: var(--sp-5);
 }
 .muted {
-  color: #a9b6c7;
+  color: var(--text-muted);
 }
 .frame-hint {
-  padding: 5px 8px;
-  color: #e3b341;
+  padding: var(--sp-2) var(--sp-4);
+  color: var(--warn);
 }
 @media (max-width: 650px) {
   .call-name {

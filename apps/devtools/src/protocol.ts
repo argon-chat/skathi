@@ -171,7 +171,18 @@ export interface PerfReply {
   fps: number;
   /** `null` when the platform does not report it (and absent from a target older than this field). */
   budgetMs?: number | null;
+  /** Frame to frame, waiting included. */
   samples: number[];
+  /** Per frame, beside `samples`: the frame requests' own time. Absent from an older target. */
+  work?: number[];
+  /** Per frame: 1 idle pacing chose the wait, 2 drew, 4 a request was held by the frame-rate limit. */
+  flags?: number[];
+  workP50Ms?: number;
+  workP95Ms?: number;
+  workMaxMs?: number;
+  pacedShare?: number;
+  drewShare?: number;
+  throttledShare?: number;
   nodes: number;
   windows: number;
   phases: boolean;

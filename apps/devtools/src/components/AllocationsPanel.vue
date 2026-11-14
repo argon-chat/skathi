@@ -33,7 +33,7 @@ const rows = computed(() => {
       (!site.value || row.site.toLowerCase().includes(site.value.toLowerCase())),
   );
 });
-const viewportHeight = computed(() => Math.max(80, props.height - (selected.value ? 257 : 212)));
+const viewportHeight = computed(() => Math.max(80, props.height));
 const windowed = computed(() => rowWindow(rows.value.length, scroll.value, viewportHeight.value));
 const visible = computed(() => rows.value.slice(windowed.value.start, windowed.value.end));
 const coverage = computed(() =>
@@ -111,7 +111,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="allocations" :style="{ height: height + 'px' }" aria-label="Allocation recording">
+  <section class="allocations" aria-label="Allocation recording">
     <div class="allocation-toolbar">
       <button
         class="btn"
@@ -183,12 +183,7 @@ onBeforeUnmount(() => {
         ><span class="bytes">{{ baseline ? "Live Δ" : "Captured live" }}</span
         ><span class="bytes allocated">Allocated</span><span class="blocks">Blocks</span>
       </div>
-      <div
-        class="allocation-rows"
-        :style="{ height: viewportHeight + 'px' }"
-        @scroll="scroll = $event.target.scrollTop"
-        :aria-busy="busy"
-      >
+      <div class="allocation-rows" @scroll="scroll = $event.target.scrollTop" :aria-busy="busy">
         <div :style="{ height: windowed.padTop + 'px' }"></div>
         <button
           v-for="row in visible"
@@ -244,11 +239,15 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .allocations {
+  flex: 1;
+  min-height: 0;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
-  background: #10151d;
-  color: #d7e0ea;
-  font-size: 11px;
+  background: var(--surface-panel);
+  color: var(--text);
+  font-size: var(--fs-s);
 }
 button {
   font-family: inherit;
@@ -261,66 +260,66 @@ select:disabled {
 }
 button:focus-visible,
 select:focus-visible {
-  outline: 2px solid #6cb6ff;
+  outline: 2px solid var(--line-focus);
   outline-offset: -2px;
 }
 .muted {
-  color: #a9b6c7;
+  color: var(--text-muted);
 }
 .warning {
-  color: #e3b341;
+  color: var(--warn);
 }
 .feedback {
-  padding: 16px 12px;
-  color: #a9b6c7;
+  padding: var(--sp-6) var(--sp-5);
+  color: var(--text-muted);
   line-height: 1.5;
 }
 .failure {
-  color: #ff9d96;
+  color: var(--bad);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-4);
 }
 .allocation-toolbar {
-  padding: 6px 8px;
+  padding: var(--sp-3) var(--sp-4);
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
-  border-bottom: 1px solid #232c3a;
+  gap: var(--sp-3);
+  border-bottom: 1px solid var(--line);
   min-height: 28px;
 }
 .coverage {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-5);
   flex-wrap: wrap;
-  padding: 7px 8px;
-  font-size: 10px;
-  color: #a9b6c7;
-  background: #121b26;
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  background: var(--surface-panel);
 }
 .allocation-totals {
   display: flex;
-  gap: 16px;
+  gap: var(--sp-6);
   flex-wrap: wrap;
-  padding: 8px;
-  border-bottom: 1px solid #232c3a;
-  color: #c9d8e8;
-  font-size: 11px;
+  padding: var(--sp-4);
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-size: var(--fs-s);
 }
 .allocation-filters {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
-  padding: 8px;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
   flex-wrap: wrap;
 }
 .allocation-filters label {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  color: #a9b6c7;
-  font-size: 10px;
+  gap: var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
 }
 .site-filter {
   flex: 1;
@@ -336,19 +335,24 @@ select:focus-visible {
 .allocation-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-4);
   width: 100%;
-  padding: 0 10px;
+  padding: 0 var(--sp-4);
   box-sizing: border-box;
   min-width: 0;
 }
 .allocation-head {
   height: 24px;
-  background: #171e29;
-  color: #a9b6c7;
-  font-size: 10px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
 }
-.allocation-rows {
+.allocations > * {
+  flex-shrink: 0;
+}
+.allocations > .allocation-rows {
+  flex: 1 1 0px;
+  min-height: 80px;
   overflow-y: auto;
 }
 .allocation-row {
@@ -356,17 +360,17 @@ select:focus-visible {
   padding-top: 0;
   padding-bottom: 0;
   border: 0;
-  border-bottom: 1px solid #1b2430;
-  background: #10151d;
-  color: #d7e0ea;
-  font-size: 11px;
+  border-bottom: 1px solid var(--line-subtle);
+  background: var(--surface-panel);
+  color: var(--text);
+  font-size: var(--fs-s);
   text-align: left;
 }
 .allocation-row:hover {
-  background: #1b2735;
+  background: var(--surface-hover);
 }
 .allocation-row.selected {
-  background: #163854;
+  background: var(--surface-active);
 }
 .category {
   width: 90px;
@@ -381,7 +385,7 @@ select:focus-visible {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: #bdd8f2;
+  color: var(--text-strong);
 }
 .bytes {
   width: 88px;
@@ -392,35 +396,35 @@ select:focus-visible {
   width: 58px;
   text-align: right;
   flex-shrink: 0;
-  color: #b9c6d6;
+  color: var(--text);
 }
 .growth {
-  color: #f1b083;
+  color: var(--warn);
 }
 .released {
-  color: #7bd28b;
+  color: var(--ok);
 }
 .allocation-footer {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-5);
   flex-wrap: wrap;
-  padding: 6px 8px;
-  color: #a9b6c7;
-  font-size: 10px;
-  border-top: 1px solid #232c3a;
+  padding: var(--sp-3) var(--sp-4);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  border-top: 1px solid var(--line);
   line-height: 1.5;
 }
 .allocation-detail {
   display: flex;
-  gap: 8px 14px;
+  gap: var(--sp-4) var(--sp-5);
   flex-wrap: wrap;
-  padding: 10px;
-  background: #0c121b;
-  border-top: 1px solid #232c3a;
-  color: #b9c6d6;
+  padding: var(--sp-4);
+  background: var(--surface-base);
+  border-top: 1px solid var(--line);
+  color: var(--text);
 }
 .allocation-detail strong {
-  color: #e6edf3;
+  color: var(--text-strong);
   overflow-wrap: anywhere;
 }
 .allocation-detail .btn {

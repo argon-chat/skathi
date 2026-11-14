@@ -1,0 +1,115 @@
+/* The devtools' design tokens: every colour, size and spacing the panels use comes from here.
+   The greys are Argon's dark theme (zinc): low steps between surfaces, borders in the surfaces' own
+   tone, and no pure white for text. */
+
+:root {
+  /* Surfaces, darkest first. */
+  --surface-sunken: #08080a;
+  --surface-base: #0c0c0e;
+  --surface-panel: #101012;
+  --surface-raised: #161618;
+  --surface-hover: #1c1c1f;
+  --surface-active: #232326;
+  --surface-window: #09090be6;
+  /* Handles and thumbs: the one surface meant to be seen at a glance. */
+  --surface-handle: #3f3f46;
+
+  /* Lines. */
+  --line-subtle: #161618;
+  --line: #1e1e21;
+  --line-strong: #27272a;
+  --line-focus: #52525b;
+
+  /* Text. */
+  --text-strong: #ececee;
+  --text: #c8c8cd;
+  --text-muted: #9a9aa3;
+  --text-faint: #6b6b74;
+  --text-ghost: #46464d;
+
+  /* No hue for the chrome's accent: selection and focus read through contrast. */
+  --accent: #e4e4e7;
+  --accent-soft: #27272a;
+  --accent-line: #52525b;
+
+  /* Meaning. */
+  --ok: #5fc485;
+  --ok-soft: #5fc48512;
+  --ok-line: #5fc48533;
+  --warn: #d9a84e;
+  --warn-soft: #d9a84e12;
+  --warn-line: #d9a84e33;
+  --bad: #e5736b;
+  --bad-soft: #e5736b12;
+  --bad-line: #e5736b33;
+  --info: #b49cf0;
+  --info-soft: #b49cf012;
+  --info-line: #b49cf033;
+  --cyan: #6cc5cc;
+
+  /* Charts. */
+  --chart-work: #a1a1aa;
+  --chart-work-quiet: #52525b;
+  --chart-wait: #18181b;
+  --chart-wait-paced: #13201a;
+  --chart-guide: #ffffff30;
+
+  /* Work categories of a recorded frame. */
+  --cat-js: #b794f6;
+  --cat-microtask: #8f78c9;
+  --cat-dom: #f0a35e;
+  --cat-style: #e3cf6a;
+  --cat-layout: #5ccfc0;
+  --cat-paint: #7bd389;
+  --cat-render: #ef86b4;
+  --cat-native: #a6a6a6;
+  --cat-wait: #4f4f4f;
+
+  /* Memory breakdown. */
+  --mem-jsc: #c99a2e;
+  --mem-rust: #d0703a;
+  --mem-images: #b5607a;
+  --mem-mapped: #7d6bb3;
+  --mem-gpu: #3a9e96;
+  --mem-other: #5a5a5a;
+
+  /* Type. */
+  --font-ui: "Segoe UI", sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", monospace;
+  --fs-2xs: 9px;
+  --fs-xs: 10px;
+  --fs-s: 11px;
+  --fs-m: 12px;
+  --fs-l: 13px;
+  --fs-xl: 15px;
+  --fs-2xl: 19px;
+  --fs-3xl: 26px;
+
+  /* Space. */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 6px;
+  --sp-4: 8px;
+  --sp-5: 12px;
+  --sp-6: 16px;
+  --sp-7: 24px;
+
+  /* Corners. */
+  --r-s: 2px;
+  --r-m: 4px;
+  --r-l: 6px;
+  --r-pill: 9px;
+
+  /* Heights. */
+  --h-chip: 18px;
+  --h-control: 20px;
+  --h-row-dense: 18px;
+  --h-row: 20px;
+  --h-row-loose: 22px;
+  --h-head: 22px;
+  --h-tab: 22px;
+  --h-status: 22px;
+  --h-bar: 26px;
+  --h-toolbar: 30px;
+  --h-titlebar: 34px;
+}

@@ -443,6 +443,12 @@ describe("the new commands", () => {
       bunExpect(perf.p95Ms).toBeGreaterThanOrEqual(perf.p50Ms);
       bunExpect(perf.nodes).toBeGreaterThan(0);
       bunExpect(perf.samples.length).toBeGreaterThan(0);
+      // Each frame's work sits beside its interval and is part of it.
+      bunExpect(perf.work.length).toBe(perf.samples.length);
+      bunExpect(perf.flags.length).toBe(perf.samples.length);
+      bunExpect(perf.workP50Ms).toBeGreaterThan(0);
+      bunExpect(perf.workP50Ms).toBeLessThanOrEqual(perf.p50Ms);
+      bunExpect(perf.drewShare).toBeGreaterThan(0);
       bunExpect(perf.bootMs).toBeGreaterThan(0);
       bunExpect(perf.phases).toBe(false);
     },

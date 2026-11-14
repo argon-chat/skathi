@@ -369,29 +369,29 @@ onUnmounted(() => {
 .split {
   width: 5px;
   flex-shrink: 0;
-  background: #0a0e16;
+  background: var(--surface-base);
   border-left-width: 1px;
   border-right-width: 1px;
-  border-color: #1e2733;
+  border-color: var(--line);
   cursor: col-resize;
 }
 .split:hover,
 .split.dragging {
-  background: #2f6ea8;
+  background: var(--surface-handle);
 }
 .cols {
-  height: 22px;
+  height: var(--h-head);
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 8px;
-  padding-left: 10px;
-  padding-right: 14px;
-  font-size: 10px;
-  color: #5c6b80;
-  background: #0f141d;
+  gap: var(--sp-4);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-5);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  background: var(--surface-panel);
   border-bottom-width: 1px;
-  border-color: #1a2230;
+  border-color: var(--line-subtle);
 }
 .list {
   position: relative;
@@ -403,60 +403,60 @@ onUnmounted(() => {
   flex-direction: column;
 }
 .row {
-  height: 20px;
+  height: var(--h-row);
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 8px;
-  padding-left: 10px;
-  padding-right: 14px;
-  font-size: 11px;
-  color: #b9c6d6;
+  gap: var(--sp-4);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-5);
+  font-size: var(--fs-s);
+  color: var(--text);
   border-bottom-width: 1px;
-  border-color: #ffffff08;
+  border-color: var(--line-subtle);
   white-space: nowrap;
 }
 .row:hover {
-  background: #ffffff0a;
+  background: var(--surface-hover);
 }
 .row.sel {
-  background: #14344f;
+  background: var(--surface-active);
 }
 .row.sel:hover {
-  background: #17405f;
+  background: var(--surface-active);
 }
 .c-kind {
   width: 44px;
   flex-shrink: 0;
-  color: #8494a8;
+  color: var(--text-muted);
 }
 .c-kind.ws {
-  color: #d2a8ff;
+  color: var(--info);
 }
 .c-kind.fetch {
-  color: #76e3ea;
+  color: var(--cyan);
 }
 .c-kind.xhr {
-  color: #e3b341;
+  color: var(--warn);
 }
 .row.marker {
-  background: #1c1730;
-  border-color: #3b2f63;
-  color: #b7a6f0;
+  background: var(--info-soft);
+  border-color: var(--info-line);
+  color: var(--info);
 }
 .row.marker:hover {
-  background: #221c3a;
+  background: var(--info-soft);
 }
 .c-kind.reload {
-  color: #b7a6f0;
+  color: var(--info);
 }
 .mark-text {
-  color: #9d8fd4;
+  color: var(--info);
 }
 .c-method {
   width: 56px;
   flex-shrink: 0;
-  color: #8494a8;
+  color: var(--text-muted);
 }
 .c-url {
   flex: 1;
@@ -478,56 +478,56 @@ onUnmounted(() => {
   min-width: 0;
 }
 .host {
-  color: #5c6b80;
+  color: var(--text-faint);
   flex-shrink: 50;
 }
 .rest {
-  color: #d7e0ea;
+  color: var(--text);
   flex-shrink: 1;
 }
 .rest-only {
-  color: #d7e0ea;
+  color: var(--text);
 }
 .c-proto {
   width: 84px;
   flex-shrink: 0;
-  color: #6d7c90;
+  color: var(--text-faint);
 }
 .c-proto.h2 {
-  color: #a5d6ff;
+  color: var(--text);
 }
 .c-proto.disk {
-  color: #8494a8;
+  color: var(--text-muted);
   font-style: italic;
 }
 .c-conn {
   width: 40px;
   flex-shrink: 0;
   text-align: right;
-  color: #5c6b80;
+  color: var(--text-faint);
 }
 .c-conn.fresh {
-  color: #d7e0ea;
+  color: var(--text);
 }
 .c-status {
   width: 74px;
   flex-shrink: 0;
   text-align: right;
-  color: #8494a8;
+  color: var(--text-muted);
 }
 .c-status.ok {
-  color: #56d364;
+  color: var(--ok);
 }
 .c-status.warn {
-  color: #e3b341;
+  color: var(--warn);
 }
 .c-status.bad {
-  color: #ff7b72;
+  color: var(--bad);
 }
 .c-time {
   width: 64px;
   flex-shrink: 0;
   text-align: right;
-  color: #6d7c90;
+  color: var(--text-faint);
 }
 </style>

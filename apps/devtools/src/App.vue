@@ -230,21 +230,21 @@ onUnmounted(() => {
   flex-direction: column;
   width: 100%;
   height: 100%;
-  background: #0a0e16d9;
-  color: #d7e0ea;
-  font-family: "Segoe UI", sans-serif;
+  background: var(--surface-window);
+  color: var(--text);
+  font-family: var(--font-ui);
   user-select: none;
 }
 .banner {
-  height: 22px;
-  padding-left: 12px;
+  height: var(--h-status);
+  padding-left: var(--sp-5);
   display: flex;
   align-items: center;
-  font-size: 11px;
-  color: #ff7b72;
-  background: #ff7b7214;
+  font-size: var(--fs-s);
+  color: var(--bad);
+  background: var(--bad-soft);
   border-bottom-width: 1px;
-  border-color: #ff7b7233;
+  border-color: var(--bad-line);
 }
 .main {
   display: flex;
@@ -253,59 +253,59 @@ onUnmounted(() => {
 }
 .split-v {
   width: 5px;
-  background: #0a0e16;
+  background: var(--surface-base);
   border-left-width: 1px;
   border-right-width: 1px;
-  border-color: #1e2733;
+  border-color: var(--line);
   cursor: col-resize;
 }
 .split-v:hover,
 .split-v.dragging {
-  background: #2f6ea8;
+  background: var(--surface-handle);
 }
 .split-h {
   height: 5px;
-  background: #0a0e16;
+  background: var(--surface-base);
   border-top-width: 1px;
   border-bottom-width: 1px;
-  border-color: #1e2733;
+  border-color: var(--line);
   cursor: row-resize;
 }
 .split-h:hover,
 .split-h.dragging {
-  background: #2f6ea8;
+  background: var(--surface-handle);
 }
 .statusbar {
-  height: 22px;
+  height: var(--h-status);
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 10px;
-  padding-left: 10px;
-  padding-right: 10px;
-  font-size: 10px;
-  color: #5c6b80;
-  background: #0a0e16;
+  gap: var(--sp-4);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-4);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  background: var(--surface-base);
   border-top-width: 1px;
-  border-color: #1e2733;
+  border-color: var(--line);
 }
 .mode {
-  color: #6cb6ff;
+  color: var(--text-muted);
 }
 .flash {
-  color: #7ee08a;
+  color: var(--ok);
 }
 .flash.bad {
-  color: #ff9d96;
+  color: var(--bad);
 }
 .spacer {
   flex: 1;
 }
 .fact {
-  color: #4e5b6d;
+  color: var(--text-ghost);
 }
 .fact.live {
-  color: #56d364;
+  color: var(--ok);
 }
 .shield {
   position: absolute;

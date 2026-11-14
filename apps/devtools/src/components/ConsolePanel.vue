@@ -428,42 +428,42 @@ function glyph(kind: string): string {
 .console {
   min-height: 0;
   border-top-width: 1px;
-  border-color: #1e2733;
+  border-color: var(--line);
 }
 .levels {
   display: flex;
   flex-direction: row;
-  gap: 2px;
+  gap: var(--sp-1);
 }
 .lvl {
   height: 17px;
-  padding-left: 6px;
-  padding-right: 6px;
-  border-radius: 3px;
-  font-size: 10px;
-  color: #4e5b6d;
-  background: #131a24;
+  padding-left: var(--sp-3);
+  padding-right: var(--sp-3);
+  border-radius: var(--r-s);
+  font-size: var(--fs-xs);
+  color: var(--text-ghost);
+  background: var(--surface-panel);
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-2);
 }
 .lvl:hover {
-  background: #1b2431;
+  background: var(--surface-hover);
 }
 .lvl.on {
-  color: #b9c6d6;
-  background: #1c2532;
+  color: var(--text);
+  background: var(--surface-hover);
 }
 .lvl.error.on {
-  color: #ff9d96;
+  color: var(--bad);
 }
 .lvl.warn.on {
-  color: #e3b341;
+  color: var(--warn);
 }
 .lvl .n {
-  font-size: 9px;
-  color: #5c6b80;
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
 }
 .filter {
   width: 130px;
@@ -472,8 +472,8 @@ function glyph(kind: string): string {
   flex: 1;
 }
 .status {
-  font-size: 10px;
-  color: #6d7c90;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -492,50 +492,50 @@ function glyph(kind: string): string {
   display: flex;
   flex-direction: row;
   align-items: flex-start;
-  gap: 6px;
+  gap: var(--sp-3);
   overflow: hidden;
-  padding-left: 8px;
-  padding-right: 12px;
-  font-size: 11px;
-  color: #b9c6d6;
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-5);
+  font-size: var(--fs-s);
+  color: var(--text);
   border-bottom-width: 1px;
-  border-color: #ffffff08;
+  border-color: var(--line-subtle);
 }
 .line:hover {
-  background: #ffffff08;
+  background: var(--surface-hover);
 }
 .line.sel {
-  background: #14344f99;
+  background: var(--surface-active);
 }
 .line.sel:hover {
-  background: #17405f;
+  background: var(--surface-active);
 }
 /* Transparent rather than `display: none` so that showing it never re-lays the row out. */
 .copy {
   width: 14px;
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--fs-s);
   line-height: 17px;
-  color: #00000000;
+  color: transparent;
   text-align: center;
 }
 .line:hover .copy,
 .line.sel .copy {
-  color: #5c6b80;
+  color: var(--text-faint);
 }
 .line .copy:hover {
-  color: #a8d4ff;
+  color: var(--text);
 }
 .glyph {
   width: 8px;
-  color: #46556a;
+  color: var(--text-ghost);
   flex-shrink: 0;
 }
 .kind {
   width: 52px;
   flex-shrink: 0;
-  font-size: 10px;
-  color: #5c6b80;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
 }
 /* The fallback is right for prose — it wraps — and wrong here: a collapsed console line is exactly
    one line tall, and a wrapped second line would be drawn into the row underneath it. */
@@ -560,7 +560,7 @@ function glyph(kind: string): string {
   flex-wrap: wrap;
 }
 .seg {
-  border-radius: 3px;
+  border-radius: var(--r-s);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -572,48 +572,48 @@ function glyph(kind: string): string {
   white-space: normal;
 }
 .line.warn .text {
-  color: #e3b341;
+  color: var(--warn);
 }
 .line.error .text,
 .line.error .glyph {
-  color: #ff7b72;
+  color: var(--bad);
 }
 .line.input .text {
-  color: #a8d4ff;
+  color: var(--text);
 }
 .line.input .glyph {
-  color: #6cb6ff;
+  color: var(--text);
 }
 .line.result .text {
-  color: #7ee08a;
+  color: var(--ok);
 }
 .line.result .glyph {
-  color: #56d364;
+  color: var(--ok);
 }
 .prompt {
-  height: 26px;
+  height: var(--h-bar);
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 6px;
-  padding-left: 8px;
-  padding-right: 8px;
+  gap: var(--sp-3);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-4);
   border-top-width: 1px;
-  border-color: #1e2733;
-  background: #0d1219;
+  border-color: var(--line);
+  background: var(--surface-base);
   position: relative;
 }
 .caret {
-  color: #6cb6ff;
-  font-size: 12px;
+  color: var(--text);
+  font-size: var(--fs-m);
 }
 .entry {
   flex: 1;
   min-width: 0;
-  height: 20px;
-  font-size: 11px;
-  color: #d7e0ea;
-  background: #00000000;
+  height: var(--h-row);
+  font-size: var(--fs-s);
+  color: var(--text);
+  background: transparent;
   border-width: 0px;
 }
 .hints {
@@ -622,26 +622,26 @@ function glyph(kind: string): string {
   bottom: 26px;
   display: flex;
   flex-direction: row;
-  gap: 3px;
-  padding: 3px;
-  border-radius: 4px;
-  background: #131a24;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  border-radius: var(--r-m);
+  background: var(--surface-panel);
   border-width: 1px;
-  border-color: #2b3646;
+  border-color: var(--line-strong);
 }
 .hint {
-  font-size: 10px;
-  color: #8494a8;
-  padding-left: 5px;
-  padding-right: 5px;
-  border-radius: 3px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  padding-left: var(--sp-2);
+  padding-right: var(--sp-2);
+  border-radius: var(--r-s);
 }
 .hint:hover {
-  background: #202938;
-  color: #d7e0ea;
+  background: var(--surface-hover);
+  color: var(--text);
 }
 .hint.first {
-  color: #a8d4ff;
-  background: #14344f;
+  color: var(--text);
+  background: var(--surface-active);
 }
 </style>

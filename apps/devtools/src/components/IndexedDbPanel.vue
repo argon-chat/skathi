@@ -265,9 +265,9 @@ watch(
 .indexed {
   min-width: 0;
   overflow-y: auto;
-  background: #10151d;
-  color: #d7e0ea;
-  font-size: 11px;
+  background: var(--surface-panel);
+  color: var(--text);
+  font-size: var(--fs-s);
 }
 button {
   font-family: inherit;
@@ -281,7 +281,7 @@ input:disabled {
 }
 button:focus-visible,
 select:focus-visible {
-  outline: 2px solid #6cb6ff;
+  outline: 2px solid var(--line-focus);
   outline-offset: -2px;
 }
 .database-toolbar,
@@ -291,57 +291,57 @@ select:focus-visible {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 6px 8px;
-  border-bottom: 1px solid #232c3a;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line);
   min-height: 24px;
 }
 .backend {
   margin-left: auto;
 }
 .muted {
-  color: #a9b6c7;
+  color: var(--text-muted);
 }
 .feedback {
-  padding: 16px 12px;
+  padding: var(--sp-6) var(--sp-5);
   line-height: 1.5;
-  color: #a9b6c7;
+  color: var(--text-muted);
 }
 .failure {
-  color: #ff9d96;
+  color: var(--bad);
   display: flex;
-  gap: 8px;
+  gap: var(--sp-4);
   align-items: center;
 }
 .warning {
-  color: #e3b341;
+  color: var(--warn);
 }
 .selectors {
   display: flex;
-  gap: 12px;
-  padding: 8px;
+  gap: var(--sp-5);
+  padding: var(--sp-4);
   flex-wrap: wrap;
-  background: #121a25;
+  background: var(--surface-panel);
 }
 .selectors label {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--sp-2);
   flex: 1;
   min-width: 140px;
-  color: #a9b6c7;
+  color: var(--text-muted);
 }
 .selectors select {
   width: 100%;
   height: 25px;
 }
 .schema-line {
-  color: #a9b6c7;
-  font-size: 10px;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
 }
 .schema-line b {
   font-weight: 400;
-  color: #c9d8e8;
+  color: var(--text);
 }
 .search-row input {
   flex: 1;
@@ -351,56 +351,56 @@ select:focus-visible {
 .record {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-4);
   box-sizing: border-box;
-  padding: 0 10px;
+  padding: 0 var(--sp-4);
   width: 100%;
   min-width: 0;
 }
 .record-head {
   height: 24px;
-  background: #171e29;
-  color: #a9b6c7;
-  font-size: 10px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
 }
 .records {
   overflow-y: auto;
 }
 .record {
-  height: 26px;
-  background: #10151d;
-  color: #d7e0ea;
+  height: var(--h-bar);
+  background: var(--surface-panel);
+  color: var(--text);
   border: 0;
-  border-bottom: 1px solid #1b2430;
-  font-size: 11px;
+  border-bottom: 1px solid var(--line-subtle);
+  font-size: var(--fs-s);
   text-align: left;
 }
 .record:hover {
-  background: #1b2735;
+  background: var(--surface-hover);
 }
 .record.selected {
-  background: #163854;
+  background: var(--surface-active);
 }
 .key {
   width: 24%;
   flex-shrink: 0;
-  color: #d2a8ff;
+  color: var(--info);
 }
 .value {
   flex: 1;
   min-width: 0;
-  color: #b9d7f4;
+  color: var(--text-strong);
 }
 .type {
   width: 72px;
   flex-shrink: 0;
-  color: #a9b6c7;
+  color: var(--text-muted);
 }
 .size {
   width: 68px;
   flex-shrink: 0;
   text-align: right;
-  color: #a9b6c7;
+  color: var(--text-muted);
 }
 .key,
 .value,
@@ -410,13 +410,13 @@ select:focus-visible {
   white-space: nowrap;
 }
 .pagination {
-  color: #a9b6c7;
-  font-size: 10px;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
 }
 .record-detail {
-  padding: 8px 10px;
-  background: #0c121b;
-  border-top: 1px solid #232c3a;
+  padding: var(--sp-4) var(--sp-4);
+  background: var(--surface-base);
+  border-top: 1px solid var(--line);
   max-height: 240px;
   overflow-y: auto;
 }
@@ -424,28 +424,28 @@ select:focus-visible {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--sp-4);
 }
 .record-detail header .btn {
   margin-left: auto;
 }
 .record-detail pre {
-  color: #c8def5;
+  color: var(--text-strong);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 11px;
+  font-size: var(--fs-s);
   line-height: 1.5;
-  margin: 8px 0;
+  margin: var(--sp-4) 0;
 }
 .preview-field {
   display: flex;
-  gap: 10px;
-  padding: 3px 0;
+  gap: var(--sp-4);
+  padding: var(--sp-1) 0;
   line-height: 1.4;
 }
 .preview-field > :first-child {
   min-width: 80px;
-  color: #d2a8ff;
+  color: var(--info);
 }
 .preview-field > :last-child {
   overflow-wrap: anywhere;
@@ -458,7 +458,7 @@ select:focus-visible {
     display: none;
   }
   .selectors {
-    gap: 6px;
+    gap: var(--sp-3);
   }
   .selectors label {
     min-width: 120px;

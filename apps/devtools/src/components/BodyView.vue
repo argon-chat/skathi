@@ -135,57 +135,57 @@ function copy(): void {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 4px;
-  padding-left: 10px;
-  padding-right: 8px;
-  background: #0f141d;
+  gap: var(--sp-2);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-4);
+  background: var(--surface-panel);
   border-bottom-width: 1px;
-  border-color: #1a2230;
+  border-color: var(--line-subtle);
 }
 .sum {
-  font-size: 10px;
-  color: #8494a8;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .sum.warn {
-  color: #e3b341;
+  color: var(--warn);
 }
 .spacer {
   flex: 1;
 }
 .seg {
   height: 17px;
-  padding-left: 7px;
-  padding-right: 7px;
-  border-radius: 3px;
-  font-size: 10px;
-  color: #8494a8;
+  padding-left: var(--sp-3);
+  padding-right: var(--sp-3);
+  border-radius: var(--r-s);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
   display: flex;
   align-items: center;
 }
 .seg:hover {
-  color: #d7e0ea;
-  background: #171e29;
+  color: var(--text);
+  background: var(--surface-raised);
 }
 .seg.on {
-  background: #14344f;
-  color: #a8d4ff;
+  background: var(--surface-active);
+  color: var(--text);
 }
 .copy {
-  height: 18px;
-  font-size: 10px;
+  height: var(--h-chip);
+  font-size: var(--fs-xs);
 }
 .note {
-  height: 22px;
+  height: var(--h-head);
   display: flex;
   align-items: center;
-  padding-left: 10px;
-  padding-right: 10px;
-  font-size: 10px;
-  color: #c6a663;
-  background: #2a1f0726;
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-4);
+  font-size: var(--fs-xs);
+  color: var(--warn);
+  background: var(--warn-soft);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -202,15 +202,15 @@ function copy(): void {
 }
 .ln {
   height: 16px;
-  padding-left: 10px;
-  padding-right: 14px;
-  font-size: 11px;
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-5);
+  font-size: var(--fs-s);
   line-height: 16px;
-  color: #c9d4e2;
+  color: var(--text);
   white-space: pre;
   overflow: hidden;
 }
 .ln.hex {
-  color: #a5d6ff;
+  color: var(--text);
 }
 </style>

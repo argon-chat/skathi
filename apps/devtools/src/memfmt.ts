@@ -2,15 +2,15 @@
 
 import type { MemBreakdown, MemCategory, MemReply, MemUnsupported } from "./protocol";
 
-export const GPU_COLOR = "#3a9e96";
+export const GPU_COLOR = "var(--mem-gpu)";
 export const MEM_COLORS: Record<string, string> = {
-  images: "#4a6fa5",
-  mapped: "#7d6bb3",
-  jsc: "#c99a2e",
-  rust: "#d0703a",
+  images: "var(--mem-images)",
+  mapped: "var(--mem-mapped)",
+  jsc: "var(--mem-jsc)",
+  rust: "var(--mem-rust)",
   // macOS: unified memory puts the GPU's allocations in the bar.
   graphics: GPU_COLOR,
-  other: "#5c6b80",
+  other: "var(--mem-other)",
 };
 
 /** Why a `mem` reply has no breakdown to draw, or `null` when it has one. */

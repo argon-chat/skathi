@@ -54,46 +54,46 @@ function run(item: MenuItem): void {
   position: absolute;
   display: flex;
   flex-direction: column;
-  padding-top: 4px;
-  padding-bottom: 4px;
-  border-radius: 6px;
-  background: #151c27;
+  padding-top: var(--sp-2);
+  padding-bottom: var(--sp-2);
+  border-radius: var(--r-l);
+  background: var(--surface-raised);
   border-width: 1px;
-  border-color: #2f3b4d;
+  border-color: var(--line-strong);
   box-shadow: 0px 6px 18px #00000080;
 }
 .item {
-  height: 22px;
+  height: var(--h-row-loose);
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 10px;
-  padding-left: 10px;
-  padding-right: 10px;
-  font-size: 11px;
-  color: #c9d4e2;
+  gap: var(--sp-4);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-4);
+  font-size: var(--fs-s);
+  color: var(--text);
   white-space: nowrap;
 }
 .item:hover {
-  background: #14344f;
-  color: #e6edf3;
+  background: var(--surface-active);
+  color: var(--text-strong);
 }
 .item.off {
-  color: #4e5b6d;
+  color: var(--text-ghost);
 }
 .item.off:hover {
-  background: #00000000;
-  color: #4e5b6d;
+  background: transparent;
+  color: var(--text-ghost);
 }
 .item.divided {
   border-top-width: 1px;
-  border-color: #232c3a;
+  border-color: var(--line);
 }
 .label-text {
   flex: 1;
 }
 .hint {
-  font-size: 10px;
-  color: #5c6b80;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
 }
 </style>

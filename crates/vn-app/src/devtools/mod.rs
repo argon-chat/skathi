@@ -2286,20 +2286,18 @@ fn cmd_trace(op: Option<&str>, frames: bool, label: Option<&str>, cap: Option<f6
 
 /// The samples a `perf` reply carries: the tail of the ring, since the push channel sends this
 /// four times a second.
-const PERF_SAMPLES: usize = 120;
+const PERF_SAMPLES: usize = 240;
 
 fn perf_data() -> Json {
     let snap = crate::perf::snapshot();
     let (avg, p50, p95, max, fps) = snap.stats();
+    let (work_p50, work_p95, work_max) = snap.work_stats();
     let round2 = |v: f32| f64::from((v * 100.0).round() / 100.0);
-    let tail: Vec<Json> = snap
-        .samples
-        .iter()
-        .rev()
-        .take(PERF_SAMPLES)
-        .rev()
-        .map(|ms| Json::n(round2(*ms)))
-        .collect();
+    let skip = snap.samples.len().saturating_sub(PERF_SAMPLES);
+    let tail: Vec<Json> = snap.samples[skip..].iter().map(|ms| Json::n(round2(*ms))).collect();
+    let work: Vec<Json> = snap.work[skip..].iter().map(|ms| Json::n(round2(*ms))).collect();
+    let flags: Vec<Json> = snap.flags[skip..].iter().map(|f| Json::n(f64::from(*f))).collect();
+    let share = |flag: u8| Json::n(f64::from((snap.share(flag) * 1000.0).round() / 1000.0));
     Json::obj(vec![
         ("frames", Json::n(snap.frames as f64)),
         ("uptimeMs", Json::n(f64::from(snap.uptime_ms.round()))),
@@ -2338,6 +2336,14 @@ fn perf_data() -> Json {
             },
         ),
         ("samples", Json::arr(tail)),
+        ("work", Json::arr(work)),
+        ("flags", Json::arr(flags)),
+        ("workP50Ms", Json::n(round2(work_p50))),
+        ("workP95Ms", Json::n(round2(work_p95))),
+        ("workMaxMs", Json::n(round2(work_max))),
+        ("pacedShare", share(crate::perf::FLAG_PACED)),
+        ("drewShare", share(crate::perf::FLAG_DREW)),
+        ("throttledShare", share(crate::perf::FLAG_THROTTLED)),
         ("idle", crate::idle::status()),
         ("nodes", Json::n(f64::from(vn_tree::devtools::node_count()))),
         ("builds", Json::n(vn_tree::devtools::frame_counts().0 as f64)),

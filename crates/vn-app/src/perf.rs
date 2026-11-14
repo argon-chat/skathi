@@ -64,6 +64,8 @@ pub fn boot() {
     // first frame and make `boot -> first frame` read as zero.
     #[cfg(vn_devtools)]
     ROLL.with(|r| r.borrow_mut().boot = Instant::now());
+    #[cfg(vn_devtools)]
+    gpui::observe_frames(on_frame_work);
     if !enabled() {
         return;
     }
@@ -92,15 +94,29 @@ pub fn boot() {
 }
 
 // The rolling window the devtools Performance panel reads: unlike `VN_PERF`'s report, an
-// unconditional fixed-size ring ([`ROLL`]) costing one `Instant::now()` and one array store per
+// unconditional fixed-size ring ([`ROLL`]) costing one `Instant::now()` and a few array stores per
 // frame. `cfg(vn_devtools)`, since a shipped prod build has nobody to read it.
+//
+// A slot is one frame of the pump: `ms` is the interval since the previous one, `work` the time
+// gpui spent on frame requests in it (every window's: callbacks, the pump, draw and present), and
+// the rest of the interval was waiting. `flags` says why: idle pacing chose the wait, the frame
+// drew, the frame-rate limit held a request back.
 
 #[cfg(vn_devtools)]
 pub const ROLL_LEN: usize = 600;
 
 #[cfg(vn_devtools)]
+pub const FLAG_PACED: u8 = 1;
+#[cfg(vn_devtools)]
+pub const FLAG_DREW: u8 = 2;
+#[cfg(vn_devtools)]
+pub const FLAG_THROTTLED: u8 = 4;
+
+#[cfg(vn_devtools)]
 struct Roll {
     ms: [f32; ROLL_LEN],
+    work: [f32; ROLL_LEN],
+    flags: [u8; ROLL_LEN],
     head: usize,
     filled: usize,
     frames: u64,
@@ -113,6 +129,8 @@ struct Roll {
 thread_local! {
     static ROLL: RefCell<Roll> = RefCell::new(Roll {
         ms: [0.0; ROLL_LEN],
+        work: [0.0; ROLL_LEN],
+        flags: [0; ROLL_LEN],
         head: 0,
         filled: 0,
         frames: 0,
@@ -125,6 +143,8 @@ thread_local! {
 #[cfg(vn_devtools)]
 pub struct Snapshot {
     pub samples: Vec<f32>,
+    pub work: Vec<f32>,
+    pub flags: Vec<u8>,
     pub frames: u64,
     pub boot_to_first_frame_ms: Option<f32>,
     pub uptime_ms: f32,
@@ -143,6 +163,25 @@ impl Snapshot {
         let at = |q: f32| sorted[((sorted.len() as f32 - 1.0) * q).round() as usize];
         (avg, at(0.5), at(0.95), sorted[sorted.len() - 1], if avg > 0.0 { 1000.0 / avg } else { 0.0 })
     }
+
+    /// p50, p95 and the worst of the frames' work.
+    pub fn work_stats(&self) -> (f32, f32, f32) {
+        if self.work.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+        let mut sorted = self.work.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let at = |q: f32| sorted[((sorted.len() as f32 - 1.0) * q).round() as usize];
+        (at(0.5), at(0.95), sorted[sorted.len() - 1])
+    }
+
+    /// The share of frames with `flag`.
+    pub fn share(&self, flag: u8) -> f32 {
+        if self.flags.is_empty() {
+            return 0.0;
+        }
+        self.flags.iter().filter(|f| *f & flag != 0).count() as f32 / self.flags.len() as f32
+    }
 }
 
 #[cfg(vn_devtools)]
@@ -150,12 +189,21 @@ pub fn snapshot() -> Snapshot {
     ROLL.with(|r| {
         let r = r.borrow();
         let mut samples = Vec::with_capacity(r.filled);
+        let mut work = Vec::with_capacity(r.filled);
+        let mut flags = Vec::with_capacity(r.filled);
+        // A slot holds the interval that ended at a frame, the pacing of that interval, and the
+        // work of the frame that opened the next one: an interval's work sits in the slot before it.
         let start = (r.head + ROLL_LEN - r.filled) % ROLL_LEN;
-        for i in 0..r.filled {
-            samples.push(r.ms[(start + i) % ROLL_LEN]);
+        for i in 1..r.filled {
+            let (before, at) = ((start + i - 1) % ROLL_LEN, (start + i) % ROLL_LEN);
+            samples.push(r.ms[at]);
+            work.push(r.work[before].min(r.ms[at]));
+            flags.push((r.flags[before] & !FLAG_PACED) | (r.flags[at] & FLAG_PACED));
         }
         Snapshot {
             samples,
+            work,
+            flags,
             frames: r.frames,
             boot_to_first_frame_ms: r.first_frame.map(|f| ms_since(r.boot, f)),
             uptime_ms: ms_since(r.boot, Instant::now()),
@@ -174,11 +222,34 @@ fn roll_frame(now: Instant) {
         if let Some(prev) = r.last {
             let head = r.head;
             r.ms[head] = (now - prev).as_secs_f32() * 1000.0;
+            r.work[head] = 0.0;
+            r.flags[head] = if crate::idle::last_paced() { FLAG_PACED } else { 0 };
             r.head = (head + 1) % ROLL_LEN;
             r.filled = (r.filled + 1).min(ROLL_LEN);
             r.frames += 1;
         }
         r.last = Some(now);
+    });
+}
+
+/// gpui's report of one frame request, charged to the pump frame in progress.
+#[cfg(vn_devtools)]
+fn on_frame_work(frame: gpui::FrameWork) {
+    ROLL.with(|r| {
+        let mut r = r.borrow_mut();
+        if r.filled == 0 {
+            return;
+        }
+        let at = (r.head + ROLL_LEN - 1) % ROLL_LEN;
+        match frame.outcome {
+            gpui::FrameOutcome::Throttled => r.flags[at] |= FLAG_THROTTLED,
+            outcome => {
+                r.work[at] += frame.ended.saturating_duration_since(frame.started).as_secs_f32() * 1000.0;
+                if outcome == gpui::FrameOutcome::Drew {
+                    r.flags[at] |= FLAG_DREW;
+                }
+            }
+        }
     });
 }
 

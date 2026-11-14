@@ -5,6 +5,7 @@ import AllocationsPanel from "./AllocationsPanel.vue";
 import type { InspectorRequest } from "../inspector-model";
 import { forceGc, measureResident, refreshMem, refreshPerf, state } from "../store";
 import { GPU_COLOR, formatMem, historyColumns, itemsOf, memColor, percent, segments, totalLabel } from "../memfmt";
+import { FALLBACK_BUDGET_MS, frameBars, frameCeiling, hasFrameWork, share, workClass } from "../perffmt";
 
 const props = defineProps<{
   height: number;
@@ -50,6 +51,17 @@ function barClass(ms: number): string {
   if (ms > ref * 3) return "bad";
   if (ms > ref * 1.6) return "warn";
   return "";
+}
+
+// A frame split into its work and the wait after it; an older target only reports intervals.
+const split = computed(() => !!perf.value && hasFrameWork(perf.value));
+const budget = computed(() => perf.value?.budgetMs || FALLBACK_BUDGET_MS);
+const frameTop = computed(() => (perf.value && split.value ? frameCeiling(perf.value.work ?? [], budget.value) : 0));
+const frames = computed(() => (perf.value && split.value ? frameBars(perf.value, budget.value, frameTop.value) : []));
+const budgetPct = computed(() => (frameTop.value ? Math.min(100, (budget.value / frameTop.value) * 100) : 0));
+
+function fixed(ms: number | undefined): string {
+  return ms === undefined ? "—" : ms.toFixed(2);
 }
 
 function seconds(ms: number | null | undefined): string {
@@ -150,6 +162,7 @@ function residentTitle(key: string): string {
       :height="Math.max(0, props.height - 57)"
       :request="request"
       :session-key="sessionKey"
+      :budget-ms="budget"
       @recording-change="frameRecordingChanged"
     />
     <AllocationsPanel
@@ -159,11 +172,86 @@ function residentTitle(key: string): string {
       :session-key="sessionKey"
       @recording-change="allocationRecordingChanged"
     />
-    <div v-else class="body scroll" :style="{ height: Math.max(0, props.height - 57) + 'px' }">
+    <div v-else class="body scroll">
       <div v-if="!perf" class="empty">
         Waiting for the first frame sample. If this stays empty the push channel is not connected — the titlebar says
         <b>polling</b> when that happens.
       </div>
+
+      <template v-else-if="split">
+        <div class="stats">
+          <div class="stat big" title="Main-thread time of a frame: callbacks, the JS pump, layout, draw and present">
+            <span class="v">{{ fixed(perf.workP50Ms) }}</span
+            ><span class="u">ms</span>
+            <span class="k">frame work · p50</span>
+          </div>
+          <div class="stat">
+            <span class="v" :class="workClass(perf.workP95Ms ?? 0, budget)">{{ fixed(perf.workP95Ms) }}</span
+            ><span class="u">ms</span>
+            <span class="k">frame work · p95</span>
+          </div>
+          <div class="stat">
+            <span class="v" :class="workClass(perf.workMaxMs ?? 0, budget)">{{ fixed(perf.workMaxMs) }}</span
+            ><span class="u">ms</span>
+            <span class="k">frame work · worst</span>
+          </div>
+          <div class="stat" title="Frames after which the clock slowed down because nothing was happening">
+            <span class="v">{{ share(perf.pacedShare) }}</span>
+            <span class="k">idle-paced frames</span>
+          </div>
+        </div>
+        <div class="meta">
+          <span>budget {{ budget.toFixed(2) }} ms{{ perf.budgetMs ? "" : " (assumed 60 Hz)" }}</span>
+          <span title="Frames per second over the ring, waiting included: low while idle on purpose"
+            >{{ perf.fps.toFixed(1) }} fps with waiting</span
+          >
+          <span title="Frames that drew; the rest ran the pump with nothing to repaint"
+            >{{ share(perf.drewShare) }} drew</span
+          >
+          <span>{{ perf.nodes }} nodes</span>
+          <span>boot {{ seconds(perf.bootMs) }}</span>
+          <span>up {{ seconds(perf.uptimeMs) }}</span>
+        </div>
+
+        <div class="chart">
+          <div class="axis">
+            <span class="tick">{{ frameTop }} ms</span>
+            <span class="tick mid">{{ frameTop / 2 }}</span>
+            <span class="tick">0</span>
+          </div>
+          <div class="bars frames">
+            <div
+              class="budget-line"
+              :style="{ bottom: budgetPct + '%' }"
+              :title="`frame budget ${budget.toFixed(2)} ms`"
+            ></div>
+            <div v-for="(f, i) in frames" :key="i" class="fbar" :title="f.title">
+              <div class="part work" :class="[f.cls, { quiet: !f.drew }]" :style="{ height: f.workPct + '%' }"></div>
+              <div class="part wait" :class="{ paced: f.paced }" :style="{ height: f.waitPct + '%' }"></div>
+            </div>
+            <div v-if="!frames.length" class="empty">collecting…</div>
+          </div>
+        </div>
+        <div class="intervals">
+          frame to frame, waiting included: p50 {{ perf.p50Ms.toFixed(2) }} · p95 {{ perf.p95Ms.toFixed(2) }} · worst
+          {{ perf.maxMs.toFixed(2) }} ms<template v-if="perf.throttledShare">
+            · {{ share(perf.throttledShare) }} of frames held a request back at the frame-rate limit</template
+          >
+        </div>
+        <div class="legend keyed">
+          <span class="key"><i class="sw work"></i>frame work</span>
+          <span class="key"><i class="sw work quiet"></i>work, nothing to redraw</span>
+          <span class="key"><i class="sw work warn"></i>past 60 % of the budget</span>
+          <span class="key"><i class="sw work bad"></i>past the budget</span>
+          <span class="key"><i class="sw wait paced"></i>waiting: idle pacing</span>
+          <span class="key"><i class="sw wait"></i>waiting for the next frame</span>
+          <span class="key"><i class="sw line"></i>display frame budget</span>
+        </div>
+        <div class="legend">
+          one bar per frame, the last {{ frames.length }} · only the work counts against the budget: a long bar of
+          waiting is the clock resting, not a slow frame
+        </div>
+      </template>
 
       <template v-else>
         <div class="stats">
@@ -418,11 +506,11 @@ function residentTitle(key: string): string {
   min-height: 30px;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
   box-sizing: border-box;
-  border-bottom: 1px solid #232c3a;
-  background: #0f1620;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-panel);
 }
 .perf-tabs button {
   font-family: inherit;
@@ -433,12 +521,12 @@ function residentTitle(key: string): string {
   cursor: default;
 }
 .perf-tabs button:focus-visible {
-  outline: 2px solid #6cb6ff;
+  outline: 2px solid var(--line-focus);
   outline-offset: -2px;
 }
 .recording-note {
-  color: #e3b341;
-  font-size: 10px;
+  color: var(--warn);
+  font-size: var(--fs-xs);
   margin-left: auto;
 }
 
@@ -457,66 +545,64 @@ function residentTitle(key: string): string {
 .body {
   display: flex;
   flex-direction: column;
-  padding: 12px;
-  gap: 12px;
+  flex: 1;
+  padding: var(--sp-5);
+  gap: var(--sp-5);
 }
 .stats {
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--sp-4);
 }
 .stat {
   display: flex;
-  flex-direction: column;
-  min-width: 96px;
-  padding: 8px;
-  border-radius: 6px;
-  background: #131a24;
-  border-width: 1px;
-  border-color: #1e2733;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  min-width: 112px;
+  padding: var(--sp-4) var(--sp-5);
+  border-radius: var(--r-l);
+  background: var(--surface-raised);
 }
-.stat.big {
-  min-width: 130px;
-  background: #10202e;
-  border-color: #244566;
+.stat .k {
+  width: 100%;
 }
 .v {
-  font-size: 19px;
-  color: #d7e0ea;
-  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: var(--fs-2xl);
+  color: var(--text);
+  font-family: var(--font-mono);
 }
 .stat.big .v {
-  font-size: 26px;
-  color: #6cb6ff;
+  color: var(--text-strong);
 }
 .v.warn {
-  color: #e3b341;
+  color: var(--warn);
 }
 .v.bad {
-  color: #ff7b72;
+  color: var(--bad);
 }
 .u {
-  font-size: 10px;
-  color: #5c6b80;
-  margin-left: 3px;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  margin-left: var(--sp-1);
 }
 .k {
-  font-size: 10px;
-  color: #7f8ea3;
-  margin-top: 3px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  margin-top: var(--sp-1);
 }
 .chart {
   height: 120px;
   flex-shrink: 0;
   display: flex;
   flex-direction: row;
-  gap: 6px;
-  padding: 8px;
-  border-radius: 6px;
-  background: #0c1119;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-radius: var(--r-l);
+  background: var(--surface-base);
   border-width: 1px;
-  border-color: #1e2733;
+  border-color: var(--line);
 }
 .axis {
   display: flex;
@@ -526,8 +612,8 @@ function residentTitle(key: string): string {
   flex-shrink: 0;
 }
 .tick {
-  font-size: 9px;
-  color: #5c6b80;
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
   text-align: right;
 }
 .bars {
@@ -536,23 +622,117 @@ function residentTitle(key: string): string {
   display: flex;
   flex-direction: row;
   align-items: flex-end;
-  gap: 1px;
+  gap: 0;
 }
 .bar {
   flex: 1;
   min-width: 1px;
-  background: #2f6ea8;
-  border-radius: 1px;
+  background: var(--chart-work-quiet);
+  border-radius: var(--r-s);
 }
 .bar.warn {
-  background: #b8891f;
+  background: var(--warn);
 }
 .bar.bad {
-  background: #cf4b43;
+  background: var(--bad);
+}
+.bars.frames {
+  position: relative;
+  gap: 0;
+}
+.fbar {
+  flex: 1;
+  min-width: 1px;
+  height: 100%;
+  display: flex;
+  flex-direction: column-reverse;
+  padding-right: 0;
+}
+.part {
+  width: 100%;
+  flex-shrink: 0;
+}
+.part.work {
+  min-height: 1px;
+  background: var(--chart-work);
+  border-radius: var(--r-s);
+}
+.part.work.quiet {
+  background: var(--chart-work-quiet);
+}
+.part.work.warn {
+  background: var(--warn);
+}
+.part.work.bad {
+  background: var(--bad);
+}
+.part.wait {
+  background: var(--chart-wait);
+}
+.part.wait.paced {
+  background: var(--chart-wait-paced);
+}
+.budget-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--chart-guide);
+}
+.meta {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--sp-5);
+  margin-top: var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.intervals {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  line-height: 15px;
+}
+.legend.keyed {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--sp-5);
+}
+.key {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.sw.work {
+  background: var(--chart-work);
+}
+.sw.work.quiet {
+  background: var(--chart-work-quiet);
+}
+.sw.work.warn {
+  background: var(--warn);
+}
+.sw.work.bad {
+  background: var(--bad);
+}
+.sw.wait {
+  background: var(--chart-wait);
+  border-width: 1px;
+  border-color: var(--line-strong);
+}
+.sw.wait.paced {
+  background: var(--chart-wait-paced);
+  border-color: var(--ok-line);
+}
+.sw.line {
+  height: 2px;
+  background: var(--surface-handle);
 }
 .legend {
-  font-size: 10px;
-  color: #5c6b80;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
   line-height: 15px;
 }
 
@@ -561,21 +741,21 @@ function residentTitle(key: string): string {
   flex-direction: row;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
-  padding-top: 8px;
+  gap: var(--sp-3);
+  padding-top: var(--sp-4);
   border-top-width: 1px;
-  border-color: #1e2733;
+  border-color: var(--line);
 }
 .stack {
   height: 16px;
   flex-shrink: 0;
   display: flex;
   flex-direction: row;
-  border-radius: 4px;
+  border-radius: var(--r-m);
   overflow: hidden;
-  background: #0c1119;
+  background: var(--surface-base);
   border-width: 1px;
-  border-color: #1e2733;
+  border-color: var(--line);
 }
 .seg {
   height: 100%;
@@ -583,7 +763,7 @@ function residentTitle(key: string): string {
 .mem-grid {
   display: flex;
   flex-direction: row;
-  gap: 12px;
+  gap: var(--sp-5);
   align-items: flex-start;
 }
 .table {
@@ -596,40 +776,40 @@ function residentTitle(key: string): string {
   display: flex;
   flex-direction: row;
   align-items: center;
-  height: 20px;
-  gap: 6px;
-  font-size: 11px;
-  color: #b9c6d6;
+  height: var(--h-row);
+  gap: var(--sp-3);
+  font-size: var(--fs-s);
+  color: var(--text);
 }
 .row.cat {
-  border-radius: 3px;
+  border-radius: var(--r-s);
 }
 .row.cat:hover {
-  background: #171e29;
+  background: var(--surface-raised);
 }
 .row.sub {
-  color: #8494a8;
-  padding-left: 18px;
+  color: var(--text-muted);
+  padding-left: var(--sp-6);
 }
 .row.sub.info {
-  color: #5c6b80;
+  color: var(--text-faint);
   font-style: italic;
 }
 .row.note {
-  color: #5c6b80;
-  font-size: 10px;
-  padding-left: 18px;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  padding-left: var(--sp-6);
 }
 .tw {
   width: 10px;
   flex-shrink: 0;
-  font-size: 9px;
-  color: #5c6b80;
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
 }
 .sw {
   width: 9px;
   height: 9px;
-  border-radius: 2px;
+  border-radius: var(--r-s);
   flex-shrink: 0;
 }
 .name {
@@ -643,47 +823,47 @@ function residentTitle(key: string): string {
   width: 72px;
   flex-shrink: 0;
   text-align: right;
-  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
 }
 .num.res {
-  color: #76e3ea;
+  color: var(--cyan);
 }
 .row.head {
   height: 16px;
-  font-size: 9px;
-  color: #5c6b80;
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
   letter-spacing: 0.4px;
   text-transform: uppercase;
 }
 .row.head .num,
 .row.head .pct {
   font-family: inherit;
-  color: #5c6b80;
+  color: var(--text-faint);
 }
 .pct {
   width: 54px;
   flex-shrink: 0;
   text-align: right;
-  color: #5c6b80;
-  font-family: "Cascadia Mono", "Consolas", monospace;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
 }
 .history {
   width: 40%;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-3);
 }
 .hchart {
   height: 140px;
   display: flex;
   flex-direction: row;
-  gap: 6px;
-  padding: 8px;
-  border-radius: 6px;
-  background: #0c1119;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-radius: var(--r-l);
+  background: var(--surface-base);
   border-width: 1px;
-  border-color: #1e2733;
+  border-color: var(--line);
 }
 .cols {
   flex: 1;

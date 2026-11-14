@@ -170,7 +170,11 @@ export function frameBuckets(frames: TraceFrame[], maximum = 180) {
     let frame = frames[offset]!;
     const end = Math.min(frames.length, offset + stride);
     for (let index = offset + 1; index < end; index++)
-      if (frames[index]!.durationMs > frame.durationMs) frame = frames[index]!;
+      if (
+        frames[index]!.cpuMs > frame.cpuMs ||
+        (frames[index]!.cpuMs === frame.cpuMs && frames[index]!.durationMs > frame.durationMs)
+      )
+        frame = frames[index]!;
     buckets.push({ frame, count: end - offset });
   }
   return buckets;

@@ -106,6 +106,12 @@ pub fn status() -> crate::json::Json {
     ])
 }
 
+/// Whether the last frame handed the clock a deliberate wait, so the gap to the next frame is pacing.
+#[cfg_attr(not(vn_devtools), allow(dead_code))]
+pub fn last_paced() -> bool {
+    cfg!(target_os = "windows") && enabled() && LAST.with(Cell::get).is_some_and(|(_, _, wait)| wait.is_some())
+}
+
 fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("VN_IDLE_PACING").map_or(true, |v| v.trim() != "0"))
