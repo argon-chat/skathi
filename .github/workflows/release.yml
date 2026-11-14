@@ -316,5 +316,5 @@ jobs:
               echo "$name@$version is already published"
               continue
             fi
-            npm publish "npm-tarballs/skathi-native-$pkg-$version.tgz" --access public --provenance --tag "$dist_tag"
+            npm publish "./npm-tarballs/skathi-native-$pkg-$version.tgz" --access public --provenance --tag "$dist_tag"
           done
