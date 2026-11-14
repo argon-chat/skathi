@@ -20,82 +20,7 @@ import { fetchHost } from "./host-fetch";
 import { colorEnabled, colorFlag, lineProgress, logTo, paint, progressFor } from "./term";
 import { createCommand } from "./create";
 import { currentPlatform, parsePlatform } from "./platform";
-
-const USAGE = `sk ${CLI_VERSION} — package a Skathi app for Windows, macOS or Linux
-
-usage
-  sk dev     [app] [--exe <h>] the dev loop: build.ts --watch + a dev host (hot reload); the
-                               host is the checkout's debug sk-app, else this version's,
-                               cached or downloaded from its release
-  sk build   [app] [options]   a debug exe in <app>/dist/debug: devtools (F12) in, the bundle
-                               not minified
-  sk publish [app] [options]   the release exe in <app>/dist/release: the engine parts
-                               sk.config.json selects, and without a selection no devtools;
-                               minified (macOS: <exeName>.app, signed per macos.sign)
-  sk run     [app] [options]   sk build, then start the exe with its stderr in this terminal
-  sk host info [exe]           what a host exe says about itself (--sk-host-info)
-  sk host path [selection]     which host \`sk build\` would stamp
-  sk host fetch [selection | --variant both | --variant dev]
-                               download prebuilt hosts of this version from its GitHub
-                               release into the local cache (no selection: every published
-                               one and the dev host; sk build and sk dev do it on demand)
-  sk host add <exe>            verify a prod host and copy it into the local cache
-  sk host build [selection | --variant both]
-                               maintainers, in a checkout: cargo-build the bare host(s)
-                               (no selection: standard and no-devtools)
-  sk check   [app] [options]   what in the bundle (app code and node_modules) breaks or slows
-                               down under native AOT, and how well it is typed
-    --format pretty|json       json: one versioned report on stdout (schema skathi.check)
-    --deny-warnings            warnings fail the check too
-    --no-deps                  the app's own code only
-    --config <path>            external config, as for sk build
-    --color | --no-color       colours on or off (default: a terminal, unless NO_COLOR is set)
-                               exit 0: clean; 1: errors; 2: usage, config or internal failure
-                               sk.config.json "check": { "allow": { "SK2001": ["pkg", "src/legacy/**"] } }
-  sk explain <CODE> | --list   what a check code means and how to fix it
-  sk create  [dir] [options]   a new app; in a terminal it asks for what the options leave open
-    --name <n>                 the app's name (default: the directory's)
-    --os windows,macos         what sk publish packages for (default: this OS)
-    --without audio,…          engine parts to leave out (${OPTIONAL.filter((p) => p !== "devtools").join(", ")})
-    --devtools | --no-devtools whether sk publish keeps devtools (default: no)
-    --router | --no-router     vue-router and pinia (asked: yes; with --yes: no)
-    --pm bun|npm|pnpm|yarn     the package manager (default: the one running this, else bun)
-    --yes, -y                  ask nothing; defaults for the rest
-
-  [app] is an app directory (default: .), its entry module, or its sk.config.json.
-
-build and publish options
-  --out <dir>                  output directory (default <app>/dist/debug or dist/release)
-  --config <path>              external config; entry and relative assets stay under [app]
-  --host <exe>                 the bare host to stamp (default: SK_HOST, the checkout's
-                               target/…/release/sk-app.exe, the local cache, then a
-                               download from the release; SK_HOST_OFFLINE=1 skips that)
-  selection — which engine parts the host carries (default: sk.config.json
-  "windows": "without" / "features" / "host", else every part; sk build always keeps
-  devtools, sk publish drops them unless the config selects them). One of:
-  --without audio,clipboard    leave these parts out
-  --features audio,storages    take only these parts
-  --variant no-devtools+no-audio
-                               a host variant by name ("standard" = every part)
-  parts: ${OPTIONAL.join(", ")}
-  --console                    keep the console subsystem (a console window opens with it)
-  --platform windows|macos|linux  what to package for (default: this OS). Another OS's
-                               build needs --host <its sk-app>, and is not signed
-  --sign <identity>            macOS: codesign with this identity, hardened runtime and
-                               entitlements ("-" = ad hoc; over sk.config.json macos.sign)
-  --no-sign                    macOS: leave the bundle unsigned (default: ad hoc)
-  --payload-only               write dist/.sk/app.skpk and stop; no host needed
-  --aot-inputs                 retain typed TS/Vue source inputs in dist/.sk/aot-inputs/
-                               (preparation archive; does not enable native AOT)
-  --allow-host-mismatch        stamp a host from another Skathi version (maintainers)
-  --define K=V                 a Vite-style define on top of sk.config.json "define"
-                               (V is an expression: --define __FLAG__=true,
-                               --define 'APP_NAME="argon"'); repeatable
-  --json                       one JSON line instead of the summary (build, host path)
-
-  sk.config.json "packs" splits the assets into <name>.skpk files beside the payload
-  (or the exe), e.g. [{ "name": "fonts", "match": ["**/*.woff2"] }, { "name": "assets" }].
-`;
+import { commandHelp, topHelp } from "./help";
 
 type Flags = Record<string, string | boolean>;
 const BOOLEAN = new Set([
@@ -107,13 +32,12 @@ const BOOLEAN = new Set([
   "allow-host-mismatch",
   "aot-inputs",
   "help",
+  "version",
   "json",
   "no-sign",
   "yes",
   "devtools",
   "no-devtools",
-  "router",
-  "no-router",
   "color",
   "no-color",
 ]);
@@ -137,6 +61,7 @@ function parse(argv: string[]): {
     }
     if (a === "-h") flags.help = true;
     else if (a === "-y") flags.yes = true;
+    else if (a === "-v") flags.version = true;
     else if (a.startsWith("--")) {
       // Split at the FIRST "=" only: `--define=K=V` keeps its own "=".
       const body = a.slice(2);
@@ -171,13 +96,22 @@ function variantOf(flags: Flags): Variant | undefined {
 async function main(argv: string[]): Promise<number> {
   const { positional, flags, repeated, rest } = parse(argv);
   const [command, ...args] = positional;
-  if (!command || flags.help || command === "help") {
-    console.log(USAGE);
-    return command || flags.help ? 0 : 1;
-  }
-  if (command === "version" || command === "--version") {
+  if (command === "version" || (!command && flags.version === true)) {
     console.log(CLI_VERSION);
     return 0;
+  }
+  const color = colorEnabled(process.stdout, colorFlag(flags));
+  const about = command === "help" ? args[0] : flags.help ? command : undefined;
+  if (about !== undefined) {
+    const text = commandHelp(about, color);
+    if (text) {
+      console.log(text);
+      return 0;
+    }
+  }
+  if (!command || flags.help || command === "help") {
+    console.log(topHelp(color));
+    return command || flags.help ? 0 : 1;
   }
 
   if (command === "build" || command === "publish" || command === "run") {
@@ -328,14 +262,14 @@ async function main(argv: string[]): Promise<number> {
       os: str("os"),
       without: str("without"),
       devtools: yesNo("devtools"),
-      router: yesNo("router"),
+      template: str("template"),
       pm: str("pm"),
       yes: flags.yes === true,
     });
   }
 
   console.error(
-    `${paint(colorEnabled(process.stderr)).red("error")}: unknown command ${JSON.stringify(command)}\n\n${USAGE}`,
+    `${paint(colorEnabled(process.stderr)).red("error")}: unknown command ${JSON.stringify(command)} (sk --help lists them)`,
   );
   return 1;
 }

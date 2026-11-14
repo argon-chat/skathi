@@ -173,6 +173,7 @@ describe("the sk CLI", () => {
     expect(list.status).toBe(0);
     for (const code of ["SK0001", "SK1004", "SK2004", "SK3004"]) expect(list.stdout).toContain(code);
     expect(sk(["explain", "SK9999"]).status).toBe(2);
-    expect(sk(["--help"]).stdout).toContain("sk check   [app] [options]");
+    expect(sk(["--help"]).stdout).toContain("check [app]");
+    expect(sk(["check", "--help"]).stdout).toContain("--deny-warnings");
   }, 60_000);
 });

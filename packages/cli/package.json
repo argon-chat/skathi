@@ -11,6 +11,7 @@
   "files": [
     "cli",
     "check",
+    "templates",
     "devtools/apps.ts",
     "devtools/commands.ts",
     "devtools/ctl.ts",

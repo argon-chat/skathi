@@ -10,12 +10,14 @@
   "type": "module",
   "files": [
     "src",
-    "env.d.ts"
+    "env.d.ts",
+    "tsconfig.app.json"
   ],
   "description": "The Skathi runtime: the Vue renderer, DOM surface and module loader an app runs on.",
   "exports": {
     ".": "./src/runtime.ts",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./tsconfig.app.json": "./tsconfig.app.json"
   },
   "types": "./src/runtime.ts",
   "dependencies": {

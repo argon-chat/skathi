@@ -753,6 +753,21 @@ declare global {
   interface SkAnimationOptions {
     duration?: number;
     easing?: string;
+    delay?: number;
+    endDelay?: number;
+    iterations?: number;
+    direction?: "normal" | "reverse" | "alternate" | "alternate-reverse";
+    fill?: "none" | "forwards" | "backwards" | "both" | "auto";
+  }
+  interface SkAnimation extends SkEventTarget {
+    readonly playState: "idle" | "running" | "paused" | "finished";
+    readonly finished: Promise<SkAnimation>;
+    playbackRate: number;
+    play(): void;
+    pause(): void;
+    cancel(): void;
+    finish(): void;
+    reverse(): void;
   }
 
   interface SkElement extends SkNode {
@@ -778,7 +793,7 @@ declare global {
     querySelectorAll<E extends SkElement = SkElement>(selector: string): SkElementList<E>;
     remove(): void;
     focus(options?: { preventScroll?: boolean }): void;
-    animate(keyframes: Record<string, string>[], options?: SkAnimationOptions): unknown;
+    animate(keyframes: Record<string, string | number>[], options?: number | SkAnimationOptions): SkAnimation;
   }
 
   interface SkInputElement extends SkElement {
@@ -802,9 +817,62 @@ declare global {
   interface SkImageData {
     readonly data: Uint8ClampedArray;
   }
+  interface SkCanvasGradient {
+    addColorStop(offset: number, color: string): void;
+  }
+  interface SkTextMetrics {
+    readonly width: number;
+  }
   interface SkCanvas2D {
-    fillStyle: string;
+    fillStyle: string | SkCanvasGradient;
+    strokeStyle: string | SkCanvasGradient;
+    lineWidth: number;
+    lineCap: "butt" | "round" | "square";
+    lineJoin: "miter" | "round" | "bevel";
+    globalAlpha: number;
+    globalCompositeOperation: string;
+    shadowBlur: number;
+    shadowColor: string;
+    font: string;
+    textAlign: "start" | "end" | "left" | "right" | "center";
+    textBaseline: "top" | "hanging" | "middle" | "alphabetic" | "ideographic" | "bottom";
+    save(): void;
+    restore(): void;
+    scale(x: number, y: number): void;
+    rotate(angle: number): void;
+    translate(x: number, y: number): void;
+    setTransform(a: number, b: number, c: number, d: number, e: number, f: number): void;
+    resetTransform(): void;
+    createLinearGradient(x0: number, y0: number, x1: number, y1: number): SkCanvasGradient;
+    createRadialGradient(x0: number, y0: number, r0: number, x1: number, y1: number, r1: number): SkCanvasGradient;
+    clearRect(x: number, y: number, w: number, h: number): void;
     fillRect(x: number, y: number, w: number, h: number): void;
+    strokeRect(x: number, y: number, w: number, h: number): void;
+    beginPath(): void;
+    closePath(): void;
+    moveTo(x: number, y: number): void;
+    lineTo(x: number, y: number): void;
+    quadraticCurveTo(cpx: number, cpy: number, x: number, y: number): void;
+    bezierCurveTo(cp1x: number, cp1y: number, cp2x: number, cp2y: number, x: number, y: number): void;
+    arc(x: number, y: number, radius: number, startAngle: number, endAngle: number, counterclockwise?: boolean): void;
+    ellipse(
+      x: number,
+      y: number,
+      radiusX: number,
+      radiusY: number,
+      rotation: number,
+      startAngle: number,
+      endAngle: number,
+      counterclockwise?: boolean,
+    ): void;
+    rect(x: number, y: number, w: number, h: number): void;
+    roundRect(x: number, y: number, w: number, h: number, radii?: number | number[]): void;
+    fill(): void;
+    stroke(): void;
+    fillText(text: string, x: number, y: number, maxWidth?: number): void;
+    strokeText(text: string, x: number, y: number, maxWidth?: number): void;
+    measureText(text: string): SkTextMetrics;
+    setLineDash(segments: number[]): void;
     createImageData(w: number, h: number): SkImageData;
     putImageData(data: SkImageData, x: number, y: number): void;
   }
@@ -812,7 +880,101 @@ declare global {
     width: number;
     height: number;
     getContext(kind: "2d"): SkCanvas2D | null;
+    /** Null without the `webgpu` engine part. */
+    getContext(kind: "webgpu"): SkGPUCanvasContext | null;
   }
+
+  // WebGPU at the depth a render-to-canvas app calls it; absent without the `webgpu` engine part.
+  interface SkNavigator {
+    readonly gpu?: SkGPU;
+  }
+  interface SkGPU {
+    requestAdapter(options?: { powerPreference?: "low-power" | "high-performance" }): Promise<SkGPUAdapter | null>;
+    getPreferredCanvasFormat(): string;
+  }
+  interface SkGPUAdapterInfo {
+    readonly vendor: string;
+    readonly architecture: string;
+    readonly device: string;
+    readonly description: string;
+  }
+  interface SkGPUAdapter {
+    readonly info: SkGPUAdapterInfo;
+    requestDevice(): Promise<SkGPUDevice>;
+  }
+  interface SkGPUBuffer {
+    destroy(): void;
+  }
+  type SkGPUBindGroupLayout = object;
+  type SkGPUBindGroup = object;
+  type SkGPUShaderModule = object;
+  type SkGPUTextureView = object;
+  interface SkGPUTexture {
+    readonly width: number;
+    readonly height: number;
+    createView(): SkGPUTextureView;
+  }
+  interface SkGPURenderPipeline {
+    getBindGroupLayout(index: number): SkGPUBindGroupLayout;
+  }
+  interface SkGPURenderPipelineDescriptor {
+    layout: "auto";
+    vertex: { module: SkGPUShaderModule; entryPoint?: string };
+    fragment: { module: SkGPUShaderModule; entryPoint?: string; targets: { format: string }[] };
+    primitive?: { topology?: "point-list" | "line-list" | "line-strip" | "triangle-list" | "triangle-strip" };
+  }
+  interface SkGPURenderPassDescriptor {
+    colorAttachments: {
+      view: SkGPUTextureView;
+      clearValue?: { r: number; g: number; b: number; a: number };
+      loadOp: "load" | "clear";
+      storeOp: "store" | "discard";
+    }[];
+  }
+  interface SkGPURenderPassEncoder {
+    setPipeline(pipeline: SkGPURenderPipeline): void;
+    setBindGroup(index: number, group: SkGPUBindGroup): void;
+    draw(vertexCount: number, instanceCount?: number, firstVertex?: number, firstInstance?: number): void;
+    end(): void;
+  }
+  type SkGPUCommandBuffer = object;
+  interface SkGPUCommandEncoder {
+    beginRenderPass(descriptor: SkGPURenderPassDescriptor): SkGPURenderPassEncoder;
+    finish(): SkGPUCommandBuffer;
+  }
+  interface SkGPUQueue {
+    submit(buffers: SkGPUCommandBuffer[]): void;
+    writeBuffer(buffer: SkGPUBuffer, offset: number, data: ArrayBuffer | ArrayBufferView): void;
+  }
+  interface SkGPUDevice {
+    readonly queue: SkGPUQueue;
+    createShaderModule(descriptor: { code: string }): SkGPUShaderModule;
+    createRenderPipeline(descriptor: SkGPURenderPipelineDescriptor): SkGPURenderPipeline;
+    createBuffer(descriptor: { size: number; usage: number }): SkGPUBuffer;
+    createBindGroup(descriptor: {
+      layout: SkGPUBindGroupLayout;
+      entries: { binding: number; resource: { buffer: SkGPUBuffer } }[];
+    }): SkGPUBindGroup;
+    createCommandEncoder(): SkGPUCommandEncoder;
+    destroy(): void;
+  }
+  interface SkGPUCanvasContext {
+    configure(configuration: { device: SkGPUDevice; format: string; alphaMode?: "opaque" | "premultiplied" }): void;
+    unconfigure(): void;
+    getCurrentTexture(): SkGPUTexture;
+  }
+  var GPUBufferUsage:
+    | {
+        readonly MAP_READ: number;
+        readonly MAP_WRITE: number;
+        readonly COPY_SRC: number;
+        readonly COPY_DST: number;
+        readonly INDEX: number;
+        readonly VERTEX: number;
+        readonly UNIFORM: number;
+        readonly STORAGE: number;
+      }
+    | undefined;
 
   interface SkTokenList {
     value: string;

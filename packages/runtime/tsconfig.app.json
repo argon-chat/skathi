@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "useDefineForClassFields": false,
+    "isolatedModules": true,
+    "types": [],
+    "paths": {
+      "vue": ["./src/runtime.ts"],
+      "@skathi-native/runtime": ["./src/runtime.ts"]
+    }
+  },
+  "vueCompilerOptions": { "lib": "@skathi-native/runtime" },
+  "files": ["./env.d.ts", "./src/engine.d.ts", "./src/protocol.d.ts", "./src/indexeddb.d.ts"]
+}

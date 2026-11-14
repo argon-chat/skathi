@@ -220,7 +220,7 @@ interface SkFetchResponse {
   readonly ok: boolean;
   readonly status: number;
   json(): Promise<unknown>;
-  text?(): Promise<string>;
+  text(): Promise<string>;
 }
 declare var fetch: ((url: string, init?: Record<string, unknown>) => Promise<SkFetchResponse>) | undefined;
 

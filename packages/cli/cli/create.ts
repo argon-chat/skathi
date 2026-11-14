@@ -1,16 +1,18 @@
 // `sk create [dir]`: a new app. In a terminal it asks for what the flags do not say: the directory, the
-// name, the OSes to package for, the engine parts, whether published builds keep devtools, vue-router
-// and pinia, and the package manager. `--yes` (or no terminal) takes the defaults.
+// name, the template, the OSes to package for, the engine parts, whether published builds keep devtools,
+// and the package manager. `--yes` (or no terminal) takes the defaults.
 //
-// It writes package.json (the app root the builders resolve npm dependencies from), sk.config.json,
-// src/, assets/, a generated 256² icon.png and a tsconfig.json that type-checks against the runtime.
+// It copies templates/<template>/ (src/, assets/) with the placeholders filled in, and writes
+// package.json (the app root the builders resolve npm dependencies from), sk.config.json, a generated
+// 256² icon.png and a tsconfig.json that type-checks against the runtime.
 // Nothing is overwritten: an existing file is an error, not a merge.
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, extname, join, relative, resolve } from "node:path";
 import * as p from "@clack/prompts";
-import { RUNTIME_DIR, RUNTIME_SRC_DIR, runtimeRequire } from "../runtime-path";
+import { runtimeRequire } from "../runtime-path";
 import { ConfigError, OPTIONAL, parseParts, sanitizeExeName, type Part } from "./config";
+import { CLI_VERSION } from "./host";
 import { encodePng } from "./icon";
 import { currentPlatform, parsePlatform, type Platform } from "./platform";
 import { colorEnabled, paint } from "./term";
@@ -18,14 +20,44 @@ import { colorEnabled, paint } from "./term";
 export const PACKAGE_MANAGERS = ["bun", "npm", "pnpm", "yarn"] as const;
 export type PackageManager = (typeof PACKAGE_MANAGERS)[number];
 
+export const TEMPLATES = ["showcase", "minimal"] as const;
+export type Template = (typeof TEMPLATES)[number];
+
+interface TemplateInfo {
+  hint: string;
+  /** Taken at the versions the runtime itself depends on. */
+  dependencies: string[];
+  window: Record<string, unknown>;
+  packs?: { name: string; match?: string[] }[];
+}
+
+const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
+  showcase: {
+    hint: "every Skathi feature, one page each",
+    dependencies: ["pinia", "vue-router"],
+    window: { width: 1100, height: 720, minWidth: 480, minHeight: 360, titleBarStyle: "hidden", titleBarHeight: 40 },
+    packs: [{ name: "media", match: ["assets/media/**"] }],
+  },
+  minimal: {
+    hint: "one window, one component",
+    dependencies: [],
+    window: { width: 760, height: 520, titleBarStyle: "default" },
+  },
+};
+
+export const TEMPLATES_DIR = resolve(import.meta.dir, "..", "templates");
+
+/** Files whose text has its `{{key}}` placeholders filled in; anything else is copied byte for byte. */
+const TEXT_FILES = new Set([".vue", ".ts", ".css", ".txt", ".json", ".html", ".svg"]);
+
 export interface CreateOptions {
   name?: string | undefined;
+  template?: Template | undefined;
   platforms?: Platform[] | undefined;
   /** Engine parts left out of every build; devtools is {@link CreateOptions.keepDevtools}'s. */
   without?: Part[] | undefined;
   /** Whether `sk publish` keeps devtools (`sk build` always has them). */
   keepDevtools?: boolean | undefined;
-  router?: boolean | undefined;
   packageManager?: PackageManager | undefined;
 }
 
@@ -67,145 +99,31 @@ function icon(): Uint8Array {
 
 const json = (v: unknown) => JSON.stringify(v, null, 2) + "\n";
 
-const STYLE = `
-.root {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 24px;
-  color: white;
+function listFiles(dir: string, prefix = ""): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    return entry.isDirectory() ? listFiles(join(dir, entry.name), rel) : [rel];
+  });
 }
-.title {
-  font-size: 22px;
-  font-weight: 600;
-}
-.btn {
-  align-self: flex-start;
-  padding: 6px 14px;
-  border-radius: 8px;
-  background: #ffffff22;
-}`;
 
-function sources(productName: string, router: boolean): Record<string, string> {
-  if (!router) {
-    return {
-      "src/main.ts": `import { createApp } from "vue";
-import App from "./App.vue";
-
-createApp(App).mount();
-`,
-      "src/App.vue": `<script setup lang="ts">
-import { onMounted, ref } from "vue";
-
-const count = ref(0);
-// A relative URL resolves against the app root in dev and against the payload once packaged.
-const greeting = ref("…");
-onMounted(async () => {
-  const res = await fetch?.("assets/hello.txt");
-  const text = res?.ok ? await res.text?.() : undefined;
-  greeting.value = text?.trim() ?? "assets/hello.txt did not load";
-});
-</script>
-
-<template>
-  <div class="root">
-    <div class="title">${productName}</div>
-    <div class="line">{{ greeting }}</div>
-    <div class="btn" @click="count++">clicked {{ count }}×</div>
-  </div>
-</template>
-
-<style scoped>${STYLE}
-</style>
-`,
-    };
+/** The template's files, keyed by app-relative path; `{{key}}` is replaced in text files, escaped for a string literal except in .txt. */
+export function templateFiles(template: Template, values: Record<string, string>): Record<string, string | Uint8Array> {
+  const dir = join(TEMPLATES_DIR, template);
+  const out: Record<string, string | Uint8Array> = {};
+  for (const rel of listFiles(dir)) {
+    const bytes = readFileSync(join(dir, rel));
+    const ext = extname(rel);
+    if (!TEXT_FILES.has(ext)) {
+      out[rel] = bytes;
+      continue;
+    }
+    out[rel] = bytes.toString("utf8").replace(/\{\{(\w+)\}\}/g, (whole, key: string) => {
+      const value = values[key];
+      if (value === undefined) return whole;
+      return ext === ".txt" ? value : JSON.stringify(value).slice(1, -1);
+    });
   }
-  return {
-    "src/main.ts": `import { createApp } from "vue";
-import { createPinia } from "pinia";
-import App from "./App.vue";
-import { router } from "./router";
-
-createApp(App).use(createPinia()).use(router).mount();
-`,
-    "src/router.ts": `import { createMemoryHistory, createRouter } from "vue-router";
-import Home from "./views/Home.vue";
-import About from "./views/About.vue";
-
-export const router = createRouter({
-  history: createMemoryHistory(),
-  routes: [
-    { path: "/", component: Home },
-    { path: "/about", component: About },
-  ],
-});
-`,
-    "src/stores/counter.ts": `import { defineStore } from "pinia";
-import { ref } from "vue";
-
-export const useCounter = defineStore("counter", () => {
-  const count = ref(0);
-  const increment = () => count.value++;
-  return { count, increment };
-});
-`,
-    "src/App.vue": `<template>
-  <div class="root">
-    <div class="title">${productName}</div>
-    <div class="nav">
-      <RouterLink class="btn" to="/">Home</RouterLink>
-      <RouterLink class="btn" to="/about">About</RouterLink>
-    </div>
-    <RouterView />
-  </div>
-</template>
-
-<style scoped>${STYLE}
-.nav {
-  display: flex;
-  gap: 8px;
-}
-</style>
-`,
-    "src/views/Home.vue": `<script setup lang="ts">
-import { onMounted, ref } from "vue";
-import { useCounter } from "../stores/counter";
-
-const counter = useCounter();
-// A relative URL resolves against the app root in dev and against the payload once packaged.
-const greeting = ref("…");
-onMounted(async () => {
-  const res = await fetch?.("assets/hello.txt");
-  const text = res?.ok ? await res.text?.() : undefined;
-  greeting.value = text?.trim() ?? "assets/hello.txt did not load";
-});
-</script>
-
-<template>
-  <div>{{ greeting }}</div>
-  <div class="btn" @click="counter.increment()">clicked {{ counter.count }}×</div>
-</template>
-
-<style scoped>
-.btn {
-  align-self: flex-start;
-  padding: 6px 14px;
-  border-radius: 8px;
-  background: #ffffff22;
-}
-</style>
-`,
-    "src/views/About.vue": `<script setup lang="ts">
-import { useCounter } from "../stores/counter";
-
-const counter = useCounter();
-</script>
-
-<template>
-  <div>The counter lives in a pinia store: {{ counter.count }}, here too.</div>
-</template>
-`,
-  };
+  return out;
 }
 
 /** Writes the app; every option has a default. Returns the files written. */
@@ -222,66 +140,52 @@ export function create(target: string, options: CreateOptions = {}): string[] {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "") || "app";
+  const template = options.template ?? "showcase";
+  const info = TEMPLATE_INFO[template];
   const platforms = options.platforms?.length ? options.platforms : [currentPlatform()];
   const without: Part[] = OPTIONAL.filter((part) =>
     part === "devtools" ? !options.keepDevtools : (options.without ?? []).includes(part),
   );
-  const rel = (to: string) => relative(dir, to).split(sep).join("/");
-  const runtime = rel(RUNTIME_SRC_DIR);
-  const pkg = (name: string) => rel(dirname(runtimeRequire.resolve(`${name}/package.json`)));
+  const runtimeDeps = (runtimeRequire("./package.json") as { dependencies: Record<string, string> }).dependencies;
+  const sdk = `^${CLI_VERSION}`;
 
   const files: Record<string, string | Uint8Array> = {
+    ...templateFiles(template, { name, productName }),
     "package.json": json({
       name: slug,
       version: "0.1.0",
       private: true,
       type: "module",
-      scripts: { dev: "sk dev", build: "sk build", publish: "sk publish" },
+      scripts: {
+        dev: "sk dev",
+        build: "sk build",
+        publish: "sk publish",
+        check: "sk check",
+        typecheck: "vue-tsc --noEmit",
+      },
+      dependencies: {
+        "@skathi-native/runtime": sdk,
+        ...Object.fromEntries(info.dependencies.map((dep) => [dep, runtimeDeps[dep]])),
+      },
+      devDependencies: { "@skathi-native/cli": sdk, typescript: "^5", "vue-tsc": "^3" },
     }),
     "sk.config.json": json({
       name,
       productName,
       version: "0.1.0",
       platforms,
-      window: { title: productName, width: 900, height: 640, backdrop: "mica" },
+      window: { title: productName, ...info.window, backdrop: "mica" },
       assets: ["assets"],
+      ...(info.packs ? { packs: info.packs } : {}),
       windows: { exeName, icon: "icon.png", without },
       ...(platforms.includes("macos") ? { macos: { bundleId: `com.example.${slug}` } } : {}),
     }),
-    ...sources(productName, options.router ?? false),
-    "assets/hello.txt": `hello from ${name}'s assets\n`,
     "icon.png": icon(),
     "tsconfig.json": json({
-      compilerOptions: {
-        target: "ESNext",
-        module: "ESNext",
-        moduleResolution: "bundler",
-        lib: ["ESNext"],
-        strict: true,
-        noEmit: true,
-        skipLibCheck: true,
-        useDefineForClassFields: false,
-        isolatedModules: true,
-        types: [],
-        baseUrl: ".",
-        paths: {
-          vue: [`${runtime}/runtime.ts`],
-          "@skathi-native/runtime": [`${runtime}/runtime.ts`],
-          "vue-router": [pkg("vue-router")],
-          pinia: [pkg("pinia")],
-        },
-      },
-      // Template types from the runtime: an installed `vue` package brings DOM typings the engine does not have.
-      vueCompilerOptions: { lib: "@skathi-native/runtime" },
-      include: [
-        `${runtime}/engine.d.ts`,
-        `${runtime}/protocol.d.ts`,
-        `${runtime}/indexeddb.d.ts`,
-        `${rel(RUNTIME_DIR)}/env.d.ts`,
-        "src/**/*.ts",
-        "src/**/*.vue",
-      ],
+      extends: "@skathi-native/runtime/tsconfig.app.json",
+      include: ["src/**/*.ts", "src/**/*.vue"],
     }),
+    ".gitignore": "node_modules/\ndist/\n",
   };
 
   for (const rel of Object.keys(files)) {
@@ -300,10 +204,10 @@ export function create(target: string, options: CreateOptions = {}): string[] {
 
 export interface CreateFlags {
   name?: string | undefined;
+  template?: string | undefined;
   os?: string | undefined;
   without?: string | undefined;
   devtools?: boolean | undefined;
-  router?: boolean | undefined;
   pm?: string | undefined;
   yes?: boolean | undefined;
 }
@@ -312,6 +216,12 @@ function parsePm(v: string): PackageManager {
   const pm = PACKAGE_MANAGERS.find((m) => m === v.trim().toLowerCase());
   if (!pm) throw new ConfigError(`--pm ${JSON.stringify(v)}: expected one of ${PACKAGE_MANAGERS.join(", ")}`);
   return pm;
+}
+
+export function parseTemplate(v: string): Template {
+  const template = TEMPLATES.find((t) => t === v.trim().toLowerCase());
+  if (!template) throw new ConfigError(`--template ${JSON.stringify(v)}: expected one of ${TEMPLATES.join(", ")}`);
+  return template;
 }
 
 function answered<T>(value: T): Exclude<T, symbol> {
@@ -327,13 +237,13 @@ export async function createCommand(target: string | undefined, flags: CreateFla
   const ask = !flags.yes && process.stdin.isTTY === true && process.stdout.isTTY === true;
   const options: CreateOptions = {
     name: flags.name,
+    template: flags.template !== undefined ? parseTemplate(flags.template) : undefined,
     platforms: flags.os
       ?.split(/[\s,]+/)
       .filter(Boolean)
       .map(parsePlatform),
     without: flags.without !== undefined ? parseParts(flags.without, "--without") : undefined,
     keepDevtools: flags.devtools,
-    router: flags.router,
     packageManager: flags.pm !== undefined ? parsePm(flags.pm) : undefined,
   };
   let dir = target;
@@ -354,6 +264,13 @@ export async function createCommand(target: string | undefined, flags: CreateFla
         message: "App name",
         initialValue: basename(resolve(dir)),
         validate: (v) => (v?.trim() ? undefined : "it needs a name"),
+      }),
+    );
+    options.template ??= answered(
+      await p.select<Template>({
+        message: "Template",
+        options: TEMPLATES.map((t) => ({ value: t, label: t, hint: TEMPLATE_INFO[t].hint })),
+        initialValue: "showcase",
       }),
     );
     options.platforms ??= answered(
@@ -385,7 +302,6 @@ export async function createCommand(target: string | undefined, flags: CreateFla
         initialValue: false,
       }),
     );
-    options.router ??= answered(await p.confirm({ message: "Add vue-router and pinia?", initialValue: true }));
     options.packageManager ??= answered(
       await p.select<PackageManager>({
         message: "Package manager",
@@ -399,7 +315,7 @@ export async function createCommand(target: string | undefined, flags: CreateFla
   const pm = options.packageManager ?? detectPackageManager();
   create(dir, options);
   const where = relative(process.cwd(), resolve(dir)) || ".";
-  const next = [...(where === "." ? [] : [`cd ${where}`]), runScript(pm, "dev")].join("\n");
+  const next = [...(where === "." ? [] : [`cd ${where}`]), `${pm} install`, runScript(pm, "dev")].join("\n");
   if (ask) {
     p.note(next, "Next");
     p.outro(`${options.name ?? basename(resolve(dir))} is ready`);

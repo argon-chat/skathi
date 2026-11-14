@@ -40,6 +40,8 @@
     "devtools/src/**/*.ts",
     "devtools/src/**/*.vue",
     "../packages/test/fixtures/*/src/**/*.ts",
-    "../packages/test/fixtures/*/src/**/*.vue"
+    "../packages/test/fixtures/*/src/**/*.vue",
+    "../packages/cli/templates/*/src/**/*.ts",
+    "../packages/cli/templates/*/src/**/*.vue"
   ]
 }
