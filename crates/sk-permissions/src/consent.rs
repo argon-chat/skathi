@@ -879,7 +879,8 @@ mod tests {
 
     #[test]
     fn the_camera_prompts_only_where_it_can_be_captured() {
-        set_camera_capture(true);
+        // The hosts enable capture where a camera backend exists: Windows and macOS.
+        set_camera_capture(cfg!(any(target_os = "windows", target_os = "macos")));
         assert!(prompts_with(Capability::Microphone, false));
         assert!(prompts_with(Capability::Camera, true));
         assert!(

@@ -14,6 +14,20 @@ target = "x86_64-pc-windows-msvc"
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608,1048576"]
 
+# Hooks Bun defines for its WebKit: weak references in the JSC prebuilt that stay undefined. Every
+# binary linking the engine needs them, test binaries included, not only sk-app (its build.rs).
+[target.aarch64-apple-darwin]
+rustflags = [
+  "-C", "link-arg=-Wl,-U,_Bun__reportUnhandledError",
+  "-C", "link-arg=-Wl,-U,_Bun__thisThreadHasVM",
+  "-C", "link-arg=-Wl,-U,_WTFTimer__cancel",
+  "-C", "link-arg=-Wl,-U,_WTFTimer__create",
+  "-C", "link-arg=-Wl,-U,_WTFTimer__deinit",
+  "-C", "link-arg=-Wl,-U,_WTFTimer__isActive",
+  "-C", "link-arg=-Wl,-U,_WTFTimer__secondsUntilTimer",
+  "-C", "link-arg=-Wl,-U,_WTFTimer__update",
+]
+
 [env]
 # The bun-webkit prebuilt is fetched by vendor/redjs/setup.ps1 (setup.sh on macOS) into
 # vendor/redjs/prebuilt/; redjs's build.rs finds it there (a set BUN_WEBKIT_DIR still wins) and
