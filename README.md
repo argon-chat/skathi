@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="icon.svg">
+    <img src="icon-black.svg" width="128" alt="Skathi">
+  </picture>
+</p>
+
 # Skathi
 
 Desktop apps from Vue 3 single-file components, without a browser. GPU-rendered UI, JavaScriptCore

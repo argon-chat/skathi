@@ -3,8 +3,8 @@
 // and the package manager. `--yes` (or no terminal) takes the defaults.
 //
 // It copies templates/<template>/ (src/, assets/) with the placeholders filled in, and writes
-// package.json (the app root the builders resolve npm dependencies from), sk.config.json, a generated
-// 256² icon.png and a tsconfig.json that type-checks against the runtime.
+// package.json (the app root the builders resolve npm dependencies from), sk.config.json, the Skathi
+// icon as icon.png and a tsconfig.json that type-checks against the runtime.
 // Nothing is overwritten: an existing file is an error, not a merge.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -13,7 +13,6 @@ import * as p from "@clack/prompts";
 import { runtimeRequire } from "../runtime-path";
 import { ConfigError, sanitizeExeName } from "./config";
 import { CLI_VERSION } from "./host";
-import { encodePng } from "./icon";
 import { currentPlatform, parsePlatform, type Platform } from "./platform";
 import { colorEnabled, paint } from "./term";
 
@@ -68,26 +67,6 @@ export function detectPackageManager(agent = process.env.npm_config_user_agent ?
 
 export const runScript = (pm: PackageManager, script: string) =>
   pm === "npm" || pm === "bun" ? `${pm} run ${script}` : `${pm} ${script}`;
-
-function icon(): Uint8Array {
-  const size = 256;
-  const data = new Uint8Array(size * size * 4);
-  const r = 56;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const dx = Math.max(0, Math.abs(x - 127.5) - (128 - r));
-      const dy = Math.max(0, Math.abs(y - 127.5) - (128 - r));
-      const inside = dx * dx + dy * dy <= r * r;
-      const t = (x + y) / (2 * size);
-      const o = (y * size + x) * 4;
-      data[o] = Math.round(0x42 + (0x2f - 0x42) * t);
-      data[o + 1] = Math.round(0xb8 + (0x6f - 0xb8) * t);
-      data[o + 2] = Math.round(0x83 + (0xd8 - 0x83) * t);
-      data[o + 3] = inside ? 255 : 0;
-    }
-  }
-  return encodePng({ width: size, height: size, data });
-}
 
 const json = (v: unknown) => JSON.stringify(v, null, 2) + "\n";
 
@@ -171,7 +150,7 @@ export function create(target: string, options: CreateOptions = {}): string[] {
       windows: { exeName, icon: "icon.png" },
       ...(platforms.includes("macos") ? { macos: { bundleId: `com.example.${slug}` } } : {}),
     }),
-    "icon.png": icon(),
+    "icon.png": readFileSync(join(TEMPLATES_DIR, "icon.png")),
     "tsconfig.json": json({
       extends: "@skathi-native/runtime/tsconfig.app.json",
       include: ["src/**/*.ts", "src/**/*.vue"],
