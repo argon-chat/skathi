@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-events",
+
+  "window": {
+    "title": "Skathi — contextmenu, clicks, img load (fixture)",
+    "width": 480,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

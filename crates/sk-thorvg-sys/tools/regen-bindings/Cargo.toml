@@ -1,0 +1,20 @@
+# Contributor tool, NOT part of the build. It is excluded from the Skathi
+# workspace by its own `[workspace]` table so `cargo build` at the repo root
+# never resolves `bindgen` and never needs `libclang`.
+#
+#     LIBCLANG_PATH="C:\Program Files\LLVM\bin" \
+#       cargo run --release --manifest-path crates/sk-thorvg-sys/tools/regen-bindings/Cargo.toml
+#
+# It writes `crates/sk-thorvg-sys/src/bindings.rs`, which is checked in.
+[package]
+name = "sk-thorvg-regen-bindings"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Same major as the version `thorvg-sys` on crates.io uses, so the output
+# shape is comparable to the upstream Rust binding.
+bindgen = "0.71"
+
+[workspace]

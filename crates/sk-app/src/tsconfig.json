@@ -1,0 +1,20 @@
+{
+  // The two host preludes, compiled into the binary as strings.
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    // Not DOM: lib.dom would make `screen`, `matchMedia` etc. already exist and hide what the prelude installs.
+    "lib": ["ESNext"],
+    // A class added later must not get a constructor prologue that runs before the host wires its globals.
+    "useDefineForClassFields": false,
+    // The preludes are classic scripts (no import/export).
+    "isolatedModules": false,
+    "types": []
+  },
+  "include": [
+    "prelude.ts",
+    "window.prelude.ts",
+    "prelude-host.d.ts",
+    "../../../packages/runtime/src/engine.d.ts",
+    "../../../packages/runtime/src/protocol.d.ts"
+  ]
+}

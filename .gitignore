@@ -1,7 +1,7 @@
 # Rust
 /target/
-crates/vn-thorvg-sys/tools/regen-bindings/target/
-crates/vn-thorvg-sys/tools/regen-bindings/Cargo.lock
+crates/sk-thorvg-sys/tools/regen-bindings/target/
+crates/sk-thorvg-sys/tools/regen-bindings/Cargo.lock
 
 # JS
 node_modules/
@@ -15,23 +15,23 @@ dist/
 *.log
 .DS_Store
 
-# Pinned contributor toolchain (see crates/vn-effects/tools/slang.manifest.json).
-# `bun packages/vue-native/fetch-slang.ts` populates it; nothing in `cargo build`
+# Pinned contributor toolchain (see crates/sk-effects/tools/slang.manifest.json).
+# `bun scripts/fetch-slang.ts` populates it; nothing in `cargo build`
 # needs it, because the generated effect HLSL is checked in.
 /tools/
 
-# Fetched Lottie measurement corpus (crates/vn-lottie/tools/fetch-corpus.sh).
+# Fetched Lottie measurement corpus (crates/sk-lottie/tools/fetch-corpus.sh).
 # Third-party After Effects exports, pinned by commit, measured but not
 # redistributed — see the script for why.
-/crates/vn-lottie/tests/corpus/
+/crates/sk-lottie/tests/corpus/
 
 # Uncommitted build probe of a third-party app (m15 gap analysis).
 # Proprietary source — staged here only to run the builder against it.
 /apps/meet-probe/
-/packages/vue-native/dist-meet/
+/packages/cli/dist-meet/
 
-# vn-test scratch, derived and large:
-#   .vn-test/            per-instance dist slots, host logs, the staged ~120 MB exe
-#   .vn-test-artifacts/  the screenshots a failed assertion points at
-/packages/vn-test/.vn-test/
-/.vn-test-artifacts/
+# sk-test scratch, derived and large:
+#   .sk-test/            per-instance dist slots, host logs, the staged ~120 MB exe
+#   .sk-test-artifacts/  the screenshots a failed assertion points at
+/packages/test/.sk-test/
+/.sk-test-artifacts/

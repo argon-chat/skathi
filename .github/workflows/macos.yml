@@ -1,6 +1,6 @@
 name: macOS
 
-# Bring-up of the macOS host: checks and builds vn-app for Apple Silicon. Not a required check.
+# Bring-up of the macOS host: checks and builds sk-app for Apple Silicon. Not a required check.
 
 on:
   push:
@@ -27,7 +27,7 @@ jobs:
       CARGO_TERM_COLOR: always
       TARGET: aarch64-apple-darwin
       # Outside the workspace: checkout's clean would otherwise drop the incremental build.
-      CARGO_TARGET_DIR: ${{ github.workspace }}/../vue-native-macos-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../skathi-macos-target
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -48,7 +48,6 @@ jobs:
         # Shaders compile at build time, so a Metal error fails here, not at first frame.
         run: xcrun -f metal >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
       - name: Install JS dependencies
-        working-directory: packages/vue-native
         run: bun install --frozen-lockfile
       - name: Cache pinned native dependencies
         uses: actions/cache@v4
@@ -60,6 +59,6 @@ jobs:
       - name: Fetch and verify native dependencies
         run: bash vendor/redjs/setup.sh
       - name: Check the host
-        run: cargo check --locked -p vn-app --target "$TARGET"
+        run: cargo check --locked -p sk-app --target "$TARGET"
       - name: Build the bare host
-        run: cargo build --locked --release -p vn-app --target "$TARGET" --features prod
+        run: cargo build --locked --release -p sk-app --target "$TARGET" --features prod

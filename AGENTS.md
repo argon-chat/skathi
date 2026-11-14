@@ -1,15 +1,17 @@
-# vue-native: instructions for agents
+# Skathi: instructions for agents
 
 Vue 3 SFCs rendered by gpui, with the JS running in JavaScriptCore (redjs). Windows-first; macOS
 and Linux hosts exist.
 
 ## Layout
 
-- `crates/vn-app`: the host (window, event loop, JS bindings, embedding API `vn_app::embed`).
-- `crates/vn-runtime`, `vn-tree`, `vn-css`, `vn-elements`: JS runtime, element tree, CSS, elements.
-- `crates/vn-desktop`, `vn-permissions`, `vn-storage`, `vn-clipboard`, …: platform services.
-- `packages/vue-native`: SFC compiler, `prod.ts` bundler, the `vn` CLI (`cli/vn.ts`), devtools.
-- `packages/vn-test`: end-to-end specs that drive a real host.
+- `crates/sk-app`: the host (window, event loop, JS bindings, embedding API `sk_app::embed`).
+- `crates/sk-runtime`, `sk-tree`, `sk-css`, `sk-elements`: JS runtime, element tree, CSS, elements.
+- `crates/sk-desktop`, `sk-permissions`, `sk-storage`, `sk-clipboard`, …: platform services.
+- `packages/runtime` (`@skathi-native/runtime`): the JS runtime apps import, run in JavaScriptCore.
+- `packages/cli` (`@skathi-native/cli`): SFC compiler, `prod.ts` bundler, the `sk` CLI (`cli/sk.ts`), devtools.
+- `packages/test` (`@skathi-native/test`): end-to-end specs that drive a real host.
+- `scripts/`: repo tooling (preludes, shaders, release hosts, AOT).
 - `apps/*`: sample and test apps (`apps/hello` is the main one).
 
 ## Commands
@@ -17,22 +19,22 @@ and Linux hosts exist.
 Build with an explicit target (see `.cargo/config.toml`):
 
 ```
-cargo build --target x86_64-pc-windows-msvc -p vn-app
+cargo build --target x86_64-pc-windows-msvc -p sk-app
 cargo test --target x86_64-pc-windows-msvc -p <crate>
 ```
 
-In `packages/vue-native`:
+JS, from the repo root (one bun workspace):
 
 ```
 bun install
-bun test                 # unit tests
-bun run typecheck         # needs Node on PATH: vue-tsc run by bun cannot resolve .vue imports
-bun run preludes         # regenerate crates/vn-app/src/{prelude,window.prelude}.js
+bun run test             # runtime and CLI unit tests
+bun run typecheck        # needs Node on PATH: vue-tsc run by bun cannot resolve .vue imports
+bun run preludes         # regenerate crates/sk-app/src/{prelude,window.prelude}.js
 bun run preludes:check
 bun run shaders:check
 ```
 
-End-to-end: `bun test specs` in `packages/vn-test`, after `cargo build -p vn-app`.
+End-to-end: `bun test specs` in `packages/test`, after `cargo build -p sk-app`.
 
 A new crate dependency must pass `cargo deny check licenses` (`deny.toml`): no GPL family.
 
@@ -52,10 +54,10 @@ exclusions in `.prettierignore`. Rust is `cargo fmt`'s.
 - **Strict TypeScript.** Every TS project extends `tsconfig.base.json` (`strict` plus `noUncheckedIndexedAccess`,
   `exactOptionalPropertyTypes`, `noUnused*` and the rest); `bun run typecheck` checks all of them. No `any`, no
   `@ts-ignore`/`@ts-expect-error`; `unknown` and narrowing at boundaries.
-- **Generated files are not edited by hand.** `crates/vn-app/src/prelude.js` and
+- **Generated files are not edited by hand.** `crates/sk-app/src/prelude.js` and
   `window.prelude.js` come from the `.ts` beside them (`bun run preludes`).
 - **This is a public SDK.** No product-specific code or policy: an app's own features live in
-  the embedder (`vn_app::embed::HostContext` hooks, vn.config.json `"aliases"`).
+  the embedder (`sk_app::embed::HostContext` hooks, sk.config.json `"aliases"`).
 - Error and advisory messages say what is wrong and what to do, without pointing at files a
   user of the SDK does not have.
 - Commits: `type(scope): summary` (`fix(css): …`, `feat(window): …`).

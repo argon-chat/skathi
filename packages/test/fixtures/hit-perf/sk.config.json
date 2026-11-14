@@ -1,0 +1,13 @@
+{
+  "$comment": "Run under SK_PERF=1 (and SK_NO_CACHE=1 for the worst case, every element prepainted every frame).",
+
+  "name": "sk-test-hit-perf",
+
+  "window": {
+    "title": "Skathi — hit targeting cost (fixture)",
+    "width": 1200,
+    "height": 900,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

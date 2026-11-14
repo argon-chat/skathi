@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "Cette application",
+  "sk.consent.microphone.title": "{app} souhaite utiliser votre micro",
+  "sk.consent.microphone.body": "Si vous l'autorisez, {app} pourra enregistrer le son de votre micro, maintenant et les prochaines fois. Votre choix est mémorisé pour cette application.",
+  "sk.consent.camera.title": "{app} souhaite utiliser votre caméra",
+  "sk.consent.camera.body": "Si vous l'autorisez, {app} pourra enregistrer des vidéos avec votre caméra, maintenant et les prochaines fois. Votre choix est mémorisé pour cette application.",
+  "sk.consent.allow": "&Autoriser",
+  "sk.consent.block": "&Bloquer",
+  "sk.crash.title": "{app} a rencontré un problème",
+  "sk.crash.body": "Une erreur interne a arrêté l'application. Redémarrez-la pour continuer.",
+  "sk.crash.body_no_restart": "Une erreur interne a arrêté l'application. Fermez-la puis rouvrez-la pour continuer.",
+  "sk.crash.details": "Détails",
+  "sk.crash.restart": "&Redémarrer",
+  "sk.crash.copy": "&Copier le rapport",
+  "sk.crash.copied": "Copié",
+  "sk.crash.close": "&Fermer",
+  "sk.crash.version": "Version {version}"
+}

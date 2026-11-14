@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-files",
+
+  "window": {
+    "title": "Skathi — files (fixture)",
+    "width": 480,
+    "height": 260,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

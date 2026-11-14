@@ -112,10 +112,10 @@ function residentTitle(key: string): string {
       <span
         v-if="mode === 'overview' && perf && !perf.phases"
         class="chip"
-        title="VN_PERF=1 in the target's environment"
-        >phase breakdown off · VN_PERF</span
+        title="SK_PERF=1 in the target's environment"
+        >phase breakdown off · SK_PERF</span
       >
-      <span v-else-if="mode === 'overview' && perf" class="chip ok">VN_PERF on · see the target's stderr</span>
+      <span v-else-if="mode === 'overview' && perf" class="chip ok">SK_PERF on · see the target's stderr</span>
       <button
         v-if="mode === 'overview'"
         class="btn"
@@ -338,8 +338,8 @@ function residentTitle(key: string): string {
           <span
             v-if="!mem.rustCounting"
             class="chip warn"
-            title="The Rust heap is counted by default in a dev build; set VN_MEMSTATS=1 in the target's environment to count it here"
-            >Rust heap: off · VN_MEMSTATS=1</span
+            title="The Rust heap is counted by default in a dev build; set SK_MEMSTATS=1 in the target's environment to count it here"
+            >Rust heap: off · SK_MEMSTATS=1</span
           >
         </template>
         <div class="spacer"></div>

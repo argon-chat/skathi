@@ -1,31 +1,31 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/vn-runtime",    # JS host: context boot, pump, bridge, host_fn!
-    "crates/vn-tree",       # retained node tree + renderer host fns
-    "crates/vn-css",        # stylesheets, cascade, per-state refinements
-    "crates/vn-elements",   # native widgets (text input, ...)
-    "crates/vn-effects",    # `--shading` registry + .slang sources + generated HLSL
-    "crates/vn-lottie",     # Lottie/.tgs playback behind the `<lottie>` element
-    "crates/vn-sticker",    # <vn-sticker>: Lottie + VP9-alpha stickers, shared decoders, loop cache
-    "crates/vn-video",      # <video> playback: portable core + the Media Foundation backend
-    "crates/vn-permissions",# platform permission backends behind redjs's navigator.permissions
-    "crates/vn-locale",     # the SDK's own text in the user's language; appLocale for an app's
-    "crates/vn-storage",    # localStorage on a disk: folders, atomic writes, DPAPI at rest
-    "crates/vn-clipboard",  # navigator.clipboard over the SAME gpui clipboard the <input> uses
-    "crates/vn-webview",    # <iframe>: a document in the platform webview (WebView2), under the app surface
-    "crates/vn-thorvg-sys", # ThorVG C++ submodule + checked-in FFI (vn-lottie's `thorvg` feature)
-    "crates/vn-vpx-sys",    # vendored libvpx VP9 decoder (cc, no nasm) + a safe wrapper (vn-sticker's video)
-    "crates/vn-yuv",        # I420 + alpha to straight BGRA at any size, SIMD (optimised in dev, below)
-    "crates/vn-payload",    # VNPK v1 (a packaged exe's app payload) + the one URL→asset-key normaliser
-    "crates/vn-desktop",    # argv parser, shell (open/reveal/trash), single instance, custom protocols
-    "crates/vn-hotkeys",    # system-wide hotkeys: Windows low-level hooks, macOS event tap, chord engine
-    "crates/vn-resample",   # the downscaled image copies' pixel kernel (optimised in dev, below)
-    "crates/vn-app",        # host binary shell
+    "crates/sk-runtime",    # JS host: context boot, pump, bridge, host_fn!
+    "crates/sk-tree",       # retained node tree + renderer host fns
+    "crates/sk-css",        # stylesheets, cascade, per-state refinements
+    "crates/sk-elements",   # native widgets (text input, ...)
+    "crates/sk-effects",    # `--shading` registry + .slang sources + generated HLSL
+    "crates/sk-lottie",     # Lottie/.tgs playback behind the `<lottie>` element
+    "crates/sk-sticker",    # <sk-sticker>: Lottie + VP9-alpha stickers, shared decoders, loop cache
+    "crates/sk-video",      # <video> playback: portable core + the Media Foundation backend
+    "crates/sk-permissions",# platform permission backends behind redjs's navigator.permissions
+    "crates/sk-locale",     # the SDK's own text in the user's language; appLocale for an app's
+    "crates/sk-storage",    # localStorage on a disk: folders, atomic writes, DPAPI at rest
+    "crates/sk-clipboard",  # navigator.clipboard over the SAME gpui clipboard the <input> uses
+    "crates/sk-webview",    # <iframe>: a document in the platform webview (WebView2), under the app surface
+    "crates/sk-thorvg-sys", # ThorVG C++ submodule + checked-in FFI (sk-lottie's `thorvg` feature)
+    "crates/sk-vpx-sys",    # vendored libvpx VP9 decoder (cc, no nasm) + a safe wrapper (sk-sticker's video)
+    "crates/sk-yuv",        # I420 + alpha to straight BGRA at any size, SIMD (optimised in dev, below)
+    "crates/sk-payload",    # SKPK v1 (a packaged exe's app payload) + the one URL→asset-key normaliser
+    "crates/sk-desktop",    # argv parser, shell (open/reveal/trash), single instance, custom protocols
+    "crates/sk-hotkeys",    # system-wide hotkeys: Windows low-level hooks, macOS event tap, chord engine
+    "crates/sk-resample",   # the downscaled image copies' pixel kernel (optimised in dev, below)
+    "crates/sk-app",        # host binary shell
 ]
 # Vendor crates must resolve against their own workspace roots (zed's, redjs's).
 # regen-bindings needs bindgen/libclang; excluded to keep that out of the lockfile.
-exclude = ["vendor", "crates/vn-thorvg-sys/tools/regen-bindings"]
+exclude = ["vendor", "crates/sk-thorvg-sys/tools/regen-bindings"]
 
 # Replicated from vendor/zed: gpui needs async-task APIs that exist only on this fork rev,
 # and [patch] applies only from the workspace root. Carries the waker-identity fix
@@ -41,14 +41,14 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 # MSVC passes /DEBUG to link.exe regardless, so debug info of the vendored static libs
-# (JSC, redjs glue, yoga) landed in a 326 MB PDB; vn-app/build.rs passes /DEBUG:NONE for release.
+# (JSC, redjs glue, yoga) landed in a 326 MB PDB; sk-app/build.rs passes /DEBUG:NONE for release.
 debug = false
 # No-op on windows-msvc (symbols live in the PDB); kept for other targets.
 strip = "symbols"
 # Not set on purpose: `panic = "abort"` (the JS bridge catches native panics, see
-# vn_runtime::bridge::poisoned) and a size opt-level (the image is dominated by static JSC).
+# sk_runtime::bridge::poisoned) and a size opt-level (the image is dominated by static JSC).
 
-# Release plus symbols for crash dumps. `VN_PDB=1` does the same for a plain `release` build.
+# Release plus symbols for crash dumps. `SK_PDB=1` does the same for a plain `release` build.
 [profile.release-symbols]
 inherits = "release"
 strip = "none"
@@ -59,9 +59,9 @@ debug = true
 opt-level = 2
 
 # Pixel kernel: generic `image::imageops::resize` compiles at the calling crate's opt-level.
-[profile.dev.package.vn-resample]
+[profile.dev.package.sk-resample]
 opt-level = 3
 
 # Same reason: SIMD intrinsics are function calls at opt-level 0.
-[profile.dev.package.vn-yuv]
+[profile.dev.package.sk-yuv]
 opt-level = 3

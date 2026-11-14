@@ -1,0 +1,11 @@
+{
+  "name": "composer",
+
+  "window": {
+    "title": "Skathi — composer (fixture)",
+    "width": 480,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

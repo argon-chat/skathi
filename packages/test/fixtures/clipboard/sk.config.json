@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-clipboard",
+
+  "window": {
+    "title": "Skathi — clipboard events (fixture)",
+    "width": 420,
+    "height": 200,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -1,0 +1,11 @@
+{
+  // The tests run under bun and import src/, which needs the engine's ambient declarations; skipLibCheck absorbs
+  // their overlap with @types/bun.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "useDefineForClassFields": false,
+    "types": ["bun"]
+  },
+  "include": ["test/**/*.ts", "src/engine.d.ts", "src/protocol.d.ts", "src/indexeddb.d.ts"],
+  "exclude": ["test/fixtures/**"]
+}

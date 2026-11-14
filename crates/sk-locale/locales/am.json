@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "ይህ መተግበሪያ",
+  "sk.consent.microphone.title": "{app} ማይክሮፎንዎን መጠቀም ይፈልጋል",
+  "sk.consent.microphone.body": "ከፈቀዱ {app} አሁንም ሆነ በሚቀጥለው ጊዜ ከማይክሮፎንዎ ድምፅ መቅዳት ይችላል። ምርጫዎ ለዚህ መተግበሪያ ይታወሳል።",
+  "sk.consent.camera.title": "{app} ካሜራዎን መጠቀም ይፈልጋል",
+  "sk.consent.camera.body": "ከፈቀዱ {app} አሁንም ሆነ በሚቀጥለው ጊዜ በካሜራዎ ቪዲዮ መቅዳት ይችላል። ምርጫዎ ለዚህ መተግበሪያ ይታወሳል።",
+  "sk.consent.allow": "ፍቀድ(&A)",
+  "sk.consent.block": "አግድ(&B)",
+  "sk.crash.title": "{app} ችግር አጋጥሞታል",
+  "sk.crash.body": "የውስጥ ስህተት መተግበሪያውን አቁሞታል። ለመቀጠል እንደገና ያስጀምሩት።",
+  "sk.crash.body_no_restart": "የውስጥ ስህተት መተግበሪያውን አቁሞታል። ለመቀጠል ዘግተው እንደገና ይክፈቱት።",
+  "sk.crash.details": "ዝርዝሮች",
+  "sk.crash.restart": "እንደገና አስጀምር(&R)",
+  "sk.crash.copy": "ሪፖርቱን ቅዳ(&C)",
+  "sk.crash.copied": "ተቀድቷል",
+  "sk.crash.close": "ዝጋ(&L)",
+  "sk.crash.version": "ስሪት {version}"
+}

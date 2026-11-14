@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-dialog-escape",
+
+  "window": {
+    "title": "Skathi — dialog from a menu, and Escape (fixture)",
+    "width": 420,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

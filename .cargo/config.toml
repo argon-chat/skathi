@@ -3,7 +3,7 @@
 #
 # /STACK 8 MiB reserve, 1 MiB commit: the default 1 MiB gives JSC only ~8k JS frames; Vue's
 # patch/unmount recursion needs more. The commit applies to every thread (~130 MB of commit
-# charge); vn-app.exe lowers it in build.rs, and editing rustflags here would rebuild everything.
+# charge); sk-app.exe lowers it in build.rs, and editing rustflags here would rebuild everything.
 #
 # An explicit `build.target` keeps build scripts and proc macros compiled for the host without
 # these rustflags, in a single target/<triple>/ tree. On macOS override it per command

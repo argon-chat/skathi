@@ -1,0 +1,13 @@
+{
+  "$comment": "Argon's titlebar call timer (Counter.vue + Digit.vue), whose digit cells are `width: 1ch`.",
+
+  "name": "sk-test-call-timer",
+
+  "window": {
+    "title": "Skathi — call timer (fixture)",
+    "width": 200,
+    "height": 80,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

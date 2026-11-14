@@ -1072,7 +1072,7 @@ export function flash(text: string, bad = false): void {
 export async function copyText(text: string, what: string): Promise<boolean> {
   const clipboard = globalThis.navigator?.clipboard;
   if (!clipboard || typeof clipboard.writeText !== "function") {
-    flash("no clipboard in this host — vn-app was built without its `clipboard` feature", true);
+    flash("no clipboard in this host — sk-app was built without its `clipboard` feature", true);
     return false;
   }
   try {

@@ -1,0 +1,35 @@
+{
+  "$comment": "The `window` block is read before the window opens; SK_WINDOW / SK_WINDOW_FOCUS override it.",
+
+  "$comment-name": "Names %LOCALAPPDATA%\\<name>\\storage, where localStorage lives; spelled out so renaming the folder does not move saved data.",
+  "name": "hello",
+
+  "$comment-packaging": "Read only by `sk build`.",
+  "productName": "Hello",
+  "version": "0.1.0",
+  "assets": ["assets"],
+  "windows": {
+    "exeName": "Hello",
+    "icon": "icon.png",
+    "description": "The Skathi demo app"
+  },
+
+  "window": {
+    "title": "Skathi — hello",
+    "width": 980,
+    "height": 720,
+
+    "minWidth": 420,
+    "minHeight": 320,
+
+    "titleBarStyle": "hidden",
+    "titleBarHeight": 36,
+
+    "$comment-titleBarFallback": "Left at its default (true) on purpose: the fallback titlebar retires on the first drag region, and env(titlebar-area-height) is 0 for that one frame.",
+
+    "backdrop": "mica",
+    "resizable": true,
+    "minimizable": true,
+    "maximizable": true
+  }
+}

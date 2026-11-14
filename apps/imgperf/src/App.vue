@@ -1,12 +1,12 @@
 <script setup lang="ts">
-// Every scenario is a tab; switching tabs calls __vn_perf_mark(), which flushes the host
+// Every scenario is a tab; switching tabs calls __sk_perf_mark(), which flushes the host
 // profiler's window and relabels the following seconds, so the log reads as one block per
 // scenario.
 import { ref, computed, onMounted, onUnmounted } from "vue";
 
-// `__vn_perf_mark` exists only under VN_PERF=1, so the guard is real.
-const mark = (name: string) => globalThis.__vn_perf_mark?.(name);
-const log = (msg: string) => (globalThis as { __vn_log?: (m: string) => void }).__vn_log?.(msg);
+// `__sk_perf_mark` exists only under SK_PERF=1, so the guard is real.
+const mark = (name: string) => globalThis.__sk_perf_mark?.(name);
+const log = (msg: string) => (globalThis as { __sk_log?: (m: string) => void }).__sk_log?.(msg);
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const thumb = (i: number) => `assets/thumbs/t${pad(i % 50)}.png`;
@@ -112,9 +112,9 @@ const stopDirector = () => {
   directorTimer = undefined;
 };
 onMounted(() => {
-  // `VN_SCENARIO` is an arbitrary string off the environment, so it is CHECKED against the tab
+  // `SK_SCENARIO` is an arbitrary string off the environment, so it is CHECKED against the tab
   // list rather than trusted.
-  const pinned = globalThis.__VN_SCENARIO__;
+  const pinned = globalThis.__SK_SCENARIO__;
   if (pinned) {
     auto.value = false;
     if (!TABS.includes(pinned as Tab)) {
@@ -179,7 +179,7 @@ const counts = computed(() => ({
     </div>
 
     <div v-if="tab === 'idle'" class="pane">
-      <p class="lead">imgperf — pick a scenario. VN_PERF=1 prints frame stats once a second.</p>
+      <p class="lead">imgperf — pick a scenario. SK_PERF=1 prints frame stats once a second.</p>
       <img src="assets/logo.svg" alt="logo" class="one" />
       <p class="lead">the SVG above goes through gpui's resvg path, from the same img() element.</p>
     </div>

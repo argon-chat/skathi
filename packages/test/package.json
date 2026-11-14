@@ -1,0 +1,18 @@
+{
+  "name": "@skathi-native/test",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Playwright-shaped end-to-end testing for Skathi apps, as a library for `bun test`.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test specs"
+  },
+  "comments": {
+    "dependencies": "None on purpose: bun:test ships with bun, and the wire is node:net + node:child_process."
+  }
+}

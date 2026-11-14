@@ -49,13 +49,13 @@ if (!process.argv.includes("--bundle")) {
   run(
     [
       process.execPath,
-      join(sdk, "packages/vue-native/prod.ts"),
+      join(sdk, "packages/cli/prod.ts"),
       join(sdk, "apps/devtools/src/main.ts"),
       bundle,
       "--aot-inputs",
       join(stage, "typed-inputs"),
     ],
-    join(sdk, "packages/vue-native"),
+    join(sdk, "packages/cli"),
   );
 }
 const source = readFileSync(bundle, "utf8");
@@ -106,7 +106,7 @@ const names = [
     "getComputedStyle",
   ]),
 ].sort();
-const wrapper = `// ${TRANSFORM}: stable host API references are opaque inputs.\n(function(__vn_host) {\nconst globalThis = __vn_host;\nconst {${names.join(",")}} = __vn_host;\n${source}\n})(__VN_AOT_HOST__);\n`;
+const wrapper = `// ${TRANSFORM}: stable host API references are opaque inputs.\n(function(__sk_host) {\nconst globalThis = __sk_host;\nconst {${names.join(",")}} = __sk_host;\n${source}\n})(__SK_AOT_HOST__);\n`;
 const input = join(stage, "devtools.native-input.js"),
   ir = join(stage, "devtools.ir");
 writeFileSync(input, wrapper);
@@ -133,9 +133,9 @@ if (entries.length !== 1 || !Number.isSafeInteger(entries[0]) || entries[0]! < 1
 const identity = readFileSync(`${image}.identity`);
 if (identity.length !== 16) throw new Error("Invalid compiler image identity");
 const prelude = Buffer.concat([
-  readFileSync(join(sdk, "crates/vn-app/src/prelude.js")),
+  readFileSync(join(sdk, "crates/sk-app/src/prelude.js")),
   Buffer.from([0]),
-  readFileSync(join(sdk, "crates/vn-app/src/window.prelude.js")),
+  readFileSync(join(sdk, "crates/sk-app/src/window.prelude.js")),
 ]);
 const imageName = `${kind}.${imageSha256.slice(0, 16)}.image`;
 copyFileSync(image, join(out, imageName));
@@ -147,7 +147,7 @@ writeFileSync(
   join(out, `${kind}.native.json`),
   JSON.stringify(
     {
-      schema: "vue-native.native-aot",
+      schema: "skathi.native-aot",
       version: 1,
       stage: "native-image",
       kind,
@@ -169,5 +169,5 @@ writeFileSync(
 );
 console.log(`Native ${kind} artifact: ${join(out, `${kind}.native.json`)} (${bytes.length} bytes)`);
 if (kind === "inspector")
-  console.log(`Build the inspector with VN_DEVTOOLS_BUNDLE=${join(out, "app.prod.js")} to match this artifact.`);
+  console.log(`Build the inspector with SK_DEVTOOLS_BUNDLE=${join(out, "app.prod.js")} to match this artifact.`);
 else console.log("Application artifact only: a dedicated host boot integration is required; this was not executed.");

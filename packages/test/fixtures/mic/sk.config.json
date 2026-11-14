@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-mic",
+
+  "window": {
+    "title": "Mic Fixture",
+    "width": 420,
+    "height": 200,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -1,0 +1,59 @@
+/* Fixture for specs/fonts.spec.ts: a WOFF2 variable font limited to the Private Use Area, with url()s relative to this file. */
+
+@font-face {
+  font-family: "SK Pixel";
+  src:
+    local("SK Pixel Nowhere"),
+    url("./fonts/PressStart2P-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "SK Tengwar";
+  src: url("./fonts/AlcarinTengwarVF.woff2") format("woff2-variations");
+  font-weight: 400 700;
+  font-display: swap;
+  unicode-range: U+E000-E0FF;
+}
+
+/* `SK Late` is drawn only by the `late` scenario's `#late`; `SK Unused` is never drawn, and stays
+   unloaded. */
+@font-face {
+  font-family: "SK Late";
+  src: url("./fonts/PressStart2P-Regular.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "SK Unused";
+  src: url("./fonts/PressStart2P-Regular.ttf") format("truetype");
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  height: 24px;
+}
+
+/* Press Start 2P advances 1em for every glyph: eight at 16px are 128px wide, where any fallback
+   measures "WWWWiiii" otherwise. */
+.probe {
+  flex: none;
+  font-size: 16px;
+  line-height: 16px;
+}
+
+#pixel {
+  font-family: "SK Pixel", serif;
+}
+
+#stack {
+  font-family: "SK Tengwar", "SK Pixel", serif;
+}
+
+#late {
+  font-family: "SK Late", serif;
+}
+
+.unused {
+  font-family: "SK Unused", serif;
+}

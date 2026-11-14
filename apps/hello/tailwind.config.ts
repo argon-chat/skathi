@@ -5,7 +5,7 @@ export default {
 
   corePlugins: {
     // Preflight would only spray element and pseudo-element selectors (`*, ::before, ::after`,
-    // `html`, `abbr:where(...)`) that vn-css cannot match — pure diagnostic noise.
+    // `html`, `abbr:where(...)`) that sk-css cannot match — pure diagnostic noise.
     preflight: false,
 
     backgroundOpacity: false,

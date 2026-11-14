@@ -23,7 +23,7 @@ export async function downloadVerified(
     ownsTemporary = true;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
-    const response = await fetcher(url, { headers: { "User-Agent": "vue-native-native-aot-build" } });
+    const response = await fetcher(url, { headers: { "User-Agent": "skathi-native-aot-build" } });
     if (!response.ok || !response.body)
       throw Error(
         `Pinned native-AOT frontend download failed (${response.status}); no moving canary fallback is allowed. Supply a hash-verified --frontend or seed the build-tool cache.`,

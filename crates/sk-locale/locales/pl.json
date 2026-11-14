@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "Ta aplikacja",
+  "sk.consent.microphone.title": "{app} prosi o dostęp do mikrofonu",
+  "sk.consent.microphone.body": "Jeśli zezwolisz, {app} uzyska możliwość nagrywania dźwięku z mikrofonu — teraz i w przyszłości. Twój wybór zostanie zapamiętany dla tej aplikacji.",
+  "sk.consent.camera.title": "{app} prosi o dostęp do kamery",
+  "sk.consent.camera.body": "Jeśli zezwolisz, {app} uzyska możliwość nagrywania wideo z kamery — teraz i w przyszłości. Twój wybór zostanie zapamiętany dla tej aplikacji.",
+  "sk.consent.allow": "&Zezwól",
+  "sk.consent.block": "Za&blokuj",
+  "sk.crash.title": "{app} nie może kontynuować działania",
+  "sk.crash.body": "Błąd wewnętrzny zatrzymał aplikację. Uruchom ją ponownie, aby kontynuować.",
+  "sk.crash.body_no_restart": "Błąd wewnętrzny zatrzymał aplikację. Zamknij ją i otwórz ponownie, aby kontynuować.",
+  "sk.crash.details": "Szczegóły",
+  "sk.crash.restart": "&Uruchom ponownie",
+  "sk.crash.copy": "&Kopiuj raport",
+  "sk.crash.copied": "Skopiowano",
+  "sk.crash.close": "&Zamknij",
+  "sk.crash.version": "Wersja {version}"
+}

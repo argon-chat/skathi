@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-lightbox",
+
+  "window": {
+    "title": "Skathi — lightbox (fixture)",
+    "width": 480,
+    "height": 320,
+    "titleBarStyle": "default",
+    "backdrop": "none"
+  }
+}

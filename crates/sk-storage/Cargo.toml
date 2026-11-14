@@ -1,0 +1,48 @@
+[package]
+name = "sk-storage"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# `StorageHost` lives in redjs (`redjs::webapi::storage`); this crate supplies only the bytes.
+sk-runtime = { path = "../sk-runtime", default-features = false, features = ["storages"] }
+serde_json = "1"
+
+[features]
+# IndexedDB on disk (src/idb.rs), encrypted at rest whenever the storage is.
+indexeddb = ["sk-runtime/indexeddb-disk"]
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Known-folder API rather than %APPDATA%: environment variables are forgeable and absent in
+# some service contexts. GetTempPath2W for TEMP; CoTaskMemFree releases SHGetKnownFolderPath's
+# result; DPAPI (CryptProtectData) is the at-rest provider.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# ring: AES-256-GCM and SystemRandom. security-framework/core-foundation: the login-keychain
+# item holding the master key, named by the bundle identifier. libc: statfs for IndexedDB's quota.
+ring = "0.17.14"
+security-framework = { version = "3.7", default-features = false }
+core-foundation = "0.10.1"
+libc = "0.2.189"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Secret Service via oo7 (the client gpui's Linux platform already links), driven synchronously
+# with futures-lite. libc: statvfs for IndexedDB's quota.
+ring = "0.17.14"
+oo7 = { git = "https://github.com/zed-industries/oo7", rev = "731c1215edb6905876c6137ab300428c7b8d7c13", default-features = false, features = ["async-std", "native_crypto"] }
+futures-lite = "2"
+libc = "0.2.189"
+
+[dev-dependencies]
+# The envelope and ring cipher are compiled under `cfg(any(macos, test))` so Windows tests cover them.
+ring = "0.17.14"

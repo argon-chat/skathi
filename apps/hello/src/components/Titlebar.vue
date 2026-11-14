@@ -3,11 +3,11 @@
 // HTMIN/HTMAX/HTCLOSE, which is what buys the Windows 11 SNAP LAYOUTS flyout on hover over the
 // maximize button.
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { appWindow } from "vue-native";
+import { appWindow } from "@skathi-native/runtime";
 
 const hostControls = ref(Boolean(appWindow.chrome.hostControls));
 const maximized = ref(appWindow.isMaximized());
-// engine.d.ts types `document` as `VnDocument | undefined` because the bun test harness has none.
+// engine.d.ts types `document` as `SkDocument | undefined` because the bun test harness has none.
 const doc = document!;
 const wco = navigator!.windowControlsOverlay;
 const title = ref(doc.title);
@@ -31,13 +31,13 @@ onMounted(() => {
   appWindow.addEventListener("unmaximize", readState);
   // `document.title` has no change event in any spec (it is a plain property), so the editor on
   // the Window page pokes this custom one.
-  globalThis.addEventListener("vn:title", readState);
+  globalThis.addEventListener("sk:title", readState);
 });
 onUnmounted(() => {
   wco.removeEventListener("geometrychange", readGeometry);
   appWindow.removeEventListener("maximize", readState);
   appWindow.removeEventListener("unmaximize", readState);
-  globalThis.removeEventListener("vn:title", readState);
+  globalThis.removeEventListener("sk:title", readState);
 });
 </script>
 

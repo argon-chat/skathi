@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-hover-target",
+
+  "window": {
+    "title": "Skathi — hover-target (fixture)",
+    "width": 520,
+    "height": 440,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

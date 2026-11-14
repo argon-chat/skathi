@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-focus-style",
+
+  "window": {
+    "title": "Skathi — focus-style (fixture)",
+    "width": 460,
+    "height": 340,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

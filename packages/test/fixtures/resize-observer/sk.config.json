@@ -1,0 +1,13 @@
+{
+  "$comment": "ResizeObserver delivered after the frame's layout and before its paint (a panel sized from its list in the same frame), and the loop error for an observation the depth rule skips.",
+
+  "name": "sk-test-resize-observer",
+
+  "window": {
+    "title": "Skathi — ResizeObserver (fixture)",
+    "width": 480,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

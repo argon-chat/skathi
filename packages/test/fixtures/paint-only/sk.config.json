@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-paint-only",
+
+  "window": {
+    "title": "Skathi — paint-only (fixture)",
+    "width": 360,
+    "height": 140,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-font-subsets",
+
+  "window": {
+    "title": "Skathi — font subsets (fixture)",
+    "width": 420,
+    "height": 440,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

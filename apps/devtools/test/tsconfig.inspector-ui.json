@@ -3,10 +3,13 @@
   "compilerOptions": {
     "lib": ["ESNext"],
     "baseUrl": "../../..",
-    "paths": { "vue": ["packages/vue-native/src/runtime.ts"], "vue-native": ["packages/vue-native/src/runtime.ts"] },
+    "paths": {
+      "vue": ["packages/runtime/src/runtime.ts"],
+      "@skathi-native/runtime": ["packages/runtime/src/runtime.ts"]
+    },
     "types": []
   },
-  "vueCompilerOptions": { "strictTemplates": true },
+  "vueCompilerOptions": { "strictTemplates": true, "lib": "@skathi-native/runtime" },
   "include": [
     "../src/App.vue",
     "../src/components/Toolbar.vue",
@@ -16,9 +19,9 @@
     "../src/components/PerfPanel.vue",
     "../src/components/StoragePanel.vue",
     "../src/inspector-model.ts",
-    "../../../packages/vue-native/src/protocol.d.ts",
-    "../../../packages/vue-native/src/engine.d.ts",
-    "../../../packages/vue-native/src/indexeddb.d.ts",
+    "../../../packages/runtime/src/protocol.d.ts",
+    "../../../packages/runtime/src/engine.d.ts",
+    "../../../packages/runtime/src/indexeddb.d.ts",
     "../../env.d.ts"
   ]
 }

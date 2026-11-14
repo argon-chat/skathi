@@ -1,17 +1,17 @@
 # Web platform coverage
 
-What a vue-native app can use from the web platform, what is coming, and what is not.
+What a Skathi app can use from the web platform, what is coming, and what is not.
 
-| Mark | Meaning                                                         |
-| ---- | --------------------------------------------------------------- |
-| ✅   | Supported on Windows, macOS and Linux                           |
-| 🪟   | Supported on Windows; macOS and Linux are planned               |
-| 🍎   | Supported on Windows and macOS; Linux is planned                |
-| 🟡   | Supported with a limitation (see the note)                      |
-| 🗓️   | Planned                                                         |
-| ⏸️   | On hold: waiting on something outside vue-native                |
-| ⛔   | Not planned for now                                             |
-| 🗑️   | Deprecated in vue-native: will not be added, or will be removed |
+| Mark | Meaning                                                     |
+| ---- | ----------------------------------------------------------- |
+| ✅   | Supported on Windows, macOS and Linux                       |
+| 🪟   | Supported on Windows; macOS and Linux are planned           |
+| 🍎   | Supported on Windows and macOS; Linux is planned            |
+| 🟡   | Supported with a limitation (see the note)                  |
+| 🗓️   | Planned                                                     |
+| ⏸️   | On hold: waiting on something outside Skathi                |
+| ⛔   | Not planned for now                                         |
+| 🗑️   | Deprecated in Skathi: will not be added, or will be removed |
 
 ## Language and scheduling
 
@@ -30,7 +30,7 @@ What a vue-native app can use from the web platform, what is coming, and what is
 
 | API                                                                                                   | Status | Notes                                                                      |
 | ----------------------------------------------------------------------------------------------------- | ------ | -------------------------------------------------------------------------- |
-| Elements, attributes, `getComputedStyle`, `elementFromPoint`, `scrollIntoView`                        | ✅     | The DOM is vue-native's element tree, rendered natively                    |
+| Elements, attributes, `getComputedStyle`, `elementFromPoint`, `scrollIntoView`                        | ✅     | The DOM is Skathi's element tree, rendered natively                        |
 | `Event`, `CustomEvent`, `EventTarget`, UI, mouse, pointer, keyboard, wheel, focus, input, drag events | ✅     |                                                                            |
 | `TouchEvent`                                                                                          | 🟡     | Constructible; the host does not deliver touch input yet                   |
 | `ResizeObserver`, `IntersectionObserver`                                                              | ✅     | Run after layout, before paint, as in a browser                            |
@@ -44,7 +44,7 @@ What a vue-native app can use from the web platform, what is coming, and what is
 | `DOMParser`                                                                                           | ⛔     |                                                                            |
 | Custom elements, shadow DOM                                                                           | ⛔     | Use Vue components                                                         |
 | `alert`, `confirm`, `prompt`                                                                          | ✅     | Native dialogs, in the user's language                                     |
-| `window.open`                                                                                         | 🟡     | Opens external URLs in the system browser; a second window is `<VnWindow>` |
+| `window.open`                                                                                         | 🟡     | Opens external URLs in the system browser; a second window is `<SkWindow>` |
 
 ## Networking
 

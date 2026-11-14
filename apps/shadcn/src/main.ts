@@ -1,7 +1,7 @@
 // Everything under src/components/ui is UNMODIFIED upstream shadcn-vue v2.2.0 (fetched by
 // tools/fetch-registry.ts); everything else in src/ is the harness.
 
-import { createApp } from "vue-native";
+import { createApp } from "@skathi-native/runtime";
 
 import App from "./App.vue";
 

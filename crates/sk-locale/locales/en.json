@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "This app",
+  "sk.consent.microphone.title": "{app} wants to use your microphone",
+  "sk.consent.microphone.body": "If you allow it, {app} can record from your microphone, now and next time. Your choice is remembered for this app.",
+  "sk.consent.camera.title": "{app} wants to use your camera",
+  "sk.consent.camera.body": "If you allow it, {app} can record video from your camera, now and next time. Your choice is remembered for this app.",
+  "sk.consent.allow": "&Allow",
+  "sk.consent.block": "&Block",
+  "sk.crash.title": "{app} ran into a problem",
+  "sk.crash.body": "An internal error stopped the app. Restart it to keep going.",
+  "sk.crash.body_no_restart": "An internal error stopped the app. Close it and open it again to keep going.",
+  "sk.crash.details": "Details",
+  "sk.crash.restart": "&Restart",
+  "sk.crash.copy": "&Copy report",
+  "sk.crash.copied": "Copied",
+  "sk.crash.close": "C&lose",
+  "sk.crash.version": "Version {version}"
+}

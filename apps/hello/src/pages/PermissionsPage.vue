@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { appPermissions } from "vue-native";
+import { appPermissions } from "@skathi-native/runtime";
 
 defineOptions({ name: "PermissionsPage" });
 
@@ -9,7 +9,7 @@ const platform = ref(appPermissions.platform);
 interface PermissionRow {
   name: string;
   /** `"unsupported"` is the word the web does not have. */
-  state: VnPermissionState;
+  state: SkPermissionState;
   canRequest: boolean;
   webState: string;
   requesting: boolean;
@@ -50,9 +50,9 @@ async function readAll() {
   rows.value = out;
 }
 
-const onChange = (e: VnEvent) => {
-  // `VnEvent` has no way to say that, so the shape is named here and asserted once.
-  const { name, state } = e as VnEvent & { name: string; state: VnPermissionState };
+const onChange = (e: SkEvent) => {
+  // `SkEvent` has no way to say that, so the shape is named here and asserted once.
+  const { name, state } = e as SkEvent & { name: string; state: SkPermissionState };
   changes.value = [`${name} -> ${state}`, ...changes.value].slice(0, 6);
   readAll();
 };

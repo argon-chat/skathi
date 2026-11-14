@@ -1,0 +1,8 @@
+{
+  // The harness and the specs run under bun. The fixtures are apps; apps/tsconfig.json checks them.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["bun"]
+  },
+  "include": ["src/**/*.ts", "specs/**/*.ts"]
+}

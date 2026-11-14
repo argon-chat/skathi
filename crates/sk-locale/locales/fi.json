@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "Tämä sovellus",
+  "sk.consent.microphone.title": "{app} haluaa käyttää mikrofoniasi",
+  "sk.consent.microphone.body": "Jos sallit sen, {app} voi tallentaa ääntä mikrofonistasi nyt ja jatkossa. Valintasi muistetaan tämän sovelluksen osalta.",
+  "sk.consent.camera.title": "{app} haluaa käyttää kameraasi",
+  "sk.consent.camera.body": "Jos sallit sen, {app} voi tallentaa videota kamerallasi nyt ja jatkossa. Valintasi muistetaan tämän sovelluksen osalta.",
+  "sk.consent.allow": "&Salli",
+  "sk.consent.block": "&Estä",
+  "sk.crash.title": "{app} kohtasi ongelman",
+  "sk.crash.body": "Sisäinen virhe pysäytti sovelluksen. Jatka käynnistämällä se uudelleen.",
+  "sk.crash.body_no_restart": "Sisäinen virhe pysäytti sovelluksen. Jatka sulkemalla se ja avaamalla se uudelleen.",
+  "sk.crash.details": "Lisätiedot",
+  "sk.crash.restart": "&Käynnistä uudelleen",
+  "sk.crash.copy": "K&opioi raportti",
+  "sk.crash.copied": "Kopioitu",
+  "sk.crash.close": "&Sulje",
+  "sk.crash.version": "Versio {version}"
+}

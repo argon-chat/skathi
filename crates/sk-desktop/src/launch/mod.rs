@@ -1,0 +1,665 @@
+//! How this process was launched, and the one-instance rule.
+//!
+//! `start` runs right after the argv parse, before the inspector, logger or gpui, so a second launch never
+//! creates a window. It either runs as the app, becomes the instance (pipe server), or forwards
+//! argv/url/cwd to the running one and exits (0 forwarded, 2 no answer, 3 pipe not ours).
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::OnceLock;
+
+use serde_json::{json, Value as Json};
+
+use crate::args::Args;
+
+#[cfg(target_os = "windows")]
+mod instance_win;
+#[cfg(target_os = "windows")]
+use instance_win as instance;
+#[cfg(target_os = "linux")]
+mod instance_unix;
+#[cfg(target_os = "linux")]
+use instance_unix as instance;
+
+pub mod protocol;
+#[cfg(target_os = "windows")]
+pub mod protocol_win;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchConfig {
+    /// `"id"` — reverse-DNS, `gl.argon.notes`. `None`: the app name stands in.
+    pub id: Option<String>,
+    pub single_instance: bool,
+    pub raise: bool,
+    pub protocols: Vec<String>,
+}
+
+impl Default for LaunchConfig {
+    fn default() -> Self {
+        LaunchConfig { id: None, single_instance: false, raise: true, protocols: Vec::new() }
+    }
+}
+
+impl LaunchConfig {
+    /// A key of the wrong type is ignored with a line on stderr: a hand-edited manifest should still start.
+    pub fn parse(text: Option<&str>) -> LaunchConfig {
+        let mut cfg = LaunchConfig::default();
+        let Some(text) = text.map(str::trim).filter(|t| !t.is_empty()) else { return cfg };
+        let v: Json = match serde_json::from_str(text) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[launch] the launch block is not JSON ({e}); using the defaults");
+                return cfg;
+            }
+        };
+        let bad = |k: &str, want: &str| eprintln!("[launch] `{k}` must be {want}; ignored");
+        match v.get("id") {
+            None | Some(Json::Null) => {}
+            Some(Json::String(s)) if !s.trim().is_empty() => cfg.id = Some(s.trim().to_string()),
+            Some(_) => bad("id", "a non-empty string"),
+        }
+        match v.get("singleInstance") {
+            None | Some(Json::Null) => {}
+            Some(Json::Bool(b)) => cfg.single_instance = *b,
+            Some(_) => bad("singleInstance", "true or false"),
+        }
+        match v.get("raiseOnSecondInstance") {
+            None | Some(Json::Null) => {}
+            Some(Json::Bool(b)) => cfg.raise = *b,
+            Some(_) => bad("raiseOnSecondInstance", "true or false"),
+        }
+        match v.get("protocols") {
+            None | Some(Json::Null) => {}
+            Some(Json::Array(list)) => {
+                for p in list {
+                    match p.as_str() {
+                        Some(s) if !s.trim().is_empty() => cfg.protocols.push(s.trim().to_ascii_lowercase()),
+                        _ => bad("protocols[…]", "a scheme string"),
+                    }
+                }
+            }
+            Some(_) => bad("protocols", "an array of scheme strings"),
+        }
+        cfg
+    }
+}
+
+/// The app's name and id. The name chain is sk-storage's so the two never disagree; the id defaults to the name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    pub name: String,
+    pub id: String,
+}
+
+/// The storage folder name (sk-storage's `sanitize`), lowercased: part of the instance key, so two processes
+/// that would share a storage folder (and its IndexedDB lock) share the instance too.
+pub fn storage_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' })
+        .take(64)
+        .collect();
+    let trimmed = cleaned.trim_matches(['-', '.'].as_slice());
+    if trimmed.is_empty() { "vue-native-app".to_string() } else { trimmed.to_ascii_lowercase() }
+}
+
+pub fn resolve_identity(cfg: &LaunchConfig, build_name: Option<String>) -> Identity {
+    let name = std::env::var("SK_APP_NAME")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or(build_name.filter(|s| !s.trim().is_empty()))
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        })
+        .unwrap_or_else(|| "vue-native-app".to_string());
+    let id = cfg.id.clone().unwrap_or_else(|| name.clone());
+    Identity { name, id }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchInfo {
+    pub argv: Vec<String>,
+    pub cwd: String,
+    pub url: Option<String>,
+    pub paths: Vec<String>,
+}
+
+impl LaunchInfo {
+    pub fn to_json(&self) -> Json {
+        json!({ "argv": self.argv, "cwd": self.cwd, "url": self.url, "paths": self.paths })
+    }
+}
+
+pub fn existing_paths(args: &[String], cwd: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for a in args {
+        if a.is_empty() || a.starts_with('-') || crate::shell::scheme_of(a).is_some_and(|s| s.len() > 1) {
+            continue;
+        }
+        let p = Path::new(a);
+        let joined = if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
+        let abs = std::path::absolute(&joined).unwrap_or(joined);
+        if std::fs::symlink_metadata(&abs).is_ok() {
+            out.push(abs.to_string_lossy().into_owned());
+        }
+    }
+    out
+}
+
+/// `LaunchParams.files`: one File System Access handle per launch path, granted here because the user
+/// named it on the command line.
+pub(crate) fn handles_for(paths: &[String]) -> Vec<Json> {
+    paths
+        .iter()
+        .filter_map(|p| {
+            let meta = std::fs::metadata(p).ok()?;
+            let kind = if meta.is_dir() { crate::fs::Kind::Directory } else { crate::fs::Kind::File };
+            Some(crate::fs::granted_handle_json(PathBuf::from(p), kind))
+        })
+        .collect()
+}
+
+struct Boot {
+    identity: Identity,
+    config: LaunchConfig,
+    info: LaunchInfo,
+    single_instance: bool,
+    dev_slot: Option<String>,
+}
+
+static BOOT: OnceLock<Boot> = OnceLock::new();
+
+pub fn identity() -> Option<&'static Identity> {
+    BOOT.get().map(|b| &b.identity)
+}
+
+pub fn config() -> Option<&'static LaunchConfig> {
+    BOOT.get().map(|b| &b.config)
+}
+
+pub fn info_json() -> String {
+    match BOOT.get() {
+        Some(b) => {
+            let mut v = b.info.to_json();
+            v["handles"] = Json::Array(handles_for(&b.info.paths));
+            v["singleInstance"] = Json::Bool(b.single_instance);
+            v["id"] = Json::String(b.identity.id.clone());
+            v["name"] = Json::String(b.identity.name.clone());
+            v.to_string()
+        }
+        None => json!({ "argv": [], "cwd": "", "url": null, "paths": [], "handles": [], "singleInstance": false })
+            .to_string(),
+    }
+}
+
+pub const MAX_MESSAGE: usize = 1 << 20;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Forward {
+    pub argv: Vec<String>,
+    pub args: Vec<String>,
+    pub cwd: String,
+    pub url: Option<String>,
+    /// `false` when the second launch is itself quiet (`SK_WINDOW_FOCUS=never`). Absent means `true`.
+    pub raise: bool,
+}
+
+impl Forward {
+    pub fn encode(&self) -> Vec<u8> {
+        json!({ "v": 1, "argv": self.argv, "args": self.args, "cwd": self.cwd, "url": self.url, "raise": self.raise })
+            .to_string()
+            .into_bytes()
+    }
+
+    /// Strict: exact keys and types, `v == 1`, at most [`MAX_MESSAGE`] bytes; anything else is refused whole.
+    pub fn decode(bytes: &[u8]) -> Result<Forward, String> {
+        if bytes.len() > MAX_MESSAGE {
+            return Err(format!("message is {} bytes, over the {MAX_MESSAGE}-byte cap", bytes.len()));
+        }
+        let v: Json = serde_json::from_slice(bytes).map_err(|e| format!("not JSON: {e}"))?;
+        let obj = v.as_object().ok_or("not a JSON object")?;
+        for k in obj.keys() {
+            if !matches!(k.as_str(), "v" | "argv" | "args" | "cwd" | "url" | "raise") {
+                return Err(format!("unknown key {k:?}"));
+            }
+        }
+        if obj.get("v").and_then(Json::as_u64) != Some(1) {
+            return Err("`v` must be 1".into());
+        }
+        let strings = |k: &str| -> Result<Vec<String>, String> {
+            obj.get(k)
+                .and_then(Json::as_array)
+                .ok_or(format!("`{k}` must be an array"))?
+                .iter()
+                .map(|x| x.as_str().map(str::to_string).ok_or(format!("`{k}` must hold strings")))
+                .collect()
+        };
+        let cwd = obj.get("cwd").and_then(Json::as_str).ok_or("`cwd` must be a string")?.to_string();
+        let url = match obj.get("url") {
+            None | Some(Json::Null) => None,
+            Some(Json::String(s)) => Some(s.clone()),
+            Some(_) => return Err("`url` must be a string or null".into()),
+        };
+        let raise = match obj.get("raise") {
+            None => true,
+            Some(Json::Bool(b)) => *b,
+            Some(_) => return Err("`raise` must be true or false".into()),
+        };
+        Ok(Forward { argv: strings("argv")?, args: strings("args")?, cwd, url, raise })
+    }
+}
+
+pub fn quiet() -> bool {
+    std::env::var("SK_WINDOW_FOCUS").is_ok_and(|v| v == "never")
+}
+
+/// Why a forwarded launch leaves the window where it is (reasons `; `-joined), or `None` when it raises it.
+fn raise_refusal(app_raises: bool, sender_raises: bool, quiet_here: bool, disabled: bool) -> Option<String> {
+    let reasons: Vec<&str> = [
+        (!app_raises, "\"raiseOnSecondInstance\" is false"),
+        (quiet_here, "this instance is quiet (SK_WINDOW_FOCUS=never)"),
+        (!sender_raises, "the second launch did not request activation"),
+        (disabled, "SK_LAUNCH_RAISE=off"),
+    ]
+    .into_iter()
+    .filter_map(|(holds, why)| holds.then_some(why))
+    .collect();
+    (!reasons.is_empty()).then(|| reasons.join("; "))
+}
+
+pub(crate) fn deliver(msg: Forward) {
+    let paths = existing_paths(&msg.args, Path::new(&msg.cwd));
+    let refusal = raise_refusal(config().is_none_or(|c| c.raise), msg.raise, quiet(), raise_disabled());
+    let raised = match refusal {
+        None if raise() => "the window was raised".to_string(),
+        None => "no window to raise yet".to_string(),
+        Some(why) => format!("not raised: {why}"),
+    };
+    let event = json!({
+        "kind": "launch",
+        "source": "second-instance",
+        "argv": msg.argv,
+        "cwd": msg.cwd,
+        "url": msg.url,
+        "handles": handles_for(&paths),
+        "paths": paths,
+    });
+    crate::emit(event.to_string());
+    crate::log_later(
+        "launch",
+        format!(
+            "[launch] a second launch was forwarded here ({} argument(s){}); {raised}",
+            msg.args.len(),
+            if msg.url.is_some() { ", a URL" } else { "" }
+        ),
+    );
+}
+
+static CLOSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The app is shutting down. From now on a second launch is answered "closing", waits for this
+/// process to exit and becomes the new instance, rather than being handed to a dying process.
+pub fn closing() {
+    CLOSING.store(true, Ordering::Relaxed);
+}
+
+pub(crate) fn is_closing() -> bool {
+    CLOSING.load(Ordering::Relaxed)
+}
+
+static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
+
+pub fn set_window(hwnd: isize) {
+    MAIN_HWND.store(hwnd, Ordering::Relaxed);
+}
+
+fn raise_disabled() -> bool {
+    std::env::var("SK_LAUNCH_RAISE").is_ok_and(|v| v.eq_ignore_ascii_case("off") || v == "0")
+}
+
+fn raise() -> bool {
+    let hwnd = MAIN_HWND.load(Ordering::Relaxed);
+    if hwnd == 0 {
+        return false;
+    }
+    #[cfg(target_os = "windows")]
+    instance::raise(hwnd);
+    true
+}
+
+fn sender_requests_raise(activate: bool, quiet_sender: bool) -> bool {
+    activate && !quiet_sender
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Run,
+    Exit(i32),
+}
+
+pub const FORWARD_TIMEOUT_MS: u64 = 5_000;
+
+/// How long a second launch waits for a closing instance to exit: longer than the host's teardown deadline.
+pub const CLOSING_PATIENCE_MS: u64 = 6_000;
+
+/// Resolves who we are and what this launch is, and, when `singleInstance` is on, either becomes THE
+/// instance or forwards to it. The instance key ignores `dev_slot`: two dev hosts of one app share a
+/// storage folder, so they are one instance.
+pub fn start(args: &Args, config_json: Option<&str>, build_name: Option<String>, dev_slot: Option<PathBuf>) -> Outcome {
+    start_with_activation(args, config_json, build_name, dev_slot, true)
+}
+
+pub fn start_with_activation(args: &Args, config_json: Option<&str>, build_name: Option<String>, dev_slot: Option<PathBuf>, activate: bool) -> Outcome {
+    let config = LaunchConfig::parse(config_json);
+    let identity = resolve_identity(&config, build_name);
+    if !args.ignored.is_empty() {
+        // A protocol launch honours nothing but `--sk-dist`: anything else came from an edited registry command.
+        let msg = format!(
+            "[skathi compat] a protocol launch ignores host flags in front of --sk-protocol-launch: {}",
+            args.ignored.join(" ")
+        );
+        eprintln!("{msg}");
+        crate::log_later("advisory", msg);
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let info = LaunchInfo {
+        argv: args.argv.clone(),
+        cwd: cwd.to_string_lossy().into_owned(),
+        url: args.url.clone(),
+        paths: existing_paths(&args.app_args, &cwd),
+    };
+    if args.host.unregister_protocols {
+        #[cfg(target_os = "windows")]
+        for scheme in protocol_win::unregister_all(&protocol_win::Hive::user(), &identity.id) {
+            println!("unregistered {scheme}:");
+        }
+        return Outcome::Exit(0);
+    }
+    let skip = !config.single_instance
+        || args.host.devtools
+        || args.host.unregister_protocols
+        || args.host.host_info
+        || std::env::var("SK_SINGLE_INSTANCE").is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("off"));
+    let mut outcome = Outcome::Run;
+    let mut holds = false;
+    if !skip {
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            let fwd = Forward {
+                argv: info.argv.clone(),
+                args: args.app_args.clone(),
+                cwd: info.cwd.clone(),
+                url: info.url.clone(),
+                raise: sender_requests_raise(activate, quiet()),
+            };
+            match instance::claim(&identity.id, &storage_name(&identity.name), &fwd) {
+                instance::Claim::Primary => holds = true,
+                instance::Claim::Unavailable(why) => {
+                    eprintln!("[skathi compat] singleInstance is declared but could not be enforced: {why}; running as a separate instance");
+                }
+                instance::Claim::Forwarded => {
+                    eprintln!("[launch] {} is already running; this launch was handed to it", identity.name);
+                    outcome = Outcome::Exit(0);
+                }
+                instance::Claim::NoAnswer => {
+                    eprintln!(
+                        "[launch] {} is already running but did not answer within {} s; not starting a second copy",
+                        identity.name,
+                        FORWARD_TIMEOUT_MS / 1000
+                    );
+                    outcome = Outcome::Exit(2);
+                }
+                instance::Claim::StillClosing => {
+                    eprintln!(
+                        "[launch] {} is closing and had not exited within {} s; not starting a second copy",
+                        identity.name,
+                        FORWARD_TIMEOUT_MS / 1000
+                    );
+                    outcome = Outcome::Exit(2);
+                }
+                instance::Claim::Impostor(why) => {
+                    eprintln!(
+                        "[skathi compat] the single-instance pipe for {} is owned by a process that is not this app ({why}) — forwarding refused",
+                        identity.name
+                    );
+                    outcome = Outcome::Exit(3);
+                }
+            }
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            let _ = &dev_slot;
+            eprintln!("[skathi compat] singleInstance is not implemented on this platform yet; running as a separate instance");
+        }
+    }
+    let dev_slot = dev_slot.map(|p| std::path::absolute(&p).unwrap_or(p).to_string_lossy().into_owned());
+    let _ = BOOT.set(Boot { identity, config, info, single_instance: holds, dev_slot });
+    outcome
+}
+
+fn own_exe() -> String {
+    std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// The declared `protocols`, at startup: a PACKAGED app (re-)registers each per-user and idempotently. A
+/// dev host never does, since that would point the scheme at a dev slot. Main thread, before the window.
+pub fn register_declared() {
+    let Some(b) = BOOT.get() else { return };
+    if b.config.protocols.is_empty() {
+        return;
+    }
+    if !b.config.single_instance {
+        crate::advise_later(&format!(
+            "\"protocols\" is declared without \"singleInstance\": every {}:// link starts a new instance of the app",
+            b.config.protocols[0]
+        ));
+    }
+    if b.dev_slot.is_some() {
+        crate::log_later(
+            "launch",
+            format!(
+                "[launch] a dev host does not register the declared protocols ({}); a packaged exe does at startup, \
+                 and appLaunch.registerProtocol() does here",
+                b.config.protocols.join(", ")
+            ),
+        );
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if protocol_win::has_package_identity() {
+            crate::advise_later(
+                "this app runs with MSIX package identity: per-user protocol registration is virtualised there and \
+                 would register nothing — declare the protocols in AppxManifest (uap:Protocol) instead; skipped",
+            );
+            return;
+        }
+        let hive = protocol_win::Hive::user();
+        let exe = own_exe();
+        for raw in &b.config.protocols {
+            let result = protocol::validate_scheme(raw)
+                .and_then(|s| protocol_win::register(&hive, &s, &b.identity.id, &exe, None).map(|w| (s, w)));
+            match result {
+                Ok((s, true)) => crate::log_later("launch", format!("[launch] registered {s}:// → {exe}")),
+                Ok((_, false)) => {}
+                Err(why) => crate::advise_later(&format!("protocol \"{raw}\" was not registered: {why}")),
+            }
+        }
+    }
+}
+
+pub fn js_register(raw: &str) -> Result<(), crate::Fail> {
+    let fail = |m: String| Err(crate::Fail::type_error(format!("registerProtocol: {m}")));
+    let scheme = match protocol::validate_scheme(raw) {
+        Ok(s) => s,
+        Err(m) => return fail(m),
+    };
+    let Some(b) = BOOT.get() else { return fail("the launch state is not initialised".into()) };
+    #[cfg(target_os = "windows")]
+    {
+        if protocol_win::has_package_identity() {
+            return fail("this app runs with MSIX package identity; declare the protocol in AppxManifest (uap:Protocol)".into());
+        }
+        if b.dev_slot.is_some() {
+            crate::advise(&format!(
+                "registerProtocol(\"{scheme}\") in a DEV host points {scheme}:// at this dev slot ({}) — a packaged \
+                 exe registers its declared protocols itself; unregister this one when done",
+                b.dev_slot.as_deref().unwrap_or_default()
+            ));
+        }
+        match protocol_win::register(&protocol_win::Hive::user(), &scheme, &b.identity.id, &own_exe(), b.dev_slot.as_deref()) {
+            Ok(_) => Ok(()),
+            Err(m) => fail(m),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (b, scheme);
+        Err(crate::Fail::new("NotSupportedError", "registerProtocol is not implemented on this platform yet"))
+    }
+}
+
+pub fn js_unregister(raw: &str) -> bool {
+    let (Ok(scheme), Some(b)) = (protocol::validate_scheme(raw), BOOT.get()) else { return false };
+    #[cfg(target_os = "windows")]
+    {
+        protocol_win::unregister(&protocol_win::Hive::user(), &scheme, &b.identity.id, &own_exe())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (b, scheme);
+        false
+    }
+}
+
+pub fn js_is_registered(raw: &str) -> bool {
+    let (Ok(scheme), Some(b)) = (protocol::validate_scheme(raw), BOOT.get()) else { return false };
+    #[cfg(target_os = "windows")]
+    {
+        protocol_win::is_registered(&protocol_win::Hive::user(), &scheme, &b.identity.id, &own_exe())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (b, scheme);
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_launch_block_parses_with_defaults_and_ignores_wrong_types() {
+        assert_eq!(LaunchConfig::parse(None), LaunchConfig::default());
+        assert!(LaunchConfig::default().raise, "raising is on by default");
+        let c = LaunchConfig::parse(Some(
+            r#"{"id":"gl.argon.notes","singleInstance":true,"raiseOnSecondInstance":false,"protocols":["Notes","x-y"]}"#,
+        ));
+        assert_eq!(c.id.as_deref(), Some("gl.argon.notes"));
+        assert!(c.single_instance);
+        assert!(!c.raise);
+        assert_eq!(c.protocols, vec!["notes", "x-y"]);
+        let c = LaunchConfig::parse(Some(r#"{"singleInstance":"yes","protocols":"notes","id":3}"#));
+        assert_eq!(c, LaunchConfig::default());
+        assert_eq!(LaunchConfig::parse(Some("not json")), LaunchConfig::default());
+    }
+
+    #[test]
+    fn the_id_defaults_to_the_name() {
+        let c = LaunchConfig::default();
+        let id = resolve_identity(&c, Some("notes".into()));
+        if std::env::var("SK_APP_NAME").is_err() {
+            assert_eq!(id, Identity { name: "notes".into(), id: "notes".into() });
+        }
+        let c = LaunchConfig { id: Some("gl.argon.notes".into()), ..LaunchConfig::default() };
+        assert_eq!(resolve_identity(&c, Some("notes".into())).id, "gl.argon.notes");
+    }
+
+    #[test]
+    fn a_forward_round_trips_and_the_decoder_is_strict() {
+        let f = Forward {
+            argv: vec!["C:\\a\\Notes.exe".into(), "x.txt".into()],
+            args: vec!["x.txt".into()],
+            cwd: "C:\\work".into(),
+            url: Some("notes://a?b=\"c d\"".into()),
+            raise: true,
+        };
+        assert_eq!(Forward::decode(&f.encode()), Ok(f.clone()));
+        let none = Forward { url: None, raise: false, ..f.clone() };
+        assert_eq!(Forward::decode(&none.encode()), Ok(none));
+        let old = Forward::decode(br#"{"v":1,"argv":[],"args":[],"cwd":"","url":null}"#).unwrap();
+        assert!(old.raise);
+        for bad in [
+            &br#"[]"#[..],
+            br#"{"v":2,"argv":[],"args":[],"cwd":""}"#,
+            br#"{"v":1,"argv":[1],"args":[],"cwd":""}"#,
+            br#"{"v":1,"argv":[],"args":[],"cwd":"","url":5}"#,
+            br#"{"v":1,"argv":[],"args":[],"cwd":"","extra":true}"#,
+            br#"{"v":1,"argv":[],"args":[],"cwd":"","raise":"yes"}"#,
+            br#"{"v":1,"argv":[],"cwd":""}"#,
+            b"\xff\xfe",
+        ] {
+            assert!(Forward::decode(bad).is_err(), "{:?}", String::from_utf8_lossy(bad));
+        }
+        let huge = vec![b' '; MAX_MESSAGE + 1];
+        assert!(Forward::decode(&huge).unwrap_err().contains("cap"));
+    }
+
+    #[test]
+    fn background_senders_forward_without_raising_the_existing_instance() {
+        assert!(sender_requests_raise(true, false));
+        assert!(!sender_requests_raise(false, false));
+        assert!(!sender_requests_raise(true, true));
+        assert!(!sender_requests_raise(false, true));
+    }
+
+    #[test]
+    fn who_may_raise_the_window() {
+        assert_eq!(raise_refusal(true, true, false, false), None);
+        assert_eq!(raise_refusal(false, true, false, false).unwrap(), "\"raiseOnSecondInstance\" is false");
+        assert_eq!(raise_refusal(true, true, true, false).unwrap(), "this instance is quiet (SK_WINDOW_FOCUS=never)");
+        assert_eq!(raise_refusal(true, false, false, false).unwrap(), "the second launch did not request activation");
+        assert_eq!(raise_refusal(true, true, false, true).unwrap(), "SK_LAUNCH_RAISE=off");
+        let all = raise_refusal(true, false, true, true).unwrap();
+        assert!(all.contains("this instance is quiet") && all.contains("the second launch did not request activation") && all.contains("SK_LAUNCH_RAISE"), "{all}");
+    }
+
+    #[test]
+    fn the_storage_name_is_the_folder_name() {
+        assert_eq!(storage_name("argon-vue-native"), "argon-vue-native");
+        assert_eq!(storage_name("Argon-Vue-Native"), "argon-vue-native");
+        assert_eq!(storage_name("my app"), storage_name("my-app"));
+        assert_eq!(storage_name("..x.."), "x");
+        assert_eq!(storage_name("///"), "vue-native-app");
+        assert_eq!(storage_name(&"a".repeat(80)).len(), 64);
+    }
+
+    #[test]
+    fn paths_are_the_arguments_that_exist() {
+        let dir = std::env::temp_dir().join(format!("sk-desktop-paths-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("x.txt"), "x").unwrap();
+        let args: Vec<String> =
+            ["x.txt", "missing.txt", "--flag", "https://example.com/", ".", dir.join("x.txt").to_str().unwrap()]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        let got = existing_paths(&args, &dir);
+        let x = dir.join("x.txt").to_string_lossy().into_owned();
+        assert_eq!(got, vec![x.clone(), dir.to_string_lossy().into_owned(), x]);
+        let missing = dir.join("gone.txt").to_string_lossy().into_owned();
+        let hs = handles_for(&[got[0].clone(), got[1].clone(), missing]);
+        assert_eq!(hs.len(), 2, "a path that vanished has no handle");
+        assert_eq!((hs[0]["name"].as_str(), hs[0]["kind"].as_str()), (Some("x.txt"), Some("file")));
+        assert_eq!(hs[1]["kind"].as_str(), Some("directory"));
+        for h in &hs {
+            assert!(!h.to_string().contains(&*dir.to_string_lossy()), "no path in {h}");
+            crate::fs::release(h["h"].as_u64().unwrap());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-embed",
+
+  "window": {
+    "title": "Skathi — embed (fixture)",
+    "width": 320,
+    "height": 200,
+    "titleBarStyle": "default",
+    "backdrop": "none"
+  }
+}

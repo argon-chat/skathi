@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { appWindow } from "vue-native";
+import { appWindow } from "@skathi-native/runtime";
 
 defineOptions({ name: "WindowPage" });
 
@@ -14,7 +14,7 @@ interface Geometry {
   extended: boolean;
 }
 
-// Under vn-app both exist before this module evaluates — asserted once, here, rather than at
+// Under sk-app both exist before this module evaluates — asserted once, here, rather than at
 // twelve call sites.
 const doc = document!;
 const wco = navigator!.windowControlsOverlay;
@@ -22,8 +22,8 @@ const wco = navigator!.windowControlsOverlay;
 const geom = ref<Partial<Geometry>>({});
 const maximized = ref(false);
 const focused = ref(false);
-const bar = ref<VnWindowRect>({ x: 0, y: 0, width: 0, height: 0 });
-const chrome = ref(appWindow.chrome as unknown as VnWindowChrome);
+const bar = ref<SkWindowRect>({ x: 0, y: 0, width: 0, height: 0 });
+const chrome = ref(appWindow.chrome as unknown as SkWindowChrome);
 
 const readAll = () => {
   geom.value = {
@@ -38,7 +38,7 @@ const readAll = () => {
   maximized.value = appWindow.isMaximized();
   focused.value = appWindow.isFocused();
   bar.value = wco.getTitlebarAreaRect();
-  chrome.value = appWindow.chrome as unknown as VnWindowChrome;
+  chrome.value = appWindow.chrome as unknown as SkWindowChrome;
   readMq();
 };
 
@@ -73,7 +73,7 @@ const applyTitle = () => {
   doc.title = titleDraft.value;
   // `document.title` has no change event in any spec, so the titlebar is poked explicitly rather
   // than polled.
-  dispatchEvent(new Event("vn:title"));
+  dispatchEvent(new Event("sk:title"));
   titleDraft.value = doc.title;
 };
 
@@ -111,10 +111,10 @@ onUnmounted(() => Object.values(MQ).forEach((m) => m.removeEventListener("change
 const nudge = (dx: number, dy: number) =>
   appWindow.setBounds({ x: appWindow.getBounds().x + dx, y: appWindow.getBounds().y + dy });
 const grow = (d: number) => resizeBy(d, d);
-// `documentElement` is `unknown` on `VnDocument` and cannot be narrowed by a merge (apps/env.d.ts
+// `documentElement` is `unknown` on `SkDocument` and cannot be narrowed by a merge (apps/env.d.ts
 // says why), so it is cast at this one use.
 const toggleFullscreen = () =>
-  doc.fullscreenElement ? doc.exitFullscreen() : (doc.documentElement as VnElement).requestFullscreen();
+  doc.fullscreenElement ? doc.exitFullscreen() : (doc.documentElement as SkElement).requestFullscreen();
 </script>
 
 <template>

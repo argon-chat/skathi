@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "Denne appen",
+  "sk.consent.microphone.title": "{app} vil bruke mikrofonen din",
+  "sk.consent.microphone.body": "Hvis du tillater det, kan {app} ta opp lyd fra mikrofonen din nå og senere. Valget ditt huskes for denne appen.",
+  "sk.consent.camera.title": "{app} vil bruke kameraet ditt",
+  "sk.consent.camera.body": "Hvis du tillater det, kan {app} ta opp video med kameraet ditt nå og senere. Valget ditt huskes for denne appen.",
+  "sk.consent.allow": "&Tillat",
+  "sk.consent.block": "&Blokker",
+  "sk.crash.title": "{app} har støtt på et problem",
+  "sk.crash.body": "En intern feil stoppet appen. Start den på nytt for å fortsette.",
+  "sk.crash.body_no_restart": "En intern feil stoppet appen. Lukk den og åpne den igjen for å fortsette.",
+  "sk.crash.details": "Detaljer",
+  "sk.crash.restart": "&Start på nytt",
+  "sk.crash.copy": "&Kopier rapport",
+  "sk.crash.copied": "Kopiert",
+  "sk.crash.close": "&Lukk",
+  "sk.crash.version": "Versjon {version}"
+}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Chromium's shape — Headers / Payload / Response / Timing for a request, Socket / Timing for a
-// WebSocket — over what `net_detail` returns (crates/vn-app/src/devtools/net.rs, `Ring::detail`).
+// WebSocket — over what `net_detail` returns (crates/sk-app/src/devtools/net.rs, `Ring::detail`).
 import { computed, reactive, watch } from "vue";
 import { BODY_BAR_H, DETAIL_TABS_H, MONO_W } from "../layout";
 import { closeNetDetail, copyText, flash, loadNetDetail, state } from "../store";
@@ -516,7 +516,7 @@ function reload(): void {
                 :class="[kv.tone, { faint: kv.faint, masked: kv.sensitive && !revealed[s.id + ':' + i] }]"
                 >{{ shown(kv, s.id + ":" + i) }}</span
               >
-              <span v-if="kv.note" class="vn">{{ kv.note }}</span>
+              <span v-if="kv.note" class="sk">{{ kv.note }}</span>
             </div>
             <span v-if="kv.sensitive" class="eye" @click="reveal(kv, s.id + ':' + i)">{{
               revealed[s.id + ":" + i] ? "hide" : "show"
@@ -552,7 +552,7 @@ function reload(): void {
                 <span class="k mono" :style="{ width: nameW + 'px' }">{{ nameOf(kv) }}</span>
                 <div class="v">
                   <span class="vt mono" :class="{ faint: kv.faint }">{{ shown(kv, s.id + ":" + i) }}</span>
-                  <span v-if="kv.note" class="vn">{{ kv.note }}</span>
+                  <span v-if="kv.note" class="sk">{{ kv.note }}</span>
                 </div>
                 <span class="eye-gap"></span>
               </div>
@@ -613,7 +613,7 @@ function reload(): void {
           <span class="k mono" :style="{ width: nameW + 'px' }">{{ nameOf(kv) }}</span>
           <div class="v">
             <span class="vt mono" :class="[kv.tone, { faint: kv.faint }]">{{ shown(kv, "t:" + i) }}</span>
-            <span v-if="kv.note" class="vn">{{ kv.note }}</span>
+            <span v-if="kv.note" class="sk">{{ kv.note }}</span>
           </div>
           <span class="eye-gap"></span>
         </div>
@@ -644,7 +644,7 @@ function reload(): void {
                 :class="[kv.tone, { faint: kv.faint, masked: kv.sensitive && !revealed[s.id + ':' + i] }]"
                 >{{ shown(kv, s.id + ":" + i) }}</span
               >
-              <span v-if="kv.note" class="vn">{{ kv.note }}</span>
+              <span v-if="kv.note" class="sk">{{ kv.note }}</span>
             </div>
             <span v-if="kv.sensitive" class="eye" @click="reveal(kv, s.id + ':' + i)">{{
               revealed[s.id + ":" + i] ? "hide" : "show"
@@ -844,7 +844,7 @@ function reload(): void {
 .vt.bad {
   color: var(--bad);
 }
-.vn {
+.sk {
   font-size: var(--fs-xs);
   line-height: 13px;
   color: var(--text-faint);

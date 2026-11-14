@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 
-// Class-driven on purpose: state-rule transitions are rejected by vn-css by design, so a real
+// Class-driven on purpose: state-rule transitions are rejected by sk-css by design, so a real
 // class flip is the supported way to animate an effect's parameters.
 const hot = ref(false);
 </script>
@@ -12,14 +12,14 @@ const hot = ref(false);
       <div class="h1">shaderlab — user-authored `--shading` effects</div>
       <div class="h2 app">
         app effects — ripple · aurora: compiled from apps/shaderlab/shaders/*.slang by `bun shaders.ts --app … --out …`,
-        loaded at startup from $VN_EFFECTS_DIR.
+        loaded at startup from $SK_EFFECTS_DIR.
       </div>
       <div class="h2 core">
         built-ins — frost · glow: the effects that ship with the engine, on the same registry and unchanged.
       </div>
     </div>
 
-    <!-- Animated: `speed` carries [VnAnimated], so the host keeps repainting while it is above zero. -->
+    <!-- Animated: `speed` carries [SkAnimated], so the host keeps repainting while it is above zero. -->
     <div class="row">
       <div class="panel ripple">
         <div class="name">ripple(1.6, 26px, 0.5, 0.42, #7fd4ff)</div>

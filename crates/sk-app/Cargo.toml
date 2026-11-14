@@ -1,0 +1,132 @@
+[package]
+name = "sk-app"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+# Compiles `apps/devtools` into the executable and emits `cfg(sk_devtools)`.
+build = "build.rs"
+
+[features]
+battery = ["sk-runtime/battery"]
+native-aot = ["sk-runtime/native-aot"]
+native-inspector = ["native-aot"]
+native-dx12 = ["gpui_windows/native-dx12"]
+# macOS: compile the Metal shaders at app start instead of build time, for a machine without
+# Xcode's Metal toolchain. Shipped builds keep the precompiled library.
+runtime-shaders = ["gpui_platform/runtime_shaders"]
+webgpu = ["sk-runtime/webgpu", "sk-tree/webgpu", "dep:wgpu", "dep:pollster"]
+# The bare host: the dev manifest/HMR polling is compiled out, and the app (bundle, window config,
+# name, assets) is the SKPK payload `sk build` stamps into a copy of this exe (src/payload.rs,
+# src/prod.rs). Not implied by `--release`; `sk host build` opts in.
+prod = []
+
+# Compiles out the devtools protocol listener, the embedded inspector and the F12 key, which every
+# build includes otherwise (an app can also disable them at runtime). For a build that must prove
+# no `eval` transport was compiled in: `cargo build -p sk-app --features prod,no-devtools`.
+no-devtools = []
+
+# Accepted no-op, so command lines written against `--features prod,devtools` keep working.
+# `build.rs` fails the build if it is combined with `no-devtools`.
+devtools = []
+
+# Web Audio (`AudioContext` & co) via sk-runtime. `--no-default-features` builds a host with no
+# audio, about 40 fewer crates.
+default = ["audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12"]
+audio = ["sk-runtime/audio", "sk-permissions/audio"]
+
+# `localStorage` / `sessionStorage` and the `appStorage` extension. Off, the whole surface
+# vanishes, so `typeof localStorage === "undefined"` tells the truth. No third-party dependency;
+storages = ["sk-runtime/storages", "dep:sk-storage"]
+# `navigator.clipboard`. Off, it is undefined; the native <input>'s Ctrl+C is unaffected (it
+# shares gpui's clipboard, not this crate).
+clipboard = ["sk-runtime/clipboard", "dep:sk-clipboard"]
+# `indexedDB` + `navigator.storage`, no Rust dependency. With `storages` on the databases are
+# encrypted SQLite files under the app's storage folder; with it off the in-memory backend runs
+indexeddb = ["sk-runtime/indexeddb", "sk-storage?/indexeddb"]
+
+[dependencies]
+# `stacker` makes `stacksafe` opt-in in gpui; an arbitrary-depth user DOM needs it for
+# `Div::{request_layout,prepaint,paint}`. Features are additive, so this one line enables it for
+# the whole binary.
+gpui = { path = "../../vendor/zed/crates/gpui", default-features = false, features = [
+    "stacker",
+] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+log = "0.4"
+raw-window-handle = "0.6"
+anyhow = "1"
+gpui_platform ={ path = "../../vendor/zed/crates/gpui_platform", default-features = false }
+sk-css = { path = "../sk-css" }
+sk-elements = { path = "../sk-elements" }
+# `default-features = false` here and in every dependent of sk-runtime: features unify across the
+# graph, so one plain dependency would turn every sk-runtime default back on.
+sk-runtime = { path = "../sk-runtime", default-features = false, features = ["net-h2"] }
+sk-tree = { path = "../sk-tree", default-features = false }
+sk-webview = { path = "../sk-webview" }
+sk-sticker = { path = "../sk-sticker" }
+sk-payload = { path = "../sk-payload" }
+memmap2 = "0.9"
+self_cell = "1"
+sk-desktop = { path = "../sk-desktop" }
+sk-hotkeys = { path = "../sk-hotkeys" }
+sk-permissions = { path = "../sk-permissions" }
+sk-locale = { path = "../sk-locale" }
+sk-storage = { path = "../sk-storage", optional = true }
+sk-clipboard = { path = "../sk-clipboard", optional = true }
+# Fallback client for a request redjs's stack does not carry as is (a body, or a redirect that must
+# not be followed), built on first use; `SK_HTTP_CLIENT=reqwest` installs it in place of redjs's.
+reqwest_client = { path = "../../vendor/zed/crates/reqwest_client" }
+futures = "0.3"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+serde_json = "1"
+
+[build-dependencies]
+serde_json = "1"
+sha2 = "0.10"
+embed-resource = "=3.0.11"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false, features = ["font-kit"] }
+libc = "0.2"
+mach2 = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# gpui's Linux display backends: Wayland where there is one, X11 elsewhere. Off, gpui_linux is a
+# headless platform.
+gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false, features = ["wayland", "x11"] }
+libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-core = "0.62"
+wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "3b3506ea31154edc04de64debda0e780cba2639c", default-features = false, features = ["std", "wgsl", "dx12"], optional = true }
+pollster = { version = "0.4", optional = true }
+gpui_windows = { path = "../../vendor/zed/crates/gpui_windows", default-features = false }
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Direct3D11on12",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_Storage_Xps",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Com",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    # `SetWindowSubclass`: a `<SkWindow :focusable="false">` answers `WM_MOUSEACTIVATE` itself.
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    # `RtlGetVersion`: the one version query Windows does not lie about for an unmanifested process.
+    "Wdk_System_SystemServices",
+    "UI",
+    "UI_ViewManagement",
+] }
+

@@ -1,0 +1,15 @@
+{
+  "$comment": "`SK_DEVTOOLS=1` in the environment overrides it, which is what keeps an app from being able to make itself undebuggable.",
+
+  "name": "devtools-off",
+  "devtools": false,
+
+  "window": {
+    "title": "Skathi — devtools off (fixture)",
+    "width": 420,
+    "height": 220,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false,
+    "backdrop": "mica"
+  }
+}

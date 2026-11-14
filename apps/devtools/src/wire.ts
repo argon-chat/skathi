@@ -5,18 +5,18 @@ const TIMEOUT_MS = 8000;
 
 async function discoverTargets(): Promise<TargetList> {
   const empty: TargetList = { preferred: null, self: null, targets: [] };
-  if (typeof globalThis.__vn_devtools_targets !== "function") {
+  if (typeof globalThis.__sk_devtools_targets !== "function") {
     return {
       ...empty,
       error:
-        "__vn_devtools_targets is not registered — this looks like a host built without the " +
+        "__sk_devtools_targets is not registered — this looks like a host built without the " +
         "devtools (`--features prod` and no `devtools` feature)",
     };
   }
   try {
     const deadline = Date.now() + 30000;
     while (true) {
-      const found = JSON.parse(globalThis.__vn_devtools_targets()) as Partial<TargetList> & {
+      const found = JSON.parse(globalThis.__sk_devtools_targets()) as Partial<TargetList> & {
         pending?: boolean;
       };
       if (!found.pending) return { ...empty, ...found };
@@ -149,7 +149,7 @@ export interface PushHandlers {
 
 /** It is deliberately a THIN object. */
 export class Push {
-  private socket: VnWebSocket | null = null;
+  private socket: SkWebSocket | null = null;
   private closed = false;
 
   constructor(target: Target, since: number, streams: PushStream[], handlers: PushHandlers) {
@@ -158,7 +158,7 @@ export class Push {
       handlers.onClose?.("this host has no WebSocket");
       return;
     }
-    let socket: VnWebSocket;
+    let socket: SkWebSocket;
     try {
       socket = new WebSocket(url);
     } catch (e) {
@@ -170,7 +170,7 @@ export class Push {
       this.send({ sub: streams });
       handlers.onOpen?.();
     };
-    socket.onmessage = (event: VnMessageEvent) => {
+    socket.onmessage = (event: SkMessageEvent) => {
       if (this.closed) return;
       try {
         handlers.onMessage(JSON.parse(String(event.data)) as PushMessage);
@@ -179,7 +179,7 @@ export class Push {
     socket.onerror = () => {
       if (!this.closed) handlers.onClose?.("the push socket errored");
     };
-    socket.onclose = (event: VnCloseEvent) => {
+    socket.onclose = (event: SkCloseEvent) => {
       if (this.closed) return;
       this.closed = true;
       handlers.onClose?.(`the push socket closed (${event.code || 0})`);
@@ -215,7 +215,7 @@ export class Push {
  * its fields would be the one thing standing between a protocol change and a blank window.
  */
 export function devtoolsArgs(): { target: string | null; window: WindowId | null; embedded: boolean } {
-  const raw = globalThis.__VN_DEVTOOLS_ARGS__;
+  const raw = globalThis.__SK_DEVTOOLS_ARGS__;
   if (!raw || typeof raw !== "object") return { target: null, window: null, embedded: false };
   const args = raw as { target?: unknown; window?: unknown; embedded?: unknown };
   return {

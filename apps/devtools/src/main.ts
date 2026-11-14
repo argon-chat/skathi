@@ -1,4 +1,4 @@
-import { createApp } from "vue-native";
+import { createApp } from "@skathi-native/runtime";
 import "./tokens.css";
 import "./theme.css";
 import App from "./App.vue";

@@ -1,0 +1,13 @@
+{
+  "$comment": "El.animate() on Argon's counter-digit strip and three boxes (fill, seek, cancel).",
+
+  "name": "sk-test-waapi",
+
+  "window": {
+    "title": "Skathi — waapi (fixture)",
+    "width": 400,
+    "height": 160,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

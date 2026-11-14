@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "vue-native-shadcn-trial",
+      "name": "skathi-shadcn-trial",
       "dependencies": {
         "@vueuse/core": "^14.4.0",
         "class-variance-authority": "^0.7.1",

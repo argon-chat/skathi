@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "Bu ilova",
+  "sk.consent.microphone.title": "{app} mikrofoningizdan foydalanmoqchi",
+  "sk.consent.microphone.body": "Ruxsat bersangiz, {app} hozir va keyingi safar ham mikrofoningizdan ovoz yozib olishi mumkin. Tanlovingiz shu ilova uchun eslab qolinadi.",
+  "sk.consent.camera.title": "{app} kamerangizdan foydalanmoqchi",
+  "sk.consent.camera.body": "Ruxsat bersangiz, {app} hozir va keyingi safar ham kamerangizdan video yozib olishi mumkin. Tanlovingiz shu ilova uchun eslab qolinadi.",
+  "sk.consent.allow": "&Ruxsat berish",
+  "sk.consent.block": "&Bloklash",
+  "sk.crash.title": "{app} ishida muammo yuz berdi",
+  "sk.crash.body": "Ichki xatolik ilovani to‘xtatdi. Davom etish uchun uni qayta ishga tushiring.",
+  "sk.crash.body_no_restart": "Ichki xatolik ilovani to‘xtatdi. Davom etish uchun uni yopib, qayta oching.",
+  "sk.crash.details": "Batafsil",
+  "sk.crash.restart": "&Qayta ishga tushirish",
+  "sk.crash.copy": "&Hisobotni nusxalash",
+  "sk.crash.copied": "Nusxa olindi",
+  "sk.crash.close": "&Yopish",
+  "sk.crash.version": "Versiya {version}"
+}

@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-hit-target",
+
+  "window": {
+    "title": "Skathi — hit target (fixture)",
+    "width": 520,
+    "height": 400,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

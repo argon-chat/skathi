@@ -1,0 +1,40 @@
+{
+  "name": "@skathi-native/cli",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/argon-chat/vue-native.git",
+    "directory": "packages/cli"
+  },
+  "version": "0.0.1",
+  "type": "module",
+  "description": "The sk CLI: SFC compiler, dev and production builders, packaging and devtools for Skathi apps.",
+  "bin": {
+    "sk": "./cli/sk.ts"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.9.0",
+    "@skathi-native/runtime": "workspace:*",
+    "@vue/compiler-sfc": "^3.5.41",
+    "postcss": "^8.4.31",
+    "tailwindcss": "3.4"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "typescript": "5"
+  },
+  "scripts": {
+    "test": "bun test",
+    "build": "bun build.ts",
+    "watch": "bun build.ts --watch",
+    "build:prod": "bun prod.ts",
+    "devtools:ui": "bun devtools/ui.ts",
+    "sk": "bun cli/sk.ts"
+  },
+  "comments": {
+    "tailwindcss": "Pinned to 3.4.x: v3 emits literal declarations that crates/sk-css maps onto gpui; v4 uses var(--tw-*) + calc() + @property, which the engine does not fully resolve yet (see tailwind.ts).",
+    "@modelcontextprotocol/sdk": "devDependency: used only by devtools/mcp.ts. devtools/ctl.ts is dependency-free so an agent can drive the app through Bash without bun install.",
+    "typescript": "The optional AOT input inventory (sk build --aot-inputs). Builds do not invoke tsc: bun transpiles .ts directly."
+  }
+}

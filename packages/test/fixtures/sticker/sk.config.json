@@ -1,0 +1,13 @@
+{
+  "$comment": "<sk-sticker>, Skathi's stickers and animated emoji (crates/sk-tree/src/sticker.rs).",
+
+  "name": "sk-test-sticker",
+
+  "window": {
+    "title": "Skathi — sk-sticker (fixture)",
+    "width": 480,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

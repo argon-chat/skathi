@@ -14,7 +14,7 @@ const picked = ref<Picked[]>([]);
 const preview = ref("");
 const inputLog = ref<string[]>([]);
 
-function readText(file: VnFile): Promise<string> {
+function readText(file: SkFile): Promise<string> {
   return new Promise((done, fail) => {
     const r = new FileReader();
     r.onload = () => done(String(r.result));
@@ -23,8 +23,8 @@ function readText(file: VnFile): Promise<string> {
   });
 }
 
-async function onPick(e: VnEvent) {
-  const input = e.target as VnFileInputElement;
+async function onPick(e: SkEvent) {
+  const input = e.target as SkFileInputElement;
   inputLog.value = [...inputLog.value, `change (${input.value || "—"})`].slice(-4);
   picked.value = [...input.files].map((f) => ({ name: f.name, size: f.size, type: f.type, rel: f.webkitRelativePath }));
   const first = input.files.item(0);
@@ -39,7 +39,7 @@ async function onPick(e: VnEvent) {
 }
 const onCancel = () => (inputLog.value = [...inputLog.value, "cancel"].slice(-4));
 
-const handle = ref<VnFileSystemFileHandle | null>(null);
+const handle = ref<SkFileSystemFileHandle | null>(null);
 const text = ref("");
 const fsaStatus = ref("");
 const TEXT_TYPES = [
@@ -57,7 +57,7 @@ async function openFile() {
   }
 }
 
-async function writeTo(h: VnFileSystemFileHandle) {
+async function writeTo(h: SkFileSystemFileHandle) {
   const w = await h.createWritable();
   await w.write(text.value);
   await w.close();
@@ -106,7 +106,7 @@ async function openFolder() {
   }
 }
 
-const notes = computed(() => text.value || "Saved from the vue-native hello app.\n");
+const notes = computed(() => text.value || "Saved from the Skathi hello app.\n");
 const blobUrl = ref("");
 const refreshUrl = () => {
   if (blobUrl.value) URL.revokeObjectURL(blobUrl.value);

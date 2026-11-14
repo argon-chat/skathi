@@ -2,12 +2,12 @@
 // Both are incremented once per mount; `localStorage` remembers across a restart of the process
 // and `sessionStorage` does not.
 import { onMounted, ref } from "vue";
-import { appStorage } from "vue-native";
+import { appStorage } from "@skathi-native/runtime";
 
 defineOptions({ name: "StoragePage" });
 
-const BOOTS = "vn.demo.boots";
-const NOTE = "vn.demo.note";
+const BOOTS = "sk.demo.boots";
+const NOTE = "sk.demo.note";
 
 type StorageInfo = ReturnType<typeof appStorage.info>;
 
@@ -18,7 +18,7 @@ const localBoots = ref(0);
 const sessionBoots = ref(0);
 const note = ref("");
 const status = ref("");
-const clipText = ref("copied from vue-native");
+const clipText = ref("copied from Skathi");
 const clipRead = ref("");
 
 function refresh() {

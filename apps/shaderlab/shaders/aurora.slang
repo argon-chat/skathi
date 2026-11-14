@@ -1,16 +1,16 @@
-import vn;
+import sk;
 
-[VnEffect("aurora")]
-[VnDoc("layered gradient sheen with a soft edge falloff")]
+[SkEffect("aurora")]
+[SkDoc("layered gradient sheen with a soft edge falloff")]
 struct Aurora : IEffect
 {
-    [VnDefault("0.8")] [VnRange(0.0, 1.0)]
+    [SkDefault("0.8")] [SkRange(0.0, 1.0)]
     float intensity;
 
-    [VnOptional] [VnDefault("0.12")] [VnRange(-1.0, 1.0)]
+    [SkOptional] [SkDefault("0.12")] [SkRange(-1.0, 1.0)]
     float angle;
 
-    [VnColor] [VnOptional] [VnDefault("#7f5cff")]
+    [SkColor] [SkOptional] [SkDefault("#7f5cff")]
     float4 tint;
 
     static override bool straightAlpha() { return true; }
@@ -19,12 +19,12 @@ struct Aurora : IEffect
     {
         // `centered()` is aspect-corrected, so the bands stay at the requested angle instead of
         // shearing with the element's proportions.
-        float2 p = vn_rotate(input.centered(), angle * 6.28318530718);
+        float2 p = sk_rotate(input.centered(), angle * 6.28318530718);
 
-        float warp = vn_fbm(p * 1.3 + float2(0.0, p.y * 0.4)) - 0.5;
+        float warp = sk_fbm(p * 1.3 + float2(0.0, p.y * 0.4)) - 0.5;
         float t = saturate(p.x * 0.5 + 0.5 + warp * 0.35);
 
-        float3 sweep = vn_palette(
+        float3 sweep = sk_palette(
             t,
             float3(0.58, 0.52, 0.68),
             float3(0.42, 0.44, 0.40),

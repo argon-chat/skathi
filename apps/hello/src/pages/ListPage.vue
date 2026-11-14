@@ -6,7 +6,7 @@ const session = useSession();
 
 const rows = Array.from({ length: 25 }, (_, i) => `row ${i + 1}`);
 const scrollTop = ref(0);
-const onScroll = (e: VnEvent) => (scrollTop.value = (e.target as VnElement).scrollTop);
+const onScroll = (e: SkEvent) => (scrollTop.value = (e.target as SkElement).scrollTop);
 const wheelY = ref(0);
 
 onActivated(() => console.log("[app] ListPage ACTIVATED (scrollTop=" + scrollTop.value + ")"));

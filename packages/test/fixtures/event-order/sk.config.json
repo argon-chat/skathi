@@ -1,0 +1,11 @@
+{
+  "name": "event-order",
+
+  "window": {
+    "title": "Skathi — event order (fixture)",
+    "width": 480,
+    "height": 420,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

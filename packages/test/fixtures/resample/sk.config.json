@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-resample",
+
+  "window": {
+    "title": "Skathi — resample (fixture)",
+    "width": 360,
+    "height": 100,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-select",
+
+  "window": {
+    "title": "Skathi — select (fixture)",
+    "width": 460,
+    "height": 420,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

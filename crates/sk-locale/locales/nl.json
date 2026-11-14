@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "Deze app",
+  "sk.consent.microphone.title": "{app} wil je microfoon gebruiken",
+  "sk.consent.microphone.body": "Als je dit toestaat, kan {app} nu en in de toekomst geluid opnemen met je microfoon. Je keuze wordt voor deze app onthouden.",
+  "sk.consent.camera.title": "{app} wil je camera gebruiken",
+  "sk.consent.camera.body": "Als je dit toestaat, kan {app} nu en in de toekomst video opnemen met je camera. Je keuze wordt voor deze app onthouden.",
+  "sk.consent.allow": "&Toestaan",
+  "sk.consent.block": "&Blokkeren",
+  "sk.crash.title": "{app} heeft een probleem",
+  "sk.crash.body": "Een interne fout heeft de app gestopt. Start de app opnieuw om verder te gaan.",
+  "sk.crash.body_no_restart": "Een interne fout heeft de app gestopt. Sluit de app en open hem opnieuw om verder te gaan.",
+  "sk.crash.details": "Details",
+  "sk.crash.restart": "Opnieuw &starten",
+  "sk.crash.copy": "Rapport &kopiëren",
+  "sk.crash.copied": "Gekopieerd",
+  "sk.crash.close": "S&luiten",
+  "sk.crash.version": "Versie {version}"
+}

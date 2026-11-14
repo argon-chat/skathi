@@ -3,7 +3,7 @@ import { TINY_CLIP_DATA_URI } from "../tinyClip";
 
 import { computed, onMounted, reactive, ref } from "vue";
 
-const videoEl = ref<VnMediaElement | null>(null);
+const videoEl = ref<SkMediaElement | null>(null);
 
 const media = reactive({
   currentTime: 0,
@@ -16,9 +16,9 @@ const media = reactive({
   videoHeight: 0,
 });
 const log = ref<string[]>([]);
-const brokenError = ref<VnMediaError | null>(null);
+const brokenError = ref<SkMediaError | null>(null);
 
-function readBack(el: VnMediaElement | null | undefined) {
+function readBack(el: SkMediaElement | null | undefined) {
   if (!el) return;
   media.currentTime = el.currentTime;
   media.duration = el.duration;
@@ -31,16 +31,16 @@ function readBack(el: VnMediaElement | null | undefined) {
 }
 
 /** This handler is only ever bound to the one element above, so that is what the cast says. */
-function onMedia(e: VnEvent) {
+function onMedia(e: SkEvent) {
   log.value.push(e.type);
   if (log.value.length > 40) log.value.shift();
-  readBack((e.target as VnMediaElement | null) ?? videoEl.value);
+  readBack((e.target as SkMediaElement | null) ?? videoEl.value);
 }
 
-function onBrokenError(e: VnEvent) {
+function onBrokenError(e: SkEvent) {
   // `e.target.error` is a real MediaError: `{ code, message }`, where the message is the advisory
   // naming what THIS machine cannot decode.
-  brokenError.value = (e.target as VnMediaElement | null)?.error ?? null;
+  brokenError.value = (e.target as SkMediaElement | null)?.error ?? null;
 }
 
 const muted = ref(true); // browsers require it for autoplay; be a good neighbour
@@ -90,10 +90,10 @@ function formatTime(seconds: number) {
 
 const scrubbing = ref(false);
 
-function seekFromEvent(e: VnMouseEvent) {
+function seekFromEvent(e: SkMouseEvent) {
   // `currentTarget` is rewritten at each step of the propagation walk, so it is the `.track` div
   // this handler is bound to — not whatever was clicked.
-  const track = e.currentTarget as VnElement | null;
+  const track = e.currentTarget as SkElement | null;
   if (!track || !Number.isFinite(media.duration)) return;
   const rect = track.getBoundingClientRect();
   if (!rect.width) return;
@@ -118,7 +118,7 @@ const CODECS: [label: string, mime: string][] = [
 ];
 const probe = ref<{ label: string; answer: string }[]>([]);
 onMounted(() => {
-  if (globalThis.__VN_SCENARIO__ === "media") {
+  if (globalThis.__SK_SCENARIO__ === "media") {
     setTimeout(() => {
       const el = videoEl.value;
       if (!el) return;
@@ -142,7 +142,7 @@ const recent = computed(() => log.value.slice(-8).join(" · "));
 
 // The origin is overridable so this page can be pointed at a real server; the default is a local
 // one, so the demo has no third-party dependency and no internet requirement.
-const httpOrigin = globalThis.__VN_HTTP_ORIGIN__ || "http://127.0.0.1:8731";
+const httpOrigin = globalThis.__SK_HTTP_ORIGIN__ || "http://127.0.0.1:8731";
 const tinyClip = TINY_CLIP_DATA_URI;
 const httpClip = `${httpOrigin}/clip-1080p.mp4`;
 const httpImage = `${httpOrigin}/clip-1080p.poster.png`;

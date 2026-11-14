@@ -1,0 +1,13 @@
+{
+  "$comment": "`em` against the element's own computed font size, down a real tree.",
+
+  "name": "sk-test-em",
+
+  "window": {
+    "title": "Skathi — em (fixture)",
+    "width": 520,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

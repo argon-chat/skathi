@@ -1,0 +1,15 @@
+{
+  "$comment": "One Vue app, one retained tree, up to FOUR OS windows: each `<SkWindow>` moves a subtree's PAINT into a second gpui window while it stays in the same tree, the same component instance and the same reactive graph.",
+
+  "name": "popout",
+
+  "window": {
+    "title": "Skathi — pop-out (window A)",
+    "width": 620,
+    "height": 460,
+
+    "$comment-titleBarStyle": "OS chrome for the main window; the `notes` pop-out paints its own caption with `chrome: \"hidden\"`.",
+    "titleBarStyle": "default",
+    "backdrop": "mica"
+  }
+}

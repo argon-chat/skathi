@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-http-images",
+
+  "window": {
+    "title": "Skathi — http-images (fixture)",
+    "width": 640,
+    "height": 300,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

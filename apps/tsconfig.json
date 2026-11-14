@@ -1,5 +1,5 @@
 {
-  // `bun run typecheck` in packages/vue-native checks this with vue-tsc.
+  // `bun run typecheck` at the repo root checks this with vue-tsc.
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     // No "DOM": the apps run on redjs. env.d.ts declares the subset it ships; add names there, never widen `lib`.
@@ -10,18 +10,20 @@
     // registry, and these paths mirror that mapping.
     "baseUrl": ".",
     "paths": {
-      "vue": ["../packages/vue-native/src/runtime.ts"],
-      "vue-native": ["../packages/vue-native/src/runtime.ts"],
-      "vue-router": ["../packages/vue-native/node_modules/vue-router"],
-      "pinia": ["../packages/vue-native/node_modules/pinia"]
+      "vue": ["../packages/runtime/src/runtime.ts"],
+      "@skathi-native/runtime": ["../packages/runtime/src/runtime.ts"],
+      "vue-router": ["../node_modules/vue-router"],
+      "pinia": ["../node_modules/pinia"]
     },
     "types": []
   },
+  // Not "vue": the hoisted node_modules/vue would pull @vue/runtime-dom into the template types.
+  "vueCompilerOptions": { "lib": "@skathi-native/runtime" },
   "include": [
-    // Ambient declarations are not pulled in by importing `vue-native`.
-    "../packages/vue-native/src/engine.d.ts",
-    "../packages/vue-native/src/protocol.d.ts",
-    "../packages/vue-native/src/indexeddb.d.ts",
+    // Ambient declarations are not pulled in by importing `@skathi-native/runtime`.
+    "../packages/runtime/src/engine.d.ts",
+    "../packages/runtime/src/protocol.d.ts",
+    "../packages/runtime/src/indexeddb.d.ts",
     "env.d.ts",
     "hello/src/**/*.ts",
     "hello/src/**/*.vue",
@@ -37,7 +39,7 @@
     "listperf/src/**/*.vue",
     "devtools/src/**/*.ts",
     "devtools/src/**/*.vue",
-    "../packages/vn-test/fixtures/*/src/**/*.ts",
-    "../packages/vn-test/fixtures/*/src/**/*.vue"
+    "../packages/test/fixtures/*/src/**/*.ts",
+    "../packages/test/fixtures/*/src/**/*.vue"
   ]
 }

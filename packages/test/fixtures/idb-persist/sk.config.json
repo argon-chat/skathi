@@ -1,0 +1,16 @@
+{
+  "$comment": "The spec pins SK_APP_NAME per run for the dev host, so this name only names the packaged exe's folder.",
+
+  "name": "sk-test-idb-persist",
+  "productName": "sk-test IndexedDB persistence",
+  "version": "0.0.1",
+  "assets": [],
+
+  "window": {
+    "title": "Skathi — IndexedDB on disk (fixture)",
+    "width": 420,
+    "height": 200,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

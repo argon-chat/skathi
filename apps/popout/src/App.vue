@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { VnWindow, type VnWindowMetrics, type VnWindowTarget } from "vue-native";
+import { SkWindow, type SkWindowMetrics, type SkWindowTarget } from "@skathi-native/runtime";
 
 const count = ref(0);
 
-// `v-if` IS the lifecycle: mounting `<VnWindow>` opens the window, unmounting closes it, and the
+// `v-if` IS the lifecycle: mounting `<SkWindow>` opens the window, unmounting closes it, and the
 // window's own X button fires `@close` so the flag goes back to false.
 const palette = ref(false);
 const player = ref(false);
@@ -13,10 +13,10 @@ const notes = ref(false);
 const brush = ref("charcoal");
 const swatches = ["charcoal", "rust", "moss", "slate"];
 
-const paletteWin = ref<{ el: VnWindowTarget | null } | null>(null);
+const paletteWin = ref<{ el: SkWindowTarget | null } | null>(null);
 const paletteRoot = computed(() => paletteWin.value?.el ?? null);
 
-const paletteSize = ref<VnWindowMetrics>({ width: 0, height: 0, scale: 1 });
+const paletteSize = ref<SkWindowMetrics>({ width: 0, height: 0, scale: 1 });
 const paletteFocused = ref(false);
 const paletteMetrics = computed(() =>
   paletteSize.value.width ? `${Math.round(paletteSize.value.width)}x${Math.round(paletteSize.value.height)}` : "none",
@@ -32,7 +32,7 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
     <h1 class="h">One app, three windows</h1>
 
     <p class="lede">
-      Everything below lives in this one component. A VnWindow moves a subtree's PAINT into a second OS window and
+      Everything below lives in this one component. A SkWindow moves a subtree's PAINT into a second OS window and
       leaves it in this tree.
     </p>
 
@@ -71,7 +71,7 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
     </div>
 
     <!-- ORDER MATTERS, and it is the one subtlety of the whole idiom: this Teleport is written
-         BEFORE the `<VnWindow>` it targets, and `disabled` is driven by `palette` as well as by the
+         BEFORE the `<SkWindow>` it targets, and `disabled` is driven by `palette` as well as by the
          target. -->
     <Teleport :to="paletteRoot" :disabled="!palette || !paletteRoot">
       <section class="panel">
@@ -92,7 +92,7 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
     </Teleport>
 
     <!-- `alwaysOnTop` because that is what a palette is. -->
-    <VnWindow
+    <SkWindow
       v-if="palette"
       ref="paletteWin"
       :title="paletteTitle"
@@ -101,16 +101,16 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
       :min-width="240"
       :min-height="200"
       @close="palette = false"
-      @resize="(m: VnWindowMetrics) => (paletteSize = m)"
+      @resize="(m: SkWindowMetrics) => (paletteSize = m)"
       @focus="paletteFocused = true"
       @blur="paletteFocused = false"
     >
       <!-- A slot child rather than the Teleport'd panel: this node is CREATED with the window, so
            the run starts in the window that paints it. -->
       <div class="pulse pulse-palette" />
-    </VnWindow>
+    </SkWindow>
 
-    <VnWindow
+    <SkWindow
       v-if="player"
       title="Player"
       :bounds="{ x: 470, y: 470, width: 360, height: 280 }"
@@ -120,9 +120,9 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
         <video class="clip" src="assets/clip-tiny.mp4" autoplay loop muted />
         <div class="foot">a video decoding into THIS window's atlas</div>
       </section>
-    </VnWindow>
+    </SkWindow>
 
-    <VnWindow
+    <SkWindow
       v-if="notes"
       title="Notes"
       chrome="hidden"
@@ -140,7 +140,7 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
 
         <div class="wtool">fixed</div>
       </section>
-    </VnWindow>
+    </SkWindow>
   </main>
 </template>
 

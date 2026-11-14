@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 
-// `VN_SCENARIO=<n>` picks the row count, so one process measures one size and the number in the
+// `SK_SCENARIO=<n>` picks the row count, so one process measures one size and the number in the
 // report is never "whatever the app happened to default to".
-const scenario = globalThis.__VN_SCENARIO__ ?? "";
+const scenario = globalThis.__SK_SCENARIO__ ?? "";
 const parsed = Number.parseInt(scenario, 10);
 const COUNT = Number.isFinite(parsed) && parsed > 0 ? parsed : 1000;
 
@@ -19,7 +19,7 @@ const rows = ref<Row[]>(
 );
 
 const scrollTop = ref(0);
-const onScroll = (e: VnEvent) => (scrollTop.value = (e.target as VnElement).scrollTop);
+const onScroll = (e: SkEvent) => (scrollTop.value = (e.target as SkElement).scrollTop);
 const title = computed(() => `${rows.value.length} rows`);
 
 const clicked = ref(-1);

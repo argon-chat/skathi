@@ -1,5 +1,5 @@
 {
-  "schema": "vue-native.native-aot-toolchain",
+  "schema": "skathi.native-aot-toolchain",
   "version": 1,
   "target": "x86_64-windows",
   "frontend": {

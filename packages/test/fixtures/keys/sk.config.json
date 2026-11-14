@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-keys",
+
+  "window": {
+    "title": "Skathi — keys (fixture)",
+    "width": 420,
+    "height": 300,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

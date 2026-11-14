@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { appWindow } from "vue-native";
+import { appWindow } from "@skathi-native/runtime";
 
-// engine.d.ts types `navigator` as optional; under vn-app it is installed before this module
+// engine.d.ts types `navigator` as optional; under sk-app it is installed before this module
 // evaluates.
 const wco = navigator!.windowControlsOverlay;
 
@@ -32,7 +32,7 @@ onUnmounted(() => removeEventListener("resize", read));
   <main class="page">
     <h1 class="h">OS chrome</h1>
     <p class="lede">
-      The titlebar above is Windows', not this app's. `titleBarStyle: "default"` in vn.config.json, which is
+      The titlebar above is Windows', not this app's. `titleBarStyle: "default"` in sk.config.json, which is
       creation-time only — a window style cannot change mid-session without desyncing gpui's cached frame metrics
       (D-25).
     </p>

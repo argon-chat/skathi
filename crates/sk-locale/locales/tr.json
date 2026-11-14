@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "Bu uygulama",
+  "sk.consent.microphone.title": "{app} mikrofonunuzu kullanmak istiyor",
+  "sk.consent.microphone.body": "İzin verirseniz {app} şimdi ve sonraki seferlerde mikrofonunuzdan ses kaydedebilir. Seçiminiz bu uygulama için hatırlanır.",
+  "sk.consent.camera.title": "{app} kameranızı kullanmak istiyor",
+  "sk.consent.camera.body": "İzin verirseniz {app} şimdi ve sonraki seferlerde kameranızdan video kaydedebilir. Seçiminiz bu uygulama için hatırlanır.",
+  "sk.consent.allow": "İzin &ver",
+  "sk.consent.block": "&Engelle",
+  "sk.crash.title": "{app} bir sorunla karşılaştı",
+  "sk.crash.body": "Dahili bir hata uygulamayı durdurdu. Devam etmek için yeniden başlatın.",
+  "sk.crash.body_no_restart": "Dahili bir hata uygulamayı durdurdu. Devam etmek için kapatıp yeniden açın.",
+  "sk.crash.details": "Ayrıntılar",
+  "sk.crash.restart": "&Yeniden başlat",
+  "sk.crash.copy": "&Raporu kopyala",
+  "sk.crash.copied": "Kopyalandı",
+  "sk.crash.close": "&Kapat",
+  "sk.crash.version": "Sürüm {version}"
+}

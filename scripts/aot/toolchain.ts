@@ -36,7 +36,7 @@ export const TABLE_FILES = [
 ] as const;
 export function loadPin(path: string): ToolchainPin {
   const pin = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")) as ToolchainPin;
-  if (pin.schema !== "vue-native.native-aot-toolchain" || pin.version !== 1 || pin.target !== "x86_64-windows")
+  if (pin.schema !== "skathi.native-aot-toolchain" || pin.version !== 1 || pin.target !== "x86_64-windows")
     throw Error("Unsupported native AOT toolchain pin");
   for (const revision of [pin.frontend?.revision, pin.engine?.revision])
     if (!/^[a-f0-9]{40}$/.test(revision || "")) throw Error("Invalid native AOT revision");

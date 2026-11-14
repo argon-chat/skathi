@@ -6063,6 +6063,257 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
+name = "sk-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "embed-resource",
+ "flate2",
+ "futures",
+ "gpui",
+ "gpui_platform",
+ "gpui_windows",
+ "image",
+ "libc",
+ "log",
+ "mach2 0.6.0",
+ "memmap2",
+ "pollster",
+ "raw-window-handle",
+ "reqwest_client",
+ "self_cell",
+ "serde_json",
+ "sha2",
+ "sk-clipboard",
+ "sk-css",
+ "sk-desktop",
+ "sk-elements",
+ "sk-hotkeys",
+ "sk-locale",
+ "sk-payload",
+ "sk-permissions",
+ "sk-runtime",
+ "sk-sticker",
+ "sk-storage",
+ "sk-tree",
+ "sk-webview",
+ "wgpu 30.0.0 (git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c)",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+]
+
+[[package]]
+name = "sk-clipboard"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "image",
+ "sk-runtime",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "sk-css"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "lightningcss",
+ "parcel_selectors",
+ "sk-effects",
+]
+
+[[package]]
+name = "sk-desktop"
+version = "0.1.0"
+dependencies = [
+ "ashpd",
+ "async-io",
+ "base64 0.22.1",
+ "block2 0.6.2",
+ "dispatch2",
+ "futures-lite",
+ "image",
+ "libc",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-authentication-services",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "objc2-media-player",
+ "serde_json",
+ "sk-permissions",
+ "sk-runtime",
+ "windows 0.62.2",
+ "windows-collections 0.3.2",
+ "windows-core 0.62.2",
+]
+
+[[package]]
+name = "sk-effects"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "sk-elements"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+]
+
+[[package]]
+name = "sk-hotkeys"
+version = "0.1.0"
+dependencies = [
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "sk-locale"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sk-runtime",
+]
+
+[[package]]
+name = "sk-lottie"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "gpui",
+ "gpui_platform",
+ "image",
+ "rasterlottie",
+ "serde_json",
+ "sk-thorvg-sys",
+]
+
+[[package]]
+name = "sk-payload"
+version = "0.1.0"
+
+[[package]]
+name = "sk-permissions"
+version = "0.1.0"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "serde_json",
+ "sk-locale",
+ "sk-runtime",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "sk-resample"
+version = "0.1.0"
+dependencies = [
+ "image",
+]
+
+[[package]]
+name = "sk-runtime"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "redjs",
+ "serde_json",
+]
+
+[[package]]
+name = "sk-sticker"
+version = "0.1.0"
+dependencies = [
+ "lz4_flex",
+ "sk-lottie",
+ "sk-vpx-sys",
+ "sk-yuv",
+]
+
+[[package]]
+name = "sk-storage"
+version = "0.1.0"
+dependencies = [
+ "core-foundation",
+ "futures-lite",
+ "libc",
+ "oo7",
+ "ring",
+ "security-framework",
+ "serde_json",
+ "sk-runtime",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "sk-thorvg-sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
+name = "sk-tree"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "gpui",
+ "image",
+ "lightningcss",
+ "sk-css",
+ "sk-elements",
+ "sk-lottie",
+ "sk-payload",
+ "sk-resample",
+ "sk-runtime",
+ "sk-sticker",
+ "sk-video",
+ "usvg",
+ "windows 0.62.2",
+ "wuff",
+]
+
+[[package]]
+name = "sk-video"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "image",
+ "sk-resample",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+]
+
+[[package]]
+name = "sk-vpx-sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
+name = "sk-webview"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "raw-window-handle",
+ "serde_json",
+ "sk-tree",
+ "webview2-com",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+]
+
+[[package]]
+name = "sk-yuv"
+version = "0.1.0"
+
+[[package]]
 name = "skrifa"
 version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7358,257 +7609,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "vn-app"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "embed-resource",
- "flate2",
- "futures",
- "gpui",
- "gpui_platform",
- "gpui_windows",
- "image",
- "libc",
- "log",
- "mach2 0.6.0",
- "memmap2",
- "pollster",
- "raw-window-handle",
- "reqwest_client",
- "self_cell",
- "serde_json",
- "sha2",
- "vn-clipboard",
- "vn-css",
- "vn-desktop",
- "vn-elements",
- "vn-hotkeys",
- "vn-locale",
- "vn-payload",
- "vn-permissions",
- "vn-runtime",
- "vn-sticker",
- "vn-storage",
- "vn-tree",
- "vn-webview",
- "wgpu 30.0.0 (git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c)",
- "windows 0.62.2",
- "windows-core 0.62.2",
-]
-
-[[package]]
-name = "vn-clipboard"
-version = "0.1.0"
-dependencies = [
- "gpui",
- "image",
- "vn-runtime",
- "windows 0.62.2",
-]
-
-[[package]]
-name = "vn-css"
-version = "0.1.0"
-dependencies = [
- "gpui",
- "lightningcss",
- "parcel_selectors",
- "vn-effects",
-]
-
-[[package]]
-name = "vn-desktop"
-version = "0.1.0"
-dependencies = [
- "ashpd",
- "async-io",
- "base64 0.22.1",
- "block2 0.6.2",
- "dispatch2",
- "futures-lite",
- "image",
- "libc",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-authentication-services",
- "objc2-core-foundation",
- "objc2-foundation 0.3.2",
- "objc2-media-player",
- "serde_json",
- "vn-permissions",
- "vn-runtime",
- "windows 0.62.2",
- "windows-collections 0.3.2",
- "windows-core 0.62.2",
-]
-
-[[package]]
-name = "vn-effects"
-version = "0.1.0"
-dependencies = [
- "gpui",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "vn-elements"
-version = "0.1.0"
-dependencies = [
- "gpui",
-]
-
-[[package]]
-name = "vn-hotkeys"
-version = "0.1.0"
-dependencies = [
- "windows 0.62.2",
-]
-
-[[package]]
-name = "vn-locale"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "vn-runtime",
-]
-
-[[package]]
-name = "vn-lottie"
-version = "0.1.0"
-dependencies = [
- "flate2",
- "gpui",
- "gpui_platform",
- "image",
- "rasterlottie",
- "serde_json",
- "vn-thorvg-sys",
-]
-
-[[package]]
-name = "vn-payload"
-version = "0.1.0"
-
-[[package]]
-name = "vn-permissions"
-version = "0.1.0"
-dependencies = [
- "block2 0.6.2",
- "objc2 0.6.4",
- "objc2-foundation 0.3.2",
- "serde_json",
- "vn-locale",
- "vn-runtime",
- "windows 0.62.2",
-]
-
-[[package]]
-name = "vn-resample"
-version = "0.1.0"
-dependencies = [
- "image",
-]
-
-[[package]]
-name = "vn-runtime"
-version = "0.1.0"
-dependencies = [
- "gpui",
- "redjs",
- "serde_json",
-]
-
-[[package]]
-name = "vn-sticker"
-version = "0.1.0"
-dependencies = [
- "lz4_flex",
- "vn-lottie",
- "vn-vpx-sys",
- "vn-yuv",
-]
-
-[[package]]
-name = "vn-storage"
-version = "0.1.0"
-dependencies = [
- "core-foundation",
- "futures-lite",
- "libc",
- "oo7",
- "ring",
- "security-framework",
- "serde_json",
- "vn-runtime",
- "windows 0.62.2",
-]
-
-[[package]]
-name = "vn-thorvg-sys"
-version = "0.1.0"
-dependencies = [
- "cc",
-]
-
-[[package]]
-name = "vn-tree"
-version = "0.1.0"
-dependencies = [
- "futures",
- "gpui",
- "image",
- "lightningcss",
- "usvg",
- "vn-css",
- "vn-elements",
- "vn-lottie",
- "vn-payload",
- "vn-resample",
- "vn-runtime",
- "vn-sticker",
- "vn-video",
- "windows 0.62.2",
- "wuff",
-]
-
-[[package]]
-name = "vn-video"
-version = "0.1.0"
-dependencies = [
- "gpui",
- "image",
- "vn-resample",
- "windows 0.62.2",
- "windows-core 0.62.2",
-]
-
-[[package]]
-name = "vn-vpx-sys"
-version = "0.1.0"
-dependencies = [
- "cc",
-]
-
-[[package]]
-name = "vn-webview"
-version = "0.1.0"
-dependencies = [
- "gpui",
- "raw-window-handle",
- "serde_json",
- "vn-tree",
- "webview2-com",
- "windows 0.62.2",
- "windows-core 0.62.2",
-]
-
-[[package]]
-name = "vn-yuv"
-version = "0.1.0"
 
 [[package]]
 name = "vswhom"

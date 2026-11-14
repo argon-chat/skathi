@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "Ứng dụng này",
+  "sk.consent.microphone.title": "{app} muốn sử dụng micrô của bạn",
+  "sk.consent.microphone.body": "Nếu bạn cho phép, {app} có thể ghi âm từ micrô của bạn, ngay bây giờ và cả những lần sau. Lựa chọn của bạn sẽ được ghi nhớ cho ứng dụng này.",
+  "sk.consent.camera.title": "{app} muốn sử dụng camera của bạn",
+  "sk.consent.camera.body": "Nếu bạn cho phép, {app} có thể quay video bằng camera của bạn, ngay bây giờ và cả những lần sau. Lựa chọn của bạn sẽ được ghi nhớ cho ứng dụng này.",
+  "sk.consent.allow": "&Cho phép",
+  "sk.consent.block": "C&hặn",
+  "sk.crash.title": "{app} đã gặp sự cố",
+  "sk.crash.body": "Một lỗi nội bộ đã làm ứng dụng dừng lại. Hãy khởi động lại để tiếp tục.",
+  "sk.crash.body_no_restart": "Một lỗi nội bộ đã làm ứng dụng dừng lại. Hãy đóng rồi mở lại ứng dụng để tiếp tục.",
+  "sk.crash.details": "Chi tiết",
+  "sk.crash.restart": "&Khởi động lại",
+  "sk.crash.copy": "&Sao chép báo cáo",
+  "sk.crash.copied": "Đã sao chép",
+  "sk.crash.close": "Đó&ng",
+  "sk.crash.version": "Phiên bản {version}"
+}

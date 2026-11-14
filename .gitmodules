@@ -12,7 +12,7 @@
 	branch = vue-native
 	shallow = true
 [submodule "crates/vn-thorvg-sys/thorvg"]
-	path = crates/vn-thorvg-sys/thorvg
+	path = crates/sk-thorvg-sys/thorvg
 	url = https://github.com/argon-chat/thorvg.git
 	branch = vue-native
 	shallow = true

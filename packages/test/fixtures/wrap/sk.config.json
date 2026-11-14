@@ -1,0 +1,13 @@
+{
+  "$comment": "Long unbroken tokens against overflow-wrap, word-break and white-space.",
+
+  "name": "sk-test-wrap",
+
+  "window": {
+    "title": "Skathi — wrap (fixture)",
+    "width": 1280,
+    "height": 900,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

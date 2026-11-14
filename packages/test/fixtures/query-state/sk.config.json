@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-query-state",
+
+  "window": {
+    "title": "Skathi — query-state (fixture)",
+    "width": 460,
+    "height": 340,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "popover-click",
+
+  "window": {
+    "title": "Skathi — popover from a real click (fixture)",
+    "width": 480,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

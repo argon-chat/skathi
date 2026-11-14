@@ -1,0 +1,13 @@
+{
+  "$comment": "Links, window.open and appShell.",
+
+  "name": "sk-test-shell",
+
+  "window": {
+    "title": "Skathi — shell (fixture)",
+    "width": 480,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

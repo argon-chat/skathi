@@ -8,7 +8,7 @@ submission constraints, so it is a faithful `.tgs` and not just "a gzipped
 JSON". Used by `src/pages/MotionPage.vue` to demo `<lottie>`.
 
 **Provenance.** The polystar shape and its fill colour are taken verbatim from
-`crates/vn-lottie/tests/fixtures/star.json`, which comes from
+`crates/sk-lottie/tests/fixtures/star.json`, which comes from
 [`LottieFiles/test-files`](https://github.com/LottieFiles/test-files) and is
 public domain (CC0). The radii are scaled ×4 onto the 512×512 canvas, and the
 group transform carries an **authored** 0→360° rotation plus a 78%→104%→78%
@@ -45,7 +45,7 @@ Everything in it is there to be _verifiable_:
 
 - **H.264 High profile 8-bit + AAC-LC in MP4** is the guaranteed inbox baseline —
   the one combination that decodes on a clean Windows install with no Store
-  codec extension (`crates/vn-video/CONTRACT.md` §8). The demo must work on the
+  codec extension (`crates/sk-video/CONTRACT.md` §8). The demo must work on the
   machine that has nothing.
 - **A burnt-in `HH:MM:SS.mmm` timecode**, so a screenshot proves _which frame_
   is on screen. Seek correctness is then a thing you can read rather than infer.

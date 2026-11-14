@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "vn-devtools": {
+    "sk-devtools": {
       "command": "bun",
-      "args": ["packages/vue-native/devtools/mcp.ts"],
+      "args": ["packages/cli/devtools/mcp.ts"],
       "env": {}
     }
   }

@@ -1,0 +1,9 @@
+{
+  // Repository scripts and crate tools, which run under bun.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "useDefineForClassFields": false,
+    "types": ["bun"]
+  },
+  "include": ["**/*.ts", "../crates/*/tools/**/*.ts"]
+}

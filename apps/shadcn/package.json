@@ -1,8 +1,8 @@
 {
-  "name": "vue-native-shadcn-trial",
+  "name": "skathi-shadcn-trial",
   "private": true,
   "version": "0.0.1",
-  "description": "shadcn-vue compatibility trial app for vue-native.",
+  "description": "shadcn-vue compatibility trial app for Skathi.",
   "dependencies": {
     "@vueuse/core": "^14.4.0",
     "class-variance-authority": "^0.7.1",
@@ -19,10 +19,10 @@
   "scripts": {
     "registry": "bun tools/fetch-registry.ts",
     "theme": "bun tools/gen-theme.ts",
-    "typecheck": "cd ../../packages/vue-native && bun x vue-tsc --noEmit -p ../../apps/shadcn/tsconfig.json"
+    "typecheck": "cd ../.. && bun x vue-tsc --noEmit -p apps/shadcn/tsconfig.json"
   },
   "comments": {
     "@tanstack/vue-table": "Types only: the verbatim shadcn utils.ts imports `Updater` from it.",
-    "typescript": "tools/*.ts run under bun from this directory; type-checking uses the vue-tsc of packages/vue-native (see the `typecheck` script)."
+    "typescript": "tools/*.ts run under bun from this directory; type-checking uses the workspace root's vue-tsc (see the `typecheck` script)."
   }
 }

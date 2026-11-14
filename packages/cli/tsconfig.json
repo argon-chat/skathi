@@ -1,0 +1,10 @@
+{
+  // The builders, the CLI and the devtools clients, which run under bun. Separate from the runtime's tsconfig
+  // because @types/bun and its src/engine.d.ts both declare `console`, `Event` and the timers.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "useDefineForClassFields": false,
+    "types": ["bun"]
+  },
+  "include": ["*.ts", "devtools/**/*.ts", "cli/**/*.ts"]
+}

@@ -120,17 +120,17 @@ export async function prepare(): Promise<void> {
   mkdirSync(source, { recursive: true });
   const bundle = join(source, "app.prod.js");
   // This is the only SFC/TS production build. The exact resulting JS feeds
-  // both the native compiler and the host's VN_DEVTOOLS_BUNDLE override.
+  // both the native compiler and the host's SK_DEVTOOLS_BUNDLE override.
   run(
     [
       process.execPath,
-      join(sdk, "packages/vue-native/prod.ts"),
+      join(sdk, "packages/cli/prod.ts"),
       join(sdk, "apps/devtools/src/main.ts"),
       bundle,
       "--aot-inputs",
       join(source, "typed-inputs"),
     ],
-    join(sdk, "packages/vue-native"),
+    join(sdk, "packages/cli"),
   );
   console.log(
     run([
@@ -154,7 +154,7 @@ export async function prepare(): Promise<void> {
   await verifyFile(join(out, document.image), document.imageSha256);
   await verifyFile(join(out, "app.prod.js"), document.sourceBundleSha256);
   const receipt = {
-    schema: "vue-native.embedded-native-inspector",
+    schema: "skathi.embedded-native-inspector",
     version: 1,
     stage: "native-image",
     manifest,

@@ -1,0 +1,13 @@
+{
+  "$comment": "Text's min-content width in Argon's dashboard stat row, at five widths, with and without nowrap.",
+
+  "name": "sk-test-min-content",
+
+  "window": {
+    "title": "Skathi — min-content (fixture)",
+    "width": 560,
+    "height": 420,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

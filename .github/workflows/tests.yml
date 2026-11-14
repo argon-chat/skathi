@@ -21,7 +21,6 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: packages/vue-native
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -29,7 +28,7 @@ jobs:
           # The AOT input tests read vendor/redjs/pins.txt.
           submodules: false
       - name: Check out pinned redjs metadata
-        run: git -C ../.. submodule update --init --depth 1 -- vendor/redjs
+        run: git submodule update --init --depth 1 -- vendor/redjs
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -43,7 +42,7 @@ jobs:
       - name: Check runtime types
         run: bun run typecheck
       - name: Run runtime and builder tests
-        run: bun test ./test
+        run: bun run test
 
   licenses:
     name: Crate licenses

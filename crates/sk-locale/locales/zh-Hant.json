@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "此應用程式",
+  "sk.consent.microphone.title": "{app} 想要使用你的麥克風",
+  "sk.consent.microphone.body": "如果允許，{app} 現在和之後都能透過你的麥克風錄音。系統會為此應用程式記住你的選擇。",
+  "sk.consent.camera.title": "{app} 想要使用你的相機",
+  "sk.consent.camera.body": "如果允許，{app} 現在和之後都能透過你的相機錄製影片。系統會為此應用程式記住你的選擇。",
+  "sk.consent.allow": "允許(&A)",
+  "sk.consent.block": "封鎖(&B)",
+  "sk.crash.title": "{app} 發生問題",
+  "sk.crash.body": "內部錯誤導致應用程式停止運作。請重新啟動以繼續。",
+  "sk.crash.body_no_restart": "內部錯誤導致應用程式停止運作。請關閉後再重新開啟以繼續。",
+  "sk.crash.details": "詳細資料",
+  "sk.crash.restart": "重新啟動(&R)",
+  "sk.crash.copy": "複製報告(&C)",
+  "sk.crash.copied": "已複製",
+  "sk.crash.close": "關閉(&L)",
+  "sk.crash.version": "版本 {version}"
+}

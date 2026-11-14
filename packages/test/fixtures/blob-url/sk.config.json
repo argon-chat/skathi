@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-blob-url",
+
+  "window": {
+    "title": "Skathi — blob: URLs (fixture)",
+    "width": 420,
+    "height": 200,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

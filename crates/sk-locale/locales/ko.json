@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "이 앱",
+  "sk.consent.microphone.title": "{app}에서 마이크를 사용하려고 합니다",
+  "sk.consent.microphone.body": "허용하면 {app}에서 지금과 다음에도 마이크로 녹음할 수 있습니다. 선택 사항은 이 앱에 대해 저장됩니다.",
+  "sk.consent.camera.title": "{app}에서 카메라를 사용하려고 합니다",
+  "sk.consent.camera.body": "허용하면 {app}에서 지금과 다음에도 카메라로 동영상을 녹화할 수 있습니다. 선택 사항은 이 앱에 대해 저장됩니다.",
+  "sk.consent.allow": "허용(&A)",
+  "sk.consent.block": "차단(&B)",
+  "sk.crash.title": "{app}에서 문제가 발생했습니다",
+  "sk.crash.body": "내부 오류로 앱이 중지되었습니다. 계속하려면 다시 시작하세요.",
+  "sk.crash.body_no_restart": "내부 오류로 앱이 중지되었습니다. 계속하려면 앱을 닫았다가 다시 여세요.",
+  "sk.crash.details": "자세히",
+  "sk.crash.restart": "다시 시작(&R)",
+  "sk.crash.copy": "보고서 복사(&C)",
+  "sk.crash.copied": "복사됨",
+  "sk.crash.close": "닫기(&L)",
+  "sk.crash.version": "버전 {version}"
+}

@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-overlay",
+
+  "window": {
+    "title": "Skathi — overlay (fixture)",
+    "width": 240,
+    "height": 160,
+    "titleBarStyle": "default",
+    "backdrop": "none"
+  }
+}

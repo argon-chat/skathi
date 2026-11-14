@@ -1,0 +1,13 @@
+{
+  "$comment": "CSS stacking contexts painted atomically (two portalled `fixed z-50` overlays, the earlier with z 0/1/2 layers inside it; a negative z-index in flow; an opacity context at z auto).",
+
+  "name": "sk-test-stacking",
+
+  "window": {
+    "title": "Skathi — stacking (fixture)",
+    "width": 720,
+    "height": 520,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

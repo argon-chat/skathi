@@ -6,7 +6,7 @@ const wide = ref(false);
 
 const ends = ref(0);
 const lastEnd = ref("—");
-const onTransitionEnd = (e: VnTransitionEvent) => {
+const onTransitionEnd = (e: SkTransitionEvent) => {
   ends.value++;
   lastEnd.value = `${e.propertyName} after ${e.elapsedTime}s`;
 };
@@ -21,7 +21,7 @@ const speed = ref(1);
 const loops = ref(0);
 const lastLoopFrame = ref(0);
 
-const onLoop = (e: VnLottieLoopEvent) => {
+const onLoop = (e: SkLottieLoopEvent) => {
   loops.value = e.currentLoop;
   lastLoopFrame.value = Math.round(e.totalTime);
 };

@@ -83,7 +83,7 @@ export function useVirtual(heights: () => number[], height: () => number): Virtu
     thumb,
     offsetOf: (i: number) => offsets.value[Math.max(0, Math.min(i, offsets.value.length - 1))],
     onWheel(event: { deltaY: number }) {
-      // The engine reports wheel deltas in CSS pixels already (vn-tree's `EV_WHEEL` payload is the
+      // The engine reports wheel deltas in CSS pixels already (sk-tree's `EV_WHEEL` payload is the
       // gpui delta), so there is no line/page mode to decode the way a browser's `deltaMode` would
       // need.
       scroll.value = clamp(scroll.value + (event.deltaY || 0));

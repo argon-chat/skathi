@@ -1,12 +1,12 @@
 /** Windows native inspector memory/profile regression.
  * bun scripts/aot/test-memory.ts --host <prod+native-aot bare host> --manifest <inspector.native.json>
- *   --payload <synthetic app.vnpk> --out <fresh output directory> [--cycles 300]
+ *   --payload <synthetic app.skpk> --out <fresh output directory> [--cycles 300]
  * The supplied payload is executed; use a synthetic fixture, never a real profile.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, existsSync, openSync, closeSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
-import { Wire, readHandshake } from "../../packages/vn-test/src/wire";
+import { Wire, readHandshake } from "../../packages/test/src/wire";
 
 if (process.platform !== "win32") throw Error("This probe measures the Windows host");
 const values = new Map<string, string>();
@@ -46,31 +46,31 @@ async function start(name: string, profile?: "default" | "compact" | "auto", tar
   mkdirSync(dist, { recursive: true });
   const env: Record<string, string | undefined> = {
     ...process.env,
-    VN_DIST: dist,
-    VN_DATA_DIR: join(out, name, "profile"),
+    SK_DIST: dist,
+    SK_DATA_DIR: join(out, name, "profile"),
     APPDATA: join(out, name, "roaming"),
     LOCALAPPDATA: join(out, name, "local"),
-    VN_APP_NAME: `NativeMemoryProbe-${process.pid}-${name}`,
-    VN_SINGLE_INSTANCE: "0",
-    VN_WINDOW_FOCUS: "never",
-    VN_DEVTOOLS: "1",
-    VN_DEVTOOLS_RAISE: "off",
-    VN_WINDOW: "900x640",
-    VN_OWNER_PID: String(process.pid),
-    VN_MEDIA_CAPTURE: "deny",
+    SK_APP_NAME: `NativeMemoryProbe-${process.pid}-${name}`,
+    SK_SINGLE_INSTANCE: "0",
+    SK_WINDOW_FOCUS: "never",
+    SK_DEVTOOLS: "1",
+    SK_DEVTOOLS_RAISE: "off",
+    SK_WINDOW: "900x640",
+    SK_OWNER_PID: String(process.pid),
+    SK_MEDIA_CAPTURE: "deny",
   };
   for (const key of [
-    "VN_PAYLOAD",
-    "VN_DEVTOOLS_NATIVE_IMAGE",
-    "VN_AOT_MEMORY_PROFILE",
+    "SK_PAYLOAD",
+    "SK_DEVTOOLS_NATIVE_IMAGE",
+    "SK_AOT_MEMORY_PROFILE",
     "JSC_structureHeapSizeInKB",
     "JSC_markedBlockCageSizeInMB",
   ])
     delete env[key];
   if (profile) {
-    env.VN_DEVTOOLS_NATIVE_IMAGE = manifest;
-    if (profile !== "auto") env.VN_AOT_MEMORY_PROFILE = profile;
-  } else env.VN_PAYLOAD = payload;
+    env.SK_DEVTOOLS_NATIVE_IMAGE = manifest;
+    if (profile !== "auto") env.SK_AOT_MEMORY_PROFILE = profile;
+  } else env.SK_PAYLOAD = payload;
   const log = join(out, name, "host.log"),
     fd = openSync(log, "w");
   const child = spawn(host, profile ? ["--devtools", "--target", target!] : [], {

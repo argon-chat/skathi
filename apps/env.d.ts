@@ -1,24 +1,24 @@
-// `packages/vue-native/src/engine.d.ts` is deliberately not this file. NOTHING IS DECLARED THAT
+// `packages/runtime/src/engine.d.ts` is deliberately not this file. NOTHING IS DECLARED THAT
 // THE HOST DOES NOT PROVIDE.
 
 export {};
 
-// the window, as a global EventTarget — crates/vn-app/src/window.prelude.js The prelude installs
+// the window, as a global EventTarget — crates/sk-app/src/window.prelude.js The prelude installs
 // these on `globalThis` before the app bundle evaluates.
 
 declare global {
   function getSelection(): { toString(): string } | null;
   function addEventListener(
     type: string,
-    listener: (ev: VnEvent) => void,
+    listener: (ev: SkEvent) => void,
     options?: boolean | { capture?: boolean; once?: boolean },
   ): void;
   function removeEventListener(
     type: string,
-    listener: (ev: VnEvent) => void,
+    listener: (ev: SkEvent) => void,
     options?: boolean | { capture?: boolean },
   ): void;
-  function dispatchEvent(ev: VnEvent): boolean;
+  function dispatchEvent(ev: SkEvent): boolean;
 
   var innerWidth: number;
   var innerHeight: number;
@@ -32,12 +32,12 @@ declare global {
 
   function open(url?: string, target?: string, features?: string): null;
 
-  interface VnLaunchParams {
+  interface SkLaunchParams {
     readonly targetURL: string | null;
-    readonly files: readonly (VnFileSystemFileHandle | VnFileSystemDirectoryHandle)[];
+    readonly files: readonly (SkFileSystemFileHandle | SkFileSystemDirectoryHandle)[];
   }
   var launchQueue: {
-    setConsumer(consumer: (params: VnLaunchParams) => unknown): void;
+    setConsumer(consumer: (params: SkLaunchParams) => unknown): void;
   };
 
   var screen: {
@@ -51,22 +51,22 @@ declare global {
   };
 
   /** A query the evaluator cannot run advises rather than answering false forever. */
-  function matchMedia(query: string): VnMediaQueryList;
+  function matchMedia(query: string): SkMediaQueryList;
 
-  interface VnMediaQueryList extends VnEventTarget {
+  interface SkMediaQueryList extends SkEventTarget {
     readonly matches: boolean;
     readonly media: string;
   }
 
   var performance: { now(): number };
 
-  var ononline: ((ev: VnEvent) => unknown) | null;
-  var onoffline: ((ev: VnEvent) => unknown) | null;
+  var ononline: ((ev: SkEvent) => unknown) | null;
+  var onoffline: ((ev: SkEvent) => unknown) | null;
 }
 
 declare global {
-  interface VnNavigator {
-    windowControlsOverlay: VnWindowControlsOverlay;
+  interface SkNavigator {
+    windowControlsOverlay: SkWindowControlsOverlay;
 
     /**
      * The async Clipboard API — vendor/redjs/redjs/src/webapi/clipboard.rs, over the host's own
@@ -75,8 +75,8 @@ declare global {
     clipboard: {
       readText(): Promise<string>;
       writeText(text: string): Promise<void>;
-      read(): Promise<VnClipboardItem[]>;
-      write(items: VnClipboardItem[]): Promise<void>;
+      read(): Promise<SkClipboardItem[]>;
+      write(items: SkClipboardItem[]): Promise<void>;
     };
 
     /** `el.click()` and `dispatchEvent` never activate. */
@@ -90,12 +90,12 @@ declare global {
     readonly maxTouchPoints: number;
   }
 
-  interface VnWindowControlsOverlay extends VnEventTarget {
+  interface SkWindowControlsOverlay extends SkEventTarget {
     readonly visible: boolean;
-    getTitlebarAreaRect(): VnWindowRect;
+    getTitlebarAreaRect(): SkWindowRect;
   }
 
-  interface VnWindowChrome {
+  interface SkWindowChrome {
     titleBarStyle: string;
     displayMode: string;
     fallbackTitleBar: boolean;
@@ -107,8 +107,8 @@ declare global {
 }
 
 declare global {
-  interface VnDocument {
-    readonly fullscreenElement: VnElement | null;
+  interface SkDocument {
+    readonly fullscreenElement: SkElement | null;
     exitFullscreen(): Promise<void>;
     // NOT `documentElement`: engine.d.ts already declares it as `documentElement?: unknown`, and
     // an interface merge cannot narrow a property that is already there.
@@ -122,7 +122,7 @@ declare global {
 }
 
 declare global {
-  interface VnDomRect {
+  interface SkDomRect {
     readonly x: number;
     readonly y: number;
     readonly top: number;
@@ -133,22 +133,22 @@ declare global {
     readonly height: number;
   }
 
-  interface VnScrollToOptions {
+  interface SkScrollToOptions {
     left?: number;
     top?: number;
     behavior?: "auto" | "instant" | "smooth";
   }
 
-  interface VnScrollIntoViewOptions {
+  interface SkScrollIntoViewOptions {
     block?: "start" | "center" | "end" | "nearest";
     inline?: "start" | "center" | "end" | "nearest";
     behavior?: "auto" | "instant" | "smooth";
   }
 
-  interface VnElement extends VnEventTarget {
+  interface SkElement extends SkEventTarget {
     /** The `id` ATTRIBUTE; the host's node id is not reachable from script. */
     id: string;
-    getBoundingClientRect(): VnDomRect;
+    getBoundingClientRect(): SkDomRect;
     /**
      * `0` on an element that does not scroll, and a write to one does nothing, exactly as in a
      * browser.
@@ -157,16 +157,16 @@ declare global {
     scrollLeft: number;
     readonly scrollWidth: number;
     readonly scrollHeight: number;
-    scrollTo(x?: number | VnScrollToOptions, y?: number): void;
-    scrollBy(x?: number | VnScrollToOptions, y?: number): void;
-    scrollIntoView(arg?: boolean | VnScrollIntoViewOptions): void;
+    scrollTo(x?: number | SkScrollToOptions, y?: number): void;
+    scrollBy(x?: number | SkScrollToOptions, y?: number): void;
+    scrollIntoView(arg?: boolean | SkScrollIntoViewOptions): void;
     focus(): void;
     blur(): void;
     click(): void;
     requestFullscreen(): Promise<void>;
   }
 
-  interface VnMediaElement extends VnElement {
+  interface SkMediaElement extends SkElement {
     currentTime: number;
     readonly duration: number;
     readonly paused: boolean;
@@ -180,24 +180,24 @@ declare global {
     readonly videoWidth: number;
     readonly videoHeight: number;
     /** A real `MediaError`: the message is the advisory naming what THIS machine cannot decode. */
-    readonly error: VnMediaError | null;
+    readonly error: SkMediaError | null;
     play(): Promise<void>;
     pause(): void;
     canPlayType(type: string): string;
   }
 
-  interface VnMediaError {
+  interface SkMediaError {
     readonly code: number;
     readonly message: string;
   }
 
-  interface VnMediaEvent extends VnEvent {
+  interface SkMediaEvent extends SkEvent {
     readonly currentTime: number;
     readonly duration: number;
     readonly readyState: number;
     readonly playbackRate: number;
   }
-  interface VnLottieLoopEvent extends VnEvent {
+  interface SkLottieLoopEvent extends SkEvent {
     readonly currentTime: number;
     readonly totalTime: number;
     readonly currentLoop: number;
@@ -205,7 +205,7 @@ declare global {
 }
 
 declare global {
-  interface VnStorage {
+  interface SkStorage {
     readonly length: number;
     key(index: number): string | null;
     getItem(key: string): string | null;
@@ -214,43 +214,43 @@ declare global {
     removeItem(key: string): void;
     clear(): void;
   }
-  var localStorage: VnStorage;
+  var localStorage: SkStorage;
   /** Per-run, never written anywhere. */
-  var sessionStorage: VnStorage;
+  var sessionStorage: SkStorage;
 }
 
 declare global {
-  interface VnFetchResponse {
+  interface SkFetchResponse {
     readonly url: string;
     readonly redirected: boolean;
     readonly headers: { get(name: string): string | null };
     arrayBuffer(): Promise<ArrayBuffer>;
-    blob(): Promise<VnBlob>;
+    blob(): Promise<SkBlob>;
   }
 
   /**
    * So unlike `fetch` and `AudioContext` next door this one is not `| undefined`: a redjs that
    * lacks it does not exist, and apps/devtools' request timeout depends on it.
    */
-  interface VnAbortSignal extends VnEventTarget {
+  interface SkAbortSignal extends SkEventTarget {
     readonly aborted: boolean;
     readonly reason: unknown;
     throwIfAborted(): void;
   }
-  interface VnAbortController {
-    readonly signal: VnAbortSignal;
+  interface SkAbortController {
+    readonly signal: SkAbortSignal;
     abort(reason?: unknown): void;
   }
-  var AbortController: { new (): VnAbortController; prototype: VnAbortController };
+  var AbortController: { new (): SkAbortController; prototype: SkAbortController };
 }
 
 declare global {
-  type VnBlobPart = VnBlob | ArrayBuffer | ArrayBufferView | string;
-  interface VnBlobPropertyBag {
+  type SkBlobPart = SkBlob | ArrayBuffer | ArrayBufferView | string;
+  interface SkBlobPropertyBag {
     type?: string;
     endings?: "transparent" | "native";
   }
-  interface VnByteStream extends AsyncIterable<Uint8Array> {
+  interface SkByteStream extends AsyncIterable<Uint8Array> {
     getReader(): {
       read(): Promise<{ done: boolean; value?: Uint8Array }>;
       cancel(reason?: unknown): Promise<void>;
@@ -259,70 +259,70 @@ declare global {
     cancel(reason?: unknown): Promise<void>;
     readonly locked: boolean;
   }
-  interface VnBlob {
+  interface SkBlob {
     readonly size: number;
     readonly type: string;
     arrayBuffer(): Promise<ArrayBuffer>;
     bytes(): Promise<Uint8Array>;
     text(): Promise<string>;
-    slice(start?: number, end?: number, contentType?: string): VnBlob;
-    stream(): VnByteStream;
+    slice(start?: number, end?: number, contentType?: string): SkBlob;
+    stream(): SkByteStream;
   }
-  var Blob: { new (parts?: Iterable<VnBlobPart>, options?: VnBlobPropertyBag): VnBlob; prototype: VnBlob };
+  var Blob: { new (parts?: Iterable<SkBlobPart>, options?: SkBlobPropertyBag): SkBlob; prototype: SkBlob };
 
-  interface VnFile extends VnBlob {
+  interface SkFile extends SkBlob {
     readonly name: string;
     readonly lastModified: number;
     readonly lastModifiedDate: Date;
     readonly webkitRelativePath: string;
   }
   var File: {
-    new (bits: Iterable<VnBlobPart>, name: string, options?: VnBlobPropertyBag & { lastModified?: number }): VnFile;
-    prototype: VnFile;
+    new (bits: Iterable<SkBlobPart>, name: string, options?: SkBlobPropertyBag & { lastModified?: number }): SkFile;
+    prototype: SkFile;
   };
 
-  interface VnFileList extends Iterable<VnFile> {
+  interface SkFileList extends Iterable<SkFile> {
     readonly length: number;
-    item(index: number): VnFile | null;
-    readonly [index: number]: VnFile;
+    item(index: number): SkFile | null;
+    readonly [index: number]: SkFile;
   }
-  var FileList: { new (): VnFileList; prototype: VnFileList };
+  var FileList: { new (): SkFileList; prototype: SkFileList };
 
-  interface VnURLConstructor {
-    createObjectURL(blob: VnBlob): string;
+  interface SkURLConstructor {
+    createObjectURL(blob: SkBlob): string;
     revokeObjectURL(url: string): void;
   }
 
-  interface VnDataTransferItem {
+  interface SkDataTransferItem {
     readonly kind: "string" | "file" | "";
     readonly type: string;
     getAsString(callback: ((data: string) => void) | null): void;
-    getAsFile(): VnFile | null;
+    getAsFile(): SkFile | null;
     getAsFileSystemHandle?(): Promise<unknown | null>;
   }
-  interface VnDataTransferItemList extends Iterable<VnDataTransferItem> {
+  interface SkDataTransferItemList extends Iterable<SkDataTransferItem> {
     readonly length: number;
-    readonly [index: number]: VnDataTransferItem;
-    add(data: string, type: string): VnDataTransferItem | null;
-    add(file: VnFile): VnDataTransferItem | null;
+    readonly [index: number]: SkDataTransferItem;
+    add(data: string, type: string): SkDataTransferItem | null;
+    add(file: SkFile): SkDataTransferItem | null;
     remove(index: number): void;
     clear(): void;
   }
-  interface VnDataTransfer {
+  interface SkDataTransfer {
     dropEffect: "none" | "copy" | "link" | "move";
     effectAllowed: "none" | "copy" | "copyLink" | "copyMove" | "link" | "linkMove" | "move" | "all" | "uninitialized";
-    readonly items: VnDataTransferItemList;
+    readonly items: SkDataTransferItemList;
     readonly types: readonly string[];
-    readonly files: VnFileList;
+    readonly files: SkFileList;
     getData(format: string): string;
     setData(format: string, data: string): void;
     clearData(format?: string): void;
     setDragImage(image: unknown, x: number, y: number): void;
   }
-  var DataTransfer: { new (): VnDataTransfer; prototype: VnDataTransfer };
+  var DataTransfer: { new (): SkDataTransfer; prototype: SkDataTransfer };
 
-  interface VnFileInputElement extends VnElement {
-    files: VnFileList;
+  interface SkFileInputElement extends SkElement {
+    files: SkFileList;
     value: string;
     accept: string;
     multiple: boolean;
@@ -331,31 +331,31 @@ declare global {
     showPicker(): void;
   }
 
-  interface VnCloseEvent extends VnEvent {
+  interface SkCloseEvent extends SkEvent {
     readonly code: number;
     readonly reason: string;
     readonly wasClean: boolean;
   }
-  interface VnMessageEvent extends VnEvent {
-    readonly data: string | VnBlob | ArrayBuffer;
+  interface SkMessageEvent extends SkEvent {
+    readonly data: string | SkBlob | ArrayBuffer;
   }
 
-  interface VnWebSocket extends VnEventTarget {
+  interface SkWebSocket extends SkEventTarget {
     readonly readyState: number;
     readonly bufferedAmount: number;
     readonly protocol: string;
     readonly url: string;
     binaryType: "blob" | "arraybuffer";
-    onopen: ((ev: VnEvent) => void) | null;
-    onerror: ((ev: VnEvent) => void) | null;
-    onclose: ((ev: VnCloseEvent) => void) | null;
-    onmessage: ((ev: VnMessageEvent) => void) | null;
-    send(data: string | ArrayBuffer | ArrayBufferView | VnBlob): void;
+    onopen: ((ev: SkEvent) => void) | null;
+    onerror: ((ev: SkEvent) => void) | null;
+    onclose: ((ev: SkCloseEvent) => void) | null;
+    onmessage: ((ev: SkMessageEvent) => void) | null;
+    send(data: string | ArrayBuffer | ArrayBufferView | SkBlob): void;
     close(code?: number, reason?: string): void;
   }
   var WebSocket: {
-    new (url: string, protocols?: string | string[]): VnWebSocket;
-    prototype: VnWebSocket;
+    new (url: string, protocols?: string | string[]): SkWebSocket;
+    prototype: SkWebSocket;
     readonly CONNECTING: 0;
     readonly OPEN: 1;
     readonly CLOSING: 2;
@@ -366,42 +366,42 @@ declare global {
 // Every picker needs a user activation, else SecurityError.
 
 declare global {
-  type VnPermissionState = "granted" | "prompt";
-  interface VnFileSystemHandlePermissionDescriptor {
+  type SkPermissionState = "granted" | "prompt";
+  interface SkFileSystemHandlePermissionDescriptor {
     mode?: "read" | "readwrite";
   }
-  interface VnFileSystemHandle {
+  interface SkFileSystemHandle {
     readonly kind: "file" | "directory";
     readonly name: string;
-    isSameEntry(other: VnFileSystemHandle): Promise<boolean>;
-    queryPermission(descriptor?: VnFileSystemHandlePermissionDescriptor): Promise<VnPermissionState>;
-    requestPermission(descriptor?: VnFileSystemHandlePermissionDescriptor): Promise<VnPermissionState>;
+    isSameEntry(other: SkFileSystemHandle): Promise<boolean>;
+    queryPermission(descriptor?: SkFileSystemHandlePermissionDescriptor): Promise<SkPermissionState>;
+    requestPermission(descriptor?: SkFileSystemHandlePermissionDescriptor): Promise<SkPermissionState>;
   }
-  interface VnFileSystemFileHandle extends VnFileSystemHandle {
+  interface SkFileSystemFileHandle extends SkFileSystemHandle {
     readonly kind: "file";
-    getFile(): Promise<VnFile>;
-    createWritable(options?: { keepExistingData?: boolean }): Promise<VnFileSystemWritableFileStream>;
+    getFile(): Promise<SkFile>;
+    createWritable(options?: { keepExistingData?: boolean }): Promise<SkFileSystemWritableFileStream>;
   }
-  interface VnFileSystemDirectoryHandle
-    extends VnFileSystemHandle, AsyncIterable<[string, VnFileSystemFileHandle | VnFileSystemDirectoryHandle]> {
+  interface SkFileSystemDirectoryHandle
+    extends SkFileSystemHandle, AsyncIterable<[string, SkFileSystemFileHandle | SkFileSystemDirectoryHandle]> {
     readonly kind: "directory";
-    getFileHandle(name: string, options?: { create?: boolean }): Promise<VnFileSystemFileHandle>;
-    getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<VnFileSystemDirectoryHandle>;
+    getFileHandle(name: string, options?: { create?: boolean }): Promise<SkFileSystemFileHandle>;
+    getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<SkFileSystemDirectoryHandle>;
     removeEntry(name: string, options?: { recursive?: boolean }): Promise<void>;
-    resolve(possibleDescendant: VnFileSystemHandle): Promise<string[] | null>;
-    entries(): AsyncIterableIterator<[string, VnFileSystemFileHandle | VnFileSystemDirectoryHandle]>;
+    resolve(possibleDescendant: SkFileSystemHandle): Promise<string[] | null>;
+    entries(): AsyncIterableIterator<[string, SkFileSystemFileHandle | SkFileSystemDirectoryHandle]>;
     keys(): AsyncIterableIterator<string>;
-    values(): AsyncIterableIterator<VnFileSystemFileHandle | VnFileSystemDirectoryHandle>;
+    values(): AsyncIterableIterator<SkFileSystemFileHandle | SkFileSystemDirectoryHandle>;
   }
-  type VnFileSystemWriteData = VnBlob | ArrayBuffer | ArrayBufferView | string;
-  type VnFileSystemWriteChunk =
-    | VnFileSystemWriteData
-    | { type: "write"; position?: number | null; data: VnFileSystemWriteData }
+  type SkFileSystemWriteData = SkBlob | ArrayBuffer | ArrayBufferView | string;
+  type SkFileSystemWriteChunk =
+    | SkFileSystemWriteData
+    | { type: "write"; position?: number | null; data: SkFileSystemWriteData }
     | { type: "seek"; position: number }
     | { type: "truncate"; size: number };
-  interface VnFileSystemWritableFileStream {
+  interface SkFileSystemWritableFileStream {
     readonly locked: boolean;
-    write(data: VnFileSystemWriteChunk): Promise<void>;
+    write(data: SkFileSystemWriteChunk): Promise<void>;
     seek(position: number): Promise<void>;
     truncate(size: number): Promise<void>;
     close(): Promise<void>;
@@ -409,41 +409,41 @@ declare global {
   }
   // The construct signatures are lib.dom's: calling one throws "Illegal constructor", but without
   // it `x instanceof FileSystemFileHandle` does not type-check.
-  var FileSystemHandle: { new (): VnFileSystemHandle; prototype: VnFileSystemHandle };
-  var FileSystemFileHandle: { new (): VnFileSystemFileHandle; prototype: VnFileSystemFileHandle };
-  var FileSystemDirectoryHandle: { new (): VnFileSystemDirectoryHandle; prototype: VnFileSystemDirectoryHandle };
+  var FileSystemHandle: { new (): SkFileSystemHandle; prototype: SkFileSystemHandle };
+  var FileSystemFileHandle: { new (): SkFileSystemFileHandle; prototype: SkFileSystemFileHandle };
+  var FileSystemDirectoryHandle: { new (): SkFileSystemDirectoryHandle; prototype: SkFileSystemDirectoryHandle };
   var FileSystemWritableFileStream: {
-    new (): VnFileSystemWritableFileStream;
-    prototype: VnFileSystemWritableFileStream;
+    new (): SkFileSystemWritableFileStream;
+    prototype: SkFileSystemWritableFileStream;
   };
 
-  type VnWellKnownDirectory = "desktop" | "documents" | "downloads" | "music" | "pictures" | "videos";
-  interface VnFilePickerAcceptType {
+  type SkWellKnownDirectory = "desktop" | "documents" | "downloads" | "music" | "pictures" | "videos";
+  interface SkFilePickerAcceptType {
     description?: string;
     accept: Record<string, string | string[]>;
   }
-  interface VnFilePickerOptions {
+  interface SkFilePickerOptions {
     id?: string;
-    startIn?: VnWellKnownDirectory | VnFileSystemHandle;
-    types?: VnFilePickerAcceptType[];
+    startIn?: SkWellKnownDirectory | SkFileSystemHandle;
+    types?: SkFilePickerAcceptType[];
     excludeAcceptAllOption?: boolean;
   }
-  interface VnOpenFilePickerOptions extends VnFilePickerOptions {
+  interface SkOpenFilePickerOptions extends SkFilePickerOptions {
     multiple?: boolean;
   }
-  interface VnSaveFilePickerOptions extends VnFilePickerOptions {
+  interface SkSaveFilePickerOptions extends SkFilePickerOptions {
     suggestedName?: string;
   }
-  interface VnDirectoryPickerOptions {
+  interface SkDirectoryPickerOptions {
     id?: string;
-    startIn?: VnWellKnownDirectory | VnFileSystemHandle;
+    startIn?: SkWellKnownDirectory | SkFileSystemHandle;
     mode?: "read" | "readwrite";
   }
-  function showOpenFilePicker(options?: VnOpenFilePickerOptions): Promise<VnFileSystemFileHandle[]>;
-  function showSaveFilePicker(options?: VnSaveFilePickerOptions): Promise<VnFileSystemFileHandle>;
-  function showDirectoryPicker(options?: VnDirectoryPickerOptions): Promise<VnFileSystemDirectoryHandle>;
+  function showOpenFilePicker(options?: SkOpenFilePickerOptions): Promise<SkFileSystemFileHandle[]>;
+  function showSaveFilePicker(options?: SkSaveFilePickerOptions): Promise<SkFileSystemFileHandle>;
+  function showDirectoryPicker(options?: SkDirectoryPickerOptions): Promise<SkFileSystemDirectoryHandle>;
 
-  interface VnProgressEvent extends VnEvent {
+  interface SkProgressEvent extends SkEvent {
     readonly lengthComputable: boolean;
     readonly loaded: number;
     readonly total: number;
@@ -451,34 +451,34 @@ declare global {
   var ProgressEvent: {
     new (
       type: string,
-      init?: VnEventInit & { lengthComputable?: boolean; loaded?: number; total?: number },
-    ): VnProgressEvent;
-    prototype: VnProgressEvent;
+      init?: SkEventInit & { lengthComputable?: boolean; loaded?: number; total?: number },
+    ): SkProgressEvent;
+    prototype: SkProgressEvent;
   };
 
-  interface VnFileReader extends VnEventTarget {
+  interface SkFileReader extends SkEventTarget {
     readonly readyState: 0 | 1 | 2;
     readonly result: string | ArrayBuffer | null;
-    readonly error: VnDOMException | null;
+    readonly error: SkDOMException | null;
     readonly EMPTY: 0;
     readonly LOADING: 1;
     readonly DONE: 2;
-    readAsArrayBuffer(blob: VnBlob): void;
-    readAsBinaryString(blob: VnBlob): void;
+    readAsArrayBuffer(blob: SkBlob): void;
+    readAsBinaryString(blob: SkBlob): void;
     /** `encoding`, else the Blob type's charset, else UTF-8; a BOM wins over all three. */
-    readAsText(blob: VnBlob, encoding?: string): void;
-    readAsDataURL(blob: VnBlob): void;
+    readAsText(blob: SkBlob, encoding?: string): void;
+    readAsDataURL(blob: SkBlob): void;
     abort(): void;
-    onloadstart: ((ev: VnProgressEvent) => void) | null;
-    onprogress: ((ev: VnProgressEvent) => void) | null;
-    onload: ((ev: VnProgressEvent) => void) | null;
-    onerror: ((ev: VnProgressEvent) => void) | null;
-    onabort: ((ev: VnProgressEvent) => void) | null;
-    onloadend: ((ev: VnProgressEvent) => void) | null;
+    onloadstart: ((ev: SkProgressEvent) => void) | null;
+    onprogress: ((ev: SkProgressEvent) => void) | null;
+    onload: ((ev: SkProgressEvent) => void) | null;
+    onerror: ((ev: SkProgressEvent) => void) | null;
+    onabort: ((ev: SkProgressEvent) => void) | null;
+    onloadend: ((ev: SkProgressEvent) => void) | null;
   }
   var FileReader: {
-    new (): VnFileReader;
-    prototype: VnFileReader;
+    new (): SkFileReader;
+    prototype: SkFileReader;
     readonly EMPTY: 0;
     readonly LOADING: 1;
     readonly DONE: 2;
@@ -486,24 +486,24 @@ declare global {
 }
 
 declare global {
-  interface VnAudioContext {
+  interface SkAudioContext {
     readonly state: "suspended" | "running" | "closed";
     readonly sampleRate: number;
     readonly currentTime: number;
     readonly audioWorklet?: unknown;
-    createOscillator(): VnOscillatorNode;
-    createAnalyser(): VnAnalyserNode;
-    createBuffer(channels: number, frames: number, sampleRate: number): VnAudioBuffer;
-    createBufferSource(): VnAudioBufferSourceNode;
-    createChannelSplitter(numberOfOutputs?: number): VnChannelSplitterNode;
-    createChannelMerger(numberOfInputs?: number): VnChannelMergerNode;
-    decodeAudioData(bytes: ArrayBuffer): Promise<VnAudioBuffer>;
+    createOscillator(): SkOscillatorNode;
+    createAnalyser(): SkAnalyserNode;
+    createBuffer(channels: number, frames: number, sampleRate: number): SkAudioBuffer;
+    createBufferSource(): SkAudioBufferSourceNode;
+    createChannelSplitter(numberOfOutputs?: number): SkChannelSplitterNode;
+    createChannelMerger(numberOfInputs?: number): SkChannelMergerNode;
+    decodeAudioData(bytes: ArrayBuffer): Promise<SkAudioBuffer>;
     resume(): Promise<void>;
     suspend(): Promise<void>;
-    createRedStreamSource(options?: Partial<VnRedStreamSourceOptions>): VnRedStreamSourceNode;
+    createRedStreamSource(options?: Partial<SkRedStreamSourceOptions>): SkRedStreamSourceNode;
   }
 
-  interface VnRedStreamSourceNode {
+  interface SkRedStreamSourceNode {
     push(block: Float32Array): number;
     readonly queuedSeconds?: number;
     readonly ready: boolean;
@@ -512,14 +512,14 @@ declare global {
   }
 
   /**
-   * NOT a merge onto engine.d.ts's `VnGainNode`, which already declares `readonly gain: { value:
+   * NOT a merge onto engine.d.ts's `SkGainNode`, which already declares `readonly gain: { value:
    * number }` — the `.value` half — and a merge cannot narrow a property that is already there.
    */
-  interface VnGainNodeWithParam extends VnAudioNode {
-    readonly gain: VnAudioParam;
+  interface SkGainNodeWithParam extends SkAudioNode {
+    readonly gain: SkAudioParam;
   }
 
-  interface VnAudioParam {
+  interface SkAudioParam {
     value: number;
     cancelScheduledValues(when: number): void;
     setValueAtTime(value: number, when: number): void;
@@ -527,16 +527,16 @@ declare global {
     exponentialRampToValueAtTime(value: number, when: number): void;
   }
 
-  interface VnOscillatorNode extends VnAudioNode {
+  interface SkOscillatorNode extends SkAudioNode {
     type: string;
-    readonly frequency: VnAudioParam;
-    readonly detune: VnAudioParam;
+    readonly frequency: SkAudioParam;
+    readonly detune: SkAudioParam;
     onended: (() => void) | null;
     start(when?: number): void;
     stop(when?: number): void;
   }
 
-  interface VnAnalyserNode extends VnAudioNode {
+  interface SkAnalyserNode extends SkAudioNode {
     fftSize: number;
     smoothingTimeConstant: number;
     readonly frequencyBinCount: number;
@@ -544,7 +544,7 @@ declare global {
     getFloatTimeDomainData(into: Float32Array): void;
   }
 
-  interface VnAudioBuffer {
+  interface SkAudioBuffer {
     readonly numberOfChannels: number;
     readonly length: number;
     readonly sampleRate: number;
@@ -553,68 +553,68 @@ declare global {
     copyToChannel(source: Float32Array, channel: number): void;
   }
 
-  interface VnAudioBufferSourceNode extends VnAudioNode {
-    buffer: VnAudioBuffer | null;
+  interface SkAudioBufferSourceNode extends SkAudioNode {
+    buffer: SkAudioBuffer | null;
     onended: (() => void) | null;
     start(when?: number): void;
     stop(when?: number): void;
   }
 
-  interface VnAudioNode {
+  interface SkAudioNode {
     readonly numberOfInputs: number;
     readonly numberOfOutputs: number;
-    connect(to: VnAudioNode, output?: number, input?: number): unknown;
-    disconnect(outputOrDestination?: number | VnAudioNode, output?: number, input?: number): void;
+    connect(to: SkAudioNode, output?: number, input?: number): unknown;
+    disconnect(outputOrDestination?: number | SkAudioNode, output?: number, input?: number): void;
   }
 
-  interface VnChannelSplitterNode extends VnAudioNode {
+  interface SkChannelSplitterNode extends SkAudioNode {
     channelCount: number;
     channelCountMode: string;
     channelInterpretation: string;
   }
 
-  interface VnChannelMergerNode extends VnAudioNode {
+  interface SkChannelMergerNode extends SkAudioNode {
     channelCount: number;
     channelCountMode: string;
     channelInterpretation: string;
   }
 
-  interface VnChannelNodeOptions {
+  interface SkChannelNodeOptions {
     channelCount?: number;
     channelCountMode?: string;
     channelInterpretation?: string;
   }
 
   var ChannelSplitterNode: {
-    new (context: VnAudioContext, options?: VnChannelNodeOptions & { numberOfOutputs?: number }): VnChannelSplitterNode;
-    prototype: VnChannelSplitterNode;
+    new (context: SkAudioContext, options?: SkChannelNodeOptions & { numberOfOutputs?: number }): SkChannelSplitterNode;
+    prototype: SkChannelSplitterNode;
   };
   var ChannelMergerNode: {
-    new (context: VnAudioContext, options?: VnChannelNodeOptions & { numberOfInputs?: number }): VnChannelMergerNode;
-    prototype: VnChannelMergerNode;
+    new (context: SkAudioContext, options?: SkChannelNodeOptions & { numberOfInputs?: number }): SkChannelMergerNode;
+    prototype: SkChannelMergerNode;
   };
 
-  var AudioContext: { new (): VnAudioContext; prototype: VnAudioContext } | undefined;
+  var AudioContext: { new (): SkAudioContext; prototype: SkAudioContext } | undefined;
   /** Declared so the probe compiles; `undefined` is the honest type. */
   var OfflineAudioContext: undefined;
 }
 
 declare global {
   /**
-   * It is for an app's own adaptations to the host, `if (globalThis.isVn) …`, without importing
-   * "vue-native" (which a browser build of the same app cannot resolve).
+   * It is for an app's own adaptations to the host, `if (globalThis.isSk) …`, without importing
+   * "@skathi-native/runtime" (which a browser build of the same app cannot resolve).
    */
-  var isVn: true;
+  var isSk: true;
 
-  var __VN_SCENARIO__: string | undefined;
+  var __SK_SCENARIO__: string | undefined;
 
   /**
-   * `VN_HTTP_ORIGIN` — where MediaPage points its http(s) `src` demos, so the page can be aimed at
+   * `SK_HTTP_ORIGIN` — where MediaPage points its http(s) `src` demos, so the page can be aimed at
    * a real server without an internet dependency.
    */
-  var __VN_HTTP_ORIGIN__: string | undefined;
+  var __SK_HTTP_ORIGIN__: string | undefined;
 
-  var __vn_perf_mark: ((name: string) => void) | undefined;
+  var __sk_perf_mark: ((name: string) => void) | undefined;
 
   /**
    * The scenario driver reaches VoicePage's verbs through `ctl.ts eval`, so the page publishes
@@ -623,104 +623,104 @@ declare global {
   var __voice: Record<string, (...args: never[]) => unknown> | undefined;
 }
 
-// The DOM redjs's mirror tree answers to (packages/vue-native/src/runtime.ts). `document` itself stays
-// engine.d.ts's loose `VnDocument | undefined`; a caller that needs the methods narrows it once, to VnDomDocument.
+// The DOM redjs's mirror tree answers to (packages/runtime/src/runtime.ts). `document` itself stays
+// engine.d.ts's loose `SkDocument | undefined`; a caller that needs the methods narrows it once, to SkDomDocument.
 declare global {
   var window: typeof globalThis;
   var onerror: ((...args: unknown[]) => unknown) | null;
   function atob(data: string): string;
-  function getComputedStyle(el: VnElement): { readonly fontSize: string };
+  function getComputedStyle(el: SkElement): { readonly fontSize: string };
 
   type RequestInit = Record<string, unknown>;
 
-  type Event = VnEvent;
-  type CustomEvent<T = unknown> = VnCustomEvent<T>;
-  type EventTarget = VnEventTarget;
-  type MouseEvent = VnMouseEvent;
-  type KeyboardEvent = VnKeyboardEvent;
-  type WheelEvent = VnWheelEvent;
-  type FocusEvent = VnFocusEvent;
-  type CompositionEvent = VnCompositionEvent;
-  type ErrorEvent = VnErrorEvent;
-  type Blob = VnBlob;
-  type File = VnFile;
-  type DOMException = VnDOMException;
-  type FileSystemFileHandle = VnFileSystemFileHandle;
-  type DOMRect = VnDomRect;
-  type Node = VnNode;
-  type Element = VnElement;
-  type HTMLElement = VnElement;
-  type Document = VnDomDocument;
-  type HTMLInputElement = VnInputElement;
-  type HTMLTextAreaElement = VnTextAreaElement;
-  type HTMLSelectElement = VnSelectElement;
-  type HTMLImageElement = VnImageElement;
-  type HTMLCanvasElement = VnCanvasElement;
-  type HTMLVideoElement = VnMediaElement;
-  type HTMLIFrameElement = VnIframeElement;
-  type MediaStreamTrack = VnMediaStreamTrack;
-  type MediaStreamConstraints = VnMediaStreamConstraints;
-  type MediaDeviceInfo = VnMediaDeviceInfo;
+  type Event = SkEvent;
+  type CustomEvent<T = unknown> = SkCustomEvent<T>;
+  type EventTarget = SkEventTarget;
+  type MouseEvent = SkMouseEvent;
+  type KeyboardEvent = SkKeyboardEvent;
+  type WheelEvent = SkWheelEvent;
+  type FocusEvent = SkFocusEvent;
+  type CompositionEvent = SkCompositionEvent;
+  type ErrorEvent = SkErrorEvent;
+  type Blob = SkBlob;
+  type File = SkFile;
+  type DOMException = SkDOMException;
+  type FileSystemFileHandle = SkFileSystemFileHandle;
+  type DOMRect = SkDomRect;
+  type Node = SkNode;
+  type Element = SkElement;
+  type HTMLElement = SkElement;
+  type Document = SkDomDocument;
+  type HTMLInputElement = SkInputElement;
+  type HTMLTextAreaElement = SkTextAreaElement;
+  type HTMLSelectElement = SkSelectElement;
+  type HTMLImageElement = SkImageElement;
+  type HTMLCanvasElement = SkCanvasElement;
+  type HTMLVideoElement = SkMediaElement;
+  type HTMLIFrameElement = SkIframeElement;
+  type MediaStreamTrack = SkMediaStreamTrack;
+  type MediaStreamConstraints = SkMediaStreamConstraints;
+  type MediaDeviceInfo = SkMediaDeviceInfo;
 
-  interface VnEventTarget {
+  interface SkEventTarget {
     addEventListener(
       type: "keydown" | "keyup",
-      listener: (ev: VnKeyboardEvent) => unknown,
+      listener: (ev: SkKeyboardEvent) => unknown,
       options?: boolean | { capture?: boolean; once?: boolean },
     ): void;
     addEventListener(
       type: "focusin" | "focusout",
-      listener: (ev: VnFocusEvent) => unknown,
+      listener: (ev: SkFocusEvent) => unknown,
       options?: boolean | { capture?: boolean; once?: boolean },
     ): void;
     removeEventListener(
       type: "keydown" | "keyup",
-      listener: (ev: VnKeyboardEvent) => unknown,
+      listener: (ev: SkKeyboardEvent) => unknown,
       options?: boolean | { capture?: boolean },
     ): void;
     removeEventListener(
       type: "focusin" | "focusout",
-      listener: (ev: VnFocusEvent) => unknown,
+      listener: (ev: SkFocusEvent) => unknown,
       options?: boolean | { capture?: boolean },
     ): void;
   }
   function addEventListener(
     type: "keydown" | "keyup",
-    listener: (ev: VnKeyboardEvent) => unknown,
+    listener: (ev: SkKeyboardEvent) => unknown,
     options?: boolean | { capture?: boolean; once?: boolean },
   ): void;
   function removeEventListener(
     type: "keydown" | "keyup",
-    listener: (ev: VnKeyboardEvent) => unknown,
+    listener: (ev: SkKeyboardEvent) => unknown,
     options?: boolean | { capture?: boolean },
   ): void;
 
-  interface VnFocusEvent extends VnEvent {
+  interface SkFocusEvent extends SkEvent {
     readonly relatedTarget: unknown;
   }
-  interface VnCompositionEvent extends VnEvent {
+  interface SkCompositionEvent extends SkEvent {
     readonly data: string;
   }
-  interface VnErrorEvent extends VnEvent {
+  interface SkErrorEvent extends SkEvent {
     readonly message: string;
   }
 
-  interface VnNode extends VnEventTarget {
+  interface SkNode extends SkEventTarget {
     readonly nodeType: number;
     readonly nodeName: string;
     readonly isConnected: boolean;
-    readonly parentNode: VnNode | null;
-    readonly firstChild: VnNode | null;
-    readonly lastChild: VnNode | null;
-    readonly childNodes: VnNodeList;
-    readonly ownerDocument: VnDomDocument;
+    readonly parentNode: SkNode | null;
+    readonly firstChild: SkNode | null;
+    readonly lastChild: SkNode | null;
+    readonly childNodes: SkNodeList;
+    readonly ownerDocument: SkDomDocument;
     textContent: string | null;
-    appendChild<T extends VnNode>(child: T): T;
-    removeChild<T extends VnNode>(child: T): T;
-    contains(other: VnNode | null): boolean;
+    appendChild<T extends SkNode>(child: T): T;
+    removeChild<T extends SkNode>(child: T): T;
+    contains(other: SkNode | null): boolean;
   }
 
-  interface VnInlineStyle {
+  interface SkInlineStyle {
     fontSize: string;
     border: string;
     display: string;
@@ -732,89 +732,89 @@ declare global {
     pointerEvents: string;
   }
 
-  interface VnDomRectList extends Iterable<VnDomRect> {
+  interface SkDomRectList extends Iterable<SkDomRect> {
     readonly length: number;
-    readonly [index: number]: VnDomRect;
+    readonly [index: number]: SkDomRect;
   }
 
-  interface VnNodeList extends Iterable<VnNode> {
+  interface SkNodeList extends Iterable<SkNode> {
     readonly length: number;
-    readonly [index: number]: VnNode;
-    item(index: number): VnNode | null;
+    readonly [index: number]: SkNode;
+    item(index: number): SkNode | null;
   }
 
-  interface VnElementList<E extends VnElement = VnElement> extends Iterable<E> {
+  interface SkElementList<E extends SkElement = SkElement> extends Iterable<E> {
     readonly length: number;
     readonly [index: number]: E;
     item(index: number): E | null;
     namedItem(name: string): E | null;
   }
 
-  interface VnAnimationOptions {
+  interface SkAnimationOptions {
     duration?: number;
     easing?: string;
   }
 
-  interface VnElement extends VnNode {
+  interface SkElement extends SkNode {
     readonly tagName: string;
     readonly namespaceURI: string | null;
     readonly classList: object;
     readonly dataset: object;
     className: string;
-    readonly style: VnInlineStyle;
-    readonly parentElement: VnElement | null;
+    readonly style: SkInlineStyle;
+    readonly parentElement: SkElement | null;
     readonly offsetWidth: number;
     readonly offsetHeight: number;
     readonly clientWidth: number;
     readonly clientHeight: number;
-    readonly children: VnElementList;
-    getClientRects(): VnDomRectList;
-    getElementsByClassName(names: string): VnElementList;
+    readonly children: SkElementList;
+    getClientRects(): SkDomRectList;
+    getElementsByClassName(names: string): SkElementList;
     getAttribute(name: string): string | null;
     setAttribute(name: string, value: string): void;
     removeAttribute(name: string): void;
-    closest(selector: string): VnElement | null;
-    querySelector<E extends VnElement = VnElement>(selector: string): E | null;
-    querySelectorAll<E extends VnElement = VnElement>(selector: string): VnElementList<E>;
+    closest(selector: string): SkElement | null;
+    querySelector<E extends SkElement = SkElement>(selector: string): E | null;
+    querySelectorAll<E extends SkElement = SkElement>(selector: string): SkElementList<E>;
     remove(): void;
     focus(options?: { preventScroll?: boolean }): void;
-    animate(keyframes: Record<string, string>[], options?: VnAnimationOptions): unknown;
+    animate(keyframes: Record<string, string>[], options?: SkAnimationOptions): unknown;
   }
 
-  interface VnInputElement extends VnElement {
+  interface SkInputElement extends SkElement {
     value: string;
-    readonly files: VnFileList | null;
+    readonly files: SkFileList | null;
   }
-  interface VnTextAreaElement extends VnElement {
-    value: string;
-  }
-  interface VnSelectElement extends VnElement {
+  interface SkTextAreaElement extends SkElement {
     value: string;
   }
-  interface VnImageElement extends VnElement {
+  interface SkSelectElement extends SkElement {
+    value: string;
+  }
+  interface SkImageElement extends SkElement {
     src: string;
     readonly complete: boolean;
     readonly naturalWidth: number;
     readonly naturalHeight: number;
-    onload: ((ev: VnEvent) => unknown) | null;
+    onload: ((ev: SkEvent) => unknown) | null;
   }
 
-  interface VnImageData {
+  interface SkImageData {
     readonly data: Uint8ClampedArray;
   }
-  interface VnCanvas2D {
+  interface SkCanvas2D {
     fillStyle: string;
     fillRect(x: number, y: number, w: number, h: number): void;
-    createImageData(w: number, h: number): VnImageData;
-    putImageData(data: VnImageData, x: number, y: number): void;
+    createImageData(w: number, h: number): SkImageData;
+    putImageData(data: SkImageData, x: number, y: number): void;
   }
-  interface VnCanvasElement extends VnElement {
+  interface SkCanvasElement extends SkElement {
     width: number;
     height: number;
-    getContext(kind: "2d"): VnCanvas2D | null;
+    getContext(kind: "2d"): SkCanvas2D | null;
   }
 
-  interface VnTokenList {
+  interface SkTokenList {
     value: string;
     readonly length: number;
     contains(token: string): boolean;
@@ -822,123 +822,123 @@ declare global {
     remove(...tokens: string[]): void;
     supports(token: string): boolean;
   }
-  interface VnContentWindow {
+  interface SkContentWindow {
     readonly document: unknown;
     postMessage(message: unknown, targetOrigin: string | { targetOrigin?: string }, transfer?: unknown[]): void;
   }
-  interface VnIframeElement extends VnElement {
-    get sandbox(): VnTokenList;
+  interface SkIframeElement extends SkElement {
+    get sandbox(): SkTokenList;
     set sandbox(value: string);
     allow: string;
     referrerPolicy: string;
     src: string;
-    readonly contentWindow: VnContentWindow | null;
+    readonly contentWindow: SkContentWindow | null;
     readonly contentDocument: unknown;
-    onload: ((ev: VnEvent) => unknown) | null;
-    onerror: ((ev: VnEvent) => unknown) | null;
+    onload: ((ev: SkEvent) => unknown) | null;
+    onerror: ((ev: SkEvent) => unknown) | null;
   }
 
-  var HTMLIFrameElement: { new (): VnIframeElement; prototype: VnIframeElement };
+  var HTMLIFrameElement: { new (): SkIframeElement; prototype: SkIframeElement };
 
-  interface VnMediaElement {
+  interface SkMediaElement {
     src: string;
   }
 
-  interface VnFontFace {
+  interface SkFontFace {
     readonly family: string;
     readonly status: string;
     readonly unicodeRange: string;
-    readonly loaded: Promise<VnFontFace>;
-    load(): Promise<VnFontFace>;
+    readonly loaded: Promise<SkFontFace>;
+    load(): Promise<SkFontFace>;
   }
-  interface VnFontFaceSetEvent extends VnEvent {
-    readonly fontfaces: Iterable<VnFontFace>;
+  interface SkFontFaceSetEvent extends SkEvent {
+    readonly fontfaces: Iterable<SkFontFace>;
   }
-  interface VnFontFaceSet extends VnEventTarget, Iterable<VnFontFace> {
+  interface SkFontFaceSet extends SkEventTarget, Iterable<SkFontFace> {
     readonly status: string;
     readonly size: number;
-    readonly ready: Promise<VnFontFaceSet>;
-    add(face: VnFontFace): void;
-    has(face: VnFontFace): boolean;
+    readonly ready: Promise<SkFontFaceSet>;
+    add(face: SkFontFace): void;
+    has(face: SkFontFace): boolean;
     check(font: string, text?: string): boolean;
-    load(font: string, text?: string): Promise<VnFontFace[]>;
+    load(font: string, text?: string): Promise<SkFontFace[]>;
   }
-  var FontFace: { new (family: string, source: string | ArrayBuffer): VnFontFace; prototype: VnFontFace };
+  var FontFace: { new (family: string, source: string | ArrayBuffer): SkFontFace; prototype: SkFontFace };
 
-  interface VnDomDocument extends VnEventTarget {
-    readonly documentElement: VnElement;
-    readonly body: VnElement;
-    readonly activeElement: VnElement | null;
-    readonly fonts: VnFontFaceSet;
-    getElementById(id: string): VnElement | null;
-    getElementsByTagName(tag: string): VnElementList;
-    getElementsByClassName(names: string): VnElementList;
-    getElementsByName(name: string): VnNodeList;
-    createElement(tag: "iframe"): VnIframeElement;
-    createElement(tag: string): VnElement;
-    createElementNS(ns: string, tag: string): VnElement;
-    querySelector<E extends VnElement = VnElement>(selector: string): E | null;
-    querySelectorAll<E extends VnElement = VnElement>(selector: string): VnElementList<E>;
+  interface SkDomDocument extends SkEventTarget {
+    readonly documentElement: SkElement;
+    readonly body: SkElement;
+    readonly activeElement: SkElement | null;
+    readonly fonts: SkFontFaceSet;
+    getElementById(id: string): SkElement | null;
+    getElementsByTagName(tag: string): SkElementList;
+    getElementsByClassName(names: string): SkElementList;
+    getElementsByName(name: string): SkNodeList;
+    createElement(tag: "iframe"): SkIframeElement;
+    createElement(tag: string): SkElement;
+    createElementNS(ns: string, tag: string): SkElement;
+    querySelector<E extends SkElement = SkElement>(selector: string): E | null;
+    querySelectorAll<E extends SkElement = SkElement>(selector: string): SkElementList<E>;
   }
 
-  interface VnResizeObserverEntry {
-    readonly target: VnElement;
-    readonly contentRect: VnDomRect;
+  interface SkResizeObserverEntry {
+    readonly target: SkElement;
+    readonly contentRect: SkDomRect;
   }
-  interface VnResizeObserver {
-    observe(el: VnElement): void;
+  interface SkResizeObserver {
+    observe(el: SkElement): void;
     disconnect(): void;
   }
-  type ResizeObserver = VnResizeObserver;
-  var ResizeObserver: { new (callback: (entries: VnResizeObserverEntry[]) => void): VnResizeObserver };
-  interface VnIntersectionObserverEntry {
-    readonly target: VnElement;
+  type ResizeObserver = SkResizeObserver;
+  var ResizeObserver: { new (callback: (entries: SkResizeObserverEntry[]) => void): SkResizeObserver };
+  interface SkIntersectionObserverEntry {
+    readonly target: SkElement;
     readonly isIntersecting: boolean;
-    readonly boundingClientRect: VnDomRect;
+    readonly boundingClientRect: SkDomRect;
   }
   var IntersectionObserver: {
-    new (callback: (entries: VnIntersectionObserverEntry[]) => void): {
-      observe(el: VnElement): void;
+    new (callback: (entries: SkIntersectionObserverEntry[]) => void): {
+      observe(el: SkElement): void;
       disconnect(): void;
     };
   };
 
-  interface VnClipboardItem {
+  interface SkClipboardItem {
     readonly types: readonly string[];
-    getType(type: string): Promise<VnBlob>;
+    getType(type: string): Promise<SkBlob>;
   }
-  var ClipboardItem: { new (items: Record<string, VnBlob>): VnClipboardItem; prototype: VnClipboardItem };
+  var ClipboardItem: { new (items: Record<string, SkBlob>): SkClipboardItem; prototype: SkClipboardItem };
 
-  interface VnMediaStreamConstraints {
+  interface SkMediaStreamConstraints {
     audio?: boolean;
     video?: boolean;
   }
-  interface VnMediaTrackSettings {
+  interface SkMediaTrackSettings {
     readonly echoCancellation?: boolean;
     readonly noiseSuppression?: boolean;
     readonly autoGainControl?: boolean;
     readonly channelCount?: number;
   }
-  interface VnMediaStreamTrack {
+  interface SkMediaStreamTrack {
     readonly readyState: string;
     readonly label: string;
-    getSettings(): VnMediaTrackSettings;
+    getSettings(): SkMediaTrackSettings;
     stop(): void;
   }
-  interface VnMediaStream {
-    getAudioTracks(): VnMediaStreamTrack[];
-    getTracks(): VnMediaStreamTrack[];
+  interface SkMediaStream {
+    getAudioTracks(): SkMediaStreamTrack[];
+    getTracks(): SkMediaStreamTrack[];
   }
-  interface VnMediaDeviceInfo {
+  interface SkMediaDeviceInfo {
     readonly kind: string;
     readonly deviceId: string;
     readonly label: string;
   }
 
-  interface VnNavigator {
+  interface SkNavigator {
     readonly mediaDevices: {
-      getUserMedia(constraints?: VnMediaStreamConstraints): Promise<VnMediaStream>;
-      enumerateDevices(): Promise<VnMediaDeviceInfo[]>;
+      getUserMedia(constraints?: SkMediaStreamConstraints): Promise<SkMediaStream>;
+      enumerateDevices(): Promise<SkMediaDeviceInfo[]>;
     };
   }
 }

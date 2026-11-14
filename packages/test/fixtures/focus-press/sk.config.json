@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-focus-press",
+
+  "window": {
+    "title": "Skathi — a press's focus (fixture)",
+    "width": 520,
+    "height": 420,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -2,7 +2,7 @@
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref } from "vue";
 
 const supported = typeof AudioContext !== "undefined";
-const ctx = ref<VnAudioContext | null>(null);
+const ctx = ref<SkAudioContext | null>(null);
 const state = reactive({
   ctxState: "—",
   sampleRate: 0,
@@ -12,11 +12,11 @@ const state = reactive({
 
 // Nodes, kept out of `reactive()` on purpose: they are host objects with live getters, not data,
 // and wrapping them in a Proxy buys nothing but confusion.
-let osc: VnOscillatorNode | null = null;
-let preAnalyser: VnAnalyserNode | null = null;
-let postAnalyser: VnAnalyserNode | null = null;
-let gainNode: VnGainNodeWithParam | null = null;
-let streamNode: VnRedStreamSourceNode | null = null;
+let osc: SkOscillatorNode | null = null;
+let preAnalyser: SkAnalyserNode | null = null;
+let postAnalyser: SkAnalyserNode | null = null;
+let gainNode: SkGainNodeWithParam | null = null;
+let streamNode: SkRedStreamSourceNode | null = null;
 
 const BARS = 48;
 const bars = ref<number[]>(new Array(BARS).fill(0));
@@ -28,7 +28,7 @@ function note(line: string) {
   if (log.value.length > 60) log.value.shift();
 }
 
-function ensureContext(): VnAudioContext {
+function ensureContext(): SkAudioContext {
   if (ctx.value) return ctx.value;
   const a = new AudioContext!();
   ctx.value = a;
@@ -39,7 +39,7 @@ function ensureContext(): VnAudioContext {
   postAnalyser.fftSize = 2048;
   preAnalyser.smoothingTimeConstant = 0.7;
 
-  gainNode = a.createGain() as VnGainNodeWithParam;
+  gainNode = a.createGain() as SkGainNodeWithParam;
   gainNode.gain.value = gain.value;
 
   preAnalyser.connect(gainNode);
@@ -96,10 +96,10 @@ function setDetune(cents: number) {
   if (osc) osc.detune.value = detune.value;
 }
 
-function fraction(e: VnMouseEvent) {
+function fraction(e: SkMouseEvent) {
   // Rewritten at each step of the propagation walk, so it is the `.track` div this handler is
   // bound to rather than whatever was clicked inside it.
-  const track = e.currentTarget as VnElement | null;
+  const track = e.currentTarget as SkElement | null;
   if (!track) return 0;
   const rect = track.getBoundingClientRect();
   if (!rect.width) return 0;
@@ -127,7 +127,7 @@ function rampGain(target: number, seconds: number) {
   note(`gain: exponential ramp to ${target} over ${seconds}s`);
 }
 
-const chirp = reactive<{ buffer: VnAudioBuffer | null; playing: boolean; peak: number }>({
+const chirp = reactive<{ buffer: SkAudioBuffer | null; playing: boolean; peak: number }>({
   buffer: null,
   playing: false,
   peak: 0,
@@ -179,7 +179,7 @@ function playChirp() {
 }
 
 const decoded = reactive({ status: "not loaded", channels: 0, frames: 0, rate: 0, seconds: 0, peak: 0 });
-let decodedBuffer: VnAudioBuffer | null = null;
+let decodedBuffer: SkAudioBuffer | null = null;
 
 async function loadFixture() {
   const a = ensureContext();
@@ -368,7 +368,7 @@ onMounted(() => {
   if (!supported) return;
   ensureContext();
   startLoop();
-  if (globalThis.__VN_SCENARIO__ === "audio") setTimeout(startTone, 400);
+  if (globalThis.__SK_SCENARIO__ === "audio") setTimeout(startTone, 400);
 });
 // KeepAlive: the page's subtree is moved out of the tree, not unmounted, so the rAF loop has to
 // stop by hand or it keeps restyling an invisible page.
@@ -422,7 +422,7 @@ const surface = computed<[string, string, string][]>(() => {
       <div class="advisory">
         <div class="ahead">AudioContext is not defined in this build.</div>
         <div>
-          The host was compiled with --no-default-features (or vn-runtime/audio off), so the Web Audio implementation is
+          The host was compiled with --no-default-features (or sk-runtime/audio off), so the Web Audio implementation is
           not linked in at all. It is deliberately absent rather than stubbed: a feature probe for AudioContext is the
           standard way to ask, and a silent fake would make it lie.
         </div>
@@ -461,7 +461,7 @@ const surface = computed<[string, string, string][]>(() => {
 
         <div class="slider-row">
           <span class="lbl">frequency</span>
-          <div class="track" @click="(e: VnMouseEvent) => setFreq(40 + fraction(e) * 4000)">
+          <div class="track" @click="(e: SkMouseEvent) => setFreq(40 + fraction(e) * 4000)">
             <div class="fill" :style="{ width: ((freq - 40) / 4000) * 100 + '%' }" />
           </div>
           <span class="val">{{ freq }} Hz</span>
@@ -469,7 +469,7 @@ const surface = computed<[string, string, string][]>(() => {
 
         <div class="slider-row">
           <span class="lbl">detune</span>
-          <div class="track" @click="(e: VnMouseEvent) => setDetune(-1200 + fraction(e) * 2400)">
+          <div class="track" @click="(e: SkMouseEvent) => setDetune(-1200 + fraction(e) * 2400)">
             <div class="fill" :style="{ width: ((detune + 1200) / 2400) * 100 + '%' }" />
           </div>
           <span class="val">{{ detune }} cents</span>
@@ -477,7 +477,7 @@ const surface = computed<[string, string, string][]>(() => {
 
         <div class="slider-row">
           <span class="lbl">gain</span>
-          <div class="track" @click="(e: VnMouseEvent) => setGain(fraction(e))">
+          <div class="track" @click="(e: SkMouseEvent) => setGain(fraction(e))">
             <div class="fill gainfill" :style="{ width: gain * 100 + '%' }" />
           </div>
           <span class="val">{{ gain.toFixed(2) }}</span>

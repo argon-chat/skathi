@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "Questa app",
+  "sk.consent.microphone.title": "{app} vuole usare il microfono",
+  "sk.consent.microphone.body": "Se lo consenti, {app} potrà registrare l'audio dal microfono, ora e le prossime volte. La tua scelta viene ricordata per questa app.",
+  "sk.consent.camera.title": "{app} vuole usare la fotocamera",
+  "sk.consent.camera.body": "Se lo consenti, {app} potrà registrare video dalla fotocamera, ora e le prossime volte. La tua scelta viene ricordata per questa app.",
+  "sk.consent.allow": "&Consenti",
+  "sk.consent.block": "&Blocca",
+  "sk.crash.title": "{app} ha riscontrato un problema",
+  "sk.crash.body": "Un errore interno ha arrestato l'app. Riavviala per continuare.",
+  "sk.crash.body_no_restart": "Un errore interno ha arrestato l'app. Chiudila e riaprila per continuare.",
+  "sk.crash.details": "Dettagli",
+  "sk.crash.restart": "&Riavvia",
+  "sk.crash.copy": "&Copia report",
+  "sk.crash.copied": "Copiato",
+  "sk.crash.close": "C&hiudi",
+  "sk.crash.version": "Versione {version}"
+}

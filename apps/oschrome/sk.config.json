@@ -1,0 +1,10 @@
+{
+  "$comment": "`titleBarStyle: \"default\"` gives the window a real WS_CAPTION: the OS draws the titlebar, its min/max/close, its double-click-to-zoom and its system menu.",
+  "window": {
+    "title": "Skathi — OS chrome",
+    "width": 720,
+    "height": 460,
+    "titleBarStyle": "default",
+    "backdrop": "mica"
+  }
+}

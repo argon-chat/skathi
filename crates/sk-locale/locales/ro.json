@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "Această aplicație",
+  "sk.consent.microphone.title": "{app} solicită acces la microfon",
+  "sk.consent.microphone.body": "Dacă permiți, {app} va putea înregistra sunet de la microfon, acum și data viitoare. Alegerea ta este reținută pentru această aplicație.",
+  "sk.consent.camera.title": "{app} solicită acces la cameră",
+  "sk.consent.camera.body": "Dacă permiți, {app} va putea înregistra video cu camera, acum și data viitoare. Alegerea ta este reținută pentru această aplicație.",
+  "sk.consent.allow": "&Permite",
+  "sk.consent.block": "&Blochează",
+  "sk.crash.title": "{app} a întâmpinat o problemă",
+  "sk.crash.body": "O eroare internă a oprit aplicația. Repornește-o pentru a continua.",
+  "sk.crash.body_no_restart": "O eroare internă a oprit aplicația. Închide-o și deschide-o din nou pentru a continua.",
+  "sk.crash.details": "Detalii",
+  "sk.crash.restart": "&Repornește",
+  "sk.crash.copy": "&Copiază raportul",
+  "sk.crash.copied": "Copiat",
+  "sk.crash.close": "Î&nchide",
+  "sk.crash.version": "Versiunea {version}"
+}

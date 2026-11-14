@@ -1,0 +1,12 @@
+{
+  // Some tests drive the runtime, which needs the engine's ambient declarations; skipLibCheck absorbs their
+  // overlap with @types/bun.
+  "extends": "./tsconfig.json",
+  "include": [
+    "test/**/*.ts",
+    "../runtime/src/engine.d.ts",
+    "../runtime/src/protocol.d.ts",
+    "../runtime/src/indexeddb.d.ts"
+  ],
+  "exclude": ["test/fixtures/**"]
+}

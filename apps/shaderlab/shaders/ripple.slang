@@ -1,25 +1,25 @@
-import vn;
+import sk;
 
-[VnEffect("ripple")]
-[VnDoc("animated concentric rings radiating from a point")]
+[SkEffect("ripple")]
+[SkDoc("animated concentric rings radiating from a point")]
 struct Ripple : IEffect
 {
-    // `[VnAnimated]` is what tells the host this effect depends on `input.time`, so the window
+    // `[SkAnimated]` is what tells the host this effect depends on `input.time`, so the window
     // keeps repainting while it is above zero — and stops when it is not.
-    [VnAnimated] [VnDefault("1.6")] [VnRange(0.0, 12.0)]
+    [SkAnimated] [SkDefault("1.6")] [SkRange(0.0, 12.0)]
     float speed;
 
-    // `[VnLength]` means the CSS argument is written `26px` and arrives already multiplied by the
+    // `[SkLength]` means the CSS argument is written `26px` and arrives already multiplied by the
     // device scale factor, so the rings are the same physical size on every monitor.
-    [VnLength] [VnDefault("26")] [VnRange(2.0, 512.0)]
+    [SkLength] [SkDefault("26")] [SkRange(2.0, 512.0)]
     float wavelength;
 
     // A `float2` expands to two CSS arguments, `center.x` and `center.y`, because a CSS function
     // argument is a single value.
-    [VnDefault("0.5 0.5")]
+    [SkDefault("0.5 0.5")]
     float2 center;
 
-    [VnColor] [VnOptional] [VnDefault("#7fd4ff")]
+    [SkColor] [SkOptional] [SkDefault("#7fd4ff")]
     float4 tint;
 
     static override bool straightAlpha() { return true; }

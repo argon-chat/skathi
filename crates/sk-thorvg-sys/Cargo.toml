@@ -1,0 +1,26 @@
+[package]
+name = "sk-thorvg-sys"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+# Static archive from a C++ tree, so the usual `links` contract
+# applies: at most one crate in the graph may provide `thorvg`.
+links = "thorvg"
+
+[features]
+# Upstream's `meson_options.txt` defaults minus what is not built (GPU engines, SVG and WebP
+# loaders). `expressions` is on because Lottie expressions are the one format feature no pure-Rust
+# backend implements.
+default = ["expressions", "png", "jpg", "fonts", "threads"]
+expressions = []  # Lottie expressions via the bundled JerryScript (190 TUs)
+png = []          # embedded PNG assets (lodepng, no system dep)
+jpg = []          # embedded JPEG assets (built-in decoder)
+fonts = []        # TTF/OTF/SFNT, for Lottie text layers with a real font
+threads = []      # ThorVG's TaskScheduler; without it everything is serial
+# Off by default, as upstream's `simd`: AVX raises the runtime CPU baseline to Sandy Bridge for a
+# rasteriser that is not the bottleneck at sticker sizes.
+avx = []
+
+[build-dependencies]
+cc = "1"

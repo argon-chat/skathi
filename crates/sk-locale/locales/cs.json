@@ -1,0 +1,18 @@
+{
+  "sk.app.this_app": "Tato aplikace",
+  "sk.consent.microphone.title": "{app} žádá o přístup k mikrofonu",
+  "sk.consent.microphone.body": "Pokud to povolíte, {app} bude moci nahrávat zvuk z mikrofonu, nyní i příště. Vaše volba se pro tuto aplikaci uloží.",
+  "sk.consent.camera.title": "{app} žádá o přístup ke kameře",
+  "sk.consent.camera.body": "Pokud to povolíte, {app} bude moci nahrávat video z kamery, nyní i příště. Vaše volba se pro tuto aplikaci uloží.",
+  "sk.consent.allow": "&Povolit",
+  "sk.consent.block": "&Blokovat",
+  "sk.crash.title": "{app} nemůže pokračovat",
+  "sk.crash.body": "Interní chyba aplikaci zastavila. Restartujte ji, abyste mohli pokračovat.",
+  "sk.crash.body_no_restart": "Interní chyba aplikaci zastavila. Zavřete ji a znovu otevřete, abyste mohli pokračovat.",
+  "sk.crash.details": "Podrobnosti",
+  "sk.crash.restart": "&Restartovat",
+  "sk.crash.copy": "Zkopírovat &zprávu",
+  "sk.crash.copied": "Zkopírováno",
+  "sk.crash.close": "Za&vřít",
+  "sk.crash.version": "Verze {version}"
+}

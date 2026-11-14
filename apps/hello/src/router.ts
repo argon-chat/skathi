@@ -31,7 +31,7 @@ const routes = [
 ] satisfies RouteRecordRaw[];
 
 // The host publishes it as a plain global; an app that does not look for it never notices.
-const scenario = globalThis.__VN_SCENARIO__;
+const scenario = globalThis.__SK_SCENARIO__;
 const pinned = routes.find((r) => r.name === scenario)?.path ?? "/";
 
 const history = createMemoryHistory();

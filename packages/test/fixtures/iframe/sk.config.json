@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-iframe",
+
+  "window": {
+    "title": "Skathi — iframe (fixture)",
+    "width": 640,
+    "height": 480,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

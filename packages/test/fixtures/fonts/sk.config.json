@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-fonts",
+
+  "window": {
+    "title": "Skathi — fonts (fixture)",
+    "width": 480,
+    "height": 240,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "$comment": "The control.",
+
+  "name": "devtools-on",
+
+  "window": {
+    "title": "Skathi — devtools on (fixture)",
+    "width": 420,
+    "height": 220,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false,
+    "backdrop": "mica"
+  }
+}

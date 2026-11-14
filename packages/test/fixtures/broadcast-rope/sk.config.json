@@ -1,0 +1,13 @@
+{
+  "$comment": "Argon's broadcast connector, an inline <svg> with no viewBox laid over a channel list and drawn from measured row positions.",
+
+  "name": "sk-test-broadcast-rope",
+
+  "window": {
+    "title": "Skathi — broadcast-rope (fixture)",
+    "width": 360,
+    "height": 420,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -28,7 +28,7 @@ const cycle = () => {
     >
       <div class="flex flex-row items-center gap-4">
         <div class="flex flex-1 flex-col gap-1">
-          <div class="text-2xl font-semibold text-foreground">shadcn-vue on vue-native</div>
+          <div class="text-2xl font-semibold text-foreground">shadcn-vue on Skathi</div>
           <div class="text-sm text-muted-foreground">
             reka-ui primitives + Tailwind 3.4, rendered by gpui — no browser, no DOM.
           </div>

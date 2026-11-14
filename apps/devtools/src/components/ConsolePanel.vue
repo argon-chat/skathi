@@ -28,7 +28,7 @@ const lines = computed(() => visibleLogs());
 const expanded = ref<Record<number, boolean>>({});
 const selected = ref<Record<number, boolean>>({});
 let anchor: number | null = null;
-const promptBox = ref<VnElement | null>(null);
+const promptBox = ref<SkElement | null>(null);
 const draft = ref("");
 const hint = ref<string[]>([]);
 
@@ -73,7 +73,7 @@ function selectedLines(): ConsoleLine[] {
   return lines.value.filter((line) => selected.value[uidOf(line)]);
 }
 
-function onLineClick(line: ConsoleLine, event: VnMouseEvent): void {
+function onLineClick(line: ConsoleLine, event: SkMouseEvent): void {
   ui.copyTarget = "console";
   if (selectedText()) return;
   const uid = uidOf(line);
@@ -104,7 +104,7 @@ function onLineClick(line: ConsoleLine, event: VnMouseEvent): void {
   }
 }
 
-function onLineDown(line: ConsoleLine, event: VnMouseEvent): void {
+function onLineDown(line: ConsoleLine, event: SkMouseEvent): void {
   if (event.button !== 2) return;
   ui.copyTarget = "console";
   const uid = uidOf(line);
@@ -181,7 +181,7 @@ function history(delta: number): void {
   draft.value = next >= h.length ? "" : h[next]!;
 }
 
-function onPromptKey(event: VnKeyboardEvent): void {
+function onPromptKey(event: SkKeyboardEvent): void {
   if (event.key === "Enter") {
     // Tab-completion's first suggestion is accepted by Enter only when the hint list is showing
     // and the caret is at a word — otherwise Enter evaluates, which is what it is for.
@@ -219,7 +219,7 @@ function focusPrompt(): void {
   promptBox.value?.focus();
 }
 
-function onKey(event: VnKeyboardEvent): void {
+function onKey(event: SkKeyboardEvent): void {
   const ctrl = event.ctrlKey || event.metaKey;
   const key = event.key.toLowerCase();
   if (key === "l" && ctrl && state.consoleOpen) {
@@ -412,7 +412,7 @@ function glyph(kind: string): string {
         ref="promptBox"
         v-model="draft"
         class="entry mono"
-        placeholder='evaluate in the target — document.title, or __VN__.require("<module id>")'
+        placeholder='evaluate in the target — document.title, or __SK__.require("<module id>")'
         @keydown="onPromptKey"
         @focus="ui.typing = true"
         @blur="ui.typing = false"

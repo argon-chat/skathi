@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-indexeddb",
+
+  "window": {
+    "title": "Skathi — IndexedDB (fixture)",
+    "width": 480,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

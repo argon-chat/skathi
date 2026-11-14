@@ -1,0 +1,13 @@
+{
+  "$comment": "A layout read from `onMounted` then sampled t=0 of that animation.",
+
+  "name": "measure-rem-transition",
+
+  "window": {
+    "title": "Skathi — a rem recompile is not a style change (fixture)",
+    "width": 480,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

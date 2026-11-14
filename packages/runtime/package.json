@@ -1,0 +1,26 @@
+{
+  "name": "@skathi-native/runtime",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/argon-chat/vue-native.git",
+    "directory": "packages/runtime"
+  },
+  "version": "0.0.1",
+  "type": "module",
+  "description": "The Skathi runtime: the Vue renderer, DOM surface and module loader an app runs on.",
+  "exports": {
+    ".": "./src/runtime.ts",
+    "./package.json": "./package.json"
+  },
+  "types": "./src/runtime.ts",
+  "dependencies": {
+    "@vue/runtime-core": "^3.5.0",
+    "pinia": "^4.0.3",
+    "vue-router": "4"
+  },
+  "scripts": {
+    "test": "bun test"
+  }
+}
