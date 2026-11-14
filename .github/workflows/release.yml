@@ -1,7 +1,8 @@
 name: Release
 
 # A `v<version>` tag publishes the prebuilt hosts `sk build` and `sk dev` download (cli/host-fetch.ts):
-# every published variant and the dev host for Windows x64 and macOS arm64, gzipped, plus hosts.json.
+# every published variant and the dev host for Windows x64, macOS arm64 and Linux x64, gzipped, plus
+# hosts.json; then @skathi-native/runtime and @skathi-native/cli at that version to npm.
 # The Windows hosts with devtools embed the inspector's native AOT image (scripts/aot/prepare-inspector.ts).
 
 on:
@@ -126,9 +127,96 @@ jobs:
           path: release-hosts/
           if-no-files-found: error
 
+  linux:
+    name: Hosts (Linux x64)
+    # The hosts need the runner's glibc or newer: keep this job on the oldest distribution supported.
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 180
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../skathi-release-target
+      # redjs's C++23 needs std::expected: clang 19+ with libstdc++ 12+.
+      CC: clang-20
+      CXX: clang++-20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+          submodules: recursive
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Install the pinned Rust toolchain
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install 1.97.1 --profile minimal --target x86_64-unknown-linux-gnu
+      - name: Install the build packages
+        # The headers the -sys crates probe through pkg-config and the compiler. Installed when missing,
+        # through apt and passwordless sudo; clang-20 from apt.llvm.org where the distribution has none.
+        run: |
+          . /etc/os-release
+          echo "$PRETTY_NAME, glibc $(ldd --version | head -n1 | awk '{print $NF}'): the oldest glibc the hosts run on"
+          packages=(pkg-config build-essential cmake binutils libasound2-dev libfontconfig-dev libfreetype-dev
+            libglib2.0-dev libssl-dev libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev
+            libxkbcommon-x11-dev libzstd-dev)
+          check() {
+            missing=()
+            for tool in clang-20 clang++-20 pkg-config cmake; do
+              command -v "$tool" >/dev/null || missing+=("$tool")
+            done
+            for lib in alsa fontconfig freetype2 glib-2.0 openssl wayland-client x11 x11-xcb xcb xkbcommon xkbcommon-x11 libzstd; do
+              pkg-config --exists "$lib" 2>/dev/null || missing+=("$lib")
+            done
+          }
+          check
+          (( ${#missing[@]} )) || exit 0
+          echo "Missing: ${missing[*]}"
+          if ! command -v apt-get >/dev/null || ! sudo -n true 2>/dev/null; then
+            echo "::error::The runner lacks ${missing[*]} and cannot install them (apt-get with passwordless sudo). Install clang-20 ${packages[*]}."
+            exit 1
+          fi
+          export DEBIAN_FRONTEND=noninteractive
+          sudo -n apt-get update -q
+          if ! apt-cache show clang-20 >/dev/null 2>&1; then
+            sudo -n apt-get install -y -q --no-install-recommends wget gnupg lsb-release software-properties-common ca-certificates
+            wget -qO "$RUNNER_TEMP/llvm.sh" https://apt.llvm.org/llvm.sh
+            sudo -n bash "$RUNNER_TEMP/llvm.sh" 20
+          fi
+          stdcxx=$(apt-cache search --names-only '^libstdc\+\+-1[2-9]-dev$' | awk '{print $1}' | sort -V | tail -n1)
+          sudo -n apt-get install -y -q --no-install-recommends clang-20 ${stdcxx:+"$stdcxx"} "${packages[@]}"
+          check
+          if (( ${#missing[@]} )); then
+            echo "::error::Still missing after the install: ${missing[*]}"
+            exit 1
+          fi
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+      - name: Check the tag
+        run: bun scripts/release-hosts.ts --check-tag "$TAG"
+      - name: Cache verified native inputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/redjs/prebuilt
+            vendor/redjs/redjs/cpp/mimalloc
+          key: linux-x64-native-inputs-${{ hashFiles('vendor/redjs/pins.txt') }}
+      - name: Fetch and verify native dependencies
+        run: bash vendor/redjs/setup.sh --platform linux-amd64
+      - name: Build and pack the hosts
+        run: bun scripts/release-hosts.ts --out release-hosts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hosts-linux
+          path: release-hosts/
+          if-no-files-found: error
+
   publish:
     name: Publish
-    needs: [windows, macos]
+    needs: [windows, macos, linux]
     runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: write
@@ -153,8 +241,80 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
+          prerelease: ${{ contains(env.TAG, '-') }}
           generate_release_notes: true
           overwrite_files: true
           files: |
             release-hosts/*.gz
             release-hosts/hosts.json
+
+  npm-pack:
+    name: Pack npm packages
+    needs: [publish]
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+      - name: Check the tag
+        run: bun scripts/release-hosts.ts --check-tag "$TAG"
+      # bun pm pack writes workspace:* as the real version; the licenses live at the repo root.
+      - name: Pack
+        run: |
+          mkdir -p npm-tarballs
+          for pkg in runtime cli; do
+            cp LICENSE-MIT LICENSE-APACHE "packages/$pkg/"
+            (cd "packages/$pkg" && bun pm pack --destination ../../npm-tarballs)
+          done
+          ls -l npm-tarballs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarballs
+          path: npm-tarballs/
+
+  # npm trusted publishing (OIDC, signed provenance) works only on GitHub-hosted runners, so this one
+  # job runs there; it builds nothing and only uploads the tarballs packed above.
+  npm-publish:
+    name: Publish to npm
+    needs: [npm-pack]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-tarballs
+          path: npm-tarballs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          registry-url: https://registry.npmjs.org
+      - name: npm with trusted publishing
+        run: npm install -g npm@11.5.1
+      # The runtime first: the published CLI depends on it at exactly this version. A re-run skips
+      # what is already published. A prerelease (0.1.0-beta.1) goes to its own dist-tag, not latest.
+      - name: Publish
+        run: |
+          version="${TAG#v}"
+          dist_tag=latest
+          if [[ "$version" == *-* ]]; then
+            pre="${version#*-}"
+            dist_tag="${pre%%.*}"
+          fi
+          for pkg in runtime cli; do
+            name="@skathi-native/$pkg"
+            if [[ "$(npm view "$name@$version" version 2>/dev/null)" == "$version" ]]; then
+              echo "$name@$version is already published"
+              continue
+            fi
+            npm publish "npm-tarballs/skathi-native-$pkg-$version.tgz" --access public --provenance --tag "$dist_tag"
+          done

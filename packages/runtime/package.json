@@ -1,14 +1,17 @@
 {
   "name": "@skathi-native/runtime",
-  "private": true,
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/argon-chat/skathi.git",
     "directory": "packages/runtime"
   },
-  "version": "0.0.1",
+  "version": "0.1.0-beta.1",
   "type": "module",
+  "files": [
+    "src",
+    "env.d.ts"
+  ],
   "description": "The Skathi runtime: the Vue renderer, DOM surface and module loader an app runs on.",
   "exports": {
     ".": "./src/runtime.ts",
@@ -22,5 +25,8 @@
   },
   "scripts": {
     "test": "bun test"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

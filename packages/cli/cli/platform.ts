@@ -1,23 +1,24 @@
 // The OS a `sk build` packages for, and where that OS keeps its hosts. Everything that differs per
 // OS by NAME (cargo target triple, host file name, cache folder) is one row of this table, so
 // host.ts and dev.ts ask for a path instead of spelling one. What a platform produces is
-// build-app.ts's `PACKAGERS`. Any OS that is not macOS keeps the Windows row.
+// build-app.ts's `PACKAGERS`. Any OS that is neither macOS nor Linux keeps the Windows row.
 
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { ConfigError } from "./config";
 
-export type Platform = "windows" | "macos";
-export const PLATFORMS: readonly Platform[] = ["windows", "macos"];
+export type Platform = "windows" | "macos" | "linux";
+export const PLATFORMS: readonly Platform[] = ["windows", "macos", "linux"];
 
 export function currentPlatform(): Platform {
-  return process.platform === "darwin" ? "macos" : "windows";
+  return process.platform === "darwin" ? "macos" : process.platform === "linux" ? "linux" : "windows";
 }
 
 export function parsePlatform(value: unknown): Platform {
   const v = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (v === "windows" || v === "win32" || v === "win") return "windows";
   if (v === "macos" || v === "darwin" || v === "mac") return "macos";
+  if (v === "linux") return "linux";
   throw new ConfigError(`--platform ${JSON.stringify(value)}: expected one of ${PLATFORMS.join(", ")}`);
 }
 
@@ -41,6 +42,17 @@ export function hostsFor(platform: Platform, arch: string = process.arch): Platf
       // .cargo/config.toml pins the Windows target, and a project config wins over the user's.
       cargoTarget: ["--target", triple],
       cacheRoot: () => join(homedir(), "Library", "Caches", "skathi", "hosts"),
+    };
+  }
+  if (platform === "linux") {
+    const triple = arch === "arm64" ? "aarch64-unknown-linux-gnu" : "x86_64-unknown-linux-gnu";
+    return {
+      platform,
+      triple,
+      exeFile: "sk-app",
+      cachedFile: "sk-host",
+      cargoTarget: ["--target", triple],
+      cacheRoot: () => join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "skathi", "hosts"),
     };
   }
   return {

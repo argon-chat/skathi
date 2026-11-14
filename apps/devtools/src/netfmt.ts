@@ -10,7 +10,7 @@ const B64_INDEX: Int16Array = (() => {
 })();
 
 /**
- * Not `atob`: the inspector's declared surface (apps/env.d.ts) has no `atob`, and a binary string
+ * Not `atob`: the inspector's declared surface (the runtime's env.d.ts) has no `atob`, and a binary string
  * would then need a second pass to become bytes anyway.
  */
 export function fromBase64(text: string): Uint8Array {

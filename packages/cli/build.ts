@@ -52,6 +52,16 @@ import {
   transformSource,
   viteShapesPlugin,
 } from "./vitecompat";
+import { colorEnabled, paint } from "./cli/term";
+
+const C = paint(colorEnabled(process.stdout));
+const styled = (rest: (text: string) => string) => (text: string) => {
+  const m = /^(\[[^\]]*\]) ([\s\S]*)$/.exec(text);
+  return m ? `${C.dim(m[1]!)} ${rest(m[2]!)}` : rest(text);
+};
+const say = (text: string) => console.log(styled((t) => t)(text));
+const warn = (text: string) => console.warn(styled(C.yellow)(text));
+const fail = (text: string, ...rest: unknown[]) => console.error(styled(C.red)(text), ...rest);
 
 const { defines: cliDefines, rest: argv } = takeDefineArgs(process.argv.slice(2));
 const positional = argv.filter((a) => !a.startsWith("--"));
@@ -79,7 +89,7 @@ function readSkConfig(): Record<string, unknown> | undefined {
     return cfg && typeof cfg === "object" ? cfg : undefined;
   } catch (e) {
     // A malformed config must not fail the build, but must not be silently ignored either.
-    console.error(`[build] ${SK_CONFIG_PATH}: ${e}`);
+    fail(`[build] ${SK_CONFIG_PATH}: ${e}`);
     return undefined;
   }
 }
@@ -130,7 +140,7 @@ function readLaunchConfig(): Record<string, unknown> | undefined {
   }
   for (const key of ["id", "singleInstance", "raiseOnSecondInstance", "protocols"]) {
     if (cfg[key] !== undefined && out[key] === undefined) {
-      console.error(`[build] ${SK_CONFIG_PATH}: "${key}" has the wrong type and was ignored`);
+      fail(`[build] ${SK_CONFIG_PATH}: "${key}" has the wrong type and was ignored`);
     }
   }
   return Object.keys(out).length ? out : undefined;
@@ -260,7 +270,7 @@ const TS_AVAILABLE = (() => {
 {
   const aliases = readSkConfig()?.aliases;
   if (aliases && typeof aliases === "object" && Object.keys(aliases).length) {
-    console.warn(
+    warn(
       `[build] sk.config.json "aliases" (${Object.keys(aliases).join(", ")}) are applied by sk build only; this dev build resolves them from node_modules`,
     );
   }
@@ -269,7 +279,7 @@ const TS_AVAILABLE = (() => {
 // The app's defines: sk.config.json "define" plus `--define K=V`, with Vite semantics.
 const APP_DEFINES = appDefines(readSkConfig()?.define, cliDefines, SK_CONFIG_PATH);
 if (APP_DEFINES.errors.length) {
-  for (const e of APP_DEFINES.errors) console.error(`[build] ${e}`);
+  for (const e of APP_DEFINES.errors) fail(`[build] ${e}`);
   process.exit(1);
 }
 
@@ -334,9 +344,7 @@ function ensureDirs() {
 async function buildVendor() {
   for (const [name, dep] of FRAMEWORK) {
     if (dep.warning) devAdvise(dep.warning);
-    console.log(
-      `${stamp()} ${name} ${dep.version ?? "unknown"}: the ${dep.from === "app" ? "app's" : "runtime's"} copy`,
-    );
+    say(`${stamp()} ${name} ${dep.version ?? "unknown"}: the ${dep.from === "app" ? "app's" : "runtime's"} copy`);
   }
   const result = await Bun.build({
     entrypoints: [LOADER_ENTRY],
@@ -383,7 +391,7 @@ const devAdvised = new Set<string>();
 function devAdvise(m: string) {
   if (devAdvised.has(m)) return;
   devAdvised.add(m);
-  console.warn(`${stamp()} advisory: ${m}`);
+  warn(`${stamp()} advisory: ${m}`);
 }
 
 async function viteCss(text: string, from: string, label: string): Promise<string> {
@@ -392,7 +400,7 @@ async function viteCss(text: string, from: string, label: string): Promise<strin
   try {
     return await generateTailwind(TW_CONFIG, { text: css, from });
   } catch (e) {
-    console.error(`${stamp()} ${label}: tailwind pass failed — emitting the source verbatim`, e);
+    fail(`${stamp()} ${label}: tailwind pass failed — emitting the source verbatim`, e);
     return css;
   }
 }
@@ -582,9 +590,7 @@ function depsOf(id: string, body: string, ids: Set<string>, skip: Set<string>): 
     const base = normalizeId((dir ? dir + "/" : "") + spec);
     const hit = CANDIDATE_EXTS.map((ext) => base + ext).find((cand) => ids.has(cand));
     if (!hit) {
-      console.warn(
-        `${stamp()} ${id}: import ${J(spec)} resolves to no built module — ` + `require() will throw at runtime`,
-      );
+      warn(`${stamp()} ${id}: import ${J(spec)} resolves to no built module — ` + `require() will throw at runtime`);
       continue;
     }
     if (hit !== id && !found.includes(hit)) found.push(hit);
@@ -636,7 +642,7 @@ function cssImportsOf(absPath: string, body: string, cssSpecs: Set<string>): str
       if (!abs.endsWith(".css")) continue;
     }
     if (!existsSync(abs)) {
-      console.warn(`${stamp()} ${toId(absPath)}: import ${J(spec)} names no file — skipped`);
+      warn(`${stamp()} ${toId(absPath)}: import ${J(spec)} names no file — skipped`);
       continue;
     }
     cssSpecs.add(spec);
@@ -660,14 +666,12 @@ async function buildCssModule(id: string): Promise<boolean> {
     const t0 = Date.now();
     try {
       css = await generateTailwind(TW_CONFIG, { text: css, from: abs });
-      console.log(
-        `${stamp()} css ${id}: ${(css.length / 1024).toFixed(1)} KB through tailwind in ${Date.now() - t0} ms`,
-      );
+      say(`${stamp()} css ${id}: ${(css.length / 1024).toFixed(1)} KB through tailwind in ${Date.now() - t0} ms`);
     } catch (e) {
-      console.error(`${stamp()} css ${id}: tailwind pass failed — emitting the source verbatim`, e);
+      fail(`${stamp()} css ${id}: tailwind pass failed — emitting the source verbatim`, e);
     }
   } else {
-    console.log(`${stamp()} css ${id}: ${(css.length / 1024).toFixed(1)} KB`);
+    say(`${stamp()} css ${id}: ${(css.length / 1024).toFixed(1)} KB`);
   }
   css = pruneVendorPrefixes(css);
   moduleDeps.set(id, []);
@@ -743,7 +747,7 @@ async function buildModule(absPath: string, ids: Set<string>) {
   const interop = devEsmInterop(tagModuleNamespaces(await result.outputs[0]!.text()).code);
   const body = interop.code;
   if (interop.unresolved) {
-    console.warn(
+    warn(
       `${stamp()} ${id}: ${interop.unresolved} import(…) with a computed specifier — the dev loader resolves ` +
         `only a string literal, so that promise rejects (prod.ts bundles it)`,
     );
@@ -857,7 +861,7 @@ async function buildNpmModule(id: string): Promise<boolean> {
     if (!npmFailed.has(id)) {
       npmFailed.add(id);
       const alias = !/^(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(?:\/|$)/i.test(spec);
-      console.warn(
+      warn(
         `${stamp()} cannot resolve ${J(spec)} from ${toId(from)} — ` +
           `require(${J(id)}) will throw at runtime ` +
           (alias
@@ -887,9 +891,7 @@ async function buildNpmModule(id: string): Promise<boolean> {
     }).catch(() => null);
     if (result?.success) break;
     if (i + 1 < candidates.length) {
-      console.warn(
-        `${stamp()} npm ${id}: ${toId(candidate)} did not build — retrying with ` + `${toId(candidates[i + 1]!)}`,
-      );
+      warn(`${stamp()} npm ${id}: ${toId(candidate)} did not build — retrying with ` + `${toId(candidates[i + 1]!)}`);
     }
   }
   if (!result?.success) {
@@ -941,7 +943,7 @@ async function syncNpmModules(): Promise<string[]> {
       const t0 = Date.now();
       if (!(await buildNpmModule(id))) continue;
       added.push(id);
-      console.log(`${stamp()} npm ${id}: ${((npmBuilt.get(id) ?? 0) / 1024) | 0} KB in ${Date.now() - t0} ms`);
+      say(`${stamp()} npm ${id}: ${((npmBuilt.get(id) ?? 0) / 1024) | 0} KB in ${Date.now() - t0} ms`);
     }
   }
 
@@ -980,7 +982,7 @@ async function buildTailwind(): Promise<boolean> {
       `}, ${J(TW_HASH)});`,
     ].join("\n"),
   );
-  console.log(`${stamp()} tailwind: ${(css.length / 1024).toFixed(1)} KB of utilities in ${Date.now() - t0} ms`);
+  say(`${stamp()} tailwind: ${(css.length / 1024).toFixed(1)} KB of utilities in ${Date.now() - t0} ms`);
   return true;
 }
 
@@ -1111,7 +1113,7 @@ async function fullBuild(reason: string) {
   writeManifest(files);
   writeChanges([]);
   const npmBytes = Array.from(npmBuilt.values()).reduce((a, b) => a + b, 0);
-  console.log(
+  say(
     `${stamp()} full build (${reason}): vendor ${(bytes / 1024) | 0} KB + ${files.length} modules` +
       (npmBuilt.size ? ` + ${npmBuilt.size} npm (${(npmBytes / 1024) | 0} KB)` : "") +
       (TW_CONFIG ? ` + tailwind (${toId(TW_CONFIG)})` : "") +
@@ -1119,7 +1121,7 @@ async function fullBuild(reason: string) {
       (TS_AVAILABLE ? " [ts type resolution on]" : "") +
       ` in ${Date.now() - t0} ms`,
   );
-  for (const [what, n] of SHAPE_NOTES) console.log(`${stamp()} ${what}: ${n}`);
+  for (const [what, n] of SHAPE_NOTES) say(`${stamp()} ${what}: ${n}`);
   SHAPE_NOTES.clear(); // an incremental pass rebuilds one file: its counts would mislead
 }
 
@@ -1141,7 +1143,7 @@ async function incrementalBuild() {
     try {
       await buildModule(abs, ids);
     } catch (e) {
-      console.error(`${stamp()} ${String(e)}`);
+      fail(`${stamp()} ${String(e)}`);
       return; // leave dist untouched; the app keeps running the last good build
     }
     changed.push({ id: toId(abs), kind });
@@ -1173,7 +1175,10 @@ async function incrementalBuild() {
   rev++;
   writeManifest(files);
   writeChanges(changed);
-  console.log(`${stamp()} rev ${rev}: ` + (changed.map((c) => `${c.kind} ${c.id}`).join(", ") || "module set changed"));
+  say(
+    `${stamp()} ${C.green(`rev ${rev}`)}: ` +
+      (changed.map((c) => `${c.kind} ${c.id}`).join(", ") || "module set changed"),
+  );
 }
 
 await fullBuild("startup").catch((e) => {
@@ -1197,7 +1202,7 @@ if (WATCH) {
         if (full) await fullBuild("runtime source changed");
         else await incrementalBuild();
       } catch (e) {
-        console.error(`${stamp()} ${String(e)}`);
+        fail(`${stamp()} ${String(e)}`);
       }
     }, 60);
   };
@@ -1215,7 +1220,7 @@ if (WATCH) {
     });
     watched.push(TW_CONFIG);
   }
-  console.log(`watching ${watched.join(", ")} ...`);
+  console.log(`${C.green("watching")} ${C.dim(watched.join(", "))}`);
   // SK_OWNER_PID: exit once the process that started the watcher is gone, however it ended (the
   // host does the same, crates/sk-app/src/owner.rs).
   const owner = Number(process.env.SK_OWNER_PID);

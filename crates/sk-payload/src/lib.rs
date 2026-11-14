@@ -20,6 +20,21 @@ pub const FORMAT: u16 = 1;
 pub const HEADER_SIZE: usize = 64;
 pub const TOC_ENTRY_SIZE: usize = 32;
 
+pub const TRAILER_MAGIC: &[u8; 8] = b"SKPKTAIL";
+pub const TRAILER_SIZE: usize = 24;
+
+/// The payload `sk build` appended to a Linux executable: `exe | zero pad | SKPK | u64 offset | u64 len | "SKPKTAIL"`,
+/// with the offset page-aligned so the data region lands on a page boundary in a mapping of the whole file.
+pub fn appended(file: &[u8]) -> Option<Range<usize>> {
+    let tail = file.len().checked_sub(TRAILER_SIZE)?;
+    if &file[tail + 16..] != TRAILER_MAGIC {
+        return None;
+    }
+    let offset = usize::try_from(u64_at(file, tail)).ok()?;
+    let len = usize::try_from(u64_at(file, tail + 8)).ok()?;
+    (offset.checked_add(len)? == tail).then_some(offset..tail)
+}
+
 /// Entry kinds. Only [`kind::ASSET`] is reachable from app code, so `fetch("sk/app.js")` is a miss.
 pub mod kind {
     pub const META: u16 = 1;
@@ -566,6 +581,31 @@ mod tests {
         assert_eq!(content_key_checked("a.txt:stream"), Err(KeyError::Invalid));
         assert_eq!(content_key_checked("a%00b"), Err(KeyError::Invalid));
         assert_eq!(content_key_checked("%ff.txt"), Err(KeyError::Invalid));
+    }
+
+    #[test]
+    fn a_payload_appended_to_an_executable_is_found_by_its_trailer() {
+        let mut file = b"\x7fELF".to_vec();
+        file.resize(4096, 0);
+        file.extend_from_slice(GOLDEN);
+        file.extend_from_slice(&4096u64.to_le_bytes());
+        file.extend_from_slice(&(GOLDEN.len() as u64).to_le_bytes());
+        file.extend_from_slice(TRAILER_MAGIC);
+        let range = appended(&file).expect("the trailer names the payload");
+        assert_eq!(range, 4096..4096 + GOLDEN.len());
+        assert_eq!(Payload::parse(&file[range]).unwrap().asset_count(), 4);
+        // The same trailer the TS writer's test pins (packages/cli/test/elf.test.ts).
+        assert_eq!(
+            file[file.len() - TRAILER_SIZE..],
+            *b"\x00\x10\x00\x00\x00\x00\x00\x00\x04\x04\x00\x00\x00\x00\x00\x00SKPKTAIL"
+        );
+
+        assert_eq!(appended(b"\x7fELF bare host"), None);
+        assert_eq!(appended(&file[..file.len() - 1]), None);
+        let mut short = file.clone();
+        short.insert(0, 0);
+        assert_eq!(appended(&short), None);
+        assert_eq!(appended(TRAILER_MAGIC), None);
     }
 
     #[test]

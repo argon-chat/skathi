@@ -1,0 +1,10 @@
+{
+  "name": "check-badconfig",
+  "version": "1.0.0",
+  "check": {
+    "allow": {
+      "SK9999": ["some-package"],
+      "SK2001": "not-a-list"
+    }
+  }
+}

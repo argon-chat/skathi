@@ -114,7 +114,7 @@ export async function fetchHost(options: FetchOptions): Promise<{ path: string; 
   const hostAsset = asset(entry.file);
   if (!hostAsset) throw new HostError(`release ${tag} lists ${entry.file} in ${MANIFEST_NAME} but does not carry it`);
 
-  log(`[sk] downloading ${entry.file} (${(hostAsset.size / 1048576).toFixed(1)} MB) from github.com/${repo} ${tag}`);
+  log(`downloading ${entry.file} (${(hostAsset.size / 1048576).toFixed(1)} MB) from github.com/${repo} ${tag}`);
   const bytes = Bun.gunzipSync(await download(hostAsset, headers));
   if (bytes.length !== entry.size || sha256(bytes) !== entry.sha256) {
     throw new HostError(`${entry.file} does not match the sha256 in ${MANIFEST_NAME}; nothing was cached`);
@@ -128,7 +128,7 @@ export async function fetchHost(options: FetchOptions): Promise<{ path: string; 
   rmSync(dest, { force: true });
   renameSync(tmp, dest);
   writeFileSync(join(dirname(dest), "host.json"), JSON.stringify(entry.info, null, 2) + "\n");
-  log(`[sk] cached ${options.variant} host ${version} → ${dest}`);
+  log(`cached ${options.variant} host ${version} → ${dest}`);
   return { path: dest, info: entry.info };
 }
 

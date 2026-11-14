@@ -1,0 +1,66 @@
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import ts from "typescript";
+import { analyze, type AnalyzeInput } from "../check";
+import { parseCheckConfig } from "../check/config";
+import type { CheckReport, Diagnostic } from "../check/schema";
+
+export const FIXTURES = join(import.meta.dir, "fixtures");
+export const RULES = join(FIXTURES, "check-rules");
+export const UNIT = join(FIXTURES, "check-unit");
+export const SK = resolve(import.meta.dir, "../cli/sk.ts");
+
+export const RULES_MODULES = [
+  "src/main.ts",
+  "src/builtins.ts",
+  "src/clean.ts",
+  "src/lazy.ts",
+  "src/dynamic.ts",
+  "src/legacy/timers.ts",
+  "src/typing.ts",
+  "src/plain.js",
+  "src/App.vue",
+  "node_modules/patchy/index.js",
+  "node_modules/loose-types/index.js",
+  "node_modules/evil-eval/index.js",
+  "node_modules/shorthand-pkg/index.js",
+  "node_modules/hidden-types/index.js",
+].map((m) => join(RULES, m));
+
+export function analyzeRules(options: Partial<AnalyzeInput> = {}): CheckReport {
+  const config = JSON.parse(readFileSync(join(RULES, "sk.config.json"), "utf8")) as { check: unknown };
+  return analyze({
+    typescript: ts,
+    root: RULES,
+    entry: join(RULES, "src/main.ts"),
+    modules: RULES_MODULES,
+    allow: parseCheckConfig(config.check).allow,
+    toolVersion: "test",
+    ...options,
+  });
+}
+
+export function analyzeUnit(files: string[]): CheckReport {
+  return analyze({
+    typescript: ts,
+    root: UNIT,
+    entry: join(UNIT, "fine.ts"),
+    modules: files.map((f) => join(UNIT, f)),
+    toolVersion: "test",
+  });
+}
+
+/** Diagnostics of one file as `line:code` (one-based lines). */
+export const lines = (report: CheckReport, file: string) =>
+  report.diagnostics.filter((d) => d.file === file).map((d) => `${d.range.start.line + 1}:${d.code}`);
+
+export const only = (report: CheckReport, code: string): Diagnostic[] =>
+  report.diagnostics.filter((d) => d.code === code);
+
+export function sk(args: string[]): { status: number; stdout: string; stderr: string } {
+  const r = Bun.spawnSync([process.execPath, SK, ...args], {
+    cwd: join(import.meta.dir, ".."),
+    env: { ...process.env, NO_COLOR: "1" },
+  });
+  return { status: r.exitCode ?? -1, stdout: r.stdout.toString(), stderr: r.stderr.toString() };
+}

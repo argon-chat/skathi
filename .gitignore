@@ -5,6 +5,7 @@ crates/sk-thorvg-sys/tools/regen-bindings/Cargo.lock
 
 # JS
 node_modules/
+!packages/cli/test/fixtures/check-*/node_modules/
 dist/
 
 # Research clones (read-only study material; reports are tracked)

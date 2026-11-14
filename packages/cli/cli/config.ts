@@ -215,6 +215,7 @@ const TOP_LEVEL = new Set([
   "packs",
   "define",
   "aliases",
+  "check",
   "windows",
   "macos",
   "id",
@@ -604,7 +605,7 @@ export function loadAppConfig(
         'no icon: set sk.config.json "macos.icon" (or "windows.icon") to a square .png or an .icns — the app gets the generic macOS icon',
       );
     }
-  } else if (!windows.icon) {
+  } else if (options.platform !== "linux" && !windows.icon) {
     warnings.push(
       'no icon: set sk.config.json "windows.icon" to an .ico or a square .png — the exe gets the default Windows icon',
     );
@@ -634,7 +635,7 @@ export function loadAppConfig(
   };
 }
 
-const PLATFORM_NAMES: readonly Platform[] = ["windows", "macos"];
+const PLATFORM_NAMES: readonly Platform[] = ["windows", "macos", "linux"];
 
 function readPlatforms(v: unknown): Platform[] | null {
   if (v === undefined) return null;

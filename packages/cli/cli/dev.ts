@@ -11,6 +11,7 @@ import { loadAppConfig } from "./config";
 import { cachedHost, checkHost, DEV_HOST, HostError, hostInfo, PKG_DIR, REPO_ROOT, CLI_VERSION } from "./host";
 import { fetchHost } from "./host-fetch";
 import { currentPlatform, hostsFor, repoHostExe } from "./platform";
+import { colorEnabled, paint, progressFor } from "./term";
 
 export async function devHost(
   options: { exe?: string | undefined; log?: (line: string) => void } = {},
@@ -50,7 +51,10 @@ export async function devHost(
 
 export async function dev(target: string, options: { exe?: string | undefined } = {}): Promise<number> {
   const config = loadAppConfig(target);
-  const exe = await devHost(options);
+  const c = paint(colorEnabled(process.stdout));
+  const progress = progressFor(process.stderr);
+  progress.step("dev host");
+  const exe = await devHost({ ...options, log: (line) => progress.detail(line) }).finally(() => progress.end());
   const dist = join(config.appRoot, "dist", ".sk-dev");
   mkdirSync(dist, { recursive: true });
   const watcher = spawn(process.execPath, [join(PKG_DIR, "build.ts"), config.entry, dist, "--watch"], {
@@ -64,7 +68,7 @@ export async function dev(target: string, options: { exe?: string | undefined } 
     if (Date.now() > deadline) throw new Error("bun build.ts produced no manifest within 2 minutes");
     await Bun.sleep(100);
   }
-  console.log(`[sk] dev: ${config.name} — dist ${dist}, host ${exe}`);
+  console.log(`${c.green("▶")} ${c.bold(config.name)} ${c.dim(`dist ${dist}, host ${exe}`)}`);
   const host = spawn(exe, [], {
     stdio: "inherit",
     // SK_OWNER_PID: the host dies with this process however it ends (crates/sk-app/src/owner.rs).

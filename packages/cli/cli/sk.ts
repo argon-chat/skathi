@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// sk — create, develop and package a Skathi app as a Windows exe or a macOS .app, without a
+// sk — create, develop and package a Skathi app for Windows, macOS or Linux, without a
 // Rust toolchain.
 
 import { spawn } from "node:child_process";
@@ -17,10 +17,11 @@ import {
 import { dev } from "./dev";
 import { addHost, buildHost, CLI_VERSION, DEV_HOST, HostError, hostInfo, resolveHost } from "./host";
 import { fetchHost } from "./host-fetch";
+import { colorEnabled, colorFlag, lineProgress, logTo, paint, progressFor } from "./term";
 import { createCommand } from "./create";
 import { currentPlatform, parsePlatform } from "./platform";
 
-const USAGE = `sk ${CLI_VERSION} — package a Skathi app as a Windows exe or a macOS .app
+const USAGE = `sk ${CLI_VERSION} — package a Skathi app for Windows, macOS or Linux
 
 usage
   sk dev     [app] [--exe <h>] the dev loop: build.ts --watch + a dev host (hot reload); the
@@ -42,6 +43,16 @@ usage
   sk host build [selection | --variant both]
                                maintainers, in a checkout: cargo-build the bare host(s)
                                (no selection: standard and no-devtools)
+  sk check   [app] [options]   what in the bundle (app code and node_modules) breaks or slows
+                               down under native AOT, and how well it is typed
+    --format pretty|json       json: one versioned report on stdout (schema skathi.check)
+    --deny-warnings            warnings fail the check too
+    --no-deps                  the app's own code only
+    --config <path>            external config, as for sk build
+    --color | --no-color       colours on or off (default: a terminal, unless NO_COLOR is set)
+                               exit 0: clean; 1: errors; 2: usage, config or internal failure
+                               sk.config.json "check": { "allow": { "SK2001": ["pkg", "src/legacy/**"] } }
+  sk explain <CODE> | --list   what a check code means and how to fix it
   sk create  [dir] [options]   a new app; in a terminal it asks for what the options leave open
     --name <n>                 the app's name (default: the directory's)
     --os windows,macos         what sk publish packages for (default: this OS)
@@ -68,7 +79,7 @@ build and publish options
                                a host variant by name ("standard" = every part)
   parts: ${OPTIONAL.join(", ")}
   --console                    keep the console subsystem (a console window opens with it)
-  --platform windows|macos     what to package for (default: this OS). Another OS's
+  --platform windows|macos|linux  what to package for (default: this OS). Another OS's
                                build needs --host <its sk-app>, and is not signed
   --sign <identity>            macOS: codesign with this identity, hardened runtime and
                                entitlements ("-" = ad hoc; over sk.config.json macos.sign)
@@ -88,6 +99,9 @@ build and publish options
 
 type Flags = Record<string, string | boolean>;
 const BOOLEAN = new Set([
+  "deny-warnings",
+  "no-deps",
+  "list",
   "console",
   "payload-only",
   "allow-host-mismatch",
@@ -100,6 +114,8 @@ const BOOLEAN = new Set([
   "no-devtools",
   "router",
   "no-router",
+  "color",
+  "no-color",
 ]);
 const REPEATABLE = new Set(["define"]);
 
@@ -176,7 +192,9 @@ async function main(argv: string[]): Promise<number> {
     }
     if (flags.sign !== undefined && flags["no-sign"])
       throw new ConfigError("--sign and --no-sign contradict each other");
+    const progress = progressFor(process.stderr, colorEnabled(process.stderr, colorFlag(flags)));
     const result = await buildApp({
+      progress,
       target: args[0] ?? ".",
       configPath: typeof flags.config === "string" ? flags.config : undefined,
       out: typeof flags.out === "string" ? flags.out : undefined,
@@ -190,7 +208,7 @@ async function main(argv: string[]): Promise<number> {
       platform,
       sign: flags["no-sign"] ? false : typeof flags.sign === "string" ? flags.sign.trim() : undefined,
       mode: command === "publish" ? "release" : "debug",
-    });
+    }).finally(() => progress.end());
     if (flags.json) {
       const s = result.stamp;
       console.log(
@@ -234,13 +252,17 @@ async function main(argv: string[]): Promise<number> {
         }),
       );
     } else {
-      console.log(summary(result));
+      console.log(summary(result, colorEnabled(process.stdout, colorFlag(flags))));
     }
     if (command !== "run" || !result.exe) return 0;
     // `run`: inherited handles, so a GUI-subsystem exe's stderr still lands in this terminal.
     const child = spawn(result.exe, rest, { stdio: "inherit" });
     return await new Promise<number>((done) => child.on("exit", (c) => done(c ?? 0)));
   }
+
+  if (command === "check") return await (await import("../check/command")).checkCommand(args[0], flags, CLI_VERSION);
+  if (command === "explain")
+    return (await import("../check/command")).explainCommand(args[0], flags.list === true, flags);
 
   if (command === "dev") {
     return await dev(args[0] ?? ".", { exe: typeof flags.exe === "string" ? flags.exe : undefined });
@@ -265,21 +287,34 @@ async function main(argv: string[]): Promise<number> {
     }
     if (sub === "add") {
       if (!arg) throw new HostError("sk host add <exe>");
-      addHost(arg, console.log);
+      addHost(arg, (line) => console.log(line));
       return 0;
     }
+    const color = colorEnabled(process.stderr, colorFlag(flags));
     if (sub === "fetch") {
       const named = flags.variant === "both" || flags.variant === DEV_HOST ? flags.variant : variantOf(flags);
       const variants = named === undefined ? [...VARIANTS, DEV_HOST] : named === "both" ? VARIANTS : [named];
-      for (const variant of variants) await fetchHost({ variant, log: console.log });
+      const progress = progressFor(process.stderr, color);
+      try {
+        for (const variant of variants) {
+          progress.step(`${variant} host`);
+          await fetchHost({ variant, log: (line) => progress.detail(line) });
+        }
+      } finally {
+        progress.end();
+      }
       return 0;
     }
     if (sub === "build") {
+      // cargo draws its own progress on the terminal: plain lines around it.
+      const lines = lineProgress((line) => console.error(line), color);
       const v = flags.variant === "both" ? "both" : (variantOf(flags) ?? "both");
       for (const variant of v === "both" ? VARIANTS : [v]) {
-        const built = buildHost(variant);
-        console.log(`[sk] ${variant}: ${built.path} (cargo ${(built.ms / 1000).toFixed(0)} s)`);
+        lines.step(`${variant} host`);
+        const built = buildHost(variant, logTo(lines));
+        lines.detail(built.path);
       }
+      lines.end();
       return 0;
     }
     throw new HostError("sk host info|path|fetch|add|build");
@@ -299,7 +334,9 @@ async function main(argv: string[]): Promise<number> {
     });
   }
 
-  console.error(`unknown command ${JSON.stringify(command)}\n\n${USAGE}`);
+  console.error(
+    `${paint(colorEnabled(process.stderr)).red("error")}: unknown command ${JSON.stringify(command)}\n\n${USAGE}`,
+  );
   return 1;
 }
 
@@ -308,7 +345,9 @@ if (import.meta.main) {
     (code) => process.exit(code),
     (e) => {
       const known = e instanceof ConfigError || e instanceof HostError;
-      console.error(known ? `sk: ${e.message}` : e);
+      const red = paint(colorEnabled(process.stderr)).red;
+      if (known || (e instanceof Error && !process.env.SK_DEBUG)) console.error(`${red("error")}: ${e.message}`);
+      else console.error(e);
       process.exit(1);
     },
   );

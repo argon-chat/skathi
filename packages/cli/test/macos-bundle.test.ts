@@ -558,7 +558,8 @@ describe("hosts per platform", () => {
     expect(parsePlatform("darwin")).toBe("macos");
     expect(parsePlatform("MacOS")).toBe("macos");
     expect(parsePlatform("win32")).toBe("windows");
-    expect(() => parsePlatform("linux")).toThrow(ConfigError);
+    expect(parsePlatform(" Linux ")).toBe("linux");
+    expect(() => parsePlatform("freebsd")).toThrow(ConfigError);
   });
 
   const other = currentPlatform() === "macos" ? "windows" : "macos";

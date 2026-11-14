@@ -70,7 +70,7 @@ function retrying<T>(what: string, f: () => T, log: (l: string) => void, attempt
       return f();
     } catch (e) {
       if (!isSharing(e) || i >= attempts) throw e;
-      log(`[sk] ${what}: the file is busy (${(e as Error).message}) — retrying in ${delay} ms`);
+      log(`${what}: the file is busy (${(e as Error).message}) — retrying in ${delay} ms`);
       sleep(delay);
       delay = Math.min(delay * 2, 2000);
     }
@@ -105,7 +105,7 @@ export function stamp(options: StampOptions): StampResult {
   let result: StampResult | null = null;
   try {
     strippedSignature = stripSignature(partial);
-    if (strippedSignature) log("[sk] removed the host's certificate table — sign the stamped exe instead");
+    if (strippedSignature) log("removed the host's certificate table — sign the stamped exe instead");
 
     const before = readPe(partial);
     let skew = 0;
@@ -173,7 +173,7 @@ export function stamp(options: StampOptions): StampResult {
     const dataAligned = (entry.rva + header.dataOff) % PAGE === 0;
     if (!dataAligned) {
       log(
-        `[sk] warning: the payload's data region did not land on a page boundary (rva 0x${entry.rva.toString(16)}, ` +
+        `warning: the payload's data region did not land on a page boundary (rva 0x${entry.rva.toString(16)}, ` +
           `data_off ${header.dataOff}) — the app runs exactly the same; only a future bytecode cache cares`,
       );
     }

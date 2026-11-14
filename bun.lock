@@ -12,7 +12,7 @@
     },
     "packages/cli": {
       "name": "@skathi-native/cli",
-      "version": "0.0.1",
+      "version": "0.1.0-beta.1",
       "bin": {
         "sk": "./cli/sk.ts",
       },
@@ -22,15 +22,15 @@
         "@vue/compiler-sfc": "^3.5.41",
         "postcss": "^8.4.31",
         "tailwindcss": "3.4",
+        "typescript": "5",
       },
       "devDependencies": {
         "@modelcontextprotocol/sdk": "^1.30.0",
-        "typescript": "5",
       },
     },
     "packages/runtime": {
       "name": "@skathi-native/runtime",
-      "version": "0.0.1",
+      "version": "0.1.0-beta.1",
       "dependencies": {
         "@vue/runtime-core": "^3.5.0",
         "pinia": "^4.0.3",
@@ -39,7 +39,7 @@
     },
     "packages/test": {
       "name": "@skathi-native/test",
-      "version": "0.0.1",
+      "version": "0.1.0-beta.1",
     },
   },
   "packages": {

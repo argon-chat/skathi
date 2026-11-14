@@ -5,7 +5,7 @@
 // Resolution, first hit wins: 1. `--host <exe>` or `SK_HOST`; 2. in-repo
 // target/x86_64-pc-windows-msvc/release/sk-app.exe, when that is a prod host of this variant and
 // version; 3. the local cache (`sk host add <exe>`, `sk host build`, or a download from this
-// version's GitHub release: host-fetch.ts); 4. an error naming them. Paths for macOS are in platform.ts.
+// version's GitHub release: host-fetch.ts); 4. an error naming them. Paths per OS are in platform.ts.
 //
 // A host for another OS cannot be run to ask what it is: only `--host` / `SK_HOST` names one, its
 // format is sniffed, and what it is comes from a `host.json` beside it or is taken on trust, with a warning.
@@ -30,6 +30,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { cargoFeatureArgs, OPTIONAL, partsLeftOut, type Variant } from "./config";
+import { appendedPayloadOf, elfMachineOf } from "./elf";
 import { bundlePayloadPath, machOArchs } from "./macos-bundle";
 import { readPe, RT } from "./pe";
 import { currentPlatform, hostsFor, repoHostExe, type Platform } from "./platform";
@@ -66,10 +67,11 @@ export interface ResolvedHost {
 
 export class HostError extends Error {}
 
-/** True when `exe` already carries an app (asking it for host info would launch it): a stamped resource on Windows, `Contents/Resources/app.skpk` on macOS. */
+/** True when `exe` already carries an app (asking it for host info would launch it): a stamped resource on Windows, `Contents/Resources/app.skpk` on macOS, an appended payload on Linux. */
 export function isStamped(exe: string): boolean {
   const bundled = bundlePayloadPath(exe);
   if (bundled && existsSync(bundled)) return true;
+  if (appendedPayloadOf(exe)) return true;
   try {
     return readPe(exe).resources.some((r) => r.type === RT.RCDATA && r.name === PAYLOAD_NAME);
   } catch {
@@ -78,7 +80,13 @@ export function isStamped(exe: string): boolean {
 }
 
 function formatProblem(exe: string, platform: Platform): string | null {
-  if (platform !== "macos") return null;
+  if (platform === "windows") return null;
+  if (platform === "linux") {
+    const machine = elfMachineOf(exe);
+    if (!machine) return `${exe} is not an ELF executable — a Linux build needs a Linux sk-app`;
+    if (machine !== "x86_64" && machine !== "aarch64") return `${exe} is an ELF for ${machine}, not x86_64 or aarch64`;
+    return null;
+  }
   const archs = machOArchs(exe);
   if (!archs) return `${exe} is not a Mach-O executable — a macOS bundle needs a macOS sk-app`;
   if (!archs.some((a) => a === "arm64" || a === "x86_64"))
@@ -225,7 +233,7 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
     if (cross) {
       if (!existsSync(exe)) throw new HostError(`${exe} does not exist`);
       if (isStamped(exe))
-        throw new HostError(`${exe} is a packaged app, not a bare host (its bundle already carries an app.skpk)`);
+        throw new HostError(`${exe} is a packaged app, not a bare host (it already carries an app payload)`);
       const { info, unverified } = crossHostInfo(exe, options.variant, platform);
       const problem = checkHost(exe, info, options.variant, allow);
       if (problem) throw new HostError(problem);
@@ -253,7 +261,7 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
       if (!problem) {
         if (statSync(REPO_RELEASE_EXE).mtimeMs < newestHostSource()) {
           log(
-            `[sk] warning: ${REPO_RELEASE_EXE} is older than the sources it is built from — ` +
+            `warning: ${REPO_RELEASE_EXE} is older than the sources it is built from — ` +
               "`bun packages/cli/cli/sk.ts host build` rebuilds it",
           );
         }
@@ -306,7 +314,7 @@ export function addHost(exe: string, log: (line: string) => void = () => {}): { 
   rmSync(dest, { force: true });
   renameSync(tmp, dest);
   writeFileSync(join(dirname(dest), "host.json"), JSON.stringify(info, null, 2) + "\n");
-  log(`[sk] cached ${info.variant} host ${info.skathi} (${info.profile}) → ${dest}`);
+  log(`cached ${info.variant} host ${info.skathi} (${info.profile}) → ${dest}`);
   return { path: dest, info };
 }
 
@@ -345,7 +353,7 @@ export function cargoBuildHost(
     throw new HostError("sk host build runs from a Skathi checkout; elsewhere, use sk host fetch or sk host add <exe>");
   }
   const args = hostCargoArgs(variant, extras.features);
-  log(`[sk] cargo ${args.join(" ")}`);
+  log(`cargo ${args.join(" ")}`);
   const t0 = performance.now();
   const r = spawnSync(cargo(), args, {
     cwd: REPO_ROOT,

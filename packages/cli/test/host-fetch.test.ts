@@ -46,7 +46,7 @@ const server = Bun.serve({
 });
 
 const saved: Record<string, string | undefined> = {};
-const ENV = ["SK_HOST_API", "SK_HOST_REPO", "GH_TOKEN", "GITHUB_TOKEN", "LOCALAPPDATA"];
+const ENV = ["SK_HOST_API", "SK_HOST_REPO", "GH_TOKEN", "GITHUB_TOKEN", "LOCALAPPDATA", "XDG_CACHE_HOME"];
 let cache: string;
 
 beforeAll(() => {
@@ -66,6 +66,7 @@ afterAll(() => server.stop(true));
 function publish(manifest: Partial<HostManifest> = {}, bytes: Uint8Array<ArrayBuffer> = host) {
   cache = mkdtempSync(join(tmpdir(), "sk-host-fetch-"));
   process.env.LOCALAPPDATA = cache;
+  process.env.XDG_CACHE_HOME = cache;
   process.env.SK_HOST_API = server.url.href;
   process.env.SK_HOST_REPO = "o/r";
   delete process.env.GH_TOKEN;
@@ -108,6 +109,31 @@ test("a variant the release does not carry names the ones it does", async () => 
   await expect(fetchHost({ variant: "no-audio", version: VERSION, platform: "windows", arch: "x64" })).rejects.toThrow(
     /no no-audio host for windows-x64 \(it has: standard\)/,
   );
+});
+
+test("a Linux host is named without .exe and cached under the XDG cache", async () => {
+  const elf = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1]);
+  const linuxFile = hostAssetName("linux", "x64", "standard");
+  expect(linuxFile).toBe("sk-host-linux-x64-standard.gz");
+  expect(file).toBe("sk-host-windows-x64-standard.exe.gz");
+  publish({
+    hosts: [
+      {
+        platform: "linux",
+        arch: "x64",
+        variant: "standard",
+        file: linuxFile,
+        sha256: sha256(elf),
+        size: elf.length,
+        info,
+      },
+    ],
+  });
+  served[linuxFile] = Bun.gzipSync(elf);
+  const { path } = await fetchHost({ variant: "standard", version: VERSION, platform: "linux", arch: "x64" });
+  expect(path).toBe(join(cache, "skathi", "hosts", VERSION, "standard", "sk-host"));
+  expect(new Uint8Array(readFileSync(path))).toEqual(elf);
+  await expect(fetchStandard()).rejects.toThrow(/no standard host for windows-x64$/);
 });
 
 test("a missing release says a private repository needs a token", async () => {

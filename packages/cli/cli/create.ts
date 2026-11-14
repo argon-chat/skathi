@@ -9,11 +9,11 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import * as p from "@clack/prompts";
-import { RUNTIME_SRC_DIR, runtimeRequire } from "../runtime-path";
+import { RUNTIME_DIR, RUNTIME_SRC_DIR, runtimeRequire } from "../runtime-path";
 import { ConfigError, OPTIONAL, parseParts, sanitizeExeName, type Part } from "./config";
-import { PKG_DIR } from "./host";
 import { encodePng } from "./icon";
 import { currentPlatform, parsePlatform, type Platform } from "./platform";
+import { colorEnabled, paint } from "./term";
 
 export const PACKAGE_MANAGERS = ["bun", "npm", "pnpm", "yarn"] as const;
 export type PackageManager = (typeof PACKAGE_MANAGERS)[number];
@@ -229,7 +229,6 @@ export function create(target: string, options: CreateOptions = {}): string[] {
   const rel = (to: string) => relative(dir, to).split(sep).join("/");
   const runtime = rel(RUNTIME_SRC_DIR);
   const pkg = (name: string) => rel(dirname(runtimeRequire.resolve(`${name}/package.json`)));
-  const apps = rel(join(PKG_DIR, "..", "..", "apps"));
 
   const files: Record<string, string | Uint8Array> = {
     "package.json": json({
@@ -278,7 +277,7 @@ export function create(target: string, options: CreateOptions = {}): string[] {
         `${runtime}/engine.d.ts`,
         `${runtime}/protocol.d.ts`,
         `${runtime}/indexeddb.d.ts`,
-        `${apps}/env.d.ts`,
+        `${rel(RUNTIME_DIR)}/env.d.ts`,
         "src/**/*.ts",
         "src/**/*.vue",
       ],
@@ -363,6 +362,7 @@ export async function createCommand(target: string | undefined, flags: CreateFla
         options: [
           { value: "windows", label: "Windows" },
           { value: "macos", label: "macOS" },
+          { value: "linux", label: "Linux" },
         ],
         initialValues: [currentPlatform()],
         required: true,
@@ -404,7 +404,8 @@ export async function createCommand(target: string | undefined, flags: CreateFla
     p.note(next, "Next");
     p.outro(`${options.name ?? basename(resolve(dir))} is ready`);
   } else {
-    console.log(`[sk] created ${resolve(dir)}\n  next: ${next.replace(/\n/g, " && ")}`);
+    const c = paint(colorEnabled(process.stdout));
+    console.log(`${c.green("✓")} created ${c.cyan(resolve(dir))}\n  ${c.dim("next:")} ${next.replace(/\n/g, " && ")}`);
   }
   return 0;
 }

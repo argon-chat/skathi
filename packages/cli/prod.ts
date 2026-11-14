@@ -1,5 +1,6 @@
 // Production builder: one self-contained IIFE, no loader, no HMR.
 // Usage: bun prod.ts [app-entry.js] [out-file] [--config <path>] [--app-root <path>] [--define=KEY=VALUE ...]
+//        [--graph <path>]: write the bundle's module graph as JSON (for `sk check`) instead of the bundle
 //
 //   dist/app.prod.js   IIFE: runtime + every app module + every SFC <style>, minified, __DEV__ = false.
 //                      `sk build` (cli/build-app.ts) packs it into the SKPK payload.
@@ -18,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 
 import { asciiOnly, checkAscii, nonAsciiCount } from "./ascii";
 import { AotInputs, aotEngineIdentity } from "./aot-inputs";
+import type { ModuleGraph } from "./check/graph";
 import { pruneVendorPrefixes } from "./css-prefixes";
 import {
   RUNTIME_DIR,
@@ -50,17 +52,19 @@ const { defines: cliDefines, rest: argv } = takeDefineArgs(process.argv.slice(2)
 let configOverride: string | undefined;
 let appRootOverride: string | undefined;
 let aotInputsDir: string | undefined;
+let graphOut: string | undefined;
 let minify = true;
 const positional: string[] = [];
 for (let i = 0; i < argv.length; i++) {
   const arg = argv[i]!;
   const flag = arg.split("=", 1)[0];
   if (arg === "--no-minify") minify = false;
-  else if (flag === "--config" || flag === "--app-root" || flag === "--aot-inputs") {
+  else if (flag === "--config" || flag === "--app-root" || flag === "--aot-inputs" || flag === "--graph") {
     const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : argv[++i];
     if (!value?.trim() || value.startsWith("--")) throw new Error(`${flag} needs a path`);
     if (flag === "--config") configOverride = resolve(value);
     else if (flag === "--aot-inputs") aotInputsDir = resolve(value);
+    else if (flag === "--graph") graphOut = resolve(value);
     else appRootOverride = resolve(value);
   } else if (!arg.startsWith("--")) positional.push(arg);
 }
@@ -412,11 +416,17 @@ const AOT_INPUTS = aotInputsDir
     })
   : null;
 
+/** `--graph`: every .js/.ts/.vue file the build loaded, by absolute path. */
+const GRAPH_LOADED = new Set<string>();
 const SHAPE_NOTES = new Map<string, number>();
 const SHAPES = {
-  sourceLoaded: AOT_INPUTS
-    ? (file: string, source: string, transformed: string) => AOT_INPUTS.source(file, source, transformed)
-    : undefined,
+  sourceLoaded:
+    AOT_INPUTS || graphOut
+      ? (file: string, source: string, transformed: string) => {
+          GRAPH_LOADED.add(file);
+          AOT_INPUTS?.source(file, source, transformed);
+        }
+      : undefined,
   docRoot: SK_CONFIG_DIR,
   wsRoot: WS_ROOT,
   svgDefault: svgDefaultOf(APP_PKG),
@@ -452,6 +462,7 @@ const vuePlugin = {
     }));
     build.onLoad({ filter: /\.vue$/ }, async (args: Bun.OnLoadArgs) => {
       const source = await Bun.file(args.path).text();
+      if (graphOut) GRAPH_LOADED.add(args.path);
       return compileVue(args.path, source);
     });
   },
@@ -502,6 +513,61 @@ function asciiBundle(code: string): string {
     );
   }
   return r.code;
+}
+
+async function writeGraph(out: string) {
+  const result = await Bun.build({
+    entrypoints: [HTML_PRELUDE ? ENTRY_ID : ENTRY_ABS],
+    format: "iife",
+    target: "browser",
+    define: DEFINES,
+    plugins: [viteShapesPlugin(SHAPES), vuePlugin, entryPlugin],
+    minify: minify ? { whitespace: true, identifiers: true, syntax: true } : false,
+    sourcemap: "none",
+    metafile: true,
+    throw: false,
+  });
+  // Metafile keys are relative, to a base that varies between runs ("node_modules/…", "../../C:/…"):
+  // match them against the absolute paths the plugins loaded.
+  const byName = new Map<string, { key: string; path: string }[]>();
+  for (const path of GRAPH_LOADED) {
+    const key = resolve(path).split(sep).join("/").toLowerCase();
+    const name = key.slice(key.lastIndexOf("/") + 1);
+    byName.set(name, [...(byName.get(name) ?? []), { key, path: resolve(path) }]);
+  }
+  const modules = new Set<string>();
+  for (const output of Object.values(result.metafile?.outputs ?? {})) {
+    for (const [key, input] of Object.entries(output.inputs)) {
+      if (input.bytesInOutput <= 0) continue;
+      const tail = `/${key.replace(/^(?:\.\.\/)+/, "").replace(/^[A-Za-z]:\//, "")}`.toLowerCase();
+      for (const loaded of byName.get(tail.slice(tail.lastIndexOf("/") + 1)) ?? [])
+        if (loaded.key.endsWith(tail)) modules.add(loaded.path);
+    }
+  }
+  const graph: ModuleGraph = {
+    schema: "skathi.module-graph",
+    version: 1,
+    entry: ENTRY_ABS,
+    appRoot: SK_CONFIG_DIR,
+    aliases: {
+      vue: RUNTIME_ENTRY,
+      "@skathi-native/runtime": RUNTIME_ENTRY,
+      ...Object.fromEntries(APP_ALIASES),
+      ...Object.fromEntries([...FRAMEWORK].map(([name, dependency]) => [name, dependency.path])),
+    },
+    declarations: [...new Bun.Glob("*.d.ts").scanSync({ cwd: RUNTIME_SRC_DIR, absolute: true })],
+    modules: [...modules].sort(),
+    errors: result.logs
+      .filter((log) => log.level === "error")
+      .map((log) => ({
+        message: log.message,
+        file: log.position?.file ? resolve(log.position.file) : null,
+        line: log.position && log.position.line > 0 ? log.position.line : null,
+        column: log.position && log.position.column >= 0 ? log.position.column : null,
+        specifier: log.name === "ResolveMessage" ? log.specifier : null,
+      })),
+  };
+  writeAtomic(out, JSON.stringify(graph) + "\n");
 }
 
 async function build() {
@@ -629,7 +695,7 @@ async function build() {
   );
 }
 
-await build().catch((e) => {
+await (graphOut ? writeGraph(graphOut) : build()).catch((e) => {
   console.error(e);
   process.exit(1);
 });

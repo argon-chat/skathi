@@ -7,9 +7,9 @@
 // `.skpk` is the exact blob that was stamped, so `SK_PAYLOAD=dist/.sk/app.skpk <host>` runs it
 // without a re-stamp. On macOS (or `--platform macos` with `--host <mac sk-app>`) the last step is
 // macos-bundle.ts: the host is copied into `<exeName>.app`, the SKPK goes in Contents/Resources,
-// and the bundle is signed (ad hoc unless an identity is given). `PACKAGERS` holds the two.
+// and the bundle is signed (ad hoc unless an identity is given). On Linux the SKPK is appended to a
+// copy of the host ELF (elf.ts). `PACKAGERS` holds the three.
 
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
@@ -23,6 +23,7 @@ import {
   type PackConfig,
   type Variant,
 } from "./config";
+import { stampElf, type ElfStampResult } from "./elf";
 import { CLI_VERSION, PKG_DIR, type ResolvedHost } from "./host";
 import { resolveOrFetchHost } from "./host-fetch";
 import { iconImagesFrom } from "./icon";
@@ -39,6 +40,7 @@ import {
 } from "./macos-bundle";
 import { currentPlatform, type Platform } from "./platform";
 import { stamp, type StampResult } from "./stamp";
+import { lineProgress, logTo, paint, progressFor, seconds, type Progress } from "./term";
 import { buildVersionInfo, numericVersion } from "./versioninfo";
 import { FORMAT, KIND, NAMES, readHeader, skewFor, writeSkpk, type SkpkInput } from "./skpk";
 
@@ -69,7 +71,9 @@ export interface BuildOptions {
    * the config's selection into <app>/dist, as the API always did.
    */
   mode?: "debug" | "release" | undefined;
+  /** Plain lines instead of the default progress on stderr. */
   log?: (line: string) => void;
+  progress?: Progress;
 }
 
 /** The variant a mode builds when neither `--variant` nor a selection flag names one. */
@@ -112,6 +116,7 @@ export interface BuildResult {
   host: ResolvedHost | null;
   stamp: StampResult | null;
   bundle: MacBundle | null;
+  elf: ElfStampResult | null;
   assets: AssetFile[];
   bundleBytes: number;
   payloadBytes: number;
@@ -203,6 +208,7 @@ interface Packaged {
   payload: Uint8Array;
   stamp: StampResult | null;
   bundle: MacBundle | null;
+  elf?: ElfStampResult;
 }
 
 function stampExe({ config, host, inputs, packs, outDir, options, log }: PackageInput): Packaged {
@@ -314,10 +320,36 @@ function macBundle({ config, host, inputs, packs, outDir, work, options, warning
   };
 }
 
-const PACKAGERS: Record<Platform, (input: PackageInput) => Packaged> = { windows: stampExe, macos: macBundle };
+function linuxExe({ config, host, inputs, packs, outDir }: PackageInput): Packaged {
+  for (const p of packs) writeFileSync(join(outDir, p.file), p.blob);
+  const elf = stampElf({
+    host: host.exe,
+    out: join(outDir, config.exeName),
+    payload: (skew) => writeSkpk(inputs, { skew }),
+  });
+  return { exe: elf.out, payload: elf.payload, stamp: null, bundle: null, elf };
+}
+
+const PACKAGERS: Record<Platform, (input: PackageInput) => Packaged> = {
+  windows: stampExe,
+  macos: macBundle,
+  linux: linuxExe,
+};
 
 export async function buildApp(options: BuildOptions): Promise<BuildResult> {
-  const log = options.log ?? console.log;
+  const progress = options.progress ?? (options.log ? lineProgress(options.log, false) : progressFor(process.stderr));
+  try {
+    return await build(options, progress);
+  } finally {
+    if (!options.progress) progress.end();
+  }
+}
+
+const kib = (n: number) => `${(n / 1024).toFixed(0)} KiB`;
+const mib = (n: number) => `${(n / 2 ** 20).toFixed(1)} MiB`;
+
+async function build(options: BuildOptions, progress: Progress): Promise<BuildResult> {
+  const log = logTo(progress);
   const t0 = performance.now();
   const platform = options.platform ?? currentPlatform();
   const config = loadAppConfig(options.target, { configPath: options.configPath, platform });
@@ -330,6 +362,7 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   mkdirSync(work, { recursive: true });
 
   // The host first: a missing or mismatched host should fail before a bundle is spent on it.
+  if (!options.payloadOnly) progress.step("host");
   const host = options.payloadOnly
     ? null
     : await resolveOrFetchHost({
@@ -340,9 +373,7 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
         log,
       });
   if (host) {
-    log(
-      `[sk] host: ${host.exe} (${host.source}; ${host.info.variant}, Skathi ${host.info.skathi}, ${host.info.profile})`,
-    );
+    progress.detail(`${host.info.variant} · Skathi ${host.info.skathi} ${host.info.profile} · ${host.source}`);
     if (host.unverified) warnings.push(host.unverified);
     if (host.substitute) warnings.push(host.substitute);
   }
@@ -361,18 +392,33 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     ...(options.aotInputs ? [`--aot-inputs=${join(work, "aot-inputs")}`] : []),
     ...(options.mode === "debug" ? ["--no-minify"] : []),
   ];
-  const r = spawnSync(process.execPath, [PROD_TS, config.entry, jsOut, ...pathArgs, ...defineArgs], {
+  progress.step("bundle");
+  const child = Bun.spawn([process.execPath, PROD_TS, config.entry, jsOut, ...pathArgs, ...defineArgs], {
     cwd: PKG_DIR,
-    encoding: "utf8",
+    stdout: "pipe",
+    stderr: "pipe",
   });
-  if (r.status !== 0 || !existsSync(jsOut)) {
-    throw new Error(`bun prod.ts failed for ${config.entry}\n${r.stdout ?? ""}${r.stderr ?? ""}`);
+  const [stdout, stderr, status] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  if (status !== 0 || !existsSync(jsOut)) {
+    throw new Error(`the production bundle of ${config.entry} failed\n${stdout}${stderr}`.trimEnd());
   }
-  for (const line of `${r.stdout ?? ""}${r.stderr ?? ""}`.trim().split(/\r?\n/)) if (line) log(`[sk] ${line}`);
+  for (const line of `${stdout}${stderr}`.trim().split(/\r?\n/)) {
+    if (!line) continue;
+    const text = line.replace(/^\[prod\] /, "");
+    const made = /^prod build: (.*?) -> /.exec(text);
+    if (made) progress.detail(made[1]!);
+    else if (text.startsWith("advisory: ")) progress.warn(text.slice("advisory: ".length));
+    else progress.info(text);
+  }
   const script = readFileSync(jsOut);
   const windowJson = readFileSync(join(work, "window.json"));
   const msBundle = performance.now() - tb;
 
+  progress.step("assets");
   const ta = performance.now();
   const collected = collectAssets(config.appRoot, config.assets, config.assetsDeclared, config.publicDir);
   warnings.push(...collected.warnings);
@@ -429,9 +475,11 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   ];
   const skpk = join(work, "app.skpk");
   for (const p of packs) writeFileSync(join(work, p.file), p.blob);
+  progress.detail(`${collected.files.length} files · ${kib(collected.totalBytes)}`);
 
   let packaged: Packaged | null = null;
   const ts = performance.now();
+  progress.step(options.payloadOnly || !host ? "payload" : platform === "macos" ? "app bundle" : "exe");
   if (options.payloadOnly || !host) {
     // An app split into packs ships app.skpk as a file mapped from offset 0: page-align its data.
     const unskewed = writeSkpk(inputs);
@@ -442,8 +490,13 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     writeFileSync(skpk, packaged.payload);
   }
   const msStamp = performance.now() - ts;
+  progress.detail(mib(packaged?.payload.length ?? readFileSync(skpk).length));
+  if (packaged?.bundle) progress.detail(mib(packaged.bundle.bytes));
+  else if (packaged?.stamp) progress.detail(mib(packaged.stamp.bytes));
+  else if (packaged?.elf) progress.detail(mib(packaged.elf.bytes));
+  progress.end();
 
-  for (const w of warnings) log(`[sk] warning: ${w}`);
+  for (const w of warnings) progress.warn(w);
   return {
     config,
     platform,
@@ -453,6 +506,7 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     host,
     stamp: packaged?.stamp ?? null,
     bundle: packaged?.bundle ?? null,
+    elf: packaged?.elf ?? null,
     assets: collected.files,
     bundleBytes: script.length,
     aotInputs: options.aotInputs ? join(work, "aot-inputs", "manifest.json") : null,
@@ -473,36 +527,61 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   };
 }
 
-const mib = (n: number) => `${(n / 2 ** 20).toFixed(1)} MiB`;
-const kib = (n: number) => `${(n / 1024).toFixed(0)} KiB`;
-
-export function summary(r: BuildResult): string {
-  const lines: string[] = [];
+export function summary(r: BuildResult, color = false): string {
+  const p = paint(color);
   const c = r.config;
   const storage =
-    r.platform === "macos" ? `~/Library/Application Support/${c.name}/storage` : `%LOCALAPPDATA%\\${c.name}\\storage`;
-  lines.push(`${c.productName} ${c.version} — name "${c.name}" (storage: ${storage})`);
-  lines.push(`  bundle   ${kib(r.bundleBytes)} in ${r.ms.bundle} ms`);
-  lines.push(`  assets   ${r.assets.length} file(s), ${kib(r.assets.reduce((n, a) => n + a.size, 0))}`);
-  lines.push(`  payload  ${kib(r.payloadBytes)} → ${r.skpk}`);
-  for (const p of r.packs) lines.push(`  pack     ${p.name}: ${p.assets} asset(s), ${kib(p.bytes)} → ${p.path}`);
+    r.platform === "macos"
+      ? `~/Library/Application Support/${c.name}/storage`
+      : r.platform === "linux"
+        ? `~/.local/share/${c.name}/storage`
+        : `%LOCALAPPDATA%\\${c.name}\\storage`;
+  const row = (label: string, text: string) => `  ${p.dim(label.padEnd(8))} ${text}`;
+  const bad = (ok: boolean, yes: string, no: string) => (ok ? yes : p.yellow(no));
+  const lines = [`${p.bold(`${c.productName} ${c.version}`)} ${p.dim(`name "${c.name}", storage ${storage}`)}`];
   if (r.stamp && r.exe) {
     const s = r.stamp;
     lines.push(
-      `  exe      ${r.exe} — ${mib(s.bytes)}, ${r.variant} host, subsystem ${s.subsystem === 2 ? "GUI" : "console"}, ` +
-        `${s.iconCount ? `${s.iconCount} icon` : "no icon"}, ${s.passes} pass(es), data ${s.dataAligned ? "page-aligned" : "NOT aligned"}`,
+      row("exe", p.cyan(r.exe)),
+      row(
+        "",
+        `${mib(s.bytes)}, ${r.variant} host, subsystem ${s.subsystem === 2 ? "GUI" : "console"}, ` +
+          `${s.iconCount ? `${s.iconCount} icon` : "no icon"}, ` +
+          bad(s.dataAligned, "data page-aligned", "data NOT aligned"),
+      ),
     );
-    lines.push(`  stamp    ${s.ms.total} ms (copy ${s.ms.copy}, resources ${s.ms.resources}, verify ${s.ms.verify})`);
+  }
+  if (r.elf) {
+    const e = r.elf;
+    lines.push(
+      row("exe", p.cyan(e.out)),
+      row(
+        "",
+        `${mib(e.bytes)}, ${r.variant} host (${e.machine}), payload appended at ${e.payloadOffset}, ` +
+          bad(e.dataAligned, "data page-aligned", "data NOT aligned"),
+      ),
+    );
   }
   if (r.bundle) {
     const b = r.bundle;
     const icon = b.iconSizes.length ? `icon ${b.iconSizes.join("/")} px` : "no icon";
     const signed =
-      b.signed === "-" ? "signed ad hoc" : b.signed ? `signed as ${JSON.stringify(b.signed)}` : "NOT signed";
-    lines.push(`  app      ${b.app} — ${mib(b.bytes)}, ${r.variant} host, ${b.bundleId}, ${icon}, ${signed}`);
-    if (b.signNote) lines.push(`           ${b.signNote}`);
-    lines.push(`  package  ${b.ms.total} ms (copy ${b.ms.copy})`);
+      b.signed === "-" ? "signed ad hoc" : b.signed ? `signed as ${JSON.stringify(b.signed)}` : p.yellow("NOT signed");
+    lines.push(
+      row("app", p.cyan(b.app)),
+      row("", `${mib(b.bytes)}, ${r.variant} host, ${b.bundleId}, ${icon}, ${signed}`),
+    );
+    if (b.signNote) lines.push(row("", p.dim(b.signNote)));
   }
-  lines.push(`  total    ${r.ms.total} ms`);
+  lines.push(
+    row(
+      "bundle",
+      `${kib(r.bundleBytes)} script, ${r.assets.length} asset(s) ${kib(r.assets.reduce((n, a) => n + a.size, 0))}`,
+    ),
+    row("payload", `${kib(r.payloadBytes)} ${p.dim(r.skpk)}`),
+  );
+  for (const pk of r.packs)
+    lines.push(row("pack", `${pk.name}: ${pk.assets} asset(s), ${kib(pk.bytes)} ${p.dim(pk.path)}`));
+  lines.push(`${p.green("done")} in ${seconds(r.ms.total)}`);
   return lines.join("\n");
 }

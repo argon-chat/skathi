@@ -8,7 +8,7 @@
 //   bun scripts/release-hosts.ts --merge <dir>
 //     once, over every OS's output: <dir>/hosts.json
 //   bun scripts/release-hosts.ts --check-tag <tag>
-//     fails unless <tag> is v<package.json version>
+//     fails unless <tag> is v<version> of every npm package the release publishes
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -24,6 +24,9 @@ import {
 import { CLI_VERSION, cargoBuildHost, checkHost, DEV_HOST, hostInfo } from "../packages/cli/cli/host";
 import { currentPlatform } from "../packages/cli/cli/platform";
 
+const ROOT = resolve(import.meta.dir, "..");
+const PUBLISHED = ["packages/runtime", "packages/cli"];
+
 const { values } = parseArgs({
   options: {
     out: { type: "string" },
@@ -35,8 +38,14 @@ const { values } = parseArgs({
 });
 
 if (values["check-tag"] !== undefined) {
-  if (values["check-tag"] !== `v${CLI_VERSION}`) {
-    console.error(`tag ${values["check-tag"]} is not v${CLI_VERSION}, the version in packages/cli/package.json`);
+  const tag = values["check-tag"];
+  const wrong = PUBLISHED.map((dir) => {
+    const version = (JSON.parse(readFileSync(join(ROOT, dir, "package.json"), "utf8")) as { version?: unknown })
+      .version;
+    return `v${String(version)}` === tag ? null : `${dir}/package.json is ${String(version)}`;
+  }).filter((w) => w !== null);
+  if (wrong.length) {
+    console.error(`tag ${tag} does not match the published packages: ${wrong.join(", ")}`);
     process.exit(1);
   }
   process.exit(0);

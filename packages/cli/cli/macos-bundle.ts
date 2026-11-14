@@ -440,7 +440,7 @@ export function signBundle(
 ): { ms: number } {
   const t0 = performance.now();
   const args = codesignArgs(app, identity, entitlementsPath);
-  log(`[sk] codesign ${args.join(" ")}`);
+  log(`codesign ${args.join(" ")}`);
   const r = spawnSync(codesign, args, { encoding: "utf8" });
   if (r.status !== 0) {
     throw new Error(`codesign failed (exit ${r.status ?? r.error?.message}):\n${(r.stderr ?? "").trim()}`);

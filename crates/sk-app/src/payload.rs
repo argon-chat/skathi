@@ -2,7 +2,8 @@
 //!
 //! A `--features prod` build is a bare host: the engine and no app. `sk build` copies it and stamps
 //! one SKPK blob (bundle, window config, identity, assets) into the copy as the `RT_RCDATA` resource
-//! `SKPAYLOAD`, so an app author ships their own exe without a Rust toolchain.
+//! `SKPAYLOAD` (Linux: appended to the ELF, [`sk_payload::appended`]), so an app author ships their
+//! own exe without a Rust toolchain.
 //!
 //! **File** (`SK_PAYLOAD=app.skpk`) is read through a read-only file mapping whose owner and handle
 //! live with the parsed payload, so nothing is copied or faulted in unused. Windows denies in-place
@@ -333,7 +334,21 @@ fn embedded() -> Option<&'static [u8]> {
     })
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+fn embedded() -> Option<&'static [u8]> {
+    use crate::mapped_file::MappedFile;
+    static EXE: OnceLock<Option<(MappedFile, std::ops::Range<usize>)>> = OnceLock::new();
+    EXE.get_or_init(|| {
+        // The running image, even after an update replaced the file at its path.
+        let exe = MappedFile::open(std::path::Path::new("/proc/self/exe")).ok()?;
+        let range = sk_payload::appended(exe.as_bytes())?;
+        Some((exe, range))
+    })
+    .as_ref()
+    .map(|(exe, range)| &exe.as_bytes()[range.clone()])
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn embedded() -> Option<&'static [u8]> {
     None
 }
