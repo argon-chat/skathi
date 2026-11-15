@@ -193,6 +193,10 @@ pub struct Extras {
     pub scrollbar_color: Option<(gpui::Hsla, gpui::Hsla)>,
     pub overscroll_x: Option<OverscrollBehavior>,
     pub overscroll_y: Option<OverscrollBehavior>,
+    /// `contain` includes paint containment: the box clips its content as `overflow: clip` does.
+    pub contain_paint: Option<bool>,
+    /// The axes `contain` size-contains ([`Extras::CONTAIN_WIDTH`], [`Extras::CONTAIN_HEIGHT`]).
+    pub contain_size: Option<u8>,
     /// Only a qualifier of the refinement's axis, which stays the truth (see `compute_overflow`).
     pub overflow_x: Option<OverflowKeyword>,
     pub overflow_y: Option<OverflowKeyword>,
@@ -599,6 +603,12 @@ impl Extras {
         }
         if other.overscroll_y.is_some() {
             self.overscroll_y = other.overscroll_y;
+        }
+        if other.contain_paint.is_some() {
+            self.contain_paint = other.contain_paint;
+        }
+        if other.contain_size.is_some() {
+            self.contain_size = other.contain_size;
         }
         if other.overflow_x.is_some() {
             self.overflow_x = other.overflow_x;
@@ -3843,6 +3853,51 @@ fn scrollbar_color(
     None
 }
 
+/// `contain` as (paint containment, size-contained axes): layout and style containment change
+/// nothing visible here.
+fn contain(
+    value: &lightningcss::properties::custom::TokenList,
+    diagnostics: &mut Vec<String>,
+) -> Option<(bool, u8)> {
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+    let (mut paint, mut size) = (false, 0);
+    for token in value.0.iter().filter(|t| !t.is_whitespace()) {
+        let TokenOrValue::Token(Token::Ident(id)) = token else {
+            unsupported(diagnostics, "contain");
+            return None;
+        };
+        match id.to_ascii_lowercase().as_str() {
+            "none" | "layout" | "style" => {}
+            "paint" | "content" => paint = true,
+            "strict" => (paint, size) = (true, Extras::CONTAIN_WIDTH | Extras::CONTAIN_HEIGHT),
+            "size" => size = Extras::CONTAIN_WIDTH | Extras::CONTAIN_HEIGHT,
+            "inline-size" => size |= Extras::CONTAIN_WIDTH,
+            _ => {
+                unsupported(diagnostics, "contain");
+                return None;
+            }
+        }
+    }
+    Some((paint, size))
+}
+
+/// Size containment sizes a box as if it were empty, which only shows on an axis the box does not
+/// size itself.
+pub(crate) fn advise_contain_size(r: &StyleRefinement, x: &Extras, diagnostics: &mut Vec<String>) {
+    let axes = x.contain_size.unwrap_or(0);
+    let auto = |l: Option<Length>| matches!(l, None | Some(Length::Auto));
+    if (axes & Extras::CONTAIN_WIDTH != 0 && auto(r.size.width))
+        || (axes & Extras::CONTAIN_HEIGHT != 0 && auto(r.size.height))
+    {
+        warn_once(
+            diagnostics,
+            "`contain: size` (or `strict`, `inline-size`) does not size the box as if it were \
+             empty (v1) — an axis without a width or height is still sized by the content; give \
+             the box an explicit size on that axis",
+        );
+    }
+}
+
 fn overscroll(
     property: &str,
     value: &lightningcss::properties::custom::TokenList,
@@ -5345,7 +5400,18 @@ fn apply_property(
                 )
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
-                if matches!(name.0.as_ref(), "touch-action" | "scroll-behavior") => {}
+                if matches!(
+                    name.0.as_ref(),
+                    "touch-action" | "scroll-behavior" | "will-change"
+                ) => {}
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "contain" =>
+            {
+                if let Some((paint, size)) = contain(&c.value, diagnostics) {
+                    x.contain_paint = Some(paint);
+                    x.contain_size = Some(size);
+                }
+            }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "scrollbar-width" =>
             {
@@ -6254,6 +6320,16 @@ fn overflow_keyword(axis: Option<Overflow>, declared: Option<OverflowKeyword>) -
 
 pub(crate) fn compute_overflow(r: &mut StyleRefinement, x: &mut Extras) {
     use OverflowKeyword as K;
+    if x.contain_paint == Some(true) {
+        if overflow_keyword(r.overflow.x, x.overflow_x) == K::Visible {
+            r.overflow.x = Some(overflow(K::Clip));
+            x.overflow_x = Some(K::Clip);
+        }
+        if overflow_keyword(r.overflow.y, x.overflow_y) == K::Visible {
+            r.overflow.y = Some(overflow(K::Clip));
+            x.overflow_y = Some(K::Clip);
+        }
+    }
     let kx = overflow_keyword(r.overflow.x, x.overflow_x);
     let ky = overflow_keyword(r.overflow.y, x.overflow_y);
     let plain = |k: K| matches!(k, K::Visible | K::Clip);
@@ -6275,6 +6351,9 @@ pub(crate) fn compute_overflow(r: &mut StyleRefinement, x: &mut Extras) {
 }
 
 impl Extras {
+    pub const CONTAIN_WIDTH: u8 = 1;
+    pub const CONTAIN_HEIGHT: u8 = 2;
+
     pub fn overflow_names(&self, base: &StyleRefinement) -> [&'static str; 2] {
         let name = |k: OverflowKeyword| match k {
             OverflowKeyword::Visible => "visible",

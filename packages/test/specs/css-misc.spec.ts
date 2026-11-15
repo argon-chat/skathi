@@ -127,3 +127,14 @@ describe("CSS Color 4/5 functions", () => {
     bunExpect(near(got, [128, 128, 0])).toBe(true);
   });
 });
+
+describe("contain", () => {
+  test("contain: paint clips the content to the box", async () => {
+    const b = await box("#contain");
+    const at = await until(shoot, (at) => red(at(b.x + 20, b.y + 20)));
+    bunExpect(red(at(b.x + 38, b.y + 38))).toBe(true);
+    bunExpect(white(at(b.x + 42, b.y + 20))).toBe(true);
+    bunExpect(white(at(b.x + 20, b.y + 42))).toBe(true);
+    bunExpect(white(at(b.x + 70, b.y + 70))).toBe(true);
+  });
+});

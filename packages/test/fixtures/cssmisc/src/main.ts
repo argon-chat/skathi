@@ -26,7 +26,15 @@ const colours = () => [
   h("div", { id: "c-border", class: "swatch c-border" }),
 ];
 
+const contained = () => [h("div", { id: "contain", class: "contain" }, [h("div", { class: "spill" })])];
+
 createApp({
   render: () =>
-    h("div", { id: "root" }, [ordered("flex", "flexrow"), ordered("grid", "gridrow"), ...positioned(), ...colours()]),
+    h("div", { id: "root" }, [
+      ordered("flex", "flexrow"),
+      ordered("grid", "gridrow"),
+      ...positioned(),
+      ...colours(),
+      ...contained(),
+    ]),
 }).mount();

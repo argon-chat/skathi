@@ -2274,6 +2274,7 @@ impl Engine {
             own.decoration.apply(&mut refinement.text);
         }
         mapper::compute_overflow(&mut base, &mut extras);
+        mapper::advise_contain_size(&base, &extras, diagnostics);
         mapper::compute_overflow(&mut before.0, &mut before.1);
         mapper::compute_overflow(&mut after.0, &mut after.1);
 
@@ -4401,6 +4402,43 @@ mod tests {
         let base = base_with_inline(sheet, "opacity: 0.9 !important; font-size: 10px");
         assert_eq!(base.opacity, Some(0.9));
         assert_eq!(base.text.font_size, Some(gpui::px(20.0).into()));
+    }
+
+    #[test]
+    fn contain_paint_clips_and_the_other_containments_are_hints() {
+        let computed = |css: &str| {
+            let engine = Engine::compile(css);
+            assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+            let mut diags = Vec::new();
+            let states = engine.compute_node(
+                box_node(),
+                None,
+                &Rc::new(Vars::default()),
+                None,
+                &Env::default(),
+                &mut diags,
+            );
+            (states.extras.overflow_names(&states.base), diags)
+        };
+        for value in ["paint", "content", "layout paint style"] {
+            let (overflow, d) = computed(&format!(".box {{ contain: {value} }}"));
+            assert_eq!(overflow, ["clip", "clip"], "{value}");
+            assert!(d.is_empty(), "{d:?}");
+        }
+        let (overflow, _) = computed(".box { contain: paint; overflow-y: auto }");
+        assert_eq!(overflow, ["hidden", "auto"]);
+        let (overflow, _) = computed(".box { contain: paint } .box { contain: none }");
+        assert_eq!(overflow, ["visible", "visible"]);
+        let (overflow, d) =
+            computed(".box { contain: layout style; will-change: transform, opacity }");
+        assert_eq!((overflow, d.len()), (["visible", "visible"], 0));
+
+        let (overflow, d) = computed(".box { contain: strict; width: 10px; height: 10px }");
+        assert_eq!((overflow, d.len()), (["clip", "clip"], 0));
+        let (_, d) = computed(".box { contain: inline-size; width: 10px }");
+        assert!(d.is_empty(), "{d:?}");
+        let (_, d) = computed(".box { contain: size; width: 10px }");
+        assert_eq!(d.len(), 1, "the auto height is still the content's: {d:?}");
     }
 
     fn hovered_opacity(css: &str, style: Option<&str>) -> Option<f32> {
