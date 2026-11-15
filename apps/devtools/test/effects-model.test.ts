@@ -58,6 +58,8 @@ const app = {
       name: "lens",
       backdrop: true,
       backdropRadiusParam: 3,
+      content: true,
+      history: true,
       signature: "lens(<number:center.x>, <number:center.y>, <length:size>?)",
       futureMarker: true,
       params: [
@@ -95,7 +97,7 @@ test("a manifest with fields and kinds this panel does not know still reads", ()
     ["size", true],
     ["pointer", false],
   ]);
-  expect(lens.flags.map((f) => f.key)).toEqual(["backdrop", "futureMarker"]);
+  expect(lens.flags.map((f) => f.key)).toEqual(["backdrop", "content", "history", "futureMarker"]);
   expect(named("noise").flags.map((f) => f.key)).toEqual(["animated"]);
   expect(named("glow").flags.map((f) => f.key)).toEqual(["bleed"]);
 });

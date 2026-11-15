@@ -1,0 +1,13 @@
+{
+  "$comment": "Effects that shade an element's own painting ([SkContent]) and keep state between frames ([SkHistory]).",
+
+  "name": "sk-test-layerfx",
+
+  "window": {
+    "title": "Skathi — layer effects (fixture)",
+    "width": 360,
+    "height": 200,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

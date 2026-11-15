@@ -18,6 +18,8 @@ function lensMove(e: MouseEvent) {
 
 const warm = ref(false);
 
+const burnt = ref(false);
+
 const cells = [6, 9, 14];
 const cell = ref(9);
 const halftone = computed(() => `halftone(${cell.value}px, 0.125, 1, #0b0b12)`);
@@ -94,6 +96,34 @@ const halftone = computed(() => `halftone(${cell.value}px, 0.125, 1, #0b0b12)`);
         <button v-for="c in cells" :key="c" class="btn" :class="{ on: cell === c }" @click="cell = c">{{ c }}px</button>
         <span class="faint">Re-screens the image under the right half as print dots.</span>
       </div>
+    </Card>
+
+    <Card title="Burn away" api="dissolve · [SkContent] · transition">
+      <div class="row">
+        <div class="ticket" :class="{ burnt }">
+          <img class="ticket-photo" src="assets/media/aurora.png" alt="Aurora" />
+          <div class="ticket-text">
+            <strong>Northern lights</strong>
+            <span>Admit one · row 12</span>
+          </div>
+        </div>
+        <button class="btn" @click="burnt = !burnt">{{ burnt ? "Restore" : "Burn" }}</button>
+      </div>
+      <p class="faint">
+        Shades the element's own painting, image and text included. A transition on --shading moves the burning edge
+        across it.
+      </p>
+    </Card>
+
+    <Card title="Pond" api="pond · [SkContent] · [SkHistory] · [SkPointer]">
+      <div class="pond">
+        <img class="pond-photo" src="assets/media/aurora.png" alt="Aurora" />
+        <span class="pond-word">still water</span>
+      </div>
+      <p class="faint">
+        Drag the pointer across. The water is a wave equation the effect steps in its own state from frame to frame, and
+        it bends and lights the element's painting under it.
+      </p>
     </Card>
 
     <Card title="Spotlight" api="spotlight · [SkPointer]">
@@ -241,6 +271,60 @@ const halftone = computed(() => `halftone(${cell.value}px, 0.125, 1, #0b0b12)`);
   right: 0;
   bottom: 0;
   width: 50%;
+}
+
+.ticket {
+  display: flex;
+  width: 360px;
+  height: 120px;
+  border-radius: 14px;
+  background: #1b1b28;
+  overflow: hidden;
+  --shading: dissolve(0, 46px);
+  transition: --shading 1800ms ease-in;
+}
+.ticket.burnt {
+  --shading: dissolve(1, 46px);
+  transition-timing-function: ease-out;
+}
+.ticket-photo {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+}
+.ticket-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 20px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.ticket-text strong {
+  font-size: 18px;
+  color: var(--text);
+}
+
+.pond {
+  position: relative;
+  height: 220px;
+  border-radius: 12px;
+  overflow: hidden;
+  --shading: pond(0.985, 40px);
+}
+.pond-photo {
+  width: 100%;
+  height: 220px;
+  object-fit: cover;
+}
+.pond-word {
+  position: absolute;
+  left: 24px;
+  bottom: 18px;
+  font-size: 44px;
+  font-weight: 800;
+  color: #ffffffe0;
 }
 
 .pad {

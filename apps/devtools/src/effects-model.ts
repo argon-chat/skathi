@@ -116,6 +116,8 @@ const KNOWN_KEYS = new Set([
   "struct",
   "doc",
   "backdrop",
+  "content",
+  "history",
   "signature",
   "params",
   "bindings",
@@ -144,6 +146,24 @@ function readFlags(raw: Record<string, unknown>, params: EffectParam[]): EffectF
       key: "backdrop",
       label: "reads backdrop",
       title: `samples what is painted behind the element: a render-target snapshot and blur pyramid per frame${radius}`,
+    });
+  }
+  if (raw.content === true) {
+    flags.push({
+      key: "content",
+      label: "reads content",
+      title:
+        "draws in place of the element's own painting: the element and its subtree render into a window-sized " +
+        "offscreen target every frame the window paints",
+    });
+  }
+  if (raw.history === true) {
+    flags.push({
+      key: "history",
+      label: "keeps history",
+      title:
+        "keeps state per element between frames: two RGBA16F textures the size of the element (16 bytes a " +
+        "device pixel) and a second pass each time it steps",
     });
   }
   if (finite(raw.bleedParam) !== null) {

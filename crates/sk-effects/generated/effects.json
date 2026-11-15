@@ -1,9 +1,9 @@
 {
-  "schema": 8,
+  "schema": 9,
   "slang": "2026.12",
   "compiler": "redslangc 0.1.1",
   "kind": "builtin",
-  "preludeSha256": "32e28447adb2473362db105791f3c0955dcb11ea4fa9ddfdd1a55f30e3e27214",
+  "preludeSha256": "afd9f26d4a905b07f6485b44fb2436fef9a4669af184262ff4103204be88a6ba",
   "effects": [
     {
       "id": 0,
@@ -11,15 +11,17 @@
       "struct": "Frost",
       "doc": "blurred backdrop + crystalline grain + rim highlight",
       "backdrop": true,
+      "content": false,
+      "history": false,
       "hlsl": "frost.hlsl",
       "wgsl": "frost.wgsl",
       "metal": "frost.metal",
       "source": "crates/sk-effects/shaders/frost.slang",
       "sourceSha256": "3878d0fc85a790a8abcc1fbc6369c3ea64093adaeb4c20ec1fa443908052dada",
       "generatedSha256": {
-        "hlsl": "f85041c3053b8d987827ae5e71ce6ab53e39f8c991faf22bf341bc0c76860868",
-        "wgsl": "39cd5e0323d93170210801622f12c88a03e44387b79dddcbf106a8621ef7cfee",
-        "metal": "ad6b276804e1b70a77185ac789b5aa8de47b89306fcd615821605c43d24f97fc"
+        "hlsl": "d370d6aea7cb82b7c0d8b86ebf618a2a9f54c221dfb2d1250748329bba942979",
+        "wgsl": "600d0384a69da6d9b520fedb445f433e0e4ae994f6535591f766052dcb03a197",
+        "metal": "f98770249101af3227a0933b8bfec70e1246bb53c6fb43a896625fdf19f6d395"
       },
       "signature": "frost(<number:strength>, <length:radius>?, <color:tint>?)",
       "backdropRadiusParam": 1,
@@ -98,6 +100,16 @@
           "index": 1
         },
         {
+          "name": "sk_content",
+          "kind": "shaderResource",
+          "index": 7
+        },
+        {
+          "name": "sk_history",
+          "kind": "shaderResource",
+          "index": 8
+        },
+        {
           "name": "GlobalParams",
           "kind": "constantBuffer",
           "index": 0
@@ -110,15 +122,17 @@
       "struct": "Noise",
       "doc": "film grain over the element",
       "backdrop": false,
+      "content": false,
+      "history": false,
       "hlsl": "noise.hlsl",
       "wgsl": "noise.wgsl",
       "metal": "noise.metal",
       "source": "crates/sk-effects/shaders/noise.slang",
       "sourceSha256": "aac4ac76e76e5b7df379ca8f6356d05d5eb7f84b754cef6ff0712c4edddcbecd",
       "generatedSha256": {
-        "hlsl": "cf4d4371ae3cf7b31c00eb4ac6c071a065a8c65c6f53de0fa910b24138891780",
-        "wgsl": "3b129f2bd8d39563e88c2ce85c90bdbc988acbcfff4fe6e6e30791ff37eabde1",
-        "metal": "fbf20c52704622b5592ac0235365a520dcaf69b53823f069f3d6f93b7c139898"
+        "hlsl": "663db09dc43d8902b4f7b7663505b251b23123b3d4a001670b8076928c5056ea",
+        "wgsl": "0e215ef7a0d05776176e205e530c3d84c7df88a3b7e2b89ab8aca028083e2a50",
+        "metal": "dc1100df1f71006f810f1e7aba8dc26fe360f770a84c2706957b5229be5b2c40"
       },
       "signature": "noise(<number:amount>, <length:scale>?, <number:speed>?)",
       "backdropRadiusParam": null,
@@ -200,6 +214,16 @@
           "index": 1
         },
         {
+          "name": "sk_content",
+          "kind": "shaderResource",
+          "index": 7
+        },
+        {
+          "name": "sk_history",
+          "kind": "shaderResource",
+          "index": 8
+        },
+        {
           "name": "GlobalParams",
           "kind": "constantBuffer",
           "index": 0
@@ -212,15 +236,17 @@
       "struct": "Glow",
       "doc": "soft halo centred on the element's rounded edge",
       "backdrop": false,
+      "content": false,
+      "history": false,
       "hlsl": "glow.hlsl",
       "wgsl": "glow.wgsl",
       "metal": "glow.metal",
       "source": "crates/sk-effects/shaders/glow.slang",
       "sourceSha256": "de1d06dddb28503e5a23a3494d73227436591594943428bd0ecec042d3926caa",
       "generatedSha256": {
-        "hlsl": "23b7039b8b935525f18ea9ae3a98bf604ef3d48320b11762bcb66da3335a4e47",
-        "wgsl": "7804e6c64144df90f5d0830b848e18ccc6268315526009905a9143190c9de0bf",
-        "metal": "8c7212dae31915a2cab55ab7721ea5c647192f8334ed6d17aabd0ab0249ca5ea"
+        "hlsl": "fb388b0701be7ef68f84d3c77346e3086e6d167fdad169b78abaff29f9e9e410",
+        "wgsl": "5d5b136ace60aa7d6896f80b2a49afb132855d2e89a045015b32785113129c93",
+        "metal": "b5e92db77f1674c951a63b8b30f81cd0db287ac545a36af4998a7a9d2bfbd2e4"
       },
       "signature": "glow(<color>?, <length:radius>, <number:strength>)",
       "backdropRadiusParam": null,
@@ -297,6 +323,16 @@
           "name": "sk_clamp_sampler",
           "kind": "samplerState",
           "index": 1
+        },
+        {
+          "name": "sk_content",
+          "kind": "shaderResource",
+          "index": 7
+        },
+        {
+          "name": "sk_history",
+          "kind": "shaderResource",
+          "index": 8
         },
         {
           "name": "GlobalParams",

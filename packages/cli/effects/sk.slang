@@ -66,6 +66,62 @@ public struct SkBackdropAttribute
 {
 };
 
+/// This effect shades its element's OWN painting: `input.content`,
+/// `contentAt`, `contentAtPx`. The element and its whole subtree (background,
+/// border, shadows, outline, children, text, video, carets, animations) paint
+/// into an offscreen group the size of the window, at full opacity, and the
+/// effect is drawn in their place; what it returns is all that shows of them.
+///
+///   * The drawn quad is the border box, dilated by a `[SkBleed]` parameter:
+///     content can be moved out to it (a box-shadow outside the box shows only
+///     there). Sampling anywhere else in the window is allowed and reads
+///     transparent where the element painted nothing.
+///   * `opacity` applies once, to the result; the content is opaque in the
+///     group. `overflow` clips of ancestors cut the result like any effect's.
+///   * A transform moves the content and the quad together; a rotation or skew
+///     cannot be drawn by an effect, and the element then shows unshaded.
+///   * Hit testing is unchanged: it follows layout, never pixels.
+///   * The group is a Backdrop Root: a `backdrop-filter` or backdrop effect
+///     inside it sees the element's own painting, not the page. The element's
+///     own `backdrop-filter` still reads the page. With `[SkBackdrop]` too, the
+///     effect owns its quad and composites the content over the backdrop
+///     itself (`sk_over(input.backdrop, input.content)`).
+///   * Cost: one window-sized offscreen target per nesting depth (pooled,
+///     released after 90 idle frames) and the subtree drawn into it every
+///     frame the window paints.
+[__AttributeUsage(_AttributeTargets.Struct)]
+public struct SkContentAttribute
+{
+};
+
+/// This effect keeps state from frame to frame: `input.history`,
+/// `historyAt`, `historyAtPx` read what it stored the last time it stepped,
+/// per element and effect. The history is two RGBA 16-bit float textures the
+/// size of the drawn quad in device pixels (16 bytes a pixel), zero when the
+/// element first draws, started over when that size changes and freed the
+/// first frame the element is not painted.
+///
+/// Each step stores what `update` returns for every texel, unclamped; an
+/// effect that does not declare `override float4 update(EffectInput input)`
+/// stores what `shade` returned. Both
+/// `shade` and `update` read the state as the LAST step left it, so the first
+/// frame reads zeros. `update` runs with `input.historyPass` set and reads
+/// content and history but never the backdrop.
+///
+///   * A history steps at most once per painted frame and at most about 75
+///     times a second, so a simulation runs at the same speed at 60 and 144
+///     Hz. It only steps while the window repaints: animate the effect
+///     (`[SkAnimated]`, `[SkAnimatedFor]`, or `[SkPointer]`, which repaints
+///     on pointer moves) for as long as the state should keep changing.
+///   * Limits: no history on a quad longer than 4096 device pixels on a side,
+///     and at most 256 MiB of histories per window; past them it reads zeros.
+///   * The element needs an identity to key its state by (every Skathi element
+///     has one).
+[__AttributeUsage(_AttributeTargets.Struct)]
+public struct SkHistoryAttribute
+{
+};
+
 /// One line of author-facing documentation, echoed in CSS advisories.
 [__AttributeUsage(_AttributeTargets.Struct)]
 public struct SkDocAttribute
@@ -211,6 +267,10 @@ public struct SkPointerTimesAttribute
 // `[[vk::binding(binding, group)]]` is the same contract for the WGSL target,
 // matching the pipeline layout in gpui_wgpu: group 0 the globals, group 1 the
 // instance buffer, group 2 the backdrop textures and their sampler.
+//
+// t7 is the element's content (`[SkContent]`), t8 its history (`[SkHistory]`):
+// WGSL group 2 bindings 7 and 8, Metal texture(7) and texture(8). Every effect
+// pipeline binds them, transparent when the effect has neither.
 
 public struct SkBounds
 {
@@ -258,6 +318,10 @@ public Texture2D<float4> sk_backdrop_input : register(t0);
 public Texture2D<float4> sk_backdrop_original : register(t2);
 [[vk::binding(1, 2)]]
 public SamplerState sk_clamp_sampler : register(s1);
+[[vk::binding(7, 2)]]
+public Texture2D<float4> sk_content : register(t7);
+[[vk::binding(8, 2)]]
+public Texture2D<float4> sk_history : register(t8);
 
 /// Scalar padding rather than a `uint3`: WGSL aligns a `vec3` to 16 bytes and
 /// would grow the block from 48 to 64.
@@ -274,8 +338,11 @@ public cbuffer GlobalParams : register(b0)
     public uint sk_global_pad2;
 };
 
-/// Bit 0 of `SkEffectQuad::flags`.
+/// Bits of `SkEffectQuad::flags`, `gpui::EFFECT_FLAG_*`.
 public static const uint SK_FLAG_NEEDS_BACKDROP = 1u;
+public static const uint SK_FLAG_NEEDS_CONTENT = 2u;
+public static const uint SK_FLAG_HISTORY = 4u;
+public static const uint SK_FLAG_HISTORY_PASS = 8u;
 
 
 // ===========================================================================
@@ -323,6 +390,20 @@ public struct EffectInput
     public float clip;
     /// Whether this effect asked for the backdrop.
     public bool hasBackdrop;
+    /// The element's own painting at this pixel, premultiplied:
+    /// `contentAt(uv)`. All zero without `[SkContent]`.
+    public float4 content;
+    /// Whether this effect reads its content (`[SkContent]`).
+    public bool hasContent;
+    /// This effect's state at this pixel as the last step stored it:
+    /// `historyAtPx(px)`. All zero without `[SkHistory]`, on the first frame,
+    /// and where the engine keeps no history (see `[SkHistory]`).
+    public float4 history;
+    /// Whether this quad has a history to read.
+    public bool hasHistory;
+    /// Whether this run computes the next history state (`update`) rather
+    /// than the element's pixels.
+    public bool historyPass;
     /// This quad's index in the instance buffer.
     public uint quad;
 
@@ -378,6 +459,56 @@ public struct EffectInput
         return this.uv + (px - this.px) / sk_viewport_size;
     }
 
+    // The content. It covers the whole window, like the backdrop: the
+    // element's painting where it is, transparent elsewhere; outside the
+    // window it clamps to the edge. Zero without `[SkContent]`.
+
+    /// The element's painting at a window UV (`input.uv` space).
+    public float4 contentAt(float2 uv)
+    {
+        return this.hasContent
+            ? sk_content.SampleLevel(sk_clamp_sampler, uv, 0.0)
+            : float4(0.0, 0.0, 0.0, 0.0);
+    }
+
+    /// The element's painting at a point in its device pixels (`input.px`).
+    public float4 contentAtPx(float2 px)
+    {
+        return this.contentAt(this.pxToUv(px));
+    }
+
+    /// The size of the content texture in texels: the window's, in device
+    /// pixels. One texel is one `px` unit.
+    public float2 contentSize()
+    {
+        return sk_viewport_size;
+    }
+
+    // The history: the drawn quad (the border box dilated by `bleed`) in
+    // device pixels, one texel each, clamped at its edge. Zero without
+    // `[SkHistory]`.
+
+    /// The state at a point in this element's device pixels (`input.px`).
+    public float4 historyAtPx(float2 px)
+    {
+        float2 size = this.historySize();
+        return this.hasHistory
+            ? sk_history.SampleLevel(sk_clamp_sampler, (px + this.bleed) / size, 0.0)
+            : float4(0.0, 0.0, 0.0, 0.0);
+    }
+
+    /// The state at a window UV (`input.uv` space).
+    public float4 historyAt(float2 uv)
+    {
+        return this.historyAtPx(this.px + (uv - this.uv) * sk_viewport_size);
+    }
+
+    /// The size of the history in texels: the drawn quad's, in device pixels.
+    public float2 historySize()
+    {
+        return max(round(sk_effect_quads[this.quad].bounds.size), float2(1.0, 1.0));
+    }
+
     /// Antialiased 0..1 coverage from a signed distance in device pixels.
     /// One device pixel of feather, which is what the rest of gpui uses.
     public float aa(float distance)
@@ -412,6 +543,11 @@ public interface IEffect
     /// nothing at runtime and removes the single most common way to get an
     /// effect wrong.
     static bool straightAlpha() { return false; }
+
+    /// With `[SkHistory]`: the state to store for this texel, read back next
+    /// step through `input.history`. Raw: not premultiplied, clamped or
+    /// covered, kept at 16-bit float precision. Defaults to `shade`.
+    float4 update(EffectInput input) { return this.shade(input); }
 };
 
 // ===========================================================================
@@ -484,7 +620,10 @@ public float4 sk_clamp_premultiplied(float4 color)
 public EffectInput sk_begin(uint id, float4 frag_position)
 {
     SkEffectQuad q = sk_effect_quads[id];
-    float2 position = frag_position.xy;
+    bool history_pass = (q.flags & SK_FLAG_HISTORY_PASS) != 0u;
+    // A history pass draws into the history texture, whose texel (0,0) is
+    // the drawn quad's top-left device pixel.
+    float2 position = history_pass ? q.bounds.origin + frag_position.xy : frag_position.xy;
     // SV_Position is the pixel centre, so this lands on a texel centre of the
     // full-resolution snapshot.
     float2 uv = position / sk_viewport_size;
@@ -508,13 +647,18 @@ public EffectInput sk_begin(uint id, float4 frag_position)
     i.size = element_size;
     i.local = i.px / element_size;
     i.hasBackdrop = has_backdrop;
+    i.hasContent = (q.flags & SK_FLAG_NEEDS_CONTENT) != 0u;
+    i.hasHistory = (q.flags & SK_FLAG_HISTORY) != 0u;
+    i.historyPass = history_pass;
     i.quad = id;
+    i.bleed = q.bleed;
     i.backdrop = i.backdropAt(uv);
+    i.content = i.contentAt(uv);
+    i.history = i.historyAtPx(i.px);
     i.sd = sd_element;
     i.coverage = saturate(0.5 - sd_element);
     i.time = q.time;
     i.scale = q.scale;
-    i.bleed = q.bleed;
     i.opacity = q.opacity;
     i.clip = sk_content_mask_coverage(position, q.content_mask, q.content_mask_radii);
     return i;
@@ -531,6 +675,10 @@ public EffectInput sk_begin(uint id, float4 frag_position)
 /// OneMinusSrcAlpha); blending it by source alpha would apply alpha twice.
 public float4 sk_finish<T : IEffect>(T material, EffectInput i)
 {
+    if (i.historyPass)
+    {
+        return material.update(i);
+    }
     float4 shaded = material.shade(i);
     if (T.straightAlpha())
     {

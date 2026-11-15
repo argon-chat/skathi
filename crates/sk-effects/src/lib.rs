@@ -27,7 +27,10 @@
 
 use std::sync::{OnceLock, RwLock};
 
-use gpui::{effect_id, EffectSpec, EFFECT_FLAG_NEEDS_BACKDROP, EFFECT_PARAM_SLOTS};
+use gpui::{
+    effect_id, EffectSpec, EFFECT_FLAG_HISTORY, EFFECT_FLAG_NEEDS_BACKDROP,
+    EFFECT_FLAG_NEEDS_CONTENT, EFFECT_PARAM_SLOTS,
+};
 
 /// The `effects.json` layout this build understands; a mismatch means the artifacts came from a
 /// different toolchain generation and must be regenerated.
@@ -175,6 +178,10 @@ struct RawEffect {
     #[serde(default)]
     doc: Option<String>,
     backdrop: bool,
+    #[serde(default)]
+    content: bool,
+    #[serde(default)]
+    history: bool,
     signature: String,
     backdrop_radius_param: Option<u8>,
     bleed_param: Option<u8>,
@@ -301,11 +308,14 @@ pub fn parse_manifest(
         out.push(&*Box::leak(Box::new(EffectSchema {
             name: Box::leak(raw.name.into_boxed_str()),
             id: first_id + index as u32,
-            flags: if raw.backdrop {
-                EFFECT_FLAG_NEEDS_BACKDROP
-            } else {
-                0
-            },
+            flags: [
+                (raw.backdrop, EFFECT_FLAG_NEEDS_BACKDROP),
+                (raw.content, EFFECT_FLAG_NEEDS_CONTENT),
+                (raw.history, EFFECT_FLAG_HISTORY),
+            ]
+            .into_iter()
+            .filter(|(set, _)| *set)
+            .fold(0, |flags, (_, flag)| flags | flag),
             params: Box::leak(params.into_boxed_slice()),
             backdrop_radius_param: raw.backdrop_radius_param,
             bleed_param: raw.bleed_param,
@@ -449,7 +459,7 @@ mod tests {
     const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
     const USER_MANIFEST: &str = r#"{
-      "schema": 8,
+      "schema": 9,
       "slang": "2026.12",
       "kind": "user",
       "effects": [
@@ -542,6 +552,19 @@ mod tests {
 
         let overflow = json.replace("\"pointerTimesParam\": 12", "\"pointerTimesParam\": 30");
         assert!(parse_manifest(&overflow, effect_id::COUNT, false, "<test>").is_err());
+    }
+
+    #[test]
+    fn content_and_history_effects_carry_their_flags() {
+        let json = USER_MANIFEST.replace(
+            "\"backdrop\": false,",
+            "\"backdrop\": false, \"content\": true, \"history\": true,",
+        );
+        let ripple = parse_manifest(&json, effect_id::COUNT, false, "<test>").unwrap()[0];
+        assert_eq!(
+            ripple.defaults().flags,
+            EFFECT_FLAG_NEEDS_CONTENT | EFFECT_FLAG_HISTORY
+        );
     }
 
     #[test]

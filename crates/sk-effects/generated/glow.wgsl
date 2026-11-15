@@ -5,7 +5,7 @@
 //   source:     crates/sk-effects/shaders/glow.slang+wrapper
 //   signature:  glow(<color>?, <length:radius>, <number:strength>)
 //   slang:      2026.12
-//   schema:     8
+//   schema:     9
 //   src-sha256: de1d06dddb28503e5a23a3494d73227436591594943428bd0ecec042d3926caa
 //   output:     premultiplied RGBA, blended One, OneMinusSrcAlpha
 //
@@ -62,6 +62,10 @@ struct SLANG_ParameterGroup_GlobalParams_std140_0
 
 @binding(1) @group(2) var sk_clamp_sampler_0 : sampler;
 
+@binding(7) @group(2) var sk_content_0 : texture_2d<f32>;
+
+@binding(8) @group(2) var sk_history_0 : texture_2d<f32>;
+
 @binding(2) @group(2) var sk_backdrop_original_0 : texture_2d<f32>;
 
 struct Glow_0
@@ -86,6 +90,11 @@ struct EffectInput_0
      opacity_1 : f32,
      clip_0 : f32,
      hasBackdrop_0 : bool,
+     content_0 : vec4<f32>,
+     hasContent_0 : bool,
+     history_0 : vec4<f32>,
+     hasHistory_0 : bool,
+     historyPass_0 : bool,
      quad_0 : u32,
 };
 
@@ -106,6 +115,11 @@ fn Glow_shade_0( this_0 : Glow_0,  input_0 : EffectInput_0) -> vec4<f32>
     return vec4<f32>(this_0.color_0.xyz, saturate(falloff_0 * falloff_0 * peak_0 * this_0.color_0.w));
 }
 
+fn IEffect_updatex24defaultImpl_0( this_1 : Glow_0,  input_1 : EffectInput_0) -> vec4<f32>
+{
+    return Glow_shade_0(this_1, input_1);
+}
+
 fn Glow_straightAlpha_0() -> bool
 {
     return true;
@@ -119,6 +133,10 @@ fn sk_clamp_premultiplied_0( color_1 : vec4<f32>) -> vec4<f32>
 
 fn sk_finish_0( material_0 : Glow_0,  i_0 : EffectInput_0) -> vec4<f32>
 {
+    if(i_0.historyPass_0)
+    {
+        return IEffect_updatex24defaultImpl_0(material_0, i_0);
+    }
     var shaded_0 : vec4<f32> = Glow_shade_0(material_0, i_0);
     var shaded_1 : vec4<f32>;
     if(Glow_straightAlpha_0())
@@ -201,10 +219,10 @@ fn sk_quad_sdf_1( point_1 : vec2<f32>,  bounds_2 : ptr<function, SkBounds_std430
     return length(max(vec2<f32>(0.0f, 0.0f), corner_center_to_point_1)) + min(0.0f, max(corner_center_to_point_1.x, corner_center_to_point_1.y)) - _S5;
 }
 
-fn EffectInput_backdropAt_0( this_1 : EffectInput_0,  uv_1 : vec2<f32>) -> vec4<f32>
+fn EffectInput_backdropAt_0( this_2 : EffectInput_0,  uv_1 : vec2<f32>) -> vec4<f32>
 {
     var _S6 : vec4<f32>;
-    if(this_1.hasBackdrop_0)
+    if(this_2.hasBackdrop_0)
     {
         _S6 = (textureSampleLevel((sk_backdrop_input_0), (sk_clamp_sampler_0), (uv_1), (0.0f)));
     }
@@ -215,77 +233,126 @@ fn EffectInput_backdropAt_0( this_1 : EffectInput_0,  uv_1 : vec2<f32>) -> vec4<
     return _S6;
 }
 
+fn EffectInput_contentAt_0( this_3 : EffectInput_0,  uv_2 : vec2<f32>) -> vec4<f32>
+{
+    var _S7 : vec4<f32>;
+    if(this_3.hasContent_0)
+    {
+        _S7 = (textureSampleLevel((sk_content_0), (sk_clamp_sampler_0), (uv_2), (0.0f)));
+    }
+    else
+    {
+        _S7 = vec4<f32>(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    return _S7;
+}
+
+fn EffectInput_historySize_0( this_4 : EffectInput_0) -> vec2<f32>
+{
+    return max(round(sk_effect_quads_0[this_4.quad_0].bounds_0.size_0), vec2<f32>(1.0f, 1.0f));
+}
+
+fn EffectInput_historyAtPx_0( this_5 : EffectInput_0,  px_1 : vec2<f32>) -> vec4<f32>
+{
+    var size_2 : vec2<f32> = EffectInput_historySize_0(this_5);
+    var _S8 : vec4<f32>;
+    if(this_5.hasHistory_0)
+    {
+        _S8 = (textureSampleLevel((sk_history_0), (sk_clamp_sampler_0), ((px_1 + vec2<f32>(this_5.bleed_1)) / size_2), (0.0f)));
+    }
+    else
+    {
+        _S8 = vec4<f32>(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    return _S8;
+}
+
 fn sk_content_mask_coverage_0( position_0 : vec2<f32>,  mask_0 : ptr<function, SkBounds_std430_0>,  radii_3 : ptr<function, SkCorners_std430_0>) -> f32
 {
-    var _S7 : bool;
+    var _S9 : bool;
     if(((*radii_3).top_left_0) == 0.0f)
     {
-        _S7 = ((*radii_3).top_right_0) == 0.0f;
+        _S9 = ((*radii_3).top_right_0) == 0.0f;
     }
     else
     {
-        _S7 = false;
+        _S9 = false;
     }
-    if(_S7)
+    if(_S9)
     {
-        _S7 = ((*radii_3).bottom_right_0) == 0.0f;
+        _S9 = ((*radii_3).bottom_right_0) == 0.0f;
     }
     else
     {
-        _S7 = false;
+        _S9 = false;
     }
-    if(_S7)
+    if(_S9)
     {
-        _S7 = ((*radii_3).bottom_left_0) == 0.0f;
+        _S9 = ((*radii_3).bottom_left_0) == 0.0f;
     }
     else
     {
-        _S7 = false;
+        _S9 = false;
     }
-    if(_S7)
+    if(_S9)
     {
         return 1.0f;
     }
-    var _S8 : f32 = sk_quad_sdf_1(position_0, &((*mask_0)), &((*radii_3)));
-    return saturate(0.5f - _S8);
+    var _S10 : f32 = sk_quad_sdf_1(position_0, &((*mask_0)), &((*radii_3)));
+    return saturate(0.5f - _S10);
 }
 
 fn sk_begin_0( id_0 : u32,  frag_position_0 : vec4<f32>) -> EffectInput_0
 {
-    var position_1 : vec2<f32> = frag_position_0.xy;
-    var uv_2 : vec2<f32> = position_1 / GlobalParams_0.sk_viewport_size_0;
-    var _S9 : SkBounds_std430_0 = sk_effect_quads_0[id_0].bounds_0;
-    var _S10 : SkCorners_std430_0 = sk_effect_quads_0[id_0].corner_radii_0;
-    var _S11 : f32 = sk_quad_sdf_0(position_1, &(_S9), &(_S10));
-    var sd_element_0 : f32 = _S11 + sk_effect_quads_0[id_0].bleed_0;
-    var element_origin_0 : vec2<f32> = _S9.origin_0 + vec2<f32>(sk_effect_quads_0[id_0].bleed_0);
-    var element_size_0 : vec2<f32> = max(_S9.size_0 - vec2<f32>((2.0f * sk_effect_quads_0[id_0].bleed_0)), vec2<f32>(1.0f, 1.0f));
-    var has_backdrop_0 : bool = (((sk_effect_quads_0[id_0].flags_0) & (u32(1)))) != u32(0);
+    var _S11 : u32 = sk_effect_quads_0[id_0].flags_0;
+    var history_pass_0 : bool = (((sk_effect_quads_0[id_0].flags_0) & (u32(8)))) != u32(0);
+    var position_1 : vec2<f32>;
+    if(history_pass_0)
+    {
+        position_1 = sk_effect_quads_0[id_0].bounds_0.origin_0 + frag_position_0.xy;
+    }
+    else
+    {
+        position_1 = frag_position_0.xy;
+    }
+    var uv_3 : vec2<f32> = position_1 / GlobalParams_0.sk_viewport_size_0;
+    var _S12 : SkBounds_std430_0 = sk_effect_quads_0[id_0].bounds_0;
+    var _S13 : SkCorners_std430_0 = sk_effect_quads_0[id_0].corner_radii_0;
+    var _S14 : f32 = sk_quad_sdf_0(position_1, &(_S12), &(_S13));
+    var sd_element_0 : f32 = _S14 + sk_effect_quads_0[id_0].bleed_0;
+    var element_origin_0 : vec2<f32> = _S12.origin_0 + vec2<f32>(sk_effect_quads_0[id_0].bleed_0);
+    var element_size_0 : vec2<f32> = max(_S12.size_0 - vec2<f32>((2.0f * sk_effect_quads_0[id_0].bleed_0)), vec2<f32>(1.0f, 1.0f));
+    var has_backdrop_0 : bool = ((_S11 & (u32(1)))) != u32(0);
     var i_1 : EffectInput_0;
-    i_1.uv_0 = uv_2;
-    var _S12 : vec2<f32> = position_1 - element_origin_0;
-    i_1.px_0 = _S12;
+    i_1.uv_0 = uv_3;
+    var _S15 : vec2<f32> = position_1 - element_origin_0;
+    i_1.px_0 = _S15;
     i_1.size_1 = element_size_0;
-    i_1.local_0 = _S12 / element_size_0;
+    i_1.local_0 = _S15 / element_size_0;
     i_1.hasBackdrop_0 = has_backdrop_0;
+    i_1.hasContent_0 = ((_S11 & (u32(2)))) != u32(0);
+    i_1.hasHistory_0 = ((_S11 & (u32(4)))) != u32(0);
+    i_1.historyPass_0 = history_pass_0;
     i_1.quad_0 = id_0;
-    i_1.backdrop_0 = EffectInput_backdropAt_0(i_1, uv_2);
+    i_1.bleed_1 = sk_effect_quads_0[id_0].bleed_0;
+    i_1.backdrop_0 = EffectInput_backdropAt_0(i_1, uv_3);
+    i_1.content_0 = EffectInput_contentAt_0(i_1, uv_3);
+    i_1.history_0 = EffectInput_historyAtPx_0(i_1, _S15);
     i_1.sd_0 = sd_element_0;
     i_1.coverage_0 = saturate(0.5f - sd_element_0);
     i_1.time_1 = sk_effect_quads_0[id_0].time_0;
     i_1.scale_1 = sk_effect_quads_0[id_0].scale_0;
-    i_1.bleed_1 = sk_effect_quads_0[id_0].bleed_0;
     i_1.opacity_1 = sk_effect_quads_0[id_0].opacity_0;
-    var _S13 : SkBounds_std430_0 = sk_effect_quads_0[id_0].content_mask_0;
-    var _S14 : SkCorners_std430_0 = sk_effect_quads_0[id_0].content_mask_radii_0;
-    var _S15 : f32 = sk_content_mask_coverage_0(position_1, &(_S13), &(_S14));
-    i_1.clip_0 = _S15;
+    var _S16 : SkBounds_std430_0 = sk_effect_quads_0[id_0].content_mask_0;
+    var _S17 : SkCorners_std430_0 = sk_effect_quads_0[id_0].content_mask_radii_0;
+    var _S18 : f32 = sk_content_mask_coverage_0(position_1, &(_S16), &(_S17));
+    i_1.clip_0 = _S18;
     return i_1;
 }
 
-fn EffectInput_param_0( this_2 : EffectInput_0,  slot_0 : u32) -> f32
+fn EffectInput_param_0( this_6 : EffectInput_0,  slot_0 : u32) -> f32
 {
-    return sk_effect_quads_0[this_2.quad_0].params_0[slot_0];
+    return sk_effect_quads_0[this_6.quad_0].params_0[slot_0];
 }
 
 struct pixelOutput_0
@@ -299,14 +366,14 @@ struct pixelInput_0
 };
 
 @fragment
-fn effect_fragment( _S16 : pixelInput_0, @builtin(position) sk_position_0 : vec4<f32>) -> pixelOutput_0
+fn effect_fragment( _S19 : pixelInput_0, @builtin(position) sk_position_0 : vec4<f32>) -> pixelOutput_0
 {
-    var sk_in_0 : EffectInput_0 = sk_begin_0(_S16.sk_id_0, sk_position_0);
+    var sk_in_0 : EffectInput_0 = sk_begin_0(_S19.sk_id_0, sk_position_0);
     var sk_material_0 : Glow_0;
     sk_material_0.color_0 = vec4<f32>(EffectInput_param_0(sk_in_0, u32(4)), EffectInput_param_0(sk_in_0, u32(5)), EffectInput_param_0(sk_in_0, u32(6)), EffectInput_param_0(sk_in_0, u32(7)));
     sk_material_0.radius_0 = EffectInput_param_0(sk_in_0, u32(0));
     sk_material_0.strength_0 = EffectInput_param_0(sk_in_0, u32(1));
-    var _S17 : pixelOutput_0 = pixelOutput_0( sk_finish_0(sk_material_0, sk_in_0) );
-    return _S17;
+    var _S20 : pixelOutput_0 = pixelOutput_0( sk_finish_0(sk_material_0, sk_in_0) );
+    return _S20;
 }
 
