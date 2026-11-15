@@ -55,8 +55,10 @@ strip = "none"
 debug = true
 
 # Dependencies are optimised in dev: unoptimised taffy layout and cascade dominated frame time.
+# Line tables only: their full debug info was nearly half of the PDB every relink rewrites.
 [profile.dev.package."*"]
 opt-level = 2
+debug = "line-tables-only"
 
 # Pixel kernel: generic `image::imageops::resize` compiles at the calling crate's opt-level.
 [profile.dev.package.sk-resample]

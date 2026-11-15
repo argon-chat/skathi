@@ -95,8 +95,9 @@ jobs:
           for f in crates/sk-effects/generated/*.metal; do
             xcrun -sdk macosx metal -c "$f" -o /dev/null
           done
+      # The workspace's `profile.dev.package."*"` debug setting outranks CARGO_PROFILE_DEV_DEBUG.
       - name: Tests
-        run: cargo test --locked --workspace --target ${{ matrix.target }}
+        run: cargo test --locked --workspace --target ${{ matrix.target }} --config "profile.dev.package.'*'.debug=0"
       - name: Release host builds
         run: cargo check --locked -p sk-app --features prod --target ${{ matrix.target }}
 
