@@ -224,7 +224,7 @@ accepted and ignored without one say so below.
 | `animation-composition`                                            | ⛔     |                                                                            |
 | Web Animations (`element.animate()`)                               | ✅     | Same properties as `@keyframes`                                            |
 | `@starting-style`                                                  | ⛔     | Use the framework's transitions (`<Transition>`, `transition:`)            |
-| View transitions (`view-transition-name`, `@view-transition`)      | 🗓️     |                                                                            |
+| View transitions (`view-transition-name`, `::view-transition-*`)   | 🟡     | Same-document only; `@view-transition` (cross-document) is not             |
 
 These properties animate (transitions, `@keyframes`, `element.animate()`): `opacity`, `color`,
 `background-color`, `border-color`, `text-decoration-color`, `fill`, `stroke`, `width`, `height`,
