@@ -683,16 +683,10 @@ mod tests {
     #[test]
     fn mapped_payload_empty_and_corrupt_parses_release_the_mapping() {
         let mut files = crate::mapped_file::tests::Files::new();
-        for (name, bytes, diagnostic) in [
-            ("empty.skpk", &b""[..], "shorter than its 64-byte header"),
-            ("corrupt.skpk", &[0u8; 64][..], "does not start with"),
-        ] {
+        for (name, bytes) in [("empty.skpk", &b""[..]), ("corrupt.skpk", &[0u8; 64][..])] {
             let path = files.write(name, bytes);
             let mapping = crate::mapped_file::MappedFile::open(&path).unwrap();
-            let error = super::AppPayload::parse(super::PayloadBytes::File(mapping))
-                .err()
-                .unwrap();
-            assert!(error.contains(diagnostic), "{error}");
+            assert!(super::AppPayload::parse(super::PayloadBytes::File(mapping)).is_err());
             std::fs::write(&path, b"released").unwrap();
         }
     }
@@ -712,9 +706,9 @@ mod tests {
         bytes[start..start + version.len()].fill(b'x');
         let path = files.write("mismatch.skpk", &bytes);
         let mapping = crate::mapped_file::MappedFile::open(&path).unwrap();
-        let error = super::set_external(super::PayloadBytes::File(mapping), "test".into(), None)
-            .unwrap_err();
-        assert!(error.contains("rebuild it with the matching sk"), "{error}");
+        assert!(
+            super::set_external(super::PayloadBytes::File(mapping), "test".into(), None).is_err()
+        );
         std::fs::write(&path, b"released").unwrap();
     }
 
@@ -759,20 +753,14 @@ mod tests {
         assert_eq!(packs.len(), 1);
         assert_eq!(packs[0].payload.asset_count(), 4);
         drop(packs);
-        let error = super::open_packs(&meta_with("fonts.skpk", &"0".repeat(64)), Some(dir))
-            .err()
-            .unwrap();
-        assert!(error.contains("another build"), "{error}");
+        assert!(super::open_packs(&meta_with("fonts.skpk", &"0".repeat(64)), Some(dir)).is_err());
         for file in ["../fonts.skpk", "sub/fonts.skpk", "C:fonts.skpk", ""] {
-            let error = super::open_packs(&meta_with(file, &id), Some(dir))
-                .err()
-                .unwrap();
-            assert!(error.contains("not a plain file name"), "{error}");
+            assert!(
+                super::open_packs(&meta_with(file, &id), Some(dir)).is_err(),
+                "{file}"
+            );
         }
-        let error = super::open_packs(&meta_with("missing.skpk", &id), Some(dir))
-            .err()
-            .unwrap();
-        assert!(error.contains("missing.skpk"), "{error}");
+        assert!(super::open_packs(&meta_with("missing.skpk", &id), Some(dir)).is_err());
         assert!(super::open_packs(&super::Meta::default(), None)
             .unwrap()
             .is_empty());

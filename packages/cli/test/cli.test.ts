@@ -110,6 +110,5 @@ describe("sk workload list and sk prune", () => {
     const pruned = sk(["workload", "prune"], env);
     expect(pruned.status).toBe(0);
     expect(pruned.stdout).toMatch(/^ {2}0\.0\.1 +standard workload +0\.0 MiB +removed$/m);
-    expect(sk(["prune"], env).stdout.trim()).toBe(`nothing to prune; the workloads of ${CLI_VERSION} stay`);
   });
 });

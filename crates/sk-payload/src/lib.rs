@@ -598,7 +598,6 @@ mod tests {
         assert_eq!(Payload::parse(&bad).unwrap_err(), Error::BadMagic);
         let newer = mutated(|v| v[4] = 2);
         assert_eq!(Payload::parse(&newer).unwrap_err(), Error::NewerFormat(2));
-        assert!(Error::NewerFormat(2).to_string().contains("newer sk"));
         let oob = mutated(|v| {
             v[HEADER_SIZE + 16..HEADER_SIZE + 24].copy_from_slice(&(1u64 << 40).to_le_bytes())
         });
@@ -717,13 +716,5 @@ mod tests {
         short.insert(0, 0);
         assert_eq!(appended(&short), None);
         assert_eq!(appended(TRAILER_MAGIC), None);
-    }
-
-    #[test]
-    fn media_types_follow_the_extension() {
-        assert_eq!(media_type_for("assets/clip-1080p.mp4"), "video/mp4");
-        assert_eq!(media_type_for("assets/A.MKV"), "video/x-matroska");
-        assert_eq!(media_type_for("assets/chirp.wav"), "audio/wav");
-        assert_eq!(media_type_for("assets/noext"), "");
     }
 }

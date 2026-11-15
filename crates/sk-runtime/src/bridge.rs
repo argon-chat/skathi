@@ -189,7 +189,7 @@ pub fn install_panic_hook() {
     }));
 }
 
-pub fn throw_error(g: *mut c_void, kind: u32, msg: &str) -> u64 {
+fn throw_error(g: *mut c_void, kind: u32, msg: &str) -> u64 {
     let utf16: Vec<u16> = msg.encode_utf16().collect();
     let mut err = 0u64;
     unsafe {

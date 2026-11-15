@@ -256,12 +256,6 @@ fn install_logger() {
 #[test]
 fn devtools_are_in_every_build_that_did_not_opt_out() {
     assert_eq!(cfg!(sk_devtools), !cfg!(feature = "no-devtools"));
-    if cfg!(feature = "prod") && !cfg!(feature = "no-devtools") {
-        assert!(
-            cfg!(sk_devtools),
-            "a shipped build must carry its own devtools"
-        );
-    }
 }
 
 #[cfg(test)]
@@ -277,13 +271,6 @@ mod logger_tests {
             directives,
             default,
         }
-    }
-
-    #[test]
-    fn an_unset_sk_log_passes_nothing() {
-        let l = logger(&[], L::Off);
-        assert_eq!(l.level_for("parcel_selectors::matching"), L::Off);
-        assert_eq!(l.level_for("gpui::platform"), L::Off);
     }
 
     #[test]

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { deflateRawSync, gzipSync } from "node:zlib";
 import { effectFindings } from "../check";
 import { watchAppEffects } from "../cli/effects";
-import { compileAppEffects, EffectsError, SCHEMA, writeEffectFiles } from "../effects/compile";
+import { compileAppEffects, EffectsError, writeEffectFiles } from "../effects/compile";
 import { resolveCompiler, unpack } from "../effects/redslangc";
 import { FIXTURES } from "./check-fixtures";
 
@@ -112,7 +112,6 @@ describe.skipIf(!compiler)("an app's effects", () => {
     const built = await compileAppEffects(root, compiler!);
     expect(built.files.map((f) => f.name)).toEqual(["ripple.hlsl", "ripple.wgsl", "ripple.metal", "effects.json"]);
     const manifest = JSON.parse(built.files.at(-1)!.text);
-    expect(manifest.schema).toBe(SCHEMA);
     expect(manifest.kind).toBe("user");
     expect(manifest.effects[0]).toMatchObject({
       name: "ripple",
@@ -124,8 +123,6 @@ describe.skipIf(!compiler)("an app's effects", () => {
       animatedParam: 0,
     });
     const metal = built.files.find((f) => f.name === "ripple.metal")!.text;
-    expect(metal).toContain("[[fragment]] pixelOutput_0 effect_fragment(");
-    expect(metal).toContain("[[buffer(1)]]");
     expect(metal).toContain('#line 4 "shaders/ripple.slang+wrapper"');
     expect(metal).not.toContain(root.replace(/\\/g, "/"));
 

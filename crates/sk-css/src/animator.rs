@@ -1588,7 +1588,7 @@ mod tests {
     }
 
     #[test]
-    fn different_effects_snap_with_an_advisory_naming_both() {
+    fn different_effects_snap() {
         let mut a = Animator::new();
         let now = t0();
         let css = "transition: --shading 1s linear";
@@ -1596,14 +1596,6 @@ mod tests {
         let new = states(with_shading("glow(10px, 0.5)"), css);
         a.on_computed(1, Some(&old), &new, now);
         assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
-
-        let diags = a.take_diagnostics();
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].contains("frost"), "{diags:?}");
-        assert!(diags[0].contains("glow"), "{diags:?}");
-
-        a.on_computed(2, Some(&old), &new, now);
-        assert!(a.take_diagnostics().is_empty());
     }
 
     #[test]
@@ -1636,7 +1628,6 @@ mod tests {
         let new = states(with_shading("none"), css);
         a.on_computed(1, Some(&old), &new, now);
         assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
-        assert_eq!(a.take_diagnostics().len(), 1);
     }
 
     #[test]

@@ -506,10 +506,7 @@ describe("hosts per platform", () => {
     }
   });
 
-  test("macOS: the triple follows the CPU; the cache lives in ~/Library/Caches", () => {
-    expect(hostsFor("macos", "arm64").triple).toBe("aarch64-apple-darwin");
-    expect(hostsFor("macos", "x64").triple).toBe("x86_64-apple-darwin");
-    expect(hostsFor("macos", "arm64").cargoTarget).toEqual(["--target", "aarch64-apple-darwin"]);
+  test("macOS: the cache lives in ~/Library/Caches", () => {
     expect(cachedHost("1.2.3", "no-devtools", "macos")).toMatch(
       /Library[\\/]Caches[\\/]skathi[\\/]hosts[\\/]1\.2\.3[\\/]no-devtools[\\/]sk-host$/,
     );

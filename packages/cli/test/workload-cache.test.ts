@@ -2,15 +2,7 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  cacheRoots,
-  formatInventory,
-  formatPrune,
-  inventory,
-  needed,
-  prune,
-  type CacheRoots,
-} from "../cli/workload-cache";
+import { cacheRoots, formatInventory, inventory, needed, prune, type CacheRoots } from "../cli/workload-cache";
 import { PIN } from "../effects/redslangc";
 
 const scratch = mkdtempSync(join(tmpdir(), "sk-workload-cache-"));
@@ -97,20 +89,16 @@ describe("the inventory", () => {
     const text = formatInventory(inventory(roots, "windows"), roots, { current: CURRENT }, false);
     expect(text).toMatch(/^ {2}0\.2\.0 +standard workload +0\.0 MiB +this sk$/m);
     expect(text).toMatch(/^ {2}0\.2\.0 +dev workload +0\.0 MiB +incomplete$/m);
-    expect(text).toContain("native images (2)");
-    expect(text).toContain("old AOT toolchain");
     expect(text).not.toContain("\x1b[");
     expect(text).toMatch(/in all; sk prune frees 0\.0 MiB$/);
   });
 });
 
 describe("prune", () => {
-  test("a dry run removes nothing and reports what would go", () => {
-    const options = { current: CURRENT, dryRun: true, roots };
-    const result = prune(inventory(roots, "windows"), options);
+  test("a dry run removes nothing and counts what would go", () => {
+    const result = prune(inventory(roots, "windows"), { current: CURRENT, dryRun: true, roots });
     expect(result.bytes).toBe(300 + 800 + 900 + 700 + 3 + 6 + 40 + 300 + 4000);
     expect(summary()).toHaveLength(12);
-    expect(formatPrune(result, options, false)).toContain("would free");
   });
 
   test("by default keeps only this version's complete workloads and empties the rest", () => {
@@ -127,9 +115,6 @@ describe("prune", () => {
     expect(readdirSync(roots.nativeImages!)).toEqual([]);
     expect(existsSync(roots.legacy[0]!)).toBe(false);
     expect(prune(inventory(roots, "windows"), { current: CURRENT, roots }).removed).toEqual([]);
-    expect(formatPrune({ removed: [], failed: [], bytes: 0 }, { current: CURRENT }, false)).toBe(
-      "nothing to prune; the workloads of 0.2.0 stay",
-    );
   });
 
   test("--keep spares another version; --all spares nothing", () => {

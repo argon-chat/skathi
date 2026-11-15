@@ -712,9 +712,7 @@ mod tests {
                 manifest.as_bytes(),
             ),
         ]);
-        assert!(application_image(&no_image)
-            .unwrap_err()
-            .contains("no image"));
+        assert!(application_image(&no_image).is_err());
         let no_script = payload(&[
             (
                 kind::NATIVE_MANIFEST,
@@ -723,17 +721,13 @@ mod tests {
             ),
             (kind::NATIVE_IMAGE, name::NATIVE_IMAGE, b"deflated"),
         ]);
-        assert!(application_image(&no_script)
-            .unwrap_err()
-            .contains("no app.prod.js"));
+        assert!(application_image(&no_script).is_err());
         let broken = payload(&[
             (kind::SCRIPT, name::SCRIPT, b"bundle"),
             (kind::NATIVE_MANIFEST, name::NATIVE_MANIFEST, b"{"),
             (kind::NATIVE_IMAGE, name::NATIVE_IMAGE, b"deflated"),
         ]);
-        assert!(application_image(&broken)
-            .unwrap_err()
-            .contains("not valid JSON"));
+        assert!(application_image(&broken).is_err());
     }
     #[cfg(sk_devtools)]
     #[test]

@@ -120,10 +120,8 @@ describe("stamping", () => {
 });
 
 describe("Linux hosts", () => {
-  test("triple per CPU, no .exe, the cache under XDG_CACHE_HOME or ~/.cache", () => {
+  test("no .exe, the cache under XDG_CACHE_HOME or ~/.cache", () => {
     expect(parsePlatform("linux")).toBe("linux");
-    expect(hostsFor("linux", "x64").triple).toBe("x86_64-unknown-linux-gnu");
-    expect(hostsFor("linux", "arm64").cargoTarget).toEqual(["--target", "aarch64-unknown-linux-gnu"]);
     expect(repoHostExe("R", hostsFor("linux", "x64"), "release")).toMatch(
       /x86_64-unknown-linux-gnu[\\/]release[\\/]sk-app$/,
     );

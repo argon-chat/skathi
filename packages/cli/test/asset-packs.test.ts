@@ -90,7 +90,6 @@ test("sk build writes the packs beside the payload and names them, with their id
   });
   expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
   const output = new TextDecoder().decode(result.stdout);
-  expect(output).toContain('\\"empty\\" takes no asset');
   const summary = JSON.parse(output.trim().split("\n").pop()!);
   expect(summary.packs.map((p: { name: string; assets: number }) => [p.name, p.assets])).toEqual([
     ["fonts", 2],

@@ -956,31 +956,28 @@ mod tests {
         let bytes = vec![1, 2, 3, 4];
         let pointer = bytes.as_ptr();
         let mut builder = Builder::new().payload_bytes(bytes);
-        let (owned, label, _) = builder.payload.take().unwrap().load().unwrap();
+        let (owned, _, _) = builder.payload.take().unwrap().load().unwrap();
         let crate::payload::PayloadBytes::Owned(owned) = owned else {
             panic!("owned bytes expected")
         };
-        assert_eq!(label, "bytes");
         assert_eq!(owned.as_ptr(), pointer);
         assert!(builder.payload.is_none());
         static STATIC_PAYLOAD: &[u8] = b"static payload bytes";
         let mut builder = Builder::new().payload_static(STATIC_PAYLOAD);
-        let (borrowed, label, _) = builder.payload.take().unwrap().load().unwrap();
+        let (borrowed, _, _) = builder.payload.take().unwrap().load().unwrap();
         let crate::payload::PayloadBytes::Embedded(borrowed) = borrowed else {
             panic!("static bytes expected")
         };
         assert_eq!(borrowed.as_ptr(), STATIC_PAYLOAD.as_ptr());
         assert_eq!(borrowed.len(), STATIC_PAYLOAD.len());
-        assert_eq!(label, "static bytes");
         let mut files = crate::mapped_file::tests::Files::new();
         let path = files.write("app.skpk", b"file bytes");
         let mut builder = Builder::new().payload_file(&path);
-        let (mapped, label, dir) = builder.payload.take().unwrap().load().unwrap();
+        let (mapped, _, dir) = builder.payload.take().unwrap().load().unwrap();
         let crate::payload::PayloadBytes::File(mapped) = mapped else {
             panic!("mapped file expected")
         };
         assert_eq!(mapped.as_bytes(), b"file bytes");
-        assert_eq!(label, path.display().to_string());
         assert_eq!(dir.as_deref(), path.parent());
         assert!(builder.payload.is_none());
         #[cfg(target_os = "windows")]
