@@ -190,9 +190,11 @@ accepted and ignored without one say so below.
 | `clip-path`                                                       | ✅     | `inset()`, `circle()`, `ellipse()`, `polygon()`, `path()`, a box keyword            |
 | `clip-path: url()`, `xywh()`, `rect()`                            | ⛔     |                                                                                     |
 | `clip: rect()`                                                    | 🟡     | Only the empty rect of the visually-hidden idiom                                    |
-| `mask`, `mask-image`, `mask-position`, `mask-repeat`, `mask-size` | ✅     | `url()` SVG and raster masks, gradient masks                                        |
-| `mask-clip`, `mask-composite`                                     | 🟡     | The gradient-border ring: two layers, the top clipped to `content-box`, `exclude`   |
-| `mask-origin`, `mask-mode`, `mask-type`, `mask-border`            | ⛔     |                                                                                     |
+| `mask`, `mask-image`, `mask-position`, `mask-repeat`, `mask-size` | 🟡     | SVG and raster `url()`, gradients. Not `url(#id)`; a `fixed` descendant is unmasked |
+| `mask-mode`                                                       | 🟡     | `alpha`, `luminance`, `match-source` (as alpha); one mode for all the layers        |
+| `mask-clip`, `mask-origin`                                        | 🟡     | `border-box`; `mask-clip: content-box` only in the gradient-border ring             |
+| `mask-composite`                                                  | 🟡     | `add`; `exclude` only in the gradient-border ring (two layers, the top one clipped) |
+| `mask-type`, `mask-border`                                        | ⛔     |                                                                                     |
 | `-webkit-mask-*`                                                  | ⛔     | Use the unprefixed property                                                         |
 | `-webkit-box-reflect`                                             | ⛔     |                                                                                     |
 | `--shading`                                                       | ✅     | Skathi's GPU effects: a custom property browsers ignore. Applies to its own element |
