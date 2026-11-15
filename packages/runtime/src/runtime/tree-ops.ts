@@ -3,7 +3,7 @@ import { hooks } from "./state";
 import { isMirrorNode } from "./listeners";
 import { warnCompat } from "../compat";
 import { insertNode, nodeOps } from "./node-ops";
-import { detachNode, looseCreated } from "./nodes";
+import { detachNode, isLoose, looseCreated } from "./nodes";
 import { defineDom, siblingOf } from "./dom-members";
 import { NODE_MEMBERS } from "./protos";
 import { notifyMutation } from "./mutation-observer";
@@ -319,11 +319,42 @@ defineDom("insertAdjacentText", function (this: MirrorElement, where: unknown, d
   if (slot) insertAll(slot[0], [looseCreated(nodeOps.createText(String(data)))], slot[1]);
 });
 
-defineDom("cloneNode", function () {
-  warnCompat(
-    "cloneNode",
-    "element.cloneNode() is not implemented — the retained tree has no copy operation; render a " +
-      "second element instead",
-  );
-  return null;
-});
+/** A loose copy of `node`: tag, namespace, attributes (class and inline style among them) and, when `deep`, its subtree. Listeners and scope ids are not copied, as in the DOM. */
+export function cloneMirror(node: MirrorNode, deep: boolean): MirrorNode {
+  const copy = copyOf(node, deep);
+  return isLoose(copy) ? copy : looseCreated(copy);
+}
+function copyOf(node: MirrorNode, deep: boolean): MirrorNode {
+  if (node.kind !== 1) {
+    const text = node.text ?? "";
+    if (node.kind === 2) return nodeOps.createText(text);
+    const comment = nodeOps.createComment(text);
+    comment.text = text;
+    return comment;
+  }
+  const copy = fragments.has(node)
+    ? (new (globalThis as unknown as { DocumentFragment: new () => MirrorElement }).DocumentFragment() as MirrorElement)
+    : nodeOps.createElement(node.tag, node._ns);
+  for (const name of node.getAttributeNames()) {
+    const value = node.getAttribute(name);
+    if (value !== null) copy.setAttribute(name, value);
+  }
+  if (!deep) return copy;
+  if (node.ownText) nodeOps.setElementText(copy, node.ownText);
+  for (const child of node.childNodes) insertNode(copyOf(child, true), copy, null, false);
+  return copy;
+}
+
+defineDom(
+  "cloneNode",
+  function (this: MirrorNode, deep?: unknown) {
+    if (isMirrorNode(this)) return cloneMirror(this, !!deep);
+    warnCompat(
+      "cloneNode",
+      "cloneNode() on an element the engine created detached (a <style>, <link>, <a> or <input> from " +
+        "document.createElement) is not implemented; it answers null",
+    );
+    return null;
+  },
+  NODE_MEMBERS,
+);

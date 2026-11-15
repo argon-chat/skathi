@@ -102,6 +102,7 @@ interface MirrorNodeBase {
   readonly nextElementSibling: MirrorElement | null;
   readonly previousElementSibling: MirrorElement | null;
   hasChildNodes(): boolean;
+  cloneNode(deep?: boolean): MirrorNode;
   getRootNode(): unknown;
   dispatchEvent(ev: Event): boolean;
   /**
@@ -203,11 +204,9 @@ export interface MirrorElement extends MirrorNodeBase {
   hasPointerCapture(pointerId: number): boolean;
   releasePointerCapture(pointerId: number): void;
 
-  // The retained tree has no copy and no insert from outside the renderer.
   insertAdjacentElement(where: string, el: MirrorElement): MirrorElement;
   append(...nodes: unknown[]): void;
   remove(): void;
-  cloneNode(): null;
 
   currentTime: number;
   readonly duration: number;

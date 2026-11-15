@@ -1,6 +1,6 @@
 import { isMirrorEl } from "./controls";
 import { mark, vacant } from "./realm";
-import { ElementProto, TextProto } from "./protos";
+import { ElementProto, NodeProto, TextProto } from "./protos";
 import type { MirrorElement, MirrorNode } from "./types";
 import { defineGlobal } from "./globals";
 import { BRANDS, DOMRectListProto, HTMLCollectionProto, NodeListProto, isChildList } from "./collections";
@@ -210,9 +210,9 @@ const NodeIface: Iface | null = (() => {
     throw new TypeError("Illegal constructor");
   };
   Object.defineProperty(iface, "name", { value: "Node" });
-  const proto = Object.create(ET?.prototype ?? Object.prototype, {
-    constructor: { value: iface, writable: true, configurable: true },
-  }) as object;
+  const proto = NodeProto;
+  Object.setPrototypeOf(proto, ET?.prototype ?? Object.prototype);
+  Object.defineProperty(proto, "constructor", { value: iface, writable: true, configurable: true });
   Object.defineProperty(iface, "prototype", { value: proto, writable: false });
   for (const [k, v] of NODE_CONSTANTS) {
     Object.defineProperty(iface, k, { value: v, enumerable: true });

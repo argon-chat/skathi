@@ -14,6 +14,7 @@ import {
 import {
   ENGINE_TAGS,
   VALID_ELEMENT_NAME,
+  cloneMirror,
   domError,
   foreignNode,
   materializeOwnText,
@@ -26,7 +27,7 @@ import type { Detached } from "./labels";
 import { detachNode, looseCreated, nodeById } from "./nodes";
 import { nodeOps } from "./node-ops";
 import { AttrImpl } from "./attr";
-import type { EventHandler, MirrorElement, MirrorNode } from "./types";
+import type { EventHandler, ListenerOptions, MirrorElement, MirrorNode } from "./types";
 import { activeElement } from "./focus";
 import { warnCompat } from "../compat";
 import { interceptGlobalTarget, isMirrorNode } from "./listeners";
@@ -114,6 +115,11 @@ if (doc) {
     const c = looseCreated(nodeOps.createComment(String(data)));
     c.text = String(data);
     return c;
+  });
+  defDoc("importNode", (node: unknown, deep?: unknown) => {
+    const n = nodeArg(node, "importNode", "Document", 1);
+    if (!n) throw domError("importNode", "Document", "NotSupportedError", "The node provided is not a mirror node.");
+    return cloneMirror(n, !!deep);
   });
   defDoc("createAttribute", (name: unknown) => {
     const n = String(name);
@@ -208,7 +214,9 @@ if (doc) {
       classes: string[];
       style: Record<string, string>;
       attrs: Record<string, string>;
-    } = { classes: [], style: Object.create(null), attrs: Object.create(null) };
+      listeners: { type: string; fn: EventHandler; opts: ListenerOptions }[];
+    } = { classes: [], style: Object.create(null), attrs: Object.create(null), listeners: [] };
+    const captureOf = (opts: ListenerOptions) => (typeof opts === "boolean" ? opts : !!opts?.capture);
     const preRoot = {
       nodeType: 1,
       tagName: "HTML",
@@ -290,8 +298,23 @@ if (doc) {
       },
       insertAdjacentElement: (where: unknown, n: unknown) =>
         ensureDocumentRoot().insertAdjacentElement(String(where), n as MirrorElement),
-      addEventListener: () => {},
-      removeEventListener: () => {},
+      // A reference to `document.body` taken before mount is still this object once the root exists.
+      addEventListener(name: unknown, fn: unknown, opts?: ListenerOptions) {
+        if (appRoot) return appRoot.addEventListener(String(name), fn as EventHandler, opts);
+        if (typeof fn !== "function" && !(fn && typeof fn === "object")) return;
+        const type = String(name);
+        const capture = captureOf(opts);
+        if (pending.listeners.some((l) => l.type === type && l.fn === fn && captureOf(l.opts) === capture)) return;
+        pending.listeners.push({ type, fn: fn as EventHandler, opts });
+      },
+      removeEventListener(name: unknown, fn: unknown, opts?: ListenerOptions) {
+        if (appRoot) return appRoot.removeEventListener(String(name), fn as EventHandler, opts);
+        const type = String(name);
+        const capture = captureOf(opts);
+        pending.listeners = pending.listeners.filter(
+          (l) => !(l.type === type && l.fn === fn && captureOf(l.opts) === capture),
+        );
+      },
       getBoundingClientRect: () => ({
         ...viewportRect(),
         toJSON() {
@@ -322,6 +345,10 @@ if (doc) {
       for (const c of pending.classes) root.classList.add(c);
       for (const k of Object.keys(pending.style)) root.style.setProperty(k, pending.style[k]);
       for (const k of Object.keys(pending.attrs)) root.setAttribute(k, pending.attrs[k]);
+      // Once: the root owns them now, and the next app's module code adds its own.
+      const listeners = pending.listeners;
+      pending.listeners = [];
+      for (const l of listeners) root.addEventListener(l.type, l.fn, l.opts);
     };
     for (const name of ["body", "documentElement"]) {
       try {
