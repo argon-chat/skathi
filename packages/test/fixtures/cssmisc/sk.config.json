@@ -1,0 +1,13 @@
+{
+  "$comment": "Small CSS features checked by their layout or pixels: `order`, `object-position`, CSS Color 4/5 functions, `contain: paint` and `scroll-behavior: smooth`.",
+
+  "name": "sk-test-cssmisc",
+
+  "window": {
+    "title": "Skathi — css misc (fixture)",
+    "width": 720,
+    "height": 520,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

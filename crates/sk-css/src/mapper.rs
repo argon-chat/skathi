@@ -3782,6 +3782,7 @@ fn apply_property(
         }
         FlexGrow(v, _) => r.flex_grow = Some(*v),
         FlexShrink(v, _) => r.flex_shrink = Some(*v),
+        Order(v, _) => r.vn_order = Some(*v),
         FlexBasis(v, _) => r.flex_basis = lpa_length(v),
         Flex(v, _) => {
             r.flex_grow = Some(v.grow);
@@ -6348,6 +6349,31 @@ mod tests {
         assert_eq!(r.flex_grow, Some(0.0));
         assert_eq!(r.flex_shrink, Some(0.0));
         assert_eq!(r.flex_basis, Some(Length::Auto));
+    }
+
+    #[test]
+    fn order_reaches_the_layout_in_every_spelling() {
+        assert_eq!(clean("order: -3").vn_order, Some(-3));
+        assert_eq!(clean("-webkit-order: 2").vn_order, Some(2));
+        let mut d = Vec::new();
+        let vars = crate::vars::resolve(
+            &Rc::new(Vars::default()),
+            &[&("--o".to_string(), "7".to_string())],
+            &crate::Env::default(),
+            &mut d,
+        );
+        let mut r = StyleRefinement::default();
+        apply_dynamic(
+            "order",
+            "var(--o)",
+            &vars,
+            &crate::Env::default(),
+            &mut r,
+            &mut Extras::default(),
+            &mut d,
+        );
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(r.vn_order, Some(7));
     }
 
     #[test]

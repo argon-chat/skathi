@@ -337,6 +337,7 @@ pub(crate) fn wrapper_style(node: &Node, size: (f32, f32)) -> gpui::StyleRefinem
         // Margin belongs only here; normalize_inner_root removes the inner duplicate.
         st.margin = cs.base.margin.clone();
         st.align_self = cs.base.align_self;
+        st.vn_order = cs.base.vn_order;
     }
     st
 }
