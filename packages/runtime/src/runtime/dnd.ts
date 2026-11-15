@@ -16,7 +16,6 @@ import {
 import { focusOvertaken, noteHostFocus, withRelatedTarget } from "./focus";
 import { dndRearm, dndState } from "./listeners";
 import { pointer, pointerCaptures, releaseCapturedPointer } from "./pointer-capture";
-import { pointerLockEvent } from "./pointer-lock";
 import { nodeById } from "./nodes";
 import { deliverFrameMessage, isFrameEl } from "./media";
 import { DERIVED, DERIVED_OF } from "./event-names";
@@ -259,7 +258,8 @@ function dndDispatch(
 __sk_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
   const name = CODE_TO_NAME[evCode];
   if (!name) return true;
-  if (name === "pointerlockchange" || name === "pointerlockerror") return pointerLockEvent(name, a, key);
+  if (name === "pointerlockchange" || name === "pointerlockerror")
+    return propagateAtDocument(name, new Event(name, { bubbles: true }));
   if (name === "mousedown" || name === "mousemove" || name === "mouseup" || name === "pointercancel") {
     pointer.position = { x: a, y: b, button: c, modifiers: d };
     pointer.buttons = buttonsFor(name, c);

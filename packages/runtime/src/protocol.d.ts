@@ -35,11 +35,8 @@ declare function __sk_remove(id: SkNodeId): void;
 declare function __sk_fullscreen_element(id: SkNodeId): boolean;
 /** Queries the owner OS window; an optional boolean queues its fullscreen state. `ownerRoot` is 0 for the primary window or a SkWindow root id. */
 declare function __sk_fullscreen_window(ownerRoot: SkNodeId, on?: boolean): boolean;
-/** Asks for the pointer lock on `id`; the window's next frame answers with `pointerlockchange` or `pointerlockerror` carrying the returned request number. */
-declare function __sk_pointer_lock_request(id: SkNodeId, unadjustedMovement: boolean): number;
-declare function __sk_pointer_lock_exit(): void;
-/** The element holding the lock, 0 for none. */
-declare function __sk_pointer_lock_element(): SkNodeId;
+/** Hands the host the registry the native DOM members answer nodes from. */
+declare function __sk_set_node_lookup(lookup: (id: SkNodeId) => object | undefined): void;
 
 /** One inline declaration: `""` REMOVES it; a value may end in `!important`; an updated key keeps its place. */
 declare function __sk_set_style(id: SkNodeId, key: SkNameId, value: string): void;

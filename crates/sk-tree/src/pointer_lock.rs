@@ -10,11 +10,16 @@
 //! window as focused (tests); `deny` refuses every request.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
 use gpui::{App, KeystrokeEvent, PointerLockError, VnPointerLock, Window};
-use sk_runtime::redjs::api::Value;
+use sk_runtime::host::{self, global, Settler};
+use sk_runtime::redjs::webapi::util::*;
 use sk_runtime::{host_fn, JsRuntime};
+
+use crate::native_dom;
 
 use crate::tree::{self, Kind};
 use crate::windows::{self, WinKey};
@@ -313,6 +318,8 @@ impl State {
 
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
+    /// The promise each unsettled `requestPointerLock()` returned.
+    static PENDING: RefCell<HashMap<u32, Settler>> = RefCell::new(HashMap::new());
 }
 
 fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
@@ -419,71 +426,92 @@ pub(crate) fn window_closed(window: WinKey) {
     with_state(|s| s.window_closed(window));
 }
 
+/// The document went away: its requests are never answered.
 pub fn navigated() {
     with_state(State::navigated);
-}
-
-fn deliver(notes: Vec<Note>, window: &mut Window, cx: &mut App) {
-    for note in notes {
-        let (code, request, text) = match note {
-            Note::Change { request } => (tree::EV_POINTERLOCKCHANGE, request, None),
-            Note::Error {
-                request,
-                name,
-                message,
-            } => (
-                tree::EV_POINTERLOCKERROR,
-                request,
-                Some(format!("{name}: {message}")),
-            ),
-        };
-        let payload = EventPayload {
-            a: f64::from(request),
-            key: text.as_deref(),
-            ..Default::default()
-        };
-        crate::off_input(|| crate::render::js_dispatch_app(0, code, &payload, window, cx));
+    let abandoned: Vec<Settler> =
+        PENDING.with(|p| p.borrow_mut().drain().map(|(_, s)| s).collect());
+    if !abandoned.is_empty() {
+        JsRuntime::try_with(|rt| {
+            for s in abandoned {
+                unsafe { s.abandon(rt.raw()) };
+            }
+        });
     }
 }
 
-host_fn!(fn sk_pointer_lock_request(_g, args) {
-    let element = args.arg(0).as_number().unwrap_or(0.0) as u32;
-    let unadjusted = args.arg(1).as_bool().unwrap_or(false);
+/// Fires each note's event at the document, then settles the request it answers.
+fn deliver(notes: Vec<Note>, window: &mut Window, cx: &mut App) {
+    for note in notes {
+        let code = match note {
+            Note::Change { .. } => tree::EV_POINTERLOCKCHANGE,
+            Note::Error { .. } => tree::EV_POINTERLOCKERROR,
+        };
+        crate::off_input(|| {
+            crate::render::js_dispatch_app(0, code, &EventPayload::default(), window, cx)
+        });
+        JsRuntime::try_with(|rt| unsafe { settle(rt.raw(), &note) });
+    }
+}
+
+unsafe fn settle(g: *mut c_void, note: &Note) {
+    let request = match *note {
+        Note::Change { request } | Note::Error { request, .. } => request,
+    };
+    let Some(settler) = PENDING.with(|p| p.borrow_mut().remove(&request)) else {
+        return;
+    };
+    match *note {
+        Note::Change { .. } => settler.resolve(g, UNDEF),
+        Note::Error { name, message, .. } => settler.reject(g, host::error(g, name, message)),
+    }
+}
+
+host_fn!(fn request_pointer_lock(g, args) {
+    let options = args.arg(0).0;
+    let unadjusted = is_cell(options) && unsafe { host::truthy(g, get(g, options, "unadjustedMovement")) };
+    let element = unsafe { native_dom::node_id(g, args.this().0) }.unwrap_or(0);
     let id = with_state(|s| s.request(element, unadjusted, Instant::now()));
     tree::with_tree(|t| t.mark_dirty());
-    Value::double(f64::from(id)).0
+    let (promise, settler) = unsafe { host::deferred(g) };
+    PENDING.with(|p| p.borrow_mut().insert(id, settler));
+    promise
 });
 
-host_fn!(fn sk_pointer_lock_exit(_g, _args) {
+host_fn!(fn exit_pointer_lock(_g, _args) {
     with_state(State::exit);
     tree::with_tree(|t| t.mark_dirty());
-    Value::undefined().0
+    UNDEF
 });
 
-host_fn!(fn sk_pointer_lock_element(_g, _args) {
+host_fn!(fn pointer_lock_element(g, _args) {
     let held = with_state(|s| s.held);
     let element = held
         .filter(|h| tree::read_tree(|t| crate::fullscreen::connected(t, h.element)))
         .map_or(0, |h| h.element);
-    Value::double(f64::from(element)).0
+    unsafe { native_dom::node_by_id(g, element) }
 });
 
 pub(crate) fn install(rt: &JsRuntime) {
-    rt.register(
-        "__sk_pointer_lock_request",
-        2,
-        sk_pointer_lock_request as *const std::ffi::c_void,
-    );
-    rt.register(
-        "__sk_pointer_lock_exit",
-        0,
-        sk_pointer_lock_exit as *const std::ffi::c_void,
-    );
-    rt.register(
-        "__sk_pointer_lock_element",
-        0,
-        sk_pointer_lock_element as *const std::ffi::c_void,
-    );
+    unsafe {
+        let g = rt.raw();
+        native_dom::method(
+            g,
+            native_dom::proto(g, "Element"),
+            "requestPointerLock",
+            0,
+            request_pointer_lock,
+        );
+        let document = get(g, global(g), "document");
+        native_dom::method(g, document, "exitPointerLock", 0, exit_pointer_lock);
+        native_dom::accessor(
+            g,
+            document,
+            "pointerLockElement",
+            pointer_lock_element,
+            None,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -756,6 +784,94 @@ mod tests {
         let mut other = Fake::new();
         other.window = OTHER;
         assert_eq!(s.tick(&mut other), vec![change(0)]);
+    }
+
+    fn js(src: &str) -> String {
+        JsRuntime::with(|rt| {
+            let v = rt
+                .ctx()
+                .eval(src)
+                .unwrap_or_else(|e| panic!("{src}: {e:?}"));
+            rt.ctx().to_rust_string(v).unwrap()
+        })
+    }
+
+    #[test]
+    fn request_pointer_lock_is_a_promise_the_settling_note_answers() {
+        sk_runtime::testing::on_js_thread(|| {
+            JsRuntime::with(|rt| {
+                native_dom::install(rt);
+                install(rt);
+            });
+            with_state(|s| *s = State::default());
+            let el = tree::with_tree(|t| {
+                let root = t.create_root();
+                let tag = t.intern("canvas");
+                let el = t.create_element(tag);
+                t.insert(el, root, 0);
+                el
+            });
+            js(&format!(
+                "globalThis.canvas = Object.create(HTMLElement.prototype); canvas.__skId = {el}; \
+                 __sk_set_node_lookup((id) => (id === {el} ? canvas : undefined)); globalThis.seen = []; \
+                 canvas.requestPointerLock({{ unadjustedMovement: true }}).then(() => seen.push('locked')); \
+                 canvas.requestPointerLock().catch((e) => seen.push(`${{e instanceof DOMException}} ${{e.name}}: ${{e.message}}`)); \
+                 Object.create(HTMLElement.prototype).requestPointerLock(); ''"
+            ));
+            let requests: Vec<(u32, u32, bool)> = with_state(|s| {
+                s.ops
+                    .iter()
+                    .filter_map(|op| match *op {
+                        Op::Request {
+                            id,
+                            element,
+                            unadjusted,
+                            ..
+                        } => Some((id, element, unadjusted)),
+                        Op::Exit => None,
+                    })
+                    .collect()
+            });
+            let [(first, a, true), (second, b, false), (_, 0, false)] = requests[..] else {
+                panic!("{requests:?}");
+            };
+            assert_eq!((a, b), (el, el));
+            assert_eq!(js("String(document.pointerLockElement)"), "null");
+
+            with_state(|s| {
+                s.held = Some(Held {
+                    element: el,
+                    window: W,
+                    unadjusted: true,
+                });
+            });
+            JsRuntime::with(|rt| unsafe {
+                settle(
+                    rt.raw(),
+                    &Note::Error {
+                        request: second,
+                        name: "WrongDocumentError",
+                        message: "Not here.",
+                    },
+                );
+                settle(rt.raw(), &Note::Change { request: first });
+                settle(rt.raw(), &Note::Change { request: first });
+            });
+            assert_eq!(js("String(document.pointerLockElement === canvas)"), "true");
+            js("''");
+            assert_eq!(
+                js("seen.join('|')"),
+                "true WrongDocumentError: Not here.|locked"
+            );
+
+            js("document.exitPointerLock()");
+            assert!(with_state(|s| s.ops.contains(&Op::Exit)));
+            navigated();
+            assert!(
+                PENDING.with(|p| p.borrow().is_empty()),
+                "a reload forgets every request"
+            );
+        });
     }
 
     #[test]

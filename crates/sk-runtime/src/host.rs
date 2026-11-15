@@ -53,6 +53,11 @@ impl Settler {
         }
     }
 
+    /// Lets the promise stay pending forever, releasing what kept it settleable.
+    pub unsafe fn abandon(self, g: *mut c_void) {
+        self.release(g);
+    }
+
     unsafe fn release(self, g: *mut c_void) {
         redjs_unprotect(g, self.resolve);
         redjs_unprotect(g, self.reject);

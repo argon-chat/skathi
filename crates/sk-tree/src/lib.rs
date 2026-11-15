@@ -28,6 +28,7 @@ mod live_state;
 pub mod log;
 mod lottie;
 mod mask;
+mod native_dom;
 mod observe;
 pub mod perf;
 mod pointer;
@@ -483,6 +484,7 @@ pub fn install(rt: &JsRuntime) {
     css_namespace::install(rt);
     selection::install(rt);
     pointer::install(rt);
+    native_dom::install(rt);
     pointer_lock::install(rt);
     observe::install(rt);
     font_api::install(rt);

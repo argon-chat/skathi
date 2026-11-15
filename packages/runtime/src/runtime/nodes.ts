@@ -18,6 +18,7 @@ export const looseRoots = new Map<SkNodeId, { ref: WeakRef<MirrorNode>; box: SkN
 export function nodeById(id: SkNodeId): MirrorNode | undefined {
   return nodesById.get(id) ?? (looseById.size ? looseById.get(id)?.deref() : undefined);
 }
+__sk_set_node_lookup(nodeById);
 export const isLoose = (n: MirrorNode): boolean => looseById.size !== 0 && looseById.get(n.__skId)?.deref() === n;
 export function loosen(n: MirrorNode): void {
   forEachDeep(n, (d) => {
