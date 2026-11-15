@@ -12,6 +12,7 @@ import MediaPage from "./pages/MediaPage.vue";
 import MotionPage from "./pages/MotionPage.vue";
 import NetworkPage from "./pages/NetworkPage.vue";
 import PermissionsPage from "./pages/PermissionsPage.vue";
+import ShadersPage from "./pages/ShadersPage.vue";
 import StoragePage from "./pages/StoragePage.vue";
 import StylesPage from "./pages/StylesPage.vue";
 import SystemPage from "./pages/SystemPage.vue";
@@ -108,6 +109,14 @@ export const pages: PageEntry[] = [
     section: "Media",
     blurb: "Canvas 2D drawing and a WebGPU shader",
     component: GraphicsPage,
+  },
+  {
+    path: "/shaders",
+    title: "Shaders",
+    icon: "shaders",
+    section: "Media",
+    blurb: "Liquid glass, nebula, halftone: the app's own GPU effects in CSS",
+    component: ShadersPage,
   },
   {
     path: "/motion",
