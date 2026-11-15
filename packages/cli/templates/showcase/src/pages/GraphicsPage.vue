@@ -118,6 +118,31 @@ onMounted(() => {
   if (surface.value) startGpu(surface.value).catch((e: unknown) => (adapterName.value = describe(e)));
 });
 onUnmounted(() => stopGpu?.());
+
+const stage = shallowRef<HTMLElement | null>(null);
+const locked = ref(false);
+const lockError = ref("");
+const spin = ref({ x: -20, y: 30 });
+const travelled = ref(0);
+
+function lock() {
+  lockError.value = "";
+  stage.value?.requestPointerLock().catch((e: unknown) => (lockError.value = describe(e)));
+}
+function look(e: MouseEvent) {
+  if (!locked.value) return;
+  spin.value = {
+    x: Math.max(-80, Math.min(80, spin.value.x - e.movementY * 0.4)),
+    y: (spin.value.y + e.movementX * 0.4) % 360,
+  };
+  travelled.value += Math.hypot(e.movementX, e.movementY);
+}
+const onLockChange = () => (locked.value = document.pointerLockElement === stage.value);
+onMounted(() => document.addEventListener("pointerlockchange", onLockChange));
+onUnmounted(() => {
+  document.removeEventListener("pointerlockchange", onLockChange);
+  if (locked.value) document.exitPointerLock();
+});
 </script>
 
 <template>
@@ -142,6 +167,21 @@ onUnmounted(() => stopGpu?.());
       <canvas ref="surface" class="canvas" :width="W * dpr" :height="H * dpr" />
       <p class="faint">A WGSL fragment shader, redrawn every frame with the time in a uniform buffer.</p>
     </Card>
+
+    <Card title="Pointer lock" api="requestPointerLock()">
+      <div ref="stage" class="stage" :class="{ locked }" @click="lock" @mousemove="look">
+        <div class="cube" :style="{ transform: `rotate(${spin.y}deg) skewX(${spin.x / 4}deg)` }">
+          <div class="face" />
+        </div>
+        <span class="hint">{{ locked ? "Move the mouse to turn the shape" : "Click to lock the pointer" }}</span>
+      </div>
+      <div class="row">
+        <span class="badge" :class="{ on: locked }">{{ locked ? "Locked" : "Not locked" }}</span>
+        <span class="faint">Esc releases the pointer</span>
+        <span class="faint mono">{{ Math.round(travelled) }} px of movement</span>
+      </div>
+      <p v-if="lockError" class="faint">{{ lockError }}</p>
+    </Card>
   </Page>
 </template>
 
@@ -150,5 +190,50 @@ onUnmounted(() => stopGpu?.());
   width: 640px;
   height: 220px;
   border-radius: 10px;
+}
+.stage {
+  position: relative;
+  width: 640px;
+  height: 180px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: radial-gradient(circle at 50% 40%, #1f1b3a, #121218);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.stage.locked {
+  border-color: var(--accent);
+}
+.cube {
+  width: 72px;
+  height: 72px;
+}
+.face {
+  width: 100%;
+  height: 100%;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  box-shadow: 0 10px 30px #6d7cff55;
+}
+.hint {
+  position: absolute;
+  left: 14px;
+  bottom: 10px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--line-strong);
+  color: var(--text-faint);
+}
+.badge.on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 </style>
