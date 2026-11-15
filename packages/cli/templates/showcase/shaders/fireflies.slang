@@ -1,9 +1,10 @@
 import sk;
 
 // Fireflies wandering over the element on paths made of incommensurate sines, so no two repeat,
-// each blinking on its own rhythm. With `lure` above 0 the ones near `at` (the pointer) gather round it.
+// each blinking on its own rhythm. With `lure` above 0 the ones near the pointer gather round it while
+// it is in the window.
 [SkEffect("fireflies")]
-[SkDoc("glowing fireflies drifting about, drawn to a point")]
+[SkDoc("glowing fireflies drifting about, drawn to the pointer")]
 struct Fireflies : IEffect
 {
     [SkAnimated] [SkDefault("1")] [SkRange(0.0, 4.0)]
@@ -13,19 +14,22 @@ struct Fireflies : IEffect
     [SkLength] [SkDefault("16")] [SkRange(2.0, 128.0)]
     float glow;
 
-    // The pointer, 0..1 across the element.
-    [SkDefault("0.5 0.5")]
-    float2 at;
-
     // 0 ignores the pointer; 1 gathers the nearby fireflies round it.
     [SkDefault("0")] [SkRange(0.0, 1.0)]
     float lure;
+
+    [SkPointer]
+    float2 at;
+
+    [SkPointerTimes]
+    float3 seen;
 
     float4 shade(EffectInput input)
     {
         float t = input.time * speed;
         float reach = max(glow, 1.0);
         float aspect = input.size.x / max(input.size.y, 1.0);
+        float near = sk_pointer_presence(seen, input.time, 0.5);
         float3 light = float3(0.0, 0.0, 0.0);
         for (int i = 0; i < 28; i++)
         {
@@ -37,7 +41,7 @@ struct Fireflies : IEffect
 
             // Drawn in by distance in the element's own proportions, then kept circling the pointer.
             float2 toward = (at - wander) * float2(aspect, 1.0);
-            float pull = lure * exp(-dot(toward, toward) / 0.35);
+            float pull = lure * near * exp(-dot(toward, toward) / 0.35);
             float2 circle = float2(cos(t * (0.6 + h.x) + 6.28 * k.x) / aspect, sin(t * (0.6 + h.x) + 6.28 * k.x));
             float2 spot = lerp(wander, at + circle * (0.04 + 0.06 * k.y), pull) * input.size;
 

@@ -1,17 +1,13 @@
 import sk;
 
-// Four layers of snow, the nearer ones bigger, softer and faster. The flakes near `at` (the pointer,
-// from JS) are pushed gently aside; the rest of the snow does not notice it.
+// Four layers of snow, the nearer ones bigger, softer and faster. The flakes near the pointer are
+// pushed gently aside while it is in the window; the rest of the snow does not notice it.
 [SkEffect("snow")]
-[SkDoc("parallax snowfall that parts around a point")]
+[SkDoc("parallax snowfall that parts around the pointer")]
 struct Snow : IEffect
 {
     [SkAnimated] [SkDefault("1")] [SkRange(0.0, 4.0)]
     float speed;
-
-    // The pointer, 0..1 across the element.
-    [SkDefault("0.5 0.5")]
-    float2 at;
 
     // How wide a berth the flakes give the pointer; 0 turns it off.
     [SkLength] [SkDefault("90")] [SkRange(0.0, 1024.0)]
@@ -19,6 +15,12 @@ struct Snow : IEffect
 
     [SkDefault("0.6")] [SkRange(0.0, 1.0)]
     float amount;
+
+    [SkPointer]
+    float2 at;
+
+    [SkPointerTimes]
+    float3 seen;
 
     static override bool straightAlpha() { return true; }
 
@@ -28,7 +30,8 @@ struct Snow : IEffect
         float2 pointer = at * input.size;
         float2 offset = input.px - pointer;
         float reach = max(berth, 1.0);
-        float part = berth > 0.0 ? 0.3 * exp(-dot(offset, offset) / (reach * reach)) : 0.0;
+        float near = sk_pointer_presence(seen, input.time, 0.5);
+        float part = berth > 0.0 ? 0.3 * near * exp(-dot(offset, offset) / (reach * reach)) : 0.0;
         float2 p = pointer + offset * (1.0 - part);
 
         float alpha = 0.0;

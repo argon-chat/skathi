@@ -23,11 +23,6 @@ struct Lens : IEffect
     [SkColor] [SkOptional] [SkDefault("#ffffff0f")]
     float4 tint;
 
-    float4 backdropAt(float2 uv)
-    {
-        return sk_backdrop_input.SampleLevel(sk_clamp_sampler, uv, 0.0);
-    }
-
     float4 shade(EffectInput input)
     {
         // `sd` is a distance field, so its screen-space gradient is the outward normal of the rim.
@@ -38,10 +33,10 @@ struct Lens : IEffect
         float curve = edge * edge;
 
         float2 magnify = (input.size * 0.5 - input.px) * 0.07;
-        float2 shift = (normal * depth * curve + magnify) / sk_viewport_size;
-        float r = backdropAt(input.uv + shift * (1.0 + dispersion)).r;
-        float4 g = backdropAt(input.uv + shift);
-        float b = backdropAt(input.uv + shift * (1.0 - dispersion)).b;
+        float2 shift = normal * depth * curve + magnify;
+        float r = input.backdropAtPx(input.px + shift * (1.0 + dispersion)).r;
+        float4 g = input.backdropAtPx(input.px + shift);
+        float b = input.backdropAtPx(input.px + shift * (1.0 - dispersion)).b;
         float4 glass = sk_over(float4(r, g.g, b, g.a), sk_premultiply(tint));
 
         // A key light from the top left catches that rim, a weaker internal reflection the opposite one.

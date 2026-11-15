@@ -1,16 +1,12 @@
 import sk;
 
-// A dot grid that swells and lights up around a point, pushing the dots aside as it passes. The point
-// comes from JS: the page writes `--shading: spotlight(x, y, ...)` on every pointer move, so the
-// shader needs no input of its own.
+// A dot grid that swells and lights up around the pointer, pushing the dots aside as it passes. The
+// host hands the effect the pointer, so no script runs: the light dims as the pointer moves off the
+// element and fades when it leaves the window.
 [SkEffect("spotlight")]
-[SkDoc("a dot grid lit and displaced around a point")]
+[SkDoc("a dot grid lit and displaced around the pointer")]
 struct Spotlight : IEffect
 {
-    // The lit point, 0..1 across the element.
-    [SkDefault("0.5 0.5")]
-    float2 at;
-
     [SkLength] [SkDefault("140")] [SkRange(8.0, 1024.0)]
     float radius;
 
@@ -21,17 +17,28 @@ struct Spotlight : IEffect
     [SkColor] [SkOptional] [SkDefault("#8b9dff")]
     float4 color;
 
+    [SkPointer]
+    float2 at;
+
+    [SkPointerTimes] [SkAnimatedFor(0.3)]
+    float3 seen;
+
     static override bool straightAlpha() { return true; }
 
     float4 shade(EffectInput input)
     {
-        float2 offset = input.px - at * input.size;
+        float2 pointer = at * input.size;
+        float2 outside = max(abs(pointer - input.size * 0.5) - input.size * 0.5, 0.0);
+        float over = 1.0 - smoothstep(0.0, 28.0 * input.scale, length(outside));
+        float lit = strength * over * sk_pointer_presence(seen, input.time, 0.3);
+
+        float2 offset = input.px - pointer;
         float reach = max(radius, 1.0);
-        float near = exp(-dot(offset, offset) / (reach * reach)) * strength;
+        float near = exp(-dot(offset, offset) / (reach * reach)) * lit;
 
         // Near the light each pixel looks up the grid closer to it, which magnifies the dots there.
         float zoom = 1.0 - 0.45 * near;
-        float2 p = at * input.size + offset * zoom;
+        float2 p = pointer + offset * zoom;
 
         float spacing = 16.0 * input.scale;
         float2 cell = (frac(p / spacing) - 0.5) * spacing / zoom;

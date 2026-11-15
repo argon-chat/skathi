@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, reactive, ref, shallowRef } from "vue";
+import { computed, ref, shallowRef } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
 import { fullWindow, shatter } from "../fullwindow";
@@ -21,31 +21,6 @@ const warm = ref(false);
 const cells = [6, 9, 14];
 const cell = ref(9);
 const halftone = computed(() => `halftone(${cell.value}px, 0.125, 1, #0b0b12)`);
-
-const pad = shallowRef<HTMLElement | null>(null);
-const target = { x: 0.5, y: 0.5, on: 0 };
-const light = reactive({ x: 0.5, y: 0.5, on: 0 });
-let frame = 0;
-function follow() {
-  light.x += (target.x - light.x) * 0.2;
-  light.y += (target.y - light.y) * 0.2;
-  light.on += (target.on - light.on) * 0.12;
-  const settled = Math.abs(target.x - light.x) + Math.abs(target.y - light.y) + Math.abs(target.on - light.on) < 0.001;
-  frame = settled ? 0 : requestAnimationFrame(follow);
-}
-function aim(e: MouseEvent, on: number) {
-  if (pad.value) {
-    const rect = pad.value.getBoundingClientRect();
-    target.x = (e.clientX - rect.left) / rect.width;
-    target.y = (e.clientY - rect.top) / rect.height;
-  }
-  target.on = on;
-  if (!frame) frame = requestAnimationFrame(follow);
-}
-const spotlight = computed(
-  () => `spotlight(${light.x.toFixed(4)}, ${light.y.toFixed(4)}, 150px, ${light.on.toFixed(3)}, #8b9dff)`,
-);
-onUnmounted(() => cancelAnimationFrame(frame));
 </script>
 
 <template>
@@ -121,17 +96,14 @@ onUnmounted(() => cancelAnimationFrame(frame));
       </div>
     </Card>
 
-    <Card title="Spotlight" api="spotlight · parameters from JS">
-      <div
-        ref="pad"
-        class="pad"
-        :style="{ '--shading': spotlight }"
-        @mousemove="aim($event, 1)"
-        @mouseleave="aim($event, 0)"
-      >
+    <Card title="Spotlight" api="spotlight · [SkPointer]">
+      <div class="pad">
         <span class="hint">move the pointer here</span>
       </div>
-      <p class="faint">The page rewrites the effect's arguments every frame from the pointer, eased in JavaScript.</p>
+      <p class="faint">
+        The host hands the effect the pointer and repaints it as the pointer moves, so no script runs. The light dims as
+        the pointer leaves the panel.
+      </p>
     </Card>
   </Page>
 </template>
@@ -278,6 +250,7 @@ onUnmounted(() => cancelAnimationFrame(frame));
   padding: 14px;
   border-radius: 12px;
   background: #0e0e16;
+  --shading: spotlight(150px, 1, #8b9dff);
 }
 .hint {
   font-size: 12px;

@@ -96,7 +96,7 @@ struct Shatter : IEffect
             }
         }
 
-        float4 seen = sk_backdrop_input.SampleLevel(sk_clamp_sampler, input.uv + (source - input.px) / sk_viewport_size, 0.0);
+        float4 seen = input.backdropAtPx(source);
         float4 gone = sk_premultiply(behind);
         if (!found)
             return gone;

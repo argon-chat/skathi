@@ -30,8 +30,7 @@ struct Halftone : IEffect
 
         // Back to element pixels, kept inside the element so the edge cells read its own backdrop.
         float2 at = clamp(sk_rotate(centre * cell, turn), float2(0.0, 0.0), input.size);
-        float2 uv = input.uv + (at - input.px) / sk_viewport_size;
-        float4 seen = sk_backdrop_input.SampleLevel(sk_clamp_sampler, uv, 0.0);
+        float4 seen = input.backdropAtPx(at);
 
         float3 rgb = seen.rgb / max(seen.a, 1e-4);
         float ink = sqrt(saturate(sk_luma(rgb) * 1.15)) * 0.5 * cell;
