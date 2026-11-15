@@ -8,6 +8,7 @@ import ConsolePanel from "./components/ConsolePanel.vue";
 import NetworkPanel from "./components/NetworkPanel.vue";
 import PerfPanel from "./components/PerfPanel.vue";
 import StoragePanel from "./components/StoragePanel.vue";
+import EffectsPanel from "./components/EffectsPanel.vue";
 import TargetsPanel from "./components/TargetsPanel.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import { onKeydown } from "./keys";
@@ -88,9 +89,9 @@ function onKey(event: KeyboardEvent): void {
     ui.focusPrompt?.();
     return;
   }
-  if (ctrl && "12345".includes(event.key)) {
+  if (ctrl && "123456".includes(event.key)) {
     event.preventDefault();
-    setTab((["elements", "network", "performance", "storage", "targets"] as const)[Number(event.key) - 1]!);
+    setTab((["elements", "network", "performance", "storage", "targets", "effects"] as const)[Number(event.key) - 1]!);
     return;
   }
   if (event.key === "Escape") {
@@ -192,6 +193,12 @@ onUnmounted(() => {
         :request="request"
         :session-key="state.session"
       />
+      <EffectsPanel
+        v-else-if="state.tab === 'effects'"
+        :height="mainH"
+        :request="request"
+        :session-key="state.session"
+      />
       <TargetsPanel v-else :height="mainH" />
     </div>
 
@@ -207,7 +214,7 @@ onUnmounted(() => {
       <span v-if="state.picking" class="mode"> ⌖ click an element in the app · Esc to cancel </span>
       <span v-else-if="ui.flash" class="flash" :class="{ bad: ui.flashBad }">{{ ui.flash }}</span>
       <span v-else class="hint">
-        Ctrl+Shift+C inspect · Ctrl+F find · Esc console · Ctrl+1…5 panels · Ctrl+` prompt · Ctrl+C copy row
+        Ctrl+Shift+C inspect · Ctrl+F find · Esc console · Ctrl+1…6 panels · Ctrl+` prompt · Ctrl+C copy row
       </span>
       <span class="spacer"></span>
       <span v-if="state.tab === 'elements' && state.selected !== null" class="fact">node {{ state.selected }}</span>

@@ -458,4 +458,4 @@ export interface Shot extends ScreenshotReply {
 
 export type Status = "detached" | "attaching" | "attached" | "lost";
 
-export type Tab = "elements" | "network" | "performance" | "storage" | "targets";
+export type Tab = "elements" | "effects" | "network" | "performance" | "storage" | "targets";

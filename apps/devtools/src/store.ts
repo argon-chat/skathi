@@ -384,7 +384,7 @@ function fail(e: unknown): string {
 function streams(): PushStream[] {
   const want: PushStream[] = ["status"];
   if (state.consoleOpen) want.push("logs");
-  if (state.tab === "elements") want.push("tree");
+  if (state.tab === "elements" || state.tab === "effects") want.push("tree");
   if (state.tab === "network") want.push("net");
   if (state.tab === "performance" && !state.captureActive) want.push("perf");
   return want;

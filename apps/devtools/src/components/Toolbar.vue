@@ -9,6 +9,7 @@ const TABS: { id: Tab; label: string; key: string }[] = [
   { id: "performance", label: "Performance", key: "3" },
   { id: "storage", label: "Storage", key: "4" },
   { id: "targets", label: "Targets", key: "5" },
+  { id: "effects", label: "Effects", key: "6" },
 ];
 
 const showWindows = computed(() => state.windows.length > 1);
