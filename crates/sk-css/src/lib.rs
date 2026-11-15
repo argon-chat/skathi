@@ -25,6 +25,7 @@ mod registered;
 mod share;
 mod transition;
 mod vars;
+pub mod view_transition;
 
 use std::rc::Rc;
 
@@ -400,6 +401,8 @@ struct RuleEntry {
     /// `::before` / `::after`. A rule that carries one styles a GENERATED box, not the element it
     /// matched, so it is folded separately.
     pseudo: Option<PseudoElement>,
+    /// Rewritten from a view transition pseudo-element: it matches the stand-ins only.
+    vt: bool,
     condition: Option<u32>,
     diagnostics: Option<Rc<Vec<String>>>,
     /// Author-written declarations; captured only under `set_capture_rule_text` since a Tailwind
@@ -681,6 +684,7 @@ pub struct Engine {
     /// indices mean nothing across sheets and a rebase rewrites declarations in place.
     generation: u64,
     share: bool,
+    collecting_ua: bool,
     pub diagnostics: Vec<String>,
 }
 
@@ -1004,6 +1008,7 @@ impl Engine {
             viewport_unkept: false,
             generation: next_generation(),
             share: share::enabled(),
+            collecting_ua: false,
             diagnostics: Vec::new(),
         };
         // The flag describes THIS sheet: a resize only recompiles when the sheet currently
@@ -1032,19 +1037,23 @@ impl Engine {
 
     fn collect_ua(&mut self, order: &mut u32) {
         let parsed = UA_PARSED.with(|ua| {
-            *ua.get_or_init(
-                || match StyleSheet::parse(UA_SHEET, ParserOptions::default()) {
+            *ua.get_or_init(|| {
+                let text: &'static str =
+                    Box::leak(format!("{UA_SHEET}{}", view_transition::UA_SHEET).into_boxed_str());
+                match StyleSheet::parse(text, ParserOptions::default()) {
                     Ok(sheet) => Some(&*Box::leak(Box::new(sheet))),
                     Err(_) => None,
-                },
-            )
+                }
+            })
         });
+        self.collecting_ua = true;
         match parsed {
             Some(sheet) => self.collect(&sheet.rules.0, None, order),
             None => self
                 .diagnostics
                 .push("Skathi's UA defaults did not parse".into()),
         }
+        self.collecting_ua = false;
     }
 
     pub fn uses_sibling_combinators(&self) -> bool {
@@ -1122,6 +1131,12 @@ impl Engine {
     }
 
     fn candidates<D: MatchDom>(&self, node: &D, f: &mut dyn FnMut(u32, usize)) {
+        let vt = node.is_view_transition_pseudo();
+        let f = &mut |i: u32, bucket: usize| {
+            if self.rules[i as usize].vt == vt {
+                f(i, bucket)
+            }
+        };
         if !self.index.enabled {
             for i in 0..self.rules.len() as u32 {
                 f(i, BUCKET_ANY);
@@ -1234,7 +1249,25 @@ impl Engine {
             };
             for sel in &style.selectors.0 {
                 use lightningcss::traits::IntoOwned as _;
-                let owned: Selector<'static> = if has::present(&sel_text(sel)) {
+                let vt = sel_text(sel).contains("::view-transition");
+                let owned: Selector<'static> = if vt {
+                    match view_transition::rewrite(&sel_text(sel), self.collecting_ua)
+                        .and_then(|text| reparse_selector(&text))
+                    {
+                        Some(s) => s.clone(),
+                        None => {
+                            mapper::once(
+                                &mut self.diagnostics,
+                                format!(
+                                    "a view transition pseudo-element selector that cannot be \
+                                     compiled was dropped: `{}`",
+                                    sel_text(sel)
+                                ),
+                            );
+                            continue;
+                        }
+                    }
+                } else if has::present(&sel_text(sel)) {
                     match has::rewrite(&sel_text(sel)).and_then(|text| reparse_selector(&text)) {
                         Some(s) => s.clone(),
                         None => {
@@ -1351,6 +1384,7 @@ impl Engine {
                     states,
                     ancestor,
                     pseudo,
+                    vt,
                     condition,
                     diagnostics: (!rule_diagnostics.is_empty())
                         .then(|| Rc::new(std::mem::take(&mut rule_diagnostics))),
@@ -2858,7 +2892,9 @@ fn matches_from_props(pc: &PseudoClass<'_>) -> bool {
         PseudoClass::Disabled
         | PseudoClass::Enabled
         | PseudoClass::Checked
-        | PseudoClass::Fullscreen(_) => true,
+        | PseudoClass::Fullscreen(_)
+        | PseudoClass::ActiveViewTransition
+        | PseudoClass::ActiveViewTransitionType { .. } => true,
         PseudoClass::Custom { name } => crate::has::is_marker(name.as_ref()),
         _ => false,
     }
@@ -6066,24 +6102,24 @@ mod tests {
             "a property sk-css maps"
         );
         assert_eq!(
-            applies("@supports (view-transition-name: none) { .box { opacity: 0.5 } }"),
+            applies("@supports (shape-outside: none) { .box { opacity: 0.5 } }"),
             None,
             "a property it does not"
         );
         assert_eq!(
-            applies("@supports not (view-transition-name: none) { .box { opacity: 0.5 } }"),
+            applies("@supports not (shape-outside: none) { .box { opacity: 0.5 } }"),
             Some(0.5)
         );
         assert_eq!(
             applies(
-                "@supports (display: flex) and (view-transition-name: none) \
+                "@supports (display: flex) and (shape-outside: none) \
                  { .box { opacity: 0.5 } }"
             ),
             None
         );
         assert_eq!(
             applies(
-                "@supports (display: flex) or (view-transition-name: none) \
+                "@supports (display: flex) or (shape-outside: none) \
                  { .box { opacity: 0.5 } }"
             ),
             Some(0.5)

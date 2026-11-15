@@ -2258,6 +2258,15 @@ impl Animator {
         self.anims.contains_key(&node)
     }
 
+    /// No CSS animation of `node` is still to finish; a paused one is not finished.
+    pub fn animations_finished(&self, node: u32, now: Instant) -> bool {
+        self.anims.get(&node).is_none_or(|runs| {
+            runs.iter().all(|run| {
+                run.paused_at.is_none() && matches!(run.phase(now), Phase::Finished { .. })
+            })
+        })
+    }
+
     fn cancel_event(&mut self, node: u32, run: &AnimRun, now: Instant) {
         // A run that already reported `animationend` finished; it was not cancelled, and the DOM
         // fires only one of the two.

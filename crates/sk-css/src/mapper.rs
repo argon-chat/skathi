@@ -208,6 +208,14 @@ pub struct Extras {
     pub mask_clips: Option<MaskClips>,
     pub mask_composite: Option<MaskCompositing>,
     pub radius_inherit: RadiusInherit,
+    /// `view-transition-name`; `Some(None)` is `none`, `auto` and `match-element` are kept as
+    /// written.
+    pub view_transition_name: Option<Option<Rc<str>>>,
+    /// `view-transition-class`; empty is `none`.
+    pub view_transition_class: Option<Rc<[Rc<str>]>>,
+    /// `mix-blend-mode: plus-lighter` (`Some(false)` is `normal`); only view transition images
+    /// blend.
+    pub plus_lighter: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -506,6 +514,15 @@ impl Extras {
         }
         if other.isolate.is_some() {
             self.isolate = other.isolate;
+        }
+        if other.view_transition_name.is_some() {
+            self.view_transition_name = other.view_transition_name.clone();
+        }
+        if other.view_transition_class.is_some() {
+            self.view_transition_class = other.view_transition_class.clone();
+        }
+        if other.plus_lighter.is_some() {
+            self.plus_lighter = other.plus_lighter;
         }
         if other.positioned.is_some() {
             self.positioned = other.positioned;
@@ -5891,6 +5908,32 @@ fn apply_property(
                     u.property_id.name()
                 ),
             );
+        }
+        Property::ViewTransitionName(name) => {
+            use lightningcss::properties::transition::ViewTransitionName as N;
+            x.view_transition_name = Some(match name {
+                N::None => None,
+                N::Auto => Some("auto".into()),
+                N::Custom(ident) => Some(ident.0.as_ref().into()),
+            });
+        }
+        Property::ViewTransitionClass(list) => {
+            use lightningcss::values::ident::NoneOrCustomIdentList as L;
+            x.view_transition_class = Some(match list {
+                L::None => Rc::from([]),
+                L::Idents(idents) => idents.iter().map(|i| Rc::from(i.0.as_ref())).collect(),
+            });
+        }
+        Property::MixBlendMode(mode) => {
+            use lightningcss::properties::effects::BlendMode;
+            match mode {
+                BlendMode::Normal => x.plus_lighter = Some(false),
+                BlendMode::PlusLighter => x.plus_lighter = Some(true),
+                _ => unsupported(
+                    diagnostics,
+                    "mix-blend-mode (only `normal`, and `plus-lighter` on view transition images)",
+                ),
+            }
         }
         other => {
             once(

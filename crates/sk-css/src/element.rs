@@ -39,6 +39,19 @@ pub trait MatchDom: Copy {
     fn interaction(&self, _state: Interaction) -> Option<bool> {
         None
     }
+    /// A view transition pseudo-element's stand-in ([`crate::VIEW_TRANSITION_TAGS`]): only rules
+    /// written for those match it, and it matches no other rule.
+    fn is_view_transition_pseudo(&self) -> bool {
+        false
+    }
+}
+
+fn active_view_transition<D: MatchDom>(node: &D) -> Option<&str> {
+    if node.is_root() {
+        node.attr(crate::view_transition::ACTIVE_ATTR)
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,6 +175,12 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
             PseudoClass::Enabled => !boolean_attr(&self.0, "disabled"),
             PseudoClass::Checked => boolean_attr(&self.0, "checked"),
             PseudoClass::Fullscreen(_) => self.0.attr(":fullscreen").is_some(),
+            PseudoClass::ActiveViewTransition => active_view_transition(&self.0).is_some(),
+            PseudoClass::ActiveViewTransitionType { kind } => active_view_transition(&self.0)
+                .is_some_and(|types| {
+                    kind.iter()
+                        .any(|k| types.split(' ').any(|t| t == k.0.as_ref()))
+                }),
             PseudoClass::Custom { name } => crate::has::matches(name.as_ref(), &self.0),
             _ => false,
         }
