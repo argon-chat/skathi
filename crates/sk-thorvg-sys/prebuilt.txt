@@ -1,0 +1,4 @@
+# Static ThorVG builds that build.rs links instead of compiling thorvg/, made by
+# .github/workflows/thorvg.yml. `release` is the release's download URL; the other lines are its
+# SHA256SUMS, verbatim. A target without a line here compiles from source.
+release https://github.com/argon-chat/skathi/releases/download/thorvg-v1.1.2-1

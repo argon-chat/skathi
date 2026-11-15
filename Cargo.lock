@@ -5921,6 +5921,8 @@ name = "sk-thorvg-sys"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "flate2",
+ "sha2",
 ]
 
 [[package]]
