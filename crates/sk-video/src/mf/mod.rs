@@ -45,6 +45,7 @@ use crate::backend::{
     CanPlay, FrameRequest, MediaError, MediaErrorCode, MediaEvent, MediaSource, NetworkState,
     ReadyState, VideoBackend, VideoFrame,
 };
+use crate::trace;
 
 pub use notify::EngineNotify;
 
@@ -547,23 +548,6 @@ impl Drop for MediaEngineBackend {
         if let Err(e) = unsafe { self.engine.Shutdown() } {
             trace(format_args!("Shutdown failed: {e}"));
         }
-    }
-}
-
-/// `SK_VIDEO_LOG=1`: a load-handshake trace on stderr.
-fn trace(args: std::fmt::Arguments<'_>) {
-    use std::sync::atomic::{AtomicU8, Ordering};
-    static ON: AtomicU8 = AtomicU8::new(2);
-    let on = match ON.load(Ordering::Relaxed) {
-        2 => {
-            let on = std::env::var("SK_VIDEO_LOG").is_ok_and(|v| v != "0") as u8;
-            ON.store(on, Ordering::Relaxed);
-            on
-        }
-        v => v,
-    };
-    if on == 1 {
-        eprintln!("[sk-video] {args}");
     }
 }
 

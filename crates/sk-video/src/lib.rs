@@ -16,7 +16,8 @@
 //! ```
 //! Codec availability is a runtime fact: [`VideoState::can_play_type`] is a live probe and a failed
 //! load produces an advisory naming the missing decoder ([`MediaError::advisory`]). The MF
-//! implementation is `#[cfg(windows)]`; [`StubBackend`] keeps the portable half testable everywhere.
+//! implementation is `#[cfg(windows)]`, the AVFoundation one `#[cfg(target_os = "macos")]`;
+//! [`StubBackend`] keeps the portable half testable everywhere.
 
 pub mod backend;
 pub mod element;
@@ -26,6 +27,9 @@ pub mod stub;
 
 #[cfg(windows)]
 pub mod mf;
+
+#[cfg(target_os = "macos")]
+pub mod avf;
 
 pub use backend::{
     CanPlay, FrameRequest, GpuFrame, HeldGpuFrame, MediaError, MediaErrorCode, MediaEvent,
@@ -57,16 +61,38 @@ pub fn backend_for_this_platform() -> Result<Box<dyn VideoBackend>, MediaError> 
     {
         mf::MediaEngineBackend::new().map(|b| Box::new(b) as Box<dyn VideoBackend>)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        avf::AvPlayerBackend::new().map(|b| Box::new(b) as Box<dyn VideoBackend>)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         Err(MediaError::new(
             backend::MediaErrorCode::SrcNotSupported,
             "no <video> backend is compiled in for this platform",
         )
         .with_advisory(
-            "sk-video ships a Media Foundation backend for Windows; the macOS \
-             (AVFoundation) one is designed but not written yet.",
+            "sk-video plays through the OS media stack: Media Foundation on Windows, \
+             AVFoundation on macOS. This platform has no backend yet.",
         ))
+    }
+}
+
+/// `SK_VIDEO_LOG=1`: a load-handshake trace on stderr.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+pub(crate) fn trace(args: std::fmt::Arguments<'_>) {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static ON: AtomicU8 = AtomicU8::new(2);
+    let on = match ON.load(Ordering::Relaxed) {
+        2 => {
+            let on = std::env::var("SK_VIDEO_LOG").is_ok_and(|v| v != "0") as u8;
+            ON.store(on, Ordering::Relaxed);
+            on
+        }
+        v => v,
+    };
+    if on == 1 {
+        eprintln!("[sk-video] {args}");
     }
 }
 

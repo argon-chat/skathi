@@ -8,6 +8,23 @@ use std::time::{Duration, Instant};
 
 use sk_video::{FrameRequest, MediaSource, VideoState};
 
+/// AVPlayer publishes its state through the main queue, so on macOS the wait runs the main run loop.
+#[cfg(target_os = "macos")]
+fn wait(duration: Duration) {
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFRunLoopDefaultMode: *const std::ffi::c_void;
+        fn CFRunLoopRunInMode(mode: *const std::ffi::c_void, seconds: f64, after: u8) -> i32;
+    }
+    // SAFETY: `main` runs on the main thread; the mode is CoreFoundation's own constant.
+    unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, duration.as_secs_f64(), 0) };
+}
+
+#[cfg(not(target_os = "macos"))]
+fn wait(duration: Duration) {
+    std::thread::sleep(duration);
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let Some(path) = args.next() else {
@@ -102,7 +119,7 @@ fn main() {
                 frames
             );
         }
-        std::thread::sleep(Duration::from_millis(16));
+        wait(Duration::from_millis(16));
     }
 
     present_ms.sort_by(f64::total_cmp);
