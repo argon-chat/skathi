@@ -331,7 +331,7 @@ These apply to inline `<svg>`.
 | `@media`                                                        | ✅     | See [Media features](#media-features)                                                                            |
 | `@supports`                                                     | ✅     | Answers for Skathi: a declaration passes only if Skathi applies it; `selector()` too                             |
 | `@container`                                                    | 🗓️     |                                                                                                                  |
-| `@layer`                                                        | ⛔     | The rules inside are dropped; Tailwind's `@layer` is resolved by its build pass                                  |
+| `@layer`                                                        | 🗓️     | The rules inside are dropped for now; Tailwind's `@layer` is resolved by its build pass                          |
 | `@keyframes`                                                    | ✅     |                                                                                                                  |
 | `@font-face`                                                    | ✅     |                                                                                                                  |
 | `@import`                                                       | 🟡     | Local files are inlined by `sk dev` / `sk build`; remote URLs are not                                            |
