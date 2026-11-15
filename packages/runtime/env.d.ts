@@ -1131,11 +1131,27 @@ declare global {
   }
   var FontFace: { new (family: string, source: string | ArrayBuffer): FontFace; prototype: FontFace };
 
+  type ViewTransitionUpdateCallback = () => unknown;
+  interface StartViewTransitionOptions {
+    update?: ViewTransitionUpdateCallback | null;
+    types?: string[] | null;
+  }
+  interface ViewTransition {
+    readonly updateCallbackDone: Promise<void>;
+    readonly ready: Promise<void>;
+    readonly finished: Promise<void>;
+    readonly types: Set<string>;
+    skipTransition(): void;
+  }
+  var ViewTransition: { prototype: ViewTransition };
+
   interface Document {
     readonly documentElement: HTMLElement;
     readonly body: HTMLElement;
     readonly activeElement: Element | null;
     readonly fonts: FontFaceSet;
+    startViewTransition(callbackOptions?: ViewTransitionUpdateCallback | StartViewTransitionOptions): ViewTransition;
+    readonly activeViewTransition: ViewTransition | null;
     readonly fullscreenEnabled: boolean;
     readonly fullscreenElement: Element | null;
     exitFullscreen(): Promise<void>;

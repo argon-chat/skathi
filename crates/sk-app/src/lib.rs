@@ -668,6 +668,7 @@ impl Shell {
         if !window::fallback_titlebar() {
             return shell
                 .child(sk_tree::build_root(window, cx))
+                .children(sk_tree::build_view_transition())
                 .children(window_controls_overlay())
                 .children(inspector_overlay());
         }
@@ -691,6 +692,7 @@ impl Shell {
                     .min_h(px(0.))
                     .child(sk_tree::build_root(window, cx)),
             )
+            .children(sk_tree::build_view_transition())
             .children(window_controls_overlay())
             .children(inspector_overlay())
     }

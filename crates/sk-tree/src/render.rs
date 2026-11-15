@@ -1723,6 +1723,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
         if t.root == 0 {
             Empty.into_any_element()
         } else {
+            crate::view_transition::begin_build(t, window);
             // The root inherits nothing: `window-drag`'s initial value is `none`.
             if let Some(id) =
                 crate::fullscreen::current(t).filter(|id| windows::window_of_node_in(t, *id) == win)
@@ -3510,6 +3511,9 @@ where
 {
     use gpui::Refineable as _;
     *e.style() = (*cs.base).clone();
+    if let Some(capture) = crate::view_transition::capture_of(id) {
+        e.style().vn_capture = Some(capture);
+    }
     if let Some(url) = &cs.extras.filter_url {
         e.style().vn_color_matrix = tree::read_tree(|tree| crate::filter::resolve(tree, url, id));
     }

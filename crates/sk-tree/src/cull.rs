@@ -79,7 +79,7 @@ fn enabled() -> bool {
 }
 
 pub(crate) fn begin_frame(window: &Window, now: std::time::Instant) {
-    let on = enabled() && !window.is_a11y_active();
+    let on = enabled() && !window.is_a11y_active() && !crate::view_transition::capturing();
     ACTIVE.with(|c| c.set(on));
     VIEWS.with(|v| v.borrow_mut().clear());
     if !on {

@@ -40,6 +40,8 @@ mod style_decl;
 mod svg;
 mod tree;
 mod video;
+mod view_transition;
+mod view_transition_js;
 mod waapi;
 pub mod windows;
 
@@ -69,6 +71,7 @@ pub use tree::{
     EV_POINTERCANCEL, EV_POINTERLOCKCHANGE, EV_POINTERLOCKERROR, EV_RATECHANGE, EV_SCROLL,
     EV_SEEKED, EV_SEEKING, EV_TIMEUPDATE, EV_VOLUMECHANGE, EV_WAITING, EV_WHEEL,
 };
+pub use view_transition::build_overlay as build_view_transition;
 pub use windows::WinKey;
 
 /// The numeric payload a native input event carries into JS. Mouse: a=x b=y c=button, d=modifier
@@ -481,6 +484,7 @@ pub fn install(rt: &JsRuntime) {
     observe::install(rt);
     font_api::install(rt);
     effect_texture::install();
+    view_transition_js::install(rt);
 }
 
 // A browser lays out on read; here layout happens during a frame, so a DOM read before the first
@@ -698,7 +702,9 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let resampled = resample::tick(window, cx);
     let restored = img::residency_tick(window, cx);
     let selecting = selection::tick(window, cx);
+    let transition = view_transition::tick(window) | view_transition_js::deliver(window, cx);
     let draw = anim
+        | transition
         | scripted
         | lottie_moved
         | video_moved

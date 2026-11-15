@@ -2093,9 +2093,45 @@ pub(crate) fn take_script_dirty() -> bool {
     SCRIPT_DIRTY.with(|d| d.replace(false))
 }
 
+/// Runs `f` under the installed sheet, or an empty one before the first.
+pub(crate) fn with_sheet<R>(f: impl FnOnce(&sk_css::Engine) -> R) -> R {
+    ENGINE.with(|e| match e.borrow().as_ref() {
+        Some(engine) => f(engine),
+        None => NO_SHEET.with(|engine| f(engine)),
+    })
+}
+
+/// Starts, keeps or drops the CSS animations of a node outside the tree (a view transition
+/// pseudo-element), as a restyle does for a tree node.
+pub(crate) fn animate_detached(id: u32, states: &sk_css::ComputedStates, now: std::time::Instant) {
+    let env = env();
+    let diagnostics = std::cell::RefCell::new(Vec::new());
+    with_sheet(|engine| {
+        ANIMATOR.with(|a| {
+            a.borrow_mut()
+                .on_computed_animations(id, states, now, &|name| {
+                    engine.keyframes_for(name, &states.vars, &env, &mut diagnostics.borrow_mut())
+                });
+        });
+    });
+    for d in diagnostics.into_inner() {
+        warn_css(&format!("[css] {d}"));
+    }
+}
+
+pub(crate) fn animations_finished(id: u32, now: std::time::Instant) -> bool {
+    ANIMATOR.with(|a| a.borrow().animations_finished(id, now))
+}
+
+pub(crate) fn cancel_detached(id: u32) {
+    let now = std::time::Instant::now();
+    ANIMATOR.with(|a| a.borrow_mut().cancel_animations(id, now));
+}
+
 pub fn animator_gc() {
     ANIMATOR.with(|a| {
-        a.borrow_mut().gc(&|id| read_tree(|t| t.node(id).is_some()));
+        a.borrow_mut()
+            .gc(&|id| crate::view_transition::is_pseudo(id) || read_tree(|t| t.node(id).is_some()));
     });
     // An unmounted node never gets a leave edge (gpui drops the listener), so sweep the set or a
     // reused id comes up pre-hovered.

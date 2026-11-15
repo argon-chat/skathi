@@ -127,7 +127,10 @@ fn min_nodes() -> u32 {
 /// Decided once per build: whether anything may replay, and which subtrees are moving. Only a moving
 /// node's subtree is refused ([`HOT`]); the frame it stops must render too (a fresh entity renders at `now`).
 pub(crate) fn begin_frame(window: &Window, now: std::time::Instant) {
-    let on = enabled() && !window.is_a11y_active() && !crate::resample::holds_replays();
+    let on = enabled()
+        && !window.is_a11y_active()
+        && !crate::resample::holds_replays()
+        && !crate::view_transition::capturing();
     ACTIVE.with(|c| c.set(on));
     HOT.with(|h| {
         let mut h = h.borrow_mut();

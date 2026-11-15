@@ -395,6 +395,11 @@ if (doc) {
 // -- web fonts: `FontFace`, `FontFaceSet`, `document.fonts`. Inert without the host's loader; a reload takes over the host's listener.
 installFonts(globalThis as unknown as Record<string, unknown>, doc);
 
+// -- View Transitions: `document.startViewTransition`, `activeViewTransition`, `ViewTransition`. Inert without the host.
+const attachViewTransitions = (globalThis as { __sk_view_transitions_attach?: (document: object) => void })
+  .__sk_view_transitions_attach;
+if (doc && typeof attachViewTransitions === "function") attachViewTransitions(doc);
+
 // -- Web Animations: `el.animate()` on HTMLElement/SVGElement prototypes only, not Element.prototype, so motion / framer-motion keep
 //    their JS animations. Inert without the host's native WAAPI core.
 if (typeof __sk_waapi_core === "object" && __sk_waapi_core !== null) {
