@@ -299,6 +299,10 @@ impl VideoState {
             match event {
                 MediaEvent::LoadedMetadata => self.metadata = true,
                 MediaEvent::Emptied => self.metadata = false,
+                // The element paused itself at the end, so the next `play()` is an edge again.
+                MediaEvent::Ended if self.backend.paused() || self.backend.ended() => {
+                    self.pushed.playing = false;
+                }
                 _ => {}
             }
         }
@@ -473,6 +477,38 @@ mod tests {
             produced, retired,
             "{produced} frames produced, {retired} released"
         );
+    }
+
+    #[test]
+    fn play_after_the_end_restarts_without_a_pause_first() {
+        let mut s = VideoState::new(Box::new(StubBackend::new(0.1, (320, 180))));
+        s.set_source(MediaSource::Path("synthetic".into())).unwrap();
+        s.play();
+        let request = FrameRequest {
+            max_size: (320, 180),
+        };
+        let start = Instant::now();
+        let mut ended = false;
+        for i in 0..30u32 {
+            let advance = s.advance(start + Duration::from_millis(16 * i as u64), &request);
+            if advance.events.contains(&MediaEvent::Ended) {
+                ended = true;
+                break;
+            }
+        }
+        assert!(ended && s.ended() && s.paused());
+        assert!(!s.wants_playing(), "the end paused the element");
+
+        s.play();
+        let advance = s.advance(start + Duration::from_secs(1), &request);
+        assert!(
+            advance.events.contains(&MediaEvent::Play),
+            "{:?}",
+            advance.events
+        );
+        assert!(!s.paused() && !s.ended());
+        assert!(s.current_time() < 0.05, "restarted from the beginning");
+        assert!(s.wants_playing());
     }
 
     #[test]

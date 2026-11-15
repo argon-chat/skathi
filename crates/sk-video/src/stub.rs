@@ -71,6 +71,9 @@ impl VideoBackend for StubBackend {
         if !self.paused {
             return;
         }
+        if self.ended {
+            self.time = 0.0;
+        }
         self.paused = false;
         self.ended = false;
         self.events.extend([MediaEvent::Play, MediaEvent::Playing]);

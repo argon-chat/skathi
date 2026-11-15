@@ -1,8 +1,8 @@
 //! `<video>` playback for gpui, without shipping a codec.
 //!
 //! A thin portable element over a [`VideoBackend`] that the platform implements (Windows:
-//! `IMFMediaEngine` in frame-server mode; macOS: `AVPlayer`): the OS player is hardware-accelerated,
-//! carries its own codec licences and has an `HTMLMediaElement`-shaped API.
+//! `IMFMediaEngine` in frame-server mode; macOS: `AVPlayer`; Linux: GStreamer's `playbin3`, loaded
+//! at runtime): the OS player carries its own codec licences and has an `HTMLMediaElement`-shaped API.
 //!
 //! Split as in `sk-lottie`: [`VideoState`] survives a frame (backend, transport, frame cache; the
 //! host keeps one per node), [`VideoOptions`] is recomputed per frame (content box, display scale,
@@ -16,8 +16,9 @@
 //! ```
 //! Codec availability is a runtime fact: [`VideoState::can_play_type`] is a live probe and a failed
 //! load produces an advisory naming the missing decoder ([`MediaError::advisory`]). The MF
-//! implementation is `#[cfg(windows)]`, the AVFoundation one `#[cfg(target_os = "macos")]`;
-//! [`StubBackend`] keeps the portable half testable everywhere.
+//! implementation is `#[cfg(windows)]`, the AVFoundation one `#[cfg(target_os = "macos")]`, the
+//! GStreamer one `#[cfg(target_os = "linux")]`; [`StubBackend`] keeps the portable half testable
+//! everywhere.
 
 pub mod backend;
 pub mod element;
@@ -30,6 +31,9 @@ pub mod mf;
 
 #[cfg(target_os = "macos")]
 pub mod avf;
+
+#[cfg(target_os = "linux")]
+pub mod gst;
 
 pub use backend::{
     CanPlay, FrameRequest, GpuFrame, HeldGpuFrame, MediaError, MediaErrorCode, MediaEvent,
@@ -65,7 +69,11 @@ pub fn backend_for_this_platform() -> Result<Box<dyn VideoBackend>, MediaError> 
     {
         avf::AvPlayerBackend::new().map(|b| Box::new(b) as Box<dyn VideoBackend>)
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        gst::GstBackend::new().map(|b| Box::new(b) as Box<dyn VideoBackend>)
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         Err(MediaError::new(
             backend::MediaErrorCode::SrcNotSupported,
@@ -73,13 +81,16 @@ pub fn backend_for_this_platform() -> Result<Box<dyn VideoBackend>, MediaError> 
         )
         .with_advisory(
             "sk-video plays through the OS media stack: Media Foundation on Windows, \
-             AVFoundation on macOS. This platform has no backend yet.",
+             AVFoundation on macOS, GStreamer on Linux. This platform has no backend yet.",
         ))
     }
 }
 
 /// `SK_VIDEO_LOG=1`: a load-handshake trace on stderr.
-#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+#[cfg_attr(
+    not(any(windows, target_os = "macos", target_os = "linux")),
+    allow(dead_code)
+)]
 pub(crate) fn trace(args: std::fmt::Arguments<'_>) {
     use std::sync::atomic::{AtomicU8, Ordering};
     static ON: AtomicU8 = AtomicU8::new(2);

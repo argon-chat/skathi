@@ -15,6 +15,10 @@ av1-software = []
 name = "avfoundation"
 harness = false
 
+[[test]]
+name = "gstreamer"
+harness = false
+
 [dependencies]
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 # Same major as gpui's, so `image::Frame` unifies with `gpui::RenderImage`'s.
@@ -38,6 +42,10 @@ windows = { version = "0.62", features = [
     "Win32_System_Variant",
 ] }
 windows-core = "0.62"
+
+# GStreamer is dlopen'ed, never linked: the host must start on a system without it.
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"

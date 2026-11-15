@@ -301,9 +301,7 @@ mod mac {
             end.iter().map(|e| e.name()).collect::<Vec<_>>()
         );
 
-        // play() after the end restarts from the beginning. `VideoState` still holds "playing"
-        // from before the end, so the edge goes through a pause, as an element's own pause does.
-        d.state.pause();
+        // play() after the end restarts from the beginning.
         d.state.play();
         d.until("restart", 5.0, |d| d.saw(MediaEvent::Playing));
         assert!(d.state.current_time() < 1.0 && !d.state.ended());
