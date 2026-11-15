@@ -5,7 +5,7 @@
 //   source:     crates/sk-effects/shaders/frost.slang+wrapper
 //   signature:  frost(<number:strength>, <length:radius>?, <color:tint>?)
 //   slang:      2026.12
-//   schema:     9
+//   schema:     10
 //   src-sha256: 3878d0fc85a790a8abcc1fbc6369c3ea64093adaeb4c20ec1fa443908052dada
 //   output:     premultiplied RGBA, written with blending disabled (it owns its quad)
 //
@@ -19,6 +19,11 @@
 //   [[texture(7)]] sk_content            the element's content
 //   [[texture(8)]] sk_history            the effect's history
 //   [[sampler(1)]] sk_clamp_sampler      clamp to edge
+//   [[texture(3)]] sk_texture0           the first SkTexture
+//   [[texture(4)]] sk_texture1           the second SkTexture
+//   [[texture(5)]] sk_texture2           the third SkTexture
+//   [[texture(6)]] sk_texture3           the fourth SkTexture
+//   [[sampler(2)]] sk_repeat_sampler     repeat
 // The VERTEX half is the Metal renderer's own, shared by every effect.
 
 #include <metal_stdlib>
@@ -35,7 +40,7 @@ struct Frost_0
 };
 
 
-#line 353 "sk.slang"
+#line 379 "sk.slang"
 struct EffectInput_0
 {
     float2 uv_0;
@@ -60,29 +65,29 @@ struct EffectInput_0
 };
 
 
-#line 737
+#line 825
 float sk_hash12_0(float2 p_0)
 {
     float _S1 = p_0.x;
 
-#line 739
+#line 827
     float3 p3_0 = fract(float3(_S1, p_0.y, _S1) * float3(0.1031000018119812) );
     float3 p3_1 = p3_0 + float3(dot(p3_0, float3(p3_0.y + 33.3300018310546875, p3_0.z + 33.3300018310546875, p3_0.x + 33.3300018310546875))) ;
     return fract((p3_1.x + p3_1.y) * p3_1.z);
 }
 
 
-#line 753
+#line 841
 float sk_value_noise_0(float2 p_1)
 {
     float2 i_0 = floor(p_1);
     float2 f_0 = fract(p_1);
     float2 u_0 = f_0 * f_0 * (float2(3.0)  - float2(2.0)  * f_0);
 
-#line 762
+#line 850
     float _S2 = u_0.x;
 
-#line 762
+#line 850
     return mix(mix(sk_hash12_0(i_0), sk_hash12_0(i_0 + float2(1.0, 0.0)), _S2), mix(sk_hash12_0(i_0 + float2(0.0, 1.0)), sk_hash12_0(i_0 + float2(1.0, 1.0)), _S2), u_0.y);
 }
 
@@ -97,12 +102,12 @@ float sk_fbm_0(float2 p_2)
 }
 
 
-#line 725
+#line 813
 float4 sk_premultiply_0(float4 color_0)
 {
     float _S3 = color_0.w;
 
-#line 727
+#line 815
     return float4(color_0.xyz * float3(_S3) , _S3);
 }
 
@@ -162,28 +167,28 @@ float4 Frost_shade_0(const Frost_0 thread* this_0, const EffectInput_0 thread* i
 }
 
 
-#line 550 "sk.slang"
+#line 638 "sk.slang"
 float4 IEffect_updatex24defaultImpl_0(const Frost_0 thread* this_1, const EffectInput_0 thread* input_1)
 {
 
-#line 550
+#line 638
     float4 _S8 = Frost_shade_0(this_1, input_1);
 
-#line 550
+#line 638
     return _S8;
 }
 
 
-#line 545
+#line 633
 bool IEffect_straightAlphax24defaultImpl_0()
 {
 
-#line 545
+#line 633
     return false;
 }
 
 
-#line 310
+#line 323
 struct SkBounds_natural_0
 {
     packed_float2 origin_0;
@@ -191,7 +196,7 @@ struct SkBounds_natural_0
 };
 
 
-#line 281
+#line 294
 struct SkCorners_0
 {
     float top_left_0;
@@ -201,7 +206,7 @@ struct SkCorners_0
 };
 
 
-#line 295
+#line 308
 struct SkEffectQuad_natural_0
 {
     uint order_0;
@@ -220,7 +225,7 @@ struct SkEffectQuad_natural_0
 };
 
 
-#line 329
+#line 355
 struct SLANG_ParameterGroup_GlobalParams_0
 {
     float4 sk_gamma_ratios_0;
@@ -234,7 +239,7 @@ struct SLANG_ParameterGroup_GlobalParams_0
 };
 
 
-#line 320
+#line 333
 struct KernelContext_0
 {
     SkEffectQuad_natural_0 device* sk_effect_quads_0;
@@ -296,32 +301,32 @@ float4 Frost_shade_1(const Frost_0 thread* this_2, const EffectInput_0 thread* i
 }
 
 
-#line 609 "sk.slang"
+#line 697 "sk.slang"
 float4 sk_clamp_premultiplied_0(float4 color_1)
 {
 
-#line 615
+#line 703
     float a_0 = saturate(color_1.w);
     return float4(clamp(color_1.xyz, float3(0.0) , float3(a_0, a_0, a_0)), a_0);
 }
 
 
-#line 676
+#line 764
 float4 sk_finish_0(const Frost_0 thread* material_0, const EffectInput_0 thread* i_1, KernelContext_0 thread* kernelContext_0)
 {
     if(i_1->historyPass_0)
     {
 
-#line 678
+#line 766
         float4 _S13 = IEffect_updatex24defaultImpl_0(material_0, i_1);
 
         return _S13;
     }
 
-#line 680
+#line 768
     float4 _S14 = Frost_shade_1(material_0, i_1);
 
-#line 680
+#line 768
     float4 shaded_0;
 
 
@@ -329,18 +334,18 @@ float4 sk_finish_0(const Frost_0 thread* material_0, const EffectInput_0 thread*
     {
         float _S15 = _S14.w;
 
-#line 685
+#line 773
         shaded_0 = float4(_S14.xyz * float3(_S15) , _S15);
 
-#line 683
+#line 771
     }
     else
     {
 
-#line 683
+#line 771
         shaded_0 = _S14;
 
-#line 683
+#line 771
     }
 
 
@@ -350,77 +355,77 @@ float4 sk_finish_0(const Frost_0 thread* material_0, const EffectInput_0 thread*
 
     float coverage_1 = saturate(0.5 - (i_1->sd_0 - i_1->bleed_0)) * saturate(i_1->opacity_0) * i_1->clip_0;
 
-#line 690
+#line 778
     float4 result_4;
 
-#line 695
+#line 783
     if(i_1->hasBackdrop_0)
     {
 
-#line 695
+#line 783
         result_4 = mix(((kernelContext_0->sk_backdrop_original_0).sample((kernelContext_0->sk_clamp_sampler_0), (i_1->uv_0), level((0.0)))), shaded_1, float4(coverage_1) );
 
-#line 695
+#line 783
     }
     else
     {
 
-#line 695
+#line 783
         result_4 = shaded_1 * float4(coverage_1) ;
 
-#line 695
+#line 783
     }
 
-#line 705
+#line 793
     return sk_clamp_premultiplied_0(result_4);
 }
 
 
-#line 565
+#line 653
 float sk_pick_corner_radius_0(float2 center_to_point_0, const SkCorners_0 thread* radii_0)
 {
 
-#line 571
+#line 659
     bool _S16 = (center_to_point_0.x) < 0.0;
 
-#line 571
+#line 659
     float top_0;
 
-#line 571
+#line 659
     if(_S16)
     {
 
-#line 571
+#line 659
         top_0 = radii_0->top_left_0;
 
-#line 571
+#line 659
     }
     else
     {
 
-#line 571
+#line 659
         top_0 = radii_0->top_right_0;
 
-#line 571
+#line 659
     }
 
-#line 571
+#line 659
     float bottom_0;
     if(_S16)
     {
 
-#line 572
+#line 660
         bottom_0 = radii_0->bottom_left_0;
 
-#line 572
+#line 660
     }
     else
     {
 
-#line 572
+#line 660
         bottom_0 = radii_0->bottom_right_0;
 
-#line 572
+#line 660
     }
     if((center_to_point_0.y) < 0.0)
     {
@@ -428,13 +433,13 @@ float sk_pick_corner_radius_0(float2 center_to_point_0, const SkCorners_0 thread
     else
     {
 
-#line 573
+#line 661
         top_0 = bottom_0;
 
-#line 573
+#line 661
     }
 
-#line 573
+#line 661
     return top_0;
 }
 
@@ -444,7 +449,7 @@ float sk_quad_sdf_0(float2 point_0, const SkBounds_natural_0 thread* bounds_1, c
     float2 half_size_0 = float2(bounds_1->size_1)  / float2(2.0) ;
     float2 center_to_point_1 = point_0 - (float2(bounds_1->origin_0)  + half_size_0);
 
-#line 580
+#line 668
     float _S17 = sk_pick_corner_radius_0(center_to_point_1, radii_1);
 
     float2 corner_center_to_point_0 = abs(center_to_point_1) - half_size_0 + float2(_S17) ;
@@ -456,13 +461,13 @@ float sk_quad_sdf_0(float2 point_0, const SkBounds_natural_0 thread* bounds_1, c
 }
 
 
-#line 577
+#line 665
 float sk_quad_sdf_1(float2 point_1, const SkBounds_natural_0 thread* bounds_2, const SkCorners_0 thread* radii_2)
 {
     float2 half_size_1 = float2(bounds_2->size_1)  / float2(2.0) ;
     float2 center_to_point_2 = point_1 - (float2(bounds_2->origin_0)  + half_size_1);
 
-#line 580
+#line 668
     float _S18 = sk_pick_corner_radius_0(center_to_point_2, radii_2);
 
     float2 corner_center_to_point_1 = abs(center_to_point_2) - half_size_1 + float2(_S18) ;
@@ -474,81 +479,81 @@ float sk_quad_sdf_1(float2 point_1, const SkBounds_natural_0 thread* bounds_2, c
 }
 
 
-#line 428
+#line 454
 float4 EffectInput_backdropAt_0(const EffectInput_0 thread* this_3, float2 uv_1, KernelContext_0 thread* kernelContext_1)
 {
 
-#line 428
+#line 454
     float4 _S19;
 
 
     if(this_3->hasBackdrop_0)
     {
 
-#line 431
+#line 457
         _S19 = ((kernelContext_1->sk_backdrop_input_0).sample((kernelContext_1->sk_clamp_sampler_0), (uv_1), level((0.0))));
 
-#line 431
+#line 457
     }
     else
     {
 
-#line 431
+#line 457
         _S19 = float4(0.0, 0.0, 0.0, 0.0);
 
-#line 431
+#line 457
     }
 
-#line 430
+#line 456
     return _S19;
 }
 
 
-#line 467
+#line 493
 float4 EffectInput_contentAt_0(const EffectInput_0 thread* this_4, float2 uv_2, KernelContext_0 thread* kernelContext_2)
 {
 
-#line 467
+#line 493
     float4 _S20;
 
 
     if(this_4->hasContent_0)
     {
 
-#line 470
+#line 496
         _S20 = ((kernelContext_2->sk_content_0).sample((kernelContext_2->sk_clamp_sampler_0), (uv_2), level((0.0))));
 
-#line 470
+#line 496
     }
     else
     {
 
-#line 470
+#line 496
         _S20 = float4(0.0, 0.0, 0.0, 0.0);
 
-#line 470
+#line 496
     }
 
-#line 469
+#line 495
     return _S20;
 }
 
 
-#line 507
+#line 533
 float2 EffectInput_historySize_0(const EffectInput_0 thread* this_5, KernelContext_0 thread* kernelContext_3)
 {
     return max(round(float2((kernelContext_3->sk_effect_quads_0+this_5->quad_0)->bounds_0.size_1) ), float2(1.0, 1.0));
 }
 
 
-#line 492
+#line 518
 float4 EffectInput_historyAtPx_0(const EffectInput_0 thread* this_6, float2 px_1, KernelContext_0 thread* kernelContext_4)
 {
 
-#line 492
+#line 518
     float2 _S21 = EffectInput_historySize_0(this_6, kernelContext_4);
 
-#line 492
+#line 518
     float4 _S22;
 
 
@@ -556,144 +561,144 @@ float4 EffectInput_historyAtPx_0(const EffectInput_0 thread* this_6, float2 px_1
     if(this_6->hasHistory_0)
     {
 
-#line 496
+#line 522
         _S22 = ((kernelContext_4->sk_history_0).sample((kernelContext_4->sk_clamp_sampler_0), ((px_1 + float2(this_6->bleed_0) ) / _S21), level((0.0))));
 
-#line 496
+#line 522
     }
     else
     {
 
-#line 496
+#line 522
         _S22 = float4(0.0, 0.0, 0.0, 0.0);
 
-#line 496
+#line 522
     }
 
-#line 495
+#line 521
     return _S22;
 }
 
 
-#line 596
+#line 684
 float sk_content_mask_coverage_0(float2 position_0, const SkBounds_natural_0 thread* mask_0, const SkCorners_0 thread* radii_3)
 {
 
-#line 596
+#line 684
     bool _S23;
 
     if((radii_3->top_left_0) == 0.0)
     {
 
-#line 598
+#line 686
         _S23 = (radii_3->top_right_0) == 0.0;
 
-#line 598
+#line 686
     }
     else
     {
 
-#line 598
+#line 686
         _S23 = false;
 
-#line 598
+#line 686
     }
 
-#line 598
+#line 686
     if(_S23)
     {
 
-#line 598
+#line 686
         _S23 = (radii_3->bottom_right_0) == 0.0;
 
-#line 598
+#line 686
     }
     else
     {
 
-#line 598
+#line 686
         _S23 = false;
 
-#line 598
+#line 686
     }
     if(_S23)
     {
 
-#line 599
+#line 687
         _S23 = (radii_3->bottom_left_0) == 0.0;
 
-#line 599
+#line 687
     }
     else
     {
 
-#line 599
+#line 687
         _S23 = false;
 
-#line 599
+#line 687
     }
 
-#line 598
+#line 686
     if(_S23)
     {
 
         return 1.0;
     }
 
-#line 601
+#line 689
     float _S24 = sk_quad_sdf_1(position_0, mask_0, radii_3);
 
     return saturate(0.5 - _S24);
 }
 
 
-#line 620
+#line 708
 EffectInput_0 sk_begin_0(uint id_0, float4 frag_position_0, KernelContext_0 thread* kernelContext_5)
 {
 
-#line 620
+#line 708
     SkEffectQuad_natural_0 device* _S25 = kernelContext_5->sk_effect_quads_0+id_0;
 
-#line 620
+#line 708
     uint _S26 = _S25->flags_0;
 
 
     bool history_pass_0 = ((_S25->flags_0) & 8U) != 0U;
 
-#line 623
+#line 711
     float2 position_1;
 
 
     if(history_pass_0)
     {
 
-#line 626
+#line 714
         position_1 = float2(_S25->bounds_0.origin_0)  + frag_position_0.xy;
 
-#line 626
+#line 714
     }
     else
     {
 
-#line 626
+#line 714
         position_1 = frag_position_0.xy;
 
-#line 626
+#line 714
     }
 
 
     float2 uv_3 = position_1 / kernelContext_5->GlobalParams_0->sk_viewport_size_0;
 
-#line 629
+#line 717
     thread SkBounds_natural_0 _S27 = _S25->bounds_0;
 
-#line 629
+#line 717
     thread SkCorners_0 _S28 = _S25->corner_radii_0;
 
-#line 629
+#line 717
     float _S29 = sk_quad_sdf_0(position_1, &_S27, &_S28);
 
-#line 637
+#line 725
     float sd_element_0 = _S29 + _S25->bleed_1;
 
     float2 element_origin_0 = float2((&_S27)->origin_0)  + float2(_S25->bleed_1) ;
@@ -705,7 +710,7 @@ EffectInput_0 sk_begin_0(uint id_0, float4 frag_position_0, KernelContext_0 thre
     (&i_2)->uv_0 = uv_3;
     float2 _S30 = position_1 - element_origin_0;
 
-#line 646
+#line 734
     (&i_2)->px_0 = _S30;
     (&i_2)->size_0 = element_size_0;
     (&i_2)->local_0 = _S30 / element_size_0;
@@ -716,24 +721,24 @@ EffectInput_0 sk_begin_0(uint id_0, float4 frag_position_0, KernelContext_0 thre
     (&i_2)->quad_0 = id_0;
     (&i_2)->bleed_0 = _S25->bleed_1;
 
-#line 654
+#line 742
     thread EffectInput_0 _S31 = i_2;
 
-#line 654
+#line 742
     float4 _S32 = EffectInput_backdropAt_0(&_S31, uv_3, kernelContext_5);
     (&i_2)->backdrop_0 = _S32;
 
-#line 655
+#line 743
     thread EffectInput_0 _S33 = i_2;
 
-#line 655
+#line 743
     float4 _S34 = EffectInput_contentAt_0(&_S33, uv_3, kernelContext_5);
     (&i_2)->content_0 = _S34;
 
-#line 656
+#line 744
     thread EffectInput_0 _S35 = i_2;
 
-#line 656
+#line 744
     float4 _S36 = EffectInput_historyAtPx_0(&_S35, _S30, kernelContext_5);
     (&i_2)->history_0 = _S36;
     (&i_2)->sd_0 = sd_element_0;
@@ -742,34 +747,34 @@ EffectInput_0 sk_begin_0(uint id_0, float4 frag_position_0, KernelContext_0 thre
     (&i_2)->scale_0 = _S25->scale_1;
     (&i_2)->opacity_0 = _S25->opacity_1;
 
-#line 662
+#line 750
     thread SkBounds_natural_0 _S37 = _S25->content_mask_0;
 
-#line 662
+#line 750
     thread SkCorners_0 _S38 = _S25->content_mask_radii_0;
 
-#line 662
+#line 750
     float _S39 = sk_content_mask_coverage_0(position_1, &_S37, &_S38);
     (&i_2)->clip_0 = _S39;
     return i_2;
 }
 
 
-#line 412
+#line 438
 float EffectInput_param_0(const EffectInput_0 thread* this_7, uint slot_0, KernelContext_0 thread* kernelContext_6)
 {
     return (kernelContext_6->sk_effect_quads_0+this_7->quad_0)->params_0[slot_0];
 }
 
 
-#line 414
+#line 440
 struct pixelOutput_0
 {
     float4 output_0 [[color(0)]];
 };
 
 
-#line 414
+#line 440
 struct pixelInput_0
 {
     [[flat]] uint sk_id_0 [[user(TEXCOORD)]];

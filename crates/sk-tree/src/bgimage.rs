@@ -131,13 +131,13 @@ fn paint_stack(
     }
 }
 
-enum Load {
+pub(crate) enum Load {
     Pending,
     Failed,
     Ready(Arc<RenderImage>),
 }
 
-fn load(source: &ImageSource, window: &mut Window, cx: &mut App) -> Load {
+pub(crate) fn load(source: &ImageSource, window: &mut Window, cx: &mut App) -> Load {
     match source {
         ImageSource::Resource(resource) => {
             match window.use_asset::<gpui::ImgResourceLoader>(resource, cx) {

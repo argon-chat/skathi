@@ -232,7 +232,7 @@ thread_local! {
     static RESIDENCY: RefCell<Residency> = RefCell::new(Residency::default());
 }
 
-fn note_known(source: Option<&ImageSource>) {
+pub(crate) fn note_known(source: Option<&ImageSource>) {
     let Some(source) = source else { return };
     let Some(key) = source_key(source) else {
         return;
@@ -1051,7 +1051,7 @@ fn warn(msg: String) {
     });
 }
 
-fn resolve(src: &str) -> Option<ImageSource> {
+pub(crate) fn resolve(src: &str) -> Option<ImageSource> {
     let src = src.trim();
     if src.is_empty() {
         return None;

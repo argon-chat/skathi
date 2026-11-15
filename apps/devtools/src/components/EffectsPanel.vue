@@ -16,6 +16,7 @@ import {
   type EffectsReply,
   type SetReply,
   type ShadingNode,
+  urlOf,
 } from "../effects-model";
 import { select, state, ui } from "../store";
 
@@ -29,7 +30,7 @@ const reply = ref<EffectsReply | null>(null);
 const error = ref("");
 const node = ref<ShadingNode | null>(null);
 const picked = ref<string | null>(null);
-const draft = ref<Draft>({ values: {}, enabled: {} });
+const draft = ref<Draft>({ values: {}, enabled: {}, urls: {} });
 const applied = ref<SetReply | null>(null);
 const copied = ref(false);
 
@@ -81,7 +82,7 @@ async function loadNode(rebuild: boolean): Promise<void> {
 function rebuildDraft(): void {
   const effect = editing.value;
   if (!effect) {
-    draft.value = { values: {}, enabled: {} };
+    draft.value = { values: {}, enabled: {}, urls: {} };
     return;
   }
   const n = node.value;
@@ -157,6 +158,16 @@ function setColor(param: EffectParam, hex: string): void {
   const rgb = [0, 2, 4].map((i) => parseInt(m[1]!.slice(i, i + 2), 16) / 255);
   draft.value.values[param.name] = [...rgb, prev[3] ?? 1];
   draft.value.enabled[param.name] = true;
+  void apply();
+}
+
+function commitUrl(param: EffectParam, event: Event): void {
+  if (event.type === "blur") ui.typing = false;
+  const typed = inputValue(event).trim();
+  const url = urlOf(typed) ?? typed;
+  if (url === (draft.value.urls[param.name] ?? "")) return;
+  draft.value.urls[param.name] = url;
+  draft.value.enabled[param.name] = url !== "" || param.required;
   void apply();
 }
 
@@ -403,6 +414,21 @@ onMounted(async () => {
                 />
               </template>
 
+              <template v-else-if="c.type === 'texture'">
+                <input
+                  class="input url mono"
+                  :value="draft.urls[c.param.name] ?? ''"
+                  placeholder="assets/image.png"
+                  :aria-label="`${c.key} image`"
+                  @focus="ui.typing = true"
+                  @blur="commitUrl(c.param, $event)"
+                  @keydown.enter="commitUrl(c.param, $event)"
+                />
+                <span class="fixed" :title="c.param.linear ? 'sampled as stored ([SkLinear])' : 'a colour image'">{{
+                  c.param.linear ? "data" : "colour"
+                }}</span>
+              </template>
+
               <template v-else>
                 <span class="fixed">{{ c.param.kind }} · filled by the host</span>
               </template>
@@ -634,6 +660,10 @@ onMounted(async () => {
 .num {
   width: 64px;
   text-align: right;
+}
+.url {
+  flex: 1;
+  min-width: 80px;
 }
 .unit {
   width: 16px;

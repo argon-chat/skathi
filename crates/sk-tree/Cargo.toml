@@ -12,6 +12,7 @@ webgpu = ["sk-runtime/webgpu"]
 [dependencies]
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 sk-css = { path = "../sk-css" }
+sk-effects = { path = "../sk-effects" }
 sk-elements = { path = "../sk-elements" }
 sk-lottie = { path = "../sk-lottie" }
 sk-video = { path = "../sk-video" }

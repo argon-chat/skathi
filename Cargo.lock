@@ -5869,6 +5869,7 @@ dependencies = [
  "image",
  "lightningcss",
  "sk-css",
+ "sk-effects",
  "sk-elements",
  "sk-lottie",
  "sk-payload",

@@ -69,6 +69,16 @@ const app = {
         { ...param("pointer", "pointer", 12, false, [0, 0], null), host: "pointer" },
       ],
     },
+    {
+      name: "grade",
+      backdrop: true,
+      signature: "grade(<texture:lut>, <number:amount>?, <texture:normals>?)",
+      params: [
+        { ...param("lut", "texture", 0, true, [0, 0, 0, 0], null), texture: 0, linear: true },
+        param("amount", "number", 2, false, [1, 0, 0, 0], [0, 1]),
+        { ...param("normals", "texture", 4, false, [0, 0, 0, 0], null), texture: 1, linear: false },
+      ],
+    },
   ],
 };
 
@@ -82,6 +92,7 @@ function effects(): EffectInfo[] {
       { name: "noise", id: 0, builtin: true },
       { name: "glow", id: 1, builtin: true },
       { name: "lens", id: 2, builtin: false },
+      { name: "grade", id: 3, builtin: false },
     ],
   );
 }
@@ -135,6 +146,19 @@ test("a draft is read from the declaration and written back unchanged", () => {
   const fromHost = draftFrom(glow, "glow(20px, 0.5)", resolved);
   expect(fromHost.enabled.color).toBe(false);
   expect(cssText(glow, fromHost)).toBe("glow(20px, 0.5)");
+});
+
+test("a texture parameter is edited as the address inside url()", () => {
+  const grade = named("grade");
+  expect(controlsFor(grade).map((c) => c.type)).toEqual(["texture", "scalar", "texture"]);
+
+  const draft = draftFrom(grade, `grade(url("assets/lut a.png"), url(n.png))`, [256, 16, 1, 0, 64, 64]);
+  expect(draft.urls).toEqual({ lut: "assets/lut a.png", normals: "n.png" });
+  expect(draft.enabled).toEqual({ lut: true, amount: false, normals: true });
+  expect(cssText(grade, draft)).toBe(`grade(url("assets/lut a.png"), url(n.png))`);
+
+  draft.urls.normals = "";
+  expect(cssText(grade, draft)).toBe(`grade(url("assets/lut a.png"))`);
 });
 
 test("a switched-off optional length is still written when a following 0 would land on it", () => {

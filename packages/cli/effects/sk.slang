@@ -34,7 +34,8 @@
 //     the engine draws a premultiplied result (see `sk_finish`).
 //   * Effects compile at `ps_5_0`; the rest of gpui stays at `ps_4_1`.
 //   * An effect declares no textures, samplers or buffers: it reads
-//     `EffectInput` and its own fields, nothing else.
+//     `EffectInput` and its own fields, nothing else. An image is a field
+//     too: `SkTexture lut;`, `url(...)` in CSS.
 
 module sk;
 
@@ -238,6 +239,15 @@ public struct SkPointerAttribute
 {
 };
 
+/// On an `SkTexture`: the image is data (a normal map, noise, a LUT), sampled
+/// as its file stores it — no premultiplication, alpha is just a fourth
+/// channel. Without it the image is colour, sampled premultiplied in the same
+/// sRGB-encoded space as `input.backdrop`.
+[__AttributeUsage(_AttributeTargets.Var)]
+public struct SkLinearAttribute
+{
+};
+
 /// A `float3` the host fills with times on the effect clock: when the pointer
 /// last moved in the window, when it last entered the window and when it last
 /// left it. It is in the window while `y > z`; `sk_pointer_presence` turns
@@ -257,16 +267,19 @@ public struct SkPointerTimesAttribute
 // for EVERY gpui pipeline, t0 is the processed backdrop (the Dual-Kawase
 // pyramid's top level), t2 the untouched render-target snapshot, b0 the shared
 // globals. s1 clamps — s0 wraps, which bleeds the opposite screen edge into
-// anything sampling near the border.
+// anything sampling near the border. t3..t6 are an effect's `SkTexture`
+// images and s2 the sampler that repeats them.
 //
 // They are declared HERE, in the module, rather than in a generated wrapper:
 // Slang keeps explicit `register()` annotations through the HLSL and Metal
 // backends (Metal: b0 buffer(0), t1 buffer(1), t0/t2 texture(0/2), s1
-// sampler(1)), so the module is the right home and an effect cannot move one.
+// sampler(1), t3..t6 texture(3..6), s2 sampler(2)), so the module is the right
+// home and an effect cannot move one.
 //
 // `[[vk::binding(binding, group)]]` is the same contract for the WGSL target,
 // matching the pipeline layout in gpui_wgpu: group 0 the globals, group 1 the
-// instance buffer, group 2 the backdrop textures and their sampler.
+// instance buffer, group 2 the backdrop textures and their sampler, then the
+// images at 3..6 and their sampler at 9.
 //
 // t7 is the element's content (`[SkContent]`), t8 its history (`[SkHistory]`):
 // WGSL group 2 bindings 7 and 8, Metal texture(7) and texture(8). Every effect
@@ -322,6 +335,19 @@ public SamplerState sk_clamp_sampler : register(s1);
 public Texture2D<float4> sk_content : register(t7);
 [[vk::binding(8, 2)]]
 public Texture2D<float4> sk_history : register(t8);
+
+// The images of `SkTexture` parameters, in declaration order, and the sampler
+// that repeats them.
+[[vk::binding(3, 2)]]
+Texture2D<float4> sk_texture0 : register(t3);
+[[vk::binding(4, 2)]]
+Texture2D<float4> sk_texture1 : register(t4);
+[[vk::binding(5, 2)]]
+Texture2D<float4> sk_texture2 : register(t5);
+[[vk::binding(6, 2)]]
+Texture2D<float4> sk_texture3 : register(t6);
+[[vk::binding(9, 2)]]
+SamplerState sk_repeat_sampler : register(s2);
 
 /// Scalar padding rather than a `uint3`: WGSL aligns a `vec3` to 16 bytes and
 /// would grow the block from 48 to 64.
@@ -526,6 +552,68 @@ public struct EffectInput
         return c * s;
     }
 };
+
+/// An image parameter, written `url(...)` in CSS and resolved like an
+/// `<img src>`. At most four per effect. Sampled bilinearly at mip 0, so it is
+/// safe in loops and branches. Until the image has loaded, or when it fails or
+/// is omitted, every read returns the field's `[SkDefault]` colour
+/// (transparent without one) and `size` is zero.
+public struct SkTexture
+{
+    /// The image's size in texels; (0, 0) while it is missing.
+    public float2 size;
+    uint slot;
+    float4 fallback;
+
+    public bool loaded()
+    {
+        return this.size.x > 0.0;
+    }
+
+    /// The image at a 0..1 UV, clamped to its edge texels outside it.
+    public float4 sample(float2 uv)
+    {
+        return this.loaded() ? sk_texture_at(this.slot, sk_clamp_sampler, uv) : this.fallback;
+    }
+
+    /// The image at a UV, repeating outside 0..1.
+    public float4 sampleRepeat(float2 uv)
+    {
+        return this.loaded() ? sk_texture_at(this.slot, sk_repeat_sampler, uv) : this.fallback;
+    }
+};
+
+/// Built by the generated wrapper; an effect receives its `SkTexture` fields filled in.
+public SkTexture sk_texture(uint slot, float2 size, float4 fallback)
+{
+    SkTexture t;
+    t.size = size;
+    t.slot = slot;
+    t.fallback = fallback;
+    return t;
+}
+
+float4 sk_texture_at(uint slot, SamplerState s, float2 uv)
+{
+    float4 texel = float4(0.0, 0.0, 0.0, 0.0);
+    if (slot == 0u)
+    {
+        texel = sk_texture0.SampleLevel(s, uv, 0.0);
+    }
+    else if (slot == 1u)
+    {
+        texel = sk_texture1.SampleLevel(s, uv, 0.0);
+    }
+    else if (slot == 2u)
+    {
+        texel = sk_texture2.SampleLevel(s, uv, 0.0);
+    }
+    else if (slot == 3u)
+    {
+        texel = sk_texture3.SampleLevel(s, uv, 0.0);
+    }
+    return texel;
+}
 
 /// The one interface an effect implements.
 public interface IEffect

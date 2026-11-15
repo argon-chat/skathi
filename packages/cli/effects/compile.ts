@@ -20,7 +20,7 @@ import { PIN, ShaderCompilerError } from "./redslangc";
 
 /// Bumped when the prelude or generated wrapper changes codegen or schema shape; rides in every
 /// header and effects.json. Rust refuses an effects.json with an unknown schema.
-export const SCHEMA = 9;
+export const SCHEMA = 10;
 
 export const PRELUDE = join(import.meta.dir, "sk.slang");
 
@@ -73,9 +73,10 @@ const TARGETS: Target[] = [
   },
 ];
 
-// Group 0 the globals, 1 the instance buffer, 2 the backdrop, its sampler and the snapshot, then the
-// element's content (7) and history (8).
-const WGSL_BINDINGS = new Set(["0:0", "1:0", "2:0", "2:1", "2:2", "2:7", "2:8"]);
+// Group 0 the globals, 1 the instance buffer, 2 the backdrop, its sampler and the snapshot, the
+// `SkTexture` images (3..6), the element's content (7) and history (8), and the images' repeating
+// sampler (9).
+const WGSL_BINDINGS = new Set(["0:0", "1:0", "2:0", "2:1", "2:2", "2:3", "2:4", "2:5", "2:6", "2:7", "2:8", "2:9"]);
 
 /// The renderer builds one pipeline layout for every effect; a resource outside it would fail at
 /// pipeline creation on the user's machine, so refuse it here.
@@ -91,7 +92,7 @@ function checkWgslBindings(code: string, file: string) {
   }
 }
 
-/// The prelude's resources on Metal, where Slang keeps the HLSL registers (b0, t1, t0, t2, t7, t8, s1). One
+/// The prelude's resources on Metal, where Slang keeps the HLSL registers (b0, t1, t0, t2, t3..t8, s1, s2). One
 /// argument table for every effect, so the renderer binds these and nothing else.
 const METAL_BINDINGS: Array<[at: string, name: string, what: string]> = [
   ["buffer(0)", "GlobalParams", "constant, the 48-byte globals"],
@@ -101,6 +102,11 @@ const METAL_BINDINGS: Array<[at: string, name: string, what: string]> = [
   ["texture(7)", "sk_content", "the element's content"],
   ["texture(8)", "sk_history", "the effect's history"],
   ["sampler(1)", "sk_clamp_sampler", "clamp to edge"],
+  ["texture(3)", "sk_texture0", "the first SkTexture"],
+  ["texture(4)", "sk_texture1", "the second SkTexture"],
+  ["texture(5)", "sk_texture2", "the third SkTexture"],
+  ["texture(6)", "sk_texture3", "the fourth SkTexture"],
+  ["sampler(2)", "sk_repeat_sampler", "repeat"],
 ];
 
 /// Refuses Metal output whose entry point or arguments are not the ones the renderer provides.
@@ -129,16 +135,25 @@ const METAL_NOTE =
   METAL_BINDINGS.map(([at, name, what]) => `//   [[${at}]]`.padEnd(20) + `${name.padEnd(22)}${what}\n`).join("") +
   `// The VERTEX half is the Metal renderer's own, shared by every effect.\n`;
 
-type ParamKind = "number" | "length" | "color";
+type ParamKind = "number" | "length" | "color" | "texture";
 
 type ParamSchema = {
   name: string;
   kind: ParamKind;
+  /// A texture's first slot holds its width and the next its height, which the host writes.
   slot: number;
   required: boolean;
+  /// A texture's is what it reads as while missing, straight RGBA.
   default: [number, number, number, number];
   range: [number, number] | null;
+  /// A texture's binding, 0..3 (t3..t6), in declaration order.
+  texture?: number;
+  /// A texture sampled as stored, without premultiplying ([SkLinear]).
+  linear?: boolean;
 };
+
+/// `SkTexture` fields per effect: the bindings the renderers provide.
+const TEXTURE_SLOTS = 4;
 
 export type EffectSchema = {
   name: string;
@@ -195,6 +210,13 @@ float4 sk_reflect_probe(float4 sk_position : SV_Position) : SV_Target
 const slotExpr = (slot: number): string => `sk_in.param(${slot}u)`;
 
 function loadExpr(field: Field): string {
+  if (field.texture) {
+    const { index, fallback } = field.texture;
+    return (
+      `sk_texture(${index}u, float2(${slotExpr(field.slot)}, ${slotExpr(field.slot + 1)}), ` +
+      `float4(${fallback.join(", ")}))`
+    );
+  }
   if (field.components === 1) return slotExpr(field.slot);
   const parts: string[] = [];
   for (let c = 0; c < field.components; c += 1) parts.push(slotExpr(field.slot + c));
@@ -263,6 +285,7 @@ const readText = (file: string): string => readFileSync(file, "utf8").replace(/\
 
 interface ReflType {
   kind?: string;
+  name?: string;
   scalarType?: string;
   elementType?: ReflType;
   elementCount?: number | string;
@@ -374,6 +397,8 @@ type Field = {
   name: string;
   components: number;
   slot: number;
+  /// An `SkTexture`: its binding and the colour it reads as while missing, as `sample` returns it.
+  texture?: { index: number; fallback: [number, number, number, number] };
 };
 
 function attr(attrs: Attribute[], name: string): Attribute | undefined {
@@ -442,7 +467,10 @@ function allocate(used: boolean[], components: number): number {
   return -1;
 }
 
+const isTexture = (type: ReflType | undefined): boolean => type?.kind === "struct" && type.name === "SkTexture";
+
 function fieldComponents(type: ReflType | undefined, where: string): number {
+  if (isTexture(type)) return 2;
   if (type?.kind === "scalar") {
     if (type.scalarType !== "float32") {
       throw new SchemaError(
@@ -461,9 +489,9 @@ function fieldComponents(type: ReflType | undefined, where: string): number {
     return n;
   }
   throw new SchemaError(
-    `${where}: unsupported parameter type \`${type?.kind ?? "?"}\` — a parameter must be ` +
-      "`float`, `float2`, `float3` or `float4` (matrices, arrays, textures and " +
-      "samplers cannot ride in the 32-float parameter block)",
+    `${where}: unsupported parameter type \`${type?.name ?? type?.kind ?? "?"}\` — a parameter must be ` +
+      "`float`, `float2`, `float3`, `float4` or `SkTexture` (an image: matrices, arrays, raw " +
+      "textures and samplers cannot ride in the 32-float parameter block)",
   );
 }
 
@@ -523,6 +551,7 @@ function buildSchema(
   let pointerTimesParam: number | null = null;
   const clockSlots: number[] = [];
   let clockWindow: number | null = null;
+  let textures = 0;
   let backdrop = attr(structAttrs, "SkBackdrop") !== undefined;
   // Taken float slots: `[SkSlot]` runs are reserved first, then fields pack in declaration order.
   const used: boolean[] = new Array(PARAM_SLOTS).fill(false);
@@ -562,7 +591,7 @@ function buildSchema(
     if (isColor && isLength) {
       throw new SchemaError(`${where}: [SkColor] and [SkLength] are mutually exclusive`);
     }
-    if (optional && components > 1 && !isColor) {
+    if (optional && components > 1 && !isColor && !isTexture(field.type)) {
       // A bare vector expands to one CSS argument per component and optional parameters are
       // skipped one argument at a time, so half a `float2` could be filled in: refuse.
       throw new SchemaError(
@@ -584,6 +613,43 @@ function buildSchema(
       }
       for (let c = 0; c < components; c += 1) used[slot + c] = true;
     }
+
+    const linear = attr(attrs, "SkLinear") !== undefined;
+    if (isTexture(field.type)) {
+      const refused = [
+        ...HOST_FILLED_REFUSES.filter((a) => a !== "SkDefault" && a !== "SkOptional"),
+        "SkAnimatedFor",
+        "SkPointer",
+        "SkPointerTimes",
+      ].find((a) => attr(attrs, a) !== undefined);
+      if (refused) throw new SchemaError(`${where}: [${refused}] cannot go on an SkTexture`);
+      if (textures === TEXTURE_SLOTS) {
+        throw new SchemaError(`${where}: an effect samples at most ${TEXTURE_SLOTS} SkTexture images`);
+      }
+      const fallback = defaultAttr
+        ? parseDefault(String(defaultAttr.arguments?.[0] ?? ""), 4, where)
+        : ([0, 0, 0, 0] as [number, number, number, number]);
+      const [r, g, b, a] = fallback;
+      fields.push({
+        name: fieldName,
+        components,
+        slot,
+        texture: { index: textures, fallback: linear ? fallback : [r * a, g * a, b * a, a] },
+      });
+      params.push({
+        name: fieldName,
+        kind: "texture",
+        slot,
+        required: !optional,
+        default: fallback,
+        range: null,
+        texture: textures,
+        linear,
+      });
+      textures += 1;
+      continue;
+    }
+    if (linear) throw new SchemaError(`${where}: [SkLinear] is only legal on an SkTexture`);
     fields.push({ name: fieldName, components, slot });
 
     const animatedFor = attr(attrs, "SkAnimatedFor");

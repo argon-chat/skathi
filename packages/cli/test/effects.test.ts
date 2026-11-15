@@ -143,7 +143,53 @@ struct Lamp : IEffect
     expect(String((error as EffectsError).message)).toContain("not a CSS argument");
   });
 
-  test("compile to every target and a schema-8 manifest that names them", async () => {
+  test("texture fields take two size slots and a binding each, and their misuse is refused", async () => {
+    const root = app({
+      "grade.slang": `import sk;
+
+[SkEffect("grade")]
+struct Grade : IEffect
+{
+    [SkDefault("#ff000080")] SkTexture lut;
+    [SkDefault("1")] float amount;
+    [SkLinear] [SkOptional] SkTexture normals;
+
+    float4 shade(EffectInput input)
+    {
+        float4 n = normals.sampleRepeat(input.local * normals.size / 16.0);
+        return lut.sample(float2(amount, n.x)) * input.coverage;
+    }
+};
+`,
+    });
+    const [grade] = (await compileAppEffects(root, compiler!)).compiled;
+    expect(grade!.effect.signature).toBe("grade(<texture:lut>, <number:amount>, <texture:normals>?)");
+    expect(grade!.effect.params).toMatchObject([
+      { name: "lut", kind: "texture", slot: 0, texture: 0, linear: false },
+      { name: "amount", kind: "number", slot: 2 },
+      { name: "normals", kind: "texture", slot: 4, texture: 1, linear: true, required: false },
+    ]);
+    expect(grade!.effect.params[0]!.default.map((c) => Math.round(c * 255))).toEqual([255, 0, 0, 128]);
+    const code = Object.fromEntries(grade!.outputs.map((o) => [o.target, o.code]));
+    expect(code.hlsl).toMatch(/sk_texture1\w* : register\(t4\)/);
+    expect(code.wgsl).toMatch(/@binding\(9\) @group\(2\) var sk_repeat_sampler/);
+    expect(code.metal).toMatch(/sk_texture1\w* \[\[texture\(4\)\]\]/);
+
+    const refused = async (body: string) => {
+      const bad = app({
+        "bad.slang": `import sk;\n[SkEffect("bad")]\nstruct Bad : IEffect\n{\n${body}\n    float4 shade(EffectInput input) { return float4(0.0); }\n};\n`,
+      });
+      const error = await compileAppEffects(bad, compiler!).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(EffectsError);
+      return String((error as EffectsError).message);
+    };
+    expect(await refused("    SkTexture a; SkTexture b; SkTexture c; SkTexture d; SkTexture e;")).toContain(
+      "at most 4 SkTexture",
+    );
+    expect(await refused("    [SkLinear] float amount;")).toContain("SkLinear");
+  });
+
+  test("compile to every target and a manifest that names them", async () => {
     const root = app({ "ripple.slang": RIPPLE });
     const built = await compileAppEffects(root, compiler!);
     expect(built.files.map((f) => f.name)).toEqual(["ripple.hlsl", "ripple.wgsl", "ripple.metal", "effects.json"]);

@@ -1,0 +1,13 @@
+{
+  "$comment": "Effects sampling url() images: colour and linear textures, a missing one, two images in one frame.",
+
+  "name": "sk-test-effect-textures",
+
+  "window": {
+    "title": "Skathi — effect textures (fixture)",
+    "width": 360,
+    "height": 120,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

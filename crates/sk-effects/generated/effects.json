@@ -1,9 +1,9 @@
 {
-  "schema": 9,
+  "schema": 10,
   "slang": "2026.12",
   "compiler": "redslangc 0.1.1",
   "kind": "builtin",
-  "preludeSha256": "afd9f26d4a905b07f6485b44fb2436fef9a4669af184262ff4103204be88a6ba",
+  "preludeSha256": "2afb0e5f79a1c157be58e61743ae75cc8ef35206b6eca078cc7618c1717f1e65",
   "effects": [
     {
       "id": 0,
@@ -19,9 +19,9 @@
       "source": "crates/sk-effects/shaders/frost.slang",
       "sourceSha256": "3878d0fc85a790a8abcc1fbc6369c3ea64093adaeb4c20ec1fa443908052dada",
       "generatedSha256": {
-        "hlsl": "d370d6aea7cb82b7c0d8b86ebf618a2a9f54c221dfb2d1250748329bba942979",
-        "wgsl": "600d0384a69da6d9b520fedb445f433e0e4ae994f6535591f766052dcb03a197",
-        "metal": "f98770249101af3227a0933b8bfec70e1246bb53c6fb43a896625fdf19f6d395"
+        "hlsl": "766f531b7e60672b46341d9a283a328c977ae49abdfb2a70d5b023b4c7f35c57",
+        "wgsl": "e23db5bd4ebf4140f5973f0d18ebcce9e93fb2cc2617393a93e57fdd49fc66a5",
+        "metal": "820d640da6a6865d0cb2c72572f400ab95472b4a46e0838b02e095b52621d925"
       },
       "signature": "frost(<number:strength>, <length:radius>?, <color:tint>?)",
       "backdropRadiusParam": 1,
@@ -110,6 +110,31 @@
           "index": 8
         },
         {
+          "name": "sk_texture0",
+          "kind": "shaderResource",
+          "index": 3
+        },
+        {
+          "name": "sk_texture1",
+          "kind": "shaderResource",
+          "index": 4
+        },
+        {
+          "name": "sk_texture2",
+          "kind": "shaderResource",
+          "index": 5
+        },
+        {
+          "name": "sk_texture3",
+          "kind": "shaderResource",
+          "index": 6
+        },
+        {
+          "name": "sk_repeat_sampler",
+          "kind": "samplerState",
+          "index": 2
+        },
+        {
           "name": "GlobalParams",
           "kind": "constantBuffer",
           "index": 0
@@ -130,9 +155,9 @@
       "source": "crates/sk-effects/shaders/noise.slang",
       "sourceSha256": "aac4ac76e76e5b7df379ca8f6356d05d5eb7f84b754cef6ff0712c4edddcbecd",
       "generatedSha256": {
-        "hlsl": "663db09dc43d8902b4f7b7663505b251b23123b3d4a001670b8076928c5056ea",
-        "wgsl": "0e215ef7a0d05776176e205e530c3d84c7df88a3b7e2b89ab8aca028083e2a50",
-        "metal": "dc1100df1f71006f810f1e7aba8dc26fe360f770a84c2706957b5229be5b2c40"
+        "hlsl": "44437e047fb841662fdd9c49c1e4e3e174978f1be1a02b6aa49e461e9c62ba54",
+        "wgsl": "98c867d489612ccd0fc8d2be907c4ef95c74bd8cd26e41556b46dc0225548db4",
+        "metal": "9550ac5fc4f48a0234e8374c9cbf6f0fdb57f649e816d866627434f833d4486d"
       },
       "signature": "noise(<number:amount>, <length:scale>?, <number:speed>?)",
       "backdropRadiusParam": null,
@@ -224,6 +249,31 @@
           "index": 8
         },
         {
+          "name": "sk_texture0",
+          "kind": "shaderResource",
+          "index": 3
+        },
+        {
+          "name": "sk_texture1",
+          "kind": "shaderResource",
+          "index": 4
+        },
+        {
+          "name": "sk_texture2",
+          "kind": "shaderResource",
+          "index": 5
+        },
+        {
+          "name": "sk_texture3",
+          "kind": "shaderResource",
+          "index": 6
+        },
+        {
+          "name": "sk_repeat_sampler",
+          "kind": "samplerState",
+          "index": 2
+        },
+        {
           "name": "GlobalParams",
           "kind": "constantBuffer",
           "index": 0
@@ -244,9 +294,9 @@
       "source": "crates/sk-effects/shaders/glow.slang",
       "sourceSha256": "de1d06dddb28503e5a23a3494d73227436591594943428bd0ecec042d3926caa",
       "generatedSha256": {
-        "hlsl": "fb388b0701be7ef68f84d3c77346e3086e6d167fdad169b78abaff29f9e9e410",
-        "wgsl": "5d5b136ace60aa7d6896f80b2a49afb132855d2e89a045015b32785113129c93",
-        "metal": "b5e92db77f1674c951a63b8b30f81cd0db287ac545a36af4998a7a9d2bfbd2e4"
+        "hlsl": "78610f7155310b30467f3fbbcfbd246cfdba69175146714314a10c21e4d8802d",
+        "wgsl": "2cbca49992336d78db2bb9690eb7753bd67df755c0065d6109488fc7f4871d28",
+        "metal": "ef425154d2c0ea2ba0a173bf1e45577ef247c833ca82a8cbd89fd3bcc76bb9bf"
       },
       "signature": "glow(<color>?, <length:radius>, <number:strength>)",
       "backdropRadiusParam": null,
@@ -333,6 +383,31 @@
           "name": "sk_history",
           "kind": "shaderResource",
           "index": 8
+        },
+        {
+          "name": "sk_texture0",
+          "kind": "shaderResource",
+          "index": 3
+        },
+        {
+          "name": "sk_texture1",
+          "kind": "shaderResource",
+          "index": 4
+        },
+        {
+          "name": "sk_texture2",
+          "kind": "shaderResource",
+          "index": 5
+        },
+        {
+          "name": "sk_texture3",
+          "kind": "shaderResource",
+          "index": 6
+        },
+        {
+          "name": "sk_repeat_sampler",
+          "kind": "samplerState",
+          "index": 2
         },
         {
           "name": "GlobalParams",

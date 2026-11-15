@@ -18,6 +18,8 @@ enum Arg {
     Number(f32),
     Length(f32),
     Color([f32; 4]),
+    /// `url(...)`, as `sk_effects::texture_source` numbered it.
+    Texture(u32),
 }
 
 impl Arg {
@@ -26,6 +28,7 @@ impl Arg {
             (Arg::Number(_), ParamKind::Number) => true,
             (Arg::Length(_), ParamKind::Length) => true,
             (Arg::Color(_), ParamKind::Color) => true,
+            (Arg::Texture(_), ParamKind::Texture) => true,
             (Arg::Number(n), ParamKind::Length) => n == 0.0,
             _ => false,
         }
@@ -36,6 +39,7 @@ impl Arg {
             Arg::Number(_) => "<number>",
             Arg::Length(_) => "<length>",
             Arg::Color(_) => "<color>",
+            Arg::Texture(_) => "url()",
         }
     }
 }
@@ -185,7 +189,7 @@ fn build(
             return None;
         }
 
-        write(&mut spec.params, param, arg, schema, diagnostics);
+        write(&mut spec, param, arg, schema, diagnostics);
         next += 1;
     }
 
@@ -210,14 +214,23 @@ fn build(
 /// Out-of-range is CLAMPED, not dropped: a browser would clamp a used value too, and dropping the
 /// whole declaration over a `1.4` would be a far bigger surprise than saturating it.
 fn write(
-    params: &mut [f32; gpui::EFFECT_PARAM_SLOTS],
+    spec: &mut EffectSpec,
     param: &ParamSchema,
     arg: Arg,
     schema: &EffectSchema,
     diagnostics: &mut Vec<String>,
 ) {
+    let params = &mut spec.params;
     let slot = param.slot as usize;
     match arg {
+        Arg::Texture(source) => {
+            let texture = param
+                .texture
+                .and_then(|(index, _)| spec.textures.get_mut(index as usize)?.as_mut());
+            if let Some(texture) = texture {
+                texture.source = source;
+            }
+        }
         Arg::Color(rgba) => {
             for (offset, channel) in rgba.iter().enumerate() {
                 if let Some(target) = params.get_mut(slot + offset) {
@@ -287,6 +300,8 @@ fn argument(group: &[&TokenOrValue]) -> Result<Arg, String> {
         TokenOrValue::Length(length) => length.to_px().map(Arg::Length).ok_or_else(|| {
             "a length in a relative unit (em/rem/vw/… are not resolved in v1)".to_string()
         }),
+        TokenOrValue::Url(url) if url.url.trim().is_empty() => Err("an empty url()".to_string()),
+        TokenOrValue::Url(url) => Ok(Arg::Texture(sk_effects::texture_source(url.url.trim()))),
         TokenOrValue::Var(_) | TokenOrValue::Env(_) => Err(
             "a var()/env() reference (custom property resolution is not implemented in v1)"
                 .to_string(),
@@ -321,7 +336,7 @@ fn advise(diagnostics: &mut Vec<String>, message: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use gpui::effect_id;
     use lightningcss::declaration::DeclarationBlock;
@@ -422,7 +437,7 @@ mod tests {
     }
 
     const USER_MANIFEST: &str = r#"{
-      "schema": 9,
+      "schema": 10,
       "kind": "user",
       "effects": [
         {
@@ -454,11 +469,27 @@ mod tests {
             { "name": "blur", "kind": "length", "slot": 1, "required": false,
               "default": [8, 0, 0, 0], "range": [0, 25] }
           ]
+        },
+        {
+          "name": "grade",
+          "backdrop": true,
+          "signature": "grade(<texture:lut>, <number:amount>?, <texture:normals>?)",
+          "backdropRadiusParam": null,
+          "bleedParam": null,
+          "animatedParam": null,
+          "params": [
+            { "name": "lut", "kind": "texture", "slot": 0, "required": true,
+              "default": [0, 0, 0, 0], "range": null, "texture": 0, "linear": true },
+            { "name": "amount", "kind": "number", "slot": 2, "required": false,
+              "default": [1, 0, 0, 0], "range": [0, 1] },
+            { "name": "normals", "kind": "texture", "slot": 4, "required": false,
+              "default": [0.5, 0.5, 1, 1], "range": null, "texture": 1, "linear": false }
+          ]
         }
       ]
     }"#;
 
-    fn with_user_effects() {
+    pub(crate) fn with_user_effects() {
         static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
         ONCE.get_or_init(|| {
             let user =
@@ -500,6 +531,36 @@ mod tests {
         assert_eq!(s.id, effect_id::COUNT + 1);
         assert_eq!(s.flags, gpui::EFFECT_FLAG_NEEDS_BACKDROP);
         assert_eq!(s.backdrop_blur_radius(), 20.0);
+    }
+
+    #[test]
+    fn a_url_argument_names_the_image_for_its_texture_binding() {
+        with_user_effects();
+        let s = spec("--shading: grade(url(assets/lut.png), 0.25)");
+        let lut = s.textures[0].expect("lut is declared");
+        assert_eq!(lut.source, sk_effects::texture_source("assets/lut.png"));
+        assert_eq!((lut.size_param, lut.linear), (0, true));
+        assert_eq!(s.params[2], 0.25);
+        let normals = s.textures[1].expect("normals is declared");
+        assert_eq!(normals.source, 0, "an omitted image is missing");
+
+        let both = spec("--shading: grade(url(\"assets/lut.png\"), url(assets/n.png))");
+        assert_eq!(both.textures[0], s.textures[0]);
+        assert_eq!(
+            both.textures[1].unwrap().source,
+            sk_effects::texture_source("assets/n.png")
+        );
+        assert_eq!(both.params[2], 1.0);
+    }
+
+    #[test]
+    fn a_texture_parameter_takes_only_a_url() {
+        with_user_effects();
+        let (s, diagnostics) = shading("--shading: grade(0.5)");
+        assert!(s.is_none());
+        assert!(!diagnostics.is_empty());
+        let (s, _) = shading("--shading: ripple(url(a.png))");
+        assert!(s.is_none());
     }
 
     #[test]

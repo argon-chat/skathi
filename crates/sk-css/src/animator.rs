@@ -607,14 +607,14 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
         })),
         (Pixels(a), Pixels(b)) => Pixels(gpui::Pixels::interpolate(a, b, t)),
         (Rems(a), Rems(b)) => Rems(gpui::Rems::interpolate(a, b, t)),
-        (Effect(a), Effect(b)) if a.id == b.id => Effect(lerp_effect(a, b, t)),
+        (Effect(a), Effect(b)) if a.interpolates_with(&b) => Effect(lerp_effect(a, b, t)),
         (Effect(a), Effect(b)) => EffectFade(a, b, t),
         // Retargeted mid-fade: back to (or on to) one of the two keeps fading from where it was;
         // a third effect fades in over the one showing more.
-        (EffectFade(x, y, s), Effect(c)) if c.id == y.id => {
+        (EffectFade(x, y, s), Effect(c)) if c.interpolates_with(&y) => {
             EffectFade(x, lerp_effect(y, c, t), s + (1.0 - s) * t)
         }
-        (EffectFade(x, y, s), Effect(c)) if c.id == x.id => {
+        (EffectFade(x, y, s), Effect(c)) if c.interpolates_with(&x) => {
             EffectFade(y, lerp_effect(x, c, t), (1.0 - s) + s * t)
         }
         (EffectFade(x, y, s), Effect(c)) => {
@@ -1856,6 +1856,35 @@ mod tests {
             assert!((half.params[channel] - 0.5).abs() < 1e-3, "slot {channel}");
         }
         assert!((half.bleed() - 20.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_same_effect_with_another_image_cross_fades() {
+        crate::mapper::effect::tests::with_user_effects();
+        let mut a = Animator::new();
+        let now = t0();
+        let css = "transition: --shading 1s linear";
+        let old = states(with_shading("grade(url(a.png), 0)"), css);
+        let new = states(with_shading("grade(url(b.png), 1)"), css);
+        a.on_computed(1, Some(&old), &new, now);
+        let half = a.overlay_test(1, now + Duration::from_millis(500)).unwrap();
+        let fade = half.vn_effect_fade.expect("a different image cross-fades");
+        let source = |spec: &EffectSpec| spec.textures[0].unwrap().source;
+        assert_eq!(source(&fade.from), sk_effects::texture_source("a.png"));
+        assert_eq!(
+            source(&shading_of(&half)),
+            sk_effects::texture_source("b.png")
+        );
+        assert_eq!(
+            fade.from.params[2], 0.0,
+            "each side keeps its own parameters"
+        );
+
+        let same = states(with_shading("grade(url(b.png), 0.5)"), css);
+        a.on_computed(2, Some(&new), &same, now);
+        let r = a.overlay_test(2, now + Duration::from_millis(500)).unwrap();
+        assert!(r.vn_effect_fade.is_none(), "the same image interpolates");
+        assert!((shading_of(&r).params[2] - 0.75).abs() < 1e-3);
     }
 
     #[test]

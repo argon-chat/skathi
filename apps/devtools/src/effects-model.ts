@@ -1,9 +1,9 @@
 // The `--shading` schema as the Effects panel reads it: effects.json text from the host, read
 // field by field so a newer manifest with more attributes still shows what this panel knows.
 
-export type ArgKind = "number" | "length" | "color";
+export type ArgKind = "number" | "length" | "color" | "texture";
 
-const EDITABLE: readonly string[] = ["number", "length", "color"];
+const EDITABLE: readonly string[] = ["number", "length", "color", "texture"];
 
 export interface EffectParam {
   name: string;
@@ -14,6 +14,8 @@ export interface EffectParam {
   range: [number, number] | null;
   /** An author can write it in `--shading`; otherwise the host fills it (or the kind is newer than this panel). */
   editable: boolean;
+  /** A texture sampled as stored rather than as a colour image. */
+  linear: boolean;
 }
 
 export interface EffectFlag {
@@ -107,6 +109,7 @@ function readParam(raw: unknown): EffectParam | null {
     default: Array.isArray(raw.default) ? raw.default.map((d) => finite(d) ?? 0) : [],
     range: range && range.length === 2 && range[0] !== null && range[1] !== null ? [range[0]!, range[1]!] : null,
     editable: EDITABLE.includes(kind) && !hostFilled,
+    linear: raw.linear === true,
   };
 }
 
@@ -252,6 +255,7 @@ export function scalarFor(param: EffectParam): Scalar {
 export type Control =
   | { type: "scalar"; key: string; param: EffectParam; scalar: Scalar }
   | { type: "color"; key: string; param: EffectParam }
+  | { type: "texture"; key: string; param: EffectParam }
   | { type: "vector"; key: string; name: string; parts: { axis: string; param: EffectParam; scalar: Scalar }[] }
   | { type: "fixed"; key: string; param: EffectParam };
 
@@ -266,6 +270,10 @@ export function controlsFor(effect: EffectInfo): Control[] {
       continue;
     }
     const axis = AXIS.exec(param.name);
+    if (param.kind === "texture") {
+      out.push({ type: "texture", key: param.name, param });
+      continue;
+    }
     if (axis && param.kind !== "color") {
       const prev = out[out.length - 1];
       const part = { axis: axis[2]!, param, scalar: scalarFor(param) };
@@ -308,7 +316,20 @@ export function parseShading(text: string | null | undefined): Parsed | null {
 
 const NUM = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?/i;
 
+const URL_ARG = /^url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)$/i;
+
+/** The address inside `url(...)`, or `null` for any other argument. */
+export function urlOf(arg: string): string | null {
+  const m = URL_ARG.exec(arg.trim());
+  return m ? (m[1] ?? m[2] ?? m[3] ?? "") : null;
+}
+
+export function urlArg(url: string): string {
+  return /[\s()'"\\]/.test(url) ? `url(${JSON.stringify(url)})` : `url(${url})`;
+}
+
 export function argKind(arg: string): ArgKind {
+  if (urlOf(arg) !== null) return "texture";
   const n = NUM.exec(arg);
   if (n) {
     const rest = arg.slice(n[0].length);
@@ -345,6 +366,8 @@ export function assign(effect: EffectInfo, args: readonly string[]): Map<string,
 export interface Draft {
   values: Record<string, number[]>;
   enabled: Record<string, boolean>;
+  /** A texture parameter's image address, as written inside `url(...)`. */
+  urls: Record<string, string>;
 }
 
 function parseScalar(arg: string): number | null {
@@ -374,7 +397,15 @@ export function draftFrom(effect: EffectInfo, text: string | null, resolved: rea
     parsed && parsed.name.toLowerCase() === effect.name.toLowerCase() ? assign(effect, parsed.args) : null;
   const values: Record<string, number[]> = {};
   const enabled: Record<string, boolean> = {};
+  const urls: Record<string, string> = {};
   for (const param of effect.params) {
+    if (param.kind === "texture") {
+      const arg = supplied?.get(param.name);
+      urls[param.name] = arg === undefined ? "" : (urlOf(arg) ?? "");
+      values[param.name] = param.default.slice(0, 2);
+      enabled[param.name] = param.required || arg !== undefined;
+      continue;
+    }
     const width = param.kind === "color" ? 4 : 1;
     let value = Array.from({ length: width }, (_, i) => param.default[i] ?? (param.kind === "color" ? 1 : 0));
     const arg = supplied?.get(param.name);
@@ -387,7 +418,7 @@ export function draftFrom(effect: EffectInfo, text: string | null, resolved: rea
     values[param.name] = value;
     enabled[param.name] = param.required || (supplied ? supplied.has(param.name) : false);
   }
-  return { values, enabled };
+  return { values, enabled, urls };
 }
 
 export function fmtNumber(value: number, step = 0.001): string {
@@ -408,7 +439,8 @@ export function hexColor(rgba: readonly number[], withAlpha = true): string {
   return withAlpha && a < 1 ? rgb + byte(a) : rgb;
 }
 
-function argText(param: EffectParam, value: readonly number[]): string {
+function argText(param: EffectParam, value: readonly number[], url: string | undefined): string {
+  if (param.kind === "texture") return urlArg(url ?? "");
   if (param.kind === "color") return hexColor(value);
   const v = fmtNumber(value[0] ?? 0, Math.min(0.001, scalarFor(param).step));
   return param.kind === "length" ? `${v}px` : v;
@@ -420,8 +452,10 @@ function argText(param: EffectParam, value: readonly number[]): string {
  */
 export function cssText(effect: EffectInfo, draft: Draft): string {
   const params = effect.params.filter((p) => p.editable);
-  const texts = params.map((p) => argText(p, draft.values[p.name] ?? p.default));
-  const on = params.map((p) => p.required || draft.enabled[p.name] === true);
+  const texts = params.map((p) => argText(p, draft.values[p.name] ?? p.default, draft.urls[p.name]));
+  const on = params.map(
+    (p) => p.required || (draft.enabled[p.name] === true && (p.kind !== "texture" || !!draft.urls[p.name])),
+  );
   for (let i = params.length - 1; i >= 0; i--) {
     if (on[i]) continue;
     const next = on.indexOf(true, i + 1);

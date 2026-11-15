@@ -28,8 +28,8 @@
 use std::sync::{OnceLock, RwLock};
 
 use gpui::{
-    effect_id, EffectSpec, EFFECT_FLAG_HISTORY, EFFECT_FLAG_NEEDS_BACKDROP,
-    EFFECT_FLAG_NEEDS_CONTENT, EFFECT_PARAM_SLOTS,
+    effect_id, EffectSpec, EffectTextureParam, EFFECT_FLAG_HISTORY, EFFECT_FLAG_NEEDS_BACKDROP,
+    EFFECT_FLAG_NEEDS_CONTENT, EFFECT_PARAM_SLOTS, EFFECT_TEXTURE_SLOTS,
 };
 
 /// The `effects.json` layout this build understands; a mismatch means the artifacts came from a
@@ -45,12 +45,15 @@ pub enum ParamKind {
     Number,
     Length,
     Color,
+    /// An image, `url(...)`; its two slots hold its size, which the painter writes.
+    Texture,
 }
 
 impl ParamKind {
     pub fn slots(self) -> u8 {
         match self {
             ParamKind::Color => 4,
+            ParamKind::Texture => 2,
             _ => 1,
         }
     }
@@ -60,6 +63,7 @@ impl ParamKind {
             ParamKind::Number => "<number>",
             ParamKind::Length => "<length>",
             ParamKind::Color => "<color>",
+            ParamKind::Texture => "url()",
         }
     }
 
@@ -68,6 +72,7 @@ impl ParamKind {
             "number" => Some(ParamKind::Number),
             "length" => Some(ParamKind::Length),
             "color" => Some(ParamKind::Color),
+            "texture" => Some(ParamKind::Texture),
             _ => None,
         }
     }
@@ -83,6 +88,8 @@ pub struct ParamSchema {
     pub default: [f32; 4],
     /// Inclusive clamp applied to a `Number`/`Length`; out-of-range values are clamped WITH an advisory.
     pub range: Option<(f32, f32)>,
+    /// A `Texture`'s binding (0..3, t3..t6) and whether it is sampled as stored.
+    pub texture: Option<(u8, bool)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -126,7 +133,18 @@ impl EffectSchema {
     /// supplied, so every optional argument is omittable without a second code path.
     pub fn defaults(&self) -> EffectSpec {
         let mut params = [0.0f32; EFFECT_PARAM_SLOTS];
+        let mut textures = [None; EFFECT_TEXTURE_SLOTS];
         for schema in self.params {
+            if let Some((index, linear)) = schema.texture {
+                if let Some(texture) = textures.get_mut(index as usize) {
+                    *texture = Some(EffectTextureParam {
+                        source: 0,
+                        size_param: schema.slot,
+                        linear,
+                    });
+                }
+                continue;
+            }
             for offset in 0..schema.kind.slots() {
                 let slot = (schema.slot + offset) as usize;
                 if slot < params.len() {
@@ -146,6 +164,7 @@ impl EffectSchema {
             clock_mask: self.clock_mask,
             clock_window: self.clock_window,
             params,
+            textures,
         }
     }
 
@@ -205,6 +224,10 @@ struct RawParam {
     required: bool,
     default: [f32; 4],
     range: Option<[f32; 2]>,
+    #[serde(default)]
+    texture: Option<u8>,
+    #[serde(default)]
+    linear: bool,
 }
 
 /// Turns one `effects.json` into schemas, numbering them from `first_id`. Leaked into `'static`
@@ -259,6 +282,29 @@ pub fn parse_manifest(
                 }
                 used[slot] = true;
             }
+            let texture = match (kind, param.texture) {
+                (ParamKind::Texture, Some(index)) if (index as usize) < EFFECT_TEXTURE_SLOTS => {
+                    if params
+                        .iter()
+                        .any(|p: &ParamSchema| p.texture.is_some_and(|(i, _)| i == index))
+                    {
+                        return Err(format!(
+                            "{origin}: {}.{} reuses texture binding {index}",
+                            raw.name, param.name
+                        ));
+                    }
+                    Some((index, param.linear))
+                }
+                (ParamKind::Texture, _) => {
+                    return Err(format!(
+                        "{origin}: {}.{} needs a texture binding 0..{}",
+                        raw.name,
+                        param.name,
+                        EFFECT_TEXTURE_SLOTS - 1
+                    ))
+                }
+                _ => None,
+            };
             params.push(ParamSchema {
                 name: Box::leak(param.name.clone().into_boxed_str()),
                 kind,
@@ -266,6 +312,7 @@ pub fn parse_manifest(
                 required: param.required,
                 default: param.default,
                 range: param.range.map(|[lo, hi]| (lo, hi)),
+                texture,
             });
         }
 
@@ -452,6 +499,39 @@ pub fn names() -> impl Iterator<Item = &'static str> {
     effects().iter().map(|effect| effect.name)
 }
 
+#[derive(Default)]
+struct TextureSources {
+    urls: Vec<std::sync::Arc<str>>,
+    ids: std::collections::HashMap<std::sync::Arc<str>, u32>,
+}
+
+static TEXTURE_SOURCES: std::sync::Mutex<Option<TextureSources>> = std::sync::Mutex::new(None);
+
+/// The number an `SkTexture` argument's URL travels as in an [`EffectSpec`]: never 0, the same for
+/// the same URL for the life of the process.
+pub fn texture_source(url: &str) -> u32 {
+    let mut guard = TEXTURE_SOURCES.lock().unwrap_or_else(|e| e.into_inner());
+    let sources = guard.get_or_insert_with(TextureSources::default);
+    if let Some(id) = sources.ids.get(url) {
+        return *id;
+    }
+    let url: std::sync::Arc<str> = url.into();
+    sources.urls.push(url.clone());
+    let id = sources.urls.len() as u32;
+    sources.ids.insert(url, id);
+    id
+}
+
+/// The URL [`texture_source`] numbered `source`.
+pub fn texture_url(source: u32) -> Option<std::sync::Arc<str>> {
+    let guard = TEXTURE_SOURCES.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .as_ref()?
+        .urls
+        .get((source as usize).checked_sub(1)?)
+        .cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,7 +539,7 @@ mod tests {
     const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
     const USER_MANIFEST: &str = r#"{
-      "schema": 9,
+      "schema": 10,
       "slang": "2026.12",
       "kind": "user",
       "effects": [
@@ -565,6 +645,31 @@ mod tests {
             ripple.defaults().flags,
             EFFECT_FLAG_NEEDS_CONTENT | EFFECT_FLAG_HISTORY
         );
+    }
+
+    #[test]
+    fn a_texture_parameter_names_its_binding_and_size_slots() {
+        let json = USER_MANIFEST.replace(
+            r#"{ "name": "tint", "kind": "color", "slot": 4,"#,
+            r#"{ "name": "lut", "kind": "texture", "slot": 2, "required": false,
+              "default": [0, 0, 0, 0], "range": null, "texture": 1, "linear": true },
+            { "name": "tint", "kind": "color", "slot": 4,"#,
+        );
+        let ripple = parse_manifest(&json, effect_id::COUNT, false, "<test>").unwrap()[0];
+        let spec = ripple.defaults();
+        assert_eq!(
+            spec.textures[1],
+            Some(EffectTextureParam {
+                source: 0,
+                size_param: 2,
+                linear: true
+            })
+        );
+        assert_eq!(spec.textures[0], None);
+        assert_eq!(&spec.params[2..4], &[0.0, 0.0]);
+
+        let unbound = json.replace(r#""texture": 1, "#, "");
+        assert!(parse_manifest(&unbound, effect_id::COUNT, false, "<test>").is_err());
     }
 
     #[test]

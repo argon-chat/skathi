@@ -13,6 +13,7 @@ mod clipboard;
 mod color;
 mod cull;
 mod dom;
+mod effect_texture;
 mod filter;
 mod font_api;
 mod fonts;
@@ -479,6 +480,7 @@ pub fn install(rt: &JsRuntime) {
     pointer_lock::install(rt);
     observe::install(rt);
     font_api::install(rt);
+    effect_texture::install();
 }
 
 // A browser lays out on read; here layout happens during a frame, so a DOM read before the first
