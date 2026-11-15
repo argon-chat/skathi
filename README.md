@@ -15,10 +15,11 @@ for the script. Windows, macOS (arm64) and Linux (x64).
 Needs [bun](https://bun.sh).
 
 ```sh
-bunx @skathi-native/cli@beta create my-app
-cd my-app
-bun install
-bun run dev
+bun add -g --no-cache @skathi-native/cli@beta && 
+   sk create showcase -y --template showcase && 
+   cd showcase && 
+   bun install && 
+   bun run dev
 ```
 
 ## Commands
