@@ -1665,10 +1665,7 @@ pub fn note_painted_frame() {
         true
     });
     if retired {
-        let msg = "[window] the app painted a `window-drag: move` region — retiring the built-in \
-                   fallback titlebar";
-        eprintln!("{msg}");
-        sk_tree::log::record("window", msg);
+        log::debug!("the app painted a `window-drag: move` region; the fallback titlebar retires");
     }
 }
 
