@@ -116,7 +116,7 @@ test("a variant the release does not carry names the ones it does", async () => 
   publish();
   await expect(
     fetchHost({ variant: "no-devtools", version: VERSION, platform: "windows", arch: "x64" }),
-  ).rejects.toThrow(/no no-devtools host for windows-x64 \(it has: standard\)/);
+  ).rejects.toThrow(/no no-devtools workload for windows-x64 \(it has: standard\)/);
 });
 
 test("a Linux host is named without .exe and cached under the XDG cache", async () => {
@@ -141,7 +141,7 @@ test("a Linux host is named without .exe and cached under the XDG cache", async 
   const { path } = await fetchHost({ variant: "standard", version: VERSION, platform: "linux", arch: "x64" });
   expect(path).toBe(join(cache, "skathi", "hosts", VERSION, "standard", "sk-host"));
   expect(new Uint8Array(readFileSync(path))).toEqual(elf);
-  await expect(fetchStandard()).rejects.toThrow(/no standard host for windows-x64$/);
+  await expect(fetchStandard()).rejects.toThrow(/no standard workload for windows-x64$/);
 });
 
 test("a missing release says a private repository needs a token", async () => {

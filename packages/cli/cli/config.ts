@@ -37,7 +37,7 @@ export const PARTS_NOT_SELECTABLE =
 export function parseVariant(v: unknown, where: string): Variant {
   const name = typeof v === "string" ? v.trim() : "";
   if (VARIANTS.includes(name)) return name;
-  throw new ConfigError(`${where}: ${JSON.stringify(v)} is not a host variant — ${VARIANTS.join(" or ")}`);
+  throw new ConfigError(`${where}: ${JSON.stringify(v)} is not a workload variant — ${VARIANTS.join(" or ")}`);
 }
 
 export function cargoFeatureArgs(variant: Variant): string[] {
@@ -306,7 +306,7 @@ function readMacos(
   const [wantMaj = 0, wantMinor = 0] = MACOS_MINIMUM.split(".").map(Number);
   if (maj < wantMaj || (maj === wantMaj && minor < wantMinor)) {
     warnings.push(
-      `sk.config.json "macos.minimumSystemVersion" ${min} is below ${MACOS_MINIMUM}, which the host is built for — ` +
+      `sk.config.json "macos.minimumSystemVersion" ${min} is below ${MACOS_MINIMUM}, which the workload is built for — ` +
         "an older macOS will offer to open the app and then fail to load it",
     );
   }

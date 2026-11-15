@@ -18,7 +18,7 @@ runtime-shaders = ["gpui_platform/runtime_shaders"]
 webgpu = ["sk-runtime/webgpu", "sk-tree/webgpu", "dep:wgpu", "dep:pollster"]
 # The bare host: the dev manifest/HMR polling is compiled out, and the app (bundle, window config,
 # name, assets) is the SKPK payload `sk build` stamps into a copy of this exe (src/payload.rs,
-# src/prod.rs). Not implied by `--release`; `sk host build` opts in.
+# src/prod.rs). Not implied by `--release`; `sk workload build` opts in.
 prod = []
 
 # Compiles out the devtools protocol listener, the embedded inspector and the F12 key, which every

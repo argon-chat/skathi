@@ -566,7 +566,7 @@ describe("hosts per platform", () => {
   describe.skipIf(other !== "macos")("a macOS host from another OS", () => {
     test("must be named, must be a Mach-O, and is described by host.json when there is one", () => {
       const d = fresh("cross");
-      expect(() => resolveHost({ variant: "standard", platform: "macos" })).toThrow(/needs the host named/);
+      expect(() => resolveHost({ variant: "standard", platform: "macos" })).toThrow(/needs the workload named/);
       writeFileSync(join(d, "sk-app.exe"), new Uint8Array([0x4d, 0x5a, 0, 0, 0, 0, 0, 0]));
       expect(() => resolveHost({ variant: "standard", platform: "macos", host: join(d, "sk-app.exe") })).toThrow(
         /not a Mach-O/,

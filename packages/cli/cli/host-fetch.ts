@@ -77,6 +77,7 @@ export interface FetchOptions {
   platform?: Platform;
   arch?: string;
   log?: (line: string) => void;
+  onBytes?: OnBytes | undefined;
 }
 
 function source() {
@@ -88,10 +89,31 @@ function source() {
   return { repo, api, headers };
 }
 
-async function download(asset: ReleaseAsset, headers: Record<string, string>): Promise<Uint8Array<ArrayBuffer>> {
+export type OnBytes = (done: number, total: number) => void;
+
+async function download(
+  asset: ReleaseAsset,
+  headers: Record<string, string>,
+  onBytes?: OnBytes,
+): Promise<Uint8Array<ArrayBuffer>> {
   const res = await fetch(asset.url, { headers: { ...headers, Accept: "application/octet-stream" } });
   if (!res.ok) throw new HostError(`downloading ${asset.name}: HTTP ${res.status}`);
-  return new Uint8Array(await res.arrayBuffer());
+  if (!onBytes || !res.body) return new Uint8Array(await res.arrayBuffer());
+  const total = Number(res.headers.get("content-length")) || asset.size;
+  const chunks: Uint8Array[] = [];
+  let done = 0;
+  for await (const chunk of res.body) {
+    chunks.push(chunk);
+    done += chunk.length;
+    onBytes(done, total);
+  }
+  const bytes = new Uint8Array(done);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.length;
+  }
+  return bytes;
 }
 
 interface Release {
@@ -132,11 +154,12 @@ async function cacheAsset(
   digest: string,
   dest: string,
   log: (line: string) => void,
+  onBytes?: OnBytes,
 ): Promise<void> {
   const asset = release.asset(name);
   if (!asset) throw new HostError(`release ${release.tag} lists ${name} in ${MANIFEST_NAME} but does not carry it`);
   log(`downloading ${name} (${(asset.size / 1048576).toFixed(1)} MB) from github.com/${release.repo} ${release.tag}`);
-  const bytes = Bun.gunzipSync(await download(asset, release.headers));
+  const bytes = Bun.gunzipSync(await download(asset, release.headers, onBytes));
   if (bytes.length !== size || sha256(bytes) !== digest) {
     throw new HostError(`${name} does not match the sha256 in ${MANIFEST_NAME}; nothing was cached`);
   }
@@ -148,7 +171,7 @@ async function cacheAsset(
   renameSync(tmp, dest);
 }
 
-/** Downloads the host for `variant` from the release of `version` into the local cache, checked against `hosts.json`. */
+/** Downloads the workload for `variant` from the release of `version` into the local cache, checked against `hosts.json`. */
 export async function fetchHost(options: FetchOptions): Promise<{ path: string; info: HostInfo }> {
   const version = options.version ?? CLI_VERSION;
   const platform = options.platform ?? currentPlatform();
@@ -163,14 +186,14 @@ export async function fetchHost(options: FetchOptions): Promise<{ path: string; 
       .map((h) => h.variant)
       .join(", ");
     throw new HostError(
-      `release ${tag} has no ${options.variant} host for ${platform}-${arch}` +
-        (offered ? ` (it has: ${offered}); other variants are built from a checkout with sk host build` : ""),
+      `release ${tag} has no ${options.variant} workload for ${platform}-${arch}` +
+        (offered ? ` (it has: ${offered}); other variants are built from a checkout with sk workload build` : ""),
     );
   }
   const dest = cachedHost(version, options.variant, platform);
-  await cacheAsset(release, entry.file, entry.size, entry.sha256, dest, log);
+  await cacheAsset(release, entry.file, entry.size, entry.sha256, dest, log, options.onBytes);
   writeFileSync(join(dirname(dest), "host.json"), JSON.stringify(entry.info, null, 2) + "\n");
-  log(`cached ${options.variant} host ${version} → ${dest}`);
+  log(`cached ${options.variant} workload ${version} → ${dest}`);
   return { path: dest, info: entry.info };
 }
 
@@ -190,7 +213,7 @@ export async function fetchAotCompiler(
   const entry = release.manifest.aot?.find((c) => c.platform === platform && c.arch === arch);
   if (!entry) throw new HostError(`release ${release.tag} has no sk-aot for ${platform}-${arch}`);
   const dest = cachedAotCompiler(version, platform);
-  await cacheAsset(release, entry.file, entry.size, entry.sha256, dest, log);
+  await cacheAsset(release, entry.file, entry.size, entry.sha256, dest, log, options.onBytes);
   writeFileSync(join(dirname(dest), "compiler.json"), JSON.stringify(entry.info, null, 2) + "\n");
   log(`cached sk-aot ${version} → ${dest}`);
   return { path: dest, info: entry.info };
@@ -208,7 +231,7 @@ export async function resolveOrFetchHost(options: ResolveOptions): Promise<Resol
     const cross = (options.platform ?? currentPlatform()) !== currentPlatform();
     if (!(e instanceof HostError) || named || cross || process.env.SK_HOST_OFFLINE === "1") throw e;
     try {
-      await fetchHost({ variant: options.variant, ...(options.log && { log: options.log }) });
+      await fetchHost({ variant: options.variant, onBytes: options.onBytes, ...(options.log && { log: options.log }) });
     } catch (f) {
       throw new HostError(`${e.message}\n(downloading it failed too: ${(f as Error).message})`);
     }

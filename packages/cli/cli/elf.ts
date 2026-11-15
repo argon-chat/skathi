@@ -104,9 +104,10 @@ export function stampElf(options: ElfStampOptions): ElfStampResult {
   const t0 = performance.now();
   const host = new Uint8Array(readFileSync(options.host));
   const machine = elfMachine(host);
-  if (!machine) throw new Error(`${options.host} is not a 64-bit ELF executable — a Linux build needs a Linux sk-app`);
+  if (!machine)
+    throw new Error(`${options.host} is not a 64-bit ELF executable — a Linux build needs a Linux workload (sk-app)`);
   if (appendedPayload(host, host.length)) {
-    throw new Error(`${options.host} is a packaged app, not a bare host (it already carries a payload)`);
+    throw new Error(`${options.host} is a packaged app, not a bare workload (it already carries a payload)`);
   }
   const offset = Math.ceil(host.length / PAGE) * PAGE;
   const unskewed = options.payload(0);

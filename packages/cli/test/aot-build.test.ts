@@ -35,7 +35,7 @@ const aot = { ...pinnedCompilerInfo(pin), transform: TRANSFORM, preludeSha256: "
 function host(info: Partial<HostInfo>): ResolvedHost {
   return {
     exe: "C:/hosts/sk-host.exe",
-    source: "--host",
+    source: "--workload",
     info: {
       mode: "prod",
       skathi: "0.0.0",

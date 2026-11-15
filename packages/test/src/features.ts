@@ -137,7 +137,7 @@ export type HostVariant = "standard" | "no-devtools";
 
 /**
  * A BARE prod host of `variant`, the way `sk build` finds one: `SK_HOST`, the in-repo release exe,
- * or the local host cache (`sk host build` fills it).
+ * or the local host cache (`sk workload build` fills it).
  */
 export async function bareHost(variant: HostVariant, log: (l: string) => void = () => {}): Promise<string> {
   const { resolveHost, HostError } = await import("../../cli/cli/host");

@@ -2,17 +2,17 @@
 // --features prod` (the whole engine, no app), built once per Skathi version and variant: `standard`, or
 // `no-devtools` with the devtools compiled out.
 //
-// Resolution, first hit wins: 1. `--host <exe>` or `SK_HOST`; 2. in-repo
+// Resolution, first hit wins: 1. `--workload <exe>` or `SK_HOST`; 2. in-repo
 // target/x86_64-pc-windows-msvc/release/sk-app.exe, when that is a prod host of this variant and
-// version; 3. the local cache (`sk host add <exe>`, `sk host build`, or a download from this
+// version; 3. the local cache (`sk workload add <exe>`, `sk workload build`, or a download from this
 // version's GitHub release: host-fetch.ts); 4. an error naming them. Paths per OS are in platform.ts.
 //
-// A host for another OS cannot be run to ask what it is: only `--host` / `SK_HOST` names one, its
+// A host for another OS cannot be run to ask what it is: only `--workload` / `SK_HOST` names one, its
 // format is sniffed, and what it is comes from a `host.json` beside it or is taken on trust, with a warning.
 //
 // A host and a bundle must come from the same Skathi version (the bundle carries the JS half of
 // the `__sk_*` protocol): the CLI refuses a host whose `--sk-host-info` disagrees
-// (`--allow-host-mismatch` is for maintainers).
+// (`--allow-workload-mismatch` is for maintainers).
 
 import { spawnSync } from "node:child_process";
 import {
@@ -69,7 +69,7 @@ export interface HostAot extends CompilerInfo {
 export interface ResolvedHost {
   exe: string;
   info: HostInfo;
-  source: "--host" | "SK_HOST" | "repo" | "cache";
+  source: "--workload" | "SK_HOST" | "repo" | "cache";
   unverified?: string;
 }
 
@@ -91,12 +91,12 @@ function formatProblem(exe: string, platform: Platform): string | null {
   if (platform === "windows") return null;
   if (platform === "linux") {
     const machine = elfMachineOf(exe);
-    if (!machine) return `${exe} is not an ELF executable — a Linux build needs a Linux sk-app`;
+    if (!machine) return `${exe} is not an ELF executable — a Linux build needs a Linux workload (sk-app)`;
     if (machine !== "x86_64" && machine !== "aarch64") return `${exe} is an ELF for ${machine}, not x86_64 or aarch64`;
     return null;
   }
   const archs = machOArchs(exe);
-  if (!archs) return `${exe} is not a Mach-O executable — a macOS bundle needs a macOS sk-app`;
+  if (!archs) return `${exe} is not a Mach-O executable — a macOS bundle needs a macOS workload (sk-app)`;
   if (!archs.some((a) => a === "arm64" || a === "x86_64"))
     return `${exe} is a Mach-O for ${archs.join(", ")}, not arm64 or x86_64`;
   return null;
@@ -114,7 +114,10 @@ export function crossHostInfo(
     try {
       const info = JSON.parse(readFileSync(sidecar, "utf8")) as HostInfo;
       if (info.mode && info.skathi && info.variant) {
-        return { info, unverified: `${platform} host described by ${sidecar}, not run (this is ${process.platform})` };
+        return {
+          info,
+          unverified: `${platform} workload described by ${sidecar}, not run (this is ${process.platform})`,
+        };
       }
     } catch {}
   }
@@ -133,7 +136,7 @@ export function crossHostInfo(
   return {
     info,
     unverified:
-      `a ${platform} host cannot be run on ${process.platform} to check it — ${exe} is taken to be a prod ${variant} host ` +
+      `a ${platform} workload cannot be run on ${process.platform} to check it — ${exe} is taken to be a prod ${variant} workload ` +
       `of Skathi ${CLI_VERSION}. Put its \`--sk-host-info\` output in ${sidecar} to have it checked.`,
   };
 }
@@ -141,7 +144,7 @@ export function crossHostInfo(
 export function hostInfo(exe: string): HostInfo {
   if (!existsSync(exe)) throw new HostError(`${exe} does not exist`);
   if (isStamped(exe)) {
-    throw new HostError(`${exe} is a packaged app, not a bare host (it already carries a SKPAYLOAD)`);
+    throw new HostError(`${exe} is a packaged app, not a bare workload (it already carries a SKPAYLOAD)`);
   }
   const r = spawnSync(exe, ["--sk-host-info"], { encoding: "utf8", timeout: 30_000, windowsHide: true });
   if (r.error) throw new HostError(`${exe} could not be run: ${r.error.message}`);
@@ -152,7 +155,7 @@ export function hostInfo(exe: string): HostInfo {
     return info;
   } catch {
     throw new HostError(
-      `${exe} did not answer --sk-host-info (exit ${r.status}). Hosts older than this CLI do not know the flag — ` +
+      `${exe} did not answer --sk-host-info (exit ${r.status}). Workloads older than this CLI do not know the flag — ` +
         `rebuild it.\n${(r.stderr ?? "").trim().split(/\r?\n/).slice(-5).join("\n")}`,
     );
   }
@@ -172,20 +175,20 @@ export function checkHost(exe: string, info: HostInfo, variant: Variant | null, 
   const mismatch =
     info.skathi !== CLI_VERSION && !allowMismatch
       ? `${exe} is Skathi ${info.skathi}, this CLI is ${CLI_VERSION} — the bundle carries the JS half of the ` +
-        `host protocol, so the two must match (--allow-host-mismatch overrides, for maintainers)`
+        `workload protocol, so the two must match (--allow-workload-mismatch overrides, for maintainers)`
       : null;
   if (variant === DEV_HOST) {
     return info.mode === "dev"
       ? mismatch
-      : `${exe} is a ${info.mode} host — sk dev needs one built without --features prod`;
+      : `${exe} is a ${info.mode} workload — sk dev needs one built without --features prod`;
   }
-  if (info.mode !== "prod") return `${exe} is a ${info.mode} host — sk build needs one built with --features prod`;
+  if (info.mode !== "prod") return `${exe} is a ${info.mode} workload — sk build needs one built with --features prod`;
   if (variant && info.variant !== variant) return `${exe} is the ${info.variant} variant, not ${variant}`;
   if (!VARIANTS.includes(info.variant)) {
-    return `${exe} is the ${info.variant} variant, which leaves engine parts out — sk build stamps only ${VARIANTS.join(" or ")} hosts`;
+    return `${exe} is the ${info.variant} variant, which leaves engine parts out — sk build stamps only ${VARIANTS.join(" or ")} workloads`;
   }
   const missing = ENGINE_FEATURES.filter((f) => !info.features?.includes(f));
-  if (missing.length) return `${exe} lacks ${missing.join(", ")} — rebuild or replace the cached host`;
+  if (missing.length) return `${exe} lacks ${missing.join(", ")} — rebuild or replace the cached workload`;
   return mismatch;
 }
 
@@ -229,6 +232,7 @@ export interface ResolveOptions {
   allowMismatch?: boolean | undefined;
   platform?: Platform | undefined;
   log?: (line: string) => void;
+  onBytes?: ((done: number, total: number) => void) | undefined;
 }
 
 export function resolveHost(options: ResolveOptions): ResolvedHost {
@@ -239,11 +243,11 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
   const explicit = options.host ?? process.env.SK_HOST;
   if (explicit) {
     const exe = resolve(explicit);
-    const source = options.host ? "--host" : "SK_HOST";
+    const source = options.host ? "--workload" : "SK_HOST";
     if (cross) {
       if (!existsSync(exe)) throw new HostError(`${exe} does not exist`);
       if (isStamped(exe))
-        throw new HostError(`${exe} is a packaged app, not a bare host (it already carries an app payload)`);
+        throw new HostError(`${exe} is a packaged app, not a bare workload (it already carries an app payload)`);
       const { info, unverified } = crossHostInfo(exe, options.variant, platform);
       const problem = checkHost(exe, info, options.variant, allow);
       if (problem) throw new HostError(problem);
@@ -258,8 +262,8 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
   }
   if (cross) {
     throw new HostError(
-      `a ${platform} build on ${process.platform} needs the host named: --host <path to a ${platform} sk-app> ` +
-        `(or SK_HOST). This machine's checkout and cache hold ${currentPlatform()} hosts.`,
+      `a ${platform} build on ${process.platform} needs the workload named: --workload <path to a ${platform} sk-app> ` +
+        `(or SK_HOST). This machine's checkout and cache hold ${currentPlatform()} workloads.`,
     );
   }
 
@@ -272,7 +276,7 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
         if (statSync(REPO_RELEASE_EXE).mtimeMs < newestHostSource()) {
           log(
             `warning: ${REPO_RELEASE_EXE} is older than the sources it is built from — ` +
-              "`bun packages/cli/cli/sk.ts host build` rebuilds it",
+              "`bun packages/cli/cli/sk.ts workload build` rebuilds it",
           );
         }
         return { exe: REPO_RELEASE_EXE, info, source: "repo" };
@@ -295,18 +299,20 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
     tried.push(`cache: ${cached} does not exist`);
   }
 
+  const remedies: [string, string][] = [
+    [`--workload <${hostsFor(platform).exeFile}>`, "(or SK_HOST=<exe>) a prod workload built from this version"],
+    [`sk workload install ${options.variant}`, `download it from the Skathi ${CLI_VERSION} release`],
+    ["sk workload add <exe>", "import one into the local cache"],
+    ...(REPO_ROOT
+      ? [[`sk workload build ${options.variant}`, "build it from this checkout (cargo)"] as [string, string]]
+      : []),
+  ];
+  const width = Math.max(...remedies.map(([how]) => how.length));
   throw new HostError(
-    `no ${options.variant} Skathi ${CLI_VERSION} host found.\n` +
+    `no ${options.variant} Skathi ${CLI_VERSION} workload found.\n` +
       tried.map((t) => `  - ${t}`).join("\n") +
       "\nSupply one of:\n" +
-      `  ${`--host <${hostsFor(platform).exeFile}>`.padEnd(21)}(or SK_HOST=<exe>)   a prod host built from this version\n` +
-      `  sk host fetch                              download it from the Skathi ${CLI_VERSION} release\n` +
-      "  sk host add <exe>                          import one into the local cache\n" +
-      (REPO_ROOT
-        ? options.variant === "standard" || options.variant === "no-devtools"
-          ? "  sk host build                              build both variants from this checkout (cargo)\n"
-          : `  sk host build --variant ${options.variant}   build this one from this checkout (cargo)\n`
-        : ""),
+      remedies.map(([how, what]) => `  ${how.padEnd(width)}  ${what}\n`).join(""),
   );
 }
 
@@ -324,7 +330,7 @@ export function addHost(exe: string, log: (line: string) => void = () => {}): { 
   rmSync(dest, { force: true });
   renameSync(tmp, dest);
   writeFileSync(join(dirname(dest), "host.json"), JSON.stringify(info, null, 2) + "\n");
-  log(`cached ${info.variant} host ${info.skathi} (${info.profile}) → ${dest}`);
+  log(`cached ${info.variant} workload ${info.skathi} (${info.profile}) → ${dest}`);
   return { path: dest, info };
 }
 
@@ -334,7 +340,7 @@ function cargo(): string {
   const home = process.env.CARGO_HOME ?? join(process.env.USERPROFILE ?? homedir(), ".cargo");
   const exe = join(home, "bin", process.platform === "win32" ? "cargo.exe" : "cargo");
   if (existsSync(exe)) return exe;
-  throw new HostError("cargo is not on PATH — building a host needs the Rust toolchain (sk build does not)");
+  throw new HostError("cargo is not on PATH — building a workload needs the Rust toolchain (sk build does not)");
 }
 
 /** The cargo command line for `variant`, plus `extra` features (`native-inspector` for a release host). */
@@ -360,7 +366,9 @@ export function cargoBuildHost(
   extras: CargoExtras = {},
 ): { exe: string; ms: number } {
   if (!REPO_ROOT || !REPO_RELEASE_EXE) {
-    throw new HostError("sk host build runs from a Skathi checkout; elsewhere, use sk host fetch or sk host add <exe>");
+    throw new HostError(
+      "sk workload build runs from a Skathi checkout; elsewhere, use sk workload install or sk workload add <exe>",
+    );
   }
   const args = hostCargoArgs(variant, extras.features);
   log(`cargo ${args.join(" ")}`);

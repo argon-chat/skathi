@@ -30,6 +30,7 @@ bun run dev
 | `sk build`   | a debug build with devtools  |
 | `sk publish` | the release build            |
 | `sk check`   | what in the app will not run |
+| `sk prune`   | clear cached workloads       |
 
 `sk <command> --help` lists its options.
 
@@ -50,5 +51,5 @@ cargo build -p sk-app --target <triple>   # x86_64-pc-windows-msvc, aarch64-appl
 
 The host statically links JavaScriptCore from Bun's WebKit build, parts of which are LGPL-2. Its
 source is at [oven-sh/WebKit](https://github.com/oven-sh/WebKit), at the commit named in
-`vendor/redjs/pins.txt`. To run an app on a modified JavaScriptCore, rebuild the host against it
-(`sk host build`) and stamp the app onto it (`sk build --host <exe>`).
+`vendor/redjs/pins.txt`. To run an app on a modified JavaScriptCore, rebuild the workload against it
+(`sk workload build`) and stamp the app onto it (`sk build --workload <exe>`).

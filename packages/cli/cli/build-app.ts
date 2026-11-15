@@ -344,9 +344,12 @@ const PACKAGERS: Record<Platform, (input: PackageInput) => Packaged> = {
 export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   const progress = options.progress ?? (options.log ? lineProgress(options.log, false) : progressFor(process.stderr));
   try {
-    return await build(options, progress);
-  } finally {
+    const result = await build(options, progress);
     if (!options.progress) progress.end();
+    return result;
+  } catch (e) {
+    progress.fail();
+    throw e;
   }
 }
 
@@ -366,14 +369,16 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     const problem = aotPlatformProblem(platform);
     if (problem) throw new ConfigError(problem);
     if (options.payloadOnly)
-      throw new ConfigError("--aot compiles against the host it stamps, so it cannot be combined with --payload-only");
+      throw new ConfigError(
+        "--aot compiles against the workload it stamps, so it cannot be combined with --payload-only",
+      );
   }
   const outDir = resolve(options.out ?? join(config.appRoot, "dist", ...(options.mode ? [options.mode] : [])));
   const work = join(outDir, ".sk");
   mkdirSync(work, { recursive: true });
 
   // The host first: a missing or mismatched host should fail before a bundle is spent on it.
-  if (!options.payloadOnly) progress.step("host");
+  if (!options.payloadOnly) progress.step("workload");
   const host = options.payloadOnly
     ? null
     : await resolveOrFetchHost({
@@ -382,6 +387,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
         allowMismatch: options.allowHostMismatch,
         platform,
         log,
+        onBytes: (done, total) => progress.bytes(done, total),
       });
   if (host) {
     progress.detail(`${host.info.variant} · Skathi ${host.info.skathi} ${host.info.profile} · ${host.source}`);
@@ -578,7 +584,7 @@ export function summary(r: BuildResult, color = false): string {
       row("exe", p.cyan(r.exe)),
       row(
         "",
-        `${mib(s.bytes)}, ${r.variant} host, subsystem ${s.subsystem === 2 ? "GUI" : "console"}, ` +
+        `${mib(s.bytes)}, ${r.variant} workload, subsystem ${s.subsystem === 2 ? "GUI" : "console"}, ` +
           `${s.iconCount ? `${s.iconCount} icon` : "no icon"}, ` +
           bad(s.dataAligned, "data page-aligned", "data NOT aligned"),
       ),
@@ -590,7 +596,7 @@ export function summary(r: BuildResult, color = false): string {
       row("exe", p.cyan(e.out)),
       row(
         "",
-        `${mib(e.bytes)}, ${r.variant} host (${e.machine}), payload appended at ${e.payloadOffset}, ` +
+        `${mib(e.bytes)}, ${r.variant} workload (${e.machine}), payload appended at ${e.payloadOffset}, ` +
           bad(e.dataAligned, "data page-aligned", "data NOT aligned"),
       ),
     );
@@ -602,7 +608,7 @@ export function summary(r: BuildResult, color = false): string {
       b.signed === "-" ? "signed ad hoc" : b.signed ? `signed as ${JSON.stringify(b.signed)}` : p.yellow("NOT signed");
     lines.push(
       row("app", p.cyan(b.app)),
-      row("", `${mib(b.bytes)}, ${r.variant} host, ${b.bundleId}, ${icon}, ${signed}`),
+      row("", `${mib(b.bytes)}, ${r.variant} workload, ${b.bundleId}, ${icon}, ${signed}`),
     );
     if (b.signNote) lines.push(row("", p.dim(b.signNote)));
   }

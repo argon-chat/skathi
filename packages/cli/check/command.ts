@@ -1,4 +1,4 @@
-import { colorEnabled, colorFlag, paint, quietProgress, spinner, type Progress } from "../cli/term";
+import { colorEnabled, colorFlag, interactive, paint, quietProgress, spinner, type Progress } from "../cli/term";
 import { highlighter, type Highlight } from "./highlight";
 import { exitCode, explain, formatPretty, listCodes, loadTypeScript, runCheck } from "./index";
 
@@ -25,7 +25,9 @@ export const defaultIo = (flags: Pick<CheckFlags, "color" | "no-color"> = {}): I
     err: (text) => process.stderr.write(`${text}\n`),
     color,
     progress: () =>
-      process.stderr.isTTY ? spinner(process.stderr, colorEnabled(process.stderr, colorFlag(flags))) : quietProgress,
+      interactive(process.stderr)
+        ? spinner(process.stderr, colorEnabled(process.stderr, colorFlag(flags)))
+        : quietProgress,
   };
 };
 
@@ -73,7 +75,7 @@ export async function checkCommand(
     }
     return exitCode(report, flags["deny-warnings"] === true);
   } catch (e) {
-    progress.end();
+    progress.fail();
     fail(e instanceof Error ? e.message : String(e));
     return 2;
   }

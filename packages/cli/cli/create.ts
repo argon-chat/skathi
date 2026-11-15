@@ -179,6 +179,7 @@ export interface CreateFlags {
   devtools?: boolean | undefined;
   pm?: string | undefined;
   yes?: boolean | undefined;
+  color?: boolean | undefined;
 }
 
 function parsePm(v: string): PackageManager {
@@ -277,7 +278,7 @@ export async function createCommand(target: string | undefined, flags: CreateFla
     p.note(next, "Next");
     p.outro(`${options.name ?? basename(resolve(dir))} is ready`);
   } else {
-    const c = paint(colorEnabled(process.stdout));
+    const c = paint(colorEnabled(process.stdout, flags.color));
     console.log(`${c.green("✓")} created ${c.cyan(resolve(dir))}\n  ${c.dim("next:")} ${next.replace(/\n/g, " && ")}`);
   }
   return 0;

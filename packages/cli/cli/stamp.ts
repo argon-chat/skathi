@@ -98,14 +98,14 @@ export function stamp(options: StampOptions): StampResult {
   const t0 = performance.now();
   const partial = `${options.out}.partial`;
   rmSync(partial, { force: true });
-  retrying("copying the host", () => copyFileSync(options.host, partial), log);
+  retrying("copying the workload", () => copyFileSync(options.host, partial), log);
   const tCopy = performance.now();
 
   let strippedSignature = false;
   let result: StampResult | null = null;
   try {
     strippedSignature = stripSignature(partial);
-    if (strippedSignature) log("removed the host's certificate table — sign the stamped exe instead");
+    if (strippedSignature) log("removed the workload's certificate table — sign the stamped exe instead");
 
     const before = readPe(partial);
     let skew = 0;

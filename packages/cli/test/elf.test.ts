@@ -155,7 +155,7 @@ describe("Linux hosts", () => {
   describe.skipIf(currentPlatform() === "linux")("from another OS", () => {
     test("the host must be named and be an ELF", () => {
       const d = fresh("cross");
-      expect(() => resolveHost({ variant: "standard", platform: "linux" })).toThrow(/needs the host named/);
+      expect(() => resolveHost({ variant: "standard", platform: "linux" })).toThrow(/needs the workload named/);
       writeFileSync(join(d, "sk-app.exe"), new Uint8Array([0x4d, 0x5a, 0, 0, 0, 0, 0, 0]));
       expect(() => resolveHost({ variant: "standard", platform: "linux", host: join(d, "sk-app.exe") })).toThrow(
         /not an ELF/,

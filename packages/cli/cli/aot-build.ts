@@ -15,7 +15,7 @@ import { TRANSFORM } from "../aot/transform";
 import { exitCode, formatPretty, runCheck, type CheckReport } from "../check/index";
 import { ConfigError } from "./config";
 import { CLI_VERSION, HostError, REPO_ROOT, type HostAot, type ResolvedHost } from "./host";
-import { cachedAotCompiler, fetchAotCompiler } from "./host-fetch";
+import { cachedAotCompiler, fetchAotCompiler, type OnBytes } from "./host-fetch";
 import type { Platform } from "./platform";
 import { KIND, NAMES, type SkpkInput } from "./skpk";
 import type { Progress } from "./term";
@@ -55,13 +55,13 @@ export function hostAot(host: ResolvedHost): HostAot {
   if (!host.info.features.includes("native-aot") || !aot) {
     throw new HostError(
       `${host.exe} cannot load native images (it was built without the native AOT loader) — ` +
-        `use a Skathi ${CLI_VERSION} release host (sk host fetch), or build one with the native-aot cargo feature`,
+        `use a Skathi ${CLI_VERSION} release workload (sk workload install), or build one with the native-aot cargo feature`,
     );
   }
   if (aot.transform !== TRANSFORM) {
     throw new HostError(
       `${host.exe} expects native images made with the ${aot.transform} transform and this sk makes ${TRANSFORM} — ` +
-        "use the sk that matches the host",
+        "use the sk that matches the workload",
     );
   }
   return aot;
@@ -81,12 +81,13 @@ export async function resolveAotCompiler(
   aot: HostAot,
   named: string | undefined,
   log: (line: string) => void,
+  onBytes?: OnBytes,
 ): Promise<CompilerChoice> {
   const explicit = named ?? process.env.SK_AOT_COMPILER;
   if (explicit) {
     const info = await compilerInfo(explicit);
     const mismatch = compilerMismatch(info, aot);
-    if (mismatch) throw new AotError(`${explicit} compiles for another host: ${mismatch}`);
+    if (mismatch) throw new AotError(`${explicit} compiles for another workload: ${mismatch}`);
     return { path: explicit, info, source: named ? "--aot-compiler" : "SK_AOT_COMPILER" };
   }
   const tried: string[] = [];
@@ -102,11 +103,11 @@ export async function resolveAotCompiler(
   }
   if (process.env.SK_HOST_OFFLINE === "1") {
     throw new AotError(
-      `no sk-aot matches the host${tried.length ? `:\n  ${tried.join("\n  ")}` : ""}\n` +
+      `no sk-aot matches the workload${tried.length ? `:\n  ${tried.join("\n  ")}` : ""}\n` +
         "SK_HOST_OFFLINE=1 forbids downloading it; pass --aot-compiler <sk-aot.exe>",
     );
   }
-  const fetched = await fetchAotCompiler({ log });
+  const fetched = await fetchAotCompiler({ log, onBytes });
   const mismatch = compilerMismatch(fetched.info, aot);
   if (mismatch) throw new AotError(`the Skathi ${CLI_VERSION} release's sk-aot: ${mismatch}`);
   return { path: fetched.path, info: await compilerInfo(fetched.path), source: "release" };
@@ -156,7 +157,9 @@ export async function buildNative(options: {
 }): Promise<NativeBuild> {
   const { progress, log, aot, work } = options;
   progress.step("AOT toolchain");
-  const compiler = await resolveAotCompiler(aot, options.compilerPath, log);
+  const compiler = await resolveAotCompiler(aot, options.compilerPath, log, (done, total) =>
+    progress.bytes(done, total),
+  );
   progress.detail(`sk-aot (${compiler.source})`);
   progress.step("native image");
   const native = await compileNative({
