@@ -1,9 +1,9 @@
 import type { MirrorCollection, MirrorElement, MirrorNode } from "./types";
 
-// NodeList, HTMLCollection and DOMRectList: code tests for them by name (motion's `subject instanceof NodeList`).
+// NodeList and HTMLCollection: code tests for them by name (motion's `subject instanceof NodeList`).
 // `childNodes` IS the renderer's child array (live by construction) and stays a plain Array: re-parenting it onto
 // NodeList.prototype made JavaScriptCore's `indexOf` 30 times slower. `childList` gives it `item` and the toString
-// tag; `Array.isArray(el.childNodes)` stays true. Static lists (`querySelectorAll()`, `getClientRects()`) are
+// tag; `Array.isArray(el.childNodes)` stays true. Static lists (`querySelectorAll()`) are
 // read-only snapshots; live collections (`children`, `getElementsByTagName()`) are Proxies recomputed when
 // `domEpoch` changes.
 
@@ -207,7 +207,6 @@ function collectionProto(name: string, opts: { named?: boolean; iterable?: boole
 }
 export const NodeListProto = collectionProto("NodeList", { iterable: true });
 export const HTMLCollectionProto = collectionProto("HTMLCollection", { named: true });
-export const DOMRectListProto = collectionProto("DOMRectList");
 
 // NodeList's own `item` and toString tag for each `childNodes` array, so `Object.prototype.toString` says
 // "[object NodeList]" and `reactive()` leaves the list alone.

@@ -58,14 +58,9 @@ describe("the other interfaces", () => {
     expect(made.textContent).toBe("made");
   });
 
-  test("CSSStyleDeclaration is what el.style is; DOMRect is what getBoundingClientRect returns", () => {
+  test("CSSStyleDeclaration is what el.style is", () => {
     const rt = createRuntime();
-    const div = rt.nodeOps.createElement("div") as unknown as {
-      style: unknown;
-      getBoundingClientRect(): Record<string, unknown>;
-    };
+    const div = rt.nodeOps.createElement("div") as unknown as { style: unknown };
     expect(div.style instanceof g(rt, "CSSStyleDeclaration")).toBe(true);
-    const r = div.getBoundingClientRect();
-    expect(r instanceof g(rt, "DOMRect")).toBe(true);
   });
 });

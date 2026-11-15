@@ -29,17 +29,6 @@ pub(crate) enum Align {
     Nearest,
 }
 
-impl Align {
-    pub(crate) fn from_code(code: u32) -> Self {
-        match code {
-            0 => Align::Start,
-            1 => Align::Center,
-            2 => Align::End,
-            _ => Align::Nearest,
-        }
-    }
-}
-
 /// CSSOM View's `ScrollBehavior`; `Auto` defers to the scrolled box's `scroll-behavior`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Behavior {
@@ -49,14 +38,6 @@ pub(crate) enum Behavior {
 }
 
 impl Behavior {
-    pub(crate) fn from_code(code: u32) -> Self {
-        match code {
-            1 => Behavior::Instant,
-            2 => Behavior::Smooth,
-            _ => Behavior::Auto,
-        }
-    }
-
     fn smooth_for(self, id: u32) -> bool {
         match self {
             Behavior::Instant => false,

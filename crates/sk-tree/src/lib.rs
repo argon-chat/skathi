@@ -19,6 +19,7 @@ mod filter;
 mod font_api;
 mod fonts;
 mod fullscreen;
+mod geometry_js;
 mod idmap;
 pub mod iframe;
 mod img;
@@ -292,48 +293,6 @@ host_fn!(fn sk_bounds(_g, args) {
     ret_string(&out)
 });
 
-// op 0 read, 1 set absolute (NaN leaves an axis alone), 2 scroll by (NaN is 0); the fifth argument
-// is the behavior, 0 auto, 1 instant, 2 smooth (`scroll::Behavior`). Answers
-// `"left,top,scrollWidth,scrollHeight"` in CSS px, or `""` for a node that is not a scroll container.
-host_fn!(fn sk_scroll(_g, args) {
-    let id = arg_id(args.arg(0));
-    let op = arg_id(args.arg(1));
-    let x = args.arg(2).as_number().unwrap_or(f64::NAN);
-    let y = args.arg(3).as_number().unwrap_or(f64::NAN);
-    let behavior = scroll::Behavior::from_code(arg_id(args.arg(4)));
-    let axis = |v: f64| (!v.is_nan()).then_some(v as f32);
-    perf::note_read(perf::Read::Scroll);
-    let out = match op {
-        1 => scroll::set(id, axis(x), axis(y), behavior),
-        2 => scroll::by(id, axis(x).unwrap_or(0.0), axis(y).unwrap_or(0.0), behavior),
-        _ => scroll::info(id),
-    };
-    ret_string(&match out {
-        Some(i) => format!(
-            "{},{},{},{},{}",
-            i.left,
-            i.top,
-            i.scroll_width,
-            i.scroll_height,
-            u8::from(i.stale)
-        ),
-        None => String::new(),
-    })
-});
-
-// `""` on success, `!<advisory>` when it could not (same shape as `__sk_query`).
-host_fn!(fn sk_scroll_into_view(_g, args) {
-    let id = arg_id(args.arg(0));
-    let block = scroll::Align::from_code(arg_id(args.arg(1)));
-    let inline = scroll::Align::from_code(arg_id(args.arg(2)));
-    let behavior = scroll::Behavior::from_code(arg_id(args.arg(3)));
-    ret_string(&match scroll::into_view(id, block, inline, behavior) {
-        Ok(false) => String::new(),
-        Ok(true) => "stale".to_string(),
-        Err(e) => format!("!{e}"),
-    })
-});
-
 // `__sk_focus(id, op)`: op 0 `el.focus()` answers "moved:<old id>" (JS fires blur/focusout on the old
 // one, then focus/focusin), "already", "pending" (queued for the frame tick) or "refused" (not
 // focusable, detached, or hidden by CSS); op 1 `el.blur()` answers "blurred" or "". With no window
@@ -463,8 +422,6 @@ pub fn install(rt: &JsRuntime) {
         ("__sk_set_dispatcher", 1, sk_set_dispatcher as *const _),
         ("__sk_query", 3, sk_query as *const _),
         ("__sk_bounds", 1, sk_bounds as *const _),
-        ("__sk_scroll", 5, sk_scroll as *const _),
-        ("__sk_scroll_into_view", 4, sk_scroll_into_view as *const _),
         ("__sk_focus", 2, sk_focus as *const _),
         ("__sk_input_select", 1, sk_input_select as *const _),
         ("__sk_media_state", 1, sk_media_state as *const _),
@@ -485,6 +442,7 @@ pub fn install(rt: &JsRuntime) {
     selection::install(rt);
     pointer::install(rt);
     native_dom::install(rt);
+    geometry_js::install(rt);
     pointer_lock::install(rt);
     observe::install(rt);
     font_api::install(rt);

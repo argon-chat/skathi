@@ -262,14 +262,6 @@ interface FsCallRecord {
   args: unknown[];
   token: number | null;
 }
-interface ScrollState {
-  left: number;
-  top: number;
-  maxLeft: number;
-  maxTop: number;
-  width: number;
-  height: number;
-}
 interface TreeModel {
   parent: Map<number, number>;
   children: Map<number, number[]>;
@@ -312,9 +304,6 @@ interface RuntimeHost {
     step(relayout?: () => void): number;
   };
   computedById: Map<number, string>;
-  scrollById: Map<number, ScrollState>;
-  scrollCalls: { id: number; op: number; x: number; y: number; behavior: number }[];
-  intoViewCalls: { id: number; block: unknown; inline: unknown; behavior: unknown }[];
   selection: { sel: number[] | null; sets: number[][]; rebases: number[][]; text: string };
   pointerCaptureCalls: { id: number; pointerId: number; capture: boolean }[];
   hit: { answer: (x: number, y: number, all: number) => string; calls: number[][] };
@@ -491,9 +480,6 @@ export function createRuntime(
       },
     },
     computedById: new Map(),
-    scrollById: new Map(),
-    scrollCalls: [],
-    intoViewCalls: [],
     selection: {
       sel: null,
       sets: [],
@@ -662,8 +648,6 @@ export function createRuntime(
     "__sk_log",
     "__sk_query",
     "__sk_bounds",
-    "__sk_scroll",
-    "__sk_scroll_into_view",
     "__sk_focus",
     "__sk_input_select",
     "__sk_reload",
@@ -756,24 +740,6 @@ export function createRuntime(
       return host.queryAnswers.get(`${selector}|${mode}`) ?? host.queryAnswers.get(selector) ?? "";
     },
     (id: number) => host.boundsById.get(id) ?? "",
-    (id: number, op: number, x: number, y: number, behavior: number) => {
-      host.scrollCalls.push({ id, op, x, y, behavior });
-      const s = host.scrollById.get(id);
-      if (!s) return "";
-      const clamp = (v: number, max: number) => Math.max(0, Math.min(v, max));
-      if (op === 1) {
-        if (Number.isFinite(x)) s.left = clamp(x, s.maxLeft);
-        if (Number.isFinite(y)) s.top = clamp(y, s.maxTop);
-      } else if (op === 2) {
-        if (Number.isFinite(x)) s.left = clamp(s.left + x, s.maxLeft);
-        if (Number.isFinite(y)) s.top = clamp(s.top + y, s.maxTop);
-      }
-      return `${s.left},${s.top},${s.width + s.maxLeft},${s.height + s.maxTop},0`;
-    },
-    (id: number, block: unknown, inline: unknown, behavior: unknown) => {
-      host.intoViewCalls.push({ id, block, inline, behavior });
-      return "";
-    },
     (id: number, op: number) => {
       host.focus.calls.push({ id, op });
       return host.focus.answer(id, op);

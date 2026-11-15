@@ -4,7 +4,6 @@ import type { MirrorCollection, MirrorElement, MirrorNode, MirrorRect, MirrorTex
 import { warnCompat } from "../compat";
 import { nodeOps, windowDocument, windowRootOf } from "./node-ops";
 import {
-  DOMRectListProto,
   HTMLCollectionProto,
   HTML_NS,
   MATHML_NS,
@@ -15,10 +14,7 @@ import {
 } from "./collections";
 import { isMirrorNode } from "./listeners";
 import { appRoot } from "../runtime";
-import { asDomRect } from "./computed-style";
 import { ownExpando } from "./controls";
-import { hostScroll } from "./scroll";
-import type { ScrollPos } from "./scroll";
 
 // The DOM surface on mirror nodes: reused browser components call element methods unconditionally, so a missing one
 // is a TypeError. Members answer truthfully (mirror tree, `__sk_query`, `__sk_bounds`, `getComputedStyle`) or
@@ -86,38 +82,23 @@ export function viewportRect(): MirrorRect {
   const height = Math.round(r.y + r.height);
   return { x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height };
 }
-/** `__sk_bounds`, with `"stale"` (the host cannot force layout inside an input handler) folded into `""`. A script-facing read (`kind`) leaves one advisory per call site and kind. */
-export function boundsOf(node: MirrorNode, kind?: string): SkRect {
+/** `__sk_bounds`, with `"stale"` (the host cannot force layout inside an input handler) folded into `""`. */
+export function boundsOf(node: MirrorNode): SkRect {
   if (!node.__skId) return "";
   const raw = __sk_bounds(node.__skId);
-  if (raw !== "stale") return raw;
-  if (kind) {
-    // Frames only (V8 and bun put an `Error` line first, JSC does not): [0] this
-    // function, [1] rectOf, [2] the accessor, [3] its caller.
-    const frames = (new Error().stack ?? "").split("\n").filter((l) => /^\s*at |@/.test(l));
-    const site = frames[3]?.trim() ?? "";
-    warnCompat(
-      `layout-stale:${kind}:${site}`,
-      `${kind} answered 0 for an element that has not been laid out yet` +
-        (site ? ` (${site})` : "") +
-        ": Skathi cannot lay out while the platform is dispatching mouse or keyboard input, " +
-        "so a node mounted in this same event has no size; a browser would lay out and answer it. " +
-        "Measure from requestAnimationFrame() or a ResizeObserver callback",
-    );
-  }
-  return "";
+  return raw === "stale" ? "" : raw;
 }
 /** The node's LAYOUT box, before any CSS `transform`: what `offsetWidth`, `clientWidth` and ResizeObserver report. */
-export function rectOf(node: MirrorNode, kind?: string): MirrorRect {
-  return rectFrom(boundsOf(node, kind), 0);
+export function rectOf(node: MirrorNode): MirrorRect {
+  return rectFrom(boundsOf(node), 0);
 }
 /**
  * Where the node was DRAWN: its border box under its own and its ancestors' `transform`, as `getBoundingClientRect()`
  * reports. Poppers sit at (0, 0) and move by `translate()`, so layout boxes would anchor to the window corner. The
  * host appends these four numbers to `__sk_bounds` only when a transform moved the box.
  */
-export function paintedRectOf(node: MirrorNode, kind?: string): MirrorRect {
-  return rectFrom(boundsOf(node, kind), 4);
+export function paintedRectOf(node: MirrorNode): MirrorRect {
+  return rectFrom(boundsOf(node), 4);
 }
 function rectFrom(raw: SkRect, at: 0 | 4): MirrorRect {
   if (!raw)
@@ -412,50 +393,3 @@ defineDomGet("localName", function (this: MirrorElement) {
 defineDomGet("prefix", function (this: MirrorElement) {
   return null;
 });
-
-// Bounds come from the last painted frame. The rect methods answer where the box was DRAWN (transforms applied); the size accessors answer the layout box.
-defineDom("getBoundingClientRect", function (this: MirrorElement) {
-  return asDomRect(paintedRectOf(this, "getBoundingClientRect()"));
-});
-defineDom("getClientRects", function (this: MirrorElement) {
-  const r = paintedRectOf(this, "getClientRects()");
-  return staticList(DOMRectListProto, r.width || r.height ? [asDomRect(r)] : []);
-});
-for (const [name, pick] of [
-  ["offsetWidth", (r: MirrorRect) => r.width],
-  ["offsetHeight", (r: MirrorRect) => r.height],
-  ["clientWidth", (r: MirrorRect) => r.width],
-  ["clientHeight", (r: MirrorRect) => r.height],
-] as [string, (r: MirrorRect) => number][]) {
-  defineDomGet(name, function (this: MirrorElement) {
-    return Math.round(pick(rectOf(this, name)));
-  });
-}
-// `scrollWidth` / `scrollHeight` are the CONTENT box: `el.scrollTop = el.scrollHeight` is wrong by the whole overflow if this answers the viewport.
-for (const [name, pick, fallback] of [
-  ["scrollWidth", (s: ScrollPos) => s.scrollWidth, (r: MirrorRect) => r.width],
-  ["scrollHeight", (s: ScrollPos) => s.scrollHeight, (r: MirrorRect) => r.height],
-] as [string, (s: ScrollPos) => number, (r: MirrorRect) => number][]) {
-  defineDomGet(name, function (this: MirrorElement) {
-    const s = hostScroll(this, 0, NaN, NaN, true);
-    return Math.round(s ? pick(s) : fallback(rectOf(this, name)));
-  });
-}
-// `offset*` is measured from the offsetParent in the DOM; with no positioned-ancestor chain these are window-relative.
-for (const [name, pick] of [
-  ["offsetTop", (r: MirrorRect) => r.top],
-  ["offsetLeft", (r: MirrorRect) => r.left],
-] as [string, (r: MirrorRect) => number][]) {
-  defineDomGet(name, function (this: MirrorElement) {
-    warnCompat(
-      "offsetParent",
-      "offsetTop/offsetLeft are measured from the WINDOW, not from an offsetParent — " +
-        "Skathi has no positioned-ancestor chain; use getBoundingClientRect(), which is exact",
-    );
-    return Math.round(pick(rectOf(this, name)));
-  });
-}
-defineDomGet("offsetParent", () => null);
-// Border widths are not published (the painted rect is the border box); 0, because @floating-ui adds these to every clipping rect and `undefined` makes it NaN.
-defineDomGet("clientTop", () => 0);
-defineDomGet("clientLeft", () => 0);

@@ -127,7 +127,7 @@ function world() {
 describe("NodeList and HTMLCollection, the interfaces", () => {
   test("exist, cannot be constructed, and carry WebIDL's members", () => {
     const { g } = world();
-    for (const name of ["NodeList", "HTMLCollection", "DOMRectList"]) {
+    for (const name of ["NodeList", "HTMLCollection"]) {
       const ctor = ctorOf(g, name);
       expect(typeof ctor).toBe("function");
       expect(ctor.name).toBe(name);
@@ -230,14 +230,6 @@ describe("querySelectorAll: a static NodeList", () => {
     expect(record.addedNodes instanceof g.NodeList).toBe(true);
     expect(record.addedNodes.item(0)).toBe(child);
     expect(record.removedNodes.length).toBe(0);
-  });
-
-  test("getClientRects() is a DOMRectList", () => {
-    const { g, vue } = world();
-    const rects = vue("div").getClientRects();
-    expect(rects instanceof g.DOMRectList).toBe(true);
-    expect(rects.length).toBe(0);
-    expect(rects.item(0)).toBe(null);
   });
 });
 

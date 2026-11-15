@@ -3,7 +3,7 @@ import { mark, vacant } from "./realm";
 import { ElementProto, NodeProto, TextProto } from "./protos";
 import type { MirrorElement, MirrorNode } from "./types";
 import { defineGlobal } from "./globals";
-import { BRANDS, DOMRectListProto, HTMLCollectionProto, NodeListProto, isChildList } from "./collections";
+import { BRANDS, HTMLCollectionProto, NodeListProto, isChildList } from "./collections";
 import { isMirrorNode } from "./listeners";
 import { NamedNodeMapImpl } from "./attributes";
 import { AttrImpl } from "./attr";
@@ -176,7 +176,6 @@ function adoptInterface(
 }
 adoptInterface("NodeList", NodeListProto, null, isChildList);
 adoptInterface("HTMLCollection", HTMLCollectionProto, null);
-adoptInterface("DOMRectList", DOMRectListProto, null);
 
 // redjs aliases `Node` to `Element`; this gives Node its own interface (constants, text nodes `instanceof`) and re-parents Element, text mirrors and Attr under it.
 const NODE_CONSTANTS: readonly (readonly [string, number])[] = [

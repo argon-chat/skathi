@@ -220,33 +220,6 @@ declare function __sk_query(selector: string, root: SkNodeId, mode: SkQueryMode)
 /** The node's rectangle at the LAST PAINTED FRAME, in client-area space. Lays out first if the tree changed, except inside an input listener, where it answers `"stale"`. */
 declare function __sk_bounds(id: SkNodeId): SkRect;
 
-type SkScrollOp = 0 | 1 | 2;
-
-/** `"left,top,scrollWidth,scrollHeight,stale"` in CSS px. `stale` 1: the content half (and the clamp) is a frame old because layout could not be forced. `""` for a node that is not a scroll container. */
-type SkScrollPos = string;
-
-/** CSSOM View's `ScrollBehavior`: 0 `auto` (the box's CSS `scroll-behavior`), 1 `instant`, 2 `smooth`. */
-type SkScrollBehavior = 0 | 1 | 2;
-
-/** Reads or moves a scroll container; answers the position after the clamp. `x`/`y` are CSS px; op 1 leaves a `NaN` axis where it is, op 2 makes it 0. A smooth move answers the position it starts from and glides over the next frames. The `scroll` event fires next frame. */
-declare function __sk_scroll(
-  id: SkNodeId,
-  op: SkScrollOp,
-  x: number,
-  y: number,
-  behavior: SkScrollBehavior,
-): SkScrollPos;
-
-type SkScrollAlign = 0 | 1 | 2 | 3;
-
-/** `scrollIntoView({ block, inline })` through every scrollable ancestor: `""` ran, `"stale"` ran on a frame-old layout, `"!<advisory>"` could not run. */
-declare function __sk_scroll_into_view(
-  id: SkNodeId,
-  block: SkScrollAlign,
-  inline: SkScrollAlign,
-  behavior: SkScrollBehavior,
-): string;
-
 /**
  * `el.focus()` (op 0) / `el.blur()` (op 1). Focus answers `"moved:<old id>"` (the runtime fires blur/focusout on the
  * old node, 0 = none, then focus/focusin), `"already"`, `"pending"` (queued until the node is built; the host fires
