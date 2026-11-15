@@ -78,7 +78,6 @@ describe("a same-realm reload", () => {
       "ResizeObserver",
       "DocumentFragment",
       "getComputedStyle",
-      "CSS",
       "HTMLInputElement",
       "Window",
       "Text",

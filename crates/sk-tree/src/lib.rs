@@ -11,6 +11,7 @@ mod bgimage;
 mod cache;
 mod clipboard;
 mod color;
+mod css_namespace;
 mod cull;
 mod dom;
 mod effect_texture;
@@ -479,6 +480,7 @@ pub fn install(rt: &JsRuntime) {
     }
     waapi::install(rt);
     style_decl::install(rt);
+    css_namespace::install(rt);
     selection::install(rt);
     pointer::install(rt);
     pointer_lock::install(rt);
