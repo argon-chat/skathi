@@ -23,6 +23,28 @@ const burnt = ref(false);
 const cells = [6, 9, 14];
 const cell = ref(9);
 const halftone = computed(() => `halftone(${cell.value}px, 0.125, 1, #0b0b12)`);
+
+const grades = [
+  { id: "teal-orange", label: "Teal & orange" },
+  { id: "noir", label: "Noir" },
+  { id: "golden", label: "Golden hour" },
+];
+const lut = ref("teal-orange");
+const graded = ref(true);
+const grade = computed(() => `grade(url(assets/textures/${lut.value}.png), ${graded.value ? 1 : 0})`);
+const pickGrade = (id: string) => {
+  lut.value = id;
+  graded.value = true;
+};
+
+const patterns = [
+  { id: "reeded", label: "Reeded", depth: 14, scale: 1.4 },
+  { id: "hammered", label: "Hammered", depth: 10, scale: 1 },
+];
+const pattern = ref(patterns[0]!);
+const glass = computed(
+  () => `glass(url(assets/textures/${pattern.value.id}.png), ${pattern.value.depth}px, ${pattern.value.scale})`,
+);
 </script>
 
 <template>
@@ -124,6 +146,45 @@ const halftone = computed(() => `halftone(${cell.value}px, 0.125, 1, #0b0b12)`);
         Drag the pointer across. The water is a wave equation the effect steps in its own state from frame to frame, and
         it bends and lights the element's painting under it.
       </p>
+    </Card>
+
+    <Card title="Colour grade" api="grade · SkTexture · url()">
+      <div class="print">
+        <img class="photo" src="assets/media/aurora.png" alt="Aurora" />
+        <div class="graded" :style="{ '--shading': grade }" />
+      </div>
+      <div class="row">
+        <button class="btn" :class="{ on: !graded }" @click="graded = false">Original</button>
+        <button
+          v-for="g in grades"
+          :key="g.id"
+          class="btn"
+          :class="{ on: graded && lut === g.id }"
+          @click="pickGrade(g.id)"
+        >
+          {{ g.label }}
+        </button>
+      </div>
+      <p class="faint">
+        The effect takes a lookup table as an image, url() in the CSS, and runs every pixel behind it through that
+        table. Switching tables cross-fades between the two grades.
+      </p>
+    </Card>
+
+    <Card title="Patterned glass" api="glass · sampleRepeat">
+      <div class="scene">
+        <div class="stripe s1" />
+        <div class="stripe s2" />
+        <div class="stripe s3" />
+        <div class="word under">texture</div>
+        <div class="pane" :style="{ '--shading': glass }" />
+      </div>
+      <div class="row">
+        <button v-for="p in patterns" :key="p.id" class="btn" :class="{ on: pattern.id === p.id }" @click="pattern = p">
+          {{ p.label }}
+        </button>
+        <span class="faint">A tiling normal map bends what is behind the pane.</span>
+      </div>
     </Card>
 
     <Card title="Spotlight" api="spotlight · [SkPointer]">
@@ -325,6 +386,45 @@ const halftone = computed(() => `halftone(${cell.value}px, 0.125, 1, #0b0b12)`);
   font-size: 44px;
   font-weight: 800;
   color: #ffffffe0;
+}
+
+.graded {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transition: --shading 700ms ease;
+}
+
+.stripe {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 70px;
+}
+.s1 {
+  left: 60px;
+  background: #8b9dff;
+}
+.s2 {
+  left: 220px;
+  background: #f472b6;
+}
+.s3 {
+  left: 380px;
+  background: #fbbf24;
+}
+.word.under {
+  left: 180px;
+}
+.pane {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 55%;
+  border-left: 1px solid #ffffff1f;
 }
 
 .pad {
