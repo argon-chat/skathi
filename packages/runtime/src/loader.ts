@@ -20,11 +20,6 @@
 // `accept(deps, cb)` stops the walk at the importer and hands `cb` the dependency's new exports.
 
 import * as runtimeNs from "./runtime";
-// Vendored libraries ride the vendor bundle (no node_modules resolution at runtime) and are
-// pre-seeded into the registry below; their `import ... from "vue"` is aliased to runtime.js by
-// the vendor build.
-import * as vueRouterNs from "vue-router";
-import * as piniaNs from "pinia";
 
 type ModuleId = string;
 
@@ -405,17 +400,9 @@ for (const alias of ["vue", "@skathi-native/runtime"]) {
   cache.set(alias, { id: alias, exports: vueExports });
 }
 
-// Vendored npm packages: one registry entry each. `VENDOR_IDS` is skipped by invalidation: these
-// are live library instances (route state, active pinia), and a hard restart must not duplicate them.
-const VENDOR_IDS = new Set(["vue", "@skathi-native/runtime"]);
-for (const [name, ns] of [
-  ["vue-router", vueRouterNs],
-  ["pinia", piniaNs],
-] as [ModuleId, Record<string, unknown>][]) {
-  factories.set(name, () => {});
-  cache.set(name, { id: name, exports: ns });
-  VENDOR_IDS.add(name);
-}
+// Skipped by invalidation: live library instances (route state, active pinia) a hard restart must not duplicate.
+// vue-router and pinia are npm modules the dev builder makes when the app imports them.
+const VENDOR_IDS = new Set(["vue", "@skathi-native/runtime", "vue-router", "pinia"]);
 
 function boot(entry: ModuleId): void {
   entryId = entry;

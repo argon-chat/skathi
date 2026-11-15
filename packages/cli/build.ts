@@ -348,10 +348,6 @@ function ensureDirs() {
 }
 
 async function buildVendor() {
-  for (const [name, dep] of FRAMEWORK) {
-    if (dep.warning) devAdvise(dep.warning);
-    say(`${stamp()} ${name} ${dep.version ?? "unknown"}: the ${dep.from === "app" ? "app's" : "runtime's"} copy`);
-  }
   const result = await Bun.build({
     entrypoints: [LOADER_ENTRY],
     format: "iife",
@@ -359,15 +355,10 @@ async function buildVendor() {
     define: DEFINES,
     plugins: [
       {
-        // vue-router and others import from "vue": that must be our runtime. Exact-match filter only:
-        // bun 1.4 crashes on catch-all onResolve filters.
+        // "vue" is our runtime. Exact-match filter only: bun 1.4 crashes on catch-all onResolve filters.
         name: "vendor-vue-alias",
         setup(b: Bun.PluginBuilder) {
           b.onResolve({ filter: /^vue$/ }, () => ({ path: RUNTIME_ENTRY }));
-          // The app owns these packages in dev and prod; mixing majors breaks store/router identity.
-          b.onResolve({ filter: /^(vue-router|pinia)$/ }, (args: Bun.OnResolveArgs) => ({
-            path: FRAMEWORK.get(args.path)!.path,
-          }));
         },
       },
     ],
@@ -638,7 +629,7 @@ function bareOf(body: string, skip: Set<string>): string[] {
     if (spec === null) continue;
     const c = spec.charCodeAt(0);
     if (c === 46 /* . */ || c === 47 /* / */) continue; // relative/absolute -> graph
-    if (isPreseeded(spec) || found.includes(spec) || skip.has(spec)) continue;
+    if ((isPreseeded(spec) && !FRAMEWORK.has(spec)) || found.includes(spec) || skip.has(spec)) continue;
     found.push(spec);
   }
   return found;
@@ -889,8 +880,11 @@ function npmSharePlugin(selfKey: string, selfRoot: string | null, found: Set<str
     setup(build: Bun.PluginBuilder) {
       build.onResolve({ filter: /^(?!node:)[^./\\]/ }, (args: Bun.OnResolveArgs) => {
         if (args.kind === "entry-point-build" || isAbsolute(args.path)) return undefined;
-        // The runtime's own modules come from the vendor bundle: a package must land on that copy.
-        if (isPreseeded(args.path)) return { path: args.path, external: true };
+        // Every importer lands on the one copy: the vendor bundle's, or the framework module built on demand.
+        if (isPreseeded(args.path)) {
+          if (FRAMEWORK.has(args.path)) found.add(args.path);
+          return { path: args.path, external: true };
+        }
         const from = importerDir(args, APP_ROOT);
         const abs = resolveImport(args.path, from);
         if (abs === null || !isAbsolute(abs) || /\.css$/i.test(abs) || LEAF_IMPORT.test(abs)) return undefined;
@@ -943,7 +937,15 @@ function writeNpmModule(id: string, what: string, body: string): boolean {
 
 async function buildNpmModule(id: string): Promise<boolean> {
   const { spec, from } = npmEntries.get(id) ?? { spec: id, from: APP_ROOT };
-  const candidates = await entryCandidates(spec, from);
+  // vue-router and pinia: the copy the app declares (else the runtime's), like the production bundle.
+  const framework = FRAMEWORK.get(id);
+  if (framework) {
+    if (framework.warning) devAdvise(framework.warning);
+    say(
+      `${stamp()} ${id} ${framework.version ?? "unknown"}: the ${framework.from === "app" ? "app's" : "runtime's"} copy`,
+    );
+  }
+  const candidates = framework ? [framework.path] : await entryCandidates(spec, from);
   if (!candidates.length) {
     noteUnresolved(id, spec, from);
     return false;

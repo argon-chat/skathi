@@ -166,7 +166,8 @@ describe("app-owned framework versions", () => {
     );
     const dev = Bun.spawnSync(["bun", "build.ts", join(dir, "src/main.ts"), dist], { cwd: PKG_DIR });
     expect(dev.exitCode).toBe(0);
-    expect(readFileSync(join(dist, "vendor.js"), "utf8")).toContain("app-owned-pinia-three");
+    expect(readFileSync(join(dist, "vendor.js"), "utf8")).not.toContain("createPinia");
+    expect(readFileSync(join(dist, "modules", "pinia.js"), "utf8")).toContain("app-owned-pinia-three");
     const prod = Bun.spawnSync(["bun", "prod.ts", join(dir, "src/main.ts"), join(dist, "app.prod.js")], {
       cwd: PKG_DIR,
     });

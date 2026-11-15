@@ -170,7 +170,7 @@ type TeleportProcess = ((this: unknown, ...args: unknown[]) => unknown) & { [TEL
 interface TeleportInternals {
   o: { querySelector?: (sel: string) => unknown };
 }
-{
+export function patchTeleport(): void {
   const impl = Teleport as unknown as { process: TeleportProcess };
   // A reload may re-evaluate this module over the same Teleport: wrap Vue's own `process`, never a predecessor's
   // wrapper, whose window registry is the old app's.

@@ -8,7 +8,7 @@ import { warnCompat } from "./compat";
 import type { MirrorElement } from "./runtime/types";
 import { hooks } from "./runtime/state";
 import { looseById, looseRoots, nodesById } from "./runtime/nodes";
-import { mk, nodeOps } from "./runtime/node-ops";
+import { mk, nodeOps, patchTeleport } from "./runtime/node-ops";
 import { patchProp } from "./runtime/patch-prop";
 import {
   disposeGlobalListener,
@@ -45,7 +45,17 @@ export { Transition, TransitionGroup, resolveTransitionProps } from "./runtime/t
 
 export let appRoot: MirrorElement | null = null; // created on mount or a pre-mount body insertion
 
-const renderer = createRenderer({ ...nodeOps, patchProp });
+const makeRenderer = () => createRenderer({ ...nodeOps, patchProp });
+let renderer: ReturnType<typeof makeRenderer> | null = null;
+
+/** Vue's renderer, made on first use: an app that renders through the DOM alone does not carry it. */
+function vueRenderer(): ReturnType<typeof makeRenderer> {
+  if (!renderer) {
+    patchTeleport();
+    renderer = makeRenderer();
+  }
+  return renderer;
+}
 
 function teardownDocumentRoot(root: MirrorElement, unmount?: () => void): void {
   if (!root.__skId) return;
@@ -114,7 +124,7 @@ export interface SkApp extends App<MirrorElement> {
 }
 
 export function createApp(rootComponent: unknown, rootProps: Record<string, unknown> | null = null): SkApp {
-  const app = renderer.createApp(rootComponent as never, rootProps);
+  const app = vueRenderer().createApp(rootComponent as never, rootProps);
   const mount = app.mount.bind(app);
   app.mount = (container?: unknown) => {
     if (globalThis.__SK_CSS__?.length) {
@@ -173,7 +183,8 @@ export function mountDocument(render: (root: MirrorElement) => () => void): Mirr
 // runtime-dom's other exports: a missing name breaks the build of every app using it (`useCssVars` is what `v-bind()`
 // in `<style>` compiles to). Each exists: the real thing where possible, an advisory where not.
 
-export const render = renderer.render;
+export const render: ReturnType<typeof makeRenderer>["render"] = (vnode, container, namespace) =>
+  vueRenderer().render(vnode, container, namespace);
 
 export { nodeOps, patchProp };
 
