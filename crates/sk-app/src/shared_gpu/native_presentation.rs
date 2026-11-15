@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
-use sk_runtime::redjs::webapi::webgpu::{
+use sk_runtime::redjs_webgpu::{
     backend::Context,
     canvas::{NativeFrame, NativePresenter, NativeSource},
 };

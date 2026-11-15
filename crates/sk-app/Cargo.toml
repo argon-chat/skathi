@@ -100,7 +100,7 @@ libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-core = "0.62"
-wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "3b3506ea31154edc04de64debda0e780cba2639c", default-features = false, features = ["std", "wgsl", "dx12"], optional = true }
+wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cddb2f5d80dc0009b2ef6767635140cacf90a007", default-features = false, features = ["std", "wgsl", "dx12"], optional = true }
 pollster = { version = "0.4", optional = true }
 gpui_windows = { path = "../../vendor/zed/crates/gpui_windows", default-features = false }
 windows = { version = "0.62", features = [

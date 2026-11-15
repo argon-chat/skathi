@@ -1,7 +1,7 @@
 //! GPU-only canvas display: convert premultiplied RGBA/BGRA into the atlas's
 //! straight BGRA on wgpu, then expose an acquired D3D11On12 texture to GPUI.
 use super::*;
-use sk_runtime::redjs::webapi::webgpu::canvas::{NativeFrame, NativePresenter, NativeSource};
+use sk_runtime::redjs_webgpu::canvas::{NativeFrame, NativePresenter, NativeSource};
 use windows::Win32::Graphics::{Direct3D11::*, Direct3D11on12::*, Direct3D12::*};
 
 const SHADER: &str = r#"

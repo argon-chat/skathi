@@ -1186,8 +1186,7 @@ pub(crate) fn report(
                 ]),
             ));
         }
-        let (native, readback, snapshots) =
-            sk_runtime::redjs::webapi::webgpu::canvas::presentation_stats();
+        let (native, readback, snapshots) = sk_runtime::redjs_webgpu::canvas::presentation_stats();
         let (copies, fallbacks) = sk_tree::devtools::gpu_canvas_presentation_stats();
         o.push((
             "webgpuPresentation",

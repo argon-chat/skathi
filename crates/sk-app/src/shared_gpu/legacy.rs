@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{ensure, Context as _, Result};
 use gpui_windows::{install_directx_device_factory, ExternalDirectXDevice};
-use sk_runtime::redjs::webapi::webgpu::backend::{
+use sk_runtime::redjs_webgpu::backend::{
     self, Adapter, AdapterFuture, AdapterOptions, Context, GpuHost,
 };
 use windows::{
@@ -59,7 +59,7 @@ fn create_generation() -> Result<ExternalDirectXDevice> {
         Err(error) => {
             // GPUI can fall back to its native D3D11 renderer. A failed shared
             // generation must not leave WebGPU bound to the retired device.
-            sk_runtime::redjs::webapi::webgpu::canvas::set_presenter(None);
+            sk_runtime::redjs_webgpu::canvas::set_presenter(None);
             backend::set_host(None);
             Err(error)
         }
@@ -165,11 +165,11 @@ fn create_shared_generation() -> Result<ExternalDirectXDevice> {
     let adapter = unsafe { device.cast::<IDXGIDevice>()?.GetAdapter()?.cast()? };
     let dxgi_factory: IDXGIFactory6 = unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))? };
     if std::env::var("SK_GPU_PRESENT").as_deref() != Ok("readback") {
-        sk_runtime::redjs::webapi::webgpu::canvas::set_presenter(Some(Arc::new(
+        sk_runtime::redjs_webgpu::canvas::set_presenter(Some(Arc::new(
             presentation::Presenter::new(context.clone(), device.clone(), device_context.clone())?,
         )));
     } else {
-        sk_runtime::redjs::webapi::webgpu::canvas::set_presenter(None);
+        sk_runtime::redjs_webgpu::canvas::set_presenter(None);
     }
     backend::set_host(Some(Arc::new(SharedHost(context.clone()))));
     log::info!(

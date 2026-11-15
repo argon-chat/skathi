@@ -10,7 +10,7 @@ publish = false
 battery = ["redjs/battery"]
 native-aot = ["redjs/native-aot"]
 # Native WebGPU; normal runtimes include it and the host supplies canvas presentation.
-webgpu = ["redjs/webgpu"]
+webgpu = ["dep:redjs-webgpu"]
 # On by default: browser APIs an app expects (typeof checks stay truthful either way).
 # Audio is the costliest feature after gpui (firewheel, cpal, symphonia); opt out with
 # `--no-default-features` for headless hosts. Opting out removes the API, it does not stub it.
@@ -30,5 +30,6 @@ net-h2 = ["redjs/net-h2"]
 [dependencies]
 # `svg-images` and `canvas` are always on.
 redjs = { path = "../../vendor/redjs/redjs", default-features = false, features = ["svg-images", "canvas"] }
+redjs-webgpu = { path = "../../vendor/redjs/redjs/webgpu", optional = true }
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 serde_json = "1"

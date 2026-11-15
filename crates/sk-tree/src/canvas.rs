@@ -18,7 +18,7 @@ use gpui::prelude::*;
 use gpui::{div, AnyElement, Context, ImageSource, RenderImage, Window, WindowControlArea};
 use sk_runtime::redjs::webapi::canvas2d as rjs;
 #[cfg(feature = "webgpu")]
-use sk_runtime::redjs::webapi::webgpu::canvas as gpu;
+use sk_runtime::redjs_webgpu::canvas as gpu;
 
 use super::{
     apply_computed_style, bind_events, focus_handle_for, gpui_object_fit, pointer_mask,
@@ -464,7 +464,7 @@ fn upload_native(native: &NativePixels, window: &mut Window, win: WinKey) -> gpu
     let mut write = gpui::TileWrite::Refused;
     // A COM reference alone does not retain wgpu's allocation.
     struct FrameLease {
-        _frame: Arc<dyn sk_runtime::redjs::webapi::webgpu::canvas::NativeFrame>,
+        _frame: Arc<dyn sk_runtime::redjs_webgpu::canvas::NativeFrame>,
     }
     let owner = Arc::new(FrameLease {
         _frame: native.frame.frame.clone(),

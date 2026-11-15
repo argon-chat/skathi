@@ -22,6 +22,8 @@ pub use bridge::{with_app, with_commit, with_published, with_published_app, Phas
 pub use runtime::{JsError, JsRuntime};
 
 pub use redjs;
+#[cfg(feature = "webgpu")]
+pub use redjs_webgpu;
 
 pub mod built {
     pub const WEBGPU: bool = cfg!(feature = "webgpu");

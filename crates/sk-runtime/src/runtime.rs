@@ -100,6 +100,8 @@ impl JsRuntime {
         }
         apply_user_agent();
         apply_pump_budget();
+        #[cfg(feature = "webgpu")]
+        redjs_webgpu::register();
         let ctx = Context::new();
         unsafe {
             let rc = ffi::redjs_web_install(ctx.raw());

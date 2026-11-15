@@ -6,7 +6,7 @@ use std::sync::{
 
 use anyhow::{ensure, Context as _, Result};
 use gpui_windows::{install_renderer_d3d12_generation_observer, renderer_d3d12_device};
-use sk_runtime::redjs::webapi::webgpu::{
+use sk_runtime::redjs_webgpu::{
     backend::{self, Adapter, AdapterFuture, AdapterOptions, Context, GpuHost},
     canvas,
 };
