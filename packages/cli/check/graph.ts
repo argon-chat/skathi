@@ -12,7 +12,7 @@ export interface ModuleGraph {
   aliases: Record<string, string>;
   /** Ambient declarations the runtime contributes. */
   declarations: string[];
-  /** Absolute paths of the .js/.ts/.vue files with code in the bundle. */
+  /** Absolute paths of the .js/.ts/.vue/.svelte files with code in the bundle. */
   modules: string[];
   errors: GraphError[];
 }

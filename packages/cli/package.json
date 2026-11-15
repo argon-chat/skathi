@@ -23,6 +23,7 @@
     "css-prefixes.ts",
     "prod.ts",
     "runtime-path.ts",
+    "svelte.ts",
     "tailwind.ts",
     "vitecompat.ts"
   ],
@@ -41,7 +42,8 @@
     "typescript": "5"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "svelte": "5.57.3"
   },
   "engines": {
     "bun": ">=1.4"
@@ -57,7 +59,8 @@
   "comments": {
     "tailwindcss": "Pinned to 3.4.x: v3 emits literal declarations that crates/sk-css maps onto gpui; v4 uses var(--tw-*) + calc() + @property, which the engine does not fully resolve yet (see tailwind.ts).",
     "@modelcontextprotocol/sdk": "devDependency: used only by devtools/mcp.ts. devtools/ctl.ts is dependency-free so an agent can drive the app through Bash without bun install.",
-    "typescript": "sk check and the AOT input inventory (sk build --aot-inputs). Builds do not invoke tsc: bun transpiles .ts directly."
+    "typescript": "sk check and the AOT input inventory (sk build --aot-inputs). Builds do not invoke tsc: bun transpiles .ts directly.",
+    "svelte": "devDependency: types and tests. A Svelte app compiles with its own svelte/compiler, the version its runtime is."
   },
   "publishConfig": {
     "access": "public"

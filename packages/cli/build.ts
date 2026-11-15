@@ -54,6 +54,7 @@ import {
   viteShapesPlugin,
 } from "./vitecompat";
 import { colorEnabled, paint } from "./cli/term";
+import { SVELTE_SOURCE, compileSvelte } from "./svelte";
 
 const C = paint(colorEnabled(process.stdout));
 const styled = (rest: (text: string) => string) => (text: string) => {
@@ -76,7 +77,7 @@ const APP_SRC_DIR = dirname(ENTRY_ABS);
 const DIST = resolve(positional[1] ?? join(PKG_DIR, "dist"));
 const MODULES_DIR = join(DIST, "modules");
 
-const SOURCE_EXT = /\.(vue|js|ts|mjs)$/;
+const SOURCE_EXT = /\.(vue|svelte|js|ts|mjs)$/;
 
 // The window block of sk.config.json is copied verbatim into the manifest: the host reads it
 // before the window opens, the only time creation-time options can be set without a flash.
@@ -548,6 +549,16 @@ const appModulePlugin = {
       const code = transformSource(out.contents, args.path, DEV_SHAPES);
       return code === null ? out : { ...out, contents: code };
     });
+    build.onLoad({ filter: SVELTE_SOURCE }, async (args: Bun.OnLoadArgs) => {
+      const id = toId(args.path);
+      const out = await compileSvelte(APP_ROOT, args.path, await Bun.file(args.path).text(), {
+        dev: true,
+        filename: id,
+      });
+      for (const w of out.warnings) devAdvise(w);
+      capturedCss = out.css ? pruneVendorPrefixes(await viteCss(out.css, args.path, `${id} <style>`)) : null;
+      return { contents: transformSource(out.js, args.path, DEV_SHAPES) ?? out.js, loader: "js" as const };
+    });
   },
 };
 
@@ -557,7 +568,20 @@ const appModulePlugin = {
 
 const REQUIRE_RE = /\brequire\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\)/g;
 
-const CANDIDATE_EXTS = ["", ".js", ".ts", ".mjs", ".vue", "/index.js", "/index.ts", "/index.vue"];
+const CANDIDATE_EXTS = [
+  "",
+  ".js",
+  ".ts",
+  ".mjs",
+  ".vue",
+  ".svelte",
+  ".svelte.ts",
+  ".svelte.js",
+  "/index.js",
+  "/index.ts",
+  "/index.vue",
+  "/index.svelte",
+];
 
 function normalizeId(path: string): string {
   const out: string[] = [];

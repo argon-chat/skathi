@@ -1,0 +1,13 @@
+{
+  "$comment": "A Svelte 5 app through Skathi's DOM: runes, blocks, delegated events, scoped CSS, transitions.",
+
+  "name": "sk-test-svelte",
+
+  "window": {
+    "title": "Skathi — Svelte (fixture)",
+    "width": 520,
+    "height": 420,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

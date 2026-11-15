@@ -1,12 +1,12 @@
 // `import.meta.hot` (the dev builder makes it `module.hot`): a module that accepts itself updates in place and is a
-// boundary for changes below it; the `restart` change kind and `./x.js` naming x.ts.
+// boundary for changes below it; the `restart` change kind and resolution of `.svelte` / `./x.js` ids.
 
 import { describe, expect, test } from "bun:test";
 import { applyChanges, createLoader, definePlain, type LoaderWorld, type Require } from "./loader-harness";
 
 const ENTRY = "app/src/main.ts";
-const VIEW = "app/src/view.ts";
-const STORE = "app/src/store.ts";
+const VIEW = "app/src/View.svelte";
+const STORE = "app/src/store.svelte.ts";
 const UTIL = "app/src/util.ts";
 
 interface ViewExports {
@@ -18,7 +18,7 @@ interface ViewExports {
 
 /** A component module as Svelte compiles it: it accepts itself and swaps its implementation in its callback. */
 function defineView(w: LoaderWorld, version: number, opts: { invalidate?: boolean } = {}) {
-  const requires: Require[] = [{ spec: "./store", id: STORE }];
+  const requires: Require[] = [{ spec: "./store.svelte", id: STORE }];
   w.SK.setDeps(
     VIEW,
     requires.map((r) => r.id),
@@ -27,7 +27,7 @@ function defineView(w: LoaderWorld, version: number, opts: { invalidate?: boolea
     VIEW,
     function (require, module, exports) {
       w.exec.set(VIEW, (w.exec.get(VIEW) ?? 0) + 1);
-      const store = require("./store") as { version: number };
+      const store = require("./store.svelte") as { version: number };
       const accepted: { version: number }[] = [];
       exports.version = version;
       exports.store = store;
@@ -50,7 +50,7 @@ function boot(): LoaderWorld {
   definePlain(w, UTIL, [], 1);
   definePlain(w, STORE, [{ spec: "./util", id: UTIL }], 1);
   defineView(w, 1);
-  definePlain(w, ENTRY, [{ spec: "./view", id: VIEW }], 1);
+  definePlain(w, ENTRY, [{ spec: "./View.svelte", id: VIEW }], 1);
   w.SK.boot(ENTRY);
   return w;
 }
@@ -103,7 +103,7 @@ describe("a module that accepts itself", () => {
     definePlain(w, UTIL, [], 1);
     definePlain(w, STORE, [{ spec: "./util", id: UTIL }], 1);
     defineView(w, 1, { invalidate: true });
-    definePlain(w, ENTRY, [{ spec: "./view", id: VIEW }], 1);
+    definePlain(w, ENTRY, [{ spec: "./View.svelte", id: VIEW }], 1);
     w.SK.boot(ENTRY);
     defineView(w, 2);
     applyChanges(w, [{ id: VIEW, kind: "reload" }]);
@@ -114,13 +114,16 @@ describe("a module that accepts itself", () => {
 describe("change kinds and ids", () => {
   test("restart re-runs the app from the entry", () => {
     const w = boot();
-    applyChanges(w, [{ id: "some-package/sub", kind: "restart" }]);
+    applyChanges(w, [{ id: "svelte/transition", kind: "restart" }]);
     expect(w.hardRestarted()).toBe(true);
     expect(w.runs(ENTRY)).toBe(2);
   });
 
-  test("an import of ./x.js resolves to x.ts", () => {
+  test("an import resolves to a rune module, a component and a .ts named as .js", () => {
     const w = boot();
+    expect(w.SK.resolve("./store.svelte", ENTRY)).toBe(STORE);
+    expect(w.SK.resolve("./store.svelte.js", ENTRY)).toBe(STORE);
+    expect(w.SK.resolve("./View", ENTRY)).toBe(VIEW);
     expect(w.SK.resolve("./util.js", ENTRY)).toBe(UTIL);
   });
 });

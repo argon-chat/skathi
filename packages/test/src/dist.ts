@@ -15,7 +15,7 @@ export const DEFAULT_EXE = join(REPO, "target/x86_64-pc-windows-msvc/debug/sk-ap
 /** Everything this harness writes that is not a user-facing artifact. */
 export const WORK_DIR = join(REPO, "packages/test/.sk-test");
 
-const SOURCE_EXT = /\.(vue|js|ts|mjs|css|json)$/;
+const SOURCE_EXT = /\.(vue|svelte|js|ts|mjs|css|json)$/;
 
 /** `hello` -> `apps/hello/src/main.ts`; an explicit path is taken verbatim. */
 export function resolveEntry(app: string): string {

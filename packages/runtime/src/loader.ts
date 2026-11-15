@@ -131,7 +131,20 @@ const log = (msg: string) => {
 
 // Ids are workspace-relative POSIX paths; bare specifiers ("vue", "@skathi-native/runtime") are registry keys.
 
-const CANDIDATE_EXTS = ["", ".js", ".ts", ".mjs", ".vue", "/index.js", "/index.ts", "/index.vue"];
+const CANDIDATE_EXTS = [
+  "",
+  ".js",
+  ".ts",
+  ".mjs",
+  ".vue",
+  ".svelte",
+  ".svelte.ts",
+  ".svelte.js",
+  "/index.js",
+  "/index.ts",
+  "/index.vue",
+  "/index.svelte",
+];
 
 function dirOf(id: ModuleId): string {
   const i = id.lastIndexOf("/");
@@ -320,6 +333,13 @@ vueExports.createApp = function (...args: Parameters<typeof origCreateApp>) {
     return vm;
   };
   return app;
+};
+const origMountDocument = runtimeNs.mountDocument;
+vueExports.mountDocument = function (...args: Parameters<typeof origMountDocument>) {
+  const root = origMountDocument(...args);
+  mountCount++;
+  log("app mounted (mount #" + mountCount + ")");
+  return root;
 };
 
 for (const alias of ["vue", "@skathi-native/runtime"]) {

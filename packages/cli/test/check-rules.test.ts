@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CheckReport } from "../check/schema";
-import { analyzeRules, lines, only } from "./check-fixtures";
+import { analyzeRules, analyzeUnit, lines, only } from "./check-fixtures";
 
 let cached: CheckReport | undefined;
 const report = () => (cached ??= analyzeRules());
@@ -60,6 +60,13 @@ describe("SK2xxx: what runs slower under AOT", () => {
   test("positions inside a .vue file point at the SFC itself", () => {
     const d = only(report(), "SK2001").find((x) => x.file === "src/App.vue")!;
     expect(d.range).toEqual({ start: { line: 5, character: 14 }, end: { line: 5, character: 18 } });
+  });
+
+  test("a .svelte file is checked through its component script, not the scripts in its markup", () => {
+    const [d, ...rest] = analyzeUnit(["Widget.svelte"]).diagnostics;
+    expect(rest).toEqual([]);
+    expect(d!.code).toBe("SK2001");
+    expect(d!.range).toEqual({ start: { line: 2, character: 16 }, end: { line: 2, character: 20 } });
   });
 });
 

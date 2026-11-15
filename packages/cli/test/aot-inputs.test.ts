@@ -228,6 +228,54 @@ test("archive preserves types erased by bundling, extended config, declarations 
   expect(readFileSync(path, "utf8")).toBe(first);
 });
 
+test("Svelte components keep source and compiled JS; a rune module stays typed", () => {
+  const app = join(scratch, "svelte-project");
+  const out = join(scratch, "svelte-archive");
+  const entry = join(app, "src/main.ts");
+  const store = join(app, "src/store.svelte.ts");
+  const storeSource = "export const store: { count: number } = $state({ count: 0 });";
+  file(entry, 'import App from "./App.svelte"; import { store } from "./store.svelte"; export { App, store };');
+  file(store, storeSource);
+  file(
+    join(app, "tsconfig.json"),
+    '{"files":["src/main.ts"],"compilerOptions":{"moduleResolution":"bundler","types":[]}}',
+  );
+  const archive = new AotInputs({
+    out,
+    appRoot: app,
+    entry,
+    typescript: ts,
+    aliases: {},
+    sourceRoots: { sdk: resolve(import.meta.dir, "../../..") },
+  });
+  archive.source(entry, readFileSync(entry, "utf8"));
+  archive.svelte(
+    join(app, "src/App.svelte"),
+    "<script>let n = $state(0);</script>{n}",
+    "export default function App() {}",
+  );
+  archive.svelte(store, storeSource, "export const store = $.proxy({ count: 0 });");
+  const manifest = JSON.parse(
+    readFileSync(
+      archive.write({
+        script: "",
+        scriptUrl: "sk://app.prod.js",
+        defines: {},
+        engine: aotEngineIdentity(null),
+        sdkVersion: "test",
+      }),
+      "utf8",
+    ),
+  );
+  const kinds = (path: string) =>
+    manifest.files.filter((input: any) => input.path === path).map((input: any) => input.kind);
+  expect(kinds("src/App.svelte").sort()).toEqual(["svelte", "svelte-module"]);
+  expect(kinds("src/store.svelte.ts").sort()).toEqual(["source", "svelte-module"]);
+  const typed = manifest.files.find((input: any) => input.path === "src/store.svelte.ts" && input.kind === "source");
+  expect(readFileSync(join(out, typed.blob), "utf8")).toBe(storeSource);
+  expect(manifest.unresolvedImports.filter((input: any) => input.specifier.includes("svelte"))).toEqual([]);
+});
+
 test("solution tsconfig retains referenced app project declarations and libraries", () => {
   const app = join(scratch, "solution-project");
   const out = join(scratch, "solution-archive");

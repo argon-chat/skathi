@@ -6,7 +6,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type ts from "typescript";
 
 type TypeScript = typeof ts;
-type InputKind = "source" | "vue" | "vue-module" | "vue-script" | "transformed-module" | "config";
+type InputKind =
+  "source" | "vue" | "vue-module" | "vue-script" | "svelte" | "svelte-module" | "transformed-module" | "config";
 interface Input {
   path: string;
   kind: InputKind;
@@ -116,6 +117,21 @@ export class AotInputs {
     }
   }
 
+  /**
+   * A Svelte component, or a `.svelte.ts`/`.svelte.js` rune module, and the JS the compiler made of it. The
+   * compiler keeps no types, so a rune module's typed source stays the program's view of it.
+   */
+  svelte(path: string, original: string, compiled: string): void {
+    this.add(path, compiled, "svelte-module", "js");
+    if (/\.svelte$/i.test(path)) {
+      this.add(path, original, "svelte");
+      this.addVirtual(`${resolve(path)}.js`, compiled);
+      return;
+    }
+    this.add(path, original, "source");
+    this.modules.set(this.key(path), { path: resolve(path), text: original });
+  }
+
   private collectTypes(): { version: string; config: string | null; diagnostics: { code: number; message: string }[] } {
     const { typescript, appRoot, entry, aliases, declarations = [] } = this.options;
     const read = (path: string): string | undefined => {
@@ -177,6 +193,9 @@ export class AotInputs {
           typescript.resolveModuleName(specifier, importer, options, host).resolvedModule ??
           (specifier.endsWith(".vue")
             ? typescript.resolveModuleName(`${specifier}.ts`, importer, options, host).resolvedModule
+            : undefined) ??
+          (specifier.endsWith(".svelte")
+            ? typescript.resolveModuleName(`${specifier}.js`, importer, options, host).resolvedModule
             : undefined) ??
           (alias ? typescript.resolveModuleName(specifier, alias, options, host).resolvedModule : undefined) ??
           (alias
@@ -282,7 +301,7 @@ export class AotInputs {
       limitations: [
         "Source archive, not a native AOT image; no host ABI or builtin-effect descriptors are inferred from declarations.",
         "Original paths are app-root-relative or use a named source-root anchor; blob names are content hashes. An AOT frontend needs a resolver that maps these paths to blobs.",
-        "Vue modules and TS/JS source rewrites are retained before Bun transpilation. Bun-generated asset/query/HTML modules, CSS installation and module linking still require a frontend adapter.",
+        "Vue and Svelte modules and TS/JS source rewrites are retained before Bun transpilation. Bun-generated asset/query/HTML modules, CSS installation and module linking still require a frontend adapter.",
         "TypeScript file-module resolution is recorded in addition to Bun's runtime graph; unresolvedImports also includes ambient module names that have no file mapping. A frontend adapter must handle them. This archive does not assert type-checking or AOT compatibility.",
       ],
     };

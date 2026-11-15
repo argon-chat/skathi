@@ -666,6 +666,8 @@ export function viteShapesPlugin(o: ShapesOptions) {
         return { contents: wasmStubModule(idOf(args.path), new Set()), loader: "js" };
       });
       build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async (args: Bun.OnLoadArgs) => {
+        // A Svelte rune module is the Svelte plugin's to compile.
+        if (/\.svelte\.[jt]s$/.test(args.path)) return undefined;
         const src = await Bun.file(args.path).text();
         const code =
           src.includes("import.meta.glob") || src.includes("new URL") ? transformSource(src, args.path, o) : null;

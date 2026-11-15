@@ -19,15 +19,25 @@ import { colorEnabled, paint } from "./term";
 export const PACKAGE_MANAGERS = ["bun", "npm", "pnpm", "yarn"] as const;
 export type PackageManager = (typeof PACKAGE_MANAGERS)[number];
 
-export const TEMPLATES = ["showcase", "minimal"] as const;
+export const TEMPLATES = ["showcase", "minimal", "svelte"] as const;
 export type Template = (typeof TEMPLATES)[number];
+
+interface Checker {
+  script: string;
+  devDependencies: Record<string, string>;
+  /** The component files the app's tsconfig.json includes besides its .ts sources. */
+  sources: string;
+}
+
+const VUE_TSC: Checker = { script: "vue-tsc --noEmit", devDependencies: { "vue-tsc": "^3" }, sources: "src/**/*.vue" };
 
 interface TemplateInfo {
   hint: string;
-  /** Taken at the versions the runtime itself depends on. */
+  /** Taken at the versions the runtime itself depends on, or accepts as a peer. */
   dependencies: string[];
   window: Record<string, unknown>;
   packs?: { name: string; match?: string[] }[];
+  checker: Checker;
 }
 
 const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
@@ -36,11 +46,19 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
     dependencies: ["pinia", "vue-router"],
     window: { width: 1100, height: 720, minWidth: 480, minHeight: 360, titleBarStyle: "hidden", titleBarHeight: 40 },
     packs: [{ name: "media", match: ["assets/media/**"] }],
+    checker: VUE_TSC,
   },
   minimal: {
     hint: "one window, one component",
     dependencies: [],
     window: { width: 760, height: 520, titleBarStyle: "default" },
+    checker: VUE_TSC,
+  },
+  svelte: {
+    hint: "the minimal app in Svelte 5",
+    dependencies: ["svelte"],
+    window: { width: 760, height: 520, titleBarStyle: "default" },
+    checker: { script: "svelte-check", devDependencies: { "svelte-check": "^4" }, sources: "src/**/*.svelte" },
   },
 };
 
@@ -49,7 +67,7 @@ export const TEMPLATES_DIR = resolve(import.meta.dir, "..", "templates");
 export const CONFIG_SCHEMA = "./node_modules/@skathi-native/runtime/sk.config.schema.json";
 
 /** Files whose text has its `{{key}}` placeholders filled in; anything else is copied byte for byte. */
-const TEXT_FILES = new Set([".vue", ".ts", ".css", ".txt", ".json", ".html", ".svg"]);
+const TEXT_FILES = new Set([".vue", ".svelte", ".ts", ".css", ".txt", ".json", ".html", ".svg"]);
 
 export interface CreateOptions {
   name?: string | undefined;
@@ -114,7 +132,11 @@ export function create(target: string, options: CreateOptions = {}): string[] {
   const template = options.template ?? "showcase";
   const info = TEMPLATE_INFO[template];
   const platforms = options.platforms?.length ? options.platforms : [currentPlatform()];
-  const runtimeDeps = (runtimeRequire("./package.json") as { dependencies: Record<string, string> }).dependencies;
+  const runtimePkg = runtimeRequire("./package.json") as {
+    dependencies: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+  };
+  const runtimeDeps = { ...runtimePkg.peerDependencies, ...runtimePkg.dependencies };
   const sdk = `^${CLI_VERSION}`;
 
   const files: Record<string, string | Uint8Array> = {
@@ -129,13 +151,13 @@ export function create(target: string, options: CreateOptions = {}): string[] {
         build: "sk build",
         publish: "sk publish",
         check: "sk check",
-        typecheck: "vue-tsc --noEmit",
+        typecheck: info.checker.script,
       },
       dependencies: {
         "@skathi-native/runtime": sdk,
         ...Object.fromEntries(info.dependencies.map((dep) => [dep, runtimeDeps[dep]])),
       },
-      devDependencies: { "@skathi-native/cli": sdk, typescript: "^5", "vue-tsc": "^3" },
+      devDependencies: { "@skathi-native/cli": sdk, typescript: "^5", ...info.checker.devDependencies },
     }),
     "sk.config.json": json({
       $schema: CONFIG_SCHEMA,
@@ -153,7 +175,7 @@ export function create(target: string, options: CreateOptions = {}): string[] {
     "icon.png": readFileSync(join(TEMPLATES_DIR, "icon.png")),
     "tsconfig.json": json({
       extends: "@skathi-native/runtime/tsconfig.app.json",
-      include: ["src/**/*.ts", "src/**/*.vue"],
+      include: ["src/**/*.ts", info.checker.sources],
     }),
     ".gitignore": "node_modules/\ndist/\n",
   };

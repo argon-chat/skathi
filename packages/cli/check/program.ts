@@ -8,11 +8,11 @@ export type TypeScript = typeof ts;
 
 /** One file of the bundle as the analysis sees it. */
 export interface Unit {
-  /** The file on disk (.vue for a single-file component). */
+  /** The file on disk (.vue or .svelte for a component). */
   path: string;
-  /** Its name in the TypeScript program: `<path>.ts`/`.js` for a .vue file. */
+  /** Its name in the TypeScript program: `<path>.ts`/`.js` for a component. */
   programPath: string;
-  /** The text positions refer to; for a .vue file everything but its scripts is blanked. */
+  /** The text positions refer to; for a component everything but its scripts is blanked. */
   text: string;
   /** TypeScript rather than JavaScript. */
   typed: boolean;
@@ -27,6 +27,7 @@ export interface Unreadable {
 }
 
 const TS_FILE = /\.[cm]?tsx?$/i;
+const COMPONENT_FILE = /\.(vue|svelte)$/i;
 
 /** The scripts of an SFC at their own offsets, everything else replaced by spaces. */
 export function vueScripts(source: string, path: string): { text: string; typed: boolean } | null {
@@ -39,6 +40,25 @@ export function vueScripts(source: string, path: string): { text: string; typed:
     for (let i = 0; i < block!.content.length; i++) chars[start + i] = block!.content[i]!;
   }
   return { text: chars.join(""), typed: blocks.some((b) => /^tsx?$/.test(b!.lang ?? "")) };
+}
+
+const blank = (text: string) => text.replace(/[^\r\n]/g, " ");
+
+/** The `<script>` blocks of a Svelte component at their own offsets, everything else replaced by spaces. */
+export function svelteScripts(source: string): { text: string; typed: boolean } | null {
+  // A `<script>` in a comment or in `<svelte:head>` is markup, not the component's script.
+  const scan = source.replace(/<!--[\s\S]*?-->|<svelte:head[\s>][\s\S]*?<\/svelte:head\s*>/gi, blank);
+  const chars = blank(source).split("");
+  let found = false;
+  let typed = false;
+  for (const m of scan.matchAll(/<script(\s[^>]*)?>([\s\S]*?)<\/script\s*>/gi)) {
+    const attrs = m[1] ?? "";
+    const start = m.index + "<script".length + attrs.length + 1;
+    for (let i = 0; i < m[2]!.length; i++) chars[start + i] = source[start + i]!;
+    found = true;
+    if (/\blang\s*=\s*["']?(ts|typescript)\b/i.test(attrs)) typed = true;
+  }
+  return found ? { text: chars.join(""), typed } : null;
 }
 
 export function readUnits(
@@ -57,10 +77,10 @@ export function readUnits(
       unreadable.push({ path, owner, message: (e as Error).message });
       continue;
     }
-    if (/\.vue$/i.test(path)) {
+    if (COMPONENT_FILE.test(path)) {
       let scripts: ReturnType<typeof vueScripts>;
       try {
-        scripts = vueScripts(source, path);
+        scripts = /\.svelte$/i.test(path) ? svelteScripts(source) : vueScripts(source, path);
       } catch (e) {
         unreadable.push({ path, owner, message: (e as Error).message });
         continue;
@@ -188,7 +208,7 @@ export function buildProgram(input: ProgramInput): BuiltProgram {
       }
       const found = typescript.resolveModuleName(specifier, importer, options, host).resolvedModule;
       if (found) return found;
-      if (/\.vue$/i.test(specifier) && specifier.startsWith(".")) {
+      if (COMPONENT_FILE.test(specifier) && specifier.startsWith(".")) {
         for (const ext of ["ts", "js"] as const) {
           const path = resolve(dirname(importer), `${specifier}.${ext}`);
           if (own.has(key(path)))

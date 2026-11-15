@@ -21,6 +21,7 @@ import { asciiOnly, checkAscii, nonAsciiCount } from "./ascii";
 import { AotInputs, aotEngineIdentity } from "./aot-inputs";
 import type { ModuleGraph } from "./check/graph";
 import { pruneVendorPrefixes } from "./css-prefixes";
+import { SVELTE_SOURCE, compileSvelte } from "./svelte";
 import {
   RUNTIME_DIR,
   RUNTIME_ENTRY,
@@ -416,7 +417,7 @@ const AOT_INPUTS = aotInputsDir
     })
   : null;
 
-/** `--graph`: every .js/.ts/.vue file the build loaded, by absolute path. */
+/** `--graph`: every .js/.ts/.vue/.svelte file the build loaded, by absolute path. */
 const GRAPH_LOADED = new Set<string>();
 const SHAPE_NOTES = new Map<string, number>();
 const SHAPES = {
@@ -464,6 +465,16 @@ const vuePlugin = {
       const source = await Bun.file(args.path).text();
       if (graphOut) GRAPH_LOADED.add(args.path);
       return compileVue(args.path, source);
+    });
+    build.onLoad({ filter: SVELTE_SOURCE }, async (args: Bun.OnLoadArgs) => {
+      const id = toId(args.path);
+      if (graphOut) GRAPH_LOADED.add(args.path);
+      const source = await Bun.file(args.path).text();
+      const out = await compileSvelte(APP_ROOT, args.path, source, { dev: false, filename: id });
+      AOT_INPUTS?.svelte(args.path, source, out.js);
+      for (const w of out.warnings) advise(w);
+      if (out.css) cssById.set(id, await viteCss(out.css, args.path, `${id} <style>`));
+      return { contents: transformSource(out.js, args.path, SHAPES) ?? out.js, loader: "js" as const };
     });
   },
 };

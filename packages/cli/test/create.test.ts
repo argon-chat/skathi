@@ -116,6 +116,26 @@ test("pinia and vue-router are dependencies only of the templates that use them"
   }
 });
 
+test("the svelte template depends on svelte at the version the runtime accepts and checks with svelte-check", () => {
+  const dir = fresh();
+  create(dir, { template: "svelte" });
+  expect(read(dir, "src/App.svelte")).toContain('const productName = "My App";');
+  expect(read(dir, "src/main.ts")).toContain('from "@skathi-native/runtime/svelte"');
+  expect(pkg(dir).dependencies.svelte).toBe(
+    (
+      JSON.parse(read(join(import.meta.dir, "../../runtime"), "package.json")) as {
+        peerDependencies: Record<string, string>;
+      }
+    ).peerDependencies.svelte!,
+  );
+  expect(Object.keys(pkg(dir).devDependencies).sort()).toEqual(["@skathi-native/cli", "svelte-check", "typescript"]);
+  expect(pkg(dir).scripts.typecheck).toBe("svelte-check");
+  expect((JSON.parse(read(dir, "tsconfig.json")) as { include: string[] }).include).toEqual([
+    "src/**/*.ts",
+    "src/**/*.svelte",
+  ]);
+});
+
 test("an unknown template is refused before anything is written", async () => {
   expect(parseTemplate(" Minimal ")).toBe("minimal");
   expect(() => parseTemplate("react")).toThrow(ConfigError);

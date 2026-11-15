@@ -158,6 +158,18 @@ export function createApp(rootComponent: unknown, rootProps: Record<string, unkn
   return app as SkApp;
 }
 
+/**
+ * Mounts an app that renders through the DOM rather than through Vue (Svelte, a hand-written one) on the document root:
+ * `render` draws into the root and returns the teardown a reload runs before the next app mounts.
+ */
+export function mountDocument(render: (root: MirrorElement) => () => void): MirrorElement {
+  if (globalThis.__SK_CSS__?.length) installStylesheet(globalThis.__SK_CSS__.join("\n"));
+  const root = ensureDocumentRoot();
+  const stop = render(root);
+  globalThis.__SK_TEARDOWN__ = () => teardownDocumentRoot(root, stop);
+  return root;
+}
+
 // runtime-dom's other exports: a missing name breaks the build of every app using it (`useCssVars` is what `v-bind()`
 // in `<style>` compiles to). Each exists: the real thing where possible, an advisory where not.
 
