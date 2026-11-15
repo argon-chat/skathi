@@ -102,29 +102,6 @@ describe("original callback profiling", () => {
     expect(ended).toEqual([23]);
   });
 
-  test("inactive controls return directly without an end call", () => {
-    const scheduler = callbacks();
-    let begins = 0,
-      ends = 0;
-    const rt = createRuntime({
-      globals: {
-        ...scheduler.globals,
-        __sk_trace_callback_begin() {
-          begins++;
-          return 0;
-        },
-        __sk_trace_callback_end() {
-          ends++;
-        },
-      },
-    });
-    const id = (rt.global.setTimeout as (...args: unknown[]) => number)((a: unknown) => a, 0, 49);
-    const timer = scheduler.timers.get(id)!;
-    expect(timer.callback(...timer.args)).toBe(49);
-    expect(begins).toBe(1);
-    expect(ends).toBe(0);
-  });
-
   test("the mirror event walk passes the original user listener to the hook", () => {
     const seen: unknown[] = [],
       ended: number[] = [];

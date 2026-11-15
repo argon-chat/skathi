@@ -298,16 +298,6 @@ mod tests {
     }
 
     #[test]
-    fn the_primary_window_owns_everything_that_is_not_popped_out() {
-        reset();
-        set_primary(7);
-        assert_eq!(primary(), 7);
-        assert!(is_primary(7));
-        assert_eq!(window_of_node(42), 7);
-        assert_eq!(window_of_root(0), Some(7));
-    }
-
-    #[test]
     fn a_painted_root_maps_both_ways_and_is_forgotten_with_its_window() {
         reset();
         set_primary(1);

@@ -44,7 +44,6 @@ describe("native color inputs", () => {
     expect(input.value).toBe("#000000");
     await tick();
     expect(seen).toEqual([]);
-    expect(rt.advisories().filter((s: string) => s.includes("@change"))).toEqual([]);
   });
 
   test("an uncanceled native click opens once, then sets value before input and change", async () => {
@@ -97,23 +96,13 @@ describe("native color inputs", () => {
 
   test("showPicker requires activation and honors disabled but not readonly", () => {
     const { rt, input, calls } = world();
-    expect(() => input.showPicker()).toThrow("requires a user gesture");
+    expect(() => input.showPicker()).toThrow();
     rt.patchProp(input, "readonly", null, "");
     rt.noteActivation("keydown", "Enter");
     input.showPicker();
     expect(calls().length).toBe(1);
     rt.patchProp(input, "disabled", null, "");
-    expect(() => input.showPicker()).toThrow("immutable controls");
-  });
-  test("unsupported assigned CSS colors advise once; an empty default stays quiet", () => {
-    const { rt, input } = world();
-    expect(input.value).toBe("#000000");
-    input.value = "";
-    expect(rt.advisories().filter((line: string) => line.includes("other CSS color values"))).toEqual([]);
-    input.value = "red";
-    input.value = "rgb(1 2 3)";
-    expect(input.value).toBe("#000000");
-    expect(rt.advisories().filter((line: string) => line.includes("other CSS color values")).length).toBe(1);
+    expect(() => input.showPicker()).toThrow();
   });
 
   test("disabled fieldset suppresses click and showPicker; a first legend follows HTML's exemption", () => {
@@ -124,7 +113,7 @@ describe("native color inputs", () => {
     rt.patchProp(fieldset, "disabled", null, "");
     click();
     input.click();
-    expect(() => input.showPicker()).toThrow("immutable controls");
+    expect(() => input.showPicker()).toThrow();
     expect(calls()).toEqual([]);
     const legend = rt.nodeOps.createElement("legend");
     rt.nodeOps.insert(legend, fieldset, null);

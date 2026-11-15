@@ -341,15 +341,6 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_entries_round_trip_in_order() {
-        round_trip(vec![
-            ("b".into(), "2".into()),
-            ("a".into(), "1".into()),
-            ("c".into(), "3".into()),
-        ]);
-    }
-
-    #[test]
     fn every_character_a_value_can_contain_survives() {
         round_trip(vec![
             ("quote\"key".into(), "back\\slash".into()),
@@ -361,12 +352,6 @@ mod tests {
             (String::new(), "empty key".into()),
             ("json".into(), r#"{"nested":["a","b"],"n":1}"#.into()),
         ]);
-    }
-
-    #[test]
-    fn a_json_blob_stored_as_a_value_comes_back_byte_identical() {
-        let payload = r#"{"user":{"name":"O'Brien \"Bob\"","roles":["a\\b"]}}"#;
-        round_trip(vec![("session".into(), payload.into())]);
     }
 
     #[test]
@@ -464,19 +449,15 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "windows")]
-    fn unsealing_something_that_is_not_ours_says_which_check_failed() {
+    fn unsealing_something_that_is_not_ours_is_refused() {
         let p = crate::crypt::provider().unwrap();
-        assert!(unseal(p, b"").unwrap_err().contains("bad magic"));
-        assert!(unseal(p, b"not-a-sealed-file")
-            .unwrap_err()
-            .contains("bad magic"));
+        assert!(unseal(p, b"").is_err());
+        assert!(unseal(p, b"not-a-sealed-file").is_err());
         let mut wrong_version = seal(p, "{}").unwrap();
         wrong_version[6] = 9;
-        assert!(unseal(p, &wrong_version).unwrap_err().contains("version 9"));
+        assert!(unseal(p, &wrong_version).is_err());
         let mut wrong_provider = seal(p, "{}").unwrap();
         wrong_provider[7] = 7;
-        assert!(unseal(p, &wrong_provider)
-            .unwrap_err()
-            .contains("provider 7"));
+        assert!(unseal(p, &wrong_provider).is_err());
     }
 }

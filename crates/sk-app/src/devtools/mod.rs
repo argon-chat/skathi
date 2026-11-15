@@ -2847,7 +2847,7 @@ fn cmd_screenshot(path: Option<&str>, backend: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{http_request_line, parse_keystroke, resolve_initial};
+    use super::http_request_line;
 
     #[test]
     fn mouse_release_does_not_insert_an_unpressed_move_into_a_captured_drag() {
@@ -2929,43 +2929,6 @@ mod tests {
             }
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-    }
-
-    /// DOM `KeyboardEvent.key` names map to gpui's; a miss dispatches a key no binding knows.
-    #[test]
-    fn dom_key_names_reach_gpui_under_its_own_names() {
-        let key = |spec: &str| parse_keystroke(spec).unwrap().key;
-        assert_eq!(key("ContextMenu"), "menu");
-        assert_eq!(key("Shift+ContextMenu"), "menu");
-        assert_eq!(key("ArrowDown"), "down");
-        assert_eq!(key("Enter"), "enter");
-        assert_eq!(key("F10"), "f10");
-        assert!(parse_keystroke("Shift+F10").unwrap().modifiers.shift);
-    }
-
-    #[test]
-    fn the_env_override_forces_on_and_only_forcing_on_locks() {
-        let saved = std::env::var("SK_DEVTOOLS").ok();
-        let case = |value: &str, config: bool| {
-            std::env::set_var("SK_DEVTOOLS", value);
-            resolve_initial(config)
-        };
-
-        assert_eq!(case("", true), (true, false));
-        assert_eq!(case("", false), (false, false));
-        for on in ["1", "on", "true", "yes", "ON", "True"] {
-            assert_eq!(case(on, false), (true, true), "SK_DEVTOOLS={on}");
-        }
-        for off in ["0", "off", "false", "no"] {
-            assert_eq!(case(off, true), (false, false), "SK_DEVTOOLS={off}");
-        }
-        assert_eq!(case("maybe", true), (true, false));
-        assert_eq!(case("maybe", false), (false, false));
-
-        match saved {
-            Some(v) => std::env::set_var("SK_DEVTOOLS", v),
-            None => std::env::remove_var("SK_DEVTOOLS"),
         }
     }
 

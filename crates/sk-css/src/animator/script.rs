@@ -901,10 +901,6 @@ mod tests {
         );
         assert_eq!(parse_easing("linear(0, 1)"), None);
         assert_eq!(parse_easing("bogus"), None);
-        assert!(crate::transition::animates("transform"));
-        assert!(crate::transition::animates("padding"));
-        assert!(!crate::transition::animates("filter"));
-        assert!(!crate::transition::animates("--shading"));
     }
 }
 

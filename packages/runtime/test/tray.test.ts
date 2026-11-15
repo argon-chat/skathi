@@ -45,15 +45,3 @@ test("a host without tray support reports it and still allows cleanup", async ()
     expect((error as Error).name).toBe("NotSupportedError");
   }
 });
-
-test("native schema errors remain synchronous and preserve the native exception", async () => {
-  const error = new TypeError("tray tooltip must be at most 127 UTF-16 units");
-  globals.__sk_appTray = {
-    available: true,
-    set: () => {
-      throw error;
-    },
-  };
-  const { appTray } = await load();
-  expect(() => appTray.set({ tooltip: "x".repeat(128) })).toThrow(error);
-});

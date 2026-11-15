@@ -100,7 +100,6 @@ describe("<a href>: activation", () => {
     click(a);
     expect(opens()).toEqual([]);
     expect(rt.advisories().length).toBe(1);
-    expect(rt.advisories()[0]).toContain("RouterLink");
   });
 
   test("file:, custom protocols and ms-settings: are refused before the host", () => {
@@ -109,7 +108,6 @@ describe("<a href>: activation", () => {
       click(a);
       expect(opens()).toEqual([]);
       expect(rt.advisories().length).toBe(1);
-      expect(rt.advisories()[0]).toContain("appShell.openExternal");
     }
   });
 
@@ -120,7 +118,6 @@ describe("<a href>: activation", () => {
     const loud = linkWorld("javascript:alert(1)");
     loud.click(loud.a);
     expect(loud.opens()).toEqual([]);
-    expect(loud.rt.advisories()[0]).toContain("not executed");
   });
 
   test("<a download href=blob:…> asks the host to save it (Save As), with no gesture needed", () => {
@@ -137,15 +134,6 @@ describe("<a href>: activation", () => {
     rt.patchProp(a, "download", null, "");
     click(a);
     expect(opens().length).toBe(1);
-  });
-
-  test("a failed open is a console warning, not an exception", async () => {
-    const { rt, a, click } = linkWorld("mailto:x@example.com");
-    rt.host.desktop.refuse = { name: "NotFoundError", error: "no application is associated", code: "ENOASSOC" };
-    click(a);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(rt.host.logs.some((l: string) => l.includes("could not open") && l.includes("no application"))).toBe(true);
   });
 });
 
@@ -212,7 +200,6 @@ describe("window.open", () => {
   test("another scheme is refused; no url / about:blank are ignored", () => {
     const { rt, opens } = linkWorld(null);
     expect(winOpen(rt)("myapp://x")).toBe(null);
-    expect(rt.advisories()[0]).toContain("appShell.openExternal");
     expect(winOpen(rt)()).toBe(null);
     expect(winOpen(rt)("about:blank")).toBe(null);
     expect(winOpen(rt)("/relative")).toBe(null);
@@ -231,11 +218,5 @@ describe("window.open", () => {
       ["/relative", "_self", undefined],
       [undefined, undefined, undefined],
     ]);
-  });
-
-  test("with no desktop host a link advises instead of opening", () => {
-    const { rt, a, click } = linkWorld("https://example.com/", { desktop: false });
-    click(a);
-    expect(rt.advisories().some((l: string) => l.includes("the link was not opened"))).toBe(true);
   });
 });

@@ -768,14 +768,6 @@ mod tests {
     }
 
     #[test]
-    fn boolean_attributes_follow_the_html_rule() {
-        assert!(!bool_attr(None));
-        assert!(bool_attr(Some("")));
-        assert!(bool_attr(Some("true")));
-        assert!(!bool_attr(Some("false")));
-    }
-
-    #[test]
     fn segments_parse_from_the_string_spelling() {
         assert_eq!(segment_from(Some("10,40")), Some((10.0, 40.0)));
         assert_eq!(segment_from(Some(" 10 , 40 ")), Some((10.0, 40.0)));

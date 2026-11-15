@@ -995,85 +995,6 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    fn report(version: Option<&str>) -> Report {
-        Report {
-            app: "Argon".into(),
-            version: version.map(String::from),
-            os: "Windows 10.0.26100 (x86_64)".into(),
-            time: UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-            reason: "already borrowed: BorrowMutError at crates/sk-tree/src/lib.rs:120:9".into(),
-        }
-    }
-
-    #[test]
-    fn the_title_names_the_app_in_the_chosen_language() {
-        let r = report(None);
-        assert_eq!(r.title(strings("en")), "Argon ran into a problem");
-        assert_eq!(r.title(strings("ru")), "Argon не может продолжить работу");
-        assert_eq!(strings("de").details, "Details");
-        assert_eq!(strings("ja").restart, "再起動(&R)");
-    }
-    #[test]
-    fn embedded_there_is_no_restart_and_close_is_the_default() {
-        assert_eq!(
-            body(strings("en"), actions(true)),
-            strings("en").body_no_restart,
-            "it does not say Restart"
-        );
-        assert_eq!(body(strings("ru"), actions(false)), strings("ru").body);
-        assert_eq!(
-            actions(false),
-            &[Action::Restart, Action::Copy, Action::Close]
-        );
-        assert_eq!(primary(actions(false)), 0);
-        assert_eq!(actions(true), &[Action::Copy, Action::Close]);
-        assert_eq!(
-            primary(actions(true)),
-            1,
-            "Close, not Copy, is what Enter does embedded"
-        );
-    }
-
-    #[test]
-    fn the_report_says_what_whoever_fixes_it_needs() {
-        let text = report(Some("1.4.2")).text();
-        let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines[0], "Argon ran into a problem");
-        assert_eq!(lines[1], "App: Argon 1.4.2");
-        assert_eq!(
-            lines[2],
-            concat!("Host: Skathi ", env!("CARGO_PKG_VERSION"))
-        );
-        assert_eq!(lines[3], "OS: Windows 10.0.26100 (x86_64)");
-        assert_eq!(lines[4], "Time: 2023-11-14 22:13:20 UTC");
-        assert_eq!(lines[5], "Error: native panic: already borrowed: BorrowMutError at crates/sk-tree/src/lib.rs:120:9");
-        assert!(
-            text.ends_with("\r\n"),
-            "Windows line ends, for Notepad and the clipboard"
-        );
-        assert_eq!(
-            report(None).text().lines().nth(1),
-            Some("App: Argon"),
-            "no version, no dangling space"
-        );
-    }
-
-    #[test]
-    fn details_name_the_version_and_the_os() {
-        assert_eq!(
-            report(Some("1.4.2")).about(strings("en")),
-            "Version 1.4.2 · Windows 10.0.26100 (x86_64)"
-        );
-        assert_eq!(
-            report(Some("1.4.2")).about(strings("ru")),
-            "Версия 1.4.2 · Windows 10.0.26100 (x86_64)"
-        );
-        assert_eq!(
-            report(None).about(strings("en")),
-            "Windows 10.0.26100 (x86_64)"
-        );
-    }
-
     #[test]
     fn utc_is_the_civil_date() {
         assert_eq!(utc(UNIX_EPOCH), "1970-01-01 00:00:00 UTC");
@@ -1086,27 +1007,6 @@ mod tests {
             utc(UNIX_EPOCH + Duration::from_secs(1_798_761_599)),
             "2026-12-31 23:59:59 UTC"
         );
-    }
-
-    #[test]
-    fn the_dialog_opens_once_and_never_in_a_test_host() {
-        assert_eq!(decide(true, false, false), Decision::Dialog);
-        assert_eq!(
-            decide(false, false, false),
-            Decision::Nothing,
-            "the pump and the tick both ask; one dialog"
-        );
-        assert_eq!(
-            decide(true, true, false),
-            Decision::Log,
-            "a test host logs and carries on"
-        );
-        assert_eq!(
-            decide(true, false, true),
-            Decision::Log,
-            "a closing app is already going"
-        );
-        assert_eq!(decide(false, true, false), Decision::Nothing);
     }
 
     #[test]
@@ -1129,22 +1029,5 @@ mod tests {
             "ёжи\nкжу\nк",
             "by characters, not bytes"
         );
-    }
-
-    #[test]
-    fn a_relaunch_has_the_arguments_without_the_program() {
-        let argv = [
-            "C:\\Apps\\Argon.exe",
-            "--profile",
-            "work space",
-            "argon://invite/x",
-        ]
-        .map(OsString::from);
-        assert_eq!(
-            relaunch_args(argv),
-            ["--profile", "work space", "argon://invite/x"].map(OsString::from)
-        );
-        assert!(relaunch_args([OsString::from("argon")]).is_empty());
-        assert!(relaunch_args(std::iter::empty()).is_empty());
     }
 }

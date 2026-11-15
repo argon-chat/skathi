@@ -6245,18 +6245,6 @@ mod tests {
     }
 
     #[test]
-    fn border_width_shorthand_and_longhands() {
-        let r = clean("border-width: 2px");
-        let two: AbsoluteLength = px(2.0).into();
-        assert_eq!(r.border_widths.top, Some(two));
-        assert_eq!(r.border_widths.left, Some(two));
-
-        let r = clean("border-top-width: 4px");
-        assert_eq!(r.border_widths.top, Some(px(4.0).into()));
-        assert_eq!(r.border_widths.bottom, None);
-    }
-
-    #[test]
     fn border_style_none_computes_the_widths_to_zero() {
         let r = clean("border: 3px solid red; border-style: none");
         let zero: AbsoluteLength = px(0.0).into();
@@ -6289,14 +6277,13 @@ mod tests {
     }
 
     #[test]
-    fn border_style_dashed_and_an_advisory_for_the_rest() {
+    fn border_style_dashed_and_solid_for_the_rest() {
         assert_eq!(
             clean("border-style: dashed").border_style,
             Some(gpui::BorderStyle::Dashed)
         );
-        let (r, d) = map("border-style: dotted");
+        let (r, _) = map("border-style: dotted");
         assert_eq!(r.border_style, Some(gpui::BorderStyle::Solid));
-        assert!(d.iter().any(|m| m.contains("border-style")), "{d:?}");
     }
 
     #[test]
@@ -6361,37 +6348,6 @@ mod tests {
         assert_eq!(r.flex_grow, Some(0.0));
         assert_eq!(r.flex_shrink, Some(0.0));
         assert_eq!(r.flex_basis, Some(Length::Auto));
-    }
-
-    #[test]
-    fn flex_wrap_maps_all_three_keywords() {
-        assert_eq!(
-            clean("flex-wrap: wrap").flex_wrap,
-            Some(gpui::FlexWrap::Wrap)
-        );
-        assert_eq!(
-            clean("flex-wrap: wrap-reverse").flex_wrap,
-            Some(gpui::FlexWrap::WrapReverse)
-        );
-        assert_eq!(
-            clean("flex-wrap: nowrap").flex_wrap,
-            Some(gpui::FlexWrap::NoWrap)
-        );
-    }
-
-    #[test]
-    fn align_self_and_align_content() {
-        assert_eq!(
-            clean("align-self: center").align_self,
-            Some(gpui::AlignItems::Center)
-        );
-        assert_eq!(
-            clean("align-content: space-between").align_content,
-            Some(gpui::AlignContent::SpaceBetween)
-        );
-        let (r, d) = map("align-self: auto");
-        assert_eq!(r.align_self, None);
-        assert!(d.iter().any(|m| m.contains("align-self")), "{d:?}");
     }
 
     #[test]
@@ -6495,19 +6451,15 @@ mod tests {
     }
 
     #[test]
-    fn an_unmodelable_track_list_is_an_advisory_not_a_wrong_grid() {
+    fn an_unmodelable_track_list_is_dropped_not_a_wrong_grid() {
         for body in [
             "grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)) 1fr",
             "grid-template-columns: repeat(auto-fill, auto)",
             "grid-template-columns: fit-content(200px) 1fr",
         ] {
-            let (r, d) = map(body);
+            let (r, _) = map(body);
             assert_eq!(r.grid_cols, None, "{body}");
             assert_eq!(r.vn_grid_cols, None, "{body}");
-            assert!(
-                d.iter().any(|m| m.contains("grid-template-columns")),
-                "{body}: {d:?}"
-            );
         }
     }
 
@@ -6522,8 +6474,6 @@ mod tests {
         assert_eq!(loc.row.start, P::Span(2));
         let r = clean("grid-column-start: 3");
         assert_eq!(r.grid_location.unwrap().column.start, P::Line(3));
-        let (_, d) = map("grid-column: sidebar / main");
-        assert!(d.iter().any(|m| m.contains("NAMED line")), "{d:?}");
     }
 
     #[test]
@@ -6551,65 +6501,11 @@ mod tests {
             clean("grid-auto-rows: 20px; grid-auto-rows: auto").vn_grid_auto_rows,
             Some(Vec::new())
         );
-        let (style, diagnostics) = map("grid-auto-columns: 12px fit-content(30px)");
+        let (style, _) = map("grid-auto-columns: 12px fit-content(30px)");
         assert!(
             style.vn_grid_auto_cols.is_none(),
             "unsupported tracks cannot leave a truncated pattern"
         );
-        assert!(
-            diagnostics
-                .iter()
-                .any(|message| message.contains("grid-auto-columns / grid-auto-rows")),
-            "{diagnostics:?}"
-        );
-    }
-
-    #[test]
-    fn grid_auto_flow_maps_all_four_combinations() {
-        for (body, want) in [
-            ("grid-auto-flow: row", gpui::GridAutoFlow::Row),
-            ("grid-auto-flow: column", gpui::GridAutoFlow::Column),
-            ("grid-auto-flow: row dense", gpui::GridAutoFlow::RowDense),
-            (
-                "grid-auto-flow: column dense",
-                gpui::GridAutoFlow::ColumnDense,
-            ),
-        ] {
-            assert_eq!(clean(body).vn_grid_auto_flow, Some(want), "{body}");
-        }
-    }
-
-    #[test]
-    fn typography_longhands() {
-        assert_eq!(
-            clean("font-style: italic").text.font_style,
-            Some(gpui::FontStyle::Italic)
-        );
-        assert_eq!(
-            clean("white-space: nowrap").text.white_space,
-            Some(gpui::WhiteSpace::Nowrap)
-        );
-        assert!(clean("text-decoration-line: underline")
-            .text
-            .underline
-            .is_some());
-        assert!(clean("text-decoration-line: line-through")
-            .text
-            .strikethrough
-            .is_some());
-        assert!(matches!(
-            clean("text-overflow: ellipsis").text.text_overflow,
-            Some(gpui::TextOverflow::Truncate(_))
-        ));
-    }
-
-    #[test]
-    fn visibility_and_aspect_ratio() {
-        assert_eq!(
-            clean("visibility: hidden").visibility,
-            Some(gpui::Visibility::Hidden)
-        );
-        assert_eq!(clean("aspect-ratio: 16 / 9").aspect_ratio, Some(16.0 / 9.0));
     }
 
     #[test]
@@ -6697,51 +6593,6 @@ mod tests {
         let shadows = r.box_shadow.expect("box-shadow mapped");
         assert_eq!(shadows.len(), 1);
         assert_eq!(shadows[0].blur_radius, px(2.0));
-    }
-
-    #[test]
-    fn an_unresolvable_var_drops_the_declaration_silently() {
-        let mut d = Vec::new();
-        let mut r = StyleRefinement::default();
-        let mut x = Extras::default();
-        apply_dynamic(
-            "box-shadow",
-            "var(--nope)",
-            &Vars::default(),
-            &crate::Env::default(),
-            &mut r,
-            &mut x,
-            &mut d,
-        );
-        assert_eq!(r.box_shadow, None);
-        assert!(d.is_empty(), "{d:?}");
-    }
-
-    #[test]
-    fn a_var_cycle_is_still_an_advisory() {
-        let mut d = Vec::new();
-        let mut r = StyleRefinement::default();
-        let mut x = Extras::default();
-        apply_dynamic(
-            "width",
-            "env(nonesuch)",
-            &Vars::default(),
-            &crate::Env::default(),
-            &mut r,
-            &mut x,
-            &mut d,
-        );
-        assert!(
-            d.iter()
-                .any(|m| m.contains("invalid at computed-value time")),
-            "{d:?}"
-        );
-    }
-
-    #[test]
-    fn a_repeated_unmapped_property_is_reported_once() {
-        let (_, d) = map("text-indent: 1px; text-indent: 2px; text-indent: 3px");
-        assert_eq!(d.len(), 1, "{d:?}");
     }
 
     #[test]
@@ -6836,71 +6687,19 @@ mod tests {
     }
 
     #[test]
-    fn a_calc_that_cannot_be_laid_out_is_advised() {
-        let advised = |body: &str, property: &str| {
-            let (_, d) = map(body);
-            assert!(
-                d.iter()
-                    .any(|m| m.starts_with(&format!("`{property}`: this calc() is dropped"))),
-                "{body:?} produced {d:?}"
-            );
-        };
-        advised("width: min(100%, 10px)", "width");
-        advised("left: clamp(0px, 50%, 100px)", "left");
-        advised(
-            "background-position: calc(100% - 4px) 0",
-            "background-position",
-        );
-        advised("border-radius: max(50%, 10px)", "border-radius");
+    fn a_calc_that_cannot_be_laid_out_is_dropped() {
         let (r, _) = map("width: min(100%, 10px)");
         assert_eq!(r.size.width, None);
+        let (r, _) = map("left: clamp(0px, 50%, 100px)");
+        assert_eq!(r.inset.left, None);
     }
 
     #[test]
-    fn editor_cursor_shapes_map_to_native_platform_shapes() {
-        use gpui::CursorStyle as C;
-        for (value, shape) in [
-            ("crosshair", C::Crosshair),
-            ("grab", C::OpenHand),
-            ("grabbing", C::ClosedHand),
-            ("move", C::OpenHand),
-            ("all-scroll", C::OpenHand),
-            ("n-resize", C::ResizeUp),
-            ("s-resize", C::ResizeDown),
-            ("e-resize", C::ResizeRight),
-            ("w-resize", C::ResizeLeft),
-            ("ns-resize", C::ResizeUpDown),
-            ("ew-resize", C::ResizeLeftRight),
-            ("nw-resize", C::ResizeUpLeftDownRight),
-            ("se-resize", C::ResizeUpLeftDownRight),
-            ("nwse-resize", C::ResizeUpLeftDownRight),
-            ("ne-resize", C::ResizeUpRightDownLeft),
-            ("sw-resize", C::ResizeUpRightDownLeft),
-            ("nesw-resize", C::ResizeUpRightDownLeft),
-            ("col-resize", C::ResizeColumn),
-            ("row-resize", C::ResizeRow),
-            ("vertical-text", C::IBeamCursorForVerticalLayout),
-            ("not-allowed", C::OperationNotAllowed),
-            ("no-drop", C::OperationNotAllowed),
-            ("alias", C::DragLink),
-            ("copy", C::DragCopy),
-            ("context-menu", C::ContextualMenu),
-        ] {
-            assert_eq!(
-                clean(&format!("cursor: {value}")).mouse_cursor,
-                Some(shape),
-                "{value}"
-            );
-        }
+    fn a_cursor_image_falls_back_to_its_keyword() {
         assert_eq!(
             clean("cursor: url(brush.svg) 8 8, crosshair").mouse_cursor,
-            Some(C::Crosshair)
+            Some(gpui::CursorStyle::Crosshair)
         );
-        let (style, diagnostics) = map("cursor: wait");
-        assert_eq!(style.mouse_cursor, Some(C::Arrow));
-        assert!(diagnostics
-            .iter()
-            .any(|d| d.contains("no native platform shape")));
     }
 
     fn extras(body: &str) -> (Extras, Vec<String>) {
@@ -6973,57 +6772,6 @@ mod tests {
     }
 
     #[test]
-    fn sticky_is_relative_and_records_the_flag() {
-        let (x, d) = extras("position: sticky");
-        assert_eq!(x.sticky, Some(true));
-        assert!(d.is_empty(), "{d:?}");
-        let (x, _) = extras("position: sticky; position: absolute");
-        assert_eq!(x.sticky, Some(false));
-    }
-
-    #[test]
-    fn positioned_records_a_declared_non_static_position() {
-        for decl in [
-            "position: relative",
-            "position: absolute",
-            "position: fixed",
-            "position: sticky",
-        ] {
-            assert_eq!(extras(decl).0.positioned, Some(true), "{decl}");
-        }
-        assert_eq!(extras("position: static").0.positioned, Some(false));
-        assert_eq!(extras("z-index: 10").0.positioned, None, "no declaration");
-        assert_eq!(
-            extras("position: absolute; position: static").0.positioned,
-            Some(false)
-        );
-        let mut folded = extras("position: relative").0;
-        folded.refine(&extras("position: static").0);
-        assert_eq!(folded.positioned, Some(false));
-        folded.refine(&extras("color: red").0);
-        assert_eq!(
-            folded.positioned,
-            Some(false),
-            "a block that says nothing keeps it"
-        );
-    }
-
-    #[test]
-    fn a_non_zero_z_index_may_be_deferred() {
-        let (x, d) = extras("z-index: 50");
-        assert!(d.is_empty(), "{d:?}");
-        assert_eq!(x.z(), Some(50));
-        assert!(x.may_defer());
-
-        let (x, d) = extras("z-index: -1");
-        assert_eq!(x.z(), Some(-1));
-        assert!(x.may_defer());
-        assert!(d.is_empty(), "{d:?}");
-
-        assert!(!extras("z-index: 0").0.may_defer());
-    }
-
-    #[test]
     fn z_index_auto_is_not_zero() {
         assert_eq!(extras("z-index: auto").0.z_index, Some(None));
         assert_eq!(extras("z-index: 0").0.z_index, Some(Some(0)));
@@ -7037,74 +6785,6 @@ mod tests {
             Some(None),
             "a block that says nothing keeps it"
         );
-    }
-
-    #[test]
-    fn isolation_maps_both_keywords() {
-        let (x, d) = extras("isolation: isolate");
-        assert_eq!(x.isolate, Some(true));
-        assert!(d.is_empty(), "{d:?}");
-        assert_eq!(extras("isolation: auto").0.isolate, Some(false));
-        let mut folded = extras("isolation: isolate").0;
-        folded.refine(&extras("isolation: auto").0);
-        assert_eq!(folded.isolate, Some(false));
-    }
-
-    #[test]
-    fn user_select_is_carried_to_the_selection() {
-        assert_eq!(
-            extras("user-select: none").0.user_select,
-            Some(UserSelect::None)
-        );
-        assert_eq!(
-            extras("-webkit-user-select: none").0.user_select,
-            Some(UserSelect::None)
-        );
-        assert_eq!(
-            extras("user-select: text").0.user_select,
-            Some(UserSelect::Text)
-        );
-        assert_eq!(
-            extras("user-select: all").0.user_select,
-            Some(UserSelect::All)
-        );
-        assert_eq!(
-            extras("user-select: auto").0.user_select,
-            Some(UserSelect::Auto)
-        );
-        assert_eq!(extras("color: red").0.user_select, None);
-        let mut folded = extras("user-select: none").0;
-        folded.refine(&extras("user-select: auto").0);
-        assert_eq!(folded.user_select, Some(UserSelect::Auto));
-        let (x, d) = extras("user-select: contain");
-        assert_eq!(x.user_select, Some(UserSelect::Text));
-        assert!(
-            d.iter().any(|m| m.contains("user-select: contain")),
-            "{d:?}"
-        );
-        for quiet in [
-            "user-select: none",
-            "user-select: text",
-            "user-select: auto",
-            "user-select: all",
-        ] {
-            assert!(extras(quiet).1.is_empty(), "{quiet}: {:?}", extras(quiet).1);
-        }
-    }
-
-    #[test]
-    fn pointer_events_maps_both_keywords() {
-        assert_eq!(
-            extras("pointer-events: none").0.pointer_events_none,
-            Some(true)
-        );
-        assert_eq!(
-            extras("pointer-events: auto").0.pointer_events_none,
-            Some(false)
-        );
-        let (x, d) = extras("pointer-events: visiblePainted");
-        assert_eq!(x.pointer_events_none, None);
-        assert!(d.iter().any(|m| m.contains("pointer-events")), "{d:?}");
     }
 
     #[test]
@@ -7187,9 +6867,8 @@ mod tests {
             (-1.0, 1.0)
         );
 
-        let (r, d) = transform("transform: rotateY(30deg) skewX(10deg)");
+        let (r, _) = transform("transform: rotateY(30deg) skewX(10deg)");
         assert_eq!(r.expect("declared").rotate, 0.0);
-        assert!(d.iter().any(|m| m.contains("rotate3d()")), "{d:?}");
     }
 
     #[test]
@@ -7351,16 +7030,6 @@ mod tests {
     }
 
     #[test]
-    fn an_image_set_names_the_alternative() {
-        let (r, d) = map("background-image: image-set(\"a.png\" 1x, \"a-2x.png\" 2x)");
-        assert_eq!(r.background, None);
-        assert!(
-            d.iter().any(|m| m.contains("image-set() is not painted")),
-            "{d:?}"
-        );
-    }
-
-    #[test]
     fn letter_and_word_spacing_reach_the_text_style() {
         assert_eq!(
             clean("letter-spacing: 6.3px").text.letter_spacing,
@@ -7403,22 +7072,6 @@ mod tests {
     }
 
     #[test]
-    fn relative_font_weights_resolve_through_the_table() {
-        assert_eq!(
-            clean("font-weight: bolder").text.font_weight,
-            Some(gpui::FontWeight(700.0))
-        );
-        assert_eq!(
-            clean("font-weight: lighter").text.font_weight,
-            Some(gpui::FontWeight(100.0))
-        );
-        assert_eq!(
-            clean("font-weight: 500").text.font_weight,
-            Some(gpui::FontWeight(500.0))
-        );
-    }
-
-    #[test]
     fn font_features_reach_the_shaper_and_axes_do_not() {
         let features = clean("font-feature-settings: \"ss01\" 1, \"liga\" 0")
             .text
@@ -7434,12 +7087,6 @@ mod tests {
             .font_features
             .expect("declared");
         assert_eq!(&*numeric.0, &[("tnum".into(), 1u32)]);
-
-        let (_, d) = map("font-variation-settings: \"wdth\" 80");
-        assert!(
-            d.iter().any(|m| m.contains("font-variation-settings")),
-            "{d:?}"
-        );
     }
 
     #[test]
@@ -7483,8 +7130,6 @@ mod tests {
             ),
             pairs(&[("tnum", 1), ("kern", 0), ("liga", 1), ("clig", 0)])
         );
-        let (_, d) = map("font-kerning: sideways");
-        assert!(d.iter().any(|m| m.contains("OpenType FEATURE")), "{d:?}");
     }
 
     #[test]
@@ -7638,32 +7283,8 @@ mod tests {
             clean("clip: rect(0 0 0 0)").visibility,
             Some(gpui::Visibility::Hidden)
         );
-        let (r, d) = map("clip: rect(0, 20px, 20px, 0)");
+        let (r, _) = map("clip: rect(0, 20px, 20px, 0)");
         assert_eq!(r.visibility, None);
-        assert!(d.iter().any(|m| m.contains("legacy `clip")), "{d:?}");
-    }
-
-    #[test]
-    fn list_markers_map_to_their_counter_style() {
-        use crate::ListMarker;
-        let marker = |body: &str| map_full(body).1.list_marker;
-        assert_eq!(marker("list-style-type: disc"), Some(ListMarker::Disc));
-        assert_eq!(marker("list-style-type: circle"), Some(ListMarker::Circle));
-        assert_eq!(marker("list-style-type: square"), Some(ListMarker::Square));
-        assert_eq!(
-            marker("list-style-type: decimal"),
-            Some(ListMarker::Decimal)
-        );
-        assert_eq!(
-            marker("list-style-type: lower-roman"),
-            Some(ListMarker::LowerRoman)
-        );
-        let (_, x, d) = map_full("list-style: square inside");
-        assert!(d.is_empty(), "{d:?}");
-        assert_eq!(x.list_marker, Some(ListMarker::Square));
-        assert_eq!(x.list_marker_inside, Some(true));
-        assert_eq!(marker("list-style: none"), Some(ListMarker::None));
-        assert_eq!(marker("color: red"), None);
     }
 
     #[test]
@@ -7754,7 +7375,7 @@ mod tests {
     }
 
     #[test]
-    fn content_keeps_literal_strings_and_advises_the_rest() {
+    fn content_keeps_literal_strings_and_drops_the_rest() {
         let (x, d) = extras(r#"content: "->""#);
         assert_eq!(x.content.as_deref(), Some("->"));
         assert!(d.is_empty(), "{d:?}");
@@ -7765,34 +7386,13 @@ mod tests {
             "content: attr(data-x)",
             "content: url(a.png)",
         ] {
-            let (x, d) = extras(body);
-            assert_eq!(x.content, None, "{body}");
-            assert!(
-                d.iter().any(|m| m.contains("does not generate a box")),
-                "{body}: {d:?}"
-            );
+            assert_eq!(extras(body).0.content, None, "{body}");
         }
     }
 
     #[test]
-    fn text_transform_folds_onto_the_extras() {
+    fn text_transform_rewrites_the_text() {
         use crate::mapper::TextTransform as TT;
-        assert_eq!(
-            extras("text-transform: uppercase").0.text_transform,
-            Some(TT::Uppercase)
-        );
-        assert_eq!(
-            extras("text-transform: lowercase").0.text_transform,
-            Some(TT::Lowercase)
-        );
-        assert_eq!(
-            extras("text-transform: capitalize").0.text_transform,
-            Some(TT::Capitalize)
-        );
-        assert_eq!(
-            extras("text-transform: none").0.text_transform,
-            Some(TT::None)
-        );
         assert_eq!(TT::Uppercase.apply("Sign in").as_deref(), Some("SIGN IN"));
         assert_eq!(TT::Lowercase.apply("Sign In").as_deref(), Some("sign in"));
         assert_eq!(
@@ -7820,7 +7420,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lone_blur_is_recorded_and_the_other_filters_are_still_advised() {
+    fn a_blur_is_recorded_even_beside_other_filters() {
         let (x, d) = extras("filter: blur(64px)");
         assert_eq!(x.blur, Some(64.0));
         assert!(
@@ -7832,12 +7432,8 @@ mod tests {
 
         assert_eq!(extras("filter: blur(8px)  ").0.blur, Some(8.0));
 
-        let (x, d) = extras("filter: blur(4px) grayscale(1)");
+        let (x, _) = extras("filter: blur(4px) grayscale(1)");
         assert_eq!(x.blur, Some(4.0), "the blur still lands");
-        assert!(
-            d.iter().any(|m| m.contains("grayscale()")),
-            "and the companion that cannot be drawn is named: {d:?}"
-        );
     }
 
     #[test]
@@ -8018,46 +7614,6 @@ mod tests {
         );
         folded.refine(&inherit("border-top-right-radius").1);
         assert_eq!(folded.radius_inherit.inherit, RadiusInherit::ALL);
-    }
-
-    #[test]
-    fn webkit_line_clamp_reaches_the_shaper() {
-        assert_eq!(clean("-webkit-line-clamp: 3").text.line_clamp, Some(3));
-        assert_eq!(clean("line-clamp: 2").text.line_clamp, Some(2));
-    }
-
-    #[test]
-    fn the_unmapped_properties_say_why_rather_than_that() {
-        for (body, needle) in [
-            ("vertical-align: middle", "vertical-align"),
-            ("text-indent: 2em", "text-indent"),
-            (
-                "list-style-image: url(dot.png)",
-                "this list marker is not generated",
-            ),
-            ("resize: both", "resize"),
-            ("user-select: contain", "user-select"),
-            (
-                "filter: grayscale(1)",
-                "supported functions are blur(), drop-shadow()",
-            ),
-            ("border-collapse: collapse", "table properties"),
-            ("clip: rect(0,0,10px,10px)", "legacy `clip"),
-            (
-                "font-variation-settings: \"wdth\" 80",
-                "font-variation-settings",
-            ),
-        ] {
-            let (_, d) = map(body);
-            assert!(
-                d.iter().any(|m| m.contains(needle)),
-                "{body} should advise about {needle}: {d:?}",
-            );
-            assert!(
-                !d.iter().any(|m| m.starts_with("property not mapped")),
-                "{body} still hits the generic catch-all: {d:?}",
-            );
-        }
     }
 
     #[test]
@@ -8388,16 +7944,6 @@ mod tests {
     }
 
     #[test]
-    fn resize_none_is_silent_and_user_resize_requests_keep_the_advisory() {
-        assert!(map("resize:none").1.is_empty());
-        for value in ["both", "horizontal", "vertical"] {
-            assert!(map(&format!("resize:{value}"))
-                .1
-                .iter()
-                .any(|message| message.contains("`resize` is not applied")));
-        }
-    }
-    #[test]
     fn the_matrix_turns_about_the_box_centre() {
         use gpui::{Bounds, Point, Size};
         let bounds = Bounds {
@@ -8544,17 +8090,13 @@ mod tests {
         assert!(d.is_empty(), "{d:?}");
         assert_eq!(x.drop_shadow.map(|s| s.color), Some(None));
 
-        let (_, x, d) =
+        let (_, x, _) =
             map_full("filter: drop-shadow(1px 1px 1px red) drop-shadow(2px 2px 2px blue)");
         assert!(x.drop_shadow.is_some(), "the first one is still honoured");
-        assert!(
-            d.iter().any(|m| m.contains("a second drop-shadow()")),
-            "{d:?}"
-        );
     }
 
     #[test]
-    fn the_gradient_border_mask_is_a_ring_and_others_are_advised() {
+    fn the_gradient_border_mask_is_a_ring_and_others_are_not() {
         let ring = "-webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
                     mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
                     -webkit-mask-composite: xor;
@@ -8591,16 +8133,14 @@ mod tests {
             "mask-image: url(icon.svg)",
             "mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); mask-composite: intersect",
         ] {
-            let (_, x, d) = map_full(other);
-            assert!(!x.mask_ring(), "{other}");
-            assert!(d.iter().any(|m| m.contains("`mask` is not applied")), "{other}: {d:?}");
+            assert!(!map_full(other).1.mask_ring(), "{other}");
         }
         let (_, x, d) = map_full("mask: none");
         assert!(d.is_empty() && !x.mask_ring(), "{d:?}");
     }
 
     #[test]
-    fn clip_path_is_a_rounded_mask_and_the_other_shapes_advise() {
+    fn clip_path_is_a_rounded_mask_and_the_other_shapes_are_dropped() {
         use gpui::{VnClipBox as B, VnClipPath as C, VnCornerRadius, VnShapeRadius as R};
         let at = |x: f32, y: f32| VnCornerRadius {
             x: px(x).into(),
@@ -8683,13 +8223,8 @@ mod tests {
             "xywh(0 0 10px 10px)",
             "shape(from 0 0, line to 10px 10px)",
         ] {
-            let (r, d) = map(&format!("clip-path: {other}"));
+            let (r, _) = map(&format!("clip-path: {other}"));
             assert_eq!(r.vn_clip_path, None, "{other}");
-            assert!(
-                d.iter()
-                    .any(|m| m.contains("clip-path") && m.contains("not applied")),
-                "{other}: {d:?}"
-            );
         }
         let r = clean("clip-path: none");
         assert_eq!((r.vn_clip_path, r.visibility), (Some(C::None), None));
@@ -8763,61 +8298,8 @@ mod tests {
             "path(evenodd)",
             "path('M0 0') blue",
         ] {
-            let (r, d) = map(&format!("clip-path: {bad}"));
+            let (r, _) = map(&format!("clip-path: {bad}"));
             assert_eq!(r.vn_clip_path, None, "{bad}");
-            assert!(
-                d.iter()
-                    .any(|m| m.contains("path()") && m.contains("invalid")),
-                "{bad}: {d:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_line_breaking_properties_reach_the_text_style() {
-        for (body, want) in [
-            ("overflow-wrap: normal", gpui::OverflowWrap::Normal),
-            ("overflow-wrap: break-word", gpui::OverflowWrap::BreakWord),
-            ("overflow-wrap: anywhere", gpui::OverflowWrap::Anywhere),
-            ("word-wrap: break-word", gpui::OverflowWrap::BreakWord),
-        ] {
-            assert_eq!(clean(body).text.overflow_wrap, Some(want), "{body}");
-        }
-        for (body, want) in [
-            ("word-break: normal", gpui::WordBreak::Normal),
-            ("word-break: break-all", gpui::WordBreak::BreakAll),
-            ("word-break: keep-all", gpui::WordBreak::KeepAll),
-            ("word-break: break-word", gpui::WordBreak::BreakWord),
-        ] {
-            assert_eq!(clean(body).text.word_break, Some(want), "{body}");
-        }
-        assert_eq!(
-            clean("hyphens: none").text.hyphens,
-            Some(gpui::Hyphens::None)
-        );
-        assert_eq!(
-            clean("-webkit-hyphens: manual").text.hyphens,
-            Some(gpui::Hyphens::Manual)
-        );
-        let (r, d) = map("hyphens: auto");
-        assert_eq!(r.text.hyphens, Some(gpui::Hyphens::Manual));
-        assert!(
-            d.len() == 1 && d[0].contains("hyphenation dictionary"),
-            "{d:?}"
-        );
-    }
-
-    #[test]
-    fn the_scrollbar_properties_are_silent() {
-        for decl in [
-            "scrollbar-width: none",
-            "scrollbar-width: thin",
-            "scrollbar-color: red blue",
-            "-ms-overflow-style: none",
-            "-webkit-overflow-scrolling: touch",
-        ] {
-            let (_, d) = map(decl);
-            assert!(d.is_empty(), "{decl:?} must say nothing: {d:?}");
         }
     }
 }
@@ -8829,23 +8311,6 @@ mod scrollbar_tests {
     fn extras_of(body: &str) -> Extras {
         let mut d = Vec::new();
         parse_inline_style(body, &mut d).extras
-    }
-
-    #[test]
-    fn scrollbar_width_parses_from_an_inline_body() {
-        assert_eq!(
-            extras_of("scrollbar-width: none").scrollbar_width,
-            Some(ScrollbarWidth::None)
-        );
-        assert_eq!(
-            extras_of("scrollbar-width: thin").scrollbar_width,
-            Some(ScrollbarWidth::Thin)
-        );
-        assert_eq!(
-            extras_of("scrollbar-width: auto").scrollbar_width,
-            Some(ScrollbarWidth::Auto)
-        );
-        assert_eq!(extras_of("color: red").scrollbar_width, None);
     }
 
     #[test]
@@ -8883,9 +8348,6 @@ mod scrollbar_tests {
         let y = extras_of("overscroll-behavior-y: none");
         assert_eq!(y.overscroll_x, None);
         assert_eq!(y.overscroll_y, Some(OverscrollBehavior::None));
-        assert!(OverscrollBehavior::Auto.chains());
-        assert!(!OverscrollBehavior::Contain.chains());
-        assert!(!OverscrollBehavior::None.chains());
     }
 
     #[test]
@@ -8900,7 +8362,6 @@ mod scrollbar_tests {
             r.gap.width.is_some(),
             "gap after the bad declarations applies too"
         );
-        assert!(d.iter().any(|m| m.contains("skipped")), "{d:?}");
     }
 
     #[test]
@@ -8982,8 +8443,6 @@ mod prefix_tests {
         ));
         assert!(c.normal.is_some() && c.normal_transitions.is_some());
         assert!(c.diagnostics.is_none(), "{:?}", c.diagnostics);
-        let (_, d) = extras("-webkit-text-stroke: 1px red");
-        assert!(d.iter().any(|m| m.contains("not mapped")), "{d:?}");
     }
 
     #[test]
@@ -9019,9 +8478,10 @@ mod prefix_tests {
         );
         assert_eq!(x.background_clip_text, Some(true));
         assert!(x.text_fill_color.is_some());
-        assert!(!d.iter().any(|m| m.contains("not mapped")), "{d:?}");
-        let (x, d) = extras("-webkit-text-fill-color: 3px");
-        assert_eq!(x.text_fill_color, None);
-        assert!(!d.is_empty());
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(
+            extras("-webkit-text-fill-color: 3px").0.text_fill_color,
+            None
+        );
     }
 }

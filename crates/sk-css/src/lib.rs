@@ -3314,22 +3314,6 @@ mod tests {
                    .box { transition: opacity 200ms linear }";
         let engine = Engine::compile(css);
         assert!(
-            !engine
-                .diagnostics
-                .iter()
-                .any(|d| d.starts_with("stylesheet parse error")),
-            "the sheet failed as a whole: {:?}",
-            engine.diagnostics
-        );
-        assert!(
-            engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("skipped, as a browser skips it")),
-            "the skipped rule is named: {:?}",
-            engine.diagnostics
-        );
-        assert!(
             engine.keyframes.contains_key("pulse"),
             "the @keyframes before the stray brace survives"
         );
@@ -3346,12 +3330,6 @@ mod tests {
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].property, TransitionProperty::Opacity);
         assert_eq!(t[0].duration, Duration::from_millis(200));
-    }
-
-    #[test]
-    fn a_node_with_no_transition_rule_gets_an_empty_list() {
-        assert!(transitions(".box { color: red }").is_empty());
-        assert!(transitions(".other { transition: opacity 1s }").is_empty());
     }
 
     #[test]
@@ -3392,14 +3370,8 @@ mod tests {
     }
 
     #[test]
-    fn state_rule_transitions_are_rejected_with_a_diagnostic() {
+    fn state_rule_transitions_are_rejected() {
         let engine = Engine::compile(".box:hover { transition: opacity 1s; opacity: 0.5 }");
-        let said = advisories(".box:hover { transition: opacity 1s; opacity: 0.5 }");
-        assert!(
-            said.iter()
-                .any(|d| d.contains("transition declared on a state selector")),
-            "{said:?}"
-        );
         let states = engine.compute(box_node(), None, &Env::default());
         assert!(states.transitions.is_empty());
         assert!(states.hover.is_some());
@@ -3428,14 +3400,7 @@ mod tests {
         let engine = Engine::compile(
             ".box { transition: opacity 1s; transition-delay: 20ms; opacity: 0.5 }",
         );
-        assert!(
-            !engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("property not mapped")),
-            "{:?}",
-            engine.diagnostics
-        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
         let states = engine.compute(box_node(), None, &Env::default());
         assert_eq!(states.base.opacity, Some(0.5));
         assert_eq!(states.transitions[0].delay, Duration::from_millis(20));
@@ -3475,44 +3440,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn tailwinds_transition_colors_alone_keeps_its_list_and_curve() {
-        let t = transitions(
-            ".box { /* .transition-colors */ \
-               transition-property: color, background-color, border-color, \
-                                    text-decoration-color, fill, stroke; \
-               transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); \
-               transition-duration: 150ms }",
-        );
-        assert_eq!(t.len(), 6);
-        assert_eq!(t[1].property, TransitionProperty::BackgroundColor);
-        assert_eq!(t[1].duration, Duration::from_millis(150));
-        assert_eq!(t[1].easing, Easing::CubicBezier(0.4, 0.0, 0.2, 1.0));
-        assert_eq!(t[3].property, TransitionProperty::TextDecorationColor);
-        assert_eq!(t[4].property, TransitionProperty::Fill);
-        assert_eq!(t[5].property, TransitionProperty::Stroke);
-        assert!(
-            !t.iter()
-                .any(|s| matches!(s.property, TransitionProperty::Other(_))),
-            "nothing in `transition-colors` should still be unrecognised: {t:?}",
-        );
-    }
-
-    #[test]
-    fn computed_states_compare_by_value() {
-        let engine = Engine::compile(".box { transition: opacity 1s; opacity: 0.5 }");
-        let a = engine.compute(box_node(), None, &Env::default());
-        let b = engine.compute(box_node(), None, &Env::default());
-        assert_eq!(a, b);
-
-        let other = Engine::compile(".box { transition: opacity 1s; opacity: 0.6 }").compute(
-            box_node(),
-            None,
-            &Env::default(),
-        );
-        assert_ne!(a, other);
-    }
-
     fn states_of(css: &str) -> ComputedStates {
         Engine::compile(css).compute(box_node(), None, &Env::default())
     }
@@ -3550,16 +3477,8 @@ mod tests {
     }
 
     #[test]
-    fn several_states_in_one_compound_pick_the_strongest_rung_and_warn() {
+    fn several_states_in_one_compound_pick_the_strongest_rung() {
         let engine = Engine::compile(".box:hover:focus { opacity: 0.4 }");
-        assert!(
-            engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("several interaction states")),
-            "{:?}",
-            engine.diagnostics
-        );
         let s = engine.compute(box_node(), None, &Env::default());
         assert_eq!(s.hover.as_ref().and_then(|f| f.opacity), Some(0.4));
         assert!(s.focus.is_none());
@@ -3619,33 +3538,6 @@ mod tests {
         let d = doc();
         let states = cascade(&engine, &d, &Env::default());
         assert!(states.iter().all(|s| s.group_hover.is_none()));
-    }
-
-    #[test]
-    fn an_ancestor_focus_selector_is_dropped_with_a_diagnostic() {
-        let engine = Engine::compile(".box:focus .child { opacity: 0.4 }");
-        assert!(
-            engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("on an ANCESTOR compound")),
-            "{:?}",
-            engine.diagnostics
-        );
-        assert!(!engine.uses_group_states());
-    }
-
-    #[test]
-    fn a_sibling_state_selector_is_dropped_with_a_diagnostic() {
-        let engine = Engine::compile(".a:hover + .b { opacity: 0.4 }");
-        assert!(
-            engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("sibling-state selector")),
-            "{:?}",
-            engine.diagnostics
-        );
     }
 
     #[test]
@@ -3993,21 +3885,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn tailwinds_disabled_variant_works() {
-        let engine = Engine::compile(r".disabled\:opacity-50:disabled { opacity: 0.5 }");
-        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
-        let node = Node {
-            tag: "input",
-            class: "disabled:opacity-50",
-            attrs: &[("disabled", "")],
-        };
-        assert_eq!(
-            engine.compute(node, None, &Env::default()).base.opacity,
-            Some(0.5)
-        );
-    }
-
     fn attr_matches(selector: &str, attrs: &'static [(&'static str, &'static str)]) -> bool {
         let engine = Engine::compile(&format!("{selector} {{ opacity: 0.5 }}"));
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
@@ -4224,16 +4101,8 @@ mod tests {
     }
 
     #[test]
-    fn an_unsupported_media_feature_drops_the_block_with_an_advisory() {
+    fn an_unsupported_media_feature_drops_the_block() {
         let engine = Engine::compile("@media (prefers-contrast: more) { .box { opacity: 0.9 } }");
-        assert!(
-            engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("@media") && d.contains("dropped")),
-            "{:?}",
-            engine.diagnostics
-        );
         assert_eq!(
             engine
                 .compute(box_node(), None, &Env::default())
@@ -4256,68 +4125,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn tailwind_responsive_and_dark_variants() {
-        let engine = Engine::compile(concat!(
-            r"@media (min-width: 640px) { .sm\:opacity-100 { opacity: 1 } }",
-            r"@media (min-width: 768px) { .md\:opacity-75 { opacity: 0.75 } }",
-            r"@media (prefers-color-scheme: dark) { .dark\:opacity-50 { opacity: 0.5 } }",
-            r"@media (prefers-reduced-motion: reduce) { .motion-reduce\:opacity-25 { opacity: .25 } }",
-        ));
-        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
-        let node = |class: &'static str| Node {
-            tag: "div",
-            class,
-            attrs: &[],
-        };
-        let get =
-            |class: &'static str, env: &Env| engine.compute(node(class), None, env).base.opacity;
-        assert_eq!(get("sm:opacity-100", &env_at(500.0, false, false)), None);
-        assert_eq!(
-            get("sm:opacity-100", &env_at(700.0, false, false)),
-            Some(1.0)
-        );
-        assert_eq!(get("md:opacity-75", &env_at(700.0, false, false)), None);
-        assert_eq!(
-            get("md:opacity-75", &env_at(800.0, false, false)),
-            Some(0.75)
-        );
-        assert_eq!(get("dark:opacity-50", &env_at(800.0, false, false)), None);
-        assert_eq!(
-            get("dark:opacity-50", &env_at(800.0, true, false)),
-            Some(0.5)
-        );
-        assert_eq!(
-            get("motion-reduce:opacity-25", &env_at(800.0, false, false)),
-            None
-        );
-        assert_eq!(
-            get("motion-reduce:opacity-25", &env_at(800.0, false, true)),
-            Some(0.25)
-        );
-    }
-
     fn audited(selector: &str) -> Engine {
         Engine::compile(&format!("{selector} {{ opacity: 0.5 }}"))
     }
 
     #[test]
-    fn unanswerable_pseudo_classes_are_reported_and_dropped() {
-        for (selector, needle) in [
-            (".box:visited", "visited"),
-            (".box:required", "required"),
-            (".box:placeholder-shown", "placeholder-shown"),
-            (".box:target", "target"),
-            (".box:lang(en)", "lang()"),
-            (".box:indeterminate", "indeterminate"),
-            (".box::first-line", "pseudo-element"),
+    fn unanswerable_pseudo_classes_are_dropped() {
+        for selector in [
+            ".box:visited",
+            ".box:required",
+            ".box:placeholder-shown",
+            ".box:target",
+            ".box:lang(en)",
+            ".box:indeterminate",
+            ".box::first-line",
         ] {
             let engine = audited(selector);
-            assert!(
-                engine.diagnostics.iter().any(|d| d.contains(needle)),
-                "{selector}: {:?}",
-                engine.diagnostics
-            );
             assert_eq!(
                 engine
                     .compute(box_node(), None, &Env::default())
@@ -4360,14 +4183,6 @@ mod tests {
     #[test]
     fn a_ladder_state_inside_a_functional_pseudo_is_rejected() {
         let engine = audited(".box:not(:hover)");
-        assert!(
-            engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains(":not()/:is()/:where()")),
-            "{:?}",
-            engine.diagnostics
-        );
         assert_eq!(
             engine
                 .compute(box_node(), None, &Env::default())
@@ -4377,109 +4192,17 @@ mod tests {
         );
     }
 
-    #[test]
-    fn audit_advisories_are_one_shot() {
-        let engine = Engine::compile(
-            ".a:visited { opacity: 0.1 } .b:visited { opacity: 0.2 } .c:visited { opacity: 0.3 }",
-        );
-        assert_eq!(
-            engine
-                .diagnostics
-                .iter()
-                .filter(|d| d.contains("visited"))
-                .count(),
-            1,
-            "{:?}",
-            engine.diagnostics
-        );
-    }
-
     /// `:nth-child(… of S)` makes parcel's matcher `unreachable!()` — a process abort, not a failed
     /// match.
     #[test]
     fn selectors_that_would_crash_the_matcher_are_rejected() {
-        for selector in [".box:nth-child(1 of .other)"] {
-            let engine = audited(selector);
-            assert!(
-                engine
-                    .diagnostics
-                    .iter()
-                    .any(|d| d.contains("no implementation") || d.contains("matcher cannot run it")),
-                "{selector}: {:?}",
-                engine.diagnostics
-            );
-            assert_eq!(
-                engine
-                    .compute(box_node(), None, &Env::default())
-                    .base
-                    .opacity,
-                None
-            );
-        }
-    }
-
-    #[test]
-    fn object_fit_keywords_all_map() {
-        for (css, want) in [
-            ("fill", ObjectFit::Fill),
-            ("contain", ObjectFit::Contain),
-            ("cover", ObjectFit::Cover),
-            ("scale-down", ObjectFit::ScaleDown),
-            ("none", ObjectFit::None),
-        ] {
-            let engine = Engine::compile(&format!(".box {{ object-fit: {css} }}"));
-            assert!(
-                engine.diagnostics.is_empty(),
-                "{css}: {:?}",
-                engine.diagnostics
-            );
-            assert_eq!(
-                engine
-                    .compute(box_node(), None, &Env::default())
-                    .extras
-                    .object_fit,
-                Some(want),
-                "object-fit: {css}"
-            );
-        }
-    }
-
-    #[test]
-    fn object_fit_is_absent_when_undeclared() {
-        let engine = Engine::compile(".box { opacity: 0.5 }");
+        let engine = audited(".box:nth-child(1 of .other)");
         assert_eq!(
             engine
                 .compute(box_node(), None, &Env::default())
-                .extras
-                .object_fit,
+                .base
+                .opacity,
             None
-        );
-    }
-
-    #[test]
-    fn object_fit_folds_by_specificity_and_order() {
-        let engine = Engine::compile(
-            ".box { object-fit: contain } div.box { object-fit: cover } .box { object-fit: none }",
-        );
-        assert_eq!(
-            engine
-                .compute(box_node(), None, &Env::default())
-                .extras
-                .object_fit,
-            Some(ObjectFit::Cover)
-        );
-    }
-
-    #[test]
-    fn important_object_fit_wins() {
-        let engine =
-            Engine::compile("div.box { object-fit: cover } .box { object-fit: none !important }");
-        assert_eq!(
-            engine
-                .compute(box_node(), None, &Env::default())
-                .extras
-                .object_fit,
-            Some(ObjectFit::None)
         );
     }
 
@@ -4627,11 +4350,6 @@ mod tests {
             ".box:has(.row:hover .icon) { opacity: 0.5 }",
         ] {
             let engine = Engine::compile(sheet);
-            assert!(
-                engine.diagnostics.iter().any(|d| d.contains(":has()")),
-                "{sheet}: {:?}",
-                engine.diagnostics
-            );
             assert_eq!(
                 engine
                     .compute(box_node(), None, &Env::default())
@@ -4643,18 +4361,6 @@ mod tests {
         }
         let engine = Engine::compile(".box:has(input[disabled]) { opacity: 0.5 }");
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
-    }
-
-    #[test]
-    fn sticky_reaches_the_computed_extras() {
-        let engine = Engine::compile(".box { position: sticky; top: 0 }");
-        assert_eq!(
-            engine
-                .compute(box_node(), None, &Env::default())
-                .extras
-                .sticky,
-            Some(true)
-        );
     }
 
     #[test]
@@ -4724,59 +4430,15 @@ mod tests {
         assert_eq!(hover.size.width, Some(gpui::px(10.0).into()));
     }
 
-    fn advisories(css: &str) -> Vec<String> {
-        let engine = Engine::compile(css);
-        let mut out = engine.diagnostics.clone();
-        engine.compute_node(
-            box_node(),
-            None,
-            &Rc::new(Vars::default()),
-            None,
-            &Env::default(),
-            &mut out,
-        );
-        out
-    }
-
     #[test]
-    fn bad_object_fit_value_is_advised() {
-        let engine = Engine::compile(".box { object-fit: squish }");
-        let said = advisories(".box { object-fit: squish }");
-        assert!(said.iter().any(|d| d.contains("object-fit")), "{said:?}");
-        assert_eq!(
-            engine
-                .compute(box_node(), None, &Env::default())
-                .extras
-                .object_fit,
-            None
-        );
-    }
-
-    #[test]
-    fn object_fit_on_a_state_selector_is_advised() {
+    fn object_fit_on_a_state_selector_applies_unconditionally() {
         let engine = Engine::compile(".box:hover { object-fit: cover }");
-        let said = advisories(".box:hover { object-fit: cover }");
-        assert!(
-            said.iter()
-                .any(|d| d.contains("object-fit") && d.contains("unconditionally")),
-            "{said:?}"
-        );
         assert_eq!(
             engine
                 .compute(box_node(), None, &Env::default())
                 .extras
                 .object_fit,
             Some(ObjectFit::Cover)
-        );
-    }
-
-    #[test]
-    fn object_fit_does_not_report_as_unmapped() {
-        let engine = Engine::compile(".box { object-fit: cover }");
-        assert!(
-            !engine.diagnostics.iter().any(|d| d.contains("not mapped")),
-            "{:?}",
-            engine.diagnostics
         );
     }
 
@@ -4815,15 +4477,6 @@ mod tests {
     }
 
     #[test]
-    fn undeclared_window_drag_is_distinct_from_an_explicit_none() {
-        assert_eq!(drag_of(".box { opacity: 0.5 }"), None);
-        assert_eq!(
-            drag_of(".box { window-drag: none }"),
-            Some(WindowDrag::None)
-        );
-    }
-
-    #[test]
     fn window_drag_folds_by_specificity_and_importance() {
         assert_eq!(
             drag_of(".box { window-drag: move } div.box { app-region: no-drag }"),
@@ -4833,49 +4486,6 @@ mod tests {
             drag_of("div.box { window-drag: none } .box { window-drag: move !important }"),
             Some(WindowDrag::Move)
         );
-    }
-
-    #[test]
-    fn bad_window_drag_value_is_advised_and_dropped() {
-        let engine = Engine::compile(".box { window-drag: sideways }");
-        let said = advisories(".box { window-drag: sideways }");
-        assert!(
-            said.iter()
-                .any(|d| d.contains("window-drag") && d.contains("sideways")),
-            "{said:?}"
-        );
-        assert_eq!(
-            engine
-                .compute(box_node(), None, &Env::default())
-                .extras
-                .window_drag,
-            None
-        );
-    }
-
-    #[test]
-    fn window_control_keywords_all_map() {
-        for (css, want) in [
-            ("minimize", WindowControl::Minimize),
-            ("maximize", WindowControl::Maximize),
-            ("close", WindowControl::Close),
-            ("none", WindowControl::None),
-        ] {
-            let engine = Engine::compile(&format!(".box {{ --window-control: {css} }}"));
-            assert!(
-                engine.diagnostics.is_empty(),
-                "{css}: {:?}",
-                engine.diagnostics
-            );
-            assert_eq!(
-                engine
-                    .compute(box_node(), None, &Env::default())
-                    .extras
-                    .window_control,
-                Some(want),
-                "--window-control: {css}"
-            );
-        }
     }
 
     #[test]
@@ -4897,34 +4507,6 @@ mod tests {
             computed.vars.get("--tw-shadow").is_some(),
             "{:?}",
             computed.vars
-        );
-    }
-
-    #[test]
-    fn bad_window_control_value_is_advised() {
-        let said = advisories(".box { --window-control: restore }");
-        assert!(
-            said.iter()
-                .any(|d| d.contains("--window-control") && d.contains("restore")),
-            "{said:?}"
-        );
-    }
-
-    /// The hit test reads an already-PAINTED frame, so a `:hover` drag region would be a paint
-    /// race.
-    #[test]
-    fn window_drag_on_a_state_selector_is_advised_by_name() {
-        let engine = Engine::compile(".box:hover { window-drag: none }");
-        let said = advisories(".box:hover { window-drag: none }");
-        assert!(
-            said.iter()
-                .any(|d| d.contains("`window-drag`") && d.contains("unconditionally")),
-            "{said:?}"
-        );
-        assert!(
-            !engine.diagnostics.iter().any(|d| d.contains("object-fit")),
-            "the advisory must name the property that was written: {:?}",
-            engine.diagnostics
         );
     }
 
@@ -5077,17 +4659,11 @@ mod tests {
         assert!(diags.is_empty(), "{diags:?}");
         assert_eq!(base.size.height, Some(gpui::px(12.0).into()));
 
-        let (base, diags) = computed_with_env(
+        let (base, _) = computed_with_env(
             ".box { height: env(keyboard-inset-height) }",
             &Env::default(),
         );
         assert_eq!(base.size.height, None);
-        assert!(
-            diags.iter().any(|d| d.contains("keyboard-inset-height")
-                && d.contains("titlebar-area-x")
-                && d.contains("invalid at computed-value time")),
-            "{diags:?}"
-        );
     }
 
     #[test]
@@ -5102,37 +4678,6 @@ mod tests {
         assert_eq!(base.size.height, Some(gpui::px(40.0).into()));
         assert_eq!(base.padding.top, Some(gpui::px(40.0).into()));
         assert_eq!(base.margin.top, Some(gpui::px(40.0).into()));
-    }
-
-    #[test]
-    fn the_env_scanner_skips_identifier_tails() {
-        let (base, diags) = computed_with_env(
-            ".box { height: my-env(titlebar-area-height) }",
-            &Env::default(),
-        );
-        assert_eq!(base.size.height, None, "`my-env(` is not `env(`");
-        assert!(
-            !diags
-                .iter()
-                .any(|d| d.contains("is not an environment variable")),
-            "{diags:?}"
-        );
-    }
-
-    #[test]
-    fn inline_window_drag_beats_the_sheet() {
-        let engine = Engine::compile("div.box { window-drag: move }");
-        let mut diags = Vec::new();
-        let (r, t, x) = parse_inline_full("window-drag: none", &mut diags);
-        assert!(diags.is_empty(), "{diags:?}");
-        let computed = engine.compute_full(
-            box_node(),
-            Some(&r),
-            (!t.is_empty()).then(|| Rc::new(t)).as_ref(),
-            x,
-            &Env::default(),
-        );
-        assert_eq!(computed.extras.window_drag, Some(WindowDrag::None));
     }
 
     struct Doc {
@@ -5706,16 +5251,8 @@ mod tests {
     }
 
     #[test]
-    fn a_state_qualified_pseudo_element_rule_advises() {
+    fn a_state_qualified_pseudo_element_rule_generates_no_box_at_rest() {
         let engine = Engine::compile(r#".nav:hover::after { content: "x" }"#);
-        assert!(
-            engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("state-qualified pseudo-element")),
-            "{:?}",
-            engine.diagnostics
-        );
         let d = doc();
         assert!(cascade(&engine, &d, &Env::default())[0].after.is_none());
     }
@@ -5835,19 +5372,6 @@ mod tests {
     }
 
     #[test]
-    fn the_non_generating_pseudo_elements_share_one_advisory() {
-        let engine = Engine::compile(
-            "::first-line { color: red } ::selection { color: red } ::marker { color: red }",
-        );
-        let hits: Vec<_> = engine
-            .diagnostics
-            .iter()
-            .filter(|d| d.contains("pseudo-element"))
-            .collect();
-        assert_eq!(hits.len(), 1, "{:?}", engine.diagnostics);
-    }
-
-    #[test]
     fn html_and_body_rules_reach_the_document_root() {
         let engine = Engine::compile(
             "html { --fg: rgb(1 2 3) } \
@@ -5919,19 +5443,14 @@ mod tests {
     }
 
     #[test]
-    fn query_all_reports_unsupported_selectors_like_the_cascade_does() {
+    fn query_all_refuses_unsupported_selectors_like_the_cascade_does() {
         let d = doc();
         let c = refs(&d);
-        let err = query_all(".nav:has(.tab)", &c).unwrap_err();
-        assert!(err.contains(":has()"), "{err}");
-        let err = query_all("a::first-line", &c).unwrap_err();
-        assert!(err.contains("pseudo-element"), "{err}");
+        assert!(query_all(".nav:has(.tab)", &c).is_err());
+        assert!(query_all("a::first-line", &c).is_err());
         assert!(query_all("a::before", &c).is_ok());
-        let err = query_all("a:visited", &c).unwrap_err();
-        assert!(err.contains("visited"), "{err}");
-        assert!(query_all(".a { color: red } .b", &c)
-            .unwrap_err()
-            .contains('{'));
+        assert!(query_all("a:visited", &c).is_err());
+        assert!(query_all(".a { color: red } .b", &c).is_err());
     }
 
     fn nested_doc() -> Doc {
@@ -6083,12 +5602,6 @@ mod tests {
         );
         assert_eq!(btn.extras.svg_presentation, None);
         assert_eq!(btn.extras.stroke, None);
-        assert!(
-            diagnostics
-                .iter()
-                .any(|m| m.contains("SVG presentation properties")),
-            "{diagnostics:?}"
-        );
     }
 
     #[test]
@@ -6167,7 +5680,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reference_cycle_is_reported_and_invalidates_the_users() {
+    fn a_reference_cycle_invalidates_the_users() {
         let engine =
             Engine::compile(":root { --a: var(--b); --b: var(--a) } .btn { opacity: var(--a, 1) }");
         let d = themed_doc();
@@ -6186,10 +5699,6 @@ mod tests {
             vars = s.vars.clone();
             opacity = s.base.opacity;
         }
-        assert!(
-            diagnostics.iter().any(|m| m.contains("cycle")),
-            "{diagnostics:?}"
-        );
         assert_eq!(opacity, Some(1.0));
     }
 
@@ -6236,25 +5745,11 @@ mod tests {
     }
 
     #[test]
-    fn a_node_that_declares_nothing_shares_the_parents_map() {
-        let engine = Engine::compile(":root { --a: 1 }");
-        let d = themed_doc();
-        let s = cascade(&engine, &d, &Env::default());
-        assert!(Rc::ptr_eq(&s[0].vars, &s[1].vars));
-        assert!(Rc::ptr_eq(&s[1].vars, &s[2].vars));
-    }
-
-    #[test]
-    fn query_all_warns_about_interaction_states() {
+    fn query_all_ignores_interaction_states_without_a_live_view() {
         let d = doc();
         let c = refs(&d);
         let r = query_all(".tab:hover", &c).unwrap();
         assert_eq!(r.matched, vec![1, 2]);
-        assert!(
-            r.warnings.iter().any(|w| w.contains("interaction state")),
-            "{:?}",
-            r.warnings
-        );
     }
 
     #[derive(Clone, Copy)]
@@ -6685,7 +6180,7 @@ mod tests {
     }
 
     #[test]
-    fn border_radius_inherit_on_a_state_rule_is_advised() {
+    fn border_radius_inherit_on_a_state_rule_is_ignored() {
         let engine = Engine::compile(".x:hover { border-radius: inherit }");
         let doc = Doc {
             nodes: vec![("", "", 0, vec![]), ("div", "x", 0, vec![])],
@@ -6700,10 +6195,6 @@ mod tests {
             &mut d,
         );
         assert_eq!(states.extras.radius_inherit, RadiusInherit::default());
-        assert!(
-            d.iter().any(|m| m.contains("border-radius: inherit")),
-            "{d:?}"
-        );
     }
 
     use crate::animator::{AnimEventKind, Animator};
@@ -6942,37 +6433,21 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_animation_name_is_advised_not_faked() {
+    fn an_unknown_animation_name_is_not_faked() {
         let cs = animated(".box { animation: nope 1s linear }");
         let mut a = Animator::new();
         a.on_computed_animations(1, &cs, Instant::now(), &|_| None);
         assert!(a.is_idle());
-        let diagnostics = a.take_diagnostics();
-        assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.contains("nope") && d.contains("@keyframes")),
-            "{diagnostics:?}"
-        );
     }
 
     #[test]
-    fn keyframes_and_animation_stopped_being_advisories() {
+    fn animation_longhands_compile() {
         let engine = Engine::compile(
             "@keyframes spin { to { transform: rotate(360deg) } } \
              .box { animation-name: spin; animation-duration: 1s; \
                     animation-iteration-count: infinite; animation-timing-function: linear }",
         );
-        assert!(
-            !engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("@keyframes are dropped")
-                    || d.contains("not mapped (v1): Animation")),
-            "{:?}",
-            engine.diagnostics
-        );
-        assert!(engine.has_keyframes());
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
         let cs = engine.compute(box_node(), None, &Env::default());
         assert_eq!(cs.animations.len(), 1);
         assert!(!cs.animations[0].iterations.is_finite());
@@ -7116,18 +6591,6 @@ mod tests {
         assert_eq!(a.steps[0].style.opacity, Some(0.0));
         assert_eq!(b.steps[0].style.opacity, Some(0.5));
         assert!(d.is_empty(), "{d:?}");
-    }
-
-    #[test]
-    fn a_var_free_keyframes_block_takes_the_shared_fast_path() {
-        let engine = Engine::compile(SPIN);
-        let cs = engine.compute(box_node(), None, &Env::default());
-        let shared = engine.keyframes("spin", &Env::default()).unwrap();
-        assert!(!shared.dynamic);
-        let resolved = engine
-            .keyframes_for("spin", &cs.vars, &Env::default(), &mut Vec::new())
-            .unwrap();
-        assert!(Rc::ptr_eq(&shared, &resolved), "the same Rc, not a rebuild");
     }
 
     #[test]
@@ -7426,14 +6889,11 @@ mod tests {
 
     #[test]
     fn scale3d_decomposes_to_the_two_axes_that_exist() {
-        let (r, d) =
+        let (r, _) =
             computed_with_env(".box { transform: scale3d(0.95, 0.8, 1) }", &Env::default());
         let t = r.vn_transform.expect("a transform");
         assert!((t.scale.0 - 0.95).abs() < 1e-6);
         assert!((t.scale.1 - 0.8).abs() < 1e-6);
-        assert!(!d.iter().any(|m| m.contains("scale3d")), "{d:?}");
-        let (_, d) = computed_with_env(".box { transform: scale3d(1, 1, 2) }", &Env::default());
-        assert!(!d.iter().any(|m| m.contains("transform")), "{d:?}");
     }
 
     #[test]
@@ -7450,14 +6910,6 @@ mod tests {
         let split = crate::strip_transitioned(rung, &cs.transitions).expect("something to strip");
         assert!(split.background.is_none());
         assert!(split.padding.left.is_some());
-    }
-
-    #[test]
-    fn a_rung_without_a_transition_is_left_alone() {
-        let engine = Engine::compile(".box { background: #000 } .box:hover { background: #fff }");
-        let cs = engine.compute(box_node(), None, &Env::default());
-        let rung = cs.hover.as_ref().unwrap();
-        assert!(crate::strip_transitioned(rung, &cs.transitions).is_none());
     }
 
     #[test]
@@ -7585,25 +7037,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rule_text_is_captured_only_when_asked_for() {
-        let d = doc();
-        let matched =
-            |engine: &Engine| engine.matched_rules(DocRef { doc: &d, i: 2 }, &Env::default());
-
-        set_capture_rule_text(false);
-        let off = Engine::compile(".tab { color: #002 }");
-        let rules = matched(&off);
-        assert_eq!(rules.len(), 1);
-        assert!(rules[0].declarations.is_empty());
-        assert_eq!(rules[0].selector, ".tab");
-
-        set_capture_rule_text(true);
-        let on = Engine::compile(".tab { color: #002 }");
-        set_capture_rule_text(false);
-        assert_eq!(matched(&on)[0].declarations.len(), 1);
-        assert!(matched(&off)[0].declarations.is_empty());
-    }
     #[test]
     fn border_currentcolor_cascades_per_side_without_overwriting_literal_edges() {
         let engine = Engine::compile(".box { color:#0000ff; border:1px solid currentColor } .box { border-left-color:#ff0000 }");

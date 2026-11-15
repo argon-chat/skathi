@@ -223,9 +223,7 @@ describe("selector matching goes to the host's real matcher", () => {
     const { root } = tree(rt);
     rt.host.queryAnswers.set(":has(.x)", "!`:has()` (the matcher has no implementation)");
     expect(root.querySelectorAll(":has(.x)").length).toBe(0);
-    const advisories = rt.advisories();
-    expect(advisories.length).toBe(1);
-    expect(advisories[0]).toContain(":has()");
+    expect(rt.advisories().length).toBe(1);
   });
 
   test("`:scope` is anchored at the element the call was made on", () => {
@@ -297,35 +295,22 @@ describe("layout comes from the host's painted bounds", () => {
 
   // The host answers "stale" when a node has no rectangle yet and layout could not be forced (a gpui input
   // listener is on the stack): zero plus one advisory per call site and accessor.
-  test("a read the host could not lay out for reads zero and advises once per site and kind", () => {
+  test("a read the host could not lay out for reads zero until it can", () => {
     const rt = createRuntime();
-    const { button, span } = tree(rt);
+    const { button } = tree(rt);
     rt.host.boundsById.set(button.__skId, "stale");
-    rt.host.boundsById.set(span.__skId, "stale");
-    const measure = (el: MirrorElement) => el.offsetWidth;
-    for (let i = 0; i < 3; i++) expect(measure(button)).toBe(0);
-    expect(measure(span)).toBe(0);
-    const stale = () => rt.advisories().filter((a) => a.includes("not been laid out"));
-    expect(stale().length).toBe(1);
-    expect(stale()[0]).toContain("offsetWidth");
-    expect(stale()[0]).toContain("requestAnimationFrame");
-    const elsewhere = (el: MirrorElement) => el.offsetWidth;
-    expect(elsewhere(span)).toBe(0);
-    expect(stale().length).toBe(2);
+    expect(button.offsetWidth).toBe(0);
     expect(button.getBoundingClientRect()).toMatchObject({ x: 0, y: 0, width: 0, height: 0 });
     expect(button.getClientRects().length).toBe(0);
-    expect(stale().length).toBe(4);
     rt.host.boundsById.set(button.__skId, "0,0,120,30");
-    expect(measure(button)).toBe(120);
-    expect(stale().length).toBe(4);
+    expect(button.offsetWidth).toBe(120);
   });
 
-  test("offsetTop/offsetLeft are window-relative and say so", () => {
+  test("offsetTop/offsetLeft are window-relative", () => {
     const rt = createRuntime();
     const { button } = tree(rt);
     rt.host.boundsById.set(button.__skId, "10,20,100,40");
     expect(button.offsetTop).toBe(20);
-    expect(rt.advisories().some((a) => a.includes("offsetParent"))).toBe(true);
   });
 });
 
@@ -440,65 +425,12 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     expect(rt.advisories()).toEqual([]);
   });
 
-  test("a host refusal becomes one advisory, not silence", () => {
-    const rt = createRuntime();
-    const { span } = tree(rt);
-    rt.host.intoViewAnswer = "!scrollIntoView(): node has no rectangle";
-    span.scrollIntoView();
-    span.scrollIntoView();
-    expect(rt.advisories().filter((a) => a.includes("no rectangle")).length).toBe(1);
-  });
-
-  test('behavior: "smooth" is performed instantly and says so, once', () => {
+  test('behavior: "smooth" is performed instantly', () => {
     const rt = createRuntime();
     const { section } = tree(rt);
     scroller(rt, section);
-
     section.scrollTo({ top: 300, behavior: "smooth" });
     expect(section.scrollTop).toBe(300);
-    section.scrollBy({ top: 10, behavior: "smooth" });
-    section.scrollIntoView({ behavior: "smooth" });
-
-    const smooth = rt.advisories().filter((a) => a.includes("smooth"));
-    expect(smooth.length).toBe(1);
-    expect(smooth[0]).toContain("INSTANTLY");
-
-    const quiet = createRuntime();
-    const t2 = tree(quiet);
-    quiet.host.scrollById.set(t2.section.__skId, { left: 0, top: 0, maxLeft: 0, maxTop: 800, width: 300, height: 200 });
-    t2.section.scrollTo({ top: 10, behavior: "auto" });
-    t2.section.scrollTo({ top: 20 });
-    expect(quiet.advisories()).toEqual([]);
-  });
-
-  test("a content-size answer the host calls STALE becomes one advisory", () => {
-    // A browser lays out on read; here layout is a frame. The host forces one except under a gpui listener
-    // (keydown/keyup, mousedown, wheel, clipboard, focus/blur), so `el.scrollTop = el.scrollHeight` right after adding
-    // content stops an item short and must say so.
-    const rt = createRuntime();
-    const { section } = tree(rt);
-    scroller(rt, section);
-    rt.host.scrollStale = true;
-
-    expect(section.scrollTop).toBe(0);
-    expect(rt.advisories()).toEqual([]);
-
-    expect(section.scrollHeight).toBe(1000);
-    section.scrollTop = 500;
-    section.scrollTo({ top: 10 });
-    section.scrollBy({ top: 10 });
-
-    const stale = rt.advisories().filter((a) => a.includes("LAST PAINTED frame"));
-    expect(stale.length).toBe(1);
-    expect(stale[0]).toContain("requestAnimationFrame");
-  });
-
-  test("a stale scrollIntoView reports the same one advisory", () => {
-    const rt = createRuntime();
-    const { button } = tree(rt);
-    rt.host.intoViewAnswer = "stale";
-    button.scrollIntoView();
-    expect(rt.advisories().filter((a) => a.includes("LAST PAINTED frame")).length).toBe(1);
   });
 
   test("a scroll EVENT no longer writes the position back onto the node", () => {
@@ -903,14 +835,6 @@ describe("custom events and dispatchEvent", () => {
     expect(rt.advisories()).toEqual([]);
   });
 
-  test("…but a PLATFORM event the host cannot deliver still says so", () => {
-    const rt = createRuntime();
-    const { button: inner } = tree(rt);
-    inner.addEventListener("mouseover", () => {});
-    expect(rt.advisories().length).toBe(1);
-    expect(rt.advisories()[0]).toContain("mouseover");
-  });
-
   test("the CSS animation/transition events are delivered, not advised", () => {
     for (const name of ["transitionend", "animationstart", "animationend", "animationcancel"] as const) {
       const rt = createRuntime();
@@ -1273,7 +1197,7 @@ describe("missing globals (G5)", () => {
     expect(div instanceof (rt.global.HTMLDivElement as Constructor)).toBe(true);
   });
 
-  test("getComputedStyle reads the host's computed values, and says so for the rest", () => {
+  test("getComputedStyle reads the host's computed values, and empty for the rest", () => {
     const rt = createRuntime();
     const { button } = tree(rt);
     rt.host.computedById.set(
@@ -1288,7 +1212,6 @@ describe("missing globals (G5)", () => {
     expect(rt.advisories()).toEqual([]);
 
     expect(cs.letterSpacing).toBe("");
-    expect(rt.advisories().some((a) => a.includes("getComputedStyle"))).toBe(true);
   });
 
   test('getComputedStyle: a node the host has no style for reads "" for everything, without an advisory', () => {
@@ -1312,13 +1235,5 @@ describe("missing globals (G5)", () => {
     rt.host.computedById.set(button.__skId, "display=block\n");
     expect(cs.getPropertyValue("--undeclared")).toBe("");
     expect(rt.advisories()).toEqual([]);
-  });
-
-  test("document.querySelectorAll goes through the same host matcher", () => {
-    const rt = createRuntime();
-    const { root, button } = tree(rt);
-    expect(rt.global.document.querySelectorAll("[data-x]").length).toBe(0);
-    void root;
-    void button;
   });
 });

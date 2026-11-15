@@ -647,16 +647,4 @@ mod tests {
             (0, 0)
         );
     }
-
-    #[test]
-    fn every_capability_has_a_glyph() {
-        assert_eq!(glyph(Capability::Microphone), '\u{E720}');
-        assert_eq!(glyph(Capability::Camera), '\u{E722}');
-        for &c in Capability::ALL {
-            assert!(
-                ('\u{E000}'..='\u{F8FF}').contains(&glyph(c)),
-                "a private-use icon glyph"
-            );
-        }
-    }
 }

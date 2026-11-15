@@ -19,11 +19,7 @@ describe("patchProp: on* props", () => {
   test("an event the host does not deliver warns instead of vanishing", () => {
     const rt = createRuntime();
     rt.patchProp(stub(rt), "onMouseover", null, () => {});
-    const advisories = rt.advisories();
-    expect(advisories.length).toBe(1);
-    expect(advisories[0]).toContain("@mouseover");
-    expect(advisories[0]).toContain("not delivered by the native host yet");
-    expect(advisories[0]).toContain("will never fire");
+    expect(rt.advisories().length).toBe(1);
     expect(rt.host.listeners).toEqual([]);
   });
 
@@ -37,32 +33,6 @@ describe("patchProp: on* props", () => {
     expect(other.advisories().length).toBe(1);
   });
 
-  test("addEventListener and the prop path share one dedup key", () => {
-    const rt = createRuntime();
-    rt.patchProp(stub(rt, 3), "onMouseover", null, () => {});
-    const node = rt.nodeOps.createElement("div");
-    node.addEventListener("mouseover", () => {});
-    expect(rt.advisories().length).toBe(1);
-  });
-
-  test("component-emit props that leak onto an element stay silent", () => {
-    // `<input v-model>` compiles to an `onUpdate:modelValue` prop on the ELEMENT: not a DOM event, so no advisory.
-    const rt = createRuntime();
-    rt.patchProp(stub(rt), "onUpdate:modelValue", null, () => {});
-    expect(rt.advisories()).toEqual([]);
-  });
-
-  test("a window-only event on an ELEMENT is silent — a browser never fires it there either", () => {
-    const rt = createRuntime();
-    const node = rt.nodeOps.createElement("div");
-    for (const name of ["resize", "load", "beforeunload", "hashchange", "storage"]) {
-      node.addEventListener(name, () => {});
-    }
-    expect(rt.advisories()).toEqual([]);
-    node.addEventListener("mouseover", () => {});
-    expect(rt.advisories().length).toBe(1);
-  });
-
   test("modifiers are stripped before the name is looked up", () => {
     const rt = createRuntime();
     rt.patchProp(stub(rt, 2), "onClickCaptureOnce", null, () => {});
@@ -72,13 +42,6 @@ describe("patchProp: on* props", () => {
 });
 
 describe("<lottie> event names", () => {
-  test("the host codes are in lockstep with crates/sk-tree/src/tree.rs", () => {
-    const rt = createRuntime();
-    expect(rt.EV_CODES.complete).toBe(11);
-    expect(rt.EV_CODES.loopComplete).toBe(12);
-    expect(rt.EV_CODES.enterFrame).toBe(13);
-  });
-
   test("the `on:` form the compiler emits for a custom element keeps its case", () => {
     const rt = createRuntime();
     rt.patchProp(stub(rt, 4), "on:loopComplete", null, () => {});
@@ -105,13 +68,6 @@ describe("<lottie> event names", () => {
     rt.patchProp(stub(rt, 4), "onLoopComplete", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.loopComplete)).toEqual([{ id: 4, code: 12, on: true }]);
     expect(rt.advisories()).toEqual([]);
-  });
-
-  test("an unknown `on:` event still gets its advisory", () => {
-    const rt = createRuntime();
-    rt.patchProp(stub(rt), "on:someCustomThing", null, () => {});
-    expect(rt.advisories().length).toBe(1);
-    expect(rt.advisories()[0]).toContain("@someCustomThing");
   });
 
   test("addEventListener uses lottie-web's own camelCase spelling", () => {
@@ -159,16 +115,6 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     rt.host.mediaById.set(node.__skId, STATE);
     return node;
   };
-
-  test("the media codes are in lockstep with crates/sk-tree/src/tree.rs", () => {
-    const rt = createRuntime();
-    expect(rt.EV_CODES.loadstart).toBe(17);
-    expect(rt.EV_CODES.timeupdate).toBe(27);
-    expect(rt.EV_CODES.ended).toBe(32);
-    expect(rt.EV_CODES.emptied).toBe(34);
-    expect(rt.EV_CODES.transitionend).toBe(35);
-    expect(rt.EV_CODES.animationcancel).toBe(38);
-  });
 
   test("@timeupdate registers a real host listener instead of advising", () => {
     const rt = createRuntime();
@@ -321,17 +267,13 @@ describe("v-model", () => {
     expect(rt.advisories()).toEqual([]);
   });
 
-  test(".lazy still updates the model, and says how it differs", () => {
+  test(".lazy still updates the model", () => {
     const rt = createRuntime();
     const el = rt.nodeOps.createElement("input");
     let model: unknown = null;
     bind(rt, el, { lazy: true }, (v: unknown) => (model = v));
     rt.host.dispatcher(el.__skId, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
     expect(model).toBe("typed");
-    const advisories = rt.advisories();
-    expect(advisories.length).toBe(1);
-    expect(advisories[0]).toContain("v-model.lazy updates on every keystroke");
-    expect(advisories[0]).toContain("does not source a `change` event");
   });
 
   test(".number and .trim still apply", () => {

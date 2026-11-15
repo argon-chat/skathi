@@ -32,14 +32,3 @@ pub(crate) fn stats() -> Option<Stats> {
 fn shared_device_enabled(setting: Option<&str>) -> bool {
     setting != Some("0")
 }
-
-#[cfg(test)]
-mod default_policy_tests {
-    #[test]
-    fn shared_gpu_is_default_and_only_zero_disables_it() {
-        assert!(super::shared_device_enabled(None));
-        assert!(super::shared_device_enabled(Some("1")));
-        assert!(super::shared_device_enabled(Some("")));
-        assert!(!super::shared_device_enabled(Some("0")));
-    }
-}

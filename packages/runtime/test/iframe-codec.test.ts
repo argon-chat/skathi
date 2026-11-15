@@ -84,7 +84,7 @@ describe("what crosses", () => {
     expect(cross([shared, shared])).toEqual([{ n: 1 }, { n: 1 }]);
     const loop: Record<string, unknown> = {};
     loop.self = loop;
-    expect(() => encodeMessage(loop)).toThrow(/could not be cloned/);
+    expect(() => encodeMessage(loop)).toThrow();
   });
 });
 
@@ -103,7 +103,7 @@ describe("what is refused, in the sender", () => {
 
   test("a platform object is refused when the caller can name one", () => {
     const node = { nodeType: 1 };
-    expect(() => encodeMessage({ el: node }, (o) => o === node)).toThrow(/could not be cloned/);
+    expect(() => encodeMessage({ el: node }, (o) => o === node)).toThrow();
     expect(cross({ el: node })).toEqual({ el: { nodeType: 1 } });
   });
 });

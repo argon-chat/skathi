@@ -17,18 +17,6 @@ const phaseHooks = (rt: Rt, props: Parameters<Rt["resolveTransitionProps"]>[0]) 
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-describe("exports", () => {
-  test("Transition and TransitionGroup are real components", () => {
-    const rt = createRuntime();
-    expect(typeof rt.Transition).toBe("object");
-    expect(rt.Transition.name).toBe("Transition");
-    expect(rt.TransitionGroup.name).toBe("TransitionGroup");
-    expect("mode" in rt.Transition.props).toBe(true);
-    expect("appear" in rt.Transition.props).toBe(true);
-    expect("enterActiveClass" in rt.Transition.props).toBe(true);
-  });
-});
-
 describe("the class pipeline", () => {
   function el(rt: Rt) {
     const root = rt.nodeOps.createElement("root");

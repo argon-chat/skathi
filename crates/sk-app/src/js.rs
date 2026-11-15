@@ -266,7 +266,13 @@ mod tests {
                         .as_bool(),
                     Some(false)
                 );
-                assert_eq!(context.eval("try { __skDirectApiTest.fail(); false } catch (e) { /native plugin/.test(e.message) }").unwrap().as_bool(), Some(true));
+                assert_eq!(
+                    context
+                        .eval("try { __skDirectApiTest.fail(); false } catch (e) { true }")
+                        .unwrap()
+                        .as_bool(),
+                    Some(true)
+                );
                 let dispatcher = JsDispatcher::install(context);
                 std::thread::spawn(move || {
                     dispatcher

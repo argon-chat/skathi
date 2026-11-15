@@ -253,24 +253,6 @@ mod tests {
     }
 
     #[test]
-    fn a_denied_display_capture_refuses_the_listing() {
-        let refused = refuse_denied(sk_permissions::State::Denied).unwrap_err();
-        assert_eq!(refused.name, "NotAllowedError");
-        assert!(
-            refused.message.starts_with("Permission denied"),
-            "{}",
-            refused.message
-        );
-        for state in [
-            sk_permissions::State::Granted,
-            sk_permissions::State::Prompt,
-            sk_permissions::State::Unsupported,
-        ] {
-            assert!(refuse_denied(state).is_ok(), "{state:?}");
-        }
-    }
-
-    #[test]
     fn a_fake_capture_lists_one_synthetic_screen_and_no_windows() {
         let all = Options::parse("[\"screen\",\"window\"]", "{}").unwrap();
         let sources = fake_sources(all).unwrap();

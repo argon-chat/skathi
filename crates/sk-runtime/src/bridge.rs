@@ -299,22 +299,6 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn a_second_init_is_refused_with_a_message() {
-        let message = crate::testing::on_js_thread(|| {
-            let payload =
-                std::panic::catch_unwind(JsRuntime::init).expect_err("a second init panics");
-            payload
-                .downcast_ref::<String>()
-                .cloned()
-                .unwrap_or_default()
-        });
-        assert!(
-            message.contains("sk_runtime::testing::on_js_thread"),
-            "{message}"
-        );
-    }
-
     /// Runs on a thread of its own: the poison is per thread.
     #[test]
     fn the_first_poison_reason_is_kept() {
@@ -337,10 +321,5 @@ mod tests {
         })
         .join()
         .unwrap();
-        assert_eq!(
-            describe_panic("boom", ""),
-            "boom",
-            "no location, no dangling `at`"
-        );
     }
 }

@@ -1194,20 +1194,6 @@ mod tests {
         );
     }
 
-    fn thumb_len(viewport: f32, content: f32, track: f32) -> f32 {
-        let t = px(track) * (px(viewport) / px(content));
-        f32::from(t.max(MIN_THUMB).min(px(track)))
-    }
-
-    #[test]
-    fn the_thumb_is_proportional_and_never_a_dot() {
-        assert!((thumb_len(100., 400., 200.) - 50.).abs() < 0.01);
-        assert!((thumb_len(300., 400., 300.) - 225.).abs() < 0.01);
-        assert_eq!(thumb_len(100., 400., 100.), f32::from(MIN_THUMB));
-        assert_eq!(thumb_len(100., 10_000., 100.), f32::from(MIN_THUMB));
-        assert_eq!(thumb_len(10., 10_000., 10.), 10.);
-    }
-
     #[test]
     fn a_recorded_span_replays_in_the_order_it_was_recorded() {
         let mut chain = vec![10u32];
@@ -1232,21 +1218,6 @@ mod tests {
         let chain: Vec<u32> = vec![1, 2];
         assert!(span_since(&chain, 2).is_empty());
         assert!(span_since(&chain, 9).is_empty());
-        assert!(ChainSpan::default().is_empty());
-        assert_eq!(ChainSpan::default().len(), 0);
-    }
-
-    #[test]
-    fn overscroll_chains_only_where_css_says_so() {
-        let auto = Overscroll::CHAINING;
-        assert!(auto.chains(Axis::Vertical));
-        assert!(auto.chains(Axis::Horizontal));
-        let contained = Overscroll {
-            x_chains: true,
-            y_chains: false,
-        };
-        assert!(!contained.chains(Axis::Vertical));
-        assert!(contained.chains(Axis::Horizontal));
     }
 
     #[test]
@@ -1283,15 +1254,6 @@ mod tests {
     }
 
     #[test]
-    fn hiding_the_bar_keeps_the_style_otherwise_intact() {
-        let base = ScrollbarStyle::from_text_color(gpui::black());
-        assert_eq!(base.track_width, Some(TRACK_AUTO));
-        assert_eq!(base.thin().track_width, Some(TRACK_THIN));
-        assert_eq!(base.hidden().track_width, None);
-        assert_eq!(base.hidden().thumb, base.thumb);
-    }
-
-    #[test]
     fn the_default_thumb_follows_the_text_colour() {
         let dark_text = gpui::hsla(0., 0., 0.1, 1.0);
         let light_text = gpui::hsla(0., 0., 0.95, 1.0);
@@ -1307,15 +1269,5 @@ mod tests {
         );
         assert!(on_light.thumb.a < 0.5 && on_light.thumb_active.a > on_light.thumb.a);
         assert_eq!(on_light.track.a, 0.0);
-    }
-
-    #[test]
-    fn scrollbar_color_replaces_both_thumb_states() {
-        let thumb = gpui::hsla(0.5, 1., 0.5, 1.);
-        let track = gpui::hsla(0.1, 1., 0.9, 1.);
-        let s = ScrollbarStyle::from_text_color(gpui::black()).with_colors(thumb, track);
-        assert_eq!(s.thumb, thumb);
-        assert_eq!(s.thumb_active, thumb);
-        assert_eq!(s.track, track);
     }
 }

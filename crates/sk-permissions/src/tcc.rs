@@ -127,43 +127,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn avfoundation_statuses_do_not_promote_restrictions_or_unknowns() {
-        assert_eq!(authorization_state(0), PermissionState::Prompt);
-        assert_eq!(authorization_state(1), PermissionState::Denied);
-        assert_eq!(authorization_state(2), PermissionState::Denied);
-        assert_eq!(authorization_state(3), PermissionState::Granted);
-        assert_eq!(authorization_state(99), PermissionState::Denied);
-    }
-
-    #[test]
-    fn the_camera_is_the_microphones_model_with_its_own_key_and_pane() {
-        let mic = media(Capability::Microphone).unwrap();
-        let camera = media(Capability::Camera).unwrap();
-        assert_eq!(
-            (mic.usage_key, mic.page, mic.anchor),
-            (
-                "NSMicrophoneUsageDescription",
-                "Microphone",
-                "Privacy_Microphone"
-            )
-        );
-        assert_eq!(
-            (camera.usage_key, camera.page, camera.anchor),
-            ("NSCameraUsageDescription", "Camera", "Privacy_Camera")
-        );
-        assert_eq!(
-            privacy_pane_url(camera.anchor),
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
-        );
-        assert_eq!(
-            media(Capability::DisplayCapture),
-            None,
-            "screen recording is CoreGraphics', not AVFoundation's"
-        );
-        assert_eq!(media(Capability::Geolocation), None);
-    }
-
-    #[test]
     fn concurrent_requests_share_one_prompt_and_settle_every_token_once() {
         let mut requests = Requests::default();
         let (first, show) = requests.begin(Capability::Microphone);

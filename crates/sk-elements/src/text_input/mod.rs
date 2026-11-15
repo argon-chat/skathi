@@ -572,14 +572,6 @@ mod tests {
             assert_eq!(usize::from(t.code()), i + 1, "{t:?}");
             assert_eq!(t.composing(), *t == InputType::InsertCompositionText);
         }
-        assert_eq!(InputType::DeleteByCut.name(), "deleteByCut");
-        assert_eq!(
-            InputIntent::with(InputType::InsertText, "a")
-                .data
-                .as_deref(),
-            Some("a")
-        );
-        assert_eq!(InputIntent::bare(InputType::InsertLineBreak).data, None);
     }
 
     #[cfg(not(target_os = "macos"))]

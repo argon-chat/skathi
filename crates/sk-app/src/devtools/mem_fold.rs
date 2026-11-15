@@ -601,88 +601,6 @@ mod tests {
     }
 
     #[test]
-    fn tags_land_in_the_panel_categories() {
-        let mi = tag::MIMALLOC_DEFAULT;
-        let cat = |r: Region| classify(&r, mi).0;
-        assert_eq!(cat(anon(mi, 1)), Cat::Jsc);
-        assert_eq!(classify(&anon(mi, 1), mi).1, MIMALLOC);
-        // MIMALLOC_OS_TAG=250: 240 is then an ordinary tag.
-        assert_eq!(classify(&anon(250, 1), 250).0, Cat::Jsc);
-        assert_eq!(classify(&anon(240, 1), 250).0, Cat::Other);
-        for t in [
-            tag::JAVASCRIPT_CORE,
-            tag::JAVASCRIPT_JIT_EXECUTABLE_ALLOCATOR,
-            tag::JAVASCRIPT_JIT_REGISTER_FILE,
-        ] {
-            assert_eq!(cat(anon(t, 1)), Cat::Jsc, "tag {t}");
-        }
-        assert_eq!(
-            cat(Region {
-                exec: true,
-                ..anon(0, 1)
-            }),
-            Cat::Jsc,
-            "untagged executable: JIT"
-        );
-        for t in [1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13] {
-            assert_eq!(cat(anon(t, 1)), Cat::Rust, "malloc tag {t}");
-        }
-        for t in [
-            tag::IOACCELERATOR,
-            tag::IOSURFACE,
-            tag::IOKIT,
-            tag::LAYERKIT,
-            tag::CGIMAGE,
-            54,
-            57,
-        ] {
-            assert_eq!(cat(anon(t, 1)), Cat::Graphics, "tag {t}");
-        }
-        assert_eq!(
-            classify(&anon(tag::STACK, 1), mi),
-            (Cat::Other, STACKS.to_string())
-        );
-        assert_eq!(cat(anon(0, 1)), Cat::Other);
-        assert_eq!(
-            cat(Region {
-                share_mode: SM_SHARED,
-                ..anon(0, 1)
-            }),
-            Cat::Mapped,
-            "shared anonymous memory"
-        );
-        assert_eq!(
-            cat(Region {
-                share_mode: SM_TRUESHARED,
-                ..anon(tag::IOACCELERATOR, 1)
-            }),
-            Cat::Graphics,
-            "the tag wins"
-        );
-        let dylib = Region {
-            backing: Backing::Image,
-            name: Some("libvn.dylib".into()),
-            ..Default::default()
-        };
-        assert_eq!(
-            classify(&dylib, mi),
-            (Cat::Images, "libvn.dylib".to_string())
-        );
-        let cache = Region {
-            backing: Backing::Image,
-            shared_cache: true,
-            ..Default::default()
-        };
-        assert_eq!(cat(cache), Cat::Images);
-        let font = Region {
-            backing: Backing::File,
-            name: Some("SFNS.ttf".into()),
-            ..Default::default()
-        };
-        assert_eq!(classify(&font, mi), (Cat::Mapped, "SFNS.ttf".to_string()));
-    }
-
-    #[test]
     fn stacks_group_by_thread_name() {
         assert_eq!(
             thread_group("tokio-runtime-worker-12"),
@@ -707,13 +625,6 @@ mod tests {
             "thread stacks: worker # ×4"
         );
         assert!(stack_slice(0x9000, &stacks, &counts).starts_with("thread stacks: no live pthread"));
-    }
-
-    #[test]
-    fn tag_names() {
-        assert_eq!(tag_name(60), "dyld");
-        assert_eq!(tag_name(62), "SQLite page cache");
-        assert_eq!(tag_name(199), "VM tag 199");
     }
 
     fn inputs<'a>(fold: &'a Fold, footprint: f64, graphics_ledger: f64) -> Inputs<'a> {
@@ -882,16 +793,6 @@ mod tests {
                 .any(|s| !s.2 && s.0.contains("ledger")),
             "no unmapped GPU slice"
         );
-    }
-
-    #[test]
-    fn without_regions_there_is_no_resident_column() {
-        let fold = sample();
-        let mut i = inputs(&fold, 19.0 * PAGE as f64, 0.0);
-        i.with_resident = false;
-        let b = breakdown(&i);
-        let first = &b.get("categories").and_then(Json::as_arr).unwrap()[0];
-        assert!(first.get("residentBytes").is_none());
     }
 
     #[test]

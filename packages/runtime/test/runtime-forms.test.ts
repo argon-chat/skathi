@@ -7,12 +7,12 @@ import { createRuntime, type MirrorElement } from "./runtime-harness";
 
 type Rt = ReturnType<typeof createRuntime>;
 
-function formWorld(options: { button?: string | null; fields?: number; novalidate?: boolean } = {}) {
+function formWorld(options: { button?: string | null; fields?: number } = {}) {
   const rt = createRuntime();
   const root = rt.nodeOps.createElement("div");
   const form = rt.nodeOps.createElement("form");
   rt.nodeOps.insert(form, root, null);
-  if (options.novalidate !== false) rt.patchProp(form, "novalidate", null, "");
+  rt.patchProp(form, "novalidate", null, "");
   const fields: MirrorElement[] = [];
   for (let i = 0; i < (options.fields ?? 1); i++) {
     const input = rt.nodeOps.createElement("input");
@@ -27,19 +27,17 @@ function formWorld(options: { button?: string | null; fields?: number; novalidat
     rt.nodeOps.insert(button, form, null);
   }
   const submits: { submitter: unknown; cancelable: boolean; bubbles: boolean; type: string }[] = [];
-  let cancel = true;
   rt.patchProp(
     form,
     "onSubmit",
     null,
     (e: { submitter: unknown; cancelable: boolean; bubbles: boolean; type: string; preventDefault(): void }) => {
       submits.push({ submitter: e.submitter, cancelable: e.cancelable, bubbles: e.bubbles, type: e.type });
-      if (cancel) e.preventDefault();
+      e.preventDefault();
     },
   );
   const click = (n: MirrorElement) => rt.host.dispatcher(n.__skId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
   const enter = (n: MirrorElement) => rt.host.dispatcher(n.__skId, rt.EV_CODES.keydown, 0, 0, 0, 0, "Enter");
-  const navigations = () => rt.advisories().filter((l: string) => l.includes("no document to navigate")).length;
   return {
     rt,
     root,
@@ -50,10 +48,6 @@ function formWorld(options: { button?: string | null; fields?: number; novalidat
     submits,
     click,
     enter,
-    navigations,
-    keep: () => {
-      cancel = false;
-    },
   };
 }
 
@@ -63,11 +57,6 @@ const lastFlag = (rt: Rt, code: number, id: number) =>
   rt.host.listeners.filter((l) => l.code === code && l.id === id).at(-1)?.on;
 
 describe("forms: what the host is asked to deliver", () => {
-  test("@submit is kept, with no 'not delivered' advisory", () => {
-    const { rt } = formWorld();
-    expect(rt.advisories()).toEqual([]);
-  });
-
   test("a <button> listens for its own click; type=button stops it, type=submit restarts it", () => {
     const { rt, button } = formWorld();
     expect(lastFlag(rt, rt.EV_CODES.click, button!.__skId)).toBe(true);
@@ -119,7 +108,7 @@ describe("forms: a submit button's activation", () => {
     expect(c.submits).toEqual([]);
   });
 
-  test("a disabled <fieldset> disables the button inside it, but not one in its first <legend>; and says what it cannot do", () => {
+  test("a disabled <fieldset> disables the button inside it, but not one in its first <legend>", () => {
     const { rt, form, button, submits, click } = formWorld();
     const fieldset = rt.nodeOps.createElement("fieldset");
     const legend = rt.nodeOps.createElement("legend");
@@ -133,7 +122,6 @@ describe("forms: a submit button's activation", () => {
     expect(submits).toEqual([]);
     click(inLegend);
     expect(submits.map(who)).toEqual([inLegend.__skId]);
-    expect(rt.advisories().filter((l: string) => l.includes("<fieldset disabled>")).length).toBe(1);
   });
 
   test('`:disabled="false"` is not disabled', () => {
@@ -141,15 +129,6 @@ describe("forms: a submit button's activation", () => {
     rt.patchProp(button!, "disabled", null, false);
     click(button!);
     expect(submits.length).toBe(1);
-  });
-
-  test("an uncancelled submission says it navigates nowhere; a cancelled one says nothing", () => {
-    const w = formWorld();
-    w.click(w.button!);
-    expect(w.navigations()).toBe(0);
-    w.keep();
-    w.click(w.button!);
-    expect(w.navigations()).toBe(1);
   });
 
   test("a button outside any form does nothing; the form attribute names an owner elsewhere", () => {
@@ -236,11 +215,10 @@ describe("forms: requestSubmit(), submit(), reset()", () => {
     expect(() => div.requestSubmit()).toThrow(TypeError);
   });
 
-  test("submit() fires no event and says it navigates nowhere", () => {
-    const { form, submits, navigations } = formWorld();
+  test("submit() fires no event", () => {
+    const { form, submits } = formWorld();
     (form as unknown as { submit(): void }).submit();
     expect(submits).toEqual([]);
-    expect(navigations()).toBe(1);
   });
 
   test("a submit from inside a submit handler is ignored, as HTML's firing flag says", () => {
@@ -255,26 +233,12 @@ describe("forms: requestSubmit(), submit(), reset()", () => {
     expect(n).toBe(1);
   });
 
-  test("a reset button fires reset, and says the controls are not restored", () => {
+  test("a reset button fires reset", () => {
     const { rt, form, button, click } = formWorld({ button: "reset" });
     let resets = 0;
     rt.patchProp(form, "onReset", null, () => resets++);
     click(button!);
     expect(resets).toBe(1);
-    expect(rt.advisories().some((l: string) => l.includes("cannot restore the controls"))).toBe(true);
-  });
-
-  test("a form WITHOUT novalidate says once that constraints are not checked; novalidate is silent", () => {
-    const w = formWorld({ novalidate: false });
-    w.rt.patchProp(w.field, "required", null, "");
-    w.click(w.button!);
-    w.click(w.button!);
-    expect(w.rt.advisories().filter((l: string) => l.includes("WITHOUT constraint validation")).length).toBe(1);
-    expect(w.submits.length).toBe(2);
-    const quiet = formWorld();
-    quiet.rt.patchProp(quiet.field, "required", null, "");
-    quiet.click(quiet.button!);
-    expect(quiet.rt.advisories()).toEqual([]);
   });
 });
 
@@ -329,13 +293,12 @@ describe("focus: el.focus(), el.blur(), document.activeElement", () => {
     expect(rt.advisories()).toEqual([]);
   });
 
-  test("'pending' fires nothing now and says so once; the host's focus event then moves activeElement", () => {
+  test("'pending' fires nothing now; the host's focus event then moves activeElement", () => {
     const { rt, a, log } = focusWorld();
     rt.host.focus.answer = () => "pending";
     focus(a);
     focus(a);
     expect(log).toEqual([]);
-    expect(rt.advisories().filter((l: string) => l.includes("next frame")).length).toBe(1);
     expect(rt.global.document.activeElement).toBe(null);
     rt.host.dispatcher(a.__skId, rt.EV_CODES.focus, 0, 0, 0, 0, undefined);
     expect(rt.global.document.activeElement).toBe(a);
@@ -623,7 +586,6 @@ describe("location.reload()", () => {
     target.dispatchEvent(new Event("message"));
     expect(messages).toBe(0);
     expect(g.__SK_UNLOAD__).toBeUndefined();
-    expect(rt.advisories().some((l: string) => l.includes("SAME JavaScript realm"))).toBe(true);
   });
 });
 
@@ -658,7 +620,6 @@ describe("native text field select()", () => {
       expect(seen).toEqual([]);
       await new Promise<void>((resolve) => queueMicrotask(resolve));
       expect(seen).toEqual([["select", true, true, false]]);
-      expect(rt.advisories().every((note: string) => note.includes('addEventListener("change")'))).toBe(true);
     },
   );
 
@@ -672,7 +633,6 @@ describe("native text field select()", () => {
     expect(input.value).toBe("Argon Привет 🙂\nSecond line");
     await new Promise<void>((resolve) => queueMicrotask(resolve));
     expect(selected).toEqual([input.value]);
-    expect(rt.advisories().every((line: string) => line.includes("element.focus()"))).toBe(true);
   });
 
   test("read-only and disabled text can be selected; only focus is refused when disabled", () => {

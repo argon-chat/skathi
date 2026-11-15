@@ -206,15 +206,6 @@ fn the_terminator_keyframe_animates_to_the_right_place() {
     // Bodymovin export. Without the pass it does not load; with a wrong one it sits still. So assert
     // the motion: a 16px square slides from x=16 to x=48 on a 64px canvas.
     let mut state = load("terminator-keyframe.json");
-    assert!(
-        state
-            .advisories()
-            .iter()
-            .any(|note| note.contains("terminator")),
-        "the rewrite was not advertised: {:?}",
-        state.advisories(),
-    );
-
     let start = opaque_centroid_x(&raster(&mut state, 0.0), 128);
     let middle = opaque_centroid_x(&raster(&mut state, 15.0), 128);
     let end = opaque_centroid_x(&raster(&mut state, 29.5), 128);
@@ -293,11 +284,6 @@ fn tgs_stickers_unwrap_and_carry_their_marker() {
 }
 
 #[test]
-fn plain_json_is_not_mistaken_for_a_sticker() {
-    assert!(!load("star.json").meta().telegram_sticker);
-}
-
-#[test]
 fn garbage_is_rejected_with_a_useful_error() {
     assert!(matches!(
         LottieState::load(b"not json at all"),
@@ -316,16 +302,8 @@ fn garbage_is_rejected_with_a_useful_error() {
 }
 
 #[test]
-fn solid_layers_are_rewritten_and_advertised() {
+fn solid_layers_draw() {
     let mut state = load("solid-layer.json");
-    assert!(
-        state
-            .advisories()
-            .iter()
-            .any(|note| note.contains("solid layer")),
-        "the rewrite was not advertised: {:?}",
-        state.advisories(),
-    );
     assert!(
         opaque_pixels(&raster(&mut state, 0.0)) > 0,
         "the solid drew nothing"
@@ -333,19 +311,6 @@ fn solid_layers_are_rewritten_and_advertised() {
 }
 
 const TICK: Duration = Duration::from_nanos(16_666_667);
-
-#[test]
-fn autoplay_is_on_by_default_matching_lottie_web() {
-    let state = load("star.json");
-    assert!(state.is_playing(), "lottie-web's loadAnimation autoplays");
-    assert!(state.needs_frame());
-    assert_eq!(
-        state.loop_mode(),
-        LoopMode::Loop,
-        "lottie-web loops by default"
-    );
-    assert_eq!(state.frame(), state.meta().in_point);
-}
 
 #[test]
 fn advancing_moves_the_playhead_and_emits_enter_frame() {

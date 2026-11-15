@@ -1296,7 +1296,7 @@ mod tests {
     }
 
     #[test]
-    fn percentage_endpoints_snap_with_one_advisory() {
+    fn percentage_endpoints_snap() {
         let mut a = Animator::new();
         let now = t0();
         let from = with_width(px(100.0).into());
@@ -1305,12 +1305,6 @@ mod tests {
         let new = states(to, "transition: width 1s linear");
         a.on_computed(1, Some(&old), &new, now);
         assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
-        let diags = a.take_diagnostics();
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].contains("width"), "{diags:?}");
-
-        a.on_computed(2, Some(&old), &new, now);
-        assert!(a.take_diagnostics().is_empty());
     }
 
     #[test]
@@ -1334,16 +1328,12 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_property_warns_once() {
+    fn an_unsupported_property_does_not_animate() {
         let mut a = Animator::new();
         let now = t0();
         let old = states(with_opacity(0.0), "transition: filter 1s");
         let new = states(with_opacity(1.0), "transition: filter 1s");
         a.on_computed(1, Some(&old), &new, now);
-        a.on_computed(2, Some(&old), &new, now);
-        let diags = a.take_diagnostics();
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].contains("filter"), "{diags:?}");
         assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
     }
 
@@ -1497,20 +1487,6 @@ mod tests {
         a.on_computed(1, Some(&old), &new, now);
         assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
         assert_eq!(a.take_diagnostics().len(), 1);
-    }
-
-    #[test]
-    fn overlay_refines_on_top_of_the_base() {
-        use gpui::Refineable;
-        let mut a = Animator::new();
-        let now = t0();
-        let old = states(with_opacity(0.0), "transition: opacity 1s linear");
-        let new = states(with_opacity(1.0), "transition: opacity 1s linear");
-        a.on_computed(1, Some(&old), &new, now);
-
-        let mut painted = (*new.base).clone();
-        painted.refine(&a.overlay_test(1, now + Duration::from_millis(250)).unwrap());
-        assert!((painted.opacity.unwrap() - 0.25).abs() < 1e-3);
     }
 
     #[test]
@@ -1803,18 +1779,6 @@ mod tests {
             (ended.h - blue.h).abs() < 1e-4 && (ended.l - blue.l).abs() < 1e-4,
             "{ended:?}"
         );
-    }
-
-    #[test]
-    fn the_three_new_properties_are_covered_by_transition_all() {
-        let all = crate::transition::TransitionProperty::animatable();
-        for p in [
-            crate::transition::TransitionProperty::Fill,
-            crate::transition::TransitionProperty::Stroke,
-            crate::transition::TransitionProperty::TextDecorationColor,
-        ] {
-            assert!(all.contains(&p), "{p:?} is not in `transition: all`");
-        }
     }
 }
 

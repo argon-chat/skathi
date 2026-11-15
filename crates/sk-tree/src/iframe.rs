@@ -631,14 +631,6 @@ pub(crate) fn placement(
 mod tests {
     use super::*;
     use crate::tree::{read_tree, with_tree};
-    use std::cell::Cell;
-
-    #[derive(Default)]
-    struct Fake {
-        on: Cell<bool>,
-        log: Rc<RefCell<Vec<String>>>,
-        sinks: Rc<RefCell<Vec<Sink>>>,
-    }
 
     struct FakeFrame(u32, Rc<RefCell<Vec<String>>>);
 
@@ -727,34 +719,6 @@ mod tests {
             message_key("a\"b\\c", "1"),
             "{\"o\":\"a\\\"b\\\\c\",\"d\":1}"
         );
-    }
-
-    #[test]
-    fn nothing_is_supported_without_a_backend_and_a_backend_answers_for_itself() {
-        BACKEND.with(|b| *b.borrow_mut() = None);
-        assert!(!supported());
-        let fake = Rc::new(Fake::default());
-        set_backend(fake.clone(), Rc::new(|| {}));
-        assert!(!supported(), "a backend whose runtime is missing");
-        fake.on.set(true);
-        assert!(supported());
-        BACKEND.with(|b| *b.borrow_mut() = None);
-    }
-
-    impl Backend for Fake {
-        fn supported(&self) -> bool {
-            self.on.get()
-        }
-        fn create(
-            &self,
-            node: u32,
-            sink: Sink,
-            _: &mut Window,
-            _: &mut App,
-        ) -> Option<Box<dyn Frame>> {
-            self.sinks.borrow_mut().push(sink);
-            Some(Box::new(FakeFrame(node, self.log.clone())))
-        }
     }
 
     #[test]

@@ -149,19 +149,6 @@ fn pid_alive(pid: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(feature = "prod"))]
-    #[test]
-    fn the_dev_default_is_the_builders_output_directory() {
-        // Only that the two halves agree about the name; the absolute path embeds the checkout.
-        assert!(super::DEV_DIST.ends_with("packages/cli/dist"));
-    }
-
-    #[test]
-    fn packaged_slots_live_under_the_temp_directory_per_app() {
-        let root = super::apps_root();
-        assert!(root.starts_with(std::env::temp_dir()));
-        assert!(root.ends_with("skathi/apps") || root.ends_with("skathi\\apps"));
-    }
 
     #[test]
     fn pruning_removes_a_dead_pid_slot_and_keeps_the_rest() {

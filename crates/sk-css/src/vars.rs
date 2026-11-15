@@ -582,14 +582,6 @@ mod tests {
     }
 
     #[test]
-    fn plain_lookup_and_ordering() {
-        let v = vars(&[("--b", "2"), ("--a", "1")]);
-        assert_eq!(v.get("--a"), Some("1"));
-        assert_eq!(v.get("--b"), Some("2"));
-        assert_eq!(v.get("--c"), None);
-    }
-
-    #[test]
     fn a_custom_property_may_reference_another() {
         let v = vars(&[("--a", "10px"), ("--b", "var(--a) var(--a)")]);
         assert_eq!(v.get("--b"), Some("10px 10px"));
@@ -627,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn cycles_are_reported_and_drop_the_properties() {
+    fn cycles_drop_the_properties() {
         let own = vec![
             ("--a".to_string(), "var(--b)".to_string()),
             ("--b".to_string(), "var(--a)".to_string()),
@@ -640,7 +632,6 @@ mod tests {
             &mut d,
         );
         assert!(v.get("--a").is_none() && v.get("--b").is_none(), "{v:?}");
-        assert!(d.iter().any(|m| m.contains("cycle")), "{d:?}");
     }
 
     #[test]

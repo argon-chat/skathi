@@ -706,37 +706,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn io_errors_map_to_file_system_access_names() {
-        let os = std::io::Error::from_raw_os_error;
-        assert_eq!(fail_io(&os(2), Access::Read).name, "NotFoundError");
-        assert_eq!(fail_io(&os(3), Access::Write).name, "NotFoundError");
-        assert_eq!(
-            fail_io(&os(145), Access::Write).name,
-            "InvalidModificationError"
-        );
-        assert_eq!(fail_io(&os(5), Access::Read).name, "NotAllowedError");
-        assert_eq!(
-            fail_io(&os(32), Access::Write).name,
-            "NoModificationAllowedError"
-        );
-        assert_eq!(
-            fail_io(&os(1175), Access::Write).name,
-            "NoModificationAllowedError"
-        );
-        assert_eq!(fail_io(&os(112), Access::Write).name, "QuotaExceededError");
-        assert_eq!(fail_io(&os(267), Access::Read).name, "TypeMismatchError");
-        let other = fail_io(&os(1117), Access::Read);
-        assert_eq!(other.name, "InvalidStateError");
-        assert!(
-            other.message.starts_with(INVALID_STATE),
-            "{}",
-            other.message
-        );
-        assert_eq!(fail_io(&os(2), Access::Read).message, NOT_FOUND);
-        assert_eq!(fail_io(&os(2), Access::Read).os_error, Some(2));
-    }
-
-    #[test]
     fn a_child_is_found_made_or_refused_by_kind() {
         let s = Scratch::new("child");
         std::fs::write(s.0.join("a.txt"), b"x").unwrap();

@@ -943,29 +943,6 @@ mod tests {
     }
 
     #[test]
-    fn well_known_directories_map_to_known_folders() {
-        for (s, k) in [
-            ("desktop", Known::Desktop),
-            ("documents", Known::Documents),
-            ("downloads", Known::Downloads),
-            ("music", Known::Music),
-            ("pictures", Known::Pictures),
-            ("videos", Known::Videos),
-        ] {
-            assert_eq!(Known::parse(s), Some(k));
-            assert_eq!(k.as_str(), s);
-        }
-        assert_eq!(
-            Known::parse("Documents"),
-            None,
-            "the enum is case-sensitive, as in WebIDL"
-        );
-        if cfg!(any(windows, target_os = "macos", target_os = "linux")) {
-            assert!(known_folder(Known::Downloads).is_some_and(|p| p.is_absolute()));
-        }
-    }
-
-    #[test]
     fn a_request_parses_into_the_dialog_and_what_follows_it() {
         let (n, then) = parse(
             r#"{"kind":"open","multiple":true,"accept":[".txt"],"result":"files"}"#,

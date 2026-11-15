@@ -325,8 +325,6 @@ interface RuntimeHost {
   scrollById: Map<number, ScrollState>;
   scrollCalls: { id: number; op: number; x: number; y: number }[];
   intoViewCalls: { id: number; block: unknown; inline: unknown }[];
-  intoViewAnswer: string;
-  scrollStale: boolean;
   selection: { sel: number[] | null; sets: number[][]; rebases: number[][]; text: string };
   pointerCaptureCalls: { id: number; pointerId: number; capture: boolean }[];
   hit: { answer: (x: number, y: number, all: number) => string; calls: number[][] };
@@ -355,7 +353,6 @@ interface RuntimeHost {
   desktop: {
     calls: { op: string; args: unknown[] }[];
     nextToken: number;
-    refuse: Json | null;
     /** Answers a `__SK_FS__` picker: `{ cancelled: true }`, `{ color }`, or `{ files }` with the FileList as `value`. */
     settle(token: number, ok?: boolean, payload?: Json, value?: unknown): void;
     fs: {
@@ -367,11 +364,10 @@ interface RuntimeHost {
   tree: TreeModel;
 }
 
-/** `devtools` / `desktop` `false` build a world without those `__sk_*` slots (an older or `--no-default-features` host); `MouseEvent` hands the world an event class (bun has none). */
+/** `devtools: false` builds a world without its `__sk_*` slots (an older or `--no-default-features` host); `MouseEvent` hands the world an event class (bun has none). */
 export function createRuntime(
   options: {
     devtools?: boolean;
-    desktop?: boolean;
     MouseEvent?: unknown;
     globals?: Record<string, unknown>;
     beforeRuntime?: (global: Record<string, unknown>) => void;
@@ -520,8 +516,6 @@ export function createRuntime(
     scrollById: new Map(),
     scrollCalls: [],
     intoViewCalls: [],
-    intoViewAnswer: "",
-    scrollStale: false,
     selection: {
       sel: null,
       sets: [],
@@ -565,7 +559,6 @@ export function createRuntime(
     desktop: {
       calls: [],
       nextToken: 1,
-      refuse: null,
       settle: (token, ok = true, payload = {}, value = undefined) => {
         const resolve = pickers.get(token);
         pickers.delete(token);
@@ -588,29 +581,20 @@ export function createRuntime(
     host.desktop.fs.calls.push({ op, args, token });
     return new Promise((resolve) => pickers.set(token, resolve as (v: unknown) => void));
   };
-  const fsHost =
-    options.desktop === false
-      ? undefined
-      : {
-          pickForInput: (accept: string, multiple: boolean, directory: boolean, current: unknown) =>
-            pick("pickForInput", [{ accept, multiple, directory }, current]),
-          pickColor: (value: string) => pick("pickColor", [value]),
-          download: (url: string, attr: string) =>
-            void host.desktop.fs.calls.push({ op: "download", args: [url, attr], token: null }),
-        };
+  const fsHost = {
+    pickForInput: (accept: string, multiple: boolean, directory: boolean, current: unknown) =>
+      pick("pickForInput", [{ accept, multiple, directory }, current]),
+    pickColor: (value: string) => pick("pickColor", [value]),
+    download: (url: string, attr: string) =>
+      void host.desktop.fs.calls.push({ op: "download", args: [url, attr], token: null }),
+  };
   // sk-desktop's `__SK_SHELL__`, as far as links and `window.open` use it.
-  const shellHost =
-    options.desktop === false
-      ? null
-      : {
-          openContent(url: string): Promise<void> {
-            host.desktop.calls.push({ op: "openExternal", args: [url, true] });
-            const r = host.desktop.refuse;
-            if (!r) return Promise.resolve();
-            host.desktop.refuse = null;
-            return Promise.reject(Object.assign(new Error(String(r.error)), { name: r.name, code: r.code }));
-          },
-        };
+  const shellHost = {
+    openContent(url: string): Promise<void> {
+      host.desktop.calls.push({ op: "openExternal", args: [url, true] });
+      return Promise.resolve();
+    },
+  };
   // compat.ts, per world: each world has its own console.
   const warned = new Set<string>();
   const hasWarned = (key: string): boolean => warned.has(key);
@@ -828,11 +812,11 @@ export function createRuntime(
         if (Number.isFinite(x)) s.left = clamp(s.left + x, s.maxLeft);
         if (Number.isFinite(y)) s.top = clamp(s.top + y, s.maxTop);
       }
-      return `${s.left},${s.top},${s.width + s.maxLeft},${s.height + s.maxTop},${host.scrollStale ? 1 : 0}`;
+      return `${s.left},${s.top},${s.width + s.maxLeft},${s.height + s.maxTop},0`;
     },
     (id: number, block: unknown, inline: unknown) => {
       host.intoViewCalls.push({ id, block, inline });
-      return host.intoViewAnswer;
+      return "";
     },
     (id: number, op: number) => {
       host.focus.calls.push({ id, op });

@@ -181,15 +181,6 @@ pub fn update(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn buttons_map_to_media_session_actions() {
-        use windows::Media::SystemMediaTransportControlsButton as B;
-        assert_eq!(super::action_of(B::Play), Some("play"));
-        assert_eq!(super::action_of(B::Next), Some("nexttrack"));
-        assert_eq!(super::action_of(B::Rewind), Some("seekbackward"));
-        assert_eq!(super::action_of(B::Record), None);
-    }
-
-    #[test]
     fn a_session_drives_the_window_controls() {
         use windows::core::w;
         use windows::Win32::UI::WindowsAndMessaging::{

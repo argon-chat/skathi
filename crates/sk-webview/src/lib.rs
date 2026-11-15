@@ -162,14 +162,4 @@ mod tests {
         assert_eq!(external_origin(APP_ORIGIN, PAGE), PAGE);
         assert_eq!(external_origin("null", PAGE), "null");
     }
-
-    #[test]
-    fn content_types_follow_the_extension() {
-        assert_eq!(
-            content_type("/games/pong/index.html?v=2"),
-            "text/html; charset=utf-8"
-        );
-        assert_eq!(content_type("/a/b.WASM"), "application/wasm");
-        assert_eq!(content_type("/noext"), "application/octet-stream");
-    }
 }

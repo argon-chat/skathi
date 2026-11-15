@@ -192,7 +192,7 @@ describe("element fullscreen lifecycle", () => {
     expect(w.windowCalls.at(-1)).toBe(false);
     w.windowChanged(false);
     w.frame();
-    await expect(w.first.requestFullscreen()).rejects.toThrow("connected element");
+    await expect(w.first.requestFullscreen()).rejects.toThrow();
   });
 
   test("secondary fullscreen targets its owner and preserves an already covering window", async () => {

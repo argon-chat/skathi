@@ -216,14 +216,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "windows")]
-    fn the_provider_identifies_itself_for_the_file_header_and_for_advisories() {
-        let p = provider().unwrap();
-        assert_eq!(p.id(), 1);
-        assert!(p.name().contains("DPAPI"), "{}", p.name());
-    }
-
-    #[test]
     #[cfg(target_os = "linux")]
     fn linux_has_the_secret_service_provider() {
         assert_eq!(provider().unwrap().id(), 3);

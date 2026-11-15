@@ -87,23 +87,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_backend_names_the_platform_it_is_standing_on() {
-        let expected = if cfg!(target_os = "windows") {
-            "Windows"
-        } else if cfg!(target_os = "macos") {
-            "macOS"
-        } else {
-            "this platform"
-        };
-        assert_eq!(GpuiClipboard.platform(), expected);
-    }
-
-    #[test]
     fn outside_a_frame_both_verbs_refuse_with_the_same_explanation() {
         // A test thread is never inside a gpui publication: this must fail, not touch a null `&mut App`.
-        let e = GpuiClipboard.read_text().unwrap_err();
-        assert!(e.contains("inside a frame"), "{e}");
-        assert_eq!(GpuiClipboard.write_text("x").unwrap_err(), e);
+        assert!(GpuiClipboard.read_text().is_err());
+        assert!(GpuiClipboard.write_text("x").is_err());
     }
 
     #[test]

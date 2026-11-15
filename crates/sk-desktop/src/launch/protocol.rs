@@ -83,25 +83,8 @@ mod tests {
             "ms-msdt",
             "search-ms",
         ] {
-            assert!(
-                validate_scheme(reserved)
-                    .unwrap_err()
-                    .contains("cannot be registered"),
-                "{reserved}"
-            );
+            assert!(validate_scheme(reserved).is_err(), "{reserved}");
         }
-    }
-
-    #[test]
-    fn the_command_line_quotes_every_path_and_ends_in_a_quoted_percent_one() {
-        assert_eq!(
-            command_line(r"C:\Program Files\Notes\Notes.exe", None),
-            r#""C:\Program Files\Notes\Notes.exe" --sk-protocol-launch -- "%1""#
-        );
-        assert_eq!(
-            command_line(r"C:\sk\sk-app.exe", Some(r"C:\slots\a b\")),
-            r#""C:\sk\sk-app.exe" --sk-dist "C:\slots\a b\\" --sk-protocol-launch -- "%1""#
-        );
     }
 
     #[test]

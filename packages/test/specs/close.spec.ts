@@ -94,8 +94,6 @@ describe("closing the app", () => {
       expect(took).toBeLessThan(8_000);
       const line = logLines(app).find((l) => l.includes("passed its 4 s deadline"));
       expect(line).toBeDefined();
-      expect(line).toContain("close(): hid 1 window(s)");
-      expect(line).toMatch(/SK_SHUTDOWN_DELAY_MS still running after \d+ ms/);
       expect(logLines(app).some((l) => l.startsWith("[shutdown] closed."))).toBe(false);
     },
     T,

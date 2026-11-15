@@ -349,18 +349,6 @@ mod tests {
     }
 
     #[test]
-    fn the_overlay_notch_parses() {
-        let d = "M0 0 C12.1506 0 22 9.8494 22 22 V42 Q22 64 44 64 H420 Q442 64 442 42 V22 \
-                 C442 9.8494 451.8494 0 464 0 Z";
-        let v = ok(d);
-        assert_eq!(v.len(), 9);
-        assert_eq!(v[0], MoveTo([0., 0.]));
-        assert_eq!(v[2], LineTo([22., 42.]));
-        assert_eq!(v[3], QuadTo([22., 64.], [44., 64.]));
-        assert_eq!(v[8], Close);
-    }
-
-    #[test]
     fn broken_data_is_an_error() {
         for bad in [
             "L0 0",

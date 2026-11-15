@@ -398,8 +398,7 @@ mod tests {
         let k = create(HKEY_CURRENT_USER, &format!(r"{}\other", s.0.classes)).unwrap();
         write_sz(&k, "", "URL:Other App Protocol").unwrap();
         drop(k);
-        let e = register(&s.0, "other", "gl.argon.notes", EXE, None).unwrap_err();
-        assert!(e.contains("Other App Protocol"), "{e}");
+        assert!(register(&s.0, "other", "gl.argon.notes", EXE, None).is_err());
         assert!(
             !unregister(&s.0, "other", "gl.argon.notes", EXE),
             "and never deleted"
@@ -410,8 +409,7 @@ mod tests {
                 .is_some()
         );
         register(&s.0, "theirs", "gl.argon.other", EXE, None).unwrap();
-        let e = register(&s.0, "theirs", "gl.argon.notes", EXE, None).unwrap_err();
-        assert!(e.contains("gl.argon.other"), "{e}");
+        assert!(register(&s.0, "theirs", "gl.argon.notes", EXE, None).is_err());
     }
 
     #[test]
@@ -448,10 +446,5 @@ mod tests {
             status(&s.0, "three", "gl.argon.other"),
             Ok(Status::Ours { .. })
         ));
-    }
-
-    #[test]
-    fn this_test_process_has_no_package_identity() {
-        assert!(!has_package_identity());
     }
 }

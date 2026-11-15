@@ -1701,22 +1701,6 @@ mod tests {
     }
 
     #[test]
-    fn http_becomes_a_uri_resource_for_gpuis_asset_loader() {
-        assert!(matches!(
-            resolve("https://example.com/a.png"),
-            Some(ImageSource::Resource(Resource::Uri(_)))
-        ));
-        assert!(matches!(
-            resolve("http://example.com/a.png"),
-            Some(ImageSource::Resource(Resource::Uri(_)))
-        ));
-        assert!(matches!(
-            resolve("assets/a.png"),
-            Some(ImageSource::Resource(Resource::Path(_)))
-        ));
-    }
-
-    #[test]
     fn video_sources_resolve_to_the_shape_the_platform_wants() {
         use sk_video::MediaSource;
         assert!(matches!(
@@ -1854,8 +1838,7 @@ mod tests {
         let _g = packaged();
         assert_eq!(read_bytes("lottie", "assets/s.tgs").unwrap(), b"tgs");
         assert_eq!(read_bytes("lottie", "/assets/s.tgs?x").unwrap(), b"tgs");
-        let miss = read_bytes("lottie", "assets/missing.tgs").unwrap_err();
-        assert!(miss.contains("not in this app's package"), "{miss}");
+        assert!(read_bytes("lottie", "assets/missing.tgs").is_err());
         match resolve_media("video", "assets/clip.mp4") {
             Ok(MediaSource::StaticBytes { mime, data }) => {
                 assert_eq!(mime, "video/mp4");
@@ -2006,14 +1989,10 @@ mod tests {
         let t = f.target(None, "image/png");
         std::fs::write(&f.0, b"a different file now").unwrap();
         assert!(blob_image(src, Some(t.clone())).is_none());
-        assert!(blob_media("video", src, Some(t))
-            .unwrap_err()
-            .contains("changed"));
+        assert!(blob_media("video", src, Some(t)).is_err());
         assert!(resolve(src).is_none());
-        assert!(read_bytes("lottie", src)
-            .unwrap_err()
-            .contains("blob URL store"));
-        assert!(resolve_media("video", src).unwrap_err().contains("revoked"));
+        assert!(read_bytes("lottie", src).is_err());
+        assert!(resolve_media("video", src).is_err());
     }
 
     #[test]

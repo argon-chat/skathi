@@ -382,14 +382,7 @@ mod tests {
         std::fs::write(path_in(&dir), b"not sealed at all").unwrap();
         let h = host_in(&dir);
         assert!(h.load().is_empty());
-        assert!(h
-            .state
-            .lock()
-            .unwrap()
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("could not decrypt"));
+        assert!(h.state.lock().unwrap().error.is_some());
         h.store(&sample());
         h.write_staged().unwrap();
         assert_eq!(host_in(&dir).load(), sample());

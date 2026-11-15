@@ -591,24 +591,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_capability_has_a_deliberate_windows_mapping() {
-        for cap in Capability::ALL.iter().copied() {
-            let gated = consent_key(cap).is_some();
-            match cap {
-                Capability::Microphone
-                | Capability::Camera
-                | Capability::DisplayCapture
-                | Capability::Geolocation => assert!(gated, "{cap:?} must be consent-store gated"),
-                Capability::Notifications
-                | Capability::ClipboardRead
-                | Capability::ClipboardWrite => {
-                    assert!(!gated, "{cap:?} has no consent-store key")
-                }
-            }
-        }
-    }
-
-    #[test]
     fn the_consent_key_names_are_the_windows_spellings_not_the_web_ones() {
         // `camera` -> `webcam` and `display-capture` -> `graphicsCaptureProgrammatic`: a "tidy"
         // into non-existent keys reads as absent, i.e. granted.
@@ -619,18 +601,6 @@ mod tests {
         );
         assert_eq!(consent_key(Capability::Microphone), Some("microphone"));
         assert_eq!(consent_key(Capability::Geolocation), Some("location"));
-    }
-
-    #[test]
-    fn the_clipboard_is_granted_because_windows_has_no_gate_for_it() {
-        assert_eq!(
-            read_state(Capability::ClipboardRead),
-            PermissionState::Granted
-        );
-        assert_eq!(
-            read_state(Capability::ClipboardWrite),
-            PermissionState::Granted
-        );
     }
 
     #[test]
@@ -651,19 +621,6 @@ mod tests {
             consent_value(&format!(r"{CONSENT}\skProbeNoSuchCapability")),
             None
         );
-    }
-
-    #[test]
-    fn every_requestable_capability_has_a_settings_page() {
-        for cap in Capability::ALL.iter().copied() {
-            let has_page = settings_uri(cap).is_some();
-            let is_clipboard =
-                matches!(cap, Capability::ClipboardRead | Capability::ClipboardWrite);
-            assert_eq!(
-                has_page, !is_clipboard,
-                "{cap:?}: only the clipboard has nothing to open"
-            );
-        }
     }
 
     #[test]

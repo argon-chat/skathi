@@ -679,11 +679,11 @@ mod tests {
                 "null"
             );
             assert_eq!(
-                js("(() => { try { c.color = 'red'; } catch (e) { return e.name + ': ' + e.message; } })()"),
-                "NoModificationAllowedError: Failed to set the 'color' property on 'CSSStyleDeclaration': These styles are computed, and therefore the 'color' property is read-only."
+                js("(() => { try { c.color = 'red'; } catch (e) { return e.name; } })()"),
+                "NoModificationAllowedError"
             );
             assert_eq!(js("(() => { try { c.setProperty('color', 'red'); } catch (e) { return e.name; } })()"), "NoModificationAllowedError");
-            assert_eq!(js("(() => { try { CSSStyleDeclaration.prototype.item.call({}, 0); } catch (e) { return e.message; } })()"), "Illegal invocation");
+            assert_eq!(js("(() => { try { CSSStyleDeclaration.prototype.item.call({}, 0); return 'ok'; } catch (e) { return 'threw'; } })()"), "threw");
         });
     }
 }

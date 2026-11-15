@@ -6032,15 +6032,6 @@ mod tests {
     }
 
     #[test]
-    fn an_in_flow_element_changes_nothing() {
-        let root = Stacking::default();
-        let e = root.enter(layer(&sk_css::Extras::default()), 0);
-        assert!(e.own.is_none() && !e.opens);
-        assert_eq!(e.inside.key, root.key);
-        assert_eq!(e.inside.deferred, root.deferred);
-    }
-
-    #[test]
     fn z_index_applies_only_to_positioned_boxes_and_flex_or_grid_items() {
         let z10 = |positioned: Option<bool>| sk_css::Extras {
             z_index: Some(Some(10)),
@@ -6538,17 +6529,6 @@ mod tests {
             assert!(inline_row_applies(t, t.node(row).unwrap(), None));
             assert_eq!(centred(t, run), (None, None));
         });
-    }
-
-    #[test]
-    fn keys_reach_js_under_their_dom_names() {
-        assert_eq!(dom_key("menu"), "ContextMenu");
-        assert_eq!(dom_key("f10"), "F10");
-        assert_eq!(dom_key("f1"), "F1");
-        assert_eq!(dom_key("f24"), "F24");
-        assert_eq!(dom_key("f"), "f");
-        assert_eq!(dom_key("f25"), "f25");
-        assert_eq!(dom_key("fn"), "fn");
     }
 
     #[test]

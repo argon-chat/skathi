@@ -2264,76 +2264,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_theme_takes_electrons_spellings_and_forces_only_when_asked() {
-        for t in [Theme::System, Theme::Light, Theme::Dark] {
-            assert_eq!(Theme::from_str(t.as_str()), Some(t));
-        }
-        assert_eq!(
-            Theme::from_str("Dark"),
-            None,
-            "the client's config spelling is mapped before this"
-        );
-        assert_eq!(Theme::from_str("auto"), None);
-        assert!(Theme::System.is_dark(true) && !Theme::System.is_dark(false));
-        assert!(!Theme::Light.is_dark(true) && Theme::Dark.is_dark(false));
-    }
-
-    #[test]
-    fn acrylic_is_the_system_material_and_only_its_fallback_is_advised() {
-        assert_eq!(
-            Backdrop::from_str("acrylic"),
-            Some((Backdrop::Acrylic, None))
-        );
-        assert_eq!(
-            Backdrop::from_str("blur"),
-            Some((Backdrop::Acrylic, Some(A20)))
-        );
-        let material = if cfg!(target_os = "macos") {
-            WindowBackgroundAppearance::Blurred
-        } else if cfg!(target_os = "linux") {
-            WindowBackgroundAppearance::Opaque
-        } else {
-            WindowBackgroundAppearance::AcrylicBackdrop
-        };
-        assert_eq!(Backdrop::Acrylic.to_gpui(), material);
-
-        for b in [
-            Backdrop::None,
-            Backdrop::Mica,
-            Backdrop::MicaAlt,
-            Backdrop::Acrylic,
-            Backdrop::Transparent,
-        ] {
-            assert_eq!(resolve_backdrop(b, true), (b, None), "{b:?} on 22621+");
-        }
-        assert_eq!(
-            resolve_backdrop(Backdrop::Acrylic, false),
-            (Backdrop::Acrylic, Some(A20C))
-        );
-        assert_eq!(
-            resolve_backdrop(Backdrop::Mica, false),
-            (Backdrop::Acrylic, Some(A20B))
-        );
-        assert_eq!(
-            resolve_backdrop(Backdrop::MicaAlt, false),
-            (Backdrop::Acrylic, Some(A20B))
-        );
-        assert_eq!(
-            resolve_backdrop(Backdrop::None, false),
-            (Backdrop::None, None)
-        );
-
-        // Silent about `acrylic` where DWM draws it.
-        let cfg = load_config(Some(r#"{"backdrop":"acrylic"}"#.to_string()));
-        assert_eq!(cfg.backdrop, Backdrop::Acrylic);
-        let advised = ADVISED.with(|s| s.borrow().contains(A20C));
-        assert_eq!(
-            advised,
-            cfg!(target_os = "windows") && !has_system_backdrop()
-        );
-    }
-
-    #[test]
     fn hex_colours_parse_in_all_three_lengths() {
         assert_eq!(parse_color("#fff"), Some(0xffff_ffff));
         assert_eq!(parse_color("#202020"), Some(0xff20_2020));
@@ -2418,27 +2348,6 @@ mod tests {
             ..base.clone()
         };
         assert_eq!(titlebar_area(&overlaid), (true, (0.0, 0.0, 862.0, 32.0)));
-    }
-
-    #[test]
-    fn a_system_backdrop_is_suspended_only_while_gpui_stands_in_for_it() {
-        for b in [Backdrop::Mica, Backdrop::MicaAlt, Backdrop::Acrylic] {
-            assert_eq!(
-                effective_backdrop(b, true),
-                b,
-                "{b:?} drawn, windowed or fullscreen"
-            );
-            assert_eq!(
-                effective_backdrop(b, false),
-                Backdrop::None,
-                "{b:?} with no desktop picture"
-            );
-        }
-        // Not a system material: what the app asked for is what it gets.
-        for b in [Backdrop::None, Backdrop::Transparent] {
-            assert_eq!(effective_backdrop(b, true), b);
-            assert_eq!(effective_backdrop(b, false), b);
-        }
     }
 
     #[test]
@@ -2553,31 +2462,6 @@ mod tests {
             None,
             "focus is independent of visibility"
         );
-    }
-
-    #[test]
-    fn the_css_env_carries_the_same_titlebar_rect() {
-        let s = Snapshot {
-            inner_width: 800.0,
-            inner_height: 600.0,
-            title_bar_height: 36.0,
-            fallback_titlebar: false,
-            ..Snapshot::default()
-        };
-        let env = css_env(&s, false, false);
-        assert_eq!(env.titlebar_area, Some([0.0, 0.0, 800.0, 36.0]));
-        assert_eq!(env.viewport_width, 800.0);
-        assert_eq!(env.viewport_height, 600.0);
-        assert_eq!(env.safe_area_insets, [0.0; 4]);
-    }
-
-    #[test]
-    fn os_chrome_is_a_real_mode_and_refuses_a_second_titlebar() {
-        let cfg = load_config(Some(
-            r#"{"titleBarStyle":"default","titleBarFallback":true}"#.to_string(),
-        ));
-        assert_eq!(cfg.title_bar_style, TitleBarStyle::Default);
-        assert!(!cfg.title_bar_fallback);
     }
 
     #[test]

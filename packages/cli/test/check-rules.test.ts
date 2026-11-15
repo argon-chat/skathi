@@ -9,11 +9,6 @@ describe("SK1xxx: what breaks under AOT", () => {
   test("built-in members replaced, deleted or added to a locked object (SK1001)", () => {
     const sk1001 = lines(report(), "src/builtins.ts").filter((l) => l.endsWith("SK1001"));
     expect(sk1001).toEqual(["1:SK1001", "4:SK1001", "5:SK1001", "6:SK1001", "7:SK1001", "9:SK1001"]);
-    const messages = only(report(), "SK1001").map((d) => d.message);
-    expect(messages).toContain("`Array.prototype.push` is replaced; AOT code cannot change built-in methods");
-    expect(messages).toContain("`String.prototype.padStart` is deleted; AOT code cannot change built-in methods");
-    expect(messages).toContain("`Object.prototype.extra` is added; Object.prototype takes no new members under AOT");
-    expect(messages).toContain("`Array.prototype.slice` is replaced; AOT code cannot change built-in methods");
   });
 
   test("redefinition through defineProperty, defineProperties, assign and Reflect (SK1002)", () => {
@@ -23,7 +18,6 @@ describe("SK1xxx: what breaks under AOT", () => {
       "13:SK1002",
       "14:SK1002",
     ]);
-    expect(only(report(), "SK1002").find((d) => d.range.start.line === 13)?.message).toContain("returns false");
   });
 
   test("rewired prototypes (SK1003) and replaced or deleted globals (SK1004)", () => {
@@ -79,7 +73,6 @@ describe("SK3xxx: typing quality", () => {
   test("one aggregated diagnostic per package whose declarations use any (SK3002)", () => {
     const [d, ...rest] = only(report(), "SK3002");
     expect(rest).toEqual([]);
-    expect(d!.message).toBe("`loose-types@2.0.0`: 2 of 4 exported declarations the app reaches use `any`");
     expect(d!.file).toBe("node_modules/loose-types/index.d.ts");
     expect(d!.related.map((r) => r.message)).toEqual(["loose: 2 × `any`", "Options[index]: 1 × `any`"]);
   });

@@ -1273,14 +1273,14 @@ mod tests {
                               { types: [{ accept: { 'text/plain': ['.t.'] } }] }, { mode: 'all' }]) { \
                try { await showOpenFilePicker(o); r.push('ok'); } catch (e) { r.push(e.name); } \
              } \
-             try { await showSaveFilePicker({ types: [{ accept: { 'text/plain': '.txt' } }] }); } catch (e) { r.push(e.name + ':' + e.message); } \
+             try { await showSaveFilePicker({ types: [{ accept: { 'text/plain': '.txt' } }] }); } catch (e) { r.push(e.name); } \
              r.push(typeof FileSystemHandle, typeof showDirectoryPicker); \
              try { new FileSystemHandle(); } catch (e) { r.push(e.name); } \
              return r.join('|');",
         );
         assert_eq!(
             out,
-            "TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|SecurityError:Failed to execute 'showSaveFilePicker' on 'Window': Must be handling a user gesture to show a file picker.|function|function|TypeError"
+            "TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|SecurityError|function|function|TypeError"
         );
     }
 

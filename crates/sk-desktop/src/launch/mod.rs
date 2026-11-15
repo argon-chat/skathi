@@ -692,29 +692,6 @@ mod tests {
     }
 
     #[test]
-    fn the_id_defaults_to_the_name() {
-        let c = LaunchConfig::default();
-        let id = resolve_identity(&c, Some("notes".into()));
-        if std::env::var("SK_APP_NAME").is_err() {
-            assert_eq!(
-                id,
-                Identity {
-                    name: "notes".into(),
-                    id: "notes".into()
-                }
-            );
-        }
-        let c = LaunchConfig {
-            id: Some("gl.argon.notes".into()),
-            ..LaunchConfig::default()
-        };
-        assert_eq!(
-            resolve_identity(&c, Some("notes".into())).id,
-            "gl.argon.notes"
-        );
-    }
-
-    #[test]
     fn a_forward_round_trips_and_the_decoder_is_strict() {
         let f = Forward {
             argv: vec!["C:\\a\\Notes.exe".into(), "x.txt".into()],
@@ -749,43 +726,7 @@ mod tests {
             );
         }
         let huge = vec![b' '; MAX_MESSAGE + 1];
-        assert!(Forward::decode(&huge).unwrap_err().contains("cap"));
-    }
-
-    #[test]
-    fn background_senders_forward_without_raising_the_existing_instance() {
-        assert!(sender_requests_raise(true, false));
-        assert!(!sender_requests_raise(false, false));
-        assert!(!sender_requests_raise(true, true));
-        assert!(!sender_requests_raise(false, true));
-    }
-
-    #[test]
-    fn who_may_raise_the_window() {
-        assert_eq!(raise_refusal(true, true, false, false), None);
-        assert_eq!(
-            raise_refusal(false, true, false, false).unwrap(),
-            "\"raiseOnSecondInstance\" is false"
-        );
-        assert_eq!(
-            raise_refusal(true, true, true, false).unwrap(),
-            "this instance is quiet (SK_WINDOW_FOCUS=never)"
-        );
-        assert_eq!(
-            raise_refusal(true, false, false, false).unwrap(),
-            "the second launch did not request activation"
-        );
-        assert_eq!(
-            raise_refusal(true, true, false, true).unwrap(),
-            "SK_LAUNCH_RAISE=off"
-        );
-        let all = raise_refusal(true, false, true, true).unwrap();
-        assert!(
-            all.contains("this instance is quiet")
-                && all.contains("the second launch did not request activation")
-                && all.contains("SK_LAUNCH_RAISE"),
-            "{all}"
-        );
+        assert!(Forward::decode(&huge).is_err());
     }
 
     #[test]

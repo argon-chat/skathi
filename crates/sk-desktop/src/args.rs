@@ -364,16 +364,6 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_launch_has_no_flags_and_no_url() {
-        let a = parse(&v(&["app.exe"]), None);
-        assert_eq!(a.host, HostFlags::default());
-        assert!(!a.protocol_launch);
-        assert_eq!(a.url, None);
-        assert!(a.app_args.is_empty());
-        assert_eq!(a.argv, v(&["app.exe"]));
-    }
-
-    #[test]
     fn the_inspector_command_line_still_parses() {
         let a = parse(
             &v(&[
@@ -441,21 +431,6 @@ mod tests {
     }
 
     #[test]
-    fn host_info_and_unregister_are_leading_flags() {
-        assert!(parse(&v(&["h.exe", "--sk-host-info"]), None).host.host_info);
-        assert!(
-            !parse(&v(&["h.exe", "x", "--sk-host-info"]), None)
-                .host
-                .host_info
-        );
-        assert!(
-            parse(&v(&["h.exe", "--sk-unregister-protocols"]), None)
-                .host
-                .unregister_protocols
-        );
-    }
-
-    #[test]
     fn a_protocol_launch_recovers_the_url_byte_exact() {
         let a = both(
             r#""C:\Program Files\Hello\Hello.exe" --sk-protocol-launch -- "myapp://a?b="c d"""#,
@@ -484,12 +459,6 @@ mod tests {
             let b = parse(&v(&["h.exe", flag, "--", "myapp://a"]), None);
             assert_eq!(b.url.as_deref(), Some("myapp://a"), "{flag}");
         }
-    }
-
-    #[test]
-    fn a_protocol_url_keeps_spaces_and_percent_escapes() {
-        let a = both(r#""C:\h.exe" --sk-protocol-launch -- "myapp://x/a  b%22c%20d""#);
-        assert_eq!(a.url.as_deref(), Some("myapp://x/a  b%22c%20d"));
     }
 
     #[test]

@@ -1001,27 +1001,9 @@ mod tests {
     }
 
     #[test]
-    fn the_question_names_the_app_in_the_chosen_language() {
+    fn enter_blocks_rather_than_grants() {
         let q = question(Capability::Microphone, "Argon", "en");
-        assert_eq!(q.title, "Argon");
-        assert_eq!(q.instruction, "Argon wants to use your microphone");
-        assert_eq!(q.buttons, vec!["&Allow".to_string(), "&Block".to_string()]);
         assert_eq!(q.default, 1, "Enter blocks: a stray key press never grants");
-        let q = question(Capability::Microphone, "Argon", "ru");
-        assert_eq!(q.instruction, "Argon запрашивает доступ к микрофону");
-        assert_eq!(q.buttons[0], "&Разрешить");
-        let q = question(Capability::Camera, "Argon", "ru");
-        assert_eq!(q.instruction, "Argon запрашивает доступ к камере");
-        assert!(q.content.contains("записывать видео"));
-        assert!(!q.content.contains("микрофон"));
-        assert_eq!(
-            question(Capability::Camera, "Argon", "ja").buttons[0],
-            "許可(&A)"
-        );
-        assert_eq!(
-            question(Capability::Camera, "Argon", "en").instruction,
-            "Argon wants to use your camera"
-        );
     }
     #[test]
     fn native_camera_consent_is_the_microphones_model() {

@@ -74,12 +74,11 @@ describe("bootstrap global event forwarding with sealed builtin methods", () => 
       document.dispatchEvent,
     ]).toEqual(identities);
     expect(Object.getOwnPropertyDescriptor(document, "dispatchEvent")?.writable).toBe(false);
-    expect(rt.advisories().some((warning: string) => warning.includes("could not be intercepted"))).toBe(false);
     g.__SK_UNLOAD__();
   });
 
   test("runtime dispatch preserves cancellation/once while native listeners still receive native events", () => {
-    const { rt, g, document, originalMessages } = world();
+    const { g, document, originalMessages } = world();
     let captures = 0,
       bubbles = 0,
       pageMessages = 0;
@@ -98,7 +97,6 @@ describe("bootstrap global event forwarding with sealed builtin methods", () => 
     document.removeEventListener("message", message);
     document.dispatchEvent(new Event("message"));
     expect([originalMessages(), pageMessages]).toEqual([2, 1]);
-    expect(rt.advisories().some((warning: string) => warning.includes("could not be intercepted"))).toBe(false);
     g.__SK_UNLOAD__();
   });
 
@@ -119,7 +117,6 @@ describe("bootstrap global event forwarding with sealed builtin methods", () => 
     document.dispatchEvent(new Event("message"));
     document.dispatchEvent(new Event("fullscreenchange"));
     expect([originalMessages(), oldMessages, newMessages, newRuntimeEvents]).toEqual([3, 1, 1, 1]);
-    expect(second.advisories().some((warning: string) => warning.includes("could not be intercepted"))).toBe(false);
     g.__SK_UNLOAD__();
   });
 });

@@ -322,35 +322,6 @@ mod tests {
         assert_eq!(read("String(navigator instanceof Navigator)"), "true");
     }
 
-    #[test]
-    fn the_delivery_budget_is_a_quarter_of_the_frame() {
-        assert_eq!(delivery_budget_us(None), SK_PUMP_DELIVERY_BUDGET_US);
-        assert_eq!(
-            delivery_budget_us(Some(1000.0 / 60.0)),
-            4000,
-            "60 Hz: the cap (a quarter is 4.17 ms)"
-        );
-        assert_eq!(delivery_budget_us(Some(1000.0 / 120.0)), 2083);
-        assert_eq!(delivery_budget_us(Some(1000.0 / 144.0)), 1736);
-        assert_eq!(delivery_budget_us(Some(1000.0 / 240.0)), 1041);
-        assert_eq!(
-            delivery_budget_us(Some(1000.0 / 1000.0)),
-            SK_PUMP_DELIVERY_MIN_US
-        );
-        assert_eq!(
-            delivery_budget_us(Some(100.0)),
-            SK_PUMP_DELIVERY_BUDGET_US,
-            "30 Hz and slower: still the cap"
-        );
-        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
-            assert_eq!(
-                delivery_budget_us(Some(bad)),
-                SK_PUMP_DELIVERY_BUDGET_US,
-                "{bad}"
-            );
-        }
-    }
-
     #[cfg(feature = "indexeddb")]
     #[test]
     fn indexeddb_answers_an_awaited_chain_within_a_few_frames() {

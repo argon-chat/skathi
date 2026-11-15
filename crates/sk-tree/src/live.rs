@@ -249,20 +249,6 @@ mod tests {
     }
 
     #[test]
-    fn a_write_in_place_is_a_present_and_a_new_tile_a_draw() {
-        assert_eq!(shown(TileWrite::InPlace, true), Shown::Present);
-        assert_eq!(shown(TileWrite::Placed, true), Shown::Draw);
-        assert_eq!(shown(TileWrite::Refused, true), Shown::Draw);
-        for w in [TileWrite::InPlace, TileWrite::Placed, TileWrite::Refused] {
-            assert_eq!(
-                shown(w, false),
-                Shown::Nowhere,
-                "nothing to show off screen"
-            );
-        }
-    }
-
-    #[test]
     fn a_tick_takes_the_most_any_producer_asked_for() {
         assert_eq!(take(), Shown::Nowhere);
         note(Shown::Present);

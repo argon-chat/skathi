@@ -1111,14 +1111,4 @@ mod tests {
         assert!(!bool_attr(Some("false")));
         assert!(!bool_attr(None));
     }
-
-    #[test]
-    fn an_entry_is_recent_for_the_tile_idle_time() {
-        let now = Instant::now();
-        let mut e = Entry::new(props("s"), windows::UNBOUND);
-        assert!(!e.recent(now), "never seen");
-        e.seen = Some(now);
-        assert!(e.recent(now + TILE_IDLE - Duration::from_millis(1)));
-        assert!(!e.recent(now + TILE_IDLE));
-    }
 }

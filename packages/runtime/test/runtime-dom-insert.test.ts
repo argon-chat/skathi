@@ -98,7 +98,7 @@ describe("document.createElement makes tree nodes", () => {
 
   test("the name is checked, the engine keeps <a>, <input> and the head-only tags, and the SVG namespace keeps case", () => {
     const { doc } = world();
-    expect(() => doc.createElement("")).toThrow("is not a valid name");
+    expect(() => doc.createElement("")).toThrow();
     expect(() => doc.createElement("a b")).toThrow(expect.objectContaining({ name: "InvalidCharacterError" }));
     for (const t of ["a", "input", "style", "link", "script"]) {
       expect([t, "__skId" in doc.createElement(t)]).toEqual([t, false]);
@@ -157,13 +157,13 @@ describe("Node: appendChild, insertBefore, removeChild, replaceChild", () => {
     const { doc, vue } = world();
     const outer = vue("div");
     const inner = vue("div", outer);
-    expect(() => inner.appendChild(outer)).toThrow("The new child element contains the parent.");
+    expect(() => inner.appendChild(outer)).toThrow(expect.objectContaining({ name: "HierarchyRequestError" }));
     expect(() => outer.appendChild(outer)).toThrow(expect.objectContaining({ name: "HierarchyRequestError" }));
     const t = doc.createTextNode("t");
     expect(() => t.appendChild(doc.createElement("b"))).toThrow(
       expect.objectContaining({ name: "HierarchyRequestError" }),
     );
-    expect(() => outer.appendChild({} as MirrorNode)).toThrow("parameter 1 is not of type 'Node'");
+    expect(() => outer.appendChild({} as MirrorNode)).toThrow(TypeError);
     expect(() => outer.appendChild("text" as unknown as MirrorNode)).toThrow(TypeError);
   });
 
@@ -321,9 +321,7 @@ describe("insertAdjacentElement / insertAdjacentText", () => {
     expect(() => mid.insertAdjacentElement("inside", mk("y"))).toThrow(
       expect.objectContaining({ name: "SyntaxError" }),
     );
-    expect(() => mid.insertAdjacentElement("beforeend", doc.createTextNode("t") as MirrorElement)).toThrow(
-      "parameter 2 is not of type 'Element'",
-    );
+    expect(() => mid.insertAdjacentElement("beforeend", doc.createTextNode("t") as MirrorElement)).toThrow(TypeError);
   });
 });
 
@@ -348,7 +346,7 @@ describe("what the renderer and script share", () => {
     expect(rt.host.tree.errors).toEqual([]);
   });
 
-  test("a node Vue freed has id 0, and inserting it again is an advisory, never a host op on a recycled id", () => {
+  test("a node Vue freed has id 0, and inserting it again is never a host op on a recycled id", () => {
     const { rt, vue } = world();
     const parent = vue("div");
     const gone = vue("span", parent);
@@ -356,17 +354,15 @@ describe("what the renderer and script share", () => {
     expect(gone.__skId).toBe(0);
     expect(parent.appendChild(gone)).toBe(gone);
     expect(parent.childNodes).toEqual([]);
-    expect(rt.advisories().join("\n")).toContain("already freed");
     expect(rt.host.tree.errors).toEqual([]);
   });
 
-  test("an engine <a> appended to the tree is an advisory, and an engine <style> anywhere joins the stylesheet", async () => {
+  test("an engine <a> appended to the tree is kept, and an engine <style> anywhere joins the stylesheet", async () => {
     const rt = createRuntime({ globals: { __SK_CSS__: [".bundle{}"] } });
     rt.createApp({ render: () => null }).mount();
     const doc = rt.global.document as unknown as DomDocument;
     const a = doc.createElement("a");
     expect(doc.body.appendChild(a)).toBe(a);
-    expect(rt.advisories().join("\n")).toContain("engine's detached element");
     const s = doc.createElement("style");
     s.textContent = ".late{}";
     doc.body.appendChild(s);

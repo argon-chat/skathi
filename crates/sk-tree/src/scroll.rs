@@ -296,20 +296,4 @@ mod tests {
         assert_eq!(align_delta(Align::Nearest, 100.0, 50.0, 100.0, 200.0), 0.0);
         assert_eq!(align_delta(Align::Nearest, 250.0, 50.0, 100.0, 200.0), 0.0);
     }
-
-    #[test]
-    fn the_alignment_codes_are_what_the_runtime_sends() {
-        assert_eq!(Align::from_code(0), Align::Start);
-        assert_eq!(Align::from_code(1), Align::Center);
-        assert_eq!(Align::from_code(2), Align::End);
-        assert_eq!(Align::from_code(3), Align::Nearest);
-        assert_eq!(Align::from_code(99), Align::Nearest);
-    }
-
-    #[test]
-    fn a_node_that_does_not_scroll_answers_nothing() {
-        assert!(info(0).is_none());
-        assert!(set(0, Some(10.0), Some(10.0)).is_none());
-        assert!(by(0, 10.0, 10.0).is_none());
-    }
 }

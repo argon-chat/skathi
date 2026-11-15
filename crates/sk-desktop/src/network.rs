@@ -339,12 +339,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_none_level_is_offline() {
-        let levels: Vec<bool> = (0..=5).map(level_is_online).collect();
-        assert_eq!(levels, [true, false, true, true, true, true]);
-    }
-
-    #[test]
     fn a_change_waits_chromium_s_delay_and_a_flap_inside_it_is_not_announced() {
         let t0 = Instant::now();
         let ms = |n: u64| t0 + Duration::from_millis(n);

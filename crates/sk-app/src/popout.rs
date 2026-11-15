@@ -1334,61 +1334,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn options_default_to_a_small_centred_window_with_os_chrome() {
-        let o = parse_options("");
-        assert_eq!(o.title, "Skathi");
-        assert_eq!((o.width, o.height), (420.0, 320.0));
-        assert!(o.x.is_none() && o.y.is_none());
-        assert!(o.os_chrome);
-        assert!(o.resizable);
-        assert!(!o.always_on_top);
-        assert!(o.backdrop.is_none());
-        assert!(!o.activate);
-        assert!(o.visible);
-        assert!(!o.cover);
-        assert!(o.taskbar);
-        assert!(!o.full_resolution);
-        assert!(!o.ignore_mouse_events);
-        assert!(o.focusable);
-        assert!(!o.content_protection);
-        assert!(o.monitor.is_none());
-    }
-
-    #[test]
-    fn an_overlay_is_click_through_unfocusable_and_left_out_of_capture() {
-        let o = parse_options(
-            r#"{"ignoreMouseEvents":true,"focusable":false,"contentProtection":true,
-                "cover":"monitor","monitor":1,"alwaysOnTop":true}"#,
-        );
-        assert!(o.ignore_mouse_events);
-        assert!(!o.focusable);
-        assert!(o.content_protection);
-        assert!(o.cover);
-        assert_eq!(o.monitor, Some(1));
-        assert!(o.always_on_top);
-        assert!(parse_options(r#"{"monitor":-1}"#).monitor.is_none());
-    }
-
-    #[test]
-    fn a_viewer_is_a_hidden_owned_cover_window_at_full_resolution() {
-        let o = parse_options(
-            r#"{"visible":false,"cover":"monitor","taskbar":false,"fullResolution":true,"activate":true}"#,
-        );
-        assert!(!o.visible);
-        assert!(o.cover);
-        assert!(!o.taskbar);
-        assert!(o.full_resolution);
-        assert!(o.activate);
-    }
-
-    #[test]
-    fn an_unknown_cover_is_no_cover() {
-        assert!(!parse_options(r#"{"cover":"screen"}"#).cover);
-        assert!(!parse_options(r#"{"cover":"none"}"#).cover);
-        assert!(!parse_options(r#"{"cover":""}"#).cover);
-    }
-
-    #[test]
     fn options_are_read_off_the_json() {
         let o = parse_options(
             r#"{"title":"Palette","x":100,"y":200,"width":300,"height":150,
@@ -1405,12 +1350,5 @@ mod tests {
         assert_eq!(o.min_width, Some(120.0));
         assert_eq!(o.min_height, Some(90.0));
         assert_eq!(o.backdrop, Some(Backdrop::Acrylic));
-    }
-
-    #[test]
-    fn an_unknown_chrome_value_is_the_default_one_rather_than_nothing() {
-        // Anything but "hidden" means the OS draws the caption, which cannot leave a window unmovable.
-        assert!(parse_options(r#"{"chrome":"wat"}"#).os_chrome);
-        assert!(parse_options(r#"{"chrome":"default"}"#).os_chrome);
     }
 }

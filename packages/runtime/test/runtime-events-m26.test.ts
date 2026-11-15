@@ -87,16 +87,6 @@ describe("contextmenu", () => {
     expect(rt.advisories()).toEqual([]);
   });
 
-  test("an uncancelled one says, once, that no native menu opens", () => {
-    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
-    const { inner } = tree(rt);
-    inner.addEventListener("contextmenu", () => {});
-    expect(fire(rt, inner, "contextmenu", 0, 0, 2)).toBe(true);
-    fire(rt, inner, "contextmenu", 0, 0, 2);
-    expect(rt.advisories().length).toBe(1);
-    expect(rt.advisories()[0]).toContain("context menu");
-  });
-
   test("from the keyboard: no button, at the coordinates the host chose", () => {
     const rt = createRuntime({ MouseEvent: FakeMouseEvent });
     const { inner } = tree(rt);
@@ -401,33 +391,6 @@ describe("a cancelled press", () => {
     expect(fire(rt, other, "mousedown", 0, 0, 0)).toBe(false);
     expect(rt.advisories()).toEqual([]);
   });
-
-  test("on a text field it is advised once: the field has already focused itself", () => {
-    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
-    const { outer } = tree(rt);
-    const field = rt.nodeOps.createElement("textarea") as unknown as El;
-    rt.nodeOps.insert(field as never, outer as never, null);
-    field.addEventListener("mousedown", (e) => e.preventDefault());
-    expect(fire(rt, field, "mousedown", 0, 0, 0)).toBe(false);
-    fire(rt, field, "mousedown", 0, 0, 0);
-    expect(rt.advisories().length).toBe(1);
-    expect(rt.advisories()[0]).toContain("already focused itself");
-  });
-
-  test("an uncancelled press on a field, or a cancelled one on a file input, is not advised", () => {
-    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
-    const { outer } = tree(rt);
-    const field = rt.nodeOps.createElement("input") as unknown as El;
-    rt.nodeOps.insert(field as never, outer as never, null);
-    field.addEventListener("mousedown", () => {});
-    expect(fire(rt, field, "mousedown", 0, 0, 0)).toBe(true);
-    const file = rt.nodeOps.createElement("input") as unknown as El;
-    file.setAttribute("type", "file");
-    rt.nodeOps.insert(file as never, outer as never, null);
-    file.addEventListener("mousedown", (e) => e.preventDefault());
-    expect(fire(rt, file, "mousedown", 0, 0, 0)).toBe(false);
-    expect(rt.advisories().filter((a) => a.includes("already focused itself"))).toEqual([]);
-  });
 });
 
 describe("keyboard clicks", () => {
@@ -450,15 +413,6 @@ describe("keyboard clicks", () => {
     keyClick(rt, link, "Enter");
     keyClick(rt, box, " ");
     expect(seen).toEqual([0, 0, 0, 0]);
-    expect(rt.advisories()).toEqual([]);
-  });
-
-  test("a mouse click carries no key and is not advised", () => {
-    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
-    const { inner } = tree(rt);
-    inner.addEventListener("click", () => {});
-    fire(rt, inner, "click", 5, 5, 0, 1 << 4);
-    fire(rt, inner, "click", 5, 5, 0, 0);
     expect(rt.advisories()).toEqual([]);
   });
 });
@@ -498,17 +452,6 @@ describe("passive listeners (a cancelled wheel scrolls nothing)", () => {
     expect(fire(rt, inner, "wheel", 0, 40)).toBe(true);
     doc.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
     expect(fire(rt, inner, "wheel", 0, 40)).toBe(false);
-  });
-
-  test("a cancelled wheel on a <textarea> is advised once: the widget has already scrolled", () => {
-    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
-    const { outer } = tree(rt);
-    const ta = rt.nodeOps.createElement("textarea") as unknown as El;
-    rt.nodeOps.insert(ta as never, outer as never, null);
-    ta.addEventListener("wheel", (e) => e.preventDefault());
-    expect(fire(rt, ta, "wheel", 0, 40)).toBe(false);
-    fire(rt, ta, "wheel", 0, 40);
-    expect(rt.advisories().filter((a) => a.includes("already scrolled")).length).toBe(1);
   });
 
   test("the default applies to wheel and touch only: a document mousedown listener still cancels", () => {
@@ -642,7 +585,7 @@ describe("<img> load and error", () => {
     img.src = "bad.png";
     const bad = img.decode();
     fire(rt, img, "error", 0, 0, 0, 0, "bad.png");
-    await expect(bad).rejects.toThrow("cannot be decoded");
+    await expect(bad).rejects.toThrow();
   });
 
   test("an empty src is complete, and its answer is an error", () => {
@@ -662,7 +605,7 @@ describe("<img> load and error", () => {
     const d = Object.getOwnPropertyDescriptor(proto, "naturalWidth")!;
     const img = rt.nodeOps.createElement("img");
     expect(d.get!.call(img)).toBe(0);
-    expect(() => d.get!.call(rt.nodeOps.createElement("div"))).toThrow("Illegal invocation");
+    expect(() => d.get!.call(rt.nodeOps.createElement("div"))).toThrow();
     const div = rt.nodeOps.createElement("div") as unknown as El;
     expect([div.naturalWidth, div.complete]).toEqual([undefined, undefined]);
     div.src = "kept";

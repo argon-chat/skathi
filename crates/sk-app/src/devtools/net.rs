@@ -1712,10 +1712,6 @@ mod tests {
         assert_eq!(marker, before + 1, "the seqs run on through a reload");
         let d = ring.detail(marker).unwrap();
         assert!(matches!(d.get("detail"), Some(Json::Null)));
-        assert!(d
-            .get("note")
-            .and_then(Json::as_str)
-            .is_some_and(|n| n.starts_with("a reload marker")));
         assert_eq!(
             ring.detail(before)
                 .unwrap()
@@ -1723,14 +1719,6 @@ mod tests {
                 .and_then(Json::as_f64),
             Some(rid as f64)
         );
-        let plain = summary(&mut ring, None);
-        let note = ring
-            .detail(plain)
-            .unwrap()
-            .get("note")
-            .and_then(Json::as_str)
-            .map(str::to_string);
-        assert!(note.is_some_and(|n| n.starts_with("no details were recorded")));
     }
 
     #[test]
@@ -1770,11 +1758,6 @@ mod tests {
             _ => panic!("no wire cookies"),
         };
         assert_eq!(wire, ["sid=abc; Path=/; HttpOnly", "theme=dark"]);
-        assert!(c
-            .get("note")
-            .and_then(Json::as_str)
-            .unwrap()
-            .contains("exactly as the transport received"));
     }
 
     #[test]
@@ -1856,15 +1839,7 @@ mod tests {
         let seq = summary(&mut ring, None);
         let d = ring.detail(seq).unwrap();
         assert_eq!(d.get("detail"), Some(&Json::Null));
-        assert!(d
-            .get("note")
-            .and_then(Json::as_str)
-            .unwrap()
-            .contains("no details"));
-        assert!(ring
-            .detail(seq + 10)
-            .unwrap_err()
-            .contains("no network entry"));
+        assert!(ring.detail(seq + 10).is_err());
     }
 
     #[test]

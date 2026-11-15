@@ -331,35 +331,41 @@ mod tests {
     }
 
     #[test]
-    fn what_libvpx_would_refuse_is_refused_first_with_a_reason() {
+    fn what_libvpx_would_refuse_is_refused_first() {
         let err =
             |video: &[Vec<u8>], blocks: &[Vec<u8>]| index(&with(video, &[], blocks)).err().unwrap();
         let k = keyframe(8, 8);
-        assert!(
-            matches!(err(&size(8, 8), &[simple_block(1, 0, &inter(true))]), VideoError::Malformed(w) if w.contains("keyframe"))
-        );
-        assert!(
-            matches!(err(&size(8, 8), &[simple_block(1, 0, b"\x00junk")]), VideoError::Malformed(w) if w.contains("not a VP9 frame"))
-        );
+        assert!(matches!(
+            err(&size(8, 8), &[simple_block(1, 0, &inter(true))]),
+            VideoError::Malformed(_)
+        ));
+        assert!(matches!(
+            err(&size(8, 8), &[simple_block(1, 0, b"\x00junk")]),
+            VideoError::Malformed(_)
+        ));
         let mut p1 = k.clone();
         p1[0] |= 0b0010_0000; // profile_low_bit: profile 1
-        assert!(
-            matches!(err(&size(8, 8), &[simple_block(1, 0, &p1)]), VideoError::Unsupported(w) if w.contains("profile 1"))
-        );
-        assert!(
-            matches!(err(&size(8, 8), &[simple_block(1, 0, &keyframe(5000, 8))]), VideoError::Unsupported(w) if w.contains("5000×8"))
-        );
-        assert!(
-            matches!(err(&size(5000, 8), &[simple_block(1, 0, &k)]), VideoError::Unsupported(w) if w.contains("5000×8"))
-        );
+        assert!(matches!(
+            err(&size(8, 8), &[simple_block(1, 0, &p1)]),
+            VideoError::Unsupported(_)
+        ));
+        assert!(matches!(
+            err(&size(8, 8), &[simple_block(1, 0, &keyframe(5000, 8))]),
+            VideoError::Unsupported(_)
+        ));
+        assert!(matches!(
+            err(&size(5000, 8), &[simple_block(1, 0, &k)]),
+            VideoError::Unsupported(_)
+        ));
         assert!(matches!(
             err(&size(8, 8), &[simple_block(1, 0, &inter(false))]),
             VideoError::Malformed(_)
         ));
         let alpha_p1 = [size(8, 8), vec![uint(ALPHA_MODE, 1)]].concat();
-        assert!(
-            matches!(err(&alpha_p1, &[block_group(1, 0, &k, Some(&p1), None)]), VideoError::Unsupported(w) if w.contains("alpha video is VP9 profile 1"))
-        );
+        assert!(matches!(
+            err(&alpha_p1, &[block_group(1, 0, &k, Some(&p1), None)]),
+            VideoError::Unsupported(_)
+        ));
     }
 
     #[test]

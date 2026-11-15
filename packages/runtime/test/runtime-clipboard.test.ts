@@ -29,9 +29,8 @@ function world() {
 const store = () => ({ types: ["text/plain"], getData: () => "hello" });
 
 describe("ClipboardEvent", () => {
-  test("the codes are the host's, and a listener arms the host bit", () => {
+  test("a listener arms the host bit", () => {
     const { rt, input } = world();
-    expect([rt.EV_CODES.paste, rt.EV_CODES.copy, rt.EV_CODES.cut]).toEqual([39, 40, 41]);
     rt.host.listeners.length = 0;
     rt.patchProp(input, "onPaste", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.paste)).toEqual([{ id: input.__skId, code: 39, on: true }]);

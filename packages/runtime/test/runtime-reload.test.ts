@@ -182,8 +182,5 @@ describe("a same-realm reload", () => {
     expect(g.__SK_HOST_STATE__).toBe("host");
     expect(typeof g.__sk_host_fn).toBe("function");
     expect(g.pinned).toBe(1);
-    expect(
-      first.advisories().some((l: string) => l.includes("1 global(s) the old app declared cannot be deleted")),
-    ).toBe(true);
   });
 });

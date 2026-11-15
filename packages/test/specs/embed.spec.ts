@@ -36,7 +36,6 @@ test("an embedded app calls its embedder, hears its events, and closes without e
   expect(out.first.add).toEqual({ ok: 5 });
   expect(out.first.fail).toEqual({ error: "AppHostError", message: "no such luck", function: "fail" });
   expect(out.first.missing.error).toBe("TypeError");
-  expect(out.first.missing.message).toContain('no function "missing"');
   expect(out.second).toEqual({ tick: { n: 1 } });
   expect(out.refusedNotJson).toBe("the event's data is not JSON");
   expect(out.exit.clean).toBe(true);

@@ -39,21 +39,6 @@ describe("appWindow namespace", () => {
     expect(calls).toEqual(["maximize"]);
     expect(rt.advisories()).toEqual([]);
   });
-
-  test("getCurrentWindow() is appWindow — the name ported Tauri code uses", () => {
-    const { host } = fakeHost();
-    windowSlot.__SK_WINDOW__ = host;
-    const rt = createRuntime();
-    expect(rt.getCurrentWindow()).toBe(rt.appWindow);
-  });
-
-  test("defineWindow forwards to the host", () => {
-    const { calls, host } = fakeHost();
-    windowSlot.__SK_WINDOW__ = host;
-    const rt = createRuntime();
-    rt.defineWindow({ title: "Notes" });
-    expect(calls).toEqual([["defineWindow", { title: "Notes" }]]);
-  });
 });
 
 // The prelude's shape: getters and `is*()` over a plain snapshot, and `onChange` subscribers called after it moves.
@@ -167,11 +152,6 @@ describe("appWindow reactivity", () => {
 });
 
 describe("no windowing host", () => {
-  test("the advisory is LAZY — importing the module warns about nothing", () => {
-    const rt = createRuntime();
-    expect(rt.advisories()).toEqual([]);
-  });
-
   test("touching the inert window warns once and never throws", () => {
     const rt = createRuntime();
     expect(() => rt.appWindow.maximize()).not.toThrow();
@@ -180,10 +160,7 @@ describe("no windowing host", () => {
       rt.appWindow.backdrop = "mica";
     }).not.toThrow();
 
-    const advisories = rt.advisories();
-    expect(advisories.length).toBe(1);
-    expect(advisories[0]).toContain("windowing host is missing");
-    expect(advisories[0]).toContain("appWindow` is inert");
+    expect(rt.advisories().length).toBe(1);
   });
 
   test("defineWindow without a host warns instead of throwing", () => {

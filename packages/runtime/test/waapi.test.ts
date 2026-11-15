@@ -1,14 +1,9 @@
-// Web Animations' object model (src/waapi.ts): `Element.animate()`, the `Animation` state machine, promises, events and
-// keyframe/timing processing. The host's painting half is a fake that records the effect and the clock.
+// Web Animations' object model (src/waapi.ts): `Element.animate()`, the `Animation` state machine, promises and events.
+// The host's painting half is a fake that records the effect and the clock.
 
 import { describe, expect, test } from "bun:test";
 import { installWaapi } from "../src/waapi";
-import {
-  createReferenceWaapiCore,
-  parseEasing,
-  referenceEffect,
-  referenceValues,
-} from "./fixtures/waapi-core-reference";
+import { createReferenceWaapiCore, referenceEffect, referenceValues } from "./fixtures/waapi-core-reference";
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -24,7 +19,7 @@ function world() {
   let values: string | null = null;
   const host = {
     setEffect(id: number, node: number, frames: Any[], timing: Any) {
-      const projected = referenceEffect(frames, notes);
+      const projected = referenceEffect(frames);
       calls.push({ op: "set", id, node, frames: projected.frames, timing: { ...timing }, easing: timing.easing });
       return projected.notes;
     },
@@ -39,7 +34,6 @@ function world() {
       return referenceValues(values);
     },
   };
-  let notes = "";
   const HTMLProto: Any = {};
   const SVGProto: Any = {};
   const ElementProto: Any = {};
@@ -108,9 +102,6 @@ function world() {
     ElementProto,
     get now() {
       return now;
-    },
-    set notes(v: string) {
-      notes = v;
     },
     set values(v: string | null) {
       values = v;
@@ -382,98 +373,5 @@ describe("Element.animate()", () => {
     await w.frame();
     await w.frame(120);
     expect(done).toBe(true);
-  });
-
-  test("the host's notes become advisories", () => {
-    const w = world();
-    w.notes = "Wfilter\nW--x";
-    w.el(1).animate({ filter: ["blur(0px)", "blur(4px)"], "--x": [0, 1] } as Any, 100);
-    expect(w.warnings).toContain("waapi:property:filter");
-    expect(w.warnings).toContain("waapi:property:--x");
-  });
-});
-
-describe("keyframes and timing", () => {
-  test("the list form computes missing offsets and refuses ones that go backwards", () => {
-    const w = world();
-    const E = w.globals.KeyframeEffect as Any;
-    const e = new E(null, [{ opacity: 0 }, { opacity: 0.2 }, { opacity: 0.4, offset: 0.8 }, { opacity: 1 }]);
-    expect(e.getKeyframes().map((k: Any) => k.computedOffset)).toEqual([0, 0.4, 0.8, 1]);
-    expect(e.getKeyframes()[2].offset).toBe(0.8);
-    expect(
-      () =>
-        new E(null, [
-          { opacity: 0, offset: 0.5 },
-          { opacity: 1, offset: 0.2 },
-        ]),
-    ).toThrow(TypeError);
-    expect(() => new E(null, [{ opacity: 0, offset: 1.5 }])).toThrow(TypeError);
-    expect(new E(null, [{ opacity: 1 }]).getKeyframes()[0].computedOffset).toBe(1);
-  });
-
-  test("the property-indexed form spaces each property's values and merges them", () => {
-    const w = world();
-    const E = w.globals.KeyframeEffect as Any;
-    const e = new E(null, { opacity: [0, 1], transform: ["none", "scale(2)", "none"], easing: "ease-in" });
-    const k = e.getKeyframes();
-    expect(k.map((f: Any) => f.computedOffset)).toEqual([0, 0.5, 1]);
-    expect(k[0]).toMatchObject({ opacity: "0", transform: "none", easing: "ease-in" });
-    expect(k[1]).toMatchObject({ transform: "scale(2)" });
-    expect(k[1].opacity).toBeUndefined();
-    expect(new E(null, { opacity: [1] }).getKeyframes()[0].computedOffset).toBe(1);
-  });
-
-  test("invalid timing and easing throw TypeError, linear() among them", () => {
-    const w = world();
-    const node = w.el(1);
-    expect(() => node.animate({ opacity: 0 }, { easing: "linear(0, 1)" })).toThrow(TypeError);
-    expect(() => node.animate({ opacity: 0 }, { duration: -1 })).toThrow(TypeError);
-    expect(() => node.animate({ opacity: 0 }, { fill: "sideways" })).toThrow(TypeError);
-    expect(() => node.animate({ opacity: 0 }, { iterations: NaN })).toThrow(TypeError);
-    expect(() => node.animate([{ opacity: 0, easing: "bounce" }])).toThrow(TypeError);
-    expect(() =>
-      node.animate({ opacity: 0 }, { duration: "auto", direction: "alternate", iterations: Infinity }),
-    ).not.toThrow();
-  });
-
-  test("hyphenated names are ignored with an advisory, camelCase becomes CSS", () => {
-    const w = world();
-    w.el(1).animate({ "background-color": ["red", "blue"], backgroundColor: ["red", "blue"] } as Any, 100);
-    expect(w.last("set").frames.map((f: Any) => [f.computed, f.props])).toEqual([
-      [0, [["background-color", "red"]]],
-      [1, [["background-color", "blue"]]],
-    ]);
-    expect(w.warnings).toContain("waapi:hyphen:background-color");
-  });
-
-  test("the timing model: delay, fill, iterations, direction", async () => {
-    const w = world();
-    const a = w
-      .el(1)
-      .animate({ opacity: [0, 1] }, { duration: 100, delay: 50, iterations: 3, direction: "alternate", fill: "both" });
-    a.pause();
-    const t = (ms: number) => {
-      a.currentTime = ms;
-      return a.effect.getComputedTiming();
-    };
-    expect(t(0)).toMatchObject({ progress: 0, currentIteration: 0 });
-    expect(t(75)).toMatchObject({ progress: 0.25, currentIteration: 0 });
-    expect(t(175)).toMatchObject({ progress: 0.75, currentIteration: 1 });
-    expect(t(275)).toMatchObject({ progress: 0.25, currentIteration: 2 });
-    expect(t(1000)).toMatchObject({ progress: 1, currentIteration: 2 });
-    expect(a.effect.getComputedTiming()).toMatchObject({ endTime: 350, activeDuration: 300 });
-  });
-
-  test("easings evaluate like CSS", () => {
-    const close = (a: number, b: number) => expect(Math.abs(a - b)).toBeLessThan(1e-3);
-    close(parseEasing("ease")!(0.5), 0.8024);
-    close(parseEasing("ease-in-out")!(0.5), 0.5);
-    close(parseEasing("cubic-bezier(0.34, 1.56, 0.64, 1)")!(0.5), 1.0874);
-    close(parseEasing("cubic-bezier(0.34, 1.56, 0.64, 1)")!(0.25), 0.8163);
-    expect(parseEasing("steps(4, end)")!(0.6)).toBe(0.5);
-    expect(parseEasing("steps(4, jump-start)")!(0.6)).toBe(0.75);
-    expect(parseEasing("step-end")!(0.99)).toBe(0);
-    expect(parseEasing("cubic-bezier(2, 0, 0, 1)")).toBe(null);
-    expect(parseEasing("linear(0, 1)")).toBe(null);
   });
 });

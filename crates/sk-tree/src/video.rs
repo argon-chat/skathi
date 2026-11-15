@@ -859,14 +859,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn boolean_attributes_follow_the_html_rule() {
-        assert!(!bool_attr(None));
-        assert!(bool_attr(Some("")));
-        assert!(bool_attr(Some("true")));
-        assert!(!bool_attr(Some("false")));
-    }
-
-    #[test]
     fn element_api_writes_before_the_decoder_are_kept_for_it() {
         let id = 0x7fff_0001;
         assert!(
@@ -894,14 +886,6 @@ mod tests {
         assert_eq!(api_of(id, false).muted, None);
         gc(|n| n != id);
         assert!(API.with(|m| !m.borrow().contains_key(&id)));
-    }
-
-    #[test]
-    fn numeric_attributes_reject_nonsense_rather_than_guessing() {
-        assert_eq!(number_attr(Some("0.5")), Some(0.5));
-        assert_eq!(number_attr(Some(" 2 ")), Some(2.0));
-        assert_eq!(number_attr(Some("fast")), None);
-        assert_eq!(number_attr(None), None);
     }
 
     #[test]

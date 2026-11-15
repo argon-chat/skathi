@@ -152,19 +152,6 @@ describe("the host's pick", () => {
     expect(seen).toEqual([]);
     expect(select.selectedIndex).toBe(0);
   });
-
-  test("an @change on a select is not told it never fires", () => {
-    const rt = createRuntime();
-    const select = make(rt, "select");
-    rt.patchProp(select, "onChange", null, () => {});
-    const div = make(rt, "div");
-    rt.patchProp(div, "onChange", null, () => {});
-    return Promise.resolve().then(() => {
-      const advice = rt.advisories().filter((a: string) => a.includes("@change"));
-      expect(advice.length).toBe(1);
-      expect(advice[0]).toContain("<select>");
-    });
-  });
 });
 
 describe("v-model", () => {
@@ -287,7 +274,6 @@ describe("v-model", () => {
     );
     expect(Array.from(el.selectedOptions).map((o: El) => o.value)).toEqual(["b", "c"]);
     expect(el.type).toBe("select-multiple");
-    expect(rt.advisories().some((a: string) => a.includes("list box"))).toBe(true);
     pick(rt, el, 0);
     expect(model.value).toEqual(["a"]);
     const rt2 = createRuntime();

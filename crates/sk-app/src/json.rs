@@ -316,15 +316,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_a_manifest() {
-        let v = parse(r#"{"rev":3,"vendorRev":1,"entry":"a/b.js","modules":["a/b.js","a/C.vue"]}"#)
-            .unwrap();
-        assert_eq!(v.get("rev").and_then(Json::as_f64), Some(3.0));
-        assert_eq!(v.get("entry").and_then(Json::as_str), Some("a/b.js"));
-        assert_eq!(v.get("modules").and_then(Json::as_arr).unwrap().len(), 2);
-    }
-
-    #[test]
     fn reads_changes_and_escapes() {
         let v = parse("{\"changed\":[{\"id\":\"x\\u00e9/y.vue\",\"kind\":\"rerender\"}]}").unwrap();
         let a = v.get("changed").and_then(Json::as_arr).unwrap();

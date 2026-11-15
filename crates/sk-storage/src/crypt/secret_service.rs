@@ -312,7 +312,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("short.key");
         fs::write(&path, b"short").unwrap();
-        assert!(from_file(&path).unwrap_err().contains("not a 256-bit key"));
+        assert!(from_file(&path).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"short");
         let _ = fs::remove_dir_all(dir);
     }

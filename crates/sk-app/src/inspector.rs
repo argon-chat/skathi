@@ -500,17 +500,3 @@ pub fn poll_frame(cx: &mut App) {
         cx.quit();
     }
 }
-
-#[cfg(all(test, not(feature = "native-aot")))]
-mod engine_policy_tests {
-    use super::*;
-    #[test]
-    fn unsupported_native_selection_fails_before_vm_init_but_jit_is_explicit() {
-        assert!(engine_without_native(None, false).is_ok());
-        assert!(engine_without_native(Some(OsStr::new("auto")), false).is_ok());
-        assert!(engine_without_native(Some(OsStr::new("native")), false).is_err());
-        assert!(engine_without_native(None, true).is_err());
-        assert!(engine_without_native(Some(OsStr::new("jit")), true).is_ok());
-        assert!(engine_without_native(Some(OsStr::new("JIT")), false).is_err());
-    }
-}

@@ -91,7 +91,6 @@ export interface LoaderWorld {
   hmr: HmrCalls;
   runs: (id: string) => number;
   hardRestarted: () => boolean;
-  logsMatching: (needle: string) => string[];
 }
 
 export function createLoader(): LoaderWorld {
@@ -138,7 +137,6 @@ export function createLoader(): LoaderWorld {
     hmr,
     runs: (id: string) => world.exec.get(id) || 0,
     hardRestarted: () => logs.some((l) => l.indexOf("hard restart") >= 0),
-    logsMatching: (needle: string) => logs.filter((l) => l.indexOf(needle) >= 0),
   };
   return world;
 }

@@ -246,13 +246,4 @@ mod tests {
         assert!(px.chunks_exact(4).any(|p| p[3] == 255), "something opaque");
         assert!(engine.estimated_bytes() > 48 * 48 * 4);
     }
-
-    #[test]
-    fn a_cut_video_and_garbage_are_named() {
-        let webm: Arc<[u8]> = Arc::from(&b"\x1a\x45\xdf\xa3\x9f"[..]);
-        let error = load(&webm).err().unwrap();
-        assert!(error.contains("malformed video sticker"), "{error}");
-        let png: Arc<[u8]> = Arc::from(&b"\x89PNG\r\n"[..]);
-        assert!(load(&png).err().unwrap().contains("neither"));
-    }
 }

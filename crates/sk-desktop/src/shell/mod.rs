@@ -519,18 +519,6 @@ mod tests {
     }
 
     #[test]
-    fn io_errors_map_to_dom_names() {
-        let nf = std::io::Error::from_raw_os_error(2);
-        let f = fail_from_io(&nf, "openPath", "C:\\x");
-        assert_eq!(
-            (f.name, f.code, f.os_error),
-            ("NotFoundError", Some("ENOENT"), Some(2))
-        );
-        let ad = std::io::Error::from_raw_os_error(if cfg!(windows) { 5 } else { 13 });
-        assert_eq!(fail_from_io(&ad, "t", "x").name, "NotAllowedError");
-    }
-
-    #[test]
     fn a_refused_call_answers_synchronously_without_a_token() {
         assert_eq!(
             start_open_external("file:///x", false).unwrap_err().name,

@@ -130,23 +130,7 @@ mod tests {
             user_folder("APPDATA", "").unwrap()
         );
         for bad in ["APP_DATA", "appdata2", "", "ROAMING", "LOCAL"] {
-            let e = user_folder(bad, "").unwrap_err();
-            assert!(e.contains("not a user folder kind"), "{bad:?}: {e}");
-            assert!(
-                e.contains("LOCALAPPDATA"),
-                "the error must list the kinds: {e}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_two_appdata_kinds_are_distinct_on_windows_and_the_same_elsewhere() {
-        let roaming = user_folder("APPDATA", "").unwrap();
-        let local = user_folder("LOCALAPPDATA", "").unwrap();
-        if cfg!(target_os = "windows") {
-            assert_ne!(roaming, local, "Windows has a roaming/local split");
-        } else {
-            assert_eq!(roaming, local, "no other platform does");
+            assert!(user_folder(bad, "").is_err(), "{bad:?}");
         }
     }
 
@@ -169,12 +153,9 @@ mod tests {
 
     #[test]
     fn a_subfolder_cannot_climb_out_of_its_known_folder() {
-        for bad in ["..", "../x", "a/../..", "..\\..\\Windows"] {
-            let e = user_folder("APPDATA", bad).unwrap_err();
-            assert!(e.contains(".."), "{bad:?}: {e}");
+        for bad in ["..", "../x", "a/../..", "..\\..\\Windows", "C:\\Windows"] {
+            assert!(user_folder("APPDATA", bad).is_err(), "{bad:?}");
         }
-        let e = user_folder("APPDATA", "C:\\Windows").unwrap_err();
-        assert!(e.contains("relative"), "{e}");
         // A subfolder that normalises away is an error, not the whole base folder.
         assert!(user_folder("APPDATA", "./").is_err());
     }

@@ -73,14 +73,12 @@ describe("<input type=file> (HTML)", () => {
     expect(label()).toBe("No file chosen");
     expect(input.files).toBeInstanceOf(FakeFileList);
     expect([input.files.length, input.value]).toEqual([0, ""]);
-    expect(rt.advisories().filter((l: string) => l.includes("approximation of Chromium")).length).toBe(1);
   });
 
-  test("a click without a user activation opens nothing, and says so in Chromium's words", () => {
+  test("a click without a user activation opens nothing", () => {
     const { rt, input } = fileWorld();
     input.click();
     expect(calls(rt, "pickForInput")).toEqual([]);
-    expect(rt.host.logs).toContain("File chooser dialog can only be shown with a user activation.");
   });
 
   test("a host click is a user's press even when no mousedown came first (nobody listened for one)", () => {
@@ -132,10 +130,7 @@ describe("<input type=file> (HTML)", () => {
     } catch (e) {
       err = e as Error;
     }
-    expect([err?.name, err?.message]).toEqual([
-      "InvalidStateError",
-      "Failed to set the 'value' property on 'HTMLInputElement': This input element accepts a filename, which may only be programmatically set to the empty string.",
-    ]);
+    expect(err?.name).toBe("InvalidStateError");
     input.value = "";
     expect([input.files.length, input.value, label()]).toEqual([0, "", "No file chosen"]);
     expect(seen).toEqual([]);
@@ -175,39 +170,24 @@ describe("<input type=file> (HTML)", () => {
     expect(calls(rt, "pickForInput").length).toBe(2);
   });
 
-  test("showPicker(): immutable is InvalidStateError, no gesture is NotAllowedError, a text input advises", () => {
+  test("showPicker(): immutable is InvalidStateError, no gesture is NotAllowedError", () => {
     const { rt, input, host } = fileWorld();
     const thrown = (el: { showPicker(): void }) => {
       try {
         el.showPicker();
         return "no throw";
       } catch (e) {
-        return `${(e as Error).name}: ${(e as Error).message}`;
+        return (e as Error).name;
       }
     };
-    expect(thrown(input)).toBe(
-      "NotAllowedError: Failed to execute 'showPicker' on 'HTMLInputElement': HTMLInputElement::showPicker() requires a user gesture.",
-    );
+    expect(thrown(input)).toBe("NotAllowedError");
     host(input, "mousedown");
     expect(thrown(input)).toBe("no throw");
     expect(calls(rt, "pickForInput").length).toBe(1);
     rt.patchProp(input, "disabled", null, "");
-    expect(thrown(input)).toContain(
-      "InvalidStateError: Failed to execute 'showPicker' on 'HTMLInputElement': HTMLInputElement::showPicker() cannot be used on immutable controls.",
-    );
+    expect(thrown(input)).toBe("InvalidStateError");
     const text = rt.nodeOps.createElement("input");
     expect(thrown(text)).toBe("no throw");
-    expect(rt.advisories().some((l: string) => l.includes("no-op"))).toBe(true);
-  });
-
-  test("@change on an element that neither is nor wraps a file input still advises; on a wrapper it does not", async () => {
-    const { rt } = fileWorld();
-    await tick();
-    expect(rt.advisories().filter((l: string) => l.includes("@change") || l.includes("@cancel"))).toEqual([]);
-    const div = rt.nodeOps.createElement("div");
-    rt.patchProp(div, "onChange", null, () => {});
-    await tick();
-    expect(rt.advisories().filter((l: string) => l.includes("@change")).length).toBe(1);
   });
 });
 

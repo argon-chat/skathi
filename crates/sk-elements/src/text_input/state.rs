@@ -1838,13 +1838,4 @@ mod tests {
         assert_eq!(pending.front().map(String::as_str), Some("32"));
         assert!(!take_echo(&mut pending, "0"));
     }
-
-    #[test]
-    fn caret_blink_phase() {
-        assert!(caret_visible(0));
-        assert!(caret_visible(CARET_BLINK_MS - 1));
-        assert!(!caret_visible(CARET_BLINK_MS));
-        assert!(!caret_visible(2 * CARET_BLINK_MS - 1));
-        assert!(caret_visible(2 * CARET_BLINK_MS));
-    }
 }

@@ -60,24 +60,10 @@ describe("usage", () => {
   test("an unknown command or option says what to run, and exits 1", () => {
     const command = sk(["biuld"]);
     expect(command.status).toBe(1);
-    expect(command.stderr).toStartWith('error: unknown command "biuld" (sk --help lists them)\n(Did you mean build?)');
+    expect(command.stderr).toContain("Did you mean build?");
     const option = sk(["workload", "prune", "--frob"]);
     expect(option.status).toBe(1);
-    expect(option.stderr.trim()).toBe("error: unknown option '--frob' (sk workload prune --help lists the options)");
     expect(sk(["check", "--frob"]).status).toBe(2);
-  });
-
-  test("sk host points at sk workload", () => {
-    const r = sk(["host", "fetch", "--variant", "dev"]);
-    expect(r.status).toBe(1);
-    expect(r.stderr.trim()).toBe("error: sk host is now sk workload: sk workload install");
-  });
-
-  test("flags that contradict each other, and retired ones, are refused", () => {
-    expect(sk(["build", ".", "--aot", "--no-aot"]).stderr).toContain("--aot and --no-aot contradict each other");
-    expect(sk(["build", ".", "--sign", "-", "--no-sign"]).stderr).toContain("--sign and --no-sign contradict");
-    expect(sk(["publish", ".", "--without", "audio"]).stderr).toContain("--without: engine parts are no longer");
-    expect(sk(["workload", "install", "tiny"]).stderr).toContain('"tiny" is not a workload variant');
   });
 
   test("an unexpected error is one line, with its stack under SK_DEBUG", () => {

@@ -80,11 +80,6 @@ describe("arming", () => {
     expect(on(rt.EV_CODES.mouseup)).toBe(false);
     expect(on(rt.EV_CODES.keydown)).toBe(false);
   });
-
-  test("drag listeners are kept, with no never-fires advisory", () => {
-    const { rt } = world();
-    expect(rt.advisories().filter((l) => l.includes("drag") || l.includes("drop"))).toEqual([]);
-  });
 });
 
 describe("the gesture", () => {

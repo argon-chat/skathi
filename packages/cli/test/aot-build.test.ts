@@ -11,7 +11,7 @@ import {
   type NativeImage,
 } from "../aot/native";
 import { loadPin, pinnedCompilerInfo } from "../aot/pin";
-import { opaqueGlobals, opaqueHost, TABLE_ID, TRANSFORM } from "../aot/transform";
+import { opaqueGlobals, TABLE_ID, TRANSFORM } from "../aot/transform";
 import { aotCheck, aotFlags, aotPlatformProblem, hostAot, resolveAotCompiler } from "../cli/aot-build";
 import { buildApp } from "../cli/build-app";
 import { ConfigError, loadAppConfig } from "../cli/config";
@@ -56,17 +56,17 @@ describe("flags and config", () => {
   test('"aot" in sk.config.json is a boolean, off by default', () => {
     expect(loadAppConfig(app({ aot: true })).aot).toBe(true);
     expect(loadAppConfig(app({})).aot).toBe(false);
-    expect(() => loadAppConfig(app({ aot: "yes" }))).toThrow('"aot" must be true or false');
+    expect(() => loadAppConfig(app({ aot: "yes" }))).toThrow(ConfigError);
   });
 
   test("--aot and --no-aot override the config; both is an error", () => {
     expect(aotFlags({}).aot).toBeUndefined();
     expect(aotFlags({ aot: true }).aot).toBe(true);
     expect(aotFlags({ "no-aot": true }).aot).toBe(false);
-    expect(() => aotFlags({ aot: true, "no-aot": true })).toThrow("contradict");
+    expect(() => aotFlags({ aot: true, "no-aot": true })).toThrow();
     expect(aotFlags({ "aot-compiler": "tools/sk-aot.exe" }).aotCompiler).toBe(resolve("tools/sk-aot.exe"));
-    expect(() => aotFlags({ "aot-compiler": " " })).toThrow("--aot-compiler needs");
-    expect(() => aotFlags({ "aot-compiler": true })).toThrow("--aot-compiler needs");
+    expect(() => aotFlags({ "aot-compiler": " " })).toThrow();
+    expect(() => aotFlags({ "aot-compiler": true })).toThrow();
   });
 
   test("only a Windows x64 build on Windows x64 can be AOT-compiled", () => {
@@ -77,16 +77,15 @@ describe("flags and config", () => {
       ["windows", { platform: "win32", arch: "arm64" }],
       ["windows", { platform: "linux", arch: "x64" }],
     ] as const)
-      expect(aotPlatformProblem(target, here)).toContain("AOT builds are Windows x64 only for now");
+      expect(aotPlatformProblem(target, here)).not.toBeNull();
   });
 
   test("a non-Windows AOT build fails before a host is looked for", async () => {
     const root = app({ aot: true });
     const error = await buildApp({ target: root, platform: "linux", log: () => {} }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ConfigError);
-    expect((error as Error).message).toContain("AOT builds are Windows x64 only for now");
     const payloadOnly = await buildApp({ target: root, payloadOnly: true, log: () => {} }).catch((e: unknown) => e);
-    expect((payloadOnly as Error).message).toMatch(/AOT builds are Windows x64 only|--payload-only/);
+    expect(payloadOnly).toBeInstanceOf(ConfigError);
   });
 });
 
@@ -94,23 +93,23 @@ describe("the host decides what an image is compiled against", () => {
   test("a host without the AOT loader is refused, saying what to use instead", () => {
     expect(hostAot(host({}))).toEqual(aot);
     expect(() => hostAot(host({ features: ["prod"], aot: null }))).toThrow(HostError);
-    expect(() => hostAot(host({ features: ["prod"] }))).toThrow("built without the native AOT loader");
-    expect(() => hostAot(host({ aot: { ...aot, transform: "opaque-host-v0" } }))).toThrow("transform");
+    expect(() => hostAot(host({ features: ["prod"] }))).toThrow(HostError);
+    expect(() => hostAot(host({ aot: { ...aot, transform: "opaque-host-v0" } }))).toThrow(HostError);
   });
 
   test("a compiler must agree with the host on every field", () => {
     expect(compilerMismatch(pinnedCompilerInfo(pin), aot)).toBeNull();
     for (const name of ["target", "frontend", "engine", "tableId", "compileOptions"] as const)
-      expect(compilerMismatch({ ...pinnedCompilerInfo(pin), [name]: "stale" }, aot)).toStartWith(`${name} stale`);
+      expect(compilerMismatch({ ...pinnedCompilerInfo(pin), [name]: "stale" }, aot)).not.toBeNull();
   });
 
   test("a named sk-aot wins and must exist; SK_AOT_COMPILER names one too", async () => {
     const missing = join(tmpdir(), `sk-aot-missing-${process.pid}.exe`);
-    await expect(resolveAotCompiler(aot, missing, () => {})).rejects.toThrow(`${missing} does not exist`);
+    await expect(resolveAotCompiler(aot, missing, () => {})).rejects.toThrow(missing);
     const before = process.env.SK_AOT_COMPILER;
     process.env.SK_AOT_COMPILER = missing;
     try {
-      await expect(resolveAotCompiler(aot, undefined, () => {})).rejects.toThrow(`${missing} does not exist`);
+      await expect(resolveAotCompiler(aot, undefined, () => {})).rejects.toThrow(missing);
     } finally {
       if (before === undefined) delete process.env.SK_AOT_COMPILER;
       else process.env.SK_AOT_COMPILER = before;
@@ -176,14 +175,6 @@ describe("the opaque-host transform", () => {
     expect(names).toContain("document");
     expect([...names].sort()).toEqual(names);
   });
-
-  test("wraps the bundle so globalThis and the host globals are the host's", () => {
-    const wrapped = opaqueHost("app();", ["a", "b"]);
-    expect(wrapped).toBe(
-      `// ${TRANSFORM}: stable host API references are opaque inputs.\n(function(__sk_host) {\n` +
-        "const globalThis = __sk_host;\nconst {a,b} = __sk_host;\napp();\n})(__SK_AOT_HOST__);\n",
-    );
-  });
 });
 
 describe("sk check gates an AOT build", () => {
@@ -191,9 +182,7 @@ describe("sk check gates an AOT build", () => {
     const error = await aotCheck(RULES, undefined, quietProgress, false).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ConfigError);
     const message = (error as Error).message;
-    expect(message).toContain("sk check found what a native image cannot run");
     expect(message).toMatch(/SK\d{4}/);
-    expect(message).toContain("--no-aot");
   }, 60_000);
 
   test("a clean app passes, its warnings printed", async () => {

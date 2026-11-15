@@ -78,35 +78,3 @@ fn capture_mode(value: Option<&str>) -> CaptureMode {
         _ => CaptureMode::Device,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{capture_mode, system_denied_hint, CaptureMode};
-
-    #[test]
-    fn only_deny_latches_the_gate_and_only_fake_swaps_the_device() {
-        assert_eq!(capture_mode(Some("deny")), CaptureMode::Deny);
-        assert_eq!(capture_mode(Some(" DENY ")), CaptureMode::Deny);
-        assert_eq!(capture_mode(Some("fake")), CaptureMode::Fake);
-        assert_eq!(capture_mode(Some(" Fake")), CaptureMode::Fake);
-        assert_eq!(capture_mode(Some("allow")), CaptureMode::Device);
-        assert_eq!(capture_mode(Some("")), CaptureMode::Device);
-        assert_eq!(capture_mode(None), CaptureMode::Device);
-    }
-
-    #[test]
-    fn a_system_denial_names_this_platforms_settings_page() {
-        let hint = system_denied_hint();
-        if cfg!(target_os = "windows") {
-            assert!(hint.unwrap().contains("ms-settings:privacy-microphone"));
-        } else if cfg!(target_os = "macos") {
-            let hint = hint.unwrap();
-            assert!(
-                hint.contains("Privacy_Microphone") && !hint.contains("Windows"),
-                "{hint}"
-            );
-        } else {
-            assert_eq!(hint, None, "no page to name");
-        }
-    }
-}

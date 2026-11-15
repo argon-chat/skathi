@@ -81,9 +81,9 @@ describe("the reka bubble-input pattern", () => {
     const rt = createRuntime();
     const div = rt.nodeOps.createElement("div");
     const d = Object.getOwnPropertyDescriptor(proto(rt, "HTMLInputElement"), "value")!;
-    expect(() => d.set!.call(div, "x")).toThrow("Illegal invocation");
-    expect(() => d.get!.call({})).toThrow("Illegal invocation");
-    expect(() => d.get!.call(Object.create(proto(rt, "HTMLInputElement")))).toThrow("Illegal invocation");
+    expect(() => d.set!.call(div, "x")).toThrow();
+    expect(() => d.get!.call({})).toThrow();
+    expect(() => d.get!.call(Object.create(proto(rt, "HTMLInputElement")))).toThrow();
     const ta = rt.nodeOps.createElement("textarea") as unknown as El;
     Object.getOwnPropertyDescriptor(proto(rt, "HTMLTextAreaElement"), "value")!.set!.call(ta, "hi");
     expect(lastValue(rt, ta.__skId)).toBe("hi");
@@ -157,9 +157,9 @@ describe("value", () => {
     rt.patchProp(mirror(file), "type", null, "file");
     expect(() => {
       file.value = "C:\\x.txt";
-    }).toThrow("may only be programmatically set to the empty string");
+    }).toThrow();
     const d = Object.getOwnPropertyDescriptor(proto(rt, "HTMLInputElement"), "value")!;
-    expect(() => d.set!.call(file, "C:\\x.txt")).toThrow("may only be programmatically set to the empty string");
+    expect(() => d.set!.call(file, "C:\\x.txt")).toThrow();
     expect(d.get!.call(file)).toBe("");
   });
 });

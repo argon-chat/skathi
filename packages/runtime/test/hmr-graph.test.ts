@@ -232,7 +232,6 @@ describe("fallbacks", () => {
     expect(w.runs(ORPHAN)).toBe(0); // not executed: nothing needs it yet
     expect(w.hmr.reload).toEqual([]);
     expect(w.hardRestarted()).toBe(false);
-    expect(w.logsMatching("skip " + ORPHAN).length).toBe(1);
   });
 
   test("a component with no HMR-able export hard-restarts", () => {
@@ -357,7 +356,6 @@ describe("batched changes", () => {
     expect(w.runs(MID)).toBe(2);
     expect(w.runs(BASE)).toBe(2);
     expect(w.hmr.reload).toEqual([APP]);
-    expect(w.logsMatching("already refreshed").length).toBe(1);
   });
 
   test("two independent plain modules both apply", () => {

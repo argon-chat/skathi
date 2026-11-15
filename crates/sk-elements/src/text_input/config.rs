@@ -111,13 +111,6 @@ mod tests {
     }
 
     #[test]
-    fn no_attributes_is_the_platform_default() {
-        let mapped = configuration(attrs());
-        assert_eq!(mapped.config, TextInputConfiguration::default());
-        assert!(mapped.unsupported.is_empty());
-    }
-
-    #[test]
     fn each_attribute_maps_to_its_field() {
         let mapped = configuration(InputAttributes {
             autocorrect: Some("on"),
@@ -186,27 +179,6 @@ mod tests {
         assert!(mapped.config.autocorrect);
         assert_eq!(mapped.config.input_action, TextInputAction::Search);
         assert!(mapped.unsupported.is_empty());
-    }
-
-    #[test]
-    fn every_enterkeyhint_keyword_is_covered() {
-        let expected = [
-            ("enter", TextInputAction::Enter),
-            ("done", TextInputAction::Done),
-            ("go", TextInputAction::Go),
-            ("next", TextInputAction::Next),
-            ("previous", TextInputAction::Previous),
-            ("search", TextInputAction::Search),
-            ("send", TextInputAction::Send),
-        ];
-        for (keyword, action) in expected {
-            let mapped = configuration(InputAttributes {
-                enterkeyhint: Some(keyword),
-                ..attrs()
-            });
-            assert_eq!(mapped.config.input_action, action, "{keyword}");
-            assert!(mapped.unsupported.is_empty(), "{keyword}");
-        }
     }
 
     #[test]

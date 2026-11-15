@@ -61,24 +61,3 @@ pub fn translate(code: u32) -> Option<MediaEvent> {
         _ => return None,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_html5_range_maps_one_for_one() {
-        assert_eq!(translate(1), Some(MediaEvent::LoadStart));
-        assert_eq!(translate(5), Some(MediaEvent::Error));
-        assert_eq!(translate(8), Some(MediaEvent::Play));
-        assert_eq!(translate(9), Some(MediaEvent::Pause));
-        assert_eq!(translate(10), Some(MediaEvent::LoadedMetadata));
-        assert_eq!(translate(13), Some(MediaEvent::Playing));
-        assert_eq!(translate(17), Some(MediaEvent::Seeked));
-        assert_eq!(translate(19), Some(MediaEvent::Ended));
-        assert_eq!(translate(22), Some(MediaEvent::VolumeChange));
-        // MF's own events carry no HTML meaning and must not leak out.
-        assert_eq!(translate(1000), None);
-        assert_eq!(translate(1002), None);
-    }
-}

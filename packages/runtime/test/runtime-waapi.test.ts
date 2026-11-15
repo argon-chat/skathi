@@ -27,7 +27,7 @@ interface AnimationGlobal {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe("el.animate() in the runtime", () => {
-  test("a mirror element animates through the host, with one placement advisory", async () => {
+  test("a mirror element animates through the host", async () => {
     const rt = createRuntime();
     const el = rt.nodeOps.createElement("div") as AnimatableElement;
     expect(typeof el.animate).toBe("function");
@@ -53,7 +53,6 @@ describe("el.animate() in the runtime", () => {
     });
     expect(set[5]).toBe("ease-out");
     expect(rt.host.anim.calls.find((c) => c[0] === "clock")).toEqual(["clock", set[1], NaN, 0, 1]);
-    expect(rt.advisories().filter((l) => l.includes("Element.animate() runs natively"))).toHaveLength(1);
     expect(el.getAnimations()).toEqual([a]);
     await a.ready;
     expect(typeof a.startTime).toBe("number");

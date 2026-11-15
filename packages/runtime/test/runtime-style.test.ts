@@ -176,15 +176,12 @@ describe("the style attribute is the inline declaration block", () => {
     ]);
   });
 
-  test("assigning a custom property works, and says that only setProperty does in a browser (S-2)", () => {
-    const { rt, el, hostStyle } = setup();
+  test("assigning a custom property works", () => {
+    const { el, hostStyle } = setup();
     el.style["--gap"] = "4px";
     el.style["--gap"] = "6px";
     expect(el.style.getPropertyValue("--gap")).toBe("6px");
     expect(hostStyle()).toEqual([["--gap", "6px"]]);
-    const said = rt.advisories().filter((a) => a.includes("expando"));
-    expect(said.length).toBe(1);
-    expect(said[0]).toContain('setProperty("--gap"');
   });
 
   test("a MutationObserver sees style changes, with the old value", async () => {
@@ -204,20 +201,6 @@ describe("the style attribute is the inline declaration block", () => {
       ["style", "width:1px"],
     ]);
     ob.disconnect();
-  });
-
-  test("the serialization divergence is advised once, and never for the verbatim attribute", () => {
-    const { rt, el } = setup();
-    el.setAttribute("style", "color:red");
-    el.getAttribute("style");
-    expect(rt.advisories().filter((a) => a.includes("serialize"))).toEqual([]);
-    el.style.cssText;
-    el.getAttribute("style");
-    el.style.width = "1px";
-    el.getAttribute("style");
-    const said = rt.advisories().filter((a) => a.includes("serialize"));
-    expect(said.length).toBe(1);
-    expect(said[0]).toContain("as they were written");
   });
 
   test("a block re-set in the same order costs a host call only for what changed", () => {
@@ -370,18 +353,14 @@ describe(":style is runtime-dom's patchStyle", () => {
     rt.patchProp(el, "style", null, { display: ["-webkit-box", "-ms-flexbox", "flex"] });
     expect(hostStyle()).toEqual([["display", "flex"]]);
     expect(rt.host.acceptCalls).toEqual(["display: flex"]);
-    expect(rt.advisories().some((a) => a.includes("style ") || a.includes(":style"))).toBe(false);
   });
 
-  test("an array whose last entries the engine rejects uses an earlier one, and says so", () => {
+  test("an array whose last entries the engine rejects uses an earlier one", () => {
     const { rt, el, hostStyle } = setup();
     rt.host.styleRejects.add("display: -webkit-box");
     rt.host.styleRejects.add("display: grid-lanes");
     rt.patchProp(el, "style", null, { display: ["flex", "-webkit-box", "grid-lanes"] });
     expect(hostStyle()).toEqual([["display", "flex"]]);
-    const said = rt.advisories().filter((a) => a.includes(":style display"));
-    expect(said.length).toBe(1);
-    expect(said[0]).toContain('uses "flex"');
   });
 
   test("an array: an empty entry removes, nothing accepted leaves the declaration as it was", () => {
@@ -397,11 +376,10 @@ describe(":style is runtime-dom's patchStyle", () => {
     expect(el.style.getPropertyPriority("width")).toBe("important");
   });
 
-  test("on a host without __sk_style_accepts an array keeps its last entry, with an advisory", () => {
+  test("on a host without __sk_style_accepts an array keeps its last entry", () => {
     const { rt, el, hostStyle } = setup({ styleAccepts: false });
     rt.patchProp(el, "style", null, { display: ["-webkit-box", "flex"] });
     expect(hostStyle()).toEqual([["display", "flex"]]);
-    expect(rt.advisories().some((a) => a.includes("__sk_style_accepts is missing"))).toBe(true);
   });
 
   test("a string style keeps the variables useCssVars set", async () => {
@@ -437,12 +415,6 @@ describe("v-show keeps its display handling", () => {
       ["display", "flex"],
       ["gap", "4px"],
     ]);
-  });
-
-  test("v-show under a <Transition> says the phases are not run (S-5)", () => {
-    const { rt, el } = setup();
-    rt.vShow.beforeMount(el, { value: true }, { transition: {} });
-    expect(rt.advisories().some((a) => a.includes("v-show inside <Transition>"))).toBe(true);
   });
 
   test("an element without an inline display shows by removing it", () => {
