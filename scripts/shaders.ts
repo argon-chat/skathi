@@ -1,11 +1,12 @@
-// Effect shader compiler: `.slang` -> `.hlsl` + a reflected schema (`effects.json`).
+// Effect shader compiler: `.slang` -> one fragment stage per renderer target (`TARGETS`: HLSL for
+// DirectX, WGSL for gpui_wgpu) + a reflected schema (`effects.json`).
 //
 // Usage
 //   bun scripts/shaders.ts                       regenerate the built-in effects into crates/sk-effects/generated/
 //   bun scripts/shaders.ts --check               CI gate: regenerate into a temp dir, fail if checked-in files differ
 //   bun scripts/shaders.ts --app <dir> --out <dir> [--watch]
-//                                        compile an app's shaders/*.slang into <out>/<name>.hlsl +
-//                                        <out>/effects.json (loaded by the host via SK_EFFECTS_DIR)
+//                                        compile an app's shaders/*.slang into <out>/<name>.<ext> for every
+//                                        target + <out>/effects.json (loaded by the host via SK_EFFECTS_DIR)
 //
 // Not wired into build.ts: a contributor without slangc must still be able to build.
 //
@@ -14,11 +15,13 @@
 // for the CSS function name, argument order, packing slots, types, defaults and flags, so a new
 // effect needs no registration in Rust or JS.
 //
-// The vertex stage is hand-written HLSL in vendor/zed/crates/gpui_windows/src/effects.hlsl: gpui clips
-// with `float4 : SV_ClipDistance` and no spelling of that survives both Slang's front end and fxc.
+// The vertex stage is hand-written per renderer (gpui_windows/src/effects.hlsl,
+// gpui_wgpu/src/shaders_effects.wgsl): gpui clips with `float4 : SV_ClipDistance` and no spelling of
+// that survives both Slang's front end and fxc.
 //
 // Built-in output is checked in so debug builds hot-reload HLSL from a real path and a Slang upgrade
-// that changes codegen shows up as a diff. App effects are compiled by D3DCompile at app startup.
+// that changes codegen shows up as a diff. App effects are compiled by the renderer at app startup,
+// and every target is always emitted, so an app built on one OS carries the shaders of all of them.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -43,17 +46,50 @@ const GENERATED = join(REPO, "crates/sk-effects/generated");
 
 /// Bumped when the prelude or generated wrapper changes codegen or schema shape; rides in every
 /// header and effects.json. Rust refuses an effects.json with an unknown schema.
-const SCHEMA = 5;
+const SCHEMA = 6;
 
 /// Pinned by sha256 in `crates/sk-effects/tools/slang.manifest.json` (see `fetch-slang.ts`).
 const SLANG_VERSION = "2026.12";
 
-/// The built-in numbering is a four-way contract: this list, `gpui::effect_id`, the pipeline table in
-/// `gpui_windows` and the ids in `crates/sk-effects/generated/effects.json`. It is not alphabetical.
+/// The built-in numbering is a contract: this list, `gpui::effect_id`, the pipeline tables in
+/// `gpui_windows` and `gpui_wgpu`, and the ids in `crates/sk-effects/generated/effects.json`. It is not alphabetical.
 const BUILTIN_ORDER = ["frost", "noise", "glow"];
 
 /// Eight floats per instance (`EffectQuad::params0` + `params1`); raising it widens every effect quad.
 const PARAM_SLOTS = 8;
+
+/// One renderer's shading language. `name` is the effects.json key naming each effect's file, which
+/// is how a renderer finds its own; a new backend (Metal: `-target metal`) is one more entry here and
+/// one more key its renderer reads.
+type Target = {
+  name: "hlsl" | "wgsl";
+  args: string[];
+  /// The last lines of the generated header: what the renderer adds to this fragment stage.
+  note: string;
+  /// `@group:@binding` pairs the renderer's pipeline layout provides; null leaves the check to the renderer.
+  bindings: Set<string> | null;
+};
+
+const TARGETS: Target[] = [
+  {
+    name: "hlsl",
+    args: ["-target", "hlsl", "-profile", "sm_5_0"],
+    note:
+      `// Compiled at ps_5_0 (effects only — the core gpui shaders stay at ps_4_1).\n` +
+      `// The VERTEX half lives in gpui_windows/src/effects.hlsl and is shared by\n` +
+      `// every effect; Slang cannot author it (SV_ClipDistance, see that file).\n`,
+    bindings: null,
+  },
+  {
+    name: "wgsl",
+    args: ["-target", "wgsl"],
+    note:
+      `// The VERTEX half lives in gpui_wgpu/src/shaders_effects.wgsl and is shared\n` +
+      `// by every effect; it clips the quad to the content mask.\n`,
+    // Group 0 the globals, 1 the instance buffer, 2 the backdrop, its sampler and the snapshot.
+    bindings: new Set(["0:0", "1:0", "2:0", "2:1", "2:2"]),
+  },
+];
 
 function findSlangc(): string {
   const candidates = [process.env.SK_SLANGC_PATH, join(REPO, "tools/slang/win-x64/slangc.exe")].filter(
@@ -106,6 +142,7 @@ function probeWrapper(structName: string): string {
 // b3 is unused by gpui (b0 = globals, b1 = batch params). This declaration is
 // never read, so it does not reach the HLSL; it exists solely so that slangc's
 // reflection describes \`${structName}\` and its user-defined attributes.
+[[vk::binding(0, 3)]]
 ConstantBuffer<${structName}> sk_reflect : register(b3);
 
 [shader("fragment")]
@@ -136,14 +173,19 @@ function realWrapper(effect: EffectSchema, fields: Field[]): string {
     })
     .join("\n");
   return `${WRAPPER_BANNER}
-// Kept for the record: reflection reads this declaration, the HLSL backend
-// strips it (nothing references it), and the renderer never binds b3.
+// Kept for the record: reflection reads this declaration, every backend
+// strips it (nothing references it), and the renderer never binds it.
+[[vk::binding(0, 3)]]
 ConstantBuffer<${effect.struct}> sk_reflect : register(b3);
 
+// The varyings of the engine-owned vertex stage (gpui_windows/src/effects.hlsl,
+// gpui_wgpu/src/shaders_effects.wgsl), in their order. Separate parameters:
+// slangc's WGSL keeps \`nointerpolation\` on a struct it copies them into, and
+// naga rejects an interpolated member without a location.
 [shader("fragment")]
-float4 effect_fragment(SkFragmentInput sk_frag) : SV_Target
+float4 effect_fragment(nointerpolation uint sk_id : TEXCOORD0, float4 sk_position : SV_Position) : SV_Target
 {
-    EffectInput sk_in = sk_begin(sk_frag);
+    EffectInput sk_in = sk_begin(sk_id, sk_position);
 
     // Parameter unpacking, generated from slangc's reflection of
     // \`${effect.struct}\`: field order IS slot order IS CSS argument order.
@@ -222,7 +264,7 @@ interface ReflParam {
 interface Reflection {
   parameters?: ReflParam[];
 }
-type RunResult = { hlsl: string | null; reflection: Reflection | null; stderr: string; ok: boolean; input: string };
+type RunResult = { output: string | null; reflection: Reflection | null; stderr: string; ok: boolean; input: string };
 
 /// slangc bug (2026.12): `-reflection-json` re-emits a string literal's source spelling instead of
 /// JSON-escaping it, so an apostrophe comes out as `\'` and `JSON.parse` rejects the file. Repair:
@@ -256,22 +298,20 @@ function runSlangc(
   entry: string,
   workdir: string,
   stem: string,
+  target: Target,
 ): RunResult {
   // slangc reads and writes real files only (no stdin/stdout mode for HLSL output) and mangles non-ASCII
   // paths, so everything runs in an ASCII temp dir.
   const input = join(workdir, `${stem}.slang`);
-  const output = join(workdir, `${stem}.hlsl`);
-  const reflectionPath = join(workdir, `${stem}.reflection.json`);
+  const output = join(workdir, `${stem}.${target.name}`);
+  const reflectionPath = join(workdir, `${stem}.${target.name}.reflection.json`);
   writeFileSync(input, combined);
   for (const stale of [output, reflectionPath]) {
     if (existsSync(stale)) rmSync(stale, { force: true });
   }
 
   const args = [
-    "-target",
-    "hlsl",
-    "-profile",
-    "sm_5_0",
+    ...target.args,
     "-stage",
     "fragment",
     "-entry",
@@ -291,10 +331,25 @@ function runSlangc(
   return {
     ok,
     stderr,
-    hlsl: ok ? readFileSync(output, "utf8") : null,
+    output: ok ? readFileSync(output, "utf8") : null,
     reflection: readReflection(reflectionPath),
     input,
   };
+}
+
+/// The renderer builds one pipeline layout for every effect; a resource outside it would fail at
+/// pipeline creation on the user's machine, so refuse it here.
+function checkBindings(target: Target, code: string, file: string) {
+  if (!target.bindings) return;
+  for (const m of code.matchAll(/@binding\((\d+)\)\s*@group\((\d+)\)\s*var(?:<[^>]*>)?\s+(\w+)/g)) {
+    if (!target.bindings.has(`${m[2]}:${m[1]}`)) {
+      throw new SchemaError(
+        `${basename(file)}: \`${m[3]}\` needs @group(${m[2]}) @binding(${m[1]}) in ${target.name}, which the ` +
+          "engine does not provide — an effect reads only `EffectInput` and its own parameters, it " +
+          "cannot declare textures, samplers or buffers of its own",
+      );
+    }
+  }
 }
 
 /// The register each top-level parameter landed on: the contract with the D3D11 renderer
@@ -625,10 +680,15 @@ function discover(dir: string): EffectSource[] {
 type Compiled = {
   file: string;
   effect: EffectSchema;
-  hlsl: string;
+  /// The generated source per target, in `TARGETS` order.
+  outputs: Array<{ target: Target; code: string }>;
   reflection: unknown;
   sourceSha256: string;
 };
+
+function stemOf(file: string): string {
+  return basename(file).replace(/\.slang$/, "");
+}
 
 /// `#line` directives carry the absolute path of the staged input; rewrite it to a stable name so
 /// the temp dir's random name does not churn the diff. App effects keep the author's real path.
@@ -645,7 +705,12 @@ function compile(
 ): Compiled {
   const userSource = effectSource.source;
   const userLines = userSource.split("\n").length;
-  const stem = basename(effectSource.file).replace(/\.slang$/, "");
+  const stem = stemOf(effectSource.file);
+  const fail = (run: RunResult) =>
+    new Error(
+      `slangc failed for ${basename(effectSource.file)}:\n` +
+        renderDiagnostics(parseDiagnostics(run.stderr, userLines, effectSource.file), run.stderr),
+    );
 
   // PASS 1: reflection only; the probe's cbuffer is dropped from the HLSL we discard.
   const probe = runSlangc(
@@ -655,29 +720,12 @@ function compile(
     "sk_reflect_probe",
     workdir,
     `${stem}.probe`,
+    TARGETS[0]!,
   );
-  if (!probe.ok) {
-    throw new Error(
-      `slangc failed for ${basename(effectSource.file)}:\n` +
-        renderDiagnostics(parseDiagnostics(probe.stderr, userLines, effectSource.file), probe.stderr),
-    );
-  }
+  if (!probe.ok) throw fail(probe);
   const { effect, fields } = buildSchema(probe.reflection, effectSource.struct, basename(effectSource.file));
 
   const wrapper = realWrapper(effect, fields);
-  const real = runSlangc(slangc, includes, `${userSource}\n${wrapper}`, "effect_fragment", workdir, stem);
-  if (!real.ok) {
-    throw new Error(
-      `slangc failed for ${basename(effectSource.file)}:\n` +
-        renderDiagnostics(parseDiagnostics(real.stderr, userLines, effectSource.file), real.stderr),
-    );
-  }
-  for (const d of parseDiagnostics(real.stderr, userLines, effectSource.file)) {
-    if (d.message) console.warn(`  ${d.file}:${d.line}: ${d.severity} ${d.message}`);
-  }
-
-  const staged = real.input;
-  const body = rewriteLineDirectives(real.hlsl!, staged, stablePath);
   const header =
     `// GENERATED by scripts/shaders.ts — DO NOT EDIT.\n` +
     `//\n` +
@@ -688,16 +736,26 @@ function compile(
     `//   slangc:     ${SLANG_VERSION}\n` +
     `//   schema:     ${SCHEMA}\n` +
     `//   src-sha256: ${sha256(userSource)}\n` +
-    `//\n` +
-    `// Compiled at ps_5_0 (effects only — the core gpui shaders stay at ps_4_1).\n` +
-    `// The VERTEX half lives in gpui_windows/src/effects.hlsl and is shared by\n` +
-    `// every effect; Slang cannot author it (SV_ClipDistance, see that file).\n\n`;
+    `//\n`;
+
+  let reflection: unknown = [];
+  const outputs = TARGETS.map((target) => {
+    const real = runSlangc(slangc, includes, `${userSource}\n${wrapper}`, "effect_fragment", workdir, stem, target);
+    if (!real.ok) throw fail(real);
+    for (const d of parseDiagnostics(real.stderr, userLines, effectSource.file)) {
+      if (d.message) console.warn(`  ${d.file}:${d.line}: ${d.severity} ${d.message}`);
+    }
+    if (target === TARGETS[0]) reflection = bindings(real.reflection);
+    const body = rewriteLineDirectives(real.output!, real.input, stablePath);
+    checkBindings(target, body, effectSource.file);
+    return { target, code: `${header}${target.note}\n${body}` };
+  });
 
   return {
     file: effectSource.file,
     effect,
-    hlsl: header + body,
-    reflection: bindings(real.reflection),
+    outputs,
+    reflection,
     sourceSha256: sha256(userSource),
   };
 }
@@ -735,10 +793,10 @@ function manifestText(
       struct: c.effect.struct,
       doc: c.effect.doc,
       backdrop: c.effect.backdrop,
-      hlsl: `${basename(c.file).replace(/\.slang$/, "")}.hlsl`,
+      ...Object.fromEntries(c.outputs.map((o) => [o.target.name, `${stemOf(c.file)}.${o.target.name}`])),
       source: sourceOf(c.file),
       sourceSha256: c.sourceSha256,
-      generatedSha256: sha256(c.hlsl),
+      generatedSha256: Object.fromEntries(c.outputs.map((o) => [o.target.name, sha256(o.code)])),
       signature: c.effect.signature,
       backdropRadiusParam: c.effect.backdropRadiusParam,
       bleedParam: c.effect.bleedParam,
@@ -757,14 +815,14 @@ function builtins(slangc: string, check: boolean) {
   const extra = [...byName.keys()].filter((n) => !BUILTIN_ORDER.includes(n));
   if (missing.length || extra.length) {
     throw new Error(
-      "the built-in effect set is a four-way contract with `gpui::effect_id`, the " +
-        "gpui_windows pipeline table and crates/sk-effects.\n" +
+      "the built-in effect set is a contract with `gpui::effect_id`, the " +
+        "gpui_windows and gpui_wgpu pipeline tables and crates/sk-effects.\n" +
         `  expected: ${BUILTIN_ORDER.join(", ")}\n` +
         (missing.length ? `  missing:  ${missing.join(", ")}\n` : "") +
         (extra.length
           ? `  extra:    ${extra.join(", ")}\n` +
             "  (adding a built-in means editing BUILTIN_ORDER here, gpui::effect_id and\n" +
-            "   EffectShader::ALL in gpui_windows — an APP effect needs none of that)\n"
+            "   EffectShader::ALL in gpui_windows and BUILTIN_EFFECTS in gpui_wgpu — an APP effect needs none of that)\n"
           : ""),
     );
   }
@@ -777,7 +835,7 @@ function builtins(slangc: string, check: boolean) {
     (s) => `crates/sk-effects/shaders/${basename(s.file)}+wrapper`,
   );
   for (const c of compiled) {
-    const stem = basename(c.file).replace(/\.slang$/, "");
+    const stem = stemOf(c.file);
     if (c.effect.name !== stem) {
       throw new Error(
         `${basename(c.file)}: [SkEffect("${c.effect.name}")] does not match the file name — a ` +
@@ -788,8 +846,8 @@ function builtins(slangc: string, check: boolean) {
 
   const preludeSha = sha256(readFileSync(join(MODULES, "sk.slang"), "utf8"));
   const wanted: Array<[string, string]> = [
-    ...compiled.map(
-      (c) => [join(GENERATED, `${basename(c.file).replace(/\.slang$/, "")}.hlsl`), c.hlsl] as [string, string],
+    ...compiled.flatMap((c) =>
+      c.outputs.map((o) => [join(GENERATED, `${stemOf(c.file)}.${o.target.name}`), o.code] as [string, string]),
     ),
     [
       join(GENERATED, "effects.json"),
@@ -862,7 +920,7 @@ function appOnce(slangc: string, shadersDir: string, out: string): number {
 
   mkdirSync(out, { recursive: true });
   for (const c of compiled) {
-    writeFileSync(join(out, basename(c.file).replace(/\.slang$/, ".hlsl")), c.hlsl);
+    for (const o of c.outputs) writeFileSync(join(out, `${stemOf(c.file)}.${o.target.name}`), o.code);
   }
   const preludeSha = sha256(readFileSync(join(MODULES, "sk.slang"), "utf8"));
   // effects.json is written LAST: the host reads it to decide what to load.

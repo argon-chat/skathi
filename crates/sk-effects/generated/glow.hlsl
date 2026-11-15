@@ -5,7 +5,7 @@
 //   source:     crates/sk-effects/shaders/glow.slang+wrapper
 //   signature:  glow(<color>?, <length:radius>, <number:strength>)
 //   slangc:     2026.12
-//   schema:     5
+//   schema:     6
 //   src-sha256: 6ceb62c92bacc8dfd99b59d412d5047dddecd6033d4145e3c49ca6bd07182952
 //
 // Compiled at ps_5_0 (effects only — the core gpui shaders stay at ps_4_1).
@@ -23,7 +23,7 @@
 #endif
 
 
-#line 178 "G:/argent/argon.shell/crates/vue-native/crates/sk-effects/shaders/modules/sk.slang"
+#line 182 "G:/argent/argon.shell/crates/vue-native/crates/sk-effects/shaders/modules/sk.slang"
 struct SkBounds_0
 {
     float2 origin_0;
@@ -39,8 +39,7 @@ struct SkCorners_0
 };
 
 
-
-
+#line 202
 struct SkEffectQuad_0
 {
     uint order_0;
@@ -49,8 +48,8 @@ struct SkEffectQuad_0
     SkBounds_0 content_mask_0;
     SkCorners_0 content_mask_radii_0;
     SkCorners_0 corner_radii_0;
-    float4 params0_0;
-    float4 params1_0;
+    float  params0_0[int(4)];
+    float  params1_0[int(4)];
     float opacity_0;
     float time_0;
     float bleed_0;
@@ -60,11 +59,11 @@ struct SkEffectQuad_0
 };
 
 
+
 StructuredBuffer<SkEffectQuad_0 > sk_effect_quads_0 : register(t1);
 
 
-
-
+#line 233
 struct SLANG_ParameterGroup_GlobalParams_0
 {
     float4 sk_gamma_ratios_0;
@@ -72,23 +71,27 @@ struct SLANG_ParameterGroup_GlobalParams_0
     float sk_grayscale_enhanced_contrast_0;
     float sk_subpixel_enhanced_contrast_0;
     uint sk_is_bgr_0;
-    uint3 sk_global_pad_0;
+    uint sk_global_pad0_0;
+    uint sk_global_pad1_0;
+    uint sk_global_pad2_0;
 };
 
 
-#line 219
+#line 233
 cbuffer GlobalParams_0 : register(b0)
 {
     SLANG_ParameterGroup_GlobalParams_0 GlobalParams_0;
 }
 
-#line 215
+#line 224
 Texture2D<float4 > sk_backdrop_input_0 : register(t0);
+
+
 
 SamplerState sk_clamp_sampler_0 : register(s1);
 
 
-#line 216
+#line 226
 Texture2D<float4 > sk_backdrop_original_0 : register(t2);
 
 
@@ -101,7 +104,7 @@ struct Glow_0
 };
 
 
-#line 247 "G:/argent/argon.shell/crates/vue-native/crates/sk-effects/shaders/modules/sk.slang"
+#line 254 "G:/argent/argon.shell/crates/vue-native/crates/sk-effects/shaders/modules/sk.slang"
 struct EffectInput_0
 {
     float2 uv_0;
@@ -166,39 +169,39 @@ bool Glow_straightAlpha_0()
 }
 
 
-#line 386 "G:/argent/argon.shell/crates/vue-native/crates/sk-effects/shaders/modules/sk.slang"
+#line 393 "G:/argent/argon.shell/crates/vue-native/crates/sk-effects/shaders/modules/sk.slang"
 float4 sk_clamp_premultiplied_0(float4 color_1)
 {
 
-#line 392
+#line 399
     float a_0 = saturate(color_1.w);
     return float4(clamp(color_1.xyz, (float3)0.0f, float3(a_0, a_0, a_0)), a_0);
 }
 
 
-#line 444
+#line 451
 float4 sk_finish_0(Glow_0 material_0, EffectInput_0 i_0)
 {
     float4 shaded_0 = Glow_shade_0(material_0, i_0);
 
-#line 446
+#line 453
     float4 shaded_1;
     if(Glow_straightAlpha_0())
     {
         float _S2 = shaded_0.w;
 
-#line 449
+#line 456
         shaded_1 = float4(shaded_0.xyz * _S2, _S2);
 
-#line 447
+#line 454
     }
     else
     {
 
-#line 447
+#line 454
         shaded_1 = shaded_0;
 
-#line 447
+#line 454
     }
 
 
@@ -208,93 +211,93 @@ float4 sk_finish_0(Glow_0 material_0, EffectInput_0 i_0)
 
     float coverage_1 = saturate(0.5f - (i_0.sd_0 - i_0.bleed_1)) * saturate(i_0.opacity_1) * i_0.clip_0;
 
-#line 454
+#line 461
     float4 result_0;
 
-#line 459
+#line 466
     if(i_0.hasBackdrop_0)
     {
 
-#line 459
+#line 466
         result_0 = lerp(sk_backdrop_original_0.SampleLevel(sk_clamp_sampler_0, i_0.uv_0, 0.0f), shaded_2, (float4)coverage_1);
 
-#line 459
+#line 466
     }
     else
     {
 
-#line 459
+#line 466
         result_0 = shaded_2 * coverage_1;
 
-#line 459
+#line 466
     }
 
-#line 469
+#line 476
     return sk_clamp_premultiplied_0(result_0);
 }
 
 
-#line 342
+#line 349
 float sk_pick_corner_radius_0(float2 center_to_point_0, SkCorners_0 radii_0)
 {
 
-#line 348
+#line 355
     bool _S3 = (center_to_point_0.x) < 0.0f;
 
-#line 348
+#line 355
     float top_0;
 
-#line 348
+#line 355
     if(_S3)
     {
 
-#line 348
+#line 355
         top_0 = radii_0.top_left_0;
 
-#line 348
+#line 355
     }
     else
     {
 
-#line 348
+#line 355
         top_0 = radii_0.top_right_0;
 
-#line 348
+#line 355
     }
 
-#line 348
+#line 355
     float bottom_0;
     if(_S3)
     {
 
-#line 349
+#line 356
         bottom_0 = radii_0.bottom_left_0;
 
-#line 349
+#line 356
     }
     else
     {
 
-#line 349
+#line 356
         bottom_0 = radii_0.bottom_right_0;
 
-#line 349
+#line 356
     }
     if((center_to_point_0.y) < 0.0f)
     {
 
-#line 350
+#line 357
     }
     else
     {
 
-#line 350
+#line 357
         top_0 = bottom_0;
 
-#line 350
+#line 357
     }
 
-#line 350
+#line 357
     return top_0;
 }
 
@@ -313,65 +316,65 @@ float sk_quad_sdf_0(float2 point_0, SkBounds_0 bounds_1, SkCorners_0 radii_1)
 }
 
 
-#line 373
+#line 380
 float sk_content_mask_coverage_0(float2 position_0, SkBounds_0 mask_0, SkCorners_0 radii_2)
 {
 
-#line 373
+#line 380
     bool _S4;
 
     if((radii_2.top_left_0) == 0.0f)
     {
 
-#line 375
+#line 382
         _S4 = (radii_2.top_right_0) == 0.0f;
 
-#line 375
+#line 382
     }
     else
     {
 
-#line 375
+#line 382
         _S4 = false;
 
-#line 375
+#line 382
     }
 
-#line 375
+#line 382
     if(_S4)
     {
 
-#line 375
+#line 382
         _S4 = (radii_2.bottom_right_0) == 0.0f;
 
-#line 375
+#line 382
     }
     else
     {
 
-#line 375
+#line 382
         _S4 = false;
 
-#line 375
+#line 382
     }
     if(_S4)
     {
 
-#line 376
+#line 383
         _S4 = (radii_2.bottom_left_0) == 0.0f;
 
-#line 376
+#line 383
     }
     else
     {
 
-#line 376
+#line 383
         _S4 = false;
 
-#line 376
+#line 383
     }
 
-#line 375
+#line 382
     if(_S4)
     {
 
@@ -381,82 +384,77 @@ float sk_content_mask_coverage_0(float2 position_0, SkBounds_0 mask_0, SkCorners
 }
 
 
-#line 236
-struct SkFragmentInput_0
+#line 404
+EffectInput_0 sk_begin_0(uint id_0, float4 frag_position_0)
 {
-    nointerpolation uint id_0 : TEXCOORD0;
-    float4 position_1 : SV_Position;
-};
+
+    float2 position_1 = frag_position_0.xy;
 
 
-#line 397
-EffectInput_0 sk_begin_0(SkFragmentInput_0 frag_0)
-{
-    SkEffectQuad_0 q_0 = sk_effect_quads_0.Load(frag_0.id_0);
-    float2 position_2 = frag_0.position_1.xy;
+    float2 uv_1 = position_1 / GlobalParams_0.sk_viewport_size_0;
 
+#line 410
+    float _S5 = sk_effect_quads_0[id_0].bleed_0;
 
-    float2 uv_1 = position_2 / GlobalParams_0.sk_viewport_size_0;
+#line 418
+    float sd_element_0 = sk_quad_sdf_0(position_1, sk_effect_quads_0[id_0].bounds_0, sk_effect_quads_0[id_0].corner_radii_0) + sk_effect_quads_0[id_0].bleed_0;
 
-#line 411
-    float sd_element_0 = sk_quad_sdf_0(position_2, q_0.bounds_0, q_0.corner_radii_0) + q_0.bleed_0;
+    float2 element_origin_0 = sk_effect_quads_0[id_0].bounds_0.origin_0 + sk_effect_quads_0[id_0].bleed_0;
+    float2 element_size_0 = max(sk_effect_quads_0[id_0].bounds_0.size_0 - 2.0f * sk_effect_quads_0[id_0].bleed_0, float2(1.0f, 1.0f));
 
-    float2 element_origin_0 = q_0.bounds_0.origin_0 + q_0.bleed_0;
-    float2 element_size_0 = max(q_0.bounds_0.size_0 - 2.0f * q_0.bleed_0, float2(1.0f, 1.0f));
-
-    bool has_backdrop_0 = ((q_0.flags_0) & 1U) != 0U;
+    bool has_backdrop_0 = ((sk_effect_quads_0[id_0].flags_0) & 1U) != 0U;
 
     EffectInput_0 i_1;
     i_1.uv_0 = uv_1;
-    float2 _S5 = position_2 - element_origin_0;
+    float2 _S6 = position_1 - element_origin_0;
 
-#line 420
-    i_1.px_0 = _S5;
+#line 427
+    i_1.px_0 = _S6;
     i_1.size_1 = element_size_0;
-    i_1.local_0 = _S5 / element_size_0;
+    i_1.local_0 = _S6 / element_size_0;
 
-#line 422
-    float4 _S6;
+#line 429
+    float4 _S7;
 
     if(has_backdrop_0)
     {
 
-#line 424
-        _S6 = sk_backdrop_input_0.SampleLevel(sk_clamp_sampler_0, uv_1, 0.0f);
+#line 431
+        _S7 = sk_backdrop_input_0.SampleLevel(sk_clamp_sampler_0, uv_1, 0.0f);
 
-#line 424
+#line 431
     }
     else
     {
 
-#line 424
-        _S6 = float4(0.0f, 0.0f, 0.0f, 0.0f);
+#line 431
+        _S7 = float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-#line 424
+#line 431
     }
 
-#line 423
-    i_1.backdrop_0 = _S6;
+#line 430
+    i_1.backdrop_0 = _S7;
 
 
     i_1.sd_0 = sd_element_0;
     i_1.coverage_0 = saturate(0.5f - sd_element_0);
-    i_1.time_1 = q_0.time_0;
-    i_1.scale_1 = q_0.scale_0;
-    i_1.bleed_1 = q_0.bleed_0;
-    i_1.opacity_1 = q_0.opacity_0;
-    i_1.clip_0 = sk_content_mask_coverage_0(position_2, q_0.content_mask_0, q_0.content_mask_radii_0);
+    i_1.time_1 = sk_effect_quads_0[id_0].time_0;
+    i_1.scale_1 = sk_effect_quads_0[id_0].scale_0;
+    i_1.bleed_1 = _S5;
+    i_1.opacity_1 = sk_effect_quads_0[id_0].opacity_0;
+    i_1.clip_0 = sk_content_mask_coverage_0(position_1, sk_effect_quads_0[id_0].content_mask_0, sk_effect_quads_0[id_0].content_mask_radii_0);
     i_1.hasBackdrop_0 = has_backdrop_0;
-    i_1.params0_1 = q_0.params0_0;
-    i_1.params1_1 = q_0.params1_0;
+    i_1.params0_1 = float4(sk_effect_quads_0[id_0].params0_0[int(0)], sk_effect_quads_0[id_0].params0_0[int(1)], sk_effect_quads_0[id_0].params0_0[int(2)], sk_effect_quads_0[id_0].params0_0[int(3)]);
+    i_1.params1_1 = float4(sk_effect_quads_0[id_0].params1_0[int(0)], sk_effect_quads_0[id_0].params1_0[int(1)], sk_effect_quads_0[id_0].params1_0[int(2)], sk_effect_quads_0[id_0].params1_0[int(3)]);
     return i_1;
 }
 
 
-#line 75 "crates/sk-effects/shaders/glow.slang+wrapper"
-float4 effect_fragment(SkFragmentInput_0 sk_frag_0) : SV_TARGET
+#line 80 "crates/sk-effects/shaders/glow.slang+wrapper"
+float4 effect_fragment(nointerpolation uint sk_id_0 : TEXCOORD0, float4 sk_position_0 : SV_Position) : SV_TARGET
 {
-    EffectInput_0 sk_in_0 = sk_begin_0(sk_frag_0);
+    EffectInput_0 sk_in_0 = sk_begin_0(sk_id_0, sk_position_0);
 
 
 

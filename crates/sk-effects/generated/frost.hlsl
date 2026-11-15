@@ -5,7 +5,7 @@
 //   source:     crates/sk-effects/shaders/frost.slang+wrapper
 //   signature:  frost(<number:strength>, <length:radius>?, <color:tint>?)
 //   slangc:     2026.12
-//   schema:     5
+//   schema:     6
 //   src-sha256: 99fd166403610be614ced72e6aedace3d28a08dd6c8a54681c8af86e2d6fb090
 //
 // Compiled at ps_5_0 (effects only — the core gpui shaders stay at ps_4_1).
@@ -23,7 +23,7 @@
 #endif
 
 
-#line 178 "G:/argent/argon.shell/crates/vue-native/crates/sk-effects/shaders/modules/sk.slang"
+#line 182 "G:/argent/argon.shell/crates/vue-native/crates/sk-effects/shaders/modules/sk.slang"
 struct SkBounds_0
 {
     float2 origin_0;
@@ -39,8 +39,7 @@ struct SkCorners_0
 };
 
 
-
-
+#line 202
 struct SkEffectQuad_0
 {
     uint order_0;
@@ -49,8 +48,8 @@ struct SkEffectQuad_0
     SkBounds_0 content_mask_0;
     SkCorners_0 content_mask_radii_0;
     SkCorners_0 corner_radii_0;
-    float4 params0_0;
-    float4 params1_0;
+    float  params0_0[int(4)];
+    float  params1_0[int(4)];
     float opacity_0;
     float time_0;
     float bleed_0;
@@ -60,11 +59,11 @@ struct SkEffectQuad_0
 };
 
 
+
 StructuredBuffer<SkEffectQuad_0 > sk_effect_quads_0 : register(t1);
 
 
-
-
+#line 233
 struct SLANG_ParameterGroup_GlobalParams_0
 {
     float4 sk_gamma_ratios_0;
@@ -72,31 +71,35 @@ struct SLANG_ParameterGroup_GlobalParams_0
     float sk_grayscale_enhanced_contrast_0;
     float sk_subpixel_enhanced_contrast_0;
     uint sk_is_bgr_0;
-    uint3 sk_global_pad_0;
+    uint sk_global_pad0_0;
+    uint sk_global_pad1_0;
+    uint sk_global_pad2_0;
 };
 
 
-#line 219
+#line 233
 cbuffer GlobalParams_0 : register(b0)
 {
     SLANG_ParameterGroup_GlobalParams_0 GlobalParams_0;
 }
 
-#line 215
+#line 224
 Texture2D<float4 > sk_backdrop_input_0 : register(t0);
+
+
 
 SamplerState sk_clamp_sampler_0 : register(s1);
 
 
-#line 216
+#line 226
 Texture2D<float4 > sk_backdrop_original_0 : register(t2);
 
 
-#line 327
+#line 334
 bool IEffect_straightAlphax24defaultImpl_0()
 {
 
-#line 327
+#line 334
     return false;
 }
 
@@ -110,7 +113,7 @@ struct Frost_0
 };
 
 
-#line 247 "G:/argent/argon.shell/crates/vue-native/crates/sk-effects/shaders/modules/sk.slang"
+#line 254 "G:/argent/argon.shell/crates/vue-native/crates/sk-effects/shaders/modules/sk.slang"
 struct EffectInput_0
 {
     float2 uv_0;
@@ -131,29 +134,29 @@ struct EffectInput_0
 };
 
 
-#line 489
+#line 496
 float sk_hash12_0(float2 p_0)
 {
     float _S1 = p_0.x;
 
-#line 491
+#line 498
     float3 p3_0 = frac(float3(_S1, p_0.y, _S1) * 0.1031000018119812f);
     float3 p3_1 = p3_0 + dot(p3_0, float3(p3_0.y + 33.3300018310546875f, p3_0.z + 33.3300018310546875f, p3_0.x + 33.3300018310546875f));
     return frac((p3_1.x + p3_1.y) * p3_1.z);
 }
 
 
-#line 505
+#line 512
 float sk_value_noise_0(float2 p_1)
 {
     float2 i_0 = floor(p_1);
     float2 f_0 = frac(p_1);
     float2 u_0 = f_0 * f_0 * (3.0f - 2.0f * f_0);
 
-#line 514
+#line 521
     float _S2 = u_0.x;
 
-#line 514
+#line 521
     return lerp(lerp(sk_hash12_0(i_0), sk_hash12_0(i_0 + float2(1.0f, 0.0f)), _S2), lerp(sk_hash12_0(i_0 + float2(0.0f, 1.0f)), sk_hash12_0(i_0 + float2(1.0f, 1.0f)), _S2), u_0.y);
 }
 
@@ -168,12 +171,12 @@ float sk_fbm_0(float2 p_2)
 }
 
 
-#line 477
+#line 484
 float4 sk_premultiply_0(float4 color_0)
 {
     float _S3 = color_0.w;
 
-#line 479
+#line 486
     return float4(color_0.xyz * _S3, _S3);
 }
 
@@ -227,39 +230,39 @@ float4 Frost_shade_0(Frost_0 this_0, EffectInput_0 input_0)
 }
 
 
-#line 386 "G:/argent/argon.shell/crates/vue-native/crates/sk-effects/shaders/modules/sk.slang"
+#line 393 "G:/argent/argon.shell/crates/vue-native/crates/sk-effects/shaders/modules/sk.slang"
 float4 sk_clamp_premultiplied_0(float4 color_1)
 {
 
-#line 392
+#line 399
     float a_0 = saturate(color_1.w);
     return float4(clamp(color_1.xyz, (float3)0.0f, float3(a_0, a_0, a_0)), a_0);
 }
 
 
-#line 444
+#line 451
 float4 sk_finish_0(Frost_0 material_0, EffectInput_0 i_1)
 {
     float4 shaded_0 = Frost_shade_0(material_0, i_1);
 
-#line 446
+#line 453
     float4 shaded_1;
     if(IEffect_straightAlphax24defaultImpl_0())
     {
         float _S6 = shaded_0.w;
 
-#line 449
+#line 456
         shaded_1 = float4(shaded_0.xyz * _S6, _S6);
 
-#line 447
+#line 454
     }
     else
     {
 
-#line 447
+#line 454
         shaded_1 = shaded_0;
 
-#line 447
+#line 454
     }
 
 
@@ -269,93 +272,93 @@ float4 sk_finish_0(Frost_0 material_0, EffectInput_0 i_1)
 
     float coverage_1 = saturate(0.5f - (i_1.sd_0 - i_1.bleed_1)) * saturate(i_1.opacity_1) * i_1.clip_0;
 
-#line 454
+#line 461
     float4 result_2;
 
-#line 459
+#line 466
     if(i_1.hasBackdrop_0)
     {
 
-#line 459
+#line 466
         result_2 = lerp(sk_backdrop_original_0.SampleLevel(sk_clamp_sampler_0, i_1.uv_0, 0.0f), shaded_2, (float4)coverage_1);
 
-#line 459
+#line 466
     }
     else
     {
 
-#line 459
+#line 466
         result_2 = shaded_2 * coverage_1;
 
-#line 459
+#line 466
     }
 
-#line 469
+#line 476
     return sk_clamp_premultiplied_0(result_2);
 }
 
 
-#line 342
+#line 349
 float sk_pick_corner_radius_0(float2 center_to_point_0, SkCorners_0 radii_0)
 {
 
-#line 348
+#line 355
     bool _S7 = (center_to_point_0.x) < 0.0f;
 
-#line 348
+#line 355
     float top_0;
 
-#line 348
+#line 355
     if(_S7)
     {
 
-#line 348
+#line 355
         top_0 = radii_0.top_left_0;
 
-#line 348
+#line 355
     }
     else
     {
 
-#line 348
+#line 355
         top_0 = radii_0.top_right_0;
 
-#line 348
+#line 355
     }
 
-#line 348
+#line 355
     float bottom_0;
     if(_S7)
     {
 
-#line 349
+#line 356
         bottom_0 = radii_0.bottom_left_0;
 
-#line 349
+#line 356
     }
     else
     {
 
-#line 349
+#line 356
         bottom_0 = radii_0.bottom_right_0;
 
-#line 349
+#line 356
     }
     if((center_to_point_0.y) < 0.0f)
     {
 
-#line 350
+#line 357
     }
     else
     {
 
-#line 350
+#line 357
         top_0 = bottom_0;
 
-#line 350
+#line 357
     }
 
-#line 350
+#line 357
     return top_0;
 }
 
@@ -374,65 +377,65 @@ float sk_quad_sdf_0(float2 point_0, SkBounds_0 bounds_1, SkCorners_0 radii_1)
 }
 
 
-#line 373
+#line 380
 float sk_content_mask_coverage_0(float2 position_0, SkBounds_0 mask_0, SkCorners_0 radii_2)
 {
 
-#line 373
+#line 380
     bool _S8;
 
     if((radii_2.top_left_0) == 0.0f)
     {
 
-#line 375
+#line 382
         _S8 = (radii_2.top_right_0) == 0.0f;
 
-#line 375
+#line 382
     }
     else
     {
 
-#line 375
+#line 382
         _S8 = false;
 
-#line 375
+#line 382
     }
 
-#line 375
+#line 382
     if(_S8)
     {
 
-#line 375
+#line 382
         _S8 = (radii_2.bottom_right_0) == 0.0f;
 
-#line 375
+#line 382
     }
     else
     {
 
-#line 375
+#line 382
         _S8 = false;
 
-#line 375
+#line 382
     }
     if(_S8)
     {
 
-#line 376
+#line 383
         _S8 = (radii_2.bottom_left_0) == 0.0f;
 
-#line 376
+#line 383
     }
     else
     {
 
-#line 376
+#line 383
         _S8 = false;
 
-#line 376
+#line 383
     }
 
-#line 375
+#line 382
     if(_S8)
     {
 
@@ -442,82 +445,77 @@ float sk_content_mask_coverage_0(float2 position_0, SkBounds_0 mask_0, SkCorners
 }
 
 
-#line 236
-struct SkFragmentInput_0
+#line 404
+EffectInput_0 sk_begin_0(uint id_0, float4 frag_position_0)
 {
-    nointerpolation uint id_0 : TEXCOORD0;
-    float4 position_1 : SV_Position;
-};
+
+    float2 position_1 = frag_position_0.xy;
 
 
-#line 397
-EffectInput_0 sk_begin_0(SkFragmentInput_0 frag_0)
-{
-    SkEffectQuad_0 q_0 = sk_effect_quads_0.Load(frag_0.id_0);
-    float2 position_2 = frag_0.position_1.xy;
+    float2 uv_1 = position_1 / GlobalParams_0.sk_viewport_size_0;
 
+#line 410
+    float _S9 = sk_effect_quads_0[id_0].bleed_0;
 
-    float2 uv_1 = position_2 / GlobalParams_0.sk_viewport_size_0;
+#line 418
+    float sd_element_0 = sk_quad_sdf_0(position_1, sk_effect_quads_0[id_0].bounds_0, sk_effect_quads_0[id_0].corner_radii_0) + sk_effect_quads_0[id_0].bleed_0;
 
-#line 411
-    float sd_element_0 = sk_quad_sdf_0(position_2, q_0.bounds_0, q_0.corner_radii_0) + q_0.bleed_0;
+    float2 element_origin_0 = sk_effect_quads_0[id_0].bounds_0.origin_0 + sk_effect_quads_0[id_0].bleed_0;
+    float2 element_size_0 = max(sk_effect_quads_0[id_0].bounds_0.size_0 - 2.0f * sk_effect_quads_0[id_0].bleed_0, float2(1.0f, 1.0f));
 
-    float2 element_origin_0 = q_0.bounds_0.origin_0 + q_0.bleed_0;
-    float2 element_size_0 = max(q_0.bounds_0.size_0 - 2.0f * q_0.bleed_0, float2(1.0f, 1.0f));
-
-    bool has_backdrop_0 = ((q_0.flags_0) & 1U) != 0U;
+    bool has_backdrop_0 = ((sk_effect_quads_0[id_0].flags_0) & 1U) != 0U;
 
     EffectInput_0 i_2;
     i_2.uv_0 = uv_1;
-    float2 _S9 = position_2 - element_origin_0;
+    float2 _S10 = position_1 - element_origin_0;
 
-#line 420
-    i_2.px_0 = _S9;
+#line 427
+    i_2.px_0 = _S10;
     i_2.size_1 = element_size_0;
-    i_2.local_0 = _S9 / element_size_0;
+    i_2.local_0 = _S10 / element_size_0;
 
-#line 422
-    float4 _S10;
+#line 429
+    float4 _S11;
 
     if(has_backdrop_0)
     {
 
-#line 424
-        _S10 = sk_backdrop_input_0.SampleLevel(sk_clamp_sampler_0, uv_1, 0.0f);
+#line 431
+        _S11 = sk_backdrop_input_0.SampleLevel(sk_clamp_sampler_0, uv_1, 0.0f);
 
-#line 424
+#line 431
     }
     else
     {
 
-#line 424
-        _S10 = float4(0.0f, 0.0f, 0.0f, 0.0f);
+#line 431
+        _S11 = float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-#line 424
+#line 431
     }
 
-#line 423
-    i_2.backdrop_0 = _S10;
+#line 430
+    i_2.backdrop_0 = _S11;
 
 
     i_2.sd_0 = sd_element_0;
     i_2.coverage_0 = saturate(0.5f - sd_element_0);
-    i_2.time_1 = q_0.time_0;
-    i_2.scale_1 = q_0.scale_0;
-    i_2.bleed_1 = q_0.bleed_0;
-    i_2.opacity_1 = q_0.opacity_0;
-    i_2.clip_0 = sk_content_mask_coverage_0(position_2, q_0.content_mask_0, q_0.content_mask_radii_0);
+    i_2.time_1 = sk_effect_quads_0[id_0].time_0;
+    i_2.scale_1 = sk_effect_quads_0[id_0].scale_0;
+    i_2.bleed_1 = _S9;
+    i_2.opacity_1 = sk_effect_quads_0[id_0].opacity_0;
+    i_2.clip_0 = sk_content_mask_coverage_0(position_1, sk_effect_quads_0[id_0].content_mask_0, sk_effect_quads_0[id_0].content_mask_radii_0);
     i_2.hasBackdrop_0 = has_backdrop_0;
-    i_2.params0_1 = q_0.params0_0;
-    i_2.params1_1 = q_0.params1_0;
+    i_2.params0_1 = float4(sk_effect_quads_0[id_0].params0_0[int(0)], sk_effect_quads_0[id_0].params0_0[int(1)], sk_effect_quads_0[id_0].params0_0[int(2)], sk_effect_quads_0[id_0].params0_0[int(3)]);
+    i_2.params1_1 = float4(sk_effect_quads_0[id_0].params1_0[int(0)], sk_effect_quads_0[id_0].params1_0[int(1)], sk_effect_quads_0[id_0].params1_0[int(2)], sk_effect_quads_0[id_0].params1_0[int(3)]);
     return i_2;
 }
 
 
-#line 81 "crates/sk-effects/shaders/frost.slang+wrapper"
-float4 effect_fragment(SkFragmentInput_0 sk_frag_0) : SV_TARGET
+#line 86 "crates/sk-effects/shaders/frost.slang+wrapper"
+float4 effect_fragment(nointerpolation uint sk_id_0 : TEXCOORD0, float4 sk_position_0 : SV_Position) : SV_TARGET
 {
-    EffectInput_0 sk_in_0 = sk_begin_0(sk_frag_0);
+    EffectInput_0 sk_in_0 = sk_begin_0(sk_id_0, sk_position_0);
 
 
 

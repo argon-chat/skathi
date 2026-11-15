@@ -2609,6 +2609,8 @@ dependencies = [
  "parking_lot",
  "profiling",
  "raw-window-handle",
+ "serde",
+ "serde_json",
  "smallvec",
  "swash",
  "unicode-bidi",

@@ -31,7 +31,7 @@ use gpui::{effect_id, EffectSpec, EFFECT_FLAG_NEEDS_BACKDROP};
 
 /// The `effects.json` layout this build understands; a mismatch means the artifacts came from a
 /// different toolchain generation and must be regenerated.
-pub const MANIFEST_SCHEMA: u32 = 5;
+pub const MANIFEST_SCHEMA: u32 = 6;
 
 /// The environment variable pointing at an app's compiled effects (the `--out` directory of `bun
 /// shaders.ts --app`); `gpui_windows` reads it too, so both see the same list in the same order.
@@ -414,7 +414,7 @@ mod tests {
     const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
     const USER_MANIFEST: &str = r#"{
-      "schema": 5,
+      "schema": 6,
       "slangc": "2026.12",
       "kind": "user",
       "effects": [
@@ -576,7 +576,7 @@ mod tests {
 
     #[test]
     fn a_manifest_from_the_future_is_refused_by_schema() {
-        let json = USER_MANIFEST.replace("\"schema\": 5", "\"schema\": 99");
+        let json = USER_MANIFEST.replace("\"schema\": 6", "\"schema\": 99");
         let error = parse_manifest(&json, 3, false, "<test>").unwrap_err();
         assert!(error.contains("schema 99"), "{error}");
         assert!(error.contains("bun shaders.ts"), "{error}");

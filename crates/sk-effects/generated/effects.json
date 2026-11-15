@@ -1,8 +1,8 @@
 {
-  "schema": 5,
+  "schema": 6,
   "slangc": "2026.12",
   "kind": "builtin",
-  "preludeSha256": "1e883d349aa28418c277a7494130b084b43c175ab7eb68c5db4271573f83e32c",
+  "preludeSha256": "caea26d7714926de54c60ad63f55548dcb77ffc5796783e88ffb198368635d26",
   "effects": [
     {
       "id": 0,
@@ -11,9 +11,13 @@
       "doc": "blurred backdrop + crystalline grain + rim highlight",
       "backdrop": true,
       "hlsl": "frost.hlsl",
+      "wgsl": "frost.wgsl",
       "source": "crates/sk-effects/shaders/frost.slang",
       "sourceSha256": "99fd166403610be614ced72e6aedace3d28a08dd6c8a54681c8af86e2d6fb090",
-      "generatedSha256": "44f8459758a1cad8ccc2deb13c0fdd297b4c72e8c9fea5e367be23324147da09",
+      "generatedSha256": {
+        "hlsl": "de28bc221c5805a7b8b8fafcbcbad3db5e8028ff802c5e7aec92cb4f3b2703fe",
+        "wgsl": "918f5769b638b40d38a3b91d3ff2156373a6292eda1da2931d6309d419a4eec8"
+      },
       "signature": "frost(<number:strength>, <length:radius>?, <color:tint>?)",
       "backdropRadiusParam": 1,
       "bleedParam": null,
@@ -100,9 +104,13 @@
       "doc": "film grain over the element",
       "backdrop": false,
       "hlsl": "noise.hlsl",
+      "wgsl": "noise.wgsl",
       "source": "crates/sk-effects/shaders/noise.slang",
       "sourceSha256": "b4efe515d394889dd4e237e2be043aaa7fc8fb440034cdca6b51371ac70cf24e",
-      "generatedSha256": "d28c77e609351ea15458e2cf423d96afe72ff786276fdc22b98dd0d102e72683",
+      "generatedSha256": {
+        "hlsl": "9e27a6a6023a17b39a88a42209fd9192dd934cb4597967b1169e7cf4cf75053e",
+        "wgsl": "bfe406c8131710dc70ec1bcb9716787ba78da072730dc5fd7bc8cd5cc93af4a5"
+      },
       "signature": "noise(<number:amount>, <length:scale>?, <number:speed>?)",
       "backdropRadiusParam": null,
       "bleedParam": null,
@@ -192,9 +200,13 @@
       "doc": "soft halo centred on the element's rounded edge",
       "backdrop": false,
       "hlsl": "glow.hlsl",
+      "wgsl": "glow.wgsl",
       "source": "crates/sk-effects/shaders/glow.slang",
       "sourceSha256": "6ceb62c92bacc8dfd99b59d412d5047dddecd6033d4145e3c49ca6bd07182952",
-      "generatedSha256": "d8eb41f3b24db29a2237033235cef00338df17115727e60ee38ece7000ecc2b4",
+      "generatedSha256": {
+        "hlsl": "88ee305ece721ed7e18492fa1a0a3053a299ead6231ce3b697c7b55eb27f2155",
+        "wgsl": "6bedef3c759e0b6c47538de2c99132223ef2e23fda866105bbdb2cc997acc490"
+      },
       "signature": "glow(<color>?, <length:radius>, <number:strength>)",
       "backdropRadiusParam": null,
       "bleedParam": 0,

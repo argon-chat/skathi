@@ -432,7 +432,7 @@ mod tests {
     }
 
     const USER_MANIFEST: &str = r#"{
-      "schema": 5,
+      "schema": 6,
       "kind": "user",
       "effects": [
         {

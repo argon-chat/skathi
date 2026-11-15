@@ -174,6 +174,10 @@ public struct SkAnimatedAttribute
 // slangc preserves explicit `register()` annotations verbatim through the HLSL
 // backend (measured, docs/SHADERS.md §3.1), so the module is the right home
 // for them and an effect can never redeclare or move one.
+//
+// `[[vk::binding(binding, group)]]` is the same contract for the WGSL target,
+// matching the pipeline layout in gpui_wgpu: group 0 the globals, group 1 the
+// instance buffer, group 2 the backdrop textures and their sampler.
 
 public struct SkBounds
 {
@@ -189,9 +193,12 @@ public struct SkCorners
     public float bottom_left;
 };
 
-/// Keep in sync with `gpui::EffectQuad` (vendor/zed/crates/gpui/src/scene.rs)
-/// and `struct EffectQuad` in gpui_windows/src/effects.hlsl.
-/// 32 words / 128 bytes.
+/// Keep in sync with `gpui::EffectQuad` (vendor/zed/crates/gpui/src/scene.rs),
+/// `struct EffectQuad` in gpui_windows/src/effects.hlsl and in
+/// gpui_wgpu/src/shaders_effects.wgsl. 32 words / 128 bytes.
+///
+/// The parameter banks are `float[4]`, not `float4`: a WGSL storage buffer
+/// aligns a `vec4` to 16 bytes, which would move `params0` from offset 72 to 80.
 public struct SkEffectQuad
 {
     public uint order;
@@ -201,8 +208,8 @@ public struct SkEffectQuad
     /// The content mask's rounded corners; see `sk_content_mask_coverage`.
     public SkCorners content_mask_radii;
     public SkCorners corner_radii;
-    public float4 params0;
-    public float4 params1;
+    public float params0[4];
+    public float params1[4];
     public float opacity;
     public float time;
     public float bleed;
@@ -211,11 +218,18 @@ public struct SkEffectQuad
     public uint flags;
 };
 
+[[vk::binding(0, 1)]]
 public StructuredBuffer<SkEffectQuad> sk_effect_quads : register(t1);
+[[vk::binding(0, 2)]]
 public Texture2D<float4> sk_backdrop_input : register(t0);
+[[vk::binding(2, 2)]]
 public Texture2D<float4> sk_backdrop_original : register(t2);
+[[vk::binding(1, 2)]]
 public SamplerState sk_clamp_sampler : register(s1);
 
+/// Scalar padding rather than a `uint3`: WGSL aligns a `vec3` to 16 bytes and
+/// would grow the block from 48 to 64.
+[[vk::binding(0, 0)]]
 public cbuffer GlobalParams : register(b0)
 {
     public float4 sk_gamma_ratios;
@@ -223,21 +237,14 @@ public cbuffer GlobalParams : register(b0)
     public float sk_grayscale_enhanced_contrast;
     public float sk_subpixel_enhanced_contrast;
     public uint sk_is_bgr;
-    public uint3 sk_global_pad;
+    public uint sk_global_pad0;
+    public uint sk_global_pad1;
+    public uint sk_global_pad2;
 };
 
 /// Bit 0 of `SkEffectQuad::flags`.
 public static const uint SK_FLAG_NEEDS_BACKDROP = 1u;
 
-/// The varyings the engine-owned vertex stage
-/// (gpui_windows/src/effects.hlsl) emits. `SV_ClipDistance` is consumed by the
-/// rasterizer and never reaches the fragment stage, which is the only reason
-/// this struct can be spelled in Slang at all — the vertex output cannot.
-public struct SkFragmentInput
-{
-    public nointerpolation uint id : TEXCOORD0;
-    public float4 position : SV_Position;
-};
 
 // ===========================================================================
 //  The authoring contract
@@ -394,10 +401,10 @@ public float4 sk_clamp_premultiplied(float4 color)
 }
 
 /// Builds the `EffectInput` for this pixel. Called by the generated wrapper.
-public EffectInput sk_begin(SkFragmentInput frag)
+public EffectInput sk_begin(uint id, float4 frag_position)
 {
-    SkEffectQuad q = sk_effect_quads[frag.id];
-    float2 position = frag.position.xy;
+    SkEffectQuad q = sk_effect_quads[id];
+    float2 position = frag_position.xy;
     // SV_Position is the pixel centre, so this lands on a texel centre of the
     // full-resolution snapshot.
     float2 uv = position / sk_viewport_size;
@@ -431,8 +438,8 @@ public EffectInput sk_begin(SkFragmentInput frag)
     i.opacity = q.opacity;
     i.clip = sk_content_mask_coverage(position, q.content_mask, q.content_mask_radii);
     i.hasBackdrop = has_backdrop;
-    i.params0 = q.params0;
-    i.params1 = q.params1;
+    i.params0 = float4(q.params0[0], q.params0[1], q.params0[2], q.params0[3]);
+    i.params1 = float4(q.params1[0], q.params1[1], q.params1[2], q.params1[3]);
     return i;
 }
 
