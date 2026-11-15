@@ -271,6 +271,9 @@ fn compile(out_dir: &Path, is_msvc: bool) {
         build.flag("/EHsc");
         // `pragma GCC`/`#warning` noise from ThorVG's bundled JerryScript.
         build.flag("/wd4068");
+        // The prebuilt comes from a runner's MSVC; its vectorized STL algorithms (`__std_min_element_f_`
+        // and the rest) live in that toolset's libcpmt, which an older Visual Studio lacks.
+        build.define("_USE_STD_VECTOR_ALGORITHMS", "0");
     } else {
         for flag in [
             "-fno-exceptions",
