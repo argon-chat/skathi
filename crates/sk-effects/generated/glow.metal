@@ -33,7 +33,7 @@ struct Glow_0
 };
 
 
-#line 255 "./sk.slang"
+#line 255 "sk.slang"
 struct EffectInput_0
 {
     float2 uv_0;
@@ -164,7 +164,7 @@ bool Glow_straightAlpha_0()
 }
 
 
-#line 394 "./sk.slang"
+#line 394 "sk.slang"
 float4 sk_clamp_premultiplied_0(float4 color_1)
 {
 

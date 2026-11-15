@@ -15,7 +15,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { PIN, ShaderCompilerError } from "./redslangc";
 
 /// Bumped when the prelude or generated wrapper changes codegen or schema shape; rides in every
@@ -309,9 +309,8 @@ async function redslangc(r: Request): Promise<RunResult> {
     r.module,
     "--source-name",
     r.sourceName,
-    // The prelude's directory is the working directory, so its #line name is `sk.slang` on every machine.
-    "-I",
-    ".",
+    "--import",
+    `sk=${PRELUDE}`,
     ...r.includes.flatMap((dir) => ["-I", dir]),
     ...r.targets.flatMap((t) => ["-t", t.spec]),
     "-e",
@@ -321,7 +320,6 @@ async function redslangc(r: Request): Promise<RunResult> {
     "row-major",
   ];
   const child = Bun.spawn([r.compiler, ...args], {
-    cwd: dirname(PRELUDE),
     stdin: new TextEncoder().encode(r.source),
     stdout: "pipe",
     stderr: "pipe",
@@ -695,23 +693,34 @@ function schemaProblem(file: string, source: string | null, error: SchemaError):
   return { severity: "error", file, ...where, message };
 }
 
-/// The `.slang` files directly in `dir`, sorted, with what is wrong with any of them.
+const DECLARES_EFFECT = /\[\s*SkEffect\s*\(/;
+
+function slangFiles(dir: string): string[] {
+  return (readdirSync(dir, { recursive: true }) as string[])
+    .filter((f) => f.endsWith(".slang"))
+    .map((f) => join(dir, f))
+    .sort();
+}
+
+/// The effects under `dir`: every `.slang` that declares an `[SkEffect]`; the rest are modules they import.
 export function discover(
   dir: string,
   sourceName: (file: string) => string,
 ): { sources: EffectSource[]; problems: Problem[] } {
   const sources: EffectSource[] = [];
   const problems: Problem[] = [];
-  const files = readdirSync(dir)
-    .filter((f) => f.endsWith(".slang"))
-    .sort();
-  for (const f of files) {
-    const file = join(dir, f);
+  const stems = new Map<string, string>();
+  for (const file of slangFiles(dir)) {
     const source = readText(file);
+    if (!DECLARES_EFFECT.test(source)) continue;
+    const f = relative(dir, file);
     try {
       if (stemOf(file) === "sk") {
         throw new SchemaError(`${f}: an effect cannot be named sk.slang — \`sk\` is the prelude's module`);
       }
+      const other = stems.get(stemOf(file));
+      if (other) throw new SchemaError(`${f}: ${other} is an effect file with the same name; rename one`);
+      stems.set(stemOf(file), f);
       sources.push({ file, sourceName: sourceName(file), struct: findStruct(file, source), source });
     } catch (e) {
       if (!(e instanceof SchemaError)) throw e;
@@ -877,7 +886,7 @@ export const appShadersDir = (appRoot: string) => join(appRoot, "shaders");
 export function hasAppEffects(appRoot: string): boolean {
   const dir = appShadersDir(appRoot);
   try {
-    return statSync(dir).isDirectory() && readdirSync(dir).some((f) => f.endsWith(".slang"));
+    return statSync(dir).isDirectory() && slangFiles(dir).some((f) => DECLARES_EFFECT.test(readText(f)));
   } catch {
     return false;
   }

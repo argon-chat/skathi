@@ -1,7 +1,7 @@
 {
   "schema": 7,
   "slang": "2026.12",
-  "compiler": "redslangc 0.1.0",
+  "compiler": "redslangc 0.1.1",
   "kind": "builtin",
   "preludeSha256": "5ec05ec0e3ff82c30ca022d98944a835f0c5eaf3e12cd880d6fb1b1ac6ff4ab6",
   "effects": [
@@ -17,9 +17,9 @@
       "source": "crates/sk-effects/shaders/frost.slang",
       "sourceSha256": "3878d0fc85a790a8abcc1fbc6369c3ea64093adaeb4c20ec1fa443908052dada",
       "generatedSha256": {
-        "hlsl": "e4c287887f92191cf83b9e79ad8a03047a91e5990d08f7e65d8e65cd05b5fd27",
+        "hlsl": "fd5939866f20dd8020baac418902c880257d25cee3bba9c5173d519463d137eb",
         "wgsl": "f5405f3ad30fd6c1635e3dc121ccc11471f9c027eab41ef65afaca14943c7db8",
-        "metal": "f339de11954ccd002869402e0da9c6ce285020bd773ecc69b641a85a0baaa019"
+        "metal": "60bead9e9db21d74041f9e7a507f733f5dce8086b9bea9bd303e3c65499b9e6c"
       },
       "signature": "frost(<number:strength>, <length:radius>?, <color:tint>?)",
       "backdropRadiusParam": 1,
@@ -112,9 +112,9 @@
       "source": "crates/sk-effects/shaders/noise.slang",
       "sourceSha256": "aac4ac76e76e5b7df379ca8f6356d05d5eb7f84b754cef6ff0712c4edddcbecd",
       "generatedSha256": {
-        "hlsl": "3ea1aec26e83a2fe9b145119baf45ea85d61c88032afc8ff68baa5c87b4b0398",
+        "hlsl": "b2a03b490ed7727a0c42434c04028a110cbf13c97fa2c534ab08681f3d525666",
         "wgsl": "26044905691ad28552245e647e6b63b38be9c8c240ffeecf065adfec2b811618",
-        "metal": "56280b5dae6c76c7e48d9ca73f8d9ac45d6e98cd2be22c3a090c8bce591c68b9"
+        "metal": "52fa5a26d7529e574fc1f40f68b26e3cbf05944fbd9be4d6c141fba45f784e2a"
       },
       "signature": "noise(<number:amount>, <length:scale>?, <number:speed>?)",
       "backdropRadiusParam": null,
@@ -210,9 +210,9 @@
       "source": "crates/sk-effects/shaders/glow.slang",
       "sourceSha256": "de1d06dddb28503e5a23a3494d73227436591594943428bd0ecec042d3926caa",
       "generatedSha256": {
-        "hlsl": "6736574066fba087d15fe6490c5e9702bb793ec3aefa8f909b18ab6c1860b6a8",
+        "hlsl": "c070f181a8002a8cff10c1312a84275fcfeb9a2d33fbbe70cbc11b5a84bf4891",
         "wgsl": "c2c6947d0dd3f2cd0f534693c32466a96c81de518fdfe4b4d7fc1ba07f2f504c",
-        "metal": "6837927df03659f8c919628bc352f490d50de3a50f37a4f10a4625a0f87f78d5"
+        "metal": "14ba507d8e5d6a24fb03540d5f7c349983ed59bc8672fe0a3b77fb9f0de4ce46"
       },
       "signature": "glow(<color>?, <length:radius>, <number:strength>)",
       "backdropRadiusParam": null,

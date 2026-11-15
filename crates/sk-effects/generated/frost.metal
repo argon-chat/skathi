@@ -24,7 +24,7 @@
 #include <metal_texture>
 using namespace metal;
 
-#line 335 "./sk.slang"
+#line 335 "sk.slang"
 bool IEffect_straightAlphax24defaultImpl_0()
 {
 
@@ -42,7 +42,7 @@ struct Frost_0
 };
 
 
-#line 255 "./sk.slang"
+#line 255 "sk.slang"
 struct EffectInput_0
 {
     float2 uv_0;
@@ -228,7 +228,7 @@ float4 Frost_shade_0(const Frost_0 thread* this_0, const EffectInput_0 thread* i
 }
 
 
-#line 394 "./sk.slang"
+#line 394 "sk.slang"
 float4 sk_clamp_premultiplied_0(float4 color_1)
 {
 
