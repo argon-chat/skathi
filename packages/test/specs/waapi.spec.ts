@@ -20,7 +20,7 @@ const opacityOf = (text: string): number => {
   return m ? Number(m[1]) : 1;
 };
 const translateYOf = (text: string): number => {
-  const m = /sk_transform:[\s\S]*?translate:\s*\(\s*Pixels\(\s*([-\d.eE]+),?\s*\),?\s*Pixels\(\s*([-\d.eE]+)/.exec(
+  const m = /vn_transform:[\s\S]*?translate:\s*\(\s*Pixels\(\s*([-\d.eE]+),?\s*\),?\s*Pixels\(\s*([-\d.eE]+)/.exec(
     text,
   );
   return m ? Number(m[2]) : NaN;
