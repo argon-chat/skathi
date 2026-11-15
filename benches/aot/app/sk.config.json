@@ -1,0 +1,10 @@
+{
+  "name": "aotbench",
+  "productName": "AotBench",
+  "version": "0.1.0",
+  "window": {
+    "title": "aotbench",
+    "width": 900,
+    "height": 700
+  }
+}
