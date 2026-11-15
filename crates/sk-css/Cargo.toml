@@ -12,3 +12,6 @@ gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 lightningcss = { version = "1.0.0-alpha.72", default-features = false, features = ["into_owned"] }
 parcel_selectors = "0.28.3"
 sk-effects = { path = "../sk-effects" }
+
+[dev-dependencies]
+serde_json = "1"

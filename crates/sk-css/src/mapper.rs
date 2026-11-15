@@ -1247,17 +1247,42 @@ impl InlineStyle {
     }
 }
 
+/// Does the engine apply `name: value`? What `CSS.supports`, `@supports` and the `:style` array form
+/// answer.
 pub fn accepts_declaration(name: &str, value: &str) -> bool {
+    matches!(verdict(name, value), Verdict::Applied | Verdict::Inert)
+}
+
+/// What the mapper does with one declaration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// It changes the computed style.
+    Applied,
+    /// Accepted without an advisory, and changes nothing here (`tab-size`, `scroll-margin`).
+    Inert,
+    /// Parsed, then not applied: the first advisory the mapper gave.
+    Rejected(String),
+    /// A vendor-prefixed spelling dropped without an advisory.
+    Dropped,
+    /// Not one valid declaration.
+    Invalid,
+}
+
+pub fn verdict(name: &str, value: &str) -> Verdict {
     let name = name.trim();
     if name.starts_with("--") {
-        return !value.contains(';');
+        return if value.contains(';') {
+            Verdict::Invalid
+        } else {
+            Verdict::Applied
+        };
     }
     let body = format!("{name}: {value}");
     let Ok(block) = DeclarationBlock::parse_string(&body, ParserOptions::default()) else {
-        return false;
+        return Verdict::Invalid;
     };
     if block.len() != 1 {
-        return false;
+        return Verdict::Invalid;
     }
     let p = block
         .declarations
@@ -1265,20 +1290,42 @@ pub fn accepts_declaration(name: &str, value: &str) -> bool {
         .chain(block.important_declarations.iter())
         .next();
     if p.is_some_and(crate::prefix::property_dropped) {
-        return false;
-    }
-    if let Some(Property::Unparsed(u)) = p {
-        return has_substitution(&u.value)
-            || matches!(
-                single_ident_raw(&u.value)
-                    .map(str::to_ascii_lowercase)
-                    .as_deref(),
-                Some("inherit" | "initial" | "unset" | "revert" | "revert-layer")
-            );
+        return Verdict::Dropped;
     }
     let mut diagnostics = Vec::new();
-    let style = parse_inline_style(&body, &mut diagnostics);
-    diagnostics.is_empty() && !style.is_empty()
+    let changed = match p {
+        Some(Property::Unparsed(u)) => {
+            if has_substitution(&u.value) || is_css_wide_keyword(&u.value) {
+                return Verdict::Applied;
+            }
+            let (mut r, mut x) = (StyleRefinement::default(), Extras::default());
+            if !apply_unparsed(u, &mut r, &mut x, &mut diagnostics) {
+                return Verdict::Invalid;
+            }
+            r != StyleRefinement::default() || x != Extras::default()
+        }
+        Some(Property::Custom(c)) if has_substitution(&c.value) => return Verdict::Applied,
+        _ => {
+            let style = parse_inline_style(&body, &mut diagnostics);
+            style
+                .refinement
+                .as_deref()
+                .is_some_and(|s| *s != StyleRefinement::default())
+                || style.extras != Extras::default()
+                || style.transitions.is_some()
+                || style.animations.is_some()
+                || style.animation_patch.is_some()
+                || style.font.is_some()
+        }
+    };
+    if let Some(first) = diagnostics.into_iter().next() {
+        return Verdict::Rejected(first);
+    }
+    if changed {
+        Verdict::Applied
+    } else {
+        Verdict::Inert
+    }
 }
 
 pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineStyle {
@@ -6149,86 +6196,15 @@ fn apply_property(
         // Reaching here means the value stayed unparsed after substitution (unbalanced `var(` or an
         // invalid token stream): a defensive advisory.
         Unparsed(u) => {
-            let reset = initial_inset_sides(u.property_id.name(), &u.value);
-            if reset != 0 {
-                if reset & 0b0001 != 0 {
-                    r.inset.top = Some(Length::Auto);
-                }
-                if reset & 0b0010 != 0 {
-                    r.inset.right = Some(Length::Auto);
-                }
-                if reset & 0b0100 != 0 {
-                    r.inset.bottom = Some(Length::Auto);
-                }
-                if reset & 0b1000 != 0 {
-                    r.inset.left = Some(Length::Auto);
-                }
-                return;
+            if !apply_unparsed(u, r, x, diagnostics) {
+                once(
+                    diagnostics,
+                    format!(
+                        "`{}` value is still unresolved after var()/env() substitution (v1)",
+                        u.property_id.name()
+                    ),
+                );
             }
-            // lightningcss has no typed `none` for a list property, so `box-shadow: none`
-            // (Tailwind's `shadow-none`) always lands here; it means an empty list, which lets it
-            // cancel an earlier shadow.
-            if matches!(u.property_id, PropertyId::BoxShadow(_))
-                && matches!(single_ident_raw(&u.value), Some("none"))
-            {
-                r.box_shadow = Some(Vec::new());
-                return;
-            }
-            if matches!(u.property_id, PropertyId::TextShadow)
-                && matches!(single_ident_raw(&u.value), Some("none" | "initial"))
-            {
-                r.text.text_shadow = Some(Vec::new());
-                return;
-            }
-            // `x: inherit` parses as Unparsed for every property but `all`; not writing the field
-            // is "take the parent's value", so it is honoured by ignoring it. `border-radius` is
-            // the exception (it does not inherit): it is recorded and filled after the cascade
-            // (`RadiusInherit`).
-            if matches!(u.property_id, PropertyId::ClipPath(_)) && !has_substitution(&u.value) {
-                use lightningcss::properties::custom::{Token, TokenOrValue};
-                match clip_path_path(&u.value) {
-                    Some(Ok(clip)) => {
-                        r.vn_clip_path = Some(clip);
-                        return;
-                    }
-                    Some(Err(why)) => {
-                        once(
-                            diagnostics,
-                            format!("`clip-path: path()` was dropped as invalid, as Chromium drops it: {why}"),
-                        );
-                        return;
-                    }
-                    None => {}
-                }
-                let what = u.value.0.iter().find_map(|t| match t {
-                    TokenOrValue::Function(f) => Some(format!("{}()", f.name.0.as_ref())),
-                    TokenOrValue::Token(Token::Function(name)) => {
-                        Some(format!("{}()", name.as_ref()))
-                    }
-                    _ => None,
-                });
-                clip_path_unsupported(diagnostics, what.as_deref().unwrap_or("this value"));
-                return;
-            }
-            if matches!(single_ident_raw(&u.value), Some("inherit")) {
-                let corners = match u.property_id {
-                    PropertyId::BorderRadius(_) => RadiusInherit::ALL,
-                    PropertyId::BorderTopLeftRadius(_) => RadiusInherit::TOP_LEFT,
-                    PropertyId::BorderTopRightRadius(_) => RadiusInherit::TOP_RIGHT,
-                    PropertyId::BorderBottomRightRadius(_) => RadiusInherit::BOTTOM_RIGHT,
-                    PropertyId::BorderBottomLeftRadius(_) => RadiusInherit::BOTTOM_LEFT,
-                    _ => 0,
-                };
-                x.radius_inherit.write(corners, true);
-                return;
-            }
-            once(
-                diagnostics,
-                format!(
-                    "`{}` value is still unresolved after var()/env() substitution (v1)",
-                    u.property_id.name()
-                ),
-            );
         }
         Property::ViewTransitionName(name) => {
             use lightningcss::properties::transition::ViewTransitionName as N;
@@ -6263,6 +6239,90 @@ fn apply_property(
             );
         }
     }
+}
+
+/// A value lightningcss left as tokens without a substitution in it; false when it is not one the
+/// mapper knows, which is to say invalid.
+fn apply_unparsed(
+    u: &lightningcss::properties::custom::UnparsedProperty,
+    r: &mut StyleRefinement,
+    x: &mut Extras,
+    diagnostics: &mut Vec<String>,
+) -> bool {
+    let reset = initial_inset_sides(u.property_id.name(), &u.value);
+    if reset != 0 {
+        if reset & 0b0001 != 0 {
+            r.inset.top = Some(Length::Auto);
+        }
+        if reset & 0b0010 != 0 {
+            r.inset.right = Some(Length::Auto);
+        }
+        if reset & 0b0100 != 0 {
+            r.inset.bottom = Some(Length::Auto);
+        }
+        if reset & 0b1000 != 0 {
+            r.inset.left = Some(Length::Auto);
+        }
+        return true;
+    }
+    // lightningcss has no typed `none` for a list property, so `box-shadow: none`
+    // (Tailwind's `shadow-none`) always lands here; it means an empty list, which lets it
+    // cancel an earlier shadow.
+    if matches!(u.property_id, PropertyId::BoxShadow(_))
+        && matches!(single_ident_raw(&u.value), Some("none"))
+    {
+        r.box_shadow = Some(Vec::new());
+        return true;
+    }
+    if matches!(u.property_id, PropertyId::TextShadow)
+        && matches!(single_ident_raw(&u.value), Some("none" | "initial"))
+    {
+        r.text.text_shadow = Some(Vec::new());
+        return true;
+    }
+    // `x: inherit` parses as Unparsed for every property but `all`; not writing the field
+    // is "take the parent's value", so it is honoured by ignoring it. `border-radius` is
+    // the exception (it does not inherit): it is recorded and filled after the cascade
+    // (`RadiusInherit`).
+    if matches!(u.property_id, PropertyId::ClipPath(_)) && !has_substitution(&u.value) {
+        use lightningcss::properties::custom::{Token, TokenOrValue};
+        match clip_path_path(&u.value) {
+            Some(Ok(clip)) => {
+                r.vn_clip_path = Some(clip);
+                return true;
+            }
+            Some(Err(why)) => {
+                once(
+                    diagnostics,
+                    format!(
+                        "`clip-path: path()` was dropped as invalid, as Chromium drops it: {why}"
+                    ),
+                );
+                return true;
+            }
+            None => {}
+        }
+        let what = u.value.0.iter().find_map(|t| match t {
+            TokenOrValue::Function(f) => Some(format!("{}()", f.name.0.as_ref())),
+            TokenOrValue::Token(Token::Function(name)) => Some(format!("{}()", name.as_ref())),
+            _ => None,
+        });
+        clip_path_unsupported(diagnostics, what.as_deref().unwrap_or("this value"));
+        return true;
+    }
+    if matches!(single_ident_raw(&u.value), Some("inherit")) {
+        let corners = match u.property_id {
+            PropertyId::BorderRadius(_) => RadiusInherit::ALL,
+            PropertyId::BorderTopLeftRadius(_) => RadiusInherit::TOP_LEFT,
+            PropertyId::BorderTopRightRadius(_) => RadiusInherit::TOP_RIGHT,
+            PropertyId::BorderBottomRightRadius(_) => RadiusInherit::BOTTOM_RIGHT,
+            PropertyId::BorderBottomLeftRadius(_) => RadiusInherit::BOTTOM_LEFT,
+            _ => 0,
+        };
+        x.radius_inherit.write(corners, true);
+        return true;
+    }
+    false
 }
 
 fn presentation_name(p: &Property) -> Option<&'static str> {

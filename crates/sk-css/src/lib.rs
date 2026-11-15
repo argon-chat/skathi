@@ -11,6 +11,7 @@
 //!   [`audit_selector`], never compiled into a rule that silently never matches.
 
 mod animator;
+pub mod catalog;
 mod element;
 #[cfg(test)]
 mod em_tests;
@@ -2510,23 +2511,38 @@ fn at_rule_ignored(rule: &CssRule<'_>, diagnostics: &mut Vec<String>) {
     mapper::once(diagnostics, msg);
 }
 
+/// `CSS.supports(conditionText)`: a `@supports` condition, or a bare declaration as browsers also take.
+pub fn supports_condition_text(text: &str) -> bool {
+    use lightningcss::rules::supports::SupportsCondition;
+    use lightningcss::traits::Parse;
+    match SupportsCondition::parse_string(text) {
+        Ok(c) => supports_condition(&c),
+        Err(_) => SupportsCondition::parse_string(&format!("({text})"))
+            .is_ok_and(|c| supports_condition(&c)),
+    }
+}
+
 fn supports_condition(condition: &lightningcss::rules::supports::SupportsCondition<'_>) -> bool {
     use lightningcss::rules::supports::SupportsCondition as C;
+    use lightningcss::vendor_prefix::VendorPrefix;
     match condition {
         C::Not(inner) => !supports_condition(inner),
         C::And(list) => list.iter().all(supports_condition),
         C::Or(list) => list.iter().any(supports_condition),
+        // `(-webkit-x: v) or (x: v)` arrives as one declaration carrying both prefixes.
         C::Declaration { property_id, value } => {
-            let text = format!("{}:{}", property_id.name(), value);
-            let Ok(block) = DeclarationBlock::parse_string(&text, ParserOptions::default()) else {
-                return false;
-            };
-            let converted = mapper::convert_block(&block);
-            converted.diagnostics.is_none()
-                && (converted.normal.is_some()
-                    || converted.normal_custom.is_some()
-                    || converted.normal_dynamic.is_some()
-                    || converted.normal_extras != Extras::default())
+            let name = property_id.name();
+            let prefix = property_id.prefix();
+            [
+                (VendorPrefix::None, ""),
+                (VendorPrefix::WebKit, "-webkit-"),
+                (VendorPrefix::Moz, "-moz-"),
+                (VendorPrefix::Ms, "-ms-"),
+                (VendorPrefix::O, "-o-"),
+            ]
+            .into_iter()
+            .filter(|(p, _)| prefix.contains(*p) || (*p == VendorPrefix::None && prefix.is_empty()))
+            .any(|(_, spelling)| catalog::supports(&format!("{spelling}{name}"), value))
         }
         C::Selector(text) => {
             if text.contains(['{', '}']) {

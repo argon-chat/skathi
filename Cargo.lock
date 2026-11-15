@@ -5718,6 +5718,7 @@ dependencies = [
  "gpui",
  "lightningcss",
  "parcel_selectors",
+ "serde_json",
  "sk-effects",
 ]
 
