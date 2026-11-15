@@ -2698,23 +2698,7 @@ fn inline_row_applies(t: &Tree, node: &crate::tree::Node, display: Option<gpui::
         match kid.kind {
             Kind::Text => has_text = true,
             Kind::Element => {
-                if !INLINE_LEVEL_TAGS.contains(&t.name(kid.tag)) {
-                    return false;
-                }
-                // The author can opt a `<span>` out with `display: block`, but `display: inline`
-                // must not count: the mapper folds every inline outer type onto its block-level
-                // equivalent, so it arrives as `Some(Block)` and would opt the whole row out.
-                let declared = kid.computed.as_ref().and_then(|cs| cs.base.display);
-                let inline_level = kid
-                    .computed
-                    .as_ref()
-                    .is_some_and(|cs| cs.extras.inline_level == Some(true));
-                if !inline_level
-                    && matches!(
-                        declared,
-                        Some(gpui::Display::Block) | Some(gpui::Display::Grid)
-                    )
-                {
+                if !inline_level_element(t, kid) {
                     return false;
                 }
                 has_element = true;
@@ -2723,6 +2707,100 @@ fn inline_row_applies(t: &Tree, node: &crate::tree::Node, display: Option<gpui::
         }
     }
     has_text || has_element
+}
+
+fn inline_level_element(t: &Tree, kid: &crate::tree::Node) -> bool {
+    if !INLINE_LEVEL_TAGS.contains(&t.name(kid.tag)) {
+        return false;
+    }
+    // The author can opt a `<span>` out with `display: block`, but `display: inline` must not
+    // count: the mapper folds every inline outer type onto its block-level equivalent, so it
+    // arrives as `Some(Block)` and would opt the whole row out.
+    let declared = kid.computed.as_ref().and_then(|cs| cs.base.display);
+    let inline_level = kid
+        .computed
+        .as_ref()
+        .is_some_and(|cs| cs.extras.inline_level == Some(true));
+    inline_level
+        || !matches!(
+            declared,
+            Some(gpui::Display::Block) | Some(gpui::Display::Grid)
+        )
+}
+
+const COLLAPSIBLE_WS: [char; 5] = [' ', '\t', '\n', '\r', '\u{c}'];
+
+fn is_blank(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| COLLAPSIBLE_WS.contains(&c))
+}
+
+fn white_space_at(t: &Tree, mut id: u32) -> sk_css::WhiteSpaceMode {
+    while let Some(n) = t.node(id) {
+        if let Some(ws) = n.computed.as_ref().and_then(|cs| cs.extras.white_space) {
+            return ws;
+        }
+        if n.parent == 0 || n.parent == id {
+            break;
+        }
+        id = n.parent;
+    }
+    sk_css::WhiteSpaceMode::Normal
+}
+
+/// A text node of collapsible white space only renders nothing (css-text-3 §4.1.1, CSS 2 §9.2.2.1):
+/// in a flex or grid container, beside a block-level box, or at a line's start or end. Between two
+/// pieces of inline content it is the word gap.
+fn blank_collapses_away(t: &Tree, id: u32, node: &crate::tree::Node) -> bool {
+    if !is_blank(&node.text) {
+        return false;
+    }
+    let mode = white_space_at(t, node.parent);
+    if !mode.collapses_spaces() || (mode.preserves_newlines() && node.text.contains('\n')) {
+        return false;
+    }
+    let Some(parent) = t.node(node.parent) else {
+        return false;
+    };
+    let display = parent.computed.as_ref().and_then(|cs| cs.base.display);
+    if matches!(
+        display,
+        Some(gpui::Display::Flex) | Some(gpui::Display::Grid)
+    ) {
+        return true;
+    }
+    if parent.kind == Kind::Element && INLINE_LEVEL_TAGS.contains(&t.name(parent.tag)) {
+        return false;
+    }
+    let content = |c: u32| {
+        !popped_out(c)
+            && t.node(c).is_some_and(|n| match n.kind {
+                Kind::Anchor => false,
+                Kind::Text => !n.text.is_empty() && !is_blank(&n.text),
+                Kind::Element => true,
+            })
+    };
+    let mut before = false;
+    let mut after = false;
+    let mut seen_self = false;
+    for &c in &parent.children {
+        if c == id {
+            seen_self = true;
+            continue;
+        }
+        if !content(c) {
+            continue;
+        }
+        let Some(kid) = t.node(c) else { continue };
+        if kid.kind == Kind::Element && !inline_level_element(t, kid) {
+            return true;
+        }
+        if seen_self {
+            after = true;
+        } else {
+            before = true;
+        }
+    }
+    !(before && after)
 }
 
 /// `text-align` on a block container centres its inline-level children with auto margins (the
@@ -3159,7 +3237,7 @@ fn generates_a_box(t: &Tree, id: u32) -> bool {
         None => false,
         Some(n) => match n.kind {
             Kind::Anchor => false,
-            Kind::Text => !n.text.is_empty(),
+            Kind::Text => !n.text.is_empty() && !blank_collapses_away(t, id, n),
             Kind::Element => true,
         },
     }
@@ -6290,6 +6368,98 @@ mod tests {
             assert_eq!(laid_out_children(t, node), vec![empty_div, text]);
             assert!(!generates_a_box(t, blank));
             assert!(!generates_a_box(t, 99_999));
+        });
+    }
+
+    #[test]
+    fn collapsible_white_space_is_a_box_only_between_inline_content() {
+        with_tree(|t| {
+            let div = t.intern("div");
+            let span = t.intern("span");
+            let text = |t: &mut Tree, s: &str, parent: u32| {
+                let n = t.create_text();
+                t.set_text(n, s.to_string());
+                t.insert(n, parent, 0);
+                n
+            };
+            let element = |t: &mut Tree, tag: u32, parent: u32| {
+                let n = t.create_element(tag);
+                t.insert(n, parent, 0);
+                n
+            };
+            let set_style = |t: &mut Tree, id: u32, f: &dyn Fn(&mut sk_css::ComputedStates)| {
+                let mut cs = sk_css::ComputedStates::default();
+                f(&mut cs);
+                if let Some(n) = t.node_mut(id) {
+                    n.computed = Some(cs);
+                }
+            };
+
+            // Between blocks, as Svelte keeps it: `<h1/> <button/>` in a block container.
+            let blocks = t.create_element(div);
+            let h1 = element(t, div, blocks);
+            let between = text(t, " ", blocks);
+            let after = element(t, div, blocks);
+            let edge = text(t, "\n  ", blocks);
+            let anchor = t.create_anchor();
+            t.insert(anchor, blocks, 0);
+            assert_eq!(
+                laid_out_children(t, t.node(blocks).unwrap()),
+                vec![h1, after]
+            );
+            assert!(!generates_a_box(t, between) && !generates_a_box(t, edge));
+
+            // The word gap of `<span>a</span> <span>b</span>`, and a line's trailing space.
+            let line = t.create_element(div);
+            let a = element(t, span, line);
+            let gap = text(t, " ", line);
+            let b = element(t, span, line);
+            let trailing = text(t, " ", line);
+            assert_eq!(laid_out_children(t, t.node(line).unwrap()), vec![a, gap, b]);
+            assert!(!generates_a_box(t, trailing));
+            let mut style = gpui::StyleRefinement::default();
+            apply_inline_row(&mut style, t, t.node(line).unwrap(), None);
+            assert_eq!(style.display, Some(gpui::Display::Flex));
+
+            // Text beside it counts as inline content, and so does a blank inside an inline element.
+            let words = t.create_element(div);
+            text(t, "a", words);
+            let word_gap = text(t, " ", words);
+            element(t, span, words);
+            assert!(generates_a_box(t, word_gap));
+            let inner = element(t, span, words);
+            let inside = text(t, " ", inner);
+            assert!(generates_a_box(t, inside));
+
+            // A flex container renders no white-space-only run, even between inline items.
+            let flex = t.create_element(div);
+            set_style(t, flex, &|cs| {
+                let mut base = gpui::StyleRefinement::default();
+                base.display = Some(gpui::Display::Flex);
+                cs.base = std::rc::Rc::new(base);
+            });
+            element(t, span, flex);
+            let flex_gap = text(t, " ", flex);
+            element(t, span, flex);
+            assert!(!generates_a_box(t, flex_gap));
+
+            // Preserved white space is content.
+            let pre = t.create_element(div);
+            set_style(t, pre, &|cs| {
+                cs.extras.white_space = Some(sk_css::WhiteSpaceMode::Pre)
+            });
+            element(t, div, pre);
+            let kept = text(t, "  ", pre);
+            element(t, div, pre);
+            assert!(generates_a_box(t, kept));
+            let pre_line = t.create_element(div);
+            set_style(t, pre_line, &|cs| {
+                cs.extras.white_space = Some(sk_css::WhiteSpaceMode::PreLine)
+            });
+            let space = text(t, " ", pre_line);
+            let newline = text(t, "\n", pre_line);
+            assert!(!generates_a_box(t, space));
+            assert!(generates_a_box(t, newline));
         });
     }
 
