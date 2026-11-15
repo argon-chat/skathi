@@ -412,7 +412,7 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     const { button } = tree(rt);
 
     button.scrollIntoView();
-    expect(rt.host.intoViewCalls.at(-1)).toEqual({ id: button.__skId, block: 0, inline: 3 });
+    expect(rt.host.intoViewCalls.at(-1)).toEqual({ id: button.__skId, block: 0, inline: 3, behavior: 0 });
 
     button.scrollIntoView(false);
     expect(rt.host.intoViewCalls.at(-1)).toMatchObject({ block: 2, inline: 3 });
@@ -425,12 +425,22 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     expect(rt.advisories()).toEqual([]);
   });
 
-  test('behavior: "smooth" is performed instantly', () => {
+  test("the behavior option reaches the host, and every other spelling leaves it to CSS", () => {
     const rt = createRuntime();
-    const { section } = tree(rt);
+    const { section, button } = tree(rt);
     scroller(rt, section);
+    const behaviors = () => rt.host.scrollCalls.filter((c) => c.op !== 0).map((c) => c.behavior);
+
     section.scrollTo({ top: 300, behavior: "smooth" });
-    expect(section.scrollTop).toBe(300);
+    section.scrollBy({ top: 10, behavior: "instant" });
+    section.scrollTo({ top: 5, behavior: "auto" });
+    section.scroll(0, 40);
+    section.scrollTop = 50;
+    expect(behaviors()).toEqual([2, 1, 0, 0, 0]);
+
+    button.scrollIntoView({ behavior: "smooth", block: "end" });
+    expect(rt.host.intoViewCalls.at(-1)).toMatchObject({ block: 2, behavior: 2 });
+    expect(rt.advisories()).toEqual([]);
   });
 
   test("a scroll EVENT no longer writes the position back onto the node", () => {

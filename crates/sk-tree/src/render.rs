@@ -4486,7 +4486,7 @@ pub(crate) fn scroll_node(
     window: &mut Window,
     cx: &mut App,
 ) -> Result<(f32, f32), String> {
-    if let Some(info) = crate::scroll::by(id, dx, dy) {
+    if let Some(info) = crate::scroll::by(id, dx, dy, crate::scroll::Behavior::Instant) {
         return Ok((info.left, info.top));
     }
     if let Some(state) = INPUT_STATES.with(|m| m.borrow().get(&id).cloned()) {

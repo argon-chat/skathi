@@ -20,9 +20,10 @@ export function hostScroll(
   x = NaN,
   y = NaN,
   sizeMatters = false,
+  behavior: SkScrollBehavior = 0,
 ): ScrollPos | null {
   if (!node.__skId) return null;
-  const raw = __sk_scroll(node.__skId, op, x, y);
+  const raw = __sk_scroll(node.__skId, op, x, y, behavior);
   if (!raw) return null;
   const [left = NaN, top = NaN, scrollWidth = NaN, scrollHeight = NaN, stale] = raw.split(",").map(Number);
   if (stale && sizeMatters) noteStale();
@@ -47,24 +48,21 @@ function noteStale(): void {
   );
 }
 
-/** `behavior: "smooth"` is performed instantly, with an advisory: a running CSS animation switches the retained-render cache off document-wide. */
-function noteBehavior(behavior: unknown): void {
-  if (behavior !== "smooth") return;
-  warnCompat(
-    "scroll-behavior",
-    'scroll behavior: "smooth" is performed INSTANTLY — the final position is exact and readable ' +
-      "on the next line, but there is no interpolation and no `scrollend` event; " +
-      'use behavior: "auto" (or "instant") to say so explicitly',
-  );
+/** `"auto"` (and anything else) leaves it to the scrolled box's CSS `scroll-behavior`. */
+function behaviorCode(behavior: unknown): SkScrollBehavior {
+  return behavior === "smooth" ? 2 : behavior === "instant" ? 1 : 0;
 }
 
-function scrollArgs(a: unknown, b: unknown): { left: number; top: number } {
+function scrollArgs(a: unknown, b: unknown): { left: number; top: number; behavior: SkScrollBehavior } {
   if (a !== null && typeof a === "object") {
     const o = a as { left?: unknown; top?: unknown; behavior?: unknown };
-    noteBehavior(o.behavior);
-    return { left: o.left === undefined ? NaN : Number(o.left), top: o.top === undefined ? NaN : Number(o.top) };
+    return {
+      left: o.left === undefined ? NaN : Number(o.left),
+      top: o.top === undefined ? NaN : Number(o.top),
+      behavior: behaviorCode(o.behavior),
+    };
   }
-  return { left: a === undefined ? NaN : Number(a), top: b === undefined ? NaN : Number(b) };
+  return { left: a === undefined ? NaN : Number(a), top: b === undefined ? NaN : Number(b), behavior: 0 };
 }
 
 for (const [name, axis] of [
@@ -87,14 +85,14 @@ for (const [name, axis] of [
 }
 
 const scrollToImpl = function (this: MirrorElement, a: unknown, b: unknown) {
-  const { left, top } = scrollArgs(a, b);
-  hostScroll(this, 1, left, top, true);
+  const { left, top, behavior } = scrollArgs(a, b);
+  hostScroll(this, 1, left, top, true, behavior);
 };
 defineDom("scrollTo", scrollToImpl);
 defineDom("scroll", scrollToImpl);
 defineDom("scrollBy", function (this: MirrorElement, a: unknown, b: unknown) {
-  const { left, top } = scrollArgs(a, b);
-  hostScroll(this, 2, Number.isFinite(left) ? left : 0, Number.isFinite(top) ? top : 0, true);
+  const { left, top, behavior } = scrollArgs(a, b);
+  hostScroll(this, 2, Number.isFinite(left) ? left : 0, Number.isFinite(top) ? top : 0, true, behavior);
 });
 
 const SCROLL_ALIGN: Record<string, SkScrollAlign> = {
@@ -108,15 +106,16 @@ defineDom("scrollIntoView", function (this: MirrorElement, arg: unknown) {
   if (!this.__skId) return;
   let block: SkScrollAlign = 0;
   let inline: SkScrollAlign = 3;
+  let behavior: SkScrollBehavior = 0;
   if (arg === false) block = 2;
   else if (arg !== null && typeof arg === "object") {
     const o = arg as { block?: unknown; inline?: unknown; behavior?: unknown };
-    noteBehavior(o.behavior);
+    behavior = behaviorCode(o.behavior);
     if (o.block !== undefined) block = SCROLL_ALIGN[String(o.block)] ?? 0;
     if (o.inline !== undefined) inline = SCROLL_ALIGN[String(o.inline)] ?? 3;
   }
   // Only horizontal-tb ltr exists: block is vertical, inline horizontal (`direction: rtl` would not flip it).
-  const out = __sk_scroll_into_view(this.__skId, block, inline);
+  const out = __sk_scroll_into_view(this.__skId, block, inline, behavior);
   if (out.charCodeAt(0) === 33 /* ! */) warnCompat("scrollIntoView", out.slice(1));
   else if (out === "stale") noteStale();
 });

@@ -51,7 +51,7 @@ const span = (at: (x: number, y: number) => Rgb, b: Bounds, y: number, hit: (c: 
 };
 
 const xs = async (row: string) => {
-  const [a, b, c] = await Promise.all(["a", "b", "c"].map((k) => box(`#${row}-${k}`)));
+  const [a, b, c] = await Promise.all([box(`#${row}-a`), box(`#${row}-b`), box(`#${row}-c`)]);
   return { a: a.x, b: b.x, c: c.x };
 };
 
@@ -136,5 +136,71 @@ describe("contain", () => {
     bunExpect(white(at(b.x + 42, b.y + 20))).toBe(true);
     bunExpect(white(at(b.x + 20, b.y + 42))).toBe(true);
     bunExpect(white(at(b.x + 70, b.y + 70))).toBe(true);
+  });
+});
+
+describe("scroll-behavior", () => {
+  /**
+   * Runs `start(el)` in the app and samples `scrollTop` once per frame until it has held still for a
+   * few frames: the first sample is the one read on the line after the call.
+   */
+  async function track(selector: string, start: string): Promise<number[]> {
+    await app.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      const seen = (globalThis.__seen = []);
+      globalThis.__tracked = false;
+      (${start})(el);
+      seen.push(el.scrollTop);
+      const t0 = performance.now();
+      const step = () => {
+        seen.push(el.scrollTop);
+        const still = seen.length > 6 && seen.slice(-6).every((v) => v === seen.at(-1));
+        if (still || performance.now() - t0 > 3000) globalThis.__tracked = true;
+        else requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    })()`);
+    await until(
+      () => app.eval("globalThis.__tracked"),
+      (done) => done === true,
+    );
+    return app.eval("globalThis.__seen");
+  }
+  const reset = (selector: string) =>
+    app.eval(`document.querySelector(${JSON.stringify(selector)}).scrollTo({ top: 0, behavior: "instant" })`);
+  const glided = (seen: number[], to: number) => {
+    const between = new Set(seen.filter((v) => v > 0 && v < to));
+    bunExpect(seen[0]).toBe(0);
+    bunExpect(between.size).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < seen.length; i++) bunExpect(seen[i]!).toBeGreaterThanOrEqual(seen[i - 1]!);
+    bunExpect(seen.at(-1)).toBe(to);
+  };
+
+  test("a box with scroll-behavior: smooth glides on scrollTo and lands exactly", async () => {
+    await reset("#sc-smooth");
+    glided(await track("#sc-smooth", "(el) => el.scrollTo(0, 400)"), 400);
+  });
+
+  test("an assignment to scrollTop glides too", async () => {
+    await reset("#sc-smooth");
+    glided(await track("#sc-smooth", "(el) => { el.scrollTop = 300; }"), 300);
+  });
+
+  test('behavior: "instant" overrides the CSS, and "smooth" glides a box without it', async () => {
+    await reset("#sc-smooth");
+    const instant = await track("#sc-smooth", '(el) => el.scrollTo({ top: 400, behavior: "instant" })');
+    bunExpect(instant[0]).toBe(400);
+    bunExpect(instant.every((v) => v === 400)).toBe(true);
+
+    await reset("#sc-plain");
+    bunExpect((await track("#sc-plain", "(el) => el.scrollTo(0, 400)"))[0]).toBe(400);
+    await reset("#sc-plain");
+    glided(await track("#sc-plain", '(el) => el.scrollBy({ top: 350, behavior: "smooth" })'), 350);
+  });
+
+  test("scrollIntoView glides its scroller and lands the row at the top", async () => {
+    await reset("#sc-smooth");
+    const seen = await track("#sc-smooth", '(el) => el.querySelector("#sc-smooth-row-9").scrollIntoView()');
+    glided(seen, 450);
   });
 });

@@ -93,3 +93,21 @@
   height: 80px;
   background: #ff0000;
 }
+
+.scroller {
+  position: absolute;
+  top: 280px;
+  width: 100px;
+  height: 100px;
+  overflow: auto;
+}
+.smooth {
+  left: 10px;
+  scroll-behavior: smooth;
+}
+.plain {
+  left: 130px;
+}
+.row {
+  height: 50px;
+}

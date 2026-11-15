@@ -1552,7 +1552,7 @@ fn autoscroll(k: WinKey, last: Point<Pixels>) -> bool {
         return false;
     };
     let before = crate::scroll::info(id).map(|i| i.top);
-    let after = crate::scroll::by(id, 0.0, dy).map(|i| i.top);
+    let after = crate::scroll::by(id, 0.0, dy, crate::scroll::Behavior::Instant).map(|i| i.top);
     before != after
 }
 

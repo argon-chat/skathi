@@ -197,6 +197,8 @@ pub struct Extras {
     pub contain_paint: Option<bool>,
     /// The axes `contain` size-contains ([`Extras::CONTAIN_WIDTH`], [`Extras::CONTAIN_HEIGHT`]).
     pub contain_size: Option<u8>,
+    /// `scroll-behavior: smooth`: a programmatic scroll of this box that does not say otherwise glides.
+    pub scroll_smooth: Option<bool>,
     /// Only a qualifier of the refinement's axis, which stays the truth (see `compute_overflow`).
     pub overflow_x: Option<OverflowKeyword>,
     pub overflow_y: Option<OverflowKeyword>,
@@ -609,6 +611,9 @@ impl Extras {
         }
         if other.contain_size.is_some() {
             self.contain_size = other.contain_size;
+        }
+        if other.scroll_smooth.is_some() {
+            self.scroll_smooth = other.scroll_smooth;
         }
         if other.overflow_x.is_some() {
             self.overflow_x = other.overflow_x;
@@ -5400,10 +5405,16 @@ fn apply_property(
                 )
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
-                if matches!(
-                    name.0.as_ref(),
-                    "touch-action" | "scroll-behavior" | "will-change"
-                ) => {}
+                if matches!(name.0.as_ref(), "touch-action" | "will-change") => {}
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "scroll-behavior" =>
+            {
+                match single_ident(&c.value, "scroll-behavior", diagnostics) {
+                    Some("auto") => x.scroll_smooth = Some(false),
+                    Some("smooth") => x.scroll_smooth = Some(true),
+                    _ => unsupported(diagnostics, "scroll-behavior"),
+                }
+            }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "contain" =>
             {
@@ -6721,6 +6732,16 @@ mod tests {
         ));
         assert!(d.is_empty(), "{d:?}");
         assert!(x.background_images.is_some_and(|l| !l.is_empty()));
+    }
+
+    #[test]
+    fn scroll_behavior_is_carried_for_the_scroller_and_a_later_auto_takes_it_back() {
+        let (x, d) = extras("scroll-behavior: smooth");
+        assert_eq!((x.scroll_smooth, d.len()), (Some(true), 0));
+        let (x, d) = extras("scroll-behavior: smooth; scroll-behavior: auto");
+        assert_eq!((x.scroll_smooth, d.len()), (Some(false), 0));
+        let (x, d) = extras("scroll-behavior: slowly");
+        assert_eq!((x.scroll_smooth, d.len()), (None, 1));
     }
 
     #[test]

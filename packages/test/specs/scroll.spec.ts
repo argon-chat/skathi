@@ -244,29 +244,22 @@ describe("el.scrollIntoView()", () => {
   );
 });
 
-describe("what is advisory'd rather than done", () => {
+describe('behavior: "smooth"', () => {
   test(
-    'behavior: "smooth" jumps to the exact position and says so, once',
+    "glides from where it was to the exact position, and a smooth scrollBy adds to where it is going",
     async () => {
       await reset();
-      await onList('(l.scrollTo({ top: 2000, behavior: "smooth" }), 0)');
-      expect(await onList("l.scrollTop")).toBe(2000);
-      await onList('(l.scrollBy({ top: 100, behavior: "smooth" }), 0)');
-      await app.eval(`document.querySelector('[data-row="10"]').scrollIntoView({ behavior: "smooth" })`);
-      await settle(200);
-
-      const { entries } = await app.logs();
-      const smooth = entries.filter((e) => typeof e.text === "string" && e.text.includes("scroll behavior"));
-      expect(smooth.length).toBe(1);
-      expect(smooth[0]!.text).toContain("INSTANTLY");
+      expect(await onList('(l.scrollTo({ top: 2000, behavior: "smooth" }), l.scrollTop)')).toBe(0);
+      expect(await onList('(l.scrollBy({ top: 100, behavior: "smooth" }), l.scrollTop)')).toBeLessThan(2100);
+      await settle(800);
+      expect(await onList("l.scrollTop")).toBe(2100);
     },
     T,
   );
 
   test(
-    "nothing else in this app logs an error",
+    "nothing in this app logs an error",
     async () => {
-      // Advisories are opt-in here on purpose: the `smooth` one above is expected.
       await app.expectNoErrors();
     },
     T,

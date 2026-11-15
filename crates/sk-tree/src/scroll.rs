@@ -8,13 +8,15 @@
 //!   [`dispatch_pending`] (from [`crate::frame_tick`], the one place with a `Window`) fires it.
 //! - A rectangle read after a scroll is corrected, not re-measured ([`unpainted_shift`]): a second
 //!   `draw` is refused inside the window's own update.
-//! - `behavior: "smooth"` scrolls instantly with an advisory: an offset is not a style property the
-//!   animator can interpolate.
+//! - A smooth scroll (`behavior: "smooth"`, or `auto` on a box with `scroll-behavior: smooth`)
+//!   glides there over the next frames ([`tick`]); a read sees where it is so far. An instant
+//!   scroll of the same box, or the user scrolling it, stops the glide.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
-use gpui::{px, Point, ScrollHandle};
+use gpui::{px, Pixels, Point, ScrollHandle};
 
 use crate::render;
 use crate::tree;
@@ -38,6 +40,89 @@ impl Align {
     }
 }
 
+/// CSSOM View's `ScrollBehavior`; `Auto` defers to the scrolled box's `scroll-behavior`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Behavior {
+    Auto,
+    Instant,
+    Smooth,
+}
+
+impl Behavior {
+    pub(crate) fn from_code(code: u32) -> Self {
+        match code {
+            1 => Behavior::Instant,
+            2 => Behavior::Smooth,
+            _ => Behavior::Auto,
+        }
+    }
+
+    fn smooth_for(self, id: u32) -> bool {
+        match self {
+            Behavior::Instant => false,
+            Behavior::Smooth => true,
+            Behavior::Auto => tree::read_tree(|t| {
+                t.node(id)
+                    .and_then(|n| n.computed.as_ref())
+                    .and_then(|cs| cs.extras.scroll_smooth)
+            })
+            .unwrap_or(false),
+        }
+    }
+}
+
+struct Glide {
+    from: Point<Pixels>,
+    to: Point<Pixels>,
+    start: Instant,
+    duration: Duration,
+    /// The offset the glide last wrote: anything else means something else scrolled the box.
+    last: Point<Pixels>,
+}
+
+impl Glide {
+    fn new(from: Point<Pixels>, to: Point<Pixels>) -> Self {
+        let distance = f32::from((to.x - from.x).abs()).max(f32::from((to.y - from.y).abs()));
+        Glide {
+            from,
+            to,
+            start: Instant::now(),
+            duration: glide_duration(distance),
+            last: from,
+        }
+    }
+
+    fn at(&self, now: Instant) -> (Point<Pixels>, bool) {
+        let t = now.saturating_duration_since(self.start).as_secs_f32()
+            / self.duration.as_secs_f32().max(f32::EPSILON);
+        if t >= 1.0 {
+            return (self.to, true);
+        }
+        let e = ease_in_out(t);
+        let lerp = |a: Pixels, b: Pixels| a + (b - a) * e;
+        (
+            Point {
+                x: lerp(self.from.x, self.to.x),
+                y: lerp(self.from.y, self.to.y),
+            },
+            false,
+        )
+    }
+}
+
+/// Longer for a longer way, as in browsers, within the 150-500 ms they keep a programmatic glide to.
+fn glide_duration(distance: f32) -> Duration {
+    Duration::from_secs_f32((distance.sqrt() * 15.0).clamp(150.0, 500.0) / 1000.0)
+}
+
+fn ease_in_out(t: f32) -> f32 {
+    if t < 0.5 {
+        4.0 * t * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Info {
     pub(crate) left: f32,
@@ -52,6 +137,7 @@ pub(crate) struct Info {
 thread_local! {
     static PENDING: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
     static AT_BUILD: RefCell<HashMap<u32, (f32, f32)>> = RefCell::new(HashMap::new());
+    static GLIDES: RefCell<HashMap<u32, Glide>> = RefCell::new(HashMap::new());
 }
 
 pub(crate) fn note_built(id: u32, handle: &ScrollHandle) {
@@ -88,6 +174,7 @@ pub(crate) fn unpainted_shift(id: u32) -> (f32, f32) {
 pub(crate) fn gc(live: &dyn Fn(u32) -> bool) {
     PENDING.with(|p| p.borrow_mut().retain(|&id| live(id)));
     AT_BUILD.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
+    GLIDES.with(|g| g.borrow_mut().retain(|&id, _| live(id)));
 }
 
 pub(crate) fn info(id: u32) -> Option<Info> {
@@ -110,27 +197,53 @@ fn info_of(handle: &ScrollHandle, stale: bool) -> Info {
     }
 }
 
-pub(crate) fn set(id: u32, left: Option<f32>, top: Option<f32>) -> Option<Info> {
+pub(crate) fn set(
+    id: u32,
+    left: Option<f32>,
+    top: Option<f32>,
+    behavior: Behavior,
+) -> Option<Info> {
     let (handle, stale) = layout_then_handle(id)?;
-    let current = handle.offset();
+    let smooth = behavior.smooth_for(id);
+    // An axis a smooth call leaves alone keeps going where a glide was taking it.
+    let current = smooth
+        .then(|| glide_target(id))
+        .flatten()
+        .unwrap_or_else(|| handle.offset());
     let want = Point {
         x: left.map_or(current.x, |v| px(-v)),
         y: top.map_or(current.y, |v| px(-v)),
     };
-    Some(apply(id, &handle, want, stale))
+    Some(apply(id, &handle, want, stale, smooth).0)
 }
 
-pub(crate) fn by(id: u32, dx: f32, dy: f32) -> Option<Info> {
+pub(crate) fn by(id: u32, dx: f32, dy: f32, behavior: Behavior) -> Option<Info> {
     let (handle, stale) = layout_then_handle(id)?;
-    let current = handle.offset();
+    let smooth = behavior.smooth_for(id);
+    // A smooth scrollBy during a glide adds to where it is going, as in browsers.
+    let current = smooth
+        .then(|| glide_target(id))
+        .flatten()
+        .unwrap_or_else(|| handle.offset());
     let want = Point {
         x: current.x - px(dx),
         y: current.y - px(dy),
     };
-    Some(apply(id, &handle, want, stale))
+    Some(apply(id, &handle, want, stale, smooth).0)
 }
 
-fn apply(id: u32, handle: &ScrollHandle, want: Point<gpui::Pixels>, stale: bool) -> Info {
+fn glide_target(id: u32) -> Option<Point<Pixels>> {
+    GLIDES.with(|g| g.borrow().get(&id).map(|glide| glide.to))
+}
+
+/// Moves (or starts gliding) to `want`, clamped; answers the position now and the one it goes to.
+fn apply(
+    id: u32,
+    handle: &ScrollHandle,
+    want: Point<Pixels>,
+    stale: bool,
+    smooth: bool,
+) -> (Info, Point<Pixels>) {
     let before = handle.offset();
     let max = handle.max_offset();
     // The clamp gpui's wheel handler applies: a programmatic scroll cannot leave the box where a
@@ -139,11 +252,54 @@ fn apply(id: u32, handle: &ScrollHandle, want: Point<gpui::Pixels>, stale: bool)
         x: want.x.clamp(-max.x, px(0.)),
         y: want.y.clamp(-max.y, px(0.)),
     };
-    if clamped != before {
+    GLIDES.with(|g| {
+        let mut g = g.borrow_mut();
+        if smooth && clamped != before {
+            g.insert(id, Glide::new(before, clamped));
+        } else {
+            g.remove(&id);
+        }
+    });
+    if !smooth && clamped != before {
         handle.set_offset(clamped);
         note_moved(id);
     }
-    info_of(handle, stale)
+    (info_of(handle, stale), clamped)
+}
+
+/// Advances every glide one frame; true while any is still moving.
+pub(crate) fn tick() -> bool {
+    if GLIDES.with(|g| g.borrow().is_empty()) {
+        return false;
+    }
+    let now = Instant::now();
+    let mut moved = Vec::new();
+    GLIDES.with(|g| {
+        g.borrow_mut().retain(|&id, glide| {
+            let Some(handle) = render::scroll_handle_of(id) else {
+                return false;
+            };
+            if handle.offset() != glide.last {
+                return false;
+            }
+            let (at, done) = glide.at(now);
+            let max = handle.max_offset();
+            let at = Point {
+                x: at.x.clamp(-max.x, px(0.)),
+                y: at.y.clamp(-max.y, px(0.)),
+            };
+            if at != glide.last {
+                handle.set_offset(at);
+                glide.last = at;
+                moved.push(id);
+            }
+            !done
+        })
+    });
+    for id in &moved {
+        note_moved(*id);
+    }
+    !moved.is_empty() || GLIDES.with(|g| !g.borrow().is_empty())
 }
 
 fn note_moved(id: u32) {
@@ -156,7 +312,12 @@ fn layout_then_handle(id: u32) -> Option<(ScrollHandle, bool)> {
     render::scroll_handle_of(id).map(|h| (h, stale))
 }
 
-pub(crate) fn into_view(id: u32, block: Align, inline: Align) -> Result<bool, String> {
+pub(crate) fn into_view(
+    id: u32,
+    block: Align,
+    inline: Align,
+    behavior: Behavior,
+) -> Result<bool, String> {
     // `true`: the rectangles and clamps are from the last painted frame ([`Info::stale`]); the JS
     // side turns it into the one advisory.
     let stale = crate::dom::layout_if_stale(id);
@@ -214,8 +375,8 @@ pub(crate) fn into_view(id: u32, block: Align, inline: Align) -> Result<bool, St
             x: before.x - px(dx),
             y: before.y - px(dy),
         };
-        apply(ancestor, &handle, want, stale);
-        let after = handle.offset();
+        let smooth = behavior.smooth_for(ancestor);
+        let (_, after) = apply(ancestor, &handle, want, stale, smooth);
         x -= f32::from(before.x - after.x);
         y -= f32::from(before.y - after.y);
         scrolled |= before != after;
@@ -271,6 +432,29 @@ pub(crate) fn dispatch_pending(window: &mut gpui::Window, cx: &mut gpui::App) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_glide_moves_one_way_and_lands_exactly() {
+        let from = Point {
+            x: px(0.),
+            y: px(-10.),
+        };
+        let to = Point {
+            x: px(0.),
+            y: px(-410.),
+        };
+        let glide = Glide::new(from, to);
+        assert_eq!(glide.at(glide.start), (from, false));
+        let mut last = from.y;
+        let steps = 20;
+        for step in 1..steps {
+            let (at, done) = glide.at(glide.start + glide.duration * step / steps);
+            assert!(!done && at.y < last, "step {step}: {at:?}");
+            last = at.y;
+        }
+        assert_eq!(glide.at(glide.start + glide.duration), (to, true));
+        assert!(glide_duration(10.) < glide_duration(400.));
+    }
 
     #[test]
     fn the_three_fixed_alignments_are_arithmetic() {

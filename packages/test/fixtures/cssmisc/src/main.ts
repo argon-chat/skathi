@@ -28,6 +28,14 @@ const colours = () => [
 
 const contained = () => [h("div", { id: "contain", class: "contain" }, [h("div", { class: "spill" })])];
 
+const rows = (id: string) =>
+  Array.from({ length: 20 }, (_, i) => h("div", { id: `${id}-row-${i}`, class: "row" }, `${i}`));
+
+const scrollers = () => [
+  h("div", { id: "sc-smooth", class: "scroller smooth" }, rows("sc-smooth")),
+  h("div", { id: "sc-plain", class: "scroller plain" }, rows("sc-plain")),
+];
+
 createApp({
   render: () =>
     h("div", { id: "root" }, [
@@ -36,5 +44,6 @@ createApp({
       ...positioned(),
       ...colours(),
       ...contained(),
+      ...scrollers(),
     ]),
 }).mount();

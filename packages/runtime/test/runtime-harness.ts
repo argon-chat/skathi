@@ -325,8 +325,8 @@ interface RuntimeHost {
   };
   computedById: Map<number, string>;
   scrollById: Map<number, ScrollState>;
-  scrollCalls: { id: number; op: number; x: number; y: number }[];
-  intoViewCalls: { id: number; block: unknown; inline: unknown }[];
+  scrollCalls: { id: number; op: number; x: number; y: number; behavior: number }[];
+  intoViewCalls: { id: number; block: unknown; inline: unknown; behavior: unknown }[];
   selection: { sel: number[] | null; sets: number[][]; rebases: number[][]; text: string };
   pointerCaptureCalls: { id: number; pointerId: number; capture: boolean }[];
   pointerLock: { requests: { id: number; unadjusted: boolean }[]; exits: number; element: number };
@@ -807,8 +807,8 @@ export function createRuntime(
       return host.queryAnswers.get(`${selector}|${mode}`) ?? host.queryAnswers.get(selector) ?? "";
     },
     (id: number) => host.boundsById.get(id) ?? "",
-    (id: number, op: number, x: number, y: number) => {
-      host.scrollCalls.push({ id, op, x, y });
+    (id: number, op: number, x: number, y: number, behavior: number) => {
+      host.scrollCalls.push({ id, op, x, y, behavior });
       const s = host.scrollById.get(id);
       if (!s) return "";
       const clamp = (v: number, max: number) => Math.max(0, Math.min(v, max));
@@ -821,8 +821,8 @@ export function createRuntime(
       }
       return `${s.left},${s.top},${s.width + s.maxLeft},${s.height + s.maxTop},0`;
     },
-    (id: number, block: unknown, inline: unknown) => {
-      host.intoViewCalls.push({ id, block, inline });
+    (id: number, block: unknown, inline: unknown, behavior: unknown) => {
+      host.intoViewCalls.push({ id, block, inline, behavior });
       return "";
     },
     (id: number, op: number) => {
