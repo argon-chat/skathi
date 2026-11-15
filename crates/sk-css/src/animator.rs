@@ -8,8 +8,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AbsoluteLength, DefiniteLength, EffectSpec, Hsla, Interpolate, Length, Pixels, Rems,
-    StyleRefinement, TransformSpec,
+    AbsoluteLength, DefiniteLength, EffectCrossFade, EffectSpec, Hsla, Interpolate, Length, Pixels,
+    Rems, StyleRefinement, TransformSpec,
 };
 
 use crate::keyframes::{AnimationSpec, FillMode, Keyframes, Phase, PlayState};
@@ -23,9 +23,11 @@ enum Animatable {
     BorderColors([Hsla; 4]),
     Pixels(Pixels),
     Rems(Rems),
-    /// The whole spec travels together because only the eight `params` interpolate — the id, the
-    /// flags and the schema metadata must MATCH for a transition to exist at all (see [`unify`]).
+    /// The whole spec travels together because only the `params` interpolate; between two specs of
+    /// different effects [`lerp`] cross-fades instead.
     Effect(EffectSpec),
+    /// A cross-fade between different effects: the first at `1 - t` beneath the second at `t`.
+    EffectFade(EffectSpec, EffectSpec, f32),
     Transform(TransformSpec),
 }
 
@@ -288,11 +290,17 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
         RowGap => r.gap.height = definite(),
         ColumnGap => r.gap.width = definite(),
         FontSize => r.text.font_size = to_absolute(v),
-        Shading => {
-            if let Animatable::Effect(spec) = v {
+        Shading => match v {
+            Animatable::Effect(spec) => {
                 r.vn_effect = Some(spec);
+                r.vn_effect_fade = None;
             }
-        }
+            Animatable::EffectFade(from, to, progress) => {
+                r.vn_effect = Some(to);
+                r.vn_effect_fade = Some(EffectCrossFade { from, progress });
+            }
+            _ => {}
+        },
         Transform => {
             if let Animatable::Transform(spec) = v {
                 r.vn_transform = Some(spec);
@@ -345,7 +353,10 @@ fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
         RowGap => r.gap.height = None,
         ColumnGap => r.gap.width = None,
         FontSize => r.text.font_size = None,
-        Shading => r.vn_effect = None,
+        Shading => {
+            r.vn_effect = None;
+            r.vn_effect_fade = None;
+        }
         Transform => r.vn_transform = None,
         All | Other(_) => {}
     }
@@ -387,7 +398,10 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
         RowGap => dst.gap.height = src.gap.height,
         ColumnGap => dst.gap.width = src.gap.width,
         FontSize => dst.text.font_size = src.text.font_size,
-        Shading => dst.vn_effect = src.vn_effect,
+        Shading => {
+            dst.vn_effect = src.vn_effect;
+            dst.vn_effect_fade = src.vn_effect_fade;
+        }
         Transform => dst.vn_transform = src.vn_transform,
         All | Other(_) => {}
     }
@@ -455,7 +469,7 @@ fn unify(a: Animatable, b: Animatable) -> Option<(Animatable, Animatable)> {
         (BorderColors(colors), Color(color)) => {
             Some((BorderColors(colors), BorderColors([color; 4])))
         }
-        (Effect(x), Effect(y)) if x.id == y.id => Some((a, b)),
+        (Effect(_), Effect(_)) | (EffectFade(..), Effect(_)) => Some((a, b)),
         (Transform(_), Transform(_)) => Some((a, b)),
         (Pixels(p), Rems(r)) if r.0 == 0.0 => Some((Pixels(p), Pixels(gpui::Pixels::from(0.0)))),
         (Pixels(p), Rems(r)) if p.as_f32() == 0.0 => Some((Rems(gpui::Rems(0.0)), Rems(r))),
@@ -475,19 +489,33 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
         })),
         (Pixels(a), Pixels(b)) => Pixels(gpui::Pixels::interpolate(a, b, t)),
         (Rems(a), Rems(b)) => Rems(gpui::Rems::interpolate(a, b, t)),
-        (Effect(a), Effect(b)) => {
-            let mut spec = b;
-            for (slot, value) in spec.params.iter_mut().enumerate() {
-                *value = f32::interpolate(a.params[slot], b.params[slot], t);
-            }
-            // Keep repainting for as long as EITHER endpoint wants to, or an animated grain would
-            // freeze the moment a transition starts.
-            spec.animated = a.animated || b.animated;
-            Effect(spec)
+        (Effect(a), Effect(b)) if a.id == b.id => Effect(lerp_effect(a, b, t)),
+        (Effect(a), Effect(b)) => EffectFade(a, b, t),
+        // Retargeted mid-fade: back to (or on to) one of the two keeps fading from where it was;
+        // a third effect fades in over the one showing more.
+        (EffectFade(x, y, s), Effect(c)) if c.id == y.id => {
+            EffectFade(x, lerp_effect(y, c, t), s + (1.0 - s) * t)
+        }
+        (EffectFade(x, y, s), Effect(c)) if c.id == x.id => {
+            EffectFade(y, lerp_effect(x, c, t), (1.0 - s) + s * t)
+        }
+        (EffectFade(x, y, s), Effect(c)) => {
+            lerp(Effect(if s >= 0.5 { y } else { x }), Effect(c), t)
         }
         (Transform(a), Transform(b)) => Transform(a.interpolate(b, t)),
         _ => to,
     }
+}
+
+fn lerp_effect(a: EffectSpec, b: EffectSpec, t: f32) -> EffectSpec {
+    let mut spec = b;
+    for (slot, value) in spec.params.iter_mut().enumerate() {
+        *value = f32::interpolate(a.params[slot], b.params[slot], t);
+    }
+    // Keep repainting for as long as EITHER endpoint wants to, or an animated grain would freeze
+    // the moment a transition starts.
+    spec.animated = a.animated || b.animated;
+    spec
 }
 
 /// Mixes premultiplied: mixing raw HSLA swings through the hues in between and makes `transparent`
@@ -953,30 +981,15 @@ impl Animator {
         match unify(from, to) {
             Some((from, to)) => Endpoints::Pair(from, to),
             None => {
-                self.warn_once(match (from, to) {
-                    (Animatable::Effect(a), Animatable::Effect(b)) => format!(
-                        "transition of --shading between different effects (`{}` -> `{}`) \
-                         cannot interpolate — snapping",
-                        effect_name(a.id),
-                        effect_name(b.id)
-                    ),
-                    _ => format!(
-                        "transition of {} between different length units is not animatable yet \
-                         (v1) — snapping",
-                        property.name()
-                    ),
-                });
+                self.warn_once(format!(
+                    "transition of {} between different length units is not animatable yet (v1) \
+                     — snapping",
+                    property.name()
+                ));
                 Endpoints::Snap
             }
         }
     }
-}
-
-fn effect_name(id: u32) -> &'static str {
-    sk_effects::EFFECTS
-        .get(id as usize)
-        .map(|effect| effect.name)
-        .unwrap_or("none")
 }
 
 enum Endpoints {
@@ -1588,14 +1601,28 @@ mod tests {
     }
 
     #[test]
-    fn different_effects_snap() {
+    fn different_effects_cross_fade() {
         let mut a = Animator::new();
         let now = t0();
         let css = "transition: --shading 1s linear";
         let old = states(with_shading("frost(0.5)"), css);
         let new = states(with_shading("glow(10px, 0.5)"), css);
         a.on_computed(1, Some(&old), &new, now);
-        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
+        let half = a.overlay_test(1, now + Duration::from_millis(250)).unwrap();
+        let fade = half.vn_effect_fade.expect("a cross-fade");
+        assert_eq!(fade.from.id, gpui::effect_id::FROST);
+        assert_eq!(shading_of(&half).id, gpui::effect_id::GLOW);
+        assert!((fade.progress - 0.25).abs() < 1e-3);
+        assert!(a.take_diagnostics().is_empty());
+
+        // Back to frost halfway in: frost grows from the share it had, glow is what fades.
+        let back = states(with_shading("frost(0.5)"), css);
+        a.on_computed(1, Some(&new), &back, now + Duration::from_millis(250));
+        let r = a.overlay_test(1, now + Duration::from_millis(750)).unwrap();
+        let fade = r.vn_effect_fade.expect("still a cross-fade");
+        assert_eq!(fade.from.id, gpui::effect_id::GLOW);
+        assert_eq!(shading_of(&r).id, gpui::effect_id::FROST);
+        assert!((fade.progress - 0.875).abs() < 1e-3);
     }
 
     #[test]
@@ -1620,14 +1647,19 @@ mod tests {
     }
 
     #[test]
-    fn transitioning_to_none_snaps() {
+    fn transitioning_to_none_fades_out() {
         let mut a = Animator::new();
         let now = t0();
         let css = "transition: --shading 1s linear";
         let old = states(with_shading("frost(0.5)"), css);
         let new = states(with_shading("none"), css);
         a.on_computed(1, Some(&old), &new, now);
-        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
+        let r = a.overlay_test(1, now + Duration::from_millis(500)).unwrap();
+        assert!(!shading_of(&r).is_some());
+        assert_eq!(
+            r.vn_effect_fade.map(|f| f.from.id),
+            Some(gpui::effect_id::FROST)
+        );
     }
 
     #[test]

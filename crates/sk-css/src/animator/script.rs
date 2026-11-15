@@ -394,7 +394,7 @@ fn css_value(v: Animatable) -> Option<String> {
         Animatable::Pixels(p) => format!("{}px", p.as_f32()),
         Animatable::Rems(r) => format!("{}rem", r.0),
         Animatable::Transform(t) => crate::transform_css(t),
-        Animatable::Effect(_) => return None,
+        Animatable::Effect(_) | Animatable::EffectFade(..) => return None,
     })
 }
 

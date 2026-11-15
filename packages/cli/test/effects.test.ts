@@ -107,7 +107,43 @@ struct Ripple : IEffect
 `;
 
 describe.skipIf(!compiler)("an app's effects", () => {
-  test("compile to every target and a schema-7 manifest that names them", async () => {
+  test("host-filled pointer fields are no CSS arguments, and clock fields list their slots", async () => {
+    const root = app({
+      "lamp.slang": `import sk;
+
+[SkEffect("lamp")]
+struct Lamp : IEffect
+{
+    [SkLength] [SkDefault("40")] float radius;
+    [SkPointer] float2 pointer;
+    [SkPointerTimes] [SkAnimatedFor(0.5)] float3 seen;
+    [SkAnimatedFor(3)] float4 starts;
+
+    float4 shade(EffectInput input)
+    {
+        float near = 1.0 - saturate(length(input.local - pointer) * radius);
+        return float4(near, sk_pointer_presence(seen, input.time, 0.5), starts.x, 1.0) * input.coverage;
+    }
+};
+`,
+    });
+    const [lamp] = (await compileAppEffects(root, compiler!)).compiled;
+    expect(lamp!.effect).toMatchObject({
+      signature: "lamp(<length:radius>, <number:starts.x>, <number:starts.y>, <number:starts.z>, <number:starts.w>)",
+      pointerParam: 1,
+      pointerTimesParam: 4,
+      clockSlots: [4, 5, 6, 8, 9, 10, 11],
+      clockWindow: 3,
+    });
+
+    const bad = app({
+      "lamp.slang": `import sk;\n[SkEffect("lamp")]\nstruct Lamp : IEffect\n{\n    [SkPointer] [SkDefault("0 0")] float2 pointer;\n    float4 shade(EffectInput input) { return float4(pointer, 0.0, 1.0); }\n};\n`,
+    });
+    const error = await compileAppEffects(bad, compiler!).catch((e: unknown) => e);
+    expect(String((error as EffectsError).message)).toContain("not a CSS argument");
+  });
+
+  test("compile to every target and a schema-8 manifest that names them", async () => {
     const root = app({ "ripple.slang": RIPPLE });
     const built = await compileAppEffects(root, compiler!);
     expect(built.files.map((f) => f.name)).toEqual(["ripple.hlsl", "ripple.wgsl", "ripple.metal", "effects.json"]);

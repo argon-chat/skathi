@@ -21,13 +21,13 @@
 //! `$SK_EFFECTS_DIR`, or a dev reload), with ids allocated after the built-ins in manifest order,
 //! which is the order the renderers build pipelines in. A reload renumbers on the next read.
 //!
-//! Parameter slots are the contract with the shaders: slot *i* is `params0[i]` for i < 4 and
-//! `params1[i - 4]` beyond, a colour takes four consecutive slots, and `shaders.ts` assigns them
+//! Parameter slots are the contract with the shaders: slot *i* is `params[i]` in the
+//! instance (32 of them), a colour takes four consecutive slots, and `shaders.ts` assigns them
 //! from field order under HLSL's no-straddle rule.
 
 use std::sync::{OnceLock, RwLock};
 
-use gpui::{effect_id, EffectSpec, EFFECT_FLAG_NEEDS_BACKDROP};
+use gpui::{effect_id, EffectSpec, EFFECT_FLAG_NEEDS_BACKDROP, EFFECT_PARAM_SLOTS};
 
 /// The `effects.json` layout this build understands; a mismatch means the artifacts came from a
 /// different toolchain generation and must be regenerated.
@@ -93,6 +93,14 @@ pub struct EffectSchema {
     pub bleed_param: Option<u8>,
     /// Slot whose value, when positive, means the effect animates and the window must keep repainting.
     pub animated_param: Option<u8>,
+    /// `[SkPointer]`'s first slot, which the painter fills; not a CSS argument.
+    pub pointer_param: Option<u8>,
+    /// `[SkPointerTimes]`'s first slot, which the painter fills; not a CSS argument.
+    pub pointer_times_param: Option<u8>,
+    /// Bit *i*: slot *i* is a time on the effect clock (`[SkAnimatedFor]`).
+    pub clock_mask: u32,
+    /// Seconds to keep repainting after the latest time in `clock_mask`.
+    pub clock_window: f32,
     pub signature: &'static str,
     pub doc: Option<&'static str>,
     /// `true` for `frost`/`noise`/`glow`, `false` for an app's own shader (phrases advisories).
@@ -114,7 +122,7 @@ impl EffectSchema {
     /// A spec with every parameter at its declared default; the parser overwrites what the author
     /// supplied, so every optional argument is omittable without a second code path.
     pub fn defaults(&self) -> EffectSpec {
-        let mut params = [0.0f32; 8];
+        let mut params = [0.0f32; EFFECT_PARAM_SLOTS];
         for schema in self.params {
             for offset in 0..schema.kind.slots() {
                 let slot = (schema.slot + offset) as usize;
@@ -130,11 +138,15 @@ impl EffectSchema {
             backdrop_radius_param: self.backdrop_radius_param,
             bleed_param: self.bleed_param,
             animated: false,
+            pointer_param: self.pointer_param,
+            pointer_times_param: self.pointer_times_param,
+            clock_mask: self.clock_mask,
+            clock_window: self.clock_window,
             params,
         }
     }
 
-    pub fn is_animated(&self, params: &[f32; 8]) -> bool {
+    pub fn is_animated(&self, params: &[f32; EFFECT_PARAM_SLOTS]) -> bool {
         self.animated_param
             .and_then(|slot| params.get(slot as usize))
             .is_some_and(|value| *value > 0.0)
@@ -167,6 +179,14 @@ struct RawEffect {
     backdrop_radius_param: Option<u8>,
     bleed_param: Option<u8>,
     animated_param: Option<u8>,
+    #[serde(default)]
+    pointer_param: Option<u8>,
+    #[serde(default)]
+    pointer_times_param: Option<u8>,
+    #[serde(default)]
+    clock_slots: Vec<u8>,
+    #[serde(default)]
+    clock_window: Option<f32>,
     params: Vec<RawParam>,
 }
 
@@ -208,7 +228,7 @@ pub fn parse_manifest(
     let mut out = Vec::with_capacity(manifest.effects.len());
     for (index, raw) in manifest.effects.into_iter().enumerate() {
         let mut params = Vec::with_capacity(raw.params.len());
-        let mut used = [false; 8];
+        let mut used = [false; EFFECT_PARAM_SLOTS];
         for param in &raw.params {
             let kind = ParamKind::parse(&param.kind).ok_or_else(|| {
                 format!(
@@ -220,7 +240,7 @@ pub fn parse_manifest(
                 let slot = (param.slot + offset) as usize;
                 if slot >= used.len() {
                     return Err(format!(
-                        "{origin}: {}.{} overflows the 8 parameter slots",
+                        "{origin}: {}.{} overflows the {EFFECT_PARAM_SLOTS} parameter slots",
                         raw.name, param.name
                     ));
                 }
@@ -258,6 +278,26 @@ pub fn parse_manifest(
             }
         }
 
+        let host_slots = [(raw.pointer_param, 2), (raw.pointer_times_param, 3)];
+        for (slot, width) in host_slots.into_iter().filter_map(|(s, w)| Some((s?, w))) {
+            if slot as usize + width > EFFECT_PARAM_SLOTS {
+                return Err(format!(
+                    "{origin}: {}: a pointer parameter at slot {slot} overflows the {EFFECT_PARAM_SLOTS} parameter slots",
+                    raw.name
+                ));
+            }
+        }
+        let mut clock_mask = 0u32;
+        for slot in &raw.clock_slots {
+            if *slot as usize >= EFFECT_PARAM_SLOTS {
+                return Err(format!(
+                    "{origin}: {}: clock slot {slot} overflows the {EFFECT_PARAM_SLOTS} parameter slots",
+                    raw.name
+                ));
+            }
+            clock_mask |= 1 << slot;
+        }
+
         out.push(&*Box::leak(Box::new(EffectSchema {
             name: Box::leak(raw.name.into_boxed_str()),
             id: first_id + index as u32,
@@ -270,6 +310,10 @@ pub fn parse_manifest(
             backdrop_radius_param: raw.backdrop_radius_param,
             bleed_param: raw.bleed_param,
             animated_param: raw.animated_param,
+            pointer_param: raw.pointer_param,
+            pointer_times_param: raw.pointer_times_param,
+            clock_mask,
+            clock_window: raw.clock_window.unwrap_or(0.0),
             signature: Box::leak(raw.signature.into_boxed_str()),
             doc: raw.doc.map(|d| &*Box::leak(d.into_boxed_str())),
             builtin,
@@ -405,7 +449,7 @@ mod tests {
     const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
     const USER_MANIFEST: &str = r#"{
-      "schema": 7,
+      "schema": 8,
       "slang": "2026.12",
       "kind": "user",
       "effects": [
@@ -478,6 +522,26 @@ mod tests {
         assert_eq!(defaults.params[0], 1.5);
         assert_eq!(&defaults.params[4..8], &[0.5, 0.8, 1.0, 1.0]);
         assert!(ripple.is_animated(&defaults.params));
+    }
+
+    #[test]
+    fn host_filled_and_clock_slots_reach_the_spec() {
+        let json = USER_MANIFEST.replace(
+            "\"animatedParam\": 0,",
+            "\"animatedParam\": 0, \"pointerParam\": 8, \"pointerTimesParam\": 12, \
+             \"clockSlots\": [1, 2], \"clockWindow\": 3,",
+        );
+        let ripple = parse_manifest(&json, effect_id::COUNT, false, "<test>").unwrap()[0];
+        let mut spec = ripple.defaults();
+        assert_eq!(spec.pointer_param, Some(8));
+        assert_eq!(spec.pointer_times_param, Some(12));
+        assert_eq!(spec.clock_mask, 0b110);
+        spec.params[1] = 10.0;
+        assert!(spec.clock_running(12.9));
+        assert!(!spec.clock_running(13.1));
+
+        let overflow = json.replace("\"pointerTimesParam\": 12", "\"pointerTimesParam\": 30");
+        assert!(parse_manifest(&overflow, effect_id::COUNT, false, "<test>").is_err());
     }
 
     #[test]

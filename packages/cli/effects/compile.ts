@@ -20,7 +20,7 @@ import { PIN, ShaderCompilerError } from "./redslangc";
 
 /// Bumped when the prelude or generated wrapper changes codegen or schema shape; rides in every
 /// header and effects.json. Rust refuses an effects.json with an unknown schema.
-export const SCHEMA = 7;
+export const SCHEMA = 8;
 
 export const PRELUDE = join(import.meta.dir, "sk.slang");
 
@@ -28,8 +28,8 @@ export const PRELUDE = join(import.meta.dir, "sk.slang");
 /// `gpui_windows` and `gpui_wgpu`, and the ids in `crates/sk-effects/generated/effects.json`. It is not alphabetical.
 export const BUILTIN_EFFECTS = ["frost", "noise", "glow"];
 
-/// Eight floats per instance (`EffectQuad::params0` + `params1`); raising it widens every effect quad.
-const PARAM_SLOTS = 8;
+/// Floats per instance (`EffectQuad::params`); raising it widens every effect quad.
+const PARAM_SLOTS = 32;
 
 const ENTRY = "effect_fragment";
 
@@ -94,7 +94,7 @@ function checkWgslBindings(code: string, file: string) {
 /// argument table for every effect, so the renderer binds these and nothing else.
 const METAL_BINDINGS: Array<[at: string, name: string, what: string]> = [
   ["buffer(0)", "GlobalParams", "constant, the 48-byte globals"],
-  ["buffer(1)", "sk_effect_quads", "device EffectQuad[], 128 bytes each"],
+  ["buffer(1)", "sk_effect_quads", "device EffectQuad[], 224 bytes each"],
   ["texture(0)", "sk_backdrop_input", "the blurred backdrop"],
   ["texture(2)", "sk_backdrop_original", "the render-target snapshot"],
   ["sampler(1)", "sk_clamp_sampler", "clamp to edge"],
@@ -146,6 +146,14 @@ export type EffectSchema = {
   backdropRadiusParam: number | null;
   bleedParam: number | null;
   animatedParam: number | null;
+  /// `[SkPointer]`'s first slot: the host writes the pointer there; not a CSS argument.
+  pointerParam: number | null;
+  /// `[SkPointerTimes]`'s first slot, host-filled like `pointerParam`.
+  pointerTimesParam: number | null;
+  /// Every slot of an `[SkAnimatedFor]` field: times on the effect clock.
+  clockSlots: number[];
+  /// The longest `[SkAnimatedFor]` window, in seconds.
+  clockWindow: number | null;
   signature: string;
 };
 
@@ -177,25 +185,17 @@ float4 sk_reflect_probe(float4 sk_position : SV_Position) : SV_Target
 `;
 }
 
-function slotExpr(slot: number): string {
-  const bank = slot < 4 ? "params0" : "params1";
-  return `sk_in.${bank}.${"xyzw"[slot % 4]}`;
-}
+const slotExpr = (slot: number): string => `sk_in.param(${slot}u)`;
 
-function loadExpr(param: ParamSchema, components: number): string {
-  if (components === 1) return slotExpr(param.slot);
+function loadExpr(field: Field): string {
+  if (field.components === 1) return slotExpr(field.slot);
   const parts: string[] = [];
-  for (let c = 0; c < components; c += 1) parts.push(slotExpr(param.slot + c));
-  return `float${components}(${parts.join(", ")})`;
+  for (let c = 0; c < field.components; c += 1) parts.push(slotExpr(field.slot + c));
+  return `float${field.components}(${parts.join(", ")})`;
 }
 
 function realWrapper(effect: EffectSchema, fields: Field[]): string {
-  const assignments = fields
-    .map((field) => {
-      const param = effect.params[field.firstParam];
-      return `    sk_material.${field.name} = ${loadExpr(param!, field.components)};`;
-    })
-    .join("\n");
+  const assignments = fields.map((field) => `    sk_material.${field.name} = ${loadExpr(field)};`).join("\n");
   return `${WRAPPER_BANNER}
 // Kept for the record: reflection reads this declaration, every backend
 // strips it (nothing references it), and the renderer never binds it.
@@ -366,8 +366,7 @@ type Attribute = { name: string; arguments: unknown[] };
 type Field = {
   name: string;
   components: number;
-  attributes: Attribute[];
-  firstParam: number;
+  slot: number;
 };
 
 function attr(attrs: Attribute[], name: string): Attribute | undefined {
@@ -457,11 +456,22 @@ function fieldComponents(type: ReflType | undefined, where: string): number {
   throw new SchemaError(
     `${where}: unsupported parameter type \`${type?.kind ?? "?"}\` — a parameter must be ` +
       "`float`, `float2`, `float3` or `float4` (matrices, arrays, textures and " +
-      "samplers cannot ride in the 8-float parameter block)",
+      "samplers cannot ride in the 32-float parameter block)",
   );
 }
 
 const COMPONENT_SUFFIX = ["x", "y", "z", "w"];
+
+const HOST_FILLED_REFUSES = [
+  "SkDefault",
+  "SkRange",
+  "SkLength",
+  "SkColor",
+  "SkOptional",
+  "SkAnimated",
+  "SkBleed",
+  "SkBackdropRadius",
+];
 
 function buildSchema(
   reflection: Reflection | null,
@@ -502,6 +512,10 @@ function buildSchema(
   let backdropRadiusParam: number | null = null;
   let bleedParam: number | null = null;
   let animatedParam: number | null = null;
+  let pointerParam: number | null = null;
+  let pointerTimesParam: number | null = null;
+  const clockSlots: number[] = [];
+  let clockWindow: number | null = null;
   let backdrop = attr(structAttrs, "SkBackdrop") !== undefined;
   // Taken float slots: `[SkSlot]` runs are reserved first, then fields pack in declaration order.
   const used: boolean[] = new Array(PARAM_SLOTS).fill(false);
@@ -557,11 +571,43 @@ function buildSchema(
       if (slot < 0) {
         throw new SchemaError(
           `${where}: no room left in the parameter block. An effect quad carries ` +
-            `${PARAM_SLOTS} floats (EffectQuad::params0 + params1) and a <color> costs 4; ` +
+            `${PARAM_SLOTS} floats (EffectQuad::params) and a <color> costs 4; ` +
             "drop or merge a parameter.",
         );
       }
       for (let c = 0; c < components; c += 1) used[slot + c] = true;
+    }
+    fields.push({ name: fieldName, components, slot });
+
+    const animatedFor = attr(attrs, "SkAnimatedFor");
+    if (animatedFor) {
+      const seconds = Number(animatedFor.arguments?.[0]);
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        throw new SchemaError(
+          `${where}: [SkAnimatedFor(${animatedFor.arguments?.[0]})] needs a positive number of seconds`,
+        );
+      }
+      clockWindow = Math.max(clockWindow ?? 0, seconds);
+      for (let c = 0; c < components; c += 1) clockSlots.push(slot + c);
+    }
+
+    const host = (["SkPointer", "SkPointerTimes"] as const).filter((a) => attr(attrs, a) !== undefined);
+    if (host.length > 1) throw new SchemaError(`${where}: [SkPointer] and [SkPointerTimes] are mutually exclusive`);
+    if (host[0]) {
+      const kind = host[0];
+      const wanted = kind === "SkPointer" ? 2 : 3;
+      if (components !== wanted) throw new SchemaError(`${where}: [${kind}] is only legal on a float${wanted}`);
+      const css = HOST_FILLED_REFUSES.find((a) => attr(attrs, a) !== undefined);
+      if (css) {
+        throw new SchemaError(
+          `${where}: [${css}] cannot go on a [${kind}] parameter — the host fills it, it is not a CSS argument`,
+        );
+      }
+      const current = kind === "SkPointer" ? pointerParam : pointerTimesParam;
+      if (current !== null) throw new SchemaError(`${where}: [${kind}] appears more than once in \`${structName}\``);
+      if (kind === "SkPointer") pointerParam = slot;
+      else pointerTimesParam = slot;
+      continue;
     }
 
     const defaults = defaultAttr
@@ -571,7 +617,6 @@ function buildSchema(
       ? ([Number(rangeAttr.arguments?.[0]), Number(rangeAttr.arguments?.[1])] as [number, number])
       : null;
 
-    const firstParam = params.length;
     if (isColor) {
       params.push({ name: fieldName, kind: "color", slot, required: !optional, default: defaults, range: null });
     } else {
@@ -586,7 +631,6 @@ function buildSchema(
         });
       }
     }
-    fields.push({ name: fieldName, components, attributes: attrs, firstParam });
 
     const marker = (attrName: string, current: number | null, requires: string) => {
       if (attr(attrs, attrName) === undefined) return current;
@@ -638,6 +682,10 @@ function buildSchema(
       backdropRadiusParam,
       bleedParam,
       animatedParam,
+      pointerParam,
+      pointerTimesParam,
+      clockSlots,
+      clockWindow,
       signature,
     },
     fields,
@@ -870,6 +918,10 @@ export function effectFiles(
       backdropRadiusParam: c.effect.backdropRadiusParam,
       bleedParam: c.effect.bleedParam,
       animatedParam: c.effect.animatedParam,
+      pointerParam: c.effect.pointerParam,
+      pointerTimesParam: c.effect.pointerTimesParam,
+      clockSlots: c.effect.clockSlots,
+      clockWindow: c.effect.clockWindow,
       params: c.effect.params,
       bindings: c.reflection,
     })),

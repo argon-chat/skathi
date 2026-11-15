@@ -122,7 +122,7 @@ public struct SkOptionalAttribute
 {
 };
 
-/// Pins this parameter to an explicit slot in the 8-float parameter block,
+/// Pins this parameter to an explicit slot in the 32-float parameter block,
 /// instead of letting the packer choose. Unpinned fields then fill the gaps in
 /// declaration order.
 ///
@@ -161,6 +161,38 @@ public struct SkAnimatedAttribute
 {
 };
 
+/// Every component of this parameter is a time on the effect clock (the
+/// clock `input.time` reads, which is `performance.now() / 1000` in JS). The
+/// window keeps repainting until `seconds` after the latest of them, then the
+/// effect costs nothing until a parameter changes: hand it the time something
+/// started instead of rewriting an age every frame.
+[__AttributeUsage(_AttributeTargets.Var)]
+public struct SkAnimatedForAttribute
+{
+    public float seconds;
+};
+
+/// A `float2` the host fills with the pointer's position in `input.local`
+/// units: 0..1 across the element, beyond that outside it, anywhere in the
+/// window. The last position stays when the pointer leaves the window. Not a
+/// CSS argument. The element repaints when the pointer moves, and only
+/// elements whose effect has a pointer parameter do.
+[__AttributeUsage(_AttributeTargets.Var)]
+public struct SkPointerAttribute
+{
+};
+
+/// A `float3` the host fills with times on the effect clock: when the pointer
+/// last moved in the window, when it last entered the window and when it last
+/// left it. It is in the window while `y > z`; `sk_pointer_presence` turns
+/// the three into a fade. Long ago (about -1e4) until it happens. Not a CSS
+/// argument; repaints like `[SkPointer]`, and with `[SkAnimatedFor]` keeps
+/// repainting for a fade after each of them.
+[__AttributeUsage(_AttributeTargets.Var)]
+public struct SkPointerTimesAttribute
+{
+};
+
 // ===========================================================================
 //  The engine's binding contract
 // ===========================================================================
@@ -196,10 +228,10 @@ public struct SkCorners
 
 /// Keep in sync with `gpui::EffectQuad` (vendor/zed/crates/gpui/src/scene.rs),
 /// `struct EffectQuad` in gpui_windows/src/effects.hlsl and in
-/// gpui_wgpu/src/shaders_effects.wgsl. 32 words / 128 bytes.
+/// gpui_wgpu/src/shaders_effects.wgsl. 56 words / 224 bytes.
 ///
-/// The parameter banks are `float[4]`, not `float4`: a WGSL storage buffer
-/// aligns a `vec4` to 16 bytes, which would move `params0` from offset 72 to 80.
+/// The parameter block is `float[]`, not `float4`s: a WGSL storage buffer
+/// aligns a `vec4` to 16 bytes, which would move it from offset 72 to 80.
 public struct SkEffectQuad
 {
     public uint order;
@@ -209,8 +241,7 @@ public struct SkEffectQuad
     /// The content mask's rounded corners; see `sk_content_mask_coverage`.
     public SkCorners content_mask_radii;
     public SkCorners corner_radii;
-    public float params0[4];
-    public float params1[4];
+    public float params[32];
     public float opacity;
     public float time;
     public float bleed;
@@ -264,9 +295,8 @@ public struct EffectInput
     public float2 px;
     /// Element box size in device pixels.
     public float2 size;
-    /// The backdrop behind this quad, premultiplied. Blurred to
-    /// `[SkBackdropRadius]` when the effect declares one, otherwise the raw
-    /// snapshot. All zero for effects that did not ask for it.
+    /// The backdrop behind this pixel, premultiplied: `backdropAt(uv)`. All
+    /// zero for effects that did not ask for it.
     public float4 backdrop;
     /// Signed distance to the ELEMENT's rounded rect in device pixels:
     /// negative inside, 0 on the edge, positive outside.
@@ -274,7 +304,8 @@ public struct EffectInput
     /// Antialiased coverage of the element's rounded rect. 1 well inside,
     /// 0 well outside.
     public float coverage;
-    /// Seconds since the process started — the clock an animated effect uses.
+    /// Seconds on the effect clock, which shares its zero with JS:
+    /// `input.time == performance.now() / 1000` (rAF timestamps too).
     public float time;
     /// Device pixels per logical pixel (the DPI scale factor).
     public float scale;
@@ -292,12 +323,60 @@ public struct EffectInput
     public float clip;
     /// Whether this effect asked for the backdrop.
     public bool hasBackdrop;
-    /// Parameter slots 0..3 — the raw packing behind the named fields on your
-    /// effect struct. Reading these directly works but bypasses the schema;
-    /// prefer the named fields.
-    public float4 params0;
-    /// Parameter slots 4..7.
-    public float4 params1;
+    /// This quad's index in the instance buffer.
+    public uint quad;
+
+    /// Parameter slot `slot` (0..31) — the raw packing behind the named
+    /// fields on your effect struct. Bypasses the schema; prefer the fields.
+    public float param(uint slot)
+    {
+        return sk_effect_quads[this.quad].params[slot];
+    }
+
+    // The backdrop. Both textures cover the whole window as it was painted
+    // before this effect, so any point may be sampled, not only the element's
+    // own area; outside the window they clamp to its edge. Neither holds the
+    // element's own background (a backdrop effect paints beneath it) nor
+    // another backdrop effect drawn in the same group (they never overlap).
+    // The blurred one is a lower-resolution pyramid level: blurred to
+    // `[SkBackdropRadius]`, or the raw snapshot when the effect has none.
+    // All four return zero for an effect without `[SkBackdrop]`.
+
+    /// The backdrop at a window UV (`input.uv` space), blurred to
+    /// `[SkBackdropRadius]` when the effect declares one.
+    public float4 backdropAt(float2 uv)
+    {
+        return this.hasBackdrop
+            ? sk_backdrop_input.SampleLevel(sk_clamp_sampler, uv, 0.0)
+            : float4(0.0, 0.0, 0.0, 0.0);
+    }
+
+    /// The backdrop at a point in this element's device pixels (`input.px`
+    /// space), blurred like `backdropAt`.
+    public float4 backdropAtPx(float2 px)
+    {
+        return this.backdropAt(this.pxToUv(px));
+    }
+
+    /// The untouched backdrop at a window UV, never blurred.
+    public float4 rawBackdropAt(float2 uv)
+    {
+        return this.hasBackdrop
+            ? sk_backdrop_original.SampleLevel(sk_clamp_sampler, uv, 0.0)
+            : float4(0.0, 0.0, 0.0, 0.0);
+    }
+
+    /// The untouched backdrop at a point in this element's device pixels.
+    public float4 rawBackdropAtPx(float2 px)
+    {
+        return this.rawBackdropAt(this.pxToUv(px));
+    }
+
+    /// A point in this element's device pixels as a window UV.
+    public float2 pxToUv(float2 px)
+    {
+        return this.uv + (px - this.px) / sk_viewport_size;
+    }
 
     /// Antialiased 0..1 coverage from a signed distance in device pixels.
     /// One device pixel of feather, which is what the rest of gpui uses.
@@ -428,9 +507,9 @@ public EffectInput sk_begin(uint id, float4 frag_position)
     i.px = position - element_origin;
     i.size = element_size;
     i.local = i.px / element_size;
-    i.backdrop = has_backdrop
-        ? sk_backdrop_input.SampleLevel(sk_clamp_sampler, uv, 0.0)
-        : float4(0.0, 0.0, 0.0, 0.0);
+    i.hasBackdrop = has_backdrop;
+    i.quad = id;
+    i.backdrop = i.backdropAt(uv);
     i.sd = sd_element;
     i.coverage = saturate(0.5 - sd_element);
     i.time = q.time;
@@ -438,9 +517,6 @@ public EffectInput sk_begin(uint id, float4 frag_position)
     i.bleed = q.bleed;
     i.opacity = q.opacity;
     i.clip = sk_content_mask_coverage(position, q.content_mask, q.content_mask_radii);
-    i.hasBackdrop = has_backdrop;
-    i.params0 = float4(q.params0[0], q.params0[1], q.params0[2], q.params0[3]);
-    i.params1 = float4(q.params1[0], q.params1[1], q.params1[2], q.params1[3]);
     return i;
 }
 
@@ -484,6 +560,18 @@ public float4 sk_finish<T : IEffect>(T material, EffectInput i)
 // ===========================================================================
 //  Helpers
 // ===========================================================================
+
+/// 0..1: how present the pointer is in the window, from `[SkPointerTimes]`
+/// and `input.time`, fading in over `seconds` after it enters and out over
+/// `seconds` after it leaves. Pair the field with `[SkAnimatedFor(seconds)]`.
+public float sk_pointer_presence(float3 times, float time, float seconds)
+{
+    float fade = max(seconds, 1e-4);
+    float entered = saturate((time - times.y) / fade);
+    float atLeave = saturate((times.z - times.y) / fade);
+    float leaving = atLeave * (1.0 - saturate((time - times.z) / fade));
+    return times.y > times.z ? entered : leaving;
+}
 
 /// Straight alpha -> premultiplied.
 public float4 sk_premultiply(float4 color)

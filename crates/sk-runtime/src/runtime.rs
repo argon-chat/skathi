@@ -44,6 +44,14 @@ fn apply_pump_budget() {
     redjs::web::set_pump_budget_us(SK_PUMP_DELIVERY_BUDGET_US);
 }
 
+/// Gives `--shading`'s `input.time` the zero of `performance.now()`, so a page can hand an effect
+/// `performance.now() / 1000` as a start time.
+fn share_clock_with_effects() {
+    let now = std::time::Instant::now();
+    let elapsed = std::time::Duration::from_secs_f64(redjs::web::now_ms().max(0.0) / 1000.0);
+    gpui::set_effect_clock_origin(now.checked_sub(elapsed).unwrap_or(now));
+}
+
 /// The JavaScriptCore options every app runs with, applied by `redjs_init` before the first VM. An
 /// option set in the environment (`JSC_jitPolicyScale=1`) wins, so it is filtered out in [`jsc_options`].
 pub const SK_JSC_OPTIONS: &str = "jitPolicyScale=0.5";
@@ -106,6 +114,7 @@ impl JsRuntime {
         unsafe {
             let rc = ffi::redjs_web_install(ctx.raw());
             assert_eq!(rc, 0, "redjs_web_install failed: {rc}");
+            share_clock_with_effects();
             // Relative reads go through the content provider; empty roots would make a miss read relative to the
             // process cwd, so a root that cannot exist turns every miss into a 404.
             let root: Vec<u16> = NO_DISK_ROOT.encode_utf16().collect();

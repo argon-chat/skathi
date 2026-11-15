@@ -210,7 +210,7 @@ fn build(
 /// Out-of-range is CLAMPED, not dropped: a browser would clamp a used value too, and dropping the
 /// whole declaration over a `1.4` would be a far bigger surprise than saturating it.
 fn write(
-    params: &mut [f32; 8],
+    params: &mut [f32; gpui::EFFECT_PARAM_SLOTS],
     param: &ParamSchema,
     arg: Arg,
     schema: &EffectSchema,
@@ -430,7 +430,7 @@ mod tests {
     }
 
     const USER_MANIFEST: &str = r#"{
-      "schema": 7,
+      "schema": 8,
       "kind": "user",
       "effects": [
         {
