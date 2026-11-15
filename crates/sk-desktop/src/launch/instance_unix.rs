@@ -114,6 +114,10 @@ fn claim_within(id: &str, storage: &str, fwd: &Forward, patience: Duration) -> C
             Sent::Gone if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(50))
             }
+            // A closing instance that dies mid-exchange breaks the socket instead of removing it.
+            Sent::NoAnswer if closing && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50))
+            }
             Sent::Closing => return Claim::StillClosing,
             Sent::Gone | Sent::NoAnswer if closing => return Claim::StillClosing,
             Sent::Gone | Sent::NoAnswer => return Claim::NoAnswer,
