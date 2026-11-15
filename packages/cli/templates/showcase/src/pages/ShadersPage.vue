@@ -2,6 +2,7 @@
 import { computed, onUnmounted, reactive, ref, shallowRef } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
+import { fullWindow, shatter } from "../fullwindow";
 
 const LENS_WIDTH = 220;
 const scene = shallowRef<HTMLElement | null>(null);
@@ -50,8 +51,24 @@ onUnmounted(() => cancelAnimationFrame(frame));
 <template>
   <Page
     title="Shaders"
-    lead="Each effect is one Slang file in shaders/, compiled into the app for DirectX, Vulkan and Metal, and applied with a CSS custom property. These five each use a different part of the effect API."
+    lead="Each effect is one Slang file in shaders/, compiled into the app for DirectX, Vulkan and Metal, and applied with a CSS custom property. Each of these uses a different part of the effect API."
   >
+    <Card title="Over the whole window" api="shatter · snow · fireflies">
+      <div class="row">
+        <button class="btn" :disabled="fullWindow.shatter !== null" @click="shatter($event.clientX, $event.clientY)">
+          Shatter
+        </button>
+        <button class="btn" :class="{ on: fullWindow.snow }" @click="fullWindow.snow = !fullWindow.snow">Snow</button>
+        <button class="btn" :class="{ on: fullWindow.fireflies }" @click="fullWindow.fireflies = !fullWindow.fireflies">
+          Fireflies
+        </button>
+      </div>
+      <p class="faint">
+        Layers over the window that take no clicks. Shatter breaks a snapshot of the window into falling shards and puts
+        it back; snow parts around the pointer and drifts when it moves fast; fireflies gather round it.
+      </p>
+    </Card>
+
     <Card title="Liquid glass" api="lens · [SkBackdrop]">
       <div ref="scene" class="scene" @mousemove="lensMove" @mouseup="lensUp" @mouseleave="lensUp">
         <div class="blob b1" />

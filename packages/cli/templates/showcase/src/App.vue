@@ -2,6 +2,7 @@
 import { appDevtools } from "@skathi-native/runtime";
 import { computed } from "vue";
 import { useRoute } from "vue-router";
+import FullWindow from "./components/FullWindow.vue";
 import Icon from "./components/Icon.vue";
 import Titlebar from "./components/Titlebar.vue";
 import { pages } from "./router";
@@ -39,6 +40,7 @@ const sections = computed(() => {
         </RouterView>
       </main>
     </div>
+    <FullWindow />
   </div>
 </template>
 
