@@ -55,10 +55,10 @@ pub use mapper::{
     set_rem_basis, set_viewport_basis, set_web_font_families, take_font_misses,
     uses_viewport_units, viewport_basis, BackgroundLayer, BackgroundSize, BackgroundUrl,
     CurrentColorTargets, Decls, Extras, FontRelativeMetrics, InlineMotion, InlinePriority,
-    InlineStyle, ListMarker, MaskClips, MaskCompositing, MaskImages, ObjectFit, OverscrollBehavior,
-    PaintLayer, RadiusInherit, ScrollbarWidth, SvgPaint, TextFill, TextTransform, TileLength,
-    UserSelect, WhiteSpaceMode, WindowControl, WindowDrag, INITIAL_REM_BASIS,
-    INITIAL_VIEWPORT_BASIS,
+    InlineStyle, ListMarker, MaskClips, MaskCompositing, MaskImages, MaskPatch, MaskStack,
+    ObjectFit, OverscrollBehavior, PaintLayer, RadiusInherit, ScrollbarWidth, SvgPaint, TextFill,
+    TextTransform, TileLength, UserSelect, WhiteSpaceMode, WindowControl, WindowDrag,
+    INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
 };
 pub use mapper::{
     set_composed_font_families, take_unreached_fonts, text_shadow_css, transform_css,
@@ -2272,14 +2272,16 @@ impl Engine {
                 mapper::apply_current_color(refinement, CurrentColorTargets::default(), color);
             }
         }
-        for (refinement, _) in [&mut before, &mut after] {
-            if mapper::border_needs_current_color(refinement) {
+        for (refinement, own) in [&mut before, &mut after] {
+            if own.current_color != CurrentColorTargets::default()
+                || mapper::border_needs_current_color(refinement)
+            {
                 let color = refinement
                     .text
                     .color
                     .or(effective_color)
                     .unwrap_or_else(gpui::black);
-                mapper::apply_current_color(refinement, CurrentColorTargets::default(), color);
+                mapper::apply_current_color(refinement, own.current_color, color);
             }
         }
         if let Some(offset) = extras.underline_offset {
@@ -6238,6 +6240,23 @@ mod tests {
         let own = compute(3, Some(red));
         assert_ne!(own.base.border_color, Some(red));
         assert_eq!(own.base.border_color, own.color);
+
+        // A `::before` icon filled with the text colour.
+        let engine = Engine::compile(".icon::before { content: \"\"; background: currentColor }");
+        let doc = Doc {
+            nodes: vec![("", "", 0, vec![]), ("i", "icon", 0, vec![])],
+        };
+        let mut d = Vec::new();
+        let states = engine.compute_node(
+            DocRef { doc: &doc, i: 1 },
+            None,
+            &Rc::new(Vars::default()),
+            Some(red),
+            &Env::default(),
+            &mut d,
+        );
+        let before = states.before.as_ref().expect("a ::before box");
+        assert_eq!(before.style.background, Some(gpui::Fill::Color(red.into())));
     }
 
     #[test]

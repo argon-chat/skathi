@@ -131,10 +131,10 @@ fn paint_stack(
     }
 }
 
-pub(crate) enum Load {
+pub(crate) enum Load<T = Arc<RenderImage>> {
     Pending,
     Failed,
-    Ready(Arc<RenderImage>),
+    Ready(T),
 }
 
 pub(crate) fn load(source: &ImageSource, window: &mut Window, cx: &mut App) -> Load {
@@ -156,7 +156,7 @@ pub(crate) fn load(source: &ImageSource, window: &mut Window, cx: &mut App) -> L
 
 /// gpui rasterises an SVG at twice its size for smoothness, so its natural size is half the decoded
 /// one.
-fn is_svg(source: &ImageSource, url: &str) -> bool {
+pub(crate) fn is_svg(source: &ImageSource, url: &str) -> bool {
     match source {
         ImageSource::Image(image) => image.format == ImageFormat::Svg,
         ImageSource::Resource(Resource::Path(p)) => {
@@ -166,7 +166,7 @@ fn is_svg(source: &ImageSource, url: &str) -> bool {
     }
 }
 
-fn head(url: &str) -> String {
+pub(crate) fn head(url: &str) -> String {
     let mut s: String = url.chars().take(60).collect();
     if s.len() < url.len() {
         s.push('…');

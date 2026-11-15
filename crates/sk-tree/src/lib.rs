@@ -26,6 +26,7 @@ mod live;
 mod live_state;
 pub mod log;
 mod lottie;
+mod mask;
 mod observe;
 pub mod perf;
 mod pointer;

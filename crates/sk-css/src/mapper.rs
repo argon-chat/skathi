@@ -207,6 +207,7 @@ pub struct Extras {
     pub mask_images: Option<MaskImages>,
     pub mask_clips: Option<MaskClips>,
     pub mask_composite: Option<MaskCompositing>,
+    pub mask: MaskPatch,
     pub radius_inherit: RadiusInherit,
     /// `view-transition-name`; `Some(None)` is `none`, `auto` and `match-element` are kept as
     /// written.
@@ -236,6 +237,46 @@ pub enum MaskCompositing {
     Add,
     Exclude,
     Other,
+}
+
+/// The `mask-*` longhands Skathi paints, cascaded apart and folded into layers after the cascade
+/// as the `background-*` ones are.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MaskPatch {
+    pub images: Option<Rc<Vec<BackgroundLayer>>>,
+    pub urls: Option<Rc<Vec<BackgroundUrl>>>,
+    pub size: Option<Rc<Vec<BackgroundSize>>>,
+    pub position: Option<Rc<Vec<(TileLength, TileLength)>>>,
+    pub repeat: Option<Rc<Vec<(bool, bool)>>>,
+    pub luminance: Option<bool>,
+}
+
+impl MaskPatch {
+    fn refine(&mut self, other: &Self) {
+        if other.images.is_some() {
+            self.images = other.images.clone();
+            self.urls = other.urls.clone();
+        }
+        if other.size.is_some() {
+            self.size = other.size.clone();
+        }
+        if other.position.is_some() {
+            self.position = other.position.clone();
+        }
+        if other.repeat.is_some() {
+            self.repeat = other.repeat.clone();
+        }
+        if other.luminance.is_some() {
+            self.luminance = other.luminance;
+        }
+    }
+}
+
+/// The layers of a `mask`, bottom first, and whether they mask by luminance.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaskStack {
+    pub layers: Vec<PaintLayer>,
+    pub luminance: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -647,6 +688,7 @@ impl Extras {
         if other.mask_composite.is_some() {
             self.mask_composite = other.mask_composite;
         }
+        self.mask.refine(&other.mask);
         self.current_color.0 =
             (self.current_color.0 & !other.current_color_overrides.0) | other.current_color.0;
         self.current_color_overrides.0 |= other.current_color_overrides.0;
@@ -672,51 +714,42 @@ impl Extras {
     }
 
     pub fn resolve_background_stack(&self) -> Option<Vec<PaintLayer>> {
-        let urls = self.background_urls.as_ref().filter(|u| !u.is_empty())?;
-        let mut stack: Vec<(u16, PaintLayer)> = Vec::new();
-        for layer in self.background_images.iter().flat_map(|l| l.iter()) {
-            stack.push((
-                layer.index,
-                PaintLayer::Gradient(self.tiled_gradient(layer)),
-            ));
-        }
-        for u in urls.iter() {
-            let i = u.index as usize;
-            stack.push((
-                u.index,
-                PaintLayer::Image {
-                    url: u.url.clone(),
-                    size: cycled(self.background_size.as_ref(), i)
-                        .unwrap_or(BackgroundSize::Explicit(None, None)),
-                    position: cycled(self.background_position.as_ref(), i)
-                        .unwrap_or((TileLength::Fraction(0.0), TileLength::Fraction(0.0))),
-                    repeat: cycled(self.background_repeat.as_ref(), i).unwrap_or((true, true)),
-                },
-            ));
-        }
-        stack.sort_by_key(|(index, _)| *index);
-        Some(stack.into_iter().rev().map(|(_, layer)| layer).collect())
+        self.background_urls.as_ref().filter(|u| !u.is_empty())?;
+        Some(self.background_tiles().stack(
+            self.background_images.as_deref(),
+            self.background_urls.as_deref(),
+        ))
     }
 
-    /// A layer with no explicit two-axis size is not tiled: a gradient has no intrinsic size, so
-    /// `auto`, `cover` and `contain` all resolve to the box itself.
-    fn tiled_gradient(&self, layer: &BackgroundLayer) -> gpui::Background {
-        let index = layer.index as usize;
-        let mut background = layer.background;
-        let size = cycled(self.background_size.as_ref(), index);
-        if let Some(BackgroundSize::Explicit(Some(w), Some(h))) = size {
-            let position = cycled(self.background_position.as_ref(), index)
-                .unwrap_or((TileLength::Fraction(0.0), TileLength::Fraction(0.0)));
-            let repeat = cycled(self.background_repeat.as_ref(), index).unwrap_or((true, true));
-            background = background.tiled(
-                (w.value(), h.value()),
-                (w.is_fraction(), h.is_fraction()),
-                (position.0.value(), position.1.value()),
-                (position.0.is_fraction(), position.1.is_fraction()),
-                repeat,
-            );
+    /// The `mask` to paint, or `None` when every layer is `none`. Not for the gradient-border ring
+    /// ([`Extras::mask_ring`]), which the background paints itself.
+    pub fn resolve_mask_stack(&self) -> Option<MaskStack> {
+        if self.mask_ring() {
+            return None;
         }
-        background
+        let m = &self.mask;
+        let tiles = Tiles {
+            size: m.size.as_ref(),
+            position: m.position.as_ref(),
+            repeat: m.repeat.as_ref(),
+        };
+        let layers = tiles.stack(m.images.as_deref(), m.urls.as_deref());
+        (!layers.is_empty()).then(|| MaskStack {
+            layers,
+            luminance: m.luminance == Some(true),
+        })
+    }
+
+    fn background_tiles(&self) -> Tiles<'_> {
+        Tiles {
+            size: self.background_size.as_ref(),
+            position: self.background_position.as_ref(),
+            repeat: self.background_repeat.as_ref(),
+        }
+    }
+
+    fn tiled_gradient(&self, layer: &BackgroundLayer) -> gpui::Background {
+        self.background_tiles().gradient(layer)
     }
 
     pub fn z(&self) -> Option<i32> {
@@ -2357,6 +2390,62 @@ fn cycled<T: Copy>(list: Option<&Rc<Vec<T>>>, i: usize) -> Option<T> {
     Some(list[i % list.len()])
 }
 
+/// The size, position and repeat lists of a `background` or a `mask`, cycled over its layers.
+struct Tiles<'a> {
+    size: Option<&'a Rc<Vec<BackgroundSize>>>,
+    position: Option<&'a Rc<Vec<(TileLength, TileLength)>>>,
+    repeat: Option<&'a Rc<Vec<(bool, bool)>>>,
+}
+
+impl Tiles<'_> {
+    /// A layer with no explicit two-axis size is not tiled: a gradient has no intrinsic size, so
+    /// `auto`, `cover` and `contain` all resolve to the box itself.
+    fn gradient(&self, layer: &BackgroundLayer) -> gpui::Background {
+        let index = layer.index as usize;
+        let mut background = layer.background;
+        if let Some(BackgroundSize::Explicit(Some(w), Some(h))) = cycled(self.size, index) {
+            let position = cycled(self.position, index)
+                .unwrap_or((TileLength::Fraction(0.0), TileLength::Fraction(0.0)));
+            let repeat = cycled(self.repeat, index).unwrap_or((true, true));
+            background = background.tiled(
+                (w.value(), h.value()),
+                (w.is_fraction(), h.is_fraction()),
+                (position.0.value(), position.1.value()),
+                (position.0.is_fraction(), position.1.is_fraction()),
+                repeat,
+            );
+        }
+        background
+    }
+
+    /// Every layer, bottom first.
+    fn stack(
+        &self,
+        images: Option<&Vec<BackgroundLayer>>,
+        urls: Option<&Vec<BackgroundUrl>>,
+    ) -> Vec<PaintLayer> {
+        let mut stack: Vec<(u16, PaintLayer)> = Vec::new();
+        for layer in images.into_iter().flatten() {
+            stack.push((layer.index, PaintLayer::Gradient(self.gradient(layer))));
+        }
+        for u in urls.into_iter().flatten() {
+            let i = u.index as usize;
+            stack.push((
+                u.index,
+                PaintLayer::Image {
+                    url: u.url.clone(),
+                    size: cycled(self.size, i).unwrap_or(BackgroundSize::Explicit(None, None)),
+                    position: cycled(self.position, i)
+                        .unwrap_or((TileLength::Fraction(0.0), TileLength::Fraction(0.0))),
+                    repeat: cycled(self.repeat, i).unwrap_or((true, true)),
+                },
+            ));
+        }
+        stack.sort_by_key(|(index, _)| *index);
+        stack.into_iter().rev().map(|(_, layer)| layer).collect()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct BackgroundUrl {
     pub index: u16,
@@ -2721,17 +2810,139 @@ fn webkit_mask_compositing(keyword: &str) -> MaskCompositing {
 }
 
 fn advise_mask(x: &Extras, diagnostics: &mut Vec<String>) {
-    let unsupported = x.mask_images == Some(MaskImages::Other)
-        || x.mask_composite == Some(MaskCompositing::Other)
-        || (x.mask_images == Some(MaskImages::TwoOpaque) && x.mask_clips == Some(MaskClips::Other));
-    if unsupported {
+    let excluded = x.mask_composite == Some(MaskCompositing::Exclude)
+        && x.mask_images
+            .is_some_and(|images| images != MaskImages::TwoOpaque);
+    if x.mask_composite == Some(MaskCompositing::Other) || excluded {
         warn_once(
             diagnostics,
-            "`mask` is not applied (v1), and the element paints unmasked. gpui has no \
-             per-element alpha mask. The one mask Skathi cuts is the gradient-border ring: \
-             two opaque layers, the top one clipped to `content-box`, with `mask-composite: \
-             exclude` (or `-webkit-mask-composite: xor`). That paints the background in the \
-             padding and border only",
+            "`mask-composite` other than `add` is not applied (v1): the mask layers are added. \
+             The one exception is the gradient-border ring (two opaque layers, the top one \
+             clipped to `content-box`, composited with `exclude`). Combine the layers into one \
+             image instead",
+        );
+    }
+}
+
+/// `-webkit-` mask properties are not read; `true` when `prefix` names only them. The ring
+/// (two opaque layers) is let through.
+fn webkit_mask(
+    prefix: lightningcss::vendor_prefix::VendorPrefix,
+    property: &str,
+    ring: bool,
+    diagnostics: &mut Vec<String>,
+) -> bool {
+    use lightningcss::vendor_prefix::VendorPrefix;
+    if prefix.contains(VendorPrefix::None) || prefix.is_empty() {
+        return false;
+    }
+    if !ring {
+        warn_once(
+            diagnostics,
+            &format!(
+                "`-webkit-{property}` is not supported and is ignored — use `{property}`, which \
+                 takes the same values"
+            ),
+        );
+    }
+    true
+}
+
+fn collect_mask_images<'a>(
+    images: impl Iterator<Item = &'a lightningcss::values::image::Image<'a>>,
+    x: &mut Extras,
+    diagnostics: &mut Vec<String>,
+) {
+    let mut layers: Vec<BackgroundLayer> = Vec::new();
+    let mut urls: Vec<BackgroundUrl> = Vec::new();
+    for (index, image) in images.enumerate() {
+        let index = index.min(u16::MAX as usize) as u16;
+        if let lightningcss::values::image::Image::Url(u) = image {
+            let url = u.url.trim();
+            if url.starts_with('#') {
+                warn_once(
+                    diagnostics,
+                    "`mask-image: url(#…)` names an SVG `<mask>` element, which is not supported \
+                     (v1); the layer is left out. Point the URL at an image file, or write the \
+                     mask as a gradient",
+                );
+            } else if !url.is_empty() {
+                urls.push(BackgroundUrl {
+                    index,
+                    url: Rc::from(url),
+                });
+            }
+            continue;
+        }
+        if let Some((backgrounds, _)) = gradient_layer(image, diagnostics) {
+            layers.extend(
+                backgrounds
+                    .into_iter()
+                    .map(|background| BackgroundLayer { index, background }),
+            );
+        }
+    }
+    x.mask.images = Some(Rc::new(layers));
+    x.mask.urls = Some(Rc::new(urls));
+}
+
+fn mask_luminance<'a>(
+    modes: impl Iterator<Item = &'a lightningcss::properties::masking::MaskMode>,
+    diagnostics: &mut Vec<String>,
+) -> bool {
+    use lightningcss::properties::masking::MaskMode as M;
+    let modes: Vec<bool> = modes.map(|m| *m == M::Luminance).collect();
+    let luminance = modes.first().copied().unwrap_or(false);
+    if modes.iter().any(|&m| m != luminance) {
+        warn_once(
+            diagnostics,
+            "`mask-mode` differs between mask layers, which is not supported (v1): the first \
+             layer's mode applies to all of them. Give every layer the same mode",
+        );
+    }
+    luminance
+}
+
+fn advise_mask_clip<'a>(
+    clips: impl Iterator<Item = &'a lightningcss::properties::masking::MaskClip>,
+    diagnostics: &mut Vec<String>,
+) {
+    use lightningcss::properties::masking::{GeometryBox as B, MaskClip as C};
+    if clips
+        .into_iter()
+        .any(|c| *c != C::GeometryBox(B::BorderBox))
+    {
+        warn_once(
+            diagnostics,
+            "`mask-clip` other than `border-box` is not applied (v1): the mask is clipped at the \
+             border box. Size and position the mask layers to fit instead",
+        );
+    }
+}
+
+fn mask_position(
+    position: &lightningcss::values::position::Position,
+    diagnostics: &mut Vec<String>,
+) -> (TileLength, TileLength) {
+    (
+        position_component(&position.x, true, diagnostics),
+        position_component(&position.y, false, diagnostics),
+    )
+}
+
+fn advise_mask_box<'a>(
+    boxes: impl Iterator<Item = &'a lightningcss::properties::masking::GeometryBox>,
+    property: &str,
+    diagnostics: &mut Vec<String>,
+) {
+    use lightningcss::properties::masking::GeometryBox as B;
+    if boxes.into_iter().any(|b| *b != B::BorderBox) {
+        warn_once(
+            diagnostics,
+            &format!(
+                "`{property}` other than `border-box` is not applied (v1): the mask is laid out \
+                 and clipped at the border box. Size and position the mask layers to fit instead"
+            ),
         );
     }
 }
@@ -4544,7 +4755,9 @@ fn apply_property(
         },
         Background(layers) => {
             if let Some(last) = layers.last() {
-                if let Some(c) = color(&last.color) {
+                if last.color == CssColor::CurrentColor {
+                    x.current_color.0 |= CurrentColorTargets::BACKGROUND;
+                } else if let Some(c) = color(&last.color) {
                     r.background = Some(gpui::Fill::Color(c.into()));
                     x.background_key_color = Some(c);
                 }
@@ -4628,21 +4841,129 @@ fn apply_property(
                 );
             }
         }
-        Mask(layers, _) => {
-            x.mask_images = Some(mask_images(layers.iter().map(|l| &l.image)));
+        Mask(layers, prefix) => {
+            let images = mask_images(layers.iter().map(|l| &l.image));
+            x.mask_images = Some(images);
             x.mask_clips = Some(mask_clips(layers.iter().map(|l| &l.clip)));
             x.mask_composite = Some(
                 layers
                     .first()
                     .map_or(MaskCompositing::Add, |l| mask_compositing(l.composite)),
             );
+            if webkit_mask(
+                *prefix,
+                "mask",
+                images == MaskImages::TwoOpaque,
+                diagnostics,
+            ) {
+                return;
+            }
+            collect_mask_images(layers.iter().map(|l| &l.image), x, diagnostics);
+            x.mask.size = Some(Rc::new(
+                layers.iter().map(|l| background_size(&l.size)).collect(),
+            ));
+            x.mask.position = Some(Rc::new(
+                layers
+                    .iter()
+                    .map(|l| mask_position(&l.position, diagnostics))
+                    .collect(),
+            ));
+            x.mask.repeat = Some(Rc::new(
+                layers
+                    .iter()
+                    .map(|l| background_repeat(&l.repeat))
+                    .collect(),
+            ));
+            x.mask.luminance = Some(mask_luminance(layers.iter().map(|l| &l.mode), diagnostics));
+            if !(images == MaskImages::TwoOpaque
+                && x.mask_clips == Some(MaskClips::ContentThenBorder))
+            {
+                advise_mask_box(layers.iter().map(|l| &l.origin), "mask-origin", diagnostics);
+                advise_mask_clip(layers.iter().map(|l| &l.clip), diagnostics);
+            }
             advise_mask(x, diagnostics);
         }
-        MaskImage(images, _) => {
-            x.mask_images = Some(mask_images(images.iter()));
+        MaskImage(images, prefix) => {
+            let kinds = mask_images(images.iter());
+            x.mask_images = Some(kinds);
+            if webkit_mask(
+                *prefix,
+                "mask-image",
+                kinds == MaskImages::TwoOpaque,
+                diagnostics,
+            ) {
+                return;
+            }
+            collect_mask_images(images.iter(), x, diagnostics);
             advise_mask(x, diagnostics);
         }
-        MaskClip(clips, _) => x.mask_clips = Some(mask_clips(clips.iter())),
+        MaskClip(clips, prefix) => {
+            let kinds = mask_clips(clips.iter());
+            x.mask_clips = Some(kinds);
+            if !webkit_mask(*prefix, "mask-clip", true, diagnostics)
+                && kinds != MaskClips::ContentThenBorder
+            {
+                advise_mask_clip(clips.iter(), diagnostics);
+            }
+        }
+        MaskSize(sizes, prefix) => {
+            if !webkit_mask(*prefix, "mask-size", false, diagnostics) {
+                x.mask.size = Some(Rc::new(sizes.iter().map(background_size).collect()));
+            }
+        }
+        MaskPosition(positions, prefix) => {
+            if !webkit_mask(*prefix, "mask-position", false, diagnostics) {
+                x.mask.position = Some(Rc::new(
+                    positions
+                        .iter()
+                        .map(|p| mask_position(p, diagnostics))
+                        .collect(),
+                ));
+            }
+        }
+        MaskPositionX(list) => {
+            let previous = x.mask.position.clone();
+            x.mask.position = Some(Rc::new(
+                list.iter()
+                    .enumerate()
+                    .map(|(i, h)| {
+                        let y = previous
+                            .as_ref()
+                            .filter(|p| !p.is_empty())
+                            .map(|p| p[i % p.len()].1)
+                            .unwrap_or(TileLength::Fraction(0.0));
+                        (position_component(h, true, diagnostics), y)
+                    })
+                    .collect(),
+            ));
+        }
+        MaskPositionY(list) => {
+            let previous = x.mask.position.clone();
+            x.mask.position = Some(Rc::new(
+                list.iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        let h = previous
+                            .as_ref()
+                            .filter(|p| !p.is_empty())
+                            .map(|p| p[i % p.len()].0)
+                            .unwrap_or(TileLength::Fraction(0.0));
+                        (h, position_component(v, false, diagnostics))
+                    })
+                    .collect(),
+            ));
+        }
+        MaskRepeat(list, prefix) => {
+            if !webkit_mask(*prefix, "mask-repeat", false, diagnostics) {
+                x.mask.repeat = Some(Rc::new(list.iter().map(background_repeat).collect()));
+            }
+        }
+        MaskOrigin(boxes, prefix) => {
+            if !webkit_mask(*prefix, "mask-origin", false, diagnostics) {
+                advise_mask_box(boxes.iter(), "mask-origin", diagnostics);
+            }
+        }
+        MaskMode(modes) => x.mask.luminance = Some(mask_luminance(modes.iter(), diagnostics)),
         MaskComposite(list) => {
             x.mask_composite = Some(
                 list.first()
@@ -8765,6 +9086,77 @@ mod tests {
         }
         let (_, x, d) = map_full("mask: none");
         assert!(d.is_empty() && !x.mask_ring(), "{d:?}");
+    }
+
+    #[test]
+    fn a_mask_resolves_to_layers_with_their_size_position_and_repeat() {
+        use TileLength::{Fraction as F, Pixels as P};
+        let (_, x, d) = map_full(
+            "mask-image: url(icons/check.svg); mask-size: contain; mask-repeat: no-repeat;
+             mask-position: center",
+        );
+        assert!(d.is_empty(), "{d:?}");
+        let stack = x.resolve_mask_stack().expect("a mask");
+        assert!(!stack.luminance);
+        assert_eq!(
+            stack.layers,
+            vec![PaintLayer::Image {
+                url: "icons/check.svg".into(),
+                size: BackgroundSize::Contain,
+                position: (F(0.5), F(0.5)),
+                repeat: (false, false),
+            }]
+        );
+
+        // The shorthand, two layers, the first on top; a gradient with a size is tiled.
+        let (_, x, d) = map_full(
+            "mask: url(a.png) 4px 0 / 10px 20px repeat-x, \
+             linear-gradient(to bottom, #000 80%, transparent) luminance",
+        );
+        assert!(d.iter().any(|d| d.contains("mask-mode")), "{d:?}");
+        let stack = x.resolve_mask_stack().expect("a mask");
+        let [PaintLayer::Gradient(_), PaintLayer::Image {
+            size,
+            position,
+            repeat,
+            ..
+        }] = stack.layers.as_slice()
+        else {
+            panic!("{:?}", stack.layers)
+        };
+        assert_eq!(*size, BackgroundSize::Explicit(Some(P(10.)), Some(P(20.))));
+        assert_eq!(*position, (P(4.), P(0.)));
+        assert_eq!(*repeat, (true, false));
+
+        let (_, x, _) = map_full("mask-image: url(a.svg); mask-image: none");
+        assert_eq!(x.resolve_mask_stack(), None);
+        let (_, x, _) =
+            map_full("mask-image: linear-gradient(#000, transparent); mask-mode: luminance");
+        assert!(x.resolve_mask_stack().expect("a mask").luminance);
+    }
+
+    #[test]
+    fn a_webkit_mask_is_ignored_and_the_ring_still_cuts() {
+        for prefixed in [
+            "-webkit-mask-image: url(icon.svg)",
+            "-webkit-mask: url(icon.svg) center / contain no-repeat",
+        ] {
+            let (_, x, d) = map_full(prefixed);
+            assert_eq!(x.resolve_mask_stack(), None, "{prefixed}");
+            assert_eq!(d.len(), 1, "{prefixed}: {d:?}");
+        }
+        let (_, x, _) =
+            map_full("mask-image: url(icon.svg); -webkit-mask-position: 0 0; mask-position: right");
+        let stack = x.resolve_mask_stack().expect("a mask");
+        assert!(
+            matches!(stack.layers[0], PaintLayer::Image { position: (TileLength::Fraction(f), _), .. } if f == 1.0),
+            "{stack:?}"
+        );
+        let ring = "-webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+                    -webkit-mask-composite: xor";
+        let (_, x, d) = map_full(ring);
+        assert!(d.is_empty() && x.mask_ring(), "{d:?}");
+        assert_eq!(x.resolve_mask_stack(), None);
     }
 
     #[test]

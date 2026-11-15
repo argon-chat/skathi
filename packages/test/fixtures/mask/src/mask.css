@@ -1,0 +1,114 @@
+#root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #fff;
+}
+
+.cell {
+  position: absolute;
+}
+
+.icon {
+  width: 48px;
+  height: 48px;
+  color: rgb(0, 0, 255);
+  background-color: currentColor;
+  mask-image: url("icons/square.svg");
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+}
+#icon {
+  left: 20px;
+  top: 20px;
+}
+
+.zoom {
+  left: 100px;
+  top: 20px;
+  transform: scale(2);
+  transform-origin: 0 0;
+}
+.icon.small {
+  width: 24px;
+  height: 24px;
+}
+
+.dot {
+  left: 180px;
+  top: 20px;
+  width: 48px;
+  height: 48px;
+  background: rgb(255, 0, 0);
+  mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><circle cx='5' cy='5' r='5'/></svg>")
+    center / 32px 32px no-repeat;
+}
+
+.fade {
+  left: 260px;
+  top: 20px;
+  width: 200px;
+  height: 100px;
+  background: rgb(0, 0, 255);
+  mask-image: linear-gradient(to bottom, #000 50%, transparent);
+}
+
+.stripes {
+  left: 20px;
+  top: 140px;
+  width: 120px;
+  height: 40px;
+  background: rgb(0, 160, 0);
+  mask-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20'><rect width='10' height='20'/></svg>");
+  mask-size: 20px 20px;
+  mask-repeat: repeat-x;
+  mask-position: 10px 0;
+}
+
+.subtree {
+  left: 180px;
+  top: 140px;
+  width: 120px;
+  height: 60px;
+  mask-image: linear-gradient(to right, #000 50%, transparent 50%);
+}
+.subtree .fill {
+  position: absolute;
+  inset: 0;
+  background: rgb(255, 0, 0);
+}
+
+.luminance {
+  left: 320px;
+  top: 140px;
+  width: 120px;
+  height: 40px;
+  background: rgb(255, 0, 0);
+  mask: linear-gradient(to right, #fff 50%, #000 50%) luminance;
+}
+
+.webkit {
+  left: 460px;
+  top: 140px;
+  width: 40px;
+  height: 40px;
+  background: rgb(0, 160, 0);
+  -webkit-mask-image: url("icons/square.svg");
+}
+
+.pseudo {
+  left: 20px;
+  top: 220px;
+  width: 48px;
+  height: 48px;
+  color: rgb(255, 0, 0);
+}
+.pseudo::before {
+  content: "";
+  display: block;
+  width: 48px;
+  height: 48px;
+  background: currentColor;
+  mask: url("icons/square.svg") center / contain no-repeat;
+}

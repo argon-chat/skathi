@@ -3,6 +3,14 @@ import { onMounted, onUnmounted, ref, shallowRef } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
 import { describe, everyFrame } from "../engine";
+import { icons, type IconName } from "../icons";
+
+const maskIcons: IconName[] = ["home", "shaders", "audio", "permissions"];
+const tints = ["#8b93ff", "#f0b45a", "#5ad1a8", "#f07a9a"];
+const iconMask = (name: IconName) =>
+  `url("data:image/svg+xml,${encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='${icons[name]}'/></svg>`,
+  )}")`;
 
 const W = 640;
 const H = 220;
@@ -168,6 +176,21 @@ onUnmounted(() => {
       <p class="faint">A WGSL fragment shader, redrawn every frame with the time in a uniform buffer.</p>
     </Card>
 
+    <Card title="Masks" api="mask-image">
+      <div class="row">
+        <span
+          v-for="(name, i) in maskIcons"
+          :key="name"
+          class="mask-icon"
+          :style="{ maskImage: iconMask(name), color: tints[i] }"
+        />
+        <div class="fade">
+          <p v-for="n in 4" :key="n">Line {{ n }} of text under a gradient mask that fades it out.</p>
+        </div>
+      </div>
+      <p class="faint">SVG icons masking a currentColor background, and a gradient that fades the text out.</p>
+    </Card>
+
     <Card title="Pointer lock" api="requestPointerLock()">
       <div ref="stage" class="stage" :class="{ locked }" @click="lock" @mousemove="look">
         <div class="cube" :style="{ transform: `rotate(${spin.y}deg) skewX(${spin.x / 4}deg)` }">
@@ -190,6 +213,20 @@ onUnmounted(() => {
   width: 640px;
   height: 220px;
   border-radius: 10px;
+}
+.mask-icon {
+  width: 32px;
+  height: 32px;
+  background: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+}
+.fade {
+  margin-left: 12px;
+  font-size: 13px;
+  line-height: 18px;
+  mask-image: linear-gradient(to bottom, #000 40%, transparent);
 }
 .stage {
   position: relative;

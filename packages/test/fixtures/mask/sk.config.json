@@ -1,0 +1,13 @@
+{
+  "$comment": "CSS `mask`: an SVG icon over `currentColor`, plain and scaled, a gradient fade, mask-size/position/repeat, a masked subtree, luminance, and an ignored `-webkit-` mask.",
+
+  "name": "sk-test-mask",
+
+  "window": {
+    "title": "Skathi — mask (fixture)",
+    "width": 560,
+    "height": 400,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

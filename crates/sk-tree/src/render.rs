@@ -2163,6 +2163,16 @@ fn build_node<V: 'static>(
                     paints_children(t, node),
                     || node_prefix(t, id),
                 );
+                let pseudo = node
+                    .computed
+                    .as_ref()
+                    .is_some_and(|cs| cs.before.is_some() || cs.after.is_some());
+                let leaf = bg_stack.is_none()
+                    && node.text.is_empty()
+                    && !pseudo
+                    && !matches!(t.name(node.tag), "input" | "textarea" | "select" | "li")
+                    && !paints_children(t, node);
+                crate::mask::apply(d.style(), id, &extras, leaf);
                 apply_inline_row(d.style(), t, node, align);
                 apply_inline_item_minimum(d.style(), t, node);
                 apply_inline_align(d.style(), t, node, &extras, align);
@@ -2380,7 +2390,7 @@ fn build_node<V: 'static>(
                     }
                     if let Some(pb) = before {
                         crate::fonts::want_for_pseudo(t, id, &pb);
-                        kids.push(pseudo_element(&pb, case, &stacking, own_display));
+                        kids.push(pseudo_element(id, &pb, case, &stacking, own_display));
                     }
                     if is_file_input {
                         kids.push(file_input_children(t, id, node, case));
@@ -2423,7 +2433,7 @@ fn build_node<V: 'static>(
                     }
                     if let Some(pb) = after {
                         crate::fonts::want_for_pseudo(t, id, &pb);
-                        kids.push(pseudo_element(&pb, case, &stacking, own_display));
+                        kids.push(pseudo_element(id, &pb, case, &stacking, own_display));
                     }
                     // The overlay scrollbar and its wheel routing. Last child: its hitboxes sit above
                     // the content's and its capture-phase wheel listener registers after the
@@ -3011,6 +3021,7 @@ fn advise_drop_shadow_shape(at: impl FnOnce() -> String) {
 /// retained-tree node. An empty `content: ""` box carries no child because gpui's text shaper needs
 /// a leaf.
 fn pseudo_element(
+    owner: u32,
     pb: &sk_css::PseudoBox,
     parent_case: Option<sk_css::TextTransform>,
     stacking: &Stacking,
@@ -3021,6 +3032,7 @@ fn pseudo_element(
     if pb.extras.mask_ring() {
         d.style().vn_mask_ring = Some(true);
     }
+    crate::mask::apply(d.style(), owner, &pb.extras, pb.content.is_empty());
     let case = pb.extras.text_transform.or(parent_case);
     let e = if pb.content.is_empty() {
         d.into_any_element()
@@ -3711,6 +3723,8 @@ pub(crate) fn effect_context(extras: &sk_css::Extras, style: &gpui::StyleRefinem
         || extras.filter_url.is_some()
         || extras.drop_shadow.is_some()
         || extras.isolate == Some(true)
+        || extras.mask.images.as_ref().is_some_and(|l| !l.is_empty())
+        || extras.mask.urls.as_ref().is_some_and(|u| !u.is_empty())
 }
 
 pub(crate) fn layer_of(
