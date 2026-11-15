@@ -35,11 +35,14 @@ page: [CSS coverage](css.md).
 | `Event`, `CustomEvent`, `EventTarget`, UI, mouse, pointer, keyboard, wheel, focus, input, drag events | ✅     |                                                                            |
 | `TouchEvent`                                                                                          | 🟡     | Constructible; the host does not deliver touch input yet                   |
 | `ResizeObserver`, `IntersectionObserver`                                                              | ✅     | Run after layout, before paint, as in a browser                            |
-| `MutationObserver`                                                                                    | ⛔     |                                                                            |
+| `MutationObserver`                                                                                    | 🟡     | `childList` and `attributes`; `characterData` is not observed              |
 | `Selection`, `Range`                                                                                  | ✅     |                                                                            |
 | `matchMedia`                                                                                          | ✅     |                                                                            |
 | Fullscreen API                                                                                        | ✅     |                                                                            |
 | Web Animations (`Animation`, `KeyframeEffect`, `element.animate`)                                     | ✅     |                                                                            |
+| View Transitions (`document.startViewTransition`, `::view-transition-*`)                              | 🟡     | Same-document transitions, in the main window                              |
+| Smooth scrolling (`behavior: "smooth"`, `scroll-behavior: smooth`)                                    | ✅     | `scrollTo`, `scrollBy`, `scrollIntoView` and `scrollTop`/`scrollLeft`      |
+| Pointer Lock (`requestPointerLock`, `exitPointerLock`, `pointerLockElement`)                          | 🟡     | Escape always releases it; on Linux, X11 only                              |
 | `FontFace`, `document.fonts`                                                                          | ✅     |                                                                            |
 | `XMLSerializer`                                                                                       | ✅     |                                                                            |
 | `DOMParser`                                                                                           | ⛔     |                                                                            |
@@ -100,24 +103,24 @@ page: [CSS coverage](css.md).
 
 ## System integration
 
-| API                                                                | Status | Notes                                                                                                 |
-| ------------------------------------------------------------------ | ------ | ----------------------------------------------------------------------------------------------------- |
-| `navigator.language`, `navigator.languages`                        | ✅     | The system's language preferences; an app can override them                                           |
-| `navigator.userAgentData`                                          | ✅     | Including `getHighEntropyValues`                                                                      |
-| `navigator.permissions.query`                                      | ✅     |                                                                                                       |
-| Async Clipboard (`navigator.clipboard`, `ClipboardItem`)           | ✅     |                                                                                                       |
-| `navigator.getBattery`                                             | ✅     |                                                                                                       |
-| `navigator.userActivation`                                         | ✅     |                                                                                                       |
-| `navigator.windowControlsOverlay`                                  | ✅     |                                                                                                       |
-| `launchQueue` (`LaunchParams`)                                     | ✅     | Files and URLs the app was opened with                                                                |
-| `navigator.setAppBadge`, `clearAppBadge`                           | 🍎     | Windows: a badge on the taskbar button; macOS: the Dock icon's badge                                  |
-| `navigator.wakeLock` (`screen`)                                    | 🍎     | Released when the window is minimized or closed                                                       |
-| `navigator.share`, `navigator.canShare`                            | 🍎     | The system share sheet; text, URLs and files                                                          |
-| Passkeys: `navigator.credentials`, `PublicKeyCredential`           | 🍎     | Windows Hello, iCloud Keychain, security keys, phones. See below. No conditional mediation (autofill) |
-| `Notification`                                                     | 🗑️     |                                                                                                       |
-| Gamepad (`navigator.getGamepads`)                                  | ⛔     |                                                                                                       |
-| Geolocation                                                        | ⛔     |                                                                                                       |
-| Vibration, Pointer Lock, Web Bluetooth, WebUSB, WebHID, Web Serial | ⛔     |                                                                                                       |
+| API                                                      | Status | Notes                                                                                                 |
+| -------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------- |
+| `navigator.language`, `navigator.languages`              | ✅     | The system's language preferences; an app can override them                                           |
+| `navigator.userAgentData`                                | ✅     | Including `getHighEntropyValues`                                                                      |
+| `navigator.permissions.query`                            | ✅     |                                                                                                       |
+| Async Clipboard (`navigator.clipboard`, `ClipboardItem`) | ✅     |                                                                                                       |
+| `navigator.getBattery`                                   | ✅     |                                                                                                       |
+| `navigator.userActivation`                               | ✅     |                                                                                                       |
+| `navigator.windowControlsOverlay`                        | ✅     |                                                                                                       |
+| `launchQueue` (`LaunchParams`)                           | ✅     | Files and URLs the app was opened with                                                                |
+| `navigator.setAppBadge`, `clearAppBadge`                 | 🍎     | Windows: a badge on the taskbar button; macOS: the Dock icon's badge                                  |
+| `navigator.wakeLock` (`screen`)                          | 🍎     | Released when the window is minimized or closed                                                       |
+| `navigator.share`, `navigator.canShare`                  | 🍎     | The system share sheet; text, URLs and files                                                          |
+| Passkeys: `navigator.credentials`, `PublicKeyCredential` | 🍎     | Windows Hello, iCloud Keychain, security keys, phones. See below. No conditional mediation (autofill) |
+| `Notification`                                           | 🗑️     |                                                                                                       |
+| Gamepad (`navigator.getGamepads`)                        | ⛔     |                                                                                                       |
+| Geolocation                                              | ⛔     |                                                                                                       |
+| Vibration, Web Bluetooth, WebUSB, WebHID, Web Serial     | ⛔     |                                                                                                       |
 
 ### Passkeys in an app
 
