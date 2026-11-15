@@ -16,3 +16,6 @@
 	url = https://github.com/argon-chat/thorvg.git
 	branch = vue-native
 	shallow = true
+[submodule "vendor/redslangc"]
+	path = vendor/redslangc
+	url = https://github.com/argon-chat/redslangc.git
