@@ -1,0 +1,13 @@
+{
+  "$comment": "document.startViewTransition: a page that flips from white to black while a named card moves and grows.",
+
+  "name": "sk-test-view-transition",
+
+  "window": {
+    "title": "Skathi — view transition (fixture)",
+    "width": 600,
+    "height": 400,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -1,0 +1,45 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+#page {
+  position: absolute;
+  inset: 0;
+}
+
+.light {
+  background: #fff;
+}
+
+.dark {
+  background: #000;
+}
+
+.card {
+  position: absolute;
+  left: 40px;
+  top: 40px;
+  width: 100px;
+  height: 100px;
+  background: #f00;
+  view-transition-name: card;
+}
+
+.card.wide {
+  left: 300px;
+  top: 200px;
+  width: 200px;
+  background: #00f;
+}
+
+::view-transition-group(*) {
+  animation-duration: 0.3s;
+}
+
+/* Halfway from 2s to 4s. */
+:active-view-transition-type(hold)::view-transition-group(*) {
+  animation-duration: 6s;
+  animation-timing-function: steps(3, jump-none);
+}
