@@ -9,18 +9,6 @@ globalThis.__SK_CSS__ = [];
 // `window.isSk` is true here and undefined in browsers. Read-only and non-configurable, so a
 // polyfill cannot half-succeed at rewriting it.
 Object.defineProperty(globalThis, "isSk", { value: true, writable: false, enumerable: true, configurable: false });
-// redjs ships no `history`; vue-router's dev build touches it at startup. Inert stub.
-// TODO: move into redjs as a native class.
-globalThis.history = {
-  state: null,
-  length: 1,
-  scrollRestoration: "auto",
-  pushState() {},
-  replaceState() {},
-  go() {},
-  back() {},
-  forward() {},
-};
 
 // AOT locks engine builtins before entering the compiled application. Keep
 // public event methods stable and change only their private delegate on reload.

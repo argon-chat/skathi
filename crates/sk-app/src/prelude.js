@@ -15,16 +15,6 @@ globalThis.__VUE_PROD_DEVTOOLS__ = false;
 globalThis.__VUE_PROD_HYDRATION_MISMATCH_DETAILS__ = false;
 globalThis.__SK_CSS__ = [];
 Object.defineProperty(globalThis, "isSk", { value: true, writable: false, enumerable: true, configurable: false });
-globalThis.history = {
-  state: null,
-  length: 1,
-  scrollRestoration: "auto",
-  pushState() {},
-  replaceState() {},
-  go() {},
-  back() {},
-  forward() {}
-};
 (() => {
   const host = globalThis;
   if (host.__SK_GLOBAL_EVENTS__)

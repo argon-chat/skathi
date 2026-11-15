@@ -129,6 +129,7 @@ impl JsRuntime {
             ffi::redjs_set_uncaught_handler(on_uncaught as *const c_void);
             crate::unsupported::install(ctx.raw());
             crate::host::install(ctx.raw());
+            crate::history::install(ctx.raw());
         }
         RUNTIME.with(|r| {
             r.set(JsRuntime { ctx })

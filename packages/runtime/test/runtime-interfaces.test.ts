@@ -37,7 +37,7 @@ describe("the other interfaces", () => {
     }
     expect({} instanceof g(rt, "Document")).toBe(false);
     expect(() => new (g(rt, "HTMLDocument"))()).toThrow();
-    for (const name of ["Location", "History", "Screen", "CharacterData", "ShadowRoot", "CSSStyleDeclaration"]) {
+    for (const name of ["Location", "Screen", "CharacterData", "ShadowRoot", "CSSStyleDeclaration"]) {
       expect(typeof g(rt, name)).toBe("function");
       expect(() => new (g(rt, name))()).toThrow();
     }

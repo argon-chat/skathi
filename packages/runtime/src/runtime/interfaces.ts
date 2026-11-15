@@ -283,7 +283,6 @@ if (WindowIface) {
 const DocumentIface = defineInterface("Document", isDocument, NodeIface ?? ET);
 defineInterface("HTMLDocument", isDocument, DocumentIface ?? ET);
 defineInterface("Location", (x) => x != null && x === theGlobal("location"), null);
-defineInterface("History", (x) => x != null && x === theGlobal("history"), null);
 defineInterface("Screen", (x) => x != null && x === theGlobal("screen"), ET);
 
 const mirrorKind = (x: unknown) =>

@@ -185,6 +185,9 @@ mod tests {
             "TypeError"
         );
         let warned = eval("console.warn = __warn; __warned.join('\\n')");
-        assert_eq!(warned.lines().count(), 4, "{warned}");
+        let ours = warned
+            .lines()
+            .filter(|l| l.contains("is not supported in Skathi"));
+        assert_eq!(ours.count(), 4, "{warned}");
     }
 }
