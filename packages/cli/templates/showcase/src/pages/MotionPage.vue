@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, shallowRef } from "vue";
+import { nextTick, ref, shallowRef } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
 
@@ -26,6 +26,20 @@ const shown = ref(true);
 const words = ["Native", "Fast", "Small", "Vue"];
 const word = ref(0);
 const nextWord = () => (word.value = (word.value + 1) % words.length);
+
+const tiles = [
+  { name: "Dusk", fill: "linear-gradient(135deg, #8b9dff, #b48cff)", text: "Violet light after sundown." },
+  { name: "Tide", fill: "linear-gradient(135deg, #38bdf8, #2dd4bf)", text: "Cool water over pale sand." },
+  { name: "Ember", fill: "linear-gradient(135deg, #fb923c, #f43f5e)", text: "The last coals of a fire." },
+  { name: "Moss", fill: "linear-gradient(135deg, #a3e635, #22c55e)", text: "Green on a north-facing stone." },
+];
+const open = ref<number | null>(null);
+const opened = () => tiles[open.value ?? 0]!;
+const show = (i: number | null) =>
+  document.startViewTransition(async () => {
+    open.value = i;
+    await nextTick();
+  });
 </script>
 
 <template>
@@ -66,6 +80,26 @@ const nextWord = () => (word.value = (word.value + 1) % words.length);
       <Transition name="swap" mode="out-in">
         <div :key="word" class="word">{{ words[word] }}</div>
       </Transition>
+    </Card>
+
+    <Card title="View transitions" api="document.startViewTransition()">
+      <div v-if="open === null" class="tiles">
+        <div
+          v-for="(tile, i) in tiles"
+          :key="tile.name"
+          class="tile"
+          :style="{ background: tile.fill, viewTransitionName: `tile-${i}` }"
+          @click="show(i)"
+        >
+          <span class="tile-name" :style="{ viewTransitionName: `tile-name-${i}` }">{{ tile.name }}</span>
+        </div>
+      </div>
+      <div v-else class="detail" @click="show(null)">
+        <div class="hero" :style="{ background: opened().fill, viewTransitionName: `tile-${open}` }">
+          <span class="hero-name" :style="{ viewTransitionName: `tile-name-${open}` }">{{ opened().name }}</span>
+        </div>
+        <p class="muted">{{ opened().text }} Click to go back.</p>
+      </div>
     </Card>
   </Page>
 </template>
@@ -195,5 +229,41 @@ const nextWord = () => (word.value = (word.value + 1) % words.length);
 .swap-leave-to {
   opacity: 0;
   transform: translateY(-10px);
+}
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.tile {
+  height: 72px;
+  display: flex;
+  align-items: flex-end;
+  padding: 10px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.tile-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffffff;
+}
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  cursor: pointer;
+}
+.hero {
+  height: 180px;
+  display: flex;
+  align-items: flex-end;
+  padding: 18px;
+  border-radius: 18px;
+}
+.hero-name {
+  font-size: 28px;
+  font-weight: 700;
+  color: #ffffff;
 }
 </style>

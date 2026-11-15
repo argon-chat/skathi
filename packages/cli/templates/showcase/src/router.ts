@@ -1,6 +1,6 @@
 // Route components are static imports: the runtime loads one bundle, so there is no lazy `() => import()`.
 import { createMemoryHistory, createRouter } from "vue-router";
-import type { Component } from "vue";
+import { nextTick, type Component } from "vue";
 import type { IconName } from "./icons";
 import AudioPage from "./pages/AudioPage.vue";
 import FilesPage from "./pages/FilesPage.vue";
@@ -155,4 +155,26 @@ export const pages: PageEntry[] = [
 export const router = createRouter({
   history: createMemoryHistory(),
   routes: pages.map(({ path, component }) => ({ path, component })),
+});
+
+// Every navigation is a view transition: the route resolves once the old page is captured, and the
+// update ends when Vue has rendered the new one.
+let rendered: (() => void) | undefined;
+router.beforeResolve(
+  (to, from) =>
+    to.path === from.path ||
+    new Promise<void>((proceed) => {
+      document.startViewTransition(
+        () =>
+          new Promise<void>((done) => {
+            rendered = done;
+            proceed();
+          }),
+      );
+    }),
+);
+router.afterEach(async () => {
+  await nextTick();
+  rendered?.();
+  rendered = undefined;
 });

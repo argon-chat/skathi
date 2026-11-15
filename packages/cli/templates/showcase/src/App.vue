@@ -33,11 +33,7 @@ const sections = computed(() => {
         <div v-if="devtools" class="foot">F12 opens the devtools</div>
       </nav>
       <main class="content">
-        <RouterView v-slot="{ Component }">
-          <Transition name="page" mode="out-in">
-            <component :is="Component" />
-          </Transition>
-        </RouterView>
+        <RouterView />
       </main>
     </div>
     <FullWindow />
@@ -114,17 +110,14 @@ const sections = computed(() => {
   min-width: 0;
   overflow-y: auto;
 }
-.page-enter-active,
-.page-leave-active {
-  transition:
-    opacity 140ms ease,
-    transform 140ms ease;
+/* Page navigations (router.ts): the page cross-fades while its title moves into place. */
+::view-transition-group(*) {
+  animation-duration: 220ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
-.page-enter-from {
-  opacity: 0;
-  transform: translateY(6px);
-}
-.page-leave-to {
-  opacity: 0;
+::view-transition-old(page-title),
+::view-transition-new(page-title) {
+  width: auto;
+  height: 100%;
 }
 </style>

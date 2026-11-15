@@ -30,6 +30,8 @@ defineProps<{ title: string; lead: string }>();
   font-size: 24px;
   font-weight: 700;
   color: var(--text);
+  align-self: flex-start;
+  view-transition-name: page-title;
 }
 .lead {
   margin: 0;
