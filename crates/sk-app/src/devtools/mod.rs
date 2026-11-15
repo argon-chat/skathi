@@ -8,6 +8,7 @@
 //! also answers HTTP/1.1 (`POST /`, one command per connection) so JS can reach it with `fetch()`.
 
 mod allocations;
+mod effects;
 mod eval;
 mod indexeddb;
 mod leases;
@@ -1296,6 +1297,8 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             arg("button").or_else(|| num("button").map(|n| (n as i64).to_string())),
         ),
         "permissions" => cmd_permissions(arg("op").as_deref(), arg("name").as_deref()),
+        "effects" => effects::command(arg("op").as_deref(), num("node"), arg("value").as_deref())
+            .map_or_else(err, ok),
         "type" | "key" => return start_input_command(cmd, req, reply),
         "" => err("no `cmd` in the request"),
         other => err(format!("unknown command `{other}`")),

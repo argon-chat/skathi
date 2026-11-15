@@ -143,6 +143,11 @@ impl EffectSchema {
 
 const BUILTIN_MANIFEST: &str = include_str!("../generated/effects.json");
 
+/// The built-ins' `effects.json` as compiled in, for tools that read the schema themselves.
+pub fn builtin_manifest() -> &'static str {
+    BUILTIN_MANIFEST
+}
+
 #[derive(serde::Deserialize)]
 struct RawManifest {
     schema: u32,

@@ -5684,6 +5684,7 @@ dependencies = [
  "sk-clipboard",
  "sk-css",
  "sk-desktop",
+ "sk-effects",
  "sk-elements",
  "sk-hotkeys",
  "sk-locale",

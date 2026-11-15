@@ -58,6 +58,7 @@ raw-window-handle = "0.6"
 anyhow = "1"
 gpui_platform ={ path = "../../vendor/zed/crates/gpui_platform", default-features = false }
 sk-css = { path = "../sk-css" }
+sk-effects = { path = "../sk-effects" }
 sk-elements = { path = "../sk-elements" }
 # `default-features = false` here and in every dependent of sk-runtime: features unify across the
 # graph, so one plain dependency would turn every sk-runtime default back on.

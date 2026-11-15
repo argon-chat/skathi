@@ -1,0 +1,11 @@
+.tile {
+  width: 80px;
+  height: 60px;
+  background: #3a6df0;
+}
+.glass {
+  --shading: frost(0.5, 10px);
+}
+.locked {
+  --shading: noise(0.3) !important;
+}

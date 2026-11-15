@@ -268,6 +268,65 @@ pub fn computed_styles(id: u32) -> Option<Vec<(&'static str, String)>> {
     })
 }
 
+/// The `--shading` effect each state of `id` resolved to, `base` first; `none` is left out.
+pub fn shading(id: u32) -> Vec<(&'static str, gpui::EffectSpec)> {
+    tree::read_tree(|t| {
+        t.node(id)
+            .and_then(|n| n.computed.as_ref())
+            .map(shading_states)
+            .unwrap_or_default()
+    })
+}
+
+fn shading_states(cs: &sk_css::ComputedStates) -> Vec<(&'static str, gpui::EffectSpec)> {
+    let mut out = Vec::new();
+    let mut push = |name: &'static str, r: Option<&gpui::StyleRefinement>| {
+        if let Some(spec) = r.and_then(|r| r.vn_effect).filter(|s| s.is_some()) {
+            out.push((name, spec));
+        }
+    };
+    push("base", Some(&cs.base));
+    push("hover", cs.hover.as_deref());
+    push("active", cs.active.as_deref());
+    push("focus", cs.focus.as_deref());
+    push("focus-visible", cs.focus_visible.as_deref());
+    push("focus-within", cs.focus_within.as_deref());
+    push("group-hover", cs.group_hover.as_ref().map(|(_, r)| &**r));
+    push("group-active", cs.group_active.as_ref().map(|(_, r)| &**r));
+    out
+}
+
+/// Elements in document order whose computed style paints a `--shading` effect in some state, or
+/// whose inline style declares one.
+pub fn shading_nodes() -> Vec<u32> {
+    tree::read_tree(|t| {
+        elements_in_document_order(t)
+            .into_iter()
+            .filter(|&id| {
+                t.node(id).is_some_and(|n| {
+                    n.computed
+                        .as_ref()
+                        .is_some_and(|cs| !shading_states(cs).is_empty())
+                }) || t.style_value(id, "--shading").is_some()
+            })
+            .collect()
+    })
+}
+
+/// One inline declaration as `(value, important)`.
+pub fn inline_style(id: u32, name: &str) -> Option<(String, bool)> {
+    tree::read_tree(|t| t.style_value(id, name).map(|(v, i)| (v.to_string(), i)))
+}
+
+/// Writes one inline declaration (`None` removes it) as `style.setProperty` would, minus the
+/// mutation observers: the inspector's edits are not the app's.
+pub fn set_inline_style(id: u32, name: &str, value: Option<(&str, bool)>) -> bool {
+    tree::with_tree(|t| match value {
+        Some((value, important)) => t.style_write(id, name, value.trim(), important),
+        None => t.style_remove(id, name).is_some(),
+    })
+}
+
 pub fn matched_rules(id: u32) -> Option<Vec<sk_css::MatchedRule>> {
     let env = crate::env();
     tree::read_tree(|t| {

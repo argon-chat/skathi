@@ -770,6 +770,31 @@ export const COMMANDS: CommandSpec[] = [
       }),
   },
   {
+    cmd: "effects",
+    description:
+      "`--shading` effects: the effects.json schemas the host loaded (built-ins and the app's own), and " +
+      "every element painting one with its declared text, resolved parameters and the rules that declare " +
+      "it. `set` overrides an element's `--shading` inline, live, and answers the advisories the value " +
+      "raises; `reset` puts back what the app had.",
+    usage: [
+      "  effects [list]                      schemas and the elements using them",
+      "  effects node --node N               one element's effect",
+      "  effects set --node N --value TEXT   override live, e.g. --value 'frost(0.6, 14px)'",
+      "  effects reset --node N              drop the override",
+    ],
+    args: {
+      op: str('"list" (default), "node", "set" or "reset"'),
+      node: NODE,
+      value: str("for op=set: the `--shading` value, e.g. frost(0.6, 14px) or none"),
+    },
+    cli: (rest, flags) =>
+      compact({
+        op: rest[0] || "list",
+        node: num(flags.node ?? rest[1]),
+        value: stringFlag(flags.value),
+      }),
+  },
+  {
     cmd: "raise",
     description:
       "Bring the addressed window to the front. The ONLY command here that deliberately takes " +

@@ -1,0 +1,13 @@
+{
+  "$comment": "Elements painting --shading from a rule, an !important rule and inline style, for the devtools `effects` command.",
+
+  "name": "sk-test-shading",
+
+  "window": {
+    "title": "Skathi — shading (fixture)",
+    "width": 360,
+    "height": 200,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
