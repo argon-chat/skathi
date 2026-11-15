@@ -2,7 +2,8 @@
 // (HLSL, WGSL, MSL), so a build made on one OS runs on all three. `sk build` puts them into the payload
 // as `sk/effects/*` entries; `sk dev` writes them to dist/.sk-dev/effects and points the dev host there.
 
-import { watch, type FSWatcher } from "node:fs";
+import { watch, writeFileSync, type FSWatcher } from "node:fs";
+import { join } from "node:path";
 import {
   appShadersDir,
   compileAppEffects,
@@ -123,4 +124,39 @@ export function watchAppEffects(options: {
       watcher?.close();
     },
   };
+}
+
+/// The dev host polls this beside the HMR changes.json: `{"dir": "<compiled effects>"}`.
+export const EFFECTS_CHANGED = "effects-changed.json";
+
+/// `sk dev`'s shader watch. A good rebuild goes to a host that reloads effects in place as the
+/// [`EFFECTS_CHANGED`] message, written after the files; a host older than that is restarted.
+export function devEffectsWatch(options: {
+  appRoot: string;
+  dist: string;
+  out: string;
+  compiler: string;
+  inPlace: boolean;
+  restart: () => void;
+  log: (line: string) => void;
+  onError: (message: string) => void;
+  debounceMs?: number;
+}): EffectsWatch {
+  return watchAppEffects({
+    appRoot: options.appRoot,
+    out: options.out,
+    compiler: options.compiler,
+    ...(options.debounceMs === undefined ? {} : { debounceMs: options.debounceMs }),
+    onBuilt: (effects) => {
+      const names = effects.compiled.map((e) => e.effect.name).join(", ");
+      if (options.inPlace) {
+        writeFileSync(join(options.dist, EFFECTS_CHANGED), `${JSON.stringify({ dir: options.out })}\n`);
+        options.log(`effects rebuilt (${names}) — reloaded in the running app`);
+      } else {
+        options.log(`effects rebuilt (${names}) — restarting the app`);
+        options.restart();
+      }
+    },
+    onError: options.onError,
+  });
 }

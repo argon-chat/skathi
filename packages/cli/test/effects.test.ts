@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateRawSync, gzipSync } from "node:zlib";
 import { effectFindings } from "../check";
-import { watchAppEffects } from "../cli/effects";
+import { devEffectsWatch, EFFECTS_CHANGED, watchAppEffects } from "../cli/effects";
 import { compileAppEffects, EffectsError, writeEffectFiles } from "../effects/compile";
 import { resolveCompiler, unpack } from "../effects/redslangc";
 import { FIXTURES } from "./check-fixtures";
@@ -186,6 +186,47 @@ test.skipIf(!compiler)(
       await step;
       expect(events.at(-1)).toMatch(/^error \S*shaders[\\/]ripple\.slang:9:18: error: /);
       expect(readFileSync(join(out, "effects.json"), "utf8")).toBe(good);
+    } finally {
+      watch.close();
+    }
+  },
+  20_000,
+);
+
+test.skipIf(!compiler)(
+  "sk dev sends a shader edit to a host that reloads effects instead of restarting it",
+  async () => {
+    const root = app({ "ripple.slang": RIPPLE });
+    const dist = join(root, "dist");
+    const out = join(dist, "effects");
+    mkdirSync(dist);
+    let restarts = 0;
+    let errors = "";
+    let wake = () => {};
+    const rebuilt = new Promise<void>((resolve) => (wake = resolve));
+    const watch = devEffectsWatch({
+      appRoot: root,
+      dist,
+      out,
+      compiler: compiler!,
+      inPlace: true,
+      restart: () => restarts++,
+      log: () => wake(),
+      onError: (text) => {
+        errors += text;
+        wake();
+      },
+      debounceMs: 30,
+    });
+    try {
+      writeFileSync(join(root, "shaders", "ripple.slang"), RIPPLE.replace("float speed;", "float speed; float depth;"));
+      await rebuilt;
+      expect(errors).toBe("");
+      expect(restarts).toBe(0);
+      const message = JSON.parse(readFileSync(join(dist, EFFECTS_CHANGED), "utf8"));
+      expect(message.dir).toBe(out);
+      const manifest = JSON.parse(readFileSync(join(message.dir, "effects.json"), "utf8"));
+      expect(manifest.effects[0].params.map((p: { name: string }) => p.name)).toContain("depth");
     } finally {
       watch.close();
     }

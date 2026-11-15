@@ -6,6 +6,9 @@
 //! (redefining its factory and re-registering its CSS), then the raw changes JSON goes to
 //! `__SK__.hmrApply`, which decides rerender / reload / css-only per entry.
 //!
+//! `sk dev` writes [`EFFECTS_CHANGED`] after it recompiled the app's shaders; the new `--shading`
+//! effects replace the running ones (`gpui::reload_app_effects`) and every window restyles and redraws.
+//!
 //! Compiled out under `--features prod`, where the bundle is embedded (see `prod.rs`).
 
 use sk_runtime::JsRuntime;
@@ -41,6 +44,9 @@ mod tests {
 }
 
 const POLL_EVERY_FRAMES: u32 = 30;
+
+/// `{"dir": "<compiled effects>"}`, written by `sk dev` after the effect files.
+const EFFECTS_CHANGED: &str = "effects-changed.json";
 
 pub(crate) fn dist(rel: &str) -> std::path::PathBuf {
     crate::slot::path(rel)
@@ -100,6 +106,8 @@ thread_local! {
     static CHANGES_STAMP: std::cell::Cell<Option<std::time::SystemTime>> =
         const { std::cell::Cell::new(None) };
     static VENDOR_REV: std::cell::Cell<f64> = const { std::cell::Cell::new(-1.0) };
+    static EFFECTS_STAMP: std::cell::Cell<Option<std::time::SystemTime>> =
+        const { std::cell::Cell::new(None) };
 }
 
 fn eval_path(rt: &JsRuntime, path: &std::path::Path, url: &str, label: &'static str) -> bool {
@@ -241,6 +249,7 @@ pub fn boot(rt: &JsRuntime) {
     }
     VENDOR_REV.with(|v| v.set(manifest.vendor_rev));
     CHANGES_STAMP.with(|s| s.set(mtime(&dist("changes.json"))));
+    EFFECTS_STAMP.with(|s| s.set(mtime(&dist(EFFECTS_CHANGED))));
 }
 
 pub fn reboot(rt: &JsRuntime) {
@@ -264,10 +273,45 @@ fn cold_restart(rt: &JsRuntime) {
     boot(rt);
 }
 
+/// Unlike `changes.json`, the message may first appear after boot: an app's first rebuild writes it.
+fn poll_effects() {
+    let path = dist(EFFECTS_CHANGED);
+    let current = mtime(&path);
+    if current.is_none() || EFFECTS_STAMP.with(|s| s.replace(current)) == current {
+        return;
+    }
+    let dir = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| json::parse(&text))
+        .and_then(|message| {
+            message
+                .get("dir")
+                .and_then(json::Json::as_str)
+                .map(str::to_string)
+        });
+    let Some(dir) = dir else {
+        eprintln!(
+            "[dev] {} names no effects directory; the app keeps its `--shading` effects",
+            path.display()
+        );
+        return;
+    };
+    match gpui::AppEffects::from_dir(std::path::Path::new(&dir)) {
+        Ok(effects) => {
+            gpui::reload_app_effects(effects);
+            sk_tree::effects_changed();
+        }
+        Err(error) => {
+            eprintln!("[dev] {error} — the app keeps its previous `--shading` effects")
+        }
+    }
+}
+
 pub fn poll_frame(frame_no: u32) {
     if frame_no % POLL_EVERY_FRAMES != 0 {
         return;
     }
+    poll_effects();
     let changes_path = dist("changes.json");
     let current = mtime(&changes_path);
     let moved = CHANGES_STAMP.with(|s| {

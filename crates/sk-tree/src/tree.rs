@@ -1196,7 +1196,12 @@ impl Tree {
     /// A web font was registered: re-parse inline `font-family`/`font` bodies, since sk-css picks
     /// the family at parse time from the fonts installed then.
     pub(crate) fn invalidate_font_inline(&mut self) -> usize {
-        let keys: Vec<u32> = ["font", "font-family"]
+        self.invalidate_inline_named(&["font", "font-family"])
+    }
+
+    /// Re-parses every inline `style` that declares one of `names`.
+    fn invalidate_inline_named(&mut self, names: &[&str]) -> usize {
+        let keys: Vec<u32> = names
             .iter()
             .filter_map(|k| self.name_ids.get(*k).copied())
             .collect();
@@ -2229,6 +2234,21 @@ pub(crate) fn recompile_for_fonts() {
     );
     with_tree(|t| {
         t.invalidate_font_inline();
+        t.mark_dirty();
+    });
+}
+
+/// The app's `--shading` effects were replaced (`gpui::reload_app_effects`): sk-css resolves an
+/// effect's name and arguments when a sheet compiles or an inline style parses, so recompile,
+/// re-parse inline `--shading` and restyle. A renamed or removed effect then degrades as an unknown
+/// one does.
+pub fn effects_changed() {
+    recompile_sheet(
+        crate::perf::FullReason::Stylesheet,
+        "the app's `--shading` effects were rebuilt — recompiling the stylesheet",
+    );
+    with_tree(|t| {
+        t.invalidate_inline_named(&["--shading"]);
         t.mark_dirty();
     });
 }

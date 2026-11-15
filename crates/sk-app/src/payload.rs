@@ -443,8 +443,8 @@ fn bundle_payload_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
         .then(|| contents.join("Resources").join("app.skpk"))
 }
 
-/// Hands the payload's `--shading` effects to the renderers and the CSS registry; before the first
-/// window, since both read them once. `SK_EFFECTS_DIR` wins over the payload.
+/// Hands the payload's `--shading` effects to the renderers and the CSS registry, before the first
+/// window. `SK_EFFECTS_DIR` wins over the payload.
 pub fn install_effects() {
     let Some(loaded) = get() else { return };
     let mut manifest = None;
@@ -461,7 +461,13 @@ pub fn install_effects() {
         }
     }
     let Some(manifest) = manifest else { return };
-    let effects = gpui::AppEffects::new("the app's payload", manifest, files);
+    let effects = match gpui::AppEffects::new("the app's payload", manifest, files) {
+        Ok(effects) => effects,
+        Err(error) => {
+            eprintln!("[prod] {error} — the app's own `--shading` effects are unavailable");
+            return;
+        }
+    };
     if !gpui::set_app_effects(effects) && std::env::var_os(gpui::APP_EFFECTS_DIR_ENV).is_some() {
         eprintln!(
             "[prod] {} is set, so the app's own `--shading` effects come from it, not from the payload",
@@ -614,6 +620,15 @@ pub fn host_info_json() -> String {
         ("features", Json::arr(features)),
         ("jscPin", Json::s(env!("SK_JSC_PIN"))),
         ("payloadFormat", Json::n(f64::from(sk_payload::FORMAT))),
+        // What a dev host takes from `sk dev` in place, besides JS modules (`dev::poll_frame`).
+        (
+            "devReload",
+            Json::arr(if cfg!(feature = "prod") {
+                Vec::new()
+            } else {
+                vec![Json::s("effects")]
+            }),
+        ),
         (
             "profile",
             Json::s(if cfg!(debug_assertions) {

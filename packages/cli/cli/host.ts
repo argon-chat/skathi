@@ -57,6 +57,8 @@ export interface HostInfo {
   jscPin: string;
   payloadFormat: number;
   profile: string;
+  /** What a dev host reloads in place from `sk dev` besides JS modules; absent on older hosts. */
+  devReload?: string[];
   /** A host built with the native AOT loader: what an app image must be compiled against. */
   aot?: HostAot | null;
 }

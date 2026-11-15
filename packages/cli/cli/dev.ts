@@ -5,8 +5,10 @@
 // -p sk-app`); the cached dev host of this version; a download of it from the release (host-fetch.ts).
 //
 // An app with shaders/*.slang has them compiled into <dist>/effects, which the host reads through
-// SK_EFFECTS_DIR, and recompiled on every change. Renderers build effect pipelines once, so a good
-// rebuild restarts the host; a failed one prints the diagnostics and keeps the last good build running.
+// SK_EFFECTS_DIR, and recompiled on every change. A good rebuild reaches the running app as a message
+// beside the HMR changes.json and replaces its effects in place; a host that predates that (its
+// --sk-host-info has no `devReload: ["effects"]`) is restarted. A failed rebuild prints the
+// diagnostics and keeps the last good build running.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -14,7 +16,7 @@ import { join } from "node:path";
 import { compileAppEffects, EffectsError, formatProblems, hasAppEffects, writeEffectFiles } from "../effects/compile";
 import { resolveCompiler } from "../effects/redslangc";
 import { loadAppConfig } from "./config";
-import { watchAppEffects, type EffectsWatch } from "./effects";
+import { devEffectsWatch, type EffectsWatch } from "./effects";
 import { cachedHost, checkHost, DEV_HOST, HostError, hostInfo, PKG_DIR, REPO_ROOT, CLI_VERSION } from "./host";
 import { fetchHost, type OnBytes } from "./host-fetch";
 import { currentPlatform, hostsFor, repoHostExe } from "./platform";
@@ -54,6 +56,14 @@ export async function devHost(
     await fetchHost({ variant: DEV_HOST, log, onBytes: options.onBytes });
   }
   return cached;
+}
+
+function reloadsEffects(exe: string): boolean {
+  try {
+    return hostInfo(exe).devReload?.includes("effects") ?? false;
+  } catch {
+    return false;
+  }
 }
 
 export async function dev(
@@ -128,17 +138,17 @@ export async function dev(
   let restarting = false;
   let effectsWatch: EffectsWatch | null = null;
   if (compiler) {
-    effectsWatch = watchAppEffects({
+    effectsWatch = devEffectsWatch({
       appRoot: config.appRoot,
+      dist,
       out: effectsDir,
       compiler,
-      onBuilt: (effects) => {
-        console.log(
-          `${c.cyan("↻")} effects rebuilt (${effects.compiled.map((e) => e.effect.name).join(", ")}) — restarting the app`,
-        );
+      inPlace: reloadsEffects(exe),
+      restart: () => {
         restarting = true;
         host.kill();
       },
+      log: (line) => console.log(`${c.cyan("↻")} ${line}`),
       onError: (text) => {
         console.error(`${c.red("effects")}: ${text}`);
         console.error(c.dim("the app keeps running the last good build"));
