@@ -151,7 +151,9 @@ export function stagedExe(source = DEFAULT_EXE): string {
   // Leftovers from runs that died before their exit hook: anything still locked belongs to a live
   // process and simply refuses to delete, which is the test.
   for (const name of readdirSync(dir)) {
-    if (!/^sk-app-sktest-\d+\.exe$/.test(name)) continue;
+    const owner = /^sk-app-sktest-(\d+)\.exe$/.exec(name);
+    // Between specs a live runner's copy is unlocked, so a nested runner must not take it.
+    if (!owner || runnerAlive(Number(owner[1]))) continue;
     try {
       rmSync(join(dir, name));
     } catch {}
@@ -160,6 +162,16 @@ export function stagedExe(source = DEFAULT_EXE): string {
   cpSync(source, staged);
   exeCopy = staged;
   return staged;
+}
+
+function runnerAlive(pid: number): boolean {
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 export function releaseStagedExe() {
