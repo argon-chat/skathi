@@ -14,8 +14,8 @@
   --warn: #fbbf24;
   --bad: #f87171;
   --radius: 14px;
-  --font: "Segoe UI", system-ui, sans-serif;
-  --mono: "Cascadia Mono", Consolas, monospace;
+  --font: system-ui, sans-serif;
+  --mono: monospace;
 }
 
 .row {

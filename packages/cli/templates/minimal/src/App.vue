@@ -42,7 +42,7 @@ onMounted(async () => {
   gap: 20px;
   padding: 32px;
   color: #f4f4f5;
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: system-ui, sans-serif;
 }
 .card {
   width: 380px;
@@ -88,7 +88,7 @@ onMounted(async () => {
   text-align: center;
 }
 .code {
-  font-family: "Cascadia Mono", Consolas, monospace;
+  font-family: monospace;
   font-size: 13px;
   color: #d4d4d8;
 }

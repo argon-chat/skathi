@@ -120,6 +120,15 @@ fn resolve_backdrop(b: Backdrop, system_backdrop: bool) -> (Backdrop, Option<&'s
     }
 }
 
+/// Painted under the app on Linux: gpui keeps an alpha channel there for client-side decorations even
+/// on an opaque window, so a translucent app background would show the desktop. Mica's base tints.
+pub(crate) fn opaque_fill(backdrop: Backdrop, dark: bool) -> Option<gpui::Rgba> {
+    if !cfg!(target_os = "linux") || backdrop == Backdrop::Transparent {
+        return None;
+    }
+    Some(gpui::rgb(if dark { 0x202020 } else { 0xf3f3f3 }))
+}
+
 /// `appWindow.backdrop`, unless gpui stands in for the material (e.g. macOS fullscreen has no desktop picture to blur).
 pub(crate) fn effective_backdrop(b: Backdrop, drawn: bool) -> Backdrop {
     match b {
@@ -1129,6 +1138,10 @@ fn publish_visibility(snapshot: &Snapshot) {
 /// Whether the host still draws its own titlebar strip; retires once the app paints a `window-drag: move` region.
 pub fn fallback_titlebar() -> bool {
     LIVE.with(|l| l.borrow().fallback_titlebar)
+}
+
+pub fn backdrop() -> Backdrop {
+    LIVE.with(|l| l.borrow().backdrop)
 }
 
 fn display_mode(fullscreen: bool) -> sk_css::DisplayMode {

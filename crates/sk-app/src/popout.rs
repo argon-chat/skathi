@@ -34,11 +34,25 @@ impl Render for PopoutShell {
         publish_env(id, self.node, window, cx);
         report_metrics(id, self.node, window);
         frame_drawn(id, window, cx);
-        gpui::div()
+        let backdrop = POPOUTS
+            .with(|p| {
+                p.borrow()
+                    .iter()
+                    .find(|w| w.id.as_u64() == id)
+                    .map(|w| w.backdrop)
+            })
+            .unwrap_or_else(crate::window::backdrop);
+        let shell = gpui::div()
             .relative()
             .size_full()
             .text_color(gpui::white())
-            .font_family(".SystemUIFont")
+            .font_family(".SystemUIFont");
+        let shell =
+            match crate::window::opaque_fill(backdrop, crate::window::effective_dark(window)) {
+                Some(fill) => shell.bg(fill),
+                None => shell,
+            };
+        shell
             .child(sk_tree::build_subtree(self.node, window, cx))
             .children(popout_inspector_overlay(id, self.node))
     }
@@ -89,6 +103,7 @@ struct Popout {
     /// The OS draws the caption (`chrome: "default"`).
     os_chrome: bool,
     title_bar_height: f32,
+    backdrop: Backdrop,
     /// Last `(width, height)` reported to JS, so `resize` fires on change.
     last_metrics: (f32, f32),
     last_focused: bool,
@@ -901,6 +916,9 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             on_event,
             os_chrome: opts.os_chrome,
             title_bar_height: opts.title_bar_height,
+            backdrop: opts
+                .backdrop
+                .unwrap_or_else(|| crate::window::config().backdrop),
             last_metrics: (0.0, 0.0),
             last_focused: false,
             fullscreen: false,

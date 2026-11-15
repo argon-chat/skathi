@@ -674,6 +674,10 @@ impl Shell {
             .font_family(".SystemUIFont");
         #[cfg(target_os = "linux")]
         let shell = linux_chrome::wrap(shell, window);
+        let shell = match window::opaque_fill(window::backdrop(), window::effective_dark(window)) {
+            Some(fill) => shell.bg(fill),
+            None => shell,
+        };
         if !window::fallback_titlebar() {
             return shell
                 .child(sk_tree::build_root(window, cx))
