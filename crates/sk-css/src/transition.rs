@@ -38,9 +38,17 @@ pub enum TransitionProperty {
     BorderTopRightRadius,
     BorderBottomRightRadius,
     BorderBottomLeftRadius,
+    BorderTopWidth,
+    BorderRightWidth,
+    BorderBottomWidth,
+    BorderLeftWidth,
     RowGap,
     ColumnGap,
     FontSize,
+    /// Discrete: `Element.animate()` and `@keyframes` flip it halfway; a transition never animates it
+    /// (no `transition-behavior: allow-discrete`).
+    OverflowX,
+    OverflowY,
     /// The whole function list travels as one value: matched lists interpolate componentwise, never
     /// through the matrix, which would shear.
     Transform,
@@ -51,7 +59,7 @@ pub enum TransitionProperty {
     Other(Rc<str>),
 }
 
-pub const ANIMATABLE_COUNT: usize = 29;
+pub const ANIMATABLE_COUNT: usize = 33;
 
 impl TransitionProperty {
     /// By value: the enum carries an `Rc`, so it is neither `Sync` nor const-promotable.
@@ -83,11 +91,29 @@ impl TransitionProperty {
             BorderTopRightRadius,
             BorderBottomRightRadius,
             BorderBottomLeftRadius,
+            BorderTopWidth,
+            BorderRightWidth,
+            BorderBottomWidth,
+            BorderLeftWidth,
             RowGap,
             ColumnGap,
             FontSize,
             Transform,
         ]
+    }
+
+    /// What keyframes animate: the [`animatable`](Self::animatable) set and the discrete properties.
+    pub fn keyframed() -> impl Iterator<Item = TransitionProperty> {
+        Self::animatable()
+            .into_iter()
+            .chain([TransitionProperty::OverflowX, TransitionProperty::OverflowY])
+    }
+
+    pub fn is_discrete(&self) -> bool {
+        matches!(
+            self,
+            TransitionProperty::OverflowX | TransitionProperty::OverflowY
+        )
     }
 
     pub fn name(&self) -> &str {
@@ -118,6 +144,12 @@ impl TransitionProperty {
             BorderTopRightRadius => "border-top-right-radius",
             BorderBottomRightRadius => "border-bottom-right-radius",
             BorderBottomLeftRadius => "border-bottom-left-radius",
+            BorderTopWidth => "border-top-width",
+            BorderRightWidth => "border-right-width",
+            BorderBottomWidth => "border-bottom-width",
+            BorderLeftWidth => "border-left-width",
+            OverflowX => "overflow-x",
+            OverflowY => "overflow-y",
             RowGap => "row-gap",
             ColumnGap => "column-gap",
             FontSize => "font-size",
@@ -350,7 +382,7 @@ impl Collector {
                 for entry in list.iter() {
                     match expand(&entry.property) {
                         Expansion::None => {}
-                        Expansion::Props(props) => properties.push(props),
+                        Expansion::Props(props) => properties.push(transitioned(props)),
                     }
                     durations.push(duration_of(
                         &entry.duration,
@@ -372,7 +404,7 @@ impl Collector {
                 for id in list.iter() {
                     match expand(id) {
                         Expansion::None => {}
-                        Expansion::Props(props) => properties.push(props),
+                        Expansion::Props(props) => properties.push(transitioned(props)),
                     }
                 }
                 self.properties = Some(properties);
@@ -473,6 +505,11 @@ enum Expansion {
     Props(Vec<TransitionProperty>),
 }
 
+fn transitioned(mut props: Vec<TransitionProperty>) -> Vec<TransitionProperty> {
+    props.retain(|p| !p.is_discrete());
+    props
+}
+
 fn expand(id: &PropertyId) -> Expansion {
     use TransitionProperty::*;
     let name = id.name();
@@ -483,7 +520,27 @@ fn expand(id: &PropertyId) -> Expansion {
         "opacity" => one(Opacity),
         "color" => one(Color),
         "background" | "background-color" => one(BackgroundColor),
-        "border" | "border-color" => one(BorderColor),
+        "border" => Expansion::Props(vec![
+            BorderColor,
+            BorderTopWidth,
+            BorderRightWidth,
+            BorderBottomWidth,
+            BorderLeftWidth,
+        ]),
+        "border-color" => one(BorderColor),
+        "border-width" => Expansion::Props(vec![
+            BorderTopWidth,
+            BorderRightWidth,
+            BorderBottomWidth,
+            BorderLeftWidth,
+        ]),
+        "border-top-width" => one(BorderTopWidth),
+        "border-right-width" => one(BorderRightWidth),
+        "border-bottom-width" => one(BorderBottomWidth),
+        "border-left-width" => one(BorderLeftWidth),
+        "overflow" => Expansion::Props(vec![OverflowX, OverflowY]),
+        "overflow-x" => one(OverflowX),
+        "overflow-y" => one(OverflowY),
         "text-decoration-color" => one(TextDecorationColor),
         "fill" => one(Fill),
         "stroke" => one(Stroke),
@@ -809,6 +866,22 @@ mod tests {
         assert_eq!(covered(&s), vec![TransitionProperty::Transform]);
         let s = specs("transition: opacity 1s, opacity 2s");
         assert_eq!(covered(&s), vec![TransitionProperty::Opacity]);
+    }
+
+    #[test]
+    fn border_widths_transition_and_overflow_does_not() {
+        let s = specs("transition: border-width 1s, overflow 1s");
+        assert_eq!(
+            covered(&s),
+            vec![
+                TransitionProperty::BorderTopWidth,
+                TransitionProperty::BorderRightWidth,
+                TransitionProperty::BorderBottomWidth,
+                TransitionProperty::BorderLeftWidth,
+            ]
+        );
+        assert!(!covered(&specs("transition: all 1s")).contains(&TransitionProperty::OverflowX));
+        assert!(animates("overflow") && animates("border-top-width"));
     }
 
     const EPS: f32 = 1e-3;

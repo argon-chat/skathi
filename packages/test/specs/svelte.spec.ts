@@ -106,6 +106,9 @@ describe("svelte", () => {
       ).toBe(true);
       await app.locator("#toggle").click();
       bunExpect(await until(`!document.querySelector("#panel")`)).toBe(true);
+      // slide animates overflow and the border widths along with height and padding.
+      const { entries } = await app.logs(0);
+      bunExpect(entries.filter((e) => e.text.includes("is not animatable here")).map((e) => e.text)).toEqual([]);
     },
     T,
   );

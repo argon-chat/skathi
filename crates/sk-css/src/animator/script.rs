@@ -279,7 +279,7 @@ impl Animator {
         };
         let mut r = StyleRefinement::default();
         apply_script_keyframes(&mut r, base, &a.frames, progress);
-        for property in TransitionProperty::animatable() {
+        for property in TransitionProperty::keyframed() {
             if let Slot::Value(v) = slot_of(&r, &property) {
                 if let Some(css) = css_value(v) {
                     out.push((property.name().to_string(), css));
@@ -317,7 +317,7 @@ fn apply_script_keyframes(
     progress: f64,
 ) {
     let p = progress as f32;
-    for property in TransitionProperty::animatable() {
+    for property in TransitionProperty::keyframed() {
         let mut list: Vec<(f32, Option<&Keyframe>)> = Vec::new();
         for k in frames
             .steps
@@ -394,6 +394,13 @@ fn css_value(v: Animatable) -> Option<String> {
         Animatable::Pixels(p) => format!("{}px", p.as_f32()),
         Animatable::Rems(r) => format!("{}rem", r.0),
         Animatable::Transform(t) => crate::transform_css(t),
+        Animatable::Overflow(o) => match o {
+            gpui::Overflow::Visible => "visible",
+            gpui::Overflow::Clip => "clip",
+            gpui::Overflow::Hidden => "hidden",
+            gpui::Overflow::Scroll => "scroll",
+        }
+        .to_string(),
         Animatable::Effect(_) | Animatable::EffectFade(..) => return None,
     })
 }
@@ -855,6 +862,41 @@ mod tests {
         }];
         let (k, _) = script_keyframes(&f, &vars, &env);
         assert_eq!(k.steps[0].style.opacity, Some(0.25));
+    }
+
+    #[test]
+    fn overflow_flips_halfway_and_border_widths_interpolate() {
+        let (mut a, t0) = animator();
+        let k = frames(&[
+            (0.0, "overflow: visible; border-top-width: 0px"),
+            (1.0, "overflow: hidden; border-top-width: 10px"),
+        ]);
+        a.script_set(1, 2, k, timing(1000.0));
+        a.script_clock(1, playing(0.0));
+        let overlay = |ms| {
+            a.overlay(2, &StyleRefinement::default(), at(t0, ms))
+                .expect("in effect")
+        };
+        let early = overlay(250);
+        assert_eq!(early.overflow.x, Some(gpui::Overflow::Visible));
+        assert_eq!(
+            early.border_widths.top,
+            Some(gpui::AbsoluteLength::Pixels(gpui::px(2.5)))
+        );
+        let late = overlay(750);
+        assert_eq!(late.overflow.x, Some(gpui::Overflow::Hidden));
+        assert_eq!(late.overflow.y, Some(gpui::Overflow::Hidden));
+        assert_eq!(
+            a.script_values(1, &StyleRefinement::default(), at(t0, 750))
+                .unwrap()
+                .into_iter()
+                .filter(|(name, _)| name.starts_with("overflow"))
+                .collect::<Vec<_>>(),
+            vec![
+                ("overflow-x".to_string(), "hidden".to_string()),
+                ("overflow-y".to_string(), "hidden".to_string())
+            ]
+        );
     }
 
     #[test]

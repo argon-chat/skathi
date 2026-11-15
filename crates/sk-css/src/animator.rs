@@ -29,6 +29,7 @@ enum Animatable {
     /// A cross-fade between different effects: the first at `1 - t` beneath the second at `t`.
     EffectFade(EffectSpec, EffectSpec, f32),
     Transform(TransformSpec),
+    Overflow(gpui::Overflow),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -154,6 +155,18 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
         BorderTopRightRadius => slot_absolute(r.corner_radii.top_right),
         BorderBottomRightRadius => slot_absolute(r.corner_radii.bottom_right),
         BorderBottomLeftRadius => slot_absolute(r.corner_radii.bottom_left),
+        BorderTopWidth => slot_absolute(r.border_widths.top),
+        BorderRightWidth => slot_absolute(r.border_widths.right),
+        BorderBottomWidth => slot_absolute(r.border_widths.bottom),
+        BorderLeftWidth => slot_absolute(r.border_widths.left),
+        OverflowX => r
+            .overflow
+            .x
+            .map_or(Slot::Missing, |o| Slot::Value(Animatable::Overflow(o))),
+        OverflowY => r
+            .overflow
+            .y
+            .map_or(Slot::Missing, |o| Slot::Value(Animatable::Overflow(o))),
         RowGap => slot_definite(r.gap.height),
         ColumnGap => slot_definite(r.gap.width),
         FontSize => slot_absolute(r.text.font_size),
@@ -287,6 +300,19 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
         BorderTopRightRadius => r.corner_radii.top_right = to_absolute(v),
         BorderBottomRightRadius => r.corner_radii.bottom_right = to_absolute(v),
         BorderBottomLeftRadius => r.corner_radii.bottom_left = to_absolute(v),
+        BorderTopWidth => r.border_widths.top = to_absolute(v),
+        BorderRightWidth => r.border_widths.right = to_absolute(v),
+        BorderBottomWidth => r.border_widths.bottom = to_absolute(v),
+        BorderLeftWidth => r.border_widths.left = to_absolute(v),
+        OverflowX | OverflowY => {
+            if let Animatable::Overflow(o) = v {
+                if matches!(p, OverflowX) {
+                    r.overflow.x = Some(o);
+                } else {
+                    r.overflow.y = Some(o);
+                }
+            }
+        }
         RowGap => r.gap.height = definite(),
         ColumnGap => r.gap.width = definite(),
         FontSize => r.text.font_size = to_absolute(v),
@@ -350,6 +376,12 @@ fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
         BorderTopRightRadius => r.corner_radii.top_right = None,
         BorderBottomRightRadius => r.corner_radii.bottom_right = None,
         BorderBottomLeftRadius => r.corner_radii.bottom_left = None,
+        BorderTopWidth => r.border_widths.top = None,
+        BorderRightWidth => r.border_widths.right = None,
+        BorderBottomWidth => r.border_widths.bottom = None,
+        BorderLeftWidth => r.border_widths.left = None,
+        OverflowX => r.overflow.x = None,
+        OverflowY => r.overflow.y = None,
         RowGap => r.gap.height = None,
         ColumnGap => r.gap.width = None,
         FontSize => r.text.font_size = None,
@@ -395,6 +427,12 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
         BorderTopRightRadius => dst.corner_radii.top_right = src.corner_radii.top_right,
         BorderBottomRightRadius => dst.corner_radii.bottom_right = src.corner_radii.bottom_right,
         BorderBottomLeftRadius => dst.corner_radii.bottom_left = src.corner_radii.bottom_left,
+        BorderTopWidth => dst.border_widths.top = src.border_widths.top,
+        BorderRightWidth => dst.border_widths.right = src.border_widths.right,
+        BorderBottomWidth => dst.border_widths.bottom = src.border_widths.bottom,
+        BorderLeftWidth => dst.border_widths.left = src.border_widths.left,
+        OverflowX => dst.overflow.x = src.overflow.x,
+        OverflowY => dst.overflow.y = src.overflow.y,
         RowGap => dst.gap.height = src.gap.height,
         ColumnGap => dst.gap.width = src.gap.width,
         FontSize => dst.text.font_size = src.text.font_size,
@@ -448,8 +486,13 @@ fn initial(p: &TransitionProperty) -> Option<Animatable> {
         | BorderTopRightRadius
         | BorderBottomRightRadius
         | BorderBottomLeftRadius
+        | BorderTopWidth
+        | BorderRightWidth
+        | BorderBottomWidth
+        | BorderLeftWidth
         | RowGap
         | ColumnGap => Some(Animatable::Pixels(Pixels::from(0.0))),
+        OverflowX | OverflowY => Some(Animatable::Overflow(gpui::Overflow::Visible)),
         Transform => Some(Animatable::Transform(TransformSpec::IDENTITY)),
         _ => None,
     }
@@ -2183,7 +2226,7 @@ fn apply_keyframes(
     spec: &AnimationSpec,
     progress: f32,
 ) {
-    for property in TransitionProperty::animatable() {
+    for property in TransitionProperty::keyframed() {
         let declares: &dyn Fn(&StyleRefinement) -> bool =
             &|r: &StyleRefinement| slot_of(r, &property) != Slot::Missing;
         let Some(segment) = frames.segment(declares, progress) else {
