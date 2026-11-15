@@ -1,8 +1,6 @@
 // The app APIs the web lacks: `appPermissions`, `appStorage`, `appShell`, `appCapture`, `appLaunch`.
 // The host crates install them natively; a host without one gets an inert stand-in that says so once.
 
-import { warnCompat } from "./compat";
-
 export interface PermissionRow {
   name: string;
   state: SkPermissionState;
@@ -147,133 +145,15 @@ export interface ShellHost extends AppShell {
   openContent(url: string): Promise<void>;
 }
 
-const host = globalThis as {
-  __SK_PERMISSIONS__?: AppPermissions;
-  __SK_STORAGE__?: AppStorage;
-  __SK_SHELL__?: ShellHost;
-  __SK_CAPTURE__?: AppCapture;
-  __SK_LAUNCH__?: AppLaunch;
-};
+declare const __SK_PERMISSIONS__: AppPermissions;
+declare const __SK_STORAGE__: AppStorage;
+declare const __SK_SHELL__: ShellHost;
+declare const __SK_CAPTURE__: AppCapture;
+declare const __SK_LAUNCH__: AppLaunch;
 
-const PERMISSION_NAMES: SkPermissionName[] = [
-  "microphone",
-  "camera",
-  "display-capture",
-  "notifications",
-  "clipboard-read",
-  "clipboard-write",
-  "geolocation",
-];
-
-function inert<T>(key: string, why: string, members: Record<string, unknown>, fallback: (name: string) => unknown): T {
-  return new Proxy(
-    {},
-    {
-      get(_t, name) {
-        warnCompat(key, why);
-        const k = String(name);
-        return Object.prototype.hasOwnProperty.call(members, k) ? members[k] : fallback(k);
-      },
-    },
-  ) as T;
-}
-
-function noDesktop(name: string): AppDesktopError {
-  const e: AppDesktopError = new Error(`${name}: no desktop host`);
-  e.name = "NotSupportedError";
-  e.code = "ENOSYS";
-  return e;
-}
-
-export const appPermissions: AppPermissions =
-  host.__SK_PERMISSIONS__ ??
-  inert<AppPermissions>(
-    "appPermissions",
-    "the permissions host is missing (sk_permissions::install did not run) — `appPermissions` is inert and every capability reads as 'unsupported'.",
-    {
-      platform: "this platform",
-      names: PERMISSION_NAMES.slice(),
-      query: () => "unsupported",
-      list: () => PERMISSION_NAMES.map((name) => ({ name, state: "unsupported", canRequest: false })),
-      request: () => Promise.resolve("unsupported"),
-    },
-    () => () => undefined,
-  );
-
-export const appStorage: AppStorage =
-  host.__SK_STORAGE__ ??
-  inert<AppStorage>(
-    "appStorage",
-    "the storage host is missing (sk_storage::install did not run, or the host was built without the `storages` feature) — `appStorage` is inert and localStorage does not persist.",
-    {
-      kinds: [],
-      folder: "",
-      encrypted: false,
-      info: () => ({
-        folder: "",
-        file: "",
-        encrypted: false,
-        bytes: 0,
-        loaded: false,
-        pending: false,
-        provider: "",
-        kinds: [],
-        error: "no storage host",
-        indexedDB: null,
-      }),
-      flush: () => false,
-    },
-    // A wrong path is worse than none: the app would write somewhere real.
-    (name) => () => {
-      throw new TypeError(`appStorage.${name} is unavailable: no storage host`);
-    },
-  );
-
-export const shellHost: ShellHost | null = host.__SK_SHELL__ ?? null;
-
-export const appShell: AppShell =
-  shellHost ??
-  inert<AppShell>(
-    "appShell",
-    "the desktop host is missing (sk_desktop::install did not run) — `appShell` is inert and every call rejects.",
-    {},
-    (name) => () => Promise.reject(noDesktop(`appShell.${name}`)),
-  );
-
-export const appCapture: AppCapture =
-  host.__SK_CAPTURE__ ??
-  inert<AppCapture>(
-    "appCapture",
-    "the desktop host is missing (sk_desktop::install did not run) — `appCapture` has no sources.",
-    {
-      permission: () => ({ state: "unsupported", canRequest: false, deniedBySystem: false }),
-      requestPermission: () => Promise.resolve("unsupported"),
-      permissionHint: () => "",
-      getSources: () => Promise.reject(noDesktop("appCapture.getSources")),
-      setPendingSource: () => false,
-    },
-    () => () => undefined,
-  );
-
-export const appLaunch: AppLaunch =
-  host.__SK_LAUNCH__ ??
-  inert<AppLaunch>(
-    "appLaunch",
-    "the desktop host is missing (sk_desktop::install did not run) — `appLaunch` is empty.",
-    {
-      argv: Object.freeze([]),
-      cwd: "",
-      url: null,
-      paths: Object.freeze([]),
-      singleInstance: false,
-      registerProtocol: () => {
-        throw new TypeError("appLaunch.registerProtocol is unavailable: no desktop host");
-      },
-      unregisterProtocol: () => false,
-      isProtocolRegistered: () => false,
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-      dispatchEvent: () => true,
-    },
-    () => () => undefined,
-  );
+export const appPermissions: AppPermissions = __SK_PERMISSIONS__;
+export const appStorage: AppStorage = __SK_STORAGE__;
+export const shellHost: ShellHost = __SK_SHELL__;
+export const appShell: AppShell = __SK_SHELL__;
+export const appCapture: AppCapture = __SK_CAPTURE__;
+export const appLaunch: AppLaunch = __SK_LAUNCH__;

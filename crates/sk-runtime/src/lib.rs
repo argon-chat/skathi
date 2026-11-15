@@ -11,11 +11,13 @@
 //! - The uncaught-JS handler is a pure sink; errors are drained after each
 //!   pump, never acted on re-entrantly.
 
+pub mod app_devtools;
 pub mod bridge;
 pub mod frames;
 mod history;
 pub mod host;
 pub mod runtime;
+pub mod standins;
 pub mod testing;
 mod unsupported;
 

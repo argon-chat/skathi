@@ -47,39 +47,5 @@ export interface AppHotkeys {
   cancelCapture(): void;
   onFired(listener: (event: HotkeyEvent) => void): () => void;
 }
-declare const __sk_appHotkeys: AppHotkeys | undefined;
-const native = typeof __sk_appHotkeys === "object" ? __sk_appHotkeys : undefined;
-const unsupported = (): Error => {
-  const error = new Error("global hotkeys are unavailable in this host");
-  error.name = "NotSupportedError";
-  return error;
-};
-/** Direct native methods; listeners stay in JavaScriptCore, with no JSON transport. */
-export const appHotkeys: AppHotkeys = Object.freeze({
-  available: native?.available ?? false,
-  setBindings(bindings: readonly HotkeyBinding[]): boolean {
-    if (native) return native.setBindings(bindings);
-    if (bindings.length === 0) return false;
-    throw unsupported();
-  },
-  status(): HotkeyStatus {
-    if (native) return native.status();
-    return { running: false, platform: "", accessibilityGranted: false, error: unsupported().message, restarts: 0 };
-  },
-  requestAccessibility(): boolean {
-    return native ? native.requestAccessibility() : false;
-  },
-  restart(): boolean {
-    if (native) return native.restart();
-    throw unsupported();
-  },
-  captureOnce(): Promise<HotkeyChord> {
-    return native ? native.captureOnce() : Promise.reject(unsupported());
-  },
-  cancelCapture(): void {
-    native?.cancelCapture();
-  },
-  onFired(listener: (event: HotkeyEvent) => void): () => void {
-    return native ? native.onFired(listener) : () => {};
-  },
-});
+declare const __sk_appHotkeys: AppHotkeys;
+export const appHotkeys: AppHotkeys = __sk_appHotkeys;

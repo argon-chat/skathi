@@ -32,19 +32,5 @@ export interface AppTray {
   /** Replace the complete tray model; null removes it. Native updates coalesce. */
   set(options: TrayOptions | null): void;
 }
-declare const __sk_appTray: AppTray | undefined;
-const native = typeof __sk_appTray === "object" ? __sk_appTray : undefined;
-/** Direct native methods; callbacks stay in JavaScriptCore, with no JSON transport. */
-export const appTray: AppTray = Object.freeze({
-  available: native?.available ?? false,
-  set(options: TrayOptions | null): void {
-    if (native) {
-      native.set(options);
-      return;
-    }
-    if (options === null) return;
-    const error = new Error("native tray is unavailable in this host");
-    error.name = "NotSupportedError";
-    throw error;
-  },
-});
+declare const __sk_appTray: AppTray;
+export const appTray: AppTray = __sk_appTray;

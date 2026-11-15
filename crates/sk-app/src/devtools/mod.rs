@@ -161,26 +161,6 @@ pub fn set_enabled(on: bool) -> Result<bool, String> {
     Ok(on)
 }
 
-pub fn state_json() -> String {
-    let inspectors = crate::inspector::children().len();
-    Json::obj(vec![
-        ("enabled", Json::Bool(enabled())),
-        ("locked", Json::Bool(locked())),
-        (
-            "port",
-            match port() {
-                Some(p) => Json::n(f64::from(p)),
-                None => Json::Null,
-            },
-        ),
-        ("pid", Json::n(std::process::id() as f64)),
-        ("key", Json::Bool(crate::window::devtools_key_enabled())),
-        ("inspectors", Json::n(inspectors as f64)),
-        ("slot", Json::s(crate::slot::dir().display().to_string())),
-    ])
-    .to_json()
-}
-
 /// Port and token are fresh every time so a client dropped at `disable()` cannot walk back in.
 /// Failures are reported and ignored.
 fn start_listener() {
@@ -384,63 +364,43 @@ sk_runtime::host_fn!(fn sk_devtools_targets(_g, _args) {
     JsRuntime::with(|rt| rt.ctx().string(&payload).0)
 });
 
-// `__sk_devtools_state()` — `{enabled, locked, port, pid, key, inspectors, slot}`.
-sk_runtime::host_fn!(fn sk_devtools_state(_g, _args) {
-    let payload = state_json();
-    JsRuntime::with(|rt| rt.ctx().string(&payload).0)
-});
+struct AppDevtools;
 
-// `__sk_devtools_set_enabled(on)` — the state afterwards, or `{error}`.
-// Returns the settled state so a refused caller (`SK_DEVTOOLS=1`) sees what is actually true.
-sk_runtime::host_fn!(fn sk_devtools_set_enabled(_g, args) {
-    let on = args.arg(0).as_bool().unwrap_or(false);
-    let payload = match set_enabled(on) {
-        Ok(_) => {
-            if on {
-                install_tees_once();
-            }
-            state_json()
+impl sk_runtime::app_devtools::DevtoolsHost for AppDevtools {
+    fn info(&self) -> sk_runtime::app_devtools::DevtoolsInfo {
+        sk_runtime::app_devtools::DevtoolsInfo {
+            enabled: enabled(),
+            locked: locked(),
+            port: port(),
+            pid: std::process::id(),
+            key: crate::window::devtools_key_enabled(),
+            inspectors: crate::inspector::children().len(),
+            slot: crate::slot::dir().display().to_string(),
         }
-        Err(e) => Json::obj(vec![("error", Json::s(e))]).to_json(),
-    };
-    JsRuntime::with(|rt| rt.ctx().string(&payload).0)
-});
+    }
 
-// `__sk_devtools_open()` — programmatic F12. `{opened}` or `{error}`.
-// Same entry point as the key (debounce, raise-existing), so a menu item and F12 agree.
-sk_runtime::host_fn!(fn sk_devtools_open(_g, _args) {
-    let payload = if !enabled() {
-        Json::obj(vec![(
-            "error",
-            Json::s(
-                "the devtools are disabled in this process — call appDevtools.enable() first",
-            ),
-        )])
-        .to_json()
-    } else {
+    fn set_enabled(&self, on: bool) -> Result<bool, String> {
+        set_enabled(on)?;
+        if on {
+            install_tees_once();
+        }
+        Ok(enabled())
+    }
+
+    // Same entry point as the key (debounce, raise-existing), so a menu item and F12 agree.
+    fn open(&self) -> Result<bool, String> {
+        if !enabled() {
+            return Err(
+                "the devtools are disabled in this process — call appDevtools.enable() first"
+                    .into(),
+            );
+        }
         let window = crate::main_window_id();
-        let ran = sk_runtime::with_app(|cx| crate::inspector::open_for_window(window, cx));
-        match ran {
-            Some(()) => Json::obj(vec![
-                ("opened", Json::Bool(true)),
-                (
-                    "window",
-                    match window {
-                        Some(w) => Json::n(w as f64),
-                        None => Json::Null,
-                    },
-                ),
-            ])
-            .to_json(),
-            None => Json::obj(vec![(
-                "error",
-                Json::s("appDevtools.open(): called outside a published phase"),
-            )])
-            .to_json(),
-        }
-    };
-    JsRuntime::with(|rt| rt.ctx().string(&payload).0)
-});
+        sk_runtime::with_app(|cx| crate::inspector::open_for_window(window, cx))
+            .map(|()| true)
+            .ok_or_else(|| "appDevtools.open(): called outside a published phase".into())
+    }
+}
 
 fn read_target(dir: &std::path::Path) -> Option<Json> {
     let text = std::fs::read_to_string(dir.join("devtools.json")).ok()?;
@@ -626,13 +586,7 @@ pub fn install(rt: &JsRuntime) {
     );
     rt.register("__sk_devtools_console", 3, sk_devtools_console as *const _);
     rt.register("__sk_devtools_targets", 0, sk_devtools_targets as *const _);
-    rt.register("__sk_devtools_state", 0, sk_devtools_state as *const _);
-    rt.register(
-        "__sk_devtools_set_enabled",
-        1,
-        sk_devtools_set_enabled as *const _,
-    );
-    rt.register("__sk_devtools_open", 0, sk_devtools_open as *const _);
+    unsafe { sk_runtime::app_devtools::install(rt.raw(), Some(Box::new(AppDevtools))) };
     net::install(rt);
     if enabled() {
         install_tees_once();

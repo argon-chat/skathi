@@ -1,7 +1,6 @@
 import { mark, vacant } from "./realm";
 import { shellHost } from "../appapi";
 import type { AppDesktopError } from "../appapi";
-import { warnCompat } from "../compat";
 import { CONTENT_SCHEMES, SCHEME_RE, adviseScheme } from "./links";
 
 // Transient activation: a keydown or mousedown the host delivered in the last five seconds
@@ -51,13 +50,6 @@ export const fsHost = typeof __SK_FS__ === "object" ? __SK_FS__ : null;
  * neither side alone is the security line. Never throws; a failure is a console warning.
  */
 export function openContentUrl(url: string, via: string): void {
-  if (!shellHost) {
-    warnCompat(
-      "shell:absent",
-      `${via}: the desktop host is missing (sk_desktop::install did not run) — the link was not ` + `opened.`,
-    );
-    return;
-  }
   let href = url;
   try {
     if (typeof URL === "function") href = new URL(url).href;

@@ -32,7 +32,6 @@ import { activeElement } from "./focus";
 import { warnCompat } from "../compat";
 import { interceptGlobalTarget, isMirrorNode } from "./listeners";
 import { cssPropName, cssomName } from "./inline-style";
-import { installFonts } from "../fonts";
 import { installWaapi } from "../waapi";
 import { ElementProto } from "./protos";
 import { isMirrorEl } from "./controls";
@@ -391,9 +390,6 @@ if (doc) {
     }
   }
 }
-
-// -- web fonts: `FontFace`, `FontFaceSet`, `document.fonts`. Inert without the host's loader; a reload takes over the host's listener.
-installFonts(globalThis as unknown as Record<string, unknown>, doc);
 
 // -- View Transitions: `document.startViewTransition`, `activeViewTransition`, `ViewTransition`. Inert without the host.
 const attachViewTransitions = (globalThis as { __sk_view_transitions_attach?: (document: object) => void })

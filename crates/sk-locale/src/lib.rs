@@ -2,11 +2,12 @@
 //! Built-in strings keep `{app}` the grammatical subject with no gendered verb, so any app name fits.
 
 use std::collections::HashMap;
-use std::ffi::c_void;
 use std::sync::{Mutex, MutexGuard, OnceLock, RwLock};
 
+use sk_runtime::host;
+use sk_runtime::redjs::glue;
 use sk_runtime::redjs::webapi::navigator;
-use sk_runtime::redjs::webapi::util::read_string;
+use sk_runtime::redjs::webapi::util::{atom, js_string, make_fn, NULL, UNDEF};
 use sk_runtime::{host_fn, JsRuntime};
 
 include!(concat!(env!("OUT_DIR"), "/builtin.rs"));
@@ -206,20 +207,6 @@ pub fn app_name(name: Option<&str>) -> String {
     }
 }
 
-fn js_string(s: &str) -> u64 {
-    JsRuntime::with(|rt| rt.ctx().string(s).0)
-}
-
-fn state_json() -> String {
-    serde_json::json!({
-        "language": language(),
-        "override": language_override(),
-        "preferences": preferences(),
-        "available": available(),
-    })
-    .to_string()
-}
-
 fn define_json(json: &str) -> Result<(), String> {
     let all: HashMap<String, HashMap<String, String>> = serde_json::from_str(json)
         .map_err(|e| format!("appLocale.define expects {{ tag: {{ key: text }} }}: {e}"))?;
@@ -232,41 +219,74 @@ fn define_json(json: &str) -> Result<(), String> {
     Ok(())
 }
 
-host_fn!(fn sk_locale_state(_g, _args) {
-    js_string(&state_json())
+fn arg_text(v: serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s,
+        v => v.to_string(),
+    }
+}
+
+host_fn!(fn resolved_get(g, _args) {
+    unsafe { js_string(g, &language()) }
 });
 
-host_fn!(fn sk_locale_set_language(g, args) {
-    let tag = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    js_string(&set_language(Some(&tag)).err().unwrap_or_default())
+host_fn!(fn language_get(g, _args) {
+    match language_override() {
+        Some(tag) => unsafe { js_string(g, &tag) },
+        None => NULL,
+    }
 });
 
-host_fn!(fn sk_locale_define(g, args) {
-    let json = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    js_string(&define_json(&json).err().unwrap_or_default())
+host_fn!(fn language_set(g, args) {
+    let v = args.arg(0).0;
+    let tag = if v == NULL || v == UNDEF { None } else { unsafe { host::string_arg(g, v) } };
+    match set_language(tag.as_deref()) {
+        Ok(()) => UNDEF,
+        Err(e) => unsafe { host::throw(g, "RangeError", &e) },
+    }
 });
 
-host_fn!(fn sk_locale_t(g, args) {
-    let key = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    let raw = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
-    let named: HashMap<String, String> = serde_json::from_str(&raw).unwrap_or_default();
+host_fn!(fn available_get(g, _args) {
+    unsafe { host::frozen_strings(g, &available()) }
+});
+
+host_fn!(fn define_js(g, args) {
+    let json = unsafe { host::stringify(g, args.arg(0).0) }.unwrap_or_default();
+    match define_json(&json) {
+        Ok(()) => UNDEF,
+        Err(e) => unsafe { host::throw(g, "TypeError", &e) },
+    }
+});
+
+host_fn!(fn t_js(g, args) {
+    let key = unsafe { host::string_arg(g, args.arg(0).0) }.unwrap_or_default();
+    let named: HashMap<String, serde_json::Value> = unsafe { host::stringify(g, args.arg(1).0) }
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
+    let named: Vec<(String, String)> = named.into_iter().map(|(k, v)| (k, arg_text(v))).collect();
     let named: Vec<(&str, &str)> = named.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-    js_string(&t(&key, &named))
+    unsafe { js_string(g, &t(&key, &named)) }
 });
 
+/// `appLocale`, as the hidden global `__sk_appLocale`.
 pub fn install(rt: &JsRuntime) {
-    let fns: &[(&str, u32, *const c_void)] = &[
-        ("__sk_locale_state", 0, sk_locale_state as *const _),
-        (
-            "__sk_locale_set_language",
-            1,
-            sk_locale_set_language as *const _,
-        ),
-        ("__sk_locale_define", 1, sk_locale_define as *const _),
-        ("__sk_locale_t", 2, sk_locale_t as *const _),
-    ];
-    for (name, arity, f) in fns {
-        rt.register(name, *arity, *f);
+    unsafe {
+        let g = rt.raw();
+        let obj = host::install_object(g, "__sk_appLocale", UNDEF);
+        host::getter(g, obj, "resolved", resolved_get);
+        let name = atom(g, "language");
+        glue::rjs_define_accessor(
+            g,
+            obj,
+            name,
+            make_fn(g, "get language", 0, language_get),
+            make_fn(g, "set language", 1, language_set),
+            0,
+        );
+        glue::rjs_atom_free(g, name);
+        host::getter(g, obj, "available", available_get);
+        host::method(g, obj, "define", 1, define_js);
+        host::method(g, obj, "t", 2, t_js);
     }
 }
 
@@ -458,9 +478,28 @@ mod tests {
         assert_eq!(t("app.greeting", &[("name", "Ada")]), "Hallo Ada");
         assert_eq!(app_name(None), "Diese App");
         assert_eq!(app_name(Some(" Argon ")), "Argon");
-        let state: serde_json::Value = serde_json::from_str(&state_json()).unwrap();
-        assert_eq!(state["language"], "de");
-        assert_eq!(state["override"], "de-CH");
+        let script = sk_runtime::testing::on_js_thread(|| {
+            JsRuntime::with(|rt| {
+                install(rt);
+                let v = rt
+                    .ctx()
+                    .eval(
+                        "(() => { const l = __sk_appLocale, out = [l.resolved, l.language]; \
+                         l.define({ de: { 'app.count': '{n} Dinge, {ok}' } }); \
+                         out.push(l.t('app.count', { n: 3, ok: true }), l.t('app.greeting'), l.available.includes('de')); \
+                         for (const bad of [() => { l.language = '!'; }, () => l.define({ '??': {} }), () => l.define({ de: 1 })]) \
+                           try { bad(); out.push('none'); } catch (e) { out.push(e.name); } \
+                         l.language = null; out.push(l.language); l.language = 'de-CH'; \
+                         return out.join('|'); })()",
+                    )
+                    .unwrap();
+                rt.ctx().to_rust_string(v).unwrap_or_default()
+            })
+        });
+        assert_eq!(
+            script,
+            "de|de-CH|3 Dinge, true|Hallo {name}|true|RangeError|TypeError|TypeError|"
+        );
         set_language(None).unwrap();
         assert_eq!(language_override(), None);
         assert_eq!(language(), negotiate(&navigator::languages(), &available()));

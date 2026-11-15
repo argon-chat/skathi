@@ -50,17 +50,6 @@ function loadAdoptCanvas(): unknown {
   return adoptCanvasFn;
 }
 
-export const FONTS_PATH = join(HERE, "../src/fonts.ts");
-let installFontsFn: unknown = null;
-function loadInstallFonts(): unknown {
-  if (installFontsFn) return installFontsFn;
-  const body = readTsSource(FONTS_PATH)
-    .replace(/^\s*import\s[^;]*;[^\S\n]*$/gm, "")
-    .replace(/^export\s+(function|const|let|class|interface)\s/gm, "$1 ");
-  installFontsFn = new Function(`${body}\nreturn installFonts;`)();
-  return installFontsFn;
-}
-
 export const WAAPI_PATH = join(HERE, "../src/waapi.ts");
 let installWaapiFn: unknown = null;
 function loadInstallWaapi(): unknown {
@@ -225,7 +214,6 @@ interface RuntimeExports extends Pick<
   | "appWindow"
   | "defineWindow"
   | "getCurrentWindow"
-  | "appDevtools"
   | "vModelText"
   | "vModelSelect"
   | "vShow"
@@ -342,16 +330,6 @@ interface RuntimeHost {
   mediaPropReads: number[][];
   mediaCalls: { id: number; verb: unknown; arg: unknown }[];
   canPlayByType: Map<string, string>;
-  devtools: {
-    enabled: boolean;
-    locked: boolean;
-    key: boolean;
-    port: number | null;
-    inspectors: number;
-    setCalls: boolean[];
-    opens: number;
-    openError: string | null;
-  };
   desktop: {
     calls: { op: string; args: unknown[] }[];
     nextToken: number;
@@ -366,10 +344,9 @@ interface RuntimeHost {
   tree: TreeModel;
 }
 
-/** `devtools: false` builds a world without its `__sk_*` slots (an older or `--no-default-features` host); `MouseEvent` hands the world an event class (bun has none). */
+/** `MouseEvent` hands the world an event class (bun has none). */
 export function createRuntime(
   options: {
-    devtools?: boolean;
     MouseEvent?: unknown;
     globals?: Record<string, unknown>;
     beforeRuntime?: (global: Record<string, unknown>) => void;
@@ -381,7 +358,6 @@ export function createRuntime(
     navigator?: Record<string, unknown>;
   } = {},
 ) {
-  const withDevtools = options.devtools !== false;
   const raw = RUNTIME_JS;
   if (!IMPORT_LINE.test(raw)) {
     throw new Error("runtime.ts no longer imports @vue/runtime-core — update this harness");
@@ -548,16 +524,6 @@ export function createRuntime(
     mediaPropReads: [],
     mediaCalls: [],
     canPlayByType: new Map(),
-    devtools: {
-      enabled: true,
-      locked: false,
-      key: true,
-      port: 49221,
-      inspectors: 0,
-      setCalls: [],
-      opens: 0,
-      openError: null,
-    },
     desktop: {
       calls: [],
       nextToken: 1,
@@ -706,16 +672,12 @@ export function createRuntime(
     "__sk_media_can_play",
     "__sk_media_events",
     "__sk_media_prop",
-    "__sk_devtools_state",
-    "__sk_devtools_set_enabled",
-    "__sk_devtools_open",
     "__SK_FS__",
     "MouseEvent",
     "URL",
     "navigator",
     "__sk_style_accepts",
     "adoptCanvas",
-    "installFonts",
     "__sk_set_layout_hook",
     "__sk_layout_watch",
     "installSelection",
@@ -737,15 +699,6 @@ export function createRuntime(
     "warnCompat",
     ...Object.keys(style.fns),
   ];
-  const devtoolsState = () => ({
-    enabled: host.devtools.enabled,
-    locked: host.devtools.locked,
-    port: host.devtools.enabled ? host.devtools.port : null,
-    pid: 4242,
-    key: host.devtools.key,
-    inspectors: host.devtools.inspectors,
-    slot: "C:\\sk\\dist",
-  });
   const args = [
     createRenderer,
     createVNode,
@@ -865,24 +818,6 @@ export function createRuntime(
       const v = line.slice(line.indexOf("=") + 1);
       return v === "true" ? 1 : v === "false" ? 0 : Number(v);
     },
-    () => JSON.stringify(devtoolsState()),
-    (on: boolean) => {
-      host.devtools.setCalls.push(on);
-      if (!on && host.devtools.locked) {
-        return JSON.stringify({
-          error: "SK_DEVTOOLS=1 is set in this process's environment, which holds the devtools on",
-        });
-      }
-      host.devtools.enabled = !!on;
-      host.devtools.port = on ? 49221 : null;
-      return JSON.stringify(devtoolsState());
-    },
-    () => {
-      host.devtools.opens++;
-      if (host.devtools.openError) return JSON.stringify({ error: host.devtools.openError });
-      host.devtools.inspectors++;
-      return JSON.stringify({ opened: true, window: 4294967297 });
-    },
     fsHost,
     options.MouseEvent ?? globalThis.MouseEvent,
     globalThis.URL,
@@ -894,7 +829,6 @@ export function createRuntime(
           return !host.styleRejects.has(`${nameOf(key)}: ${value}`);
         },
     loadAdoptCanvas(),
-    loadInstallFonts(),
     options.layoutWatch === false
       ? undefined
       : (fn: (op: number) => number) => {
@@ -966,11 +900,6 @@ export function createRuntime(
     for (let i = first; i < first + 4; i++) args[i] = undefined;
   }
 
-  if (!withDevtools) {
-    const first = params.indexOf("__sk_devtools_state");
-    for (let i = first; i < first + 3; i++) args[i] = undefined;
-  }
-
   options.beforeRuntime?.(fakeGlobal);
   // eslint-disable-next-line no-new-func
   const exports: RuntimeExports = new Function(
@@ -978,7 +907,7 @@ export function createRuntime(
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, nodeById, looseById, looseRoots, sweepLoose, Transition, TransitionGroup, resolveTransitionProps,
        writeClass, appWindow, defineWindow, getCurrentWindow,
-       appDevtools, vModelText, vModelSelect, vShow, activation, noteActivation,
+       vModelText, vModelSelect, vShow, activation, noteActivation,
        render, useCssVars, useCssModule, VueElement, defineCustomElement, createSSRApp, hydrate,
        useHost, useShadowRoot, initDirectivesForSSR };`,
   )(...args);

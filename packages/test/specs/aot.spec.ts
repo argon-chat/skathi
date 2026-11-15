@@ -183,7 +183,7 @@ describe.skipIf("skip" in ready)("sk build --aot", () => {
       opened.push(app);
       await expect(app.locator(".probe")).toHaveCount(1);
       bunExpect(lines(app, /\[native-aot\] application native entry completed/)).toHaveLength(1);
-      bunExpect(await app.eval(`__sk_locale_t("aot.probe", "{}")`)).toBe("from the host catalog");
+      bunExpect(await app.eval(`__sk_appLocale.t("aot.probe")`)).toBe("from the host catalog");
       bunExpect(
         await app.eval(
           `(() => { const input = document.querySelector(".probe"); input.focus(); return document.activeElement === input; })()`,

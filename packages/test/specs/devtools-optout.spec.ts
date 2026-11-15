@@ -150,7 +150,7 @@ describe("a shipped build carries its own devtools", () => {
         });
         bunExpect(after.inspectors[0].pid).toBeGreaterThan(0);
 
-        const state = JSON.parse(await app.eval("__sk_devtools_state()"));
+        const state = JSON.parse(await app.eval("JSON.stringify(__sk_appDevtools.info())"));
         bunExpect(state.enabled).toBe(true);
         bunExpect(state.locked).toBe(false);
         bunExpect(state.port).toBe(app.port);

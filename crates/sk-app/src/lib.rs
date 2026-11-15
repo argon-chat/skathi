@@ -1158,6 +1158,7 @@ fn run_app() {
             #[cfg(sk_devtools)]
             devtools::install(rt);
             embed::install(rt);
+            unsafe { sk_runtime::standins::install_missing(rt.raw()) };
             Ok(())
         });
         if let Err(error) = setup_result {

@@ -342,14 +342,6 @@ declare var __sk_trace_callback_end: ((token: number) => void) | undefined;
 /** Polls background discovery: `{ pending: true }` until a scan completes, then every attachable instance as JSON (`{ preferred, self, targets }`). Absent with `--features no-devtools`. */
 declare function __sk_devtools_targets(): SkJson;
 
-/** `{ enabled, locked, port, pid, key, inspectors, slot }`. `enabled` off means NO listener; `locked` is `SK_DEVTOOLS=1` (refuses `disable()`); `key` is the `SK_DEVTOOLS_KEY` gate (declines F12 only). */
-declare function __sk_devtools_state(): SkJson;
-
-/** Turns the devtools on or off; answers the settled state or `{ error }` when refused. On binds a fresh port and token; off closes the listener and sockets, blanks the token and deletes the handshake. */
-declare function __sk_devtools_set_enabled(on: boolean): SkJson;
-
-declare function __sk_devtools_open(): SkJson;
-
 /** How THIS process was started as an inspector (`sk-app --devtools`); published by another process, so readers guard. */
 declare var __SK_DEVTOOLS_ARGS__:
   | {

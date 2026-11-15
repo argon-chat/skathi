@@ -39,8 +39,8 @@ export {
   withModifiers,
 } from "./runtime/directives";
 export { appWindow, defineWindow, getCurrentWindow } from "./runtime/window";
-export { appDevtools } from "./runtime/devtools";
-export type { DevtoolsInfo } from "./runtime/devtools";
+export { appDevtools } from "./devtools";
+export type { DevtoolsInfo } from "./devtools";
 export { Transition, TransitionGroup, resolveTransitionProps } from "./runtime/transitions";
 
 export let appRoot: MirrorElement | null = null; // created on mount or a pre-mount body insertion

@@ -760,13 +760,25 @@ host_fn!(fn load_event_construct(g,args){
 });
 host_fn!(fn event_faces(g,args){match slot(g,args.this().0,api(g).event){Some(v)=>v,None=>u::throw_type_error(g,"Incompatible FontFaceSetLoadEvent receiver")}});
 host_fn!(fn document_fonts(g,_args){u::get(g,api(g).root,"document")});
-host_fn!(fn attach(g,args){
-    let doc=args.arg(0).0;if !u::is_cell(doc){return u::throw_type_error(g,"Font API attachment requires a document");}
-    let a=api(g);let mut set=u::get(g,a.root,"document");
-    if set==u::UNDEF{set=new_set(g,u::UNDEF,true);put(g,a.root,"document",set);}
-    let name=u::atom(g,"fonts");glue::rjs_define_accessor(g,doc,name,u::make_fn(g,"get fonts",0,document_fonts),u::UNDEF,0);glue::rjs_atom_free(g,name);
-    fresh(g,set);set
-});
+unsafe fn attach(g: *mut c_void, doc: u64) {
+    let a = api(g);
+    let mut set = u::get(g, a.root, "document");
+    if set == u::UNDEF {
+        set = new_set(g, u::UNDEF, true);
+        put(g, a.root, "document", set);
+    }
+    let name = u::atom(g, "fonts");
+    glue::rjs_define_accessor(
+        g,
+        doc,
+        name,
+        u::make_fn(g, "get fonts", 0, document_fonts),
+        u::UNDEF,
+        0,
+    );
+    glue::rjs_atom_free(g, name);
+    fresh(g, set);
+}
 
 pub(crate) fn install(rt: &JsRuntime) {
     unsafe {
@@ -880,7 +892,10 @@ pub(crate) fn install(rt: &JsRuntime) {
             put(g, root, n, v);
         }
         APIS.with(|s| s.borrow_mut().insert(id, a));
-        rt.register("__sk_fonts_attach", 1, attach as *const c_void);
+        let document = u::get(g, global, "document");
+        if u::is_cell(document) {
+            attach(g, document);
+        }
     }
 }
 
@@ -939,7 +954,7 @@ mod tests {
         deliver(rt, &[]);
         js(
             rt,
-            r#"globalThis.fontDoc={};globalThis.fontSet=__sk_fonts_attach(fontDoc);fontSet.clear();
+            r#"globalThis.fontSet=document.fonts;fontSet.clear();
             globalThis.fassert=(ok,message)=>{if(!ok)throw Error(message||'font assertion');};"#,
         );
         unsafe {
@@ -983,7 +998,7 @@ mod tests {
                 setup(rt);
                 js(
                     rt,
-                    r#"fassert(fontDoc.fonts===fontSet&&__sk_fonts_attach({})===fontSet);
+                    r#"fassert(fontSet instanceof FontFaceSet&&document.fonts===fontSet);
             fassert(fontSet instanceof EventTarget);fassert(String(fontSet)==='[object FontFaceSet]');
             fassert(typeof FontFace==='function'&&typeof FontFaceSet==='function'&&typeof FontFaceSetLoadEvent==='function');
             fassert(FontFaceSet.prototype.keys===FontFaceSet.prototype.values);
