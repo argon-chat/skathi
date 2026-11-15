@@ -2473,6 +2473,12 @@ pub(crate) fn warn_missing_font(family: &str, used: Option<&str>) {
 
 fn apply_background_clip_text(style: &mut gpui::StyleRefinement, extras: &sk_css::Extras, id: u64) {
     if let Some(sk_css::TextFill::Color(fill)) = extras.text_fill_color {
+        // `currentColor` in `text-shadow` is `color`, not the fill that replaces it in gpui.
+        if let (Some(color), Some(shadows)) = (style.text.color, style.text.text_shadow.as_mut()) {
+            for shadow in shadows {
+                shadow.color.get_or_insert(color);
+            }
+        }
         style.text.color = Some(fill);
     }
     if extras.background_clip_text != Some(true) {

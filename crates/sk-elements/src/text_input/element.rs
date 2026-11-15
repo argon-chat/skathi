@@ -366,6 +366,7 @@ fn shape(
     let font = text_style.font();
     // Runs are shaped here rather than via `StyledText`, so CSS `letter-spacing` must be carried across.
     let (tracking, word_spacing) = (text_style.letter_spacing, text_style.word_spacing);
+    let text_shadow = text_style.text_shadow.clone();
     let run = |len: usize, underline: bool| TextRun {
         len,
         font: font.clone(),
@@ -380,6 +381,7 @@ fn shape(
         strikethrough: None,
         tracking,
         word_spacing,
+        text_shadow: text_shadow.clone(),
     };
     let runs: Vec<TextRun> = match marked_range {
         Some(marked) if marked.end <= display.len() => vec![

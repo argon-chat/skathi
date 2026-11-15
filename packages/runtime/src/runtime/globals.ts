@@ -136,6 +136,7 @@ const CSS_SUPPORTED = new Set<string>([
   "right",
   "row-gap",
   "text-align",
+  "text-shadow",
   "top",
   "transform",
   "visibility",

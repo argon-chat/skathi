@@ -3127,6 +3127,108 @@ fn unresolved_color(diagnostics: &mut Vec<String>, what: &str) {
     );
 }
 
+/// The device-pixel blur radius gpui draws at most (`MAX_GLYPH_SHADOW_SIGMA` is half of it).
+const MAX_TEXT_SHADOW_BLUR_DEVICE_PX: f32 = 2. * gpui::MAX_GLYPH_SHADOW_SIGMA;
+
+/// `None` drops the declaration, as a browser drops an invalid one.
+fn text_shadows(
+    shadows: &[lightningcss::properties::text::TextShadow],
+    diagnostics: &mut Vec<String>,
+) -> Option<Vec<gpui::TextShadow>> {
+    let mut out = Vec::with_capacity(shadows.len());
+    for s in shadows {
+        if css_length_px(&s.spread) != Some(0.0) {
+            once(
+                diagnostics,
+                "`text-shadow` was dropped: it takes no spread distance (a fourth length), and \
+                 browsers drop the whole declaration for one. Remove the fourth length"
+                    .into(),
+            );
+            return None;
+        }
+        let (Some(x), Some(y), Some(blur)) = (
+            css_length_px(&s.x_offset),
+            css_length_px(&s.y_offset),
+            css_length_px(&s.blur),
+        ) else {
+            once(
+                diagnostics,
+                "`text-shadow` was dropped: an offset or blur radius does not resolve to a length \
+                 here. Use px, em, rem or a calc() of them"
+                    .into(),
+            );
+            return None;
+        };
+        if blur < 0.0 {
+            once(
+                diagnostics,
+                "`text-shadow` was dropped: a blur radius cannot be negative, and browsers drop \
+                 the declaration. Use 0 for a sharp shadow"
+                    .into(),
+            );
+            return None;
+        }
+        if blur > MAX_TEXT_SHADOW_BLUR_DEVICE_PX / 2.0 {
+            once(
+                diagnostics,
+                format!(
+                    "`text-shadow` blur radius {blur}px is drawn at most {}px wide in device \
+                     pixels ({}px at 2x); a softer shadow needs `filter: drop-shadow()`",
+                    MAX_TEXT_SHADOW_BLUR_DEVICE_PX,
+                    MAX_TEXT_SHADOW_BLUR_DEVICE_PX / 2.0
+                ),
+            );
+        }
+        let color = match &s.color {
+            CssColor::CurrentColor => None,
+            c => match color(c) {
+                Some(c) => Some(c),
+                None => {
+                    unresolved_color(diagnostics, "text-shadow");
+                    continue;
+                }
+            },
+        };
+        out.push(gpui::TextShadow {
+            color,
+            offset: gpui::point(px(x), px(y)),
+            blur_radius: px(blur),
+        });
+    }
+    Some(out)
+}
+
+/// A `text-shadow` list as `getComputedStyle` writes it: colour first, every length, `none` when empty.
+pub fn text_shadow_css(shadows: &[gpui::TextShadow], current_color: Hsla) -> String {
+    if shadows.is_empty() {
+        return "none".into();
+    }
+    let rgb = |c: Hsla| {
+        let c = gpui::Rgba::from(c);
+        let channel = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let (r, g, b) = (channel(c.r), channel(c.g), channel(c.b));
+        if c.a >= 1.0 {
+            format!("rgb({r}, {g}, {b})")
+        } else {
+            let a = (c.a.clamp(0.0, 1.0) * 1000.0).round() / 1000.0;
+            format!("rgba({r}, {g}, {b}, {a})")
+        }
+    };
+    shadows
+        .iter()
+        .map(|s| {
+            format!(
+                "{} {}px {}px {}px",
+                rgb(s.color.unwrap_or(current_color)),
+                f32::from(s.offset.x),
+                f32::from(s.offset.y),
+                f32::from(s.blur_radius)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[path = "effect.rs"]
 pub(crate) mod effect;
 
@@ -4996,6 +5098,11 @@ fn apply_property(
             }
             r.box_shadow = Some(out);
         }
+        TextShadow(shadows) => {
+            if let Some(shadows) = text_shadows(shadows, diagnostics) {
+                r.text.text_shadow = Some(shadows);
+            }
+        }
         FontFamily(families) => {
             x.web_font = waiting_web_font(families);
             if let Some(family) = first_available_family(families) {
@@ -5727,6 +5834,12 @@ fn apply_property(
                 && matches!(single_ident_raw(&u.value), Some("none"))
             {
                 r.box_shadow = Some(Vec::new());
+                return;
+            }
+            if matches!(u.property_id, PropertyId::TextShadow)
+                && matches!(single_ident_raw(&u.value), Some("none" | "initial"))
+            {
+                r.text.text_shadow = Some(Vec::new());
                 return;
             }
             // `x: inherit` parses as Unparsed for every property but `all`; not writing the field
@@ -7793,6 +7906,57 @@ mod tests {
         );
         assert_eq!(r.box_shadow, Some(Vec::new()), "{d:?}");
         assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn text_shadow_keeps_order_offsets_blur_and_current_color() {
+        let shadows = clean("text-shadow: 1px 2px 3px red, -0.5em 0 #00f, 0 0 4px")
+            .text
+            .text_shadow
+            .expect("text-shadow");
+        assert_eq!(shadows.len(), 3);
+        assert_eq!(shadows[0].offset, gpui::point(px(1.0), px(2.0)));
+        assert_eq!(shadows[0].blur_radius, px(3.0));
+        assert_eq!(shadows[0].color, Some(gpui::red()));
+        assert_eq!(
+            shadows[1].offset.x,
+            px(-8.0),
+            "em resolves against the font size"
+        );
+        assert_eq!(shadows[1].blur_radius, px(0.0));
+        assert_eq!(shadows[2].color, None, "an omitted color is currentColor");
+        for none in ["none", "initial"] {
+            let mut d = Vec::new();
+            let mut r = clean("text-shadow: 1px 1px red");
+            apply_dynamic(
+                "text-shadow",
+                none,
+                &Vars::default(),
+                &crate::Env::default(),
+                &mut r,
+                &mut Extras::default(),
+                &mut d,
+            );
+            assert_eq!(r.text.text_shadow, Some(Vec::new()), "{none}");
+            assert!(d.is_empty(), "{d:?}");
+        }
+        assert_eq!(clean("text-shadow: inherit").text.text_shadow, None);
+    }
+
+    #[test]
+    fn invalid_text_shadows_drop_the_declaration_and_say_why() {
+        for body in [
+            "text-shadow: 1px 1px 2px 3px red",
+            "text-shadow: 1px 1px -2px red",
+        ] {
+            let (r, d) = map(&format!("text-shadow: 4px 4px blue; {body}"));
+            assert_eq!(
+                r.text.text_shadow.map(|s| s[0].offset.x),
+                Some(px(4.0)),
+                "{body} must not replace the earlier value"
+            );
+            assert_eq!(d.len(), 1, "{body}: {d:?}");
+        }
     }
 
     #[test]

@@ -59,7 +59,9 @@ pub use mapper::{
     UserSelect, WhiteSpaceMode, WindowControl, WindowDrag, INITIAL_REM_BASIS,
     INITIAL_VIEWPORT_BASIS,
 };
-pub use mapper::{set_composed_font_families, take_unreached_fonts, transform_css};
+pub use mapper::{
+    set_composed_font_families, take_unreached_fonts, text_shadow_css, transform_css,
+};
 pub use media::{match_media, DisplayMode, Env};
 #[doc(hidden)]
 pub use registered::CustomAnimationContext;

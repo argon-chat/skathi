@@ -182,6 +182,7 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "direction",
     "font-size",
     "color",
+    "text-shadow",
 ];
 
 /// One computed property of `id` (a [`COMPUTED_PROPERTIES`] name or a custom property); `None` for a node
@@ -360,6 +361,24 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
                 at = n.parent;
             }
             css_rgb(color.unwrap_or_else(gpui::black))
+        }
+        "text-shadow" => {
+            let (mut shadows, mut color) = (None, None);
+            let mut at = id;
+            while let Some(n) = t.node(at) {
+                if let Some(c) = n.computed.as_ref() {
+                    shadows = shadows.or_else(|| c.base.text.text_shadow.clone());
+                    color = color.or(c.base.text.color);
+                }
+                if (shadows.is_some() && color.is_some()) || n.parent == 0 || n.parent == at {
+                    break;
+                }
+                at = n.parent;
+            }
+            sk_css::text_shadow_css(
+                shadows.as_deref().unwrap_or_default(),
+                color.unwrap_or_else(gpui::black),
+            )
         }
         _ => return None,
     })

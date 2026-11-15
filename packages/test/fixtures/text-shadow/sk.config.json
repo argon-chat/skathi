@@ -1,0 +1,13 @@
+{
+  "$comment": "CSS `text-shadow`: sharp and blurred shadows, lists, inheritance, transitions, and a page of shadowed labels for frame timing.",
+
+  "name": "sk-test-text-shadow",
+
+  "window": {
+    "title": "Skathi — text-shadow (fixture)",
+    "width": 720,
+    "height": 520,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

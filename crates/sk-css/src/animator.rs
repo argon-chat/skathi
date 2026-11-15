@@ -31,6 +31,45 @@ enum Animatable {
     Transform(TransformSpec),
     Overflow(gpui::Overflow),
     ObjectPosition(gpui::ObjectPosition),
+    TextShadows(TextShadows),
+}
+
+/// A longer `text-shadow` list snaps instead of interpolating.
+const MAX_ANIMATED_TEXT_SHADOWS: usize = 4;
+
+/// A `text-shadow` list as a `Copy` value, with the `color` its `currentColor` entries take when
+/// one is interpolated against a concrete colour.
+#[derive(Clone, Copy, Debug)]
+struct TextShadows {
+    shadows: [gpui::TextShadow; MAX_ANIMATED_TEXT_SHADOWS],
+    len: usize,
+    current: Hsla,
+}
+
+impl TextShadows {
+    fn new(list: &[gpui::TextShadow], current: Hsla) -> Option<Self> {
+        if list.len() > MAX_ANIMATED_TEXT_SHADOWS {
+            return None;
+        }
+        let mut shadows = [gpui::TextShadow::default(); MAX_ANIMATED_TEXT_SHADOWS];
+        shadows[..list.len()].copy_from_slice(list);
+        Some(Self {
+            shadows,
+            len: list.len(),
+            current,
+        })
+    }
+
+    fn list(&self) -> &[gpui::TextShadow] {
+        &self.shadows[..self.len]
+    }
+}
+
+/// `current` is not part of the value: a change of `color` alone does not transition `text-shadow`.
+impl PartialEq for TextShadows {
+    fn eq(&self, other: &Self) -> bool {
+        self.list() == other.list()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -44,6 +83,8 @@ enum Opaque {
     /// A concrete `fill` / `stroke` colour. sk-tree draws it into the serialized `<svg>` document,
     /// which an overlay refinement cannot reach, so a change of one snaps (and says so).
     SvgColour(Hsla),
+    /// A `text-shadow` list longer than [`MAX_ANIMATED_TEXT_SHADOWS`].
+    LongTextShadowList,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -95,6 +136,16 @@ fn slot_color(v: Option<Hsla>) -> Slot {
     v.map_or(Slot::Missing, |c| Slot::Value(Animatable::Color(c)))
 }
 
+fn slot_text_shadow(r: &StyleRefinement, current: Hsla) -> Slot {
+    match &r.text.text_shadow {
+        None => Slot::Missing,
+        Some(list) => TextShadows::new(list, current)
+            .map_or(Slot::Opaque(Opaque::LongTextShadowList), |shadows| {
+                Slot::Value(Animatable::TextShadows(shadows))
+            }),
+    }
+}
+
 fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
     use TransitionProperty::*;
     match p {
@@ -135,6 +186,7 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
                 .and_then(|u| u.color)
                 .or_else(|| r.text.strikethrough.as_ref().and_then(|st| st.color)),
         ),
+        TextShadow => slot_text_shadow(r, r.text.color.unwrap_or_else(gpui::black)),
         // A refinement carries no SVG paint; `slot_inherited` answers these from the node's
         // `Extras`.
         Fill | Stroke => Slot::Missing,
@@ -210,6 +262,7 @@ fn slot_inherited(
             }
             slot => slot,
         },
+        TextShadow => slot_text_shadow(r, r.text.color.or(inherited).unwrap_or_else(gpui::black)),
         _ => slot_of(r, p),
     }
 }
@@ -285,6 +338,11 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
                 }
             }
         }
+        TextShadow => {
+            if let Animatable::TextShadows(shadows) = v {
+                r.text.text_shadow = Some(shadows.list().to_vec());
+            }
+        }
         Fill | Stroke => r.text.color = color().or(r.text.color),
         Width => r.size.width = length(),
         Height => r.size.height = length(),
@@ -358,6 +416,7 @@ fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
                 st.color = None;
             }
         }
+        TextShadow => r.text.text_shadow = None,
         // Take a transitioned property out of the `:hover` rung so gpui cannot snap it.
         // `fill`/`stroke` paint `color`, which only `transition: color` may animate, so stripping
         // it here would leave a hover colour painted by nobody.
@@ -413,6 +472,7 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
             dst.text.underline = src.text.underline.clone();
             dst.text.strikethrough = src.text.strikethrough.clone();
         }
+        TextShadow => dst.text.text_shadow = src.text.text_shadow.clone(),
         Fill | Stroke => {}
         BackgroundColor => dst.background = src.background.clone(),
         BorderColor => {
@@ -506,6 +566,7 @@ fn initial(p: &TransitionProperty) -> Option<Animatable> {
         OverflowX | OverflowY => Some(Animatable::Overflow(gpui::Overflow::Visible)),
         Transform => Some(Animatable::Transform(TransformSpec::IDENTITY)),
         ObjectPosition => Some(Animatable::ObjectPosition(gpui::ObjectPosition::default())),
+        TextShadow => TextShadows::new(&[], gpui::black()).map(Animatable::TextShadows),
         _ => None,
     }
 }
@@ -527,6 +588,7 @@ fn unify(a: Animatable, b: Animatable) -> Option<(Animatable, Animatable)> {
         (Effect(_), Effect(_)) | (EffectFade(..), Effect(_)) => Some((a, b)),
         (Transform(_), Transform(_)) => Some((a, b)),
         (ObjectPosition(_), ObjectPosition(_)) => Some((a, b)),
+        (TextShadows(_), TextShadows(_)) => Some((a, b)),
         (Pixels(p), Rems(r)) if r.0 == 0.0 => Some((Pixels(p), Pixels(gpui::Pixels::from(0.0)))),
         (Pixels(p), Rems(r)) if p.as_f32() == 0.0 => Some((Rems(gpui::Rems(0.0)), Rems(r))),
         (Rems(r), Pixels(p)) if p.as_f32() == 0.0 => Some((Rems(r), Rems(gpui::Rems(0.0)))),
@@ -565,8 +627,42 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
             y_fraction: f32::interpolate(a.y_fraction, b.y_fraction, t),
             y_offset: gpui::Pixels::interpolate(a.y_offset, b.y_offset, t),
         }),
+        (TextShadows(a), TextShadows(b)) => TextShadows(lerp_text_shadows(a, b, t)),
         _ => to,
     }
+}
+
+/// CSS pads the shorter list with transparent shadows at zero offset and blur.
+fn lerp_text_shadows(from: TextShadows, to: TextShadows, t: f32) -> TextShadows {
+    let len = from.len.max(to.len);
+    let mut out = to;
+    out.len = len;
+    for index in 0..len {
+        let pick = |shadows: &TextShadows, other: &TextShadows| match shadows.list().get(index) {
+            Some(shadow) => (*shadow, shadow.color.unwrap_or(shadows.current)),
+            None => {
+                let color = other.list()[index]
+                    .color
+                    .unwrap_or(other.current)
+                    .opacity(0.0);
+                (gpui::TextShadow::default(), color)
+            }
+        };
+        let (a, a_color) = pick(&from, &to);
+        let (b, b_color) = pick(&to, &from);
+        out.shadows[index] = gpui::TextShadow {
+            color: match (from.list().get(index), to.list().get(index)) {
+                (Some(x), Some(y)) if x.color.is_none() && y.color.is_none() => None,
+                _ => Some(lerp_color(a_color, b_color, t)),
+            },
+            offset: gpui::point(
+                Pixels::interpolate(a.offset.x, b.offset.x, t),
+                Pixels::interpolate(a.offset.y, b.offset.y, t),
+            ),
+            blur_radius: Pixels::interpolate(a.blur_radius, b.blur_radius, t).max(gpui::px(0.)),
+        };
+    }
+    out
 }
 
 fn lerp_effect(a: EffectSpec, b: EffectSpec, t: f32) -> EffectSpec {
@@ -1025,6 +1121,15 @@ impl Animator {
                     return Endpoints::Snap;
                 }
             },
+            (Slot::Opaque(Opaque::LongTextShadowList), _)
+            | (_, Slot::Opaque(Opaque::LongTextShadowList)) => {
+                self.warn_once(format!(
+                    "transition of {} with more than {MAX_ANIMATED_TEXT_SHADOWS} shadows is not \
+                     animatable — snapping. Animate a shorter list",
+                    property.name()
+                ));
+                return Endpoints::Snap;
+            }
             (Slot::Opaque(Opaque::SvgColour(_)), _) | (_, Slot::Opaque(Opaque::SvgColour(_))) => {
                 self.warn_once(format!(
                     "transition of {} to or from a concrete SVG paint colour is not animatable \
@@ -1393,6 +1498,58 @@ mod tests {
         );
         let half = a.overlay_test(1, now + Duration::from_millis(500)).unwrap();
         assert_eq!(half.vn_object_position.map(|p| p.x_fraction), Some(0.75));
+    }
+
+    #[test]
+    fn text_shadows_interpolate_pairwise_and_pad_with_transparent() {
+        fn shadowed(shadows: &[gpui::TextShadow]) -> StyleRefinement {
+            let mut r = StyleRefinement::default();
+            r.text.text_shadow = Some(shadows.to_vec());
+            r
+        }
+        let shadow = |x: f32, blur: f32, color: Option<Hsla>| gpui::TextShadow {
+            color,
+            offset: gpui::point(px(x), px(x)),
+            blur_radius: px(blur),
+        };
+        let red = Hsla::from(Rgba {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        });
+        let mut a = Animator::new();
+        let now = t0();
+        let css = "transition: text-shadow 1s linear";
+        let old = states(shadowed(&[shadow(0.0, 0.0, None)]), css);
+        let new = states(
+            shadowed(&[shadow(4.0, 8.0, Some(red)), shadow(2.0, 2.0, Some(red))]),
+            css,
+        );
+        a.on_computed(1, Some(&old), &new, now);
+        let half = a
+            .overlay_test(1, now + Duration::from_millis(500))
+            .and_then(|r| r.text.text_shadow)
+            .expect("text-shadow transitions");
+        assert_eq!(half.len(), 2);
+        assert_eq!(half[0].offset.x, px(2.0));
+        assert_eq!(half[0].blur_radius, px(4.0));
+        let first = half[0].color.expect("currentColor meets red");
+        assert!(
+            first.h != red.h || first.l != red.l,
+            "mixed with black: {first:?}"
+        );
+        assert_eq!(
+            half[1].offset.x,
+            px(1.0),
+            "the shorter list is padded with zeros"
+        );
+        assert_eq!(half[1].blur_radius, px(1.0));
+        let second = half[1].color.expect("a padded shadow is transparent red");
+        assert!(
+            (second.a - 0.5).abs() < 1e-3 && second.h == red.h,
+            "{second:?}"
+        );
     }
 
     #[test]

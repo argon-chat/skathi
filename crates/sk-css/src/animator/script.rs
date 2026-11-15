@@ -411,6 +411,7 @@ fn css_value(v: Animatable) -> Option<String> {
                 axis(p.y_fraction, p.y_offset)
             )
         }
+        Animatable::TextShadows(shadows) => crate::text_shadow_css(shadows.list(), shadows.current),
         Animatable::Effect(_) | Animatable::EffectFade(..) => return None,
     })
 }
