@@ -1,6 +1,7 @@
 # Web platform coverage
 
-What a Skathi app can use from the web platform, what is coming, and what is not.
+What a Skathi app can use from the web platform, what is coming, and what is not. CSS has its own
+page: [CSS coverage](css.md).
 
 | Mark | Meaning                                                     |
 | ---- | ----------------------------------------------------------- |
