@@ -137,6 +137,14 @@ describe("the sk CLI", () => {
     expect(report.diagnostics.some((d) => d.file === "src/builtins.ts" && d.code === "SK1001")).toBe(true);
   }, 60_000);
 
+  test("code the production bundle keeps behind a false guard, or calls only from there, is not reported", () => {
+    const r = sk(["check", join(FIXTURES, "check-guards"), "--format", "json"]);
+    const report = JSON.parse(r.stdout) as CheckReport;
+    expect(
+      report.diagnostics.filter((d) => d.code === "SK1001").map((d) => `${d.file}:${d.range.start.line + 1}`),
+    ).toEqual(["node_modules/guarded/index.js:11"]);
+  }, 60_000);
+
   test("warnings exit 0, or 1 with --deny-warnings", () => {
     const app = join(FIXTURES, "check-warn");
     const plain = sk(["check", app]);

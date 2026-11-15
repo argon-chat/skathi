@@ -9,6 +9,7 @@ import { Builtins } from "./builtins";
 import { codeInfo, REGISTRY } from "./codes";
 import { parseCheckConfig, Suppressions } from "./config";
 import { rangeOf, ZERO_RANGE, type Finding } from "./finding";
+import { BundleLiveness } from "./bundle";
 import { buildGraph, GraphFailure, type ModuleGraph } from "./graph";
 import { Packages } from "./packages";
 import { buildProgram, readUnits, type TypeScript } from "./program";
@@ -55,6 +56,8 @@ export interface AnalyzeInput {
   /** Findings made before the analysis (configuration problems). */
   findings?: Finding[];
   progress?: Progress | undefined;
+  /** The production bundle: a rule finding in code it cannot run is not reported. */
+  bundle?: ModuleGraph["bundle"];
 }
 
 export function loadTypeScript(appRoot: string): TypeScript {
@@ -138,6 +141,7 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
     modules: graph.modules,
     aliases: graph.aliases,
     declarations: graph.declarations,
+    bundle: graph.bundle,
     allow: checkConfig.allow,
     deps: options.deps ?? true,
     findings,
@@ -215,6 +219,7 @@ export function analyze(input: AnalyzeInput): CheckReport {
     if (built.configNote) progress.warn(built.configNote);
     const { program, checker } = built;
     const rules = new Rules(typescript, checker, new Builtins(typescript, program, checker));
+    const liveness = input.bundle ? new BundleLiveness(typescript, input.bundle) : null;
     progress.step("AOT rules", units.length);
     for (const unit of units) {
       progress.tick();
@@ -244,7 +249,11 @@ export function analyze(input: AnalyzeInput): CheckReport {
         delete unit.sourceFile;
         continue;
       }
-      if (deps || !unit.owner) rules.run(unit, file, findings);
+      if (deps || !unit.owner) {
+        const found: Finding[] = [];
+        rules.run(unit, file, found);
+        findings.push(...found.filter((f) => !liveness || liveness.live(f.file, f.range)));
+      }
     }
     progress.step("typing quality");
     const typing = new Typing(

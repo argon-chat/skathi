@@ -167,6 +167,9 @@ for (const [k, v] of Object.entries(APP_DEFINES.defines)) {
   } catch {}
 }
 
+// As Vite's production build: a package's `production` export (esm-env's DEV is `false`, not a NODE_ENV probe).
+const PROD_CONDITIONS = ["production"];
+
 const DEFINES: Record<string, string> = {
   __DEV__: "false",
   "process.env.NODE_ENV": '"production"',
@@ -533,27 +536,44 @@ async function writeGraph(out: string) {
     target: "browser",
     define: DEFINES,
     plugins: [viteShapesPlugin(SHAPES), vuePlugin, entryPlugin],
+    conditions: PROD_CONDITIONS,
     minify: minify ? { whitespace: true, identifiers: true, syntax: true } : false,
-    sourcemap: "none",
+    sourcemap: "external",
     metafile: true,
     throw: false,
   });
-  // Metafile keys are relative, to a base that varies between runs ("node_modules/…", "../../C:/…"):
-  // match them against the absolute paths the plugins loaded.
+  // Metafile keys and sourcemap sources are relative, to a base that varies between runs
+  // ("node_modules/…", "../../C:/…"): match them against the absolute paths the plugins loaded.
   const byName = new Map<string, { key: string; path: string }[]>();
   for (const path of GRAPH_LOADED) {
     const key = resolve(path).split(sep).join("/").toLowerCase();
     const name = key.slice(key.lastIndexOf("/") + 1);
     byName.set(name, [...(byName.get(name) ?? []), { key, path: resolve(path) }]);
   }
+  const loadedPaths = (key: string) => {
+    const tail = `/${key.replace(/^(?:\.\.\/)+/, "").replace(/^[A-Za-z]:\//, "")}`.toLowerCase();
+    return (byName.get(tail.slice(tail.lastIndexOf("/") + 1)) ?? []).filter((l) => l.key.endsWith(tail));
+  };
   const modules = new Set<string>();
   for (const output of Object.values(result.metafile?.outputs ?? {})) {
     for (const [key, input] of Object.entries(output.inputs)) {
       if (input.bytesInOutput <= 0) continue;
-      const tail = `/${key.replace(/^(?:\.\.\/)+/, "").replace(/^[A-Za-z]:\//, "")}`.toLowerCase();
-      for (const loaded of byName.get(tail.slice(tail.lastIndexOf("/") + 1)) ?? [])
-        if (loaded.key.endsWith(tail)) modules.add(loaded.path);
+      for (const loaded of loadedPaths(key)) modules.add(loaded.path);
     }
+  }
+  let bundle: ModuleGraph["bundle"];
+  const code = result.outputs.find((o) => o.kind === "entry-point");
+  const map = result.outputs.find((o) => o.kind === "sourcemap");
+  if (result.success && code && map) {
+    const raw = JSON.parse(await map.text()) as { sources: string[]; sourcesContent?: string[]; mappings: string };
+    const sources = raw.sources.map((key, i) => {
+      const [loaded, ...others] = loadedPaths(key);
+      if (!loaded || others.length) return null;
+      // Positions are the file's own only when the bundler read it as is (not a compiled .vue or .svelte).
+      const text = readFileSync(loaded.path, "utf8").replace(/^\uFEFF/, "");
+      return raw.sourcesContent?.[i] === text ? loaded.path : null;
+    });
+    bundle = { code: await code.text(), sources, mappings: raw.mappings };
   }
   const graph: ModuleGraph = {
     schema: "skathi.module-graph",
@@ -568,6 +588,7 @@ async function writeGraph(out: string) {
     },
     declarations: [...new Bun.Glob("*.d.ts").scanSync({ cwd: RUNTIME_SRC_DIR, absolute: true })],
     modules: [...modules].sort(),
+    ...(bundle ? { bundle } : {}),
     errors: result.logs
       .filter((log) => log.level === "error")
       .map((log) => ({
@@ -595,6 +616,7 @@ async function build() {
     target: "browser",
     define: DEFINES,
     plugins: [viteShapesPlugin(SHAPES), vuePlugin, entryPlugin],
+    conditions: PROD_CONDITIONS,
     minify: minify ? { whitespace: true, identifiers: true, syntax: true } : false,
     sourcemap: "none",
   });
