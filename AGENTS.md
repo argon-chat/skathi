@@ -54,6 +54,10 @@ exclusions in `.prettierignore`. Rust is `cargo fmt`'s.
 - **Strict TypeScript.** Every TS project extends `tsconfig.base.json` (`strict` plus `noUncheckedIndexedAccess`,
   `exactOptionalPropertyTypes`, `noUnused*` and the rest); `bun run typecheck` checks all of them. No `any`, no
   `@ts-ignore`/`@ts-expect-error`; `unknown` and narrowing at boundaries.
+- **Web and platform APIs are Rust.** A new API (or a rewrite of one) is a native class registered from
+  Rust (redjs `define_class`, host data, native promises), not a TS module in `packages/runtime`. TS is
+  only for what must be JS: the Vue and Svelte renderer glue, the module loader and HMR, and objects that
+  libraries patch directly. A thin TS shim over a host function is not a reason to write it in TS.
 - **Generated files are not edited by hand.** `crates/sk-app/src/prelude.js` and
   `window.prelude.js` come from the `.ts` beside them (`bun run preludes`).
 - **This is a public SDK.** No product-specific code or policy: an app's own features live in
