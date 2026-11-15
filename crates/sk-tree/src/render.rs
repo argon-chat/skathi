@@ -4525,6 +4525,12 @@ fn alt_element(alt: &str) -> AnyElement {
     }
 }
 
+/// The `object-position` an inner picture element paints with: the replaced element's own, from
+/// its outer box (animation overlay included).
+pub(crate) fn object_position_of(outer: &gpui::StyleRefinement) -> gpui::ObjectPosition {
+    outer.vn_object_position.unwrap_or_default()
+}
+
 fn gpui_object_fit(fit: sk_css::ObjectFit) -> gpui::ObjectFit {
     match fit {
         sk_css::ObjectFit::Fill => gpui::ObjectFit::Fill,
@@ -4599,6 +4605,9 @@ fn build_img<V: 'static>(
         // sized `<img>` the web stretches.
         .unwrap_or(gpui::ObjectFit::Fill);
     e = e.object_fit(fit);
+    e.style()
+        .vn_object_position
+        .get_or_insert_with(gpui::ObjectPosition::default);
 
     let failed_src: String = if src.chars().count() > 64 {
         format!(
@@ -4955,12 +4964,16 @@ fn build_lottie<V: 'static>(
         // The tile the worker's frames are written into (`crate::lottie`) and the box the next one
         // is drawn for. TODO: wire `filter: grayscale(1)` (gpui's image element does it natively)
         // once `Extras` carries `filter`.
+        let position = object_position_of(d.style());
         d = d.child(
             match crate::lottie::paint(id, win, size, window.scale_factor()) {
-                Some(image) => gpui::img(gpui::ImageSource::Render(image))
-                    .object_fit(object_fit.into())
-                    .size_full()
-                    .into_any_element(),
+                Some(image) => {
+                    let mut picture = gpui::img(gpui::ImageSource::Render(image))
+                        .object_fit(object_fit.into())
+                        .size_full();
+                    picture.style().vn_object_position = Some(position);
+                    picture.into_any_element()
+                }
                 None => div().size_full().into_any_element(),
             },
         );
@@ -5234,6 +5247,7 @@ fn build_video<V: 'static>(
         size: painted_box.unwrap_or((0.0, 0.0)),
         scale: window.scale_factor(),
         object_fit,
+        object_position: object_position_of(d.style()),
     };
     crate::video::note_frame_box(id, &options);
 
@@ -5247,15 +5261,16 @@ fn build_video<V: 'static>(
         }
     } else if let Some(poster) = t.prop(id, "poster").filter(|p| !p.trim().is_empty()) {
         if let Some(source) = img_src::source_for(id, poster.trim()) {
-            let poster = gpui::img(source)
+            let mut poster = gpui::img(source)
                 .object_fit(gpui_object_fit(
                     node.computed
                         .as_ref()
                         .and_then(|cs| cs.extras.object_fit)
                         .unwrap_or(sk_css::ObjectFit::Contain),
                 ))
-                .size_full()
-                .into_any_element();
+                .size_full();
+            poster.style().vn_object_position = Some(object_position_of(d.style()));
+            let poster = poster.into_any_element();
             let poster = clip_replaced(poster, d.style(), window.rem_size());
             d = d.child(poster);
         }

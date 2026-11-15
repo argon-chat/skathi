@@ -596,6 +596,7 @@ fn size_as_replaced(style: &mut gpui::StyleRefinement, iw: f32, ih: f32, rem: gp
 #[cfg(feature = "webgpu")]
 fn solid_bounds(
     fit: &gpui::ObjectFit,
+    position: gpui::ObjectPosition,
     bounds: gpui::Bounds<gpui::Pixels>,
     width: u32,
     height: u32,
@@ -614,29 +615,20 @@ fn solid_bounds(
         gpui::DevicePixels(i32::try_from(width).ok()?),
         gpui::DevicePixels(i32::try_from(height).ok()?),
     );
-    let fitted = if matches!(fit, gpui::ObjectFit::None) {
-        // GPUI's None helper anchors top-left, so centre this intrinsic-size drawing buffer
-        // explicitly.
-        let size = gpui::size(gpui::px(width as f32), gpui::px(height as f32));
-        gpui::Bounds::new(
-            gpui::point(
-                bounds.origin.x + (bounds.size.width - size.width) / 2.,
-                bounds.origin.y + (bounds.size.height - size.height) / 2.,
-            ),
-            size,
-        )
-    } else {
-        fit.get_bounds(bounds, size)
-    };
-    Some(fitted)
+    Some(fit.get_bounds_at(bounds, size, position))
 }
 
 #[cfg(feature = "webgpu")]
-fn solid_black(width: u32, height: u32, fit: gpui::ObjectFit) -> AnyElement {
+fn solid_black(
+    width: u32,
+    height: u32,
+    fit: gpui::ObjectFit,
+    position: gpui::ObjectPosition,
+) -> AnyElement {
     gpui::canvas(
         |_, _, _| (),
         move |bounds, (), window, _| {
-            if let Some(fitted) = solid_bounds(&fit, bounds, width, height) {
+            if let Some(fitted) = solid_bounds(&fit, position, bounds, width, height) {
                 let paint = fitted.intersect(&bounds);
                 if paint.size.width > gpui::px(0.) && paint.size.height > gpui::px(0.) {
                     window.paint_quad(gpui::fill(paint, gpui::black()));
@@ -671,28 +663,28 @@ pub(super) fn build<V: 'static>(
     let (iw, ih) = intrinsic(t, id);
     size_as_replaced(d.style(), iw as f32, ih as f32, window.rem_size());
 
-    let fit = node
-        .computed
-        .as_ref()
-        .and_then(|cs| cs.extras.object_fit)
-        .map(gpui_object_fit)
-        .unwrap_or(gpui::ObjectFit::Fill);
+    let declared_fit = node.computed.as_ref().and_then(|cs| cs.extras.object_fit);
+    let fit = move || {
+        declared_fit
+            .map(gpui_object_fit)
+            .unwrap_or(gpui::ObjectFit::Fill)
+    };
+    let position = super::object_position_of(d.style());
+    let fitted = |image| {
+        let mut picture = gpui::img(ImageSource::Render(image))
+            .object_fit(fit())
+            .size_full();
+        picture.style().vn_object_position = Some(position);
+        picture.into_any_element()
+    };
     let picture = match pixels {
-        Some(Pixels::Atlas(image)) => Some(
-            gpui::img(ImageSource::Render(image))
-                .object_fit(fit)
-                .size_full()
-                .into_any_element(),
-        ),
+        Some(Pixels::Atlas(image)) => Some(fitted(image)),
         #[cfg(feature = "webgpu")]
-        Some(Pixels::SolidBlack { width, height }) => Some(solid_black(width, height, fit)),
+        Some(Pixels::SolidBlack { width, height }) => {
+            Some(solid_black(width, height, fit(), position))
+        }
         #[cfg(feature = "webgpu")]
-        Some(Pixels::Texture(native)) => native_image(id, native, window, win).map(|image| {
-            gpui::img(ImageSource::Render(image))
-                .object_fit(fit)
-                .size_full()
-                .into_any_element()
-        }),
+        Some(Pixels::Texture(native)) => native_image(id, native, window, win).map(fitted),
         None => None,
     };
     if let Some(picture) = picture {
@@ -838,7 +830,8 @@ mod tests {
     fn opaque_blank_obeys_object_fit_and_centres_intrinsic_size() {
         use gpui::{point, px, size, Bounds, ObjectFit};
         let bounds = Bounds::new(point(px(10.), px(20.)), size(px(200.), px(100.)));
-        let fitted = |fit| solid_bounds(&fit, bounds, 100, 100).unwrap();
+        let centre = gpui::ObjectPosition::default();
+        let fitted = |fit| solid_bounds(&fit, centre, bounds, 100, 100).unwrap();
         assert_eq!(fitted(ObjectFit::Fill), bounds);
         assert_eq!(
             fitted(ObjectFit::Contain),
@@ -854,12 +847,13 @@ mod tests {
         );
         assert_eq!(fitted(ObjectFit::ScaleDown), fitted(ObjectFit::None));
         assert_eq!(
-            solid_bounds(&ObjectFit::ScaleDown, bounds, 400, 200),
+            solid_bounds(&ObjectFit::ScaleDown, centre, bounds, 400, 200),
             Some(bounds)
         );
-        assert!(solid_bounds(&ObjectFit::Fill, bounds, 0, 100).is_none());
+        assert!(solid_bounds(&ObjectFit::Fill, centre, bounds, 0, 100).is_none());
         assert!(solid_bounds(
             &ObjectFit::Fill,
+            centre,
             Bounds::new(bounds.origin, size(px(0.), px(100.))),
             100,
             100

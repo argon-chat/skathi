@@ -30,6 +30,7 @@ enum Animatable {
     EffectFade(EffectSpec, EffectSpec, f32),
     Transform(TransformSpec),
     Overflow(gpui::Overflow),
+    ObjectPosition(gpui::ObjectPosition),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -170,6 +171,9 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
         RowGap => slot_definite(r.gap.height),
         ColumnGap => slot_definite(r.gap.width),
         FontSize => slot_absolute(r.text.font_size),
+        ObjectPosition => r.vn_object_position.map_or(Slot::Missing, |o| {
+            Slot::Value(Animatable::ObjectPosition(o))
+        }),
         Shading => r
             .vn_effect
             .map_or(Slot::Missing, |e| Slot::Value(Animatable::Effect(e))),
@@ -316,6 +320,11 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
         RowGap => r.gap.height = definite(),
         ColumnGap => r.gap.width = definite(),
         FontSize => r.text.font_size = to_absolute(v),
+        ObjectPosition => {
+            if let Animatable::ObjectPosition(o) = v {
+                r.vn_object_position = Some(o);
+            }
+        }
         Shading => match v {
             Animatable::Effect(spec) => {
                 r.vn_effect = Some(spec);
@@ -385,6 +394,7 @@ fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
         RowGap => r.gap.height = None,
         ColumnGap => r.gap.width = None,
         FontSize => r.text.font_size = None,
+        ObjectPosition => r.vn_object_position = None,
         Shading => {
             r.vn_effect = None;
             r.vn_effect_fade = None;
@@ -436,6 +446,7 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
         RowGap => dst.gap.height = src.gap.height,
         ColumnGap => dst.gap.width = src.gap.width,
         FontSize => dst.text.font_size = src.text.font_size,
+        ObjectPosition => dst.vn_object_position = src.vn_object_position,
         Shading => {
             dst.vn_effect = src.vn_effect;
             dst.vn_effect_fade = src.vn_effect_fade;
@@ -494,6 +505,7 @@ fn initial(p: &TransitionProperty) -> Option<Animatable> {
         | ColumnGap => Some(Animatable::Pixels(Pixels::from(0.0))),
         OverflowX | OverflowY => Some(Animatable::Overflow(gpui::Overflow::Visible)),
         Transform => Some(Animatable::Transform(TransformSpec::IDENTITY)),
+        ObjectPosition => Some(Animatable::ObjectPosition(gpui::ObjectPosition::default())),
         _ => None,
     }
 }
@@ -514,6 +526,7 @@ fn unify(a: Animatable, b: Animatable) -> Option<(Animatable, Animatable)> {
         }
         (Effect(_), Effect(_)) | (EffectFade(..), Effect(_)) => Some((a, b)),
         (Transform(_), Transform(_)) => Some((a, b)),
+        (ObjectPosition(_), ObjectPosition(_)) => Some((a, b)),
         (Pixels(p), Rems(r)) if r.0 == 0.0 => Some((Pixels(p), Pixels(gpui::Pixels::from(0.0)))),
         (Pixels(p), Rems(r)) if p.as_f32() == 0.0 => Some((Rems(gpui::Rems(0.0)), Rems(r))),
         (Rems(r), Pixels(p)) if p.as_f32() == 0.0 => Some((Rems(r), Rems(gpui::Rems(0.0)))),
@@ -546,6 +559,12 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
             lerp(Effect(if s >= 0.5 { y } else { x }), Effect(c), t)
         }
         (Transform(a), Transform(b)) => Transform(a.interpolate(b, t)),
+        (ObjectPosition(a), ObjectPosition(b)) => ObjectPosition(gpui::ObjectPosition {
+            x_fraction: f32::interpolate(a.x_fraction, b.x_fraction, t),
+            x_offset: gpui::Pixels::interpolate(a.x_offset, b.x_offset, t),
+            y_fraction: f32::interpolate(a.y_fraction, b.y_fraction, t),
+            y_offset: gpui::Pixels::interpolate(a.y_offset, b.y_offset, t),
+        }),
         _ => to,
     }
 }
@@ -920,9 +939,9 @@ impl Animator {
             .max()
     }
 
-    /// Drops tracks that have reached their target. Safe to call every frame after painting: a
-    /// finished track's value equals the computed base, so removing it is visually a no-op.
-    pub fn finish_settled(&mut self, now: Instant) {
+    /// Drops tracks that have reached their target, and says whether any did: the last frame that
+    /// painted one showed a value short of its end, so one more frame must be drawn.
+    pub fn finish_settled(&mut self, now: Instant) -> bool {
         let mut events = Vec::new();
         self.nodes.retain(|&node, tracks| {
             tracks.retain(|t| {
@@ -939,7 +958,9 @@ impl Animator {
             });
             !tracks.is_empty()
         });
+        let settled = !events.is_empty();
         self.events.append(&mut events);
+        settled
     }
 
     pub fn gc(&mut self, alive: &dyn Fn(u32) -> bool) {
@@ -1335,6 +1356,43 @@ mod tests {
         a.on_computed(1, Some(&old), &new, now);
         let overlay = a.overlay_test(1, now + Duration::from_millis(250)).unwrap();
         assert_eq!(overlay.size.width, Some(px(125.0).into()));
+    }
+
+    #[test]
+    fn object_position_interpolates_from_its_centred_initial_value() {
+        let css = "transition: object-position 1s linear";
+        let at = |x_fraction: f32, x_offset: f32| {
+            let mut r = StyleRefinement::default();
+            r.vn_object_position = Some(gpui::ObjectPosition {
+                x_fraction,
+                x_offset: px(x_offset),
+                ..Default::default()
+            });
+            r
+        };
+        let mut a = Animator::new();
+        let now = t0();
+        a.on_computed(
+            1,
+            Some(&states(at(0.0, 0.0), css)),
+            &states(at(1.0, -20.0), css),
+            now,
+        );
+        let quarter = a.overlay_test(1, now + Duration::from_millis(250)).unwrap();
+        assert_eq!(
+            quarter.vn_object_position,
+            Some(at(0.25, -5.0).vn_object_position.unwrap())
+        );
+
+        let mut a = Animator::new();
+        a.on_computed(
+            1,
+            Some(&states(StyleRefinement::default(), css)),
+            &states(at(1.0, 0.0), css),
+            now,
+        );
+        let half = a.overlay_test(1, now + Duration::from_millis(500)).unwrap();
+        assert_eq!(half.vn_object_position.map(|p| p.x_fraction), Some(0.75));
     }
 
     #[test]

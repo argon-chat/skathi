@@ -31,3 +31,29 @@
 .o-last {
   order: 9;
 }
+
+.op {
+  position: absolute;
+  top: 80px;
+  width: 120px;
+  height: 60px;
+}
+.op-none {
+  left: 10px;
+  object-fit: none;
+  object-position: right 10px top 5px;
+}
+.op-cover {
+  left: 150px;
+  object-fit: cover;
+  object-position: 0 100%;
+}
+.op-anim {
+  left: 290px;
+  object-fit: none;
+  object-position: left top;
+  transition: object-position 800ms linear;
+}
+.op-anim.op-end {
+  object-position: right top;
+}

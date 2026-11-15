@@ -401,6 +401,16 @@ fn css_value(v: Animatable) -> Option<String> {
             gpui::Overflow::Scroll => "scroll",
         }
         .to_string(),
+        Animatable::ObjectPosition(p) => {
+            let axis = |fraction: f32, offset: gpui::Pixels| {
+                format!("calc({}% + {}px)", fraction * 100.0, offset.as_f32())
+            };
+            format!(
+                "{} {}",
+                axis(p.x_fraction, p.x_offset),
+                axis(p.y_fraction, p.y_offset)
+            )
+        }
         Animatable::Effect(_) | Animatable::EffectFade(..) => return None,
     })
 }

@@ -8,6 +8,18 @@ const ordered = (id: string, cls: string) =>
     h("div", { id: `${id}-c`, class: "item" }, "C"),
   ]);
 
+// 40x40 PNGs: an SVG's natural size is not its CSS size here.
+const RED_SQUARE =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAIAAAADnC86AAAALElEQVR42u3NsQkAAAjAsP7/tD4huASyp6kXicVisVgsFovFYrFYLBaLxXcWqvU6G92VM/sAAAAASUVORK5CYII=";
+const RED_OVER_BLUE =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAIAAAADnC86AAAAL0lEQVR42u3QsQkAMAzAMP//dHpFyFCBd4GbOikwGAwGg8Hgj2CzwWAwGAwGg9d7cNs6GyLw6J8AAAAASUVORK5CYII=";
+
+const positioned = () => [
+  h("img", { id: "op-none", class: "op op-none", src: RED_SQUARE, alt: "" }),
+  h("img", { id: "op-cover", class: "op op-cover", src: RED_OVER_BLUE, alt: "" }),
+  h("img", { id: "op-anim", class: "op op-anim", src: RED_SQUARE, alt: "" }),
+];
+
 createApp({
-  render: () => h("div", { id: "root" }, [ordered("flex", "flexrow"), ordered("grid", "gridrow")]),
+  render: () => h("div", { id: "root" }, [ordered("flex", "flexrow"), ordered("grid", "gridrow"), ...positioned()]),
 }).mount();

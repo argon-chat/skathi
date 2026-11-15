@@ -677,9 +677,9 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     render::apply_pending_blur(window, cx);
     render::apply_pending_focus(window, cx);
     render::ensure_root_focus(window, cx);
-    tree::advance_animations();
+    let settled = tree::advance_animations();
     // `|` not `||`: every part must run each tick.
-    let anim = render::dispatch_anim_events(window, cx);
+    let anim = render::dispatch_anim_events(window, cx) | settled;
     let scripted = tree::take_script_dirty();
     img::tick(window, cx);
     iframe::tick(window, cx);

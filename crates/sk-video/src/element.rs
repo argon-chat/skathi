@@ -32,6 +32,7 @@ pub struct VideoOptions {
     pub size: (f32, f32),
     pub scale: f32,
     pub object_fit: VideoFit,
+    pub object_position: gpui::ObjectPosition,
 }
 
 impl Default for VideoOptions {
@@ -40,6 +41,7 @@ impl Default for VideoOptions {
             size: (0.0, 0.0),
             scale: 1.0,
             object_fit: VideoFit::Contain,
+            object_position: gpui::ObjectPosition::default(),
         }
     }
 }
@@ -74,10 +76,11 @@ pub fn video(
     }
 
     match state.frame() {
-        Some(image) => img(image)
-            .object_fit(options.object_fit.into())
-            .size_full()
-            .into_any_element(),
+        Some(image) => {
+            let mut picture = img(image).object_fit(options.object_fit.into()).size_full();
+            picture.style().vn_object_position = Some(options.object_position);
+            picture.into_any_element()
+        }
         None => div().size_full().into_any_element(),
     }
 }

@@ -1990,15 +1990,15 @@ pub(crate) fn moving_nodes(now: std::time::Instant, out: &mut std::collections::
 /// Advances the animator clock and queues boundary events. Must run every frame from
 /// [`crate::frame_tick`], not behind [`animating`]'s short-circuit, or a frame repainting for
 /// another reason skips the clock and queues no `animationstart`.
-pub fn advance_animations() {
+pub fn advance_animations() -> bool {
     let now = std::time::Instant::now();
     ANIMATOR.with(|a| {
         let mut a = a.borrow_mut();
         // `tick` queues `animationstart`/`animationend`; it runs before `finish_settled` drops
         // settled transition tracks (the source of `transitionend`).
         a.tick(now);
-        a.finish_settled(now);
-    });
+        a.finish_settled(now)
+    })
 }
 
 pub fn take_anim_events() -> Vec<sk_css::AnimEvent> {

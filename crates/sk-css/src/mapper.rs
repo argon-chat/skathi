@@ -3015,6 +3015,50 @@ fn unresolved_color(diagnostics: &mut Vec<String>, what: &str) {
 #[path = "effect.rs"]
 pub(crate) mod effect;
 
+fn object_position(p: &Property, diagnostics: &mut Vec<String>) -> Option<gpui::ObjectPosition> {
+    use lightningcss::traits::Parse;
+    use lightningcss::values::position::{Position, PositionComponent as C};
+    fn axis<S: PositionSide + Copy>(c: &C<S>) -> Option<(f32, f32)> {
+        let linear = |v: &LengthPercentage| match v {
+            DimensionPercentage::Dimension(d) => Some((0.0, length_value_px(d)?)),
+            DimensionPercentage::Percentage(p) => Some((p.0, 0.0)),
+            DimensionPercentage::Calc(c) => calc_linear(c),
+        };
+        match c {
+            C::Center => Some((0.5, 0.0)),
+            C::Length(v) => linear(v),
+            C::Side { side, offset } => {
+                let (f, px) = offset.as_ref().map_or(Some((0.0, 0.0)), linear)?;
+                Some(if side.is_near_edge() {
+                    (f, px)
+                } else {
+                    (1.0 - f, -px)
+                })
+            }
+        }
+    }
+    let raw = value_text(p)?;
+    let resolved = Position::parse_string(&raw)
+        .ok()
+        .and_then(|pos| Some((axis(&pos.x)?, axis(&pos.y)?)));
+    let Some(((x_fraction, x_offset), (y_fraction, y_offset))) = resolved else {
+        once(
+            diagnostics,
+            format!(
+                "unsupported value for object-position: {raw} — expected one to four keywords, \
+                 lengths or percentages, as in `left 10px top 20%`"
+            ),
+        );
+        return None;
+    };
+    Some(gpui::ObjectPosition {
+        x_fraction,
+        x_offset: px(x_offset),
+        y_fraction,
+        y_offset: px(y_offset),
+    })
+}
+
 fn object_fit(
     value: &lightningcss::properties::custom::TokenList,
     diagnostics: &mut Vec<String>,
@@ -4979,6 +5023,13 @@ fn apply_property(
                 }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "object-position" =>
+            {
+                if let Some(position) = object_position(p, diagnostics) {
+                    r.vn_object_position = Some(position);
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(
                     name.0.as_ref(),
                     "window-drag" | "app-region" | "-webkit-app-region"
@@ -6374,6 +6425,33 @@ mod tests {
         );
         assert!(d.is_empty(), "{d:?}");
         assert_eq!(r.vn_order, Some(7));
+    }
+
+    #[test]
+    fn object_position_is_a_fraction_of_the_free_space_plus_an_offset() {
+        let at = |body: &str| {
+            let p = clean(body).vn_object_position.expect("mapped");
+            (
+                p.x_fraction,
+                f32::from(p.x_offset),
+                p.y_fraction,
+                f32::from(p.y_offset),
+            )
+        };
+        assert_eq!(at("object-position: left"), (0.0, 0.0, 0.5, 0.0));
+        assert_eq!(at("object-position: 25% 10px"), (0.25, 0.0, 0.0, 10.0));
+        assert_eq!(
+            at("object-position: right 10px bottom 20%"),
+            (1.0, -10.0, 0.8, 0.0)
+        );
+        assert_eq!(at("object-position: top right"), (1.0, 0.0, 0.0, 0.0));
+        assert_eq!(
+            at("object-position: calc(50% + 4px) center"),
+            (0.5, 4.0, 0.5, 0.0)
+        );
+        let (r, d) = map("object-position: 10px sideways");
+        assert_eq!(r.vn_object_position, None);
+        assert_eq!(d.len(), 1, "{d:?}");
     }
 
     #[test]

@@ -45,6 +45,7 @@ pub enum TransitionProperty {
     RowGap,
     ColumnGap,
     FontSize,
+    ObjectPosition,
     /// Discrete: `Element.animate()` and `@keyframes` flip it halfway; a transition never animates it
     /// (no `transition-behavior: allow-discrete`).
     OverflowX,
@@ -59,7 +60,7 @@ pub enum TransitionProperty {
     Other(Rc<str>),
 }
 
-pub const ANIMATABLE_COUNT: usize = 33;
+pub const ANIMATABLE_COUNT: usize = 34;
 
 impl TransitionProperty {
     /// By value: the enum carries an `Rc`, so it is neither `Sync` nor const-promotable.
@@ -98,6 +99,7 @@ impl TransitionProperty {
             RowGap,
             ColumnGap,
             FontSize,
+            ObjectPosition,
             Transform,
         ]
     }
@@ -153,6 +155,7 @@ impl TransitionProperty {
             RowGap => "row-gap",
             ColumnGap => "column-gap",
             FontSize => "font-size",
+            ObjectPosition => "object-position",
             Transform => "transform",
             Shading => "--shading",
             All => "all",
@@ -586,6 +589,7 @@ fn expand(id: &PropertyId) -> Expansion {
         "row-gap" => one(RowGap),
         "column-gap" => one(ColumnGap),
         "font-size" => one(FontSize),
+        "object-position" => one(ObjectPosition),
         "transform" => one(Transform),
         // lightningcss parses an unknown property id — including a custom property — into
         // `PropertyId::Custom`, whose `name()` keeps the leading dashes.
