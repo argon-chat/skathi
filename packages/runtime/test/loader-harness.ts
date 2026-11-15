@@ -36,6 +36,8 @@ export interface HmrComponent {
 export interface HotLike {
   readonly data: Record<string, unknown>;
   accept(cb?: (exports: Exports) => void): void;
+  accept(deps: string | string[], cb: (mods: unknown) => void): void;
+  acceptExports(names: string | string[], cb?: (exports: Exports) => void): void;
   dispose(cb: (data: Record<string, unknown>) => void): void;
   invalidate(): void;
 }

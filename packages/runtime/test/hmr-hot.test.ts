@@ -111,6 +111,74 @@ describe("a module that accepts itself", () => {
   });
 });
 
+describe("a module that accepts a dependency or some of its exports", () => {
+  const HOST = "app/src/host.ts";
+  const OTHER = "app/src/other.ts";
+  const LIB = "app/src/lib.ts";
+
+  function acceptingDeps(deps: string | string[]) {
+    const w = createLoader();
+    definePlain(w, UTIL, [], 1);
+    definePlain(w, OTHER, [], 1);
+    w.SK.setDeps(HOST, [UTIL, OTHER]);
+    w.SK.define(HOST, function (require, module, exports) {
+      w.exec.set(HOST, (w.exec.get(HOST) ?? 0) + 1);
+      exports.util = require("./util");
+      exports.got = [];
+      module.hot!.accept(deps, (mods) => (exports.got as unknown[]).push(mods));
+    });
+    definePlain(w, ENTRY, [{ spec: "./host", id: HOST }], 1);
+    w.SK.boot(ENTRY);
+    definePlain(w, UTIL, [], 2);
+    applyChanges(w, [{ id: UTIL, kind: "reload" }]);
+    return w;
+  }
+
+  test("accept(dep, cb) re-runs the dependency and hands cb its exports; the importer stays", () => {
+    const w = acceptingDeps("./util");
+    expect(w.runs(UTIL)).toBe(2);
+    expect(w.runs(HOST)).toBe(1);
+    expect(w.runs(ENTRY)).toBe(1);
+    const got = w.SK.require(HOST).got as { version: number }[];
+    expect(got.map((m) => m.version)).toEqual([2]);
+    expect(w.hardRestarted()).toBe(false);
+  });
+
+  test("accept([deps], cb) hands cb a list with the updated one in its place", () => {
+    const w = acceptingDeps(["./other", "./util"]);
+    const got = w.SK.require(HOST).got as [unknown, { version: number }][];
+    expect(got.map(([other, util]) => [other, util.version])).toEqual([[undefined, 2]]);
+    expect(w.hardRestarted()).toBe(false);
+  });
+
+  function exporting(answer: number) {
+    return function (
+      _require: unknown,
+      module: { hot?: { acceptExports(names: string): void } },
+      exports: Record<string, unknown>,
+    ) {
+      exports.default = { answer };
+      exports.answer = answer;
+      module.hot!.acceptExports("default");
+    };
+  }
+
+  test("acceptExports updates in place while the other exports keep their values, else reaches the importers", () => {
+    const w = createLoader();
+    w.SK.setDeps(LIB, []);
+    w.SK.define(LIB, exporting(1), "1");
+    definePlain(w, ENTRY, [{ spec: "./lib", id: LIB }], 1);
+    w.SK.boot(ENTRY);
+    w.SK.define(LIB, exporting(1), "1b");
+    applyChanges(w, [{ id: LIB, kind: "reload" }]);
+    expect(w.runs(ENTRY)).toBe(1);
+    expect(w.hardRestarted()).toBe(false);
+    w.SK.define(LIB, exporting(2), "2");
+    applyChanges(w, [{ id: LIB, kind: "reload" }]);
+    expect(w.hardRestarted()).toBe(true);
+  });
+});
+
 describe("change kinds and ids", () => {
   test("restart re-runs the app from the entry", () => {
     const w = boot();

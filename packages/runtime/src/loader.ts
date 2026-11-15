@@ -16,7 +16,8 @@
 // Vue reload them. Reaching the entry, or no component, falls back to a state-losing hard restart.
 //
 // `import.meta.hot` is `module.hot` (Vite's client API, per module evaluation): a module that accepts
-// itself is re-run and handed to its accept callbacks, and is a boundary the importer walk stops at.
+// itself is re-run and handed to its accept callbacks, and is a boundary the importer walk stops at;
+// `accept(deps, cb)` stops the walk at the importer and hands `cb` the dependency's new exports.
 
 import * as runtimeNs from "./runtime";
 // Vendored libraries ride the vendor bundle (no node_modules resolution at runtime) and are
@@ -41,8 +42,14 @@ interface HotState {
   data: HotData;
   /** null: the module does not accept itself. */
   accepts: (HotAccept | null)[] | null;
+  /** `acceptExports(names)` alone: an update that changes another export also reaches the importers. */
+  acceptedExports: Set<string> | null;
+  /** `accept(deps, cb)`: dependencies whose updates stop here and are handed to `cb`. */
+  depAccepts: { deps: ModuleId[]; single: boolean; cb: ((mods: unknown) => void) | null }[];
   disposers: ((data: HotData) => void)[];
+  disposed: boolean;
   invalidated: boolean;
+  record: ModuleRecord;
 }
 
 interface HotContext {
@@ -182,22 +189,44 @@ function resolveId(spec: string, fromId: ModuleId | null | undefined): ModuleId 
 
 const hotStates = new Map<ModuleId, HotState>(); // id -> its latest evaluation's import.meta.hot state
 
-function hotContext(id: ModuleId): HotContext {
+function hotContext(id: ModuleId, record: ModuleRecord): HotContext {
   const prev = hotStates.get(id);
-  const state: HotState = { data: prev ? prev.data : {}, accepts: null, disposers: [], invalidated: false };
+  const state: HotState = {
+    data: prev ? prev.data : {},
+    accepts: null,
+    acceptedExports: null,
+    depAccepts: [],
+    disposers: [],
+    disposed: false,
+    invalidated: false,
+    record,
+  };
   hotStates.set(id, state);
-  const unsupported = (what: string) =>
-    log(id + ": import.meta.hot." + what + " is not supported; a change reloads the importers instead");
+  let acceptsAll = false;
+  const callback = (cb: unknown) => (typeof cb === "function" ? cb : null);
   return {
     get data() {
       return state.data;
     },
-    accept(deps?: unknown) {
-      if (deps === undefined || typeof deps === "function") (state.accepts ??= []).push((deps as HotAccept) ?? null);
-      else unsupported("accept(deps, …)");
+    accept(deps?: unknown, cb?: unknown) {
+      if (deps === undefined || typeof deps === "function") {
+        acceptsAll = true;
+        state.acceptedExports = null;
+        (state.accepts ??= []).push(callback(deps) as HotAccept | null);
+      } else if (typeof deps === "string" || Array.isArray(deps)) {
+        const specs = (Array.isArray(deps) ? deps : [deps]).filter((d): d is string => typeof d === "string");
+        state.depAccepts.push({
+          deps: specs.map((spec) => resolveId(spec, id)),
+          single: typeof deps === "string",
+          cb: callback(cb) as ((mods: unknown) => void) | null,
+        });
+      }
     },
-    acceptExports() {
-      unsupported("acceptExports()");
+    acceptExports(names?: unknown, cb?: unknown) {
+      (state.accepts ??= []).push(callback(cb) as HotAccept | null);
+      if (acceptsAll) return;
+      const list = (Array.isArray(names) ? names : [names]).filter((n): n is string => typeof n === "string");
+      state.acceptedExports = new Set([...(state.acceptedExports ?? []), ...list]);
     },
     dispose(cb) {
       if (typeof cb === "function") state.disposers.push(cb);
@@ -213,19 +242,47 @@ function hotContext(id: ModuleId): HotContext {
   };
 }
 
-/** Re-runs a module that accepts itself and hands its old accept callbacks the new exports; false when it does not accept itself or invalidated the update. */
-function hotUpdate(id: ModuleId): boolean {
-  const old = hotStates.get(id);
-  if (!old || !old.accepts) return false;
-  for (const dispose of old.disposers) dispose(old.data);
+/** Runs the dispose handlers of a module's current evaluation, once, before it is replaced. */
+function disposeHot(id: ModuleId): void {
+  const state = hotStates.get(id);
+  if (!state || state.disposed) return;
+  state.disposed = true;
+  for (const dispose of state.disposers) dispose(state.data);
+}
+
+/**
+ * Re-runs a module that accepts itself and hands its old accept callbacks the new exports. "importers": an export
+ * outside its `acceptExports` list changed, so the importers' copies are stale.
+ */
+function hotUpdate(id: ModuleId): "updated" | "invalidated" | "importers" {
+  const old = hotStates.get(id)!;
+  const before = old.record.exports;
+  disposeHot(id);
   cache.delete(id);
   const exports = requireId(id, null);
-  for (const accept of old.accepts) accept?.(exports);
+  for (const accept of old.accepts ?? []) accept?.(exports);
   log("hot update " + id);
-  return !old.invalidated;
+  if (old.invalidated) return "invalidated";
+  const accepted = old.acceptedExports;
+  if (accepted && before) {
+    for (const name of new Set([...Object.keys(before), ...Object.keys(exports)])) {
+      if (!accepted.has(name) && before[name] !== exports[name]) return "importers";
+    }
+  }
+  return "updated";
 }
 
 const selfAccepting = (id: ModuleId) => !!hotStates.get(id)?.accepts;
+const acceptsDep = (id: ModuleId, dep: ModuleId) => !!hotStates.get(id)?.depAccepts.some((a) => a.deps.includes(dep));
+
+/** Hands `dep`'s new exports to the `accept(deps, cb)` callbacks of `id` that name it. */
+function depUpdate(id: ModuleId, dep: ModuleId, exports: Record<string, unknown>): void {
+  for (const a of hotStates.get(id)?.depAccepts ?? []) {
+    if (!a.deps.includes(dep)) continue;
+    a.cb?.(a.single ? exports : a.deps.map((d) => (d === dep ? exports : undefined)));
+  }
+  log("hot update " + dep + " (accepted by " + id + ")");
+}
 
 function define(id: ModuleId, factory: ModuleFactory, hash?: string): void {
   const known = factories.has(id);
@@ -275,7 +332,8 @@ function requireId(id: ModuleId, fromId: ModuleId | null): Record<string, unknow
   if (!factory) {
     throw new Error("[sk] module not found: " + id + (fromId ? " (required from " + fromId + ")" : ""));
   }
-  const mod: ModuleRecord = { id, exports: {}, hot: hotContext(id) };
+  const mod: ModuleRecord = { id, exports: {} };
+  mod.hot = hotContext(id, mod);
   cache.set(id, mod);
   requireDepth++;
   try {
@@ -415,17 +473,23 @@ function isComponentId(id: ModuleId): boolean {
 /// A changed non-component module: reload the components that transitively import it (the only way their captured
 /// copies of its exports refresh), stopping at each .vue module and giving up at the entry. Every module on the walked
 /// paths is invalidated before any re-require so each re-executes once. Returns false when it bailed out to hardRestart.
-function reloadDependents(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch: HmrBatch): boolean {
+function reloadDependents(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch: HmrBatch, updated = false): boolean {
   const visited = new Set<ModuleId>([id]);
-  const invalidate: ModuleId[] = [id];
+  // `updated`: `id` already re-ran (a hot update whose other exports changed); only its importers are stale.
+  const invalidate: ModuleId[] = updated ? [] : [id];
   const targets: ModuleId[] = []; // .vue modules to re-require + hand to Vue
   const boundaries: ModuleId[] = []; // modules that accept themselves (import.meta.hot.accept)
+  const accepted: [ModuleId, ModuleId][] = []; // [importer, dep] where the importer accepts the dep
   const queue: ModuleId[] = [id];
   while (queue.length) {
     const cur = queue.shift()!;
     const set = importers.get(cur);
     if (!set) continue;
     for (const imp of set) {
+      if (cache.has(imp) && acceptsDep(imp, cur)) {
+        accepted.push([imp, cur]);
+        continue;
+      }
       if (visited.has(imp)) continue; // also the cycle guard
       visited.add(imp);
       if (imp === entryId) {
@@ -443,7 +507,9 @@ function reloadDependents(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch:
     }
   }
 
-  if (!targets.length && !boundaries.length) {
+  // An importer that re-runs anyway (another path reached it) needs no callback.
+  const handed = accepted.filter(([imp]) => !invalidate.includes(imp));
+  if (!targets.length && !boundaries.length && !handed.length) {
     if (cache.has(id) && !batch.fresh.has(id)) {
       cache.delete(id);
       requireId(id, null); // keep the cache truthful; nobody to notify
@@ -460,7 +526,10 @@ function reloadDependents(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch:
     hardRestart("__VUE_HMR_RUNTIME__ missing (is __DEV__ true?)");
     return false;
   }
-  for (let i = 0; i < invalidate.length; i++) cache.delete(invalidate[i]!);
+  for (let i = 0; i < invalidate.length; i++) {
+    disposeHot(invalidate[i]!);
+    cache.delete(invalidate[i]!);
+  }
   for (let i = 0; i < targets.length; i++) {
     const target = targets[i]!;
     if (batch.reloaded.has(target)) continue;
@@ -475,14 +544,25 @@ function reloadDependents(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch:
   for (const boundary of boundaries) {
     if (batch.reloaded.has(boundary)) continue;
     batch.reloaded.add(boundary);
-    if (!hotUpdate(boundary)) {
-      hardRestart("import.meta.hot.invalidate() in " + boundary);
-      return false;
-    }
+    if (!selfUpdate(boundary, hmr, batch)) return false;
   }
-  const updated = targets.concat(boundaries);
-  log("reload " + id + " -> " + updated.length + " module(s): " + updated.join(", "));
+  for (const [imp, dep] of handed) depUpdate(imp, dep, requireId(dep, null));
+  const reached = targets.concat(
+    boundaries,
+    handed.map(([imp]) => imp),
+  );
+  log("reload " + id + " -> " + reached.length + " module(s): " + reached.join(", "));
   return true;
+}
+
+/** A hot update of a module that accepts itself; false when it bailed out to hardRestart. */
+function selfUpdate(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch: HmrBatch): boolean {
+  const result = hotUpdate(id);
+  if (result === "invalidated") {
+    hardRestart("import.meta.hot.invalidate() in " + id);
+    return false;
+  }
+  return result === "updated" || reloadDependents(id, hmr, batch, true);
 }
 
 function hmrApply(changes: HmrChanges | null | undefined): void {
@@ -537,8 +617,7 @@ function hmrApply(changes: HmrChanges | null | undefined): void {
       if (selfAccepting(at)) {
         if (batch.reloaded.has(at)) continue;
         batch.reloaded.add(at);
-        if (hotUpdate(at)) continue;
-        hardRestart("import.meta.hot.invalidate() in " + at);
+        if (selfUpdate(at, hmr, batch)) continue;
         return;
       }
       if (!reloadDependents(at, hmr, batch)) return;
