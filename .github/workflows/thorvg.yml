@@ -1,0 +1,179 @@
+name: thorvg prebuilt
+
+# Builds crates/sk-thorvg-sys's static ThorVG for every target, with its build.rs compiling from
+# source at the default features, and publishes the archives as the release build.rs downloads.
+# Then set `release` in crates/sk-thorvg-sys/prebuilt.txt to the tag's download URL and paste the
+# release's SHA256SUMS below it. A change to how build.rs compiles ThorVG needs a new tag
+# (thorvg-v<version>-<n+1>). To add a platform to an existing release, list its key in `only`;
+# archives already published are never replaced.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, thorvg-v<ThorVG version>-<build number>
+        required: true
+        default: thorvg-v1.1.2-1
+      only:
+        description: Build only these keys, comma-separated (empty builds every key)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: ${{ matrix.key }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            key: x86_64-pc-windows-msvc-mt
+            rustflags: -C target-feature=+crt-static
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            key: x86_64-pc-windows-msvc-md
+            rustflags: ""
+          # The oldest hosted image: its libstdc++ is the floor for every binary that links the archive.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            key: x86_64-unknown-linux-gnu
+            rustflags: ""
+          - os: macos-15
+            target: aarch64-apple-darwin
+            key: aarch64-apple-darwin
+            rustflags: ""
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            key: x86_64-apple-darwin
+            rustflags: ""
+    env:
+      SELECTED: ${{ inputs.only == '' || contains(format(',{0},', inputs.only), format(',{0},', matrix.key)) }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        if: env.SELECTED == 'true'
+        with:
+          persist-credentials: false
+      - name: Check out ThorVG
+        if: env.SELECTED == 'true'
+        run: git submodule update --init --depth 1 -- crates/sk-thorvg-sys/thorvg
+
+      - name: Check the tag
+        if: env.SELECTED == 'true'
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          version=$(sed -n 's/^const THORVG_VERSION: &str = "\(.*\)";$/\1/p' crates/sk-thorvg-sys/build.rs)
+          if [[ "$TAG" != "thorvg-v$version-"* ]]; then
+            echo "::error::$TAG does not name ThorVG $version (thorvg-v$version-<n>)"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: env.SELECTED == 'true' && runner.os == 'Windows'
+        with:
+          arch: x64
+      - name: Rust
+        if: env.SELECTED == 'true'
+        run: rustup toolchain install 1.97.1 --profile minimal --target ${{ matrix.target }}
+
+      # Outside the repository, so cargo does not load the workspace (and its other submodules);
+      # .cargo/config.toml does not apply there, hence RUSTFLAGS and MACOSX_DEPLOYMENT_TARGET.
+      # With debug info, as a source build has it in dev and release-symbols builds.
+      # pwsh, not bash: Git's /usr/bin/link.exe shadows MSVC's on bash's PATH.
+      - name: Build
+        if: env.SELECTED == 'true'
+        shell: pwsh
+        env:
+          SK_THORVG_FROM_SOURCE: "1"
+          RUSTFLAGS: ${{ matrix.rustflags }}
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
+          CARGO_PROFILE_RELEASE_DEBUG: "true"
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP 'sk-thorvg-sys'
+          Copy-Item -Recurse -Force crates/sk-thorvg-sys $work
+          Copy-Item Cargo.lock, rust-toolchain.toml $work
+          Set-Location $work
+          $start = Get-Date
+          cargo build --release --target ${{ matrix.target }}
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "::notice title=${{ matrix.key }}::built in $([int]((Get-Date) - $start).TotalSeconds) s"
+
+      - name: Package
+        if: env.SELECTED == 'true'
+        shell: bash
+        env:
+          KEY: ${{ matrix.key }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          temp="$RUNNER_TEMP" lib=libthorvg.a ext=a
+          if [ "$RUNNER_OS" = Windows ]; then temp=$(cygpath -u "$RUNNER_TEMP") lib=thorvg.lib ext=lib; fi
+          found=$(find "$temp/sk-thorvg-sys/target/$TARGET/release/build" -path '*/out/*' -name "$lib")
+          if [ "$(printf '%s\n' "$found" | wc -l)" -ne 1 ] || [ -z "$found" ]; then
+            echo "::error::expected one $lib, found: $found"
+            exit 1
+          fi
+          archive="thorvg-$VERSION-$KEY.$ext.gz"
+          gzip -9 -n -c "$found" > "$archive"
+          ls -l "$found" "$archive"
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        if: env.SELECTED == 'true'
+        with:
+          name: ${{ matrix.key }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          cd dist
+          sha256sum *.gz > ../built.sums
+          cat ../built.sums
+          ls -l
+          notes="ThorVG static libraries for crates/sk-thorvg-sys (its build.rs downloads these), built by the thorvg prebuilt workflow at $GITHUB_SHA from its thorvg submodule, with the crate's default features. ThorVG is MIT; the code it bundles keeps its own licenses (JerryScript Apache-2.0, RapidJSON MIT, lodepng Zlib)."
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            published=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+            for archive in *.gz; do
+              if grep -qxF "$archive" <<<"$published"; then
+                echo "::error::$TAG already has $archive; delete it by hand to replace it"
+                exit 1
+              fi
+            done
+            gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p SHA256SUMS -O ../published.sums
+            sort -k2,2 ../published.sums ../built.sums > SHA256SUMS
+            cat SHA256SUMS
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" ./*.gz
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber SHA256SUMS
+          else
+            mv ../built.sums SHA256SUMS
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "ThorVG ${TAG#thorvg-v} (static, for sk-thorvg-sys)" --notes "$notes" --latest=false \
+              ./*.gz SHA256SUMS
+          fi
