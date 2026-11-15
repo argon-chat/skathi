@@ -57,3 +57,25 @@
 .op-anim.op-end {
   object-position: right top;
 }
+
+.swatch {
+  position: absolute;
+  top: 160px;
+  width: 40px;
+  height: 40px;
+}
+.c-oklch {
+  left: 10px;
+  background: oklch(62.8% 0.2577 29.23);
+}
+.c-mix {
+  left: 60px;
+  color: #0000ff;
+  background-color: color-mix(in srgb, currentColor 50%, #ff0000);
+}
+.c-border {
+  left: 110px;
+  box-sizing: border-box;
+  border: 10px solid color-mix(in oklab, white, black);
+  background: lab(54.29% 80.82 69.91);
+}

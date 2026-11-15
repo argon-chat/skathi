@@ -306,15 +306,7 @@ fn argument(group: &[&TokenOrValue]) -> Result<Arg, String> {
 }
 
 fn rgba(color: &CssColor) -> Option<[f32; 4]> {
-    match color {
-        CssColor::RGBA(c) => Some([
-            c.red as f32 / 255.0,
-            c.green as f32 / 255.0,
-            c.blue as f32 / 255.0,
-            c.alpha_f32(),
-        ]),
-        _ => None,
-    }
+    super::srgb(color)
 }
 
 fn known_effects() -> String {

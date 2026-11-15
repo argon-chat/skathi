@@ -658,6 +658,12 @@ impl<'a> Half<'a> {
 /// every author rule beats these.
 pub(crate) const UA_SHEET: &str = ":where([hidden]) { display: none }";
 
+thread_local! {
+    /// The element's own `color`, handed to a second cascade pass by a first one in which a
+    /// colour function read `currentColor` before `color` was known.
+    static OWN_COLOR_GUESS: std::cell::Cell<Option<gpui::Hsla>> = const { std::cell::Cell::new(None) };
+}
+
 pub struct Engine {
     rules: Vec<RuleEntry>,
     index: RuleIndex,
@@ -1571,6 +1577,7 @@ impl Engine {
         env: &Env,
         diagnostics: &mut Vec<String>,
     ) -> ComputedStates {
+        let guessed = OWN_COLOR_GUESS.with(std::cell::Cell::take);
         let probe = perf_on();
         let t0 = probe.then(std::time::Instant::now);
         let el = element::El(node);
@@ -1640,6 +1647,9 @@ impl Engine {
                 return states;
             }
         }
+        let parent_current = parent_color.unwrap_or_else(gpui::black);
+        let current_color =
+            mapper::CurrentColorScope::enter(parent_current, guessed.unwrap_or(parent_current));
 
         // Duplicates stay (`vars::resolve` is last-wins in push order). Borrowed because Tailwind's
         // universal block is ~40 declarations per element.
@@ -2173,6 +2183,21 @@ impl Engine {
         // Every rung gets the same value: `color` itself is not in gpui's state ladder, so a
         // `:hover` rule cannot change what `currentColor` means.
         let effective_color = base.text.color.or(parent_color);
+        let own_current = effective_color.unwrap_or_else(gpui::black);
+        if current_color.read() && guessed.is_none() && own_current != parent_current {
+            drop(current_color);
+            OWN_COLOR_GUESS.with(|g| g.set(Some(own_current)));
+            return self.compute_node_with_font(
+                node,
+                inline,
+                parent_vars,
+                parent_color,
+                parent_font_size,
+                parent_font,
+                env,
+                diagnostics,
+            );
+        }
         if extras.current_color != mapper::CurrentColorTargets::default()
             || [
                 &base,
@@ -6031,6 +6056,71 @@ mod tests {
             applies("@supports selector(::first-line) { .box { opacity: 0.5 } }"),
             None
         );
+    }
+
+    #[test]
+    fn current_color_inside_a_colour_function_is_the_computed_color() {
+        let engine = Engine::compile(
+            ".mix { border-color: color-mix(in srgb, currentColor 50%, #0000ff) } \
+             .mix { color: #ff0000 } \
+             .rel { color: rgb(from currentColor r g b / 50%); \
+                    background-color: color-mix(in srgb, currentColor, transparent) } \
+             .var { --c: currentColor; box-shadow: 0 0 1px color-mix(in srgb, var(--c), #00ff00) } \
+             .scroll { overflow: auto; scrollbar-color: color-mix(in srgb, currentColor, white) red }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let doc = Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "mix", 0, vec![]),
+                ("div", "rel", 0, vec![]),
+                ("div", "var", 0, vec![]),
+                ("div", "scroll", 0, vec![]),
+            ],
+        };
+        let green: gpui::Hsla = gpui::rgb(0x00ff00).into();
+        let compute = |i: usize| {
+            let mut d = Vec::new();
+            let states = engine.compute_node(
+                DocRef { doc: &doc, i },
+                None,
+                &Rc::new(Vars::default()),
+                Some(green),
+                &Env::default(),
+                &mut d,
+            );
+            assert!(d.is_empty(), "{d:?}");
+            states
+        };
+        let rgba = |c: Option<gpui::Hsla>| {
+            let c = gpui::Rgba::from(c.expect("resolved"));
+            [c.r, c.g, c.b, c.a].map(|v| (v * 255.0).round() as u8)
+        };
+
+        let mix = compute(1);
+        assert_eq!(
+            rgba(mix.base.border_color),
+            [128, 0, 128, 255],
+            "its own red, declared later"
+        );
+
+        let rel = compute(2);
+        assert_eq!(
+            rgba(rel.color),
+            [0, 255, 0, 128],
+            "`color` reads the parent's"
+        );
+        let background = match rel.base.background {
+            Some(gpui::Fill::Color(bg)) => bg.as_solid(),
+            _ => None,
+        };
+        assert_eq!(rgba(background), [0, 255, 0, 64], "the rest read its own");
+
+        let shadow = compute(3).base.box_shadow.clone().expect("mapped");
+        assert_eq!(rgba(Some(shadow[0].color)), [0, 255, 0, 255]);
+
+        let (thumb, _) = compute(4).extras.scrollbar_color.expect("mapped");
+        assert_eq!(rgba(Some(thumb)), [128, 255, 128, 255]);
     }
 
     #[test]

@@ -20,6 +20,13 @@ const positioned = () => [
   h("img", { id: "op-anim", class: "op op-anim", src: RED_SQUARE, alt: "" }),
 ];
 
+const colours = () => [
+  h("div", { id: "c-oklch", class: "swatch c-oklch" }),
+  h("div", { id: "c-mix", class: "swatch c-mix" }),
+  h("div", { id: "c-border", class: "swatch c-border" }),
+];
+
 createApp({
-  render: () => h("div", { id: "root" }, [ordered("flex", "flexrow"), ordered("grid", "gridrow"), ...positioned()]),
+  render: () =>
+    h("div", { id: "root" }, [ordered("flex", "flexrow"), ordered("grid", "gridrow"), ...positioned(), ...colours()]),
 }).mount();

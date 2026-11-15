@@ -103,3 +103,27 @@ describe("object-position", () => {
     bunExpect(lefts.some((x) => x > 4 && x < 76)).toBe(true);
   });
 });
+
+describe("CSS Color 4/5 functions", () => {
+  const near = (got: Rgb, want: Rgb) => got.every((v, i) => Math.abs(v - want[i]!) <= 2);
+  const sample = async (selector: string, dx: number, dy: number) => {
+    const b = await box(selector);
+    return (await shoot())(b.x + dx, b.y + dy);
+  };
+
+  test("oklch(), lab() and color-mix() paint their sRGB colours", async () => {
+    bunExpect(await sample("#c-oklch", 20, 20)).toEqual([255, 0, 0]);
+    bunExpect(near(await sample("#c-border", 20, 20), [255, 0, 0])).toBe(true);
+    bunExpect(near(await sample("#c-border", 3, 20), [99, 99, 99])).toBe(true);
+  });
+
+  test("color-mix() over currentColor uses the element's own colour", async () => {
+    bunExpect(near(await sample("#c-mix", 20, 20), [128, 0, 128])).toBe(true);
+    await app.eval('document.querySelector("#c-mix").style.color = "#00ff00"');
+    const got = await until(
+      () => sample("#c-mix", 20, 20),
+      (c) => near(c, [128, 128, 0]),
+    );
+    bunExpect(near(got, [128, 128, 0])).toBe(true);
+  });
+});

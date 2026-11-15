@@ -834,7 +834,9 @@ fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
                     Channel::Static
                 }
             },
-            CustomPropertyName::Unknown(name) if has_substitution(&c.value) => {
+            CustomPropertyName::Unknown(name)
+                if has_substitution(&c.value) || has_current_color_function(&c.value) =>
+            {
                 match value_text(p) {
                     Some(v) => Channel::Dynamic(name.0.as_ref().to_string(), v),
                     None => Channel::Static,
@@ -944,6 +946,82 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
     }
 }
 
+thread_local! {
+    /// While an element computes: what `currentColor` stands for inside a colour function — the
+    /// parent's colour in `color` itself, the element's own everywhere else — and whether a
+    /// declaration read it.
+    static CURRENT_COLOR: std::cell::Cell<Option<(Hsla, Hsla)>> = const { std::cell::Cell::new(None) };
+    static CURRENT_COLOR_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The `currentColor` context of one element's cascade. `own` is a guess until the cascade has
+/// computed `color`; [`CurrentColorScope::read`] says whether a second pass with the real one is
+/// needed.
+pub(crate) struct CurrentColorScope {
+    outer: Option<(Hsla, Hsla)>,
+    outer_read: bool,
+}
+
+impl CurrentColorScope {
+    pub(crate) fn enter(parent: Hsla, own: Hsla) -> Self {
+        Self {
+            outer: CURRENT_COLOR.with(|c| c.replace(Some((parent, own)))),
+            outer_read: CURRENT_COLOR_READ.with(|r| r.replace(false)),
+        }
+    }
+
+    pub(crate) fn read(&self) -> bool {
+        CURRENT_COLOR_READ.with(std::cell::Cell::get)
+    }
+}
+
+impl Drop for CurrentColorScope {
+    fn drop(&mut self) {
+        CURRENT_COLOR.with(|c| c.set(self.outer));
+        CURRENT_COLOR_READ.with(|r| r.set(self.outer_read));
+    }
+}
+
+/// `value` with each `currentColor` keyword spelled as the colour it stands for, so that
+/// `color-mix()` and relative colours over it compute; `None` outside an element's cascade or
+/// when there is no such keyword.
+fn current_color_substituted(name: &str, value: &str) -> Option<String> {
+    const KEYWORD: &str = "currentcolor";
+    let lower = value.to_ascii_lowercase();
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
+    let bytes = lower.as_bytes();
+    let starts: Vec<usize> = lower
+        .match_indices(KEYWORD)
+        .map(|(at, _)| at)
+        .filter(|&at| {
+            let end = at + KEYWORD.len();
+            (at == 0 || !ident(bytes[at - 1])) && (end == bytes.len() || !ident(bytes[end]))
+        })
+        .collect();
+    if starts.is_empty() {
+        return None;
+    }
+    let (parent, own) = CURRENT_COLOR.with(std::cell::Cell::get)?;
+    CURRENT_COLOR_READ.with(|r| r.set(true));
+    let c = gpui::Rgba::from(if name == "color" { parent } else { own });
+    let literal = format!(
+        "rgb({} {} {} / {})",
+        c.r * 255.0,
+        c.g * 255.0,
+        c.b * 255.0,
+        c.a
+    );
+    let mut out = String::with_capacity(value.len() + starts.len() * literal.len());
+    let mut from = 0;
+    for at in starts {
+        out.push_str(&value[from..at]);
+        out.push_str(&literal);
+        from = at + KEYWORD.len();
+    }
+    out.push_str(&value[from..]);
+    Some(out)
+}
+
 /// Three failures, each advised: invalid substitution (missing variable, cycle), a substituted text
 /// that does not parse, or a property the mapper does not map. Invalid ones are dropped, as in CSS.
 pub(crate) fn apply_dynamic(
@@ -972,17 +1050,28 @@ pub(crate) fn apply_dynamic(
             return;
         }
     };
-    let property =
-        match Property::parse_string(PropertyId::from(name), &value, ParserOptions::default()) {
-            Ok(p) => p,
-            Err(_) => {
-                once(
-                    diagnostics,
-                    format!("`{name}: {value}` did not parse after var() substitution (v1)"),
-                );
-                return;
+    use lightningcss::traits::IntoOwned as _;
+    let parse = |value: &str| {
+        Property::parse_string(PropertyId::from(name), value, ParserOptions::default())
+            .ok()
+            .map(|p| p.into_owned())
+    };
+    let property = match parse(&value) {
+        Some(unresolved @ (Property::Unparsed(_) | Property::Custom(_))) => {
+            match current_color_substituted(name, &value) {
+                Some(concrete) => parse(&concrete),
+                None => Some(unresolved),
             }
-        };
+        }
+        parsed => parsed,
+    };
+    let Some(property) = property else {
+        once(
+            diagnostics,
+            format!("`{name}: {value}` did not parse after var() substitution (v1)"),
+        );
+        return;
+    };
     // A `transition` is folded into its own list at sheet-compile time and the list is per rule,
     // not per element — so a var()-composed one has nowhere to land.
     if matches!(
@@ -1252,17 +1341,27 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
 }
 
 fn color(c: &CssColor) -> Option<Hsla> {
+    let [r, g, b, a] = srgb(c)?;
+    Some(gpui::Rgba { r, g, b, a }.into())
+}
+
+/// A concrete colour in sRGB channels. `lab()`, `oklch()`, `color()` and the rest are converted
+/// and clipped per channel, which is what browsers paint on an sRGB display; `color-mix()` and
+/// relative colours arrive here already computed.
+pub(crate) fn srgb(c: &CssColor) -> Option<[f32; 4]> {
+    use lightningcss::values::color::{ColorSpace, SRGB};
     match c {
-        CssColor::RGBA(c) => Some(
-            gpui::Rgba {
-                r: c.red as f32 / 255.0,
-                g: c.green as f32 / 255.0,
-                b: c.blue as f32 / 255.0,
-                a: c.alpha as f32 / 255.0,
-            }
-            .into(),
-        ),
-        _ => None,
+        CssColor::RGBA(c) => Some([
+            c.red as f32 / 255.0,
+            c.green as f32 / 255.0,
+            c.blue as f32 / 255.0,
+            c.alpha_f32(),
+        ]),
+        CssColor::LAB(_) | CssColor::Predefined(_) | CssColor::Float(_) => {
+            let c = SRGB::try_from(c).ok()?.resolve_missing();
+            Some([c.r, c.g, c.b, c.alpha].map(|v| v.clamp(0.0, 1.0)))
+        }
+        CssColor::CurrentColor | CssColor::LightDark(..) | CssColor::System(_) => None,
     }
 }
 
@@ -3006,8 +3105,9 @@ fn unresolved_color(diagnostics: &mut Vec<String>, what: &str) {
     once(
         diagnostics,
         format!(
-            "`{what}` value does not resolve to a concrete color (v1) — `currentColor`, \
-             `color-mix()` and system colors are not computed"
+            "`{what}` value does not resolve to a concrete color (v1) — `light-dark()` and \
+             system colors (`Canvas`, `ButtonText`, …) are not computed; write the color, and \
+             switch it with `@media (prefers-color-scheme: dark)` where it must follow the theme"
         ),
     );
 }
@@ -3551,6 +3651,24 @@ fn has_substitution(value: &lightningcss::properties::custom::TokenList<'_>) -> 
         TokenOrValue::UnresolvedColor(UnresolvedColor::LightDark { light, dark }) => {
             has_substitution(light) || has_substitution(dark)
         }
+        _ => false,
+    })
+}
+
+/// `color-mix(in srgb, currentColor 40%, red)` and `oklch(from currentColor l c h)` depend on the
+/// element's computed `color`, so they are resolved per element like a `var()`.
+fn has_current_color_function(value: &lightningcss::properties::custom::TokenList<'_>) -> bool {
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+    fn mentions(value: &lightningcss::properties::custom::TokenList<'_>) -> bool {
+        value.0.iter().any(|token| match token {
+            TokenOrValue::Token(Token::Ident(id)) => id.eq_ignore_ascii_case("currentcolor"),
+            TokenOrValue::Color(lightningcss::values::color::CssColor::CurrentColor) => true,
+            TokenOrValue::Function(f) => mentions(&f.arguments),
+            _ => false,
+        })
+    }
+    value.0.iter().any(|token| match token {
+        TokenOrValue::Function(f) => mentions(&f.arguments),
         _ => false,
     })
 }
@@ -6425,6 +6543,105 @@ mod tests {
         );
         assert!(d.is_empty(), "{d:?}");
         assert_eq!(r.vn_order, Some(7));
+    }
+
+    fn rgb8(c: Option<Hsla>) -> [u8; 4] {
+        let c = gpui::Rgba::from(c.expect("a concrete colour"));
+        [c.r, c.g, c.b, c.a].map(|v| (v * 255.0).round() as u8)
+    }
+
+    #[test]
+    fn css_color_4_and_5_functions_compute_to_srgb() {
+        let text = |value: &str| rgb8(clean(&format!("color: {value}")).text.color);
+        assert_eq!(text("oklch(62.8% 0.2577 29.23)"), [255, 0, 0, 255]);
+        assert_eq!(text("oklab(0.5 0 0)"), [99, 99, 99, 255]);
+        assert_eq!(text("lab(54.29% 80.82 69.91)"), [255, 0, 0, 255]);
+        assert_eq!(text("lch(54.29% 106.84 40.85 / 50%)"), [255, 0, 0, 128]);
+        assert_eq!(text("hwb(120 0% 0%)"), [0, 255, 0, 255]);
+        assert_eq!(text("color(srgb 0 0.5 1)"), [0, 128, 255, 255]);
+        assert_eq!(
+            text("color(srgb-linear 0.2158 0.2158 0.2158)"),
+            [128, 128, 128, 255]
+        );
+        assert_eq!(text("color-mix(in srgb, red, blue)"), [128, 0, 128, 255]);
+        assert_eq!(
+            text("color-mix(in srgb, red 25%, transparent)"),
+            [255, 0, 0, 64]
+        );
+        assert_eq!(text("rgb(from #ff0000 r g 255)"), [255, 0, 255, 255]);
+        assert_eq!(text("oklch(from #00ff00 l c h / 0.5)"), [0, 255, 0, 128]);
+    }
+
+    #[test]
+    fn a_wide_gamut_colour_is_clipped_into_srgb() {
+        let [r, g, b, _] = rgb8(clean("color: color(display-p3 1 0 0)").text.color);
+        assert!(r == 255 && g < 40 && b < 40, "{r} {g} {b}");
+        let [r, g, b, _] = rgb8(clean("color: oklch(90% 0.4 145)").text.color);
+        assert!(
+            g > r && g > b && g > 220,
+            "a too-vivid green stays green: {r} {g} {b}"
+        );
+    }
+
+    #[test]
+    fn every_colour_valued_property_takes_a_css_color_4_value() {
+        let red = "oklch(62.8% 0.2577 29.23)";
+        let solid = |r: &StyleRefinement| match &r.background {
+            Some(gpui::Fill::Color(bg)) => bg.as_solid(),
+            _ => None,
+        };
+        let want = [255, 0, 0, 255];
+        assert_eq!(
+            rgb8(solid(&clean(&format!("background-color: {red}")))),
+            want
+        );
+        assert_eq!(
+            rgb8(clean(&format!("border-color: {red}")).border_color),
+            want
+        );
+        assert_eq!(
+            rgb8(
+                clean(&format!("border-left: 1px solid {red}"))
+                    .vn_border_colors
+                    .left
+                    .flatten()
+            ),
+            want
+        );
+        let outline = clean(&format!("outline: 2px solid {red}"))
+            .vn_outline
+            .expect("ring");
+        assert_eq!(rgb8(Some(outline.color)), want);
+        let shadow = clean(&format!("box-shadow: 0 0 4px {red}"))
+            .box_shadow
+            .expect("shadow");
+        assert_eq!(rgb8(Some(shadow[0].color)), want);
+        let decoration = clean(&format!("text-decoration: underline {red}"))
+            .text
+            .underline
+            .expect("line");
+        assert_eq!(rgb8(decoration.color), want);
+
+        let (x, d) = extras(&format!(
+            "accent-color: {red}; fill: {red}; overflow: auto; scrollbar-color: {red} lab(0% 0 0)"
+        ));
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(rgb8(x.accent_color.flatten()), want);
+        let Some(SvgPaint::Color(fill)) = x.fill else {
+            panic!("{:?}", x.fill)
+        };
+        assert_eq!(rgb8(Some(fill)), want);
+        let (thumb, track) = x.scrollbar_color.expect("pair");
+        assert_eq!(
+            (rgb8(Some(thumb)), rgb8(Some(track))),
+            (want, [0, 0, 0, 255])
+        );
+
+        let (x, d) = extras(&format!(
+            "background-image: linear-gradient({red}, color-mix(in oklab, {red}, {red}))"
+        ));
+        assert!(d.is_empty(), "{d:?}");
+        assert!(x.background_images.is_some_and(|l| !l.is_empty()));
     }
 
     #[test]
