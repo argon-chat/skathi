@@ -121,7 +121,8 @@ unsafe fn computed_read(g: *mut c_void, id: Option<u32>, css: &str, shown: &str)
             &format!(
                 "getComputedStyle().{shown} reads \"\" — Skathi's computed style publishes the properties a reused \
                  component actually reads (transition-*, animation-*, transform, display, position, overflow-*, \
-                 width/height, direction, font-size, color) plus every custom property, not all 340 longhands"
+                 width/height, padding-*, margin-*, border-*-width, direction, font-size, color) plus every custom \
+                 property, not all 340 longhands"
             ),
         );
     }

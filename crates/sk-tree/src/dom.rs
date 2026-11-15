@@ -167,6 +167,18 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "transition-delay",
     "width",
     "height",
+    "padding-top",
+    "padding-right",
+    "padding-bottom",
+    "padding-left",
+    "margin-top",
+    "margin-right",
+    "margin-bottom",
+    "margin-left",
+    "border-top-width",
+    "border-right-width",
+    "border-bottom-width",
+    "border-left-width",
     "direction",
     "font-size",
     "color",
@@ -318,6 +330,7 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
                 .unwrap_or((0.0, 0.0));
             format!("{}px", if name == "width" { w } else { h })
         }
+        _ if edge_of(name).is_some() => edge_px(t, id, cs, name)?,
         "direction" => "ltr".into(),
         "font-size" => {
             let mut px = None;
@@ -350,6 +363,61 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         }
         _ => return None,
     })
+}
+
+#[derive(Clone, Copy)]
+enum EdgeBox {
+    Padding,
+    Margin,
+    Border,
+}
+
+fn edge_of(name: &str) -> Option<(EdgeBox, &str)> {
+    if let Some(side) = name.strip_prefix("padding-") {
+        return Some((EdgeBox::Padding, side));
+    }
+    if let Some(side) = name.strip_prefix("margin-") {
+        return Some((EdgeBox::Margin, side));
+    }
+    let side = name.strip_prefix("border-")?.strip_suffix("-width")?;
+    Some((EdgeBox::Border, side))
+}
+
+fn side_of<T: Clone + std::fmt::Debug + Default + PartialEq>(
+    edges: &gpui::EdgesRefinement<T>,
+    side: &str,
+) -> Option<T> {
+    match side {
+        "top" => edges.top.clone(),
+        "right" => edges.right.clone(),
+        "bottom" => edges.bottom.clone(),
+        "left" => edges.left.clone(),
+        _ => None,
+    }
+}
+
+/// A padding, margin or border-width longhand as a browser resolves it: px, a percentage of the parent's width
+/// (every side, as CSS has it), `auto` margins as 0.
+fn edge_px(t: &Tree, id: u32, cs: &sk_css::ComputedStates, name: &str) -> Option<String> {
+    let (which, side) = edge_of(name)?;
+    let rem = gpui::px(sk_css::rem_basis());
+    let parent_width = || {
+        let parent = t.node(id).map(|n| n.parent).unwrap_or(0);
+        let w = crate::render::bounds_of(parent).map_or(0.0, |(_, _, w, _)| w);
+        gpui::AbsoluteLength::Pixels(gpui::px(w))
+    };
+    let px = match which {
+        EdgeBox::Padding => side_of(&cs.base.padding, side)
+            .map_or(gpui::px(0.0), |l| l.to_pixels(parent_width(), rem)),
+        EdgeBox::Margin => match side_of(&cs.base.margin, side) {
+            Some(gpui::Length::Definite(l)) => l.to_pixels(parent_width(), rem),
+            Some(gpui::Length::Auto) | None => gpui::px(0.0),
+        },
+        EdgeBox::Border => {
+            side_of(&cs.base.border_widths, side).map_or(gpui::px(0.0), |l| l.to_pixels(rem))
+        }
+    };
+    Some(format!("{}px", f32::from(px)))
 }
 
 fn secs(d: std::time::Duration) -> String {
@@ -488,6 +556,34 @@ mod tests {
         assert_eq!(prop(single, "animation-name"), "none");
         assert_eq!(prop(single, "animation-duration"), "0.25s");
         assert_eq!(prop(single, "animation-fill-mode"), "forwards");
+    }
+
+    #[test]
+    fn computed_box_edges_resolve_to_px() {
+        let (boxed, bare) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let boxed = t.create_element(div);
+            t.set_class(boxed, "boxed");
+            t.insert(boxed, root, 0);
+            let bare = t.create_element(div);
+            t.insert(bare, root, 1);
+            (boxed, bare)
+        });
+        tree::set_engine(sk_css::Engine::compile(
+            ".boxed { padding: 4px 1rem; margin: 3px auto 0; border-top: 2px solid red }",
+        ));
+        tree::restyle_all();
+        let rem = format!("{}px", sk_css::rem_basis());
+        assert_eq!(prop(boxed, "padding-top"), "4px");
+        assert_eq!(prop(boxed, "padding-left"), rem);
+        assert_eq!(prop(boxed, "margin-top"), "3px");
+        assert_eq!(prop(boxed, "margin-right"), "0px", "auto");
+        assert_eq!(prop(boxed, "border-top-width"), "2px");
+        assert_eq!(prop(boxed, "border-bottom-width"), "0px");
+        for name in ["padding-bottom", "margin-left", "border-left-width"] {
+            assert_eq!(prop(bare, name), "0px", "{name}");
+        }
     }
 
     #[test]

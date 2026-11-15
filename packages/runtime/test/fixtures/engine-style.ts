@@ -219,7 +219,8 @@ export function styleHost(o: StyleHostOptions) {
         `getComputedStyle:${css}`,
         `getComputedStyle().${shown} reads "" — skathi's computed style publishes the properties a reused ` +
           "component actually reads (transition-*, animation-*, transform, display, position, overflow-*, " +
-          "width/height, direction, font-size, color) plus every custom property, not all 340 longhands",
+          "width/height, padding-*, margin-*, border-*-width, direction, font-size, color) plus every custom " +
+          "property, not all 340 longhands",
       );
     }
     return "";
