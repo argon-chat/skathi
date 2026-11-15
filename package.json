@@ -14,8 +14,7 @@
     "preludes": "bun scripts/gen-preludes.ts",
     "preludes:check": "bun scripts/gen-preludes.ts --check",
     "shaders": "bun scripts/shaders.ts",
-    "shaders:check": "bun scripts/shaders.ts --check",
-    "shaders:fetch": "bun scripts/fetch-slang.ts"
+    "shaders:check": "bun scripts/shaders.ts --check"
   },
   "devDependencies": {
     "@types/bun": "^1.4.0",

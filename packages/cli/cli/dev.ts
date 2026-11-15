@@ -3,11 +3,18 @@
 //
 // The dev host, first hit wins: `--exe` or SK_DEV_HOST; in a checkout, its debug sk-app (`cargo build
 // -p sk-app`); the cached dev host of this version; a download of it from the release (host-fetch.ts).
+//
+// An app with shaders/*.slang has them compiled into <dist>/effects, which the host reads through
+// SK_EFFECTS_DIR, and recompiled on every change. Renderers build effect pipelines once, so a good
+// rebuild restarts the host; a failed one prints the diagnostics and keeps the last good build running.
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { compileAppEffects, EffectsError, formatProblems, hasAppEffects, writeEffectFiles } from "../effects/compile";
+import { resolveCompiler } from "../effects/redslangc";
 import { loadAppConfig } from "./config";
+import { watchAppEffects, type EffectsWatch } from "./effects";
 import { cachedHost, checkHost, DEV_HOST, HostError, hostInfo, PKG_DIR, REPO_ROOT, CLI_VERSION } from "./host";
 import { fetchHost, type OnBytes } from "./host-fetch";
 import { currentPlatform, hostsFor, repoHostExe } from "./platform";
@@ -51,7 +58,7 @@ export async function devHost(
 
 export async function dev(
   target: string,
-  options: { exe?: string | undefined; color?: boolean | undefined } = {},
+  options: { exe?: string | undefined; shaderCompiler?: string | undefined; color?: boolean | undefined } = {},
 ): Promise<number> {
   const config = loadAppConfig(target);
   const c = paint(colorEnabled(process.stdout, options.color));
@@ -65,9 +72,34 @@ export async function dev(
     progress.fail();
     throw e;
   });
-  progress.end();
   const dist = join(config.appRoot, "dist", ".sk-dev");
   mkdirSync(dist, { recursive: true });
+
+  const effectsDir = join(dist, "effects");
+  const overridden = !!process.env.SK_EFFECTS_DIR;
+  let compiler: string | null = null;
+  if (hasAppEffects(config.appRoot) && !overridden) {
+    progress.step("effects");
+    try {
+      compiler = (
+        await resolveCompiler({
+          named: options.shaderCompiler,
+          log: (line) => progress.info(line),
+          onBytes: (done, total) => progress.bytes(done, total),
+        })
+      ).path;
+      const effects = await compileAppEffects(config.appRoot, compiler);
+      writeEffectFiles(effectsDir, effects.files);
+      progress.detail(effects.compiled.map((e) => e.effect.name).join(", "));
+    } catch (e) {
+      progress.fail();
+      const text = e instanceof EffectsError ? formatProblems(e.problems) : e instanceof Error ? e.message : String(e);
+      console.error(`${c.red("effects")}: ${text}`);
+      if (existsSync(join(effectsDir, "effects.json"))) console.error(c.dim("the app starts with the last good build"));
+    }
+  }
+  progress.end();
+
   const watcher = spawn(process.execPath, [join(PKG_DIR, "build.ts"), config.entry, dist, "--watch"], {
     cwd: PKG_DIR,
     stdio: "inherit",
@@ -80,12 +112,41 @@ export async function dev(
     await Bun.sleep(100);
   }
   console.log(`${c.green("▶")} ${c.bold(config.name)} ${c.dim(`dist ${dist}, workload ${exe}`)}`);
-  const host = spawn(exe, [], {
-    stdio: "inherit",
-    // SK_OWNER_PID: the host dies with this process however it ends (crates/sk-app/src/owner.rs).
-    env: { ...process.env, SK_DIST: dist, SK_APP_ROOT: config.appRoot, SK_OWNER_PID: String(process.pid) },
-  });
+  const start = (): ChildProcess =>
+    spawn(exe, [], {
+      stdio: "inherit",
+      // SK_OWNER_PID: the host dies with this process however it ends (crates/sk-app/src/owner.rs).
+      env: {
+        ...process.env,
+        SK_DIST: dist,
+        SK_APP_ROOT: config.appRoot,
+        SK_OWNER_PID: String(process.pid),
+        ...(!overridden && existsSync(join(effectsDir, "effects.json")) ? { SK_EFFECTS_DIR: effectsDir } : {}),
+      },
+    });
+  let host = start();
+  let restarting = false;
+  let effectsWatch: EffectsWatch | null = null;
+  if (compiler) {
+    effectsWatch = watchAppEffects({
+      appRoot: config.appRoot,
+      out: effectsDir,
+      compiler,
+      onBuilt: (effects) => {
+        console.log(
+          `${c.cyan("↻")} effects rebuilt (${effects.compiled.map((e) => e.effect.name).join(", ")}) — restarting the app`,
+        );
+        restarting = true;
+        host.kill();
+      },
+      onError: (text) => {
+        console.error(`${c.red("effects")}: ${text}`);
+        console.error(c.dim("the app keeps running the last good build"));
+      },
+    });
+  }
   const stop = () => {
+    effectsWatch?.close();
     try {
       watcher.kill();
     } catch {}
@@ -97,7 +158,15 @@ export async function dev(
     stop();
     process.exit(130);
   });
-  const code: number = await new Promise((done) => host.on("exit", (c) => done(c ?? 0)));
+  const code: number = await new Promise((done) => {
+    const exited = (status: number | null) => {
+      if (!restarting) return done(status ?? 0);
+      restarting = false;
+      host = start();
+      host.on("exit", exited);
+    };
+    host.on("exit", exited);
+  });
   stop();
   return code;
 }

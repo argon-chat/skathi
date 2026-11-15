@@ -6,9 +6,9 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 # The `--shading` effect registry: names, arguments and defaults. DATA plus the `.slang` sources and
-# their checked-in slangc output (`shaders/`, `generated/`); no rendering code (gpui owns the
-# primitive, gpui_windows the pipelines, sk-css the grammar). The schemas are slangc's reflection,
-# emitted as `effects.json` by `bun shaders.ts`; `cargo build` never invokes slangc.
+# their checked-in compiler output (`shaders/`, `generated/`); no rendering code (gpui owns the
+# primitive, the renderers the pipelines, sk-css the grammar). The schemas are Slang's reflection,
+# emitted as `effects.json` by `bun run shaders`; `cargo build` never compiles a shader.
 
 [dependencies]
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }

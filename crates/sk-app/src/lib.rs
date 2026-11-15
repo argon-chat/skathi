@@ -983,6 +983,7 @@ fn run_app() {
     app.on_reopen(|_| embed::reopen());
     #[cfg(feature = "prod")]
     let app = if payload::get().is_some() {
+        payload::install_effects();
         app.with_assets(payload::GpuiAssets)
     } else {
         app

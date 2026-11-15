@@ -27,6 +27,7 @@ export const KIND = {
   BYTECODE: 4,
   NATIVE_MANIFEST: 5,
   NATIVE_IMAGE: 6,
+  EFFECT: 7,
   ASSET: 16,
 } as const;
 
@@ -37,6 +38,7 @@ export const NAMES = {
   BYTECODE: "sk/app.bc",
   NATIVE_MANIFEST: "sk/app.native.json",
   NATIVE_IMAGE: "sk/app.image",
+  EFFECTS_DIR: "sk/effects/",
 } as const;
 
 export const FLAG_HAS_BYTECODE = 1;

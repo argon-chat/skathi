@@ -16,9 +16,7 @@ dist/
 *.log
 .DS_Store
 
-# Pinned contributor toolchain (see crates/sk-effects/tools/slang.manifest.json).
-# `bun scripts/fetch-slang.ts` populates it; nothing in `cargo build`
-# needs it, because the generated effect HLSL is checked in.
+# Only tools/sk-aot is tracked; anything else under tools/ is a local download.
 /tools/*
 !/tools/sk-aot/
 

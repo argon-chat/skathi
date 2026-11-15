@@ -35,8 +35,12 @@ const hot = ref(false);
         <div class="swatch frost">frost</div>
         <div class="swatch noise">noise</div>
         <div class="swatch glow" :class="{ hot }" @click="hot = !hot">glow · click</div>
+        <div class="swatch sheen">sheen</div>
       </div>
-      <p class="faint">Skathi's own effects, in a custom property that a browser simply ignores.</p>
+      <p class="faint">
+        Skathi's own effects, in a custom property that a browser simply ignores. sheen is this app's, from
+        shaders/sheen.slang.
+      </p>
     </Card>
 
     <Card title="Layout" api="grid · ::before · :hover">
@@ -155,6 +159,10 @@ const hot = ref(false);
 }
 .glow.hot {
   --shading: glow(#ff2d95, 30px, 1);
+}
+.sheen {
+  background: linear-gradient(135deg, #3b3f9e, #8b5cf6);
+  --shading: sheen(0.5, #ffffffcc);
 }
 .grid {
   display: grid;

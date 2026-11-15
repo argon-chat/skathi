@@ -112,6 +112,9 @@ impl AppPayload {
     pub fn native_image(&self) -> Option<&[u8]> {
         self.0.borrow_dependent().native_image()
     }
+    pub fn effects(&self) -> Vec<(&str, &[u8])> {
+        self.0.borrow_dependent().effects().collect()
+    }
     pub fn assets(&self) -> &[sk_payload::Entry<'_>] {
         self.0.borrow_dependent().assets()
     }
@@ -438,6 +441,33 @@ fn bundle_payload_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("app"));
     (macos.file_name()? == "MacOS" && contents.file_name()? == "Contents" && is_app)
         .then(|| contents.join("Resources").join("app.skpk"))
+}
+
+/// Hands the payload's `--shading` effects to the renderers and the CSS registry; before the first
+/// window, since both read them once. `SK_EFFECTS_DIR` wins over the payload.
+pub fn install_effects() {
+    let Some(loaded) = get() else { return };
+    let mut manifest = None;
+    let mut files = Vec::new();
+    for (name, data) in loaded.payload.effects() {
+        let Ok(text) = std::str::from_utf8(data) else {
+            eprintln!("[prod] the app's effect file {name} is not UTF-8; it is skipped");
+            continue;
+        };
+        if name == "effects.json" {
+            manifest = Some(text.to_string());
+        } else {
+            files.push((name.to_string(), text.to_string()));
+        }
+    }
+    let Some(manifest) = manifest else { return };
+    let effects = gpui::AppEffects::new("the app's payload", manifest, files);
+    if !gpui::set_app_effects(effects) && std::env::var_os(gpui::APP_EFFECTS_DIR_ENV).is_some() {
+        eprintln!(
+            "[prod] {} is set, so the app's own `--shading` effects come from it, not from the payload",
+            gpui::APP_EFFECTS_DIR_ENV
+        );
+    }
 }
 
 /// Exact first (a binary search); on a miss, an ASCII-case-insensitive scan with one advisory naming

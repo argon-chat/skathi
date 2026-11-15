@@ -9,7 +9,8 @@
 // macos-bundle.ts: the host is copied into `<exeName>.app`, the SKPK goes in Contents/Resources,
 // and the bundle is signed (ad hoc unless an identity is given). On Linux the SKPK is appended to a
 // copy of the host ELF (elf.ts). `PACKAGERS` holds the three. With `--aot` (Windows x64), aot-build.ts adds
-// the app's native image to the SKPK.
+// the app's native image to the SKPK. The app's shaders/*.slang go in as `sk/effects/*` (effects.ts), every
+// renderer's target whatever the OS.
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -17,6 +18,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { aotCheck, aotPlatformProblem, buildNative, hostAot, type NativeBuild } from "./aot-build";
 import { collectAssets, type AssetFile } from "./assets";
 import { ConfigError, loadAppConfig, parseVariant, type AppConfig, type PackConfig, type Variant } from "./config";
+import { buildAppEffects, type BuiltEffects } from "./effects";
 import { stampElf, type ElfStampResult } from "./elf";
 import { CLI_VERSION, PKG_DIR, type ResolvedHost } from "./host";
 import { resolveOrFetchHost } from "./host-fetch";
@@ -60,6 +62,8 @@ export interface BuildOptions {
   aot?: boolean | undefined;
   /** The sk-aot to use instead of the checkout's or the release's. */
   aotCompiler?: string | undefined;
+  /** The redslangc that compiles the app's effect shaders instead of the pinned release. */
+  shaderCompiler?: string | undefined;
   /** Colors in a report that refuses the build. */
   color?: boolean;
   platform?: Platform | undefined;
@@ -119,6 +123,8 @@ export interface BuildResult {
   payloadBytes: number;
   packs: { name: string; path: string; bytes: number; assets: number }[];
   aotInputs: string | null;
+  /** The app's own --shading effects, compiled into the payload. */
+  effects: { names: string[]; dir: string; compiler: string } | null;
   native: {
     manifest: string;
     imageBytes: number;
@@ -395,6 +401,14 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   }
   const hostNative = aot && host ? hostAot(host) : null;
 
+  const effects: BuiltEffects | null = await buildAppEffects({
+    appRoot: config.appRoot,
+    out: join(work, "effects"),
+    compiler: options.shaderCompiler,
+    progress,
+  });
+  if (!effects) rmSync(join(work, "effects"), { recursive: true, force: true });
+
   const jsOut = join(work, "app.prod.js");
   const assetsJson = join(work, "assets.json");
   // A stale list from an older build must not survive a builder that wrote none.
@@ -488,6 +502,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     { name: NAMES.WINDOW, kind: KIND.WINDOW, data: windowJson },
     { name: NAMES.SCRIPT, kind: KIND.SCRIPT, data: script },
     ...split.own.map((f) => ({ name: f.key, kind: KIND.ASSET, data: new Uint8Array(readFileSync(f.path)) })),
+    ...(effects?.inputs ?? []),
   ];
   const skpk = join(work, "app.skpk");
   for (const p of packs) writeFileSync(join(work, p.file), p.blob);
@@ -541,6 +556,11 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     assets: collected.files,
     bundleBytes: script.length,
     aotInputs: options.aotInputs ? join(work, "aot-inputs", "manifest.json") : null,
+    effects: effects && {
+      names: effects.effects.compiled.map((c) => c.effect.name),
+      dir: join(work, "effects"),
+      compiler: effects.compiler.path,
+    },
     native: native && {
       manifest: native.manifestPath,
       imageBytes: native.imageBytes,
@@ -619,6 +639,9 @@ export function summary(r: BuildResult, color = false): string {
     ),
     row("payload", `${kib(r.payloadBytes)} ${p.dim(r.skpk)}`),
   );
+  if (r.effects) {
+    lines.push(row("effects", `${r.effects.names.join(", ")} ${p.dim("hlsl · wgsl · metal")}`));
+  }
   if (r.native) {
     lines.push(
       row(

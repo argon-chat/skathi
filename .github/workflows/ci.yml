@@ -35,6 +35,9 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Types
         run: bun run typecheck
+      # Downloads the pinned redslangc, which the effect tests then use from the cache.
+      - name: Generated effect shaders are current
+        run: bun run shaders:check
       - name: Tests
         run: bun run test
       - name: Format
@@ -84,6 +87,14 @@ jobs:
           sudo -n apt-get install -y -q --no-install-recommends gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good gstreamer1.0-libav
           echo "SK_VIDEO_REQUIRE_GSTREAMER=1" >> "$GITHUB_ENV"
+      # The Metal renderer compiles these at run time; a library compile catches what Slang got wrong.
+      - if: runner.os == 'macOS'
+        name: Generated MSL compiles
+        run: |
+          xcrun -sdk macosx metal -v >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+          for f in crates/sk-effects/generated/*.metal; do
+            xcrun -sdk macosx metal -c "$f" -o /dev/null
+          done
       - name: Tests
         run: cargo test --locked --workspace --target ${{ matrix.target }}
       - name: Release host builds

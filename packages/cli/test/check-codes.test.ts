@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { runCheck } from "../check";
+import { effectFindings, runCheck } from "../check";
 import { ALL_CODES, RANGES, REGISTRY } from "../check/codes";
 import { analyzeRules, analyzeUnit, FIXTURES } from "./check-fixtures";
 
@@ -39,6 +39,16 @@ describe("the code registry", () => {
     add(analyzeUnit(["broken.ts", "missing.ts"]).diagnostics);
     for (const app of ["check-badconfig", "check-unresolved"]) {
       add((await runCheck({ target: join(FIXTURES, app), toolVersion: "test" })).diagnostics);
+    }
+    const shaders = join(FIXTURES, "check-shaders");
+    add(await effectFindings(shaders));
+    const saved = process.env.SK_REDSLANGC;
+    process.env.SK_REDSLANGC = join(shaders, "no-redslangc");
+    try {
+      add(await effectFindings(shaders));
+    } finally {
+      if (saved === undefined) delete process.env.SK_REDSLANGC;
+      else process.env.SK_REDSLANGC = saved;
     }
     expect([...REGISTRY.keys()].filter((code) => !seen.has(code))).toEqual([]);
   }, 60_000);

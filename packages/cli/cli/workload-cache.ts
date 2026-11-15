@@ -1,14 +1,16 @@
 // The per-user caches `sk workload list` shows and `sk prune` empties: the workloads and sk-aot of each
-// Skathi version (<cache>/skathi/hosts/<version>/<variant>|aot), the native images AOT apps expand
-// at start (Windows), and caches older versions of sk left behind.
+// Skathi version (<cache>/skathi/hosts/<version>/<variant>|aot), the effect shader compiler
+// (<cache>/skathi/redslangc/<version>), the native images AOT apps expand at start (Windows), and caches
+// older versions of sk left behind.
 
 import { existsSync, lstatSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { compilerCacheRoot, compilerExe, PIN } from "../effects/redslangc";
 import { cacheRoot } from "./host";
 import { currentPlatform, hostsFor, type Platform } from "./platform";
 import { mib, paint } from "./term";
 
-export type CacheKind = "workload" | "compiler" | "native-images" | "legacy" | "other";
+export type CacheKind = "workload" | "compiler" | "shader-compiler" | "native-images" | "legacy" | "other";
 
 export interface CacheEntry {
   kind: CacheKind;
@@ -23,6 +25,7 @@ export interface CacheEntry {
 
 export interface CacheRoots {
   workloads: string;
+  shaderCompilers: string;
   nativeImages: string | null;
   legacy: string[];
 }
@@ -31,7 +34,12 @@ export function cacheRoots(platform: Platform = currentPlatform()): CacheRoots {
   const workloads = cacheRoot(platform);
   const skathi = dirname(workloads);
   const native = process.env.SK_AOT_CACHE_DIR || (platform === "windows" ? join(skathi, "native-aot", "v1") : null);
-  return { workloads, nativeImages: native, legacy: [join(skathi, "aot-toolchain")] };
+  return {
+    workloads,
+    shaderCompilers: compilerCacheRoot(platform),
+    nativeImages: native,
+    legacy: [join(skathi, "aot-toolchain")],
+  };
 }
 
 const names = (dir: string): string[] => {
@@ -95,6 +103,12 @@ export function inventory(roots: CacheRoots, platform: Platform = currentPlatfor
     const path = join(roots.workloads, name);
     entries.push({ kind: "other", path, bytes: sizeOf(path) });
   }
+  const redslangc = compilerExe(platform);
+  for (const version of names(roots.shaderCompilers).sort(compareVersions)) {
+    const path = join(roots.shaderCompilers, version);
+    const complete = isDir(path) && existsSync(join(path, redslangc));
+    entries.push({ kind: "shader-compiler", path, bytes: sizeOf(path), version, complete });
+  }
   const images = roots.nativeImages ? names(roots.nativeImages) : [];
   if (roots.nativeImages && images.length) {
     entries.push({
@@ -115,9 +129,10 @@ export interface KeepOptions {
   all?: boolean;
 }
 
-/** Whether `entry` stays: a complete workload or compiler of the current version or a kept one. */
+/** Whether `entry` stays: a complete workload or compiler of the current version or a kept one, or the pinned redslangc. */
 export function needed(entry: CacheEntry, options: KeepOptions): boolean {
   if (options.all || entry.version === undefined || entry.complete === false) return false;
+  if (entry.kind === "shader-compiler") return entry.version === PIN.version;
   if (entry.kind === "native-images" || entry.kind === "legacy") return false;
   return entry.version === options.current || (options.keep ?? []).includes(entry.version);
 }
@@ -169,10 +184,14 @@ export function prune(
 export function entryName(e: CacheEntry): string {
   if (e.kind === "workload") return `${e.variant} workload`;
   if (e.kind === "compiler") return "sk-aot";
+  if (e.kind === "shader-compiler") return `redslangc ${e.version}`;
   if (e.kind === "native-images") return `native images (${e.items})`;
   if (e.kind === "legacy") return "old AOT toolchain";
   return "stray file";
 }
+
+/** The Skathi version column: a shader compiler has its own version, in its name. */
+const skathiVersion = (e: CacheEntry) => (e.kind === "shader-compiler" ? "" : (e.version ?? ""));
 
 type Line = readonly [version: string, name: string, size: string, note: string];
 
@@ -200,10 +219,10 @@ export function formatInventory(
         ? p.yellow("incomplete")
         : !needed(e, options)
           ? ""
-          : e.version === options.current
+          : e.version === options.current || e.kind === "shader-compiler"
             ? p.green("this sk")
             : p.green("kept");
-    return [e.version ?? "", entryName(e), mib(e.bytes), [state, where(e, p)].filter(Boolean).join(" ")];
+    return [skathiVersion(e), entryName(e), mib(e.bytes), [state, where(e, p)].filter(Boolean).join(" ")];
   });
   const total = entries.reduce((n, e) => n + e.bytes, 0);
   const free = entries.filter((e) => !needed(e, options)).reduce((n, e) => n + e.bytes, 0);
@@ -221,8 +240,13 @@ export function formatPrune(result: PruneResult, options: KeepOptions & { dryRun
   if (!result.removed.length && !result.failed.length) return `nothing to prune; the workloads of ${kept} stay`;
   const verb = options.dryRun ? "would remove" : "removed";
   const rows = [
-    ...result.removed.map((e): Line => [e.version ?? "", entryName(e), mib(e.bytes), p.dim(verb)]),
-    ...result.failed.map(({ entry: e, error }): Line => [e.version ?? "", entryName(e), mib(e.bytes), p.yellow(error)]),
+    ...result.removed.map((e): Line => [skathiVersion(e), entryName(e), mib(e.bytes), p.dim(verb)]),
+    ...result.failed.map(({ entry: e, error }): Line => [
+      skathiVersion(e),
+      entryName(e),
+      mib(e.bytes),
+      p.yellow(error),
+    ]),
   ];
   return [
     ...lines(rows, p),

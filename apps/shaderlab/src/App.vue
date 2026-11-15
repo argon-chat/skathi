@@ -11,8 +11,7 @@ const hot = ref(false);
     <div class="head">
       <div class="h1">shaderlab — user-authored `--shading` effects</div>
       <div class="h2 app">
-        app effects — ripple · aurora: compiled from apps/shaderlab/shaders/*.slang by `bun shaders.ts --app … --out …`,
-        loaded at startup from $SK_EFFECTS_DIR.
+        app effects — ripple · aurora: shaders/*.slang, compiled into the app by sk build and sk dev for every OS.
       </div>
       <div class="h2 core">
         built-ins — frost · glow: the effects that ship with the engine, on the same registry and unchanged.

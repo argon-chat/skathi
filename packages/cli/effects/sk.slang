@@ -13,17 +13,17 @@
 //     };
 //
 // That is the WHOLE authoring surface. No entry point, no semantics, no
-// register bindings, no vertex stage — all of that lives below, and
-// `scripts/shaders.ts` appends a four-line wrapper that calls
-// `sk_begin` / `sk_finish` around your `shade`.
-//
-// The attributes are not decoration. slangc reflects them
-// (`-reflection-json`), and shaders.ts turns that reflection into the CSS
-// schema: `[SkEffect("ripple")]` is the function name, the FIELD ORDER is the
-// argument order and the parameter-slot order, and the per-field attributes
-// give the CSS type, the default and the clamp range. Nothing is registered
-// twice; there is no Rust or JS list of your effect's parameters to keep in
-// sync.
+// register bindings, no vertex stage — all of that lives below, and the
+// compiler appends a short wrapper that calls `sk_begin` / `sk_finish`
+// around your `shade`. One effect per file, in the app's `shaders/`:
+// `sk build`, `sk run` and `sk publish` compile them into the app for every
+// OS, `sk dev` recompiles on save, and `sk check` reports what fails.
+// The attributes are not decoration. The compiler reflects them and turns
+// that reflection into the CSS schema: `[SkEffect("ripple")]` is the
+// function name, the FIELD ORDER is the argument order and the
+// parameter-slot order, and the per-field attributes give the CSS type, the
+// default and the clamp range. Nothing is registered twice; there is no Rust
+// or JS list of your effect's parameters to keep in sync.
 //
 // Rules the engine cannot enforce for you:
 //   * Never call `Sample` inside a loop or a non-uniform branch — implicit
@@ -33,13 +33,13 @@
 //     `static override bool straightAlpha() { return true; }`. Either way
 //     the engine draws a premultiplied result (see `sk_finish`).
 //   * Effects compile at `ps_5_0`; the rest of gpui stays at `ps_4_1`.
-//
-// The full constraint list is docs/SHADERS-AUTHORING.md.
+//   * An effect declares no textures, samplers or buffers: it reads
+//     `EffectInput` and its own fields, nothing else.
 
 module sk;
 
 // ===========================================================================
-//  Authoring attributes — reflected by slangc, consumed by shaders.ts
+//  Authoring attributes — reflected by the compiler, read into the schema
 // ===========================================================================
 //
 // Slang user-defined attributes are declared as structs tagged
@@ -115,7 +115,7 @@ public struct SkColorAttribute
 /// so an omitted optional parameter is skipped when the argument in that
 /// position does not have its type — which is how `glow(12px, 0.8)` and
 /// `glow(#7fd4ff, 12px, 0.8)` both parse. An optional parameter must therefore
-/// differ in CSS type from the parameter that follows it; shaders.ts rejects
+/// differ in CSS type from the parameter that follows it; the compiler rejects
 /// the effect at compile time otherwise.
 [__AttributeUsage(_AttributeTargets.Var)]
 public struct SkOptionalAttribute
@@ -172,9 +172,9 @@ public struct SkAnimatedAttribute
 // anything sampling near the border.
 //
 // They are declared HERE, in the module, rather than in a generated wrapper:
-// slangc preserves explicit `register()` annotations verbatim through the HLSL
-// backend (measured, docs/SHADERS.md §3.1), so the module is the right home
-// for them and an effect can never redeclare or move one.
+// Slang keeps explicit `register()` annotations through the HLSL and Metal
+// backends (Metal: b0 buffer(0), t1 buffer(1), t0/t2 texture(0/2), s1
+// sampler(1)), so the module is the right home and an effect cannot move one.
 //
 // `[[vk::binding(binding, group)]]` is the same contract for the WGSL target,
 // matching the pipeline layout in gpui_wgpu: group 0 the globals, group 1 the
@@ -341,7 +341,7 @@ public interface IEffect
 //
 // `sk_begin` and `sk_finish` are what a generated wrapper calls; between them
 // it does nothing but unpack the parameter slots into the effect struct's
-// named fields (which is why shaders.ts needs reflection at all). Because
+// named fields (which is why the compiler needs reflection at all). Because
 // `sk_finish` is generic over `T : IEffect`, Slang specialises the whole
 // composition at compile time: there is no indirect call, no vtable, and the
 // engine-owned coverage/premultiply/backdrop-restore logic lives in this

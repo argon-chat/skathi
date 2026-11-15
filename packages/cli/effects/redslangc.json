@@ -1,0 +1,19 @@
+{
+  "version": "0.1.0",
+  "slang": "2026.12",
+  "release": "https://github.com/argon-chat/redslangc/releases/download/v0.1.0",
+  "assets": {
+    "windows-x64": {
+      "file": "redslangc-v0.1.0-x86_64-pc-windows-msvc.zip",
+      "sha256": "ff3d661f0c854dd3f1d977307ff1e18099f4ffcebe5e198446b3a437bd187eae"
+    },
+    "linux-x64": {
+      "file": "redslangc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "22c1fec747c9918dce8bbf7635a3d36e80b22b742f3a69e3c5edef34cb36b5a2"
+    },
+    "macos-arm64": {
+      "file": "redslangc-v0.1.0-aarch64-apple-darwin.tar.gz",
+      "sha256": "33363d0c2c9dece12cad1249a353c61370194e7766e9731ecd242578cde4e384"
+    }
+  }
+}

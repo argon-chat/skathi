@@ -108,17 +108,15 @@ pub fn parse(value: &TokenList, diagnostics: &mut Vec<String>) -> Option<EffectS
             let function = functions[0];
             let name = function.name.0.as_ref();
             let Some(schema) = sk_effects::lookup(name) else {
-                // The registry is built-ins PLUS whatever `$SK_EFFECTS_DIR` contributed, so
-                // "unknown" here can mean either "typo" or "you have not compiled your app's
-                // shaders yet".
+                // The registry is built-ins PLUS the app's own, so "unknown" here can mean either
+                // "typo" or "this effect's shader did not make it into the app".
                 advise(
                     diagnostics,
                     &format!(
                         "`--shading: {name}(…)` is not a known effect — available: {}. An app's \
-                         own effect must be compiled with `bun shaders.ts --app <app> --out \
-                         <dir>` and the host run with {}=<dir>.",
+                         own effect is a `shaders/<name>.slang` declaring [SkEffect(\"{name}\")]; \
+                         sk build and sk dev compile it into the app.",
                         known_effects(),
-                        sk_effects::EFFECTS_DIR_ENV,
                     ),
                 );
                 return None;
@@ -432,7 +430,7 @@ mod tests {
     }
 
     const USER_MANIFEST: &str = r#"{
-      "schema": 6,
+      "schema": 7,
       "kind": "user",
       "effects": [
         {

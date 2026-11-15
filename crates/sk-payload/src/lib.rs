@@ -45,6 +45,8 @@ pub mod kind {
     pub const NATIVE_MANIFEST: u16 = 5;
     /// That image, raw-DEFLATE compressed.
     pub const NATIVE_IMAGE: u16 = 6;
+    /// The app's own `--shading` effects: `sk/effects/effects.json` and the shaders it names.
+    pub const EFFECT: u16 = 7;
     pub const ASSET: u16 = 16;
 }
 
@@ -55,6 +57,8 @@ pub mod name {
     pub const BYTECODE: &str = "sk/app.bc";
     pub const NATIVE_MANIFEST: &str = "sk/app.native.json";
     pub const NATIVE_IMAGE: &str = "sk/app.image";
+    /// The prefix of every [`super::kind::EFFECT`] entry.
+    pub const EFFECTS_DIR: &str = "sk/effects/";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,6 +276,16 @@ impl<'a> Payload<'a> {
             .iter()
             .find(|e| e.kind == kind::NATIVE_IMAGE && e.name == name::NATIVE_IMAGE)
             .map(|e| e.data)
+    }
+
+    /// The app's effect files, named relative to [`name::EFFECTS_DIR`]; empty for an app without any.
+    pub fn effects(&self) -> impl Iterator<Item = (&'a str, &'a [u8])> + '_ {
+        self.entries.iter().filter_map(|e| {
+            (e.kind == kind::EFFECT)
+                .then(|| e.name.strip_prefix(name::EFFECTS_DIR))
+                .flatten()
+                .map(|n| (n, e.data))
+        })
     }
 
     pub fn assets(&self) -> &[Entry<'a>] {
@@ -533,6 +547,25 @@ mod tests {
             Payload::parse(&bad).unwrap_err(),
             Error::BadUtf8("\"sk/app.native.json\"".into())
         );
+    }
+
+    #[test]
+    fn effects_are_their_own_kind_and_not_assets() {
+        let blob = write_unaligned(&[
+            (kind::SCRIPT, name::SCRIPT, b"app()"),
+            (kind::EFFECT, "sk/effects/effects.json", b"{}"),
+            (kind::EFFECT, "sk/effects/ripple.wgsl", b"fn"),
+            (kind::ASSET, "assets/a.txt", b"a"),
+        ]);
+        let p = Payload::parse(&blob).unwrap();
+        let effects: Vec<_> = p.effects().collect();
+        assert_eq!(
+            effects,
+            [("effects.json", &b"{}"[..]), ("ripple.wgsl", &b"fn"[..])]
+        );
+        assert_eq!(p.asset("sk/effects/ripple.wgsl"), None);
+        assert_eq!(p.asset_count(), 1);
+        assert_eq!(Payload::parse(GOLDEN).unwrap().effects().count(), 0);
     }
 
     #[test]

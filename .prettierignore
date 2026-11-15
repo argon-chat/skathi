@@ -4,7 +4,6 @@ target/
 *.lock
 bun.lock
 *.toml
-crates/sk-effects/tools/slang.manifest.json
 scripts/aot/toolchain.lock.json
 
 # Generated, checked byte for byte against their generators.

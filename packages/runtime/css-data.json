@@ -41,7 +41,7 @@
     },
     {
       "name": "--shading",
-      "description": "Skathi: a GPU shader effect on this element only (not inherited, unlike other custom properties). One effect function, or `none`. Out-of-range arguments are clamped. An app's own effects, compiled with the Skathi shader tool, are named the same way.",
+      "description": "Skathi: a GPU shader effect on this element only (not inherited, unlike other custom properties). One effect function, or `none`. Out-of-range arguments are clamped. An app's own effects, its shaders/*.slang, are named the same way.",
       "syntax": "none | frost( <number> , <length>? , <color>? ) | noise( <number> , <length>? , <number>? ) | glow( <color>? , <length> , <number> )",
       "values": [
         { "name": "none", "description": "No effect; cancels an earlier rule." },

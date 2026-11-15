@@ -58,6 +58,25 @@ const CODES: CodeInfo[] = [
     fatal: true,
   },
   {
+    code: "SK0005",
+    severity: "error",
+    title: "an effect shader does not compile",
+    explanation:
+      "The app's shaders/*.slang are its own `--shading` effects, compiled into the app for every OS by sk build. One of them does not compile, or breaks a rule of the effect schema (an attribute, a parameter type, a name), so sk build refuses the app.",
+    example:
+      '[SkEffect("ripple")]\nstruct Ripple : IEffect\n{\n    int rings; // parameters are float, float2, float3 or float4\n    float4 shade(EffectInput input) { return float4(0, 0, 0, 0); }\n};',
+    fix: "Fix the shader at the reported line; the rules are in the comments of the `sk` prelude (`import sk;`).",
+  },
+  {
+    code: "SK0006",
+    severity: "warning",
+    title: "the effect shaders could not be checked",
+    explanation:
+      "The app has shaders/*.slang, but the shader compiler (redslangc) could not be found or downloaded, so they were not compiled. sk build needs it too.",
+    example: "SK_HOST_OFFLINE=1 with no cached redslangc",
+    fix: "Allow the download once, or set SK_REDSLANGC to a redslangc binary.",
+  },
+  {
     code: "SK1001",
     severity: "error",
     title: "a built-in method or property is replaced or deleted",

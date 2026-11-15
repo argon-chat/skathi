@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { loadAppConfig } from "../cli/config";
+import { appShadersDir, compileAppEffects, EffectsError, hasAppEffects } from "../effects/compile";
+import { resolveCompiler } from "../effects/redslangc";
 import { quietProgress, type Progress } from "../cli/term";
 import { Builtins } from "./builtins";
 import { codeInfo, REGISTRY } from "./codes";
@@ -91,6 +93,7 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
   const typescript = loadTypeScript(config.appRoot);
   const base = { typescript, root: config.appRoot, entry: config.entry, toolVersion: options.toolVersion, progress };
   if (findings.length) return analyze({ ...base, modules: [], findings });
+  findings.push(...(await effectFindings(config.appRoot, progress)));
 
   progress.step("module graph");
   let graph: ModuleGraph;
@@ -137,7 +140,47 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
     declarations: graph.declarations,
     allow: checkConfig.allow,
     deps: options.deps ?? true,
+    findings,
   });
+}
+
+/** The app's shaders/*.slang, compiled as sk build would: one SK0005 per error, at the author's line. */
+export async function effectFindings(appRoot: string, progress: Progress = quietProgress): Promise<Finding[]> {
+  if (!hasAppEffects(appRoot)) return [];
+  const dir = appShadersDir(appRoot);
+  progress.step("effect shaders");
+  let compiler: string;
+  try {
+    compiler = (
+      await resolveCompiler({
+        log: (line) => progress.info(line),
+        onBytes: (done, total) => progress.bytes(done, total),
+      })
+    ).path;
+  } catch (e) {
+    const message = `the effect shaders were not compiled: ${e instanceof Error ? e.message : String(e)}`;
+    return [{ code: "SK0006", message, file: dir, range: ZERO_RANGE, related: [] }];
+  }
+  try {
+    await compileAppEffects(appRoot, compiler);
+    return [];
+  } catch (e) {
+    if (!(e instanceof EffectsError)) throw e;
+    return e.problems
+      .filter((p) => p.severity === "error")
+      .map((p): Finding => {
+        const own = isAbsolute(p.file);
+        const line = own ? Math.max(0, p.line - 1) : 0;
+        const character = own ? Math.max(0, p.column - 1) : 0;
+        return {
+          code: "SK0005",
+          message: own ? p.message : `${p.file}${p.line ? `:${p.line}` : ""}: ${p.message}`,
+          file: own ? p.file : dir,
+          range: { start: { line, character }, end: { line, character } },
+          related: [],
+        };
+      });
+  }
 }
 
 export function analyze(input: AnalyzeInput): CheckReport {

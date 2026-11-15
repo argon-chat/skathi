@@ -14,6 +14,7 @@ import { addHost, buildHost, CLI_VERSION, DEV_HOST, HostError, hostInfo, resolve
 import { fetchHost } from "./host-fetch";
 import { currentPlatform, parsePlatform } from "./platform";
 import { colorEnabled, lineProgress, logTo, paint, progressFor } from "./term";
+import { PIN } from "../effects/redslangc";
 import { cacheRoots, formatInventory, formatPrune, inventory, needed, prune } from "./workload-cache";
 
 interface Run {
@@ -93,7 +94,7 @@ function pruneCommand(parent: CommandUnknownOpts, run: Run) {
     .copyInheritedSettings(parent)
     .summary("Remove cached workloads this sk does not use")
     .description(
-      `Remove what sk ${CLI_VERSION} does not need: other versions' workloads and sk-aot, incomplete downloads, ` +
+      `Remove what sk ${CLI_VERSION} does not need: other versions' workloads and sk-aot, redslangc builds other than ${PIN.version}, incomplete downloads, ` +
         "expanded native images (apps expand them again at start) and old toolchains.",
     )
     .option("--dry-run", "Show what would go, remove nothing")
@@ -163,11 +164,14 @@ export function cli(run: Run): Command {
   program
     .command("dev")
     .summary("Run the app with hot reload")
-    .description("Run the app with hot reload: edits to .vue, .ts and .css apply without a restart.")
+    .description(
+      "Run the app with hot reload: edits to .vue, .ts and .css apply without a restart; an edit to a shaders/*.slang effect recompiles it and restarts the app.",
+    )
     .argument("[app]")
     .option("--exe <workload>", "Run this dev workload instead of the cached one")
+    .option("--shader-compiler <exe>", "Compile effect shaders with this redslangc (or SK_REDSLANGC)")
     .action(async (app, o) => {
-      run.code = await dev(app ?? ".", { exe: o.exe, color: run.color });
+      run.code = await dev(app ?? ".", { exe: o.exe, shaderCompiler: o.shaderCompiler, color: run.color });
     });
 
   for (const [mode, text] of Object.entries(BUILD_MODES)) {
@@ -191,6 +195,7 @@ export function cli(run: Run): Command {
       .option("--payload-only", "Write dist/.sk/app.skpk and stop")
       .option("--aot-inputs", "Keep the typed sources for a later AOT compile")
       .option("--aot-compiler <exe>", "Compile native images with this sk-aot.exe (or SK_AOT_COMPILER)")
+      .option("--shader-compiler <exe>", "Compile effect shaders with this redslangc (or SK_REDSLANGC)")
       .addOption(hidden("--host <exe>"))
       .addOption(hidden("--variant <name>"))
       .addOption(hidden("--allow-workload-mismatch"))
@@ -227,6 +232,7 @@ export function cli(run: Run): Command {
         allowHostMismatch: o.allowWorkloadMismatch === true || o.allowHostMismatch === true,
         defines: o.define,
         aotInputs: o.aotInputs === true,
+        shaderCompiler: o.shaderCompiler,
         ...aot,
         color: errColor,
         platform,
@@ -240,6 +246,7 @@ export function cli(run: Run): Command {
             exe: result.exe,
             skpk: result.skpk,
             aotInputs: result.aotInputs,
+            effects: result.effects,
             native: result.native,
             name: result.config.name,
             productName: result.config.productName,

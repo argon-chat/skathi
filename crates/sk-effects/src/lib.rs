@@ -14,28 +14,26 @@
 //! (keyed by the same numbering), this crate the names, argument schemas and defaults, and `sk-css`
 //! the token-list grammar.
 //!
-//! The schemas are parsed from `effects.json`, which `bun shaders.ts` produces from slangc's
-//! reflection, so an effect is declared once, in its `.slang` file. Built-ins are in
-//! `crates/sk-effects/generated/effects.json` (checked in and `include_str!`d, so `cargo build`
-//! needs no slangc); app effects in `$SK_EFFECTS_DIR/effects.json`, with ids allocated after the
-//! built-ins in manifest order, which is the order `gpui_windows` builds pipelines in.
+//! The schemas are parsed from `effects.json`, which the effect compiler (`packages/cli/effects`)
+//! produces from Slang's reflection, so an effect is declared once, in its `.slang` file. Built-ins
+//! are in `crates/sk-effects/generated/effects.json` (checked in and `include_str!`d, so `cargo
+//! build` needs no shader compiler); an app's come from [`gpui::app_effects`] (its payload, or
+//! `$SK_EFFECTS_DIR`), with ids allocated after the built-ins in manifest order, which is the order
+//! the renderers build pipelines in.
 //!
 //! Parameter slots are the contract with the shaders: slot *i* is `params0[i]` for i < 4 and
 //! `params1[i - 4]` beyond, a colour takes four consecutive slots, and `shaders.ts` assigns them
 //! from field order under HLSL's no-straddle rule.
 
-use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use gpui::{effect_id, EffectSpec, EFFECT_FLAG_NEEDS_BACKDROP};
 
 /// The `effects.json` layout this build understands; a mismatch means the artifacts came from a
 /// different toolchain generation and must be regenerated.
-pub const MANIFEST_SCHEMA: u32 = 6;
+pub const MANIFEST_SCHEMA: u32 = 7;
 
-/// The environment variable pointing at an app's compiled effects (the `--out` directory of `bun
-/// shaders.ts --app`); `gpui_windows` reads it too, so both see the same list in the same order.
-pub const EFFECTS_DIR_ENV: &str = "SK_EFFECTS_DIR";
+pub use gpui::APP_EFFECTS_DIR_ENV as EFFECTS_DIR_ENV;
 
 /// What kind of CSS value a parameter accepts; drives validation and the type-directed matching
 /// that lets an optional leading parameter be omitted (`glow(12px, 0.8)`, `glow(#7fd4ff, 12px, 0.8)`).
@@ -190,7 +188,7 @@ pub fn parse_manifest(
     if manifest.schema != MANIFEST_SCHEMA {
         return Err(format!(
             "{origin}: effects.json is schema {} but this build understands {MANIFEST_SCHEMA} — \
-             re-run `bun shaders.ts`",
+             rebuild with the sk that matches this host",
             manifest.schema
         ));
     }
@@ -293,30 +291,11 @@ fn advisory(message: String) {
     seen.push(message);
 }
 
-pub fn user_effects_dir() -> Option<PathBuf> {
-    match std::env::var_os(EFFECTS_DIR_ENV) {
-        Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
-        _ => None,
-    }
-}
-
-fn load_user(dir: &Path, first_id: u32) -> Vec<&'static EffectSchema> {
-    let path = dir.join("effects.json");
-    let json = match std::fs::read_to_string(&path) {
-        Ok(json) => json,
-        Err(error) => {
-            advisory(format!(
-                "{EFFECTS_DIR_ENV} is set to `{}` but {} could not be read ({error}) — the app's \
-                 own `--shading` effects are unavailable. Run `bun shaders.ts --app <app> --out \
-                 {}`.",
-                dir.display(),
-                path.display(),
-                dir.display()
-            ));
-            return Vec::new();
-        }
+fn load_user(first_id: u32) -> Vec<&'static EffectSchema> {
+    let Some(app) = gpui::app_effects() else {
+        return Vec::new();
     };
-    match parse_manifest(&json, first_id, false, &path.display().to_string()) {
+    match parse_manifest(&app.manifest, first_id, false, &app.origin) {
         Ok(effects) => effects,
         Err(error) => {
             // A broken manifest must not take the app down: every built-in
@@ -349,9 +328,7 @@ fn build() -> &'static [&'static EffectSchema] {
          pipeline table"
     );
 
-    if let Some(dir) = user_effects_dir() {
-        effects.extend(load_user(&dir, effect_id::COUNT));
-    }
+    effects.extend(load_user(effect_id::COUNT));
     Box::leak(effects.into_boxed_slice())
 }
 
@@ -414,8 +391,8 @@ mod tests {
     const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
     const USER_MANIFEST: &str = r#"{
-      "schema": 6,
-      "slangc": "2026.12",
+      "schema": 7,
+      "slang": "2026.12",
       "kind": "user",
       "effects": [
         {
@@ -572,14 +549,6 @@ mod tests {
         assert_eq!(defaults.params[0], 1.5);
         assert_eq!(&defaults.params[4..8], &[0.5, 0.8, 1.0, 1.0]);
         assert!(ripple.is_animated(&defaults.params));
-    }
-
-    #[test]
-    fn a_manifest_from_the_future_is_refused_by_schema() {
-        let json = USER_MANIFEST.replace("\"schema\": 6", "\"schema\": 99");
-        let error = parse_manifest(&json, 3, false, "<test>").unwrap_err();
-        assert!(error.contains("schema 99"), "{error}");
-        assert!(error.contains("bun shaders.ts"), "{error}");
     }
 
     #[test]

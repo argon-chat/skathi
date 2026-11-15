@@ -12,6 +12,7 @@
     "aot",
     "cli",
     "check",
+    "effects",
     "templates",
     "devtools/apps.ts",
     "devtools/commands.ts",

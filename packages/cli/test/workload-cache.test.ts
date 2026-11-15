@@ -11,6 +11,7 @@ import {
   prune,
   type CacheRoots,
 } from "../cli/workload-cache";
+import { PIN } from "../effects/redslangc";
 
 const scratch = mkdtempSync(join(tmpdir(), "sk-workload-cache-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -27,6 +28,7 @@ beforeEach(() => {
   const skathi = join(mkdtempSync(join(scratch, "c-")), "skathi");
   roots = {
     workloads: join(skathi, "hosts"),
+    shaderCompilers: join(skathi, "redslangc"),
     nativeImages: join(skathi, "native-aot", "v1"),
     legacy: [join(skathi, "aot-toolchain")],
   };
@@ -40,6 +42,9 @@ beforeEach(() => {
   file(join(w, "0.1.0", "no-devtools", "sk-host.exe"), 800);
   file(join(w, "0.1.0-beta.1", "dev", "sk-host.exe"), 700);
   file(join(w, "stray.partial"), 3);
+  file(join(roots.shaderCompilers, PIN.version, "redslangc.exe"), 50);
+  file(join(roots.shaderCompilers, "0.0.9", "redslangc.exe"), 40);
+  file(join(roots.shaderCompilers, `${PIN.version}.partial`, "LICENSE"), 6);
   file(join(roots.nativeImages!, "a".repeat(64), "app.image"), 200);
   file(join(roots.nativeImages!, "b".repeat(64), "inspector.image"), 100);
   file(join(roots.legacy[0]!, "frontend-x", "bun.tgz"), 4000);
@@ -58,6 +63,9 @@ describe("the inventory", () => {
       ["workload", "0.1.0", "standard", 900, true],
       ["workload", "0.1.0-beta.1", "dev", 700, true],
       ["other", "", "", 3, null],
+      ["shader-compiler", `${PIN.version}.partial`, "", 6, false],
+      ["shader-compiler", PIN.version, "", 50, true],
+      ["shader-compiler", "0.0.9", "", 40, true],
       ["native-images", "", "", 300, null],
       ["legacy", "", "", 4000, null],
     ]);
@@ -65,19 +73,22 @@ describe("the inventory", () => {
   });
 
   test("an empty or missing cache is an empty inventory", () => {
-    expect(inventory({ workloads: join(scratch, "none"), nativeImages: null, legacy: [] })).toEqual([]);
+    const none = join(scratch, "none");
+    expect(inventory({ workloads: none, shaderCompilers: none, nativeImages: null, legacy: [] })).toEqual([]);
   });
 
   test("this version's complete workloads are needed; --keep adds versions, --all needs nothing", () => {
     const entries = inventory(roots, "windows");
     const kept = (options: Parameters<typeof needed>[1]) =>
       entries.filter((e) => needed(e, options)).map((e) => `${e.version}/${e.variant ?? e.kind}`);
-    expect(kept({ current: CURRENT })).toEqual(["0.2.0/standard", "0.2.0/compiler"]);
+    const pinned = `${PIN.version}/shader-compiler`;
+    expect(kept({ current: CURRENT })).toEqual(["0.2.0/standard", "0.2.0/compiler", pinned]);
     expect(kept({ current: CURRENT, keep: ["0.1.0"] })).toEqual([
       "0.2.0/standard",
       "0.2.0/compiler",
       "0.1.0/no-devtools",
       "0.1.0/standard",
+      pinned,
     ]);
     expect(kept({ current: CURRENT, all: true })).toEqual([]);
   });
@@ -97,8 +108,8 @@ describe("prune", () => {
   test("a dry run removes nothing and reports what would go", () => {
     const options = { current: CURRENT, dryRun: true, roots };
     const result = prune(inventory(roots, "windows"), options);
-    expect(result.bytes).toBe(300 + 800 + 900 + 700 + 3 + 300 + 4000);
-    expect(summary()).toHaveLength(9);
+    expect(result.bytes).toBe(300 + 800 + 900 + 700 + 3 + 6 + 40 + 300 + 4000);
+    expect(summary()).toHaveLength(12);
     expect(formatPrune(result, options, false)).toContain("would free");
   });
 
@@ -108,8 +119,10 @@ describe("prune", () => {
     expect(summary()).toEqual([
       ["workload", "0.2.0", "standard", 1010, true],
       ["compiler", "0.2.0", "", 505, true],
+      ["shader-compiler", PIN.version, "", 50, true],
     ]);
     expect(readdirSync(roots.workloads)).toEqual([CURRENT]);
+    expect(readdirSync(roots.shaderCompilers)).toEqual([PIN.version]);
     expect(existsSync(roots.nativeImages!)).toBe(true);
     expect(readdirSync(roots.nativeImages!)).toEqual([]);
     expect(existsSync(roots.legacy[0]!)).toBe(false);
@@ -136,6 +149,7 @@ test("the cache lives under LOCALAPPDATA on Windows, beside the native image cac
     expect(r.workloads).toBe(join(scratch, "local", "skathi", "hosts"));
     expect(r.nativeImages).toBe(join(scratch, "local", "skathi", "native-aot", "v1"));
     expect(r.legacy).toEqual([join(scratch, "local", "skathi", "aot-toolchain")]);
+    expect(r.shaderCompilers).toBe(join(scratch, "local", "skathi", "redslangc"));
     expect(cacheRoots("linux").nativeImages).toBeNull();
     process.env.SK_AOT_CACHE_DIR = join(scratch, "images");
     expect(cacheRoots("windows").nativeImages).toBe(join(scratch, "images"));
