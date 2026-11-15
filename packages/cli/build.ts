@@ -8,7 +8,8 @@
 //
 // Module ids are workspace-relative POSIX paths. Change kind: script or <style> scoped/module/lang
 // shape changed -> "reload"; template -> "rerender" (state survives); <style> text only ->
-// "css-only"; non-.vue source -> "reload".
+// "css-only"; non-.vue source -> "reload"; an npm module already loaded that now belongs to a
+// rebuilt package group -> "restart".
 // hoistStatic and inlineTemplate are forced off: the host has no insertStaticContent, and an inline
 // render inside setup() could not be swapped without losing state.
 // npm dependencies are one shared module per package entry (inlining per importer breaks
@@ -322,7 +323,8 @@ const DEFINES: Record<string, string> = {
   // by Bun while parsing.
   "import.meta.env.SK": "true",
   "import.meta.env": JSON.stringify(VITE_ENV_DEV),
-  // Library code guards on it; undefined means "not a dev server" (our HMR rides __VUE_HMR_RUNTIME__).
+  // Undefined in the vendor bundle and npm modules (library code guards on it); an app module gets its own
+  // (`MODULE_DEFINES`).
   "import.meta.hot": "undefined",
   "import.meta.url": '"sk://module"',
   // Leftover import.meta.glob calls are defined to a findable name so buildModule can fail clearly.
@@ -330,6 +332,9 @@ const DEFINES: Record<string, string> = {
   "import.meta": JSON.stringify({ env: VITE_ENV_DEV, url: "sk://module" }),
   ...APP_DEFINES.defines,
 };
+
+// An app module's `import.meta.hot` is the loader's per-module HMR context.
+const MODULE_DEFINES: Record<string, string> = { ...DEFINES, "import.meta.hot": "module.hot" };
 
 function writeAtomic(path: string, text: string) {
   const tmp = path + ".tmp";
@@ -588,7 +593,10 @@ function depsOf(id: string, body: string, ids: Set<string>, skip: Set<string>): 
     if (spec === null || spec.charCodeAt(0) !== 46 /* . */) continue; // bare -> vendor
     if (skip.has(spec)) continue; // a stylesheet: its own synthetic module
     const base = normalizeId((dir ? dir + "/" : "") + spec);
-    const hit = CANDIDATE_EXTS.map((ext) => base + ext).find((cand) => ids.has(cand));
+    // TypeScript's ESM spelling: `./x.js` names `x.ts`.
+    const hit = CANDIDATE_EXTS.map((ext) => base + ext)
+      .concat(base.endsWith(".js") ? [base.slice(0, -3) + ".ts"] : [])
+      .find((cand) => ids.has(cand));
     if (!hit) {
       warn(`${stamp()} ${id}: import ${J(spec)} resolves to no built module — ` + `require() will throw at runtime`);
       continue;
@@ -733,7 +741,7 @@ async function buildModule(absPath: string, ids: Set<string>) {
       target: "node",
       external: ["*"],
       plugins: [devShapesPlugin, devImports, appModulePlugin],
-      define: DEFINES,
+      define: MODULE_DEFINES,
     });
   } finally {
     inlinedNow = null;
@@ -780,11 +788,18 @@ async function buildModule(absPath: string, ids: Set<string>) {
 // npm modules: one per package ENTRY, keyed on the resolved directory (not the name), so every
 // importer of a directory shares it and a nested copy at another version stays separate. The id
 // is the specifier when the app resolves it to that directory, else `<spec>~<hash of the directory>`.
+// Two or more entries of one package (`svelte`, `svelte/internal/client`) share module state through
+// relative imports: they are bundled together into one group module, and each entry's module reads
+// its namespace from it.
 
 const npmBuilt = new Map<string, number>();
 const npmFailed = new Set<string>();
-const npmEntries = new Map<string, { spec: string; from: string }>();
+const npmEntries = new Map<string, { spec: string; from: string; root: string | null }>();
 const npmBare = new Map<string, string[]>();
+/** Package root -> its group module's id and members. */
+const npmGroups = new Map<string, { id: string; members: string[] }>();
+/** npm id -> the group module it was last built as a member of, "" when built alone. */
+const npmShape = new Map<string, string>();
 
 function splitSpec(spec: string): [string, string] {
   const parts = spec.split("/");
@@ -832,20 +847,31 @@ function npmIdOf(spec: string, abs: string, from: string): string {
     appKeys.set(spec, appKey);
   }
   const id = key === appKey ? spec : `${spec}~${Bun.hash(key).toString(16).slice(0, 8)}`;
-  if (!npmEntries.has(id)) npmEntries.set(id, { spec, from: id === spec ? APP_ROOT : from });
+  if (!npmEntries.has(id)) {
+    npmEntries.set(id, { spec, from: id === spec ? APP_ROOT : from, root: packageRootOf(abs, splitSpec(spec)[0]) });
+  }
   return id;
 }
 
-function npmSharePlugin(selfKey: string, found: Set<string>) {
+/** A file of the package at `root` itself, not of one installed beneath it. */
+function inPackage(abs: string, root: string): boolean {
+  const rel = relative(root, abs);
+  return !!rel && !rel.startsWith("..") && !isAbsolute(rel) && !rel.split(sep).includes("node_modules");
+}
+
+function npmSharePlugin(selfKey: string, selfRoot: string | null, found: Set<string>) {
   return {
     name: "sk-dev-npm-share",
     setup(build: Bun.PluginBuilder) {
       build.onResolve({ filter: /^(?!node:)[^./\\]/ }, (args: Bun.OnResolveArgs) => {
-        if (args.kind === "entry-point-build" || isAbsolute(args.path) || isPreseeded(args.path)) return undefined;
+        if (args.kind === "entry-point-build" || isAbsolute(args.path)) return undefined;
+        // The runtime's own modules come from the vendor bundle: a package must land on that copy.
+        if (isPreseeded(args.path)) return { path: args.path, external: true };
         const from = importerDir(args, APP_ROOT);
         const abs = resolveImport(args.path, from);
         if (abs === null || !isAbsolute(abs) || /\.css$/i.test(abs) || LEAF_IMPORT.test(abs)) return undefined;
-        if (npmKey(args.path, abs) === selfKey) return undefined;
+        // The package's own `#imports` and self-references are part of it, as its relative imports are.
+        if (npmKey(args.path, abs) === selfKey || (selfRoot && inPackage(abs, selfRoot))) return undefined;
         const id = npmIdOf(args.path, abs, from);
         found.add(id);
         return { path: id, external: true };
@@ -854,25 +880,52 @@ function npmSharePlugin(selfKey: string, found: Set<string>) {
   };
 }
 
+function noteUnresolved(id: string, spec: string, from: string): void {
+  if (npmFailed.has(id)) return;
+  npmFailed.add(id);
+  const alias = !/^(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(?:\/|$)/i.test(spec);
+  warn(
+    `${stamp()} cannot resolve ${J(spec)} from ${toId(from)} — ` +
+      `require(${J(id)}) will throw at runtime ` +
+      (alias
+        ? "(an import alias resolves through tsconfig.json compilerOptions.paths, as in sk build; " +
+          "a vite.config resolve.alias is not read)"
+        : "(is it installed?)"),
+  );
+}
+
+const npmHash = new Map<string, string>();
+
+/** Writes an npm module script; true when its body differs from the last one written under this id. */
+function writeNpmModule(id: string, what: string, body: string): boolean {
+  moduleDeps.set(id, []);
+  // Constant unless the package changes, so a rebuild never invalidates module-scope singletons.
+  const hash = Bun.hash(body).toString(16);
+  writeAtomic(
+    join(MODULES_DIR, encId(id)),
+    [
+      `// Skathi module: ${id} (${what})`,
+      `__SK__.setDeps && __SK__.setDeps(${J(id)}, []);`,
+      `__SK__.define(${J(id)}, function (require, module, exports) {`,
+      body,
+      `}, ${J(hash)});`,
+    ].join("\n"),
+  );
+  npmBuilt.set(id, body.length);
+  const changed = npmHash.get(id) !== hash;
+  npmHash.set(id, hash);
+  return changed;
+}
+
 async function buildNpmModule(id: string): Promise<boolean> {
   const { spec, from } = npmEntries.get(id) ?? { spec: id, from: APP_ROOT };
   const candidates = await entryCandidates(spec, from);
   if (!candidates.length) {
-    if (!npmFailed.has(id)) {
-      npmFailed.add(id);
-      const alias = !/^(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(?:\/|$)/i.test(spec);
-      warn(
-        `${stamp()} cannot resolve ${J(spec)} from ${toId(from)} — ` +
-          `require(${J(id)}) will throw at runtime ` +
-          (alias
-            ? "(an import alias resolves through tsconfig.json compilerOptions.paths, as in sk build; " +
-              "a vite.config resolve.alias is not read)"
-            : "(is it installed?)"),
-      );
-    }
+    noteUnresolved(id, spec, from);
     return false;
   }
   const selfKey = npmKey(spec, candidates[0]!);
+  const selfRoot = packageRootOf(candidates[0]!, splitSpec(spec)[0]);
   const requires = new Set<string>();
   let result: Awaited<ReturnType<typeof Bun.build>> | null = null;
   let entry = candidates[0]!;
@@ -886,7 +939,7 @@ async function buildNpmModule(id: string): Promise<boolean> {
       // Pre-seeded ids plus every other package entry stay external. A dependency can ship raw .vue
       // source: without the SFC plugin Bun treats it as an asset and the import silently renders
       // nothing.
-      plugins: [npmShapesPlugin, npmSharePlugin(selfKey, requires), vuePlugin],
+      plugins: [npmShapesPlugin, npmSharePlugin(selfKey, selfRoot, requires), vuePlugin],
       define: DEFINES,
     }).catch(() => null);
     if (result?.success) break;
@@ -898,22 +951,85 @@ async function buildNpmModule(id: string): Promise<boolean> {
     for (const log of result?.logs ?? []) console.error(log);
     throw new Error(`npm module build failed: ${id}`);
   }
-  const body = tagModuleNamespaces(await result.outputs[0]!.text()).code;
-  moduleDeps.set(id, []);
   npmBare.set(id, Array.from(requires).sort());
-  writeAtomic(
-    join(MODULES_DIR, encId(id)),
-    [
-      `// Skathi module: ${id} (npm dependency, bundled from ${toId(entry)})`,
-      `__SK__.setDeps && __SK__.setDeps(${J(id)}, []);`,
-      `__SK__.define(${J(id)}, function (require, module, exports) {`,
-      body,
-      // Constant unless the package changes, so a rebuild never invalidates module-scope singletons.
-      `}, ${J(Bun.hash(body).toString(16))});`,
-    ].join("\n"),
+  npmShape.set(id, "");
+  writeNpmModule(
+    id,
+    `npm dependency, bundled from ${toId(entry)}`,
+    tagModuleNamespaces(await result.outputs[0]!.text()).code,
   );
-  npmBuilt.set(id, body.length);
   return true;
+}
+
+const GROUP_ENTRY = "__sk_npm_group__.js";
+
+/** Bundles the entries `members` of the package at `root` into one module: the members it built, and whether that module changed. */
+async function buildNpmGroup(root: string, members: string[]): Promise<{ built: string[]; changed: boolean }> {
+  const lists: string[][] = [];
+  const built: string[] = [];
+  for (const id of members) {
+    const { spec, from } = npmEntries.get(id)!;
+    const candidates = await entryCandidates(spec, from);
+    if (!candidates.length) {
+      noteUnresolved(id, spec, from);
+      continue;
+    }
+    lists.push(candidates);
+    built.push(id);
+  }
+  if (!built.length) return { built, changed: false };
+  const gid = `${pkgNameAt.get(root) ?? toId(root)}~pkg~${Bun.hash(toId(root)).toString(16).slice(0, 8)}`;
+  const probe = join(root, GROUP_ENTRY); // never written: the plugin answers for it
+  const requires = new Set<string>();
+  let result: Awaited<ReturnType<typeof Bun.build>> | null = null;
+  const attempts = Math.max(...lists.map((l) => l.length));
+  for (let i = 0; i < attempts; i++) {
+    const source = lists.map((l, k) => `export * as e${k} from ${J(l[Math.min(i, l.length - 1)])};`).join("\n");
+    requires.clear();
+    result = await Bun.build({
+      entrypoints: [probe],
+      format: "cjs",
+      target: "browser",
+      plugins: [
+        {
+          name: "sk-npm-group-entry",
+          setup(b: Bun.PluginBuilder) {
+            b.onResolve({ filter: /__sk_npm_group__\.js$/ }, () => ({ path: probe }));
+            b.onLoad({ filter: /__sk_npm_group__\.js$/ }, () => ({ contents: source, loader: "js" }));
+          },
+        },
+        npmShapesPlugin,
+        npmSharePlugin("", root, requires),
+        vuePlugin,
+      ],
+      define: DEFINES,
+    }).catch(() => null);
+    if (result?.success) break;
+  }
+  if (!result?.success) {
+    for (const log of result?.logs ?? []) console.error(log);
+    throw new Error(`npm module build failed: ${built.join(", ")} (bundled together as ${gid})`);
+  }
+  npmBare.set(gid, Array.from(requires).sort());
+  const changed = writeNpmModule(
+    gid,
+    `npm dependency, the entries ${built.join(", ")} of ${toId(root)}`,
+    tagModuleNamespaces(await result.outputs[0]!.text()).code,
+  );
+  for (const [k, id] of built.entries()) {
+    // An ES module's namespace is the module; a CommonJS entry's is its `module.exports`, as when built alone.
+    writeNpmModule(
+      id,
+      `npm dependency, entry of ${gid}`,
+      `var ns = require(${J(gid)}).e${k};\n` +
+        'module.exports = ns && ns[Symbol.toStringTag] === "Module" ? ' +
+        'Object.defineProperty(ns, "__esModule", { value: true }) : ns && ns.default;',
+    );
+    npmBare.set(id, [gid]);
+    npmShape.set(id, gid);
+  }
+  npmGroups.set(root, { id: gid, members: built });
+  return { built, changed };
 }
 
 const npmIds = () => Array.from(npmBuilt.keys()).sort();
@@ -930,16 +1046,50 @@ function wantedNpm(): Set<string> {
   return wanted;
 }
 
-async function syncNpmModules(): Promise<string[]> {
+/** `added`: npm modules new to the build; `regrouped`: ones already built that now belong to a new group module (a running app holds the old copy). */
+async function syncNpmModules(): Promise<{ added: string[]; regrouped: string[] }> {
   const added: string[] = [];
+  const regrouped: string[] = [];
   const tried = new Set<string>();
-  for (;;) {
-    const todo = Array.from(wantedNpm())
-      .filter((id) => !npmBuilt.has(id) && !tried.has(id))
+  for (let progress = true; progress;) {
+    progress = false;
+    const wanted = wantedNpm();
+    const groupIds = new Set(Array.from(npmGroups.values(), (g) => g.id));
+    const byRoot = new Map<string, string[]>();
+    for (const id of wanted) {
+      const root = groupIds.has(id) ? null : npmEntries.get(id)?.root;
+      if (root) byRoot.set(root, [...(byRoot.get(root) ?? []), id]);
+    }
+    for (const [root, ids] of byRoot) {
+      const known = npmGroups.get(root)?.members ?? [];
+      // A member that went away leaves the group as it is; a new one rebuilds it.
+      if (ids.length < 2 && !known.length) continue;
+      if (ids.every((id) => known.includes(id) && npmBuilt.has(id))) continue;
+      const members = Array.from(new Set([...known, ...ids])).sort();
+      const key = members.join("\n");
+      if (tried.has(key)) continue;
+      tried.add(key);
+      progress = true;
+      const before = new Set(members.filter((id) => npmBuilt.has(id)));
+      const shapeBefore = new Map(members.map((id) => [id, npmShape.get(id)]));
+      const t0 = Date.now();
+      const { built, changed } = await buildNpmGroup(root, members);
+      for (const id of built) {
+        if (!before.has(id)) added.push(id);
+        else if (changed || shapeBefore.get(id) !== npmShape.get(id)) regrouped.push(id);
+      }
+      if (built.length) say(`${stamp()} npm ${built.join(", ")}: bundled together in ${Date.now() - t0} ms`);
+    }
+    const grouped = (id: string) => {
+      const root = npmEntries.get(id)?.root;
+      return !!root && npmGroups.has(root);
+    };
+    const todo = Array.from(wanted)
+      .filter((id) => !npmBuilt.has(id) && !tried.has(id) && !groupIds.has(id) && !grouped(id))
       .sort();
-    if (!todo.length) break;
     for (const id of todo) {
       tried.add(id);
+      progress = true;
       const t0 = Date.now();
       if (!(await buildNpmModule(id))) continue;
       added.push(id);
@@ -952,12 +1102,14 @@ async function syncNpmModules(): Promise<string[]> {
     if (wanted.has(id)) continue;
     npmBuilt.delete(id);
     npmBare.delete(id);
+    npmShape.delete(id);
     moduleDeps.delete(id);
     try {
       rmSync(join(MODULES_DIR, encId(id)));
     } catch {}
   }
-  return added.filter((id) => npmBuilt.has(id));
+  for (const [root, group] of npmGroups) if (!npmBuilt.has(group.id)) npmGroups.delete(root);
+  return { added: added.filter((id) => npmBuilt.has(id)), regrouped: regrouped.filter((id) => npmBuilt.has(id)) };
 }
 
 const TW_CONFIG = findConfig(appRootArg ? APP_ROOT : APP_SRC_DIR, ID_ROOT);
@@ -987,7 +1139,7 @@ async function buildTailwind(): Promise<boolean> {
 }
 
 type Blocks = { src: string; script: string; template: string; styleShape: string; styleText: string };
-type Kind = "reload" | "rerender" | "css-only";
+type Kind = "reload" | "rerender" | "css-only" | "restart";
 
 const prevBlocks = new Map<string, Blocks>(); // abs path -> blocks
 
@@ -1094,6 +1246,9 @@ async function fullBuild(reason: string) {
   npmBuilt.clear(); // force a rewrite: the module files may not exist yet
   npmBare.clear();
   npmEntries.clear();
+  npmGroups.clear();
+  npmShape.clear();
+  npmHash.clear();
   appKeys.clear();
   pkgNameAt.clear();
   cssModules.clear();
@@ -1162,10 +1317,10 @@ async function incrementalBuild() {
     structural = true;
   }
 
-  for (const spec of await syncNpmModules()) {
-    changed.push({ id: spec, kind: "reload" });
-    structural = true;
-  }
+  const npm = await syncNpmModules();
+  for (const id of npm.added) changed.push({ id, kind: "reload" });
+  for (const id of npm.regrouped) changed.push({ id, kind: "restart" });
+  if (npm.added.length || npm.regrouped.length) structural = true;
 
   // Always re-run Tailwind: any content file can add a utility, and a stylesheet that went
   // through Tailwind is re-emitted on the same signal.

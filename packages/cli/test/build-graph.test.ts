@@ -542,6 +542,106 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
   }, 30000);
 });
 
+// Entries of one package that share module state through relative imports (`svelte` and `svelte/internal/client`).
+describe("build.ts (dev): two entries of one package share its modules", () => {
+  const dir = mkdtempSync(join(FIXTURES, "npm-group-"));
+  tmpDirs.push(dir);
+  const rel = "packages/cli/test/fixtures/" + dir.split(/[\\/]/).pop();
+  const MAIN = `${rel}/src/main.ts`;
+  const put = (path: string, text: string) => {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  };
+  put("package.json", JSON.stringify({ name: "npm-group-fixture", private: true }));
+  put(
+    "node_modules/multi/package.json",
+    JSON.stringify({
+      name: "multi",
+      version: "1.0.0",
+      type: "module",
+      exports: { ".": "./index.js", "./client": "./client.js", "./extra": "./extra.js", "./legacy": "./legacy.cjs" },
+      imports: { "#state": "./state.js" },
+    }),
+  );
+  put("node_modules/multi/state.js", "export const registry = new Map();\n");
+  put(
+    "node_modules/multi/index.js",
+    'import { registry } from "#state";\nexport const register = (k, v) => registry.set(k, v);\n',
+  );
+  put(
+    "node_modules/multi/client.js",
+    'import { registry } from "./state.js";\nexport const lookup = (k) => registry.get(k);\n',
+  );
+  put("node_modules/multi/extra.js", 'import { lookup } from "multi/client";\nexport default () => lookup("k");\n');
+  put("node_modules/multi/legacy.cjs", 'module.exports = function legacy() { return "cjs"; };\n');
+  put(
+    "node_modules/uses-runtime/package.json",
+    JSON.stringify({ name: "uses-runtime", version: "1.0.0", type: "module", exports: "./index.js" }),
+  );
+  put("node_modules/uses-runtime/index.js", 'export { mountDocument } from "@skathi-native/runtime";\n');
+  put(
+    "src/main.ts",
+    'import { register } from "multi";\n' +
+      'import { lookup } from "multi/client";\n' +
+      'import legacy from "multi/legacy";\n' +
+      'import { mountDocument } from "uses-runtime";\n' +
+      'register("k", "shared");\n' +
+      'export const found = lookup("k");\n' +
+      "export const cjs = legacy();\n" +
+      "export const mount = mountDocument;\n",
+  );
+
+  const dist = mkdtempSync(join(tmpdir(), "sk-build-group-"));
+  tmpDirs.push(dist);
+  const read = (f: string) => {
+    try {
+      return readFileSync(join(dist, f), "utf8");
+    } catch {
+      return "";
+    }
+  };
+  const script = (id: string) => read(join("modules", id.split("/").join("__") + ".js"));
+  const until = async (ok: () => boolean) => {
+    for (let i = 0; i < 150 && !ok(); i++) await Bun.sleep(100);
+    return ok();
+  };
+
+  test("one copy of the package's modules; a new entry rebuilds it and asks for a restart", async () => {
+    const proc = watchBuild(join(dir, "src/main.ts"), dist);
+    try {
+      expect(await until(() => read("manifest.json").includes(MAIN))).toBe(true);
+      const manifest = JSON.parse(read("manifest.json")) as Manifest;
+      const group = manifest.modules.filter((m) => m.startsWith("multi~pkg~"));
+      expect(group).toHaveLength(1);
+      expect(script(group[0]!).match(/new Map\b/g)).toHaveLength(1);
+      expect(script("multi")).toContain(`require(${JSON.stringify(group[0])})`);
+      expect(script("uses-runtime")).toContain('require("@skathi-native/runtime")');
+
+      const w = createLoader();
+      for (const mod of manifest.modules) {
+        new Function("__SK__", "__VUE_HMR_RUNTIME__", script(mod))(w.SK, w.sandbox.__VUE_HMR_RUNTIME__);
+      }
+      const main = w.SK.require(MAIN) as unknown as { found: string; cjs: string };
+      expect(main.found).toBe("shared");
+      expect(main.cjs).toBe("cjs");
+
+      await Bun.sleep(300);
+      writeFileSync(
+        join(dir, "src/main.ts"),
+        readFileSync(join(dir, "src/main.ts"), "utf8") + 'export { default as extra } from "multi/extra";\n',
+      );
+      expect(await until(() => read("changes.json").includes("restart"))).toBe(true);
+      const changes = JSON.parse(read("changes.json")) as Changes;
+      expect(changes.changed).toContainEqual({ id: "multi", kind: "restart" });
+      expect(changes.changed).toContainEqual({ id: "multi/extra", kind: "reload" });
+      expect(script(group[0]!).match(/new Map\b/g)).toHaveLength(1);
+    } finally {
+      proc.kill();
+      await proc.exited;
+    }
+  }, 30000);
+});
+
 describe("build.ts (dev): an edit to an inlined file rebuilds its importer", () => {
   const dir = mkdtempSync(join(FIXTURES, "inline-app-"));
   tmpDirs.push(dir);

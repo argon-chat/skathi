@@ -33,16 +33,24 @@ export interface HmrComponent {
   render: () => unknown;
 }
 
-interface ModuleRecord {
+export interface HotLike {
+  readonly data: Record<string, unknown>;
+  accept(cb?: (exports: Exports) => void): void;
+  dispose(cb: (data: Record<string, unknown>) => void): void;
+  invalidate(): void;
+}
+
+export interface ModuleRecord {
   id: string;
   exports: Exports;
+  hot?: HotLike;
 }
 
 type Factory = (require: (spec: string) => Exports, module: ModuleRecord, exports: Exports) => void;
 
 export interface HmrChange {
   id: string;
-  kind?: "reload" | "rerender" | "css-only";
+  kind?: "reload" | "rerender" | "css-only" | "restart";
 }
 
 export interface LoaderRegistry {
