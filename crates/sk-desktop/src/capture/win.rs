@@ -4,7 +4,6 @@ use serde_json::{json, Value};
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 use windows::Win32::UI::HiDpi::{
     SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
@@ -404,8 +403,10 @@ fn print_thumbnail(window: HWND, rect: RECT, width: u32, height: u32) -> Result<
         (rect.right - rect.left) as u32,
         (rect.bottom - rect.top) as u32,
     )?;
-    if !unsafe { PrintWindow(window, full.dc, PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT)) }.as_bool()
-    {
+    let printed = unsafe {
+        windows_sys::Win32::Storage::Xps::PrintWindow(window.0, full.dc.0, PW_RENDERFULLCONTENT)
+    };
+    if printed == 0 {
         return Err(failure("PrintWindow"));
     }
     let thumbnail = Surface::new(width, height)?;

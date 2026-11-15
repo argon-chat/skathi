@@ -112,18 +112,23 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
-    "Win32_Storage_Xps",
     "Win32_System_LibraryLoader",
     "Win32_System_Com",
-    "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     # `SetWindowSubclass`: a `<SkWindow :focusable="false">` answers `WM_MOUSEACTIVATE` itself.
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
-    # `RtlGetVersion`: the one version query Windows does not lie about for an unmanifested process.
-    "Wdk_System_SystemServices",
     "UI",
     "UI_ViewManagement",
+] }
+# Plain functions whose `windows` modules are large and needed by nothing else.
+windows-sys = { version = "0.61", features = [
+    "Win32_Graphics_Gdi",
+    # `PrintWindow`
+    "Win32_Storage_Xps",
+    # `RtlGetVersion`: the one version query Windows does not lie about for an unmanifested process.
+    "Wdk_System_SystemServices",
+    "Win32_System_SystemInformation",
 ] }
 

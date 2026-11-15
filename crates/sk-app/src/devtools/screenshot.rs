@@ -28,12 +28,12 @@ use windows::Win32::Graphics::Gdi::{
 };
 // `PrintWindow` is under Storage::Xps in windows-rs' metadata; its flag is a plain `u32` in WindowsAndMessaging.
 #[cfg(windows)]
-use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
-#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
     PW_RENDERFULLCONTENT,
 };
+#[cfg(windows)]
+use windows_sys::Win32::Storage::Xps::PrintWindow;
 
 /// Which capture path to use; `Auto` is the default.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -279,8 +279,7 @@ fn capture_print_window(path: &Path) -> Result<Shot, String> {
         }
     };
 
-    let ok =
-        unsafe { PrintWindow(hwnd, gdi.mem, PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT)) }.as_bool();
+    let ok = unsafe { PrintWindow(hwnd.0, gdi.mem.0, PW_RENDERFULLCONTENT) } != 0;
     if !ok {
         return Err(
             "PrintWindow(PW_RENDERFULLCONTENT) failed — the window may have been destroyed".into(),

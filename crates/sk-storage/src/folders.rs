@@ -53,8 +53,8 @@ fn unknown(kind: &str) -> String {
 
 #[cfg(target_os = "windows")]
 fn base_of(kind: &str) -> Result<PathBuf, String> {
-    use windows::Win32::Storage::FileSystem::GetTempPath2W;
-    use windows::Win32::UI::Shell::{
+    use windows_sys::Win32::Storage::FileSystem::GetTempPath2W;
+    use windows_sys::Win32::UI::Shell::{
         FOLDERID_Documents, FOLDERID_LocalAppData, FOLDERID_Profile, FOLDERID_RoamingAppData,
         SHGetKnownFolderPath, KF_FLAG_DEFAULT,
     };
@@ -66,7 +66,7 @@ fn base_of(kind: &str) -> Result<PathBuf, String> {
         "HOME" => FOLDERID_Profile,
         "TEMP" => {
             let mut buf = [0u16; 261];
-            let n = unsafe { GetTempPath2W(Some(&mut buf)) } as usize;
+            let n = unsafe { GetTempPath2W(buf.len() as u32, buf.as_mut_ptr()) } as usize;
             if n == 0 || n > buf.len() {
                 return Err("GetTempPath2W did not return a path".into());
             }
@@ -75,14 +75,27 @@ fn base_of(kind: &str) -> Result<PathBuf, String> {
         other => return Err(unknown(other)),
     };
     // SAFETY: `id` is one of the constants above; the handle argument is
-    // `None` (the calling user's own folder); the returned PWSTR is ours to
-    // free and is freed on both paths below.
-    let wide = unsafe { SHGetKnownFolderPath(&id, KF_FLAG_DEFAULT, None) }
-        .map_err(|e| format!("SHGetKnownFolderPath failed for {kind}: {e}"))?;
-    let path = unsafe { wide.to_string() };
-    unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(wide.0 as *const core::ffi::c_void)) };
-    path.map(PathBuf::from)
-        .map_err(|e| format!("SHGetKnownFolderPath returned an unreadable path for {kind}: {e}"))
+    // null (the calling user's own folder); the returned PWSTR is ours to
+    // free, also on failure, and is freed below.
+    let mut wide = std::ptr::null_mut();
+    let hr = unsafe {
+        SHGetKnownFolderPath(&id, KF_FLAG_DEFAULT as u32, std::ptr::null_mut(), &mut wide)
+    };
+    let path = (hr >= 0).then(|| {
+        // SAFETY: on success `wide` is a NUL-terminated string.
+        let len = (0..).take_while(|&i| unsafe { *wide.add(i) } != 0).count();
+        String::from_utf16(unsafe { std::slice::from_raw_parts(wide, len) })
+    });
+    unsafe { windows_sys::Win32::System::Com::CoTaskMemFree(wide.cast()) };
+    match path {
+        None => Err(format!(
+            "SHGetKnownFolderPath failed for {kind}: 0x{:08x}",
+            hr as u32
+        )),
+        Some(path) => path.map(PathBuf::from).map_err(|e| {
+            format!("SHGetKnownFolderPath returned an unreadable path for {kind}: {e}")
+        }),
+    }
 }
 
 #[cfg(not(target_os = "windows"))]

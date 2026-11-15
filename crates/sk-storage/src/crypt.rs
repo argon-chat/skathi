@@ -65,12 +65,19 @@ pub fn provider() -> Option<&'static dyn SecretProvider> {
 pub fn random_bytes(buf: &mut [u8]) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Security::Cryptography::{
+        use windows_sys::Win32::Security::Cryptography::{
             BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
         };
-        let st = unsafe { BCryptGenRandom(None, buf, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
-        if st.0 < 0 {
-            return Err(format!("BCryptGenRandom failed: 0x{:08x}", st.0 as u32));
+        let st = unsafe {
+            BCryptGenRandom(
+                std::ptr::null_mut(),
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+                BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+            )
+        };
+        if st < 0 {
+            return Err(format!("BCryptGenRandom failed: 0x{:08x}", st as u32));
         }
         Ok(())
     }
@@ -109,39 +116,40 @@ impl SecretProvider for Dpapi {
 
 #[cfg(target_os = "windows")]
 unsafe fn dpapi(input: &[u8], protect: bool) -> Result<Vec<u8>, String> {
-    use windows::Win32::Foundation::{LocalFree, HLOCAL};
-    use windows::Win32::Security::Cryptography::{
+    use std::ptr::{null, null_mut};
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{
         CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
 
-    let mut inb = CRYPT_INTEGER_BLOB {
+    let inb = CRYPT_INTEGER_BLOB {
         cbData: input.len() as u32,
         pbData: input.as_ptr() as *mut u8,
     };
-    let mut entb = CRYPT_INTEGER_BLOB {
+    let entb = CRYPT_INTEGER_BLOB {
         cbData: ENTROPY.len() as u32,
         pbData: ENTROPY.as_ptr() as *mut u8,
     };
     let mut out = CRYPT_INTEGER_BLOB::default();
 
     // CRYPTPROTECT_UI_FORBIDDEN: this runs on the JS/render thread, which a UI prompt would deadlock.
-    let r = if protect {
+    let ok = if protect {
         CryptProtectData(
-            &mut inb,
-            None,
-            Some(&mut entb),
-            None,
-            None,
+            &inb,
+            null(),
+            &entb,
+            null(),
+            null(),
             CRYPTPROTECT_UI_FORBIDDEN,
             &mut out,
         )
     } else {
         CryptUnprotectData(
-            &mut inb,
-            None,
-            Some(&mut entb),
-            None,
-            None,
+            &inb,
+            null_mut(),
+            &entb,
+            null(),
+            null(),
             CRYPTPROTECT_UI_FORBIDDEN,
             &mut out,
         )
@@ -152,7 +160,12 @@ unsafe fn dpapi(input: &[u8], protect: bool) -> Result<Vec<u8>, String> {
     } else {
         "CryptUnprotectData"
     };
-    r.map_err(|e| format!("{verb} failed: {e}"))?;
+    if ok == 0 {
+        return Err(format!(
+            "{verb} failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
 
     let bytes = if out.pbData.is_null() {
         Vec::new()
@@ -160,7 +173,7 @@ unsafe fn dpapi(input: &[u8], protect: bool) -> Result<Vec<u8>, String> {
         core::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec()
     };
     if !out.pbData.is_null() {
-        let _ = LocalFree(Some(HLOCAL(out.pbData as *mut core::ffi::c_void)));
+        LocalFree(out.pbData.cast());
     }
     Ok(bytes)
 }

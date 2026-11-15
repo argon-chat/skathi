@@ -12,19 +12,25 @@
 //! HKCU only. A scheme that already exists without our marker (in HKCU or HKLM) is another app's and is
 //! never overwritten: registering it is a TypeError naming the owner. Writes are idempotent.
 
-use windows::core::{HSTRING, PWSTR};
-use windows::Win32::Foundation::{
+use std::ptr::{null, null_mut};
+
+use windows_sys::Win32::Foundation::{
     ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR,
 };
-use windows::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
-use windows::Win32::System::Registry::{
+use windows_sys::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
+use windows_sys::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW,
     RegSetValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE,
-    REG_OPTION_NON_VOLATILE, REG_SZ, REG_VALUE_TYPE,
+    REG_OPTION_NON_VOLATILE, REG_SZ,
 };
-use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
+use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
 
+use super::instance_win::wide;
 use super::protocol::{command_line, command_targets};
+
+fn notify_assoc_changed() {
+    unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED as i32, SHCNF_IDLIST, null(), null()) };
+}
 
 pub const OWNER_VALUE: &str = "VnOwner";
 
@@ -56,18 +62,18 @@ struct Key(HKEY);
 impl Drop for Key {
     fn drop(&mut self) {
         unsafe {
-            let _ = RegCloseKey(self.0);
+            RegCloseKey(self.0);
         }
     }
 }
 
 fn open(root: HKEY, path: &str, write: bool) -> Result<Option<Key>, WIN32_ERROR> {
-    let mut h = HKEY::default();
+    let mut h: HKEY = null_mut();
     let r = unsafe {
         RegOpenKeyExW(
             root,
-            &HSTRING::from(path),
-            None,
+            wide(path).as_ptr(),
+            0,
             if write {
                 KEY_READ | KEY_WRITE
             } else {
@@ -86,18 +92,18 @@ fn open(root: HKEY, path: &str, write: bool) -> Result<Option<Key>, WIN32_ERROR>
 }
 
 fn create(root: HKEY, path: &str) -> Result<Key, WIN32_ERROR> {
-    let mut h = HKEY::default();
+    let mut h: HKEY = null_mut();
     let r = unsafe {
         RegCreateKeyExW(
             root,
-            &HSTRING::from(path),
-            None,
-            None,
+            wide(path).as_ptr(),
+            0,
+            null(),
             REG_OPTION_NON_VOLATILE,
             KEY_READ | KEY_WRITE,
-            None,
+            null(),
             &mut h,
-            None,
+            null_mut(),
         )
     };
     if r == ERROR_SUCCESS {
@@ -108,10 +114,10 @@ fn create(root: HKEY, path: &str) -> Result<Key, WIN32_ERROR> {
 }
 
 fn read_sz(key: &Key, name: &str) -> Option<String> {
-    let name = HSTRING::from(name);
-    let mut ty = REG_VALUE_TYPE::default();
+    let name = wide(name);
+    let mut ty = 0;
     let mut len = 0u32;
-    if unsafe { RegQueryValueExW(key.0, &name, None, Some(&mut ty), None, Some(&mut len)) }
+    if unsafe { RegQueryValueExW(key.0, name.as_ptr(), null(), &mut ty, null_mut(), &mut len) }
         != ERROR_SUCCESS
     {
         return None;
@@ -124,11 +130,11 @@ fn read_sz(key: &Key, name: &str) -> Option<String> {
     if unsafe {
         RegQueryValueExW(
             key.0,
-            &name,
-            None,
-            None,
-            Some(buf.as_mut_ptr()),
-            Some(&mut len2),
+            name.as_ptr(),
+            null(),
+            null_mut(),
+            buf.as_mut_ptr(),
+            &mut len2,
         )
     } != ERROR_SUCCESS
     {
@@ -148,7 +154,16 @@ fn write_sz(key: &Key, name: &str, value: &str) -> Result<bool, WIN32_ERROR> {
     }
     let mut bytes: Vec<u8> = value.encode_utf16().flat_map(u16::to_le_bytes).collect();
     bytes.extend_from_slice(&[0, 0]);
-    let r = unsafe { RegSetValueExW(key.0, &HSTRING::from(name), None, REG_SZ, Some(&bytes)) };
+    let r = unsafe {
+        RegSetValueExW(
+            key.0,
+            wide(name).as_ptr(),
+            0,
+            REG_SZ,
+            bytes.as_ptr(),
+            bytes.len() as u32,
+        )
+    };
     if r == ERROR_SUCCESS {
         Ok(true)
     } else {
@@ -230,7 +245,7 @@ pub fn register(
     wrote |= write_sz(&cmd, "", &command_line(exe, dev_slot))
         .map_err(|e| fail(r"\shell\open\command", e))?;
     if wrote && hive.notify {
-        unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None) };
+        notify_assoc_changed();
     }
     Ok(wrote)
 }
@@ -243,9 +258,9 @@ fn delete(hive: &Hive, scheme: &str) -> bool {
     let Ok(Some(classes)) = open(HKEY_CURRENT_USER, &hive.classes, true) else {
         return false;
     };
-    let ok = unsafe { RegDeleteTreeW(classes.0, &HSTRING::from(scheme)) } == ERROR_SUCCESS;
+    let ok = unsafe { RegDeleteTreeW(classes.0, wide(scheme).as_ptr()) } == ERROR_SUCCESS;
     if ok && hive.notify {
-        unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None) };
+        notify_assoc_changed();
     }
     ok
 }
@@ -267,12 +282,12 @@ pub fn unregister_all(hive: &Hive, id: &str) -> Vec<String> {
             RegEnumKeyExW(
                 classes.0,
                 i,
-                Some(PWSTR(name.as_mut_ptr())),
+                name.as_mut_ptr(),
                 &mut len,
-                None,
-                None,
-                None,
-                None,
+                null(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
             )
         };
         if r == ERROR_NO_MORE_ITEMS {
@@ -303,8 +318,8 @@ pub fn unregister_all(hive: &Hive, id: &str) -> Vec<String> {
 /// Under MSIX package identity HKCU\Classes writes are virtualised and register nothing.
 pub fn has_package_identity() -> bool {
     let mut len = 0u32;
-    let r = unsafe { GetCurrentPackageFullName(&mut len, None) };
-    r.0 == 122
+    let r = unsafe { GetCurrentPackageFullName(&mut len, std::ptr::null_mut()) };
+    r == 122
 }
 
 #[cfg(test)]
@@ -329,7 +344,7 @@ mod tests {
             if let Ok(Some(sw)) = open(HKEY_CURRENT_USER, "Software", true) {
                 let name = self.1.trim_start_matches(r"Software\");
                 unsafe {
-                    let _ = RegDeleteTreeW(sw.0, &HSTRING::from(name));
+                    RegDeleteTreeW(sw.0, wide(name).as_ptr());
                 }
             }
             assert!(

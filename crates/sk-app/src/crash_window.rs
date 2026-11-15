@@ -173,14 +173,14 @@ pub fn utc(t: SystemTime) -> String {
 pub fn os_version() -> String {
     #[cfg(target_os = "windows")]
     {
-        use windows::Wdk::System::SystemServices::RtlGetVersion;
-        use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
+        use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
+        use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
         let mut vi = OSVERSIONINFOW {
             dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
             ..Default::default()
         };
         // `RtlGetVersion`: `GetVersionEx` reports 6.2 to an unmanifested process.
-        if unsafe { RtlGetVersion(&mut vi) }.is_ok() {
+        if unsafe { RtlGetVersion(&mut vi) } >= 0 {
             return format!(
                 "Windows {}.{}.{} ({})",
                 vi.dwMajorVersion,

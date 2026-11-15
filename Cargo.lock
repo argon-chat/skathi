@@ -2381,7 +2381,7 @@ dependencies = [
  "usvg",
  "uuid",
  "waker-fn",
- "windows 0.62.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2644,6 +2644,7 @@ dependencies = [
  "windows-core 0.62.2",
  "windows-numerics 0.3.1",
  "windows-registry",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5765,6 +5766,7 @@ dependencies = [
  "wgpu",
  "windows 0.62.2",
  "windows-core 0.62.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5774,7 +5776,7 @@ dependencies = [
  "gpui",
  "image",
  "sk-runtime",
- "windows 0.62.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5811,6 +5813,7 @@ dependencies = [
  "windows 0.62.2",
  "windows-collections 0.3.2",
  "windows-core 0.62.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5833,7 +5836,7 @@ dependencies = [
 name = "sk-hotkeys"
 version = "0.1.0"
 dependencies = [
- "windows 0.62.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5871,7 +5874,7 @@ dependencies = [
  "serde_json",
  "sk-locale",
  "sk-runtime",
- "windows 0.62.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5913,7 +5916,7 @@ dependencies = [
  "security-framework",
  "serde_json",
  "sk-runtime",
- "windows 0.62.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

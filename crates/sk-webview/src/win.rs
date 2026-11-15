@@ -26,7 +26,9 @@ use webview2_com::{
 };
 use windows::core::{Interface, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::DirectComposition::{IDCompositionDevice, IDCompositionVisual};
+use windows::Win32::Graphics::DirectComposition::{
+    IDCompositionDevice, IDCompositionRectangleClip, IDCompositionVisual,
+};
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::Shell::SHCreateMemStream;
@@ -184,6 +186,7 @@ impl Backend for WebView2 {
             device,
             underlay,
             visual: None,
+            clip: None,
             controller: None,
             composition: None,
             webview: None,
@@ -228,6 +231,8 @@ struct Inner {
     device: IDCompositionDevice,
     underlay: IDCompositionVisual,
     visual: Option<IDCompositionVisual>,
+    /// `visual`'s clip, made on its first placement.
+    clip: Option<IDCompositionRectangleClip>,
     controller: Option<ICoreWebView2Controller>,
     composition: Option<ICoreWebView2CompositionController>,
     webview: Option<ICoreWebView2>,
@@ -640,12 +645,18 @@ impl Inner {
                     visual.SetOffsetX2(x)?;
                     visual.SetOffsetY2(y)?;
                     let [cx, cy, cw, ch] = p.clip;
-                    visual.SetClip2(&windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F {
-                        left: cx - x,
-                        top: cy - y,
-                        right: cx - x + cw,
-                        bottom: cy - y + ch,
-                    })?;
+                    let clip = match &self.clip {
+                        Some(clip) => clip,
+                        None => {
+                            let clip = self.device.CreateRectangleClip()?;
+                            visual.SetClip(&clip)?;
+                            self.clip.insert(clip)
+                        }
+                    };
+                    clip.SetLeft2(cx - x)?;
+                    clip.SetTop2(cy - y)?;
+                    clip.SetRight2(cx - x + cw)?;
+                    clip.SetBottom2(cy - y + ch)?;
                     if !self.shown {
                         controller.SetIsVisible(true)?;
                         self.shown = true;
@@ -671,6 +682,7 @@ impl Inner {
             return;
         }
         let result: windows::core::Result<()> = (|| unsafe {
+            self.clip = None;
             if let Some(visual) = self.visual.take() {
                 let _ = self.underlay.RemoveVisual(&visual);
                 let _ = self.device.Commit();

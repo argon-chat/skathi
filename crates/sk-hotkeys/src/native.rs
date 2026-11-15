@@ -1,11 +1,12 @@
 use super::{Button, Hotkeys, RAW};
+use std::ptr::{null, null_mut};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     sync::{Weak, atomic::Ordering, mpsc::SyncSender},
     time::{Duration, Instant},
 };
-use windows::Win32::{
+use windows_sys::Win32::{
     Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM},
     System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
     UI::{Input::KeyboardAndMouse::GetAsyncKeyState, WindowsAndMessaging::*},
@@ -22,7 +23,7 @@ pub(super) fn held_modifiers() -> Vec<Button> {
 pub(super) fn wake_stop(thread: u32) {
     if thread != 0 {
         unsafe {
-            let _ = PostThreadMessageW(thread, WM_QUIT, WPARAM(0), LPARAM(0));
+            PostThreadMessageW(thread, WM_QUIT, 0, 0);
         }
     }
 }
@@ -32,7 +33,7 @@ const WM_SYNC_HOOKS: u32 = WM_APP + 1;
 pub(super) fn wake_sync(thread: u32) {
     if thread != 0 {
         unsafe {
-            let _ = PostThreadMessageW(thread, WM_SYNC_HOOKS, WPARAM(0), LPARAM(0));
+            PostThreadMessageW(thread, WM_SYNC_HOOKS, 0, 0);
         }
     }
 }
@@ -41,25 +42,31 @@ pub(super) fn wake_sync(thread: u32) {
 /// session, a move from a 1-8 kHz gaming mouse included, is delivered to the
 /// hook thread synchronously and waited for before it reaches the game.
 struct Hooks {
-    module: Option<HINSTANCE>,
+    module: HINSTANCE,
     keyboard: HHOOK,
     mouse: Option<HHOOK>,
 }
 impl Drop for Hooks {
     fn drop(&mut self) {
         unsafe {
-            let _ = UnhookWindowsHookEx(self.keyboard);
+            UnhookWindowsHookEx(self.keyboard);
         }
         self.set_mouse(false).ok();
     }
 }
+fn last_error() -> std::io::Error {
+    std::io::Error::last_os_error()
+}
 impl Hooks {
     fn install(mouse: bool) -> Result<Self, String> {
-        let module =
-            unsafe { GetModuleHandleW(None) }.map_err(|e| format!("global hotkey module: {e}"))?;
-        let module = Some(HINSTANCE(module.0));
-        let keyboard = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), module, 0) }
-            .map_err(|e| format!("global keyboard hook: {e}"))?;
+        let module = unsafe { GetModuleHandleW(null()) };
+        if module.is_null() {
+            return Err(format!("global hotkey module: {}", last_error()));
+        }
+        let keyboard = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), module, 0) };
+        if keyboard.is_null() {
+            return Err(format!("global keyboard hook: {}", last_error()));
+        }
         let mut hooks = Self {
             module,
             keyboard,
@@ -73,14 +80,16 @@ impl Hooks {
         match (wanted, self.mouse) {
             (true, None) => {
                 let hook =
-                    unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), self.module, 0) }
-                        .map_err(|e| format!("global mouse hook: {e}"))?;
+                    unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), self.module, 0) };
+                if hook.is_null() {
+                    return Err(format!("global mouse hook: {}", last_error()));
+                }
                 self.mouse = Some(hook);
                 Ok(true)
             }
             (false, Some(hook)) => {
                 unsafe {
-                    let _ = UnhookWindowsHookEx(hook);
+                    UnhookWindowsHookEx(hook);
                 }
                 self.mouse = None;
                 Ok(false)
@@ -113,7 +122,7 @@ struct Timer(usize);
 impl Drop for Timer {
     fn drop(&mut self) {
         unsafe {
-            let _ = KillTimer(None, self.0);
+            KillTimer(null_mut(), self.0);
         }
     }
 }
@@ -128,7 +137,7 @@ pub(super) fn run(owner: Weak<Hotkeys>, ready: SyncSender<Result<(), String>>) {
     service.thread_id.store(id, Ordering::Release);
     let mut message = MSG::default();
     unsafe {
-        let _ = PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE);
+        PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE);
     }
     let wants_mouse = service
         .state
@@ -145,7 +154,7 @@ pub(super) fn run(owner: Weak<Hotkeys>, ready: SyncSender<Result<(), String>>) {
             return;
         }
     };
-    let timer = unsafe { SetTimer(None, 0, 100, None) };
+    let timer = unsafe { SetTimer(null_mut(), 0, 100, None) };
     if timer == 0 {
         let _ = ready.send(Err("could not create global hotkey watchdog".into()));
         service.thread_id.store(0, Ordering::Release);
@@ -169,7 +178,7 @@ pub(super) fn run(owner: Weak<Hotkeys>, ready: SyncSender<Result<(), String>>) {
     let mut last_restart = previous_tick;
     let mut unexpected = BTreeMap::<Button, Instant>::new();
     loop {
-        let result = unsafe { GetMessageW(&mut message, None, 0, 0) }.0;
+        let result = unsafe { GetMessageW(&mut message, null_mut(), 0, 0) };
         if result <= 0 {
             if result < 0 {
                 if let Some(service) = owner.upgrade() {
@@ -199,7 +208,7 @@ pub(super) fn run(owner: Weak<Hotkeys>, ready: SyncSender<Result<(), String>>) {
             }
             // On a locked/secure desktop the hook cannot observe releases;
             // cancel holds even though the message pump itself keeps ticking.
-            if unsafe { GetForegroundWindow() }.is_invalid() {
+            if unsafe { GetForegroundWindow() }.is_null() {
                 service.reset();
             }
             previous_tick = now;
@@ -279,7 +288,7 @@ pub(super) fn run(owner: Weak<Hotkeys>, ready: SyncSender<Result<(), String>>) {
             }
         } else {
             unsafe {
-                let _ = TranslateMessage(&message);
+                TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
         }
@@ -299,17 +308,13 @@ pub(super) fn run(owner: Weak<Hotkeys>, ready: SyncSender<Result<(), String>>) {
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0
         && matches!(
-            wparam.0 as u32,
+            wparam as u32,
             WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP
         )
     {
-        let data = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
-        let button = keyboard_button(
-            data.vkCode,
-            data.scanCode,
-            data.flags.0 & LLKHF_EXTENDED.0 != 0,
-        );
-        let down = matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
+        let data = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
+        let button = keyboard_button(data.vkCode, data.scanCode, data.flags & LLKHF_EXTENDED != 0);
+        let down = matches!(wparam as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
         if let Some(button) = button {
             let consumed = OWNER.with(|slot| {
                 slot.borrow()
@@ -317,27 +322,27 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
                     .is_some_and(|owner| owner.input(button, down))
             });
             if consumed {
-                return LRESULT(1);
+                return 1;
             }
         }
     }
-    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+    unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
 }
 unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
-        let data = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
-        if let Some((button, down)) = mouse_button(wparam.0 as u32, data.mouseData) {
+        let data = unsafe { &*(lparam as *const MSLLHOOKSTRUCT) };
+        if let Some((button, down)) = mouse_button(wparam as u32, data.mouseData) {
             let consumed = OWNER.with(|slot| {
                 slot.borrow()
                     .upgrade()
                     .is_some_and(|owner| owner.input(button, down))
             });
             if consumed {
-                return LRESULT(1);
+                return 1;
             }
         }
     }
-    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+    unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
 }
 fn keyboard_button(vk: u32, scan: u32, extended: bool) -> Option<Button> {
     let code = match vk {
@@ -520,7 +525,7 @@ mod tests {
     fn real_f24_input_reaches_handler_with_balanced_suppressed_hold() {
         use super::super::{Binding, Chord};
         use std::sync::{Arc, mpsc};
-        use windows::Win32::UI::Input::KeyboardAndMouse::{
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
             INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_F24,
         };
         fn send_f24(up: bool) -> u32 {
@@ -529,17 +534,13 @@ mod tests {
                 Anonymous: INPUT_0 {
                     ki: KEYBDINPUT {
                         wVk: VK_F24,
-                        dwFlags: if up {
-                            KEYEVENTF_KEYUP
-                        } else {
-                            Default::default()
-                        },
+                        dwFlags: if up { KEYEVENTF_KEYUP } else { 0 },
                         dwExtraInfo: 0x564e484b,
                         ..Default::default()
                     },
                 },
             };
-            unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) }
+            unsafe { SendInput(1, &input, std::mem::size_of::<INPUT>() as i32) }
         }
         struct Stop(Arc<Hotkeys>);
         impl Drop for Stop {
@@ -557,7 +558,7 @@ mod tests {
         }
 
         assert!(
-            !unsafe { GetForegroundWindow() }.is_invalid(),
+            !unsafe { GetForegroundWindow() }.is_null(),
             "interactive desktop required"
         );
         assert!(
@@ -565,7 +566,7 @@ mod tests {
             "do not run while a real modifier is held"
         );
         assert!(
-            !physical_down(&Button::keyboard(VK_F24.0 as u32)),
+            !physical_down(&Button::keyboard(VK_F24 as u32)),
             "F24 is already physically held"
         );
         let service = Hotkeys::new();
@@ -586,7 +587,7 @@ mod tests {
             .set_bindings(vec![Binding {
                 id: "native-f24-proof".into(),
                 chord: Chord {
-                    buttons: vec![Button::keyboard(VK_F24.0 as u32)],
+                    buttons: vec![Button::keyboard(VK_F24 as u32)],
                 },
                 suppress: Some(true),
                 trigger_cooldown_ms: None,

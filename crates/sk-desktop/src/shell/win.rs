@@ -15,8 +15,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::UI::Shell::{
     FileOperation, IFileOperation, IFileOperationProgressSink, IFileOperationProgressSink_Impl,
     ILCreateFromPathW, ILFree, IShellItem, SHCreateItemFromParsingName, SHOpenFolderAndSelectItems,
-    ShellExecuteExW, FOFX_ADDUNDORECORD, FOFX_EARLYFAILURE, FOFX_RECYCLEONDELETE, FOF_ALLOWUNDO,
-    FOF_NO_UI, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW,
+    FOFX_ADDUNDORECORD, FOFX_EARLYFAILURE, FOFX_RECYCLEONDELETE, FOF_ALLOWUNDO, FOF_NO_UI,
     TSF_DELETE_RECYCLE_IF_POSSIBLE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -98,17 +97,25 @@ fn fail(verb: &str, target: &str, err: &windows::core::Error) -> Fail {
 }
 
 fn shell_execute(file: &HSTRING, directory: Option<&HSTRING>) -> windows::core::Result<()> {
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW,
+    };
     let verb = HSTRING::from("open");
     let mut info = SHELLEXECUTEINFOW {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
         fMask: SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI,
-        lpVerb: PCWSTR(verb.as_ptr()),
-        lpFile: PCWSTR(file.as_ptr()),
-        lpDirectory: directory.map_or(PCWSTR::null(), |d| PCWSTR(d.as_ptr())),
+        lpVerb: verb.as_ptr(),
+        lpFile: file.as_ptr(),
+        lpDirectory: directory.map_or(std::ptr::null(), |d| d.as_ptr()),
         nShow: SW_SHOWNORMAL.0,
         ..Default::default()
     };
-    let r = unsafe { ShellExecuteExW(&mut info) };
+    // The error is read before the message pump can overwrite the thread's last error.
+    let r = if unsafe { ShellExecuteExW(&mut info) } != 0 {
+        Ok(())
+    } else {
+        Err(windows::core::Error::from_thread())
+    };
     drain_messages();
     r
 }

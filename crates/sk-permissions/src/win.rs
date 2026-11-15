@@ -21,18 +21,23 @@ use sk_runtime::redjs::webapi::permissions::{
     Capability, PermissionHost, PermissionState, RequestOutcome,
 };
 
-use windows::core::{HSTRING, PCWSTR};
-use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE};
-use windows::Win32::System::Registry::{
+use std::ptr::{null, null_mut};
+
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE};
+use windows_sys::Win32::System::Registry::{
     RegCloseKey, RegGetValueW, RegNotifyChangeKeyValue, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER,
     HKEY_LOCAL_MACHINE, KEY_NOTIFY, KEY_READ, REG_NOTIFY_CHANGE_LAST_SET, REG_NOTIFY_CHANGE_NAME,
     REG_NOTIFY_THREAD_AGNOSTIC, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
 };
-use windows::Win32::System::Threading::{
+use windows_sys::Win32::System::Threading::{
     CreateEventW, ResetEvent, WaitForMultipleObjects, INFINITE,
 };
-use windows::Win32::UI::Shell::ShellExecuteW;
-use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+use windows_sys::Win32::UI::Shell::ShellExecuteW;
+use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(Some(0)).collect()
+}
 
 const CONSENT: &str =
     r"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore";
@@ -81,18 +86,18 @@ fn settings_uri(cap: Capability) -> Option<&'static str> {
 }
 
 fn read_sz(root: HKEY, path: &str, name: &str) -> Option<String> {
-    let path = HSTRING::from(path);
-    let name = HSTRING::from(name);
+    let path = wide(path);
+    let name = wide(name);
     let mut len: u32 = 0;
     unsafe {
         if RegGetValueW(
             root,
-            &path,
-            &name,
+            path.as_ptr(),
+            name.as_ptr(),
             RRF_RT_REG_SZ,
-            None,
-            None,
-            Some(&mut len),
+            null_mut(),
+            null_mut(),
+            &mut len,
         ) != ERROR_SUCCESS
         {
             return None;
@@ -100,12 +105,12 @@ fn read_sz(root: HKEY, path: &str, name: &str) -> Option<String> {
         let mut buf = vec![0u16; (len as usize).div_ceil(2).max(1)];
         if RegGetValueW(
             root,
-            &path,
-            &name,
+            path.as_ptr(),
+            name.as_ptr(),
             RRF_RT_REG_SZ,
-            None,
-            Some(buf.as_mut_ptr().cast()),
-            Some(&mut len),
+            null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut len,
         ) != ERROR_SUCCESS
         {
             return None;
@@ -121,19 +126,19 @@ fn read_sz(root: HKEY, path: &str, name: &str) -> Option<String> {
 }
 
 fn read_dword(root: HKEY, path: &str, name: &str) -> Option<u32> {
-    let path = HSTRING::from(path);
-    let name = HSTRING::from(name);
+    let path = wide(path);
+    let name = wide(name);
     let mut out: u32 = 0;
     let mut len: u32 = 4;
     unsafe {
         if RegGetValueW(
             root,
-            &path,
-            &name,
+            path.as_ptr(),
+            name.as_ptr(),
             RRF_RT_REG_DWORD,
-            None,
-            Some((&mut out as *mut u32).cast()),
-            Some(&mut len),
+            null_mut(),
+            (&mut out as *mut u32).cast(),
+            &mut len,
         ) != ERROR_SUCCESS
         {
             return None;
@@ -340,19 +345,19 @@ impl PermissionHost for WindowsHost {
 
 /// `ShellExecuteW`; success is the legacy `> 32` HINSTANCE convention.
 fn open_uri(uri: &str) -> bool {
-    let uri = HSTRING::from(uri);
-    let verb = HSTRING::from("open");
+    let uri = wide(uri);
+    let verb = wide("open");
     let rc = unsafe {
         ShellExecuteW(
-            None,
-            PCWSTR(verb.as_ptr()),
-            PCWSTR(uri.as_ptr()),
-            None,
-            None,
+            null_mut(),
+            verb.as_ptr(),
+            uri.as_ptr(),
+            null(),
+            null(),
             SW_SHOWNORMAL,
         )
     };
-    rc.0 as usize > 32
+    rc as usize > 32
 }
 
 fn changes() -> &'static Mutex<Vec<Capability>> {
@@ -396,9 +401,10 @@ fn watched_keys() -> Vec<(HKEY, String, Vec<Capability>)> {
 }
 
 fn open_key(root: HKEY, path: &str) -> Option<HKEY> {
-    let mut key = HKEY::default();
-    let wide = HSTRING::from(path);
-    (unsafe { RegOpenKeyExW(root, &wide, None, KEY_READ | KEY_NOTIFY, &mut key) } == ERROR_SUCCESS)
+    let mut key: HKEY = null_mut();
+    let path = wide(path);
+    (unsafe { RegOpenKeyExW(root, path.as_ptr(), 0, KEY_READ | KEY_NOTIFY, &mut key) }
+        == ERROR_SUCCESS)
         .then_some(key)
 }
 
@@ -414,7 +420,10 @@ struct Watch {
 
 impl Watch {
     fn new(root: HKEY, path: String) -> Option<Watch> {
-        let event = unsafe { CreateEventW(None, true, false, None) }.ok()?;
+        let event = unsafe { CreateEventW(null(), 1, 0, null()) };
+        if event.is_null() {
+            return None;
+        }
         let mut w = Watch {
             root,
             path,
@@ -470,13 +479,7 @@ impl Watch {
                 REG_NOTIFY_CHANGE_NAME
             };
             let rc = unsafe {
-                RegNotifyChangeKeyValue(
-                    key,
-                    false,
-                    filter | REG_NOTIFY_THREAD_AGNOSTIC,
-                    Some(self.event),
-                    true,
-                )
+                RegNotifyChangeKeyValue(key, 0, filter | REG_NOTIFY_THREAD_AGNOSTIC, self.event, 1)
             };
             if rc == ERROR_SUCCESS {
                 self.armed = true;
@@ -491,7 +494,7 @@ impl Watch {
     fn close(&mut self) {
         if let Some(key) = self.key.take() {
             unsafe {
-                let _ = RegCloseKey(key);
+                RegCloseKey(key);
             }
         }
         self.open = 0;
@@ -503,7 +506,7 @@ impl Drop for Watch {
     fn drop(&mut self) {
         self.close();
         unsafe {
-            let _ = CloseHandle(self.event);
+            CloseHandle(self.event);
         }
     }
 }
@@ -532,14 +535,16 @@ impl Watcher {
         if handles.is_empty() {
             return None;
         }
-        let rc = unsafe { WaitForMultipleObjects(&handles, false, timeout_ms) };
-        let idx = rc.0 as usize;
+        let rc = unsafe {
+            WaitForMultipleObjects(handles.len() as u32, handles.as_ptr(), 0, timeout_ms)
+        };
+        let idx = rc as usize;
         if idx >= handles.len() {
             return None;
         }
         let w = &mut self.watches[idx];
         unsafe {
-            let _ = ResetEvent(w.event);
+            ResetEvent(w.event);
         }
         w.armed = false;
         for w in &mut self.watches {
@@ -655,39 +660,48 @@ mod tests {
             k
         }
         fn set(&self, sub: &str, value: &str) {
-            use windows::Win32::System::Registry::{
+            use windows_sys::Win32::System::Registry::{
                 RegCreateKeyExW, RegSetValueExW, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
             };
-            let path = HSTRING::from(format!(r"{}\{sub}", self.0));
-            let mut key = HKEY::default();
+            let path = wide(&format!(r"{}\{sub}", self.0));
+            let mut key: HKEY = null_mut();
             unsafe {
                 assert_eq!(
                     RegCreateKeyExW(
                         HKEY_CURRENT_USER,
-                        &path,
-                        None,
-                        None,
+                        path.as_ptr(),
+                        0,
+                        null(),
                         REG_OPTION_NON_VOLATILE,
                         KEY_SET_VALUE,
-                        None,
+                        null(),
                         &mut key,
-                        None
+                        null_mut()
                     ),
                     ERROR_SUCCESS
                 );
-                let wide: Vec<u16> = value.encode_utf16().chain([0]).collect();
-                let bytes = std::slice::from_raw_parts(wide.as_ptr().cast::<u8>(), wide.len() * 2);
+                let value = wide(value);
                 assert_eq!(
-                    RegSetValueExW(key, &HSTRING::from("Value"), None, REG_SZ, Some(bytes)),
+                    RegSetValueExW(
+                        key,
+                        wide("Value").as_ptr(),
+                        0,
+                        REG_SZ,
+                        value.as_ptr().cast(),
+                        (value.len() * 2) as u32
+                    ),
                     ERROR_SUCCESS
                 );
-                let _ = RegCloseKey(key);
+                RegCloseKey(key);
             }
         }
         fn delete(&self) {
-            let path = HSTRING::from(self.0.as_str());
+            let path = wide(&self.0);
             unsafe {
-                let _ = windows::Win32::System::Registry::RegDeleteTreeW(HKEY_CURRENT_USER, &path);
+                windows_sys::Win32::System::Registry::RegDeleteTreeW(
+                    HKEY_CURRENT_USER,
+                    path.as_ptr(),
+                );
             }
         }
     }

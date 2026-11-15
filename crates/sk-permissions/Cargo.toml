@@ -19,9 +19,9 @@ serde_json = "1"
 sk-locale = { path = "../sk-locale" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# 0.62 like `sk-video`: this crate shares no types with gpui. Everything here is a state read or
-# a shell open; `Security_Authorization_AppCapabilityAccess` is absent on purpose (see win.rs).
-windows = { version = "0.62", features = [
+# Everything here is a state read or a shell open; `Security_Authorization_AppCapabilityAccess`
+# is absent on purpose (see win.rs).
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_Registry",

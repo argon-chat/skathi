@@ -10,13 +10,16 @@
 //! straight alpha, bottom-up. Every representation is prepared before the clipboard opens, so a PNG that
 //! does not decode leaves it untouched.
 
-use windows::core::w;
-use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
-use windows::Win32::System::DataExchange::{
+use std::io::Error;
+use std::ptr::null_mut;
+
+use windows_sys::core::w;
+use windows_sys::Win32::Foundation::GlobalFree;
+use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
     RegisterClipboardFormatW, SetClipboardData,
 };
-use windows::Win32::System::Memory::{
+use windows_sys::Win32::System::Memory::{
     GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
 };
 
@@ -40,21 +43,21 @@ impl Open {
     // Another process (a clipboard manager) may hold it briefly: retry.
     fn new() -> Result<Self, String> {
         for _ in 0..10 {
-            if unsafe { OpenClipboard(None) }.is_ok() {
+            if unsafe { OpenClipboard(null_mut()) } != 0 {
                 return Ok(Open);
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         Err(format!(
             "the clipboard is held by another process ({})",
-            std::io::Error::last_os_error()
+            Error::last_os_error()
         ))
     }
 }
 
 impl Drop for Open {
     fn drop(&mut self) {
-        let _ = unsafe { CloseClipboard() };
+        unsafe { CloseClipboard() };
     }
 }
 
@@ -77,7 +80,12 @@ pub(crate) fn write(items: &[(String, Vec<u8>)]) -> Result<(), String> {
         }
     }
     let _open = Open::new()?;
-    unsafe { EmptyClipboard() }.map_err(|e| format!("the clipboard could not be emptied: {e}"))?;
+    if unsafe { EmptyClipboard() } == 0 {
+        return Err(format!(
+            "the clipboard could not be emptied: {}",
+            Error::last_os_error()
+        ));
+    }
     for (format, data) in formats {
         set(format, &data)?;
     }
@@ -109,17 +117,23 @@ pub(crate) fn read() -> Result<Vec<(String, Vec<u8>)>, String> {
 
 fn set(format: u32, data: &[u8]) -> Result<(), String> {
     unsafe {
-        let global = GlobalAlloc(GMEM_MOVEABLE, data.len().max(1))
-            .map_err(|e| format!("out of memory for the clipboard: {e}"))?;
+        let global = GlobalAlloc(GMEM_MOVEABLE, data.len().max(1));
+        if global.is_null() {
+            return Err(format!(
+                "out of memory for the clipboard: {}",
+                Error::last_os_error()
+            ));
+        }
         let ptr = GlobalLock(global);
         if ptr.is_null() {
-            let _ = GlobalFree(Some(global));
+            GlobalFree(global);
             return Err("the clipboard memory could not be locked".into());
         }
         std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
-        let _ = GlobalUnlock(global);
-        if let Err(e) = SetClipboardData(format, Some(HANDLE(global.0))) {
-            let _ = GlobalFree(Some(global));
+        GlobalUnlock(global);
+        if SetClipboardData(format, global).is_null() {
+            let e = Error::last_os_error();
+            GlobalFree(global);
             return Err(format!("the clipboard refused format {format}: {e}"));
         }
     }
@@ -128,16 +142,20 @@ fn set(format: u32, data: &[u8]) -> Result<(), String> {
 
 fn get(format: u32) -> Option<Vec<u8>> {
     unsafe {
-        IsClipboardFormatAvailable(format).ok()?;
-        let handle = GetClipboardData(format).ok()?;
-        let global = HGLOBAL(handle.0);
+        if IsClipboardFormatAvailable(format) == 0 {
+            return None;
+        }
+        let global = GetClipboardData(format);
+        if global.is_null() {
+            return None;
+        }
         let size = GlobalSize(global);
         let ptr = GlobalLock(global);
         if ptr.is_null() {
             return None;
         }
         let bytes = std::slice::from_raw_parts(ptr as *const u8, size).to_vec();
-        let _ = GlobalUnlock(global);
+        GlobalUnlock(global);
         Some(bytes)
     }
 }

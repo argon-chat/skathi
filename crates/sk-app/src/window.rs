@@ -850,14 +850,15 @@ pub(crate) fn has_system_backdrop() -> bool {
     use std::sync::OnceLock;
     static HAS: OnceLock<bool> = OnceLock::new();
     *HAS.get_or_init(|| {
-        use windows::Wdk::System::SystemServices::RtlGetVersion;
-        use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
+        use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
+        use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
         let mut vi = OSVERSIONINFOW {
             dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
             ..Default::default()
         };
         // `RtlGetVersion` is the only version query that does not lie for an unmanifested process.
-        unsafe { RtlGetVersion(&mut vi) }.is_ok() && vi.dwBuildNumber >= 22621
+        let status = unsafe { RtlGetVersion(&mut vi) };
+        status >= 0 && vi.dwBuildNumber >= 22621
     })
 }
 

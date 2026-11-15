@@ -13,17 +13,17 @@ use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::Gdi::*,
-        System::{
-            LibraryLoader::GetModuleHandleW,
-            Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD},
-            Threading::GetCurrentThreadId,
-        },
+        System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
         UI::{
             HiDpi::{GetDpiForSystem, GetSystemMetricsForDpi},
             Shell::*,
             WindowsAndMessaging::*,
         },
     },
+};
+use windows_sys::Win32::{
+    Foundation::ERROR_SUCCESS,
+    System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD},
 };
 
 const CALLBACK: u32 = WM_APP + 0x61;
@@ -615,15 +615,15 @@ fn taskbar_foreground() -> u8 {
     let result = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,
-            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
-            w!("SystemUsesLightTheme"),
+            windows_sys::w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+            windows_sys::w!("SystemUsesLightTheme"),
             RRF_RT_REG_DWORD,
-            None,
-            Some((&mut light as *mut u32).cast()),
-            Some(&mut length),
+            std::ptr::null_mut(),
+            (&mut light as *mut u32).cast(),
+            &mut length,
         )
     };
-    if result.is_ok() && light == 0 {
+    if result == ERROR_SUCCESS && light == 0 {
         255
     } else {
         0

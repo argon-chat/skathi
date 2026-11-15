@@ -269,13 +269,20 @@ fn move_aside(path: &Path) -> PathBuf {
 
 #[cfg(target_os = "windows")]
 fn new_key() -> Result<[u8; 32], String> {
-    use windows::Win32::Security::Cryptography::{
+    use windows_sys::Win32::Security::Cryptography::{
         BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
     };
     let mut k = [0u8; 32];
-    let st = unsafe { BCryptGenRandom(None, &mut k, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
-    if st.0 < 0 {
-        return Err(format!("BCryptGenRandom failed: 0x{:08x}", st.0 as u32));
+    let st = unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            k.as_mut_ptr(),
+            k.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    if st < 0 {
+        return Err(format!("BCryptGenRandom failed: 0x{:08x}", st as u32));
     }
     Ok(k)
 }
@@ -307,20 +314,12 @@ fn quota_from(free: u64, total: u64, usage: u64) -> u64 {
 #[cfg(target_os = "windows")]
 fn disk(dir: &Path) -> Option<(u64, u64)> {
     use std::os::windows::ffi::OsStrExt;
-    use windows::core::PCWSTR;
-    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
     let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
     let (mut free, mut total) = (0u64, 0u64);
-    unsafe {
-        GetDiskFreeSpaceExW(
-            PCWSTR(wide.as_ptr()),
-            Some(&mut free),
-            Some(&mut total),
-            None,
-        )
-    }
-    .ok()?;
-    (total > 0).then_some((free, total))
+    let ok =
+        unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, &mut total, std::ptr::null_mut()) };
+    (ok != 0 && total > 0).then_some((free, total))
 }
 
 /// `statfs`, not `statvfs`: Darwin's `statvfs` has 32-bit block counts.

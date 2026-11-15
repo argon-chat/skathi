@@ -284,34 +284,42 @@ impl Write for Counting<'_> {
 
 #[cfg(windows)]
 fn replace(target: &Path, swap: &Path) -> std::io::Result<()> {
-    use windows::Win32::Storage::FileSystem::{
+    use std::ptr::null;
+    use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, ReplaceFileW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
         REPLACEFILE_IGNORE_ACL_ERRORS, REPLACEFILE_IGNORE_MERGE_ERRORS,
     };
     let (t, s) = (win_path(target), win_path(swap));
     if target.exists() {
-        let r = unsafe {
+        let ok = unsafe {
             ReplaceFileW(
-                &t,
-                &s,
-                None,
+                t.as_ptr(),
+                s.as_ptr(),
+                null(),
                 REPLACEFILE_IGNORE_MERGE_ERRORS | REPLACEFILE_IGNORE_ACL_ERRORS,
-                None,
-                None,
+                null(),
+                null(),
             )
         };
-        match r {
-            Ok(()) => return Ok(()),
-            Err(e) if (e.code().0 as u32 & 0xFFFF) == 2 => {}
-            Err(e) => {
-                return Err(std::io::Error::from_raw_os_error(
-                    (e.code().0 as u32 & 0xFFFF) as i32,
-                ))
-            }
+        if ok != 0 {
+            return Ok(());
+        }
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() != Some(2) {
+            return Err(e);
         }
     }
-    unsafe { MoveFileExW(&s, &t, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) }
-        .map_err(|e| std::io::Error::from_raw_os_error((e.code().0 as u32 & 0xFFFF) as i32))
+    if unsafe {
+        MoveFileExW(
+            s.as_ptr(),
+            t.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[cfg(not(windows))]
@@ -321,15 +329,17 @@ fn replace(target: &Path, swap: &Path) -> std::io::Result<()> {
 
 /// A path the wide Win32 calls take: `\\?\` in front of a long absolute one (std adds it itself, a direct call does not).
 #[cfg(windows)]
-fn win_path(p: &Path) -> windows::core::HSTRING {
+fn win_path(p: &Path) -> Vec<u16> {
     let s = p.as_os_str().to_string_lossy();
-    if s.len() >= 248 && !s.starts_with(r"\\?\") {
-        if let Some(unc) = s.strip_prefix(r"\\") {
-            return windows::core::HSTRING::from(format!(r"\\?\UNC\{unc}"));
+    let s = if s.len() >= 248 && !s.starts_with(r"\\?\") {
+        match s.strip_prefix(r"\\") {
+            Some(unc) => format!(r"\\?\UNC\{unc}"),
+            None => format!(r"\\?\{s}"),
         }
-        return windows::core::HSTRING::from(format!(r"\\?\{s}"));
-    }
-    windows::core::HSTRING::from(s.as_ref())
+    } else {
+        s.into_owned()
+    };
+    s.encode_utf16().chain(Some(0)).collect()
 }
 
 fn writables() -> &'static Mutex<HashMap<u64, Arc<Mutex<Writable>>>> {

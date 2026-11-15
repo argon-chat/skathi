@@ -13,44 +13,52 @@
 //! JSON, acked with one byte: `1` delivered, `2` closing (the second launch waits for it and becomes the instance).
 
 use std::ffi::c_void;
+use std::ptr::{null, null_mut};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use windows::core::{HSTRING, PWSTR};
-use windows::Win32::Foundation::{
+use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, LocalFree, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS,
     ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GENERIC_READ,
-    GENERIC_WRITE, HANDLE, HLOCAL, HWND, INVALID_HANDLE_VALUE,
+    GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
-use windows::Win32::Security::Authorization::{
+use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
-use windows::Win32::Security::{
+use windows_sys::Win32::Security::{
     GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY,
     TOKEN_USER,
 };
-use windows::Win32::Storage::FileSystem::{
+use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FlushFileBuffers, GetFileInformationByHandle, ReadFile, WriteFile,
-    BY_HANDLE_FILE_INFORMATION, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_FIRST_PIPE_INSTANCE,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
-    SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
+    BY_HANDLE_FILE_INFORMATION, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
+    SECURITY_SQOS_PRESENT,
 };
-use windows::Win32::System::Pipes::{
+use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientProcessId,
     GetNamedPipeServerProcessId, SetNamedPipeHandleState, WaitNamedPipeW, PIPE_READMODE_MESSAGE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
-use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
-use windows::Win32::System::Threading::{
+use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+use windows_sys::Win32::System::Threading::{
     CreateMutexW, GetCurrentProcess, GetCurrentProcessId, OpenProcess, OpenProcessToken,
     QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows::Win32::UI::WindowsAndMessaging::{
+use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindowAsync,
     SW_RESTORE, SW_SHOW,
 };
 
 use super::{Forward, CLOSING_PATIENCE_MS, FORWARD_TIMEOUT_MS, MAX_MESSAGE};
+
+pub(super) fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(Some(0)).collect()
+}
+
+fn os_error(code: u32) -> std::io::Error {
+    std::io::Error::from_raw_os_error(code as i32)
+}
 
 #[derive(Debug)]
 pub enum Claim {
@@ -65,9 +73,9 @@ pub enum Claim {
 struct Owned(HANDLE);
 impl Drop for Owned {
     fn drop(&mut self) {
-        if !self.0.is_invalid() {
+        if !self.0.is_null() && self.0 != INVALID_HANDLE_VALUE {
             unsafe {
-                let _ = CloseHandle(self.0);
+                CloseHandle(self.0);
             }
         }
     }
@@ -100,28 +108,28 @@ pub fn instance_key(id: &str, storage: &str, sid: &str) -> String {
 
 fn token_user_sid(process: HANDLE) -> Option<String> {
     unsafe {
-        let mut token = HANDLE::default();
-        OpenProcessToken(process, TOKEN_QUERY, &mut token).ok()?;
+        let mut token: HANDLE = null_mut();
+        if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
+            return None;
+        }
         let token = Owned(token);
         let mut len = 0u32;
-        let _ = GetTokenInformation(token.0, TokenUser, None, 0, &mut len);
+        GetTokenInformation(token.0, TokenUser, null_mut(), 0, &mut len);
         if len == 0 {
             return None;
         }
         let mut buf = vec![0u8; len as usize];
-        GetTokenInformation(
-            token.0,
-            TokenUser,
-            Some(buf.as_mut_ptr().cast()),
-            len,
-            &mut len,
-        )
-        .ok()?;
+        if GetTokenInformation(token.0, TokenUser, buf.as_mut_ptr().cast(), len, &mut len) == 0 {
+            return None;
+        }
         let user = &*(buf.as_ptr() as *const TOKEN_USER);
-        let mut s = PWSTR::null();
-        ConvertSidToStringSidW(user.User.Sid, &mut s).ok()?;
-        let out = s.to_string().ok();
-        let _ = LocalFree(Some(HLOCAL(s.0.cast())));
+        let mut s = null_mut();
+        if ConvertSidToStringSidW(user.User.Sid, &mut s) == 0 {
+            return None;
+        }
+        let units = (0..).take_while(|&i| *s.add(i) != 0).count();
+        let out = String::from_utf16(std::slice::from_raw_parts(s, units)).ok();
+        LocalFree(s.cast());
         out
     }
 }
@@ -131,43 +139,41 @@ fn own_sid() -> Option<String> {
 }
 
 fn open_peer(pid: u32) -> Option<Owned> {
-    unsafe {
-        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
-            .ok()
-            .map(Owned)
-    }
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    (!h.is_null()).then_some(Owned(h))
 }
 
 fn image_path(process: HANDLE) -> Option<String> {
     let mut buf = vec![0u16; 32_768];
     let mut len = buf.len() as u32;
-    unsafe {
-        QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_WIN32,
-            PWSTR(buf.as_mut_ptr()),
-            &mut len,
-        )
-        .ok()?
-    };
+    if unsafe {
+        QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len)
+    } == 0
+    {
+        return None;
+    }
     Some(String::from_utf16_lossy(&buf[..len as usize]))
 }
 
 fn file_identity(path: &str) -> Option<(u32, u64)> {
     unsafe {
         let h = CreateFileW(
-            &HSTRING::from(path),
+            wide(path).as_ptr(),
             0,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            None,
+            null(),
             OPEN_EXISTING,
-            FILE_FLAGS_AND_ATTRIBUTES(0),
-            None,
-        )
-        .ok()?;
+            0,
+            null_mut(),
+        );
+        if h == INVALID_HANDLE_VALUE {
+            return None;
+        }
         let h = Owned(h);
         let mut info = BY_HANDLE_FILE_INFORMATION::default();
-        GetFileInformationByHandle(h.0, &mut info).ok()?;
+        if GetFileInformationByHandle(h.0, &mut info) == 0 {
+            return None;
+        }
         Some((
             info.dwVolumeSerialNumber,
             (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
@@ -196,38 +202,37 @@ fn verify_server(pid: u32, sid: &str) -> Result<(), String> {
 struct Dacl(PSECURITY_DESCRIPTOR);
 impl Dacl {
     fn for_user(sid: &str) -> Option<Dacl> {
-        let sddl = HSTRING::from(format!("D:P(A;;GA;;;{sid})(A;;GA;;;SY)"));
-        let mut sd = PSECURITY_DESCRIPTOR::default();
-        unsafe {
+        let sddl = wide(&format!("D:P(A;;GA;;;{sid})(A;;GA;;;SY)"));
+        let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+        let ok = unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                &sddl,
+                sddl.as_ptr(),
                 SDDL_REVISION_1,
                 &mut sd,
-                None,
+                null_mut(),
             )
-            .ok()?
         };
-        Some(Dacl(sd))
+        (ok != 0).then_some(Dacl(sd))
     }
     fn attributes(&self) -> SECURITY_ATTRIBUTES {
         SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-            lpSecurityDescriptor: self.0 .0,
-            bInheritHandle: false.into(),
+            lpSecurityDescriptor: self.0,
+            bInheritHandle: 0,
         }
     }
 }
 impl Drop for Dacl {
     fn drop(&mut self) {
         unsafe {
-            let _ = LocalFree(Some(HLOCAL(self.0 .0)));
+            LocalFree(self.0);
         }
     }
 }
 unsafe impl Send for Dacl {}
 
 fn last_error() -> u32 {
-    unsafe { GetLastError().0 }
+    unsafe { GetLastError() }
 }
 
 pub fn claim(id: &str, storage: &str, fwd: &Forward) -> Claim {
@@ -241,9 +246,9 @@ fn claim_within(id: &str, storage: &str, fwd: &Forward, patience: Duration) -> C
     let key = instance_key(id, storage, &sid);
     let mut session = 0u32;
     unsafe {
-        let _ = ProcessIdToSessionId(GetCurrentProcessId(), &mut session);
+        ProcessIdToSessionId(GetCurrentProcessId(), &mut session);
     }
-    let mutex_name = HSTRING::from(format!("Local\\vn-instance-{key}"));
+    let mutex_name = wide(&format!("Local\\vn-instance-{key}"));
     let pipe_name = format!(r"\\.\pipe\vn-instance-{key}-{session}");
 
     let mut deadline = Instant::now() + patience;
@@ -298,22 +303,25 @@ enum Mutex {
     Failed(String),
 }
 
-fn take_mutex(name: &HSTRING) -> Mutex {
-    match unsafe { CreateMutexW(None, false, name) } {
-        Ok(h) => {
-            if last_error() == ERROR_ALREADY_EXISTS.0 {
-                unsafe {
-                    let _ = CloseHandle(h);
-                }
-                Mutex::Taken
-            } else {
-                // Held for the life of the process; the kernel drops it when we die.
-                std::mem::forget(Owned(h));
-                Mutex::Ours
-            }
+fn take_mutex(name: &[u16]) -> Mutex {
+    let h = unsafe { CreateMutexW(null(), 0, name.as_ptr()) };
+    let e = last_error();
+    if h.is_null() {
+        return if e == ERROR_ACCESS_DENIED {
+            Mutex::Denied
+        } else {
+            Mutex::Failed(format!("CreateMutexW: {}", os_error(e)))
+        };
+    }
+    if e == ERROR_ALREADY_EXISTS {
+        unsafe {
+            CloseHandle(h);
         }
-        Err(e) if e.code() == ERROR_ACCESS_DENIED.to_hresult() => Mutex::Denied,
-        Err(e) => Mutex::Failed(format!("CreateMutexW: {e}")),
+        Mutex::Taken
+    } else {
+        // Held for the life of the process; the kernel drops it when we die.
+        std::mem::forget(Owned(h));
+        Mutex::Ours
     }
 }
 
@@ -329,49 +337,48 @@ const ACK_DELIVERED: u8 = 1;
 const ACK_CLOSING: u8 = 2;
 
 fn forward(pipe_name: &str, sid: &str, fwd: &Forward, deadline: Instant) -> Sent {
-    let name = HSTRING::from(pipe_name);
+    let name = wide(pipe_name);
     let pipe = loop {
         let opened = unsafe {
             CreateFileW(
-                &name,
-                (GENERIC_READ | GENERIC_WRITE).0,
-                Default::default(),
-                None,
+                name.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                null(),
                 OPEN_EXISTING,
                 // Identification only: the server may ask who we are, never act as us.
                 SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
-                None,
+                null_mut(),
             )
         };
-        match opened {
-            Ok(h) => break Owned(h),
-            Err(e) => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return Sent::NoAnswer;
-                }
-                if e.code() == ERROR_PIPE_BUSY.to_hresult() {
-                    unsafe {
-                        let _ = WaitNamedPipeW(
-                            &name,
-                            remaining.as_millis().min(u128::from(u32::MAX)) as u32,
-                        );
-                    }
-                    continue;
-                }
-                if e.code() == ERROR_FILE_NOT_FOUND.to_hresult() {
-                    return Sent::Gone;
-                }
-                return Sent::NoAnswer;
-            }
+        if opened != INVALID_HANDLE_VALUE {
+            break Owned(opened);
         }
+        let e = last_error();
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Sent::NoAnswer;
+        }
+        if e == ERROR_PIPE_BUSY {
+            unsafe {
+                WaitNamedPipeW(
+                    name.as_ptr(),
+                    remaining.as_millis().min(u128::from(u32::MAX)) as u32,
+                );
+            }
+            continue;
+        }
+        if e == ERROR_FILE_NOT_FOUND {
+            return Sent::Gone;
+        }
+        return Sent::NoAnswer;
     };
     unsafe {
         let mode = PIPE_READMODE_MESSAGE;
-        let _ = SetNamedPipeHandleState(pipe.0, Some(&mode), None, None);
+        SetNamedPipeHandleState(pipe.0, &mode, null(), null());
     }
     let mut server_pid = 0u32;
-    if unsafe { GetNamedPipeServerProcessId(pipe.0, &mut server_pid) }.is_err() {
+    if unsafe { GetNamedPipeServerProcessId(pipe.0, &mut server_pid) } == 0 {
         return Sent::Impostor("the pipe server's pid could not be read".into());
     }
     if let Err(why) = verify_server(server_pid, sid) {
@@ -380,7 +387,7 @@ fn forward(pipe_name: &str, sid: &str, fwd: &Forward, deadline: Instant) -> Sent
     // The secondary was just started by the user, so it may hand the foreground on; a quiet launch does not.
     if fwd.raise {
         unsafe {
-            let _ = AllowSetForegroundWindow(server_pid);
+            AllowSetForegroundWindow(server_pid);
         }
     }
     let bytes = fwd.encode();
@@ -389,26 +396,33 @@ fn forward(pipe_name: &str, sid: &str, fwd: &Forward, deadline: Instant) -> Sent
         return Sent::NoAnswer;
     }
     let mut written = 0u32;
-    if unsafe { WriteFile(pipe.0, Some(&bytes), Some(&mut written), None) }.is_err()
-        || written as usize != bytes.len()
-    {
+    let wrote = unsafe {
+        WriteFile(
+            pipe.0,
+            bytes.as_ptr(),
+            bytes.len() as u32,
+            &mut written,
+            null_mut(),
+        )
+    };
+    if wrote == 0 || written as usize != bytes.len() {
         return Sent::NoAnswer;
     }
     // The ack has a deadline: a wedged primary that accepted must not hold this process forever.
     let (tx, rx) = mpsc::channel();
-    let raw = pipe.0 .0 as usize;
+    let raw = pipe.0 as usize;
     std::thread::spawn(move || {
         let mut ack = [0u8; 1];
         let mut n = 0u32;
         let ok = unsafe {
             ReadFile(
-                HANDLE(raw as *mut c_void),
-                Some(&mut ack),
-                Some(&mut n),
-                None,
+                raw as *mut c_void,
+                ack.as_mut_ptr(),
+                ack.len() as u32,
+                &mut n,
+                null_mut(),
             )
-        }
-        .is_ok();
+        } != 0;
         let _ = tx.send(if ok && n == 1 { ack[0] } else { 0 });
     });
     let remaining = deadline
@@ -428,7 +442,7 @@ fn forward(pipe_name: &str, sid: &str, fwd: &Forward, deadline: Instant) -> Sent
 
 const PIPE_BUFFER: u32 = 64 * 1024;
 
-fn create_instance(name: &HSTRING, dacl: &Dacl, first: bool) -> Result<Owned, String> {
+fn create_instance(name: &[u16], dacl: &Dacl, first: bool) -> Result<Owned, String> {
     let sa = dacl.attributes();
     let open_mode = if first {
         PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE
@@ -437,19 +451,19 @@ fn create_instance(name: &HSTRING, dacl: &Dacl, first: bool) -> Result<Owned, St
     };
     let h = unsafe {
         CreateNamedPipeW(
-            name,
+            name.as_ptr(),
             open_mode,
             PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
             PIPE_UNLIMITED_INSTANCES,
             PIPE_BUFFER,
             PIPE_BUFFER,
             0,
-            Some(&sa),
+            &sa,
         )
     };
-    if h == INVALID_HANDLE_VALUE || h.is_invalid() {
+    if h == INVALID_HANDLE_VALUE || h.is_null() {
         let e = last_error();
-        return Err(if e == ERROR_ACCESS_DENIED.0 {
+        return Err(if e == ERROR_ACCESS_DENIED {
             "the pipe name is already taken by another process".to_string()
         } else {
             format!("CreateNamedPipeW failed ({e})")
@@ -462,7 +476,7 @@ fn create_instance(name: &HSTRING, dacl: &Dacl, first: bool) -> Result<Owned, St
 /// `vn-instance` thread. A taken name is retried for up to a second: the previous instance's pipe may linger.
 fn serve(pipe_name: String, sid: String, deadline: Instant) -> Result<(), String> {
     let dacl = Dacl::for_user(&sid).ok_or("the pipe's security descriptor could not be built")?;
-    let name = HSTRING::from(pipe_name);
+    let name = wide(&pipe_name);
     let give_up = deadline.min(Instant::now() + Duration::from_secs(1));
     let first = loop {
         match create_instance(&name, &dacl, true) {
@@ -486,10 +500,8 @@ fn serve(pipe_name: String, sid: String, deadline: Instant) -> Result<(), String
                         }
                     },
                 };
-                let connected = match unsafe { ConnectNamedPipe(pipe.0, None) } {
-                    Ok(()) => true,
-                    Err(e) => e.code() == ERROR_PIPE_CONNECTED.to_hresult(),
-                };
+                let connected = unsafe { ConnectNamedPipe(pipe.0, null_mut()) } != 0
+                    || last_error() == ERROR_PIPE_CONNECTED;
                 if !connected {
                     continue;
                 }
@@ -512,7 +524,7 @@ fn serve(pipe_name: String, sid: String, deadline: Instant) -> Result<(), String
 
 fn handle(pipe: Owned, sid: &str) {
     let mut client_pid = 0u32;
-    let same_user = unsafe { GetNamedPipeClientProcessId(pipe.0, &mut client_pid) }.is_ok()
+    let same_user = unsafe { GetNamedPipeClientProcessId(pipe.0, &mut client_pid) } != 0
         && open_peer(client_pid)
             .and_then(|p| token_user_sid(p.0))
             .as_deref()
@@ -522,7 +534,7 @@ fn handle(pipe: Owned, sid: &str) {
             "[launch] refused a single-instance message from pid {client_pid}: not this user"
         );
         unsafe {
-            let _ = DisconnectNamedPipe(pipe.0);
+            DisconnectNamedPipe(pipe.0);
         }
         return;
     }
@@ -535,7 +547,7 @@ fn handle(pipe: Owned, sid: &str) {
         Err(why) => {
             eprintln!("[launch] refused a single-instance message from pid {client_pid}: {why}");
             unsafe {
-                let _ = DisconnectNamedPipe(pipe.0);
+                DisconnectNamedPipe(pipe.0);
             }
             return;
         }
@@ -543,14 +555,10 @@ fn handle(pipe: Owned, sid: &str) {
     let closing = super::is_closing();
     unsafe {
         let mut n = 0u32;
-        let _ = WriteFile(
-            pipe.0,
-            Some(&[if closing { ACK_CLOSING } else { ACK_DELIVERED }]),
-            Some(&mut n),
-            None,
-        );
-        let _ = FlushFileBuffers(pipe.0);
-        let _ = DisconnectNamedPipe(pipe.0);
+        let ack = [if closing { ACK_CLOSING } else { ACK_DELIVERED }];
+        WriteFile(pipe.0, ack.as_ptr(), 1, &mut n, null_mut());
+        FlushFileBuffers(pipe.0);
+        DisconnectNamedPipe(pipe.0);
     }
     drop(pipe);
     if closing {
@@ -569,28 +577,37 @@ fn read_message(pipe: &Owned) -> Result<Vec<u8>, String> {
     let mut chunk = vec![0u8; PIPE_BUFFER as usize];
     loop {
         let mut n = 0u32;
-        let r = unsafe { ReadFile(pipe.0, Some(&mut chunk), Some(&mut n), None) };
+        let ok = unsafe {
+            ReadFile(
+                pipe.0,
+                chunk.as_mut_ptr(),
+                chunk.len() as u32,
+                &mut n,
+                null_mut(),
+            )
+        } != 0;
+        let e = last_error();
         out.extend_from_slice(&chunk[..n as usize]);
         if out.len() > MAX_MESSAGE {
             return Err(format!("message over the {MAX_MESSAGE}-byte cap"));
         }
-        match r {
-            Ok(()) => return Ok(out),
-            Err(e) if e.code() == ERROR_MORE_DATA.to_hresult() => continue,
-            Err(e) => return Err(format!("read failed: {e}")),
+        match e {
+            _ if ok => return Ok(out),
+            ERROR_MORE_DATA => continue,
+            e => return Err(format!("read failed: {}", os_error(e))),
         }
     }
 }
 
 pub fn raise(hwnd: isize) {
-    let hwnd = HWND(hwnd as *mut c_void);
+    let hwnd = hwnd as *mut c_void;
     unsafe {
-        if IsIconic(hwnd).as_bool() {
-            let _ = ShowWindowAsync(hwnd, SW_RESTORE);
-        } else if !IsWindowVisible(hwnd).as_bool() {
-            let _ = ShowWindowAsync(hwnd, SW_SHOW);
+        if IsIconic(hwnd) != 0 {
+            ShowWindowAsync(hwnd, SW_RESTORE);
+        } else if IsWindowVisible(hwnd) == 0 {
+            ShowWindowAsync(hwnd, SW_SHOW);
         }
-        let _ = SetForegroundWindow(hwnd);
+        SetForegroundWindow(hwnd);
     }
 }
 
@@ -652,7 +669,7 @@ mod tests {
         let sid = own_sid().unwrap();
         let key = instance_key(&id, "wedged", &sid);
         assert!(matches!(
-            take_mutex(&HSTRING::from(format!("Local\\vn-instance-{key}"))),
+            take_mutex(&wide(&format!("Local\\vn-instance-{key}"))),
             Mutex::Ours
         ));
         let fwd = Forward {

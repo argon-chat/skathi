@@ -144,12 +144,14 @@ mod gcm {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
-    use windows::Win32::Security::Cryptography::{
+    use std::ptr::{null, null_mut};
+
+    use windows_sys::Win32::Security::Cryptography::{
         BCryptCloseAlgorithmProvider, BCryptDecrypt, BCryptDestroyKey, BCryptEncrypt,
         BCryptGenerateSymmetricKey, BCryptOpenAlgorithmProvider, BCryptSetProperty,
         BCRYPT_AES_ALGORITHM, BCRYPT_ALG_HANDLE, BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO,
         BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO_VERSION, BCRYPT_CHAINING_MODE, BCRYPT_CHAIN_MODE_GCM,
-        BCRYPT_FLAGS, BCRYPT_HANDLE, BCRYPT_KEY_HANDLE, BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS,
+        BCRYPT_KEY_HANDLE,
     };
 
     use super::KEY_NAME;
@@ -177,9 +179,9 @@ mod gcm {
         }
     }
 
-    fn check(st: windows::Win32::Foundation::NTSTATUS, what: &str) -> Result<(), String> {
-        if st.0 < 0 {
-            Err(format!("{what} failed: 0x{:08x}", st.0 as u32))
+    fn check(st: windows_sys::Win32::Foundation::NTSTATUS, what: &str) -> Result<(), String> {
+        if st < 0 {
+            Err(format!("{what} failed: 0x{:08x}", st as u32))
         } else {
             Ok(())
         }
@@ -200,32 +202,40 @@ mod gcm {
     impl Gcm {
         fn new(secret: &[u8; 32], id: String) -> Result<Gcm, String> {
             unsafe {
-                let mut alg = BCRYPT_ALG_HANDLE::default();
+                let mut alg: BCRYPT_ALG_HANDLE = null_mut();
                 check(
-                    BCryptOpenAlgorithmProvider(
-                        &mut alg,
-                        BCRYPT_AES_ALGORITHM,
-                        windows::core::PCWSTR::null(),
-                        BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS(0),
-                    ),
+                    BCryptOpenAlgorithmProvider(&mut alg, BCRYPT_AES_ALGORITHM, null(), 0),
                     "BCryptOpenAlgorithmProvider(AES)",
                 )?;
-                let mode: Vec<u8> = BCRYPT_CHAIN_MODE_GCM
-                    .as_wide()
-                    .iter()
-                    .chain(std::iter::once(&0u16))
-                    .flat_map(|c| c.to_le_bytes())
-                    .collect();
+                // The property value is the mode's name in UTF-16, NUL included.
+                let units = (0..)
+                    .take_while(|&i| *BCRYPT_CHAIN_MODE_GCM.add(i) != 0)
+                    .count()
+                    + 1;
                 if let Err(e) = check(
-                    BCryptSetProperty(BCRYPT_HANDLE(alg.0), BCRYPT_CHAINING_MODE, &mode, 0),
+                    BCryptSetProperty(
+                        alg,
+                        BCRYPT_CHAINING_MODE,
+                        BCRYPT_CHAIN_MODE_GCM.cast(),
+                        (units * 2) as u32,
+                        0,
+                    ),
                     "GCM mode",
                 ) {
                     let _ = BCryptCloseAlgorithmProvider(alg, 0);
                     return Err(e);
                 }
-                let mut key = BCRYPT_KEY_HANDLE::default();
+                let mut key: BCRYPT_KEY_HANDLE = null_mut();
                 if let Err(e) = check(
-                    BCryptGenerateSymmetricKey(alg, &mut key, None, secret, 0),
+                    BCryptGenerateSymmetricKey(
+                        alg,
+                        &mut key,
+                        null_mut(),
+                        0,
+                        secret.as_ptr(),
+                        secret.len() as u32,
+                        0,
+                    ),
                     "BCryptGenerateSymmetricKey",
                 ) {
                     let _ = BCryptCloseAlgorithmProvider(alg, 0);
@@ -260,12 +270,15 @@ mod gcm {
                     check(
                         BCryptEncrypt(
                             *key,
-                            Some(plain),
-                            Some(&a as *const _ as *const core::ffi::c_void),
-                            None,
-                            Some(body),
+                            plain.as_ptr(),
+                            plain.len() as u32,
+                            &a as *const _ as *const core::ffi::c_void,
+                            null_mut(),
+                            0,
+                            body.as_mut_ptr(),
+                            body.len() as u32,
                             &mut n,
-                            BCRYPT_FLAGS(0),
+                            0,
                         ),
                         "BCryptEncrypt",
                     )?;
@@ -291,12 +304,15 @@ mod gcm {
                 check(
                     BCryptDecrypt(
                         *key,
-                        Some(body),
-                        Some(&a as *const _ as *const core::ffi::c_void),
-                        None,
-                        Some(&mut out),
+                        body.as_ptr(),
+                        body.len() as u32,
+                        &a as *const _ as *const core::ffi::c_void,
+                        null_mut(),
+                        0,
+                        out.as_mut_ptr(),
+                        out.len() as u32,
                         &mut n,
-                        BCRYPT_FLAGS(0),
+                        0,
                     ),
                     "BCryptDecrypt (wrong key or a damaged entry)",
                 )?;
