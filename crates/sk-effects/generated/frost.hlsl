@@ -6,7 +6,7 @@
 //   signature:  frost(<number:strength>, <length:radius>?, <color:tint>?)
 //   slang:      2026.12
 //   schema:     7
-//   src-sha256: 99fd166403610be614ced72e6aedace3d28a08dd6c8a54681c8af86e2d6fb090
+//   src-sha256: 3878d0fc85a790a8abcc1fbc6369c3ea64093adaeb4c20ec1fa443908052dada
 //   output:     premultiplied RGBA, written with blending disabled (it owns its quad)
 //
 // Compiled at ps_5_0 (effects only — the core gpui shaders stay at ps_4_1).

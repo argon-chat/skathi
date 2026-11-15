@@ -6,7 +6,7 @@
 //   signature:  glow(<color>?, <length:radius>, <number:strength>)
 //   slang:      2026.12
 //   schema:     7
-//   src-sha256: 6ceb62c92bacc8dfd99b59d412d5047dddecd6033d4145e3c49ca6bd07182952
+//   src-sha256: de1d06dddb28503e5a23a3494d73227436591594943428bd0ecec042d3926caa
 //   output:     premultiplied RGBA, blended One, OneMinusSrcAlpha
 //
 // Compiled at ps_5_0 (effects only — the core gpui shaders stay at ps_4_1).

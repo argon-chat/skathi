@@ -251,6 +251,9 @@ export function formatProblems(problems: Problem[], cwd: string = process.cwd())
 
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
 
+/// A Windows checkout may hold CRLF; hashes and the generated headers must match a Linux one.
+const readText = (file: string): string => readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+
 interface ReflType {
   kind?: string;
   scalarType?: string;
@@ -704,7 +707,7 @@ export function discover(
     .sort();
   for (const f of files) {
     const file = join(dir, f);
-    const source = readFileSync(file, "utf8");
+    const source = readText(file);
     try {
       if (stemOf(file) === "sk") {
         throw new SchemaError(`${f}: an effect cannot be named sk.slang — \`sk\` is the prelude's module`);
@@ -843,7 +846,7 @@ export function effectFiles(
     slang: PIN.slang,
     compiler: `redslangc ${PIN.version}`,
     kind,
-    preludeSha256: sha256(readFileSync(PRELUDE, "utf8")),
+    preludeSha256: sha256(readText(PRELUDE)),
     effects: compiled.map((c, index) => ({
       id: index,
       name: c.effect.name,
@@ -916,8 +919,7 @@ export async function compileAppEffects(appRoot: string, compiler: string): Prom
 }
 
 function schemaProblemAt(c: Compiled, message: string): Problem {
-  const source = readFileSync(c.file, "utf8");
-  const lines = source.split("\n");
+  const lines = readText(c.file).split("\n");
   const at = lines.findIndex((l) => l.includes("SkEffect"));
   return {
     severity: "error",

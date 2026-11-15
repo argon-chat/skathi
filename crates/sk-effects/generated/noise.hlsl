@@ -6,7 +6,7 @@
 //   signature:  noise(<number:amount>, <length:scale>?, <number:speed>?)
 //   slang:      2026.12
 //   schema:     7
-//   src-sha256: b4efe515d394889dd4e237e2be043aaa7fc8fb440034cdca6b51371ac70cf24e
+//   src-sha256: aac4ac76e76e5b7df379ca8f6356d05d5eb7f84b754cef6ff0712c4edddcbecd
 //   output:     premultiplied RGBA, blended One, OneMinusSrcAlpha
 //
 // Compiled at ps_5_0 (effects only — the core gpui shaders stay at ps_4_1).

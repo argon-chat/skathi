@@ -15,11 +15,11 @@
       "wgsl": "frost.wgsl",
       "metal": "frost.metal",
       "source": "crates/sk-effects/shaders/frost.slang",
-      "sourceSha256": "99fd166403610be614ced72e6aedace3d28a08dd6c8a54681c8af86e2d6fb090",
+      "sourceSha256": "3878d0fc85a790a8abcc1fbc6369c3ea64093adaeb4c20ec1fa443908052dada",
       "generatedSha256": {
-        "hlsl": "065a62d74404602d0dcef2267d911d349f86b5b163b84b1788427336e19dc950",
-        "wgsl": "86df7707ad6d74aa59d40f707a6a203de722ef4f865b4d1938c3c0d3e1450908",
-        "metal": "a371eab1e491522969c3a5b1a78775ffb3b3eef9f83471a845455beed12625c0"
+        "hlsl": "e4c287887f92191cf83b9e79ad8a03047a91e5990d08f7e65d8e65cd05b5fd27",
+        "wgsl": "f5405f3ad30fd6c1635e3dc121ccc11471f9c027eab41ef65afaca14943c7db8",
+        "metal": "f339de11954ccd002869402e0da9c6ce285020bd773ecc69b641a85a0baaa019"
       },
       "signature": "frost(<number:strength>, <length:radius>?, <color:tint>?)",
       "backdropRadiusParam": 1,
@@ -110,11 +110,11 @@
       "wgsl": "noise.wgsl",
       "metal": "noise.metal",
       "source": "crates/sk-effects/shaders/noise.slang",
-      "sourceSha256": "b4efe515d394889dd4e237e2be043aaa7fc8fb440034cdca6b51371ac70cf24e",
+      "sourceSha256": "aac4ac76e76e5b7df379ca8f6356d05d5eb7f84b754cef6ff0712c4edddcbecd",
       "generatedSha256": {
-        "hlsl": "f56f3c0231053a2ba4a834519f3b6f9ba482e7ce1cee725a8959c2cb5a31a973",
-        "wgsl": "c3d7e7ad51ecd80c116ee8c3048677bcb5089a0298fa3d514d050f5fdd26ef01",
-        "metal": "d37e525f3830f6cac6db1beb70e45244da134bab291b78772d2fbd142d8ca287"
+        "hlsl": "3ea1aec26e83a2fe9b145119baf45ea85d61c88032afc8ff68baa5c87b4b0398",
+        "wgsl": "26044905691ad28552245e647e6b63b38be9c8c240ffeecf065adfec2b811618",
+        "metal": "56280b5dae6c76c7e48d9ca73f8d9ac45d6e98cd2be22c3a090c8bce591c68b9"
       },
       "signature": "noise(<number:amount>, <length:scale>?, <number:speed>?)",
       "backdropRadiusParam": null,
@@ -208,11 +208,11 @@
       "wgsl": "glow.wgsl",
       "metal": "glow.metal",
       "source": "crates/sk-effects/shaders/glow.slang",
-      "sourceSha256": "6ceb62c92bacc8dfd99b59d412d5047dddecd6033d4145e3c49ca6bd07182952",
+      "sourceSha256": "de1d06dddb28503e5a23a3494d73227436591594943428bd0ecec042d3926caa",
       "generatedSha256": {
-        "hlsl": "cd1773a78f18048ecf641b1d283dfeb43637789023ddd73eed6cedf4feeb0fa2",
-        "wgsl": "f594bcc7f9e2e94ff3ba4642bda2531c6ccb7a9744bf7ad3d26d03878c10f985",
-        "metal": "da6539c8b17159e30e62ed852f6e8cfcf0d40193fc3ae1e7e4bb62f9a77d0d99"
+        "hlsl": "6736574066fba087d15fe6490c5e9702bb793ec3aefa8f909b18ab6c1860b6a8",
+        "wgsl": "c2c6947d0dd3f2cd0f534693c32466a96c81de518fdfe4b4d7fc1ba07f2f504c",
+        "metal": "6837927df03659f8c919628bc352f490d50de3a50f37a4f10a4625a0f87f78d5"
       },
       "signature": "glow(<color>?, <length:radius>, <number:strength>)",
       "backdropRadiusParam": null,
