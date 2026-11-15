@@ -995,6 +995,8 @@ fn run_app() {
             std::future::ready(())
         }));
         close_iframes_on_quit(cx);
+        // Before any text field's interceptor, so Escape leaves a pointer lock ahead of them all.
+        std::mem::forget(cx.intercept_keystrokes(sk_tree::pointer_lock_intercept_escape));
         #[cfg(sk_devtools)]
         {
             inspector::install_hotkey(cx);

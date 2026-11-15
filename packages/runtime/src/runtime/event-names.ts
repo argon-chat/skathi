@@ -76,6 +76,10 @@ export const EV_CODES = {
   // An `<iframe>` document's postMessage, delivered at the iframe node and retargeted to `window`. `key` is
   // `{"o": origin, "d": wire}`, the payload in `iframe.ts`'s wire form.
   message: 52,
+  // The document's pointer lock, delivered at node 0 and fired at `document`. `a` is the request it settles (0: none),
+  // an error's `key` "Name: message".
+  pointerlockchange: 53,
+  pointerlockerror: 54,
 } as const;
 
 /** `InputEvent.inputType` by host code: indexes sk-elements' `text_input::InputType` (lockstep, test/protocol-codes.test.ts). 0: none. */

@@ -156,14 +156,27 @@ fn capture_path(t: &Tree, id: u32, root: u32) -> Option<Vec<u32>> {
     None
 }
 
+/// The capture or the pointer lock's element: where mouse events go wherever the pointer is.
+pub(crate) fn routed_target(window: &Window) -> Option<u32> {
+    crate::pointer_lock::target_in(window).or_else(|| captured_target(window))
+}
+
 /// gpui element moves only run while hovered. The OS captures the window, so a raw window listener
-/// must collect moves beyond the captured box and beyond the client area as well.
+/// must collect moves beyond the captured box and beyond the client area as well. Every move's
+/// motion adds up here until a `mousemove` reports it.
 pub(crate) fn capture_listeners(window: &mut Window) {
+    window.on_mouse_event(|_: &gpui::MouseDownEvent, phase, _, _| {
+        if phase == DispatchPhase::Capture {
+            crate::pointer_lock::note_gesture();
+        }
+    });
     window.on_mouse_event(|ev: &MouseMoveEvent, phase, window, _cx| {
         if phase != DispatchPhase::Capture {
             return;
         }
-        let Some(id) = captured_target(window) else {
+        let moved = window.vn_mouse_movement();
+        windows::here(window, |w| w.mouse_movement = w.mouse_movement + moved);
+        let Some(id) = routed_target(window) else {
             return;
         };
         windows::here(window, |w| {
@@ -184,9 +197,11 @@ pub(crate) fn capture_listeners(window: &mut Window) {
 }
 
 fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) {
-    let capture = (kind != VnHitKind::Scroll)
-        .then(|| captured_target(window))
-        .flatten();
+    let capture = crate::pointer_lock::target_in(window).or_else(|| {
+        (kind != VnHitKind::Scroll)
+            .then(|| captured_target(window))
+            .flatten()
+    });
     if capture.is_none() && crate::select::refine(kind, p, window, cx) {
         return;
     }
@@ -233,7 +248,7 @@ pub(crate) fn target_or(window: &Window, fallback: u32) -> u32 {
 /// current release. A removed/detached press or an actually-disabled control cannot be activated by
 /// the release.
 pub(crate) fn click_target(window: &Window, down: u32, fallback: u32) -> Option<u32> {
-    let capture = captured_target(window);
+    let capture = routed_target(window);
     let up = windows::here(window, |w| w.hit).unwrap_or(fallback);
     tree::read_tree(|t| click_target_in_tree(t, down, up, window_root(t, window), capture))
 }

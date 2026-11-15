@@ -78,6 +78,10 @@ pub const EV_COMPOSITIONEND: u32 = 51;
 /// An `<iframe>`'s document posted to its parent (`crate::iframe`): at the iframe's node, `key` =
 /// `{"o": origin, "d": wire}`. The runtime fires it at `window`.
 pub const EV_MESSAGE: u32 = 52;
+/// The document's pointer lock changed (`a` = the request it settles, 0: none) or a request failed (`key` =
+/// "Name: message"). Delivered at node 0; the runtime fires both at `document`.
+pub const EV_POINTERLOCKCHANGE: u32 = 53;
+pub const EV_POINTERLOCKERROR: u32 = 54;
 
 /// Every host event code with the name JS knows it by; devtools lists from here.
 pub const EVENT_NAMES: &[(u32, &str)] = &[
@@ -133,6 +137,8 @@ pub const EVENT_NAMES: &[(u32, &str)] = &[
     (EV_COMPOSITIONUPDATE, "compositionupdate"),
     (EV_COMPOSITIONEND, "compositionend"),
     (EV_MESSAGE, "message"),
+    (EV_POINTERLOCKCHANGE, "pointerlockchange"),
+    (EV_POINTERLOCKERROR, "pointerlockerror"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

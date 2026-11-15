@@ -210,6 +210,7 @@ fn discard_queued_tasks(state: &DispatchState) {
 }
 
 pub(crate) fn reload(context: &Context) {
+    sk_tree::pointer_lock_navigated();
     // A queued old-page event must not enter a new subscription after reload.
     if let Some(state) = DISPATCH.get() {
         discard_queued_tasks(state);

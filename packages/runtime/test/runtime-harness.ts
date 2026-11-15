@@ -165,7 +165,9 @@ type EventName =
   | "compositionstart"
   | "compositionupdate"
   | "compositionend"
-  | "message";
+  | "message"
+  | "pointerlockchange"
+  | "pointerlockerror";
 
 export interface RealmEvent {
   type: string;
@@ -327,6 +329,7 @@ interface RuntimeHost {
   intoViewCalls: { id: number; block: unknown; inline: unknown }[];
   selection: { sel: number[] | null; sets: number[][]; rebases: number[][]; text: string };
   pointerCaptureCalls: { id: number; pointerId: number; capture: boolean }[];
+  pointerLock: { requests: { id: number; unadjusted: boolean }[]; exits: number; element: number };
   hit: { answer: (x: number, y: number, all: number) => string; calls: number[][] };
   anim: { calls: unknown[][]; notes: string; values: string | null };
   styleRejects: Set<string>;
@@ -523,6 +526,7 @@ export function createRuntime(
       text: "",
     },
     pointerCaptureCalls: [],
+    pointerLock: { requests: [], exits: 0, element: 0 },
     hit: {
       answer: (_x: number, _y: number, _all: number) => "",
       calls: [],
@@ -723,6 +727,9 @@ export function createRuntime(
     "__sk_selection_rebase",
     "__sk_hit_at",
     "__sk_pointer_capture",
+    "__sk_pointer_lock_request",
+    "__sk_pointer_lock_exit",
+    "__sk_pointer_lock_element",
     "installWaapi",
     "__sk_waapi_core",
     "Teleport",
@@ -927,6 +934,9 @@ export function createRuntime(
       host.pointerCaptureCalls.push({ id, pointerId, capture });
       return true;
     },
+    (id: number, unadjusted: boolean) => host.pointerLock.requests.push({ id, unadjusted }),
+    () => void host.pointerLock.exits++,
+    () => host.pointerLock.element,
     loadInstallWaapi(),
     options.anim === false
       ? undefined

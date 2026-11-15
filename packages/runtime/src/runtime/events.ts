@@ -200,6 +200,16 @@ function inputInit(name: string, a: number, b: number, data: unknown) {
   };
 }
 
+/** A `mousemove` / `pointermove`'s `movementX` / `movementY`, passed to `synthesize` as `data`; nothing for any other event. */
+function movementOf(name: string, data: unknown): { movementX?: number; movementY?: number } {
+  if (name !== "mousemove" && name !== "pointermove") return {};
+  const m = data as { movementX?: unknown; movementY?: unknown } | null | undefined;
+  return {
+    movementX: typeof m?.movementX === "number" ? m.movementX : 0,
+    movementY: typeof m?.movementY === "number" ? m.movementY : 0,
+  };
+}
+
 /** A wheel's `clientX` / `clientY`, passed to `synthesize` as `data` (`a`/`b` are the deltas); 0, 0 if absent. */
 function wheelAt(data: unknown): { clientX: number; clientY: number } {
   const at = data as { clientX?: unknown; clientY?: unknown } | null | undefined;
@@ -221,6 +231,7 @@ export function synthesize(
 ): Event {
   const common = { bubbles: !NO_BUBBLE.has(name), cancelable: !NO_BUBBLE.has(name) && !NOT_CANCELABLE.has(name) };
   const M = mods(d);
+  const moved = movementOf(name, data);
   try {
     if ((name === "copy" || name === "cut" || name === "paste") && ClipboardEventClass)
       return new ClipboardEventClass(name, { ...common, composed: true, clipboardData: data ?? null });
@@ -233,6 +244,7 @@ export function synthesize(
         ...POINTER_INIT,
         clientX: a,
         clientY: b,
+        ...moved,
         button: buttonFor(name, c),
         buttons,
         pressure: buttons ? 0.5 : 0,
@@ -256,6 +268,7 @@ export function synthesize(
           ...M,
           clientX: a,
           clientY: b,
+          ...moved,
           button: buttonFor(name, c),
           buttons: buttonsFor(name, c),
           detail: detailFor(name, d),
@@ -357,6 +370,7 @@ export function synthesize(
                           ? {
                               clientX: a,
                               clientY: b,
+                              ...moved,
                               button: buttonFor(name, c),
                               buttons: buttonsFor(name, c),
                               ...POINTER_INIT,
@@ -368,6 +382,7 @@ export function synthesize(
                               button: buttonFor(name, c),
                               buttons: buttonsFor(name, c),
                               detail: detailFor(name, d),
+                              ...moved,
                               ...M,
                             };
   for (const k in extra) Object.defineProperty(ev, k, { value: (extra as ExtraProps)[k], configurable: true });

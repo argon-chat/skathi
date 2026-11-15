@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-pointer-lock",
+
+  "window": {
+    "title": "Skathi — pointer lock (fixture)",
+    "width": 420,
+    "height": 300,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

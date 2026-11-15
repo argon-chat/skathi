@@ -627,21 +627,35 @@ fn dom_key(k: &str) -> String {
 /// (innermost) claim wins; otherwise k nested listeners ran k dispatch walks per move. The frame's
 /// hover resolves first so `mouseleave`/`mouseenter` precede `mousemove`.
 pub fn flush_pending_mouse_move(window: &mut Window, cx: &mut App) {
+    crate::pointer_lock::tick(window, cx);
     // The frame's script runs after this: its queries see this window's modality as
     // `:focus-visible` paints it.
     crate::live_state::note_modality(window);
     crate::pointer::resolve_hover(window, cx);
-    let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else {
+    let Some((p, target)) = take_pending_move(window, cx) else {
         return;
     };
     let payload = mouse_payload(p.position, p.button, &p.modifiers);
+    // The pump's, before gpui's draw: a forced layout may draw (`crate::off_input`).
+    crate::off_input(|| js_dispatch_app(target, tree::EV_MOUSEMOVE, &payload, window, cx));
+}
+
+/// The coalesced move and its target, its motion armed for the dispatch that follows.
+fn take_pending_move(window: &mut Window, cx: &mut App) -> Option<(PendingMouseMove, u32)> {
+    let (pending, moved) = windows::here(window, |w| {
+        (
+            w.pending_mouse_move.take(),
+            std::mem::take(&mut w.mouse_movement),
+        )
+    });
+    let p = pending?;
     if p.button < 0.0 && crate::pointer::captured_target(window).is_some() {
         cancel_press(window, cx);
     }
-    let target = crate::pointer::captured_target(window)
+    let target = crate::pointer::routed_target(window)
         .unwrap_or_else(|| crate::pointer::target_at(window, p.position));
-    // The pump's, before gpui's draw: a forced layout may draw (`crate::off_input`).
-    crate::off_input(|| js_dispatch_app(target, tree::EV_MOUSEMOVE, &payload, window, cx));
+    crate::pointer_at_next_dispatch(f64::from(moved.x), f64::from(moved.y));
+    Some((p, target))
 }
 
 /// gpui's scroll delta as the DOM's `deltaX`/`deltaY`. The conventions are opposite: gpui's follows
@@ -764,8 +778,9 @@ fn open_up_wave(ev: &MouseUpEvent, window: &mut Window, cx: &mut App) {
             ..Default::default()
         });
     });
-    // A capture must receive its release even when no hovered element has a mouse-up listener.
-    if let Some(target) = crate::pointer::captured_target(window) {
+    // A capture (or the pointer lock) must receive its release even when no hovered element has a
+    // mouse-up listener.
+    if let Some(target) = crate::pointer::routed_target(window) {
         let payload = mouse_payload_n(ev.position, button, &ev.modifiers, ev.click_count);
         claim_up(window, cx, |w| &mut w.mouseup, target, &payload);
     }
@@ -795,15 +810,10 @@ fn bind_root_mouse<E: gpui::InteractiveElement>(mut e: E) -> E {
 /// A press or release delivers the coalesced `mousemove` first, as Chromium does; otherwise a move
 /// and the release after it in one frame were heard release first.
 fn deliver_move_before_button(window: &mut Window, cx: &mut App) {
-    let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else {
+    let Some((p, target)) = take_pending_move(window, cx) else {
         return;
     };
     let payload = mouse_payload(p.position, p.button, &p.modifiers);
-    if p.button < 0.0 && crate::pointer::captured_target(window).is_some() {
-        cancel_press(window, cx);
-    }
-    let target = crate::pointer::captured_target(window)
-        .unwrap_or_else(|| crate::pointer::target_at(window, p.position));
     js_dispatch_app(target, tree::EV_MOUSEMOVE, &payload, window, cx);
 }
 
@@ -3818,7 +3828,7 @@ fn stack_box(
 /// `document` listener hear one Escape twice. Keyed by gpui's per-event number because interceptors
 /// run before capture, a cancelled key stops the walk early, and devtools sends several keys in one
 /// update.
-fn claim_key_event(window: &Window) -> bool {
+pub(crate) fn claim_key_event(window: &Window) -> bool {
     let seq = window.vn_key_event_seq();
     windows::here(window, |w| {
         std::mem::replace(&mut w.key_event_claimed, seq) != seq

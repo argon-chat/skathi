@@ -28,6 +28,7 @@ mod lottie;
 mod observe;
 pub mod perf;
 mod pointer;
+mod pointer_lock;
 mod range;
 mod render;
 mod resample;
@@ -48,6 +49,9 @@ pub use img::{
     set_asset_store, set_dev_asset_files, AssetLookup,
 };
 pub use observe::update_layout_observers;
+pub use pointer_lock::{
+    intercept_escape as pointer_lock_intercept_escape, navigated as pointer_lock_navigated,
+};
 pub use render::{
     bounds_in, build_root, build_subtree, control_hitboxes, control_hitboxes_in,
     enable_pick_hitboxes, flush_pending_mouse_move, painted_bounds_in, painted_drag_region,
@@ -61,8 +65,8 @@ pub use tree::{
     EV_ENTERFRAME, EV_ERROR, EV_FOCUS, EV_INPUT, EV_KEYDOWN, EV_KEYUP, EV_LOAD, EV_LOADEDDATA,
     EV_LOADEDMETADATA, EV_LOADSTART, EV_LOOPCOMPLETE, EV_MESSAGE, EV_MOUSEDOWN, EV_MOUSEENTER,
     EV_MOUSELEAVE, EV_MOUSEMOVE, EV_MOUSEUP, EV_PASTE, EV_PAUSE, EV_PLAY, EV_PLAYING,
-    EV_POINTERCANCEL, EV_RATECHANGE, EV_SCROLL, EV_SEEKED, EV_SEEKING, EV_TIMEUPDATE,
-    EV_VOLUMECHANGE, EV_WAITING, EV_WHEEL,
+    EV_POINTERCANCEL, EV_POINTERLOCKCHANGE, EV_POINTERLOCKERROR, EV_RATECHANGE, EV_SCROLL,
+    EV_SEEKED, EV_SEEKING, EV_TIMEUPDATE, EV_VOLUMECHANGE, EV_WAITING, EV_WHEEL,
 };
 pub use windows::WinKey;
 
@@ -469,6 +473,7 @@ pub fn install(rt: &JsRuntime) {
     style_decl::install(rt);
     selection::install(rt);
     pointer::install(rt);
+    pointer_lock::install(rt);
     observe::install(rt);
     font_api::install(rt);
 }
@@ -729,6 +734,7 @@ pub fn forget_window(key: windows::WinKey) {
     render::sticker::forget_window(key);
     lottie::forget_window(key);
     iframe::forget_window(key);
+    pointer_lock::window_closed(key);
 }
 
 /// A paint-only frame is not presented while the page is hidden (`crate::live`); the draw that

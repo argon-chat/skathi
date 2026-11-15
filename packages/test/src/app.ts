@@ -460,6 +460,8 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
   if (env.SK_WINDOW_FOCUS === undefined) env.SK_WINDOW_FOCUS = "never";
   Object.assign(env, options.env ?? {});
   if (env.SK_MEDIA_CAPTURE?.trim().toLowerCase() !== "fake") env.SK_MEDIA_CAPTURE = "deny";
+  // Never the real cursor: the person at the machine keeps it. `fake` simulates the lock in gpui.
+  if (env.SK_POINTER_LOCK?.trim().toLowerCase() !== "fake") env.SK_POINTER_LOCK = "deny";
 
   log(`[sk-test] ${label}: launching ${exe} on ${slotDir || "its own %TEMP% slot"}`);
   const child = spawn(exe, options.args ?? [], {

@@ -16,6 +16,7 @@ import {
 import { focusOvertaken, noteHostFocus, withRelatedTarget } from "./focus";
 import { dndRearm, dndState } from "./listeners";
 import { pointer, pointerCaptures, releaseCapturedPointer } from "./pointer-capture";
+import { pointerLockEvent } from "./pointer-lock";
 import { nodeById } from "./nodes";
 import { deliverFrameMessage, isFrameEl } from "./media";
 import { DERIVED, DERIVED_OF } from "./event-names";
@@ -258,6 +259,7 @@ function dndDispatch(
 __sk_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
   const name = CODE_TO_NAME[evCode];
   if (!name) return true;
+  if (name === "pointerlockchange" || name === "pointerlockerror") return pointerLockEvent(name, a, key);
   if (name === "mousedown" || name === "mousemove" || name === "mouseup" || name === "pointercancel") {
     pointer.position = { x: a, y: b, button: c, modifiers: d };
     pointer.buttons = buttonsFor(name, c);
@@ -280,6 +282,7 @@ __sk_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
   if (!target) return true;
   if (name === "keydown" && key === "Escape" && globalThis.__SK_WINDOW__?.escapeFullscreen?.()) return false;
   if (name === "wheel" && x !== undefined) data = { clientX: x, clientY: y ?? 0 };
+  if (name === "mousemove") data = { movementX: x ?? 0, movementY: y ?? 0 };
   // The host delivers `selectionchange` at the root, whose listener bit the
   // document's listeners arm; a browser fires it AT the document.
   if (name === "selectionchange") return propagateAtDocument(name, synthesize(name, a, b, c, d, key));
@@ -329,7 +332,8 @@ __sk_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
     for (const dn of derived) {
       if (!DERIVED[dn as DerivedEventName].pre) continue;
       if (!hasListener(target, dn)) continue;
-      if (!propagate(target, dn, synthesize(dn, a, b, c, d, key))) proceed = false;
+      if (!propagate(target, dn, synthesize(dn, a, b, c, d, key, name === "mousemove" ? data : undefined)))
+        proceed = false;
     }
   }
   // Skipping the source event when nothing listens is safe: the only `preventDefault()` that could set the flag

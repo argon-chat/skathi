@@ -36,7 +36,7 @@ pub(crate) fn is_active(id: u32) -> bool {
     ELEMENT.with(Cell::get) == id && id != 0 && tree::read_tree(|tree| current(tree) == Some(id))
 }
 
-fn connected(tree: &Tree, mut id: u32) -> bool {
+pub(crate) fn connected(tree: &Tree, mut id: u32) -> bool {
     for _ in 0..4096 {
         if id == tree.root && id != 0 {
             return true;

@@ -77,6 +77,8 @@ declare global {
   interface DocumentEventMap extends GlobalEventHandlersEventMap {
     fullscreenchange: Event;
     fullscreenerror: Event;
+    pointerlockchange: Event;
+    pointerlockerror: Event;
     selectionchange: Event;
     visibilitychange: Event;
   }
@@ -263,6 +265,9 @@ declare global {
   }
   interface FullscreenOptions {
     navigationUI?: "auto" | "hide" | "show";
+  }
+  interface PointerLockOptions {
+    unadjustedMovement?: boolean;
   }
 
   interface NodeList extends Iterable<Node> {
@@ -554,6 +559,7 @@ declare global {
     releasePointerCapture(pointerId: number): void;
     hasPointerCapture(pointerId: number): boolean;
     requestFullscreen(options?: FullscreenOptions): Promise<void>;
+    requestPointerLock(options?: PointerLockOptions): Promise<void>;
     animate(
       keyframes: Keyframe[] | PropertyIndexedKeyframes | null,
       options?: number | KeyframeAnimationOptions,
@@ -1133,6 +1139,8 @@ declare global {
     readonly fullscreenEnabled: boolean;
     readonly fullscreenElement: Element | null;
     exitFullscreen(): Promise<void>;
+    readonly pointerLockElement: Element | null;
+    exitPointerLock(): void;
     hasFocus(): boolean;
     /** Inert, and returns `false`, as a browser does when a command cannot be executed; use `navigator.clipboard`. */
     execCommand(commandId: string): boolean;

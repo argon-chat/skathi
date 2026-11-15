@@ -35,6 +35,11 @@ declare function __sk_remove(id: SkNodeId): void;
 declare function __sk_fullscreen_element(id: SkNodeId): boolean;
 /** Queries the owner OS window; an optional boolean queues its fullscreen state. `ownerRoot` is 0 for the primary window or a SkWindow root id. */
 declare function __sk_fullscreen_window(ownerRoot: SkNodeId, on?: boolean): boolean;
+/** Asks for the pointer lock on `id`; the window's next frame answers with `pointerlockchange` or `pointerlockerror` carrying the returned request number. */
+declare function __sk_pointer_lock_request(id: SkNodeId, unadjustedMovement: boolean): number;
+declare function __sk_pointer_lock_exit(): void;
+/** The element holding the lock, 0 for none. */
+declare function __sk_pointer_lock_element(): SkNodeId;
 
 /** One inline declaration: `""` REMOVES it; a value may end in `!important`; an updated key keeps its place. */
 declare function __sk_set_style(id: SkNodeId, key: SkNameId, value: string): void;
@@ -83,7 +88,7 @@ declare function __sk_set_layout_hook(fn: (op: number) => number): void;
 /** `true`: the next frame runs the layout step even if nothing lays out. `false`: every observation was released. */
 declare function __sk_layout_watch(observing: boolean): void;
 
-/** `(nodeId, code, a, b, c, d, key, data, x, y) -> proceed`. `a`-`d`/`key` are per-event (`SkEventPayload`); `data` is the clipboard DataTransfer for copy/cut/paste; `x`/`y` are window CSS px, only for `wheel`. */
+/** `(nodeId, code, a, b, c, d, key, data, x, y) -> proceed`. `a`-`d`/`key` are per-event (`SkEventPayload`); `data` is the clipboard DataTransfer for copy/cut/paste; `x`/`y` are window CSS px for `wheel`, the movement for `mousemove`. */
 type SkDispatcher = (
   node: SkNodeId,
   code: SkEventCode,
@@ -186,7 +191,9 @@ type SkEventCode =
   | 49 // compositionstart
   | 50 // compositionupdate
   | 51 // compositionend
-  | 52; // message            (an <iframe>'s document to its parent)
+  | 52 // message            (an <iframe>'s document to its parent)
+  | 53 // pointerlockchange  (`a` = the request it settles, 0: none)
+  | 54; // pointerlockerror   (`a` = the request, `key` = "Name: message")
 
 /** The document selection: `"anchor,anchorOffset,anchorOwn,focus,focusOffset,focusOwn"` (UTF-16 offsets), `""` for none. `own` 1 is an offset into an element's OWN text, which the runtime turns into a Text child. */
 declare function __sk_selection_get(): string;
