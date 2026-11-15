@@ -143,9 +143,14 @@ impl Frames {
                 .unwrap_or_else(|e| e.into_inner())
                 .take();
             if let Some(held) = sample.and_then(|s| describe(api, s)) {
+                // Starting playback from a paused seek hands the preroll frame over a second time.
+                let repeat = self
+                    .held
+                    .as_ref()
+                    .is_some_and(|h| h.pts == held.pts && h.size == held.size);
                 self.held = Some(held);
                 self.decoded = true;
-                fresh = true;
+                fresh = !repeat;
             }
         }
         if !fresh && self.presented_for == target {
