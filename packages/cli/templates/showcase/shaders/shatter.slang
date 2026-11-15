@@ -19,8 +19,9 @@ struct Shatter : IEffect
     [SkLength] [SkDefault("110")] [SkRange(24.0, 512.0)]
     float shard;
 
-    // What shows where the shards have gone.
-    [SkColor] [SkOptional] [SkDefault("#050508")]
+    // What shows in the cracks and where the shards have gone. Transparent by default, so a window
+    // with a transparent background opens onto whatever is behind it.
+    [SkColor] [SkOptional] [SkDefault("#00000000")]
     float4 behind;
 
     float2 seed(float2 cell)
@@ -106,9 +107,10 @@ struct Shatter : IEffect
         float crack = cracked * (1.0 - saturate(edge / (0.9 * px)));
         float glint = cracked * (1.0 - saturate(abs(edge - 1.6 * px) / px)) * (0.35 + 0.4 * fall);
 
-        float4 glass = float4(seen.rgb * light, seen.a);
-        glass = lerp(glass, float4(0.0, 0.0, 0.0, 1.0), crack * 0.85);
-        glass = float4(glass.rgb + glint * glass.a, glass.a);
-        return lerp(glass, gone, smoothstep(0.6, 1.0, fall));
+        float4 glass = float4(seen.rgb * light + glint * seen.a, seen.a);
+        // Premultiplied, so scaling the whole colour thins the alpha too: cracks and fading shards
+        // let through what is behind the window rather than darkening it.
+        float keep = (1.0 - crack) * (1.0 - smoothstep(0.6, 1.0, fall));
+        return glass * keep + gone * (1.0 - keep);
     }
 };

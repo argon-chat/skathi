@@ -4,6 +4,8 @@ import { reactive } from "vue";
 export const fullWindow = reactive({
   snow: false,
   fireflies: false,
+  /** Every click anywhere sends out a ring of water. */
+  ripples: false,
   /** 0 intact to 1 fallen apart; null while no shatter runs. */
   shatter: null as number | null,
   /** Where the crack starts, in client pixels. */

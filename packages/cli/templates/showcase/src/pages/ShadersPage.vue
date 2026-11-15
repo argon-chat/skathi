@@ -53,10 +53,13 @@ onUnmounted(() => cancelAnimationFrame(frame));
     title="Shaders"
     lead="Each effect is one Slang file in shaders/, compiled into the app for DirectX, Vulkan and Metal, and applied with a CSS custom property. Each of these uses a different part of the effect API."
   >
-    <Card title="Over the whole window" api="shatter · snow · fireflies">
+    <Card title="Over the whole window" api="shatter · ripples · snow · fireflies">
       <div class="row">
         <button class="btn" :disabled="fullWindow.shatter !== null" @click="shatter($event.clientX, $event.clientY)">
           Shatter
+        </button>
+        <button class="btn" :class="{ on: fullWindow.ripples }" @click="fullWindow.ripples = !fullWindow.ripples">
+          Ripples
         </button>
         <button class="btn" :class="{ on: fullWindow.snow }" @click="fullWindow.snow = !fullWindow.snow">Snow</button>
         <button class="btn" :class="{ on: fullWindow.fireflies }" @click="fullWindow.fireflies = !fullWindow.fireflies">
@@ -65,7 +68,9 @@ onUnmounted(() => cancelAnimationFrame(frame));
       </div>
       <p class="faint">
         Layers over the window that take no clicks. Shatter breaks a snapshot of the window into falling shards and puts
-        it back; snow parts around the pointer and drifts when it moves fast; fireflies gather round it.
+        it back, the cracks and gaps letting through what is behind the window. With ripples on, a click anywhere sends
+        out a ring of water that bends the window, and rings that meet interfere. Snow parts around the pointer;
+        fireflies drift towards it.
       </p>
     </Card>
 
