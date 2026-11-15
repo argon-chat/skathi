@@ -503,7 +503,16 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
 
   // The listener starts before the JS runtime, so this only proves the process is alive and
   // pumping frames.
-  const handshake = readHandshake(slotDir);
+  // The host may not have finished writing it.
+  let handshake: ReturnType<typeof readHandshake> | null = null;
+  while (!handshake) {
+    try {
+      handshake = readHandshake(slotDir);
+    } catch (e) {
+      if (Date.now() > deadline) throw fail(`devtools.json is unreadable: ${(e as Error).message}`);
+      await sleep(25);
+    }
+  }
   let ping: any = null;
   for (;;) {
     try {
