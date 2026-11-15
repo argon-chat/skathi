@@ -46,6 +46,7 @@ function boot(): Booted {
     __sk_window_set_title: () => {},
     __sk_window_verb: (verb: string) => verbs.push(verb),
     __sk_window_advise: () => {},
+    __sk_advise: () => true,
     __sk_window_match_media: () => '{"matches":false}',
   };
   new Function("globalThis", "document", "requestAnimationFrame", ...Object.keys(host), PRELUDE)(

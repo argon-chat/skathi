@@ -10,12 +10,8 @@
   // `globalThis.innerWidth` seeding below from a throw into a silent no-op.
   "use strict";
 
-  const warned = new Set<string>();
   const warn = (key: string, msg: string) => {
-    if (warned.has(key)) return;
-    warned.add(key);
-    console.warn(`[skathi compat] ${msg}`);
-    __sk_window_advise(msg);
+    if (__sk_advise(key, msg)) __sk_window_advise(msg);
   };
 
   // One snapshot per frame, pushed by the host; `refresh()` re-reads it, since geometry writes lag a frame.

@@ -1,12 +1,9 @@
-// One-shot compat advisories: never silently drop behavior a browser has; say what to use instead.
-const warned = new Set<string>();
+// One-shot compat advisories, in the host's set: never silently drop behavior a browser has; say what to use instead.
 
 export function hasWarned(key: string): boolean {
-  return warned.has(key);
+  return __sk_advised(key);
 }
 
 export function warnCompat(key: string, msg: string): void {
-  if (warned.has(key)) return;
-  warned.add(key);
-  console.warn(`[skathi compat] ${msg}`);
+  __sk_advise(key, msg);
 }

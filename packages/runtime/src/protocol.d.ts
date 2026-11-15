@@ -334,6 +334,9 @@ declare function __sk_window_click(nodeId: SkNodeId, x: number, y: number): bool
 
 /** A line into the host log. Always registered by the app host (callers do not probe); a bare embedder must provide it. */
 declare function __sk_log(message: string): void;
+/** `console.warn`s `[skathi compat] message` the first time `key` is advised in this process; false after. */
+declare function __sk_advise(key: string, message: string): boolean;
+declare function __sk_advised(key: string): boolean;
 
 /** Optional recording controls, absent without devtools. A nonzero token must be ended in finally. */
 declare var __sk_trace_callback_begin: ((callback: unknown) => number) | undefined;

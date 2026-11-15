@@ -12,13 +12,9 @@
 // survives.
 "use strict";
 (() => {
-  const warned = new Set;
   const warn = (key, msg) => {
-    if (warned.has(key))
-      return;
-    warned.add(key);
-    console.warn(`[skathi compat] ${msg}`);
-    __sk_window_advise(msg);
+    if (__sk_advise(key, msg))
+      __sk_window_advise(msg);
   };
   let raw = __sk_window_state();
   let S = JSON.parse(raw);

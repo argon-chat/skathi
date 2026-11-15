@@ -171,10 +171,10 @@ thread_local! {
     static WARNED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
-/// `console.warn` once per `key` for this thread.
-pub unsafe fn warn_compat(g: *mut c_void, key: &str, msg: &str) {
+/// `console.warn` once per `key` for this thread; false when `key` was already said.
+pub unsafe fn warn_compat(g: *mut c_void, key: &str, msg: &str) -> bool {
     if !WARNED.with(|w| w.borrow_mut().insert(key.to_string())) {
-        return;
+        return false;
     }
     let console = get(g, global(g), "console");
     if is_cell(console) {
@@ -184,5 +184,64 @@ pub unsafe fn warn_compat(g: *mut c_void, key: &str, msg: &str) {
             console,
             &[js_string(g, &format!("[skathi compat] {msg}"))],
         );
+    }
+    true
+}
+
+pub fn has_warned(key: &str) -> bool {
+    WARNED.with(|w| w.borrow().contains(key))
+}
+
+crate::host_fn!(fn js_advise(g, args) {
+    let key = unsafe { string_arg(g, args.arg(0).0) }.unwrap_or_default();
+    let msg = unsafe { string_arg(g, args.arg(1).0) }.unwrap_or_default();
+    enc_bool(unsafe { warn_compat(g, &key, &msg) })
+});
+
+crate::host_fn!(fn js_advised(g, args) {
+    let key = unsafe { string_arg(g, args.arg(0).0) }.unwrap_or_default();
+    enc_bool(has_warned(&key))
+});
+
+/// `__sk_advise(key, message)` and `__sk_advised(key)`: the runtime's one-shot advisories share the
+/// host's set.
+pub(crate) unsafe fn install(g: *mut c_void) {
+    define(
+        g,
+        global(g),
+        "__sk_advise",
+        make_fn(g, "__sk_advise", 2, js_advise),
+        2,
+    );
+    define(
+        g,
+        global(g),
+        "__sk_advised",
+        make_fn(g, "__sk_advised", 1, js_advised),
+        2,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::JsRuntime;
+
+    #[test]
+    fn the_runtime_and_the_host_share_one_advisory_set() {
+        crate::testing::on_js_thread(|| {
+            JsRuntime::with(|rt| {
+                let read = |src: &str| {
+                    rt.ctx()
+                        .to_rust_string(rt.ctx().eval(src).unwrap())
+                        .unwrap()
+                };
+                assert!(unsafe { super::warn_compat(rt.raw(), "host-first", "said by the host") });
+                assert_eq!(
+                    read("[__sk_advised('host-first'), __sk_advise('host-first', 'x'), __sk_advise('js-first', 'y'), __sk_advise('js-first', 'y')].join()"),
+                    "true,false,true,false"
+                );
+                assert!(super::has_warned("js-first"));
+            });
+        });
     }
 }
