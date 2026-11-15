@@ -30,7 +30,8 @@
 //     derivatives are undefined there. Use `SampleLevel(..., 0)`.
 //   * `shade()` returns a PREMULTIPLIED colour by default. Either premultiply
 //     yourself (`sk_premultiply`) or opt out with
-//     `static override bool straightAlpha() { return true; }`.
+//     `static override bool straightAlpha() { return true; }`. Either way
+//     the engine draws a premultiplied result (see `sk_finish`).
 //   * Effects compile at `ps_5_0`; the rest of gpui stays at `ps_4_1`.
 //
 // The full constraint list is docs/SHADERS-AUTHORING.md.
@@ -448,6 +449,10 @@ public EffectInput sk_begin(uint id, float4 frag_position)
 /// the element opacity, and — for a backdrop effect, which draws with blending
 /// disabled and therefore owns every pixel of its quad — restoring the
 /// untouched snapshot outside that coverage.
+///
+/// The result is PREMULTIPLIED whatever `straightAlpha` says. Every renderer
+/// blends a non-backdrop effect as premultiplied source-over (One,
+/// OneMinusSrcAlpha); blending it by source alpha would apply alpha twice.
 public float4 sk_finish<T : IEffect>(T material, EffectInput i)
 {
     float4 shaded = material.shade(i);

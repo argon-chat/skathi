@@ -736,6 +736,11 @@ function compile(
     `//   slangc:     ${SLANG_VERSION}\n` +
     `//   schema:     ${SCHEMA}\n` +
     `//   src-sha256: ${sha256(userSource)}\n` +
+    `//   output:     ${
+      effect.backdrop
+        ? "premultiplied RGBA, written with blending disabled (it owns its quad)"
+        : "premultiplied RGBA, blended One, OneMinusSrcAlpha"
+    }\n` +
     `//\n`;
 
   let reflection: unknown = [];

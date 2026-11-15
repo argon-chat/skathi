@@ -7,6 +7,7 @@
 //   slangc:     2026.12
 //   schema:     6
 //   src-sha256: 99fd166403610be614ced72e6aedace3d28a08dd6c8a54681c8af86e2d6fb090
+//   output:     premultiplied RGBA, written with blending disabled (it owns its quad)
 //
 // The VERTEX half lives in gpui_wgpu/src/shaders_effects.wgsl and is shared
 // by every effect; it clips the quad to the content mask.
