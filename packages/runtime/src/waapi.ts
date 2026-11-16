@@ -6,7 +6,7 @@
 // * `animate` / `getAnimations` live on HTMLElement.prototype and SVGElement.prototype, not
 //   Element.prototype: motion / framer-motion probe Element.prototype to choose WAAPI, and their JS
 //   path is better here (a spring would fall back to a 300 ms ease-out, a `filter` would jump at
-//   its end). One advisory, on the first call.
+//   its end).
 // * `document.timeline.currentTime` is held for the frame (the rAF timestamp once a rAF has run,
 //   else the first read, held from then on). It never goes back.
 // * A finish is dispatched one frame after the frame that reached it: its promise settles in
@@ -268,8 +268,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       return new Set();
     }
   }
-
-  let advisedPlacement = false;
 
   class KeyframeEffectImpl extends AnimationEffectImpl {
     #target: object | null;
@@ -948,13 +946,6 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
   const byComposite = (a: AnimationImpl, b: AnimationImpl): number => a._id() - b._id();
 
   function animate(this: object, keyframes: unknown, options?: unknown): AnimationImpl {
-    if (!advisedPlacement) {
-      advisedPlacement = true;
-      d.warn(
-        "waapi:placement",
-        "Element.animate() runs natively here, on HTMLElement.prototype and SVGElement.prototype only — Element.prototype has no 'animate', so motion / framer-motion keep their own JS animations",
-      );
-    }
     const effect = new KeyframeEffectImpl(this, keyframes, options);
     const o = options && typeof options === "object" ? (options as Record<string, unknown>) : null;
     if (o && o.timeline !== undefined && o.timeline !== timeline) {

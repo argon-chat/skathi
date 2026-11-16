@@ -111,7 +111,7 @@ function world() {
 }
 
 describe("Element.animate()", () => {
-  test("lives on the HTML and SVG prototypes only, and says so once", () => {
+  test("lives on the HTML and SVG prototypes only, without an advisory", () => {
     const w = world();
     expect(typeof w.HTMLProto.animate).toBe("function");
     expect(typeof w.SVGProto.animate).toBe("function");
@@ -121,7 +121,7 @@ describe("Element.animate()", () => {
     expect(w.warnings).toEqual([]);
     w.el(1).animate({ opacity: [0, 1] }, 100);
     w.el(2).animate({ opacity: [0, 1] }, 100);
-    expect(w.warnings).toEqual(["waapi:placement"]);
+    expect(w.warnings).toEqual([]);
     for (const name of [
       "Animation",
       "KeyframeEffect",

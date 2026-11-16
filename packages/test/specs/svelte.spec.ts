@@ -109,6 +109,8 @@ describe("svelte", () => {
       // slide animates overflow and the border widths along with height and padding.
       const { entries } = await app.logs(0);
       bunExpect(entries.filter((e) => e.text.includes("is not animatable here")).map((e) => e.text)).toEqual([]);
+      // Svelte runs every transition through Element.animate(), which works as it is.
+      bunExpect(entries.filter((e) => e.text.includes("[skathi compat]")).map((e) => e.text)).toEqual([]);
     },
     T,
   );
