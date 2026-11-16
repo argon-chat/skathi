@@ -63,7 +63,8 @@ test(
     const mute = ctx.createGain(); mute.gain.value = 0; mute.connect(ctx.destination);
     const src = ctx.createBufferSource();
     src.buffer = ctx.createBuffer(1, 4800, 48000); src.loop = true; src.connect(mute); src.start();
-    globalThis.__SK_TEST_MEDIA__ = { ctx, t: Date.now() };
+    const closed = new AudioContext(); closed.close();
+    globalThis.__SK_TEST_MEDIA__ = { ctx, closed, t: Date.now() };
     globalThis.mediaOldApp = 1;
     location.reload();
     return "asked";
